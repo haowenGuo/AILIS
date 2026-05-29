@@ -1,0 +1,77 @@
+services:
+  - type: web
+    name: airi-backend
+    runtime: python
+    plan: starter
+    region: singapore
+    numInstances: 1
+    autoDeployTrigger: commit
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /healthz
+    buildFilter:
+      paths:
+        - backend/**
+        - requirements.txt
+        - render.yaml
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.11
+      - key: DEBUG
+        value: "False"
+      - key: CORS_ALLOW_ORIGINS
+        value: http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173,http://127.0.0.1:4173,https://haowenguo.github.io
+      - key: DATA_DIR
+        value: /opt/render/project/src/backend/data
+      - key: DATABASE_URL
+        value: sqlite+aiosqlite:////opt/render/project/src/backend/data/app.db
+      - key: CHROMA_PERSIST_DIR
+        value: /opt/render/project/src/backend/data/chroma
+      - key: EDU_SESSION_COOKIE_NAME
+        value: simteach_session
+      - key: EDU_SESSION_TTL_DAYS
+        value: "14"
+      - key: EDU_TEACHER_INVITE_CODE
+        generateValue: true
+      - key: EDU_SEED_ADMIN
+        value: "true"
+      - key: EDU_ADMIN_EMAIL
+        value: admin@simclass.local
+      - key: EDU_ADMIN_PASSWORD
+        sync: false
+      - key: EDU_ADMIN_PHONE
+        value: "13800000000"
+      - key: EDU_ADMIN_SCHOOL_NAME
+        value: 仿真人教学教室
+      - key: EDU_HF_DATASET_VIEWER_URL
+        value: https://datasets-server.huggingface.co
+      - key: EDU_HF_QUESTION_DATASET
+        value: SeaLLMs/SeaExam
+      - key: EDU_HF_QUESTION_CONFIG
+        value: m3exam-chinese
+      - key: EDU_HF_QUESTION_SPLIT
+        value: test
+      - key: EDU_QUESTION_BANK_CACHE_TTL_SECONDS
+        value: "900"
+      - key: LLM_API_BASE
+        value: https://ark.cn-beijing.volces.com/api/v3
+      - key: LLM_API_KEY
+        sync: false
+      - key: LLM_MODEL_NAME
+        value: doubao-seed-2-0-mini-260215
+      - key: ELEVENLABS_API_BASE
+        value: https://api.elevenlabs.io
+      - key: ELEVENLABS_API_KEY
+        sync: false
+      - key: ELEVENLABS_VOICE_ID
+        sync: false
+      - key: ELEVENLABS_MODEL_ID
+        value: eleven_multilingual_v2
+      - key: ELEVENLABS_OUTPUT_FORMAT
+        value: mp3_44100_128
+      - key: ELEVENLABS_TIMEOUT_SECONDS
+        value: "60"
+    disk:
+      name: backend-data
+      mountPath: /opt/render/project/src/backend/data
+      sizeGB: 5

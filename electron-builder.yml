@@ -1,0 +1,36 @@
+appId: com.humanclaw.desktop
+productName: HumanClaw
+artifactName: ${productName}-${version}-${arch}.${ext}
+directories:
+  output: F:/HumanClaw/Build/HumanClaw
+files:
+  - dist/**/*
+  - electron/**/*
+  - package.json
+extraResources:
+  - from: Resources/speech-models
+    to: speech-models
+  - from: build-cache/openclaw-runtime
+    to: openclaw-runtime
+  - from: build-cache/openclaw-vendor
+    to: openclaw-vendor
+extraMetadata:
+  main: electron/main.cjs
+asar: true
+asarUnpack:
+  - electron/**/*.py
+npmRebuild: false
+win:
+  executableName: HumanClaw
+  signAndEditExecutable: false
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: portable
+      arch:
+        - x64
+nsis:
+  artifactName: ${productName}-Setup-${version}-win-${arch}.${ext}
+portable:
+  artifactName: ${productName}-Portable-${version}-win-${arch}.${ext}

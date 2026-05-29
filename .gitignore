@@ -1,0 +1,65 @@
+# Node / frontend
+node_modules/
+dist/
+
+# Python / backend
+backend/.env
+backend/data/
+backend/**/__pycache__/
+**/__pycache__/
+*.pyc
+
+# IDE / local cache
+.idea/
+.vscode/
+.claude/
+.local/
+
+# Local generated folders
+input/
+output/
+tmp/
+build-cache/
+.humanclaw-rollback/
+.humanclaw-state/
+.runtime-logs/
+eval-results/
+AIGrilClaw/.refs/
+历史版本/
+release/
+backend/blog_content/auto_blog_runs/**/local_runner_*.log
+backend/blog_content/auto_blog_runs/**/runner.lock
+backend/blog_content/auto_blog_runs/**/RUNNER_LOG.md
+backend/blog_content/auto_blog_runs/**/RUNNER_STATUS.json
+backend/blog_content/auto_blog_runs/**/last_runner_message.md
+backend/blog_content/auto_blog_runs/**/event-log.jsonl
+backend/blog_content/auto_blog_runs/**/progress.json
+backend/blog_content/auto_blog_runs/**/state.json
+backend/blog_content/auto_blog_runs/**/control-queue.jsonl
+backend/blog_content/auto_blog_runs/**/stop.flag
+
+# Legacy / generated assets not needed in the published repo
+/main.js
+/AiGril.vrm
+/pinghua.py
+/tupian.py
+output_perfect_smooth.png
+output_smooth.png
+smooth_result.png
+
+# Unused source/export assets under Resources
+Resources/fbx/
+Resources/*.fbx
+Resources/*.glb
+Resources/AiGril-18.vrm
+Resources/AiGril_18.vrm
+Resources/VRMA_MotionPack/vrma/Countach.vrma
+Resources/VRMA_MotionPack/vrma/Relax.vrma
+Resources/VRMA_MotionPack/vrma/VRMA_32.vrma
+Resources/VRMA_MotionPack/vrma/VRMA_33.vrma
+Resources/VRMA_MotionPack/vrma/*.vmd
+Resources/VRMA_MotionPack/vrma/*.converted.vrma
+Resources/harvested/
+Resources/library/
+Resources/resource-library.json
+Resources/speech-models/

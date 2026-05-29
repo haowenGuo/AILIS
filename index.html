@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>AIGril - AIGL 虚拟人对话系统</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: "Microsoft YaHei", -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+        }
+
+        :root {
+            /* 全局主题色，完全匹配截图的柔和浅蓝系 */
+            --primary-color: #a8d8f0;
+            --primary-deep: #73b8e5;
+            --bg-main: #f0f8ff;
+            --bg-panel: rgba(255, 255, 255, 0.88);
+            --text-main: #333333;
+            --text-secondary: #666666;
+            --text-light: #999999;
+            --radius-big: 20px;
+            --radius-small: 12px;
+            --shadow-soft: 0 4px 20px rgba(0, 0, 0, 0.06);
+        }
+
+        body {
+            width: 100vw;
+            height: 100vh;
+            overflow: hidden;
+            background: var(--bg-main);
+        }
+
+        /* 全屏背景纹理 + 顶部波浪，完全匹配截图 */
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            /* 浅十字纹理背景 */
+            background-image:
+                linear-gradient(90deg, rgba(115, 184, 229, 0.06) 1px, transparent 1px),
+                linear-gradient(rgba(115, 184, 229, 0.06) 1px, transparent 1px);
+            background-size: 24px 24px;
+            z-index: 0;
+        }
+
+        body::after {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 60px;
+            /* 顶部波浪装饰 */
+            background: linear-gradient(180deg, #d8effa 0%, rgba(216, 239, 250, 0) 100%);
+            border-bottom-left-radius: 50% 20px;
+            border-bottom-right-radius: 50% 20px;
+            z-index: 0;
+        }
+
+        /* 整体布局容器 */
+        #app-container {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+        }
+
+        /* 左侧全屏3D画布容器，虚拟人作为绝对主体 */
+        #canvas-container {
+            width: 100%;
+            height: 100%;
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 1;
+        }
+
+        /* 左上角logo，匹配截图样式 */
+        #app-logo {
+            position: absolute;
+            top: 18px;
+            left: 20px;
+            font-size: 22px;
+            font-weight: 600;
+            color: var(--primary-deep);
+            z-index: 10;
+            letter-spacing: 1px;
+        }
+
+        /* 右上角功能按钮区，匹配截图的极简样式 */
+        #top-controls {
+            position: absolute;
+            top: 18px;
+            right: 20px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            z-index: 10;
+        }
+
+        .control-btn {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.7);
+            border: none;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-secondary);
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .control-btn:hover {
+            background: rgba(255, 255, 255, 0.95);
+            transform: scale(1.05);
+        }
+
+        /* 右侧悬浮对话面板，核心优化，完全去掉生硬侧边栏 */
+        #chat-panel {
+            position: absolute;
+            right: 24px;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 380px;
+            max-height: calc(100vh - 80px);
+            background: var(--bg-panel);
+            border-radius: var(--radius-big);
+            display: flex;
+            flex-direction: column;
+            box-shadow: var(--shadow-soft);
+            backdrop-filter: blur(10px);
+            z-index: 10;
+            overflow: hidden;
+        }
+
+        /* 消息列表容器，去掉生硬分割线 */
+        #message-list {
+            flex: 1;
+            padding: 20px 16px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+            min-height: 300px;
+        }
+
+        /* 消息气泡通用样式，更柔和圆润 */
+        .message-item {
+            max-width: 85%;
+            padding: 10px 14px;
+            border-radius: var(--radius-small);
+            font-size: 14px;
+            line-height: 1.6;
+            word-wrap: break-word;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+        }
+
+        /* 用户消息，柔和渐变，去掉生硬直角 */
+        .message-user {
+            align-self: flex-end;
+            background: linear-gradient(135deg, var(--primary-deep) 0%, var(--primary-color) 100%);
+            color: white;
+            border-bottom-right-radius: 4px;
+        }
+
+        /* AI消息，极浅背景，更贴合整体风格 */
+        .message-ai {
+            align-self: flex-start;
+            background: white;
+            color: var(--text-main);
+            border-bottom-left-radius: 4px;
+        }
+
+        /* 系统消息，极致弱化，不抢视觉焦点，去掉生硬提示感 */
+        .message-system {
+            align-self: center;
+            background: rgba(248, 240, 255, 0.6);
+            color: var(--text-light);
+            font-size: 12px;
+            padding: 4px 10px;
+            border-radius: 6px;
+            max-width: 90%;
+            text-align: center;
+        }
+
+        /* 加载中提示，更柔和 */
+        .message-loading {
+            align-self: flex-start;
+            color: var(--text-light);
+            font-size: 13px;
+            padding: 8px 14px;
+        }
+
+        .message-markdown {
+            white-space: normal;
+        }
+
+        .message-markdown > :first-child {
+            margin-top: 0;
+        }
+
+        .message-markdown > :last-child {
+            margin-bottom: 0;
+        }
+
+        .message-markdown p,
+        .message-markdown ul,
+        .message-markdown ol,
+        .message-markdown blockquote,
+        .message-markdown pre {
+            margin: 0 0 0.65em;
+        }
+
+        .message-markdown h1,
+        .message-markdown h2,
+        .message-markdown h3,
+        .message-markdown h4 {
+            margin: 0 0 0.5em;
+            font-size: 1em;
+            line-height: 1.35;
+            font-weight: 700;
+        }
+
+        .message-markdown ul,
+        .message-markdown ol {
+            padding-left: 1.25em;
+        }
+
+        .message-markdown li + li {
+            margin-top: 0.25em;
+        }
+
+        .message-markdown code {
+            padding: 0.08em 0.32em;
+            border-radius: 4px;
+            background: rgba(51, 51, 51, 0.08);
+            font-family: "Cascadia Code", Consolas, monospace;
+            font-size: 0.92em;
+        }
+
+        .message-markdown pre {
+            max-width: 100%;
+            overflow-x: auto;
+            padding: 10px;
+            border-radius: 6px;
+            background: #102638;
+            color: #f7fbff;
+        }
+
+        .message-markdown pre code {
+            padding: 0;
+            background: transparent;
+            color: inherit;
+            white-space: pre;
+        }
+
+        .message-markdown blockquote {
+            padding-left: 0.8em;
+            border-left: 3px solid rgba(115, 184, 229, 0.45);
+            color: var(--text-secondary);
+        }
+
+        .message-markdown a {
+            color: var(--primary-deep);
+            text-decoration: none;
+        }
+
+        .message-markdown a:hover {
+            text-decoration: underline;
+        }
+
+        .message-user.message-markdown code {
+            background: rgba(255, 255, 255, 0.2);
+        }
+
+        .message-user.message-markdown a {
+            color: #ffffff;
+            text-decoration: underline;
+        }
+
+        /* 输入框区域，去掉所有生硬边框和分割线 */
+        #input-area {
+            padding: 12px 16px 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        #message-input {
+            width: 100%;
+            min-height: 56px;
+            max-height: 120px;
+            padding: 12px 16px;
+            border: 1px solid rgba(168, 216, 240, 0.5);
+            border-radius: var(--radius-small);
+            resize: none;
+            outline: none;
+            font-size: 14px;
+            line-height: 1.5;
+            background: rgba(255, 255, 255, 0.7);
+            transition: all 0.2s ease;
+        }
+
+        #message-input:focus {
+            border-color: var(--primary-deep);
+            background: white;
+        }
+
+        #message-input::placeholder {
+            color: var(--text-light);
+        }
+
+        /* 底部操作栏，极简设计，匹配截图 */
+        #input-footer {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .input-tools {
+            display: flex;
+            gap: 8px;
+        }
+
+        .tool-btn {
+            width: 28px;
+            height: 28px;
+            border: none;
+            background: transparent;
+            color: var(--text-secondary);
+            cursor: pointer;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s ease;
+        }
+
+        .tool-btn:hover {
+            background: rgba(168, 216, 240, 0.2);
+            color: var(--primary-deep);
+        }
+
+        #send-btn {
+            padding: 8px 24px;
+            border: none;
+            border-radius: 8px;
+            background: var(--primary-deep);
+            color: white;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        #send-btn:hover {
+            background: #5aa0d6;
+            transform: scale(1.02);
+        }
+
+        #send-btn:disabled {
+            background: var(--primary-color);
+            cursor: not-allowed;
+            opacity: 0.6;
+            transform: none;
+        }
+
+        /* 滚动条美化，极致弱化 */
+        ::-webkit-scrollbar {
+            width: 4px;
+        }
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: rgba(168, 216, 240, 0.6);
+            border-radius: 2px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--primary-deep);
+        }
+
+        /* 响应式适配，小屏自动调整 */
+        @media (max-width: 768px) {
+            #chat-panel {
+                width: calc(100vw - 40px);
+                right: 20px;
+                left: 20px;
+                top: auto;
+                bottom: 20px;
+                transform: none;
+                max-height: 60vh;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="app-container">
+        <!-- 全屏3D画布区域，虚拟人作为主体 -->
+        <div id="canvas-container">
+            <div id="app-logo">AIGril</div>
+
+            <!-- 右上角功能按钮，匹配截图的极简设计 -->
+            <div id="top-controls">
+                <button class="control-btn" title="信息">ⓘ</button>
+                <button class="control-btn" title="设置">⚙</button>
+                <button class="control-btn" title="用户">👤</button>
+            </div>
+        </div>
+
+        <!-- 右侧悬浮对话面板，去掉生硬侧边栏 -->
+        <div id="chat-panel">
+            <!-- 消息列表，去掉生硬标题栏 -->
+            <div id="message-list">
+                <div class="message-system">AIGL到啦~</div>
+            </div>
+            <!-- 输入区域，极简人性化设计 -->
+            <div id="input-area">
+                <textarea id="message-input" placeholder="说点什么..."></textarea>
+                <div id="input-footer">
+                    <div class="input-tools">
+                        <button class="tool-btn" title="键盘">⌨</button>
+                        <button class="tool-btn" title="语音输出">🔊</button>
+                    </div>
+                    <button id="send-btn" disabled>发送</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 模块化主程序入口 -->
+    <script type="module" src="./src/app.js"></script>
+</body>
+</html>

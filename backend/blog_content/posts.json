@@ -1,0 +1,724 @@
+[
+  {
+    "slug": "hello-blog-framework",
+    "published_at": "2026-04-17",
+    "reading_time": "2 min",
+    "featured": true,
+    "tags": ["intro", "blog", "framework"],
+    "translations": {
+      "zh": {
+        "title": "Hello, Blog Framework",
+        "summary": "这是一篇占位文章，用来验证博客框架已经搭建完成，后续只需要填内容即可。",
+        "body_file": "posts/zh/hello-blog-framework.md"
+      },
+      "en": {
+        "title": "Hello, Blog Framework",
+        "summary": "This is a placeholder post to verify that the blog framework is ready and content can be added later without touching the page code.",
+        "body_file": "posts/en/hello-blog-framework.md"
+      }
+    }
+  },
+  {
+    "slug": "why-build-in-public",
+    "published_at": "2026-04-17",
+    "reading_time": "3 min",
+    "featured": false,
+    "tags": ["writing", "notes"],
+    "translations": {
+      "zh": {
+        "title": "Why Build in Public",
+        "summary": "我希望博客不仅展示结果，也记录过程，这会让项目和成长轨迹都更清楚。",
+        "body_file": "posts/zh/why-build-in-public.md"
+      },
+      "en": {
+        "title": "Why Build in Public",
+        "summary": "I want the blog to show not only finished work, but also the process that produced it.",
+        "body_file": "posts/en/why-build-in-public.md"
+      }
+    }
+  },
+  {
+    "slug": "aigril-desktop-pet-v1",
+    "published_at": "2026-04-18",
+    "reading_time": "5 min",
+    "featured": true,
+    "tags": ["electron", "desktop-pet", "vrm", "voice"],
+    "translations": {
+      "zh": {
+        "title": "AIGril 桌宠版 V1：从网页虚拟人到常驻桌面",
+        "summary": "这一版把 AIGril 正式做成了一个可常驻桌面的桌宠形态，并补齐了右键控制、托盘、语音模式切换和本地语音识别的基础链路。",
+        "body_file": "posts/zh/aigril-desktop-pet-v1.md"
+      },
+      "en": {
+        "title": "AIGril Desktop Pet V1: From Web Avatar to Resident Companion",
+        "summary": "This iteration turns AIGril into a real desktop pet with a transparent always-on-top shell, tray and context controls, speech mode switching, and a first working pass of local speech recognition.",
+        "body_file": "posts/en/aigril-desktop-pet-v1.md"
+      }
+    }
+  },
+  {
+    "slug": "aigril-render-github-pages-deployment",
+    "published_at": "2026-04-22",
+    "reading_time": "6 min",
+    "featured": false,
+    "tags": ["deployment", "render", "github-pages", "fastapi"],
+    "translations": {
+      "zh": {
+        "title": "AIGril 的上线方式：GitHub Pages 前端加 Render 后端",
+        "summary": "这篇文章记录 AIGril 如何从本地虚拟人项目变成可在线体验的前后端系统，并说明源码、体验地址和桌面包的整理方式。",
+        "body_file": "posts/zh/aigril-render-github-pages-deployment.md"
+      },
+      "en": {
+        "title": "How AIGril Is Deployed: GitHub Pages for the Frontend and Render for the Backend",
+        "summary": "This post explains how AIGril moved from a local virtual-character project to a live frontend-backend system, including source code, live links, and desktop packaging notes.",
+        "body_file": "posts/en/aigril-render-github-pages-deployment.md"
+      }
+    }
+  },
+  {
+    "slug": "autoresearch-evidence-first-agentic-research",
+    "published_at": "2026-04-22",
+    "reading_time": "7 min",
+    "featured": false,
+    "tags": ["autoresearch", "agents", "research", "rag"],
+    "translations": {
+      "zh": {
+        "title": "AutoResearch：把自动调研做成可追踪的研究流水线",
+        "summary": "这篇文章介绍 AutoResearch 的 Phase 1 思路：用规划、检索、证据抽取、记忆和报告引擎，把自动调研从一次性总结变成可追踪的工程流水线。",
+        "body_file": "posts/zh/autoresearch-evidence-first-agentic-research.md"
+      },
+      "en": {
+        "title": "AutoResearch: Turning Agentic Research into a Traceable Pipeline",
+        "summary": "This post introduces AutoResearch as an evidence-first research pipeline built around planning, retrieval, memory, evidence extraction, and report generation.",
+        "body_file": "posts/en/autoresearch-evidence-first-agentic-research.md"
+      }
+    }
+  },
+  {
+    "slug": "haorender-gpu-modern-rhi-roadmap",
+    "published_at": "2026-04-22",
+    "reading_time": "7 min",
+    "featured": false,
+    "tags": ["rendering", "gpu", "rhi", "cpp"],
+    "translations": {
+      "zh": {
+        "title": "HaoRender-GPU：从 CPU 渲染经验走向现代 RHI 架构",
+        "summary": "这篇文章介绍 HaoRender-GPU 如何从独立工程起步，以 OpenGL triangle 为最小闭环，逐步走向 D3D12/Vulkan 风格的现代 RHI 架构。",
+        "body_file": "posts/zh/haorender-gpu-modern-rhi-roadmap.md"
+      },
+      "en": {
+        "title": "HaoRender-GPU: From CPU Rendering Experience to a Modern RHI Roadmap",
+        "summary": "This post introduces HaoRender-GPU as a separate modern rendering track that starts with OpenGL samples and moves toward a D3D12/Vulkan-shaped RHI architecture.",
+        "body_file": "posts/en/haorender-gpu-modern-rhi-roadmap.md"
+      }
+    }
+  },
+  {
+    "slug": "multi-codex-orchestrator-patch-first-parallel-agents",
+    "published_at": "2026-04-22",
+    "reading_time": "7 min",
+    "featured": false,
+    "tags": ["agents", "codex", "orchestration", "testing"],
+    "translations": {
+      "zh": {
+        "title": "Multi-Codex Orchestrator：把多 Agent 协作变成可验证的 Patch 流水线",
+        "summary": "这篇文章介绍 Multi-Codex Orchestrator 如何用 Manager/Worker/Repair/Conflict Resolver、git worktree 和结构化工件，把多 Agent 编程变成可验证的 patch 流水线。",
+        "body_file": "posts/zh/multi-codex-orchestrator-patch-first-parallel-agents.md"
+      },
+      "en": {
+        "title": "Multi-Codex Orchestrator: Turning Multi-Agent Coding into a Verifiable Patch Pipeline",
+        "summary": "This post explains how Multi-Codex Orchestrator uses manager-worker roles, git worktrees, structured artifacts, repair loops, and deterministic validation to coordinate parallel coding agents.",
+        "body_file": "posts/en/multi-codex-orchestrator-patch-first-parallel-agents.md"
+      }
+    }
+  },
+  {
+    "slug": "haorender-cpu-rendering-workbench",
+    "published_at": "2026-04-22",
+    "reading_time": "6 min",
+    "featured": false,
+    "tags": ["rendering", "cpp", "qt", "cpu"],
+    "translations": {
+      "zh": {
+        "title": "haorender：把 CPU 光栅化做成可调试的桌面渲染工作台",
+        "summary": "这篇文章基于 haorender 的 README 和 CMake 配置，介绍它如何从 CPU 光栅化项目发展成带 Qt UI、材质调试、阴影控制、profiling 和便携分发思路的桌面渲染工作台。",
+        "body_file": "posts/zh/haorender-cpu-rendering-workbench.md"
+      },
+      "en": {
+        "title": "haorender: Turning CPU Rasterization into a Debuggable Desktop Rendering Workbench",
+        "summary": "This post uses haorender's README and CMake configuration to explain how the project frames CPU rasterization as a Qt-based desktop rendering workbench with material inspection, shadows, profiling, and portable packaging.",
+        "body_file": "posts/en/haorender-cpu-rendering-workbench.md"
+      }
+    }
+  },
+  {
+    "slug": "humanclaw-desktop-pet-openclaw-bridge",
+    "published_at": "2026-04-22",
+    "reading_time": "6 min",
+    "featured": false,
+    "tags": ["electron", "desktop-pet", "openclaw", "voice"],
+    "translations": {
+      "zh": {
+        "title": "HumanClaw：把桌宠界面和 OpenClaw 运行时分清楚",
+        "summary": "这篇文章基于 HumanClaw 的 README、package.json 和 requirements.txt，介绍它如何把 Electron 桌宠界面、Python companion backend 与本地 OpenClaw Gateway 运行时拆成清晰的产品边界。",
+        "body_file": "posts/zh/humanclaw-desktop-pet-openclaw-bridge.md"
+      },
+      "en": {
+        "title": "HumanClaw: Separating the Desktop Pet from the OpenClaw Runtime",
+        "summary": "This post uses HumanClaw's README, package.json, and requirements.txt to explain how the project separates its Electron desktop pet, Python companion backend, and local OpenClaw Gateway runtime.",
+        "body_file": "posts/en/humanclaw-desktop-pet-openclaw-bridge.md"
+      }
+    }
+  },
+  {
+    "slug": "she-ai-native-2d-engine-bootstrap",
+    "published_at": "2026-04-22",
+    "reading_time": "7 min",
+    "featured": false,
+    "tags": ["engine", "cpp", "gamedev", "ai"],
+    "translations": {
+      "zh": {
+        "title": "SHE：先把 2D 引擎做成 AI 可理解的骨架",
+        "summary": "这篇文章基于 SHE 的 README、CMake 配置和公开 docs，介绍它如何先用 runtime services、schema、diagnostics 和 AI context export 搭出可协作的 2D 引擎骨架。",
+        "body_file": "posts/zh/she-ai-native-2d-engine-bootstrap.md"
+      },
+      "en": {
+        "title": "SHE: Building an AI-Readable Bootstrap for a 2D Engine",
+        "summary": "This post uses SHE's README, CMake setup, and public docs to explain how the project starts with runtime services, schemas, diagnostics, and AI context export before building the full 2D engine stack.",
+        "body_file": "posts/en/she-ai-native-2d-engine-bootstrap.md"
+      }
+    }
+  },
+  {
+    "slug": "humanoid-teaching-classroom-simclass-template",
+    "published_at": "2026-04-22",
+    "reading_time": "7 min",
+    "featured": false,
+    "tags": ["education", "node", "serverless", "testing"],
+    "translations": {
+      "zh": {
+        "title": "仿真人教学：从 Render 演示版走向多端教学平台模板",
+        "summary": "这篇文章基于仿真人教学的 README、package.json 和公开 docs，介绍它如何把学生端、教师端、仿真课堂、自动回归、生产自检和多端迁移路线整理成可验证的教学软件模板。",
+        "body_file": "posts/zh/humanoid-teaching-classroom-simclass-template.md"
+      },
+      "en": {
+        "title": "Humanoid Teaching Classroom: From a Render Demo to a Multi-Platform Education Template",
+        "summary": "This post uses the project's README, package metadata, and public docs to explain how it organizes student and teacher flows, simulated classrooms, regression checks, production readiness, and a multi-platform migration path.",
+        "body_file": "posts/en/humanoid-teaching-classroom-simclass-template.md"
+      }
+    }
+  },
+  {
+    "slug": "she-w01-gameplay-core-contracts",
+    "published_at": "2026-04-22",
+    "reading_time": "6 min",
+    "featured": false,
+    "tags": ["engine", "gamedev", "cpp", "agents"],
+    "translations": {
+      "zh": {
+        "title": "SHE W01：把玩法核心先做成命令、事件和计时器契约",
+        "summary": "这篇文章基于 SHE-w01-gameplay 的 README、CMake 配置和公开 docs，介绍 W01 Gameplay Core 如何先稳定命令、事件、计时器和 AI 可见的玩法契约。",
+        "body_file": "posts/zh/she-w01-gameplay-core-contracts.md"
+      },
+      "en": {
+        "title": "SHE W01: Turning Gameplay Core into Command, Event, and Timer Contracts",
+        "summary": "This post uses SHE-w01-gameplay's README, CMake setup, and public docs to explain how W01 Gameplay Core stabilizes commands, events, timers, and AI-visible gameplay contracts.",
+        "body_file": "posts/en/she-w01-gameplay-core-contracts.md"
+      }
+    }
+  },
+  {
+    "slug": "she-w02-data-core-schema-contracts",
+    "published_at": "2026-04-22",
+    "reading_time": "6 min",
+    "featured": false,
+    "tags": ["engine", "gamedev", "cpp", "schema"],
+    "translations": {
+      "zh": {
+        "title": "SHE W02：把玩法数据先做成 schema-first 契约",
+        "summary": "这篇文章基于 SHE-w02-data 的 README、CMake 配置和公开 docs，介绍 W02 Data Core 如何用 schema registration、validation results 和 AI context 把玩法数据做成可验证契约。",
+        "body_file": "posts/zh/she-w02-data-core-schema-contracts.md"
+      },
+      "en": {
+        "title": "SHE W02: Turning Gameplay Data into Schema-First Contracts",
+        "summary": "This post uses SHE-w02-data's README, CMake setup, and public docs to explain how W02 Data Core turns gameplay data into verifiable contracts through schema registration, validation results, and AI context.",
+        "body_file": "posts/en/she-w02-data-core-schema-contracts.md"
+      }
+    }
+  },
+  {
+    "slug": "she-w03-diagnostics-ai-context",
+    "published_at": "2026-04-22",
+    "reading_time": "6 min",
+    "featured": false,
+    "tags": ["engine", "diagnostics", "cpp", "ai"],
+    "translations": {
+      "zh": {
+        "title": "SHE W03：让诊断和 AI Context 讲清楚每一帧",
+        "summary": "这篇文章基于 SHE-w03-diagnostics 的 README、CMake 配置和公开 docs，介绍 W03 如何用 frame trace、diagnostics report 和 authoring context 让运行时状态对人和 Codex 都可读。",
+        "body_file": "posts/zh/she-w03-diagnostics-ai-context.md"
+      },
+      "en": {
+        "title": "SHE W03: Making Diagnostics and AI Context Explain Every Frame",
+        "summary": "This post uses SHE-w03-diagnostics' README, CMake setup, and public docs to explain how W03 makes runtime state readable through frame traces, diagnostics reports, and authoring context export.",
+        "body_file": "posts/en/she-w03-diagnostics-ai-context.md"
+      }
+    }
+  },
+  {
+    "slug": "she-w04-scripting-host-boundary",
+    "published_at": "2026-04-22",
+    "reading_time": "6 min",
+    "featured": false,
+    "tags": ["engine", "scripting", "cpp", "lua"],
+    "translations": {
+      "zh": {
+        "title": "SHE W04：把脚本能力先做成稳定宿主边界",
+        "summary": "这篇文章基于 SHE-w04-scripting 的 README、CMake 配置和公开 docs，介绍 W04 为什么要把脚本做成稳定 host boundary，而不是绕过 gameplay、data、diagnostics 和 AI Context 契约。",
+        "body_file": "posts/zh/she-w04-scripting-host-boundary.md"
+      },
+      "en": {
+        "title": "SHE W04: Turning Scripting into a Stable Host Boundary",
+        "summary": "This post uses SHE-w04-scripting's README, CMake setup, and public docs to explain why W04 treats scripting as a stable host boundary instead of a shortcut around gameplay, data, diagnostics, and AI context contracts.",
+        "body_file": "posts/en/she-w04-scripting-host-boundary.md"
+      }
+    }
+  },
+  {
+    "slug": "she-w05-scene-ecs-world-model",
+    "published_at": "2026-04-22",
+    "reading_time": "6 min",
+    "featured": false,
+    "tags": ["engine", "ecs", "gamedev", "cpp"],
+    "translations": {
+      "zh": {
+        "title": "SHE W05：把 Scene + ECS 做成稳定世界模型",
+        "summary": "这篇文章基于 SHE-w05-scene 的 README、CMake 配置和公开 docs，介绍 W05 为什么要先稳定 entity identity、component query、transform ownership 和 scene lifetime，再承接 renderer、physics 与 asset pipeline。",
+        "body_file": "posts/zh/she-w05-scene-ecs-world-model.md"
+      },
+      "en": {
+        "title": "SHE W05: Turning Scene + ECS into a Stable World Model",
+        "summary": "This post uses SHE-w05-scene's README, CMake setup, and public docs to explain why W05 stabilizes entity identity, component queries, transform ownership, and scene lifetime before renderer, physics, and asset pipeline work build on it.",
+        "body_file": "posts/en/she-w05-scene-ecs-world-model.md"
+      }
+    }
+  },
+  {
+    "slug": "she-w06-asset-pipeline-contracts",
+    "published_at": "2026-04-22",
+    "reading_time": "6 min",
+    "featured": false,
+    "tags": ["engine", "assets", "gamedev", "cpp"],
+    "translations": {
+      "zh": {
+        "title": "SHE W06：让资产管线先稳定身份、元数据和加载边界",
+        "summary": "这篇文章基于 SHE-w06-assets 的 README、CMake 配置和公开 docs，介绍 W06 为什么要先稳定 asset ID、metadata、loader registration 和 handle lifetime，再承接 renderer、audio 与 scene/prefab authoring。",
+        "body_file": "posts/zh/she-w06-asset-pipeline-contracts.md"
+      },
+      "en": {
+        "title": "SHE W06: Stabilizing Asset Identity, Metadata, and Loader Boundaries",
+        "summary": "This post uses SHE-w06-assets' README, CMake setup, and public docs to explain why W06 stabilizes asset IDs, metadata, loader registration, and handle lifetime before renderer, audio, and scene or prefab authoring depend on it.",
+        "body_file": "posts/en/she-w06-asset-pipeline-contracts.md"
+      }
+    }
+  },
+  {
+    "slug": "she-w07-platform-input-frame-boundary",
+    "published_at": "2026-04-22",
+    "reading_time": "6 min",
+    "featured": false,
+    "tags": ["engine", "platform", "input", "cpp"],
+    "translations": {
+      "zh": {
+        "title": "SHE W07：把窗口、输入和帧时间做成运行时边界",
+        "summary": "这篇文章基于 SHE-w07-platform 的 README、CMake 配置和公开 docs，介绍 W07 如何把窗口、输入、事件泵和帧时间做成后续渲染、物理、音频和 UI 能共同依赖的运行时边界。",
+        "body_file": "posts/zh/she-w07-platform-input-frame-boundary.md"
+      },
+      "en": {
+        "title": "SHE W07: Turning Windowing, Input, and Frame Timing into a Runtime Boundary",
+        "summary": "This post uses SHE-w07-platform's README, CMake setup, and public docs to explain how W07 turns windowing, input, event pumping, and frame timing into a runtime boundary for renderer, physics, audio, and UI work.",
+        "body_file": "posts/en/she-w07-platform-input-frame-boundary.md"
+      }
+    }
+  },
+  {
+    "slug": "she-w08-renderer2d-frame-submission",
+    "published_at": "2026-04-22",
+    "reading_time": "6 min",
+    "featured": false,
+    "tags": ["engine", "rendering", "gamedev", "cpp"],
+    "translations": {
+      "zh": {
+        "title": "SHE W08：把 Renderer2D 做成清晰的提交与帧所有权边界",
+        "summary": "这篇文章基于 SHE-w08-renderer 的 README、CMake 配置和公开 docs，介绍 W08 如何把 camera、sprite submission、texture/material handle 和 frame begin/end ownership 做成可解释的渲染边界。",
+        "body_file": "posts/zh/she-w08-renderer2d-frame-submission.md"
+      },
+      "en": {
+        "title": "SHE W08: Turning Renderer2D into a Clear Submission and Frame Ownership Boundary",
+        "summary": "This post uses SHE-w08-renderer's README, CMake setup, and public docs to explain how W08 turns camera state, sprite submission, texture/material handles, and frame begin/end ownership into a clear rendering boundary.",
+        "body_file": "posts/en/she-w08-renderer2d-frame-submission.md"
+      }
+    }
+  },
+  {
+    "slug": "she-w09-physics2d-fixed-step-collisions",
+    "published_at": "2026-04-22",
+    "reading_time": "6 min",
+    "featured": false,
+    "tags": ["engine", "physics", "gamedev", "cpp"],
+    "translations": {
+      "zh": {
+        "title": "SHE W09：把 Physics2D 做成固定步长与碰撞事件边界",
+        "summary": "这篇文章基于 SHE-w09-physics 的 README、CMake 配置和公开 docs，介绍 W09 如何把 Box2D runtime boundary、body/collider lifetime、fixed-step simulation 和 collision callbacks 接入 gameplay events。",
+        "body_file": "posts/zh/she-w09-physics2d-fixed-step-collisions.md"
+      },
+      "en": {
+        "title": "SHE W09: Turning Physics2D into a Fixed-Step and Collision Event Boundary",
+        "summary": "This post uses SHE-w09-physics' README, CMake setup, and public docs to explain how W09 connects the Box2D runtime boundary, body/collider lifetime, fixed-step simulation, and collision callbacks into gameplay events.",
+        "body_file": "posts/en/she-w09-physics2d-fixed-step-collisions.md"
+      }
+    }
+  },
+  {
+    "slug": "she-w10-audio-runtime-playback-events",
+    "published_at": "2026-04-22",
+    "reading_time": "6 min",
+    "featured": false,
+    "tags": ["engine", "audio", "gamedev", "cpp"],
+    "translations": {
+      "zh": {
+        "title": "SHE W10：把 Audio Runtime 做成播放契约和玩法反馈边界",
+        "summary": "这篇文章基于 SHE-w10-audio 的 README、CMake 配置和公开 docs，介绍 W10 如何把 miniaudio 播放路径、sound/music asset contract、channel ownership 和 gameplay-triggered audio events 放进统一运行时边界。",
+        "body_file": "posts/zh/she-w10-audio-runtime-playback-events.md"
+      },
+      "en": {
+        "title": "SHE W10: Turning Audio Runtime into Playback Contracts and Gameplay Feedback",
+        "summary": "This post uses SHE-w10-audio's README, CMake setup, and public docs to explain how W10 fits miniaudio playback, sound and music asset contracts, channel ownership, and gameplay-triggered audio events into one runtime boundary.",
+        "body_file": "posts/en/she-w10-audio-runtime-playback-events.md"
+      }
+    }
+  },
+  {
+    "slug": "she-w11-ui-debug-runtime-inspection",
+    "published_at": "2026-04-22",
+    "reading_time": "6 min",
+    "featured": false,
+    "tags": ["engine", "debugging", "gamedev", "cpp"],
+    "translations": {
+      "zh": {
+        "title": "SHE W11：把 UI + Debug Tools 做成运行时检查界面",
+        "summary": "这篇文章基于 SHE-w11-ui-debug 的 README、CMake 配置和公开 docs，介绍 W11 如何用 IUiService、Dear ImGui 方向、sandbox debug integration 和 runtime inspection panels 把运行时状态变成可扫描的调试表面。",
+        "body_file": "posts/zh/she-w11-ui-debug-runtime-inspection.md"
+      },
+      "en": {
+        "title": "SHE W11: Turning UI + Debug Tools into a Runtime Inspection Surface",
+        "summary": "This post uses SHE-w11-ui-debug's README, CMake setup, and public docs to explain how W11 turns runtime counters, traces, inspection hooks, sandbox integration, and AI context previews into a scannable debug surface.",
+        "body_file": "posts/en/she-w11-ui-debug-runtime-inspection.md"
+      }
+    }
+  },
+  {
+    "slug": "she-w12-first-playable-vertical-slice",
+    "published_at": "2026-04-22",
+    "reading_time": "6 min",
+    "featured": false,
+    "tags": ["engine", "gamedev", "cpp", "vertical-slice"],
+    "translations": {
+      "zh": {
+        "title": "SHE W12：用第一个可玩 Vertical Slice 验证整条引擎链路",
+        "summary": "这篇文章基于 SHE-w12-vertical-slice 的 README、CMake 配置和公开 docs，介绍 W12 如何用一个小型可玩循环验证 gameplay、data、scene、physics、audio、debug UI 和 AI context 是否真正接通。",
+        "body_file": "posts/zh/she-w12-first-playable-vertical-slice.md"
+      },
+      "en": {
+        "title": "SHE W12: Validating the Engine Spine with the First Playable Vertical Slice",
+        "summary": "This post uses SHE-w12-vertical-slice's README, CMake setup, and public docs to explain how W12 validates the engine spine through one small playable loop across gameplay, data, scene, physics, audio, debug UI, and AI context.",
+        "body_file": "posts/en/she-w12-first-playable-vertical-slice.md"
+      }
+    }
+  },
+  {
+    "slug": "humanoid-teaching-aliyun-serverless-backend",
+    "published_at": "2026-04-22",
+    "reading_time": "6 min",
+    "featured": false,
+    "tags": ["education", "serverless", "aliyun", "backend"],
+    "translations": {
+      "zh": {
+        "title": "仿真人教学 Aliyun Serverless：把正式后端模板先立住",
+        "summary": "这篇文章基于仿真人教学 aliyun-serverless 子项目的 README 和 package.json，介绍它如何把身份、资源、AI、课堂、统计和家长视图整理成面向正式部署的后端模板。",
+        "body_file": "posts/zh/humanoid-teaching-aliyun-serverless-backend.md"
+      },
+      "en": {
+        "title": "Humanoid Teaching Aliyun Serverless: Establishing the Formal Backend Template",
+        "summary": "This post uses the aliyun-serverless subproject README and package metadata to explain how it organizes identity, resources, AI teaching, classroom interaction, statistics, and parent views into a deployment-oriented backend template.",
+        "body_file": "posts/en/humanoid-teaching-aliyun-serverless-backend.md"
+      }
+    }
+  },
+  {
+    "slug": "humanoid-teaching-uniapp-multi-end-frontend",
+    "published_at": "2026-04-22",
+    "reading_time": "6 min",
+    "featured": false,
+    "tags": ["education", "uniapp", "frontend", "vue"],
+    "translations": {
+      "zh": {
+        "title": "仿真人教学 uni-app：把课堂产品做成多端前端模板",
+        "summary": "这篇文章基于仿真人教学 uniapp 子项目的 README 和 package.json，介绍它如何把登录、资源、仿真课堂、智能备课、答疑、错题复盘和家校协同整理成多端前端模板。",
+        "body_file": "posts/zh/humanoid-teaching-uniapp-multi-end-frontend.md"
+      },
+      "en": {
+        "title": "Humanoid Teaching uni-app: Turning the Classroom Product into a Multi-End Frontend Template",
+        "summary": "This post uses the uniapp subproject README and package metadata to explain how it organizes login, resources, simulated classrooms, lesson prep, Q&A, wrong-question review, and parent collaboration into a multi-end frontend template.",
+        "body_file": "posts/en/humanoid-teaching-uniapp-multi-end-frontend.md"
+      }
+    }
+  },
+  {
+    "slug": "aclpubcheck-camera-ready-format-checks",
+    "published_at": "2026-04-22",
+    "reading_time": "5 min",
+    "featured": false,
+    "tags": ["publishing", "python", "latex", "acl"],
+    "translations": {
+      "zh": {
+        "title": "ACL pubcheck：把论文格式检查提前到 camera-ready 之前",
+        "summary": "这篇文章基于 ACL pubcheck 的 README，介绍它如何把字体、作者格式、页边距、页底空间和引用姓名检查前移到作者自己的论文交付流程里。",
+        "body_file": "posts/zh/aclpubcheck-camera-ready-format-checks.md"
+      },
+      "en": {
+        "title": "ACL pubcheck: Moving Paper Format Checks Before Camera Ready",
+        "summary": "This post uses the ACL pubcheck README to explain how the tool moves font, author-formatting, margin, bottom-space, and citation-name checks into the author's own paper delivery workflow.",
+        "body_file": "posts/en/aclpubcheck-camera-ready-format-checks.md"
+      }
+    }
+  },
+  {
+    "slug": "mediacrawler-playwright-social-data-boundaries",
+    "published_at": "2026-04-22",
+    "reading_time": "6 min",
+    "featured": false,
+    "tags": ["crawler", "playwright", "data", "compliance"],
+    "translations": {
+      "zh": {
+        "title": "MediaCrawler：把自媒体数据采集放进可控的学习边界",
+        "summary": "这篇文章基于 MediaCrawler 的 README、依赖清单和公开 docs，介绍它如何用 Playwright、登录态、多平台模块、结构化存储和词云分析组织自媒体数据采集，同时强调学习研究和合规边界。",
+        "body_file": "posts/zh/mediacrawler-playwright-social-data-boundaries.md"
+      },
+      "en": {
+        "title": "MediaCrawler: Keeping Social Platform Data Collection Inside a Controlled Learning Boundary",
+        "summary": "This post uses MediaCrawler's README, dependency metadata, and public docs to explain how it organizes Playwright login state, platform modules, structured storage, and word-cloud analysis while keeping compliance boundaries explicit.",
+        "body_file": "posts/en/mediacrawler-playwright-social-data-boundaries.md"
+      }
+    }
+  },
+  {
+    "slug": "she-workspace-multicodex-integration-spine",
+    "published_at": "2026-04-22",
+    "reading_time": "7 min",
+    "featured": false,
+    "tags": ["engine", "codex", "workflow", "gamedev"],
+    "translations": {
+      "zh": {
+        "title": "SHE Workspace：把多 Codex 引擎开发收束到 W00 主线",
+        "summary": "这篇文章基于 SHE-workspace 主仓库的 README、CMake 配置和公开 docs，介绍 W00 如何作为多 Codex 引擎开发的架构、协调和集成主线。",
+        "body_file": "posts/zh/she-workspace-multicodex-integration-spine.md"
+      },
+      "en": {
+        "title": "SHE Workspace: Using W00 as the Integration Spine for Multi-Codex Engine Work",
+        "summary": "This post uses the SHE-workspace main repository README, CMake setup, and public docs to explain how W00 acts as the architecture, coordination, and integration line for multi-Codex engine development.",
+        "body_file": "posts/en/she-workspace-multicodex-integration-spine.md"
+      }
+    }
+  },
+  {
+    "slug": "baidutieba-python-csv-research-crawler",
+    "published_at": "2026-04-22",
+    "reading_time": "5 min",
+    "featured": false,
+    "tags": ["crawler", "python", "csv", "compliance"],
+    "translations": {
+      "zh": {
+        "title": "BaiduTieba-main：把贴吧关键词采集收进 CSV 研究边界",
+        "summary": "这篇文章基于 BaiduTieba-main 的 README 和 requirements 文件，介绍它如何用 Python、关键词配置、页码范围、CSV 输出和日志，把贴吧采集做成小范围研究练习，并强调 cookie 与数据发布边界。",
+        "body_file": "posts/zh/baidutieba-python-csv-research-crawler.md"
+      },
+      "en": {
+        "title": "BaiduTieba-main: Keeping Tieba Keyword Collection Inside a CSV Research Boundary",
+        "summary": "This post uses BaiduTieba-main's README and requirements file to explain how a Python keyword crawler can stay within a small CSV-based research workflow while keeping cookie and data-publishing boundaries explicit.",
+        "body_file": "posts/en/baidutieba-python-csv-research-crawler.md"
+      }
+    }
+  },
+  {
+    "slug": "she-coordination-multicodex-operational-memory",
+    "published_at": "2026-04-22",
+    "reading_time": "5 min",
+    "featured": false,
+    "tags": ["engine", "codex", "workflow", "coordination"],
+    "translations": {
+      "zh": {
+        "title": "SHE Coordination：把多 Codex 协作做成共享运行记忆",
+        "summary": "这篇文章基于 SHE coordination 目录下的 README 文件，介绍它如何用任务板、状态台账、workstream、handoff 和集成影响记录支撑多 Codex 并行开发。",
+        "body_file": "posts/zh/she-coordination-multicodex-operational-memory.md"
+      },
+      "en": {
+        "title": "SHE Coordination: Turning Multi-Codex Work into Shared Operational Memory",
+        "summary": "This post uses the README files in SHE coordination to explain how task boards, status ledgers, workstreams, handoffs, and integration-impact notes support parallel Codex development.",
+        "body_file": "posts/en/she-coordination-multicodex-operational-memory.md"
+      }
+    }
+  },
+  {
+    "slug": "gltf-sample-models-rendering-test-suite",
+    "published_at": "2026-04-22",
+    "reading_time": "5 min",
+    "featured": false,
+    "tags": ["gltf", "rendering", "assets", "testing"],
+    "translations": {
+      "zh": {
+        "title": "glTF Sample Models：把 3D 资产样例做成渲染器测试清单",
+        "summary": "这篇文章基于 glTF Sample Models 的 README 和 glTF 2.0 索引，介绍它如何把三角形、PBR、动画、skinning、材质扩展和边缘案例整理成渲染器与资产管线的测试地图。",
+        "body_file": "posts/zh/gltf-sample-models-rendering-test-suite.md"
+      },
+      "en": {
+        "title": "glTF Sample Models: Turning 3D Assets into a Renderer Test Checklist",
+        "summary": "This post uses the glTF Sample Models README and glTF 2.0 index to explain how the collection turns triangles, PBR, animation, skinning, material extensions, and edge cases into a renderer and asset-pipeline test map.",
+        "body_file": "posts/en/gltf-sample-models-rendering-test-suite.md"
+      }
+    }
+  },
+  {
+    "slug": "dify-llm-app-platform-workflow-rag-llmops",
+    "published_at": "2026-04-22",
+    "reading_time": "5 min",
+    "featured": false,
+    "tags": ["llm", "workflow", "rag", "llmops"],
+    "translations": {
+      "zh": {
+        "title": "Dify：把 LLM 应用开发收进工作流、RAG 和 LLMOps 平台",
+        "summary": "这篇文章基于 Dify 的 README，介绍它如何把可视化工作流、RAG、Agent、模型管理、可观测性和 API 集成整理成面向生产的 LLM 应用平台。",
+        "body_file": "posts/zh/dify-llm-app-platform-workflow-rag-llmops.md"
+      },
+      "en": {
+        "title": "Dify: Turning LLM App Development into Workflow, RAG, and LLMOps",
+        "summary": "This post uses Dify's README to explain how the platform combines visual workflows, RAG, agents, model management, observability, and APIs into a production-oriented LLM app platform.",
+        "body_file": "posts/en/dify-llm-app-platform-workflow-rag-llmops.md"
+      }
+    }
+  },
+  {
+    "slug": "acl-style-files-latex-submission-contract",
+    "published_at": "2026-04-22",
+    "reading_time": "5 min",
+    "featured": false,
+    "tags": ["publishing", "latex", "acl", "templates"],
+    "translations": {
+      "zh": {
+        "title": "ACL Style Files：把论文模板当成投稿契约",
+        "summary": "这篇文章基于 ACL style files 的 README，介绍官方 LaTeX 模板如何把作者写作、格式边界、出版主席维护和后续格式预检连接成一条投稿契约。",
+        "body_file": "posts/zh/acl-style-files-latex-submission-contract.md"
+      },
+      "en": {
+        "title": "ACL Style Files: Treating the Paper Template as a Submission Contract",
+        "summary": "This post uses the ACL style files README to explain how the official LaTeX templates connect authoring, formatting boundaries, publication-chair maintenance, and later validation into one submission contract.",
+        "body_file": "posts/en/acl-style-files-latex-submission-contract.md"
+      }
+    }
+  },
+  {
+    "slug": "apache-maven-pom-build-documentation-contract",
+    "published_at": "2026-04-22",
+    "reading_time": "5 min",
+    "featured": false,
+    "tags": ["java", "maven", "build", "docs"],
+    "translations": {
+      "zh": {
+        "title": "Apache Maven：用 POM 把 Java 构建、报告和文档收进同一个入口",
+        "summary": "这篇文章基于 Apache Maven 本地分发目录的 README，介绍 Maven 如何用 POM 把构建、报告和文档整理成可被人、CI 和自动化工具共同理解的工程契约。",
+        "body_file": "posts/zh/apache-maven-pom-build-documentation-contract.md"
+      },
+      "en": {
+        "title": "Apache Maven: Using the POM as a Build, Reporting, and Documentation Contract",
+        "summary": "This post uses the Apache Maven README to explain how Maven uses the POM to turn builds, reporting, and documentation into a contract that humans, CI systems, and automation tools can inspect.",
+        "body_file": "posts/en/apache-maven-pom-build-documentation-contract.md"
+      }
+    }
+  },
+  {
+    "slug": "krkrz-visual-novel-runtime-compatibility",
+    "published_at": "2026-04-22",
+    "reading_time": "5 min",
+    "featured": false,
+    "tags": ["gamedev", "runtime", "visual-novel", "compatibility"],
+    "translations": {
+      "zh": {
+        "title": "吉里吉里Z：把视觉小说运行时做成清晰的兼容边界",
+        "summary": "这篇文章基于吉里吉里Z 本地分发目录的 README，介绍它如何把 2D 游戏运行时、KAG 视觉小说入口、插件化能力和吉里吉里2迁移注意事项整理成清晰边界。",
+        "body_file": "posts/zh/krkrz-visual-novel-runtime-compatibility.md"
+      },
+      "en": {
+        "title": "Kirikiri Z: Drawing a Clear Compatibility Boundary for a Visual Novel Runtime",
+        "summary": "This post uses the Kirikiri Z README to explain how the runtime frames 2D game hosting, KAG visual-novel authoring, pluginized capabilities, and Kirikiri2 migration notes.",
+        "body_file": "posts/en/krkrz-visual-novel-runtime-compatibility.md"
+      }
+    }
+  },
+  {
+    "slug": "notepad-plus-plus-local-tool-inventory",
+    "published_at": "2026-04-22",
+    "reading_time": "4 min",
+    "featured": false,
+    "tags": ["tools", "editor", "workflow", "windows"],
+    "translations": {
+      "zh": {
+        "title": "Notepad++：把轻量编辑器纳入本地工具清单",
+        "summary": "这篇文章基于 Notepad++ 的本地 README，介绍如何只用软件名、版本和启动入口等低风险信息，把轻量编辑器记录成本机工具链的一部分。",
+        "body_file": "posts/zh/notepad-plus-plus-local-tool-inventory.md"
+      },
+      "en": {
+        "title": "Notepad++: Treating a Lightweight Editor as Part of the Local Tool Inventory",
+        "summary": "This post uses the local Notepad++ README to explain how a lightweight editor can be documented through low-risk metadata such as name, version, and launch boundary.",
+        "body_file": "posts/en/notepad-plus-plus-local-tool-inventory.md"
+      }
+    }
+  },
+  {
+    "slug": "jupyter-notebook-local-lab-entrypoint",
+    "published_at": "2026-04-22",
+    "reading_time": "4 min",
+    "featured": false,
+    "tags": ["tools", "notebook", "python", "workflow"],
+    "translations": {
+      "zh": {
+        "title": "Jupyter Notebook：把本地实验入口整理成可控工作台",
+        "summary": "这篇文章基于 JupyterNotebook 的本地 README，介绍如何把 Miniconda、Notebook 工作目录和启动入口整理成安全克制的本地研究工作台记录。",
+        "body_file": "posts/zh/jupyter-notebook-local-lab-entrypoint.md"
+      },
+      "en": {
+        "title": "Jupyter Notebook: Turning a Local Research Entry Point into a Controlled Workbench",
+        "summary": "This post uses the local JupyterNotebook README to explain how a Miniconda-backed notebook workspace can be documented as a safe, repeatable research entry point.",
+        "body_file": "posts/en/jupyter-notebook-local-lab-entrypoint.md"
+      }
+    }
+  },
+  {
+    "slug": "mysql-workbench-visual-database-workbench",
+    "published_at": "2026-04-22",
+    "reading_time": "5 min",
+    "featured": false,
+    "tags": ["database", "mysql", "tools", "workflow"],
+    "translations": {
+      "zh": {
+        "title": "MySQL Workbench：把数据库连接、建模和运维放进一个可视化工作台",
+        "summary": "这篇文章基于 MySQL Workbench 本地 README，介绍它如何把 SQL 开发、数据建模、服务器管理、数据迁移和企业能力整理成一个可视化数据库工作台。",
+        "body_file": "posts/zh/mysql-workbench-visual-database-workbench.md"
+      },
+      "en": {
+        "title": "MySQL Workbench: Bringing SQL, Modeling, and Administration into One Visual Workbench",
+        "summary": "This post uses the local MySQL Workbench README to explain how it brings SQL development, data modeling, server administration, migration, and enterprise support into one visual database workbench.",
+        "body_file": "posts/en/mysql-workbench-visual-database-workbench.md"
+      }
+    }
+  }
+]

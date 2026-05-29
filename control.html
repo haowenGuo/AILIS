@@ -1,0 +1,895 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HumanClaw Control Panel</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: "Microsoft YaHei", -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+        }
+
+        :root {
+            color-scheme: light;
+            --bg: #f3f5f7;
+            --panel: rgba(255, 255, 255, 0.96);
+            --border: rgba(29, 49, 62, 0.12);
+            --text-main: #20313d;
+            --text-muted: #5b6b74;
+            --accent: #17856b;
+            --accent-soft: rgba(23, 133, 107, 0.12);
+            --accent-warm: #d96c46;
+            --accent-warm-soft: rgba(217, 108, 70, 0.12);
+            --shadow: 0 18px 40px rgba(23, 37, 49, 0.08);
+        }
+
+        html,
+        body {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background:
+                radial-gradient(circle at top right, rgba(217, 108, 70, 0.08), transparent 26%),
+                radial-gradient(circle at bottom left, rgba(23, 133, 107, 0.1), transparent 30%),
+                var(--bg);
+            color: var(--text-main);
+        }
+
+        body {
+            display: flex;
+            flex-direction: column;
+        }
+
+        button,
+        input,
+        select {
+            font: inherit;
+        }
+
+        #shell {
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+            flex: 1;
+        }
+
+        #header {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 16px;
+            padding: 22px 26px 18px;
+            border-bottom: 1px solid rgba(29, 49, 62, 0.08);
+            background: rgba(255, 255, 255, 0.82);
+            backdrop-filter: blur(10px);
+            -webkit-app-region: drag;
+        }
+
+        #header-main {
+            min-width: 0;
+        }
+
+        #eyebrow {
+            color: var(--accent);
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+
+        #title {
+            margin-top: 6px;
+            font-size: 28px;
+            font-weight: 700;
+            line-height: 1.1;
+        }
+
+        #subtitle {
+            margin-top: 10px;
+            max-width: 760px;
+            color: var(--text-muted);
+            font-size: 14px;
+            line-height: 1.7;
+        }
+
+        #header-actions {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            -webkit-app-region: no-drag;
+        }
+
+        .pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            min-height: 36px;
+            padding: 0 12px;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.95);
+            border: 1px solid rgba(29, 49, 62, 0.08);
+            color: var(--text-muted);
+            font-size: 13px;
+        }
+
+        .pill strong {
+            color: var(--text-main);
+            font-weight: 600;
+        }
+
+        .ghost-btn,
+        .primary-btn,
+        .danger-btn,
+        .icon-btn {
+            border: 1px solid transparent;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background-color 0.18s ease, border-color 0.18s ease, transform 0.18s ease;
+        }
+
+        .icon-btn {
+            width: 38px;
+            height: 38px;
+            background: rgba(255, 255, 255, 0.94);
+            border-color: rgba(29, 49, 62, 0.08);
+            color: var(--text-main);
+            font-size: 18px;
+        }
+
+        .icon-btn:hover,
+        .ghost-btn:hover,
+        .primary-btn:hover,
+        .danger-btn:hover {
+            transform: translateY(-1px);
+        }
+
+        .ghost-btn {
+            min-height: 40px;
+            padding: 0 14px;
+            background: rgba(255, 255, 255, 0.92);
+            border-color: rgba(29, 49, 62, 0.1);
+            color: var(--text-main);
+        }
+
+        .primary-btn {
+            min-height: 42px;
+            padding: 0 16px;
+            background: var(--accent);
+            color: #ffffff;
+        }
+
+        .primary-btn:disabled {
+            opacity: 0.55;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .danger-btn {
+            min-height: 40px;
+            padding: 0 14px;
+            background: var(--accent-warm-soft);
+            border-color: rgba(217, 108, 70, 0.18);
+            color: #8b472f;
+        }
+
+        #content {
+            flex: 1;
+            min-height: 0;
+            overflow: auto;
+            padding: 20px 26px 120px;
+        }
+
+        #section-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 18px;
+            align-items: start;
+        }
+
+        .panel-section {
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            box-shadow: var(--shadow);
+            overflow: hidden;
+        }
+
+        .section-head {
+            padding: 16px 18px 12px;
+            border-bottom: 1px solid rgba(29, 49, 62, 0.08);
+        }
+
+        .section-title {
+            font-size: 18px;
+            font-weight: 700;
+        }
+
+        .section-copy {
+            margin-top: 6px;
+            color: var(--text-muted);
+            font-size: 13px;
+            line-height: 1.6;
+        }
+
+        .section-body {
+            padding: 16px 18px 18px;
+            display: grid;
+            gap: 14px;
+        }
+
+        .field {
+            display: grid;
+            gap: 8px;
+        }
+
+        .field.inline {
+            grid-template-columns: minmax(0, 1fr) auto;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .field-meta {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+        }
+
+        .field-actions {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+        }
+
+        .field-label {
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        .field-help {
+            color: var(--text-muted);
+            font-size: 12px;
+            line-height: 1.5;
+        }
+
+        .field-value {
+            color: var(--accent);
+            font-size: 12px;
+            font-weight: 700;
+        }
+
+        .memory-list {
+            display: grid;
+            gap: 8px;
+        }
+
+        .memory-block {
+            border: 1px solid rgba(29, 49, 62, 0.1);
+            border-radius: 8px;
+            padding: 10px 12px;
+            background: rgba(248, 251, 250, 0.9);
+        }
+
+        .memory-block-title {
+            font-size: 13px;
+            font-weight: 700;
+        }
+
+        .memory-block-text {
+            margin-top: 6px;
+            color: var(--text-muted);
+            font-size: 12px;
+            line-height: 1.55;
+            white-space: pre-wrap;
+        }
+
+        input[type="text"],
+        input[type="password"],
+        input[type="number"],
+        select {
+            width: 100%;
+            min-height: 40px;
+            border: 1px solid rgba(29, 49, 62, 0.14);
+            border-radius: 8px;
+            padding: 0 12px;
+            background: #ffffff;
+            color: var(--text-main);
+        }
+
+        input[type="range"] {
+            width: 100%;
+            accent-color: var(--accent);
+        }
+
+        input[type="checkbox"] {
+            width: 18px;
+            height: 18px;
+            accent-color: var(--accent);
+        }
+
+        .split-2 {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 12px;
+        }
+
+        .dialogue-layout-editor {
+            display: grid;
+            gap: 12px;
+        }
+
+        .dialogue-preview-stage {
+            position: relative;
+            height: 280px;
+            border: 1px solid rgba(29, 49, 62, 0.1);
+            border-radius: 8px;
+            background:
+                linear-gradient(90deg, rgba(29, 49, 62, 0.05) 1px, transparent 1px),
+                linear-gradient(180deg, rgba(29, 49, 62, 0.05) 1px, transparent 1px),
+                #f8fbfa;
+            background-size: 24px 24px;
+            overflow: hidden;
+        }
+
+        .dialogue-window-preview {
+            position: absolute;
+            left: 50%;
+            top: 50%;
+            width: 280px;
+            height: 210px;
+            transform: translate(-50%, -50%);
+            transform-origin: center center;
+            border: 2px dashed rgba(23, 133, 107, 0.46);
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.58);
+        }
+
+        .dialogue-avatar-preview {
+            position: absolute;
+            left: 50%;
+            bottom: 0;
+            width: 120px;
+            height: 170px;
+            transform: translateX(-50%);
+            border: 1px solid rgba(29, 49, 62, 0.1);
+            border-bottom: 0;
+            border-radius: 70px 70px 8px 8px;
+            background:
+                radial-gradient(circle at 50% 24%, rgba(217, 108, 70, 0.18), transparent 20%),
+                linear-gradient(180deg, rgba(23, 133, 107, 0.18), rgba(23, 133, 107, 0.08));
+            pointer-events: none;
+        }
+
+        .dialogue-bubble-preview {
+            position: absolute;
+            left: 8px;
+            top: 8px;
+            width: 158px;
+            min-height: 58px;
+            padding: 9px 11px;
+            border: 2px solid rgba(86, 143, 184, 0.52);
+            border-radius: 8px;
+            background:
+                linear-gradient(90deg, rgba(123, 184, 223, 0.28), transparent 30px),
+                rgba(255, 255, 255, 0.96);
+            box-shadow:
+                0 10px 24px rgba(55, 112, 151, 0.14),
+                inset 4px 0 0 rgba(123, 184, 223, 0.34);
+            color: #263847;
+            font-size: 12px;
+            line-height: 1.45;
+            cursor: grab;
+            user-select: none;
+            touch-action: none;
+            transform-origin: 0 0;
+        }
+
+        .dialogue-bubble-preview:active {
+            cursor: grabbing;
+        }
+
+        .dialogue-resize-handle {
+            position: absolute;
+            right: -7px;
+            bottom: -7px;
+            width: 16px;
+            height: 16px;
+            border: 2px solid #ffffff;
+            border-radius: 50%;
+            background: var(--accent);
+            box-shadow: 0 2px 8px rgba(23, 37, 49, 0.2);
+            cursor: nwse-resize;
+            touch-action: none;
+        }
+
+        #footer-bar {
+            position: fixed;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+            padding: 16px 26px;
+            border-top: 1px solid rgba(29, 49, 62, 0.08);
+            background: rgba(255, 255, 255, 0.92);
+            backdrop-filter: blur(12px);
+        }
+
+        #status-text {
+            color: var(--text-muted);
+            font-size: 13px;
+        }
+
+        #footer-actions {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        @media (max-width: 980px) {
+            #section-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="shell">
+        <header id="header">
+            <div id="header-main">
+                <div id="eyebrow">HumanClaw Desktop</div>
+                <div id="title">控制面板</div>
+                <div id="subtitle">把桌宠显示、模型接口、语音路线和镜头参数都收在一个地方。保存后会立即同步到角色窗口和聊天窗。</div>
+            </div>
+            <div id="header-actions">
+                <div class="pill"><strong id="app-version">v1.0.0</strong><span>桌面版</span></div>
+                <button id="close-btn" class="icon-btn" type="button" aria-label="关闭控制面板">×</button>
+            </div>
+        </header>
+
+        <main id="content">
+            <div id="section-grid">
+                <section class="panel-section">
+                    <div class="section-head">
+                        <div class="section-title">桌宠显示</div>
+                        <div class="section-copy">角色大小、镜头距离和桌面表现统一从这里调。</div>
+                    </div>
+                    <div class="section-body">
+                        <label class="field">
+                            <div class="field-meta">
+                                <span class="field-label">桌宠缩放</span>
+                            </div>
+                            <select id="pet-scale"></select>
+                        </label>
+
+                        <label class="field">
+                            <div class="field-meta">
+                                <span class="field-label">镜头距离</span>
+                                <span class="field-value" id="camera-distance-value"></span>
+                            </div>
+                            <input id="camera-distance" type="range" min="0.75" max="1.8" step="0.01">
+                            <div class="field-help">数值越小越贴近人物。</div>
+                        </label>
+
+                        <label class="field">
+                            <div class="field-meta">
+                                <span class="field-label">镜头高度</span>
+                                <span class="field-value" id="camera-height-value"></span>
+                            </div>
+                            <input id="camera-height" type="range" min="0.7" max="1.8" step="0.01">
+                        </label>
+
+                        <label class="field">
+                            <div class="field-meta">
+                                <span class="field-label">注视高度</span>
+                                <span class="field-value" id="camera-target-y-value"></span>
+                            </div>
+                            <input id="camera-target-y" type="range" min="0.5" max="1.5" step="0.01">
+                        </label>
+
+                        <label class="field inline">
+                            <div>
+                                <div class="field-label">任务栏显示</div>
+                                <div class="field-help">关闭后桌宠只留在桌面和托盘里。</div>
+                            </div>
+                            <input id="pet-show-taskbar" type="checkbox">
+                        </label>
+                    </div>
+                </section>
+
+                <section class="panel-section">
+                    <div class="section-head">
+                        <div class="section-title">人物对话框</div>
+                        <div class="section-copy">拖动预览里的气泡放位置，拖右下角圆点改变说话时的透明窗口尺寸。</div>
+                    </div>
+                    <div class="section-body">
+                        <div class="dialogue-layout-editor">
+                            <div class="dialogue-preview-stage" id="avatar-bubble-editor">
+                                <div class="dialogue-window-preview" id="avatar-bubble-window-preview">
+                                    <div class="dialogue-avatar-preview" id="avatar-bubble-avatar-preview"></div>
+                                    <div class="dialogue-bubble-preview" id="avatar-bubble-preview">嗯嗯，我在这里。</div>
+                                    <div class="dialogue-resize-handle" id="avatar-bubble-window-resize"></div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="split-2">
+                            <label class="field">
+                                <div class="field-meta">
+                                    <span class="field-label">气泡左右</span>
+                                    <span class="field-value" id="avatar-bubble-left-value"></span>
+                                </div>
+                                <input id="avatar-bubble-left" type="range" min="0" max="640" step="1">
+                            </label>
+
+                            <label class="field">
+                                <div class="field-meta">
+                                    <span class="field-label">气泡上下</span>
+                                    <span class="field-value" id="avatar-bubble-top-value"></span>
+                                </div>
+                                <input id="avatar-bubble-top" type="range" min="0" max="480" step="1">
+                            </label>
+                        </div>
+
+                        <label class="field">
+                            <div class="field-meta">
+                                <span class="field-label">气泡比例</span>
+                                <span class="field-value" id="avatar-bubble-scale-value"></span>
+                            </div>
+                            <input id="avatar-bubble-scale" type="range" min="0.75" max="1.35" step="0.01">
+                        </label>
+
+                        <label class="field">
+                            <div class="field-meta">
+                                <span class="field-label">窗口宽度</span>
+                                <span class="field-value" id="avatar-bubble-extra-width-value"></span>
+                            </div>
+                            <input id="avatar-bubble-extra-width" type="range" min="0" max="520" step="1">
+                        </label>
+
+                        <label class="field">
+                            <div class="field-meta">
+                                <span class="field-label">窗口高度</span>
+                                <span class="field-value" id="avatar-bubble-extra-top-value"></span>
+                            </div>
+                            <input id="avatar-bubble-extra-top" type="range" min="0" max="360" step="1">
+                        </label>
+                    </div>
+                </section>
+
+                <section class="panel-section">
+                    <div class="section-head">
+                        <div class="section-title">Agent 链路</div>
+                        <div class="section-copy">对话统一进入 HumanClaw Agent Runner，由 Agent 判断是情感对话还是任务执行。</div>
+                    </div>
+                    <div class="section-body">
+                        <div class="field">
+                            <div class="field-meta">
+                                <span class="field-label">当前链路</span>
+                            </div>
+                            <div class="field-help">AIGril 对话窗 -> HumanClaw Agent Runner -> HumanClaw Gateway -> Tool Surface</div>
+                        </div>
+
+                        <div class="field">
+                            <div class="field-meta">
+                                <span class="field-label">HumanClaw 状态</span>
+                            </div>
+                            <div class="field-help" id="openclaw-status-text">读取中...</div>
+                            <div class="field-help" id="openclaw-runtime-text"></div>
+                        </div>
+
+                        <label class="field">
+                            <div class="field-meta">
+                                <span class="field-label">本地状态目录</span>
+                                <span class="field-actions">
+                                    <button id="choose-humanclaw-state-dir-btn" class="ghost-btn" type="button">选择目录</button>
+                                    <button id="reset-humanclaw-state-dir-btn" class="ghost-btn" type="button">使用默认</button>
+                                </span>
+                            </div>
+                            <input id="humanclaw-state-dir" type="text" placeholder="留空使用软件根目录下的 .humanclaw-state">
+                            <div class="field-help" id="humanclaw-state-dir-help">默认保存在软件根目录，不写入 C 盘用户数据目录。</div>
+                        </label>
+
+                        <label class="field inline">
+                            <div>
+                                <div class="field-label">完全控制能力</div>
+                                <div class="field-help">开启后任务 Agent 可自动执行命令、读写文件、操作用户目录和外部工具；关闭后危险动作会重新要求确认。</div>
+                            </div>
+                            <input id="computer-control-enabled" type="checkbox">
+                        </label>
+
+                        <div class="field">
+                            <div class="field-meta">
+                                <span class="field-label">对话触发</span>
+                            </div>
+                            <div class="field-help">桌面助手版本只在用户输入、语音输入或任务指令时回应。</div>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="panel-section">
+                    <div class="section-head">
+                        <div class="section-title">人格记忆</div>
+                        <div class="section-copy">Letta/MemGPT 风格记忆块、项目记忆、轻量反思和好感度状态都会保存在本地状态目录。</div>
+                    </div>
+                    <div class="section-body">
+                        <div class="field">
+                            <div class="field-meta">
+                                <span class="field-label">记忆状态</span>
+                                <span class="field-actions">
+                                    <button id="refresh-memory-btn" class="ghost-btn" type="button">刷新</button>
+                                    <button id="reset-affinity-btn" class="ghost-btn" type="button">好感度归 50</button>
+                                </span>
+                            </div>
+                            <div class="field-help" id="memory-status-text">读取中...</div>
+                            <div class="field-help" id="memory-path-text"></div>
+                        </div>
+
+                        <div class="field">
+                            <div class="field-meta">
+                                <span class="field-label">核心记忆块</span>
+                            </div>
+                            <div class="memory-list" id="memory-block-list"></div>
+                            <div class="field-help">这里展示摘要和状态，明文密钥不会出现在模型上下文和控制面板摘要里。</div>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="panel-section">
+                    <div class="section-head">
+                        <div class="section-title">模型 API</div>
+                        <div class="section-copy">桌面版直接使用这里配置的 OpenAI-compatible 接口，Key 只保存在本机用户数据目录。</div>
+                    </div>
+                    <div class="section-body">
+                        <label class="field">
+                            <div class="field-meta">
+                                <span class="field-label">Provider</span>
+                            </div>
+                            <select id="llm-provider"></select>
+                        </label>
+
+                        <label class="field">
+                            <div class="field-meta">
+                                <span class="field-label">API Base</span>
+                            </div>
+                            <input id="llm-base-url" type="text" placeholder="https://ark.cn-beijing.volces.com/api/v3">
+                        </label>
+
+                        <label class="field">
+                            <div class="field-meta">
+                                <span class="field-label">模型</span>
+                            </div>
+                            <input id="llm-model" type="text" placeholder="doubao-seed-2-0-mini-260215">
+                        </label>
+
+                        <label class="field">
+                            <div class="field-meta">
+                                <span class="field-label">API Key</span>
+                                <button id="clear-llm-key-btn" class="ghost-btn" type="button">清除 Key</button>
+                            </div>
+                            <input id="llm-api-key" type="password" autocomplete="off" placeholder="留空表示保留已保存 Key">
+                            <div class="field-help" id="llm-key-state">Key 状态读取中...</div>
+                        </label>
+
+                        <div class="split-2">
+                            <label class="field">
+                                <div class="field-meta">
+                                    <span class="field-label">温度</span>
+                                    <span class="field-value" id="llm-temperature-value"></span>
+                                </div>
+                                <input id="llm-temperature" type="range" min="0" max="2" step="0.01">
+                            </label>
+                            <label class="field">
+                                <div class="field-meta">
+                                    <span class="field-label">超时（ms）</span>
+                                </div>
+                                <input id="llm-timeout" type="number" min="5000" max="120000" step="1000">
+                            </label>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="panel-section">
+                    <div class="section-head">
+                        <div class="section-title">邮箱账号</div>
+                        <div class="section-copy">邮件工具会优先使用这里保存的本机账号配置。QQ 使用邮箱授权码，Gmail/Outlook 可用应用密码或 OAuth2 token。</div>
+                    </div>
+                    <div class="section-body">
+                        <div class="split-2">
+                            <label class="field">
+                                <div class="field-meta">
+                                    <span class="field-label">QQ 邮箱</span>
+                                </div>
+                                <input id="email-qq-account" type="text" autocomplete="off" placeholder="name@qq.com">
+                            </label>
+                            <label class="field">
+                                <div class="field-meta">
+                                    <span class="field-label">授权码</span>
+                                    <button id="clear-email-qq-secret-btn" class="ghost-btn" type="button">清除</button>
+                                </div>
+                                <input id="email-qq-secret" type="password" autocomplete="off" placeholder="留空表示保留已保存授权码">
+                                <div class="field-help" id="email-qq-state">未配置</div>
+                            </label>
+                        </div>
+
+                        <div class="split-2">
+                            <label class="field">
+                                <div class="field-meta">
+                                    <span class="field-label">Gmail</span>
+                                </div>
+                                <input id="email-gmail-account" type="text" autocomplete="off" placeholder="name@gmail.com">
+                            </label>
+                            <label class="field">
+                                <div class="field-meta">
+                                    <span class="field-label">App Password / Token</span>
+                                    <button id="clear-email-gmail-secret-btn" class="ghost-btn" type="button">清除</button>
+                                </div>
+                                <input id="email-gmail-secret" type="password" autocomplete="off" placeholder="留空表示保留已保存密钥">
+                                <div class="field-help" id="email-gmail-state">未配置</div>
+                            </label>
+                        </div>
+
+                        <div class="split-2">
+                            <label class="field">
+                                <div class="field-meta">
+                                    <span class="field-label">Outlook</span>
+                                </div>
+                                <input id="email-outlook-account" type="text" autocomplete="off" placeholder="name@outlook.com">
+                            </label>
+                            <label class="field">
+                                <div class="field-meta">
+                                    <span class="field-label">App Password / Token</span>
+                                    <button id="clear-email-outlook-secret-btn" class="ghost-btn" type="button">清除</button>
+                                </div>
+                                <input id="email-outlook-secret" type="password" autocomplete="off" placeholder="留空表示保留已保存密钥">
+                                <div class="field-help" id="email-outlook-state">未配置</div>
+                            </label>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="panel-section">
+                    <div class="section-head">
+                        <div class="section-title">语音与麦克风</div>
+                        <div class="section-copy">CosyVoice3 作为本地高质量路线，Kokoro-82M 作为最低延迟路线，ElevenLabs 作为顶级音质路线；浏览器与 VITS 作为备用方案保留。</div>
+                    </div>
+                    <div class="section-body">
+                        <label class="field">
+                            <div class="field-meta">
+                                <span class="field-label">语音输出模式</span>
+                            </div>
+                            <select id="speech-mode"></select>
+                        </label>
+
+                        <label class="field">
+                            <div class="field-meta">
+                                <span class="field-label">ElevenLabs API Base</span>
+                            </div>
+                            <input id="elevenlabs-api-base" type="text" autocomplete="off" placeholder="https://api.elevenlabs.io">
+                        </label>
+
+                        <label class="field">
+                            <div class="field-meta">
+                                <span class="field-label">ElevenLabs Voice ID</span>
+                            </div>
+                            <input id="elevenlabs-voice-id" type="text" autocomplete="off" placeholder="输入 Voice ID">
+                        </label>
+
+                        <label class="field">
+                            <div class="field-meta">
+                                <span class="field-label">ElevenLabs API Key</span>
+                                <button id="clear-elevenlabs-key-btn" class="ghost-btn" type="button">清除 Key</button>
+                            </div>
+                            <input id="elevenlabs-api-key" type="password" autocomplete="off" placeholder="留空表示保留已保存 Key">
+                            <div class="field-help" id="elevenlabs-key-state">Key 状态读取中...</div>
+                        </label>
+
+                        <div class="split-2">
+                            <label class="field">
+                                <div class="field-meta">
+                                    <span class="field-label">ElevenLabs 模型</span>
+                                </div>
+                                <input id="elevenlabs-model-id" type="text" autocomplete="off" placeholder="eleven_multilingual_v2">
+                            </label>
+                            <label class="field">
+                                <div class="field-meta">
+                                    <span class="field-label">音频格式</span>
+                                </div>
+                                <input id="elevenlabs-output-format" type="text" autocomplete="off" placeholder="mp3_44100_128">
+                            </label>
+                        </div>
+
+                        <label class="field">
+                            <div class="field-meta">
+                                <span class="field-label">ElevenLabs 超时（ms）</span>
+                            </div>
+                            <input id="elevenlabs-timeout" type="number" min="5000" max="120000" step="1000">
+                        </label>
+
+                        <label class="field">
+                            <div class="field-meta">
+                                <span class="field-label">默认麦克风</span>
+                                <button id="refresh-mics-btn" class="ghost-btn" type="button">刷新设备</button>
+                            </div>
+                            <select id="preferred-mic"></select>
+                            <div class="field-help" id="mic-help">会优先使用这里指定的输入设备。</div>
+                        </label>
+
+                        <label class="field">
+                            <div class="field-meta">
+                                <span class="field-label">语音识别模式</span>
+                            </div>
+                            <select id="recognition-mode"></select>
+                            <div class="field-help">按钮模式需要点一次开始听；自动 ASR 会持续监听，并先做人声/噪音门禁。</div>
+                        </label>
+
+                        <label class="field">
+                            <div class="field-meta">
+                                <span class="field-label">本地语音速度</span>
+                                <span class="field-value" id="tts-rate-value"></span>
+                            </div>
+                            <input id="tts-rate" type="range" min="0.6" max="1.4" step="0.01">
+                        </label>
+
+                        <label class="field">
+                            <div class="field-meta">
+                                <span class="field-label">本地语音音高</span>
+                                <span class="field-value" id="tts-pitch-value"></span>
+                            </div>
+                            <input id="tts-pitch" type="range" min="0.6" max="1.6" step="0.01">
+                        </label>
+
+                        <label class="field">
+                            <div class="field-meta">
+                                <span class="field-label">本地语音音量</span>
+                                <span class="field-value" id="tts-volume-value"></span>
+                            </div>
+                            <input id="tts-volume" type="range" min="0" max="1" step="0.01">
+                        </label>
+                    </div>
+                </section>
+
+                <section class="panel-section">
+                    <div class="section-head">
+                        <div class="section-title">运行信息</div>
+                        <div class="section-copy">给排障和二次开发留一块固定的观察位。</div>
+                    </div>
+                    <div class="section-body">
+                        <div class="field">
+                            <div class="field-label">用户数据目录</div>
+                            <div class="field-help" id="user-data-path">读取中...</div>
+                        </div>
+
+                        <div class="field">
+                            <div class="field-label">识别模式</div>
+                            <div class="field-help" id="recognition-mode-text">auto-vad</div>
+                        </div>
+
+                        <div class="field">
+                            <div class="field-label">打包状态</div>
+                            <div class="field-help" id="package-state-text">读取中...</div>
+                        </div>
+                    </div>
+                </section>
+            </div>
+        </main>
+
+        <footer id="footer-bar">
+            <div id="status-text">正在读取当前配置...</div>
+            <div id="footer-actions">
+                <button id="reset-btn" class="danger-btn" type="button">恢复默认</button>
+                <button id="save-btn" class="primary-btn" type="button" disabled>保存设置</button>
+            </div>
+        </footer>
+    </div>
+
+    <script type="module" src="./src/control-panel-app.js"></script>
+</body>
+</html>

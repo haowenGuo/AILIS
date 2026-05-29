@@ -1,0 +1,169 @@
+{
+  "default_locale": "zh",
+  "locales": {
+    "zh": {
+      "site_title": "郭浩文",
+      "site_subtitle": "个人博客 · 项目 · 笔记",
+      "hero_title": "把系统、虚拟人和想法，持续地做出来，也写出来。",
+      "hero_intro": "这是一个偏写作优先的个人博客框架。结构参考了几种非常成熟的个人博客写法：Paul Graham 的简洁文章流、Josh Comeau 的个人主页式入口，以及 swyx 的 About / Projects / Writing 分层。",
+      "bio": "郭浩文，主要关注图形渲染、虚拟人交互、大模型应用工程，以及把想法真正做成可部署系统的过程。这里后续会持续更新项目记录、技术笔记、开发日志和随笔。",
+      "location": "武汉 / 中国",
+      "email": "1910481404@qq.com",
+      "github": "https://github.com/haowenGuo",
+      "x": "",
+      "now_title": "Now",
+      "now_text": "当前重点：把个人项目、技术文章和实验记录系统化整理出来，逐步形成稳定的个人表达空间。",
+      "nav": {
+        "home": "首页",
+        "about": "关于",
+        "projects": "项目",
+        "writing": "写作"
+      },
+      "labels": {
+        "recent_writing": "最近写作",
+        "recent_posts": "最近文章",
+        "featured_writing": "精选写作",
+        "start_here": "从这里开始",
+        "projects": "项目",
+        "selected_work": "代表项目",
+        "inspiration": "参考",
+        "blog_references": "博客参考",
+        "how_to_update": "如何更新",
+        "future_workflow": "后续更新方式",
+        "about": "关于",
+        "base": "基本信息",
+        "writing": "写作",
+        "all_writing": "全部文章",
+        "project": "项目",
+        "read_more": "了解更多",
+        "read_writing": "阅读文章",
+        "view_projects": "查看项目",
+        "about_me": "关于我",
+        "back_to_writing": "← 返回文章列表"
+      },
+      "about_sections": [
+        {
+          "title": "关于我",
+          "body": "我主要关注图形渲染、虚拟人交互、大模型应用工程，以及把想法真正做成可部署系统的过程。这个博客后续会逐步承接这些内容。"
+        },
+        {
+          "title": "我会写什么",
+          "body": "博客将主要记录项目复盘、技术实现、开发日志、个人想法，以及一些更长期的研究兴趣。"
+        }
+      ],
+      "projects_intro": "这里会逐步收录我认为值得长期维护和展示的项目。当前先保留最核心的两个入口，后面你只需要继续往 site.json 里追加项目即可。",
+      "writing_intro": "这里是文章列表页。后续无论你写项目复盘、技术笔记、周记还是更个人化的随笔，都可以沿用同一套结构。",
+      "featured_projects": [
+        {
+          "name": "AIGril / AIGL",
+          "description": "一个基于浏览器的 3D 虚拟人项目，包含 VRM 渲染、动作表情联动、流式对话和记忆系统。",
+          "link": "https://haowenGuo.github.io/AIGril/?backend=https://airi-backend.onrender.com"
+        },
+        {
+          "name": "AI Safety API",
+          "description": "部署在同一 Render 服务中的内容安全审核接口，提供综合判定和多算法结果。",
+          "link": "https://airi-backend.onrender.com/docs"
+        }
+      ],
+      "inspirations": [
+        {
+          "name": "Paul Graham",
+          "url": "https://paulgraham.com/",
+          "note": "文章优先、极简结构"
+        },
+        {
+          "name": "Josh Comeau",
+          "url": "https://www.joshwcomeau.com/",
+          "note": "首页像个人品牌入口，信息组织清晰"
+        },
+        {
+          "name": "swyx",
+          "url": "https://www.swyx.io/",
+          "note": "About / Projects / Writing 分层明确"
+        }
+      ]
+    },
+    "en": {
+      "site_title": "HaoWen Guo",
+      "site_subtitle": "Personal blog · projects · notes",
+      "hero_title": "Building systems, avatars, and ideas in public.",
+      "hero_intro": "This is a writing-first personal blog framework. The structure borrows from several mature blogs: the simplicity of Paul Graham, the strong homepage identity of Josh Comeau, and the About / Projects / Writing split used by swyx.",
+      "bio": "HaoWen Guo works around graphics, virtual characters, AI application engineering, and the process of turning ideas into deployable systems. This blog will gradually collect project notes, technical writing, devlogs, and essays.",
+      "location": "Wuhan / China",
+      "email": "1910481404@qq.com",
+      "github": "https://github.com/haowenGuo",
+      "x": "",
+      "now_title": "Now",
+      "now_text": "Current focus: turning personal projects, technical writing, and experimental notes into a stable long-term body of work.",
+      "nav": {
+        "home": "Home",
+        "about": "About",
+        "projects": "Projects",
+        "writing": "Writing"
+      },
+      "labels": {
+        "recent_writing": "Recent writing",
+        "recent_posts": "Recent posts",
+        "featured_writing": "Featured writing",
+        "start_here": "Start here",
+        "projects": "Projects",
+        "selected_work": "Selected work",
+        "inspiration": "Inspiration",
+        "blog_references": "Blog references",
+        "how_to_update": "How to update",
+        "future_workflow": "Future workflow",
+        "about": "About",
+        "base": "Base",
+        "writing": "Writing",
+        "all_writing": "All writing",
+        "project": "Project",
+        "read_more": "Read more",
+        "read_writing": "Read writing",
+        "view_projects": "View projects",
+        "about_me": "About me",
+        "back_to_writing": "← Back to writing"
+      },
+      "about_sections": [
+        {
+          "title": "About me",
+          "body": "I work around graphics, virtual character systems, AI application engineering, and the process of turning ideas into something deployable. This blog is meant to hold that body of work over time."
+        },
+        {
+          "title": "What I write about",
+          "body": "The writing here will mainly cover project breakdowns, implementation notes, devlogs, personal essays, and longer-term research interests."
+        }
+      ],
+      "projects_intro": "This page will gradually collect the projects I want to maintain and present for the long term. For now it keeps the two most representative entries, and later you only need to append more items in site.json.",
+      "writing_intro": "This is the archive page for writing. Whether you publish project breakdowns, technical notes, weekly logs, or more personal essays, they can all live in the same structure.",
+      "featured_projects": [
+        {
+          "name": "AIGril / AIGL",
+          "description": "A browser-based 3D virtual companion project with VRM rendering, action/expression control, streaming chat, and memory.",
+          "link": "https://haowenGuo.github.io/AIGril/?backend=https://airi-backend.onrender.com"
+        },
+        {
+          "name": "AI Safety API",
+          "description": "A safety moderation API deployed on the same Render backend, returning both aggregate decisions and per-algorithm results.",
+          "link": "https://airi-backend.onrender.com/docs"
+        }
+      ],
+      "inspirations": [
+        {
+          "name": "Paul Graham",
+          "url": "https://paulgraham.com/",
+          "note": "Writing first, radically simple structure"
+        },
+        {
+          "name": "Josh Comeau",
+          "url": "https://www.joshwcomeau.com/",
+          "note": "A homepage that works as a personal brand surface"
+        },
+        {
+          "name": "swyx",
+          "url": "https://www.swyx.io/",
+          "note": "Clear About / Projects / Writing information architecture"
+        }
+      ]
+    }
+  }
+}
