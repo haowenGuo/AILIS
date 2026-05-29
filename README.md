@@ -1,69 +1,92 @@
-<div align="center">
-  <h1>AIGril</h1>
-  <p><strong>AIGL virtual companion for both the browser and a desktop-pet style Electron app, with a 3D VRM avatar, streaming chat, expressive animation, and lightweight memory.</strong></p>
-  <p>
-    <a href="https://haowenGuo.github.io/AIGril/?backend=https://airi-backend.onrender.com"><img alt="Try AIGril" src="https://img.shields.io/badge/Try%20AIGril-Live%20Experience-2563eb?style=for-the-badge"></a>
-    <a href="https://haowenGuo.github.io/AIGril/"><img alt="Frontend Demo" src="https://img.shields.io/badge/GitHub%20Pages-Frontend%20Demo-0f172a?style=for-the-badge"></a>
-    <a href="https://airi-backend.onrender.com/docs"><img alt="Backend API" src="https://img.shields.io/badge/Backend-FastAPI%20Docs-059669?style=for-the-badge"></a>
-  </p>
-  <p>
-    <a href="README.md">English</a> ·
-    <a href="README.zh-CN.md">简体中文</a> ·
-    <a href="README.ja.md">日本語</a>
-  </p>
-</div>
+# AIGL Assistant
 
----
+AIGL Assistant is a desktop embodied-agent project built around a VRM character, a local Electron runtime, speech interaction, visual understanding, memory, and a HumanClaw-style tool harness.
 
-## Overview
+This repository is no longer just a browser companion demo. It keeps some avatar and frontend foundations from the earlier AIGril work, but its product direction is different: AIGL Assistant is meant to feel like a personal desktop assistant that can talk, see context when permitted, remember preferences, and help with real tasks through a stable agent runtime.
 
-AIGril now has two usable fronts built around the same AIGL runtime:
+## Product Direction
 
-- Web experience for browser-based conversation and demo access
-- Electron desktop pet for always-on-top companionship on Windows PC
+The project has two goals that must stay balanced:
 
-The project keeps the same VRM avatar, motion system, chat flow, and backend integration, while packaging them differently for browser and desktop use.
+- Humanlike experience: AIGL should feel like a character sharing the desktop with the user, not a control panel wrapped around a chatbot.
+- Reliable task execution: tools, approvals, memory, vision, and model calls should be structured enough to support complex work without making the user feel they are operating a developer console.
 
-## Experience
+In short, the bottom layer should be engineering-stable like Codex or Claude Code, while the top layer should feel like a warm desktop character.
 
-- Full web experience: [https://haowenGuo.github.io/AIGril/?backend=https://airi-backend.onrender.com](https://haowenGuo.github.io/AIGril/?backend=https://airi-backend.onrender.com)
-- Frontend-only demo: [https://haowenGuo.github.io/AIGril/](https://haowenGuo.github.io/AIGril/)
-- Backend API docs: [https://airi-backend.onrender.com/docs](https://airi-backend.onrender.com/docs)
+## What Makes This Different From AIGril
 
-## Desktop Pet Features
+The older AIGril project focused mainly on a web/desktop-pet companion experience. AIGL Assistant is moving toward a fuller local assistant architecture:
 
-- Frameless transparent pet window
-- Always-on-top desktop presence with remembered size, scale, position, and visibility
-- Click the pet to open chat
-- Right-click menu for `Chat`, `Speech Mode`, `Scale`, and `Quit`
-- System tray entry with visibility and taskbar options
-- Separate chat window synchronized with the pet runtime
-- Three speech output modes: server voice, local lightweight voice, or muted voice
-- Manual local speech recognition in the chat window on desktop
+- Desktop-first Electron runtime instead of a public web demo first
+- HumanClaw agent loop for planning, tool calls, approvals, event flow, and recovery
+- Vision tools for chat-window, full-screen, and region screenshots as model context
+- Multiple speech routes, including low-latency Kokoro, higher-quality CosyVoice, and ElevenLabs
+- Local ASR direction with automatic voice activity detection
+- Memory blocks, project memory, relationship state, and lightweight reflection
+- Humanlike experience evals for persona, tone, memory use, emotion response, and low tool-feel
 
-## Core Features
+## Current Capabilities
 
-- Streaming chat responses from a FastAPI backend
-- VRM avatar actions such as idle, dance, surprise, wave, and anger
-- Expression presets such as happy, sad, relaxed, surprised, and playful blink
-- Speaking-state animation and lip-sync fallback while text is arriving
-- Session memory with periodic summary compression
+- VRM desktop character with expressions, actions, lip sync, and dialogue bubble rendering
+- Electron desktop shell with pet window, chat window, control panel, and local settings
+- Chat flow backed by an OpenAI-compatible model provider
+- Screenshot-based visual understanding through a permission-aware vision layer
+- HumanClaw tool layer for file, code, computer, email, MCP, and vision skills
+- Durable pending approval and local state storage
+- Speech output through desktop TTS workers and cloud TTS providers
+- Local speech recognition worker and recognition-mode controls
+- AIGL humanlike eval dataset, judge rules, runners, and long-term companionship cases
 
-## Tech Stack
+## Architecture
 
-- Frontend: Vite, Three.js, `@pixiv/three-vrm`
-- Desktop shell: Electron
-- Backend: FastAPI, SQLAlchemy, SQLite
-- Model access: OpenAI-compatible API
-- Deployment: GitHub Pages + Render
+```text
+electron/   Desktop main process, HumanClaw runtime, TTS/ASR workers, tool implementations
+src/        Renderer apps for chat, pet avatar, control panel, speech, vision UI, and bubbles
+backend/    Optional FastAPI backend, API schemas, education/Vivix services, and static assets
+Resources/  VRM model, VRMA motions, and reference voice assets
+evals/      AIGL humanlike experience scenarios and dataset plans
+tests/      Node test suites for HumanClaw, memory, tools, evals, provider, and runtime behavior
+docs/       Architecture notes, OpenClaw research, HumanClaw design, memory, vision, and eval docs
+scripts/    Validation, smoke tests, eval runners, generation tools, and build helpers
+```
 
-## Run Locally
+Core design documents:
 
-### Web
+- [Embodied Agent Architecture](docs/aigl-embodied-agent-architecture.md)
+- [Memory Architecture V2](docs/aigl-memory-architecture-v2.md)
+- [Humanlike Eval](docs/aigl-humanlike-eval.md)
+- [OpenClaw From Zero](docs/openclaw-from-zero.md)
+- [Tool Ecosystem Driver Guide](docs/tool-ecosystem-driver-guide.md)
+
+## Local Development
+
+Install dependencies:
 
 ```bash
 pnpm install
-pnpm dev
+```
+
+Run the desktop app in development mode:
+
+```bash
+pnpm desktop:dev
+```
+
+Build and start the desktop app:
+
+```bash
+pnpm desktop:start
+```
+
+Package the Windows desktop app:
+
+```bash
+pnpm desktop:package
+```
+
+Optional backend setup:
+
+```bash
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
@@ -71,63 +94,45 @@ copy backend\.env.example backend\.env
 python -m uvicorn backend.main:app --reload
 ```
 
-### Desktop Pet
+## Configuration
+
+Most desktop settings are managed through the Electron control panel and local desktop state. The project supports OpenAI-compatible providers, including custom base URLs, model names, request timeouts, and local/private credentials.
+
+Useful environment examples live in:
+
+- `backend/.env.example`
+- `requirements-desktop-asr.txt`
+- `package.json`
+
+Local caches, downloaded models, runtime logs, eval outputs, and HumanClaw state are intentionally ignored by Git. They are machine-local data, not source assets.
+
+## Validation
+
+Common checks:
 
 ```bash
-pnpm install
-python -m pip install -r requirements-desktop-asr.txt
-pnpm desktop:start
+pnpm test:humanclaw-memory
+pnpm test:aigl-humanlike-eval
+pnpm test:humanclaw-runtime
+pnpm test:humanclaw-tool-contracts
+pnpm humanclaw:validate-gateway
 ```
 
-Notes:
-
-- Local speech recognition is optional and only used by the Electron build
-- The current desktop ASR path uses a local Python worker with Whisper Small
-- On first use, the ASR model is downloaded and cached locally
-
-### Desktop Development
+Humanlike eval commands:
 
 ```bash
-pnpm desktop:dev
+pnpm eval:aigl-humanlike:validate
+pnpm eval:aigl-humanlike:generate
+pnpm eval:aigl-humanlike:report
+pnpm eval:aigl-humanlike:long-term:validate
 ```
 
-Required environment variable:
+## Privacy Notes
 
-```env
-LLM_API_KEY=your_llm_api_key
-```
+AIGL Assistant is designed as a personal desktop assistant, so local secrets and private memory can exist on the user's own machine. The codebase should still avoid committing real API keys, runtime transcripts, logs, local model caches, generated eval results, or downloaded model weights.
 
-## Packaging
+Vision is treated as a perception layer, not a screen-control agent. Screenshots are intended to help the model understand context and answer better, not to silently click, type, purchase, send, or submit actions.
 
-Build the latest Windows desktop packages with:
+## Status
 
-```bash
-pnpm desktop:package
-```
-
-Generated files are written to [`release/`](release), including:
-
-- `AIGril-Setup-<version>-win-x64.exe`
-- `AIGril-Portable-<version>-win-x64.exe`
-- `release/win-unpacked/AIGril.exe`
-
-## Repository Layout
-
-```text
-backend/   FastAPI API, memory logic, deployment config
-electron/  Electron main process, preload bridge, desktop state
-src/       VRM avatar, chat runtime, desktop render entry points
-Resources/ VRM model and VRMA animation assets
-scripts/   Static build helpers
-examples/  Standalone developer examples
-```
-
-## Deployment
-
-- Public frontend: GitHub Pages
-- Public backend: Render
-- Render config: [`render.yaml`](render.yaml)
-
-## Goal
-
-Build a virtual companion that feels responsive, expressive, and pleasant both in the browser and as a desktop pet, while keeping the project structure practical to evolve.
+This project is in active development. The current priority is to keep the existing stable runtime intact while improving the presentation layer, memory quality, speech/vision experience, tool contracts, and eval coverage.
