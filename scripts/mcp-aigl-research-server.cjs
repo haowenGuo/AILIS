@@ -1578,7 +1578,7 @@ function buildAuthorSummary(authors = []) {
         .join(', ');
 }
 
-function scorePaperMetadataCandidate(candidate = {}, { title = '', query = '', doi = '' } = {}) {
+function scorePaperMetadataCandidate(candidate = {}, { title = '', query = '', doi = '', authorId = '' } = {}) {
     const normalizedDoi = normalizeDoi(doi);
     const candidateDoi = normalizeDoi(candidate.doi);
     const targetTitle = normalizePaperTitle(title || query);
@@ -1620,6 +1620,9 @@ function scorePaperMetadataCandidate(candidate = {}, { title = '', query = '', d
     }
     if (candidate.authors?.length) {
         score += 8;
+    }
+    if (normalizeString(authorId)) {
+        score += 160;
     }
     return score;
 }
@@ -1699,8 +1702,10 @@ async function paperMetadataLookup(args = {}) {
     const query = normalizeString(args.query || args.q || args.search || title);
     const rawUrl = normalizeString(args.url || args.uri);
     const doi = normalizeDoi(args.doi || args.DOI || (/doi\.org\//i.test(rawUrl) ? rawUrl : ''));
-    if (!title && !query && !doi) {
-        return errorResult('paper_metadata_lookup requires title, query, or doi');
+    const authorId = normalizeString(args.authorId || args.author_id || args.authorOpenAlexId || args.author_openalex_id);
+    const beforeYear = clampNumber(args.beforeYear || args.before_year, 0, 0, 3000);
+    if (!title && !query && !doi && !authorId) {
+        return errorResult('paper_metadata_lookup requires title, query, doi, or authorId');
     }
     const maxResults = clampNumber(args.maxResults || args.max_results, 5, 1, 12);
     const timeoutMs = clampNumber(args.timeoutMs || args.timeout_ms, 45000, 5000, 180000);
@@ -1708,10 +1713,67 @@ async function paperMetadataLookup(args = {}) {
     const attempts = [];
     const results = [];
     const seen = new Set();
-    const searchText = normalizeString(title || query || doi);
+    const searchText = normalizeString(title || query || doi || authorId);
 
     const openAlexBaseUrl = normalizeString(args.openAlexBaseUrl, 'https://api.openalex.org/works');
     const crossrefBaseUrl = normalizeString(args.crossrefBaseUrl, 'https://api.crossref.org/works');
+
+    if (authorId) {
+        const authorWorksUrl = appendUrlQueryParams(
+            `${openAlexBaseUrl}?filter=${encodeURIComponent(`author.id:${authorId}`)}&sort=publication_date:asc&per-page=${Math.min(maxResults, 10)}`,
+            { api_key: openAlexApiKey }
+        );
+        const authorWorks = await fetchJsonUrl(authorWorksUrl, Math.min(timeoutMs, 20000));
+        attempts.push({ source: 'openalex_author_works', url: authorWorksUrl, ok: authorWorks.ok, status: authorWorks.status, error: authorWorks.error || '' });
+        if (authorWorks.ok) {
+            for (const work of Array.isArray(authorWorks.json?.results) ? authorWorks.json.results : []) {
+                pushPaperMetadataCandidate(results, seen, mapOpenAlexWorkToPaperMetadata(work), { title, query, doi, authorId });
+            }
+        }
+        const rankedAuthorWorks = results
+            .filter((candidate) => !beforeYear || !candidate.year || candidate.year < beforeYear)
+            .sort((a, b) => {
+                const yearA = Number(a.year || 9999);
+                const yearB = Number(b.year || 9999);
+                if (yearA !== yearB) {
+                    return yearA - yearB;
+                }
+                return b.score - a.score;
+            })
+            .slice(0, maxResults);
+        if (!rankedAuthorWorks.length) {
+            return errorResult('paper_metadata_lookup found no scholarly metadata candidates', {
+                status: 'no_results',
+                title,
+                query,
+                doi,
+                authorId,
+                beforeYear,
+                attempts
+            });
+        }
+        const payload = {
+            status: 'completed',
+            title,
+            query,
+            doi,
+            authorId,
+            beforeYear,
+            resultCount: rankedAuthorWorks.length,
+            attempts,
+            bestMatch: rankedAuthorWorks[0],
+            results: rankedAuthorWorks
+        };
+        const text = JSON.stringify(payload, null, 2);
+        return {
+            content: [{ type: 'text', text }],
+            structuredContent: {
+                ok: true,
+                ...payload
+            },
+            details: payload
+        };
+    }
 
     if (doi) {
         const openAlexByDoi = appendUrlQueryParams(
@@ -1776,8 +1838,23 @@ async function paperMetadataLookup(args = {}) {
         title,
         query,
         doi,
+        authorId,
+        beforeYear,
         resultCount: rankedResults.length,
         attempts,
+        bestMatch: rankedResults[0],
+        suggestedNextCalls: (rankedResults[0]?.authors || [])
+            .filter((author) => normalizeString(author.openAlexId))
+            .slice(0, 5)
+            .map((author) => ({
+                tool: 'paper_metadata_lookup',
+                args: {
+                    authorId: author.openAlexId,
+                    beforeYear: rankedResults[0]?.year || undefined,
+                    maxResults
+                },
+                reason: `List earlier works for ${author.name}`
+            })),
         results: rankedResults
     };
     const text = JSON.stringify(payload, null, 2);
@@ -3048,7 +3125,7 @@ const TOOLS = [
     },
     {
         name: 'paper_metadata_lookup',
-        description: 'Look up scholarly paper metadata from structured APIs before broad web search. Best for exact paper/report titles or DOI questions where you need authors, year, venue, DOI, and candidate landing/PDF URLs without scraping publisher pages.',
+        description: 'Look up scholarly paper metadata from structured APIs before broad web search. Best for exact paper/report titles or DOI questions where you need authors, year, venue, DOI, and candidate landing/PDF URLs without scraping publisher pages. It also supports a second hop with authorId to list an author’s earlier works in chronological order.',
         inputSchema: {
             type: 'object',
             properties: {
@@ -3057,6 +3134,8 @@ const TOOLS = [
                 q: { type: 'string', description: 'Compatibility alias for query.' },
                 search: { type: 'string', description: 'Compatibility alias for query.' },
                 doi: { type: 'string', description: 'DOI or DOI URL for direct metadata lookup.' },
+                authorId: { type: 'string', description: 'Optional OpenAlex author id for second-hop lookup of that author’s publications.' },
+                beforeYear: { type: 'number', description: 'Optional year cutoff for authorId mode. Returns works earlier than this year.' },
                 maxResults: { type: 'number', description: 'Maximum metadata candidates to return, clamped to 1-12.' },
                 timeoutMs: { type: 'number', description: 'Overall lookup timeout in milliseconds, clamped to 5000-180000.' }
             }

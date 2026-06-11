@@ -191,6 +191,58 @@ test('paper_metadata_lookup returns ranked scholarly metadata from OpenAlex and 
     });
 });
 
+test('paper_metadata_lookup can list earlier works for an OpenAlex author id', async () => {
+    await withServer((request, response) => {
+        const url = new URL(request.url || '/', 'http://127.0.0.1');
+        response.setHeader('content-type', 'application/json');
+        if (url.pathname === '/openalex/works') {
+            assert.equal(url.searchParams.get('filter'), 'author.id:https://openalex.org/A5047423326');
+            assert.equal(url.searchParams.get('sort'), 'publication_date:asc');
+            response.end(JSON.stringify({
+                results: [
+                    {
+                        id: 'https://openalex.org/W1',
+                        display_name: 'Mapping human-oriented information to software agents for online systems usage',
+                        publication_year: 2001,
+                        doi: 'https://doi.org/10.1049/cp:20010464',
+                        type: 'proceedings-article',
+                        primary_location: {
+                            source: { display_name: 'IEE Colloquium on E-commerce: Netting the Opportunity' },
+                            landing_page_url: 'https://doi.org/10.1049/cp:20010464'
+                        },
+                        authorships: [
+                            { author: { display_name: 'Pietro Murano', id: 'https://openalex.org/A5047423326' } }
+                        ]
+                    },
+                    {
+                        id: 'https://openalex.org/W2',
+                        display_name: 'Later paper',
+                        publication_year: 2016,
+                        authorships: [
+                            { author: { display_name: 'Pietro Murano', id: 'https://openalex.org/A5047423326' } }
+                        ]
+                    }
+                ]
+            }));
+            return;
+        }
+        response.writeHead(404);
+        response.end(JSON.stringify({ message: `not found: ${url.pathname}` }));
+    }, async (baseUrl) => {
+        const result = await paperMetadataLookup({
+            authorId: 'https://openalex.org/A5047423326',
+            beforeYear: 2015,
+            openAlexBaseUrl: `${baseUrl}/openalex/works`
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        const payload = JSON.parse(result.content[0].text);
+        assert.equal(payload.results.length, 1);
+        assert.equal(payload.bestMatch.title, 'Mapping human-oriented information to software agents for online systems usage');
+        assert.equal(payload.bestMatch.year, 2001);
+    });
+});
+
 test('github_repo_read parses common GitHub repository references', () => {
     assert.deepEqual(parseGitHubRepoRef({ repo: 'microsoft/playwright' }), {
         owner: 'microsoft',
