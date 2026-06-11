@@ -1489,6 +1489,308 @@ async function fetchJsonUrl(url, timeoutMs = 30000) {
     }
 }
 
+function readScholarlyApiConfig() {
+    return {
+        openAlexApiKey: normalizeString(process.env.OPENALEX_API_KEY || process.env.AIGL_OPENALEX_API_KEY),
+        crossrefMailto: normalizeString(process.env.CROSSREF_MAILTO || process.env.AIGL_CROSSREF_MAILTO)
+    };
+}
+
+function appendUrlQueryParams(url, params = {}) {
+    try {
+        const parsed = new URL(url);
+        for (const [key, value] of Object.entries(params)) {
+            const normalized = normalizeString(value);
+            if (normalized) {
+                parsed.searchParams.set(key, normalized);
+            }
+        }
+        return parsed.toString();
+    } catch {
+        return url;
+    }
+}
+
+function buildOpenAlexWorksSearchUrl(baseUrl, query, maxResults, { exact = false, apiKey = '' } = {}) {
+    const parsedBase = normalizeString(baseUrl, 'https://api.openalex.org/works');
+    const searchParam = exact ? 'search.exact' : 'search';
+    return appendUrlQueryParams(
+        `${parsedBase}?${searchParam}=${encodeURIComponent(normalizeString(query))}&per-page=${Math.min(maxResults, 10)}`,
+        { api_key: apiKey }
+    );
+}
+
+function normalizeDoi(value = '') {
+    return normalizeString(value)
+        .replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, '')
+        .replace(/^doi:\s*/i, '')
+        .trim()
+        .toLowerCase();
+}
+
+function normalizePaperTitle(value = '') {
+    return normalizeString(value)
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function normalizeAuthorName(value = '') {
+    return normalizeString(value).replace(/\s+/g, ' ').trim();
+}
+
+function normalizeOpenAlexAuthors(authorships = []) {
+    return (Array.isArray(authorships) ? authorships : [])
+        .map((authorship) => {
+            const author = authorship?.author || {};
+            return {
+                name: normalizeAuthorName(author.display_name || authorship.author_name),
+                openAlexId: normalizeString(author.id),
+                institutions: (Array.isArray(authorship.institutions) ? authorship.institutions : [])
+                    .map((institution) => normalizeString(institution?.display_name))
+                    .filter(Boolean)
+            };
+        })
+        .filter((author) => author.name);
+}
+
+function normalizeCrossrefAuthors(authors = []) {
+    return (Array.isArray(authors) ? authors : [])
+        .map((author) => {
+            const name = normalizeAuthorName([
+                normalizeString(author.given),
+                normalizeString(author.family)
+            ].filter(Boolean).join(' ') || author.name);
+            return {
+                name,
+                orcid: normalizeString(author.ORCID).replace(/^https?:\/\/orcid\.org\//i, '')
+            };
+        })
+        .filter((author) => author.name);
+}
+
+function buildAuthorSummary(authors = []) {
+    return authors
+        .map((author) => normalizeAuthorName(author?.name))
+        .filter(Boolean)
+        .slice(0, 12)
+        .join(', ');
+}
+
+function scorePaperMetadataCandidate(candidate = {}, { title = '', query = '', doi = '' } = {}) {
+    const normalizedDoi = normalizeDoi(doi);
+    const candidateDoi = normalizeDoi(candidate.doi);
+    const targetTitle = normalizePaperTitle(title || query);
+    const candidateTitle = normalizePaperTitle(candidate.title);
+    const terms = significantPdfQueryTerms(targetTitle);
+    const haystack = `${candidateTitle} ${candidate.venue || ''} ${candidate.url || ''}`.toLowerCase();
+    let score = 0;
+    let matched = 0;
+    if (normalizedDoi && candidateDoi && normalizedDoi === candidateDoi) {
+        score += 500;
+    }
+    if (targetTitle && candidateTitle) {
+        if (targetTitle === candidateTitle) {
+            score += 260;
+        }
+        if (candidateTitle.includes(targetTitle) || targetTitle.includes(candidateTitle)) {
+            score += 80;
+        }
+    }
+    for (const term of terms) {
+        if (haystack.includes(term)) {
+            matched += 1;
+            score += 22;
+        }
+    }
+    if (terms.length) {
+        score += Math.round((matched / terms.length) * 120);
+    }
+    if (terms.length >= 4 && matched < 3) {
+        score -= 120;
+    } else if (terms.length >= 2 && matched === 0) {
+        score -= 120;
+    }
+    if (candidate.pdfUrl) {
+        score += 16;
+    }
+    if (candidate.landingUrl || candidate.url) {
+        score += 8;
+    }
+    if (candidate.authors?.length) {
+        score += 8;
+    }
+    return score;
+}
+
+function pushPaperMetadataCandidate(rows, seen, candidate = {}, context = {}) {
+    const key = [
+        normalizeDoi(candidate.doi),
+        normalizePaperTitle(candidate.title),
+        normalizeString(candidate.url || candidate.landingUrl)
+    ].filter(Boolean).join('::');
+    if (!key || seen.has(key)) {
+        return;
+    }
+    const scored = {
+        ...candidate,
+        score: scorePaperMetadataCandidate(candidate, context)
+    };
+    if (scored.score < 45) {
+        return;
+    }
+    seen.add(key);
+    rows.push(scored);
+}
+
+function mapOpenAlexWorkToPaperMetadata(work = {}) {
+    const doi = normalizeDoi(work.doi || work.ids?.doi);
+    const pdfUrl = normalizeString(work.best_oa_location?.pdf_url || work.primary_location?.pdf_url || work.open_access?.oa_url);
+    const landingUrl = normalizeString(
+        work.best_oa_location?.landing_page_url ||
+        work.primary_location?.landing_page_url ||
+        (doi ? `https://doi.org/${doi}` : '') ||
+        work.id
+    );
+    const authors = normalizeOpenAlexAuthors(work.authorships);
+    return {
+        source: 'openalex',
+        sourceId: normalizeString(work.id),
+        title: normalizeString(work.display_name || work.title),
+        year: Number(work.publication_year || work.year || 0) || undefined,
+        doi,
+        type: normalizeString(work.type),
+        venue: normalizeString(work.primary_location?.source?.display_name || work.host_venue?.display_name),
+        url: landingUrl || pdfUrl,
+        landingUrl,
+        pdfUrl,
+        citedByCount: Number(work.cited_by_count || 0) || undefined,
+        referencedWorksCount: Number(work.referenced_works_count || 0) || undefined,
+        authors,
+        authorsSummary: buildAuthorSummary(authors)
+    };
+}
+
+function mapCrossrefItemToPaperMetadata(item = {}) {
+    const doi = normalizeDoi(item.DOI || item.doi);
+    const linkEntries = Array.isArray(item.link) ? item.link : [];
+    const pdfLink = linkEntries.find((entry) => /pdf/i.test(normalizeString(entry['content-type'] || entry.contentType)));
+    const authors = normalizeCrossrefAuthors(item.author);
+    const yearParts = item['published-print']?.['date-parts'] || item['published-online']?.['date-parts'] || item.issued?.['date-parts'];
+    return {
+        source: 'crossref',
+        sourceId: doi || normalizeString(item.URL),
+        title: normalizeString(Array.isArray(item.title) ? item.title[0] : item.title),
+        year: Number(Array.isArray(yearParts) && Array.isArray(yearParts[0]) ? yearParts[0][0] : 0) || undefined,
+        doi,
+        type: normalizeString(item.type),
+        venue: normalizeString(Array.isArray(item['container-title']) ? item['container-title'][0] : item.publisher),
+        url: normalizeString(item.resource?.primary?.URL || item.URL),
+        landingUrl: normalizeString(item.resource?.primary?.URL || item.URL),
+        pdfUrl: normalizeString(pdfLink?.URL),
+        authors,
+        authorsSummary: buildAuthorSummary(authors)
+    };
+}
+
+async function paperMetadataLookup(args = {}) {
+    const title = normalizeString(args.title || args.documentTitle || args.document_title);
+    const query = normalizeString(args.query || args.q || args.search || title);
+    const rawUrl = normalizeString(args.url || args.uri);
+    const doi = normalizeDoi(args.doi || args.DOI || (/doi\.org\//i.test(rawUrl) ? rawUrl : ''));
+    if (!title && !query && !doi) {
+        return errorResult('paper_metadata_lookup requires title, query, or doi');
+    }
+    const maxResults = clampNumber(args.maxResults || args.max_results, 5, 1, 12);
+    const timeoutMs = clampNumber(args.timeoutMs || args.timeout_ms, 45000, 5000, 180000);
+    const { openAlexApiKey, crossrefMailto } = readScholarlyApiConfig();
+    const attempts = [];
+    const results = [];
+    const seen = new Set();
+    const searchText = normalizeString(title || query || doi);
+
+    const openAlexBaseUrl = normalizeString(args.openAlexBaseUrl, 'https://api.openalex.org/works');
+    const crossrefBaseUrl = normalizeString(args.crossrefBaseUrl, 'https://api.crossref.org/works');
+
+    if (doi) {
+        const openAlexByDoi = appendUrlQueryParams(
+            `${openAlexBaseUrl}?filter=${encodeURIComponent(`doi:${doi}`)}&per-page=${Math.min(maxResults, 10)}`,
+            { api_key: openAlexApiKey }
+        );
+        const openAlex = await fetchJsonUrl(openAlexByDoi, Math.min(timeoutMs, 20000));
+        attempts.push({ source: 'openalex', url: openAlexByDoi, ok: openAlex.ok, status: openAlex.status, error: openAlex.error || '' });
+        if (openAlex.ok) {
+            for (const work of Array.isArray(openAlex.json?.results) ? openAlex.json.results : []) {
+                pushPaperMetadataCandidate(results, seen, mapOpenAlexWorkToPaperMetadata(work), { title, query, doi });
+            }
+        }
+
+        const crossrefByDoi = appendUrlQueryParams(`${crossrefBaseUrl}/${encodeURIComponent(doi)}`, { mailto: crossrefMailto });
+        const crossref = await fetchJsonUrl(crossrefByDoi, Math.min(timeoutMs, 20000));
+        attempts.push({ source: 'crossref', url: crossrefByDoi, ok: crossref.ok, status: crossref.status, error: crossref.error || '' });
+        if (crossref.ok && crossref.json?.message) {
+            pushPaperMetadataCandidate(results, seen, mapCrossrefItemToPaperMetadata(crossref.json.message), { title, query, doi });
+        }
+    }
+
+    const encodedSearch = encodeURIComponent(searchText.replace(/^["']+|["']+$/g, ''));
+    const openAlexSearchUrl = buildOpenAlexWorksSearchUrl(openAlexBaseUrl, searchText, maxResults, {
+        exact: Boolean(title),
+        apiKey: openAlexApiKey
+    });
+    const openAlexSearch = await fetchJsonUrl(openAlexSearchUrl, Math.min(timeoutMs, 20000));
+    attempts.push({ source: 'openalex', url: openAlexSearchUrl, ok: openAlexSearch.ok, status: openAlexSearch.status, error: openAlexSearch.error || '' });
+    if (openAlexSearch.ok) {
+        for (const work of Array.isArray(openAlexSearch.json?.results) ? openAlexSearch.json.results : []) {
+            pushPaperMetadataCandidate(results, seen, mapOpenAlexWorkToPaperMetadata(work), { title, query, doi });
+        }
+    }
+
+    const crossrefSearchUrl = appendUrlQueryParams(
+        `${crossrefBaseUrl}?query.title=${encodedSearch}&rows=${Math.min(maxResults, 10)}`,
+        { mailto: crossrefMailto }
+    );
+    const crossrefSearch = await fetchJsonUrl(crossrefSearchUrl, Math.min(timeoutMs, 20000));
+    attempts.push({ source: 'crossref', url: crossrefSearchUrl, ok: crossrefSearch.ok, status: crossrefSearch.status, error: crossrefSearch.error || '' });
+    if (crossrefSearch.ok) {
+        for (const item of Array.isArray(crossrefSearch.json?.message?.items) ? crossrefSearch.json.message.items : []) {
+            pushPaperMetadataCandidate(results, seen, mapCrossrefItemToPaperMetadata(item), { title, query, doi });
+        }
+    }
+
+    const rankedResults = results
+        .sort((a, b) => b.score - a.score)
+        .slice(0, maxResults);
+    if (!rankedResults.length) {
+        return errorResult('paper_metadata_lookup found no scholarly metadata candidates', {
+            status: 'no_results',
+            title,
+            query,
+            doi,
+            attempts
+        });
+    }
+    const payload = {
+        status: 'completed',
+        title,
+        query,
+        doi,
+        resultCount: rankedResults.length,
+        attempts,
+        results: rankedResults
+    };
+    const text = JSON.stringify(payload, null, 2);
+    return {
+        content: [{ type: 'text', text }],
+        structuredContent: {
+            ok: true,
+            ...payload
+        },
+        details: payload
+    };
+}
+
 async function searchScholarlyCandidates(query = '', { maxResults = 8, timeoutMs = 60000 } = {}) {
     const phrase = normalizePdfSearchPhrase(query);
     if (!phrase) {
@@ -1496,12 +1798,16 @@ async function searchScholarlyCandidates(query = '', { maxResults = 8, timeoutMs
     }
     const startedAt = Date.now();
     const remainingBudgetMs = () => timeoutMs - (Date.now() - startedAt);
+    const { openAlexApiKey, crossrefMailto } = readScholarlyApiConfig();
     const seen = new Set();
     const results = [];
     const attempts = [];
     const encoded = encodeURIComponent(phrase.replace(/^["']+|["']+$/g, ''));
 
-    const openAlexUrl = `https://api.openalex.org/works?search=${encoded}&per-page=${Math.min(maxResults, 10)}`;
+    const openAlexUrl = buildOpenAlexWorksSearchUrl('https://api.openalex.org/works', phrase.replace(/^["']+|["']+$/g, ''), maxResults, {
+        exact: /[?]/.test(phrase),
+        apiKey: openAlexApiKey
+    });
     const openAlex = remainingBudgetMs() >= 3000
         ? await fetchJsonUrl(openAlexUrl, Math.min(remainingBudgetMs(), 20000))
         : { ok: false, status: 0, error: 'scholarly_search_budget_exhausted' };
@@ -1524,7 +1830,10 @@ async function searchScholarlyCandidates(query = '', { maxResults = 8, timeoutMs
         }
     }
 
-    const crossrefUrl = `https://api.crossref.org/works?query.title=${encoded}&rows=${Math.min(maxResults, 10)}`;
+    const crossrefUrl = appendUrlQueryParams(
+        `https://api.crossref.org/works?query.title=${encoded}&rows=${Math.min(maxResults, 10)}`,
+        { mailto: crossrefMailto }
+    );
     const crossref = remainingBudgetMs() >= 3000
         ? await fetchJsonUrl(crossrefUrl, Math.min(remainingBudgetMs(), 20000))
         : { ok: false, status: 0, error: 'scholarly_search_budget_exhausted' };
@@ -2341,6 +2650,75 @@ print(json.dumps(payload, ensure_ascii=False, default=str))
     return textResult(result.stdout.trim(), { status: 'completed', path: filePath });
 }
 
+async function readDocument(args = {}) {
+    const filePath = path.resolve(normalizeString(args.path || args.file || args.filePath || args.file_path));
+    const stat = filePath ? await fs.stat(filePath).catch(() => null) : null;
+    if (!stat || !stat.isFile() || !/\.(?:docx|docm)$/i.test(filePath)) {
+        return errorResult('read_document requires an existing .docx/.docm file path', { path: filePath });
+    }
+    const code = `
+import json, sys
+from docx import Document
+
+path = sys.argv[1]
+doc = Document(path)
+paragraphs = []
+for index, paragraph in enumerate(doc.paragraphs):
+    text = (paragraph.text or "").strip()
+    if text:
+        paragraphs.append({"index": index, "text": text})
+tables = []
+for table_index, table in enumerate(doc.tables):
+    rows = []
+    for row in table.rows:
+        cells = [(cell.text or "").strip() for cell in row.cells]
+        if any(cells):
+            rows.append(cells)
+    if rows:
+        tables.append({"index": table_index, "rows": rows})
+print(json.dumps({
+    "path": path,
+    "paragraphs": paragraphs,
+    "tables": tables,
+    "paragraph_count": len(paragraphs),
+    "table_count": len(tables)
+}, ensure_ascii=False))
+`.trim();
+    const result = await runProcess('python', ['-c', code, filePath], {
+        cwd: path.dirname(filePath),
+        timeoutMs: args.timeoutMs || 120000
+    });
+    if (result.exitCode !== 0) {
+        return errorResult('read_document failed', { path: filePath, stderr: result.stderr.slice(0, 3000) });
+    }
+    const text = normalizeString(result.stdout);
+    let document;
+    try {
+        document = JSON.parse(text);
+    } catch (error) {
+        return errorResult(`read_document returned invalid JSON: ${error.message}`, {
+            path: filePath,
+            stdout: text.slice(0, 2000)
+        });
+    }
+    const details = {
+        status: 'completed',
+        path: filePath,
+        paragraphCount: Number(document.paragraph_count || 0),
+        tableCount: Number(document.table_count || 0)
+    };
+    return {
+        content: [{ type: 'text', text }],
+        structuredContent: {
+            ok: true,
+            ...details,
+            document,
+            ...document
+        },
+        details
+    };
+}
+
 async function readPresentation(args = {}) {
     const filePath = path.resolve(normalizeString(args.path || args.file || args.filePath || args.file_path));
     const maxSlides = clampNumber(args.maxSlides || args.max_slides, 120, 1, 500);
@@ -2595,7 +2973,7 @@ print(json.dumps(payload, ensure_ascii=False))
 const TOOLS = [
     {
         name: 'web_search',
-        description: 'Search the public web for evidence through AIGL managed search backends. Standard call: { "query": "specific search keywords", "maxResults": 5 }. Use web_fetch for a known HTML/text URL, pdf_extract_text for a known PDF URL, and github_repo_read for GitHub README/tree/file evidence. General web queries default to Bing first; GitHub/code repository queries default to GitHub repository search first, then DuckDuckGo, then Bing. Returns titles, URLs, snippets, and structured backend attempts.',
+        description: 'Fallback broad public web search through AIGL managed search backends. Standard call: { "query": "specific search keywords", "maxResults": 5 }. Do not use as the first step for attached/local files, known URLs, PDFs/papers/reports, YouTube/videos, audio, images, spreadsheets, presentations, Word documents, code files, or GitHub repositories; use the dedicated MCP tool for those artifact types first. Use web_fetch for a known HTML/text URL, paper_metadata_lookup for exact paper/DOI metadata, pdf_extract_text for a known PDF URL, pdf_find_and_extract for a paper/report title when you need full text, and github_repo_read for GitHub README/tree/file evidence. General web queries default to Bing first; GitHub/code repository queries default to GitHub repository search first, then DuckDuckGo, then Bing. Returns titles, URLs, snippets, and structured backend attempts.',
         inputSchema: {
             type: 'object',
             properties: {
@@ -2669,8 +3047,24 @@ const TOOLS = [
         }
     },
     {
+        name: 'paper_metadata_lookup',
+        description: 'Look up scholarly paper metadata from structured APIs before broad web search. Best for exact paper/report titles or DOI questions where you need authors, year, venue, DOI, and candidate landing/PDF URLs without scraping publisher pages.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                title: { type: 'string', description: 'Exact paper/report title when known. Preferred for title-based lookup.' },
+                query: { type: 'string', description: 'General scholarly lookup query. Use title when the title is exact.' },
+                q: { type: 'string', description: 'Compatibility alias for query.' },
+                search: { type: 'string', description: 'Compatibility alias for query.' },
+                doi: { type: 'string', description: 'DOI or DOI URL for direct metadata lookup.' },
+                maxResults: { type: 'number', description: 'Maximum metadata candidates to return, clamped to 1-12.' },
+                timeoutMs: { type: 'number', description: 'Overall lookup timeout in milliseconds, clamped to 5000-180000.' }
+            }
+        }
+    },
+    {
         name: 'pdf_find_and_extract',
-        description: 'Find a PDF from a known HTML page URL, exact document title, or search query, then extract readable text from the best PDF candidate. Use this for papers/reports when you do not already have a direct .pdf URL. Standard flow: { "title": "exact paper/report title", "extract_query": "answer terms" } or { "url": "known article page", "extract_query": "answer terms" }. It discovers PDF/download links, tries likely OJS article download URLs, and returns extraction attempts for recovery.',
+        description: 'Find a PDF from a known HTML page URL, exact document title, or search query, then extract readable text from the best PDF candidate. Use this after paper_metadata_lookup when you need the paper body rather than just metadata. Standard flow: { "title": "exact paper/report title", "extract_query": "answer terms" } or { "url": "known article page", "extract_query": "answer terms" }. It discovers PDF/download links, tries likely OJS article download URLs, and returns extraction attempts for recovery.',
         inputSchema: {
             type: 'object',
             properties: {
@@ -2744,6 +3138,20 @@ const TOOLS = [
                 filePath: { type: 'string' },
                 file_path: { type: 'string' },
                 maxRows: { type: 'number' },
+                timeoutMs: { type: 'number' }
+            }
+        }
+    },
+    {
+        name: 'read_document',
+        description: 'Read a local Word .docx/.docm document and return JSON plus structuredContent with paragraphs and tables. Use this for attached Word document questions before writing custom scripts, especially when table rows are evidence. If it succeeds, reason from the returned structure instead of re-reading raw DOCX bytes.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                path: { type: 'string' },
+                file: { type: 'string' },
+                filePath: { type: 'string' },
+                file_path: { type: 'string' },
                 timeoutMs: { type: 'number' }
             }
         }
@@ -2825,11 +3233,13 @@ async function handleToolCall(request) {
     if (name === 'github_repo_read') return await githubRepoRead(args);
     if (name === 'web_fetch') return await webFetch(args);
     if (name === 'pdf_extract_text') return await pdfExtractText(args);
+    if (name === 'paper_metadata_lookup') return await paperMetadataLookup(args);
     if (name === 'pdf_find_and_extract') return await pdfFindAndExtract(args);
     if (name === 'download_file') return await downloadFile(args);
     if (name === 'web_extract_links') return await webExtractLinks(args);
     if (name === 'run_python_file') return await runPythonFile(args);
     if (name === 'read_spreadsheet') return await readSpreadsheet(args);
+    if (name === 'read_document') return await readDocument(args);
     if (name === 'read_presentation') return await readPresentation(args);
     if (name === 'transcribe_audio') return await transcribeAudio(args);
     if (name === 'describe_image') return await describeImage(args);
@@ -2905,8 +3315,10 @@ module.exports = {
     handleToolCall,
     normalizeSearchBackends,
     parseGitHubRepoRef,
+    paperMetadataLookup,
     pdfFindAndExtract,
     pdfExtractText,
+    readDocument,
     readPresentation,
     SEARCH_BACKENDS,
     webExtractLinks,

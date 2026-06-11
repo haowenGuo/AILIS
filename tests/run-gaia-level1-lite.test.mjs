@@ -147,6 +147,51 @@ test('GAIA evidence digest preserves ClinicalTrials enrollment from structured b
     assert.doesNotMatch(digest, /missing evidence/i);
 });
 
+test('GAIA evidence digest prefers structured read_document payload over truncated preview text', () => {
+    const digest = buildEvidenceDigest({
+        steps: [
+            {
+                id: 'step-docx',
+                title: 'Read Secret Santa document',
+                tool: 'mcp__aigl_research__read_document',
+                args: { path: 'secret-santa.docx' },
+                response: {
+                    ok: true,
+                    status: 'completed',
+                    result: {
+                        content: [{
+                            type: 'text',
+                            text: '{"path":"secret-santa.docx","paragraphs":[{"index":0,"text":"Employees"}],"tables":[{"index":0,"rows":[["Giver","Recipient"]]}]'
+                        }],
+                        structuredContent: {
+                            ok: true,
+                            status: 'completed',
+                            path: 'secret-santa.docx',
+                            document: {
+                                path: 'secret-santa.docx',
+                                paragraph_count: 3,
+                                table_count: 1,
+                                paragraphs: [
+                                    { index: 0, text: 'Employees' },
+                                    { index: 1, text: 'Profiles' },
+                                    { index: 2, text: 'Gift list' }
+                                ],
+                                tables: [
+                                    { index: 0, rows: [['Giver', 'Recipient'], ['Fred', 'Rebecca']] }
+                                ]
+                            }
+                        }
+                    }
+                }
+            }
+        ]
+    });
+
+    assert.match(digest, /"Gift list"/);
+    assert.match(digest, /Fred/);
+    assert.doesNotMatch(digest, /undefined/);
+});
+
 test('GAIA finalizer deterministically extracts ClinicalTrials actual enrollment', async () => {
     const result = await finalizeAnswerFromEvidence({
         question: {

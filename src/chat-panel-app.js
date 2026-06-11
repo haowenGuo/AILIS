@@ -86,10 +86,22 @@ window.addEventListener('DOMContentLoaded', () => {
         return '已连接桌宠';
     }
 
+    function setIconButtonLabel(button, label) {
+        if (!button) {
+            return;
+        }
+        button.setAttribute('aria-label', label);
+        button.title = label;
+        const screenReaderLabel = button.querySelector('.sr-only');
+        if (screenReaderLabel) {
+            screenReaderLabel.textContent = label;
+        }
+    }
+
     function updateComposerState() {
         const hasDraft = Boolean(inputEl.value.trim() || pendingVisionAttachment || pendingFileAttachments.length);
-        sendBtnEl.textContent = isBusy ? '中断' : '发送';
         sendBtnEl.dataset.mode = isBusy ? 'interrupt' : 'send';
+        setIconButtonLabel(sendBtnEl, isBusy ? '中断对话' : '发送');
         sendBtnEl.disabled = isRecording || isTranscribing || isCapturingVision || (!isBusy && !hasDraft);
         statusEl.textContent = getStatusText();
 
@@ -101,11 +113,15 @@ window.addEventListener('DOMContentLoaded', () => {
                 (!isRecording && isBusy);
             voiceBtnEl.dataset.recording = isRecording ? 'true' : 'false';
             if (getRecognitionMode() === 'continuous') {
-                voiceBtnEl.textContent = '暂停';
+                voiceBtnEl.dataset.state = 'pause';
+                setIconButtonLabel(voiceBtnEl, '暂停自动听');
             } else if (isRecording) {
-                voiceBtnEl.textContent = getRecognitionMode() === 'auto-vad' ? '取消' : '停止';
+                const isAutoVad = getRecognitionMode() === 'auto-vad';
+                voiceBtnEl.dataset.state = isAutoVad ? 'cancel' : 'stop';
+                setIconButtonLabel(voiceBtnEl, isAutoVad ? '取消语音输入' : '停止录音');
             } else {
-                voiceBtnEl.textContent = getRecognitionMode() === 'auto-vad' ? '自动听' : '语音';
+                voiceBtnEl.dataset.state = 'mic';
+                setIconButtonLabel(voiceBtnEl, getRecognitionMode() === 'auto-vad' ? '自动听' : '语音输入');
             }
         }
 

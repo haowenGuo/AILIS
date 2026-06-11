@@ -23,6 +23,13 @@ const {
     compactToolSchema,
     truncateMiddleText
 } = require('../electron/aigl-runtime-budget.cjs');
+const {
+    buildToolRoutingAdvice,
+    rankToolSearchResults
+} = require('../electron/aigl-tool-routing.cjs');
+const {
+    HumanClawMcpManager
+} = require('../electron/humanclaw-mcp-session.cjs');
 
 test('AIGL tool specs keep Codex-like shape without Codex naming', () => {
     assert.ok(AIGL_RUNTIME_TOOL_DEFINITIONS.some((tool) => tool.id === 'tool_search'));
@@ -147,6 +154,69 @@ test('AIGL MCP adapter parses direct MCP ids and creates stable specs', () => {
     });
     assert.deepEqual(toolArgs, { text: 'hello' });
     assert.deepEqual(meta, { reason: 'test' });
+});
+
+function mcpTool(name, description = '') {
+    return {
+        id: `mcp__aigl_research__${name}`,
+        type: 'mcp_tool',
+        server: 'aigl_research',
+        tool: name,
+        name: `mcp__aigl_research__${name}`,
+        description,
+        schema_properties: ['path', 'url', 'query', 'title']
+    };
+}
+
+test('AIGL tool routing prefers artifact-specific MCP tools over broad web_search', () => {
+    const candidates = [
+        mcpTool('web_search', 'Fallback broad public web search.'),
+        mcpTool('web_fetch', 'Fetch a known HTML page URL.'),
+        mcpTool('pdf_find_and_extract', 'Find and extract a paper or report PDF.'),
+        mcpTool('read_document', 'Read Word DOCX documents with paragraphs and tables.'),
+        mcpTool('read_presentation', 'Read PowerPoint PPTX slides.'),
+        mcpTool('youtube_transcript', 'Read YouTube video transcripts.')
+    ];
+
+    assert.equal(
+        rankToolSearchResults(candidates, 'attached docx Word document table evidence web search', 2)[0].tool,
+        'read_document'
+    );
+    assert.equal(
+        rankToolSearchResults(candidates, 'PowerPoint pptx slides that mention a category', 2)[0].tool,
+        'read_presentation'
+    );
+    assert.equal(
+        rankToolSearchResults(candidates, 'exact paper title report PDF find answer field', 2)[0].tool,
+        'pdf_find_and_extract'
+    );
+    assert.equal(
+        rankToolSearchResults(candidates, 'YouTube video transcript question', 2)[0].tool,
+        'youtube_transcript'
+    );
+    assert.match(buildToolRoutingAdvice('attached docx Word document table', candidates), /read_document/);
+});
+
+test('HumanClaw MCP manager search uses tool routing before returning specs', async () => {
+    const manager = new HumanClawMcpManager({});
+    manager.listToolSpecs = async () => [
+        mcpTool('web_search', 'Fallback broad public web search.'),
+        mcpTool('web_fetch', 'Fetch a known HTML page URL.'),
+        mcpTool('read_document', 'Read Word DOCX documents with paragraphs and tables.'),
+        mcpTool('youtube_transcript', 'Read YouTube video transcripts.')
+    ];
+
+    const documentSpecs = await manager.searchToolSpecs({
+        query: 'attached docx document table evidence search web',
+        limit: 1
+    });
+    assert.equal(documentSpecs[0].tool, 'read_document');
+
+    const videoSpecs = await manager.searchToolSpecs({
+        query: 'youtube video transcript evidence',
+        limit: 1
+    });
+    assert.equal(videoSpecs[0].tool, 'youtube_transcript');
 });
 
 test('AIGL runtime budget compacts large schemas and tool text for model context', () => {

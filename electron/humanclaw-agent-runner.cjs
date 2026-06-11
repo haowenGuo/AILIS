@@ -1997,7 +1997,7 @@ function buildMcpBridgeSkillText() {
         'Codex-like 用法：Runtime 会把 MCP tools 暴露成 namespace/function 风格的直接工具名，例如 mcp__aigl_research__web_fetch。普通任务优先调用这种 direct tool，不要手工拼 mcp_bridge.call_tool。',
         'mcp_bridge 主要用于 list_servers、health_check、list_tool_specs、search_tools、list_resources、read_resource、list_prompts/get_prompt、注册/关闭 server 等管理和修复动作。',
         '如果 capability_context 给出了 mcp__server__tool 形式的 direct spec，可以直接把 tool_call.tool 写成该 id；Runtime 会保留原始 args 并路由到对应 MCP server/tool。',
-        '研究/网页类工具边界：web_fetch 只读 HTML/纯文本；PDF 或二进制不要继续用 web_fetch；已知 PDF URL/路径用 pdf_extract_text，不知道 PDF 直链但知道论文/报告标题或文章页时优先用 pdf_find_and_extract；PDF/论文题知道标题时把标题放 title，把要找的字段放 extract_query，不要把答案字段当唯一 query；必要时再 download_file。',
+        '研究/网页类工具边界：web_search 是兜底检索，不是默认第一步；附件/本地文件、PDF/论文、视频、音频、图片、代码和 GitHub 仓库优先用 tool_search 找专用 direct MCP 工具。web_fetch 只读 HTML/纯文本；PDF 或二进制不要继续用 web_fetch；已知 PDF URL/路径用 pdf_extract_text，不知道 PDF 直链但知道论文/报告标题或文章页时优先用 pdf_find_and_extract；PDF/论文题知道标题时把标题放 title，把要找的字段放 extract_query，不要把答案字段当唯一 query；必要时再 download_file。',
         'mcp_bridge 管理 action：schema/list_servers/register_server/remove_server/health_check/list_tools/list_tool_specs/search_tools/list_resources/read_resource/list_prompts/get_prompt/shutdown_server。'
     ].join('\n');
 }
@@ -2395,7 +2395,7 @@ async function enrichCapabilityContextWithMcpToolSpecs(capabilityEvent, runtime,
         return capabilityEvent;
     }
     const reason = normalizeText(capabilityEvent.request?.reason || '');
-    const query = [reason, 'web fetch search pdf arxiv github database browser email file resource'].filter(Boolean).join(' ');
+    const query = [reason, 'direct MCP tool document pdf spreadsheet presentation video transcript image audio API repository file'].filter(Boolean).join(' ');
     try {
         const specs = await mcpManager.searchToolSpecs({
             query,
@@ -3362,6 +3362,7 @@ function buildLlmAgentExecutorMessages({
         '你自己判断用户当前输入是普通情感/闲聊，还是需要执行任务；不要依赖外部分类结果。',
         'recent_turn_items 是 Codex-like 执行记录：tool_call 表示工具已开始，tool_result 表示工具成功或失败，context 表示能力说明已加载，runtime_note 是诊断信息。工具失败也是 observation，应进入下一轮决策；不要因为单个工具失败就僵死，可以换工具、换策略、请求上下文或诚实 final。',
         '证据缺口协议：如果 latest_observation 或 tool_result 中出现 evidence_gap/recovery_hint，说明上一个工具虽然可能成功，但证据不足；优先按 recovery_hint 调用 tool_search 寻找结构化 API、文档解析、视频帧采样或视觉工具，不要机械重复同一个 web_fetch/search。',
+        '工具选择路由：如果任务提到附件、文件路径、DOCX/Word、PPT/PPTX、表格/CSV/XLSX、PDF/论文/报告、YouTube/视频、音频、图片、代码文件、GitHub 仓库或已知 URL，先用 tool_search 查对应 artifact/tool 类型并调用返回的专用 mcp__... 工具；web_search 只作为没有专用工具或专用工具失败后的兜底。',
         '遇到任务时按 Codex/OpenClaw 风格逐步执行：观察当前状态，决定下一步，调用一个工具，等待 observation，再决定下一步。不要一次性输出完整 steps 当作完成，也不要只说计划。',
         '权限协议：如果 observation 显示 permission_profile_read_only、network_access_disabled 或需要额外文件/网络权限，使用 request_permissions 精确请求 permissions，不要只在 final_answer 里口头请求授权。',
         '外部资料与产物规则：如果用户要求读取 URL/PDF/网页/技术文档/API/官方文档/版本化库行为/文件/邮箱/仓库/屏幕，或要求生成、修改、提交某个文件，不能只凭模型记忆 final。你必须先调用最小必要工具拿到 observation；如果用户要求输出文件，写入后还要用 read/stat/artifact_verifier 复核，再 final。',
@@ -3449,6 +3450,18 @@ const DIRECT_TOOL_EXECUTOR_FALLBACK_STATUSES = new Set([
     'empty_response',
     'invalid_agent_decision'
 ]);
+
+function isTerminalProviderErrorMessage(error = '') {
+    const text = normalizeText(error).toLowerCase();
+    if (!text) {
+        return false;
+    }
+    return /insufficient\s+balance|insufficient\s+credit|billing|payment|required\s+balance|quota\s+exceeded|out\s+of\s+quota|invalid\s+(api\s*)?key|api\s*key\s*(invalid|missing|required)|authentication|unauthorized|forbidden/.test(text);
+}
+
+function isTerminalProviderDecisionError(decision = {}) {
+    return decision?.status === 'provider_error' && isTerminalProviderErrorMessage(decision.error);
+}
 
 function isValidNativeToolName(name = '') {
     return NATIVE_TOOL_NAME_PATTERN.test(normalizeText(name));
@@ -3866,6 +3879,7 @@ function buildLlmAgentDirectToolMessages({
         '不要输出 JSON 决策协议，不要手写 tool_call/tool/args 包装对象；如果要执行工具，使用原生工具调用。每轮最多调用一个工具。',
         '如果缺工具、缺 API、缺文档解析、缺视频/视觉能力，先调用 tool_search；tool_search 返回的 mcp__... 或 external__... 在下一轮会变成可直接调用的原生工具。',
         '工具失败、证据不足、字段没找到时，要根据 latest_failed_observation、recovery_hint 和 lossless_tool_observations 改换策略，不要机械重复同一个 web_search。',
+        '工具选择路由：如果任务提到附件、文件路径、DOCX/Word、PPT/PPTX、表格/CSV/XLSX、PDF/论文/报告、YouTube/视频、音频、图片、代码文件、GitHub 仓库或已知 URL，先用 tool_search 查对应 artifact/tool 类型并调用返回的专用 mcp__... 工具；web_search 只作为没有专用工具或专用工具失败后的兜底。',
         '需要用户授权时调用 request_permissions。危险写入、shell、patch、邮件发送等会由本地 Gateway 审批，不要在参数中伪造 approved=true。',
         '最终答复必须是给用户看的 Markdown。没有足够证据时不要提交猜测答案，要继续调用工具或明确 blocked。',
         exactAnswerMode
@@ -3969,7 +3983,10 @@ async function callLlmAgentDirectToolDecision(settings, payload, { hasToolHistor
             ok: false,
             status: response.code || 'provider_error',
             error: response.error || 'Direct tool executor LLM call failed.',
-            directToolFallback: response.code !== 'timeout' && response.code !== 'aborted'
+            directToolFallback:
+                response.code !== 'timeout' &&
+                response.code !== 'aborted' &&
+                !(response.code === 'provider_error' && isTerminalProviderErrorMessage(response.error))
         };
     }
     const directToolCall = (response.toolCalls || []).find((call) => call?.name && call.name !== 'aigl_agent_decision');
@@ -4276,6 +4293,7 @@ async function callLlmAgentDecision(settings, payload) {
     if (
         !response.ok &&
         response.code === 'provider_error' &&
+        !isTerminalProviderErrorMessage(response.error) &&
         (payload.nativeToolCalls !== false || payload.jsonMode !== false)
     ) {
         response = await callDesktopLlmProvider(settings, {
@@ -5845,7 +5863,9 @@ class HumanClawAgentRunner {
             if (
                 useDirectToolExecutor &&
                 !decision.ok &&
-                (decision.directToolFallback === true || DIRECT_TOOL_EXECUTOR_FALLBACK_STATUSES.has(decision.status))
+                (decision.directToolFallback === true ||
+                    (DIRECT_TOOL_EXECUTOR_FALLBACK_STATUSES.has(decision.status) &&
+                        !isTerminalProviderDecisionError(decision)))
             ) {
                 const fallbackNote = {
                     type: 'runtime_note',
@@ -5960,6 +5980,36 @@ class HumanClawAgentRunner {
             const interruptedAfterDecision = await maybeFinishInterruptedRun(`after_llm_decision_${iteration}`);
             if (interruptedAfterDecision) {
                 return interruptedAfterDecision;
+            }
+            if (!decision.ok && isTerminalProviderDecisionError(decision)) {
+                const displayText = `LLM provider is unavailable: ${decision.error || 'provider_error'}`;
+                return await finishRuntimeRun(attachPersonaSurface({
+                    ok: false,
+                    runId,
+                    sessionId,
+                    status: 'provider_error',
+                    mode: 'task',
+                    planner: 'llm-agentic-executor',
+                    intent: 'llm_provider_unavailable',
+                    executionRequired: stepResults.length > 0,
+                    durationMs: Date.now() - startedAt,
+                    message,
+                    error: decision.error || 'LLM provider failed before the agent could make a decision.',
+                    displayText,
+                    speechText: displayText,
+                    plan: [],
+                    steps: stepResults,
+                    events
+                }, renderStatusSurface({
+                    text: displayText,
+                    status: 'provider_error',
+                    ok: false,
+                    source: 'llm_provider_unavailable',
+                    expression: 'anxious'
+                })), {
+                    source: 'llm_provider_unavailable',
+                    nextAction: '检查或更换 LLM provider/API key 后重新运行'
+                });
             }
             if (decision.ok && decision.action !== 'final' && decision.publicReasoning) {
                 const reasoningEvent = {

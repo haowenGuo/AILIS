@@ -267,6 +267,58 @@ test('HumanClaw Gateway tool_search surfaces and executes external virtual direc
     }
 });
 
+test('HumanClaw Gateway tool_search ranks specific MCP artifact tools before web_search', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'humanclaw-tool-routing-test-'));
+    const gateway = new HumanClawGateway({
+        port: 0,
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit')
+    });
+    const mcpTool = (name, description = '') => ({
+        id: `mcp__aigl_research__${name}`,
+        type: 'mcp_tool',
+        server: 'aigl_research',
+        tool: name,
+        name: `mcp__aigl_research__${name}`,
+        description,
+        inputSchema: {
+            type: 'object',
+            properties: {
+                path: { type: 'string' },
+                query: { type: 'string' },
+                title: { type: 'string' }
+            }
+        },
+        schemaProperties: ['path', 'query', 'title'],
+        callPattern: {
+            args: { path: '<path>' }
+        }
+    });
+
+    try {
+        gateway.runtime.mcpManager.searchToolSpecs = async () => [
+            mcpTool('web_search', 'Fallback broad public web search.'),
+            mcpTool('read_presentation', 'Read PowerPoint PPTX slides.'),
+            mcpTool('read_document', 'Read Word DOCX documents with paragraphs and tables.'),
+            mcpTool('youtube_transcript', 'Read YouTube video transcripts.')
+        ];
+
+        const result = await gateway.executeGatewayToolSearch({
+            query: 'attached pptx PowerPoint slides evidence web search',
+            includeExternal: false,
+            limit: 1
+        });
+
+        assert.equal(result.details.tools.length, 1);
+        assert.equal(result.details.tools[0].tool, 'read_presentation');
+        assert.match(result.details.routing_advice, /read_presentation/);
+    } finally {
+        await gateway.stop();
+        await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
+});
+
 test('HumanClaw Gateway event stream keeps cursor-addressable replay history', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'humanclaw-events-test-'));
     const gateway = new HumanClawGateway({

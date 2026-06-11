@@ -41,6 +41,10 @@ const {
 const {
     isExternalVirtualToolId
 } = require('./humanclaw-tool-acquisition-gateway.cjs');
+const {
+    buildToolRoutingAdvice,
+    rankToolSearchResults
+} = require('./aigl-tool-routing.cjs');
 
 const PROJECT_ROOT = path.resolve(__dirname, '..');
 const DEFAULT_PORT = Number(process.env.HUMANCLAW_GATEWAY_PORT || 19777);
@@ -736,7 +740,8 @@ class HumanClawGateway extends EventEmitter {
                 }];
             }
         }
-        const tools = [...external, ...local, ...mcp].slice(0, limit);
+        const tools = rankToolSearchResults([...external, ...local, ...mcp], query, limit);
+        const routingAdvice = buildToolRoutingAdvice(query, tools);
         return {
             content: [
                 {
@@ -744,7 +749,11 @@ class HumanClawGateway extends EventEmitter {
                     text: JSON.stringify({
                         status: 'completed',
                         query,
-                        note: 'Callable external tools can be invoked directly with their external__provider__tool id from call_pattern.tool. Do not wrap them in capability_manager.execute_exposed_external_tool.',
+                        note: [
+                            'Callable external tools can be invoked directly with their external__provider__tool id from call_pattern.tool. Do not wrap them in capability_manager.execute_exposed_external_tool.',
+                            'For attachments, PDFs, videos, images, audio, code, repositories, or known URLs, prefer the most specific returned tool before broad web_search.'
+                        ].join(' '),
+                        routing_advice: routingAdvice,
                         tools
                     }, null, 2)
                 }
@@ -752,12 +761,14 @@ class HumanClawGateway extends EventEmitter {
             details: {
                 status: 'completed',
                 query,
+                routing_advice: routingAdvice,
                 tools
             },
             structuredContent: {
                 status: 'completed',
                 query,
-                note: 'Callable external tools can be invoked directly with their external__provider__tool id from call_pattern.tool.',
+                note: 'Callable external tools can be invoked directly with their external__provider__tool id from call_pattern.tool. Prefer specific document/PDF/media/file tools before broad web_search.',
+                routing_advice: routingAdvice,
                 tools
             }
         };

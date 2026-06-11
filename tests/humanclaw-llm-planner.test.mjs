@@ -378,6 +378,35 @@ async function createDirectToolCallChatCompletionsServer() {
     };
 }
 
+async function createProviderErrorChatCompletionsServer({ status = 402, message = 'Insufficient Balance' } = {}) {
+    const calls = [];
+    const server = http.createServer(async (req, res) => {
+        let raw = '';
+        req.on('data', (chunk) => {
+            raw += chunk;
+        });
+        req.on('end', () => {
+            const payload = raw ? JSON.parse(raw) : {};
+            calls.push({ url: req.url, payload });
+            res.writeHead(status, { 'content-type': 'application/json' });
+            res.end(JSON.stringify({
+                error: {
+                    message,
+                    type: 'billing_error',
+                    code: 'insufficient_balance'
+                }
+            }));
+        });
+    });
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    return {
+        url: `http://127.0.0.1:${address.port}`,
+        calls,
+        close: () => new Promise((resolve) => server.close(resolve))
+    };
+}
+
 async function createToolSearchDirectExposureServer() {
     const calls = [];
     let turn = 0;
@@ -594,6 +623,60 @@ test('Agentic Executor can execute real native direct tool calls before JSON pla
         assert.equal(llmServer.calls[0].payload.tool_choice, 'auto');
         assert.match(llmServer.calls[0].payload.messages[0].content, /Direct Tool Executor/);
         assert.equal(result.body.steps[0].tool, 'write');
+    } finally {
+        await gateway.stop();
+        await llmServer.close();
+        await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
+});
+
+test('Agentic Executor fails fast on terminal LLM provider billing errors', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'humanclaw-provider-error-agent-'));
+    const llmServer = await createProviderErrorChatCompletionsServer();
+    const gateway = new HumanClawGateway({
+        port: 0,
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit')
+    });
+
+    try {
+        const status = await gateway.start();
+        const result = await runAgent(status.url, {
+            sessionId: 'provider-error-fail-fast-test',
+            message: '读取一个文档并回答问题',
+            agentLoop: 'llm',
+            maxAgentSteps: 5,
+            llmSettings: {
+                provider: 'openai-compatible',
+                baseUrl: llmServer.url,
+                apiKey: 'test-key',
+                model: 'mock-provider-error',
+                temperature: 0,
+                timeoutMs: 10000
+            },
+            context: {
+                workspace: workspaceRoot,
+                directToolExecutor: true,
+                nativeDirectTools: true,
+                computerControlEnabled: true,
+                permissionProfile: 'danger-full-access',
+                approvalPolicy: 'auto',
+                approved: true,
+                autoConfirm: true
+            }
+        });
+
+        assert.equal(result.body.ok, false, JSON.stringify(result.body));
+        assert.equal(result.body.status, 'provider_error');
+        assert.equal(result.body.intent, 'llm_provider_unavailable');
+        assert.match(result.body.displayText, /Insufficient Balance/);
+        assert.equal(result.body.steps.length, 0);
+        assert.equal(llmServer.calls.length, 1);
+        assert.equal(
+            result.body.events.some((event) => event.type === 'agent.invalid_decision_observation'),
+            false
+        );
     } finally {
         await gateway.stop();
         await llmServer.close();

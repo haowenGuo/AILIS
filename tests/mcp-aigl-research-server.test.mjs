@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
 import http from 'node:http';
+import os from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
 import { createRequire } from 'node:module';
 
@@ -12,8 +16,10 @@ const {
     extractGitHubRepositoryResults,
     githubRepoRead,
     normalizeSearchBackends,
+    paperMetadataLookup,
     parseGitHubRepoRef,
     pdfFindAndExtract,
+    readDocument,
     webExtractLinks,
     webFetch
 } = require('../scripts/mcp-aigl-research-server.cjs');
@@ -63,14 +69,126 @@ test('AIGL research MCP exposes Codex-aligned PDF/file tools', () => {
     assert.ok(names.includes('github_repo_read'));
     assert.ok(names.includes('web_fetch'));
     assert.ok(names.includes('pdf_extract_text'));
+    assert.ok(names.includes('paper_metadata_lookup'));
     assert.ok(names.includes('pdf_find_and_extract'));
     assert.ok(names.includes('download_file'));
+    assert.ok(names.includes('read_document'));
     assert.ok(names.includes('read_presentation'));
     assert.ok(searchTool.inputSchema.properties.backend);
     assert.ok(searchTool.inputSchema.properties.backends);
     assert.ok(searchTool.inputSchema.properties.backends.items.enum.includes('duckduckgo_html'));
     assert.ok(searchTool.inputSchema.properties.backends.items.enum.includes('github_repositories'));
     assert.ok(searchTool.description.includes('managed search backends'));
+});
+
+test('read_document extracts Word paragraphs and tables as structured JSON', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigl-docx-'));
+    try {
+        const docxPath = path.join(tmpDir, 'sample.docx');
+        const code = [
+            'from docx import Document',
+            'import sys',
+            'doc = Document()',
+            'doc.add_paragraph("Employees")',
+            'table = doc.add_table(rows=2, cols=2)',
+            'table.cell(0, 0).text = "Giver"',
+            'table.cell(0, 1).text = "Recipient"',
+            'table.cell(1, 0).text = "Fred"',
+            'table.cell(1, 1).text = "Rebecca"',
+            'doc.save(sys.argv[1])'
+        ].join('\n');
+        const created = spawnSync('python', ['-c', code, docxPath], { encoding: 'utf8' });
+        assert.equal(created.status, 0, created.stderr || created.stdout);
+
+        const result = await readDocument({ path: docxPath });
+        assert.equal(result.isError, undefined, result.content[0].text);
+        const payload = JSON.parse(result.content[0].text);
+        assert.equal(payload.paragraphs[0].text, 'Employees');
+        assert.deepEqual(payload.tables[0].rows[0], ['Giver', 'Recipient']);
+        assert.deepEqual(payload.tables[0].rows[1], ['Fred', 'Rebecca']);
+        assert.equal(result.structuredContent.document.paragraphs[0].text, 'Employees');
+        assert.deepEqual(result.structuredContent.document.tables[0].rows[1], ['Fred', 'Rebecca']);
+    } finally {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+});
+
+test('paper_metadata_lookup returns ranked scholarly metadata from OpenAlex and Crossref', async () => {
+    let openAlexSearchExact = '';
+    await withServer((request, response) => {
+        const url = new URL(request.url || '/', 'http://127.0.0.1');
+        response.setHeader('content-type', 'application/json');
+        if (url.pathname === '/openalex/works') {
+            openAlexSearchExact = url.searchParams.get('search.exact') || '';
+            response.end(JSON.stringify({
+                results: [
+                    {
+                        id: 'https://openalex.org/W123',
+                        display_name: 'Pie Menus or Linear Menus, Which Is Better?',
+                        publication_year: 2015,
+                        doi: 'https://doi.org/10.1145/2702613.2732927',
+                        type: 'article',
+                        primary_location: {
+                            source: { display_name: 'CHI EA 2015' },
+                            landing_page_url: 'https://doi.org/10.1145/2702613.2732927'
+                        },
+                        best_oa_location: {
+                            pdf_url: 'https://example.org/pie-menus.pdf',
+                            landing_page_url: 'https://example.org/pie-menus'
+                        },
+                        authorships: [
+                            { author: { display_name: 'Antti Oulasvirta', id: 'https://openalex.org/A1' } },
+                            { author: { display_name: 'Jussi Jokinen', id: 'https://openalex.org/A2' } }
+                        ],
+                        cited_by_count: 17,
+                        referenced_works_count: 21
+                    }
+                ]
+            }));
+            return;
+        }
+        if (url.pathname === '/crossref/works') {
+            response.end(JSON.stringify({
+                message: {
+                    items: [
+                        {
+                            DOI: '10.1145/2702613.2732927',
+                            title: ['Pie Menus or Linear Menus, Which Is Better?'],
+                            URL: 'https://doi.org/10.1145/2702613.2732927',
+                            type: 'proceedings-article',
+                            publisher: 'ACM',
+                            'container-title': ['CHI EA 2015'],
+                            author: [
+                                { given: 'Antti', family: 'Oulasvirta' },
+                                { given: 'Jussi', family: 'Jokinen' }
+                            ],
+                            link: [
+                                { URL: 'https://example.org/pie-menus.pdf', 'content-type': 'application/pdf' }
+                            ]
+                        }
+                    ]
+                }
+            }));
+            return;
+        }
+        response.writeHead(404);
+        response.end(JSON.stringify({ message: `not found: ${url.pathname}` }));
+    }, async (baseUrl) => {
+        const result = await paperMetadataLookup({
+            title: 'Pie Menus or Linear Menus, Which Is Better?',
+            openAlexBaseUrl: `${baseUrl}/openalex/works`,
+            crossrefBaseUrl: `${baseUrl}/crossref/works`
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        const payload = JSON.parse(result.content[0].text);
+        assert.equal(openAlexSearchExact, 'Pie Menus or Linear Menus, Which Is Better?');
+        assert.equal(payload.results[0].title, 'Pie Menus or Linear Menus, Which Is Better?');
+        assert.equal(payload.results[0].doi, '10.1145/2702613.2732927');
+        assert.equal(payload.results[0].authors[0].name, 'Antti Oulasvirta');
+        assert.equal(payload.results[0].pdfUrl, 'https://example.org/pie-menus.pdf');
+        assert.equal(result.structuredContent.results[0].authors[1].name, 'Jussi Jokinen');
+    });
 });
 
 test('github_repo_read parses common GitHub repository references', () => {

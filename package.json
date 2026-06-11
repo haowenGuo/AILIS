@@ -1,6 +1,6 @@
 {
   "name": "humanclaw",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "HumanClaw desktop pet with VRM avatar, companion chat, and optional OpenClaw runtime integration.",
   "type": "module",
   "main": "electron/main.cjs",

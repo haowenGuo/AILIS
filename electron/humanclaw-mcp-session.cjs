@@ -8,6 +8,9 @@ const {
     createAiglDirectMcpToolSpec,
     enhanceAiglMcpToolSchema
 } = require('./aigl-mcp-adapter.cjs');
+const {
+    rankToolSearchResults
+} = require('./aigl-tool-routing.cjs');
 
 const DEFAULT_MCP_PROTOCOL_VERSION = '2025-06-18';
 const DEFAULT_MCP_TIMEOUT_MS = 30000;
@@ -943,19 +946,9 @@ class HumanClawMcpManager {
         const needle = normalizeString(query).toLowerCase();
         const boundedLimit = Math.max(1, Math.min(Number(limit) || 8, 50));
         if (!needle) {
-            return specs.slice(0, boundedLimit);
+            return rankToolSearchResults(specs, 'specific document pdf media file api tool', boundedLimit);
         }
-        const terms = needle.split(/\s+/).filter(Boolean);
-        return specs
-            .map((spec) => {
-                const haystack = buildMcpToolSearchText(spec);
-                const score = terms.reduce((sum, term) => sum + (haystack.includes(term) ? 1 : 0), 0);
-                return { spec, score };
-            })
-            .filter((entry) => entry.score > 0)
-            .sort((a, b) => b.score - a.score || a.spec.name.localeCompare(b.spec.name))
-            .slice(0, boundedLimit)
-            .map((entry) => entry.spec);
+        return rankToolSearchResults(specs, query, boundedLimit);
     }
 
     cacheToolSchemas(serverName, tools = []) {

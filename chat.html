@@ -814,6 +814,189 @@
             background: rgba(248, 250, 252, 0.92);
         }
 
+        .sr-only {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            padding: 0;
+            margin: -1px;
+            overflow: hidden;
+            clip: rect(0, 0, 0, 0);
+            white-space: nowrap;
+            border: 0;
+        }
+
+        .icon-btn {
+            position: relative;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            flex: 0 0 auto;
+            width: 34px;
+            height: 34px;
+            min-width: 34px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 0;
+            color: var(--text-main);
+            background: #ffffff;
+            cursor: pointer;
+            -webkit-app-region: no-drag;
+        }
+
+        .icon-btn svg {
+            width: 18px;
+            height: 18px;
+            stroke: currentColor;
+            stroke-width: 2;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+            fill: none;
+            pointer-events: none;
+        }
+
+        .icon-btn:hover:enabled {
+            background: var(--surface-soft);
+        }
+
+        .icon-btn:focus-visible {
+            outline: none;
+            border-color: #93b4ff;
+            box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+        }
+
+        .icon-btn:disabled {
+            color: #a3afbf;
+            background: #f1f5f9;
+            cursor: not-allowed;
+        }
+
+        #chat-header-actions .icon-btn {
+            width: 30px;
+            height: 30px;
+            min-width: 30px;
+            padding: 0;
+        }
+
+        #chat-header-actions .icon-btn svg {
+            width: 16px;
+            height: 16px;
+        }
+
+        #clear-chat-btn:hover:enabled,
+        #close-btn:hover:enabled {
+            color: var(--danger);
+            background: #fff5f5;
+            border-color: #fecaca;
+        }
+
+        #composer {
+            padding: 10px;
+            gap: 8px;
+            background: #ffffff;
+        }
+
+        #message-input {
+            min-height: 92px;
+            border-radius: 10px;
+            padding: 14px 16px;
+            background: #fbfcfe;
+        }
+
+        #composer-footer {
+            min-height: 38px;
+            gap: 10px;
+        }
+
+        #composer-actions {
+            gap: 6px;
+        }
+
+        #composer-actions > button,
+        #vision-actions > button {
+            font-size: 0;
+        }
+
+        #file-btn,
+        #vision-btn,
+        #voice-btn {
+            width: 36px;
+            height: 36px;
+            min-width: 36px;
+            border-radius: 9px;
+            padding: 0;
+        }
+
+        #vision-btn {
+            width: 42px;
+            gap: 2px;
+        }
+
+        #vision-btn .chevron-icon {
+            width: 11px;
+            height: 11px;
+            color: var(--text-muted);
+        }
+
+        #voice-btn[data-recording="true"] {
+            color: #ffffff;
+            border-color: #dc2626;
+            background: #dc2626;
+        }
+
+        #voice-btn[data-recording="true"]:hover:enabled {
+            background: #b91c1c;
+        }
+
+        #voice-btn svg[data-icon],
+        #send-btn svg[data-icon] {
+            display: none;
+        }
+
+        #voice-btn[data-state="mic"] svg[data-icon="mic"],
+        #voice-btn[data-state="pause"] svg[data-icon="pause"],
+        #voice-btn[data-state="stop"] svg[data-icon="stop"],
+        #voice-btn[data-state="cancel"] svg[data-icon="x"],
+        #send-btn[data-mode="send"] svg[data-icon="arrow-up"],
+        #send-btn[data-mode="interrupt"] svg[data-icon="square"] {
+            display: block;
+        }
+
+        #send-btn {
+            width: 42px;
+            height: 42px;
+            min-width: 42px;
+            border-radius: 999px;
+            padding: 0;
+            border: 1px solid #111827;
+            color: #ffffff;
+            background: #111827;
+        }
+
+        #send-btn:hover:enabled {
+            background: #020617;
+        }
+
+        #send-btn[data-mode="interrupt"] {
+            border-color: #dc2626;
+            background: #dc2626;
+        }
+
+        #send-btn[data-mode="interrupt"]:hover:enabled {
+            background: #b91c1c;
+        }
+
+        #send-btn:disabled {
+            border-color: #d8e0ea;
+            color: #ffffff;
+            background: #cbd5e1;
+        }
+
+        #send-btn svg {
+            width: 19px;
+            height: 19px;
+        }
+
     </style>
 </head>
 <body>
@@ -825,10 +1008,22 @@
                 <div id="chat-subtitle">和桌宠说话，动作和表情会同步联动</div>
             </div>
             <div id="chat-header-actions">
-                <button id="copy-chat-btn" type="button" aria-label="复制会话">复制</button>
-                <button id="clear-chat-btn" type="button" aria-label="清空会话">清空</button>
-                <button id="settings-btn" type="button" aria-label="打开控制面板">⚙</button>
-                <button id="close-btn" type="button" aria-label="关闭聊天窗">×</button>
+                <button id="copy-chat-btn" class="icon-btn" type="button" aria-label="复制会话" title="复制会话">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="10" height="10" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                    <span class="sr-only">复制会话</span>
+                </button>
+                <button id="clear-chat-btn" class="icon-btn" type="button" aria-label="清空会话" title="清空会话">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18"></path><path d="M8 6V4h8v2"></path><path d="M19 6l-1 14H6L5 6"></path><path d="M10 11v5"></path><path d="M14 11v5"></path></svg>
+                    <span class="sr-only">清空会话</span>
+                </button>
+                <button id="settings-btn" class="icon-btn" type="button" aria-label="打开控制面板" title="打开控制面板">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5A3.5 3.5 0 1 0 12 8a3.5 3.5 0 0 0 0 7.5Z"></path><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6V20a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-.6 1.7 1.7 0 0 0-1.88.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1H4a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 .6-1 1.7 1.7 0 0 0-.34-1.88l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6V4a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 .6 1.7 1.7 0 0 0 1.88-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9c.12.36.33.7.6 1h.1a2 2 0 1 1 0 4H20a1.7 1.7 0 0 0-.6 1Z"></path></svg>
+                    <span class="sr-only">打开控制面板</span>
+                </button>
+                <button id="close-btn" class="icon-btn" type="button" aria-label="关闭聊天窗" title="关闭聊天窗">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg>
+                    <span class="sr-only">关闭聊天窗</span>
+                </button>
             </div>
         </header>
 
@@ -848,17 +1043,34 @@
             <div id="composer-footer">
                 <div id="chat-status">已连接桌宠</div>
                 <div id="composer-actions">
-                    <button id="file-btn" type="button">文件</button>
+                    <button id="file-btn" class="icon-btn" type="button" aria-label="添加文件" title="添加文件">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14"></path><path d="M5 12h14"></path></svg>
+                        <span class="sr-only">添加文件</span>
+                    </button>
                     <div id="vision-actions">
-                        <button id="vision-btn" type="button">看图</button>
+                        <button id="vision-btn" class="icon-btn" type="button" aria-label="截图识别" title="截图识别">
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"></rect><circle cx="8.5" cy="10" r="1.5"></circle><path d="m21 15-4.5-4.5L11 16l-2-2-6 6"></path></svg>
+                            <svg class="chevron-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>
+                            <span class="sr-only">截图识别</span>
+                        </button>
                         <div id="vision-menu" hidden>
                             <button type="button" data-vision-target="chat-window">看对话窗</button>
                             <button type="button" data-vision-target="region">矩形截图</button>
                             <button type="button" data-vision-target="screen">看全屏</button>
                         </div>
                     </div>
-                    <button id="voice-btn" type="button" hidden>语音</button>
-                    <button id="send-btn" type="button">发送</button>
+                    <button id="voice-btn" class="icon-btn" type="button" aria-label="语音输入" title="语音输入" data-state="mic" hidden>
+                        <svg data-icon="mic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><path d="M12 19v3"></path></svg>
+                        <svg data-icon="pause" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14"></path><path d="M16 5v14"></path></svg>
+                        <svg data-icon="stop" viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"></rect></svg>
+                        <svg data-icon="x" viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg>
+                        <span class="sr-only">语音输入</span>
+                    </button>
+                    <button id="send-btn" class="icon-btn" type="button" aria-label="发送" title="发送" data-mode="send">
+                        <svg data-icon="arrow-up" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5"></path><path d="m5 12 7-7 7 7"></path></svg>
+                        <svg data-icon="square" viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="2"></rect></svg>
+                        <span class="sr-only">发送</span>
+                    </button>
                 </div>
             </div>
         </div>

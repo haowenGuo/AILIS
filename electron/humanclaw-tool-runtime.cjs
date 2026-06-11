@@ -15,6 +15,10 @@ const {
     normalizeAiglMcpCallArgs,
     parseAiglDirectMcpToolId
 } = require('./aigl-mcp-adapter.cjs');
+const {
+    buildToolRoutingAdvice,
+    rankToolSearchResults
+} = require('./aigl-tool-routing.cjs');
 
 const TOOL_EXPOSURE = AIGL_TOOL_EXPOSURE;
 const CORE_RUNTIME_TOOL_DEFINITIONS = AIGL_RUNTIME_TOOL_DEFINITIONS;
@@ -223,12 +227,20 @@ async function executeToolSearch(registry, args = {}) {
             }];
         }
     }
-    const tools = [...local, ...mcp].slice(0, limit);
+    const tools = rankToolSearchResults([...local, ...mcp], query, limit);
+    const routingAdvice = buildToolRoutingAdvice(query, tools);
     return makeTextResult({
         status: 'completed',
-        text: JSON.stringify({ status: 'completed', query, tools }, null, 2),
+        text: JSON.stringify({
+            status: 'completed',
+            query,
+            routing_advice: routingAdvice,
+            note: 'Prefer specific document/PDF/media/file tools before broad web_search when a task references a concrete artifact.',
+            tools
+        }, null, 2),
         details: {
             query,
+            routing_advice: routingAdvice,
             tools
         }
     });

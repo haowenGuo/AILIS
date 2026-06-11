@@ -198,13 +198,15 @@ function buildBenchmarkMessage(question, filePath) {
         'When the task is solved, return the exact short answer.',
         'AIGL visible persona text may stay natural; the benchmark runner stores the exact final_answer into a separate answer artifact.',
         'Available generic MCP server: aigl_research.',
-        'Prefer direct MCP tool ids instead of hand-building bridge payloads. Common direct tools: mcp__aigl_research__web_search, mcp__aigl_research__web_fetch, mcp__aigl_research__web_extract_links, mcp__aigl_research__pdf_find_and_extract, mcp__aigl_research__pdf_extract_text, mcp__aigl_research__download_file, mcp__aigl_research__youtube_transcript, mcp__aigl_research__transcribe_audio, mcp__aigl_research__describe_image, mcp__aigl_research__read_spreadsheet, mcp__aigl_research__read_presentation, mcp__aigl_research__run_python_file.',
-        'For paper/report questions without a direct PDF URL, call mcp__aigl_research__pdf_find_and_extract as the first retrieval action when the question contains an exact paper/report title. Do not start with broad web_search for exact-title paper questions.',
+        'Prefer direct MCP tool ids instead of hand-building bridge payloads. Common direct tools: mcp__aigl_research__read_document, mcp__aigl_research__read_spreadsheet, mcp__aigl_research__read_presentation, mcp__aigl_research__paper_metadata_lookup, mcp__aigl_research__pdf_find_and_extract, mcp__aigl_research__pdf_extract_text, mcp__aigl_research__youtube_transcript, mcp__aigl_research__transcribe_audio, mcp__aigl_research__describe_image, mcp__aigl_research__run_python_file, mcp__aigl_research__github_repo_read, mcp__aigl_research__web_fetch, mcp__aigl_research__web_extract_links, mcp__aigl_research__download_file, mcp__aigl_research__web_search.',
+        'Tool routing rule: mcp__aigl_research__web_search is a fallback for broad discovery only. For attached/local artifacts, known URLs, exact paper/report titles, PDFs, YouTube/videos, audio, images, code files, spreadsheets, presentations, Word documents, or GitHub repos, call the specific MCP tool first.',
+        'For paper/report questions without a direct PDF URL, call mcp__aigl_research__paper_metadata_lookup as the first retrieval action when the question contains an exact paper/report title or DOI. Use mcp__aigl_research__pdf_find_and_extract after that when you need full-text evidence. Do not start with broad web_search for exact-title paper questions.',
         'For pdf_find_and_extract: pass the exact title as title, include source/institution/journal terms from the question in query when present, and put answer terms in extract_query, e.g. {"title":"Exact Paper Title","query":"Exact Paper Title University of Leicester","extract_query":"numeric field or phrase"}.',
         'Use mcp_bridge mainly for MCP discovery/admin actions like list_servers, list_tool_specs, search_tools, read_resource, or health_check.',
         'For attached spreadsheets or CSV files, prefer mcp__aigl_research__read_spreadsheet; it returns columns, rows, numeric_sums, and total_numeric_sum. Use those full-file sums before writing any custom shell command.',
         'A head()/first-rows preview is not enough evidence for a final spreadsheet answer.',
         'For attached PowerPoint files, prefer mcp__aigl_research__read_presentation. For category/count questions such as "slides that mention crustaceans", count semantic members of the category (for example crab, crayfish, isopod), not only exact occurrences of the category word.',
+        'For attached Word/DOCX files, prefer mcp__aigl_research__read_document so paragraphs and tables remain structured evidence for the finalizer. If read_document succeeds, reason from its returned structure and move to final_answer; do not fall back to exec/raw DOCX reads unless the parser is missing the needed section.',
         'For attached audio/image/code files, use the file contents as primary evidence; do not guess from the filename.',
         '',
         'Question:',
@@ -659,14 +661,72 @@ function compactSpreadsheetObservation(text) {
     }
 }
 
+function findDocumentPayload(value, depth = 0) {
+    if (depth > 10 || value === undefined || value === null) {
+        return null;
+    }
+    const parsed = parseJsonLike(value);
+    if (!parsed || typeof parsed !== 'object') {
+        return null;
+    }
+    if (Array.isArray(parsed.paragraphs) || Array.isArray(parsed.tables)) {
+        return parsed;
+    }
+    for (const key of ['document', 'body', 'data', 'result', 'details', 'structuredContent', 'structured_content']) {
+        if (parsed[key] && typeof parsed[key] === 'object') {
+            const found = findDocumentPayload(parsed[key], depth + 1);
+            if (found) {
+                return found;
+            }
+        }
+    }
+    if (Array.isArray(parsed.content)) {
+        for (const item of parsed.content.slice(0, 4)) {
+            const found = findDocumentPayload(item?.text, depth + 1);
+            if (found) {
+                return found;
+            }
+        }
+    }
+    return null;
+}
+
+function compactDocumentObservation(value) {
+    const document = findDocumentPayload(value);
+    if (!document) {
+        return '';
+    }
+    return clipText(JSON.stringify(pruneEmptyValues({
+        source: 'read_document',
+        path: document.path,
+        paragraph_count: document.paragraph_count ?? (Array.isArray(document.paragraphs) ? document.paragraphs.length : undefined),
+        table_count: document.table_count ?? (Array.isArray(document.tables) ? document.tables.length : undefined),
+        paragraphs: Array.isArray(document.paragraphs) ? document.paragraphs : undefined,
+        tables: Array.isArray(document.tables) ? document.tables : undefined
+    }), null, 2), 12000);
+}
+
 function getEvidenceObservationText(step = {}) {
     const observationValues = collectStepObservationValues(step);
     const rawText = stringifyObservationValue(observationValues[0]);
     const mcpTool = normalizeText(step.args?.tool || step.args?.tool_name || step.args?.toolName || step.args?.name);
-    if (mcpTool === 'read_spreadsheet') {
+    const toolName = normalizeText(step.tool || mcpTool).toLowerCase();
+    if (toolName.includes('read_spreadsheet') || mcpTool === 'read_spreadsheet') {
         const compact = compactSpreadsheetObservation(rawText);
         if (compact) {
             return compact;
+        }
+    }
+    if (toolName.includes('read_document') || mcpTool === 'read_document') {
+        for (const value of [
+            step.response?.result?.structuredContent,
+            step.response?.result?.details,
+            ...observationValues
+        ]) {
+            const compact = compactDocumentObservation(value);
+            if (compact) {
+                return compact;
+            }
         }
     }
     if (looksLikeClinicalTrialsStep(step, observationValues)) {
@@ -914,6 +974,10 @@ function buildEvidenceDigest(response = {}) {
 }
 
 async function finalizeAnswerFromEvidence({ question, filePath, response, llmSettings }) {
+    const deterministic = await finalizeAnswerDeterministically({ question, filePath, response });
+    if (deterministic?.ok) {
+        return deterministic;
+    }
     const evidence = buildEvidenceDigest(response);
     if (!evidence) {
         return null;
@@ -936,10 +1000,6 @@ async function finalizeAnswerFromEvidence({ question, filePath, response, llmSet
                 reason: 'spreadsheet evidence only shows a preview, not a full-file computation'
             };
         }
-    }
-    const deterministic = await finalizeAnswerDeterministically({ question, filePath, response });
-    if (deterministic?.ok) {
-        return deterministic;
     }
     const llmResponse = await callDesktopLlmProvider(llmSettings, {
         temperature: 0,
@@ -1076,7 +1136,7 @@ async function callAgent({ baseUrl, args, question, filePath, llmSettings }) {
     let finalizer = null;
     let answerGate = buildFinalAnswerGate({ question, response });
     const forceEvidenceFinalizer = shouldForceEvidenceFinalizer({ question, filePath });
-    if ((!answerGate.ok || forceEvidenceFinalizer) && Array.isArray(response?.steps) && response.steps.length) {
+    if (!answerGate.ok || forceEvidenceFinalizer) {
         finalizer = await finalizeAnswerFromEvidence({ question, filePath, response, llmSettings }).catch((error) => ({
             ok: false,
             status: 'finalizer_error',
@@ -1175,6 +1235,11 @@ async function main() {
                     const completedByFinalizer = agentResult.answerGate?.source === 'finalizer' && agentResult.answerGate?.ok === true;
                     const completedByAgentFinal = agentResult.answerGate?.source === 'agent_final_answer' && agentResult.response?.ok === true;
                     const hasSubmittedAnswer = Boolean(agentResult.submittedAnswer);
+                    const rawAgentStatus = normalizeText(agentResult.response?.status);
+                    const answerGateStatus = normalizeText(agentResult.answerGate?.status);
+                    const noAnswerStatus = rawAgentStatus === 'provider_error'
+                        ? rawAgentStatus
+                        : (answerGateStatus || rawAgentStatus);
                     const answerArtifactPath = hasSubmittedAnswer
                         ? await writeAnswerArtifact(args, question, agentResult.submittedAnswer)
                         : '';
@@ -1202,12 +1267,27 @@ async function main() {
                             error: agentResult.response?.error || '',
                             blockedReason: agentResult.response?.blockedReason || ''
                         },
-                        ok: hasSubmittedAnswer && (completedByAgentFinal || completedByFinalizer),
+                        ok: hasSubmittedAnswer && (completedByAgentFinal || completedByFinalizer || agentResult.answerGate?.ok === true),
                         status: completedByFinalizer
                             ? 'finalized'
-                            : (!hasSubmittedAnswer ? (agentResult.answerGate?.status || agentResult.response?.status || '') : (agentResult.response?.status || ''))
+                            : (!hasSubmittedAnswer ? noAnswerStatus : rawAgentStatus)
                     };
                 } catch (error) {
+                    const finalizer = await finalizeAnswerFromEvidence({
+                        question,
+                        filePath,
+                        response: { steps: [] },
+                        llmSettings
+                    }).catch((finalizerError) => ({
+                        ok: false,
+                        status: 'finalizer_error',
+                        error: finalizerError?.message || String(finalizerError)
+                    }));
+                    const answerGate = buildFinalAnswerGate({ question, response: {}, finalizer });
+                    const submittedAnswer = answerGate.ok ? answerGate.answer : '';
+                    const answerArtifactPath = submittedAnswer
+                        ? await writeAnswerArtifact(args, question, submittedAnswer)
+                        : '';
                     finalResult = {
                         record_type: attempt < args.taskRetries ? 'attempt' : 'final',
                         attempt,
@@ -1216,12 +1296,20 @@ async function main() {
                         question: question.question,
                         file_name: question.file_name || '',
                         file_path: filePath || '',
-                        answer_artifact_path: '',
-                        ok: false,
-                        status: 'runner_error',
+                        answer_artifact_path: answerArtifactPath,
+                        ok: Boolean(submittedAnswer),
+                        status: submittedAnswer ? 'finalized' : 'runner_error',
                         durationMs: Date.now() - startedAt,
-                        submitted_answer: '',
-                        error: error?.message || String(error)
+                        submitted_answer: submittedAnswer,
+                        answer_gate: answerGate || null,
+                        finalizer: finalizer || null,
+                        error: submittedAnswer ? '' : (error?.message || String(error)),
+                        raw_status: {
+                            ok: false,
+                            status: 'runner_error',
+                            error: error?.message || String(error),
+                            blockedReason: ''
+                        }
                     };
                 }
                 const retry = shouldRetryTask(finalResult) && attempt < args.taskRetries;
