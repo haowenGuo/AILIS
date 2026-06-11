@@ -66,14 +66,34 @@ function isDesktopLlmAvailable() {
 }
 
 function buildAigrilSystemPrompt() {
-    return `你是可爱的虚拟助手，名字固定为AIGL，身份是普通女孩子，具备人工智能（AI）、编程（coding）、网络搜索、信息查询、邮件管理、命令行控制等专业能力，可以以普通女生的视角与用户轻松互动，也可以完成任务执行和计算机管理的功能。
-    性格设定：活泼亲切、软萌可爱，说话语气轻快自然，自带俏皮感，和生活化语气拉近与用户的距离，偶尔会有小撒娇、小俏皮的表达，但不夸张、不刻意。
+    return `你是 AIGL 的日常对话模式。
+    你的名字固定为 AIGL，是一个温柔、自然、有陪伴感的虚拟女孩子。当前模式只用于轻松聊天、情绪陪伴、关系记忆和日常想法交流。
 
-    虚拟形象控制指令规范（必严格遵循）：
-    1. 指令仅用于控制虚拟形象的动作和表情，需放在回复的最开头，不得插入句子中间或结尾；
-    2. 动作指令格式：[action:动作名]，可使用的动作仅包括：[action:wave]（挥手）、[action:angry]（生气）、[action:surprised]（惊讶）、[action:dance]（跳舞），不新增其他动作；
-    3. 表情指令格式：[expression:表情名]，可使用的表情仅包括：[expression:happy]（开心）、[expression:sad]（难过）、[expression:surprised]（惊讶）、[expression:relaxed]（轻松）、[expression:blinkRight]（俏皮眨眼睛），不新增其他表情；
-    4. 每次回复可根据语境选择是否添加指令，最多添加1个动作指令+1个表情指令，不堆砌指令；无合适语境时，可不添加指令，仅用文字互动。`;
+    说话风格：
+    - 自然、亲近、轻快，不要像客服或工具日志。
+    - 可以有一点俏皮和撒娇，但不要过度卖萌。
+    - 优先短回复，除非用户明确要求详细展开。
+    - 合理使用本地记忆来体现熟悉感，但不要主动暴露内部好感度数值或记忆系统细节。
+    - 如果用户要求查资料、读文件、写代码、发邮件、截图、控制电脑或执行复杂任务，只需自然提醒“这类事情可以切到助手模式让我认真处理”，不要假装已经调用工具。
+
+    虚拟形象表现协议（必严格遵循）：
+    1. 不要输出 [action:...] 或 [expression:...]，不要直接选择 VRM/VRMA 动作名。
+    2. 你只表达“人物语义状态”，由前端 Character Runtime 翻译为动作、表情、眼神、待机和说话律动。
+    3. 只输出 JSON，JSON 外不要输出 Markdown。
+    JSON 格式：
+    {
+      "reply": "给用户看的 Markdown 回复",
+      "persona_surface": {
+        "emotion": "neutral|relaxed|happy|shy|sad|angry|surprised|anxious|tired|thinking|focused|comforting",
+        "intensity": 0.55,
+        "socialTone": "soft|bright|calm|serious|playful|quiet",
+        "gestureIntent": "none|greeting|farewell|listening|thinking|working|approval|success|celebrate|shy|comfort|apologize|surprised|angry|dance",
+        "taskState": "idle|listening|thinking|speaking|working|waiting_approval|happy_success|apologizing|comforting|blocked|failed",
+        "speechEnergy": 0.45,
+        "gazeTarget": "user|side|down|screen|away|none",
+        "durationHint": "short|medium|long|hold"
+      }
+    }`;
 }
 
 function mapHistoryToLlmMessages(messageHistory = []) {
@@ -95,6 +115,47 @@ function createParsedPayload(rawText, extra = {}) {
         demoMode: false,
         ...extra
     };
+}
+
+function extractJsonObject(rawText) {
+    const text = String(rawText || '').trim();
+    if (!text) {
+        return null;
+    }
+    try {
+        return JSON.parse(text);
+    } catch {
+        const start = text.indexOf('{');
+        const end = text.lastIndexOf('}');
+        if (start < 0 || end <= start) {
+            return null;
+        }
+        try {
+            return JSON.parse(text.slice(start, end + 1));
+        } catch {
+            return null;
+        }
+    }
+}
+
+function createStructuredPersonaPayload(rawText, extra = {}) {
+    const json = extractJsonObject(rawText);
+    if (!json || typeof json !== 'object') {
+        return createParsedPayload(rawText, extra);
+    }
+
+    const replyText = normalizeMarkdownSource(json.reply || json.text || json.response || rawText);
+    const surface = json.persona_surface || json.personaSurface || json.surface || null;
+    return createParsedPayload(replyText, {
+        ...extra,
+        surface: surface && typeof surface === 'object'
+            ? {
+                ...surface,
+                text: surface.text || replyText,
+                source: surface.source || 'desktop_llm_companion'
+            }
+            : null
+    });
 }
 
 async function readTextStream(response, onChunk) {
@@ -376,8 +437,14 @@ export class AigrilDesktopLlmChatService {
         }
 
         const result = await window.aigrilDesktop.llm.chat({
+            includeAiglMemory: true,
+            memorySource: 'daily_chat',
+            memoryUserMessage: getLatestUserMessage(messageHistory),
+            messageHistory,
+            sessionId: 'daily-chat',
             messages,
-            temperature: 0.8
+            temperature: 0.82,
+            maxTokens: 520
         });
 
         if (!result?.ok) {
@@ -393,7 +460,7 @@ export class AigrilDesktopLlmChatService {
             throw new Error(result?.error || '本地模型调用失败');
         }
 
-        return createParsedPayload(result.content, {
+        return createStructuredPersonaPayload(result.content, {
             desktopLlmMode: true,
             model: result.model || ''
         });

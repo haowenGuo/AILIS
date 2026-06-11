@@ -144,9 +144,102 @@ test('HumanClaw Gateway exposes runtime tools, update_plan, policy checks, and t
         assert.equal(blockedByFileSystemField.body.status, 'blocked');
         await assert.rejects(() => fs.readFile(path.join(workspaceRoot, 'blocked-by-field.txt'), 'utf8'), /ENOENT/);
 
+        const permissionRequest = await callTool(baseUrl, {
+            tool: 'request_permissions',
+            args: {
+                reason: 'Need to write one acceptance file.',
+                permissions: {
+                    file_system: {
+                        write: ['granted.txt']
+                    }
+                }
+            },
+            context: {
+                workspace: workspaceRoot,
+                sessionKey: 'runtime-gateway',
+                permissionProfile: 'read-only'
+            }
+        });
+        assert.equal(permissionRequest.body.ok, false);
+        assert.equal(permissionRequest.body.status, 'needs_approval');
+
+        const granted = await callTool(baseUrl, {
+            tool: 'request_permissions',
+            args: {
+                reason: 'Need to write one acceptance file.',
+                permissions: {
+                    file_system: {
+                        write: ['granted.txt']
+                    }
+                }
+            },
+            context: {
+                workspace: workspaceRoot,
+                sessionKey: 'runtime-gateway',
+                permissionProfile: 'read-only',
+                approved: true
+            }
+        });
+        assert.equal(granted.body.ok, true, granted.body.error);
+        assert.equal(granted.body.result.details.grant.status, 'granted');
+
+        const grantedWrite = await callTool(baseUrl, {
+            tool: 'write',
+            args: { path: 'granted.txt', content: 'permission grant worked' },
+            context: {
+                workspace: workspaceRoot,
+                sessionKey: 'runtime-gateway',
+                permissionProfile: 'read-only'
+            }
+        });
+        assert.equal(grantedWrite.body.ok, true, grantedWrite.body.error);
+        assert.equal(await fs.readFile(path.join(workspaceRoot, 'granted.txt'), 'utf8'), 'permission grant worked');
+
+        const patch = await callTool(baseUrl, {
+            tool: 'apply_patch',
+            args: {
+                input: [
+                    '*** Begin Patch',
+                    '*** Add File: patched.txt',
+                    '+hello patch',
+                    '*** End Patch'
+                ].join('\n')
+            },
+            context: {
+                workspace: workspaceRoot,
+                sessionKey: 'runtime-gateway'
+            }
+        });
+        assert.equal(patch.body.ok, true, patch.body.error);
+        assert.equal(await fs.readFile(path.join(workspaceRoot, 'patched.txt'), 'utf8'), 'hello patch\n');
+
+        const intercepted = await callTool(baseUrl, {
+            tool: 'computer',
+            args: {
+                action: 'exec_command',
+                cmd: [
+                    'apply_patch <<PATCH',
+                    '*** Begin Patch',
+                    '*** Add File: intercepted.txt',
+                    '+hello intercept',
+                    '*** End Patch',
+                    'PATCH'
+                ].join('\n')
+            },
+            context: {
+                workspace: workspaceRoot,
+                sessionKey: 'runtime-gateway'
+            }
+        });
+        assert.equal(intercepted.body.ok, true, intercepted.body.error);
+        assert.equal(intercepted.body.result.details.action, 'apply_patch');
+        assert.equal(await fs.readFile(path.join(workspaceRoot, 'intercepted.txt'), 'utf8'), 'hello intercept\n');
+
         const transcript = await jsonFetch(`${baseUrl}/transcript?runId=runtime-gateway-run`);
         assert.equal(transcript.body.ok, true);
         assert.ok(transcript.body.items.some((item) => item.type === 'tool.call'));
+        assert.ok(transcript.body.items.some((item) => item.type === 'tool.event' && item.status === 'begin'));
+        assert.ok(transcript.body.items.some((item) => item.type === 'tool.event' && ['success', 'failure'].includes(item.status)));
         assert.ok(transcript.body.items.some((item) => item.type === 'plan.updated'));
         assert.ok(transcript.body.items.some((item) => item.type === 'tool.result'));
     } finally {
@@ -224,6 +317,42 @@ rl.on('line', (line) => {
         );
         assert.equal(call.details.status, 'completed');
         assert.match(call.content[0].text, /echo:hello/);
+        assert.equal(runtime.canExecuteTool('mcp__fixture__echo'), true);
+        assert.equal(runtime.canExecuteTool('mcp:fixture:echo'), true);
+
+        const directCall = await runtime.executeTool(
+            'mcp__fixture__echo',
+            { text: 'direct' },
+            { runId: 'mcp-run' }
+        );
+        assert.equal(directCall.details.status, 'completed');
+        assert.equal(directCall.details.server, 'fixture');
+        assert.equal(directCall.details.tool, 'echo');
+        assert.match(directCall.content[0].text, /echo:direct/);
+
+        const searched = await runtime.executeTool(
+            'tool_search',
+            { query: 'echo fixture', limit: 8 },
+            { runId: 'mcp-run' }
+        );
+        assert.equal(searched.details.status, 'completed');
+        assert.ok(searched.details.tools.some((tool) => tool.id === 'mcp__fixture__echo'));
+
+        const aliasCall = await runtime.executeTool(
+            'mcp_bridge',
+            { action: 'call_tool', server: 'fixture', tool_name: 'echo', tool_args: { text: 'alias' } },
+            { runId: 'mcp-run' }
+        );
+        assert.equal(aliasCall.details.status, 'completed');
+        assert.match(aliasCall.content[0].text, /echo:alias/);
+
+        const topLevelArgCall = await runtime.executeTool(
+            'mcp_bridge',
+            { action: 'call_tool', server: 'fixture', tool: 'echo', text: 'top-level' },
+            { runId: 'mcp-run' }
+        );
+        assert.equal(topLevelArgCall.details.status, 'completed');
+        assert.match(topLevelArgCall.content[0].text, /echo:top-level/);
 
         const resource = await runtime.executeTool(
             'mcp_bridge',

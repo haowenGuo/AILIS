@@ -1,0 +1,23 @@
+{
+  "ok": true,
+  "dataset": "princeton-nlp/SWE-bench_Lite",
+  "config": "default",
+  "split": "test",
+  "offset": 0,
+  "repo": "scikit-learn/scikit-learn",
+  "requestedLimit": 1,
+  "rowCount": 1,
+  "totalRows": 300,
+  "scannedRows": 200,
+  "scanOffsets": [
+    0,
+    100
+  ],
+  "output": "F:\\AIGril\\evals\\engineering\\swebench-lite.test.scikit-learn-scikit-learn.sample.jsonl",
+  "repos": [
+    "scikit-learn/scikit-learn"
+  ],
+  "instances": [
+    "scikit-learn__scikit-learn-10297"
+  ]
+}

@@ -13,6 +13,7 @@ export default defineConfig({
     build: {
         rollupOptions: {
             input: {
+                agentLab: resolve(workspaceRoot, 'agent-lab.html'),
                 control: resolve(workspaceRoot, 'control.html'),
                 index: resolve(workspaceRoot, 'index.html'),
                 pet: resolve(workspaceRoot, 'pet.html'),

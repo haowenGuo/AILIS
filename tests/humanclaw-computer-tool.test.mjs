@@ -7,7 +7,12 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const { HumanClawGateway } = require('../electron/humanclaw-gateway.cjs');
-const { resolveTargetPath, commonUserRoots } = require('../electron/humanclaw-computer-tool.cjs');
+const {
+    HumanClawComputerTool,
+    resolveTargetPath,
+    commonUserRoots
+} = require('../electron/humanclaw-computer-tool.cjs');
+const { HumanClawPlatformAdapter } = require('../electron/humanclaw-platform-adapter.cjs');
 
 async function jsonFetch(url, options = {}) {
     const response = await fetch(url, {
@@ -41,6 +46,125 @@ test('HumanClaw computer path helpers resolve workspace and common roots', () =>
     assert.ok(commonUserRoots({ workspaceRoot, workspaceDir: workspaceRoot }).some((entry) => entry === workspaceRoot));
 });
 
+test('HumanClaw computer tool exposes OSWorld-style GUI actions through the platform adapter', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'humanclaw-computer-gui-test-'));
+    const platformAdapter = new HumanClawPlatformAdapter({ platform: 'win32' });
+    platformAdapter.desktopScreenshotCommand = ({ outputPath }) => ({
+        supported: true,
+        command: process.execPath,
+        args: [
+            '-e',
+            `require('fs').mkdirSync(require('path').dirname(${JSON.stringify(outputPath)}), { recursive: true }); require('fs').writeFileSync(${JSON.stringify(outputPath)}, 'png'); console.log(JSON.stringify({ ok: true, path: ${JSON.stringify(outputPath)}, width: 2, height: 2 }));`
+        ]
+    });
+    platformAdapter.guiInputCommand = ({ action }) => ({
+        supported: true,
+        command: process.execPath,
+        args: ['-e', `console.log(JSON.stringify({ ok: true, action: ${JSON.stringify(action)} }))`]
+    });
+    platformAdapter.clipboardReadCommand = () => ({
+        supported: true,
+        command: process.execPath,
+        args: ['-e', 'console.log(JSON.stringify({ ok: true, text: "clipboard text" }))']
+    });
+    platformAdapter.clipboardWriteCommand = ({ text }) => ({
+        supported: true,
+        command: process.execPath,
+        args: ['-e', `console.log(JSON.stringify({ ok: true, bytes: ${Buffer.byteLength(text, 'utf8')} }))`]
+    });
+
+    const tool = new HumanClawComputerTool({
+        workspaceRoot,
+        platformAdapter
+    });
+
+    try {
+        const schema = await tool.execute({ action: 'schema' }, {}, { workspaceRoot, platformAdapter });
+        assert.ok(schema.details.schema.actions.includes('screen_screenshot'));
+        assert.ok(schema.details.schema.actions.includes('mouse_click'));
+        assert.equal(schema.details.schema.safety.guiInput, 'windows-powershell-user32');
+
+        const screenshot = await tool.execute(
+            { action: 'screen_screenshot', path: 'screen.png' },
+            { workspace: workspaceRoot },
+            { workspaceRoot, workspaceDir: workspaceRoot, platformAdapter }
+        );
+        assert.equal(screenshot.details.status, 'completed');
+        assert.equal(screenshot.details.width, 2);
+        assert.ok(screenshot.content.some((entry) => entry.type === 'image'));
+
+        const clickNeedsApproval = await tool.execute(
+            { action: 'mouse_click', x: 10, y: 12 },
+            { workspace: workspaceRoot },
+            { workspaceRoot, platformAdapter }
+        );
+        assert.equal(clickNeedsApproval.details.status, 'needs_approval');
+
+        const click = await tool.execute(
+            { action: 'click', x: 10, y: 12 },
+            { workspace: workspaceRoot, approved: true },
+            { workspaceRoot, platformAdapter }
+        );
+        assert.equal(click.details.status, 'completed');
+        assert.equal(click.details.action, 'mouse_click');
+
+        const clipboardRead = await tool.execute(
+            { action: 'clipboard_read' },
+            { workspace: workspaceRoot },
+            { workspaceRoot, platformAdapter }
+        );
+        assert.equal(clipboardRead.details.text, 'clipboard text');
+
+        const clipboardWrite = await tool.execute(
+            { action: 'clipboard_write', text: 'hello' },
+            { workspace: workspaceRoot, approved: true },
+            { workspaceRoot, platformAdapter }
+        );
+        assert.equal(clipboardWrite.details.status, 'completed');
+    } finally {
+        await tool.shutdown();
+    }
+});
+
+test('HumanClaw computer exec_command delegates process spawn through the platform adapter', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'humanclaw-computer-spawn-adapter-'));
+    const platformAdapter = new HumanClawPlatformAdapter({
+        platform: 'android',
+        hostPlatform: process.platform
+    });
+    platformAdapter.commandSpawnSpec = (command, { cwd, env } = {}) => ({
+        supported: true,
+        command: process.execPath,
+        args: ['-e', `console.log('ADAPTER_SPAWN:' + ${JSON.stringify(command)})`],
+        options: {
+            cwd,
+            shell: false,
+            windowsHide: process.platform === 'win32',
+            env: {
+                ...process.env,
+                ...(env || {})
+            }
+        }
+    });
+
+    const tool = new HumanClawComputerTool({
+        workspaceRoot,
+        platformAdapter
+    });
+
+    try {
+        const result = await tool.execute(
+            { action: 'exec_command', command: 'echo from-device', yield_time_ms: 3000, max_output_tokens: 1000 },
+            { workspace: workspaceRoot, approved: true },
+            { workspaceRoot, workspaceDir: workspaceRoot, platformAdapter }
+        );
+        assert.equal(result.details.status, 'completed');
+        assert.match(result.details.output, /ADAPTER_SPAWN:echo from-device/);
+    } finally {
+        await tool.shutdown();
+    }
+});
+
 test('HumanClaw computer tool provides filesystem and process control with approval gates', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'humanclaw-computer-test-'));
     const gateway = new HumanClawGateway({
@@ -64,7 +188,8 @@ test('HumanClaw computer tool provides filesystem and process control with appro
             context: { workspace: workspaceRoot }
         });
         assert.equal(schema.body.ok, true, schema.body.error);
-        assert.ok(schema.body.result.details.schema.actions.includes('session_start'));
+        assert.equal(schema.body.result.details.schema.safety.platform.capabilities.pty, true);
+        assert.equal(schema.body.result.details.schema.safety.platform.capabilities.shell, true);
 
         const writeBlocked = await callTool(baseUrl, {
             tool: 'computer',
@@ -136,11 +261,24 @@ test('HumanClaw computer tool provides filesystem and process control with appro
         assert.equal(exec.body.ok, true, exec.body.error);
         assert.match(exec.body.result.details.stdout, /COMPUTER_EXEC_OK/);
 
+        const execWithArgs = await callTool(baseUrl, {
+            tool: 'computer',
+            args: {
+                action: 'exec',
+                command: process.execPath,
+                args: ['-e', "console.log('COMPUTER_EXEC_ARGS_OK')"],
+                timeoutMs: 10000
+            },
+            context: { workspace: workspaceRoot, approved: true }
+        });
+        assert.equal(execWithArgs.body.ok, true, execWithArgs.body.error);
+        assert.match(execWithArgs.body.result.details.stdout, /COMPUTER_EXEC_ARGS_OK/);
+
         const session = await callTool(baseUrl, {
             tool: 'computer',
             args: {
                 action: 'session_start',
-                command: 'node -e "console.log(\'SESSION_READY\'); setTimeout(()=>{}, 30000)"',
+                command: 'node -e "console.log(\'SESSION_READY\'); setTimeout(function(){}, 30000)"',
                 timeoutMs: 60000
             },
             context: { workspace: workspaceRoot, approved: true }
@@ -162,6 +300,56 @@ test('HumanClaw computer tool provides filesystem and process control with appro
         }
         assert.equal(processRead.body.ok, true, processRead.body.error);
         assert.match(processRead.body.result.details.session.stdout, /SESSION_READY/);
+
+        const unifiedNeedsApproval = await callTool(baseUrl, {
+            tool: 'computer',
+            args: { action: 'exec_command', cmd: 'node -e "console.log(1)"', yield_time_ms: 100 },
+            context: { workspace: workspaceRoot }
+        });
+        assert.equal(unifiedNeedsApproval.body.ok, false);
+        assert.equal(unifiedNeedsApproval.body.status, 'needs_approval');
+
+        const unifiedExec = await callTool(baseUrl, {
+            tool: 'computer',
+            args: {
+                action: 'exec_command',
+                cmd: 'node -e "console.log(\'UNIFIED_READY\'); setTimeout(function(){}, 30000)"',
+                yield_time_ms: 300,
+                max_output_tokens: 2000
+            },
+            context: { workspace: workspaceRoot, approved: true }
+        });
+        assert.equal(unifiedExec.body.ok, true, unifiedExec.body.error);
+        assert.ok(unifiedExec.body.result.details.session_id);
+        assert.equal(unifiedExec.body.result.details.exit_code, null);
+        assert.equal(typeof unifiedExec.body.result.details.original_token_count, 'number');
+
+        let unifiedPoll = null;
+        for (let attempt = 0; attempt < 10; attempt += 1) {
+            unifiedPoll = await callTool(baseUrl, {
+                tool: 'computer',
+                args: {
+                    action: 'write_stdin',
+                    session_id: unifiedExec.body.result.details.session_id,
+                    chars: '',
+                    yield_time_ms: 300,
+                    max_output_tokens: 2000
+                },
+                context: { workspace: workspaceRoot }
+            });
+            if (/UNIFIED_READY/.test(unifiedPoll.body.result?.details?.output || '')) {
+                break;
+            }
+        }
+        assert.equal(unifiedPoll.body.ok, true, unifiedPoll.body.error);
+        assert.match(unifiedPoll.body.result.details.output, /UNIFIED_READY/);
+
+        const unifiedKilled = await callTool(baseUrl, {
+            tool: 'computer',
+            args: { action: 'process_kill', sessionId: unifiedExec.body.result.details.session_id },
+            context: { workspace: workspaceRoot, approved: true }
+        });
+        assert.equal(unifiedKilled.body.ok, true, unifiedKilled.body.error);
 
         const processList = await callTool(baseUrl, {
             tool: 'computer',

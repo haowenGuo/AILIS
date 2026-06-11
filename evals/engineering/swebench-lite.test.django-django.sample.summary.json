@@ -1,0 +1,22 @@
+{
+  "ok": true,
+  "dataset": "princeton-nlp/SWE-bench_Lite",
+  "config": "default",
+  "split": "test",
+  "offset": 0,
+  "repo": "django/django",
+  "requestedLimit": 1,
+  "rowCount": 1,
+  "totalRows": 300,
+  "scannedRows": 100,
+  "scanOffsets": [
+    0
+  ],
+  "output": "F:\\AIGril\\evals\\engineering\\swebench-lite.test.django-django.sample.jsonl",
+  "repos": [
+    "django/django"
+  ],
+  "instances": [
+    "django__django-10914"
+  ]
+}

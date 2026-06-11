@@ -5,8 +5,13 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const {
+    buildAnthropicMessagesUrl,
     buildChatCompletionsUrl,
-    callDesktopLlmProvider
+    buildGeminiGenerateContentUrl,
+    buildResponsesUrl,
+    callDesktopLlmProvider,
+    checkDesktopLlmProvider,
+    getProviderCapabilities
 } = require('../electron/desktop-llm-provider.cjs');
 
 let server;
@@ -29,22 +34,140 @@ describe('desktop LLM provider', () => {
     before(async () => {
         server = http.createServer(async (request, response) => {
             const body = await readRequestBody(request);
+            const parsedBody = body ? JSON.parse(body) : {};
             receivedRequest = {
                 method: request.method,
                 url: request.url,
                 authorization: request.headers.authorization,
+                xApiKey: request.headers['x-api-key'],
                 contentType: request.headers['content-type'],
-                body: JSON.parse(body)
+                body: parsedBody
             };
 
             response.writeHead(200, {
                 'content-type': 'application/json'
             });
+
+            if (request.url === '/v1/responses') {
+                if (Array.isArray(parsedBody.tools) && parsedBody.tools.length) {
+                    response.end(JSON.stringify({
+                        output: [
+                            {
+                                type: 'function_call',
+                                call_id: 'call-resp-1',
+                                name: parsedBody.tools[0].name,
+                                arguments: JSON.stringify({ ok: true, kind: 'tool' })
+                            }
+                        ],
+                        usage: { total_tokens: 8 }
+                    }));
+                    return;
+                }
+                response.end(JSON.stringify({
+                    output_text: parsedBody.text ? '{"ok":true,"kind":"json"}' : 'OK',
+                    usage: { total_tokens: 6 }
+                }));
+                return;
+            }
+
+            if (request.url === '/v1/messages') {
+                if (Array.isArray(parsedBody.tools) && parsedBody.tools.length) {
+                    response.end(JSON.stringify({
+                        content: [
+                            {
+                                type: 'tool_use',
+                                id: 'toolu_1',
+                                name: parsedBody.tools[0].name,
+                                input: { ok: true, kind: 'tool' }
+                            }
+                        ],
+                        usage: { input_tokens: 4, output_tokens: 4 }
+                    }));
+                    return;
+                }
+                response.end(JSON.stringify({
+                    content: [
+                        {
+                            type: 'text',
+                            text: parsedBody.system?.includes('JSON') ? '{"ok":true,"kind":"json"}' : 'OK'
+                        }
+                    ],
+                    usage: { input_tokens: 4, output_tokens: 4 }
+                }));
+                return;
+            }
+
+            if (request.url.startsWith('/v1beta/models/gemini-demo:generateContent')) {
+                if (Array.isArray(parsedBody.tools) && parsedBody.tools.length) {
+                    response.end(JSON.stringify({
+                        candidates: [
+                            {
+                                content: {
+                                    parts: [
+                                        {
+                                            functionCall: {
+                                                name: parsedBody.tools[0].functionDeclarations[0].name,
+                                                args: { ok: true, kind: 'tool' }
+                                            }
+                                        }
+                                    ]
+                                }
+                            }
+                        ],
+                        usageMetadata: { totalTokenCount: 8 }
+                    }));
+                    return;
+                }
+                response.end(JSON.stringify({
+                    candidates: [
+                        {
+                            content: {
+                                parts: [
+                                    {
+                                        text: parsedBody.generationConfig?.responseMimeType === 'application/json'
+                                            ? '{"ok":true,"kind":"json"}'
+                                            : 'OK'
+                                    }
+                                ]
+                            }
+                        }
+                    ],
+                    usageMetadata: { totalTokenCount: 6 }
+                }));
+                return;
+            }
+
+            if (Array.isArray(parsedBody.tools) && parsedBody.tools.length) {
+                response.end(JSON.stringify({
+                    choices: [
+                        {
+                            message: {
+                                tool_calls: [
+                                    {
+                                        id: 'call-chat-1',
+                                        type: 'function',
+                                        function: {
+                                            name: parsedBody.tools[0].function.name,
+                                            arguments: JSON.stringify({ ok: true, kind: 'tool' })
+                                        }
+                                    }
+                                ],
+                                content: ''
+                            }
+                        }
+                    ],
+                    usage: { total_tokens: 9 }
+                }));
+                return;
+            }
+
             response.end(JSON.stringify({
                 choices: [
                     {
                         message: {
-                            content: '[action:wave][expression:happy]你好呀'
+                            content: parsedBody.response_format
+                                ? '{"ok":true,"kind":"json"}'
+                                : '[action:wave][expression:happy]你好呀'
                         }
                     }
                 ],
@@ -155,5 +278,178 @@ describe('desktop LLM provider', () => {
                 ]
             }
         ]);
+    });
+
+    it('passes response_format for OpenAI-compatible JSON mode', async () => {
+        const result = await callDesktopLlmProvider({
+            provider: 'openai-compatible',
+            baseUrl: `${serverUrl}/v1`,
+            apiKey: 'test-secret-key',
+            model: 'demo-model',
+            timeoutMs: 5000
+        }, {
+            jsonMode: true,
+            messages: [{ role: 'user', content: 'Return JSON.' }]
+        });
+
+        assert.equal(result.ok, true);
+        assert.equal(result.content, '{"ok":true,"kind":"json"}');
+        assert.deepEqual(receivedRequest.body.response_format, { type: 'json_object' });
+    });
+
+    it('passes low-latency reasoning controls for OpenAI-compatible requests when explicitly provided', async () => {
+        const result = await callDesktopLlmProvider({
+            provider: 'openai-compatible',
+            baseUrl: `${serverUrl}/v1`,
+            apiKey: 'test-secret-key',
+            model: 'demo-model',
+            timeoutMs: 5000
+        }, {
+            messages: [{ role: 'user', content: 'Return OK.' }],
+            temperature: 0,
+            reasoning_effort: 'minimal',
+            thinking: { type: 'disabled' },
+            max_tokens: 2048,
+            parallel_tool_calls: true
+        });
+
+        assert.equal(result.ok, true);
+        assert.equal(receivedRequest.body.temperature, 0);
+        assert.equal(receivedRequest.body.reasoning_effort, 'minimal');
+        assert.deepEqual(receivedRequest.body.thinking, { type: 'disabled' });
+        assert.equal(receivedRequest.body.max_tokens, 2048);
+        assert.equal(receivedRequest.body.parallel_tool_calls, true);
+    });
+
+    it('extracts OpenAI-compatible native tool calls', async () => {
+        const result = await callDesktopLlmProvider({
+            provider: 'openai-compatible',
+            baseUrl: `${serverUrl}/v1`,
+            apiKey: 'test-secret-key',
+            model: 'demo-model',
+            timeoutMs: 5000
+        }, {
+            tools: [
+                {
+                    name: 'demo_tool',
+                    description: 'demo',
+                    parameters: {
+                        type: 'object',
+                        properties: {
+                            ok: { type: 'boolean' }
+                        }
+                    }
+                }
+            ],
+            toolChoice: { name: 'demo_tool', required: true },
+            messages: [{ role: 'user', content: 'Use tool.' }]
+        });
+
+        assert.equal(result.ok, true);
+        assert.equal(result.nativeToolCalls, true);
+        assert.equal(result.toolCalls[0].name, 'demo_tool');
+        assert.deepEqual(result.toolCalls[0].arguments, { ok: true, kind: 'tool' });
+    });
+
+    it('supports OpenAI Responses adapter request and function-call extraction', async () => {
+        assert.equal(buildResponsesUrl(`${serverUrl}/v1`), `${serverUrl}/v1/responses`);
+        const result = await callDesktopLlmProvider({
+            provider: 'openai-responses',
+            baseUrl: `${serverUrl}/v1`,
+            apiKey: 'openai-test-key',
+            model: 'gpt-demo',
+            timeoutMs: 5000
+        }, {
+            tools: [{ name: 'demo_tool', description: 'demo', parameters: { type: 'object' } }],
+            toolChoice: { name: 'demo_tool', required: true },
+            messages: [
+                { role: 'system', content: 'system' },
+                { role: 'user', content: 'Use tool.' }
+            ]
+        });
+
+        assert.equal(result.ok, true);
+        assert.equal(receivedRequest.url, '/v1/responses');
+        assert.equal(receivedRequest.authorization, 'Bearer openai-test-key');
+        assert.equal(receivedRequest.body.instructions, 'system');
+        assert.equal(result.toolCalls[0].name, 'demo_tool');
+    });
+
+    it('supports Anthropic adapter request and tool-use extraction', async () => {
+        assert.equal(buildAnthropicMessagesUrl(`${serverUrl}/v1`), `${serverUrl}/v1/messages`);
+        const result = await callDesktopLlmProvider({
+            provider: 'anthropic',
+            baseUrl: serverUrl,
+            apiKey: 'anthropic-test-key',
+            model: 'claude-demo',
+            timeoutMs: 5000
+        }, {
+            tools: [{ name: 'demo_tool', description: 'demo', parameters: { type: 'object' } }],
+            toolChoice: { name: 'demo_tool', required: true },
+            messages: [
+                { role: 'system', content: 'system' },
+                { role: 'user', content: 'Use tool.' }
+            ]
+        });
+
+        assert.equal(result.ok, true);
+        assert.equal(receivedRequest.url, '/v1/messages');
+        assert.equal(receivedRequest.xApiKey, 'anthropic-test-key');
+        assert.equal(receivedRequest.body.system, 'system');
+        assert.equal(result.toolCalls[0].name, 'demo_tool');
+    });
+
+    it('supports Gemini adapter request and functionCall extraction', async () => {
+        assert.equal(
+            buildGeminiGenerateContentUrl(`${serverUrl}/v1beta`, 'gemini-demo', 'gemini-test-key'),
+            `${serverUrl}/v1beta/models/gemini-demo:generateContent?key=gemini-test-key`
+        );
+        const result = await callDesktopLlmProvider({
+            provider: 'gemini',
+            baseUrl: `${serverUrl}/v1beta`,
+            apiKey: 'gemini-test-key',
+            model: 'gemini-demo',
+            timeoutMs: 5000
+        }, {
+            tools: [{ name: 'demo_tool', description: 'demo', parameters: { type: 'object' } }],
+            toolChoice: { name: 'demo_tool', required: true },
+            messages: [
+                { role: 'system', content: 'system' },
+                { role: 'user', content: 'Use tool.' }
+            ]
+        });
+
+        assert.equal(result.ok, true);
+        assert.ok(receivedRequest.url.startsWith('/v1beta/models/gemini-demo:generateContent'));
+        assert.deepEqual(receivedRequest.body.systemInstruction, { parts: [{ text: 'system' }] });
+        assert.equal(result.toolCalls[0].name, 'demo_tool');
+    });
+
+    it('runs provider health checks without exposing API keys', async () => {
+        const result = await checkDesktopLlmProvider({
+            provider: 'openai-compatible',
+            baseUrl: `${serverUrl}/v1`,
+            apiKey: 'secret-health-key',
+            model: 'demo-model',
+            timeoutMs: 5000
+        }, {
+            includeVision: false
+        });
+
+        assert.equal(result.ok, true);
+        assert.equal(result.checks.basic.ok, true);
+        assert.equal(result.checks.json.ok, true);
+        assert.equal(result.checks.toolCalling.ok, true);
+        assert.equal(JSON.stringify(result).includes('secret-health-key'), false);
+    });
+
+    it('reports model capability heuristics', () => {
+        const caps = getProviderCapabilities({
+            provider: 'gemini',
+            model: 'gemini-2.0-flash'
+        });
+        assert.equal(caps.nativeToolCalling, true);
+        assert.equal(caps.vision, true);
+        assert.equal(caps.lowLatency, true);
     });
 });

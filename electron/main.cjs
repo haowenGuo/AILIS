@@ -33,12 +33,19 @@ const {
     OpenClawRuntimeSupervisor
 } = require('./openclaw-runtime.cjs');
 const { HumanClawGateway } = require('./humanclaw-gateway.cjs');
+const { createHumanClawDesktopPlatformAdapter } = require('./humanclaw-desktop-platform-adapter.cjs');
 const {
     getOpenClawToolSurface,
     getOpenClawToolSurfaceSummary,
     validateOpenClawToolSurface
 } = require('./openclaw-tool-surface.cjs');
-const { callDesktopLlmProvider } = require('./desktop-llm-provider.cjs');
+const {
+    callDesktopLlmProvider,
+    checkDesktopLlmProvider,
+    getDefaultProviderBaseUrl,
+    getDefaultProviderModel,
+    getProviderCapabilities
+} = require('./desktop-llm-provider.cjs');
 const {
     BACKEND_MODE_OPTIONS,
     DEFAULT_AUTO_CHAT_ENABLED,
@@ -48,10 +55,22 @@ const {
     DEFAULT_AVATAR_DIALOGUE_BUBBLE_EXTRA_WIDTH,
     DEFAULT_BACKEND_BASE_URL,
     DEFAULT_BACKEND_MODE,
+    DEFAULT_CONVERSATION_MODE,
     DEFAULT_CAMERA_DISTANCE,
     DEFAULT_CAMERA_HEIGHT,
     DEFAULT_CAMERA_TARGET_Y,
     DEFAULT_COMPUTER_CONTROL_ENABLED,
+    DEFAULT_RENDER_PROFILE_ID,
+    DEFAULT_RENDER_LIGHT_YAW_DEG,
+    DEFAULT_RENDER_KEY_LIGHT_SCALE,
+    DEFAULT_RENDER_AMBIENT_FILL_SCALE,
+    DEFAULT_RENDER_OUTLINE_SCALE,
+    DEFAULT_RENDER_SHADOW_ENABLED,
+    DEFAULT_RENDER_RESOLUTION_SCALE,
+    DEFAULT_RENDER_FPS_LIMIT,
+    DEFAULT_RENDER_SHADOW_QUALITY,
+    DEFAULT_RENDER_OUTLINE_ENABLED,
+    DEFAULT_RENDER_ANTIALIAS_ENABLED,
     DEFAULT_DESKTOP_NATIVE_TTS_PITCH,
     DEFAULT_DESKTOP_NATIVE_TTS_RATE,
     DEFAULT_DESKTOP_NATIVE_TTS_VOLUME,
@@ -60,6 +79,8 @@ const {
     DEFAULT_LLM_PROVIDER,
     DEFAULT_LLM_REQUEST_TIMEOUT_MS,
     DEFAULT_LLM_TEMPERATURE,
+    LLM_PROVIDER_DEFAULT_BASE_URLS,
+    LLM_PROVIDER_DEFAULT_MODELS,
     DEFAULT_ELEVENLABS_API_BASE,
     DEFAULT_ELEVENLABS_API_KEY,
     DEFAULT_ELEVENLABS_MODEL_ID,
@@ -72,7 +93,9 @@ const {
     EMAIL_PROVIDER_OPTIONS,
     LLM_PROVIDER_OPTIONS,
     PET_SCALE_OPTIONS,
+    CONVERSATION_MODE_OPTIONS,
     RECOGNITION_MODE_OPTIONS,
+    RENDER_PROFILE_OPTIONS,
     SPEECH_MODE_OPTIONS,
     getDefaultState,
     getScaledPetSize,
@@ -90,7 +113,19 @@ const {
     normalizeCameraDistance,
     normalizeCameraHeight,
     normalizeCameraTargetY,
+    normalizeConversationMode,
     normalizeComputerControlEnabled,
+    normalizeRenderProfileId,
+    normalizeRenderLightYawDeg,
+    normalizeRenderKeyLightScale,
+    normalizeRenderAmbientFillScale,
+    normalizeRenderOutlineScale,
+    normalizeRenderShadowEnabled,
+    normalizeRenderResolutionScale,
+    normalizeRenderFpsLimit,
+    normalizeRenderShadowQuality,
+    normalizeRenderOutlineEnabled,
+    normalizeRenderAntialiasEnabled,
     normalizeDesktopNativeTTSPitch,
     normalizeDesktopNativeTTSRate,
     normalizeDesktopNativeTTSVolume,
@@ -109,6 +144,13 @@ const {
     normalizeLlmRequestTimeoutMs,
     normalizeLlmTemperature,
     normalizeOpenClawGatewayUrl,
+    normalizePetMouseHitTestDebug,
+    normalizePetMouseHitTestEnabled,
+    normalizePetMouseHitTestHeightRatio,
+    normalizePetMouseHitTestOffsetXRatio,
+    normalizePetMouseHitTestOffsetYRatio,
+    normalizePetMouseHitTestShape,
+    normalizePetMouseHitTestWidthRatio,
     normalizeRecognitionMode,
     normalizeSpeechMode,
     normalizePreferredMicDeviceId,
@@ -124,17 +166,21 @@ const CHAT_MIN_WIDTH = 360;
 const CHAT_MIN_HEIGHT = 420;
 const CONTROL_MIN_WIDTH = 760;
 const CONTROL_MIN_HEIGHT = 620;
+const AGENT_LAB_MIN_WIDTH = 1100;
+const AGENT_LAB_MIN_HEIGHT = 760;
 const PET_DIALOGUE_DEFAULT_EXTRA_TOP = DEFAULT_AVATAR_DIALOGUE_BUBBLE_EXTRA_TOP;
 const PET_DIALOGUE_DEFAULT_EXTRA_WIDTH = DEFAULT_AVATAR_DIALOGUE_BUBBLE_EXTRA_WIDTH;
 const PET_DIALOGUE_MAX_EXTRA_TOP = 360;
 const PET_DIALOGUE_MAX_EXTRA_WIDTH = 520;
 const KOKORO_WARMUP_DELAY_MS = 1200;
 const COSYVOICE3_WARMUP_DELAY_MS = 6500;
+const LOCAL_RESOURCE_PROTOCOL = 'aigril-resource';
 const SPEECH_MODEL_PROTOCOL = 'aigril-model';
 const SPEECH_MODEL_CACHE_DIRNAME = 'speech-models';
 const VISION_CACHE_DIRNAME = 'vision-snapshots';
 const HUMANCLAW_STATE_DIRNAME = '.humanclaw-state';
 const VISION_CACHE_MAX_FILES = 40;
+const CHAT_FILE_ATTACHMENT_LIMIT = 12;
 const VISION_REGION_MIN_SIZE_DIP = 12;
 const VISION_MODEL_MAX_EDGE = 1800;
 const VISION_MODEL_JPEG_QUALITY = 88;
@@ -142,10 +188,14 @@ const SPEECH_MODEL_REMOTE_HOSTS = {
     modelscope: 'https://www.modelscope.cn/models/',
     huggingface: 'https://huggingface.co/'
 };
+const PET_CURSOR_TRACK_INTERVAL_MS = 50;
 
 let petWindow = null;
 let chatWindow = null;
 let controlWindow = null;
+let controlWindowLoadPromise = null;
+let agentLabWindow = null;
+let agentLabWindowLoadPromise = null;
 let tray = null;
 let isQuitting = false;
 let desktopState = null;
@@ -159,12 +209,33 @@ let petDialogueExtraTop = 0;
 let petDialogueExtraWidth = 0;
 let petDialogueBoundsMutation = false;
 let petDialogueBoundsMutationTimer = null;
+let petMousePassthroughEnabled = false;
+let petDragState = null;
+let petCursorTrackingTimer = null;
+let petCursorTrackingLastSignature = '';
 let visionRegionSelectionRequest = null;
 const windowPersistTimers = new Map();
 const speechModelDownloadTasks = new Map();
+const desktopPlatformAdapter = createHumanClawDesktopPlatformAdapter({
+    BrowserWindow,
+    desktopCapturer,
+    screen,
+    preloadPath: path.join(__dirname, 'preload.cjs'),
+    loadWindowContent
+});
 
 if (typeof protocol?.registerSchemesAsPrivileged === 'function') {
     protocol.registerSchemesAsPrivileged([
+        {
+            scheme: LOCAL_RESOURCE_PROTOCOL,
+            privileges: {
+                standard: true,
+                secure: true,
+                supportFetchAPI: true,
+                corsEnabled: true,
+                stream: true
+            }
+        },
         {
             scheme: SPEECH_MODEL_PROTOCOL,
             privileges: {
@@ -309,35 +380,172 @@ function normalizeVisionTarget(target) {
     return 'chat-window';
 }
 
-function normalizeVisionRegionSelection(selection = {}, display, image) {
-    const scaleFactor = Number(display?.scaleFactor) || 1;
-    const imageSize = image.getSize();
-    const rawX = Number(selection.x);
-    const rawY = Number(selection.y);
-    const rawWidth = Number(selection.width);
-    const rawHeight = Number(selection.height);
+function normalizeChatFilePath(value = '') {
+    const filePath = String(value || '').trim();
+    if (!filePath) {
+        return '';
+    }
+    return path.resolve(filePath);
+}
 
-    if (
-        !Number.isFinite(rawX) ||
-        !Number.isFinite(rawY) ||
-        !Number.isFinite(rawWidth) ||
-        !Number.isFinite(rawHeight) ||
-        rawWidth < VISION_REGION_MIN_SIZE_DIP ||
-        rawHeight < VISION_REGION_MIN_SIZE_DIP
-    ) {
-        throw new Error('截图区域太小。');
+function formatChatFileBytes(bytes) {
+    const numericValue = Number(bytes);
+    if (!Number.isFinite(numericValue) || numericValue < 0) {
+        return '';
+    }
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    let value = numericValue;
+    let unitIndex = 0;
+    while (value >= 1024 && unitIndex < units.length - 1) {
+        value /= 1024;
+        unitIndex += 1;
+    }
+    return `${value.toFixed(unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
+}
+
+function inferChatFileMimeType(filePath) {
+    const extension = path.extname(filePath).toLowerCase();
+    const mimeTypes = {
+        '.txt': 'text/plain',
+        '.md': 'text/markdown',
+        '.markdown': 'text/markdown',
+        '.json': 'application/json',
+        '.jsonl': 'application/x-ndjson',
+        '.csv': 'text/csv',
+        '.tsv': 'text/tab-separated-values',
+        '.yaml': 'application/yaml',
+        '.yml': 'application/yaml',
+        '.toml': 'application/toml',
+        '.xml': 'application/xml',
+        '.html': 'text/html',
+        '.htm': 'text/html',
+        '.js': 'text/javascript',
+        '.mjs': 'text/javascript',
+        '.cjs': 'text/javascript',
+        '.ts': 'text/typescript',
+        '.tsx': 'text/typescript',
+        '.jsx': 'text/javascript',
+        '.py': 'text/x-python',
+        '.java': 'text/x-java-source',
+        '.c': 'text/x-c',
+        '.cpp': 'text/x-c++',
+        '.h': 'text/x-c',
+        '.hpp': 'text/x-c++',
+        '.cs': 'text/x-csharp',
+        '.go': 'text/x-go',
+        '.rs': 'text/x-rust',
+        '.php': 'text/x-php',
+        '.rb': 'text/x-ruby',
+        '.sh': 'text/x-shellscript',
+        '.ps1': 'text/x-powershell',
+        '.bat': 'application/x-bat',
+        '.css': 'text/css',
+        '.scss': 'text/x-scss',
+        '.less': 'text/x-less',
+        '.pdf': 'application/pdf',
+        '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+        '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        '.png': 'image/png',
+        '.jpg': 'image/jpeg',
+        '.jpeg': 'image/jpeg',
+        '.webp': 'image/webp',
+        '.gif': 'image/gif',
+        '.svg': 'image/svg+xml',
+        '.mp3': 'audio/mpeg',
+        '.wav': 'audio/wav',
+        '.mp4': 'video/mp4',
+        '.zip': 'application/zip'
+    };
+    return mimeTypes[extension] || '';
+}
+
+async function describeChatFilePath(rawPath) {
+    const filePath = normalizeChatFilePath(rawPath);
+    if (!filePath) {
+        return {
+            ok: false,
+            path: '',
+            error: 'empty_path'
+        };
+    }
+    let stat;
+    try {
+        stat = await fsp.lstat(filePath);
+    } catch (error) {
+        return {
+            ok: false,
+            path: filePath,
+            error: error?.code === 'ENOENT' ? 'not_found' : (error?.message || String(error))
+        };
     }
 
-    const x = Math.max(0, Math.min(Math.round(rawX * scaleFactor), imageSize.width - 1));
-    const y = Math.max(0, Math.min(Math.round(rawY * scaleFactor), imageSize.height - 1));
-    const width = Math.max(1, Math.min(Math.round(rawWidth * scaleFactor), imageSize.width - x));
-    const height = Math.max(1, Math.min(Math.round(rawHeight * scaleFactor), imageSize.height - y));
-
-    if (width < 1 || height < 1) {
-        throw new Error('截图区域为空。');
+    const kind = stat.isDirectory()
+        ? 'directory'
+        : stat.isFile()
+            ? 'file'
+            : stat.isSymbolicLink()
+                ? 'symlink'
+                : 'other';
+    if (!['file', 'directory'].includes(kind)) {
+        return {
+            ok: false,
+            path: filePath,
+            error: `unsupported_${kind}`
+        };
     }
 
-    return { x, y, width, height };
+    const name = path.basename(filePath) || filePath;
+    const extension = stat.isFile() ? path.extname(filePath).toLowerCase() : '';
+    return {
+        ok: true,
+        type: 'file',
+        id: `file-${Buffer.from(filePath).toString('base64url').slice(0, 72)}`,
+        source: 'local-file',
+        label: name,
+        name,
+        path: filePath,
+        kind,
+        extension,
+        mimeType: stat.isFile() ? inferChatFileMimeType(filePath) : '',
+        size: stat.isFile() ? stat.size : 0,
+        sizeText: stat.isFile() ? formatChatFileBytes(stat.size) : '文件夹',
+        createdAt: stat.birthtime ? stat.birthtime.toISOString() : '',
+        modifiedAt: stat.mtime ? stat.mtime.toISOString() : ''
+    };
+}
+
+async function describeChatFilePaths(rawPaths = []) {
+    const paths = Array.isArray(rawPaths) ? rawPaths : [];
+    const uniquePaths = [];
+    const seen = new Set();
+    for (const rawPath of paths) {
+        const filePath = normalizeChatFilePath(rawPath);
+        const key = process.platform === 'win32' ? filePath.toLowerCase() : filePath;
+        if (filePath && !seen.has(key)) {
+            uniquePaths.push(filePath);
+            seen.add(key);
+        }
+        if (uniquePaths.length >= CHAT_FILE_ATTACHMENT_LIMIT) {
+            break;
+        }
+    }
+
+    const described = await Promise.all(uniquePaths.map(describeChatFilePath));
+    const files = described.filter((entry) => entry.ok);
+    const skipped = described
+        .filter((entry) => !entry.ok)
+        .map((entry) => ({
+            path: entry.path || '',
+            error: entry.error || 'unknown'
+        }));
+    return {
+        ok: true,
+        files,
+        skipped,
+        limit: CHAT_FILE_ATTACHMENT_LIMIT,
+        truncated: paths.length > uniquePaths.length
+    };
 }
 
 async function cleanupVisionCache(cacheRoot) {
@@ -420,30 +628,14 @@ async function captureWindowSnapshot(target, sourceWindow) {
         throw new Error('要截图的窗口还没有打开。');
     }
 
-    const image = await targetWindow.capturePage();
-    if (image.isEmpty()) {
-        throw new Error('窗口截图为空。');
-    }
-    return image;
+    return await desktopPlatformAdapter.captureWindowSnapshot({
+        targetWindow,
+        emptyMessage: '窗口截图为空。'
+    });
 }
 
-async function captureScreenSnapshot(display = screen.getPrimaryDisplay()) {
-    const thumbnailSize = {
-        width: Math.round(display.size.width * display.scaleFactor),
-        height: Math.round(display.size.height * display.scaleFactor)
-    };
-    const sources = await desktopCapturer.getSources({
-        types: ['screen'],
-        thumbnailSize
-    });
-    const source = sources.find((item) => String(item.display_id) === String(display.id)) ||
-        sources[0];
-    const image = source?.thumbnail;
-
-    if (!image || image.isEmpty()) {
-        throw new Error('屏幕截图为空。');
-    }
-    return image;
+async function captureScreenSnapshot(display = desktopPlatformAdapter.getPrimaryDisplay()) {
+    return await desktopPlatformAdapter.captureScreenSnapshot(display);
 }
 
 function destroyVisionRegionWindow(request) {
@@ -482,36 +674,9 @@ function requestVisionRegionSelection(display) {
         throw new Error('已有一个矩形截图正在进行。');
     }
 
-    const bounds = display.bounds;
-    const selectionWindow = new BrowserWindow({
-        x: bounds.x,
-        y: bounds.y,
-        width: bounds.width,
-        height: bounds.height,
-        frame: false,
-        transparent: true,
-        backgroundColor: '#00000000',
-        hasShadow: false,
-        resizable: false,
-        movable: false,
-        minimizable: false,
-        maximizable: false,
-        fullscreenable: false,
-        skipTaskbar: true,
-        alwaysOnTop: true,
-        show: false,
-        title: 'AIGL Region Capture',
-        webPreferences: {
-            preload: path.join(__dirname, 'preload.cjs'),
-            contextIsolation: true,
-            nodeIntegration: false,
-            sandbox: false
-        }
+    const selectionWindow = desktopPlatformAdapter.createRegionSelectionWindow(display, {
+        title: 'AIGL Region Capture'
     });
-
-    selectionWindow.setAlwaysOnTop(true, 'screen-saver');
-    selectionWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-    selectionWindow.setMenuBarVisibility(false);
 
     const request = {};
     const selectionPromise = new Promise((resolve, reject) => {
@@ -531,14 +696,7 @@ function requestVisionRegionSelection(display) {
         request.reject(new Error('已取消矩形截图。'));
     });
 
-    void loadWindowContent(selectionWindow, 'vision-region.html')
-        .then(() => {
-            if (selectionWindow.isDestroyed()) {
-                return;
-            }
-            selectionWindow.show();
-            selectionWindow.focus();
-        })
+    void desktopPlatformAdapter.showRegionSelectionWindow(selectionWindow, 'vision-region.html')
         .catch((error) => {
             if (visionRegionSelectionRequest === request) {
                 visionRegionSelectionRequest = null;
@@ -551,16 +709,11 @@ function requestVisionRegionSelection(display) {
 }
 
 async function captureRegionSnapshot() {
-    const display = screen.getPrimaryDisplay();
-    const screenImage = await captureScreenSnapshot(display);
-    const selection = await requestVisionRegionSelection(display);
-    const cropRect = normalizeVisionRegionSelection(selection, display, screenImage);
-    const image = screenImage.crop(cropRect);
-
-    if (!image || image.isEmpty()) {
-        throw new Error('矩形截图为空。');
-    }
-    return image;
+    return await desktopPlatformAdapter.captureRegionSnapshot({
+        display: desktopPlatformAdapter.getPrimaryDisplay(),
+        requestSelection: requestVisionRegionSelection,
+        minSize: VISION_REGION_MIN_SIZE_DIP
+    });
 }
 
 async function captureVisionSnapshot(event, payload = {}) {
@@ -634,6 +787,73 @@ async function createFileResponse(filePath) {
             'content-length': String(fileBuffer.byteLength)
         }
     });
+}
+
+function isPathInsideRoot(candidatePath, rootPath) {
+    const relativePath = path.relative(rootPath, candidatePath);
+    return relativePath === '' || (
+        Boolean(relativePath) &&
+        !relativePath.startsWith('..') &&
+        !path.isAbsolute(relativePath)
+    );
+}
+
+function getLocalResourceRoots() {
+    const appRoot = path.resolve(__dirname, '..');
+    return [
+        path.join(appRoot, 'Resources'),
+        path.join(appRoot, 'dist', 'Resources'),
+        process.resourcesPath ? path.join(process.resourcesPath, 'Resources') : ''
+    ]
+        .filter(Boolean)
+        .map((rootPath) => path.resolve(rootPath))
+        .filter((rootPath, index, roots) => roots.indexOf(rootPath) === index);
+}
+
+function parseLocalResourcePathFromUrl(requestUrl) {
+    const targetUrl = new URL(requestUrl);
+    const rawPath = decodeURIComponent([
+        targetUrl.hostname || '',
+        targetUrl.pathname || ''
+    ].join('/'))
+        .replace(/\\/g, '/')
+        .replace(/\/+/g, '/')
+        .replace(/^\/+/, '')
+        .trim();
+
+    if (!rawPath || rawPath.includes('\0')) {
+        throw new Error('缺少本地资源路径');
+    }
+
+    const relativePath = rawPath
+        .replace(/^resources\//i, '')
+        .replace(/^\/+/, '');
+    const roots = getLocalResourceRoots();
+
+    for (const rootPath of roots) {
+        const candidatePath = path.resolve(rootPath, relativePath);
+        if (!isPathInsideRoot(candidatePath, rootPath)) {
+            continue;
+        }
+        if (fs.existsSync(candidatePath)) {
+            return candidatePath;
+        }
+    }
+
+    throw new Error(`本地资源不存在：${rawPath}`);
+}
+
+async function handleLocalResourceProtocol(request) {
+    try {
+        return createFileResponse(parseLocalResourcePathFromUrl(request.url));
+    } catch (error) {
+        return new Response(String(error.message || error), {
+            status: 404,
+            headers: {
+                'content-type': 'text/plain; charset=utf-8'
+            }
+        });
+    }
 }
 
 async function findBundledSpeechModelFile(asset) {
@@ -810,18 +1030,7 @@ function makeTrayIcon() {
 }
 
 function clampBoundsToDisplay(bounds, minimumWidth = 320, minimumHeight = 320) {
-    const display = screen.getDisplayMatching(bounds);
-    const workArea = display.workArea;
-    const width = Math.min(Math.max(bounds.width, minimumWidth), workArea.width);
-    const height = Math.min(Math.max(bounds.height, minimumHeight), workArea.height);
-
-    return {
-        ...bounds,
-        width,
-        height,
-        x: Math.min(Math.max(bounds.x, workArea.x), workArea.x + workArea.width - width),
-        y: Math.min(Math.max(bounds.y, workArea.y), workArea.y + workArea.height - height)
-    };
+    return desktopPlatformAdapter.clampBoundsToDisplay(bounds, minimumWidth, minimumHeight);
 }
 
 function normalizePetDialogueExtraTop(value) {
@@ -857,52 +1066,15 @@ function getPetDialogueExpandedLayout(
     requestedExtraTop = PET_DIALOGUE_DEFAULT_EXTRA_TOP,
     requestedExtraWidth = PET_DIALOGUE_DEFAULT_EXTRA_WIDTH
 ) {
-    const safeBaseBounds = clampBoundsToDisplay(
+    return desktopPlatformAdapter.getExpandedWindowLayout({
         baseBounds,
-        PET_MIN_SIZE.width,
-        PET_MIN_SIZE.height
-    );
-    const display = screen.getDisplayMatching(safeBaseBounds);
-    const workArea = display.workArea;
-    const requestedTop = normalizePetDialogueExtraTop(requestedExtraTop);
-    const requestedWidth = normalizePetDialogueExtraWidth(requestedExtraWidth);
-    const availableTop = Math.max(0, safeBaseBounds.y - workArea.y);
-    const extraTop = Math.min(
-        requestedTop,
-        availableTop,
-        Math.max(0, workArea.height - safeBaseBounds.height)
-    );
-    const targetWidth = Math.min(
-        safeBaseBounds.width + requestedWidth,
-        workArea.width
-    );
-    const baseCenterX = safeBaseBounds.x + safeBaseBounds.width / 2;
-    const centeredX = Math.round(baseCenterX - targetWidth / 2);
-    const expandedX = Math.min(
-        Math.max(centeredX, workArea.x),
-        workArea.x + workArea.width - targetWidth
-    );
-    const reservedLeft = Math.max(0, safeBaseBounds.x - expandedX);
-    const reservedRight = Math.max(
-        0,
-        expandedX + targetWidth - (safeBaseBounds.x + safeBaseBounds.width)
-    );
-    const extraWidth = Math.max(0, Math.round(reservedLeft + reservedRight));
-
-    return {
-        baseBounds: safeBaseBounds,
-        extraTop,
-        extraWidth,
-        reservedLeft,
-        reservedRight,
-        expandedBounds: {
-            ...safeBaseBounds,
-            x: expandedX,
-            y: safeBaseBounds.y - extraTop,
-            width: targetWidth,
-            height: safeBaseBounds.height + extraTop
-        }
-    };
+        requestedExtraTop,
+        requestedExtraWidth,
+        minimumWidth: PET_MIN_SIZE.width,
+        minimumHeight: PET_MIN_SIZE.height,
+        normalizeExtraTop: normalizePetDialogueExtraTop,
+        normalizeExtraWidth: normalizePetDialogueExtraWidth
+    });
 }
 
 function setPetWindowBoundsTransient(bounds) {
@@ -917,6 +1089,75 @@ function setPetWindowBoundsTransient(bounds) {
         petDialogueBoundsMutation = false;
         petDialogueBoundsMutationTimer = null;
     }, 220);
+}
+
+function getCurrentPetScale() {
+    return normalizePetScale(desktopState?.preferences?.petScale || DEFAULT_PET_SCALE);
+}
+
+function canonicalizePetBounds(bounds) {
+    return clampBoundsToDisplay(
+        resizePetBounds(bounds, getCurrentPetScale()),
+        PET_MIN_SIZE.width,
+        PET_MIN_SIZE.height
+    );
+}
+
+function setPetMousePassthrough(enabled, options = {}) {
+    if (!petWindow || petWindow.isDestroyed()) {
+        return false;
+    }
+
+    const nextEnabled = Boolean(enabled);
+    if (petMousePassthroughEnabled === nextEnabled && !options.force) {
+        return true;
+    }
+
+    petMousePassthroughEnabled = nextEnabled;
+    return desktopPlatformAdapter.setMousePassthrough(petWindow, nextEnabled, {
+        forward: true
+    });
+}
+
+function stopPetCursorTracking() {
+    if (petCursorTrackingTimer) {
+        clearInterval(petCursorTrackingTimer);
+        petCursorTrackingTimer = null;
+    }
+    petCursorTrackingLastSignature = '';
+}
+
+function startPetCursorTracking() {
+    stopPetCursorTracking();
+    petCursorTrackingTimer = setInterval(() => {
+        if (!petWindow || petWindow.isDestroyed() || !petWindow.isVisible()) {
+            return;
+        }
+
+        const bounds = petWindow.getBounds();
+        const cursor = screen.getCursorScreenPoint();
+        const inside =
+            cursor.x >= bounds.x &&
+            cursor.x <= bounds.x + bounds.width &&
+            cursor.y >= bounds.y &&
+            cursor.y <= bounds.y + bounds.height;
+
+        const clientX = inside ? Math.round(cursor.x - bounds.x) : null;
+        const clientY = inside ? Math.round(cursor.y - bounds.y) : null;
+        const signature = inside ? `1:${clientX}:${clientY}` : '0';
+        if (signature === petCursorTrackingLastSignature) {
+            return;
+        }
+        petCursorTrackingLastSignature = signature;
+
+        petWindow.webContents.send('aigril:pet-cursor-point', {
+            inside,
+            clientX,
+            clientY,
+            screenX: cursor.x,
+            screenY: cursor.y
+        });
+    }, PET_CURSOR_TRACK_INTERVAL_MS);
 }
 
 function setPetDialogueWindowExpanded(
@@ -934,7 +1175,9 @@ function setPetDialogueWindowExpanded(
     }
 
     if (expanded) {
-        const referenceBounds = petDialogueCollapsedBounds || petWindow.getBounds();
+        const referenceBounds = canonicalizePetBounds(
+            petDialogueCollapsedBounds || petWindow.getBounds()
+        );
         const layout = getPetDialogueExpandedLayout(
             referenceBounds,
             requestedExtraTop,
@@ -961,10 +1204,8 @@ function setPetDialogueWindowExpanded(
         };
     }
 
-    const restoreBounds = clampBoundsToDisplay(
-        petDialogueCollapsedBounds || petWindow.getBounds(),
-        PET_MIN_SIZE.width,
-        PET_MIN_SIZE.height
+    const restoreBounds = canonicalizePetBounds(
+        petDialogueCollapsedBounds || petWindow.getBounds()
     );
 
     petDialogueCollapsedBounds = null;
@@ -1025,10 +1266,15 @@ function resolveOpenClawGatewayUrl() {
 
 function getPersistedLlmSettings() {
     const preferences = desktopState?.preferences || {};
+    const provider = normalizeLlmProvider(preferences.llmProvider || DEFAULT_LLM_PROVIDER);
     return {
-        provider: normalizeLlmProvider(preferences.llmProvider || DEFAULT_LLM_PROVIDER),
-        baseUrl: normalizeLlmBaseUrl(preferences.llmBaseUrl || DEFAULT_LLM_BASE_URL),
-        model: normalizeLlmModel(preferences.llmModel || DEFAULT_LLM_MODEL),
+        provider,
+        baseUrl: normalizeLlmBaseUrl(
+            preferences.llmBaseUrl || getDefaultProviderBaseUrl(provider) || DEFAULT_LLM_BASE_URL
+        ),
+        model: normalizeLlmModel(
+            preferences.llmModel || getDefaultProviderModel(provider) || DEFAULT_LLM_MODEL
+        ),
         apiKey: normalizeLlmApiKey(preferences.llmApiKey || ''),
         temperature: normalizeLlmTemperature(
             preferences.llmTemperature ?? DEFAULT_LLM_TEMPERATURE
@@ -1039,19 +1285,45 @@ function getPersistedLlmSettings() {
     };
 }
 
-function getEnvironmentLlmApiKey() {
+function getEnvironmentLlmApiKey(provider = DEFAULT_LLM_PROVIDER) {
+    const normalizedProvider = normalizeLlmProvider(provider);
+    if (normalizedProvider === 'openai-responses') {
+        return normalizeLlmApiKey(
+            process.env.OPENAI_API_KEY ||
+                process.env.AIGRIL_OPENAI_API_KEY ||
+                ''
+        );
+    }
+    if (normalizedProvider === 'anthropic') {
+        return normalizeLlmApiKey(
+            process.env.ANTHROPIC_API_KEY ||
+                process.env.CLAUDE_API_KEY ||
+                process.env.AIGRIL_ANTHROPIC_API_KEY ||
+                ''
+        );
+    }
+    if (normalizedProvider === 'gemini') {
+        return normalizeLlmApiKey(
+            process.env.GEMINI_API_KEY ||
+                process.env.GOOGLE_API_KEY ||
+                process.env.GOOGLE_GENERATIVE_AI_API_KEY ||
+                process.env.AIGRIL_GEMINI_API_KEY ||
+                ''
+        );
+    }
     return normalizeLlmApiKey(
         process.env.DOUBAO_API_KEY ||
         process.env.ARK_API_KEY ||
         process.env.VOLCENGINE_API_KEY ||
         process.env.OPENAI_COMPATIBLE_API_KEY ||
+        process.env.OPENAI_API_KEY ||
         ''
     );
 }
 
 function getResolvedLlmSettings() {
     const persistedSettings = getPersistedLlmSettings();
-    const environmentApiKey = getEnvironmentLlmApiKey();
+    const environmentApiKey = getEnvironmentLlmApiKey(persistedSettings.provider);
     const apiKeySource = persistedSettings.apiKey
         ? 'saved'
         : environmentApiKey
@@ -1062,6 +1334,38 @@ function getResolvedLlmSettings() {
         ...persistedSettings,
         apiKey: persistedSettings.apiKey || environmentApiKey,
         apiKeySource
+    };
+}
+
+function buildTemporaryLlmSettings(settings = {}) {
+    const provider = normalizeLlmProvider(settings.provider || settings.llmProvider || DEFAULT_LLM_PROVIDER);
+    return {
+        provider,
+        baseUrl: normalizeLlmBaseUrl(
+            settings.baseUrl ||
+                settings.llmBaseUrl ||
+                getDefaultProviderBaseUrl(provider) ||
+                DEFAULT_LLM_BASE_URL
+        ),
+        model: normalizeLlmModel(
+            settings.model ||
+                settings.llmModel ||
+                getDefaultProviderModel(provider) ||
+                DEFAULT_LLM_MODEL
+        ),
+        apiKey: normalizeLlmApiKey(
+            settings.apiKey ||
+                settings.llmApiKey ||
+                getEnvironmentLlmApiKey(provider) ||
+                ''
+        ),
+        temperature: normalizeLlmTemperature(settings.temperature ?? settings.llmTemperature ?? DEFAULT_LLM_TEMPERATURE),
+        timeoutMs: normalizeLlmRequestTimeoutMs(
+            settings.timeoutMs ||
+                settings.requestTimeoutMs ||
+                settings.llmRequestTimeoutMs ||
+                DEFAULT_LLM_REQUEST_TIMEOUT_MS
+        )
     };
 }
 
@@ -1129,7 +1433,8 @@ function getRendererLlmPreferences() {
         llmApiKeyConfigured: Boolean(settings.apiKey),
         llmApiKeySource: settings.apiKeySource,
         llmTemperature: settings.temperature,
-        llmRequestTimeoutMs: settings.timeoutMs
+        llmRequestTimeoutMs: settings.timeoutMs,
+        llmCapabilities: getProviderCapabilities(settings)
     };
 }
 
@@ -1497,6 +1802,9 @@ function getRendererPreferences() {
         petScale: normalizePetScale(desktopState?.preferences?.petScale || DEFAULT_PET_SCALE),
         speechMode: normalizeSpeechMode(desktopState?.preferences?.speechMode),
         recognitionMode: normalizeRecognitionMode(desktopState?.preferences?.recognitionMode),
+        conversationMode: normalizeConversationMode(
+            desktopState?.preferences?.conversationMode || DEFAULT_CONVERSATION_MODE
+        ),
         preferredMicDeviceId: normalizePreferredMicDeviceId(desktopState?.preferences?.preferredMicDeviceId),
         backendBaseUrl: resolveDesktopBackendBaseUrl(),
         backendMode: resolveDesktopBackendMode(),
@@ -1516,6 +1824,39 @@ function getRendererPreferences() {
         ),
         cameraTargetY: normalizeCameraTargetY(
             desktopState?.preferences?.cameraTargetY || DEFAULT_CAMERA_TARGET_Y
+        ),
+        renderProfileId: normalizeRenderProfileId(
+            desktopState?.preferences?.renderProfileId || DEFAULT_RENDER_PROFILE_ID
+        ),
+        renderLightYawDeg: normalizeRenderLightYawDeg(
+            desktopState?.preferences?.renderLightYawDeg ?? DEFAULT_RENDER_LIGHT_YAW_DEG
+        ),
+        renderKeyLightScale: normalizeRenderKeyLightScale(
+            desktopState?.preferences?.renderKeyLightScale ?? DEFAULT_RENDER_KEY_LIGHT_SCALE
+        ),
+        renderAmbientFillScale: normalizeRenderAmbientFillScale(
+            desktopState?.preferences?.renderAmbientFillScale ?? DEFAULT_RENDER_AMBIENT_FILL_SCALE
+        ),
+        renderOutlineScale: normalizeRenderOutlineScale(
+            desktopState?.preferences?.renderOutlineScale ?? DEFAULT_RENDER_OUTLINE_SCALE
+        ),
+        renderShadowEnabled: normalizeRenderShadowEnabled(
+            desktopState?.preferences?.renderShadowEnabled ?? DEFAULT_RENDER_SHADOW_ENABLED
+        ),
+        renderResolutionScale: normalizeRenderResolutionScale(
+            desktopState?.preferences?.renderResolutionScale ?? DEFAULT_RENDER_RESOLUTION_SCALE
+        ),
+        renderFpsLimit: normalizeRenderFpsLimit(
+            desktopState?.preferences?.renderFpsLimit ?? DEFAULT_RENDER_FPS_LIMIT
+        ),
+        renderShadowQuality: normalizeRenderShadowQuality(
+            desktopState?.preferences?.renderShadowQuality ?? DEFAULT_RENDER_SHADOW_QUALITY
+        ),
+        renderOutlineEnabled: normalizeRenderOutlineEnabled(
+            desktopState?.preferences?.renderOutlineEnabled ?? DEFAULT_RENDER_OUTLINE_ENABLED
+        ),
+        renderAntialiasEnabled: normalizeRenderAntialiasEnabled(
+            desktopState?.preferences?.renderAntialiasEnabled ?? DEFAULT_RENDER_ANTIALIAS_ENABLED
         ),
         desktopNativeTtsRate: normalizeDesktopNativeTTSRate(
             desktopState?.preferences?.desktopNativeTtsRate || DEFAULT_DESKTOP_NATIVE_TTS_RATE
@@ -1552,6 +1893,27 @@ function getRendererPreferences() {
         ),
         avatarDialogueBubbleExtraTop: normalizeAvatarDialogueBubbleExtraTop(
             desktopState?.preferences?.avatarDialogueBubbleExtraTop
+        ),
+        petMouseHitTestEnabled: normalizePetMouseHitTestEnabled(
+            desktopState?.preferences?.petMouseHitTestEnabled
+        ),
+        petMouseHitTestShape: normalizePetMouseHitTestShape(
+            desktopState?.preferences?.petMouseHitTestShape
+        ),
+        petMouseHitTestWidthRatio: normalizePetMouseHitTestWidthRatio(
+            desktopState?.preferences?.petMouseHitTestWidthRatio
+        ),
+        petMouseHitTestHeightRatio: normalizePetMouseHitTestHeightRatio(
+            desktopState?.preferences?.petMouseHitTestHeightRatio
+        ),
+        petMouseHitTestOffsetXRatio: normalizePetMouseHitTestOffsetXRatio(
+            desktopState?.preferences?.petMouseHitTestOffsetXRatio
+        ),
+        petMouseHitTestOffsetYRatio: normalizePetMouseHitTestOffsetYRatio(
+            desktopState?.preferences?.petMouseHitTestOffsetYRatio
+        ),
+        petMouseHitTestDebug: normalizePetMouseHitTestDebug(
+            desktopState?.preferences?.petMouseHitTestDebug
         )
     };
 }
@@ -1563,8 +1925,21 @@ function getControlPanelState() {
             petScaleOptions: PET_SCALE_OPTIONS,
             speechModeOptions: SPEECH_MODE_OPTIONS,
             recognitionModeOptions: RECOGNITION_MODE_OPTIONS,
+            conversationModeOptions: CONVERSATION_MODE_OPTIONS,
             backendModeOptions: BACKEND_MODE_OPTIONS,
             llmProviderOptions: LLM_PROVIDER_OPTIONS,
+            llmProviderDefaultBaseUrls: LLM_PROVIDER_DEFAULT_BASE_URLS,
+            llmProviderDefaultModels: LLM_PROVIDER_DEFAULT_MODELS,
+            llmProviderCapabilities: Object.fromEntries(
+                LLM_PROVIDER_OPTIONS.map((provider) => [
+                    provider,
+                    getProviderCapabilities({
+                        provider,
+                        model: getDefaultProviderModel(provider)
+                    })
+                ])
+            ),
+            renderProfileOptions: RENDER_PROFILE_OPTIONS,
             emailProviderOptions: EMAIL_PROVIDER_OPTIONS
         },
         assistant: {
@@ -1667,6 +2042,63 @@ function openExternalLinks(window) {
     });
 }
 
+function hookRendererDiagnostics(window, label) {
+    const webContents = window?.webContents;
+    if (!webContents || webContents.__aigrilDiagnosticsHooked) {
+        return;
+    }
+
+    webContents.__aigrilDiagnosticsHooked = true;
+    webContents.on('console-message', (_event, level, message, line, sourceId) => {
+        console.log(`[renderer:${label}] console(${level}) ${message} (${sourceId || 'unknown'}:${line || 0})`);
+    });
+    webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
+        console.error(`[renderer:${label}] did-fail-load ${errorCode}: ${errorDescription} ${validatedURL || ''}`);
+    });
+    webContents.on('render-process-gone', (_event, details = {}) => {
+        console.error(`[renderer:${label}] render-process-gone`, details);
+    });
+    webContents.on('unresponsive', () => {
+        console.error(`[renderer:${label}] unresponsive`);
+    });
+    webContents.on('dom-ready', () => {
+        console.log(`[renderer:${label}] dom-ready`);
+    });
+    webContents.on('did-finish-load', () => {
+        console.log(`[renderer:${label}] did-finish-load ${webContents.getURL()}`);
+    });
+}
+
+function hookWindowContextMenu(window, label) {
+    const webContents = window?.webContents;
+    if (!webContents || webContents.__aigrilContextMenuHooked) {
+        return;
+    }
+
+    webContents.__aigrilContextMenuHooked = true;
+    webContents.on('context-menu', (event, params = {}) => {
+        const sourceWindow = BrowserWindow.fromWebContents(webContents) || window;
+        const inputFieldType = String(params.inputFieldType || 'none');
+        const isEditable = Boolean(params.isEditable || inputFieldType !== 'none');
+        const hasSelection = Boolean(String(params.selectionText || '').trim());
+
+        if (isEditable || hasSelection) {
+            event.preventDefault();
+            showTextEditMenu(sourceWindow, {
+                isEditable,
+                hasSelection,
+                editFlags: params.editFlags || {}
+            });
+            return;
+        }
+
+        if (label === 'chat') {
+            event.preventDefault();
+            showControlMenu(sourceWindow);
+        }
+    });
+}
+
 function loadWindowContent(window, pageName) {
     if (isDevMode()) {
         return window.loadURL(buildRendererUrl(pageName));
@@ -1720,14 +2152,61 @@ function toggleChatWindow() {
 
 function showControlPanel() {
     if (!controlWindow) {
-        createControlWindow();
+        createControlWindow({ showWhenReady: true });
+        return true;
     }
 
-    if (!controlWindow.isVisible()) {
+    controlWindow.__aigrilShowWhenReady = true;
+    const isControlLoaded = Boolean(controlWindow.__aigrilDidFinishLoad);
+    if (!controlWindow.isVisible() && isControlLoaded) {
         controlWindow.show();
     }
 
-    controlWindow.focus();
+    if (isControlLoaded) {
+        controlWindow.focus();
+    } else {
+        controlWindowLoadPromise?.then(() => {
+            if (!controlWindow || controlWindow.isDestroyed()) {
+                return;
+            }
+            if (controlWindow.__aigrilShowWhenReady && !controlWindow.isVisible()) {
+                controlWindow.show();
+            }
+            controlWindow.focus();
+        }).catch((error) => {
+            console.error('[window] 控制面板延迟显示失败：', error);
+        });
+    }
+    return true;
+}
+
+function showAgentLabWindow() {
+    if (!agentLabWindow) {
+        createAgentLabWindow({ showWhenReady: true });
+        return true;
+    }
+
+    agentLabWindow.__aigrilShowWhenReady = true;
+    const isLoaded = Boolean(agentLabWindow.__aigrilDidFinishLoad);
+    if (!agentLabWindow.isVisible() && isLoaded) {
+        agentLabWindow.show();
+    }
+
+    if (isLoaded) {
+        agentLabWindow.focus();
+    } else {
+        agentLabWindowLoadPromise?.then(() => {
+            if (!agentLabWindow || agentLabWindow.isDestroyed()) {
+                return;
+            }
+            if (agentLabWindow.__aigrilShowWhenReady && !agentLabWindow.isVisible()) {
+                agentLabWindow.show();
+            }
+            agentLabWindow.focus();
+        }).catch((error) => {
+            console.error('[window] Agent 分析台延迟显示失败：', error);
+        });
+    }
     return true;
 }
 
@@ -1749,6 +2228,7 @@ function applyPreferencesPatch(partialPreferences = {}) {
         petScale: rendererPreferences.petScale,
         speechMode: rendererPreferences.speechMode,
         recognitionMode: rendererPreferences.recognitionMode,
+        conversationMode: rendererPreferences.conversationMode,
         preferredMicDeviceId: rendererPreferences.preferredMicDeviceId,
         backendBaseUrl: resolveDesktopBackendBaseUrl(),
         backendMode: rendererPreferences.backendMode,
@@ -1771,6 +2251,7 @@ function applyPreferencesPatch(partialPreferences = {}) {
         cameraDistance: rendererPreferences.cameraDistance,
         cameraHeight: rendererPreferences.cameraHeight,
         cameraTargetY: rendererPreferences.cameraTargetY,
+        renderProfileId: rendererPreferences.renderProfileId,
         desktopNativeTtsRate: rendererPreferences.desktopNativeTtsRate,
         desktopNativeTtsPitch: rendererPreferences.desktopNativeTtsPitch,
         desktopNativeTtsVolume: rendererPreferences.desktopNativeTtsVolume,
@@ -1781,7 +2262,14 @@ function applyPreferencesPatch(partialPreferences = {}) {
         avatarDialogueBubbleTop: rendererPreferences.avatarDialogueBubbleTop,
         avatarDialogueBubbleScale: rendererPreferences.avatarDialogueBubbleScale,
         avatarDialogueBubbleExtraWidth: rendererPreferences.avatarDialogueBubbleExtraWidth,
-        avatarDialogueBubbleExtraTop: rendererPreferences.avatarDialogueBubbleExtraTop
+        avatarDialogueBubbleExtraTop: rendererPreferences.avatarDialogueBubbleExtraTop,
+        petMouseHitTestEnabled: rendererPreferences.petMouseHitTestEnabled,
+        petMouseHitTestShape: rendererPreferences.petMouseHitTestShape,
+        petMouseHitTestWidthRatio: rendererPreferences.petMouseHitTestWidthRatio,
+        petMouseHitTestHeightRatio: rendererPreferences.petMouseHitTestHeightRatio,
+        petMouseHitTestOffsetXRatio: rendererPreferences.petMouseHitTestOffsetXRatio,
+        petMouseHitTestOffsetYRatio: rendererPreferences.petMouseHitTestOffsetYRatio,
+        petMouseHitTestDebug: rendererPreferences.petMouseHitTestDebug
     };
 
     if ('petSkipTaskbar' in partialPreferences) {
@@ -1795,6 +2283,9 @@ function applyPreferencesPatch(partialPreferences = {}) {
     }
     if ('recognitionMode' in partialPreferences) {
         nextPreferences.recognitionMode = normalizeRecognitionMode(partialPreferences.recognitionMode);
+    }
+    if ('conversationMode' in partialPreferences) {
+        nextPreferences.conversationMode = normalizeConversationMode(partialPreferences.conversationMode);
     }
     if ('preferredMicDeviceId' in partialPreferences) {
         nextPreferences.preferredMicDeviceId = normalizePreferredMicDeviceId(
@@ -1906,6 +2397,43 @@ function applyPreferencesPatch(partialPreferences = {}) {
     if ('cameraTargetY' in partialPreferences) {
         nextPreferences.cameraTargetY = normalizeCameraTargetY(partialPreferences.cameraTargetY);
     }
+    if ('renderProfileId' in partialPreferences) {
+        nextPreferences.renderProfileId = normalizeRenderProfileId(partialPreferences.renderProfileId);
+    }
+    if ('renderLightYawDeg' in partialPreferences) {
+        nextPreferences.renderLightYawDeg = normalizeRenderLightYawDeg(partialPreferences.renderLightYawDeg);
+    }
+    if ('renderKeyLightScale' in partialPreferences) {
+        nextPreferences.renderKeyLightScale = normalizeRenderKeyLightScale(partialPreferences.renderKeyLightScale);
+    }
+    if ('renderAmbientFillScale' in partialPreferences) {
+        nextPreferences.renderAmbientFillScale = normalizeRenderAmbientFillScale(
+            partialPreferences.renderAmbientFillScale
+        );
+    }
+    if ('renderOutlineScale' in partialPreferences) {
+        nextPreferences.renderOutlineScale = normalizeRenderOutlineScale(partialPreferences.renderOutlineScale);
+    }
+    if ('renderShadowEnabled' in partialPreferences) {
+        nextPreferences.renderShadowEnabled = normalizeRenderShadowEnabled(partialPreferences.renderShadowEnabled);
+    }
+    if ('renderResolutionScale' in partialPreferences) {
+        nextPreferences.renderResolutionScale = normalizeRenderResolutionScale(partialPreferences.renderResolutionScale);
+    }
+    if ('renderFpsLimit' in partialPreferences) {
+        nextPreferences.renderFpsLimit = normalizeRenderFpsLimit(partialPreferences.renderFpsLimit);
+    }
+    if ('renderShadowQuality' in partialPreferences) {
+        nextPreferences.renderShadowQuality = normalizeRenderShadowQuality(partialPreferences.renderShadowQuality);
+    }
+    if ('renderOutlineEnabled' in partialPreferences) {
+        nextPreferences.renderOutlineEnabled = normalizeRenderOutlineEnabled(partialPreferences.renderOutlineEnabled);
+    }
+    if ('renderAntialiasEnabled' in partialPreferences) {
+        nextPreferences.renderAntialiasEnabled = normalizeRenderAntialiasEnabled(partialPreferences.renderAntialiasEnabled);
+    }
+    delete nextPreferences.renderShadowStrength;
+    delete nextPreferences.renderShadowRange;
     if ('desktopNativeTtsRate' in partialPreferences) {
         nextPreferences.desktopNativeTtsRate = normalizeDesktopNativeTTSRate(
             partialPreferences.desktopNativeTtsRate
@@ -1947,6 +2475,41 @@ function applyPreferencesPatch(partialPreferences = {}) {
     if ('avatarDialogueBubbleExtraTop' in partialPreferences) {
         nextPreferences.avatarDialogueBubbleExtraTop = normalizeAvatarDialogueBubbleExtraTop(
             partialPreferences.avatarDialogueBubbleExtraTop
+        );
+    }
+    if ('petMouseHitTestEnabled' in partialPreferences) {
+        nextPreferences.petMouseHitTestEnabled = normalizePetMouseHitTestEnabled(
+            partialPreferences.petMouseHitTestEnabled
+        );
+    }
+    if ('petMouseHitTestShape' in partialPreferences) {
+        nextPreferences.petMouseHitTestShape = normalizePetMouseHitTestShape(
+            partialPreferences.petMouseHitTestShape
+        );
+    }
+    if ('petMouseHitTestWidthRatio' in partialPreferences) {
+        nextPreferences.petMouseHitTestWidthRatio = normalizePetMouseHitTestWidthRatio(
+            partialPreferences.petMouseHitTestWidthRatio
+        );
+    }
+    if ('petMouseHitTestHeightRatio' in partialPreferences) {
+        nextPreferences.petMouseHitTestHeightRatio = normalizePetMouseHitTestHeightRatio(
+            partialPreferences.petMouseHitTestHeightRatio
+        );
+    }
+    if ('petMouseHitTestOffsetXRatio' in partialPreferences) {
+        nextPreferences.petMouseHitTestOffsetXRatio = normalizePetMouseHitTestOffsetXRatio(
+            partialPreferences.petMouseHitTestOffsetXRatio
+        );
+    }
+    if ('petMouseHitTestOffsetYRatio' in partialPreferences) {
+        nextPreferences.petMouseHitTestOffsetYRatio = normalizePetMouseHitTestOffsetYRatio(
+            partialPreferences.petMouseHitTestOffsetYRatio
+        );
+    }
+    if ('petMouseHitTestDebug' in partialPreferences) {
+        nextPreferences.petMouseHitTestDebug = normalizePetMouseHitTestDebug(
+            partialPreferences.petMouseHitTestDebug
         );
     }
 
@@ -2162,12 +2725,65 @@ function showControlMenu(targetWindow = petWindow) {
     return true;
 }
 
+function buildTextEditMenuTemplate({ isEditable = false, hasSelection = false, editFlags = {} } = {}) {
+    const editable = Boolean(isEditable);
+    const selection = Boolean(hasSelection);
+    const flags = editFlags && typeof editFlags === 'object' ? editFlags : {};
+    const hasFlag = (key, fallback) => (
+        Object.prototype.hasOwnProperty.call(flags, key)
+            ? Boolean(flags[key])
+            : fallback
+    );
+    const template = [];
+
+    if (editable) {
+        template.push(
+            { label: '撤销', role: 'undo', enabled: hasFlag('canUndo', true) },
+            { label: '重做', role: 'redo', enabled: hasFlag('canRedo', true) },
+            { type: 'separator' },
+            { label: '剪切', role: 'cut', enabled: hasFlag('canCut', selection) },
+            { label: '复制', role: 'copy', enabled: hasFlag('canCopy', selection) },
+            { label: '粘贴', role: 'paste', enabled: hasFlag('canPaste', true) }
+        );
+    } else {
+        template.push({
+            label: '复制',
+            role: 'copy',
+            enabled: hasFlag('canCopy', selection)
+        });
+    }
+
+    template.push(
+        { type: 'separator' },
+        { label: '全选', role: 'selectAll', enabled: hasFlag('canSelectAll', true) }
+    );
+
+    return template;
+}
+
+function showTextEditMenu(targetWindow, context = {}) {
+    if (!targetWindow || targetWindow.isDestroyed()) {
+        return false;
+    }
+
+    const menu = Menu.buildFromTemplate(buildTextEditMenuTemplate(context));
+    menu.popup({ window: targetWindow });
+    return true;
+}
+
 function createPetWindow() {
     const petState = desktopState.petWindow;
-    const petBounds = clampBoundsToDisplay(petState.bounds, PET_MIN_SIZE.width, PET_MIN_SIZE.height);
+    const petBounds = canonicalizePetBounds(petState.bounds);
+    desktopState.petWindow.bounds = petBounds;
+    persistDesktopState();
 
-    petWindow = new BrowserWindow({
-        ...petBounds,
+    console.log('[window:pet] create', {
+        bounds: petBounds,
+        visible: Boolean(petState.visible),
+        skipTaskbar: desktopState.preferences.petSkipTaskbar
+    });
+    petWindow = desktopPlatformAdapter.createWindow({
+        bounds: petBounds,
         frame: false,
         transparent: true,
         backgroundColor: '#00000000',
@@ -2177,21 +2793,21 @@ function createPetWindow() {
         alwaysOnTop: true,
         skipTaskbar: desktopState.preferences.petSkipTaskbar,
         show: Boolean(petState.visible),
-        title: 'HumanClaw Pet',
-        webPreferences: {
-            preload: path.join(__dirname, 'preload.cjs'),
-            contextIsolation: true,
-            nodeIntegration: false,
-            sandbox: false
-        }
+        title: 'HumanClaw Pet'
     });
 
-    petWindow.setAlwaysOnTop(true, 'screen-saver');
-    petWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    desktopPlatformAdapter.applyWindowBehavior(petWindow, {
+        alwaysOnTop: true,
+        alwaysOnTopLevel: 'screen-saver',
+        visibleOnAllWorkspaces: true,
+        visibleOnFullScreen: true
+    });
     openExternalLinks(petWindow);
+    hookRendererDiagnostics(petWindow, 'pet');
     hookWindowPersistence('petWindow', petWindow);
 
     petWindow.on('close', (event) => {
+        console.log('[window:pet] close', { isQuitting });
         if (isQuitting) {
             return;
         }
@@ -2201,6 +2817,7 @@ function createPetWindow() {
     });
 
     petWindow.on('closed', () => {
+        console.log('[window:pet] closed');
         petWindow = null;
         petDialogueCollapsedBounds = null;
         petDialogueExpanded = false;
@@ -2209,11 +2826,16 @@ function createPetWindow() {
         petDialogueBoundsMutation = false;
         clearTimeout(petDialogueBoundsMutationTimer);
         petDialogueBoundsMutationTimer = null;
+        petMousePassthroughEnabled = false;
+        petDragState = null;
+        stopPetCursorTracking();
     });
 
     void loadWindowContent(petWindow, 'pet.html').catch((error) => {
         console.error('[window] 桌宠窗口加载失败：', error);
     });
+    setPetMousePassthrough(true, { force: true });
+    startPetCursorTracking();
     if (!desktopState.petWindow.visible) {
         petWindow.hide();
     }
@@ -2223,8 +2845,8 @@ function createChatWindow() {
     const chatState = desktopState.chatWindow;
     const chatBounds = clampBoundsToDisplay(chatState.bounds, CHAT_MIN_WIDTH, CHAT_MIN_HEIGHT);
 
-    chatWindow = new BrowserWindow({
-        ...chatBounds,
+    chatWindow = desktopPlatformAdapter.createWindow({
+        bounds: chatBounds,
         frame: false,
         transparent: false,
         backgroundColor: '#f8fbff',
@@ -2233,19 +2855,16 @@ function createChatWindow() {
         show: false,
         skipTaskbar: false,
         alwaysOnTop: true,
-        title: 'HumanClaw Chat',
-        webPreferences: {
-            preload: path.join(__dirname, 'preload.cjs'),
-            contextIsolation: true,
-            nodeIntegration: false,
-            sandbox: false
-        }
+        title: 'HumanClaw Chat'
     });
 
     openExternalLinks(chatWindow);
+    hookRendererDiagnostics(chatWindow, 'chat');
+    hookWindowContextMenu(chatWindow, 'chat');
     hookWindowPersistence('chatWindow', chatWindow);
 
     chatWindow.on('close', (event) => {
+        console.log('[window:chat] close', { isQuitting });
         if (isQuitting) {
             return;
         }
@@ -2254,6 +2873,7 @@ function createChatWindow() {
     });
 
     chatWindow.on('closed', () => {
+        console.log('[window:chat] closed');
         chatWindow = null;
     });
 
@@ -2268,16 +2888,17 @@ function createChatWindow() {
         });
 }
 
-function createControlWindow() {
+function createControlWindow(options = {}) {
     const controlState = desktopState.controlWindow;
     const controlBounds = clampBoundsToDisplay(
         controlState.bounds,
         CONTROL_MIN_WIDTH,
         CONTROL_MIN_HEIGHT
     );
+    const showWhenReady = Boolean(options.showWhenReady || controlState.visible);
 
-    controlWindow = new BrowserWindow({
-        ...controlBounds,
+    controlWindow = desktopPlatformAdapter.createWindow({
+        bounds: controlBounds,
         minWidth: CONTROL_MIN_WIDTH,
         minHeight: CONTROL_MIN_HEIGHT,
         frame: false,
@@ -2287,19 +2908,22 @@ function createControlWindow() {
         resizable: true,
         show: false,
         skipTaskbar: false,
-        title: 'HumanClaw Control Panel',
-        webPreferences: {
-            preload: path.join(__dirname, 'preload.cjs'),
-            contextIsolation: true,
-            nodeIntegration: false,
-            sandbox: false
-        }
+        title: 'HumanClaw Control Panel'
+    });
+    controlWindow.__aigrilDidFinishLoad = false;
+    controlWindow.__aigrilShowWhenReady = showWhenReady;
+    console.log('[window:control] create', {
+        bounds: controlBounds,
+        showWhenReady
     });
 
     openExternalLinks(controlWindow);
+    hookRendererDiagnostics(controlWindow, 'control');
+    hookWindowContextMenu(controlWindow, 'control');
     hookWindowPersistence('controlWindow', controlWindow);
 
     controlWindow.on('close', (event) => {
+        console.log('[window:control] close', { isQuitting });
         if (isQuitting) {
             return;
         }
@@ -2308,17 +2932,96 @@ function createControlWindow() {
     });
 
     controlWindow.on('closed', () => {
+        console.log('[window:control] closed');
         controlWindow = null;
+        controlWindowLoadPromise = null;
     });
 
-    void loadWindowContent(controlWindow, 'control.html')
+    controlWindowLoadPromise = loadWindowContent(controlWindow, 'control.html')
         .then(() => {
-            if (desktopState.controlWindow.visible) {
+            if (!controlWindow || controlWindow.isDestroyed()) {
+                return;
+            }
+            controlWindow.__aigrilDidFinishLoad = true;
+            if (controlWindow.__aigrilShowWhenReady) {
                 controlWindow.show();
+                controlWindow.focus();
             }
         })
         .catch((error) => {
             console.error('[window] 控制面板加载失败：', error);
+        });
+}
+
+function createAgentLabWindow(options = {}) {
+    const display = screen.getPrimaryDisplay();
+    const workArea = display.workArea;
+    const width = Math.min(Math.max(1280, AGENT_LAB_MIN_WIDTH), Math.max(AGENT_LAB_MIN_WIDTH, workArea.width - 48));
+    const height = Math.min(Math.max(840, AGENT_LAB_MIN_HEIGHT), Math.max(AGENT_LAB_MIN_HEIGHT, workArea.height - 48));
+    const bounds = clampBoundsToDisplay(
+        {
+            x: Math.round(workArea.x + (workArea.width - width) / 2),
+            y: Math.round(workArea.y + (workArea.height - height) / 2),
+            width,
+            height
+        },
+        AGENT_LAB_MIN_WIDTH,
+        AGENT_LAB_MIN_HEIGHT
+    );
+    const showWhenReady = Boolean(options.showWhenReady);
+
+    agentLabWindow = desktopPlatformAdapter.createWindow({
+        bounds,
+        minWidth: AGENT_LAB_MIN_WIDTH,
+        minHeight: AGENT_LAB_MIN_HEIGHT,
+        frame: false,
+        transparent: false,
+        backgroundColor: '#0f172a',
+        hasShadow: true,
+        resizable: true,
+        show: false,
+        skipTaskbar: false,
+        title: 'HumanClaw Agent Analysis Lab'
+    });
+    agentLabWindow.__aigrilDidFinishLoad = false;
+    agentLabWindow.__aigrilShowWhenReady = showWhenReady;
+    console.log('[window:agent-lab] create', {
+        bounds,
+        showWhenReady
+    });
+
+    openExternalLinks(agentLabWindow);
+    hookRendererDiagnostics(agentLabWindow, 'agent-lab');
+    hookWindowContextMenu(agentLabWindow, 'agent-lab');
+
+    agentLabWindow.on('close', (event) => {
+        console.log('[window:agent-lab] close', { isQuitting });
+        if (isQuitting) {
+            return;
+        }
+        event.preventDefault();
+        agentLabWindow.hide();
+    });
+
+    agentLabWindow.on('closed', () => {
+        console.log('[window:agent-lab] closed');
+        agentLabWindow = null;
+        agentLabWindowLoadPromise = null;
+    });
+
+    agentLabWindowLoadPromise = loadWindowContent(agentLabWindow, 'agent-lab.html')
+        .then(() => {
+            if (!agentLabWindow || agentLabWindow.isDestroyed()) {
+                return;
+            }
+            agentLabWindow.__aigrilDidFinishLoad = true;
+            if (agentLabWindow.__aigrilShowWhenReady) {
+                agentLabWindow.show();
+                agentLabWindow.focus();
+            }
+        })
+        .catch((error) => {
+            console.error('[window] Agent 分析台加载失败：', error);
         });
 }
 
@@ -2408,6 +3111,24 @@ async function chooseHumanClawStateDir() {
     };
 }
 
+async function chooseChatFiles(sourceWindow = null) {
+    const result = await dialog.showOpenDialog(sourceWindow || chatWindow || BrowserWindow.getFocusedWindow() || petWindow, {
+        title: '选择要交给 AIGL 的文件',
+        properties: ['openFile', 'multiSelections'],
+        filters: [
+            { name: '所有文件', extensions: ['*'] }
+        ]
+    });
+    if (result.canceled || !result.filePaths?.length) {
+        return {
+            ok: false,
+            canceled: true,
+            files: []
+        };
+    }
+    return describeChatFilePaths(result.filePaths);
+}
+
 function registerIpc() {
     ipcMain.on('aigril:get-preferences-sync', (event) => {
         event.returnValue = getRendererPreferences();
@@ -2417,6 +3138,12 @@ function registerIpc() {
     ipcMain.handle('aigril:save-preferences', (_event, payload = {}) => applyPreferencesPatch(payload));
     ipcMain.handle('aigril:restore-default-preferences', () => restoreDefaultPreferences());
     ipcMain.handle('aigril:choose-humanclaw-state-dir', () => chooseHumanClawStateDir());
+    ipcMain.handle('aigril:chat-files-choose', (event) =>
+        chooseChatFiles(BrowserWindow.fromWebContents(event.sender))
+    );
+    ipcMain.handle('aigril:chat-files-describe', async (_event, payload = {}) =>
+        describeChatFilePaths(payload?.paths || payload?.filePaths || [])
+    );
     ipcMain.handle('aigril:toggle-chat-window', () => toggleChatWindow());
     ipcMain.handle('aigril:show-chat-window', () => {
         showChatWindow();
@@ -2427,9 +3154,14 @@ function registerIpc() {
         return false;
     });
     ipcMain.handle('aigril:show-control-panel', () => showControlPanel());
+    ipcMain.handle('aigril:show-agent-lab', () => showAgentLabWindow());
     ipcMain.handle('aigril:show-control-menu', (event) => {
         const sourceWindow = BrowserWindow.fromWebContents(event.sender);
         return showControlMenu(sourceWindow || petWindow);
+    });
+    ipcMain.handle('aigril:show-text-edit-menu', (event, payload = {}) => {
+        const sourceWindow = BrowserWindow.fromWebContents(event.sender);
+        return showTextEditMenu(sourceWindow || BrowserWindow.getFocusedWindow(), payload || {});
     });
     ipcMain.handle('aigril:close-current-window', (event) => {
         const sourceWindow = BrowserWindow.fromWebContents(event.sender);
@@ -2449,6 +3181,25 @@ function registerIpc() {
     ipcMain.handle('aigril:vision-capture', async (event, payload = {}) =>
         captureVisionSnapshot(event, payload)
     );
+    ipcMain.handle('aigril:llm-health-check', async (_event, payload = {}) => {
+        const currentSettings = getResolvedLlmSettings();
+        const incomingSettings = payload?.settings || {};
+        const settings = payload?.settings
+            ? buildTemporaryLlmSettings({
+                ...currentSettings,
+                ...incomingSettings,
+                apiKey: incomingSettings.apiKey ||
+                    incomingSettings.llmApiKey ||
+                    currentSettings.apiKey ||
+                    ''
+            })
+            : getResolvedLlmSettings();
+        return checkDesktopLlmProvider(settings, {
+            includeToolCall: payload?.includeToolCall !== false,
+            includeVision: payload?.includeVision !== false,
+            timeoutMs: payload?.timeoutMs || settings.timeoutMs
+        });
+    });
     ipcMain.handle('aigril:memory-snapshot', async (_event, payload = {}) =>
         ensureHumanClawGateway().getMemorySnapshot(payload || {})
     );
@@ -2525,31 +3276,96 @@ function registerIpc() {
             llmSettings: payload?.llmSettings || getResolvedLlmSettings()
         })
     );
+    ipcMain.handle('aigril:gateway-agent-interrupt', async (_event, payload = {}) =>
+        ensureHumanClawGateway().interruptAgentRun(payload || {})
+    );
     ipcMain.handle('aigril:gateway-audit-list', async (_event, payload = {}) => ({
         ok: true,
         entries: await ensureHumanClawGateway().readAuditEntries(Number(payload.limit) || 100)
     }));
+    ipcMain.handle('aigril:agent-lab-runs', async (_event, payload = {}) =>
+        ensureHumanClawGateway().listAgentAnalysisRuns(Number(payload.limit) || 40)
+    );
+    ipcMain.handle('aigril:agent-lab-analysis', async (_event, payload = {}) =>
+        ensureHumanClawGateway().analyzeAgentRun(payload.runId || '', {
+            transcriptLimit: Number(payload.transcriptLimit || payload.limit || 2000)
+        })
+    );
+    ipcMain.handle('aigril:agent-lab-run', async (_event, payload = {}) =>
+        ensureHumanClawGateway().runAgentAnalysis({
+            ...(payload || {}),
+            llmSettings: payload?.llmSettings || getResolvedLlmSettings()
+        })
+    );
+    ipcMain.handle('aigril:agent-lab-continue', async (_event, payload = {}) =>
+        ensureHumanClawGateway().continueAgentAnalysis({
+            ...(payload || {}),
+            llmSettings: payload?.llmSettings || getResolvedLlmSettings()
+        })
+    );
+    ipcMain.handle('aigril:agent-lab-interrupt', async (_event, payload = {}) =>
+        ensureHumanClawGateway().interruptAgentRun({
+            ...(payload || {}),
+            source: payload?.source || 'agent-analysis-lab'
+        })
+    );
 
-    ipcMain.on('aigril:drag-pet-window', (_event, payload = {}) => {
-        if (!petWindow) {
+    ipcMain.on('aigril:begin-drag-pet-window', (event) => {
+        const sourceWindow = BrowserWindow.fromWebContents(event.sender);
+        if (!petWindow || sourceWindow !== petWindow) {
             return;
         }
 
-        const rawDeltaX = Number(payload.deltaX || 0);
-        const rawDeltaY = Number(payload.deltaY || 0);
-        const deltaX = Number.isFinite(rawDeltaX) ? rawDeltaX : 0;
-        const deltaY = Number.isFinite(rawDeltaY) ? rawDeltaY : 0;
+        const cursor = screen.getCursorScreenPoint();
+        const baseBounds = petDialogueExpanded && petDialogueCollapsedBounds
+            ? { ...petDialogueCollapsedBounds }
+            : petWindow.getBounds();
+        petDragState = {
+            cursor,
+            baseBounds,
+            lastAppliedBounds: { ...baseBounds },
+            lastAppliedExpandedBounds: null,
+            wasExpanded: Boolean(petDialogueExpanded && petDialogueCollapsedBounds),
+            extraTop: petDialogueExtraTop || PET_DIALOGUE_DEFAULT_EXTRA_TOP,
+            extraWidth: petDialogueExtraWidth || PET_DIALOGUE_DEFAULT_EXTRA_WIDTH
+        };
+    });
+
+    ipcMain.on('aigril:drag-pet-window', (event, payload = {}) => {
+        if (!petWindow) {
+            return;
+        }
+        const sourceWindow = BrowserWindow.fromWebContents(event.sender);
+        if (sourceWindow && sourceWindow !== petWindow) {
+            return;
+        }
+
+        let deltaX = 0;
+        let deltaY = 0;
+        if (petDragState?.cursor && petDragState?.baseBounds) {
+            const cursor = screen.getCursorScreenPoint();
+            deltaX = cursor.x - petDragState.cursor.x;
+            deltaY = cursor.y - petDragState.cursor.y;
+        } else {
+            const rawDeltaX = Number(payload.deltaX || 0);
+            const rawDeltaY = Number(payload.deltaY || 0);
+            deltaX = Number.isFinite(rawDeltaX) ? rawDeltaX : 0;
+            deltaY = Number.isFinite(rawDeltaY) ? rawDeltaY : 0;
+        }
 
         if (petDialogueExpanded && petDialogueCollapsedBounds) {
+            const baseBounds = petDragState?.baseBounds
+                ? { ...petDragState.baseBounds }
+                : { ...petDialogueCollapsedBounds };
             const movedBaseBounds = clampBoundsToDisplay({
-                ...petDialogueCollapsedBounds,
-                x: Math.round(petDialogueCollapsedBounds.x + deltaX),
-                y: Math.round(petDialogueCollapsedBounds.y + deltaY)
+                ...baseBounds,
+                x: Math.round(baseBounds.x + deltaX),
+                y: Math.round(baseBounds.y + deltaY)
             }, PET_MIN_SIZE.width, PET_MIN_SIZE.height);
             const layout = getPetDialogueExpandedLayout(
                 movedBaseBounds,
-                petDialogueExtraTop || PET_DIALOGUE_DEFAULT_EXTRA_TOP,
-                petDialogueExtraWidth || PET_DIALOGUE_DEFAULT_EXTRA_WIDTH
+                petDragState?.extraTop || petDialogueExtraTop || PET_DIALOGUE_DEFAULT_EXTRA_TOP,
+                petDragState?.extraWidth || petDialogueExtraWidth || PET_DIALOGUE_DEFAULT_EXTRA_WIDTH
             );
 
             petDialogueCollapsedBounds = layout.baseBounds;
@@ -2558,23 +3374,75 @@ function registerIpc() {
             petDialogueExpanded = layout.extraTop > 0 || layout.extraWidth > 0;
             desktopState.petWindow.bounds = layout.baseBounds;
             desktopState.petWindow.visible = petWindow.isVisible();
+            if (
+                petDragState?.lastAppliedExpandedBounds &&
+                petDragState.lastAppliedExpandedBounds.x === layout.expandedBounds.x &&
+                petDragState.lastAppliedExpandedBounds.y === layout.expandedBounds.y &&
+                petDragState.lastAppliedExpandedBounds.width === layout.expandedBounds.width &&
+                petDragState.lastAppliedExpandedBounds.height === layout.expandedBounds.height
+            ) {
+                return;
+            }
+            if (petDragState) {
+                petDragState.lastAppliedBounds = { ...layout.baseBounds };
+                petDragState.lastAppliedExpandedBounds = { ...layout.expandedBounds };
+            }
             setPetWindowBoundsTransient(layout.expandedBounds);
             return;
         }
 
-        const bounds = petWindow.getBounds();
+        const bounds = petDragState?.baseBounds
+            ? { ...petDragState.baseBounds }
+            : petWindow.getBounds();
         const nextBounds = clampBoundsToDisplay({
             ...bounds,
             x: Math.round(bounds.x + deltaX),
             y: Math.round(bounds.y + deltaY)
         }, PET_MIN_SIZE.width, PET_MIN_SIZE.height);
 
+        if (
+            petDragState?.lastAppliedBounds &&
+            petDragState.lastAppliedBounds.x === nextBounds.x &&
+            petDragState.lastAppliedBounds.y === nextBounds.y &&
+            petDragState.lastAppliedBounds.width === nextBounds.width &&
+            petDragState.lastAppliedBounds.height === nextBounds.height
+        ) {
+            return;
+        }
+        if (petDragState) {
+            petDragState.lastAppliedBounds = { ...nextBounds };
+        }
         petWindow.setBounds(nextBounds);
+        desktopState.petWindow.bounds = nextBounds;
+        desktopState.petWindow.visible = petWindow.isVisible();
+    });
+
+    ipcMain.on('aigril:end-drag-pet-window', (event) => {
+        const sourceWindow = BrowserWindow.fromWebContents(event.sender);
+        if (sourceWindow && sourceWindow !== petWindow) {
+            return;
+        }
+        petDragState = null;
+        if (petWindow && !petWindow.isDestroyed()) {
+            updateWindowState('petWindow', petWindow);
+        }
+    });
+
+    ipcMain.on('aigril:set-pet-mouse-passthrough', (event, payload = {}) => {
+        const sourceWindow = BrowserWindow.fromWebContents(event.sender);
+        if (!petWindow || sourceWindow !== petWindow) {
+            return;
+        }
+        setPetMousePassthrough(Boolean(payload.enabled));
     });
 
     ipcMain.on('aigril:chat-send-message', (_event, payload = {}) => {
         petWindow?.webContents.send('aigril:chat-send-message', payload);
         showChatWindow();
+    });
+
+    ipcMain.on('aigril:chat-control', (_event, payload = {}) => {
+        petWindow?.webContents.send('aigril:chat-control', payload);
     });
 
     ipcMain.on('aigril:pet-chat-event', (_event, payload = {}) => {
@@ -2611,6 +3479,9 @@ app.whenReady().then(() => {
     desktopState.preferences.backendBaseUrl = resolveDesktopBackendBaseUrl();
     desktopState.preferences.backendMode = normalizeBackendMode(
         desktopState.preferences.backendMode || DEFAULT_BACKEND_MODE
+    );
+    desktopState.preferences.conversationMode = normalizeConversationMode(
+        desktopState.preferences.conversationMode || DEFAULT_CONVERSATION_MODE
     );
     desktopState.preferences.openclawGatewayUrl = normalizeOpenClawGatewayUrl(
         desktopState.preferences.openclawGatewayUrl || DEFAULT_OPENCLAW_GATEWAY_URL
@@ -2658,6 +3529,7 @@ app.whenReady().then(() => {
     desktopASRManager = new DesktopASRManager({ app });
     Menu.setApplicationMenu(null);
     registerMediaPermissionHandlers();
+    protocol.handle(LOCAL_RESOURCE_PROTOCOL, handleLocalResourceProtocol);
     protocol.handle(SPEECH_MODEL_PROTOCOL, handleSpeechModelProtocol);
     registerIpc();
     void ensureHumanClawGateway().start().catch((error) => {
@@ -2700,6 +3572,7 @@ app.whenReady().then(() => {
 });
 
 app.on('before-quit', () => {
+    console.log('[app] before-quit');
     isQuitting = true;
     if (visionRegionSelectionRequest) {
         cancelVisionRegionSelection();
@@ -2715,6 +3588,15 @@ app.on('before-quit', () => {
     closeKokoroTTS();
 });
 
+app.on('will-quit', () => {
+    console.log('[app] will-quit');
+});
+
+app.on('quit', (_event, exitCode) => {
+    console.log('[app] quit', { exitCode });
+});
+
 app.on('window-all-closed', () => {
+    console.log('[app] window-all-closed');
     // 托盘常驻形态下，窗口全部关闭并不等于退出应用。
 });

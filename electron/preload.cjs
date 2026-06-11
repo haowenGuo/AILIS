@@ -1,10 +1,22 @@
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 const initialPreferences = ipcRenderer.sendSync('aigril:get-preferences-sync');
+
+function createResourceUrl(relativePath = '') {
+    const cleanPath = String(relativePath || '')
+        .replace(/\\/g, '/')
+        .replace(/^\/+/, '')
+        .split('/')
+        .filter(Boolean)
+        .map((segment) => encodeURIComponent(segment))
+        .join('/');
+    return `aigril-resource:///${cleanPath}`;
+}
 
 contextBridge.exposeInMainWorld('aigrilDesktop', {
     platform: 'electron',
     preferences: initialPreferences,
+    resourceUrl: createResourceUrl,
     versions: {
         chrome: process.versions.chrome,
         electron: process.versions.electron,
@@ -18,13 +30,30 @@ contextBridge.exposeInMainWorld('aigrilDesktop', {
     showChatWindow: () => ipcRenderer.invoke('aigril:show-chat-window'),
     hideChatWindow: () => ipcRenderer.invoke('aigril:hide-chat-window'),
     showControlPanel: () => ipcRenderer.invoke('aigril:show-control-panel'),
+    showAgentLab: () => ipcRenderer.invoke('aigril:show-agent-lab'),
     showControlMenu: () => ipcRenderer.invoke('aigril:show-control-menu'),
+    showTextEditMenu: (payload) => ipcRenderer.invoke('aigril:show-text-edit-menu', payload || {}),
     closeCurrentWindow: () => ipcRenderer.invoke('aigril:close-current-window'),
     setSpeechMode: (mode) => ipcRenderer.invoke('aigril:set-speech-mode', mode),
     setRecognitionMode: (mode) => ipcRenderer.invoke('aigril:set-recognition-mode', mode),
     setPreferredMicDevice: (deviceId) => ipcRenderer.invoke('aigril:set-preferred-mic-device', deviceId),
     llm: {
-        chat: (payload) => ipcRenderer.invoke('aigril:llm-chat', payload || {})
+        chat: (payload) => ipcRenderer.invoke('aigril:llm-chat', payload || {}),
+        healthCheck: (payload) => ipcRenderer.invoke('aigril:llm-health-check', payload || {})
+    },
+    files: {
+        choose: (payload) => ipcRenderer.invoke('aigril:chat-files-choose', payload || {}),
+        describe: (payload) => ipcRenderer.invoke('aigril:chat-files-describe', payload || {}),
+        getPathForFile: (file) => {
+            try {
+                if (webUtils?.getPathForFile && file) {
+                    return webUtils.getPathForFile(file) || '';
+                }
+            } catch {
+                return '';
+            }
+            return file?.path || '';
+        }
     },
     memory: {
         getSnapshot: (payload) => ipcRenderer.invoke('aigril:memory-snapshot', payload || {}),
@@ -48,8 +77,21 @@ contextBridge.exposeInMainWorld('aigrilDesktop', {
         synthesize: (payload) => ipcRenderer.invoke('aigril:tts-synthesize', payload || {})
     },
     transcribeAudio: (audioBytes) => ipcRenderer.invoke('aigril:asr-transcribe', audioBytes),
-    dragPetWindow: (deltaX, deltaY) => {
-        ipcRenderer.send('aigril:drag-pet-window', { deltaX, deltaY });
+    beginDragPetWindow: () => {
+        ipcRenderer.send('aigril:begin-drag-pet-window', {});
+    },
+    dragPetWindow: (payloadOrDeltaX = {}, deltaY = 0) => {
+        if (payloadOrDeltaX && typeof payloadOrDeltaX === 'object') {
+            ipcRenderer.send('aigril:drag-pet-window', payloadOrDeltaX);
+            return;
+        }
+        ipcRenderer.send('aigril:drag-pet-window', { deltaX: payloadOrDeltaX, deltaY });
+    },
+    endDragPetWindow: () => {
+        ipcRenderer.send('aigril:end-drag-pet-window', {});
+    },
+    setPetMousePassthrough: (enabled) => {
+        ipcRenderer.send('aigril:set-pet-mouse-passthrough', { enabled: Boolean(enabled) });
     },
     setPetDialogueExpanded: (payload) =>
         ipcRenderer.invoke('aigril:set-pet-dialogue-expanded', payload || {}),
@@ -59,6 +101,9 @@ contextBridge.exposeInMainWorld('aigrilDesktop', {
             return;
         }
         ipcRenderer.send('aigril:chat-send-message', { content, ...(options || {}) });
+    },
+    sendChatControl: (payload) => {
+        ipcRenderer.send('aigril:chat-control', payload || {});
     },
     emitChatEvent: (payload) => {
         ipcRenderer.send('aigril:pet-chat-event', payload || {});
@@ -76,6 +121,16 @@ contextBridge.exposeInMainWorld('aigrilDesktop', {
         ipcRenderer.on('aigril:chat-state-sync-request', wrapped);
         return () => ipcRenderer.removeListener('aigril:chat-state-sync-request', wrapped);
     },
+    onChatControlRequest: (listener) => {
+        const wrapped = (_event, payload = {}) => listener(payload);
+        ipcRenderer.on('aigril:chat-control', wrapped);
+        return () => ipcRenderer.removeListener('aigril:chat-control', wrapped);
+    },
+    onPetCursorPoint: (listener) => {
+        const wrapped = (_event, payload = {}) => listener(payload);
+        ipcRenderer.on('aigril:pet-cursor-point', wrapped);
+        return () => ipcRenderer.removeListener('aigril:pet-cursor-point', wrapped);
+    },
     onChatEvent: (listener) => {
         const wrapped = (_event, payload = {}) => listener(payload);
         ipcRenderer.on('aigril:chat-event', wrapped);
@@ -90,6 +145,11 @@ contextBridge.exposeInMainWorld('aigrilDesktop', {
         };
         ipcRenderer.on('aigril:preferences-updated', wrapped);
         return () => ipcRenderer.removeListener('aigril:preferences-updated', wrapped);
+    },
+    onCharacterLabToggle: (listener) => {
+        const wrapped = (_event, payload = {}) => listener(payload);
+        ipcRenderer.on('aigril:character-lab-toggle', wrapped);
+        return () => ipcRenderer.removeListener('aigril:character-lab-toggle', wrapped);
     },
     assistant: {
         isSupported: true,
@@ -116,11 +176,20 @@ contextBridge.exposeInMainWorld('aigrilDesktop', {
         listTools: () => ipcRenderer.invoke('aigril:gateway-tools-list'),
         callTool: (payload) => ipcRenderer.invoke('aigril:gateway-tools-call', payload || {}),
         runAgent: (payload) => ipcRenderer.invoke('aigril:gateway-agent-run', payload || {}),
+        interruptAgentRun: (payload) => ipcRenderer.invoke('aigril:gateway-agent-interrupt', payload || {}),
         listAudit: (limit) => ipcRenderer.invoke('aigril:gateway-audit-list', { limit }),
         onEvent: (listener) => {
             const wrapped = (_event, payload = {}) => listener(payload);
             ipcRenderer.on('aigril:gateway-event', wrapped);
             return () => ipcRenderer.removeListener('aigril:gateway-event', wrapped);
         }
+    },
+    agentLab: {
+        isSupported: true,
+        listRuns: (payload) => ipcRenderer.invoke('aigril:agent-lab-runs', payload || {}),
+        getRunAnalysis: (payload) => ipcRenderer.invoke('aigril:agent-lab-analysis', payload || {}),
+        runTask: (payload) => ipcRenderer.invoke('aigril:agent-lab-run', payload || {}),
+        continueTask: (payload) => ipcRenderer.invoke('aigril:agent-lab-continue', payload || {}),
+        interruptTask: (payload) => ipcRenderer.invoke('aigril:agent-lab-interrupt', payload || {})
     }
 });

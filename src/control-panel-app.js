@@ -23,6 +23,7 @@ const elements = {
     cameraTargetYValue: document.getElementById('camera-target-y-value'),
     closeBtn: document.getElementById('close-btn'),
     computerControlEnabled: document.getElementById('computer-control-enabled'),
+    conversationMode: document.getElementById('conversation-mode'),
     clearElevenLabsKeyBtn: document.getElementById('clear-elevenlabs-key-btn'),
     clearLlmKeyBtn: document.getElementById('clear-llm-key-btn'),
     clearEmailQqSecretBtn: document.getElementById('clear-email-qq-secret-btn'),
@@ -46,8 +47,14 @@ const elements = {
     elevenLabsVoiceId: document.getElementById('elevenlabs-voice-id'),
     llmApiKey: document.getElementById('llm-api-key'),
     llmBaseUrl: document.getElementById('llm-base-url'),
+    llmCapabilityState: document.getElementById('llm-capability-state'),
+    llmHealthCheckBtn: document.getElementById('llm-health-check-btn'),
+    llmHealthState: document.getElementById('llm-health-state'),
     llmKeyState: document.getElementById('llm-key-state'),
     llmModel: document.getElementById('llm-model'),
+    llmModelPreset: document.getElementById('llm-model-preset'),
+    llmPreset: document.getElementById('llm-preset'),
+    llmPresetHelp: document.getElementById('llm-preset-help'),
     llmProvider: document.getElementById('llm-provider'),
     llmTemperature: document.getElementById('llm-temperature'),
     llmTemperatureValue: document.getElementById('llm-temperature-value'),
@@ -62,7 +69,19 @@ const elements = {
     resetHumanClawStateDirBtn: document.getElementById('reset-humanclaw-state-dir-btn'),
     openclawRuntimeText: document.getElementById('openclaw-runtime-text'),
     openclawStatusText: document.getElementById('openclaw-status-text'),
+    openAgentLabBtn: document.getElementById('open-agent-lab-btn'),
     packageStateText: document.getElementById('package-state-text'),
+    petMouseHitTestEnabled: document.getElementById('pet-mouse-hit-test-enabled'),
+    petMouseHitTestShape: document.getElementById('pet-mouse-hit-test-shape'),
+    petMouseHitTestWidth: document.getElementById('pet-mouse-hit-test-width'),
+    petMouseHitTestWidthValue: document.getElementById('pet-mouse-hit-test-width-value'),
+    petMouseHitTestHeight: document.getElementById('pet-mouse-hit-test-height'),
+    petMouseHitTestHeightValue: document.getElementById('pet-mouse-hit-test-height-value'),
+    petMouseHitTestOffsetX: document.getElementById('pet-mouse-hit-test-offset-x'),
+    petMouseHitTestOffsetXValue: document.getElementById('pet-mouse-hit-test-offset-x-value'),
+    petMouseHitTestOffsetY: document.getElementById('pet-mouse-hit-test-offset-y'),
+    petMouseHitTestOffsetYValue: document.getElementById('pet-mouse-hit-test-offset-y-value'),
+    petMouseHitTestDebug: document.getElementById('pet-mouse-hit-test-debug'),
     petScale: document.getElementById('pet-scale'),
     preferredMic: document.getElementById('preferred-mic'),
     petShowTaskbar: document.getElementById('pet-show-taskbar'),
@@ -72,6 +91,24 @@ const elements = {
     refreshMicsBtn: document.getElementById('refresh-mics-btn'),
     resetAffinityBtn: document.getElementById('reset-affinity-btn'),
     resetBtn: document.getElementById('reset-btn'),
+    renderAmbientFill: document.getElementById('render-ambient-fill'),
+    renderAmbientFillValue: document.getElementById('render-ambient-fill-value'),
+    renderAntialiasEnabled: document.getElementById('render-antialias-enabled'),
+    renderFpsLimit: document.getElementById('render-fps-limit'),
+    renderFpsLimitValue: document.getElementById('render-fps-limit-value'),
+    renderKeyLight: document.getElementById('render-key-light'),
+    renderKeyLightValue: document.getElementById('render-key-light-value'),
+    renderLightYaw: document.getElementById('render-light-yaw'),
+    renderLightYawValue: document.getElementById('render-light-yaw-value'),
+    renderOutlineEnabled: document.getElementById('render-outline-enabled'),
+    renderOutlineScale: document.getElementById('render-outline-scale'),
+    renderOutlineScaleValue: document.getElementById('render-outline-scale-value'),
+    renderProfile: document.getElementById('render-profile'),
+    renderResolutionScale: document.getElementById('render-resolution-scale'),
+    renderResolutionScaleValue: document.getElementById('render-resolution-scale-value'),
+    renderShadowEnabled: document.getElementById('render-shadow-enabled'),
+    renderShadowQuality: document.getElementById('render-shadow-quality'),
+    renderShadowQualityValue: document.getElementById('render-shadow-quality-value'),
     saveBtn: document.getElementById('save-btn'),
     speechMode: document.getElementById('speech-mode'),
     statusText: document.getElementById('status-text'),
@@ -99,12 +136,158 @@ const recognitionModeLabels = {
     manual: '手动开始/停止'
 };
 
-const llmProviderLabels = {
-    'openai-compatible': 'OpenAI-compatible'
+const conversationModeLabels = {
+    assistant: '助手模式：任务执行',
+    daily: '日常对话：低延迟'
 };
 
-const PET_BASE_WIDTH = 360;
-const PET_BASE_HEIGHT = 560;
+const llmProviderLabels = {
+    'openai-compatible': 'OpenAI-compatible',
+    'openai-responses': 'OpenAI Responses',
+    anthropic: 'Anthropic Claude',
+    gemini: 'Google Gemini'
+};
+
+const fallbackLlmProviderDefaultBaseUrls = {
+    'openai-compatible': 'https://ark.cn-beijing.volces.com/api/v3',
+    'openai-responses': 'https://api.openai.com/v1',
+    anthropic: 'https://api.anthropic.com',
+    gemini: 'https://generativelanguage.googleapis.com/v1beta'
+};
+
+const fallbackLlmProviderDefaultModels = {
+    'openai-compatible': 'doubao-seed-2-0-mini-260215',
+    'openai-responses': 'gpt-4.1-mini',
+    anthropic: 'claude-3-5-haiku-latest',
+    gemini: 'gemini-2.0-flash'
+};
+
+const LLM_PRESET_CUSTOM_ID = 'custom';
+const llmPresetCatalog = [
+    {
+        id: 'doubao',
+        label: '豆包 / 火山方舟',
+        help: '国内低延迟优先；日常对话建议 mini，复杂任务建议 pro。',
+        provider: 'openai-compatible',
+        baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
+        models: [
+            { id: 'doubao-seed-2-0-mini-260215', label: 'Doubao Seed 2.0 Mini（低延迟）' },
+            { id: 'doubao-seed-2-0-pro-260215', label: 'Doubao Seed 2.0 Pro（复杂任务）' }
+        ]
+    },
+    {
+        id: 'openai',
+        label: 'OpenAI',
+        help: '使用 OpenAI Responses API；适合高质量通用任务。',
+        provider: 'openai-responses',
+        baseUrl: 'https://api.openai.com/v1',
+        models: [
+            { id: 'gpt-4.1-mini', label: 'GPT-4.1 mini（较快）' },
+            { id: 'gpt-4.1', label: 'GPT-4.1（更强）' }
+        ]
+    },
+    {
+        id: 'anthropic',
+        label: 'Anthropic Claude',
+        help: '适合长文、代码和稳健推理；需要 Anthropic API Key。',
+        provider: 'anthropic',
+        baseUrl: 'https://api.anthropic.com',
+        models: [
+            { id: 'claude-3-5-haiku-latest', label: 'Claude Haiku（低延迟）' },
+            { id: 'claude-3-5-sonnet-latest', label: 'Claude Sonnet（更强）' }
+        ]
+    },
+    {
+        id: 'gemini',
+        label: 'Google Gemini',
+        help: '适合低延迟和多模态场景；需要 Google Gemini API Key。',
+        provider: 'gemini',
+        baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+        models: [
+            { id: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash（低延迟）' },
+            { id: 'gemini-2.0-pro', label: 'Gemini 2.0 Pro（更强）' }
+        ]
+    },
+    {
+        id: 'deepseek',
+        label: 'DeepSeek',
+        help: 'OpenAI-compatible；复杂任务建议 V4 Pro，低延迟任务建议 V4 Flash。',
+        provider: 'openai-compatible',
+        baseUrl: 'https://api.deepseek.com',
+        models: [
+            { id: 'deepseek-v4-pro', label: 'DeepSeek V4 Pro（复杂任务）' },
+            { id: 'deepseek-v4-flash', label: 'DeepSeek V4 Flash（低延迟）' }
+        ]
+    },
+    {
+        id: 'qwen',
+        label: '通义千问 / DashScope',
+        help: 'OpenAI-compatible 兼容模式；适合中文和通用任务。',
+        provider: 'openai-compatible',
+        baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+        models: [
+            { id: 'qwen-turbo', label: 'Qwen Turbo（低延迟）' },
+            { id: 'qwen-plus', label: 'Qwen Plus（均衡）' },
+            { id: 'qwen-max', label: 'Qwen Max（更强）' }
+        ]
+    },
+    {
+        id: 'kimi',
+        label: 'Kimi / Moonshot',
+        help: 'OpenAI-compatible；适合中文长上下文和资料阅读。',
+        provider: 'openai-compatible',
+        baseUrl: 'https://api.moonshot.cn/v1',
+        models: [
+            { id: 'moonshot-v1-8k', label: 'Moonshot 8K（低延迟）' },
+            { id: 'moonshot-v1-32k', label: 'Moonshot 32K' },
+            { id: 'moonshot-v1-128k', label: 'Moonshot 128K（长上下文）' }
+        ]
+    },
+    {
+        id: 'zhipu',
+        label: '智谱 GLM',
+        help: 'OpenAI-compatible；适合中文通用任务。',
+        provider: 'openai-compatible',
+        baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+        models: [
+            { id: 'glm-4-flash', label: 'GLM-4 Flash（低延迟）' },
+            { id: 'glm-4-plus', label: 'GLM-4 Plus（更强）' }
+        ]
+    },
+    {
+        id: 'openrouter',
+        label: 'OpenRouter',
+        help: '一个 Key 接多家模型；模型 ID 可以在高级模型 ID 中自行替换。',
+        provider: 'openai-compatible',
+        baseUrl: 'https://openrouter.ai/api/v1',
+        models: [
+            { id: 'openai/gpt-4.1-mini', label: 'OpenAI GPT-4.1 mini' },
+            { id: 'anthropic/claude-3.5-haiku', label: 'Claude Haiku' },
+            { id: 'google/gemini-2.0-flash-001', label: 'Gemini Flash' },
+            { id: 'deepseek/deepseek-chat', label: 'DeepSeek Chat' }
+        ]
+    },
+    {
+        id: LLM_PRESET_CUSTOM_ID,
+        label: '自定义 / 其他 OpenAI-compatible',
+        help: '高级模式：手动填写 Provider、API Base 和模型 ID。',
+        provider: 'openai-compatible',
+        baseUrl: '',
+        models: []
+    }
+];
+
+const renderProfileLabels = {
+    aigl_soft_anime_mtoon: '柔和动漫 MToon',
+    aigl_bright_companion_mtoon: '明亮陪伴 MToon',
+    aigl_cinematic_rim_toon: '电影感边缘光 Toon',
+    aigl_material_hybrid_npr: '材质混合 NPR',
+    aigl_hard_cel_mtoon: '硬边赛璐璐 MToon'
+};
+
+const PET_BASE_WIDTH = 720;
+const PET_BASE_HEIGHT = 960;
+const FPS_LIMIT_OPTIONS = [24, 30, 45, 60];
 const BUBBLE_PREVIEW_BASE_WIDTH = 158;
 const BUBBLE_PREVIEW_BASE_HEIGHT = 58;
 
@@ -117,6 +300,9 @@ let dialoguePreviewScale = 1;
 let dialoguePreviewDrag = null;
 let pendingClearLlmKey = false;
 let pendingClearElevenLabsKey = false;
+let llmProviderDefaultBaseUrls = { ...fallbackLlmProviderDefaultBaseUrls };
+let llmProviderDefaultModels = { ...fallbackLlmProviderDefaultModels };
+let lastLlmProviderValue = 'openai-compatible';
 const pendingClearEmailSecrets = {
     qq: false,
     gmail: false,
@@ -153,6 +339,77 @@ function formatValue(value) {
 
 function formatPixelValue(value) {
     return `${Math.round(Number(value) || 0)}px`;
+}
+
+function formatHitTestScale(value, neutral, strength) {
+    const scale = 1 + (Number(value) - neutral) * strength;
+    return `${Math.round(scale * 100)}%`;
+}
+
+function formatNeutralOffset(value, neutral = 0) {
+    const offset = Number(value) - neutral;
+    const sign = offset > 0 ? '+' : '';
+    return `${sign}${Math.round(offset * 100)}%`;
+}
+
+function formatPercentScale(value) {
+    return `${Math.round(Number(value || 1) * 100)}%`;
+}
+
+function formatLightYaw(value) {
+    const numericValue = Math.round(Number(value || 0));
+    if (numericValue === 0) {
+        return '正面';
+    }
+    return `${numericValue > 0 ? '右' : '左'} ${Math.abs(numericValue)}°`;
+}
+
+function normalizeQualityLevel(value, fallbackValue = 3) {
+    const numericValue = Math.round(Number(value));
+    if (![1, 2, 3].includes(numericValue)) {
+        return fallbackValue;
+    }
+    return numericValue;
+}
+
+function formatQualityLevel(value) {
+    return ['低', '中', '高'][normalizeQualityLevel(value) - 1];
+}
+
+function normalizeRenderResolutionScale(value, fallbackValue = 2) {
+    return clampNumber(value, 0.5, 3, fallbackValue, 2);
+}
+
+function normalizeRenderFpsLimit(value, fallbackValue = 60) {
+    const numericValue = Number(value);
+    if (!Number.isFinite(numericValue)) {
+        return fallbackValue;
+    }
+    return FPS_LIMIT_OPTIONS.reduce((closestValue, optionValue) => (
+        Math.abs(optionValue - numericValue) < Math.abs(closestValue - numericValue)
+            ? optionValue
+            : closestValue
+    ), fallbackValue);
+}
+
+function getFpsSliderIndex(value) {
+    const fpsLimit = normalizeRenderFpsLimit(value);
+    const optionIndex = FPS_LIMIT_OPTIONS.indexOf(fpsLimit);
+    return optionIndex >= 0 ? optionIndex + 1 : FPS_LIMIT_OPTIONS.length;
+}
+
+function getFpsFromSliderIndex(value) {
+    const optionIndex = Math.round(Number(value)) - 1;
+    return FPS_LIMIT_OPTIONS[Math.min(Math.max(optionIndex, 0), FPS_LIMIT_OPTIONS.length - 1)];
+}
+
+function formatResolutionScale(value) {
+    const normalizedValue = normalizeRenderResolutionScale(value);
+    return `${normalizedValue.toFixed(2).replace(/\.?0+$/, '')}x`;
+}
+
+function formatFpsLimit(value) {
+    return `${normalizeRenderFpsLimit(value)} FPS`;
 }
 
 function clampNumber(value, minimum, maximum, fallbackValue, digits = 2) {
@@ -225,6 +482,30 @@ function updateRangeLabels() {
     elements.cameraDistanceValue.textContent = formatValue(elements.cameraDistance.value);
     elements.cameraHeightValue.textContent = formatValue(elements.cameraHeight.value);
     elements.cameraTargetYValue.textContent = formatValue(elements.cameraTargetY.value);
+    elements.renderLightYawValue.textContent = formatLightYaw(elements.renderLightYaw.value);
+    elements.renderKeyLightValue.textContent = formatPercentScale(elements.renderKeyLight.value);
+    elements.renderAmbientFillValue.textContent = formatPercentScale(elements.renderAmbientFill.value);
+    elements.renderOutlineScaleValue.textContent = formatPercentScale(elements.renderOutlineScale.value);
+    elements.renderResolutionScaleValue.textContent = formatResolutionScale(elements.renderResolutionScale.value);
+    elements.renderFpsLimitValue.textContent = formatFpsLimit(getFpsFromSliderIndex(elements.renderFpsLimit.value));
+    elements.renderShadowQualityValue.textContent = formatQualityLevel(elements.renderShadowQuality.value);
+    elements.petMouseHitTestWidthValue.textContent = formatHitTestScale(
+        elements.petMouseHitTestWidth.value || 0.58,
+        0.58,
+        0.85
+    );
+    elements.petMouseHitTestHeightValue.textContent = formatHitTestScale(
+        elements.petMouseHitTestHeight.value || 0.78,
+        0.78,
+        0.72
+    );
+    elements.petMouseHitTestOffsetXValue.textContent = formatNeutralOffset(
+        elements.petMouseHitTestOffsetX.value || 0
+    );
+    elements.petMouseHitTestOffsetYValue.textContent = formatNeutralOffset(
+        elements.petMouseHitTestOffsetY.value || 0.08,
+        0.08
+    );
     elements.ttsRateValue.textContent = formatValue(elements.ttsRate.value);
     elements.ttsPitchValue.textContent = formatValue(elements.ttsPitch.value);
     elements.ttsVolumeValue.textContent = formatValue(elements.ttsVolume.value);
@@ -249,6 +530,9 @@ function normalizePreferences(preferences = {}) {
         petSkipTaskbar: Boolean(preferences.petSkipTaskbar),
         speechMode: String(preferences.speechMode || 'cosyvoice3'),
         recognitionMode: String(preferences.recognitionMode || 'auto-vad'),
+        conversationMode: ['assistant', 'daily'].includes(String(preferences.conversationMode || '').trim())
+            ? String(preferences.conversationMode).trim()
+            : 'assistant',
         preferredMicDeviceId: String(preferences.preferredMicDeviceId || ''),
         humanClawStateDir: String(preferences.humanClawStateDir || ''),
         humanClawResolvedStateDir: String(preferences.humanClawResolvedStateDir || ''),
@@ -260,6 +544,9 @@ function normalizePreferences(preferences = {}) {
         llmApiKeySource: String(preferences.llmApiKeySource || 'none'),
         llmTemperature: Number(llmTemperature.toFixed(2)),
         llmRequestTimeoutMs: Math.round(llmTimeout),
+        llmCapabilities: preferences.llmCapabilities && typeof preferences.llmCapabilities === 'object'
+            ? preferences.llmCapabilities
+            : {},
         elevenLabsApiBase: String(preferences.elevenLabsApiBase || 'https://api.elevenlabs.io'),
         elevenLabsVoiceId: String(preferences.elevenLabsVoiceId || ''),
         elevenLabsModelId: String(preferences.elevenLabsModelId || 'eleven_multilingual_v2'),
@@ -274,6 +561,22 @@ function normalizePreferences(preferences = {}) {
         cameraDistance: Number(preferences.cameraDistance ?? 1.1),
         cameraHeight: Number(preferences.cameraHeight ?? 1.3),
         cameraTargetY: Number(preferences.cameraTargetY ?? 1),
+        renderProfileId: Object.prototype.hasOwnProperty.call(
+            renderProfileLabels,
+            String(preferences.renderProfileId || '')
+        )
+            ? String(preferences.renderProfileId)
+            : 'aigl_soft_anime_mtoon',
+        renderLightYawDeg: clampNumber(preferences.renderLightYawDeg, -75, 75, 0, 0),
+        renderKeyLightScale: clampNumber(preferences.renderKeyLightScale, 0.65, 1.45, 1, 2),
+        renderAmbientFillScale: clampNumber(preferences.renderAmbientFillScale, 0.55, 1.35, 1, 2),
+        renderOutlineScale: clampNumber(preferences.renderOutlineScale, 0.25, 1.2, 0.72, 2),
+        renderShadowEnabled: preferences.renderShadowEnabled !== false,
+        renderResolutionScale: normalizeRenderResolutionScale(preferences.renderResolutionScale, 2),
+        renderFpsLimit: normalizeRenderFpsLimit(preferences.renderFpsLimit, 60),
+        renderShadowQuality: normalizeQualityLevel(preferences.renderShadowQuality, 3),
+        renderOutlineEnabled: preferences.renderOutlineEnabled !== false,
+        renderAntialiasEnabled: preferences.renderAntialiasEnabled !== false,
         desktopNativeTtsRate: Number(preferences.desktopNativeTtsRate ?? 0.96),
         desktopNativeTtsPitch: Number(preferences.desktopNativeTtsPitch ?? 1.12),
         desktopNativeTtsVolume: Number(preferences.desktopNativeTtsVolume ?? 1),
@@ -295,7 +598,40 @@ function normalizePreferences(preferences = {}) {
         ),
         avatarDialogueBubbleExtraTop: Math.round(
             clampNumber(preferences.avatarDialogueBubbleExtraTop, 0, 360, 190, 0)
-        )
+        ),
+        petMouseHitTestEnabled: preferences.petMouseHitTestEnabled !== false,
+        petMouseHitTestShape: ['ellipse', 'rectangle'].includes(String(preferences.petMouseHitTestShape || '').trim().toLowerCase())
+            ? String(preferences.petMouseHitTestShape).trim().toLowerCase()
+            : 'ellipse',
+        petMouseHitTestWidthRatio: clampNumber(
+            preferences.petMouseHitTestWidthRatio,
+            0.2,
+            1,
+            0.58,
+            2
+        ),
+        petMouseHitTestHeightRatio: clampNumber(
+            preferences.petMouseHitTestHeightRatio,
+            0.25,
+            1,
+            0.78,
+            2
+        ),
+        petMouseHitTestOffsetXRatio: clampNumber(
+            preferences.petMouseHitTestOffsetXRatio,
+            -0.5,
+            0.5,
+            0,
+            2
+        ),
+        petMouseHitTestOffsetYRatio: clampNumber(
+            preferences.petMouseHitTestOffsetYRatio,
+            -0.5,
+            0.5,
+            0.08,
+            2
+        ),
+        petMouseHitTestDebug: Boolean(preferences.petMouseHitTestDebug)
     };
 }
 
@@ -323,8 +659,11 @@ function readFormPreferences({ includeSecret = false } = {}) {
         petSkipTaskbar: !elements.petShowTaskbar.checked,
         speechMode: elements.speechMode.value,
         recognitionMode: elements.recognitionMode.value,
+        conversationMode: elements.conversationMode?.value || currentPreferences?.conversationMode || 'assistant',
         preferredMicDeviceId: elements.preferredMic.value,
-        humanClawStateDir: elements.humanClawStateDir.value.trim(),
+        humanClawStateDir: elements.humanClawStateDir
+            ? elements.humanClawStateDir.value.trim()
+            : currentPreferences?.humanClawStateDir || '',
         humanClawResolvedStateDir: currentPreferences?.humanClawResolvedStateDir || '',
         humanClawDefaultStateDir: currentPreferences?.humanClawDefaultStateDir || '',
         llmProvider: elements.llmProvider.value,
@@ -354,6 +693,17 @@ function readFormPreferences({ includeSecret = false } = {}) {
         cameraDistance: Number(elements.cameraDistance.value),
         cameraHeight: Number(elements.cameraHeight.value),
         cameraTargetY: Number(elements.cameraTargetY.value),
+        renderProfileId: elements.renderProfile.value,
+        renderLightYawDeg: Number(elements.renderLightYaw.value),
+        renderKeyLightScale: Number(elements.renderKeyLight.value),
+        renderAmbientFillScale: Number(elements.renderAmbientFill.value),
+        renderOutlineScale: Number(elements.renderOutlineScale.value),
+        renderShadowEnabled: elements.renderShadowEnabled.checked,
+        renderResolutionScale: normalizeRenderResolutionScale(elements.renderResolutionScale.value, 2),
+        renderFpsLimit: getFpsFromSliderIndex(elements.renderFpsLimit.value),
+        renderShadowQuality: Number(elements.renderShadowQuality.value),
+        renderOutlineEnabled: elements.renderOutlineEnabled.checked,
+        renderAntialiasEnabled: elements.renderAntialiasEnabled.checked,
         desktopNativeTtsRate: Number(elements.ttsRate.value),
         desktopNativeTtsPitch: Number(elements.ttsPitch.value),
         desktopNativeTtsVolume: Number(elements.ttsVolume.value),
@@ -361,7 +711,14 @@ function readFormPreferences({ includeSecret = false } = {}) {
         avatarDialogueBubbleTop: Number(elements.avatarBubbleTop.value),
         avatarDialogueBubbleScale: Number(elements.avatarBubbleScale.value),
         avatarDialogueBubbleExtraWidth: Number(elements.avatarBubbleExtraWidth.value),
-        avatarDialogueBubbleExtraTop: Number(elements.avatarBubbleExtraTop.value)
+        avatarDialogueBubbleExtraTop: Number(elements.avatarBubbleExtraTop.value),
+        petMouseHitTestEnabled: elements.petMouseHitTestEnabled.checked,
+        petMouseHitTestShape: elements.petMouseHitTestShape.value,
+        petMouseHitTestWidthRatio: Number(elements.petMouseHitTestWidth.value),
+        petMouseHitTestHeightRatio: Number(elements.petMouseHitTestHeight.value),
+        petMouseHitTestOffsetXRatio: Number(elements.petMouseHitTestOffsetX.value),
+        petMouseHitTestOffsetYRatio: Number(elements.petMouseHitTestOffsetY.value),
+        petMouseHitTestDebug: elements.petMouseHitTestDebug.checked
     });
 
     if (includeSecret) {
@@ -462,6 +819,19 @@ function fillRecognitionModeOptions(modeOptions = []) {
     });
 }
 
+function fillConversationModeOptions(modeOptions = []) {
+    if (!elements.conversationMode) {
+        return;
+    }
+    elements.conversationMode.innerHTML = '';
+    modeOptions.forEach((mode) => {
+        const option = document.createElement('option');
+        option.value = mode;
+        option.textContent = conversationModeLabels[mode] || mode;
+        elements.conversationMode.appendChild(option);
+    });
+}
+
 function fillLlmProviderOptions(providerOptions = []) {
     elements.llmProvider.innerHTML = '';
     providerOptions.forEach((provider) => {
@@ -469,6 +839,16 @@ function fillLlmProviderOptions(providerOptions = []) {
         option.value = provider;
         option.textContent = llmProviderLabels[provider] || provider;
         elements.llmProvider.appendChild(option);
+    });
+}
+
+function fillRenderProfileOptions(profileOptions = []) {
+    elements.renderProfile.innerHTML = '';
+    profileOptions.forEach((profileId) => {
+        const option = document.createElement('option');
+        option.value = profileId;
+        option.textContent = renderProfileLabels[profileId] || profileId;
+        elements.renderProfile.appendChild(option);
     });
 }
 
@@ -495,6 +875,271 @@ function syncLlmKeyState() {
     elements.llmKeyState.textContent = elements.llmApiKey.value.trim()
         ? '保存后会写入新的 Key。'
         : 'Key 状态：未配置。';
+}
+
+function formatCapabilityFlag(value) {
+    if (value === true) {
+        return '支持';
+    }
+    if (value === false) {
+        return '未确认';
+    }
+    return String(value || '未知');
+}
+
+function estimateLlmCapabilities(provider, model) {
+    const providerCaps = panelState?.options?.llmProviderCapabilities?.[provider] || {};
+    const lowerModel = String(model || '').toLowerCase();
+    const vision = provider === 'openai-compatible'
+        ? /(vision|vl|omni|gpt-4o|gpt-4\.1|gpt-5|qwen.*vl|glm-4v|doubao.*vision|seed.*vision|kimi.*vision)/i.test(lowerModel)
+        : Boolean(providerCaps.vision);
+    const lowLatency = /(mini|flash|haiku|turbo|lite|fast|speed|doubao|deepseek-chat)/i.test(lowerModel);
+    const longContext = provider === 'openai-compatible'
+        ? /(128k|200k|1m|long|qwen|doubao|deepseek)/i.test(lowerModel)
+        : Boolean(providerCaps.longContext);
+    return {
+        ...providerCaps,
+        provider,
+        model,
+        vision,
+        longContext,
+        lowLatency
+    };
+}
+
+function renderLlmCapabilityState(capabilities = null) {
+    if (!elements.llmCapabilityState) {
+        return;
+    }
+    const provider = elements.llmProvider?.value || currentPreferences?.llmProvider || 'openai-compatible';
+    const model = elements.llmModel?.value || currentPreferences?.llmModel || '';
+    const caps = capabilities || estimateLlmCapabilities(provider, model);
+    elements.llmCapabilityState.textContent = [
+        `传输：${caps.transport || '未知'}`,
+        `视觉：${formatCapabilityFlag(caps.vision)}`,
+        `工具调用：${formatCapabilityFlag(caps.nativeToolCalling)}`,
+        `JSON：${formatCapabilityFlag(caps.jsonMode || caps.jsonSchema)}`,
+        `长上下文：${formatCapabilityFlag(caps.longContext)}`,
+        `低延迟：${formatCapabilityFlag(caps.lowLatency)}`
+    ].join(' | ');
+}
+
+function renderLlmHealthState(result = null) {
+    if (!elements.llmHealthState) {
+        return;
+    }
+    if (!result) {
+        elements.llmHealthState.textContent = '尚未测试当前模型。';
+        return;
+    }
+    if (result.ok) {
+        elements.llmHealthState.textContent = '连接正常。';
+    } else {
+        const failedCheck = Object.entries(result.checks || {})
+            .find(([, check]) => check && !check.skipped && !check.ok)?.[0];
+        const reason = result.summary || (failedCheck ? `${failedCheck} 检测失败` : '请检查 Key、服务商和模型。');
+        elements.llmHealthState.textContent = `连接异常：${reason}`;
+    }
+    renderLlmCapabilityState(result.capabilities);
+}
+
+function getProviderDefaultBaseUrl(provider) {
+    return llmProviderDefaultBaseUrls[provider] || fallbackLlmProviderDefaultBaseUrls[provider] || '';
+}
+
+function getProviderDefaultModel(provider) {
+    return llmProviderDefaultModels[provider] || fallbackLlmProviderDefaultModels[provider] || '';
+}
+
+function normalizeBaseUrlForPreset(value = '') {
+    return String(value || '').trim().replace(/\/+$/, '').toLowerCase();
+}
+
+function getLlmPreset(presetId) {
+    return llmPresetCatalog.find((preset) => preset.id === presetId) ||
+        llmPresetCatalog.find((preset) => preset.id === LLM_PRESET_CUSTOM_ID);
+}
+
+function getPresetDefaultModel(preset) {
+    return preset?.models?.[0]?.id || '';
+}
+
+function findMatchingLlmPreset({ provider = '', baseUrl = '', model = '' } = {}) {
+    const normalizedProvider = String(provider || '').trim();
+    const normalizedBaseUrl = normalizeBaseUrlForPreset(baseUrl);
+    const normalizedModel = String(model || '').trim();
+    const exactPreset = llmPresetCatalog.find((preset) =>
+        preset.id !== LLM_PRESET_CUSTOM_ID &&
+        preset.provider === normalizedProvider &&
+        normalizeBaseUrlForPreset(preset.baseUrl) === normalizedBaseUrl &&
+        preset.models.some((entry) => entry.id === normalizedModel)
+    );
+    if (exactPreset) {
+        return {
+            preset: exactPreset,
+            model: normalizedModel
+        };
+    }
+
+    const basePreset = llmPresetCatalog.find((preset) =>
+        preset.id !== LLM_PRESET_CUSTOM_ID &&
+        preset.provider === normalizedProvider &&
+        normalizeBaseUrlForPreset(preset.baseUrl) === normalizedBaseUrl
+    );
+    if (basePreset) {
+        return {
+            preset: basePreset,
+            model: basePreset.models.some((entry) => entry.id === normalizedModel)
+                ? normalizedModel
+                : LLM_PRESET_CUSTOM_ID
+        };
+    }
+
+    return {
+        preset: getLlmPreset(LLM_PRESET_CUSTOM_ID),
+        model: LLM_PRESET_CUSTOM_ID
+    };
+}
+
+function fillLlmPresetOptions() {
+    if (!elements.llmPreset) {
+        return;
+    }
+    elements.llmPreset.innerHTML = '';
+    llmPresetCatalog.forEach((preset) => {
+        const option = document.createElement('option');
+        option.value = preset.id;
+        option.textContent = preset.label;
+        elements.llmPreset.appendChild(option);
+    });
+}
+
+function fillLlmModelPresetOptions(presetId, selectedModel = '') {
+    if (!elements.llmModelPreset) {
+        return;
+    }
+    const preset = getLlmPreset(presetId);
+    const modelOptions = preset?.models || [];
+    elements.llmModelPreset.innerHTML = '';
+
+    if (!modelOptions.length) {
+        const option = document.createElement('option');
+        option.value = LLM_PRESET_CUSTOM_ID;
+        option.textContent = '手动填写高级模型 ID';
+        elements.llmModelPreset.appendChild(option);
+        elements.llmModelPreset.value = LLM_PRESET_CUSTOM_ID;
+        return;
+    }
+
+    modelOptions.forEach((model) => {
+        const option = document.createElement('option');
+        option.value = model.id;
+        option.textContent = model.label || model.id;
+        elements.llmModelPreset.appendChild(option);
+    });
+
+    const customOption = document.createElement('option');
+    customOption.value = LLM_PRESET_CUSTOM_ID;
+    customOption.textContent = '自定义模型 ID';
+    elements.llmModelPreset.appendChild(customOption);
+
+    elements.llmModelPreset.value = modelOptions.some((entry) => entry.id === selectedModel)
+        ? selectedModel
+        : LLM_PRESET_CUSTOM_ID;
+}
+
+function syncLlmPresetHelp(presetId = elements.llmPreset?.value) {
+    if (!elements.llmPresetHelp) {
+        return;
+    }
+    const preset = getLlmPreset(presetId);
+    elements.llmPresetHelp.textContent = preset?.help || '选择服务商后，只需要填写对应平台的 API Key。';
+}
+
+function syncLlmPresetSelectionFromFields() {
+    if (!elements.llmPreset || !elements.llmModelPreset) {
+        return;
+    }
+    const match = findMatchingLlmPreset({
+        provider: elements.llmProvider.value,
+        baseUrl: elements.llmBaseUrl.value,
+        model: elements.llmModel.value
+    });
+    elements.llmPreset.value = match.preset.id;
+    fillLlmModelPresetOptions(match.preset.id, match.model);
+    syncLlmPresetHelp(match.preset.id);
+}
+
+function applyLlmPreset(presetId, { preserveModel = false } = {}) {
+    const preset = getLlmPreset(presetId);
+    if (!preset || preset.id === LLM_PRESET_CUSTOM_ID) {
+        fillLlmModelPresetOptions(LLM_PRESET_CUSTOM_ID, LLM_PRESET_CUSTOM_ID);
+        syncLlmPresetHelp(LLM_PRESET_CUSTOM_ID);
+        return;
+    }
+
+    elements.llmProvider.value = preset.provider;
+    elements.llmBaseUrl.value = preset.baseUrl;
+    if (!preserveModel || !elements.llmModel.value.trim()) {
+        elements.llmModel.value = getPresetDefaultModel(preset);
+    }
+    lastLlmProviderValue = preset.provider;
+    fillLlmModelPresetOptions(preset.id, elements.llmModel.value);
+    syncLlmPresetHelp(preset.id);
+    renderLlmCapabilityState();
+    renderLlmHealthState(null);
+}
+
+function applyLlmProviderDefaultsIfNeeded(previousProvider, nextProvider) {
+    if (!previousProvider || previousProvider === nextProvider) {
+        return;
+    }
+    const previousBaseUrl = getProviderDefaultBaseUrl(previousProvider);
+    const previousModel = getProviderDefaultModel(previousProvider);
+    if (!elements.llmBaseUrl.value.trim() || elements.llmBaseUrl.value.trim() === previousBaseUrl) {
+        elements.llmBaseUrl.value = getProviderDefaultBaseUrl(nextProvider);
+    }
+    if (!elements.llmModel.value.trim() || elements.llmModel.value.trim() === previousModel) {
+        elements.llmModel.value = getProviderDefaultModel(nextProvider);
+    }
+}
+
+async function runLlmHealthCheck() {
+    if (!window.aigrilDesktop?.llm?.healthCheck) {
+        renderLlmHealthState({
+            ok: false,
+            checks: {},
+            summary: '当前桌面宿主不支持模型检测。'
+        });
+        return;
+    }
+    elements.llmHealthCheckBtn.disabled = true;
+    elements.llmHealthState.textContent = '正在测试模型连接、JSON、Tool 和 Vision 能力...';
+    try {
+        const settings = {
+            provider: elements.llmProvider.value,
+            baseUrl: elements.llmBaseUrl.value,
+            model: elements.llmModel.value,
+            apiKey: elements.llmApiKey.value.trim(),
+            temperature: Number(elements.llmTemperature.value),
+            timeoutMs: Number(elements.llmTimeout.value)
+        };
+        const result = await window.aigrilDesktop.llm.healthCheck({
+            settings,
+            includeToolCall: true,
+            includeVision: true,
+            timeoutMs: Math.min(Number(elements.llmTimeout.value) || 25000, 30000)
+        });
+        renderLlmHealthState(result);
+    } catch (error) {
+        renderLlmHealthState({
+            ok: false,
+            checks: {},
+            summary: `模型检测失败：${error.message || error}`
+        });
+    } finally {
+        elements.llmHealthCheckBtn.disabled = false;
+    }
 }
 
 function syncElevenLabsKeyState() {
@@ -548,19 +1193,31 @@ function fillForm(preferences) {
     elements.petShowTaskbar.checked = !normalized.petSkipTaskbar;
     elements.speechMode.value = normalized.speechMode;
     elements.recognitionMode.value = normalized.recognitionMode;
-    elements.recognitionModeText.textContent = recognitionModeLabels[normalized.recognitionMode] || normalized.recognitionMode;
-    elements.humanClawStateDir.value = normalized.humanClawStateDir;
+    if (elements.conversationMode) {
+        elements.conversationMode.value = normalized.conversationMode;
+    }
+    if (elements.recognitionModeText) {
+        elements.recognitionModeText.textContent = recognitionModeLabels[normalized.recognitionMode] ||
+            normalized.recognitionMode;
+    }
+    if (elements.humanClawStateDir) {
+        elements.humanClawStateDir.value = normalized.humanClawStateDir;
+    }
     if (elements.humanClawStateDirHelp) {
         elements.humanClawStateDirHelp.textContent = normalized.humanClawStateDir
             ? `当前解析目录：${normalized.humanClawResolvedStateDir || normalized.humanClawStateDir}`
             : `默认目录：${normalized.humanClawDefaultStateDir || '软件根目录下的 .humanclaw-state'}`;
     }
     elements.llmProvider.value = normalized.llmProvider;
+    lastLlmProviderValue = normalized.llmProvider;
     elements.llmBaseUrl.value = normalized.llmBaseUrl;
     elements.llmModel.value = normalized.llmModel;
     elements.llmApiKey.value = '';
     elements.llmTemperature.value = String(normalized.llmTemperature);
     elements.llmTimeout.value = String(normalized.llmRequestTimeoutMs);
+    syncLlmPresetSelectionFromFields();
+    renderLlmCapabilityState(normalized.llmCapabilities);
+    renderLlmHealthState(null);
     elements.elevenLabsApiBase.value = normalized.elevenLabsApiBase;
     elements.elevenLabsVoiceId.value = normalized.elevenLabsVoiceId;
     elements.elevenLabsApiKey.value = '';
@@ -580,6 +1237,17 @@ function fillForm(preferences) {
     elements.cameraDistance.value = String(normalized.cameraDistance);
     elements.cameraHeight.value = String(normalized.cameraHeight);
     elements.cameraTargetY.value = String(normalized.cameraTargetY);
+    elements.renderProfile.value = normalized.renderProfileId;
+    elements.renderLightYaw.value = String(normalized.renderLightYawDeg);
+    elements.renderKeyLight.value = String(normalized.renderKeyLightScale);
+    elements.renderAmbientFill.value = String(normalized.renderAmbientFillScale);
+    elements.renderOutlineScale.value = String(normalized.renderOutlineScale);
+    elements.renderShadowEnabled.checked = normalized.renderShadowEnabled;
+    elements.renderResolutionScale.value = String(normalized.renderResolutionScale);
+    elements.renderFpsLimit.value = String(getFpsSliderIndex(normalized.renderFpsLimit));
+    elements.renderShadowQuality.value = String(normalized.renderShadowQuality);
+    elements.renderOutlineEnabled.checked = normalized.renderOutlineEnabled;
+    elements.renderAntialiasEnabled.checked = normalized.renderAntialiasEnabled;
     elements.ttsRate.value = String(normalized.desktopNativeTtsRate);
     elements.ttsPitch.value = String(normalized.desktopNativeTtsPitch);
     elements.ttsVolume.value = String(normalized.desktopNativeTtsVolume);
@@ -588,6 +1256,13 @@ function fillForm(preferences) {
     elements.avatarBubbleScale.value = String(normalized.avatarDialogueBubbleScale);
     elements.avatarBubbleExtraWidth.value = String(normalized.avatarDialogueBubbleExtraWidth);
     elements.avatarBubbleExtraTop.value = String(normalized.avatarDialogueBubbleExtraTop);
+    elements.petMouseHitTestEnabled.checked = normalized.petMouseHitTestEnabled;
+    elements.petMouseHitTestShape.value = normalized.petMouseHitTestShape;
+    elements.petMouseHitTestWidth.value = String(normalized.petMouseHitTestWidthRatio);
+    elements.petMouseHitTestHeight.value = String(normalized.petMouseHitTestHeightRatio);
+    elements.petMouseHitTestOffsetX.value = String(normalized.petMouseHitTestOffsetXRatio);
+    elements.petMouseHitTestOffsetY.value = String(normalized.petMouseHitTestOffsetYRatio);
+    elements.petMouseHitTestDebug.checked = normalized.petMouseHitTestDebug;
 
     updateRangeLabels();
     syncLlmKeyState();
@@ -598,6 +1273,10 @@ function fillForm(preferences) {
 }
 
 function renderHumanClawStatus(status = {}) {
+    if (!elements.openclawStatusText || !elements.openclawRuntimeText) {
+        return;
+    }
+
     assistantStatusCache = {
         ...(assistantStatusCache || {}),
         ...(status || {}),
@@ -647,6 +1326,10 @@ function renderHumanClawStatus(status = {}) {
 }
 
 async function refreshOpenClawStatus() {
+    if (!elements.openclawStatusText || !elements.openclawRuntimeText) {
+        return;
+    }
+
     if (!window.aigrilDesktop?.gateway?.getStatus) {
         elements.openclawStatusText.textContent = '当前环境不支持 HumanClaw Gateway。';
         elements.openclawRuntimeText.textContent = '';
@@ -742,6 +1425,457 @@ async function refreshMemoryStatus() {
             elements.memoryStatusText.textContent = `读取人格记忆失败：${error.message || error}`;
         }
     }
+}
+
+function clearElement(element) {
+    if (element) {
+        element.innerHTML = '';
+    }
+}
+
+function setAgentLabStatus(text) {
+    if (elements.agentLabStatus) {
+        elements.agentLabStatus.textContent = text;
+    }
+}
+
+function formatDurationMs(value) {
+    const duration = Number(value);
+    if (!Number.isFinite(duration) || duration < 0) {
+        return '-';
+    }
+    if (duration < 1000) {
+        return `${Math.round(duration)}ms`;
+    }
+    if (duration < 60000) {
+        const digits = duration < 10000 ? 1 : 0;
+        return `${(duration / 1000).toFixed(digits)}s`;
+    }
+    return `${(duration / 60000).toFixed(1)}m`;
+}
+
+function formatTokenCount(value) {
+    const tokens = Number(value);
+    if (!Number.isFinite(tokens) || tokens < 0) {
+        return '-';
+    }
+    if (tokens >= 1000000) {
+        return `${(tokens / 1000000).toFixed(1)}M`;
+    }
+    if (tokens >= 1000) {
+        return `${(tokens / 1000).toFixed(1)}K`;
+    }
+    return String(Math.round(tokens));
+}
+
+function formatAgentLabTime(value) {
+    const date = value ? new Date(value) : null;
+    if (!date || Number.isNaN(date.getTime())) {
+        return '';
+    }
+    return date.toLocaleString();
+}
+
+function safeJsonStringify(value) {
+    const seen = new WeakSet();
+    return JSON.stringify(value, (key, entry) => {
+        if (/token|password|secret|api[_-]?key|authorization|credential|pass|auth[_-]?code/i.test(key)) {
+            return '__REDACTED__';
+        }
+        if (entry && typeof entry === 'object') {
+            if (seen.has(entry)) {
+                return '[Circular]';
+            }
+            seen.add(entry);
+        }
+        return entry;
+    }, 2);
+}
+
+function createAgentLabEmpty(text) {
+    const empty = document.createElement('div');
+    empty.className = 'agent-lab-empty';
+    empty.textContent = text;
+    return empty;
+}
+
+function renderAgentLabRuns(runs = []) {
+    if (!elements.agentLabRuns) {
+        return;
+    }
+    clearElement(elements.agentLabRuns);
+    if (!runs.length) {
+        elements.agentLabRuns.appendChild(createAgentLabEmpty('还没有可分析的 Agent 运行记录。'));
+        return;
+    }
+
+    runs.slice(0, 12).forEach((run) => {
+        const item = document.createElement('button');
+        item.type = 'button';
+        item.className = `agent-lab-run-item${run.runId === agentLabSelectedRunId ? ' active' : ''}`;
+
+        const title = document.createElement('div');
+        title.className = 'agent-lab-item-title';
+        title.textContent = truncatePanelText(run.message || run.intent || run.runId, 80);
+
+        const meta = document.createElement('div');
+        meta.className = 'agent-lab-item-meta';
+        meta.textContent = [
+            run.status || 'unknown',
+            run.sessionId || 'main',
+            formatDurationMs(run.durationMs),
+            formatAgentLabTime(run.iso)
+        ].filter(Boolean).join(' | ');
+
+        item.appendChild(title);
+        item.appendChild(meta);
+        item.addEventListener('click', () => {
+            void loadAgentLabAnalysis(run.runId);
+        });
+        elements.agentLabRuns.appendChild(item);
+    });
+}
+
+function appendAgentLabMetric(label, value) {
+    const item = document.createElement('div');
+    item.className = 'agent-lab-metric';
+
+    const valueNode = document.createElement('div');
+    valueNode.className = 'agent-lab-metric-value';
+    valueNode.textContent = value;
+
+    const labelNode = document.createElement('div');
+    labelNode.className = 'agent-lab-metric-label';
+    labelNode.textContent = label;
+
+    item.appendChild(valueNode);
+    item.appendChild(labelNode);
+    elements.agentLabMetrics?.appendChild(item);
+}
+
+function renderAgentLabMetrics(analysis) {
+    if (!elements.agentLabMetrics) {
+        return;
+    }
+    clearElement(elements.agentLabMetrics);
+    const summary = analysis?.summary || {};
+    appendAgentLabMetric('状态', summary.status || analysis?.status || '-');
+    appendAgentLabMetric('总耗时', formatDurationMs(summary.durationMs));
+    appendAgentLabMetric('Agent 轮次', String(summary.rounds ?? 0));
+    appendAgentLabMetric('上下文 Token', formatTokenCount(summary.totalContextTokens));
+    appendAgentLabMetric('LLM 调用', String(summary.llmCalls ?? 0));
+    appendAgentLabMetric('LLM Token', formatTokenCount(summary.usage?.totalTokens));
+    appendAgentLabMetric('工具调用', String(summary.toolCalls ?? 0));
+    appendAgentLabMetric('失败工具', String(summary.failedTools ?? 0));
+}
+
+function renderAgentLabBottleneck(analysis) {
+    if (!elements.agentLabBottleneck) {
+        return;
+    }
+    clearElement(elements.agentLabBottleneck);
+    if (!analysis) {
+        elements.agentLabBottleneck.appendChild(createAgentLabEmpty('选择一次运行后，系统会根据耗时、失败工具和上下文规模推断核心瓶颈。'));
+        return;
+    }
+
+    const primary = document.createElement('div');
+    primary.className = 'agent-lab-bottleneck-item';
+    const title = document.createElement('div');
+    title.className = 'agent-lab-item-title';
+    title.textContent = analysis.summary?.primaryBottleneck || analysis.bottlenecks?.primary || '未发现明显单点瓶颈';
+    const meta = document.createElement('div');
+    meta.className = 'agent-lab-item-meta';
+    meta.textContent = `runId: ${analysis.runId || '-'} | transcript: ${analysis.transcript?.itemCount ?? 0} items`;
+    primary.appendChild(title);
+    primary.appendChild(meta);
+    elements.agentLabBottleneck.appendChild(primary);
+
+    const items = Array.isArray(analysis.bottlenecks?.items) ? analysis.bottlenecks.items : [];
+    if (!items.length) {
+        return;
+    }
+    items.slice(0, 6).forEach((entry) => {
+        const item = document.createElement('div');
+        item.className = 'agent-lab-bottleneck-item';
+        const itemTitle = document.createElement('div');
+        itemTitle.className = 'agent-lab-item-title';
+        itemTitle.textContent = entry.label || entry.kind || 'bottleneck';
+        const itemMeta = document.createElement('div');
+        itemMeta.className = 'agent-lab-item-meta';
+        itemMeta.textContent = [
+            entry.kind || '',
+            entry.severity ? `severity=${entry.severity}` : '',
+            entry.durationMs ? `duration=${formatDurationMs(entry.durationMs)}` : '',
+            entry.tokens ? `tokens=${formatTokenCount(entry.tokens)}` : '',
+            truncatePanelText(entry.detail || '', 110)
+        ].filter(Boolean).join(' | ');
+        item.appendChild(itemTitle);
+        item.appendChild(itemMeta);
+        elements.agentLabBottleneck.appendChild(item);
+    });
+}
+
+function renderAgentLabTimeline(analysis) {
+    if (!elements.agentLabTimeline) {
+        return;
+    }
+    clearElement(elements.agentLabTimeline);
+    const timeline = Array.isArray(analysis?.timeline) ? analysis.timeline : [];
+    if (!timeline.length) {
+        elements.agentLabTimeline.appendChild(createAgentLabEmpty('暂无时间线。运行一次任务后会显示 transcript、event 和 audit 的合并轨迹。'));
+        return;
+    }
+
+    timeline.slice(-60).forEach((entry) => {
+        const item = document.createElement('div');
+        item.className = 'agent-lab-timeline-item';
+
+        const title = document.createElement('div');
+        title.className = 'agent-lab-item-title';
+        title.textContent = `${entry.kind || 'runtime'} · ${entry.title || entry.type || 'event'}`;
+
+        const meta = document.createElement('div');
+        meta.className = 'agent-lab-item-meta';
+        meta.textContent = [
+            entry.source || '',
+            entry.status || '',
+            entry.durationMs ? formatDurationMs(entry.durationMs) : '',
+            formatAgentLabTime(entry.iso),
+            truncatePanelText(entry.preview || '', 130)
+        ].filter(Boolean).join(' | ');
+
+        item.appendChild(title);
+        item.appendChild(meta);
+        elements.agentLabTimeline.appendChild(item);
+    });
+}
+
+function getSelectedAgentLabRound() {
+    const rounds = Array.isArray(agentLabAnalysis?.rounds) ? agentLabAnalysis.rounds : [];
+    const value = Number(elements.agentLabContextSelect?.value ?? 0);
+    return rounds.find((round) => Number(round.iteration) === value) || rounds[0] || null;
+}
+
+function renderAgentLabContext(round = null) {
+    if (!elements.agentLabContextJson) {
+        return;
+    }
+    if (!agentLabAnalysis || !round) {
+        elements.agentLabContextJson.textContent = '选择一次运行后，这里会展示该轮发送给模型的完整 messages、prompt budget、LLM 调用和工具结果。';
+        return;
+    }
+    elements.agentLabContextJson.textContent = safeJsonStringify({
+        runId: agentLabAnalysis.runId,
+        sessionId: agentLabAnalysis.sessionId,
+        transcript: agentLabAnalysis.transcript,
+        iteration: round.iteration,
+        label: round.label,
+        approxInputTokens: round.approxInputTokens,
+        promptBudget: round.promptBudget,
+        messages: round.messages,
+        decision: round.decision,
+        llmCalls: round.llmCalls,
+        tools: round.tools,
+        notes: round.notes
+    });
+}
+
+function renderAgentLabContextOptions(analysis) {
+    if (!elements.agentLabContextSelect) {
+        return;
+    }
+    clearElement(elements.agentLabContextSelect);
+    const rounds = Array.isArray(analysis?.rounds) ? analysis.rounds : [];
+    elements.agentLabContextSelect.disabled = !rounds.length;
+    if (!rounds.length) {
+        const option = document.createElement('option');
+        option.value = '';
+        option.textContent = '暂无可用轮次上下文';
+        elements.agentLabContextSelect.appendChild(option);
+        renderAgentLabContext(null);
+        return;
+    }
+    rounds.forEach((round) => {
+        const option = document.createElement('option');
+        option.value = String(round.iteration);
+        option.textContent = [
+            round.label || `第 ${Number(round.iteration || 0) + 1} 轮`,
+            `${formatTokenCount(round.approxInputTokens)} ctx tokens`,
+            `${round.llmCalls?.length || 0} LLM`,
+            `${round.tools?.length || 0} tools`
+        ].join(' | ');
+        elements.agentLabContextSelect.appendChild(option);
+    });
+    renderAgentLabContext(getSelectedAgentLabRound());
+}
+
+function renderAgentLabAnalysis(analysis) {
+    agentLabAnalysis = analysis || null;
+    if (analysis?.runId) {
+        agentLabSelectedRunId = analysis.runId;
+    }
+    renderAgentLabMetrics(agentLabAnalysis);
+    renderAgentLabBottleneck(agentLabAnalysis);
+    renderAgentLabTimeline(agentLabAnalysis);
+    renderAgentLabContextOptions(agentLabAnalysis);
+    renderAgentLabRuns(agentLabRuns);
+    if (!agentLabAnalysis) {
+        setAgentLabStatus('暂无运行');
+        return;
+    }
+    setAgentLabStatus([
+        agentLabAnalysis.status || 'unknown',
+        `${agentLabAnalysis.summary?.rounds ?? 0} 轮`,
+        `${agentLabAnalysis.summary?.toolCalls ?? 0} 工具`
+    ].join(' | '));
+}
+
+async function loadAgentLabAnalysis(runId, { silent = false } = {}) {
+    const id = String(runId || '').trim();
+    if (!id || !window.aigrilDesktop?.agentLab?.getRunAnalysis) {
+        if (!silent) {
+            setAgentLabStatus('当前环境不支持 Agent Lab。');
+        }
+        return;
+    }
+    agentLabSelectedRunId = id;
+    renderAgentLabRuns(agentLabRuns);
+    if (!silent) {
+        setAgentLabStatus('正在读取分析...');
+    }
+    try {
+        const analysis = await window.aigrilDesktop.agentLab.getRunAnalysis({
+            runId: id,
+            transcriptLimit: 2500
+        });
+        if (!analysis?.ok) {
+            renderAgentLabAnalysis(null);
+            setAgentLabStatus(`读取失败：${analysis?.error || analysis?.status || 'unknown'}`);
+            return;
+        }
+        renderAgentLabAnalysis(analysis);
+    } catch (error) {
+        if (!silent) {
+            setAgentLabStatus(`分析失败：${error.message || error}`);
+        }
+    }
+}
+
+async function refreshAgentLabRuns({ selectLatest = false, silent = false } = {}) {
+    if (!window.aigrilDesktop?.agentLab?.listRuns) {
+        setAgentLabStatus('当前环境不支持 Agent Lab。');
+        renderAgentLabAnalysis(null);
+        return;
+    }
+    if (!silent) {
+        setAgentLabStatus('正在刷新...');
+    }
+    try {
+        const result = await window.aigrilDesktop.agentLab.listRuns({ limit: 40 });
+        agentLabRuns = Array.isArray(result?.runs) ? result.runs : [];
+        const nextRunId = selectLatest
+            ? agentLabRuns[0]?.runId
+            : agentLabSelectedRunId || agentLabRuns[0]?.runId || '';
+        renderAgentLabRuns(agentLabRuns);
+        if (nextRunId) {
+            await loadAgentLabAnalysis(nextRunId, { silent: true });
+        } else {
+            renderAgentLabAnalysis(null);
+        }
+    } catch (error) {
+        if (!silent) {
+            setAgentLabStatus(`刷新失败：${error.message || error}`);
+        }
+    }
+}
+
+function syncAgentLabRunButton() {
+    if (!elements.agentLabRunBtn) {
+        return;
+    }
+    elements.agentLabRunBtn.disabled = agentLabRunInFlight;
+    elements.agentLabRunBtn.textContent = agentLabRunInFlight ? '运行中...' : '运行并分析';
+}
+
+async function runAgentLabTask() {
+    if (!window.aigrilDesktop?.agentLab?.runTask) {
+        setAgentLabStatus('当前环境不支持 Agent Lab。');
+        return;
+    }
+    const message = elements.agentLabTask?.value.trim() || '';
+    if (!message) {
+        setAgentLabStatus('请先输入一个测试任务。');
+        elements.agentLabTask?.focus();
+        return;
+    }
+    const sessionId = elements.agentLabSession?.value.trim() || 'agent-lab';
+    const maxAgentSteps = Math.max(1, Math.min(Number(elements.agentLabMaxSteps?.value || 12), 80));
+    const dryRun = elements.agentLabDryRun?.checked === true;
+    const classifyOnly = elements.agentLabClassifyOnly?.checked === true;
+    const approved = elements.agentLabApproved?.checked === true;
+
+    agentLabRunInFlight = true;
+    syncAgentLabRunButton();
+    setAgentLabStatus('正在运行 Agent Loop...');
+
+    try {
+        const result = await window.aigrilDesktop.agentLab.runTask({
+            message,
+            sessionId,
+            agentLoop: 'llm',
+            planner: 'llm',
+            maxAgentSteps,
+            dryRun,
+            classifyOnly,
+            autoConfirm: approved,
+            analysis: {
+                transcriptLimit: 2500
+            },
+            context: {
+                sessionId,
+                sessionKey: sessionId,
+                agentLoop: 'llm',
+                planner: 'llm',
+                maxAgentSteps,
+                dryRun,
+                approved,
+                autoConfirm: approved,
+                confirmationPolicy: approved ? 'auto' : 'manual',
+                analysisMode: true,
+                source: 'control-panel-agent-lab'
+            }
+        });
+        if (result?.analysis?.ok) {
+            renderAgentLabAnalysis(result.analysis);
+        }
+        if (result?.runId) {
+            agentLabSelectedRunId = result.runId;
+            await refreshAgentLabRuns({ selectLatest: true, silent: true });
+            await loadAgentLabAnalysis(result.runId, { silent: true });
+        } else if (!result?.ok) {
+            setAgentLabStatus(`运行失败：${result?.status || 'unknown'}`);
+        }
+    } catch (error) {
+        setAgentLabStatus(`运行失败：${error.message || error}`);
+    } finally {
+        agentLabRunInFlight = false;
+        syncAgentLabRunButton();
+    }
+}
+
+function scheduleAgentLabAnalysisRefresh(runId) {
+    const id = String(runId || agentLabSelectedRunId || '').trim();
+    if (!id || id !== agentLabSelectedRunId) {
+        return;
+    }
+    if (agentLabRefreshTimer) {
+        clearTimeout(agentLabRefreshTimer);
+    }
+    agentLabRefreshTimer = setTimeout(() => {
+        agentLabRefreshTimer = null;
+        void loadAgentLabAnalysis(id, { silent: true });
+    }, 650);
 }
 
 async function resetAffinityScore() {
@@ -892,21 +2026,38 @@ async function initialize() {
 
     try {
         panelState = await window.aigrilDesktop.getControlPanelState();
+        llmProviderDefaultBaseUrls = {
+            ...fallbackLlmProviderDefaultBaseUrls,
+            ...(panelState.options?.llmProviderDefaultBaseUrls || {})
+        };
+        llmProviderDefaultModels = {
+            ...fallbackLlmProviderDefaultModels,
+            ...(panelState.options?.llmProviderDefaultModels || {})
+        };
         fillScaleOptions(panelState.options?.petScaleOptions || []);
         fillSpeechModeOptions(panelState.options?.speechModeOptions || []);
         fillRecognitionModeOptions(panelState.options?.recognitionModeOptions || ['auto-vad', 'continuous', 'manual']);
+        fillConversationModeOptions(panelState.options?.conversationModeOptions || ['assistant', 'daily']);
         fillLlmProviderOptions(panelState.options?.llmProviderOptions || ['openai-compatible']);
+        fillLlmPresetOptions();
+        fillRenderProfileOptions(panelState.options?.renderProfileOptions || Object.keys(renderProfileLabels));
         fillForm(panelState.preferences || {});
         renderHumanClawStatus(panelState.assistant?.humanGateway || panelState.assistant || {});
 
         elements.appVersion.textContent = `v${panelState.environment?.version || '1.0.0'}`;
-        elements.userDataPath.textContent = panelState.environment?.userDataPath || '未知';
-        elements.recognitionModeText.textContent = recognitionModeLabels[panelState.preferences?.recognitionMode] ||
-            panelState.preferences?.recognitionMode ||
-            'auto-vad';
-        elements.packageStateText.textContent = panelState.environment?.isPackaged
-            ? '已从安装包或便携版启动'
-            : '开发模式运行中';
+        if (elements.userDataPath) {
+            elements.userDataPath.textContent = panelState.environment?.userDataPath || '未知';
+        }
+        if (elements.recognitionModeText) {
+            elements.recognitionModeText.textContent = recognitionModeLabels[panelState.preferences?.recognitionMode] ||
+                panelState.preferences?.recognitionMode ||
+                'auto-vad';
+        }
+        if (elements.packageStateText) {
+            elements.packageStateText.textContent = panelState.environment?.isPackaged
+                ? '已从安装包或便携版启动'
+                : '开发模式运行中';
+        }
 
         await refreshMicrophones();
         await refreshOpenClawStatus();
@@ -1022,12 +2173,31 @@ function endDialoguePreviewDrag(event) {
     elements.elevenLabsOutputFormat,
     elements.elevenLabsTimeout,
     elements.computerControlEnabled,
+    elements.conversationMode,
     elements.emailQqAccount,
     elements.emailGmailAccount,
     elements.emailOutlookAccount,
+    elements.petMouseHitTestDebug,
+    elements.petMouseHitTestEnabled,
+    elements.petMouseHitTestHeight,
+    elements.petMouseHitTestOffsetX,
+    elements.petMouseHitTestOffsetY,
+    elements.petMouseHitTestShape,
+    elements.petMouseHitTestWidth,
     elements.petScale,
     elements.preferredMic,
     elements.recognitionMode,
+    elements.renderAmbientFill,
+    elements.renderAntialiasEnabled,
+    elements.renderFpsLimit,
+    elements.renderKeyLight,
+    elements.renderLightYaw,
+    elements.renderOutlineEnabled,
+    elements.renderOutlineScale,
+    elements.renderProfile,
+    elements.renderResolutionScale,
+    elements.renderShadowEnabled,
+    elements.renderShadowQuality,
     elements.petShowTaskbar,
     elements.speechMode,
     elements.ttsPitch,
@@ -1060,6 +2230,48 @@ elements.llmApiKey.addEventListener('input', () => {
     }
     syncLlmKeyState();
     syncSaveButton();
+});
+
+elements.llmPreset?.addEventListener('change', () => {
+    applyLlmPreset(elements.llmPreset.value);
+    updateRangeLabels();
+    syncSaveButton();
+});
+
+elements.llmModelPreset?.addEventListener('change', () => {
+    if (elements.llmModelPreset.value !== LLM_PRESET_CUSTOM_ID) {
+        elements.llmModel.value = elements.llmModelPreset.value;
+        renderLlmCapabilityState();
+        renderLlmHealthState(null);
+    }
+    syncSaveButton();
+});
+
+elements.llmProvider?.addEventListener('change', () => {
+    const nextProvider = elements.llmProvider.value;
+    applyLlmProviderDefaultsIfNeeded(lastLlmProviderValue, nextProvider);
+    lastLlmProviderValue = nextProvider;
+    syncLlmPresetSelectionFromFields();
+    renderLlmCapabilityState();
+    renderLlmHealthState(null);
+    updateRangeLabels();
+    syncSaveButton();
+});
+
+elements.llmBaseUrl?.addEventListener('input', () => {
+    syncLlmPresetSelectionFromFields();
+    renderLlmCapabilityState();
+    renderLlmHealthState(null);
+});
+
+elements.llmModel?.addEventListener('input', () => {
+    syncLlmPresetSelectionFromFields();
+    renderLlmCapabilityState();
+    renderLlmHealthState(null);
+});
+
+elements.llmHealthCheckBtn?.addEventListener('click', () => {
+    void runLlmHealthCheck();
 });
 
 elements.elevenLabsApiKey.addEventListener('input', () => {
@@ -1149,6 +2361,10 @@ elements.refreshMemoryBtn?.addEventListener('click', () => {
 
 elements.resetAffinityBtn?.addEventListener('click', () => {
     void resetAffinityScore();
+});
+
+elements.openAgentLabBtn?.addEventListener('click', () => {
+    void window.aigrilDesktop?.showAgentLab?.();
 });
 
 elements.closeBtn.addEventListener('click', () => {

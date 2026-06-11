@@ -24,6 +24,10 @@ async function readJsonl(filePath) {
     return text.split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
 }
 
+function messagesToText(messages = []) {
+    return messages.map((message) => message.content || '').join('\n');
+}
+
 test('AIGL humanlike eval relationship stages match product affinity design', () => {
     assert.equal(relationshipStageFromAffinity(50), 'familiarizing');
     assert.equal(relationshipStageFromAffinity(70), 'trusted');
@@ -57,6 +61,71 @@ test('AIGL long-term companionship scenario set covers durable relationship risk
     assert.ok(scenarios.some((scenario) => scenario.tags?.includes('privacy_memory')));
     assert.ok(scenarios.some((scenario) => scenario.tags?.includes('restart_recovery')));
     assert.ok(scenarios.some((scenario) => scenario.tags?.includes('vision_uncertainty')));
+});
+
+test('AIGL 30-day longitudinal companionship benchmark has deep daily histories', async () => {
+    const rawDataset = JSON.parse(await fs.readFile(path.resolve('evals/aigl-humanlike/longitudinal-companionship-30d.dataset.json'), 'utf8'));
+    const scenarios = await readJsonl(path.resolve('evals/aigl-humanlike/longitudinal-companionship-30d.scenarios.jsonl'));
+    const validation = validateScenarioDataset(scenarios);
+    assert.equal(validation.ok, true, JSON.stringify(validation.issues, null, 2));
+    assert.equal(rawDataset.version, 2);
+    assert.equal(rawDataset.cases.length, 10);
+    assert.equal(rawDataset.days_per_case, 30);
+    assert.equal(rawDataset.user_dialogues_per_day >= 10, true);
+    for (const entry of rawDataset.cases) {
+        assert.equal(entry.days.length, 30);
+        assert.ok(entry.days.every((day) => day.dialogues.length >= 10));
+        assert.ok(entry.days.some((day) => day.dialogues.some((dialogue) => /邮件/.test(dialogue.user))));
+        assert.ok(entry.days.some((day) => day.dialogues.some((dialogue) => /论文|读一下/.test(dialogue.user))));
+        assert.ok(entry.days.some((day) => day.dialogues.some((dialogue) => /WORD|文档|表格|脚本/.test(dialogue.user))));
+        assert.ok(entry.days.some((day) => day.dialogues.some((dialogue) => /GitHub|提交/.test(dialogue.user))));
+        assert.ok(entry.days.some((day) => day.dialogues.some((dialogue) => /领导|火大|累|陪我/.test(dialogue.user))));
+    }
+    assert.equal(scenarios.length, 10);
+    for (const scenario of scenarios) {
+        assert.equal(scenario.category, 'longitudinal_companionship_30d');
+        assert.equal(scenario.longitudinal_context?.day_count, 30);
+        assert.equal(scenario.longitudinal_context?.minimum_user_turns_per_day >= 10, true);
+        assert.equal(scenario.longitudinal_context?.total_user_turns, 360);
+        assert.equal(scenario.memory_context?.longitudinal_summary?.daily_summaries?.length, 30);
+        assert.equal(scenario.longitudinal_context?.relationship_curve?.length, 30);
+        assert.equal(scenario.longitudinal_context?.day_logs?.length, 30);
+        assert.equal(scenario.conversation?.filter((message) => message.role === 'user').length, 360);
+        assert.equal(scenario.conversation?.length >= 700, true);
+        assert.ok(scenario.reliability_checks?.includes('memory_evidence_discipline'));
+        assert.ok(scenario.tags?.includes('daily_10_plus_dialogues'));
+        assert.ok(scenario.tags?.includes('realistic_daily_dialogues'));
+    }
+    assert.ok(scenarios.some((scenario) => scenario.affinity_score >= 90));
+    assert.ok(scenarios.some((scenario) => scenario.affinity_score < 80));
+});
+
+test('AIGL humanlike eval preserves longitudinal benchmark context for judge packets', () => {
+    const scenario = normalizeScenario({
+        id: 'longitudinal-preserve-test',
+        category: 'longitudinal_companionship_30d',
+        affinity_score: 90,
+        user_message: '这个月我们怎么收尾？',
+        expected_behavior: ['应使用 30 天长期上下文。'],
+        longitudinal_context: {
+            day_count: 30,
+            total_user_turns: 360
+        },
+        benchmark_spec: {
+            total_user_turns: 360
+        },
+        reliability_checks: ['long_context_retention']
+    });
+    const packet = buildHumanlikeJudgePacket({
+        scenario,
+        candidate: {
+            text: '这个月我们先收一个小闭环。'
+        }
+    });
+    assert.equal(packet.scenario.longitudinal_context.day_count, 30);
+    assert.equal(packet.scenario.benchmark_spec.total_user_turns, 360);
+    assert.deepEqual(packet.scenario.reliability_checks, ['long_context_retention']);
+    assert.match(messagesToText(packet.messages), /longitudinal_context/);
 });
 
 test('AIGL humanlike eval 1000-scenario plan is balanced and explicit', async () => {
@@ -157,6 +226,7 @@ test('AIGL humanlike judge parser accepts flat metric fields and legacy hard fai
         multimodal_sync: 4,
         low_tool_feeling: 5,
         relationship_stage_fit: 4,
+        task_completion: 4,
         hard_fail_flags: {
             tool_log_style: false,
             exposed_internal_info: false
@@ -167,7 +237,8 @@ test('AIGL humanlike judge parser accepts flat metric fields and legacy hard fai
     assert.equal(parsed.ok, true);
     assert.equal(parsed.metrics.persona_consistency.score, 5);
     assert.equal(parsed.metrics.naturalness.score, 4);
-    assert.equal(parsed.weighted_score, 88.8);
+    assert.equal(parsed.metrics.task_completion.score, 4);
+    assert.equal(parsed.weighted_score, 87.6);
     assert.equal(parsed.pass, true);
 });
 
@@ -202,7 +273,8 @@ test('AIGL humanlike judge parser scores weighted results and hard failures', ()
             emotional_fit: { score: 4, reason: '情绪合适' },
             multimodal_sync: { score: 3, reason: '信息不足' },
             low_tool_feeling: { score: 4, reason: '不工具化' },
-            relationship_stage_fit: { score: 3, reason: '亲密度一般' }
+            relationship_stage_fit: { score: 3, reason: '亲密度一般' },
+            task_completion: { score: 3, reason: '只部分处理当前请求' }
         },
         hard_fail_flags: {
             exposes_internal_affinity_score_unprompted: true
@@ -242,7 +314,8 @@ test('AIGL humanlike imported judgment normalizes JSONL rows', () => {
                 emotional_fit: { score: 4, reason: '情绪合适' },
                 multimodal_sync: { score: 3, reason: '没有多模态信息' },
                 low_tool_feeling: { score: 4, reason: '不工具化' },
-                relationship_stage_fit: { score: 4, reason: '符合阶段' }
+                relationship_stage_fit: { score: 4, reason: '符合阶段' },
+                task_completion: { score: 4, reason: '处理了当前请求' }
             },
             hard_fail_flags: {},
             issues: [],

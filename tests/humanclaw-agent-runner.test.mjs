@@ -120,7 +120,7 @@ test('HumanClaw Agent Runner plans chat and executes file tasks through the Gate
         });
         assert.equal(approval.body.ok, false);
         assert.equal(approval.body.status, 'needs_approval');
-        assert.match(approval.body.displayText, /需要确认/);
+        assert.match(approval.body.displayText, /需要.*确认/);
 
         const rpc = await jsonFetch(`${baseUrl}/rpc`, {
             method: 'POST',

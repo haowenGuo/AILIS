@@ -263,6 +263,34 @@
             font-weight: 700;
         }
 
+        .advanced-section {
+            border: 1px solid rgba(29, 49, 62, 0.1);
+            border-radius: 8px;
+            background: rgba(248, 250, 252, 0.72);
+            overflow: hidden;
+        }
+
+        .advanced-section summary {
+            min-height: 40px;
+            padding: 11px 12px;
+            color: var(--text-main);
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 700;
+            list-style-position: inside;
+        }
+
+        .advanced-section > .section-body {
+            padding: 12px;
+            border-top: 1px solid rgba(29, 49, 62, 0.08);
+        }
+
+        .advanced-note {
+            color: var(--text-muted);
+            font-size: 12px;
+            line-height: 1.55;
+        }
+
         .memory-list {
             display: grid;
             gap: 8px;
@@ -438,6 +466,240 @@
                 grid-template-columns: 1fr;
             }
         }
+
+        /* Codex-like control surface */
+        :root {
+            --bg: #eef2f7;
+            --panel: #ffffff;
+            --panel-soft: #f8fafc;
+            --border: #cfd8e3;
+            --text-main: #18212f;
+            --text-muted: #657386;
+            --accent: #2563eb;
+            --accent-soft: #eff6ff;
+            --accent-warm: #b42318;
+            --accent-warm-soft: #fff1f0;
+            --shadow: 0 12px 28px rgba(15, 23, 42, 0.08);
+        }
+
+        html,
+        body {
+            background:
+                linear-gradient(180deg, #f7f9fc 0%, #eef2f7 100%);
+            color: var(--text-main);
+        }
+
+        #header {
+            align-items: center;
+            padding: 14px 22px;
+            background: #f8fafc;
+            border-bottom: 1px solid var(--border);
+            backdrop-filter: none;
+        }
+
+        #eyebrow {
+            color: var(--text-muted);
+            font-size: 11px;
+            letter-spacing: 0.04em;
+        }
+
+        #title {
+            margin-top: 4px;
+            font-size: 21px;
+            line-height: 1.15;
+        }
+
+        #subtitle {
+            margin-top: 6px;
+            max-width: 820px;
+            font-size: 13px;
+            line-height: 1.5;
+        }
+
+        .pill {
+            min-height: 32px;
+            border-radius: 8px;
+            background: #ffffff;
+            border-color: var(--border);
+            font-size: 12px;
+            box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+        }
+
+        #content {
+            padding: 18px 22px 96px;
+        }
+
+        #section-grid {
+            gap: 14px;
+        }
+
+        .panel-section {
+            border-color: var(--border);
+            background: #ffffff;
+            box-shadow: var(--shadow);
+        }
+
+        .section-head {
+            padding: 14px 16px 11px;
+            background: var(--panel-soft);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .section-title {
+            font-size: 15px;
+            line-height: 1.3;
+        }
+
+        .section-copy {
+            margin-top: 5px;
+            font-size: 12px;
+            line-height: 1.45;
+        }
+
+        .section-body {
+            padding: 14px 16px 16px;
+            gap: 12px;
+        }
+
+        .field {
+            gap: 7px;
+        }
+
+        .field-label {
+            font-size: 13px;
+        }
+
+        .field-help {
+            font-size: 12px;
+        }
+
+        .field-value {
+            color: var(--accent);
+            font-size: 12px;
+        }
+
+        input[type="text"],
+        input[type="password"],
+        input[type="number"],
+        select {
+            min-height: 38px;
+            border-color: var(--border);
+            background: #ffffff;
+            color: var(--text-main);
+        }
+
+        input[type="text"]:focus,
+        input[type="password"]:focus,
+        input[type="number"]:focus,
+        select:focus {
+            outline: none;
+            border-color: #93b4ff;
+            box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+        }
+
+        input[type="range"] {
+            accent-color: var(--accent);
+        }
+
+        input[type="checkbox"] {
+            accent-color: var(--accent);
+        }
+
+        .ghost-btn,
+        .primary-btn,
+        .danger-btn,
+        .icon-btn {
+            border-radius: 7px;
+            transform: none;
+        }
+
+        .icon-btn {
+            width: 34px;
+            height: 34px;
+            background: #ffffff;
+            border-color: var(--border);
+            color: var(--text-main);
+        }
+
+        .ghost-btn {
+            min-height: 34px;
+            background: #ffffff;
+            border-color: var(--border);
+            color: var(--text-main);
+            font-size: 12px;
+        }
+
+        .primary-btn {
+            min-height: 38px;
+            background: var(--accent);
+            border-color: #1d4ed8;
+        }
+
+        .danger-btn {
+            min-height: 38px;
+            background: var(--accent-warm-soft);
+            border-color: #f0b8b4;
+            color: var(--accent-warm);
+        }
+
+        .icon-btn:hover,
+        .ghost-btn:hover,
+        .primary-btn:hover,
+        .danger-btn:hover {
+            transform: none;
+        }
+
+        .ghost-btn:hover,
+        .icon-btn:hover {
+            background: #f8fafc;
+        }
+
+        .primary-btn:hover:enabled {
+            background: #1d4ed8;
+        }
+
+        .split-2 {
+            gap: 10px;
+        }
+
+        .memory-block {
+            border-color: var(--border);
+            background: var(--panel-soft);
+        }
+
+        .dialogue-preview-stage {
+            border-color: var(--border);
+            background:
+                linear-gradient(90deg, rgba(24, 33, 47, 0.04) 1px, transparent 1px),
+                linear-gradient(180deg, rgba(24, 33, 47, 0.04) 1px, transparent 1px),
+                #f8fafc;
+        }
+
+        .dialogue-window-preview {
+            border-color: rgba(37, 99, 235, 0.38);
+        }
+
+        .dialogue-bubble-preview {
+            border-color: rgba(37, 99, 235, 0.36);
+            background: #ffffff;
+            box-shadow: 0 12px 28px rgba(15, 23, 42, 0.12);
+        }
+
+        .dialogue-resize-handle {
+            background: var(--accent);
+        }
+
+        #footer-bar {
+            padding: 12px 22px;
+            background: rgba(248, 250, 252, 0.96);
+            border-top: 1px solid var(--border);
+            backdrop-filter: blur(10px);
+        }
+
+        #status-text {
+            font-size: 12px;
+        }
+
     </style>
 </head>
 <body>
@@ -446,7 +708,7 @@
             <div id="header-main">
                 <div id="eyebrow">HumanClaw Desktop</div>
                 <div id="title">控制面板</div>
-                <div id="subtitle">把桌宠显示、模型接口、语音路线和镜头参数都收在一个地方。保存后会立即同步到角色窗口和聊天窗。</div>
+                <div id="subtitle">普通设置只保留日常会用到的选择；复杂参数收在高级设置里。保存后会立即同步到角色窗口和聊天窗。</div>
             </div>
             <div id="header-actions">
                 <div class="pill"><strong id="app-version">v1.0.0</strong><span>桌面版</span></div>
@@ -459,7 +721,7 @@
                 <section class="panel-section">
                     <div class="section-head">
                         <div class="section-title">桌宠显示</div>
-                        <div class="section-copy">角色大小、镜头距离和桌面表现统一从这里调。</div>
+                        <div class="section-copy">只保留角色大小、渲染风格和任务栏显示，细节调参放在高级设置里。</div>
                     </div>
                     <div class="section-body">
                         <label class="field">
@@ -471,28 +733,129 @@
 
                         <label class="field">
                             <div class="field-meta">
-                                <span class="field-label">镜头距离</span>
-                                <span class="field-value" id="camera-distance-value"></span>
+                                <span class="field-label">渲染风格</span>
                             </div>
-                            <input id="camera-distance" type="range" min="0.75" max="1.8" step="0.01">
-                            <div class="field-help">数值越小越贴近人物。</div>
+                            <select id="render-profile"></select>
+                            <div class="field-help">多套角色专用 MToon/灯光方案，保存后会立即同步到桌宠窗口。</div>
                         </label>
 
-                        <label class="field">
-                            <div class="field-meta">
-                                <span class="field-label">镜头高度</span>
-                                <span class="field-value" id="camera-height-value"></span>
-                            </div>
-                            <input id="camera-height" type="range" min="0.7" max="1.8" step="0.01">
-                        </label>
+                        <details class="advanced-section">
+                            <summary>高级外观参数</summary>
+                            <div class="section-body">
+                                <div class="split-2">
+                                    <label class="field">
+                                        <div class="field-meta">
+                                            <span class="field-label">主光方向</span>
+                                            <span class="field-value" id="render-light-yaw-value"></span>
+                                        </div>
+                                        <input id="render-light-yaw" type="range" min="-75" max="75" step="1">
+                                    </label>
 
-                        <label class="field">
-                            <div class="field-meta">
-                                <span class="field-label">注视高度</span>
-                                <span class="field-value" id="camera-target-y-value"></span>
+                                    <label class="field">
+                                        <div class="field-meta">
+                                            <span class="field-label">主光强度</span>
+                                            <span class="field-value" id="render-key-light-value"></span>
+                                        </div>
+                                        <input id="render-key-light" type="range" min="0.65" max="1.45" step="0.01">
+                                    </label>
+                                </div>
+
+                                <div class="split-2">
+                                    <label class="field">
+                                        <div class="field-meta">
+                                            <span class="field-label">环境填充</span>
+                                            <span class="field-value" id="render-ambient-fill-value"></span>
+                                        </div>
+                                        <input id="render-ambient-fill" type="range" min="0.55" max="1.35" step="0.01">
+                                    </label>
+
+                                    <label class="field">
+                                        <div class="field-meta">
+                                            <span class="field-label">描边粗细</span>
+                                            <span class="field-value" id="render-outline-scale-value"></span>
+                                        </div>
+                                        <input id="render-outline-scale" type="range" min="0.25" max="1.2" step="0.01">
+                                    </label>
+                                </div>
+
+                                <label class="field inline">
+                                    <div>
+                                        <div class="field-label">投影阴影</div>
+                                        <div class="field-help">使用 Shadow Map 在人物脚下生成透明投影。</div>
+                                    </div>
+                                    <input id="render-shadow-enabled" type="checkbox">
+                                </label>
+
+                                <div class="split-2">
+                                    <label class="field">
+                                        <div class="field-meta">
+                                            <span class="field-label">渲染分辨率</span>
+                                            <span class="field-value" id="render-resolution-scale-value"></span>
+                                        </div>
+                                        <input id="render-resolution-scale" type="range" min="0.5" max="3" step="0.25">
+                                    </label>
+
+                                    <label class="field">
+                                        <div class="field-meta">
+                                            <span class="field-label">帧率上限</span>
+                                            <span class="field-value" id="render-fps-limit-value"></span>
+                                        </div>
+                                        <input id="render-fps-limit" type="range" min="1" max="4" step="1">
+                                    </label>
+                                </div>
+
+                                <label class="field">
+                                    <div class="field-meta">
+                                        <span class="field-label">阴影清晰度</span>
+                                        <span class="field-value" id="render-shadow-quality-value"></span>
+                                    </div>
+                                    <input id="render-shadow-quality" type="range" min="1" max="3" step="1">
+                                </label>
+
+                                <div class="split-2">
+                                    <label class="field inline">
+                                        <div>
+                                            <div class="field-label">角色描边</div>
+                                            <div class="field-help">关闭后减少描边额外绘制。</div>
+                                        </div>
+                                        <input id="render-outline-enabled" type="checkbox">
+                                    </label>
+
+                                    <label class="field inline">
+                                        <div>
+                                            <div class="field-label">抗锯齿</div>
+                                            <div class="field-help">关闭后下次启动画布时生效。</div>
+                                        </div>
+                                        <input id="render-antialias-enabled" type="checkbox">
+                                    </label>
+                                </div>
+
+                                <label class="field">
+                                    <div class="field-meta">
+                                        <span class="field-label">镜头距离</span>
+                                        <span class="field-value" id="camera-distance-value"></span>
+                                    </div>
+                                    <input id="camera-distance" type="range" min="0.75" max="1.8" step="0.01">
+                                    <div class="field-help">数值越小越贴近人物。</div>
+                                </label>
+
+                                <label class="field">
+                                    <div class="field-meta">
+                                        <span class="field-label">镜头高度</span>
+                                        <span class="field-value" id="camera-height-value"></span>
+                                    </div>
+                                    <input id="camera-height" type="range" min="0.7" max="1.8" step="0.01">
+                                </label>
+
+                                <label class="field">
+                                    <div class="field-meta">
+                                        <span class="field-label">注视高度</span>
+                                        <span class="field-value" id="camera-target-y-value"></span>
+                                    </div>
+                                    <input id="camera-target-y" type="range" min="0.5" max="1.5" step="0.01">
+                                </label>
                             </div>
-                            <input id="camera-target-y" type="range" min="0.5" max="1.5" step="0.01">
-                        </label>
+                        </details>
 
                         <label class="field inline">
                             <div>
@@ -501,15 +864,81 @@
                             </div>
                             <input id="pet-show-taskbar" type="checkbox">
                         </label>
+
+                        <details class="advanced-section">
+                            <summary>鼠标热区调试</summary>
+                            <div class="section-body">
+                                <label class="field inline">
+                                    <div>
+                                        <div class="field-label">实时鼠标热区</div>
+                                        <div class="field-help">透明窗口会点击穿透，人物热区会根据 VRM 当前动作和位置实时跟随。</div>
+                                    </div>
+                                    <input id="pet-mouse-hit-test-enabled" type="checkbox">
+                                </label>
+
+                                <label class="field">
+                                    <div class="field-meta">
+                                        <span class="field-label">热区形状</span>
+                                    </div>
+                                    <select id="pet-mouse-hit-test-shape">
+                                        <option value="ellipse">椭圆</option>
+                                        <option value="rectangle">矩形</option>
+                                    </select>
+                                </label>
+
+                                <div class="split-2">
+                                    <label class="field">
+                                        <div class="field-meta">
+                                            <span class="field-label">宽度补偿</span>
+                                            <span class="field-value" id="pet-mouse-hit-test-width-value"></span>
+                                        </div>
+                                        <input id="pet-mouse-hit-test-width" type="range" min="0.2" max="1" step="0.01">
+                                    </label>
+
+                                    <label class="field">
+                                        <div class="field-meta">
+                                            <span class="field-label">高度补偿</span>
+                                            <span class="field-value" id="pet-mouse-hit-test-height-value"></span>
+                                        </div>
+                                        <input id="pet-mouse-hit-test-height" type="range" min="0.25" max="1" step="0.01">
+                                    </label>
+                                </div>
+
+                                <div class="split-2">
+                                    <label class="field">
+                                        <div class="field-meta">
+                                            <span class="field-label">左右偏移</span>
+                                            <span class="field-value" id="pet-mouse-hit-test-offset-x-value"></span>
+                                        </div>
+                                        <input id="pet-mouse-hit-test-offset-x" type="range" min="-0.5" max="0.5" step="0.01">
+                                    </label>
+
+                                    <label class="field">
+                                        <div class="field-meta">
+                                            <span class="field-label">上下偏移</span>
+                                            <span class="field-value" id="pet-mouse-hit-test-offset-y-value"></span>
+                                        </div>
+                                        <input id="pet-mouse-hit-test-offset-y" type="range" min="-0.5" max="0.5" step="0.01">
+                                    </label>
+                                </div>
+
+                                <label class="field inline">
+                                    <div>
+                                        <div class="field-label">显示热区轮廓</div>
+                                        <div class="field-help">调试用，绿色轮廓显示当前人物鼠标命中范围。</div>
+                                    </div>
+                                    <input id="pet-mouse-hit-test-debug" type="checkbox">
+                                </label>
+                            </div>
+                        </details>
                     </div>
                 </section>
 
-                <section class="panel-section">
-                    <div class="section-head">
-                        <div class="section-title">人物对话框</div>
-                        <div class="section-copy">拖动预览里的气泡放位置，拖右下角圆点改变说话时的透明窗口尺寸。</div>
-                    </div>
-                    <div class="section-body">
+                <section class="panel-section advanced-panel">
+                    <details class="advanced-section">
+                        <summary>高级设置：人物对话框</summary>
+                        <div class="section-body">
+                        <p class="advanced-note">默认会自动校准说话框位置；只有需要手动修正透明窗口和气泡尺寸时再展开这里。</p>
                         <div class="dialogue-layout-editor">
                             <div class="dialogue-preview-stage" id="avatar-bubble-editor">
                                 <div class="dialogue-window-preview" id="avatar-bubble-window-preview">
@@ -561,83 +990,38 @@
                             </div>
                             <input id="avatar-bubble-extra-top" type="range" min="0" max="360" step="1">
                         </label>
-                    </div>
+                        </div>
+                    </details>
                 </section>
 
                 <section class="panel-section">
                     <div class="section-head">
-                        <div class="section-title">Agent 链路</div>
-                        <div class="section-copy">对话统一进入 HumanClaw Agent Runner，由 Agent 判断是情感对话还是任务执行。</div>
+                        <div class="section-title">任务权限</div>
+                        <div class="section-copy">只保留用户需要决定的安全开关，内部实现细节不在控制面板展示。</div>
                     </div>
                     <div class="section-body">
-                        <div class="field">
-                            <div class="field-meta">
-                                <span class="field-label">当前链路</span>
-                            </div>
-                            <div class="field-help">AIGril 对话窗 -> HumanClaw Agent Runner -> HumanClaw Gateway -> Tool Surface</div>
-                        </div>
-
-                        <div class="field">
-                            <div class="field-meta">
-                                <span class="field-label">HumanClaw 状态</span>
-                            </div>
-                            <div class="field-help" id="openclaw-status-text">读取中...</div>
-                            <div class="field-help" id="openclaw-runtime-text"></div>
-                        </div>
-
                         <label class="field">
                             <div class="field-meta">
-                                <span class="field-label">本地状态目录</span>
-                                <span class="field-actions">
-                                    <button id="choose-humanclaw-state-dir-btn" class="ghost-btn" type="button">选择目录</button>
-                                    <button id="reset-humanclaw-state-dir-btn" class="ghost-btn" type="button">使用默认</button>
-                                </span>
+                                <span class="field-label">对话模式</span>
                             </div>
-                            <input id="humanclaw-state-dir" type="text" placeholder="留空使用软件根目录下的 .humanclaw-state">
-                            <div class="field-help" id="humanclaw-state-dir-help">默认保存在软件根目录，不写入 C 盘用户数据目录。</div>
+                            <select id="conversation-mode"></select>
+                            <div class="field-help">日常对话模式只加载角色设定和本地记忆，不向模型暴露工具、MCP 和任务执行上下文，用来测试低延迟聊天。</div>
                         </label>
 
                         <label class="field inline">
                             <div>
                                 <div class="field-label">完全控制能力</div>
-                                <div class="field-help">开启后任务 Agent 可自动执行命令、读写文件、操作用户目录和外部工具；关闭后危险动作会重新要求确认。</div>
+                                <div class="field-help">开启后 AIGL 可以按你的指令执行命令、读写文件和调用本地工具；关闭后高风险动作会重新要求确认。</div>
                             </div>
                             <input id="computer-control-enabled" type="checkbox">
                         </label>
 
                         <div class="field">
                             <div class="field-meta">
-                                <span class="field-label">对话触发</span>
+                                <span class="field-label">Agent 分析台</span>
+                                <button id="open-agent-lab-btn" class="primary-btn" type="button">打开独立分析台</button>
                             </div>
-                            <div class="field-help">桌面助手版本只在用户输入、语音输入或任务指令时回应。</div>
-                        </div>
-                    </div>
-                </section>
-
-                <section class="panel-section">
-                    <div class="section-head">
-                        <div class="section-title">人格记忆</div>
-                        <div class="section-copy">Letta/MemGPT 风格记忆块、项目记忆、轻量反思和好感度状态都会保存在本地状态目录。</div>
-                    </div>
-                    <div class="section-body">
-                        <div class="field">
-                            <div class="field-meta">
-                                <span class="field-label">记忆状态</span>
-                                <span class="field-actions">
-                                    <button id="refresh-memory-btn" class="ghost-btn" type="button">刷新</button>
-                                    <button id="reset-affinity-btn" class="ghost-btn" type="button">好感度归 50</button>
-                                </span>
-                            </div>
-                            <div class="field-help" id="memory-status-text">读取中...</div>
-                            <div class="field-help" id="memory-path-text"></div>
-                        </div>
-
-                        <div class="field">
-                            <div class="field-meta">
-                                <span class="field-label">核心记忆块</span>
-                            </div>
-                            <div class="memory-list" id="memory-block-list"></div>
-                            <div class="field-help">这里展示摘要和状态，明文密钥不会出现在模型上下文和控制面板摘要里。</div>
+                            <div class="field-help">在独立窗口中运行、逐轮调试和分析 Agent Loop，不占用控制面板空间。</div>
                         </div>
                     </div>
                 </section>
@@ -645,28 +1029,23 @@
                 <section class="panel-section">
                     <div class="section-head">
                         <div class="section-title">模型 API</div>
-                        <div class="section-copy">桌面版直接使用这里配置的 OpenAI-compatible 接口，Key 只保存在本机用户数据目录。</div>
+                        <div class="section-copy">选择服务商和模型后填写 Key；高级接口字段默认收起，Key 只保存在本机。</div>
                     </div>
                     <div class="section-body">
                         <label class="field">
                             <div class="field-meta">
-                                <span class="field-label">Provider</span>
+                                <span class="field-label">服务商</span>
                             </div>
-                            <select id="llm-provider"></select>
-                        </label>
-
-                        <label class="field">
-                            <div class="field-meta">
-                                <span class="field-label">API Base</span>
-                            </div>
-                            <input id="llm-base-url" type="text" placeholder="https://ark.cn-beijing.volces.com/api/v3">
+                            <select id="llm-preset"></select>
+                            <div class="field-help" id="llm-preset-help">选择服务商后，只需要填写对应平台的 API Key。</div>
                         </label>
 
                         <label class="field">
                             <div class="field-meta">
                                 <span class="field-label">模型</span>
                             </div>
-                            <input id="llm-model" type="text" placeholder="doubao-seed-2-0-mini-260215">
+                            <select id="llm-model-preset"></select>
+                            <div class="field-help">日常对话优先选低延迟模型；复杂任务再选更强的 Pro/Max/Sonnet 类模型。</div>
                         </label>
 
                         <label class="field">
@@ -676,6 +1055,38 @@
                             </div>
                             <input id="llm-api-key" type="password" autocomplete="off" placeholder="留空表示保留已保存 Key">
                             <div class="field-help" id="llm-key-state">Key 状态读取中...</div>
+                        </label>
+
+                        <div class="field">
+                            <div class="field-meta">
+                                <span class="field-label">连接测试</span>
+                                <button id="llm-health-check-btn" class="ghost-btn" type="button">测试连接</button>
+                            </div>
+                            <div class="field-help" id="llm-health-state">尚未测试当前模型。</div>
+                        </div>
+
+                        <details class="advanced-section">
+                            <summary>高级模型参数</summary>
+                            <div class="section-body">
+                        <label class="field">
+                            <div class="field-meta">
+                                <span class="field-label">高级 Provider</span>
+                            </div>
+                            <select id="llm-provider"></select>
+                        </label>
+
+                        <label class="field">
+                            <div class="field-meta">
+                                <span class="field-label">高级 API Base</span>
+                            </div>
+                            <input id="llm-base-url" type="text" placeholder="https://ark.cn-beijing.volces.com/api/v3">
+                        </label>
+
+                        <label class="field">
+                            <div class="field-meta">
+                                <span class="field-label">高级模型 ID</span>
+                            </div>
+                            <input id="llm-model" type="text" placeholder="doubao-seed-2-0-mini-260215">
                         </label>
 
                         <div class="split-2">
@@ -693,6 +1104,15 @@
                                 <input id="llm-timeout" type="number" min="5000" max="120000" step="1000">
                             </label>
                         </div>
+
+                        <div class="field">
+                            <div class="field-meta">
+                                <span class="field-label">能力详情</span>
+                            </div>
+                            <div class="field-help" id="llm-capability-state">能力表读取中...</div>
+                        </div>
+                            </div>
+                        </details>
                     </div>
                 </section>
 
@@ -758,7 +1178,7 @@
                 <section class="panel-section">
                     <div class="section-head">
                         <div class="section-title">语音与麦克风</div>
-                        <div class="section-copy">CosyVoice3 作为本地高质量路线，Kokoro-82M 作为最低延迟路线，ElevenLabs 作为顶级音质路线；浏览器与 VITS 作为备用方案保留。</div>
+                        <div class="section-copy">普通用户只需要选择语音路线、麦克风和 ASR 模式；音频细节放在高级设置里。</div>
                     </div>
                     <div class="section-body">
                         <label class="field">
@@ -768,6 +1188,9 @@
                             <select id="speech-mode"></select>
                         </label>
 
+                        <details class="advanced-section">
+                            <summary>高级 ElevenLabs 参数</summary>
+                            <div class="section-body">
                         <label class="field">
                             <div class="field-meta">
                                 <span class="field-label">ElevenLabs API Base</span>
@@ -812,6 +1235,8 @@
                             </div>
                             <input id="elevenlabs-timeout" type="number" min="5000" max="120000" step="1000">
                         </label>
+                            </div>
+                        </details>
 
                         <label class="field">
                             <div class="field-meta">
@@ -830,6 +1255,9 @@
                             <div class="field-help">按钮模式需要点一次开始听；自动 ASR 会持续监听，并先做人声/噪音门禁。</div>
                         </label>
 
+                        <details class="advanced-section">
+                            <summary>高级本地语音参数</summary>
+                            <div class="section-body">
                         <label class="field">
                             <div class="field-meta">
                                 <span class="field-label">本地语音速度</span>
@@ -853,31 +1281,59 @@
                             </div>
                             <input id="tts-volume" type="range" min="0" max="1" step="0.01">
                         </label>
+                            </div>
+                        </details>
                     </div>
                 </section>
 
-                <section class="panel-section">
-                    <div class="section-head">
-                        <div class="section-title">运行信息</div>
-                        <div class="section-copy">给排障和二次开发留一块固定的观察位。</div>
-                    </div>
-                    <div class="section-body">
-                        <div class="field">
-                            <div class="field-label">用户数据目录</div>
-                            <div class="field-help" id="user-data-path">读取中...</div>
-                        </div>
+                <section class="panel-section advanced-panel">
+                    <details class="advanced-section">
+                        <summary>高级设置：运行状态与记忆目录</summary>
+                        <div class="section-body">
+                            <label class="field">
+                                <div class="field-meta">
+                                    <span class="field-label">HumanClaw 状态目录</span>
+                                    <span class="field-actions">
+                                        <button id="choose-humanclaw-state-dir-btn" class="ghost-btn" type="button">选择目录</button>
+                                        <button id="reset-humanclaw-state-dir-btn" class="ghost-btn" type="button">使用默认</button>
+                                    </span>
+                                </div>
+                                <input id="humanclaw-state-dir" type="text" autocomplete="off" placeholder="留空使用软件根目录下的 .humanclaw-state">
+                                <div class="field-help" id="humanclaw-state-dir-help">默认目录读取中...</div>
+                            </label>
 
-                        <div class="field">
-                            <div class="field-label">识别模式</div>
-                            <div class="field-help" id="recognition-mode-text">auto-vad</div>
-                        </div>
+                            <div class="field">
+                                <div class="field-meta">
+                                    <span class="field-label">运行状态</span>
+                                </div>
+                                <div class="field-help" id="openclaw-status-text">状态读取中...</div>
+                                <div class="field-help" id="openclaw-runtime-text"></div>
+                            </div>
 
-                        <div class="field">
-                            <div class="field-label">打包状态</div>
-                            <div class="field-help" id="package-state-text">读取中...</div>
+                            <div class="field">
+                                <div class="field-meta">
+                                    <span class="field-label">工具状态</span>
+                                </div>
+                                <div class="field-help" id="package-state-text">运行环境读取中...</div>
+                                <div class="field-help" id="user-data-path"></div>
+                            </div>
+
+                            <div class="field">
+                                <div class="field-meta">
+                                    <span class="field-label">Memory 路径</span>
+                                    <span class="field-actions">
+                                        <button id="refresh-memory-btn" class="ghost-btn" type="button">刷新记忆</button>
+                                        <button id="reset-affinity-btn" class="ghost-btn" type="button">重置好感度</button>
+                                    </span>
+                                </div>
+                                <div class="field-help" id="memory-status-text">记忆状态读取中...</div>
+                                <div class="field-help" id="memory-path-text"></div>
+                                <div class="memory-list" id="memory-block-list"></div>
+                            </div>
                         </div>
-                    </div>
+                    </details>
                 </section>
+
             </div>
         </main>
 

@@ -1,0 +1,583 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HumanClaw Agent Analysis Lab</title>
+    <style>
+        :root {
+            --bg: #0b1020;
+            --panel: rgba(248, 250, 252, 0.96);
+            --panel-dark: rgba(15, 23, 42, 0.92);
+            --line: rgba(148, 163, 184, 0.24);
+            --line-strong: rgba(148, 163, 184, 0.42);
+            --text: #e5edf8;
+            --muted: #94a3b8;
+            --ink: #101827;
+            --ink-muted: #64748b;
+            --blue: #38bdf8;
+            --green: #34d399;
+            --amber: #f59e0b;
+            --red: #ef4444;
+            --shadow: 0 24px 80px rgba(2, 6, 23, 0.38);
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        html,
+        body {
+            width: 100%;
+            min-height: 100%;
+            margin: 0;
+            background:
+                radial-gradient(circle at 8% 8%, rgba(56, 189, 248, 0.22), transparent 30%),
+                radial-gradient(circle at 92% 18%, rgba(52, 211, 153, 0.14), transparent 28%),
+                linear-gradient(135deg, #08111f 0%, #0f172a 45%, #111827 100%);
+            color: var(--text);
+            font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif;
+        }
+
+        button,
+        input,
+        textarea,
+        select {
+            font: inherit;
+        }
+
+        button {
+            cursor: pointer;
+        }
+
+        #shell {
+            min-height: 100vh;
+            display: grid;
+            grid-template-rows: auto 1fr;
+        }
+
+        #topbar {
+            display: flex;
+            justify-content: space-between;
+            gap: 18px;
+            align-items: center;
+            padding: 18px 22px;
+            border-bottom: 1px solid var(--line);
+            background: rgba(2, 6, 23, 0.58);
+            backdrop-filter: blur(18px);
+        }
+
+        .eyebrow {
+            color: var(--blue);
+            font-size: 11px;
+            font-weight: 800;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+        }
+
+        h1 {
+            margin: 4px 0 0;
+            font-size: 24px;
+            line-height: 1.15;
+        }
+
+        .subtitle {
+            margin-top: 6px;
+            max-width: 920px;
+            color: var(--muted);
+            font-size: 13px;
+            line-height: 1.55;
+        }
+
+        .top-actions {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+        }
+
+        .ghost-btn,
+        .primary-btn,
+        .danger-btn {
+            min-height: 36px;
+            border: 1px solid var(--line-strong);
+            border-radius: 10px;
+            padding: 0 13px;
+            color: var(--text);
+            background: rgba(15, 23, 42, 0.64);
+        }
+
+        .primary-btn {
+            border-color: rgba(56, 189, 248, 0.5);
+            background: linear-gradient(135deg, #0284c7, #0891b2);
+            box-shadow: 0 12px 26px rgba(14, 165, 233, 0.24);
+        }
+
+        .danger-btn {
+            border-color: rgba(239, 68, 68, 0.4);
+            background: rgba(127, 29, 29, 0.42);
+        }
+
+        .primary-btn:disabled,
+        .ghost-btn:disabled,
+        .danger-btn:disabled {
+            cursor: not-allowed;
+            opacity: 0.5;
+        }
+
+        #workspace {
+            display: grid;
+            grid-template-columns: 330px minmax(0, 1fr);
+            gap: 16px;
+            padding: 16px;
+            min-height: 0;
+        }
+
+        .sidebar,
+        .main-grid > section,
+        .detail-card {
+            border: 1px solid var(--line);
+            border-radius: 18px;
+            background: rgba(15, 23, 42, 0.72);
+            box-shadow: var(--shadow);
+            overflow: hidden;
+        }
+
+        .sidebar {
+            display: grid;
+            grid-template-rows: auto auto 1fr;
+            min-height: 0;
+        }
+
+        .panel-head {
+            padding: 14px 16px;
+            border-bottom: 1px solid var(--line);
+        }
+
+        .panel-title {
+            font-size: 14px;
+            font-weight: 850;
+        }
+
+        .panel-copy {
+            margin-top: 5px;
+            color: var(--muted);
+            font-size: 12px;
+            line-height: 1.5;
+        }
+
+        .task-box {
+            display: grid;
+            gap: 10px;
+            padding: 14px 16px;
+            border-bottom: 1px solid var(--line);
+        }
+
+        label {
+            display: grid;
+            gap: 6px;
+            color: var(--muted);
+            font-size: 12px;
+            font-weight: 700;
+        }
+
+        textarea,
+        input,
+        select {
+            width: 100%;
+            min-height: 38px;
+            border: 1px solid rgba(148, 163, 184, 0.26);
+            border-radius: 10px;
+            padding: 8px 10px;
+            color: var(--text);
+            background: rgba(2, 6, 23, 0.42);
+            outline: none;
+        }
+
+        textarea:focus,
+        input:focus,
+        select:focus {
+            border-color: rgba(56, 189, 248, 0.74);
+            box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.12);
+        }
+
+        textarea {
+            min-height: 118px;
+            resize: vertical;
+            line-height: 1.55;
+        }
+
+        .split {
+            display: grid;
+            grid-template-columns: 1fr 92px;
+            gap: 10px;
+        }
+
+        .check-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            color: var(--text);
+            font-size: 12px;
+            font-weight: 700;
+        }
+
+        .check-row input {
+            width: 18px;
+            height: 18px;
+            min-height: 0;
+            accent-color: var(--blue);
+        }
+
+        .button-row {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .run-list {
+            min-height: 0;
+            overflow: auto;
+            padding: 10px;
+            display: grid;
+            gap: 8px;
+            align-content: start;
+        }
+
+        .run-item {
+            width: 100%;
+            border: 1px solid rgba(148, 163, 184, 0.22);
+            border-radius: 13px;
+            padding: 10px;
+            text-align: left;
+            color: var(--text);
+            background: rgba(2, 6, 23, 0.34);
+        }
+
+        .run-item.active,
+        .run-item:hover {
+            border-color: rgba(56, 189, 248, 0.55);
+            background: rgba(8, 47, 73, 0.55);
+        }
+
+        .run-title,
+        .round-title {
+            font-size: 13px;
+            font-weight: 850;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .meta {
+            margin-top: 5px;
+            color: var(--muted);
+            font-size: 11px;
+            line-height: 1.45;
+        }
+
+        .main-grid {
+            min-width: 0;
+            display: grid;
+            grid-template-rows: auto auto minmax(0, 1fr);
+            gap: 16px;
+        }
+
+        .metrics {
+            display: grid;
+            grid-template-columns: repeat(6, minmax(0, 1fr));
+            gap: 10px;
+            padding: 14px;
+        }
+
+        .metric {
+            border: 1px solid rgba(148, 163, 184, 0.2);
+            border-radius: 14px;
+            padding: 12px;
+            background: rgba(2, 6, 23, 0.36);
+        }
+
+        .metric-value {
+            font-size: 20px;
+            font-weight: 900;
+        }
+
+        .metric-label {
+            margin-top: 5px;
+            color: var(--muted);
+            font-size: 11px;
+        }
+
+        .diagnostics {
+            display: grid;
+            grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
+            gap: 14px;
+            padding: 14px;
+        }
+
+        .finding-list {
+            display: grid;
+            gap: 8px;
+        }
+
+        .finding {
+            border-left: 3px solid var(--blue);
+            border-radius: 12px;
+            padding: 10px 12px;
+            background: rgba(2, 6, 23, 0.34);
+            color: var(--text);
+            font-size: 12px;
+            line-height: 1.55;
+        }
+
+        .finding.high {
+            border-left-color: var(--red);
+        }
+
+        .finding.medium {
+            border-left-color: var(--amber);
+        }
+
+        .finding.low {
+            border-left-color: var(--green);
+        }
+
+        .round-workspace {
+            min-height: 0;
+            display: grid;
+            grid-template-columns: 290px minmax(0, 1fr);
+            gap: 16px;
+        }
+
+        .round-list {
+            min-height: 0;
+            overflow: auto;
+            padding: 10px;
+            display: grid;
+            gap: 8px;
+            align-content: start;
+        }
+
+        .round-item {
+            width: 100%;
+            border: 1px solid rgba(148, 163, 184, 0.2);
+            border-radius: 14px;
+            padding: 10px;
+            color: var(--text);
+            text-align: left;
+            background: rgba(2, 6, 23, 0.34);
+        }
+
+        .round-item.active,
+        .round-item:hover {
+            border-color: rgba(52, 211, 153, 0.55);
+            background: rgba(6, 78, 59, 0.42);
+        }
+
+        .round-detail {
+            min-height: 0;
+            overflow: auto;
+            padding: 14px;
+            display: grid;
+            gap: 12px;
+        }
+
+        .detail-card {
+            box-shadow: none;
+        }
+
+        .detail-body {
+            padding: 12px 14px 14px;
+            display: grid;
+            gap: 10px;
+        }
+
+        .summary-line {
+            color: var(--text);
+            font-size: 13px;
+            line-height: 1.6;
+        }
+
+        .message {
+            border: 1px solid rgba(148, 163, 184, 0.2);
+            border-radius: 13px;
+            padding: 10px 12px;
+            background: rgba(2, 6, 23, 0.34);
+        }
+
+        .message-role {
+            color: var(--blue);
+            font-size: 11px;
+            font-weight: 900;
+            text-transform: uppercase;
+        }
+
+        .message-text {
+            margin-top: 6px;
+            color: var(--text);
+            font-size: 12px;
+            line-height: 1.6;
+            white-space: pre-wrap;
+        }
+
+        .tool-table {
+            display: grid;
+            gap: 8px;
+        }
+
+        .tool-row {
+            display: grid;
+            grid-template-columns: 140px 96px 92px minmax(0, 1fr);
+            gap: 10px;
+            align-items: start;
+            border: 1px solid rgba(148, 163, 184, 0.18);
+            border-radius: 12px;
+            padding: 9px 10px;
+            background: rgba(2, 6, 23, 0.28);
+            color: var(--text);
+            font-size: 12px;
+        }
+
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            width: fit-content;
+            min-height: 22px;
+            border-radius: 999px;
+            padding: 2px 8px;
+            color: #dff7ff;
+            background: rgba(56, 189, 248, 0.16);
+            border: 1px solid rgba(56, 189, 248, 0.24);
+            font-size: 11px;
+            font-weight: 800;
+        }
+
+        .badge.ok {
+            color: #d1fae5;
+            background: rgba(52, 211, 153, 0.14);
+            border-color: rgba(52, 211, 153, 0.26);
+        }
+
+        .badge.fail {
+            color: #fee2e2;
+            background: rgba(239, 68, 68, 0.14);
+            border-color: rgba(239, 68, 68, 0.26);
+        }
+
+        .empty {
+            border: 1px dashed rgba(148, 163, 184, 0.28);
+            border-radius: 14px;
+            padding: 16px;
+            color: var(--muted);
+            font-size: 13px;
+            line-height: 1.6;
+            background: rgba(2, 6, 23, 0.24);
+        }
+
+        @media (max-width: 1180px) {
+            #workspace,
+            .round-workspace,
+            .diagnostics {
+                grid-template-columns: 1fr;
+            }
+
+            .metrics {
+                grid-template-columns: repeat(3, minmax(0, 1fr));
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="shell">
+        <header id="topbar">
+            <div>
+                <div class="eyebrow">Agent Analysis Lab</div>
+                <h1>Agent 全流程调试与瓶颈分析台</h1>
+                <div class="subtitle">像调试代码一样调试 Agent：运行任务、逐轮暂停、查看每轮完整上下文、工具调用、耗时、Token 成本和核心卡点。</div>
+            </div>
+            <div class="top-actions">
+                <button id="refresh-btn" class="ghost-btn" type="button">刷新</button>
+                <button id="open-control-btn" class="ghost-btn" type="button">控制面板</button>
+                <button id="close-btn" class="danger-btn" type="button">关闭</button>
+            </div>
+        </header>
+
+        <main id="workspace">
+            <aside class="sidebar">
+                <div class="panel-head">
+                    <div class="panel-title">任务执行</div>
+                    <div class="panel-copy">逐轮调试会在每轮后暂停；点击“下一轮”继续同一个 run。</div>
+                </div>
+                <div class="task-box">
+                    <label>
+                        测试任务
+                        <textarea id="task-input" placeholder="例如：读取 package.json，分析项目测试脚本，然后说明最应该先跑哪几个验证。"></textarea>
+                    </label>
+                    <div class="split">
+                        <label>
+                            Session
+                            <input id="session-input" type="text" value="agent-lab">
+                        </label>
+                        <label>
+                            轮次
+                            <input id="max-steps-input" type="number" min="1" max="80" value="12">
+                        </label>
+                    </div>
+                    <label class="check-row">
+                        <span>安全 dry-run</span>
+                        <input id="dry-run-check" type="checkbox" checked>
+                    </label>
+                    <label class="check-row">
+                        <span>自动确认测试动作</span>
+                        <input id="auto-confirm-check" type="checkbox">
+                    </label>
+                    <div class="button-row">
+                        <button id="run-debug-btn" class="primary-btn" type="button">逐轮调试启动</button>
+                        <button id="run-full-btn" class="ghost-btn" type="button">跑完整流程</button>
+                        <button id="next-round-btn" class="primary-btn" type="button" disabled>下一轮</button>
+                        <button id="interrupt-run-btn" class="danger-btn" type="button" disabled>强制中断</button>
+                    </div>
+                    <div id="status-text" class="panel-copy">等待连接 Agent Lab。</div>
+                </div>
+                <div id="run-list" class="run-list"></div>
+            </aside>
+
+            <section class="main-grid">
+                <section>
+                    <div class="panel-head">
+                        <div class="panel-title">总览指标</div>
+                        <div class="panel-copy" id="run-summary">选择或运行一个 Agent 任务后显示。</div>
+                    </div>
+                    <div id="metrics" class="metrics"></div>
+                </section>
+
+                <section>
+                    <div class="panel-head">
+                        <div class="panel-title">问题定位与瓶颈</div>
+                        <div class="panel-copy">按失败、耗时、上下文规模和工具结果推断研发排查入口。</div>
+                    </div>
+                    <div class="diagnostics">
+                        <div id="findings" class="finding-list"></div>
+                        <div id="timeline" class="finding-list"></div>
+                    </div>
+                </section>
+
+                <section class="round-workspace">
+                    <div>
+                        <div class="panel-head">
+                            <div class="panel-title">轮次拆解</div>
+                            <div class="panel-copy">每一轮包含：模型看到的上下文、决策、工具和耗时。</div>
+                        </div>
+                        <div id="round-list" class="round-list"></div>
+                    </div>
+                    <div id="round-detail" class="round-detail"></div>
+                </section>
+            </section>
+        </main>
+    </div>
+
+    <script type="module" src="./src/agent-lab-app.js"></script>
+</body>
+</html>

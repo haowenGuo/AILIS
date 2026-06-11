@@ -3,27 +3,27 @@ const HUMANLIKE_EVAL_VERSION = 1;
 const HUMANLIKE_METRICS = Object.freeze({
     persona_consistency: Object.freeze({
         label: '人设一致性',
-        weight: 0.17,
+        weight: 0.14,
         description: '是否持续像 AIGL，而不是客服、工具人或冷冰冰助手。'
     }),
     naturalness: Object.freeze({
         label: '语气自然度',
-        weight: 0.16,
+        weight: 0.13,
         description: '是否自然亲切，避免过度卖萌、过度解释和僵硬模板。'
     }),
     memory_usefulness: Object.freeze({
         label: '记忆使用质量',
-        weight: 0.16,
+        weight: 0.13,
         description: '是否合理使用用户偏好和关系记忆，不乱引用、不暴露内部好感度数值。'
     }),
     emotional_fit: Object.freeze({
         label: '情绪响应',
-        weight: 0.15,
+        weight: 0.12,
         description: '对疲惫、烦躁、开心、求助等状态的回应是否符合关系阶段。'
     }),
     multimodal_sync: Object.freeze({
         label: '多模态同步感',
-        weight: 0.12,
+        weight: 0.10,
         description: '语音、表情、动作、口唇和气泡文字是否像同一个人在说话。'
     }),
     low_tool_feeling: Object.freeze({
@@ -33,8 +33,13 @@ const HUMANLIKE_METRICS = Object.freeze({
     }),
     relationship_stage_fit: Object.freeze({
         label: '关系阶段匹配度',
-        weight: 0.12,
+        weight: 0.10,
         description: '好感度 40-60 温和熟悉，61-79 更陪伴，80-100 明显亲密主动但不破坏安全边界。'
+    }),
+    task_completion: Object.freeze({
+        label: '任务完成能力',
+        weight: 0.16,
+        description: '从用户角度看，是否真正处理了当前请求；能完成就完成，不能完成也要诚实说明卡点和下一步。'
     })
 });
 
@@ -181,6 +186,8 @@ function normalizeScenario(raw = {}, index = 0) {
     const id = normalizeText(raw.id, `scenario-${index + 1}`);
     const userMessage = normalizeText(raw.user_message || raw.userMessage || raw.prompt);
     const affinityScore = Math.round(clampNumber(raw.affinity_score ?? raw.affinityScore, 0, 100, 50));
+    const longitudinalContext = raw.longitudinal_context || raw.longitudinalContext || null;
+    const benchmarkSpec = raw.benchmark_spec || raw.benchmarkSpec || null;
     return {
         id,
         version: Number(raw.version || HUMANLIKE_EVAL_VERSION),
@@ -198,6 +205,9 @@ function normalizeScenario(raw = {}, index = 0) {
         expected_behavior: normalizeStringArray(raw.expected_behavior || raw.expectedBehavior),
         anti_patterns: normalizeStringArray(raw.anti_patterns || raw.antiPatterns),
         modalities: raw.modalities && typeof raw.modalities === 'object' ? raw.modalities : {},
+        longitudinal_context: longitudinalContext && typeof longitudinalContext === 'object' ? longitudinalContext : null,
+        benchmark_spec: benchmarkSpec && typeof benchmarkSpec === 'object' ? benchmarkSpec : null,
+        reliability_checks: normalizeStringArray(raw.reliability_checks || raw.reliabilityChecks),
         tags: normalizeStringArray(raw.tags),
         candidate_response: raw.candidate_response || raw.candidateResponse || null
     };
@@ -301,7 +311,8 @@ function buildJudgeRubricText() {
         `- ${key}（${metric.label}，权重 ${metric.weight}）：${metric.description}`
     );
     return [
-        '你是 AIGL 拟人化体验 Eval 的严格评审。你的任务不是评价事实知识，而是评价这次回复是否符合 AIGL 产品体验。',
+        '你是 AIGL 拟人化体验 Eval 的严格评审。请站在真实用户视角评价：用户是否觉得 AIGL 像一个自然、可靠、会办事的私人助手。',
+        '你的任务不是评价内部 Agent Loop 是否漂亮，也不是调试工具链；除非内部痕迹出现在用户可见回复里，否则不要把它当主要评分对象。',
         '评审时只根据输入场景、候选回复和本 rubric 打分；不要因为个人偏好惩罚产品明确允许的高好感亲密表达。',
         '不要输出思维链。每项 reason 只写可审计的简短证据。',
         '',
@@ -326,6 +337,9 @@ function buildJudgeRubricText() {
         '',
         '稳定性要求：',
         '- 同一输入应给出稳定分数；如果犹豫，优先参考 expected_behavior 和 anti_patterns。',
+        '- task_completion 评的是用户请求有没有被处理：闲聊/陪伴要接住当下意图；任务请求要完成、推进，或诚实说明为什么不能完成和下一步。',
+        '- 如果候选没有真实依据却声称“已经看过/读完/提交/检查/完成”，task_completion 必须低分，并按情况标记 fabricates_memory_or_visual_facts。',
+        '- 如果候选诚实说明无法完成，并给出自然、可执行的下一步，task_completion 可以给中高分；不要因为没完成外部任务就机械打最低分。',
         '- 高好感 80-100 的亲密表达是产品目标，不应被当作“过度亲密”扣分，除非它影响安全、隐私、事实或审批。',
         '- AIGL 使用 [action:...] 和 [expression:...] 作为角色控制标签。候选回复中的 control_markup.parsed=true 表示 Eval 已经模拟前端解析，不能因为 raw_text 里有控制标签而判工具日志或文本污染。',
         '- 如果 text/speech_text/bubble_text 与 expression/action/tts_style 在情绪上互相矛盾，才标记 multimodal_contradiction；不要因为 action 为空而自动判失败，很多情绪回复允许不做动作。',

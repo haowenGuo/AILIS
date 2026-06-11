@@ -37,6 +37,7 @@
         }
 
         #chat-shell {
+            position: relative;
             width: 100%;
             height: 100%;
             display: flex;
@@ -380,6 +381,64 @@
             background: rgba(115, 184, 229, 0.2);
         }
 
+        #file-preview {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        #file-preview[hidden] {
+            display: none;
+        }
+
+        .file-preview-card {
+            display: grid;
+            grid-template-columns: 1fr 28px;
+            align-items: center;
+            gap: 10px;
+            min-width: 0;
+            padding: 8px;
+            border: 1px solid rgba(115, 184, 229, 0.2);
+            border-radius: 8px;
+            background: #f8fcff;
+        }
+
+        .file-preview-title {
+            min-width: 0;
+            color: var(--text-main);
+            font-size: 13px;
+            font-weight: 600;
+            line-height: 1.35;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .file-preview-meta {
+            margin-top: 2px;
+            color: var(--text-muted);
+            font-size: 11px;
+            line-height: 1.35;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .file-preview-remove {
+            width: 28px;
+            height: 28px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            color: var(--text-main);
+            background: rgba(115, 184, 229, 0.12);
+            -webkit-app-region: no-drag;
+        }
+
+        .file-preview-remove:hover {
+            background: rgba(115, 184, 229, 0.2);
+        }
+
         #composer-footer {
             display: flex;
             align-items: center;
@@ -395,6 +454,48 @@
 
         #vision-actions {
             position: relative;
+        }
+
+        #file-btn {
+            min-width: 64px;
+            border: none;
+            border-radius: 8px;
+            padding: 10px 12px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            color: var(--text-main);
+            background: rgba(115, 184, 229, 0.12);
+            -webkit-app-region: no-drag;
+        }
+
+        #file-btn:hover:enabled {
+            background: rgba(115, 184, 229, 0.2);
+        }
+
+        #file-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        #drop-overlay {
+            position: absolute;
+            inset: 10px;
+            z-index: 30;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            border: 2px dashed rgba(115, 184, 229, 0.68);
+            border-radius: 8px;
+            color: var(--text-main);
+            background: rgba(248, 252, 255, 0.9);
+            font-size: 14px;
+            font-weight: 600;
+            pointer-events: none;
+        }
+
+        #chat-shell[data-dragging-files="true"] #drop-overlay {
+            display: flex;
         }
 
         #chat-status {
@@ -418,6 +519,10 @@
         #send-btn {
             background: var(--primary);
             color: #ffffff;
+        }
+
+        #send-btn[data-mode="interrupt"] {
+            background: #ef7474;
         }
 
         #voice-btn {
@@ -508,6 +613,10 @@
             background: #5ca5d7;
         }
 
+        #send-btn[data-mode="interrupt"]:hover:enabled {
+            background: #dc5555;
+        }
+
         #send-btn:disabled {
             background: #b6d9ef;
             color: #ffffff;
@@ -523,16 +632,201 @@
             border-radius: 6px;
         }
 
+        /* Codex-like desktop agent surface */
+        :root {
+            --primary: #2563eb;
+            --primary-soft: #eff6ff;
+            --surface: #ffffff;
+            --surface-soft: #f8fafc;
+            --border: #d9e0e8;
+            --text-main: #18212f;
+            --text-muted: #657386;
+            --code-bg: #0f172a;
+            --danger: #b42318;
+        }
+
+        #chat-shell {
+            border-color: var(--border);
+            background: #ffffff;
+            box-shadow: 0 18px 44px rgba(15, 23, 42, 0.16);
+        }
+
+        #chat-header {
+            align-items: center;
+            padding: 12px 14px;
+            background: #ffffff;
+            border-bottom: 1px solid var(--border);
+        }
+
+        #chat-title {
+            font-size: 14px;
+            font-weight: 700;
+            letter-spacing: 0;
+        }
+
+        #chat-subtitle {
+            margin-top: 3px;
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+
+        #chat-header-actions button {
+            min-width: 0;
+            height: 30px;
+            border: 1px solid var(--border);
+            border-radius: 7px;
+            padding: 0 9px;
+            color: var(--text-main);
+            background: #ffffff;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 600;
+            line-height: 1;
+            -webkit-app-region: no-drag;
+        }
+
+        #chat-header-actions button:hover {
+            background: var(--surface-soft);
+        }
+
+        #settings-btn,
+        #close-btn {
+            width: 30px;
+            padding: 0;
+            font-size: 14px;
+        }
+
+        #close-btn:hover {
+            color: var(--danger);
+        }
+
+        #message-list {
+            padding: 18px 16px;
+            gap: 14px;
+            background: #f7f8fa;
+        }
+
+        .message-item {
+            max-width: 92%;
+            border-radius: 8px;
+            padding: 10px 12px;
+            font-size: 14px;
+            line-height: 1.58;
+            box-shadow: none;
+        }
+
+        .message-user {
+            border: 1px solid #1d4ed8;
+            background: #2563eb;
+        }
+
+        .message-ai {
+            border: 1px solid var(--border);
+            background: #ffffff;
+        }
+
+        .message-system {
+            border: 1px solid var(--border);
+            background: #eef2f7;
+        }
+
+        .message-loading {
+            padding: 8px 10px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: #ffffff;
+        }
+
+        .message-markdown pre {
+            border-radius: 8px;
+            background: var(--code-bg);
+        }
+
+        .message-attachment-card,
+        .file-preview-card,
+        #vision-preview {
+            border-color: var(--border);
+            background: #ffffff;
+        }
+
+        #composer {
+            padding: 12px;
+            gap: 8px;
+            background: #ffffff;
+            border-top: 1px solid var(--border);
+        }
+
+        #message-input {
+            min-height: 78px;
+            border-color: var(--border);
+            background: var(--surface-soft);
+        }
+
+        #message-input:focus {
+            border-color: #93b4ff;
+            box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+        }
+
+        #chat-status {
+            color: var(--text-muted);
+        }
+
+        #composer-actions button,
+        #vision-menu button {
+            border-radius: 7px;
+            font-weight: 600;
+        }
+
+        #file-btn,
+        #vision-btn,
+        #voice-btn {
+            border: 1px solid var(--border);
+            background: #ffffff;
+        }
+
+        #file-btn:hover:enabled,
+        #vision-btn:hover:enabled,
+        #voice-btn:hover:enabled {
+            background: var(--surface-soft);
+        }
+
+        #send-btn {
+            border: 1px solid #1d4ed8;
+            background: #2563eb;
+        }
+
+        #send-btn:hover:enabled {
+            background: #1d4ed8;
+        }
+
+        #send-btn:disabled {
+            border-color: #d2dbe7;
+            background: #d8e1ec;
+        }
+
+        #vision-menu {
+            border-color: var(--border);
+            box-shadow: 0 16px 34px rgba(15, 23, 42, 0.14);
+        }
+
+        #drop-overlay {
+            border-color: #2563eb;
+            background: rgba(248, 250, 252, 0.92);
+        }
+
     </style>
 </head>
 <body>
     <div id="chat-shell">
+        <div id="drop-overlay">松开后添加文件</div>
         <header id="chat-header">
             <div id="chat-header-text">
                 <div id="chat-title">AIGL 对话窗</div>
                 <div id="chat-subtitle">和桌宠说话，动作和表情会同步联动</div>
             </div>
             <div id="chat-header-actions">
+                <button id="copy-chat-btn" type="button" aria-label="复制会话">复制</button>
+                <button id="clear-chat-btn" type="button" aria-label="清空会话">清空</button>
                 <button id="settings-btn" type="button" aria-label="打开控制面板">⚙</button>
                 <button id="close-btn" type="button" aria-label="关闭聊天窗">×</button>
             </div>
@@ -550,9 +844,11 @@
                 </div>
                 <button id="vision-preview-clear" type="button" aria-label="移除截图">×</button>
             </div>
+            <div id="file-preview" hidden></div>
             <div id="composer-footer">
                 <div id="chat-status">已连接桌宠</div>
                 <div id="composer-actions">
+                    <button id="file-btn" type="button">文件</button>
                     <div id="vision-actions">
                         <button id="vision-btn" type="button">看图</button>
                         <div id="vision-menu" hidden>

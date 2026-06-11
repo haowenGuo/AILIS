@@ -2,47 +2,27 @@ const fsp = require('fs/promises');
 const path = require('path');
 const { randomUUID } = require('crypto');
 const { HumanClawMcpManager } = require('./humanclaw-mcp-session.cjs');
+const { HumanClawToolDoctor } = require('./humanclaw-tool-doctor.cjs');
+const { HumanClawCapabilityManager } = require('./humanclaw-capability-manager.cjs');
+const { HumanClawSelfDebugger } = require('./humanclaw-self-debugger.cjs');
+const { createHumanClawPlatformAdapter } = require('./humanclaw-platform-adapter.cjs');
 const { getToolContractPromptText } = require('./humanclaw-tool-contracts.cjs');
+const {
+    CORE_RUNTIME_TOOL_DEFINITIONS: RUNTIME_TOOL_DEFINITIONS,
+    CORE_RUNTIME_TOOL_IDS: RUNTIME_TOOL_IDS,
+    createHumanClawToolRuntimeRegistry,
+    parseDirectMcpToolId
+} = require('./humanclaw-tool-runtime.cjs');
+const {
+    compactJsonForModel,
+    compactToolResultForModel
+} = require('./aigl-runtime-budget.cjs');
 
-const DEFAULT_MAX_RESULT_TEXT_CHARS = 12000;
+const DEFAULT_MAX_RESULT_TEXT_CHARS = 6000;
 const DEFAULT_MAX_TRANSCRIPT_ITEMS = 500;
 const DEFAULT_SUBAGENT_WAIT_TIMEOUT_MS = 30000;
 const DEFAULT_SUBAGENT_RUN_TIMEOUT_MS = 15 * 60 * 1000;
 
-const RUNTIME_TOOL_DEFINITIONS = Object.freeze([
-    Object.freeze({
-        id: 'update_plan',
-        label: 'update_plan',
-        description: 'Update the visible agent plan as a first-class runtime tool.',
-        sectionId: 'runtime',
-        route: 'humanclaw-runtime',
-        materialized: true,
-        status: 'available',
-        needsApproval: false
-    }),
-    Object.freeze({
-        id: 'subagents',
-        label: 'subagents',
-        description: 'Spawn, wait, cancel, and inspect child Agent runs through the HumanClaw runtime transcript.',
-        sectionId: 'runtime',
-        route: 'humanclaw-runtime',
-        materialized: true,
-        status: 'available',
-        needsApprovalActions: Object.freeze(['spawn', 'create', 'send', 'close'])
-    }),
-    Object.freeze({
-        id: 'mcp_bridge',
-        label: 'mcp_bridge',
-        description: 'Manage configured MCP servers and execute tools/resources/prompts through stdio or HTTP MCP sessions.',
-        sectionId: 'runtime',
-        route: 'humanclaw-runtime',
-        materialized: true,
-        status: 'available',
-        needsApprovalActions: Object.freeze(['tool_call'])
-    })
-]);
-
-const RUNTIME_TOOL_IDS = new Set(RUNTIME_TOOL_DEFINITIONS.map((tool) => tool.id));
 const FILE_MUTATING_TOOLS = new Set(['write', 'edit', 'apply_patch']);
 const FILE_READONLY_TOOLS = new Set(['read', 'web_fetch']);
 const EXEC_TOOLS = new Set(['exec']);
@@ -67,16 +47,19 @@ const COMPUTER_READONLY_ACTIONS = new Set([
     'pty_resize',
     'rollback_list',
     'process_list',
-    'process_read'
+    'process_read',
+    'write_stdin'
 ]);
 const COMPUTER_EXEC_ACTIONS = new Set([
     'exec',
     'run',
+    'exec_command',
     'session_start',
     'pty_start',
     'pty_write',
     'pty_kill',
     'process_write',
+    'write_stdin',
     'process_kill'
 ]);
 const COMPUTER_MUTATING_ACTIONS = new Set([
@@ -132,8 +115,18 @@ function summarize(value, maxChars = 800) {
     } catch {
         text = String(value);
     }
+    if (text === undefined || text === null) {
+        text = '';
+    }
     text = text.replace(/\s+/g, ' ').trim();
     return text.length > maxChars ? `${text.slice(0, maxChars - 3)}...` : text;
+}
+
+function isSafeTokenMetricKey(key = '') {
+    return /^(prompt|completion|input|output|total|reasoning|cached|candidates)Tokens$/i.test(key) ||
+        /^(prompt|completion|input|output|total|reasoning|cached)_tokens$/i.test(key) ||
+        /^(prompt|completion|total|candidates)TokenCount$/i.test(key) ||
+        /(^|_)token_count$|^max_output_tokens$/i.test(key);
 }
 
 function redactObject(value) {
@@ -145,7 +138,8 @@ function redactObject(value) {
     }
     const redacted = {};
     for (const [key, entry] of Object.entries(value)) {
-        if (/token|password|secret|api[_-]?key|authorization|credential|pass|auth[_-]?code/i.test(key)) {
+        const isSafeTokenMetric = isSafeTokenMetricKey(key);
+        if (!isSafeTokenMetric && /token|password|secret|api[_-]?key|authorization|credential|pass|auth[_-]?code/i.test(key)) {
             redacted[key] = '__REDACTED__';
         } else {
             redacted[key] = redactObject(entry);
@@ -221,6 +215,59 @@ function normalizeMcpContent(result) {
             text: JSON.stringify(result || {}, null, 2)
         }
     ];
+}
+
+function isPlainObject(value) {
+    return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+}
+
+const MCP_BRIDGE_ARG_KEYS = new Set([
+    'action',
+    'operation',
+    'intent',
+    'server',
+    'serverId',
+    'tool',
+    'name',
+    'toolName',
+    'tool_name',
+    'args',
+    'arguments',
+    'tool_args',
+    'toolArgs',
+    'parameters',
+    'params',
+    'serverConfig',
+    'config',
+    'servers',
+    'persist',
+    'timeoutMs',
+    'runId',
+    'sessionId',
+    '_meta',
+    'meta',
+    'uri',
+    'resourceUri',
+    'resource',
+    'prompt',
+    'promptName'
+]);
+
+function normalizeMcpToolArgs(args = {}) {
+    const explicitArgs =
+        args.args ||
+        args.arguments ||
+        args.tool_args ||
+        args.toolArgs ||
+        args.parameters ||
+        args.params;
+    const normalized = isPlainObject(explicitArgs) ? { ...explicitArgs } : {};
+    for (const [key, value] of Object.entries(args || {})) {
+        if (!MCP_BRIDGE_ARG_KEYS.has(key) && normalized[key] === undefined) {
+            normalized[key] = value;
+        }
+    }
+    return normalized;
 }
 
 function parseJsonLine(line) {
@@ -320,6 +367,90 @@ function needsApprovalByPolicy(evaluation, context = {}) {
     return evaluation.requiresApprovalCapable === true;
 }
 
+function normalizePermissionPaths(paths = [], workspaceRoot = process.cwd()) {
+    const values = Array.isArray(paths) ? paths : paths ? [paths] : [];
+    return values
+        .map((entry) => normalizeString(entry))
+        .filter(Boolean)
+        .map((entry) => entry === '*' ? '*' : path.resolve(path.isAbsolute(entry) ? entry : path.join(workspaceRoot, entry)));
+}
+
+function normalizePermissionRequest(permissions = {}, workspaceRoot = process.cwd()) {
+    const fileSystem = permissions.file_system || permissions.fileSystem || permissions.filesystem || {};
+    const request = {
+        network: {
+            enabled: permissions.network?.enabled === true
+        },
+        file_system: {
+            read: normalizePermissionPaths(fileSystem.read, workspaceRoot),
+            write: normalizePermissionPaths(fileSystem.write, workspaceRoot)
+        }
+    };
+    return request;
+}
+
+function isEmptyPermissionRequest(permissions = {}) {
+    return permissions.network?.enabled !== true
+        && !(permissions.file_system?.read || []).length
+        && !(permissions.file_system?.write || []).length;
+}
+
+function isInsideAnyPath(targetPath, roots = []) {
+    const target = path.resolve(targetPath);
+    return roots.some((root) => {
+        if (root === '*') {
+            return true;
+        }
+        const resolved = path.resolve(root);
+        return target === resolved || target.startsWith(`${resolved}${path.sep}`);
+    });
+}
+
+function extractPatchPaths(input = '') {
+    const patch = normalizeString(input);
+    const paths = [];
+    const pattern = /^\*\*\* (?:Add File|Update File|Delete File):\s+(.+)$/gm;
+    let match = pattern.exec(patch);
+    while (match) {
+        const patchPath = normalizeString(match[1]);
+        if (patchPath) {
+            paths.push(patchPath);
+        }
+        match = pattern.exec(patch);
+    }
+    return paths;
+}
+
+function collectToolWritePaths({ toolId, args = {}, workspaceRoot = process.cwd() } = {}) {
+    const raw = [];
+    const push = (...values) => {
+        for (const value of values) {
+            const text = normalizeString(value);
+            if (text) {
+                raw.push(text);
+            }
+        }
+    };
+    if (['write', 'edit'].includes(toolId)) {
+        push(args.path);
+    } else if (toolId === 'apply_patch') {
+        for (const patchPath of extractPatchPaths(args.input || args.patch)) {
+            push(patchPath);
+        }
+    } else if (toolId === 'computer') {
+        const action = normalizeAction(args.action || args.operation || args.intent);
+        if (['write', 'write_binary', 'append', 'mkdir', 'delete', 'trash', 'acl_set', 'rollback_restore'].includes(action)) {
+            push(args.path, args.target);
+        }
+        if (['copy', 'move', 'rename'].includes(action)) {
+            push(args.target, args.destination);
+        }
+    } else if (toolId === 'code') {
+        push(args.path);
+    }
+    return normalizePermissionPaths(raw, workspaceRoot);
+}
+
 class HumanClawRuntime {
     constructor(options = {}) {
         this.workspaceRoot = path.resolve(options.workspaceRoot || process.cwd());
@@ -328,8 +459,10 @@ class HumanClawRuntime {
         this.transcriptDir = path.join(this.auditDir, 'transcripts');
         this.emitGatewayEvent = typeof options.emitGatewayEvent === 'function' ? options.emitGatewayEvent : () => {};
         this.subagentExecutor = typeof options.subagentExecutor === 'function' ? options.subagentExecutor : null;
+        this.platformAdapter = createHumanClawPlatformAdapter(options.platformAdapter || options.platform || {});
         this.runs = new Map();
         this.planState = new Map();
+        this.permissionGrants = new Map();
         this.subagents = new Map();
         this.subagentRuns = new Map();
         this.subagentControllers = new Map();
@@ -340,6 +473,30 @@ class HumanClawRuntime {
             defaultServers: options.mcpServers,
             configPath: options.mcpConfigPath
         });
+        this.toolDoctor = new HumanClawToolDoctor({
+            workspaceRoot: this.workspaceRoot,
+            projectRoot: this.projectRoot,
+            auditDir: this.auditDir,
+            mcpManager: this.mcpManager,
+            emitGatewayEvent: (type, payload) => this.emitGatewayEvent(type, payload)
+        });
+        this.capabilityManager = new HumanClawCapabilityManager({
+            workspaceRoot: this.workspaceRoot,
+            projectRoot: this.projectRoot,
+            auditDir: this.auditDir,
+            mcpManager: this.mcpManager,
+            toolDoctor: this.toolDoctor,
+            emitGatewayEvent: (type, payload) => this.emitGatewayEvent(type, payload)
+        });
+        this.selfDebugger = new HumanClawSelfDebugger({
+            workspaceRoot: this.workspaceRoot,
+            projectRoot: this.projectRoot,
+            auditDir: this.auditDir,
+            toolDoctor: this.toolDoctor,
+            capabilityManager: this.capabilityManager,
+            emitGatewayEvent: (type, payload) => this.emitGatewayEvent(type, payload)
+        });
+        this.toolRuntimeRegistry = createHumanClawToolRuntimeRegistry(this);
     }
 
     getStatus() {
@@ -350,18 +507,30 @@ class HumanClawRuntime {
             activeTranscriptRuns: this.runs.size,
             planStateCount: this.planState.size,
             subagentCount: this.subagents.size,
+            platform: this.platformAdapter.getStatus(),
             mcpServerCount: this.mcpManager.getStatus().serverCount,
             mcp: this.mcpManager.getStatus(),
-            runtimeTools: RUNTIME_TOOL_DEFINITIONS.map((tool) => tool.id),
+            toolDoctor: this.toolDoctor.getStatus(),
+            capabilityManager: this.capabilityManager.getStatus(),
+            selfDebugger: this.selfDebugger.getStatus(),
+            runtimeTools: this.toolRuntimeRegistry.listDefinitions().map((tool) => tool.id),
+            toolRuntime: {
+                model: 'codex_like_tool_runtime_registry',
+                directToolCount: this.toolRuntimeRegistry.modelVisibleSpecs().length,
+                registeredToolCount: this.toolRuntimeRegistry.listDefinitions().length
+            },
             permissionDefaults: {
                 fileSystem: 'workspace-write',
                 shell: 'approval-required',
                 approvalPolicy: 'on-request'
             },
+            permissionGrantCount: this.permissionGrants.size,
             capabilities: [
                 'formal_item_transcript',
                 'update_plan_tool',
                 'permission_policy_evaluation',
+                'request_permissions_tool',
+                'permission_grant_store',
                 'tool_result_guard',
                 'tool_result_repair',
                 'subagent_child_runner',
@@ -371,7 +540,18 @@ class HumanClawRuntime {
                 'mcp_health_check',
                 'mcp_prompt_calls',
                 'mcp_input_schema_validation',
-                'mcp_tool_and_resource_calls'
+                'mcp_tool_and_resource_calls',
+                'tool_doctor_health_checks',
+                'tool_scorecard',
+                'mcp_discovery',
+                'self_repair_gate',
+                'capability_registry',
+                'capability_installer',
+                'skill_auto_authoring',
+                'repair_executor',
+                'self_debug_loop',
+                'self_debug_evidence_collection',
+                'self_debug_repair_protocol'
             ]
         };
     }
@@ -387,11 +567,11 @@ class HumanClawRuntime {
     }
 
     getRuntimeToolDefinitions() {
-        return RUNTIME_TOOL_DEFINITIONS.map((tool) => ({ ...tool }));
+        return this.toolRuntimeRegistry.listDefinitions();
     }
 
     canExecuteTool(toolId) {
-        return RUNTIME_TOOL_IDS.has(toolId);
+        return this.toolRuntimeRegistry.has(toolId);
     }
 
     resolveRunPath(runId, sessionId = 'main') {
@@ -685,17 +865,44 @@ class HumanClawRuntime {
         if (!guarded.details || typeof guarded.details !== 'object') {
             guarded.details = {};
         }
+        guarded.details = compactJsonForModel(guarded.details, {
+            maxStringChars: 1200,
+            maxArrayItems: 24,
+            maxObjectKeys: 80,
+            maxDepth: 5
+        });
+        if (guarded.structuredContent && typeof guarded.structuredContent === 'object') {
+            guarded.structuredContent = compactJsonForModel(redactObject(guarded.structuredContent), {
+                maxStringChars: 1200,
+                maxArrayItems: 24,
+                maxObjectKeys: 80,
+                maxDepth: 5
+            });
+        }
         guarded.details.guard = {
             status: 'guarded',
             tool: toolId,
             callId,
             maxTextChars
         };
-        return guarded;
+        return compactToolResultForModel(guarded, {
+            maxTextChars,
+            maxStructuredStringChars: 1200
+        });
     }
 
     classifyToolCall({ toolId, args = {} } = {}) {
         const action = normalizeAction(args.action || args.operation || args.intent || args.command);
+        const directMcp = parseDirectMcpToolId(toolId);
+        if (directMcp) {
+            return {
+                class: 'mcp',
+                mutates: false,
+                requiresApprovalCapable: false,
+                action: directMcp.tool,
+                directMcpTool: directMcp.id
+            };
+        }
         if (RUNTIME_TOOL_IDS.has(toolId)) {
             if (toolId === 'update_plan') {
                 return {
@@ -705,6 +912,14 @@ class HumanClawRuntime {
                     action
                 };
             }
+            if (toolId === 'request_permissions') {
+                return {
+                    class: 'permission_request',
+                    mutates: false,
+                    requiresApprovalCapable: false,
+                    action: 'request_permissions'
+                };
+            }
             if (toolId === 'subagents') {
                 const subagentAction = normalizeAction(args.action, 'list');
                 return {
@@ -712,6 +927,69 @@ class HumanClawRuntime {
                     mutates: ['spawn', 'create', 'send', 'close'].includes(subagentAction),
                     requiresApprovalCapable: ['spawn', 'create', 'send', 'close'].includes(subagentAction),
                     action: subagentAction
+                };
+            }
+            if (toolId === 'tool_doctor') {
+                const doctorAction = normalizeAction(args.action, 'health_check');
+                const mutates = ['record_observation', 'propose_repair', 'mark_repair'].includes(doctorAction)
+                    || (doctorAction === 'discover_mcp' && (args.cloneGithub === true || args.allowNetwork === true));
+                return {
+                    class: 'tool_health',
+                    mutates,
+                    requiresApprovalCapable: false,
+                    action: doctorAction
+                };
+            }
+            if (toolId === 'capability_manager') {
+                const capabilityAction = normalizeAction(args.action, 'registry');
+                const mutates = [
+                    'plan_install',
+                    'plan_mcp_candidate',
+                    'configure_external_auth_profile',
+                    'install_capability',
+                    'author_skill',
+                    'rollback',
+                    'execute_repair',
+                    'bulk_expose_external_tools',
+                    'refresh_registry',
+                    'record_tool_outcome'
+                ].includes(capabilityAction);
+                return {
+                    class: 'capability_lifecycle',
+                    mutates,
+                    requiresApprovalCapable: [
+                        'configure_external_auth_profile',
+                        'install_capability',
+                        'author_skill',
+                        'rollback',
+                        'execute_repair',
+                        'smoke_mcp_candidate',
+                        'execute_exposed_external_tool',
+                        'smoke_exposed_external_tool'
+                    ].includes(capabilityAction),
+                    action: capabilityAction
+                };
+            }
+            if (toolId === 'self_debugger') {
+                const debugAction = normalizeAction(args.action, 'open_case');
+                const codeRepairActions = ['apply_patch'];
+                const statefulActions = [
+                    'open_case',
+                    'create_case',
+                    'collect_evidence',
+                    'diagnose',
+                    'propose_patch',
+                    'validate_patch',
+                    'apply_patch',
+                    'run_loop',
+                    'mark_case',
+                    'close_case'
+                ];
+                return {
+                    class: 'self_debug',
+                    mutates: statefulActions.includes(debugAction),
+                    requiresApprovalCapable: codeRepairActions.includes(debugAction),
+                    action: debugAction
                 };
             }
             return {
@@ -745,10 +1023,33 @@ class HumanClawRuntime {
         if (FILE_MUTATING_TOOLS.has(toolId)) {
             return { class: 'mutating', mutates: true, requiresApprovalCapable: false, action };
         }
+        if (toolId === 'exec') {
+            const command = normalizeString(args.cmd || args.command);
+            if (command.includes('*** Begin Patch') && command.includes('*** End Patch')) {
+                return { class: 'mutating', mutates: true, requiresApprovalCapable: false, action: 'apply_patch_intercept' };
+            }
+        }
         if (EXEC_TOOLS.has(toolId)) {
             return { class: 'exec_capable', mutates: true, requiresApprovalCapable: true, action };
         }
         if (toolId === 'computer') {
+            if (['exec_command', 'exec', 'run'].includes(action)) {
+                const command = normalizeString(args.cmd || args.command);
+                if (command.includes('*** Begin Patch') && command.includes('*** End Patch')) {
+                    return { class: 'mutating', mutates: true, requiresApprovalCapable: false, action: 'apply_patch_intercept' };
+                }
+            }
+            if (action === 'write_stdin') {
+                const chars = typeof args.chars === 'string'
+                    ? args.chars
+                    : typeof args.input === 'string'
+                        ? args.input
+                        : '';
+                if (!chars) {
+                    return { class: 'readonly_scoped', mutates: false, requiresApprovalCapable: false, action };
+                }
+                return { class: 'exec_capable', mutates: true, requiresApprovalCapable: true, action };
+            }
             if (COMPUTER_READONLY_ACTIONS.has(action)) {
                 return { class: 'readonly_scoped', mutates: false, requiresApprovalCapable: false, action };
             }
@@ -784,23 +1085,31 @@ class HumanClawRuntime {
         };
     }
 
-    evaluateToolCall({ toolId, args = {}, context = {} } = {}) {
+    evaluateToolCall({ toolId, args = {}, context = {}, workspaceDir = '' } = {}) {
         const policy = normalizePermissionProfile(context);
         const classification = this.classifyToolCall({ toolId, args, context });
+        const permissionGrant = this.findPermissionGrantForToolCall({
+            toolId,
+            args,
+            classification,
+            context,
+            workspaceDir
+        });
         const deniedReasons = [];
-        if (isReadOnlyProfile(policy) && classification.mutates) {
+        if (isReadOnlyProfile(policy) && classification.mutates && permissionGrant?.kind !== 'file_system.write') {
             deniedReasons.push('permission_profile_read_only');
         }
         if (policy.shell === 'none' && classification.class === 'exec_capable') {
             deniedReasons.push('shell_access_disabled');
         }
-        if (policy.network === 'none' && ['external', 'mcp'].includes(classification.class)) {
+        if (policy.network === 'none' && ['external', 'mcp'].includes(classification.class) && permissionGrant?.kind !== 'network') {
             deniedReasons.push('network_access_disabled');
         }
         if (
             policy.approvalPolicy === 'never' &&
             context.approved !== true &&
-            classification.requiresApprovalCapable === true
+            classification.requiresApprovalCapable === true &&
+            !permissionGrant
         ) {
             deniedReasons.push('approval_not_allowed_by_policy');
         }
@@ -810,12 +1119,17 @@ class HumanClawRuntime {
             needsApproval: false,
             reason: deniedReasons[0] || '',
             policy,
-            classification
+            classification,
+            permissionGrant: permissionGrant ? {
+                kind: permissionGrant.kind,
+                grantId: permissionGrant.grant.id,
+                scope: permissionGrant.grant.scope
+            } : null
         };
         if (base.denied) {
             return base;
         }
-        const requiresApproval = needsApprovalByPolicy(
+        const requiresApproval = permissionGrant ? false : needsApprovalByPolicy(
             {
                 ...classification,
                 policy
@@ -860,6 +1174,113 @@ class HumanClawRuntime {
                 Array.isArray(value) ? value.map(annotate).filter((tool) => tool.exposed !== false) : value
             ])
         );
+    }
+
+    permissionGrantScopeKey(context = {}, scope = 'session') {
+        const sessionId = normalizeString(context.sessionId || context.sessionKey || context.session || 'main', 'main');
+        if (scope === 'turn') {
+            return `${sessionId}|${normalizeString(context.runId || context.turnId || context.callId, 'turn')}`;
+        }
+        return `${sessionId}|session`;
+    }
+
+    listPermissionGrantsForContext(context = {}) {
+        const sessionKey = this.permissionGrantScopeKey(context, 'session');
+        const turnKey = this.permissionGrantScopeKey(context, 'turn');
+        return [...this.permissionGrants.values()].filter((grant) => grant.scopeKey === sessionKey || grant.scopeKey === turnKey);
+    }
+
+    findPermissionGrantForToolCall({ toolId, args = {}, classification = {}, context = {}, workspaceDir = '' } = {}) {
+        const grants = this.listPermissionGrantsForContext(context);
+        if (!grants.length) {
+            return null;
+        }
+        if (['external', 'mcp'].includes(classification.class)) {
+            const grant = grants.find((entry) => entry.permissions?.network?.enabled === true);
+            return grant ? { kind: 'network', grant } : null;
+        }
+        if (!classification.mutates) {
+            return null;
+        }
+        const roots = grants.flatMap((grant) => grant.permissions?.file_system?.write || []);
+        if (!roots.length) {
+            return null;
+        }
+        const targets = collectToolWritePaths({
+            toolId,
+            args,
+            workspaceRoot: workspaceDir || context.workspace || this.workspaceRoot
+        });
+        if (!targets.length) {
+            return null;
+        }
+        const ok = targets.every((target) => isInsideAnyPath(target, roots));
+        if (!ok) {
+            return null;
+        }
+        const grant = grants.find((entry) => {
+            const writeRoots = entry.permissions?.file_system?.write || [];
+            return targets.every((target) => isInsideAnyPath(target, writeRoots));
+        });
+        return grant ? { kind: 'file_system.write', grant, targets } : null;
+    }
+
+    async requestPermissions(args = {}, context = {}) {
+        const permissions = normalizePermissionRequest(args.permissions || {}, context.workspace || this.workspaceRoot);
+        if (isEmptyPermissionRequest(permissions)) {
+            return {
+                content: [{ type: 'text', text: 'request_permissions requires at least one permission' }],
+                isError: true,
+                details: {
+                    status: 'empty_permission_request',
+                    error: 'request_permissions requires at least one network or file_system permission'
+                }
+            };
+        }
+        const scope = normalizeString(args.scope, 'session') === 'turn' ? 'turn' : 'session';
+        const request = {
+            id: randomUUID(),
+            status: context.approved === true || args.approved === true ? 'granted' : 'needs_approval',
+            reason: normalizeString(args.reason, 'AIGL needs additional permissions to continue the task.'),
+            scope,
+            scopeKey: this.permissionGrantScopeKey(context, scope),
+            permissions,
+            createdAt: new Date().toISOString(),
+            runId: normalizeString(context.runId),
+            sessionId: normalizeString(context.sessionId || context.sessionKey || 'main', 'main')
+        };
+        if (request.status !== 'granted') {
+            this.emitGatewayEvent('approval.requested', {
+                type: 'request_permissions',
+                requestId: request.id,
+                reason: request.reason,
+                permissions: request.permissions,
+                scope: request.scope
+            });
+            return {
+                content: [{ type: 'text', text: JSON.stringify(request, null, 2) }],
+                isError: true,
+                details: {
+                    status: 'needs_approval',
+                    permissionRequest: request
+                }
+            };
+        }
+        this.permissionGrants.set(request.id, request);
+        this.emitGatewayEvent('approval.granted', {
+            type: 'request_permissions',
+            grantId: request.id,
+            reason: request.reason,
+            permissions: request.permissions,
+            scope: request.scope
+        });
+        return {
+            content: [{ type: 'text', text: JSON.stringify(request, null, 2) }],
+            details: {
+                status: 'completed',
+                grant: request
+            }
+        };
     }
 
     async updatePlan({ runId, sessionId = 'main', plan = [], explanation = '' } = {}) {
@@ -909,33 +1330,7 @@ class HumanClawRuntime {
     }
 
     async executeTool(toolId, args = {}, context = {}) {
-        if (toolId === 'update_plan') {
-            return await this.updatePlan({
-                runId: context.runId || args.runId,
-                sessionId: context.sessionId || context.sessionKey || args.sessionId || 'main',
-                plan: args.plan || args.items || args.steps || args.todos || [],
-                explanation: args.explanation || args.summary || ''
-            });
-        }
-        if (toolId === 'subagents') {
-            return await this.executeSubagentRelay(args, context);
-        }
-        if (toolId === 'mcp_bridge') {
-            return await this.executeMcpBridge(args, context);
-        }
-        return {
-            content: [
-                {
-                    type: 'text',
-                    text: JSON.stringify({ status: 'not_materialized', tool: toolId }, null, 2)
-                }
-            ],
-            isError: true,
-            details: {
-                status: 'not_materialized',
-                tool: toolId
-            }
-        };
+        return await this.toolRuntimeRegistry.dispatch(toolId, args, context);
     }
 
     publicSubagent(subagent = {}) {
@@ -1013,7 +1408,7 @@ class HumanClawRuntime {
             planner: normalizeString(args.planner || context.planner, 'llm'),
             agentLoop: normalizeString(args.agentLoop || context.agentLoop, 'llm'),
             agentMode: normalizeString(args.agentMode || context.agentMode, 'llm'),
-            maxAgentSteps: Number(args.maxAgentSteps || context.maxAgentSteps || 6)
+            maxAgentSteps: Number(args.maxAgentSteps || context.maxAgentSteps || 50)
         };
     }
 
@@ -1479,6 +1874,47 @@ class HumanClawRuntime {
                 }
             };
         }
+        if (action === 'list_tool_specs') {
+            const server = normalizeString(args.server || args.serverId);
+            const toolSpecs = await this.mcpManager.listToolSpecs(server, args.timeoutMs || context.timeoutMs);
+            return {
+                content: [
+                    {
+                        type: 'text',
+                        text: JSON.stringify({ status: 'completed', toolSpecs }, null, 2)
+                    }
+                ],
+                details: {
+                    status: 'completed',
+                    server,
+                    toolSpecs
+                }
+            };
+        }
+        if (action === 'search_tools') {
+            const server = normalizeString(args.server || args.serverId);
+            const query = normalizeString(args.query || args.q || args.search);
+            const toolSpecs = await this.mcpManager.searchToolSpecs({
+                query,
+                server,
+                limit: args.limit,
+                timeoutMs: args.timeoutMs || context.timeoutMs
+            });
+            return {
+                content: [
+                    {
+                        type: 'text',
+                        text: JSON.stringify({ status: 'completed', query, toolSpecs }, null, 2)
+                    }
+                ],
+                details: {
+                    status: 'completed',
+                    query,
+                    server,
+                    toolSpecs
+                }
+            };
+        }
         if (action === 'list_resources') {
             const server = normalizeString(args.server || args.serverId);
             const resources = await this.mcpManager.listResources(server, args.timeoutMs || context.timeoutMs);
@@ -1562,7 +1998,8 @@ class HumanClawRuntime {
         }
         if (['tool_call', 'call_tool'].includes(action)) {
             const server = normalizeString(args.server || args.serverId);
-            const tool = normalizeString(args.tool || args.name);
+            const tool = normalizeString(args.tool || args.name || args.toolName || args.tool_name);
+            const toolArgs = normalizeMcpToolArgs(args);
             await this.appendItem(runId, {
                 type: 'mcp.tool.call.begin',
                 sessionId,
@@ -1570,14 +2007,14 @@ class HumanClawRuntime {
                 payload: {
                     server,
                     tool,
-                    args: args.args || args.arguments || {}
+                    args: toolArgs
                 }
             });
             try {
                 const result = await this.mcpManager.callTool({
                     server,
                     tool,
-                    args: args.args || args.arguments || {},
+                    args: toolArgs,
                     meta: args._meta || args.meta,
                     timeoutMs: args.timeoutMs || context.timeoutMs
                 });

@@ -1,31 +1,16 @@
-import { cpSync, existsSync, mkdirSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, rmSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import {
+    getLoadableMotionFiles,
+    listMotionIntakeEntries
+} from '../src/character/motion-intake-catalog.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const projectRoot = resolve(__dirname, '..');
 const distRoot = resolve(projectRoot, 'dist');
-const runtimeVrmDir = resolve(projectRoot, 'Resources', 'VRMA_MotionPack', 'vrma');
-
-const runtimeAnimationFiles = [
-    'Angry.vrma',
-    'Blush.vrma',
-    'Clapping.vrma',
-    'Goodbye.vrma',
-    'Idle.vrma',
-    'Idle1.vrma',
-    'Idle2.vrma',
-    'Jump.vrma',
-    'LookAround.vrma',
-    'Sad.vrma',
-    'Sleepy.vrma',
-    'Surprised.vrma',
-    'Thinking.vrma',
-    'VRMA_17.vrma',
-    'VRMA_25.vrma'
-];
 
 // 只复制前端实际会访问到的 VRM 与 VRMA 资源，避免把无关的大文件一起打进 Pages 产物。
 const assetsToCopy = [
@@ -35,10 +20,25 @@ const assetsToCopy = [
     }
 ];
 
-for (const fileName of runtimeAnimationFiles) {
+const loadableMotionTargets = new Set(
+    getLoadableMotionFiles().map((motionFile) => resolve(distRoot, motionFile.path))
+);
+for (const entry of listMotionIntakeEntries()) {
+    if (!entry.localPath) {
+        continue;
+    }
+    const target = resolve(distRoot, entry.localPath);
+    if (loadableMotionTargets.has(target) || !existsSync(target)) {
+        continue;
+    }
+    rmSync(target, { force: true });
+    console.log(`[build] removed stale motion asset: ${target}`);
+}
+
+for (const motionFile of getLoadableMotionFiles()) {
     assetsToCopy.push({
-        source: resolve(runtimeVrmDir, fileName),
-        target: resolve(distRoot, 'Resources', 'VRMA_MotionPack', 'vrma', fileName)
+        source: resolve(projectRoot, motionFile.path),
+        target: resolve(distRoot, motionFile.path)
     });
 }
 

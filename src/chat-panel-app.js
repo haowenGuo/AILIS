@@ -1,5 +1,10 @@
 import { CONFIG } from './config.js';
 import { createDesktopSpeechRecognitionService } from './desktop-speech-recognition.js';
+import {
+    getDefaultMessageForAttachments,
+    normalizeChatAttachments,
+    splitChatAttachments
+} from './chat-attachments.js';
 import { setMarkdownContent, setPlainTextContent } from './markdown-renderer.js';
 
 function getMessageClassName(role) {
@@ -19,6 +24,11 @@ window.addEventListener('DOMContentLoaded', () => {
     const messageListEl = document.getElementById('message-list');
     const inputEl = document.getElementById('message-input');
     const sendBtnEl = document.getElementById('send-btn');
+    const chatShellEl = document.getElementById('chat-shell');
+    const copyChatBtnEl = document.getElementById('copy-chat-btn');
+    const clearChatBtnEl = document.getElementById('clear-chat-btn');
+    const fileBtnEl = document.getElementById('file-btn');
+    const filePreviewEl = document.getElementById('file-preview');
     const voiceBtnEl = document.getElementById('voice-btn');
     const visionBtnEl = document.getElementById('vision-btn');
     const visionMenuEl = document.getElementById('vision-menu');
@@ -36,6 +46,9 @@ window.addEventListener('DOMContentLoaded', () => {
     let isTranscribing = false;
     let isCapturingVision = false;
     let pendingVisionAttachment = null;
+    let pendingFileAttachments = [];
+    let fileDragDepth = 0;
+    let currentMessages = [];
     let speechStatusText = '';
     let currentRecognitionMode = window.aigrilDesktop?.preferences?.recognitionMode || 'auto-vad';
     let currentPreferredMicDeviceId = window.aigrilDesktop?.preferences?.preferredMicDeviceId || '';
@@ -74,8 +87,10 @@ window.addEventListener('DOMContentLoaded', () => {
     }
 
     function updateComposerState() {
-        const hasDraft = Boolean(inputEl.value.trim() || pendingVisionAttachment);
-        sendBtnEl.disabled = isBusy || isRecording || isTranscribing || isCapturingVision || !hasDraft;
+        const hasDraft = Boolean(inputEl.value.trim() || pendingVisionAttachment || pendingFileAttachments.length);
+        sendBtnEl.textContent = isBusy ? '中断' : '发送';
+        sendBtnEl.dataset.mode = isBusy ? 'interrupt' : 'send';
+        sendBtnEl.disabled = isRecording || isTranscribing || isCapturingVision || (!isBusy && !hasDraft);
         statusEl.textContent = getStatusText();
 
         if (voiceBtnEl) {
@@ -97,6 +112,19 @@ window.addEventListener('DOMContentLoaded', () => {
         if (visionBtnEl) {
             visionBtnEl.disabled = isBusy || isRecording || isTranscribing || isCapturingVision ||
                 typeof window.aigrilDesktop?.vision?.capture !== 'function';
+        }
+
+        if (fileBtnEl) {
+            fileBtnEl.disabled = isBusy || isRecording || isTranscribing || isCapturingVision ||
+                typeof window.aigrilDesktop?.files?.choose !== 'function';
+        }
+
+        if (clearChatBtnEl) {
+            clearChatBtnEl.disabled = isBusy || isRecording || isTranscribing || isCapturingVision;
+        }
+
+        if (copyChatBtnEl) {
+            copyChatBtnEl.disabled = currentMessages.filter((message) => !message.pending).length === 0;
         }
     }
 
@@ -180,6 +208,138 @@ window.addEventListener('DOMContentLoaded', () => {
         updateComposerState();
     }
 
+    function formatFileMeta(attachment) {
+        const chunks = [
+            attachment.kind === 'directory' ? '文件夹' : (attachment.sizeText || '文件'),
+            attachment.extension || attachment.mimeType || '',
+            attachment.path || ''
+        ].filter(Boolean);
+        return chunks.join(' · ');
+    }
+
+    function renderFilePreview() {
+        if (!filePreviewEl) {
+            return;
+        }
+        filePreviewEl.innerHTML = '';
+        filePreviewEl.hidden = pendingFileAttachments.length === 0;
+        pendingFileAttachments.forEach((attachment) => {
+            const card = document.createElement('div');
+            card.className = 'file-preview-card';
+
+            const textWrap = document.createElement('div');
+            textWrap.style.minWidth = '0';
+
+            const title = document.createElement('div');
+            title.className = 'file-preview-title';
+            title.textContent = attachment.name || attachment.label || '文件';
+            textWrap.appendChild(title);
+
+            const meta = document.createElement('div');
+            meta.className = 'file-preview-meta';
+            meta.title = attachment.path || '';
+            meta.textContent = formatFileMeta(attachment);
+            textWrap.appendChild(meta);
+
+            const removeButton = document.createElement('button');
+            removeButton.className = 'file-preview-remove';
+            removeButton.type = 'button';
+            removeButton.textContent = '×';
+            removeButton.setAttribute('aria-label', `移除 ${attachment.name || '文件'}`);
+            removeButton.addEventListener('click', () => {
+                pendingFileAttachments = pendingFileAttachments.filter((item) => item.path !== attachment.path);
+                renderFilePreview();
+                updateComposerState();
+            });
+
+            card.appendChild(textWrap);
+            card.appendChild(removeButton);
+            filePreviewEl.appendChild(card);
+        });
+    }
+
+    function mergePendingFileAttachments(files = []) {
+        const normalizedFiles = splitChatAttachments(files).files;
+        if (!normalizedFiles.length) {
+            return 0;
+        }
+        const byPath = new Map(pendingFileAttachments.map((attachment) => [attachment.path, attachment]));
+        normalizedFiles.forEach((attachment) => {
+            byPath.set(attachment.path, attachment);
+        });
+        pendingFileAttachments = [...byPath.values()].slice(0, 12);
+        renderFilePreview();
+        updateComposerState();
+        return normalizedFiles.length;
+    }
+
+    async function addLocalFilePaths(paths = [], { source = 'drop' } = {}) {
+        const cleanPaths = [...new Set((Array.isArray(paths) ? paths : [])
+            .map((filePath) => String(filePath || '').trim())
+            .filter(Boolean))];
+        if (!cleanPaths.length || typeof window.aigrilDesktop?.files?.describe !== 'function') {
+            return 0;
+        }
+        try {
+            const result = await window.aigrilDesktop.files.describe({ paths: cleanPaths, source });
+            const addedCount = mergePendingFileAttachments(result?.files || []);
+            if (result?.skipped?.length) {
+                setTransientStatus(`有 ${result.skipped.length} 个文件无法添加`);
+            } else if (addedCount > 0) {
+                setTransientStatus(`已添加 ${addedCount} 个文件`);
+            }
+            return addedCount;
+        } catch (error) {
+            console.error('添加文件失败：', error);
+            setTransientStatus(`添加文件失败：${error.message || '无法读取文件路径'}`);
+            return 0;
+        }
+    }
+
+    async function chooseLocalFiles() {
+        if (typeof window.aigrilDesktop?.files?.choose !== 'function') {
+            return;
+        }
+        try {
+            const result = await window.aigrilDesktop.files.choose({});
+            if (result?.canceled) {
+                return;
+            }
+            mergePendingFileAttachments(result?.files || []);
+            if (result?.files?.length) {
+                setTransientStatus(`已添加 ${result.files.length} 个文件`);
+            }
+        } catch (error) {
+            console.error('选择文件失败：', error);
+            setTransientStatus(`选择文件失败：${error.message || '系统文件选择器不可用'}`);
+        }
+    }
+
+    function hasDraggedFiles(event) {
+        return Array.from(event?.dataTransfer?.types || []).includes('Files');
+    }
+
+    function getPathForDraggedFile(file) {
+        if (!file) {
+            return '';
+        }
+        try {
+            const electronPath = window.aigrilDesktop?.files?.getPathForFile?.(file);
+            if (electronPath) {
+                return electronPath;
+            }
+        } catch {
+            // Fall through to legacy Electron file.path.
+        }
+        return file.path || '';
+    }
+
+    async function addDroppedFiles(fileList) {
+        const files = Array.from(fileList || []);
+        const paths = files.map(getPathForDraggedFile).filter(Boolean);
+        await addLocalFilePaths(paths, { source: 'drop' });
+    }
+
     function closeVisionMenu() {
         if (visionMenuEl) {
             visionMenuEl.hidden = true;
@@ -254,7 +414,7 @@ window.addEventListener('DOMContentLoaded', () => {
     }
 
     function appendMessageAttachments(element, attachments = []) {
-        const normalizedAttachments = normalizeVisionAttachments(attachments);
+        const normalizedAttachments = normalizeChatAttachments(attachments);
         if (!normalizedAttachments.length) {
             return;
         }
@@ -262,7 +422,9 @@ window.addEventListener('DOMContentLoaded', () => {
         const wrapper = document.createElement('div');
         wrapper.className = 'message-attachments';
 
-        normalizedAttachments.forEach((attachment) => {
+        const splitAttachments = splitChatAttachments(normalizedAttachments);
+
+        splitAttachments.vision.forEach((attachment) => {
             const card = document.createElement('div');
             card.className = 'message-attachment-card';
 
@@ -279,6 +441,26 @@ window.addEventListener('DOMContentLoaded', () => {
             wrapper.appendChild(card);
         });
 
+        splitAttachments.files.forEach((attachment) => {
+            const card = document.createElement('div');
+            card.className = 'message-attachment-card';
+
+            const title = document.createElement('div');
+            title.className = 'message-attachment-meta';
+            title.style.marginTop = '0';
+            title.style.fontWeight = '600';
+            title.textContent = attachment.name || attachment.label || '文件';
+            card.appendChild(title);
+
+            const meta = document.createElement('div');
+            meta.className = 'message-attachment-meta';
+            meta.title = attachment.path || '';
+            meta.textContent = formatFileMeta(attachment);
+            card.appendChild(meta);
+
+            wrapper.appendChild(card);
+        });
+
         element.appendChild(wrapper);
     }
 
@@ -286,6 +468,10 @@ window.addEventListener('DOMContentLoaded', () => {
         if (!message?.id) {
             return;
         }
+        currentMessages = [
+            ...currentMessages.filter((entry) => entry.id !== message.id),
+            message
+        ];
 
         let element = messageListEl.querySelector(`[data-message-id="${message.id}"]`);
         if (!element) {
@@ -311,25 +497,102 @@ window.addEventListener('DOMContentLoaded', () => {
         if (!element) {
             return;
         }
+        currentMessages = currentMessages.filter((message) => message.id !== messageId);
         element.remove();
         scrollToBottom();
+        updateComposerState();
     }
 
     function renderSnapshot(messages = []) {
+        currentMessages = [];
         messageListEl.innerHTML = '';
         messages.forEach((message) => upsertMessage(message));
         scrollToBottom();
+        updateComposerState();
+    }
+
+    function formatMessageForCopy(message) {
+        if (message.pending) {
+            return '';
+        }
+        const roleLabel = message.role === 'user'
+            ? 'User'
+            : message.role === 'assistant'
+                ? 'AIGL'
+                : message.role === 'system'
+                    ? 'System'
+                    : message.role || 'Message';
+        const attachmentText = splitChatAttachments(message.attachments || []);
+        const attachmentLines = [
+            ...attachmentText.vision.map((attachment) => `- 截图：${attachment.label || attachment.source || '截图'}`),
+            ...attachmentText.files.map((attachment) => `- 文件：${attachment.name || attachment.label || '文件'} ${attachment.path || ''}`.trim())
+        ];
+        return [
+            `## ${roleLabel}`,
+            String(message.content || '').trim(),
+            attachmentLines.length ? ['附件：', ...attachmentLines].join('\n') : ''
+        ].filter(Boolean).join('\n\n');
+    }
+
+    async function copyConversation() {
+        const text = currentMessages
+            .map(formatMessageForCopy)
+            .filter(Boolean)
+            .join('\n\n---\n\n')
+            .trim();
+        if (!text) {
+            setTransientStatus('当前没有可复制的会话');
+            return;
+        }
+        try {
+            await navigator.clipboard.writeText(text);
+            setTransientStatus('会话已复制到剪贴板');
+        } catch (error) {
+            console.error('复制会话失败：', error);
+            setTransientStatus(`复制失败：${error.message || '剪贴板不可用'}`);
+        }
+    }
+
+    function clearConversation() {
+        if (isBusy || isRecording || isTranscribing || isCapturingVision) {
+            setTransientStatus('当前正在处理，稍后再清空');
+            return;
+        }
+        if (!window.confirm('清空当前对话窗口？长期记忆不会被删除。')) {
+            return;
+        }
+        pendingVisionAttachment = null;
+        pendingFileAttachments = [];
+        renderVisionPreview();
+        renderFilePreview();
+        window.aigrilDesktop?.sendChatControl?.({ type: 'clear-conversation' });
     }
 
     function sendCurrentMessage() {
+        if (isBusy) {
+            window.aigrilDesktop?.sendChatControl?.({
+                type: 'interrupt-conversation',
+                source: 'chat-panel'
+            });
+            setTransientStatus('正在中断当前对话...');
+            return;
+        }
         const content = inputEl.value.trim();
-        if ((!content && !pendingVisionAttachment) || isBusy || isRecording || isTranscribing || isCapturingVision) {
+        if (
+            (!content && !pendingVisionAttachment && !pendingFileAttachments.length) ||
+            isRecording ||
+            isTranscribing ||
+            isCapturingVision
+        ) {
             return;
         }
 
-        const attachments = pendingVisionAttachment ? [pendingVisionAttachment] : [];
+        const attachments = normalizeChatAttachments([
+            ...(pendingVisionAttachment ? [pendingVisionAttachment] : []),
+            ...pendingFileAttachments
+        ]);
         window.aigrilDesktop?.sendChatMessage?.({
-            content: content || '帮我看一下这张截图。',
+            content: content || getDefaultMessageForAttachments(attachments),
             attachments,
             source: 'chat-panel'
         });
@@ -339,7 +602,9 @@ window.addEventListener('DOMContentLoaded', () => {
         }
         inputEl.value = '';
         pendingVisionAttachment = null;
+        pendingFileAttachments = [];
         renderVisionPreview();
+        renderFilePreview();
         updateComposerState();
     }
 
@@ -690,6 +955,13 @@ window.addEventListener('DOMContentLoaded', () => {
     sendBtnEl.addEventListener('click', () => {
         sendCurrentMessage();
     });
+    copyChatBtnEl?.addEventListener('click', () => {
+        void copyConversation();
+    });
+    clearChatBtnEl?.addEventListener('click', clearConversation);
+    fileBtnEl?.addEventListener('click', () => {
+        void chooseLocalFiles();
+    });
     visionBtnEl?.addEventListener('click', toggleVisionMenu);
     visionPreviewClearEl?.addEventListener('click', clearVisionAttachment);
     visionMenuEl?.addEventListener('click', (event) => {
@@ -720,9 +992,43 @@ window.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    window.addEventListener('contextmenu', (event) => {
+    window.addEventListener('dragenter', (event) => {
+        if (!hasDraggedFiles(event)) {
+            return;
+        }
         event.preventDefault();
-        void window.aigrilDesktop?.showControlMenu?.();
+        fileDragDepth += 1;
+        if (chatShellEl) {
+            chatShellEl.dataset.draggingFiles = 'true';
+        }
+    });
+    window.addEventListener('dragover', (event) => {
+        if (!hasDraggedFiles(event)) {
+            return;
+        }
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'copy';
+    });
+    window.addEventListener('dragleave', (event) => {
+        if (!hasDraggedFiles(event)) {
+            return;
+        }
+        event.preventDefault();
+        fileDragDepth = Math.max(0, fileDragDepth - 1);
+        if (fileDragDepth === 0 && chatShellEl) {
+            chatShellEl.dataset.draggingFiles = 'false';
+        }
+    });
+    window.addEventListener('drop', (event) => {
+        if (!hasDraggedFiles(event)) {
+            return;
+        }
+        event.preventDefault();
+        fileDragDepth = 0;
+        if (chatShellEl) {
+            chatShellEl.dataset.draggingFiles = 'false';
+        }
+        void addDroppedFiles(event.dataTransfer?.files);
     });
 
     closeBtnEl.addEventListener('click', async () => {

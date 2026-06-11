@@ -1,7 +1,5 @@
 const fs = require('fs');
 const path = require('path');
-const { buildToolContractsPrompt } = require('./humanclaw-tool-contracts.cjs');
-
 const SKILL_ROOT = path.join(__dirname, 'skills');
 
 const DEFAULT_SKILLS = Object.freeze({
@@ -38,7 +36,7 @@ const DEFAULT_SKILLS = Object.freeze({
         label: '代码 Skill',
         description: 'Code search, diagnostics, AST refactor, tests, Git, PR, and CI workflows.',
         when: '代码搜索、符号、诊断、AST 重构、测试、Git、PR/CI 工作流。',
-        tools: Object.freeze(['code', 'read', 'write', 'edit', 'apply_patch', 'exec'])
+        tools: Object.freeze(['code', 'computer', 'read', 'write', 'edit', 'apply_patch', 'exec'])
     }),
     mcp_bridge: Object.freeze({
         id: 'mcp_bridge',
@@ -46,6 +44,27 @@ const DEFAULT_SKILLS = Object.freeze({
         description: 'Discover and call configured MCP servers, tools, resources, and prompts.',
         when: '需要接入外部 MCP Server、发现外部工具、读取 MCP resources/prompts 时。',
         tools: Object.freeze(['mcp_bridge'])
+    }),
+    tool_doctor: Object.freeze({
+        id: 'tool_doctor',
+        label: '工具体检 Skill',
+        description: 'Tool Doctor health checks, MCP discovery, tool scorecards, and gated self-repair proposals.',
+        when: '需要检查工具稳定性、发现 MCP 候选、追踪工具成功率/超时率、或提出自修复方案时。',
+        tools: Object.freeze(['tool_doctor', 'mcp_bridge'])
+    }),
+    capability_manager: Object.freeze({
+        id: 'capability_manager',
+        label: '能力安装与自修复 Skill',
+        description: 'Capability registry, installer, skill authoring, rollback, and approved repair execution.',
+        when: '用户要求安装新能力、接入新的 MCP/Skill、修复工具链、或让 AIGL 自我迭代能力时。',
+        tools: Object.freeze(['capability_manager', 'tool_doctor', 'mcp_bridge'])
+    }),
+    self_debugger: Object.freeze({
+        id: 'self_debugger',
+        label: '自我排查 Skill',
+        description: 'Dedicated self-debug loop for AIGL bugs: open cases, collect evidence, diagnose, propose patches, validate, and apply through the repair executor.',
+        when: '用户反馈 AIGL 自身 bug、工具异常、Agent Loop 不稳定、能力退化，或明确要求 AIGL 自己检查并修复问题时。',
+        tools: Object.freeze(['self_debugger', 'capability_manager', 'tool_doctor'])
     })
 });
 
@@ -55,7 +74,10 @@ const LEGACY_SKILL_MARKERS = Object.freeze({
     computer: '电脑操作 SKILL',
     file_manager: '文件整理 SKILL',
     code: '代码 SKILL',
-    mcp_bridge: 'MCP SKILL'
+    mcp_bridge: 'MCP SKILL',
+    tool_doctor: 'TOOL DOCTOR SKILL',
+    capability_manager: 'CAPABILITY MANAGER SKILL',
+    self_debugger: 'SELF DEBUGGER SKILL'
 });
 
 function normalizeString(value, fallback = '') {
@@ -115,11 +137,18 @@ function parseSkillMarkdown(markdown = '', fallback = {}) {
 }
 
 function readSkillFromDisk(skillId) {
-    const fallback = DEFAULT_SKILLS[skillId];
-    if (!fallback) {
+    const id = normalizeString(skillId);
+    if (!id) {
         return null;
     }
-    const filePath = path.join(SKILL_ROOT, skillId, 'SKILL.md');
+    const fallback = DEFAULT_SKILLS[id] || {
+        id,
+        label: id,
+        description: '',
+        when: '',
+        tools: []
+    };
+    const filePath = path.join(SKILL_ROOT, id, 'SKILL.md');
     try {
         const markdown = fs.readFileSync(filePath, 'utf8');
         return {
@@ -142,8 +171,19 @@ function getHumanClawSkill(skillId) {
     return readSkillFromDisk(id);
 }
 
+function listSkillIdsFromDisk() {
+    try {
+        return fs.readdirSync(SKILL_ROOT, { withFileTypes: true })
+            .filter((entry) => entry.isDirectory())
+            .map((entry) => entry.name)
+            .filter(Boolean);
+    } catch {
+        return [];
+    }
+}
+
 function listHumanClawSkills() {
-    return Object.keys(DEFAULT_SKILLS)
+    return [...new Set([...Object.keys(DEFAULT_SKILLS), ...listSkillIdsFromDisk()])]
         .map((id) => getHumanClawSkill(id))
         .filter(Boolean);
 }
@@ -160,7 +200,6 @@ function listHumanClawSkillSummaries() {
 
 function buildDynamicSkillAppendix(skill, options = {}) {
     const sections = [];
-    const tools = Array.isArray(skill.tools) ? skill.tools : [];
     if (skill.id === 'email') {
         const profiles = options.emailProfiles || {};
         const profileSummaries = Object.entries(profiles)
@@ -170,9 +209,6 @@ function buildDynamicSkillAppendix(skill, options = {}) {
             })
             .join('; ');
         sections.push(`已配置邮箱状态（不含密钥）：${profileSummaries || 'unknown'}`);
-    }
-    if (tools.length) {
-        sections.push(buildToolContractsPrompt(tools));
     }
     return sections.filter(Boolean).join('\n\n');
 }

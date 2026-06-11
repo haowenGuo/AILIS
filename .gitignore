@@ -20,11 +20,12 @@ input/
 output/
 tmp/
 build-cache/
+logs/
 .humanclaw-rollback/
 .humanclaw-state/
 .runtime-logs/
 eval-results/
-AIGrilClaw/.refs/
+AIGrilClaw/
 历史版本/
 release/
 backend/blog_content/auto_blog_runs/**/local_runner_*.log
@@ -46,6 +47,16 @@ backend/blog_content/auto_blog_runs/**/stop.flag
 output_perfect_smooth.png
 output_smooth.png
 smooth_result.png
+arxiv_*.html
+arxiv_abs_content.txt
+paper_metadata.txt
+temp_*
+transformer_paper.html
+browser-wait-example*.md
+paper-card.md
+transformer-paper-code-card.md
+transcribe_pie.py
+references/
 
 # Unused source/export assets under Resources
 Resources/fbx/
@@ -63,3 +74,8 @@ Resources/harvested/
 Resources/library/
 Resources/resource-library.json
 Resources/speech-models/
+Resources/MotionIntake/download-attempts.json
+Resources/MotionIntake/candidates/*/raw/
+Resources/MotionIntake/candidates/**/unity_anim/
+Resources/MotionIntake/candidates/**/*.blend
+Resources/MotionIntake/candidates/sachi-vrma-1/

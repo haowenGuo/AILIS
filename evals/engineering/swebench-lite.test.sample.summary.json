@@ -1,0 +1,24 @@
+{
+  "ok": true,
+  "dataset": "princeton-nlp/SWE-bench_Lite",
+  "config": "default",
+  "split": "test",
+  "offset": 0,
+  "repo": null,
+  "requestedLimit": 3,
+  "rowCount": 3,
+  "totalRows": 300,
+  "scannedRows": 3,
+  "scanOffsets": [
+    0
+  ],
+  "output": "F:\\AIGril\\evals\\engineering\\swebench-lite.test.sample.jsonl",
+  "repos": [
+    "astropy/astropy"
+  ],
+  "instances": [
+    "astropy__astropy-12907",
+    "astropy__astropy-14182",
+    "astropy__astropy-14365"
+  ]
+}

@@ -15,13 +15,20 @@ test('HumanClaw tool contracts expose versioned schemas and validate common fail
     const contracts = listToolContracts();
     assert.ok(contracts.length >= 10);
     assert.ok(contracts.some((contract) => contract.id === 'mcp_bridge' && contract.version >= 1));
+    assert.ok(contracts.some((contract) => contract.id === 'tool_search' && contract.version >= 1));
+    assert.ok(contracts.some((contract) => contract.id === 'tool_doctor' && contract.version >= 1));
+    assert.ok(contracts.some((contract) => contract.id === 'capability_manager' && contract.version >= 1));
+    assert.ok(contracts.some((contract) => contract.id === 'self_debugger' && contract.version >= 1));
     assert.ok(contracts.some((contract) => contract.id === 'computer' && contract.risk === 'high'));
     assert.ok(contracts.every((contract) => contract.returns?.properties?.content));
     assert.ok(contracts.every((contract) => contract.errors?.includes('invalid_tool_args')));
+    assert.ok(contracts.every((contract) => contract.experience?.embodiedAction));
+    assert.ok(contracts.every((contract) => contract.experience?.userFacingVerb));
 
     const validRead = validateToolContract('read', { path: 'package.json' });
     assert.equal(validRead.ok, true);
     assert.equal(validRead.contract.mutates, false);
+    assert.equal(validRead.contract.experience.userFacingVerb, '看一下文件');
 
     const badRead = validateToolContract('read', {});
     assert.equal(badRead.ok, false);
@@ -47,11 +54,39 @@ test('HumanClaw tool contracts expose versioned schemas and validate common fail
     });
     assert.equal(validMcpRead.ok, true);
 
+    const validMcpToolNameAlias = validateToolContract('mcp_bridge', {
+        action: 'call_tool',
+        server: 'fixture',
+        tool_name: 'echo',
+        arguments: { text: 'hello' }
+    });
+    assert.equal(validMcpToolNameAlias.ok, true);
+    assert.equal(validMcpToolNameAlias.args.tool, 'echo');
+
+    const validMcpToolArgsAlias = validateToolContract('mcp_bridge', {
+        action: 'call_tool',
+        server: 'fixture',
+        tool: 'echo',
+        tool_args: { text: 'hello' }
+    });
+    assert.equal(validMcpToolArgsAlias.ok, true);
+    assert.deepEqual(validMcpToolArgsAlias.args.args, { text: 'hello' });
+
     const validMcpHealth = validateToolContract('mcp_bridge', {
         action: 'health_check',
         server: 'fixture'
     });
     assert.equal(validMcpHealth.ok, true);
+
+    const validToolSearch = validateToolContract('tool_search', {
+        query: 'playwright wait selector',
+        limit: 5
+    });
+    assert.equal(validToolSearch.ok, true);
+
+    const badToolSearch = validateToolContract('tool_search', {});
+    assert.equal(badToolSearch.ok, false);
+    assert.ok(badToolSearch.errors.some((error) => error.includes('requires query')));
 
     const badMcpPrompt = validateToolContract('mcp_bridge', {
         action: 'get_prompt',
@@ -59,6 +94,76 @@ test('HumanClaw tool contracts expose versioned schemas and validate common fail
     });
     assert.equal(badMcpPrompt.ok, false);
     assert.ok(badMcpPrompt.errors.some((error) => error.includes('requires prompt')));
+
+    const validDoctorObservation = validateToolContract('tool_doctor', {
+        action: 'record_observation',
+        tool: 'mcp_bridge',
+        status: 'timeout',
+        latencyMs: 25000,
+        errorCode: 'timeout'
+    });
+    assert.equal(validDoctorObservation.ok, true);
+
+    const badRepair = validateToolContract('tool_doctor', {
+        action: 'propose_repair',
+        tool: 'mcp_bridge'
+    });
+    assert.equal(badRepair.ok, false);
+    assert.ok(badRepair.errors.some((error) => error.includes('requires title')));
+
+    const validCapabilityPlan = validateToolContract('capability_manager', {
+        action: 'plan_install',
+        request: 'install github MCP',
+        sourceKind: 'github_mcp',
+        githubRepo: 'https://github.com/example/mcp.git'
+    });
+    assert.equal(validCapabilityPlan.ok, true);
+
+    const validCandidateSearch = validateToolContract('capability_manager', {
+        action: 'search_tool_candidates',
+        query: 'ocr pdf tools'
+    });
+    assert.equal(validCandidateSearch.ok, true);
+
+    const validCandidatePlan = validateToolContract('capability_manager', {
+        action: 'plan_mcp_candidate',
+        candidateId: 'mcp-registry:io-example-docs:1.0.0'
+    });
+    assert.equal(validCandidatePlan.ok, true);
+
+    const validLearningRecord = validateToolContract('capability_manager', {
+        action: 'record_tool_outcome',
+        taskText: 'read a pdf',
+        toolId: 'mcp__docs__read',
+        success: true,
+        score: 1
+    });
+    assert.equal(validLearningRecord.ok, true);
+
+    const badCapabilityRepair = validateToolContract('capability_manager', {
+        action: 'execute_repair'
+    });
+    assert.equal(badCapabilityRepair.ok, false);
+    assert.ok(badCapabilityRepair.errors.some((error) => error.includes('requires candidateDiff')));
+
+    const validSelfDebugCase = validateToolContract('self_debugger', {
+        action: 'open_case',
+        bugReport: 'AIGL failed to read the latest tool result',
+        affectedCapability: 'agent_loop'
+    });
+    assert.equal(validSelfDebugCase.ok, true);
+
+    const badSelfDebugCase = validateToolContract('self_debugger', {
+        action: 'open_case'
+    });
+    assert.equal(badSelfDebugCase.ok, false);
+    assert.ok(badSelfDebugCase.errors.some((error) => error.includes('requires bugReport')));
+
+    const validSelfDebugApply = validateToolContract('self_debugger', {
+        action: 'apply_patch',
+        caseId: 'debug-123'
+    });
+    assert.equal(validSelfDebugApply.ok, true);
 });
 
 test('HumanClaw tool contracts generate prompt and summary text from the same source', () => {
@@ -67,6 +172,8 @@ test('HumanClaw tool contracts generate prompt and summary text from the same so
     assert.match(emailPrompt, /input_schema/);
     assert.match(emailPrompt, /return_schema/);
     assert.match(emailPrompt, /error_codes/);
+    assert.match(emailPrompt, /experience=/);
+    assert.match(emailPrompt, /看看邮箱/);
 
     const combined = buildToolContractsPrompt(['mcp_bridge', 'vision.capture_context']);
     assert.match(combined, /health_check/);
@@ -75,4 +182,24 @@ test('HumanClaw tool contracts generate prompt and summary text from the same so
     const summaries = listToolContractSummaries(['mcp_bridge']);
     assert.equal(summaries[0].id, 'mcp_bridge');
     assert.ok(summaries[0].actions.includes('list_prompts'));
+    assert.equal(summaries[0].experience.embodiedAction, 'use_external_tool');
+
+    const toolSearchPrompt = getToolContractPromptText('tool_search');
+    assert.match(toolSearchPrompt, /tool_search/);
+    assert.match(toolSearchPrompt, /query/);
+
+    const doctorPrompt = getToolContractPromptText('tool_doctor');
+    assert.match(doctorPrompt, /discover_mcp/);
+    assert.match(doctorPrompt, /检查工具健康/);
+
+    const capabilityPrompt = getToolContractPromptText('capability_manager');
+    assert.match(capabilityPrompt, /install_capability/);
+    assert.match(capabilityPrompt, /安装和修复能力/);
+
+    const selfDebuggerPrompt = getToolContractPromptText('self_debugger');
+    assert.match(selfDebuggerPrompt, /collect_evidence/);
+    assert.match(selfDebuggerPrompt, /自我排查问题/);
+
+    const subagentPrompt = getToolContractPromptText('subagents');
+    assert.match(subagentPrompt, /"maximum": 50/);
 });

@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 
@@ -45,7 +46,7 @@ function parseArgs(argv = process.argv.slice(2)) {
         concurrency: 2,
         progressEvery: 10,
         judgeRetries: 3,
-        maxAgentSteps: 4,
+        maxAgentSteps: 50,
         candidateTimeoutMs: Number(process.env.AIGL_CANDIDATE_LLM_TIMEOUT_MS || 120000),
         judgeTimeoutMs: Number(process.env.AIGL_EVAL_LLM_TIMEOUT_MS || 120000),
         judgeBaseUrl: process.env.AIGL_EVAL_LLM_BASE_URL || process.env.OPENAI_BASE_URL || process.env.LLM_BASE_URL || '',
@@ -74,7 +75,7 @@ function parseArgs(argv = process.argv.slice(2)) {
         else if (token === '--concurrency') args.concurrency = Math.max(1, Math.min(Number(next()) || 1, 8));
         else if (token === '--progress-every') args.progressEvery = Math.max(1, Number(next()) || args.progressEvery);
         else if (token === '--judge-retries') args.judgeRetries = Math.max(1, Math.min(Number(next()) || args.judgeRetries, 6));
-        else if (token === '--max-agent-steps') args.maxAgentSteps = Math.max(1, Math.min(Number(next()) || args.maxAgentSteps, 20));
+        else if (token === '--max-agent-steps') args.maxAgentSteps = Math.max(1, Math.min(Number(next()) || args.maxAgentSteps, 50));
         else if (token === '--judge-base-url') args.judgeBaseUrl = next();
         else if (token === '--judge-model') args.judgeModel = next();
         else if (token === '--judge-api-key') args.judgeApiKey = next();
@@ -130,10 +131,70 @@ function selectResumeRows(rows = []) {
     return [...byScenario.values()].filter((row) => row?.judge?.ok);
 }
 
+function normalizeEmailProfiles(rawProfiles = {}) {
+    const source = rawProfiles && typeof rawProfiles === 'object' ? rawProfiles : {};
+    const providers = ['qq', 'gmail', 'outlook'];
+    return Object.fromEntries(
+        providers.map((providerId) => {
+            const profile = source[providerId] && typeof source[providerId] === 'object'
+                ? source[providerId]
+                : {};
+            return [
+                providerId,
+                {
+                    account: normalizeText(profile.account || profile.email),
+                    secret: normalizeText(
+                        profile.secret ||
+                            profile.password ||
+                            profile.appPassword ||
+                            profile.authCode ||
+                            profile.accessToken
+                    ),
+                    authType: normalizeText(profile.authType || profile.auth?.type, 'password').toLowerCase() === 'oauth2'
+                        ? 'oauth2'
+                        : 'password'
+                }
+            ];
+        })
+    );
+}
+
+function detectGithubCliStatus() {
+    const lookup = spawnSync('gh', ['auth', 'status'], {
+        encoding: 'utf8',
+        windowsHide: true,
+        timeout: 5000
+    });
+    if (lookup.error || lookup.status !== 0) {
+        return {
+            available: false,
+            loggedIn: false,
+            account: ''
+        };
+    }
+    const output = `${lookup.stdout || ''}\n${lookup.stderr || ''}`;
+    const accountMatch = output.match(/Logged in to github\.com account\s+([^\s]+)/i);
+    return {
+        available: true,
+        loggedIn: true,
+        account: normalizeText(accountMatch?.[1])
+    };
+}
+
 function loadDesktopStateSettings() {
     const statePath = path.join(process.env.APPDATA || '', 'humanclaw', 'desktop-state.json');
+    const mcpConfigPath = path.join(process.env.APPDATA || '', 'humanclaw', 'humanclaw-gateway', 'mcp-servers.json');
+    const github = detectGithubCliStatus();
+    const fallback = {
+        baseUrl: '',
+        model: '',
+        apiKey: '',
+        emailProfiles: normalizeEmailProfiles({}),
+        mcpConfigPath: fsSync.existsSync(mcpConfigPath) ? mcpConfigPath : '',
+        github
+    };
     if (!statePath || !fsSync.existsSync(statePath)) {
-        return {};
+        return fallback;
     }
     try {
         const state = JSON.parse(fsSync.readFileSync(statePath, 'utf8'));
@@ -141,10 +202,13 @@ function loadDesktopStateSettings() {
         return {
             baseUrl: normalizeText(preferences.llmBaseUrl),
             model: normalizeText(preferences.llmModel),
-            apiKey: normalizeText(preferences.llmApiKey)
+            apiKey: normalizeText(preferences.llmApiKey),
+            emailProfiles: normalizeEmailProfiles(preferences.emailProfiles || {}),
+            mcpConfigPath: fsSync.existsSync(mcpConfigPath) ? mcpConfigPath : '',
+            github
         };
     } catch {
-        return {};
+        return fallback;
     }
 }
 
@@ -177,13 +241,19 @@ function buildEvalMemoryContext(scenario) {
 }
 
 async function startStandaloneGateway(args) {
+    const desktopState = loadDesktopStateSettings();
     const auditDir = path.join(args.outputDir, '.gateway-audit');
-    const gateway = new HumanClawGateway({
+    const gatewayOptions = {
         port: 0,
         workspaceRoot: PROJECT_ROOT,
         projectRoot: PROJECT_ROOT,
-        auditDir
-    });
+        auditDir,
+        emailProfiles: desktopState.emailProfiles || {}
+    };
+    if (desktopState.mcpConfigPath) {
+        gatewayOptions.mcpConfigPath = desktopState.mcpConfigPath;
+    }
+    const gateway = new HumanClawGateway(gatewayOptions);
     const status = await gateway.start();
     return { gateway, baseUrl: status.url, status };
 }

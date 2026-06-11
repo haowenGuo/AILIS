@@ -5,6 +5,7 @@ const path = require('path');
 const { EventEmitter } = require('events');
 const { randomUUID } = require('crypto');
 const { pathToFileURL } = require('url');
+const { approxTokenCount } = require('./aigl-runtime-budget.cjs');
 
 const {
     OPENCLAW_CORE_TOOL_DEFINITIONS,
@@ -14,7 +15,13 @@ const {
     validateOpenClawToolSurface
 } = require('./openclaw-tool-surface.cjs');
 const { OpenClawRuntimeSupervisor } = require('./openclaw-runtime.cjs');
-const { HumanClawRuntime, RUNTIME_TOOL_IDS } = require('./humanclaw-runtime.cjs');
+const { HumanClawRuntime } = require('./humanclaw-runtime.cjs');
+const {
+    TOOL_EXPOSURE,
+    HumanClawRuntimeTool,
+    HumanClawToolRuntimeRegistry
+} = require('./humanclaw-tool-runtime.cjs');
+const { createHumanClawPlatformAdapter } = require('./humanclaw-platform-adapter.cjs');
 const { HumanClawAgentRunner } = require('./humanclaw-agent-runner.cjs');
 const { HumanClawMemoryRuntime } = require('./humanclaw-memory-store.cjs');
 const {
@@ -25,11 +32,15 @@ const { EMAIL_TOOL_ID, executeEmailTool, listProviderDetails } = require('./huma
 const { FILE_MANAGER_TOOL_ID, executeFileManagerTool } = require('./humanclaw-file-manager-tool.cjs');
 const { COMPUTER_TOOL_ID, HumanClawComputerTool } = require('./humanclaw-computer-tool.cjs');
 const { CODE_TOOL_ID, executeCodeTool } = require('./humanclaw-code-tool.cjs');
+const { ARTIFACT_VERIFIER_TOOL_ID, executeArtifactVerifierTool } = require('./humanclaw-artifact-verifier-tool.cjs');
 const {
     HUMANCLAW_VISION_TOOL_DEFINITION,
     VISION_TOOL_ID,
     executeVisionTool
 } = require('./humanclaw-vision-tool.cjs');
+const {
+    isExternalVirtualToolId
+} = require('./humanclaw-tool-acquisition-gateway.cjs');
 
 const PROJECT_ROOT = path.resolve(__dirname, '..');
 const DEFAULT_PORT = Number(process.env.HUMANCLAW_GATEWAY_PORT || 19777);
@@ -62,12 +73,15 @@ const EXTERNAL_SIDE_EFFECT_TOOL_IDS = new Set([
 ]);
 const PLUGIN_OR_TRIGGER_TOOL_IDS = new Set(['code_execution', 'x_search', 'heartbeat_respond']);
 const FILE_TOOL_IDS = new Set(['read', 'write', 'edit']);
-const LOCAL_CORE_TOOL_IDS = new Set(['read', 'write', 'exec']);
+const LOCAL_CORE_TOOL_IDS = new Set(['read', 'write', 'exec', 'apply_patch']);
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 const LOSSLESS_EVENT_TYPES = new Set([
     'gateway.started',
     'gateway.stopped',
     'runtime.item',
+    'tool.call.begin',
+    'tool.call.success',
+    'tool.call.failure',
     'tool.call.started',
     'tool.call.finished',
     'agent.run.started',
@@ -122,10 +136,12 @@ const HUMANCLAW_LOCAL_TOOL_DEFINITIONS = Object.freeze([
             'delete',
             'acl_set',
             'exec',
+            'exec_command',
             'session_start',
             'pty_start',
             'pty_write',
             'pty_kill',
+            'write_stdin',
             'process_write',
             'process_kill',
             'rollback_restore'
@@ -140,6 +156,16 @@ const HUMANCLAW_LOCAL_TOOL_DEFINITIONS = Object.freeze([
         materialized: true,
         status: 'available',
         needsApprovalActions: Object.freeze(['git_commit', 'rename_symbol', 'test', 'pr_create'])
+    }),
+    Object.freeze({
+        id: ARTIFACT_VERIFIER_TOOL_ID,
+        label: 'artifact_verifier',
+        description: 'Read-only structured artifact verification for JSON/JSONL/CSV/TSV/YAML/TOML/Markdown/log/text files.',
+        sectionId: 'artifact-verification',
+        route: 'humanclaw-local',
+        materialized: true,
+        status: 'available',
+        needsApprovalActions: Object.freeze([])
     }),
     HUMANCLAW_VISION_TOOL_DEFINITION
 ]);
@@ -185,14 +211,7 @@ function formatSseEvent(event) {
 }
 
 function isPathInside(rootPath, targetPath) {
-    const root = path.resolve(rootPath);
-    const target = path.resolve(targetPath);
-    const rootComparable = process.platform === 'win32' ? root.toLowerCase() : root;
-    const targetComparable = process.platform === 'win32' ? target.toLowerCase() : target;
-    return (
-        targetComparable === rootComparable ||
-        targetComparable.startsWith(`${rootComparable}${path.sep}`)
-    );
+    return createHumanClawPlatformAdapter().isPathInside(rootPath, targetPath);
 }
 
 function summarize(value, maxChars = 600) {
@@ -202,8 +221,18 @@ function summarize(value, maxChars = 600) {
     } catch {
         text = String(value);
     }
+    if (text === undefined || text === null) {
+        text = '';
+    }
     text = text.replace(/\s+/g, ' ').trim();
     return text.length > maxChars ? `${text.slice(0, maxChars - 3)}...` : text;
+}
+
+function isSafeTokenMetricKey(key = '') {
+    return /^(prompt|completion|input|output|total|reasoning|cached|candidates)Tokens$/i.test(key) ||
+        /^(prompt|completion|input|output|total|reasoning|cached)_tokens$/i.test(key) ||
+        /^(prompt|completion|total|candidates)TokenCount$/i.test(key) ||
+        /(^|_)token_count$|^max_output_tokens$/i.test(key);
 }
 
 function redactObject(value) {
@@ -216,7 +245,8 @@ function redactObject(value) {
 
     const redacted = {};
     for (const [key, entry] of Object.entries(value)) {
-        if (/token|password|secret|api[_-]?key|authorization|credential|pass|auth[_-]?code/i.test(key)) {
+        const isSafeTokenMetric = isSafeTokenMetricKey(key);
+        if (!isSafeTokenMetric && /token|password|secret|api[_-]?key|authorization|credential|pass|auth[_-]?code/i.test(key)) {
             redacted[key] = '__REDACTED__';
         } else {
             redacted[key] = redactObject(entry);
@@ -280,6 +310,25 @@ function classifyToolResult(result) {
     return 'completed';
 }
 
+function makeExternalVirtualToolResult(result = {}, { toolId = '' } = {}) {
+    const status = normalizeString(result.status, result.ok === false ? 'error' : 'completed');
+    return {
+        isError: result.ok === false || status !== 'completed',
+        content: [
+            {
+                type: 'text',
+                text: summarize(result, 6000)
+            }
+        ],
+        details: {
+            ...result,
+            status,
+            toolId: result.toolId || toolId
+        },
+        structuredContent: result
+    };
+}
+
 function classifyError(error) {
     const message = error instanceof Error ? error.message : String(error);
     if (error?.code === 'HUMANCLAW_GATEWAY_APPROVAL_REQUIRED') {
@@ -301,6 +350,157 @@ function classifyError(error) {
         return 'needs_gateway';
     }
     return 'error';
+}
+
+function analysisTimestamp(value = {}) {
+    const numericTs = Number(value.ts || value.startedAt || value.completedAt || 0);
+    if (Number.isFinite(numericTs) && numericTs > 0) {
+        return numericTs;
+    }
+    const parsed = Date.parse(value.iso || value.createdAt || value.updatedAt || '');
+    return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function analysisIso(value = {}) {
+    const ts = analysisTimestamp(value);
+    return ts ? new Date(ts).toISOString() : '';
+}
+
+function usageMetric(usage = {}, keys = []) {
+    if (!usage || typeof usage !== 'object') {
+        return null;
+    }
+    for (const key of keys) {
+        const value = key.split('.').reduce((current, part) => current?.[part], usage);
+        const numericValue = Number(value);
+        if (Number.isFinite(numericValue)) {
+            return numericValue;
+        }
+    }
+    return null;
+}
+
+function normalizeUsageForAnalysis(usage = {}) {
+    if (!usage || typeof usage !== 'object') {
+        return null;
+    }
+    const promptTokens = usageMetric(usage, ['promptTokens', 'prompt_tokens', 'input_tokens', 'promptTokenCount']);
+    const completionTokens = usageMetric(usage, ['completionTokens', 'completion_tokens', 'output_tokens', 'candidatesTokenCount']);
+    const totalTokens = usageMetric(usage, ['totalTokens', 'total_tokens', 'totalTokenCount']);
+    const reasoningTokens = usageMetric(usage, [
+        'reasoningTokens',
+        'completion_tokens_details.reasoning_tokens',
+        'output_tokens_details.reasoning_tokens'
+    ]);
+    const cachedTokens = usageMetric(usage, [
+        'cachedTokens',
+        'prompt_tokens_details.cached_tokens',
+        'input_tokens_details.cached_tokens'
+    ]);
+    return {
+        promptTokens,
+        completionTokens,
+        totalTokens: totalTokens ?? (
+            Number.isFinite(promptTokens) || Number.isFinite(completionTokens)
+                ? Number(promptTokens || 0) + Number(completionTokens || 0)
+                : null
+        ),
+        reasoningTokens,
+        cachedTokens
+    };
+}
+
+function addUsageTotals(total, usage = {}) {
+    const normalized = normalizeUsageForAnalysis(usage);
+    if (!normalized) {
+        return total;
+    }
+    for (const key of ['promptTokens', 'completionTokens', 'totalTokens', 'reasoningTokens', 'cachedTokens']) {
+        const numericValue = Number(normalized[key]);
+        if (Number.isFinite(numericValue)) {
+            total[key] += numericValue;
+        }
+    }
+    return total;
+}
+
+function getPayloadIteration(payload = {}) {
+    const value = Number(payload.iteration ?? payload.context?.iteration ?? payload.args?.iteration);
+    return Number.isFinite(value) ? value : null;
+}
+
+function summarizeForAnalysis(value, maxChars = 1800) {
+    return summarize(value, maxChars);
+}
+
+function timelineKind(type = '') {
+    if (/context_snapshot|prompt_budget/.test(type)) {
+        return 'context';
+    }
+    if (/llm_call|token_usage/.test(type)) {
+        return 'llm';
+    }
+    if (/tool\./.test(type)) {
+        return 'tool';
+    }
+    if (/decision|reasoning|capability/.test(type)) {
+        return 'agent';
+    }
+    if (/final|blocked|completed/.test(type)) {
+        return 'result';
+    }
+    return 'runtime';
+}
+
+function timelineTitle(type = '', payload = {}) {
+    const iteration = getPayloadIteration(payload);
+    const prefix = Number.isFinite(iteration) ? `轮次 ${iteration + 1} · ` : '';
+    if (type === 'agent.context_snapshot') {
+        return `${prefix}完整上下文`;
+    }
+    if (type === 'agent.llm_call') {
+        return `${prefix}LLM 决策 ${payload.model || payload.provider || ''}`.trim();
+    }
+    if (type === 'agent.decision') {
+        return `${prefix}Agent 决策 ${payload.action || payload.status || ''}`.trim();
+    }
+    if (type === 'tool.call') {
+        return `${prefix}工具开始 ${payload.tool || ''}`.trim();
+    }
+    if (type === 'tool.result') {
+        return `${prefix}工具结果 ${payload.tool || ''}`.trim();
+    }
+    if (type === 'agent.capability_context') {
+        return `${prefix}能力上下文加载`;
+    }
+    if (type === 'agent.reasoning') {
+        return `${prefix}推理摘要`;
+    }
+    if (type === 'agent.final') {
+        return '最终答复';
+    }
+    if (type === 'agent.blocked') {
+        return '运行阻塞';
+    }
+    return payload.title || payload.stage || type || 'runtime item';
+}
+
+function isRunAuditEntry(entry = {}, runId = '') {
+    if (!entry || typeof entry !== 'object') {
+        return false;
+    }
+    return entry.runId === runId ||
+        entry.args?.runId === runId ||
+        entry.context?.runId === runId ||
+        entry.result?.runId === runId;
+}
+
+function isRunGatewayEvent(event = {}, runId = '') {
+    const payload = event?.payload || {};
+    return payload.runId === runId ||
+        payload.context?.runId === runId ||
+        payload.result?.runId === runId ||
+        payload.args?.runId === runId;
 }
 
 function throwBlocked(message, details = undefined) {
@@ -389,10 +589,12 @@ class HumanClawGateway extends EventEmitter {
         );
         this.auditLogPath = path.join(this.auditDir, 'audit.jsonl');
         this.smokeReportPath = path.join(this.projectRoot, 'tmp', 'openclaw-tool-smoke', 'last-report.json');
+        this.platformAdapter = createHumanClawPlatformAdapter(options.platformAdapter || options.platform || {});
         this.runtime = new HumanClawRuntime({
             auditDir: this.auditDir,
             workspaceRoot: this.workspaceRoot,
             projectRoot: this.projectRoot,
+            platformAdapter: this.platformAdapter,
             emitGatewayEvent: (type, payload) => this.emitGatewayEvent(type, payload),
             mcpServers: options.mcpServers,
             mcpConfigPath: options.mcpConfigPath || path.join(this.auditDir, 'mcp-servers.json'),
@@ -411,7 +613,8 @@ class HumanClawGateway extends EventEmitter {
         this.toolSets = new Map();
         this.toolRuntimeSupervisor = null;
         this.computerTool = new HumanClawComputerTool({
-            workspaceRoot: this.workspaceRoot
+            workspaceRoot: this.workspaceRoot,
+            platformAdapter: this.platformAdapter
         });
         this.getEmailProfiles = typeof options.getEmailProfiles === 'function'
             ? options.getEmailProfiles
@@ -424,7 +627,140 @@ class HumanClawGateway extends EventEmitter {
             rootDir: path.join(this.auditDir, 'memory'),
             workspaceRoot: this.workspaceRoot
         });
+        this.gatewayToolRuntimeRegistry = this.createGatewayToolRuntimeRegistry();
         this.agentRunner = null;
+    }
+
+    createGatewayToolRuntimeRegistry() {
+        const registry = new HumanClawToolRuntimeRegistry({ runtime: this.runtime });
+        const localDefinitions = [
+            ...HUMANCLAW_LOCAL_TOOL_DEFINITIONS.map((definition) => ({
+                ...definition,
+                exposure: TOOL_EXPOSURE.DIRECT
+            })),
+            ...['read', 'write', 'exec', 'apply_patch'].map((id) => {
+                const openClawDefinition = OPENCLAW_CORE_TOOL_DEFINITIONS.find((tool) => tool.id === id) || {};
+                return {
+                    id,
+                    label: openClawDefinition.label || id,
+                    description: openClawDefinition.description || `Local core ${id} tool.`,
+                    sectionId: openClawDefinition.sectionId || 'local-core',
+                    route: 'humanclaw-local-core',
+                    materialized: true,
+                    status: 'available',
+                    needsApprovalActions: id === 'exec' ? Object.freeze(['exec']) : id === 'apply_patch' ? Object.freeze(['apply_patch']) : Object.freeze([]),
+                    exposure: TOOL_EXPOSURE.DIRECT
+                };
+            })
+        ];
+        for (const definition of localDefinitions) {
+            registry.register(new HumanClawRuntimeTool({
+                definition,
+                handle: async (args, context) => this.executeGatewayLocalTool(definition.id, args, context)
+            }));
+        }
+        for (const definition of this.runtime.getRuntimeToolDefinitions()) {
+            if (definition.id === 'tool_search') {
+                registry.register(new HumanClawRuntimeTool({
+                    definition: {
+                        ...definition,
+                        route: 'humanclaw-gateway',
+                        description: 'Search all Gateway, Runtime, and MCP tools and return Codex-like loadable specs.',
+                        exposure: TOOL_EXPOSURE.DIRECT
+                    },
+                    handle: async (args) => this.executeGatewayToolSearch(args)
+                }));
+                continue;
+            }
+            registry.register(new HumanClawRuntimeTool({
+                definition: {
+                    ...definition,
+                    route: definition.route || 'humanclaw-runtime'
+                },
+                handle: async (args, context) => this.runtime.executeTool(definition.id, args, context)
+            }));
+        }
+        return registry;
+    }
+
+    async executeGatewayToolSearch(args = {}) {
+        const query = normalizeString(args.query || args.q);
+        const limit = Math.max(1, Math.min(Number(args.limit || 12), 50));
+        const local = this.gatewayToolRuntimeRegistry.search(query, limit).map((entry) => ({
+            id: entry.id,
+            type: 'gateway_or_runtime_tool',
+            exposure: entry.exposure,
+            spec: entry.spec
+        }));
+        let mcp = [];
+        if (args.includeMcp !== false && this.runtime?.mcpManager?.searchToolSpecs) {
+            try {
+                mcp = (await this.runtime.mcpManager.searchToolSpecs({
+                    query,
+                    limit,
+                    timeoutMs: args.timeoutMs
+                })).map((spec) => ({
+                    id: spec.id,
+                    type: 'mcp_tool',
+                    server: spec.server,
+                    tool: spec.tool,
+                    name: spec.name,
+                    description: spec.description || spec.title || '',
+                    input_schema: spec.inputSchema || {},
+                    call_pattern: {
+                        tool: spec.id,
+                        args: spec.callPattern?.args || Object.fromEntries((spec.schemaProperties || []).map((key) => [key, `<${key}>`]))
+                    }
+                }));
+            } catch (error) {
+                mcp = [{
+                    type: 'mcp_tool_search_error',
+                    error: error?.message || String(error)
+                }];
+            }
+        }
+        let external = [];
+        if (args.includeExternal !== false && this.runtime?.capabilityManager?.searchExternalToolEntries) {
+            try {
+                const searched = await this.runtime.capabilityManager.searchExternalToolEntries({
+                    query,
+                    limit,
+                    includeExposed: args.includeExposed !== false,
+                    includeContracts: args.includeContracts !== false
+                });
+                external = Array.isArray(searched.tools) ? searched.tools : [];
+            } catch (error) {
+                external = [{
+                    type: 'external_tool_search_error',
+                    error: error?.message || String(error)
+                }];
+            }
+        }
+        const tools = [...external, ...local, ...mcp].slice(0, limit);
+        return {
+            content: [
+                {
+                    type: 'text',
+                    text: JSON.stringify({
+                        status: 'completed',
+                        query,
+                        note: 'Callable external tools can be invoked directly with their external__provider__tool id from call_pattern.tool. Do not wrap them in capability_manager.execute_exposed_external_tool.',
+                        tools
+                    }, null, 2)
+                }
+            ],
+            details: {
+                status: 'completed',
+                query,
+                tools
+            },
+            structuredContent: {
+                status: 'completed',
+                query,
+                note: 'Callable external tools can be invoked directly with their external__provider__tool id from call_pattern.tool.',
+                tools
+            }
+        };
     }
 
     resolveDefaultContext() {
@@ -524,6 +860,8 @@ class HumanClawGateway extends EventEmitter {
 
     getStatus() {
         const address = this.getAddress();
+        const gatewayToolDefinitions = this.gatewayToolRuntimeRegistry?.listDefinitions?.() || [];
+        const directGatewayTools = this.gatewayToolRuntimeRegistry?.modelVisibleSpecs?.() || [];
         return {
             enabled: true,
             running: Boolean(this.server),
@@ -532,6 +870,7 @@ class HumanClawGateway extends EventEmitter {
             port: address.port,
             url: address.url,
             workspaceRoot: this.workspaceRoot,
+            platform: this.platformAdapter.getStatus(),
             auditLogPath: this.auditLogPath,
             toolGatewayUrl: this.toolGatewayUrl,
             openClawToolSurface: getOpenClawToolSurfaceSummary(),
@@ -539,6 +878,12 @@ class HumanClawGateway extends EventEmitter {
             toolContracts: {
                 version: 1,
                 count: listToolContracts().length
+            },
+            toolRuntime: {
+                model: 'codex_like_gateway_tool_registry',
+                registeredToolCount: gatewayToolDefinitions.length,
+                directToolCount: directGatewayTools.length,
+                deferredToolCount: gatewayToolDefinitions.filter((tool) => tool.exposure === TOOL_EXPOSURE.DEFERRED).length
             },
             defaultContext: redactObject(this.resolveDefaultContext()),
             runtime: this.runtime.getStatus(),
@@ -756,6 +1101,51 @@ class HumanClawGateway extends EventEmitter {
             return;
         }
 
+        if (url.pathname === '/agent/interrupt' && req.method === 'POST') {
+            const body = await this.readJsonBody(req);
+            this.sendJson(res, 200, await this.interruptAgentRun(body));
+            return;
+        }
+
+        if (url.pathname === '/agent/analysis/runs' && req.method === 'GET') {
+            this.sendJson(
+                res,
+                200,
+                await this.listAgentAnalysisRuns(Number(url.searchParams.get('limit') || 40))
+            );
+            return;
+        }
+
+        if (url.pathname === '/agent/analysis/run' && req.method === 'POST') {
+            const body = await this.readJsonBody(req);
+            this.sendJson(res, 200, await this.runAgentAnalysis(body));
+            return;
+        }
+
+        if (url.pathname === '/agent/analysis/continue' && req.method === 'POST') {
+            const body = await this.readJsonBody(req);
+            this.sendJson(res, 200, await this.continueAgentAnalysis(body));
+            return;
+        }
+
+        if (url.pathname === '/agent/analysis/interrupt' && req.method === 'POST') {
+            const body = await this.readJsonBody(req);
+            this.sendJson(res, 200, await this.interruptAgentRun(body));
+            return;
+        }
+
+        if (url.pathname === '/agent/analysis' && req.method === 'GET') {
+            this.sendJson(
+                res,
+                200,
+                await this.analyzeAgentRun(
+                    url.searchParams.get('runId') || '',
+                    { transcriptLimit: Number(url.searchParams.get('limit') || 2000) }
+                )
+            );
+            return;
+        }
+
         if (url.pathname === '/rpc' && req.method === 'POST') {
             const body = await this.readJsonBody(req);
             this.sendJson(res, 200, await this.handleRpc(body));
@@ -921,9 +1311,10 @@ class HumanClawGateway extends EventEmitter {
             params.includeMaterialized === true ||
             context.materialize === true ||
             context.includeMaterialized === true;
+        const registeredToolIds = new Set(this.gatewayToolRuntimeRegistry?.toolIds?.() || []);
         const materialized = shouldMaterialize
             ? await this.listMaterializedToolIds().catch(() => [])
-            : [...RUNTIME_TOOL_IDS];
+            : [...registeredToolIds];
         const materializedSet = new Set(materialized);
         const coreTools = OPENCLAW_CORE_TOOL_DEFINITIONS.map((tool) => ({
             id: tool.id,
@@ -931,11 +1322,11 @@ class HumanClawGateway extends EventEmitter {
             description: tool.description,
             sectionId: tool.sectionId,
             route: this.resolveToolRoute(tool.id),
-            status: RUNTIME_TOOL_IDS.has(tool.id)
+            status: registeredToolIds.has(tool.id)
                 ? 'available'
                 : smoke.map.get(tool.id)?.status || this.defaultToolStatus(tool.id, materializedSet),
             materialized:
-                RUNTIME_TOOL_IDS.has(tool.id) ||
+                registeredToolIds.has(tool.id) ||
                 materializedSet.has(tool.id) ||
                 Boolean(smoke.map.get(tool.id)?.materialized),
             needsApproval: tool.id === 'exec' || tool.id === 'subagents',
@@ -956,8 +1347,17 @@ class HumanClawGateway extends EventEmitter {
             status: smoke.map.get(tool.id)?.status || 'needs_pairing',
             materialized: Boolean(smoke.map.get(tool.id)?.materialized)
         }));
-        const runtimeTools = this.runtime.getRuntimeToolDefinitions();
-        const localTools = HUMANCLAW_LOCAL_TOOL_DEFINITIONS.map((tool) => ({
+        const gatewayDefinitions = this.gatewayToolRuntimeRegistry.listDefinitions();
+        const runtimeTools = gatewayDefinitions
+            .filter((tool) => ['humanclaw-runtime', 'humanclaw-gateway'].includes(tool.route))
+            .map((tool) => ({
+                ...tool,
+                status: tool.status || 'available',
+                materialized: true
+            }));
+        const localTools = this.gatewayToolRuntimeRegistry.listDefinitions()
+            .filter((tool) => tool.route === 'humanclaw-local')
+            .map((tool) => ({
             ...tool,
             providers: tool.id === EMAIL_TOOL_ID ? listProviderDetails() : undefined
         }));
@@ -987,6 +1387,10 @@ class HumanClawGateway extends EventEmitter {
     }
 
     resolveToolRoute(toolId) {
+        const gatewayTool = this.gatewayToolRuntimeRegistry?.definition(toolId);
+        if (gatewayTool?.route) {
+            return gatewayTool.route;
+        }
         if (this.runtime.canExecuteTool(toolId)) {
             return 'humanclaw-runtime';
         }
@@ -1000,6 +1404,9 @@ class HumanClawGateway extends EventEmitter {
     }
 
     defaultToolStatus(toolId, materializedSet) {
+        if (this.gatewayToolRuntimeRegistry?.has(toolId)) {
+            return 'available';
+        }
         if (this.runtime.canExecuteTool(toolId)) {
             return 'available';
         }
@@ -1017,7 +1424,10 @@ class HumanClawGateway extends EventEmitter {
 
     async listMaterializedToolIds() {
         const tools = await this.getToolSet({ workspace: this.workspaceRoot });
-        return [...new Set([...tools.keys(), ...RUNTIME_TOOL_IDS])];
+        return [...new Set([
+            ...tools.keys(),
+            ...(this.gatewayToolRuntimeRegistry?.toolIds?.() || [])
+        ])];
     }
 
     async callTool(request = {}) {
@@ -1049,13 +1459,15 @@ class HumanClawGateway extends EventEmitter {
             if (!toolId) {
                 throw new GatewayHttpError(400, 'missing_tool', 'tools.call requires a tool name');
             }
-            const contractValidation = validateToolContract(toolId, args);
-            if (!contractValidation.ok) {
-                throw new GatewayHttpError(400, 'invalid_tool_args', 'tool arguments failed contract validation', {
-                    tool: toolId,
-                    contract: contractValidation.contract,
-                    errors: contractValidation.errors
-                });
+            if (!isExternalVirtualToolId(toolId)) {
+                const contractValidation = validateToolContract(toolId, args);
+                if (!contractValidation.ok) {
+                    throw new GatewayHttpError(400, 'invalid_tool_args', 'tool arguments failed contract validation', {
+                        tool: toolId,
+                        contract: contractValidation.contract,
+                        errors: contractValidation.errors
+                    });
+                }
             }
             const workspaceDir = this.resolveWorkspace(context.workspace);
             if (transcriptRunId) {
@@ -1075,6 +1487,21 @@ class HumanClawGateway extends EventEmitter {
                             iteration: context.iteration
                         }
                     }
+                });
+            }
+            const beginEvent = {
+                callId,
+                tool: toolId,
+                stage: 'begin',
+                startedAt
+            };
+            this.emitGatewayEvent('tool.call.begin', beginEvent);
+            if (transcriptRunId) {
+                await this.runtime.appendItem(transcriptRunId, {
+                    type: 'tool.event',
+                    sessionId: transcriptSessionId,
+                    status: 'begin',
+                    payload: beginEvent
                 });
             }
             const policyDecision = this.runtime.evaluateToolCall({ toolId, args, context, workspaceDir });
@@ -1130,7 +1557,26 @@ class HumanClawGateway extends EventEmitter {
                         result: guardedResult
                     }
                 });
+                await this.runtime.appendItem(transcriptRunId, {
+                    type: 'tool.event',
+                    sessionId: transcriptSessionId,
+                    status: 'success',
+                    payload: {
+                        callId,
+                        tool: toolId,
+                        stage: 'success',
+                        status,
+                        durationMs: response.durationMs
+                    }
+                });
             }
+            this.emitGatewayEvent('tool.call.success', {
+                callId,
+                tool: toolId,
+                stage: 'success',
+                status,
+                durationMs: response.durationMs
+            });
             this.emitGatewayEvent('tool.call.finished', response);
             return response;
         } catch (error) {
@@ -1183,7 +1629,28 @@ class HumanClawGateway extends EventEmitter {
                         result: guardedError
                     }
                 });
+                await this.runtime.appendItem(transcriptRunId, {
+                    type: 'tool.event',
+                    sessionId: transcriptSessionId,
+                    status: 'failure',
+                    payload: {
+                        callId,
+                        tool: toolId,
+                        stage: 'failure',
+                        status,
+                        error: response.error,
+                        durationMs: response.durationMs
+                    }
+                });
             }
+            this.emitGatewayEvent('tool.call.failure', {
+                callId,
+                tool: toolId,
+                stage: 'failure',
+                status,
+                error: response.error,
+                durationMs: response.durationMs
+            });
             this.emitGatewayEvent('tool.call.finished', response);
             return response;
         }
@@ -1196,6 +1663,17 @@ class HumanClawGateway extends EventEmitter {
             context: this.mergeDefaultContext(
                 input.context && typeof input.context === 'object' ? input.context : {}
             )
+        });
+    }
+
+    async interruptAgentRun(request = {}) {
+        const input = request && typeof request === 'object' ? request : {};
+        const context = input.context && typeof input.context === 'object' ? input.context : {};
+        return await this.ensureAgentRunner().requestInterruptRun({
+            runId: input.runId || context.runId || '',
+            sessionId: input.sessionId || input.sessionKey || context.sessionId || context.sessionKey || '',
+            reason: input.reason || context.reason || 'user_interrupt',
+            source: input.source || context.source || 'gateway'
         });
     }
 
@@ -1222,7 +1700,7 @@ class HumanClawGateway extends EventEmitter {
             sessionId: subagent?.childSessionId || context.sessionId || context.sessionKey,
             agentLoop: 'llm',
             planner: 'llm',
-            maxAgentSteps: Number(args.maxAgentSteps || context.maxAgentSteps || 6),
+            maxAgentSteps: Number(args.maxAgentSteps || context.maxAgentSteps || 50),
             context: this.mergeDefaultContext({
                 ...context,
                 parentRunId: subagent?.runId,
@@ -1233,7 +1711,7 @@ class HumanClawGateway extends EventEmitter {
                 sessionKey: subagent?.childSessionId || context.sessionKey,
                 agentLoop: 'llm',
                 planner: 'llm',
-                maxAgentSteps: Number(args.maxAgentSteps || context.maxAgentSteps || 6)
+                maxAgentSteps: Number(args.maxAgentSteps || context.maxAgentSteps || 50)
             })
         });
         const result = signal
@@ -1281,46 +1759,24 @@ class HumanClawGateway extends EventEmitter {
     }
 
     async callOpenClawTool({ toolId, args, context, workspaceDir }) {
-        if (toolId === EMAIL_TOOL_ID) {
-            return await executeEmailTool(args, {
+        if (isExternalVirtualToolId(toolId)) {
+            const result = await this.runtime?.capabilityManager?.executeVirtualExternalTool?.(toolId, args, {
                 ...context,
-                emailProfiles: {
-                    ...(this.getEmailProfiles() || {}),
-                    ...(context.emailProfiles || context.emailAccounts || {})
-                }
+                workspace: workspaceDir,
+                workspaceDir
             });
+            return makeExternalVirtualToolResult(result || {
+                status: 'capability_manager_unavailable',
+                ok: false,
+                toolId,
+                message: 'Capability Manager is not available for external virtual tool execution.'
+            }, { toolId });
         }
-        if (toolId === FILE_MANAGER_TOOL_ID) {
-            return await executeFileManagerTool(args, context, {
-                workspaceDir,
-                workspaceRoot: this.workspaceRoot,
-                projectRoot: this.projectRoot
-            });
-        }
-        if (toolId === COMPUTER_TOOL_ID) {
-            return await this.computerTool.execute(args, context, {
-                workspaceDir,
-                workspaceRoot: this.workspaceRoot,
-                projectRoot: this.projectRoot
-            });
-        }
-        if (toolId === CODE_TOOL_ID) {
-            return await executeCodeTool(args, context, {
-                workspaceDir,
-                workspaceRoot: this.workspaceRoot,
-                projectRoot: this.projectRoot
-            });
-        }
-        if (toolId === VISION_TOOL_ID) {
-            return await executeVisionTool(args, context, this.visionServices);
-        }
-        if (LOCAL_CORE_TOOL_IDS.has(toolId)) {
-            return await this.executeLocalCoreTool({ toolId, args, context, workspaceDir });
-        }
-        if (this.runtime.canExecuteTool(toolId)) {
-            return await this.runtime.executeTool(toolId, args, {
+        if (this.gatewayToolRuntimeRegistry?.has(toolId)) {
+            return await this.gatewayToolRuntimeRegistry.dispatch(toolId, args, {
                 ...context,
-                workspace: workspaceDir
+                workspace: workspaceDir,
+                workspaceDir
             });
         }
         if (PLUGIN_OR_TRIGGER_TOOL_IDS.has(toolId)) {
@@ -1352,6 +1808,62 @@ class HumanClawGateway extends EventEmitter {
         return await tool.execute(`humanclaw-${toolId}`, finalArgs);
     }
 
+    async executeGatewayLocalTool(toolId, args, context = {}) {
+        const workspaceDir = context.workspaceDir || this.resolveWorkspace(context.workspace);
+        if (toolId === EMAIL_TOOL_ID) {
+            return await executeEmailTool(args, {
+                ...context,
+                emailProfiles: {
+                    ...(this.getEmailProfiles() || {}),
+                    ...(context.emailProfiles || context.emailAccounts || {})
+                }
+            });
+        }
+        if (toolId === FILE_MANAGER_TOOL_ID) {
+            return await executeFileManagerTool(args, context, {
+                workspaceDir,
+                workspaceRoot: this.workspaceRoot,
+                projectRoot: this.projectRoot
+            });
+        }
+        if (toolId === COMPUTER_TOOL_ID) {
+            const action = normalizeString(args.action || args.operation || args.intent).toLowerCase().replace(/[-\s]+/g, '_');
+            if (['exec_command', 'exec', 'run'].includes(action)) {
+                const interceptedPatch = this.extractPatchFromCommand(args.cmd || args.command);
+                if (interceptedPatch) {
+                    return await this.executeLocalApplyPatch(interceptedPatch, workspaceDir);
+                }
+            }
+            return await this.computerTool.execute(args, context, {
+                workspaceDir,
+                workspaceRoot: this.workspaceRoot,
+                projectRoot: this.projectRoot,
+                platformAdapter: this.platformAdapter
+            });
+        }
+        if (toolId === CODE_TOOL_ID) {
+            return await executeCodeTool(args, context, {
+                workspaceDir,
+                workspaceRoot: this.workspaceRoot,
+                projectRoot: this.projectRoot
+            });
+        }
+        if (toolId === ARTIFACT_VERIFIER_TOOL_ID) {
+            return await executeArtifactVerifierTool(args, context, {
+                workspaceDir,
+                workspaceRoot: this.workspaceRoot,
+                projectRoot: this.projectRoot
+            });
+        }
+        if (toolId === VISION_TOOL_ID) {
+            return await executeVisionTool(args, context, this.visionServices);
+        }
+        if (LOCAL_CORE_TOOL_IDS.has(toolId)) {
+            return await this.executeLocalCoreTool({ toolId, args, context, workspaceDir });
+        }
+        return this.notAvailableResult(toolId, 'not-materialized');
+    }
+
     notAvailableResult(toolId, reason) {
         const statusByReason = {
             'provider-plugin-or-trigger': 'not_materialized',
@@ -1379,6 +1891,161 @@ class HumanClawGateway extends EventEmitter {
                 tool: toolId,
                 status: statusByReason[reason] || 'unavailable',
                 reason
+            }
+        };
+    }
+
+    extractPatchFromCommand(command = '') {
+        const text = normalizeString(command);
+        const start = text.indexOf('*** Begin Patch');
+        const end = text.indexOf('*** End Patch');
+        if (start < 0 || end < start) {
+            return '';
+        }
+        return text.slice(start, end + '*** End Patch'.length).trim();
+    }
+
+    parseLocalPatch(input = '') {
+        const patch = normalizeString(input);
+        if (!patch.startsWith('*** Begin Patch') || !patch.includes('*** End Patch')) {
+            throwBlocked('apply_patch input must start with *** Begin Patch and end with *** End Patch');
+        }
+        const lines = patch.split(/\r?\n/);
+        const operations = [];
+        let index = 1;
+        const readBody = () => {
+            const body = [];
+            while (index < lines.length && !/^\*\*\* (?:Add File|Update File|Delete File|End Patch)/.test(lines[index])) {
+                body.push(lines[index]);
+                index += 1;
+            }
+            return body;
+        };
+        while (index < lines.length) {
+            const line = lines[index];
+            if (/^\*\*\* End Patch\s*$/.test(line)) {
+                break;
+            }
+            let match = line.match(/^\*\*\* Add File:\s+(.+)$/);
+            if (match) {
+                index += 1;
+                operations.push({ type: 'add', path: match[1].trim(), body: readBody() });
+                continue;
+            }
+            match = line.match(/^\*\*\* Update File:\s+(.+)$/);
+            if (match) {
+                index += 1;
+                operations.push({ type: 'update', path: match[1].trim(), body: readBody() });
+                continue;
+            }
+            match = line.match(/^\*\*\* Delete File:\s+(.+)$/);
+            if (match) {
+                index += 1;
+                operations.push({ type: 'delete', path: match[1].trim(), body: [] });
+                continue;
+            }
+            if (normalizeString(line)) {
+                throwBlocked(`unsupported apply_patch line: ${line}`);
+            }
+            index += 1;
+        }
+        if (!operations.length) {
+            throwBlocked('apply_patch contains no file operations');
+        }
+        return operations;
+    }
+
+    patchBodyToText(body = []) {
+        const content = [];
+        for (const line of body) {
+            if (line.startsWith('+')) {
+                content.push(line.slice(1));
+            } else if (line.startsWith('***')) {
+                break;
+            } else if (normalizeString(line)) {
+                throwBlocked(`add file patch lines must start with +: ${line}`);
+            }
+        }
+        return content.length ? `${content.join('\n')}\n` : '';
+    }
+
+    applyUpdatePatchText(source = '', body = []) {
+        let text = source.replace(/\r\n/g, '\n');
+        let oldLines = [];
+        let newLines = [];
+        const flush = () => {
+            if (!oldLines.length && !newLines.length) {
+                return;
+            }
+            const oldBlock = oldLines.length ? `${oldLines.join('\n')}\n` : '';
+            const newBlock = newLines.length ? `${newLines.join('\n')}\n` : '';
+            const variants = oldBlock.endsWith('\n') ? [oldBlock, oldBlock.slice(0, -1)] : [oldBlock];
+            const found = variants.find((variant) => variant && text.includes(variant));
+            if (!found) {
+                throwBlocked('apply_patch update hunk did not match target file');
+            }
+            text = text.replace(found, found.endsWith('\n') ? newBlock : newBlock.replace(/\n$/, ''));
+            oldLines = [];
+            newLines = [];
+        };
+        for (const line of body) {
+            if (line.startsWith('@@')) {
+                flush();
+                continue;
+            }
+            if (line.startsWith(' ')) {
+                oldLines.push(line.slice(1));
+                newLines.push(line.slice(1));
+                continue;
+            }
+            if (line.startsWith('-')) {
+                oldLines.push(line.slice(1));
+                continue;
+            }
+            if (line.startsWith('+')) {
+                newLines.push(line.slice(1));
+                continue;
+            }
+            if (/^\\ No newline/.test(line) || !normalizeString(line)) {
+                continue;
+            }
+            throwBlocked(`unsupported update patch line: ${line}`);
+        }
+        flush();
+        return text;
+    }
+
+    async executeLocalApplyPatch(input, workspaceDir) {
+        this.assertPatchInsideWorkspace(input, workspaceDir);
+        const operations = this.parseLocalPatch(input);
+        const changedFiles = [];
+        for (const operation of operations) {
+            const target = this.resolveToolPath(operation.path, workspaceDir, 'patchPath');
+            if (operation.type === 'add') {
+                const content = this.patchBodyToText(operation.body);
+                await fsp.mkdir(path.dirname(target), { recursive: true });
+                await fsp.writeFile(target, content, 'utf8');
+                changedFiles.push({ action: 'add', path: target, bytes: Buffer.byteLength(content, 'utf8') });
+                continue;
+            }
+            if (operation.type === 'delete') {
+                await fsp.rm(target, { force: true });
+                changedFiles.push({ action: 'delete', path: target });
+                continue;
+            }
+            const source = await fsp.readFile(target, 'utf8').catch((error) => {
+                throwBlocked(`apply_patch update target not found: ${operation.path}`, { error: error?.message || String(error) });
+            });
+            const next = this.applyUpdatePatchText(source, operation.body);
+            await fsp.writeFile(target, next, 'utf8');
+            changedFiles.push({ action: 'update', path: target, bytes: Buffer.byteLength(next, 'utf8') });
+        }
+        return {
+            content: [{ type: 'text', text: `apply_patch completed: ${changedFiles.length} file(s)` }],
+            details: {
+                status: 'completed',
+                action: 'apply_patch',
+                changedFiles
             }
         };
     }
@@ -1438,7 +2105,15 @@ class HumanClawGateway extends EventEmitter {
             };
         }
 
+        if (toolId === 'apply_patch') {
+            return await this.executeLocalApplyPatch(args.input || args.patch, workspaceDir);
+        }
+
         if (toolId === 'exec') {
+            const interceptedPatch = this.extractPatchFromCommand(args.command || args.cmd);
+            if (interceptedPatch) {
+                return await this.executeLocalApplyPatch(interceptedPatch, workspaceDir);
+            }
             const finalArgs = this.prepareToolArgs({ toolId, args, context, workspaceDir });
             return await this.computerTool.execute(
                 {
@@ -1619,12 +2294,13 @@ class HumanClawGateway extends EventEmitter {
 
     async appendAudit(entry) {
         await fsp.mkdir(this.auditDir, { recursive: true });
+        const safeEntry = redactObject(entry);
         const line = JSON.stringify({
             ts: Date.now(),
             iso: new Date().toISOString(),
-            ...entry,
-            argsPreview: summarize(entry.args),
-            contextPreview: summarize(entry.context)
+            ...safeEntry,
+            argsPreview: summarize(safeEntry.args),
+            contextPreview: summarize(safeEntry.context)
         });
         await fsp.appendFile(this.auditLogPath, `${line}\n`, 'utf8');
     }
@@ -1647,6 +2323,485 @@ class HumanClawGateway extends EventEmitter {
         } catch {
             return [];
         }
+    }
+
+    async listAgentAnalysisRuns(limit = 40) {
+        const boundedLimit = Math.min(Math.max(Number(limit) || 40, 1), 200);
+        const entries = await this.readAuditEntries(1000);
+        const runs = new Map();
+        for (const entry of entries) {
+            const runId = normalizeString(entry.runId || entry.result?.runId || entry.args?.runId);
+            if (!runId || (entry.type && entry.type !== 'agent.run')) {
+                continue;
+            }
+            const ts = analysisTimestamp(entry);
+            const prior = runs.get(runId);
+            if (prior && prior.ts > ts) {
+                continue;
+            }
+            runs.set(runId, {
+                runId,
+                sessionId: normalizeString(entry.args?.sessionId || entry.context?.sessionId || entry.sessionId, 'main'),
+                ts,
+                iso: analysisIso(entry),
+                status: normalizeString(entry.status, 'unknown'),
+                ok: entry.ok === true,
+                durationMs: Number.isFinite(Number(entry.durationMs)) ? Number(entry.durationMs) : null,
+                mode: normalizeString(entry.mode),
+                intent: normalizeString(entry.intent),
+                planner: normalizeString(entry.planner),
+                message: normalizeString(entry.args?.message || entry.message),
+                resultPreview: summarizeForAnalysis(entry.resultPreview || entry.displayText || entry.error || '', 360)
+            });
+        }
+
+        const activeRuns = this.ensureAgentRunner()?.activeRuns;
+        if (activeRuns?.size) {
+            for (const run of activeRuns.values()) {
+                if (!run?.runId) {
+                    continue;
+                }
+                runs.set(run.runId, {
+                    runId: run.runId,
+                    sessionId: normalizeString(run.sessionId, 'main'),
+                    ts: Number(run.startedAt) || Date.now(),
+                    iso: new Date(Number(run.startedAt) || Date.now()).toISOString(),
+                    status: 'running',
+                    ok: false,
+                    durationMs: Date.now() - (Number(run.startedAt) || Date.now()),
+                    mode: normalizeString(run.mode),
+                    intent: normalizeString(run.intent),
+                    planner: normalizeString(run.planner),
+                    message: normalizeString(run.message),
+                    resultPreview: 'running'
+                });
+            }
+        }
+
+        const sortedRuns = [...runs.values()]
+            .sort((a, b) => (b.ts || 0) - (a.ts || 0))
+            .slice(0, boundedLimit);
+        await Promise.all(sortedRuns.map(async (run) => {
+            try {
+                const transcript = await this.runtime.readTranscript(run.runId, 500);
+                const transcriptItems = transcript.items || [];
+                const finalItem = [...transcriptItems].reverse().find((item) =>
+                    ['turn.completed', 'agent.final', 'agent.blocked', 'approval.requested'].includes(item.type)
+                );
+                const latestDebugPause = [...transcriptItems].reverse().find((item) => item.type === 'agent.debug.paused') || null;
+                const latestDebugPauseActive = latestDebugPause &&
+                    (!finalItem || analysisTimestamp(latestDebugPause) >= analysisTimestamp(finalItem));
+                if (!latestDebugPauseActive) {
+                    return;
+                }
+                run.status = 'debug_paused';
+                run.debugPaused = true;
+                run.debugSessionId = normalizeString(latestDebugPause.payload?.debugSessionId);
+                run.pausedAtIteration = Number.isFinite(Number(latestDebugPause.payload?.iteration))
+                    ? Number(latestDebugPause.payload.iteration)
+                    : null;
+                run.nextIteration = Number.isFinite(Number(latestDebugPause.payload?.nextIteration))
+                    ? Number(latestDebugPause.payload.nextIteration)
+                    : null;
+            } catch {
+                // The list should stay usable even if an old transcript was rotated or is malformed.
+            }
+        }));
+
+        return {
+            ok: true,
+            status: 'completed',
+            runs: sortedRuns,
+            auditLogPath: this.auditLogPath,
+            transcriptDir: this.runtime?.transcriptDir || ''
+        };
+    }
+
+    buildRunTimeline({ transcriptItems = [], events = [], auditEntries = [] } = {}) {
+        const timeline = [];
+        for (const item of transcriptItems) {
+            const payload = item.payload || {};
+            timeline.push({
+                source: 'transcript',
+                id: item.id || `${item.runId}:${item.seq}`,
+                seq: item.seq || null,
+                ts: analysisTimestamp(item),
+                iso: analysisIso(item),
+                type: item.type,
+                kind: timelineKind(item.type),
+                status: item.status || payload.status || '',
+                iteration: getPayloadIteration(payload),
+                title: timelineTitle(item.type, payload),
+                durationMs: Number.isFinite(Number(payload.durationMs)) ? Number(payload.durationMs) : null,
+                ok: payload.ok,
+                tool: payload.tool || payload.toolCall?.tool || '',
+                preview: summarizeForAnalysis(payload.displayText || payload.text || payload.summary || payload.error || payload.result || payload, 900)
+            });
+        }
+        for (const event of events) {
+            const payload = event.payload || {};
+            timeline.push({
+                source: 'event',
+                id: event.id,
+                seq: event.seq || null,
+                ts: analysisTimestamp(event),
+                iso: analysisIso(event),
+                type: event.type,
+                kind: timelineKind(event.type),
+                status: payload.status || '',
+                iteration: getPayloadIteration(payload),
+                title: timelineTitle(event.type, payload),
+                durationMs: Number.isFinite(Number(payload.durationMs)) ? Number(payload.durationMs) : null,
+                ok: payload.ok,
+                tool: payload.tool || '',
+                preview: summarizeForAnalysis(payload, 700)
+            });
+        }
+        for (const entry of auditEntries) {
+            timeline.push({
+                source: 'audit',
+                id: entry.callId || entry.runId || `${entry.ts || entry.iso}:audit`,
+                seq: null,
+                ts: analysisTimestamp(entry),
+                iso: analysisIso(entry),
+                type: entry.type || 'tool.audit',
+                kind: entry.type === 'agent.run' ? 'result' : 'tool',
+                status: entry.status || '',
+                iteration: null,
+                title: entry.type === 'agent.run'
+                    ? `审计记录 ${entry.status || ''}`.trim()
+                    : `工具审计 ${entry.tool || ''}`.trim(),
+                durationMs: Number.isFinite(Number(entry.durationMs)) ? Number(entry.durationMs) : null,
+                ok: entry.ok,
+                tool: entry.tool || '',
+                preview: summarizeForAnalysis(entry.resultPreview || entry.error || entry.argsPreview || entry, 700)
+            });
+        }
+        return timeline
+            .sort((a, b) => (a.ts || 0) - (b.ts || 0) || (a.seq || 0) - (b.seq || 0))
+            .slice(-2000);
+    }
+
+    buildRunRounds(transcriptItems = []) {
+        const rounds = new Map();
+        const ensureRound = (iteration) => {
+            const index = Number.isFinite(Number(iteration)) ? Number(iteration) : 0;
+            if (!rounds.has(index)) {
+                rounds.set(index, {
+                    iteration: index,
+                    label: `第 ${index + 1} 轮`,
+                    promptBudget: null,
+                    approxInputTokens: 0,
+                    messages: [],
+                    decision: null,
+                    llmCalls: [],
+                    tools: [],
+                    notes: []
+                });
+            }
+            return rounds.get(index);
+        };
+
+        const toolCalls = new Map();
+        for (const item of transcriptItems) {
+            const payload = item.payload || {};
+            const iteration = getPayloadIteration(payload);
+            if (item.type === 'agent.context_snapshot') {
+                const round = ensureRound(iteration);
+                round.promptBudget = payload.promptBudget || null;
+                round.approxInputTokens = Number(payload.promptBudget?.approx_input_tokens) || approxTokenCount(JSON.stringify(payload.messages || []));
+                round.messages = Array.isArray(payload.messages) ? payload.messages : [];
+                continue;
+            }
+            if (item.type === 'agent.llm_call') {
+                ensureRound(iteration).llmCalls.push({
+                    callId: payload.callId || '',
+                    provider: payload.provider || '',
+                    model: payload.model || '',
+                    status: payload.status || item.status || '',
+                    action: payload.action || '',
+                    ok: payload.ok === true,
+                    durationMs: Number(payload.durationMs) || 0,
+                    usage: normalizeUsageForAnalysis(payload.usage || {})
+                });
+                continue;
+            }
+            if (item.type === 'agent.decision') {
+                ensureRound(iteration).decision = {
+                    status: item.status || payload.status || '',
+                    action: payload.action || '',
+                    intent: payload.intent || '',
+                    summary: payload.summary || '',
+                    publicReasoning: payload.publicReasoning || '',
+                    riskLevel: payload.riskLevel || '',
+                    toolCall: payload.toolCall || null,
+                    error: payload.error || ''
+                };
+                continue;
+            }
+            if (item.type === 'tool.call') {
+                const callId = normalizeString(payload.callId || item.id);
+                const tool = {
+                    callId,
+                    tool: payload.tool || '',
+                    status: 'started',
+                    ok: null,
+                    durationMs: 0,
+                    args: payload.args || null,
+                    resultPreview: ''
+                };
+                toolCalls.set(callId, tool);
+                ensureRound(iteration).tools.push(tool);
+                continue;
+            }
+            if (item.type === 'tool.result') {
+                const callId = normalizeString(payload.callId || item.id);
+                let tool = toolCalls.get(callId);
+                if (!tool) {
+                    tool = {
+                        callId,
+                        tool: payload.tool || '',
+                        status: payload.status || item.status || '',
+                        ok: payload.ok === true,
+                        durationMs: Number(payload.durationMs) || 0,
+                        args: null,
+                        resultPreview: summarizeForAnalysis(payload.result || payload.error || '', 900)
+                    };
+                    ensureRound(iteration).tools.push(tool);
+                } else {
+                    tool.status = payload.status || item.status || tool.status;
+                    tool.ok = payload.ok === true;
+                    tool.durationMs = Number(payload.durationMs) || tool.durationMs;
+                    tool.resultPreview = summarizeForAnalysis(payload.result || payload.error || '', 900);
+                }
+            }
+        }
+
+        return [...rounds.values()].sort((a, b) => a.iteration - b.iteration);
+    }
+
+    buildRunToolCalls(transcriptItems = []) {
+        const calls = new Map();
+        for (const item of transcriptItems) {
+            const payload = item.payload || {};
+            if (!['tool.call', 'tool.result'].includes(item.type)) {
+                continue;
+            }
+            const callId = normalizeString(payload.callId || item.id);
+            if (!callId) {
+                continue;
+            }
+            const existing = calls.get(callId) || {
+                callId,
+                tool: payload.tool || '',
+                startedAt: null,
+                completedAt: null,
+                status: 'started',
+                ok: null,
+                durationMs: 0,
+                iteration: getPayloadIteration(payload),
+                args: null,
+                resultPreview: ''
+            };
+            if (item.type === 'tool.call') {
+                existing.startedAt = analysisTimestamp(item);
+                existing.tool = payload.tool || existing.tool;
+                existing.args = payload.args || existing.args;
+                existing.iteration = getPayloadIteration(payload);
+            } else {
+                existing.completedAt = analysisTimestamp(item);
+                existing.tool = payload.tool || existing.tool;
+                existing.status = payload.status || item.status || existing.status;
+                existing.ok = payload.ok === true;
+                existing.durationMs = Number(payload.durationMs) || existing.durationMs;
+                existing.resultPreview = summarizeForAnalysis(payload.result || payload.error || '', 900);
+            }
+            calls.set(callId, existing);
+        }
+        return [...calls.values()].sort((a, b) => (a.startedAt || a.completedAt || 0) - (b.startedAt || b.completedAt || 0));
+    }
+
+    buildRunBottlenecks({ rounds = [], toolCalls = [], llmCalls = [], status = '' } = {}) {
+        const candidates = [];
+        for (const call of llmCalls) {
+            candidates.push({
+                kind: 'llm',
+                label: `轮次 ${Number(call.iteration ?? 0) + 1} LLM ${call.model || call.provider || ''}`.trim(),
+                durationMs: Number(call.durationMs) || 0,
+                severity: call.ok === false ? 'high' : 'medium',
+                detail: call.status || ''
+            });
+        }
+        for (const tool of toolCalls) {
+            candidates.push({
+                kind: 'tool',
+                label: `${tool.tool || 'tool'} ${tool.status || ''}`.trim(),
+                durationMs: Number(tool.durationMs) || 0,
+                severity: tool.ok === false ? 'high' : 'medium',
+                detail: tool.resultPreview || ''
+            });
+        }
+        for (const round of rounds) {
+            candidates.push({
+                kind: 'context',
+                label: `${round.label} 输入上下文`,
+                tokens: Number(round.approxInputTokens) || 0,
+                severity: Number(round.approxInputTokens) > 24000 ? 'high' : 'low',
+                detail: `${Number(round.approxInputTokens) || 0} approx tokens`
+            });
+        }
+        const failedTool = toolCalls.find((tool) => tool.ok === false);
+        const slowest = candidates
+            .filter((entry) => Number(entry.durationMs) > 0 || Number(entry.tokens) > 0)
+            .sort((a, b) => (b.durationMs || b.tokens || 0) - (a.durationMs || a.tokens || 0))
+            .slice(0, 8);
+        const primary = failedTool
+            ? `首要问题可能在工具 ${failedTool.tool || failedTool.callId}：${failedTool.status || 'failed'}`
+            : slowest[0]
+                ? `最大开销来自 ${slowest[0].label}`
+                : status && status !== 'completed'
+                    ? `运行状态停在 ${status}`
+                    : '未发现明显单点瓶颈';
+        return {
+            primary,
+            items: slowest
+        };
+    }
+
+    async analyzeAgentRun(runId, options = {}) {
+        const id = normalizeString(runId);
+        if (!id) {
+            return {
+                ok: false,
+                status: 'missing_run_id',
+                error: 'runId is required'
+            };
+        }
+        const transcript = await this.runtime.readTranscript(id, Number(options.transcriptLimit || 2000));
+        const transcriptItems = transcript.items || [];
+        const auditEntries = (await this.readAuditEntries(1000)).filter((entry) => isRunAuditEntry(entry, id));
+        const events = this.eventLog.filter((event) => isRunGatewayEvent(event, id));
+        const timeline = this.buildRunTimeline({ transcriptItems, events, auditEntries });
+        const rounds = this.buildRunRounds(transcriptItems);
+        const toolCalls = this.buildRunToolCalls(transcriptItems);
+        const llmCalls = rounds.flatMap((round) =>
+            round.llmCalls.map((call) => ({
+                ...call,
+                iteration: round.iteration
+            }))
+        );
+        const usageTotals = {
+            promptTokens: 0,
+            completionTokens: 0,
+            totalTokens: 0,
+            reasoningTokens: 0,
+            cachedTokens: 0
+        };
+        for (const call of llmCalls) {
+            addUsageTotals(usageTotals, call.usage || {});
+        }
+        const finalItem = [...transcriptItems].reverse().find((item) =>
+            ['turn.completed', 'agent.final', 'agent.blocked', 'approval.requested'].includes(item.type)
+        );
+        const latestDebugPause = [...transcriptItems].reverse().find((item) => item.type === 'agent.debug.paused') || null;
+        const latestDebugPauseActive = latestDebugPause &&
+            (!finalItem || analysisTimestamp(latestDebugPause) >= analysisTimestamp(finalItem));
+        const finalAudit = [...auditEntries].reverse().find((entry) => entry.type === 'agent.run') || null;
+        const status = normalizeString(
+            finalAudit?.status || finalItem?.status || finalItem?.payload?.status,
+            transcript.ok ? 'running_or_partial' : transcript.status || 'not_found'
+        );
+        const ok = finalAudit ? finalAudit.ok === true : finalItem?.payload?.ok === true;
+        const durationMs = Number(finalAudit?.durationMs ?? finalItem?.payload?.durationMs);
+        const totalContextTokens = rounds.reduce((sum, round) => sum + (Number(round.approxInputTokens) || 0), 0);
+        const bottlenecks = this.buildRunBottlenecks({ rounds, toolCalls, llmCalls, status });
+        return {
+            ok: transcript.ok || auditEntries.length > 0 || events.length > 0,
+            status,
+            runId: id,
+            sessionId: normalizeString(transcriptItems[0]?.sessionId || finalAudit?.args?.sessionId, 'main'),
+            summary: {
+                ok,
+                status,
+                durationMs: Number.isFinite(durationMs) ? durationMs : null,
+                mode: finalAudit?.mode || finalItem?.payload?.mode || '',
+                intent: finalAudit?.intent || finalItem?.payload?.intent || '',
+                planner: finalAudit?.planner || finalItem?.payload?.planner || '',
+                rounds: rounds.length,
+                llmCalls: llmCalls.length,
+                toolCalls: toolCalls.length,
+                failedTools: toolCalls.filter((tool) => tool.ok === false).length,
+                totalContextTokens,
+                usage: usageTotals,
+                primaryBottleneck: bottlenecks.primary,
+                debugPaused: status === 'debug_paused' || Boolean(latestDebugPauseActive),
+                debugSessionId: latestDebugPauseActive ? normalizeString(latestDebugPause?.payload?.debugSessionId) : '',
+                pausedAtIteration: latestDebugPauseActive && Number.isFinite(Number(latestDebugPause?.payload?.iteration))
+                    ? Number(latestDebugPause.payload.iteration)
+                    : null,
+                nextIteration: latestDebugPauseActive && Number.isFinite(Number(latestDebugPause?.payload?.nextIteration))
+                    ? Number(latestDebugPause.payload.nextIteration)
+                    : null
+            },
+            transcript: {
+                ok: transcript.ok,
+                status: transcript.status,
+                path: transcript.transcriptPath || '',
+                itemCount: transcriptItems.length
+            },
+            audit: {
+                path: this.auditLogPath,
+                entryCount: auditEntries.length
+            },
+            rounds,
+            toolCalls,
+            llmCalls,
+            bottlenecks,
+            timeline
+        };
+    }
+
+    async runAgentAnalysis(request = {}) {
+        const result = await this.runAgent(request || {});
+        const runId = normalizeString(result?.runId || result?.result?.runId || result?.payload?.runId);
+        const analysis = runId ? await this.analyzeAgentRun(runId, request.analysis || {}) : null;
+        return {
+            ok: result?.ok === true,
+            status: result?.status || analysis?.status || 'completed',
+            runId,
+            result,
+            analysis
+        };
+    }
+
+    async continueAgentAnalysis(request = {}) {
+        const debugSessionId = normalizeString(request.debugSessionId || request.context?.debugSessionId);
+        const runId = normalizeString(request.runId || request.context?.runId);
+        const result = await this.runAgent({
+            ...(request || {}),
+            debugSessionId,
+            runId,
+            agentLoop: 'llm',
+            planner: 'llm',
+            debugBreakAfterRound: request.debugBreakAfterRound !== false,
+            context: {
+                ...(request.context || {}),
+                debugSessionId,
+                runId,
+                agentLoop: 'llm',
+                planner: 'llm',
+                debugBreakAfterRound: request.debugBreakAfterRound !== false
+            }
+        });
+        const nextRunId = normalizeString(result?.runId || result?.result?.runId || result?.payload?.runId || runId);
+        const analysis = nextRunId ? await this.analyzeAgentRun(nextRunId, request.analysis || {}) : null;
+        return {
+            ok: result?.ok === true,
+            status: result?.status || analysis?.status || 'completed',
+            runId: nextRunId,
+            result,
+            analysis
+        };
     }
 }
 

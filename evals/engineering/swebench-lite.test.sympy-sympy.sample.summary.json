@@ -1,0 +1,24 @@
+{
+  "ok": true,
+  "dataset": "princeton-nlp/SWE-bench_Lite",
+  "config": "default",
+  "split": "test",
+  "offset": 0,
+  "repo": "sympy/sympy",
+  "requestedLimit": 1,
+  "rowCount": 1,
+  "totalRows": 300,
+  "scannedRows": 300,
+  "scanOffsets": [
+    0,
+    100,
+    200
+  ],
+  "output": "F:\\AIGril\\evals\\engineering\\swebench-lite.test.sympy-sympy.sample.jsonl",
+  "repos": [
+    "sympy/sympy"
+  ],
+  "instances": [
+    "sympy__sympy-11400"
+  ]
+}

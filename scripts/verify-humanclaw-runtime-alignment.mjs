@@ -8,6 +8,8 @@ const abs = (...parts) => path.join(root, ...parts);
 
 const human = {
   runtime: rel('electron', 'humanclaw-runtime.cjs'),
+  toolRuntime: rel('electron', 'humanclaw-tool-runtime.cjs'),
+  toolSpecs: rel('electron', 'aigl-tool-specs.cjs'),
   gateway: rel('electron', 'humanclaw-gateway.cjs'),
   runner: rel('electron', 'humanclaw-agent-runner.cjs'),
   runtimeTest: rel('tests', 'humanclaw-runtime.test.mjs'),
@@ -60,7 +62,8 @@ const checks = [
     evidence: [
       ev('Codex plan delta notification', codex.item, ['pub struct PlanDeltaNotification', 'pub delta: String']),
       ev('OpenClaw plan tool and stream', openclaw.toolPolicy, ['id: "update_plan"', 'label: "update_plan"']),
-      ev('HumanClaw update_plan tool definition', human.runtime, ["id: 'update_plan'", "type: 'plan.updated'", 'async updatePlan']),
+      ev('HumanClaw update_plan tool definition', human.toolSpecs, ["id: 'update_plan'", 'AIGL_RUNTIME_TOOL_DEFINITIONS']),
+      ev('HumanClaw update_plan transcript event', human.runtime, ["type: 'plan.updated'", 'async updatePlan']),
       ev('HumanClaw agent drives update_plan', human.runner, ["tool: 'update_plan'", 'plan_update']),
     ],
   },
@@ -69,8 +72,9 @@ const checks = [
     verdict: 'aligned-simplified',
     evidence: [
       ev('OpenClaw broad tool catalog', openclaw.toolPolicy, ['id: "update_plan"', 'id: "exec"', 'id: "read"', 'id: "subagents"']),
-      ev('HumanClaw gateway exposes runtime tools', human.gateway, ['const runtimeTools = this.runtime.getRuntimeToolDefinitions()', 'coreTools', 'materializedProbe']),
-      ev('HumanClaw runtime exposes tool definitions', human.runtime, ['getRuntimeToolDefinitions()', 'RUNTIME_TOOL_DEFINITIONS']),
+      ev('HumanClaw gateway exposes registry-backed tools', human.gateway, ['const gatewayDefinitions = this.gatewayToolRuntimeRegistry.listDefinitions()', 'const runtimeTools = gatewayDefinitions', 'codex_like_gateway_tool_registry']),
+      ev('HumanClaw runtime exposes tool definitions', human.runtime, ['getRuntimeToolDefinitions()', 'toolRuntimeRegistry']),
+      ev('HumanClaw Codex-like tool runtime registry', human.toolRuntime, ['class HumanClawToolRuntimeRegistry', 'modelVisibleSpecs', 'async dispatch']),
     ],
   },
   {
@@ -117,7 +121,9 @@ const checks = [
     evidence: [
       ev('Codex MCP tool call protocol', codex.mcp, ['pub struct McpServerToolCallParams', 'pub server: String', 'pub tool: String', 'pub struct McpServerToolCallResponse']),
       ev('OpenClaw ACP MCP bridge constraints', openclaw.acpDoc, ['Per-session `mcpServers` are not supported in bridge mode', 'plugin-tools-mcp-bridge']),
-      ev('HumanClaw MCP runtime bridge surface', human.runtime, ["id: 'mcp_bridge'", 'executeMcpBridge', "type: 'mcp.tool.call.begin'", "type: 'mcp.tool.call.end'"]),
+      ev('HumanClaw MCP runtime bridge surface', human.toolSpecs, ["id: 'mcp_bridge'", 'AIGL_RUNTIME_TOOL_DEFINITIONS']),
+      ev('HumanClaw MCP direct dispatch', human.toolRuntime, ['dispatchDirectMcpTool', 'tool_search']),
+      ev('HumanClaw MCP call lifecycle', human.runtime, ['executeMcpBridge', "type: 'mcp.tool.call.begin'", "type: 'mcp.tool.call.end'"]),
       ev('HumanClaw MCP stdio session manager', rel('electron', 'humanclaw-mcp-session.cjs'), ['class HumanClawMcpManager', "session.request('tools/list'", "session.request('tools/call'", "session.request('resources/read'"]),
     ],
   },
@@ -127,7 +133,9 @@ const checks = [
     evidence: [
       ev('Codex child agents inherit runtime policy', codex.multiAgents, ['apply_spawn_agent_runtime_overrides', 'approval_policy', 'set_permission_profile']),
       ev('OpenClaw subagent orchestration docs', openclaw.subagentsDoc, ['sessions_spawn', '`subagents`', 'Completion is push-based']),
-      ev('HumanClaw subagent runner surface', human.runtime, ["id: 'subagents'", 'startSubagentRun', 'this.subagentRuns.set', "type: 'subagent.completed'"]),
+      ev('HumanClaw subagent runtime definition', human.toolSpecs, ["id: 'subagents'", 'AIGL_RUNTIME_TOOL_DEFINITIONS']),
+      ev('HumanClaw subagent runtime dispatch', human.toolRuntime, ['definitionById.subagents']),
+      ev('HumanClaw subagent runner surface', human.runtime, ['startSubagentRun', 'this.subagentRuns.set', "type: 'subagent.completed'"]),
     ],
   },
   {
@@ -145,8 +153,9 @@ const checks = [
     verdict: 'humanclaw-specific-aligned-to-codex-tool-shape',
     evidence: [
       ev('Codex command execution handler', codex.shell, ['ToolEmitter::shell', 'ShellRequest', 'intercept_apply_patch']),
-      ev('HumanClaw local core tools', human.gateway, ['const LOCAL_CORE_TOOL_IDS = new Set', 'async executeLocalCoreTool', "if (toolId === 'read')", "if (toolId === 'write')", "if (toolId === 'exec')"]),
-      ev('HumanClaw agent prompt exposes computer actions', human.runner, ['computer: list/tree/stat/read/write/append/mkdir/copy/move/delete/search/hash/du/exec/session_start/process_read/process_write/process_kill/watch/rollback/binary/acl/pty']),
+      ev('HumanClaw local core tools registered as runtime tools', human.gateway, ['createGatewayToolRuntimeRegistry', "'humanclaw-local-core'", 'executeGatewayLocalTool']),
+      ev('HumanClaw gateway dispatches through registry first', human.gateway, ['this.gatewayToolRuntimeRegistry.dispatch', 'this.executeGatewayLocalTool']),
+      ev('HumanClaw agent prompt exposes computer actions', human.runner, ['computer action：list/tree/stat/read/write/write_binary/append/mkdir/copy/move/rename/delete/search/hash/du/exec_command/write_stdin/exec/session_start/process_read/process_write/process_kill/pty_start/pty_write/pty_kill/watch/watch_stop/rollback_list/rollback_restore/acl_get/acl_set']),
     ],
   },
   {

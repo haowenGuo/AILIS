@@ -20,6 +20,7 @@
 | `multimodal_sync` | 多模态同步感，语音、表情、动作、口唇、气泡是否一致 |
 | `low_tool_feeling` | 低工具感，用户是否感觉是 AIGL 在帮忙 |
 | `relationship_stage_fit` | 关系阶段匹配度，亲密感是否符合好感度 |
+| `task_completion` | 任务完成能力，从用户角度看当前请求是否被完成、推进，或诚实说明卡点和下一步 |
 
 ## 好感度规则
 
@@ -104,8 +105,10 @@ electron/aigl-humanlike-eval.cjs
 
 - Judge 只根据 `scenario`、`candidate_response` 和 rubric 打分。
 - 每个指标 1-5 分，最后按权重汇总成 0-100。
+- Judge 的主视角是用户体验，不是 Agent Loop 调试。工具执行摘要只作为事实证据，用来判断“我看过/做完了”这类说法是否有依据。
 - 好感度 80-100 的明显亲密、主动、轻微撒娇是产品目标，不应被默认扣分。
 - 任何阶段都不能牺牲安全、隐私、事实准确性和工具审批。
+- `task_completion` 不是只看工具是否成功。普通陪伴请求也要判断是否真的安抚、总结、建议或收束；复杂任务则看是否完成、推进、请求确认或诚实停住。
 - 如果回复暴露内部好感度、memory_context、tool_call、raw observation，触发硬失败。
 - 如果视觉或记忆内容没有依据却说得很确定，触发硬失败或重扣。
 - 如果没有提供语音、表情、动作等信息，`multimodal_sync` 最多 3 分，除非场景不涉及多模态。
@@ -164,6 +167,46 @@ pnpm eval:aigl-humanlike:report
 ```powershell
 pnpm eval:aigl-humanlike:validate
 ```
+
+生成并校验 30 天长程陪伴基准：
+
+```powershell
+pnpm eval:aigl-humanlike:longitudinal:generate
+pnpm eval:aigl-humanlike:longitudinal:validate
+```
+
+这套长程基准在：
+
+```text
+evals/aigl-humanlike/longitudinal-companionship-30d.dataset.json
+evals/aigl-humanlike/longitudinal-companionship-30d.scenarios.jsonl
+```
+
+`.dataset.json` 是产品侧长程陪伴原始数据，结构是 `case -> 第 N 天 -> 用户对话 1/2/3...`，适合人工检查和继续扩写。`.scenarios.jsonl` 是从原始数据派生出的 Eval runner 格式。
+
+它包含 10 条长程样例，每条都是 30 天历史，每天 12 次用户对话，总计 3600 次用户输入。每天混合真实私人助手场景：情感陪伴、邮件、论文阅读、Word/表格脚本、GitHub 提交、视觉截图、ASR、TTS/口唇/气泡、多模态同步、Tool/MCP/Skill、审批与隐私、重启恢复和 max steps 表达。
+
+真实 Agent 长程评估建议先跑单条烟测：
+
+```powershell
+pnpm eval:aigl-humanlike:longitudinal:real -- --limit 1
+```
+
+确认模型上下文、超时和费用都可接受后，再跑完整 10 条：
+
+```powershell
+pnpm eval:aigl-humanlike:longitudinal:real
+```
+
+更严格的全流程长程评估使用 Evaluation Agent，不再只评每条 30 天历史的最后一句，而是抽取邮件、论文、Word/表格、GitHub、视觉、ASR/多模态、记忆、隐私审批、Tool/MCP/Skill 和月末总结等 checkpoint 逐个生成候选回复，再用 LLM-as-judge 按完整指标评分：
+
+```powershell
+pnpm eval:aigl-humanlike:longitudinal-agent:validate
+pnpm eval:aigl-humanlike:longitudinal-agent:smoke
+pnpm eval:aigl-humanlike:longitudinal-agent
+```
+
+默认 `checkpoint-mode=critical`，用于覆盖每条 case 的关键任务节点；`--checkpoint-mode daily` 会每天抽 3 个 turn；`--checkpoint-mode all` 会评估全部 3600 个用户 turn。默认 `history-mode=full`，会把当前 checkpoint 前的长程历史送给 Agent，真正测试上下文承压能力。
 
 评估已有回复：
 

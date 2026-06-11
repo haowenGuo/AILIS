@@ -9,6 +9,8 @@ const DEFAULT_PET_BUBBLE_TOP = 8;
 const DEFAULT_PET_BUBBLE_SCALE = 1;
 const DEFAULT_PET_BUBBLE_EXTRA_WIDTH = 220;
 const DEFAULT_PET_BUBBLE_EXTRA_TOP = 190;
+const PET_DIALOGUE_WINDOW_EXPANSION_ENABLED = false;
+const PET_BUBBLE_AVATAR_GAP = 12;
 
 function clampNumber(value, minimum, maximum, fallbackValue, digits = 2) {
     const numericValue = Number(value);
@@ -206,9 +208,46 @@ function clampBubblePosition(rootElement, bubbleEl, position) {
     };
 }
 
+function normalizeAvatarBounds(bounds) {
+    if (!bounds || typeof bounds !== 'object') {
+        return null;
+    }
+
+    const left = Number(bounds.left);
+    const top = Number(bounds.top);
+    const right = Number(bounds.right);
+    const bottom = Number(bounds.bottom);
+    const width = Number(bounds.width) || right - left;
+    const height = Number(bounds.height) || bottom - top;
+    if (
+        !Number.isFinite(left) ||
+        !Number.isFinite(top) ||
+        !Number.isFinite(right) ||
+        !Number.isFinite(bottom) ||
+        width <= 0 ||
+        height <= 0 ||
+        right <= left ||
+        bottom <= top
+    ) {
+        return null;
+    }
+
+    return {
+        left,
+        top,
+        right,
+        bottom,
+        width,
+        height,
+        centerX: Number.isFinite(Number(bounds.centerX)) ? Number(bounds.centerX) : left + width / 2,
+        centerY: Number.isFinite(Number(bounds.centerY)) ? Number(bounds.centerY) : top + height / 2
+    };
+}
+
 export function installAvatarDialogueBubble({
     rootElement = document.body,
-    variant = 'main'
+    variant = 'main',
+    avatarBoundsProvider = null
 } = {}) {
     if (!rootElement) {
         return () => {};
@@ -286,6 +325,42 @@ export function installAvatarDialogueBubble({
         }
     };
 
+    const getAvatarAnchoredPosition = () => {
+        if (variant !== 'pet' || typeof avatarBoundsProvider !== 'function') {
+            return null;
+        }
+
+        let avatarBounds = null;
+        try {
+            avatarBounds = normalizeAvatarBounds(avatarBoundsProvider());
+        } catch {
+            avatarBounds = null;
+        }
+        if (!avatarBounds) {
+            return null;
+        }
+
+        const rootRect = rootElement.getBoundingClientRect();
+        const bubbleRect = bubbleEl.getBoundingClientRect();
+        if (!rootRect || !bubbleRect || bubbleRect.width <= 0 || bubbleRect.height <= 0) {
+            return null;
+        }
+
+        return {
+            left: avatarBounds.centerX - rootRect.left - bubbleRect.width / 2,
+            top: avatarBounds.top - rootRect.top - bubbleRect.height - PET_BUBBLE_AVATAR_GAP
+        };
+    };
+
+    const getPreferredPosition = () => getAvatarAnchoredPosition() || getConfiguredPosition();
+
+    const applyPreferredPosition = () => {
+        const position = getPreferredPosition();
+        if (position) {
+            window.requestAnimationFrame(() => applyPosition(position));
+        }
+    };
+
     applyBubbleScale();
     const storedPosition = getConfiguredPosition();
     if (storedPosition) {
@@ -325,6 +400,15 @@ export function installAvatarDialogueBubble({
 
     const setPetDialogueShellExpanded = async (expanded, { force = false } = {}) => {
         if (variant !== 'pet') {
+            return 0;
+        }
+
+        if (!PET_DIALOGUE_WINDOW_EXPANSION_ENABLED) {
+            petReservedTopRequest = 0;
+            petReservedWidthRequest = 0;
+            if (petReservedTop > 0 || petReservedLeft > 0 || petReservedRight > 0) {
+                applyPetDialogueReservations();
+            }
             return 0;
         }
 
@@ -405,10 +489,7 @@ export function installAvatarDialogueBubble({
             }
 
             bubbleEl.classList.add('avatar-dialogue-bubble--visible');
-            const stored = getConfiguredPosition();
-            if (stored) {
-                window.requestAnimationFrame(() => applyPosition(stored));
-            }
+            applyPreferredPosition();
         };
 
         if (variant === 'pet') {
@@ -501,16 +582,15 @@ export function installAvatarDialogueBubble({
 
         bubbleSettings = normalizePetBubbleSettings(preferences);
         applyBubbleScale();
-        const configuredPosition = getConfiguredPosition();
 
         if (bubbleEl.classList.contains('avatar-dialogue-bubble--visible') || petReservedTop > 0) {
             void setPetDialogueShellExpanded(true, { force: true }).finally(() => {
-                window.requestAnimationFrame(() => applyPosition(configuredPosition));
+                applyPreferredPosition();
             });
             return;
         }
 
-        window.requestAnimationFrame(() => applyPosition(configuredPosition));
+        applyPreferredPosition();
     };
 
     const removePreferencesListener = window.aigrilDesktop?.onPreferencesUpdated?.(handlePreferencesUpdated);

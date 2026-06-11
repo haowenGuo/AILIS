@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+import { getLoadableMotionFiles } from './character/motion-intake-catalog.js';
+import { DEFAULT_RENDER_PROFILE_ID, normalizeRenderProfileId } from './character/render-profiles.js';
 
 const DEFAULT_BACKEND_BASE_URL = 'https://airi-backend.onrender.com';
 const DEFAULT_DESKTOP_BACKEND_BASE_URL = '';
@@ -13,6 +15,19 @@ const DEFAULT_DESKTOP_NATIVE_TTS_PITCH = 1.12;
 const DEFAULT_DESKTOP_NATIVE_TTS_VOLUME = 1;
 const DEFAULT_AUTO_CHAT_MIN_INTERVAL = 60000;
 const DEFAULT_AUTO_CHAT_MAX_INTERVAL = 120000;
+const DEFAULT_RENDER_LIGHT_YAW_DEG = 0;
+const DEFAULT_RENDER_KEY_LIGHT_SCALE = 1;
+const DEFAULT_RENDER_AMBIENT_FILL_SCALE = 1;
+const DEFAULT_RENDER_OUTLINE_SCALE = 0.72;
+const DEFAULT_RENDER_SHADOW_ENABLED = true;
+const DEFAULT_RENDER_SHADOW_STRENGTH = 0.22;
+const DEFAULT_RENDER_SHADOW_RANGE = 1.8;
+const DEFAULT_RENDER_RESOLUTION_SCALE = 2;
+const DEFAULT_RENDER_FPS_LIMIT = 60;
+const DEFAULT_RENDER_SHADOW_QUALITY = 3;
+const DEFAULT_RENDER_OUTLINE_ENABLED = true;
+const DEFAULT_RENDER_ANTIALIAS_ENABLED = true;
+const RENDER_FPS_LIMIT_OPTIONS = [24, 30, 45, 60];
 
 function normalizeBackendBaseUrl(value, fallbackValue = DEFAULT_BACKEND_BASE_URL) {
     const normalizedValue = String(value || '').trim().replace(/\/+$/, '');
@@ -47,11 +62,58 @@ function normalizeDesktopBoolean(value, fallbackValue) {
     return fallbackValue;
 }
 
+function normalizeQualityLevel(value, fallbackValue = 3) {
+    const numericValue = Math.round(Number(value));
+    return [1, 2, 3].includes(numericValue) ? numericValue : fallbackValue;
+}
+
+function normalizeRenderResolutionScale(value, fallbackValue = DEFAULT_RENDER_RESOLUTION_SCALE) {
+    return normalizeNumber(value, 0.5, 3, fallbackValue, 2);
+}
+
+function normalizeRenderFpsLimit(value, fallbackValue = DEFAULT_RENDER_FPS_LIMIT) {
+    const numericValue = Number(value);
+    if (!Number.isFinite(numericValue)) {
+        return fallbackValue;
+    }
+    return RENDER_FPS_LIMIT_OPTIONS.reduce((closestValue, optionValue) => (
+        Math.abs(optionValue - numericValue) < Math.abs(closestValue - numericValue)
+            ? optionValue
+            : closestValue
+    ), fallbackValue);
+}
+
+function qualityLevelToShadowMapSize(level) {
+    return { 1: 512, 2: 1024, 3: 2048 }[normalizeQualityLevel(level)] || 2048;
+}
+
 function getDesktopPreferencesSnapshot() {
     if (typeof window === 'undefined') {
         return {};
     }
     return window.aigrilDesktop?.preferences || {};
+}
+
+function getDesktopResourceUrl(relativePath) {
+    if (typeof window === 'undefined') {
+        return relativePath;
+    }
+    const resourceUrl = window.aigrilDesktop?.resourceUrl;
+    if (typeof resourceUrl !== 'function') {
+        return relativePath;
+    }
+    try {
+        return resourceUrl(relativePath);
+    } catch {
+        return relativePath;
+    }
+}
+
+function getDesktopLoadableMotionFiles() {
+    return getLoadableMotionFiles().map((fileInfo) => ({
+        ...fileInfo,
+        path: getDesktopResourceUrl(fileInfo.path)
+    }));
 }
 
 function getRuntimeSettings() {
@@ -175,6 +237,68 @@ function applyDesktopSpeechSettings(preferences = {}) {
     );
 }
 
+function applyRenderProfileSettings(preferences = {}) {
+    CONFIG.RENDER_PROFILE_ID = normalizeRenderProfileId(
+        preferences.renderProfileId || CONFIG.RENDER_PROFILE_ID || DEFAULT_RENDER_PROFILE_ID
+    );
+}
+
+function applyRenderLookSettings(preferences = {}) {
+    CONFIG.RENDER_LOOK = {
+        lightYawDeg: normalizeNumber(
+            preferences.renderLightYawDeg,
+            -75,
+            75,
+            CONFIG.RENDER_LOOK?.lightYawDeg ?? DEFAULT_RENDER_LIGHT_YAW_DEG,
+            0
+        ),
+        keyLightScale: normalizeNumber(
+            preferences.renderKeyLightScale,
+            0.65,
+            1.45,
+            CONFIG.RENDER_LOOK?.keyLightScale ?? DEFAULT_RENDER_KEY_LIGHT_SCALE
+        ),
+        ambientFillScale: normalizeNumber(
+            preferences.renderAmbientFillScale,
+            0.55,
+            1.35,
+            CONFIG.RENDER_LOOK?.ambientFillScale ?? DEFAULT_RENDER_AMBIENT_FILL_SCALE
+        ),
+        outlineScale: normalizeNumber(
+            preferences.renderOutlineScale,
+            0.25,
+            1.2,
+            CONFIG.RENDER_LOOK?.outlineScale ?? DEFAULT_RENDER_OUTLINE_SCALE
+        ),
+        shadowEnabled: normalizeDesktopBoolean(
+            preferences.renderShadowEnabled,
+            CONFIG.RENDER_LOOK?.shadowEnabled ?? DEFAULT_RENDER_SHADOW_ENABLED
+        ),
+        shadowStrength: DEFAULT_RENDER_SHADOW_STRENGTH,
+        shadowRange: DEFAULT_RENDER_SHADOW_RANGE
+    };
+}
+
+function applyRenderQualitySettings(preferences = {}) {
+    CONFIG.RENDER_RESOLUTION_SCALE = normalizeRenderResolutionScale(
+        preferences.renderResolutionScale ?? DEFAULT_RENDER_RESOLUTION_SCALE
+    );
+    CONFIG.RENDER_FPS_LIMIT = normalizeRenderFpsLimit(
+        preferences.renderFpsLimit ?? DEFAULT_RENDER_FPS_LIMIT
+    );
+    CONFIG.RENDER_SHADOW_MAP_SIZE = qualityLevelToShadowMapSize(
+        preferences.renderShadowQuality ?? DEFAULT_RENDER_SHADOW_QUALITY
+    );
+    CONFIG.RENDER_OUTLINE_ENABLED = normalizeDesktopBoolean(
+        preferences.renderOutlineEnabled,
+        CONFIG.RENDER_OUTLINE_ENABLED ?? DEFAULT_RENDER_OUTLINE_ENABLED
+    );
+    CONFIG.RENDER_ANTIALIAS_ENABLED = normalizeDesktopBoolean(
+        preferences.renderAntialiasEnabled,
+        CONFIG.RENDER_ANTIALIAS_ENABLED ?? DEFAULT_RENDER_ANTIALIAS_ENABLED
+    );
+}
+
 function applyAutoChatSettings(preferences = {}) {
     const minimumIntervalMs = Math.round(normalizeNumber(
         preferences.autoChatMinIntervalSec,
@@ -199,34 +323,23 @@ function applyAutoChatSettings(preferences = {}) {
 const runtimeSettings = getRuntimeSettings();
 
 export const CONFIG = {
-    MODEL_PATH: 'Resources/AiGril.vrm',
-    ANIMATION_FILES: [
-        { name: 'idle', path: 'Resources/VRMA_MotionPack/vrma/Idle.vrma' },
-        { name: 'idle1', path: 'Resources/VRMA_MotionPack/vrma/Idle1.vrma' },
-        { name: 'idle2', path: 'Resources/VRMA_MotionPack/vrma/Idle2.vrma' },
-        { name: 'vrma25', path: 'Resources/VRMA_MotionPack/vrma/VRMA_25.vrma' },
-        { name: 'vrma17', path: 'Resources/VRMA_MotionPack/vrma/VRMA_17.vrma' },
-        { name: 'angry', path: 'Resources/VRMA_MotionPack/vrma/Angry.vrma' },
-        { name: 'blush', path: 'Resources/VRMA_MotionPack/vrma/Blush.vrma' },
-        { name: 'sad', path: 'Resources/VRMA_MotionPack/vrma/Sad.vrma' },
-        { name: 'sleepy', path: 'Resources/VRMA_MotionPack/vrma/Sleepy.vrma' },
-        { name: 'surprised', path: 'Resources/VRMA_MotionPack/vrma/Surprised.vrma' },
-        { name: 'lookaround', path: 'Resources/VRMA_MotionPack/vrma/LookAround.vrma' },
-        { name: 'jump', path: 'Resources/VRMA_MotionPack/vrma/Jump.vrma' },
-        { name: 'goodbye', path: 'Resources/VRMA_MotionPack/vrma/Goodbye.vrma' },
-        { name: 'clapping', path: 'Resources/VRMA_MotionPack/vrma/Clapping.vrma' },
-        { name: 'thinking', path: 'Resources/VRMA_MotionPack/vrma/Thinking.vrma' }
-    ],
+    MODEL_PATH: getDesktopResourceUrl('Resources/AiGril.vrm'),
+    ANIMATION_FILES: getDesktopLoadableMotionFiles(),
     IDLE_ACTION_LIST: ['idle', 'idle1', 'idle2'],
     DANCE_ACTION_LIST: ['vrma17', 'vrma25'],
     CROSS_FADE_DURATION: 0.4,
     RENDER_PIXEL_RATIO: 2,
+    RENDER_RESOLUTION_SCALE: DEFAULT_RENDER_RESOLUTION_SCALE,
+    RENDER_FPS_LIMIT: 60,
+    RENDER_SHADOW_MAP_SIZE: 2048,
+    RENDER_OUTLINE_ENABLED: DEFAULT_RENDER_OUTLINE_ENABLED,
+    RENDER_ANTIALIAS_ENABLED: DEFAULT_RENDER_ANTIALIAS_ENABLED,
     CAMERA_POSITION: new THREE.Vector3(0, DEFAULT_CAMERA_HEIGHT, DEFAULT_CAMERA_DISTANCE),
     CAMERA_TARGET: new THREE.Vector3(0, DEFAULT_CAMERA_TARGET_Y, 0),
     CAMERA_MIN_DISTANCE: 0.85,
     CAMERA_MAX_DISTANCE: 1.5,
-    BLINK_MIN_INTERVAL: 2000,
-    BLINK_MAX_INTERVAL: 5000,
+    BLINK_MIN_INTERVAL: 2800,
+    BLINK_MAX_INTERVAL: 6500,
     SPEAK_SPEED: 5.2,
     SPEAK_AMPLITUDE: 0.46,
     MAX_MOUTH_OPEN: 0.95,
@@ -274,6 +387,16 @@ export const CONFIG = {
     BACKEND_TTS_SYNTHESIZE_API_URL: `${runtimeSettings.backendBaseUrl}/api/tts/synthesize`,
     BACKEND_TEXT_API_URL: `${runtimeSettings.backendBaseUrl}/api/chat/text`,
     SPEECH_MODE: runtimeSettings.speechMode,
+    RENDER_PROFILE_ID: DEFAULT_RENDER_PROFILE_ID,
+    RENDER_LOOK: {
+        lightYawDeg: DEFAULT_RENDER_LIGHT_YAW_DEG,
+        keyLightScale: DEFAULT_RENDER_KEY_LIGHT_SCALE,
+        ambientFillScale: DEFAULT_RENDER_AMBIENT_FILL_SCALE,
+        outlineScale: DEFAULT_RENDER_OUTLINE_SCALE,
+        shadowEnabled: DEFAULT_RENDER_SHADOW_ENABLED,
+        shadowStrength: DEFAULT_RENDER_SHADOW_STRENGTH,
+        shadowRange: DEFAULT_RENDER_SHADOW_RANGE
+    },
     ASR_SAMPLE_RATE: 16000,
     ASR_MAX_RECORD_MS: 12000,
     ASR_MIN_INPUT_LEVEL: 0.01,
@@ -314,6 +437,9 @@ export function applyDesktopPreferencesToConfig(preferences = {}) {
     }
 
     applyCameraSettings(preferences);
+    applyRenderProfileSettings(preferences);
+    applyRenderQualitySettings(preferences);
+    applyRenderLookSettings(preferences);
     applyDesktopSpeechSettings(preferences);
     applyAutoChatSettings(preferences);
 

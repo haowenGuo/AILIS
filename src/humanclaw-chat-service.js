@@ -1,8 +1,18 @@
 import { markdownToPlainText, normalizeMarkdownSource } from './markdown-renderer.js';
+import {
+    splitChatAttachments,
+    summarizeChatAttachmentsForGateway
+} from './chat-attachments.js';
+import {
+    PROGRESS_MAX_FRAMES,
+    createPersonaProgressFrame,
+    renderPersonaProgressSurface
+} from './aigl-progress-surface.js';
 
 const CONTROL_TAG_PATTERN = /\[(action|expression):([^\]]*)\]/g;
 const LEADING_INCOMPLETE_CONTROL_TAG_PATTERN = /^(?:\[(?:action|expression):[^\]]*)+/;
 const VISION_LLM_TIMEOUT_MS = 90000;
+const PROGRESS_MIN_INTERVAL_MS = 1200;
 
 function normalizeText(value) {
     if (typeof value !== 'string') {
@@ -18,6 +28,96 @@ function getLatestUserEntry(messageHistory = []) {
         }
     }
     return null;
+}
+
+function createProgressPayload(frames = []) {
+    const surface = renderPersonaProgressSurface(frames);
+    return toAssistantPayload(surface.text, {
+        speechText: surface.speechText,
+        bubbleText: surface.bubbleText,
+        surface
+    });
+}
+
+export function createGatewayProgressBridge({ gateway, sessionId, onProgress, onRunStarted, onRunFinished }) {
+    if (typeof onProgress !== 'function' || typeof gateway?.onEvent !== 'function') {
+        return () => {};
+    }
+    const state = {
+        runId: '',
+        frames: [],
+        visibleStepCount: 0,
+        totalSteps: 0,
+        lastText: '',
+        lastEmitAt: 0
+    };
+    const pushFrame = (frame, { force = false } = {}) => {
+        if (!frame?.text || state.frames.at(-1)?.text === frame.text) {
+            return;
+        }
+        state.frames.push(frame);
+        state.frames = state.frames.slice(-PROGRESS_MAX_FRAMES);
+        const nextText = renderPersonaProgressSurface(state.frames).text;
+        const now = Date.now();
+        if (!force && nextText === state.lastText) {
+            return;
+        }
+        if (!force && now - state.lastEmitAt < PROGRESS_MIN_INTERVAL_MS) {
+            return;
+        }
+        state.lastText = nextText;
+        state.lastEmitAt = now;
+        onProgress(createProgressPayload(state.frames));
+    };
+
+    const unsubscribe = gateway.onEvent((event = {}) => {
+        const type = normalizeText(event.type);
+        const payload = event.payload && typeof event.payload === 'object' ? event.payload : {};
+        if (type === 'agent.run.started') {
+            if (normalizeText(payload.sessionId) !== normalizeText(sessionId)) {
+                return;
+            }
+            state.runId = normalizeText(payload.runId);
+            onRunStarted?.({
+                runId: state.runId,
+                sessionId: normalizeText(payload.sessionId),
+                payload
+            });
+            state.totalSteps = Number(payload.stepCount || 0) || 0;
+            pushFrame(createPersonaProgressFrame(event), { force: true });
+            return;
+        }
+        if (!state.runId || normalizeText(payload.runId) !== state.runId) {
+            return;
+        }
+        if (type === 'agent.run.finished' || type === 'agent.run.interrupted') {
+            onRunFinished?.({
+                runId: state.runId,
+                sessionId: normalizeText(payload.sessionId),
+                payload
+            });
+        }
+        if (type === 'agent.step.started') {
+            const frame = createPersonaProgressFrame(event, {
+                index: state.visibleStepCount + 1,
+                total: state.totalSteps
+            });
+            if (frame) {
+                state.visibleStepCount += 1;
+                pushFrame(frame);
+            }
+            return;
+        }
+        if (type === 'agent.reasoning.delta' || type === 'agent.message.delta') {
+            pushFrame(createPersonaProgressFrame(event), { force: type === 'agent.reasoning.delta' });
+            return;
+        }
+        if (type === 'agent.step.finished') {
+            pushFrame(createPersonaProgressFrame(event));
+        }
+    });
+
+    return typeof unsubscribe === 'function' ? unsubscribe : () => {};
 }
 
 function normalizeVisionAttachments(attachments = []) {
@@ -56,16 +156,7 @@ function sanitizeMessageHistoryForGateway(messageHistory = []) {
 
         return {
             ...message,
-            attachments: normalizeVisionAttachments(message.attachments).map((attachment) => ({
-                type: attachment.type,
-                id: attachment.id,
-                source: attachment.source,
-                label: attachment.label,
-                mimeType: attachment.mimeType,
-                width: attachment.width,
-                height: attachment.height,
-                createdAt: attachment.createdAt
-            }))
+            attachments: summarizeChatAttachmentsForGateway(message.attachments)
         };
     });
 }
@@ -211,8 +302,16 @@ async function attachServerTtsIfRequested(payload, replyMode) {
 
 function toHumanClawPayload(result) {
     const cue = getAvatarCue(result);
-    return toAssistantPayload(result?.displayText || result?.error || 'HumanClaw 没有返回可显示内容。', {
+    const surface = result?.surface && typeof result.surface === 'object' ? result.surface : null;
+    const surfaceText = normalizeMarkdownSource(surface?.text || '');
+    const fallbackText = normalizeMarkdownSource(result?.displayText || result?.finalAnswer || result?.error || 'HumanClaw 没有返回可显示内容。');
+    return toAssistantPayload(surfaceText || fallbackText, {
         ...cue,
+        action: surface ? surface.action : cue.action,
+        expression: surface ? surface.expression : cue.expression,
+        speechText: surface?.speechText || result?.speechText || surfaceText || '',
+        bubbleText: surface?.bubbleText || result?.bubbleText || '',
+        surface,
         humanclaw: result
     });
 }
@@ -250,9 +349,11 @@ function toAssistantPayload(text, extra = {}) {
         display_text: parsed.displayText,
         display_format: 'markdown',
         contentFormat: 'markdown',
-        speech_text: parsed.speechText,
+        speech_text: normalizeText(extra.speechText || extra.speech_text) || parsed.speechText,
+        bubble_text: normalizeText(extra.bubbleText || extra.bubble_text) || parsed.displayText,
         action: parsed.action || extra.action || null,
         expression: parsed.expression || extra.expression || null,
+        surface: extra.surface || null,
         fallbackMode: true,
         streamMode: false,
         demoMode: false
@@ -310,6 +411,8 @@ export class HumanClawDesktopChatService {
         this.gateway = window.aigrilDesktop?.gateway || null;
         this.supportsAutoChat = false;
         this.prefersThinkingState = true;
+        this.activeRunId = '';
+        this.activeSessionId = '';
     }
 
     getWelcomeMessage() {
@@ -345,8 +448,9 @@ export class HumanClawDesktopChatService {
             throw new Error('消息不能为空');
         }
 
-        const visionAttachments = normalizeVisionAttachments(latestUserEntry?.attachments);
-        if (visionAttachments.length) {
+        const splitAttachments = splitChatAttachments(latestUserEntry?.attachments);
+        const visionAttachments = splitAttachments.vision;
+        if (visionAttachments.length && !splitAttachments.files.length) {
             const payload = await fetchVisionAssistantTurn(latestUserEntry, {
                 sessionId,
                 messageHistory
@@ -355,19 +459,64 @@ export class HumanClawDesktopChatService {
         }
 
         const status = await this.ensureReady();
-        const result = await this.gateway.runAgent({
+        const unsubscribeProgress = createGatewayProgressBridge({
+            gateway: this.gateway,
             sessionId,
-            message,
-            messageHistory: sanitizeMessageHistoryForGateway(messageHistory),
-            agentLoop: 'llm',
-            context: {
-                workspace: status.workspaceRoot,
-                agentLoop: 'llm'
+            onProgress,
+            onRunStarted: ({ runId, sessionId: startedSessionId }) => {
+                this.activeRunId = runId;
+                this.activeSessionId = startedSessionId || sessionId;
+            },
+            onRunFinished: ({ runId }) => {
+                if (this.activeRunId === runId) {
+                    this.activeRunId = '';
+                    this.activeSessionId = '';
+                }
             }
         });
+        let result;
+        try {
+            result = await this.gateway.runAgent({
+                sessionId,
+                message,
+                messageHistory: sanitizeMessageHistoryForGateway(messageHistory),
+                attachments: summarizeChatAttachmentsForGateway(latestUserEntry?.attachments),
+                agentLoop: 'llm',
+                context: {
+                    workspace: status.workspaceRoot,
+                    agentLoop: 'llm'
+                }
+            });
+        } finally {
+            unsubscribeProgress();
+            this.activeRunId = '';
+            this.activeSessionId = '';
+        }
 
         const payload = toHumanClawPayload(result);
 
         return attachServerTtsIfRequested(payload, replyMode);
+    }
+
+    async abortCurrentTurn({ sessionId = '', reason = 'chat_user_interrupt' } = {}) {
+        if (!this.gateway?.interruptAgentRun) {
+            return {
+                ok: false,
+                status: 'unsupported',
+                error: '当前桌面宿主不支持 HumanClaw 对话中断。'
+            };
+        }
+        const targetSessionId = normalizeText(sessionId || this.activeSessionId);
+        const result = await this.gateway.interruptAgentRun({
+            runId: this.activeRunId,
+            sessionId: targetSessionId,
+            reason,
+            source: 'chat-panel'
+        });
+        if (result?.ok) {
+            this.activeRunId = result.runId || this.activeRunId;
+            this.activeSessionId = result.sessionId || targetSessionId;
+        }
+        return result;
     }
 }

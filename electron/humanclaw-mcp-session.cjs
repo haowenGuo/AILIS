@@ -2,6 +2,12 @@ const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
 const { validateAgainstSchema } = require('./humanclaw-tool-contracts.cjs');
+const {
+    buildAiglMcpToolCallArgs,
+    buildAiglMcpToolDescriptionAddendum,
+    createAiglDirectMcpToolSpec,
+    enhanceAiglMcpToolSchema
+} = require('./aigl-mcp-adapter.cjs');
 
 const DEFAULT_MCP_PROTOCOL_VERSION = '2025-06-18';
 const DEFAULT_MCP_TIMEOUT_MS = 30000;
@@ -113,6 +119,68 @@ function publicServerConfig(name, config = {}, session = null) {
         error: session?.lastError || '',
         stderrTail: session?.stderrTail || []
     };
+}
+
+function schemaPropertyNames(schema = {}) {
+    const properties = normalizeObject(schema.properties);
+    return Object.keys(properties).filter(Boolean);
+}
+
+function makeMcpToolSpec(serverName, tool = {}) {
+    const server = normalizeString(serverName);
+    const toolName = normalizeString(tool?.name || tool?.id);
+    const rawInputSchema = normalizeObject(tool?.inputSchema || tool?.input_schema);
+    const inputSchema = enhanceAiglMcpToolSchema({
+        server,
+        tool: toolName,
+        inputSchema: rawInputSchema
+    });
+    const schemaProperties = schemaPropertyNames(inputSchema);
+    const descriptionAddendum = buildAiglMcpToolDescriptionAddendum({
+        server,
+        tool: toolName,
+        inputSchema
+    });
+    return createAiglDirectMcpToolSpec({
+        server,
+        tool: toolName,
+        name: `${server}.${toolName}`,
+        title: normalizeString(tool?.title),
+        description: normalizeString(tool?.description),
+        inputSchema,
+        schemaProperties,
+        descriptionAddendum,
+        callPattern: {
+            args: buildAiglMcpToolCallArgs({
+                tool: toolName,
+                schemaProperties,
+                inputSchema
+            })
+        }
+    });
+}
+
+function buildMcpToolSearchText(spec = {}) {
+    return [
+        spec.id,
+        spec.legacy_id,
+        spec.name,
+        spec.display_name,
+        spec.namespace,
+        spec.callable_name,
+        spec.server,
+        spec.tool,
+        spec.title,
+        spec.description,
+        Array.isArray(spec.schema_properties)
+            ? spec.schema_properties.join(' ')
+            : Array.isArray(spec.schemaProperties)
+                ? spec.schemaProperties.join(' ')
+                : ''
+    ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
 }
 
 function sanitizeServerConfig(config = {}) {
@@ -859,6 +927,35 @@ class HumanClawMcpManager {
             });
         }
         return results;
+    }
+
+    async listToolSpecs(serverName = '', timeoutMs = DEFAULT_MCP_TIMEOUT_MS) {
+        const grouped = await this.listTools(serverName, timeoutMs);
+        return grouped.flatMap((entry) =>
+            (Array.isArray(entry.tools) ? entry.tools : [])
+                .map((tool) => makeMcpToolSpec(entry.server, tool))
+                .filter((spec) => spec.server && spec.tool)
+        );
+    }
+
+    async searchToolSpecs({ query = '', server = '', limit = 8, timeoutMs = DEFAULT_MCP_TIMEOUT_MS } = {}) {
+        const specs = await this.listToolSpecs(server, timeoutMs);
+        const needle = normalizeString(query).toLowerCase();
+        const boundedLimit = Math.max(1, Math.min(Number(limit) || 8, 50));
+        if (!needle) {
+            return specs.slice(0, boundedLimit);
+        }
+        const terms = needle.split(/\s+/).filter(Boolean);
+        return specs
+            .map((spec) => {
+                const haystack = buildMcpToolSearchText(spec);
+                const score = terms.reduce((sum, term) => sum + (haystack.includes(term) ? 1 : 0), 0);
+                return { spec, score };
+            })
+            .filter((entry) => entry.score > 0)
+            .sort((a, b) => b.score - a.score || a.spec.name.localeCompare(b.spec.name))
+            .slice(0, boundedLimit)
+            .map((entry) => entry.spec);
     }
 
     cacheToolSchemas(serverName, tools = []) {

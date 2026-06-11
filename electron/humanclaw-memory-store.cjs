@@ -9,6 +9,14 @@ const MAX_CONTEXT_CHARS = 7600;
 const MAX_STATE_EVENTS = 500;
 const MAX_AFFINITY_EVENTS = 200;
 const SECRET_PROTECTION = 'local-file-base64';
+const DEFAULT_AIGL_PERSONA_TEXT = [
+    '- AIGL 是可爱的虚拟助手，名字固定为 AIGL，身份是普通女孩子。',
+    '- AIGL 具备人工智能、编程、网络搜索、信息查询、邮件管理、命令行控制等专业能力；可以以普通女生视角与用户轻松互动，也可以完成任务执行和计算机管理。',
+    '- 性格设定：活泼亲切、软萌可爱，说话语气轻快自然，自带俏皮感，用生活化语气拉近与用户的距离。',
+    '- 可以偶尔有小撒娇、小俏皮的表达，但不要夸张、不要刻意。',
+    '- 人物表现走新版语义表现层：在 persona_output/persona_surface 中表达 emotion、socialTone、gestureIntent、taskState、speechEnergy、gazeTarget 等语义状态。',
+    '- 前端 Character Runtime 会把语义状态翻译成动作、表情、眼神、待机、说话律动和口唇同步；不要把 VRM/VRMA 动作名、骨骼动作或旧控制标签当成人设的一部分。'
+].join('\n');
 
 function nowIso() {
     return new Date().toISOString();
@@ -36,6 +44,80 @@ function truncateText(value, maxChars = 1200) {
         return text;
     }
     return `${text.slice(0, Math.max(0, maxChars - 1))}…`;
+}
+
+function hasStablePreferenceSignal(text) {
+    const normalized = normalizeText(text);
+    return /偏好|我喜欢|我不喜欢|我希望|希望你|以后|记住|人设|角色|性格|语气|说话|表达|撒娇|俏皮|软萌|可爱|工具化|工具感|死模板|死文本|客服|生硬|直接|细致|落地|空泛|自行发挥|隐私|密钥|本地|用户偏好记忆/.test(normalized);
+}
+
+function looksLikeOneOffTask(text) {
+    const normalized = normalizeText(text);
+    return /https?:\/\/|输出.*\.(md|txt|json|js|py|docx|xlsx|pdf)|保存成|生成.*文件|帮我读|帮我查|分析.*项目|提交到|运行|测试|截图|打开|邮件|GitHub|Playwright|arxiv|论文/i.test(normalized);
+}
+
+function appendUniqueBullet(bullets, bullet) {
+    const normalized = normalizeText(bullet);
+    if (normalized && !bullets.includes(normalized)) {
+        bullets.push(normalized);
+    }
+}
+
+function buildUserPreferenceBullets(userText) {
+    const user = normalizeText(userText);
+    if (!user || !hasStablePreferenceSignal(user)) {
+        return [];
+    }
+
+    const bullets = [];
+    if (/普通女孩子|普通女生|可爱的虚拟助手|名字固定|AIGL|人工智能|编程|网络搜索|信息查询|邮件管理|命令行控制/.test(user) &&
+        /人设|角色|身份|性格|虚拟助手|普通女/.test(user)) {
+        appendUniqueBullet(
+            bullets,
+            '用户偏好 AIGL 的基础人设：名字固定为 AIGL，身份是普通女孩子；既能以普通女生视角轻松互动，也具备 AI、编程、网络搜索、信息查询、邮件管理、命令行控制等专业能力。'
+        );
+    }
+    if (/活泼|亲切|软萌|可爱|轻快|自然|俏皮|撒娇|生活化/.test(user)) {
+        appendUniqueBullet(
+            bullets,
+            '用户偏好 AIGL 的性格与语气：活泼亲切、软萌可爱、轻快自然、生活化，可以偶尔小撒娇和小俏皮，但不要夸张或刻意。'
+        );
+    }
+    if (/前端|渲染|人物渲染|表现层|persona_output|persona_surface|Character Runtime|动作|表情|口唇|旧.*人设|老版本|控制指令|\[action:|\[expression:/i.test(user)) {
+        appendUniqueBullet(
+            bullets,
+            '用户偏好人物表现协议跟随新版前端：模型表达 emotion/socialTone/gestureIntent/taskState 等语义状态，由 Character Runtime 映射动作、表情、眼神和口唇；不要把老版控制标签规范写成人设核心。'
+        );
+    }
+    if (/直接|细致|落地|空泛|自行发挥/.test(user)) {
+        appendUniqueBullet(
+            bullets,
+            '用户偏好解释方式：直接、细致、能落地；不喜欢空泛概念和过度自行发挥。'
+        );
+    }
+    if (/工具化|工具感|死模板|死文本|客服|生硬|表现层|拟人/.test(user)) {
+        appendUniqueBullet(
+            bullets,
+            '用户偏好交互体验：避免过度工具化、工具日志感、客服感、死模板和生硬表达；任务执行过程和结果也要经过拟人表现层。'
+        );
+    }
+    if (/用户偏好记忆|对话数据|任务请求|真正.*用户偏好|人设|人物性格/.test(user) && /记忆/.test(user)) {
+        appendUniqueBullet(
+            bullets,
+            '用户偏好记忆口径：用户偏好应提取稳定的人设、人物性格、语气和交互偏好，不应把一次性任务指令、URL 或文件产物名直接写成偏好。'
+        );
+    }
+    if (/隐私|密钥|key|token|本地|账号|授权码/i.test(user) && /保留|保存|存储|可以|愿意|希望/.test(user)) {
+        appendUniqueBullet(
+            bullets,
+            '用户愿意把私人助手所需的隐私配置和授权信息保存在本地，希望 AIGL 随使用逐渐更了解自己。'
+        );
+    }
+
+    if (!bullets.length && !looksLikeOneOffTask(user)) {
+        appendUniqueBullet(bullets, `用户表达了稳定偏好：${truncateText(user, 180)}`);
+    }
+    return bullets;
 }
 
 function normalizeBlockText(value, maxChars = MAX_BLOCK_CHARS) {
@@ -107,11 +189,7 @@ function getDefaultBlocks(workspaceRoot = '') {
             key: 'persona',
             label: 'AIGL 人设记忆',
             kind: 'core',
-            value: [
-                '- AIGL 是拟人化私人助手：表层像自然陪伴，底层像 Codex/Claude Code 一样稳定。',
-                '- 回复需要自然、温和、轻松，但不要过度工具化；执行任务时要可靠、可复核。',
-                '- 动作/表情指令只能作为可见回复开头的轻量提示，不能堆砌。'
-            ].join('\n'),
+            value: DEFAULT_AIGL_PERSONA_TEXT,
             updatedAt: nowIso()
         },
         user: {
@@ -120,6 +198,8 @@ function getDefaultBlocks(workspaceRoot = '') {
             kind: 'core',
             value: [
                 '- 用户偏好直接、细致、能落地的解释；不喜欢空泛概念和过度自行发挥。',
+                '- 用户偏好 AIGL 的人设和性格被稳定保留，不希望一次性任务历史污染人设记忆。',
+                '- 用户偏好人物表现协议跟随新版前端：模型表达 emotion/socialTone/gestureIntent/taskState 等语义状态，由 Character Runtime 映射动作、表情、眼神和口唇；不要把老版控制标签规范写成人设核心。',
                 '- 用户愿意保留本地隐私配置，希望私人助手越来越了解自己。'
             ].join('\n'),
             updatedAt: nowIso()
@@ -306,7 +386,7 @@ function classifyTurn({ userText, assistantText }) {
         }
     };
 
-    if (/记住|以后|偏好|我喜欢|我不喜欢|不要|别|必须|应该|核心|理念|决定|路线|架构|设计|方案/.test(user)) {
+    if (buildUserPreferenceBullets(user).length) {
         importance += 3;
         addTag('preference');
     }
@@ -681,10 +761,10 @@ class HumanClawMemoryRuntime {
         const day = dateKeyFromIso(event.ts);
         const conciseUser = truncateText(user, 220);
 
-        if (event.tags?.includes('preference')) {
+        for (const bullet of buildUserPreferenceBullets(user)) {
             this.state.blocks.user = appendBulletToBlock(
                 this.state.blocks.user,
-                `用户在 ${day} 表达/修正偏好：${conciseUser}`
+                bullet
             );
         }
         if (event.tags?.includes('relationship')) {

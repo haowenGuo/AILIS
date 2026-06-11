@@ -5,6 +5,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { execFile, spawn } = require('child_process');
 const { randomUUID } = require('crypto');
+const { createHumanClawPlatformAdapter, getDefaultPlatformAdapter } = require('./humanclaw-platform-adapter.cjs');
 
 const COMPUTER_TOOL_ID = 'computer';
 const DEFAULT_MAX_BYTES = 128 * 1024;
@@ -16,6 +17,10 @@ const DEFAULT_SESSION_TIMEOUT_MS = 12 * 60 * 60 * 1000;
 const DEFAULT_BINARY_CHUNK_BYTES = 256 * 1024;
 const DEFAULT_WATCH_BUFFER_EVENTS = 500;
 const DEFAULT_ROLLBACK_LIMIT = 200;
+const DEFAULT_EXEC_YIELD_TIME_MS = 1000;
+const DEFAULT_EXEC_MAX_OUTPUT_TOKENS = 6000;
+const MIN_EXEC_YIELD_TIME_MS = 50;
+const MAX_EXEC_YIELD_TIME_MS = 30000;
 
 const WRITE_ACTIONS = new Set([
     'write',
@@ -28,12 +33,23 @@ const WRITE_ACTIONS = new Set([
     'trash',
     'exec',
     'run',
+    'exec_command',
     'session_start',
     'pty_start',
     'pty_write',
     'pty_kill',
     'process_write',
     'process_kill',
+    'mouse_move',
+    'mouse_click',
+    'mouse_double_click',
+    'mouse_right_click',
+    'mouse_drag',
+    'scroll',
+    'keyboard_type',
+    'keyboard_press',
+    'keyboard_hotkey',
+    'clipboard_write',
     'watch_stop',
     'write_binary',
     'acl_set',
@@ -56,12 +72,16 @@ const READ_ONLY_ACTIONS = new Set([
     'watch_start',
     'watch_poll',
     'watch_list',
+    'screen_screenshot',
+    'clipboard_read',
+    'wait',
     'pty_status',
     'pty_read',
     'pty_resize',
     'rollback_list',
     'process_list',
-    'process_read'
+    'process_read',
+    'write_stdin'
 ]);
 
 let nodePtyLoadResult = null;
@@ -88,6 +108,15 @@ function normalizeString(value, fallback = '') {
     return trimmed || fallback;
 }
 
+function normalizeCommandArgs(value) {
+    if (!Array.isArray(value)) {
+        return [];
+    }
+    return value
+        .map((entry) => String(entry))
+        .filter((entry) => entry.length > 0);
+}
+
 function normalizeBoolean(value, fallback = false) {
     if (typeof value === 'boolean') {
         return value;
@@ -111,30 +140,16 @@ function normalizeNumber(value, fallback, min, max) {
     return Math.min(Math.max(parsed, min), max);
 }
 
-function isPathInside(rootPath, targetPath) {
-    const root = path.resolve(rootPath);
-    const target = path.resolve(targetPath);
-    const rootComparable = process.platform === 'win32' ? root.toLowerCase() : root;
-    const targetComparable = process.platform === 'win32' ? target.toLowerCase() : target;
-    return targetComparable === rootComparable || targetComparable.startsWith(`${rootComparable}${path.sep}`);
+function getRuntimePlatform(runtime = {}) {
+    return runtime.platformAdapter || getDefaultPlatformAdapter();
 }
 
-function uniquePaths(paths) {
-    const seen = new Set();
-    const result = [];
-    for (const entry of paths) {
-        const normalized = normalizeString(entry);
-        if (!normalized) {
-            continue;
-        }
-        const resolved = path.resolve(normalized);
-        const key = process.platform === 'win32' ? resolved.toLowerCase() : resolved;
-        if (!seen.has(key)) {
-            seen.add(key);
-            result.push(resolved);
-        }
-    }
-    return result;
+function isPathInside(rootPath, targetPath, platformAdapter = getDefaultPlatformAdapter()) {
+    return platformAdapter.isPathInside(rootPath, targetPath);
+}
+
+function uniquePaths(paths, platformAdapter = getDefaultPlatformAdapter()) {
+    return platformAdapter.uniquePaths(paths);
 }
 
 function maybePath(...parts) {
@@ -146,6 +161,7 @@ function maybePath(...parts) {
 
 function commonUserRoots(runtime = {}) {
     const home = os.homedir();
+    const platformAdapter = getRuntimePlatform(runtime);
     return uniquePaths([
         runtime.workspaceRoot,
         runtime.workspaceDir,
@@ -161,22 +177,11 @@ function commonUserRoots(runtime = {}) {
         maybePath(home, 'Pictures'),
         maybePath(home, 'Videos'),
         maybePath(home, 'Music')
-    ]);
+    ], platformAdapter);
 }
 
-function protectedRoots() {
-    if (process.platform !== 'win32') {
-        return ['/', '/bin', '/boot', '/dev', '/etc', '/lib', '/proc', '/root', '/sbin', '/sys', '/usr'];
-    }
-    const systemDrive = process.env.SystemDrive || 'C:';
-    const windir = process.env.WINDIR || `${systemDrive}\\Windows`;
-    return uniquePaths([
-        `${systemDrive}\\`,
-        windir,
-        `${systemDrive}\\Program Files`,
-        `${systemDrive}\\Program Files (x86)`,
-        `${systemDrive}\\ProgramData`
-    ]);
+function protectedRoots(runtime = {}) {
+    return getRuntimePlatform(runtime).protectedRoots();
 }
 
 function resolveTargetPath(rawPath, runtime = {}) {
@@ -202,7 +207,8 @@ function guardPath(targetPath, action, context = {}, runtime = {}) {
     }
     const readOnly = READ_ONLY_ACTIONS.has(action);
     const commonRoots = commonUserRoots(runtime);
-    const insideCommon = commonRoots.some((root) => isPathInside(root, targetPath));
+    const platformAdapter = getRuntimePlatform(runtime);
+    const insideCommon = commonRoots.some((root) => isPathInside(root, targetPath, platformAdapter));
     if (insideCommon) {
         return null;
     }
@@ -218,7 +224,7 @@ function guardPath(targetPath, action, context = {}, runtime = {}) {
             }
         );
     }
-    const protectedHit = protectedRoots().find((root) => isPathInside(root, targetPath));
+    const protectedHit = protectedRoots(runtime).find((root) => isPathInside(root, targetPath, platformAdapter));
     if (protectedHit && !readOnly && context.allowSystemMutation !== true) {
         return createErrorResult(
             'blocked',
@@ -250,6 +256,33 @@ function createErrorResult(status, message, details = {}) {
             ...details
         }
     };
+}
+
+function normalizeGuiAction(action = '') {
+    const normalized = normalizeString(action).toLowerCase().replace(/[-\s]+/g, '_');
+    const aliases = {
+        screenshot: 'screen_screenshot',
+        capture_screen: 'screen_screenshot',
+        click: 'mouse_click',
+        double_click: 'mouse_double_click',
+        right_click: 'mouse_right_click',
+        drag: 'mouse_drag',
+        mouse_scroll: 'scroll',
+        type: 'keyboard_type',
+        type_text: 'keyboard_type',
+        press_key: 'keyboard_press',
+        hotkey: 'keyboard_hotkey',
+        read_clipboard: 'clipboard_read',
+        write_clipboard: 'clipboard_write',
+        sleep: 'wait',
+        shell: 'exec_command',
+        shell_exec: 'exec_command',
+        command: 'exec_command',
+        poll: 'write_stdin',
+        process_poll: 'write_stdin',
+        stdin: 'write_stdin'
+    };
+    return aliases[normalized] || normalized;
 }
 
 function formatBytes(bytes) {
@@ -409,6 +442,227 @@ async function runExecFile(command, args = [], options = {}) {
                 error: error ? error.message || String(error) : ''
             });
         });
+    });
+}
+
+async function runAdapterCommand(commandSpec = {}, options = {}) {
+    const steps = Array.isArray(commandSpec.steps) && commandSpec.steps.length
+        ? commandSpec.steps
+        : [{ command: commandSpec.command, args: commandSpec.args || [], windowsHide: commandSpec.windowsHide }];
+    const stdoutParts = [];
+    const stderrParts = [];
+    let lastExitCode = 0;
+    for (let index = 0; index < steps.length; index++) {
+        const step = steps[index] || {};
+        const result = await runExecFile(step.command, step.args || [], {
+            ...options,
+            windowsHide: step.windowsHide ?? commandSpec.windowsHide ?? options.windowsHide
+        });
+        lastExitCode = result.exitCode;
+        if (result.stdout) {
+            stdoutParts.push(result.stdout);
+        }
+        if (result.stderr) {
+            stderrParts.push(result.stderr);
+        }
+        if (!result.ok && !step.optional) {
+            return {
+                ...result,
+                stepIndex: index,
+                stepCommand: step.command,
+                stdout: stdoutParts.join('\n'),
+                stderr: stderrParts.join('\n') || result.stderr
+            };
+        }
+    }
+    return {
+        ok: true,
+        exitCode: lastExitCode,
+        stdout: stdoutParts.join('\n'),
+        stderr: stderrParts.join('\n'),
+        error: ''
+    };
+}
+
+function parseJsonObject(text = '') {
+    const trimmed = normalizeString(text);
+    if (!trimmed) {
+        return null;
+    }
+    try {
+        return JSON.parse(trimmed);
+    } catch {
+        const line = trimmed
+            .split(/\r?\n/)
+            .reverse()
+            .find((entry) => entry.trim().startsWith('{') && entry.trim().endsWith('}'));
+        if (!line) {
+            return null;
+        }
+        try {
+            return JSON.parse(line);
+        } catch {
+            return null;
+        }
+    }
+}
+
+function defaultScreenshotPath(runtime = {}) {
+    const root = runtime.screenshotDir ||
+        path.join(os.tmpdir(), 'humanclaw-screenshots');
+    return path.join(root, `screen-${Date.now()}-${crypto.randomBytes(3).toString('hex')}.png`);
+}
+
+async function actionWait(args = {}) {
+    const durationMs = normalizeNumber(args.durationMs || args.ms || args.timeoutMs, 1000, 0, 60000);
+    await new Promise((resolve) => setTimeout(resolve, durationMs));
+    return createTextResult(`wait completed: ${durationMs}ms`, {
+        status: 'completed',
+        action: 'wait',
+        durationMs
+    });
+}
+
+async function actionScreenScreenshot(args, context, runtime) {
+    const platformAdapter = getRuntimePlatform(runtime);
+    const targetPath = resolveTargetPath(args.path || args.outputPath || defaultScreenshotPath(runtime), runtime);
+    const guard = guardPath(targetPath, 'write', context, runtime);
+    if (guard) {
+        return guard;
+    }
+    const command = platformAdapter.desktopScreenshotCommand?.({ outputPath: targetPath });
+    if (!command?.supported) {
+        return createErrorResult('not_supported', command?.reason || 'screen_screenshot is not supported by this platform adapter.', {
+            action: 'screen_screenshot',
+            platform: platformAdapter.getStatus()
+        });
+    }
+    await fsp.mkdir(path.dirname(targetPath), { recursive: true }).catch(() => {});
+    const result = await runAdapterCommand(command, {
+        timeout: normalizeNumber(args.timeoutMs, 15000, 1000, 120000),
+        windowsHide: command.windowsHide !== false
+    });
+    if (!result.ok) {
+        return createErrorResult('computer_exec_failed', '屏幕截图失败。', {
+            action: 'screen_screenshot',
+            ...result
+        });
+    }
+    const parsed = parseJsonObject(result.stdout) || {};
+    const stat = await safeStat(targetPath);
+    return {
+        content: [
+            { type: 'text', text: `screen_screenshot saved: ${targetPath}` },
+            { type: 'image', uri: targetPath, mimeType: 'image/png' }
+        ],
+        details: {
+            status: 'completed',
+            action: 'screen_screenshot',
+            path: targetPath,
+            width: parsed.width || null,
+            height: parsed.height || null,
+            size: stat?.size || null,
+            sizeText: stat ? formatBytes(stat.size) : 'unknown',
+            stdout: result.stdout,
+            stderr: result.stderr
+        }
+    };
+}
+
+async function actionClipboardRead(args, context, runtime) {
+    const platformAdapter = getRuntimePlatform(runtime);
+    const command = platformAdapter.clipboardReadCommand?.();
+    if (!command?.supported) {
+        return createErrorResult('not_supported', command?.reason || 'clipboard_read is not supported by this platform adapter.', {
+            action: 'clipboard_read',
+            platform: platformAdapter.getStatus()
+        });
+    }
+    const result = await runAdapterCommand(command, {
+        timeout: normalizeNumber(args.timeoutMs, 10000, 1000, 60000),
+        windowsHide: command.windowsHide !== false
+    });
+    if (!result.ok) {
+        return createErrorResult('computer_exec_failed', '读取剪贴板失败。', {
+            action: 'clipboard_read',
+            ...result
+        });
+    }
+    const parsed = parseJsonObject(result.stdout);
+    const text = parsed && typeof parsed.text === 'string' ? parsed.text : result.stdout;
+    return createTextResult(text, {
+        status: 'completed',
+        action: 'clipboard_read',
+        text,
+        bytes: Buffer.byteLength(text, 'utf8')
+    });
+}
+
+async function actionClipboardWrite(args, context, runtime) {
+    const action = 'clipboard_write';
+    const guard = approvalRequired(action, args, context);
+    if (guard) {
+        return guard;
+    }
+    const platformAdapter = getRuntimePlatform(runtime);
+    const text = typeof args.text === 'string' ? args.text : String(args.content || '');
+    const command = platformAdapter.clipboardWriteCommand?.({ text });
+    if (!command?.supported) {
+        return createErrorResult('not_supported', command?.reason || 'clipboard_write is not supported by this platform adapter.', {
+            action,
+            platform: platformAdapter.getStatus()
+        });
+    }
+    const result = await runAdapterCommand(command, {
+        timeout: normalizeNumber(args.timeoutMs, 10000, 1000, 60000),
+        windowsHide: command.windowsHide !== false
+    });
+    if (!result.ok) {
+        return createErrorResult('computer_exec_failed', '写入剪贴板失败。', {
+            action,
+            ...result
+        });
+    }
+    return createTextResult('clipboard_write completed', {
+        status: 'completed',
+        action,
+        bytes: Buffer.byteLength(text, 'utf8'),
+        stdout: result.stdout,
+        stderr: result.stderr
+    });
+}
+
+async function actionGuiInput(args, context, runtime) {
+    const action = normalizeGuiAction(args.action || args.operation || args.intent);
+    const guard = approvalRequired(action, args, context);
+    if (guard) {
+        return guard;
+    }
+    const platformAdapter = getRuntimePlatform(runtime);
+    const command = platformAdapter.guiInputCommand?.({ ...args, action });
+    if (!command?.supported) {
+        return createErrorResult('not_supported', command?.reason || `${action} is not supported by this platform adapter.`, {
+            action,
+            platform: platformAdapter.getStatus()
+        });
+    }
+    const result = await runAdapterCommand(command, {
+        timeout: normalizeNumber(args.timeoutMs, 10000, 1000, 120000),
+        windowsHide: command.windowsHide !== false
+    });
+    if (!result.ok) {
+        return createErrorResult('computer_exec_failed', `${action} 执行失败。`, {
+            action,
+            ...result
+        });
+    }
+    const parsed = parseJsonObject(result.stdout) || {};
+    return createTextResult(`${action} completed`, {
+        status: 'completed',
+        action,
+        observation: parsed,
+        stdout: result.stdout,
+        stderr: result.stderr
     });
 }
 
@@ -997,9 +1251,9 @@ async function actionAclGet(args, context, runtime) {
     if (!stat) {
         return createErrorResult('not_found', `路径不存在：${target}`, { path: target });
     }
-    const result = process.platform === 'win32'
-        ? await runExecFile('icacls.exe', [target])
-        : await runExecFile('ls', ['-ld', target]);
+    const platformAdapter = getRuntimePlatform(runtime);
+    const aclCommand = platformAdapter.aclReadCommand(target);
+    const result = await runExecFile(aclCommand.command, aclCommand.args);
     if (!result.ok) {
         return createErrorResult('error', result.stderr || result.error || '读取 ACL 失败。', {
             action: 'acl_get',
@@ -1011,7 +1265,7 @@ async function actionAclGet(args, context, runtime) {
         status: 'completed',
         action: 'acl_get',
         path: target,
-        platform: process.platform,
+        platform: platformAdapter.getStatus(),
         stdout: result.stdout
     });
 }
@@ -1022,15 +1276,18 @@ async function actionAclSet(args, context, runtime) {
     if (guard) {
         return guard;
     }
-    if (process.platform !== 'win32') {
-        return createErrorResult('not_supported', 'acl_set 当前只实现了 Windows icacls 安全封装。', {
-            action: 'acl_set',
-            platform: process.platform
-        });
-    }
+    const platformAdapter = getRuntimePlatform(runtime);
     const icaclsArgs = Array.isArray(args.icaclsArgs)
         ? args.icaclsArgs.map((entry) => normalizeString(entry)).filter(Boolean)
         : [];
+    const aclCommand = platformAdapter.aclSetCommand(target, icaclsArgs);
+    if (!aclCommand.supported) {
+        return createErrorResult('not_supported', 'acl_set 当前只实现了 Windows icacls 安全封装。', {
+            action: 'acl_set',
+            platform: platformAdapter.getStatus(),
+            reason: aclCommand.reason
+        });
+    }
     if (!icaclsArgs.length) {
         return createErrorResult('needs_config', 'acl_set 需要 icaclsArgs，例如 ["/grant", "User:(R)"]。', {
             action: 'acl_set',
@@ -1048,7 +1305,7 @@ async function actionAclSet(args, context, runtime) {
     }
     const before = await actionAclGet({ path: target }, context, runtime);
     const rollback = await createRollbackSnapshot('acl_set', [target], args, runtime);
-    const result = await runExecFile('icacls.exe', [target, ...icaclsArgs]);
+    const result = await runExecFile(aclCommand.command, aclCommand.args);
     if (!result.ok) {
         return createErrorResult('error', result.stderr || result.error || '设置 ACL 失败。', {
             action: 'acl_set',
@@ -1156,12 +1413,35 @@ function appendBounded(buffer, chunk, maxBytes = DEFAULT_PROCESS_BUFFER_BYTES) {
     return merged.slice(Math.max(0, merged.length - maxBytes));
 }
 
+function estimateTokenCount(text = '') {
+    return Math.ceil(String(text).length / 4);
+}
+
+function truncateByApproxTokens(text = '', maxTokens = DEFAULT_EXEC_MAX_OUTPUT_TOKENS) {
+    const source = String(text || '');
+    const limit = normalizeNumber(maxTokens, DEFAULT_EXEC_MAX_OUTPUT_TOKENS, 256, 100000);
+    const maxChars = limit * 4;
+    if (source.length <= maxChars) {
+        return source;
+    }
+    return `${source.slice(0, Math.max(0, maxChars - 160))}\n...[truncated: original_token_count=${estimateTokenCount(source)}, max_output_tokens=${limit}]`;
+}
+
+function collectSessionText(record = {}) {
+    return [record.stdout || '', record.stderr || ''].filter(Boolean).join(record.stdout && record.stderr ? '\n' : '');
+}
+
+function collectPtyText(record = {}) {
+    return record.output || '';
+}
+
 class ComputerRuntime {
     constructor(options = {}) {
         this.sessions = new Map();
         this.ptySessions = new Map();
         this.watchers = new Map();
         this.workspaceRoot = options.workspaceRoot || process.cwd();
+        this.platformAdapter = createHumanClawPlatformAdapter(options.platformAdapter || options.platform || {});
     }
 
     createWatchRecord(target, args = {}) {
@@ -1344,6 +1624,96 @@ class ComputerRuntime {
         return record;
     }
 
+    async waitForProcessSnapshot(record, yieldTimeMs = DEFAULT_EXEC_YIELD_TIME_MS) {
+        const waitMs = normalizeNumber(yieldTimeMs, DEFAULT_EXEC_YIELD_TIME_MS, MIN_EXEC_YIELD_TIME_MS, MAX_EXEC_YIELD_TIME_MS);
+        const deadline = Date.now() + waitMs;
+        let lastLength = Buffer.byteLength(collectSessionText(record), 'utf8');
+        while (Date.now() < deadline) {
+            if (record.status !== 'running') {
+                break;
+            }
+            await new Promise((resolve) => setTimeout(resolve, 25));
+            const nextLength = Buffer.byteLength(collectSessionText(record), 'utf8');
+            if (nextLength !== lastLength) {
+                lastLength = nextLength;
+            }
+        }
+        return this.buildUnifiedExecDetails(record, { yieldTimeMs: waitMs });
+    }
+
+    async waitForPtySnapshot(record, yieldTimeMs = DEFAULT_EXEC_YIELD_TIME_MS) {
+        const waitMs = normalizeNumber(yieldTimeMs, DEFAULT_EXEC_YIELD_TIME_MS, MIN_EXEC_YIELD_TIME_MS, MAX_EXEC_YIELD_TIME_MS);
+        const deadline = Date.now() + waitMs;
+        while (Date.now() < deadline) {
+            if (record.status !== 'running') {
+                break;
+            }
+            await new Promise((resolve) => setTimeout(resolve, 25));
+        }
+        return this.buildUnifiedPtyDetails(record, { yieldTimeMs: waitMs });
+    }
+
+    buildUnifiedExecDetails(record, options = {}) {
+        const outputText = collectSessionText(record);
+        const maxOutputTokens = normalizeNumber(options.maxOutputTokens || options.max_output_tokens, DEFAULT_EXEC_MAX_OUTPUT_TOKENS, 256, 100000);
+        const originalTokenCount = estimateTokenCount(outputText);
+        const output = truncateByApproxTokens(outputText, maxOutputTokens);
+        const running = record.status === 'running';
+        return {
+            status: 'completed',
+            action: options.action || 'exec_command',
+            command: record.command,
+            workdir: record.workdir,
+            pid: record.pid,
+            session_id: running ? record.id : undefined,
+            sessionId: running ? record.id : undefined,
+            exit_code: running ? null : record.exitCode,
+            exitCode: running ? null : record.exitCode,
+            signal: record.signal,
+            process_status: record.status,
+            running,
+            chunk_id: randomUUID(),
+            wall_time_seconds: Math.max(0, (Date.now() - record.startedAt) / 1000),
+            original_token_count: originalTokenCount,
+            max_output_tokens: maxOutputTokens,
+            output,
+            stdout: truncateByApproxTokens(record.stdout || '', maxOutputTokens),
+            stderr: truncateByApproxTokens(record.stderr || '', maxOutputTokens),
+            session: this.publicSession(record)
+        };
+    }
+
+    buildUnifiedPtyDetails(record, options = {}) {
+        const outputText = collectPtyText(record);
+        const maxOutputTokens = normalizeNumber(options.maxOutputTokens || options.max_output_tokens, DEFAULT_EXEC_MAX_OUTPUT_TOKENS, 256, 100000);
+        const originalTokenCount = estimateTokenCount(outputText);
+        const output = truncateByApproxTokens(outputText, maxOutputTokens);
+        const running = record.status === 'running';
+        return {
+            status: 'completed',
+            action: options.action || 'exec_command',
+            command: record.command,
+            workdir: record.workdir,
+            pid: record.pid,
+            tty: true,
+            session_id: running ? record.id : undefined,
+            sessionId: running ? record.id : undefined,
+            exit_code: running ? null : record.exitCode,
+            exitCode: running ? null : record.exitCode,
+            signal: record.signal,
+            process_status: record.status,
+            running,
+            chunk_id: randomUUID(),
+            wall_time_seconds: Math.max(0, (Date.now() - record.startedAt) / 1000),
+            original_token_count: originalTokenCount,
+            max_output_tokens: maxOutputTokens,
+            output,
+            stdout: output,
+            stderr: '',
+            session: this.publicPty(record)
+        };
+    }
+
     publicPty(record, includeOutput = true) {
         return {
             id: record.id,
@@ -1388,40 +1758,26 @@ class ComputerRuntime {
                 workdir
             });
         }
-        const executable = normalizeString(
-            args.executable || args.shell,
-            process.platform === 'win32' ? process.env.ComSpec || 'cmd.exe' : process.env.SHELL || 'bash'
-        );
-        const ptyArgs = Array.isArray(args.args)
-            ? args.args.map((entry) => String(entry))
-            : command
-                ? process.platform === 'win32'
-                    ? ['/d', '/s', '/c', command]
-                    : ['-lc', command]
-                : [];
         const cols = normalizeNumber(args.cols, 100, 20, 400);
         const rows = normalizeNumber(args.rows, 30, 5, 200);
-        const terminal = ptyLoad.pty.spawn(executable, ptyArgs, {
-            name: normalizeString(args.term, 'xterm-256color'),
+        const ptySpec = getRuntimePlatform(runtime).ptySpawnOptions({
+            command,
+            executable: args.executable || args.shell,
+            args: args.args,
+            cwd: workdir,
+            env: args.env,
+            term: normalizeString(args.term, 'xterm-256color'),
             cols,
             rows,
-            cwd: workdir,
-            ...(process.platform === 'win32'
-                ? {
-                      useConpty: args.useConpty === undefined ? true : normalizeBoolean(args.useConpty, true),
-                      useConptyDll: normalizeBoolean(args.useConptyDll, false)
-                  }
-                : {}),
-            env: {
-                ...process.env,
-                ...(args.env && typeof args.env === 'object' ? args.env : {})
-            }
+            useConpty: args.useConpty,
+            useConptyDll: args.useConptyDll
         });
+        const terminal = ptyLoad.pty.spawn(ptySpec.executable, ptySpec.args, ptySpec.options);
         const record = {
             id: randomUUID(),
             command,
-            executable,
-            args: ptyArgs,
+            executable: ptySpec.executable,
+            args: ptySpec.args,
             workdir,
             pid: terminal.pid,
             status: 'running',
@@ -1580,44 +1936,63 @@ class ComputerRuntime {
         if (!command) {
             return createErrorResult('needs_config', 'exec 需要 command 参数。');
         }
+        const commandArgs = normalizeCommandArgs(args.args || args.arguments);
+        const commandForDisplay = commandArgs.length ? [command, ...commandArgs].join(' ') : command;
         const workdir = resolveWorkdir(args, context, runtime);
-        const guard = guardPath(workdir, 'read', context, runtime) || commandNeedsApproval({ ...args, action: 'exec' }, context);
+        const guard = guardPath(workdir, 'read', context, runtime) || commandNeedsApproval({ ...args, action: 'exec', command: commandForDisplay }, context);
         if (guard) {
             return guard;
         }
         if (args.dryRun === true) {
-            return createTextResult(JSON.stringify({ action: 'exec', dryRun: true, command, workdir }, null, 2), {
+            return createTextResult(JSON.stringify({ action: 'exec', dryRun: true, command, args: commandArgs, workdir }, null, 2), {
                 status: 'completed',
                 action: 'exec',
                 dryRun: true,
                 command,
+                args: commandArgs,
                 workdir
             });
         }
         const timeoutMs = normalizeNumber(args.timeoutMs || args.timeout, DEFAULT_EXEC_TIMEOUT_MS, 1000, 10 * 60 * 1000);
         const startedAt = Date.now();
         return await new Promise((resolve) => {
-            const child = spawn(command, {
+            const platformAdapter = getRuntimePlatform(runtime);
+            const spawnSpec = platformAdapter.commandSpawnSpec
+                ? platformAdapter.commandSpawnSpec(command, { args: commandArgs, cwd: workdir, env: args.env })
+                : {
+                      supported: true,
+                      command,
+                      args: commandArgs,
+                      options: platformAdapter.shellSpawnOptions({ cwd: workdir, env: args.env })
+                  };
+            if (!spawnSpec.supported) {
+                resolve(createErrorResult('not_supported', spawnSpec.reason || 'Command execution is not supported by this platform adapter.', {
+                    action: 'exec',
+                    command,
+                    args: commandArgs,
+                    workdir,
+                    platform: platformAdapter.getStatus()
+                }));
+                return;
+            }
+            const child = spawn(spawnSpec.command, spawnSpec.args || [], spawnSpec.options || platformAdapter.shellSpawnOptions({
                 cwd: workdir,
-                shell: true,
-                windowsHide: true,
-                env: {
-                    ...process.env,
-                    ...(args.env && typeof args.env === 'object' ? args.env : {})
-                }
-            });
+                env: args.env
+            }));
             let stdout = '';
             let stderr = '';
             const timer = setTimeout(() => {
-                child.kill('SIGTERM');
-                resolve(createErrorResult('timeout', `命令超时：${command}`, {
-                    action: 'exec',
-                    command,
-                    workdir,
-                    stdout,
-                    stderr,
-                    durationMs: Date.now() - startedAt
-                }));
+                platformAdapter.killProcessTree(child, 'SIGTERM').finally(() => {
+                    resolve(createErrorResult('timeout', `命令超时：${command}`, {
+                        action: 'exec',
+                        command,
+                        args: commandArgs,
+                        workdir,
+                        stdout,
+                        stderr,
+                        durationMs: Date.now() - startedAt
+                    }));
+                });
             }, timeoutMs);
             child.stdout?.on('data', (chunk) => {
                 stdout = appendBounded(stdout, chunk, normalizeNumber(args.maxOutputBytes, DEFAULT_PROCESS_BUFFER_BYTES, 1024, 5 * 1024 * 1024));
@@ -1630,6 +2005,7 @@ class ComputerRuntime {
                 resolve(createErrorResult('error', error.message || String(error), {
                     action: 'exec',
                     command,
+                    args: commandArgs,
                     workdir
                 }));
             });
@@ -1639,6 +2015,7 @@ class ComputerRuntime {
                     status: exitCode === 0 ? 'completed' : 'error',
                     action: 'exec',
                     command,
+                    args: commandArgs,
                     workdir,
                     exitCode,
                     signal,
@@ -1655,35 +2032,125 @@ class ComputerRuntime {
         });
     }
 
+    async execCommand(args, context, runtime) {
+        const command = normalizeString(args.cmd || args.command);
+        if (!command) {
+            return createErrorResult('needs_config', 'exec_command 需要 cmd 或 command 参数。');
+        }
+        const commandArgs = normalizeCommandArgs(args.args || args.arguments);
+        const commandForDisplay = commandArgs.length ? [command, ...commandArgs].join(' ') : command;
+        const workdir = resolveWorkdir(args, context, runtime);
+        const guard = guardPath(workdir, 'read', context, runtime) || commandNeedsApproval({ ...args, action: 'exec_command', command: commandForDisplay }, context);
+        if (guard) {
+            return guard;
+        }
+        const yieldTimeMs = normalizeNumber(args.yield_time_ms || args.yieldTimeMs, DEFAULT_EXEC_YIELD_TIME_MS, MIN_EXEC_YIELD_TIME_MS, MAX_EXEC_YIELD_TIME_MS);
+        const maxOutputTokens = normalizeNumber(args.max_output_tokens || args.maxOutputTokens, DEFAULT_EXEC_MAX_OUTPUT_TOKENS, 256, 100000);
+        if (args.dryRun === true) {
+            const details = {
+                status: 'completed',
+                action: 'exec_command',
+                dryRun: true,
+                command,
+                cmd: command,
+                args: commandArgs,
+                workdir,
+                yield_time_ms: yieldTimeMs,
+                max_output_tokens: maxOutputTokens
+            };
+            return createTextResult(JSON.stringify(details, null, 2), details);
+        }
+        if (normalizeBoolean(args.tty, false)) {
+            const ptyResult = await this.ptyStart({ ...args, command, action: 'pty_start' }, context, runtime);
+            if (ptyResult.isError) {
+                return ptyResult;
+            }
+            const record = this.ptySessions.get(ptyResult.details?.session?.id);
+            if (!record) {
+                return createErrorResult('session_not_found', 'exec_command PTY 会话创建后无法读取。', { action: 'exec_command' });
+            }
+            const details = await this.waitForPtySnapshot(record, yieldTimeMs);
+            details.max_output_tokens = maxOutputTokens;
+            details.output = truncateByApproxTokens(details.output, maxOutputTokens);
+            details.stdout = details.output;
+            return createTextResult(details.output || JSON.stringify(details, null, 2), details);
+        }
+        const timeoutMs = normalizeNumber(args.timeoutMs || args.timeout, DEFAULT_SESSION_TIMEOUT_MS, 1000, 24 * 60 * 60 * 1000);
+        const platformAdapter = getRuntimePlatform(runtime);
+        const spawnSpec = platformAdapter.commandSpawnSpec
+            ? platformAdapter.commandSpawnSpec(command, { args: commandArgs, cwd: workdir, env: args.env })
+            : {
+                  supported: true,
+                  command,
+                  args: commandArgs,
+                  options: platformAdapter.shellSpawnOptions({ cwd: workdir, env: args.env })
+              };
+        if (!spawnSpec.supported) {
+            return createErrorResult('not_supported', spawnSpec.reason || 'Command execution is not supported by this platform adapter.', {
+                action: 'exec_command',
+                command,
+                workdir,
+                platform: platformAdapter.getStatus()
+            });
+        }
+        const child = spawn(spawnSpec.command, spawnSpec.args || [], spawnSpec.options || platformAdapter.shellSpawnOptions({
+            cwd: workdir,
+            env: args.env
+        }));
+        const record = this.createSessionRecord({ command, workdir, child, timeoutMs });
+        const details = await this.waitForProcessSnapshot(record, yieldTimeMs);
+        details.max_output_tokens = maxOutputTokens;
+        details.output = truncateByApproxTokens(collectSessionText(record), maxOutputTokens);
+        details.stdout = truncateByApproxTokens(record.stdout || '', maxOutputTokens);
+        details.stderr = truncateByApproxTokens(record.stderr || '', maxOutputTokens);
+        return createTextResult(details.output || JSON.stringify(details, null, 2), details);
+    }
+
     async sessionStart(args, context, runtime) {
         const command = normalizeString(args.command || args.cmd);
         if (!command) {
             return createErrorResult('needs_config', 'session_start 需要 command 参数。');
         }
+        const commandArgs = normalizeCommandArgs(args.args || args.arguments);
+        const commandForDisplay = commandArgs.length ? [command, ...commandArgs].join(' ') : command;
         const workdir = resolveWorkdir(args, context, runtime);
-        const guard = guardPath(workdir, 'read', context, runtime) || commandNeedsApproval({ ...args, action: 'session_start' }, context);
+        const guard = guardPath(workdir, 'read', context, runtime) || commandNeedsApproval({ ...args, action: 'session_start', command: commandForDisplay }, context);
         if (guard) {
             return guard;
         }
         if (args.dryRun === true) {
-            return createTextResult(JSON.stringify({ action: 'session_start', dryRun: true, command, workdir }, null, 2), {
+            return createTextResult(JSON.stringify({ action: 'session_start', dryRun: true, command, args: commandArgs, workdir }, null, 2), {
                 status: 'completed',
                 action: 'session_start',
                 dryRun: true,
                 command,
+                args: commandArgs,
                 workdir
             });
         }
         const timeoutMs = normalizeNumber(args.timeoutMs || args.timeout, DEFAULT_SESSION_TIMEOUT_MS, 1000, 24 * 60 * 60 * 1000);
-        const child = spawn(command, {
+        const platformAdapter = getRuntimePlatform(runtime);
+        const spawnSpec = platformAdapter.commandSpawnSpec
+            ? platformAdapter.commandSpawnSpec(command, { args: commandArgs, cwd: workdir, env: args.env })
+            : {
+                  supported: true,
+                  command,
+                  args: commandArgs,
+                  options: platformAdapter.shellSpawnOptions({ cwd: workdir, env: args.env })
+              };
+        if (!spawnSpec.supported) {
+            return createErrorResult('not_supported', spawnSpec.reason || 'Command execution is not supported by this platform adapter.', {
+                action: 'session_start',
+                command,
+                args: commandArgs,
+                workdir,
+                platform: platformAdapter.getStatus()
+            });
+        }
+        const child = spawn(spawnSpec.command, spawnSpec.args || [], spawnSpec.options || platformAdapter.shellSpawnOptions({
             cwd: workdir,
-            shell: true,
-            windowsHide: true,
-            env: {
-                ...process.env,
-                ...(args.env && typeof args.env === 'object' ? args.env : {})
-            }
-        });
+            env: args.env
+        }));
         const record = this.createSessionRecord({ command, workdir, child, timeoutMs });
         return createTextResult(JSON.stringify(this.publicSession(record), null, 2), {
             status: 'completed',
@@ -1731,7 +2198,67 @@ class ComputerRuntime {
         });
     }
 
-    processKill(args, context) {
+    async writeStdin(args, context) {
+        const id = normalizeString(args.session_id || args.sessionId || args.id);
+        const input = typeof args.chars === 'string'
+            ? args.chars
+            : typeof args.input === 'string'
+                ? args.input
+                : '';
+        const yieldTimeMs = normalizeNumber(args.yield_time_ms || args.yieldTimeMs, DEFAULT_EXEC_YIELD_TIME_MS, MIN_EXEC_YIELD_TIME_MS, MAX_EXEC_YIELD_TIME_MS);
+        const maxOutputTokens = normalizeNumber(args.max_output_tokens || args.maxOutputTokens, DEFAULT_EXEC_MAX_OUTPUT_TOKENS, 256, 100000);
+        if (!id) {
+            return createErrorResult('needs_config', 'write_stdin 需要 session_id 或 sessionId 参数。');
+        }
+        const processRecord = this.sessions.get(id);
+        const ptyRecord = this.ptySessions.get(id);
+        if (!processRecord && !ptyRecord) {
+            return createErrorResult('not_found', `没有找到 unified exec 会话：${id}`, { sessionId: id });
+        }
+        if (input) {
+            const approval = approvalRequired('write_stdin', args, context);
+            if (approval) {
+                return approval;
+            }
+        }
+        if (processRecord) {
+            if (input && processRecord.status !== 'running') {
+                return createErrorResult('error', `进程会话不是 running：${processRecord.status}`, { sessionId: id, status: processRecord.status });
+            }
+            if (input) {
+                processRecord.child.stdin?.write(input);
+            }
+            if (input && (args.submit === true || args.enter === true)) {
+                processRecord.child.stdin?.write(os.EOL);
+            }
+            const details = await this.waitForProcessSnapshot(processRecord, yieldTimeMs);
+            details.action = 'write_stdin';
+            details.max_output_tokens = maxOutputTokens;
+            details.output = truncateByApproxTokens(collectSessionText(processRecord), maxOutputTokens);
+            details.stdout = truncateByApproxTokens(processRecord.stdout || '', maxOutputTokens);
+            details.stderr = truncateByApproxTokens(processRecord.stderr || '', maxOutputTokens);
+            details.bytes_written = Buffer.byteLength(input);
+            return createTextResult(details.output || JSON.stringify(details, null, 2), details);
+        }
+        if (input && ptyRecord.status !== 'running') {
+            return createErrorResult('error', `PTY 会话不是 running：${ptyRecord.status}`, { sessionId: id, status: ptyRecord.status });
+        }
+        if (input) {
+            ptyRecord.terminal.write(input);
+        }
+        if (input && (args.submit === true || args.enter === true)) {
+            ptyRecord.terminal.write(os.EOL);
+        }
+        const details = await this.waitForPtySnapshot(ptyRecord, yieldTimeMs);
+        details.action = 'write_stdin';
+        details.max_output_tokens = maxOutputTokens;
+        details.output = truncateByApproxTokens(collectPtyText(ptyRecord), maxOutputTokens);
+        details.stdout = details.output;
+        details.bytes_written = Buffer.byteLength(input);
+        return createTextResult(details.output || JSON.stringify(details, null, 2), details);
+    }
+
+    async processKill(args, context) {
         const id = normalizeString(args.sessionId || args.id);
         const record = this.sessions.get(id);
         if (!record) {
@@ -1742,14 +2269,16 @@ class ComputerRuntime {
             return approval;
         }
         const signal = normalizeString(args.signal, 'SIGTERM');
-        record.child.kill(signal);
+        const killed = await this.platformAdapter.killProcessTree(record.child, signal);
         record.status = record.status === 'running' ? 'killed' : record.status;
         record.updatedAt = Date.now();
         return createTextResult(`killed ${id}`, {
             status: 'completed',
             action: 'process_kill',
             sessionId: id,
-            signal
+            signal,
+            platform: this.platformAdapter.getStatus(),
+            kill: killed
         });
     }
 
@@ -1772,7 +2301,7 @@ class ComputerRuntime {
         for (const record of this.sessions.values()) {
             if (record.status === 'running') {
                 try {
-                    record.child.kill('SIGTERM');
+                    await this.platformAdapter.killProcessTree(record.child, 'SIGTERM');
                 } catch {}
             }
             if (record.timeout) {
@@ -1803,6 +2332,19 @@ function schemaResult(runtime) {
             'search',
             'hash',
             'du',
+            'screen_screenshot',
+            'mouse_move',
+            'mouse_click',
+            'mouse_double_click',
+            'mouse_right_click',
+            'mouse_drag',
+            'scroll',
+            'keyboard_type',
+            'keyboard_press',
+            'keyboard_hotkey',
+            'clipboard_read',
+            'clipboard_write',
+            'wait',
             'acl_get',
             'acl_set',
             'watch_start',
@@ -1810,6 +2352,8 @@ function schemaResult(runtime) {
             'watch_list',
             'watch_stop',
             'exec',
+            'exec_command',
+            'write_stdin',
             'session_start',
             'pty_status',
             'pty_start',
@@ -1826,13 +2370,17 @@ function schemaResult(runtime) {
         ],
         safety: {
             readDefaultRoots: commonUserRoots(runtime),
-            protectedRoots: protectedRoots(),
+            protectedRoots: protectedRoots(runtime),
+            platform: getRuntimePlatform(runtime).getStatus(),
             mutationsRequireApproval: true,
             outsideWorkspaceRequires: 'context.allowOutsideWorkspace=true',
             protectedMutationRequires: 'context.allowSystemMutation=true plus approval',
             deleteDefault: 'trash/quarantine; permanent delete requires allowPermanentDelete=true and dangerous=true',
             rollbackJournal: rollbackJournalPath(runtime),
-            ptyOptional: loadNodePty().ok
+            ptyOptional: loadNodePty().ok,
+            guiInput: getRuntimePlatform(runtime).getStatus().capabilities.guiInput,
+            screenCapture: getRuntimePlatform(runtime).getStatus().capabilities.screenCapture,
+            clipboard: getRuntimePlatform(runtime).getStatus().capabilities.clipboard
         }
     };
     return createTextResult(JSON.stringify(schema, null, 2), {
@@ -1852,63 +2400,94 @@ class HumanClawComputerTool {
     }
 
     async execute(args = {}, context = {}, runtime = {}) {
-        const action = normalizeString(args.action || args.operation || args.intent, 'schema').toLowerCase();
+        const action = normalizeGuiAction(args.action || args.operation || args.intent || 'schema');
+        const effectiveRuntime = {
+            ...runtime,
+            platformAdapter: runtime.platformAdapter || this.runtime.platformAdapter
+        };
         if (action === 'schema' || action === 'help') {
-            return schemaResult(runtime);
+            return schemaResult(effectiveRuntime);
         }
         if (action === 'ls' || action === 'list') {
-            return await actionList(args, context, runtime);
+            return await actionList(args, context, effectiveRuntime);
         }
         if (action === 'tree') {
-            return await actionTree(args, context, runtime);
+            return await actionTree(args, context, effectiveRuntime);
         }
         if (action === 'stat') {
-            return await actionStat(args, context, runtime);
+            return await actionStat(args, context, effectiveRuntime);
         }
         if (action === 'read' || action === 'cat') {
-            return await actionRead(args, context, runtime);
+            return await actionRead(args, context, effectiveRuntime);
         }
         if (action === 'read_binary') {
-            return await actionReadBinary(args, context, runtime);
+            return await actionReadBinary(args, context, effectiveRuntime);
         }
         if (action === 'write') {
-            return await actionWrite(args, context, runtime, false);
+            return await actionWrite(args, context, effectiveRuntime, false);
         }
         if (action === 'write_binary') {
-            return await actionWriteBinary(args, context, runtime);
+            return await actionWriteBinary(args, context, effectiveRuntime);
         }
         if (action === 'append') {
-            return await actionWrite(args, context, runtime, true);
+            return await actionWrite(args, context, effectiveRuntime, true);
         }
         if (action === 'mkdir') {
-            return await actionMkdir(args, context, runtime);
+            return await actionMkdir(args, context, effectiveRuntime);
         }
         if (action === 'copy' || action === 'cp') {
-            return await actionCopyMove(args, context, runtime, false);
+            return await actionCopyMove(args, context, effectiveRuntime, false);
         }
         if (action === 'move' || action === 'rename' || action === 'mv') {
-            return await actionCopyMove(args, context, runtime, true);
+            return await actionCopyMove(args, context, effectiveRuntime, true);
         }
         if (action === 'delete' || action === 'rm' || action === 'trash') {
-            return await actionDelete(args, context, runtime);
+            return await actionDelete(args, context, effectiveRuntime);
         }
         if (action === 'search' || action === 'find') {
-            return await actionSearch(args, context, runtime);
+            return await actionSearch(args, context, effectiveRuntime);
         }
         if (action === 'hash' || action === 'checksum') {
-            return await actionHash(args, context, runtime);
+            return await actionHash(args, context, effectiveRuntime);
         }
         if (action === 'du' || action === 'disk_usage') {
-            return await actionDu(args, context, runtime);
+            return await actionDu(args, context, effectiveRuntime);
+        }
+        if (action === 'wait') {
+            return await actionWait(args);
+        }
+        if (action === 'screen_screenshot') {
+            return await actionScreenScreenshot(args, context, effectiveRuntime);
+        }
+        if (action === 'clipboard_read') {
+            return await actionClipboardRead(args, context, effectiveRuntime);
+        }
+        if (action === 'clipboard_write') {
+            return await actionClipboardWrite(args, context, effectiveRuntime);
+        }
+        if (
+            [
+                'mouse_move',
+                'mouse_click',
+                'mouse_double_click',
+                'mouse_right_click',
+                'mouse_drag',
+                'scroll',
+                'keyboard_type',
+                'keyboard_press',
+                'keyboard_hotkey'
+            ].includes(action)
+        ) {
+            return await actionGuiInput({ ...args, action }, context, effectiveRuntime);
         }
         if (action === 'acl_get') {
-            return await actionAclGet(args, context, runtime);
+            return await actionAclGet(args, context, effectiveRuntime);
         }
         if (action === 'acl_set') {
-            return await actionAclSet(args, context, runtime);
+            return await actionAclSet(args, context, effectiveRuntime);
         }
         if (action === 'watch_start') {
-            return this.runtime.watchStart(args, context, runtime);
+            return this.runtime.watchStart(args, context, effectiveRuntime);
         }
         if (action === 'watch_list') {
             return this.runtime.watchList();
@@ -1920,22 +2499,28 @@ class HumanClawComputerTool {
             return this.runtime.watchStop(args, context);
         }
         if (action === 'rollback_list') {
-            return await actionRollbackList(args, context, runtime);
+            return await actionRollbackList(args, context, effectiveRuntime);
         }
         if (action === 'rollback_restore') {
-            return await actionRollbackRestore(args, context, runtime);
+            return await actionRollbackRestore(args, context, effectiveRuntime);
         }
         if (action === 'exec' || action === 'run') {
-            return await this.runtime.exec({ ...args, action }, context, runtime);
+            return await this.runtime.exec({ ...args, action }, context, effectiveRuntime);
+        }
+        if (action === 'exec_command') {
+            return await this.runtime.execCommand({ ...args, action }, context, effectiveRuntime);
+        }
+        if (action === 'write_stdin') {
+            return await this.runtime.writeStdin({ ...args, action }, context, effectiveRuntime);
         }
         if (action === 'session_start' || action === 'spawn') {
-            return await this.runtime.sessionStart({ ...args, action }, context, runtime);
+            return await this.runtime.sessionStart({ ...args, action }, context, effectiveRuntime);
         }
         if (action === 'pty_status') {
             return this.runtime.ptyStatus();
         }
         if (action === 'pty_start') {
-            return await this.runtime.ptyStart({ ...args, action }, context, runtime);
+            return await this.runtime.ptyStart({ ...args, action }, context, effectiveRuntime);
         }
         if (action === 'pty_read') {
             return this.runtime.ptyRead(args);
@@ -1964,10 +2549,10 @@ class HumanClawComputerTool {
             return this.runtime.processWrite(args, context);
         }
         if (action === 'process_kill') {
-            return this.runtime.processKill(args, context);
+            return await this.runtime.processKill(args, context);
         }
         return createErrorResult('needs_config', `不支持的 computer action：${action}`, {
-            supportedActions: schemaResult(runtime).details.schema.actions
+            supportedActions: schemaResult(effectiveRuntime).details.schema.actions
         });
     }
 }
@@ -1978,5 +2563,6 @@ module.exports = {
     ComputerRuntime,
     commonUserRoots,
     protectedRoots,
-    resolveTargetPath
+    resolveTargetPath,
+    getRuntimePlatform
 };
