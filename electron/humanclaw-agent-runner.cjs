@@ -1046,6 +1046,22 @@ function parseEmailJsonCommand(message) {
     };
 }
 
+function inferEmailListLimit(normalized) {
+    const explicitLimitMatch =
+        normalized.match(/(?:latest|recent|newest|new|最近|最新|前|top)\s*(\d{1,3})\s*(?:个|封)?\s*(?:邮件|邮箱|email|mail)/i) ||
+        normalized.match(/(\d{1,3})\s*(?:个|封)?\s*(?:邮件|邮箱|email|mail)/i);
+    if (explicitLimitMatch) {
+        const limit = Math.min(Math.max(Number(explicitLimitMatch[1]), 1), 50);
+        if (Number.isFinite(limit)) {
+            return limit;
+        }
+    }
+    if (/今天|最近|latest|recent|最新/i.test(normalized)) {
+        return 10;
+    }
+    return 20;
+}
+
 function parseEmailDraftOrSend(message) {
     const normalized = compactText(message);
     const action = /(发送|send)/i.test(normalized) ? 'send' : /(草拟|起草|写封|draft|compose)/i.test(normalized) ? 'draft' : '';
@@ -1108,12 +1124,12 @@ function parseEmailListCommand(message) {
     if (!/(邮件|邮箱|收件箱|inbox|email|mail)/i.test(normalized)) {
         return null;
     }
-    if (!/(查看|读取|列出|搜索|整理|管理|检查|未读|今天|最近|inbox|email|mail)/i.test(normalized)) {
+    if (!/(查看|读取|列出|搜索|整理|管理|检查|未读|今天|最近|最新|获取|取|拉取|显示|inbox|email|mail)/i.test(normalized)) {
         return null;
     }
     const args = {
         action: 'list',
-        limit: /今天|最近|latest|recent/i.test(normalized) ? 10 : 20
+        limit: inferEmailListLimit(normalized)
     };
     if (/(未读|unread|unseen)/i.test(normalized)) {
         args.filter = 'unread';
@@ -1954,7 +1970,8 @@ function buildEmailAgentSkillText(emailProfiles = {}) {
         `已配置邮箱状态（不含密钥）：${profileSummaries || 'unknown'}`,
         'email 读取类 action：providers/schema/list/search/inbox/read/get/gmail_list_labels/gmail_list_threads/gmail_get_thread/outlook_graph_messages/outlook_graph_message/outlook_graph_folders。',
         'email 写入/变更类 action：draft/compose/send/mark_read/mark_unread/move/delete。send、标记、移动、删除属于高风险动作，需要 Gateway 审批。',
-        '检查“有没有新邮件/未读邮件”时，第一步使用 {"tool":"email","args":{"action":"list","filter":"unread","limit":10}}；如果用户说“今天”，加 since=YYYY-MM-DD；如果只说“最近”，用 action=list limit=10。',
+        '检查“有没有新邮件/未读邮件”时，第一步使用 {"tool":"email","args":{"action":"list","filter":"unread","limit":10}}；如果用户说“今天”，加 since=YYYY-MM-DD；如果只说“最近”或“最新10封”，直接用 action=list limit=10。',
+        '如果用户只要求“最新10个邮件 / 最近10封邮件 / 取最新邮件列表”，一次 email.list 就是完整答案；不要继续 read 正文、不要反复 list/search。',
         '查看邮件详情时，先 list/search 找 uid 或 messageId，再用 read/get 读取具体邮件。总结邮件时根据 observation 中的列表决定是否继续 read。',
         '如果 email 工具返回 needs_config，不要臆造 IMAP 信息；直接告诉用户去控制面板配置对应 provider 的账号和授权码/OAuth token。',
         '不要发明 email action。尤其不要输出 check_new、open_mail、mail、browser_email；这些必须表达为 email.list/search/read。'
@@ -2489,10 +2506,17 @@ function sanitizeEmailAgentStep(step, index, phase) {
     };
     delete args.approved;
     delete args.dangerous;
-    if ((EMAIL_UNREAD_ACTION_HINTS.has(rawAction) || /新邮件|未读|unread|unseen/i.test(`${rawArgs.query || ''} ${rawArgs.search || ''} ${rawArgs.filter || ''}`)) && !args.filter) {
+    if (typeof args.limit === 'string' && args.limit.trim()) {
+        const parsedLimit = Number(args.limit);
+        if (Number.isFinite(parsedLimit)) {
+            args.limit = parsedLimit;
+        }
+    }
+    const argsText = `${rawArgs.query || ''} ${rawArgs.search || ''} ${rawArgs.subject || ''} ${rawArgs.body || ''} ${rawArgs.text || ''} ${rawArgs.filter || ''}`;
+    if ((EMAIL_UNREAD_ACTION_HINTS.has(rawAction) || /新邮件|未读|unread|unseen/i.test(argsText) || rawArgs.unreadOnly === true || rawArgs.unseenOnly === true || rawArgs.onlyUnread === true) && !args.filter) {
         args.filter = 'unread';
     }
-    if ((rawAction === 'latest' || rawAction === 'recent' || EMAIL_UNREAD_ACTION_HINTS.has(rawAction)) && !args.limit) {
+    if ((rawAction === 'latest' || rawAction === 'recent' || EMAIL_UNREAD_ACTION_HINTS.has(rawAction) || /今天|最近|latest|recent|最新/i.test(argsText)) && !args.limit) {
         args.limit = 10;
     }
     const context = {

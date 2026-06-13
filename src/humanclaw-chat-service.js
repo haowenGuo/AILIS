@@ -482,9 +482,11 @@ export class HumanClawDesktopChatService {
                 messageHistory: sanitizeMessageHistoryForGateway(messageHistory),
                 attachments: summarizeChatAttachmentsForGateway(latestUserEntry?.attachments),
                 agentLoop: 'llm',
+                directToolExecutor: true,
                 context: {
                     workspace: status.workspaceRoot,
-                    agentLoop: 'llm'
+                    agentLoop: 'llm',
+                    directToolExecutor: true
                 }
             });
         } finally {

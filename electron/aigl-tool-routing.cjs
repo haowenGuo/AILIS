@@ -128,7 +128,7 @@ const ROUTING_PROFILES = Object.freeze([
         bonus: 82,
         primaryBonus: 24,
         webPenalty: 65,
-        advice: 'Use paper_metadata_lookup for exact-title paper/DOI metadata, then pdf_find_and_extract or pdf_extract_text when you need the paper body.'
+        advice: 'Use paper_metadata_lookup for paper/DOI metadata and fuzzy bibliographic clues such as author, year, topic, or journal/source. It can accept either structured fields or a raw scholarly query, then use pdf_find_and_extract or pdf_extract_text when you need the paper body.'
     }),
     Object.freeze({
         id: 'known_url_fetch',
@@ -141,7 +141,7 @@ const ROUTING_PROFILES = Object.freeze([
         bonus: 62,
         primaryBonus: 12,
         webPenalty: 35,
-        advice: 'Use web_fetch or web_extract_links for a known page URL before broad web_search.'
+        advice: 'Use web_fetch or web_extract_links for a known page URL before broad web_search. For archive/listing/search/table-of-contents pages, pass query or contains with the task clues so links are ranked by relevance instead of page order.'
     }),
     Object.freeze({
         id: 'youtube_video',

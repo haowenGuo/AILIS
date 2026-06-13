@@ -1389,6 +1389,37 @@ function normalizeArgsForContract(toolId, args = {}) {
             normalized.args = { ...explicitArgs };
         }
     }
+    if (toolId === 'email') {
+        const uid = args.uid !== undefined && args.uid !== null
+            ? String(args.uid).trim()
+            : args.messageId !== undefined && args.messageId !== null
+                ? String(args.messageId).trim()
+                : args.id !== undefined && args.id !== null
+                    ? String(args.id).trim()
+                    : '';
+        if (uid) {
+            normalized.uid = uid;
+        }
+        const messageId = args.messageId !== undefined && args.messageId !== null
+            ? String(args.messageId).trim()
+            : args.uid !== undefined && args.uid !== null
+                ? String(args.uid).trim()
+                : args.id !== undefined && args.id !== null
+                    ? String(args.id).trim()
+                    : '';
+        if (messageId) {
+            normalized.messageId = messageId;
+        }
+        if (args.limit !== undefined && args.limit !== null && args.limit !== '') {
+            const limit = Number(args.limit);
+            if (Number.isFinite(limit)) {
+                normalized.limit = limit;
+            }
+        }
+        if ((args.unreadOnly === true || args.unseenOnly === true || args.onlyUnread === true) && !normalizeString(args.filter || args.query || args.search)) {
+            normalized.filter = 'unread';
+        }
+    }
     return normalized;
 }
 

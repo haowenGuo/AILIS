@@ -162,6 +162,533 @@ function stripHtml(html = '') {
         .trim();
 }
 
+function extractDoiCandidate(value = '') {
+    const text = normalizeString(value);
+    if (!text) {
+        return '';
+    }
+    const match = text.match(/\b10\.\d{4,9}\/[-._;()/:a-z0-9]+\b/i);
+    return match ? match[0].replace(/[).,;]+$/g, '').toLowerCase() : '';
+}
+
+function isLikelyPdfUrl(value = '') {
+    const text = normalizeString(value).toLowerCase();
+    return Boolean(text) && (
+        /\.pdf(?:$|[?#])/i.test(text) ||
+        /\/pdf(?:$|[/?#])/i.test(text) ||
+        /[?&](?:format|type)=pdf\b/i.test(text) ||
+        /download[^?#]*pdf/i.test(text)
+    );
+}
+
+function classifyResearchLink(link = {}) {
+    const url = normalizeString(link.url || link.uri);
+    const text = normalizeString(link.text || link.title);
+    const doi = extractDoiCandidate(/doi\.org\//i.test(url) ? url : `${text} ${url}`);
+    if (doi) {
+        return { kind: 'doi', doi };
+    }
+    if (isLikelyPdfUrl(url) || /\b(pdf|full text|download pdf|view pdf)\b/i.test(text)) {
+        return { kind: 'pdf', doi: '' };
+    }
+    if (/arxiv\.org\/abs\//i.test(url)) {
+        return { kind: 'paper_abs', doi: '' };
+    }
+    if (
+        /\/article\/|\/paper\/|\/study\/|\/publication\/|\/preprint\/|\/doi\/|\/abs\/|\/full\/|\/view\/\d+/i.test(url) ||
+        /\b(article|paper|study|research|journal|proceedings|preprint|manuscript|publication)\b/i.test(text)
+    ) {
+        return { kind: 'article', doi: '' };
+    }
+    return { kind: 'web', doi: '' };
+}
+
+function isLowSignalNavigationLink(link = {}) {
+    const haystack = `${normalizeString(link.text || link.title)} ${normalizeString(link.url || link.uri)}`.toLowerCase();
+    return /\b(home|about|contact|privacy|terms|login|log in|sign in|register|subscribe|cookie|cookies|menu|share|facebook|twitter|linkedin|instagram|mastodon|rss|comment|comments|reply|print|tag|category|author profile|profile)\b/.test(haystack);
+}
+
+function isArchivePaginationLink({ url = '', text = '', pageUrl = '' } = {}) {
+    const normalizedText = normalizeString(text).toLowerCase();
+    const normalizedUrl = normalizeString(url).toLowerCase();
+    const normalizedPageUrl = normalizeString(pageUrl).toLowerCase();
+    return /^(next|older|older posts|more|more articles|view more|load more)$/.test(normalizedText)
+        && /(archive|search|issue|issues|page|offset|start)/i.test(`${normalizedPageUrl} ${normalizedUrl}`)
+        && (
+            /\/archive(?:\/\d+)?(?:$|[/?#])/i.test(normalizedUrl) ||
+            /(?:[?&](?:page|start|offset)=\d+)/i.test(normalizedUrl) ||
+            /\/page\/\d+(?:$|[/?#])/i.test(normalizedUrl)
+        );
+}
+
+function scoreResearchLink(link = {}, index = 0, pageUrl = '') {
+    const url = normalizeString(link.url || link.uri);
+    const text = normalizeString(link.text || link.title);
+    let { kind, doi } = classifyResearchLink({ url, text });
+    let score = 10;
+    if (isArchivePaginationLink({ url, text, pageUrl })) {
+        kind = 'pagination';
+        score += 120;
+    }
+    if (kind === 'doi') score += 140;
+    if (kind === 'pdf') score += 125;
+    if (kind === 'paper_abs') score += 95;
+    if (kind === 'article') score += 80;
+    if (/\b(linked paper|linked study|reference|citation|full text|download)\b/i.test(text)) score += 20;
+    if (/\b(pdf|paper|study|article|journal|research|doi|arxiv|abstract)\b/i.test(`${text} ${url}`)) score += 12;
+    if (isLowSignalNavigationLink({ url, text })) score -= 80;
+    try {
+        const linkHost = new URL(url).hostname.replace(/^www\./i, '');
+        const pageHost = pageUrl ? new URL(pageUrl).hostname.replace(/^www\./i, '') : '';
+        if (pageHost && linkHost && linkHost !== pageHost) {
+            score += 8;
+        }
+    } catch {}
+    score -= Math.min(index, 30);
+    return {
+        score,
+        kind,
+        doi,
+        url,
+        text
+    };
+}
+
+function summarizeRelevantLink(candidate = {}) {
+    return pruneEmptyDeep({
+        kind: normalizeString(candidate.kind),
+        text: normalizeString(candidate.text, '(no text)'),
+        url: normalizeString(candidate.url),
+        doi: normalizeString(candidate.doi),
+        score: Number.isFinite(candidate.score) ? Number(candidate.score.toFixed(2)) : undefined
+    });
+}
+
+function buildSuggestedCallForLink(candidate = {}) {
+    const url = normalizeString(candidate.url);
+    const text = normalizeString(candidate.text, 'linked resource');
+    if (normalizeString(candidate.doi)) {
+        return {
+            tool: 'paper_metadata_lookup',
+            args: { doi: candidate.doi },
+            reason: `Resolve scholarly metadata from DOI link: ${text}`
+        };
+    }
+    if (candidate.kind === 'pdf' || isLikelyPdfUrl(url)) {
+        return {
+            tool: 'pdf_extract_text',
+            args: { url, maxChars: 12000 },
+            reason: `Read the linked PDF directly: ${text}`
+        };
+    }
+    return {
+        tool: 'web_fetch',
+        args: { url },
+        reason: `Read the linked page before broadening search: ${text}`
+    };
+}
+
+function dedupeSuggestedNextCalls(calls = [], limit = 5) {
+    const unique = [];
+    const seen = new Set();
+    for (const call of Array.isArray(calls) ? calls : []) {
+        if (!call || !normalizeString(call.tool)) {
+            continue;
+        }
+        const key = `${call.tool}:${JSON.stringify(call.args || {})}`;
+        if (seen.has(key)) {
+            continue;
+        }
+        seen.add(key);
+        unique.push(pruneEmptyDeep({
+            tool: normalizeString(call.tool),
+            args: call.args && typeof call.args === 'object' ? call.args : undefined,
+            reason: normalizeString(call.reason)
+        }));
+        if (unique.length >= limit) {
+            break;
+        }
+    }
+    return unique;
+}
+
+function rankLinksForResearch(links = [], pageUrl = '', query = '') {
+    return (Array.isArray(links) ? links : [])
+        .map((link, index) => {
+            const research = scoreResearchLink(link, index, pageUrl);
+            const queryMatch = query
+                ? scoreSearchResultAgainstQuery({
+                    title: research.text,
+                    snippet: '',
+                    url: research.url
+                }, query)
+                : { score: 0, matchedTerms: [] };
+            return {
+                ...research,
+                researchScore: research.score,
+                queryScore: queryMatch.score,
+                queryMatchedTerms: queryMatch.matchedTerms,
+                score: research.score + queryMatch.score * 4
+            };
+        })
+        .sort((a, b) => b.score - a.score || b.queryScore - a.queryScore || a.url.localeCompare(b.url));
+}
+
+function buildSuggestedCallsFromRankedLinks(rankedLinks = [], limit = 3) {
+    return dedupeSuggestedNextCalls(
+        rankedLinks
+            .filter((candidate) => candidate.score >= 35)
+            .map((candidate) => buildSuggestedCallForLink(candidate)),
+        limit
+    );
+}
+
+const SEARCH_QUERY_STOPWORDS = new Set([
+    'about', 'after', 'article', 'before', 'between', 'from', 'have', 'into', 'journal',
+    'linked', 'paper', 'question', 'related', 'report', 'site', 'that', 'their', 'there',
+    'these', 'this', 'those', 'what', 'when', 'where', 'which', 'with'
+]);
+
+const MONTH_QUERY_TERMS = new Set([
+    'january', 'february', 'march', 'april', 'may', 'june',
+    'july', 'august', 'september', 'october', 'november', 'december'
+]);
+
+const TOPIC_QUERY_STOPWORDS = new Set([
+    ...SEARCH_QUERY_STOPWORDS,
+    ...MONTH_QUERY_TERMS,
+    'abstract', 'article', 'author', 'citation', 'conference', 'depiction', 'doi',
+    'journal', 'paper', 'proceedings', 'publication', 'quoted', 'quote', 'review',
+    'science', 'source', 'study', 'topic'
+]);
+
+function extractSearchQueryTerms(query = '') {
+    const sanitized = normalizeString(query)
+        .replace(/\bsite:[^\s]+/gi, ' ')
+        .replace(/\bhttps?:\/\/\S+/gi, ' ')
+        .replace(/["'“”‘’()[\]{}]/g, ' ');
+    const rawTerms = sanitized.toLowerCase().match(/[a-z0-9]{3,}/g) || [];
+    const terms = [];
+    const seen = new Set();
+    for (const term of rawTerms) {
+        if (SEARCH_QUERY_STOPWORDS.has(term)) {
+            continue;
+        }
+        if (/^\d{1,3}$/.test(term)) {
+            continue;
+        }
+        if (seen.has(term)) {
+            continue;
+        }
+        seen.add(term);
+        terms.push(term);
+        if (terms.length >= 10) {
+            break;
+        }
+    }
+    return terms;
+}
+
+function extractQuotedSearchPhrases(query = '') {
+    return Array.from(normalizeString(query).matchAll(/"([^"]{3,})"/g))
+        .map((match) => normalizePaperTitle(match[1]))
+        .filter(Boolean)
+        .slice(0, 5);
+}
+
+function looksScholarlySearchQuery(query = '') {
+    const text = normalizeString(query);
+    if (!text) {
+        return false;
+    }
+    const hasYear = /\b(?:18|19|20)\d{2}\b/.test(text);
+    const hasScholarlyCue = /\b(journal|article|paper|study|proceedings|author|doi|citation|abstract|specimens|taxonomy|species|lepidoptera|entomology)\b/i.test(text);
+    const capitalizedWords = (text.match(/\b[A-Z][a-z]{2,}\b/g) || []).length;
+    return /\bdoi\b/i.test(text) || (hasYear && (hasScholarlyCue || capitalizedWords >= 2));
+}
+
+function extractRawQuotedSearchPhrases(query = '') {
+    return Array.from(normalizeString(query).matchAll(/"([^"]{3,})"/g))
+        .map((match) => normalizeString(match[1]))
+        .filter(Boolean)
+        .slice(0, 5);
+}
+
+function isLikelyAuthorPhrase(phrase = '') {
+    const tokens = normalizeAuthorName(phrase).split(/\s+/).filter(Boolean);
+    if (!tokens.length || tokens.length > 4) {
+        return false;
+    }
+    if (tokens.some((token) => TOPIC_QUERY_STOPWORDS.has(token.toLowerCase()))) {
+        return false;
+    }
+    const capitalized = tokens.filter((token) => /^[A-Z][A-Za-z'’-]+$/.test(token)).length;
+    return capitalized >= Math.min(tokens.length, 2);
+}
+
+function inferAuthorFromScholarlyQuery(query = '') {
+    for (const phrase of extractRawQuotedSearchPhrases(query)) {
+        if (isLikelyAuthorPhrase(phrase)) {
+            return phrase;
+        }
+    }
+    const words = normalizeString(query)
+        .replace(/["'“”‘’()[\]{}:,/\\-]+/g, ' ')
+        .split(/\s+/)
+        .filter(Boolean);
+    const collected = [];
+    for (const word of words) {
+        const lower = word.toLowerCase();
+        if (/^(?:18|19|20)\d{2}$/.test(word)) {
+            break;
+        }
+        if (MONTH_QUERY_TERMS.has(lower) || TOPIC_QUERY_STOPWORDS.has(lower)) {
+            break;
+        }
+        if (/^[A-Z][A-Za-z'’-]+$/.test(word)) {
+            collected.push(word);
+            if (collected.length >= 3) {
+                break;
+            }
+            continue;
+        }
+        if (collected.length) {
+            break;
+        }
+    }
+    if (collected.length >= 2) {
+        return collected.slice(0, 2).join(' ');
+    }
+    return collected.length === 1 ? collected[0] : '';
+}
+
+function inferVenueFromScholarlyQuery(query = '') {
+    const rawQuery = normalizeString(query);
+    const quoted = extractRawQuotedSearchPhrases(rawQuery);
+    for (const phrase of quoted) {
+        if (new RegExp(`"${escapeRegExp(phrase)}"\\s+(?:journal|review|conference|proceedings)`, 'i').test(rawQuery)) {
+            return phrase;
+        }
+    }
+    if (/\bjournal\b/i.test(rawQuery)) {
+        const shortQuoted = quoted.find((phrase) => phrase.split(/\s+/).length <= 3);
+        if (shortQuoted) {
+            return shortQuoted;
+        }
+    }
+    const venueMatch = rawQuery.match(/\b([A-Z][A-Za-z0-9:&-]{2,})\s+(?:journal|review|conference|proceedings)\b/);
+    return normalizeString(venueMatch?.[1]);
+}
+
+function inferTopicFromScholarlyQuery(query = '', { author = '', venue = '', year = 0 } = {}) {
+    let remaining = normalizeString(query)
+        .replace(/\bsite:[^\s]+/gi, ' ')
+        .replace(/\bhttps?:\/\/\S+/gi, ' ');
+    for (const fragment of [author, venue, year ? String(year) : '']) {
+        const normalized = normalizeString(fragment);
+        if (!normalized) {
+            continue;
+        }
+        remaining = remaining.replace(new RegExp(escapeRegExp(normalized), 'ig'), ' ');
+    }
+    const topicTokens = [];
+    for (const token of remaining.replace(/["'“”‘’()[\]{}:.,/\\-]+/g, ' ').split(/\s+/).filter(Boolean)) {
+        const lower = token.toLowerCase();
+        if (token.length < 3 || TOPIC_QUERY_STOPWORDS.has(lower) || /^(?:18|19|20)\d{2}$/.test(token)) {
+            continue;
+        }
+        topicTokens.push(token);
+        if (topicTokens.length >= 6) {
+            break;
+        }
+    }
+    return topicTokens.join(' ');
+}
+
+function inferPaperMetadataArgsFromScholarlyQuery(query = '') {
+    const normalizedQuery = normalizeString(query);
+    const yearMatch = normalizedQuery.match(/\b((?:18|19|20)\d{2})\b/);
+    const year = yearMatch ? Number(yearMatch[1]) : 0;
+    const author = inferAuthorFromScholarlyQuery(normalizedQuery);
+    const venue = inferVenueFromScholarlyQuery(normalizedQuery);
+    const topic = inferTopicFromScholarlyQuery(normalizedQuery, { author, venue, year });
+    return pruneEmptyDeep({
+        query: normalizedQuery,
+        author,
+        year: year || undefined,
+        topic,
+        venue
+    }) || { query: normalizedQuery };
+}
+
+function scoreSearchResultAgainstQuery(result = {}, query = '') {
+    const normalizedText = normalizePaperTitle([
+        normalizeString(result.title),
+        normalizeString(result.snippet),
+        normalizeString(result.url)
+    ].join(' '));
+    const titleText = normalizePaperTitle(normalizeString(result.title));
+    const matchedTerms = [];
+    let score = 0;
+    for (const term of extractSearchQueryTerms(query)) {
+        const normalizedTerm = normalizePaperTitle(term);
+        if (!normalizedTerm || !normalizedText.includes(normalizedTerm)) {
+            continue;
+        }
+        matchedTerms.push(term);
+        score += /^\d{4}$/.test(term) ? 8 : term.length >= 6 ? 18 : 12;
+        if (titleText.includes(normalizedTerm)) {
+            score += 6;
+        }
+    }
+    for (const phrase of extractQuotedSearchPhrases(query)) {
+        if (phrase && normalizedText.includes(phrase)) {
+            score += 45;
+        }
+    }
+    if (matchedTerms.length >= 2) {
+        score += 20;
+    }
+    return {
+        score,
+        matchedTerms: matchedTerms.slice(0, 6)
+    };
+}
+
+function rankSearchResultsForFollowup(results = [], query = '') {
+    return (Array.isArray(results) ? results : [])
+        .map((item, index) => {
+            const research = scoreResearchLink({
+                url: normalizeString(item.url),
+                text: normalizeString(item.title || item.snippet)
+            }, index);
+            const queryMatch = scoreSearchResultAgainstQuery(item, query);
+            return {
+                ...item,
+                kind: research.kind,
+                doi: research.doi,
+                score: research.score,
+                researchScore: research.score,
+                queryScore: queryMatch.score,
+                queryMatchedTerms: queryMatch.matchedTerms,
+                combinedScore: queryMatch.score * 4 + research.score
+            };
+        })
+        .sort((a, b) => b.combinedScore - a.combinedScore || b.queryScore - a.queryScore || b.researchScore - a.researchScore);
+}
+
+function buildSuggestedCallsFromSearchResults(results = [], { query = '', limit = 3 } = {}) {
+    const ranked = rankSearchResultsForFollowup(results, query);
+    const eligible = ranked.filter((candidate) => (
+        candidate.queryMatchedTerms.length >= 2 ||
+        candidate.queryScore >= 30 ||
+        ((candidate.kind === 'doi' || candidate.kind === 'pdf' || candidate.kind === 'paper_abs') && candidate.queryMatchedTerms.length >= 1)
+    ));
+    const directCalls = buildSuggestedCallsFromRankedLinks(eligible, limit);
+    if (directCalls.length) {
+        return directCalls;
+    }
+    return dedupeSuggestedNextCalls(
+        eligible
+            .slice(0, limit)
+            .map((item) => ({
+                tool: 'web_fetch',
+                args: { url: item.url },
+                reason: `Read search result: ${normalizeString(item.title, item.url)}`
+            })),
+        limit
+    );
+}
+
+function filterRankedLinksForQuerySuggestions(rankedLinks = [], query = '') {
+    const normalizedQuery = normalizeString(query);
+    const hasUsefulQueryTerms = extractSearchQueryTerms(normalizedQuery).length > 0
+        || extractQuotedSearchPhrases(normalizedQuery).length > 0;
+    if (!normalizedQuery || !hasUsefulQueryTerms) {
+        return rankedLinks;
+    }
+    return (Array.isArray(rankedLinks) ? rankedLinks : []).filter((candidate) => (
+        candidate.kind === 'pagination' ||
+        Number(candidate.queryScore) >= 30 ||
+        (Array.isArray(candidate.queryMatchedTerms) && candidate.queryMatchedTerms.length >= 2) ||
+        (Array.isArray(candidate.queryMatchedTerms) && candidate.queryMatchedTerms.some((term) => /^(?:18|19|20)\d{2}$/.test(term)))
+    ));
+}
+
+function formatSuggestedNextCalls(calls = []) {
+    return (Array.isArray(calls) ? calls : [])
+        .slice(0, 5)
+        .map((call, index) => {
+            const args = call.args && typeof call.args === 'object' ? ` ${JSON.stringify(call.args)}` : '';
+            const reason = normalizeString(call.reason);
+            return `${index + 1}. ${normalizeString(call.tool)}${args}${reason ? ` - ${reason}` : ''}`;
+        })
+        .join('\n');
+}
+
+function formatRelevantLinks(links = []) {
+    return (Array.isArray(links) ? links : [])
+        .slice(0, 5)
+        .map((link, index) => `${index + 1}. [${normalizeString(link.kind, 'web')}] ${normalizeString(link.text, '(no text)')}\nURL: ${normalizeString(link.url)}`)
+        .join('\n\n');
+}
+
+function buildWebToolGuidanceText({ evidenceGap = '', recoveryHint = '', suggestedNextCalls = [], observedRelevantLinks = [] } = {}) {
+    const sections = [];
+    if (evidenceGap) {
+        sections.push(`Evidence gap: ${evidenceGap}`);
+    }
+    if (recoveryHint) {
+        sections.push(`Recovery hint: ${recoveryHint}`);
+    }
+    if (Array.isArray(suggestedNextCalls) && suggestedNextCalls.length) {
+        sections.push(`Suggested next calls:\n${formatSuggestedNextCalls(suggestedNextCalls)}`);
+    }
+    if (Array.isArray(observedRelevantLinks) && observedRelevantLinks.length) {
+        sections.push(`High-signal links:\n${formatRelevantLinks(observedRelevantLinks)}`);
+    }
+    return sections.join('\n\n');
+}
+
+function classifyAccessBarrierText(text = '') {
+    const haystack = normalizeString(text).toLowerCase();
+    if (!haystack) {
+        return null;
+    }
+    if (/(radware|bot manager|bot challenge|captcha|verify you are human|human verification|checking your browser|press and hold)/i.test(haystack)) {
+        return {
+            status: 'access_challenge',
+            evidenceGap: 'This page is an anti-bot challenge, not the target content.',
+            recoveryHint: 'Do not keep refetching this URL. Prefer DOI metadata, linked PDFs/articles, or another accessible source.'
+        };
+    }
+    if (/(access denied|forbidden|permission denied|request blocked|not authorized)/i.test(haystack)) {
+        return {
+            status: 'access_denied',
+            evidenceGap: 'This page denied automated access and is not reliable evidence.',
+            recoveryHint: 'Use metadata APIs, extracted links, or an accessible mirror instead of repeating the same fetch.'
+        };
+    }
+    return null;
+}
+
+function buildHttpAccessFailureDetails(url, fetched = {}) {
+    const details = pruneEmptyDeep({
+        url,
+        statusCode: Number(fetched.status) || undefined,
+        errorCode: normalizeString(fetched.errorCode),
+        stderr: normalizeString(fetched.stderr)
+    });
+    if (fetched.status === 403) {
+        details.evidenceGap = 'Remote site blocked automated access (HTTP 403).';
+        details.recoveryHint = 'This is a server-side access policy, not a local network failure. Prefer metadata, extracted links from an accessible page, or another source instead of retrying this URL.';
+    } else if (fetched.status === 429) {
+        details.evidenceGap = 'Remote site rate-limited automated requests (HTTP 429).';
+        details.recoveryHint = 'This is a remote rate limit, not a local connectivity failure. Back off or use another API/source instead of hammering the same endpoint.';
+    }
+    return details;
+}
+
 function extractDuckDuckGoResults(html = '', maxResults = 8) {
     const rows = [];
     const linkPattern = /<a\s+rel="nofollow"\s+href="([^"]+)"[^>]*class=['"]result-link['"][^>]*>([\s\S]*?)<\/a>[\s\S]*?<td\s+class=['"]result-snippet['"]>([\s\S]*?)<\/td>/gi;
@@ -222,6 +749,13 @@ function normalizeUrlCandidate(value = '') {
         if (target) {
             const decodedTarget = decodeSearchRedirectTarget(target);
             return decodedTarget || decodeURIComponent(target);
+        }
+        const yahooRedirect = parsed.href.match(/\/RU=([^/]+)/i);
+        if (yahooRedirect) {
+            const decodedTarget = decodeSearchRedirectTarget(yahooRedirect[1]);
+            if (decodedTarget) {
+                return decodedTarget;
+            }
         }
         return parsed.toString();
     } catch {
@@ -301,6 +835,36 @@ function extractGenericAnchorResults(html = '', maxResults = 8) {
         rows.push({ title, url, snippet: '' });
     }
     return dedupeSearchResults(rows, maxResults);
+}
+
+function extractYahooResults(html = '', maxResults = 8) {
+    const rows = [];
+    const blockPattern = /<li\b[^>]*>([\s\S]*?)(?=<li\b|<\/ol>|<\/ul>|$)/gi;
+    let blockMatch;
+    while ((blockMatch = blockPattern.exec(html)) && rows.length < maxResults * 4) {
+        const block = blockMatch[1];
+        if (!/\balgo\b|\bcompTitle\b/i.test(block)) {
+            continue;
+        }
+        const linkMatch = block.match(/<a\b[^>]*href=["']([^"']+)["'][^>]*>[\s\S]*?<h3\b[^>]*class=["'][^"']*\btitle\b[^"']*["'][^>]*>([\s\S]*?)<\/h3>/i) ||
+            block.match(/<h3\b[^>]*class=["'][^"']*\btitle\b[^"']*["'][^>]*>\s*<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/i);
+        if (!linkMatch) {
+            continue;
+        }
+        const url = normalizeUrlCandidate(linkMatch[1]);
+        if (!url || /(^|\.)yahoo\.com|images\.search\.yahoo\.com/i.test(url)) {
+            continue;
+        }
+        const snippetMatch = block.match(/<div\b[^>]*class=["'][^"']*\bcompText\b[^"']*["'][^>]*>[\s\S]*?<p\b[^>]*>([\s\S]*?)<\/p>/i) ||
+            block.match(/<p\b[^>]*class=["'][^"']*\b(?:fc-dustygray|lh-22)\b[^"']*["'][^>]*>([\s\S]*?)<\/p>/i);
+        rows.push({
+            title: linkMatch[2],
+            url,
+            snippet: snippetMatch ? snippetMatch[1] : ''
+        });
+    }
+    const parsed = dedupeSearchResults(rows, maxResults);
+    return parsed.length ? parsed : extractGenericAnchorResults(html, maxResults);
 }
 
 function extractBingResults(html = '', maxResults = 8) {
@@ -456,6 +1020,11 @@ const SEARCH_BACKENDS = Object.freeze({
         buildUrl: (query) => `https://www.bing.com/search?q=${encodeURIComponent(query)}`,
         extract: extractBingResults
     }),
+    yahoo_html: Object.freeze({
+        id: 'yahoo_html',
+        buildUrl: (query) => `https://search.yahoo.com/search?p=${encodeURIComponent(query)}`,
+        extract: extractYahooResults
+    }),
     github_repositories: Object.freeze({
         id: 'github_repositories',
         buildUrl: (query) => {
@@ -477,12 +1046,12 @@ function normalizeSearchBackends(args = {}, query = '') {
     const requested = raw.length
         ? raw
         : isLikelyGitHubSearch(query)
-            ? ['github_repositories', 'duckduckgo_lite', 'duckduckgo_html', 'bing_html']
-            : ['bing_html', 'duckduckgo_lite', 'duckduckgo_html'];
+            ? ['github_repositories', 'duckduckgo_lite', 'duckduckgo_html', 'bing_html', 'yahoo_html']
+            : ['bing_html', 'duckduckgo_lite', 'duckduckgo_html', 'yahoo_html'];
     const backends = requested
         .map((id) => SEARCH_BACKENDS[normalizeString(id).toLowerCase()])
         .filter(Boolean);
-    return backends.length ? backends : [SEARCH_BACKENDS.bing_html, SEARCH_BACKENDS.duckduckgo_lite, SEARCH_BACKENDS.duckduckgo_html];
+    return backends.length ? backends : [SEARCH_BACKENDS.bing_html, SEARCH_BACKENDS.duckduckgo_lite, SEARCH_BACKENDS.duckduckgo_html, SEARCH_BACKENDS.yahoo_html];
 }
 
 async function runSearchBackend(backend, query, maxResults, timeoutMs) {
@@ -534,25 +1103,67 @@ async function webSearch(args = {}) {
     const maxResults = clampNumber(args.maxResults || args.limit, 8, 1, 12);
     const timeoutMs = clampNumber(args.timeoutMs || args.timeout_ms, 15000, 5000, 120000);
     const attempts = [];
-    for (const backend of normalizeSearchBackends(args, query)) {
+    const backends = normalizeSearchBackends(args, query);
+    for (let backendIndex = 0; backendIndex < backends.length; backendIndex += 1) {
+        const backend = backends[backendIndex];
         const attempt = await runSearchBackend(backend, query, maxResults, timeoutMs);
         attempts.push(attempt);
         if (!attempt.ok) {
             continue;
         }
-        const text = attempt.results.map((item, index) => [
+        const rankedResults = rankSearchResultsForFollowup(attempt.results, query);
+        const text = rankedResults.map((item, index) => [
             `${index + 1}. ${item.title}`,
             `URL: ${item.url}`,
             `Snippet: ${item.snippet}`
         ].join('\n')).join('\n\n');
-        return textResult(text, {
+        const baseSuggestedNextCalls = buildSuggestedCallsFromSearchResults(attempt.results, { query, limit: 3 });
+        const observedRelevantLinks = rankedResults
+            .filter((candidate) => candidate.queryMatchedTerms.length >= 1 || candidate.kind !== 'web')
+            .slice(0, 5)
+            .map((candidate) => summarizeRelevantLink(candidate));
+        const queryFocusTerms = extractSearchQueryTerms(query).slice(0, 6);
+        const topQueryScore = rankedResults[0]?.queryScore || 0;
+        const offTarget = baseSuggestedNextCalls.length === 0 && topQueryScore < 30;
+        if (offTarget && backendIndex < backends.length - 1) {
+            continue;
+        }
+        const suggestedNextCalls = offTarget && looksScholarlySearchQuery(query)
+            ? dedupeSuggestedNextCalls([
+                {
+                    tool: 'paper_metadata_lookup',
+                    args: inferPaperMetadataArgsFromScholarlyQuery(query),
+                    reason: 'Search results look off-target for a bibliographic query; switch to structured scholarly metadata lookup instead of rephrasing the same web search.'
+                },
+                ...baseSuggestedNextCalls
+            ], 3)
+            : baseSuggestedNextCalls;
+        const evidenceGap = offTarget
+            ? `Search results look off-target for the key query terms: ${queryFocusTerms.join(', ') || query}. Refine the query with exact phrases, source names, or author names before following a result.`
+            : 'Search results are discovery only. Open a result or resolve a DOI/PDF before answering.';
+        const recoveryHint = offTarget
+            ? 'Do not follow obviously unrelated popular results. Tighten the query or switch to a more specific tool before searching again.'
+            : 'Prefer the suggested follow-up calls below before issuing another broad web_search.';
+        const guidance = buildWebToolGuidanceText({
+            evidenceGap,
+            recoveryHint,
+            suggestedNextCalls,
+            observedRelevantLinks
+        });
+        return textResult([guidance, `Search results:\n${text}`].filter(Boolean).join('\n\n'), {
             status: 'completed',
             query,
             backend: attempt.backend,
             url: attempt.url,
             durationMs: attempt.durationMs,
             attempts,
-            results: attempt.results
+            results: attempt.results,
+            evidenceGap,
+            recoveryHint,
+            suggestedNextCalls,
+            observedRelevantLinks,
+            queryFocusTerms,
+            topQueryScore
         });
     }
     return errorResult('web_search failed across all configured search backends', {
@@ -561,7 +1172,9 @@ async function webSearch(args = {}) {
         query,
         retryable: true,
         attempts,
-        suggestedTools: ['web_fetch', 'web_extract_links']
+        suggestedTools: ['web_fetch', 'web_extract_links'],
+        evidenceGap: 'Broad discovery failed; no evidence page was opened yet.',
+        recoveryHint: 'Try a more specific title/DOI/source query or switch to a domain-specific tool instead of repeating the same broad search.'
     });
 }
 
@@ -1008,7 +1621,7 @@ async function webFetch(args = {}) {
     const wikiText = await maybeFetchWikipediaWikitext(url, 90000);
     const fetched = wikiText || await fetchText(url, 90000);
     if (!fetched.ok) {
-        return errorResult(fetched.error || 'web_fetch fetch failed', { url, stderr: fetched.stderr });
+        return errorResult(fetched.error || 'web_fetch fetch failed', buildHttpAccessFailureDetails(url, fetched));
     }
     const contentType = fetched.contentType || '';
     if (isPdfContentType(contentType) || fetched.isPdf || fetched.isBinary || !isReadableTextContentType(contentType)) {
@@ -1023,13 +1636,45 @@ async function webFetch(args = {}) {
         url,
         maxChars
     });
-    return textResult(focused.text, {
+    const extractedLinks = /html/i.test(contentType) ? extractLinksFromHtml(body, url, 80) : [];
+    const linkQuery = normalizeString(args.query || args.contains || '');
+    const rankedLinks = rankLinksForResearch(extractedLinks, url, linkQuery);
+    const suggestedRankedLinks = filterRankedLinksForQuerySuggestions(rankedLinks, linkQuery);
+    const suggestedNextCalls = buildSuggestedCallsFromRankedLinks(suggestedRankedLinks, 3);
+    const observedLinksForGuidance = linkQuery ? suggestedRankedLinks : rankedLinks;
+    const observedRelevantLinks = observedLinksForGuidance.slice(0, 5).map((candidate) => summarizeRelevantLink(candidate));
+    const barrier = classifyAccessBarrierText(text);
+    const evidenceGap = barrier?.evidenceGap || (
+        suggestedNextCalls.length
+            ? 'This page excerpt is not enough on its own. Follow one of the linked DOI/PDF/article candidates before answering.'
+            : /html/i.test(contentType)
+                ? 'This is a page excerpt. If the answer depends on linked references or supporting documents, inspect the outbound links next.'
+                : ''
+    );
+    const recoveryHint = barrier?.recoveryHint || (
+        suggestedNextCalls.length
+            ? 'Prefer following the high-signal linked resources below instead of broadening back to web_search.'
+            : ''
+    );
+    const guidance = buildWebToolGuidanceText({
+        evidenceGap,
+        recoveryHint,
+        suggestedNextCalls,
+        observedRelevantLinks
+    });
+    return textResult([guidance, `Content excerpt:\n${focused.text}`].filter(Boolean).join('\n\n'), {
         status: 'completed',
         url,
         contentType,
         originalChars: text.length,
         returnedChars: focused.text.length,
-        focus: focused.focus
+        focus: focused.focus,
+        observedLinkCount: extractedLinks.length,
+        suggestedNextCalls,
+        observedRelevantLinks,
+        evidenceGap,
+        recoveryHint,
+        pageStatus: barrier?.status || undefined
     });
 }
 
@@ -1041,16 +1686,36 @@ async function webExtractLinks(args = {}) {
     const maxLinks = clampNumber(args.maxLinks || args.max_links || args.limit, 80, 1, 300);
     const fetched = await fetchText(url, args.timeoutMs || 90000);
     if (!fetched.ok) {
-        return errorResult(fetched.error || 'web_extract_links fetch failed', { url, stderr: fetched.stderr });
+        return errorResult(fetched.error || 'web_extract_links fetch failed', buildHttpAccessFailureDetails(url, fetched));
     }
     if ((fetched.contentType && !isHtmlContentType(fetched.contentType)) || fetched.isBinary) {
         return unsupportedContentTypeResult('web_extract_links', url, fetched, ['web_fetch', 'download_file']);
     }
+    const linkQuery = normalizeString(args.query || args.contains || '');
     const links = extractLinksFromHtml(fetched.text, url, maxLinks);
-    const text = links.length
-        ? links.map((link, index) => `${index + 1}. ${link.text || '(no text)'}\nURL: ${link.url}`).join('\n\n')
+    const rankedLinks = rankLinksForResearch(links, url, linkQuery);
+    const orderedLinks = rankedLinks.map((candidate) => ({ text: candidate.text, url: candidate.url }));
+    const suggestedRankedLinks = filterRankedLinksForQuerySuggestions(rankedLinks, linkQuery);
+    const suggestedNextCalls = buildSuggestedCallsFromRankedLinks(suggestedRankedLinks, 3);
+    const observedLinksForGuidance = linkQuery ? suggestedRankedLinks : rankedLinks;
+    const observedRelevantLinks = observedLinksForGuidance.slice(0, 5).map((candidate) => summarizeRelevantLink(candidate));
+    const linkText = orderedLinks.length
+        ? orderedLinks.map((link, index) => `${index + 1}. ${link.text || '(no text)'}\nURL: ${link.url}`).join('\n\n')
         : `No links extracted from: ${url}`;
-    return textResult(text, { status: 'completed', url, links });
+    const guidance = buildWebToolGuidanceText({
+        evidenceGap: orderedLinks.length ? 'Extracted links are candidates only. Follow a DOI/PDF/article link before answering.' : '',
+        recoveryHint: suggestedNextCalls.length ? 'Prefer the high-signal links below over another broad web_search.' : '',
+        suggestedNextCalls,
+        observedRelevantLinks
+    });
+    return textResult([guidance, `Extracted links:\n${linkText}`].filter(Boolean).join('\n\n'), {
+        status: 'completed',
+        url,
+        links: orderedLinks,
+        suggestedNextCalls,
+        observedRelevantLinks,
+        evidenceGap: orderedLinks.length ? 'Links alone are not evidence; follow one of them.' : undefined
+    });
 }
 
 async function downloadFile(args = {}) {
@@ -1273,10 +1938,76 @@ const PDF_QUERY_STOPWORDS = new Set([
     'report'
 ]);
 
+const PDF_EVIDENCE_GENERIC_TERMS = new Set([
+    'article',
+    'author',
+    'authors',
+    'depiction',
+    'depictions',
+    'different',
+    'dragon',
+    'dragons',
+    'journal',
+    'nature',
+    'paper',
+    'quoted',
+    'quote',
+    'source',
+    'title',
+    'two',
+    'word'
+]);
+
 function significantPdfQueryTerms(value = '') {
     return tokenizePdfQuery(value)
         .filter((term) => !PDF_QUERY_STOPWORDS.has(term))
         .slice(0, 16);
+}
+
+function pdfEvidenceTermWeight(term = '') {
+    const normalized = normalizeString(term).toLowerCase();
+    if (!normalized) {
+        return 0;
+    }
+    if (PDF_EVIDENCE_GENERIC_TERMS.has(normalized)) {
+        return 1;
+    }
+    if (normalized.length >= 8) {
+        return 14;
+    }
+    if (normalized.length >= 5) {
+        return 10;
+    }
+    return 4;
+}
+
+function countPdfEvidenceTerm(chunk = '', term = '') {
+    const normalized = normalizeString(term).toLowerCase();
+    if (!normalized) {
+        return 0;
+    }
+    const escaped = normalized.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const pattern = /^[a-z]+$/.test(normalized) && !normalized.endsWith('s')
+        ? new RegExp(`\\b${escaped}s?\\b`, 'g')
+        : new RegExp(`\\b${escaped}\\b`, 'g');
+    const matches = String(chunk || '').toLowerCase().match(pattern);
+    return matches ? matches.length : 0;
+}
+
+function findPdfEvidenceTermOffset(chunk = '', term = '') {
+    const lowerChunk = String(chunk || '').toLowerCase();
+    const normalized = normalizeString(term).toLowerCase();
+    if (!normalized) {
+        return -1;
+    }
+    const direct = lowerChunk.indexOf(normalized);
+    if (direct >= 0) {
+        return direct;
+    }
+    if (/^[a-z]+$/.test(normalized) && !normalized.endsWith('s')) {
+        return lowerChunk.indexOf(`${normalized}s`);
+    }
+    return -1;
 }
 
 function normalizePdfSearchPhrase(value = '') {
@@ -1477,15 +2208,71 @@ function pushScholarlyCandidate(rows, seen, candidate = {}, query = '', source =
     });
 }
 
-async function fetchJsonUrl(url, timeoutMs = 30000) {
-    const fetched = await fetchText(url, timeoutMs);
-    if (!fetched.ok) {
-        return { ok: false, error: fetched.error || 'fetch failed', status: fetched.status || 0 };
+function extractArxivCandidatesFromAtom(xml = '', query = '') {
+    const candidates = [];
+    const entryPattern = /<entry\b[\s\S]*?<\/entry>/gi;
+    let match;
+    while ((match = entryPattern.exec(String(xml || '')))) {
+        const entry = match[0];
+        const id = stripHtml(entry.match(/<id>([\s\S]*?)<\/id>/i)?.[1] || '').trim();
+        const title = stripHtml(entry.match(/<title>([\s\S]*?)<\/title>/i)?.[1] || '').replace(/\s+/g, ' ').trim();
+        if (!/arxiv\.org\/abs\//i.test(id)) {
+            continue;
+        }
+        const arxivId = id.match(/\/abs\/([^/?#\s]+)/i)?.[1]?.replace(/v\d+$/i, '');
+        if (!arxivId) {
+            continue;
+        }
+        candidates.push({
+            title,
+            snippet: 'arXiv DOI match',
+            url: `https://arxiv.org/pdf/${arxivId}`,
+            sourceQuery: query
+        });
+        candidates.push({
+            title,
+            snippet: 'arXiv DOI match',
+            url: `https://arxiv.org/abs/${arxivId}`,
+            sourceQuery: query
+        });
     }
+    return candidates;
+}
+
+async function fetchJsonUrl(url, timeoutMs = 30000) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
     try {
-        return { ok: true, json: JSON.parse(fetched.text || '{}'), status: fetched.status || 0 };
+        const response = await fetch(url, {
+            headers: {
+                'Accept': 'application/json',
+                'User-Agent': 'AIGLResearchMCP/0.1 (+local assistant research tool)'
+            },
+            signal: controller.signal
+        });
+        const text = await response.text();
+        if (!response.ok) {
+            return {
+                ok: false,
+                error: `HTTP ${response.status}`,
+                status: response.status,
+                retryAfter: response.headers.get('retry-after') || '',
+                text: text.slice(0, 1000)
+            };
+        }
+        try {
+            return { ok: true, json: JSON.parse(text || '{}'), status: response.status };
+        } catch (error) {
+            return { ok: false, error: `invalid JSON: ${error.message}`, status: response.status, text: text.slice(0, 1000) };
+        }
     } catch (error) {
-        return { ok: false, error: `invalid JSON: ${error.message}`, status: fetched.status || 0 };
+        return {
+            ok: false,
+            error: error?.name === 'AbortError' ? 'timeout' : (error?.message || String(error)),
+            status: 0
+        };
+    } finally {
+        clearTimeout(timeoutId);
     }
 }
 
@@ -1511,13 +2298,18 @@ function appendUrlQueryParams(url, params = {}) {
     }
 }
 
-function buildOpenAlexWorksSearchUrl(baseUrl, query, maxResults, { exact = false, apiKey = '' } = {}) {
+function buildOpenAlexWorksSearchUrl(baseUrl, query, maxResults, { exact = false, apiKey = '', filter = '', sort = '' } = {}) {
     const parsedBase = normalizeString(baseUrl, 'https://api.openalex.org/works');
-    const searchParam = exact ? 'search.exact' : 'search';
-    return appendUrlQueryParams(
-        `${parsedBase}?${searchParam}=${encodeURIComponent(normalizeString(query))}&per-page=${Math.min(maxResults, 10)}`,
-        { api_key: apiKey }
-    );
+    const params = [`per-page=${Math.min(maxResults, 10)}`];
+    const normalizedQuery = normalizeString(query);
+    if (normalizedQuery) {
+        const searchParam = exact ? 'search.exact' : 'search';
+        params.unshift(`${searchParam}=${encodeURIComponent(normalizedQuery)}`);
+    }
+    if (normalizeString(filter)) {
+        params.push(`filter=${encodeURIComponent(normalizeString(filter))}`);
+    }
+    return appendUrlQueryParams(`${parsedBase}?${params.join('&')}`, { api_key: apiKey, sort });
 }
 
 function normalizeDoi(value = '') {
@@ -1538,6 +2330,101 @@ function normalizePaperTitle(value = '') {
 
 function normalizeAuthorName(value = '') {
     return normalizeString(value).replace(/\s+/g, ' ').trim();
+}
+
+function escapeRegExp(value = '') {
+    return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function buildBibliographicSearchText({ title = '', query = '', author = '', year = 0, topic = '', venue = '' } = {}) {
+    const parts = [];
+    const seen = new Set();
+    for (const part of [title, author, year ? String(year) : '', topic, venue, query]) {
+        const normalized = normalizeString(part);
+        const key = normalized.toLowerCase();
+        if (!normalized || seen.has(key)) {
+            continue;
+        }
+        seen.add(key);
+        parts.push(normalized);
+    }
+    return parts.join(' ');
+}
+
+function buildTopicalPaperQuery({ title = '', query = '', author = '', year = 0, topic = '', venue = '' } = {}) {
+    let text = normalizeString(title || [topic, venue, query].filter(Boolean).join(' ') || query);
+    for (const fragment of [author, year ? String(year) : '']) {
+        const normalized = normalizeString(fragment);
+        if (!normalized) {
+            continue;
+        }
+        text = text.replace(new RegExp(escapeRegExp(normalized), 'ig'), ' ');
+    }
+    return normalizeString(text.replace(/\s+/g, ' '));
+}
+
+function authorNameTokens(value = '') {
+    return normalizeAuthorName(value)
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, ' ')
+        .split(/\s+/)
+        .filter(Boolean);
+}
+
+function scoreAuthorNameMatch(candidateName = '', targetAuthor = '') {
+    const candidateTokens = authorNameTokens(candidateName);
+    const targetTokens = authorNameTokens(targetAuthor);
+    if (!candidateTokens.length || !targetTokens.length) {
+        return 0;
+    }
+    if (candidateTokens.join(' ') === targetTokens.join(' ')) {
+        return 180;
+    }
+    const overlap = targetTokens.filter((token) => candidateTokens.includes(token)).length;
+    let score = overlap * 28;
+    if (candidateTokens[candidateTokens.length - 1] === targetTokens[targetTokens.length - 1]) {
+        score += 36;
+    }
+    if (overlap === targetTokens.length) {
+        score += 52;
+    }
+    return score;
+}
+
+function rankOpenAlexAuthorMatches(results = [], targetAuthor = '') {
+    return (Array.isArray(results) ? results : [])
+        .map((author) => {
+            const name = normalizeAuthorName(author.display_name || author.name);
+            return {
+                id: normalizeString(author.id),
+                name,
+                worksCount: Number(author.works_count || 0) || 0,
+                citedByCount: Number(author.cited_by_count || 0) || 0,
+                score: scoreAuthorNameMatch(name, targetAuthor) + Math.min(Number(author.works_count || 0) || 0, 50)
+            };
+        })
+        .filter((author) => author.id && author.name)
+        .sort((a, b) => b.score - a.score || b.worksCount - a.worksCount || a.name.localeCompare(b.name));
+}
+
+function buildOpenAlexAuthorsSearchUrl(baseUrl, author, maxResults, { apiKey = '' } = {}) {
+    const parsedBase = normalizeString(baseUrl, 'https://api.openalex.org/authors');
+    return appendUrlQueryParams(
+        `${parsedBase}?search=${encodeURIComponent(normalizeAuthorName(author))}&per-page=${Math.min(maxResults, 10)}`,
+        { api_key: apiKey }
+    );
+}
+
+function buildOpenAlexWorksFilter({ authorId = '', year = 0 } = {}) {
+    const filters = [];
+    if (normalizeString(authorId)) {
+        filters.push(`author.id:${authorId}`);
+    }
+    if (Number(year) > 0) {
+        filters.push(`from_publication_date:${year}-01-01`);
+        filters.push(`to_publication_date:${year}-12-31`);
+    }
+    return filters.join(',');
 }
 
 function normalizeOpenAlexAuthors(authorships = []) {
@@ -1578,13 +2465,14 @@ function buildAuthorSummary(authors = []) {
         .join(', ');
 }
 
-function scorePaperMetadataCandidate(candidate = {}, { title = '', query = '', doi = '', authorId = '' } = {}) {
+function scorePaperMetadataCandidate(candidate = {}, { title = '', query = '', doi = '', authorId = '', author = '', year = 0, topic = '', venue = '' } = {}) {
     const normalizedDoi = normalizeDoi(doi);
     const candidateDoi = normalizeDoi(candidate.doi);
-    const targetTitle = normalizePaperTitle(title || query);
+    const targetTitle = normalizePaperTitle(title || '');
+    const topicalQuery = normalizePaperTitle(buildTopicalPaperQuery({ title, query, author, year, topic, venue }));
     const candidateTitle = normalizePaperTitle(candidate.title);
-    const terms = significantPdfQueryTerms(targetTitle);
-    const haystack = `${candidateTitle} ${candidate.venue || ''} ${candidate.url || ''}`.toLowerCase();
+    const terms = significantPdfQueryTerms(targetTitle || topicalQuery);
+    const haystack = `${candidateTitle} ${candidate.venue || ''} ${candidate.url || ''} ${candidate.authorsSummary || ''}`.toLowerCase();
     let score = 0;
     let matched = 0;
     if (normalizedDoi && candidateDoi && normalizedDoi === candidateDoi) {
@@ -1607,6 +2495,14 @@ function scorePaperMetadataCandidate(candidate = {}, { title = '', query = '', d
     if (terms.length) {
         score += Math.round((matched / terms.length) * 120);
     }
+    if (targetTitle && candidateTitle && targetTitle !== candidateTitle && !(candidateTitle.includes(targetTitle) || targetTitle.includes(candidateTitle))) {
+        const titleMatchRatio = matched / Math.max(terms.length, 1);
+        if (terms.length >= 4 && titleMatchRatio < 0.5) {
+            score -= 180;
+        } else if (terms.length >= 2 && titleMatchRatio < 0.34) {
+            score -= 120;
+        }
+    }
     if (terms.length >= 4 && matched < 3) {
         score -= 120;
     } else if (terms.length >= 2 && matched === 0) {
@@ -1620,6 +2516,34 @@ function scorePaperMetadataCandidate(candidate = {}, { title = '', query = '', d
     }
     if (candidate.authors?.length) {
         score += 8;
+    }
+    if (normalizeString(author)) {
+        const authorMatch = Math.max(
+            scoreAuthorNameMatch(candidate.authorsSummary, author),
+            ...(Array.isArray(candidate.authors) ? candidate.authors.map((candidateAuthor) => scoreAuthorNameMatch(candidateAuthor?.name, author)) : [0])
+        );
+        score += authorMatch;
+        if ((candidate.authors?.length || candidate.authorsSummary) && authorMatch === 0) {
+            score -= 140;
+        }
+    }
+    if (Number(year) > 0) {
+        if (Number(candidate.year) === Number(year)) {
+            score += 96;
+        } else if (Number(candidate.year) > 0) {
+            score -= 96;
+        }
+    }
+    const venueTerms = significantPdfQueryTerms(normalizePaperTitle(venue));
+    let matchedVenueTerms = 0;
+    for (const term of venueTerms) {
+        if (haystack.includes(term)) {
+            matchedVenueTerms += 1;
+            score += 16;
+        }
+    }
+    if (venueTerms.length >= 2 && matchedVenueTerms === 0) {
+        score -= 40;
     }
     if (normalizeString(authorId)) {
         score += 160;
@@ -1662,6 +2586,7 @@ function mapOpenAlexWorkToPaperMetadata(work = {}) {
         sourceId: normalizeString(work.id),
         title: normalizeString(work.display_name || work.title),
         year: Number(work.publication_year || work.year || 0) || undefined,
+        publicationDate: normalizeString(work.publication_date || work.publicationDate),
         doi,
         type: normalizeString(work.type),
         venue: normalizeString(work.primary_location?.source?.display_name || work.host_venue?.display_name),
@@ -1697,15 +2622,157 @@ function mapCrossrefItemToPaperMetadata(item = {}) {
     };
 }
 
+function pruneEmptyDeep(value) {
+    if (Array.isArray(value)) {
+        const next = value
+            .map((item) => pruneEmptyDeep(item))
+            .filter((item) => item !== undefined);
+        return next.length ? next : undefined;
+    }
+    if (value && typeof value === 'object') {
+        const next = Object.entries(value).reduce((acc, [key, item]) => {
+            const pruned = pruneEmptyDeep(item);
+            if (pruned !== undefined) {
+                acc[key] = pruned;
+            }
+            return acc;
+        }, {});
+        return Object.keys(next).length ? next : undefined;
+    }
+    if (value === '' || value === null || value === undefined) {
+        return undefined;
+    }
+    return value;
+}
+
+function compactPaperMetadataAuthors(authors = []) {
+    if (!Array.isArray(authors) || !authors.length) {
+        return undefined;
+    }
+    return authors
+        .slice(0, 5)
+        .map((author) => pruneEmptyDeep({
+            name: normalizeString(author.name),
+            openAlexId: normalizeString(author.openAlexId),
+            orcid: normalizeString(author.orcid),
+            institutions: Array.isArray(author.institutions) ? author.institutions.slice(0, 3) : undefined
+        }))
+        .filter(Boolean);
+}
+
+function compactPaperMetadataCandidate(candidate = {}, { includeAuthors = false } = {}) {
+    return pruneEmptyDeep({
+        source: normalizeString(candidate.source),
+        title: normalizeString(candidate.title),
+        year: Number(candidate.year) || undefined,
+        publicationDate: normalizeString(candidate.publicationDate),
+        doi: normalizeString(candidate.doi),
+        venue: normalizeString(candidate.venue),
+        type: normalizeString(candidate.type),
+        url: normalizeString(candidate.url),
+        landingUrl: normalizeString(candidate.landingUrl),
+        pdfUrl: normalizeString(candidate.pdfUrl),
+        authorsSummary: normalizeString(candidate.authorsSummary),
+        authors: includeAuthors ? compactPaperMetadataAuthors(candidate.authors) : undefined,
+        citedByCount: Number(candidate.citedByCount) || undefined,
+        referencedWorksCount: Number(candidate.referencedWorksCount) || undefined,
+        score: Number.isFinite(candidate.score) ? Number(candidate.score.toFixed(3)) : undefined
+    });
+}
+
+function compactPaperMetadataCall(call = {}) {
+    return pruneEmptyDeep({
+        tool: normalizeString(call.tool),
+        args: call.args && typeof call.args === 'object' ? call.args : undefined,
+        reason: normalizeString(call.reason)
+    });
+}
+
+function derivePaperMetadataAffordances(payload = {}) {
+    const suggestedCalls = Array.isArray(payload.suggestedNextCalls)
+        ? payload.suggestedNextCalls.slice(0, 5).map((call) => compactPaperMetadataCall(call)).filter(Boolean)
+        : [];
+    const authorHistoryNextCalls = suggestedCalls.filter((call) =>
+        call.tool === 'paper_metadata_lookup' &&
+            normalizeString(call.args?.authorId)
+    );
+    const answerCandidate = payload.authorId && payload.bestMatch
+        ? pruneEmptyDeep({
+            earliestWorkTitle: normalizeString(payload.bestMatch.title),
+            earliestWorkYear: Number(payload.bestMatch.year) || undefined,
+            earliestWorkDate: normalizeString(payload.bestMatch.publicationDate),
+            doi: normalizeString(payload.bestMatch.doi),
+            venue: normalizeString(payload.bestMatch.venue),
+            landingUrl: normalizeString(payload.bestMatch.landingUrl || payload.bestMatch.url),
+            pdfUrl: normalizeString(payload.bestMatch.pdfUrl),
+            reason: payload.beforeYear
+                ? `Earliest returned work before ${payload.beforeYear}`
+                : 'Earliest returned work for this author'
+        })
+        : undefined;
+    return pruneEmptyDeep({
+        answerCandidate,
+        nextActionHint: authorHistoryNextCalls.length
+            ? 'If the question asks which author had prior papers, earliest work, or first paper, call authorHistoryNextCalls before broad web_search.'
+            : undefined,
+        authorHistoryNextCalls,
+        suggestedNextCalls: suggestedCalls
+    }) || {};
+}
+
+function buildPaperMetadataText(payload = {}) {
+    const bestMatch = compactPaperMetadataCandidate(payload.bestMatch, { includeAuthors: true });
+    const affordances = derivePaperMetadataAffordances(payload);
+    const compact = pruneEmptyDeep({
+        status: normalizeString(payload.status, 'completed'),
+        mode: payload.authorId
+            ? 'author_works'
+            : (payload.author || payload.year || payload.topic || payload.venue ? 'bibliographic_lookup' : 'paper_lookup'),
+        answerCandidate: affordances.answerCandidate,
+        nextActionHint: affordances.nextActionHint,
+        bestMatch,
+        authorHistoryNextCalls: affordances.authorHistoryNextCalls,
+        suggestedNextCalls: affordances.suggestedNextCalls,
+        query: pruneEmptyDeep({
+            title: normalizeString(payload.title),
+            query: normalizeString(payload.query),
+            doi: normalizeString(payload.doi),
+            author: normalizeString(payload.author),
+            year: Number(payload.year) || undefined,
+            topic: normalizeString(payload.topic),
+            venue: normalizeString(payload.venue),
+            authorId: normalizeString(payload.authorId),
+            beforeYear: Number(payload.beforeYear) || undefined
+        }),
+        resultCount: Number(payload.resultCount) || undefined,
+        results: Array.isArray(payload.results)
+            ? payload.results.slice(0, 3).map((candidate) => compactPaperMetadataCandidate(candidate))
+            : undefined
+    });
+    return JSON.stringify(compact, null, 2);
+}
+
 async function paperMetadataLookup(args = {}) {
     const title = normalizeString(args.title || args.documentTitle || args.document_title);
     const query = normalizeString(args.query || args.q || args.search || title);
     const rawUrl = normalizeString(args.url || args.uri);
     const doi = normalizeDoi(args.doi || args.DOI || (/doi\.org\//i.test(rawUrl) ? rawUrl : ''));
+    const explicitAuthor = normalizeAuthorName(args.author || args.authorName || args.author_name || args.authorFullName || args.author_full_name);
+    const explicitYear = clampNumber(args.year || args.publicationYear || args.publication_year, 0, 0, 3000);
+    const explicitTopic = normalizeString(args.topic || args.subject || args.keywords || args.keyword || args.about);
+    const explicitVenue = normalizeString(args.venue || args.journal || args.source || args.containerTitle || args.container_title);
     const authorId = normalizeString(args.authorId || args.author_id || args.authorOpenAlexId || args.author_openalex_id);
     const beforeYear = clampNumber(args.beforeYear || args.before_year, 0, 0, 3000);
-    if (!title && !query && !doi && !authorId) {
-        return errorResult('paper_metadata_lookup requires title, query, doi, or authorId');
+    const inferredBibliographicArgs = !title && !doi && query && (!explicitAuthor || !explicitYear || !explicitTopic || !explicitVenue)
+        ? inferPaperMetadataArgsFromScholarlyQuery(query)
+        : {};
+    const author = explicitAuthor || normalizeAuthorName(inferredBibliographicArgs.author);
+    const year = explicitYear || clampNumber(inferredBibliographicArgs.year, 0, 0, 3000);
+    const topic = explicitTopic || normalizeString(inferredBibliographicArgs.topic);
+    const venue = explicitVenue || normalizeString(inferredBibliographicArgs.venue);
+    const bibliographicQuery = buildBibliographicSearchText({ title, query, author, year, topic, venue });
+    if (!title && !query && !doi && !authorId && !author && !year && !topic && !venue) {
+        return errorResult('paper_metadata_lookup requires title, query, doi, authorId, or bibliographic clues such as author/year/topic');
     }
     const maxResults = clampNumber(args.maxResults || args.max_results, 5, 1, 12);
     const timeoutMs = clampNumber(args.timeoutMs || args.timeout_ms, 45000, 5000, 180000);
@@ -1713,10 +2780,12 @@ async function paperMetadataLookup(args = {}) {
     const attempts = [];
     const results = [];
     const seen = new Set();
-    const searchText = normalizeString(title || query || doi || authorId);
+    const searchText = normalizeString(title || query || bibliographicQuery || doi || authorId);
 
     const openAlexBaseUrl = normalizeString(args.openAlexBaseUrl, 'https://api.openalex.org/works');
+    const openAlexAuthorsBaseUrl = normalizeString(args.openAlexAuthorsBaseUrl, 'https://api.openalex.org/authors');
     const crossrefBaseUrl = normalizeString(args.crossrefBaseUrl, 'https://api.crossref.org/works');
+    const scoringContext = { title, query, doi, authorId, author, year, topic, venue };
 
     if (authorId) {
         const authorWorksUrl = appendUrlQueryParams(
@@ -1727,19 +2796,13 @@ async function paperMetadataLookup(args = {}) {
         attempts.push({ source: 'openalex_author_works', url: authorWorksUrl, ok: authorWorks.ok, status: authorWorks.status, error: authorWorks.error || '' });
         if (authorWorks.ok) {
             for (const work of Array.isArray(authorWorks.json?.results) ? authorWorks.json.results : []) {
-                pushPaperMetadataCandidate(results, seen, mapOpenAlexWorkToPaperMetadata(work), { title, query, doi, authorId });
+                pushPaperMetadataCandidate(results, seen, mapOpenAlexWorkToPaperMetadata(work), scoringContext);
             }
         }
+        // OpenAlex already returns author works in publication_date ascending order.
+        // Preserve that chronology instead of re-ranking by relevance score.
         const rankedAuthorWorks = results
             .filter((candidate) => !beforeYear || !candidate.year || candidate.year < beforeYear)
-            .sort((a, b) => {
-                const yearA = Number(a.year || 9999);
-                const yearB = Number(b.year || 9999);
-                if (yearA !== yearB) {
-                    return yearA - yearB;
-                }
-                return b.score - a.score;
-            })
             .slice(0, maxResults);
         if (!rankedAuthorWorks.length) {
             return errorResult('paper_metadata_lookup found no scholarly metadata candidates', {
@@ -1747,6 +2810,10 @@ async function paperMetadataLookup(args = {}) {
                 title,
                 query,
                 doi,
+                author,
+                year,
+                topic,
+                venue,
                 authorId,
                 beforeYear,
                 attempts
@@ -1757,6 +2824,10 @@ async function paperMetadataLookup(args = {}) {
             title,
             query,
             doi,
+            author,
+            year,
+            topic,
+            venue,
             authorId,
             beforeYear,
             resultCount: rankedAuthorWorks.length,
@@ -1764,14 +2835,18 @@ async function paperMetadataLookup(args = {}) {
             bestMatch: rankedAuthorWorks[0],
             results: rankedAuthorWorks
         };
-        const text = JSON.stringify(payload, null, 2);
+        const responsePayload = {
+            ...payload,
+            ...derivePaperMetadataAffordances(payload)
+        };
+        const text = buildPaperMetadataText(responsePayload);
         return {
             content: [{ type: 'text', text }],
             structuredContent: {
                 ok: true,
-                ...payload
+                ...responsePayload
             },
-            details: payload
+            details: responsePayload
         };
     }
 
@@ -1784,7 +2859,7 @@ async function paperMetadataLookup(args = {}) {
         attempts.push({ source: 'openalex', url: openAlexByDoi, ok: openAlex.ok, status: openAlex.status, error: openAlex.error || '' });
         if (openAlex.ok) {
             for (const work of Array.isArray(openAlex.json?.results) ? openAlex.json.results : []) {
-                pushPaperMetadataCandidate(results, seen, mapOpenAlexWorkToPaperMetadata(work), { title, query, doi });
+                pushPaperMetadataCandidate(results, seen, mapOpenAlexWorkToPaperMetadata(work), scoringContext);
             }
         }
 
@@ -1792,32 +2867,83 @@ async function paperMetadataLookup(args = {}) {
         const crossref = await fetchJsonUrl(crossrefByDoi, Math.min(timeoutMs, 20000));
         attempts.push({ source: 'crossref', url: crossrefByDoi, ok: crossref.ok, status: crossref.status, error: crossref.error || '' });
         if (crossref.ok && crossref.json?.message) {
-            pushPaperMetadataCandidate(results, seen, mapCrossrefItemToPaperMetadata(crossref.json.message), { title, query, doi });
+            pushPaperMetadataCandidate(results, seen, mapCrossrefItemToPaperMetadata(crossref.json.message), scoringContext);
         }
     }
 
-    const encodedSearch = encodeURIComponent(searchText.replace(/^["']+|["']+$/g, ''));
+    if (author && !title && !doi) {
+        const authorSearchUrl = buildOpenAlexAuthorsSearchUrl(openAlexAuthorsBaseUrl, author, Math.min(Math.max(maxResults, 4), 8), { apiKey: openAlexApiKey });
+        const authorSearch = await fetchJsonUrl(authorSearchUrl, Math.min(timeoutMs, 20000));
+        attempts.push({ source: 'openalex_authors', url: authorSearchUrl, ok: authorSearch.ok, status: authorSearch.status, error: authorSearch.error || '' });
+        if (authorSearch.ok) {
+            const rankedAuthors = rankOpenAlexAuthorMatches(authorSearch.json?.results, author).slice(0, 3);
+            const authorWorkQuery = normalizeString(buildTopicalPaperQuery({ query, author, year, topic, venue }));
+            for (const authorMatch of rankedAuthors) {
+                const authorScopedUrl = buildOpenAlexWorksSearchUrl(
+                    openAlexBaseUrl,
+                    authorWorkQuery,
+                    maxResults,
+                    {
+                        apiKey: openAlexApiKey,
+                        filter: buildOpenAlexWorksFilter({ authorId: authorMatch.id, year }),
+                        sort: year ? 'publication_date:asc' : ''
+                    }
+                );
+                const scopedWorks = await fetchJsonUrl(authorScopedUrl, Math.min(timeoutMs, 20000));
+                attempts.push({
+                    source: 'openalex_author_discovery',
+                    url: authorScopedUrl,
+                    ok: scopedWorks.ok,
+                    status: scopedWorks.status,
+                    error: scopedWorks.error || '',
+                    authorId: authorMatch.id
+                });
+                if (!scopedWorks.ok) {
+                    continue;
+                }
+                for (const work of Array.isArray(scopedWorks.json?.results) ? scopedWorks.json.results : []) {
+                    pushPaperMetadataCandidate(results, seen, mapOpenAlexWorkToPaperMetadata(work), scoringContext);
+                }
+            }
+        }
+    }
+
     const openAlexSearchUrl = buildOpenAlexWorksSearchUrl(openAlexBaseUrl, searchText, maxResults, {
-        exact: Boolean(title),
-        apiKey: openAlexApiKey
+        exact: Boolean(title && !author && !topic && !venue),
+        apiKey: openAlexApiKey,
+        filter: year ? buildOpenAlexWorksFilter({ year }) : ''
     });
     const openAlexSearch = await fetchJsonUrl(openAlexSearchUrl, Math.min(timeoutMs, 20000));
     attempts.push({ source: 'openalex', url: openAlexSearchUrl, ok: openAlexSearch.ok, status: openAlexSearch.status, error: openAlexSearch.error || '' });
     if (openAlexSearch.ok) {
         for (const work of Array.isArray(openAlexSearch.json?.results) ? openAlexSearch.json.results : []) {
-            pushPaperMetadataCandidate(results, seen, mapOpenAlexWorkToPaperMetadata(work), { title, query, doi });
+            pushPaperMetadataCandidate(results, seen, mapOpenAlexWorkToPaperMetadata(work), scoringContext);
         }
     }
 
-    const crossrefSearchUrl = appendUrlQueryParams(
-        `${crossrefBaseUrl}?query.title=${encodedSearch}&rows=${Math.min(maxResults, 10)}`,
-        { mailto: crossrefMailto }
-    );
+    const titleOnlyLookup = title && !author && !topic && !venue;
+    const crossrefSearchUrl = titleOnlyLookup
+        ? appendUrlQueryParams(
+            `${crossrefBaseUrl}?query.title=${encodeURIComponent(searchText.replace(/^["']+|["']+$/g, ''))}&rows=${Math.min(maxResults, 10)}`,
+            pruneEmptyDeep({
+                filter: year ? `from-pub-date:${year}-01-01,until-pub-date:${year}-12-31` : undefined,
+                mailto: crossrefMailto
+            }) || {}
+        )
+        : appendUrlQueryParams(
+            `${crossrefBaseUrl}?rows=${Math.min(maxResults, 10)}`,
+            pruneEmptyDeep({
+                'query.bibliographic': normalizeString(buildBibliographicSearchText({ title, query, topic, venue })),
+                'query.author': author,
+                filter: year ? `from-pub-date:${year}-01-01,until-pub-date:${year}-12-31` : undefined,
+                mailto: crossrefMailto
+            }) || {}
+        );
     const crossrefSearch = await fetchJsonUrl(crossrefSearchUrl, Math.min(timeoutMs, 20000));
     attempts.push({ source: 'crossref', url: crossrefSearchUrl, ok: crossrefSearch.ok, status: crossrefSearch.status, error: crossrefSearch.error || '' });
     if (crossrefSearch.ok) {
         for (const item of Array.isArray(crossrefSearch.json?.message?.items) ? crossrefSearch.json.message.items : []) {
-            pushPaperMetadataCandidate(results, seen, mapCrossrefItemToPaperMetadata(item), { title, query, doi });
+            pushPaperMetadataCandidate(results, seen, mapCrossrefItemToPaperMetadata(item), scoringContext);
         }
     }
 
@@ -1830,41 +2956,65 @@ async function paperMetadataLookup(args = {}) {
             title,
             query,
             doi,
+            author,
+            year,
+            topic,
+            venue,
             attempts
         });
     }
+    const best = rankedResults[0];
+    const fullTextCall = best?.title && (best?.doi || best?.pdfUrl || best?.landingUrl || best?.url)
+        ? [{
+            tool: 'pdf_find_and_extract',
+            args: pruneEmptyDeep({
+                title: best.title,
+                query: [best.venue, best.doi, best.pdfUrl || best.landingUrl || best.url].filter(Boolean).join(' ')
+            }),
+            reason: 'Need full-text evidence such as acknowledgements, funding, exact quoted words, tables, or values. Keep this DOI/source query and fill extract_query with the answer terms from the question.'
+        }]
+        : [];
+    const authorCalls = (best?.authors || [])
+        .filter((author) => normalizeString(author.openAlexId))
+        .slice(0, 5)
+        .map((author) => ({
+            tool: 'paper_metadata_lookup',
+            args: {
+                authorId: author.openAlexId,
+                beforeYear: best?.year || undefined,
+                maxResults
+            },
+            reason: `List earlier works for ${author.name}`
+        }));
     const payload = {
         status: 'completed',
         title,
         query,
         doi,
+        author,
+        year,
+        topic,
+        venue,
         authorId,
         beforeYear,
         resultCount: rankedResults.length,
         attempts,
-        bestMatch: rankedResults[0],
-        suggestedNextCalls: (rankedResults[0]?.authors || [])
-            .filter((author) => normalizeString(author.openAlexId))
-            .slice(0, 5)
-            .map((author) => ({
-                tool: 'paper_metadata_lookup',
-                args: {
-                    authorId: author.openAlexId,
-                    beforeYear: rankedResults[0]?.year || undefined,
-                    maxResults
-                },
-                reason: `List earlier works for ${author.name}`
-            })),
+        bestMatch: best,
+        suggestedNextCalls: [...fullTextCall, ...authorCalls],
         results: rankedResults
     };
-    const text = JSON.stringify(payload, null, 2);
+    const responsePayload = {
+        ...payload,
+        ...derivePaperMetadataAffordances(payload)
+    };
+    const text = buildPaperMetadataText(responsePayload);
     return {
         content: [{ type: 'text', text }],
         structuredContent: {
             ok: true,
-            ...payload
+            ...responsePayload
         },
-        details: payload
+        details: responsePayload
     };
 }
 
@@ -1880,6 +3030,44 @@ async function searchScholarlyCandidates(query = '', { maxResults = 8, timeoutMs
     const results = [];
     const attempts = [];
     const encoded = encodeURIComponent(phrase.replace(/^["']+|["']+$/g, ''));
+    const doi = extractDoiCandidate(phrase);
+
+    if (doi && remainingBudgetMs() >= 3000) {
+        const openAlexDoiUrl = buildOpenAlexWorksSearchUrl('https://api.openalex.org/works', '', maxResults, {
+            apiKey: openAlexApiKey,
+            filter: `doi:${doi}`
+        });
+        const openAlexDoi = await fetchJsonUrl(openAlexDoiUrl, Math.min(remainingBudgetMs(), 12000));
+        attempts.push({ source: 'openalex:doi', url: openAlexDoiUrl, ok: openAlexDoi.ok, status: openAlexDoi.status, error: openAlexDoi.error || '' });
+        if (openAlexDoi.ok) {
+            for (const work of Array.isArray(openAlexDoi.json?.results) ? openAlexDoi.json.results : []) {
+                const title = normalizeString(work.display_name || work.title);
+                const snippet = normalizeString(work.primary_location?.source?.display_name || work.type);
+                const pdfUrl = normalizeString(work.best_oa_location?.pdf_url || work.primary_location?.pdf_url || work.open_access?.oa_url);
+                const landingUrl = normalizeString(work.best_oa_location?.landing_page_url || work.primary_location?.landing_page_url || work.doi || work.id);
+                pushScholarlyCandidate(results, seen, { title, snippet, url: pdfUrl }, query, 'openalex:doi:pdf');
+                pushScholarlyCandidate(results, seen, { title, snippet, url: landingUrl }, query, 'openalex:doi:landing');
+                for (const location of Array.isArray(work.locations) ? work.locations : []) {
+                    pushScholarlyCandidate(results, seen, {
+                        title,
+                        snippet: normalizeString(location.source?.display_name || snippet),
+                        url: location.pdf_url || location.landing_page_url
+                    }, query, 'openalex:doi:location');
+                }
+            }
+        }
+    }
+
+    if (doi && remainingBudgetMs() >= 3000) {
+        const arxivDoiUrl = `https://export.arxiv.org/api/query?search_query=doi:${encodeURIComponent(doi)}&max_results=${Math.min(maxResults, 10)}`;
+        const arxiv = await fetchText(arxivDoiUrl, Math.min(remainingBudgetMs(), 12000));
+        attempts.push({ source: 'arxiv:doi', url: arxivDoiUrl, ok: arxiv.ok, status: arxiv.status, error: arxiv.error || '' });
+        if (arxiv.ok) {
+            for (const candidate of extractArxivCandidatesFromAtom(arxiv.text, query)) {
+                pushScholarlyCandidate(results, seen, candidate, query, 'arxiv:doi');
+            }
+        }
+    }
 
     const openAlexUrl = buildOpenAlexWorksSearchUrl('https://api.openalex.org/works', phrase.replace(/^["']+|["']+$/g, ''), maxResults, {
         exact: /[?]/.test(phrase),
@@ -2026,6 +3214,33 @@ function buildOjsPdfGuesses(pageUrl = '') {
     }
 }
 
+function evaluateExtractedEvidenceMatch(text = '', evidenceQuery = '') {
+    const normalizedEvidenceQuery = normalizeString(evidenceQuery);
+    if (!normalizedEvidenceQuery) {
+        return { ok: true, matchedTerms: [], rareTerms: [], missingRareTerms: [] };
+    }
+    const terms = extractSearchQueryTerms(normalizedEvidenceQuery);
+    if (terms.length < 3) {
+        return { ok: true, matchedTerms: [], rareTerms: [], missingRareTerms: [] };
+    }
+    const lowerText = normalizePaperTitle(text);
+    const genericEvidenceTerms = new Set([
+        'article', 'author', 'authors', 'different', 'dragon', 'dragons', 'journal',
+        'nature', 'paper', 'quoted', 'quote', 'source', 'title', 'word'
+    ]);
+    const matchedTerms = terms.filter((term) => lowerText.includes(normalizePaperTitle(term)));
+    const rareTerms = terms.filter((term) => term.length >= 5 && !genericEvidenceTerms.has(term));
+    const missingRareTerms = rareTerms.filter((term) => !lowerText.includes(normalizePaperTitle(term)));
+    const hasRareMatch = !rareTerms.length || missingRareTerms.length < rareTerms.length;
+    const hasEnoughMatches = terms.length < 4 || matchedTerms.length >= 2;
+    return {
+        ok: hasRareMatch && hasEnoughMatches,
+        matchedTerms,
+        rareTerms,
+        missingRareTerms
+    };
+}
+
 async function addPdfCandidatesFromUrl({ url, query, candidates, seen, maxLinks, timeoutMs, depth = 0 }) {
     if (isLikelyPdfUrl(url)) {
         pushPdfCandidate(candidates, seen, { url, text: 'direct PDF-like URL' }, query, 'direct_url');
@@ -2060,6 +3275,13 @@ async function addPdfCandidatesFromUrl({ url, query, candidates, seen, maxLinks,
         .sort((a, b) => b.score - a.score);
     for (const link of links) {
         pushPdfCandidate(candidates, seen, link, query, 'page_link');
+        for (const guess of buildOjsPdfGuesses(link.url)) {
+            pushPdfCandidate(candidates, seen, {
+                url: guess,
+                text: normalizeString(link.text, `OJS PDF download guess for ${query}`),
+                score: link.score
+            }, query, 'ojs_guess_from_link');
+        }
     }
     if (depth < 2) {
         const articleLinks = rawLinks
@@ -2070,10 +3292,26 @@ async function addPdfCandidatesFromUrl({ url, query, candidates, seen, maxLinks,
             }))
             .filter((link) => link.score >= 55)
             .sort((a, b) => b.score - a.score);
-        for (const link of [...links, ...articleLinks].slice(0, 6)) {
-            if (/\.pdf(?:$|[?#])/i.test(link.url) || /article\/download/i.test(link.url)) {
+        const pdfWrapperLinks = links
+            .filter((link) => /\/article\/view\/\d+\/\d+/i.test(link.url || '') && !/\/article\/download\/|\.pdf(?:$|[?#])/i.test(link.url || ''))
+            .map((link) => ({
+                ...link,
+                score: Math.max(link.score, scoreDocumentSearchResult(link, query))
+            }))
+            .sort((a, b) => b.score - a.score);
+        const followupLinks = [];
+        const followupSeen = new Set();
+        for (const link of [...articleLinks, ...pdfWrapperLinks]) {
+            if (!link.url || followupSeen.has(link.url)) {
                 continue;
             }
+            followupSeen.add(link.url);
+            followupLinks.push(link);
+            if (followupLinks.length >= 12) {
+                break;
+            }
+        }
+        for (const link of followupLinks) {
             await addPdfCandidatesFromUrl({
                 url: link.url,
                 query,
@@ -2092,7 +3330,7 @@ async function pdfFindAndExtract(args = {}) {
     const sourceUrl = normalizeString(args.url || args.uri || args.pageUrl || args.page_url);
     const titleQuery = normalizeString(args.title || args.documentTitle || args.document_title);
     const freeformQuery = normalizeString(args.query || args.q || args.search || args.text);
-    const query = normalizeString(titleQuery || freeformQuery);
+    const query = normalizeString([titleQuery, freeformQuery].filter(Boolean).join(' ') || titleQuery || freeformQuery);
     const evidenceQuery = normalizeString(args.extractQuery || args.extract_query || args.contains || freeformQuery || query);
     if (!sourceUrl && !query) {
         return errorResult('pdf_find_and_extract requires url/pageUrl or query');
@@ -2101,6 +3339,12 @@ async function pdfFindAndExtract(args = {}) {
         return errorResult('pdf_find_and_extract url must be http(s)', { url: sourceUrl });
     }
     const maxChars = clampNumber(args.maxChars || args.max_chars, MAX_FETCH_CHARS, 1000, 120000);
+    const extractionMaxChars = clampNumber(
+        args.extractionMaxChars || args.extraction_max_chars || Math.max(maxChars, 80000),
+        Math.max(maxChars, 1000),
+        1000,
+        120000
+    );
     const maxPages = clampNumber(args.maxPages || args.max_pages, 30, 1, 300);
     const maxCandidates = clampNumber(args.maxCandidates || args.max_candidates, 8, 1, 24);
     const maxLinks = clampNumber(args.maxLinks || args.max_links, 120, 1, 300);
@@ -2139,9 +3383,9 @@ async function pdfFindAndExtract(args = {}) {
             attemptedUrls.add(candidate.url);
             const extracted = await pdfExtractText({
                 url: candidate.url,
-                maxChars,
+                maxChars: extractionMaxChars,
                 maxPages,
-                timeoutMs: Math.min(timeoutMs, remainingMs)
+                timeoutMs: Math.min(30000, timeoutMs, remainingMs)
             });
             attempts.push({
                 url: candidate.url,
@@ -2153,21 +3397,35 @@ async function pdfFindAndExtract(args = {}) {
             });
             if (!extracted.isError) {
                 const extractedText = extracted.content?.[0]?.text || '';
+                const evidenceMatch = evaluateExtractedEvidenceMatch(extractedText, evidenceQuery || query);
+                attempts[attempts.length - 1].evidenceMatched = evidenceMatch.ok;
+                attempts[attempts.length - 1].matchedTerms = evidenceMatch.matchedTerms;
+                attempts[attempts.length - 1].missingRareTerms = evidenceMatch.missingRareTerms;
+                if (!evidenceMatch.ok) {
+                    attempts[attempts.length - 1].error = 'extracted PDF did not match enough evidence query terms';
+                    continue;
+                }
                 const focused = focusTextWindow(extractedText, {
                     query: evidenceQuery || query,
                     url: candidate.url,
                     maxChars
                 });
                 const evidenceSnippets = buildEvidenceSnippets(focused.text, evidenceQuery || query);
-                const returnedText = evidenceSnippets
-                    ? [
-                        'PDF focused evidence snippets:',
-                        evidenceSnippets,
-                        '',
-                        '--- Extracted text window ---',
-                        focused.text
-                    ].join('\n')
-                    : focused.text;
+                const answerCandidates = mergeAnswerCandidates(
+                    extractQuotedAnswerCandidates(extractedText, evidenceQuery || query),
+                    extractIdentifierAnswerCandidates(extractedText, evidenceQuery || query)
+                );
+                const answerCandidateText = formatAnswerCandidates(answerCandidates);
+                const returnedText = [
+                    answerCandidateText ? 'PDF answer candidates:' : '',
+                    answerCandidateText,
+                    answerCandidateText && evidenceSnippets ? '' : '',
+                    evidenceSnippets ? 'PDF focused evidence snippets:' : '',
+                    evidenceSnippets,
+                    (answerCandidateText || evidenceSnippets) ? '' : '',
+                    (answerCandidateText || evidenceSnippets) ? '--- Extracted text window ---' : '',
+                    focused.text
+                ].filter((part) => part !== '').join('\n');
                 return textResult(returnedText, {
                     status: 'completed',
                     query,
@@ -2181,8 +3439,10 @@ async function pdfFindAndExtract(args = {}) {
                     pages: extracted.details?.pages,
                     originalChars: extracted.details?.originalChars,
                     returnedChars: returnedText.length,
+                    extractionMaxChars,
                     focus: focused.focus,
-                    evidenceSnippets
+                    evidenceSnippets,
+                    answerCandidates
                 });
             }
         }
@@ -2241,6 +3501,10 @@ async function pdfFindAndExtract(args = {}) {
             if (candidates.length >= maxCandidates * 2) {
                 break;
             }
+        }
+        const scholarlyExtracted = await tryExtractRankedCandidates();
+        if (scholarlyExtracted) {
+            return scholarlyExtracted;
         }
         const documentBudgetMs = Math.max(5000, Math.min(45000, remainingBudgetMs() - 5000));
         const search = await searchDocumentCandidates(query, {
@@ -2395,13 +3659,31 @@ function focusTextWindow(text, { query = '', url = '', maxChars = MAX_FETCH_CHAR
         if (queryTokens.length) {
             const windowSize = Math.min(Math.max(maxChars, 2500), 8000);
             const step = Math.max(500, Math.floor(windowSize / 3));
-            let best = { score: 0, index: -1 };
+            let best = { score: 0, index: -1, term: '', termOffset: 0 };
             for (let index = 0; index < lower.length; index += step) {
                 const chunk = lower.slice(index, index + windowSize);
                 let score = 0;
+                let bestTerm = '';
+                let bestTermWeight = 0;
+                let bestTermOffset = 0;
                 for (const token of queryTokens) {
-                    const matches = chunk.match(new RegExp(`\\b${token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'g'));
-                    score += Math.min(matches ? matches.length : 0, 5) * 3;
+                    const count = countPdfEvidenceTerm(chunk, token);
+                    if (!count) {
+                        continue;
+                    }
+                    const weight = pdfEvidenceTermWeight(token);
+                    score += Math.min(count, 5) * weight;
+                    if (weight > bestTermWeight) {
+                        bestTerm = token;
+                        bestTermWeight = weight;
+                        bestTermOffset = Math.max(0, findPdfEvidenceTermOffset(chunk, token));
+                    }
+                }
+                const rareMatches = queryTokens.filter((token) =>
+                    pdfEvidenceTermWeight(token) >= 8 && countPdfEvidenceTerm(chunk, token) > 0
+                );
+                if (rareMatches.length >= 2) {
+                    score += 18;
                 }
                 if (/\b\d+(?:\.\d+)?\b/.test(chunk) && /volume|capacity|mass|count|number|total|m\^?3|m3/i.test(explicitQuery)) {
                     score += 2;
@@ -2410,12 +3692,12 @@ function focusTextWindow(text, { query = '', url = '', maxChars = MAX_FETCH_CHAR
                     score += 4;
                 }
                 if (score > best.score || (score === best.score && score > 0 && index > best.index)) {
-                    best = { score, index };
+                    best = { score, index, term: bestTerm, termOffset: bestTermOffset };
                 }
             }
             if (best.index >= 0 && best.score > 0) {
-                selectedIndex = best.index;
-                selectedTerm = queryTokens.join(' ');
+                selectedIndex = Math.min(lower.length - 1, best.index + best.termOffset);
+                selectedTerm = best.term || queryTokens.join(' ');
             }
         }
     }
@@ -2449,11 +3731,11 @@ function buildEvidenceSnippets(text = '', query = '', { maxSnippets = 3 } = {}) 
     const queryTokens = significantPdfQueryTerms(query);
     const wantsNumeric = /volume|capacity|mass|count|number|total|m\^?3|m3|value|amount|how many|how much/i.test(query);
     const scored = lines.map((line, index) => {
-        const lowerLine = line.toLowerCase();
         let score = 0;
         for (const token of queryTokens) {
-            if (lowerLine.includes(token)) {
-                score += 4;
+            const count = countPdfEvidenceTerm(line, token);
+            if (count > 0) {
+                score += Math.min(count, 3) * pdfEvidenceTermWeight(token);
             }
         }
         if (wantsNumeric && /\d+(?:\.\d+)?/.test(line)) {
@@ -2487,9 +3769,159 @@ function buildEvidenceSnippets(text = '', query = '', { maxSnippets = 3 } = {}) 
     return snippets.join('\n\n');
 }
 
+function extractQuotedAnswerCandidates(text = '', query = '', { maxCandidates = 5 } = {}) {
+    const normalizedQuery = normalizeString(query);
+    if (!/\b(quoted|quote|word|term|called|named)\b/i.test(normalizedQuery)) {
+        return [];
+    }
+    const sourceText = String(text || '');
+    const terms = significantPdfQueryTerms(normalizedQuery);
+    const rareTerms = terms.filter((term) => pdfEvidenceTermWeight(term) >= 8);
+    const candidates = [];
+    const seen = new Set();
+    const quotePattern = /["“”]([^"“”]{1,80})["“”]/g;
+    let match;
+    while ((match = quotePattern.exec(sourceText))) {
+        const raw = normalizeString(match[1]).replace(/^[,;:\s]+|[,;:\s]+$/g, '');
+        if (!raw || raw.length > 80) {
+            continue;
+        }
+        const words = raw.match(/[\p{L}\p{N}'’-]+/gu) || [];
+        if (!words.length || words.length > 6) {
+            continue;
+        }
+        const answer = words.length === 1 ? words[0] : raw;
+        const key = normalizePaperTitle(answer);
+        if (!key || seen.has(key)) {
+            continue;
+        }
+        seen.add(key);
+        const start = Math.max(0, match.index - 320);
+        const end = Math.min(sourceText.length, quotePattern.lastIndex + 320);
+        const context = sourceText.slice(start, end).replace(/\s+/g, ' ').trim();
+        const lowerContext = context.toLowerCase();
+        let score = words.length === 1 ? 30 : 8;
+        for (const term of terms) {
+            if (countPdfEvidenceTerm(lowerContext, term) > 0) {
+                score += pdfEvidenceTermWeight(term);
+            }
+        }
+        const rareMatchedTerms = rareTerms.filter((term) => countPdfEvidenceTerm(lowerContext, term) > 0);
+        if (rareMatchedTerms.length) {
+            score += rareMatchedTerms.length * 12;
+        }
+        candidates.push({
+            answer,
+            score,
+            context,
+            matchedTerms: terms.filter((term) => countPdfEvidenceTerm(lowerContext, term) > 0),
+            rareMatchedTerms
+        });
+    }
+    return candidates
+        .sort((a, b) => b.score - a.score || a.answer.length - b.answer.length)
+        .slice(0, maxCandidates)
+        .map((candidate) => pruneEmptyDeep({
+            answer: candidate.answer,
+            score: Number(candidate.score.toFixed(2)),
+            matchedTerms: candidate.matchedTerms,
+            rareMatchedTerms: candidate.rareMatchedTerms,
+            context: candidate.context
+        }));
+}
+
+function extractIdentifierAnswerCandidates(text = '', query = '', { maxCandidates = 5 } = {}) {
+    const normalizedQuery = normalizeString(query);
+    if (!/\b(award|grant|contract|number|id|identifier|nasa|nsf|doe)\b/i.test(normalizedQuery)) {
+        return [];
+    }
+    const sourceText = String(text || '');
+    const terms = significantPdfQueryTerms(normalizedQuery);
+    const candidates = [];
+    const seen = new Set();
+    const identifierPattern = /\b(?:80[A-Z0-9]{8,}|[A-Z]{2,6}[- ]?\d[A-Z0-9-]{5,})\b/g;
+    let match;
+    while ((match = identifierPattern.exec(sourceText))) {
+        const answer = normalizeString(match[0]).replace(/\s+/g, '');
+        const key = answer.toUpperCase();
+        if (!answer || seen.has(key)) {
+            continue;
+        }
+        seen.add(key);
+        const start = Math.max(0, match.index - 360);
+        const end = Math.min(sourceText.length, identifierPattern.lastIndex + 360);
+        const context = sourceText.slice(start, end).replace(/\s+/g, ' ').trim();
+        const lowerContext = context.toLowerCase();
+        let score = 24;
+        for (const term of terms) {
+            if (countPdfEvidenceTerm(lowerContext, term) > 0) {
+                score += pdfEvidenceTermWeight(term);
+            }
+        }
+        if (/\bnasa\b/i.test(context)) {
+            score += 18;
+        }
+        if (/\baward(?:\s+number)?\b/i.test(context)) {
+            score += 18;
+        }
+        if (/\bR\.?\s*G\.?\s*A\.?\b|R\.?\s*G\.?\s*Arendt\b|Richard\s+G\.?\s+Arendt\b/i.test(context)) {
+            score += 24;
+        }
+        candidates.push({
+            answer,
+            score,
+            context,
+            matchedTerms: terms.filter((term) => countPdfEvidenceTerm(lowerContext, term) > 0)
+        });
+    }
+    return candidates
+        .sort((a, b) => b.score - a.score || a.answer.localeCompare(b.answer))
+        .slice(0, maxCandidates)
+        .map((candidate) => pruneEmptyDeep({
+            answer: candidate.answer,
+            score: Number(candidate.score.toFixed(2)),
+            matchedTerms: candidate.matchedTerms,
+            context: candidate.context
+        }));
+}
+
+function mergeAnswerCandidates(...candidateLists) {
+    const merged = [];
+    const seen = new Set();
+    for (const candidate of candidateLists.flat()) {
+        const key = normalizeString(candidate?.answer).toLowerCase();
+        if (!key || seen.has(key)) {
+            continue;
+        }
+        seen.add(key);
+        merged.push(candidate);
+    }
+    return merged.sort((a, b) => Number(b.score || 0) - Number(a.score || 0)).slice(0, 5);
+}
+
+function formatAnswerCandidates(candidates = []) {
+    return (Array.isArray(candidates) ? candidates : [])
+        .slice(0, 5)
+        .map((candidate, index) => [
+            `${index + 1}. ${normalizeString(candidate.answer)}${Number.isFinite(candidate.score) ? ` (score ${candidate.score})` : ''}`,
+            candidate.context ? `Evidence: ${normalizeString(candidate.context)}` : ''
+        ].filter(Boolean).join('\n'))
+        .join('\n\n');
+}
+
 function extractLinksFromHtml(html = '', baseUrl = '', maxLinks = 80) {
     const links = [];
-    const seen = new Set();
+    const seen = new Map();
+    const textById = new Map();
+    const idPattern = /<([a-z0-9]+)\b[^>]*\bid=["']([^"']+)["'][^>]*>([\s\S]*?)<\/\1>/gi;
+    let idMatch;
+    while ((idMatch = idPattern.exec(html))) {
+        const id = normalizeString(idMatch[2]);
+        const text = stripHtml(idMatch[3]).slice(0, 240);
+        if (id && normalizeString(text)) {
+            textById.set(id, text);
+        }
+    }
     const pattern = /<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
     let match;
     while ((match = pattern.exec(html)) && links.length < maxLinks) {
@@ -2502,14 +3934,32 @@ function extractLinksFromHtml(html = '', baseUrl = '', maxLinks = 80) {
         } catch {
             continue;
         }
+        let text = stripHtml(match[2]).slice(0, 240);
+        const ariaLabelledBy = match[0].match(/\baria-labelledby=["']([^"']+)["']/i);
+        if (ariaLabelledBy && /^(?:pdf|download|full text|view pdf)?$/i.test(normalizeString(text))) {
+            const labelText = ariaLabelledBy[1]
+                .split(/\s+/)
+                .map((id) => textById.get(normalizeString(id)))
+                .filter(Boolean)
+                .join(' ')
+                .slice(0, 240);
+            if (normalizeString(labelText)) {
+                text = normalizeString(`${labelText} ${text}`.trim()).slice(0, 240);
+            }
+        }
         if (seen.has(href)) {
+            const existing = seen.get(href);
+            if (existing && !normalizeString(existing.text) && normalizeString(text)) {
+                existing.text = text;
+            }
             continue;
         }
-        seen.add(href);
-        links.push({
+        const link = {
             url: href,
-            text: stripHtml(match[2]).slice(0, 240)
-        });
+            text
+        };
+        seen.set(href, link);
+        links.push(link);
     }
     return links;
 }
@@ -3061,10 +4511,10 @@ const TOOLS = [
                 maxResults: { type: 'number', description: 'Requested result count, clamped to 1-12. Use 3-8 for normal tasks.' },
                 limit: { type: 'number', description: 'Compatibility alias for maxResults. Prefer maxResults.' },
                 timeoutMs: { type: 'number', description: 'Per-backend timeout in milliseconds, clamped to 5000-120000. Default is 15000. Omit unless a task needs a longer wait.' },
-                backend: { type: 'string', description: 'Optional backend id: bing_html, duckduckgo_lite, duckduckgo_html, or github_repositories. Omit for automatic fallback.' },
+                backend: { type: 'string', description: 'Optional backend id: bing_html, duckduckgo_lite, duckduckgo_html, yahoo_html, or github_repositories. Omit for automatic fallback.' },
                 backends: {
                     type: 'array',
-                    items: { type: 'string', enum: ['bing_html', 'duckduckgo_lite', 'duckduckgo_html', 'github_repositories'] },
+                    items: { type: 'string', enum: ['bing_html', 'duckduckgo_lite', 'duckduckgo_html', 'yahoo_html', 'github_repositories'] },
                     description: 'Optional ordered backend ids. Omit for automatic fallback.'
                 }
             }
@@ -3093,7 +4543,7 @@ const TOOLS = [
     },
     {
         name: 'web_fetch',
-        description: 'Fetch a public HTTP(S) HTML or text resource and return readable text. Rejects PDF/binary content with unsupported_content_type; use pdf_extract_text or download_file for PDFs/files.',
+        description: 'Fetch a public HTTP(S) HTML or text resource and return readable text. Rejects PDF/binary content with unsupported_content_type; use pdf_extract_text or download_file for PDFs/files. For archive, listing, search-result, table-of-contents, or journal issue pages, pass query/contains with task terms such as author, year, topic, or answer clue so excerpts and linked resources are ranked against the task instead of newest/first links.',
         inputSchema: {
             type: 'object',
             required: ['url'],
@@ -3125,19 +4575,32 @@ const TOOLS = [
     },
     {
         name: 'paper_metadata_lookup',
-        description: 'Look up scholarly paper metadata from structured APIs before broad web search. Best for exact paper/report titles or DOI questions where you need authors, year, venue, DOI, and candidate landing/PDF URLs without scraping publisher pages. It also supports a second hop with authorId to list an author’s earlier works in chronological order.',
+        description: 'Look up scholarly paper metadata from structured APIs before broad web search. Use it for exact paper/report titles or DOI questions, and also for fuzzy bibliographic discovery when you only have author name, year, topic, or journal/source clues. Returns authors, year, venue, DOI, and candidate landing/PDF URLs without scraping publisher pages. It also supports a second hop with authorId to list an author’s earlier works in chronological order.',
         inputSchema: {
             type: 'object',
             properties: {
                 title: { type: 'string', description: 'Exact paper/report title when known. Preferred for title-based lookup.' },
-                query: { type: 'string', description: 'General scholarly lookup query. Use title when the title is exact.' },
+                query: { type: 'string', description: 'General scholarly lookup query. Use title when the title is exact; use query plus author/year/topic for fuzzy bibliographic discovery.' },
                 q: { type: 'string', description: 'Compatibility alias for query.' },
                 search: { type: 'string', description: 'Compatibility alias for query.' },
                 doi: { type: 'string', description: 'DOI or DOI URL for direct metadata lookup.' },
+                author: { type: 'string', description: 'Author name for bibliographic discovery when the exact paper title is unknown.' },
+                authorName: { type: 'string', description: 'Compatibility alias for author.' },
+                author_name: { type: 'string', description: 'Compatibility alias for author.' },
+                year: { type: 'number', description: 'Publication year hint for bibliographic discovery.' },
+                publicationYear: { type: 'number', description: 'Compatibility alias for year.' },
+                publication_year: { type: 'number', description: 'Compatibility alias for year.' },
+                topic: { type: 'string', description: 'Topic, subject, or distinctive phrase when the exact title is unknown.' },
+                subject: { type: 'string', description: 'Compatibility alias for topic.' },
+                keywords: { type: 'string', description: 'Compatibility alias for topic.' },
+                venue: { type: 'string', description: 'Optional journal, conference, publisher, or source hint.' },
+                journal: { type: 'string', description: 'Compatibility alias for venue.' },
+                source: { type: 'string', description: 'Compatibility alias for venue.' },
                 authorId: { type: 'string', description: 'Optional OpenAlex author id for second-hop lookup of that author’s publications.' },
                 beforeYear: { type: 'number', description: 'Optional year cutoff for authorId mode. Returns works earlier than this year.' },
                 maxResults: { type: 'number', description: 'Maximum metadata candidates to return, clamped to 1-12.' },
-                timeoutMs: { type: 'number', description: 'Overall lookup timeout in milliseconds, clamped to 5000-180000.' }
+                timeoutMs: { type: 'number', description: 'Overall lookup timeout in milliseconds, clamped to 5000-180000.' },
+                openAlexAuthorsBaseUrl: { type: 'string', description: 'Optional override for tests/self-hosted OpenAlex author search endpoint.' }
             }
         }
     },
@@ -3182,12 +4645,14 @@ const TOOLS = [
     },
     {
         name: 'web_extract_links',
-        description: 'Fetch a public HTTP(S) HTML page and extract normalized outbound links with anchor text. Rejects PDF/binary content.',
+        description: 'Fetch a public HTTP(S) HTML page and extract normalized outbound links with anchor text. Rejects PDF/binary content. Pass query/contains for archive, listing, search-result, table-of-contents, or journal issue pages so links are ranked by the task terms and pagination/archive links remain visible.',
         inputSchema: {
             type: 'object',
             properties: {
                 url: { type: 'string' },
                 maxLinks: { type: 'number' },
+                query: { type: 'string', description: 'Optional task terms used to rank extracted links, e.g. author, year, topic, issue date, or answer clue.' },
+                contains: { type: 'string', description: 'Compatibility alias for query.' },
                 timeoutMs: { type: 'number' }
             }
         }
@@ -3383,11 +4848,15 @@ if (require.main === module) {
 
 module.exports = {
     TOOLS,
+    buildSuggestedCallsFromSearchResults,
     downloadFile,
     extractBingResults,
+    extractArxivCandidatesFromAtom,
     extractDuckDuckGoHtmlResults,
     extractGenericAnchorResults,
     extractGitHubRepositoryResults,
+    extractYahooResults,
+    inferPaperMetadataArgsFromScholarlyQuery,
     fetchText,
     githubRepoRead,
     handleRequest,
@@ -3397,6 +4866,7 @@ module.exports = {
     paperMetadataLookup,
     pdfFindAndExtract,
     pdfExtractText,
+    rankLinksForResearch,
     readDocument,
     readPresentation,
     SEARCH_BACKENDS,

@@ -192,6 +192,48 @@ test('GAIA evidence digest prefers structured read_document payload over truncat
     assert.doesNotMatch(digest, /undefined/);
 });
 
+test('GAIA evidence digest preserves structured PDF answer candidates', () => {
+    const digest = buildEvidenceDigest({
+        steps: [
+            {
+                id: 'step-pdf',
+                title: 'Find and extract PDF',
+                tool: 'mcp__aigl_research__pdf_find_and_extract',
+                args: {
+                    title: '"Dragons are Tricksy": The Uncanny Dragons of Children Literature',
+                    extract_query: 'quoted from two different authors distaste dragon depictions'
+                },
+                response: {
+                    ok: true,
+                    status: 'completed',
+                    result: {
+                        content: [{
+                            type: 'text',
+                            text: 'PDF focused evidence snippets: noisy preview that might otherwise be truncated'
+                        }],
+                        structuredContent: {
+                            ok: true,
+                            status: 'completed',
+                            pdfUrl: 'https://example.org/article/download/164228/106850',
+                            evidenceQuery: 'quoted from two different authors distaste dragon depictions',
+                            answerCandidates: [{
+                                answer: 'fluffy',
+                                score: 74,
+                                context: 'Ruth Stein and Margaret Blount both comment with distaste on the increasingly cuddly, "fluffy" nature of dragons.'
+                            }],
+                            evidenceSnippets: 'Ruth Stein and Margaret Blount both comment with distaste on the increasingly cuddly, "fluffy" nature of dragons.'
+                        }
+                    }
+                }
+            }
+        ]
+    });
+
+    assert.match(digest, /"answerCandidates"/);
+    assert.match(digest, /"fluffy"/);
+    assert.match(digest, /distaste/);
+});
+
 test('GAIA finalizer deterministically extracts ClinicalTrials actual enrollment', async () => {
     const result = await finalizeAnswerFromEvidence({
         question: {
