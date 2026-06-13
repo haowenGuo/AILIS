@@ -1,8 +1,8 @@
-version: 1.0.3
+version: 1.0.4
 files:
-  - url: HumanClaw-Setup-1.0.3-win-x64.exe
-    sha512: 1WdvrOfGPPFwovoBarm/wZ0ZJ66IA/mhBBz2D0Z7cfdloCl3DSZ3CZB1iC6m9U80CdZ1aNtp7EHT0xfIiu9e6A==
-    size: 289562064
-path: HumanClaw-Setup-1.0.3-win-x64.exe
-sha512: 1WdvrOfGPPFwovoBarm/wZ0ZJ66IA/mhBBz2D0Z7cfdloCl3DSZ3CZB1iC6m9U80CdZ1aNtp7EHT0xfIiu9e6A==
-releaseDate: '2026-06-11T23:00:03.200Z'
+  - url: HumanClaw-Setup-1.0.4-win-x64.exe
+    sha512: SLmnVcFROKYYUnDL8eXO3nGUQy6qbKKeDJU84Gotfb1UaMZr9m90vmaqH6tvTqiEUe9drkMNjqBjzcDFOXigNQ==
+    size: 289551484
+path: HumanClaw-Setup-1.0.4-win-x64.exe
+sha512: SLmnVcFROKYYUnDL8eXO3nGUQy6qbKKeDJU84Gotfb1UaMZr9m90vmaqH6tvTqiEUe9drkMNjqBjzcDFOXigNQ==
+releaseDate: '2026-06-13T04:23:30.115Z'

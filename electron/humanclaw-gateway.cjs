@@ -28,7 +28,7 @@ const {
     listToolContracts,
     validateToolContract
 } = require('./humanclaw-tool-contracts.cjs');
-const { EMAIL_TOOL_ID, executeEmailTool, listProviderDetails } = require('./humanclaw-email-tool.cjs');
+const EMAIL_TOOL_ID = 'email';
 const { FILE_MANAGER_TOOL_ID, executeFileManagerTool } = require('./humanclaw-file-manager-tool.cjs');
 const { COMPUTER_TOOL_ID, HumanClawComputerTool } = require('./humanclaw-computer-tool.cjs');
 const { CODE_TOOL_ID, executeCodeTool } = require('./humanclaw-code-tool.cjs');
@@ -173,6 +173,36 @@ const HUMANCLAW_LOCAL_TOOL_DEFINITIONS = Object.freeze([
     }),
     HUMANCLAW_VISION_TOOL_DEFINITION
 ]);
+
+let emailToolModule = null;
+let emailToolLoadError = null;
+
+function loadEmailToolModule() {
+    if (emailToolModule) {
+        return emailToolModule;
+    }
+    if (emailToolLoadError) {
+        throw emailToolLoadError;
+    }
+    try {
+        emailToolModule = require('./humanclaw-email-tool.cjs');
+        return emailToolModule;
+    } catch (error) {
+        emailToolLoadError = error;
+        throw error;
+    }
+}
+
+function safeListEmailProviderDetails() {
+    try {
+        return loadEmailToolModule().listProviderDetails();
+    } catch (error) {
+        return {
+            error: error?.message || String(error),
+            providers: {}
+        };
+    }
+}
 
 class GatewayHttpError extends Error {
     constructor(statusCode, code, message, details = undefined) {
@@ -1370,7 +1400,7 @@ class HumanClawGateway extends EventEmitter {
             .filter((tool) => tool.route === 'humanclaw-local')
             .map((tool) => ({
             ...tool,
-            providers: tool.id === EMAIL_TOOL_ID ? listProviderDetails() : undefined
+            providers: tool.id === EMAIL_TOOL_ID ? safeListEmailProviderDetails() : undefined
         }));
         const exposed = this.runtime.exposeToolGroups(
             {
@@ -1822,6 +1852,7 @@ class HumanClawGateway extends EventEmitter {
     async executeGatewayLocalTool(toolId, args, context = {}) {
         const workspaceDir = context.workspaceDir || this.resolveWorkspace(context.workspace);
         if (toolId === EMAIL_TOOL_ID) {
+            const { executeEmailTool } = loadEmailToolModule();
             return await executeEmailTool(args, {
                 ...context,
                 emailProfiles: {

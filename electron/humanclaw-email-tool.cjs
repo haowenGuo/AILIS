@@ -375,9 +375,9 @@ function buildSmtpTransport({ provider, account, secret, authType, args }) {
 function buildSearchQuery(args = {}) {
     const query = {};
     const filter = normalizeString(args.filter || args.query || args.search).toLowerCase();
-    if (filter === 'unread' || filter === 'unseen') {
+    if (filter === 'unread' || filter === 'unseen' || args.unreadOnly === true || args.unseenOnly === true || args.onlyUnread === true) {
         query.seen = false;
-    } else if (filter === 'seen' || filter === 'read') {
+    } else if (filter === 'seen' || filter === 'read' || args.seenOnly === true || args.onlyRead === true) {
         query.seen = true;
     }
     const since = normalizeString(args.since || args.after);

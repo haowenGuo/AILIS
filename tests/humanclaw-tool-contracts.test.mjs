@@ -39,6 +39,21 @@ test('HumanClaw tool contracts expose versioned schemas and validate common fail
     assert.equal(badEmail.ok, false);
     assert.ok(badEmail.errors.some((error) => error.includes('one of')));
 
+    const validEmailReadNumericUid = validateToolContract('email', {
+        action: 'read',
+        uid: 2652
+    });
+    assert.equal(validEmailReadNumericUid.ok, true);
+    assert.equal(validEmailReadNumericUid.args.uid, '2652');
+
+    const validEmailListStringLimit = validateToolContract('email', {
+        action: 'list',
+        limit: '10',
+        filter: 'unread'
+    });
+    assert.equal(validEmailListStringLimit.ok, true);
+    assert.equal(validEmailListStringLimit.args.limit, 10);
+
     const badMcpCall = validateToolContract('mcp_bridge', {
         action: 'call_tool',
         server: 'fixture',

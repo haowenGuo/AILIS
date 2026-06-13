@@ -200,7 +200,11 @@ function buildBenchmarkMessage(question, filePath) {
         'Available generic MCP server: aigl_research.',
         'Prefer direct MCP tool ids instead of hand-building bridge payloads. Common direct tools: mcp__aigl_research__read_document, mcp__aigl_research__read_spreadsheet, mcp__aigl_research__read_presentation, mcp__aigl_research__paper_metadata_lookup, mcp__aigl_research__pdf_find_and_extract, mcp__aigl_research__pdf_extract_text, mcp__aigl_research__youtube_transcript, mcp__aigl_research__transcribe_audio, mcp__aigl_research__describe_image, mcp__aigl_research__run_python_file, mcp__aigl_research__github_repo_read, mcp__aigl_research__web_fetch, mcp__aigl_research__web_extract_links, mcp__aigl_research__download_file, mcp__aigl_research__web_search.',
         'Tool routing rule: mcp__aigl_research__web_search is a fallback for broad discovery only. For attached/local artifacts, known URLs, exact paper/report titles, PDFs, YouTube/videos, audio, images, code files, spreadsheets, presentations, Word documents, or GitHub repos, call the specific MCP tool first.',
-        'For paper/report questions without a direct PDF URL, call mcp__aigl_research__paper_metadata_lookup as the first retrieval action when the question contains an exact paper/report title or DOI. If it returns authors with openAlexId, you can call it again with authorId and beforeYear for earlier works by that author. Use mcp__aigl_research__pdf_find_and_extract after metadata lookup when you need full-text evidence. Do not start with broad web_search for exact-title paper questions.',
+        'When a tool returns suggestedNextCalls, evidenceGap, or recoveryHint, treat that as the preferred next-step plan. Follow the same-domain recovery path before falling back to another broad web_search.',
+        'Treat web_search results as discovery only. After web_search succeeds, move to a concrete URL, DOI, PDF, or extracted link from the returned candidates before answering.',
+        'For news/article/webpage discovery, preserve exact date constraints from the question. If the question says June 6, 2023 or another exact day, keep the day in search queries and verify the fetched page date before following its linked paper/resources; do not broaden to only month/year unless exact-date searches fail.',
+        'Treat web_fetch excerpts as partial evidence. If it surfaces high-signal links or cited resources, follow those next instead of searching the web again. When fetching archive/listing/search-result/table-of-contents/journal issue pages, include query/contains with the task clues such as author, year, topic, venue, or answer phrase so linked PDFs/articles are ranked by relevance; if the page has no query-term match, do not follow newest unrelated PDFs just because they are listed first.',
+        'For paper/report questions without a direct PDF URL, call mcp__aigl_research__paper_metadata_lookup as the first retrieval action when the question contains an exact paper/report title or DOI. If the exact title is unknown but the question gives bibliographic clues such as author name, year, topic, or journal/source, use paper_metadata_lookup before rewriting the clue set into more web_search queries. Structured fields are best when obvious, e.g. {"author":"Emily Midkiff","year":2014,"topic":"dragon depictions","venue":"Fafnir"}, but a raw scholarly query is acceptable because the tool can infer bibliographic clues internally. Do not stuff the whole clue bundle into title when the title is unknown. If it returns authors with openAlexId, you can call it again with authorId and beforeYear for earlier works by that author. Use mcp__aigl_research__pdf_find_and_extract after metadata lookup when you need full-text evidence; keep the DOI/source terms from metadata in pdf_find_and_extract.query, and put the question target such as "NASA award number Arendt" or "quoted word distaste" in extract_query. Do not start with broad web_search for scholarly questions when metadata lookup already has enough clues.',
         'For pdf_find_and_extract: pass the exact title as title, include source/institution/journal terms from the question in query when present, and put answer terms in extract_query, e.g. {"title":"Exact Paper Title","query":"Exact Paper Title University of Leicester","extract_query":"numeric field or phrase"}.',
         'Use mcp_bridge mainly for MCP discovery/admin actions like list_servers, list_tool_specs, search_tools, read_resource, or health_check.',
         'For attached spreadsheets or CSV files, prefer mcp__aigl_research__read_spreadsheet; it returns columns, rows, numeric_sums, and total_numeric_sum. Use those full-file sums before writing any custom shell command.',
@@ -706,6 +710,62 @@ function compactDocumentObservation(value) {
     }), null, 2), 12000);
 }
 
+function findPdfEvidencePayload(value, depth = 0) {
+    if (depth > 8 || value === undefined || value === null) {
+        return null;
+    }
+    const parsed = parseJsonLike(value);
+    if (!parsed || typeof parsed !== 'object') {
+        return null;
+    }
+    if (parsed.pdfUrl || parsed.evidenceSnippets || Array.isArray(parsed.answerCandidates)) {
+        return parsed;
+    }
+    for (const key of ['body', 'data', 'result', 'details', 'structuredContent', 'structured_content']) {
+        if (parsed[key] && typeof parsed[key] === 'object') {
+            const found = findPdfEvidencePayload(parsed[key], depth + 1);
+            if (found) {
+                return found;
+            }
+        }
+    }
+    if (Array.isArray(parsed.content)) {
+        for (const item of parsed.content.slice(0, 4)) {
+            const found = findPdfEvidencePayload(item?.text, depth + 1);
+            if (found) {
+                return found;
+            }
+        }
+    }
+    return null;
+}
+
+function compactPdfEvidenceObservation(value) {
+    const payload = findPdfEvidencePayload(value);
+    if (!payload) {
+        return '';
+    }
+    return clipText(JSON.stringify(pruneEmptyValues({
+        source: 'pdf_find_and_extract',
+        pdfUrl: payload.pdfUrl,
+        query: payload.query,
+        evidenceQuery: payload.evidenceQuery,
+        answerCandidates: Array.isArray(payload.answerCandidates) ? payload.answerCandidates.slice(0, 5) : undefined,
+        evidenceSnippets: payload.evidenceSnippets,
+        focus: payload.focus,
+        attempts: Array.isArray(payload.attempts)
+            ? payload.attempts.slice(-5).map((attempt) => pruneEmptyValues({
+                url: attempt.url,
+                ok: attempt.ok,
+                status: attempt.status,
+                evidenceMatched: attempt.evidenceMatched,
+                matchedTerms: attempt.matchedTerms,
+                missingRareTerms: attempt.missingRareTerms
+            }))
+            : undefined
+    }), null, 2), 12000);
+}
+
 function getEvidenceObservationText(step = {}) {
     const observationValues = collectStepObservationValues(step);
     const rawText = stringifyObservationValue(observationValues[0]);
@@ -724,6 +784,18 @@ function getEvidenceObservationText(step = {}) {
             ...observationValues
         ]) {
             const compact = compactDocumentObservation(value);
+            if (compact) {
+                return compact;
+            }
+        }
+    }
+    if (toolName.includes('pdf_find_and_extract') || mcpTool === 'pdf_find_and_extract') {
+        for (const value of [
+            step.response?.result?.structuredContent,
+            step.response?.result?.details,
+            ...observationValues
+        ]) {
+            const compact = compactPdfEvidenceObservation(value);
             if (compact) {
                 return compact;
             }
@@ -1013,6 +1085,7 @@ async function finalizeAnswerFromEvidence({ question, filePath, response, llmSet
                     'Do not browse, do not invent facts, and do not mention uncertainty in the answer field.',
                     'Never compute totals from observations labeled head, first rows, preview, schema, or sample rows.',
                     'For spreadsheet/CSV questions, answer only when the observations include a full-file computation or the complete relevant table.',
+                    'For webpage/news questions with an exact date in the question, only use evidence from pages whose observed date/title match that exact target; if the evidence points to a different day or article, return missing evidence.',
                     'If the question already specifies the unit, return the bare value without repeating the unit.',
                     'If the observations do not contain enough evidence, return {"answer":"","confidence":"low","reason":"missing evidence"}.',
                     'Return strict JSON only: {"answer":"short exact answer","confidence":"high|medium|low","reason":"brief evidence note"}.'

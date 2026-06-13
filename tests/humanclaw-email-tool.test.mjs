@@ -229,6 +229,18 @@ test('HumanClaw Gateway exposes and guards the local email tool', async () => {
         assert.equal(classifyEmail.body.intent, 'email_management');
         assert.equal(classifyEmail.body.plan[0].tool, 'email');
 
+        const classifyLatestEmail = await runAgent(baseUrl, {
+            sessionId: 'email-test-latest',
+            message: '取最新10个邮件',
+            classifyOnly: true
+        });
+        assert.equal(classifyLatestEmail.body.ok, true);
+        assert.equal(classifyLatestEmail.body.mode, 'task');
+        assert.equal(classifyLatestEmail.body.intent, 'email_management');
+        assert.equal(classifyLatestEmail.body.plan[0].tool, 'email');
+        assert.equal(classifyLatestEmail.body.plan[0].args.action, 'list');
+        assert.equal(classifyLatestEmail.body.plan[0].args.limit, 10);
+
         const audit = await jsonFetch(`${baseUrl}/audit?limit=20`);
         assert.equal(audit.body.ok, true);
         assert.ok(!JSON.stringify(audit.body.entries).includes('secret-for-test'));
