@@ -56,6 +56,11 @@ function looksLikeOneOffTask(text) {
     return /https?:\/\/|输出.*\.(md|txt|json|js|py|docx|xlsx|pdf)|保存成|生成.*文件|帮我读|帮我查|分析.*项目|提交到|运行|测试|截图|打开|邮件|GitHub|Playwright|arxiv|论文/i.test(normalized);
 }
 
+function hasExplicitPersistentPreference(text) {
+    const normalized = normalizeText(text);
+    return /以后记住|请记住|记住|我希望|希望你|以后|必须|不要|自我修改|自我进化|自我迭代|用户偏好|长期偏好/.test(normalized);
+}
+
 function appendUniqueBullet(bullets, bullet) {
     const normalized = normalizeText(bullet);
     if (normalized && !bullets.includes(normalized)) {
@@ -114,7 +119,7 @@ function buildUserPreferenceBullets(userText) {
         );
     }
 
-    if (!bullets.length && !looksLikeOneOffTask(user)) {
+    if (!bullets.length && (hasExplicitPersistentPreference(user) || !looksLikeOneOffTask(user))) {
         appendUniqueBullet(bullets, `用户表达了稳定偏好：${truncateText(user, 180)}`);
     }
     return bullets;

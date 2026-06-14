@@ -83,3 +83,26 @@ test('HumanClaw memory affinity stages match AIGL relationship design', async ()
     assert.match(context, /允许明显亲密、主动、轻微撒娇和更多默契表达/);
     assert.match(context, /不影响安全、隐私、事实准确性、工具审批/);
 });
+
+test('HumanClaw memory keeps explicit self-evolution preferences even when they mention tests', async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'humanclaw-self-evolution-memory-'));
+    const memory = new HumanClawMemoryRuntime({
+        rootDir: path.join(rootDir, 'memory'),
+        workspaceRoot: rootDir
+    });
+
+    const recorded = memory.recordTurn({
+        sessionId: 'self-evolution-memory-test',
+        userMessage: '以后记住，我希望 AIGRIL 做自我修改时必须开新分支、先跑测试、展示风险和回滚方案，不要偷偷改主分支。',
+        assistantMessage: '我会把自我修改放进可审计的分支、测试、审批和回滚流程。',
+        source: 'test'
+    });
+    assert.equal(recorded.ok, true);
+    assert.ok(recorded.event.tags.includes('preference'));
+
+    const snapshot = memory.getSnapshot({ includeEvents: true });
+    const userBlock = snapshot.blocks.find((block) => block.key === 'user');
+    assert.match(userBlock.value, /自我修改/);
+    assert.match(userBlock.value, /开新分支/);
+    assert.match(userBlock.value, /回滚方案/);
+});
