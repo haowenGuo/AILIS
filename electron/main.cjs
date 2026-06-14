@@ -168,6 +168,8 @@ const CONTROL_MIN_WIDTH = 760;
 const CONTROL_MIN_HEIGHT = 620;
 const AGENT_LAB_MIN_WIDTH = 1100;
 const AGENT_LAB_MIN_HEIGHT = 760;
+const SELF_EVOLUTION_MIN_WIDTH = 1120;
+const SELF_EVOLUTION_MIN_HEIGHT = 720;
 const PET_DIALOGUE_DEFAULT_EXTRA_TOP = DEFAULT_AVATAR_DIALOGUE_BUBBLE_EXTRA_TOP;
 const PET_DIALOGUE_DEFAULT_EXTRA_WIDTH = DEFAULT_AVATAR_DIALOGUE_BUBBLE_EXTRA_WIDTH;
 const PET_DIALOGUE_MAX_EXTRA_TOP = 360;
@@ -196,6 +198,8 @@ let controlWindow = null;
 let controlWindowLoadPromise = null;
 let agentLabWindow = null;
 let agentLabWindowLoadPromise = null;
+let selfEvolutionWindow = null;
+let selfEvolutionWindowLoadPromise = null;
 let tray = null;
 let isQuitting = false;
 let desktopState = null;
@@ -2240,6 +2244,36 @@ function showAgentLabWindow() {
     return true;
 }
 
+function showSelfEvolutionWindow() {
+    if (!selfEvolutionWindow) {
+        createSelfEvolutionWindow({ showWhenReady: true });
+        return true;
+    }
+
+    selfEvolutionWindow.__aigrilShowWhenReady = true;
+    const isLoaded = Boolean(selfEvolutionWindow.__aigrilDidFinishLoad);
+    if (!selfEvolutionWindow.isVisible() && isLoaded) {
+        selfEvolutionWindow.show();
+    }
+
+    if (isLoaded) {
+        selfEvolutionWindow.focus();
+    } else {
+        selfEvolutionWindowLoadPromise?.then(() => {
+            if (!selfEvolutionWindow || selfEvolutionWindow.isDestroyed()) {
+                return;
+            }
+            if (selfEvolutionWindow.__aigrilShowWhenReady && !selfEvolutionWindow.isVisible()) {
+                selfEvolutionWindow.show();
+            }
+            selfEvolutionWindow.focus();
+        }).catch((error) => {
+            console.error('[window] 自我进化中心延迟显示失败：', error);
+        });
+    }
+    return true;
+}
+
 function quitApplication() {
     isQuitting = true;
     app.quit();
@@ -3056,6 +3090,84 @@ function createAgentLabWindow(options = {}) {
         });
 }
 
+function createSelfEvolutionWindow(options = {}) {
+    const display = screen.getPrimaryDisplay();
+    const workArea = display.workArea;
+    const width = Math.min(
+        Math.max(1240, SELF_EVOLUTION_MIN_WIDTH),
+        Math.max(SELF_EVOLUTION_MIN_WIDTH, workArea.width - 64)
+    );
+    const height = Math.min(
+        Math.max(800, SELF_EVOLUTION_MIN_HEIGHT),
+        Math.max(SELF_EVOLUTION_MIN_HEIGHT, workArea.height - 64)
+    );
+    const bounds = clampBoundsToDisplay(
+        {
+            x: Math.round(workArea.x + (workArea.width - width) / 2),
+            y: Math.round(workArea.y + (workArea.height - height) / 2),
+            width,
+            height
+        },
+        SELF_EVOLUTION_MIN_WIDTH,
+        SELF_EVOLUTION_MIN_HEIGHT
+    );
+    const showWhenReady = Boolean(options.showWhenReady);
+
+    selfEvolutionWindow = desktopPlatformAdapter.createWindow({
+        bounds,
+        minWidth: SELF_EVOLUTION_MIN_WIDTH,
+        minHeight: SELF_EVOLUTION_MIN_HEIGHT,
+        frame: false,
+        transparent: false,
+        backgroundColor: '#f1f4ee',
+        hasShadow: true,
+        resizable: true,
+        show: false,
+        skipTaskbar: false,
+        title: 'AIGRIL Self Evolution Lab'
+    });
+    selfEvolutionWindow.__aigrilDidFinishLoad = false;
+    selfEvolutionWindow.__aigrilShowWhenReady = showWhenReady;
+    console.log('[window:self-evolution] create', {
+        bounds,
+        showWhenReady
+    });
+
+    openExternalLinks(selfEvolutionWindow);
+    hookRendererDiagnostics(selfEvolutionWindow, 'self-evolution');
+    hookWindowContextMenu(selfEvolutionWindow, 'self-evolution');
+
+    selfEvolutionWindow.on('close', (event) => {
+        console.log('[window:self-evolution] close', { isQuitting });
+        if (isQuitting) {
+            return;
+        }
+        event.preventDefault();
+        selfEvolutionWindow.hide();
+    });
+
+    selfEvolutionWindow.on('closed', () => {
+        console.log('[window:self-evolution] closed');
+        selfEvolutionWindow = null;
+        selfEvolutionWindowLoadPromise = null;
+    });
+
+    selfEvolutionWindowLoadPromise = loadWindowContent(selfEvolutionWindow, 'self-evolution.html')
+        .then(() => {
+            if (!selfEvolutionWindow || selfEvolutionWindow.isDestroyed()) {
+                return;
+            }
+            selfEvolutionWindow.__aigrilDidFinishLoad = true;
+            if (selfEvolutionWindow.__aigrilShowWhenReady) {
+                selfEvolutionWindow.show();
+                selfEvolutionWindow.focus();
+            }
+        })
+        .catch((error) => {
+            console.error('[window] 自我进化中心加载失败：', error);
+        });
+}
+
 function refreshTrayMenu() {
     if (!tray) {
         return;
@@ -3186,6 +3298,7 @@ function registerIpc() {
     });
     ipcMain.handle('aigril:show-control-panel', () => showControlPanel());
     ipcMain.handle('aigril:show-agent-lab', () => showAgentLabWindow());
+    ipcMain.handle('aigril:show-self-evolution', () => showSelfEvolutionWindow());
     ipcMain.handle('aigril:show-control-menu', (event) => {
         const sourceWindow = BrowserWindow.fromWebContents(event.sender);
         return showControlMenu(sourceWindow || petWindow);
@@ -3347,6 +3460,25 @@ function registerIpc() {
             source: payload?.source || 'agent-analysis-lab'
         })
     );
+    ipcMain.handle('aigril:self-evolution-analyze', async (_event, payload = {}) => {
+        await ensureHumanClawGatewayStarted('self_evolution_analyze');
+        return ensureHumanClawGateway().analyzeSelfEvolution(payload || {});
+    });
+    ipcMain.handle('aigril:self-evolution-proposals', async (_event, payload = {}) => {
+        await ensureHumanClawGatewayStarted('self_evolution_proposals');
+        return ensureHumanClawGateway().listSelfEvolutionProposals(payload || {});
+    });
+    ipcMain.handle('aigril:self-evolution-mark', async (_event, payload = {}) => {
+        await ensureHumanClawGatewayStarted('self_evolution_mark');
+        return ensureHumanClawGateway().markSelfEvolutionProposal(payload || {});
+    });
+    ipcMain.handle('aigril:self-evolution-apply', async (_event, payload = {}) => {
+        await ensureHumanClawGatewayStarted('self_evolution_apply');
+        return ensureHumanClawGateway().applySelfEvolutionProposal({
+            ...(payload || {}),
+            source: payload?.source || 'self-evolution-lab'
+        });
+    });
 
     ipcMain.on('aigril:begin-drag-pet-window', (event) => {
         const sourceWindow = BrowserWindow.fromWebContents(event.sender);

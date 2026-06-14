@@ -24,6 +24,7 @@ const {
 const { createHumanClawPlatformAdapter } = require('./humanclaw-platform-adapter.cjs');
 const { HumanClawAgentRunner } = require('./humanclaw-agent-runner.cjs');
 const { HumanClawMemoryRuntime } = require('./humanclaw-memory-store.cjs');
+const { AiglSelfEvolutionRuntime } = require('./aigl-self-evolution-runtime.cjs');
 const {
     listToolContracts,
     validateToolContract
@@ -661,6 +662,14 @@ class HumanClawGateway extends EventEmitter {
             rootDir: path.join(this.auditDir, 'memory'),
             workspaceRoot: this.workspaceRoot
         });
+        this.selfEvolutionRuntime = options.selfEvolutionRuntime || new AiglSelfEvolutionRuntime({
+            auditDir: this.auditDir,
+            workspaceRoot: this.workspaceRoot,
+            projectRoot: this.projectRoot,
+            runtime: this.runtime,
+            memoryRuntime: this.memoryRuntime,
+            emitGatewayEvent: (type, payload) => this.emitGatewayEvent(type, payload)
+        });
         this.gatewayToolRuntimeRegistry = this.createGatewayToolRuntimeRegistry();
         this.agentRunner = null;
     }
@@ -929,6 +938,7 @@ class HumanClawGateway extends EventEmitter {
             defaultContext: redactObject(this.resolveDefaultContext()),
             runtime: this.runtime.getStatus(),
             memory: this.memoryRuntime?.getStatus?.() || null,
+            selfEvolution: this.selfEvolutionRuntime?.getStatus?.() || null,
             toolRuntimeGateway: this.toolRuntimeSupervisor?.getStatus?.() || null,
             agentRunner: this.ensureAgentRunner().getStatus(),
             events: {
@@ -999,6 +1009,29 @@ class HumanClawGateway extends EventEmitter {
             ok: false,
             status: 'memory_not_configured'
         };
+    }
+
+    async analyzeSelfEvolution(payload = {}) {
+        await this.selfEvolutionRuntime?.ensureLoaded?.();
+        return await this.selfEvolutionRuntime.analyze(payload || {});
+    }
+
+    async listSelfEvolutionProposals(payload = {}) {
+        await this.selfEvolutionRuntime?.ensureLoaded?.();
+        return await this.selfEvolutionRuntime.listProposals(payload || {});
+    }
+
+    async markSelfEvolutionProposal(payload = {}) {
+        await this.selfEvolutionRuntime?.ensureLoaded?.();
+        return await this.selfEvolutionRuntime.markProposal(payload || {});
+    }
+
+    async applySelfEvolutionProposal(payload = {}) {
+        await this.selfEvolutionRuntime?.ensureLoaded?.();
+        return await this.selfEvolutionRuntime.applyProposal(payload || {}, {
+            approved: payload?.approved === true,
+            source: payload?.source || 'gateway'
+        });
     }
 
     emitGatewayEvent(type, payload = {}) {
@@ -1184,6 +1217,37 @@ class HumanClawGateway extends EventEmitter {
                     { transcriptLimit: Number(url.searchParams.get('limit') || 2000) }
                 )
             );
+            return;
+        }
+
+        if (url.pathname === '/self-evolution/analyze' && (req.method === 'GET' || req.method === 'POST')) {
+            const body = req.method === 'POST' ? await this.readJsonBody(req) : {};
+            this.sendJson(res, 200, await this.analyzeSelfEvolution({
+                ...(body || {}),
+                limit: body.limit || Number(url.searchParams.get('limit') || 80),
+                taskText: body.taskText || url.searchParams.get('taskText') || url.searchParams.get('task') || ''
+            }));
+            return;
+        }
+
+        if (url.pathname === '/self-evolution/proposals' && req.method === 'GET') {
+            this.sendJson(res, 200, await this.listSelfEvolutionProposals({
+                limit: Number(url.searchParams.get('limit') || 80),
+                status: url.searchParams.get('status') || '',
+                type: url.searchParams.get('type') || ''
+            }));
+            return;
+        }
+
+        if (url.pathname === '/self-evolution/proposal/mark' && req.method === 'POST') {
+            const body = await this.readJsonBody(req);
+            this.sendJson(res, 200, await this.markSelfEvolutionProposal(body));
+            return;
+        }
+
+        if (url.pathname === '/self-evolution/proposal/apply' && req.method === 'POST') {
+            const body = await this.readJsonBody(req);
+            this.sendJson(res, 200, await this.applySelfEvolutionProposal(body));
             return;
         }
 

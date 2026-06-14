@@ -70,6 +70,7 @@ const elements = {
     openclawRuntimeText: document.getElementById('openclaw-runtime-text'),
     openclawStatusText: document.getElementById('openclaw-status-text'),
     openAgentLabBtn: document.getElementById('open-agent-lab-btn'),
+    openSelfEvolutionBtn: document.getElementById('open-self-evolution-btn'),
     packageStateText: document.getElementById('package-state-text'),
     petMouseHitTestEnabled: document.getElementById('pet-mouse-hit-test-enabled'),
     petMouseHitTestShape: document.getElementById('pet-mouse-hit-test-shape'),
@@ -2365,6 +2366,10 @@ elements.resetAffinityBtn?.addEventListener('click', () => {
 
 elements.openAgentLabBtn?.addEventListener('click', () => {
     void window.aigrilDesktop?.showAgentLab?.();
+});
+
+elements.openSelfEvolutionBtn?.addEventListener('click', () => {
+    void window.aigrilDesktop?.showSelfEvolution?.();
 });
 
 elements.closeBtn.addEventListener('click', () => {
