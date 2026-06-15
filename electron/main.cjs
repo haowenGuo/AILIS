@@ -1230,8 +1230,8 @@ function setPetDialogueWindowExpanded(
     };
 }
 
-function persistDesktopState() {
-    desktopState = saveDesktopState(app, desktopState);
+function persistDesktopState(options = {}) {
+    desktopState = saveDesktopState(app, desktopState, options);
     refreshTrayMenu();
 }
 
@@ -2628,7 +2628,20 @@ function applyPreferencesPatch(partialPreferences = {}) {
         petWindow.setSkipTaskbar(nextPreferences.petSkipTaskbar);
     }
 
-    persistDesktopState();
+    const allowBlankCredentials = [];
+    if (partialPreferences.llmApiKeyAction === 'clear') {
+        allowBlankCredentials.push('llmApiKey');
+    }
+    if (partialPreferences.elevenLabsApiKeyAction === 'clear') {
+        allowBlankCredentials.push('elevenLabsApiKey');
+    }
+    for (const [providerId, profile] of Object.entries(partialPreferences.emailProfiles || {})) {
+        if (profile?.secretAction === 'clear') {
+            allowBlankCredentials.push(`emailProfiles.${providerId}.secret`);
+        }
+    }
+
+    persistDesktopState({ allowBlankCredentials });
     broadcastPreferencesUpdated();
 
     if ('speechMode' in partialPreferences) {

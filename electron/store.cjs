@@ -833,9 +833,58 @@ function loadDesktopState(app) {
     }
 }
 
-function saveDesktopState(app, nextState) {
-    const normalized = normalizeState(nextState);
+function preserveExistingValue(nextPreferences, existingPreferences, key, allowBlankCredentials) {
+    if (allowBlankCredentials.has(key)) {
+        return;
+    }
+    if (!nextPreferences[key] && existingPreferences[key]) {
+        nextPreferences[key] = existingPreferences[key];
+    }
+}
+
+function preserveExistingEmailSecrets(nextPreferences, existingPreferences, allowBlankCredentials) {
+    if (!nextPreferences.emailProfiles || !existingPreferences.emailProfiles) {
+        return;
+    }
+    for (const providerId of EMAIL_PROVIDER_OPTIONS) {
+        const key = `emailProfiles.${providerId}.secret`;
+        if (allowBlankCredentials.has(key)) {
+            continue;
+        }
+        const nextProfile = nextPreferences.emailProfiles[providerId];
+        const existingProfile = existingPreferences.emailProfiles[providerId];
+        if (nextProfile && existingProfile?.secret && !nextProfile.secret) {
+            nextProfile.secret = existingProfile.secret;
+        }
+    }
+}
+
+function preserveExistingCredentials(filePath, normalized, options = {}) {
+    if (options.preserveExistingCredentials === false || !fs.existsSync(filePath)) {
+        return normalized;
+    }
+
+    try {
+        const rawState = fs.readFileSync(filePath, 'utf8').replace(/^\uFEFF/, '');
+        const existing = normalizeState(JSON.parse(rawState));
+        const nextPreferences = normalized.preferences || {};
+        const existingPreferences = existing.preferences || {};
+        const allowBlankCredentials = new Set(options.allowBlankCredentials || []);
+
+        preserveExistingValue(nextPreferences, existingPreferences, 'llmApiKey', allowBlankCredentials);
+        preserveExistingValue(nextPreferences, existingPreferences, 'elevenLabsApiKey', allowBlankCredentials);
+        preserveExistingValue(nextPreferences, existingPreferences, 'elevenLabsVoiceId', allowBlankCredentials);
+        preserveExistingEmailSecrets(nextPreferences, existingPreferences, allowBlankCredentials);
+    } catch (error) {
+        console.warn('⚠️ 合并已保存凭据失败，继续保存当前状态：', error);
+    }
+
+    return normalized;
+}
+
+function saveDesktopState(app, nextState, options = {}) {
     const filePath = getStateFilePath(app);
+    const normalized = preserveExistingCredentials(filePath, normalizeState(nextState), options);
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
     fs.writeFileSync(filePath, JSON.stringify(normalized, null, 2), 'utf8');
     return normalized;
