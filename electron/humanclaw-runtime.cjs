@@ -496,7 +496,76 @@ class HumanClawRuntime {
             capabilityManager: this.capabilityManager,
             emitGatewayEvent: (type, payload) => this.emitGatewayEvent(type, payload)
         });
+        this.selfEvolutionRuntime = options.selfEvolutionRuntime || null;
         this.toolRuntimeRegistry = createHumanClawToolRuntimeRegistry(this);
+    }
+
+    setSelfEvolutionRuntime(runtime) {
+        this.selfEvolutionRuntime = runtime || null;
+        return this.selfEvolutionRuntime;
+    }
+
+    formatSelfEvolutionProposal(proposal = {}, index = 0) {
+        const title = normalizeString(proposal.title, proposal.id || '未命名提案');
+        const type = normalizeString(proposal.type, 'unknown');
+        const status = normalizeString(proposal.status, 'unknown');
+        const risk = normalizeString(proposal.riskLabel || proposal.risk, 'unknown');
+        const summary = normalizeString(proposal.summary, '暂无摘要。');
+        const targetKind = normalizeString(proposal.target?.kind);
+        const targetName = normalizeString(
+            proposal.target?.tool ||
+            proposal.target?.toolId ||
+            proposal.target?.key ||
+            proposal.target?.capability ||
+            proposal.target?.name
+        );
+        const evidenceCount = Array.isArray(proposal.evidence) ? proposal.evidence.length : 0;
+        const recommendedAction = normalizeString(proposal.recommendedAction);
+        return [
+            `${index + 1}. ${title}`,
+            `类型：${type}；状态：${status}；风险：${risk}`,
+            targetKind || targetName ? `目标：${[targetKind, targetName].filter(Boolean).join(' / ')}` : '',
+            `原因：${summary}`,
+            evidenceCount ? `证据：已汇总 ${evidenceCount} 条证据，完整明细保留在审计 details 中。` : '',
+            recommendedAction ? `建议动作：${recommendedAction}` : ''
+        ].filter(Boolean).join('\n');
+    }
+
+    formatSelfEvolutionResult(action = 'analyze', result = {}) {
+        const status = normalizeString(result.status, result.ok === false ? 'failed' : 'completed');
+        const proposals = Array.isArray(result.proposals)
+            ? result.proposals
+            : result.proposal
+                ? [result.proposal]
+                : [];
+        if (action === 'schema') {
+            return [
+                '自我进化工具已可用。',
+                '用 analyze 生成偏好、工具瓶颈和能力补齐提案；用 list_proposals/get_proposal 查看；用户确认后再用 mark_proposal/apply_proposal。'
+            ].join('\n');
+        }
+        if (status === 'not_found') {
+            return `没有找到自我进化提案：${normalizeString(result.id || result.proposalId, 'unknown')}`;
+        }
+        if (status === 'needs_approval') {
+            const proposal = result.proposal || {};
+            return [
+                '这个自我进化提案需要用户确认后才能应用。',
+                proposal.id ? `提案 ID：${proposal.id}` : '',
+                proposal.title ? `提案：${proposal.title}` : '',
+                result.approvalText ? `确认文案：${result.approvalText}` : '请向用户解释风险和变更内容，获得明确确认后再继续。'
+            ].filter(Boolean).join('\n');
+        }
+        if (!proposals.length) {
+            const headline = normalizeString(result.summary?.headline);
+            return headline || `自我进化动作 ${action} 已完成，当前没有需要展示的提案。`;
+        }
+        const headline = normalizeString(result.summary?.headline, `自我进化动作 ${action} 已完成，返回 ${proposals.length} 个提案。`);
+        return [
+            headline,
+            '',
+            ...proposals.map((proposal, index) => this.formatSelfEvolutionProposal(proposal, index))
+        ].join('\n\n');
     }
 
     getStatus() {
@@ -513,6 +582,7 @@ class HumanClawRuntime {
             toolDoctor: this.toolDoctor.getStatus(),
             capabilityManager: this.capabilityManager.getStatus(),
             selfDebugger: this.selfDebugger.getStatus(),
+            selfEvolution: this.selfEvolutionRuntime?.getStatus?.() || null,
             runtimeTools: this.toolRuntimeRegistry.listDefinitions().map((tool) => tool.id),
             toolRuntime: {
                 model: 'codex_like_tool_runtime_registry',
@@ -551,7 +621,10 @@ class HumanClawRuntime {
                 'repair_executor',
                 'self_debug_loop',
                 'self_debug_evidence_collection',
-                'self_debug_repair_protocol'
+                'self_debug_repair_protocol',
+                'self_evolution_loop',
+                'self_evolution_preference_learning',
+                'self_evolution_tool_bottleneck_analysis'
             ]
         };
     }
@@ -992,6 +1065,16 @@ class HumanClawRuntime {
                     action: debugAction
                 };
             }
+            if (toolId === 'self_evolution') {
+                const evolutionAction = normalizeAction(args.action, 'analyze');
+                const mutatingActions = ['analyze', 'mark_proposal', 'apply_proposal'];
+                return {
+                    class: 'self_evolution',
+                    mutates: mutatingActions.includes(evolutionAction),
+                    requiresApprovalCapable: evolutionAction === 'apply_proposal',
+                    action: evolutionAction
+                };
+            }
             return {
                 class: 'mcp',
                 mutates:
@@ -1325,6 +1408,76 @@ class HumanClawRuntime {
                 status: 'completed',
                 explanation: state.explanation,
                 plan: items
+            }
+        };
+    }
+
+    async executeSelfEvolution(args = {}, context = {}) {
+        const action = normalizeAction(args.action || args.operation || args.intent, 'analyze');
+        const runtime = this.selfEvolutionRuntime;
+        if (!runtime) {
+            return {
+                content: [{
+                    type: 'text',
+                    text: '自我进化 runtime 还没有连接到当前 Agent 执行环境。'
+                }],
+                isError: true,
+                details: {
+                    status: 'self_evolution_runtime_not_available',
+                    action
+                }
+            };
+        }
+        await runtime.ensureLoaded?.();
+        let result = null;
+        if (action === 'schema') {
+            result = {
+                ok: true,
+                status: 'completed',
+                contract: getToolContractPromptText('self_evolution')
+            };
+        } else if (action === 'analyze') {
+            result = await runtime.analyze({
+                ...args,
+                taskText: normalizeString(args.taskText || args.task || args.query || context.message || context.userMessage)
+            });
+        } else if (action === 'list_proposals') {
+            result = await runtime.listProposals(args);
+        } else if (action === 'get_proposal') {
+            const id = normalizeString(args.id || args.proposalId);
+            const proposal = await runtime.getProposal(id);
+            result = proposal
+                ? { ok: true, status: 'completed', proposal }
+                : { ok: false, status: 'not_found', id };
+        } else if (action === 'mark_proposal') {
+            result = await runtime.markProposal(args);
+        } else if (action === 'apply_proposal') {
+            result = await runtime.applyProposal(args, {
+                ...context,
+                approved: args.approved === true || context.approved === true,
+                source: normalizeString(args.source || context.source, 'agent')
+            });
+        } else {
+            result = {
+                ok: false,
+                status: 'invalid_tool_args',
+                error: `Unsupported self_evolution action: ${action}`
+            };
+        }
+        const status = normalizeString(result?.status, result?.ok === false ? 'failed' : 'completed');
+        const text = this.formatSelfEvolutionResult(action, result || {});
+        return {
+            content: [{ type: 'text', text }],
+            isError: result?.ok === false && status !== 'needs_approval',
+            details: {
+                status,
+                action,
+                ...(result && typeof result === 'object' ? result : { result })
+            },
+            structuredContent: {
+                status,
+                action,
+                ...(result && typeof result === 'object' ? result : { result })
             }
         };
     }

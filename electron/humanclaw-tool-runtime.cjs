@@ -286,6 +286,10 @@ function createHumanClawToolRuntimeRegistry(runtime) {
         definition: definitionById.self_debugger,
         handle: async (args, context) => runtime.selfDebugger.execute(args, context)
     }));
+    registry.register(new HumanClawRuntimeTool({
+        definition: definitionById.self_evolution,
+        handle: async (args, context) => runtime.executeSelfEvolution(args, context)
+    }));
     return registry;
 }
 

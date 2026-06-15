@@ -19,6 +19,7 @@ test('HumanClaw tool contracts expose versioned schemas and validate common fail
     assert.ok(contracts.some((contract) => contract.id === 'tool_doctor' && contract.version >= 1));
     assert.ok(contracts.some((contract) => contract.id === 'capability_manager' && contract.version >= 1));
     assert.ok(contracts.some((contract) => contract.id === 'self_debugger' && contract.version >= 1));
+    assert.ok(contracts.some((contract) => contract.id === 'self_evolution' && contract.version >= 1));
     assert.ok(contracts.some((contract) => contract.id === 'computer' && contract.risk === 'high'));
     assert.ok(contracts.every((contract) => contract.returns?.properties?.content));
     assert.ok(contracts.every((contract) => contract.errors?.includes('invalid_tool_args')));
@@ -179,6 +180,18 @@ test('HumanClaw tool contracts expose versioned schemas and validate common fail
         caseId: 'debug-123'
     });
     assert.equal(validSelfDebugApply.ok, true);
+
+    const validSelfEvolutionAnalyze = validateToolContract('self_evolution', {
+        action: 'analyze',
+        taskText: '以后按我的偏好优化 AIGRIL'
+    });
+    assert.equal(validSelfEvolutionAnalyze.ok, true);
+
+    const badSelfEvolutionApply = validateToolContract('self_evolution', {
+        action: 'apply_proposal'
+    });
+    assert.equal(badSelfEvolutionApply.ok, false);
+    assert.ok(badSelfEvolutionApply.errors.some((error) => error.includes('requires id')));
 });
 
 test('HumanClaw tool contracts generate prompt and summary text from the same source', () => {
@@ -214,6 +227,10 @@ test('HumanClaw tool contracts generate prompt and summary text from the same so
     const selfDebuggerPrompt = getToolContractPromptText('self_debugger');
     assert.match(selfDebuggerPrompt, /collect_evidence/);
     assert.match(selfDebuggerPrompt, /自我排查问题/);
+
+    const selfEvolutionPrompt = getToolContractPromptText('self_evolution');
+    assert.match(selfEvolutionPrompt, /apply_proposal/);
+    assert.match(selfEvolutionPrompt, /分析并优化自己/);
 
     const subagentPrompt = getToolContractPromptText('subagents');
     assert.match(subagentPrompt, /"maximum": 50/);

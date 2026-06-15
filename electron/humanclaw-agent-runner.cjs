@@ -170,7 +170,8 @@ const AGENT_TOOL_CATALOG = Object.freeze([
     Object.freeze({ id: 'subagents', label: 'subagents', summary: '可执行子 Agent：spawn/wait/log/send/cancel。' }),
     Object.freeze({ id: 'mcp_bridge', label: 'mcp_bridge', summary: 'MCP 管理与发现入口：列 server、健康检查、搜索 direct MCP tool specs、读 resources/prompts；普通任务使用 mcp__server__tool。' }),
     Object.freeze({ id: 'capability_manager', label: 'capability_manager', summary: '能力注册、安装、外部工具批量暴露、Contract 编译/验收、Skill 生成、回滚和已审批修复执行。' }),
-    Object.freeze({ id: 'self_debugger', label: 'self_debugger', summary: 'AIGL 自身 bug 的专用排查协议：建案、收证据、诊断、提补丁、验证、审批后应用。' })
+    Object.freeze({ id: 'self_debugger', label: 'self_debugger', summary: 'AIGL 自身 bug 的专用排查协议：建案、收证据、诊断、提补丁、验证、审批后应用。' }),
+    Object.freeze({ id: 'self_evolution', label: 'self_evolution', summary: '通过对话和任务执行分析用户偏好、工具瓶颈、能力缺口，并生成可审批的自我优化提案。' })
 ]);
 const AGENT_MCP_CATALOG = Object.freeze([
     Object.freeze({ id: 'mcp_bridge', label: 'MCP Bridge', summary: '发现 MCP servers/tool specs/resources/prompts；普通网页、PDF、GitHub、数据库取证任务应先获得 mcp__server__tool direct spec，再直接调用。' })
@@ -2160,6 +2161,16 @@ function buildSelfDebuggerSkillText() {
     ].join('\n');
 }
 
+function buildSelfEvolutionSkillText() {
+    return [
+        'SELF EVOLUTION SKILL：用于用户通过对话或任务执行要求 AIGRIL 优化自己、学习长期偏好、修复 Tool/MCP/Skill 卡点、补齐复杂任务能力、或改进前端/人物渲染体验。',
+        '协议：先用 self_evolution.analyze 汇总近期偏好、工具瓶颈和能力缺口，生成可审查提案；再用自然语言向用户说明提案、证据、风险和建议动作；用户明确确认后才 mark_proposal/apply_proposal。',
+        '边界：不要把用户引导到控制面板；不要直接裸改自身代码。代码、前端架构、人物渲染或工具链修复应由 self_evolution 生成提案，再联动 self_debugger/capability_manager 收证据、验证和应用。',
+        '可见表达：不要把 proposal JSON 原样甩给用户；要解释为“我发现了什么、为什么这是瓶颈、风险是什么、下一步要不要我应用”。',
+        'self_evolution action：schema/analyze/list_proposals/get_proposal/mark_proposal/apply_proposal。'
+    ].join('\n');
+}
+
 function buildVisionAgentSkillText() {
     return [
         'VISION SKILL：AIGL 的只读视觉感知层，用于在文本不足时“看一眼”屏幕、聊天窗口或框选区域。',
@@ -2352,6 +2363,9 @@ function buildSkillContextText(skillId, { emailProfiles = {} } = {}) {
     if (skillId === 'self_debugger') {
         return buildSelfDebuggerSkillText();
     }
+    if (skillId === 'self_evolution') {
+        return buildSelfEvolutionSkillText();
+    }
     return '';
 }
 
@@ -2430,6 +2444,12 @@ function buildToolContextText(toolId, { emailProfiles = {} } = {}) {
         return appendToolContractText('self_debugger', [
             'TOOL self_debugger schema：',
             buildSelfDebuggerSkillText()
+        ].join('\n'));
+    }
+    if (toolId === 'self_evolution') {
+        return appendToolContractText('self_evolution', [
+            'TOOL self_evolution schema：',
+            buildSelfEvolutionSkillText()
         ].join('\n'));
     }
     return getToolContractPromptText(toolId);
@@ -2772,6 +2792,7 @@ function sanitizeLlmStep(step, index) {
         'tool_search',
         'capability_manager',
         'self_debugger',
+        'self_evolution',
         'read',
         'write',
         'edit',
@@ -3523,6 +3544,7 @@ function buildLlmAgentExecutorMessages({
         '公开思考流：如果这一轮在执行任务，可以给 public_reasoning 写一句给用户看的短进度摘要，说明你基于 observation 准备做什么或已经确认了什么。不要泄露隐藏推理链，不要写工具日志，不要写“第 N 步/我在看本机状态”这类低信息量模板；没有实质信息时可以留空。',
         '人物表现：使用顶层 persona_output 给出自然可见文本、气泡文本、语音风格，以及 emotion/intensity/socialTone/gestureIntent/taskState/speechEnergy/gazeTarget/durationHint。不要把 persona_output JSON 复制到 final_answer、blocked_reason、public_reasoning、Markdown 或代码块里；不要直接选择 VRM 动作名；工具执行语义仍由 action/tool_call 决定。',
         '工具 experience：工具 contract 里的 experience 字段说明这个工具在人物体验里代表什么，审批、等待、失败和成功要按 AIGL 的自然表达呈现，不要把 tool_call、approvalId、raw observation 当用户回复。',
+        'Self Evolution Loop：当用户说“优化你自己/学习我的偏好/以后按我的方式来/修复 Tool、MCP 或 Skill/拉取新能力/修改前端架构或人物渲染”等，不要让用户去控制面板。优先 load_context tools:["self_evolution"]，再调用 self_evolution.analyze 生成提案；用自然语言说明发现、证据、风险和下一步审批点；只有用户明确确认后才 apply_proposal。',
         'Self Debug Loop：当用户反馈 AIGL 自身 bug、工具链异常、Agent Loop 不稳定或要求 AIGL 自己修复时，优先把它当作高风险自修复任务。先加载 self_debugger 能力，按建案、收证据、诊断、提补丁、验证、确认后应用的协议推进；不要直接裸改自己的代码。',
         '工具能力索引：首轮只给 capability_catalog。详细 schema 通过 load_context、tool_search 或工具 observation 按需出现。MCP 工具优先使用 tool_search/capability_context 中的 mcp__server__tool direct spec；外部 API/Composio/OpenAPI 工具优先使用 tool_search 返回的 external__provider__tool direct spec。没有 direct spec 时，先 load/search specs，mcp_bridge/capability_manager 只作为管理、安装、修复入口。请按任务目标和证据缺口选择最小必要工具，避免关键词驱动的机械路由。',
         exactAnswerMode
@@ -3531,7 +3553,7 @@ function buildLlmAgentExecutorMessages({
         '可见回复格式：final_answer 字段是给用户看的 Markdown 字符串，可以使用自然段、短列表、代码块和加粗；blocked_reason 也按 Markdown 组织。不要输出 HTML；不要把 persona_output/persona_surface 或 emotion/intensity/gestureIntent/taskState 等内部控制字段放进任何可见回复字段。',
         '只输出 JSON，JSON 外不要输出 Markdown。',
         'persona_output 字段示例：{"text":"自然可见回复","bubble_text":"可选气泡短句","speech_text":"可选语音文本","emotion":"happy|relaxed|shy|sad|angry|surprised|anxious|tired|thinking|focused|comforting","intensity":0.55,"socialTone":"soft|bright|calm|serious|playful|quiet","gestureIntent":"none|greeting|farewell|thinking|working|approval|success|celebrate|shy|comfort|apologize|surprised|angry|dance","taskState":"idle|listening|thinking|speaking|working|waiting_approval|happy_success|apologizing|comforting|blocked|failed","speechEnergy":0.45,"gazeTarget":"user|side|down|screen|away|none","durationHint":"short|medium|long|hold","tts_style":"..."}',
-        'JSON 格式：{"mode":"conversation|task","intent":"...","summary":"...","public_reasoning":"给用户看的短进度摘要，可空","action":"load_context|tool|final|blocked","capability_request":{"skills":[],"tools":[],"mcp":[],"reason":"..."},"plan_update":["..."],"tool_call":{"tool":"vision.capture_context|computer|email|code|file_manager|artifact_verifier|tool_search|request_permissions|mcp_bridge|capability_manager|self_debugger|subagents|update_plan|read|write|exec|apply_patch|mcp__server__tool|external__provider__tool","title":"...","args":{"action":"...","target":"screen|chat-window|active-window|region","reason":"...","question":"..."}},"persona_output":{},"final_answer":"Markdown...","exact_answer_submission":{"answer":"短答案","confidence":"high|medium|low","evidence_refs":["artifact-..."],"format_type":"plain|number|date|list|name|url|json","reason":"brief evidence note"},"blocked_reason":"Markdown..."}',
+        'JSON 格式：{"mode":"conversation|task","intent":"...","summary":"...","public_reasoning":"给用户看的短进度摘要，可空","action":"load_context|tool|final|blocked","capability_request":{"skills":[],"tools":[],"mcp":[],"reason":"..."},"plan_update":["..."],"tool_call":{"tool":"vision.capture_context|computer|email|code|file_manager|artifact_verifier|tool_search|request_permissions|mcp_bridge|capability_manager|self_debugger|self_evolution|subagents|update_plan|read|write|exec|apply_patch|mcp__server__tool|external__provider__tool","title":"...","args":{"action":"...","target":"screen|chat-window|active-window|region","reason":"...","question":"..."}},"persona_output":{},"final_answer":"Markdown...","exact_answer_submission":{"answer":"短答案","confidence":"high|medium|low","evidence_refs":["artifact-..."],"format_type":"plain|number|date|list|name|url|json","reason":"brief evidence note"},"blocked_reason":"Markdown..."}',
         '当 tool_call.tool 是 mcp_bridge 时，只能用于 MCP 管理/发现/修复动作，不要用它包装 call_tool。执行具体 MCP 工具必须使用 mcp__server__tool direct id。',
         `最多工具轮数：${maxSteps}`,
         `工具摘要：${toolSummary || 'Core tools are indexed in capability_catalog; detailed contracts and MCP tool specs are deferred.'}`
@@ -4598,7 +4620,7 @@ function buildAgentDecisionRepairMessages(messages = [], decision = {}) {
                     required_output_shape: {
                         action: 'load_context|tool|final|blocked',
                         tool_call: {
-                            tool: 'tool_search|request_permissions|mcp__server__tool|external__provider__tool|mcp_bridge|computer|code|email|file_manager|vision.capture_context|subagents|capability_manager|self_debugger|read|write|exec|apply_patch',
+                            tool: 'tool_search|request_permissions|mcp__server__tool|external__provider__tool|mcp_bridge|computer|code|email|file_manager|vision.capture_context|subagents|capability_manager|self_debugger|self_evolution|read|write|exec|apply_patch',
                             title: 'short action title',
                             args: {}
                         },

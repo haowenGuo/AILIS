@@ -31,7 +31,6 @@ contextBridge.exposeInMainWorld('aigrilDesktop', {
     hideChatWindow: () => ipcRenderer.invoke('aigril:hide-chat-window'),
     showControlPanel: () => ipcRenderer.invoke('aigril:show-control-panel'),
     showAgentLab: () => ipcRenderer.invoke('aigril:show-agent-lab'),
-    showSelfEvolution: () => ipcRenderer.invoke('aigril:show-self-evolution'),
     showControlMenu: () => ipcRenderer.invoke('aigril:show-control-menu'),
     showTextEditMenu: (payload) => ipcRenderer.invoke('aigril:show-text-edit-menu', payload || {}),
     closeCurrentWindow: () => ipcRenderer.invoke('aigril:close-current-window'),
@@ -192,12 +191,5 @@ contextBridge.exposeInMainWorld('aigrilDesktop', {
         runTask: (payload) => ipcRenderer.invoke('aigril:agent-lab-run', payload || {}),
         continueTask: (payload) => ipcRenderer.invoke('aigril:agent-lab-continue', payload || {}),
         interruptTask: (payload) => ipcRenderer.invoke('aigril:agent-lab-interrupt', payload || {})
-    },
-    selfEvolution: {
-        isSupported: true,
-        analyze: (payload) => ipcRenderer.invoke('aigril:self-evolution-analyze', payload || {}),
-        listProposals: (payload) => ipcRenderer.invoke('aigril:self-evolution-proposals', payload || {}),
-        markProposal: (payload) => ipcRenderer.invoke('aigril:self-evolution-mark', payload || {}),
-        applyProposal: (payload) => ipcRenderer.invoke('aigril:self-evolution-apply', payload || {})
     }
 });

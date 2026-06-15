@@ -670,6 +670,7 @@ class HumanClawGateway extends EventEmitter {
             memoryRuntime: this.memoryRuntime,
             emitGatewayEvent: (type, payload) => this.emitGatewayEvent(type, payload)
         });
+        this.runtime.setSelfEvolutionRuntime?.(this.selfEvolutionRuntime);
         this.gatewayToolRuntimeRegistry = this.createGatewayToolRuntimeRegistry();
         this.agentRunner = null;
     }

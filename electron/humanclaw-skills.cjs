@@ -65,6 +65,13 @@ const DEFAULT_SKILLS = Object.freeze({
         description: 'Dedicated self-debug loop for AIGL bugs: open cases, collect evidence, diagnose, propose patches, validate, and apply through the repair executor.',
         when: '用户反馈 AIGL 自身 bug、工具异常、Agent Loop 不稳定、能力退化，或明确要求 AIGL 自己检查并修复问题时。',
         tools: Object.freeze(['self_debugger', 'capability_manager', 'tool_doctor'])
+    }),
+    self_evolution: Object.freeze({
+        id: 'self_evolution',
+        label: '自我进化 Skill',
+        description: 'Conversation-driven self-evolution loop for preference learning, tool bottleneck analysis, capability acquisition proposals, and gated self-improvement.',
+        when: '用户要求 AIGRIL 优化自己、持续学习偏好、修复 Tool/MCP/Skill、拉取新能力、或改进前端/人物渲染体验时。',
+        tools: Object.freeze(['self_evolution', 'self_debugger', 'capability_manager', 'tool_doctor'])
     })
 });
 
@@ -77,7 +84,8 @@ const LEGACY_SKILL_MARKERS = Object.freeze({
     mcp_bridge: 'MCP SKILL',
     tool_doctor: 'TOOL DOCTOR SKILL',
     capability_manager: 'CAPABILITY MANAGER SKILL',
-    self_debugger: 'SELF DEBUGGER SKILL'
+    self_debugger: 'SELF DEBUGGER SKILL',
+    self_evolution: 'SELF EVOLUTION SKILL'
 });
 
 function normalizeString(value, fallback = '') {

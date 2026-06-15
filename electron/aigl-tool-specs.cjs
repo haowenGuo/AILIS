@@ -105,6 +105,17 @@ const AIGL_RUNTIME_TOOL_DEFINITIONS = Object.freeze([
         status: 'available',
         needsApprovalActions: Object.freeze(['apply_patch']),
         exposure: AIGL_TOOL_EXPOSURE.DEFERRED
+    }),
+    Object.freeze({
+        id: 'self_evolution',
+        label: 'self_evolution',
+        description: 'Analyze AIGRIL usage, preferences, tool bottlenecks, and capability gaps; create gated self-improvement proposals that can be reviewed and applied from the agent loop.',
+        sectionId: 'runtime',
+        route: 'humanclaw-runtime',
+        materialized: true,
+        status: 'available',
+        needsApprovalActions: Object.freeze(['apply_proposal']),
+        exposure: AIGL_TOOL_EXPOSURE.DEFERRED
     })
 ]);
 

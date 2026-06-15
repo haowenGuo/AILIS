@@ -626,3 +626,86 @@ test('HumanClaw runtime subagents execute child runner lifecycle and retain logs
     assert.ok(log.details.events.some((event) => event.type === 'subagent.progress'));
     assert.ok(log.details.events.some((event) => event.type === 'subagent.completed'));
 });
+
+test('HumanClaw runtime exposes self_evolution as a conversation-driven agent tool', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'humanclaw-self-evolution-tool-'));
+    const runtime = new HumanClawRuntime({
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit')
+    });
+    const proposal = {
+        id: 'proposal-preference-1',
+        type: 'preference_consolidation',
+        title: '沉淀新的用户偏好',
+        status: 'proposed',
+        risk: 'low',
+        riskLabel: '低风险',
+        summary: '用户希望 AIGRIL 通过对话学习偏好，而不是进入控制面板。',
+        evidence: [{ type: 'memory_event', preview: '不要放控制面板' }],
+        target: { kind: 'memory_block', key: 'user' },
+        recommendedAction: 'approve_and_apply'
+    };
+
+    runtime.setSelfEvolutionRuntime({
+        getStatus: () => ({ enabled: true, loaded: true, proposalCount: 1 }),
+        ensureLoaded: async () => ({}),
+        analyze: async (args = {}) => ({
+            ok: true,
+            status: 'completed',
+            summary: {
+                headline: `发现 1 个可处理的自我进化提案：${args.taskText}`
+            },
+            proposals: [proposal]
+        }),
+        listProposals: async () => ({
+            ok: true,
+            status: 'completed',
+            proposals: [proposal]
+        }),
+        getProposal: async (id) => id === proposal.id ? proposal : null,
+        markProposal: async (args = {}) => ({
+            ok: true,
+            status: 'completed',
+            proposal: { ...proposal, status: args.status }
+        }),
+        applyProposal: async () => ({
+            ok: false,
+            status: 'needs_approval',
+            proposal,
+            approvalText: 'Apply self-evolution proposal?'
+        })
+    });
+
+    try {
+        assert.equal(runtime.canExecuteTool('self_evolution'), true);
+        assert.ok(runtime.getStatus().capabilities.includes('self_evolution_loop'));
+        assert.ok(runtime.getRuntimeToolDefinitions().some((tool) => tool.id === 'self_evolution'));
+
+        const analyzed = await runtime.executeTool('self_evolution', {
+            action: 'analyze',
+            taskText: '优化 AIGRIL 自己'
+        });
+        assert.equal(analyzed.details.status, 'completed');
+        assert.match(analyzed.content[0].text, /发现 1 个可处理的自我进化提案/);
+        assert.match(analyzed.content[0].text, /沉淀新的用户偏好/);
+        assert.match(analyzed.content[0].text, /不是进入控制面板/);
+
+        const classification = runtime.classifyToolCall({
+            toolId: 'self_evolution',
+            args: { action: 'apply_proposal' }
+        });
+        assert.equal(classification.class, 'self_evolution');
+        assert.equal(classification.mutates, true);
+        assert.equal(classification.requiresApprovalCapable, true);
+
+        const apply = await runtime.executeTool('self_evolution', {
+            action: 'apply_proposal',
+            id: proposal.id
+        });
+        assert.equal(apply.details.status, 'needs_approval');
+        assert.match(apply.content[0].text, /需要用户确认/);
+    } finally {
+        await runtime.shutdown();
+    }
+});

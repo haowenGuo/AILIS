@@ -313,6 +313,15 @@ const SELF_DEBUGGER_ACTIONS = Object.freeze([
     'close_case'
 ]);
 
+const SELF_EVOLUTION_ACTIONS = Object.freeze([
+    'schema',
+    'analyze',
+    'list_proposals',
+    'get_proposal',
+    'mark_proposal',
+    'apply_proposal'
+]);
+
 function defaultReturns() {
     return cloneJson(STANDARD_TOOL_RETURN_SCHEMA);
 }
@@ -430,6 +439,14 @@ const TOOL_EXPERIENCE = Object.freeze({
         successStyle: 'summarize_result',
         failureStyle: 'explain_test_or_code_failure',
         userFacingVerb: '自我排查问题'
+    }),
+    self_evolution: makeExperienceMetadata({
+        embodiedAction: 'evolve_self',
+        permissionStyle: 'explicit_for_apply',
+        progressStyle: 'focused',
+        successStyle: 'summarize_result',
+        failureStyle: 'explain_test_or_code_failure',
+        userFacingVerb: '分析并优化自己'
     }),
     email: makeExperienceMetadata({
         embodiedAction: 'check_mailbox',
@@ -1138,6 +1155,61 @@ const TOOL_CONTRACTS = Object.freeze({
             return [];
         }
     }),
+    self_evolution: Object.freeze({
+        id: 'self_evolution',
+        version: CONTRACT_VERSION,
+        mutates: true,
+        risk: 'high',
+        approval: 'required-for-apply-proposal',
+        experience: TOOL_EXPERIENCE.self_evolution,
+        returns: defaultReturns(),
+        errors: defaultErrors([
+            'self_evolution_runtime_not_available',
+            'proposal_not_found',
+            'proposal_requires_approval',
+            'proposal_apply_failed'
+        ]),
+        schema: actionSchema(SELF_EVOLUTION_ACTIONS, {
+            id: stringSchema(),
+            proposalId: stringSchema(),
+            status: stringSchema({
+                enum: ['approved', 'rejected', 'needs_review', 'superseded', 'closed', 'proposed', 'applied']
+            }),
+            type: stringSchema({
+                enum: ['preference_consolidation', 'tool_bottleneck_repair', 'capability_acquisition']
+            }),
+            taskText: stringSchema(),
+            task: stringSchema(),
+            query: stringSchema(),
+            note: stringSchema(),
+            reason: stringSchema(),
+            reviewer: stringSchema(),
+            source: stringSchema(),
+            approved: booleanSchema(),
+            recentRunId: stringSchema(),
+            runId: stringSchema(),
+            sessionId: stringSchema(),
+            sourceHints: arraySchema(stringSchema()),
+            memoryEventLimit: numberSchema({ minimum: 1, maximum: 100 }),
+            toolLimit: numberSchema({ minimum: 1, maximum: 500 }),
+            minToolSamples: numberSchema({ minimum: 1, maximum: 100 }),
+            limit: numberSchema({ minimum: 1, maximum: 300 })
+        }),
+        customValidate(args = {}) {
+            const action = normalizeAction(args.action || args.operation || args.intent, 'analyze');
+            const hasProposalId = Boolean(normalizeString(args.id || args.proposalId));
+            if (['get_proposal', 'apply_proposal'].includes(action) && !hasProposalId) {
+                return [`self_evolution.${action} requires id/proposalId`];
+            }
+            if (action === 'mark_proposal' && !hasProposalId) {
+                return ['self_evolution.mark_proposal requires id/proposalId'];
+            }
+            if (action === 'mark_proposal' && !normalizeString(args.status)) {
+                return ['self_evolution.mark_proposal requires status'];
+            }
+            return [];
+        }
+    }),
     email: Object.freeze({
         id: 'email',
         version: CONTRACT_VERSION,
@@ -1389,10 +1461,15 @@ function normalizeArgsForContract(toolId, args = {}) {
         return {};
     }
     const normalized = { ...args };
-    if (['email', 'file_manager', 'computer', 'code', 'artifact_verifier', 'mcp_bridge', 'tool_doctor', 'capability_manager', 'self_debugger', 'subagents', 'vision.capture_context'].includes(toolId)) {
+    if (['email', 'file_manager', 'computer', 'code', 'artifact_verifier', 'mcp_bridge', 'tool_doctor', 'capability_manager', 'self_debugger', 'self_evolution', 'subagents', 'vision.capture_context'].includes(toolId)) {
+        const fallbackAction = toolId === 'vision.capture_context'
+            ? 'capture_context'
+            : toolId === 'self_evolution'
+                ? 'analyze'
+                : 'schema';
         normalized.action = normalizeAction(
             args.action || args.operation || args.intent,
-            toolId === 'vision.capture_context' ? 'capture_context' : 'schema'
+            fallbackAction
         );
     }
     if (toolId === 'mcp_bridge') {

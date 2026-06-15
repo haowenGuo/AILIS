@@ -20,6 +20,7 @@ test('HumanClaw skills load from SKILL.md packages and reference contracted tool
     assert.ok(skills.some((skill) => skill.id === 'mcp_bridge'));
     assert.ok(skills.some((skill) => skill.id === 'capability_manager'));
     assert.ok(skills.some((skill) => skill.id === 'self_debugger'));
+    assert.ok(skills.some((skill) => skill.id === 'self_evolution' && skill.source === 'skill_file'));
 
     for (const skill of skills) {
         for (const toolId of skill.tools || []) {
@@ -49,4 +50,10 @@ test('HumanClaw skills load from SKILL.md packages and reference contracted tool
     assert.doesNotMatch(selfDebuggerContext, /TOOL CONTRACT self_debugger@v/);
     assert.match(selfDebuggerContext, /validate_patch/);
     assert.match(getToolContractPromptText('self_debugger'), /TOOL CONTRACT self_debugger@v/);
+
+    const selfEvolutionContext = buildHumanClawSkillContextText('self_evolution');
+    assert.doesNotMatch(selfEvolutionContext, /TOOL CONTRACT self_evolution@v/);
+    assert.match(selfEvolutionContext, /analyze/);
+    assert.match(selfEvolutionContext, /不把用户引导去控制面板/);
+    assert.match(getToolContractPromptText('self_evolution'), /TOOL CONTRACT self_evolution@v/);
 });
