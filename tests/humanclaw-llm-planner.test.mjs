@@ -8,6 +8,7 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const { HumanClawGateway } = require('../electron/humanclaw-gateway.cjs');
+const { HumanClawPlatformAdapter } = require('../electron/humanclaw-platform-adapter.cjs');
 const { resolveAgentDecisionTimeoutMs } = require('../electron/humanclaw-agent-runner.cjs');
 const { buildTurnItemsPromptObject } = require('../electron/humanclaw-turn-items.cjs');
 
@@ -252,6 +253,83 @@ async function createDelayedChatCompletionsServer(delayMs = 5000) {
         close: () => new Promise((resolve) => server.close(resolve))
     };
 }
+
+test('Agent prompts inject runtime_environment from the active platform adapter', async () => {
+    const cases = [
+        {
+            platform: 'win32',
+            env: { ComSpec: 'C:\\Windows\\System32\\cmd.exe' },
+            expectedFamily: 'windows',
+            expectedPathStyle: 'windows',
+            expectedShellDialect: 'cmd'
+        },
+        {
+            platform: 'linux',
+            env: { SHELL: '/bin/bash' },
+            expectedFamily: 'linux',
+            expectedPathStyle: 'posix',
+            expectedShellDialect: 'posix-shell'
+        }
+    ];
+
+    for (const item of cases) {
+        const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), `humanclaw-runtime-env-${item.expectedFamily}-`));
+        const llmServer = await createScriptedChatCompletionsServer(() => ({
+            mode: 'task',
+            intent: 'runtime_environment_probe',
+            summary: 'probe runtime environment',
+            action: 'final',
+            final_answer: 'runtime environment observed'
+        }));
+        const gateway = new HumanClawGateway({
+            port: 0,
+            workspaceRoot,
+            projectRoot: path.resolve('.'),
+            auditDir: path.join(workspaceRoot, '.audit'),
+            platformAdapter: new HumanClawPlatformAdapter({
+                platform: item.platform,
+                hostPlatform: item.platform,
+                env: item.env
+            })
+        });
+
+        try {
+            const status = await gateway.start();
+            const result = await runAgent(status.url, {
+                sessionId: `runtime-env-${item.expectedFamily}`,
+                message: '只确认当前运行环境，不要执行命令',
+                agentLoop: 'llm',
+                directToolExecutor: false,
+                llmSettings: {
+                    provider: 'openai-compatible',
+                    baseUrl: llmServer.url,
+                    apiKey: 'test-key',
+                    model: `mock-${item.expectedFamily}`,
+                    temperature: 0,
+                    timeoutMs: 10000
+                },
+                context: {
+                    workspace: workspaceRoot,
+                    directToolExecutor: false,
+                    nativeDirectTools: false
+                }
+            });
+
+            assert.equal(result.body.ok, true, JSON.stringify(result.body));
+            const userPayload = JSON.parse(llmServer.calls[0].payload.messages.find((entry) => entry.role === 'user').content);
+            assert.equal(userPayload.runtime_environment.family, item.expectedFamily);
+            assert.equal(userPayload.runtime_environment.path_style, item.expectedPathStyle);
+            assert.equal(userPayload.runtime_environment.shell_dialect, item.expectedShellDialect);
+            assert.match(userPayload.runtime_environment.command_guidance, /Do not assume|not Linux by default|POSIX/);
+            assert.match(llmServer.calls[0].system, /runtime_environment/);
+            assert.doesNotMatch(llmServer.calls[0].system, /当前桌面端优先 Windows|Windows 桌面端命令必须/);
+        } finally {
+            await gateway.stop();
+            await llmServer.close();
+            await fs.rm(workspaceRoot, { recursive: true, force: true });
+        }
+    }
+});
 
 test('HumanClaw Agent run can be interrupted while preserving transcript data', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'humanclaw-interrupt-test-'));

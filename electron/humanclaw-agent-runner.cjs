@@ -163,6 +163,7 @@ const AGENT_TOOL_CATALOG = Object.freeze([
     Object.freeze({ id: 'file_manager', label: 'file_manager', summary: '文件整理和垃圾清理入口。' }),
     Object.freeze({ id: 'code', label: 'code', summary: '代码操作、Git、测试和重构入口。' }),
     Object.freeze({ id: 'artifact_verifier', label: 'artifact_verifier', summary: '只读结构化产物验收：JSON/JSONL/CSV/TSV/YAML/TOML/Markdown/log/text。' }),
+    Object.freeze({ id: 'github_pages', label: 'github_pages', summary: 'GitHub Pages/gh-pages/github.io 发布诊断、关键阻塞和公开 URL 验收证据。' }),
     Object.freeze({ id: 'exec', label: 'exec', summary: '在当前工作区执行命令或脚本，用于运行验证、测试和生成工件。' }),
     Object.freeze({ id: 'update_plan', label: 'update_plan', summary: '更新任务计划和进度。' }),
     Object.freeze({ id: 'tool_search', label: 'tool_search', summary: 'Codex-like 工具发现：搜索本地 runtime 工具、MCP direct specs、external__ 外部直连工具和已摄入 contract。' }),
@@ -192,6 +193,15 @@ const CAPABILITY_ID_ALIASES = new Map([
     ['cleanup', 'file_manager'],
     ['coding', 'code'],
     ['git', 'code'],
+    ['github', 'github_pages'],
+    ['github_pages', 'github_pages'],
+    ['github-pages', 'github_pages'],
+    ['pages', 'github_pages'],
+    ['gh-pages', 'github_pages'],
+    ['github.io', 'github_pages'],
+    ['deploy', 'github_pages'],
+    ['deployment', 'github_pages'],
+    ['publish', 'github_pages'],
     ['database', 'mcp_bridge'],
     ['db', 'mcp_bridge'],
     ['sql', 'mcp_bridge'],
@@ -1879,6 +1889,105 @@ function buildToolContext(requestContext = {}, fallbackWorkspace, sessionId) {
     return context;
 }
 
+function inferRuntimeShellDialect(platformStatus = {}) {
+    const family = normalizeText(platformStatus.family || platformStatus.id || platformStatus.platform).toLowerCase();
+    const shell = normalizeText(
+        platformStatus.defaults?.shell ||
+        platformStatus.capabilityMatrix?.shell?.backend ||
+        platformStatus.defaultShell
+    ).toLowerCase();
+    if (family === 'windows') {
+        if (shell.includes('powershell') || shell.includes('pwsh')) {
+            return 'powershell';
+        }
+        if (shell.includes('cmd') || shell.includes('comspec')) {
+            return 'cmd';
+        }
+        return 'windows-shell';
+    }
+    if (family === 'android') {
+        return 'adb-shell';
+    }
+    if (family === 'ios') {
+        return 'no-general-shell';
+    }
+    if (family === 'macos' || family === 'linux') {
+        return 'posix-shell';
+    }
+    return shell || 'unknown';
+}
+
+function inferRuntimePathStyle(platformStatus = {}) {
+    const family = normalizeText(platformStatus.family || platformStatus.id || platformStatus.platform).toLowerCase();
+    if (family === 'windows') {
+        return 'windows';
+    }
+    if (['linux', 'macos', 'android', 'ios'].includes(family)) {
+        return 'posix';
+    }
+    return 'unknown';
+}
+
+function buildRuntimeCommandGuidance(environment = {}) {
+    const family = normalizeText(environment.family).toLowerCase();
+    const shellDialect = normalizeText(environment.shell_dialect).toLowerCase();
+    if (family === 'windows') {
+        const shellSpecificGuidance = shellDialect === 'powershell'
+            ? 'Use PowerShell syntax for pipelines, redirection, env vars, and output truncation; do not use cmd-only fragments such as cd /d or NUL unless you explicitly invoke cmd.exe.'
+            : 'The default shell is cmd-compatible; cmd syntax such as %VAR%, NUL, and cd /d is valid, and PowerShell-specific syntax should only be used when you explicitly invoke powershell/pwsh.';
+        return [
+            'Generate commands for the current Windows shell semantics, not Linux by default.',
+            shellSpecificGuidance,
+            'Avoid POSIX-only fragments such as head, tail, grep, wc, rm -rf, or /dev/null unless the command explicitly runs inside WSL/Git Bash and that environment is verified.'
+        ].join(' ');
+    }
+    if (family === 'linux' || family === 'macos') {
+        return [
+            `Generate commands for ${family} POSIX shell semantics using the reported default shell.`,
+            'Do not use Windows-only cmd.exe, PowerShell, drive-letter paths, or NUL unless you explicitly invoke a Windows compatibility layer and verify it.'
+        ].join(' ');
+    }
+    if (family === 'android') {
+        return 'Generate commands for adb shell/device semantics. Do not assume a desktop Linux filesystem unless the observation proves it.';
+    }
+    if (family === 'ios') {
+        return 'This target does not expose a general-purpose shell by default. Prefer available device automation or filesystem tools instead of inventing shell commands.';
+    }
+    return 'Inspect runtime_environment and tool schema before generating OS-specific commands. Do not assume Linux.';
+}
+
+function buildRuntimeEnvironmentPromptObject(platformAdapter = null) {
+    const platformStatus = platformAdapter?.getStatus?.() || {};
+    const family = normalizeText(platformStatus.family || platformStatus.id || platformStatus.platform, 'unknown');
+    const environment = {
+        model: 'aigl_runtime_environment.v1',
+        source: 'platform_adapter',
+        platform: normalizeText(platformStatus.platform, family),
+        family,
+        host_platform: normalizeText(platformStatus.hostPlatform),
+        arch: normalizeText(platformStatus.arch),
+        default_shell: normalizeText(
+            platformStatus.defaults?.shell ||
+            platformStatus.capabilityMatrix?.shell?.backend ||
+            ''
+        ),
+        shell_dialect: inferRuntimeShellDialect(platformStatus),
+        path_style: inferRuntimePathStyle(platformStatus),
+        capabilities: {
+            shell: platformStatus.capabilities?.shell === true,
+            filesystem: platformStatus.capabilities?.filesystem === true,
+            pty: platformStatus.capabilities?.pty === true,
+            screen_capture: platformStatus.capabilities?.screenCapture || '',
+            clipboard: platformStatus.capabilities?.clipboard || '',
+            gui_input: platformStatus.capabilities?.guiInput || ''
+        }
+    };
+    return {
+        ...environment,
+        command_guidance: buildRuntimeCommandGuidance(environment)
+    };
+}
+
 function formatStepResult(stepResult) {
     const title = stepResult.title || stepResult.tool;
     if (!stepResult.response) {
@@ -2103,10 +2212,12 @@ function buildComputerAgentSkillText() {
         '优先读取/检查再修改；修改后复核。会改变系统或文件的动作必须走 Gateway 审批策略。',
         '聊天窗附带本地文件时，attached_files 只给路径和元数据。文本/代码/Markdown/CSV/JSON 优先用 read；PDF、Office、图片、音视频、压缩包和未知二进制先 stat/hash，必要时用 read_binary 或 exec 调用本机可用解析器/脚本提取内容，不要直接臆造。',
         'Codex-like 命令行主链：普通命令、测试和脚本优先用 computer.exec_command；如果返回 session_id，后续用 computer.write_stdin 继续输入或用 chars="" 轮询，不要重复启动同一个长命令。',
+        '命令必须根据 runtime_environment.family/default_shell/path_style 生成：Windows 用 cmd/PowerShell 语义，Linux/macOS 用 POSIX shell 语义，Android 用 adb shell 语义；工具层不会替你解析或改写命令。',
+        '不要默认当前是 Linux，也不要默认当前是 Windows。只有 runtime_environment 或 observation 明确对应平台时，才使用该平台专属片段，例如 head/tail/grep/wc/rm -rf、/dev/null、PowerShell 管道、cmd 的 NUL/cd /d、Windows 盘符路径。',
         'exec_command 参数：{"action":"exec_command","cmd":"命令","workdir":"工作目录","yield_time_ms":1000,"max_output_tokens":6000,"tty":false}；write_stdin 参数：{"action":"write_stdin","session_id":"...","chars":"","yield_time_ms":1000,"max_output_tokens":6000}。',
         '兼容旧动作：exec/session_start/process_read/process_write/pty_start/pty_write 仍可用，但代码、测试、脚本类任务优先走 exec_command/write_stdin。',
         'computer action：list/tree/stat/read/write/write_binary/append/mkdir/copy/move/rename/delete/search/hash/du/exec_command/write_stdin/exec/session_start/process_read/process_write/process_kill/pty_start/pty_write/pty_kill/watch/watch_stop/rollback_list/rollback_restore/acl_get/acl_set。',
-        '系统相关细节由 Platform Adapter 提供；当前桌面端优先 Windows，但不要在任务策略里写死平台假设。需要平台细节时先 load computer schema 或查看 observation 里的 platform。'
+        '系统相关细节由 Platform Adapter 提供；需要平台细节时先看 runtime_environment、computer.schema 或 observation 里的 platform，不要在任务策略里写死平台假设。'
     ].join('\n');
 }
 
@@ -2123,6 +2234,7 @@ function buildCodeAgentSkillText() {
         '代码 SKILL：用于代码搜索、符号索引、诊断、AST 级重构、测试、Git 和 PR/CI 工作流。',
         '先理解仓库和测试方式，再改代码；改后运行最相关验证。',
         '执行测试/构建/脚本时优先通过 computer.exec_command + computer.write_stdin 观察长命令；修改源码时优先使用 apply_patch，不要用 shell 重定向覆盖源码文件。',
+        'GitHub Pages/gh-pages/github.io 发布和验收不是普通 Git 任务；优先加载 github_pages Skill 并调用 github_pages 工具收集 blocker/evidence。',
         'code action：search/symbols/diagnostics/refactor_rename/test/git_status/git_diff/git_commit/pr_create/ci_status。'
     ].join('\n');
 }
@@ -2412,6 +2524,14 @@ function buildToolContextText(toolId, { emailProfiles = {} } = {}) {
             '适合：GitHub/工程任务的报告或日志、论文阅读笔记 Markdown、数据库/表格导出的 CSV/JSON、邮箱结果导出的 JSONL/log、配置迁移的 YAML/TOML/JSON。',
             '论文卡片验收：如果用户要求 paper-card.md 或论文阅读卡片，用 args.contract="paper_card.v1"，它会检查研究问题、核心方法、关键贡献、局限性、是否值得深入读和来源说明。',
             '不适合：生成文件、修改文件、联网抓取、替代 code/computer/email/mcp_bridge 执行真实任务。'
+        ].join('\n'));
+    }
+    if (toolId === 'github_pages') {
+        return appendToolContractText('github_pages', [
+            'TOOL github_pages schema：',
+            '只读 GitHub Pages/gh-pages/github.io 发布诊断工具，用于识别 Pages workflow、dist 发布目录、远端仓库、公开 URL 验收和关键阻塞。',
+            'GitHub Pages、gh-pages、github.io、部署验收、Pages 404 场景优先使用 github_pages.diagnose_publish 或 github_pages.verify_url，不要先裸用 git/curl/head。',
+            '返回的 criticalBlockers 是未解决关键阻塞，verificationEvidence 是验收证据；最终回答应解释成人类可读结论。'
         ].join('\n'));
     }
     if (toolId === 'update_plan') {
@@ -3508,7 +3628,8 @@ function buildLlmAgentExecutorMessages({
     memoryContext = '',
     fileAttachments = [],
     externalToolExposure = null,
-    exactAnswerMode = false
+    exactAnswerMode = false,
+    runtimeEnvironment = null
 }) {
     const initialPlanHint = buildInitialPlanHint(initialPlan);
     const capabilityCatalog = buildAgentCapabilityCatalog();
@@ -3544,6 +3665,7 @@ function buildLlmAgentExecutorMessages({
         '公开思考流：如果这一轮在执行任务，可以给 public_reasoning 写一句给用户看的短进度摘要，说明你基于 observation 准备做什么或已经确认了什么。不要泄露隐藏推理链，不要写工具日志，不要写“第 N 步/我在看本机状态”这类低信息量模板；没有实质信息时可以留空。',
         '人物表现：使用顶层 persona_output 给出自然可见文本、气泡文本、语音风格，以及 emotion/intensity/socialTone/gestureIntent/taskState/speechEnergy/gazeTarget/durationHint。不要把 persona_output JSON 复制到 final_answer、blocked_reason、public_reasoning、Markdown 或代码块里；不要直接选择 VRM 动作名；工具执行语义仍由 action/tool_call 决定。',
         '工具 experience：工具 contract 里的 experience 字段说明这个工具在人物体验里代表什么，审批、等待、失败和成功要按 AIGL 的自然表达呈现，不要把 tool_call、approvalId、raw observation 当用户回复。',
+        '运行环境协议：user payload 里的 runtime_environment 是当前这一轮的真实执行环境，来自 Platform Adapter，不属于长期记忆。生成 shell、路径、重定向、管道、环境变量和文件命令时必须先看 runtime_environment.family/default_shell/path_style/command_guidance；不要默认自己在 Linux、Windows 或 macOS。',
         'Self Evolution Loop：当用户说“优化你自己/学习我的偏好/以后按我的方式来/修复 Tool、MCP 或 Skill/拉取新能力/修改前端架构或人物渲染”等，不要让用户去控制面板。优先 load_context tools:["self_evolution"]，再调用 self_evolution.analyze 生成提案；用自然语言说明发现、证据、风险和下一步审批点；只有用户明确确认后才 apply_proposal。',
         'Self Debug Loop：当用户反馈 AIGL 自身 bug、工具链异常、Agent Loop 不稳定或要求 AIGL 自己修复时，优先把它当作高风险自修复任务。先加载 self_debugger 能力，按建案、收证据、诊断、提补丁、验证、确认后应用的协议推进；不要直接裸改自己的代码。',
         '工具能力索引：首轮只给 capability_catalog。详细 schema 通过 load_context、tool_search 或工具 observation 按需出现。MCP 工具优先使用 tool_search/capability_context 中的 mcp__server__tool direct spec；外部 API/Composio/OpenAPI 工具优先使用 tool_search 返回的 external__provider__tool direct spec。没有 direct spec 时，先 load/search specs，mcp_bridge/capability_manager 只作为管理、安装、修复入口。请按任务目标和证据缺口选择最小必要工具，避免关键词驱动的机械路由。',
@@ -3581,6 +3703,7 @@ function buildLlmAgentExecutorMessages({
                     recent_conversation: recentConversation,
                     memory_context: compactMemoryContext,
                     attached_files: getAttachedFilesPromptObject(fileAttachments),
+                    runtime_environment: runtimeEnvironment,
                     recent_turn_items: recentTurnItems,
                     initial_plan_hint: initialPlanHint,
                     evidence_artifacts: evidenceArtifacts,
@@ -4013,7 +4136,8 @@ function buildLlmAgentDirectToolMessages({
     memoryContext = '',
     fileAttachments = [],
     externalToolExposure = null,
-    exactAnswerMode = false
+    exactAnswerMode = false,
+    runtimeEnvironment = null
 }) {
     const capabilityCatalog = buildAgentCapabilityCatalog();
     const recentConversation = normalizeConversationHistory(messageHistory);
@@ -4044,6 +4168,8 @@ function buildLlmAgentDirectToolMessages({
         '不要输出 JSON 决策协议，不要手写 tool_call/tool/args 包装对象；如果要执行工具，使用原生工具调用。每轮最多调用一个工具。',
         '如果缺工具、缺 API、缺文档解析、缺视频/视觉能力，先调用 tool_search；tool_search 返回的 mcp__... 或 external__... 在下一轮会变成可直接调用的原生工具。',
         '工具失败、证据不足、字段没找到时，要根据 latest_failed_observation、recovery_hint 和 lossless_tool_observations 改换策略，不要机械重复同一个 web_search。',
+        '运行环境协议：user payload 里的 runtime_environment 是当前这一轮的真实执行环境，来自 Platform Adapter，不属于长期记忆。生成 shell、路径、重定向、管道、环境变量和文件命令时必须先看 runtime_environment.family/default_shell/path_style/command_guidance；不要默认自己在 Linux、Windows 或 macOS。',
+        'GitHub Pages 路由：任务涉及 GitHub Pages、gh-pages、github.io、部署验收、Pages 404 或发布目录时，优先直接调用 github_pages.diagnose_publish / github_pages.verify_url；不要先用裸 exec 拼 git/curl/head 作为主要诊断路径。',
         '工具选择路由：如果任务提到附件、文件路径、DOCX/Word、PPT/PPTX、表格/CSV/XLSX、PDF/论文/报告、YouTube/视频、音频、图片、代码文件、GitHub 仓库或已知 URL，先用 tool_search 查对应 artifact/tool 类型并调用返回的专用 mcp__... 工具；web_search 只作为没有专用工具或专用工具失败后的兜底。',
         '需要用户授权时调用 request_permissions。危险写入、shell、patch、邮件发送等会由本地 Gateway 审批，不要在参数中伪造 approved=true。',
         '最终答复必须是给用户看的 Markdown。没有足够证据时不要提交猜测答案，要继续调用工具或明确 blocked。',
@@ -4063,6 +4189,7 @@ function buildLlmAgentDirectToolMessages({
                     recent_conversation: recentConversation,
                     memory_context: compactMemoryContext,
                     attached_files: getAttachedFilesPromptObject(fileAttachments),
+                    runtime_environment: runtimeEnvironment,
                     recent_turn_items: recentTurnItems,
                     lossless_tool_observations: buildLosslessToolObservationDigest(stepResults),
                     evidence_artifacts: evidenceArtifacts,
@@ -5946,6 +6073,7 @@ class HumanClawAgentRunner {
                 requestContext,
                 exactAnswerMode
             });
+            const runtimeEnvironment = buildRuntimeEnvironmentPromptObject(this.gateway?.platformAdapter);
             const useDirectToolExecutor =
                 shouldUseDirectToolExecutor(decisionSettings, requestContext) &&
                 directToolSpecs.length > 0;
@@ -5961,6 +6089,7 @@ class HumanClawAgentRunner {
                 fileAttachments,
                 externalToolExposure,
                 exactAnswerMode,
+                runtimeEnvironment,
                 toolSummary: useDirectToolExecutor
                     ? `Native direct tools exposed: ${directToolSpecs.map((tool) => tool.name).slice(0, 16).join(', ')}${directToolSpecs.length > 16 ? ', ...' : ''}.`
                     : 'Codex-like capability index only. Load detailed tool contracts with load_context; load MCP/external tools through tool_search/capability_context as mcp__server__tool or external__provider__tool direct specs. Use mcp_bridge/capability_manager for discovery, auth, install, resources, and server management.'
@@ -5985,6 +6114,7 @@ class HumanClawAgentRunner {
                     promptBudget,
                     executorMode: useDirectToolExecutor ? 'native_direct_tools' : 'json_meta_decision',
                     directTools: directToolSpecs.map((tool) => tool.name),
+                    runtimeEnvironment,
                     messages: decisionMessages
                 }
             });

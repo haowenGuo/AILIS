@@ -34,6 +34,7 @@ const { FILE_MANAGER_TOOL_ID, executeFileManagerTool } = require('./humanclaw-fi
 const { COMPUTER_TOOL_ID, HumanClawComputerTool } = require('./humanclaw-computer-tool.cjs');
 const { CODE_TOOL_ID, executeCodeTool } = require('./humanclaw-code-tool.cjs');
 const { ARTIFACT_VERIFIER_TOOL_ID, executeArtifactVerifierTool } = require('./humanclaw-artifact-verifier-tool.cjs');
+const { GITHUB_PAGES_TOOL_ID, executeGitHubPagesTool } = require('./humanclaw-github-pages-tool.cjs');
 const {
     HUMANCLAW_VISION_TOOL_DEFINITION,
     VISION_TOOL_ID,
@@ -167,6 +168,16 @@ const HUMANCLAW_LOCAL_TOOL_DEFINITIONS = Object.freeze([
         label: 'artifact_verifier',
         description: 'Read-only structured artifact verification for JSON/JSONL/CSV/TSV/YAML/TOML/Markdown/log/text files.',
         sectionId: 'artifact-verification',
+        route: 'humanclaw-local',
+        materialized: true,
+        status: 'available',
+        needsApprovalActions: Object.freeze([])
+    }),
+    Object.freeze({
+        id: GITHUB_PAGES_TOOL_ID,
+        label: 'github_pages',
+        description: 'Read-only GitHub Pages and gh-pages deployment diagnostics with blockers and verification evidence.',
+        sectionId: 'github-pages',
         route: 'humanclaw-local',
         materialized: true,
         status: 'available',
@@ -1957,6 +1968,13 @@ class HumanClawGateway extends EventEmitter {
         }
         if (toolId === ARTIFACT_VERIFIER_TOOL_ID) {
             return await executeArtifactVerifierTool(args, context, {
+                workspaceDir,
+                workspaceRoot: this.workspaceRoot,
+                projectRoot: this.projectRoot
+            });
+        }
+        if (toolId === GITHUB_PAGES_TOOL_ID) {
+            return await executeGitHubPagesTool(args, context, {
                 workspaceDir,
                 workspaceRoot: this.workspaceRoot,
                 projectRoot: this.projectRoot

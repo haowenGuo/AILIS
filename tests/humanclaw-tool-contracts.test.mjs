@@ -20,6 +20,7 @@ test('HumanClaw tool contracts expose versioned schemas and validate common fail
     assert.ok(contracts.some((contract) => contract.id === 'capability_manager' && contract.version >= 1));
     assert.ok(contracts.some((contract) => contract.id === 'self_debugger' && contract.version >= 1));
     assert.ok(contracts.some((contract) => contract.id === 'self_evolution' && contract.version >= 1));
+    assert.ok(contracts.some((contract) => contract.id === 'github_pages' && contract.risk === 'low'));
     assert.ok(contracts.some((contract) => contract.id === 'computer' && contract.risk === 'high'));
     assert.ok(contracts.every((contract) => contract.returns?.properties?.content));
     assert.ok(contracts.every((contract) => contract.errors?.includes('invalid_tool_args')));
@@ -99,6 +100,13 @@ test('HumanClaw tool contracts expose versioned schemas and validate common fail
         limit: 5
     });
     assert.equal(validToolSearch.ok, true);
+
+    const validGitHubPages = validateToolContract('github_pages', {
+        action: 'diagnose_publish',
+        targetPath: 'about-aigl.html',
+        skipNetwork: true
+    });
+    assert.equal(validGitHubPages.ok, true);
 
     const badToolSearch = validateToolContract('tool_search', {});
     assert.equal(badToolSearch.ok, false);

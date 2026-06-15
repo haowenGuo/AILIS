@@ -38,6 +38,13 @@ const DEFAULT_SKILLS = Object.freeze({
         when: '代码搜索、符号、诊断、AST 重构、测试、Git、PR/CI 工作流。',
         tools: Object.freeze(['code', 'computer', 'read', 'write', 'edit', 'apply_patch', 'exec'])
     }),
+    github_pages: Object.freeze({
+        id: 'github_pages',
+        label: 'GitHub Pages Skill',
+        description: 'GitHub Pages, gh-pages, github.io, deployment verification, and publish blocker diagnostics.',
+        when: 'GitHub Pages 部署、gh-pages 分支、github.io 访问失败、Pages 404、发布验收和 GitHub 静态站点排障。',
+        tools: Object.freeze(['github_pages', 'code', 'computer', 'read', 'exec'])
+    }),
     mcp_bridge: Object.freeze({
         id: 'mcp_bridge',
         label: 'MCP Skill',
@@ -81,6 +88,7 @@ const LEGACY_SKILL_MARKERS = Object.freeze({
     computer: '电脑操作 SKILL',
     file_manager: '文件整理 SKILL',
     code: '代码 SKILL',
+    github_pages: 'GITHUB PAGES SKILL',
     mcp_bridge: 'MCP SKILL',
     tool_doctor: 'TOOL DOCTOR SKILL',
     capability_manager: 'CAPABILITY MANAGER SKILL',

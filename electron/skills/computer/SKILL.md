@@ -17,7 +17,8 @@ triggers:
 规则：
 - 优先读取和检查，再修改；修改后主动复核。
 - 写文件、删除、移动、shell/PTY、进程写入/结束等动作按 Gateway 策略审批。
-- 命令和系统控制通过 Platform Adapter 执行；当前桌面端优先 Windows，但不要把 Windows-only 假设写进任务策略。需要平台细节时先看 computer.schema 的 platform/safety。
+- 命令和系统控制通过 Platform Adapter 执行；当前系统由每轮 `runtime_environment.family/default_shell/path_style` 动态给出，不属于长期记忆。不要默认当前是 Linux、Windows 或 macOS。
+- 命令应由 Agent 自己按 `runtime_environment` 写成对应平台语义；工具层不做 shell 字符串解析改写。只有当前平台明确支持时，才使用 `head`、`tail`、`wc`、`/dev/null`、`rm -rf`、`grep`、PowerShell 管道、cmd 的 `NUL`/`cd /d`、Windows 盘符路径等平台专属片段。
 - 高风险动作必须说明原因，工具层会根据 contract 和 permission profile 决定是否继续。
 
 桌面任务工具选择：

@@ -229,6 +229,13 @@ const CODE_ACTIONS = Object.freeze([
     'ci_status'
 ]);
 
+const GITHUB_PAGES_ACTIONS = Object.freeze([
+    'schema',
+    'inspect',
+    'diagnose_publish',
+    'verify_url'
+]);
+
 const MCP_ACTIONS = Object.freeze([
     'schema',
     'list_servers',
@@ -483,6 +490,14 @@ const TOOL_EXPERIENCE = Object.freeze({
         successStyle: 'summarize_result',
         failureStyle: 'plain_explain',
         userFacingVerb: '复核产物'
+    }),
+    github_pages: makeExperienceMetadata({
+        embodiedAction: 'diagnose_deployment',
+        permissionStyle: 'silent_internal',
+        progressStyle: 'focused',
+        successStyle: 'summarize_result',
+        failureStyle: 'plain_explain',
+        userFacingVerb: '检查 GitHub Pages'
     }),
     vision_capture_context: makeExperienceMetadata({
         embodiedAction: 'look',
@@ -1345,6 +1360,35 @@ const TOOL_CONTRACTS = Object.freeze({
             maxErrors: numberSchema({ minimum: 0, maximum: 1000000 })
         })
     }),
+    github_pages: Object.freeze({
+        id: 'github_pages',
+        version: CONTRACT_VERSION,
+        mutates: false,
+        risk: 'low',
+        approval: 'never',
+        experience: TOOL_EXPERIENCE.github_pages,
+        returns: defaultReturns(),
+        errors: defaultErrors(['not_git_repo', 'github_remote_missing', 'verification_failed']),
+        schema: actionSchema(GITHUB_PAGES_ACTIONS, {
+            remote: stringSchema(),
+            owner: stringSchema(),
+            repo: stringSchema(),
+            branch: stringSchema(),
+            publishBranch: stringSchema(),
+            targetPath: stringSchema(),
+            path: stringSchema(),
+            url: stringSchema(),
+            baseUrl: stringSchema(),
+            expectedText: stringSchema(),
+            expectedStatus: numberSchema({ minimum: 100, maximum: 599 }),
+            timeoutMs: numberSchema({ minimum: 1000, maximum: 120000 }),
+            timeout: numberSchema({ minimum: 1000, maximum: 120000 }),
+            maxBytes: numberSchema({ minimum: 1024, maximum: 5 * 1024 * 1024 }),
+            skipNetwork: booleanSchema(),
+            workdir: stringSchema(),
+            cwd: stringSchema()
+        })
+    }),
     'vision.capture_context': Object.freeze({
         id: 'vision.capture_context',
         version: CONTRACT_VERSION,
@@ -1461,7 +1505,7 @@ function normalizeArgsForContract(toolId, args = {}) {
         return {};
     }
     const normalized = { ...args };
-    if (['email', 'file_manager', 'computer', 'code', 'artifact_verifier', 'mcp_bridge', 'tool_doctor', 'capability_manager', 'self_debugger', 'self_evolution', 'subagents', 'vision.capture_context'].includes(toolId)) {
+    if (['email', 'file_manager', 'computer', 'code', 'artifact_verifier', 'github_pages', 'mcp_bridge', 'tool_doctor', 'capability_manager', 'self_debugger', 'self_evolution', 'subagents', 'vision.capture_context'].includes(toolId)) {
         const fallbackAction = toolId === 'vision.capture_context'
             ? 'capture_context'
             : toolId === 'self_evolution'

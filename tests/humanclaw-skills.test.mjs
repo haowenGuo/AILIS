@@ -21,6 +21,7 @@ test('HumanClaw skills load from SKILL.md packages and reference contracted tool
     assert.ok(skills.some((skill) => skill.id === 'capability_manager'));
     assert.ok(skills.some((skill) => skill.id === 'self_debugger'));
     assert.ok(skills.some((skill) => skill.id === 'self_evolution' && skill.source === 'skill_file'));
+    assert.ok(skills.some((skill) => skill.id === 'github_pages' && skill.source === 'skill_file'));
 
     for (const skill of skills) {
         for (const toolId of skill.tools || []) {
@@ -56,4 +57,9 @@ test('HumanClaw skills load from SKILL.md packages and reference contracted tool
     assert.match(selfEvolutionContext, /analyze/);
     assert.match(selfEvolutionContext, /不把用户引导去控制面板/);
     assert.match(getToolContractPromptText('self_evolution'), /TOOL CONTRACT self_evolution@v/);
+
+    const githubPagesContext = buildHumanClawSkillContextText('github_pages');
+    assert.match(githubPagesContext, /GITHUB PAGES SKILL/);
+    assert.match(githubPagesContext, /github_pages\.diagnose_publish/);
+    assert.match(getToolContractPromptText('github_pages'), /TOOL CONTRACT github_pages@v/);
 });
