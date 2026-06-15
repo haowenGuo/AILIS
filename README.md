@@ -1,62 +1,122 @@
-# AIGL Assistant
+# AIGL Assistant / HumanClaw
 
-AIGL Assistant is a desktop embodied-agent project built around a VRM character, a local Electron runtime, speech interaction, visual understanding, memory, and a HumanClaw-style tool harness.
+<p align="center">
+  <strong>A desktop-first embodied AI assistant built around AIGL, combining a VRM character, HumanClaw task execution, conversational companionship, memory, vision, speech, and a local Electron runtime.</strong>
+</p>
 
-This repository is no longer just a browser companion demo. It keeps some avatar and frontend foundations from the earlier AIGril work, but its product direction is different: AIGL Assistant is meant to feel like a personal desktop assistant that can talk, see context when permitted, remember preferences, and help with real tasks through a stable agent runtime.
+<p align="center">
+  <a href="README.md">English</a> ·
+  <a href="README.zh-CN.md">简体中文</a> ·
+  <a href="README.ja.md">日本語</a>
+</p>
 
-## Product Direction
+---
 
-The project has two goals that must stay balanced:
+## What This Project Is
 
-- Humanlike experience: AIGL should feel like a character sharing the desktop with the user, not a control panel wrapped around a chatbot.
-- Reliable task execution: tools, approvals, memory, vision, and model calls should be structured enough to support complex work without making the user feel they are operating a developer console.
+AIGL Assistant is the current AIGRIL mainline. It is no longer just a browser avatar or a lightweight desktop pet. The project is moving toward a personal embodied-agent system: AIGL appears as a desktop character, talks with the user, remembers long-term context, understands visual context when permitted, and can execute real tasks through the HumanClaw runtime.
 
-In short, the bottom layer should be engineering-stable like Codex or Claude Code, while the top layer should feel like a warm desktop character.
+The product target is deliberately two-layered:
 
-## What Makes This Different From AIGril
+- The surface should feel like AIGL is sharing the desktop with the user.
+- The bottom layer should be stable like a local agent harness, with tools, approvals, audit logs, memory, recovery, and tests.
 
-The older AIGril project focused mainly on a web/desktop-pet companion experience. AIGL Assistant is moving toward a fuller local assistant architecture:
+In short: AIGL Assistant is trying to make task execution feel less like operating a developer console and more like working with a capable character.
 
-- Desktop-first Electron runtime instead of a public web demo first
-- HumanClaw agent loop for planning, tool calls, approvals, event flow, and recovery
-- Vision tools for chat-window, full-screen, and region screenshots as model context
-- Multiple speech routes, including low-latency Kokoro, higher-quality CosyVoice, and ElevenLabs
-- Local ASR direction with automatic voice activity detection
-- Memory blocks, project memory, relationship state, and lightweight reflection
-- Humanlike experience evals for persona, tone, memory use, emotion response, and low tool-feel
+## Core Systems
 
-## Current Capabilities
+| System | Role |
+| --- | --- |
+| Embodied desktop shell | Electron windows for the VRM pet, chat panel, control panel, and Agent Analysis Lab. |
+| AIGL character runtime | VRM rendering, VRMA motions, expressions, dialogue bubbles, lip sync, speech state, and stylized rendering controls. |
+| HumanClaw Gateway | Local HTTP/SSE gateway on `127.0.0.1:19777` for health, tool listing, tool calls, audit logs, events, and agent runs. |
+| HumanClaw Agent Runner | LLM-centered agent loop for conversation/task routing, planning, tool calls, approval recovery, interruption, and final responses. |
+| Tool layer | OpenClaw-aligned tools plus HumanClaw local tools for file, code, computer, email, vision, MCP, tool search, capability management, and artifact verification. |
+| Persona memory runtime | Core memory blocks, project/user/relationship state, affinity, secret index, event memory, reflection direction, and control-panel inspection. |
+| Vision layer | Permission-aware screenshot/context capture for screen, active window, chat window, pet window, control panel, and selected regions. |
+| Speech layer | Local ASR worker plus multiple TTS paths, including browser speech, Kokoro, CosyVoice3, and ElevenLabs-style cloud speech. |
+| Control panel | Local settings for LLM providers, model presets, speech, ASR, email profiles, computer-control mode, state directory, memory, and gateway status. |
+| Evaluation and validation | Humanlike evals, long-term companionship scenarios, HumanClaw tool tests, gateway smokes, SWE-bench/GAIA/OSWorld-oriented scripts. |
 
-- VRM desktop character with expressions, actions, lip sync, and dialogue bubble rendering
-- Electron desktop shell with pet window, chat window, control panel, and local settings
-- Chat flow backed by an OpenAI-compatible model provider
-- Screenshot-based visual understanding through a permission-aware vision layer
-- HumanClaw tool layer for file, code, computer, email, MCP, and vision skills
-- Durable pending approval and local state storage
-- Speech output through desktop TTS workers and cloud TTS providers
-- Local speech recognition worker and recognition-mode controls
-- AIGL humanlike eval dataset, judge rules, runners, and long-term companionship cases
+## Design Direction
 
-## Architecture
+AIGL Assistant is not "a chatbot with tool buttons" and not "an agent platform with a cute skin." The architecture aims for a clear separation:
 
 ```text
-electron/   Desktop main process, HumanClaw runtime, TTS/ASR workers, tool implementations
-src/        Renderer apps for chat, pet avatar, control panel, speech, vision UI, and bubbles
-backend/    Optional FastAPI backend, API schemas, education/Vivix services, and static assets
-Resources/  VRM model, VRMA motions, and reference voice assets
-evals/      AIGL humanlike experience scenarios and dataset plans
-tests/      Node test suites for HumanClaw, memory, tools, evals, provider, and runtime behavior
-docs/       Architecture notes, OpenClaw research, HumanClaw design, memory, vision, and eval docs
-scripts/    Validation, smoke tests, eval runners, generation tools, and build helpers
+LLM understands intent.
+Memory preserves continuity.
+Harness executes reliably.
+Tools observe or act.
+Persona renderer turns runtime events into AIGL-like expression.
+Eval catches drift in reliability, safety, and humanlike experience.
 ```
 
-Core design documents:
+Important design principles:
+
+- Keep the interface low-tool-feel: users should not see raw `tool_call`, approval ids, or noisy observations.
+- Keep execution explicit and auditable: file writes, shell execution, email actions, external effects, and privacy-sensitive vision go through policy and approval gates.
+- Treat memory as persona continuity, not a keyword trigger system.
+- Let the model decide semantics with structured context, while code hardens schemas, paths, approvals, redaction, timeouts, event replay, and persistence.
+- Preserve the desktop character layer instead of collapsing everything into a control panel.
+
+## Task Execution
+
+HumanClaw exposes a local gateway and an agent loop rather than making the renderer call tools directly.
+
+Runtime path:
+
+```text
+Chat / voice / attachment
+  -> HumanClaw Desktop Chat Service
+  -> window.aigrilDesktop.gateway.runAgent()
+  -> HumanClaw Agent Runner
+  -> HumanClaw Gateway
+  -> local tools / OpenClaw-style tools / MCP tools
+  -> structured events
+  -> persona progress and final response
+```
+
+The current tool surface includes:
+
+- Core tools such as `read`, `write`, `edit`, `apply_patch`, `exec`, `update_plan`, `tool_search`, and permission requests.
+- Local HumanClaw tools for email, file management, computer/runtime state, code inspection, artifact verification, and vision capture.
+- MCP bridge and capability manager paths for discovering and exposing external tools.
+- Audit logs and SSE events for runs, tool starts/finishes, approvals, failures, and analysis.
+
+## Desktop Experience
+
+The packaged product is `HumanClaw`.
+
+- Frameless always-on-top VRM pet window.
+- Separate chat window for conversation and task requests.
+- Control panel for providers, voice, memory, email, gateway status, and permissions.
+- Agent Analysis Lab for inspecting and continuing agent runs.
+- Local state directory under `.humanclaw-state` by default.
+- Windows NSIS and portable packages are built through Electron Builder.
+
+## Repository Map
+
+```text
+electron/   Main process, HumanClaw gateway, agent runner, tools, memory, TTS/ASR workers
+src/        Renderer apps for pet, chat, control panel, vision UI, speech, bubbles, character runtime
+backend/    Optional FastAPI backend, schemas, legacy services, education/Vivix/static assets
+Resources/  AIGL VRM model, VRMA motions, motion intake assets, reference voice assets
+docs/       Architecture, memory, gateway, OpenClaw alignment, eval, benchmark, and tooling notes
+tests/      Node tests for HumanClaw runtime, tools, memory, gateway, evals, provider, and UI helpers
+scripts/    Smoke tests, validation, benchmark runners, eval generation, build helpers
+evals/      AIGL humanlike and engineering evaluation fixtures
+release/    Desktop release metadata and packaged artifacts when present
+```
+
+Core design docs:
 
 - [Embodied Agent Architecture](docs/aigl-embodied-agent-architecture.md)
 - [Memory Architecture V2](docs/aigl-memory-architecture-v2.md)
+- [HumanClaw Gateway v0](docs/humanclaw-gateway-v0.md)
+- [HumanClaw Agent Runner v0](docs/humanclaw-agent-runner-v0.md)
+- [Tool Ecosystem Driver Guide](docs/tool-ecosystem-driver-guide.md)
 - [Humanlike Eval](docs/aigl-humanlike-eval.md)
 - [OpenClaw From Zero](docs/openclaw-from-zero.md)
-- [Tool Ecosystem Driver Guide](docs/tool-ecosystem-driver-guide.md)
 
 ## Local Development
 
@@ -78,10 +138,10 @@ Build and start the desktop app:
 pnpm desktop:start
 ```
 
-Package the Windows desktop app:
+Package the Windows app:
 
 ```bash
-pnpm desktop:package
+pnpm desktop:package:win
 ```
 
 Optional backend setup:
@@ -96,29 +156,30 @@ python -m uvicorn backend.main:app --reload
 
 ## Configuration
 
-Most desktop settings are managed through the Electron control panel and local desktop state. The project supports OpenAI-compatible providers, including custom base URLs, model names, request timeouts, and local/private credentials.
+Most desktop settings are controlled from the HumanClaw control panel. The app supports OpenAI-compatible providers and provider presets, including custom base URLs, model names, request timeouts, and local credentials.
 
-Useful environment examples live in:
-
-- `backend/.env.example`
-- `requirements-desktop-asr.txt`
-- `package.json`
-
-Local caches, downloaded models, runtime logs, eval outputs, and HumanClaw state are intentionally ignored by Git. They are machine-local data, not source assets.
+Local-only data such as API keys, email credentials, memory state, downloaded speech models, runtime logs, eval outputs, and temporary run state should stay out of Git.
 
 ## Validation
 
-Common checks:
+Common focused checks:
 
 ```bash
-pnpm test:humanclaw-memory
-pnpm test:aigl-humanlike-eval
+pnpm test:humanclaw-gateway
+pnpm test:humanclaw-agent
 pnpm test:humanclaw-runtime
 pnpm test:humanclaw-tool-contracts
+pnpm test:humanclaw-memory
+pnpm test:aigl-humanlike-eval
+```
+
+Broader gateway validation:
+
+```bash
 pnpm humanclaw:validate-gateway
 ```
 
-Humanlike eval commands:
+Humanlike evals:
 
 ```bash
 pnpm eval:aigl-humanlike:validate
@@ -127,12 +188,12 @@ pnpm eval:aigl-humanlike:report
 pnpm eval:aigl-humanlike:long-term:validate
 ```
 
-## Privacy Notes
+## Privacy and Safety
 
-AIGL Assistant is designed as a personal desktop assistant, so local secrets and private memory can exist on the user's own machine. The codebase should still avoid committing real API keys, runtime transcripts, logs, local model caches, generated eval results, or downloaded model weights.
+AIGL Assistant is a personal desktop assistant. It can hold local memory, credentials, paths, and private project context on the user's own machine, so the codebase treats those as local runtime data rather than source assets.
 
-Vision is treated as a perception layer, not a screen-control agent. Screenshots are intended to help the model understand context and answer better, not to silently click, type, purchase, send, or submit actions.
+Safety defaults include workspace path guards, secret redaction, approval gates for high-risk actions, dry-run behavior for external side effects unless explicitly approved, and audit logging for tool calls. Vision is a perception layer: screenshots help AIGL understand context, but they do not imply permission to click, type, purchase, send, or submit anything.
 
 ## Status
 
-This project is in active development. The current priority is to keep the existing stable runtime intact while improving the presentation layer, memory quality, speech/vision experience, tool contracts, and eval coverage.
+The current mainline is active development around HumanClaw `1.0.4`. The priority is to keep the working desktop runtime stable while improving gateway startup reliability, task execution, memory quality, speech/vision experience, tool contracts, and evaluation coverage.
