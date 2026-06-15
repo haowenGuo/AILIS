@@ -221,6 +221,99 @@ function getNativeSpeechSettings(text) {
     };
 }
 
+function normalizeSpeechText(value) {
+    return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+function getSynthesisErrorText(payload) {
+    if (!payload || typeof payload !== 'object') {
+        return '';
+    }
+    const detail = payload.detail;
+    if (detail && typeof detail === 'object') {
+        return detail.message || JSON.stringify(detail);
+    }
+    return detail || payload.message || payload.error?.message || payload.error || '';
+}
+
+async function readSynthesisError(response) {
+    const text = await response.text().catch(() => '');
+    if (!text) {
+        return '';
+    }
+    try {
+        return getSynthesisErrorText(JSON.parse(text)) || text;
+    } catch {
+        return text;
+    }
+}
+
+async function synthesizeBackendSpeech(text) {
+    const cleanText = normalizeSpeechText(text);
+    if (!cleanText) {
+        throw new Error('TTS 输入文本不能为空');
+    }
+
+    const response = await fetch(CONFIG.BACKEND_TTS_SYNTHESIZE_API_URL, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            text: cleanText
+        })
+    });
+
+    if (!response.ok) {
+        const errorText = await readSynthesisError(response);
+        throw new Error(errorText || `TTS 合成请求失败，状态码：${response.status}`);
+    }
+
+    return response.json();
+}
+
+function normalizeSynthesisResult(result, { defaultMimeType = 'audio/wav' } = {}) {
+    if (!result || typeof result !== 'object') {
+        throw new Error('TTS 合成结果为空');
+    }
+    if (result.ok === false) {
+        throw new Error(getSynthesisErrorText(result) || 'TTS 合成失败');
+    }
+    if (typeof result.play === 'function') {
+        return {
+            play: result.play,
+            mimeType: result.mimeType || result.mime_type || defaultMimeType,
+            alignment: result.normalizedAlignment || result.normalized_alignment || result.alignment || null
+        };
+    }
+
+    const audioBase64 = result.audioBase64 || result.audio_base64 || '';
+    const audioBlob = result.audioBlob || null;
+    const hasAudioBlob = typeof Blob !== 'undefined' && audioBlob instanceof Blob;
+    if (!audioBase64 && !hasAudioBlob) {
+        throw new Error('TTS 合成结果没有可播放音频');
+    }
+
+    return {
+        audioBase64,
+        audioBlob,
+        mimeType: result.mimeType || result.mime_type || defaultMimeType,
+        alignment: result.normalizedAlignment || result.normalized_alignment || result.alignment || null
+    };
+}
+
+function candidateSupportsTTS(candidate) {
+    try {
+        return Boolean(candidate?.supportsTTS);
+    } catch {
+        return false;
+    }
+}
+
+function canCandidateSynthesize(candidate) {
+    return candidateSupportsTTS(candidate) && typeof candidate.synthesizeSpeech === 'function';
+}
+
 class ServerTTSCandidate {
     constructor() {
         this.id = 'server-tts';
@@ -229,6 +322,27 @@ class ServerTTSCandidate {
 
     get supportsTTS() {
         return true;
+    }
+
+    async synthesizeSpeech(text) {
+        const cleanText = normalizeSpeechText(text);
+        if (!cleanText) {
+            throw new Error('TTS 输入文本不能为空');
+        }
+
+        if (isDesktopRuntime() && typeof window.aigrilDesktop?.tts?.synthesize === 'function') {
+            return normalizeSynthesisResult(
+                await window.aigrilDesktop.tts.synthesize({
+                    text: cleanText
+                }),
+                { defaultMimeType: 'audio/mpeg' }
+            );
+        }
+
+        return normalizeSynthesisResult(
+            await synthesizeBackendSpeech(cleanText),
+            { defaultMimeType: 'audio/mpeg' }
+        );
     }
 
     async speak({
@@ -282,17 +396,14 @@ class LocalVitsTTSCandidate {
         return isDesktopRuntime();
     }
 
-    get supportsChunkedTTS() {
-        return this.supportsTTS;
+    async synthesizeSpeech(text) {
+        const { synthesizeLocalVitsSpeech } = await import('./local-vits-tts.js');
+        const result = await synthesizeLocalVitsSpeech(text);
+        return normalizeSynthesisResult(result);
     }
 
     async synthesizeChunk(text) {
-        const { synthesizeLocalVitsSpeech } = await import('./local-vits-tts.js');
-        const result = await synthesizeLocalVitsSpeech(text);
-        return {
-            audioBase64: result.audioBase64,
-            mimeType: result.mimeType
-        };
+        return this.synthesizeSpeech(text);
     }
 
     async speak({
@@ -311,7 +422,7 @@ class LocalVitsTTSCandidate {
         scrollToBottom();
 
         const speechText = payload?.speech_text || displayText;
-        const result = await this.synthesizeChunk(speechText);
+        const result = await this.synthesizeSpeech(speechText);
         await audioPlayer.playSpeech({
             audioBase64: result.audioBase64,
             mimeType: result.mimeType,
@@ -342,11 +453,7 @@ class CosyVoice3TTSCandidate {
         return isDesktopRuntime() && typeof window.aigrilDesktop?.tts?.synthesize === 'function';
     }
 
-    get supportsChunkedTTS() {
-        return this.supportsTTS;
-    }
-
-    async synthesizeChunk(text) {
+    async synthesizeSpeech(text) {
         const result = await window.aigrilDesktop.tts.synthesize({
             provider: 'cosyvoice3',
             preset: 'anime_shy_soft',
@@ -354,14 +461,11 @@ class CosyVoice3TTSCandidate {
             speed: 0.92
         });
 
-        if (!result?.ok || !result.audio_base64) {
-            throw new Error(result?.error || 'CosyVoice3 本地语音合成失败');
-        }
+        return normalizeSynthesisResult(result);
+    }
 
-        return {
-            audioBase64: result.audio_base64,
-            mimeType: result.mime_type || 'audio/wav'
-        };
+    async synthesizeChunk(text) {
+        return this.synthesizeSpeech(text);
     }
 
     async speak({
@@ -380,7 +484,7 @@ class CosyVoice3TTSCandidate {
         scrollToBottom();
 
         const speechText = payload?.speech_text || displayText;
-        const result = await this.synthesizeChunk(speechText);
+        const result = await this.synthesizeSpeech(speechText);
 
         await audioPlayer.playSpeech({
             audioBase64: result.audioBase64,
@@ -412,11 +516,7 @@ class KokoroZhTTSCandidate {
         return isDesktopRuntime() && typeof window.aigrilDesktop?.tts?.synthesize === 'function';
     }
 
-    get supportsChunkedTTS() {
-        return this.supportsTTS;
-    }
-
-    async synthesizeChunk(text) {
+    async synthesizeSpeech(text) {
         const result = await window.aigrilDesktop.tts.synthesize({
             provider: 'kokoro',
             voice: 'zf_003',
@@ -425,14 +525,11 @@ class KokoroZhTTSCandidate {
             timeoutMs: 120000
         });
 
-        if (!result?.ok || !result.audio_base64) {
-            throw new Error(result?.error || 'Kokoro 本地语音合成失败');
-        }
+        return normalizeSynthesisResult(result);
+    }
 
-        return {
-            audioBase64: result.audio_base64,
-            mimeType: result.mime_type || 'audio/wav'
-        };
+    async synthesizeChunk(text) {
+        return this.synthesizeSpeech(text);
     }
 
     async speak({
@@ -451,7 +548,7 @@ class KokoroZhTTSCandidate {
         scrollToBottom();
 
         const speechText = payload?.speech_text || displayText;
-        const result = await this.synthesizeChunk(speechText);
+        const result = await this.synthesizeSpeech(speechText);
 
         await audioPlayer.playSpeech({
             audioBase64: result.audioBase64,
@@ -490,7 +587,23 @@ class NativeSpeechSynthesisCandidate {
         );
     }
 
-    async speak({
+    async synthesizeSpeech(text, context = {}) {
+        const displayText = normalizeSpeechText(text);
+        if (!displayText) {
+            throw new Error('TTS 输入文本不能为空');
+        }
+        return {
+            play: async ({ onPlaybackStart } = {}) => this.playNativeSpeech({
+                displayText,
+                vrmSystem: context.vrmSystem,
+                updateMessageContent: () => {},
+                scrollToBottom: () => {},
+                onAvatarPlaybackStart: onPlaybackStart
+            })
+        };
+    }
+
+    async playNativeSpeech({
         displayText,
         vrmSystem,
         updateMessageContent,
@@ -500,6 +613,16 @@ class NativeSpeechSynthesisCandidate {
         if (!this.supportsTTS || !displayText) {
             return false;
         }
+        if (!vrmSystem) {
+            throw new Error('浏览器原生语音缺少角色语音状态控制器');
+        }
+
+        const updateVisibleText = typeof updateMessageContent === 'function'
+            ? updateMessageContent
+            : () => {};
+        const scroll = typeof scrollToBottom === 'function'
+            ? scrollToBottom
+            : () => {};
 
         const synth = window.speechSynthesis;
         const utterance = new SpeechSynthesisUtterance(displayText);
@@ -527,8 +650,8 @@ class NativeSpeechSynthesisCandidate {
                 started = true;
                 vrmSystem.startFallbackSpeech();
                 onAvatarPlaybackStart?.();
-                updateMessageContent(displayText);
-                scrollToBottom();
+                updateVisibleText(displayText);
+                scroll();
             };
 
             utterance.onboundary = (event) => {
@@ -537,14 +660,14 @@ class NativeSpeechSynthesisCandidate {
                 }
 
                 const visibleLength = Math.min(displayText.length, event.charIndex + 1);
-                updateMessageContent(displayText.slice(0, visibleLength));
-                scrollToBottom();
+                updateVisibleText(displayText.slice(0, visibleLength));
+                scroll();
             };
 
             utterance.onend = () => {
                 vrmSystem.stopSpeaking();
-                updateMessageContent(displayText);
-                scrollToBottom();
+                updateVisibleText(displayText);
+                scroll();
                 resolve();
             };
 
@@ -568,6 +691,10 @@ class NativeSpeechSynthesisCandidate {
         return true;
     }
 
+    async speak(options) {
+        return this.playNativeSpeech(options);
+    }
+
     dispose() {
         window.speechSynthesis?.cancel?.();
     }
@@ -581,11 +708,11 @@ export class SpeechProvider {
     }
 
     get supportsTTS() {
-        return this.ttsCandidates.some((candidate) => candidate.supportsTTS);
+        return this.ttsCandidates.some((candidate) => candidateSupportsTTS(candidate));
     }
 
     get supportsChunkedTTS() {
-        return this.ttsCandidates.some((candidate) => candidate.supportsChunkedTTS);
+        return this.ttsCandidates.some((candidate) => canCandidateSynthesize(candidate));
     }
 
     get isSpeechDisabled() {
@@ -593,9 +720,15 @@ export class SpeechProvider {
     }
 
     get replyModeFallbackChain() {
-        const firstCandidate = this.ttsCandidates.find((candidate) => candidate.supportsTTS);
+        const firstCandidate = this.ttsCandidates.find((candidate) => candidateSupportsTTS(candidate));
         if (!firstCandidate) {
             return ['stream_text'];
+        }
+
+        if (this.supportsChunkedTTS) {
+            return firstCandidate.replyMode === 'server_tts'
+                ? ['stream_text', 'server_tts']
+                : ['stream_text'];
         }
 
         if (firstCandidate.replyMode === 'server_tts') {
@@ -609,7 +742,7 @@ export class SpeechProvider {
         if (this.isSpeechDisabled) {
             return 'off';
         }
-        const firstCandidate = this.ttsCandidates.find((candidate) => candidate.supportsTTS);
+        const firstCandidate = this.ttsCandidates.find((candidate) => candidateSupportsTTS(candidate));
         return firstCandidate?.id || 'text-only';
     }
 
@@ -622,18 +755,39 @@ export class SpeechProvider {
             return null;
         }
 
-        const candidate = this.ttsCandidates.find((item) => item.supportsChunkedTTS && typeof item.synthesizeChunk === 'function');
-        if (!candidate) {
+        const candidates = this.ttsCandidates.filter((candidate) => canCandidateSynthesize(candidate));
+        if (!candidates.length) {
             return null;
         }
 
         return createChunkedTtsSession({
             ...options,
-            providerId: candidate.id,
-            synthesize: async (text, context) => candidate.synthesizeChunk(text, context),
+            providerId: candidates.map((candidate) => candidate.id).join(' -> '),
+            synthesize: async (text, context) => {
+                const chunkErrors = [];
+                for (const candidate of candidates) {
+                    try {
+                        return await candidate.synthesizeSpeech(text, {
+                            ...context,
+                            vrmSystem: options.vrmSystem
+                        });
+                    } catch (error) {
+                        const entry = {
+                            provider: candidate.id,
+                            message: error?.message || String(error),
+                            context
+                        };
+                        chunkErrors.push(entry);
+                        this.lastTTSErrors.unshift(entry);
+                    }
+                }
+
+                throw new Error(chunkErrors.map((entry) => `${entry.provider}: ${entry.message}`).join('；') ||
+                    '所有 TTS candidate 都无法合成当前语音片段');
+            },
             onError: (error, context) => {
                 this.lastTTSErrors.unshift({
-                    provider: candidate.id,
+                    provider: 'chunked-tts',
                     message: error?.message || String(error),
                     context
                 });
@@ -646,7 +800,7 @@ export class SpeechProvider {
         this.lastTTSErrors = [];
 
         for (const candidate of this.ttsCandidates) {
-            if (!candidate.supportsTTS) {
+            if (!candidateSupportsTTS(candidate)) {
                 continue;
             }
 

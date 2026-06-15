@@ -168,7 +168,7 @@ export class ChunkedTtsSession {
         if (this.cancelled) {
             return;
         }
-        if (!result?.audioBase64 && !result?.audioBlob) {
+        if (!result?.audioBase64 && !result?.audioBlob && typeof result?.play !== 'function') {
             this.playbackQueue.skip(request.sequence);
             return;
         }
@@ -177,7 +177,9 @@ export class ChunkedTtsSession {
             text: request.text,
             audioBase64: result.audioBase64,
             audioBlob: result.audioBlob,
-            mimeType: result.mimeType || result.mime_type || 'audio/wav'
+            mimeType: result.mimeType || result.mime_type || 'audio/wav',
+            alignment: result.alignment || result.normalizedAlignment || result.normalized_alignment || null,
+            play: typeof result.play === 'function' ? result.play : null
         });
     }
 

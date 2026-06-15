@@ -241,6 +241,7 @@ export class ChatTTSSystem {
         let avatarSpeechStarted = false;
         const session = this.speechProvider.createChunkedSession({
             audioPlayer: this.audioPlayer,
+            vrmSystem: this.vrmSystem,
             onPlaybackStart: (item) => {
                 if (avatarSpeechStarted) {
                     return;

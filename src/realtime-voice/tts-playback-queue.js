@@ -103,19 +103,28 @@ export class TtsPlaybackQueue {
             this.items.delete(this.nextSequence);
             this.playing = true;
             try {
-                await this.audioPlayer.playSpeech({
-                    audioBase64: item.audioBase64,
-                    audioBlob: item.audioBlob,
-                    mimeType: item.mimeType || 'audio/wav',
-                    displayText: item.text,
-                    alignment: null,
-                    onPlaybackStart: () => {
-                        if (!this.started) {
-                            this.started = true;
-                            this.onPlaybackStart?.(item);
-                        }
+                const handlePlaybackStart = () => {
+                    if (!this.started) {
+                        this.started = true;
+                        this.onPlaybackStart?.(item);
                     }
-                });
+                };
+                if (typeof item.play === 'function') {
+                    await item.play({
+                        displayText: item.text,
+                        text: item.text,
+                        onPlaybackStart: handlePlaybackStart
+                    });
+                } else {
+                    await this.audioPlayer.playSpeech({
+                        audioBase64: item.audioBase64,
+                        audioBlob: item.audioBlob,
+                        mimeType: item.mimeType || 'audio/wav',
+                        displayText: item.text,
+                        alignment: item.alignment || null,
+                        onPlaybackStart: handlePlaybackStart
+                    });
+                }
             } catch (error) {
                 this.onError?.(error, { phase: 'playback', item });
             } finally {

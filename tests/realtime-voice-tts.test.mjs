@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { SpeechProvider } from '../src/speech-provider.js';
 import { createChunkedTtsSession } from '../src/realtime-voice/chunked-tts-session.js';
 import { createTtsTextChunker } from '../src/realtime-voice/tts-text-chunker.js';
 
@@ -99,4 +100,134 @@ test('Chunked TTS session cancels queued playback', async () => {
 
     assert.equal(stopCount, 1);
     assert.equal(session.hasPlaybackStarted(), false);
+});
+
+test('Chunked TTS session can play provider-managed chunks without audio blobs', async () => {
+    const played = [];
+    const session = createChunkedTtsSession({
+        flushDelayMs: 5000,
+        synthesize: async (text) => ({
+            play: async ({ displayText, onPlaybackStart }) => {
+                onPlaybackStart?.();
+                played.push(displayText);
+            }
+        }),
+        audioPlayer: {
+            async playSpeech() {
+                throw new Error('audio player should not be used for provider-managed playback');
+            },
+            async stop() {}
+        }
+    });
+
+    session.appendText('第一句直接由 provider 播放。第二句也一样。');
+    session.finish();
+    await session.waitUntilDone();
+
+    assert.deepEqual(played, ['第一句直接由 provider 播放。', '第二句也一样。']);
+    assert.equal(session.hasPlaybackStarted(), true);
+});
+
+test('SpeechProvider wraps any synthesizable TTS candidate as chunked TTS', async () => {
+    const synthCalls = [];
+    const played = [];
+    const provider = new SpeechProvider({
+        mode: 'server',
+        ttsCandidates: [
+            {
+                id: 'generic-api-tts',
+                replyMode: 'server_tts',
+                get supportsTTS() {
+                    return true;
+                },
+                async synthesizeSpeech(text) {
+                    synthCalls.push(text);
+                    return {
+                        audioBase64: Buffer.from(`audio:${text}`).toString('base64'),
+                        mimeType: 'audio/wav'
+                    };
+                },
+                async speak() {
+                    return false;
+                }
+            }
+        ]
+    });
+
+    assert.equal(provider.supportsChunkedTTS, true);
+    assert.deepEqual(provider.replyModeFallbackChain, ['stream_text', 'server_tts']);
+
+    const session = provider.createChunkedSession({
+        flushDelayMs: 5000,
+        audioPlayer: {
+            async playSpeech({ displayText, onPlaybackStart }) {
+                onPlaybackStart?.();
+                played.push(displayText);
+            },
+            async stop() {}
+        }
+    });
+
+    session.appendText('API 第一段先播。API 第二段继续播。');
+    session.finish();
+    await session.waitUntilDone();
+
+    assert.deepEqual(synthCalls, ['API 第一段先播。', 'API 第二段继续播。']);
+    assert.deepEqual(played, synthCalls);
+});
+
+test('SpeechProvider chunk synthesis falls back across candidate chain', async () => {
+    const played = [];
+    const provider = new SpeechProvider({
+        mode: 'local',
+        ttsCandidates: [
+            {
+                id: 'broken-tts',
+                replyMode: 'stream_text',
+                get supportsTTS() {
+                    return true;
+                },
+                async synthesizeSpeech() {
+                    throw new Error('boom');
+                },
+                async speak() {
+                    return false;
+                }
+            },
+            {
+                id: 'fallback-tts',
+                replyMode: 'stream_text',
+                get supportsTTS() {
+                    return true;
+                },
+                async synthesizeSpeech(text) {
+                    return {
+                        audioBase64: Buffer.from(text).toString('base64'),
+                        mimeType: 'audio/wav'
+                    };
+                },
+                async speak() {
+                    return false;
+                }
+            }
+        ]
+    });
+
+    const session = provider.createChunkedSession({
+        flushDelayMs: 5000,
+        audioPlayer: {
+            async playSpeech({ displayText, onPlaybackStart }) {
+                onPlaybackStart?.();
+                played.push(displayText);
+            },
+            async stop() {}
+        }
+    });
+
+    session.appendText('主 TTS 坏了也应该播。');
+    session.finish();
+    await session.waitUntilDone();
+
+    assert.deepEqual(played, ['主 TTS 坏了也应该播。']);
+    assert.match(provider.getLastTTSFailureMessage(), /boom/);
 });
