@@ -31,9 +31,9 @@ In short: AIGL Assistant is trying to make task execution feel less like operati
 ## Public Showcase
 
 - Project showcase and downloads: [https://haowenGuo.github.io/AIGril/about-aigl.html](https://haowenGuo.github.io/AIGril/about-aigl.html)
-- Windows current mainline: [HumanClaw Setup 1.0.4](https://github.com/haowenGuo/AIGL-Assistant/releases/download/v1.0.4/HumanClaw-Setup-1.0.4-win-x64.exe) or [HumanClaw Portable 1.0.4](https://github.com/haowenGuo/AIGL-Assistant/releases/download/v1.0.4/HumanClaw-Portable-1.0.4-win-x64.exe).
-- Linux compatible packages: [AppImage](https://github.com/haowenGuo/AIGril/releases/download/v1.0.3/AIGril-1.0.3-linux-x86_64.AppImage), [Debian .deb](https://github.com/haowenGuo/AIGril/releases/download/v1.0.3/AIGril-1.0.3-linux-amd64.deb), or [tar.gz](https://github.com/haowenGuo/AIGril/releases/download/v1.0.3/AIGril-1.0.3-linux-x64.tar.gz).
-- Note: HumanClaw `v1.0.4` currently publishes Windows assets; the Linux packages are from the earlier AIGril `v1.0.3` release.
+- Windows public package: [AIGril Setup 1.0.3](https://github.com/haowenGuo/AIGril/releases/download/v1.0.3/AIGril-Setup-1.0.3-win-x64.exe) or [AIGril Portable 1.0.3](https://github.com/haowenGuo/AIGril/releases/download/v1.0.3/AIGril-Portable-1.0.3-win-x64.exe).
+- Linux public packages: [AppImage](https://github.com/haowenGuo/AIGril/releases/download/v1.0.3/AIGril-1.0.3-linux-x86_64.AppImage), [Debian .deb](https://github.com/haowenGuo/AIGril/releases/download/v1.0.3/AIGril-1.0.3-linux-amd64.deb), or [tar.gz](https://github.com/haowenGuo/AIGril/releases/download/v1.0.3/AIGril-1.0.3-linux-x64.tar.gz).
+- Note: HumanClaw `v1.0.4` is the private current mainline; public downloads currently use the AIGril `v1.0.3` release until public HumanClaw assets are published.
 
 ## Core Systems
 
