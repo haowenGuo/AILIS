@@ -6,6 +6,12 @@ import {
     splitChatAttachments
 } from './chat-attachments.js';
 import { setMarkdownContent, setPlainTextContent } from './markdown-renderer.js';
+import {
+    getAsrLatencyPreset,
+    isFastAsrMode,
+    isVadRecognitionMode,
+    normalizeAsrRecognitionMode
+} from './realtime-voice/asr-latency-presets.js';
 
 function getMessageClassName(role) {
     if (role === 'user') {
@@ -53,6 +59,7 @@ window.addEventListener('DOMContentLoaded', () => {
     let currentRecognitionMode = window.aigrilDesktop?.preferences?.recognitionMode || 'auto-vad';
     let currentPreferredMicDeviceId = window.aigrilDesktop?.preferences?.preferredMicDeviceId || '';
     let recorderController = null;
+    let activeAsrPreset = null;
     let recordingTimeoutId = 0;
     let levelPollingId = 0;
     let continuousRestartId = 0;
@@ -82,6 +89,9 @@ window.addEventListener('DOMContentLoaded', () => {
         }
         if (getRecognitionMode() === 'continuous') {
             return '自动 ASR 已开启，等待你说话...';
+        }
+        if (getRecognitionMode() === 'fast-vad') {
+            return '快速 ASR 已就绪';
         }
         return '已连接桌宠';
     }
@@ -116,12 +126,12 @@ window.addEventListener('DOMContentLoaded', () => {
                 voiceBtnEl.dataset.state = 'pause';
                 setIconButtonLabel(voiceBtnEl, '暂停自动听');
             } else if (isRecording) {
-                const isAutoVad = getRecognitionMode() === 'auto-vad';
-                voiceBtnEl.dataset.state = isAutoVad ? 'cancel' : 'stop';
-                setIconButtonLabel(voiceBtnEl, isAutoVad ? '取消语音输入' : '停止录音');
+                const isVadMode = isVadRecognitionMode(getRecognitionMode());
+                voiceBtnEl.dataset.state = isVadMode ? 'cancel' : 'stop';
+                setIconButtonLabel(voiceBtnEl, isVadMode ? '取消语音输入' : '停止录音');
             } else {
                 voiceBtnEl.dataset.state = 'mic';
-                setIconButtonLabel(voiceBtnEl, getRecognitionMode() === 'auto-vad' ? '自动听' : '语音输入');
+                setIconButtonLabel(voiceBtnEl, isVadRecognitionMode(getRecognitionMode()) ? '自动听' : '语音输入');
             }
         }
 
@@ -646,13 +656,7 @@ window.addEventListener('DOMContentLoaded', () => {
     }
 
     function getRecognitionMode() {
-        if (currentRecognitionMode === 'manual') {
-            return 'manual';
-        }
-        if (currentRecognitionMode === 'continuous') {
-            return 'continuous';
-        }
-        return 'auto-vad';
+        return normalizeAsrRecognitionMode(currentRecognitionMode);
     }
 
     function canStartContinuousAsr() {
@@ -751,18 +755,24 @@ window.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
-        const autoVadMode = getRecognitionMode() === 'auto-vad' || getRecognitionMode() === 'continuous';
+        const recognitionMode = getRecognitionMode();
+        const asrPreset = getAsrLatencyPreset(recognitionMode, CONFIG);
+        activeAsrPreset = asrPreset;
+        const autoVadMode = asrPreset.autoVad;
         activeContinuousRecording = Boolean(continuous);
         speechStatusText = '正在请求麦克风权限...';
         updateComposerState();
 
         try {
             recorderController = await speechRecognition.createRecorder({
-                preferredDeviceId: currentPreferredMicDeviceId
+                preferredDeviceId: currentPreferredMicDeviceId,
+                timesliceMs: asrPreset.recorderTimesliceMs
             });
             isRecording = true;
             speechStatusText = continuous
                 ? '自动 ASR 监听中...'
+                : isFastAsrMode(recognitionMode)
+                ? '快速 ASR：我在听，直接说...'
                 : autoVadMode
                 ? '我在听，直接开口就好...'
                 : '正在听你说话...';
@@ -777,8 +787,8 @@ window.addEventListener('DOMContentLoaded', () => {
             clearLevelPolling();
 
             const listenStartedAt = Date.now();
-            const speechLevel = Math.max(CONFIG.ASR_CONTINUOUS_SPEECH_LEVEL, CONFIG.ASR_MIN_INPUT_LEVEL * 1.6);
-            const silenceLevel = CONFIG.ASR_MIN_INPUT_LEVEL;
+            const speechLevel = asrPreset.speechLevel;
+            const silenceLevel = asrPreset.silenceLevel;
             let speechStarted = false;
             let speechStartAt = 0;
             let lastVoiceAt = 0;
@@ -806,7 +816,7 @@ window.addEventListener('DOMContentLoaded', () => {
                         ? voiceActivity.voiceLike ||
                             (
                                 currentLevel >= speechLevel * 1.35 &&
-                                voiceActivity.voiceScore >= CONFIG.ASR_CONTINUOUS_VOICE_SCORE - 0.08 &&
+                                voiceActivity.voiceScore >= asrPreset.voiceScore - 0.08 &&
                                 voiceActivity.highRatio <= 0.48
                             )
                         : currentLevel >= speechLevel;
@@ -814,7 +824,7 @@ window.addEventListener('DOMContentLoaded', () => {
                     if (!speechStarted) {
                         if (voiceLike) {
                             voicedFrameCount += 1;
-                            if (voicedFrameCount >= CONFIG.ASR_CONTINUOUS_VOICE_FRAMES) {
+                            if (voicedFrameCount >= asrPreset.voiceFrames) {
                                 speechStarted = true;
                                 speechStartAt = now;
                                 lastVoiceAt = now;
@@ -829,7 +839,7 @@ window.addEventListener('DOMContentLoaded', () => {
                                 : (continuous ? '自动 ASR 监听中...' : '我在听，直接开口就好...');
                         }
 
-                        if (!speechStarted && now - listenStartedAt >= CONFIG.ASR_CONTINUOUS_IDLE_MS) {
+                        if (!speechStarted && now - listenStartedAt >= asrPreset.idleMs) {
                             if (!continuous) {
                                 setTransientStatus('这次没有听到你说话');
                             }
@@ -853,8 +863,8 @@ window.addEventListener('DOMContentLoaded', () => {
                     const speechDurationMs = now - speechStartAt;
                     const silenceDurationMs = now - lastVoiceAt;
                     if (
-                        speechDurationMs >= CONFIG.ASR_CONTINUOUS_MIN_SPEECH_MS &&
-                        silenceDurationMs >= CONFIG.ASR_CONTINUOUS_SILENCE_MS
+                        speechDurationMs >= asrPreset.minSpeechMs &&
+                        silenceDurationMs >= asrPreset.silenceMs
                     ) {
                         speechStatusText = '收到，我来识别...';
                         updateComposerState();
@@ -862,7 +872,7 @@ window.addEventListener('DOMContentLoaded', () => {
                         return;
                     }
 
-                    speechStatusText = silenceDurationMs >= 420
+                    speechStatusText = silenceDurationMs >= asrPreset.pauseHintMs
                         ? '检测到停顿，马上收尾...'
                         : '正在听你说...';
                     updateComposerState();
@@ -877,15 +887,16 @@ window.addEventListener('DOMContentLoaded', () => {
                     speechStatusText = '正在听你说话... 目前几乎没有收到声音';
                 }
                 updateComposerState();
-            }, 120);
+            }, asrPreset.levelPollingMs);
 
             recordingTimeoutId = window.setTimeout(() => {
                 void stopVoiceInput({ cancel: autoVadMode && !speechStarted });
-            }, CONFIG.ASR_MAX_RECORD_MS);
+            }, asrPreset.maxRecordMs);
         } catch (error) {
             console.error('启动本地语音识别失败：', error);
             setTransientStatus(`语音识别失败：${error.message || '无法打开麦克风'}`);
             activeContinuousRecording = false;
+            activeAsrPreset = null;
             syncContinuousAsr(3000);
         }
     }
@@ -896,8 +907,10 @@ window.addEventListener('DOMContentLoaded', () => {
         }
 
         const activeRecorder = recorderController;
+        const asrPreset = activeAsrPreset || getAsrLatencyPreset(getRecognitionMode(), CONFIG);
         const wasContinuousRecording = activeContinuousRecording;
         recorderController = null;
+        activeAsrPreset = null;
         activeContinuousRecording = false;
         clearRecordingTimeout();
         clearLevelPolling();
@@ -905,7 +918,9 @@ window.addEventListener('DOMContentLoaded', () => {
         isTranscribing = !cancel;
 
         if (!cancel) {
-            speechStatusText = '正在本地识别语音，首次加载会稍慢...';
+            speechStatusText = asrPreset.asrPreset === 'fast'
+                ? '快速 ASR 正在识别...'
+                : '正在本地识别语音，首次加载会稍慢...';
         } else {
             speechStatusText = '';
         }
@@ -921,8 +936,15 @@ window.addEventListener('DOMContentLoaded', () => {
                 return;
             }
 
-            const result = await speechRecognition.transcribeAudioBlob(audioBlob);
+            const result = await speechRecognition.transcribeAudioBlob(audioBlob, {
+                preset: asrPreset.asrPreset
+            });
             const transcript = String(result?.text || '').trim();
+            console.info('[ASR] transcription finished', {
+                preset: result?.preset || asrPreset.asrPreset,
+                durationSeconds: result?.duration_seconds,
+                timing: result?.timing || result?.client_timing || null
+            });
 
             if (!transcript || isLikelyTranscriptNoise(transcript, result)) {
                 if (!wasContinuousRecording) {
@@ -961,7 +983,7 @@ window.addEventListener('DOMContentLoaded', () => {
             return;
         }
         if (isRecording) {
-            await stopVoiceInput({ cancel: getRecognitionMode() === 'auto-vad' });
+            await stopVoiceInput({ cancel: isVadRecognitionMode(getRecognitionMode()) });
             return;
         }
 

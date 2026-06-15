@@ -35,6 +35,37 @@ function normalizeBinaryPayload(payload) {
     throw new Error('无法解析语音识别音频数据');
 }
 
+function isPlainTranscribePayload(payload) {
+    return Boolean(
+        payload &&
+        typeof payload === 'object' &&
+        !Buffer.isBuffer(payload) &&
+        !(payload instanceof Uint8Array) &&
+        !(payload instanceof ArrayBuffer) &&
+        !ArrayBuffer.isView(payload) &&
+        !Array.isArray(payload)
+    );
+}
+
+function normalizeAsrPreset(value) {
+    const normalizedValue = String(value || '').trim().toLowerCase();
+    if (['fast', 'low-latency', 'low_latency', 'realtime'].includes(normalizedValue)) {
+        return 'fast';
+    }
+    return 'balanced';
+}
+
+function normalizeTranscribePayload(payload) {
+    const audioBytes = normalizeBinaryPayload(payload);
+    const rawPreset = isPlainTranscribePayload(payload)
+        ? payload.preset || payload.options?.preset || payload.asrPreset
+        : '';
+    return {
+        audioBytes,
+        preset: normalizeAsrPreset(rawPreset)
+    };
+}
+
 class DesktopASRManager {
     constructor({ app }) {
         this.app = app;
@@ -122,6 +153,8 @@ class DesktopASRManager {
                     AIGRIL_ASR_MODEL_ENDPOINT: process.env.AIGRIL_ASR_MODEL_ENDPOINT || 'https://hf-mirror.com',
                     AIGRIL_ASR_LANGUAGE: process.env.AIGRIL_ASR_LANGUAGE || 'zh',
                     AIGRIL_ASR_TASK: process.env.AIGRIL_ASR_TASK || 'transcribe',
+                    AIGRIL_ASR_CHUNK_LENGTH_S: process.env.AIGRIL_ASR_CHUNK_LENGTH_S || '15',
+                    AIGRIL_ASR_BATCH_SIZE: process.env.AIGRIL_ASR_BATCH_SIZE || '4',
                     AIGRIL_ASR_CACHE_DIR: this.getCacheDir()
                 }
             }
@@ -231,14 +264,23 @@ class DesktopASRManager {
     }
 
     async transcribeAudioBytes(payload) {
-        const audioBytes = normalizeBinaryPayload(payload);
+        const { audioBytes, preset } = normalizeTranscribePayload(payload);
         if (!audioBytes.length) {
             throw new Error('录音内容为空');
         }
 
-        return this.sendRequest('transcribe', {
-            audioBase64: audioBytes.toString('base64')
+        const startedAt = Date.now();
+        const result = await this.sendRequest('transcribe', {
+            audioBase64: audioBytes.toString('base64'),
+            preset
         });
+        return {
+            ...(result || {}),
+            preset: result?.preset || preset,
+            manager_timing: {
+                total_seconds: Number(((Date.now() - startedAt) / 1000).toFixed(3))
+            }
+        };
     }
 
     warmup() {

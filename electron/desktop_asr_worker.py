@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 import traceback
 import wave
 from typing import Any
@@ -35,6 +36,10 @@ SENSEVOICE_MODEL = None
 SENSEVOICE_POSTPROCESS = None
 
 
+def elapsed_seconds(started_at: float) -> float:
+    return round(time.perf_counter() - started_at, 3)
+
+
 def send(payload: dict[str, Any]) -> None:
     sys.stdout.write(json.dumps(payload, ensure_ascii=False) + "\n")
     sys.stdout.flush()
@@ -43,6 +48,35 @@ def send(payload: dict[str, Any]) -> None:
 def log(message: str) -> None:
     sys.stderr.write(message + "\n")
     sys.stderr.flush()
+
+
+def normalize_preset(value: Any) -> str:
+    normalized_value = str(value or "").strip().lower()
+    if normalized_value in {"fast", "low-latency", "low_latency", "realtime"}:
+        return "fast"
+    return "balanced"
+
+
+def build_generate_kwargs(preset: str) -> dict[str, Any]:
+    generate_kwargs: dict[str, Any] = {
+        "task": TASK,
+        "temperature": 0.0,
+        "condition_on_prev_tokens": False,
+        "compression_ratio_threshold": 1.35,
+        "logprob_threshold": -1.0,
+        "no_speech_threshold": 0.6
+    }
+    if LANGUAGE:
+        generate_kwargs["language"] = LANGUAGE
+
+    if preset == "fast":
+        generate_kwargs.update({
+            "num_beams": 1,
+            "compression_ratio_threshold": 1.5,
+            "no_speech_threshold": 0.45
+        })
+
+    return generate_kwargs
 
 
 def decode_wav_bytes(wav_bytes: bytes) -> tuple[np.ndarray, int, float]:
@@ -156,47 +190,70 @@ def ensure_sensevoice_model():
     return SENSEVOICE_MODEL, SENSEVOICE_POSTPROCESS
 
 
-def transcribe(audio_base64: str) -> dict[str, Any]:
+def call_whisper_pipeline(asr_pipeline: Any, audio_array: np.ndarray, sample_rate: int, preset: str) -> Any:
+    payload = {
+        "array": audio_array,
+        "sampling_rate": sample_rate
+    }
+    call_kwargs: dict[str, Any] = {
+        "return_timestamps": False,
+        "generate_kwargs": build_generate_kwargs(preset)
+    }
+
+    if preset == "fast":
+        call_kwargs.update({
+            "chunk_length_s": min(CHUNK_LENGTH_S, 12),
+            "batch_size": min(BATCH_SIZE, 4)
+        })
+
+    try:
+        return asr_pipeline(payload, **call_kwargs)
+    except TypeError as exc:
+        message = str(exc)
+        if "chunk_length_s" not in message and "batch_size" not in message:
+            raise
+        call_kwargs.pop("chunk_length_s", None)
+        call_kwargs.pop("batch_size", None)
+        return asr_pipeline(payload, **call_kwargs)
+
+
+def transcribe(audio_base64: str, preset_value: Any = "balanced") -> dict[str, Any]:
     if not audio_base64:
         raise RuntimeError("录音内容为空")
 
+    total_started_at = time.perf_counter()
+    decode_started_at = time.perf_counter()
+    preset = normalize_preset(preset_value)
     audio_bytes = base64.b64decode(audio_base64)
     audio_array, sample_rate, duration_seconds = decode_wav_bytes(audio_bytes)
+    decode_seconds = elapsed_seconds(decode_started_at)
 
     if is_effective_silence(audio_array):
         return {
             "text": "",
             "engine": ENGINE,
+            "preset": preset,
             "language": LANGUAGE or None,
             "task": TASK,
             "model_id": SENSEVOICE_MODEL_ID if ENGINE in {"sensevoice", "sensevoice-small", "funasr"} else MODEL_ID,
-            "duration_seconds": duration_seconds
+            "duration_seconds": duration_seconds,
+            "timing": {
+                "decode_seconds": decode_seconds,
+                "model_seconds": 0,
+                "total_seconds": elapsed_seconds(total_started_at)
+            }
         }
 
     if ENGINE in {"sensevoice", "sensevoice-small", "funasr"}:
-        return transcribe_sensevoice(audio_bytes, duration_seconds)
+        return transcribe_sensevoice(audio_bytes, duration_seconds, preset, {
+            "total_started_at": total_started_at,
+            "decode_seconds": decode_seconds
+        })
 
     asr_pipeline = ensure_pipeline()
-
-    generate_kwargs = {
-        "task": TASK,
-        "temperature": 0.0,
-        "condition_on_prev_tokens": False,
-        "compression_ratio_threshold": 1.35,
-        "logprob_threshold": -1.0,
-        "no_speech_threshold": 0.6
-    }
-    if LANGUAGE:
-        generate_kwargs["language"] = LANGUAGE
-
-    result = asr_pipeline(
-        {
-            "array": audio_array,
-            "sampling_rate": sample_rate
-        },
-        return_timestamps=False,
-        generate_kwargs=generate_kwargs
-    )
+    model_started_at = time.perf_counter()
+    result = call_whisper_pipeline(asr_pipeline, audio_array, sample_rate, preset)
+    model_seconds = elapsed_seconds(model_started_at)
 
     text = ""
     if isinstance(result, dict):
@@ -207,16 +264,28 @@ def transcribe(audio_base64: str) -> dict[str, Any]:
     return {
         "text": text,
         "engine": "whisper",
+        "preset": preset,
         "language": LANGUAGE or None,
         "task": TASK,
         "model_id": MODEL_ID,
-        "duration_seconds": duration_seconds
+        "duration_seconds": duration_seconds,
+        "timing": {
+            "decode_seconds": decode_seconds,
+            "model_seconds": model_seconds,
+            "total_seconds": elapsed_seconds(total_started_at)
+        }
     }
 
 
-def transcribe_sensevoice(wav_bytes: bytes, duration_seconds: float) -> dict[str, Any]:
+def transcribe_sensevoice(
+    wav_bytes: bytes,
+    duration_seconds: float,
+    preset: str,
+    timing_context: dict[str, Any]
+) -> dict[str, Any]:
     model, postprocess = ensure_sensevoice_model()
     temp_path = ""
+    model_started_at = time.perf_counter()
     try:
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as audio_file:
             audio_file.write(wav_bytes)
@@ -250,10 +319,16 @@ def transcribe_sensevoice(wav_bytes: bytes, duration_seconds: float) -> dict[str
     return {
         "text": text,
         "engine": "sensevoice",
+        "preset": preset,
         "language": SENSEVOICE_LANGUAGE,
         "task": TASK,
         "model_id": SENSEVOICE_MODEL_ID,
-        "duration_seconds": duration_seconds
+        "duration_seconds": duration_seconds,
+        "timing": {
+            "decode_seconds": float(timing_context.get("decode_seconds") or 0),
+            "model_seconds": elapsed_seconds(model_started_at),
+            "total_seconds": elapsed_seconds(float(timing_context.get("total_started_at") or time.perf_counter()))
+        }
     }
 
 
@@ -279,7 +354,7 @@ def handle_request(payload: dict[str, Any]) -> dict[str, Any]:
         }
 
     if action == "transcribe":
-        return transcribe(str(payload.get("audioBase64") or ""))
+        return transcribe(str(payload.get("audioBase64") or ""), payload.get("preset"))
 
     raise RuntimeError(f"不支持的 action：{action}")
 

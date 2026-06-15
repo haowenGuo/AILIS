@@ -131,6 +131,7 @@ const speechModeLabels = {
 };
 
 const recognitionModeLabels = {
+    'fast-vad': '快速 ASR：低延迟按钮',
     'auto-vad': '按钮开启 ASR',
     continuous: '自动 ASR 常驻检测',
     manual: '手动开始/停止'
@@ -2036,7 +2037,7 @@ async function initialize() {
         };
         fillScaleOptions(panelState.options?.petScaleOptions || []);
         fillSpeechModeOptions(panelState.options?.speechModeOptions || []);
-        fillRecognitionModeOptions(panelState.options?.recognitionModeOptions || ['auto-vad', 'continuous', 'manual']);
+        fillRecognitionModeOptions(panelState.options?.recognitionModeOptions || ['fast-vad', 'auto-vad', 'continuous', 'manual']);
         fillConversationModeOptions(panelState.options?.conversationModeOptions || ['assistant', 'daily']);
         fillLlmProviderOptions(panelState.options?.llmProviderOptions || ['openai-compatible']);
         fillLlmPresetOptions();
