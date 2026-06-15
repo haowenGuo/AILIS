@@ -1439,15 +1439,24 @@ function getRendererLlmPreferences() {
     };
 }
 
+function isLowLatencyElevenLabsModel(modelId) {
+    return /(?:flash|turbo)/i.test(String(modelId || ''));
+}
+
 function getPersistedElevenLabsSettings() {
     const preferences = desktopState?.preferences || {};
+    const modelId = normalizeElevenLabsModelId(
+        preferences.elevenLabsModelId || DEFAULT_ELEVENLABS_MODEL_ID
+    );
+    const lowLatency = isLowLatencyElevenLabsModel(modelId);
+
     return {
         apiBase: normalizeElevenLabsApiBase(
             preferences.elevenLabsApiBase || DEFAULT_ELEVENLABS_API_BASE
         ),
         apiKey: normalizeElevenLabsApiKey(preferences.elevenLabsApiKey || DEFAULT_ELEVENLABS_API_KEY),
         voiceId: normalizeElevenLabsVoiceId(preferences.elevenLabsVoiceId || DEFAULT_ELEVENLABS_VOICE_ID),
-        modelId: normalizeElevenLabsModelId(preferences.elevenLabsModelId || DEFAULT_ELEVENLABS_MODEL_ID),
+        modelId,
         outputFormat: normalizeElevenLabsOutputFormat(
             preferences.elevenLabsOutputFormat || DEFAULT_ELEVENLABS_OUTPUT_FORMAT
         ),
@@ -1455,12 +1464,12 @@ function getPersistedElevenLabsSettings() {
             preferences.elevenLabsTimeoutMs || DEFAULT_ELEVENLABS_TIMEOUT_MS
         ),
         enableLogging: true,
-        optimizeStreamingLatency: 0,
+        optimizeStreamingLatency: lowLatency ? 3 : 0,
         stability: 0.45,
         similarityBoost: 0.8,
         style: 0.15,
         speed: 1.0,
-        useSpeakerBoost: true
+        useSpeakerBoost: !lowLatency
     };
 }
 
@@ -2680,7 +2689,7 @@ function getSpeechModeLabel(mode) {
         return '本地 VITS 实验模型';
     }
     if (mode === 'server') {
-        return 'ElevenLabs 顶级音质';
+        return 'ElevenLabs 低延迟语音';
     }
     if (mode === 'local') {
         return '浏览器 speechSynthesis';

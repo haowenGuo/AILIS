@@ -125,7 +125,7 @@ const speechModeLabels = {
     cosyvoice3: 'CosyVoice3 本地高质量',
     kokoro: 'Kokoro-82M 最低延迟',
     local: '浏览器 speechSynthesis',
-    server: 'ElevenLabs 顶级音质',
+    server: 'ElevenLabs 低延迟语音',
     vits: '本地 VITS 实验模型',
     off: '关闭语音'
 };
@@ -550,7 +550,7 @@ function normalizePreferences(preferences = {}) {
             : {},
         elevenLabsApiBase: String(preferences.elevenLabsApiBase || 'https://api.elevenlabs.io'),
         elevenLabsVoiceId: String(preferences.elevenLabsVoiceId || ''),
-        elevenLabsModelId: String(preferences.elevenLabsModelId || 'eleven_multilingual_v2'),
+        elevenLabsModelId: String(preferences.elevenLabsModelId || 'eleven_flash_v2_5'),
         elevenLabsOutputFormat: String(preferences.elevenLabsOutputFormat || 'mp3_44100_128'),
         elevenLabsTimeoutMs: Math.round(
             Math.min(120000, Math.max(5000, Number(preferences.elevenLabsTimeoutMs ?? 60000)))

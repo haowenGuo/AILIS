@@ -116,7 +116,7 @@ async function synthesizeElevenLabsSpeech(settings = {}, payload = {}) {
     const text = normalizeString(payload.text);
     const apiKey = normalizeString(settings.apiKey);
     const voiceId = normalizeString(settings.voiceId);
-    const modelId = normalizeString(settings.modelId) || 'eleven_multilingual_v2';
+    const modelId = normalizeString(settings.modelId) || 'eleven_flash_v2_5';
     const outputFormat = normalizeOutputFormat(settings.outputFormat);
     const timeoutMs = normalizeTimeoutMs(settings.timeoutMs);
 
