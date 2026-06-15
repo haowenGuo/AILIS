@@ -387,7 +387,10 @@ async function readTextStream(response, onChunk) {
 
             if (chunkText) {
                 fullText += chunkText;
-                onChunk?.(fullText);
+                onChunk?.({
+                    deltaText: chunkText,
+                    fullText
+                });
             }
         }
     }
@@ -404,7 +407,10 @@ async function readTextStream(response, onChunk) {
         }
         if (chunkText) {
             fullText += chunkText;
-            onChunk?.(fullText);
+            onChunk?.({
+                deltaText: chunkText,
+                fullText
+            });
         }
     }
 
@@ -575,8 +581,17 @@ export class AigrilBackendChatService {
             throw new Error(errorMessage);
         }
 
-        const rawText = await readTextStream(response, (nextRawText) => {
+        let lastProgressSpeechText = '';
+        const rawText = await readTextStream(response, (progress) => {
+            const nextRawText = typeof progress === 'string' ? progress : progress?.fullText || '';
             const nextPayload = parseReplyMarkup(nextRawText);
+            const nextSpeechText = nextPayload.speech_text || '';
+            const streamDeltaSpeechText = nextSpeechText.startsWith(lastProgressSpeechText)
+                ? nextSpeechText.slice(lastProgressSpeechText.length)
+                : '';
+            lastProgressSpeechText = nextSpeechText;
+            nextPayload.stream_delta_text = typeof progress === 'string' ? '' : progress?.deltaText || '';
+            nextPayload.stream_delta_speech_text = streamDeltaSpeechText;
             onProgress?.(nextPayload);
         });
 

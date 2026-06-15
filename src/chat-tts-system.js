@@ -68,6 +68,7 @@ export class ChatTTSSystem {
         this.hasShownSpeechProviderHint = false;
         this.messageCounter = 0;
         this.interruptRequested = false;
+        this.activeChunkedSpeechSession = null;
 
         this.inputEl.disabled = true;
         this.sendBtnEl.disabled = true;
@@ -232,6 +233,70 @@ export class ChatTTSSystem {
         });
     }
 
+    createChunkedSpeechSession(aiMessageDiv) {
+        if (this.speechProvider?.isSpeechDisabled || typeof this.speechProvider?.createChunkedSession !== 'function') {
+            return null;
+        }
+
+        let avatarSpeechStarted = false;
+        const session = this.speechProvider.createChunkedSession({
+            audioPlayer: this.audioPlayer,
+            onPlaybackStart: (item) => {
+                if (avatarSpeechStarted) {
+                    return;
+                }
+                avatarSpeechStarted = true;
+                this.emitAvatarSpeechEvent({
+                    phase: 'start',
+                    id: aiMessageDiv?.dataset?.messageId || '',
+                    text: item?.text || aiMessageDiv?.__aigrilMessageContent || ''
+                });
+            },
+            onPlaybackEnd: () => {
+                if (avatarSpeechStarted) {
+                    this.endAvatarSpeech(aiMessageDiv);
+                }
+            },
+            onError: (error, context) => {
+                console.warn('[chunked-tts] 分段语音失败：', context, error);
+            }
+        });
+
+        if (session) {
+            this.activeChunkedSpeechSession = session;
+        }
+
+        return session;
+    }
+
+    appendChunkedSpeechProgress(session, payload) {
+        if (!session || !payload) {
+            return;
+        }
+        const deltaText = payload.stream_delta_speech_text || '';
+        if (deltaText) {
+            session.appendText(deltaText);
+        }
+    }
+
+    async finishChunkedSpeechSession(session) {
+        if (!session) {
+            return false;
+        }
+        session.finish();
+        if (!session.hasActivity()) {
+            return false;
+        }
+        await session.waitUntilDone();
+        return typeof session.hasPlaybackStarted === 'function' ? session.hasPlaybackStarted() : true;
+    }
+
+    clearChunkedSpeechSession(session) {
+        if (this.activeChunkedSpeechSession === session) {
+            this.activeChunkedSpeechSession = null;
+        }
+    }
+
     startAvatarPlayback(payload, displayText, aiMessageDiv) {
         this.executeAvatarCue(payload, aiMessageDiv);
         this.startAvatarSpeech(payload, displayText, aiMessageDiv);
@@ -349,17 +414,28 @@ export class ChatTTSSystem {
         console.log('✨ AIGL 尝试主动发起对话...');
         this.setBusy(true);
         const aiMessageDiv = this.createAIMessage();
+        const chunkedSpeechSession = this.createChunkedSpeechSession(aiMessageDiv);
 
         try {
             const payload = await this.fetchAssistantTurnWithFallback(true, (partialPayload) => {
                 this.renderStreamingAssistantReply(partialPayload, aiMessageDiv);
+                this.appendChunkedSpeechProgress(chunkedSpeechSession, partialPayload);
             });
-            await this.renderAssistantReply(payload, aiMessageDiv);
+            const usedChunkedSpeech = await this.finishChunkedSpeechSession(chunkedSpeechSession);
+            if (usedChunkedSpeech) {
+                this.executeAvatarCue(payload, aiMessageDiv);
+                this.updateMessageContent(aiMessageDiv, payload.display_text || payload.speech_text || '...');
+                this.scrollToBottom();
+            } else {
+                await this.renderAssistantReply(payload, aiMessageDiv);
+            }
             this.messageHistory.push({ role: 'assistant', content: payload.display_text });
         } catch (error) {
+            await chunkedSpeechSession?.cancel?.('auto-chat-error');
             this.removeMessageElement(aiMessageDiv);
             console.error('主动对话请求失败：', error);
         } finally {
+            this.clearChunkedSpeechSession(chunkedSpeechSession);
             this.setBusy(false);
             this.startAutoChatTimer();
         }
@@ -393,16 +469,26 @@ export class ChatTTSSystem {
 
         const loadingEl = this.addLoadingMessage();
         const aiMessageDiv = this.createAIMessage();
+        const chunkedSpeechSession = this.createChunkedSpeechSession(aiMessageDiv);
 
         try {
             const payload = await this.fetchAssistantTurnWithFallback(false, (partialPayload) => {
                 this.removeMessageElement(loadingEl);
                 this.renderStreamingAssistantReply(partialPayload, aiMessageDiv);
+                this.appendChunkedSpeechProgress(chunkedSpeechSession, partialPayload);
             });
             this.removeMessageElement(loadingEl);
-            await this.renderAssistantReply(payload, aiMessageDiv);
+            const usedChunkedSpeech = await this.finishChunkedSpeechSession(chunkedSpeechSession);
+            if (usedChunkedSpeech) {
+                this.executeAvatarCue(payload, aiMessageDiv);
+                this.updateMessageContent(aiMessageDiv, payload.display_text || payload.speech_text || '...');
+                this.scrollToBottom();
+            } else {
+                await this.renderAssistantReply(payload, aiMessageDiv);
+            }
             this.messageHistory.push({ role: 'assistant', content: payload.display_text });
         } catch (error) {
+            await chunkedSpeechSession?.cancel?.('chat-turn-error');
             this.removeMessageElement(loadingEl);
             this.removeMessageElement(aiMessageDiv);
             this.vrmSystem.stopSpeaking();
@@ -413,6 +499,7 @@ export class ChatTTSSystem {
                 console.error('后端请求失败：', error);
             }
         } finally {
+            this.clearChunkedSpeechSession(chunkedSpeechSession);
             this.interruptRequested = false;
             this.setBusy(false);
             this.startAutoChatTimer();
@@ -430,6 +517,7 @@ export class ChatTTSSystem {
         this.interruptRequested = true;
         this.vrmSystem.stopSpeaking();
         try {
+            await this.activeChunkedSpeechSession?.cancel?.('chat_user_interrupt');
             await this.audioPlayer?.stop?.();
         } catch {}
         this.addSystemMessage('正在中断当前对话，已产生的上下文和工具记录会保留。');

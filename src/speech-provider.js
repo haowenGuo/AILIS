@@ -1,4 +1,5 @@
 import { CONFIG } from './config.js';
+import { createChunkedTtsSession } from './realtime-voice/chunked-tts-session.js';
 
 function isDesktopRuntime() {
     return window.aigrilDesktop?.platform === 'electron';
@@ -281,6 +282,19 @@ class LocalVitsTTSCandidate {
         return isDesktopRuntime();
     }
 
+    get supportsChunkedTTS() {
+        return this.supportsTTS;
+    }
+
+    async synthesizeChunk(text) {
+        const { synthesizeLocalVitsSpeech } = await import('./local-vits-tts.js');
+        const result = await synthesizeLocalVitsSpeech(text);
+        return {
+            audioBase64: result.audioBase64,
+            mimeType: result.mimeType
+        };
+    }
+
     async speak({
         payload,
         displayText,
@@ -296,9 +310,8 @@ class LocalVitsTTSCandidate {
         updateMessageContent(displayText);
         scrollToBottom();
 
-        const { synthesizeLocalVitsSpeech } = await import('./local-vits-tts.js');
         const speechText = payload?.speech_text || displayText;
-        const result = await synthesizeLocalVitsSpeech(speechText);
+        const result = await this.synthesizeChunk(speechText);
         await audioPlayer.playSpeech({
             audioBase64: result.audioBase64,
             mimeType: result.mimeType,
@@ -329,6 +342,28 @@ class CosyVoice3TTSCandidate {
         return isDesktopRuntime() && typeof window.aigrilDesktop?.tts?.synthesize === 'function';
     }
 
+    get supportsChunkedTTS() {
+        return this.supportsTTS;
+    }
+
+    async synthesizeChunk(text) {
+        const result = await window.aigrilDesktop.tts.synthesize({
+            provider: 'cosyvoice3',
+            preset: 'anime_shy_soft',
+            text,
+            speed: 0.92
+        });
+
+        if (!result?.ok || !result.audio_base64) {
+            throw new Error(result?.error || 'CosyVoice3 本地语音合成失败');
+        }
+
+        return {
+            audioBase64: result.audio_base64,
+            mimeType: result.mime_type || 'audio/wav'
+        };
+    }
+
     async speak({
         payload,
         displayText,
@@ -345,20 +380,11 @@ class CosyVoice3TTSCandidate {
         scrollToBottom();
 
         const speechText = payload?.speech_text || displayText;
-        const result = await window.aigrilDesktop.tts.synthesize({
-            provider: 'cosyvoice3',
-            preset: 'anime_shy_soft',
-            text: speechText,
-            speed: 0.92
-        });
-
-        if (!result?.ok || !result.audio_base64) {
-            throw new Error(result?.error || 'CosyVoice3 本地语音合成失败');
-        }
+        const result = await this.synthesizeChunk(speechText);
 
         await audioPlayer.playSpeech({
-            audioBase64: result.audio_base64,
-            mimeType: result.mime_type || 'audio/wav',
+            audioBase64: result.audioBase64,
+            mimeType: result.mimeType,
             displayText,
             alignment: null,
             onPlaybackStart: () => {
@@ -386,6 +412,29 @@ class KokoroZhTTSCandidate {
         return isDesktopRuntime() && typeof window.aigrilDesktop?.tts?.synthesize === 'function';
     }
 
+    get supportsChunkedTTS() {
+        return this.supportsTTS;
+    }
+
+    async synthesizeChunk(text) {
+        const result = await window.aigrilDesktop.tts.synthesize({
+            provider: 'kokoro',
+            voice: 'zf_003',
+            text,
+            speed: 0.98,
+            timeoutMs: 120000
+        });
+
+        if (!result?.ok || !result.audio_base64) {
+            throw new Error(result?.error || 'Kokoro 本地语音合成失败');
+        }
+
+        return {
+            audioBase64: result.audio_base64,
+            mimeType: result.mime_type || 'audio/wav'
+        };
+    }
+
     async speak({
         payload,
         displayText,
@@ -402,21 +451,11 @@ class KokoroZhTTSCandidate {
         scrollToBottom();
 
         const speechText = payload?.speech_text || displayText;
-        const result = await window.aigrilDesktop.tts.synthesize({
-            provider: 'kokoro',
-            voice: 'zf_003',
-            text: speechText,
-            speed: 0.98,
-            timeoutMs: 120000
-        });
-
-        if (!result?.ok || !result.audio_base64) {
-            throw new Error(result?.error || 'Kokoro 本地语音合成失败');
-        }
+        const result = await this.synthesizeChunk(speechText);
 
         await audioPlayer.playSpeech({
-            audioBase64: result.audio_base64,
-            mimeType: result.mime_type || 'audio/wav',
+            audioBase64: result.audioBase64,
+            mimeType: result.mimeType,
             displayText,
             alignment: null,
             onPlaybackStart: () => {
@@ -545,6 +584,10 @@ export class SpeechProvider {
         return this.ttsCandidates.some((candidate) => candidate.supportsTTS);
     }
 
+    get supportsChunkedTTS() {
+        return this.ttsCandidates.some((candidate) => candidate.supportsChunkedTTS);
+    }
+
     get isSpeechDisabled() {
         return this.mode === 'off';
     }
@@ -572,6 +615,31 @@ export class SpeechProvider {
 
     getLastTTSFailureMessage() {
         return this.lastTTSErrors[0]?.message || '';
+    }
+
+    createChunkedSession(options = {}) {
+        if (this.isSpeechDisabled) {
+            return null;
+        }
+
+        const candidate = this.ttsCandidates.find((item) => item.supportsChunkedTTS && typeof item.synthesizeChunk === 'function');
+        if (!candidate) {
+            return null;
+        }
+
+        return createChunkedTtsSession({
+            ...options,
+            providerId: candidate.id,
+            synthesize: async (text, context) => candidate.synthesizeChunk(text, context),
+            onError: (error, context) => {
+                this.lastTTSErrors.unshift({
+                    provider: candidate.id,
+                    message: error?.message || String(error),
+                    context
+                });
+                options.onError?.(error, context);
+            }
+        });
     }
 
     async playSpeech(options) {

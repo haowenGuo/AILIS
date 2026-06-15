@@ -1,239 +1,527 @@
-# Realtime Voice System Research, AIRI-Inspired
+# AIGril Realtime Voice Plan v2
 
 Branch: `codex/realtime-voice-airi`
 
-This document is the design baseline for building a realtime voice system in AIGril 1.0.4. It is intentionally written before implementation, because the core risk is architectural: replacing one TTS provider will not make the app realtime. The app needs an intent/session layer that can connect voice input, LLM token output, TTS generation, playback, lip sync, persona surface, and cancellation.
+这版方案替代第一版。第一版的问题是太像“从零建一个完整实时语音系统”。现在的目标改成更务实的一句话：
 
-## 1. What "Realtime Voice" Means Here
+> 在现有 AIGril 代码上，把 TTS 和 ASR 拆开优化，尽可能让 TTS 足够快、ASR 足够快；先不要追求端到端全双工。
 
-There are four practical levels:
+## 1. 核心判断
 
-| Level | Name | Behavior | User perception |
-| --- | --- | --- | --- |
-| L0 | Current segmented voice | Record a speech segment, run batch ASR, wait for full assistant payload, synthesize full speech, then play | Works, but feels turn-based |
-| L1 | Low-latency turn-taking | Keep current VAD/ASR, but stream assistant text into chunked TTS and play the first chunk early | Feels much faster after the user stops speaking |
-| L2 | Streaming ASR + streaming TTS | Stream mic audio to ASR, receive partial/final transcript deltas, stream LLM tokens to TTS | Feels close to live conversation |
-| L3 | Native speech-to-speech/full duplex | One realtime model/session handles audio input, turn detection, tool calls, and audio output | Closest to GPT-4o/Realtime-style voice |
-
-For AIGril, the recommended path is L1 first, then L2. L3 can be an optional provider, not the default architecture, because it can bypass AIGril's existing persona surface, local TTS, tool/runtime control, and privacy choices.
-
-## 2. Current AIGril Voice Architecture
-
-Current AIGril already has useful voice pieces:
-
-- `src/chat-panel-app.js` has manual, `auto-vad`, and `continuous` voice input modes. Continuous mode repeatedly starts recording when the app is idle, uses analyser-based voice activity, then stops after silence and sends the transcript.
-- `src/desktop-speech-recognition.js` records microphone audio with `MediaRecorder`, monitors level/voice score with `AnalyserNode`, then converts the final blob to mono 16 kHz WAV.
-- `electron/local-asr-manager.cjs` sends the final WAV bytes to `electron/desktop_asr_worker.py`.
-- `electron/desktop_asr_worker.py` runs batch ASR through Whisper or SenseVoice. It is not a streaming recognizer today.
-- `src/aigril-companion-chat-service.js` can read backend streaming text and invoke `onProgress`, but progress is currently the accumulated full text, not token/delta events.
-- `src/aigril-companion-chat-service.js` desktop LLM path calls `window.aigrilDesktop.llm.chat()` as a single final response, so daily desktop LLM chat is not token-streaming yet.
-- `src/chat-tts-system.js` creates the assistant message and updates streaming text, but TTS starts after the final payload in `renderAssistantReply()`.
-- `src/speech-provider.js` picks a final TTS candidate, then synthesizes the whole `displayText`/`speech_text`.
-- `src/tts-audio-player.js` plays one audio blob at a time and drives lip sync from an analyser over the actual audio envelope.
-- `src/character/persona-surface.js`, `src/character/character-state-machine.js`, and `electron/aigl-persona-renderer.cjs` already separate visible text from persona surface semantics.
-
-The key gap: AIGril has no AIRI-like `StageTtsSession` abstraction. There is no per-assistant-intent object that receives LLM token deltas, chunks text for TTS, schedules playback, and can be cancelled by user speech.
-
-## 3. What AIRI Actually Does
-
-### 3.1 WebAI demo
-
-The public WebAI realtime voice demo is not strict full duplex. In `apps/vad-asr-chat-tts/src/pages/index.vue`, VAD emits `speech-ready` only after a speech segment ends. The demo converts that segment to WAV, calls `generateTranscription()`, then streams LLM text, splits by `<break/>`, calls `generateSpeech()` per sentence, and queues audio by sentence index.
-
-That is L1-style low-latency turn-taking, not live ASR while the user is still speaking.
-
-### 3.2 AIRI main app
-
-AIRI's stronger idea is on the output side:
-
-- `packages/stage-ui/src/components/scenes/Stage.vue` opens one TTS session per assistant intent before message composition.
-- `onTokenLiteral()` forwards every LLM token into `currentSession.appendText(literal)`.
-- `packages/stage-ui/src/libs/speech/tts-session.ts` chooses either a segmenter path or a bidirectional WebSocket path based on provider capability, not hard-coded provider routing.
-- `packages/stage-ui/src/libs/speech/streaming-pipeline.ts` opens `/api/v1/audio/speech/ws`, sends `start`, `text`, `finish`, receives binary audio chunks and sentence/session events, decodes audio, and schedules playback.
-- `apps/server/src/routes/audio-speech-ws/*` is a server-side proxy to unSpeech/upstream streaming TTS, with auth, billing, usage, and request logs.
-
-AIRI's input side has provider-gated streaming:
-
-- Web Speech API provider: browser-only, `continuous = true`, `interimResults = true`; AIRI explicitly excludes Electron because Web Speech API depends on browser support/API keys.
-- Aliyun NLS provider: streams PCM chunks over a WebSocket/HTTP bridge and emits transcript deltas.
-
-The main lesson is not "copy a provider"; it is "make realtime a capability-driven session protocol."
-
-## 4. External Architecture Signals
-
-Official docs line up with the same split:
-
-- OpenAI recommends realtime sessions for live low-latency audio and request-based audio APIs for bounded file/speech requests: https://developers.openai.com/api/docs/guides/realtime
-- OpenAI recommends WebRTC for browser realtime voice connections, with a backend involved for session setup or ephemeral credentials: https://developers.openai.com/api/docs/guides/realtime-webrtc
-- Alibaba Cloud Model Studio's realtime speech recognition streams audio over WebSocket and returns low-latency transcribed text: https://www.alibabacloud.com/help/en/model-studio/real-time-speech-recognition-user-guide
-- BytePlus/Seed Speech documents bidirectional streaming TTS over WebSocket: https://docs.byteplus.com/en/docs/byteplusvoice/streaming_tts
-- Azure Voice Live is a unified speech-to-speech API that avoids manually orchestrating STT, LLM, and TTS, but it is a provider-level architecture choice: https://learn.microsoft.com/en-us/azure/ai-services/speech-service/voice-live
-
-These sources suggest AIGril should keep two architecture paths:
-
-- Composable pipeline: ASR provider -> AIGril LLM/tool/runtime -> TTS provider.
-- Native realtime provider: one provider owns speech-to-speech and emits text/audio/events back into AIGril.
-
-## 5. Proposed AIGril Architecture
-
-### 5.1 Capability schema
-
-Do not hard-route by provider name. Add a voice capability registry similar to AIRI:
-
-```js
-{
-  transcription: {
-    mode: 'batch' | 'stream',
-    streamInput: true,
-    interimResults: true,
-    finalResults: true,
-    sampleRate: 16000,
-    transport: 'media-recorder' | 'pcm-websocket' | 'browser-speech-api'
-  },
-  speech: {
-    transport: 'rest' | 'chunked-rest' | 'bidirectional-ws' | 'native-realtime',
-    acceptsTokenStream: false,
-    acceptsSentenceStream: true,
-    returnsAudioStream: false,
-    supportsCancel: true
-  }
-}
-```
-
-The UI and controller should ask "what can this provider do?" instead of "is this provider X?"
-
-### 5.2 Runtime modules
-
-Recommended new modules:
-
-- `src/realtime-voice/realtime-voice-controller.js`
-  Owns one active voice intent. State machine: `idle -> listening -> transcribing -> thinking -> speaking -> idle`, plus `interrupted` and `error`. Handles barge-in: when user speech starts during assistant playback, cancel active TTS and abort the assistant turn if configured.
-
-- `src/realtime-voice/voice-input-session.js`
-  Normalizes ASR providers into events: `speech-start`, `partial-transcript`, `final-transcript`, `speech-end`, `noise`, `error`, `closed`.
-
-- `src/realtime-voice/segmented-local-asr-provider.js`
-  Wraps current `createDesktopSpeechRecognitionService()` so the existing MediaRecorder + Whisper/SenseVoice path becomes one provider. This gives L1 without throwing away current code.
-
-- `src/realtime-voice/assistant-stream-adapter.js`
-  Converts chat services into `onDelta`, `onSurface`, `onFinal`, `onError`. Backend streaming can emit deltas now with a small change to `readTextStream()`. Desktop LLM needs a later IPC streaming path.
-
-- `src/realtime-voice/tts-segmenter.js`
-  Chunks assistant token deltas by punctuation, newline, max characters, max latency, and explicit flush. Do not depend on prompting the LLM to output `<break/>`.
-
-- `src/realtime-voice/speech-output-session.js`
-  AIRI-like session object: `appendText(text)`, `appendSurface(surface)`, `finishInput()`, `cancel(reason)`, `end()`. It chooses chunked REST TTS, bidirectional WebSocket TTS, native browser speech synthesis, or text-only fallback through provider capabilities.
-
-- `src/realtime-voice/playback-queue.js`
-  Schedules decoded audio chunks in order by intent/sequence, supports cancel by intent, and feeds actual audio envelope into the existing lip sync path.
-
-### 5.3 Data flow
+AIGril 现在不是没有语音基础，而是链路太串行：
 
 ```text
-Mic input
-  -> VoiceInputSession
-  -> final transcript
-  -> ChatTTSSystem / assistant stream
-  -> AssistantStreamAdapter
-  -> visible text + persona surface deltas
-  -> SpeechOutputSession
-  -> TTS segmenter/provider
-  -> PlaybackQueue
-  -> TTSAudioPlayer / VRM lip sync / dialogue bubble
+用户说话 -> 录完整段 -> 本地 ASR -> 发给 LLM -> 拿到完整 payload -> 整段 TTS -> 播放
 ```
 
-The persona surface must remain a separate internal channel. Never put `persona_surface` or `persona_output` into the visible/speech text stream. This matters even more in realtime, because partial JSON would otherwise leak mid-stream.
+这条链路里有两个最慢点：
 
-## 6. Implementation Plan
+- ASR 慢：`MediaRecorder` 录完后才 `transcribeAudioBlob()`，Whisper/SenseVoice 是整段批处理。
+- TTS 慢：`SpeechProvider.playSpeech()` 等最终 `displayText` 出来后才整段合成。
 
-### Phase 1: L1 realtime output, minimal risk
+所以 v2 不先做“大一统 realtime controller”，而是拆成两个独立工程面：
 
-Goal: keep current ASR, make assistant speech start before the full answer is complete.
+```text
+TTS 快速出声工程
+ASR 快速出字工程
+```
 
-Tasks:
+两条线可以并行推进，也可以单独回滚。第一优先级是 TTS，因为现有 `stream_text` 已经有 assistant 文本进度，改动小、收益直接。
 
-1. Add `tts-segmenter.js` with deterministic chunking rules.
-2. Add `speech-output-session.js` with a segmenter-based adapter around current TTS candidates.
-3. Change backend streaming path so `readTextStream()` can emit both accumulated text and raw delta.
-4. In `ChatTTSSystem.sendMessage()`, open a speech session before fetching the assistant turn, append text deltas as they arrive, and call `finishInput()` at stream end.
-5. Keep final `renderAssistantReply()` as the authoritative text update, but do not re-synthesize the full final answer if the session already played it.
-6. Add cancellation: `interruptCurrentTurn()` must cancel active speech session and playback queue before aborting the agent.
+## 2. 当前代码基线
 
-This phase should make daily backend-streaming chat feel much faster. It will not fix desktop LLM final-response mode until the desktop LLM provider supports streaming.
+### 2.1 TTS 现状
 
-### Phase 2: Normalize current ASR
+相关文件：
 
-Goal: make current VAD/MediaRecorder ASR fit the new provider model.
+- `src/chat-tts-system.js`
+- `src/speech-provider.js`
+- `src/tts-audio-player.js`
+- `src/aigril-companion-chat-service.js`
+- `src/humanclaw-chat-service.js`
 
-Tasks:
+当前路径：
 
-1. Move current `chat-panel-app.js` ASR control flow into `SegmentedLocalAsrProvider`.
-2. Emit normalized events from the provider instead of directly writing `inputEl.value` and calling `sendCurrentMessage()`.
-3. Add barge-in policy: if user speech starts while AIGril is speaking, stop TTS immediately; optionally abort assistant turn after speech remains active for N frames.
-4. Add echo protection: pause continuous ASR during TTS playback by default, then optionally support echo-cancelled full duplex later.
+1. `ChatTTSSystem.sendMessage()` 调 `fetchAssistantTurnWithFallback()`
+2. backend `stream_text` 期间只调用 `renderStreamingAssistantReply()`
+3. 流式阶段只更新 UI 和 avatar cue
+4. 最终 `renderAssistantReply()` 调 `playPreferredSpeech()`
+5. `SpeechProvider.playSpeech()` 选择候选 TTS
+6. CosyVoice3/Kokoro/native speech 都按完整文本合成
+7. `TTSAudioPlayer.playSpeech()` 播放一个完整音频 blob
 
-### Phase 3: Add true streaming ASR provider
+最大问题：
 
-Goal: real partial/final transcript deltas.
+- 流式文本没有进入 TTS。
+- TTS 没有 chunk/session/queue。
+- `TTSAudioPlayer` 一次只能播一个 blob，没有“多个短句音频顺序播放”的队列。
 
-Provider candidates:
+### 2.2 ASR 现状
 
-1. Cloud WebSocket ASR: Alibaba/Qwen realtime ASR or Aliyun NLS-style provider. Best fit for Chinese and AIRI-like architecture.
-2. Browser Web Speech API: useful for web, but AIRI found it is not reliable in Electron.
-3. Local streaming ASR: possible later with a streaming-capable engine, but current `desktop_asr_worker.py` is batch WAV-based.
+相关文件：
 
-Do not replace the existing local ASR. Keep it as the privacy/offline fallback.
+- `src/chat-panel-app.js`
+- `src/desktop-speech-recognition.js`
+- `electron/local-asr-manager.cjs`
+- `electron/desktop_asr_worker.py`
+- `electron/preload.cjs`
+- `electron/main.cjs`
 
-### Phase 4: Optional native speech-to-speech provider
+当前路径：
 
-Goal: allow OpenAI Realtime/Azure Voice Live-style sessions as a provider.
+1. `chat-panel-app.js` 负责 manual / auto-vad / continuous 模式
+2. `createDesktopSpeechRecognitionService().createRecorder()` 打开麦克风
+3. `AnalyserNode` 每 120ms 判断声音和人声分数
+4. 静音超过阈值后 `stopVoiceInput()`
+5. `transcribeAudioBlob()` 把完整录音转成 16k WAV
+6. `window.aigrilDesktop.transcribeAudio()` 发 IPC
+7. `desktop_asr_worker.py` 对完整 WAV 跑 Whisper/SenseVoice
 
-This should be a separate provider transport: `native-realtime`. It should emit text transcript, audio output, tool-call events, and persona cues back into AIGril. It must not bypass AIGril's safety rules, tool runtime, or avatar state machine silently.
+最大问题：
 
-## 7. Latency Targets
+- VAD 是实时的，但识别不是实时的。
+- continuous 模式只是“反复录短段”，不是 streaming ASR。
+- 录音结束点偏保守：`ASR_CONTINUOUS_SILENCE_MS = 1100`，用户停顿后还要等 1.1s。
 
-Initial practical targets:
+## 3. 目标拆分
 
-- L1 first speech chunk after first assistant text: under 1200 ms for local TTS once warmed.
-- L1 first audio after user stops speaking: ASR time + LLM first token + first TTS chunk. This may still be 2-5 seconds on local Whisper/CosyVoice, but it should be much better than waiting for the full answer.
-- L2 partial transcript: under 300-500 ms after spoken words.
-- L2 final transcript after endpoint: under 500-900 ms.
-- Barge-in stop playback: under 150 ms after confirmed user speech start.
+### 3.1 TTS 目标
 
-These should be measured with timestamps in development logs, not guessed.
+让 AIGril 在 assistant 回复还没完整生成时就开始说第一段。
 
-## 8. Risks
+优先目标：
 
-- Persona JSON leakage: realtime partial output makes this worse. The stream adapter must strip/hold internal JSON and only release visible text.
-- TTS chunk quality: too-small chunks sound choppy; too-large chunks increase latency. Start with punctuation + 20-60 Chinese chars + 700 ms max-latency flush.
-- TTS concurrency ordering: concurrent synthesis can return out of order. Playback must schedule by sequence.
-- Echo loop: continuous ASR may transcribe AIGril's own voice. Start with ASR paused during TTS, then add echo cancellation/full duplex later.
-- Cancellation: every session needs an intent id and cancel signal. Otherwise old TTS chunks will play after a new user interruption.
-- Provider costs/auth: streaming ASR/TTS must keep API keys in Electron main/backend, not renderer.
-- Desktop LLM non-streaming: daily chat on `window.aigrilDesktop.llm.chat()` needs a streaming IPC API before it can fully benefit.
+- 不换 TTS provider，先复用 `window.aigrilDesktop.tts.synthesize()`
+- 不要求 provider 真 streaming，先做 chunked TTS
+- 每个 chunk 仍是一次普通 TTS 请求
+- 多个 chunk 并发合成，但按原文顺序播放
+- 播放时继续复用 `TTSAudioPlayer` 的音频口型
 
-## 9. Test Plan
+理想体验：
 
-Unit tests:
+```text
+LLM 开始输出 -> 收到第一句/半句 -> 立刻合成第一段 -> 播放第一段
+后续文本继续合成 -> 排队播放
+```
 
-- TTS segmenter chunks Chinese/English punctuation, max length, flush markers, and partial JSON safely.
-- Speech output session preserves order when TTS promises resolve out of order.
-- Cancel by intent drops queued and in-flight chunks.
-- Persona surface extraction never leaks `persona_output`/`persona_surface` into visible text.
+### 3.2 ASR 目标
 
-Integration/smoke tests:
+先把当前 ASR 做到“短段、快停、快识别”，再接真正 streaming ASR。
 
-- Fake ASR provider emits final transcript -> fake assistant stream emits deltas -> fake TTS provider emits audio buffers -> playback queue receives ordered chunks.
-- Interrupt while speaking cancels playback and calls assistant abort.
-- Batch local ASR still works in manual/auto-vad/continuous modes.
-- Text-only fallback still updates UI and avatar state.
+优先目标：
 
-Manual verification:
+- 保留当前本地 Whisper/SenseVoice 路径
+- 调整 VAD 停顿策略，减少用户说完后的等待
+- 支持更短的录音段快速提交
+- 保持 continuous 模式稳定，不把环境声当用户消息
+- 后续再加 cloud streaming ASR provider
 
-- Warm local TTS, speak one short sentence, measure first audible response.
-- Speak while AIGril is speaking, confirm playback stops quickly and no stale sentence resumes.
-- Verify mouth movement follows actual audio envelope for chunked playback.
+理想体验：
 
-## 10. Immediate Next Engineering Step
+```text
+用户开始说话 -> 本地 VAD 立刻确认 speech-start
+用户停顿 500-700ms -> 立即截断提交 ASR
+ASR 结果回来 -> 自动发送消息
+```
 
-The first code change should be Phase 1: add `SpeechOutputSession` and `TtsSegmenter`, then wire backend `stream_text` deltas into it. This gives the most visible latency win with the least provider risk and keeps the existing local ASR/TTS stack intact.
+## 4. TTS 快速出声方案
+
+### 4.1 最小改造路径
+
+不先引入复杂全局 runtime，只加三个小模块：
+
+```text
+src/realtime-voice/tts-text-chunker.js
+src/realtime-voice/chunked-tts-session.js
+src/realtime-voice/tts-playback-queue.js
+```
+
+职责：
+
+- `tts-text-chunker.js`
+  从累计文本/增量文本里切出适合 TTS 的短文本。
+
+- `chunked-tts-session.js`
+  管一个 assistant 回复的 TTS 生命周期：appendText、flush、finish、cancel。
+
+- `tts-playback-queue.js`
+  管多个 chunk 音频的顺序播放，底层继续调用 `TTSAudioPlayer.playSpeech()`。
+
+### 4.2 直接接入点
+
+第一处：`src/aigril-companion-chat-service.js`
+
+当前 `readTextStream(response, onChunk)` 只给累计文本：
+
+```js
+fullText += chunkText;
+onChunk?.(fullText);
+```
+
+改成兼容式回调：
+
+```js
+onChunk?.({
+  deltaText: chunkText,
+  fullText,
+});
+```
+
+为了不破坏旧调用，可以先让 `onProgress` 同时支持 string 和 object。
+
+第二处：`src/chat-tts-system.js`
+
+在 `sendMessage()` 里创建 AI 消息后、fetch 开始前打开 TTS session：
+
+```js
+const ttsSession = this.speechProvider?.createChunkedSession?.({
+  audioPlayer: this.audioPlayer,
+  vrmSystem: this.vrmSystem,
+  onAvatarPlaybackStart: ...
+});
+```
+
+然后在 progress 回调里：
+
+```js
+this.renderStreamingAssistantReply(partialPayload, aiMessageDiv);
+ttsSession?.appendText(progress.deltaText || deltaFromFullText);
+```
+
+最终：
+
+```js
+ttsSession?.finish();
+await ttsSession?.waitUntilDone();
+```
+
+如果 session 已经播放过，就不要在 `renderAssistantReply()` 里再整段 TTS。
+
+### 4.3 Chunk 规则
+
+先用确定性规则，不靠提示词让模型输出 `<break/>`。
+
+中文优先规则：
+
+- 硬切：`。！？\n`
+- 软切：`，、；：`
+- 首段要快：8-18 个汉字就可以触发一次 soft flush
+- 后续段落：18-45 个汉字
+- 最大等待：收到文本后 600ms 内没有硬标点，也 flush 一个可说片段
+- 不切代码块、表格、URL、JSON 控制块
+
+英文规则：
+
+- 硬切：`.?!\n`
+- 软切：`,;:`
+- 首段 6-12 words
+- 后续 10-24 words
+
+### 4.4 TTS 并发与顺序
+
+合成可以并发，播放必须顺序。
+
+```text
+chunk 0 -> synth slow -> result late
+chunk 1 -> synth fast -> result early
+playback queue waits for chunk 0
+```
+
+建议默认：
+
+- `maxConcurrentTts = 2`
+- `maxBufferedChunks = 4`
+- 如果用户打断：cancel 当前 session，丢弃未播放 chunk，停止当前 audio
+
+### 4.5 复用现有 TTS
+
+不要先重写 CosyVoice3/Kokoro worker。第一版直接复用：
+
+```js
+window.aigrilDesktop.tts.synthesize({
+  provider: 'cosyvoice3',
+  preset: 'anime_shy_soft',
+  text: chunkText,
+  speed: 0.92
+});
+```
+
+以及：
+
+```js
+window.aigrilDesktop.tts.synthesize({
+  provider: 'kokoro',
+  voice: 'zf_003',
+  text: chunkText,
+  speed: 0.98,
+  timeoutMs: 120000
+});
+```
+
+`SpeechProvider` 只需要新增能力：
+
+```js
+createChunkedSession(options) {}
+```
+
+旧的 `playSpeech()` 保留，作为 fallback。
+
+### 4.6 TTS 指标
+
+需要打点，不靠感觉：
+
+- `assistant_first_delta_ms`
+- `first_tts_chunk_ready_ms`
+- `first_audio_play_ms`
+- `tts_chunk_synthesize_ms`
+- `tts_queue_wait_ms`
+- `tts_cancel_to_silence_ms`
+
+第一阶段目标：
+
+- 首段文本出来后 800-1500ms 内出声
+- 打断后 150ms 内停止当前音频
+- 不重复整段朗读
+
+## 5. ASR 快速出字方案
+
+### 5.1 先优化现有 VAD + 批处理 ASR
+
+这一步不引入新 provider，只调现有链路。
+
+改造点在 `src/chat-panel-app.js` 和 `src/config.js`：
+
+当前停顿阈值：
+
+```js
+ASR_CONTINUOUS_SILENCE_MS: 1100
+ASR_CONTINUOUS_MIN_SPEECH_MS: 380
+ASR_CONTINUOUS_VOICE_FRAMES: 3
+```
+
+建议新增一个 fast preset：
+
+```js
+ASR_FAST_SILENCE_MS: 650
+ASR_FAST_MIN_SPEECH_MS: 280
+ASR_FAST_VOICE_FRAMES: 2
+ASR_FAST_MAX_RECORD_MS: 8000
+```
+
+不要直接替换默认值，先做 preference/实验开关：
+
+```text
+recognitionLatencyMode: balanced | fast
+```
+
+fast 模式：
+
+- 更快收尾
+- 更容易误触发
+- 适合实时对话
+
+balanced 模式：
+
+- 保留当前参数
+- 适合任务执行、嘈杂环境
+
+### 5.2 分段策略
+
+当前 continuous 模式每次完整录一段。可以改成“更短段”：
+
+```text
+speech-start
+  -> collect until silence 650ms
+  -> submit segment
+  -> immediately restart listening
+```
+
+注意两点：
+
+- TTS 播放时先暂停 listening，避免转写 AIGril 自己的声音。
+- 以后支持 barge-in 时，只在检测到足够强的人声时停止 TTS。
+
+### 5.3 ASR worker 加速
+
+当前 `desktop_asr_worker.py` 的强项是复用已加载模型。可先做：
+
+- 确保 app 启动后 warmup 已完成
+- 首次打开语音模式时主动 warmup
+- 记录 ASR 耗时：decode WAV、model inference、postprocess
+- 对短音频走更短 chunk 参数或 SenseVoice 优先
+
+不要在第一阶段做本地 streaming Whisper，成本高，收益不稳定。
+
+### 5.4 真正实时 ASR provider
+
+这条线独立做，不影响 TTS 快速出声。
+
+新增 provider 抽象：
+
+```js
+createRealtimeAsrSession({
+  sampleRate: 16000,
+  onPartialText,
+  onFinalText,
+  onSpeechStart,
+  onSpeechEnd,
+  onError
+});
+```
+
+候选 provider：
+
+- Aliyun NLS / Qwen realtime ASR：更适合中文，WebSocket PCM 流。
+- OpenAI realtime transcription：适合和 OpenAI provider 绑定。
+- Web Speech API：不作为 Electron 主方案，只能作为 web fallback。
+
+接入原则：
+
+- API key 留在 Electron main 或本地 backend，不放 renderer。
+- renderer 只推 PCM chunk 或 MediaStream 状态。
+- provider 回传 partial/final transcript 事件。
+
+### 5.5 ASR 指标
+
+必须打点：
+
+- `speech_start_detect_ms`
+- `speech_end_detect_ms`
+- `segment_duration_ms`
+- `asr_submit_ms`
+- `asr_result_ms`
+- `asr_total_after_silence_ms`
+- `false_trigger_count`
+- `empty_transcript_count`
+
+第一阶段目标：
+
+- 用户停顿后 650-900ms 内提交 ASR
+- 本地短句 ASR 尽量 1-3s 内返回
+- continuous 模式误触发可控
+
+## 6. TTS 和 ASR 的边界
+
+不要一开始把 TTS 和 ASR 绑成一个大状态机。先定义简单边界。
+
+TTS 对外：
+
+```js
+session.appendText(deltaText);
+session.finish();
+session.cancel(reason);
+session.waitUntilDone();
+```
+
+ASR 对外：
+
+```js
+asr.on('speech-start', ...)
+asr.on('partial-text', ...)
+asr.on('final-text', ...)
+asr.on('speech-end', ...)
+asr.start()
+asr.stop()
+```
+
+Chat 只负责粘合：
+
+```text
+ASR final text -> sendCurrentMessage()
+assistant delta text -> TTS appendText()
+user interrupt -> TTS cancel + optional agent abort
+```
+
+这个边界比第一版更重要：TTS 快和 ASR 快可以分别验证。
+
+## 7. 分阶段落地
+
+### Phase A: TTS 快速出声
+
+最优先。
+
+改动文件：
+
+- `src/aigril-companion-chat-service.js`
+- `src/chat-tts-system.js`
+- `src/speech-provider.js`
+- `src/tts-audio-player.js`
+- 新增 `src/realtime-voice/tts-text-chunker.js`
+- 新增 `src/realtime-voice/chunked-tts-session.js`
+- 新增 `src/realtime-voice/tts-playback-queue.js`
+
+验收：
+
+- backend `stream_text` 回复时，第一句未等全文完成就开始播放。
+- 最终文本仍完整显示。
+- 不重复朗读。
+- interrupt 可以停止当前 chunk 和后续 chunk。
+
+### Phase B: ASR fast preset
+
+改动文件：
+
+- `src/config.js`
+- `src/chat-panel-app.js`
+- `src/desktop-speech-recognition.js`
+
+验收：
+
+- fast 模式下停顿收尾更快。
+- continuous 模式能更快提交短句。
+- 环境声过滤没有明显倒退。
+
+### Phase C: TTS provider warmup and metrics
+
+改动文件：
+
+- `electron/main.cjs`
+- `electron/desktop-cosyvoice3-tts.cjs`
+- `electron/desktop-kokoro-tts.cjs`
+- `src/speech-provider.js`
+
+验收：
+
+- 首次 TTS 慢的问题有明确状态提示。
+- warmup 后短句合成耗时可观测。
+
+### Phase D: streaming ASR provider
+
+改动文件：
+
+- 新增 `electron/realtime-asr-provider.cjs`
+- 新增 `src/realtime-voice/realtime-asr-session.js`
+- 修改 `electron/preload.cjs`
+- 修改 `electron/main.cjs`
+- 修改 `src/chat-panel-app.js`
+
+验收：
+
+- 能收到 partial transcript。
+- final transcript 自动进入消息框或自动发送。
+- TTS 播放时默认暂停 ASR，避免回声自触发。
+
+## 8. 不做什么
+
+第一阶段不做：
+
+- 不做 OpenAI Realtime 全双工总线。
+- 不重写本地 ASR worker。
+- 不要求 CosyVoice3/Kokoro 真 streaming。
+- 不让 LLM 输出 `<break/>` 控制 TTS。
+- 不把 persona JSON 混进 speech text。
+- 不把 GitHub Pages/tool/GAIA 相关工作混进这个分支的 realtime 实现提交。
+
+## 9. 最小可执行任务
+
+下一步最小任务建议：
+
+1. 新增 `tts-text-chunker` 单元测试。
+2. 新增 `chunked-tts-session`，用 fake TTS 测并发合成、顺序播放、cancel。
+3. 修改 `readTextStream()` 支持 delta callback。
+4. 在 `ChatTTSSystem` 中只对 backend `stream_text` 打开 chunked TTS。
+5. 本地跑一个假 TTS smoke，不先接真实 CosyVoice3。
+
+这样第一轮实现可以只解决一个问题：**assistant 文本一出来，TTS 就开始排队合成并尽快出声。**
+
+ASR fast preset 放第二个 PR/提交做，避免一次改两条链路导致问题不好定位。
