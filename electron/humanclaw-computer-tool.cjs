@@ -258,6 +258,100 @@ function createErrorResult(status, message, details = {}) {
     };
 }
 
+function isLikelyTextBuffer(buffer) {
+    if (!Buffer.isBuffer(buffer) || buffer.length === 0) {
+        return true;
+    }
+    const sample = buffer.subarray(0, Math.min(buffer.length, 8192));
+    let control = 0;
+    let nul = 0;
+    for (const byte of sample) {
+        if (byte === 0) {
+            nul += 1;
+        }
+        const allowedWhitespace = byte === 9 || byte === 10 || byte === 12 || byte === 13;
+        if (byte < 32 && !allowedWhitespace) {
+            control += 1;
+        }
+    }
+    const decoded = sample.toString('utf8');
+    const replacementChars = (decoded.match(/\uFFFD/g) || []).length;
+    return nul === 0 && control / sample.length < 0.02 && replacementChars / Math.max(1, decoded.length) < 0.02;
+}
+
+function getStructuredFileHint(filePath = '') {
+    const ext = path.extname(filePath).toLowerCase();
+    const hints = {
+        '.docx': 'Word/DOCX document',
+        '.doc': 'Word document',
+        '.xlsx': 'Excel/XLSX spreadsheet',
+        '.xls': 'Excel spreadsheet',
+        '.pptx': 'PowerPoint/PPTX presentation',
+        '.ppt': 'PowerPoint presentation',
+        '.pdf': 'PDF document',
+        '.zip': 'ZIP archive',
+        '.7z': '7z archive',
+        '.rar': 'RAR archive',
+        '.png': 'PNG image',
+        '.jpg': 'JPEG image',
+        '.jpeg': 'JPEG image',
+        '.webp': 'WebP image',
+        '.gif': 'GIF image',
+        '.mp3': 'audio file',
+        '.wav': 'audio file',
+        '.mp4': 'video file',
+        '.mov': 'video file'
+    };
+    return hints[ext] || 'binary or structured file';
+}
+
+function pickOutputStoreDirectTool(action = '') {
+    const normalized = normalizeGuiAction(action);
+    if (normalized === 'tail' || normalized === 'output_tail' || normalized === 'tail_output') {
+        return 'output_tail';
+    }
+    if (normalized === 'search' || normalized === 'find' || normalized === 'output_search' || normalized === 'search_output') {
+        return 'output_search';
+    }
+    if (normalized === 'read' || normalized === 'cat' || normalized === 'output_read' || normalized === 'read_output') {
+        return 'output_read';
+    }
+    return '';
+}
+
+function outputStoreWrongSurfaceResult(args = {}, action = '') {
+    const outputId = normalizeString(args.outputId || args.output_id || args.id);
+    if (!outputId) {
+        return null;
+    }
+    const normalizedAction = normalizeGuiAction(action);
+    const hasFilesystemTarget = Boolean(normalizeString(args.path || args.source || args.target || args.workdir));
+    const explicitOutputAction = /^output_(read|tail|search)$/.test(normalizedAction) || /_output$/.test(normalizedAction);
+    if (hasFilesystemTarget && !explicitOutputAction) {
+        return null;
+    }
+    if (!pickOutputStoreDirectTool(action)) {
+        return null;
+    }
+    return createErrorResult(
+        'wrong_tool_surface',
+        `outputId 是执行日志标识，不是文件路径，也不是 computer action。当前默认工具面不会把执行日志读取工具暴露给 Agent；请使用本轮返回的 stdout/stderr/preview，或运行更窄的命令把需要的结果写入普通文件后再用 read 读取。`,
+        {
+            action,
+            outputId,
+            wrongCall: {
+                tool: 'computer',
+                args: {
+                    action,
+                    outputId
+                }
+            },
+            defaultSurface: 'legacy_stable',
+            recovery: 'Use visible exec preview, rerun a narrower command, or write the needed data to a normal file and read that file.'
+        }
+    );
+}
+
 function normalizeGuiAction(action = '') {
     const normalized = normalizeString(action).toLowerCase().replace(/[-\s]+/g, '_');
     const aliases = {
@@ -795,7 +889,28 @@ async function actionRead(args, context, runtime) {
     try {
         const buffer = Buffer.alloc(Math.min(stat.size, maxBytes));
         const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
-        const text = buffer.subarray(0, bytesRead).toString(args.encoding || 'utf8');
+        const chunk = buffer.subarray(0, bytesRead);
+        const forceText = args.forceText === true || args.allowBinaryText === true;
+        if (!forceText && !isLikelyTextBuffer(chunk)) {
+            const fileKind = getStructuredFileHint(target);
+            return createErrorResult(
+                'binary_file',
+                `read 只能读取普通文本文件；${target} 看起来是 ${fileKind}。请使用专用解析工具、tool_search，或 read_binary 读取原始字节，不要把二进制内容当文本上下文。`,
+                {
+                    path: target,
+                    size: stat.size,
+                    sizeText: formatBytes(stat.size),
+                    bytesSampled: bytesRead,
+                    fileKind,
+                    suggestedNext: {
+                        tool: 'tool_search',
+                        query: `${fileKind} extract text tables content`
+                    },
+                    override: 'If raw text decoding is truly intended, call read with forceText=true.'
+                }
+            );
+        }
+        const text = chunk.toString(args.encoding || 'utf8');
         return createTextResult(text, {
             status: 'completed',
             action: 'read',
@@ -1427,12 +1542,202 @@ function truncateByApproxTokens(text = '', maxTokens = DEFAULT_EXEC_MAX_OUTPUT_T
     return `${source.slice(0, Math.max(0, maxChars - 160))}\n...[truncated: original_token_count=${estimateTokenCount(source)}, max_output_tokens=${limit}]`;
 }
 
+function hasShellNewline(command = '') {
+    return /\r|\n/.test(String(command || ''));
+}
+
+function buildCommandDiagnostics({ command = '', args = [], platformAdapter = null } = {}) {
+    const diagnostics = {
+        shellString: !normalizeCommandArgs(args).length,
+        containsNewline: hasShellNewline(command),
+        platform: platformAdapter?.getStatus ? platformAdapter.getStatus() : null,
+        warnings: []
+    };
+    if (
+        diagnostics.shellString &&
+        diagnostics.containsNewline &&
+        typeof platformAdapter?.isWindows === 'function' &&
+        platformAdapter.isWindows()
+    ) {
+        diagnostics.warnings.push({
+            code: 'windows_cmd_multiline_shell_string',
+            message: 'Windows cmd shell strings with embedded newlines are fragile. Prefer command+args, or write complex Python/PowerShell/Node logic to a script file and run that file.'
+        });
+    }
+    return diagnostics;
+}
+
+function annotateExecDetails(details = {}, { command = '', args = [], platformAdapter = null } = {}) {
+    const stdout = typeof details.stdout === 'string' ? details.stdout : '';
+    const stderr = typeof details.stderr === 'string' ? details.stderr : '';
+    const outputEmpty = stdout.length === 0 && stderr.length === 0;
+    return {
+        ...details,
+        outputEmpty,
+        evidence: {
+            stdoutBytes: Buffer.byteLength(stdout, 'utf8'),
+            stderrBytes: Buffer.byteLength(stderr, 'utf8'),
+            hasStdout: stdout.length > 0,
+            hasStderr: stderr.length > 0,
+            exitCode: details.exitCode ?? details.exit_code ?? null
+        },
+        commandDiagnostics: buildCommandDiagnostics({ command, args, platformAdapter })
+    };
+}
+
+function formatExecContent(details = {}) {
+    if (details.outputStore?.outputId) {
+        const outputStore = details.outputStore;
+        const previewTruncated = outputStore.previewTruncated === true;
+        const lines = [
+            `exitCode=${details.exitCode ?? details.exit_code}`,
+            `bytes=${outputStore.bytes ?? 0} lines=${outputStore.lineCount ?? 0} stdoutBytes=${outputStore.stdoutBytes ?? 0} stderrBytes=${outputStore.stderrBytes ?? 0}`,
+            `outputComplete=${previewTruncated ? 'false' : 'true'}`,
+            `outputTruncatedForModel=${previewTruncated ? 'true' : 'false'}`
+        ];
+        if (previewTruncated) {
+            lines.push(
+                'fullOutput=stored_for_agent_lab',
+                'modelHint=Visible output is incomplete. Rerun a narrower command, filter/search in the command itself, or write the needed result to a normal file and read that file.'
+            );
+        } else {
+            lines.push('modelHint=Visible stdout/stderr below is complete for this command.');
+        }
+        if (outputStore.preview) {
+            lines.push(previewTruncated ? '--- stdout/stderr preview ---' : '--- stdout/stderr complete ---', outputStore.preview);
+        } else {
+            lines.push('stdout=<empty>', 'stderr=<empty>');
+        }
+        const warnings = Array.isArray(details.commandDiagnostics?.warnings)
+            ? details.commandDiagnostics.warnings
+            : [];
+        if (warnings.length) {
+            lines.push(`diagnostic=${warnings.map((warning) => warning.code).join(',')}`);
+            lines.push(warnings.map((warning) => warning.message).join(' '));
+        }
+        return lines.join('\n');
+    }
+    if (details.stdout) {
+        return details.stdout;
+    }
+    if (details.stderr) {
+        return details.stderr;
+    }
+    const lines = [
+        `exitCode=${details.exitCode ?? details.exit_code}`,
+        'stdout=<empty>',
+        'stderr=<empty>'
+    ];
+    const warnings = Array.isArray(details.commandDiagnostics?.warnings)
+        ? details.commandDiagnostics.warnings
+        : [];
+    if (warnings.length) {
+        lines.push(`diagnostic=${warnings.map((warning) => warning.code).join(',')}`);
+        lines.push(warnings.map((warning) => warning.message).join(' '));
+    } else {
+        lines.push('diagnostic=no stdout/stderr was produced; if output files were expected, verify them with stat/read instead of assuming they exist.');
+    }
+    return lines.join('\n');
+}
+
 function collectSessionText(record = {}) {
     return [record.stdout || '', record.stderr || ''].filter(Boolean).join(record.stdout && record.stderr ? '\n' : '');
 }
 
 function collectPtyText(record = {}) {
     return record.output || '';
+}
+
+async function createExecOutputCapture({ args = {}, context = {}, runtime = {}, action = 'exec', command = '', commandArgs = [], workdir = '' } = {}) {
+    const store = runtime?.outputStore || context?.outputStore;
+    if (!store?.createCapture || args.storeOutput === false || args.captureOutput === false) {
+        return null;
+    }
+    const callId = normalizeString(context.callId || args.callId || args.outputId, randomUUID());
+    const previewChars = normalizeNumber(
+        args.previewChars || args.outputPreviewChars || args.maxPreviewChars,
+        6000,
+        256,
+        100000
+    );
+    try {
+        return await store.createCapture({
+            outputId: args.outputId || callId,
+            callId,
+            previewChars,
+            metadata: {
+                action,
+                tool: COMPUTER_TOOL_ID,
+                command,
+                args: commandArgs,
+                workdir,
+                runId: normalizeString(context.runId),
+                sessionId: normalizeString(context.sessionId || context.sessionKey),
+                iteration: Number.isFinite(Number(context.iteration)) ? Number(context.iteration) : null
+            }
+        });
+    } catch {
+        return null;
+    }
+}
+
+function summarizeExecOutputCapture(outputCapture) {
+    if (!outputCapture?.summary) {
+        return null;
+    }
+    try {
+        return outputCapture.summary();
+    } catch {
+        return null;
+    }
+}
+
+async function finalizeExecOutputCapture(outputCapture, extra = {}) {
+    if (!outputCapture?.finalize) {
+        return null;
+    }
+    try {
+        return await outputCapture.finalize(extra);
+    } catch (error) {
+        return {
+            status: 'store_error',
+            error: error?.message || String(error)
+        };
+    }
+}
+
+async function summarizeRecordOutputStore(record = {}, extra = {}) {
+    if (record.outputStore) {
+        return record.outputStore;
+    }
+    if (!record.outputCapture) {
+        return null;
+    }
+    if (record.status && record.status !== 'running') {
+        record.outputStore = await finalizeExecOutputCapture(record.outputCapture, {
+            status: record.status === 'exited' && record.exitCode === 0 ? 'completed' : record.status,
+            exitCode: record.exitCode,
+            signal: record.signal,
+            ...extra
+        });
+        return record.outputStore;
+    }
+    return summarizeExecOutputCapture(record.outputCapture);
+}
+
+function attachOutputStoreDetails(details = {}, outputStore = null) {
+    if (!outputStore?.outputId) {
+        return details;
+    }
+    return {
+        ...details,
+        outputId: outputStore.outputId,
+        outputPreview: outputStore.preview || '',
+        outputPreviewTruncated: outputStore.previewTruncated === true,
+        outputBytes: outputStore.bytes ?? outputStore.combinedBytes ?? null,
+        outputLineCount: outputStore.lineCount ?? null,
+        outputStore
+    };
 }
 
 class ComputerRuntime {
@@ -1574,7 +1879,7 @@ class ComputerRuntime {
         });
     }
 
-    createSessionRecord({ command, workdir, child, timeoutMs }) {
+    createSessionRecord({ command, workdir, child, timeoutMs, outputCapture = null }) {
         const id = randomUUID();
         const record = {
             id,
@@ -1589,14 +1894,18 @@ class ComputerRuntime {
             stdout: '',
             stderr: '',
             child,
-            timeout: null
+            timeout: null,
+            outputCapture,
+            outputStore: summarizeExecOutputCapture(outputCapture)
         };
         child.stdout?.on('data', (chunk) => {
             record.stdout = appendBounded(record.stdout, chunk);
+            record.outputCapture?.append('stdout', chunk);
             record.updatedAt = Date.now();
         });
         child.stderr?.on('data', (chunk) => {
             record.stderr = appendBounded(record.stderr, chunk);
+            record.outputCapture?.append('stderr', chunk);
             record.updatedAt = Date.now();
         });
         child.on('exit', (code, signal) => {
@@ -1608,16 +1917,41 @@ class ComputerRuntime {
                 clearTimeout(record.timeout);
                 record.timeout = null;
             }
+            finalizeExecOutputCapture(record.outputCapture, {
+                status: code === 0 ? 'completed' : 'error',
+                exitCode: code,
+                signal
+            }).then((summary) => {
+                if (summary) {
+                    record.outputStore = summary;
+                }
+            }).catch(() => {});
         });
         child.on('error', (error) => {
             record.status = 'error';
             record.stderr = appendBounded(record.stderr, `\n${error.message || error}`);
+            record.outputCapture?.append('stderr', `\n${error.message || error}`);
             record.updatedAt = Date.now();
+            finalizeExecOutputCapture(record.outputCapture, {
+                status: 'error',
+                error: error?.message || String(error)
+            }).then((summary) => {
+                if (summary) {
+                    record.outputStore = summary;
+                }
+            }).catch(() => {});
         });
         record.timeout = setTimeout(() => {
             if (record.status === 'running') {
                 record.status = 'timeout';
                 child.kill('SIGTERM');
+                finalizeExecOutputCapture(record.outputCapture, {
+                    status: 'timeout'
+                }).then((summary) => {
+                    if (summary) {
+                        record.outputStore = summary;
+                    }
+                }).catch(() => {});
             }
         }, timeoutMs);
         this.sessions.set(id, record);
@@ -1659,6 +1993,7 @@ class ComputerRuntime {
         const originalTokenCount = estimateTokenCount(outputText);
         const output = truncateByApproxTokens(outputText, maxOutputTokens);
         const running = record.status === 'running';
+        const outputStore = record.outputStore || summarizeExecOutputCapture(record.outputCapture);
         return {
             status: 'completed',
             action: options.action || 'exec_command',
@@ -1679,6 +2014,8 @@ class ComputerRuntime {
             output,
             stdout: truncateByApproxTokens(record.stdout || '', maxOutputTokens),
             stderr: truncateByApproxTokens(record.stderr || '', maxOutputTokens),
+            outputId: outputStore?.outputId,
+            outputStore,
             session: this.publicSession(record)
         };
     }
@@ -1912,6 +2249,7 @@ class ComputerRuntime {
     }
 
     publicSession(record, includeOutput = true) {
+        const outputStore = record.outputStore || summarizeExecOutputCapture(record.outputCapture);
         return {
             id: record.id,
             command: record.command,
@@ -1922,6 +2260,7 @@ class ComputerRuntime {
             signal: record.signal,
             startedAt: new Date(record.startedAt).toISOString(),
             updatedAt: new Date(record.updatedAt).toISOString(),
+            ...(outputStore ? { outputId: outputStore.outputId, outputStore } : {}),
             ...(includeOutput
                 ? {
                       stdout: record.stdout,
@@ -1954,79 +2293,132 @@ class ComputerRuntime {
             });
         }
         const timeoutMs = normalizeNumber(args.timeoutMs || args.timeout, DEFAULT_EXEC_TIMEOUT_MS, 1000, 10 * 60 * 1000);
+        const maxOutputTokens = normalizeNumber(args.max_output_tokens || args.maxOutputTokens, DEFAULT_EXEC_MAX_OUTPUT_TOKENS, 256, 100000);
         const startedAt = Date.now();
-        return await new Promise((resolve) => {
-            const platformAdapter = getRuntimePlatform(runtime);
-            const spawnSpec = platformAdapter.commandSpawnSpec
-                ? platformAdapter.commandSpawnSpec(command, { args: commandArgs, cwd: workdir, env: args.env })
-                : {
-                      supported: true,
-                      command,
-                      args: commandArgs,
-                      options: platformAdapter.shellSpawnOptions({ cwd: workdir, env: args.env })
-                  };
-            if (!spawnSpec.supported) {
-                resolve(createErrorResult('not_supported', spawnSpec.reason || 'Command execution is not supported by this platform adapter.', {
-                    action: 'exec',
-                    command,
-                    args: commandArgs,
-                    workdir,
-                    platform: platformAdapter.getStatus()
-                }));
-                return;
-            }
-            const child = spawn(spawnSpec.command, spawnSpec.args || [], spawnSpec.options || platformAdapter.shellSpawnOptions({
+        const platformAdapter = getRuntimePlatform(runtime);
+        const spawnSpec = platformAdapter.commandSpawnSpec
+            ? platformAdapter.commandSpawnSpec(command, { args: commandArgs, cwd: workdir, env: args.env })
+            : {
+                  supported: true,
+                  command,
+                  args: commandArgs,
+                  options: platformAdapter.shellSpawnOptions({ cwd: workdir, env: args.env })
+              };
+        if (!spawnSpec.supported) {
+            return createErrorResult('not_supported', spawnSpec.reason || 'Command execution is not supported by this platform adapter.', {
+                action: 'exec',
+                command,
+                args: commandArgs,
+                workdir,
+                platform: platformAdapter.getStatus()
+            });
+        }
+        const outputCapture = await createExecOutputCapture({ args, context, runtime, action: 'exec', command, commandArgs, workdir });
+        let child;
+        try {
+            child = spawn(spawnSpec.command, spawnSpec.args || [], spawnSpec.options || platformAdapter.shellSpawnOptions({
                 cwd: workdir,
                 env: args.env
             }));
+        } catch (error) {
+            const outputStore = await finalizeExecOutputCapture(outputCapture, {
+                status: 'error',
+                error: error?.message || String(error)
+            });
+            const details = attachOutputStoreDetails(annotateExecDetails({
+                status: 'error',
+                action: 'exec',
+                command,
+                args: commandArgs,
+                workdir,
+                exitCode: null,
+                stdout: '',
+                stderr: error?.message || String(error),
+                durationMs: Date.now() - startedAt
+            }, { command, args: commandArgs, platformAdapter }), outputStore);
+            return {
+                content: [{ type: 'text', text: formatExecContent(details) }],
+                isError: true,
+                details
+            };
+        }
+        return await new Promise((resolve) => {
+            let settled = false;
+            let timedOut = false;
             let stdout = '';
             let stderr = '';
-            const timer = setTimeout(() => {
-                platformAdapter.killProcessTree(child, 'SIGTERM').finally(() => {
-                    resolve(createErrorResult('timeout', `命令超时：${command}`, {
-                        action: 'exec',
-                        command,
-                        args: commandArgs,
-                        workdir,
-                        stdout,
-                        stderr,
-                        durationMs: Date.now() - startedAt
-                    }));
+            const maxOutputBytes = normalizeNumber(args.maxOutputBytes, DEFAULT_PROCESS_BUFFER_BYTES, 1024, 5 * 1024 * 1024);
+            let timer = null;
+            const finish = async ({ status, exitCode = null, signal = null, error = '' } = {}) => {
+                if (settled) {
+                    return;
+                }
+                settled = true;
+                if (timer) {
+                    clearTimeout(timer);
+                    timer = null;
+                }
+                const outputStore = await finalizeExecOutputCapture(outputCapture, {
+                    status,
+                    exitCode,
+                    signal,
+                    error,
+                    durationMs: Date.now() - startedAt
                 });
-            }, timeoutMs);
-            child.stdout?.on('data', (chunk) => {
-                stdout = appendBounded(stdout, chunk, normalizeNumber(args.maxOutputBytes, DEFAULT_PROCESS_BUFFER_BYTES, 1024, 5 * 1024 * 1024));
-            });
-            child.stderr?.on('data', (chunk) => {
-                stderr = appendBounded(stderr, chunk, normalizeNumber(args.maxOutputBytes, DEFAULT_PROCESS_BUFFER_BYTES, 1024, 5 * 1024 * 1024));
-            });
-            child.on('error', (error) => {
-                clearTimeout(timer);
-                resolve(createErrorResult('error', error.message || String(error), {
-                    action: 'exec',
-                    command,
-                    args: commandArgs,
-                    workdir
-                }));
-            });
-            child.on('exit', (exitCode, signal) => {
-                clearTimeout(timer);
-                const details = {
-                    status: exitCode === 0 ? 'completed' : 'error',
+                const outputText = [stdout, stderr].filter(Boolean).join(stdout && stderr ? '\n' : '');
+                const details = attachOutputStoreDetails(annotateExecDetails({
+                    status,
                     action: 'exec',
                     command,
                     args: commandArgs,
                     workdir,
                     exitCode,
                     signal,
-                    stdout,
-                    stderr,
-                    durationMs: Date.now() - startedAt
-                };
+                    output: truncateByApproxTokens(outputText, maxOutputTokens),
+                    stdout: truncateByApproxTokens(stdout, maxOutputTokens),
+                    stderr: truncateByApproxTokens(stderr || error, maxOutputTokens),
+                    durationMs: Date.now() - startedAt,
+                    error
+                }, { command, args: commandArgs, platformAdapter }), outputStore);
                 resolve({
-                    content: [{ type: 'text', text: stdout || stderr || `exitCode=${exitCode}` }],
-                    isError: exitCode !== 0,
+                    content: [{ type: 'text', text: formatExecContent(details) }],
+                    isError: status !== 'completed',
                     details
+                });
+            };
+            timer = setTimeout(() => {
+                timedOut = true;
+                platformAdapter.killProcessTree(child, 'SIGTERM').finally(() => {
+                    finish({
+                        status: 'timeout',
+                        signal: 'SIGTERM',
+                        error: `命令超时：${command}`
+                    });
+                });
+            }, timeoutMs);
+            child.stdout?.on('data', (chunk) => {
+                stdout = appendBounded(stdout, chunk, maxOutputBytes);
+                outputCapture?.append('stdout', chunk);
+            });
+            child.stderr?.on('data', (chunk) => {
+                stderr = appendBounded(stderr, chunk, maxOutputBytes);
+                outputCapture?.append('stderr', chunk);
+            });
+            child.on('error', (error) => {
+                const message = error?.message || String(error);
+                stderr = appendBounded(stderr, `\n${message}`, maxOutputBytes);
+                outputCapture?.append('stderr', `\n${message}`);
+                finish({
+                    status: 'error',
+                    error: message
+                });
+            });
+            child.on('exit', (exitCode, signal) => {
+                finish({
+                    status: timedOut ? 'timeout' : exitCode === 0 ? 'completed' : 'error',
+                    exitCode,
+                    signal,
+                    error: timedOut ? `命令超时：${command}` : ''
                 });
             });
         });
@@ -2093,17 +2485,48 @@ class ComputerRuntime {
                 platform: platformAdapter.getStatus()
             });
         }
-        const child = spawn(spawnSpec.command, spawnSpec.args || [], spawnSpec.options || platformAdapter.shellSpawnOptions({
-            cwd: workdir,
-            env: args.env
-        }));
-        const record = this.createSessionRecord({ command, workdir, child, timeoutMs });
+        const outputCapture = await createExecOutputCapture({ args, context, runtime, action: 'exec_command', command, commandArgs, workdir });
+        let child;
+        try {
+            child = spawn(spawnSpec.command, spawnSpec.args || [], spawnSpec.options || platformAdapter.shellSpawnOptions({
+                cwd: workdir,
+                env: args.env
+            }));
+        } catch (error) {
+            const outputStore = await finalizeExecOutputCapture(outputCapture, {
+                status: 'error',
+                error: error?.message || String(error)
+            });
+            const details = attachOutputStoreDetails(annotateExecDetails({
+                status: 'error',
+                action: 'exec_command',
+                command,
+                args: commandArgs,
+                workdir,
+                exitCode: null,
+                stdout: '',
+                stderr: error?.message || String(error)
+            }, { command, args: commandArgs, platformAdapter }), outputStore);
+            return {
+                content: [{ type: 'text', text: formatExecContent(details) }],
+                isError: true,
+                details
+            };
+        }
+        const record = this.createSessionRecord({ command, workdir, child, timeoutMs, outputCapture });
         const details = await this.waitForProcessSnapshot(record, yieldTimeMs);
         details.max_output_tokens = maxOutputTokens;
         details.output = truncateByApproxTokens(collectSessionText(record), maxOutputTokens);
         details.stdout = truncateByApproxTokens(record.stdout || '', maxOutputTokens);
         details.stderr = truncateByApproxTokens(record.stderr || '', maxOutputTokens);
-        return createTextResult(details.output || JSON.stringify(details, null, 2), details);
+        const outputStore = await summarizeRecordOutputStore(record, {
+            durationMs: Math.max(0, Date.now() - record.startedAt)
+        });
+        const annotatedDetails = attachOutputStoreDetails(
+            annotateExecDetails(details, { command, args: commandArgs, platformAdapter }),
+            outputStore
+        );
+        return createTextResult(formatExecContent(annotatedDetails), annotatedDetails);
     }
 
     async sessionStart(args, context, runtime) {
@@ -2147,11 +2570,29 @@ class ComputerRuntime {
                 platform: platformAdapter.getStatus()
             });
         }
-        const child = spawn(spawnSpec.command, spawnSpec.args || [], spawnSpec.options || platformAdapter.shellSpawnOptions({
-            cwd: workdir,
-            env: args.env
-        }));
-        const record = this.createSessionRecord({ command, workdir, child, timeoutMs });
+        const outputCapture = await createExecOutputCapture({ args, context, runtime, action: 'session_start', command, commandArgs, workdir });
+        let child;
+        try {
+            child = spawn(spawnSpec.command, spawnSpec.args || [], spawnSpec.options || platformAdapter.shellSpawnOptions({
+                cwd: workdir,
+                env: args.env
+            }));
+        } catch (error) {
+            const outputStore = await finalizeExecOutputCapture(outputCapture, {
+                status: 'error',
+                error: error?.message || String(error)
+            });
+            const details = attachOutputStoreDetails({
+                status: 'error',
+                action: 'session_start',
+                command,
+                args: commandArgs,
+                workdir,
+                error: error?.message || String(error)
+            }, outputStore);
+            return createErrorResult('error', error?.message || String(error), details);
+        }
+        const record = this.createSessionRecord({ command, workdir, child, timeoutMs, outputCapture });
         return createTextResult(JSON.stringify(this.publicSession(record), null, 2), {
             status: 'completed',
             action: 'session_start',
@@ -2238,7 +2679,9 @@ class ComputerRuntime {
             details.stdout = truncateByApproxTokens(processRecord.stdout || '', maxOutputTokens);
             details.stderr = truncateByApproxTokens(processRecord.stderr || '', maxOutputTokens);
             details.bytes_written = Buffer.byteLength(input);
-            return createTextResult(details.output || JSON.stringify(details, null, 2), details);
+            const outputStore = await summarizeRecordOutputStore(processRecord);
+            const withOutputStore = attachOutputStoreDetails(details, outputStore);
+            return createTextResult(formatExecContent(withOutputStore), withOutputStore);
         }
         if (input && ptyRecord.status !== 'running') {
             return createErrorResult('error', `PTY 会话不是 running：${ptyRecord.status}`, { sessionId: id, status: ptyRecord.status });
@@ -2272,13 +2715,19 @@ class ComputerRuntime {
         const killed = await this.platformAdapter.killProcessTree(record.child, signal);
         record.status = record.status === 'running' ? 'killed' : record.status;
         record.updatedAt = Date.now();
+        record.outputStore = await summarizeRecordOutputStore(record, {
+            status: 'killed',
+            signal
+        });
         return createTextResult(`killed ${id}`, {
             status: 'completed',
             action: 'process_kill',
             sessionId: id,
             signal,
             platform: this.platformAdapter.getStatus(),
-            kill: killed
+            kill: killed,
+            outputId: record.outputStore?.outputId,
+            outputStore: record.outputStore
         });
     }
 
@@ -2381,6 +2830,14 @@ function schemaResult(runtime) {
             guiInput: getRuntimePlatform(runtime).getStatus().capabilities.guiInput,
             screenCapture: getRuntimePlatform(runtime).getStatus().capabilities.screenCapture,
             clipboard: getRuntimePlatform(runtime).getStatus().capabilities.clipboard
+        },
+        directTools: {
+            execOutputStore: {
+                status: 'runtime_artifact_only_by_default',
+                useWhen: 'computer.exec/exec_command/session_start returns outputId, bytes, lineCount, or previewTruncated.',
+                defaultAgentBehavior: 'Use returned stdout/stderr/preview. If more evidence is needed, rerun a narrower command or write the needed data to a normal file and read that file.',
+                doNotCall: 'Do not treat outputId as a filesystem path or computer action.'
+            }
         }
     };
     return createTextResult(JSON.stringify(schema, null, 2), {
@@ -2405,6 +2862,10 @@ class HumanClawComputerTool {
             ...runtime,
             platformAdapter: runtime.platformAdapter || this.runtime.platformAdapter
         };
+        const outputStoreSurfaceError = outputStoreWrongSurfaceResult(args, action);
+        if (outputStoreSurfaceError) {
+            return outputStoreSurfaceError;
+        }
         if (action === 'schema' || action === 'help') {
             return schemaResult(effectiveRuntime);
         }

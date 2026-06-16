@@ -239,6 +239,9 @@ function toolSpecificityScore(toolName = '') {
     if (toolName === 'web_fetch' || toolName === 'web_extract_links') {
         return 4;
     }
+    if (/^output_(read|tail|search)$/.test(toolName)) {
+        return 14;
+    }
     if (/^(read_|pdf_|youtube_|transcribe_|describe_|github_|run_python)/.test(toolName)) {
         return 12;
     }
@@ -255,6 +258,21 @@ function scoreToolForQuery(entry = {}, query = '') {
 
     if (needle && toolName && (needle === toolName || needle.includes(toolName) || text.includes(needle))) {
         score += 18;
+    }
+    if (
+        /^output_(read|tail|search)$/.test(toolName) &&
+        /\b(outputid|output_id|previewtruncated|exec output|stdout|stderr|full output|stored output|output store|tail output|search output)\b/i.test(query)
+    ) {
+        score += 36;
+    }
+    if (toolName === 'output_read' && /\b(full output|read output|stdout|stderr|byte range|complete output|stored output)\b/i.test(query)) {
+        score += 16;
+    }
+    if (toolName === 'output_tail' && /\b(tail|last|ending|recent|final lines|bottom)\b/i.test(query)) {
+        score += 16;
+    }
+    if (toolName === 'output_search' && /\b(search|find|needle|query|match|grep)\b/i.test(query)) {
+        score += 16;
     }
     if (entry.type === 'mcp_tool' || /^mcp__/.test(normalizeForSearch(entry.id))) {
         score += 3;

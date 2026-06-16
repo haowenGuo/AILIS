@@ -214,6 +214,16 @@ test('HumanClaw computer tool provides filesystem and process control with appro
         assert.equal(read.body.ok, true, read.body.error);
         assert.match(read.body.result.content[0].text, /hello computer/);
 
+        await fs.writeFile(path.join(workspaceRoot, 'sample.docx'), Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x00, 0x00, 0x00, 0x00]));
+        const binaryRead = await callTool(baseUrl, {
+            tool: 'computer',
+            args: { action: 'read', path: 'sample.docx' },
+            context: { workspace: workspaceRoot }
+        });
+        assert.equal(binaryRead.body.ok, false);
+        assert.equal(binaryRead.body.status, 'binary_file');
+        assert.match(binaryRead.body.result.details.suggestedNext.query, /Word\/DOCX document/);
+
         const list = await callTool(baseUrl, {
             tool: 'computer',
             args: { action: 'list', path: '.' },
@@ -273,6 +283,20 @@ test('HumanClaw computer tool provides filesystem and process control with appro
         });
         assert.equal(execWithArgs.body.ok, true, execWithArgs.body.error);
         assert.match(execWithArgs.body.result.details.stdout, /COMPUTER_EXEC_ARGS_OK/);
+
+        const silentExec = await callTool(baseUrl, {
+            tool: 'computer',
+            args: {
+                action: 'exec',
+                command: process.execPath,
+                args: ['-e', 'process.exit(0)'],
+                timeoutMs: 10000
+            },
+            context: { workspace: workspaceRoot, approved: true }
+        });
+        assert.equal(silentExec.body.ok, true, silentExec.body.error);
+        assert.equal(silentExec.body.result.details.outputEmpty, true);
+        assert.match(silentExec.body.result.content[0].text, /stdout=<empty>/);
 
         const session = await callTool(baseUrl, {
             tool: 'computer',

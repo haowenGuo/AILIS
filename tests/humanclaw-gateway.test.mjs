@@ -128,6 +128,98 @@ test('HumanClaw Gateway exposes health, tools, guarded tool calls, and audit', a
         assert.equal(exec.body.ok, true, exec.body.error);
         assert.match(JSON.stringify(exec.body.result), /GATEWAY_EXEC_OK/);
 
+        const execWithArgs = await jsonFetch(`${baseUrl}/tools/call`, {
+            method: 'POST',
+            body: JSON.stringify({
+                tool: 'exec',
+                args: {
+                    command: process.execPath,
+                    args: ['-e', "console.log('GATEWAY_EXEC_ARGS_OK')"],
+                    timeout: 8
+                },
+                context: { workspace: workspaceRoot, approved: true }
+            })
+        });
+        assert.equal(execWithArgs.body.ok, true, execWithArgs.body.error);
+        assert.match(execWithArgs.body.result.details.stdout, /GATEWAY_EXEC_ARGS_OK/);
+
+        const longExec = await jsonFetch(`${baseUrl}/tools/call`, {
+            method: 'POST',
+            body: JSON.stringify({
+                tool: 'exec',
+                args: {
+                    command: process.execPath,
+                    args: [
+                        '-e',
+                        [
+                            "console.log('STORE_START')",
+                            "for (let i = 0; i < 220; i += 1) console.log('STORE_LINE_' + i + ':' + 'x'.repeat(48))",
+                            "console.log('STORE_NEEDLE_FINAL')"
+                        ].join(';')
+                    ],
+                    timeout: 8,
+                    maxPreviewChars: 1200
+                },
+                context: { workspace: workspaceRoot, approved: true }
+            })
+        });
+        assert.equal(longExec.body.ok, true, longExec.body.error);
+        const outputStore = longExec.body.result.details.outputStore;
+        assert.ok(outputStore?.outputId);
+        assert.equal(outputStore.previewTruncated, true);
+        assert.ok(outputStore.bytes > 1200);
+        const logStat = await fs.stat(outputStore.path);
+        assert.equal(logStat.size, outputStore.bytes);
+        assert.match(longExec.body.result.content[0].text, /fullOutput=stored_for_agent_lab/);
+        assert.doesNotMatch(longExec.body.result.content[0].text, /output_read\/output_tail\/output_search/);
+
+        const outputSearch = await jsonFetch(`${baseUrl}/tools/call`, {
+            method: 'POST',
+            body: JSON.stringify({
+                tool: 'output_search',
+                args: { outputId: outputStore.outputId, query: 'STORE_NEEDLE_FINAL', contextLines: 0 },
+                context: { workspace: workspaceRoot }
+            })
+        });
+        assert.equal(outputSearch.body.ok, true, outputSearch.body.error);
+        assert.equal(outputSearch.body.result.details.matchCount, 1);
+
+        const outputTail = await jsonFetch(`${baseUrl}/tools/call`, {
+            method: 'POST',
+            body: JSON.stringify({
+                tool: 'output_tail',
+                args: { outputId: outputStore.outputId, lines: 3 },
+                context: { workspace: workspaceRoot }
+            })
+        });
+        assert.equal(outputTail.body.ok, true, outputTail.body.error);
+        assert.match(outputTail.body.result.content[0].text, /STORE_NEEDLE_FINAL/);
+
+        const outputRead = await jsonFetch(`${baseUrl}/tools/call`, {
+            method: 'POST',
+            body: JSON.stringify({
+                tool: 'output_read',
+                args: { outputId: outputStore.outputId, offset: 0, limit: 128 },
+                context: { workspace: workspaceRoot }
+            })
+        });
+        assert.equal(outputRead.body.ok, true, outputRead.body.error);
+        assert.match(outputRead.body.result.content[0].text, /STORE_START/);
+        assert.equal(outputRead.body.result.details.hasMore, true);
+
+        const wrongOutputReadSurface = await jsonFetch(`${baseUrl}/tools/call`, {
+            method: 'POST',
+            body: JSON.stringify({
+                tool: 'computer',
+                args: { action: 'read', outputId: outputStore.outputId },
+                context: { workspace: workspaceRoot }
+            })
+        });
+        assert.equal(wrongOutputReadSurface.body.ok, false);
+        assert.equal(wrongOutputReadSurface.body.status, 'wrong_tool_surface');
+        assert.equal(wrongOutputReadSurface.body.result.details.defaultSurface, 'legacy_stable');
+        assert.match(wrongOutputReadSurface.body.result.details.recovery, /narrower command/);
+
         const audit = await jsonFetch(`${baseUrl}/audit?limit=10`);
         assert.equal(audit.body.ok, true);
         assert.ok(audit.body.entries.length >= 4);
@@ -313,6 +405,17 @@ test('HumanClaw Gateway tool_search ranks specific MCP artifact tools before web
         assert.equal(result.details.tools.length, 1);
         assert.equal(result.details.tools[0].tool, 'read_presentation');
         assert.match(result.details.routing_advice, /read_presentation/);
+
+        const docxResult = await gateway.executeGatewayToolSearch({
+            query: 'DOCX word document extract text content',
+            includeExternal: false,
+            limit: 1
+        });
+
+        assert.equal(docxResult.details.tools.length, 1);
+        assert.equal(docxResult.details.tools[0].tool, 'read_document');
+        assert.notEqual(docxResult.details.tools[0].id, 'artifact_verifier');
+        assert.match(docxResult.details.routing_advice, /read_document/);
     } finally {
         await gateway.stop();
         await fs.rm(workspaceRoot, { recursive: true, force: true });
@@ -451,7 +554,16 @@ test('HumanClaw Gateway builds agent analysis snapshots from transcript, audit, 
                 status: 'completed',
                 durationMs: 17,
                 result: {
-                    content: [{ type: 'text', text: 'file contents' }]
+                    content: [{ type: 'text', text: 'file contents' }],
+                    details: {
+                        outputStore: {
+                            outputId: 'output-call-read-1',
+                            path: path.join(workspaceRoot, '.audit', 'output-store', 'output-call-read-1.log'),
+                            bytes: 1234,
+                            lineCount: 12,
+                            previewTruncated: true
+                        }
+                    }
                 }
             }
         });
@@ -506,6 +618,8 @@ test('HumanClaw Gateway builds agent analysis snapshots from transcript, audit, 
         assert.equal(analysis.summary.usage.totalTokens, 120);
         assert.equal(analysis.rounds[0].messages[1].content, 'debug this agent loop');
         assert.equal(analysis.toolCalls[0].durationMs, 17);
+        assert.equal(analysis.toolCalls[0].outputStore.outputId, 'output-call-read-1');
+        assert.equal(analysis.outputArtifacts[0].outputId, 'output-call-read-1');
         assert.match(analysis.summary.primaryBottleneck, /LLM|read|上下文/);
         assert.equal(analysis.summary.debugPaused, true);
         assert.equal(analysis.summary.debugSessionId, 'debug-session-1');

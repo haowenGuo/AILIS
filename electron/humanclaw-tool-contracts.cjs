@@ -410,6 +410,14 @@ const TOOL_EXPERIENCE = Object.freeze({
         failureStyle: 'plain_explain',
         userFacingVerb: '查找可用工具'
     }),
+    output_store: makeExperienceMetadata({
+        embodiedAction: 'inspect_command_output',
+        permissionStyle: 'silent_read',
+        progressStyle: 'quiet',
+        successStyle: 'summarize_result',
+        failureStyle: 'plain_explain',
+        userFacingVerb: '查看命令输出'
+    }),
     subagents: makeExperienceMetadata({
         embodiedAction: 'delegate_subtask',
         permissionStyle: 'inherits_parent_policy',
@@ -597,14 +605,36 @@ const TOOL_CONTRACTS = Object.freeze({
         errors: defaultErrors(['exec_blocked', 'exec_failed', 'shell_access_disabled']),
         schema: makeObjectSchema({
             properties: {
-                command: stringSchema({ minLength: 1 }),
-                cmd: stringSchema({ minLength: 1 }),
-                args: arraySchema(stringSchema()),
-                workdir: stringSchema(),
-                timeoutMs: numberSchema({ minimum: 1000, maximum: 24 * 60 * 60 * 1000 }),
-                timeout: numberSchema({ minimum: 1 }),
-                maxOutputBytes: numberSchema({ minimum: 1 }),
-                env: objectSchema()
+                command: stringSchema({
+                    minLength: 1,
+                    description: 'Command line to run in the current runtime_environment shell. Use for existing scripts, tests, builds, diagnostics, and short one-shot commands.'
+                }),
+                cmd: stringSchema({
+                    minLength: 1,
+                    description: 'Alias for command.'
+                }),
+                args: arraySchema(stringSchema(), {
+                    description: 'Optional argv list for direct-spawn style execution when supported; prefer args for complex paths or parameters to reduce shell quoting issues.'
+                }),
+                workdir: stringSchema({
+                    description: 'Working directory for the command. Use a workspace path when reading or creating follow-up artifacts.'
+                }),
+                timeoutMs: numberSchema({
+                    minimum: 1000,
+                    maximum: 24 * 60 * 60 * 1000,
+                    description: 'Maximum runtime in milliseconds before the command is stopped.'
+                }),
+                timeout: numberSchema({
+                    minimum: 1,
+                    description: 'Legacy timeout field.'
+                }),
+                maxOutputBytes: numberSchema({
+                    minimum: 1,
+                    description: 'Maximum captured stdout/stderr bytes.'
+                }),
+                env: objectSchema({
+                    description: 'Additional environment variables for this command.'
+                })
             },
             additionalProperties: true
         }),
@@ -717,6 +747,69 @@ const TOOL_CONTRACTS = Object.freeze({
             }
             return [];
         }
+    }),
+    output_read: Object.freeze({
+        id: 'output_read',
+        version: CONTRACT_VERSION,
+        mutates: false,
+        risk: 'low',
+        approval: 'never',
+        experience: TOOL_EXPERIENCE.output_store,
+        returns: defaultReturns(),
+        errors: defaultErrors(['output_not_found', 'invalid_range']),
+        schema: makeObjectSchema({
+            required: ['outputId'],
+            properties: {
+                outputId: stringSchema({ minLength: 1 }),
+                channel: stringSchema({ enum: ['combined', 'stdout', 'stderr'] }),
+                offset: numberSchema({ minimum: 0 }),
+                limit: numberSchema({ minimum: 1, maximum: 512 * 1024 })
+            },
+            additionalProperties: true
+        })
+    }),
+    output_tail: Object.freeze({
+        id: 'output_tail',
+        version: CONTRACT_VERSION,
+        mutates: false,
+        risk: 'low',
+        approval: 'never',
+        experience: TOOL_EXPERIENCE.output_store,
+        returns: defaultReturns(),
+        errors: defaultErrors(['output_not_found', 'invalid_range']),
+        schema: makeObjectSchema({
+            required: ['outputId'],
+            properties: {
+                outputId: stringSchema({ minLength: 1 }),
+                channel: stringSchema({ enum: ['combined', 'stdout', 'stderr'] }),
+                bytes: numberSchema({ minimum: 1, maximum: 512 * 1024 }),
+                lines: numberSchema({ minimum: 1, maximum: 10000 })
+            },
+            additionalProperties: true
+        })
+    }),
+    output_search: Object.freeze({
+        id: 'output_search',
+        version: CONTRACT_VERSION,
+        mutates: false,
+        risk: 'low',
+        approval: 'never',
+        experience: TOOL_EXPERIENCE.output_store,
+        returns: defaultReturns(),
+        errors: defaultErrors(['output_not_found', 'empty_query', 'invalid_regex']),
+        schema: makeObjectSchema({
+            required: ['outputId', 'query'],
+            properties: {
+                outputId: stringSchema({ minLength: 1 }),
+                channel: stringSchema({ enum: ['combined', 'stdout', 'stderr'] }),
+                query: stringSchema({ minLength: 1 }),
+                regex: booleanSchema(),
+                caseSensitive: booleanSchema(),
+                maxResults: numberSchema({ minimum: 1, maximum: 200 }),
+                contextLines: numberSchema({ minimum: 0, maximum: 5 })
+            },
+            additionalProperties: true
+        })
     }),
     subagents: Object.freeze({
         id: 'subagents',

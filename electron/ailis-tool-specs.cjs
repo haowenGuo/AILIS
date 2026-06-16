@@ -17,6 +17,19 @@ const AILIS_TOOL_KIND = Object.freeze({
     FREEFORM: 'freeform'
 });
 
+function isExperimentalOutputStoreToolsEnabled() {
+    return (
+        process.env.AILIS_EXPERIMENTAL_OUTPUT_TOOLS === '1' ||
+        process.env.AIGL_EXPERIMENTAL_OUTPUT_TOOLS === '1' ||
+        process.env.AILIS_TOOL_SURFACE_MODE === 'codex' ||
+        process.env.AIGL_TOOL_SURFACE_MODE === 'codex'
+    );
+}
+
+const OUTPUT_STORE_TOOL_EXPOSURE = isExperimentalOutputStoreToolsEnabled()
+    ? AILIS_TOOL_EXPOSURE.DIRECT
+    : AILIS_TOOL_EXPOSURE.HIDDEN;
+
 const AILIS_RUNTIME_TOOL_DEFINITIONS = Object.freeze([
     Object.freeze({
         id: 'update_plan',
@@ -39,6 +52,39 @@ const AILIS_RUNTIME_TOOL_DEFINITIONS = Object.freeze([
         status: 'available',
         needsApproval: false,
         exposure: AILIS_TOOL_EXPOSURE.DIRECT
+    }),
+    Object.freeze({
+        id: 'output_read',
+        label: 'output_read',
+        description: 'Top-level direct tool, not a computer action. Read a byte range from a stored exec output artifact by outputId instead of rerunning the command.',
+        sectionId: 'runtime',
+        route: 'humanclaw-runtime',
+        materialized: true,
+        status: 'available',
+        needsApproval: false,
+        exposure: OUTPUT_STORE_TOOL_EXPOSURE
+    }),
+    Object.freeze({
+        id: 'output_tail',
+        label: 'output_tail',
+        description: 'Top-level direct tool, not a computer action. Read the tail of a stored exec output artifact by outputId, optionally limited by bytes or lines.',
+        sectionId: 'runtime',
+        route: 'humanclaw-runtime',
+        materialized: true,
+        status: 'available',
+        needsApproval: false,
+        exposure: OUTPUT_STORE_TOOL_EXPOSURE
+    }),
+    Object.freeze({
+        id: 'output_search',
+        label: 'output_search',
+        description: 'Top-level direct tool, not a computer action. Search a stored exec output artifact by outputId without loading the full output into model context.',
+        sectionId: 'runtime',
+        route: 'humanclaw-runtime',
+        materialized: true,
+        status: 'available',
+        needsApproval: false,
+        exposure: OUTPUT_STORE_TOOL_EXPOSURE
     }),
     Object.freeze({
         id: 'request_permissions',

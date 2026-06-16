@@ -20,6 +20,7 @@ const {
 } = require('../electron/ailis-mcp-adapter.cjs');
 const {
     approxTokenCount,
+    compactToolResultForModel,
     compactToolSchema,
     truncateMiddleText
 } = require('../electron/ailis-runtime-budget.cjs');
@@ -33,6 +34,12 @@ const {
 
 test('AILIS tool specs keep Codex-like shape without Codex naming', () => {
     assert.ok(AILIS_RUNTIME_TOOL_DEFINITIONS.some((tool) => tool.id === 'tool_search'));
+    assert.ok(AILIS_RUNTIME_TOOL_DEFINITIONS.some((tool) => tool.id === 'output_read'));
+    assert.ok(AILIS_RUNTIME_TOOL_DEFINITIONS.some((tool) => tool.id === 'output_tail'));
+    assert.ok(AILIS_RUNTIME_TOOL_DEFINITIONS.some((tool) => tool.id === 'output_search'));
+    assert.equal(AILIS_RUNTIME_TOOL_DEFINITIONS.find((tool) => tool.id === 'output_read').exposure, AILIS_TOOL_EXPOSURE.HIDDEN);
+    assert.equal(AILIS_RUNTIME_TOOL_DEFINITIONS.find((tool) => tool.id === 'output_tail').exposure, AILIS_TOOL_EXPOSURE.HIDDEN);
+    assert.equal(AILIS_RUNTIME_TOOL_DEFINITIONS.find((tool) => tool.id === 'output_search').exposure, AILIS_TOOL_EXPOSURE.HIDDEN);
 
     const toolSearch = AILIS_RUNTIME_TOOL_DEFINITIONS.find((tool) => tool.id === 'tool_search');
     assert.equal(toolSearch.route, 'humanclaw-runtime');
@@ -202,6 +209,22 @@ test('AILIS tool routing prefers artifact-specific MCP tools over broad web_sear
     assert.match(buildToolRoutingAdvice('attached docx Word document table', candidates), /read_document/);
 });
 
+test('AILIS tool routing can rank output store tools when an experimental surface provides them', () => {
+    const outputTools = AILIS_RUNTIME_TOOL_DEFINITIONS
+        .filter((tool) => ['output_read', 'output_tail', 'output_search'].includes(tool.id))
+        .map((tool) => ({
+            id: tool.id,
+            type: 'runtime_tool',
+            exposure: tool.exposure,
+            spec: createAilisFunctionToolSpec(tool)
+        }));
+
+    const ranked = rankToolSearchResults(outputTools, 'exec outputId previewTruncated full stdout output', 3);
+    assert.equal(ranked[0].id, 'output_read');
+    assert.ok(ranked.some((tool) => tool.id === 'output_tail'));
+    assert.ok(ranked.some((tool) => tool.id === 'output_search'));
+});
+
 test('HumanClaw MCP manager search uses tool routing before returning specs', async () => {
     const manager = new HumanClawMcpManager({});
     manager.listToolSpecs = async () => [
@@ -270,6 +293,22 @@ test('AILIS runtime budget compacts large schemas and tool text for model contex
     assert.match(truncated, /truncated for model budget/);
     assert.match(truncated, /TAIL$/);
     assert.ok(approxTokenCount(truncated) < approxTokenCount(`${'a'.repeat(2000)}TAIL`));
+});
+
+test('AILIS runtime budget preserves primary tool text beyond structured string budget', () => {
+    const text = `${'x'.repeat(3000)}TAIL`;
+    const compacted = compactToolResultForModel({
+        content: [{ type: 'text', text }],
+        details: { stdout: text }
+    }, {
+        maxTextChars: 6000,
+        maxStructuredStringChars: 1200
+    });
+
+    assert.equal(compacted.content[0].text, text);
+    assert.equal(compacted.content[0].originalTextChars, text.length);
+    assert.equal(compacted.content[0].truncated, false);
+    assert.equal(compacted.details.stdout.length < text.length, true);
 });
 
 test('AILIS direct MCP specs expose compact model-facing schema', () => {

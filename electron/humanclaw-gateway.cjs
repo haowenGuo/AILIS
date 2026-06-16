@@ -741,12 +741,15 @@ class HumanClawGateway extends EventEmitter {
     async executeGatewayToolSearch(args = {}) {
         const query = normalizeString(args.query || args.q);
         const limit = Math.max(1, Math.min(Number(args.limit || 12), 50));
-        const local = this.gatewayToolRuntimeRegistry.search(query, limit).map((entry) => ({
-            id: entry.id,
-            type: 'gateway_or_runtime_tool',
-            exposure: entry.exposure,
-            spec: entry.spec
-        }));
+        const includeDirect = args.includeDirect === true;
+        const local = this.gatewayToolRuntimeRegistry.search(query, limit)
+            .filter((entry) => includeDirect || entry.exposure !== TOOL_EXPOSURE.DIRECT)
+            .map((entry) => ({
+                id: entry.id,
+                type: 'gateway_or_runtime_tool',
+                exposure: entry.exposure,
+                spec: entry.spec
+            }));
         let mcp = [];
         if (args.includeMcp !== false && this.runtime?.mcpManager?.searchToolSpecs) {
             try {
@@ -1875,10 +1878,11 @@ class HumanClawGateway extends EventEmitter {
         };
     }
 
-    async callOpenClawTool({ toolId, args, context, workspaceDir }) {
+    async callOpenClawTool({ callId = '', toolId, args, context, workspaceDir }) {
         if (isExternalVirtualToolId(toolId)) {
             const result = await this.runtime?.capabilityManager?.executeVirtualExternalTool?.(toolId, args, {
                 ...context,
+                callId,
                 workspace: workspaceDir,
                 workspaceDir
             });
@@ -1892,6 +1896,7 @@ class HumanClawGateway extends EventEmitter {
         if (this.gatewayToolRuntimeRegistry?.has(toolId)) {
             return await this.gatewayToolRuntimeRegistry.dispatch(toolId, args, {
                 ...context,
+                callId,
                 workspace: workspaceDir,
                 workspaceDir
             });
@@ -1956,7 +1961,9 @@ class HumanClawGateway extends EventEmitter {
                 workspaceDir,
                 workspaceRoot: this.workspaceRoot,
                 projectRoot: this.projectRoot,
-                platformAdapter: this.platformAdapter
+                platformAdapter: this.platformAdapter,
+                outputStore: this.runtime.outputStore,
+                auditDir: this.auditDir
             });
         }
         if (toolId === CODE_TOOL_ID) {
@@ -2244,6 +2251,7 @@ class HumanClawGateway extends EventEmitter {
                 {
                     action: 'exec',
                     command: finalArgs.command || finalArgs.cmd,
+                    args: finalArgs.args || finalArgs.arguments,
                     workdir: finalArgs.workdir,
                     timeoutMs: finalArgs.timeoutMs || finalArgs.timeout,
                     maxOutputBytes: finalArgs.maxOutputBytes,
@@ -2253,7 +2261,10 @@ class HumanClawGateway extends EventEmitter {
                 {
                     workspaceDir,
                     workspaceRoot: this.workspaceRoot,
-                    projectRoot: this.projectRoot
+                    projectRoot: this.projectRoot,
+                    platformAdapter: this.platformAdapter,
+                    outputStore: this.runtime.outputStore,
+                    auditDir: this.auditDir
                 }
             );
         }
@@ -2607,6 +2618,19 @@ class HumanClawGateway extends EventEmitter {
             .slice(-2000);
     }
 
+    extractOutputStoreFromToolPayload(payload = {}) {
+        const result = payload.result || {};
+        const details = result.details || {};
+        const structured = result.structuredContent || {};
+        const candidates = [
+            details.outputStore,
+            structured.outputStore,
+            result.outputStore,
+            payload.outputStore
+        ];
+        return candidates.find((candidate) => candidate && typeof candidate === 'object' && candidate.outputId) || null;
+    }
+
     buildRunRounds(transcriptItems = []) {
         const rounds = new Map();
         const ensureRound = (iteration) => {
@@ -2673,7 +2697,8 @@ class HumanClawGateway extends EventEmitter {
                     ok: null,
                     durationMs: 0,
                     args: payload.args || null,
-                    resultPreview: ''
+                    resultPreview: '',
+                    outputStore: null
                 };
                 toolCalls.set(callId, tool);
                 ensureRound(iteration).tools.push(tool);
@@ -2690,7 +2715,8 @@ class HumanClawGateway extends EventEmitter {
                         ok: payload.ok === true,
                         durationMs: Number(payload.durationMs) || 0,
                         args: null,
-                        resultPreview: summarizeForAnalysis(payload.result || payload.error || '', 900)
+                        resultPreview: summarizeForAnalysis(payload.result || payload.error || '', 900),
+                        outputStore: this.extractOutputStoreFromToolPayload(payload)
                     };
                     ensureRound(iteration).tools.push(tool);
                 } else {
@@ -2698,6 +2724,7 @@ class HumanClawGateway extends EventEmitter {
                     tool.ok = payload.ok === true;
                     tool.durationMs = Number(payload.durationMs) || tool.durationMs;
                     tool.resultPreview = summarizeForAnalysis(payload.result || payload.error || '', 900);
+                    tool.outputStore = this.extractOutputStoreFromToolPayload(payload) || tool.outputStore;
                 }
             }
         }
@@ -2726,7 +2753,8 @@ class HumanClawGateway extends EventEmitter {
                 durationMs: 0,
                 iteration: getPayloadIteration(payload),
                 args: null,
-                resultPreview: ''
+                resultPreview: '',
+                outputStore: null
             };
             if (item.type === 'tool.call') {
                 existing.startedAt = analysisTimestamp(item);
@@ -2740,6 +2768,7 @@ class HumanClawGateway extends EventEmitter {
                 existing.ok = payload.ok === true;
                 existing.durationMs = Number(payload.durationMs) || existing.durationMs;
                 existing.resultPreview = summarizeForAnalysis(payload.result || payload.error || '', 900);
+                existing.outputStore = this.extractOutputStoreFromToolPayload(payload) || existing.outputStore;
             }
             calls.set(callId, existing);
         }
@@ -2840,6 +2869,19 @@ class HumanClawGateway extends EventEmitter {
         const durationMs = Number(finalAudit?.durationMs ?? finalItem?.payload?.durationMs);
         const totalContextTokens = rounds.reduce((sum, round) => sum + (Number(round.approxInputTokens) || 0), 0);
         const bottlenecks = this.buildRunBottlenecks({ rounds, toolCalls, llmCalls, status });
+        const outputArtifacts = toolCalls
+            .filter((tool) => tool.outputStore?.outputId)
+            .map((tool) => ({
+                callId: tool.callId,
+                tool: tool.tool,
+                status: tool.status,
+                iteration: tool.iteration,
+                outputId: tool.outputStore.outputId,
+                path: tool.outputStore.path || '',
+                bytes: Number(tool.outputStore.bytes) || 0,
+                lineCount: Number(tool.outputStore.lineCount) || 0,
+                previewTruncated: tool.outputStore.previewTruncated === true
+            }));
         return {
             ok: transcript.ok || auditEntries.length > 0 || events.length > 0,
             status,
@@ -2856,6 +2898,7 @@ class HumanClawGateway extends EventEmitter {
                 llmCalls: llmCalls.length,
                 toolCalls: toolCalls.length,
                 failedTools: toolCalls.filter((tool) => tool.ok === false).length,
+                outputArtifacts: outputArtifacts.length,
                 totalContextTokens,
                 usage: usageTotals,
                 primaryBottleneck: bottlenecks.primary,
@@ -2881,6 +2924,7 @@ class HumanClawGateway extends EventEmitter {
             rounds,
             toolCalls,
             llmCalls,
+            outputArtifacts,
             bottlenecks,
             timeline
         };

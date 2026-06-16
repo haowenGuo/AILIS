@@ -148,12 +148,14 @@ class HumanClawToolRuntimeRegistry {
             .map((tool) => tool.spec());
     }
 
-    search(query = '', limit = 8) {
+    search(query = '', limit = 8, { includeHidden = false } = {}) {
         const terms = normalizeString(query).toLowerCase().split(/\s+/).filter(Boolean);
-        const entries = [...this.tools.values()].map((tool) => ({
-            ...tool.searchInfo(),
-            spec: tool.spec()
-        }));
+        const entries = [...this.tools.values()]
+            .filter((tool) => includeHidden || tool.exposure !== TOOL_EXPOSURE.HIDDEN)
+            .map((tool) => ({
+                ...tool.searchInfo(),
+                spec: tool.spec()
+            }));
         const scored = entries.map((entry) => {
             const text = normalizeString(entry.text).toLowerCase();
             const score = terms.length
@@ -206,12 +208,15 @@ async function executeToolSearch(registry, args = {}) {
     const query = normalizeString(args.query || args.q);
     const limit = Math.max(1, Math.min(Number(args.limit || 8), 50));
     const includeMcp = args.includeMcp !== false;
-    const local = registry.search(query, limit).map((entry) => ({
-        id: entry.id,
-        type: 'runtime_tool',
-        exposure: entry.exposure,
-        spec: entry.spec
-    }));
+    const includeDirect = args.includeDirect === true;
+    const local = registry.search(query, limit)
+        .filter((entry) => includeDirect || entry.exposure !== TOOL_EXPOSURE.DIRECT)
+        .map((entry) => ({
+            id: entry.id,
+            type: 'runtime_tool',
+            exposure: entry.exposure,
+            spec: entry.spec
+        }));
     let mcp = [];
     if (includeMcp && registry.runtime?.mcpManager?.searchToolSpecs) {
         try {
@@ -261,6 +266,18 @@ function createHumanClawToolRuntimeRegistry(runtime) {
     registry.register(new HumanClawRuntimeTool({
         definition: definitionById.tool_search,
         handle: async (args) => executeToolSearch(registry, args)
+    }));
+    registry.register(new HumanClawRuntimeTool({
+        definition: definitionById.output_read,
+        handle: async (args) => runtime.readExecOutput(args)
+    }));
+    registry.register(new HumanClawRuntimeTool({
+        definition: definitionById.output_tail,
+        handle: async (args) => runtime.tailExecOutput(args)
+    }));
+    registry.register(new HumanClawRuntimeTool({
+        definition: definitionById.output_search,
+        handle: async (args) => runtime.searchExecOutput(args)
     }));
     registry.register(new HumanClawRuntimeTool({
         definition: definitionById.request_permissions,

@@ -11,7 +11,7 @@ const DEFAULT_OPENCLAW_UPSTREAM_ROOT = path.join(
 
 const TOOL_PROFILE_IDS = ['minimal', 'coding', 'messaging', 'full'];
 
-const EXEC_TOOL_DISPLAY_SUMMARY = 'Run shell now.';
+const EXEC_TOOL_DISPLAY_SUMMARY = 'Run one command in the current runtime_environment shell and return stdout, stderr, exitCode, durationMs, and workdir.';
 const PROCESS_TOOL_DISPLAY_SUMMARY = 'Inspect/control exec sessions.';
 const CRON_TOOL_DISPLAY_SUMMARY = 'Schedule reminders, cron, wake events.';
 const SESSIONS_LIST_TOOL_DISPLAY_SUMMARY = 'List visible sessions; filters/previews.';

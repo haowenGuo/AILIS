@@ -207,6 +207,24 @@ function compactToolResultForModel(result = {}, options = {}) {
                 remaining = Math.max(0, remaining - text.length);
                 return { type: 'text', text };
             }
+            if (typeof part.text === 'string') {
+                const metadata = { ...part };
+                delete metadata.text;
+                const next = compactJsonForModel(metadata, {
+                    maxStringChars: maxStructuredStringChars,
+                    maxArrayItems: 16,
+                    maxObjectKeys: 48,
+                    maxDepth: 5
+                });
+                const originalTextChars = Number.isFinite(Number(part.originalTextChars))
+                    ? Number(part.originalTextChars)
+                    : part.text.length;
+                next.text = truncateMiddleText(part.text, remaining || 128);
+                next.originalTextChars = originalTextChars;
+                next.truncated = Boolean(part.truncated) || next.text.length < part.text.length || originalTextChars > next.text.length;
+                remaining = Math.max(0, remaining - next.text.length);
+                return next;
+            }
             const next = compactJsonForModel(part, {
                 maxStringChars: Math.min(maxStructuredStringChars, Math.max(128, remaining || maxStructuredStringChars)),
                 maxArrayItems: 16,

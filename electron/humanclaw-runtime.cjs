@@ -6,6 +6,7 @@ const { HumanClawToolDoctor } = require('./humanclaw-tool-doctor.cjs');
 const { HumanClawCapabilityManager } = require('./humanclaw-capability-manager.cjs');
 const { HumanClawSelfDebugger } = require('./humanclaw-self-debugger.cjs');
 const { createHumanClawPlatformAdapter } = require('./humanclaw-platform-adapter.cjs');
+const { HumanClawOutputStore } = require('./humanclaw-output-store.cjs');
 const { getToolContractPromptText } = require('./humanclaw-tool-contracts.cjs');
 const {
     CORE_RUNTIME_TOOL_DEFINITIONS: RUNTIME_TOOL_DEFINITIONS,
@@ -457,6 +458,9 @@ class HumanClawRuntime {
         this.projectRoot = path.resolve(options.projectRoot || this.workspaceRoot);
         this.auditDir = path.resolve(options.auditDir || path.join(this.projectRoot, 'tmp', 'humanclaw-gateway'));
         this.transcriptDir = path.join(this.auditDir, 'transcripts');
+        this.outputStore = options.outputStore || new HumanClawOutputStore({
+            rootDir: options.outputStoreDir || path.join(this.auditDir, 'output-store')
+        });
         this.emitGatewayEvent = typeof options.emitGatewayEvent === 'function' ? options.emitGatewayEvent : () => {};
         this.subagentExecutor = typeof options.subagentExecutor === 'function' ? options.subagentExecutor : null;
         this.platformAdapter = createHumanClawPlatformAdapter(options.platformAdapter || options.platform || {});
@@ -498,6 +502,45 @@ class HumanClawRuntime {
         });
         this.selfEvolutionRuntime = options.selfEvolutionRuntime || null;
         this.toolRuntimeRegistry = createHumanClawToolRuntimeRegistry(this);
+    }
+
+    async readExecOutput(args = {}) {
+        const result = await this.outputStore.read(args);
+        return this.formatOutputStoreResult('output_read', result);
+    }
+
+    async tailExecOutput(args = {}) {
+        const result = await this.outputStore.tail(args);
+        return this.formatOutputStoreResult('output_tail', result);
+    }
+
+    async searchExecOutput(args = {}) {
+        const result = await this.outputStore.search(args);
+        return this.formatOutputStoreResult('output_search', result);
+    }
+
+    formatOutputStoreResult(action, result = {}) {
+        const ok = result.ok !== false;
+        const text = action === 'output_search'
+            ? JSON.stringify({
+                  status: result.status,
+                  outputId: result.outputId,
+                  matchCount: result.matchCount || 0,
+                  matches: result.matches || []
+              }, null, 2)
+            : result.text || result.error || '';
+        return {
+            content: [{ type: 'text', text }],
+            isError: !ok,
+            details: {
+                action,
+                ...result
+            },
+            structuredContent: {
+                action,
+                ...result
+            }
+        };
     }
 
     setSelfEvolutionRuntime(runtime) {

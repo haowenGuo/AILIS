@@ -77,6 +77,32 @@ function formatTokens(value) {
     return String(Math.round(tokens));
 }
 
+function formatBytes(value) {
+    const bytes = Number(value);
+    if (!Number.isFinite(bytes) || bytes < 0) {
+        return '-';
+    }
+    if (bytes >= 1024 * 1024) {
+        return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
+    }
+    if (bytes >= 1024) {
+        return `${(bytes / 1024).toFixed(1)}KB`;
+    }
+    return `${Math.round(bytes)}B`;
+}
+
+function formatOutputArtifact(outputStore = {}) {
+    if (!outputStore?.outputId) {
+        return '';
+    }
+    return [
+        `完整输出 ${outputStore.outputId}`,
+        `${formatBytes(outputStore.bytes)} / ${Number(outputStore.lineCount) || 0} 行`,
+        outputStore.previewTruncated ? '预览已截断' : '预览完整',
+        '可用 output_read / output_tail / output_search 继续分析'
+    ].join(' · ');
+}
+
 function formatTime(value) {
     const date = value ? new Date(value) : null;
     return date && !Number.isNaN(date.getTime()) ? date.toLocaleString() : '';
@@ -302,7 +328,13 @@ function renderTools(round) {
         const status = append(row, `badge ${tool.ok === false ? 'fail' : tool.ok === true ? 'ok' : ''}`, tool.status || 'started');
         status.title = tool.callId || '';
         append(row, '', formatDuration(tool.durationMs));
-        append(row, '', compact(tool.resultPreview || JSON.stringify(tool.args || {}), 260));
+        const preview = append(row, 'tool-preview');
+        append(preview, '', compact(tool.resultPreview || JSON.stringify(tool.args || {}), 260));
+        const outputArtifact = formatOutputArtifact(tool.outputStore);
+        if (outputArtifact) {
+            const artifact = append(preview, 'output-artifact', outputArtifact);
+            artifact.title = tool.outputStore?.path || outputArtifact;
+        }
     });
 }
 
