@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { createGatewayProgressBridge } from '../src/humanclaw-chat-service.js';
+import {
+    HumanClawDesktopChatService,
+    createGatewayProgressBridge
+} from '../src/humanclaw-chat-service.js';
 
 function createFakeGateway() {
     let listener = null;
@@ -149,4 +152,96 @@ test('chat progress bridge ignores low-information computer starts without reaso
     });
 
     assert.equal(outputs.length, 0);
+});
+
+test('desktop chat service keeps newer active run when an older run finishes later', async () => {
+    const previousWindow = globalThis.window;
+    let listener = null;
+    let resolveFirstRun;
+    let resolveSecondRun;
+    const firstRunDone = new Promise((resolve) => {
+        resolveFirstRun = resolve;
+    });
+    const secondRunDone = new Promise((resolve) => {
+        resolveSecondRun = resolve;
+    });
+
+    globalThis.window = {
+        aigrilDesktop: {
+            gateway: {
+                isSupported: true,
+                onEvent(callback) {
+                    listener = callback;
+                    return () => {};
+                },
+                async getStatus() {
+                    return {
+                        running: true,
+                        workspaceRoot: 'F:/AIGril_self_evolution_runtime'
+                    };
+                },
+                async runAgent({ message }) {
+                    if (message === 'old') {
+                        listener?.({
+                            type: 'agent.run.started',
+                            payload: {
+                                runId: 'old-run',
+                                sessionId: 'main'
+                            }
+                        });
+                        await firstRunDone;
+                        return {
+                            ok: true,
+                            displayText: 'old done'
+                        };
+                    }
+                    listener?.({
+                        type: 'agent.run.started',
+                        payload: {
+                            runId: 'new-run',
+                            sessionId: 'main'
+                        }
+                    });
+                    await secondRunDone;
+                    return {
+                        ok: true,
+                        displayText: 'new done'
+                    };
+                }
+            }
+        }
+    };
+
+    try {
+        const service = new HumanClawDesktopChatService();
+        const oldPromise = service.fetchAssistantTurn({
+            sessionId: 'main',
+            messageHistory: [{ role: 'user', content: 'old' }],
+            onProgress() {}
+        });
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        assert.equal(service.activeRunId, 'old-run');
+
+        const newPromise = service.fetchAssistantTurn({
+            sessionId: 'main',
+            messageHistory: [{ role: 'user', content: 'new' }],
+            onProgress() {}
+        });
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        assert.equal(service.activeRunId, 'new-run');
+
+        resolveFirstRun();
+        await oldPromise;
+        assert.equal(service.activeRunId, 'new-run');
+
+        resolveSecondRun();
+        await newPromise;
+        assert.equal(service.activeRunId, '');
+    } finally {
+        if (previousWindow === undefined) {
+            delete globalThis.window;
+        } else {
+            globalThis.window = previousWindow;
+        }
+    }
 });

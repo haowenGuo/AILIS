@@ -462,13 +462,17 @@ export class HumanClawDesktopChatService {
         }
 
         const status = await this.ensureReady();
+        let bridgedRunId = '';
+        let bridgedSessionId = '';
         const unsubscribeProgress = createGatewayProgressBridge({
             gateway: this.gateway,
             sessionId,
             onProgress,
             onRunStarted: ({ runId, sessionId: startedSessionId }) => {
+                bridgedRunId = runId;
+                bridgedSessionId = startedSessionId || sessionId;
                 this.activeRunId = runId;
-                this.activeSessionId = startedSessionId || sessionId;
+                this.activeSessionId = bridgedSessionId;
             },
             onRunFinished: ({ runId }) => {
                 if (this.activeRunId === runId) {
@@ -494,8 +498,12 @@ export class HumanClawDesktopChatService {
             });
         } finally {
             unsubscribeProgress();
-            this.activeRunId = '';
-            this.activeSessionId = '';
+            if (bridgedRunId && this.activeRunId === bridgedRunId) {
+                this.activeRunId = '';
+                this.activeSessionId = '';
+            } else if (!this.activeRunId && bridgedSessionId && this.activeSessionId === bridgedSessionId) {
+                this.activeSessionId = '';
+            }
         }
 
         const payload = toHumanClawPayload(result);

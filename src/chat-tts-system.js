@@ -68,9 +68,12 @@ export class ChatTTSSystem {
         this.hasShownTextFallbackHint = false;
         this.hasShownSpeechProviderHint = false;
         this.messageCounter = 0;
+        this.turnCounter = 0;
         this.interruptRequested = false;
         this.interruptInFlight = false;
         this.activeChunkedSpeechSession = null;
+        this.activeTurn = null;
+        this.cancelledTurnIds = new Set();
 
         this.inputEl.disabled = true;
         this.sendBtnEl.disabled = true;
@@ -160,6 +163,51 @@ export class ChatTTSSystem {
     createMessageId(role = 'message') {
         this.messageCounter += 1;
         return `${role}-${Date.now()}-${this.messageCounter}`;
+    }
+
+    createTurnState(kind = 'chat') {
+        this.turnCounter += 1;
+        const turn = {
+            id: `${kind}-${Date.now()}-${this.turnCounter}`,
+            kind,
+            loadingEl: null,
+            aiMessageDiv: null,
+            chunkedSpeechSession: null
+        };
+        this.activeTurn = turn;
+        return turn;
+    }
+
+    isTurnCancelled(turn) {
+        return Boolean(turn?.id && this.cancelledTurnIds.has(turn.id));
+    }
+
+    isTurnActive(turn) {
+        return Boolean(turn?.id && this.activeTurn?.id === turn.id && !this.isTurnCancelled(turn));
+    }
+
+    createMessageHistorySnapshot() {
+        return this.messageHistory.map((message) => ({
+            ...message,
+            attachments: Array.isArray(message.attachments)
+                ? message.attachments.map((attachment) => ({ ...attachment }))
+                : message.attachments
+        }));
+    }
+
+    markTurnCancelled(turn) {
+        if (turn?.id) {
+            this.cancelledTurnIds.add(turn.id);
+        }
+    }
+
+    releaseTurn(turn) {
+        if (this.activeTurn?.id === turn?.id) {
+            this.activeTurn = null;
+        }
+        if (turn?.id) {
+            this.cancelledTurnIds.delete(turn.id);
+        }
     }
 
     ensureMessageIdentity(element, role) {
@@ -424,15 +472,31 @@ export class ChatTTSSystem {
 
         console.log('✨ AIGL 尝试主动发起对话...');
         this.setBusy(true);
+        const turn = this.createTurnState('auto');
         const aiMessageDiv = this.createAIMessage();
         const chunkedSpeechSession = this.createChunkedSpeechSession(aiMessageDiv);
+        turn.aiMessageDiv = aiMessageDiv;
+        turn.chunkedSpeechSession = chunkedSpeechSession;
+        const messageHistorySnapshot = this.createMessageHistorySnapshot();
 
         try {
             const payload = await this.fetchAssistantTurnWithFallback(true, (partialPayload) => {
+                if (!this.isTurnActive(turn)) {
+                    return;
+                }
                 this.renderStreamingAssistantReply(partialPayload, aiMessageDiv);
                 this.appendChunkedSpeechProgress(chunkedSpeechSession, partialPayload);
+            }, {
+                messageHistory: messageHistorySnapshot,
+                shouldContinue: () => this.isTurnActive(turn)
             });
+            if (!this.isTurnActive(turn)) {
+                return;
+            }
             const usedChunkedSpeech = await this.finishChunkedSpeechSession(chunkedSpeechSession);
+            if (!this.isTurnActive(turn)) {
+                return;
+            }
             if (usedChunkedSpeech) {
                 this.executeAvatarCue(payload, aiMessageDiv);
                 this.updateMessageContent(aiMessageDiv, payload.display_text || payload.speech_text || '...');
@@ -444,13 +508,18 @@ export class ChatTTSSystem {
         } catch (error) {
             await chunkedSpeechSession?.cancel?.('auto-chat-error');
             this.removeMessageElement(aiMessageDiv);
-            console.error('主动对话请求失败：', error);
+            if (!this.isTurnCancelled(turn)) {
+                console.error('主动对话请求失败：', error);
+            }
         } finally {
             this.clearChunkedSpeechSession(chunkedSpeechSession);
-            this.interruptRequested = false;
-            this.interruptInFlight = false;
-            this.setBusy(false);
-            this.startAutoChatTimer();
+            if (this.activeTurn?.id === turn.id) {
+                this.interruptRequested = false;
+                this.interruptInFlight = false;
+                this.setBusy(false);
+                this.startAutoChatTimer();
+            }
+            this.releaseTurn(turn);
         }
     }
 
@@ -483,15 +552,32 @@ export class ChatTTSSystem {
         const loadingEl = this.addLoadingMessage();
         const aiMessageDiv = this.createAIMessage();
         const chunkedSpeechSession = this.createChunkedSpeechSession(aiMessageDiv);
+        const turn = this.createTurnState('chat');
+        turn.loadingEl = loadingEl;
+        turn.aiMessageDiv = aiMessageDiv;
+        turn.chunkedSpeechSession = chunkedSpeechSession;
+        const messageHistorySnapshot = this.createMessageHistorySnapshot();
 
         try {
             const payload = await this.fetchAssistantTurnWithFallback(false, (partialPayload) => {
+                if (!this.isTurnActive(turn)) {
+                    return;
+                }
                 this.removeMessageElement(loadingEl);
                 this.renderStreamingAssistantReply(partialPayload, aiMessageDiv);
                 this.appendChunkedSpeechProgress(chunkedSpeechSession, partialPayload);
+            }, {
+                messageHistory: messageHistorySnapshot,
+                shouldContinue: () => this.isTurnActive(turn)
             });
+            if (!this.isTurnActive(turn)) {
+                return;
+            }
             this.removeMessageElement(loadingEl);
             const usedChunkedSpeech = await this.finishChunkedSpeechSession(chunkedSpeechSession);
+            if (!this.isTurnActive(turn)) {
+                return;
+            }
             if (usedChunkedSpeech) {
                 this.executeAvatarCue(payload, aiMessageDiv);
                 this.updateMessageContent(aiMessageDiv, payload.display_text || payload.speech_text || '...');
@@ -505,18 +591,19 @@ export class ChatTTSSystem {
             this.removeMessageElement(loadingEl);
             this.removeMessageElement(aiMessageDiv);
             this.vrmSystem.stopSpeaking();
-            if (this.interruptRequested) {
-                this.addSystemMessage('已中断当前对话，已生成的数据会保留在 Agent transcript 里。');
-            } else {
+            if (!this.isTurnCancelled(turn)) {
                 this.addSystemMessage(`请求失败：${error.message}`);
                 console.error('后端请求失败：', error);
             }
         } finally {
             this.clearChunkedSpeechSession(chunkedSpeechSession);
-            this.interruptRequested = false;
-            this.interruptInFlight = false;
-            this.setBusy(false);
-            this.startAutoChatTimer();
+            if (this.activeTurn?.id === turn.id) {
+                this.interruptRequested = false;
+                this.interruptInFlight = false;
+                this.setBusy(false);
+                this.startAutoChatTimer();
+            }
+            this.releaseTurn(turn);
         }
     }
 
@@ -537,36 +624,50 @@ export class ChatTTSSystem {
 
         this.interruptInFlight = true;
         this.interruptRequested = true;
+        const interruptedTurn = this.activeTurn;
+        this.markTurnCancelled(interruptedTurn);
+        if (this.activeTurn?.id === interruptedTurn?.id) {
+            this.activeTurn = null;
+        }
         this.vrmSystem.stopSpeaking();
         try {
-            await this.activeChunkedSpeechSession?.cancel?.('chat_user_interrupt');
-            await this.audioPlayer?.stop?.();
-        } catch {}
-        this.addSystemMessage('正在中断当前对话，已产生的上下文和工具记录会保留。');
-        try {
-            const result = await this.chatService?.abortCurrentTurn?.({
-                sessionId: this.sessionId,
-                reason: 'chat_user_interrupt'
+            Promise.resolve(this.activeChunkedSpeechSession?.cancel?.('chat_user_interrupt')).catch((error) => {
+                console.warn('分段语音中断失败：', error);
             });
-            if (!result?.ok && result?.status === 'unsupported') {
-                this.interruptInFlight = false;
+            Promise.resolve(this.audioPlayer?.stop?.()).catch((error) => {
+                console.warn('音频中断失败：', error);
+            });
+        } catch {}
+        this.removeMessageElement(interruptedTurn?.loadingEl);
+        this.removeMessageElement(interruptedTurn?.aiMessageDiv);
+        this.addSystemMessage('已停止当前回复，后台会继续保存上下文和工具记录。你可以继续发送新消息。');
+        this.interruptRequested = false;
+        this.interruptInFlight = false;
+        this.setBusy(false);
+        this.startAutoChatTimer();
+
+        Promise.resolve(this.chatService?.abortCurrentTurn?.({
+            sessionId: this.sessionId,
+            reason: 'chat_user_interrupt'
+        })).then((result) => {
+            if (!result?.ok && result?.status !== 'unsupported' && result?.status !== 'no_active_run') {
+                console.warn('后台中断请求未成功：', result);
             }
-            return result;
-        } catch (error) {
-            this.interruptInFlight = false;
-            this.addSystemMessage(`中断请求失败：${error.message || error}`);
-            return {
-                ok: false,
-                status: 'interrupt_failed',
-                error: error.message || String(error)
-            };
-        }
+        }).catch((error) => {
+            console.warn('后台中断请求失败：', error);
+        });
+
+        return {
+            ok: true,
+            status: 'interrupt_backgrounded',
+            sessionId: this.sessionId
+        };
     }
 
-    async fetchAssistantTurn(isAutoChat = false, onProgress) {
+    async fetchAssistantTurn(isAutoChat = false, onProgress, messageHistory = this.messageHistory) {
         return this.chatService.fetchAssistantTurn({
             sessionId: this.sessionId,
-            messageHistory: this.messageHistory,
+            messageHistory,
             is_auto_chat: isAutoChat,
             isAutoChat,
             replyMode: 'stream_text',
@@ -574,23 +675,33 @@ export class ChatTTSSystem {
         });
     }
 
-    async fetchAssistantTurnWithFallback(isAutoChat = false, onProgress) {
+    async fetchAssistantTurnWithFallback(isAutoChat = false, onProgress, options = {}) {
         const replyModes = this.speechProvider?.replyModeFallbackChain || ['stream_text'];
+        const messageHistory = options.messageHistory || this.messageHistory;
+        const shouldContinue = typeof options.shouldContinue === 'function'
+            ? options.shouldContinue
+            : () => true;
         let lastError = null;
 
         for (let index = 0; index < replyModes.length; index += 1) {
+            if (!shouldContinue()) {
+                throw new Error('turn_cancelled');
+            }
             const replyMode = replyModes[index];
 
             try {
                 return await this.chatService.fetchAssistantTurn({
                     sessionId: this.sessionId,
-                    messageHistory: this.messageHistory,
+                    messageHistory,
                     is_auto_chat: isAutoChat,
                     isAutoChat,
                     replyMode,
                     onProgress: replyMode === 'stream_text' ? onProgress : null
                 });
             } catch (error) {
+                if (!shouldContinue()) {
+                    throw error;
+                }
                 lastError = error;
                 console.warn(`语音回复模式 ${replyMode} 失败：`, error);
             }
