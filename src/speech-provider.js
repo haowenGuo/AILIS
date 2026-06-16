@@ -354,15 +354,33 @@ class ServerTTSCandidate {
         scrollToBottom,
         onAvatarPlaybackStart
     }) {
-        if (!payload?.audio_base64) {
-            return false;
+        let audioBase64 = payload?.audio_base64 || '';
+        let audioBlob = payload?.audioBlob || null;
+        let mimeType = payload?.mime_type || payload?.mimeType || 'audio/mpeg';
+        let speechAlignment = alignment;
+
+        if (!audioBase64 && !audioBlob) {
+            const speechText = payload?.speech_text || displayText;
+            const result = await this.synthesizeSpeech(speechText);
+            if (typeof result.play === 'function') {
+                await result.play({
+                    displayText,
+                    onPlaybackStart: onAvatarPlaybackStart
+                });
+                return true;
+            }
+            audioBase64 = result.audioBase64 || '';
+            audioBlob = result.audioBlob || null;
+            mimeType = result.mimeType || mimeType;
+            speechAlignment = result.alignment || speechAlignment;
         }
 
         await audioPlayer.playSpeech({
-            audioBase64: payload.audio_base64,
-            mimeType: payload.mime_type,
+            audioBase64,
+            audioBlob,
+            mimeType,
             displayText,
-            alignment,
+            alignment: speechAlignment,
             onTextProgress: (text) => {
                 updateMessageContent(text || '');
                 scrollToBottom();

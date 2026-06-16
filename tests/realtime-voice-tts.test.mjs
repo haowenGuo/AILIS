@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { SpeechProvider } from '../src/speech-provider.js';
+import { createSpeechProvider, SpeechProvider } from '../src/speech-provider.js';
 import { createChunkedTtsSession } from '../src/realtime-voice/chunked-tts-session.js';
 import { createTtsTextChunker } from '../src/realtime-voice/tts-text-chunker.js';
 
@@ -230,4 +230,63 @@ test('SpeechProvider chunk synthesis falls back across candidate chain', async (
 
     assert.deepEqual(played, ['主 TTS 坏了也应该播。']);
     assert.match(provider.getLastTTSFailureMessage(), /boom/);
+});
+
+test('server speech provider synthesizes final text when stream payload has no audio', async () => {
+    const previousWindow = globalThis.window;
+    const synthCalls = [];
+    const played = [];
+
+    globalThis.window = {
+        aigrilDesktop: {
+            platform: 'electron',
+            tts: {
+                synthesize: async (payload) => {
+                    synthCalls.push(payload.text);
+                    return {
+                        ok: true,
+                        audio_base64: Buffer.from(`audio:${payload.text}`).toString('base64'),
+                        mime_type: 'audio/mpeg'
+                    };
+                }
+            }
+        }
+    };
+
+    try {
+        const provider = createSpeechProvider({
+            speechMode: 'server'
+        });
+
+        const result = await provider.playSpeech({
+            payload: {
+                speech_text: '最终文本也要补语音。',
+                fallbackMode: true
+            },
+            displayText: '最终文本也要补语音。',
+            alignment: null,
+            audioPlayer: {
+                async playSpeech({ audioBase64, displayText, onPlaybackStart }) {
+                    assert.ok(audioBase64);
+                    onPlaybackStart?.();
+                    played.push(displayText);
+                },
+                async stop() {}
+            },
+            updateMessageContent() {},
+            scrollToBottom() {},
+            onAvatarPlaybackStart() {}
+        });
+
+        assert.equal(result.played, true);
+        assert.equal(result.provider, 'server-tts');
+        assert.deepEqual(synthCalls, ['最终文本也要补语音。']);
+        assert.deepEqual(played, ['最终文本也要补语音。']);
+    } finally {
+        if (previousWindow === undefined) {
+            delete globalThis.window;
+        } else {
+            globalThis.window = previousWindow;
+        }
+    }
 });
