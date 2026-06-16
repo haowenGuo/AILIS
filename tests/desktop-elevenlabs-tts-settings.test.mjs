@@ -39,6 +39,7 @@ test('ElevenLabs desktop TTS forwards control-panel voice tuning settings', asyn
         apiKey: 'test-key',
         voiceId: 'voice-id',
         modelId: 'eleven_flash_v2_5',
+        languageCode: 'zh',
         outputFormat: 'mp3_44100_128',
         optimizeStreamingLatency: 1,
         stability: 0.51,
@@ -53,6 +54,7 @@ test('ElevenLabs desktop TTS forwards control-panel voice tuning settings', asyn
     assert.equal(result.ok, true);
     assert.match(capturedRequest.url, /optimize_streaming_latency=1/);
     assert.equal(capturedRequest.body.model_id, 'eleven_flash_v2_5');
+    assert.equal(capturedRequest.body.language_code, 'zh');
     assert.deepEqual(capturedRequest.body.voice_settings, {
         stability: 0.51,
         similarity_boost: 0.72,

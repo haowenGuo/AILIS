@@ -1222,24 +1222,37 @@
                         <div class="split-2">
                             <label class="field">
                                 <div class="field-meta">
+                                    <span class="field-label">语言风格档</span>
+                                </div>
+                                <select id="elevenlabs-language-code">
+                                    <option value="zh">中文温柔二次元</option>
+                                    <option value="en">English gentle anime</option>
+                                    <option value="ja">日本語やさしいアニメ</option>
+                                </select>
+                                <div class="field-help">切换语言会套用对应的高质量 ElevenLabs 参数。</div>
+                            </label>
+                            <label class="field">
+                                <div class="field-meta">
                                     <span class="field-label">ElevenLabs 模型</span>
                                 </div>
-                                <input id="elevenlabs-model-id" type="text" autocomplete="off" placeholder="eleven_flash_v2_5">
+                                <input id="elevenlabs-model-id" type="text" autocomplete="off" placeholder="eleven_multilingual_v2">
                             </label>
+                        </div>
+
+                        <div class="split-2">
                             <label class="field">
                                 <div class="field-meta">
                                     <span class="field-label">音频格式</span>
                                 </div>
                                 <input id="elevenlabs-output-format" type="text" autocomplete="off" placeholder="mp3_44100_128">
                             </label>
+                            <label class="field">
+                                <div class="field-meta">
+                                    <span class="field-label">ElevenLabs 超时（ms）</span>
+                                </div>
+                                <input id="elevenlabs-timeout" type="number" min="5000" max="120000" step="1000">
+                            </label>
                         </div>
-
-                        <label class="field">
-                            <div class="field-meta">
-                                <span class="field-label">ElevenLabs 超时（ms）</span>
-                            </div>
-                            <input id="elevenlabs-timeout" type="number" min="5000" max="120000" step="1000">
-                        </label>
 
                         <label class="field">
                             <div class="field-meta">

@@ -3,7 +3,7 @@ const path = require('path');
 const { screen } = require('electron');
 
 const STATE_FILE_NAME = 'desktop-state.json';
-const STATE_VERSION = 25;
+const STATE_VERSION = 26;
 // Transparent Electron frame size. Avatar visual size is compensated in the pet renderer.
 const PET_BASE_WIDTH = 720;
 const PET_BASE_HEIGHT = 960;
@@ -40,14 +40,15 @@ const DEFAULT_LLM_REQUEST_TIMEOUT_MS = 25000;
 const DEFAULT_ELEVENLABS_API_BASE = 'https://api.elevenlabs.io';
 const DEFAULT_ELEVENLABS_API_KEY = '';
 const DEFAULT_ELEVENLABS_VOICE_ID = '';
-const DEFAULT_ELEVENLABS_MODEL_ID = 'eleven_flash_v2_5';
+const DEFAULT_ELEVENLABS_MODEL_ID = 'eleven_multilingual_v2';
+const DEFAULT_ELEVENLABS_LANGUAGE_CODE = 'zh';
 const DEFAULT_ELEVENLABS_OUTPUT_FORMAT = 'mp3_44100_128';
 const DEFAULT_ELEVENLABS_TIMEOUT_MS = 60000;
-const DEFAULT_ELEVENLABS_OPTIMIZE_STREAMING_LATENCY = 1;
-const DEFAULT_ELEVENLABS_STABILITY = 0.45;
-const DEFAULT_ELEVENLABS_SIMILARITY_BOOST = 0.8;
-const DEFAULT_ELEVENLABS_STYLE = 0.15;
-const DEFAULT_ELEVENLABS_SPEED = 0.92;
+const DEFAULT_ELEVENLABS_OPTIMIZE_STREAMING_LATENCY = 0;
+const DEFAULT_ELEVENLABS_STABILITY = 0.58;
+const DEFAULT_ELEVENLABS_SIMILARITY_BOOST = 0.78;
+const DEFAULT_ELEVENLABS_STYLE = 0.05;
+const DEFAULT_ELEVENLABS_SPEED = 0.9;
 const DEFAULT_ELEVENLABS_USE_SPEAKER_BOOST = true;
 const DEFAULT_COMPUTER_CONTROL_ENABLED = true;
 const DEFAULT_CAMERA_DISTANCE = 1.1;
@@ -208,6 +209,14 @@ function normalizeElevenLabsVoiceId(value) {
 function normalizeElevenLabsModelId(value) {
     const normalizedValue = String(value || '').trim();
     return normalizedValue || DEFAULT_ELEVENLABS_MODEL_ID;
+}
+
+function normalizeElevenLabsLanguageCode(value) {
+    const normalizedValue = String(value || '').trim().toLowerCase();
+    if (['zh', 'en', 'ja'].includes(normalizedValue)) {
+        return normalizedValue;
+    }
+    return DEFAULT_ELEVENLABS_LANGUAGE_CODE;
 }
 
 function normalizeElevenLabsOutputFormat(value) {
@@ -559,6 +568,7 @@ function getDefaultState() {
             elevenLabsApiKey: DEFAULT_ELEVENLABS_API_KEY,
             elevenLabsVoiceId: DEFAULT_ELEVENLABS_VOICE_ID,
             elevenLabsModelId: DEFAULT_ELEVENLABS_MODEL_ID,
+            elevenLabsLanguageCode: DEFAULT_ELEVENLABS_LANGUAGE_CODE,
             elevenLabsOutputFormat: DEFAULT_ELEVENLABS_OUTPUT_FORMAT,
             elevenLabsTimeoutMs: DEFAULT_ELEVENLABS_TIMEOUT_MS,
             elevenLabsOptimizeStreamingLatency: DEFAULT_ELEVENLABS_OPTIMIZE_STREAMING_LATENCY,
@@ -743,6 +753,9 @@ function normalizeState(inputState) {
     );
     normalizedState.preferences.elevenLabsModelId = normalizeElevenLabsModelId(
         normalizedState.preferences.elevenLabsModelId
+    );
+    normalizedState.preferences.elevenLabsLanguageCode = normalizeElevenLabsLanguageCode(
+        normalizedState.preferences.elevenLabsLanguageCode
     );
     normalizedState.preferences.elevenLabsOutputFormat = normalizeElevenLabsOutputFormat(
         normalizedState.preferences.elevenLabsOutputFormat
@@ -1000,6 +1013,7 @@ module.exports = {
     LLM_PROVIDER_DEFAULT_MODELS,
     DEFAULT_ELEVENLABS_API_BASE,
     DEFAULT_ELEVENLABS_API_KEY,
+    DEFAULT_ELEVENLABS_LANGUAGE_CODE,
     DEFAULT_ELEVENLABS_MODEL_ID,
     DEFAULT_ELEVENLABS_OPTIMIZE_STREAMING_LATENCY,
     DEFAULT_ELEVENLABS_OUTPUT_FORMAT,
@@ -1063,6 +1077,7 @@ module.exports = {
     normalizeChunkedTtsEnabled,
     normalizeElevenLabsApiBase,
     normalizeElevenLabsApiKey,
+    normalizeElevenLabsLanguageCode,
     normalizeElevenLabsModelId,
     normalizeElevenLabsOptimizeStreamingLatency,
     normalizeElevenLabsOutputFormat,

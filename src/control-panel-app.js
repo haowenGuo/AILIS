@@ -42,6 +42,7 @@ const elements = {
     elevenLabsApiBase: document.getElementById('elevenlabs-api-base'),
     elevenLabsApiKey: document.getElementById('elevenlabs-api-key'),
     elevenLabsKeyState: document.getElementById('elevenlabs-key-state'),
+    elevenLabsLanguageCode: document.getElementById('elevenlabs-language-code'),
     elevenLabsModelId: document.getElementById('elevenlabs-model-id'),
     elevenLabsOptimizeLatency: document.getElementById('elevenlabs-optimize-latency'),
     elevenLabsOptimizeLatencyValue: document.getElementById('elevenlabs-optimize-latency-value'),
@@ -137,7 +138,7 @@ const speechModeLabels = {
     cosyvoice3: 'CosyVoice3 本地高质量',
     kokoro: 'Kokoro-82M 最低延迟',
     local: '浏览器 speechSynthesis',
-    server: 'ElevenLabs 低延迟语音',
+    server: 'ElevenLabs 云端语音',
     vits: '本地 VITS 实验模型',
     off: '关闭语音'
 };
@@ -152,6 +153,42 @@ const recognitionModeLabels = {
 const conversationModeLabels = {
     assistant: '助手模式：任务执行',
     daily: '日常对话：低延迟'
+};
+
+const elevenLabsLanguagePresets = {
+    zh: {
+        label: '中文温柔二次元',
+        modelId: 'eleven_multilingual_v2',
+        outputFormat: 'mp3_44100_128',
+        optimizeStreamingLatency: 0,
+        stability: 0.58,
+        similarityBoost: 0.78,
+        style: 0.05,
+        speed: 0.9,
+        useSpeakerBoost: true
+    },
+    en: {
+        label: 'English gentle anime',
+        modelId: 'eleven_multilingual_v2',
+        outputFormat: 'mp3_44100_128',
+        optimizeStreamingLatency: 0,
+        stability: 0.55,
+        similarityBoost: 0.8,
+        style: 0.08,
+        speed: 0.92,
+        useSpeakerBoost: true
+    },
+    ja: {
+        label: '日本語やさしいアニメ',
+        modelId: 'eleven_multilingual_v2',
+        outputFormat: 'mp3_44100_128',
+        optimizeStreamingLatency: 0,
+        stability: 0.52,
+        similarityBoost: 0.78,
+        style: 0.08,
+        speed: 0.88,
+        useSpeakerBoost: true
+    }
 };
 
 const llmProviderLabels = {
@@ -429,11 +466,19 @@ function normalizeElevenLabsOptimizeLatency(value, fallbackValue = 1) {
     return Math.round(clampNumber(value, 0, 4, fallbackValue, 0));
 }
 
+function normalizeElevenLabsLanguageCode(value, fallbackValue = 'zh') {
+    const normalizedValue = String(value || '').trim().toLowerCase();
+    if (Object.prototype.hasOwnProperty.call(elevenLabsLanguagePresets, normalizedValue)) {
+        return normalizedValue;
+    }
+    return fallbackValue;
+}
+
 function normalizeElevenLabsSetting(value, fallbackValue) {
     return clampNumber(value, 0, 1, fallbackValue, 2);
 }
 
-function normalizeElevenLabsSpeed(value, fallbackValue = 0.92) {
+function normalizeElevenLabsSpeed(value, fallbackValue = 0.9) {
     return clampNumber(value, 0.7, 1.2, fallbackValue, 2);
 }
 
@@ -446,6 +491,26 @@ function formatElevenLabsOptimizeLatency(value) {
         return `${normalizedValue} 平衡`;
     }
     return `${normalizedValue} 速度优先`;
+}
+
+function applyElevenLabsLanguagePreset(languageCode) {
+    const normalizedLanguage = normalizeElevenLabsLanguageCode(languageCode);
+    const preset = elevenLabsLanguagePresets[normalizedLanguage];
+    if (!preset) {
+        return;
+    }
+
+    elements.elevenLabsLanguageCode.value = normalizedLanguage;
+    elements.elevenLabsModelId.value = preset.modelId;
+    elements.elevenLabsOutputFormat.value = preset.outputFormat;
+    elements.elevenLabsOptimizeLatency.value = String(preset.optimizeStreamingLatency);
+    elements.elevenLabsStability.value = String(preset.stability);
+    elements.elevenLabsSimilarity.value = String(preset.similarityBoost);
+    elements.elevenLabsStyle.value = String(preset.style);
+    elements.elevenLabsSpeed.value = String(preset.speed);
+    elements.elevenLabsSpeakerBoost.checked = preset.useSpeakerBoost;
+    updateRangeLabels();
+    setStatus(`已套用 ${preset.label} ElevenLabs 语音参数。`);
 }
 
 function clampNumber(value, minimum, maximum, fallbackValue, digits = 2) {
@@ -593,19 +658,20 @@ function normalizePreferences(preferences = {}) {
             : {},
         elevenLabsApiBase: String(preferences.elevenLabsApiBase || 'https://api.elevenlabs.io'),
         elevenLabsVoiceId: String(preferences.elevenLabsVoiceId || ''),
-        elevenLabsModelId: String(preferences.elevenLabsModelId || 'eleven_flash_v2_5'),
+        elevenLabsModelId: String(preferences.elevenLabsModelId || 'eleven_multilingual_v2'),
+        elevenLabsLanguageCode: normalizeElevenLabsLanguageCode(preferences.elevenLabsLanguageCode, 'zh'),
         elevenLabsOutputFormat: String(preferences.elevenLabsOutputFormat || 'mp3_44100_128'),
         elevenLabsTimeoutMs: Math.round(
             Math.min(120000, Math.max(5000, Number(preferences.elevenLabsTimeoutMs ?? 60000)))
         ),
         elevenLabsOptimizeStreamingLatency: normalizeElevenLabsOptimizeLatency(
             preferences.elevenLabsOptimizeStreamingLatency,
-            1
+            0
         ),
-        elevenLabsStability: normalizeElevenLabsSetting(preferences.elevenLabsStability, 0.45),
-        elevenLabsSimilarityBoost: normalizeElevenLabsSetting(preferences.elevenLabsSimilarityBoost, 0.8),
-        elevenLabsStyle: normalizeElevenLabsSetting(preferences.elevenLabsStyle, 0.15),
-        elevenLabsSpeed: normalizeElevenLabsSpeed(preferences.elevenLabsSpeed, 0.92),
+        elevenLabsStability: normalizeElevenLabsSetting(preferences.elevenLabsStability, 0.58),
+        elevenLabsSimilarityBoost: normalizeElevenLabsSetting(preferences.elevenLabsSimilarityBoost, 0.78),
+        elevenLabsStyle: normalizeElevenLabsSetting(preferences.elevenLabsStyle, 0.05),
+        elevenLabsSpeed: normalizeElevenLabsSpeed(preferences.elevenLabsSpeed, 0.9),
         elevenLabsUseSpeakerBoost: preferences.elevenLabsUseSpeakerBoost !== false,
         elevenLabsApiKeyConfigured: Boolean(preferences.elevenLabsApiKeyConfigured),
         elevenLabsApiKeySource: String(preferences.elevenLabsApiKeySource || 'none'),
@@ -734,6 +800,7 @@ function readFormPreferences({ includeSecret = false } = {}) {
         elevenLabsApiBase: elements.elevenLabsApiBase.value,
         elevenLabsVoiceId: elements.elevenLabsVoiceId.value,
         elevenLabsModelId: elements.elevenLabsModelId.value,
+        elevenLabsLanguageCode: elements.elevenLabsLanguageCode.value,
         elevenLabsOutputFormat: elements.elevenLabsOutputFormat.value,
         elevenLabsTimeoutMs: Number(elements.elevenLabsTimeout.value),
         elevenLabsOptimizeStreamingLatency: Number(elements.elevenLabsOptimizeLatency.value),
@@ -1283,6 +1350,7 @@ function fillForm(preferences) {
     elements.elevenLabsVoiceId.value = normalized.elevenLabsVoiceId;
     elements.elevenLabsApiKey.value = '';
     elements.elevenLabsModelId.value = normalized.elevenLabsModelId;
+    elements.elevenLabsLanguageCode.value = normalized.elevenLabsLanguageCode;
     elements.elevenLabsOutputFormat.value = normalized.elevenLabsOutputFormat;
     elements.elevenLabsTimeout.value = String(normalized.elevenLabsTimeoutMs);
     elements.elevenLabsOptimizeLatency.value = String(normalized.elevenLabsOptimizeStreamingLatency);
@@ -2236,6 +2304,7 @@ function endDialoguePreviewDrag(event) {
     elements.humanClawStateDir,
     elements.elevenLabsApiBase,
     elements.elevenLabsVoiceId,
+    elements.elevenLabsLanguageCode,
     elements.elevenLabsModelId,
     elements.elevenLabsOutputFormat,
     elements.elevenLabsTimeout,
@@ -2353,6 +2422,11 @@ elements.elevenLabsApiKey.addEventListener('input', () => {
         pendingClearElevenLabsKey = false;
     }
     syncElevenLabsKeyState();
+    syncSaveButton();
+});
+
+elements.elevenLabsLanguageCode?.addEventListener('change', () => {
+    applyElevenLabsLanguagePreset(elements.elevenLabsLanguageCode.value);
     syncSaveButton();
 });
 

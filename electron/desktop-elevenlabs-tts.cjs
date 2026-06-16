@@ -116,7 +116,7 @@ async function synthesizeElevenLabsSpeech(settings = {}, payload = {}) {
     const text = normalizeString(payload.text);
     const apiKey = normalizeString(settings.apiKey);
     const voiceId = normalizeString(settings.voiceId);
-    const modelId = normalizeString(settings.modelId) || 'eleven_flash_v2_5';
+    const modelId = normalizeString(settings.modelId) || 'eleven_multilingual_v2';
     const outputFormat = normalizeOutputFormat(settings.outputFormat);
     const timeoutMs = normalizeTimeoutMs(settings.timeoutMs);
 
@@ -144,10 +144,10 @@ async function synthesizeElevenLabsSpeech(settings = {}, payload = {}) {
             text,
             model_id: modelId,
             voice_settings: {
-                stability: normalizeNumber(settings.stability, 0.45, 0, 1),
-                similarity_boost: normalizeNumber(settings.similarityBoost, 0.8, 0, 1),
-                style: normalizeNumber(settings.style, 0.15, 0, 1),
-                speed: normalizeNumber(settings.speed, 1, 0.7, 1.2),
+                stability: normalizeNumber(settings.stability, 0.58, 0, 1),
+                similarity_boost: normalizeNumber(settings.similarityBoost, 0.78, 0, 1),
+                style: normalizeNumber(settings.style, 0.05, 0, 1),
+                speed: normalizeNumber(settings.speed, 0.9, 0.7, 1.2),
                 use_speaker_boost: settings.useSpeakerBoost !== false
             }
         };

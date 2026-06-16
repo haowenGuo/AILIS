@@ -72,6 +72,7 @@ test('desktop state allows explicit credential clearing', () => {
 
 test('desktop state normalizes ElevenLabs voice tuning preferences', () => {
     const state = getDefaultState();
+    state.preferences.elevenLabsLanguageCode = 'JA';
     state.preferences.elevenLabsOptimizeStreamingLatency = 9;
     state.preferences.elevenLabsStability = -1;
     state.preferences.elevenLabsSimilarityBoost = 2;
@@ -81,12 +82,34 @@ test('desktop state normalizes ElevenLabs voice tuning preferences', () => {
 
     const savedState = saveDesktopState(app, state, { preserveExistingCredentials: false });
 
+    assert.equal(savedState.preferences.elevenLabsLanguageCode, 'ja');
     assert.equal(savedState.preferences.elevenLabsOptimizeStreamingLatency, 4);
     assert.equal(savedState.preferences.elevenLabsStability, 0);
     assert.equal(savedState.preferences.elevenLabsSimilarityBoost, 1);
     assert.equal(savedState.preferences.elevenLabsStyle, 0.33);
     assert.equal(savedState.preferences.elevenLabsSpeed, 1.2);
     assert.equal(savedState.preferences.elevenLabsUseSpeakerBoost, false);
+});
+
+test('desktop state defaults ElevenLabs to Chinese gentle anime quality preset', () => {
+    const state = getDefaultState();
+
+    assert.equal(state.preferences.elevenLabsModelId, 'eleven_multilingual_v2');
+    assert.equal(state.preferences.elevenLabsLanguageCode, 'zh');
+    assert.equal(state.preferences.elevenLabsOptimizeStreamingLatency, 0);
+    assert.equal(state.preferences.elevenLabsStability, 0.58);
+    assert.equal(state.preferences.elevenLabsSimilarityBoost, 0.78);
+    assert.equal(state.preferences.elevenLabsStyle, 0.05);
+    assert.equal(state.preferences.elevenLabsSpeed, 0.9);
+});
+
+test('desktop state falls back to Chinese ElevenLabs language preset for unsupported languages', () => {
+    const state = getDefaultState();
+    state.preferences.elevenLabsLanguageCode = 'fr';
+
+    const savedState = saveDesktopState(app, state, { preserveExistingCredentials: false });
+
+    assert.equal(savedState.preferences.elevenLabsLanguageCode, 'zh');
 });
 
 test('desktop state preserves chunked TTS preference for quality comparison', () => {

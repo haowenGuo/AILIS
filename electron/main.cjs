@@ -84,6 +84,7 @@ const {
     LLM_PROVIDER_DEFAULT_MODELS,
     DEFAULT_ELEVENLABS_API_BASE,
     DEFAULT_ELEVENLABS_API_KEY,
+    DEFAULT_ELEVENLABS_LANGUAGE_CODE,
     DEFAULT_ELEVENLABS_MODEL_ID,
     DEFAULT_ELEVENLABS_OPTIMIZE_STREAMING_LATENCY,
     DEFAULT_ELEVENLABS_OUTPUT_FORMAT,
@@ -139,6 +140,7 @@ const {
     normalizeChunkedTtsEnabled,
     normalizeElevenLabsApiBase,
     normalizeElevenLabsApiKey,
+    normalizeElevenLabsLanguageCode,
     normalizeElevenLabsModelId,
     normalizeElevenLabsOptimizeStreamingLatency,
     normalizeElevenLabsOutputFormat,
@@ -1466,6 +1468,9 @@ function getPersistedElevenLabsSettings() {
         apiKey: normalizeElevenLabsApiKey(preferences.elevenLabsApiKey || DEFAULT_ELEVENLABS_API_KEY),
         voiceId: normalizeElevenLabsVoiceId(preferences.elevenLabsVoiceId || DEFAULT_ELEVENLABS_VOICE_ID),
         modelId,
+        languageCode: normalizeElevenLabsLanguageCode(
+            preferences.elevenLabsLanguageCode || DEFAULT_ELEVENLABS_LANGUAGE_CODE
+        ),
         outputFormat: normalizeElevenLabsOutputFormat(
             preferences.elevenLabsOutputFormat || DEFAULT_ELEVENLABS_OUTPUT_FORMAT
         ),
@@ -1500,6 +1505,7 @@ function getRendererElevenLabsPreferences() {
         elevenLabsApiBase: settings.apiBase,
         elevenLabsVoiceId: settings.voiceId,
         elevenLabsModelId: settings.modelId,
+        elevenLabsLanguageCode: settings.languageCode,
         elevenLabsOutputFormat: settings.outputFormat,
         elevenLabsTimeoutMs: settings.timeoutMs,
         elevenLabsOptimizeStreamingLatency: settings.optimizeStreamingLatency,
@@ -2313,6 +2319,7 @@ function applyPreferencesPatch(partialPreferences = {}) {
         elevenLabsApiKey: currentElevenLabsSettings.apiKey,
         elevenLabsVoiceId: currentElevenLabsSettings.voiceId,
         elevenLabsModelId: currentElevenLabsSettings.modelId,
+        elevenLabsLanguageCode: currentElevenLabsSettings.languageCode,
         elevenLabsOutputFormat: currentElevenLabsSettings.outputFormat,
         elevenLabsTimeoutMs: currentElevenLabsSettings.timeoutMs,
         elevenLabsOptimizeStreamingLatency: currentElevenLabsSettings.optimizeStreamingLatency,
@@ -2414,6 +2421,11 @@ function applyPreferencesPatch(partialPreferences = {}) {
     }
     if ('elevenLabsModelId' in partialPreferences) {
         nextPreferences.elevenLabsModelId = normalizeElevenLabsModelId(partialPreferences.elevenLabsModelId);
+    }
+    if ('elevenLabsLanguageCode' in partialPreferences) {
+        nextPreferences.elevenLabsLanguageCode = normalizeElevenLabsLanguageCode(
+            partialPreferences.elevenLabsLanguageCode
+        );
     }
     if ('elevenLabsOutputFormat' in partialPreferences) {
         nextPreferences.elevenLabsOutputFormat = normalizeElevenLabsOutputFormat(
@@ -2766,7 +2778,7 @@ function getSpeechModeLabel(mode) {
         return '本地 VITS 实验模型';
     }
     if (mode === 'server') {
-        return 'ElevenLabs 低延迟语音';
+        return 'ElevenLabs 云端语音';
     }
     if (mode === 'local') {
         return '浏览器 speechSynthesis';
@@ -3639,6 +3651,9 @@ app.whenReady().then(() => {
     );
     desktopState.preferences.elevenLabsModelId = normalizeElevenLabsModelId(
         desktopState.preferences.elevenLabsModelId || DEFAULT_ELEVENLABS_MODEL_ID
+    );
+    desktopState.preferences.elevenLabsLanguageCode = normalizeElevenLabsLanguageCode(
+        desktopState.preferences.elevenLabsLanguageCode || DEFAULT_ELEVENLABS_LANGUAGE_CODE
     );
     desktopState.preferences.elevenLabsOutputFormat = normalizeElevenLabsOutputFormat(
         desktopState.preferences.elevenLabsOutputFormat || DEFAULT_ELEVENLABS_OUTPUT_FORMAT
