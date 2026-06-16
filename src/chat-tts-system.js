@@ -49,11 +49,12 @@ function appendAttachmentHint(content, attachments = []) {
 }
 
 export class ChatTTSSystem {
-    constructor(vrmSystem, audioPlayer, chatService, { speechProvider = null } = {}) {
+    constructor(vrmSystem, audioPlayer, chatService, { speechProvider = null, chunkedTtsEnabled = true } = {}) {
         this.vrmSystem = vrmSystem;
         this.audioPlayer = audioPlayer;
         this.chatService = chatService;
         this.speechProvider = speechProvider;
+        this.chunkedTtsEnabled = chunkedTtsEnabled !== false;
 
         this.messageHistory = [];
         this.messageListEl = document.getElementById('message-list');
@@ -143,7 +144,11 @@ export class ChatTTSSystem {
         this.autoChatTimer = setTimeout(() => this.triggerAutoChat(), randomDelay);
     }
 
-    applyRuntimePreferences() {
+    applyRuntimePreferences(preferences = {}) {
+        if ('chunkedTtsEnabled' in preferences) {
+            this.chunkedTtsEnabled = preferences.chunkedTtsEnabled !== false;
+        }
+
         if (this.inputEl.disabled) {
             return;
         }
@@ -234,6 +239,10 @@ export class ChatTTSSystem {
     }
 
     createChunkedSpeechSession(aiMessageDiv) {
+        if (!this.chunkedTtsEnabled) {
+            return null;
+        }
+
         if (this.speechProvider?.isSpeechDisabled || typeof this.speechProvider?.createChunkedSession !== 'function') {
             return null;
         }

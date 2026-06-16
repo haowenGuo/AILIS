@@ -88,3 +88,13 @@ test('desktop state normalizes ElevenLabs voice tuning preferences', () => {
     assert.equal(savedState.preferences.elevenLabsSpeed, 1.2);
     assert.equal(savedState.preferences.elevenLabsUseSpeakerBoost, false);
 });
+
+test('desktop state preserves chunked TTS preference for quality comparison', () => {
+    const state = getDefaultState();
+    assert.equal(state.preferences.chunkedTtsEnabled, true);
+
+    state.preferences.chunkedTtsEnabled = false;
+    const savedState = saveDesktopState(app, state, { preserveExistingCredentials: false });
+
+    assert.equal(savedState.preferences.chunkedTtsEnabled, false);
+});

@@ -16,13 +16,15 @@ window.addEventListener('DOMContentLoaded', async () => {
     const vrmSystem = new VRMModelSystem();
     const audioPlayer = new TTSAudioPlayer(vrmSystem);
     const chatService = createChatService();
+    const initialPreferences = window.aigrilDesktop?.preferences || {};
     const buildSpeechProvider = (speechMode = null) => createSpeechProvider({
         enableTTS: true,
         speechMode
     });
-    let speechProvider = buildSpeechProvider(window.aigrilDesktop?.preferences?.speechMode);
+    let speechProvider = buildSpeechProvider(initialPreferences.speechMode);
     const chatSystem = new ChatTTSSystem(vrmSystem, audioPlayer, chatService, {
-        speechProvider
+        speechProvider,
+        chunkedTtsEnabled: initialPreferences.chunkedTtsEnabled
     });
 
     window.aigrilDesktop?.onPreferencesUpdated?.(({ preferences = {} } = {}) => {
@@ -30,7 +32,7 @@ window.addEventListener('DOMContentLoaded', async () => {
         speechProvider?.dispose?.();
         speechProvider = buildSpeechProvider(preferences.speechMode);
         chatSystem.setSpeechProvider(speechProvider);
-        chatSystem.applyRuntimePreferences();
+        chatSystem.applyRuntimePreferences(preferences);
         vrmSystem.applyPreferences();
         window.speechProvider = speechProvider;
     });

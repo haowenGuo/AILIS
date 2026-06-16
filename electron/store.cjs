@@ -3,7 +3,7 @@ const path = require('path');
 const { screen } = require('electron');
 
 const STATE_FILE_NAME = 'desktop-state.json';
-const STATE_VERSION = 24;
+const STATE_VERSION = 25;
 // Transparent Electron frame size. Avatar visual size is compensated in the pet renderer.
 const PET_BASE_WIDTH = 720;
 const PET_BASE_HEIGHT = 960;
@@ -82,6 +82,7 @@ const LEGACY_RENDER_PROFILE_ID_ALIASES = Object.freeze({
 const DEFAULT_DESKTOP_NATIVE_TTS_RATE = 0.96;
 const DEFAULT_DESKTOP_NATIVE_TTS_PITCH = 1.12;
 const DEFAULT_DESKTOP_NATIVE_TTS_VOLUME = 1;
+const DEFAULT_CHUNKED_TTS_ENABLED = true;
 const DEFAULT_AUTO_CHAT_ENABLED = false;
 const DEFAULT_AUTO_CHAT_MIN_INTERVAL_SEC = 60;
 const DEFAULT_AUTO_CHAT_MAX_INTERVAL_SEC = 120;
@@ -258,6 +259,10 @@ function normalizeLlmRequestTimeoutMs(value) {
 
 function normalizeComputerControlEnabled(value) {
     return normalizeBoolean(value, DEFAULT_COMPUTER_CONTROL_ENABLED);
+}
+
+function normalizeChunkedTtsEnabled(value) {
+    return normalizeBoolean(value, DEFAULT_CHUNKED_TTS_ENABLED);
 }
 
 function normalizeEmailAuthType(value) {
@@ -580,6 +585,7 @@ function getDefaultState() {
             desktopNativeTtsRate: DEFAULT_DESKTOP_NATIVE_TTS_RATE,
             desktopNativeTtsPitch: DEFAULT_DESKTOP_NATIVE_TTS_PITCH,
             desktopNativeTtsVolume: DEFAULT_DESKTOP_NATIVE_TTS_VOLUME,
+            chunkedTtsEnabled: DEFAULT_CHUNKED_TTS_ENABLED,
             autoChatEnabled: DEFAULT_AUTO_CHAT_ENABLED,
             autoChatMinIntervalSec: DEFAULT_AUTO_CHAT_MIN_INTERVAL_SEC,
             autoChatMaxIntervalSec: DEFAULT_AUTO_CHAT_MAX_INTERVAL_SEC,
@@ -821,6 +827,9 @@ function normalizeState(inputState) {
     normalizedState.preferences.desktopNativeTtsVolume = normalizeDesktopNativeTTSVolume(
         normalizedState.preferences.desktopNativeTtsVolume
     );
+    normalizedState.preferences.chunkedTtsEnabled = normalizeChunkedTtsEnabled(
+        normalizedState.preferences.chunkedTtsEnabled
+    );
     normalizedState.preferences.autoChatEnabled = normalizeAutoChatEnabled(
         normalizedState.preferences.autoChatEnabled
     );
@@ -980,6 +989,7 @@ module.exports = {
     DEFAULT_DESKTOP_NATIVE_TTS_PITCH,
     DEFAULT_DESKTOP_NATIVE_TTS_RATE,
     DEFAULT_DESKTOP_NATIVE_TTS_VOLUME,
+    DEFAULT_CHUNKED_TTS_ENABLED,
     DEFAULT_LLM_API_KEY,
     DEFAULT_LLM_BASE_URL,
     DEFAULT_LLM_MODEL,
@@ -1050,6 +1060,7 @@ module.exports = {
     normalizeDesktopNativeTTSPitch,
     normalizeDesktopNativeTTSRate,
     normalizeDesktopNativeTTSVolume,
+    normalizeChunkedTtsEnabled,
     normalizeElevenLabsApiBase,
     normalizeElevenLabsApiKey,
     normalizeElevenLabsModelId,

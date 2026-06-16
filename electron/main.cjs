@@ -74,6 +74,7 @@ const {
     DEFAULT_DESKTOP_NATIVE_TTS_PITCH,
     DEFAULT_DESKTOP_NATIVE_TTS_RATE,
     DEFAULT_DESKTOP_NATIVE_TTS_VOLUME,
+    DEFAULT_CHUNKED_TTS_ENABLED,
     DEFAULT_LLM_BASE_URL,
     DEFAULT_LLM_MODEL,
     DEFAULT_LLM_PROVIDER,
@@ -135,6 +136,7 @@ const {
     normalizeDesktopNativeTTSPitch,
     normalizeDesktopNativeTTSRate,
     normalizeDesktopNativeTTSVolume,
+    normalizeChunkedTtsEnabled,
     normalizeElevenLabsApiBase,
     normalizeElevenLabsApiKey,
     normalizeElevenLabsModelId,
@@ -1931,6 +1933,9 @@ function getRendererPreferences() {
         desktopNativeTtsVolume: normalizeDesktopNativeTTSVolume(
             desktopState?.preferences?.desktopNativeTtsVolume || DEFAULT_DESKTOP_NATIVE_TTS_VOLUME
         ),
+        chunkedTtsEnabled: normalizeChunkedTtsEnabled(
+            desktopState?.preferences?.chunkedTtsEnabled ?? DEFAULT_CHUNKED_TTS_ENABLED
+        ),
         autoChatEnabled: normalizeAutoChatEnabled(
             desktopState?.preferences?.autoChatEnabled ?? DEFAULT_AUTO_CHAT_ENABLED
         ),
@@ -2325,6 +2330,7 @@ function applyPreferencesPatch(partialPreferences = {}) {
         desktopNativeTtsRate: rendererPreferences.desktopNativeTtsRate,
         desktopNativeTtsPitch: rendererPreferences.desktopNativeTtsPitch,
         desktopNativeTtsVolume: rendererPreferences.desktopNativeTtsVolume,
+        chunkedTtsEnabled: rendererPreferences.chunkedTtsEnabled,
         autoChatEnabled: rendererPreferences.autoChatEnabled,
         autoChatMinIntervalSec: rendererPreferences.autoChatMinIntervalSec,
         autoChatMaxIntervalSec: rendererPreferences.autoChatMaxIntervalSec,
@@ -2542,6 +2548,9 @@ function applyPreferencesPatch(partialPreferences = {}) {
         nextPreferences.desktopNativeTtsVolume = normalizeDesktopNativeTTSVolume(
             partialPreferences.desktopNativeTtsVolume
         );
+    }
+    if ('chunkedTtsEnabled' in partialPreferences) {
+        nextPreferences.chunkedTtsEnabled = normalizeChunkedTtsEnabled(partialPreferences.chunkedTtsEnabled);
     }
     if ('autoChatEnabled' in partialPreferences) {
         nextPreferences.autoChatEnabled = normalizeAutoChatEnabled(partialPreferences.autoChatEnabled);
@@ -3657,6 +3666,9 @@ app.whenReady().then(() => {
     );
     desktopState.preferences.computerControlEnabled = normalizeComputerControlEnabled(
         desktopState.preferences.computerControlEnabled ?? DEFAULT_COMPUTER_CONTROL_ENABLED
+    );
+    desktopState.preferences.chunkedTtsEnabled = normalizeChunkedTtsEnabled(
+        desktopState.preferences.chunkedTtsEnabled ?? DEFAULT_CHUNKED_TTS_ENABLED
     );
     desktopState = saveDesktopState(app, desktopState);
     desktopASRManager = new DesktopASRManager({ app });

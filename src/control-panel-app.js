@@ -21,6 +21,7 @@ const elements = {
     cameraHeightValue: document.getElementById('camera-height-value'),
     cameraTargetY: document.getElementById('camera-target-y'),
     cameraTargetYValue: document.getElementById('camera-target-y-value'),
+    chunkedTtsEnabled: document.getElementById('chunked-tts-enabled'),
     closeBtn: document.getElementById('close-btn'),
     computerControlEnabled: document.getElementById('computer-control-enabled'),
     conversationMode: document.getElementById('conversation-mode'),
@@ -571,6 +572,7 @@ function normalizePreferences(preferences = {}) {
         petScale: String(preferences.petScale ?? '0.85'),
         petSkipTaskbar: Boolean(preferences.petSkipTaskbar),
         speechMode: String(preferences.speechMode || 'cosyvoice3'),
+        chunkedTtsEnabled: preferences.chunkedTtsEnabled !== false,
         recognitionMode: String(preferences.recognitionMode || 'auto-vad'),
         conversationMode: ['assistant', 'daily'].includes(String(preferences.conversationMode || '').trim())
             ? String(preferences.conversationMode).trim()
@@ -709,6 +711,7 @@ function readFormPreferences({ includeSecret = false } = {}) {
         petScale: Number(elements.petScale.value),
         petSkipTaskbar: !elements.petShowTaskbar.checked,
         speechMode: elements.speechMode.value,
+        chunkedTtsEnabled: elements.chunkedTtsEnabled.checked,
         recognitionMode: elements.recognitionMode.value,
         conversationMode: elements.conversationMode?.value || currentPreferences?.conversationMode || 'assistant',
         preferredMicDeviceId: elements.preferredMic.value,
@@ -1249,6 +1252,7 @@ function fillForm(preferences) {
     elements.petScale.value = normalized.petScale;
     elements.petShowTaskbar.checked = !normalized.petSkipTaskbar;
     elements.speechMode.value = normalized.speechMode;
+    elements.chunkedTtsEnabled.checked = normalized.chunkedTtsEnabled;
     elements.recognitionMode.value = normalized.recognitionMode;
     if (elements.conversationMode) {
         elements.conversationMode.value = normalized.conversationMode;
@@ -2241,6 +2245,7 @@ function endDialoguePreviewDrag(event) {
     elements.elevenLabsStability,
     elements.elevenLabsSimilarity,
     elements.elevenLabsStyle,
+    elements.chunkedTtsEnabled,
     elements.computerControlEnabled,
     elements.conversationMode,
     elements.emailQqAccount,
