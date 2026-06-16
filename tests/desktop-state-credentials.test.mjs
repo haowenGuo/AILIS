@@ -69,3 +69,22 @@ test('desktop state allows explicit credential clearing', () => {
     assert.equal(savedState.preferences.elevenLabsApiKey, '');
     assert.equal(savedState.preferences.elevenLabsVoiceId, 'elevenlabs-existing-voice');
 });
+
+test('desktop state normalizes ElevenLabs voice tuning preferences', () => {
+    const state = getDefaultState();
+    state.preferences.elevenLabsOptimizeStreamingLatency = 9;
+    state.preferences.elevenLabsStability = -1;
+    state.preferences.elevenLabsSimilarityBoost = 2;
+    state.preferences.elevenLabsStyle = 0.333;
+    state.preferences.elevenLabsSpeed = 2;
+    state.preferences.elevenLabsUseSpeakerBoost = false;
+
+    const savedState = saveDesktopState(app, state, { preserveExistingCredentials: false });
+
+    assert.equal(savedState.preferences.elevenLabsOptimizeStreamingLatency, 4);
+    assert.equal(savedState.preferences.elevenLabsStability, 0);
+    assert.equal(savedState.preferences.elevenLabsSimilarityBoost, 1);
+    assert.equal(savedState.preferences.elevenLabsStyle, 0.33);
+    assert.equal(savedState.preferences.elevenLabsSpeed, 1.2);
+    assert.equal(savedState.preferences.elevenLabsUseSpeakerBoost, false);
+});

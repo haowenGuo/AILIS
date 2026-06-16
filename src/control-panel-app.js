@@ -42,7 +42,18 @@ const elements = {
     elevenLabsApiKey: document.getElementById('elevenlabs-api-key'),
     elevenLabsKeyState: document.getElementById('elevenlabs-key-state'),
     elevenLabsModelId: document.getElementById('elevenlabs-model-id'),
+    elevenLabsOptimizeLatency: document.getElementById('elevenlabs-optimize-latency'),
+    elevenLabsOptimizeLatencyValue: document.getElementById('elevenlabs-optimize-latency-value'),
     elevenLabsOutputFormat: document.getElementById('elevenlabs-output-format'),
+    elevenLabsSimilarity: document.getElementById('elevenlabs-similarity'),
+    elevenLabsSimilarityValue: document.getElementById('elevenlabs-similarity-value'),
+    elevenLabsSpeakerBoost: document.getElementById('elevenlabs-speaker-boost'),
+    elevenLabsSpeed: document.getElementById('elevenlabs-speed'),
+    elevenLabsSpeedValue: document.getElementById('elevenlabs-speed-value'),
+    elevenLabsStability: document.getElementById('elevenlabs-stability'),
+    elevenLabsStabilityValue: document.getElementById('elevenlabs-stability-value'),
+    elevenLabsStyle: document.getElementById('elevenlabs-style'),
+    elevenLabsStyleValue: document.getElementById('elevenlabs-style-value'),
     elevenLabsTimeout: document.getElementById('elevenlabs-timeout'),
     elevenLabsVoiceId: document.getElementById('elevenlabs-voice-id'),
     llmApiKey: document.getElementById('llm-api-key'),
@@ -413,6 +424,29 @@ function formatFpsLimit(value) {
     return `${normalizeRenderFpsLimit(value)} FPS`;
 }
 
+function normalizeElevenLabsOptimizeLatency(value, fallbackValue = 1) {
+    return Math.round(clampNumber(value, 0, 4, fallbackValue, 0));
+}
+
+function normalizeElevenLabsSetting(value, fallbackValue) {
+    return clampNumber(value, 0, 1, fallbackValue, 2);
+}
+
+function normalizeElevenLabsSpeed(value, fallbackValue = 0.92) {
+    return clampNumber(value, 0.7, 1.2, fallbackValue, 2);
+}
+
+function formatElevenLabsOptimizeLatency(value) {
+    const normalizedValue = normalizeElevenLabsOptimizeLatency(value);
+    if (normalizedValue === 0) {
+        return '0 音质优先';
+    }
+    if (normalizedValue <= 2) {
+        return `${normalizedValue} 平衡`;
+    }
+    return `${normalizedValue} 速度优先`;
+}
+
 function clampNumber(value, minimum, maximum, fallbackValue, digits = 2) {
     const numericValue = Number(value);
     if (!Number.isFinite(numericValue)) {
@@ -490,6 +524,13 @@ function updateRangeLabels() {
     elements.renderResolutionScaleValue.textContent = formatResolutionScale(elements.renderResolutionScale.value);
     elements.renderFpsLimitValue.textContent = formatFpsLimit(getFpsFromSliderIndex(elements.renderFpsLimit.value));
     elements.renderShadowQualityValue.textContent = formatQualityLevel(elements.renderShadowQuality.value);
+    elements.elevenLabsOptimizeLatencyValue.textContent = formatElevenLabsOptimizeLatency(
+        elements.elevenLabsOptimizeLatency.value
+    );
+    elements.elevenLabsSpeedValue.textContent = formatValue(elements.elevenLabsSpeed.value);
+    elements.elevenLabsStabilityValue.textContent = formatValue(elements.elevenLabsStability.value);
+    elements.elevenLabsSimilarityValue.textContent = formatValue(elements.elevenLabsSimilarity.value);
+    elements.elevenLabsStyleValue.textContent = formatValue(elements.elevenLabsStyle.value);
     elements.petMouseHitTestWidthValue.textContent = formatHitTestScale(
         elements.petMouseHitTestWidth.value || 0.58,
         0.58,
@@ -555,6 +596,15 @@ function normalizePreferences(preferences = {}) {
         elevenLabsTimeoutMs: Math.round(
             Math.min(120000, Math.max(5000, Number(preferences.elevenLabsTimeoutMs ?? 60000)))
         ),
+        elevenLabsOptimizeStreamingLatency: normalizeElevenLabsOptimizeLatency(
+            preferences.elevenLabsOptimizeStreamingLatency,
+            1
+        ),
+        elevenLabsStability: normalizeElevenLabsSetting(preferences.elevenLabsStability, 0.45),
+        elevenLabsSimilarityBoost: normalizeElevenLabsSetting(preferences.elevenLabsSimilarityBoost, 0.8),
+        elevenLabsStyle: normalizeElevenLabsSetting(preferences.elevenLabsStyle, 0.15),
+        elevenLabsSpeed: normalizeElevenLabsSpeed(preferences.elevenLabsSpeed, 0.92),
+        elevenLabsUseSpeakerBoost: preferences.elevenLabsUseSpeakerBoost !== false,
         elevenLabsApiKeyConfigured: Boolean(preferences.elevenLabsApiKeyConfigured),
         elevenLabsApiKeySource: String(preferences.elevenLabsApiKeySource || 'none'),
         computerControlEnabled: preferences.computerControlEnabled !== false,
@@ -683,6 +733,12 @@ function readFormPreferences({ includeSecret = false } = {}) {
         elevenLabsModelId: elements.elevenLabsModelId.value,
         elevenLabsOutputFormat: elements.elevenLabsOutputFormat.value,
         elevenLabsTimeoutMs: Number(elements.elevenLabsTimeout.value),
+        elevenLabsOptimizeStreamingLatency: Number(elements.elevenLabsOptimizeLatency.value),
+        elevenLabsStability: Number(elements.elevenLabsStability.value),
+        elevenLabsSimilarityBoost: Number(elements.elevenLabsSimilarity.value),
+        elevenLabsStyle: Number(elements.elevenLabsStyle.value),
+        elevenLabsSpeed: Number(elements.elevenLabsSpeed.value),
+        elevenLabsUseSpeakerBoost: elements.elevenLabsSpeakerBoost.checked,
         elevenLabsApiKeyConfigured: pendingClearElevenLabsKey
             ? false
             : Boolean(currentPreferences?.elevenLabsApiKeyConfigured),
@@ -1225,6 +1281,12 @@ function fillForm(preferences) {
     elements.elevenLabsModelId.value = normalized.elevenLabsModelId;
     elements.elevenLabsOutputFormat.value = normalized.elevenLabsOutputFormat;
     elements.elevenLabsTimeout.value = String(normalized.elevenLabsTimeoutMs);
+    elements.elevenLabsOptimizeLatency.value = String(normalized.elevenLabsOptimizeStreamingLatency);
+    elements.elevenLabsStability.value = String(normalized.elevenLabsStability);
+    elements.elevenLabsSimilarity.value = String(normalized.elevenLabsSimilarityBoost);
+    elements.elevenLabsStyle.value = String(normalized.elevenLabsStyle);
+    elements.elevenLabsSpeed.value = String(normalized.elevenLabsSpeed);
+    elements.elevenLabsSpeakerBoost.checked = normalized.elevenLabsUseSpeakerBoost;
     elements.computerControlEnabled.checked = normalized.computerControlEnabled;
     for (const [providerId, entry] of Object.entries(emailElements)) {
         const profile = normalized.emailProfiles?.[providerId] || {};
@@ -2173,6 +2235,12 @@ function endDialoguePreviewDrag(event) {
     elements.elevenLabsModelId,
     elements.elevenLabsOutputFormat,
     elements.elevenLabsTimeout,
+    elements.elevenLabsOptimizeLatency,
+    elements.elevenLabsSpeakerBoost,
+    elements.elevenLabsSpeed,
+    elements.elevenLabsStability,
+    elements.elevenLabsSimilarity,
+    elements.elevenLabsStyle,
     elements.computerControlEnabled,
     elements.conversationMode,
     elements.emailQqAccount,

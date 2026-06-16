@@ -1219,7 +1219,7 @@
                                 <div class="field-meta">
                                     <span class="field-label">ElevenLabs 模型</span>
                                 </div>
-                                <input id="elevenlabs-model-id" type="text" autocomplete="off" placeholder="eleven_multilingual_v2">
+                                <input id="elevenlabs-model-id" type="text" autocomplete="off" placeholder="eleven_flash_v2_5">
                             </label>
                             <label class="field">
                                 <div class="field-meta">
@@ -1234,6 +1234,53 @@
                                 <span class="field-label">ElevenLabs 超时（ms）</span>
                             </div>
                             <input id="elevenlabs-timeout" type="number" min="5000" max="120000" step="1000">
+                        </label>
+
+                        <label class="field">
+                            <div class="field-meta">
+                                <span class="field-label">低延迟优化</span>
+                                <span class="field-value" id="elevenlabs-optimize-latency-value"></span>
+                            </div>
+                            <input id="elevenlabs-optimize-latency" type="range" min="0" max="4" step="1">
+                            <div class="field-help">0 更稳更自然，3-4 更快但更容易牺牲音质。</div>
+                        </label>
+
+                        <label class="toggle-row">
+                            <input id="elevenlabs-speaker-boost" type="checkbox">
+                            <span>Speaker Boost</span>
+                        </label>
+
+                        <label class="field">
+                            <div class="field-meta">
+                                <span class="field-label">语速</span>
+                                <span class="field-value" id="elevenlabs-speed-value"></span>
+                            </div>
+                            <input id="elevenlabs-speed" type="range" min="0.7" max="1.2" step="0.01">
+                        </label>
+
+                        <div class="split-2">
+                            <label class="field">
+                                <div class="field-meta">
+                                    <span class="field-label">稳定度</span>
+                                    <span class="field-value" id="elevenlabs-stability-value"></span>
+                                </div>
+                                <input id="elevenlabs-stability" type="range" min="0" max="1" step="0.01">
+                            </label>
+                            <label class="field">
+                                <div class="field-meta">
+                                    <span class="field-label">相似度增强</span>
+                                    <span class="field-value" id="elevenlabs-similarity-value"></span>
+                                </div>
+                                <input id="elevenlabs-similarity" type="range" min="0" max="1" step="0.01">
+                            </label>
+                        </div>
+
+                        <label class="field">
+                            <div class="field-meta">
+                                <span class="field-label">风格强度</span>
+                                <span class="field-value" id="elevenlabs-style-value"></span>
+                            </div>
+                            <input id="elevenlabs-style" type="range" min="0" max="1" step="0.01">
                         </label>
                             </div>
                         </details>

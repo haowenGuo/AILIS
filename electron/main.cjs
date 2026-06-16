@@ -84,8 +84,14 @@ const {
     DEFAULT_ELEVENLABS_API_BASE,
     DEFAULT_ELEVENLABS_API_KEY,
     DEFAULT_ELEVENLABS_MODEL_ID,
+    DEFAULT_ELEVENLABS_OPTIMIZE_STREAMING_LATENCY,
     DEFAULT_ELEVENLABS_OUTPUT_FORMAT,
+    DEFAULT_ELEVENLABS_SIMILARITY_BOOST,
+    DEFAULT_ELEVENLABS_SPEED,
+    DEFAULT_ELEVENLABS_STABILITY,
+    DEFAULT_ELEVENLABS_STYLE,
     DEFAULT_ELEVENLABS_TIMEOUT_MS,
+    DEFAULT_ELEVENLABS_USE_SPEAKER_BOOST,
     DEFAULT_ELEVENLABS_VOICE_ID,
     DEFAULT_HUMANCLAW_STATE_DIR,
     DEFAULT_OPENCLAW_GATEWAY_URL,
@@ -132,8 +138,14 @@ const {
     normalizeElevenLabsApiBase,
     normalizeElevenLabsApiKey,
     normalizeElevenLabsModelId,
+    normalizeElevenLabsOptimizeStreamingLatency,
     normalizeElevenLabsOutputFormat,
+    normalizeElevenLabsSimilarityBoost,
+    normalizeElevenLabsSpeed,
+    normalizeElevenLabsStability,
+    normalizeElevenLabsStyle,
     normalizeElevenLabsTimeoutMs,
+    normalizeElevenLabsUseSpeakerBoost,
     normalizeElevenLabsVoiceId,
     normalizeEmailProfiles,
     normalizeHumanClawStateDir,
@@ -1439,16 +1451,11 @@ function getRendererLlmPreferences() {
     };
 }
 
-function isLowLatencyElevenLabsModel(modelId) {
-    return /(?:flash|turbo)/i.test(String(modelId || ''));
-}
-
 function getPersistedElevenLabsSettings() {
     const preferences = desktopState?.preferences || {};
     const modelId = normalizeElevenLabsModelId(
         preferences.elevenLabsModelId || DEFAULT_ELEVENLABS_MODEL_ID
     );
-    const lowLatency = isLowLatencyElevenLabsModel(modelId);
 
     return {
         apiBase: normalizeElevenLabsApiBase(
@@ -1464,12 +1471,24 @@ function getPersistedElevenLabsSettings() {
             preferences.elevenLabsTimeoutMs || DEFAULT_ELEVENLABS_TIMEOUT_MS
         ),
         enableLogging: true,
-        optimizeStreamingLatency: lowLatency ? 3 : 0,
-        stability: 0.45,
-        similarityBoost: 0.8,
-        style: 0.15,
-        speed: 1.0,
-        useSpeakerBoost: !lowLatency
+        optimizeStreamingLatency: normalizeElevenLabsOptimizeStreamingLatency(
+            preferences.elevenLabsOptimizeStreamingLatency ?? DEFAULT_ELEVENLABS_OPTIMIZE_STREAMING_LATENCY
+        ),
+        stability: normalizeElevenLabsStability(
+            preferences.elevenLabsStability ?? DEFAULT_ELEVENLABS_STABILITY
+        ),
+        similarityBoost: normalizeElevenLabsSimilarityBoost(
+            preferences.elevenLabsSimilarityBoost ?? DEFAULT_ELEVENLABS_SIMILARITY_BOOST
+        ),
+        style: normalizeElevenLabsStyle(
+            preferences.elevenLabsStyle ?? DEFAULT_ELEVENLABS_STYLE
+        ),
+        speed: normalizeElevenLabsSpeed(
+            preferences.elevenLabsSpeed ?? DEFAULT_ELEVENLABS_SPEED
+        ),
+        useSpeakerBoost: normalizeElevenLabsUseSpeakerBoost(
+            preferences.elevenLabsUseSpeakerBoost ?? DEFAULT_ELEVENLABS_USE_SPEAKER_BOOST
+        )
     };
 }
 
@@ -1481,6 +1500,12 @@ function getRendererElevenLabsPreferences() {
         elevenLabsModelId: settings.modelId,
         elevenLabsOutputFormat: settings.outputFormat,
         elevenLabsTimeoutMs: settings.timeoutMs,
+        elevenLabsOptimizeStreamingLatency: settings.optimizeStreamingLatency,
+        elevenLabsStability: settings.stability,
+        elevenLabsSimilarityBoost: settings.similarityBoost,
+        elevenLabsStyle: settings.style,
+        elevenLabsSpeed: settings.speed,
+        elevenLabsUseSpeakerBoost: settings.useSpeakerBoost,
         elevenLabsApiKeyConfigured: Boolean(settings.apiKey),
         elevenLabsApiKeySource: settings.apiKey ? 'saved' : 'none'
     };
@@ -2285,6 +2310,12 @@ function applyPreferencesPatch(partialPreferences = {}) {
         elevenLabsModelId: currentElevenLabsSettings.modelId,
         elevenLabsOutputFormat: currentElevenLabsSettings.outputFormat,
         elevenLabsTimeoutMs: currentElevenLabsSettings.timeoutMs,
+        elevenLabsOptimizeStreamingLatency: currentElevenLabsSettings.optimizeStreamingLatency,
+        elevenLabsStability: currentElevenLabsSettings.stability,
+        elevenLabsSimilarityBoost: currentElevenLabsSettings.similarityBoost,
+        elevenLabsStyle: currentElevenLabsSettings.style,
+        elevenLabsSpeed: currentElevenLabsSettings.speed,
+        elevenLabsUseSpeakerBoost: currentElevenLabsSettings.useSpeakerBoost,
         computerControlEnabled: rendererPreferences.computerControlEnabled,
         emailProfiles: getPersistedEmailProfiles(),
         cameraDistance: rendererPreferences.cameraDistance,
@@ -2386,6 +2417,30 @@ function applyPreferencesPatch(partialPreferences = {}) {
     if ('elevenLabsTimeoutMs' in partialPreferences) {
         nextPreferences.elevenLabsTimeoutMs = normalizeElevenLabsTimeoutMs(
             partialPreferences.elevenLabsTimeoutMs
+        );
+    }
+    if ('elevenLabsOptimizeStreamingLatency' in partialPreferences) {
+        nextPreferences.elevenLabsOptimizeStreamingLatency = normalizeElevenLabsOptimizeStreamingLatency(
+            partialPreferences.elevenLabsOptimizeStreamingLatency
+        );
+    }
+    if ('elevenLabsStability' in partialPreferences) {
+        nextPreferences.elevenLabsStability = normalizeElevenLabsStability(partialPreferences.elevenLabsStability);
+    }
+    if ('elevenLabsSimilarityBoost' in partialPreferences) {
+        nextPreferences.elevenLabsSimilarityBoost = normalizeElevenLabsSimilarityBoost(
+            partialPreferences.elevenLabsSimilarityBoost
+        );
+    }
+    if ('elevenLabsStyle' in partialPreferences) {
+        nextPreferences.elevenLabsStyle = normalizeElevenLabsStyle(partialPreferences.elevenLabsStyle);
+    }
+    if ('elevenLabsSpeed' in partialPreferences) {
+        nextPreferences.elevenLabsSpeed = normalizeElevenLabsSpeed(partialPreferences.elevenLabsSpeed);
+    }
+    if ('elevenLabsUseSpeakerBoost' in partialPreferences) {
+        nextPreferences.elevenLabsUseSpeakerBoost = normalizeElevenLabsUseSpeakerBoost(
+            partialPreferences.elevenLabsUseSpeakerBoost
         );
     }
     if ('elevenLabsApiKey' in partialPreferences) {
@@ -3581,6 +3636,24 @@ app.whenReady().then(() => {
     );
     desktopState.preferences.elevenLabsTimeoutMs = normalizeElevenLabsTimeoutMs(
         desktopState.preferences.elevenLabsTimeoutMs || DEFAULT_ELEVENLABS_TIMEOUT_MS
+    );
+    desktopState.preferences.elevenLabsOptimizeStreamingLatency = normalizeElevenLabsOptimizeStreamingLatency(
+        desktopState.preferences.elevenLabsOptimizeStreamingLatency ?? DEFAULT_ELEVENLABS_OPTIMIZE_STREAMING_LATENCY
+    );
+    desktopState.preferences.elevenLabsStability = normalizeElevenLabsStability(
+        desktopState.preferences.elevenLabsStability ?? DEFAULT_ELEVENLABS_STABILITY
+    );
+    desktopState.preferences.elevenLabsSimilarityBoost = normalizeElevenLabsSimilarityBoost(
+        desktopState.preferences.elevenLabsSimilarityBoost ?? DEFAULT_ELEVENLABS_SIMILARITY_BOOST
+    );
+    desktopState.preferences.elevenLabsStyle = normalizeElevenLabsStyle(
+        desktopState.preferences.elevenLabsStyle ?? DEFAULT_ELEVENLABS_STYLE
+    );
+    desktopState.preferences.elevenLabsSpeed = normalizeElevenLabsSpeed(
+        desktopState.preferences.elevenLabsSpeed ?? DEFAULT_ELEVENLABS_SPEED
+    );
+    desktopState.preferences.elevenLabsUseSpeakerBoost = normalizeElevenLabsUseSpeakerBoost(
+        desktopState.preferences.elevenLabsUseSpeakerBoost ?? DEFAULT_ELEVENLABS_USE_SPEAKER_BOOST
     );
     desktopState.preferences.computerControlEnabled = normalizeComputerControlEnabled(
         desktopState.preferences.computerControlEnabled ?? DEFAULT_COMPUTER_CONTROL_ENABLED

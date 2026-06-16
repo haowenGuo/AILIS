@@ -43,6 +43,12 @@ const DEFAULT_ELEVENLABS_VOICE_ID = '';
 const DEFAULT_ELEVENLABS_MODEL_ID = 'eleven_flash_v2_5';
 const DEFAULT_ELEVENLABS_OUTPUT_FORMAT = 'mp3_44100_128';
 const DEFAULT_ELEVENLABS_TIMEOUT_MS = 60000;
+const DEFAULT_ELEVENLABS_OPTIMIZE_STREAMING_LATENCY = 1;
+const DEFAULT_ELEVENLABS_STABILITY = 0.45;
+const DEFAULT_ELEVENLABS_SIMILARITY_BOOST = 0.8;
+const DEFAULT_ELEVENLABS_STYLE = 0.15;
+const DEFAULT_ELEVENLABS_SPEED = 0.92;
+const DEFAULT_ELEVENLABS_USE_SPEAKER_BOOST = true;
 const DEFAULT_COMPUTER_CONTROL_ENABLED = true;
 const DEFAULT_CAMERA_DISTANCE = 1.1;
 const DEFAULT_CAMERA_HEIGHT = 1.3;
@@ -210,6 +216,36 @@ function normalizeElevenLabsOutputFormat(value) {
 
 function normalizeElevenLabsTimeoutMs(value) {
     return Math.round(clampNumber(value, 5000, 120000, DEFAULT_ELEVENLABS_TIMEOUT_MS, 0));
+}
+
+function normalizeElevenLabsOptimizeStreamingLatency(value) {
+    return Math.round(clampNumber(
+        value,
+        0,
+        4,
+        DEFAULT_ELEVENLABS_OPTIMIZE_STREAMING_LATENCY,
+        0
+    ));
+}
+
+function normalizeElevenLabsStability(value) {
+    return clampNumber(value, 0, 1, DEFAULT_ELEVENLABS_STABILITY, 2);
+}
+
+function normalizeElevenLabsSimilarityBoost(value) {
+    return clampNumber(value, 0, 1, DEFAULT_ELEVENLABS_SIMILARITY_BOOST, 2);
+}
+
+function normalizeElevenLabsStyle(value) {
+    return clampNumber(value, 0, 1, DEFAULT_ELEVENLABS_STYLE, 2);
+}
+
+function normalizeElevenLabsSpeed(value) {
+    return clampNumber(value, 0.7, 1.2, DEFAULT_ELEVENLABS_SPEED, 2);
+}
+
+function normalizeElevenLabsUseSpeakerBoost(value) {
+    return normalizeBoolean(value, DEFAULT_ELEVENLABS_USE_SPEAKER_BOOST);
 }
 
 function normalizeLlmTemperature(value) {
@@ -520,6 +556,12 @@ function getDefaultState() {
             elevenLabsModelId: DEFAULT_ELEVENLABS_MODEL_ID,
             elevenLabsOutputFormat: DEFAULT_ELEVENLABS_OUTPUT_FORMAT,
             elevenLabsTimeoutMs: DEFAULT_ELEVENLABS_TIMEOUT_MS,
+            elevenLabsOptimizeStreamingLatency: DEFAULT_ELEVENLABS_OPTIMIZE_STREAMING_LATENCY,
+            elevenLabsStability: DEFAULT_ELEVENLABS_STABILITY,
+            elevenLabsSimilarityBoost: DEFAULT_ELEVENLABS_SIMILARITY_BOOST,
+            elevenLabsStyle: DEFAULT_ELEVENLABS_STYLE,
+            elevenLabsSpeed: DEFAULT_ELEVENLABS_SPEED,
+            elevenLabsUseSpeakerBoost: DEFAULT_ELEVENLABS_USE_SPEAKER_BOOST,
             computerControlEnabled: DEFAULT_COMPUTER_CONTROL_ENABLED,
             cameraDistance: DEFAULT_CAMERA_DISTANCE,
             cameraHeight: DEFAULT_CAMERA_HEIGHT,
@@ -701,6 +743,24 @@ function normalizeState(inputState) {
     );
     normalizedState.preferences.elevenLabsTimeoutMs = normalizeElevenLabsTimeoutMs(
         normalizedState.preferences.elevenLabsTimeoutMs
+    );
+    normalizedState.preferences.elevenLabsOptimizeStreamingLatency = normalizeElevenLabsOptimizeStreamingLatency(
+        normalizedState.preferences.elevenLabsOptimizeStreamingLatency
+    );
+    normalizedState.preferences.elevenLabsStability = normalizeElevenLabsStability(
+        normalizedState.preferences.elevenLabsStability
+    );
+    normalizedState.preferences.elevenLabsSimilarityBoost = normalizeElevenLabsSimilarityBoost(
+        normalizedState.preferences.elevenLabsSimilarityBoost
+    );
+    normalizedState.preferences.elevenLabsStyle = normalizeElevenLabsStyle(
+        normalizedState.preferences.elevenLabsStyle
+    );
+    normalizedState.preferences.elevenLabsSpeed = normalizeElevenLabsSpeed(
+        normalizedState.preferences.elevenLabsSpeed
+    );
+    normalizedState.preferences.elevenLabsUseSpeakerBoost = normalizeElevenLabsUseSpeakerBoost(
+        normalizedState.preferences.elevenLabsUseSpeakerBoost
     );
     normalizedState.preferences.computerControlEnabled = normalizeComputerControlEnabled(
         normalizedState.preferences.computerControlEnabled
@@ -931,8 +991,14 @@ module.exports = {
     DEFAULT_ELEVENLABS_API_BASE,
     DEFAULT_ELEVENLABS_API_KEY,
     DEFAULT_ELEVENLABS_MODEL_ID,
+    DEFAULT_ELEVENLABS_OPTIMIZE_STREAMING_LATENCY,
     DEFAULT_ELEVENLABS_OUTPUT_FORMAT,
+    DEFAULT_ELEVENLABS_SIMILARITY_BOOST,
+    DEFAULT_ELEVENLABS_SPEED,
+    DEFAULT_ELEVENLABS_STABILITY,
+    DEFAULT_ELEVENLABS_STYLE,
     DEFAULT_ELEVENLABS_TIMEOUT_MS,
+    DEFAULT_ELEVENLABS_USE_SPEAKER_BOOST,
     DEFAULT_ELEVENLABS_VOICE_ID,
     DEFAULT_HUMANCLAW_STATE_DIR,
     DEFAULT_COMPUTER_CONTROL_ENABLED,
@@ -987,8 +1053,14 @@ module.exports = {
     normalizeElevenLabsApiBase,
     normalizeElevenLabsApiKey,
     normalizeElevenLabsModelId,
+    normalizeElevenLabsOptimizeStreamingLatency,
     normalizeElevenLabsOutputFormat,
+    normalizeElevenLabsSimilarityBoost,
+    normalizeElevenLabsSpeed,
+    normalizeElevenLabsStability,
+    normalizeElevenLabsStyle,
     normalizeElevenLabsTimeoutMs,
+    normalizeElevenLabsUseSpeakerBoost,
     normalizeElevenLabsVoiceId,
     normalizeLlmApiKey,
     normalizeLlmBaseUrl,
