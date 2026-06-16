@@ -238,7 +238,7 @@ test('server speech provider synthesizes final text when stream payload has no a
     const played = [];
 
     globalThis.window = {
-        aigrilDesktop: {
+        ailisDesktop: {
             platform: 'electron',
             tts: {
                 synthesize: async (payload) => {

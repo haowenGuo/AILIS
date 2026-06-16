@@ -55,7 +55,7 @@ window.addEventListener('DOMContentLoaded', () => {
     }
 
     function cancelSelection() {
-        window.aigrilDesktop?.vision?.cancelRegionSelection?.();
+        window.ailisDesktop?.vision?.cancelRegionSelection?.();
     }
 
     function finishSelection() {
@@ -65,7 +65,7 @@ window.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
-        window.aigrilDesktop?.vision?.finishRegionSelection?.({
+        window.ailisDesktop?.vision?.finishRegionSelection?.({
             selection: {
                 x: Math.round(rect.x),
                 y: Math.round(rect.y),

@@ -1,4 +1,4 @@
-# AIGril Blog Publishing Guide
+# AILIS Blog Publishing Guide
 
 这份文档是给“帮你发文的其他 AI”准备的。
 
@@ -233,7 +233,7 @@ Markdown 第一行必须是一级标题：
 以后你可以直接把下面这段发给别的 AI：
 
 ```md
-请按 AIGril 博客发文规范新增一篇文章，只修改博客内容层：
+请按 AILIS 博客发文规范新增一篇文章，只修改博客内容层：
 
 1. 新增中文正文到 `backend/blog_content/posts/zh/<slug>.md`
 2. 新增英文正文到 `backend/blog_content/posts/en/<slug>.md`

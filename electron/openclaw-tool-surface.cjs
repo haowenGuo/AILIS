@@ -4,7 +4,7 @@ const path = require('path');
 const PROJECT_ROOT = path.resolve(__dirname, '..');
 const DEFAULT_OPENCLAW_UPSTREAM_ROOT = path.join(
     PROJECT_ROOT,
-    'AIGrilClaw',
+    'AILISClaw',
     '.refs',
     'openclaw-main'
 );

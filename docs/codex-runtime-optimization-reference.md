@@ -5,7 +5,7 @@ Last updated: 2026-06-07
 This document records how local Codex source reduces runtime latency, prompt bloat, and tool overhead. It is intentionally code-backed: every claim below points to local Codex source under:
 
 ```text
-F:\AIGril\build-cache\codex-runtime\codex-rs
+F:\AILIS\build-cache\codex-runtime\codex-rs
 ```
 
 This is not a generic "prompt engineering" note. The important pattern is that Codex does not rely on the model alone to stay fast. The runtime aggressively controls:
@@ -16,7 +16,7 @@ This is not a generic "prompt engineering" note. The important pattern is that C
 - when history gets compacted,
 - how token usage is measured.
 
-For AIGL, this matters because the slow tasks we observed were not tool-time bound. They were model-wait bound: tools finished in seconds, but the model kept re-reading large history and large observations for many rounds.
+For AILIS, this matters because the slow tasks we observed were not tool-time bound. They were model-wait bound: tools finished in seconds, but the model kept re-reading large history and large observations for many rounds.
 
 ## 1. The Main Optimization Shape
 
@@ -32,7 +32,7 @@ Keep the first-turn tool surface small
 -> auto-compact history with explicit retention budgets
 ```
 
-The direct implication for AIGL is simple:
+The direct implication for AILIS is simple:
 
 - If the model sees too many tools too early, it slows down and chooses worse.
 - If tool outputs are fed back too verbosely, every next step gets slower.
@@ -150,7 +150,7 @@ assert!(
 
 This is a very important clue. Codex is testing for prompt hygiene, not just tool correctness.
 
-### AIGL takeaway
+### AILIS takeaway
 
 The first fix direction is not "better prompt wording". It is:
 
@@ -206,9 +206,9 @@ Why this helps:
 - The model does not need every deep sub-object explained in full to decide the next action.
 - Compacting schemas protects both latency and tool-call reliability.
 
-### AIGL takeaway
+### AILIS takeaway
 
-If AIGL exposes full JSON schemas from every MCP tool, browser tool, research tool, and file tool on every turn, the model will waste time parsing contract detail instead of planning. Codex avoids that at the parser layer, not with "please be concise" instructions.
+If AILIS exposes full JSON schemas from every MCP tool, browser tool, research tool, and file tool on every turn, the model will waste time parsing contract detail instead of planning. Codex avoids that at the parser layer, not with "please be concise" instructions.
 
 ## 4. Codex Truncates Tool Output Before It Goes Back Into the Next Round
 
@@ -273,9 +273,9 @@ Without this layer, every tool becomes a prompt amplifier:
 
 and the model pays for that again on every subsequent turn.
 
-### AIGL takeaway
+### AILIS takeaway
 
-For AIGL, this is more important than adding more tools. Before adding more tools, every tool needs a model-facing truncation adapter:
+For AILIS, this is more important than adding more tools. Before adding more tools, every tool needs a model-facing truncation adapter:
 
 - `web_fetch` should not dump whole pages by default.
 - `github_repo_read` should return scoped structure, not raw noise.
@@ -301,9 +301,9 @@ This is subtle but important:
 - Codex does not let internal previews grow carelessly either.
 - Even logging and telemetry surfaces are treated as model-budget-sensitive.
 
-### AIGL takeaway
+### AILIS takeaway
 
-If AIGL reuses verbose event text for both UI progress and model context, it is doing the opposite of this design. Internal traces should be rich; model-facing traces should be lean.
+If AILIS reuses verbose event text for both UI progress and model context, it is doing the opposite of this design. Internal traces should be rich; model-facing traces should be lean.
 
 ## 6. Codex Tracks Token Usage Continuously Instead of Guessing
 
@@ -339,9 +339,9 @@ Why this matters:
 - Cached input tokens tell you whether repeated context is being reused well.
 - Reasoning output tokens tell you whether the model is spending too much effort per decision.
 
-### AIGL takeaway
+### AILIS takeaway
 
-AIGL should log per-turn:
+AILIS should log per-turn:
 
 - total prompt tokens,
 - delta from previous turn,
@@ -443,7 +443,7 @@ Meaning:
 - Remote compaction does not blindly preserve every past item.
 - It filters by message role and then truncates retained text to a token budget.
 
-This is very relevant to AIGL. If AIGL keeps replaying giant tool observations, redundant progress strings, and persona wrappers inside the active history, it is violating the same principle Codex is enforcing here.
+This is very relevant to AILIS. If AILIS keeps replaying giant tool observations, redundant progress strings, and persona wrappers inside the active history, it is violating the same principle Codex is enforcing here.
 
 ## 9. Codex Web Search Is Also Context-Budgeted
 
@@ -472,9 +472,9 @@ Meaning:
 - Codex treats web search as a bounded retrieval tool, not a raw HTML floodgate.
 - Search context size is configurable as `low`, `medium`, or `high`.
 
-### AIGL takeaway
+### AILIS takeaway
 
-This is the opposite of returning a whole fetched page unless the model explicitly asked for that much. AIGL should separate:
+This is the opposite of returning a whole fetched page unless the model explicitly asked for that much. AILIS should separate:
 
 - search result retrieval,
 - page fetch,
@@ -503,9 +503,9 @@ But:
 - measure continuously,
 - compact with explicit budgets.
 
-## 11. Direct Mapping to AIGL's Slowdown
+## 11. Direct Mapping to AILIS's Slowdown
 
-From the slow AIGL runs we saw earlier, the main symptom was:
+From the slow AILIS runs we saw earlier, the main symptom was:
 
 - tools finished quickly,
 - model waiting dominated total runtime,
@@ -520,7 +520,7 @@ Against Codex's design, that usually points to four concrete problems:
 
 This is why a task can spend only a few seconds in tools but several minutes in model wait.
 
-## 12. What AIGL Should Copy Next
+## 12. What AILIS Should Copy Next
 
 If we want the highest-value Codex-aligned changes, the order should be:
 

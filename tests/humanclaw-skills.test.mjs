@@ -37,7 +37,7 @@ test('HumanClaw skills load from SKILL.md packages and reference contracted tool
     assert.match(context, /SKILL PACKAGE mcp_bridge/);
     assert.doesNotMatch(context, /TOOL CONTRACT mcp_bridge@v/);
     assert.match(context, /health_check/);
-    assert.match(context, /mcp__aigl_research__web_fetch/);
+    assert.match(context, /mcp__ailis_research__web_fetch/);
     assert.doesNotMatch(context, /先 `list_servers`/);
     assert.doesNotMatch(context, /调用 `call_tool` 前/);
     assert.match(getToolContractPromptText('mcp_bridge'), /TOOL CONTRACT mcp_bridge@v/);

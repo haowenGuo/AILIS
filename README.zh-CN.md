@@ -1,9 +1,9 @@
 <div align="center">
-  <h1>AIGril</h1>
-  <p><strong>一个围绕 AIGL 构建的虚拟陪伴项目，同时提供网页体验与 Electron 桌宠版本，重点是 3D VRM 虚拟形象、流式对话、动作表情联动，以及轻量记忆能力。</strong></p>
+  <h1>AILIS</h1>
+  <p><strong>一个围绕 AILIS 构建的虚拟陪伴项目，同时提供网页体验与 Electron 桌宠版本，重点是 3D VRM 虚拟形象、流式对话、动作表情联动，以及轻量记忆能力。</strong></p>
   <p>
-    <a href="https://haowenGuo.github.io/AIGril/?backend=https://airi-backend.onrender.com"><img alt="Try AIGril" src="https://img.shields.io/badge/Try%20AIGril-完整体验-2563eb?style=for-the-badge"></a>
-    <a href="https://haowenGuo.github.io/AIGril/"><img alt="Frontend Demo" src="https://img.shields.io/badge/GitHub%20Pages-前端展示-0f172a?style=for-the-badge"></a>
+    <a href="https://haowenGuo.github.io/AILIS/?backend=https://airi-backend.onrender.com"><img alt="Try AILIS" src="https://img.shields.io/badge/Try%20AILIS-完整体验-2563eb?style=for-the-badge"></a>
+    <a href="https://haowenGuo.github.io/AILIS/"><img alt="Frontend Demo" src="https://img.shields.io/badge/GitHub%20Pages-前端展示-0f172a?style=for-the-badge"></a>
     <a href="https://airi-backend.onrender.com/docs"><img alt="Backend API" src="https://img.shields.io/badge/Backend-FastAPI%20文档-059669?style=for-the-badge"></a>
   </p>
   <p>
@@ -17,17 +17,17 @@
 
 ## 项目简介
 
-AIGril 现在已经有两条可以实际使用的产品形态：
+AILIS 现在已经有两条可以实际使用的产品形态：
 
 - 网页版：适合在线体验、前端展示和后端联调
 - 桌宠版：适合常驻桌面、随时唤起聊天的陪伴场景
 
-两者共用 AIGL 的 VRM 形象、动作系统、聊天流程和后端能力，只是在运行外壳和交互方式上不同。
+两者共用 AILIS 的 VRM 形象、动作系统、聊天流程和后端能力，只是在运行外壳和交互方式上不同。
 
 ## 在线体验
 
-- 完整体验版：[https://haowenGuo.github.io/AIGril/?backend=https://airi-backend.onrender.com](https://haowenGuo.github.io/AIGril/?backend=https://airi-backend.onrender.com)
-- 纯前端展示版：[https://haowenGuo.github.io/AIGril/](https://haowenGuo.github.io/AIGril/)
+- 完整体验版：[https://haowenGuo.github.io/AILIS/?backend=https://airi-backend.onrender.com](https://haowenGuo.github.io/AILIS/?backend=https://airi-backend.onrender.com)
+- 纯前端展示版：[https://haowenGuo.github.io/AILIS/](https://haowenGuo.github.io/AILIS/)
 - 后端接口文档：[https://airi-backend.onrender.com/docs](https://airi-backend.onrender.com/docs)
 
 ## 桌宠版功能
@@ -107,9 +107,9 @@ pnpm desktop:package
 
 产物会输出到 [`release/`](release) 目录，包括：
 
-- `AIGril-Setup-<version>-win-x64.exe`
-- `AIGril-Portable-<version>-win-x64.exe`
-- `release/win-unpacked/AIGril.exe`
+- `AILIS-Setup-<version>-win-x64.exe`
+- `AILIS-Portable-<version>-win-x64.exe`
+- `release/win-unpacked/AILIS.exe`
 
 ## 项目结构
 
@@ -130,4 +130,4 @@ examples/  独立开发示例
 
 ## 项目目标
 
-让 AIGL 既能作为网页中的虚拟角色，也能作为真正的桌宠常驻桌面，在保持响应速度和表现力的同时，继续方便工程化迭代。
+让 AILIS 既能作为网页中的虚拟角色，也能作为真正的桌宠常驻桌面，在保持响应速度和表现力的同时，继续方便工程化迭代。

@@ -8,9 +8,9 @@ Scope: GAIA official validation Level 1, 53 tasks.
 
 Artifacts:
 
-- Summary: `F:\AIGril\eval-results\engineering\gaia-official\gaia-l1-full-retest-20260612.summary.json`
-- Raw transcript JSONL: `F:\AIGril\eval-results\engineering\gaia-official\gaia-l1-full-retest-20260612.jsonl`
-- Report: `F:\AIGril\eval-results\engineering\gaia-official\gaia-l1-full-retest-20260612.report.md`
+- Summary: `F:\AILIS\eval-results\engineering\gaia-official\gaia-l1-full-retest-20260612.summary.json`
+- Raw transcript JSONL: `F:\AILIS\eval-results\engineering\gaia-official\gaia-l1-full-retest-20260612.jsonl`
+- Report: `F:\AILIS\eval-results\engineering\gaia-official\gaia-l1-full-retest-20260612.report.md`
 
 ## Result
 
@@ -41,18 +41,18 @@ The main failure mode is repeated `web_search` / `web_fetch` looping without clo
 
 Top tool usage across the incorrect tasks:
 
-- `mcp__aigl_research__web_search`: 189 calls
-- `mcp__aigl_research__web_fetch`: 186 calls
+- `mcp__ailis_research__web_search`: 189 calls
+- `mcp__ailis_research__web_fetch`: 186 calls
 - `tool_search`: 63 calls
 - `exec`: 56 calls
 - `update_plan`: 25 calls
-- `mcp__aigl_research__describe_image`: 11 calls
-- `mcp__aigl_research__pdf_extract_text`: 10 calls
-- `mcp__filesystem_aigl__read_media_file`: 9 calls
-- `mcp__aigl_research__youtube_transcript`: 6 calls
-- `mcp__aigl_research__paper_metadata_lookup`: 6 calls
-- `mcp__aigl_research__read_document`: 5 calls
-- `mcp__aigl_research__transcribe_audio`: 4 calls
+- `mcp__ailis_research__describe_image`: 11 calls
+- `mcp__ailis_research__pdf_extract_text`: 10 calls
+- `mcp__filesystem_ailis__read_media_file`: 9 calls
+- `mcp__ailis_research__youtube_transcript`: 6 calls
+- `mcp__ailis_research__paper_metadata_lookup`: 6 calls
+- `mcp__ailis_research__read_document`: 5 calls
+- `mcp__ailis_research__transcribe_audio`: 4 calls
 
 ## Failure Inventory
 

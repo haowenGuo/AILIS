@@ -113,7 +113,7 @@ test('chat progress bridge shows public reasoning instead of tool-start template
 
     assert.equal(outputs.length, 1);
     assert.match(outputs[0].display_text, /读取 note\.txt/);
-    assert.equal(outputs[0].surface.renderer, 'aigl-progress-surface');
+    assert.equal(outputs[0].surface.renderer, 'ailis-progress-surface');
     assert.equal(outputs[0].surface.traceVisible, true);
     assert.doesNotMatch(outputs[0].display_text, /第 \d+|进度|tool|Evidence|TaskSpec|update_plan/);
 });
@@ -167,7 +167,7 @@ test('desktop chat service keeps newer active run when an older run finishes lat
     });
 
     globalThis.window = {
-        aigrilDesktop: {
+        ailisDesktop: {
             gateway: {
                 isSupported: true,
                 onEvent(callback) {
@@ -177,7 +177,7 @@ test('desktop chat service keeps newer active run when an older run finishes lat
                 async getStatus() {
                     return {
                         running: true,
-                        workspaceRoot: 'F:/AIGril_self_evolution_runtime'
+                        workspaceRoot: 'F:/AILIS_self_evolution_runtime'
                     };
                 },
                 async runAgent({ message }) {

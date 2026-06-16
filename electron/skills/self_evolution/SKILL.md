@@ -1,8 +1,8 @@
 ---
 id: self_evolution
 label: 自我进化 Skill
-description: Conversation-driven self-evolution loop for AIGRIL preference learning, tool bottleneck analysis, capability proposals, and gated self-improvement.
-when: 用户要求 AIGRIL 优化自己、持续学习偏好、修复 Tool/MCP/Skill、拉取新能力、或改进前端/人物渲染体验时。
+description: Conversation-driven self-evolution loop for AILIS preference learning, tool bottleneck analysis, capability proposals, and gated self-improvement.
+when: 用户要求 AILIS 优化自己、持续学习偏好、修复 Tool/MCP/Skill、拉取新能力、或改进前端/人物渲染体验时。
 tools:
   - self_evolution
   - self_debugger
@@ -20,7 +20,7 @@ triggers:
 
 # 自我进化 Skill
 
-这个 Skill 让 AIGRIL 通过对话和任务执行来优化自己，而不是要求用户去控制面板里手动找入口。
+这个 Skill 让 AILIS 通过对话和任务执行来优化自己，而不是要求用户去控制面板里手动找入口。
 
 ## 工作方式
 

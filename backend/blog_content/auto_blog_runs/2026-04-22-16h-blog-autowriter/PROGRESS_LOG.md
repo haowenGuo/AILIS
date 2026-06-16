@@ -21,10 +21,10 @@
 
 ## 文章清单
 
-- `aigril-render-github-pages-deployment`
-  - 中文标题：AIGril 的上线方式：GitHub Pages 前端加 Render 后端
-  - 英文标题：How AIGril Is Deployed: GitHub Pages for the Frontend and Render for the Backend
-  - 内容概要：记录 AIGril 的前后端部署结构，说明 GitHub Pages 前端、Render FastAPI 后端、在线体验入口、源码地址和桌面端打包方式。
+- `ailis-render-github-pages-deployment`
+  - 中文标题：AILIS 的上线方式：GitHub Pages 前端加 Render 后端
+  - 英文标题：How AILIS Is Deployed: GitHub Pages for the Frontend and Render for the Backend
+  - 内容概要：记录 AILIS 的前后端部署结构，说明 GitHub Pages 前端、Render FastAPI 后端、在线体验入口、源码地址和桌面端打包方式。
 
 - `autoresearch-evidence-first-agentic-research`
   - 中文标题：AutoResearch：把自动调研做成可追踪的研究流水线

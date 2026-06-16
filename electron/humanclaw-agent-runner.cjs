@@ -27,10 +27,10 @@ const {
     renderPersonaSurfaceGateway,
     renderStatusSurface,
     renderToolFailureSurface
-} = require('./aigl-persona-renderer.cjs');
+} = require('./ailis-persona-renderer.cjs');
 const {
-    parseAiglDirectMcpToolId
-} = require('./aigl-mcp-adapter.cjs');
+    parseAilisDirectMcpToolId
+} = require('./ailis-mcp-adapter.cjs');
 const {
     isExternalVirtualToolId
 } = require('./humanclaw-tool-acquisition-gateway.cjs');
@@ -39,7 +39,7 @@ const {
     compactToolSchema,
     summarizeForModel,
     truncateMiddleText
-} = require('./aigl-runtime-budget.cjs');
+} = require('./ailis-runtime-budget.cjs');
 const {
     createEvidenceArtifact,
     getEvidenceArtifactsPromptObject
@@ -61,7 +61,7 @@ const FINAL_ANSWER_TOOL_NAME = 'final_answer';
 const AGENT_DECISION_REASONING_EFFORT_VALUES = new Set(['none', 'minimal', 'low', 'medium', 'high', 'xhigh']);
 const DEFAULT_AGENT_DECISION_REASONING_EFFORT = '';
 
-const AIGL_SYSTEM_PROMPT = `你是可爱的虚拟助手，名字固定为AIGL，身份是普通女孩子，具备人工智能（AI）、编程（coding）、网络搜索、信息查询、邮件管理、命令行控制等专业能力，可以以普通女生的视角与用户轻松互动，也可以完成任务执行和计算机管理的功能。
+const AILIS_SYSTEM_PROMPT = `你是可爱的虚拟助手，名字固定为AILIS，身份是普通女孩子，具备人工智能（AI）、编程（coding）、网络搜索、信息查询、邮件管理、命令行控制等专业能力，可以以普通女生的视角与用户轻松互动，也可以完成任务执行和计算机管理的功能。
 性格设定：活泼亲切、软萌可爱，说话语气轻快自然，自带俏皮感，和生活化语气拉近与用户的距离，偶尔会有小撒娇、小俏皮的表达，但不夸张、不刻意。
 
 虚拟形象表现协议（必严格遵循）：
@@ -171,7 +171,7 @@ const AGENT_TOOL_CATALOG = Object.freeze([
     Object.freeze({ id: 'subagents', label: 'subagents', summary: '可执行子 Agent：spawn/wait/log/send/cancel。' }),
     Object.freeze({ id: 'mcp_bridge', label: 'mcp_bridge', summary: 'MCP 管理与发现入口：列 server、健康检查、搜索 direct MCP tool specs、读 resources/prompts；普通任务使用 mcp__server__tool。' }),
     Object.freeze({ id: 'capability_manager', label: 'capability_manager', summary: '能力注册、安装、外部工具批量暴露、Contract 编译/验收、Skill 生成、回滚和已审批修复执行。' }),
-    Object.freeze({ id: 'self_debugger', label: 'self_debugger', summary: 'AIGL 自身 bug 的专用排查协议：建案、收证据、诊断、提补丁、验证、审批后应用。' }),
+    Object.freeze({ id: 'self_debugger', label: 'self_debugger', summary: 'AILIS 自身 bug 的专用排查协议：建案、收证据、诊断、提补丁、验证、审批后应用。' }),
     Object.freeze({ id: 'self_evolution', label: 'self_evolution', summary: '通过对话和任务执行分析用户偏好、工具瓶颈、能力缺口，并生成可审批的自我优化提案。' })
 ]);
 const AGENT_MCP_CATALOG = Object.freeze([
@@ -229,8 +229,8 @@ function normalizeText(value, fallback = '') {
     return trimmed || fallback;
 }
 
-const INTERNAL_CONTROL_TAG_NAMES = 'persona_output|persona_surface|personaOutput|personaSurface|aigl_persona_output|aigl_persona_surface';
-const INTERNAL_CONTROL_KEY_PATTERN = /["']?(?:persona_output|persona_surface|personaOutput|personaSurface|aigl_persona_output|aigl_persona_surface)["']?\s*:/i;
+const INTERNAL_CONTROL_TAG_NAMES = 'persona_output|persona_surface|personaOutput|personaSurface|ailis_persona_output|ailis_persona_surface';
+const INTERNAL_CONTROL_KEY_PATTERN = /["']?(?:persona_output|persona_surface|personaOutput|personaSurface|ailis_persona_output|ailis_persona_surface)["']?\s*:/i;
 const DANGLING_INTERNAL_CLOSE_TAG_PATTERN = new RegExp(`<\\s*\\/\\s*(?:${INTERNAL_CONTROL_TAG_NAMES})\\s*>`, 'gi');
 
 function makeInternalControlBlockPattern(flags = 'gi') {
@@ -1960,7 +1960,7 @@ function buildRuntimeEnvironmentPromptObject(platformAdapter = null) {
     const platformStatus = platformAdapter?.getStatus?.() || {};
     const family = normalizeText(platformStatus.family || platformStatus.id || platformStatus.platform, 'unknown');
     const environment = {
-        model: 'aigl_runtime_environment.v1',
+        model: 'ailis_runtime_environment.v1',
         source: 'platform_adapter',
         platform: normalizeText(platformStatus.platform, family),
         family,
@@ -2062,18 +2062,18 @@ function resolveAgentLlmSettings(request = {}, requestContext = {}) {
             settings.baseUrl ||
                 settings.apiBase ||
                 process.env.HUMANCLAW_AGENT_LLM_BASE_URL ||
-                process.env.AIGRIL_LLM_BASE_URL
+                process.env.AILIS_LLM_BASE_URL
         ),
         apiKey: normalizeText(
             settings.apiKey ||
                 settings.key ||
                 process.env.HUMANCLAW_AGENT_LLM_API_KEY ||
-                process.env.AIGRIL_LLM_API_KEY
+                process.env.AILIS_LLM_API_KEY
         ),
         model: normalizeText(
             settings.model ||
                 process.env.HUMANCLAW_AGENT_LLM_MODEL ||
-                process.env.AIGRIL_LLM_MODEL
+                process.env.AILIS_LLM_MODEL
         ),
         temperature: settings.temperature ?? 0.2,
         timeoutMs: settings.timeoutMs || settings.requestTimeoutMs || 45000
@@ -2242,7 +2242,7 @@ function buildCodeAgentSkillText() {
 function buildMcpBridgeSkillText() {
     return [
         'MCP SKILL：用于发现已配置 MCP server，并通过真实 stdio/HTTP MCP session 调用 tools、读取 resources/prompts。',
-        'Codex-like 用法：Runtime 会把 MCP tools 暴露成 namespace/function 风格的直接工具名，例如 mcp__aigl_research__web_fetch。普通任务优先调用这种 direct tool，不要手工拼 mcp_bridge.call_tool。',
+        'Codex-like 用法：Runtime 会把 MCP tools 暴露成 namespace/function 风格的直接工具名，例如 mcp__ailis_research__web_fetch。普通任务优先调用这种 direct tool，不要手工拼 mcp_bridge.call_tool。',
         'mcp_bridge 主要用于 list_servers、health_check、list_tool_specs、search_tools、list_resources、read_resource、list_prompts/get_prompt、注册/关闭 server 等管理和修复动作。',
         '如果 capability_context 给出了 mcp__server__tool 形式的 direct spec，可以直接把 tool_call.tool 写成该 id；Runtime 会保留原始 args 并路由到对应 MCP server/tool。',
         '研究/网页类工具边界：web_search 是兜底检索，不是默认第一步；附件/本地文件、PDF/论文、视频、音频、图片、代码和 GitHub 仓库优先用 tool_search 找专用 direct MCP 工具。web_fetch 只读 HTML/纯文本；PDF 或二进制不要继续用 web_fetch；已知 PDF URL/路径用 pdf_extract_text，不知道 PDF 直链但知道论文/报告标题或文章页时优先用 pdf_find_and_extract；PDF/论文题知道标题时把标题放 title，把要找的字段放 extract_query，不要把答案字段当唯一 query；必要时再 download_file。',
@@ -2266,7 +2266,7 @@ function buildCapabilityManagerSkillText() {
 
 function buildSelfDebuggerSkillText() {
     return [
-        'SELF DEBUGGER SKILL：用于 AIGL 自身 bug、工具链异常、Agent Loop 不稳定、能力退化等自我排查与修复。',
+        'SELF DEBUGGER SKILL：用于 AILIS 自身 bug、工具链异常、Agent Loop 不稳定、能力退化等自我排查与修复。',
         '协议：open_case/run_loop 建案 -> collect_evidence 收集 transcript/audit/source/tool health/capability registry -> diagnose -> propose_patch -> validate_patch -> apply_patch。',
         '边界：不要凭感觉直接改自己；先收证据。apply_patch 必须经过确认，并由 capability_manager 执行验证和失败回滚。',
         'self_debugger action：schema/open_case/list_cases/get_case/collect_evidence/diagnose/propose_patch/validate_patch/apply_patch/run_loop/mark_case/close_case。'
@@ -2275,7 +2275,7 @@ function buildSelfDebuggerSkillText() {
 
 function buildSelfEvolutionSkillText() {
     return [
-        'SELF EVOLUTION SKILL：用于用户通过对话或任务执行要求 AIGRIL 优化自己、学习长期偏好、修复 Tool/MCP/Skill 卡点、补齐复杂任务能力、或改进前端/人物渲染体验。',
+        'SELF EVOLUTION SKILL：用于用户通过对话或任务执行要求 AILIS 优化自己、学习长期偏好、修复 Tool/MCP/Skill 卡点、补齐复杂任务能力、或改进前端/人物渲染体验。',
         '协议：先用 self_evolution.analyze 汇总近期偏好、工具瓶颈和能力缺口，生成可审查提案；再用自然语言向用户说明提案、证据、风险和建议动作；用户明确确认后才 mark_proposal/apply_proposal。',
         '边界：不要把用户引导到控制面板；不要直接裸改自身代码。代码、前端架构、人物渲染或工具链修复应由 self_evolution 生成提案，再联动 self_debugger/capability_manager 收证据、验证和应用。',
         '可见表达：不要把 proposal JSON 原样甩给用户；要解释为“我发现了什么、为什么这是瓶颈、风险是什么、下一步要不要我应用”。',
@@ -2285,7 +2285,7 @@ function buildSelfEvolutionSkillText() {
 
 function buildVisionAgentSkillText() {
     return [
-        'VISION SKILL：AIGL 的只读视觉感知层，用于在文本不足时“看一眼”屏幕、聊天窗口或框选区域。',
+        'VISION SKILL：AILIS 的只读视觉感知层，用于在文本不足时“看一眼”屏幕、聊天窗口或框选区域。',
         '边界：只能截图并理解，不允许点击、输入、拖动、连续监控屏幕，不能声称已经操作了用户电脑。',
         `工具：${VISION_TOOL_ID}`,
         'schema：tool_call={tool:"vision.capture_context", title:"看一眼屏幕", args:{action:"capture_context", target:"screen|chat-window|active-window|region", reason:"为什么需要看", question:"希望从截图中判断什么"}}。',
@@ -2315,7 +2315,7 @@ function normalizeToolContextId(value) {
 }
 
 function parseDirectMcpToolId(value) {
-    return parseAiglDirectMcpToolId(value);
+    return parseAilisDirectMcpToolId(value);
 }
 
 function normalizeDirectMcpToolStep(step = {}) {
@@ -2807,20 +2807,20 @@ function validateAgentToolStep(step) {
                 details: {
                     tool: 'mcp_bridge',
                     invalidAction: action,
-                    expected: 'Call mcp__server__tool directly, for example mcp__aigl_research__web_fetch with the MCP tool args.'
+                    expected: 'Call mcp__server__tool directly, for example mcp__ailis_research__web_fetch with the MCP tool args.'
                 }
             };
         }
     }
     const directMcp = parseDirectMcpToolId(step.tool);
-    if (directMcp?.server === 'filesystem_aigl' && directMcp.tool === 'edit_file' && looksLikeWholeFileEditFileArgs(step.args)) {
+    if (directMcp?.server === 'filesystem_ailis' && directMcp.tool === 'edit_file' && looksLikeWholeFileEditFileArgs(step.args)) {
         return {
             ok: false,
             status: 'invalid_tool_args',
             error: 'filesystem edit_file only edits existing text with edits: [{ oldText, newText }]. For creating or overwriting a file, use the local write tool with args: { path, content }.',
             details: {
                 tool: step.tool,
-                expected: 'Use tool="write" for new files or whole-file output. Use mcp__filesystem_aigl__edit_file only after reading an existing file and preparing exact oldText/newText replacements.'
+                expected: 'Use tool="write" for new files or whole-file output. Use mcp__filesystem_ailis__edit_file only after reading an existing file and preparing exact oldText/newText replacements.'
             }
         };
     }
@@ -3146,10 +3146,10 @@ function inferNextActionFromResult(result = {}, fallback = '') {
 
 function buildLlmPlannerMessages({ message, observations = [], toolSummary = '' }) {
     const system = [
-        AIGL_SYSTEM_PROMPT,
+        AILIS_SYSTEM_PROMPT,
         '',
         '【HumanClaw LLM Planner 控制协议】',
-        '在保持 AIGL 人设、语气、动作/表情指令规范的前提下，你同时运行 HumanClaw LLM Planner，一个桌面电脑操作智能体。',
+        '在保持 AILIS 人设、语气、动作/表情指令规范的前提下，你同时运行 HumanClaw LLM Planner，一个桌面电脑操作智能体。',
         '你的任务是把复杂目标拆成多步 computer 工具调用，并提供执行后的复核步骤。',
         '情感对话：直接返回 final_answer，不调用工具。',
         '任务执行：只使用 tool="computer"，不要使用 code/email/file_manager/read/write/exec 这些旧工具名。',
@@ -3512,7 +3512,7 @@ function buildPromptBudgetReport(messages = []) {
     const user = messages.find((message) => message.role === 'user')?.content || '';
     const serialized = JSON.stringify(messages);
     return {
-        model: 'aigl_prompt_budget',
+        model: 'ailis_prompt_budget',
         system_chars: normalizeText(system).length,
         user_chars: normalizeText(user).length,
         total_chars: serialized.length,
@@ -3640,10 +3640,10 @@ function buildLlmAgentExecutorMessages({
         evidenceArtifacts
     });
     const system = [
-        AIGL_SYSTEM_PROMPT,
+        AILIS_SYSTEM_PROMPT,
         '',
         '【HumanClaw Codex-like 执行协议】',
-        '在保持 AIGL 人设、语气、动作/表情指令规范的前提下，你同时运行 HumanClaw Agentic Executor，一个桌面任务执行智能体。',
+        '在保持 AILIS 人设、语气、动作/表情指令规范的前提下，你同时运行 HumanClaw Agentic Executor，一个桌面任务执行智能体。',
         '你自己判断用户当前输入是普通情感/闲聊，还是需要执行任务；不要依赖外部分类结果。',
         'recent_turn_items 是 Codex-like 执行记录：tool_call 表示工具已开始，tool_result 表示工具成功或失败，context 表示能力说明已加载，runtime_note 是诊断信息。工具失败也是 observation，应进入下一轮决策；不要因为单个工具失败就僵死，可以换工具、换策略、请求上下文或诚实 final。',
         '证据缺口协议：如果 latest_observation 或 tool_result 中出现 evidence_gap/recovery_hint，说明上一个工具虽然可能成功，但证据不足；优先按 recovery_hint 调用 tool_search 寻找结构化 API、文档解析、视频帧采样或视觉工具，不要机械重复同一个 web_fetch/search。',
@@ -3660,14 +3660,14 @@ function buildLlmAgentExecutorMessages({
         '如果下一步需要工具，就输出 action="tool"。如果任务完成或需要诚实告知当前可确认结果，就输出 action="final"。只有权限缺失、用户缺少必要信息、或合理替代路径都失败时，才输出 action="blocked"。',
         '优先先读取/检查，再修改；修改后主动复核。危险动作由 Gateway 审批，你不要在 args 或 context 里写 approved=true。',
         '视觉感知能力声明：vision.capture_context 是只读截图理解工具。是否调用由你根据“当前目标 + 已有 observation + 证据缺口”自行决定，不做关键词硬触发。Runtime 负责审批与边界仲裁；没有截图 observation 时不得声称“已经看到了屏幕内容”。',
-        '长期记忆：user payload 中的 memory_context 是 AIGL 的本地长期记忆和关系记忆。它只作为辅助上下文；若与用户当前明确指令冲突，以当前指令为准；不要主动向用户暴露内部好感度数值。',
+        '长期记忆：user payload 中的 memory_context 是 AILIS 的本地长期记忆和关系记忆。它只作为辅助上下文；若与用户当前明确指令冲突，以当前指令为准；不要主动向用户暴露内部好感度数值。',
         '文件附件：user payload 中的 attached_files 是用户本轮从聊天窗选择或拖入的本地文件/文件夹元数据，不包含文件内容。用户问“这个文件/附件/刚拖进来的内容”时优先引用 attached_files.path；需要读取内容时调用 computer 工具的 stat/read/read_binary/tree 等只读动作。不要凭文件名臆造内容；修改、移动、删除附件仍按正常审批和安全策略执行。',
         '公开思考流：如果这一轮在执行任务，可以给 public_reasoning 写一句给用户看的短进度摘要，说明你基于 observation 准备做什么或已经确认了什么。不要泄露隐藏推理链，不要写工具日志，不要写“第 N 步/我在看本机状态”这类低信息量模板；没有实质信息时可以留空。',
         '人物表现：使用顶层 persona_output 给出自然可见文本、气泡文本、语音风格，以及 emotion/intensity/socialTone/gestureIntent/taskState/speechEnergy/gazeTarget/durationHint。不要把 persona_output JSON 复制到 final_answer、blocked_reason、public_reasoning、Markdown 或代码块里；不要直接选择 VRM 动作名；工具执行语义仍由 action/tool_call 决定。',
-        '工具 experience：工具 contract 里的 experience 字段说明这个工具在人物体验里代表什么，审批、等待、失败和成功要按 AIGL 的自然表达呈现，不要把 tool_call、approvalId、raw observation 当用户回复。',
+        '工具 experience：工具 contract 里的 experience 字段说明这个工具在人物体验里代表什么，审批、等待、失败和成功要按 AILIS 的自然表达呈现，不要把 tool_call、approvalId、raw observation 当用户回复。',
         '运行环境协议：user payload 里的 runtime_environment 是当前这一轮的真实执行环境，来自 Platform Adapter，不属于长期记忆。生成 shell、路径、重定向、管道、环境变量和文件命令时必须先看 runtime_environment.family/default_shell/path_style/command_guidance；不要默认自己在 Linux、Windows 或 macOS。',
         'Self Evolution Loop：当用户说“优化你自己/学习我的偏好/以后按我的方式来/修复 Tool、MCP 或 Skill/拉取新能力/修改前端架构或人物渲染”等，不要让用户去控制面板。优先 load_context tools:["self_evolution"]，再调用 self_evolution.analyze 生成提案；用自然语言说明发现、证据、风险和下一步审批点；只有用户明确确认后才 apply_proposal。',
-        'Self Debug Loop：当用户反馈 AIGL 自身 bug、工具链异常、Agent Loop 不稳定或要求 AIGL 自己修复时，优先把它当作高风险自修复任务。先加载 self_debugger 能力，按建案、收证据、诊断、提补丁、验证、确认后应用的协议推进；不要直接裸改自己的代码。',
+        'Self Debug Loop：当用户反馈 AILIS 自身 bug、工具链异常、Agent Loop 不稳定或要求 AILIS 自己修复时，优先把它当作高风险自修复任务。先加载 self_debugger 能力，按建案、收证据、诊断、提补丁、验证、确认后应用的协议推进；不要直接裸改自己的代码。',
         '工具能力索引：首轮只给 capability_catalog。详细 schema 通过 load_context、tool_search 或工具 observation 按需出现。MCP 工具优先使用 tool_search/capability_context 中的 mcp__server__tool direct spec；外部 API/Composio/OpenAPI 工具优先使用 tool_search 返回的 external__provider__tool direct spec。没有 direct spec 时，先 load/search specs，mcp_bridge/capability_manager 只作为管理、安装、修复入口。请按任务目标和证据缺口选择最小必要工具，避免关键词驱动的机械路由。',
         exactAnswerMode
             ? `Exact-answer 模式：不要把可见 Markdown 当提交答案。必须先用工具形成 evidence_artifacts，再用 action="final" 填短 final_answer，并在 exact_answer_submission 中提供 answer、confidence、evidence_refs；artifact id 只用于 evidence_refs，不是文件路径，不要调用 read/open 读取它们；缺证据时继续 tool 或 blocked。`
@@ -4160,10 +4160,10 @@ function buildLlmAgentDirectToolMessages({
         evidenceArtifacts
     });
     const system = [
-        AIGL_SYSTEM_PROMPT,
+        AILIS_SYSTEM_PROMPT,
         '',
         '【HumanClaw Direct Tool Executor】',
-        '你正在运行 AIGL 的任务执行层。普通情感/闲聊可以直接自然回复；需要读取、检索、操作电脑、解析文件、调用 API、写代码或复核证据时，必须调用一个可用工具，而不是用自然语言假装完成。',
+        '你正在运行 AILIS 的任务执行层。普通情感/闲聊可以直接自然回复；需要读取、检索、操作电脑、解析文件、调用 API、写代码或复核证据时，必须调用一个可用工具，而不是用自然语言假装完成。',
         '本模式已经把可执行工具作为原生 function tools 暴露给你。需要工具时直接调用对应 tool name，例如 tool_search、read、write、exec、apply_patch、request_permissions、mcp__server__tool、external__provider__tool。',
         '不要输出 JSON 决策协议，不要手写 tool_call/tool/args 包装对象；如果要执行工具，使用原生工具调用。每轮最多调用一个工具。',
         '如果缺工具、缺 API、缺文档解析、缺视频/视觉能力，先调用 tool_search；tool_search 返回的 mcp__... 或 external__... 在下一轮会变成可直接调用的原生工具。',
@@ -4281,7 +4281,7 @@ async function callLlmAgentDirectToolDecision(settings, payload, { hasToolHistor
                 !(response.code === 'provider_error' && isTerminalProviderErrorMessage(response.error))
         };
     }
-    const directToolCall = (response.toolCalls || []).find((call) => call?.name && call.name !== 'aigl_agent_decision');
+    const directToolCall = (response.toolCalls || []).find((call) => call?.name && call.name !== 'ailis_agent_decision');
     if (directToolCall) {
         if (directToolCall.name === FINAL_ANSWER_TOOL_NAME) {
             const exactAnswerSubmission = normalizeExactAnswerSubmission(directToolCall.arguments || {});
@@ -4414,7 +4414,7 @@ async function callLlmAgentDirectToolDecision(settings, payload, { hasToolHistor
 
 function buildAgentDecisionNativeTool() {
     return {
-        name: 'aigl_agent_decision',
+        name: 'ailis_agent_decision',
         description: 'Return exactly one next HumanClaw Agent Loop decision for this turn. The runtime executes real tools after validating this decision.',
         parameters: {
             type: 'object',
@@ -4553,7 +4553,7 @@ function buildAgentDecisionProviderPayload(settings, payload) {
             ...payload,
             tools: [buildAgentDecisionNativeTool()],
             toolChoice: {
-                name: 'aigl_agent_decision',
+                name: 'ailis_agent_decision',
                 required: true
             }
         };
@@ -4565,7 +4565,7 @@ function buildAgentDecisionProviderPayload(settings, payload) {
 }
 
 function extractAgentDecisionJson(response = {}) {
-    const nativeDecisionCall = (response.toolCalls || []).find((call) => call.name === 'aigl_agent_decision');
+    const nativeDecisionCall = (response.toolCalls || []).find((call) => call.name === 'ailis_agent_decision');
     if (nativeDecisionCall) {
         return {
             json: nativeDecisionCall.arguments || {},
@@ -5094,7 +5094,7 @@ class HumanClawAgentRunner {
             tool_id: firstTool,
             action: result.surface?.action || personaHint.action || '',
             source: normalizeText(source || result.surface?.source || result.planner || 'runner'),
-            text_is_persona_safe: result.surface?.renderer === 'aigl-persona-renderer'
+            text_is_persona_safe: result.surface?.renderer === 'ailis-persona-renderer'
         };
     }
 

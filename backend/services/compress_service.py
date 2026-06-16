@@ -65,7 +65,7 @@ async def _compress_single_session(db: AsyncSession, session_id: str, llm_svc: L
     try:
         summary = await llm_svc.generate_non_stream(
             prompt=compress_prompt,
-            system_prompt="你是AIGL的记忆助手，负责把旧的聊天内容压缩成简洁的摘要。"
+            system_prompt="你是AILIS的记忆助手，负责把旧的聊天内容压缩成简洁的摘要。"
                           "语气要像普通可爱的女孩子，只保留核心聊天内容，",
             temperature=0.3,
             max_tokens=8000

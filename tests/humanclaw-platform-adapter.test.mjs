@@ -43,8 +43,8 @@ test('HumanClaw platform adapter exposes macOS and Linux desktop skeleton capabi
     });
     assert.equal(macos.id, 'macos');
     assert.equal(macos.defaultShellExecutable(), 'zsh');
-    assert.equal(macos.desktopScreenshotCommand({ outputPath: '/tmp/aigl-screen.png' }).supported, true);
-    assert.match(macos.desktopScreenshotCommand({ outputPath: '/tmp/aigl-screen.png' }).args.join('\n'), /screencapture/);
+    assert.equal(macos.desktopScreenshotCommand({ outputPath: '/tmp/ailis-screen.png' }).supported, true);
+    assert.match(macos.desktopScreenshotCommand({ outputPath: '/tmp/ailis-screen.png' }).args.join('\n'), /screencapture/);
     assert.deepEqual(macos.clipboardReadCommand(), {
         supported: true,
         command: 'pbpaste',
@@ -62,7 +62,7 @@ test('HumanClaw platform adapter exposes macOS and Linux desktop skeleton capabi
     });
     assert.equal(linux.id, 'linux');
     assert.equal(linux.defaultShellExecutable(), 'bash');
-    const linuxScreenshot = linux.desktopScreenshotCommand({ outputPath: '/tmp/aigl-screen.png' });
+    const linuxScreenshot = linux.desktopScreenshotCommand({ outputPath: '/tmp/ailis-screen.png' });
     assert.equal(linuxScreenshot.supported, true);
     assert.match(linuxScreenshot.args.join('\n'), /gnome-screenshot|grim|spectacle|scrot/);
     assert.equal(linux.clipboardReadCommand().supported, true);
@@ -130,10 +130,10 @@ test('HumanClaw platform adapter exposes iOS simulator skeleton and real-device 
     assert.equal(simulator.id, 'ios-simulator');
     assert.equal(simulator.getStatus().capabilities.mobileDevice, true);
     assert.equal(simulator.commandSpawnSpec('ls').supported, false);
-    const screenshot = simulator.desktopScreenshotCommand({ outputPath: '/tmp/aigl-ios.png' });
+    const screenshot = simulator.desktopScreenshotCommand({ outputPath: '/tmp/ailis-ios.png' });
     assert.equal(screenshot.supported, true);
     assert.equal(screenshot.command, 'xcrun-test');
-    assert.deepEqual(screenshot.args, ['simctl', 'io', 'booted', 'screenshot', '/tmp/aigl-ios.png']);
+    assert.deepEqual(screenshot.args, ['simctl', 'io', 'booted', 'screenshot', '/tmp/ailis-ios.png']);
     assert.deepEqual(simulator.clipboardReadCommand(), {
         supported: true,
         command: 'xcrun-test',
@@ -150,7 +150,7 @@ test('HumanClaw platform adapter exposes iOS simulator skeleton and real-device 
     });
     assert.equal(realIos.id, 'ios');
     assert.equal(realIos.commandSpawnSpec('ls').supported, false);
-    assert.equal(realIos.desktopScreenshotCommand({ outputPath: '/tmp/aigl-ios.png' }).supported, false);
+    assert.equal(realIos.desktopScreenshotCommand({ outputPath: '/tmp/ailis-ios.png' }).supported, false);
     assert.equal(realIos.getStatus().capabilityMatrix.guiInput.status, 'skeleton');
 });
 

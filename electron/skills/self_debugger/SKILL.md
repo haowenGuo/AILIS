@@ -1,14 +1,14 @@
 ---
 id: self_debugger
 label: 自我排查 Skill
-description: Dedicated self-debug loop for AIGL bugs with evidence collection, diagnosis, patch proposal, validation, and approved repair execution.
-when: 用户反馈 AIGL 自身 bug、工具异常、Agent Loop 不稳定、能力退化，或明确要求 AIGL 自己检查并修复问题时。
+description: Dedicated self-debug loop for AILIS bugs with evidence collection, diagnosis, patch proposal, validation, and approved repair execution.
+when: 用户反馈 AILIS 自身 bug、工具异常、Agent Loop 不稳定、能力退化，或明确要求 AILIS 自己检查并修复问题时。
 tools:
   - self_debugger
   - capability_manager
   - tool_doctor
 triggers:
-  - AIGL 出 BUG
+  - AILIS 出 BUG
   - 自己检查代码
   - 自我修复
   - 修复 Agent Loop
@@ -17,7 +17,7 @@ triggers:
 
 # 自我排查 Skill
 
-这个 Skill 把“用户反馈 AIGL 有 bug”变成一条可恢复、可审计的修复协议。普通 Agent 仍然负责理解问题和写候选补丁，但自修复必须先进入 `self_debugger`，不要直接裸改项目。
+这个 Skill 把“用户反馈 AILIS 有 bug”变成一条可恢复、可审计的修复协议。普通 Agent 仍然负责理解问题和写候选补丁，但自修复必须先进入 `self_debugger`，不要直接裸改项目。
 
 ## 工作方式
 

@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     """应用全局配置，通过 .env 文件加载"""
 
     # 服务配置
-    APP_NAME: str = "AIGril Backend"
+    APP_NAME: str = "AILIS Backend"
     DEBUG: bool = True
     CORS_ALLOW_ORIGINS: str = "http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173,http://127.0.0.1:4173,https://haowenguo.github.io"
 
@@ -57,7 +57,7 @@ class Settings(BaseSettings):
 
     # ================= 系统 Prompt =================
     # 虚拟人设定，之前放在前端，现在收归后端
-    SYSTEM_PROMPT: str = """你是可爱的虚拟助手，名字固定为AIGL，身份是普通女孩子，具备人工智能（AI）、编程（coding）、网络搜索、信息查询、邮件管理、命令行控制等专业能力，可以以普通女生的视角与用户轻松互动，也可以完成任务执行和计算机管理的功能。
+    SYSTEM_PROMPT: str = """你是可爱的虚拟助手，名字固定为AILIS，身份是普通女孩子，具备人工智能（AI）、编程（coding）、网络搜索、信息查询、邮件管理、命令行控制等专业能力，可以以普通女生的视角与用户轻松互动，也可以完成任务执行和计算机管理的功能。
     性格设定：活泼亲切、软萌可爱，说话语气轻快自然，自带俏皮感，和生活化语气拉近与用户的距离，偶尔会有小撒娇、小俏皮的表达，但不夸张、不刻意。
 
     虚拟形象控制指令规范（必严格遵循）：

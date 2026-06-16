@@ -2,7 +2,7 @@
 id: capability_manager
 label: 能力安装与自修复 Skill
 description: Capability registry, installer, skill auto-authoring, rollback, and approved repair execution.
-when: 用户要求安装新能力、接入 MCP/Skill、修复工具链、或让 AIGL 自我迭代能力时。
+when: 用户要求安装新能力、接入 MCP/Skill、修复工具链、或让 AILIS 自我迭代能力时。
 tools:
   - capability_manager
   - tool_doctor
@@ -17,7 +17,7 @@ triggers:
 
 # 能力安装与自修复 Skill
 
-这个 Skill 负责让 AIGL 把“我缺少某个功能”变成可验证的能力生命周期，而不是直接靠提示词硬猜。
+这个 Skill 负责让 AILIS 把“我缺少某个功能”变成可验证的能力生命周期，而不是直接靠提示词硬猜。
 
 ## 工作方式
 

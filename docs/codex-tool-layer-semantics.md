@@ -1,11 +1,11 @@
 # Codex Tool Layer Semantics
 
-This document records how the Codex tool layer is actually structured in the local Codex source, and what AIGL should copy from it. The point is not "add more tools"; the point is that every tool has a hard semantic boundary: what the model sees, what the runtime can execute, what the output means, and how failures are represented.
+This document records how the Codex tool layer is actually structured in the local Codex source, and what AILIS should copy from it. The point is not "add more tools"; the point is that every tool has a hard semantic boundary: what the model sees, what the runtime can execute, what the output means, and how failures are represented.
 
 Source root used for this document:
 
 ```text
-F:\AIGril\build-cache\codex-runtime\codex-rs
+F:\AILIS\build-cache\codex-runtime\codex-rs
 ```
 
 ## 0. The Core Lesson
@@ -16,7 +16,7 @@ A Codex-style tool is not just a prompt description. It is a typed contract with
 2. Runtime executor: `ToolExecutor`, `ToolRegistry`, `ToolRouter`, payload validation, hooks, telemetry.
 3. Output contract: `ToolOutput`, typed response item, success flag, truncation, code-mode form.
 
-This is the boundary AIGL violated in the PDF failure:
+This is the boundary AILIS violated in the PDF failure:
 
 ```text
 web_fetch said: I return readable text.
@@ -33,8 +33,8 @@ Codex starts with a closed enum of model-visible tool shapes.
 Source:
 
 ```text
-F:\AIGril\build-cache\codex-runtime\codex-rs\tools\src\tool_spec.rs:13
-F:\AIGril\build-cache\codex-runtime\codex-rs\tools\src\tool_spec.rs:17
+F:\AILIS\build-cache\codex-runtime\codex-rs\tools\src\tool_spec.rs:13
+F:\AILIS\build-cache\codex-runtime\codex-rs\tools\src\tool_spec.rs:17
 ```
 
 Representative Codex code:
@@ -72,7 +72,7 @@ Meaning:
 
 `tool_search` is its own model-visible mechanism for discovering deferred tools.
 
-For AIGL, this means `web_fetch`, `pdf_extract_text`, `download_file`, `read_mcp_resource`, and `browser_extract_dom` should not all pretend to be the same kind of thing.
+For AILIS, this means `web_fetch`, `pdf_extract_text`, `download_file`, `read_mcp_resource`, and `browser_extract_dom` should not all pretend to be the same kind of thing.
 
 ## 2. Function Tool Contract
 
@@ -81,8 +81,8 @@ Codex's normal function tool shape is `ResponsesApiTool`.
 Source:
 
 ```text
-F:\AIGril\build-cache\codex-runtime\codex-rs\tools\src\responses_api.rs:25
-F:\AIGril\build-cache\codex-runtime\codex-rs\tools\src\responses_api.rs:127
+F:\AILIS\build-cache\codex-runtime\codex-rs\tools\src\responses_api.rs:25
+F:\AILIS\build-cache\codex-runtime\codex-rs\tools\src\responses_api.rs:127
 ```
 
 Representative Codex code:
@@ -117,8 +117,8 @@ The lower-level metadata is `ToolDefinition`.
 Source:
 
 ```text
-F:\AIGril\build-cache\codex-runtime\codex-rs\tools\src\tool_definition.rs:4
-F:\AIGril\build-cache\codex-runtime\codex-rs\tools\src\tool_definition.rs:21
+F:\AILIS\build-cache\codex-runtime\codex-rs\tools\src\tool_definition.rs:4
+F:\AILIS\build-cache\codex-runtime\codex-rs\tools\src\tool_definition.rs:21
 ```
 
 Representative Codex code:
@@ -139,7 +139,7 @@ pub fn into_deferred(mut self) -> Self {
 }
 ```
 
-Meaning for AIGL:
+Meaning for AILIS:
 
 If a tool returns "readable text", the output contract should make that explicit. If the HTTP response is `application/pdf`, a text fetch tool should return `unsupported_content_type`, not a fake success.
 
@@ -150,8 +150,8 @@ The central Codex boundary is `ToolExecutor`.
 Source:
 
 ```text
-F:\AIGril\build-cache\codex-runtime\codex-rs\tools\src\tool_executor.rs:6
-F:\AIGril\build-cache\codex-runtime\codex-rs\tools\src\tool_executor.rs:35
+F:\AILIS\build-cache\codex-runtime\codex-rs\tools\src\tool_executor.rs:6
+F:\AILIS\build-cache\codex-runtime\codex-rs\tools\src\tool_executor.rs:35
 ```
 
 Representative Codex code:
@@ -193,7 +193,7 @@ exposure -> whether it is visible now or discoverable later
 handle -> actual execution
 ```
 
-AIGL should mirror this boundary. Each AIGL tool should have one owner object/module that owns both the schema and the execution behavior.
+AILIS should mirror this boundary. Each AILIS tool should have one owner object/module that owns both the schema and the execution behavior.
 
 ## 4. Router and Payload Boundary
 
@@ -202,8 +202,8 @@ Codex converts model output into a typed `ToolCall` before dispatching.
 Source:
 
 ```text
-F:\AIGril\build-cache\codex-runtime\codex-rs\core\src\tools\router.rs:27
-F:\AIGril\build-cache\codex-runtime\codex-rs\core\src\tools\router.rs:89
+F:\AILIS\build-cache\codex-runtime\codex-rs\core\src\tools\router.rs:27
+F:\AILIS\build-cache\codex-runtime\codex-rs\core\src\tools\router.rs:89
 ```
 
 Representative Codex code:
@@ -244,9 +244,9 @@ Codex dispatches through `ToolRegistry`.
 Source:
 
 ```text
-F:\AIGril\build-cache\codex-runtime\codex-rs\core\src\tools\registry.rs:42
-F:\AIGril\build-cache\codex-runtime\codex-rs\core\src\tools\registry.rs:249
-F:\AIGril\build-cache\codex-runtime\codex-rs\core\src\tools\registry.rs:326
+F:\AILIS\build-cache\codex-runtime\codex-rs\core\src\tools\registry.rs:42
+F:\AILIS\build-cache\codex-runtime\codex-rs\core\src\tools\registry.rs:249
+F:\AILIS\build-cache\codex-runtime\codex-rs\core\src\tools\registry.rs:326
 ```
 
 Representative Codex code:
@@ -275,8 +275,8 @@ Dispatch checks the tool exists and the payload kind matches.
 Source:
 
 ```text
-F:\AIGril\build-cache\codex-runtime\codex-rs\core\src\tools\registry.rs:362
-F:\AIGril\build-cache\codex-runtime\codex-rs\core\src\tools\registry.rs:396
+F:\AILIS\build-cache\codex-runtime\codex-rs\core\src\tools\registry.rs:362
+F:\AILIS\build-cache\codex-runtime\codex-rs\core\src\tools\registry.rs:396
 ```
 
 Representative Codex code:
@@ -296,7 +296,7 @@ if !tool.matches_kind(&invocation.payload) {
 }
 ```
 
-Meaning for AIGL:
+Meaning for AILIS:
 
 Validation should happen before execution, and errors should be tool errors, not vague Agent uncertainty. If `pdf_extract_text` receives an HTML URL, it can reject it. If `web_fetch_text` receives a PDF content type, it can reject it.
 
@@ -307,9 +307,9 @@ Codex does not dump every possible tool into every turn. It builds a planned too
 Source:
 
 ```text
-F:\AIGril\build-cache\codex-runtime\codex-rs\core\src\tools\spec_plan.rs:153
-F:\AIGril\build-cache\codex-runtime\codex-rs\core\src\tools\spec_plan.rs:183
-F:\AIGril\build-cache\codex-runtime\codex-rs\core\src\tools\spec_plan.rs:499
+F:\AILIS\build-cache\codex-runtime\codex-rs\core\src\tools\spec_plan.rs:153
+F:\AILIS\build-cache\codex-runtime\codex-rs\core\src\tools\spec_plan.rs:183
+F:\AILIS\build-cache\codex-runtime\codex-rs\core\src\tools\spec_plan.rs:499
 ```
 
 Representative Codex code:
@@ -345,8 +345,8 @@ Direct tools enter the model-visible list.
 Source:
 
 ```text
-F:\AIGril\build-cache\codex-runtime\codex-rs\core\src\tools\spec_plan.rs:191
-F:\AIGril\build-cache\codex-runtime\codex-rs\core\src\tools\spec_plan.rs:198
+F:\AILIS\build-cache\codex-runtime\codex-rs\core\src\tools\spec_plan.rs:191
+F:\AILIS\build-cache\codex-runtime\codex-rs\core\src\tools\spec_plan.rs:198
 ```
 
 Representative Codex code:
@@ -374,9 +374,9 @@ Codex has a formal tool discovery mechanism, not a giant prompt.
 Source:
 
 ```text
-F:\AIGril\build-cache\codex-runtime\codex-rs\core\src\tools\spec_plan.rs:762
-F:\AIGril\build-cache\codex-runtime\codex-rs\core\src\tools\handlers\tool_search.rs:23
-F:\AIGril\build-cache\codex-runtime\codex-rs\core\src\tools\tool_search_entry.rs:19
+F:\AILIS\build-cache\codex-runtime\codex-rs\core\src\tools\spec_plan.rs:762
+F:\AILIS\build-cache\codex-runtime\codex-rs\core\src\tools\handlers\tool_search.rs:23
+F:\AILIS\build-cache\codex-runtime\codex-rs\core\src\tools\tool_search_entry.rs:19
 ```
 
 Representative Codex code:
@@ -406,8 +406,8 @@ Tool search indexes text but returns real loadable tool specs.
 Source:
 
 ```text
-F:\AIGril\build-cache\codex-runtime\codex-rs\core\src\tools\handlers\tool_search.rs:39
-F:\AIGril\build-cache\codex-runtime\codex-rs\core\src\tools\handlers\tool_search.rs:103
+F:\AILIS\build-cache\codex-runtime\codex-rs\core\src\tools\handlers\tool_search.rs:39
+F:\AILIS\build-cache\codex-runtime\codex-rs\core\src\tools\handlers\tool_search.rs:103
 ```
 
 Representative Codex code:
@@ -429,8 +429,8 @@ Deferred specs deliberately remove `output_schema`.
 Source:
 
 ```text
-F:\AIGril\build-cache\codex-runtime\codex-rs\core\src\tools\tool_search_entry.rs:25
-F:\AIGril\build-cache\codex-runtime\codex-rs\core\src\tools\tool_search_entry.rs:35
+F:\AILIS\build-cache\codex-runtime\codex-rs\core\src\tools\tool_search_entry.rs:25
+F:\AILIS\build-cache\codex-runtime\codex-rs\core\src\tools\tool_search_entry.rs:35
 ```
 
 Representative Codex code:
@@ -452,7 +452,7 @@ ToolSpec::Namespace(mut namespace) => {
 }
 ```
 
-Meaning for AIGL:
+Meaning for AILIS:
 
 Capability catalog should not dump every contract into the first prompt. It should expose a small direct set plus a searchable deferred catalog. The model can ask for relevant tools when needed.
 
@@ -465,8 +465,8 @@ Codex treats MCP as a real external protocol layer, not just a bridge string.
 Source:
 
 ```text
-F:\AIGril\build-cache\codex-runtime\codex-rs\codex-mcp\src\tools.rs:28
-F:\AIGril\build-cache\codex-runtime\codex-rs\codex-mcp\src\tools.rs:139
+F:\AILIS\build-cache\codex-runtime\codex-rs\codex-mcp\src\tools.rs:28
+F:\AILIS\build-cache\codex-runtime\codex-rs\codex-mcp\src\tools.rs:139
 ```
 
 Representative Codex code:
@@ -488,7 +488,7 @@ pub struct ToolInfo {
 pub(crate) fn normalize_tools_for_model<I>(tools: I) -> Vec<ToolInfo>
 ```
 
-The comments in Codex are exactly the rule AIGL should copy:
+The comments in Codex are exactly the rule AILIS should copy:
 
 ```rust
 //! Raw MCP tool identities must be preserved for protocol calls, while
@@ -501,7 +501,7 @@ MCP input schema can be shaped before exposing to the model.
 Source:
 
 ```text
-F:\AIGril\build-cache\codex-runtime\codex-rs\codex-mcp\src\tools.rs:114
+F:\AILIS\build-cache\codex-runtime\codex-rs\codex-mcp\src\tools.rs:114
 ```
 
 Representative Codex code:
@@ -532,8 +532,8 @@ Codex does not flatten MCP results into arbitrary text by default. It wraps MCP 
 Source:
 
 ```text
-F:\AIGril\build-cache\codex-runtime\codex-rs\tools\src\mcp_tool.rs:6
-F:\AIGril\build-cache\codex-runtime\codex-rs\tools\src\mcp_tool.rs:39
+F:\AILIS\build-cache\codex-runtime\codex-rs\tools\src\mcp_tool.rs:6
+F:\AILIS\build-cache\codex-runtime\codex-rs\tools\src\mcp_tool.rs:39
 ```
 
 Representative Codex code:
@@ -593,8 +593,8 @@ Codex wraps each MCP tool in an `McpHandler`.
 Source:
 
 ```text
-F:\AIGril\build-cache\codex-runtime\codex-rs\core\src\tools\handlers\mcp.rs:29
-F:\AIGril\build-cache\codex-runtime\codex-rs\core\src\tools\handlers\mcp.rs:55
+F:\AILIS\build-cache\codex-runtime\codex-rs\core\src\tools\handlers\mcp.rs:29
+F:\AILIS\build-cache\codex-runtime\codex-rs\core\src\tools\handlers\mcp.rs:55
 ```
 
 Representative Codex code:
@@ -636,9 +636,9 @@ The actual transport call goes through `McpConnectionManager`.
 Source:
 
 ```text
-F:\AIGril\build-cache\codex-runtime\codex-rs\core\src\mcp_tool_call.rs:547
-F:\AIGril\build-cache\codex-runtime\codex-rs\core\src\mcp_tool_call.rs:571
-F:\AIGril\build-cache\codex-runtime\codex-rs\codex-mcp\src\connection_manager.rs:589
+F:\AILIS\build-cache\codex-runtime\codex-rs\core\src\mcp_tool_call.rs:547
+F:\AILIS\build-cache\codex-runtime\codex-rs\core\src\mcp_tool_call.rs:571
+F:\AILIS\build-cache\codex-runtime\codex-rs\codex-mcp\src\connection_manager.rs:589
 ```
 
 Representative Codex code:
@@ -682,7 +682,7 @@ pub async fn call_tool(
 
 Meaning:
 
-Codex MCP is a real client manager with server startup, tool filters, timeouts, and actual `tools/call`. AIGL should not treat MCP as a passive registry plus manual wrappers.
+Codex MCP is a real client manager with server startup, tool filters, timeouts, and actual `tools/call`. AILIS should not treat MCP as a passive registry plus manual wrappers.
 
 ## 11. MCP Resources Are Not MCP Tools
 
@@ -691,10 +691,10 @@ Codex separates `call_tool` from `read_resource`.
 Source:
 
 ```text
-F:\AIGril\build-cache\codex-runtime\codex-rs\core\src\tools\handlers\mcp_resource_spec.rs:6
-F:\AIGril\build-cache\codex-runtime\codex-rs\core\src\tools\handlers\mcp_resource_spec.rs:62
-F:\AIGril\build-cache\codex-runtime\codex-rs\core\src\tools\handlers\mcp_resource\read_mcp_resource.rs:27
-F:\AIGril\build-cache\codex-runtime\codex-rs\codex-mcp\src\connection_manager.rs:669
+F:\AILIS\build-cache\codex-runtime\codex-rs\core\src\tools\handlers\mcp_resource_spec.rs:6
+F:\AILIS\build-cache\codex-runtime\codex-rs\core\src\tools\handlers\mcp_resource_spec.rs:62
+F:\AILIS\build-cache\codex-runtime\codex-rs\core\src\tools\handlers\mcp_resource\read_mcp_resource.rs:27
+F:\AILIS\build-cache\codex-runtime\codex-rs\codex-mcp\src\connection_manager.rs:669
 ```
 
 Representative Codex code:
@@ -730,7 +730,7 @@ async fn handle(
 }
 ```
 
-Meaning for AIGL:
+Meaning for AILIS:
 
 Do not merge "tools" and "resources" into one vague MCP bridge. A database schema, a file-like resource, and an executable GitHub action are different surfaces.
 
@@ -741,8 +741,8 @@ Codex models hosted web search as a `ToolSpec::WebSearch`, not as a generic func
 Source:
 
 ```text
-F:\AIGril\build-cache\codex-runtime\codex-rs\core\src\tools\hosted_spec.rs:20
-F:\AIGril\build-cache\codex-runtime\codex-rs\core\src\tools\spec_plan.rs:241
+F:\AILIS\build-cache\codex-runtime\codex-rs\core\src\tools\hosted_spec.rs:20
+F:\AILIS\build-cache\codex-runtime\codex-rs\core\src\tools\spec_plan.rs:241
 ```
 
 Representative Codex code:
@@ -767,7 +767,7 @@ pub fn create_web_search_tool(options: WebSearchToolOptions<'_>) -> Option<ToolS
 
 Meaning:
 
-Search is not fetch. Fetch is not parse. Parse is not summarize. AIGL should split these:
+Search is not fetch. Fetch is not parse. Parse is not summarize. AILIS should split these:
 
 ```text
 web_search: find sources
@@ -786,8 +786,8 @@ Codex's shell tool is a concrete function with explicit input parameters and an 
 Source:
 
 ```text
-F:\AIGril\build-cache\codex-runtime\codex-rs\core\src\tools\handlers\shell_spec.rs:19
-F:\AIGril\build-cache\codex-runtime\codex-rs\core\src\tools\handlers\shell_spec.rs:247
+F:\AILIS\build-cache\codex-runtime\codex-rs\core\src\tools\handlers\shell_spec.rs:19
+F:\AILIS\build-cache\codex-runtime\codex-rs\core\src\tools\handlers\shell_spec.rs:247
 ```
 
 Representative Codex code:
@@ -821,7 +821,7 @@ The output schema includes:
 
 Meaning:
 
-Command execution has a real lifecycle. If still running, return a `session_id`. If output is truncated, return `original_token_count`. AIGL's tool layer should follow this pattern for long-running browser, repo, PDF, and benchmark tasks.
+Command execution has a real lifecycle. If still running, return a `session_id`. If output is truncated, return `original_token_count`. AILIS's tool layer should follow this pattern for long-running browser, repo, PDF, and benchmark tasks.
 
 ## 14. Apply Patch Is Freeform Grammar
 
@@ -830,8 +830,8 @@ Codex does not model file patching as arbitrary shell text. It uses a grammar-bo
 Source:
 
 ```text
-F:\AIGril\build-cache\codex-runtime\codex-rs\core\src\tools\handlers\apply_patch_spec.rs:5
-F:\AIGril\build-cache\codex-runtime\codex-rs\core\src\tools\handlers\apply_patch_spec.rs:9
+F:\AILIS\build-cache\codex-runtime\codex-rs\core\src\tools\handlers\apply_patch_spec.rs:5
+F:\AILIS\build-cache\codex-runtime\codex-rs\core\src\tools\handlers\apply_patch_spec.rs:9
 ```
 
 Representative Codex code:
@@ -854,7 +854,7 @@ pub fn create_apply_patch_freeform_tool(include_environment_id: bool) -> ToolSpe
 
 Meaning:
 
-Some tools should not be JSON functions. For AIGL, this matters if we later add structured patching, region screenshots, or UI action scripts. If the payload has a domain grammar, expose it as a grammar or strict schema, not loose prose.
+Some tools should not be JSON functions. For AILIS, this matters if we later add structured patching, region screenshots, or UI action scripts. If the payload has a domain grammar, expose it as a grammar or strict schema, not loose prose.
 
 ## 15. Dynamic Tools
 
@@ -863,9 +863,9 @@ Codex supports tools contributed by the current thread/session as dynamic tools.
 Source:
 
 ```text
-F:\AIGril\build-cache\codex-runtime\codex-rs\core\src\tools\handlers\dynamic.rs:32
-F:\AIGril\build-cache\codex-runtime\codex-rs\core\src\tools\handlers\dynamic.rs:39
-F:\AIGril\build-cache\codex-runtime\codex-rs\core\src\tools\handlers\dynamic.rs:129
+F:\AILIS\build-cache\codex-runtime\codex-rs\core\src\tools\handlers\dynamic.rs:32
+F:\AILIS\build-cache\codex-runtime\codex-rs\core\src\tools\handlers\dynamic.rs:39
+F:\AILIS\build-cache\codex-runtime\codex-rs\core\src\tools\handlers\dynamic.rs:129
 ```
 
 Representative Codex code:
@@ -903,7 +903,7 @@ impl CoreToolRuntime for DynamicToolHandler {
 
 Meaning:
 
-AIGL's `Capability Registry` and `Skill Auto-Authoring` should map nicely to this. Newly installed capabilities can become dynamic tools with `defer_loading` instead of permanently bloating the first prompt.
+AILIS's `Capability Registry` and `Skill Auto-Authoring` should map nicely to this. Newly installed capabilities can become dynamic tools with `defer_loading` instead of permanently bloating the first prompt.
 
 ## 16. Output Contract
 
@@ -912,9 +912,9 @@ Codex makes tool output responsible for how it re-enters the model context.
 Source:
 
 ```text
-F:\AIGril\build-cache\codex-runtime\codex-rs\tools\src\tool_output.rs:15
-F:\AIGril\build-cache\codex-runtime\codex-rs\core\src\tools\context.rs:65
-F:\AIGril\build-cache\codex-runtime\codex-rs\core\src\tools\context.rs:110
+F:\AILIS\build-cache\codex-runtime\codex-rs\tools\src\tool_output.rs:15
+F:\AILIS\build-cache\codex-runtime\codex-rs\core\src\tools\context.rs:65
+F:\AILIS\build-cache\codex-runtime\codex-rs\core\src\tools\context.rs:110
 ```
 
 Representative Codex code:
@@ -965,7 +965,7 @@ telemetry preview
 post-tool hook payload
 ```
 
-AIGL should not use one giant text blob for all four purposes.
+AILIS should not use one giant text blob for all four purposes.
 
 ## 17. What Codex Would Do Differently For The PDF Case
 
@@ -977,7 +977,7 @@ The Codex-aligned flow for `https://arxiv.org/abs/1706.03762` should be:
 4. If a text-fetch tool sees `application/pdf`, return a typed unsupported content result.
 5. Let the model choose fallback based on explicit tool result, not on a fake success.
 
-Expected AIGL-style tool result for wrong tool:
+Expected AILIS-style tool result for wrong tool:
 
 ```json
 {
@@ -992,11 +992,11 @@ Expected AIGL-style tool result for wrong tool:
 
 This keeps the Agent intelligent. It does not hardcode "if arxiv then PDF parser". It simply makes the tool honest.
 
-## 18. Codex-to-AIGL Mapping
+## 18. Codex-to-AILIS Mapping
 
-| Codex concept | Codex source | AIGL target |
+| Codex concept | Codex source | AILIS target |
 | --- | --- | --- |
-| `ToolSpec` enum | `tools/src/tool_spec.rs:17` | AIGL tool specs should have distinct kinds: function, namespace, hosted/search, freeform, MCP |
+| `ToolSpec` enum | `tools/src/tool_spec.rs:17` | AILIS tool specs should have distinct kinds: function, namespace, hosted/search, freeform, MCP |
 | `ResponsesApiTool` | `tools/src/responses_api.rs:25` | Every tool has name, description, input schema, output schema, defer flag |
 | `ToolExecutor` | `tools/src/tool_executor.rs:41` | Every tool implementation owns both spec and `handle()` |
 | `ToolExposure` | `tools/src/tool_executor.rs:8` | Direct vs deferred vs hidden tools; avoid first-prompt bloat |
@@ -1010,7 +1010,7 @@ This keeps the Agent intelligent. It does not hardcode "if arxiv then PDF parser
 | `apply_patch` freeform | `core/src/tools/handlers/apply_patch_spec.rs:9` | Domain grammar for patch-like operations |
 | hosted `web_search` | `core/src/tools/hosted_spec.rs:20` | Search is not fetch; fetch is not parse |
 
-## 19. Practical AIGL Rules From Codex
+## 19. Practical AILIS Rules From Codex
 
 Rule 1: Tool names must not overpromise.
 
@@ -1045,7 +1045,7 @@ Runtime can block impossible or unsafe calls, but should not replace incomplete 
 The least invasive Codex-aligned change was:
 
 1. Introduce a `ToolRuntime` contract parallel to Codex `ToolExecutor`.
-2. Move tool schema and handler into the same module for each AIGL tool.
+2. Move tool schema and handler into the same module for each AILIS tool.
 3. Add `ToolExposure` and a searchable deferred catalog.
 4. Split `web_fetch` into honest primitives:
    `web_fetch_text`, `web_fetch_html`, `download_file`, `pdf_extract_text`.
@@ -1053,11 +1053,11 @@ The least invasive Codex-aligned change was:
 6. Keep observation records as eval/debug metadata, never as the completion judge.
 7. Let the Agent loop decide next step from real tool results.
 
-This is not a large rewrite. It is a boundary correction. The existing AIGL Agent can remain the brain; the tool layer just has to stop lying to it.
+This is not a large rewrite. It is a boundary correction. The existing AILIS Agent can remain the brain; the tool layer just has to stop lying to it.
 
-Current AIGL status after the Codex-aligned tool runtime pass:
+Current AILIS status after the Codex-aligned tool runtime pass:
 
-| Target | AIGL status |
+| Target | AILIS status |
 | --- | --- |
 | `ToolExecutor`-like object | Implemented in `electron/humanclaw-tool-runtime.cjs` as `HumanClawRuntimeTool`. |
 | Central `ToolRegistry` | Implemented as `HumanClawToolRuntimeRegistry`; runtime and gateway dispatch through it first. |
@@ -1070,7 +1070,7 @@ Current AIGL status after the Codex-aligned tool runtime pass:
 
 ## 21. Actual Codex Tool Selection Chain
 
-Codex does not have an AIGL-style `TaskSpec`, `TaskGraph`, or `EvidenceLedger` gate in the main turn loop. Tool selection is produced by this chain:
+Codex does not have an AILIS-style `TaskSpec`, `TaskGraph`, or `EvidenceLedger` gate in the main turn loop. Tool selection is produced by this chain:
 
 ```text
 conversation history
@@ -1088,11 +1088,11 @@ conversation history
 Codex source:
 
 ```text
-F:\AIGril\build-cache\codex-runtime\codex-rs\core\src\session\turn.rs:117
-F:\AIGril\build-cache\codex-runtime\codex-rs\core\src\session\turn.rs:887
-F:\AIGril\build-cache\codex-runtime\codex-rs\core\src\tools\router.rs:90
-F:\AIGril\build-cache\codex-runtime\codex-rs\core\src\tools\registry.rs:326
-F:\AIGril\build-cache\codex-runtime\codex-rs\tools\src\tool_output.rs:16
+F:\AILIS\build-cache\codex-runtime\codex-rs\core\src\session\turn.rs:117
+F:\AILIS\build-cache\codex-runtime\codex-rs\core\src\session\turn.rs:887
+F:\AILIS\build-cache\codex-runtime\codex-rs\core\src\tools\router.rs:90
+F:\AILIS\build-cache\codex-runtime\codex-rs\core\src\tools\registry.rs:326
+F:\AILIS\build-cache\codex-runtime\codex-rs\tools\src\tool_output.rs:16
 ```
 
 Representative Codex code:
@@ -1156,23 +1156,23 @@ pub trait ToolExecutor<Invocation>: Send + Sync {
 }
 ```
 
-This is the part AIGL should copy most directly. If a tool module owns only prompt text but not executable behavior, it is not Codex-like. If a runtime handler executes something that its schema did not promise, it is also not Codex-like.
+This is the part AILIS should copy most directly. If a tool module owns only prompt text but not executable behavior, it is not Codex-like. If a runtime handler executes something that its schema did not promise, it is also not Codex-like.
 
-## 23. Where AIGL Currently Differs
+## 23. Where AILIS Currently Differs
 
-AIGL is already closer than before, but there are still real differences that explain the research failures.
+AILIS is already closer than before, but there are still real differences that explain the research failures.
 
-### 23.1 AIGL still has a JSON planner protocol before tool calls
+### 23.1 AILIS still has a JSON planner protocol before tool calls
 
-AIGL asks the model to emit an intermediate JSON decision:
+AILIS asks the model to emit an intermediate JSON decision:
 
 ```text
-F:\AIGril\electron\humanclaw-agent-runner.cjs:2863
-F:\AIGril\electron\humanclaw-agent-runner.cjs:2879
-F:\AIGril\electron\humanclaw-agent-runner.cjs:2921
+F:\AILIS\electron\humanclaw-agent-runner.cjs:2863
+F:\AILIS\electron\humanclaw-agent-runner.cjs:2879
+F:\AILIS\electron\humanclaw-agent-runner.cjs:2921
 ```
 
-AIGL-side shape:
+AILIS-side shape:
 
 ```text
 action="load_context|tool|final|blocked"
@@ -1190,19 +1190,19 @@ ResponseItem::CustomToolCall
 
 Consequence:
 
-For AIGL, the model can fail before it reaches the real tool layer. In the Playwright task, it had to learn `load_context`, then `mcp_bridge`, then MCP inner tool schema, then file-write schema. Codex shortens that path by putting real tool specs directly in `tools`.
+For AILIS, the model can fail before it reaches the real tool layer. In the Playwright task, it had to learn `load_context`, then `mcp_bridge`, then MCP inner tool schema, then file-write schema. Codex shortens that path by putting real tool specs directly in `tools`.
 
-### 23.2 AIGL keeps `mcp_bridge`, but normal calls can bypass it
+### 23.2 AILIS keeps `mcp_bridge`, but normal calls can bypass it
 
-AIGL runtime route:
+AILIS runtime route:
 
 ```text
-F:\AIGril\electron\humanclaw-runtime.cjs:1087
-F:\AIGril\electron\humanclaw-runtime.cjs:1566
-F:\AIGril\electron\humanclaw-runtime.cjs:1789
+F:\AILIS\electron\humanclaw-runtime.cjs:1087
+F:\AILIS\electron\humanclaw-runtime.cjs:1566
+F:\AILIS\electron\humanclaw-runtime.cjs:1789
 ```
 
-AIGL exposes `mcp_bridge` actions such as:
+AILIS exposes `mcp_bridge` actions such as:
 
 ```text
 schema
@@ -1217,8 +1217,8 @@ call_tool
 Codex route:
 
 ```text
-F:\AIGril\build-cache\codex-runtime\codex-rs\core\src\tools\handlers\mcp.rs:29
-F:\AIGril\build-cache\codex-runtime\codex-rs\core\src\tools\handlers\mcp.rs:191
+F:\AILIS\build-cache\codex-runtime\codex-rs\core\src\tools\handlers\mcp.rs:29
+F:\AILIS\build-cache\codex-runtime\codex-rs\core\src\tools\handlers\mcp.rs:191
 ```
 
 Codex wraps each MCP tool as a model-visible namespace function:
@@ -1233,27 +1233,27 @@ Ok(ToolSpec::Namespace(ResponsesApiNamespace {
 
 Current consequence:
 
-AIGL keeps `mcp_bridge` for management actions such as server registration, health checks, resource reads, prompts, and schema discovery. Normal MCP tool calls no longer have to go through the bridge: `HumanClawToolRuntimeRegistry.dispatch()` recognizes canonical `mcp__server__tool` ids and also accepts legacy `mcp:<server>:<tool>` aliases, then forwards the original args to MCP `tools/call`.
+AILIS keeps `mcp_bridge` for management actions such as server registration, health checks, resource reads, prompts, and schema discovery. Normal MCP tool calls no longer have to go through the bridge: `HumanClawToolRuntimeRegistry.dispatch()` recognizes canonical `mcp__server__tool` ids and also accepts legacy `mcp:<server>:<tool>` aliases, then forwards the original args to MCP `tools/call`.
 
 Remaining gap:
 
-Codex represents MCP tools as provider-native namespace/function specs. AIGL now has equivalent direct ids and specs, but the Agent still uses an AIGL JSON planner protocol instead of provider-native `ResponseItem::FunctionCall`.
+Codex represents MCP tools as provider-native namespace/function specs. AILIS now has equivalent direct ids and specs, but the Agent still uses an AILIS JSON planner protocol instead of provider-native `ResponseItem::FunctionCall`.
 
-### 23.3 AIGL capability loading is similar to Codex tool_search, but not the same
+### 23.3 AILIS capability loading is similar to Codex tool_search, but not the same
 
-AIGL has a deferred first-turn catalog:
+AILIS has a deferred first-turn catalog:
 
 ```text
-F:\AIGril\electron\humanclaw-agent-runner.cjs:1832
-F:\AIGril\electron\humanclaw-agent-runner.cjs:1848
-F:\AIGril\electron\humanclaw-agent-runner.cjs:4152
+F:\AILIS\electron\humanclaw-agent-runner.cjs:1832
+F:\AILIS\electron\humanclaw-agent-runner.cjs:1848
+F:\AILIS\electron\humanclaw-agent-runner.cjs:4152
 ```
 
 This is conceptually aligned with Codex:
 
 ```text
-F:\AIGril\build-cache\codex-runtime\codex-rs\core\src\tools\spec_plan.rs:762
-F:\AIGril\build-cache\codex-runtime\codex-rs\core\src\tools\handlers\tool_search.rs:23
+F:\AILIS\build-cache\codex-runtime\codex-rs\core\src\tools\spec_plan.rs:762
+F:\AILIS\build-cache\codex-runtime\codex-rs\core\src\tools\handlers\tool_search.rs:23
 ```
 
 But Codex `tool_search` returns loadable tool specs, not prose context:
@@ -1262,19 +1262,19 @@ But Codex `tool_search` returns loadable tool specs, not prose context:
 Ok(boxed_tool_output(ToolSearchOutput { tools }))
 ```
 
-AIGL `load_context` returns text sections plus compact specs. That helps token budget, but the model still has to translate prose into AIGL's JSON tool-call protocol.
+AILIS `load_context` returns text sections plus compact specs. That helps token budget, but the model still has to translate prose into AILIS's JSON tool-call protocol.
 
 Consequence:
 
-For research tasks, AIGL may stop after reading enough prose to write an answer, even if it has not truly used the intended official-document tool. Codex's native tool output path makes the loaded tool itself part of the model's available callable surface.
+For research tasks, AILIS may stop after reading enough prose to write an answer, even if it has not truly used the intended official-document tool. Codex's native tool output path makes the loaded tool itself part of the model's available callable surface.
 
-### 23.4 AIGL file-write tools still compete
+### 23.4 AILIS file-write tools still compete
 
 The Playwright task showed:
 
 ```text
-filesystem_aigl.edit_file failed because the model guessed content instead of edits.
-filesystem_aigl.edit_file failed again because it needed oldText.
+filesystem_ailis.edit_file failed because the model guessed content instead of edits.
+filesystem_ailis.edit_file failed again because it needed oldText.
 computer.write failed once because the model guessed target instead of path.
 computer.write then succeeded.
 ```
@@ -1298,18 +1298,18 @@ MCP/dynamic tools as namespace functions
 Source:
 
 ```text
-F:\AIGril\build-cache\codex-runtime\codex-rs\core\src\tools\handlers\shell_spec.rs:19
-F:\AIGril\build-cache\codex-runtime\codex-rs\core\src\tools\handlers\apply_patch_spec.rs:9
+F:\AILIS\build-cache\codex-runtime\codex-rs\core\src\tools\handlers\shell_spec.rs:19
+F:\AILIS\build-cache\codex-runtime\codex-rs\core\src\tools\handlers\apply_patch_spec.rs:9
 ```
 
-### 23.5 AIGL research tools improved, but the model-visible semantics are still indirect
+### 23.5 AILIS research tools improved, but the model-visible semantics are still indirect
 
 The research MCP server now correctly rejects PDF bytes for `web_fetch`:
 
 ```text
-F:\AIGril\scripts\mcp-aigl-research-server.cjs:216
-F:\AIGril\scripts\mcp-aigl-research-server.cjs:923
-F:\AIGril\tests\mcp-aigl-research-server.test.mjs:31
+F:\AILIS\scripts\mcp-ailis-research-server.cjs:216
+F:\AILIS\scripts\mcp-ailis-research-server.cjs:923
+F:\AILIS\tests\mcp-ailis-research-server.test.mjs:31
 ```
 
 That fixes one concrete bug. The deeper issue is still that the model must discover:
@@ -1323,13 +1323,13 @@ artifact_verifier for final file checks
 
 Codex's answer is not "hardcode if arxiv then pdf_extract_text". Codex's answer is "make these separate typed tools, make them searchable, and make wrong calls return structured observations".
 
-## 24. Why AIGL Research Fails In Plain Engineering Terms
+## 24. Why AILIS Research Fails In Plain Engineering Terms
 
 The common failure chain is:
 
 ```text
 1. User asks for research or official docs.
-2. AIGL first prompt exposes only a broad capability index.
+2. AILIS first prompt exposes only a broad capability index.
 3. Model must decide to load MCP context.
 4. Runtime returns MCP prose/spec context.
 5. Model must choose either mcp_bridge or a direct MCP tool id such as mcp__server__tool.
@@ -1353,7 +1353,7 @@ The important diagnosis:
 
 This is not solved by adding more prompt rules. Prompt rules may help one benchmark and hurt another. Codex relies more on typed tools, native tool specs, and observation loops.
 
-## 25. Codex-Aligned AIGL Target Architecture
+## 25. Codex-Aligned AILIS Target Architecture
 
 The target should be:
 
@@ -1365,12 +1365,12 @@ Agent Loop
   -> runtime executes exact handler
   -> ToolOutput returns structured success/error observation
   -> model continues or final
-  -> Persona Surface renders final/progress for AIGL
+  -> Persona Surface renders final/progress for AILIS
 ```
 
-Concrete AIGL mapping:
+Concrete AILIS mapping:
 
-| Codex module | AIGL module to align | Required shape |
+| Codex module | AILIS module to align | Required shape |
 | --- | --- | --- |
 | `ToolExecutor` | `humanclaw-tool-runtime.cjs` or equivalent | one object owns `id/spec/exposure/handle/output` |
 | `ToolSpec` | `humanclaw-tool-contracts.cjs` | separate model-visible schema from prose skill |
@@ -1385,14 +1385,14 @@ This preserves the user's product direction:
 
 ```text
 Codex-like underneath: typed tools, searchable capabilities, observations, retries.
-AIGL-like above: persona rendering, voice, expression, bubble, warmth.
+AILIS-like above: persona rendering, voice, expression, bubble, warmth.
 ```
 
 ## 26. Implemented Change List, Not A Rewrite
 
 Implemented in this pass:
 
-1. Added a real AIGL `ToolRuntime` registry next to current contracts.
+1. Added a real AILIS `ToolRuntime` registry next to current contracts.
 2. Wrapped existing built-ins as runtime objects: runtime tools plus gateway-local `computer`, `code`, `file_manager`, `email`, `artifact_verifier`, and `vision.capture_context`.
 3. Promoted MCP-discovered tools into direct runtime call ids: canonical `mcp__server__tool`, with legacy `mcp:<server>:<tool>` kept as a compatibility alias.
 4. Kept `mcp_bridge` available, but direct MCP calls and `tool_search` no longer require the model to hand-assemble bridge payloads.
@@ -1403,13 +1403,13 @@ Implemented in this pass:
 
 Still not fully identical to Codex:
 
-1. AIGL still has its own JSON decision protocol. Codex uses provider-native response items and a Rust `ToolRouter`.
-2. AIGL has a gateway API compatibility layer that returns `coreTools/runtimeTools/localTools` for existing UI and smoke scripts. Internally this now reads from the registry, but the public shape remains old for compatibility.
+1. AILIS still has its own JSON decision protocol. Codex uses provider-native response items and a Rust `ToolRouter`.
+2. AILIS has a gateway API compatibility layer that returns `coreTools/runtimeTools/localTools` for existing UI and smoke scripts. Internally this now reads from the registry, but the public shape remains old for compatibility.
 3. Some broad tools, especially `computer`, still multiplex many actions under one schema. That is acceptable for the current product, but Codex-style purity would split more actions into narrower executors over time.
 
 ## 27. Acceptance Tests
 
-These tests should tell us whether AIGL has actually become more Codex-like, instead of just learning one task.
+These tests should tell us whether AILIS has actually become more Codex-like, instead of just learning one task.
 
 | Test | Expected behavior |
 | --- | --- |
@@ -1421,13 +1421,13 @@ These tests should tell us whether AIGL has actually become more Codex-like, ins
 | Wrong tool call test | `web_fetch` on PDF returns `unsupported_content_type` and model retries with `pdf_extract_text` |
 | First prompt budget test | First prompt contains only catalog + direct core specs, not full contracts |
 
-The Playwright chain from `F:\AIGril\logs\aigl-browser-wait-chain-2026-06-05T15-07-54-181Z.md` is a useful baseline. It completed, but it should not need multiple schema-guess failures to write a file, and it should collect official-document evidence before final.
+The Playwright chain from `F:\AILIS\logs\ailis-browser-wait-chain-2026-06-05T15-07-54-181Z.md` is a useful baseline. It completed, but it should not need multiple schema-guess failures to write a file, and it should collect official-document evidence before final.
 
 ## 28. Bottom Line
 
 Codex manages tool selection by giving the model a small, accurate, executable tool surface and then trusting the model to choose the next call from observations.
 
-AIGL currently gives the model a persona-aware JSON agent protocol, a deferred capability catalog, and an MCP bridge. That is workable, but research tasks suffer when the bridge and capability text are too indirect.
+AILIS currently gives the model a persona-aware JSON agent protocol, a deferred capability catalog, and an MCP bridge. That is workable, but research tasks suffer when the bridge and capability text are too indirect.
 
 The Codex-aligned direction is not to hardcode task routes. It is to make the executable tool surface honest and discoverable:
 

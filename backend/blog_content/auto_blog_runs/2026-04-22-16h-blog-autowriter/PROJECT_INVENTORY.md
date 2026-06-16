@@ -11,10 +11,10 @@
 | 序号 | 项目路径 | 项目名 | 识别标记 |
 |---:|---|---|---|
 | 1 | `F:\aclpubcheck-main` | aclpubcheck-main | README.md |
-| 2 | `F:\AIGril` | AIGril | .git, package.json, requirements.txt, vite.config.js |
-| 3 | `F:\AIGril_main_release` | AIGril_main_release | .git, package.json, requirements.txt, vite.config.js |
-| 4 | `F:\AIGril_tmp_main` | AIGril_tmp_main | .git, package.json, requirements.txt, vite.config.js |
-| 5 | `F:\AIG备份\AIGril` | AIGril | package.json, requirements.txt, vite.config.js, README.md |
+| 2 | `F:\AILIS` | AILIS | .git, package.json, requirements.txt, vite.config.js |
+| 3 | `F:\AILIS_main_release` | AILIS_main_release | .git, package.json, requirements.txt, vite.config.js |
+| 4 | `F:\AILIS_tmp_main` | AILIS_tmp_main | .git, package.json, requirements.txt, vite.config.js |
+| 5 | `F:\AIG备份\AILIS` | AILIS | package.json, requirements.txt, vite.config.js, README.md |
 | 6 | `F:\apache-maven-3.9.9` | apache-maven-3.9.9 | README.txt |
 | 7 | `F:\Apps\Notepad++` | Notepad++ | README.txt |
 | 8 | `F:\AutoResearch` | AutoResearch | .git, pyproject.toml, README.md |
@@ -62,7 +62,7 @@
 
 优先研究用户本人项目或明显相关项目：
 
-- AIGril
+- AILIS
 - AutoResearch
 - multi-codex-orchestrator
 - HaoRender / haorender

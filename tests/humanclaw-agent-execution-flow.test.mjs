@@ -55,7 +55,7 @@ test('Agent tool observations become evidence artifacts and turn refs', () => {
     const stepResult = attachAgentEvidenceArtifacts({
         id: 'step-1',
         title: 'Read spreadsheet',
-        tool: 'mcp__aigl_research__read_spreadsheet',
+        tool: 'mcp__ailis_research__read_spreadsheet',
         args: { path: 'scores.xlsx', action: 'read_spreadsheet' },
         iteration: 1,
         response: {
@@ -93,7 +93,7 @@ test('Agent model-facing observation digest stays compact and artifact-backed', 
     const stepResult = attachAgentEvidenceArtifacts({
         id: 'step-long',
         title: 'Search noisy web results',
-        tool: 'mcp__aigl_research__web_search',
+        tool: 'mcp__ailis_research__web_search',
         args: { query: 'noisy query' },
         iteration: 3,
         response: {
@@ -123,7 +123,7 @@ test('Agent exact-answer gate requires confident known evidence refs', () => {
     const stepResult = attachAgentEvidenceArtifacts({
         id: 'step-2',
         title: 'Fetch source',
-        tool: 'mcp__aigl_research__web_fetch',
+        tool: 'mcp__ailis_research__web_fetch',
         args: { url: 'https://example.test/report' },
         iteration: 2,
         response: {

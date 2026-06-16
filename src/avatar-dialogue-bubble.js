@@ -1,8 +1,8 @@
-export const AVATAR_SPEECH_EVENT_NAME = 'aigril-avatar-speech-event';
+export const AVATAR_SPEECH_EVENT_NAME = 'ailis-avatar-speech-event';
 
-const BUBBLE_STYLE_ID = 'aigril-avatar-dialogue-bubble-style';
+const BUBBLE_STYLE_ID = 'ailis-avatar-dialogue-bubble-style';
 const BUBBLE_HIDE_DELAY_MS = 1400;
-const BUBBLE_POSITION_STORAGE_PREFIX = 'aigril-avatar-dialogue-bubble-position';
+const BUBBLE_POSITION_STORAGE_PREFIX = 'ailis-avatar-dialogue-bubble-position';
 const BUBBLE_EDGE_PADDING = 8;
 const DEFAULT_PET_BUBBLE_LEFT = 8;
 const DEFAULT_PET_BUBBLE_TOP = 8;
@@ -274,9 +274,9 @@ export function installAvatarDialogueBubble({
     let petReservedWidthRequest = 0;
     let petReservedLeft = 0;
     let petReservedRight = 0;
-    let bubbleSettings = normalizePetBubbleSettings(window.aigrilDesktop?.preferences || {});
+    let bubbleSettings = normalizePetBubbleSettings(window.ailisDesktop?.preferences || {});
 
-    const usesDesktopBubbleSettings = () => variant === 'pet' && Boolean(window.aigrilDesktop);
+    const usesDesktopBubbleSettings = () => variant === 'pet' && Boolean(window.ailisDesktop);
 
     const applyBubbleScale = () => {
         const scale = usesDesktopBubbleSettings() ? bubbleSettings.scale : DEFAULT_PET_BUBBLE_SCALE;
@@ -306,7 +306,7 @@ export function installAvatarDialogueBubble({
             top: Math.round(safePosition.top)
         };
 
-        const savePromise = window.aigrilDesktop?.savePreferences?.({
+        const savePromise = window.ailisDesktop?.savePreferences?.({
             avatarDialogueBubbleLeft: bubbleSettings.left,
             avatarDialogueBubbleTop: bubbleSettings.top
         });
@@ -428,7 +428,7 @@ export function installAvatarDialogueBubble({
             return 0;
         }
 
-        const setExpanded = window.aigrilDesktop?.setPetDialogueExpanded;
+        const setExpanded = window.ailisDesktop?.setPetDialogueExpanded;
         if (!setExpanded) {
             applyPetDialogueReservations();
             return 0;
@@ -593,7 +593,7 @@ export function installAvatarDialogueBubble({
         applyPreferredPosition();
     };
 
-    const removePreferencesListener = window.aigrilDesktop?.onPreferencesUpdated?.(handlePreferencesUpdated);
+    const removePreferencesListener = window.ailisDesktop?.onPreferencesUpdated?.(handlePreferencesUpdated);
 
     window.addEventListener(AVATAR_SPEECH_EVENT_NAME, handleSpeechEvent);
     bubbleEl.addEventListener('pointerdown', beginDrag);

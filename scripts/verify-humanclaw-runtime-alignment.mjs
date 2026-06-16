@@ -9,7 +9,7 @@ const abs = (...parts) => path.join(root, ...parts);
 const human = {
   runtime: rel('electron', 'humanclaw-runtime.cjs'),
   toolRuntime: rel('electron', 'humanclaw-tool-runtime.cjs'),
-  toolSpecs: rel('electron', 'aigl-tool-specs.cjs'),
+  toolSpecs: rel('electron', 'ailis-tool-specs.cjs'),
   gateway: rel('electron', 'humanclaw-gateway.cjs'),
   runner: rel('electron', 'humanclaw-agent-runner.cjs'),
   runtimeTest: rel('tests', 'humanclaw-runtime.test.mjs'),
@@ -62,7 +62,7 @@ const checks = [
     evidence: [
       ev('Codex plan delta notification', codex.item, ['pub struct PlanDeltaNotification', 'pub delta: String']),
       ev('OpenClaw plan tool and stream', openclaw.toolPolicy, ['id: "update_plan"', 'label: "update_plan"']),
-      ev('HumanClaw update_plan tool definition', human.toolSpecs, ["id: 'update_plan'", 'AIGL_RUNTIME_TOOL_DEFINITIONS']),
+      ev('HumanClaw update_plan tool definition', human.toolSpecs, ["id: 'update_plan'", 'AILIS_RUNTIME_TOOL_DEFINITIONS']),
       ev('HumanClaw update_plan transcript event', human.runtime, ["type: 'plan.updated'", 'async updatePlan']),
       ev('HumanClaw agent drives update_plan', human.runner, ["tool: 'update_plan'", 'plan_update']),
     ],
@@ -121,7 +121,7 @@ const checks = [
     evidence: [
       ev('Codex MCP tool call protocol', codex.mcp, ['pub struct McpServerToolCallParams', 'pub server: String', 'pub tool: String', 'pub struct McpServerToolCallResponse']),
       ev('OpenClaw ACP MCP bridge constraints', openclaw.acpDoc, ['Per-session `mcpServers` are not supported in bridge mode', 'plugin-tools-mcp-bridge']),
-      ev('HumanClaw MCP runtime bridge surface', human.toolSpecs, ["id: 'mcp_bridge'", 'AIGL_RUNTIME_TOOL_DEFINITIONS']),
+      ev('HumanClaw MCP runtime bridge surface', human.toolSpecs, ["id: 'mcp_bridge'", 'AILIS_RUNTIME_TOOL_DEFINITIONS']),
       ev('HumanClaw MCP direct dispatch', human.toolRuntime, ['dispatchDirectMcpTool', 'tool_search']),
       ev('HumanClaw MCP call lifecycle', human.runtime, ['executeMcpBridge', "type: 'mcp.tool.call.begin'", "type: 'mcp.tool.call.end'"]),
       ev('HumanClaw MCP stdio session manager', rel('electron', 'humanclaw-mcp-session.cjs'), ['class HumanClawMcpManager', "session.request('tools/list'", "session.request('tools/call'", "session.request('resources/read'"]),
@@ -133,7 +133,7 @@ const checks = [
     evidence: [
       ev('Codex child agents inherit runtime policy', codex.multiAgents, ['apply_spawn_agent_runtime_overrides', 'approval_policy', 'set_permission_profile']),
       ev('OpenClaw subagent orchestration docs', openclaw.subagentsDoc, ['sessions_spawn', '`subagents`', 'Completion is push-based']),
-      ev('HumanClaw subagent runtime definition', human.toolSpecs, ["id: 'subagents'", 'AIGL_RUNTIME_TOOL_DEFINITIONS']),
+      ev('HumanClaw subagent runtime definition', human.toolSpecs, ["id: 'subagents'", 'AILIS_RUNTIME_TOOL_DEFINITIONS']),
       ev('HumanClaw subagent runtime dispatch', human.toolRuntime, ['definitionById.subagents']),
       ev('HumanClaw subagent runner surface', human.runtime, ['startSubagentRun', 'this.subagentRuns.set', "type: 'subagent.completed'"]),
     ],

@@ -357,7 +357,7 @@ function renderAnalysis() {
 }
 
 async function refreshRuns({ silent = false, selectLatest = false } = {}) {
-    if (!window.aigrilDesktop?.agentLab?.listRuns) {
+    if (!window.ailisDesktop?.agentLab?.listRuns) {
         setStatus('当前环境不支持 Electron Agent Lab IPC；请从桌面端打开。');
         renderAnalysis();
         return;
@@ -365,7 +365,7 @@ async function refreshRuns({ silent = false, selectLatest = false } = {}) {
     if (!silent) {
         setStatus('正在刷新运行记录...');
     }
-    const result = await window.aigrilDesktop.agentLab.listRuns({ limit: 60 });
+    const result = await window.ailisDesktop.agentLab.listRuns({ limit: 60 });
     runs = Array.isArray(result?.runs) ? result.runs : [];
     const next = selectLatest ? runs[0]?.runId : selectedRunId || runs[0]?.runId;
     renderRuns();
@@ -380,14 +380,14 @@ async function refreshRuns({ silent = false, selectLatest = false } = {}) {
 }
 
 async function loadAnalysis(runId, { silent = false } = {}) {
-    if (!runId || !window.aigrilDesktop?.agentLab?.getRunAnalysis) {
+    if (!runId || !window.ailisDesktop?.agentLab?.getRunAnalysis) {
         return;
     }
     selectedRunId = runId;
     if (!silent) {
         setStatus('正在读取 run 分析...');
     }
-    const result = await window.aigrilDesktop.agentLab.getRunAnalysis({
+    const result = await window.ailisDesktop.agentLab.getRunAnalysis({
         runId,
         transcriptLimit: 4000
     });
@@ -435,7 +435,7 @@ function buildRunPayload({ stepMode = false } = {}) {
 }
 
 async function runTask({ stepMode = false } = {}) {
-    if (!window.aigrilDesktop?.agentLab?.runTask) {
+    if (!window.ailisDesktop?.agentLab?.runTask) {
         setStatus('当前环境不支持 Agent Lab IPC。');
         return;
     }
@@ -449,7 +449,7 @@ async function runTask({ stepMode = false } = {}) {
     renderAnalysis();
     setStatus(stepMode ? '正在启动逐轮调试...' : '正在运行完整 Agent Loop...');
     try {
-        const result = await window.aigrilDesktop.agentLab.runTask(payload);
+        const result = await window.ailisDesktop.agentLab.runTask(payload);
         analysis = result?.analysis || null;
         selectedRunId = result?.runId || analysis?.runId || selectedRunId;
         selectedRoundIndex = Math.max(0, (analysis?.rounds?.length || 1) - 1);
@@ -476,7 +476,7 @@ async function continueRound() {
     renderAnalysis();
     setStatus(`正在进入第 ${Number(summary.nextIteration ?? 0) + 1} 轮...`);
     try {
-        const result = await window.aigrilDesktop.agentLab.continueTask({
+        const result = await window.ailisDesktop.agentLab.continueTask({
             runId: selectedRunId,
             debugSessionId: summary.debugSessionId,
             debugBreakAfterRound: true,
@@ -503,7 +503,7 @@ async function continueRound() {
 }
 
 async function interruptRun() {
-    if (!window.aigrilDesktop?.agentLab?.interruptTask) {
+    if (!window.ailisDesktop?.agentLab?.interruptTask) {
         setStatus('当前环境不支持 Agent 中断 IPC。');
         return;
     }
@@ -511,7 +511,7 @@ async function interruptRun() {
     const targetRunId = selectedRunId || analysis?.runId || '';
     setStatus(targetRunId ? '正在中断当前 run...' : '正在按 session 中断当前任务...');
     try {
-        const result = await window.aigrilDesktop.agentLab.interruptTask({
+        const result = await window.ailisDesktop.agentLab.interruptTask({
             runId: targetRunId,
             sessionId,
             reason: 'agent_lab_user_interrupt',
@@ -552,10 +552,10 @@ elements.runFullBtn?.addEventListener('click', () => void runTask({ stepMode: fa
 elements.nextRoundBtn?.addEventListener('click', () => void continueRound());
 elements.interruptRunBtn?.addEventListener('click', () => void interruptRun());
 elements.refreshBtn?.addEventListener('click', () => void refreshRuns());
-elements.openControlBtn?.addEventListener('click', () => void window.aigrilDesktop?.showControlPanel?.());
-elements.closeBtn?.addEventListener('click', () => void window.aigrilDesktop?.closeCurrentWindow?.());
+elements.openControlBtn?.addEventListener('click', () => void window.ailisDesktop?.showControlPanel?.());
+elements.closeBtn?.addEventListener('click', () => void window.ailisDesktop?.closeCurrentWindow?.());
 
-window.aigrilDesktop?.gateway?.onEvent?.((event = {}) => {
+window.ailisDesktop?.gateway?.onEvent?.((event = {}) => {
     const runId = event.payload?.runId || event.runId || '';
     if (/^(agent|tool|runtime)\./.test(event.type || '')) {
         scheduleRefresh(runId);

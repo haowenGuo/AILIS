@@ -12,7 +12,7 @@ import requests
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Prefetch OSWorld task assets into OSWorld's setup cache.")
-    parser.add_argument("--osworld-dir", default="/mnt/f/AIGril/build-cache/OSWorld")
+    parser.add_argument("--osworld-dir", default="/mnt/f/AILIS/build-cache/OSWorld")
     parser.add_argument("--test-all-meta-path", default="evaluation_examples/test_small.json")
     parser.add_argument("--test-config-base-dir", default="evaluation_examples")
     parser.add_argument("--cache-dir", default="cache")

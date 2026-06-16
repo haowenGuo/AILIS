@@ -16,7 +16,7 @@ That is a useful pattern for infrastructure tools. The local directory provides 
 
 ## Why it matters for automated engineering work
 
-The AIGril auto-blog run scans many local projects and writes from low-risk materials. Maven is a good reminder that automation works best when a project has a stable, declarative metadata entry point.
+The AILIS auto-blog run scans many local projects and writes from low-risk materials. Maven is a good reminder that automation works best when a project has a stable, declarative metadata entry point.
 
 In Maven projects, that entry point is usually `pom.xml`. A tool can read it to understand dependencies, lifecycle expectations, plugins, and reporting conventions before deciding how to test or package the project. The same principle appears in other ecosystems through files such as `package.json`, `pyproject.toml`, `CMakeLists.txt`, and public docs.
 

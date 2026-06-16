@@ -15,7 +15,7 @@ if (Test-Path $LockFile) {
         $process = Get-Process -Id $runnerPid -ErrorAction SilentlyContinue
         if ($process) {
             Stop-Process -Id $runnerPid -Force
-            Write-Output "Stopped AIGril auto blog runner PID $runnerPid."
+            Write-Output "Stopped AILIS auto blog runner PID $runnerPid."
         } else {
             Write-Output "Runner PID $runnerPid was not running."
         }
@@ -32,7 +32,7 @@ $matches = Get-CimInstance Win32_Process |
 
 foreach ($match in $matches) {
     Stop-Process -Id $match.ProcessId -Force -ErrorAction SilentlyContinue
-    Write-Output "Stopped sleeping AIGril auto blog runner PID $($match.ProcessId)."
+    Write-Output "Stopped sleeping AILIS auto blog runner PID $($match.ProcessId)."
 }
 
 Remove-Item -Path $LockFile -Force -ErrorAction SilentlyContinue

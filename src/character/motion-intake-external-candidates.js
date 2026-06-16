@@ -174,7 +174,7 @@ function createFumiEntry(fileName) {
         source: 'fumi2kick-vrma-motion-pack',
         license: 'CC0 according to packaged README and BOOTH item description',
         token,
-        notes: 'Imported from local fm_vrma_motion_pack_01.zip. Many motions are gag/comedy oriented, so keep out of stable Runtime until AIGL visual review.'
+        notes: 'Imported from local fm_vrma_motion_pack_01.zip. Many motions are gag/comedy oriented, so keep out of stable Runtime until AILIS visual review.'
     });
 }
 

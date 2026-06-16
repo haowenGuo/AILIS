@@ -1,14 +1,14 @@
-# AIGril Realtime Voice Plan v2
+# AILIS Realtime Voice Plan v2
 
 Branch: `codex/realtime-voice-airi`
 
 这版方案替代第一版。第一版的问题是太像“从零建一个完整实时语音系统”。现在的目标改成更务实的一句话：
 
-> 在现有 AIGril 代码上，把 TTS 和 ASR 拆开优化，尽可能让 TTS 足够快、ASR 足够快；先不要追求端到端全双工。
+> 在现有 AILIS 代码上，把 TTS 和 ASR 拆开优化，尽可能让 TTS 足够快、ASR 足够快；先不要追求端到端全双工。
 
 ## 1. 核心判断
 
-AIGril 现在不是没有语音基础，而是链路太串行：
+AILIS 现在不是没有语音基础，而是链路太串行：
 
 ```text
 用户说话 -> 录完整段 -> 本地 ASR -> 发给 LLM -> 拿到完整 payload -> 整段 TTS -> 播放
@@ -37,7 +37,7 @@ ASR 快速出字工程
 - `src/chat-tts-system.js`
 - `src/speech-provider.js`
 - `src/tts-audio-player.js`
-- `src/aigril-companion-chat-service.js`
+- `src/ailis-companion-chat-service.js`
 - `src/humanclaw-chat-service.js`
 
 当前路径：
@@ -74,7 +74,7 @@ ASR 快速出字工程
 3. `AnalyserNode` 每 120ms 判断声音和人声分数
 4. 静音超过阈值后 `stopVoiceInput()`
 5. `transcribeAudioBlob()` 把完整录音转成 16k WAV
-6. `window.aigrilDesktop.transcribeAudio()` 发 IPC
+6. `window.ailisDesktop.transcribeAudio()` 发 IPC
 7. `desktop_asr_worker.py` 对完整 WAV 跑 Whisper/SenseVoice
 
 最大问题：
@@ -87,11 +87,11 @@ ASR 快速出字工程
 
 ### 3.1 TTS 目标
 
-让 AIGril 在 assistant 回复还没完整生成时就开始说第一段。
+让 AILIS 在 assistant 回复还没完整生成时就开始说第一段。
 
 优先目标：
 
-- 不换 TTS provider，先复用 `window.aigrilDesktop.tts.synthesize()`
+- 不换 TTS provider，先复用 `window.ailisDesktop.tts.synthesize()`
 - 不要求 provider 真 streaming，先做 chunked TTS
 - 每个 chunk 仍是一次普通 TTS 请求
 - 多个 chunk 并发合成，但按原文顺序播放
@@ -149,7 +149,7 @@ src/realtime-voice/tts-playback-queue.js
 
 ### 4.2 直接接入点
 
-第一处：`src/aigril-companion-chat-service.js`
+第一处：`src/ailis-companion-chat-service.js`
 
 当前 `readTextStream(response, onChunk)` 只给累计文本：
 
@@ -238,7 +238,7 @@ playback queue waits for chunk 0
 不要先重写 CosyVoice3/Kokoro worker。第一版直接复用：
 
 ```js
-window.aigrilDesktop.tts.synthesize({
+window.ailisDesktop.tts.synthesize({
   provider: 'cosyvoice3',
   preset: 'anime_shy_soft',
   text: chunkText,
@@ -249,7 +249,7 @@ window.aigrilDesktop.tts.synthesize({
 以及：
 
 ```js
-window.aigrilDesktop.tts.synthesize({
+window.ailisDesktop.tts.synthesize({
   provider: 'kokoro',
   voice: 'zf_003',
   text: chunkText,
@@ -338,7 +338,7 @@ speech-start
 
 注意两点：
 
-- TTS 播放时先暂停 listening，避免转写 AIGril 自己的声音。
+- TTS 播放时先暂停 listening，避免转写 AILIS 自己的声音。
 - 以后支持 barge-in 时，只在检测到足够强的人声时停止 TTS。
 
 ### 5.3 ASR worker 加速
@@ -442,7 +442,7 @@ user interrupt -> TTS cancel + optional agent abort
 
 改动文件：
 
-- `src/aigril-companion-chat-service.js`
+- `src/ailis-companion-chat-service.js`
 - `src/chat-tts-system.js`
 - `src/speech-provider.js`
 - `src/tts-audio-player.js`

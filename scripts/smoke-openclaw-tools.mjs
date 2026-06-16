@@ -70,7 +70,7 @@ function summarizeEvidence(value, maxChars = 420) {
 
 function createTimeoutError(ms) {
     const error = new Error(`timeout after ${ms}ms`);
-    error.code = 'AIGRIL_TOOL_SMOKE_TIMEOUT';
+    error.code = 'AILIS_TOOL_SMOKE_TIMEOUT';
     return error;
 }
 
@@ -107,7 +107,7 @@ function statusFromError(error) {
     if (/pairing required/i.test(message)) {
         return 'needs_pairing';
     }
-    if (error?.code === 'AIGRIL_TOOL_SMOKE_TIMEOUT') {
+    if (error?.code === 'AILIS_TOOL_SMOKE_TIMEOUT') {
         return 'fail';
     }
     return 'fail';
@@ -276,7 +276,7 @@ async function listMcpTools() {
         stderr += String(chunk);
     });
 
-    const client = new Client({ name: 'aigril-openclaw-smoke', version: '0.1.0' });
+    const client = new Client({ name: 'ailis-openclaw-smoke', version: '0.1.0' });
     try {
         await client.connect(transport, { timeout: 15000 });
         const response = await client.listTools(undefined, { timeout: 15000 });
@@ -350,7 +350,7 @@ async function main() {
         try {
             const status = await supervisor.ensureReady();
             delete process.env.OPENCLAW_GATEWAY_URL;
-            delete process.env.AIGRIL_OPENCLAW_GATEWAY_URL;
+            delete process.env.AILIS_OPENCLAW_GATEWAY_URL;
             report.gateway = {
                 attempted: true,
                 ok: true,

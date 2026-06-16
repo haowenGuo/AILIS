@@ -63,21 +63,21 @@ const DEFAULT_SKILLS = Object.freeze({
         id: 'capability_manager',
         label: '能力安装与自修复 Skill',
         description: 'Capability registry, installer, skill authoring, rollback, and approved repair execution.',
-        when: '用户要求安装新能力、接入新的 MCP/Skill、修复工具链、或让 AIGL 自我迭代能力时。',
+        when: '用户要求安装新能力、接入新的 MCP/Skill、修复工具链、或让 AILIS 自我迭代能力时。',
         tools: Object.freeze(['capability_manager', 'tool_doctor', 'mcp_bridge'])
     }),
     self_debugger: Object.freeze({
         id: 'self_debugger',
         label: '自我排查 Skill',
-        description: 'Dedicated self-debug loop for AIGL bugs: open cases, collect evidence, diagnose, propose patches, validate, and apply through the repair executor.',
-        when: '用户反馈 AIGL 自身 bug、工具异常、Agent Loop 不稳定、能力退化，或明确要求 AIGL 自己检查并修复问题时。',
+        description: 'Dedicated self-debug loop for AILIS bugs: open cases, collect evidence, diagnose, propose patches, validate, and apply through the repair executor.',
+        when: '用户反馈 AILIS 自身 bug、工具异常、Agent Loop 不稳定、能力退化，或明确要求 AILIS 自己检查并修复问题时。',
         tools: Object.freeze(['self_debugger', 'capability_manager', 'tool_doctor'])
     }),
     self_evolution: Object.freeze({
         id: 'self_evolution',
         label: '自我进化 Skill',
         description: 'Conversation-driven self-evolution loop for preference learning, tool bottleneck analysis, capability acquisition proposals, and gated self-improvement.',
-        when: '用户要求 AIGRIL 优化自己、持续学习偏好、修复 Tool/MCP/Skill、拉取新能力、或改进前端/人物渲染体验时。',
+        when: '用户要求 AILIS 优化自己、持续学习偏好、修复 Tool/MCP/Skill、拉取新能力、或改进前端/人物渲染体验时。',
         tools: Object.freeze(['self_evolution', 'self_debugger', 'capability_manager', 'tool_doctor'])
     })
 });

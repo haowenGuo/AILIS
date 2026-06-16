@@ -1,10 +1,10 @@
 # 从 0 到 1 手搓一个小型 OpenClaw 参考
 
-本文基于 `openclaw/openclaw` 上游源码做结构拆解，并给出一个适合当前 HumanClaw / AIGril 桌宠项目的“小型 OpenClaw”实现路线。
+本文基于 `openclaw/openclaw` 上游源码做结构拆解，并给出一个适合当前 HumanClaw / AILIS 桌宠项目的“小型 OpenClaw”实现路线。
 
 参考源码已下载到：
 
-- `F:\AIGril\AIGrilClaw\.refs\openclaw-main`
+- `F:\AILIS\AILISClaw\.refs\openclaw-main`
 - 上游仓库：<https://github.com/openclaw/openclaw>
 - 本次参考版本：`package.json` 显示 `2026.5.21`
 
@@ -319,12 +319,12 @@ MiniClaw 的安全底线可以更简单，但不要省掉这 5 个点：
 
 当前项目已经有 OpenClaw 桥接雏形，重点文件：
 
-- `F:\AIGril\electron\openclaw-runtime.cjs`
-- `F:\AIGril\electron\main.cjs`
-- `F:\AIGril\electron\preload.cjs`
-- `F:\AIGril\src\openclaw-chat-service.js`
-- `F:\AIGril\src\control-panel-app.js`
-- `F:\AIGril\src\chat-service.js`
+- `F:\AILIS\electron\openclaw-runtime.cjs`
+- `F:\AILIS\electron\main.cjs`
+- `F:\AILIS\electron\preload.cjs`
+- `F:\AILIS\src\openclaw-chat-service.js`
+- `F:\AILIS\src\control-panel-app.js`
+- `F:\AILIS\src\chat-service.js`
 
 已有链路：
 
@@ -339,7 +339,7 @@ electron/main.cjs
   -> IPC: assistant-status/history/send-message/abort-run/list-sessions
 
 preload.cjs
-  -> window.aigrilDesktop.assistant.*
+  -> window.ailisDesktop.assistant.*
 
 renderer
   -> OpenClawDesktopChatService
@@ -355,7 +355,7 @@ renderer
 建议先放在一个独立目录，避免污染桌宠已有代码：
 
 ```text
-F:\AIGril\src\mini-openclaw\
+F:\AILIS\src\mini-openclaw\
   gateway\
     server.js
     protocol.js
@@ -379,9 +379,9 @@ F:\AIGril\src\mini-openclaw\
 第二阶段再接进 Electron：
 
 ```text
-F:\AIGril\electron\mini-openclaw-runtime.cjs
-F:\AIGril\electron\main.cjs
-F:\AIGril\src\openclaw-chat-service.js
+F:\AILIS\electron\mini-openclaw-runtime.cjs
+F:\AILIS\electron\main.cjs
+F:\AILIS\src\openclaw-chat-service.js
 ```
 
 ## MVP RPC 清单
@@ -394,7 +394,7 @@ F:\AIGril\src\openclaw-chat-service.js
 
 ```json
 {
-  "client": { "id": "aigril-desktop", "mode": "backend", "version": "dev" },
+  "client": { "id": "ailis-desktop", "mode": "backend", "version": "dev" },
   "role": "operator",
   "scopes": ["operator.read", "operator.write"]
 }
@@ -523,7 +523,7 @@ final：
 
 - `mini-openclaw` 独立目录。
 - 一个可执行 CLI。
-- 一个本地状态目录，例如 `F:\AIGril\tmp\mini-openclaw-home`。
+- 一个本地状态目录，例如 `F:\AILIS\tmp\mini-openclaw-home`。
 
 验收：
 
@@ -724,7 +724,7 @@ sequenceDiagram
   LLM-->>Agent: delta text
   Agent-->>GW: chat delta
   GW-->>Main: event chat delta
-  Main-->>UI: aigril:assistant-event
+  Main-->>UI: ailis:assistant-event
   Agent->>GW: append assistant + chat final
   GW-->>Main: event chat final
   Main-->>UI: final payload
@@ -777,8 +777,8 @@ sequenceDiagram
 源码证据：
 
 - `@modelcontextprotocol/sdk` 直接出现在上游依赖里。
-- [mcp-transport.ts](/F:/AIGril/AIGrilClaw/.refs/openclaw-main/src/agents/mcp-transport.ts:1) 明确支持 `stdio`、`sse`、`streamable-http`。
-- [mcp-http.handlers.ts](/F:/AIGril/AIGrilClaw/.refs/openclaw-main/src/gateway/mcp-http.handlers.ts:1) 直接实现 `initialize`、`tools/list`、`tools/call`。
+- [mcp-transport.ts](/F:/AILIS/AILISClaw/.refs/openclaw-main/src/agents/mcp-transport.ts:1) 明确支持 `stdio`、`sse`、`streamable-http`。
+- [mcp-http.handlers.ts](/F:/AILIS/AILISClaw/.refs/openclaw-main/src/gateway/mcp-http.handlers.ts:1) 直接实现 `initialize`、`tools/list`、`tools/call`。
 
 对应生态：
 
@@ -822,7 +822,7 @@ sequenceDiagram
 
 源码证据：
 
-- [pi-bundle-lsp-runtime.ts](/F:/AIGril/AIGrilClaw/.refs/openclaw-main/src/agents/pi-bundle-lsp-runtime.ts:1) 里直接写了 “Minimal LSP JSON-RPC framing over stdio”。
+- [pi-bundle-lsp-runtime.ts](/F:/AILIS/AILISClaw/.refs/openclaw-main/src/agents/pi-bundle-lsp-runtime.ts:1) 里直接写了 “Minimal LSP JSON-RPC framing over stdio”。
 - 同文件里实现了 `Content-Length` framing、`initialize`、`shutdown`、`$/cancelRequest` 这一类标准 LSP/JSON-RPC 行为。
 
 对应生态：
@@ -838,8 +838,8 @@ sequenceDiagram
 源码证据：
 
 - 上游依赖和浏览器插件依赖里有 `playwright-core`。
-- [extensions/browser/package.json](/F:/AIGril/AIGrilClaw/.refs/openclaw-main/extensions/browser/package.json:1) 直接依赖 `playwright-core`。
-- [browser-cdp.ts](/F:/AIGril/AIGrilClaw/.refs/openclaw-main/src/plugin-sdk/browser-cdp.ts:1) 说明它也接了 CDP URL 这一层。
+- [extensions/browser/package.json](/F:/AILIS/AILISClaw/.refs/openclaw-main/extensions/browser/package.json:1) 直接依赖 `playwright-core`。
+- [browser-cdp.ts](/F:/AILIS/AILISClaw/.refs/openclaw-main/src/plugin-sdk/browser-cdp.ts:1) 说明它也接了 CDP URL 这一层。
 
 对应生态：
 
@@ -853,7 +853,7 @@ sequenceDiagram
 
 源码证据：
 
-- [gmail-watcher.ts](/F:/AIGril/AIGrilClaw/.refs/openclaw-main/src/hooks/gmail-watcher.ts:1) 会启动 `gog gmail watch serve`。
+- [gmail-watcher.ts](/F:/AILIS/AILISClaw/.refs/openclaw-main/src/hooks/gmail-watcher.ts:1) 会启动 `gog gmail watch serve`。
 - 代码注释已经写明：这是在 Gateway 启动时自动起 Gmail watcher。
 
 对应生态：
@@ -875,8 +875,8 @@ sequenceDiagram
 源码证据：
 
 - `wizard` 文案和 channel runtime 里已经能看到 `telegram`、`line`、`google chat`、`synology chat`、`imessage-webhook` 这些渠道痕迹。
-- [server-channels.ts](/F:/AIGril/AIGrilClaw/.refs/openclaw-main/src/gateway/server-channels.ts:1) 是统一的 channel 生命周期管理器。
-- [webhook-request-guards.ts](/F:/AIGril/AIGrilClaw/.refs/openclaw-main/src/plugin-sdk/webhook-request-guards.ts:1) 是统一 webhook 防护层。
+- [server-channels.ts](/F:/AILIS/AILISClaw/.refs/openclaw-main/src/gateway/server-channels.ts:1) 是统一的 channel 生命周期管理器。
+- [webhook-request-guards.ts](/F:/AILIS/AILISClaw/.refs/openclaw-main/src/plugin-sdk/webhook-request-guards.ts:1) 是统一 webhook 防护层。
 
 对应生态：
 
@@ -897,7 +897,7 @@ OpenClaw 自己做的不是“聊天协议本身”，而是：
 源码证据：
 
 - 上游 lockfile 里有 `standardwebhooks`。
-- [webhook-request-guards.ts](/F:/AIGril/AIGrilClaw/.refs/openclaw-main/src/plugin-sdk/webhook-request-guards.ts:1) 实现了方法限制、Content-Type 限制、限流、并发 in-flight 限制、body size limit。
+- [webhook-request-guards.ts](/F:/AILIS/AILISClaw/.refs/openclaw-main/src/plugin-sdk/webhook-request-guards.ts:1) 实现了方法限制、Content-Type 限制、限流、并发 in-flight 限制、body size limit。
 
 对应生态：
 

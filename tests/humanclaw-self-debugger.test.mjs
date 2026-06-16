@@ -39,7 +39,7 @@ test('Self Debugger opens a case, collects evidence, validates a repair, and app
         await runtime.startRun({
             runId: 'self-debug-run',
             sessionId: 'debug-session',
-            message: 'AIGL 读文件时返回旧行为',
+            message: 'AILIS 读文件时返回旧行为',
             planner: 'test'
         });
         await runtime.appendItem('self-debug-run', {
@@ -54,7 +54,7 @@ test('Self Debugger opens a case, collects evidence, validates a repair, and app
 
         const opened = await runtime.executeTool('self_debugger', {
             action: 'open_case',
-            bugReport: 'AIGL 读文件时返回旧行为，需要自我排查',
+            bugReport: 'AILIS 读文件时返回旧行为，需要自我排查',
             affectedCapability: 'code',
             recentRunId: 'self-debug-run',
             sourceHints: ['buggy.txt']

@@ -539,7 +539,7 @@ class HumanClawToolDoctor {
                 },
                 {
                     id: 'humanlike_longitudinal_smoke',
-                    command: 'pnpm eval:aigl-humanlike:longitudinal-agent:smoke',
+                    command: 'pnpm eval:ailis-humanlike:longitudinal-agent:smoke',
                     purpose: 'Spot-check user-facing persona, low tool-feel, memory quality, and task progress.'
                 }
             );

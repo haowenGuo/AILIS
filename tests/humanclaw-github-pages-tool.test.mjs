@@ -25,15 +25,15 @@ async function runGit(cwd, args) {
 }
 
 test('GitHub Pages tool parses common GitHub remotes', () => {
-    assert.deepEqual(parseGitHubRemote('git@github.com:haowenGuo/AIGL-Assistant.git'), {
+    assert.deepEqual(parseGitHubRemote('git@github.com:haowenGuo/AILIS-Assistant.git'), {
         owner: 'haowenGuo',
-        repo: 'AIGL-Assistant',
-        remoteUrl: 'git@github.com:haowenGuo/AIGL-Assistant.git'
+        repo: 'AILIS-Assistant',
+        remoteUrl: 'git@github.com:haowenGuo/AILIS-Assistant.git'
     });
-    assert.deepEqual(parseGitHubRemote('https://github.com/haowenGuo/AIGL-Assistant.git'), {
+    assert.deepEqual(parseGitHubRemote('https://github.com/haowenGuo/AILIS-Assistant.git'), {
         owner: 'haowenGuo',
-        repo: 'AIGL-Assistant',
-        remoteUrl: 'https://github.com/haowenGuo/AIGL-Assistant.git'
+        repo: 'AILIS-Assistant',
+        remoteUrl: 'https://github.com/haowenGuo/AILIS-Assistant.git'
     });
 });
 
@@ -46,7 +46,7 @@ test('GitHub Pages tool reports dist publish blockers without treating diagnosti
     await runGit(workspaceRoot, ['init']);
     await runGit(workspaceRoot, ['remote', 'add', 'origin', 'https://github.com/example/demo.git']);
     await fs.mkdir(path.join(workspaceRoot, '.github', 'workflows'), { recursive: true });
-    await fs.writeFile(path.join(workspaceRoot, 'about-aigl.html'), '<h1>AIGL</h1>\n');
+    await fs.writeFile(path.join(workspaceRoot, 'about-ailis.html'), '<h1>AILIS</h1>\n');
     await fs.writeFile(path.join(workspaceRoot, '.github', 'workflows', 'deploy-pages.yml'), [
         'name: Deploy Pages',
         'on: push',
@@ -61,7 +61,7 @@ test('GitHub Pages tool reports dist publish blockers without treating diagnosti
     ].join('\n'));
 
     const result = await executeGitHubPagesTool(
-        { action: 'diagnose_publish', targetPath: 'about-aigl.html', skipNetwork: true },
+        { action: 'diagnose_publish', targetPath: 'about-ailis.html', skipNetwork: true },
         {},
         { workspaceDir: workspaceRoot, workspaceRoot }
     );

@@ -60,7 +60,7 @@ function shellScriptCommand(script, args = []) {
     return {
         supported: true,
         command: '/bin/sh',
-        args: ['-lc', script, 'aigl-platform-adapter', ...args.map((entry) => String(entry))]
+        args: ['-lc', script, 'ailis-platform-adapter', ...args.map((entry) => String(entry))]
     };
 }
 
@@ -380,7 +380,7 @@ class HumanClawPlatformAdapter {
                 supported: false,
                 reason: this.isIOSSimulator()
                     ? 'iOS Simulator does not expose a general-purpose POSIX shell through the adapter. Use screenshot/clipboard/Appium-XCUITest style actions instead.'
-                    : 'Real iOS devices do not expose a general-purpose shell through AIGL. Use XCUITest/Appium/WebDriverAgent-backed actions after pairing/provisioning.'
+                    : 'Real iOS devices do not expose a general-purpose shell through AILIS. Use XCUITest/Appium/WebDriverAgent-backed actions after pairing/provisioning.'
             };
         }
         if (argList.length) {
@@ -499,7 +499,7 @@ class HumanClawPlatformAdapter {
 
     desktopScreenshotCommand({ outputPath } = {}) {
         if (this.isAndroid()) {
-            const remotePath = `/sdcard/aigl-screen-${Date.now()}-${Math.random().toString(16).slice(2)}.png`;
+            const remotePath = `/sdcard/ailis-screen-${Date.now()}-${Math.random().toString(16).slice(2)}.png`;
             const adb = this.androidAdbExecutable();
             return {
                 supported: true,
@@ -825,14 +825,14 @@ Set-Clipboard -Value $text
 Add-Type @"
 using System;
 using System.Runtime.InteropServices;
-public class AiglWinInput {
+public class AilisWinInput {
     [DllImport("user32.dll")] public static extern bool SetCursorPos(int X, int Y);
     [DllImport("user32.dll")] public static extern void mouse_event(uint flags, uint dx, uint dy, int data, UIntPtr extra);
 }
 "@
-function MoveTo([int]$mx, [int]$my) { [AiglWinInput]::SetCursorPos($mx, $my) | Out-Null }
-function LeftClick() { [AiglWinInput]::mouse_event(0x0002,0,0,0,[UIntPtr]::Zero); Start-Sleep -Milliseconds 30; [AiglWinInput]::mouse_event(0x0004,0,0,0,[UIntPtr]::Zero) }
-function RightClick() { [AiglWinInput]::mouse_event(0x0008,0,0,0,[UIntPtr]::Zero); Start-Sleep -Milliseconds 30; [AiglWinInput]::mouse_event(0x0010,0,0,0,[UIntPtr]::Zero) }
+function MoveTo([int]$mx, [int]$my) { [AilisWinInput]::SetCursorPos($mx, $my) | Out-Null }
+function LeftClick() { [AilisWinInput]::mouse_event(0x0002,0,0,0,[UIntPtr]::Zero); Start-Sleep -Milliseconds 30; [AilisWinInput]::mouse_event(0x0004,0,0,0,[UIntPtr]::Zero) }
+function RightClick() { [AilisWinInput]::mouse_event(0x0008,0,0,0,[UIntPtr]::Zero); Start-Sleep -Milliseconds 30; [AilisWinInput]::mouse_event(0x0010,0,0,0,[UIntPtr]::Zero) }
         `.trim();
         let body = '';
         if (['mouse_move', 'move_mouse'].includes(action)) {
@@ -846,7 +846,7 @@ function RightClick() { [AiglWinInput]::mouse_event(0x0008,0,0,0,[UIntPtr]::Zero
         } else if (['mouse_drag', 'drag'].includes(action)) {
             body = `${mouseScript}
 MoveTo ${x} ${y}
-[AiglWinInput]::mouse_event(0x0002,0,0,0,[UIntPtr]::Zero)
+[AilisWinInput]::mouse_event(0x0002,0,0,0,[UIntPtr]::Zero)
 $steps = [Math]::Max(1, [Math]::Min(40, [Math]::Round(${durationMs} / 30)))
 for ($i = 1; $i -le $steps; $i++) {
     $nx = [Math]::Round(${x} + ((${endX} - ${x}) * $i / $steps))
@@ -854,9 +854,9 @@ for ($i = 1; $i -le $steps; $i++) {
     MoveTo $nx $ny
     Start-Sleep -Milliseconds ([Math]::Max(1, [Math]::Round(${durationMs} / $steps)))
 }
-[AiglWinInput]::mouse_event(0x0004,0,0,0,[UIntPtr]::Zero)`;
+[AilisWinInput]::mouse_event(0x0004,0,0,0,[UIntPtr]::Zero)`;
         } else if (['scroll', 'mouse_scroll'].includes(action)) {
-            body = `${mouseScript}\nMoveTo ${x} ${y}\n[AiglWinInput]::mouse_event(0x0800,0,0,${delta},[UIntPtr]::Zero)`;
+            body = `${mouseScript}\nMoveTo ${x} ${y}\n[AilisWinInput]::mouse_event(0x0800,0,0,${delta},[UIntPtr]::Zero)`;
         } else if (['keyboard_type', 'type_text', 'type'].includes(action)) {
             body = `
 Add-Type -AssemblyName System.Windows.Forms

@@ -1,7 +1,7 @@
 ---
 id: vision
 label: 视觉感知 Skill
-description: AIGL read-only visual perception for screen, chat-window, active-window, and region screenshots.
+description: AILIS read-only visual perception for screen, chat-window, active-window, and region screenshots.
 when: 用户在问屏幕、当前窗口、截图、报错、页面状态，或仅靠文本不足以判断时。
 tools:
   - vision.capture_context
@@ -12,7 +12,7 @@ triggers:
 ---
 # Vision Skill
 
-这是 AIGL 的只读视觉感知层，不是屏幕操作 Agent。
+这是 AILIS 的只读视觉感知层，不是屏幕操作 Agent。
 
 边界：
 - 可以截图并理解当前聊天窗口、全屏、活动窗口、框选区域。

@@ -7,7 +7,7 @@ import {
 import { markdownToPlainText, setMarkdownContent, setPlainTextContent } from './markdown-renderer.js';
 import { AVATAR_SPEECH_EVENT_NAME } from './avatar-dialogue-bubble.js';
 
-const CHAT_UI_EVENT_NAME = 'aigril-chat-ui-event';
+const CHAT_UI_EVENT_NAME = 'ailis-chat-ui-event';
 
 function normalizeVisionAttachments(attachments = []) {
     if (!Array.isArray(attachments)) {
@@ -103,7 +103,7 @@ export class ChatTTSSystem {
 
         window.addEventListener('modelLoaded', () => {
             const welcomeMessage = this.chatService?.getWelcomeMessage?.() ||
-                'AIGL到啦！现在可以聊天啦~';
+                'AILIS到啦！现在可以聊天啦~';
             this.addSystemMessage(welcomeMessage);
             this.inputEl.disabled = false;
             this.sendBtnEl.disabled = false;
@@ -244,9 +244,9 @@ export class ChatTTSSystem {
         return {
             id: this.ensureMessageIdentity(element, role),
             role,
-            content: element.__aigrilMessageContent ?? element.textContent ?? '',
+            content: element.__ailisMessageContent ?? element.textContent ?? '',
             contentFormat: element.dataset.contentFormat || 'markdown',
-            attachments: element.__aigrilAttachments || [],
+            attachments: element.__ailisAttachments || [],
             pending: role === 'loading'
         };
     }
@@ -308,7 +308,7 @@ export class ChatTTSSystem {
                 this.emitAvatarSpeechEvent({
                     phase: 'start',
                     id: aiMessageDiv?.dataset?.messageId || '',
-                    text: item?.text || aiMessageDiv?.__aigrilMessageContent || ''
+                    text: item?.text || aiMessageDiv?.__ailisMessageContent || ''
                 });
             },
             onPlaybackEnd: () => {
@@ -431,7 +431,7 @@ export class ChatTTSSystem {
 
     clearConversation() {
         if (this.isBusy) {
-            this.addSystemMessage('AIGL 正在执行当前请求，完成后再清空会话。');
+            this.addSystemMessage('AILIS 正在执行当前请求，完成后再清空会话。');
             return false;
         }
         this.messageHistory = [];
@@ -470,7 +470,7 @@ export class ChatTTSSystem {
             return;
         }
 
-        console.log('✨ AIGL 尝试主动发起对话...');
+        console.log('✨ AILIS 尝试主动发起对话...');
         this.setBusy(true);
         const turn = this.createTurnState('auto');
         const aiMessageDiv = this.createAIMessage();
@@ -902,7 +902,7 @@ export class ChatTTSSystem {
         div.dataset.actionCue = '';
         div.dataset.expressionCue = '';
         div.dataset.contentFormat = 'markdown';
-        div.__aigrilMessageContent = '';
+        div.__ailisMessageContent = '';
         this.messageListEl.appendChild(div);
         this.notifyMessageAdded(div, 'assistant');
         this.scrollToBottom();
@@ -912,8 +912,8 @@ export class ChatTTSSystem {
     addUserMessage(content, attachments = []) {
         const div = document.createElement('div');
         div.className = 'message-item message-user';
-        div.__aigrilAttachments = normalizeChatAttachments(attachments);
-        this.renderMessageContent(div, buildAttachmentHint(content, div.__aigrilAttachments), 'markdown');
+        div.__ailisAttachments = normalizeChatAttachments(attachments);
+        this.renderMessageContent(div, buildAttachmentHint(content, div.__ailisAttachments), 'markdown');
         this.messageListEl.appendChild(div);
         this.notifyMessageAdded(div, 'user');
         this.scrollToBottom();
@@ -931,7 +931,7 @@ export class ChatTTSSystem {
     addLoadingMessage() {
         const div = document.createElement('div');
         div.className = 'message-loading';
-        this.renderMessageContent(div, 'AIGL正在思考...', 'text');
+        this.renderMessageContent(div, 'AILIS正在思考...', 'text');
         this.messageListEl.appendChild(div);
         this.notifyMessageAdded(div, 'loading');
         this.scrollToBottom();

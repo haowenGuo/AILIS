@@ -36,7 +36,7 @@ rl.on('line', (line) => {
     return;
   }
   if (request.method === 'tools/call') {
-    send({ id: request.id, result: { content: [{ type: 'text', text: 'hello:' + (request.params?.arguments?.name || 'AIGL') }] } });
+    send({ id: request.id, result: { content: [{ type: 'text', text: 'hello:' + (request.params?.arguments?.name || 'AILIS') }] } });
     return;
   }
   send({ id: request.id, error: { code: -32601, message: 'unknown method' } });

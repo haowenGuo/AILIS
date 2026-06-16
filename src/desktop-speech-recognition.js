@@ -8,7 +8,7 @@ const RECORDING_MIME_TYPES = [
 ];
 
 function isDesktopRuntime() {
-    return window.aigrilDesktop?.platform === 'electron';
+    return window.ailisDesktop?.platform === 'electron';
 }
 
 function getRecordingMimeType() {
@@ -136,7 +136,7 @@ function encodePcmAsWav(samples, sampleRate) {
 export function createDesktopSpeechRecognitionService() {
     const supportsRecognition = Boolean(
         isDesktopRuntime() &&
-        window.aigrilDesktop?.transcribeAudio &&
+        window.ailisDesktop?.transcribeAudio &&
         navigator.mediaDevices?.getUserMedia &&
         typeof MediaRecorder !== 'undefined' &&
         typeof AudioContext !== 'undefined'
@@ -386,7 +386,7 @@ export function createDesktopSpeechRecognitionService() {
             const wavBytes = new Uint8Array(await wavBlob.arrayBuffer());
             const encodedAt = nowMs();
             const preset = String(options?.preset || 'balanced').trim().toLowerCase() || 'balanced';
-            const result = await window.aigrilDesktop.transcribeAudio({
+            const result = await window.ailisDesktop.transcribeAudio({
                 audioBytes: wavBytes,
                 preset
             });

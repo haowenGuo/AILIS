@@ -51,10 +51,10 @@
 
 最关键的来源是：
 
-- [tool-catalog.ts](/F:/AIGril/AIGrilClaw/.refs/openclaw-main/src/agents/tool-catalog.ts:1)
-- [pi-tools.ts](/F:/AIGril/AIGrilClaw/.refs/openclaw-main/src/agents/pi-tools.ts:620)
-- [openclaw-tools.ts](/F:/AIGril/AIGrilClaw/.refs/openclaw-main/src/agents/openclaw-tools.ts:1)
-- [tool-policy-pipeline.ts](/F:/AIGril/AIGrilClaw/.refs/openclaw-main/src/agents/tool-policy-pipeline.ts:1)
+- [tool-catalog.ts](/F:/AILIS/AILISClaw/.refs/openclaw-main/src/agents/tool-catalog.ts:1)
+- [pi-tools.ts](/F:/AILIS/AILISClaw/.refs/openclaw-main/src/agents/pi-tools.ts:620)
+- [openclaw-tools.ts](/F:/AILIS/AILISClaw/.refs/openclaw-main/src/agents/openclaw-tools.ts:1)
+- [tool-policy-pipeline.ts](/F:/AILIS/AILISClaw/.refs/openclaw-main/src/agents/tool-policy-pipeline.ts:1)
 
 OpenClaw 不是一个“工具注册表 + 一堆散工具”这么简单，它是分层装配的：
 
@@ -81,7 +81,7 @@ base coding tools
 
 ### 1. 文件与运行时
 
-来自 [tool-catalog.ts](/F:/AIGril/AIGrilClaw/.refs/openclaw-main/src/agents/tool-catalog.ts:55)：
+来自 [tool-catalog.ts](/F:/AILIS/AILISClaw/.refs/openclaw-main/src/agents/tool-catalog.ts:55)：
 
 - `read`
 - `write`
@@ -114,7 +114,7 @@ base coding tools
 
 ### 2. Web 与搜索
 
-来自 [tool-catalog.ts](/F:/AIGril/AIGrilClaw/.refs/openclaw-main/src/agents/tool-catalog.ts:104) 和 [web-search.ts](/F:/AIGril/AIGrilClaw/.refs/openclaw-main/src/agents/tools/web-search.ts:1)：
+来自 [tool-catalog.ts](/F:/AILIS/AILISClaw/.refs/openclaw-main/src/agents/tool-catalog.ts:104) 和 [web-search.ts](/F:/AILIS/AILISClaw/.refs/openclaw-main/src/agents/tools/web-search.ts:1)：
 
 - `web_search`
 - `web_fetch`
@@ -134,15 +134,15 @@ OpenClaw 的命名更适合作为 agent 的通用工具语义。
 
 ### 3. 会话与子 Agent
 
-来自 [openclaw-tools.ts](/F:/AIGril/AIGrilClaw/.refs/openclaw-main/src/agents/openclaw-tools.ts:320) 和这些具体文件：
+来自 [openclaw-tools.ts](/F:/AILIS/AILISClaw/.refs/openclaw-main/src/agents/openclaw-tools.ts:320) 和这些具体文件：
 
-- [sessions-list-tool.ts](/F:/AIGril/AIGrilClaw/.refs/openclaw-main/src/agents/tools/sessions-list-tool.ts:73)
-- [sessions-history-tool.ts](/F:/AIGril/AIGrilClaw/.refs/openclaw-main/src/agents/tools/sessions-history-tool.ts:188)
-- [sessions-send-tool.ts](/F:/AIGril/AIGrilClaw/.refs/openclaw-main/src/agents/tools/sessions-send-tool.ts:193)
-- [sessions-spawn-tool.ts](/F:/AIGril/AIGrilClaw/.refs/openclaw-main/src/agents/tools/sessions-spawn-tool.ts:269)
-- [sessions-yield-tool.ts](/F:/AIGril/AIGrilClaw/.refs/openclaw-main/src/agents/tools/sessions-yield-tool.ts:15)
-- [subagents-tool.ts](/F:/AIGril/AIGrilClaw/.refs/openclaw-main/src/agents/tools/subagents-tool.ts:36)
-- [session-status-tool.ts](/F:/AIGril/AIGrilClaw/.refs/openclaw-main/src/agents/tools/session-status-tool.ts:336)
+- [sessions-list-tool.ts](/F:/AILIS/AILISClaw/.refs/openclaw-main/src/agents/tools/sessions-list-tool.ts:73)
+- [sessions-history-tool.ts](/F:/AILIS/AILISClaw/.refs/openclaw-main/src/agents/tools/sessions-history-tool.ts:188)
+- [sessions-send-tool.ts](/F:/AILIS/AILISClaw/.refs/openclaw-main/src/agents/tools/sessions-send-tool.ts:193)
+- [sessions-spawn-tool.ts](/F:/AILIS/AILISClaw/.refs/openclaw-main/src/agents/tools/sessions-spawn-tool.ts:269)
+- [sessions-yield-tool.ts](/F:/AILIS/AILISClaw/.refs/openclaw-main/src/agents/tools/sessions-yield-tool.ts:15)
+- [subagents-tool.ts](/F:/AILIS/AILISClaw/.refs/openclaw-main/src/agents/tools/subagents-tool.ts:36)
+- [session-status-tool.ts](/F:/AILIS/AILISClaw/.refs/openclaw-main/src/agents/tools/session-status-tool.ts:336)
 
 核心工具：
 
@@ -169,12 +169,12 @@ OpenClaw 的命名更适合作为 agent 的通用工具语义。
 
 对应来源：
 
-- [message-tool.ts](/F:/AIGril/AIGrilClaw/.refs/openclaw-main/src/agents/tools/message-tool.ts:945)
-- [cron-tool.ts](/F:/AIGril/AIGrilClaw/.refs/openclaw-main/src/agents/tools/cron-tool.ts:493)
-- [gateway-tool.ts](/F:/AIGril/AIGrilClaw/.refs/openclaw-main/src/agents/tools/gateway-tool.ts:371)
-- [heartbeat-response-tool.ts](/F:/AIGril/AIGrilClaw/.refs/openclaw-main/src/agents/tools/heartbeat-response-tool.ts:41)
-- [update-plan-tool.ts](/F:/AIGril/AIGrilClaw/.refs/openclaw-main/src/agents/tools/update-plan-tool.ts:79)
-- [agents-list-tool.ts](/F:/AIGril/AIGrilClaw/.refs/openclaw-main/src/agents/tools/agents-list-tool.ts:36)
+- [message-tool.ts](/F:/AILIS/AILISClaw/.refs/openclaw-main/src/agents/tools/message-tool.ts:945)
+- [cron-tool.ts](/F:/AILIS/AILISClaw/.refs/openclaw-main/src/agents/tools/cron-tool.ts:493)
+- [gateway-tool.ts](/F:/AILIS/AILISClaw/.refs/openclaw-main/src/agents/tools/gateway-tool.ts:371)
+- [heartbeat-response-tool.ts](/F:/AILIS/AILISClaw/.refs/openclaw-main/src/agents/tools/heartbeat-response-tool.ts:41)
+- [update-plan-tool.ts](/F:/AILIS/AILISClaw/.refs/openclaw-main/src/agents/tools/update-plan-tool.ts:79)
+- [agents-list-tool.ts](/F:/AILIS/AILISClaw/.refs/openclaw-main/src/agents/tools/agents-list-tool.ts:36)
 
 核心工具：
 
@@ -198,7 +198,7 @@ OpenClaw 的命名更适合作为 agent 的通用工具语义。
 
 来源：
 
-- [nodes-tool.ts](/F:/AIGril/AIGrilClaw/.refs/openclaw-main/src/agents/tools/nodes-tool.ts:137)
+- [nodes-tool.ts](/F:/AILIS/AILISClaw/.refs/openclaw-main/src/agents/tools/nodes-tool.ts:137)
 
 工具名：
 
@@ -240,12 +240,12 @@ OpenClaw 这里不是拆成十几个 `camera.snap / location.get / notifications
 
 来源：
 
-- [image-tool.ts](/F:/AIGril/AIGrilClaw/.refs/openclaw-main/src/agents/tools/image-tool.ts:508)
-- [image-generate-tool.ts](/F:/AIGril/AIGrilClaw/.refs/openclaw-main/src/agents/tools/image-generate-tool.ts:792)
-- [music-generate-tool.ts](/F:/AIGril/AIGrilClaw/.refs/openclaw-main/src/agents/tools/music-generate-tool.ts:599)
-- [video-generate-tool.ts](/F:/AIGril/AIGrilClaw/.refs/openclaw-main/src/agents/tools/video-generate-tool.ts:943)
-- [pdf-tool.ts](/F:/AIGril/AIGrilClaw/.refs/openclaw-main/src/agents/tools/pdf-tool.ts:323)
-- [tts-tool.ts](/F:/AIGril/AIGrilClaw/.refs/openclaw-main/src/agents/tools/tts-tool.ts:62)
+- [image-tool.ts](/F:/AILIS/AILISClaw/.refs/openclaw-main/src/agents/tools/image-tool.ts:508)
+- [image-generate-tool.ts](/F:/AILIS/AILISClaw/.refs/openclaw-main/src/agents/tools/image-generate-tool.ts:792)
+- [music-generate-tool.ts](/F:/AILIS/AILISClaw/.refs/openclaw-main/src/agents/tools/music-generate-tool.ts:599)
+- [video-generate-tool.ts](/F:/AILIS/AILISClaw/.refs/openclaw-main/src/agents/tools/video-generate-tool.ts:943)
+- [pdf-tool.ts](/F:/AILIS/AILISClaw/.refs/openclaw-main/src/agents/tools/pdf-tool.ts:323)
+- [tts-tool.ts](/F:/AILIS/AILISClaw/.refs/openclaw-main/src/agents/tools/tts-tool.ts:62)
 
 核心工具：
 
@@ -270,7 +270,7 @@ OpenClaw 这里不是拆成十几个 `camera.snap / location.get / notifications
 
 来源：
 
-- [tool-catalog.ts](/F:/AIGril/AIGrilClaw/.refs/openclaw-main/src/agents/tool-catalog.ts:321)
+- [tool-catalog.ts](/F:/AILIS/AILISClaw/.refs/openclaw-main/src/agents/tool-catalog.ts:321)
 
 它内建这些 profile：
 
@@ -315,7 +315,7 @@ type ToolProfileId = "minimal" | "coding" | "messaging" | "full";
 
 来源：
 
-- [pi-tools.ts](/F:/AIGril/AIGrilClaw/.refs/openclaw-main/src/agents/pi-tools.ts:634)
+- [pi-tools.ts](/F:/AILIS/AILISClaw/.refs/openclaw-main/src/agents/pi-tools.ts:634)
 
 OpenClaw 并不是永远把所有工具都做出来，而是先算 construction plan：
 
@@ -354,8 +354,8 @@ type ToolConstructionPlan = {
 
 来源：
 
-- [tool-policy-pipeline.ts](/F:/AIGril/AIGrilClaw/.refs/openclaw-main/src/agents/tool-policy-pipeline.ts:1)
-- [pi-tools.policy.ts](/F:/AIGril/AIGrilClaw/.refs/openclaw-main/src/agents/pi-tools.policy.ts:1)
+- [tool-policy-pipeline.ts](/F:/AILIS/AILISClaw/.refs/openclaw-main/src/agents/tool-policy-pipeline.ts:1)
+- [pi-tools.policy.ts](/F:/AILIS/AILISClaw/.refs/openclaw-main/src/agents/pi-tools.policy.ts:1)
 
 它的 policy 不是单层 allowlist，而是多层叠加：
 
@@ -489,7 +489,7 @@ OpenClaw 的 `nodes` 很适合电脑、手机、设备、外设、通知、摄�
 
 来源：
 
-- [channel-tools.ts](/F:/AIGril/AIGrilClaw/.refs/openclaw-main/src/mcp/channel-tools.ts:14)
+- [channel-tools.ts](/F:/AILIS/AILISClaw/.refs/openclaw-main/src/mcp/channel-tools.ts:14)
 
 它暴露了这批 MCP 工具：
 

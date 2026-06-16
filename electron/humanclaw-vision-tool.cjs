@@ -148,7 +148,7 @@ function buildVisionUnderstandingMessages({ snapshot, target, reason, question }
         {
             role: 'system',
             content: [
-                '你是 AIGL 的 VisionUnderstandingSkill，只负责根据截图做只读视觉理解。',
+                '你是 AILIS 的 VisionUnderstandingSkill，只负责根据截图做只读视觉理解。',
                 '你不能声称自己已经点击、输入、拖动或操作屏幕。',
                 '输出给上层 Agent 的 observation 要稳定、简洁、可复核。',
                 '必须区分：确定看到的内容、不确定或看不清的内容、给用户的下一步建议。',

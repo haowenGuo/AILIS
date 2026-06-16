@@ -28,6 +28,6 @@ triggers:
 - 诊断结果里的 `criticalBlockers` 是关键阻塞，`verificationEvidence` 是验收证据。向用户解释时用自然语言概括，不要把 JSON 原样甩出来。
 
 常用调用：
-- 发布链路诊断：`{"action":"diagnose_publish","targetPath":"about-aigl.html","skipNetwork":false}`
-- 只做本地/工作流检查：`{"action":"diagnose_publish","targetPath":"about-aigl.html","skipNetwork":true}`
-- 公开 URL 验收：`{"action":"verify_url","url":"https://owner.github.io/repo/about-aigl.html","expectedStatus":200}`
+- 发布链路诊断：`{"action":"diagnose_publish","targetPath":"about-ailis.html","skipNetwork":false}`
+- 只做本地/工作流检查：`{"action":"diagnose_publish","targetPath":"about-ailis.html","skipNetwork":true}`
+- 公开 URL 验收：`{"action":"verify_url","url":"https://owner.github.io/repo/about-ailis.html","expectedStatus":200}`

@@ -38,40 +38,40 @@
     }
   },
   {
-    "slug": "aigril-desktop-pet-v1",
+    "slug": "ailis-desktop-pet-v1",
     "published_at": "2026-04-18",
     "reading_time": "5 min",
     "featured": true,
     "tags": ["electron", "desktop-pet", "vrm", "voice"],
     "translations": {
       "zh": {
-        "title": "AIGril 桌宠版 V1：从网页虚拟人到常驻桌面",
-        "summary": "这一版把 AIGril 正式做成了一个可常驻桌面的桌宠形态，并补齐了右键控制、托盘、语音模式切换和本地语音识别的基础链路。",
-        "body_file": "posts/zh/aigril-desktop-pet-v1.md"
+        "title": "AILIS 桌宠版 V1：从网页虚拟人到常驻桌面",
+        "summary": "这一版把 AILIS 正式做成了一个可常驻桌面的桌宠形态，并补齐了右键控制、托盘、语音模式切换和本地语音识别的基础链路。",
+        "body_file": "posts/zh/ailis-desktop-pet-v1.md"
       },
       "en": {
-        "title": "AIGril Desktop Pet V1: From Web Avatar to Resident Companion",
-        "summary": "This iteration turns AIGril into a real desktop pet with a transparent always-on-top shell, tray and context controls, speech mode switching, and a first working pass of local speech recognition.",
-        "body_file": "posts/en/aigril-desktop-pet-v1.md"
+        "title": "AILIS Desktop Pet V1: From Web Avatar to Resident Companion",
+        "summary": "This iteration turns AILIS into a real desktop pet with a transparent always-on-top shell, tray and context controls, speech mode switching, and a first working pass of local speech recognition.",
+        "body_file": "posts/en/ailis-desktop-pet-v1.md"
       }
     }
   },
   {
-    "slug": "aigril-render-github-pages-deployment",
+    "slug": "ailis-render-github-pages-deployment",
     "published_at": "2026-04-22",
     "reading_time": "6 min",
     "featured": false,
     "tags": ["deployment", "render", "github-pages", "fastapi"],
     "translations": {
       "zh": {
-        "title": "AIGril 的上线方式：GitHub Pages 前端加 Render 后端",
-        "summary": "这篇文章记录 AIGril 如何从本地虚拟人项目变成可在线体验的前后端系统，并说明源码、体验地址和桌面包的整理方式。",
-        "body_file": "posts/zh/aigril-render-github-pages-deployment.md"
+        "title": "AILIS 的上线方式：GitHub Pages 前端加 Render 后端",
+        "summary": "这篇文章记录 AILIS 如何从本地虚拟人项目变成可在线体验的前后端系统，并说明源码、体验地址和桌面包的整理方式。",
+        "body_file": "posts/zh/ailis-render-github-pages-deployment.md"
       },
       "en": {
-        "title": "How AIGril Is Deployed: GitHub Pages for the Frontend and Render for the Backend",
-        "summary": "This post explains how AIGril moved from a local virtual-character project to a live frontend-backend system, including source code, live links, and desktop packaging notes.",
-        "body_file": "posts/en/aigril-render-github-pages-deployment.md"
+        "title": "How AILIS Is Deployed: GitHub Pages for the Frontend and Render for the Backend",
+        "summary": "This post explains how AILIS moved from a local virtual-character project to a live frontend-backend system, including source code, live links, and desktop packaging notes.",
+        "body_file": "posts/en/ailis-render-github-pages-deployment.md"
       }
     }
   },

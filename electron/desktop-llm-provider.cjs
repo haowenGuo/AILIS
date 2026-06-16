@@ -398,7 +398,7 @@ function normalizeJsonSchema(payload = {}) {
         return null;
     }
     return {
-        name: normalizeString(payload.jsonSchemaName || payload.schemaName || 'aigl_response'),
+        name: normalizeString(payload.jsonSchemaName || payload.schemaName || 'ailis_response'),
         strict: payload.strictJsonSchema !== false,
         schema
     };
@@ -440,7 +440,7 @@ function resolveResponsesTextFormat(payload = {}) {
             return {
                 format: {
                     type: 'json_schema',
-                    name: normalizeString(format.json_schema.name || 'aigl_response'),
+                    name: normalizeString(format.json_schema.name || 'ailis_response'),
                     schema: format.json_schema.schema || {},
                     strict: format.json_schema.strict !== false
                 }
@@ -1284,7 +1284,7 @@ function buildHealthJsonMessages() {
 
 function buildHealthToolSpec() {
     return {
-        name: 'aigl_health_echo',
+        name: 'ailis_health_echo',
         description: 'Echo a short health-check payload for tool-call verification.',
         parameters: {
             type: 'object',
@@ -1364,15 +1364,15 @@ async function checkDesktopLlmProvider(settings = {}, options = {}) {
             timeoutMs,
             temperature: 0,
             tools: [buildHealthToolSpec()],
-            toolChoice: { name: 'aigl_health_echo', required: true },
+            toolChoice: { name: 'ailis_health_echo', required: true },
             messages: [
                 { role: 'system', content: 'Use the provided tool for this health check.' },
-                { role: 'user', content: 'Call aigl_health_echo with {"ok":true,"kind":"tool"}.' }
+                { role: 'user', content: 'Call ailis_health_echo with {"ok":true,"kind":"tool"}.' }
             ]
         });
         result.checks.toolCalling.ok = Boolean(
             result.checks.toolCalling.ok &&
-                result.checks.toolCalling.toolCalls?.some((call) => call.name === 'aigl_health_echo')
+                result.checks.toolCalling.toolCalls?.some((call) => call.name === 'ailis_health_echo')
         );
     } else {
         result.checks.toolCalling = normalizeHealthCheck(false, {

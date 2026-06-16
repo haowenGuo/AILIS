@@ -5,7 +5,7 @@ const path = require('path');
 const { EventEmitter } = require('events');
 const { randomUUID } = require('crypto');
 const { pathToFileURL } = require('url');
-const { approxTokenCount } = require('./aigl-runtime-budget.cjs');
+const { approxTokenCount } = require('./ailis-runtime-budget.cjs');
 
 const {
     OPENCLAW_CORE_TOOL_DEFINITIONS,
@@ -24,7 +24,7 @@ const {
 const { createHumanClawPlatformAdapter } = require('./humanclaw-platform-adapter.cjs');
 const { HumanClawAgentRunner } = require('./humanclaw-agent-runner.cjs');
 const { HumanClawMemoryRuntime } = require('./humanclaw-memory-store.cjs');
-const { AiglSelfEvolutionRuntime } = require('./aigl-self-evolution-runtime.cjs');
+const { AilisSelfEvolutionRuntime } = require('./ailis-self-evolution-runtime.cjs');
 const {
     listToolContracts,
     validateToolContract
@@ -46,7 +46,7 @@ const {
 const {
     buildToolRoutingAdvice,
     rankToolSearchResults
-} = require('./aigl-tool-routing.cjs');
+} = require('./ailis-tool-routing.cjs');
 
 const PROJECT_ROOT = path.resolve(__dirname, '..');
 const DEFAULT_PORT = Number(process.env.HUMANCLAW_GATEWAY_PORT || 19777);
@@ -673,7 +673,7 @@ class HumanClawGateway extends EventEmitter {
             rootDir: path.join(this.auditDir, 'memory'),
             workspaceRoot: this.workspaceRoot
         });
-        this.selfEvolutionRuntime = options.selfEvolutionRuntime || new AiglSelfEvolutionRuntime({
+        this.selfEvolutionRuntime = options.selfEvolutionRuntime || new AilisSelfEvolutionRuntime({
             auditDir: this.auditDir,
             workspaceRoot: this.workspaceRoot,
             projectRoot: this.projectRoot,
@@ -2398,10 +2398,10 @@ class HumanClawGateway extends EventEmitter {
 
     async withDefaultOpenClawGatewayEnv(action) {
         const priorOpenClawGatewayUrl = process.env.OPENCLAW_GATEWAY_URL;
-        const priorAigrilOpenClawGatewayUrl = process.env.AIGRIL_OPENCLAW_GATEWAY_URL;
+        const priorAilisOpenClawGatewayUrl = process.env.AILIS_OPENCLAW_GATEWAY_URL;
         try {
             delete process.env.OPENCLAW_GATEWAY_URL;
-            delete process.env.AIGRIL_OPENCLAW_GATEWAY_URL;
+            delete process.env.AILIS_OPENCLAW_GATEWAY_URL;
             return await action();
         } finally {
             if (priorOpenClawGatewayUrl === undefined) {
@@ -2409,10 +2409,10 @@ class HumanClawGateway extends EventEmitter {
             } else {
                 process.env.OPENCLAW_GATEWAY_URL = priorOpenClawGatewayUrl;
             }
-            if (priorAigrilOpenClawGatewayUrl === undefined) {
-                delete process.env.AIGRIL_OPENCLAW_GATEWAY_URL;
+            if (priorAilisOpenClawGatewayUrl === undefined) {
+                delete process.env.AILIS_OPENCLAW_GATEWAY_URL;
             } else {
-                process.env.AIGRIL_OPENCLAW_GATEWAY_URL = priorAigrilOpenClawGatewayUrl;
+                process.env.AILIS_OPENCLAW_GATEWAY_URL = priorAilisOpenClawGatewayUrl;
             }
         }
     }

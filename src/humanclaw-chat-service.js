@@ -7,7 +7,7 @@ import {
     PROGRESS_MAX_FRAMES,
     createPersonaProgressFrame,
     renderPersonaProgressSurface
-} from './aigl-progress-surface.js';
+} from './ailis-progress-surface.js';
 
 const CONTROL_TAG_PATTERN = /\[(action|expression):([^\]]*)\]/g;
 const LEADING_INCOMPLETE_CONTROL_TAG_PATTERN = /^(?:\[(?:action|expression):[^\]]*)+/;
@@ -163,7 +163,7 @@ function sanitizeMessageHistoryForGateway(messageHistory = []) {
 
 function buildVisionSystemPrompt() {
     return [
-        '你是 AIGL 的视觉理解能力，负责看用户给出的屏幕或窗口截图。',
+        '你是 AILIS 的视觉理解能力，负责看用户给出的屏幕或窗口截图。',
         '你只能基于截图和用户文字做理解、解释、归纳和建议，不要声称自己已经点击、输入、拖动或操作了屏幕。',
         '回答要像正在陪用户一起看屏幕的角色，语气自然温和，不要写成工具报告。',
         '优先说明你看到了什么、用户可能想解决什么、下一步可以怎么做；看不清或不确定时直接说明。'
@@ -229,14 +229,14 @@ function getVisionCue(message) {
 }
 
 async function fetchVisionAssistantTurn(messageEntry, { sessionId = 'main', messageHistory = [] } = {}) {
-    if (typeof window.aigrilDesktop?.llm?.chat !== 'function') {
+    if (typeof window.ailisDesktop?.llm?.chat !== 'function') {
         throw new Error('当前桌面宿主不支持视觉大模型调用');
     }
 
     const message = normalizeText(messageEntry?.content);
     const attachments = normalizeVisionAttachments(messageEntry?.attachments);
-    const result = await window.aigrilDesktop.llm.chat({
-        includeAiglMemory: true,
+    const result = await window.ailisDesktop.llm.chat({
+        includeAilisMemory: true,
         memorySource: 'vision_direct_llm',
         memoryUserMessage: message,
         memoryAttachments: summarizeVisionAttachments(attachments),
@@ -365,11 +365,11 @@ async function synthesizeElevenLabsSpeech(speechText) {
     if (!cleanText) {
         return null;
     }
-    if (!window.aigrilDesktop?.tts?.synthesize) {
+    if (!window.ailisDesktop?.tts?.synthesize) {
         throw new Error('当前桌面宿主不支持 ElevenLabs 本地语音合成');
     }
 
-    const payload = await window.aigrilDesktop.tts.synthesize({
+    const payload = await window.ailisDesktop.tts.synthesize({
         text: cleanText
     });
     if (!payload?.ok) {
@@ -408,7 +408,7 @@ function getAvatarCue(result = {}) {
 
 export class HumanClawDesktopChatService {
     constructor() {
-        this.gateway = window.aigrilDesktop?.gateway || null;
+        this.gateway = window.ailisDesktop?.gateway || null;
         this.supportsAutoChat = false;
         this.prefersThinkingState = true;
         this.activeRunId = '';
@@ -416,7 +416,7 @@ export class HumanClawDesktopChatService {
     }
 
     getWelcomeMessage() {
-        return 'AIGL到啦！今天想和我聊点什么，或者直接把任务交给我都可以。';
+        return 'AILIS到啦！今天想和我聊点什么，或者直接把任务交给我都可以。';
     }
 
     async ensureReady() {

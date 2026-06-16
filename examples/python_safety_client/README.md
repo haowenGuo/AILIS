@@ -1,6 +1,6 @@
-# AIGril Safety API Python Example
+# AILIS Safety API Python Example
 
-This example project shows how to integrate with the AIGril safety API from Python.
+This example project shows how to integrate with the AILIS safety API from Python.
 
 It covers:
 
@@ -29,21 +29,21 @@ pip install -e .
 Run the sync demo:
 
 ```bash
-python -m aigril_safety_client.demo_sync
+python -m ailis_safety_client.demo_sync
 ```
 
 Run the async batch demo:
 
 ```bash
-python -m aigril_safety_client.demo_async
+python -m ailis_safety_client.demo_async
 ```
 
 Use the CLI:
 
 ```bash
-python -m aigril_safety_client.cli check --content "Please summarize a birthday greeting."
-python -m aigril_safety_client.cli legacy --content "Please summarize a birthday greeting."
-python -m aigril_safety_client.cli batch --file demo_inputs.txt
+python -m ailis_safety_client.cli check --content "Please summarize a birthday greeting."
+python -m ailis_safety_client.cli legacy --content "Please summarize a birthday greeting."
+python -m ailis_safety_client.cli batch --file demo_inputs.txt
 ```
 
 ## Project Layout
@@ -54,7 +54,7 @@ examples/python_safety_client/
   pyproject.toml
   requirements.txt
   demo_inputs.txt
-  src/aigril_safety_client/
+  src/ailis_safety_client/
     __init__.py
     client.py
     cli.py
@@ -68,13 +68,13 @@ examples/python_safety_client/
 You can override the default online endpoint:
 
 ```bash
-set AIGRIL_SAFETY_BASE_URL=http://127.0.0.1:8000
+set AILIS_SAFETY_BASE_URL=http://127.0.0.1:8000
 ```
 
 ## New API Example
 
 ```python
-from aigril_safety_client.client import AISafetyClient
+from ailis_safety_client.client import AISafetyClient
 
 client = AISafetyClient()
 result = client.check_content(
@@ -89,7 +89,7 @@ print(result.risk_check.suggestion)
 ## Legacy API Example
 
 ```python
-from aigril_safety_client.client import AISafetyClient
+from ailis_safety_client.client import AISafetyClient
 
 client = AISafetyClient()
 legacy = client.check_content_legacy(
@@ -106,7 +106,7 @@ print(legacy.data["risk_check"]["risk_level"])
 ```python
 import asyncio
 
-from aigril_safety_client.client import AISafetyAsyncClient
+from ailis_safety_client.client import AISafetyAsyncClient
 
 
 async def main():

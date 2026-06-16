@@ -10,7 +10,7 @@ const { HumanClawGateway } = require('../electron/humanclaw-gateway.cjs');
 const {
     paperMetadataLookup,
     readDocument
-} = require('./mcp-aigl-research-server.cjs');
+} = require('./mcp-ailis-research-server.cjs');
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(__dirname, '..');
@@ -145,7 +145,7 @@ async function fetchJsonProbe(label, url, { headers = {}, timeoutMs = 30000 } = 
     try {
         const response = await fetch(url, {
             headers: {
-                'User-Agent': 'AIGL-GAIA-tool-inventory-audit/1.0',
+                'User-Agent': 'AILIS-GAIA-tool-inventory-audit/1.0',
                 ...headers
             },
             signal: controller.signal
@@ -276,7 +276,7 @@ async function collectGatewayInventory(args) {
         return redact({
             gatewayStatus: status,
             gaiaRunnerSurface: {
-                directToolExecutorEnv: process.env.AIGL_GAIA_DIRECT_TOOL_EXECUTOR || '',
+                directToolExecutorEnv: process.env.AILIS_GAIA_DIRECT_TOOL_EXECUTOR || '',
                 startupNativeDirectToolCountWithoutFinalAnswer: directSpecs.length,
                 startupNativeDirectToolNamesWithoutFinalAnswer: directSpecs.map((spec) => spec.name),
                 exactAnswerModeAdds: ['final_answer'],
@@ -334,7 +334,7 @@ async function smokeScholarlyBackends(args) {
     if (semanticKey) {
         semanticHeaders['x-api-key'] = semanticKey;
     }
-    const aiglCurrent = await paperMetadataLookup({
+    const ailisCurrent = await paperMetadataLookup({
         title: PAPER_TITLE,
         year: 2015,
         timeoutMs: args.timeoutMs
@@ -345,10 +345,10 @@ async function smokeScholarlyBackends(args) {
             error: error?.message || String(error)
         }
     }));
-    const currentPayload = aiglCurrent.structuredContent || aiglCurrent.details || {};
+    const currentPayload = ailisCurrent.structuredContent || ailisCurrent.details || {};
     const probes = [
         Promise.resolve({
-            label: 'aigl_current_paper_metadata_lookup',
+            label: 'ailis_current_paper_metadata_lookup',
             ok: currentPayload.ok === true,
             status: currentPayload.status || '',
             parsedSummary: {
@@ -497,11 +497,11 @@ print(json.dumps({
     return {
         failureType: 'DOCX structured extraction / Secret Santa',
         sample: samplePath,
-        selectedBackends: ['current AIGL read_document', 'python-docx direct parse'],
-        note: 'AIGL read_document already uses python-docx. If both return full tables, the failure is downstream evidence consumption/finalization, not raw DOCX parsing.',
+        selectedBackends: ['current AILIS read_document', 'python-docx direct parse'],
+        note: 'AILIS read_document already uses python-docx. If both return full tables, the failure is downstream evidence consumption/finalization, not raw DOCX parsing.',
         results: [
             {
-                label: 'aigl_read_document',
+                label: 'ailis_read_document',
                 ok: currentStructured.ok === true,
                 paragraphCount: currentStructured.paragraphCount,
                 tableCount: currentStructured.tableCount,
@@ -595,7 +595,7 @@ function buildReport({ args, inventory, backendSmoke }) {
         '',
         '## Startup Tool Surface',
         '',
-        `AIGL_GAIA_DIRECT_TOOL_EXECUTOR=${inventory.gaiaRunnerSurface.directToolExecutorEnv || '(empty)'}`,
+        `AILIS_GAIA_DIRECT_TOOL_EXECUTOR=${inventory.gaiaRunnerSurface.directToolExecutorEnv || '(empty)'}`,
         `Startup native direct tool count, excluding exact-answer finalizer: ${inventory.gaiaRunnerSurface.startupNativeDirectToolCountWithoutFinalAnswer}`,
         'Exact-answer mode adds native tool: final_answer.',
         '',

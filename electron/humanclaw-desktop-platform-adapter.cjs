@@ -107,7 +107,7 @@ class HumanClawDesktopPlatformAdapter {
             skipTaskbar: Boolean(options.skipTaskbar),
             alwaysOnTop: Boolean(options.alwaysOnTop),
             show: Boolean(options.show),
-            title: normalizeString(options.title, 'AIGL Window'),
+            title: normalizeString(options.title, 'AILIS Window'),
             webPreferences
         };
     }
@@ -171,7 +171,7 @@ class HumanClawDesktopPlatformAdapter {
             skipTaskbar: true,
             alwaysOnTop: true,
             show: false,
-            title: normalizeString(options.title, 'AIGL Region Capture')
+            title: normalizeString(options.title, 'AILIS Region Capture')
         });
         this.applyWindowBehavior(window, {
             alwaysOnTop: true,

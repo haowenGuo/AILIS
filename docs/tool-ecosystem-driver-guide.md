@@ -6,7 +6,7 @@
 
 本地参考库目录：
 
-- `F:\AIGril\AIGrilClaw\.refs\tool-ecosystem`
+- `F:\AILIS\AILISClaw\.refs\tool-ecosystem`
 
 ## 一句话结论
 
@@ -146,7 +146,7 @@ export interface ToolCallResult {
 
 本地仓库：
 
-- `F:\AIGril\AIGrilClaw\.refs\tool-ecosystem\mcp-typescript-sdk`
+- `F:\AILIS\AILISClaw\.refs\tool-ecosystem\mcp-typescript-sdk`
 
 当前状态判断：
 
@@ -219,7 +219,7 @@ interface McpServerSpec {
 
 本地仓库：
 
-- `F:\AIGril\AIGrilClaw\.refs\tool-ecosystem\mcp-servers`
+- `F:\AILIS\AILISClaw\.refs\tool-ecosystem\mcp-servers`
 
 这个仓库的价值不是“直接上线生产”，而是：
 
@@ -262,7 +262,7 @@ Windows 上如果你要兼容通用 MCP host 配置，通常要支持：
 
 本地仓库：
 
-- `F:\AIGril\AIGrilClaw\.refs\tool-ecosystem\github-mcp-server`
+- `F:\AILIS\AILISClaw\.refs\tool-ecosystem\github-mcp-server`
 
 推荐接法：
 
@@ -314,7 +314,7 @@ docker run -i --rm -e GITHUB_PERSONAL_ACCESS_TOKEN ghcr.io/github/github-mcp-ser
 
 本地仓库：
 
-- `F:\AIGril\AIGrilClaw\.refs\tool-ecosystem\playwright-mcp`
+- `F:\AILIS\AILISClaw\.refs\tool-ecosystem\playwright-mcp`
 
 推荐启动方式：
 
@@ -348,7 +348,7 @@ README 的判断很重要：
 
 本地仓库：
 
-- `F:\AIGril\AIGrilClaw\.refs\tool-ecosystem\openai-node`
+- `F:\AILIS\AILISClaw\.refs\tool-ecosystem\openai-node`
 
 适合你关注的能力：
 
@@ -392,7 +392,7 @@ const response = await client.responses.create({
 
 本地仓库：
 
-- `F:\AIGril\AIGrilClaw\.refs\tool-ecosystem\anthropic-sdk-typescript`
+- `F:\AILIS\AILISClaw\.refs\tool-ecosystem\anthropic-sdk-typescript`
 
 本地 examples 已经把 tool loop 写得很清楚：
 
@@ -444,7 +444,7 @@ mcp_servers: [
 
 本地仓库：
 
-- `F:\AIGril\AIGrilClaw\.refs\tool-ecosystem\google-js-genai`
+- `F:\AILIS\AILISClaw\.refs\tool-ecosystem\google-js-genai`
 
 Gemini 这条线的亮点很多：
 
@@ -505,7 +505,7 @@ tools: [mcpToTool(printingClient, beepingClient)]
 
 本地仓库：
 
-- `F:\AIGril\AIGrilClaw\.refs\tool-ecosystem\ripgrep`
+- `F:\AILIS\AILISClaw\.refs\tool-ecosystem\ripgrep`
 
 这是你本地代码搜索的首选底座，不要自己写递归 grep。
 
@@ -534,7 +534,7 @@ rg -t ts "ToolDescriptor" src
 
 本地仓库：
 
-- `F:\AIGril\AIGrilClaw\.refs\tool-ecosystem\tree-sitter`
+- `F:\AILIS\AILISClaw\.refs\tool-ecosystem\tree-sitter`
 
 它不是编辑器替代品，而是给你的 Gateway 提供：
 
@@ -560,7 +560,7 @@ rg -t ts "ToolDescriptor" src
 
 本地协议仓库：
 
-- `F:\AIGril\AIGrilClaw\.refs\tool-ecosystem\language-server-protocol`
+- `F:\AILIS\AILISClaw\.refs\tool-ecosystem\language-server-protocol`
 
 第一版怎么接最稳：
 
@@ -589,7 +589,7 @@ rg -t ts "ToolDescriptor" src
 
 本地协议仓库：
 
-- `F:\AIGril\AIGrilClaw\.refs\tool-ecosystem\debug-adapter-protocol`
+- `F:\AILIS\AILISClaw\.refs\tool-ecosystem\debug-adapter-protocol`
 
 DAP 适合第二阶段接入，不建议第一版就做满。
 
@@ -640,7 +640,7 @@ DAP 适合第二阶段接入，不建议第一版就做满。
 
 本地仓库：
 
-- `F:\AIGril\AIGrilClaw\.refs\tool-ecosystem\google-api-nodejs-client`
+- `F:\AILIS\AILISClaw\.refs\tool-ecosystem\google-api-nodejs-client`
 
 适合场景：
 
@@ -670,7 +670,7 @@ DAP 适合第二阶段接入，不建议第一版就做满。
 
 本地仓库：
 
-- `F:\AIGril\AIGrilClaw\.refs\tool-ecosystem\msgraph-sdk-javascript`
+- `F:\AILIS\AILISClaw\.refs\tool-ecosystem\msgraph-sdk-javascript`
 
 驱动方式：
 
@@ -684,7 +684,7 @@ DAP 适合第二阶段接入，不建议第一版就做满。
 
 本地仓库：
 
-- `F:\AIGril\AIGrilClaw\.refs\tool-ecosystem\slack-node-sdk`
+- `F:\AILIS\AILISClaw\.refs\tool-ecosystem\slack-node-sdk`
 
 Slack 不要只理解成“发一条消息”，它有几条不同接入面：
 
@@ -712,7 +712,7 @@ Slack 不要只理解成“发一条消息”，它有几条不同接入面：
 
 本地仓库：
 
-- `F:\AIGril\AIGrilClaw\.refs\tool-ecosystem\grammy`
+- `F:\AILIS\AILISClaw\.refs\tool-ecosystem\grammy`
 
 这条线适合拿来做“外部人格入口”：
 
@@ -728,7 +728,7 @@ Slack 不要只理解成“发一条消息”，它有几条不同接入面：
 
 本地仓库：
 
-- `F:\AIGril\AIGrilClaw\.refs\tool-ecosystem\notion-sdk-js`
+- `F:\AILIS\AILISClaw\.refs\tool-ecosystem\notion-sdk-js`
 
 Notion SDK 的优点是简单直接，适合：
 
@@ -751,7 +751,7 @@ Notion 也类似：
 
 本地仓库：
 
-- `F:\AIGril\AIGrilClaw\.refs\tool-ecosystem\octokit`
+- `F:\AILIS\AILISClaw\.refs\tool-ecosystem\octokit`
 
 GitHub 这条线建议双轨：
 
@@ -771,9 +771,9 @@ GitHub 这条线建议双轨：
 
 本地仓库：
 
-- `F:\AIGril\AIGrilClaw\.refs\tool-ecosystem\zod`
-- `F:\AIGril\AIGrilClaw\.refs\tool-ecosystem\typebox`
-- `F:\AIGril\AIGrilClaw\.refs\tool-ecosystem\ajv`
+- `F:\AILIS\AILISClaw\.refs\tool-ecosystem\zod`
+- `F:\AILIS\AILISClaw\.refs\tool-ecosystem\typebox`
+- `F:\AILIS\AILISClaw\.refs\tool-ecosystem\ajv`
 
 推荐组合：
 
@@ -929,5 +929,5 @@ src/gateway/chat-send.ts
 
 配套文档：
 
-- [claw-integration-basis-research.md](F:/AIGril/docs/claw-integration-basis-research.md)
-- [openclaw-from-zero.md](F:/AIGril/docs/openclaw-from-zero.md)
+- [claw-integration-basis-research.md](F:/AILIS/docs/claw-integration-basis-research.md)
+- [openclaw-from-zero.md](F:/AILIS/docs/openclaw-from-zero.md)

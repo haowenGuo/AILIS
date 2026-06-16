@@ -9,8 +9,8 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const {
     CONTRACT_SOURCE_PROFILES,
-    compileAndLintAiglContract,
-    lintAiglContract
+    compileAndLintAilisContract,
+    lintAilisContract
 } = require('../electron/humanclaw-contract-compiler.cjs');
 const { HumanClawToolAcquisitionGateway } = require('../electron/humanclaw-tool-acquisition-gateway.cjs');
 const { HumanClawCapabilityManager } = require('../electron/humanclaw-capability-manager.cjs');
@@ -32,7 +32,7 @@ async function withHttpServer(handler) {
     };
 }
 
-test('AIGL contract compiler lists mature source profiles', () => {
+test('AILIS contract compiler lists mature source profiles', () => {
     const ids = CONTRACT_SOURCE_PROFILES.map((entry) => entry.id);
     assert.ok(ids.includes('mcp_registry'));
     assert.ok(ids.includes('composio'));
@@ -41,8 +41,8 @@ test('AIGL contract compiler lists mature source profiles', () => {
     assert.ok(ids.includes('codex_openhands'));
 });
 
-test('AIGL contract linter rejects thin tool menu schemas', () => {
-    const result = compileAndLintAiglContract({
+test('AILIS contract linter rejects thin tool menu schemas', () => {
+    const result = compileAndLintAilisContract({
         name: 'thin_tool',
         description: 'Do thing.',
         inputSchema: {
@@ -60,8 +60,8 @@ test('AIGL contract linter rejects thin tool menu schemas', () => {
     assert.ok(result.lint.issues.some((issue) => issue.code === 'missing_error_recovery'));
 });
 
-test('AIGL contract compiler applies known recovery contract for run_python_file', () => {
-    const result = compileAndLintAiglContract({
+test('AILIS contract compiler applies known recovery contract for run_python_file', () => {
+    const result = compileAndLintAilisContract({
         name: 'run_python_file',
         description: 'Run a local Python file and return stdout/stderr.',
         inputSchema: {
@@ -76,7 +76,7 @@ test('AIGL contract compiler applies known recovery contract for run_python_file
         }
     }, {
         sourceType: 'mcp_tool',
-        server: 'aigl_research'
+        server: 'ailis_research'
     });
     assert.equal(result.lint.approved, true, JSON.stringify(result.lint.issues));
     assert.deepEqual(result.contract.inputSchema.required, ['path']);
@@ -85,8 +85,8 @@ test('AIGL contract compiler applies known recovery contract for run_python_file
     assert.match(result.promptCard, /computer\.write/);
 });
 
-test('OpenAPI operation compiles into a canonical AIGL contract', () => {
-    const result = compileAndLintAiglContract({
+test('OpenAPI operation compiles into a canonical AILIS contract', () => {
+    const result = compileAndLintAilisContract({
         operationId: 'gmailListMessages',
         method: 'get',
         path: '/gmail/v1/users/{userId}/messages',
@@ -125,7 +125,7 @@ test('Tool Acquisition Gateway stores accepted and rejected compiled contracts',
     });
     const intake = await gateway.intakeContracts({
         sourceType: 'mcp_tool',
-        server: 'aigl_research',
+        server: 'ailis_research',
         contracts: [
             {
                 name: 'run_python_file',
@@ -575,8 +575,8 @@ test('Tool Acquisition Gateway includes built-in public OpenAPI tools in externa
 
 test('Tool Acquisition Gateway executes approved OpenAPI adapter with env auth profile', async () => {
     const workspaceRoot = await makeWorkspace('humanclaw-openapi-adapter-auth-');
-    const previousToken = process.env.AIGL_TEST_OPENAPI_TOKEN;
-    process.env.AIGL_TEST_OPENAPI_TOKEN = 'openapi-secret';
+    const previousToken = process.env.AILIS_TEST_OPENAPI_TOKEN;
+    process.env.AILIS_TEST_OPENAPI_TOKEN = 'openapi-secret';
     const server = await withHttpServer((req, res) => {
         let body = '';
         req.on('data', (chunk) => {
@@ -603,7 +603,7 @@ test('Tool Acquisition Gateway executes approved OpenAPI adapter with env auth p
             authProfileId: 'local-openapi',
             provider: 'openapi',
             authType: 'bearer_env',
-            envVar: 'AIGL_TEST_OPENAPI_TOKEN'
+            envVar: 'AILIS_TEST_OPENAPI_TOKEN'
         });
         assert.equal(profile.status, 'completed');
         assert.equal(profile.profile.envPresent, true);
@@ -666,9 +666,9 @@ test('Tool Acquisition Gateway executes approved OpenAPI adapter with env auth p
         assert.equal(result.request.headers.Authorization, '__REDACTED__');
     } finally {
         if (previousToken === undefined) {
-            delete process.env.AIGL_TEST_OPENAPI_TOKEN;
+            delete process.env.AILIS_TEST_OPENAPI_TOKEN;
         } else {
-            process.env.AIGL_TEST_OPENAPI_TOKEN = previousToken;
+            process.env.AILIS_TEST_OPENAPI_TOKEN = previousToken;
         }
         await server.close();
     }
@@ -676,8 +676,8 @@ test('Tool Acquisition Gateway executes approved OpenAPI adapter with env auth p
 
 test('Tool Acquisition Gateway executes approved Composio adapter with scoped env auth', async () => {
     const workspaceRoot = await makeWorkspace('humanclaw-composio-adapter-auth-');
-    const previousToken = process.env.AIGL_TEST_COMPOSIO_KEY;
-    process.env.AIGL_TEST_COMPOSIO_KEY = 'composio-secret';
+    const previousToken = process.env.AILIS_TEST_COMPOSIO_KEY;
+    process.env.AILIS_TEST_COMPOSIO_KEY = 'composio-secret';
     const requests = [];
     const server = await withHttpServer((req, res) => {
         let body = '';
@@ -705,7 +705,7 @@ test('Tool Acquisition Gateway executes approved Composio adapter with scoped en
             authProfileId: 'local-composio',
             provider: 'composio',
             authType: 'composio_api_key_env',
-            envVar: 'AIGL_TEST_COMPOSIO_KEY',
+            envVar: 'AILIS_TEST_COMPOSIO_KEY',
             baseUrl: `${server.baseUrl}/api/v3`,
             userId: 'user-1'
         });
@@ -767,9 +767,9 @@ test('Tool Acquisition Gateway executes approved Composio adapter with scoped en
         assert.equal(result.request.headers['x-api-key'], '__REDACTED__');
     } finally {
         if (previousToken === undefined) {
-            delete process.env.AIGL_TEST_COMPOSIO_KEY;
+            delete process.env.AILIS_TEST_COMPOSIO_KEY;
         } else {
-            process.env.AIGL_TEST_COMPOSIO_KEY = previousToken;
+            process.env.AILIS_TEST_COMPOSIO_KEY = previousToken;
         }
         await server.close();
     }
@@ -790,7 +790,7 @@ test('Capability Manager exposes contract compiler actions', async () => {
     const compiled = await manager.execute({
         action: 'compile_contract',
         sourceType: 'mcp_tool',
-        server: 'aigl_research',
+        server: 'ailis_research',
         rawContract: {
             name: 'run_python_file',
             description: 'Run a local Python file and return stdout/stderr.',

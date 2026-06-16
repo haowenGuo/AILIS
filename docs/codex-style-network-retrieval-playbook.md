@@ -49,10 +49,10 @@ Important boundary: do not turn the global `tool_search` implementation into a p
 
 Repository mapping:
 
-- [aigl-tool-routing.cjs](F:/AIGril/electron/aigl-tool-routing.cjs)
-- [humanclaw-mcp-session.cjs](F:/AIGril/electron/humanclaw-mcp-session.cjs)
-- [humanclaw-gateway.cjs](F:/AIGril/electron/humanclaw-gateway.cjs)
-- [humanclaw-tool-runtime.cjs](F:/AIGril/electron/humanclaw-tool-runtime.cjs)
+- [ailis-tool-routing.cjs](F:/AILIS/electron/ailis-tool-routing.cjs)
+- [humanclaw-mcp-session.cjs](F:/AILIS/electron/humanclaw-mcp-session.cjs)
+- [humanclaw-gateway.cjs](F:/AILIS/electron/humanclaw-gateway.cjs)
+- [humanclaw-tool-runtime.cjs](F:/AILIS/electron/humanclaw-tool-runtime.cjs)
 
 ### 2. Structured retrieval before HTML scraping
 
@@ -77,8 +77,8 @@ Why this order:
 
 Repository mapping:
 
-- [mcp-aigl-research-server.cjs](F:/AIGril/scripts/mcp-aigl-research-server.cjs)
-- [run-gaia-level1-lite.mjs](F:/AIGril/scripts/run-gaia-level1-lite.mjs)
+- [mcp-ailis-research-server.cjs](F:/AILIS/scripts/mcp-ailis-research-server.cjs)
+- [run-gaia-level1-lite.mjs](F:/AILIS/scripts/run-gaia-level1-lite.mjs)
 
 ### 3. Site policy awareness
 
@@ -131,7 +131,7 @@ That matters for:
 
 Repository mapping:
 
-- [run-gaia-level1-lite.mjs](F:/AIGril/scripts/run-gaia-level1-lite.mjs)
+- [run-gaia-level1-lite.mjs](F:/AILIS/scripts/run-gaia-level1-lite.mjs)
 
 ### 6. Validate on traces, not just unit tests
 

@@ -1,4 +1,4 @@
-# AIGril 自动博客撰写工作流
+# AILIS 自动博客撰写工作流
 
 这个文件用于 16 小时自动博客撰写任务。当前工程按 `auto-longrun-task` 模式运行：真正写文章、校验、提交、推送和失败恢复的部分由本地 LongRun Controller 执行；Codex heartbeat 只负责读取 durable state，并向用户汇报。
 
@@ -37,7 +37,7 @@ runner 职责：
 9. 校验 `posts.json`
 10. 只 stage 博客相关文件
 11. 提交当前分支，并把 commit 写入 `state.json`
-12. 按顺序 cherry-pick pending commits 到 `F:\AIGril_tmp_main`
+12. 按顺序 cherry-pick pending commits 到 `F:\AILIS_tmp_main`
 13. 推送到 GitHub `main`
 14. 追加 `event-log.jsonl`，刷新 `progress.json`
 15. 对失败进行分类，再进入重试、阻塞或等待

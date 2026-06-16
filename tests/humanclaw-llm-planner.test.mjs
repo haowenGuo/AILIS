@@ -52,7 +52,7 @@ test('Agent turn items mark successful web fetches with structured API evidence 
             {
                 id: 'clinical-web-fetch',
                 title: 'Fetch ClinicalTrials page',
-                tool: 'mcp__aigl_research__web_fetch',
+                tool: 'mcp__ailis_research__web_fetch',
                 args: {
                     url: 'https://clinicaltrials.gov/study/NCT03411733',
                     extract_content: true
@@ -555,7 +555,7 @@ async function createNativeResponsesDecisionServer(decisionFactory) {
             const payload = raw ? JSON.parse(raw) : {};
             calls.push({ url: req.url, payload });
             res.writeHead(200, { 'content-type': 'application/json' });
-            if (Array.isArray(payload.tools) && payload.tools.some((tool) => tool.name === 'aigl_agent_decision')) {
+            if (Array.isArray(payload.tools) && payload.tools.some((tool) => tool.name === 'ailis_agent_decision')) {
                 decisionCount += 1;
                 const decision = decisionFactory({ decisionCount, payload });
                 res.end(JSON.stringify({
@@ -563,7 +563,7 @@ async function createNativeResponsesDecisionServer(decisionFactory) {
                         {
                             type: 'function_call',
                             call_id: `native-call-${decisionCount}`,
-                            name: 'aigl_agent_decision',
+                            name: 'ailis_agent_decision',
                             arguments: JSON.stringify(decision)
                         }
                     ],
@@ -695,7 +695,7 @@ test('Agentic Executor can execute real native direct tool calls before JSON pla
         assert.equal(llmServer.calls.length, 2);
         assert.ok(llmServer.calls[0].payload.tools.some((tool) => tool.function?.name === 'write'));
         assert.equal(
-            llmServer.calls[0].payload.tools.some((tool) => tool.function?.name === 'aigl_agent_decision'),
+            llmServer.calls[0].payload.tools.some((tool) => tool.function?.name === 'ailis_agent_decision'),
             false
         );
         assert.equal(llmServer.calls[0].payload.tool_choice, 'auto');
@@ -977,11 +977,11 @@ test('Agentic Executor consumes native provider tool-call decisions and keeps ru
         const written = await fs.readFile(path.join(workspaceRoot, 'native-output.txt'), 'utf8');
         assert.match(written, /native tool-call decision ok/);
         const nativeDecisionCalls = llmServer.calls.filter((call) =>
-            call.payload.tools?.some((tool) => tool.name === 'aigl_agent_decision')
+            call.payload.tools?.some((tool) => tool.name === 'ailis_agent_decision')
         );
         assert.equal(nativeDecisionCalls.length, 2);
-        assert.equal(nativeDecisionCalls[0].payload.tool_choice.name, 'aigl_agent_decision');
-        assert.equal(nativeDecisionCalls[0].payload.tools[0].name, 'aigl_agent_decision');
+        assert.equal(nativeDecisionCalls[0].payload.tool_choice.name, 'ailis_agent_decision');
+        assert.equal(nativeDecisionCalls[0].payload.tools[0].name, 'ailis_agent_decision');
     } finally {
         await gateway.stop();
         await llmServer.close();
@@ -1068,7 +1068,7 @@ test('Agentic Executor Loop asks confirmation, resumes, observes, and keeps call
         const text = await fs.readFile(path.join(workspaceRoot, 'planner-output', 'README.txt'), 'utf8');
         assert.match(text, /Agentic Executor OK/);
         assert.equal(llmServer.calls.filter((call) => /HumanClaw Agentic Executor/.test(call.system)).length, 4);
-        assert.match(llmServer.calls[0].system, /名字固定为AIGL/);
+        assert.match(llmServer.calls[0].system, /名字固定为AILIS/);
         assert.match(llmServer.calls[0].system, /具备人工智能/);
         assert.match(llmServer.calls[0].system, /不要依赖外部分类结果/);
         assert.doesNotMatch(llmServer.calls[0].system, /不具备任何人工智能/);
@@ -1297,7 +1297,7 @@ test('Agentic Executor skips vision confirmation when full computer control is e
             message.content.some((part) => part?.type === 'image_url')
         );
         if (hasImageInput) {
-            return '我看到桌面上有 AIGL 聊天窗口和桌宠，截图链路正常。';
+            return '我看到桌面上有 AILIS 聊天窗口和桌宠，截图链路正常。';
         }
         agentDecisionCount += 1;
         if (agentDecisionCount === 1) {
@@ -1323,7 +1323,7 @@ test('Agentic Executor skips vision confirmation when full computer control is e
             intent: 'vision_full_control_check',
             summary: '视觉检查完成',
             action: 'final',
-            final_answer: '我看到了当前屏幕，AIGL 聊天窗口和桌宠都在，视觉截图链路正常。'
+            final_answer: '我看到了当前屏幕，AILIS 聊天窗口和桌宠都在，视觉截图链路正常。'
         };
     });
     const llmSettings = {
@@ -1377,7 +1377,7 @@ test('Agentic Executor skips vision confirmation when full computer control is e
         const status = await gateway.start();
         const result = await runAgent(status.url, {
             sessionId: 'vision-full-control-test',
-            message: 'AIGL，直接看一下当前屏幕，判断视觉截图功能是否正常。',
+            message: 'AILIS，直接看一下当前屏幕，判断视觉截图功能是否正常。',
             agentLoop: 'llm',
             llmSettings,
             context: { workspace: workspaceRoot }
@@ -1579,7 +1579,7 @@ test('Agentic Executor keeps deprecated task layers out of the model prompt', as
         assert.equal(result.body.taskGraph, undefined);
         assert.equal(result.body.events.some((event) => event.type === 'evidence_recovery'), false);
         assert.match(result.body.displayText, /没有读取到论文原文|不能把概要说成已经完成/);
-        assert.equal(result.body.surface.renderer, 'aigl-persona-renderer');
+        assert.equal(result.body.surface.renderer, 'ailis-persona-renderer');
         assert.equal(llmServer.calls.length, 1);
         const llmUserPayload = JSON.parse(llmServer.calls[0].payload.messages.find((entry) => entry.role === 'user').content);
         assert.equal(llmUserPayload.task_brief, undefined);
@@ -1625,7 +1625,7 @@ test('Agentic Executor keeps generic official-doc tasks Codex-like in the first 
         const status = await gateway.start();
         const result = await runAgent(status.url, {
             sessionId: 'generic-doc-prompt-test',
-            message: 'AIGL，帮我查一下 Playwright 里如何等待元素出现，然后给我写一个最小可运行的 JS 示例，保存成 browser-wait-example.md。要求说明 timeout 怎么设置',
+            message: 'AILIS，帮我查一下 Playwright 里如何等待元素出现，然后给我写一个最小可运行的 JS 示例，保存成 browser-wait-example.md。要求说明 timeout 怎么设置',
             agentLoop: 'llm',
             maxAgentSteps: 1,
             llmSettings,
@@ -1814,7 +1814,7 @@ test('Agentic Executor treats missing command failures as observations for the n
                     title: '尝试外部 HTML 解析器',
                     args: {
                         action: 'exec',
-                        command: '__aigl_missing_parser_tool__ --version',
+                        command: '__ailis_missing_parser_tool__ --version',
                         reason: '模拟一个缺失的解析依赖'
                     }
                 }
@@ -1866,7 +1866,7 @@ test('Agentic Executor treats missing command failures as observations for the n
         assert.ok(secondPayload.recent_turn_items.items.some((item) =>
             item.type === 'tool_result' &&
             item.status === 'failed' &&
-            /__aigl_missing_parser_tool__|not recognized|not found|无法将/.test(item.preview)
+            /__ailis_missing_parser_tool__|not recognized|not found|无法将/.test(item.preview)
         ));
         assert.ok(secondPayload.recent_turn_items.items.some((item) =>
             item.type === 'tool_result' &&

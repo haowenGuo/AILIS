@@ -31,7 +31,7 @@ export function setPlainTextContent(target, value) {
         return;
     }
     const text = typeof value === 'string' ? value : '';
-    target.__aigrilMessageContent = text;
+    target.__ailisMessageContent = text;
     target.dataset.contentFormat = 'text';
     target.classList.remove('message-markdown');
     target.textContent = text;
@@ -43,7 +43,7 @@ export function setMarkdownContent(target, value) {
     }
 
     const markdown = normalizeMarkdownSource(value);
-    target.__aigrilMessageContent = markdown;
+    target.__ailisMessageContent = markdown;
     target.dataset.contentFormat = 'markdown';
     target.classList.add('message-markdown');
     target.replaceChildren(renderMarkdown(markdown));

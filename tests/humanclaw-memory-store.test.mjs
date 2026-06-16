@@ -31,7 +31,7 @@ test('HumanClaw memory runtime persists blocks, events, affinity, and redacted s
 
     const recorded = memory.recordTurn({
         sessionId: 'memory-test',
-        userMessage: '以后记住，我不喜欢过度工具化 UI，AIGL 要拟人一些，记忆架构参考 Letta/MemGPT 和 Generative Agents。',
+        userMessage: '以后记住，我不喜欢过度工具化 UI，AILIS 要拟人一些，记忆架构参考 Letta/MemGPT 和 Generative Agents。',
         assistantMessage: '我记住了，会把拟人体验放在表层，把稳定 Agent 架构放在底层。',
         source: 'test'
     });
@@ -47,7 +47,7 @@ test('HumanClaw memory runtime persists blocks, events, affinity, and redacted s
         sessionId: 'memory-test',
         message: '继续做记忆系统'
     });
-    assert.match(context, /AIGL 长期记忆上下文/);
+    assert.match(context, /AILIS 长期记忆上下文/);
     assert.match(context, /过度工具化/);
     assert.match(context, /doubao-api-key/);
     assert.equal(context.includes('test-secret-00000000-0000-4000-8000-000000000000'), false);
@@ -60,7 +60,7 @@ test('HumanClaw memory runtime persists blocks, events, affinity, and redacted s
     assert.ok((await fs.readFile(path.join(rootDir, 'memory', 'events.jsonl'), 'utf8')).includes('memory-test'));
 });
 
-test('HumanClaw memory affinity stages match AIGL relationship design', async () => {
+test('HumanClaw memory affinity stages match AILIS relationship design', async () => {
     const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'humanclaw-affinity-'));
     const memory = new HumanClawMemoryRuntime({
         rootDir: path.join(rootDir, 'memory'),
@@ -93,7 +93,7 @@ test('HumanClaw memory keeps explicit self-evolution preferences even when they 
 
     const recorded = memory.recordTurn({
         sessionId: 'self-evolution-memory-test',
-        userMessage: '以后记住，我希望 AIGRIL 做自我修改时必须开新分支、先跑测试、展示风险和回滚方案，不要偷偷改主分支。',
+        userMessage: '以后记住，我希望 AILIS 做自我修改时必须开新分支、先跑测试、展示风险和回滚方案，不要偷偷改主分支。',
         assistantMessage: '我会把自我修改放进可审计的分支、测试、审批和回滚流程。',
         source: 'test'
     });

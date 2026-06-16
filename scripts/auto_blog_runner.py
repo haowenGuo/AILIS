@@ -30,7 +30,7 @@ EVENT_LOG = RUN_DIR / "event-log.jsonl"
 STOP_FILE = RUN_DIR / "stop.flag"
 ITERATIONS_DIR = RUN_DIR / "iterations"
 
-DEFAULT_MAIN_WORKTREE = Path("F:/AIGril_tmp_main")
+DEFAULT_MAIN_WORKTREE = Path("F:/AILIS_tmp_main")
 
 ALLOWED_EXACT_PATHS = {
     "backend/blog_content/posts.json",
@@ -724,7 +724,7 @@ def parse_until(value: str | None) -> float | None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Run the AIGril auto blog writer locally.")
+    parser = argparse.ArgumentParser(description="Run the AILIS auto blog writer locally.")
     parser.add_argument("--once", action="store_true", help="Run one iteration and exit.")
     parser.add_argument("--run-immediately", action="store_true", help="Run once before waiting.")
     parser.add_argument("--interval-seconds", type=int, default=300)

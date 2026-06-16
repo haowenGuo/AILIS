@@ -16,7 +16,7 @@ const {
 const {
     compactJsonForModel,
     compactToolResultForModel
-} = require('./aigl-runtime-budget.cjs');
+} = require('./ailis-runtime-budget.cjs');
 
 const DEFAULT_MAX_RESULT_TEXT_CHARS = 6000;
 const DEFAULT_MAX_TRANSCRIPT_ITEMS = 500;
@@ -1324,7 +1324,7 @@ class HumanClawRuntime {
         const request = {
             id: randomUUID(),
             status: context.approved === true || args.approved === true ? 'granted' : 'needs_approval',
-            reason: normalizeString(args.reason, 'AIGL needs additional permissions to continue the task.'),
+            reason: normalizeString(args.reason, 'AILIS needs additional permissions to continue the task.'),
             scope,
             scopeKey: this.permissionGrantScopeKey(context, scope),
             permissions,

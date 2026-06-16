@@ -46,7 +46,7 @@ function parseArgs(argv = process.argv.slice(2)) {
         outputDir: DEFAULT_OUTPUT_DIR,
         datasetDir: DEFAULT_DATASET_DIR,
         runId: '',
-        username: 'AIGL-local-codex',
+        username: 'AILIS-local-codex',
         taskIds: [],
         offset: 0,
         limit: 0,
@@ -513,9 +513,9 @@ async function runLiteRunner(args, baseUrl) {
         '--temperature', String(args.temperature),
         '--task-retries', String(args.taskRetries),
         '--benchmark-name', args.benchmarkName,
-        '--agent-code', `AIGL local HumanClaw Gateway ${args.benchmarkName} runner`
+        '--agent-code', `AILIS local HumanClaw Gateway ${args.benchmarkName} runner`
     ];
-    if (/^(1|true|yes|on)$/i.test(process.env.AIGL_GAIA_DIRECT_TOOL_EXECUTOR || '')) {
+    if (/^(1|true|yes|on)$/i.test(process.env.AILIS_GAIA_DIRECT_TOOL_EXECUTOR || '')) {
         liteArgs.push('--direct-tool-executor');
     }
     if (args.localSubmit) {

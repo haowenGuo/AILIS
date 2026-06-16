@@ -641,7 +641,7 @@ test('HumanClaw runtime exposes self_evolution as a conversation-driven agent to
         status: 'proposed',
         risk: 'low',
         riskLabel: '低风险',
-        summary: '用户希望 AIGRIL 通过对话学习偏好，而不是进入控制面板。',
+        summary: '用户希望 AILIS 通过对话学习偏好，而不是进入控制面板。',
         evidence: [{ type: 'memory_event', preview: '不要放控制面板' }],
         target: { kind: 'memory_block', key: 'user' },
         recommendedAction: 'approve_and_apply'
@@ -684,7 +684,7 @@ test('HumanClaw runtime exposes self_evolution as a conversation-driven agent to
 
         const analyzed = await runtime.executeTool('self_evolution', {
             action: 'analyze',
-            taskText: '优化 AIGRIL 自己'
+            taskText: '优化 AILIS 自己'
         });
         assert.equal(analyzed.details.status, 'completed');
         assert.match(analyzed.content[0].text, /发现 1 个可处理的自我进化提案/);

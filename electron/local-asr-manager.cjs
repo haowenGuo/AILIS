@@ -93,7 +93,7 @@ class DesktopASRManager {
             return this.pythonCommand;
         }
 
-        const envPython = String(process.env.AIGRIL_PYTHON || '').trim();
+        const envPython = String(process.env.AILIS_PYTHON || '').trim();
         const candidates = [];
 
         if (envPython) {
@@ -126,7 +126,7 @@ class DesktopASRManager {
             }
         }
 
-        throw new Error('未找到可用的 Python 运行时，请安装 Python 3.12 或设置 AIGRIL_PYTHON');
+        throw new Error('未找到可用的 Python 运行时，请安装 Python 3.12 或设置 AILIS_PYTHON');
     }
 
     ensureWorker() {
@@ -149,13 +149,13 @@ class DesktopASRManager {
                 stdio: ['pipe', 'pipe', 'pipe'],
                 env: {
                     ...process.env,
-                    AIGRIL_ASR_MODEL_ID: process.env.AIGRIL_ASR_MODEL_ID || 'openai/whisper-small',
-                    AIGRIL_ASR_MODEL_ENDPOINT: process.env.AIGRIL_ASR_MODEL_ENDPOINT || 'https://hf-mirror.com',
-                    AIGRIL_ASR_LANGUAGE: process.env.AIGRIL_ASR_LANGUAGE || 'zh',
-                    AIGRIL_ASR_TASK: process.env.AIGRIL_ASR_TASK || 'transcribe',
-                    AIGRIL_ASR_CHUNK_LENGTH_S: process.env.AIGRIL_ASR_CHUNK_LENGTH_S || '15',
-                    AIGRIL_ASR_BATCH_SIZE: process.env.AIGRIL_ASR_BATCH_SIZE || '4',
-                    AIGRIL_ASR_CACHE_DIR: this.getCacheDir()
+                    AILIS_ASR_MODEL_ID: process.env.AILIS_ASR_MODEL_ID || 'openai/whisper-small',
+                    AILIS_ASR_MODEL_ENDPOINT: process.env.AILIS_ASR_MODEL_ENDPOINT || 'https://hf-mirror.com',
+                    AILIS_ASR_LANGUAGE: process.env.AILIS_ASR_LANGUAGE || 'zh',
+                    AILIS_ASR_TASK: process.env.AILIS_ASR_TASK || 'transcribe',
+                    AILIS_ASR_CHUNK_LENGTH_S: process.env.AILIS_ASR_CHUNK_LENGTH_S || '15',
+                    AILIS_ASR_BATCH_SIZE: process.env.AILIS_ASR_BATCH_SIZE || '4',
+                    AILIS_ASR_CACHE_DIR: this.getCacheDir()
                 }
             }
         );

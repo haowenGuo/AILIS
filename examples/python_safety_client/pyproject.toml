@@ -1,7 +1,7 @@
 [project]
-name = "aigril-safety-client"
+name = "ailis-safety-client"
 version = "0.1.0"
-description = "Python examples for the AIGril safety moderation API"
+description = "Python examples for the AILIS safety moderation API"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -9,7 +9,7 @@ dependencies = [
 ]
 
 [project.scripts]
-aigril-safety-demo = "aigril_safety_client.cli:main"
+ailis-safety-demo = "ailis_safety_client.cli:main"
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]

@@ -581,7 +581,7 @@ class HumanClawCapabilityManager {
                 'Capability Installer: turn requested capabilities into explicit install plans with rollback and validation.',
                 'Tool Acquisition Gateway: discover core tools and MCP Registry candidates without exposing unverified tools to the Agent.',
                 'Standard Tool Packs: expose vetted email, document, web, academic, and media backends as contract-checked callable/non-callable tools.',
-                'Contract Compiler: import mature schemas from MCP Registry, Composio, OpenAPI, LangChain/Pydantic, and Codex/OpenHands-style specs into one AIGL contract shape.',
+                'Contract Compiler: import mature schemas from MCP Registry, Composio, OpenAPI, LangChain/Pydantic, and Codex/OpenHands-style specs into one AILIS contract shape.',
                 'Contract Linter: reject tools missing required fields, when-not-to-use guidance, examples, error recovery, or smoke profiles.',
                 'External Auth Profiles: store only env-var references, base URLs, and account scope; never persist raw API keys.',
                 'External Tool Exposure: bulk expose Composio/OpenAPI/MCP Registry/MCP contracts to the Agent with callable/non-callable verification metadata and execute verified callable entries through one audited auth/approval path.',

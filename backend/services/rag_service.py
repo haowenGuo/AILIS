@@ -23,7 +23,7 @@ class RAGService:
         self.vector_store = Chroma(
             persist_directory=settings.CHROMA_PERSIST_DIR,
             embedding_function=self.embeddings,
-            collection_name="aigril_knowledge_base"
+            collection_name="ailis_knowledge_base"
         )
 
     async def query(self, user_query: str, top_k: int = 3) -> str:

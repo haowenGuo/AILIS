@@ -1,6 +1,6 @@
-# AIGril Auto Blog Runner Prompt
+# AILIS Auto Blog Runner Prompt
 
-You are the local worker for the AIGril 16-hour auto blog writing run.
+You are the local worker for the AILIS 16-hour auto blog writing run.
 
 Run exactly one writing iteration, then stop.
 
@@ -8,7 +8,7 @@ Run exactly one writing iteration, then stop.
 
 Repository:
 
-- `F:\AIGril`
+- `F:\AILIS`
 
 Run directory:
 

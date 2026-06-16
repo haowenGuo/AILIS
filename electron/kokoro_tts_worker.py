@@ -7,10 +7,10 @@ import time
 from pathlib import Path
 
 
-PROJECT_ROOT = Path(os.environ.get("AIGRIL_PROJECT_ROOT") or Path(__file__).resolve().parents[1])
-REPO_ID = os.environ.get("AIGRIL_KOKORO_REPO_ID") or "hexgrad/Kokoro-82M-v1.1-zh"
-DEFAULT_VOICE = os.environ.get("AIGRIL_KOKORO_VOICE") or "zf_003"
-DEFAULT_SPEED = float(os.environ.get("AIGRIL_KOKORO_SPEED") or "0.98")
+PROJECT_ROOT = Path(os.environ.get("AILIS_PROJECT_ROOT") or Path(__file__).resolve().parents[1])
+REPO_ID = os.environ.get("AILIS_KOKORO_REPO_ID") or "hexgrad/Kokoro-82M-v1.1-zh"
+DEFAULT_VOICE = os.environ.get("AILIS_KOKORO_VOICE") or "zf_003"
+DEFAULT_SPEED = float(os.environ.get("AILIS_KOKORO_SPEED") or "0.98")
 SAMPLE_RATE = 24000
 JSON_STDOUT = sys.stdout
 
@@ -87,7 +87,7 @@ def ensure_model():
         np = numpy_module
         sf = soundfile_module
 
-        device = os.environ.get("AIGRIL_KOKORO_DEVICE") or (
+        device = os.environ.get("AILIS_KOKORO_DEVICE") or (
             "cuda" if torch.cuda.is_available() else "cpu"
         )
         model = KModel(repo_id=REPO_ID).to(device).eval()
@@ -146,7 +146,7 @@ def synthesize(request):
             parts.append(chunk)
         waveform = np.concatenate(parts)
 
-    tmp_file = tempfile.NamedTemporaryFile(prefix="aigril-kokoro-", suffix=".wav", delete=False)
+    tmp_file = tempfile.NamedTemporaryFile(prefix="ailis-kokoro-", suffix=".wav", delete=False)
     tmp_path = tmp_file.name
     tmp_file.close()
 

@@ -15,8 +15,8 @@ const distRoot = resolve(projectRoot, 'dist');
 // 只复制前端实际会访问到的 VRM 与 VRMA 资源，避免把无关的大文件一起打进 Pages 产物。
 const assetsToCopy = [
     {
-        source: resolve(projectRoot, 'Resources', 'AiGril.vrm'),
-        target: resolve(distRoot, 'Resources', 'AiGril.vrm')
+        source: resolve(projectRoot, 'Resources', 'AILIS.vrm'),
+        target: resolve(distRoot, 'Resources', 'AILIS.vrm')
     }
 ];
 

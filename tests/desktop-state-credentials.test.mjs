@@ -15,7 +15,7 @@ let stateDir;
 let app;
 
 beforeEach(() => {
-    stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigril-state-test-'));
+    stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ailis-state-test-'));
     app = {
         getPath(name) {
             assert.equal(name, 'userData');

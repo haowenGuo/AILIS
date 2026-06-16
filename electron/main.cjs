@@ -176,7 +176,7 @@ const {
 } = require('./store.cjs');
 
 const DEFAULT_DEV_SERVER_URL = 'http://127.0.0.1:5173';
-const devServerUrl = process.env.AIGRIL_DESKTOP_DEV_URL || '';
+const devServerUrl = process.env.AILIS_DESKTOP_DEV_URL || '';
 const PET_MIN_SIZE = getScaledPetSize(PET_SCALE_OPTIONS[0]);
 const CHAT_MIN_WIDTH = 360;
 const CHAT_MIN_HEIGHT = 420;
@@ -190,8 +190,8 @@ const PET_DIALOGUE_MAX_EXTRA_TOP = 360;
 const PET_DIALOGUE_MAX_EXTRA_WIDTH = 520;
 const KOKORO_WARMUP_DELAY_MS = 1200;
 const COSYVOICE3_WARMUP_DELAY_MS = 6500;
-const LOCAL_RESOURCE_PROTOCOL = 'aigril-resource';
-const SPEECH_MODEL_PROTOCOL = 'aigril-model';
+const LOCAL_RESOURCE_PROTOCOL = 'ailis-resource';
+const SPEECH_MODEL_PROTOCOL = 'ailis-model';
 const SPEECH_MODEL_CACHE_DIRNAME = 'speech-models';
 const VISION_CACHE_DIRNAME = 'vision-snapshots';
 const HUMANCLAW_STATE_DIRNAME = '.humanclaw-state';
@@ -205,6 +205,9 @@ const SPEECH_MODEL_REMOTE_HOSTS = {
     huggingface: 'https://huggingface.co/'
 };
 const PET_CURSOR_TRACK_INTERVAL_MS = 50;
+
+app.setName('AILIS');
+app.setAppUserModelId('com.ailis.desktop');
 
 let petWindow = null;
 let chatWindow = null;
@@ -692,7 +695,7 @@ function requestVisionRegionSelection(display) {
     }
 
     const selectionWindow = desktopPlatformAdapter.createRegionSelectionWindow(display, {
-        title: 'AIGL Region Capture'
+        title: 'AILIS Region Capture'
     });
 
     const request = {};
@@ -1167,7 +1170,7 @@ function startPetCursorTracking() {
         }
         petCursorTrackingLastSignature = signature;
 
-        petWindow.webContents.send('aigril:pet-cursor-point', {
+        petWindow.webContents.send('ailis:pet-cursor-point', {
             inside,
             clientX,
             clientY,
@@ -1252,7 +1255,7 @@ function persistDesktopState(options = {}) {
 }
 
 function resolveDesktopBackendBaseUrl() {
-    const envBackendBaseUrl = String(process.env.AIGRIL_BACKEND_BASE_URL || '').trim();
+    const envBackendBaseUrl = String(process.env.AILIS_BACKEND_BASE_URL || '').trim();
     if (envBackendBaseUrl) {
         return normalizeBackendBaseUrl(envBackendBaseUrl);
     }
@@ -1268,7 +1271,7 @@ function resolveDesktopBackendMode() {
 
 function resolveOpenClawGatewayUrl() {
     const envGatewayUrl = String(
-        process.env.AIGRIL_OPENCLAW_GATEWAY_URL ||
+        process.env.AILIS_OPENCLAW_GATEWAY_URL ||
         process.env.OPENCLAW_GATEWAY_URL ||
         ''
     ).trim();
@@ -1307,7 +1310,7 @@ function getEnvironmentLlmApiKey(provider = DEFAULT_LLM_PROVIDER) {
     if (normalizedProvider === 'openai-responses') {
         return normalizeLlmApiKey(
             process.env.OPENAI_API_KEY ||
-                process.env.AIGRIL_OPENAI_API_KEY ||
+                process.env.AILIS_OPENAI_API_KEY ||
                 ''
         );
     }
@@ -1315,7 +1318,7 @@ function getEnvironmentLlmApiKey(provider = DEFAULT_LLM_PROVIDER) {
         return normalizeLlmApiKey(
             process.env.ANTHROPIC_API_KEY ||
                 process.env.CLAUDE_API_KEY ||
-                process.env.AIGRIL_ANTHROPIC_API_KEY ||
+                process.env.AILIS_ANTHROPIC_API_KEY ||
                 ''
         );
     }
@@ -1324,7 +1327,7 @@ function getEnvironmentLlmApiKey(provider = DEFAULT_LLM_PROVIDER) {
             process.env.GEMINI_API_KEY ||
                 process.env.GOOGLE_API_KEY ||
                 process.env.GOOGLE_GENERATIVE_AI_API_KEY ||
-                process.env.AIGRIL_GEMINI_API_KEY ||
+                process.env.AILIS_GEMINI_API_KEY ||
                 ''
         );
     }
@@ -1550,8 +1553,8 @@ function extractLatestUserTextFromLlmPayload(payload = {}) {
     return '';
 }
 
-function attachAiglMemoryToLlmPayload(payload = {}) {
-    if (payload.includeAiglMemory !== true) {
+function attachAilisMemoryToLlmPayload(payload = {}) {
+    if (payload.includeAilisMemory !== true) {
         return payload;
     }
     const messages = Array.isArray(payload.messages) ? payload.messages : [];
@@ -1577,7 +1580,7 @@ function attachAiglMemoryToLlmPayload(payload = {}) {
     const memoryMessage = {
         role: 'system',
         content: [
-            '以下是 AIGL 的本地长期记忆上下文，只作为辅助参考。',
+            '以下是 AILIS 的本地长期记忆上下文，只作为辅助参考。',
             '若与用户当前明确指令冲突，以当前指令为准；不要主动暴露内部好感度数值。',
             '',
             memoryContext
@@ -1597,9 +1600,9 @@ function attachAiglMemoryToLlmPayload(payload = {}) {
 }
 
 async function callDesktopLlm(payload = {}) {
-    const enrichedPayload = attachAiglMemoryToLlmPayload(payload);
+    const enrichedPayload = attachAilisMemoryToLlmPayload(payload);
     const result = await callDesktopLlmProvider(getResolvedLlmSettings(), enrichedPayload);
-    if (payload.includeAiglMemory === true) {
+    if (payload.includeAilisMemory === true) {
         try {
             ensureHumanClawGateway().memoryRuntime?.recordTurn?.({
                 sessionId: payload.sessionId || payload.sessionKey || 'main',
@@ -1686,7 +1689,7 @@ function broadcastAssistantEvent(payload) {
     }
 
     for (const window of getOpenWindows()) {
-        window.webContents.send('aigril:assistant-event', payload);
+        window.webContents.send('ailis:assistant-event', payload);
     }
 }
 
@@ -1696,7 +1699,7 @@ function broadcastHumanGatewayEvent(payload) {
     }
 
     for (const window of getOpenWindows()) {
-        window.webContents.send('aigril:gateway-event', payload);
+        window.webContents.send('ailis:gateway-event', payload);
     }
 }
 
@@ -2037,9 +2040,9 @@ function broadcastPreferencesUpdated() {
         preferences: getRendererPreferences()
     };
 
-    petWindow?.webContents.send('aigril:preferences-updated', payload);
-    chatWindow?.webContents.send('aigril:preferences-updated', payload);
-    controlWindow?.webContents.send('aigril:preferences-updated', payload);
+    petWindow?.webContents.send('ailis:preferences-updated', payload);
+    chatWindow?.webContents.send('ailis:preferences-updated', payload);
+    controlWindow?.webContents.send('ailis:preferences-updated', payload);
 }
 
 function getWindowMinimumSize(key) {
@@ -2119,11 +2122,11 @@ function openExternalLinks(window) {
 
 function hookRendererDiagnostics(window, label) {
     const webContents = window?.webContents;
-    if (!webContents || webContents.__aigrilDiagnosticsHooked) {
+    if (!webContents || webContents.__ailisDiagnosticsHooked) {
         return;
     }
 
-    webContents.__aigrilDiagnosticsHooked = true;
+    webContents.__ailisDiagnosticsHooked = true;
     webContents.on('console-message', (_event, level, message, line, sourceId) => {
         console.log(`[renderer:${label}] console(${level}) ${message} (${sourceId || 'unknown'}:${line || 0})`);
     });
@@ -2146,11 +2149,11 @@ function hookRendererDiagnostics(window, label) {
 
 function hookWindowContextMenu(window, label) {
     const webContents = window?.webContents;
-    if (!webContents || webContents.__aigrilContextMenuHooked) {
+    if (!webContents || webContents.__ailisContextMenuHooked) {
         return;
     }
 
-    webContents.__aigrilContextMenuHooked = true;
+    webContents.__ailisContextMenuHooked = true;
     webContents.on('context-menu', (event, params = {}) => {
         const sourceWindow = BrowserWindow.fromWebContents(webContents) || window;
         const inputFieldType = String(params.inputFieldType || 'none');
@@ -2231,8 +2234,8 @@ function showControlPanel() {
         return true;
     }
 
-    controlWindow.__aigrilShowWhenReady = true;
-    const isControlLoaded = Boolean(controlWindow.__aigrilDidFinishLoad);
+    controlWindow.__ailisShowWhenReady = true;
+    const isControlLoaded = Boolean(controlWindow.__ailisDidFinishLoad);
     if (!controlWindow.isVisible() && isControlLoaded) {
         controlWindow.show();
     }
@@ -2244,7 +2247,7 @@ function showControlPanel() {
             if (!controlWindow || controlWindow.isDestroyed()) {
                 return;
             }
-            if (controlWindow.__aigrilShowWhenReady && !controlWindow.isVisible()) {
+            if (controlWindow.__ailisShowWhenReady && !controlWindow.isVisible()) {
                 controlWindow.show();
             }
             controlWindow.focus();
@@ -2261,8 +2264,8 @@ function showAgentLabWindow() {
         return true;
     }
 
-    agentLabWindow.__aigrilShowWhenReady = true;
-    const isLoaded = Boolean(agentLabWindow.__aigrilDidFinishLoad);
+    agentLabWindow.__ailisShowWhenReady = true;
+    const isLoaded = Boolean(agentLabWindow.__ailisDidFinishLoad);
     if (!agentLabWindow.isVisible() && isLoaded) {
         agentLabWindow.show();
     }
@@ -2274,7 +2277,7 @@ function showAgentLabWindow() {
             if (!agentLabWindow || agentLabWindow.isDestroyed()) {
                 return;
             }
-            if (agentLabWindow.__aigrilShowWhenReady && !agentLabWindow.isVisible()) {
+            if (agentLabWindow.__ailisShowWhenReady && !agentLabWindow.isVisible()) {
                 agentLabWindow.show();
             }
             agentLabWindow.focus();
@@ -2922,7 +2925,7 @@ function createPetWindow() {
         alwaysOnTop: true,
         skipTaskbar: desktopState.preferences.petSkipTaskbar,
         show: Boolean(petState.visible),
-        title: 'HumanClaw Pet'
+        title: 'AILIS Pet'
     });
 
     desktopPlatformAdapter.applyWindowBehavior(petWindow, {
@@ -2984,7 +2987,7 @@ function createChatWindow() {
         show: false,
         skipTaskbar: false,
         alwaysOnTop: true,
-        title: 'HumanClaw Chat'
+        title: 'AILIS Chat'
     });
 
     openExternalLinks(chatWindow);
@@ -3037,10 +3040,10 @@ function createControlWindow(options = {}) {
         resizable: true,
         show: false,
         skipTaskbar: false,
-        title: 'HumanClaw Control Panel'
+        title: 'AILIS Control Panel'
     });
-    controlWindow.__aigrilDidFinishLoad = false;
-    controlWindow.__aigrilShowWhenReady = showWhenReady;
+    controlWindow.__ailisDidFinishLoad = false;
+    controlWindow.__ailisShowWhenReady = showWhenReady;
     console.log('[window:control] create', {
         bounds: controlBounds,
         showWhenReady
@@ -3071,8 +3074,8 @@ function createControlWindow(options = {}) {
             if (!controlWindow || controlWindow.isDestroyed()) {
                 return;
             }
-            controlWindow.__aigrilDidFinishLoad = true;
-            if (controlWindow.__aigrilShowWhenReady) {
+            controlWindow.__ailisDidFinishLoad = true;
+            if (controlWindow.__ailisShowWhenReady) {
                 controlWindow.show();
                 controlWindow.focus();
             }
@@ -3110,10 +3113,10 @@ function createAgentLabWindow(options = {}) {
         resizable: true,
         show: false,
         skipTaskbar: false,
-        title: 'HumanClaw Agent Analysis Lab'
+        title: 'AILIS Agent Analysis Lab'
     });
-    agentLabWindow.__aigrilDidFinishLoad = false;
-    agentLabWindow.__aigrilShowWhenReady = showWhenReady;
+    agentLabWindow.__ailisDidFinishLoad = false;
+    agentLabWindow.__ailisShowWhenReady = showWhenReady;
     console.log('[window:agent-lab] create', {
         bounds,
         showWhenReady
@@ -3143,8 +3146,8 @@ function createAgentLabWindow(options = {}) {
             if (!agentLabWindow || agentLabWindow.isDestroyed()) {
                 return;
             }
-            agentLabWindow.__aigrilDidFinishLoad = true;
-            if (agentLabWindow.__aigrilShowWhenReady) {
+            agentLabWindow.__ailisDidFinishLoad = true;
+            if (agentLabWindow.__ailisShowWhenReady) {
                 agentLabWindow.show();
                 agentLabWindow.focus();
             }
@@ -3180,7 +3183,7 @@ function refreshTrayMenu() {
     ]);
 
     tray.setContextMenu(menu);
-    tray.setToolTip('HumanClaw 桌宠');
+    tray.setToolTip('AILIS 桌宠');
 }
 
 function createTray() {
@@ -3224,7 +3227,7 @@ function restoreDefaultPreferences() {
 
 async function chooseHumanClawStateDir() {
     const result = await dialog.showOpenDialog(controlWindow || BrowserWindow.getFocusedWindow() || petWindow, {
-        title: '选择 HumanClaw 本地状态目录',
+        title: '选择 AILIS 本地状态目录',
         defaultPath: getPersistedHumanClawStateDir(),
         properties: ['openDirectory', 'createDirectory']
     });
@@ -3242,7 +3245,7 @@ async function chooseHumanClawStateDir() {
 
 async function chooseChatFiles(sourceWindow = null) {
     const result = await dialog.showOpenDialog(sourceWindow || chatWindow || BrowserWindow.getFocusedWindow() || petWindow, {
-        title: '选择要交给 AIGL 的文件',
+        title: '选择要交给 AILIS 的文件',
         properties: ['openFile', 'multiSelections'],
         filters: [
             { name: '所有文件', extensions: ['*'] }
@@ -3259,58 +3262,58 @@ async function chooseChatFiles(sourceWindow = null) {
 }
 
 function registerIpc() {
-    ipcMain.on('aigril:get-preferences-sync', (event) => {
+    ipcMain.on('ailis:get-preferences-sync', (event) => {
         event.returnValue = getRendererPreferences();
     });
 
-    ipcMain.handle('aigril:get-control-panel-state', () => getControlPanelState());
-    ipcMain.handle('aigril:save-preferences', (_event, payload = {}) => applyPreferencesPatch(payload));
-    ipcMain.handle('aigril:restore-default-preferences', () => restoreDefaultPreferences());
-    ipcMain.handle('aigril:choose-humanclaw-state-dir', () => chooseHumanClawStateDir());
-    ipcMain.handle('aigril:chat-files-choose', (event) =>
+    ipcMain.handle('ailis:get-control-panel-state', () => getControlPanelState());
+    ipcMain.handle('ailis:save-preferences', (_event, payload = {}) => applyPreferencesPatch(payload));
+    ipcMain.handle('ailis:restore-default-preferences', () => restoreDefaultPreferences());
+    ipcMain.handle('ailis:choose-humanclaw-state-dir', () => chooseHumanClawStateDir());
+    ipcMain.handle('ailis:chat-files-choose', (event) =>
         chooseChatFiles(BrowserWindow.fromWebContents(event.sender))
     );
-    ipcMain.handle('aigril:chat-files-describe', async (_event, payload = {}) =>
+    ipcMain.handle('ailis:chat-files-describe', async (_event, payload = {}) =>
         describeChatFilePaths(payload?.paths || payload?.filePaths || [])
     );
-    ipcMain.handle('aigril:toggle-chat-window', () => toggleChatWindow());
-    ipcMain.handle('aigril:show-chat-window', () => {
+    ipcMain.handle('ailis:toggle-chat-window', () => toggleChatWindow());
+    ipcMain.handle('ailis:show-chat-window', () => {
         showChatWindow();
         return true;
     });
-    ipcMain.handle('aigril:hide-chat-window', () => {
+    ipcMain.handle('ailis:hide-chat-window', () => {
         hideChatWindow();
         return false;
     });
-    ipcMain.handle('aigril:show-control-panel', () => showControlPanel());
-    ipcMain.handle('aigril:show-agent-lab', () => showAgentLabWindow());
-    ipcMain.handle('aigril:show-control-menu', (event) => {
+    ipcMain.handle('ailis:show-control-panel', () => showControlPanel());
+    ipcMain.handle('ailis:show-agent-lab', () => showAgentLabWindow());
+    ipcMain.handle('ailis:show-control-menu', (event) => {
         const sourceWindow = BrowserWindow.fromWebContents(event.sender);
         return showControlMenu(sourceWindow || petWindow);
     });
-    ipcMain.handle('aigril:show-text-edit-menu', (event, payload = {}) => {
+    ipcMain.handle('ailis:show-text-edit-menu', (event, payload = {}) => {
         const sourceWindow = BrowserWindow.fromWebContents(event.sender);
         return showTextEditMenu(sourceWindow || BrowserWindow.getFocusedWindow(), payload || {});
     });
-    ipcMain.handle('aigril:close-current-window', (event) => {
+    ipcMain.handle('ailis:close-current-window', (event) => {
         const sourceWindow = BrowserWindow.fromWebContents(event.sender);
         sourceWindow?.hide();
         return true;
     });
-    ipcMain.handle('aigril:set-speech-mode', (_event, mode) => updateSpeechMode(mode));
-    ipcMain.handle('aigril:set-recognition-mode', (_event, mode) => updateRecognitionMode(mode));
-    ipcMain.handle('aigril:set-preferred-mic-device', (_event, deviceId) => updatePreferredMicDevice(deviceId));
-    ipcMain.handle('aigril:set-pet-dialogue-expanded', (_event, payload = {}) =>
+    ipcMain.handle('ailis:set-speech-mode', (_event, mode) => updateSpeechMode(mode));
+    ipcMain.handle('ailis:set-recognition-mode', (_event, mode) => updateRecognitionMode(mode));
+    ipcMain.handle('ailis:set-preferred-mic-device', (_event, deviceId) => updatePreferredMicDevice(deviceId));
+    ipcMain.handle('ailis:set-pet-dialogue-expanded', (_event, payload = {}) =>
         setPetDialogueWindowExpanded(
             Boolean(payload.expanded),
             payload.extraTop,
             payload.extraWidth
         )
     );
-    ipcMain.handle('aigril:vision-capture', async (event, payload = {}) =>
+    ipcMain.handle('ailis:vision-capture', async (event, payload = {}) =>
         captureVisionSnapshot(event, payload)
     );
-    ipcMain.handle('aigril:llm-health-check', async (_event, payload = {}) => {
+    ipcMain.handle('ailis:llm-health-check', async (_event, payload = {}) => {
         const currentSettings = getResolvedLlmSettings();
         const incomingSettings = payload?.settings || {};
         const settings = payload?.settings
@@ -3329,124 +3332,124 @@ function registerIpc() {
             timeoutMs: payload?.timeoutMs || settings.timeoutMs
         });
     });
-    ipcMain.handle('aigril:memory-snapshot', async (_event, payload = {}) =>
+    ipcMain.handle('ailis:memory-snapshot', async (_event, payload = {}) =>
         ensureHumanClawGateway().getMemorySnapshot(payload || {})
     );
-    ipcMain.handle('aigril:memory-search', async (_event, payload = {}) =>
+    ipcMain.handle('ailis:memory-search', async (_event, payload = {}) =>
         ensureHumanClawGateway().searchMemory(payload.query || payload.text || '', payload || {})
     );
-    ipcMain.handle('aigril:memory-update-block', async (_event, payload = {}) =>
+    ipcMain.handle('ailis:memory-update-block', async (_event, payload = {}) =>
         ensureHumanClawGateway().updateMemoryBlock(payload.key || '', payload.value || payload.content || '')
     );
-    ipcMain.handle('aigril:memory-reset-affinity', async (_event, payload = {}) =>
+    ipcMain.handle('ailis:memory-reset-affinity', async (_event, payload = {}) =>
         ensureHumanClawGateway().resetMemoryAffinity(payload.score)
     );
-    ipcMain.handle('aigril:memory-forget', async (_event, payload = {}) =>
+    ipcMain.handle('ailis:memory-forget', async (_event, payload = {}) =>
         ensureHumanClawGateway().forgetMemory(payload || {})
     );
-    ipcMain.handle('aigril:memory-save-secret', async (_event, payload = {}) =>
+    ipcMain.handle('ailis:memory-save-secret', async (_event, payload = {}) =>
         ensureHumanClawGateway().saveMemorySecret(payload || {})
     );
-    ipcMain.handle('aigril:memory-delete-secret', async (_event, payload = {}) =>
+    ipcMain.handle('ailis:memory-delete-secret', async (_event, payload = {}) =>
         ensureHumanClawGateway().deleteMemorySecret(payload.name || payload.id || '')
     );
-    ipcMain.on('aigril:vision-region-selected', (event, payload = {}) => {
+    ipcMain.on('ailis:vision-region-selected', (event, payload = {}) => {
         completeVisionRegionSelection(event, payload.selection || payload);
     });
-    ipcMain.on('aigril:vision-region-cancelled', (event) => {
+    ipcMain.on('ailis:vision-region-cancelled', (event) => {
         cancelVisionRegionSelection(event);
     });
-    ipcMain.handle('aigril:llm-chat', async (_event, payload = {}) => callDesktopLlm(payload));
-    ipcMain.handle('aigril:tts-synthesize', async (_event, payload = {}) => callDesktopTts(payload));
-    ipcMain.handle('aigril:asr-transcribe', async (_event, audioBytes) => {
+    ipcMain.handle('ailis:llm-chat', async (_event, payload = {}) => callDesktopLlm(payload));
+    ipcMain.handle('ailis:tts-synthesize', async (_event, payload = {}) => callDesktopTts(payload));
+    ipcMain.handle('ailis:asr-transcribe', async (_event, audioBytes) => {
         if (!desktopASRManager) {
             throw new Error('本地语音识别管理器尚未初始化');
         }
 
         return desktopASRManager.transcribeAudioBytes(audioBytes);
     });
-    ipcMain.handle('aigril:assistant-status', async () => getAssistantStatusSnapshot());
-    ipcMain.handle('aigril:assistant-tool-surface', async () => getOpenClawToolSurface());
-    ipcMain.handle('aigril:assistant-validate-tool-surface', async () => validateOpenClawToolSurface());
-    ipcMain.handle('aigril:assistant-history', async (_event, payload = {}) => {
+    ipcMain.handle('ailis:assistant-status', async () => getAssistantStatusSnapshot());
+    ipcMain.handle('ailis:assistant-tool-surface', async () => getOpenClawToolSurface());
+    ipcMain.handle('ailis:assistant-validate-tool-surface', async () => validateOpenClawToolSurface());
+    ipcMain.handle('ailis:assistant-history', async (_event, payload = {}) => {
         await syncOpenClawSelection({ ensureReady: true });
         return ensureAssistantGateway().getHistory(Number(payload.limit) || 200);
     });
-    ipcMain.handle('aigril:assistant-send-message', async (_event, payload = {}) => {
+    ipcMain.handle('ailis:assistant-send-message', async (_event, payload = {}) => {
         await syncOpenClawSelection({ ensureReady: true });
         return ensureAssistantGateway().sendMessage(payload.content || '', {
             timeoutMs: Number(payload.timeoutMs) || undefined
         });
     });
-    ipcMain.handle('aigril:assistant-abort-run', async (_event, payload = {}) => {
+    ipcMain.handle('ailis:assistant-abort-run', async (_event, payload = {}) => {
         await syncOpenClawSelection({ ensureReady: true });
         return ensureAssistantGateway().abortRun(payload.runId || '');
     });
-    ipcMain.handle('aigril:assistant-list-sessions', async (_event, payload = {}) => {
+    ipcMain.handle('ailis:assistant-list-sessions', async (_event, payload = {}) => {
         await syncOpenClawSelection({ ensureReady: true });
         return ensureAssistantGateway().listSessions(Number(payload.limit) || 20);
     });
-    ipcMain.handle('aigril:assistant-set-session-key', async (_event, payload = {}) => {
+    ipcMain.handle('ailis:assistant-set-session-key', async (_event, payload = {}) => {
         await syncOpenClawSelection({ ensureReady: true });
         return ensureAssistantGateway().setSessionKey(payload.sessionKey || '');
     });
-    ipcMain.handle('aigril:assistant-patch-session', async (_event, payload = {}) => {
+    ipcMain.handle('ailis:assistant-patch-session', async (_event, payload = {}) => {
         await syncOpenClawSelection({ ensureReady: true });
         return ensureAssistantGateway().patchSession(payload || {});
     });
-    ipcMain.handle('aigril:gateway-status', async () =>
+    ipcMain.handle('ailis:gateway-status', async () =>
         getHumanClawGatewayStatusEnsuringStarted('status_request')
     );
-    ipcMain.handle('aigril:gateway-tools-list', async () => {
+    ipcMain.handle('ailis:gateway-tools-list', async () => {
         await ensureHumanClawGatewayStarted('tools_list');
         return ensureHumanClawGateway().listTools();
     });
-    ipcMain.handle('aigril:gateway-tools-call', async (_event, payload = {}) => {
+    ipcMain.handle('ailis:gateway-tools-call', async (_event, payload = {}) => {
         await ensureHumanClawGatewayStarted('tool_call');
         return ensureHumanClawGateway().callTool(payload || {});
     });
-    ipcMain.handle('aigril:gateway-agent-run', async (_event, payload = {}) => {
+    ipcMain.handle('ailis:gateway-agent-run', async (_event, payload = {}) => {
         await ensureHumanClawGatewayStarted('agent_run');
         return ensureHumanClawGateway().runAgent({
             ...(payload || {}),
             llmSettings: payload?.llmSettings || getResolvedLlmSettings()
         });
     });
-    ipcMain.handle('aigril:gateway-agent-interrupt', async (_event, payload = {}) =>
+    ipcMain.handle('ailis:gateway-agent-interrupt', async (_event, payload = {}) =>
         ensureHumanClawGateway().interruptAgentRun(payload || {})
     );
-    ipcMain.handle('aigril:gateway-audit-list', async (_event, payload = {}) => ({
+    ipcMain.handle('ailis:gateway-audit-list', async (_event, payload = {}) => ({
         ok: true,
         entries: await ensureHumanClawGateway().readAuditEntries(Number(payload.limit) || 100)
     }));
-    ipcMain.handle('aigril:agent-lab-runs', async (_event, payload = {}) =>
+    ipcMain.handle('ailis:agent-lab-runs', async (_event, payload = {}) =>
         ensureHumanClawGateway().listAgentAnalysisRuns(Number(payload.limit) || 40)
     );
-    ipcMain.handle('aigril:agent-lab-analysis', async (_event, payload = {}) =>
+    ipcMain.handle('ailis:agent-lab-analysis', async (_event, payload = {}) =>
         ensureHumanClawGateway().analyzeAgentRun(payload.runId || '', {
             transcriptLimit: Number(payload.transcriptLimit || payload.limit || 2000)
         })
     );
-    ipcMain.handle('aigril:agent-lab-run', async (_event, payload = {}) =>
+    ipcMain.handle('ailis:agent-lab-run', async (_event, payload = {}) =>
         ensureHumanClawGateway().runAgentAnalysis({
             ...(payload || {}),
             llmSettings: payload?.llmSettings || getResolvedLlmSettings()
         })
     );
-    ipcMain.handle('aigril:agent-lab-continue', async (_event, payload = {}) =>
+    ipcMain.handle('ailis:agent-lab-continue', async (_event, payload = {}) =>
         ensureHumanClawGateway().continueAgentAnalysis({
             ...(payload || {}),
             llmSettings: payload?.llmSettings || getResolvedLlmSettings()
         })
     );
-    ipcMain.handle('aigril:agent-lab-interrupt', async (_event, payload = {}) =>
+    ipcMain.handle('ailis:agent-lab-interrupt', async (_event, payload = {}) =>
         ensureHumanClawGateway().interruptAgentRun({
             ...(payload || {}),
             source: payload?.source || 'agent-analysis-lab'
         })
     );
 
-    ipcMain.on('aigril:begin-drag-pet-window', (event) => {
+    ipcMain.on('ailis:begin-drag-pet-window', (event) => {
         const sourceWindow = BrowserWindow.fromWebContents(event.sender);
         if (!petWindow || sourceWindow !== petWindow) {
             return;
@@ -3467,7 +3470,7 @@ function registerIpc() {
         };
     });
 
-    ipcMain.on('aigril:drag-pet-window', (event, payload = {}) => {
+    ipcMain.on('ailis:drag-pet-window', (event, payload = {}) => {
         if (!petWindow) {
             return;
         }
@@ -3553,7 +3556,7 @@ function registerIpc() {
         desktopState.petWindow.visible = petWindow.isVisible();
     });
 
-    ipcMain.on('aigril:end-drag-pet-window', (event) => {
+    ipcMain.on('ailis:end-drag-pet-window', (event) => {
         const sourceWindow = BrowserWindow.fromWebContents(event.sender);
         if (sourceWindow && sourceWindow !== petWindow) {
             return;
@@ -3564,7 +3567,7 @@ function registerIpc() {
         }
     });
 
-    ipcMain.on('aigril:set-pet-mouse-passthrough', (event, payload = {}) => {
+    ipcMain.on('ailis:set-pet-mouse-passthrough', (event, payload = {}) => {
         const sourceWindow = BrowserWindow.fromWebContents(event.sender);
         if (!petWindow || sourceWindow !== petWindow) {
             return;
@@ -3572,23 +3575,23 @@ function registerIpc() {
         setPetMousePassthrough(Boolean(payload.enabled));
     });
 
-    ipcMain.on('aigril:chat-send-message', (_event, payload = {}) => {
-        petWindow?.webContents.send('aigril:chat-send-message', payload);
+    ipcMain.on('ailis:chat-send-message', (_event, payload = {}) => {
+        petWindow?.webContents.send('ailis:chat-send-message', payload);
         showChatWindow();
     });
 
-    ipcMain.on('aigril:chat-control', (_event, payload = {}) => {
-        petWindow?.webContents.send('aigril:chat-control', payload);
+    ipcMain.on('ailis:chat-control', (_event, payload = {}) => {
+        petWindow?.webContents.send('ailis:chat-control', payload);
     });
 
-    ipcMain.on('aigril:pet-chat-event', (_event, payload = {}) => {
+    ipcMain.on('ailis:pet-chat-event', (_event, payload = {}) => {
         if (chatWindow) {
-            chatWindow.webContents.send('aigril:chat-event', payload);
+            chatWindow.webContents.send('ailis:chat-event', payload);
         }
     });
 
-    ipcMain.on('aigril:chat-state-sync-request', () => {
-        petWindow?.webContents.send('aigril:chat-state-sync-request', {});
+    ipcMain.on('ailis:chat-state-sync-request', () => {
+        petWindow?.webContents.send('ailis:chat-state-sync-request', {});
     });
 }
 

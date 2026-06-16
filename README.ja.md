@@ -1,9 +1,9 @@
 <div align="center">
-  <h1>AIGril</h1>
-  <p><strong>AIGL をメインキャラクターとする、3D VRM アバターとストリーミング対話を備えたブラウザ向けバーチャルコンパニオンプロジェクトです。</strong></p>
+  <h1>AILIS</h1>
+  <p><strong>AILIS をメインキャラクターとする、3D VRM アバターとストリーミング対話を備えたブラウザ向けバーチャルコンパニオンプロジェクトです。</strong></p>
   <p>
-    <a href="https://haowenGuo.github.io/AIGril/?backend=https://airi-backend.onrender.com"><img alt="Try AIGril" src="https://img.shields.io/badge/Try%20AIGril-フル体験版-2563eb?style=for-the-badge"></a>
-    <a href="https://haowenGuo.github.io/AIGril/"><img alt="Frontend Demo" src="https://img.shields.io/badge/GitHub%20Pages-フロントエンド%20デモ-0f172a?style=for-the-badge"></a>
+    <a href="https://haowenGuo.github.io/AILIS/?backend=https://airi-backend.onrender.com"><img alt="Try AILIS" src="https://img.shields.io/badge/Try%20AILIS-フル体験版-2563eb?style=for-the-badge"></a>
+    <a href="https://haowenGuo.github.io/AILIS/"><img alt="Frontend Demo" src="https://img.shields.io/badge/GitHub%20Pages-フロントエンド%20デモ-0f172a?style=for-the-badge"></a>
     <a href="https://airi-backend.onrender.com/docs"><img alt="Backend API" src="https://img.shields.io/badge/Backend-FastAPI%20Docs-059669?style=for-the-badge"></a>
   </p>
   <p>
@@ -17,7 +17,7 @@
 
 ## 概要
 
-AIGL は AIGril のメインキャラクターであり、Web 上のバーチャルキャラクターをより生き生きと感じられるようにすることを目指しています。
+AILIS は AILIS のメインキャラクターであり、Web 上のバーチャルキャラクターをより生き生きと感じられるようにすることを目指しています。
 
 - ブラウザ上で 3D VRM アバターを表示
 - FastAPI バックエンドからテキストをストリーミング返信
@@ -27,8 +27,8 @@ AIGL は AIGril のメインキャラクターであり、Web 上のバーチャ
 
 ## 体験リンク
 
-- フル体験版: [https://haowenGuo.github.io/AIGril/?backend=https://airi-backend.onrender.com](https://haowenGuo.github.io/AIGril/?backend=https://airi-backend.onrender.com)
-- フロントエンドのみのデモ: [https://haowenGuo.github.io/AIGril/](https://haowenGuo.github.io/AIGril/)
+- フル体験版: [https://haowenGuo.github.io/AILIS/?backend=https://airi-backend.onrender.com](https://haowenGuo.github.io/AILIS/?backend=https://airi-backend.onrender.com)
+- フロントエンドのみのデモ: [https://haowenGuo.github.io/AILIS/](https://haowenGuo.github.io/AILIS/)
 - バックエンド API ドキュメント: [https://airi-backend.onrender.com/docs](https://airi-backend.onrender.com/docs)
 
 ## 主な機能

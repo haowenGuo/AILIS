@@ -276,11 +276,11 @@ test('HumanClaw Gateway tool_search ranks specific MCP artifact tools before web
         auditDir: path.join(workspaceRoot, '.audit')
     });
     const mcpTool = (name, description = '') => ({
-        id: `mcp__aigl_research__${name}`,
+        id: `mcp__ailis_research__${name}`,
         type: 'mcp_tool',
-        server: 'aigl_research',
+        server: 'ailis_research',
         tool: name,
-        name: `mcp__aigl_research__${name}`,
+        name: `mcp__ailis_research__${name}`,
         description,
         inputSchema: {
             type: 'object',
@@ -380,7 +380,7 @@ test('HumanClaw Gateway builds agent analysis snapshots from transcript, audit, 
             payload: {
                 iteration: 0,
                 promptBudget: {
-                    model: 'aigl_prompt_budget',
+                    model: 'ailis_prompt_budget',
                     total_chars: 321,
                     approx_input_tokens: 123
                 },

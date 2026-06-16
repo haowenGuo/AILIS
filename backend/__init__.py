@@ -1,1 +1,1 @@
-"""AIGril backend package."""
+"""AILIS backend package."""

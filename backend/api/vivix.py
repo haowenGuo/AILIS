@@ -47,7 +47,7 @@ def _build_ark_url(path: str) -> str:
 
 def _perform_ark_request(method: str, path: str, payload: dict | None = None) -> tuple[int, bytes, str]:
     if not settings.LLM_API_KEY:
-        raise HTTPException(status_code=500, detail="LLM_API_KEY is missing on the AIGril backend.")
+        raise HTTPException(status_code=500, detail="LLM_API_KEY is missing on the AILIS backend.")
 
     data = None
     headers = {

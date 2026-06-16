@@ -81,7 +81,7 @@ console.log(reel.status, reel.outputUrl);`,o={prompt:`Midnight campaign film for
           <span class="pill pill-orange">Turbo mode</span>
         </div>
         <p class="panel-note">
-          This panel is wired for Doubao Seedance through the AIGril backend proxy. Local development can still use <code>.env.local</code>.
+          This panel is wired for Doubao Seedance through the AILIS backend proxy. Local development can still use <code>.env.local</code>.
         </p>
 
         <label class="field-label" for="turbo-model">Model / Endpoint ID</label>

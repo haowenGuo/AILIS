@@ -194,7 +194,7 @@ test('GAIA evidence digest prefers structured read_document payload over truncat
             {
                 id: 'step-docx',
                 title: 'Read Secret Santa document',
-                tool: 'mcp__aigl_research__read_document',
+                tool: 'mcp__ailis_research__read_document',
                 args: { path: 'secret-santa.docx' },
                 response: {
                     ok: true,
@@ -239,7 +239,7 @@ test('GAIA evidence digest preserves structured PDF answer candidates', () => {
             {
                 id: 'step-pdf',
                 title: 'Find and extract PDF',
-                tool: 'mcp__aigl_research__pdf_find_and_extract',
+                tool: 'mcp__ailis_research__pdf_find_and_extract',
                 args: {
                     title: '"Dragons are Tricksy": The Uncanny Dragons of Children Literature',
                     extract_query: 'quoted from two different authors distaste dragon depictions'
@@ -327,7 +327,7 @@ test('GAIA finalizer counts semantic crustacean slides from presentation text', 
             steps: [{
                 id: 'step-ppt',
                 title: 'Read presentation',
-                tool: 'mcp__aigl_research__read_presentation',
+                tool: 'mcp__ailis_research__read_presentation',
                 args: { path: 'deck.pptx' },
                 response: {
                     ok: true,

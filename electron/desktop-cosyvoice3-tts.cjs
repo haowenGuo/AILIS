@@ -21,7 +21,7 @@ function getProjectRoot() {
 }
 
 function resolvePythonPath(projectRoot) {
-    const configuredPath = normalizeString(process.env.AIGRIL_COSYVOICE3_PYTHON);
+    const configuredPath = normalizeString(process.env.AILIS_COSYVOICE3_PYTHON);
     if (configuredPath) {
         return configuredPath;
     }
@@ -66,7 +66,7 @@ class CosyVoice3TTSManager {
             windowsHide: true,
             env: {
                 ...process.env,
-                AIGRIL_PROJECT_ROOT: this.projectRoot,
+                AILIS_PROJECT_ROOT: this.projectRoot,
                 PYTHONIOENCODING: 'utf-8',
                 KMP_DUPLICATE_LIB_OK: 'TRUE'
             }

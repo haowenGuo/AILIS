@@ -3,14 +3,14 @@ const path = require('path');
 const { spawn } = require('child_process');
 const { validateAgainstSchema } = require('./humanclaw-tool-contracts.cjs');
 const {
-    buildAiglMcpToolCallArgs,
-    buildAiglMcpToolDescriptionAddendum,
-    createAiglDirectMcpToolSpec,
-    enhanceAiglMcpToolSchema
-} = require('./aigl-mcp-adapter.cjs');
+    buildAilisMcpToolCallArgs,
+    buildAilisMcpToolDescriptionAddendum,
+    createAilisDirectMcpToolSpec,
+    enhanceAilisMcpToolSchema
+} = require('./ailis-mcp-adapter.cjs');
 const {
     rankToolSearchResults
-} = require('./aigl-tool-routing.cjs');
+} = require('./ailis-tool-routing.cjs');
 
 const DEFAULT_MCP_PROTOCOL_VERSION = '2025-06-18';
 const DEFAULT_MCP_TIMEOUT_MS = 30000;
@@ -133,18 +133,18 @@ function makeMcpToolSpec(serverName, tool = {}) {
     const server = normalizeString(serverName);
     const toolName = normalizeString(tool?.name || tool?.id);
     const rawInputSchema = normalizeObject(tool?.inputSchema || tool?.input_schema);
-    const inputSchema = enhanceAiglMcpToolSchema({
+    const inputSchema = enhanceAilisMcpToolSchema({
         server,
         tool: toolName,
         inputSchema: rawInputSchema
     });
     const schemaProperties = schemaPropertyNames(inputSchema);
-    const descriptionAddendum = buildAiglMcpToolDescriptionAddendum({
+    const descriptionAddendum = buildAilisMcpToolDescriptionAddendum({
         server,
         tool: toolName,
         inputSchema
     });
-    return createAiglDirectMcpToolSpec({
+    return createAilisDirectMcpToolSpec({
         server,
         tool: toolName,
         name: `${server}.${toolName}`,
@@ -154,7 +154,7 @@ function makeMcpToolSpec(serverName, tool = {}) {
         schemaProperties,
         descriptionAddendum,
         callPattern: {
-            args: buildAiglMcpToolCallArgs({
+            args: buildAilisMcpToolCallArgs({
                 tool: toolName,
                 schemaProperties,
                 inputSchema

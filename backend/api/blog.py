@@ -259,7 +259,7 @@ def _page_shell(title: str, body: str, site: BlogSite, locale: str, prefix: str)
     </div>
     {body}
     <div class="footer">
-      Powered by AIGril FastAPI backend on Render
+      Powered by AILIS FastAPI backend on Render
     </div>
   </main>
 </body>

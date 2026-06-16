@@ -222,7 +222,7 @@ function fetchUrl(targetUrl, {
             method,
             timeout: timeoutMs,
             headers: {
-                'user-agent': 'AIGRIL-GitHubPagesTool/1.0',
+                'user-agent': 'AILIS-GitHubPagesTool/1.0',
                 accept: 'text/html,application/json,text/plain,*/*'
             }
         }, (response) => {
@@ -642,12 +642,12 @@ function schemaResult() {
         examples: [
             {
                 action: 'diagnose_publish',
-                targetPath: 'about-aigl.html',
+                targetPath: 'about-ailis.html',
                 skipNetwork: true
             },
             {
                 action: 'verify_url',
-                url: 'https://owner.github.io/repo/about-aigl.html',
+                url: 'https://owner.github.io/repo/about-ailis.html',
                 expectedStatus: 200
             }
         ]

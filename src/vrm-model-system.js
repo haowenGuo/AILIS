@@ -359,7 +359,7 @@ export class VRMModelSystem {
         });
         const geometry = new THREE.PlaneGeometry(GROUND_SHADOW_RECEIVER_SIZE, GROUND_SHADOW_RECEIVER_SIZE);
         this.shadowReceiver = new THREE.Mesh(geometry, material);
-        this.shadowReceiver.name = 'AIGL_ShadowMap_Receiver';
+        this.shadowReceiver.name = 'AILIS_ShadowMap_Receiver';
         this.shadowReceiver.rotation.x = -Math.PI / 2;
         this.shadowReceiver.position.set(0, -0.015, 0);
         this.shadowReceiver.receiveShadow = true;
@@ -574,7 +574,7 @@ export class VRMModelSystem {
                 this.renderProfileController.bindVrm(this.vrm);
             }
             const result = this.renderProfileController.apply(normalizedProfileId, getRenderLookSettings());
-            console.log('🎨 AIGL 渲染方案已应用:', profile.label, result.materialSummary, result.outlineSummary);
+            console.log('🎨 AILIS 渲染方案已应用:', profile.label, result.materialSummary, result.outlineSummary);
         }
         this.applyRenderShadowSettings();
 

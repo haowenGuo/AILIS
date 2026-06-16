@@ -1,21 +1,21 @@
-# AIGL Assistant
+# AILIS Assistant
 
-AIGL Assistant is a desktop embodied-agent project built around a VRM character, a local Electron runtime, speech interaction, visual understanding, memory, and a HumanClaw-style tool harness.
+AILIS Assistant is a desktop embodied-agent project built around a VRM character, a local Electron runtime, speech interaction, visual understanding, memory, and a HumanClaw-style tool harness.
 
-This repository is no longer just a browser companion demo. It keeps some avatar and frontend foundations from the earlier AIGril work, but its product direction is different: AIGL Assistant is meant to feel like a personal desktop assistant that can talk, see context when permitted, remember preferences, and help with real tasks through a stable agent runtime.
+This repository is no longer just a browser companion demo. It keeps some avatar and frontend foundations from the earlier AILIS work, but its product direction is different: AILIS Assistant is meant to feel like a personal desktop assistant that can talk, see context when permitted, remember preferences, and help with real tasks through a stable agent runtime.
 
 ## Product Direction
 
 The project has two goals that must stay balanced:
 
-- Humanlike experience: AIGL should feel like a character sharing the desktop with the user, not a control panel wrapped around a chatbot.
+- Humanlike experience: AILIS should feel like a character sharing the desktop with the user, not a control panel wrapped around a chatbot.
 - Reliable task execution: tools, approvals, memory, vision, and model calls should be structured enough to support complex work without making the user feel they are operating a developer console.
 
 In short, the bottom layer should be engineering-stable like Codex or Claude Code, while the top layer should feel like a warm desktop character.
 
-## What Makes This Different From AIGril
+## What Makes This Different From AILIS
 
-The older AIGril project focused mainly on a web/desktop-pet companion experience. AIGL Assistant is moving toward a fuller local assistant architecture:
+The older AILIS project focused mainly on a web/desktop-pet companion experience. AILIS Assistant is moving toward a fuller local assistant architecture:
 
 - Desktop-first Electron runtime instead of a public web demo first
 - HumanClaw agent loop for planning, tool calls, approvals, event flow, and recovery
@@ -35,7 +35,7 @@ The older AIGril project focused mainly on a web/desktop-pet companion experienc
 - Durable pending approval and local state storage
 - Speech output through desktop TTS workers and cloud TTS providers
 - Local speech recognition worker and recognition-mode controls
-- AIGL humanlike eval dataset, judge rules, runners, and long-term companionship cases
+- AILIS humanlike eval dataset, judge rules, runners, and long-term companionship cases
 
 ## Architecture
 
@@ -44,7 +44,7 @@ electron/   Desktop main process, HumanClaw runtime, TTS/ASR workers, tool imple
 src/        Renderer apps for chat, pet avatar, control panel, speech, vision UI, and bubbles
 backend/    Optional FastAPI backend, API schemas, education/Vivix services, and static assets
 Resources/  VRM model, VRMA motions, and reference voice assets
-evals/      AIGL humanlike experience scenarios and dataset plans
+evals/      AILIS humanlike experience scenarios and dataset plans
 tests/      Node test suites for HumanClaw, memory, tools, evals, provider, and runtime behavior
 docs/       Architecture notes, OpenClaw research, HumanClaw design, memory, vision, and eval docs
 scripts/    Validation, smoke tests, eval runners, generation tools, and build helpers
@@ -52,9 +52,9 @@ scripts/    Validation, smoke tests, eval runners, generation tools, and build h
 
 Core design documents:
 
-- [Embodied Agent Architecture](docs/aigl-embodied-agent-architecture.md)
-- [Memory Architecture V2](docs/aigl-memory-architecture-v2.md)
-- [Humanlike Eval](docs/aigl-humanlike-eval.md)
+- [Embodied Agent Architecture](docs/ailis-embodied-agent-architecture.md)
+- [Memory Architecture V2](docs/ailis-memory-architecture-v2.md)
+- [Humanlike Eval](docs/ailis-humanlike-eval.md)
 - [OpenClaw From Zero](docs/openclaw-from-zero.md)
 - [Tool Ecosystem Driver Guide](docs/tool-ecosystem-driver-guide.md)
 
@@ -112,7 +112,7 @@ Common checks:
 
 ```bash
 pnpm test:humanclaw-memory
-pnpm test:aigl-humanlike-eval
+pnpm test:ailis-humanlike-eval
 pnpm test:humanclaw-runtime
 pnpm test:humanclaw-tool-contracts
 pnpm humanclaw:validate-gateway
@@ -121,15 +121,15 @@ pnpm humanclaw:validate-gateway
 Humanlike eval commands:
 
 ```bash
-pnpm eval:aigl-humanlike:validate
-pnpm eval:aigl-humanlike:generate
-pnpm eval:aigl-humanlike:report
-pnpm eval:aigl-humanlike:long-term:validate
+pnpm eval:ailis-humanlike:validate
+pnpm eval:ailis-humanlike:generate
+pnpm eval:ailis-humanlike:report
+pnpm eval:ailis-humanlike:long-term:validate
 ```
 
 ## Privacy Notes
 
-AIGL Assistant is designed as a personal desktop assistant, so local secrets and private memory can exist on the user's own machine. The codebase should still avoid committing real API keys, runtime transcripts, logs, local model caches, generated eval results, or downloaded model weights.
+AILIS Assistant is designed as a personal desktop assistant, so local secrets and private memory can exist on the user's own machine. The codebase should still avoid committing real API keys, runtime transcripts, logs, local model caches, generated eval results, or downloaded model weights.
 
 Vision is treated as a perception layer, not a screen-control agent. Screenshots are intended to help the model understand context and answer better, not to silently click, type, purchase, send, or submit actions.
 

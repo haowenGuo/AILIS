@@ -1,6 +1,6 @@
 # GAIA L1 Runtime / Agent Loop No-Answer Failure Analysis
 
-Run id: `official-validation-l1-aigl-current-20260607-1335`
+Run id: `official-validation-l1-ailis-current-20260607-1335`
 
 Date: 2026-06-07
 
@@ -1013,7 +1013,7 @@ Pass criteria:
 
 ## Bottom Line
 
-The 26 no-answer failures are mostly not "AIGL cannot reason" failures. They are control-plane failures:
+The 26 no-answer failures are mostly not "AILIS cannot reason" failures. They are control-plane failures:
 
 - invalid model actions became terminal task failures
 - irrelevant searches were treated as progress

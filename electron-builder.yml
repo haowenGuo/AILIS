@@ -1,8 +1,8 @@
-appId: com.humanclaw.desktop
-productName: HumanClaw
+appId: com.ailis.desktop
+productName: AILIS
 artifactName: ${productName}-${version}-${arch}.${ext}
 directories:
-  output: F:/HumanClaw/Build/HumanClaw
+  output: F:/AILIS/Build/AILIS
 files:
   - dist/**/*
   - electron/**/*
@@ -21,7 +21,7 @@ asarUnpack:
   - electron/**/*.py
 npmRebuild: false
 win:
-  executableName: HumanClaw
+  executableName: AILIS
   signAndEditExecutable: false
   target:
     - target: nsis
@@ -35,7 +35,7 @@ nsis:
 portable:
   artifactName: ${productName}-Portable-${version}-win-${arch}.${ext}
 linux:
-  executableName: humanclaw
+  executableName: ailis
   category: Utility
   target:
     - target: AppImage

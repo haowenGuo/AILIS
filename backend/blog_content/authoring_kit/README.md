@@ -1,4 +1,4 @@
-# AIGril Blog Authoring Kit
+# AILIS Blog Authoring Kit
 
 以后如果你要发博客，或者让其他 AI 帮你发博客，直接把整个 `authoring_kit` 文件夹交给它就可以。
 
@@ -31,7 +31,7 @@
 你可以直接复制下面这段：
 
 ```md
-请严格按照 AIGril 博客发文规范执行，只修改博客内容层：
+请严格按照 AILIS 博客发文规范执行，只修改博客内容层：
 
 1. 阅读 `backend/blog_content/authoring_kit/PUBLISHING_GUIDE.md`
 2. 新增中文文章到 `backend/blog_content/posts/zh/<slug>.md`

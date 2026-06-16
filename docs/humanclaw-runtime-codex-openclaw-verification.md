@@ -76,7 +76,7 @@ pnpm humanclaw:verify-runtime-alignment
 
 ## 下一步建议
 
-如果目标是个人桌面助手，当前 v1 已经足够继续做 AIGRIL 前端到任务执行的真实体验。接下来优先级应该是：
+如果目标是个人桌面助手，当前 v1 已经足够继续做 AILIS 前端到任务执行的真实体验。接下来优先级应该是：
 
 1. 把真实 MCP client/session manager 接进 `mcp_bridge`。
 2. 把 `subagents` 从内存 stub 升级为真实 child Agent Runner。

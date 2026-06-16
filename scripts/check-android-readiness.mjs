@@ -180,17 +180,17 @@ async function main() {
             const model = run(adb.path, ['shell', 'getprop', 'ro.product.model'], { timeout: 10000 }).stdout;
             const androidVersion = run(adb.path, ['shell', 'getprop', 'ro.build.version.release'], { timeout: 10000 }).stdout;
             const size = run(adb.path, ['shell', 'wm', 'size'], { timeout: 10000 }).stdout;
-            const shell = run(adb.path, ['shell', 'echo', 'AIGL_ANDROID_OK'], { timeout: 10000 });
+            const shell = run(adb.path, ['shell', 'echo', 'AILIS_ANDROID_OK'], { timeout: 10000 });
             checks.device.active = {
                 serial: online.serial,
                 model,
                 androidVersion,
                 size
             };
-            checks.basicRuntime.shell = shell.ok && shell.stdout.includes('AIGL_ANDROID_OK') ? 'ok' : 'failed';
+            checks.basicRuntime.shell = shell.ok && shell.stdout.includes('AILIS_ANDROID_OK') ? 'ok' : 'failed';
 
-            const remotePath = `/sdcard/aigl-android-doctor-${Date.now()}.png`;
-            const localPath = path.join(os.tmpdir(), `aigl-android-doctor-${Date.now()}.png`);
+            const remotePath = `/sdcard/ailis-android-doctor-${Date.now()}.png`;
+            const localPath = path.join(os.tmpdir(), `ailis-android-doctor-${Date.now()}.png`);
             const capture = run(adb.path, ['shell', 'screencap', '-p', remotePath], { timeout: 15000 });
             const pull = capture.ok ? run(adb.path, ['pull', remotePath, localPath], { timeout: 15000 }) : { ok: false };
             run(adb.path, ['shell', 'rm', '-f', remotePath], { timeout: 5000 });
@@ -206,11 +206,11 @@ async function main() {
         }
     }
 
-    const canInstallAiglNativeApp = checks.installableArtifacts.available && checks.device.available;
+    const canInstallAilisNativeApp = checks.installableArtifacts.available && checks.device.available;
     const canControlAndroidViaAdb = checks.adb.available && checks.device.available && checks.basicRuntime.shell === 'ok';
     console.log(JSON.stringify({
-        ok: canInstallAiglNativeApp || canControlAndroidViaAdb,
-        canInstallAiglNativeApp,
+        ok: canInstallAilisNativeApp || canControlAndroidViaAdb,
+        canInstallAilisNativeApp,
         canControlAndroidViaAdb,
         checks
     }, null, 2));

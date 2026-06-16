@@ -42,7 +42,7 @@ Calls one tool through the gateway.
     "path": "README.md"
   },
   "context": {
-    "workspace": "F:/AIGril"
+    "workspace": "F:/AILIS"
   }
 }
 ```

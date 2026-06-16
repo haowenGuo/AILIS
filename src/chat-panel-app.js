@@ -57,8 +57,8 @@ window.addEventListener('DOMContentLoaded', () => {
     let fileDragDepth = 0;
     let currentMessages = [];
     let speechStatusText = '';
-    let currentRecognitionMode = window.aigrilDesktop?.preferences?.recognitionMode || 'auto-vad';
-    let currentPreferredMicDeviceId = window.aigrilDesktop?.preferences?.preferredMicDeviceId || '';
+    let currentRecognitionMode = window.ailisDesktop?.preferences?.recognitionMode || 'auto-vad';
+    let currentPreferredMicDeviceId = window.ailisDesktop?.preferences?.preferredMicDeviceId || '';
     let recorderController = null;
     let activeAsrPreset = null;
     let recordingTimeoutId = 0;
@@ -74,7 +74,7 @@ window.addEventListener('DOMContentLoaded', () => {
 
     function getStatusText() {
         if (isCapturingVision) {
-            return 'AIGL 正在看截图...';
+            return 'AILIS 正在看截图...';
         }
         if (isRecording) {
             return speechStatusText || '正在听你说话...';
@@ -89,7 +89,7 @@ window.addEventListener('DOMContentLoaded', () => {
             return '正在中断当前对话...';
         }
         if (isBusy) {
-            return 'AIGL 正在思考或说话...';
+            return 'AILIS 正在思考或说话...';
         }
         if (getRecognitionMode() === 'continuous') {
             return '自动 ASR 已开启，等待你说话...';
@@ -145,12 +145,12 @@ window.addEventListener('DOMContentLoaded', () => {
 
         if (visionBtnEl) {
             visionBtnEl.disabled = isBusy || isRecording || isTranscribing || isCapturingVision ||
-                typeof window.aigrilDesktop?.vision?.capture !== 'function';
+                typeof window.ailisDesktop?.vision?.capture !== 'function';
         }
 
         if (fileBtnEl) {
             fileBtnEl.disabled = isBusy || isRecording || isTranscribing || isCapturingVision ||
-                typeof window.aigrilDesktop?.files?.choose !== 'function';
+                typeof window.ailisDesktop?.files?.choose !== 'function';
         }
 
         if (clearChatBtnEl) {
@@ -311,11 +311,11 @@ window.addEventListener('DOMContentLoaded', () => {
         const cleanPaths = [...new Set((Array.isArray(paths) ? paths : [])
             .map((filePath) => String(filePath || '').trim())
             .filter(Boolean))];
-        if (!cleanPaths.length || typeof window.aigrilDesktop?.files?.describe !== 'function') {
+        if (!cleanPaths.length || typeof window.ailisDesktop?.files?.describe !== 'function') {
             return 0;
         }
         try {
-            const result = await window.aigrilDesktop.files.describe({ paths: cleanPaths, source });
+            const result = await window.ailisDesktop.files.describe({ paths: cleanPaths, source });
             const addedCount = mergePendingFileAttachments(result?.files || []);
             if (result?.skipped?.length) {
                 setTransientStatus(`有 ${result.skipped.length} 个文件无法添加`);
@@ -331,11 +331,11 @@ window.addEventListener('DOMContentLoaded', () => {
     }
 
     async function chooseLocalFiles() {
-        if (typeof window.aigrilDesktop?.files?.choose !== 'function') {
+        if (typeof window.ailisDesktop?.files?.choose !== 'function') {
             return;
         }
         try {
-            const result = await window.aigrilDesktop.files.choose({});
+            const result = await window.ailisDesktop.files.choose({});
             if (result?.canceled) {
                 return;
             }
@@ -358,7 +358,7 @@ window.addEventListener('DOMContentLoaded', () => {
             return '';
         }
         try {
-            const electronPath = window.aigrilDesktop?.files?.getPathForFile?.(file);
+            const electronPath = window.ailisDesktop?.files?.getPathForFile?.(file);
             if (electronPath) {
                 return electronPath;
             }
@@ -411,7 +411,7 @@ window.addEventListener('DOMContentLoaded', () => {
     }
 
     async function captureVision(target = 'chat-window', { transientStatus = true } = {}) {
-        if (isCapturingVision || typeof window.aigrilDesktop?.vision?.capture !== 'function') {
+        if (isCapturingVision || typeof window.ailisDesktop?.vision?.capture !== 'function') {
             return null;
         }
 
@@ -420,7 +420,7 @@ window.addEventListener('DOMContentLoaded', () => {
         updateComposerState();
 
         try {
-            const payload = await window.aigrilDesktop.vision.capture({ target });
+            const payload = await window.ailisDesktop.vision.capture({ target });
             if (!payload?.ok || !payload.snapshot) {
                 throw new Error(payload?.error || '截图失败');
             }
@@ -552,7 +552,7 @@ window.addEventListener('DOMContentLoaded', () => {
         const roleLabel = message.role === 'user'
             ? 'User'
             : message.role === 'assistant'
-                ? 'AIGL'
+                ? 'AILIS'
                 : message.role === 'system'
                     ? 'System'
                     : message.role || 'Message';
@@ -599,7 +599,7 @@ window.addEventListener('DOMContentLoaded', () => {
         pendingFileAttachments = [];
         renderVisionPreview();
         renderFilePreview();
-        window.aigrilDesktop?.sendChatControl?.({ type: 'clear-conversation' });
+        window.ailisDesktop?.sendChatControl?.({ type: 'clear-conversation' });
     }
 
     function sendCurrentMessage() {
@@ -608,7 +608,7 @@ window.addEventListener('DOMContentLoaded', () => {
                 return;
             }
             interruptPending = true;
-            window.aigrilDesktop?.sendChatControl?.({
+            window.ailisDesktop?.sendChatControl?.({
                 type: 'interrupt-conversation',
                 source: 'chat-panel'
             });
@@ -630,7 +630,7 @@ window.addEventListener('DOMContentLoaded', () => {
             ...(pendingVisionAttachment ? [pendingVisionAttachment] : []),
             ...pendingFileAttachments
         ]);
-        window.aigrilDesktop?.sendChatMessage?.({
+        window.ailisDesktop?.sendChatMessage?.({
             content: content || getDefaultMessageForAttachments(attachments),
             attachments,
             source: 'chat-panel'
@@ -1086,14 +1086,14 @@ window.addEventListener('DOMContentLoaded', () => {
         if (recorderController) {
             await stopVoiceInput({ cancel: true });
         }
-        await window.aigrilDesktop?.hideChatWindow?.();
+        await window.ailisDesktop?.hideChatWindow?.();
     });
 
     settingsBtnEl?.addEventListener('click', () => {
-        void window.aigrilDesktop?.showControlPanel?.();
+        void window.ailisDesktop?.showControlPanel?.();
     });
 
-    window.aigrilDesktop?.onChatEvent?.((payload = {}) => {
+    window.ailisDesktop?.onChatEvent?.((payload = {}) => {
         if (payload.type === 'snapshot') {
             renderSnapshot(payload.messages || []);
             if (typeof payload.isBusy === 'boolean') {
@@ -1127,7 +1127,7 @@ window.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    window.aigrilDesktop?.onPreferencesUpdated?.(({ preferences = {} } = {}) => {
+    window.ailisDesktop?.onPreferencesUpdated?.(({ preferences = {} } = {}) => {
         const previousMode = getRecognitionMode();
         currentRecognitionMode = preferences.recognitionMode || 'auto-vad';
         currentPreferredMicDeviceId = preferences.preferredMicDeviceId || '';
@@ -1139,7 +1139,7 @@ window.addEventListener('DOMContentLoaded', () => {
     });
 
     window.addEventListener('focus', () => {
-        window.aigrilDesktop?.requestChatStateSync?.();
+        window.ailisDesktop?.requestChatStateSync?.();
     });
 
     window.addEventListener('beforeunload', () => {

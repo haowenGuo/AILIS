@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-OSWORLD_REPO="${OSWORLD_REPO:-/mnt/f/AIGril/build-cache/OSWorld}"
-OSWORLD_VENV="${OSWORLD_VENV:-/root/aigl-osworld-venv}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+AILIS_ROOT="${AILIS_ROOT:-$(cd "${SCRIPT_DIR}/.." && pwd)}"
+OSWORLD_REPO="${OSWORLD_REPO:-${AILIS_ROOT}/build-cache/OSWorld}"
+OSWORLD_VENV="${OSWORLD_VENV:-/root/ailis-osworld-venv}"
 PIP_INDEX_URL="${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"
 PIP_DEFAULT_TIMEOUT="${PIP_DEFAULT_TIMEOUT:-180}"
 PIP_RETRIES="${PIP_RETRIES:-10}"

@@ -1,6 +1,6 @@
 const {
     summarizeForModel
-} = require('./aigl-runtime-budget.cjs');
+} = require('./ailis-runtime-budget.cjs');
 
 const DEFAULT_MAX_TURN_ITEMS = 16;
 const DEFAULT_PREVIEW_CHARS = 1000;
@@ -161,7 +161,7 @@ function classifyEvidenceGapObservation({ tool = '', args = {}, response = {}, p
     const url = normalizeText(args.url || args.href || response.result?.details?.url || response.result?.url);
     const text = `${url}\n${preview}\n${extractToolResultText(response.result)}`.toLowerCase();
     const isWebFetch = toolId === 'web_fetch' ||
-        toolId === 'mcp__aigl_research__web_fetch' ||
+        toolId === 'mcp__ailis_research__web_fetch' ||
         /web_fetch$/.test(toolId) ||
         action === 'web_fetch' ||
         action === 'fetch';
@@ -188,8 +188,8 @@ function classifyEvidenceGapObservation({ tool = '', args = {}, response = {}, p
         return {
             evidence_gap: 'document_parser_preferred',
             summary: 'The target appears to be a PDF or paper; page fetch alone may miss the answer-bearing text.',
-            recovery_hint: 'try mcp__aigl_research__pdf_find_and_extract for unknown PDF links, or pdf_extract_text for a direct PDF URL/path.',
-            alternatives: ['mcp__aigl_research__pdf_find_and_extract', 'mcp__aigl_research__pdf_extract_text', 'download_file']
+            recovery_hint: 'try mcp__ailis_research__pdf_find_and_extract for unknown PDF links, or pdf_extract_text for a direct PDF URL/path.',
+            alternatives: ['mcp__ailis_research__pdf_find_and_extract', 'mcp__ailis_research__pdf_extract_text', 'download_file']
         };
     }
     if (/\.docx(\?|#|$)|wordprocessingml|secret santa/.test(text)) {

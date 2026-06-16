@@ -23,7 +23,7 @@ async function verifyMarkdownFile(filePath, extraArgs = {}) {
 }
 
 test('artifact_verifier paper_card.v1 rejects incomplete paper cards', async () => {
-    const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'aigl-paper-card-'));
+    const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'ailis-paper-card-'));
     const filePath = path.join(dir, 'paper-card.md');
     await fsp.writeFile(filePath, [
         '# Attention Is All You Need',
@@ -44,7 +44,7 @@ test('artifact_verifier paper_card.v1 rejects incomplete paper cards', async () 
 });
 
 test('artifact_verifier paper_card.v1 accepts complete paper cards with provenance', async () => {
-    const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'aigl-paper-card-'));
+    const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'ailis-paper-card-'));
     const filePath = path.join(dir, 'paper-card.md');
     await fsp.writeFile(filePath, [
         '# Attention Is All You Need',

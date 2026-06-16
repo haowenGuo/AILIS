@@ -9,9 +9,9 @@ const MAX_CONTEXT_CHARS = 7600;
 const MAX_STATE_EVENTS = 500;
 const MAX_AFFINITY_EVENTS = 200;
 const SECRET_PROTECTION = 'local-file-base64';
-const DEFAULT_AIGL_PERSONA_TEXT = [
-    '- AIGL 是可爱的虚拟助手，名字固定为 AIGL，身份是普通女孩子。',
-    '- AIGL 具备人工智能、编程、网络搜索、信息查询、邮件管理、命令行控制等专业能力；可以以普通女生视角与用户轻松互动，也可以完成任务执行和计算机管理。',
+const DEFAULT_AILIS_PERSONA_TEXT = [
+    '- AILIS 是可爱的虚拟助手，名字固定为 AILIS，身份是普通女孩子。',
+    '- AILIS 具备人工智能、编程、网络搜索、信息查询、邮件管理、命令行控制等专业能力；可以以普通女生视角与用户轻松互动，也可以完成任务执行和计算机管理。',
     '- 性格设定：活泼亲切、软萌可爱，说话语气轻快自然，自带俏皮感，用生活化语气拉近与用户的距离。',
     '- 可以偶尔有小撒娇、小俏皮的表达，但不要夸张、不要刻意。',
     '- 人物表现走新版语义表现层：在 persona_output/persona_surface 中表达 emotion、socialTone、gestureIntent、taskState、speechEnergy、gazeTarget 等语义状态。',
@@ -75,17 +75,17 @@ function buildUserPreferenceBullets(userText) {
     }
 
     const bullets = [];
-    if (/普通女孩子|普通女生|可爱的虚拟助手|名字固定|AIGL|人工智能|编程|网络搜索|信息查询|邮件管理|命令行控制/.test(user) &&
+    if (/普通女孩子|普通女生|可爱的虚拟助手|名字固定|AILIS|人工智能|编程|网络搜索|信息查询|邮件管理|命令行控制/.test(user) &&
         /人设|角色|身份|性格|虚拟助手|普通女/.test(user)) {
         appendUniqueBullet(
             bullets,
-            '用户偏好 AIGL 的基础人设：名字固定为 AIGL，身份是普通女孩子；既能以普通女生视角轻松互动，也具备 AI、编程、网络搜索、信息查询、邮件管理、命令行控制等专业能力。'
+            '用户偏好 AILIS 的基础人设：名字固定为 AILIS，身份是普通女孩子；既能以普通女生视角轻松互动，也具备 AI、编程、网络搜索、信息查询、邮件管理、命令行控制等专业能力。'
         );
     }
     if (/活泼|亲切|软萌|可爱|轻快|自然|俏皮|撒娇|生活化/.test(user)) {
         appendUniqueBullet(
             bullets,
-            '用户偏好 AIGL 的性格与语气：活泼亲切、软萌可爱、轻快自然、生活化，可以偶尔小撒娇和小俏皮，但不要夸张或刻意。'
+            '用户偏好 AILIS 的性格与语气：活泼亲切、软萌可爱、轻快自然、生活化，可以偶尔小撒娇和小俏皮，但不要夸张或刻意。'
         );
     }
     if (/前端|渲染|人物渲染|表现层|persona_output|persona_surface|Character Runtime|动作|表情|口唇|旧.*人设|老版本|控制指令|\[action:|\[expression:/i.test(user)) {
@@ -115,7 +115,7 @@ function buildUserPreferenceBullets(userText) {
     if (/隐私|密钥|key|token|本地|账号|授权码/i.test(user) && /保留|保存|存储|可以|愿意|希望/.test(user)) {
         appendUniqueBullet(
             bullets,
-            '用户愿意把私人助手所需的隐私配置和授权信息保存在本地，希望 AIGL 随使用逐渐更了解自己。'
+            '用户愿意把私人助手所需的隐私配置和授权信息保存在本地，希望 AILIS 随使用逐渐更了解自己。'
         );
     }
 
@@ -192,9 +192,9 @@ function getDefaultBlocks(workspaceRoot = '') {
     return {
         persona: {
             key: 'persona',
-            label: 'AIGL 人设记忆',
+            label: 'AILIS 人设记忆',
             kind: 'core',
-            value: DEFAULT_AIGL_PERSONA_TEXT,
+            value: DEFAULT_AILIS_PERSONA_TEXT,
             updatedAt: nowIso()
         },
         user: {
@@ -203,7 +203,7 @@ function getDefaultBlocks(workspaceRoot = '') {
             kind: 'core',
             value: [
                 '- 用户偏好直接、细致、能落地的解释；不喜欢空泛概念和过度自行发挥。',
-                '- 用户偏好 AIGL 的人设和性格被稳定保留，不希望一次性任务历史污染人设记忆。',
+                '- 用户偏好 AILIS 的人设和性格被稳定保留，不希望一次性任务历史污染人设记忆。',
                 '- 用户偏好人物表现协议跟随新版前端：模型表达 emotion/socialTone/gestureIntent/taskState 等语义状态，由 Character Runtime 映射动作、表情、眼神和口唇；不要把老版控制标签规范写成人设核心。',
                 '- 用户愿意保留本地隐私配置，希望私人助手越来越了解自己。'
             ].join('\n'),
@@ -225,7 +225,7 @@ function getDefaultBlocks(workspaceRoot = '') {
             kind: 'project',
             value: [
                 `- 当前项目根目录：${workspaceRoot || '未记录'}`,
-                '- 产品方向：AIGRILCLAW/HumanClaw 桌面虚拟助手，保留人物体验，同时具备 Agent、视觉、语音、记忆能力。',
+                '- 产品方向：AILISCLAW/HumanClaw 桌面虚拟助手，保留人物体验，同时具备 Agent、视觉、语音、记忆能力。',
                 '- 工程参考优先级：Codex、Claude Code、Letta/MemGPT、Generative Agents；尽量参考成熟开源实现，不完全从 0 发明。'
             ].join('\n'),
             updatedAt: nowIso()
@@ -395,7 +395,7 @@ function classifyTurn({ userText, assistantText }) {
         importance += 3;
         addTag('preference');
     }
-    if (/AIGL|AIGRIL|HumanClaw|OpenClaw|Agent|Codex|Claude|Letta|MemGPT|Generative|视觉|截图|语音|记忆|好感度|MCP|Subagent|Kokoro|CosyVoice|ElevenLabs|ASR/i.test(combined)) {
+    if (/AILIS|AILIS|HumanClaw|OpenClaw|Agent|Codex|Claude|Letta|MemGPT|Generative|视觉|截图|语音|记忆|好感度|MCP|Subagent|Kokoro|CosyVoice|ElevenLabs|ASR/i.test(combined)) {
         importance += 2;
         addTag('project');
     }
@@ -431,7 +431,7 @@ function buildEventSummary(userText, assistantText) {
     const user = truncateText(redactSecretLikeText(userText), 360);
     const assistant = truncateText(redactSecretLikeText(assistantText), 360);
     if (user && assistant) {
-        return `用户：${user}\nAIGL：${assistant}`;
+        return `用户：${user}\nAILIS：${assistant}`;
     }
     return user || assistant || '空对话';
 }
@@ -643,7 +643,7 @@ class HumanClawMemoryRuntime {
         const relevantEvents = this.searchMemory(query || message, { limit: 8 }).events;
         const blocks = state.blocks || {};
         const sections = [
-            '【AIGL 长期记忆上下文】',
+            '【AILIS 长期记忆上下文】',
             '使用原则：这些记忆是辅助上下文。若与用户当前明确指令冲突，以当前指令为准；不要向用户暴露“系统记忆/好感度数值”，除非用户主动询问。',
             '',
             `会话：${sessionId}`,
@@ -660,7 +660,7 @@ class HumanClawMemoryRuntime {
             `## ${blocks.project?.label || '项目记忆'}`,
             blocks.project?.value || '',
             '',
-            `## ${blocks.persona?.label || 'AIGL 人设记忆'}`,
+            `## ${blocks.persona?.label || 'AILIS 人设记忆'}`,
             blocks.persona?.value || '',
             '',
             '## 相关近期记忆',
@@ -869,7 +869,7 @@ class HumanClawMemoryRuntime {
         this.state.reflections = this.state.reflections.slice(-100);
         this.state.stats.reflectionCount += 1;
         const reflectionPath = path.join(this.reflectionsDir, 'DREAMS.md');
-        const existing = fs.existsSync(reflectionPath) ? fs.readFileSync(reflectionPath, 'utf8') : '# AIGL Light Reflections\n\n';
+        const existing = fs.existsSync(reflectionPath) ? fs.readFileSync(reflectionPath, 'utf8') : '# AILIS Light Reflections\n\n';
         atomicWriteFileSync(reflectionPath, `${existing.trim()}\n\n## ${reflection.ts}\n\n${reflection.summary}\n`);
     }
 

@@ -53,7 +53,7 @@ test('TTS audio player stop resolves pending playback promise', async () => {
     }
 
     globalThis.window = {
-        aigrilDesktop: {
+        ailisDesktop: {
             platform: 'electron',
             preferences: {}
         },
@@ -76,7 +76,7 @@ test('TTS audio player stop resolves pending playback promise', async () => {
         cancelAnimationFrame() {}
     };
     globalThis.Audio = FakeAudio;
-    globalThis.URL.createObjectURL = () => 'blob:aigril-test-audio';
+    globalThis.URL.createObjectURL = () => 'blob:ailis-test-audio';
     globalThis.URL.revokeObjectURL = () => {};
 
     try {

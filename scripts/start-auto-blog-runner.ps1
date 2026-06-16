@@ -34,7 +34,7 @@ $process = Start-Process `
     -PassThru `
     -WindowStyle Minimized
 
-Write-Output "Started AIGril auto blog runner."
+Write-Output "Started AILIS auto blog runner."
 Write-Output "PID: $($process.Id)"
 Write-Output "Status: $RunDir\RUNNER_STATUS.json"
 Write-Output "Log: $RunDir\RUNNER_LOG.md"

@@ -11,7 +11,7 @@ const CONTRACT_SOURCE_PROFILES = Object.freeze([
         strengths: [
             'Standard protocol shape',
             'Broad ecosystem coverage',
-            'Works with AIGL mcp__server__tool direct specs'
+            'Works with AILIS mcp__server__tool direct specs'
         ],
         caveats: [
             'Tool descriptions vary in quality',
@@ -29,7 +29,7 @@ const CONTRACT_SOURCE_PROFILES = Object.freeze([
             'Useful for Gmail, Slack, GitHub, Notion, calendar, and SaaS tools'
         ],
         caveats: [
-            'Auth/OAuth state and side effects must be represented in AIGL permissions',
+            'Auth/OAuth state and side effects must be represented in AILIS permissions',
             'Low-level API actions often need higher-level tool cards'
         ]
     }),
@@ -71,10 +71,10 @@ const CONTRACT_SOURCE_PROFILES = Object.freeze([
         importShape: 'Core runtime tool spec: { name, description, parameters, output_schema }',
         strengths: [
             'Best reference for file, command, patch, session, and code execution tools',
-            'Matches AIGL computer/code runtime goals'
+            'Matches AILIS computer/code runtime goals'
         ],
         caveats: [
-            'Must adapt permissions, sandbox, approval, and persona surface to AIGL'
+            'Must adapt permissions, sandbox, approval, and persona surface to AILIS'
         ]
     })
 ]);
@@ -385,7 +385,7 @@ function applyKnownEnhancements(contract = {}) {
         contract.examples = normalizeArray(contract.examples);
         if (!contract.examples.length) {
             contract.examples.push({
-                path: 'F:/AIGril/tmp/solve.py',
+                path: 'F:/AILIS/tmp/solve.py',
                 timeoutMs: 120000
             });
         }
@@ -414,7 +414,7 @@ function applyKnownEnhancements(contract = {}) {
     return contract;
 }
 
-function compileAiglContract(raw = {}, options = {}) {
+function compileAilisContract(raw = {}, options = {}) {
     const sourceType = inferSourceType(raw, options);
     const defaults = sourceDefaults(sourceType);
     const name = normalizeString(
@@ -483,7 +483,7 @@ function compileAiglContract(raw = {}, options = {}) {
         approval: normalizeString(options.approval || raw.approval, 'policy'),
         provenance: {
             importedAt: new Date().toISOString(),
-            compiler: 'aigl_contract_compiler_v1',
+            compiler: 'ailis_contract_compiler_v1',
             generatedExampleCount: generatedExamples.length
         }
     };
@@ -492,7 +492,7 @@ function compileAiglContract(raw = {}, options = {}) {
     return enhanced;
 }
 
-function lintAiglContract(contract = {}, options = {}) {
+function lintAilisContract(contract = {}, options = {}) {
     const minScore = Number(options.minScore || DEFAULT_MIN_SCORE);
     let score = 100;
     const issues = [];
@@ -578,9 +578,9 @@ function lintAiglContract(contract = {}, options = {}) {
 }
 
 function buildContractPromptCard(contract = {}, lint = null) {
-    const quality = lint || lintAiglContract(contract);
+    const quality = lint || lintAilisContract(contract);
     return [
-        `AIGL TOOL CONTRACT ${contract.id}`,
+        `AILIS TOOL CONTRACT ${contract.id}`,
         `source=${contract.source?.type || 'unknown'}; risk=${contract.risk || 'medium'}; mutates=${contract.mutates ? 'true' : 'false'}; quality=${quality.score}/${quality.minScore}; gate=${quality.status}`,
         `purpose=${normalizeString(contract.purpose || contract.description)}`,
         `when_to_use=${JSON.stringify(normalizeArray(contract.whenToUse).slice(0, 4))}`,
@@ -594,9 +594,9 @@ function buildContractPromptCard(contract = {}, lint = null) {
     ].join('\n');
 }
 
-function compileAndLintAiglContract(raw = {}, options = {}) {
-    const contract = compileAiglContract(raw, options);
-    const lint = lintAiglContract(contract, options);
+function compileAndLintAilisContract(raw = {}, options = {}) {
+    const contract = compileAilisContract(raw, options);
+    const lint = lintAilisContract(contract, options);
     return {
         status: 'completed',
         contract,
@@ -609,8 +609,8 @@ module.exports = {
     CONTRACT_INTAKE_VERSION,
     CONTRACT_SOURCE_PROFILES,
     DEFAULT_MIN_SCORE,
-    compileAiglContract,
-    lintAiglContract,
-    compileAndLintAiglContract,
+    compileAilisContract,
+    lintAilisContract,
+    compileAndLintAilisContract,
     buildContractPromptCard
 };

@@ -3,8 +3,8 @@ const path = require('path');
 const { spawn } = require('child_process');
 
 const DEFAULT_TIMEOUT_MS = 120000;
-const DEFAULT_KOKORO_VOICE = process.env.AIGRIL_KOKORO_VOICE || 'zf_003';
-const DEFAULT_KOKORO_SPEED = Number(process.env.AIGRIL_KOKORO_SPEED) || 0.98;
+const DEFAULT_KOKORO_VOICE = process.env.AILIS_KOKORO_VOICE || 'zf_003';
+const DEFAULT_KOKORO_SPEED = Number(process.env.AILIS_KOKORO_SPEED) || 0.98;
 
 function normalizeString(value) {
     return String(value || '').trim();
@@ -23,7 +23,7 @@ function getProjectRoot() {
 }
 
 function resolvePythonPath(projectRoot) {
-    const configuredPath = normalizeString(process.env.AIGRIL_KOKORO_PYTHON);
+    const configuredPath = normalizeString(process.env.AILIS_KOKORO_PYTHON);
     if (configuredPath) {
         return configuredPath;
     }
@@ -87,7 +87,7 @@ class KokoroTTSManager {
             env: {
                 ...process.env,
                 ...(this.hfHome ? { HF_HOME: this.hfHome } : {}),
-                AIGRIL_PROJECT_ROOT: this.projectRoot,
+                AILIS_PROJECT_ROOT: this.projectRoot,
                 PYTHONIOENCODING: 'utf-8',
                 KMP_DUPLICATE_LIB_OK: 'TRUE'
             }

@@ -149,14 +149,14 @@ function getLabStatus() {
 }
 
 function injectLabStyles() {
-    if (document.getElementById('aigl-character-lab-style')) {
+    if (document.getElementById('ailis-character-lab-style')) {
         return;
     }
 
     const style = document.createElement('style');
-    style.id = 'aigl-character-lab-style';
+    style.id = 'ailis-character-lab-style';
     style.textContent = `
-        .aigl-character-lab-toggle {
+        .ailis-character-lab-toggle {
             position: fixed;
             left: 14px;
             bottom: 14px;
@@ -173,7 +173,7 @@ function injectLabStyles() {
             backdrop-filter: blur(10px);
         }
 
-        .aigl-character-lab {
+        .ailis-character-lab {
             position: fixed;
             left: 14px;
             bottom: 52px;
@@ -194,23 +194,23 @@ function injectLabStyles() {
             user-select: none;
         }
 
-        .aigl-character-lab.is-open {
+        .ailis-character-lab.is-open {
             display: flex;
         }
 
-        .aigl-character-lab__header {
+        .ailis-character-lab__header {
             display: flex;
             align-items: center;
             justify-content: space-between;
             gap: 8px;
         }
 
-        .aigl-character-lab__title {
+        .ailis-character-lab__title {
             font-size: 14px;
             font-weight: 700;
         }
 
-        .aigl-character-lab__status {
+        .ailis-character-lab__status {
             padding: 7px 8px;
             border-radius: 6px;
             background: rgba(115, 184, 229, 0.12);
@@ -219,25 +219,25 @@ function injectLabStyles() {
             line-height: 1.45;
         }
 
-        .aigl-character-lab__section {
+        .ailis-character-lab__section {
             display: flex;
             flex-direction: column;
             gap: 6px;
         }
 
-        .aigl-character-lab__section-title {
+        .ailis-character-lab__section-title {
             font-size: 12px;
             font-weight: 700;
             color: #4a7187;
         }
 
-        .aigl-character-lab__grid {
+        .ailis-character-lab__grid {
             display: grid;
             grid-template-columns: repeat(3, minmax(0, 1fr));
             gap: 6px;
         }
 
-        .aigl-character-lab__button {
+        .ailis-character-lab__button {
             min-width: 0;
             min-height: 30px;
             border: 1px solid rgba(92, 142, 170, 0.22);
@@ -248,21 +248,21 @@ function injectLabStyles() {
             cursor: pointer;
         }
 
-        .aigl-character-lab__button:hover {
+        .ailis-character-lab__button:hover {
             background: rgba(225, 244, 255, 0.92);
         }
 
-        .aigl-character-lab__button.is-danger {
+        .ailis-character-lab__button.is-danger {
             color: #8b3741;
             border-color: rgba(139, 55, 65, 0.25);
             background: rgba(255, 246, 247, 0.92);
         }
 
-        .aigl-character-lab__button.is-wide {
+        .ailis-character-lab__button.is-wide {
             grid-column: span 2;
         }
 
-        .aigl-character-lab__hint {
+        .ailis-character-lab__hint {
             color: #648296;
             font-size: 11px;
             line-height: 1.45;
@@ -272,39 +272,39 @@ function injectLabStyles() {
 }
 
 export function installCharacterRuntimeLab({ rootElement = document.body } = {}) {
-    if (typeof window === 'undefined' || window.__aiglCharacterRuntimeLabInstalled) {
+    if (typeof window === 'undefined' || window.__ailisCharacterRuntimeLabInstalled) {
         return null;
     }
-    window.__aiglCharacterRuntimeLabInstalled = true;
+    window.__ailisCharacterRuntimeLabInstalled = true;
     injectLabStyles();
 
     const state = {
-        open: window.localStorage?.getItem('aigl_character_lab_open') === '1',
+        open: window.localStorage?.getItem('ailis_character_lab_open') === '1',
         sequenceTimer: null,
         pulseTimer: null
     };
 
-    const toggleButton = createElement('button', 'aigl-character-lab-toggle', '角色验收');
+    const toggleButton = createElement('button', 'ailis-character-lab-toggle', '角色验收');
     toggleButton.type = 'button';
     toggleButton.title = '打开/关闭角色验收面板，快捷键 Ctrl+Shift+L';
 
-    const panel = createElement('section', 'aigl-character-lab');
-    panel.setAttribute('aria-label', 'AIGL 角色验收面板');
+    const panel = createElement('section', 'ailis-character-lab');
+    panel.setAttribute('aria-label', 'AILIS 角色验收面板');
 
-    const header = createElement('div', 'aigl-character-lab__header');
+    const header = createElement('div', 'ailis-character-lab__header');
     header.append(
-        createElement('div', 'aigl-character-lab__title', '角色 Runtime 验收'),
-        createElement('button', 'aigl-character-lab__button', '关闭')
+        createElement('div', 'ailis-character-lab__title', '角色 Runtime 验收'),
+        createElement('button', 'ailis-character-lab__button', '关闭')
     );
     const closeButton = header.querySelector('button');
 
-    const status = createElement('div', 'aigl-character-lab__status');
-    const sequenceLabel = createElement('div', 'aigl-character-lab__hint', '当前巡检：手动');
+    const status = createElement('div', 'ailis-character-lab__status');
+    const sequenceLabel = createElement('div', 'ailis-character-lab__hint', '当前巡检：手动');
 
     function setOpen(open) {
         state.open = Boolean(open);
         panel.classList.toggle('is-open', state.open);
-        window.localStorage?.setItem('aigl_character_lab_open', state.open ? '1' : '0');
+        window.localStorage?.setItem('ailis_character_lab_open', state.open ? '1' : '0');
     }
 
     function stopSequence({ resetIdle = true } = {}) {
@@ -416,12 +416,12 @@ export function installCharacterRuntimeLab({ rootElement = document.body } = {})
     }
 
     function createSection(title, cases, handler, options = {}) {
-        const section = createElement('div', 'aigl-character-lab__section');
-        section.appendChild(createElement('div', 'aigl-character-lab__section-title', title));
-        const grid = createElement('div', 'aigl-character-lab__grid');
+        const section = createElement('div', 'ailis-character-lab__section');
+        section.appendChild(createElement('div', 'ailis-character-lab__section-title', title));
+        const grid = createElement('div', 'ailis-character-lab__grid');
         for (const item of cases) {
             const label = options.getLabel?.(item) || item[1];
-            const button = createElement('button', 'aigl-character-lab__button', label);
+            const button = createElement('button', 'ailis-character-lab__button', label);
             const titleText = options.getTitle?.(item);
             if (titleText) {
                 button.title = titleText;
@@ -454,28 +454,28 @@ export function installCharacterRuntimeLab({ rootElement = document.body } = {})
         }
     });
 
-    const automationSection = createElement('div', 'aigl-character-lab__section');
-    automationSection.appendChild(createElement('div', 'aigl-character-lab__section-title', '自动巡检'));
-    const automationGrid = createElement('div', 'aigl-character-lab__grid');
-    const autoExpressionsButton = createElement('button', 'aigl-character-lab__button is-wide', '自动表情');
+    const automationSection = createElement('div', 'ailis-character-lab__section');
+    automationSection.appendChild(createElement('div', 'ailis-character-lab__section-title', '自动巡检'));
+    const automationGrid = createElement('div', 'ailis-character-lab__grid');
+    const autoExpressionsButton = createElement('button', 'ailis-character-lab__button is-wide', '自动表情');
     autoExpressionsButton.type = 'button';
     autoExpressionsButton.addEventListener('click', () => {
         startSequence(EXPRESSION_CASES, ([emotion, label]) => testExpression(emotion, label), 2600, '表情');
     });
-    const autoStatesButton = createElement('button', 'aigl-character-lab__button', '自动状态');
+    const autoStatesButton = createElement('button', 'ailis-character-lab__button', '自动状态');
     autoStatesButton.type = 'button';
     autoStatesButton.addEventListener('click', () => {
         startSequence(STATE_CASES, ([, label, surface]) => testState(surface, label), 3600, '状态');
     });
-    const autoMotionsButton = createElement('button', 'aigl-character-lab__button', '自动动作');
+    const autoMotionsButton = createElement('button', 'ailis-character-lab__button', '自动动作');
     autoMotionsButton.type = 'button';
     autoMotionsButton.addEventListener('click', () => {
         startSequence(MOTION_CASES, ([actionName, label]) => testMotion(actionName, label), 4700, '实验动作');
     });
-    const lipButton = createElement('button', 'aigl-character-lab__button', '口型脉冲');
+    const lipButton = createElement('button', 'ailis-character-lab__button', '口型脉冲');
     lipButton.type = 'button';
     lipButton.addEventListener('click', startLipPulse);
-    const stopButton = createElement('button', 'aigl-character-lab__button is-danger', '停止/回待机');
+    const stopButton = createElement('button', 'ailis-character-lab__button is-danger', '停止/回待机');
     stopButton.type = 'button';
     stopButton.addEventListener('click', () => stopSequence());
     automationGrid.append(autoExpressionsButton, autoStatesButton, autoMotionsButton, lipButton, stopButton);
@@ -483,7 +483,7 @@ export function installCharacterRuntimeLab({ rootElement = document.body } = {})
 
     const hint = createElement(
         'div',
-        'aigl-character-lab__hint',
+        'ailis-character-lab__hint',
         '建议先点“自动状态”看小动作。带 * 的 VRMA 是实验资产：可手动查看，但默认不会进入普通对话表现链路。'
     );
 
@@ -516,7 +516,7 @@ export function installCharacterRuntimeLab({ rootElement = document.body } = {})
         }
     });
 
-    window.aigrilDesktop?.onCharacterLabToggle?.(() => {
+    window.ailisDesktop?.onCharacterLabToggle?.(() => {
         setOpen(true);
     });
 

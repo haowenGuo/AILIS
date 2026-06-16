@@ -328,11 +328,11 @@ const llmPresetCatalog = [
 ];
 
 const renderProfileLabels = {
-    aigl_soft_anime_mtoon: '柔和动漫 MToon',
-    aigl_bright_companion_mtoon: '明亮陪伴 MToon',
-    aigl_cinematic_rim_toon: '电影感边缘光 Toon',
-    aigl_material_hybrid_npr: '材质混合 NPR',
-    aigl_hard_cel_mtoon: '硬边赛璐璐 MToon'
+    ailis_soft_anime_mtoon: '柔和动漫 MToon',
+    ailis_bright_companion_mtoon: '明亮陪伴 MToon',
+    ailis_cinematic_rim_toon: '电影感边缘光 Toon',
+    ailis_material_hybrid_npr: '材质混合 NPR',
+    ailis_hard_cel_mtoon: '硬边赛璐璐 MToon'
 };
 
 const PET_BASE_WIDTH = 720;
@@ -685,7 +685,7 @@ function normalizePreferences(preferences = {}) {
             String(preferences.renderProfileId || '')
         )
             ? String(preferences.renderProfileId)
-            : 'aigl_soft_anime_mtoon',
+            : 'ailis_soft_anime_mtoon',
         renderLightYawDeg: clampNumber(preferences.renderLightYawDeg, -75, 75, 0, 0),
         renderKeyLightScale: clampNumber(preferences.renderKeyLightScale, 0.65, 1.45, 1, 2),
         renderAmbientFillScale: clampNumber(preferences.renderAmbientFillScale, 0.55, 1.35, 1, 2),
@@ -1232,7 +1232,7 @@ function applyLlmProviderDefaultsIfNeeded(previousProvider, nextProvider) {
 }
 
 async function runLlmHealthCheck() {
-    if (!window.aigrilDesktop?.llm?.healthCheck) {
+    if (!window.ailisDesktop?.llm?.healthCheck) {
         renderLlmHealthState({
             ok: false,
             checks: {},
@@ -1251,7 +1251,7 @@ async function runLlmHealthCheck() {
             temperature: Number(elements.llmTemperature.value),
             timeoutMs: Number(elements.llmTimeout.value)
         };
-        const result = await window.aigrilDesktop.llm.healthCheck({
+        const result = await window.ailisDesktop.llm.healthCheck({
             settings,
             includeToolCall: true,
             includeVision: true,
@@ -1465,14 +1465,14 @@ async function refreshOpenClawStatus() {
         return;
     }
 
-    if (!window.aigrilDesktop?.gateway?.getStatus) {
+    if (!window.ailisDesktop?.gateway?.getStatus) {
         elements.openclawStatusText.textContent = '当前环境不支持 HumanClaw Gateway。';
         elements.openclawRuntimeText.textContent = '';
         return;
     }
 
     try {
-        renderHumanClawStatus(await window.aigrilDesktop.gateway.getStatus());
+        renderHumanClawStatus(await window.ailisDesktop.gateway.getStatus());
     } catch (error) {
         elements.openclawStatusText.textContent = `读取 HumanClaw 状态失败：${error.message || error}`;
         elements.openclawRuntimeText.textContent = '';
@@ -1547,14 +1547,14 @@ function renderMemorySnapshot(snapshot = {}) {
 }
 
 async function refreshMemoryStatus() {
-    if (!window.aigrilDesktop?.memory?.getSnapshot) {
+    if (!window.ailisDesktop?.memory?.getSnapshot) {
         if (elements.memoryStatusText) {
             elements.memoryStatusText.textContent = '当前环境不支持人格记忆。';
         }
         return;
     }
     try {
-        renderMemorySnapshot(await window.aigrilDesktop.memory.getSnapshot({ includeEvents: false }));
+        renderMemorySnapshot(await window.ailisDesktop.memory.getSnapshot({ includeEvents: false }));
     } catch (error) {
         if (elements.memoryStatusText) {
             elements.memoryStatusText.textContent = `读取人格记忆失败：${error.message || error}`;
@@ -1868,7 +1868,7 @@ function renderAgentLabAnalysis(analysis) {
 
 async function loadAgentLabAnalysis(runId, { silent = false } = {}) {
     const id = String(runId || '').trim();
-    if (!id || !window.aigrilDesktop?.agentLab?.getRunAnalysis) {
+    if (!id || !window.ailisDesktop?.agentLab?.getRunAnalysis) {
         if (!silent) {
             setAgentLabStatus('当前环境不支持 Agent Lab。');
         }
@@ -1880,7 +1880,7 @@ async function loadAgentLabAnalysis(runId, { silent = false } = {}) {
         setAgentLabStatus('正在读取分析...');
     }
     try {
-        const analysis = await window.aigrilDesktop.agentLab.getRunAnalysis({
+        const analysis = await window.ailisDesktop.agentLab.getRunAnalysis({
             runId: id,
             transcriptLimit: 2500
         });
@@ -1898,7 +1898,7 @@ async function loadAgentLabAnalysis(runId, { silent = false } = {}) {
 }
 
 async function refreshAgentLabRuns({ selectLatest = false, silent = false } = {}) {
-    if (!window.aigrilDesktop?.agentLab?.listRuns) {
+    if (!window.ailisDesktop?.agentLab?.listRuns) {
         setAgentLabStatus('当前环境不支持 Agent Lab。');
         renderAgentLabAnalysis(null);
         return;
@@ -1907,7 +1907,7 @@ async function refreshAgentLabRuns({ selectLatest = false, silent = false } = {}
         setAgentLabStatus('正在刷新...');
     }
     try {
-        const result = await window.aigrilDesktop.agentLab.listRuns({ limit: 40 });
+        const result = await window.ailisDesktop.agentLab.listRuns({ limit: 40 });
         agentLabRuns = Array.isArray(result?.runs) ? result.runs : [];
         const nextRunId = selectLatest
             ? agentLabRuns[0]?.runId
@@ -1934,7 +1934,7 @@ function syncAgentLabRunButton() {
 }
 
 async function runAgentLabTask() {
-    if (!window.aigrilDesktop?.agentLab?.runTask) {
+    if (!window.ailisDesktop?.agentLab?.runTask) {
         setAgentLabStatus('当前环境不支持 Agent Lab。');
         return;
     }
@@ -1955,7 +1955,7 @@ async function runAgentLabTask() {
     setAgentLabStatus('正在运行 Agent Loop...');
 
     try {
-        const result = await window.aigrilDesktop.agentLab.runTask({
+        const result = await window.ailisDesktop.agentLab.runTask({
             message,
             sessionId,
             agentLoop: 'llm',
@@ -2014,11 +2014,11 @@ function scheduleAgentLabAnalysisRefresh(runId) {
 }
 
 async function resetAffinityScore() {
-    if (!window.aigrilDesktop?.memory?.resetAffinity) {
+    if (!window.ailisDesktop?.memory?.resetAffinity) {
         return;
     }
     try {
-        await window.aigrilDesktop.memory.resetAffinity({ score: 50 });
+        await window.ailisDesktop.memory.resetAffinity({ score: 50 });
         await refreshMemoryStatus();
         setStatus('好感度已重置为 50。');
     } catch (error) {
@@ -2095,7 +2095,7 @@ async function refreshMicrophones({ requestPermission = false } = {}) {
 }
 
 async function savePreferences() {
-    if (!window.aigrilDesktop?.savePreferences) {
+    if (!window.ailisDesktop?.savePreferences) {
         setStatus('当前环境不支持保存桌面配置。');
         return;
     }
@@ -2105,7 +2105,7 @@ async function savePreferences() {
     setStatus('正在保存设置...');
 
     try {
-        const savedPreferences = await window.aigrilDesktop.savePreferences(
+        const savedPreferences = await window.ailisDesktop.savePreferences(
             readFormPreferences({ includeSecret: true })
         );
         pendingClearLlmKey = false;
@@ -2122,7 +2122,7 @@ async function savePreferences() {
 }
 
 async function restoreDefaults() {
-    if (!window.aigrilDesktop?.restoreDefaultPreferences) {
+    if (!window.ailisDesktop?.restoreDefaultPreferences) {
         setStatus('当前环境不支持恢复默认配置。');
         return;
     }
@@ -2137,7 +2137,7 @@ async function restoreDefaults() {
     setStatus('正在恢复默认设置...');
 
     try {
-        const restoredPreferences = await window.aigrilDesktop.restoreDefaultPreferences();
+        const restoredPreferences = await window.ailisDesktop.restoreDefaultPreferences();
         pendingClearLlmKey = false;
         pendingClearElevenLabsKey = false;
         fillForm(restoredPreferences);
@@ -2152,15 +2152,15 @@ async function restoreDefaults() {
 }
 
 async function initialize() {
-    if (!window.aigrilDesktop?.getControlPanelState) {
-        setStatus('当前页面只能在 AIGril 桌面版里使用。');
+    if (!window.ailisDesktop?.getControlPanelState) {
+        setStatus('当前页面只能在 AILIS 桌面版里使用。');
         return;
     }
 
     setStatus('正在读取当前配置...');
 
     try {
-        panelState = await window.aigrilDesktop.getControlPanelState();
+        panelState = await window.ailisDesktop.getControlPanelState();
         llmProviderDefaultBaseUrls = {
             ...fallbackLlmProviderDefaultBaseUrls,
             ...(panelState.options?.llmProviderDefaultBaseUrls || {})
@@ -2463,12 +2463,12 @@ elements.clearElevenLabsKeyBtn.addEventListener('click', () => {
 });
 
 elements.chooseHumanClawStateDirBtn?.addEventListener('click', async () => {
-    if (!window.aigrilDesktop?.chooseHumanClawStateDir) {
+    if (!window.ailisDesktop?.chooseHumanClawStateDir) {
         setStatus('当前环境不支持选择目录。');
         return;
     }
     try {
-        const result = await window.aigrilDesktop.chooseHumanClawStateDir();
+        const result = await window.ailisDesktop.chooseHumanClawStateDir();
         if (!result?.ok || !result.path) {
             return;
         }
@@ -2512,14 +2512,14 @@ elements.resetAffinityBtn?.addEventListener('click', () => {
 });
 
 elements.openAgentLabBtn?.addEventListener('click', () => {
-    void window.aigrilDesktop?.showAgentLab?.();
+    void window.ailisDesktop?.showAgentLab?.();
 });
 
 elements.closeBtn.addEventListener('click', () => {
-    void window.aigrilDesktop?.closeCurrentWindow?.();
+    void window.ailisDesktop?.closeCurrentWindow?.();
 });
 
-window.aigrilDesktop?.onPreferencesUpdated?.(({ preferences = {} } = {}) => {
+window.ailisDesktop?.onPreferencesUpdated?.(({ preferences = {} } = {}) => {
     if (saveInFlight) {
         return;
     }
@@ -2535,7 +2535,7 @@ window.aigrilDesktop?.onPreferencesUpdated?.(({ preferences = {} } = {}) => {
     setStatus('已同步外部配置更新。');
 });
 
-window.aigrilDesktop?.gateway?.onEvent?.((event = {}) => {
+window.ailisDesktop?.gateway?.onEvent?.((event = {}) => {
     if (/^(gateway|agent|tool)\./.test(event.type || '')) {
         void refreshOpenClawStatus();
     }

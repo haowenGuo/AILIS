@@ -55,9 +55,9 @@
       "writing_intro": "这里是文章列表页。后续无论你写项目复盘、技术笔记、周记还是更个人化的随笔，都可以沿用同一套结构。",
       "featured_projects": [
         {
-          "name": "AIGril / AIGL",
+          "name": "AILIS / AILIS",
           "description": "一个基于浏览器的 3D 虚拟人项目，包含 VRM 渲染、动作表情联动、流式对话和记忆系统。",
-          "link": "https://haowenGuo.github.io/AIGril/?backend=https://airi-backend.onrender.com"
+          "link": "https://haowenGuo.github.io/AILIS/?backend=https://airi-backend.onrender.com"
         },
         {
           "name": "AI Safety API",
@@ -137,9 +137,9 @@
       "writing_intro": "This is the archive page for writing. Whether you publish project breakdowns, technical notes, weekly logs, or more personal essays, they can all live in the same structure.",
       "featured_projects": [
         {
-          "name": "AIGril / AIGL",
+          "name": "AILIS / AILIS",
           "description": "A browser-based 3D virtual companion project with VRM rendering, action/expression control, streaming chat, and memory.",
-          "link": "https://haowenGuo.github.io/AIGril/?backend=https://airi-backend.onrender.com"
+          "link": "https://haowenGuo.github.io/AILIS/?backend=https://airi-backend.onrender.com"
         },
         {
           "name": "AI Safety API",

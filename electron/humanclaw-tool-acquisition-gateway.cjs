@@ -6,8 +6,8 @@ const { listToolContractSummaries } = require('./humanclaw-tool-contracts.cjs');
 const { listHumanClawSkills } = require('./humanclaw-skills.cjs');
 const {
     CONTRACT_SOURCE_PROFILES,
-    compileAndLintAiglContract,
-    lintAiglContract,
+    compileAndLintAilisContract,
+    lintAilisContract,
     buildContractPromptCard
 } = require('./humanclaw-contract-compiler.cjs');
 const {
@@ -17,7 +17,7 @@ const {
     collectStandardToolPackContracts,
     collectStandardToolPackAuthProfiles,
     publicReadonlyOpenApiOperationsFromStandardPacks
-} = require('./aigl-standard-tool-packs.cjs');
+} = require('./ailis-standard-tool-packs.cjs');
 
 const OFFICIAL_MCP_REGISTRY_URL = 'https://registry.modelcontextprotocol.io/v0/servers';
 const LEARNING_SCHEMA_VERSION = 1;
@@ -33,7 +33,7 @@ const LOCAL_DOCUMENT_ADAPTERS = Object.freeze({
         runtime: 'python',
         packageName: 'docling',
         importName: 'docling',
-        commandEnvVar: 'AIGL_PYTHON',
+        commandEnvVar: 'AILIS_PYTHON',
         outputFormat: 'markdown'
     }),
     markitdown_convert_document: Object.freeze({
@@ -42,7 +42,7 @@ const LOCAL_DOCUMENT_ADAPTERS = Object.freeze({
         runtime: 'python',
         packageName: 'markitdown',
         importName: 'markitdown',
-        commandEnvVar: 'AIGL_PYTHON',
+        commandEnvVar: 'AILIS_PYTHON',
         outputFormat: 'markdown'
     }),
     python_document_extract: Object.freeze({
@@ -51,7 +51,7 @@ const LOCAL_DOCUMENT_ADAPTERS = Object.freeze({
         runtime: 'python',
         packageName: 'python-docx,pypdf',
         importNames: Object.freeze(['docx', 'pypdf']),
-        commandEnvVar: 'AIGL_PYTHON',
+        commandEnvVar: 'AILIS_PYTHON',
         outputFormat: 'markdown'
     })
 });
@@ -488,7 +488,7 @@ function inferLocalDocumentAdapter(raw = {}, requestedAdapter = {}) {
             packageName: normalizeString(requestedAdapter.packageName || requestedAdapter.package || requestedAdapter.dependency),
             importName: normalizeString(requestedAdapter.importName || requestedAdapter.import || requestedAdapter.packageName || requestedAdapter.package),
             importNames: normalizeArray(requestedAdapter.importNames || requestedAdapter.requiredImports || requestedAdapter.imports).map(String).filter(Boolean),
-            commandEnvVar: normalizeString(requestedAdapter.commandEnvVar || requestedAdapter.pythonEnvVar, 'AIGL_PYTHON')
+            commandEnvVar: normalizeString(requestedAdapter.commandEnvVar || requestedAdapter.pythonEnvVar, 'AILIS_PYTHON')
         };
     }
     const key = normalizeString(raw.toolId || raw.id || raw.name || raw.operationId).toLowerCase();
@@ -497,7 +497,7 @@ function inferLocalDocumentAdapter(raw = {}, requestedAdapter = {}) {
 }
 
 function localAdapterCommand(adapter = {}) {
-    const envVar = normalizeString(adapter.commandEnvVar, 'AIGL_PYTHON');
+    const envVar = normalizeString(adapter.commandEnvVar, 'AILIS_PYTHON');
     return normalizeString(envVar && process.env[envVar], normalizeString(adapter.command, 'python'));
 }
 
@@ -891,7 +891,7 @@ function buildMcpSmokeProfile({ serverName = '', sourceKind = 'mcp_config', auth
             },
             {
                 id: 'mcp_direct_tool_specs',
-                title: 'AIGL can convert returned tools into mcp__server__tool direct specs.',
+                title: 'AILIS can convert returned tools into mcp__server__tool direct specs.',
                 type: 'mcp_direct_spec_generation',
                 required: true
             }
@@ -963,7 +963,7 @@ class HumanClawToolAcquisitionGateway {
                 category: bundle.category,
                 description: bundle.description,
                 health,
-                source: 'aigl_core_tool_catalog',
+                source: 'ailis_core_tool_catalog',
                 toolIds: [...bundle.toolIds],
                 availableToolIds,
                 skillIds: [...bundle.skillIds],
@@ -1327,7 +1327,7 @@ class HumanClawToolAcquisitionGateway {
             args.operation ||
             args.openapiOperation ||
             args;
-        const result = compileAndLintAiglContract(raw, {
+        const result = compileAndLintAilisContract(raw, {
             id: args.contractId || args.id,
             name: args.name,
             title: args.title,
@@ -1352,7 +1352,7 @@ class HumanClawToolAcquisitionGateway {
         if (!contract || !contract.inputSchema) {
             return this.compileContract(args);
         }
-        const lint = lintAiglContract(contract, { minScore: args.minScore });
+        const lint = lintAilisContract(contract, { minScore: args.minScore });
         return {
             status: 'completed',
             contract,
@@ -1407,7 +1407,7 @@ class HumanClawToolAcquisitionGateway {
             };
         }
         const minScore = Number(args.minScore || 75);
-        const compiled = rawContracts.map((raw, index) => compileAndLintAiglContract(raw, {
+        const compiled = rawContracts.map((raw, index) => compileAndLintAilisContract(raw, {
             sourceType: sourceType || raw.sourceType || raw.source_type,
             server: args.server || args.serverName || args.mcpServerName,
             sourceName: args.sourceName,
@@ -1592,7 +1592,7 @@ class HumanClawToolAcquisitionGateway {
         if (args.secret || args.secretValue || args.token || args.apiKey || args.password) {
             return {
                 error: 'raw_secret_not_allowed',
-                message: 'Do not store raw secrets in AIGL auth profiles. Put the secret in an environment variable and store only envVar here.'
+                message: 'Do not store raw secrets in AILIS auth profiles. Put the secret in an environment variable and store only envVar here.'
             };
         }
         const envVar = normalizeString(
@@ -1900,7 +1900,7 @@ class HumanClawToolAcquisitionGateway {
                 outputSchema: spec.output_schema || spec.outputSchema || {},
                 server: spec.server
             };
-            const compiled = compileAndLintAiglContract(raw, {
+            const compiled = compileAndLintAilisContract(raw, {
                 sourceType: 'mcp_tool',
                 server: spec.server,
                 minScore: args.minScore || 60
@@ -1969,7 +1969,7 @@ class HumanClawToolAcquisitionGateway {
                 },
                 permissions: candidate.install?.authEnvVar ? [candidate.install.authEnvVar] : []
             };
-            const compiled = compileAndLintAiglContract(raw, {
+            const compiled = compileAndLintAilisContract(raw, {
                 sourceType: 'mcp_tool',
                 sourceName: 'official_mcp_registry',
                 sourceUrl: candidate.sourceUrl || this.registryUrl,
@@ -2079,7 +2079,7 @@ class HumanClawToolAcquisitionGateway {
                 composioAdapterEnabled ||
                 localAdapterEnabled
             );
-            const compiled = compileAndLintAiglContract(raw, {
+            const compiled = compileAndLintAilisContract(raw, {
                 sourceType: sourceType || raw.sourceType || raw.source_type,
                 server: args.server || args.serverName || args.mcpServerName,
                 sourceName: args.sourceName,
@@ -2153,7 +2153,7 @@ class HumanClawToolAcquisitionGateway {
             verification: 'standard_pack_public_readonly',
             notes: [
                 ...normalizeArray(entry.notes),
-                'AIGL Standard Tool Pack public read-only OpenAPI adapter; no auth required.'
+                'AILIS Standard Tool Pack public read-only OpenAPI adapter; no auth required.'
             ],
             virtualToolId: createExternalVirtualToolId(entry)
         }));
@@ -2453,7 +2453,7 @@ class HumanClawToolAcquisitionGateway {
                     adapter,
                     command,
                     message: `Python runtime is unavailable for local adapter: ${result.error}`,
-                    nextActions: ['Set AIGL_PYTHON to a Python executable with the required package installed.']
+                    nextActions: ['Set AILIS_PYTHON to a Python executable with the required package installed.']
                 };
             }
             if (!result.ok) {
@@ -2481,7 +2481,7 @@ class HumanClawToolAcquisitionGateway {
             importNames,
             missingImports,
             message: `Python package is not importable: ${missingImports.join(', ')}`,
-            nextActions: [`Install ${adapter.packageName || missingImports.join(', ')} in the AIGL Python environment.`, 'Use the alternate document converter if available.']
+            nextActions: [`Install ${adapter.packageName || missingImports.join(', ')} in the AILIS Python environment.`, 'Use the alternate document converter if available.']
         };
     }
 
@@ -2973,7 +2973,7 @@ class HumanClawToolAcquisitionGateway {
             toolId: exposure.toolId,
             callable: true,
             source: exposure.source,
-            message: 'This exposure was marked callable, but AIGL does not have an executor adapter for this source type yet.',
+            message: 'This exposure was marked callable, but AILIS does not have an executor adapter for this source type yet.',
             nextActions: ['Install or implement a source-specific adapter.', 'Run smoke tests, then re-expose after verification.']
         };
     }
@@ -3160,7 +3160,7 @@ class HumanClawToolAcquisitionGateway {
             verification: entry.callable ? entry.verification : normalizeString(entry.verification, 'adapter_required'),
             notes: [
                 ...normalizeArray(entry.notes),
-                'Imported from AIGL Standard Tool Packs; use smoke_exposed_external_tool before relying on live authenticated backends.'
+                'Imported from AILIS Standard Tool Packs; use smoke_exposed_external_tool before relying on live authenticated backends.'
             ]
         }));
         return {

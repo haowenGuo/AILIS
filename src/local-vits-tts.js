@@ -19,7 +19,7 @@ let synthesizerPromise = null;
 function configureTransformersRuntime() {
     env.allowRemoteModels = false;
     env.allowLocalModels = true;
-    env.localModelPath = 'aigril-model://modelscope/';
+    env.localModelPath = 'ailis-model://modelscope/';
     env.backends.onnx.wasm.numThreads = 1;
     env.backends.onnx.wasm.wasmPaths = {
         'ort-wasm.wasm': ortWasmUrl,

@@ -7,11 +7,11 @@ import time
 from pathlib import Path
 
 
-PROJECT_ROOT = Path(os.environ.get("AIGRIL_PROJECT_ROOT") or Path(__file__).resolve().parents[1])
-COSYVOICE_ROOT = Path(os.environ.get("AIGRIL_COSYVOICE_ROOT") or PROJECT_ROOT / "build-cache" / "CosyVoice")
-MODEL_DIR = Path(os.environ.get("AIGRIL_COSYVOICE3_MODEL_DIR") or COSYVOICE_ROOT / "pretrained_models" / "Fun-CosyVoice3-0.5B")
+PROJECT_ROOT = Path(os.environ.get("AILIS_PROJECT_ROOT") or Path(__file__).resolve().parents[1])
+COSYVOICE_ROOT = Path(os.environ.get("AILIS_COSYVOICE_ROOT") or PROJECT_ROOT / "build-cache" / "CosyVoice")
+MODEL_DIR = Path(os.environ.get("AILIS_COSYVOICE3_MODEL_DIR") or COSYVOICE_ROOT / "pretrained_models" / "Fun-CosyVoice3-0.5B")
 DEFAULT_PROMPT_WAV = COSYVOICE_ROOT / "asset" / "zero_shot_prompt.wav"
-SELECTED_PREVIEW_WAV = PROJECT_ROOT / "Resources" / "tts" / "cosyvoice3_aigl_anime_shy_soft_0.wav"
+SELECTED_PREVIEW_WAV = PROJECT_ROOT / "Resources" / "tts" / "cosyvoice3_ailis_anime_shy_soft_0.wav"
 DEFAULT_INSTRUCT_TEXT = (
     "You are a helpful assistant. "
     "请用泛化的日系二次元害羞少女声线说话，语气轻声、柔弱、有一点小心翼翼，"
@@ -41,7 +41,7 @@ class redirect_stdout_to_stderr:
 
 
 def get_prompt_wav():
-    raw_path = os.environ.get("AIGRIL_COSYVOICE3_PROMPT_WAV")
+    raw_path = os.environ.get("AILIS_COSYVOICE3_PROMPT_WAV")
     candidates = [
         Path(raw_path) if raw_path else None,
         DEFAULT_PROMPT_WAV,
@@ -124,7 +124,7 @@ def synthesize(request):
     sample_rate = int(active_model.sample_rate)
     duration_seconds = speech.shape[1] / sample_rate
 
-    tmp_file = tempfile.NamedTemporaryFile(prefix="aigril-cosyvoice3-", suffix=".wav", delete=False)
+    tmp_file = tempfile.NamedTemporaryFile(prefix="ailis-cosyvoice3-", suffix=".wav", delete=False)
     tmp_path = tmp_file.name
     tmp_file.close()
 

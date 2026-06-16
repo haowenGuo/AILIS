@@ -2,7 +2,7 @@ import { CONFIG } from './config.js';
 import { createChunkedTtsSession } from './realtime-voice/chunked-tts-session.js';
 
 function isDesktopRuntime() {
-    return window.aigrilDesktop?.platform === 'electron';
+    return window.ailisDesktop?.platform === 'electron';
 }
 
 const ZH_FEMALE_VOICE_HINTS = [
@@ -330,9 +330,9 @@ class ServerTTSCandidate {
             throw new Error('TTS 输入文本不能为空');
         }
 
-        if (isDesktopRuntime() && typeof window.aigrilDesktop?.tts?.synthesize === 'function') {
+        if (isDesktopRuntime() && typeof window.ailisDesktop?.tts?.synthesize === 'function') {
             return normalizeSynthesisResult(
-                await window.aigrilDesktop.tts.synthesize({
+                await window.ailisDesktop.tts.synthesize({
                     text: cleanText
                 }),
                 { defaultMimeType: 'audio/mpeg' }
@@ -468,11 +468,11 @@ class CosyVoice3TTSCandidate {
     }
 
     get supportsTTS() {
-        return isDesktopRuntime() && typeof window.aigrilDesktop?.tts?.synthesize === 'function';
+        return isDesktopRuntime() && typeof window.ailisDesktop?.tts?.synthesize === 'function';
     }
 
     async synthesizeSpeech(text) {
-        const result = await window.aigrilDesktop.tts.synthesize({
+        const result = await window.ailisDesktop.tts.synthesize({
             provider: 'cosyvoice3',
             preset: 'anime_shy_soft',
             text,
@@ -531,11 +531,11 @@ class KokoroZhTTSCandidate {
     }
 
     get supportsTTS() {
-        return isDesktopRuntime() && typeof window.aigrilDesktop?.tts?.synthesize === 'function';
+        return isDesktopRuntime() && typeof window.ailisDesktop?.tts?.synthesize === 'function';
     }
 
     async synthesizeSpeech(text) {
-        const result = await window.aigrilDesktop.tts.synthesize({
+        const result = await window.ailisDesktop.tts.synthesize({
             provider: 'kokoro',
             voice: 'zf_003',
             text,

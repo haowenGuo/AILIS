@@ -103,7 +103,7 @@ test('HumanClaw tool contracts expose versioned schemas and validate common fail
 
     const validGitHubPages = validateToolContract('github_pages', {
         action: 'diagnose_publish',
-        targetPath: 'about-aigl.html',
+        targetPath: 'about-ailis.html',
         skipNetwork: true
     });
     assert.equal(validGitHubPages.ok, true);
@@ -172,7 +172,7 @@ test('HumanClaw tool contracts expose versioned schemas and validate common fail
 
     const validSelfDebugCase = validateToolContract('self_debugger', {
         action: 'open_case',
-        bugReport: 'AIGL failed to read the latest tool result',
+        bugReport: 'AILIS failed to read the latest tool result',
         affectedCapability: 'agent_loop'
     });
     assert.equal(validSelfDebugCase.ok, true);
@@ -191,7 +191,7 @@ test('HumanClaw tool contracts expose versioned schemas and validate common fail
 
     const validSelfEvolutionAnalyze = validateToolContract('self_evolution', {
         action: 'analyze',
-        taskText: '以后按我的偏好优化 AIGRIL'
+        taskText: '以后按我的偏好优化 AILIS'
     });
     assert.equal(validSelfEvolutionAnalyze.ok, true);
 

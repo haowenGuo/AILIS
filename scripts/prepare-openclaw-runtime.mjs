@@ -58,7 +58,7 @@ function copyDirectory(sourcePath, targetPath) {
 
 function resolveRuntimeSourceCandidates() {
     return [
-        normalizeOptionalString(process.env.AIGRIL_OPENCLAW_DEPLOY_DIR),
+        normalizeOptionalString(process.env.AILIS_OPENCLAW_DEPLOY_DIR),
         path.join(projectRoot, 'tmp', 'openclaw-deploy-test'),
         path.resolve(projectRoot, '..', 'HumanClaw', 'HumanClaw', 'build-cache', 'openclaw-runtime'),
         'F:\\HumanClaw\\HumanClaw\\build-cache\\openclaw-runtime'
@@ -67,7 +67,7 @@ function resolveRuntimeSourceCandidates() {
 
 function resolveOpenClawRepoCandidates() {
     return [
-        normalizeOptionalString(process.env.AIGRIL_OPENCLAW_REPO),
+        normalizeOptionalString(process.env.AILIS_OPENCLAW_REPO),
         normalizeOptionalString(process.env.OPENCLAW_REPO),
         path.resolve(projectRoot, '..', 'HumanClaw', 'OPENCLAW_Lobster'),
         'F:\\HumanClaw\\OPENCLAW_Lobster'
@@ -122,7 +122,7 @@ function stageRuntimeBundle() {
     const repoRoot = resolveExistingOpenClawRepo();
     if (!repoRoot) {
         throw new Error(
-            '找不到 OpenClaw 源码目录，请设置 AIGRIL_OPENCLAW_REPO 或先准备现成 deploy 目录。'
+            '找不到 OpenClaw 源码目录，请设置 AILIS_OPENCLAW_REPO 或先准备现成 deploy 目录。'
         );
     }
 

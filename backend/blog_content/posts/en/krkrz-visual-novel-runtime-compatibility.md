@@ -26,7 +26,7 @@ Those details form a useful migration checklist. They cover encoding, plugin lin
 
 This post is a high-level summary of the README only. It does not redistribute the local runtime, plugins, debugger, saved data, license text, or binary files. The README already points readers to public resources such as the Kirikiri Z homepage, Kirikiri Z reference, TJS2 reference, Kirikiri2 migration notes, and older version history.
 
-For the AIGril auto-writing workflow, the safe boundary is clear: describe the runtime structure, documentation entry points, and compatibility notes, but do not package the local distribution or inspect binary content.
+For the AILIS auto-writing workflow, the safe boundary is clear: describe the runtime structure, documentation entry points, and compatibility notes, but do not package the local distribution or inspect binary content.
 
 ## Closing
 

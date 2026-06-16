@@ -12,11 +12,11 @@ const EXTERNAL_VENDOR_ROOT = 'F:\\HumanClaw\\HumanClaw\\build-cache\\openclaw-ve
 const EXTERNAL_OPENCLAW_HOME = 'F:\\HumanClaw\\Runtime\\OpenClawHome';
 
 const DEFAULT_GATEWAY_URL =
-    process.env.AIGRIL_OPENCLAW_GATEWAY_URL ||
+    process.env.AILIS_OPENCLAW_GATEWAY_URL ||
     process.env.OPENCLAW_GATEWAY_URL ||
     'ws://127.0.0.1:19011';
 const DEFAULT_SESSION_KEY =
-    process.env.AIGRIL_OPENCLAW_SESSION_KEY ||
+    process.env.AILIS_OPENCLAW_SESSION_KEY ||
     process.env.OPENCLAW_SESSION_KEY ||
     'main';
 const DEFAULT_PROTOCOL_VERSION = 3;
@@ -95,7 +95,7 @@ function buildGatewayUrlCandidates(rawUrl) {
     }
 
     return dedupeStrings([
-        toGatewayWsUrl(process.env.AIGRIL_OPENCLAW_GATEWAY_URL),
+        toGatewayWsUrl(process.env.AILIS_OPENCLAW_GATEWAY_URL),
         toGatewayWsUrl(process.env.OPENCLAW_GATEWAY_URL),
         ...DEFAULT_GATEWAY_URL_FALLBACKS
     ]);
@@ -119,7 +119,7 @@ function resolveRuntimeRootCandidates(app) {
     const appPath = app?.getAppPath?.() || PROJECT_ROOT;
     const resourceRoot = app?.isPackaged ? process.resourcesPath : appPath;
     const envRepoRoots = dedupeStrings([
-        process.env.AIGRIL_OPENCLAW_REPO,
+        process.env.AILIS_OPENCLAW_REPO,
         process.env.OPENCLAW_REPO
     ]);
 
@@ -140,7 +140,7 @@ function resolveBundledOpenClawRoot(app) {
 
 function resolveGatewayRuntimeCandidates(app) {
     return dedupeStrings([
-        process.env.AIGRIL_OPENCLAW_SDK_PATH,
+        process.env.AILIS_OPENCLAW_SDK_PATH,
         process.env.OPENCLAW_SDK_PATH,
         ...resolveRuntimeRootCandidates(app).map((rootPath) => (
             path.join(rootPath, 'dist', 'plugin-sdk', 'gateway-runtime.js')
@@ -154,7 +154,7 @@ function resolveVendorNodePath(app) {
     const nodeBinaryName = process.platform === 'win32' ? 'node.exe' : 'node';
 
     return resolveExistingPath([
-        process.env.AIGRIL_OPENCLAW_NODE_PATH,
+        process.env.AILIS_OPENCLAW_NODE_PATH,
         process.env.OPENCLAW_NODE_PATH,
         path.join(resourceRoot, 'openclaw-vendor', nodeBinaryName),
         path.join(appPath, 'build-cache', 'openclaw-vendor', nodeBinaryName),
@@ -167,7 +167,7 @@ function resolveVendorNodePath(app) {
 
 function resolveOpenClawHomeRoot(app) {
     const candidates = dedupeStrings([
-        process.env.AIGRIL_OPENCLAW_HOME,
+        process.env.AILIS_OPENCLAW_HOME,
         process.env.OPENCLAW_HOME,
         process.env.HUMANCLAW_OPENCLAW_HOME,
         EXTERNAL_OPENCLAW_HOME,
@@ -204,7 +204,7 @@ async function loadGatewayRuntime(app) {
             const runtimePath = resolveExistingPath(resolveGatewayRuntimeCandidates(app));
             if (!runtimePath) {
                 throw new Error(
-                    '未找到 OpenClaw Gateway runtime，请先准备 build-cache/openclaw-runtime 或设置 AIGRIL_OPENCLAW_REPO'
+                    '未找到 OpenClaw Gateway runtime，请先准备 build-cache/openclaw-runtime 或设置 AILIS_OPENCLAW_REPO'
                 );
             }
 
@@ -217,7 +217,7 @@ async function loadGatewayRuntime(app) {
 
 function createTimeoutError(message) {
     const error = new Error(message);
-    error.code = 'AIGRIL_TIMEOUT';
+    error.code = 'AILIS_TIMEOUT';
     return error;
 }
 
@@ -304,11 +304,11 @@ class OpenClawGatewayManager extends EventEmitter {
 
         const token =
             normalizeOptionalString(options.token) ||
-            normalizeOptionalString(process.env.AIGRIL_OPENCLAW_GATEWAY_TOKEN) ||
+            normalizeOptionalString(process.env.AILIS_OPENCLAW_GATEWAY_TOKEN) ||
             normalizeOptionalString(process.env.OPENCLAW_GATEWAY_TOKEN);
         const password =
             normalizeOptionalString(options.password) ||
-            normalizeOptionalString(process.env.AIGRIL_OPENCLAW_GATEWAY_PASSWORD) ||
+            normalizeOptionalString(process.env.AILIS_OPENCLAW_GATEWAY_PASSWORD) ||
             normalizeOptionalString(process.env.OPENCLAW_GATEWAY_PASSWORD);
         const sessionKey = normalizeOptionalString(options.sessionKey) || DEFAULT_SESSION_KEY;
         const gatewayUrls = buildGatewayUrlCandidates(options.gatewayUrl);
@@ -465,7 +465,7 @@ class OpenClawGatewayManager extends EventEmitter {
                 token: this.config.token || undefined,
                 password: this.config.password || undefined,
                 clientName: 'gateway-client',
-                clientDisplayName: 'AIGril Desktop',
+                clientDisplayName: 'AILIS Desktop',
                 clientVersion: this.config.clientVersion || 'dev',
                 platform: process.platform,
                 mode: 'backend',
@@ -836,13 +836,13 @@ class OpenClawRuntimeSupervisor extends EventEmitter {
 
         const sdkPath = this.getSdkPath();
         process.env.OPENCLAW_HOME = this.homeRoot;
-        process.env.AIGRIL_OPENCLAW_HOME = this.homeRoot;
+        process.env.AILIS_OPENCLAW_HOME = this.homeRoot;
         process.env.OPENCLAW_REPO = this.bundleRoot;
-        process.env.AIGRIL_OPENCLAW_REPO = this.bundleRoot;
+        process.env.AILIS_OPENCLAW_REPO = this.bundleRoot;
         process.env.OPENCLAW_SDK_PATH = sdkPath;
-        process.env.AIGRIL_OPENCLAW_SDK_PATH = sdkPath;
+        process.env.AILIS_OPENCLAW_SDK_PATH = sdkPath;
         process.env.OPENCLAW_GATEWAY_URL = this.address.url;
-        process.env.AIGRIL_OPENCLAW_GATEWAY_URL = this.address.url;
+        process.env.AILIS_OPENCLAW_GATEWAY_URL = this.address.url;
     }
 
     ensureHomeStructure() {
@@ -878,13 +878,13 @@ class OpenClawRuntimeSupervisor extends EventEmitter {
         const env = {
             ...process.env,
             OPENCLAW_HOME: this.homeRoot,
-            AIGRIL_OPENCLAW_HOME: this.homeRoot,
+            AILIS_OPENCLAW_HOME: this.homeRoot,
             OPENCLAW_REPO: this.bundleRoot,
-            AIGRIL_OPENCLAW_REPO: this.bundleRoot,
+            AILIS_OPENCLAW_REPO: this.bundleRoot,
             OPENCLAW_SDK_PATH: this.getSdkPath(),
-            AIGRIL_OPENCLAW_SDK_PATH: this.getSdkPath(),
+            AILIS_OPENCLAW_SDK_PATH: this.getSdkPath(),
             OPENCLAW_GATEWAY_URL: this.address.url,
-            AIGRIL_OPENCLAW_GATEWAY_URL: this.address.url
+            AILIS_OPENCLAW_GATEWAY_URL: this.address.url
         };
 
         if (!this.isVendorReady()) {
@@ -1018,7 +1018,7 @@ class OpenClawRuntimeSupervisor extends EventEmitter {
 
             const probeClient = new OpenClawGatewayManager({
                 app: this.app,
-                clientVersion: 'aigril-openclaw-probe',
+                clientVersion: 'ailis-openclaw-probe',
                 enabled: true,
                 gatewayUrl: this.address.url
             });

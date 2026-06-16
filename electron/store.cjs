@@ -55,13 +55,13 @@ const DEFAULT_CAMERA_DISTANCE = 1.1;
 const DEFAULT_CAMERA_HEIGHT = 1.3;
 const DEFAULT_CAMERA_TARGET_Y = 1;
 const RENDER_PROFILE_OPTIONS = [
-    'aigl_soft_anime_mtoon',
-    'aigl_bright_companion_mtoon',
-    'aigl_cinematic_rim_toon',
-    'aigl_material_hybrid_npr',
-    'aigl_hard_cel_mtoon'
+    'ailis_soft_anime_mtoon',
+    'ailis_bright_companion_mtoon',
+    'ailis_cinematic_rim_toon',
+    'ailis_material_hybrid_npr',
+    'ailis_hard_cel_mtoon'
 ];
-const DEFAULT_RENDER_PROFILE_ID = 'aigl_soft_anime_mtoon';
+const DEFAULT_RENDER_PROFILE_ID = 'ailis_soft_anime_mtoon';
 const DEFAULT_RENDER_LIGHT_YAW_DEG = 0;
 const DEFAULT_RENDER_KEY_LIGHT_SCALE = 1;
 const DEFAULT_RENDER_AMBIENT_FILL_SCALE = 1;
@@ -74,11 +74,11 @@ const DEFAULT_RENDER_OUTLINE_ENABLED = true;
 const DEFAULT_RENDER_ANTIALIAS_ENABLED = true;
 const RENDER_FPS_LIMIT_OPTIONS = [24, 30, 45, 60];
 const LEGACY_RENDER_PROFILE_ID_ALIASES = Object.freeze({
-    aigl_soft_genshin_base: 'aigl_soft_anime_mtoon',
-    aigl_bright_companion: 'aigl_bright_companion_mtoon',
-    aigl_wuwa_cinematic: 'aigl_cinematic_rim_toon',
-    aigl_endfield_hybrid: 'aigl_material_hybrid_npr',
-    aigl_cel_anime_hard: 'aigl_hard_cel_mtoon'
+    ailis_soft_genshin_base: 'ailis_soft_anime_mtoon',
+    ailis_bright_companion: 'ailis_bright_companion_mtoon',
+    ailis_wuwa_cinematic: 'ailis_cinematic_rim_toon',
+    ailis_endfield_hybrid: 'ailis_material_hybrid_npr',
+    ailis_cel_anime_hard: 'ailis_hard_cel_mtoon'
 });
 const DEFAULT_DESKTOP_NATIVE_TTS_RATE = 0.96;
 const DEFAULT_DESKTOP_NATIVE_TTS_PITCH = 1.12;

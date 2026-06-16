@@ -68,7 +68,7 @@ export const MOTION_INTAKE_SOURCES = Object.freeze({
         downloadableUrl: 'https://booth.pm/downloadables/4234181',
         license: 'CC0 according to BOOTH item description; verify archive terms after download',
         downloadStatus: 'imported',
-        notes: 'Imported from F:/新建文件夹/fm_vrma_motion_pack_01.zip. Good free candidate source, but many motions may be gag/comedy oriented and need strict AIGL style review.'
+        notes: 'Imported from F:/新建文件夹/fm_vrma_motion_pack_01.zip. Good free candidate source, but many motions may be gag/comedy oriented and need strict AILIS style review.'
     }
 });
 
@@ -99,7 +99,7 @@ const BASE_MOTION_INTAKE_CATALOG = Object.freeze({
         approved: true,
         reviewStatus: 'approved',
         reviewBy: 'runtime-baseline',
-        notes: 'Approved only as a stable idle fallback; not considered final AIGL art direction.'
+        notes: 'Approved only as a stable idle fallback; not considered final AILIS art direction.'
     },
     idle2: {
         id: 'idle2',
@@ -126,7 +126,7 @@ const BASE_MOTION_INTAKE_CATALOG = Object.freeze({
         clippingRisk: 'medium',
         approved: false,
         reviewStatus: 'candidate',
-        notes: 'Needs visual pass on AIGL. Current procedural thinking pose is preferred for stable runtime.'
+        notes: 'Needs visual pass on AILIS. Current procedural thinking pose is preferred for stable runtime.'
     },
     lookaround: {
         id: 'lookaround',
@@ -152,7 +152,7 @@ const BASE_MOTION_INTAKE_CATALOG = Object.freeze({
         clippingRisk: 'medium',
         approved: false,
         reviewStatus: 'candidate',
-        notes: 'Promising AIGL style, but must be checked for hand/face clipping.'
+        notes: 'Promising AILIS style, but must be checked for hand/face clipping.'
     },
     relax: {
         id: 'relax',
@@ -191,7 +191,7 @@ const BASE_MOTION_INTAKE_CATALOG = Object.freeze({
         clippingRisk: 'high',
         approved: false,
         reviewStatus: 'candidate',
-        notes: 'Likely to clip around hands/chest on AIGL. Keep out of stable runtime until visually accepted.'
+        notes: 'Likely to clip around hands/chest on AILIS. Keep out of stable runtime until visually accepted.'
     },
     jump: {
         id: 'jump',
@@ -217,7 +217,7 @@ const BASE_MOTION_INTAKE_CATALOG = Object.freeze({
         clippingRisk: 'medium',
         approved: false,
         reviewStatus: 'candidate',
-        notes: 'May be too strong/masculine for AIGL default personality.'
+        notes: 'May be too strong/masculine for AILIS default personality.'
     },
     sad: {
         id: 'sad',
@@ -308,7 +308,7 @@ const BASE_MOTION_INTAKE_CATALOG = Object.freeze({
         clippingRisk: 'medium',
         approved: false,
         reviewStatus: 'candidate',
-        notes: 'Worth comparing against Goodbye.vrma, but not stable until AIGL visual review.'
+        notes: 'Worth comparing against Goodbye.vrma, but not stable until AILIS visual review.'
     },
     vroid_peace: {
         id: 'vroid_peace',
@@ -334,7 +334,7 @@ const BASE_MOTION_INTAKE_CATALOG = Object.freeze({
         clippingRisk: 'medium',
         approved: false,
         reviewStatus: 'candidate',
-        notes: 'Probably outside AIGL default assistant tone.'
+        notes: 'Probably outside AILIS default assistant tone.'
     },
     vroid_spin: {
         id: 'vroid_spin',
@@ -373,7 +373,7 @@ const BASE_MOTION_INTAKE_CATALOG = Object.freeze({
         clippingRisk: 'high',
         approved: false,
         reviewStatus: 'rejected_for_stable',
-        notes: 'High clothing/framing risk and not suitable for AIGL default desktop assistant behavior.'
+        notes: 'High clothing/framing risk and not suitable for AILIS default desktop assistant behavior.'
     }
 });
 

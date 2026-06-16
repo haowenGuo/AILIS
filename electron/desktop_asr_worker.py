@@ -12,18 +12,18 @@ from typing import Any
 import numpy as np
 
 
-ENGINE = os.environ.get("AIGRIL_ASR_ENGINE", os.environ.get("AIGRIL_ASR_PROVIDER", "whisper")).strip().lower() or "whisper"
-MODEL_ID = os.environ.get("AIGRIL_ASR_MODEL_ID", "openai/whisper-small").strip() or "openai/whisper-small"
-SENSEVOICE_MODEL_ID = os.environ.get("AIGRIL_SENSEVOICE_MODEL_ID", "FunAudioLLM/SenseVoiceSmall").strip() or "FunAudioLLM/SenseVoiceSmall"
-MODEL_ENDPOINT = os.environ.get("AIGRIL_ASR_MODEL_ENDPOINT", "https://hf-mirror.com").strip()
-CACHE_DIR = os.environ.get("AIGRIL_ASR_CACHE_DIR", os.path.join(os.path.dirname(__file__), "..", ".local", "asr-cache"))
-LANGUAGE = os.environ.get("AIGRIL_ASR_LANGUAGE", "zh").strip()
-SENSEVOICE_LANGUAGE = os.environ.get("AIGRIL_SENSEVOICE_LANGUAGE", "auto").strip() or "auto"
-TASK = os.environ.get("AIGRIL_ASR_TASK", "transcribe").strip() or "transcribe"
-CHUNK_LENGTH_S = int(os.environ.get("AIGRIL_ASR_CHUNK_LENGTH_S", "30"))
-BATCH_SIZE = int(os.environ.get("AIGRIL_ASR_BATCH_SIZE", "8"))
-SILENCE_RMS_THRESHOLD = float(os.environ.get("AIGRIL_ASR_SILENCE_RMS_THRESHOLD", "0.0010"))
-SILENCE_PEAK_THRESHOLD = float(os.environ.get("AIGRIL_ASR_SILENCE_PEAK_THRESHOLD", "0.0060"))
+ENGINE = os.environ.get("AILIS_ASR_ENGINE", os.environ.get("AILIS_ASR_PROVIDER", "whisper")).strip().lower() or "whisper"
+MODEL_ID = os.environ.get("AILIS_ASR_MODEL_ID", "openai/whisper-small").strip() or "openai/whisper-small"
+SENSEVOICE_MODEL_ID = os.environ.get("AILIS_SENSEVOICE_MODEL_ID", "FunAudioLLM/SenseVoiceSmall").strip() or "FunAudioLLM/SenseVoiceSmall"
+MODEL_ENDPOINT = os.environ.get("AILIS_ASR_MODEL_ENDPOINT", "https://hf-mirror.com").strip()
+CACHE_DIR = os.environ.get("AILIS_ASR_CACHE_DIR", os.path.join(os.path.dirname(__file__), "..", ".local", "asr-cache"))
+LANGUAGE = os.environ.get("AILIS_ASR_LANGUAGE", "zh").strip()
+SENSEVOICE_LANGUAGE = os.environ.get("AILIS_SENSEVOICE_LANGUAGE", "auto").strip() or "auto"
+TASK = os.environ.get("AILIS_ASR_TASK", "transcribe").strip() or "transcribe"
+CHUNK_LENGTH_S = int(os.environ.get("AILIS_ASR_CHUNK_LENGTH_S", "30"))
+BATCH_SIZE = int(os.environ.get("AILIS_ASR_BATCH_SIZE", "8"))
+SILENCE_RMS_THRESHOLD = float(os.environ.get("AILIS_ASR_SILENCE_RMS_THRESHOLD", "0.0010"))
+SILENCE_PEAK_THRESHOLD = float(os.environ.get("AILIS_ASR_SILENCE_PEAK_THRESHOLD", "0.0060"))
 
 os.environ.setdefault("HF_ENDPOINT", MODEL_ENDPOINT)
 os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")

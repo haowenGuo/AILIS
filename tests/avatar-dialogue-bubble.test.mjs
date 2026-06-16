@@ -149,7 +149,7 @@ function installFakeDom({ onExpand = () => {} } = {}) {
         return 1;
     };
     windowTarget.clearTimeout = () => {};
-    windowTarget.aigrilDesktop = {
+    windowTarget.ailisDesktop = {
         preferences: {},
         setPetDialogueExpanded: async (payload) => {
             onExpand(payload);

@@ -7,7 +7,7 @@ POST /tools/call
 {
   "tool": "computer | code | email | file_manager",
   "args": { "action": "..." },
-  "context": { "workspace": "F:/AIGril", "approved": true }
+  "context": { "workspace": "F:/AILIS", "approved": true }
 }
 ```
 
@@ -114,7 +114,7 @@ API 直接确认示例：
 {
   "confirmApprovalId": "上一步返回的 approvalId",
   "context": {
-    "workspace": "F:/AIGril",
+    "workspace": "F:/AILIS",
     "approved": true
   }
 }

@@ -1,6 +1,6 @@
-# AIGL GAIA Validation L1 Failure Analysis
+# AILIS GAIA Validation L1 Failure Analysis
 
-Run id: `official-validation-l1-aigl-current-20260607-1335`
+Run id: `official-validation-l1-ailis-current-20260607-1335`
 
 Date: 2026-06-07
 
@@ -8,9 +8,9 @@ Scope: GAIA official validation Level 1, 53 tasks.
 
 Artifacts:
 
-- Summary: `F:\AIGril\eval-results\engineering\gaia-official\official-validation-l1-aigl-current-20260607-1335.summary.json`
-- Raw transcript JSONL: `F:\AIGril\eval-results\engineering\gaia-official\official-validation-l1-aigl-current-20260607-1335.jsonl`
-- Report: `F:\AIGril\eval-results\engineering\gaia-official\official-validation-l1-aigl-current-20260607-1335.report.md`
+- Summary: `F:\AILIS\eval-results\engineering\gaia-official\official-validation-l1-ailis-current-20260607-1335.summary.json`
+- Raw transcript JSONL: `F:\AILIS\eval-results\engineering\gaia-official\official-validation-l1-ailis-current-20260607-1335.jsonl`
+- Report: `F:\AILIS\eval-results\engineering\gaia-official\official-validation-l1-ailis-current-20260607-1335.report.md`
 
 ## Result
 
@@ -45,7 +45,7 @@ Attempt-level repair signals:
 
 ## Executive Diagnosis
 
-The current AIGL pipeline can run the full GAIA L1 validation set end to end, but it is not yet in a stable benchmark state.
+The current AILIS pipeline can run the full GAIA L1 validation set end to end, but it is not yet in a stable benchmark state.
 
 The largest blocker is not only base-model reasoning. The largest blocker is the harness: the Agent Loop often accepts non-terminal behavior as terminal, and the final-answer guard allows conversational or poorly formatted text into the scorer. On GAIA, a system can find useful evidence and still score zero if it does not produce the exact required answer string.
 
@@ -91,7 +91,7 @@ Symptoms:
 
 Likely root causes:
 
-- AIGL persona style leaks into benchmark answers.
+- AILIS persona style leaks into benchmark answers.
 - The finalizer does not enforce the GAIA answer contract.
 - Unit conversion instructions are not validated against the question wording.
 - List answers are not canonicalized according to prompt requirements.

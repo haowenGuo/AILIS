@@ -12,7 +12,7 @@ const __dirname = path.dirname(__filename);
 const projectRoot = path.resolve(__dirname, '..');
 const defaultOsworldRoot = path.join(projectRoot, 'build-cache', 'OSWorld');
 const osworldRoot = path.resolve(process.env.OSWORLD_REPO || defaultOsworldRoot);
-const wslPython = process.env.OSWORLD_WSL_PYTHON || '/root/aigl-osworld-venv/bin/python';
+const wslPython = process.env.OSWORLD_WSL_PYTHON || '/root/ailis-osworld-venv/bin/python';
 const reportDir = path.join(projectRoot, 'eval-results', 'engineering', 'osworld-pc-readiness');
 
 function run(command, args = [], options = {}) {
@@ -120,7 +120,7 @@ async function main() {
         virtualbox: run('where.exe', ['VBoxManage']),
         docker: run('docker', ['--version']),
         wsl: run('wsl', ['--status']),
-        wslDocker: run('wsl', ['-d', 'Ubuntu-22.04', '--', 'bash', '-lc', 'docker info >/tmp/aigl-osworld-docker-info.txt 2>/tmp/aigl-osworld-docker-info.err; code=$?; echo status:$code; head -30 /tmp/aigl-osworld-docker-info.txt; head -30 /tmp/aigl-osworld-docker-info.err']),
+        wslDocker: run('wsl', ['-d', 'Ubuntu-22.04', '--', 'bash', '-lc', 'docker info >/tmp/ailis-osworld-docker-info.txt 2>/tmp/ailis-osworld-docker-info.err; code=$?; echo status:$code; head -30 /tmp/ailis-osworld-docker-info.txt; head -30 /tmp/ailis-osworld-docker-info.err']),
         wslKvm: run('wsl', ['-d', 'Ubuntu-22.04', '--', 'bash', '-lc', 'if [ -e /dev/kvm ]; then echo KVM_PRESENT; else echo KVM_MISSING; fi; egrep -c "(vmx|svm)" /proc/cpuinfo || true']),
         wslPython: run('wsl', ['-d', 'Ubuntu-22.04', '--', 'bash', '-lc', `test -x ${JSON.stringify(wslPython)} && ${JSON.stringify(wslPython)} --version`]),
         wslOsworldImport: osworldExists
@@ -172,7 +172,7 @@ async function main() {
             testSmall: summarizeDomains(smallMeta),
             testAll: summarizeDomains(allMeta)
         },
-        aiglComputerCapability: buildCapabilityGap(),
+        ailisComputerCapability: buildCapabilityGap(),
         officialRunReady: windowsRunReady || wslRunReady,
         runRoute: wslRunReady ? 'wsl-docker-kvm' : windowsRunReady ? 'windows-native-provider' : 'not-ready',
         blockers,
@@ -186,7 +186,7 @@ async function main() {
               ]
             : [
                   'Run quickstart.py with the available provider.',
-                  'Add an AIGL OSWorld agent wrapper and run test_small.json.',
+                  'Add an AILIS OSWorld agent wrapper and run test_small.json.',
                   'Use trajectory logs to tune screenshot, GUI input, recovery, and evidence collection.'
               ]
     };
@@ -222,11 +222,11 @@ async function main() {
             `- test_small: ${report.datasets.testSmall.total} tasks`,
             `- test_all: ${report.datasets.testAll.total} tasks`,
             '',
-            '## AIGL Computer Capability',
+            '## AILIS Computer Capability',
             '',
-            `- required OSWorld-style actions: ${report.aiglComputerCapability.required.length}`,
-            `- present: ${report.aiglComputerCapability.present.length}`,
-            `- missing: ${report.aiglComputerCapability.missing.length ? report.aiglComputerCapability.missing.join(', ') : 'none'}`,
+            `- required OSWorld-style actions: ${report.ailisComputerCapability.required.length}`,
+            `- present: ${report.ailisComputerCapability.present.length}`,
+            `- missing: ${report.ailisComputerCapability.missing.length ? report.ailisComputerCapability.missing.join(', ') : 'none'}`,
             '',
             '## Blockers',
             '',

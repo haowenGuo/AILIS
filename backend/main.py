@@ -88,7 +88,7 @@ app.include_router(vivix_router, tags=["Vivix"])
 @app.get("/")
 async def root():
     return {
-        "message": "AIGril Backend is running",
+        "message": "AILIS Backend is running",
         "docs": "/docs",
         "blog": "/blog",
         "edu": "/edu",

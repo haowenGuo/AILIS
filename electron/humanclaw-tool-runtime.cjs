@@ -1,28 +1,28 @@
 const { validateToolContract } = require('./humanclaw-tool-contracts.cjs');
 const {
-    AIGL_RUNTIME_TOOL_DEFINITIONS,
-    AIGL_RUNTIME_TOOL_IDS,
-    AIGL_TOOL_EXPOSURE,
-    createAiglFunctionToolSpec
-} = require('./aigl-tool-specs.cjs');
+    AILIS_RUNTIME_TOOL_DEFINITIONS,
+    AILIS_RUNTIME_TOOL_IDS,
+    AILIS_TOOL_EXPOSURE,
+    createAilisFunctionToolSpec
+} = require('./ailis-tool-specs.cjs');
 const {
-    makeAiglToolError,
-    makeAiglToolResult,
-    normalizeAiglToolOutput
-} = require('./aigl-tool-result.cjs');
+    makeAilisToolError,
+    makeAilisToolResult,
+    normalizeAilisToolOutput
+} = require('./ailis-tool-result.cjs');
 const {
-    createAiglDirectMcpToolSpec,
-    normalizeAiglMcpCallArgs,
-    parseAiglDirectMcpToolId
-} = require('./aigl-mcp-adapter.cjs');
+    createAilisDirectMcpToolSpec,
+    normalizeAilisMcpCallArgs,
+    parseAilisDirectMcpToolId
+} = require('./ailis-mcp-adapter.cjs');
 const {
     buildToolRoutingAdvice,
     rankToolSearchResults
-} = require('./aigl-tool-routing.cjs');
+} = require('./ailis-tool-routing.cjs');
 
-const TOOL_EXPOSURE = AIGL_TOOL_EXPOSURE;
-const CORE_RUNTIME_TOOL_DEFINITIONS = AIGL_RUNTIME_TOOL_DEFINITIONS;
-const CORE_RUNTIME_TOOL_IDS = AIGL_RUNTIME_TOOL_IDS;
+const TOOL_EXPOSURE = AILIS_TOOL_EXPOSURE;
+const CORE_RUNTIME_TOOL_DEFINITIONS = AILIS_RUNTIME_TOOL_DEFINITIONS;
+const CORE_RUNTIME_TOOL_IDS = AILIS_RUNTIME_TOOL_IDS;
 
 function normalizeString(value, fallback = '') {
     if (typeof value !== 'string') {
@@ -44,18 +44,18 @@ function cloneJson(value) {
     }
 }
 
-const parseDirectMcpToolId = parseAiglDirectMcpToolId;
+const parseDirectMcpToolId = parseAilisDirectMcpToolId;
 
 function makeTextResult({ status = 'completed', text = '', details = {}, isError = false } = {}) {
-    return makeAiglToolResult({ status, text, details, isError });
+    return makeAilisToolResult({ status, text, details, isError });
 }
 
 function normalizeToolOutput(result = {}, { toolId = '' } = {}) {
-    return normalizeAiglToolOutput(result, { toolId });
+    return normalizeAilisToolOutput(result, { toolId });
 }
 
 function createToolSpec(definition = {}) {
-    return createAiglFunctionToolSpec(definition);
+    return createAilisFunctionToolSpec(definition);
 }
 
 class HumanClawRuntimeTool {
@@ -90,7 +90,7 @@ class HumanClawRuntimeTool {
     async dispatch(args = {}, context = {}) {
         const validation = this.validate(args);
         if (!validation.ok) {
-            return makeAiglToolError({
+            return makeAilisToolError({
                 status: validation.status || 'invalid_tool_args',
                 errorCode: validation.status || 'invalid_tool_args',
                 message: `tool arguments failed contract validation: ${(validation.errors || []).join('; ')}`,
@@ -187,7 +187,7 @@ class HumanClawToolRuntimeRegistry {
     }
 
     async dispatchDirectMcpTool(directMcp, args = {}, context = {}) {
-        const { toolArgs, meta } = normalizeAiglMcpCallArgs(args);
+        const { toolArgs, meta } = normalizeAilisMcpCallArgs(args);
         const output = await this.runtime.executeMcpBridge(
             {
                 action: 'call_tool',
@@ -219,7 +219,7 @@ async function executeToolSearch(registry, args = {}) {
                 query,
                 limit,
                 timeoutMs: args.timeoutMs
-            })).map((spec) => createAiglDirectMcpToolSpec(spec));
+            })).map((spec) => createAilisDirectMcpToolSpec(spec));
         } catch (error) {
             mcp = [{
                 type: 'mcp_tool_search_error',

@@ -1,26 +1,26 @@
-export const DEFAULT_RENDER_PROFILE_ID = 'aigl_soft_anime_mtoon';
+export const DEFAULT_RENDER_PROFILE_ID = 'ailis_soft_anime_mtoon';
 
 export const RENDER_PROFILE_IDS = Object.freeze([
-    'aigl_soft_anime_mtoon',
-    'aigl_bright_companion_mtoon',
-    'aigl_cinematic_rim_toon',
-    'aigl_material_hybrid_npr',
-    'aigl_hard_cel_mtoon'
+    'ailis_soft_anime_mtoon',
+    'ailis_bright_companion_mtoon',
+    'ailis_cinematic_rim_toon',
+    'ailis_material_hybrid_npr',
+    'ailis_hard_cel_mtoon'
 ]);
 
 const LEGACY_RENDER_PROFILE_ID_ALIASES = Object.freeze({
-    aigl_soft_genshin_base: 'aigl_soft_anime_mtoon',
-    aigl_bright_companion: 'aigl_bright_companion_mtoon',
-    aigl_wuwa_cinematic: 'aigl_cinematic_rim_toon',
-    aigl_endfield_hybrid: 'aigl_material_hybrid_npr',
-    aigl_cel_anime_hard: 'aigl_hard_cel_mtoon'
+    ailis_soft_genshin_base: 'ailis_soft_anime_mtoon',
+    ailis_bright_companion: 'ailis_bright_companion_mtoon',
+    ailis_wuwa_cinematic: 'ailis_cinematic_rim_toon',
+    ailis_endfield_hybrid: 'ailis_material_hybrid_npr',
+    ailis_cel_anime_hard: 'ailis_hard_cel_mtoon'
 });
 
 const PROFILE_ORDER = new Map(RENDER_PROFILE_IDS.map((id, index) => [id, index]));
 
 export const RENDER_PROFILES = Object.freeze([
     {
-        id: 'aigl_soft_anime_mtoon',
+        id: 'ailis_soft_anime_mtoon',
         label: '柔和动漫 MToon',
         shortLabel: 'Soft Anime',
         description: '基于 VRM/MToon 的柔和动漫风：脸和皮肤更干净，阴影偏暖，轮廓克制。',
@@ -133,7 +133,7 @@ export const RENDER_PROFILES = Object.freeze([
         }
     },
     {
-        id: 'aigl_bright_companion_mtoon',
+        id: 'ailis_bright_companion_mtoon',
         label: '明亮陪伴 MToon',
         shortLabel: 'Bright MToon',
         description: '基于 VRM/MToon 的高填充光日常风格：整体更亮、更软，适合长时间陪伴。',
@@ -243,7 +243,7 @@ export const RENDER_PROFILES = Object.freeze([
         }
     },
     {
-        id: 'aigl_cinematic_rim_toon',
+        id: 'ailis_cinematic_rim_toon',
         label: '电影感边缘光 Toon',
         shortLabel: 'Cinematic Rim',
         description: '基于 VRM/MToon 与角色独立灯光的电影感预设：对比更强，冷暖光和边缘光更明显。',
@@ -353,7 +353,7 @@ export const RENDER_PROFILES = Object.freeze([
         }
     },
     {
-        id: 'aigl_material_hybrid_npr',
+        id: 'ailis_material_hybrid_npr',
         label: '材质混合 NPR',
         shortLabel: 'Hybrid NPR',
         description: '基于 VRM/MToon 的材质分组 NPR 预设：保留动漫脸部可读性，同时让头发、衣物和配件更有层次。',
@@ -464,7 +464,7 @@ export const RENDER_PROFILES = Object.freeze([
         }
     },
     {
-        id: 'aigl_hard_cel_mtoon',
+        id: 'ailis_hard_cel_mtoon',
         label: '硬边赛璐璐 MToon',
         shortLabel: 'Hard Cel',
         description: '基于 VRM/MToon 近似传统赛璐璐动画：硬边阴影、强轮廓和低填充光。它不是完整 ramp cel shader。',

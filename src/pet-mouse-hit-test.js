@@ -1,4 +1,4 @@
-const STYLE_ID = 'aigl-pet-mouse-hit-test-style';
+const STYLE_ID = 'ailis-pet-mouse-hit-test-style';
 const INTERACTIVE_SELECTORS = Object.freeze([
     '.avatar-dialogue-bubble--visible'
 ]);
@@ -322,7 +322,7 @@ export function installPetMouseHitTest({
             return;
         }
         state.passthrough = nextEnabled;
-        window.aigrilDesktop?.setPetMousePassthrough?.(nextEnabled);
+        window.ailisDesktop?.setPetMousePassthrough?.(nextEnabled);
     }
 
     function applyCursorState(active) {

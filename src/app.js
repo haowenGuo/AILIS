@@ -12,11 +12,11 @@ window.addEventListener('DOMContentLoaded', async () => {
         rootElement: document.getElementById('app-container'),
         variant: 'main'
     });
-    applyDesktopPreferencesToConfig(window.aigrilDesktop?.preferences || {});
+    applyDesktopPreferencesToConfig(window.ailisDesktop?.preferences || {});
     const vrmSystem = new VRMModelSystem();
     const audioPlayer = new TTSAudioPlayer(vrmSystem);
     const chatService = createChatService();
-    const initialPreferences = window.aigrilDesktop?.preferences || {};
+    const initialPreferences = window.ailisDesktop?.preferences || {};
     const buildSpeechProvider = (speechMode = null) => createSpeechProvider({
         enableTTS: true,
         speechMode
@@ -27,7 +27,7 @@ window.addEventListener('DOMContentLoaded', async () => {
         chunkedTtsEnabled: initialPreferences.chunkedTtsEnabled
     });
 
-    window.aigrilDesktop?.onPreferencesUpdated?.(({ preferences = {} } = {}) => {
+    window.ailisDesktop?.onPreferencesUpdated?.(({ preferences = {} } = {}) => {
         applyDesktopPreferencesToConfig(preferences);
         speechProvider?.dispose?.();
         speechProvider = buildSpeechProvider(preferences.speechMode);
