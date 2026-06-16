@@ -48,6 +48,7 @@ window.addEventListener('DOMContentLoaded', () => {
     const statusEl = document.getElementById('chat-status');
 
     let isBusy = false;
+    let interruptPending = false;
     let isRecording = false;
     let isTranscribing = false;
     let isCapturingVision = false;
@@ -84,6 +85,9 @@ window.addEventListener('DOMContentLoaded', () => {
         if (speechStatusText) {
             return speechStatusText;
         }
+        if (interruptPending) {
+            return '正在中断当前对话...';
+        }
         if (isBusy) {
             return 'AIGL 正在思考或说话...';
         }
@@ -111,8 +115,12 @@ window.addEventListener('DOMContentLoaded', () => {
     function updateComposerState() {
         const hasDraft = Boolean(inputEl.value.trim() || pendingVisionAttachment || pendingFileAttachments.length);
         sendBtnEl.dataset.mode = isBusy ? 'interrupt' : 'send';
-        setIconButtonLabel(sendBtnEl, isBusy ? '中断对话' : '发送');
-        sendBtnEl.disabled = isRecording || isTranscribing || isCapturingVision || (!isBusy && !hasDraft);
+        setIconButtonLabel(sendBtnEl, isBusy ? (interruptPending ? '正在中断' : '中断对话') : '发送');
+        sendBtnEl.disabled = isRecording ||
+            isTranscribing ||
+            isCapturingVision ||
+            interruptPending ||
+            (!isBusy && !hasDraft);
         statusEl.textContent = getStatusText();
 
         if (voiceBtnEl) {
@@ -596,11 +604,16 @@ window.addEventListener('DOMContentLoaded', () => {
 
     function sendCurrentMessage() {
         if (isBusy) {
+            if (interruptPending) {
+                return;
+            }
+            interruptPending = true;
             window.aigrilDesktop?.sendChatControl?.({
                 type: 'interrupt-conversation',
                 source: 'chat-panel'
             });
             setTransientStatus('正在中断当前对话...');
+            updateComposerState();
             return;
         }
         const content = inputEl.value.trim();
@@ -1085,6 +1098,9 @@ window.addEventListener('DOMContentLoaded', () => {
             renderSnapshot(payload.messages || []);
             if (typeof payload.isBusy === 'boolean') {
                 isBusy = payload.isBusy;
+                if (!isBusy) {
+                    interruptPending = false;
+                }
             }
             updateComposerState();
             syncContinuousAsr();
@@ -1103,6 +1119,9 @@ window.addEventListener('DOMContentLoaded', () => {
 
         if (payload.type === 'state' && typeof payload.isBusy === 'boolean') {
             isBusy = payload.isBusy;
+            if (!isBusy) {
+                interruptPending = false;
+            }
             updateComposerState();
             syncContinuousAsr();
         }

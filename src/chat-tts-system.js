@@ -69,6 +69,7 @@ export class ChatTTSSystem {
         this.hasShownSpeechProviderHint = false;
         this.messageCounter = 0;
         this.interruptRequested = false;
+        this.interruptInFlight = false;
         this.activeChunkedSpeechSession = null;
 
         this.inputEl.disabled = true;
@@ -446,6 +447,8 @@ export class ChatTTSSystem {
             console.error('主动对话请求失败：', error);
         } finally {
             this.clearChunkedSpeechSession(chunkedSpeechSession);
+            this.interruptRequested = false;
+            this.interruptInFlight = false;
             this.setBusy(false);
             this.startAutoChatTimer();
         }
@@ -511,6 +514,7 @@ export class ChatTTSSystem {
         } finally {
             this.clearChunkedSpeechSession(chunkedSpeechSession);
             this.interruptRequested = false;
+            this.interruptInFlight = false;
             this.setBusy(false);
             this.startAutoChatTimer();
         }
@@ -524,6 +528,14 @@ export class ChatTTSSystem {
                 error: '当前没有正在执行的对话。'
             };
         }
+        if (this.interruptInFlight) {
+            return {
+                ok: true,
+                status: 'interrupt_pending'
+            };
+        }
+
+        this.interruptInFlight = true;
         this.interruptRequested = true;
         this.vrmSystem.stopSpeaking();
         try {
@@ -532,11 +544,16 @@ export class ChatTTSSystem {
         } catch {}
         this.addSystemMessage('正在中断当前对话，已产生的上下文和工具记录会保留。');
         try {
-            return await this.chatService?.abortCurrentTurn?.({
+            const result = await this.chatService?.abortCurrentTurn?.({
                 sessionId: this.sessionId,
                 reason: 'chat_user_interrupt'
             });
+            if (!result?.ok && result?.status === 'unsupported') {
+                this.interruptInFlight = false;
+            }
+            return result;
         } catch (error) {
+            this.interruptInFlight = false;
             this.addSystemMessage(`中断请求失败：${error.message || error}`);
             return {
                 ok: false,

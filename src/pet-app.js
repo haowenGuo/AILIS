@@ -94,7 +94,8 @@ function installPetInteractions(rootElement) {
 window.addEventListener('DOMContentLoaded', async () => {
     const petShellEl = document.getElementById('pet-shell');
     const canvasContainerEl = document.getElementById('canvas-container');
-    applyDesktopPreferencesToConfig(window.aigrilDesktop?.preferences || {});
+    const initialPreferences = window.aigrilDesktop?.preferences || {};
+    applyDesktopPreferencesToConfig(initialPreferences);
     applyPetWindowFrameCameraCompensation();
     const vrmSystem = new VRMModelSystem();
     installAvatarDialogueBubble({
@@ -103,20 +104,21 @@ window.addEventListener('DOMContentLoaded', async () => {
         avatarBoundsProvider: () => vrmSystem.getAvatarHitTestBounds?.()
     });
     const audioPlayer = new TTSAudioPlayer(vrmSystem);
-    let chatService = createChatService(window.aigrilDesktop?.preferences || {});
+    let chatService = createChatService(initialPreferences);
     const buildSpeechProvider = (speechMode = null) => createSpeechProvider({
         enableTTS: true,
         speechMode
     });
-    let speechProvider = buildSpeechProvider(window.aigrilDesktop?.preferences?.speechMode);
+    let speechProvider = buildSpeechProvider(initialPreferences.speechMode);
     const chatSystem = new ChatTTSSystem(vrmSystem, audioPlayer, chatService, {
-        speechProvider
+        speechProvider,
+        chunkedTtsEnabled: initialPreferences.chunkedTtsEnabled
     });
     const mouseHitTest = installPetMouseHitTest({
         rootElement: petShellEl,
         canvasElement: canvasContainerEl,
         avatarBoundsProvider: () => vrmSystem.getAvatarHitTestBounds?.(),
-        preferences: window.aigrilDesktop?.preferences || {}
+        preferences: initialPreferences
     });
     const removePetCursorPointListener = window.aigrilDesktop?.onPetCursorPoint?.((payload = {}) => {
         mouseHitTest?.handleCursorPoint?.(payload);
@@ -162,7 +164,7 @@ window.addEventListener('DOMContentLoaded', async () => {
             chatSystem.setChatService(chatService);
             window.chatService = chatService;
         }
-        chatSystem.applyRuntimePreferences();
+        chatSystem.applyRuntimePreferences(preferences);
         vrmSystem.applyPreferences();
         mouseHitTest?.updatePreferences(preferences);
         window.speechProvider = speechProvider;

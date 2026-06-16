@@ -56,6 +56,7 @@ export class TTSAudioPlayer {
         this.lipSyncEnvelope = 0;
         this.lipSyncPulsePhase = 0;
         this.lastLipSyncAudioTime = 0;
+        this.activePlaybackStop = null;
     }
 
     async unlock() {
@@ -103,27 +104,44 @@ export class TTSAudioPlayer {
         }
 
         return new Promise((resolve, reject) => {
+            let settled = false;
             const cleanupListeners = () => {
                 this.audioElement.onended = null;
                 this.audioElement.onerror = null;
             };
 
-            const finalizePlayback = () => {
+            const settlePlayback = (callback) => {
+                if (settled) {
+                    return;
+                }
+                settled = true;
                 cleanupListeners();
-                this.stop().finally(() => {
-                    if (onTextProgress) {
-                        onTextProgress(displayText);
-                    }
-                    if (onPlaybackEnd) {
-                        onPlaybackEnd();
-                    }
-                    resolve();
+                this.activePlaybackStop = null;
+                callback();
+            };
+
+            const finalizePlayback = () => {
+                settlePlayback(() => {
+                    this.stop({ settlePlayback: false }).finally(() => {
+                        if (onTextProgress) {
+                            onTextProgress(displayText);
+                        }
+                        if (onPlaybackEnd) {
+                            onPlaybackEnd();
+                        }
+                        resolve();
+                    });
                 });
             };
 
+            this.activePlaybackStop = () => {
+                settlePlayback(() => resolve());
+            };
+
             this.audioElement.onerror = () => {
-                cleanupListeners();
-                this.stop().finally(() => reject(new Error('音频资源播放失败')));
+                settlePlayback(() => {
+                    this.stop({ settlePlayback: false }).finally(() => reject(new Error('音频资源播放失败')));
+                });
             };
 
             this.audioElement.onended = () => {
@@ -132,6 +150,9 @@ export class TTSAudioPlayer {
 
             this.audioElement.play()
                 .then(() => {
+                    if (settled) {
+                        return;
+                    }
                     if (this.analyserNode) {
                         this.vrmSystem.startAudioDrivenSpeech();
                     } else {
@@ -158,13 +179,18 @@ export class TTSAudioPlayer {
                     syncFrame();
                 })
                 .catch((error) => {
-                    cleanupListeners();
-                    this.stop().finally(() => reject(error));
+                    settlePlayback(() => {
+                        this.stop({ settlePlayback: false }).finally(() => reject(error));
+                    });
                 });
         });
     }
 
-    async stop() {
+    async stop({ settlePlayback = true } = {}) {
+        if (settlePlayback && this.activePlaybackStop) {
+            this.activePlaybackStop();
+        }
+
         if (this.syncRafId) {
             window.cancelAnimationFrame(this.syncRafId);
             this.syncRafId = 0;
