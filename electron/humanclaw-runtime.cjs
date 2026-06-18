@@ -105,6 +105,37 @@ function normalizeAction(value, fallback = '') {
     return normalizeString(value, fallback).toLowerCase().replace(/[-\s]+/g, '_');
 }
 
+function createBuiltinAilisResearchMcpServers(options = {}) {
+    if (
+        options.disableBuiltinAilisResearchMcp === true ||
+        options.builtinMcpServers === false ||
+        /^(1|true|yes)$/i.test(normalizeString(process.env.AILIS_DISABLE_BUILTIN_RESEARCH_MCP))
+    ) {
+        return {};
+    }
+    const projectRoot = path.resolve(options.projectRoot || path.resolve(__dirname, '..'));
+    const serverPath = path.join(projectRoot, 'scripts', 'mcp-ailis-research-server.cjs');
+    const command = normalizeString(
+        process.env.AILIS_MCP_NODE_PATH ||
+            process.env.HUMANCLAW_MCP_NODE_PATH ||
+            process.env.AILIS_OPENCLAW_NODE_PATH ||
+            process.env.OPENCLAW_NODE_PATH,
+        process.execPath
+    );
+    return {
+        ailis_research: {
+            transport: 'stdio',
+            command,
+            args: [serverPath],
+            cwd: projectRoot,
+            env: {
+                ELECTRON_RUN_AS_NODE: '1',
+                AILIS_RESEARCH_MCP_BUILTIN: '1'
+            }
+        }
+    };
+}
+
 function safeSegment(value, fallback = 'unknown') {
     const text = normalizeString(value, fallback).replace(/[^A-Za-z0-9_.-]+/g, '_');
     return text.slice(0, 120) || fallback;
@@ -479,6 +510,11 @@ class HumanClawRuntime {
             workspaceRoot: this.workspaceRoot,
             projectRoot: this.projectRoot,
             emitGatewayEvent: (type, payload) => this.emitGatewayEvent(type, payload),
+            builtinServers: createBuiltinAilisResearchMcpServers({
+                projectRoot: this.projectRoot,
+                disableBuiltinAilisResearchMcp: options.disableBuiltinAilisResearchMcp,
+                builtinMcpServers: options.builtinMcpServers
+            }),
             defaultServers: options.mcpServers,
             configPath: options.mcpConfigPath
         });

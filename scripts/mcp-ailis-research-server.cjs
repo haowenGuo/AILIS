@@ -1124,12 +1124,33 @@ async function webSearch(args = {}) {
         return errorResult('web_search requires query');
     }
     const maxResults = clampNumber(args.maxResults || args.limit, 8, 1, 12);
-    const timeoutMs = clampNumber(args.timeoutMs || args.timeout_ms, 15000, 5000, 120000);
+    const timeoutMs = clampNumber(args.timeoutMs || args.timeout_ms, 8000, 3000, 30000);
     const attempts = [];
     const backends = normalizeSearchBackends(args, query);
+    const overallTimeoutMs = clampNumber(
+        args.overallTimeoutMs || args.overall_timeout_ms,
+        Math.min(36000, Math.max(12000, timeoutMs * backends.length)),
+        8000,
+        120000
+    );
+    const startedAt = Date.now();
     for (let backendIndex = 0; backendIndex < backends.length; backendIndex += 1) {
+        const elapsedMs = Date.now() - startedAt;
+        const remainingMs = overallTimeoutMs - elapsedMs;
+        if (remainingMs < 1500) {
+            attempts.push({
+                ok: false,
+                backend: backends[backendIndex].id,
+                durationMs: 0,
+                errorCode: 'overall_timeout_budget_exhausted',
+                error: 'web_search overall timeout budget exhausted before trying this backend.',
+                retryable: true
+            });
+            break;
+        }
         const backend = backends[backendIndex];
-        const attempt = await runSearchBackend(backend, query, maxResults, timeoutMs);
+        const attemptTimeoutMs = Math.min(timeoutMs, Math.max(1000, remainingMs - 750));
+        const attempt = await runSearchBackend(backend, query, maxResults, attemptTimeoutMs);
         attempts.push(attempt);
         if (!attempt.ok) {
             continue;
@@ -1148,9 +1169,6 @@ async function webSearch(args = {}) {
         const queryFocusTerms = extractSearchQueryTerms(query).slice(0, 6);
         const topQueryScore = rankedResults[0]?.queryScore || 0;
         const offTarget = baseSuggestedNextCalls.length === 0 && topQueryScore < 30;
-        if (offTarget && backendIndex < backends.length - 1) {
-            continue;
-        }
         const suggestedNextCalls = offTarget && looksScholarlySearchQuery(query)
             ? dedupeSuggestedNextCalls([
                 {
@@ -1179,6 +1197,8 @@ async function webSearch(args = {}) {
             backend: attempt.backend,
             url: attempt.url,
             durationMs: attempt.durationMs,
+            overallDurationMs: Date.now() - startedAt,
+            overallTimeoutMs,
             attempts,
             results: attempt.results,
             evidenceGap,
@@ -1194,6 +1214,8 @@ async function webSearch(args = {}) {
         errorCode: 'search_backends_failed',
         query,
         retryable: true,
+        overallDurationMs: Date.now() - startedAt,
+        overallTimeoutMs,
         attempts,
         suggestedTools: ['web_fetch', 'web_extract_links'],
         evidenceGap: 'Broad discovery failed; no evidence page was opened yet.',
@@ -4878,7 +4900,8 @@ const TOOLS = [
                 text: { type: 'string', description: 'Compatibility alias for query. Prefer query.' },
                 maxResults: { type: 'number', description: 'Requested result count, clamped to 1-12. Use 3-8 for normal tasks.' },
                 limit: { type: 'number', description: 'Compatibility alias for maxResults. Prefer maxResults.' },
-                timeoutMs: { type: 'number', description: 'Per-backend timeout in milliseconds, clamped to 5000-120000. Default is 15000. Omit unless a task needs a longer wait.' },
+                timeoutMs: { type: 'number', description: 'Per-backend timeout in milliseconds, clamped to 3000-30000. Default is 8000. Omit unless a task needs a longer wait.' },
+                overallTimeoutMs: { type: 'number', description: 'Overall search budget in milliseconds, clamped to 8000-120000. Defaults under the Gateway timeout so failures return as tool results instead of hanging.' },
                 backend: { type: 'string', description: 'Optional backend id: bing_html, duckduckgo_lite, duckduckgo_html, yahoo_html, or github_repositories. Omit for automatic fallback.' },
                 backends: {
                     type: 'array',

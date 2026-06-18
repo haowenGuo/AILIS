@@ -499,6 +499,45 @@ test('HumanClaw Gateway tool_search ranks specific MCP artifact tools before web
     }
 });
 
+test('HumanClaw Gateway registers built-in AILIS research MCP for web search and direct fetch', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'humanclaw-builtin-research-mcp-'));
+    const gateway = new HumanClawGateway({
+        port: 0,
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit')
+    });
+    const page = await withHttpServer((_request, response) => {
+        response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        response.end('<html><body><h1>AILIS direct fetch smoke page</h1></body></html>');
+    });
+
+    try {
+        const servers = gateway.runtime.mcpManager.listServers();
+        assert.ok(servers.some((server) => server.name === 'ailis_research'));
+
+        const search = await gateway.executeGatewayToolSearch({
+            query: 'web search',
+            includeExternal: false,
+            limit: 10,
+            timeoutMs: 30000
+        });
+        assert.ok(search.details.tools.some((tool) => tool.id === 'mcp__ailis_research__web_search'));
+
+        const fetched = await gateway.runtime.executeTool(
+            'mcp__ailis_research__web_fetch',
+            { url: page.baseUrl, maxChars: 2000 },
+            { runId: 'builtin-research-mcp-run', workspace: workspaceRoot, timeoutMs: 30000 }
+        );
+        assert.equal(fetched.details.status, 'completed');
+        assert.match(fetched.content[0].text, /AILIS direct fetch smoke page/);
+    } finally {
+        await page.close();
+        await gateway.stop();
+        await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
+});
+
 test('HumanClaw Gateway exposes context artifact query and guards raw payload reads', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'humanclaw-context-artifact-test-'));
     const gateway = new HumanClawGateway({

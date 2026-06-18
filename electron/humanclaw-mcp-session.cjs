@@ -722,7 +722,7 @@ class McpHttpSession {
 }
 
 class HumanClawMcpManager {
-    constructor({ workspaceRoot, projectRoot, emitGatewayEvent, defaultServers, configPath } = {}) {
+    constructor({ workspaceRoot, projectRoot, emitGatewayEvent, builtinServers, defaultServers, configPath } = {}) {
         this.workspaceRoot = workspaceRoot;
         this.projectRoot = projectRoot;
         this.emitGatewayEvent = typeof emitGatewayEvent === 'function' ? emitGatewayEvent : () => {};
@@ -732,6 +732,7 @@ class HumanClawMcpManager {
         this.configPath = normalizeString(configPath || process.env.HUMANCLAW_MCP_CONFIG_PATH);
         this.configStoreStatus = this.configPath ? 'not_loaded' : 'disabled';
         this.configStoreError = '';
+        this.registerServers(builtinServers);
         this.loadConfigFile();
         this.registerServers(process.env.HUMANCLAW_MCP_SERVERS_JSON || process.env.HUMANCLAW_MCP_SERVERS);
         this.registerServers(defaultServers);
