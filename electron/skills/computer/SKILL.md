@@ -29,7 +29,7 @@ triggers:
 - 短 inline 代码可以使用 `python -c` / `node -e`；不要把大段多行程序塞进 shell 字符串，尤其是在 shell 方言或 quoting 规则不确定时。
 - 如果命令会生成文件，最好在 `stdout` 打印生成路径、文件大小或 `DONE` 标记，随后用 `read` / `stat` / `hash` 复核。
 - `exitCode=0` 只表示进程正常退出，不表示任务语义成功；任务证据主要来自 `stdout` / `stderr` 和后续文件验证。
-- 当返回里有 `outputId`、`bytes`、`lineCount` 或 `previewTruncated=true` 时，完整 stdout/stderr 已保存到 Exec Output Store，供 Agent Lab 和调试链路查看。默认 Agent 工具面只依赖本轮返回的 stdout/stderr/preview；如果还缺证据，应运行更窄命令、把结果写入普通文件后 `read`，或使用本轮实际暴露的专用工具。
+- 当返回里有 `outputId`、`bytes`、`lineCount` 或 `previewTruncated=true` 时，完整 stdout/stderr 已保存到 Exec Output Store。需要完整片段时先用 `tool_search` 查询 `output_read` / `output_tail` / `output_search`，再按需读取、搜索或查看尾部；不要把 `outputId` 当文件路径传给 `computer.read`，也不要为了恢复被截断输出而盲目重跑命令。
 - 如果预期有输出或文件产物，但 `stdout` / `stderr` 为空，应视为没有拿到证据，检查 quoting、`workdir`、输出路径，或改为运行脚本文件/专用工具。
 
 示例：

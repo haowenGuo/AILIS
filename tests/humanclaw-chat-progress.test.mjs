@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+    createEmbodiedCommandPayload,
     HumanClawDesktopChatService,
     createGatewayProgressBridge
 } from '../src/humanclaw-chat-service.js';
@@ -44,6 +45,51 @@ test('chat progress bridge stays silent for ordinary run start events', () => {
 
     assert.equal(outputs.length, 0);
     unsubscribe();
+});
+
+test('assistant chat routes short dance request to embodied command before gateway', async () => {
+    const previousWindow = globalThis.window;
+    let gatewayCalled = false;
+    globalThis.window = {
+        ailisDesktop: {
+            gateway: {
+                isSupported: true,
+                async getStatus() {
+                    gatewayCalled = true;
+                    return { running: true };
+                },
+                async runAgent() {
+                    gatewayCalled = true;
+                    return { ok: true };
+                }
+            }
+        }
+    };
+
+    try {
+        const service = new HumanClawDesktopChatService();
+        const payload = await service.fetchAssistantTurn({
+            sessionId: 'main',
+            messageHistory: [{ role: 'user', content: '跳舞' }],
+            replyMode: 'text_only'
+        });
+
+        assert.equal(gatewayCalled, false);
+        assert.equal(payload.action, 'dance');
+        assert.equal(payload.expression, 'happy');
+        assert.equal(payload.surface.gestureIntent, 'dance');
+        assert.equal(payload.surface.taskState, 'happy_success');
+    } finally {
+        if (previousWindow === undefined) {
+            delete globalThis.window;
+        } else {
+            globalThis.window = previousWindow;
+        }
+    }
+});
+
+test('assistant embodied command parser does not steal task-like dance requests', () => {
+    assert.equal(createEmbodiedCommandPayload('帮我写一个跳舞脚本'), null);
 });
 
 test('chat progress bridge stays silent until reasoning arrives for a task run', () => {

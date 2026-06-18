@@ -1029,7 +1029,7 @@
                 <section class="panel-section">
                     <div class="section-head">
                         <div class="section-title">模型 API</div>
-                        <div class="section-copy">选择服务商和模型后填写 Key；高级接口字段默认收起，Key 只保存在本机。</div>
+                        <div class="section-copy">云端模型填写 Key；Ollama/vLLM 本地模型通常只需要服务地址和模型名。</div>
                     </div>
                     <div class="section-body">
                         <label class="field">
@@ -1037,7 +1037,8 @@
                                 <span class="field-label">服务商</span>
                             </div>
                             <select id="llm-preset"></select>
-                            <div class="field-help" id="llm-preset-help">选择服务商后，只需要填写对应平台的 API Key。</div>
+                            <div class="field-help" id="llm-preset-help">选择服务商后填写对应配置；本地 Ollama/vLLM 通常不需要 API Key。</div>
+                            <div class="field-help" id="llm-setup-help">本地模型：先启动 Ollama 或 vLLM 服务，再在这里选择对应预设。</div>
                         </label>
 
                         <label class="field">
@@ -1053,7 +1054,7 @@
                                 <span class="field-label">API Key</span>
                                 <button id="clear-llm-key-btn" class="ghost-btn" type="button">清除 Key</button>
                             </div>
-                            <input id="llm-api-key" type="password" autocomplete="off" placeholder="留空表示保留已保存 Key">
+                            <input id="llm-api-key" type="password" autocomplete="off" placeholder="本地可留空；云端留空表示保留已保存 Key">
                             <div class="field-help" id="llm-key-state">Key 状态读取中...</div>
                         </label>
 
@@ -1389,6 +1390,7 @@
                                     <span class="field-actions">
                                         <button id="refresh-memory-btn" class="ghost-btn" type="button">刷新记忆</button>
                                         <button id="reset-affinity-btn" class="ghost-btn" type="button">重置好感度</button>
+                                        <button id="clear-memory-btn" class="danger-btn" type="button">清空记忆</button>
                                     </span>
                                 </div>
                                 <div class="field-help" id="memory-status-text">记忆状态读取中...</div>

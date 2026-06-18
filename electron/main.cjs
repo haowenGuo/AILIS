@@ -95,10 +95,12 @@ const {
     DEFAULT_ELEVENLABS_TIMEOUT_MS,
     DEFAULT_ELEVENLABS_USE_SPEAKER_BOOST,
     DEFAULT_ELEVENLABS_VOICE_ID,
+    DEFAULT_ELEVENLABS_VOICE_PROFILES,
     DEFAULT_HUMANCLAW_STATE_DIR,
     DEFAULT_OPENCLAW_GATEWAY_URL,
     DEFAULT_PET_SCALE,
     EMAIL_PROVIDER_OPTIONS,
+    ELEVENLABS_LANGUAGE_CODES,
     LLM_PROVIDER_OPTIONS,
     PET_SCALE_OPTIONS,
     CONVERSATION_MODE_OPTIONS,
@@ -150,6 +152,7 @@ const {
     normalizeElevenLabsStyle,
     normalizeElevenLabsTimeoutMs,
     normalizeElevenLabsUseSpeakerBoost,
+    normalizeElevenLabsVoiceProfiles,
     normalizeElevenLabsVoiceId,
     normalizeEmailProfiles,
     normalizeHumanClawStateDir,
@@ -1307,6 +1310,20 @@ function getPersistedLlmSettings() {
 
 function getEnvironmentLlmApiKey(provider = DEFAULT_LLM_PROVIDER) {
     const normalizedProvider = normalizeLlmProvider(provider);
+    if (normalizedProvider === 'ollama') {
+        return normalizeLlmApiKey(
+            process.env.OLLAMA_API_KEY ||
+                process.env.AILIS_OLLAMA_API_KEY ||
+                ''
+        );
+    }
+    if (normalizedProvider === 'vllm') {
+        return normalizeLlmApiKey(
+            process.env.VLLM_API_KEY ||
+                process.env.AILIS_VLLM_API_KEY ||
+                ''
+        );
+    }
     if (normalizedProvider === 'openai-responses') {
         return normalizeLlmApiKey(
             process.env.OPENAI_API_KEY ||
@@ -1341,18 +1358,26 @@ function getEnvironmentLlmApiKey(provider = DEFAULT_LLM_PROVIDER) {
     );
 }
 
+function isLocalLlmProvider(provider = DEFAULT_LLM_PROVIDER) {
+    const normalizedProvider = normalizeLlmProvider(provider);
+    return normalizedProvider === 'ollama' || normalizedProvider === 'vllm';
+}
+
 function getResolvedLlmSettings() {
     const persistedSettings = getPersistedLlmSettings();
     const environmentApiKey = getEnvironmentLlmApiKey(persistedSettings.provider);
-    const apiKeySource = persistedSettings.apiKey
+    const apiKey = isLocalLlmProvider(persistedSettings.provider)
+        ? environmentApiKey
+        : persistedSettings.apiKey || environmentApiKey;
+    const apiKeySource = apiKey && persistedSettings.apiKey && !isLocalLlmProvider(persistedSettings.provider)
         ? 'saved'
-        : environmentApiKey
+        : apiKey
         ? 'environment'
         : 'none';
 
     return {
         ...persistedSettings,
-        apiKey: persistedSettings.apiKey || environmentApiKey,
+        apiKey,
         apiKeySource
     };
 }
@@ -1458,47 +1483,100 @@ function getRendererLlmPreferences() {
     };
 }
 
-function getPersistedElevenLabsSettings() {
-    const preferences = desktopState?.preferences || {};
-    const modelId = normalizeElevenLabsModelId(
-        preferences.elevenLabsModelId || DEFAULT_ELEVENLABS_MODEL_ID
+function detectElevenLabsLanguageFromText(text) {
+    const source = String(text || '');
+    const kanaCount = (source.match(/[\u3040-\u30ff]/g) || []).length;
+    if (kanaCount > 0) {
+        return 'ja';
+    }
+
+    const cjkCount = (source.match(/[\u3400-\u9fff]/g) || []).length;
+    if (cjkCount > 0) {
+        return 'zh';
+    }
+
+    const latinCount = (source.match(/[A-Za-z]/g) || []).length;
+    if (latinCount > 0) {
+        return 'en';
+    }
+
+    return '';
+}
+
+function normalizeRequestedElevenLabsLanguage(payload = {}, preferences = {}) {
+    const requestedLanguage = String(
+        payload.languageCode || payload.language_code || payload.language || ''
+    ).trim().toLowerCase();
+    if (ELEVENLABS_LANGUAGE_CODES.includes(requestedLanguage)) {
+        return requestedLanguage;
+    }
+
+    const detectedLanguage = detectElevenLabsLanguageFromText(payload.text);
+    if (detectedLanguage) {
+        return detectedLanguage;
+    }
+
+    return normalizeElevenLabsLanguageCode(
+        preferences.elevenLabsLanguageCode || DEFAULT_ELEVENLABS_LANGUAGE_CODE
     );
+}
+
+function getPersistedElevenLabsVoiceProfiles() {
+    const preferences = desktopState?.preferences || {};
+    return normalizeElevenLabsVoiceProfiles(preferences.elevenLabsVoiceProfiles, preferences);
+}
+
+function getPersistedElevenLabsSettings(payload = {}) {
+    const preferences = desktopState?.preferences || {};
+    const voiceProfiles = getPersistedElevenLabsVoiceProfiles();
+    const languageCode = normalizeRequestedElevenLabsLanguage(payload, preferences);
+    const selectedProfile = voiceProfiles[languageCode] || voiceProfiles.zh || DEFAULT_ELEVENLABS_VOICE_PROFILES.zh;
 
     return {
         apiBase: normalizeElevenLabsApiBase(
             preferences.elevenLabsApiBase || DEFAULT_ELEVENLABS_API_BASE
         ),
         apiKey: normalizeElevenLabsApiKey(preferences.elevenLabsApiKey || DEFAULT_ELEVENLABS_API_KEY),
-        voiceId: normalizeElevenLabsVoiceId(preferences.elevenLabsVoiceId || DEFAULT_ELEVENLABS_VOICE_ID),
-        modelId,
-        languageCode: normalizeElevenLabsLanguageCode(
-            preferences.elevenLabsLanguageCode || DEFAULT_ELEVENLABS_LANGUAGE_CODE
+        voiceId: normalizeElevenLabsVoiceId(
+            selectedProfile.voiceId || preferences.elevenLabsVoiceId || DEFAULT_ELEVENLABS_VOICE_ID
         ),
+        modelId: normalizeElevenLabsModelId(
+            selectedProfile.modelId || preferences.elevenLabsModelId || DEFAULT_ELEVENLABS_MODEL_ID
+        ),
+        languageCode,
         outputFormat: normalizeElevenLabsOutputFormat(
-            preferences.elevenLabsOutputFormat || DEFAULT_ELEVENLABS_OUTPUT_FORMAT
+            selectedProfile.outputFormat || preferences.elevenLabsOutputFormat || DEFAULT_ELEVENLABS_OUTPUT_FORMAT
         ),
         timeoutMs: normalizeElevenLabsTimeoutMs(
             preferences.elevenLabsTimeoutMs || DEFAULT_ELEVENLABS_TIMEOUT_MS
         ),
         enableLogging: true,
         optimizeStreamingLatency: normalizeElevenLabsOptimizeStreamingLatency(
-            preferences.elevenLabsOptimizeStreamingLatency ?? DEFAULT_ELEVENLABS_OPTIMIZE_STREAMING_LATENCY
+            selectedProfile.optimizeStreamingLatency ??
+                preferences.elevenLabsOptimizeStreamingLatency ??
+                DEFAULT_ELEVENLABS_OPTIMIZE_STREAMING_LATENCY
         ),
         stability: normalizeElevenLabsStability(
-            preferences.elevenLabsStability ?? DEFAULT_ELEVENLABS_STABILITY
+            selectedProfile.stability ?? preferences.elevenLabsStability ?? DEFAULT_ELEVENLABS_STABILITY
         ),
         similarityBoost: normalizeElevenLabsSimilarityBoost(
-            preferences.elevenLabsSimilarityBoost ?? DEFAULT_ELEVENLABS_SIMILARITY_BOOST
+            selectedProfile.similarityBoost ??
+                preferences.elevenLabsSimilarityBoost ??
+                DEFAULT_ELEVENLABS_SIMILARITY_BOOST
         ),
         style: normalizeElevenLabsStyle(
-            preferences.elevenLabsStyle ?? DEFAULT_ELEVENLABS_STYLE
+            selectedProfile.style ?? preferences.elevenLabsStyle ?? DEFAULT_ELEVENLABS_STYLE
         ),
         speed: normalizeElevenLabsSpeed(
-            preferences.elevenLabsSpeed ?? DEFAULT_ELEVENLABS_SPEED
+            selectedProfile.speed ?? preferences.elevenLabsSpeed ?? DEFAULT_ELEVENLABS_SPEED
         ),
         useSpeakerBoost: normalizeElevenLabsUseSpeakerBoost(
-            preferences.elevenLabsUseSpeakerBoost ?? DEFAULT_ELEVENLABS_USE_SPEAKER_BOOST
-        )
+            selectedProfile.useSpeakerBoost ??
+                preferences.elevenLabsUseSpeakerBoost ??
+                DEFAULT_ELEVENLABS_USE_SPEAKER_BOOST
+        ),
+        voiceProfiles,
+        selectedLanguageCode: languageCode
     };
 }
 
@@ -1517,6 +1595,7 @@ function getRendererElevenLabsPreferences() {
         elevenLabsStyle: settings.style,
         elevenLabsSpeed: settings.speed,
         elevenLabsUseSpeakerBoost: settings.useSpeakerBoost,
+        elevenLabsVoiceProfiles: settings.voiceProfiles,
         elevenLabsApiKeyConfigured: Boolean(settings.apiKey),
         elevenLabsApiKeySource: settings.apiKey ? 'saved' : 'none'
     };
@@ -1621,7 +1700,7 @@ async function callDesktopLlm(payload = {}) {
 }
 
 async function callDesktopElevenLabsTts(payload = {}) {
-    return synthesizeElevenLabsSpeech(getPersistedElevenLabsSettings(), payload);
+    return synthesizeElevenLabsSpeech(getPersistedElevenLabsSettings(payload), payload);
 }
 
 async function callDesktopTts(payload = {}) {
@@ -2331,6 +2410,7 @@ function applyPreferencesPatch(partialPreferences = {}) {
         elevenLabsStyle: currentElevenLabsSettings.style,
         elevenLabsSpeed: currentElevenLabsSettings.speed,
         elevenLabsUseSpeakerBoost: currentElevenLabsSettings.useSpeakerBoost,
+        elevenLabsVoiceProfiles: currentElevenLabsSettings.voiceProfiles,
         computerControlEnabled: rendererPreferences.computerControlEnabled,
         emailProfiles: getPersistedEmailProfiles(),
         cameraDistance: rendererPreferences.cameraDistance,
@@ -2464,6 +2544,12 @@ function applyPreferencesPatch(partialPreferences = {}) {
             partialPreferences.elevenLabsUseSpeakerBoost
         );
     }
+    if ('elevenLabsVoiceProfiles' in partialPreferences) {
+        nextPreferences.elevenLabsVoiceProfiles = normalizeElevenLabsVoiceProfiles(
+            partialPreferences.elevenLabsVoiceProfiles,
+            nextPreferences
+        );
+    }
     if ('elevenLabsApiKey' in partialPreferences) {
         const nextApiKey = normalizeElevenLabsApiKey(partialPreferences.elevenLabsApiKey);
         if (nextApiKey) {
@@ -2472,6 +2558,38 @@ function applyPreferencesPatch(partialPreferences = {}) {
     }
     if (partialPreferences.elevenLabsApiKeyAction === 'clear') {
         nextPreferences.elevenLabsApiKey = '';
+    }
+    if (
+        'elevenLabsVoiceId' in partialPreferences ||
+        'elevenLabsModelId' in partialPreferences ||
+        'elevenLabsLanguageCode' in partialPreferences ||
+        'elevenLabsOutputFormat' in partialPreferences ||
+        'elevenLabsOptimizeStreamingLatency' in partialPreferences ||
+        'elevenLabsStability' in partialPreferences ||
+        'elevenLabsSimilarityBoost' in partialPreferences ||
+        'elevenLabsStyle' in partialPreferences ||
+        'elevenLabsSpeed' in partialPreferences ||
+        'elevenLabsUseSpeakerBoost' in partialPreferences ||
+        'elevenLabsVoiceProfiles' in partialPreferences
+    ) {
+        const activeLanguageCode = normalizeElevenLabsLanguageCode(nextPreferences.elevenLabsLanguageCode);
+        const nextProfiles = normalizeElevenLabsVoiceProfiles(nextPreferences.elevenLabsVoiceProfiles, nextPreferences);
+        nextProfiles[activeLanguageCode] = {
+            ...nextProfiles[activeLanguageCode],
+            voiceId: normalizeElevenLabsVoiceId(nextPreferences.elevenLabsVoiceId),
+            modelId: normalizeElevenLabsModelId(nextPreferences.elevenLabsModelId),
+            languageCode: activeLanguageCode,
+            outputFormat: normalizeElevenLabsOutputFormat(nextPreferences.elevenLabsOutputFormat),
+            optimizeStreamingLatency: normalizeElevenLabsOptimizeStreamingLatency(
+                nextPreferences.elevenLabsOptimizeStreamingLatency
+            ),
+            stability: normalizeElevenLabsStability(nextPreferences.elevenLabsStability),
+            similarityBoost: normalizeElevenLabsSimilarityBoost(nextPreferences.elevenLabsSimilarityBoost),
+            style: normalizeElevenLabsStyle(nextPreferences.elevenLabsStyle),
+            speed: normalizeElevenLabsSpeed(nextPreferences.elevenLabsSpeed),
+            useSpeakerBoost: normalizeElevenLabsUseSpeakerBoost(nextPreferences.elevenLabsUseSpeakerBoost)
+        };
+        nextPreferences.elevenLabsVoiceProfiles = normalizeElevenLabsVoiceProfiles(nextProfiles, nextPreferences);
     }
     if ('computerControlEnabled' in partialPreferences) {
         nextPreferences.computerControlEnabled = normalizeComputerControlEnabled(
@@ -3316,14 +3434,25 @@ function registerIpc() {
     ipcMain.handle('ailis:llm-health-check', async (_event, payload = {}) => {
         const currentSettings = getResolvedLlmSettings();
         const incomingSettings = payload?.settings || {};
+        const incomingProvider = normalizeLlmProvider(
+            incomingSettings.provider ||
+                incomingSettings.llmProvider ||
+                currentSettings.provider
+        );
+        const incomingApiKey = normalizeLlmApiKey(
+            incomingSettings.apiKey ||
+                incomingSettings.llmApiKey ||
+                ''
+        );
+        const fallbackApiKey = isLocalLlmProvider(incomingProvider)
+            ? getEnvironmentLlmApiKey(incomingProvider)
+            : currentSettings.apiKey;
         const settings = payload?.settings
             ? buildTemporaryLlmSettings({
                 ...currentSettings,
                 ...incomingSettings,
-                apiKey: incomingSettings.apiKey ||
-                    incomingSettings.llmApiKey ||
-                    currentSettings.apiKey ||
-                    ''
+                provider: incomingProvider,
+                apiKey: incomingApiKey || fallbackApiKey || ''
             })
             : getResolvedLlmSettings();
         return checkDesktopLlmProvider(settings, {
@@ -3343,6 +3472,9 @@ function registerIpc() {
     );
     ipcMain.handle('ailis:memory-reset-affinity', async (_event, payload = {}) =>
         ensureHumanClawGateway().resetMemoryAffinity(payload.score)
+    );
+    ipcMain.handle('ailis:memory-clear', async (_event, payload = {}) =>
+        ensureHumanClawGateway().clearMemory(payload || {})
     );
     ipcMain.handle('ailis:memory-forget', async (_event, payload = {}) =>
         ensureHumanClawGateway().forgetMemory(payload || {})
@@ -3681,6 +3813,10 @@ app.whenReady().then(() => {
     );
     desktopState.preferences.elevenLabsUseSpeakerBoost = normalizeElevenLabsUseSpeakerBoost(
         desktopState.preferences.elevenLabsUseSpeakerBoost ?? DEFAULT_ELEVENLABS_USE_SPEAKER_BOOST
+    );
+    desktopState.preferences.elevenLabsVoiceProfiles = normalizeElevenLabsVoiceProfiles(
+        desktopState.preferences.elevenLabsVoiceProfiles,
+        desktopState.preferences
     );
     desktopState.preferences.computerControlEnabled = normalizeComputerControlEnabled(
         desktopState.preferences.computerControlEnabled ?? DEFAULT_COMPUTER_CONTROL_ENABLED

@@ -106,3 +106,50 @@ test('HumanClaw memory keeps explicit self-evolution preferences even when they 
     assert.match(userBlock.value, /开新分支/);
     assert.match(userBlock.value, /回滚方案/);
 });
+
+test('HumanClaw memory compiles larger structured context and clears memory while preserving secrets', async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'humanclaw-memory-clear-'));
+    const memory = new HumanClawMemoryRuntime({
+        rootDir: path.join(rootDir, 'memory'),
+        workspaceRoot: rootDir
+    });
+
+    memory.saveSecret({
+        name: 'local-test-token',
+        kind: 'test_secret',
+        value: 'secret-value-that-should-survive-clear'
+    });
+
+    const filler = 'detail '.repeat(90);
+    for (let index = 0; index < 30; index += 1) {
+        memory.recordTurn({
+            sessionId: 'large-context-test',
+            userMessage: `memoryanchor ${index} ${filler}`,
+            assistantMessage: `ack memoryanchor ${index} ${filler}`,
+            source: 'test'
+        });
+    }
+
+    let observedLimit = 0;
+    const searchMemory = memory.searchMemory.bind(memory);
+    memory.searchMemory = (query, options = {}) => {
+        observedLimit = options.limit;
+        return searchMemory(query, options);
+    };
+
+    const context = memory.compileContext({
+        sessionId: 'large-context-test',
+        message: 'memoryanchor'
+    });
+    assert.equal(observedLimit, 24);
+    assert.ok(context.length > 7600);
+    assert.match(context, /\n## 相关近期记忆\n/);
+
+    const cleared = memory.clearMemory();
+    assert.equal(cleared.ok, true);
+    assert.equal(memory.getStatus().eventCount, 0);
+    assert.equal(memory.getStatus().secretCount, 1);
+    assert.equal((await fs.readFile(path.join(rootDir, 'memory', 'events.jsonl'), 'utf8')), '');
+    assert.equal(memory.searchMemory('memoryanchor').events.length, 0);
+    assert.ok(memory.listSecrets().secrets.some((secret) => secret.name === 'local-test-token'));
+});

@@ -24,6 +24,7 @@ logs/
 .humanclaw-rollback/
 .humanclaw-state/
 .runtime-logs/
+.ailis-runtime/
 eval-results/
 AILISClaw/
 历史版本/

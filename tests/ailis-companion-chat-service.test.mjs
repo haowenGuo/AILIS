@@ -61,6 +61,7 @@ test('companion chat strips persona_output control block from user-visible text'
 test('companion chat preserves structured persona surface as animation channel', () => {
     const payload = createStructuredPersonaPayload(JSON.stringify({
         reply: '好呀，我在这里。',
+        speech_text: '好呀，我在这里。',
         persona_surface: {
             emotion: 'happy',
             intensity: 0.6,
@@ -79,6 +80,22 @@ test('companion chat preserves structured persona surface as animation channel',
     assert.equal(payload.surface.gestureIntent, 'greeting');
     assert.equal(payload.surface.taskState, 'speaking');
     assert.doesNotMatch(payload.display_text, /persona_surface|gestureIntent|taskState/);
+});
+
+test('companion chat keeps speech_text separate from visible action prose', () => {
+    const payload = createStructuredPersonaPayload(JSON.stringify({
+        reply: '（我轻轻歪头看着你）**好呀，我在这里。**',
+        speech_text: '好呀，我在这里。',
+        persona_surface: {
+            emotion: 'happy',
+            gestureIntent: 'greeting',
+            taskState: 'speaking'
+        }
+    }));
+
+    assert.match(payload.display_text, /轻轻歪头/);
+    assert.equal(payload.speech_text, '好呀，我在这里。');
+    assert.equal(payload.surface.gestureIntent, 'greeting');
 });
 
 test('companion chat strips incomplete persona_output while streaming', () => {

@@ -32,9 +32,6 @@ const {
     parseAilisDirectMcpToolId
 } = require('./ailis-mcp-adapter.cjs');
 const {
-    isExternalVirtualToolId
-} = require('./humanclaw-tool-acquisition-gateway.cjs');
-const {
     approxTokenCount,
     compactToolSchema,
     summarizeForModel,
@@ -48,7 +45,7 @@ const {
 const DEFAULT_RUN_TIMEOUT_MS = 90000;
 const MAX_RESULT_PREVIEW_CHARS = 2600;
 const MAX_PROMPT_PROGRESS_CHARS = 700;
-const MAX_PROMPT_MEMORY_CHARS = 6000;
+const MAX_PROMPT_MEMORY_CHARS = 20000;
 const MAX_MCP_TOOL_DESCRIPTION_CHARS = 900;
 const DEFAULT_AGENT_LOOP_STEPS = 50;
 const MAX_AGENT_LOOP_STEPS = 50;
@@ -163,10 +160,13 @@ const AGENT_TOOL_CATALOG = Object.freeze([
     Object.freeze({ id: 'file_manager', label: 'file_manager', summary: '文件整理和垃圾清理入口。' }),
     Object.freeze({ id: 'code', label: 'code', summary: '代码操作、Git、测试和重构入口。' }),
     Object.freeze({ id: 'artifact_verifier', label: 'artifact_verifier', summary: '只读结构化产物验收：JSON/JSONL/CSV/TSV/YAML/TOML/Markdown/log/text。' }),
+    Object.freeze({ id: 'artifact_query', label: 'artifact_query', summary: 'AILIS Context Artifact 查询入口：用 artifactId 查询 summary/grid/range/search，避免把大 payload 文件读进主上下文。' }),
+    Object.freeze({ id: 'artifact_compute', label: 'artifact_compute', summary: 'AILIS Context Artifact 计算入口：在 artifact 上做 profile/find_path 等确定性数据分析，返回短证据而不是大 payload。' }),
+    Object.freeze({ id: 'read_xlsx_workbook', label: 'read_xlsx_workbook', summary: '只读 Excel/XLSX/XLSM 工作簿解析：sheet、单元格值、公式、填充颜色、合并区域和紧凑网格。' }),
     Object.freeze({ id: 'github_pages', label: 'github_pages', summary: 'GitHub Pages/gh-pages/github.io 发布诊断、关键阻塞和公开 URL 验收证据。' }),
     Object.freeze({ id: 'exec', label: 'exec', summary: '在当前 runtime_environment shell 中运行一条命令，返回 stdout/stderr/exitCode/duration/workdir；适合已有脚本、测试、构建、诊断和短命令。' }),
     Object.freeze({ id: 'update_plan', label: 'update_plan', summary: '更新任务计划和进度。' }),
-    Object.freeze({ id: 'tool_search', label: 'tool_search', summary: 'Codex-like 工具发现：搜索本地 runtime 工具、MCP direct specs、external__ 外部直连工具和已摄入 contract。' }),
+    Object.freeze({ id: 'tool_search', label: 'tool_search', summary: 'Codex-like 工具发现：搜索 deferred tool metadata，并暴露匹配工具给下一轮调用。' }),
     Object.freeze({ id: 'request_permissions', label: 'request_permissions', summary: 'Codex-like 权限申请：当当前 permission profile 阻止必要的文件或网络操作时，先请求精确授权。' }),
     Object.freeze({ id: 'subagents', label: 'subagents', summary: '可执行子 Agent：spawn/wait/log/send/cancel。' }),
     Object.freeze({ id: 'mcp_bridge', label: 'mcp_bridge', summary: 'MCP 管理与发现入口：列 server、健康检查、搜索 direct MCP tool specs、读 resources/prompts；普通任务使用 mcp__server__tool。' }),
@@ -206,10 +206,20 @@ const CAPABILITY_ID_ALIASES = new Map([
     ['db', 'mcp_bridge'],
     ['sql', 'mcp_bridge'],
     ['artifact', 'artifact_verifier'],
+    ['artifact_query', 'artifact_query'],
+    ['artifact_compute', 'artifact_compute'],
+    ['data_worker', 'artifact_compute'],
+    ['context_artifact', 'artifact_query'],
+    ['payload', 'artifact_query'],
     ['verifier', 'artifact_verifier'],
     ['csv', 'artifact_verifier'],
     ['json', 'artifact_verifier'],
     ['markdown', 'artifact_verifier'],
+    ['xlsx', 'read_xlsx_workbook'],
+    ['xlsm', 'read_xlsx_workbook'],
+    ['excel', 'read_xlsx_workbook'],
+    ['workbook', 'read_xlsx_workbook'],
+    ['spreadsheet', 'read_xlsx_workbook'],
     ['mcp', 'mcp_bridge'],
     ['tools', 'tool_search'],
     ['tool_discovery', 'tool_search'],
@@ -757,7 +767,7 @@ function inferAgentEvidenceId(stepResult = {}) {
         }
         return 'operation_result';
     }
-    if (/web_fetch|pdf|read_spreadsheet|spreadsheet|csv|extract|download|transcript|github_repo_read|read|fetch/.test(haystack)) {
+    if (/web_fetch|pdf|artifact_compute|artifact_query|read_xlsx_workbook|read_spreadsheet|spreadsheet|workbook|xlsx|csv|extract|download|transcript|github_repo_read|read|fetch/.test(haystack)) {
         return /pdf|document|spreadsheet|csv|transcript|extract|read/.test(haystack)
             ? 'research_read_result'
             : 'parsed_content';
@@ -813,6 +823,113 @@ function buildAgentEvidenceArtifactsPromptObject(stepResults = []) {
         Array.isArray(stepResult.evidenceArtifacts) ? stepResult.evidenceArtifacts : []
     );
     return getEvidenceArtifactsPromptObject(artifacts).slice(-16);
+}
+
+function getToolResultDetails(stepResult = {}) {
+    const result = stepResult.response?.result || {};
+    const candidates = [
+        result?.structuredContent && typeof result.structuredContent === 'object' ? result.structuredContent : null,
+        result?.structured_content && typeof result.structured_content === 'object' ? result.structured_content : null,
+        result?.details && typeof result.details === 'object' ? result.details : null,
+        stepResult.response?.details && typeof stepResult.response.details === 'object' ? stepResult.response.details : null
+    ].filter(Boolean);
+    return candidates.reduce((merged, entry) => ({ ...merged, ...entry }), {});
+}
+
+function normalizeEvidenceBoolean(value, fallback = false) {
+    if (value === true || value === 'true') {
+        return true;
+    }
+    if (value === false || value === 'false') {
+        return false;
+    }
+    return fallback;
+}
+
+function buildReadyEvidenceFromStep(stepResult = {}) {
+    const details = getToolResultDetails(stepResult);
+    const observationContract = details.observationContract || details.observation_contract || {};
+    const evidence = details.evidence && typeof details.evidence === 'object' ? details.evidence : {};
+    const coveredByEvidence = details.coveredByEvidence && typeof details.coveredByEvidence === 'object'
+        ? details.coveredByEvidence
+        : null;
+    const complete = normalizeEvidenceBoolean(details.complete, normalizeEvidenceBoolean(observationContract.complete, normalizeEvidenceBoolean(evidence.complete)));
+    const truncated = normalizeEvidenceBoolean(details.truncated, normalizeEvidenceBoolean(observationContract.truncated, normalizeEvidenceBoolean(evidence.truncated)));
+    const reasoningReady = normalizeEvidenceBoolean(
+        details.reasoningReady,
+        normalizeEvidenceBoolean(details.reasoning_ready, normalizeEvidenceBoolean(observationContract.reasoning_ready, normalizeEvidenceBoolean(evidence.reasoningReady)))
+    );
+    if (stepResult.response?.ok !== true || complete !== true || truncated === true || reasoningReady !== true) {
+        return null;
+    }
+    const coverage = details.coverage && typeof details.coverage === 'object'
+        ? details.coverage
+        : (evidence.coverage && typeof evidence.coverage === 'object' ? evidence.coverage : null);
+    const result = details.result && typeof details.result === 'object' ? details.result : {};
+    return {
+        stepId: stepResult.id || null,
+        tool: stepResult.tool || null,
+        title: stepResult.title || null,
+        action: details.action || stepResult.args?.action || stepResult.args?.operation || stepResult.args?.intent || null,
+        artifactId: details.artifactId || evidence.artifactId || stepResult.args?.artifactId || stepResult.args?.artifact_id || null,
+        sheet: details.sheet || evidence.sheet || coverage?.sheet || null,
+        range: details.range || evidence.range || coverage?.range || result.range || null,
+        evidenceId: details.pinnedEvidenceId || evidence.evidenceId || coveredByEvidence?.evidenceId || null,
+        coveredByEvidence,
+        resultSummary: Object.keys(result).length
+            ? {
+                pathFound: typeof result.pathFound === 'boolean' ? result.pathFound : undefined,
+                steps: Number.isFinite(Number(result.steps)) ? Number(result.steps) : undefined,
+                visited: Number.isFinite(Number(result.visited)) ? Number(result.visited) : undefined,
+                pathTruncated: result.pathTruncated === true
+            }
+            : null,
+        coverage: coverage ? {
+            kind: coverage.kind,
+            queryAction: coverage.queryAction,
+            sheet: coverage.sheet,
+            range: coverage.range,
+            complete: coverage.complete,
+            truncated: coverage.truncated
+        } : null
+    };
+}
+
+function buildEvidenceSufficiencyPromptObject(stepResults = [], { exactAnswerMode = false } = {}) {
+    const readyEvidence = (Array.isArray(stepResults) ? stepResults : [])
+        .map(buildReadyEvidenceFromStep)
+        .filter(Boolean)
+        .slice(-8);
+    const latestReady = readyEvidence[readyEvidence.length - 1] || null;
+    const latestFailed = [...(Array.isArray(stepResults) ? stepResults : [])].reverse()
+        .find((stepResult) => stepResult?.response && stepResult.response.ok !== true) || null;
+    const repeatedCoveredReads = readyEvidence.filter((entry) => entry.coveredByEvidence?.evidenceId).slice(-6);
+    const hasComputeEvidence = readyEvidence.some((entry) => entry.tool === 'artifact_compute');
+    const status = readyEvidence.length
+        ? (latestFailed ? 'ready_with_later_failure' : 'ready_for_reasoning')
+        : 'needs_more_evidence';
+    return {
+        model: 'ailis_evidence_sufficiency.v1',
+        status,
+        ready: readyEvidence.length > 0,
+        exact_answer_mode: exactAnswerMode === true,
+        recommended_next_action: readyEvidence.length
+            ? 'Use the ready evidence to reason or final if it answers the user goal; do not repeat covered artifact reads. Call a narrower query/compute only if a specific missing field remains.'
+            : 'Gather complete, non-truncated, reasoning-ready evidence with read/query/compute tools before final.',
+        ready_evidence_count: readyEvidence.length,
+        ready_evidence: readyEvidence,
+        latest_ready_evidence: latestReady,
+        repeated_covered_reads: repeatedCoveredReads,
+        has_compute_evidence: hasComputeEvidence,
+        latest_failure_after_ready_evidence: latestFailed && readyEvidence.length
+            ? {
+                stepId: latestFailed.id || null,
+                tool: latestFailed.tool || null,
+                status: latestFailed.response?.status || 'unknown',
+                error: summarize(latestFailed.response?.error || extractToolResultText(latestFailed.response?.result) || '', 360)
+            }
+            : null
+    };
 }
 
 function getAvailableEvidenceRefSet(stepResults = []) {
@@ -2529,6 +2646,35 @@ function buildToolContextText(toolId, { emailProfiles = {} } = {}) {
             '不适合：生成文件、修改文件、联网抓取、替代 code/computer/email/mcp_bridge 执行真实任务。'
         ].join('\n'));
     }
+    if (toolId === 'artifact_query') {
+        return appendToolContractText('artifact_query', [
+            'TOOL artifact_query schema：',
+            'AILIS Context Artifact 查询工具。复杂文件解析、长日志、大文本和大工具输出会保存成 artifactId；不要 raw read 这些 payload 文件。',
+            '表格动作：summary 查看概要；grid 查看紧凑网格；range 按 A1:D20 读取局部；search 按文本/颜色/地址搜索。',
+            '大文本动作：text_schema 查看行数/字符数；text_range 按行号或 offset 读片段；text_search 搜索匹配行和上下文；text_tail 查看尾部。',
+            '文档动作：document_schema 查看页/section；document_search 搜索；document_page 读取指定页；document_section 读取指定章节。',
+            '典型调用：{"tool":"artifact_query","args":{"artifactId":"ctx-spreadsheet-...","action":"range","sheet":"Map","range":"A1:I20"}}。',
+            '返回包含 complete/truncated/reasoning_ready。若 complete=true 且 reasoning_ready=true，应基于证据推理或回答，不要反复读取同一大 payload。'
+        ].join('\n'));
+    }
+    if (toolId === 'artifact_compute') {
+        return appendToolContractText('artifact_compute', [
+            'TOOL artifact_compute schema：',
+            'AILIS Context Artifact 计算工具。用于在 managed artifact 上做确定性 data-worker 分析，避免把完整表格/日志/文档塞进主模型上下文。',
+            '常用动作：profile 查看 artifact/sheet 结构和颜色/公式/合并概况；find_path 在二维 spreadsheet grid 上按 start/end/passable/blocked 参数搜索路径。',
+            '典型调用：{"tool":"artifact_compute","args":{"artifactId":"ctx-spreadsheet-...","action":"find_path","sheet":"Map","startValue":"START","endValue":"END","blockedFills":["000000"]}}。',
+            '返回短文本 + structuredContent，包含 complete/truncated/reasoning_ready。拿到 reasoning_ready=true 的 compute 结果后，应优先推理/回答，而不是继续重复读取同一 grid。'
+        ].join('\n'));
+    }
+    if (toolId === 'read_xlsx_workbook') {
+        return appendToolContractText('read_xlsx_workbook', [
+            'TOOL read_xlsx_workbook schema：',
+            '只读 Excel/XLSX/XLSM 工作簿解析工具，用于本地附件、表格地图、颜色网格、公式、合并单元格和多 sheet 检查。',
+            '优先场景：用户给出 .xlsx/.xlsm 文件、问题依赖单元格颜色/填充色/公式/合并区域/二维网格布局，或 read 返回 binary_file 并建议寻找表格解析工具。',
+            '常用参数：{path, sheet, range, maxRows, maxCols, includeStyles:true, includeFormulas:true}；不传 action 时 runtime 默认 inspect。',
+            '返回：人类可读预览 + artifactId + observation_contract。需要更多证据时用 artifact_query 的 summary/grid/range/search 按需查询；不要 raw read artifact payload，也不要用 exec dump 二进制。'
+        ].join('\n'));
+    }
     if (toolId === 'github_pages') {
         return appendToolContractText('github_pages', [
             'TOOL github_pages schema：',
@@ -2543,8 +2689,10 @@ function buildToolContextText(toolId, { emailProfiles = {} } = {}) {
     if (toolId === 'tool_search') {
         return appendToolContractText('tool_search', [
             'TOOL tool_search schema：',
-            'Codex-like deferred tool discovery. Use it when the first-turn capability_catalog is not enough and you need concrete runtime/MCP specs.',
-        '返回值会包含 runtime tool specs、mcp__server__tool direct call_pattern、external__provider__tool direct call_pattern；普通任务优先使用返回的 direct spec，而不是手工拼 mcp_bridge.call_tool 或 capability_manager.execute_exposed_external_tool。'
+            '# Tool discovery',
+            'Searches over deferred tool metadata with BM25 and exposes matching tools for the next model call.',
+            'Some tools may not have been provided upfront; use tool_search to search for required tools.',
+            'For MCP tool discovery, use tool_search instead of list_mcp_resources or list_mcp_resource_templates.'
         ].join('\n'));
     }
     if (toolId === 'subagents') {
@@ -2901,30 +3049,8 @@ function sanitizeLlmStep(step, index) {
     if (directMcpStep) {
         return directMcpStep;
     }
-    const allowedTools = new Set([
-        'email',
-        'file_manager',
-        'computer',
-        'code',
-        'artifact_verifier',
-        VISION_TOOL_ID,
-        'update_plan',
-        'request_permissions',
-        'subagents',
-        'mcp_bridge',
-        'tool_search',
-        'capability_manager',
-        'self_debugger',
-        'self_evolution',
-        'read',
-        'write',
-        'edit',
-        'web_fetch',
-        'exec',
-        'apply_patch'
-    ]);
     const tool = normalizeText(step.tool || step.name);
-    if (!allowedTools.has(tool) && !isExternalVirtualToolId(tool)) {
+    if (!tool) {
         return null;
     }
     let args = step.args || step.arguments || step.input || step.parameters || step.params || step.tool_args || step.toolArgs || {};
@@ -3638,6 +3764,7 @@ function buildLlmAgentExecutorMessages({
     const capabilityCatalog = buildAgentCapabilityCatalog();
     const recentConversation = normalizeConversationHistory(messageHistory);
     const evidenceArtifacts = buildAgentEvidenceArtifactsPromptObject(stepResults);
+    const evidenceSufficiency = buildEvidenceSufficiencyPromptObject(stepResults, { exactAnswerMode });
     const exactAnswerContract = buildExactAnswerContractPromptObject({
         exactAnswerMode,
         evidenceArtifacts
@@ -3650,7 +3777,8 @@ function buildLlmAgentExecutorMessages({
         '你自己判断用户当前输入是普通情感/闲聊，还是需要执行任务；不要依赖外部分类结果。',
         'recent_turn_items 是 Codex-like 执行记录：tool_call 表示工具已开始，tool_result 表示工具成功或失败，context 表示能力说明已加载，runtime_note 是诊断信息。工具失败也是 observation，应进入下一轮决策；不要因为单个工具失败就僵死，可以换工具、换策略、请求上下文或诚实 final。',
         '证据缺口协议：如果 latest_observation 或 tool_result 中出现 evidence_gap/recovery_hint，说明上一个工具虽然可能成功，但证据不足；优先按 recovery_hint 调用 tool_search 寻找结构化 API、文档解析、视频帧采样或视觉工具，不要机械重复同一个 web_fetch/search。',
-        '工具选择路由：如果任务提到附件、文件路径、DOCX/Word、PPT/PPTX、表格/CSV/XLSX、PDF/论文/报告、YouTube/视频、音频、图片、代码文件、GitHub 仓库或已知 URL，先用 tool_search 查对应 artifact/tool 类型并调用返回的专用 mcp__... 工具；web_search 只作为没有专用工具或专用工具失败后的兜底。',
+        '证据充分协议：如果 user payload 的 evidence_sufficiency.status 是 ready_for_reasoning，且 ready_evidence 已覆盖当前问题所需字段/范围/计算结果，应进入推理或 final；不要继续重复读取 covered artifact/range，除非能说明缺少哪个具体字段。',
+        '工具选择路由：如果任务提到附件、文件路径、DOCX/Word、PPT/PPTX、表格/CSV/XLSX、PDF/论文/报告、YouTube/视频、音频、图片、代码文件、GitHub 仓库或已知 URL，先用 tool_search 查对应 artifact/tool 类型并调用返回的专用 direct 工具（本地工具、mcp__... 或 external__...）；web_search 只作为没有专用工具或专用工具失败后的兜底。',
         '遇到任务时按 Codex/OpenClaw 风格逐步执行：观察当前状态，决定下一步，调用一个工具，等待 observation，再决定下一步。不要一次性输出完整 steps 当作完成，也不要只说计划。',
         '权限协议：如果 observation 显示 permission_profile_read_only、network_access_disabled 或需要额外文件/网络权限，使用 request_permissions 精确请求 permissions，不要只在 final_answer 里口头请求授权。',
         '外部资料与产物规则：如果用户要求读取 URL/PDF/网页/技术文档/API/官方文档/版本化库行为/文件/邮箱/仓库/屏幕，或要求生成、修改、提交某个文件，不能只凭模型记忆 final。你必须先调用最小必要工具拿到 observation；如果用户要求输出文件，写入后还要用 read/stat/artifact_verifier 复核，再 final。',
@@ -3678,7 +3806,7 @@ function buildLlmAgentExecutorMessages({
         '可见回复格式：final_answer 字段是给用户看的 Markdown 字符串，可以使用自然段、短列表、代码块和加粗；blocked_reason 也按 Markdown 组织。不要输出 HTML；不要把 persona_output/persona_surface 或 emotion/intensity/gestureIntent/taskState 等内部控制字段放进任何可见回复字段。',
         '只输出 JSON，JSON 外不要输出 Markdown。',
         'persona_output 字段示例：{"text":"自然可见回复","bubble_text":"可选气泡短句","speech_text":"可选语音文本","emotion":"happy|relaxed|shy|sad|angry|surprised|anxious|tired|thinking|focused|comforting","intensity":0.55,"socialTone":"soft|bright|calm|serious|playful|quiet","gestureIntent":"none|greeting|farewell|thinking|working|approval|success|celebrate|shy|comfort|apologize|surprised|angry|dance","taskState":"idle|listening|thinking|speaking|working|waiting_approval|happy_success|apologizing|comforting|blocked|failed","speechEnergy":0.45,"gazeTarget":"user|side|down|screen|away|none","durationHint":"short|medium|long|hold","tts_style":"..."}',
-        'JSON 格式：{"mode":"conversation|task","intent":"...","summary":"...","public_reasoning":"给用户看的短进度摘要，可空","action":"load_context|tool|final|blocked","capability_request":{"skills":[],"tools":[],"mcp":[],"reason":"..."},"plan_update":["..."],"tool_call":{"tool":"vision.capture_context|computer|email|code|file_manager|artifact_verifier|tool_search|request_permissions|mcp_bridge|capability_manager|self_debugger|self_evolution|subagents|update_plan|read|write|exec|apply_patch|mcp__server__tool|external__provider__tool","title":"...","args":{"action":"...","target":"screen|chat-window|active-window|region","reason":"...","question":"..."}},"persona_output":{},"final_answer":"Markdown...","exact_answer_submission":{"answer":"短答案","confidence":"high|medium|low","evidence_refs":["artifact-..."],"format_type":"plain|number|date|list|name|url|json","reason":"brief evidence note"},"blocked_reason":"Markdown..."}',
+        'JSON 格式：{"mode":"conversation|task","intent":"...","summary":"...","public_reasoning":"给用户看的短进度摘要，可空","action":"load_context|tool|final|blocked","capability_request":{"skills":[],"tools":[],"mcp":[],"reason":"..."},"plan_update":["..."],"tool_call":{"tool":"vision.capture_context|computer|email|code|file_manager|artifact_verifier|artifact_query|artifact_compute|read_xlsx_workbook|tool_search|request_permissions|mcp_bridge|capability_manager|self_debugger|self_evolution|subagents|update_plan|read|write|exec|apply_patch|mcp__server__tool|external__provider__tool","title":"...","args":{"action":"...","target":"screen|chat-window|active-window|region","reason":"...","question":"..."}},"persona_output":{},"final_answer":"Markdown...","exact_answer_submission":{"answer":"短答案","confidence":"high|medium|low","evidence_refs":["artifact-..."],"format_type":"plain|number|date|list|name|url|json","reason":"brief evidence note"},"blocked_reason":"Markdown..."}',
         '当 tool_call.tool 是 mcp_bridge 时，只能用于 MCP 管理/发现/修复动作，不要用它包装 call_tool。执行具体 MCP 工具必须使用 mcp__server__tool direct id。',
         `最多工具轮数：${maxSteps}`,
         `工具摘要：${toolSummary || 'Core tools are indexed in capability_catalog; detailed contracts and MCP tool specs are deferred.'}`
@@ -3710,6 +3838,7 @@ function buildLlmAgentExecutorMessages({
                     recent_turn_items: recentTurnItems,
                     initial_plan_hint: initialPlanHint,
                     evidence_artifacts: evidenceArtifacts,
+                    evidence_sufficiency: evidenceSufficiency,
                     exact_answer_contract: exactAnswerContract,
                     capability_catalog: capabilityCatalog,
                     external_tool_exposure: externalToolExposure,
@@ -4158,6 +4287,7 @@ function buildLlmAgentDirectToolMessages({
         ? summarizeForModel(memoryContext, MAX_PROMPT_MEMORY_CHARS)
         : null;
     const evidenceArtifacts = buildAgentEvidenceArtifactsPromptObject(stepResults);
+    const evidenceSufficiency = buildEvidenceSufficiencyPromptObject(stepResults, { exactAnswerMode });
     const exactAnswerContract = buildExactAnswerContractPromptObject({
         exactAnswerMode,
         evidenceArtifacts
@@ -4167,14 +4297,15 @@ function buildLlmAgentDirectToolMessages({
         '',
         '【HumanClaw Direct Tool Executor】',
         '你正在运行 AILIS 的任务执行层。普通情感/闲聊可以直接自然回复；需要读取、检索、操作电脑、解析文件、调用 API、写代码或复核证据时，必须调用一个可用工具，而不是用自然语言假装完成。',
-        '本模式已经把可执行工具作为原生 function tools 暴露给你。需要工具时直接调用对应 tool name，例如 tool_search、read、write、exec、apply_patch、request_permissions、mcp__server__tool、external__provider__tool。',
+        '本模式已经把可执行工具作为原生 function tools 暴露给你。需要工具时直接调用对应 tool name，例如 tool_search、artifact_query、artifact_compute、read_xlsx_workbook、read、write、exec、apply_patch、request_permissions、mcp__server__tool、external__provider__tool。',
         '不要输出 JSON 决策协议，不要手写 tool_call/tool/args 包装对象；如果要执行工具，使用原生工具调用。每轮最多调用一个工具。',
         '如果缺工具、缺 API、缺文档解析、缺视频/视觉能力，先调用 tool_search；tool_search 返回的 mcp__... 或 external__... 在下一轮会变成可直接调用的原生工具。',
         '只调用本轮 tools 数组中实际暴露的原生工具；不要根据历史提示或其他系统经验虚构工具名。',
         '工具失败、证据不足、字段没找到时，要根据 latest_failed_observation、recovery_hint 和 lossless_tool_observations 改换策略，不要机械重复同一个 web_search。',
+        '证据充分时要收敛：如果 user payload 的 evidence_sufficiency.status 是 ready_for_reasoning，且 ready_evidence 已覆盖当前问题所需字段/范围/计算结果，应推理或最终回答，不要继续重复读取 covered artifact/range。',
         '运行环境协议：user payload 里的 runtime_environment 是当前这一轮的真实执行环境，来自 Platform Adapter，不属于长期记忆。生成 shell、路径、重定向、管道、环境变量和文件命令时必须先看 runtime_environment.family/default_shell/path_style/command_guidance；不要默认自己在 Linux、Windows 或 macOS。',
         'GitHub Pages 路由：任务涉及 GitHub Pages、gh-pages、github.io、部署验收、Pages 404 或发布目录时，优先直接调用 github_pages.diagnose_publish / github_pages.verify_url；不要先用裸 exec 拼 git/curl/head 作为主要诊断路径。',
-        '工具选择路由：如果任务提到附件、文件路径、DOCX/Word、PPT/PPTX、表格/CSV/XLSX、PDF/论文/报告、YouTube/视频、音频、图片、代码文件、GitHub 仓库或已知 URL，先用 tool_search 查对应 artifact/tool 类型并调用返回的专用 mcp__... 工具；web_search 只作为没有专用工具或专用工具失败后的兜底。',
+        '工具选择路由：如果任务提到附件、文件路径、DOCX/Word、PPT/PPTX、表格/CSV/XLSX、PDF/论文/报告、YouTube/视频、音频、图片、代码文件、GitHub 仓库或已知 URL，先用 tool_search 查对应 artifact/tool 类型并调用返回的专用 direct 工具（本地工具、mcp__... 或 external__...）；web_search 只作为没有专用工具或专用工具失败后的兜底。',
         '需要用户授权时调用 request_permissions。危险写入、shell、patch、邮件发送等会由本地 Gateway 审批，不要在参数中伪造 approved=true。',
         '最终答复必须是给用户看的 Markdown。没有足够证据时不要提交猜测答案，要继续调用工具或明确 blocked。',
         exactAnswerMode
@@ -4197,6 +4328,7 @@ function buildLlmAgentDirectToolMessages({
                     recent_turn_items: recentTurnItems,
                     lossless_tool_observations: buildLosslessToolObservationDigest(stepResults),
                     evidence_artifacts: evidenceArtifacts,
+                    evidence_sufficiency: evidenceSufficiency,
                     exact_answer_contract: exactAnswerContract,
                     capability_catalog: capabilityCatalog,
                     external_tool_exposure: externalToolExposure,
@@ -4751,7 +4883,7 @@ function buildAgentDecisionRepairMessages(messages = [], decision = {}) {
                     required_output_shape: {
                         action: 'load_context|tool|final|blocked',
                         tool_call: {
-                            tool: 'tool_search|request_permissions|mcp__server__tool|external__provider__tool|mcp_bridge|computer|code|email|file_manager|vision.capture_context|subagents|capability_manager|self_debugger|self_evolution|read|write|exec|apply_patch',
+                            tool: 'tool_search|request_permissions|mcp__server__tool|external__provider__tool|mcp_bridge|computer|code|email|file_manager|artifact_verifier|artifact_query|artifact_compute|read_xlsx_workbook|vision.capture_context|subagents|capability_manager|self_debugger|self_evolution|read|write|exec|apply_patch',
                             title: 'short action title',
                             args: {}
                         },
@@ -7848,9 +7980,11 @@ module.exports = {
     attachAgentEvidenceArtifacts,
     buildAgentDirectToolSpecs,
     buildAgentEvidenceArtifactsPromptObject,
+    buildEvidenceSufficiencyPromptObject,
     buildFinalAnswerNativeToolSpec,
     buildLosslessToolObservationDigest,
     buildToolResultEvent,
+    sanitizeAgentToolCall,
     isExactAnswerExecutionMode,
     normalizeExactAnswerSubmission,
     stripControlTags,

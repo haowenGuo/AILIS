@@ -34,20 +34,27 @@ const {
 
 test('AILIS tool specs keep Codex-like shape without Codex naming', () => {
     assert.ok(AILIS_RUNTIME_TOOL_DEFINITIONS.some((tool) => tool.id === 'tool_search'));
+    assert.ok(AILIS_RUNTIME_TOOL_DEFINITIONS.some((tool) => tool.id === 'artifact_compute'));
     assert.ok(AILIS_RUNTIME_TOOL_DEFINITIONS.some((tool) => tool.id === 'output_read'));
     assert.ok(AILIS_RUNTIME_TOOL_DEFINITIONS.some((tool) => tool.id === 'output_tail'));
     assert.ok(AILIS_RUNTIME_TOOL_DEFINITIONS.some((tool) => tool.id === 'output_search'));
-    assert.equal(AILIS_RUNTIME_TOOL_DEFINITIONS.find((tool) => tool.id === 'output_read').exposure, AILIS_TOOL_EXPOSURE.HIDDEN);
-    assert.equal(AILIS_RUNTIME_TOOL_DEFINITIONS.find((tool) => tool.id === 'output_tail').exposure, AILIS_TOOL_EXPOSURE.HIDDEN);
-    assert.equal(AILIS_RUNTIME_TOOL_DEFINITIONS.find((tool) => tool.id === 'output_search').exposure, AILIS_TOOL_EXPOSURE.HIDDEN);
+    assert.equal(AILIS_RUNTIME_TOOL_DEFINITIONS.find((tool) => tool.id === 'output_read').exposure, AILIS_TOOL_EXPOSURE.DEFERRED);
+    assert.equal(AILIS_RUNTIME_TOOL_DEFINITIONS.find((tool) => tool.id === 'output_tail').exposure, AILIS_TOOL_EXPOSURE.DEFERRED);
+    assert.equal(AILIS_RUNTIME_TOOL_DEFINITIONS.find((tool) => tool.id === 'output_search').exposure, AILIS_TOOL_EXPOSURE.DEFERRED);
 
     const toolSearch = AILIS_RUNTIME_TOOL_DEFINITIONS.find((tool) => tool.id === 'tool_search');
     assert.equal(toolSearch.route, 'humanclaw-runtime');
     assert.equal(toolSearch.exposure, AILIS_TOOL_EXPOSURE.DIRECT);
+    assert.match(toolSearch.description, /deferred .*tool metadata/i);
+
+    const artifactCompute = AILIS_RUNTIME_TOOL_DEFINITIONS.find((tool) => tool.id === 'artifact_compute');
+    assert.equal(artifactCompute.route, 'humanclaw-runtime');
+    assert.equal(artifactCompute.exposure, AILIS_TOOL_EXPOSURE.DIRECT);
 
     const spec = createAilisFunctionToolSpec(toolSearch);
     assert.equal(spec.type, 'function');
     assert.equal(spec.name, 'tool_search');
+    assert.match(spec.description, /Tool discovery/i);
     assert.equal(spec.parameters.type, 'object');
     assert.ok(spec.output_schema.properties.content);
     assert.equal(Object.prototype.hasOwnProperty.call(spec, 'metadata'), false);
@@ -309,6 +316,21 @@ test('AILIS runtime budget preserves primary tool text beyond structured string 
     assert.equal(compacted.content[0].originalTextChars, text.length);
     assert.equal(compacted.content[0].truncated, false);
     assert.equal(compacted.details.stdout.length < text.length, true);
+});
+
+test('AILIS tool routing ranks artifact_compute for managed artifact data-worker tasks', () => {
+    const artifactTools = AILIS_RUNTIME_TOOL_DEFINITIONS
+        .filter((tool) => ['artifact_query', 'artifact_compute'].includes(tool.id))
+        .map((tool) => ({
+            id: tool.id,
+            type: 'runtime_tool',
+            exposure: tool.exposure,
+            spec: createAilisFunctionToolSpec(tool)
+        }));
+
+    const ranked = rankToolSearchResults(artifactTools, 'artifactId spreadsheet data worker find path grid compute', 2);
+    assert.equal(ranked[0].id, 'artifact_compute');
+    assert.match(buildToolRoutingAdvice('artifact compute path search', artifactTools), /artifact_compute/);
 });
 
 test('AILIS direct MCP specs expose compact model-facing schema', () => {

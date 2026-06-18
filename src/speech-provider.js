@@ -1,5 +1,6 @@
 import { CONFIG } from './config.js';
 import { createChunkedTtsSession } from './realtime-voice/chunked-tts-session.js';
+import { deriveTtsSpeechText } from './tts-speech-text.js';
 
 function isDesktopRuntime() {
     return window.ailisDesktop?.platform === 'electron';
@@ -360,7 +361,10 @@ class ServerTTSCandidate {
         let speechAlignment = alignment;
 
         if (!audioBase64 && !audioBlob) {
-            const speechText = payload?.speech_text || displayText;
+            const speechText = deriveTtsSpeechText(payload, displayText);
+            if (!speechText) {
+                return false;
+            }
             const result = await this.synthesizeSpeech(speechText);
             if (typeof result.play === 'function') {
                 await result.play({
@@ -439,7 +443,10 @@ class LocalVitsTTSCandidate {
         updateMessageContent(displayText);
         scrollToBottom();
 
-        const speechText = payload?.speech_text || displayText;
+        const speechText = deriveTtsSpeechText(payload, displayText);
+        if (!speechText) {
+            return false;
+        }
         const result = await this.synthesizeSpeech(speechText);
         await audioPlayer.playSpeech({
             audioBase64: result.audioBase64,
@@ -501,7 +508,10 @@ class CosyVoice3TTSCandidate {
         updateMessageContent(displayText);
         scrollToBottom();
 
-        const speechText = payload?.speech_text || displayText;
+        const speechText = deriveTtsSpeechText(payload, displayText);
+        if (!speechText) {
+            return false;
+        }
         const result = await this.synthesizeSpeech(speechText);
 
         await audioPlayer.playSpeech({
@@ -565,7 +575,10 @@ class KokoroZhTTSCandidate {
         updateMessageContent(displayText);
         scrollToBottom();
 
-        const speechText = payload?.speech_text || displayText;
+        const speechText = deriveTtsSpeechText(payload, displayText);
+        if (!speechText) {
+            return false;
+        }
         const result = await this.synthesizeSpeech(speechText);
 
         await audioPlayer.playSpeech({

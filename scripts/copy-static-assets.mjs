@@ -17,6 +17,11 @@ const assetsToCopy = [
     {
         source: resolve(projectRoot, 'Resources', 'AILIS.vrm'),
         target: resolve(distRoot, 'Resources', 'AILIS.vrm')
+    },
+    {
+        source: resolve(projectRoot, 'Resources', 'Emotes'),
+        target: resolve(distRoot, 'Resources', 'Emotes'),
+        replaceExisting: true
     }
 ];
 
@@ -46,6 +51,10 @@ for (const asset of assetsToCopy) {
     if (!existsSync(asset.source)) {
         console.warn(`[build] skipped missing asset: ${asset.source}`);
         continue;
+    }
+
+    if (existsSync(asset.target) && asset.replaceExisting) {
+        rmSync(asset.target, { recursive: true, force: true });
     }
 
     if (existsSync(asset.target)) {

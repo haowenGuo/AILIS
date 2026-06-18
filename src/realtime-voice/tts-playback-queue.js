@@ -16,6 +16,10 @@ export class TtsPlaybackQueue {
         this.playing = false;
         this.cancelled = false;
         this.started = false;
+        this.startedSettled = false;
+        this.startedPromise = new Promise((resolve) => {
+            this.resolveStarted = resolve;
+        });
         this.donePromise = new Promise((resolve) => {
             this.resolveDone = resolve;
         });
@@ -57,6 +61,7 @@ export class TtsPlaybackQueue {
         } catch (error) {
             this.onError?.(error, { phase: 'cancel', reason });
         } finally {
+            this.resolveStartedOnce(false);
             this.resolveDone?.();
         }
     }
@@ -65,8 +70,20 @@ export class TtsPlaybackQueue {
         return this.donePromise;
     }
 
+    waitUntilStartedOrDone() {
+        return this.startedPromise;
+    }
+
     hasStarted() {
         return this.started;
+    }
+
+    resolveStartedOnce(started) {
+        if (this.startedSettled) {
+            return;
+        }
+        this.startedSettled = true;
+        this.resolveStarted?.(Boolean(started));
     }
 
     isComplete() {
@@ -78,6 +95,7 @@ export class TtsPlaybackQueue {
 
     resolveIfComplete() {
         if (this.isComplete()) {
+            this.resolveStartedOnce(false);
             this.onPlaybackEnd?.();
             this.resolveDone?.();
         }
@@ -107,6 +125,7 @@ export class TtsPlaybackQueue {
                     if (!this.started) {
                         this.started = true;
                         this.onPlaybackStart?.(item);
+                        this.resolveStartedOnce(true);
                     }
                 };
                 if (typeof item.play === 'function') {

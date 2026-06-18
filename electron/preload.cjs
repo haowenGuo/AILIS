@@ -60,6 +60,7 @@ contextBridge.exposeInMainWorld('ailisDesktop', {
         search: (payload) => ipcRenderer.invoke('ailis:memory-search', payload || {}),
         updateBlock: (payload) => ipcRenderer.invoke('ailis:memory-update-block', payload || {}),
         resetAffinity: (payload) => ipcRenderer.invoke('ailis:memory-reset-affinity', payload || {}),
+        clear: (payload) => ipcRenderer.invoke('ailis:memory-clear', payload || {}),
         forget: (payload) => ipcRenderer.invoke('ailis:memory-forget', payload || {}),
         saveSecret: (payload) => ipcRenderer.invoke('ailis:memory-save-secret', payload || {}),
         deleteSecret: (payload) => ipcRenderer.invoke('ailis:memory-delete-secret', payload || {})

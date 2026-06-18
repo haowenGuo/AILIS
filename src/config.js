@@ -323,7 +323,7 @@ function applyAutoChatSettings(preferences = {}) {
 const runtimeSettings = getRuntimeSettings();
 
 export const CONFIG = {
-    MODEL_PATH: getDesktopResourceUrl('Resources/AILIS.vrm'),
+    MODEL_PATH: getDesktopResourceUrl('Resources/AILIS_18.vrm'),
     ANIMATION_FILES: getDesktopLoadableMotionFiles(),
     IDLE_ACTION_LIST: ['idle', 'idle1', 'idle2'],
     DANCE_ACTION_LIST: ['vrma17', 'vrma25'],

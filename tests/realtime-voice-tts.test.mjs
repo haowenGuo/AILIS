@@ -73,6 +73,48 @@ test('Chunked TTS session plays synthesized chunks in source order', async () =>
     assert.equal(session.hasPlaybackStarted(), true);
 });
 
+test('Chunked TTS session reports first playback before the whole queue finishes', async () => {
+    let finishPlayback = null;
+    let playbackDone = false;
+    let playCount = 0;
+    const session = createChunkedTtsSession({
+        flushDelayMs: 5000,
+        synthesize: async (text) => ({
+            audioBase64: Buffer.from(text).toString('base64'),
+            mimeType: 'audio/wav'
+        }),
+        audioPlayer: {
+            async playSpeech({ onPlaybackStart }) {
+                playCount += 1;
+                onPlaybackStart?.();
+                if (playCount === 1) {
+                    await new Promise((resolve) => {
+                        finishPlayback = resolve;
+                    });
+                }
+            },
+            async stop() {}
+        }
+    });
+
+    session.appendText('第一段先开始播放。第二段稍后播放。');
+    session.finish();
+
+    const started = await session.waitUntilPlaybackStartedOrDone();
+    assert.equal(started, true);
+    assert.equal(session.hasPlaybackStarted(), true);
+
+    session.waitUntilDone().then(() => {
+        playbackDone = true;
+    });
+    await sleep(20);
+    assert.equal(playbackDone, false);
+
+    finishPlayback();
+    await session.waitUntilDone();
+    assert.equal(playbackDone, true);
+});
+
 test('Chunked TTS session cancels queued playback', async () => {
     let stopCount = 0;
     const session = createChunkedTtsSession({

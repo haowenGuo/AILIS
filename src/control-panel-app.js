@@ -69,6 +69,7 @@ const elements = {
     llmPreset: document.getElementById('llm-preset'),
     llmPresetHelp: document.getElementById('llm-preset-help'),
     llmProvider: document.getElementById('llm-provider'),
+    llmSetupHelp: document.getElementById('llm-setup-help'),
     llmTemperature: document.getElementById('llm-temperature'),
     llmTemperatureValue: document.getElementById('llm-temperature-value'),
     llmTimeout: document.getElementById('llm-timeout'),
@@ -102,6 +103,7 @@ const elements = {
     recognitionModeText: document.getElementById('recognition-mode-text'),
     refreshMemoryBtn: document.getElementById('refresh-memory-btn'),
     refreshMicsBtn: document.getElementById('refresh-mics-btn'),
+    clearMemoryBtn: document.getElementById('clear-memory-btn'),
     resetAffinityBtn: document.getElementById('reset-affinity-btn'),
     resetBtn: document.getElementById('reset-btn'),
     renderAmbientFill: document.getElementById('render-ambient-fill'),
@@ -190,26 +192,33 @@ const elevenLabsLanguagePresets = {
         useSpeakerBoost: true
     }
 };
+const ELEVENLABS_LANGUAGE_CODES = Object.freeze(Object.keys(elevenLabsLanguagePresets));
 
 const llmProviderLabels = {
     'openai-compatible': 'OpenAI-compatible',
     'openai-responses': 'OpenAI Responses',
     anthropic: 'Anthropic Claude',
-    gemini: 'Google Gemini'
+    gemini: 'Google Gemini',
+    vllm: 'vLLM 本地',
+    ollama: 'Ollama 本地'
 };
 
 const fallbackLlmProviderDefaultBaseUrls = {
     'openai-compatible': 'https://ark.cn-beijing.volces.com/api/v3',
     'openai-responses': 'https://api.openai.com/v1',
     anthropic: 'https://api.anthropic.com',
-    gemini: 'https://generativelanguage.googleapis.com/v1beta'
+    gemini: 'https://generativelanguage.googleapis.com/v1beta',
+    vllm: 'http://127.0.0.1:8000/v1',
+    ollama: 'http://127.0.0.1:11434'
 };
 
 const fallbackLlmProviderDefaultModels = {
     'openai-compatible': 'doubao-seed-2-0-mini-260215',
     'openai-responses': 'gpt-4.1-mini',
     anthropic: 'claude-3-5-haiku-latest',
-    gemini: 'gemini-2.0-flash'
+    gemini: 'gemini-2.0-flash',
+    vllm: 'Qwen/Qwen2.5-7B-Instruct',
+    ollama: 'llama3.2'
 };
 
 const LLM_PRESET_CUSTOM_ID = 'custom';
@@ -318,6 +327,33 @@ const llmPresetCatalog = [
         ]
     },
     {
+        id: 'ollama',
+        label: 'Ollama 本地',
+        help: '本机离线模型；Base 填服务根地址，不要加 /api/chat。模型名必须和 ollama list 里的名字一致，API Key 通常留空。',
+        provider: 'ollama',
+        baseUrl: 'http://127.0.0.1:11434',
+        models: [
+            { id: 'llama3.2', label: 'Llama 3.2（默认本地）' },
+            { id: 'qwen2.5:7b', label: 'Qwen2.5 7B（中文/通用）' },
+            { id: 'qwen2.5:14b', label: 'Qwen2.5 14B（更强）' },
+            { id: 'llama3.1:8b', label: 'Llama 3.1 8B' },
+            { id: 'gemma3:4b', label: 'Gemma 3 4B（轻量）' }
+        ]
+    },
+    {
+        id: 'vllm',
+        label: 'vLLM 本地 / 局域网',
+        help: 'OpenAI-compatible 本地服务；Base 必须填到 /v1，模型名必须等于 vLLM /v1/models 返回的 id。API Key 可留空。',
+        provider: 'vllm',
+        baseUrl: 'http://127.0.0.1:8000/v1',
+        models: [
+            { id: 'Qwen/Qwen2.5-7B-Instruct', label: 'Qwen2.5 7B Instruct' },
+            { id: 'Qwen/Qwen2.5-14B-Instruct', label: 'Qwen2.5 14B Instruct' },
+            { id: 'meta-llama/Llama-3.1-8B-Instruct', label: 'Llama 3.1 8B Instruct' },
+            { id: 'deepseek-ai/DeepSeek-R1-Distill-Qwen-7B', label: 'DeepSeek R1 Distill Qwen 7B' }
+        ]
+    },
+    {
         id: LLM_PRESET_CUSTOM_ID,
         label: '自定义 / 其他 OpenAI-compatible',
         help: '高级模式：手动填写 Provider、API Base 和模型 ID。',
@@ -350,6 +386,8 @@ let dialoguePreviewScale = 1;
 let dialoguePreviewDrag = null;
 let pendingClearLlmKey = false;
 let pendingClearElevenLabsKey = false;
+let draftElevenLabsVoiceProfiles = {};
+let draftElevenLabsActiveLanguageCode = 'zh';
 let llmProviderDefaultBaseUrls = { ...fallbackLlmProviderDefaultBaseUrls };
 let llmProviderDefaultModels = { ...fallbackLlmProviderDefaultModels };
 let lastLlmProviderValue = 'openai-compatible';
@@ -358,6 +396,11 @@ const pendingClearEmailSecrets = {
     gmail: false,
     outlook: false
 };
+
+function isLocalLlmProvider(provider = elements.llmProvider?.value) {
+    return provider === 'ollama' || provider === 'vllm';
+}
+
 const emailElements = {
     qq: {
         account: elements.emailQqAccount,
@@ -493,6 +536,132 @@ function formatElevenLabsOptimizeLatency(value) {
     return `${normalizedValue} 速度优先`;
 }
 
+function getDefaultElevenLabsVoiceProfile(languageCode) {
+    const normalizedLanguage = normalizeElevenLabsLanguageCode(languageCode);
+    const preset = elevenLabsLanguagePresets[normalizedLanguage] || elevenLabsLanguagePresets.zh;
+    return {
+        voiceId: '',
+        modelId: preset.modelId,
+        languageCode: normalizedLanguage,
+        outputFormat: preset.outputFormat,
+        optimizeStreamingLatency: preset.optimizeStreamingLatency,
+        stability: preset.stability,
+        similarityBoost: preset.similarityBoost,
+        style: preset.style,
+        speed: preset.speed,
+        useSpeakerBoost: preset.useSpeakerBoost
+    };
+}
+
+function normalizeElevenLabsVoiceProfile(profile = {}, languageCode = 'zh', fallback = {}) {
+    const normalizedLanguage = normalizeElevenLabsLanguageCode(languageCode);
+    const defaults = getDefaultElevenLabsVoiceProfile(normalizedLanguage);
+    const source = profile && typeof profile === 'object' ? profile : {};
+    const fallbackSource = fallback && typeof fallback === 'object' ? fallback : {};
+    return {
+        voiceId: String(source.voiceId || fallbackSource.voiceId || defaults.voiceId),
+        modelId: String(source.modelId || fallbackSource.modelId || defaults.modelId),
+        languageCode: normalizedLanguage,
+        outputFormat: String(source.outputFormat || fallbackSource.outputFormat || defaults.outputFormat),
+        optimizeStreamingLatency: normalizeElevenLabsOptimizeLatency(
+            source.optimizeStreamingLatency ??
+                fallbackSource.optimizeStreamingLatency ??
+                defaults.optimizeStreamingLatency,
+            defaults.optimizeStreamingLatency
+        ),
+        stability: normalizeElevenLabsSetting(
+            source.stability ?? fallbackSource.stability ?? defaults.stability,
+            defaults.stability
+        ),
+        similarityBoost: normalizeElevenLabsSetting(
+            source.similarityBoost ?? fallbackSource.similarityBoost ?? defaults.similarityBoost,
+            defaults.similarityBoost
+        ),
+        style: normalizeElevenLabsSetting(source.style ?? fallbackSource.style ?? defaults.style, defaults.style),
+        speed: normalizeElevenLabsSpeed(source.speed ?? fallbackSource.speed ?? defaults.speed, defaults.speed),
+        useSpeakerBoost: (source.useSpeakerBoost ?? fallbackSource.useSpeakerBoost ?? defaults.useSpeakerBoost) !== false
+    };
+}
+
+function normalizeElevenLabsVoiceProfiles(profiles = {}, preferences = {}) {
+    const source = profiles && typeof profiles === 'object' ? profiles : {};
+    const legacyLanguage = normalizeElevenLabsLanguageCode(preferences.elevenLabsLanguageCode, 'zh');
+    const legacyProfile = {
+        voiceId: preferences.elevenLabsVoiceId,
+        modelId: preferences.elevenLabsModelId,
+        outputFormat: preferences.elevenLabsOutputFormat,
+        optimizeStreamingLatency: preferences.elevenLabsOptimizeStreamingLatency,
+        stability: preferences.elevenLabsStability,
+        similarityBoost: preferences.elevenLabsSimilarityBoost,
+        style: preferences.elevenLabsStyle,
+        speed: preferences.elevenLabsSpeed,
+        useSpeakerBoost: preferences.elevenLabsUseSpeakerBoost
+    };
+    const voiceFallback = { voiceId: preferences.elevenLabsVoiceId };
+    return Object.fromEntries(ELEVENLABS_LANGUAGE_CODES.map((languageCode) => {
+        const profile = source[languageCode] && typeof source[languageCode] === 'object'
+            ? source[languageCode]
+            : {};
+        const fallback = Object.keys(profile).length
+            ? voiceFallback
+            : {
+                ...voiceFallback,
+                ...(languageCode === legacyLanguage ? legacyProfile : {})
+            };
+        return [
+            languageCode,
+            normalizeElevenLabsVoiceProfile(profile, languageCode, fallback)
+        ];
+    }));
+}
+
+function readElevenLabsProfileFromFields(languageCode = elements.elevenLabsLanguageCode.value) {
+    const normalizedLanguage = normalizeElevenLabsLanguageCode(languageCode);
+    return normalizeElevenLabsVoiceProfile({
+        voiceId: elements.elevenLabsVoiceId.value,
+        modelId: elements.elevenLabsModelId.value,
+        outputFormat: elements.elevenLabsOutputFormat.value,
+        optimizeStreamingLatency: Number(elements.elevenLabsOptimizeLatency.value),
+        stability: Number(elements.elevenLabsStability.value),
+        similarityBoost: Number(elements.elevenLabsSimilarity.value),
+        style: Number(elements.elevenLabsStyle.value),
+        speed: Number(elements.elevenLabsSpeed.value),
+        useSpeakerBoost: elements.elevenLabsSpeakerBoost.checked
+    }, normalizedLanguage);
+}
+
+function writeElevenLabsProfileToFields(profile, languageCode) {
+    const normalizedLanguage = normalizeElevenLabsLanguageCode(languageCode);
+    const normalizedProfile = normalizeElevenLabsVoiceProfile(profile, normalizedLanguage);
+    elements.elevenLabsLanguageCode.value = normalizedLanguage;
+    elements.elevenLabsVoiceId.value = normalizedProfile.voiceId;
+    elements.elevenLabsModelId.value = normalizedProfile.modelId;
+    elements.elevenLabsOutputFormat.value = normalizedProfile.outputFormat;
+    elements.elevenLabsOptimizeLatency.value = String(normalizedProfile.optimizeStreamingLatency);
+    elements.elevenLabsStability.value = String(normalizedProfile.stability);
+    elements.elevenLabsSimilarity.value = String(normalizedProfile.similarityBoost);
+    elements.elevenLabsStyle.value = String(normalizedProfile.style);
+    elements.elevenLabsSpeed.value = String(normalizedProfile.speed);
+    elements.elevenLabsSpeakerBoost.checked = normalizedProfile.useSpeakerBoost !== false;
+    updateRangeLabels();
+}
+
+function captureCurrentElevenLabsProfile() {
+    const languageCode = normalizeElevenLabsLanguageCode(draftElevenLabsActiveLanguageCode);
+    draftElevenLabsVoiceProfiles = normalizeElevenLabsVoiceProfiles(draftElevenLabsVoiceProfiles, currentPreferences || {});
+    draftElevenLabsVoiceProfiles[languageCode] = readElevenLabsProfileFromFields(languageCode);
+}
+
+function switchElevenLabsVoiceProfile(languageCode) {
+    captureCurrentElevenLabsProfile();
+    const nextLanguage = normalizeElevenLabsLanguageCode(languageCode);
+    draftElevenLabsActiveLanguageCode = nextLanguage;
+    draftElevenLabsVoiceProfiles = normalizeElevenLabsVoiceProfiles(draftElevenLabsVoiceProfiles, currentPreferences || {});
+    writeElevenLabsProfileToFields(draftElevenLabsVoiceProfiles[nextLanguage], nextLanguage);
+    const label = elevenLabsLanguagePresets[nextLanguage]?.label || nextLanguage;
+    setStatus(`已切换到 ${label} 语音配置。`);
+}
+
 function applyElevenLabsLanguagePreset(languageCode) {
     const normalizedLanguage = normalizeElevenLabsLanguageCode(languageCode);
     const preset = elevenLabsLanguagePresets[normalizedLanguage];
@@ -509,6 +678,9 @@ function applyElevenLabsLanguagePreset(languageCode) {
     elements.elevenLabsStyle.value = String(preset.style);
     elements.elevenLabsSpeed.value = String(preset.speed);
     elements.elevenLabsSpeakerBoost.checked = preset.useSpeakerBoost;
+    draftElevenLabsActiveLanguageCode = normalizedLanguage;
+    draftElevenLabsVoiceProfiles = normalizeElevenLabsVoiceProfiles(draftElevenLabsVoiceProfiles, currentPreferences || {});
+    draftElevenLabsVoiceProfiles[normalizedLanguage] = readElevenLabsProfileFromFields(normalizedLanguage);
     updateRangeLabels();
     setStatus(`已套用 ${preset.label} ElevenLabs 语音参数。`);
 }
@@ -632,6 +804,10 @@ function normalizePreferences(preferences = {}) {
     );
 
     const emailProfiles = normalizeEmailProfiles(preferences.emailProfiles || {});
+    const elevenLabsVoiceProfiles = normalizeElevenLabsVoiceProfiles(
+        preferences.elevenLabsVoiceProfiles,
+        preferences
+    );
 
     return {
         petScale: String(preferences.petScale ?? '0.85'),
@@ -673,6 +849,7 @@ function normalizePreferences(preferences = {}) {
         elevenLabsStyle: normalizeElevenLabsSetting(preferences.elevenLabsStyle, 0.05),
         elevenLabsSpeed: normalizeElevenLabsSpeed(preferences.elevenLabsSpeed, 0.9),
         elevenLabsUseSpeakerBoost: preferences.elevenLabsUseSpeakerBoost !== false,
+        elevenLabsVoiceProfiles,
         elevenLabsApiKeyConfigured: Boolean(preferences.elevenLabsApiKeyConfigured),
         elevenLabsApiKeySource: String(preferences.elevenLabsApiKeySource || 'none'),
         computerControlEnabled: preferences.computerControlEnabled !== false,
@@ -773,6 +950,7 @@ function normalizeEmailProfiles(profiles = {}) {
 }
 
 function readFormPreferences({ includeSecret = false } = {}) {
+    captureCurrentElevenLabsProfile();
     const nextPreferences = normalizePreferences({
         petScale: Number(elements.petScale.value),
         petSkipTaskbar: !elements.petShowTaskbar.checked,
@@ -809,6 +987,7 @@ function readFormPreferences({ includeSecret = false } = {}) {
         elevenLabsStyle: Number(elements.elevenLabsStyle.value),
         elevenLabsSpeed: Number(elements.elevenLabsSpeed.value),
         elevenLabsUseSpeakerBoost: elements.elevenLabsSpeakerBoost.checked,
+        elevenLabsVoiceProfiles: draftElevenLabsVoiceProfiles,
         elevenLabsApiKeyConfigured: pendingClearElevenLabsKey
             ? false
             : Boolean(currentPreferences?.elevenLabsApiKeyConfigured),
@@ -982,6 +1161,13 @@ function fillRenderProfileOptions(profileOptions = []) {
 function syncLlmKeyState() {
     if (pendingClearLlmKey) {
         elements.llmKeyState.textContent = '保存后会清除已保存 Key。';
+        return;
+    }
+
+    if (isLocalLlmProvider()) {
+        elements.llmKeyState.textContent = elements.llmApiKey.value.trim()
+            ? '本次测试会使用输入的本地服务 Key；保存后常规调用优先使用本地专属环境变量。'
+            : '本地 Ollama/vLLM 通常无需 Key；如 vLLM 需要鉴权，请设置 VLLM_API_KEY。';
         return;
     }
 
@@ -1180,7 +1366,32 @@ function syncLlmPresetHelp(presetId = elements.llmPreset?.value) {
         return;
     }
     const preset = getLlmPreset(presetId);
-    elements.llmPresetHelp.textContent = preset?.help || '选择服务商后，只需要填写对应平台的 API Key。';
+    elements.llmPresetHelp.textContent = preset?.help || '选择服务商后填写对应配置；本地 Ollama/vLLM 通常不需要 API Key。';
+}
+
+function getLocalLlmSetupHelp(provider = elements.llmProvider?.value) {
+    if (provider === 'ollama') {
+        return [
+            'Ollama 使用步骤：1. 运行 ollama serve；2. 运行 ollama pull llama3.2 或其他模型；',
+            '3. AILIS 的 API Base 填 http://127.0.0.1:11434，不要写 /api/chat；',
+            '4. 模型 ID 填 ollama list 里看到的名字，例如 llama3.2 或 qwen2.5:7b；5. API Key 留空。'
+        ].join('');
+    }
+    if (provider === 'vllm') {
+        return [
+            'vLLM 一站式部署：运行 pnpm llm:vllm:oneclick；国内源可运行 pnpm llm:vllm:oneclick:modelscope。脚本会在 WSL/Linux 创建 venv、安装 vLLM、下载模型并启动服务；',
+            'AILIS 的 API Base 填 http://127.0.0.1:8000/v1；',
+            '模型 ID 填 /v1/models 返回的 id，通常等于启动时的模型名；API Key 默认留空。'
+        ].join('');
+    }
+    return '本地模型：先启动 Ollama 或 vLLM 服务，再选择对应预设；云端模型则填写平台 API Key。';
+}
+
+function syncLlmSetupHelp() {
+    if (!elements.llmSetupHelp) {
+        return;
+    }
+    elements.llmSetupHelp.textContent = getLocalLlmSetupHelp(elements.llmProvider?.value);
 }
 
 function syncLlmPresetSelectionFromFields() {
@@ -1195,6 +1406,7 @@ function syncLlmPresetSelectionFromFields() {
     elements.llmPreset.value = match.preset.id;
     fillLlmModelPresetOptions(match.preset.id, match.model);
     syncLlmPresetHelp(match.preset.id);
+    syncLlmSetupHelp();
 }
 
 function applyLlmPreset(presetId, { preserveModel = false } = {}) {
@@ -1213,6 +1425,8 @@ function applyLlmPreset(presetId, { preserveModel = false } = {}) {
     lastLlmProviderValue = preset.provider;
     fillLlmModelPresetOptions(preset.id, elements.llmModel.value);
     syncLlmPresetHelp(preset.id);
+    syncLlmSetupHelp();
+    syncLlmKeyState();
     renderLlmCapabilityState();
     renderLlmHealthState(null);
 }
@@ -1241,7 +1455,9 @@ async function runLlmHealthCheck() {
         return;
     }
     elements.llmHealthCheckBtn.disabled = true;
-    elements.llmHealthState.textContent = '正在测试模型连接、JSON、Tool 和 Vision 能力...';
+    elements.llmHealthState.textContent = isLocalLlmProvider()
+        ? '正在测试本地模型连接和 JSON 输出能力...'
+        : '正在测试模型连接、JSON、Tool 和 Vision 能力...';
     try {
         const settings = {
             provider: elements.llmProvider.value,
@@ -1347,18 +1563,17 @@ function fillForm(preferences) {
     renderLlmCapabilityState(normalized.llmCapabilities);
     renderLlmHealthState(null);
     elements.elevenLabsApiBase.value = normalized.elevenLabsApiBase;
-    elements.elevenLabsVoiceId.value = normalized.elevenLabsVoiceId;
     elements.elevenLabsApiKey.value = '';
-    elements.elevenLabsModelId.value = normalized.elevenLabsModelId;
-    elements.elevenLabsLanguageCode.value = normalized.elevenLabsLanguageCode;
-    elements.elevenLabsOutputFormat.value = normalized.elevenLabsOutputFormat;
     elements.elevenLabsTimeout.value = String(normalized.elevenLabsTimeoutMs);
-    elements.elevenLabsOptimizeLatency.value = String(normalized.elevenLabsOptimizeStreamingLatency);
-    elements.elevenLabsStability.value = String(normalized.elevenLabsStability);
-    elements.elevenLabsSimilarity.value = String(normalized.elevenLabsSimilarityBoost);
-    elements.elevenLabsStyle.value = String(normalized.elevenLabsStyle);
-    elements.elevenLabsSpeed.value = String(normalized.elevenLabsSpeed);
-    elements.elevenLabsSpeakerBoost.checked = normalized.elevenLabsUseSpeakerBoost;
+    draftElevenLabsVoiceProfiles = normalizeElevenLabsVoiceProfiles(
+        normalized.elevenLabsVoiceProfiles,
+        normalized
+    );
+    draftElevenLabsActiveLanguageCode = normalizeElevenLabsLanguageCode(normalized.elevenLabsLanguageCode, 'zh');
+    writeElevenLabsProfileToFields(
+        draftElevenLabsVoiceProfiles[draftElevenLabsActiveLanguageCode],
+        draftElevenLabsActiveLanguageCode
+    );
     elements.computerControlEnabled.checked = normalized.computerControlEnabled;
     for (const [providerId, entry] of Object.entries(emailElements)) {
         const profile = normalized.emailProfiles?.[providerId] || {};
@@ -2026,6 +2241,30 @@ async function resetAffinityScore() {
     }
 }
 
+async function clearMemoryStore() {
+    if (!window.ailisDesktop?.memory?.clear) {
+        setStatus('当前环境不支持清空人格记忆。');
+        return;
+    }
+    const confirmed = window.confirm(
+        '确认清空 AILIS 长期记忆吗？\n\n将重置记忆块、近期事件、daily notes、反思记录和好感度；已保存的密钥条目会保留。'
+    );
+    if (!confirmed) {
+        return;
+    }
+    try {
+        const result = await window.ailisDesktop.memory.clear({ preserveSecrets: true });
+        if (!result?.ok) {
+            setStatus(`清空记忆失败：${result?.status || 'unknown_error'}`);
+            return;
+        }
+        await refreshMemoryStatus();
+        setStatus('长期记忆已清空，密钥条目已保留。');
+    } catch (error) {
+        setStatus(`清空记忆失败：${error.message || error}`);
+    }
+}
+
 function syncMicrophoneSelection() {
     const currentValue = currentPreferences?.preferredMicDeviceId || '';
     const previousValue = elements.preferredMic.value;
@@ -2395,6 +2634,7 @@ elements.llmProvider?.addEventListener('change', () => {
     applyLlmProviderDefaultsIfNeeded(lastLlmProviderValue, nextProvider);
     lastLlmProviderValue = nextProvider;
     syncLlmPresetSelectionFromFields();
+    syncLlmKeyState();
     renderLlmCapabilityState();
     renderLlmHealthState(null);
     updateRangeLabels();
@@ -2426,7 +2666,7 @@ elements.elevenLabsApiKey.addEventListener('input', () => {
 });
 
 elements.elevenLabsLanguageCode?.addEventListener('change', () => {
-    applyElevenLabsLanguagePreset(elements.elevenLabsLanguageCode.value);
+    switchElevenLabsVoiceProfile(elements.elevenLabsLanguageCode.value);
     syncSaveButton();
 });
 
@@ -2509,6 +2749,10 @@ elements.refreshMemoryBtn?.addEventListener('click', () => {
 
 elements.resetAffinityBtn?.addEventListener('click', () => {
     void resetAffinityScore();
+});
+
+elements.clearMemoryBtn?.addEventListener('click', () => {
+    void clearMemoryStore();
 });
 
 elements.openAgentLabBtn?.addEventListener('click', () => {

@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="AILIS happy sticker">
+  <defs>
+    <linearGradient id="bg" x1="16" y1="12" x2="112" y2="118" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#e8f8ff"/>
+      <stop offset="1" stop-color="#fff4f8"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="5" stdDeviation="5" flood-color="#6aa9c7" flood-opacity=".22"/>
+    </filter>
+  </defs>
+  <circle cx="64" cy="64" r="54" fill="url(#bg)" filter="url(#shadow)"/>
+  <path d="M31 39c7-14 22-22 37-20 13 2 23 9 29 20" fill="none" stroke="#75bde8" stroke-width="7" stroke-linecap="round"/>
+  <path d="M35 38c12-9 30-11 47-3 7 3 12 7 16 12" fill="none" stroke="#ffd2e3" stroke-width="8" stroke-linecap="round"/>
+  <circle cx="45" cy="60" r="6" fill="#24445b"/>
+  <circle cx="83" cy="60" r="6" fill="#24445b"/>
+  <path d="M48 82c10 12 23 12 34 0" fill="none" stroke="#24445b" stroke-width="6" stroke-linecap="round"/>
+  <circle cx="35" cy="74" r="7" fill="#ffb6cf" opacity=".75"/>
+  <circle cx="93" cy="74" r="7" fill="#ffb6cf" opacity=".75"/>
+  <path d="M98 31l5 9 10 2-8 7 1 10-8-5-9 5 2-10-8-7 10-2z" fill="#ffd76a"/>
+</svg>

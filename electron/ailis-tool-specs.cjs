@@ -28,7 +28,7 @@ function isExperimentalOutputStoreToolsEnabled() {
 
 const OUTPUT_STORE_TOOL_EXPOSURE = isExperimentalOutputStoreToolsEnabled()
     ? AILIS_TOOL_EXPOSURE.DIRECT
-    : AILIS_TOOL_EXPOSURE.HIDDEN;
+    : AILIS_TOOL_EXPOSURE.DEFERRED;
 
 const AILIS_RUNTIME_TOOL_DEFINITIONS = Object.freeze([
     Object.freeze({
@@ -45,8 +45,30 @@ const AILIS_RUNTIME_TOOL_DEFINITIONS = Object.freeze([
     Object.freeze({
         id: 'tool_search',
         label: 'tool_search',
-        description: 'Search deferred runtime tools and MCP tool specs, then return loadable tool specifications for the next Agent step.',
+        description: 'Tool discovery. Searches over deferred tool metadata with BM25 and exposes matching tools for the next Agent step.',
         sectionId: 'runtime',
+        route: 'humanclaw-runtime',
+        materialized: true,
+        status: 'available',
+        needsApproval: false,
+        exposure: AILIS_TOOL_EXPOSURE.DIRECT
+    }),
+    Object.freeze({
+        id: 'artifact_query',
+        label: 'artifact_query',
+        description: 'Query managed AILIS context artifacts by artifactId without dumping large payload files into the model context. Use spreadsheet grid/range/search, text_range/text_search/text_tail, or document_search/document_page/document_section instead of raw read on artifact payloads.',
+        sectionId: 'context-artifacts',
+        route: 'humanclaw-runtime',
+        materialized: true,
+        status: 'available',
+        needsApproval: false,
+        exposure: AILIS_TOOL_EXPOSURE.DIRECT
+    }),
+    Object.freeze({
+        id: 'artifact_compute',
+        label: 'artifact_compute',
+        description: 'Run deterministic data-worker computations on managed context artifacts, such as spreadsheet profiling and grid path search, returning compact reasoning-ready evidence instead of raw payloads.',
+        sectionId: 'context-artifacts',
         route: 'humanclaw-runtime',
         materialized: true,
         status: 'available',

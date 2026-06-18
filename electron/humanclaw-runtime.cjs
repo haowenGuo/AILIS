@@ -7,6 +7,7 @@ const { HumanClawCapabilityManager } = require('./humanclaw-capability-manager.c
 const { HumanClawSelfDebugger } = require('./humanclaw-self-debugger.cjs');
 const { createHumanClawPlatformAdapter } = require('./humanclaw-platform-adapter.cjs');
 const { HumanClawOutputStore } = require('./humanclaw-output-store.cjs');
+const { HumanClawContextArtifactStore } = require('./humanclaw-context-artifact-store.cjs');
 const { getToolContractPromptText } = require('./humanclaw-tool-contracts.cjs');
 const {
     CORE_RUNTIME_TOOL_DEFINITIONS: RUNTIME_TOOL_DEFINITIONS,
@@ -462,6 +463,10 @@ class HumanClawRuntime {
             rootDir: options.outputStoreDir || path.join(this.auditDir, 'output-store')
         });
         this.emitGatewayEvent = typeof options.emitGatewayEvent === 'function' ? options.emitGatewayEvent : () => {};
+        this.contextArtifactStore = options.contextArtifactStore || new HumanClawContextArtifactStore({
+            rootDir: options.contextArtifactStoreDir || path.join(this.auditDir, 'context-artifacts'),
+            emitGatewayEvent: (type, payload) => this.emitGatewayEvent(type, payload)
+        });
         this.subagentExecutor = typeof options.subagentExecutor === 'function' ? options.subagentExecutor : null;
         this.platformAdapter = createHumanClawPlatformAdapter(options.platformAdapter || options.platform || {});
         this.runs = new Map();
@@ -517,6 +522,14 @@ class HumanClawRuntime {
     async searchExecOutput(args = {}) {
         const result = await this.outputStore.search(args);
         return this.formatOutputStoreResult('output_search', result);
+    }
+
+    async queryContextArtifact(args = {}) {
+        return await this.contextArtifactStore.execute(args);
+    }
+
+    async computeContextArtifact(args = {}) {
+        return await this.contextArtifactStore.compute(args);
     }
 
     formatOutputStoreResult(action, result = {}) {
@@ -627,6 +640,10 @@ class HumanClawRuntime {
             selfDebugger: this.selfDebugger.getStatus(),
             selfEvolution: this.selfEvolutionRuntime?.getStatus?.() || null,
             runtimeTools: this.toolRuntimeRegistry.listDefinitions().map((tool) => tool.id),
+            contextArtifacts: {
+                rootDir: this.contextArtifactStore.rootDir,
+                indexPath: this.contextArtifactStore.indexPath
+            },
             toolRuntime: {
                 model: 'codex_like_tool_runtime_registry',
                 directToolCount: this.toolRuntimeRegistry.modelVisibleSpecs().length,

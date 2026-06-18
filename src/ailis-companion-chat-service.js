@@ -1,5 +1,6 @@
 import { CONFIG } from './config.js';
-import { markdownToPlainText, normalizeMarkdownSource } from './markdown-renderer.js';
+import { normalizeMarkdownSource } from './markdown-renderer.js';
+import { extractTtsSpeechTextFromDisplay, normalizeTtsSpeechText } from './tts-speech-text.js';
 
 function sleep(ms) {
     return new Promise((resolve) => window.setTimeout(resolve, ms));
@@ -177,7 +178,7 @@ function parseReplyMarkup(rawText) {
         display_text: displayText,
         display_format: 'markdown',
         contentFormat: 'markdown',
-        speech_text: markdownToPlainText(displayText).replace(/\n/g, ' '),
+        speech_text: extractTtsSpeechTextFromDisplay(displayText),
         action,
         expression
     };
@@ -202,12 +203,14 @@ function buildAilisSystemPrompt() {
     虚拟形象表现协议（必严格遵循）：
     1. 你必须只输出一个 JSON 对象，JSON 外不要输出任何正文、Markdown、代码块、XML 或额外解释。
     2. reply 是唯一给用户看的 Markdown 文本；不要把 persona_surface、emotion、intensity、gestureIntent、taskState、speechEnergy 等内部字段写进 reply。
-    3. persona_surface 是给前端 Character Runtime 的人物语义状态，用来驱动动作、表情、眼神、待机和说话律动。
-    4. 不要输出 [action:...] 或 [expression:...]，不要直接选择 VRM/VRMA 动作名。
+    3. speech_text 是唯一给 TTS 朗读的文本；必须去掉括号动作、表情描写、舞台提示和 Markdown，只保留真正适合说出口的话，可以比 reply 更短、更口语。
+    4. persona_surface 是给前端 Character Runtime 的人物语义状态，用来驱动动作、表情、眼神、待机和说话律动。
+    5. 不要输出 [action:...] 或 [expression:...]，不要直接选择 VRM/VRMA 动作名。
 
     JSON 格式：
     {
       "reply": "给用户看的 Markdown 回复",
+      "speech_text": "给 TTS 朗读的自然口语文本",
       "persona_surface": {
         "emotion": "neutral|relaxed|happy|shy|sad|angry|surprised|anxious|tired|thinking|focused|comforting",
         "intensity": 0.55,
@@ -330,6 +333,21 @@ function createStructuredPersonaPayload(rawText, extra = {}) {
     }
 
     const structuredReply = sanitizeUserVisibleReplyText(json.reply || json.text || json.response || '');
+    const requestedSpeech = normalizeTtsSpeechText(
+        json.speech_text ||
+            json.speechText ||
+            json.tts_text ||
+            json.ttsText ||
+            json.persona_surface?.speech_text ||
+            json.persona_surface?.speechText ||
+            json.personaSurface?.speech_text ||
+            json.personaSurface?.speechText ||
+            json.persona_output?.speech_text ||
+            json.persona_output?.speechText ||
+            json.personaOutput?.speech_text ||
+            json.personaOutput?.speechText ||
+            ''
+    );
     const personaOnlyJson = looksLikePersonaSurfaceObject(json) && !structuredReply;
     const replyText = normalizeMarkdownSource(structuredReply || visibleText || (personaOnlyJson ? '' : rawText));
     const surface = json.persona_surface ||
@@ -341,6 +359,7 @@ function createStructuredPersonaPayload(rawText, extra = {}) {
         (personaOnlyJson ? json : null);
     return createParsedPayload(replyText, {
         ...extra,
+        speech_text: requestedSpeech || extractTtsSpeechTextFromDisplay(replyText),
         surface: surface && typeof surface === 'object'
             ? {
                 ...surface,
@@ -424,7 +443,7 @@ function createDemoPayload({ text, action = null, expression = null, autoChat = 
         display_text: text,
         display_format: 'markdown',
         contentFormat: 'markdown',
-        speech_text: markdownToPlainText(text).replace(/\n/g, ' '),
+        speech_text: extractTtsSpeechTextFromDisplay(text),
         audio_base64: '',
         mime_type: '',
         action,

@@ -1714,6 +1714,8 @@ test('Agentic Executor feeds tool results back as Codex-like turn items', async 
         assert.equal(llmServer.calls.length, 2);
         const secondPayload = JSON.parse(llmServer.calls[1].payload.messages.find((entry) => entry.role === 'user').content);
         assert.equal(secondPayload.recent_turn_items.model, 'codex_like_turn_items');
+        assert.equal(secondPayload.evidence_sufficiency.model, 'ailis_evidence_sufficiency.v1');
+        assert.equal(typeof secondPayload.evidence_sufficiency.status, 'string');
         assert.ok(secondPayload.recent_turn_items.items.some((item) =>
             item.type === 'tool_result' &&
             item.status === 'completed' &&

@@ -1,4 +1,4 @@
-import { markdownToPlainText, normalizeMarkdownSource } from './markdown-renderer.js';
+import { normalizeMarkdownSource } from './markdown-renderer.js';
 import {
     splitChatAttachments,
     summarizeChatAttachmentsForGateway
@@ -8,11 +8,13 @@ import {
     createPersonaProgressFrame,
     renderPersonaProgressSurface
 } from './ailis-progress-surface.js';
+import { extractTtsSpeechTextFromDisplay, normalizeTtsSpeechText } from './tts-speech-text.js';
 
 const CONTROL_TAG_PATTERN = /\[(action|expression):([^\]]*)\]/g;
 const LEADING_INCOMPLETE_CONTROL_TAG_PATTERN = /^(?:\[(?:action|expression):[^\]]*)+/;
 const VISION_LLM_TIMEOUT_MS = 90000;
 const PROGRESS_MIN_INTERVAL_MS = 1200;
+const EMBODIED_COMMAND_TASK_WORD_PATTERN = /写|代码|脚本|文件|邮件|查|搜索|整理|生成|测试|运行|打开|读取|分析|修复|优化|提交|commit|debug|report|文档/i;
 
 function normalizeText(value) {
     if (typeof value !== 'string') {
@@ -228,6 +230,58 @@ function getVisionCue(message) {
     };
 }
 
+function normalizeEmbodiedCommandText(value) {
+    return normalizeText(value)
+        .replace(/[，。！？!?,.;；：:\s~～…]+/g, '')
+        .toLowerCase();
+}
+
+function isLikelyStandaloneEmbodiedCommand(message) {
+    const normalized = normalizeEmbodiedCommandText(message);
+    return normalized.length > 0 &&
+        normalized.length <= 28 &&
+        !EMBODIED_COMMAND_TASK_WORD_PATTERN.test(message);
+}
+
+export function createEmbodiedCommandPayload(message = '') {
+    if (!isLikelyStandaloneEmbodiedCommand(message)) {
+        return null;
+    }
+
+    const normalized = normalizeEmbodiedCommandText(message);
+    if (!/(跳舞|跳个舞|跳一段|舞蹈|dance|dancing)/i.test(normalized)) {
+        return null;
+    }
+
+    const text = '好呀，我给你跳一段。';
+    return toAssistantPayload(text, {
+        action: 'dance',
+        expression: 'happy',
+        speechText: text,
+        bubbleText: '跳舞模式，启动。',
+        surface: {
+            text,
+            speechText: text,
+            bubbleText: '跳舞模式，启动。',
+            action: 'dance',
+            expression: 'happy',
+            emotion: 'happy',
+            intensity: 0.78,
+            socialTone: 'playful',
+            gestureIntent: 'dance',
+            taskState: 'happy_success',
+            speechEnergy: 0.72,
+            gazeTarget: 'user',
+            durationHint: 'long',
+            source: 'assistant_embodied_command'
+        },
+        embodiedCommand: {
+            type: 'dance',
+            source: 'assistant_mode_short_command'
+        }
+    });
+}
+
 async function fetchVisionAssistantTurn(messageEntry, { sessionId = 'main', messageHistory = [] } = {}) {
     if (typeof window.ailisDesktop?.llm?.chat !== 'function') {
         throw new Error('当前桌面宿主不支持视觉大模型调用');
@@ -335,7 +389,7 @@ function parseAssistantReply(rawText) {
     return {
         rawText: raw,
         displayText,
-        speechText: markdownToPlainText(displayText).replace(/\n/g, ' '),
+        speechText: extractTtsSpeechTextFromDisplay(displayText),
         action,
         expression
     };
@@ -349,7 +403,7 @@ function toAssistantPayload(text, extra = {}) {
         display_text: parsed.displayText,
         display_format: 'markdown',
         contentFormat: 'markdown',
-        speech_text: normalizeText(extra.speechText || extra.speech_text) || parsed.speechText,
+        speech_text: normalizeTtsSpeechText(extra.speechText || extra.speech_text) || parsed.speechText,
         bubble_text: normalizeText(extra.bubbleText || extra.bubble_text) || parsed.displayText,
         action: parsed.action || extra.action || null,
         expression: parsed.expression || extra.expression || null,
@@ -361,7 +415,7 @@ function toAssistantPayload(text, extra = {}) {
 }
 
 async function synthesizeElevenLabsSpeech(speechText) {
-    const cleanText = normalizeText(speechText);
+    const cleanText = normalizeTtsSpeechText(speechText);
     if (!cleanText) {
         return null;
     }
@@ -449,6 +503,11 @@ export class HumanClawDesktopChatService {
         const message = normalizeText(latestUserEntry?.content);
         if (!message) {
             throw new Error('消息不能为空');
+        }
+
+        const embodiedPayload = createEmbodiedCommandPayload(message);
+        if (embodiedPayload) {
+            return attachServerTtsIfRequested(embodiedPayload, replyMode);
         }
 
         const splitAttachments = splitChatAttachments(latestUserEntry?.attachments);

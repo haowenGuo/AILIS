@@ -18,7 +18,7 @@ const DEFAULT_BACKEND_BASE_URL = '';
 const DEFAULT_BACKEND_MODE = 'humanclaw';
 const DEFAULT_OPENCLAW_GATEWAY_URL = 'ws://127.0.0.1:19011';
 const DEFAULT_HUMANCLAW_STATE_DIR = '';
-const LLM_PROVIDER_OPTIONS = ['openai-compatible', 'openai-responses', 'anthropic', 'gemini'];
+const LLM_PROVIDER_OPTIONS = ['openai-compatible', 'openai-responses', 'anthropic', 'gemini', 'vllm', 'ollama'];
 const DEFAULT_LLM_PROVIDER = 'openai-compatible';
 const DEFAULT_LLM_BASE_URL = 'https://ark.cn-beijing.volces.com/api/v3';
 const DEFAULT_LLM_MODEL = 'doubao-seed-2-0-mini-260215';
@@ -26,13 +26,17 @@ const LLM_PROVIDER_DEFAULT_BASE_URLS = Object.freeze({
     'openai-compatible': DEFAULT_LLM_BASE_URL,
     'openai-responses': 'https://api.openai.com/v1',
     anthropic: 'https://api.anthropic.com',
-    gemini: 'https://generativelanguage.googleapis.com/v1beta'
+    gemini: 'https://generativelanguage.googleapis.com/v1beta',
+    vllm: 'http://127.0.0.1:8000/v1',
+    ollama: 'http://127.0.0.1:11434'
 });
 const LLM_PROVIDER_DEFAULT_MODELS = Object.freeze({
     'openai-compatible': DEFAULT_LLM_MODEL,
     'openai-responses': 'gpt-4.1-mini',
     anthropic: 'claude-3-5-haiku-latest',
-    gemini: 'gemini-2.0-flash'
+    gemini: 'gemini-2.0-flash',
+    vllm: 'Qwen/Qwen2.5-7B-Instruct',
+    ollama: 'llama3.2'
 });
 const DEFAULT_LLM_API_KEY = '';
 const DEFAULT_LLM_TEMPERATURE = 0.8;
@@ -50,6 +54,45 @@ const DEFAULT_ELEVENLABS_SIMILARITY_BOOST = 0.78;
 const DEFAULT_ELEVENLABS_STYLE = 0.05;
 const DEFAULT_ELEVENLABS_SPEED = 0.9;
 const DEFAULT_ELEVENLABS_USE_SPEAKER_BOOST = true;
+const ELEVENLABS_LANGUAGE_CODES = ['zh', 'en', 'ja'];
+const DEFAULT_ELEVENLABS_VOICE_PROFILES = Object.freeze({
+    zh: Object.freeze({
+        voiceId: DEFAULT_ELEVENLABS_VOICE_ID,
+        modelId: DEFAULT_ELEVENLABS_MODEL_ID,
+        languageCode: 'zh',
+        outputFormat: DEFAULT_ELEVENLABS_OUTPUT_FORMAT,
+        optimizeStreamingLatency: 0,
+        stability: 0.58,
+        similarityBoost: 0.78,
+        style: 0.05,
+        speed: 0.9,
+        useSpeakerBoost: true
+    }),
+    en: Object.freeze({
+        voiceId: DEFAULT_ELEVENLABS_VOICE_ID,
+        modelId: DEFAULT_ELEVENLABS_MODEL_ID,
+        languageCode: 'en',
+        outputFormat: DEFAULT_ELEVENLABS_OUTPUT_FORMAT,
+        optimizeStreamingLatency: 0,
+        stability: 0.55,
+        similarityBoost: 0.8,
+        style: 0.08,
+        speed: 0.92,
+        useSpeakerBoost: true
+    }),
+    ja: Object.freeze({
+        voiceId: DEFAULT_ELEVENLABS_VOICE_ID,
+        modelId: DEFAULT_ELEVENLABS_MODEL_ID,
+        languageCode: 'ja',
+        outputFormat: DEFAULT_ELEVENLABS_OUTPUT_FORMAT,
+        optimizeStreamingLatency: 0,
+        stability: 0.52,
+        similarityBoost: 0.78,
+        style: 0.08,
+        speed: 0.88,
+        useSpeakerBoost: true
+    })
+});
 const DEFAULT_COMPUTER_CONTROL_ENABLED = true;
 const DEFAULT_CAMERA_DISTANCE = 1.1;
 const DEFAULT_CAMERA_HEIGHT = 1.3;
@@ -256,6 +299,79 @@ function normalizeElevenLabsSpeed(value) {
 
 function normalizeElevenLabsUseSpeakerBoost(value) {
     return normalizeBoolean(value, DEFAULT_ELEVENLABS_USE_SPEAKER_BOOST);
+}
+
+function normalizeElevenLabsVoiceProfile(value = {}, languageCode = DEFAULT_ELEVENLABS_LANGUAGE_CODE, fallback = {}) {
+    const normalizedLanguageCode = normalizeElevenLabsLanguageCode(languageCode);
+    const defaults = DEFAULT_ELEVENLABS_VOICE_PROFILES[normalizedLanguageCode] ||
+        DEFAULT_ELEVENLABS_VOICE_PROFILES.zh;
+    const source = value && typeof value === 'object' ? value : {};
+    const fallbackSource = fallback && typeof fallback === 'object' ? fallback : {};
+
+    return {
+        voiceId: normalizeElevenLabsVoiceId(source.voiceId || fallbackSource.voiceId || defaults.voiceId),
+        modelId: normalizeElevenLabsModelId(source.modelId || fallbackSource.modelId || defaults.modelId),
+        languageCode: normalizedLanguageCode,
+        outputFormat: normalizeElevenLabsOutputFormat(
+            source.outputFormat || fallbackSource.outputFormat || defaults.outputFormat
+        ),
+        optimizeStreamingLatency: normalizeElevenLabsOptimizeStreamingLatency(
+            source.optimizeStreamingLatency ??
+                fallbackSource.optimizeStreamingLatency ??
+                defaults.optimizeStreamingLatency
+        ),
+        stability: normalizeElevenLabsStability(source.stability ?? fallbackSource.stability ?? defaults.stability),
+        similarityBoost: normalizeElevenLabsSimilarityBoost(
+            source.similarityBoost ?? fallbackSource.similarityBoost ?? defaults.similarityBoost
+        ),
+        style: normalizeElevenLabsStyle(source.style ?? fallbackSource.style ?? defaults.style),
+        speed: normalizeElevenLabsSpeed(source.speed ?? fallbackSource.speed ?? defaults.speed),
+        useSpeakerBoost: normalizeElevenLabsUseSpeakerBoost(
+            source.useSpeakerBoost ?? fallbackSource.useSpeakerBoost ?? defaults.useSpeakerBoost
+        )
+    };
+}
+
+function createLegacyElevenLabsVoiceProfile(preferences = {}) {
+    return {
+        voiceId: preferences.elevenLabsVoiceId,
+        modelId: preferences.elevenLabsModelId,
+        languageCode: preferences.elevenLabsLanguageCode,
+        outputFormat: preferences.elevenLabsOutputFormat,
+        optimizeStreamingLatency: preferences.elevenLabsOptimizeStreamingLatency,
+        stability: preferences.elevenLabsStability,
+        similarityBoost: preferences.elevenLabsSimilarityBoost,
+        style: preferences.elevenLabsStyle,
+        speed: preferences.elevenLabsSpeed,
+        useSpeakerBoost: preferences.elevenLabsUseSpeakerBoost
+    };
+}
+
+function normalizeElevenLabsVoiceProfiles(value = {}, preferences = {}) {
+    const source = value && typeof value === 'object' ? value : {};
+    const legacyProfile = createLegacyElevenLabsVoiceProfile(preferences);
+    const legacyLanguage = normalizeElevenLabsLanguageCode(
+        preferences.elevenLabsLanguageCode || DEFAULT_ELEVENLABS_LANGUAGE_CODE
+    );
+    const legacyVoiceFallback = {
+        voiceId: preferences.elevenLabsVoiceId
+    };
+
+    return Object.fromEntries(ELEVENLABS_LANGUAGE_CODES.map((languageCode) => {
+        const profileSource = source[languageCode] && typeof source[languageCode] === 'object'
+            ? source[languageCode]
+            : {};
+        const fallback = Object.keys(profileSource).length
+            ? legacyVoiceFallback
+            : {
+                ...legacyVoiceFallback,
+                ...(languageCode === legacyLanguage ? legacyProfile : {})
+            };
+        return [
+            languageCode,
+            normalizeElevenLabsVoiceProfile(profileSource, languageCode, fallback)
+        ];
+    }));
 }
 
 function normalizeLlmTemperature(value) {
@@ -577,6 +693,7 @@ function getDefaultState() {
             elevenLabsStyle: DEFAULT_ELEVENLABS_STYLE,
             elevenLabsSpeed: DEFAULT_ELEVENLABS_SPEED,
             elevenLabsUseSpeakerBoost: DEFAULT_ELEVENLABS_USE_SPEAKER_BOOST,
+            elevenLabsVoiceProfiles: normalizeElevenLabsVoiceProfiles(),
             computerControlEnabled: DEFAULT_COMPUTER_CONTROL_ENABLED,
             cameraDistance: DEFAULT_CAMERA_DISTANCE,
             cameraHeight: DEFAULT_CAMERA_HEIGHT,
@@ -781,6 +898,10 @@ function normalizeState(inputState) {
     normalizedState.preferences.elevenLabsUseSpeakerBoost = normalizeElevenLabsUseSpeakerBoost(
         normalizedState.preferences.elevenLabsUseSpeakerBoost
     );
+    normalizedState.preferences.elevenLabsVoiceProfiles = normalizeElevenLabsVoiceProfiles(
+        nextState.preferences?.elevenLabsVoiceProfiles,
+        normalizedState.preferences
+    );
     normalizedState.preferences.computerControlEnabled = normalizeComputerControlEnabled(
         normalizedState.preferences.computerControlEnabled
     );
@@ -941,6 +1062,20 @@ function preserveExistingEmailSecrets(nextPreferences, existingPreferences, allo
     }
 }
 
+function preserveExistingElevenLabsProfileVoiceIds(nextPreferences, existingPreferences, allowBlankCredentials) {
+    for (const languageCode of ELEVENLABS_LANGUAGE_CODES) {
+        const key = `elevenLabsVoiceProfiles.${languageCode}.voiceId`;
+        if (allowBlankCredentials.has(key)) {
+            continue;
+        }
+        const nextProfile = nextPreferences.elevenLabsVoiceProfiles?.[languageCode];
+        const existingProfile = existingPreferences.elevenLabsVoiceProfiles?.[languageCode];
+        if (nextProfile && existingProfile?.voiceId && !nextProfile.voiceId) {
+            nextProfile.voiceId = existingProfile.voiceId;
+        }
+    }
+}
+
 function preserveExistingCredentials(filePath, normalized, options = {}) {
     if (options.preserveExistingCredentials === false || !fs.existsSync(filePath)) {
         return normalized;
@@ -956,6 +1091,7 @@ function preserveExistingCredentials(filePath, normalized, options = {}) {
         preserveExistingValue(nextPreferences, existingPreferences, 'llmApiKey', allowBlankCredentials);
         preserveExistingValue(nextPreferences, existingPreferences, 'elevenLabsApiKey', allowBlankCredentials);
         preserveExistingValue(nextPreferences, existingPreferences, 'elevenLabsVoiceId', allowBlankCredentials);
+        preserveExistingElevenLabsProfileVoiceIds(nextPreferences, existingPreferences, allowBlankCredentials);
         preserveExistingEmailSecrets(nextPreferences, existingPreferences, allowBlankCredentials);
     } catch (error) {
         console.warn('⚠️ 合并已保存凭据失败，继续保存当前状态：', error);
@@ -1024,6 +1160,7 @@ module.exports = {
     DEFAULT_ELEVENLABS_TIMEOUT_MS,
     DEFAULT_ELEVENLABS_USE_SPEAKER_BOOST,
     DEFAULT_ELEVENLABS_VOICE_ID,
+    DEFAULT_ELEVENLABS_VOICE_PROFILES,
     DEFAULT_HUMANCLAW_STATE_DIR,
     DEFAULT_COMPUTER_CONTROL_ENABLED,
     DEFAULT_OPENCLAW_GATEWAY_URL,
@@ -1036,6 +1173,7 @@ module.exports = {
     DEFAULT_PET_MOUSE_HIT_TEST_OFFSET_Y_RATIO,
     DEFAULT_PET_MOUSE_HIT_TEST_DEBUG,
     EMAIL_PROVIDER_OPTIONS,
+    ELEVENLABS_LANGUAGE_CODES,
     LLM_PROVIDER_OPTIONS,
     PET_SCALE_OPTIONS,
     CONVERSATION_MODE_OPTIONS,
@@ -1087,6 +1225,8 @@ module.exports = {
     normalizeElevenLabsStyle,
     normalizeElevenLabsTimeoutMs,
     normalizeElevenLabsUseSpeakerBoost,
+    normalizeElevenLabsVoiceProfile,
+    normalizeElevenLabsVoiceProfiles,
     normalizeElevenLabsVoiceId,
     normalizeLlmApiKey,
     normalizeLlmBaseUrl,

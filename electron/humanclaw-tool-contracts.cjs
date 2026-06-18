@@ -499,6 +499,30 @@ const TOOL_EXPERIENCE = Object.freeze({
         failureStyle: 'plain_explain',
         userFacingVerb: '复核产物'
     }),
+    artifact_query: makeExperienceMetadata({
+        embodiedAction: 'query_artifact',
+        permissionStyle: 'silent_read',
+        progressStyle: 'focused',
+        successStyle: 'summarize_result',
+        failureStyle: 'plain_explain',
+        userFacingVerb: '查询上下文产物'
+    }),
+    artifact_compute: makeExperienceMetadata({
+        embodiedAction: 'analyze_artifact',
+        permissionStyle: 'silent_read',
+        progressStyle: 'focused',
+        successStyle: 'summarize_result',
+        failureStyle: 'plain_explain',
+        userFacingVerb: '分析上下文产物'
+    }),
+    read_xlsx_workbook: makeExperienceMetadata({
+        embodiedAction: 'read_spreadsheet',
+        permissionStyle: 'silent_read',
+        progressStyle: 'focused',
+        successStyle: 'summarize_result',
+        failureStyle: 'plain_explain',
+        userFacingVerb: '读取 Excel'
+    }),
     github_pages: makeExperienceMetadata({
         embodiedAction: 'diagnose_deployment',
         permissionStyle: 'silent_internal',
@@ -733,9 +757,19 @@ const TOOL_CONTRACTS = Object.freeze({
         errors: defaultErrors(['empty_query']),
         schema: makeObjectSchema({
             properties: {
-                query: stringSchema({ minLength: 1 }),
-                q: stringSchema({ minLength: 1 }),
-                limit: numberSchema({ minimum: 1, maximum: 50 }),
+                query: stringSchema({
+                    minLength: 1,
+                    description: 'Search query for deferred tools.'
+                }),
+                q: stringSchema({
+                    minLength: 1,
+                    description: 'Alias for query.'
+                }),
+                limit: numberSchema({
+                    minimum: 1,
+                    maximum: 50,
+                    description: 'Maximum number of tools to return.'
+                }),
                 includeDeferred: booleanSchema(),
                 includeMcp: booleanSchema()
             },
@@ -1453,6 +1487,222 @@ const TOOL_CONTRACTS = Object.freeze({
             maxErrors: numberSchema({ minimum: 0, maximum: 1000000 })
         })
     }),
+    artifact_query: Object.freeze({
+        id: 'artifact_query',
+        version: CONTRACT_VERSION,
+        mutates: false,
+        risk: 'low',
+        approval: 'never',
+        experience: TOOL_EXPERIENCE.artifact_query,
+        returns: defaultReturns(),
+        errors: defaultErrors([
+            'missing_artifact_id',
+            'artifact_not_found',
+            'artifact_payload_read_failed',
+            'sheet_not_found',
+            'invalid_range',
+            'missing_query'
+        ]),
+        schema: actionSchema([
+            'schema',
+            'list',
+            'summary',
+            'get',
+            'grid',
+            'range',
+            'search',
+            'tail',
+            'text_schema',
+            'text_range',
+            'text_search',
+            'text_tail',
+            'document_schema',
+            'document_search',
+            'document_page',
+            'document_section',
+            'page',
+            'section'
+        ], {
+            artifactId: stringSchema(),
+            artifact_id: stringSchema(),
+            id: stringSchema(),
+            sheet: stringSchema(),
+            sheetName: stringSchema(),
+            sheet_name: stringSchema(),
+            worksheet: stringSchema(),
+            sheetIndex: numberSchema({ minimum: 1, maximum: 1000 }),
+            sheet_index: numberSchema({ minimum: 1, maximum: 1000 }),
+            range: stringSchema(),
+            addressRange: stringSchema(),
+            address_range: stringSchema(),
+            query: stringSchema(),
+            q: stringSchema(),
+            text: stringSchema(),
+            pattern: stringSchema(),
+            regex: booleanSchema(),
+            caseSensitive: booleanSchema(),
+            case_sensitive: booleanSchema(),
+            contextLines: numberSchema({ minimum: 0, maximum: 10 }),
+            context_lines: numberSchema({ minimum: 0, maximum: 10 }),
+            startLine: numberSchema({ minimum: 1, maximum: 100000000 }),
+            start_line: numberSchema({ minimum: 1, maximum: 100000000 }),
+            endLine: numberSchema({ minimum: 1, maximum: 100000000 }),
+            end_line: numberSchema({ minimum: 1, maximum: 100000000 }),
+            offset: numberSchema({ minimum: 0 }),
+            start: numberSchema({ minimum: 0 }),
+            chars: numberSchema({ minimum: 1, maximum: 200000 }),
+            page: numberSchema({ minimum: 1, maximum: 1000000 }),
+            pageNumber: numberSchema({ minimum: 1, maximum: 1000000 }),
+            page_number: numberSchema({ minimum: 1, maximum: 1000000 }),
+            index: numberSchema({ minimum: 0, maximum: 1000000 }),
+            sectionIndex: numberSchema({ minimum: 0, maximum: 1000000 }),
+            section_index: numberSchema({ minimum: 0, maximum: 1000000 }),
+            title: stringSchema(),
+            limit: numberSchema({ minimum: 1, maximum: 500 }),
+            maxResults: numberSchema({ minimum: 1, maximum: 500 }),
+            max_results: numberSchema({ minimum: 1, maximum: 500 }),
+            maxRows: numberSchema({ minimum: 1, maximum: 500 }),
+            max_rows: numberSchema({ minimum: 1, maximum: 500 }),
+            maxCols: numberSchema({ minimum: 1, maximum: 200 }),
+            max_cols: numberSchema({ minimum: 1, maximum: 200 }),
+            maxChars: numberSchema({ minimum: 1000, maximum: 30000 }),
+            max_chars: numberSchema({ minimum: 1000, maximum: 30000 })
+        })
+    }),
+    artifact_compute: Object.freeze({
+        id: 'artifact_compute',
+        version: CONTRACT_VERSION,
+        mutates: false,
+        risk: 'low',
+        approval: 'never',
+        experience: TOOL_EXPERIENCE.artifact_compute,
+        returns: defaultReturns(),
+        errors: defaultErrors([
+            'missing_artifact_id',
+            'artifact_not_found',
+            'artifact_payload_read_failed',
+            'unsupported_artifact_kind',
+            'sheet_not_found',
+            'empty_grid',
+            'start_not_found',
+            'end_not_found'
+        ]),
+        schema: actionSchema(['schema', 'profile', 'spreadsheet_profile', 'describe', 'find_path', 'spreadsheet_find_path', 'path'], {
+            artifactId: stringSchema(),
+            artifact_id: stringSchema(),
+            id: stringSchema(),
+            sheet: stringSchema(),
+            sheetName: stringSchema(),
+            sheet_name: stringSchema(),
+            worksheet: stringSchema(),
+            sheetIndex: numberSchema({ minimum: 1, maximum: 1000 }),
+            sheet_index: numberSchema({ minimum: 1, maximum: 1000 }),
+            range: stringSchema(),
+            addressRange: stringSchema(),
+            address_range: stringSchema(),
+            start: stringSchema(),
+            startAddress: stringSchema(),
+            start_address: stringSchema(),
+            startValue: stringSchema(),
+            start_value: stringSchema(),
+            startQuery: stringSchema(),
+            start_query: stringSchema(),
+            startFill: stringSchema(),
+            start_fill: stringSchema(),
+            startColor: stringSchema(),
+            start_color: stringSchema(),
+            end: stringSchema(),
+            endAddress: stringSchema(),
+            end_address: stringSchema(),
+            endValue: stringSchema(),
+            end_value: stringSchema(),
+            endQuery: stringSchema(),
+            end_query: stringSchema(),
+            endFill: stringSchema(),
+            end_fill: stringSchema(),
+            endColor: stringSchema(),
+            end_color: stringSchema(),
+            blockedValues: { anyOf: [stringSchema(), arraySchema(stringSchema())] },
+            blocked_values: { anyOf: [stringSchema(), arraySchema(stringSchema())] },
+            blockedFills: { anyOf: [stringSchema(), arraySchema(stringSchema())] },
+            blocked_fills: { anyOf: [stringSchema(), arraySchema(stringSchema())] },
+            blockedColors: { anyOf: [stringSchema(), arraySchema(stringSchema())] },
+            blocked_colors: { anyOf: [stringSchema(), arraySchema(stringSchema())] },
+            blockedCells: { anyOf: [stringSchema(), arraySchema(stringSchema())] },
+            blocked_cells: { anyOf: [stringSchema(), arraySchema(stringSchema())] },
+            passableValues: { anyOf: [stringSchema(), arraySchema(stringSchema())] },
+            passable_values: { anyOf: [stringSchema(), arraySchema(stringSchema())] },
+            passableFills: { anyOf: [stringSchema(), arraySchema(stringSchema())] },
+            passable_fills: { anyOf: [stringSchema(), arraySchema(stringSchema())] },
+            passableColors: { anyOf: [stringSchema(), arraySchema(stringSchema())] },
+            passable_colors: { anyOf: [stringSchema(), arraySchema(stringSchema())] },
+            passableCells: { anyOf: [stringSchema(), arraySchema(stringSchema())] },
+            passable_cells: { anyOf: [stringSchema(), arraySchema(stringSchema())] },
+            diagonal: booleanSchema(),
+            allowDiagonal: booleanSchema(),
+            allow_diagonal: booleanSchema(),
+            maxPathCells: numberSchema({ minimum: 1, maximum: 1000 }),
+            max_path_cells: numberSchema({ minimum: 1, maximum: 1000 }),
+            limit: numberSchema({ minimum: 1, maximum: 100 })
+        }),
+        customValidate(args = {}) {
+            const action = normalizeAction(args.action || args.operation || args.intent, 'profile');
+            if (action !== 'schema' && !normalizeString(args.artifactId || args.artifact_id || args.id)) {
+                return ['artifact_compute requires artifactId/id except for action=schema'];
+            }
+            return [];
+        }
+    }),
+    read_xlsx_workbook: Object.freeze({
+        id: 'read_xlsx_workbook',
+        version: CONTRACT_VERSION,
+        mutates: false,
+        risk: 'low',
+        approval: 'never',
+        experience: TOOL_EXPERIENCE.read_xlsx_workbook,
+        returns: defaultReturns(),
+        errors: defaultErrors([
+            'missing_path',
+            'file_not_found',
+            'path_outside_workspace',
+            'unsupported_format',
+            'parse_failed',
+            'sheet_not_found'
+        ]),
+        schema: actionSchema(['schema', 'inspect', 'read', 'read_workbook'], {
+            path: stringSchema({ minLength: 1 }),
+            file: stringSchema({ minLength: 1 }),
+            filePath: stringSchema({ minLength: 1 }),
+            file_path: stringSchema({ minLength: 1 }),
+            sheet: stringSchema(),
+            sheetName: stringSchema(),
+            sheet_name: stringSchema(),
+            worksheet: stringSchema(),
+            sheetIndex: numberSchema({ minimum: 1, maximum: 1000 }),
+            sheet_index: numberSchema({ minimum: 1, maximum: 1000 }),
+            range: stringSchema(),
+            addressRange: stringSchema(),
+            address_range: stringSchema(),
+            maxRows: numberSchema({ minimum: 1, maximum: 10000 }),
+            max_rows: numberSchema({ minimum: 1, maximum: 10000 }),
+            maxCols: numberSchema({ minimum: 1, maximum: 1000 }),
+            max_cols: numberSchema({ minimum: 1, maximum: 1000 }),
+            maxColumns: numberSchema({ minimum: 1, maximum: 1000 }),
+            max_columns: numberSchema({ minimum: 1, maximum: 1000 }),
+            maxCells: numberSchema({ minimum: 1, maximum: 1000000 }),
+            max_cells: numberSchema({ minimum: 1, maximum: 1000000 }),
+            maxSheets: numberSchema({ minimum: 1, maximum: 100 }),
+            max_sheets: numberSchema({ minimum: 1, maximum: 100 }),
+            previewChars: numberSchema({ minimum: 1000, maximum: 20000 }),
+            preview_chars: numberSchema({ minimum: 1000, maximum: 20000 }),
+            includeEmpty: booleanSchema(),
+            include_empty: booleanSchema(),
+            includeStyles: booleanSchema(),
+            include_styles: booleanSchema(),
+            includeFormulas: booleanSchema(),
+            include_formulas: booleanSchema()
+        })
+    }),
     github_pages: Object.freeze({
         id: 'github_pages',
         version: CONTRACT_VERSION,
@@ -1598,12 +1848,18 @@ function normalizeArgsForContract(toolId, args = {}) {
         return {};
     }
     const normalized = { ...args };
-    if (['email', 'file_manager', 'computer', 'code', 'artifact_verifier', 'github_pages', 'mcp_bridge', 'tool_doctor', 'capability_manager', 'self_debugger', 'self_evolution', 'subagents', 'vision.capture_context'].includes(toolId)) {
+    if (['email', 'file_manager', 'computer', 'code', 'artifact_verifier', 'artifact_query', 'artifact_compute', 'read_xlsx_workbook', 'github_pages', 'mcp_bridge', 'tool_doctor', 'capability_manager', 'self_debugger', 'self_evolution', 'subagents', 'vision.capture_context'].includes(toolId)) {
         const fallbackAction = toolId === 'vision.capture_context'
             ? 'capture_context'
             : toolId === 'self_evolution'
                 ? 'analyze'
-                : 'schema';
+                : toolId === 'read_xlsx_workbook'
+                    ? 'inspect'
+                    : toolId === 'artifact_compute'
+                        ? 'profile'
+                        : toolId === 'artifact_query'
+                            ? 'summary'
+                            : 'schema';
         normalized.action = normalizeAction(
             args.action || args.operation || args.intent,
             fallbackAction

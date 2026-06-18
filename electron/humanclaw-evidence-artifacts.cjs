@@ -71,11 +71,46 @@ function getObservationText(observation = {}) {
 function getObservationDetails(observation = {}) {
     const result = observation.response?.result || {};
     const structured = result?.structuredContent || result?.structured_content;
-    return [
+    const candidates = [
         structured && typeof structured === 'object' ? structured : null,
         result?.details && typeof result.details === 'object' ? result.details : null,
         observation.response?.details && typeof observation.response.details === 'object' ? observation.response.details : null
-    ].find(Boolean) || {};
+    ].filter(Boolean);
+    return candidates.reduce((merged, entry) => ({ ...merged, ...entry }), {});
+}
+
+function artifactEvidencePayload(details = {}) {
+    const artifactId = normalizeText(
+        details.artifactId ||
+        details.artifact_id ||
+        details.contextArtifact?.id ||
+        details.artifact?.artifactId ||
+        details.artifact?.id
+    );
+    if (!artifactId && !details.coverage && !details.evidence) {
+        return {};
+    }
+    const evidence = details.evidence && typeof details.evidence === 'object' ? details.evidence : {};
+    const coverage = details.coverage && typeof details.coverage === 'object'
+        ? details.coverage
+        : (evidence.coverage && typeof evidence.coverage === 'object' ? evidence.coverage : null);
+    return {
+        artifactId: artifactId || normalizeText(evidence.artifactId),
+        artifactKind: normalizeText(details.artifactKind || evidence.artifactKind),
+        artifactType: normalizeText(details.artifactType || evidence.artifactType),
+        artifactAction: normalizeText(details.action || evidence.action),
+        sheet: normalizeText(details.sheet || evidence.sheet || coverage?.sheet),
+        range: normalizeText(details.range || evidence.range || coverage?.range),
+        coverage: coverage ? cloneJson(coverage) : null,
+        complete: details.complete === true || evidence.complete === true,
+        truncated: details.truncated === true || evidence.truncated === true,
+        reasoningReady: details.reasoningReady === true || details.reasoning_ready === true || evidence.reasoningReady === true,
+        pinnedEvidenceId: normalizeText(details.pinnedEvidenceId || details.pinned_evidence_id || evidence.evidenceId),
+        coveredByEvidence: details.coveredByEvidence && typeof details.coveredByEvidence === 'object'
+            ? cloneJson(details.coveredByEvidence)
+            : null,
+        observationContract: cloneJson(details.observationContract || details.observation_contract || null)
+    };
 }
 
 function looksLikePdfOrBinaryText(text = '') {
@@ -200,12 +235,15 @@ function confidenceFromText(text = '', base = 0.68) {
 function payloadForArtifact(type, observation = {}) {
     const args = observation.args || {};
     const text = getObservationText(observation);
+    const details = getObservationDetails(observation);
     const urls = extractUrls(text);
     const path = inferPath(args, text);
+    const artifactPayload = artifactEvidencePayload(details);
     const base = {
         contentChars: text.length,
         textHash: stableHash(text),
-        preview: summarize(text, 260)
+        preview: summarize(text, 260),
+        ...artifactPayload
     };
 
     if (type === 'IssueContextEvidence') {
@@ -466,6 +504,18 @@ function getEvidenceArtifactPromptObject(artifact = {}) {
             dryRun: artifact.payload?.dryRun,
             backupMentioned: artifact.payload?.backupMentioned,
             passed: artifact.payload?.passed,
+            artifactId: artifact.payload?.artifactId,
+            artifactKind: artifact.payload?.artifactKind,
+            artifactType: artifact.payload?.artifactType,
+            artifactAction: artifact.payload?.artifactAction,
+            sheet: artifact.payload?.sheet,
+            range: artifact.payload?.range,
+            coverage: artifact.payload?.coverage,
+            complete: artifact.payload?.complete,
+            truncated: artifact.payload?.truncated,
+            reasoningReady: artifact.payload?.reasoningReady,
+            pinnedEvidenceId: artifact.payload?.pinnedEvidenceId,
+            coveredByEvidence: artifact.payload?.coveredByEvidence,
             contentChars: artifact.payload?.contentChars
         }
     };

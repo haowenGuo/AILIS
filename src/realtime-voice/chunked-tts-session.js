@@ -92,6 +92,13 @@ export class ChunkedTtsSession {
         return this.playbackQueue.waitUntilDone();
     }
 
+    waitUntilPlaybackStartedOrDone() {
+        if (typeof this.playbackQueue.waitUntilStartedOrDone === 'function') {
+            return this.playbackQueue.waitUntilStartedOrDone();
+        }
+        return this.waitUntilDone().then(() => this.hasPlaybackStarted());
+    }
+
     hasPlaybackStarted() {
         return this.playbackQueue.hasStarted();
     }

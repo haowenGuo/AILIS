@@ -36,6 +36,10 @@ const { CODE_TOOL_ID, executeCodeTool } = require('./humanclaw-code-tool.cjs');
 const { ARTIFACT_VERIFIER_TOOL_ID, executeArtifactVerifierTool } = require('./humanclaw-artifact-verifier-tool.cjs');
 const { GITHUB_PAGES_TOOL_ID, executeGitHubPagesTool } = require('./humanclaw-github-pages-tool.cjs');
 const {
+    READ_XLSX_WORKBOOK_TOOL_ID,
+    executeReadXlsxWorkbookTool
+} = require('./humanclaw-xlsx-workbook-tool.cjs');
+const {
     HUMANCLAW_VISION_TOOL_DEFINITION,
     VISION_TOOL_ID,
     executeVisionTool
@@ -45,7 +49,8 @@ const {
 } = require('./humanclaw-tool-acquisition-gateway.cjs');
 const {
     buildToolRoutingAdvice,
-    rankToolSearchResults
+    rankToolSearchResults,
+    toolMatchesRoutingProfile
 } = require('./ailis-tool-routing.cjs');
 
 const PROJECT_ROOT = path.resolve(__dirname, '..');
@@ -95,6 +100,7 @@ const LOSSLESS_EVENT_TYPES = new Set([
     'agent.step.started',
     'agent.step.finished',
     'agent.plan.updated',
+    'context_artifact.created',
     'subagent.event',
     'mcp.tool.call.begin',
     'mcp.tool.call.end',
@@ -174,6 +180,16 @@ const HUMANCLAW_LOCAL_TOOL_DEFINITIONS = Object.freeze([
         needsApprovalActions: Object.freeze([])
     }),
     Object.freeze({
+        id: READ_XLSX_WORKBOOK_TOOL_ID,
+        label: 'read_xlsx_workbook',
+        description: 'Read local XLSX/XLSM workbooks as structured sheets, cells, formulas, merged ranges, fill colors, and compact grids. Use for Excel attachments before ad hoc Python or raw binary reads.',
+        sectionId: 'spreadsheet-reading',
+        route: 'humanclaw-local',
+        materialized: true,
+        status: 'available',
+        needsApprovalActions: Object.freeze([])
+    }),
+    Object.freeze({
         id: GITHUB_PAGES_TOOL_ID,
         label: 'github_pages',
         description: 'Read-only GitHub Pages and gh-pages deployment diagnostics with blockers and verification evidence.',
@@ -203,6 +219,13 @@ function loadEmailToolModule() {
         emailToolLoadError = error;
         throw error;
     }
+}
+
+function shouldIncludeDirectToolInSearch(entry, query, includeDirect) {
+    if (includeDirect || entry.exposure !== TOOL_EXPOSURE.DIRECT) {
+        return true;
+    }
+    return toolMatchesRoutingProfile(entry, query);
 }
 
 function safeListEmailProviderDetails() {
@@ -480,7 +503,7 @@ function summarizeForAnalysis(value, maxChars = 1800) {
 }
 
 function timelineKind(type = '') {
-    if (/context_snapshot|prompt_budget/.test(type)) {
+    if (/context_snapshot|prompt_budget|context_artifact/.test(type)) {
         return 'context';
     }
     if (/llm_call|token_usage/.test(type)) {
@@ -518,6 +541,9 @@ function timelineTitle(type = '', payload = {}) {
     }
     if (type === 'agent.capability_context') {
         return `${prefix}能力上下文加载`;
+    }
+    if (type === 'context_artifact.created') {
+        return `${prefix}上下文产物 ${payload.artifactId || ''}`.trim();
     }
     if (type === 'agent.reasoning') {
         return `${prefix}推理摘要`;
@@ -720,7 +746,7 @@ class HumanClawGateway extends EventEmitter {
                     definition: {
                         ...definition,
                         route: 'humanclaw-gateway',
-                        description: 'Search all Gateway, Runtime, and MCP tools and return Codex-like loadable specs.',
+                        description: 'Tool discovery. Searches over deferred tool metadata with BM25 and exposes matching tools for the next Agent step.',
                         exposure: TOOL_EXPOSURE.DIRECT
                     },
                     handle: async (args) => this.executeGatewayToolSearch(args)
@@ -743,7 +769,7 @@ class HumanClawGateway extends EventEmitter {
         const limit = Math.max(1, Math.min(Number(args.limit || 12), 50));
         const includeDirect = args.includeDirect === true;
         const local = this.gatewayToolRuntimeRegistry.search(query, limit)
-            .filter((entry) => includeDirect || entry.exposure !== TOOL_EXPOSURE.DIRECT)
+            .filter((entry) => shouldIncludeDirectToolInSearch(entry, query, includeDirect))
             .map((entry) => ({
                 id: entry.id,
                 type: 'gateway_or_runtime_tool',
@@ -803,10 +829,6 @@ class HumanClawGateway extends EventEmitter {
                     text: JSON.stringify({
                         status: 'completed',
                         query,
-                        note: [
-                            'Callable external tools can be invoked directly with their external__provider__tool id from call_pattern.tool. Do not wrap them in capability_manager.execute_exposed_external_tool.',
-                            'For attachments, PDFs, videos, images, audio, code, repositories, or known URLs, prefer the most specific returned tool before broad web_search.'
-                        ].join(' '),
                         routing_advice: routingAdvice,
                         tools
                     }, null, 2)
@@ -821,7 +843,6 @@ class HumanClawGateway extends EventEmitter {
             structuredContent: {
                 status: 'completed',
                 query,
-                note: 'Callable external tools can be invoked directly with their external__provider__tool id from call_pattern.tool. Prefer specific document/PDF/media/file tools before broad web_search.',
                 routing_advice: routingAdvice,
                 tools
             }
@@ -1000,6 +1021,13 @@ class HumanClawGateway extends EventEmitter {
 
     resetMemoryAffinity(score) {
         return this.memoryRuntime?.resetAffinity?.(score) || {
+            ok: false,
+            status: 'memory_not_configured'
+        };
+    }
+
+    clearMemory(payload = {}) {
+        return this.memoryRuntime?.clearMemory?.(payload) || {
             ok: false,
             status: 'memory_not_configured'
         };
@@ -1963,6 +1991,7 @@ class HumanClawGateway extends EventEmitter {
                 projectRoot: this.projectRoot,
                 platformAdapter: this.platformAdapter,
                 outputStore: this.runtime.outputStore,
+                contextArtifactStore: this.runtime.contextArtifactStore,
                 auditDir: this.auditDir
             });
         }
@@ -1978,6 +2007,15 @@ class HumanClawGateway extends EventEmitter {
                 workspaceDir,
                 workspaceRoot: this.workspaceRoot,
                 projectRoot: this.projectRoot
+            });
+        }
+        if (toolId === READ_XLSX_WORKBOOK_TOOL_ID) {
+            return await executeReadXlsxWorkbookTool(args, context, {
+                workspaceDir,
+                workspaceRoot: this.workspaceRoot,
+                projectRoot: this.projectRoot,
+                auditDir: this.auditDir,
+                contextArtifactStore: this.runtime.contextArtifactStore
             });
         }
         if (toolId === GITHUB_PAGES_TOOL_ID) {
@@ -2185,6 +2223,10 @@ class HumanClawGateway extends EventEmitter {
     async executeLocalCoreTool({ toolId, args, context, workspaceDir }) {
         if (toolId === 'read') {
             const target = this.resolveToolPath(args.path, workspaceDir, 'path');
+            const artifactRecord = await this.runtime.contextArtifactStore?.findByPath?.(target).catch(() => null);
+            if (artifactRecord?.payloadPath && path.resolve(artifactRecord.payloadPath) === path.resolve(target)) {
+                return this.runtime.contextArtifactStore.guardReadResult(artifactRecord, target);
+            }
             let stat = null;
             try {
                 stat = await fsp.stat(target);

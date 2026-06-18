@@ -17,7 +17,8 @@ const {
 } = require('./ailis-mcp-adapter.cjs');
 const {
     buildToolRoutingAdvice,
-    rankToolSearchResults
+    rankToolSearchResults,
+    toolMatchesRoutingProfile
 } = require('./ailis-tool-routing.cjs');
 
 const TOOL_EXPOSURE = AILIS_TOOL_EXPOSURE;
@@ -56,6 +57,13 @@ function normalizeToolOutput(result = {}, { toolId = '' } = {}) {
 
 function createToolSpec(definition = {}) {
     return createAilisFunctionToolSpec(definition);
+}
+
+function shouldIncludeDirectToolInSearch(entry, query, includeDirect) {
+    if (includeDirect || entry.exposure !== TOOL_EXPOSURE.DIRECT) {
+        return true;
+    }
+    return toolMatchesRoutingProfile(entry, query);
 }
 
 class HumanClawRuntimeTool {
@@ -210,7 +218,7 @@ async function executeToolSearch(registry, args = {}) {
     const includeMcp = args.includeMcp !== false;
     const includeDirect = args.includeDirect === true;
     const local = registry.search(query, limit)
-        .filter((entry) => includeDirect || entry.exposure !== TOOL_EXPOSURE.DIRECT)
+        .filter((entry) => shouldIncludeDirectToolInSearch(entry, query, includeDirect))
         .map((entry) => ({
             id: entry.id,
             type: 'runtime_tool',
@@ -240,10 +248,10 @@ async function executeToolSearch(registry, args = {}) {
             status: 'completed',
             query,
             routing_advice: routingAdvice,
-            note: 'Prefer specific document/PDF/media/file tools before broad web_search when a task references a concrete artifact.',
             tools
         }, null, 2),
         details: {
+            status: 'completed',
             query,
             routing_advice: routingAdvice,
             tools
@@ -266,6 +274,14 @@ function createHumanClawToolRuntimeRegistry(runtime) {
     registry.register(new HumanClawRuntimeTool({
         definition: definitionById.tool_search,
         handle: async (args) => executeToolSearch(registry, args)
+    }));
+    registry.register(new HumanClawRuntimeTool({
+        definition: definitionById.artifact_query,
+        handle: async (args) => runtime.queryContextArtifact(args)
+    }));
+    registry.register(new HumanClawRuntimeTool({
+        definition: definitionById.artifact_compute,
+        handle: async (args) => runtime.computeContextArtifact(args)
     }));
     registry.register(new HumanClawRuntimeTool({
         definition: definitionById.output_read,

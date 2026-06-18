@@ -108,6 +108,20 @@ test('HumanClaw tool contracts expose versioned schemas and validate common fail
     });
     assert.equal(validGitHubPages.ok, true);
 
+    const validArtifactCompute = validateToolContract('artifact_compute', {
+        artifactId: 'ctx-spreadsheet-demo',
+        sheet: 'Map'
+    });
+    assert.equal(validArtifactCompute.ok, true);
+    assert.equal(validArtifactCompute.args.action, 'profile');
+
+    const badArtifactCompute = validateToolContract('artifact_compute', {
+        action: 'find_path',
+        sheet: 'Map'
+    });
+    assert.equal(badArtifactCompute.ok, false);
+    assert.ok(badArtifactCompute.errors.some((error) => error.includes('requires artifactId')));
+
     const badToolSearch = validateToolContract('tool_search', {});
     assert.equal(badToolSearch.ok, false);
     assert.ok(badToolSearch.errors.some((error) => error.includes('requires query')));
@@ -223,6 +237,11 @@ test('HumanClaw tool contracts generate prompt and summary text from the same so
     const toolSearchPrompt = getToolContractPromptText('tool_search');
     assert.match(toolSearchPrompt, /tool_search/);
     assert.match(toolSearchPrompt, /query/);
+    assert.match(toolSearchPrompt, /deferred tools/i);
+
+    const artifactComputePrompt = getToolContractPromptText('artifact_compute');
+    assert.match(artifactComputePrompt, /artifact_compute/);
+    assert.match(artifactComputePrompt, /find_path/);
 
     const doctorPrompt = getToolContractPromptText('tool_doctor');
     assert.match(doctorPrompt, /discover_mcp/);

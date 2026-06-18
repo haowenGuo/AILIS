@@ -1,3 +1,5 @@
+import { appendTextWithAilisEmotes } from './ailis-emote-stickers.js';
+
 const SAFE_LINK_PROTOCOLS = new Set(['http:', 'https:', 'mailto:']);
 
 export function normalizeMarkdownSource(value, fallback = '') {
@@ -43,13 +45,15 @@ export function setMarkdownContent(target, value) {
     }
 
     const markdown = normalizeMarkdownSource(value);
+    const enableAilisEmotes = target.classList?.contains('message-ai') ||
+        target.dataset?.enableAilisEmotes === 'true';
     target.__ailisMessageContent = markdown;
     target.dataset.contentFormat = 'markdown';
     target.classList.add('message-markdown');
-    target.replaceChildren(renderMarkdown(markdown));
+    target.replaceChildren(renderMarkdown(markdown, { enableAilisEmotes }));
 }
 
-function renderMarkdown(markdown) {
+function renderMarkdown(markdown, options = {}) {
     const fragment = document.createDocumentFragment();
     if (!markdown) {
         return fragment;
@@ -86,7 +90,7 @@ function renderMarkdown(markdown) {
         if (heading) {
             const level = Math.min(heading[1].length, 4);
             const element = document.createElement(`h${level}`);
-            appendInlineMarkdown(element, heading[2]);
+            appendInlineMarkdown(element, heading[2], options);
             fragment.appendChild(element);
             index += 1;
             continue;
@@ -106,7 +110,7 @@ function renderMarkdown(markdown) {
                     break;
                 }
                 const item = document.createElement('li');
-                appendInlineMarkdown(item, match[1]);
+                appendInlineMarkdown(item, match[1], options);
                 list.appendChild(item);
                 index += 1;
             }
@@ -122,7 +126,7 @@ function renderMarkdown(markdown) {
                     break;
                 }
                 const item = document.createElement('li');
-                appendInlineMarkdown(item, match[1]);
+                appendInlineMarkdown(item, match[1], options);
                 list.appendChild(item);
                 index += 1;
             }
@@ -141,7 +145,7 @@ function renderMarkdown(markdown) {
                 quoteLines.push(match[1]);
                 index += 1;
             }
-            appendInlineMarkdown(quote, quoteLines.join('\n'));
+            appendInlineMarkdown(quote, quoteLines.join('\n'), options);
             fragment.appendChild(quote);
             continue;
         }
@@ -153,7 +157,7 @@ function renderMarkdown(markdown) {
             index += 1;
         }
         const paragraph = document.createElement('p');
-        appendInlineMarkdown(paragraph, paragraphLines.join('\n'));
+        appendInlineMarkdown(paragraph, paragraphLines.join('\n'), options);
         fragment.appendChild(paragraph);
     }
 
@@ -171,14 +175,20 @@ function createCodeBlock(codeText, language) {
     return pre;
 }
 
-function appendInlineMarkdown(parent, source) {
+function appendText(parent, text, options = {}) {
+    appendTextWithAilisEmotes(parent, text, {
+        enabled: Boolean(options.enableAilisEmotes)
+    });
+}
+
+function appendInlineMarkdown(parent, source, options = {}) {
     const tokenPattern = /(`[^`\n]+`|\[([^\]\n]+)\]\(([^)\s]+)\)|\*\*([^*\n]+)\*\*|\*([^*\n]+)\*|\n)/g;
     let cursor = 0;
     let match = tokenPattern.exec(source);
 
     while (match) {
         if (match.index > cursor) {
-            parent.appendChild(document.createTextNode(source.slice(cursor, match.index)));
+            appendText(parent, source.slice(cursor, match.index), options);
         }
 
         const token = match[0];
@@ -198,15 +208,15 @@ function appendInlineMarkdown(parent, source) {
                 anchor.textContent = match[2];
                 parent.appendChild(anchor);
             } else {
-                parent.appendChild(document.createTextNode(match[2]));
+                appendText(parent, match[2], options);
             }
         } else if (match[4]) {
             const strong = document.createElement('strong');
-            strong.textContent = match[4];
+            appendText(strong, match[4], options);
             parent.appendChild(strong);
         } else if (match[5]) {
             const emphasis = document.createElement('em');
-            emphasis.textContent = match[5];
+            appendText(emphasis, match[5], options);
             parent.appendChild(emphasis);
         }
 
@@ -215,7 +225,7 @@ function appendInlineMarkdown(parent, source) {
     }
 
     if (cursor < source.length) {
-        parent.appendChild(document.createTextNode(source.slice(cursor)));
+        appendText(parent, source.slice(cursor), options);
     }
 }
 

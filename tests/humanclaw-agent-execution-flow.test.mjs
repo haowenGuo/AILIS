@@ -8,10 +8,12 @@ const {
     attachAgentEvidenceArtifacts,
     buildAgentDirectToolSpecs,
     buildAgentEvidenceArtifactsPromptObject,
+    buildEvidenceSufficiencyPromptObject,
     buildToolResultEvent,
     buildLosslessToolObservationDigest,
     isExactAnswerExecutionMode,
     normalizeExactAnswerSubmission,
+    sanitizeAgentToolCall,
     validateExactAnswerSubmission
 } = require('../electron/humanclaw-agent-runner.cjs');
 
@@ -51,6 +53,42 @@ test('Agent direct tool specs inject native final_answer only for exact-answer m
     assert.equal(ordinarySpecs.some((spec) => spec.name === 'final_answer'), false);
 });
 
+test('Agent tool-call sanitizer does not maintain a hardcoded runtime tool whitelist', () => {
+    const xlsxCall = sanitizeAgentToolCall({
+        tool_call: {
+            tool: 'read_xlsx_workbook',
+            title: 'Read workbook',
+            args: {
+                path: 'task.xlsx',
+                includeStyles: true
+            }
+        }
+    }, 0);
+
+    assert.equal(xlsxCall.tool, 'read_xlsx_workbook');
+    assert.equal(xlsxCall.args.path, 'task.xlsx');
+
+    const githubPagesCall = sanitizeAgentToolCall({
+        tool: 'github_pages',
+        args: {
+            action: 'diagnose_publish',
+            path: '.'
+        }
+    }, 1);
+
+    assert.equal(githubPagesCall.tool, 'github_pages');
+
+    const futureToolCall = sanitizeAgentToolCall({
+        tool: 'future_runtime_tool',
+        args: {
+            example: true
+        }
+    }, 2);
+
+    assert.equal(futureToolCall.tool, 'future_runtime_tool');
+    assert.equal(sanitizeAgentToolCall({ args: {} }, 3), null);
+});
+
 test('Agent tool observations become evidence artifacts and turn refs', () => {
     const stepResult = attachAgentEvidenceArtifacts({
         id: 'step-1',
@@ -84,6 +122,184 @@ test('Agent tool observations become evidence artifacts and turn refs', () => {
     const event = buildToolResultEvent(stepResult);
     assert.deepEqual(event.evidenceRefs, refs);
     assert.equal(event.evidenceArtifacts.length, 1);
+});
+
+test('Agent evidence artifacts preserve context artifact coverage metadata', () => {
+    const stepResult = attachAgentEvidenceArtifacts({
+        id: 'step-artifact-range',
+        title: 'Query workbook range',
+        tool: 'artifact_query',
+        args: {
+            action: 'range',
+            artifactId: 'ctx-spreadsheet-demo',
+            sheet: 'Map',
+            range: 'A1:I20'
+        },
+        iteration: 2,
+        response: {
+            ok: true,
+            status: 'completed',
+            result: {
+                content: [{
+                    type: 'text',
+                    text: 'SPREADSHEET_RANGE sheet="Map" range=A1:I20\ntruncated=false; complete=true; reasoning_ready=true'
+                }],
+                details: {
+                    action: 'range',
+                    artifactId: 'ctx-spreadsheet-demo',
+                    sheet: 'Map',
+                    range: 'A1:I20',
+                    complete: true,
+                    truncated: false,
+                    reasoningReady: true,
+                    pinnedEvidenceId: 'ev-demo',
+                    coverage: {
+                        kind: 'spreadsheet_range_coverage',
+                        queryAction: 'range',
+                        sheet: 'Map',
+                        range: 'A1:I20',
+                        complete: true,
+                        truncated: false
+                    }
+                }
+            }
+        }
+    }, {
+        taskType: 'exact_answer_eval'
+    });
+
+    assert.equal(stepResult.evidenceArtifacts.length, 1);
+    const promptArtifacts = buildAgentEvidenceArtifactsPromptObject([stepResult]);
+    assert.equal(promptArtifacts[0].payload.artifactId, 'ctx-spreadsheet-demo');
+    assert.equal(promptArtifacts[0].payload.sheet, 'Map');
+    assert.equal(promptArtifacts[0].payload.range, 'A1:I20');
+    assert.equal(promptArtifacts[0].payload.complete, true);
+    assert.equal(promptArtifacts[0].payload.truncated, false);
+    assert.equal(promptArtifacts[0].payload.reasoningReady, true);
+    assert.equal(promptArtifacts[0].payload.pinnedEvidenceId, 'ev-demo');
+    assert.equal(promptArtifacts[0].payload.coverage.range, 'A1:I20');
+});
+
+test('Agent evidence sufficiency gate summarizes ready artifact and compute evidence', () => {
+    const stepResults = [{
+        id: 'step-range',
+        title: 'Query workbook range',
+        tool: 'artifact_query',
+        args: {
+            action: 'range',
+            artifactId: 'ctx-spreadsheet-demo',
+            sheet: 'Map',
+            range: 'A1:I20'
+        },
+        response: {
+            ok: true,
+            status: 'completed',
+            result: {
+                content: [{ type: 'text', text: 'complete range evidence' }],
+                details: {
+                    action: 'range',
+                    artifactId: 'ctx-spreadsheet-demo',
+                    sheet: 'Map',
+                    range: 'A1:I20',
+                    complete: true,
+                    truncated: false,
+                    reasoningReady: true,
+                    pinnedEvidenceId: 'ev-range',
+                    coverage: {
+                        kind: 'spreadsheet_range_coverage',
+                        queryAction: 'range',
+                        sheet: 'Map',
+                        range: 'A1:I20',
+                        complete: true,
+                        truncated: false
+                    }
+                }
+            }
+        }
+    }, {
+        id: 'step-covered',
+        title: 'Query covered subrange',
+        tool: 'artifact_query',
+        args: {
+            action: 'range',
+            artifactId: 'ctx-spreadsheet-demo',
+            sheet: 'Map',
+            range: 'B2:C3'
+        },
+        response: {
+            ok: true,
+            status: 'completed',
+            result: {
+                content: [{ type: 'text', text: 'covered subrange evidence' }],
+                details: {
+                    action: 'range',
+                    artifactId: 'ctx-spreadsheet-demo',
+                    sheet: 'Map',
+                    range: 'B2:C3',
+                    complete: true,
+                    truncated: false,
+                    reasoningReady: true,
+                    coveredByEvidence: {
+                        evidenceId: 'ev-range',
+                        sheet: 'Map',
+                        range: 'A1:I20',
+                        complete: true,
+                        truncated: false,
+                        reasoningReady: true
+                    },
+                    coverage: {
+                        kind: 'spreadsheet_range_coverage',
+                        queryAction: 'range',
+                        sheet: 'Map',
+                        range: 'B2:C3',
+                        complete: true,
+                        truncated: false
+                    }
+                }
+            }
+        }
+    }, {
+        id: 'step-compute',
+        title: 'Compute path',
+        tool: 'artifact_compute',
+        args: {
+            action: 'find_path',
+            artifactId: 'ctx-spreadsheet-demo',
+            sheet: 'Map'
+        },
+        response: {
+            ok: true,
+            status: 'completed',
+            result: {
+                content: [{ type: 'text', text: 'pathFound=true steps=12' }],
+                details: {
+                    action: 'find_path',
+                    artifactId: 'ctx-spreadsheet-demo',
+                    sheet: 'Map',
+                    range: 'A1:I20',
+                    complete: true,
+                    truncated: false,
+                    reasoningReady: true,
+                    result: {
+                        pathFound: true,
+                        steps: 12,
+                        visited: 35,
+                        pathTruncated: false
+                    }
+                }
+            }
+        }
+    }];
+
+    const sufficiency = buildEvidenceSufficiencyPromptObject(stepResults, { exactAnswerMode: true });
+    assert.equal(sufficiency.status, 'ready_for_reasoning');
+    assert.equal(sufficiency.ready, true);
+    assert.equal(sufficiency.exact_answer_mode, true);
+    assert.equal(sufficiency.ready_evidence_count, 3);
+    assert.equal(sufficiency.has_compute_evidence, true);
+    assert.equal(sufficiency.repeated_covered_reads[0].coveredByEvidence.evidenceId, 'ev-range');
+    assert.equal(sufficiency.latest_ready_evidence.resultSummary.pathFound, true);
+    assert.equal(sufficiency.latest_ready_evidence.resultSummary.steps, 12);
 });
 
 test('Agent model-facing observation digest stays compact and artifact-backed', () => {

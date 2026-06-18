@@ -5,9 +5,10 @@ const { randomUUID } = require('crypto');
 const MEMORY_STORE_VERSION = 1;
 const DEFAULT_AFFINITY_SCORE = 50;
 const MAX_BLOCK_CHARS = 2200;
-const MAX_CONTEXT_CHARS = 7600;
+const MAX_CONTEXT_CHARS = 20000;
 const MAX_STATE_EVENTS = 500;
 const MAX_AFFINITY_EVENTS = 200;
+const DEFAULT_RELEVANT_EVENT_LIMIT = 24;
 const SECRET_PROTECTION = 'local-file-base64';
 const DEFAULT_AILIS_PERSONA_TEXT = [
     '- AILIS 是可爱的虚拟助手，名字固定为 AILIS，身份是普通女孩子。',
@@ -40,6 +41,17 @@ function clampNumber(value, min, max, fallback) {
 
 function truncateText(value, maxChars = 1200) {
     const text = normalizeText(value);
+    if (!text || text.length <= maxChars) {
+        return text;
+    }
+    return `${text.slice(0, Math.max(0, maxChars - 1))}…`;
+}
+
+function truncateStructuredText(value, maxChars = 1200) {
+    const text = String(value || '')
+        .replace(/\r\n/g, '\n')
+        .replace(/[ \t]+$/gm, '')
+        .trim();
     if (!text || text.length <= maxChars) {
         return text;
     }
@@ -174,6 +186,16 @@ function atomicWriteJsonSync(filePath, value) {
 function appendJsonlSync(filePath, value) {
     ensureDirSync(path.dirname(filePath));
     fs.appendFileSync(filePath, `${JSON.stringify(value)}\n`, 'utf8');
+}
+
+function clearDirectoryContentsSync(dirPath) {
+    ensureDirSync(dirPath);
+    for (const entry of fs.readdirSync(dirPath, { withFileTypes: true })) {
+        fs.rmSync(path.join(dirPath, entry.name), {
+            recursive: true,
+            force: true
+        });
+    }
 }
 
 function safeFileName(value) {
@@ -640,7 +662,7 @@ class HumanClawMemoryRuntime {
             message,
             ...(Array.isArray(messageHistory) ? messageHistory.slice(-6).map((entry) => entry?.content || '') : [])
         ].join('\n');
-        const relevantEvents = this.searchMemory(query || message, { limit: 8 }).events;
+        const relevantEvents = this.searchMemory(query || message, { limit: DEFAULT_RELEVANT_EVENT_LIMIT }).events;
         const blocks = state.blocks || {};
         const sections = [
             '【AILIS 长期记忆上下文】',
@@ -671,7 +693,7 @@ class HumanClawMemoryRuntime {
             `## ${blocks.secrets_index?.label || '隐私与密钥索引'}`,
             blocks.secrets_index?.value || this.buildSecretsIndexText()
         ];
-        return truncateText(sections.filter((entry) => entry !== undefined && entry !== null).join('\n'), maxChars);
+        return truncateStructuredText(sections.filter((entry) => entry !== undefined && entry !== null).join('\n'), maxChars);
     }
 
     searchMemory(query, { limit = 10 } = {}) {
@@ -927,6 +949,25 @@ class HumanClawMemoryRuntime {
         };
         this.persist('reset_affinity');
         return { ok: true, affinity: { ...this.state.affinity } };
+    }
+
+    clearMemory({ preserveSecrets = true } = {}) {
+        const secrets = preserveSecrets === false
+            ? []
+            : (this.state?.secrets || []).map((secret) => ({ ...secret }));
+        clearDirectoryContentsSync(this.capsulesDir);
+        clearDirectoryContentsSync(this.dailyDir);
+        clearDirectoryContentsSync(this.reflectionsDir);
+        atomicWriteFileSync(this.eventsPath, '');
+        this.state = createDefaultState(this.workspaceRoot);
+        this.state.secrets = secrets;
+        this.persist('clear_memory');
+        return {
+            ok: true,
+            status: 'cleared',
+            preservedSecretCount: secrets.length,
+            statusSnapshot: this.getStatus()
+        };
     }
 
     saveSecret({ name = '', kind = 'generic', value = '', description = '', provider = '' } = {}) {

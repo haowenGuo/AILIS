@@ -393,6 +393,40 @@ test('character runtime drives expression mix and semantic motion through adapte
     assert.equal(calls.some((call) => call[0] === 'motion'), false);
 });
 
+test('character runtime plays companion semantic gesture when chat motion policy opts in', () => {
+    const calls = [];
+    const runtime = new CharacterRuntime({
+        driver: {
+            getAvailableMotions: () => ['idle', 'vroid_greeting'],
+            getCurrentMotion: () => 'idle',
+            setSurfaceState: () => {},
+            applySceneMood: () => {},
+            applyExpressionMix: () => {},
+            playMotion: (motion) => {
+                calls.push(motion.id);
+                return true;
+            }
+        }
+    });
+
+    const result = runtime.applyPayload({
+        display_text: '你好呀，我在。',
+        surface: {
+            emotion: 'happy',
+            gestureIntent: 'greeting',
+            taskState: 'speaking'
+        }
+    }, {
+        allowExpressiveMotion: true,
+        allowExperimentalMotion: true,
+        random: () => 0
+    });
+
+    assert.equal(result.motion.id, 'vroid_greeting');
+    assert.equal(result.playedMotion, true);
+    assert.deepEqual(calls, ['vroid_greeting']);
+});
+
 test('character state machine enriches task states with stable role defaults', () => {
     const stateMachine = new CharacterStateMachine();
     const result = stateMachine.transition({

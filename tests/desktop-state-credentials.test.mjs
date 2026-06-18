@@ -8,6 +8,7 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const {
     getDefaultState,
+    normalizeElevenLabsVoiceProfiles,
     saveDesktopState
 } = require('../electron/store.cjs');
 
@@ -101,6 +102,45 @@ test('desktop state defaults ElevenLabs to Chinese gentle anime quality preset',
     assert.equal(state.preferences.elevenLabsSimilarityBoost, 0.78);
     assert.equal(state.preferences.elevenLabsStyle, 0.05);
     assert.equal(state.preferences.elevenLabsSpeed, 0.9);
+    assert.equal(state.preferences.elevenLabsVoiceProfiles.zh.languageCode, 'zh');
+    assert.equal(state.preferences.elevenLabsVoiceProfiles.en.languageCode, 'en');
+    assert.equal(state.preferences.elevenLabsVoiceProfiles.ja.languageCode, 'ja');
+    assert.equal(state.preferences.elevenLabsVoiceProfiles.en.speed, 0.92);
+    assert.equal(state.preferences.elevenLabsVoiceProfiles.ja.speed, 0.88);
+});
+
+test('desktop state migrates a legacy single ElevenLabs voice into language profiles', () => {
+    const profiles = normalizeElevenLabsVoiceProfiles({}, {
+        elevenLabsVoiceId: 'legacy-voice',
+        elevenLabsLanguageCode: 'ja',
+        elevenLabsSpeed: 0.83
+    });
+
+    assert.equal(profiles.zh.voiceId, 'legacy-voice');
+    assert.equal(profiles.en.voiceId, 'legacy-voice');
+    assert.equal(profiles.ja.voiceId, 'legacy-voice');
+    assert.equal(profiles.ja.speed, 0.83);
+    assert.equal(profiles.en.speed, 0.92);
+});
+
+test('desktop state preserves saved ElevenLabs profile voice ids when stale runtime saves blanks', () => {
+    const existingState = getDefaultState();
+    existingState.preferences.elevenLabsVoiceProfiles.zh.voiceId = 'zh-voice';
+    existingState.preferences.elevenLabsVoiceProfiles.en.voiceId = 'en-voice';
+    existingState.preferences.elevenLabsVoiceProfiles.ja.voiceId = 'ja-voice';
+
+    saveDesktopState(app, existingState, { preserveExistingCredentials: false });
+
+    const staleState = getDefaultState();
+    staleState.preferences.elevenLabsVoiceProfiles.zh.voiceId = '';
+    staleState.preferences.elevenLabsVoiceProfiles.en.voiceId = '';
+    staleState.preferences.elevenLabsVoiceProfiles.ja.voiceId = '';
+
+    const savedState = saveDesktopState(app, staleState);
+
+    assert.equal(savedState.preferences.elevenLabsVoiceProfiles.zh.voiceId, 'zh-voice');
+    assert.equal(savedState.preferences.elevenLabsVoiceProfiles.en.voiceId, 'en-voice');
+    assert.equal(savedState.preferences.elevenLabsVoiceProfiles.ja.voiceId, 'ja-voice');
 });
 
 test('desktop state falls back to Chinese ElevenLabs language preset for unsupported languages', () => {

@@ -3,26 +3,34 @@ const OPENAI_COMPATIBLE_PROVIDER = 'openai-compatible';
 const OPENAI_RESPONSES_PROVIDER = 'openai-responses';
 const ANTHROPIC_PROVIDER = 'anthropic';
 const GEMINI_PROVIDER = 'gemini';
+const VLLM_PROVIDER = 'vllm';
+const OLLAMA_PROVIDER = 'ollama';
 
 const PROVIDER_OPTIONS = Object.freeze([
     OPENAI_COMPATIBLE_PROVIDER,
     OPENAI_RESPONSES_PROVIDER,
     ANTHROPIC_PROVIDER,
-    GEMINI_PROVIDER
+    GEMINI_PROVIDER,
+    VLLM_PROVIDER,
+    OLLAMA_PROVIDER
 ]);
 
 const DEFAULT_PROVIDER_BASE_URLS = Object.freeze({
     [OPENAI_COMPATIBLE_PROVIDER]: 'https://ark.cn-beijing.volces.com/api/v3',
     [OPENAI_RESPONSES_PROVIDER]: 'https://api.openai.com/v1',
     [ANTHROPIC_PROVIDER]: 'https://api.anthropic.com',
-    [GEMINI_PROVIDER]: 'https://generativelanguage.googleapis.com/v1beta'
+    [GEMINI_PROVIDER]: 'https://generativelanguage.googleapis.com/v1beta',
+    [VLLM_PROVIDER]: 'http://127.0.0.1:8000/v1',
+    [OLLAMA_PROVIDER]: 'http://127.0.0.1:11434'
 });
 
 const DEFAULT_PROVIDER_MODELS = Object.freeze({
     [OPENAI_COMPATIBLE_PROVIDER]: 'doubao-seed-2-0-mini-260215',
     [OPENAI_RESPONSES_PROVIDER]: 'gpt-4.1-mini',
     [ANTHROPIC_PROVIDER]: 'claude-3-5-haiku-latest',
-    [GEMINI_PROVIDER]: 'gemini-2.0-flash'
+    [GEMINI_PROVIDER]: 'gemini-2.0-flash',
+    [VLLM_PROVIDER]: 'Qwen/Qwen2.5-7B-Instruct',
+    [OLLAMA_PROVIDER]: 'llama3.2'
 });
 
 const PROVIDER_CAPABILITY_TABLE = Object.freeze({
@@ -81,6 +89,34 @@ const PROVIDER_CAPABILITY_TABLE = Object.freeze({
         longContext: true,
         lowLatency: 'model-dependent',
         notes: 'Gemini 原生支持 function calling 和 responseMimeType=application/json。'
+    }),
+    [VLLM_PROVIDER]: Object.freeze({
+        provider: VLLM_PROVIDER,
+        label: 'vLLM OpenAI-compatible Local Server',
+        transport: 'chat-completions',
+        chat: true,
+        nativeToolCalling: false,
+        nativeToolCallingDefault: false,
+        jsonMode: true,
+        jsonSchema: false,
+        vision: 'model-dependent',
+        longContext: 'model-dependent',
+        lowLatency: 'model-dependent',
+        notes: '本地 vLLM 使用 OpenAI-compatible /v1/chat/completions；API Key 可留空。工具调用能力取决于模型和 chat template，默认不强测。'
+    }),
+    [OLLAMA_PROVIDER]: Object.freeze({
+        provider: OLLAMA_PROVIDER,
+        label: 'Ollama Local Chat API',
+        transport: 'ollama-api-chat',
+        chat: true,
+        nativeToolCalling: false,
+        nativeToolCallingDefault: false,
+        jsonMode: true,
+        jsonSchema: false,
+        vision: 'model-dependent',
+        longContext: 'model-dependent',
+        lowLatency: 'model-dependent',
+        notes: '本地 Ollama 使用 /api/chat；API Key 留空。多模态能力取决于本地模型。'
     })
 });
 
@@ -258,6 +294,20 @@ function buildGeminiGenerateContentUrl(baseUrl, model, apiKey) {
         ? normalizedBaseUrl
         : `${normalizedBaseUrl}/models/${normalizedModel}`;
     return `${root}:generateContent?key=${cleanKey}`;
+}
+
+function buildOllamaChatUrl(baseUrl) {
+    const normalizedBaseUrl = normalizeBaseUrl(baseUrl);
+    if (!normalizedBaseUrl) {
+        return '';
+    }
+    if (/\/api\/chat$/i.test(normalizedBaseUrl)) {
+        return normalizedBaseUrl;
+    }
+    if (/\/api$/i.test(normalizedBaseUrl)) {
+        return `${normalizedBaseUrl}/chat`;
+    }
+    return `${normalizedBaseUrl}/api/chat`;
 }
 
 function normalizeMessages(messages) {
@@ -622,20 +672,24 @@ function getModelCapabilityHeuristics(provider, model) {
     const normalizedProvider = normalizeProvider(provider);
     const normalizedModel = normalizeString(model).toLowerCase();
     const visionModel =
-        /(vision|vl|omni|gpt-4o|gpt-4\.1|gpt-5|o3|o4|claude-3|gemini|qwen.*vl|glm-4v|doubao.*vision|seed.*vision|kimi.*vision)/i
+        /(vision|vl|omni|gpt-4o|gpt-4\.1|gpt-5|o3|o4|claude-3|gemini|qwen.*vl|glm-4v|doubao.*vision|seed.*vision|kimi.*vision|llava|bakllava|moondream)/i
             .test(normalizedModel);
     const longContextModel =
-        /(128k|200k|1m|long|gemini|claude|gpt-4\.1|gpt-5|qwen|doubao|deepseek)/i
+        /(128k|200k|1m|long|gemini|claude|gpt-4\.1|gpt-5|qwen|doubao|deepseek|llama3\.1|llama3\.2|llama3\.3|mistral|mixtral)/i
             .test(normalizedModel);
     const lowLatencyModel =
-        /(mini|flash|haiku|turbo|lite|fast|speed|doubao|deepseek-chat)/i
+        /(mini|flash|haiku|turbo|lite|fast|speed|doubao|deepseek-chat|llama3\.2|phi|gemma|qwen.*0\.5b|qwen.*1\.5b|qwen.*3b|qwen.*7b)/i
             .test(normalizedModel);
 
     return {
-        vision: normalizedProvider === OPENAI_COMPATIBLE_PROVIDER
+        vision: normalizedProvider === OPENAI_COMPATIBLE_PROVIDER ||
+            normalizedProvider === VLLM_PROVIDER ||
+            normalizedProvider === OLLAMA_PROVIDER
             ? visionModel
             : PROVIDER_CAPABILITY_TABLE[normalizedProvider]?.vision === true && visionModel !== false,
-        longContext: normalizedProvider === OPENAI_COMPATIBLE_PROVIDER
+        longContext: normalizedProvider === OPENAI_COMPATIBLE_PROVIDER ||
+            normalizedProvider === VLLM_PROVIDER ||
+            normalizedProvider === OLLAMA_PROVIDER
             ? longContextModel
             : PROVIDER_CAPABILITY_TABLE[normalizedProvider]?.longContext === true,
         lowLatency: lowLatencyModel
@@ -719,11 +773,13 @@ async function fetchJsonWithTimeout(url, requestOptions, timeoutMs, externalSign
 }
 
 function validateProviderInput(settings, messages) {
-    if (!settings.model || !settings.apiKey || !settings.baseUrl) {
+    if (!settings.model || !settings.baseUrl || (providerRequiresApiKey(settings.provider) && !settings.apiKey)) {
         return {
             ok: false,
             code: 'needs_config',
-            error: '请先在控制面板配置 API Base、模型和 API Key。'
+            error: providerRequiresApiKey(settings.provider)
+                ? '请先在控制面板配置 API Base、模型和 API Key。'
+                : '请先在控制面板配置本地模型服务地址和模型名。'
         };
     }
 
@@ -736,6 +792,27 @@ function validateProviderInput(settings, messages) {
     }
 
     return null;
+}
+
+function providerRequiresApiKey(provider = DEFAULT_PROVIDER) {
+    const normalizedProvider = normalizeProvider(provider);
+    return normalizedProvider !== VLLM_PROVIDER && normalizedProvider !== OLLAMA_PROVIDER;
+}
+
+function buildJsonHeaders({ apiKey = '', bearer = true, extra = {} } = {}) {
+    const headers = {
+        'Content-Type': 'application/json',
+        ...extra
+    };
+    const normalizedApiKey = normalizeString(apiKey);
+    if (normalizedApiKey) {
+        if (bearer) {
+            headers.Authorization = `Bearer ${normalizedApiKey}`;
+        } else {
+            headers['x-api-key'] = normalizedApiKey;
+        }
+    }
+    return headers;
 }
 
 function buildProviderResult(settings, data, content, toolCalls = []) {
@@ -792,10 +869,7 @@ async function callOpenAiCompatible(settings, payload, messages) {
         buildChatCompletionsUrl(settings.baseUrl),
         {
             method: 'POST',
-            headers: {
-                Authorization: `Bearer ${settings.apiKey}`,
-                'Content-Type': 'application/json'
-            },
+            headers: buildJsonHeaders({ apiKey: settings.apiKey }),
             body: JSON.stringify(body)
         },
         normalizeTimeoutMs(payload.timeoutMs ?? settings.timeoutMs),
@@ -825,6 +899,82 @@ async function callOpenAiCompatible(settings, payload, messages) {
     }
 
     return buildProviderResult(settings, result.data, content, toolCalls);
+}
+
+function convertMessagesForOllama(messages = [], payload = {}) {
+    const out = [];
+    if (shouldRequestJson(payload)) {
+        out.push({
+            role: 'system',
+            content: 'Return valid JSON only. Do not include Markdown fences or extra prose.'
+        });
+    }
+    for (const message of messages) {
+        const role = message.role === 'assistant'
+            ? 'assistant'
+            : message.role === 'system' || message.role === 'developer'
+            ? 'system'
+            : 'user';
+        const content = contentToText(message.content);
+        if (!content) {
+            continue;
+        }
+        out.push({ role, content });
+    }
+    return out;
+}
+
+function extractOllamaOutput(data = {}) {
+    return normalizeString(data.message?.content || data.response || '');
+}
+
+async function callOllama(settings, payload, messages) {
+    const invalid = validateProviderInput(settings, messages);
+    if (invalid) {
+        return invalid;
+    }
+
+    const body = {
+        model: settings.model,
+        messages: convertMessagesForOllama(messages, payload),
+        stream: false,
+        options: {
+            temperature: normalizeTemperature(payload.temperature ?? settings.temperature)
+        }
+    };
+    if (shouldRequestJson(payload)) {
+        body.format = 'json';
+    }
+
+    const result = await fetchJsonWithTimeout(
+        buildOllamaChatUrl(settings.baseUrl),
+        {
+            method: 'POST',
+            headers: buildJsonHeaders(),
+            body: JSON.stringify(body)
+        },
+        normalizeTimeoutMs(payload.timeoutMs ?? settings.timeoutMs),
+        payload.abortSignal || payload.signal || null
+    );
+
+    if (!result.ok) {
+        return {
+            ok: false,
+            code: result.code || 'provider_error',
+            status: result.status,
+            error: result.error
+        };
+    }
+
+    const content = extractOllamaOutput(result.data);
+    if (!content) {
+        return {
+            ok: false,
+            code: 'empty_response',
+            error: '模型接口返回为空。'
+        };
+    }
+    return buildProviderResult(settings, result.data, content, []);
 }
 
 function convertMessagesForResponses(messages = []) {
@@ -936,8 +1086,7 @@ async function callOpenAiResponses(settings, payload, messages) {
         {
             method: 'POST',
             headers: {
-                Authorization: `Bearer ${settings.apiKey}`,
-                'Content-Type': 'application/json'
+                ...buildJsonHeaders({ apiKey: settings.apiKey })
             },
             body: JSON.stringify(body)
         },
@@ -1077,9 +1226,8 @@ async function callAnthropic(settings, payload, messages) {
         {
             method: 'POST',
             headers: {
-                'x-api-key': settings.apiKey,
+                ...buildJsonHeaders({ apiKey: settings.apiKey, bearer: false }),
                 'anthropic-version': '2023-06-01',
-                'content-type': 'application/json'
             },
             body: JSON.stringify(body)
         },
@@ -1257,6 +1405,9 @@ async function callGemini(settings, payload, messages) {
 async function callDesktopLlmProvider(settings = {}, payload = {}) {
     const resolvedSettings = getResolvedSettings(settings);
     const messages = normalizeMessages(payload.messages);
+    if (resolvedSettings.provider === OLLAMA_PROVIDER) {
+        return callOllama(resolvedSettings, payload, messages);
+    }
     if (resolvedSettings.provider === OPENAI_RESPONSES_PROVIDER) {
         return callOpenAiResponses(resolvedSettings, payload, messages);
     }
@@ -1428,13 +1579,16 @@ module.exports = {
     DEFAULT_PROVIDER_BASE_URLS,
     DEFAULT_PROVIDER_MODELS,
     GEMINI_PROVIDER,
+    OLLAMA_PROVIDER,
     OPENAI_COMPATIBLE_PROVIDER,
     OPENAI_RESPONSES_PROVIDER,
     PROVIDER_CAPABILITY_TABLE,
     PROVIDER_OPTIONS,
+    VLLM_PROVIDER,
     buildAnthropicMessagesUrl,
     buildChatCompletionsUrl,
     buildGeminiGenerateContentUrl,
+    buildOllamaChatUrl,
     buildResponsesUrl,
     callDesktopLlmProvider,
     checkDesktopLlmProvider,

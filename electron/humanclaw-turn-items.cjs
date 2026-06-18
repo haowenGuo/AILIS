@@ -35,6 +35,7 @@ function itemSummaryForPrompt(item = {}, maxChars = 360) {
         result_status: item.result_status || null,
         error_type: item.error_type || item.errorType || null,
         evidence_gap: item.evidence_gap || item.evidenceGap || null,
+        artifact_evidence: item.artifact_evidence || item.artifactEvidence || null,
         recovery_hint: item.recovery_hint || item.recoveryHint || null,
         preview: item.preview ? summarizeValue(item.preview, maxChars) : undefined,
         compacted: item.compacted === true
@@ -101,6 +102,46 @@ function getResponseDetails(response = {}) {
         return response.details;
     }
     return {};
+}
+
+function getArtifactEvidenceSummary(response = {}) {
+    const details = getResponseDetails(response);
+    const evidence = details.evidence && typeof details.evidence === 'object' ? details.evidence : {};
+    const coverage = details.coverage && typeof details.coverage === 'object'
+        ? details.coverage
+        : (evidence.coverage && typeof evidence.coverage === 'object' ? evidence.coverage : null);
+    const artifactId = normalizeText(details.artifactId || evidence.artifactId);
+    if (!artifactId && !coverage && !evidence.evidenceId) {
+        return null;
+    }
+    return {
+        artifactId,
+        evidenceId: normalizeText(details.pinnedEvidenceId || evidence.evidenceId),
+        action: normalizeText(details.action || evidence.action),
+        sheet: normalizeText(details.sheet || evidence.sheet || coverage?.sheet),
+        range: normalizeText(details.range || evidence.range || coverage?.range),
+        complete: details.complete === true || evidence.complete === true,
+        truncated: details.truncated === true || evidence.truncated === true,
+        reasoningReady: details.reasoningReady === true || evidence.reasoningReady === true,
+        coveredByEvidence: details.coveredByEvidence && typeof details.coveredByEvidence === 'object'
+            ? {
+                evidenceId: details.coveredByEvidence.evidenceId,
+                range: details.coveredByEvidence.range,
+                sheet: details.coveredByEvidence.sheet,
+                complete: details.coveredByEvidence.complete,
+                truncated: details.coveredByEvidence.truncated,
+                reasoningReady: details.coveredByEvidence.reasoningReady
+            }
+            : null,
+        coverage: coverage ? {
+            kind: coverage.kind,
+            queryAction: coverage.queryAction,
+            sheet: coverage.sheet,
+            range: coverage.range,
+            complete: coverage.complete,
+            truncated: coverage.truncated
+        } : null
+    };
 }
 
 function getCommandProgram(command = '') {
@@ -263,6 +304,7 @@ function buildToolResultItem(event = {}) {
         preview: summarizeValue([preview, formatFailureHint(failure), formatEvidenceGapHint(evidenceGap)].filter(Boolean).join('\n'), DEFAULT_PREVIEW_CHARS),
         error_type: failure?.error_type || null,
         evidence_gap: evidenceGap?.evidence_gap || null,
+        artifact_evidence: getArtifactEvidenceSummary(event.response || event.result || {}),
         recovery_hint: failure?.recovery_hint || evidenceGap?.recovery_hint || null,
         alternatives: failure?.alternatives || evidenceGap?.alternatives || [],
         iteration: Number.isFinite(event.iteration) ? event.iteration : null
@@ -298,6 +340,7 @@ function buildToolResultItemFromStep(stepResult = {}) {
         preview: summarizeValue([basePreview, formatFailureHint(failure), formatEvidenceGapHint(evidenceGap)].filter(Boolean).join('\n'), DEFAULT_PREVIEW_CHARS),
         error_type: failure?.error_type || null,
         evidence_gap: evidenceGap?.evidence_gap || null,
+        artifact_evidence: getArtifactEvidenceSummary(response),
         recovery_hint: failure?.recovery_hint || evidenceGap?.recovery_hint || null,
         alternatives: failure?.alternatives || evidenceGap?.alternatives || [],
         iteration: Number.isFinite(stepResult.iteration) ? stepResult.iteration : null

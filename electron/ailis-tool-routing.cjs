@@ -109,13 +109,30 @@ const ROUTING_PROFILES = Object.freeze([
     Object.freeze({
         id: 'spreadsheet',
         patterns: [
-            /\b(xlsx|xls|csv|tsv|spreadsheet|workbook|worksheet|sheet|columns?|rows?|numeric sum|total)\b/i,
-            /(电子表格|工作簿|表格|列|行|求和|总和)/i
+            /\b(xlsx|xlsm|xls|csv|tsv|spreadsheet|workbook|worksheet|sheet|columns?|rows?|numeric sum|total)\b/i,
+            /\b(cell colors?|fill colors?|merged cells?|formula cells?|grid map|spreadsheet map)\b/i,
+            /(电子表格|工作簿|表格|列|行|求和|总和|单元格|填充色|颜色|公式|合并单元格)/i
         ],
-        tools: ['read_spreadsheet'],
+        tools: ['read_xlsx_workbook', 'read_spreadsheet'],
+        primaryTools: ['read_xlsx_workbook'],
         bonus: 90,
+        primaryBonus: 30,
         webPenalty: 80,
-        advice: 'Use read_spreadsheet for tabular attachments before web_search.'
+        advice: 'Use read_xlsx_workbook for Excel/XLSX/XLSM attachments, especially when cell colors, formulas, merged cells, or grid layout matter; use read_spreadsheet only for plain table summaries.'
+    }),
+    Object.freeze({
+        id: 'context_artifact',
+        patterns: [
+            /\b(artifactid|artifact_id|artifact_query|artifact_compute|context artifact|artifact payload|payload file|fulljsonpath|managed artifact|query artifact)\b/i,
+            /\b(read artifact|artifact range|artifact grid|artifact search|spreadsheet range|grid query|artifact compute|data worker|find path|path search)\b/i,
+            /(上下文产物|产物查询|证据产物|大文件载荷|查询证据|产物计算|路径搜索|数据工人)/i
+        ],
+        tools: ['artifact_query', 'artifact_compute'],
+        primaryTools: ['artifact_query', 'artifact_compute'],
+        bonus: 95,
+        primaryBonus: 40,
+        webPenalty: 90,
+        advice: 'Use artifact_query for managed AILIS context artifacts by artifactId; use artifact_compute for deterministic data-worker analysis such as spreadsheet profiling or grid path search. Do not raw-read artifact payload files into the model context.'
     }),
     Object.freeze({
         id: 'paper_report_pdf_discovery',
@@ -214,6 +231,17 @@ function matchingRoutingProfiles(query = '') {
     return ROUTING_PROFILES.filter((profile) => profile.patterns.some((pattern) => pattern.test(normalized)));
 }
 
+function toolMatchesRoutingProfile(entry = {}, query = '') {
+    const toolName = canonicalToolName(entry);
+    if (!toolName) {
+        return false;
+    }
+    return matchingRoutingProfiles(query).some((profile) => (
+        (profile.tools || []).includes(toolName) ||
+        (profile.primaryTools || []).includes(toolName)
+    ));
+}
+
 function tokenizeSearchQuery(query = '') {
     return normalizeForSearch(query)
         .split(/[^a-z0-9_./:-]+/i)
@@ -242,6 +270,9 @@ function toolSpecificityScore(toolName = '') {
     if (/^output_(read|tail|search)$/.test(toolName)) {
         return 14;
     }
+    if (/^artifact_(query|compute)$/.test(toolName)) {
+        return 14;
+    }
     if (/^(read_|pdf_|youtube_|transcribe_|describe_|github_|run_python)/.test(toolName)) {
         return 12;
     }
@@ -264,6 +295,18 @@ function scoreToolForQuery(entry = {}, query = '') {
         /\b(outputid|output_id|previewtruncated|exec output|stdout|stderr|full output|stored output|output store|tail output|search output)\b/i.test(query)
     ) {
         score += 36;
+    }
+    if (
+        toolName === 'artifact_query' &&
+        /\b(artifactid|artifact_id|artifact_query|context artifact|artifact payload|payload file|fulljsonpath|managed artifact|query artifact|artifact range|artifact grid|artifact search)\b/i.test(query)
+    ) {
+        score += 44;
+    }
+    if (
+        toolName === 'artifact_compute' &&
+        /\b(artifactid|artifact_id|artifact_compute|context artifact|managed artifact|artifact compute|data worker|spreadsheet profile|find path|path search|grid path|maze)\b/i.test(query)
+    ) {
+        score += 44;
     }
     if (toolName === 'output_read' && /\b(full output|read output|stdout|stderr|byte range|complete output|stored output)\b/i.test(query)) {
         score += 16;
@@ -341,7 +384,10 @@ function buildToolRoutingAdvice(query = '', rankedTools = []) {
         return '';
     }
     const firstTool = canonicalToolName(rankedTools[0] || {});
-    const profile = profiles.find((candidate) => candidate.tools.includes(firstTool)) || profiles[0];
+    const profile = profiles.find((candidate) => (
+        (candidate.tools || []).includes(firstTool) ||
+        (candidate.primaryTools || []).includes(firstTool)
+    )) || profiles[0];
     return profile.advice || '';
 }
 
@@ -351,5 +397,6 @@ module.exports = {
     collectToolSearchText,
     matchingRoutingProfiles,
     rankToolSearchResults,
-    scoreToolForQuery
+    scoreToolForQuery,
+    toolMatchesRoutingProfile
 };

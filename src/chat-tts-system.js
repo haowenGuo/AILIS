@@ -6,8 +6,46 @@ import {
 } from './chat-attachments.js';
 import { markdownToPlainText, setMarkdownContent, setPlainTextContent } from './markdown-renderer.js';
 import { AVATAR_SPEECH_EVENT_NAME } from './avatar-dialogue-bubble.js';
+import { deriveTtsSpeechText, normalizeTtsSpeechText } from './tts-speech-text.js';
 
 const CHAT_UI_EVENT_NAME = 'ailis-chat-ui-event';
+const CHAT_EXPRESSIVE_GESTURE_INTENTS = new Set([
+    'greeting',
+    'farewell',
+    'success',
+    'celebrate',
+    'surprised',
+    'dance'
+]);
+
+function getPayloadSurface(payload = {}) {
+    return payload.surface ||
+        payload.personaSurface ||
+        payload.persona_surface ||
+        payload.personaOutput ||
+        payload.persona_output ||
+        null;
+}
+
+function normalizeCueValue(value) {
+    return String(value || '').trim().toLowerCase().replace(/[-\s]+/g, '_');
+}
+
+function shouldAllowChatMotion(payload = {}) {
+    const surface = getPayloadSurface(payload) || {};
+    const gestureIntent = normalizeCueValue(
+        surface.gestureIntent ||
+            surface.gesture_intent ||
+            payload.gestureIntent ||
+            payload.gesture_intent
+    );
+    const action = normalizeCueValue(surface.action || payload.action);
+
+    return Boolean(action) ||
+        CHAT_EXPRESSIVE_GESTURE_INTENTS.has(gestureIntent) ||
+        payload.desktopLlmMode === true ||
+        payload.demoMode === true;
+}
 
 function normalizeVisionAttachments(attachments = []) {
     if (!Array.isArray(attachments)) {
@@ -260,7 +298,7 @@ export class ChatTTSSystem {
     }
 
     getAvatarSpeechText(payload, displayText) {
-        const source = payload?.bubble_text || payload?.speech_text || displayText || payload?.display_text || '';
+        const source = deriveTtsSpeechText(payload, displayText);
         return markdownToPlainText(source)
             .replace(/[ \t]+/g, ' ')
             .replace(/\n{3,}/g, '\n\n')
@@ -332,19 +370,26 @@ export class ChatTTSSystem {
         if (!session || !payload) {
             return;
         }
-        const deltaText = payload.stream_delta_speech_text || '';
+        const deltaText = normalizeTtsSpeechText(payload.stream_delta_speech_text || '');
         if (deltaText) {
             session.appendText(deltaText);
         }
     }
 
-    async finishChunkedSpeechSession(session) {
+    async finishChunkedSpeechSession(session, fallbackText = '') {
         if (!session) {
             return false;
+        }
+        if (!session.hasActivity() && fallbackText) {
+            session.appendText(fallbackText);
         }
         session.finish();
         if (!session.hasActivity()) {
             return false;
+        }
+        if (typeof session.waitUntilPlaybackStartedOrDone === 'function') {
+            const started = await session.waitUntilPlaybackStartedOrDone();
+            return Boolean(started || session.hasPlaybackStarted?.());
         }
         await session.waitUntilDone();
         return typeof session.hasPlaybackStarted === 'function' ? session.hasPlaybackStarted() : true;
@@ -354,6 +399,32 @@ export class ChatTTSSystem {
         if (this.activeChunkedSpeechSession === session) {
             this.activeChunkedSpeechSession = null;
         }
+    }
+
+    releaseChunkedSpeechSessionWhenDone(session) {
+        if (!session) {
+            return;
+        }
+        if (typeof session.waitUntilDone !== 'function') {
+            this.clearChunkedSpeechSession(session);
+            return;
+        }
+        void session.waitUntilDone()
+            .catch(() => {})
+            .finally(() => this.clearChunkedSpeechSession(session));
+    }
+
+    stopLingeringSpeech(reason = 'new-turn') {
+        const session = this.activeChunkedSpeechSession;
+        if (session) {
+            Promise.resolve(session.cancel?.(reason)).catch((error) => {
+                console.warn('停止上一段分段语音失败：', error);
+            });
+            this.clearChunkedSpeechSession(session);
+        }
+        Promise.resolve(this.audioPlayer?.stop?.()).catch((error) => {
+            console.warn('停止上一段音频失败：', error);
+        });
     }
 
     startAvatarPlayback(payload, displayText, aiMessageDiv) {
@@ -493,7 +564,10 @@ export class ChatTTSSystem {
             if (!this.isTurnActive(turn)) {
                 return;
             }
-            const usedChunkedSpeech = await this.finishChunkedSpeechSession(chunkedSpeechSession);
+            const usedChunkedSpeech = await this.finishChunkedSpeechSession(
+                chunkedSpeechSession,
+                deriveTtsSpeechText(payload, payload.display_text || '')
+            );
             if (!this.isTurnActive(turn)) {
                 return;
             }
@@ -512,7 +586,7 @@ export class ChatTTSSystem {
                 console.error('主动对话请求失败：', error);
             }
         } finally {
-            this.clearChunkedSpeechSession(chunkedSpeechSession);
+            this.releaseChunkedSpeechSessionWhenDone(chunkedSpeechSession);
             if (this.activeTurn?.id === turn.id) {
                 this.interruptRequested = false;
                 this.interruptInFlight = false;
@@ -536,6 +610,7 @@ export class ChatTTSSystem {
         }
         const messageContent = content || getDefaultMessageForAttachments(attachments);
 
+        this.stopLingeringSpeech('new-chat-turn');
         this.setBusy(true);
         this.startAutoChatTimer();
 
@@ -574,7 +649,10 @@ export class ChatTTSSystem {
                 return;
             }
             this.removeMessageElement(loadingEl);
-            const usedChunkedSpeech = await this.finishChunkedSpeechSession(chunkedSpeechSession);
+            const usedChunkedSpeech = await this.finishChunkedSpeechSession(
+                chunkedSpeechSession,
+                deriveTtsSpeechText(payload, payload.display_text || '')
+            );
             if (!this.isTurnActive(turn)) {
                 return;
             }
@@ -596,7 +674,7 @@ export class ChatTTSSystem {
                 console.error('后端请求失败：', error);
             }
         } finally {
-            this.clearChunkedSpeechSession(chunkedSpeechSession);
+            this.releaseChunkedSpeechSessionWhenDone(chunkedSpeechSession);
             if (this.activeTurn?.id === turn.id) {
                 this.interruptRequested = false;
                 this.interruptInFlight = false;
@@ -726,6 +804,7 @@ export class ChatTTSSystem {
             return;
         }
 
+        this.executeAvatarCue(payload, aiMessageDiv);
         await this.playPreferredSpeech({
             payload,
             displayText,
@@ -744,7 +823,7 @@ export class ChatTTSSystem {
 
     executeAvatarCue(payload, aiMessageDiv) {
         const cueSignature = JSON.stringify({
-            surface: payload.surface || payload.personaSurface || null,
+            surface: getPayloadSurface(payload),
             action: payload.action || null,
             expression: payload.expression || null
         });
@@ -752,9 +831,12 @@ export class ChatTTSSystem {
             return;
         }
 
+        const allowChatMotion = shouldAllowChatMotion(payload);
         this.vrmSystem.applyPersonaSurfacePayload?.(payload, {
             messageId: aiMessageDiv?.dataset?.messageId || '',
-            source: 'chat_tts'
+            source: 'chat_tts',
+            allowExpressiveMotion: allowChatMotion,
+            allowExperimentalMotion: allowChatMotion
         });
 
         if (aiMessageDiv) {
@@ -765,23 +847,28 @@ export class ChatTTSSystem {
     }
 
     async playPreferredSpeech({ payload, displayText, alignment, aiMessageDiv }) {
+        const speechText = deriveTtsSpeechText(payload, displayText);
+        const speechPayload = {
+            ...payload,
+            speech_text: speechText
+        };
         if (this.speechProvider?.isSpeechDisabled) {
             this.vrmSystem.stopSpeaking();
-            this.executeAvatarCue(payload, aiMessageDiv);
+            this.executeAvatarCue(speechPayload, aiMessageDiv);
             this.updateMessageContent(aiMessageDiv, displayText);
             this.scrollToBottom();
             return;
         }
 
         const speechResult = await this.speechProvider?.playSpeech?.({
-            payload,
+            payload: speechPayload,
             displayText,
             alignment,
             audioPlayer: this.audioPlayer,
             vrmSystem: this.vrmSystem,
             updateMessageContent: (text) => this.updateMessageContent(aiMessageDiv, text),
             scrollToBottom: () => this.scrollToBottom(),
-            onAvatarPlaybackStart: () => this.startAvatarPlayback(payload, displayText, aiMessageDiv)
+            onAvatarPlaybackStart: () => this.startAvatarPlayback(speechPayload, displayText, aiMessageDiv)
         });
 
         if (speechResult?.played) {
@@ -800,7 +887,7 @@ export class ChatTTSSystem {
         }
 
         if (payload.fallbackMode || !payload.audio_base64 || !this.speechProvider?.supportsTTS) {
-            await this.playFallbackSpeech(displayText, aiMessageDiv, payload);
+            await this.playFallbackSpeech(displayText, aiMessageDiv, speechPayload);
             if (!this.hasShownTextFallbackHint) {
                 this.addSystemMessage('当前语音服务不可用，已自动切换为纯文本回复。');
                 this.hasShownTextFallbackHint = true;
@@ -824,7 +911,7 @@ export class ChatTTSSystem {
                     } else {
                         this.updateMessageContent(aiMessageDiv, displayText);
                     }
-                    this.startAvatarPlayback(payload, displayText, aiMessageDiv);
+                    this.startAvatarPlayback(speechPayload, displayText, aiMessageDiv);
                     this.scrollToBottom();
                 },
                 onPlaybackEnd: () => {
@@ -844,14 +931,18 @@ export class ChatTTSSystem {
     }
 
     async playFallbackSpeech(displayText, aiMessageDiv, payload = {}) {
+        const speechText = deriveTtsSpeechText(payload, displayText);
         const durationMs = Math.min(
             CONFIG.TEXT_ONLY_SPEECH_MAX_MS,
-            Math.max(CONFIG.TEXT_ONLY_SPEECH_MIN_MS, displayText.length * CONFIG.TEXT_ONLY_SPEECH_CHAR_MS)
+            Math.max(CONFIG.TEXT_ONLY_SPEECH_MIN_MS, (speechText || displayText).length * CONFIG.TEXT_ONLY_SPEECH_CHAR_MS)
         );
 
         this.vrmSystem.startFallbackSpeech();
         this.executeAvatarCue(payload, aiMessageDiv);
-        this.startAvatarSpeech(payload, displayText, aiMessageDiv);
+        this.startAvatarSpeech({
+            ...payload,
+            speech_text: speechText
+        }, displayText, aiMessageDiv);
 
         await new Promise((resolve) => {
             const startTime = performance.now();

@@ -3,12 +3,16 @@ const fsp = require('fs/promises');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
+const zlib = require('zlib');
 const { execFile, spawn } = require('child_process');
 const { randomUUID } = require('crypto');
 const { createHumanClawPlatformAdapter, getDefaultPlatformAdapter } = require('./humanclaw-platform-adapter.cjs');
+const { extractPdfDocument } = require('./humanclaw-pdf-document-engine.cjs');
 
 const COMPUTER_TOOL_ID = 'computer';
 const DEFAULT_MAX_BYTES = 128 * 1024;
+const DEFAULT_TEXT_ARTIFACT_BYTES = 128 * 1024;
+const DEFAULT_MAX_ARTIFACT_SOURCE_BYTES = 50 * 1024 * 1024;
 const DEFAULT_SEARCH_LIMIT = 200;
 const DEFAULT_TREE_LIMIT = 500;
 const DEFAULT_PROCESS_BUFFER_BYTES = 256 * 1024;
@@ -305,6 +309,307 @@ function getStructuredFileHint(filePath = '') {
     return hints[ext] || 'binary or structured file';
 }
 
+function isTextArtifactExtension(filePath = '') {
+    return new Set([
+        '.txt',
+        '.log',
+        '.md',
+        '.markdown',
+        '.json',
+        '.jsonl',
+        '.csv',
+        '.tsv',
+        '.xml',
+        '.yaml',
+        '.yml',
+        '.toml'
+    ]).has(path.extname(filePath).toLowerCase());
+}
+
+function isDocumentArtifactExtension(filePath = '') {
+    return new Set(['.docx', '.pdf']).has(path.extname(filePath).toLowerCase());
+}
+
+function decodeXmlEntities(text = '') {
+    return String(text || '')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&amp;/g, '&')
+        .replace(/&quot;/g, '"')
+        .replace(/&apos;/g, "'")
+        .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number(code)))
+        .replace(/&#x([0-9a-f]+);/gi, (_, code) => String.fromCharCode(parseInt(code, 16)));
+}
+
+function normalizeExtractedDocumentText(text = '') {
+    return String(text || '')
+        .replace(/\r\n/g, '\n')
+        .replace(/[ \t]+\n/g, '\n')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+}
+
+function stripXmlToText(xml = '') {
+    const withBreaks = String(xml || '')
+        .replace(/<\/w:p>/g, '\n')
+        .replace(/<\/w:tr>/g, '\n')
+        .replace(/<\/w:tc>/g, '\t')
+        .replace(/<w:tab\/>/g, '\t')
+        .replace(/<w:br\/>/g, '\n');
+    return normalizeExtractedDocumentText(decodeXmlEntities(withBreaks.replace(/<[^>]+>/g, '')));
+}
+
+function readZipEntries(buffer) {
+    const eocdSignature = 0x06054b50;
+    let eocdOffset = -1;
+    for (let index = buffer.length - 22; index >= Math.max(0, buffer.length - 66000); index -= 1) {
+        if (buffer.readUInt32LE(index) === eocdSignature) {
+            eocdOffset = index;
+            break;
+        }
+    }
+    if (eocdOffset < 0) {
+        throw new Error('zip_eocd_not_found');
+    }
+    const centralDirectorySize = buffer.readUInt32LE(eocdOffset + 12);
+    const centralDirectoryOffset = buffer.readUInt32LE(eocdOffset + 16);
+    const entries = new Map();
+    let offset = centralDirectoryOffset;
+    const end = centralDirectoryOffset + centralDirectorySize;
+    while (offset < end && buffer.readUInt32LE(offset) === 0x02014b50) {
+        const method = buffer.readUInt16LE(offset + 10);
+        const compressedSize = buffer.readUInt32LE(offset + 20);
+        const fileNameLength = buffer.readUInt16LE(offset + 28);
+        const extraLength = buffer.readUInt16LE(offset + 30);
+        const commentLength = buffer.readUInt16LE(offset + 32);
+        const localHeaderOffset = buffer.readUInt32LE(offset + 42);
+        const name = buffer.subarray(offset + 46, offset + 46 + fileNameLength).toString('utf8');
+        const localNameLength = buffer.readUInt16LE(localHeaderOffset + 26);
+        const localExtraLength = buffer.readUInt16LE(localHeaderOffset + 28);
+        const dataOffset = localHeaderOffset + 30 + localNameLength + localExtraLength;
+        const compressed = buffer.subarray(dataOffset, dataOffset + compressedSize);
+        let content;
+        if (method === 0) {
+            content = compressed;
+        } else if (method === 8) {
+            content = zlib.inflateRawSync(compressed);
+        } else {
+            content = Buffer.alloc(0);
+        }
+        entries.set(name, content);
+        offset += 46 + fileNameLength + extraLength + commentLength;
+    }
+    return entries;
+}
+
+function extractDocxDocument(buffer) {
+    const entries = readZipEntries(buffer);
+    const parts = [
+        'word/document.xml',
+        ...[...entries.keys()].filter((name) => /^word\/(?:header|footer|footnotes|endnotes)\d*\.xml$/i.test(name))
+    ];
+    const sections = [];
+    for (const part of parts) {
+        const xml = entries.get(part);
+        if (!xml) {
+            continue;
+        }
+        const text = stripXmlToText(xml.toString('utf8'));
+        if (text) {
+            sections.push({
+                index: sections.length,
+                title: part,
+                text
+            });
+        }
+    }
+    const text = normalizeExtractedDocumentText(sections.map((section) => section.text).join('\n\n'));
+    if (!text) {
+        throw new Error('docx_no_text_extracted');
+    }
+    return {
+        format: 'docx',
+        parser: 'basic_docx_zip_xml',
+        text,
+        pages: [{ pageNumber: 1, text }],
+        sections
+    };
+}
+
+function buildArtifactPreview(text = '', maxChars = 4000) {
+    const source = String(text || '');
+    if (source.length <= maxChars) {
+        return { text: source, truncated: false };
+    }
+    return {
+        text: `${source.slice(0, Math.max(0, maxChars - 120))}\n... [artifact preview truncated; use artifact_query for exact ranges/search] ...`,
+        truncated: true
+    };
+}
+
+async function createManagedTextArtifact({ target, stat, text, encoding = 'utf8', runtime = {}, context = {}, args = {} } = {}) {
+    if (!runtime.contextArtifactStore?.createArtifact) {
+        return null;
+    }
+    const lines = text.split(/\r?\n/);
+    return await runtime.contextArtifactStore.createArtifact({
+        kind: 'text',
+        type: path.extname(target).slice(1).toLowerCase() || 'text',
+        tool: COMPUTER_TOOL_ID,
+        runId: context.runId,
+        sessionId: context.sessionId || context.sessionKey,
+        sourcePath: target,
+        payload: {
+            path: target,
+            textArtifact: {
+                path: target,
+                encoding,
+                type: path.extname(target).slice(1).toLowerCase() || 'text',
+                bytes: stat.size,
+                chars: text.length,
+                lineCount: lines.length,
+                text
+            }
+        },
+        summary: `Text artifact ${path.basename(target)}: ${lines.length} lines, ${text.length} chars`,
+        metadata: {
+            size: stat.size,
+            extension: path.extname(target).toLowerCase(),
+            createdFrom: 'computer.read',
+            requestedMaxBytes: args.maxBytes
+        },
+        modelView: {
+            path: target,
+            lineCount: lines.length,
+            chars: text.length,
+            queryTools: ['artifact_query:text_schema', 'artifact_query:text_range', 'artifact_query:text_search', 'artifact_query:text_tail']
+        },
+        queryHints: ['artifact_query summary', 'artifact_query text_range', 'artifact_query text_search', 'artifact_query text_tail']
+    });
+}
+
+async function createManagedDocumentArtifact({ target, stat, document, runtime = {}, context = {} } = {}) {
+    if (!runtime.contextArtifactStore?.createArtifact) {
+        return null;
+    }
+    const lines = document.text.split(/\r?\n/);
+    return await runtime.contextArtifactStore.createArtifact({
+        kind: 'document',
+        type: document.format || path.extname(target).slice(1).toLowerCase() || 'document',
+        tool: COMPUTER_TOOL_ID,
+        runId: context.runId,
+        sessionId: context.sessionId || context.sessionKey,
+        sourcePath: target,
+        payload: {
+            path: target,
+            documentArtifact: {
+                path: target,
+                format: document.format,
+                parser: document.parser,
+                bytes: stat.size,
+                chars: document.text.length,
+                lineCount: lines.length,
+                text: document.text,
+                pages: document.pages || [],
+                sections: document.sections || []
+            }
+        },
+        summary: `Document artifact ${path.basename(target)}: ${document.format || 'document'}, ${document.text.length} chars`,
+        metadata: {
+            size: stat.size,
+            extension: path.extname(target).toLowerCase(),
+            parser: document.parser,
+            createdFrom: 'computer.read'
+        },
+        modelView: {
+            path: target,
+            format: document.format,
+            parser: document.parser,
+            pages: document.pages?.length || 0,
+            sections: document.sections?.length || 0,
+            chars: document.text.length,
+            queryTools: ['artifact_query:document_schema', 'artifact_query:document_search', 'artifact_query:document_page', 'artifact_query:document_section']
+        },
+        queryHints: ['artifact_query summary', 'artifact_query document_search', 'artifact_query document_page', 'artifact_query document_section']
+    });
+}
+
+function artifactCreatedReadResult({ kind, record, target, stat, text = '', preview, actions = [] } = {}) {
+    return createTextResult([
+        `${kind === 'document' ? 'DOCUMENT_ARTIFACT_CREATED' : 'TEXT_ARTIFACT_CREATED'}`,
+        `artifactId=${record.id}`,
+        `path=${target}`,
+        `bytes=${stat.size} payloadBytes=${record.payloadBytes}`,
+        `queryWith=artifact_query actions ${actions.join(', ')}`,
+        'observation_contract=complete:true truncated:false reasoning_ready:true',
+        '--- preview ---',
+        preview.text
+    ].filter(Boolean).join('\n'), {
+        status: 'completed',
+        action: 'read',
+        path: target,
+        size: stat.size,
+        sizeText: formatBytes(stat.size),
+        artifactId: record.id,
+        artifactKind: kind,
+        payloadBytes: record.payloadBytes,
+        previewTruncated: preview.truncated,
+        complete: true,
+        truncated: false,
+        reasoningReady: true,
+        suggestedNext: {
+            tool: 'artifact_query',
+            args: {
+                artifactId: record.id,
+                action: kind === 'document' ? 'document_search' : 'text_search',
+                query: '<text>'
+            }
+        }
+    });
+}
+
+function normalizeDocumentParseFailure(error) {
+    return {
+        code: normalizeString(error?.code || ''),
+        message: error?.message || String(error || ''),
+        details: error?.details && typeof error.details === 'object' ? error.details : {}
+    };
+}
+
+function isScannedPdfNeedsOcrFailure(failure = {}) {
+    return failure.code === 'scanned_pdf_needs_ocr' ||
+        failure.code === 'pdf_no_text_extracted' ||
+        /scanned_pdf_needs_ocr|pdf_no_text_extracted|no selectable text|scanned\/image-only/i.test(failure.message || '');
+}
+
+function scannedPdfNeedsOcrReadResult({ target, stat, bytesRead = 0, fileKind = 'PDF document', failure = {} } = {}) {
+    return createErrorResult(
+        'scanned_pdf_needs_ocr',
+        `这个 PDF 没有可选中的文本，像是扫描件或图片型 PDF。read 不会把 PDF 图片流乱码当作正文；请通过 tool_search 查找 OCR / PDF page render / vision 工具，再把 OCR 结果保存为 document_artifact 后查询。`,
+        {
+            path: target,
+            size: stat?.size || 0,
+            sizeText: formatBytes(stat?.size || 0),
+            bytesSampled: bytesRead,
+            fileKind,
+            documentParseError: failure.message || 'scanned_pdf_needs_ocr',
+            documentParseCode: failure.code || 'scanned_pdf_needs_ocr',
+            parseDetails: failure.details || {},
+            suggestedNext: {
+                tool: 'tool_search',
+                query: 'OCR scanned PDF image-only PDF pdf_page_render ocr_document vision text extraction'
+            },
+            observationContract: {
+                complete: false,
+                truncated: false,
+                reasoning_ready: false,
+                needs_ocr: true
+            },
+            override: 'If raw bytes are needed for a custom OCR pipeline, use read_binary or render PDF pages to images first.'
+        }
+    );
+}
+
 function pickOutputStoreDirectTool(action = '') {
     const normalized = normalizeGuiAction(action);
     if (normalized === 'tail' || normalized === 'output_tail' || normalized === 'tail_output') {
@@ -335,7 +640,7 @@ function outputStoreWrongSurfaceResult(args = {}, action = '') {
     }
     return createErrorResult(
         'wrong_tool_surface',
-        `outputId 是执行日志标识，不是文件路径，也不是 computer action。当前默认工具面不会把执行日志读取工具暴露给 Agent；请使用本轮返回的 stdout/stderr/preview，或运行更窄的命令把需要的结果写入普通文件后再用 read 读取。`,
+        `outputId 是执行日志标识，不是文件路径，也不是 computer action。请通过 tool_search 查询 output_read/output_tail/output_search，并用返回的 direct tool 按需读取、搜索或查看尾部；不要把 outputId 当 path 传给 computer.read。`,
         {
             action,
             outputId,
@@ -346,8 +651,8 @@ function outputStoreWrongSurfaceResult(args = {}, action = '') {
                     outputId
                 }
             },
-            defaultSurface: 'legacy_stable',
-            recovery: 'Use visible exec preview, rerun a narrower command, or write the needed data to a normal file and read that file.'
+            defaultSurface: 'deferred_output_store_tools',
+            recovery: 'Call tool_search with a query like "exec output outputId search tail read", then call output_search/output_tail/output_read directly.'
         }
     );
 }
@@ -880,19 +1185,139 @@ async function actionRead(args, context, runtime) {
     if (guard) {
         return guard;
     }
+    const artifactRecord = await runtime.contextArtifactStore?.findByPath?.(target).catch(() => null);
+    if (artifactRecord?.payloadPath && path.resolve(artifactRecord.payloadPath) === path.resolve(target)) {
+        return runtime.contextArtifactStore.guardReadResult(artifactRecord, target);
+    }
     const stat = await safeStat(target);
     if (!stat || !stat.isFile()) {
         return createErrorResult('not_found', `文件不存在：${target}`, { path: target });
     }
     const maxBytes = normalizeNumber(args.maxBytes, DEFAULT_MAX_BYTES, 1, 5 * 1024 * 1024);
+    const maxArtifactBytes = normalizeNumber(args.maxArtifactBytes || args.max_artifact_bytes, DEFAULT_MAX_ARTIFACT_SOURCE_BYTES, 1, 100 * 1024 * 1024);
     const handle = await fsp.open(target, 'r');
     try {
         const buffer = Buffer.alloc(Math.min(stat.size, maxBytes));
         const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
         const chunk = buffer.subarray(0, bytesRead);
         const forceText = args.forceText === true || args.allowBinaryText === true;
-        if (!forceText && !isLikelyTextBuffer(chunk)) {
+        if (!forceText && isDocumentArtifactExtension(target)) {
+            let documentParseError = '';
+            let documentParseFailure = null;
+            if (stat.size <= maxArtifactBytes && runtime.contextArtifactStore?.createArtifact) {
+                try {
+                    const fullBuffer = stat.size === bytesRead ? chunk : await fsp.readFile(target);
+                    const ext = path.extname(target).toLowerCase();
+                    const document = ext === '.docx'
+                        ? extractDocxDocument(fullBuffer)
+                        : await extractPdfDocument(fullBuffer);
+                    const record = await createManagedDocumentArtifact({
+                        target,
+                        stat,
+                        document,
+                        runtime,
+                        context
+                    });
+                    if (record?.id) {
+                        const preview = buildArtifactPreview(document.text, normalizeNumber(args.previewChars || args.preview_chars, 4000, 1000, 20000));
+                        return artifactCreatedReadResult({
+                            kind: 'document',
+                            record,
+                            target,
+                            stat,
+                            text: document.text,
+                            preview,
+                            actions: ['summary', 'document_schema', 'document_search', 'document_page', 'document_section']
+                        });
+                    }
+                } catch (error) {
+                    documentParseFailure = normalizeDocumentParseFailure(error);
+                    documentParseError = documentParseFailure.message;
+                }
+            } else {
+                documentParseError = stat.size > maxArtifactBytes
+                    ? `document_too_large:${formatBytes(stat.size)} > ${formatBytes(maxArtifactBytes)}`
+                    : 'context_artifact_store_unavailable';
+            }
             const fileKind = getStructuredFileHint(target);
+            if (isScannedPdfNeedsOcrFailure(documentParseFailure)) {
+                return scannedPdfNeedsOcrReadResult({
+                    target,
+                    stat,
+                    bytesRead,
+                    fileKind,
+                    failure: documentParseFailure
+                });
+            }
+            return createErrorResult(
+                'binary_file',
+                `read 不能直接把 ${fileKind} 的原始内容放进模型上下文；${target} 未能解析为 document_artifact。请使用 tool_search 查找 DOCX/PDF 专用解析工具，或 read_binary 读取原始字节。`,
+                {
+                    path: target,
+                    size: stat.size,
+                    sizeText: formatBytes(stat.size),
+                    bytesSampled: bytesRead,
+                    fileKind,
+                    documentParseError,
+                    suggestedNext: {
+                        tool: 'tool_search',
+                        query: `${fileKind} document_artifact document_search pdf docx extract text`
+                    },
+                    override: 'If raw text decoding is truly intended, call read with forceText=true.'
+                }
+            );
+        }
+        if (!forceText && !isLikelyTextBuffer(chunk)) {
+            let documentParseError = '';
+            let documentParseFailure = null;
+            if (
+                isDocumentArtifactExtension(target) &&
+                stat.size <= maxArtifactBytes &&
+                runtime.contextArtifactStore?.createArtifact
+            ) {
+                try {
+                    const fullBuffer = stat.size === bytesRead ? chunk : await fsp.readFile(target);
+                    const ext = path.extname(target).toLowerCase();
+                    const document = ext === '.docx'
+                        ? extractDocxDocument(fullBuffer)
+                        : await extractPdfDocument(fullBuffer);
+                    const record = await createManagedDocumentArtifact({
+                        target,
+                        stat,
+                        document,
+                        runtime,
+                        context
+                    });
+                    if (record?.id) {
+                        const preview = buildArtifactPreview(document.text, normalizeNumber(args.previewChars || args.preview_chars, 4000, 1000, 20000));
+                        return artifactCreatedReadResult({
+                            kind: 'document',
+                            record,
+                            target,
+                            stat,
+                            text: document.text,
+                            preview,
+                            actions: ['summary', 'document_schema', 'document_search', 'document_page', 'document_section']
+                        });
+                    }
+                } catch (error) {
+                    documentParseFailure = normalizeDocumentParseFailure(error);
+                    documentParseError = documentParseFailure.message;
+                }
+            }
+            const fileKind = getStructuredFileHint(target);
+            if (isScannedPdfNeedsOcrFailure(documentParseFailure)) {
+                return scannedPdfNeedsOcrReadResult({
+                    target,
+                    stat,
+                    bytesRead,
+                    fileKind,
+                    failure: documentParseFailure
+                });
+            }
+            const structuredQuery = /Excel|XLSX|spreadsheet/i.test(fileKind)
+                ? 'read_xlsx_workbook xlsx workbook cell values fill colors formulas merged ranges'
+                : `${fileKind} extract text tables content artifact_query document_search`;
             return createErrorResult(
                 'binary_file',
                 `read 只能读取普通文本文件；${target} 看起来是 ${fileKind}。请使用专用解析工具、tool_search，或 read_binary 读取原始字节，不要把二进制内容当文本上下文。`,
@@ -904,13 +1329,45 @@ async function actionRead(args, context, runtime) {
                     fileKind,
                     suggestedNext: {
                         tool: 'tool_search',
-                        query: `${fileKind} extract text tables content`
+                        query: structuredQuery
                     },
+                    ...(documentParseError ? { documentParseError } : {}),
                     override: 'If raw text decoding is truly intended, call read with forceText=true.'
                 }
             );
         }
         const text = chunk.toString(args.encoding || 'utf8');
+        const shouldCreateTextArtifact = (
+            args.asArtifact === true ||
+            args.artifact === true ||
+            (stat.size > maxBytes && isTextArtifactExtension(target))
+        ) && stat.size <= maxArtifactBytes && runtime.contextArtifactStore?.createArtifact;
+        if (shouldCreateTextArtifact) {
+            const fullText = stat.size === bytesRead
+                ? text
+                : await fsp.readFile(target, args.encoding || 'utf8');
+            const record = await createManagedTextArtifact({
+                target,
+                stat,
+                text: fullText,
+                encoding: args.encoding || 'utf8',
+                runtime,
+                context,
+                args
+            });
+            if (record?.id) {
+                const preview = buildArtifactPreview(fullText, normalizeNumber(args.previewChars || args.preview_chars, 4000, 1000, 20000));
+                return artifactCreatedReadResult({
+                    kind: 'text',
+                    record,
+                    target,
+                    stat,
+                    text: fullText,
+                    preview,
+                    actions: ['summary', 'text_schema', 'text_range', 'text_search', 'text_tail']
+                });
+            }
+        }
         return createTextResult(text, {
             status: 'completed',
             action: 'read',
@@ -1598,7 +2055,7 @@ function formatExecContent(details = {}) {
         if (previewTruncated) {
             lines.push(
                 'fullOutput=stored_for_agent_lab',
-                'modelHint=Visible output is incomplete. Rerun a narrower command, filter/search in the command itself, or write the needed result to a normal file and read that file.'
+                'modelHint=Visible output is incomplete. Use tool_search query "exec output outputId search tail read" to load output_search/output_tail/output_read, then inspect only the needed slice. Do not rerun the command just to recover truncated output.'
             );
         } else {
             lines.push('modelHint=Visible stdout/stderr below is complete for this command.');

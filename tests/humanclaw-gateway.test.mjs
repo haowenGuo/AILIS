@@ -8,6 +8,7 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const { HumanClawGateway } = require('../electron/humanclaw-gateway.cjs');
+const ExcelJS = require('exceljs');
 
 async function jsonFetch(url, options = {}) {
     const response = await fetch(url, {
@@ -32,6 +33,54 @@ async function withHttpServer(handler) {
             server.close((error) => error ? reject(error) : resolve());
         })
     };
+}
+
+function buildSimplePdfWithText(text) {
+    const escaped = String(text).replace(/[()\\]/g, '\\$&');
+    const stream = `BT /F1 12 Tf 72 720 Td (${escaped}) Tj ET`;
+    const objects = [
+        '1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n',
+        '2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n',
+        '3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>\nendobj\n',
+        '4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n',
+        `5 0 obj\n<< /Length ${Buffer.byteLength(stream, 'latin1')} >>\nstream\n${stream}\nendstream\nendobj\n`
+    ];
+    let body = '%PDF-1.4\n';
+    const offsets = [0];
+    for (const object of objects) {
+        offsets.push(Buffer.byteLength(body, 'latin1'));
+        body += object;
+    }
+    const xrefOffset = Buffer.byteLength(body, 'latin1');
+    body += `xref\n0 ${objects.length + 1}\n`;
+    body += '0000000000 65535 f \n';
+    for (let index = 1; index < offsets.length; index += 1) {
+        body += `${String(offsets[index]).padStart(10, '0')} 00000 n \n`;
+    }
+    body += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`;
+    return Buffer.from(body, 'latin1');
+}
+
+function buildBlankPdfWithoutSelectableText() {
+    const objects = [
+        '1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n',
+        '2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n',
+        '3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>\nendobj\n'
+    ];
+    let body = '%PDF-1.4\n';
+    const offsets = [0];
+    for (const object of objects) {
+        offsets.push(Buffer.byteLength(body, 'latin1'));
+        body += object;
+    }
+    const xrefOffset = Buffer.byteLength(body, 'latin1');
+    body += `xref\n0 ${objects.length + 1}\n`;
+    body += '0000000000 65535 f \n';
+    for (let index = 1; index < offsets.length; index += 1) {
+        body += `${String(offsets[index]).padStart(10, '0')} 00000 n \n`;
+    }
+    body += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`;
+    return Buffer.from(body, 'latin1');
 }
 
 test('HumanClaw Gateway exposes health, tools, guarded tool calls, and audit', async () => {
@@ -72,6 +121,9 @@ test('HumanClaw Gateway exposes health, tools, guarded tool calls, and audit', a
         });
         assert.equal(searchTools.body.ok, true, searchTools.body.error);
         assert.match(JSON.stringify(searchTools.body.result), /computer/);
+        assert.equal(Object.hasOwn(searchTools.body.result.details, 'discovery'), false);
+        assert.equal(Object.hasOwn(searchTools.body.result.details, 'searched_web'), false);
+        assert.equal(Object.hasOwn(searchTools.body.result.details, 'note'), false);
 
         const write = await jsonFetch(`${baseUrl}/tools/call`, {
             method: 'POST',
@@ -171,7 +223,8 @@ test('HumanClaw Gateway exposes health, tools, guarded tool calls, and audit', a
         const logStat = await fs.stat(outputStore.path);
         assert.equal(logStat.size, outputStore.bytes);
         assert.match(longExec.body.result.content[0].text, /fullOutput=stored_for_agent_lab/);
-        assert.doesNotMatch(longExec.body.result.content[0].text, /output_read\/output_tail\/output_search/);
+        assert.match(longExec.body.result.content[0].text, /tool_search query "exec output outputId search tail read"/);
+        assert.match(longExec.body.result.content[0].text, /output_search\/output_tail\/output_read/);
 
         const outputSearch = await jsonFetch(`${baseUrl}/tools/call`, {
             method: 'POST',
@@ -217,8 +270,8 @@ test('HumanClaw Gateway exposes health, tools, guarded tool calls, and audit', a
         });
         assert.equal(wrongOutputReadSurface.body.ok, false);
         assert.equal(wrongOutputReadSurface.body.status, 'wrong_tool_surface');
-        assert.equal(wrongOutputReadSurface.body.result.details.defaultSurface, 'legacy_stable');
-        assert.match(wrongOutputReadSurface.body.result.details.recovery, /narrower command/);
+        assert.equal(wrongOutputReadSurface.body.result.details.defaultSurface, 'deferred_output_store_tools');
+        assert.match(wrongOutputReadSurface.body.result.details.recovery, /tool_search/);
 
         const audit = await jsonFetch(`${baseUrl}/audit?limit=10`);
         assert.equal(audit.body.ok, true);
@@ -403,6 +456,8 @@ test('HumanClaw Gateway tool_search ranks specific MCP artifact tools before web
         });
 
         assert.equal(result.details.tools.length, 1);
+        assert.equal(Object.hasOwn(result.details, 'discovery'), false);
+        assert.equal(Object.hasOwn(result.details, 'searched_content'), false);
         assert.equal(result.details.tools[0].tool, 'read_presentation');
         assert.match(result.details.routing_advice, /read_presentation/);
 
@@ -416,6 +471,269 @@ test('HumanClaw Gateway tool_search ranks specific MCP artifact tools before web
         assert.equal(docxResult.details.tools[0].tool, 'read_document');
         assert.notEqual(docxResult.details.tools[0].id, 'artifact_verifier');
         assert.match(docxResult.details.routing_advice, /read_document/);
+
+        const xlsxResult = await gateway.executeGatewayToolSearch({
+            query: 'attached xlsx spreadsheet cell colors fill formulas merged map',
+            includeExternal: false,
+            includeMcp: false,
+            limit: 3
+        });
+
+        assert.ok(xlsxResult.details.tools.some((tool) => tool.id === 'read_xlsx_workbook'));
+        assert.equal(xlsxResult.details.tools[0].id, 'read_xlsx_workbook');
+        assert.match(xlsxResult.details.routing_advice, /read_xlsx_workbook/);
+
+        const artifactQueryResult = await gateway.executeGatewayToolSearch({
+            query: 'artifact_query artifactId fullJsonPath payload range grid search',
+            includeExternal: false,
+            includeMcp: false,
+            limit: 3
+        });
+
+        assert.ok(artifactQueryResult.details.tools.some((tool) => tool.id === 'artifact_query'));
+        assert.equal(artifactQueryResult.details.tools[0].id, 'artifact_query');
+        assert.match(artifactQueryResult.details.routing_advice, /artifact_query/);
+    } finally {
+        await gateway.stop();
+        await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
+});
+
+test('HumanClaw Gateway exposes context artifact query and guards raw payload reads', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'humanclaw-context-artifact-test-'));
+    const gateway = new HumanClawGateway({
+        port: 0,
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit')
+    });
+    const workbookPath = path.join(workspaceRoot, 'map.xlsx');
+
+    try {
+        const workbook = new ExcelJS.Workbook();
+        const sheet = workbook.addWorksheet('Map');
+        sheet.getCell('A1').value = 'START';
+        sheet.getCell('B1').fill = {
+            type: 'pattern',
+            pattern: 'solid',
+            fgColor: { argb: 'FF0099FF' }
+        };
+        sheet.getCell('C2').value = 'END';
+        await workbook.xlsx.writeFile(workbookPath);
+
+        const status = await gateway.start();
+        const baseUrl = status.url;
+
+        const xlsx = await jsonFetch(`${baseUrl}/tools/call`, {
+            method: 'POST',
+            body: JSON.stringify({
+                tool: 'read_xlsx_workbook',
+                args: {
+                    path: workbookPath,
+                    sheet: 'Map',
+                    maxRows: 4,
+                    maxCols: 4,
+                    includeStyles: true
+                },
+                context: { workspace: workspaceRoot, runId: 'artifact-run-1', sessionId: 'artifact-session-1' }
+            })
+        });
+        assert.equal(xlsx.body.ok, true, xlsx.body.error);
+        const artifactId = xlsx.body.result.details.artifactId;
+        assert.ok(artifactId);
+        assert.doesNotMatch(xlsx.body.result.content[0].text, /fullJsonPath/);
+        assert.ok(gateway.eventLog.some((event) =>
+            event.type === 'context_artifact.created' &&
+            event.payload?.artifactId === artifactId &&
+            event.payload?.runId === 'artifact-run-1'
+        ));
+
+        const query = await jsonFetch(`${baseUrl}/tools/call`, {
+            method: 'POST',
+            body: JSON.stringify({
+                tool: 'artifact_query',
+                args: {
+                    action: 'range',
+                    artifactId,
+                    sheet: 'Map',
+                    range: 'A1:C2'
+                },
+                context: { workspace: workspaceRoot }
+            })
+        });
+        assert.equal(query.body.ok, true, query.body.error);
+        assert.match(query.body.result.content[0].text, /START/);
+        assert.match(query.body.result.content[0].text, /0099FF/);
+
+        const compute = await jsonFetch(`${baseUrl}/tools/call`, {
+            method: 'POST',
+            body: JSON.stringify({
+                tool: 'artifact_compute',
+                args: {
+                    action: 'find_path',
+                    artifactId,
+                    sheet: 'Map',
+                    startValue: 'START',
+                    endValue: 'END',
+                    blockedFills: ['0099FF']
+                },
+                context: { workspace: workspaceRoot }
+            })
+        });
+        assert.equal(compute.body.ok, true, compute.body.error);
+        assert.match(compute.body.result.content[0].text, /ARTIFACT_COMPUTE_FIND_PATH/);
+        assert.equal(compute.body.result.details.result.pathFound, true);
+
+        const record = await gateway.runtime.contextArtifactStore.getRecord(artifactId);
+        assert.ok(record.payloadPath);
+        const rawRead = await jsonFetch(`${baseUrl}/tools/call`, {
+            method: 'POST',
+            body: JSON.stringify({
+                tool: 'read',
+                args: { path: record.payloadPath },
+                context: { workspace: workspaceRoot }
+            })
+        });
+        assert.equal(rawRead.body.ok, false);
+        assert.equal(rawRead.body.status, 'blocked');
+        assert.equal(rawRead.body.result.details.code, 'context_artifact_raw_read_blocked');
+        assert.equal(rawRead.body.result.details.suggestedNext.tool, 'artifact_query');
+    } finally {
+        await gateway.stop();
+        await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
+});
+
+test('HumanClaw Gateway turns large text and parsed documents into queryable artifacts', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'humanclaw-text-artifact-test-'));
+    const gateway = new HumanClawGateway({
+        port: 0,
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit')
+    });
+
+    try {
+        const largeLog = Array.from({ length: 420 }, (_, index) =>
+            `LOG_LINE_${index + 1}: ${index === 317 ? 'NEEDLE_BIG_TEXT_ARTIFACT' : 'ordinary line'} ${'x'.repeat(80)}`
+        ).join('\n');
+        await fs.writeFile(path.join(workspaceRoot, 'large.log'), largeLog, 'utf8');
+        await fs.writeFile(
+            path.join(workspaceRoot, 'paper.pdf'),
+            buildSimplePdfWithText('PDF artifact evidence includes AWARD-42 and document search should find it.')
+        );
+        await fs.writeFile(
+            path.join(workspaceRoot, 'scan.pdf'),
+            buildBlankPdfWithoutSelectableText()
+        );
+
+        const status = await gateway.start();
+        const baseUrl = status.url;
+
+        const readLog = await jsonFetch(`${baseUrl}/tools/call`, {
+            method: 'POST',
+            body: JSON.stringify({
+                tool: 'computer',
+                args: { action: 'read', path: 'large.log', maxBytes: 1024 },
+                context: { workspace: workspaceRoot }
+            })
+        });
+        assert.equal(readLog.body.ok, true, readLog.body.error);
+        assert.match(readLog.body.result.content[0].text, /TEXT_ARTIFACT_CREATED/);
+        const textArtifactId = readLog.body.result.details.artifactId;
+        assert.ok(textArtifactId);
+        assert.doesNotMatch(readLog.body.result.content[0].text, /LOG_LINE_420/);
+
+        const textSearch = await jsonFetch(`${baseUrl}/tools/call`, {
+            method: 'POST',
+            body: JSON.stringify({
+                tool: 'artifact_query',
+                args: {
+                    artifactId: textArtifactId,
+                    action: 'text_search',
+                    query: 'NEEDLE_BIG_TEXT_ARTIFACT',
+                    contextLines: 0
+                },
+                context: { workspace: workspaceRoot }
+            })
+        });
+        assert.equal(textSearch.body.ok, true, textSearch.body.error);
+        assert.equal(textSearch.body.result.details.matchCount, 1);
+
+        const textTail = await jsonFetch(`${baseUrl}/tools/call`, {
+            method: 'POST',
+            body: JSON.stringify({
+                tool: 'artifact_query',
+                args: {
+                    artifactId: textArtifactId,
+                    action: 'text_tail',
+                    lines: 2
+                },
+                context: { workspace: workspaceRoot }
+            })
+        });
+        assert.equal(textTail.body.ok, true, textTail.body.error);
+        assert.match(textTail.body.result.content[0].text, /LOG_LINE_420/);
+
+        const readPdf = await jsonFetch(`${baseUrl}/tools/call`, {
+            method: 'POST',
+            body: JSON.stringify({
+                tool: 'computer',
+                args: { action: 'read', path: 'paper.pdf' },
+                context: { workspace: workspaceRoot }
+            })
+        });
+        assert.equal(readPdf.body.ok, true, readPdf.body.error);
+        assert.match(readPdf.body.result.content[0].text, /DOCUMENT_ARTIFACT_CREATED/);
+        const documentArtifactId = readPdf.body.result.details.artifactId;
+        assert.ok(documentArtifactId);
+
+        const documentSearch = await jsonFetch(`${baseUrl}/tools/call`, {
+            method: 'POST',
+            body: JSON.stringify({
+                tool: 'artifact_query',
+                args: {
+                    artifactId: documentArtifactId,
+                    action: 'document_search',
+                    query: 'AWARD-42',
+                    contextLines: 0
+                },
+                context: { workspace: workspaceRoot }
+            })
+        });
+        assert.equal(documentSearch.body.ok, true, documentSearch.body.error);
+        assert.equal(documentSearch.body.result.details.matchCount, 1);
+
+        const documentPage = await jsonFetch(`${baseUrl}/tools/call`, {
+            method: 'POST',
+            body: JSON.stringify({
+                tool: 'artifact_query',
+                args: {
+                    artifactId: documentArtifactId,
+                    action: 'document_page',
+                    page: 1
+                },
+                context: { workspace: workspaceRoot }
+            })
+        });
+        assert.equal(documentPage.body.ok, true, documentPage.body.error);
+        assert.match(documentPage.body.result.content[0].text, /AWARD-42/);
+
+        const readScannedPdf = await jsonFetch(`${baseUrl}/tools/call`, {
+            method: 'POST',
+            body: JSON.stringify({
+                tool: 'computer',
+                args: { action: 'read', path: 'scan.pdf' },
+                context: { workspace: workspaceRoot }
+            })
+        });
+        assert.equal(readScannedPdf.body.ok, false);
+        assert.equal(readScannedPdf.body.status, 'scanned_pdf_needs_ocr');
+        assert.equal(readScannedPdf.body.result.details.documentParseCode, 'scanned_pdf_needs_ocr');
+        assert.equal(readScannedPdf.body.result.details.observationContract.needs_ocr, true);
+        assert.equal(readScannedPdf.body.result.details.suggestedNext.tool, 'tool_search');
+        assert.doesNotMatch(readScannedPdf.body.result.content[0].text, /DOCUMENT_ARTIFACT_CREATED/);
+        assert.equal(readScannedPdf.body.result.details.artifactId, undefined);
     } finally {
         await gateway.stop();
         await fs.rm(workspaceRoot, { recursive: true, force: true });
