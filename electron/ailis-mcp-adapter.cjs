@@ -31,6 +31,93 @@ function appendDescription(target, text) {
     target.description = current ? `${current}${separator}${text}` : text;
 }
 
+function schemaPropertyNames(schema = {}) {
+    const properties = schema && typeof schema === 'object' && !Array.isArray(schema)
+        ? schema.properties || {}
+        : {};
+    return Object.keys(properties).filter(Boolean);
+}
+
+function ensureRequired(schema = {}, fields = []) {
+    if (!schema || typeof schema !== 'object' || Array.isArray(schema)) {
+        return;
+    }
+    const current = Array.isArray(schema.required) ? schema.required.filter((entry) => typeof entry === 'string') : [];
+    const next = new Set(current);
+    for (const field of fields) {
+        if (typeof field === 'string' && field) {
+            next.add(field);
+        }
+    }
+    schema.required = [...next];
+}
+
+function ensureStringField(schema = {}, field = '') {
+    if (!schema || typeof schema !== 'object' || !field) {
+        return;
+    }
+    if (!schema.properties || typeof schema.properties !== 'object' || Array.isArray(schema.properties)) {
+        schema.properties = {};
+    }
+    const current = schema.properties[field] && typeof schema.properties[field] === 'object'
+        ? schema.properties[field]
+        : {};
+    schema.properties[field] = {
+        type: 'string',
+        minLength: 1,
+        ...current
+    };
+    if (schema.properties[field].type === 'string' && schema.properties[field].minLength === undefined) {
+        schema.properties[field].minLength = 1;
+    }
+}
+
+function closeObjectSchemas(schema = {}) {
+    if (!schema || typeof schema !== 'object' || Array.isArray(schema)) {
+        return schema;
+    }
+    const schemaType = normalizeString(schema.type);
+    const hasObjectShape = schemaType === 'object' || Boolean(schema.properties);
+    if (hasObjectShape) {
+        schema.type = 'object';
+        if (!schema.properties || typeof schema.properties !== 'object' || Array.isArray(schema.properties)) {
+            schema.properties = {};
+        }
+        if (typeof schema.additionalProperties !== 'boolean') {
+            schema.additionalProperties = Object.keys(schema.properties).length ? false : true;
+        }
+        ensureRequired(schema, []);
+        for (const child of Object.values(schema.properties)) {
+            closeObjectSchemas(child);
+        }
+    }
+    if (schema.items) {
+        closeObjectSchemas(schema.items);
+    }
+    if (Array.isArray(schema.anyOf)) {
+        schema.anyOf.forEach(closeObjectSchemas);
+    }
+    return schema;
+}
+
+function applyAilisKnownRequiredSchema({ tool = '', inputSchema = {} } = {}) {
+    const normalizedTool = normalizeString(tool).toLowerCase();
+    if (normalizedTool === 'web_search') {
+        ensureStringField(inputSchema, 'query');
+        ensureRequired(inputSchema, ['query']);
+        appendDescription(inputSchema.properties.query, 'Required. Do not call web_search with empty arguments.');
+    } else if (normalizedTool === 'web_fetch') {
+        ensureStringField(inputSchema, 'url');
+        ensureRequired(inputSchema, ['url']);
+        appendDescription(inputSchema.properties.url, 'Required HTTP(S) URL. Do not call web_fetch with empty arguments.');
+    } else if (normalizedTool === 'describe_image') {
+        ensureStringField(inputSchema, 'path');
+        ensureRequired(inputSchema, ['path']);
+        appendDescription(inputSchema.properties.path, 'Required local image path. Do not call describe_image with empty arguments.');
+    }
+    return inputSchema;
+}
+
 function buildAilisMcpToolDescriptionAddendum({ tool = '', inputSchema = {} } = {}) {
     const normalizedTool = normalizeString(tool).toLowerCase();
     const properties = inputSchema && typeof inputSchema === 'object' ? inputSchema.properties || {} : {};
@@ -62,7 +149,10 @@ function enhanceAilisMcpToolSchema({ tool = '', inputSchema = {} } = {}) {
         appendDescription(itemProperties.newText, 'Replacement text to insert in place of oldText.');
         appendDescription(properties.dryRun, 'Set true only to preview the diff without applying changes.');
     }
-    return compactToolSchema(schema);
+    return compactToolSchema(closeObjectSchemas(applyAilisKnownRequiredSchema({
+        tool: normalizedTool,
+        inputSchema: schema
+    })));
 }
 
 function buildAilisMcpToolCallArgs({ tool = '', schemaProperties = [], inputSchema = {} } = {}) {
@@ -165,7 +255,15 @@ function createAilisDirectMcpToolSpec({ id, server, tool, name, title, descripti
     const addendum = Array.isArray(descriptionAddendum) && descriptionAddendum.length
         ? [...descriptionAddendum]
         : buildAilisMcpToolDescriptionAddendum({ tool: normalizedTool, inputSchema: enhancedSchema });
-    const properties = Array.isArray(schemaProperties) ? [...schemaProperties] : [];
+    const properties = Array.isArray(schemaProperties) && schemaProperties.length
+        ? [...schemaProperties]
+        : schemaPropertyNames(enhancedSchema);
+    const modelSpec = {
+        type: 'function',
+        name: modelId,
+        description: truncateMiddleText([normalizeString(description), ...addendum].filter(Boolean).join(' '), 1200),
+        parameters: enhancedSchema
+    };
     return {
         id: modelId,
         legacy_id: legacyId,
@@ -177,9 +275,10 @@ function createAilisDirectMcpToolSpec({ id, server, tool, name, title, descripti
         title: normalizeString(title),
         name: `${namespace}${callableName}`,
         display_name: normalizeString(name || tool) || `${normalizedServer}.${normalizedTool}`,
-        description: truncateMiddleText([normalizeString(description), ...addendum].filter(Boolean).join(' '), 1200),
+        description: modelSpec.description,
         input_schema: enhancedSchema,
         schema_properties: properties,
+        spec: modelSpec,
         call_pattern: {
             tool: modelId,
             args: callPattern?.args || buildAilisMcpToolCallArgs({

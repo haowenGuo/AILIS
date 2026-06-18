@@ -1,8 +1,16 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
 import { createRequire } from 'node:module';
+import os from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
 
 const require = createRequire(import.meta.url);
+const { AILISGateway } = require('../electron/ailis-gateway.cjs');
+const {
+    buildAgentDirectToolSpecs,
+    validateNativeDirectToolCall
+} = require('../electron/ailis-agent-runner.cjs');
 const {
     AILIS_RUNTIME_TOOL_DEFINITIONS,
     AILIS_TOOL_EXPOSURE,
@@ -29,8 +37,8 @@ const {
     rankToolSearchResults
 } = require('../electron/ailis-tool-routing.cjs');
 const {
-    HumanClawMcpManager
-} = require('../electron/humanclaw-mcp-session.cjs');
+    AILISMcpManager
+} = require('../electron/ailis-mcp-session.cjs');
 
 test('AILIS tool specs keep Codex-like shape without Codex naming', () => {
     assert.ok(AILIS_RUNTIME_TOOL_DEFINITIONS.some((tool) => tool.id === 'tool_search'));
@@ -43,19 +51,21 @@ test('AILIS tool specs keep Codex-like shape without Codex naming', () => {
     assert.equal(AILIS_RUNTIME_TOOL_DEFINITIONS.find((tool) => tool.id === 'output_search').exposure, AILIS_TOOL_EXPOSURE.DEFERRED);
 
     const toolSearch = AILIS_RUNTIME_TOOL_DEFINITIONS.find((tool) => tool.id === 'tool_search');
-    assert.equal(toolSearch.route, 'humanclaw-runtime');
+    assert.equal(toolSearch.route, 'ailis-runtime');
     assert.equal(toolSearch.exposure, AILIS_TOOL_EXPOSURE.DIRECT);
     assert.match(toolSearch.description, /deferred .*tool metadata/i);
 
     const artifactCompute = AILIS_RUNTIME_TOOL_DEFINITIONS.find((tool) => tool.id === 'artifact_compute');
-    assert.equal(artifactCompute.route, 'humanclaw-runtime');
-    assert.equal(artifactCompute.exposure, AILIS_TOOL_EXPOSURE.DIRECT);
+    assert.equal(artifactCompute.route, 'ailis-runtime');
+    assert.equal(artifactCompute.exposure, AILIS_TOOL_EXPOSURE.DEFERRED);
 
     const spec = createAilisFunctionToolSpec(toolSearch);
     assert.equal(spec.type, 'function');
     assert.equal(spec.name, 'tool_search');
     assert.match(spec.description, /Tool discovery/i);
     assert.equal(spec.parameters.type, 'object');
+    assert.deepEqual(spec.parameters.required, ['query']);
+    assert.equal(spec.parameters.additionalProperties, false);
     assert.ok(spec.output_schema.properties.content);
     assert.equal(Object.prototype.hasOwnProperty.call(spec, 'metadata'), false);
 
@@ -162,6 +172,55 @@ test('AILIS MCP adapter parses direct MCP ids and creates stable specs', () => {
         newText: '<replacement text>'
     });
 
+    const webSearchSpec = createAilisDirectMcpToolSpec({
+        server: 'ailis_research',
+        tool: 'web_search',
+        description: 'Fallback broad public web search.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                query: { type: 'string' },
+                maxResults: { type: 'number' }
+            }
+        }
+    });
+    assert.deepEqual(webSearchSpec.input_schema.required, ['query']);
+    assert.equal(webSearchSpec.input_schema.properties.query.minLength, 1);
+    assert.equal(webSearchSpec.input_schema.additionalProperties, false);
+    assert.deepEqual(webSearchSpec.call_pattern.args, {
+        query: '<query>',
+        maxResults: '<maxResults>'
+    });
+    assert.equal(webSearchSpec.spec.name, 'mcp__ailis_research__web_search');
+    assert.deepEqual(webSearchSpec.spec.parameters.required, ['query']);
+
+    const webFetchSpec = createAilisDirectMcpToolSpec({
+        server: 'ailis_research',
+        tool: 'web_fetch',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                url: { type: 'string' }
+            }
+        }
+    });
+    assert.deepEqual(webFetchSpec.input_schema.required, ['url']);
+    assert.equal(webFetchSpec.input_schema.properties.url.minLength, 1);
+
+    const describeImageSpec = createAilisDirectMcpToolSpec({
+        server: 'ailis_research',
+        tool: 'describe_image',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                path: { type: 'string' },
+                question: { type: 'string' }
+            }
+        }
+    });
+    assert.deepEqual(describeImageSpec.input_schema.required, ['path']);
+    assert.equal(describeImageSpec.input_schema.properties.path.minLength, 1);
+
     const { toolArgs, meta } = normalizeAilisMcpCallArgs({
         text: 'hello',
         _meta: { reason: 'test' }
@@ -232,8 +291,8 @@ test('AILIS tool routing can rank output store tools when an experimental surfac
     assert.ok(ranked.some((tool) => tool.id === 'output_search'));
 });
 
-test('HumanClaw MCP manager search uses tool routing before returning specs', async () => {
-    const manager = new HumanClawMcpManager({});
+test('AILIS MCP manager search uses tool routing before returning specs', async () => {
+    const manager = new AILISMcpManager({});
     manager.listToolSpecs = async () => [
         mcpTool('web_search', 'Fallback broad public web search.'),
         mcpTool('web_fetch', 'Fetch a known HTML page URL.'),
@@ -259,6 +318,149 @@ test('HumanClaw MCP manager search uses tool routing before returning specs', as
         limit: 1
     });
     assert.equal(knownUrlSpecs[0].tool, 'youtube_transcript');
+});
+
+test('AILIS Gateway exposes a small Codex-style core surface by default', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-tool-surface-'));
+    const gateway = new AILISGateway({
+        port: 0,
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit')
+    });
+
+    const directNames = gateway.gatewayToolRuntimeRegistry.modelVisibleSpecs().map((tool) => tool.name);
+    for (const expected of ['tool_search', 'update_plan', 'computer', 'read', 'write', 'exec', 'apply_patch', 'request_permissions']) {
+        assert.ok(directNames.includes(expected), `${expected} should be a core direct tool`);
+    }
+    for (const deferred of ['read_xlsx_workbook', 'artifact_query', 'artifact_compute', 'github_pages', 'mcp_bridge', 'subagents']) {
+        assert.equal(directNames.includes(deferred), false, `${deferred} should be loaded through tool_search`);
+    }
+
+    const initialSpecs = buildAgentDirectToolSpecs(gateway, {
+        requestContext: { nativeDirectTools: true }
+    });
+    assert.equal(initialSpecs.some((tool) => tool.name === 'tool_search'), true);
+    assert.equal(initialSpecs.some((tool) => tool.name === 'read_xlsx_workbook'), false);
+
+    const searchResult = await gateway.executeGatewayToolSearch({
+        query: 'xlsx spreadsheet workbook',
+        includeMcp: false,
+        includeExternal: false,
+        limit: 5
+    });
+    assert.ok(searchResult.structuredContent.tools.some((tool) => tool.id === 'read_xlsx_workbook'));
+
+    const nextSpecs = buildAgentDirectToolSpecs(gateway, {
+        requestContext: { nativeDirectTools: true },
+        stepResults: [{
+            tool: 'tool_search',
+            response: {
+                ok: true,
+                result: searchResult
+            }
+        }]
+    });
+    assert.equal(nextSpecs.some((tool) => tool.name === 'read_xlsx_workbook'), true);
+});
+
+test('AILIS tool_search returns strict direct MCP specs and native preflight blocks empty args', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-mcp-search-'));
+    const gateway = new AILISGateway({
+        port: 0,
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit')
+    });
+
+    gateway.runtime.mcpManager.searchToolSpecs = async () => [
+        createAilisDirectMcpToolSpec({
+            server: 'ailis_research',
+            tool: 'web_search',
+            description: 'Fallback broad public web search.',
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    query: { type: 'string' },
+                    maxResults: { type: 'number' }
+                }
+            }
+        }),
+        createAilisDirectMcpToolSpec({
+            server: 'ailis_research',
+            tool: 'web_fetch',
+            description: 'Fetch known web URL.',
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    url: { type: 'string' }
+                }
+            }
+        }),
+        createAilisDirectMcpToolSpec({
+            server: 'ailis_research',
+            tool: 'describe_image',
+            description: 'Describe a local image.',
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    path: { type: 'string' }
+                }
+            }
+        })
+    ];
+
+    const searchResult = await gateway.executeGatewayToolSearch({
+        query: 'web search fetch describe image',
+        includeExternal: false,
+        limit: 10
+    });
+    const webSearch = searchResult.structuredContent.tools.find((tool) => tool.id === 'mcp__ailis_research__web_search');
+    const webFetch = searchResult.structuredContent.tools.find((tool) => tool.id === 'mcp__ailis_research__web_fetch');
+    const describeImage = searchResult.structuredContent.tools.find((tool) => tool.id === 'mcp__ailis_research__describe_image');
+    assert.deepEqual(webSearch.spec.parameters.required, ['query']);
+    assert.equal(webSearch.spec.parameters.additionalProperties, false);
+    assert.deepEqual(webFetch.spec.parameters.required, ['url']);
+    assert.deepEqual(describeImage.spec.parameters.required, ['path']);
+
+    const nextSpecs = buildAgentDirectToolSpecs(gateway, {
+        requestContext: { nativeDirectTools: true },
+        stepResults: [{
+            tool: 'tool_search',
+            response: {
+                ok: true,
+                result: searchResult
+            }
+        }]
+    });
+    assert.ok(nextSpecs.some((tool) => tool.name === 'mcp__ailis_research__web_search'));
+
+    const invalidWebSearch = validateNativeDirectToolCall({
+        name: 'mcp__ailis_research__web_search',
+        arguments: {}
+    }, nextSpecs);
+    assert.equal(invalidWebSearch.ok, false);
+    assert.match(invalidWebSearch.errors.join('\n'), /query is required|empty arguments/);
+
+    const invalidWebFetch = validateNativeDirectToolCall({
+        name: 'mcp__ailis_research__web_fetch',
+        arguments: {}
+    }, nextSpecs);
+    assert.equal(invalidWebFetch.ok, false);
+    assert.match(invalidWebFetch.errors.join('\n'), /url is required|empty arguments/);
+
+    const invalidDescribeImage = validateNativeDirectToolCall({
+        name: 'mcp__ailis_research__describe_image',
+        arguments: {}
+    }, nextSpecs);
+    assert.equal(invalidDescribeImage.ok, false);
+    assert.match(invalidDescribeImage.errors.join('\n'), /path is required|empty arguments/);
+
+    const valid = validateNativeDirectToolCall({
+        name: 'mcp__ailis_research__web_search',
+        arguments: { query: 'Kaggle AI defense competition strategy', maxResults: 5 }
+    }, nextSpecs);
+    assert.equal(valid.ok, true, valid.errors.join('; '));
 });
 
 test('AILIS runtime budget compacts large schemas and tool text for model context', () => {

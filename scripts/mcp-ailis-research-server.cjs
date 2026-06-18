@@ -28,7 +28,7 @@ function clampNumber(value, fallback, min, max) {
 
 function readDesktopLlmSettings() {
     const appData = process.env.APPDATA || path.join(process.env.USERPROFILE || '', 'AppData', 'Roaming');
-    const statePath = path.join(appData, 'humanclaw', 'desktop-state.json');
+    const statePath = path.join(appData, 'ailis', 'desktop-state.json');
     if (!fsSync.existsSync(statePath)) {
         return null;
     }
@@ -4156,7 +4156,7 @@ function renderDocumentMarkdown(document = {}) {
 
 async function writeMcpArtifact(kind = 'artifact', baseName = 'artifact', text = '') {
     const root = normalizeString(process.env.AILIS_MCP_ARTIFACT_DIR) ||
-        path.join(process.cwd(), '.humanclaw-state', 'mcp-artifacts', kind);
+        path.join(process.cwd(), '.ailis-state', 'mcp-artifacts', kind);
     await fs.mkdir(root, { recursive: true });
     const safeName = normalizeString(baseName, kind)
         .replace(/[^a-zA-Z0-9._-]+/g, '-')
@@ -4893,8 +4893,9 @@ const TOOLS = [
         description: 'Fallback broad public web search through AILIS managed search backends. Standard call: { "query": "specific search keywords", "maxResults": 5 }. Do not use as the first step for attached/local files, known URLs, PDFs/papers/reports, YouTube/videos, audio, images, spreadsheets, presentations, Word documents, code files, or GitHub repositories; use the dedicated MCP tool for those artifact types first. Use web_fetch for a known HTML/text URL, paper_metadata_lookup for exact paper/DOI metadata, pdf_extract_text for a known PDF URL, pdf_find_and_extract for a paper/report title when you need full text, and github_repo_read for GitHub README/tree/file evidence. General web queries default to Bing first; GitHub/code repository queries default to GitHub repository search first, then DuckDuckGo, then Bing. Returns titles, URLs, snippets, and structured backend attempts.',
         inputSchema: {
             type: 'object',
+            required: ['query'],
             properties: {
-                query: { type: 'string', description: 'Required search keywords. Prefer this field over q/search/text. Example: "Playwright wait for selector timeout official docs".' },
+                query: { type: 'string', minLength: 1, description: 'Required search keywords. Prefer this field over q/search/text. Example: "Playwright wait for selector timeout official docs". Do not call web_search with empty arguments.' },
                 q: { type: 'string', description: 'Compatibility alias for query. Prefer query.' },
                 search: { type: 'string', description: 'Compatibility alias for query. Prefer query.' },
                 text: { type: 'string', description: 'Compatibility alias for query. Prefer query.' },
@@ -4908,7 +4909,8 @@ const TOOLS = [
                     items: { type: 'string', enum: ['bing_html', 'duckduckgo_lite', 'duckduckgo_html', 'yahoo_html', 'github_repositories'] },
                     description: 'Optional ordered backend ids. Omit for automatic fallback.'
                 }
-            }
+            },
+            additionalProperties: false
         }
     },
     {
@@ -4939,11 +4941,12 @@ const TOOLS = [
             type: 'object',
             required: ['url'],
             properties: {
-                url: { type: 'string' },
+                url: { type: 'string', minLength: 1 },
                 maxChars: { type: 'number' },
                 query: { type: 'string' },
                 contains: { type: 'string' }
-            }
+            },
+            additionalProperties: false
         }
     },
     {
@@ -5129,8 +5132,9 @@ const TOOLS = [
         description: 'Describe or answer a question about a local image file using the configured vision-capable LLM. Use for attached PNG/JPG/WebP images.',
         inputSchema: {
             type: 'object',
+            required: ['path'],
             properties: {
-                path: { type: 'string' },
+                path: { type: 'string', minLength: 1 },
                 file: { type: 'string' },
                 filePath: { type: 'string' },
                 file_path: { type: 'string' },
@@ -5139,7 +5143,8 @@ const TOOLS = [
                 question: { type: 'string' },
                 maxChars: { type: 'number' },
                 timeoutMs: { type: 'number' }
-            }
+            },
+            additionalProperties: false
         }
     },
     {
