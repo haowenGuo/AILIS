@@ -20,7 +20,6 @@ const {
     extractGitHubRepositoryResults,
     extractYahooResults,
     githubRepoRead,
-    inferKaggleCompetitionSlugsFromQuery,
     inferPaperMetadataArgsFromScholarlyQuery,
     isVisionPayloadUnsupportedProviderError,
     normalizeSearchBackends,
@@ -769,30 +768,6 @@ test('web_search chooses GitHub backend first only for repository-oriented queri
 
     const generalBackends = normalizeSearchBackends({}, 'Playwright locator waitFor official docs').map((backend) => backend.id);
     assert.equal(generalBackends[0], 'bing_html');
-});
-
-test('web_search suggests inferred official Kaggle competition pages before generic results', () => {
-    const query = 'Kaggle "AI Agent Security" "Multi-Step Tool Attacks" competition strategy guide agent tool attack defense 2026';
-    const slugs = inferKaggleCompetitionSlugsFromQuery(query);
-
-    assert.equal(slugs[0], 'ai-agent-security-multi-step-tool-attacks');
-
-    const calls = buildSuggestedCallsFromSearchResults([
-        {
-            title: 'Kaggle : The World\'s AI Proving Ground',
-            url: 'https://www.kaggle.com/',
-            snippet: 'Discover what actually works in AI.'
-        },
-        {
-            title: 'Kaggle beginner guide',
-            url: 'https://example.com/kaggle-beginner',
-            snippet: 'Generic Kaggle competition tutorial.'
-        }
-    ], { query, limit: 3 });
-
-    assert.equal(calls[0].tool, 'web_fetch');
-    assert.equal(calls[0].args.url, 'https://www.kaggle.com/competitions/ai-agent-security-multi-step-tool-attacks');
-    assert.equal(calls[1].args.url, 'https://www.kaggle.com/competitions/ai-agent-security-multi-step-tool-attacks/overview');
 });
 
 test('github_repo_read reads README, tree, and file evidence through GitHub API shape', async () => {

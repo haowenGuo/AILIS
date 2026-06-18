@@ -600,70 +600,6 @@ function rankSearchResultsForFollowup(results = [], query = '') {
         .sort((a, b) => b.combinedScore - a.combinedScore || b.queryScore - a.queryScore || b.researchScore - a.researchScore);
 }
 
-const KAGGLE_COMPETITION_QUERY_STOPWORDS = new Set([
-    'kaggle', 'competition', 'competitions', 'contest', 'challenge', 'strategy',
-    'guide', 'walkthrough', 'writeup', 'overview', 'rules', 'dataset', 'datasets',
-    'data', 'evaluation', 'scoring', 'leaderboard', 'submission', 'submissions',
-    'latest', 'current', 'official', 'page'
-]);
-
-function slugifyKaggleCompetitionTitle(value = '') {
-    return normalizeString(value)
-        .toLowerCase()
-        .replace(/&/g, ' and ')
-        .replace(/[^a-z0-9]+/g, '-')
-        .replace(/^-+|-+$/g, '')
-        .replace(/-{2,}/g, '-');
-}
-
-function inferKaggleCompetitionSlugsFromQuery(query = '') {
-    const text = normalizeString(query);
-    if (!/\bkaggle\b/i.test(text) || !/\b(competition|competitions|contest|challenge)\b/i.test(text)) {
-        return [];
-    }
-    const quotedPhrases = extractRawQuotedSearchPhrases(text)
-        .filter((phrase) => !KAGGLE_COMPETITION_QUERY_STOPWORDS.has(phrase.toLowerCase()));
-    const candidates = [];
-    if (quotedPhrases.length) {
-        candidates.push(quotedPhrases.join(' '));
-    }
-    const cleaned = text
-        .replace(/\bsite:[^\s]+/gi, ' ')
-        .replace(/\bhttps?:\/\/\S+/gi, ' ')
-        .replace(/["'“”‘’()[\]{}]/g, ' ')
-        .split(/\s+/)
-        .filter((token) => {
-            const normalized = token.toLowerCase().replace(/[^a-z0-9-]/g, '');
-            return normalized &&
-                !/^(?:18|19|20)\d{2}$/.test(normalized) &&
-                !KAGGLE_COMPETITION_QUERY_STOPWORDS.has(normalized);
-        })
-        .join(' ');
-    if (cleaned) {
-        candidates.push(cleaned);
-    }
-    return Array.from(new Set(candidates.map(slugifyKaggleCompetitionTitle).filter((slug) => slug.length >= 8))).slice(0, 2);
-}
-
-function buildInferredSuggestedCallsFromSearchQuery(query = '', limit = 2) {
-    const slugs = inferKaggleCompetitionSlugsFromQuery(query);
-    const calls = [];
-    for (const slug of slugs) {
-        const baseUrl = `https://www.kaggle.com/competitions/${slug}`;
-        calls.push({
-            tool: 'web_fetch',
-            args: { url: baseUrl },
-            reason: 'Read inferred official Kaggle competition page from the query title.'
-        });
-        calls.push({
-            tool: 'web_fetch',
-            args: { url: `${baseUrl}/overview` },
-            reason: 'Read inferred official Kaggle competition overview page from the query title.'
-        });
-    }
-    return dedupeSuggestedNextCalls(calls, limit);
-}
-
 function buildSuggestedCallsFromSearchResults(results = [], { query = '', limit = 3 } = {}) {
     const ranked = rankSearchResultsForFollowup(results, query);
     const eligible = ranked.filter((candidate) => (
@@ -671,10 +607,9 @@ function buildSuggestedCallsFromSearchResults(results = [], { query = '', limit 
         candidate.queryScore >= 30 ||
         ((candidate.kind === 'doi' || candidate.kind === 'pdf' || candidate.kind === 'paper_abs') && candidate.queryMatchedTerms.length >= 1)
     ));
-    const inferredCalls = buildInferredSuggestedCallsFromSearchQuery(query, Math.min(limit, 2));
     const directCalls = buildSuggestedCallsFromRankedLinks(eligible, limit);
-    if (inferredCalls.length || directCalls.length) {
-        return dedupeSuggestedNextCalls([...inferredCalls, ...directCalls], limit);
+    if (directCalls.length) {
+        return directCalls;
     }
     return dedupeSuggestedNextCalls(
         eligible
@@ -5378,7 +5313,6 @@ module.exports = {
     extractGenericAnchorResults,
     extractGitHubRepositoryResults,
     extractYahooResults,
-    inferKaggleCompetitionSlugsFromQuery,
     inferPaperMetadataArgsFromScholarlyQuery,
     isVisionPayloadUnsupportedProviderError,
     fetchText,
