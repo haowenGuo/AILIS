@@ -164,3 +164,81 @@ test('Turn items classify web_search discovery output as needing web_fetch evide
     assert.match(items[0].recovery_hint, /mcp__ailis_research__web_fetch/);
     assert.ok(items[0].alternatives.includes('mcp__ailis_research__web_fetch'));
 });
+
+test('Turn items classify web_fetch JavaScript shells as unusable evidence', () => {
+    const items = buildCodexLikeTurnItems({
+        stepResults: [
+            {
+                id: 'step-js-shell',
+                title: 'Fetch Miyoushe guide',
+                tool: 'mcp__ailis_research__web_fetch',
+                args: { url: 'https://www.miyoushe.com/zzz/article/59714036' },
+                iteration: 2,
+                response: {
+                    ok: true,
+                    status: 'completed',
+                    result: {
+                        content: [{ type: 'text', text: 'Evidence gap: The fetched page is only a JavaScript loading shell.\n\nContent excerpt:\n米游社 Loading...' }],
+                        details: {
+                            status: 'completed',
+                            evidenceQuality: 'js_shell',
+                            isEvidence: false,
+                            observationContract: {
+                                complete: false,
+                                truncated: false,
+                                reasoning_ready: false,
+                                is_evidence: false,
+                                evidence_quality: 'js_shell'
+                            }
+                        }
+                    }
+                }
+            }
+        ]
+    });
+
+    assert.equal(items.length, 1);
+    assert.equal(items[0].evidence_gap, 'js_shell_no_content');
+    assert.match(items[0].recovery_hint, /Do not refetch/);
+    assert.ok(items[0].alternatives.includes('different web_fetch URL'));
+});
+
+test('Turn items do not add an evidence gap for sufficient web_fetch evidence', () => {
+    const items = buildCodexLikeTurnItems({
+        stepResults: [
+            {
+                id: 'step-ready-page',
+                title: 'Fetch BWiki guide',
+                tool: 'mcp__ailis_research__web_fetch',
+                args: { url: 'https://wiki.biligame.com/zzz/%E8%8E%B1%E7%89%B9' },
+                iteration: 4,
+                response: {
+                    ok: true,
+                    status: 'completed',
+                    result: {
+                        content: [{ type: 'text', text: 'Content excerpt:\n莱特 - 绝区零WIKI_BWIKI 技能加点 配队 驱动盘' }],
+                        details: {
+                            status: 'completed',
+                            evidenceQuality: 'sufficient_evidence',
+                            isEvidence: true,
+                            complete: true,
+                            truncated: false,
+                            reasoningReady: true,
+                            observationContract: {
+                                complete: true,
+                                truncated: false,
+                                reasoning_ready: true,
+                                is_evidence: true,
+                                evidence_quality: 'sufficient_evidence'
+                            }
+                        }
+                    }
+                }
+            }
+        ]
+    });
+
+    assert.equal(items.length, 1);
+    assert.equal(items[0].evidence_gap, null);
+    assert.equal(items[0].recovery_hint, null);
+});

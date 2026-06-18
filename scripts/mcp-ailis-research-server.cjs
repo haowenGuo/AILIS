@@ -695,6 +695,176 @@ function classifyAccessBarrierText(text = '') {
     return null;
 }
 
+function countCjkCharacters(text = '') {
+    return (normalizeString(text).match(/[\u3400-\u9fff]/g) || []).length;
+}
+
+function countUtf8MojibakeMarkers(text = '') {
+    const sample = normalizeString(text).slice(0, 6000);
+    return (
+        (sample.match(/(?:Ã.|Â.|â[\u0080-\u00bf]|[åçéèäæ][\u0080-\u00bf])/g) || []).length +
+        (sample.match(/[�]/g) || []).length
+    );
+}
+
+function looksLikeUtf8Mojibake(text = '') {
+    const sample = normalizeString(text).slice(0, 6000);
+    if (!sample) {
+        return false;
+    }
+    const mojibakeMarkers = countUtf8MojibakeMarkers(sample);
+    const cjkCount = countCjkCharacters(sample);
+    return mojibakeMarkers >= 8 && mojibakeMarkers > Math.max(6, cjkCount * 2);
+}
+
+function repairUtf8MojibakeText(text = '') {
+    const original = normalizeString(text);
+    if (!looksLikeUtf8Mojibake(original)) {
+        return { text: original, repaired: false, suspected: false };
+    }
+    let best = original;
+    let repaired = false;
+    for (let pass = 0; pass < 3 && looksLikeUtf8Mojibake(best); pass += 1) {
+        const next = Buffer.from(best, 'latin1').toString('utf8');
+        if (!next || next === best) {
+            break;
+        }
+        const bestCjk = countCjkCharacters(best);
+        const nextCjk = countCjkCharacters(next);
+        const bestMarkers = countUtf8MojibakeMarkers(best);
+        const nextMarkers = countUtf8MojibakeMarkers(next);
+        if (nextCjk > bestCjk || nextMarkers < bestMarkers) {
+            best = next;
+            repaired = true;
+            continue;
+        }
+        break;
+    }
+    if (repaired && !looksLikeUtf8Mojibake(best)) {
+        return { text: best, repaired: true, suspected: false };
+    }
+    return { text: best, repaired, suspected: looksLikeUtf8Mojibake(best) };
+}
+
+function looksLikeJavaScriptShellText(text = '', url = '') {
+    const compact = normalizeString(text).replace(/\s+/g, ' ');
+    if (!compact) {
+        return true;
+    }
+    if (/miyoushe\.com/i.test(url) && compact.length <= 240 && /\bloading\b/i.test(compact)) {
+        return true;
+    }
+    return compact.length <= 240 &&
+        /(loading\.{0,3}|正在加载|加载中|please enable javascript|enable javascript|javascript is disabled|app-root|__next)/i.test(compact);
+}
+
+function extractEvidenceTerms(query = '') {
+    const text = normalizeString(query)
+        .replace(/\bsite:[^\s]+/gi, ' ')
+        .replace(/\bhttps?:\/\/\S+/gi, ' ');
+    const seen = new Set();
+    const terms = [];
+    for (const match of text.matchAll(/[\u3400-\u9fff]{2,}|[a-z0-9][a-z0-9_-]{2,}/gi)) {
+        const term = normalizeString(match[0]).toLowerCase();
+        if (!term || SEARCH_QUERY_STOPWORDS.has(term) || seen.has(term)) {
+            continue;
+        }
+        seen.add(term);
+        terms.push(term);
+        if (terms.length >= 10) {
+            break;
+        }
+    }
+    return terms;
+}
+
+function countEvidenceTermMatches(text = '', query = '') {
+    const haystack = normalizeString(text).toLowerCase();
+    if (!haystack) {
+        return 0;
+    }
+    return extractEvidenceTerms(query)
+        .filter((term) => haystack.includes(term.toLowerCase()))
+        .length;
+}
+
+function isMandatoryEvidenceFollowup(call = {}) {
+    const tool = normalizeString(call.tool);
+    return ['paper_metadata_lookup', 'pdf_extract_text', 'pdf_find_and_extract', 'download_file'].includes(tool);
+}
+
+function classifyWebFetchEvidenceQuality({ text = '', url = '', query = '', contentType = '', barrier = null, suggestedNextCalls = [], truncated = false, encodingRepair = null } = {}) {
+    const normalizedText = normalizeString(text);
+    if (barrier) {
+        return {
+            evidenceQuality: barrier.status || 'access_barrier',
+            isEvidence: false,
+            evidenceGap: barrier.evidenceGap,
+            recoveryHint: barrier.recoveryHint,
+            pageStatus: barrier.status
+        };
+    }
+    if (looksLikeJavaScriptShellText(normalizedText, url)) {
+        return {
+            evidenceQuality: 'js_shell',
+            isEvidence: false,
+            evidenceGap: 'The fetched page is only a JavaScript loading shell, not answer-bearing page content.',
+            recoveryHint: 'Do not refetch the same URL. Use an accessible source, a reader/backend that can render JavaScript, or a different search result.',
+            pageStatus: 'js_shell'
+        };
+    }
+    if (encodingRepair?.suspected) {
+        return {
+            evidenceQuality: 'encoding_failure',
+            isEvidence: false,
+            evidenceGap: 'The fetched text appears mojibake/incorrectly decoded, so it is not reliable answer evidence.',
+            recoveryHint: 'Retry through an encoding-aware fetch backend or choose another accessible source instead of reasoning from mojibake.',
+            pageStatus: 'encoding_failure'
+        };
+    }
+    if (normalizedText.length < 200) {
+        return {
+            evidenceQuality: 'thin_content',
+            isEvidence: false,
+            evidenceGap: 'The fetched page text is too short to be reliable answer evidence.',
+            recoveryHint: 'Open a higher-signal result or use a domain-specific source instead of repeating this thin page.',
+            pageStatus: 'thin_content'
+        };
+    }
+    const mandatoryFollowup = suggestedNextCalls.some(isMandatoryEvidenceFollowup);
+    if (mandatoryFollowup) {
+        return {
+            evidenceQuality: 'partial_evidence',
+            isEvidence: true,
+            evidenceGap: 'This page excerpt is not enough on its own. Follow the linked DOI/PDF/document candidate before answering.',
+            recoveryHint: 'Prefer following the high-signal linked resources below instead of broadening back to web_search.',
+            pageStatus: 'partial_evidence'
+        };
+    }
+    const matchedTerms = countEvidenceTermMatches(normalizedText, query);
+    const hasQuery = extractEvidenceTerms(query).length > 0;
+    const enoughText = normalizedText.length >= 1200;
+    const querySatisfied = !hasQuery || matchedTerms >= Math.min(2, extractEvidenceTerms(query).length);
+    if (enoughText && querySatisfied && !truncated) {
+        return {
+            evidenceQuality: 'sufficient_evidence',
+            isEvidence: true,
+            evidenceGap: '',
+            recoveryHint: 'Use this page content to answer if it matches the user goal; do not refetch the same URL unless a specific missing field remains.',
+            pageStatus: encodingRepair?.repaired ? 'encoding_repaired' : 'content_ready'
+        };
+    }
+    return {
+        evidenceQuality: 'partial_evidence',
+        isEvidence: true,
+        evidenceGap: /html/i.test(contentType)
+            ? 'This is a page excerpt. If the answer depends on missing details, inspect a more specific link or source next.'
+            : '',
+        recoveryHint: '',
+        pageStatus: encodingRepair?.repaired ? 'encoding_repaired' : 'partial_evidence'
+    };
+}
+
 function buildHttpAccessFailureDetails(url, fetched = {}) {
     const details = pruneEmptyDeep({
         url,
@@ -1682,9 +1852,11 @@ async function webFetch(args = {}) {
         return unsupportedContentTypeResult('web_fetch', url, fetched, ['pdf_extract_text', 'download_file']);
     }
     const body = fetched.text;
-    const text = fetched.kind === 'wikipedia_wikitext'
+    const rawText = fetched.kind === 'wikipedia_wikitext'
         ? stripWikiText(body)
         : /html/i.test(contentType) ? stripHtml(body) : body.trim();
+    const encodingRepair = repairUtf8MojibakeText(rawText);
+    const text = encodingRepair.text;
     const focused = focusTextWindow(text, {
         query: args.query || args.contains || '',
         url,
@@ -1698,24 +1870,26 @@ async function webFetch(args = {}) {
     const observedLinksForGuidance = linkQuery ? suggestedRankedLinks : rankedLinks;
     const observedRelevantLinks = observedLinksForGuidance.slice(0, 5).map((candidate) => summarizeRelevantLink(candidate));
     const barrier = classifyAccessBarrierText(text);
-    const evidenceGap = barrier?.evidenceGap || (
-        suggestedNextCalls.length
-            ? 'This page excerpt is not enough on its own. Follow one of the linked DOI/PDF/article candidates before answering.'
-            : /html/i.test(contentType)
-                ? 'This is a page excerpt. If the answer depends on linked references or supporting documents, inspect the outbound links next.'
-                : ''
-    );
-    const recoveryHint = barrier?.recoveryHint || (
-        suggestedNextCalls.length
-            ? 'Prefer following the high-signal linked resources below instead of broadening back to web_search.'
-            : ''
-    );
+    const truncatedForModel = focused.text.length < text.length;
+    const quality = classifyWebFetchEvidenceQuality({
+        text,
+        url,
+        query: linkQuery,
+        contentType,
+        barrier,
+        suggestedNextCalls,
+        truncated: truncatedForModel,
+        encodingRepair
+    });
+    const evidenceGap = quality.evidenceGap || '';
+    const recoveryHint = quality.recoveryHint || '';
     const guidance = buildWebToolGuidanceText({
         evidenceGap,
         recoveryHint,
         suggestedNextCalls,
         observedRelevantLinks
     });
+    const reasoningReady = quality.evidenceQuality === 'sufficient_evidence' && quality.isEvidence === true && !truncatedForModel;
     return textResult([guidance, `Content excerpt:\n${focused.text}`].filter(Boolean).join('\n\n'), {
         status: 'completed',
         url,
@@ -1726,12 +1900,25 @@ async function webFetch(args = {}) {
         originalChars: text.length,
         returnedChars: focused.text.length,
         focus: focused.focus,
+        complete: reasoningReady,
+        truncated: truncatedForModel,
+        reasoningReady,
+        isEvidence: quality.isEvidence,
+        evidenceQuality: quality.evidenceQuality,
+        observationContract: {
+            complete: reasoningReady,
+            truncated: truncatedForModel,
+            reasoning_ready: reasoningReady,
+            is_evidence: quality.isEvidence,
+            evidence_quality: quality.evidenceQuality
+        },
         observedLinkCount: extractedLinks.length,
         suggestedNextCalls,
         observedRelevantLinks,
         evidenceGap,
         recoveryHint,
-        pageStatus: barrier?.status || undefined
+        pageStatus: quality.pageStatus || undefined,
+        encodingRepair: encodingRepair.repaired ? 'latin1_to_utf8' : undefined
     });
 }
 

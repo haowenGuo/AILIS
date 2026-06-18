@@ -3021,6 +3021,96 @@ function buildInvalidToolStepResult(step, validation, iteration) {
     };
 }
 
+function getWebToolRepeatTarget(step = {}) {
+    const parsedMcp = parseDirectMcpToolId(step.tool);
+    const baseName = normalizeText(parsedMcp?.tool || step.tool).toLowerCase();
+    if (baseName === 'web_fetch') {
+        const url = normalizeText(step.args?.url || step.args?.uri)
+            .replace(/#.*$/g, '')
+            .replace(/\/+$/g, '')
+            .toLowerCase();
+        return url ? { kind: 'web_fetch', key: url, label: 'url' } : null;
+    }
+    if (baseName === 'web_search') {
+        const query = normalizeText(step.args?.query || step.args?.q || step.args?.search || step.args?.text)
+            .replace(/\s+/g, ' ')
+            .toLowerCase();
+        return query ? { kind: 'web_search', key: query, label: 'query' } : null;
+    }
+    return null;
+}
+
+function getWebToolEvidenceQuality(stepResult = {}) {
+    const details = getToolResultDetails(stepResult);
+    const observationContract = details.observationContract || details.observation_contract || {};
+    return normalizeText(
+        details.evidenceQuality ||
+            details.evidence_quality ||
+            observationContract.evidence_quality ||
+            stepResult.response?.details?.evidenceQuality ||
+            stepResult.response?.details?.evidence_quality
+    );
+}
+
+function webRepeatGuardReason(priorResults = []) {
+    const qualities = priorResults.map(getWebToolEvidenceQuality).filter(Boolean);
+    if (qualities.includes('sufficient_evidence')) {
+        return {
+            status: 'repeated_ready_evidence',
+            error: 'This URL/query already produced reasoning-ready evidence. Use the existing evidence to answer or ask a narrower missing-field question instead of repeating the same call.'
+        };
+    }
+    if (qualities.some((quality) => ['js_shell', 'thin_content', 'encoding_failure', 'access_challenge', 'access_denied'].includes(quality))) {
+        return {
+            status: 'repeated_low_value_web_observation',
+            error: 'This URL/query already produced low-value web evidence. Do not repeat it; switch source, change query, or answer from other evidence.'
+        };
+    }
+    if (priorResults.length >= 2) {
+        return {
+            status: 'repeated_web_tool_call',
+            error: 'The same web_search query or web_fetch URL has already been tried twice. Change strategy or summarize the evidence already collected.'
+        };
+    }
+    return null;
+}
+
+function validateAgentToolLoopGuard(step = {}, stepResults = [], requestContext = {}) {
+    if (requestContext.allowRepeatedWebToolCalls === true) {
+        return { ok: true };
+    }
+    const target = getWebToolRepeatTarget(step);
+    if (!target) {
+        return { ok: true };
+    }
+    const priorResults = (Array.isArray(stepResults) ? stepResults : [])
+        .slice(-20)
+        .filter((stepResult) => {
+            const previous = getWebToolRepeatTarget(stepResult);
+            return previous?.kind === target.kind && previous.key === target.key;
+        });
+    const reason = webRepeatGuardReason(priorResults);
+    if (!reason) {
+        return { ok: true };
+    }
+    return {
+        ok: false,
+        status: 'tool_loop_guard',
+        error: reason.error,
+        details: {
+            tool: step.tool,
+            targetKind: target.kind,
+            targetField: target.label,
+            targetValue: target.key,
+            repeatCount: priorResults.length,
+            reason: reason.status,
+            recoveryHint: target.kind === 'web_fetch'
+                ? 'Use the fetched page content if sufficient; otherwise choose a different URL/source instead of refetching the same URL.'
+                : 'Use a result URL from the previous search, add domain/source constraints, or answer from existing evidence instead of repeating the same query.'
+        }
+    };
+}
+
 function looksLikeWholeFileEditFileArgs(args = {}) {
     if (!args || typeof args !== 'object' || Array.isArray(args)) {
         return false;
@@ -7047,6 +7137,46 @@ class AILISAgentRunner {
                 continue;
             }
 
+            const loopGuard = validateAgentToolLoopGuard(step, stepResults, requestContext);
+            if (!loopGuard.ok) {
+                events.push({
+                    type: 'tool_call',
+                    id: step.id,
+                    title: step.title,
+                    tool: step.tool,
+                    args: step.args,
+                    iteration
+                });
+                const guardedStepResult = buildInvalidToolStepResult(step, loopGuard, iteration);
+                stepResults.push(guardedStepResult);
+                events.push(buildToolResultEvent(guardedStepResult));
+                await appendRuntimeItem({
+                    type: 'agent.tool_loop_guard',
+                    status: loopGuard.status || 'tool_loop_guard',
+                    payload: {
+                        iteration,
+                        tool: step.tool,
+                        args: step.args,
+                        error: loopGuard.error,
+                        details: loopGuard.details
+                    }
+                });
+                const interruptedAfterLoopGuard = await maybeFinishInterruptedRun(`after_tool_loop_guard_${iteration}`);
+                if (interruptedAfterLoopGuard) {
+                    return interruptedAfterLoopGuard;
+                }
+                const paused = await pauseAfterRound({
+                    iteration,
+                    reason: 'tool_loop_guard',
+                    decision,
+                    step
+                });
+                if (paused) {
+                    return paused;
+                }
+                continue;
+            }
+
             const plannedToolContext = buildToolContext(requestContext, this.workspaceRoot, sessionId);
             const policyDecision = this.gateway.runtime?.evaluateToolCall?.({
                 toolId: step.tool,
@@ -8204,6 +8334,7 @@ module.exports = {
     isExactAnswerExecutionMode,
     normalizeExactAnswerSubmission,
     stripControlTags,
+    validateAgentToolLoopGuard,
     validateNativeDirectToolCall,
     validateExactAnswerSubmission,
     resolveAgentDecisionTimeoutMs

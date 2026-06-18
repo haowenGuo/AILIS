@@ -10,6 +10,7 @@ const require = createRequire(import.meta.url);
 const { AILISGateway } = require('../electron/ailis-gateway.cjs');
 const {
     buildAgentDirectToolSpecs,
+    validateAgentToolLoopGuard,
     validateNativeDirectToolCall
 } = require('../electron/ailis-agent-runner.cjs');
 const {
@@ -474,6 +475,66 @@ test('AILIS suppresses repeated update_plan direct-tool loops without hiding oth
         stepResults: repeatedPlanSteps
     });
     assert.equal(overrideSpecs.some((tool) => tool.name === 'update_plan'), true);
+});
+
+test('AILIS loop guard blocks repeated web_fetch after reasoning-ready evidence', () => {
+    const previousFetch = {
+        tool: 'mcp__ailis_research__web_fetch',
+        args: { url: 'https://wiki.biligame.com/zzz/%E8%8E%B1%E7%89%B9' },
+        response: {
+            ok: true,
+            status: 'completed',
+            result: {
+                details: {
+                    evidenceQuality: 'sufficient_evidence',
+                    isEvidence: true,
+                    complete: true,
+                    truncated: false,
+                    reasoningReady: true,
+                    observationContract: {
+                        evidence_quality: 'sufficient_evidence',
+                        reasoning_ready: true
+                    }
+                }
+            }
+        }
+    };
+
+    const guard = validateAgentToolLoopGuard({
+        tool: 'mcp__ailis_research__web_fetch',
+        args: { url: 'https://wiki.biligame.com/zzz/%E8%8E%B1%E7%89%B9#section' }
+    }, [previousFetch]);
+
+    assert.equal(guard.ok, false);
+    assert.equal(guard.status, 'tool_loop_guard');
+    assert.equal(guard.details.reason, 'repeated_ready_evidence');
+});
+
+test('AILIS loop guard blocks a third identical web_search query', () => {
+    const previousSearches = Array.from({ length: 2 }, () => ({
+        tool: 'mcp__ailis_research__web_search',
+        args: { query: '绝区零 莱特 养成攻略 技能加点 配队 驱动盘' },
+        response: {
+            ok: true,
+            status: 'completed',
+            result: {
+                content: [{ type: 'text', text: 'Evidence gap: Search results look off-target.' }],
+                details: {
+                    status: 'completed',
+                    evidenceGap: 'Search results look off-target.'
+                }
+            }
+        }
+    }));
+
+    const guard = validateAgentToolLoopGuard({
+        tool: 'mcp__ailis_research__web_search',
+        args: { query: '  绝区零 莱特 养成攻略 技能加点 配队 驱动盘  ' }
+    }, previousSearches);
+
+    assert.equal(guard.ok, false);
+    assert.equal(guard.status, 'tool_loop_guard');
+    assert.equal(guard.details.reason, 'repeated_web_tool_call');
 });
 
 test('AILIS tool_search returns strict direct MCP specs and native preflight blocks empty args', async () => {

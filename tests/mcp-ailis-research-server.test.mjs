@@ -979,6 +979,60 @@ test('web_fetch marks anti-bot challenge pages as low-value evidence', async () 
     });
 });
 
+test('web_fetch classifies JavaScript loading shells as non-evidence', async () => {
+    await withServer((request, response) => {
+        response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        response.end('<html><body><div id="root">米游社 Loading...</div></body></html>');
+    }, async (baseUrl) => {
+        const result = await webFetch({ url: `${baseUrl}/zzz/article/59714036` });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.equal(result.structuredContent.evidenceQuality, 'js_shell');
+        assert.equal(result.structuredContent.isEvidence, false);
+        assert.equal(result.structuredContent.observationContract.reasoning_ready, false);
+        assert.match(result.structuredContent.evidenceGap, /JavaScript loading shell/i);
+        assert.match(result.structuredContent.recoveryHint, /Do not refetch/i);
+    });
+});
+
+test('web_fetch repairs common UTF-8 mojibake before evidence classification', async () => {
+    const mojibake = Buffer.from('绝区零莱特攻略：技能加点、配队、驱动盘推荐。', 'utf8').toString('latin1');
+    await withServer((request, response) => {
+        response.writeHead(200, { 'content-type': 'text/html' });
+        response.end(`<html><body><article>${mojibake}</article></body></html>`);
+    }, async (baseUrl) => {
+        const result = await webFetch({ url: `${baseUrl}/guide`, query: '绝区零 莱特 攻略' });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.match(result.content[0].text, /绝区零莱特攻略/);
+        assert.equal(result.structuredContent.encodingRepair, 'latin1_to_utf8');
+        assert.notEqual(result.structuredContent.evidenceQuality, 'encoding_failure');
+    });
+});
+
+test('web_fetch marks long relevant HTML text as reasoning-ready evidence', async () => {
+    const guideBody = [
+        '<h1>莱特 - 绝区零WIKI_BWIKI</h1>',
+        '<p>莱特攻略包含技能加点、驱动盘、音擎、配队和养成材料。</p>',
+        `<p>${'莱特是一名适合火属性队伍的角色，攻略正文提供技能说明和配队建议。'.repeat(80)}</p>`,
+        '<a href="/zzz/other">其他角色</a>'
+    ].join('');
+    await withServer((request, response) => {
+        response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        response.end(`<html><body>${guideBody}</body></html>`);
+    }, async (baseUrl) => {
+        const result = await webFetch({ url: `${baseUrl}/zzz/lighter`, query: '绝区零 莱特 攻略 配队 驱动盘' });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.equal(result.structuredContent.evidenceQuality, 'sufficient_evidence');
+        assert.equal(result.structuredContent.isEvidence, true);
+        assert.equal(result.structuredContent.complete, true);
+        assert.equal(result.structuredContent.reasoningReady, true);
+        assert.equal(result.structuredContent.observationContract.reasoning_ready, true);
+        assert.equal(result.structuredContent.evidenceGap, '');
+    });
+});
+
 test('pdf_find_and_extract discovers PDF links from HTML pages and extracts text', async () => {
     await withServer((request, response) => {
         if (request.url === '/paper') {

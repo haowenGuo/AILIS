@@ -200,6 +200,21 @@ function classifyEvidenceGapObservation({ tool = '', args = {}, response = {}, p
     const toolId = normalizeText(tool);
     const action = normalizeText(args.action || args.operation || args.intent).toLowerCase();
     const url = normalizeText(args.url || args.href || response.result?.details?.url || response.result?.url);
+    const details = (
+        response.result?.structuredContent && typeof response.result.structuredContent === 'object'
+            ? response.result.structuredContent
+            : null
+    ) || (
+        response.result?.details && typeof response.result.details === 'object'
+            ? response.result.details
+            : null
+    ) || (
+        response.details && typeof response.details === 'object'
+            ? response.details
+            : {}
+    );
+    const observationContract = details.observationContract || details.observation_contract || {};
+    const evidenceQuality = normalizeText(details.evidenceQuality || details.evidence_quality || observationContract.evidence_quality);
     const text = `${url}\n${preview}\n${extractToolResultText(response.result)}`.toLowerCase();
     const isWebSearch = toolId === 'web_search' ||
         toolId === 'mcp__ailis_research__web_search' ||
@@ -221,6 +236,33 @@ function classifyEvidenceGapObservation({ tool = '', args = {}, response = {}, p
         action === 'fetch';
     if (!isWebFetch) {
         return null;
+    }
+    if (evidenceQuality === 'sufficient_evidence') {
+        return null;
+    }
+    if (evidenceQuality === 'js_shell') {
+        return {
+            evidence_gap: 'js_shell_no_content',
+            summary: 'Web fetch returned a JavaScript loading shell, not answer-bearing page content.',
+            recovery_hint: 'Do not refetch the same URL. Use an accessible source, a JavaScript-rendering reader/backend, or a different search result.',
+            alternatives: ['different web_fetch URL', 'web_search with source/domain terms', 'browser/rendered page reader']
+        };
+    }
+    if (evidenceQuality === 'encoding_failure') {
+        return {
+            evidence_gap: 'encoding_failure',
+            summary: 'Web fetch returned mojibake/incorrectly decoded text that is not reliable evidence.',
+            recovery_hint: 'Retry with an encoding-aware fetch path or choose another accessible source instead of reasoning from mojibake.',
+            alternatives: ['encoding-aware web_fetch', 'different source', 'reader backend']
+        };
+    }
+    if (evidenceQuality === 'thin_content') {
+        return {
+            evidence_gap: 'thin_content',
+            summary: 'Web fetch returned too little text to support an answer.',
+            recovery_hint: 'Open a higher-signal result or switch source instead of repeating this thin page.',
+            alternatives: ['different web_fetch URL', 'web_search with exact/source terms']
+        };
     }
     if (/clinicaltrials\.gov|nct\d{8}/i.test(text)) {
         return {
