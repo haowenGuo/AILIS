@@ -12,6 +12,7 @@ const {
     TOOLS,
     buildSuggestedCallsFromSearchResults,
     classifyYtDlpFailure,
+    describeImageProviderUnsupportedResult,
     extractArxivCandidatesFromAtom,
     extractBingResults,
     extractDuckDuckGoHtmlResults,
@@ -20,6 +21,7 @@ const {
     extractYahooResults,
     githubRepoRead,
     inferPaperMetadataArgsFromScholarlyQuery,
+    isVisionPayloadUnsupportedProviderError,
     normalizeSearchBackends,
     paperMetadataLookup,
     parseGitHubRepoRef,
@@ -102,6 +104,23 @@ test('YouTube tools expose recovery affordance before broad web search', async (
     assert.equal(transcript.structuredContent.status, 'invalid_args');
     assert.equal(transcript.structuredContent.suggestedNextCalls[0].tool, 'youtube_video_search');
     assert.match(transcript.content[0].text, /suggested_next_calls/);
+});
+
+test('describe_image reports text-only provider image payload rejection as actionable', () => {
+    const providerResponse = {
+        ok: false,
+        code: 'provider_error',
+        error: "Failed to deserialize the JSON body into the target type: messages[0]: unknown variant image_url, expected text"
+    };
+
+    assert.equal(isVisionPayloadUnsupportedProviderError(providerResponse), true);
+    const result = describeImageProviderUnsupportedResult('D:\\Temp\\humanclaw-screenshots\\screen.png', providerResponse);
+
+    assert.equal(result.isError, true);
+    assert.equal(result.structuredContent.status, 'vision_provider_unsupported');
+    assert.match(result.content[0].text, /image_url/);
+    assert.match(result.content[0].text, /Do not retry describe_image/);
+    assert.match(result.content[0].text, /next_actions/);
 });
 
 test('yt-dlp failures classify YouTube anti-bot blocks as non-query problems', () => {

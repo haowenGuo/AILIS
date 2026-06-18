@@ -493,6 +493,24 @@ test('HumanClaw Gateway tool_search ranks specific MCP artifact tools before web
         assert.ok(artifactQueryResult.details.tools.some((tool) => tool.id === 'artifact_query'));
         assert.equal(artifactQueryResult.details.tools[0].id, 'artifact_query');
         assert.match(artifactQueryResult.details.routing_advice, /artifact_query/);
+
+        gateway.runtime.mcpManager.searchToolSpecs = async () => [
+            mcpTool('web_search', 'Search managed public web backends and return result pages for follow-up fetching.'),
+            mcpTool('web_fetch', 'Fetch a known HTML page URL.'),
+            mcpTool('describe_image', 'Describe a local image or screenshot using a vision model.'),
+            mcpTool('pdf_find_and_extract', 'Find and extract a paper or report PDF.'),
+            mcpTool('read_document', 'Read Word DOCX documents with paragraphs and tables.'),
+            mcpTool('youtube_video_search', 'Search YouTube videos by title or channel with yt-dlp.')
+        ];
+
+        const publicCompetitionResult = await gateway.executeGatewayToolSearch({
+            query: 'Kaggle "AI Agent Security" "Multi-Step Tool Attacks" competition strategy guide',
+            includeExternal: false,
+            limit: 5
+        });
+
+        assert.equal(publicCompetitionResult.details.tools[0].id, 'mcp__ailis_research__web_search');
+        assert.match(publicCompetitionResult.details.routing_advice, /web_search/);
     } finally {
         await gateway.stop();
         await fs.rm(workspaceRoot, { recursive: true, force: true });
