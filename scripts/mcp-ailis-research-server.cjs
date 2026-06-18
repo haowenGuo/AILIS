@@ -4560,35 +4560,6 @@ print(json.dumps({"text": result.get("text", ""), "language": result.get("langua
     return textResult(result.stdout.trim(), { status: 'completed', path: filePath, model });
 }
 
-function isVisionPayloadUnsupportedProviderError(response = {}) {
-    const text = [
-        response.code,
-        response.status,
-        response.error,
-        response.message
-    ]
-        .filter(Boolean)
-        .join(' ')
-        .toLowerCase();
-    return /image_url|image input|vision|multimodal|unknown variant.*image|expected text|deserialize.*messages|unsupported.*image/.test(text);
-}
-
-function describeImageProviderUnsupportedResult(filePath, response = {}) {
-    const providerError = normalizeString(response.error || response.message || response.code);
-    return actionableErrorResult('describe_image provider does not support image input payload', {
-        path: filePath,
-        status: 'vision_provider_unsupported',
-        failureReason: 'vision_payload_rejected',
-        error: providerError.slice(0, 2000),
-        message: 'The configured LLM endpoint rejected the image_url message part. Do not retry describe_image with the same provider/model in this turn.',
-        nextActions: [
-            'Use computer/window-title/process evidence and public web_search/web_fetch when screenshot vision is not required.',
-            'Configure a vision-capable provider/model before retrying describe_image.',
-            'If the task needs exact screen reading, stop and report that the active provider is text-only for image inputs.'
-        ]
-    });
-}
-
 async function describeImage(args = {}) {
     const filePath = path.resolve(normalizeString(args.path || args.file || args.filePath || args.file_path || args.imagePath || args.image_path));
     const stat = filePath ? await fs.stat(filePath).catch(() => null) : null;
@@ -4628,18 +4599,10 @@ async function describeImage(args = {}) {
         });
     }
     if (!response.ok) {
-        if (isVisionPayloadUnsupportedProviderError(response)) {
-            return describeImageProviderUnsupportedResult(filePath, response);
-        }
-        return actionableErrorResult('describe_image failed', {
+        return errorResult('describe_image failed', {
             path: filePath,
             status: response.code || 'vision_model_error',
-            error: response.error || '',
-            message: response.error || response.message || '',
-            nextActions: [
-                'Do not retry the exact same describe_image call unless the provider settings changed.',
-                'Use other available evidence or report the vision tool failure with the provider error.'
-            ]
+            error: response.error || ''
         });
     }
     return textResult(response.content.slice(0, maxChars), {
@@ -5305,7 +5268,6 @@ module.exports = {
     TOOLS,
     buildSuggestedCallsFromSearchResults,
     classifyYtDlpFailure,
-    describeImageProviderUnsupportedResult,
     downloadFile,
     extractBingResults,
     extractArxivCandidatesFromAtom,
@@ -5314,7 +5276,6 @@ module.exports = {
     extractGitHubRepositoryResults,
     extractYahooResults,
     inferPaperMetadataArgsFromScholarlyQuery,
-    isVisionPayloadUnsupportedProviderError,
     fetchText,
     githubRepoRead,
     handleRequest,

@@ -26,7 +26,6 @@ const {
 } = require('../electron/ailis-runtime-budget.cjs');
 const {
     buildToolRoutingAdvice,
-    queryLooksLikePublicWebDiscovery,
     rankToolSearchResults
 } = require('../electron/ailis-tool-routing.cjs');
 const {
@@ -215,27 +214,6 @@ test('AILIS tool routing prefers artifact-specific MCP tools over broad web_sear
         'youtube_transcript'
     );
     assert.match(buildToolRoutingAdvice('attached docx Word document table', candidates), /read_document/);
-});
-
-test('AILIS tool routing exposes web_search for public competition discovery queries', () => {
-    const candidates = [
-        mcpTool('web_search', 'Search managed public web backends and return result pages for follow-up fetching.'),
-        mcpTool('web_fetch', 'Fetch a known HTML page URL.'),
-        mcpTool('describe_image', 'Describe a local image or screenshot using a vision model.'),
-        mcpTool('pdf_find_and_extract', 'Find and extract a paper or report PDF.'),
-        mcpTool('read_document', 'Read Word DOCX documents with paragraphs and tables.'),
-        mcpTool('youtube_video_search', 'Search YouTube videos by title or channel with yt-dlp.'),
-        mcpTool('youtube_transcript', 'Read YouTube video transcripts.')
-    ];
-
-    const query = 'Kaggle "AI Agent Security" "Multi-Step Tool Attacks" competition strategy guide';
-    const ranked = rankToolSearchResults(candidates, query, 3);
-
-    assert.equal(queryLooksLikePublicWebDiscovery(query), true);
-    assert.equal(ranked[0].tool, 'web_search');
-    assert.ok(ranked.some((tool) => tool.id === 'mcp__ailis_research__web_search'));
-    assert.match(buildToolRoutingAdvice(query, ranked), /web_search/);
-    assert.equal(queryLooksLikePublicWebDiscovery('attached screenshot Kaggle competition'), false);
 });
 
 test('AILIS tool routing can rank output store tools when an experimental surface provides them', () => {

@@ -223,32 +223,6 @@ function queryExplicitlyRequestsWebSearch(query = '') {
     return /\b(web_search|web search|search the web|internet search|public web|bing|google|duckduckgo)\b/i.test(query);
 }
 
-function queryHasKnownUrl(query = '') {
-    return /\bhttps?:\/\/\S+/i.test(query);
-}
-
-function queryHasLocalEvidenceHint(query = '') {
-    return /[a-z]:\\|\\\\|(?:^|\s)\/[^\s]+|\b(attached|attachment|local file|file path|screenshot|image|photo|picture|png|jpe?g|webp|pdf|docx?|pptx?|xlsx?|spreadsheet|workbook|audio|mp3|wav|artifactid|artifact_id|outputid|output_id)\b|附件|本地文件|截图|图片|图像|文档|表格|音频/i.test(query);
-}
-
-function queryLooksLikePublicWebDiscovery(query = '') {
-    const normalized = normalizeString(query);
-    if (!normalized || queryHasKnownUrl(normalized) || queryHasLocalEvidenceHint(normalized)) {
-        return false;
-    }
-    if (/\b(kaggle|competition|contest|challenge|leaderboard|benchmark|official|rules?|overview|dataset|evaluation|scoring|submission|writeup|walkthrough|strategy|guide|current|latest|news)\b/i.test(normalized)) {
-        return true;
-    }
-    if (/(比赛|竞赛|挑战赛|排行榜|官方|规则|概览|数据集|评测|评分|提交|攻略|最新|新闻)/i.test(normalized)) {
-        return true;
-    }
-    if (/\b[a-z0-9-]+\.(?:com|org|net|io|ai|dev|edu|gov|cn)\b/i.test(normalized)) {
-        return true;
-    }
-    return /["“][^"”]{8,}["”]/.test(normalized) &&
-        /\b(rules?|overview|dataset|evaluation|strategy|guide|writeup|competition|contest|challenge)\b/i.test(normalized);
-}
-
 function matchingRoutingProfiles(query = '') {
     const normalized = normalizeString(query);
     if (!normalized) {
@@ -310,7 +284,6 @@ function scoreToolForQuery(entry = {}, query = '') {
     const toolName = canonicalToolName(entry);
     const needle = normalizeForSearch(query);
     const explicitWebSearch = queryExplicitlyRequestsWebSearch(query);
-    const publicWebDiscovery = queryLooksLikePublicWebDiscovery(query);
     const profiles = matchingRoutingProfiles(query);
     let score = baseTextScore(query, text);
 
@@ -349,13 +322,6 @@ function scoreToolForQuery(entry = {}, query = '') {
     } else if (/^external__/.test(normalizeForSearch(entry.id))) {
         score += 4;
     }
-    if (toolName === 'web_search') {
-        if (explicitWebSearch) {
-            score += 82;
-        } else if (publicWebDiscovery) {
-            score += 74;
-        }
-    }
 
     for (const profile of profiles) {
         if (profile.tools.includes(toolName)) {
@@ -364,7 +330,7 @@ function scoreToolForQuery(entry = {}, query = '') {
         if ((profile.primaryTools || []).includes(toolName)) {
             score += profile.primaryBonus || 0;
         }
-        if (toolName === 'web_search' && !explicitWebSearch && !publicWebDiscovery) {
+        if (toolName === 'web_search' && !explicitWebSearch) {
             score -= profile.webPenalty || 50;
         }
     }
@@ -379,7 +345,6 @@ function scoreToolForQuery(entry = {}, query = '') {
     if (
         toolName === 'web_search' &&
         !explicitWebSearch &&
-        !publicWebDiscovery &&
         /\b(attached|attachment|file|local|pdf|document|video|audio|image|spreadsheet|presentation|schema|api)\b/i.test(query)
     ) {
         score -= 25;
@@ -415,9 +380,6 @@ function rankToolSearchResults(entries = [], query = '', limit = 8) {
 
 function buildToolRoutingAdvice(query = '', rankedTools = []) {
     const profiles = matchingRoutingProfiles(query);
-    if (queryLooksLikePublicWebDiscovery(query) && canonicalToolName(rankedTools[0] || {}) === 'web_search') {
-        return 'Use web_search for public discovery, then web_fetch the strongest result pages.';
-    }
     if (!profiles.length) {
         return '';
     }
@@ -434,7 +396,6 @@ module.exports = {
     canonicalToolName,
     collectToolSearchText,
     matchingRoutingProfiles,
-    queryLooksLikePublicWebDiscovery,
     rankToolSearchResults,
     scoreToolForQuery,
     toolMatchesRoutingProfile
