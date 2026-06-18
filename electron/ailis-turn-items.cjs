@@ -201,6 +201,19 @@ function classifyEvidenceGapObservation({ tool = '', args = {}, response = {}, p
     const action = normalizeText(args.action || args.operation || args.intent).toLowerCase();
     const url = normalizeText(args.url || args.href || response.result?.details?.url || response.result?.url);
     const text = `${url}\n${preview}\n${extractToolResultText(response.result)}`.toLowerCase();
+    const isWebSearch = toolId === 'web_search' ||
+        toolId === 'mcp__ailis_research__web_search' ||
+        /web_search$/.test(toolId) ||
+        action === 'web_search' ||
+        action === 'search';
+    if (isWebSearch && /evidence gap|discovery only|open a result|suggested next calls|high-signal links|url:/i.test(text)) {
+        return {
+            evidence_gap: 'search_results_need_fetch',
+            summary: 'Web search returned discovery links, but the answer still needs an opened page as evidence.',
+            recovery_hint: 'Call mcp__ailis_research__web_fetch with a high-signal result URL from the search output before issuing another broad web_search or final answer.',
+            alternatives: ['mcp__ailis_research__web_fetch', 'web_fetch']
+        };
+    }
     const isWebFetch = toolId === 'web_fetch' ||
         toolId === 'mcp__ailis_research__web_fetch' ||
         /web_fetch$/.test(toolId) ||

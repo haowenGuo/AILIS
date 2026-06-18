@@ -216,11 +216,25 @@ const ROUTING_PROFILES = Object.freeze([
         bonus: 72,
         webPenalty: 38,
         advice: 'Use github_repo_read for known GitHub repositories after repository discovery.'
+    }),
+    Object.freeze({
+        id: 'public_web_discovery',
+        patterns: [
+            /\b(kaggle|competition|contest|leaderboard|benchmark|challenge|latest|current|recent|today|news|strategy|guide|walkthrough|attack|defense|adversarial)\b/i,
+            /(最新|当前|今天|最近|新闻|攻略|比赛|竞赛|挑战|排行榜|攻防|对抗|安全|检索|搜索|查找)/i
+        ],
+        tools: ['web_search', 'web_fetch'],
+        primaryTools: ['web_search'],
+        bonus: 86,
+        primaryBonus: 20,
+        webPenalty: 0,
+        advice: 'Use web_search for public/current web discovery queries such as latest competitions, leaderboards, news, strategy, and guide requests; then use web_fetch on a high-signal result URL before answering.'
     })
 ]);
 
 function queryExplicitlyRequestsWebSearch(query = '') {
-    return /\b(web_search|web search|search the web|internet search|public web|bing|google|duckduckgo)\b/i.test(query);
+    return /\b(web_search|web search|search the web|internet search|public web|bing|google|duckduckgo)\b/i.test(query) ||
+        /(联网搜索|网页搜索|网络搜索|公开网页|搜索一下|检索一下|查一下)/i.test(query);
 }
 
 function matchingRoutingProfiles(query = '') {
@@ -331,7 +345,7 @@ function scoreToolForQuery(entry = {}, query = '') {
             score += profile.primaryBonus || 0;
         }
         if (toolName === 'web_search' && !explicitWebSearch) {
-            score -= profile.webPenalty || 50;
+            score -= profile.webPenalty ?? 50;
         }
     }
 
@@ -345,7 +359,8 @@ function scoreToolForQuery(entry = {}, query = '') {
     if (
         toolName === 'web_search' &&
         !explicitWebSearch &&
-        /\b(attached|attachment|file|local|pdf|document|video|audio|image|spreadsheet|presentation|schema|api)\b/i.test(query)
+        /\b(attached|attachment|file|local|pdf|document|video|audio|image|spreadsheet|presentation|schema|api)\b/i.test(query) &&
+        !profiles.some((profile) => profile.id === 'public_web_discovery')
     ) {
         score -= 25;
     }

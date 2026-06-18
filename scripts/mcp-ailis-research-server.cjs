@@ -700,6 +700,11 @@ function buildHttpAccessFailureDetails(url, fetched = {}) {
         url,
         statusCode: Number(fetched.status) || undefined,
         errorCode: normalizeString(fetched.errorCode),
+        backend: normalizeString(fetched.backend),
+        fallbackFrom: normalizeString(fetched.fallbackFrom),
+        primaryErrorCode: normalizeString(fetched.primaryErrorCode),
+        fallbackErrorCode: normalizeString(fetched.fallbackErrorCode),
+        fallbackError: normalizeString(fetched.fallbackError),
         stderr: normalizeString(fetched.stderr)
     });
     if (fetched.status === 403) {
@@ -708,6 +713,10 @@ function buildHttpAccessFailureDetails(url, fetched = {}) {
     } else if (fetched.status === 429) {
         details.evidenceGap = 'Remote site rate-limited automated requests (HTTP 429).';
         details.recoveryHint = 'This is a remote rate limit, not a local connectivity failure. Back off or use another API/source instead of hammering the same endpoint.';
+    } else if (/ssl|unexpected_eof|eof occurred/i.test(`${fetched.error || ''}\n${fetched.stderr || ''}\n${fetched.fallbackError || ''}`)) {
+        details.failureReason = 'https_ssl_fetch_failed';
+        details.evidenceGap = 'The HTTP fetch backend hit a TLS/SSL transport failure before page content was retrieved.';
+        details.recoveryHint = 'Retry the same URL once through the alternate fetch backend, or use a high-signal search result URL instead of switching to shell scraping.';
     }
     return details;
 }
@@ -1711,6 +1720,9 @@ async function webFetch(args = {}) {
         status: 'completed',
         url,
         contentType,
+        fetchBackend: fetched.backend,
+        fallbackFrom: fetched.fallbackFrom,
+        primaryErrorCode: fetched.primaryErrorCode,
         originalChars: text.length,
         returnedChars: focused.text.length,
         focus: focused.focus,
@@ -4168,7 +4180,16 @@ async function writeMcpArtifact(kind = 'artifact', baseName = 'artifact', text =
     return artifactPath;
 }
 
-async function fetchText(url, timeoutMs = 60000) {
+async function fetchTextWithPythonRequests(url, timeoutMs = 60000) {
+    if (process.env.AILIS_RESEARCH_TEST_FORCE_PYTHON_FETCH_FAIL === '1') {
+        return {
+            ok: false,
+            errorCode: 'fetch_process_failed',
+            error: 'forced python requests failure',
+            stderr: 'AILIS_RESEARCH_TEST_FORCE_PYTHON_FETCH_FAIL',
+            backend: 'python_requests'
+        };
+    }
     const code = `
 import json, requests, sys
 url = sys.argv[1]
@@ -4198,7 +4219,8 @@ print(json.dumps({
             timedOut: result.timedOut === true,
             errorCode: result.timedOut === true ? 'timeout' : 'fetch_process_failed',
             error: `python requests exit ${result.exitCode}`,
-            stderr: result.stderr
+            stderr: result.stderr,
+            backend: 'python_requests'
         };
     }
     let payload;
@@ -4207,8 +4229,10 @@ print(json.dumps({
     } catch (error) {
         return {
             ok: false,
+            errorCode: 'invalid_requests_payload',
             error: `invalid requests payload: ${error.message}`,
-            stderr: result.stderr
+            stderr: result.stderr,
+            backend: 'python_requests'
         };
     }
     const status = Number(payload.status || 0);
@@ -4224,7 +4248,92 @@ print(json.dumps({
         prefixHex: normalizeString(payload.prefix_hex),
         text: String(payload.text || ''),
         stderr: result.stderr,
-        error: status ? `HTTP ${status}` : ''
+        error: status ? `HTTP ${status}` : '',
+        backend: 'python_requests'
+    };
+}
+
+async function fetchTextWithNodeFetch(url, timeoutMs = 60000) {
+    if (typeof fetch !== 'function') {
+        return {
+            ok: false,
+            errorCode: 'node_fetch_unavailable',
+            error: 'global fetch is unavailable in this Node runtime',
+            backend: 'node_fetch'
+        };
+    }
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), clampNumber(timeoutMs, 60000, 1000, 600000));
+    try {
+        const response = await fetch(url, {
+            redirect: 'follow',
+            signal: controller.signal,
+            headers: {
+                'User-Agent': 'AILISResearchMCP/0.1 (+local assistant research tool)',
+                Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,text/plain;q=0.8,*/*;q=0.5'
+            }
+        });
+        const contentType = normalizeString(response.headers.get('content-type'));
+        const content = Buffer.from(await response.arrayBuffer());
+        const prefix = content.subarray(0, 16);
+        const isPdf = content.subarray(0, 4).toString('ascii') === '%PDF' || /application\/pdf/i.test(contentType);
+        const hasNul = content.subarray(0, Math.min(content.length, 2048)).includes(0);
+        const isBinary = isPdf || hasNul;
+        return {
+            ok: response.status >= 200 && response.status < 400,
+            status: response.status,
+            errorCode: response.status >= 200 && response.status < 400 ? '' : `http_${response.status || 'unknown'}`,
+            contentType,
+            contentLength: content.length,
+            isPdf,
+            isBinary,
+            prefixHex: prefix.toString('hex'),
+            text: isBinary ? '' : content.toString('utf8'),
+            stderr: '',
+            error: response.status ? `HTTP ${response.status}` : '',
+            backend: 'node_fetch'
+        };
+    } catch (error) {
+        return {
+            ok: false,
+            timedOut: error?.name === 'AbortError',
+            errorCode: error?.name === 'AbortError' ? 'timeout' : 'node_fetch_failed',
+            error: error?.message || String(error),
+            stderr: error?.stack || error?.message || String(error),
+            backend: 'node_fetch'
+        };
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
+function shouldFallbackToNodeFetch(fetched = {}) {
+    if (!fetched || fetched.ok) {
+        return false;
+    }
+    return ['fetch_process_failed', 'invalid_requests_payload', 'timeout'].includes(normalizeString(fetched.errorCode));
+}
+
+async function fetchText(url, timeoutMs = 60000) {
+    const primary = await fetchTextWithPythonRequests(url, timeoutMs);
+    if (!shouldFallbackToNodeFetch(primary)) {
+        return primary;
+    }
+    const fallback = await fetchTextWithNodeFetch(url, timeoutMs);
+    if (fallback.ok || fallback.status) {
+        return {
+            ...fallback,
+            fallbackFrom: primary.backend || 'python_requests',
+            primaryErrorCode: primary.errorCode,
+            primaryStderr: normalizeString(primary.stderr).slice(0, 3000)
+        };
+    }
+    return {
+        ...primary,
+        fallbackErrorCode: fallback.errorCode,
+        fallbackError: fallback.error,
+        fallbackBackend: fallback.backend,
+        fallbackStderr: normalizeString(fallback.stderr).slice(0, 3000)
     };
 }
 
@@ -4599,10 +4708,34 @@ async function describeImage(args = {}) {
         });
     }
     if (!response.ok) {
-        return errorResult('describe_image failed', {
+        const providerError = response.error || '';
+        const unsupportedImageInput = /unknown variant [`']?image_url|expected [`']?text|image_url/i.test(providerError);
+        return actionableErrorResult('describe_image failed', {
             path: filePath,
             status: response.code || 'vision_model_error',
-            error: response.error || ''
+            error: providerError,
+            failureReason: unsupportedImageInput
+                ? 'configured_llm_provider_does_not_accept_image_url_parts'
+                : 'vision_model_call_failed',
+            message: unsupportedImageInput
+                ? '当前配置的大模型接口不支持 image_url 视觉输入；不要重复调用 describe_image。请改用窗口标题、页面文本、OCR/截图读取工具，或先用 web_search 检索公开比赛信息。'
+                : '视觉模型调用失败；不要机械重复同一个截图分析调用，改用其他证据来源。',
+            nextActions: unsupportedImageInput
+                ? [
+                    'Call tool_search with a public web discovery query such as "Kaggle AI defense competition latest strategy web_search".',
+                    'If screen evidence is still needed, inspect window titles or use OCR/page-text tools instead of describe_image.',
+                    'Only retry describe_image after switching to a vision-capable provider/model.'
+                ]
+                : [
+                    'Try another evidence source before retrying describe_image.',
+                    'Use web_search for public competition/strategy information when the screen cannot be analyzed.'
+                ],
+            suggestedNextCalls: [
+                {
+                    tool: 'tool_search',
+                    args: { query: 'Kaggle AI defense competition latest strategy web_search', limit: 8 }
+                }
+            ]
         });
     }
     return textResult(response.content.slice(0, maxChars), {

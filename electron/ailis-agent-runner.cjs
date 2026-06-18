@@ -4115,11 +4115,93 @@ function buildNativeSpecFromSearchToolEntry(entry = {}) {
     });
 }
 
+function canonicalDirectToolId(value = '') {
+    const normalized = normalizeText(value);
+    if (!normalized) {
+        return '';
+    }
+    const parsedMcp = parseAilisDirectMcpToolId(normalized);
+    return parsedMcp?.id || normalized;
+}
+
+function directToolEntryId(entry = {}) {
+    return canonicalDirectToolId(
+        entry.spec?.name ||
+            entry.call_pattern?.tool ||
+            entry.callPattern?.tool ||
+            entry.id ||
+            entry.name
+    );
+}
+
+function isNonRetryableDirectToolFailure(stepResult = {}) {
+    if (!stepResult?.tool || stepResult.response?.ok === true) {
+        return false;
+    }
+    const text = `${stepResult.response?.error || ''}\n${extractToolResultText(stepResult.response?.result)}`.toLowerCase();
+    return /failure_reason=configured_llm_provider_does_not_accept_image_url_parts|requires local llm settings with vision support|unknown variant [`']?image_url|expected [`']?text/.test(text);
+}
+
+function collectTemporarilyDisabledDirectTools(stepResults = []) {
+    const disabled = new Set();
+    for (const stepResult of Array.isArray(stepResults) ? stepResults.slice(-12) : []) {
+        if (isNonRetryableDirectToolFailure(stepResult)) {
+            const toolId = canonicalDirectToolId(stepResult.tool);
+            if (toolId) {
+                disabled.add(toolId);
+            }
+        }
+    }
+    return disabled;
+}
+
+function countTrailingDirectToolCalls(stepResults = [], toolId = '') {
+    const expected = canonicalDirectToolId(toolId);
+    if (!expected) {
+        return 0;
+    }
+    let count = 0;
+    for (let index = stepResults.length - 1; index >= 0; index -= 1) {
+        const current = canonicalDirectToolId(stepResults[index]?.tool);
+        if (current !== expected) {
+            break;
+        }
+        count += 1;
+    }
+    return count;
+}
+
+function collectTemporarilySuppressedCoreDirectTools(stepResults = [], requestContext = {}) {
+    const suppressed = new Set();
+    const steps = Array.isArray(stepResults) ? stepResults : [];
+    if (requestContext.allowRepeatedUpdatePlanDirectTool === true) {
+        // Keep compatibility for debugging sessions that intentionally exercise planning.
+    } else if (countTrailingDirectToolCalls(steps, 'update_plan') >= 2) {
+        suppressed.add('update_plan');
+    }
+    if (requestContext.allowRepeatedToolSearchDirectTool !== true) {
+        const lastNonPlanStep = [...steps].reverse()
+            .find((stepResult) => canonicalDirectToolId(stepResult?.tool) !== 'update_plan');
+        if (
+            canonicalDirectToolId(lastNonPlanStep?.tool) === 'tool_search' &&
+            lastNonPlanStep?.response?.ok === true &&
+            extractSearchToolsFromStepResult(lastNonPlanStep).length > 0
+        ) {
+            suppressed.add('tool_search');
+        }
+    }
+    return suppressed;
+}
+
 function buildDynamicDirectToolSpecsFromObservations(stepResults = []) {
     const specs = [];
     const seen = new Set();
+    const disabledTools = collectTemporarilyDisabledDirectTools(stepResults);
     for (const stepResult of stepResults.slice(-8)) {
         for (const entry of extractSearchToolsFromStepResult(stepResult)) {
+            if (disabledTools.has(directToolEntryId(entry))) {
+                continue;
+            }
             pushUniqueNativeToolSpec(specs, seen, buildNativeSpecFromSearchToolEntry(entry));
         }
     }
@@ -4185,7 +4267,11 @@ function buildAgentDirectToolSpecs(gateway, { stepResults = [], requestContext =
     if (exactAnswerMode) {
         pushUniqueNativeToolSpec(specs, seen, buildFinalAnswerNativeToolSpec());
     }
+    const suppressedCoreTools = collectTemporarilySuppressedCoreDirectTools(stepResults, requestContext);
     for (const spec of gateway?.gatewayToolRuntimeRegistry?.modelVisibleSpecs?.() || []) {
+        if (suppressedCoreTools.has(canonicalDirectToolId(spec.name || spec.function?.name))) {
+            continue;
+        }
         pushUniqueNativeToolSpec(specs, seen, spec);
     }
     for (const spec of buildDynamicDirectToolSpecsFromObservations(stepResults)) {

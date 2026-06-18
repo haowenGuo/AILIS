@@ -146,7 +146,81 @@ function compactToolSchema(inputSchema = {}, options = {}) {
     return schema;
 }
 
-function compactJsonForModel(value, options = {}, depth = 0) {
+function isPrimitiveJsonValue(value) {
+    return value == null || ['string', 'number', 'boolean'].includes(typeof value);
+}
+
+function isSchemaLikeObject(value) {
+    return Boolean(
+        value &&
+            typeof value === 'object' &&
+            !Array.isArray(value) &&
+            (
+                typeof value.type === 'string' ||
+                value.properties ||
+                Array.isArray(value.required) ||
+                value.items ||
+                typeof value.additionalProperties === 'boolean'
+            )
+    );
+}
+
+function compactSchemaPropertiesForModel(properties = {}, options = {}, schemaDepth = 0) {
+    const maxStringChars = Math.max(64, Number(options.maxStringChars || DEFAULT_JSON_STRING_BUDGET_CHARS));
+    const maxObjectKeys = Math.max(1, Number(options.maxObjectKeys || DEFAULT_JSON_OBJECT_KEYS));
+    const entries = Object.entries(properties && typeof properties === 'object' && !Array.isArray(properties) ? properties : {});
+    const out = {};
+    for (const [key, value] of entries.slice(0, maxObjectKeys)) {
+        out[key] = isSchemaLikeObject(value)
+            ? compactSchemaNodeForModel(value, options, schemaDepth + 1)
+            : summarizeForModel(value, maxStringChars);
+    }
+    if (entries.length > maxObjectKeys) {
+        out.__omitted_keys = entries.length - maxObjectKeys;
+    }
+    return out;
+}
+
+function compactSchemaNodeForModel(value = {}, options = {}, schemaDepth = 0) {
+    const maxStringChars = Math.max(64, Number(options.maxStringChars || DEFAULT_JSON_STRING_BUDGET_CHARS));
+    const maxArrayItems = Math.max(1, Number(options.maxArrayItems || DEFAULT_JSON_ARRAY_ITEMS));
+    const out = {};
+    for (const key of ['type', 'format', 'pattern', 'minLength', 'maxLength', 'minimum', 'maximum', 'default']) {
+        if (Object.prototype.hasOwnProperty.call(value, key)) {
+            out[key] = cloneJson(value[key]);
+        }
+    }
+    if (typeof value.description === 'string') {
+        out.description = truncateMiddleText(value.description, maxStringChars);
+    }
+    if (Array.isArray(value.required)) {
+        out.required = value.required.filter((entry) => typeof entry === 'string').slice(0, 24);
+    }
+    if (Array.isArray(value.enum)) {
+        out.enum = value.enum.slice(0, maxArrayItems).map((entry) =>
+            isPrimitiveJsonValue(entry) ? entry : summarizeForModel(entry, maxStringChars)
+        );
+        if (value.enum.length > maxArrayItems) {
+            out.enum.push(`... ${value.enum.length - maxArrayItems} more`);
+        }
+    }
+    if (typeof value.additionalProperties === 'boolean') {
+        out.additionalProperties = value.additionalProperties;
+    }
+    if (value.items && typeof value.items === 'object' && !Array.isArray(value.items)) {
+        out.items = schemaDepth >= 2
+            ? summarizeForModel(value.items, maxStringChars)
+            : compactSchemaNodeForModel(value.items, options, schemaDepth + 1);
+    }
+    if (value.properties && typeof value.properties === 'object' && !Array.isArray(value.properties)) {
+        out.properties = schemaDepth >= 2
+            ? Object.fromEntries(Object.keys(value.properties).slice(0, 24).map((key) => [key, '<schema compacted>']))
+            : compactSchemaPropertiesForModel(value.properties, options, schemaDepth + 1);
+    }
+    return Object.keys(out).length ? out : summarizeForModel(value, maxStringChars);
+}
+
+function compactJsonForModel(value, options = {}, depth = 0, parentKey = '') {
     const maxStringChars = Math.max(64, Number(options.maxStringChars || DEFAULT_JSON_STRING_BUDGET_CHARS));
     const maxArrayItems = Math.max(1, Number(options.maxArrayItems || DEFAULT_JSON_ARRAY_ITEMS));
     const maxObjectKeys = Math.max(1, Number(options.maxObjectKeys || DEFAULT_JSON_OBJECT_KEYS));
@@ -158,10 +232,34 @@ function compactJsonForModel(value, options = {}, depth = 0) {
         return value;
     }
     if (depth >= maxDepth) {
+        if (Array.isArray(value) && (
+            parentKey === 'required' ||
+            parentKey === 'enum' ||
+            value.every(isPrimitiveJsonValue)
+        )) {
+            const items = value.slice(0, maxArrayItems).map((entry) =>
+                isPrimitiveJsonValue(entry) ? entry : summarizeForModel(entry, maxStringChars)
+            );
+            if (value.length > maxArrayItems) {
+                items.push(`... ${value.length - maxArrayItems} more`);
+            }
+            return items;
+        }
+        if (
+            parentKey === 'properties' &&
+            value &&
+            typeof value === 'object' &&
+            !Array.isArray(value)
+        ) {
+            return compactSchemaPropertiesForModel(value, options);
+        }
+        if (isSchemaLikeObject(value)) {
+            return compactSchemaNodeForModel(value, options);
+        }
         return summarizeForModel(value, maxStringChars);
     }
     if (Array.isArray(value)) {
-        const items = value.slice(0, maxArrayItems).map((entry) => compactJsonForModel(entry, options, depth + 1));
+        const items = value.slice(0, maxArrayItems).map((entry) => compactJsonForModel(entry, options, depth + 1, parentKey));
         if (value.length > maxArrayItems) {
             items.push({ omitted_items: value.length - maxArrayItems });
         }
@@ -170,7 +268,7 @@ function compactJsonForModel(value, options = {}, depth = 0) {
     const out = {};
     const entries = Object.entries(value);
     for (const [key, entry] of entries.slice(0, maxObjectKeys)) {
-        out[key] = compactJsonForModel(entry, options, depth + 1);
+        out[key] = compactJsonForModel(entry, options, depth + 1, key);
     }
     if (entries.length > maxObjectKeys) {
         out.__omitted_keys = entries.length - maxObjectKeys;

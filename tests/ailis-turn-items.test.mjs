@@ -3,7 +3,7 @@ import test from 'node:test';
 import {
     buildCodexLikeTurnItems,
     buildTurnItemsPromptObject
-} from '../electron/humanclaw-turn-items.cjs';
+} from '../electron/ailis-turn-items.cjs';
 
 test('Turn items map tool calls and results into Codex-like chronological items', () => {
     const promptObject = buildTurnItemsPromptObject({
@@ -127,4 +127,40 @@ test('Turn items classify Windows command-not-found failures with recovery hints
     assert.match(items[0].preview, /python3/);
     assert.match(items[0].recovery_hint, /PowerShell|Node\.js|web_fetch/);
     assert.ok(items[0].alternatives.includes('node'));
+});
+
+test('Turn items classify web_search discovery output as needing web_fetch evidence', () => {
+    const items = buildCodexLikeTurnItems({
+        stepResults: [
+            {
+                id: 'step-search',
+                title: 'Search Kaggle strategy',
+                tool: 'mcp__ailis_research__web_search',
+                args: { query: 'Kaggle AI攻防 competition latest 攻略' },
+                iteration: 1,
+                response: {
+                    ok: true,
+                    status: 'completed',
+                    result: {
+                        content: [{
+                            type: 'text',
+                            text: [
+                                'Evidence gap: Search results are discovery only. Open a result before answering.',
+                                'Suggested next calls:',
+                                '1. web_fetch {"url":"https://www.kaggle.com/"}',
+                                'High-signal links:',
+                                'URL: https://www.kaggle.com/'
+                            ].join('\n')
+                        }]
+                    }
+                }
+            }
+        ]
+    });
+
+    assert.equal(items.length, 1);
+    assert.equal(items[0].status, 'completed');
+    assert.equal(items[0].evidence_gap, 'search_results_need_fetch');
+    assert.match(items[0].recovery_hint, /mcp__ailis_research__web_fetch/);
+    assert.ok(items[0].alternatives.includes('mcp__ailis_research__web_fetch'));
 });
