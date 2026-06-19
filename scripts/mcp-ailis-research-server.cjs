@@ -185,6 +185,456 @@ function stripHtml(html = '') {
         .trim();
 }
 
+function compactWhitespace(value = '') {
+    return normalizeString(String(value || '').replace(/\s+/g, ' '));
+}
+
+function truncateRelationText(value = '', max = 240) {
+    const text = compactWhitespace(value);
+    return text.length > max ? `${text.slice(0, Math.max(0, max - 3)).trim()}...` : text;
+}
+
+function extractHtmlAttribute(tag = '', name = '') {
+    if (!tag || !name) {
+        return '';
+    }
+    const pattern = new RegExp(`\\b${name}\\s*=\\s*("([^"]*)"|'([^']*)'|([^\\s>]+))`, 'i');
+    const match = String(tag).match(pattern);
+    return match ? decodeHtml(match[2] || match[3] || match[4] || '') : '';
+}
+
+function resolveHtmlUrl(value = '', baseUrl = '') {
+    const raw = decodeHtml(String(value || '').trim());
+    if (!raw || raw.startsWith('#') || /^(?:javascript|mailto|tel):/i.test(raw)) {
+        return '';
+    }
+    try {
+        return new URL(raw, baseUrl).href;
+    } catch {
+        return /^https?:\/\//i.test(raw) ? raw : '';
+    }
+}
+
+function extractHtmlDocumentTitle(html = '') {
+    const title = String(html).match(/<title\b[^>]*>([\s\S]*?)<\/title>/i);
+    return title ? truncateRelationText(stripHtml(title[1]), 180) : '';
+}
+
+function extractHtmlMetadata(html = '', baseUrl = '') {
+    const metadata = [];
+    const seen = new Set();
+    const title = extractHtmlDocumentTitle(html);
+    if (title) {
+        metadata.push({ name: 'title', value: title });
+        seen.add('title');
+    }
+    const langMatch = String(html).match(/<html\b[^>]*\blang=["']([^"']+)["'][^>]*>/i);
+    if (langMatch) {
+        metadata.push({ name: 'language', value: truncateRelationText(langMatch[1], 80) });
+        seen.add('language');
+    }
+    const linkPattern = /<link\b[^>]*>/gi;
+    let linkMatch;
+    while ((linkMatch = linkPattern.exec(html)) && metadata.length < 18) {
+        const tag = linkMatch[0];
+        const rel = compactWhitespace(extractHtmlAttribute(tag, 'rel')).toLowerCase();
+        if (!/\b(?:canonical|alternate|amphtml|manifest)\b/.test(rel)) {
+            continue;
+        }
+        const href = resolveHtmlUrl(extractHtmlAttribute(tag, 'href'), baseUrl);
+        if (!href) {
+            continue;
+        }
+        const key = `link:${rel}:${href}`;
+        if (seen.has(key)) {
+            continue;
+        }
+        seen.add(key);
+        metadata.push({ name: `link:${rel}`, value: href });
+    }
+    const metaPattern = /<meta\b[^>]*>/gi;
+    let metaMatch;
+    while ((metaMatch = metaPattern.exec(html)) && metadata.length < 30) {
+        const tag = metaMatch[0];
+        const name = compactWhitespace(
+            extractHtmlAttribute(tag, 'name') ||
+            extractHtmlAttribute(tag, 'property') ||
+            extractHtmlAttribute(tag, 'itemprop')
+        );
+        const content = truncateRelationText(extractHtmlAttribute(tag, 'content'), 360);
+        if (!name || !content) {
+            continue;
+        }
+        if (!/^(?:description|keywords|author|date|article:|og:|twitter:|citation_|dc\.|dcterms\.)/i.test(name)) {
+            continue;
+        }
+        const key = `meta:${name}:${content}`;
+        if (seen.has(key)) {
+            continue;
+        }
+        seen.add(key);
+        metadata.push({ name, value: content });
+    }
+    return metadata;
+}
+
+function normalizeJsonLdList(value) {
+    if (!value) {
+        return [];
+    }
+    if (Array.isArray(value)) {
+        return value.flatMap(normalizeJsonLdList);
+    }
+    if (typeof value === 'object') {
+        if (Array.isArray(value['@graph'])) {
+            return value['@graph'].flatMap(normalizeJsonLdList);
+        }
+        return [value];
+    }
+    return [];
+}
+
+function jsonLdEntityName(value) {
+    if (!value) {
+        return '';
+    }
+    if (typeof value === 'string') {
+        return truncateRelationText(value, 180);
+    }
+    if (Array.isArray(value)) {
+        return value.map(jsonLdEntityName).filter(Boolean).join(', ').slice(0, 220);
+    }
+    if (typeof value === 'object') {
+        return truncateRelationText(value.name || value.headline || value.title || value['@id'] || value.url || '', 220);
+    }
+    return truncateRelationText(String(value), 180);
+}
+
+function extractJsonLdRelations(html = '', baseUrl = '') {
+    const entities = [];
+    const triples = [];
+    const seenEntities = new Set();
+    const seenTriples = new Set();
+    const pattern = /<script\b[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+    let match;
+    while ((match = pattern.exec(html)) && entities.length < 20) {
+        let parsed;
+        try {
+            parsed = JSON.parse(decodeHtml(match[1]).trim());
+        } catch {
+            continue;
+        }
+        for (const node of normalizeJsonLdList(parsed)) {
+            const types = Array.isArray(node['@type']) ? node['@type'] : [node['@type']].filter(Boolean);
+            const name = jsonLdEntityName(node);
+            const url = resolveHtmlUrl(node.url || node.mainEntityOfPage || node['@id'] || '', baseUrl);
+            const entity = {
+                type: types.join(', ') || undefined,
+                name: name || undefined,
+                url: url || undefined,
+                datePublished: truncateRelationText(node.datePublished || node.dateModified || '', 120) || undefined
+            };
+            const entityKey = JSON.stringify(entity);
+            if ((entity.name || entity.url || entity.type) && !seenEntities.has(entityKey)) {
+                seenEntities.add(entityKey);
+                entities.push(pruneEmptyDeep(entity));
+            }
+            const subject = entity.name || entity.url || entity.type || 'json-ld entity';
+            const relationFields = ['author', 'publisher', 'creator', 'about', 'mainEntity', 'isPartOf', 'itemListElement'];
+            for (const field of relationFields) {
+                const values = Array.isArray(node[field]) ? node[field] : [node[field]].filter(Boolean);
+                for (const value of values.slice(0, 8)) {
+                    const object = jsonLdEntityName(value);
+                    if (!object) {
+                        continue;
+                    }
+                    const triple = { subject, predicate: field, object, source: 'json-ld' };
+                    const key = JSON.stringify(triple);
+                    if (!seenTriples.has(key)) {
+                        seenTriples.add(key);
+                        triples.push(triple);
+                    }
+                    if (triples.length >= 40) {
+                        break;
+                    }
+                }
+                if (triples.length >= 40) {
+                    break;
+                }
+            }
+        }
+    }
+    return { entities, triples };
+}
+
+function extractHtmlDefinitionRelations(html = '', limit = 24) {
+    const keyValues = [];
+    const triples = [];
+    const seen = new Set();
+    const dlPattern = /<dt\b[^>]*>([\s\S]*?)<\/dt>\s*<dd\b[^>]*>([\s\S]*?)<\/dd>/gi;
+    let match;
+    while ((match = dlPattern.exec(html)) && keyValues.length < limit) {
+        const key = truncateRelationText(stripHtml(match[1]), 120);
+        const value = truncateRelationText(stripHtml(match[2]), 300);
+        const pairKey = `${key}:${value}`;
+        if (!key || !value || seen.has(pairKey)) {
+            continue;
+        }
+        seen.add(pairKey);
+        keyValues.push({ key, value, source: 'definition_list' });
+        triples.push({ subject: 'page', predicate: key, object: value, source: 'definition_list' });
+    }
+    return { keyValues, triples };
+}
+
+function extractTableCells(rowHtml = '') {
+    const cells = [];
+    const pattern = /<t[hd]\b[^>]*>([\s\S]*?)<\/t[hd]>/gi;
+    let match;
+    while ((match = pattern.exec(rowHtml)) && cells.length < 16) {
+        cells.push(truncateRelationText(stripHtml(match[1]), 240));
+    }
+    return cells;
+}
+
+function extractHtmlTableRelations(html = '', limit = 6) {
+    const tables = [];
+    const keyValues = [];
+    const triples = [];
+    const seenTriples = new Set();
+    const tablePattern = /<table\b[^>]*>([\s\S]*?)<\/table>/gi;
+    let tableMatch;
+    while ((tableMatch = tablePattern.exec(html)) && tables.length < limit) {
+        const tableHtml = tableMatch[1];
+        const captionMatch = tableHtml.match(/<caption\b[^>]*>([\s\S]*?)<\/caption>/i);
+        const caption = captionMatch ? truncateRelationText(stripHtml(captionMatch[1]), 180) : '';
+        const rowMatches = Array.from(tableHtml.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/gi)).slice(0, 24);
+        const rows = rowMatches.map((row) => extractTableCells(row[1])).filter((cells) => cells.some(Boolean));
+        if (!rows.length) {
+            continue;
+        }
+        const firstRowHasHeaders = /<th\b/i.test(rowMatches[0]?.[1] || '');
+        const headers = firstRowHasHeaders ? rows[0] : [];
+        const dataRows = firstRowHasHeaders ? rows.slice(1) : rows;
+        const table = pruneEmptyDeep({
+            caption: caption || undefined,
+            headers: headers.length ? headers : undefined,
+            rowCount: dataRows.length,
+            sampleRows: dataRows.slice(0, 8)
+        });
+        tables.push(table);
+        for (const cells of dataRows.slice(0, 12)) {
+            if (headers.length >= 2 && cells.length >= 2) {
+                const rowSubject = cells[0] || caption || 'table row';
+                for (let index = 1; index < Math.min(headers.length, cells.length); index += 1) {
+                    const predicate = headers[index];
+                    const object = cells[index];
+                    if (!predicate || !object) {
+                        continue;
+                    }
+                    const triple = { subject: rowSubject, predicate, object, source: caption || 'table' };
+                    const key = JSON.stringify(triple);
+                    if (!seenTriples.has(key)) {
+                        seenTriples.add(key);
+                        triples.push(triple);
+                    }
+                }
+            } else if (cells.length === 2 && cells[0] && cells[1]) {
+                const pair = { key: cells[0], value: cells[1], source: caption || 'table' };
+                keyValues.push(pair);
+                const triple = { subject: caption || 'page', predicate: cells[0], object: cells[1], source: caption || 'table' };
+                const key = JSON.stringify(triple);
+                if (!seenTriples.has(key)) {
+                    seenTriples.add(key);
+                    triples.push(triple);
+                }
+            }
+        }
+    }
+    return { tables, keyValues, triples };
+}
+
+function extractHtmlSections(html = '', baseUrl = '', limit = 14) {
+    const headings = [];
+    const pattern = /<h([1-6])\b([^>]*)>([\s\S]*?)<\/h\1>/gi;
+    let match;
+    while ((match = pattern.exec(html)) && headings.length < 80) {
+        const text = truncateRelationText(stripHtml(match[3]), 180);
+        if (!text) {
+            continue;
+        }
+        headings.push({
+            level: Number(match[1]),
+            id: extractHtmlAttribute(match[2], 'id'),
+            heading: text,
+            start: match.index,
+            end: pattern.lastIndex
+        });
+    }
+    const sections = [];
+    const stack = [];
+    for (let index = 0; index < headings.length && sections.length < limit; index += 1) {
+        const heading = headings[index];
+        while (stack.length && stack[stack.length - 1].level >= heading.level) {
+            stack.pop();
+        }
+        stack.push({ level: heading.level, heading: heading.heading });
+        const next = headings[index + 1];
+        const fragment = html.slice(heading.end, next ? next.start : Math.min(html.length, heading.end + 6000));
+        const textPreview = truncateRelationText(stripHtml(fragment), 520);
+        const links = extractLinksFromHtml(fragment, baseUrl, 12)
+            .map((link) => pruneEmptyDeep({
+                text: truncateRelationText(link.text, 140),
+                url: link.url
+            }))
+            .filter((link) => link.url || link.text)
+            .slice(0, 6);
+        sections.push(pruneEmptyDeep({
+            level: heading.level,
+            heading: heading.heading,
+            path: stack.map((entry) => entry.heading),
+            id: heading.id || undefined,
+            textPreview: textPreview || undefined,
+            links: links.length ? links : undefined
+        }));
+    }
+    if (!sections.length) {
+        const articleMatch = html.match(/<(?:article|main|body)\b[^>]*>([\s\S]*?)<\/(?:article|main|body)>/i);
+        const textPreview = truncateRelationText(stripHtml(articleMatch ? articleMatch[1] : html), 700);
+        if (textPreview) {
+            sections.push({ level: 0, heading: 'page body', path: ['page body'], textPreview });
+        }
+    }
+    return sections;
+}
+
+function buildLinkRelationTriples(links = [], sections = [], pageTitle = '') {
+    const triples = [];
+    const seen = new Set();
+    const sectionByUrl = new Map();
+    for (const section of sections) {
+        for (const link of section.links || []) {
+            if (link.url && !sectionByUrl.has(link.url)) {
+                sectionByUrl.set(link.url, section.heading);
+            }
+        }
+    }
+    for (const link of links.slice(0, 20)) {
+        const url = normalizeString(link.url);
+        if (!url) {
+            continue;
+        }
+        const subject = sectionByUrl.get(url) || pageTitle || 'page';
+        const object = truncateRelationText(link.text || url, 180) || url;
+        const triple = {
+            subject,
+            predicate: 'links_to',
+            object,
+            url,
+            source: 'anchor'
+        };
+        const key = `${subject}:links_to:${url}:${object}`;
+        if (!seen.has(key)) {
+            seen.add(key);
+            triples.push(triple);
+        }
+    }
+    return triples;
+}
+
+function extractHtmlRelationGraph(html = '', { url = '', query = '', links = [] } = {}) {
+    const metadata = extractHtmlMetadata(html, url);
+    const title = metadata.find((entry) => entry.name === 'title')?.value || extractHtmlDocumentTitle(html);
+    const canonicalUrl = metadata.find((entry) => entry.name === 'link:canonical')?.value || url;
+    const sections = extractHtmlSections(html, url);
+    const rankedLinks = rankLinksForResearch(
+        Array.isArray(links) && links.length ? links : extractLinksFromHtml(html, url, 80),
+        url,
+        query
+    ).slice(0, 12);
+    const linkRelations = rankedLinks.map((candidate) => pruneEmptyDeep({
+        kind: candidate.kind,
+        text: truncateRelationText(candidate.text, 160),
+        url: candidate.url,
+        score: Number.isFinite(candidate.score) ? Number(candidate.score.toFixed(2)) : undefined,
+        queryMatchedTerms: candidate.queryMatchedTerms?.length ? candidate.queryMatchedTerms.slice(0, 8) : undefined
+    }));
+    const jsonLd = extractJsonLdRelations(html, url);
+    const tableRelations = extractHtmlTableRelations(html);
+    const definitionRelations = extractHtmlDefinitionRelations(html);
+    const keyValues = [...definitionRelations.keyValues, ...tableRelations.keyValues].slice(0, 30);
+    const relationTriples = [
+        ...jsonLd.triples,
+        ...definitionRelations.triples,
+        ...tableRelations.triples,
+        ...buildLinkRelationTriples(rankedLinks, sections, title)
+    ].slice(0, 70);
+    return pruneEmptyDeep({
+        status: 'extracted',
+        sourceUrl: url || undefined,
+        canonicalUrl: canonicalUrl || undefined,
+        title: title || undefined,
+        metadata: metadata.length ? metadata.slice(0, 30) : undefined,
+        jsonLdEntities: jsonLd.entities.length ? jsonLd.entities.slice(0, 20) : undefined,
+        sections: sections.length ? sections : undefined,
+        linkRelations: linkRelations.length ? linkRelations : undefined,
+        tables: tableRelations.tables.length ? tableRelations.tables : undefined,
+        keyValues: keyValues.length ? keyValues : undefined,
+        relationTriples: relationTriples.length ? relationTriples : undefined
+    });
+}
+
+function formatHtmlRelationGraph(graph = {}) {
+    if (!graph || typeof graph !== 'object' || graph.status !== 'extracted') {
+        return '';
+    }
+    const lines = ['HTML relationship map:'];
+    if (graph.title) {
+        lines.push(`Title: ${graph.title}`);
+    }
+    if (graph.canonicalUrl && graph.canonicalUrl !== graph.sourceUrl) {
+        lines.push(`Canonical: ${graph.canonicalUrl}`);
+    }
+    const meta = (graph.metadata || [])
+        .filter((entry) => !['title', 'language', 'link:canonical'].includes(entry.name))
+        .slice(0, 5)
+        .map((entry) => `${entry.name}=${entry.value}`);
+    if (meta.length) {
+        lines.push(`Metadata: ${meta.join(' | ')}`);
+    }
+    const sections = (graph.sections || []).slice(0, 5);
+    if (sections.length) {
+        lines.push('Sections:');
+        for (const section of sections) {
+            const path = Array.isArray(section.path) && section.path.length ? section.path.join(' > ') : section.heading;
+            lines.push(`- ${path}${section.textPreview ? `: ${section.textPreview}` : ''}`);
+        }
+    }
+    const keyValues = (graph.keyValues || []).slice(0, 8);
+    if (keyValues.length) {
+        lines.push('Key-value facts:');
+        for (const pair of keyValues) {
+            lines.push(`- ${pair.key}: ${pair.value}`);
+        }
+    }
+    const tables = (graph.tables || []).slice(0, 3);
+    if (tables.length) {
+        lines.push('Tables:');
+        for (const table of tables) {
+            const headers = Array.isArray(table.headers) && table.headers.length ? ` headers=${table.headers.join(' | ')}` : '';
+            lines.push(`- ${table.caption || 'table'} rows=${table.rowCount || 0}${headers}`);
+        }
+    }
+    const triples = (graph.relationTriples || []).slice(0, 10);
+    if (triples.length) {
+        lines.push('Relations:');
+        for (const triple of triples) {
+            lines.push(`- ${triple.subject} --${triple.predicate}--> ${triple.object}${triple.url ? ` (${triple.url})` : ''}`);
+        }
+    }
+    return lines.join('\n');
+}
+
 function extractDoiCandidate(value = '') {
     const text = normalizeString(value);
     if (!text) {
@@ -1869,6 +2319,10 @@ async function webFetch(args = {}) {
     const suggestedNextCalls = buildSuggestedCallsFromRankedLinks(suggestedRankedLinks, 3);
     const observedLinksForGuidance = linkQuery ? suggestedRankedLinks : rankedLinks;
     const observedRelevantLinks = observedLinksForGuidance.slice(0, 5).map((candidate) => summarizeRelevantLink(candidate));
+    const htmlRelations = /html/i.test(contentType)
+        ? extractHtmlRelationGraph(body, { url, query: linkQuery, links: extractedLinks })
+        : null;
+    const htmlRelationSummary = formatHtmlRelationGraph(htmlRelations);
     const barrier = classifyAccessBarrierText(text);
     const truncatedForModel = focused.text.length < text.length;
     const quality = classifyWebFetchEvidenceQuality({
@@ -1890,7 +2344,7 @@ async function webFetch(args = {}) {
         observedRelevantLinks
     });
     const reasoningReady = quality.evidenceQuality === 'sufficient_evidence' && quality.isEvidence === true && !truncatedForModel;
-    return textResult([guidance, `Content excerpt:\n${focused.text}`].filter(Boolean).join('\n\n'), {
+    return textResult([guidance, htmlRelationSummary, `Content excerpt:\n${focused.text}`].filter(Boolean).join('\n\n'), {
         status: 'completed',
         url,
         contentType,
@@ -1915,6 +2369,8 @@ async function webFetch(args = {}) {
         observedLinkCount: extractedLinks.length,
         suggestedNextCalls,
         observedRelevantLinks,
+        htmlRelations: htmlRelations || undefined,
+        htmlRelationSummary: htmlRelationSummary || undefined,
         evidenceGap,
         recoveryHint,
         pageStatus: quality.pageStatus || undefined,
@@ -5256,7 +5712,7 @@ const TOOLS = [
     },
     {
         name: 'web_fetch',
-        description: 'Fetch a public HTTP(S) HTML or text resource and return readable text. Rejects PDF/binary content with unsupported_content_type; use pdf_extract_text or download_file for PDFs/files. For archive, listing, search-result, table-of-contents, or journal issue pages, pass query/contains with task terms such as author, year, topic, or answer clue so excerpts and linked resources are ranked against the task instead of newest/first links.',
+        description: 'Fetch a public HTTP(S) HTML or text resource and return readable text plus a structured HTML relationship map when HTML is available. The relationship map exposes title/metadata, heading sections, ranked links with context, JSON-LD entities, key-value facts, table rows, and relation triples so the model can reason over page structure instead of plain text only. Rejects PDF/binary content with unsupported_content_type; use pdf_extract_text or download_file for PDFs/files. For archive, listing, search-result, table-of-contents, or journal issue pages, pass query/contains with task terms such as author, year, topic, or answer clue so excerpts and linked resources are ranked against the task instead of newest/first links.',
         inputSchema: {
             type: 'object',
             required: ['url'],

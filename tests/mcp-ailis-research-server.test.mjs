@@ -941,6 +941,57 @@ test('web_fetch surfaces linked DOI and PDF follow-up actions from HTML pages', 
     });
 });
 
+test('web_fetch extracts HTML relationship map for model reasoning', async () => {
+    await withServer((request, response) => {
+        response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        response.end([
+            '<!doctype html>',
+            '<html lang="zh-CN">',
+            '<head>',
+            '<title>绝区零 叶瞬光攻略</title>',
+            '<link rel="canonical" href="/guides/ye-shunguang">',
+            '<meta name="description" content="叶瞬光抽取建议、驱动盘、配队和技能优先级。">',
+            '<script type="application/ld+json">',
+            JSON.stringify({
+                '@type': 'Article',
+                headline: '叶瞬光攻略',
+                author: { '@type': 'Person', name: '攻略组' },
+                about: { '@type': 'Thing', name: '绝区零' },
+                datePublished: '2026-06-19'
+            }),
+            '</script>',
+            '</head>',
+            '<body>',
+            '<h1>叶瞬光攻略</h1>',
+            '<p>叶瞬光适合电属性异常队伍，今天复刻可以抽。</p>',
+            '<h2>抽取建议</h2>',
+            '<p>如果缺少电属性主C，可以优先考虑。</p>',
+            '<a href="/guides/team">配队方案</a>',
+            '<dl><dt>角色定位</dt><dd>电属性输出</dd></dl>',
+            '<table><caption>养成优先级</caption><tr><th>项目</th><th>建议</th></tr><tr><td>技能</td><td>核心技优先</td></tr></table>',
+            '</body></html>'
+        ].join(''));
+    }, async (baseUrl) => {
+        const result = await webFetch({
+            url: `${baseUrl}/guide`,
+            query: '绝区零 叶瞬光 攻略 配队 技能'
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.match(result.content[0].text, /HTML relationship map:/);
+        assert.match(result.content[0].text, /Relations:/);
+        assert.equal(result.structuredContent.htmlRelations.title, '绝区零 叶瞬光攻略');
+        assert.equal(result.structuredContent.htmlRelations.canonicalUrl, `${baseUrl}/guides/ye-shunguang`);
+        assert.ok(result.structuredContent.htmlRelations.metadata.some((entry) => entry.name === 'description'));
+        assert.ok(result.structuredContent.htmlRelations.sections.some((section) => section.heading === '抽取建议'));
+        assert.ok(result.structuredContent.htmlRelations.linkRelations.some((link) => link.url === `${baseUrl}/guides/team`));
+        assert.ok(result.structuredContent.htmlRelations.keyValues.some((pair) => pair.key === '角色定位' && pair.value === '电属性输出'));
+        assert.ok(result.structuredContent.htmlRelations.tables.some((table) => table.caption === '养成优先级'));
+        assert.ok(result.structuredContent.htmlRelations.jsonLdEntities.some((entity) => entity.name === '叶瞬光攻略'));
+        assert.ok(result.structuredContent.htmlRelations.relationTriples.some((triple) => triple.predicate === '建议' && triple.object === '核心技优先'));
+    });
+});
+
 test('web_fetch does not suggest unrelated PDFs when query terms are absent', async () => {
     await withServer((request, response) => {
         response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
