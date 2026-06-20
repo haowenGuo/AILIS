@@ -29,6 +29,7 @@ const {
     readDocument,
     webExtractLinks,
     webFetch,
+    webSearch,
     youtubeTranscript,
     youtubeVideoSearch
 } = require('../scripts/mcp-ailis-research-server.cjs');
@@ -87,9 +88,14 @@ test('AILIS research MCP exposes Codex-aligned PDF/file tools', () => {
     assert.ok(names.includes('youtube_transcript'));
     assert.ok(searchTool.inputSchema.properties.backend);
     assert.ok(searchTool.inputSchema.properties.backends);
+    assert.ok(searchTool.inputSchema.properties.provider);
+    assert.ok(searchTool.inputSchema.properties.searxngUrl);
     assert.ok(searchTool.inputSchema.properties.backends.items.enum.includes('duckduckgo_html'));
     assert.ok(searchTool.inputSchema.properties.backends.items.enum.includes('github_repositories'));
+    assert.ok(searchTool.inputSchema.properties.backends.items.enum.includes('searxng_json'));
+    assert.ok(searchTool.inputSchema.properties.backends.items.enum.includes('firecrawl_search'));
     assert.ok(searchTool.description.includes('managed search backends'));
+    assert.ok(searchTool.description.includes('AILIS_SEARXNG_URL'));
 });
 
 test('YouTube tools expose recovery affordance before broad web search', async () => {
@@ -743,13 +749,115 @@ test('web_search can parse GitHub repository API fallback results', () => {
     );
 });
 
-test('web_search chooses GitHub backend first only for repository-oriented queries', () => {
-    const githubBackends = normalizeSearchBackends({}, 'site:github.com Attention Is All You Need implementation').map((backend) => backend.id);
-    assert.equal(githubBackends[0], 'github_repositories');
-    assert.ok(githubBackends.includes('duckduckgo_lite'));
+test('web_search chooses provider chain while keeping GitHub backend first for repository queries', () => {
+    const previousProvider = process.env.AILIS_WEB_SEARCH_PROVIDER;
+    delete process.env.AILIS_WEB_SEARCH_PROVIDER;
+    try {
+        const githubBackends = normalizeSearchBackends({}, 'site:github.com Attention Is All You Need implementation').map((backend) => backend.id);
+        assert.equal(githubBackends[0], 'github_repositories');
+        assert.equal(githubBackends[1], 'searxng_json');
+        assert.ok(githubBackends.includes('firecrawl_search'));
+        assert.ok(githubBackends.includes('duckduckgo_lite'));
 
-    const generalBackends = normalizeSearchBackends({}, 'Playwright locator waitFor official docs').map((backend) => backend.id);
-    assert.equal(generalBackends[0], 'bing_html');
+        const generalBackends = normalizeSearchBackends({}, 'Playwright locator waitFor official docs').map((backend) => backend.id);
+        assert.equal(generalBackends[0], 'searxng_json');
+        assert.equal(generalBackends[1], 'firecrawl_search');
+        assert.ok(generalBackends.includes('bing_html'));
+
+        const htmlBackends = normalizeSearchBackends({ provider: 'html' }, 'Playwright locator waitFor official docs').map((backend) => backend.id);
+        assert.deepEqual(htmlBackends, ['bing_html', 'duckduckgo_lite', 'duckduckgo_html', 'yahoo_html']);
+    } finally {
+        if (previousProvider === undefined) {
+            delete process.env.AILIS_WEB_SEARCH_PROVIDER;
+        } else {
+            process.env.AILIS_WEB_SEARCH_PROVIDER = previousProvider;
+        }
+    }
+});
+
+test('web_search uses SearXNG JSON provider before HTML fallback', async () => {
+    await withServer((request, response) => {
+        const url = new URL(request.url || '/', 'http://127.0.0.1');
+        assert.equal(url.pathname, '/search');
+        assert.equal(url.searchParams.get('format'), 'json');
+        assert.match(url.searchParams.get('q') || '', /叶瞬光/);
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({
+            results: [
+                {
+                    title: '【绝区零】叶瞬光角色攻略',
+                    url: 'https://www.bilibili.com/video/BV1rXBoBoEv1/',
+                    content: '小光攻略，技能机制，输出手法，配队配装，驱动盘和音擎。'
+                }
+            ]
+        }));
+    }, async (baseUrl) => {
+        const result = await webSearch({
+            query: '绝区零 叶瞬光 小光 攻略',
+            provider: 'searxng',
+            searxngUrl: baseUrl,
+            maxResults: 5
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.equal(result.structuredContent.backend, 'searxng_json');
+        assert.equal(result.structuredContent.attempts[0].backend, 'searxng_json');
+        assert.equal(result.structuredContent.results[0].url, 'https://www.bilibili.com/video/BV1rXBoBoEv1/');
+        assert.equal(result.structuredContent.suggestedNextCalls[0].tool, 'web_fetch');
+    });
+});
+
+test('web_search falls from failed SearXNG JSON to Firecrawl search provider', async () => {
+    const requests = [];
+    await withServer((request, response) => {
+        const url = new URL(request.url || '/', 'http://127.0.0.1');
+        requests.push({ method: request.method, pathname: url.pathname });
+        if (url.pathname === '/search') {
+            response.writeHead(503, { 'content-type': 'application/json' });
+            response.end(JSON.stringify({ error: 'searxng unavailable' }));
+            return;
+        }
+        if (url.pathname === '/v1/search') {
+            let body = '';
+            request.on('data', (chunk) => {
+                body += chunk;
+            });
+            request.on('end', () => {
+                const payload = JSON.parse(body);
+                assert.match(payload.query, /Crawl4AI|agent/i);
+                response.writeHead(200, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({
+                    success: true,
+                    data: [
+                        {
+                            title: 'Crawl4AI agent web extraction guide',
+                            url: 'https://docs.crawl4ai.com/core/quickstart/',
+                            description: 'Crawl4AI extracts Markdown for LLM and agent web tasks.'
+                        }
+                    ]
+                }));
+            });
+            return;
+        }
+        response.writeHead(404, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ error: 'not found' }));
+    }, async (baseUrl) => {
+        const result = await webSearch({
+            query: 'Crawl4AI agent web extraction guide',
+            provider: 'searxng,firecrawl',
+            searxngUrl: baseUrl,
+            firecrawlUrl: baseUrl,
+            maxResults: 5
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.equal(result.structuredContent.backend, 'firecrawl_search');
+        assert.equal(result.structuredContent.attempts[0].backend, 'searxng_json');
+        assert.equal(result.structuredContent.attempts[0].ok, false);
+        assert.equal(result.structuredContent.attempts[1].backend, 'firecrawl_search');
+        assert.equal(result.structuredContent.results[0].url, 'https://docs.crawl4ai.com/core/quickstart/');
+        assert.deepEqual(requests.map((item) => item.pathname), ['/search', '/v1/search']);
+    });
 });
 
 test('github_repo_read reads README, tree, and file evidence through GitHub API shape', async () => {
@@ -998,6 +1106,86 @@ test('web_fetch rejects PDF/binary content instead of returning raw PDF bytes', 
         assert.equal(result.details.contentType, 'application/pdf');
         assert.deepEqual(result.details.suggestedTools, ['pdf_extract_text', 'download_file']);
         assert.doesNotMatch(result.content[0].text, /%PDF-1\.5/);
+    });
+});
+
+test('web_fetch uses Crawl4AI Markdown when configured', async () => {
+    await withServer((request, response) => {
+        const url = new URL(request.url || '/', 'http://127.0.0.1');
+        if (url.pathname === '/crawl') {
+            let body = '';
+            request.on('data', (chunk) => {
+                body += chunk;
+            });
+            request.on('end', () => {
+                const payload = JSON.parse(body);
+                assert.equal(payload.url.endsWith('/guide'), true);
+                response.writeHead(200, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({
+                    markdown: [
+                        '# 绝区零 叶瞬光攻略',
+                        '',
+                        '叶瞬光也被玩家叫作小光。这个攻略覆盖技能机制、输出手法、配队配装、驱动盘和音擎。',
+                        '为了让证据足够长，这里继续说明养成优先级、队伍循环、异常积蓄和实战注意事项。',
+                        '建议先确认角色定位，再查看[配队详解](/teams)。'
+                    ].join('\n')
+                }));
+            });
+            return;
+        }
+        response.writeHead(500, { 'content-type': 'text/plain' });
+        response.end('web_fetch should not hit the original page when Crawl4AI succeeds');
+    }, async (baseUrl) => {
+        const result = await webFetch({
+            url: `${baseUrl}/guide`,
+            query: '绝区零 叶瞬光 小光 攻略 配队',
+            provider: 'crawl4ai',
+            crawl4aiUrl: baseUrl
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.equal(result.structuredContent.fetchBackend, 'crawl4ai');
+        assert.equal(result.structuredContent.contentType, 'text/markdown; charset=utf-8');
+        assert.equal(result.structuredContent.crawl4aiAttempt.ok, true);
+        assert.equal(result.structuredContent.observedLinkCount, 1);
+        assert.match(result.content[0].text, /叶瞬光也被玩家叫作小光/);
+    });
+});
+
+test('web_fetch falls back to current HTML extraction when Crawl4AI is unavailable', async () => {
+    await withServer((request, response) => {
+        const url = new URL(request.url || '/', 'http://127.0.0.1');
+        if (url.pathname === '/crawl') {
+            response.writeHead(503, { 'content-type': 'application/json' });
+            response.end(JSON.stringify({ error: 'crawl4ai unavailable' }));
+            return;
+        }
+        if (url.pathname === '/guide') {
+            response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+            response.end([
+                '<html><body>',
+                '<h1>绝区零 叶瞬光攻略</h1>',
+                '<p>小光攻略包含技能机制、配队配装、驱动盘、音擎和输出手法。</p>',
+                '<p>这是 Crawl4AI 不可用时的内置 HTML 抽取 fallback 内容。</p>',
+                '</body></html>'
+            ].join(''));
+            return;
+        }
+        response.writeHead(404, { 'content-type': 'text/plain' });
+        response.end('not found');
+    }, async (baseUrl) => {
+        const result = await webFetch({
+            url: `${baseUrl}/guide`,
+            query: '绝区零 叶瞬光 小光 攻略',
+            provider: 'crawl4ai',
+            crawl4aiUrl: baseUrl
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.notEqual(result.structuredContent.fetchBackend, 'crawl4ai');
+        assert.equal(result.structuredContent.crawl4aiAttempt.ok, false);
+        assert.equal(result.structuredContent.crawl4aiAttempt.errorCode, 'http_503');
+        assert.match(result.content[0].text, /内置 HTML 抽取 fallback 内容/);
     });
 });
 

@@ -1832,7 +1832,208 @@ function isLikelyGitHubSearch(query = '') {
     return /github\.com|site:github\.com|\bgithub\b|repository|repo|代码仓库|复现代码|implementation|pytorch|tensorflow/i.test(query);
 }
 
+const HTML_SEARCH_BACKEND_IDS = Object.freeze(['bing_html', 'duckduckgo_lite', 'duckduckgo_html', 'yahoo_html']);
+const DEFAULT_SEARXNG_URL = 'http://127.0.0.1:8080';
+const DEFAULT_FIRECRAWL_URL = 'https://api.firecrawl.dev';
+const DEFAULT_CRAWL4AI_URL = 'http://127.0.0.1:11235';
+
+function normalizeBaseUrl(value = '') {
+    return normalizeString(value).replace(/\/+$/g, '');
+}
+
+function searxngBaseUrl(args = {}) {
+    return normalizeBaseUrl(
+        args.searxngUrl ||
+        args.searxng_url ||
+        process.env.AILIS_SEARXNG_URL ||
+        process.env.SEARXNG_URL ||
+        DEFAULT_SEARXNG_URL
+    );
+}
+
+function hasConfiguredSearxngUrl(args = {}) {
+    return Boolean(
+        normalizeString(args.searxngUrl || args.searxng_url) ||
+        normalizeString(process.env.AILIS_SEARXNG_URL || process.env.SEARXNG_URL)
+    );
+}
+
+function firecrawlBaseUrl(args = {}) {
+    return normalizeBaseUrl(
+        args.firecrawlUrl ||
+        args.firecrawl_url ||
+        process.env.AILIS_FIRECRAWL_URL ||
+        process.env.FIRECRAWL_BASE_URL ||
+        DEFAULT_FIRECRAWL_URL
+    );
+}
+
+function firecrawlApiKey(args = {}) {
+    return normalizeString(args.firecrawlApiKey || args.firecrawl_api_key || process.env.FIRECRAWL_API_KEY);
+}
+
+function crawl4aiFetchConfig(args = {}) {
+    const provider = normalizeString(
+        args.fetchProvider ||
+        args.fetch_provider ||
+        args.provider ||
+        process.env.AILIS_WEB_FETCH_PROVIDER ||
+        'auto',
+        'auto'
+    ).toLowerCase();
+    if (provider === 'builtin' || provider === 'current' || provider === 'html') {
+        return null;
+    }
+    const configuredUrl = normalizeBaseUrl(
+        args.crawl4aiUrl ||
+        args.crawl4ai_url ||
+        process.env.AILIS_CRAWL4AI_URL ||
+        process.env.CRAWL4AI_URL
+    );
+    if (configuredUrl) {
+        return { baseUrl: configuredUrl, provider };
+    }
+    if (provider === 'crawl4ai') {
+        return { baseUrl: DEFAULT_CRAWL4AI_URL, provider };
+    }
+    return null;
+}
+
+function buildSearxngSearchUrl(query, maxResults, args = {}) {
+    const baseUrl = searxngBaseUrl(args);
+    const url = new URL(`${baseUrl}/search`);
+    url.searchParams.set('q', query);
+    url.searchParams.set('format', 'json');
+    url.searchParams.set('language', normalizeString(args.language || args.lang || 'auto', 'auto'));
+    url.searchParams.set('safesearch', String(clampNumber(args.safeSearch || args.safe_search, 0, 0, 2)));
+    url.searchParams.set('pageno', '1');
+    if (maxResults) {
+        url.searchParams.set('results_on_new_tab', '0');
+    }
+    return url.toString();
+}
+
+function extractSearxngJsonResults(payload = {}, maxResults = 8) {
+    const rows = Array.isArray(payload.results) ? payload.results : [];
+    return dedupeSearchResults(rows.map((item) => ({
+        title: item.title || item.pretty_url || item.url,
+        url: item.url,
+        snippet: item.content || item.snippet || item.description || item.engine || ''
+    })), maxResults);
+}
+
+function extractFirecrawlSearchResults(payload = {}, maxResults = 8) {
+    const rows = Array.isArray(payload.data)
+        ? payload.data
+        : Array.isArray(payload.results)
+            ? payload.results
+            : [];
+    return dedupeSearchResults(rows.map((item) => {
+        const metadata = item.metadata || {};
+        const markdown = normalizeString(item.markdown || item.content || item.text);
+        return {
+            title: item.title || metadata.title || item.url,
+            url: item.url || item.link,
+            snippet: item.description || item.snippet || metadata.description || markdown.slice(0, 500)
+        };
+    }), maxResults);
+}
+
+async function runSearxngSearchBackend({ query, maxResults, timeoutMs, args = {} } = {}) {
+    const startedAt = Date.now();
+    const url = buildSearxngSearchUrl(query, maxResults, args);
+    const effectiveTimeoutMs = hasConfiguredSearxngUrl(args) ? timeoutMs : Math.min(timeoutMs, 1800);
+    const fetched = await fetchJsonWithNodeFetch(url, { timeoutMs: effectiveTimeoutMs });
+    const durationMs = Date.now() - startedAt;
+    if (!fetched.ok) {
+        return {
+            ok: false,
+            backend: 'searxng_json',
+            url,
+            durationMs,
+            status: fetched.status || 0,
+            errorCode: fetched.errorCode || (fetched.timedOut ? 'timeout' : 'searxng_fetch_failed'),
+            error: fetched.error || 'SearXNG JSON search failed.',
+            retryable: true
+        };
+    }
+    const results = extractSearxngJsonResults(fetched.json, maxResults);
+    return {
+        ok: results.length > 0,
+        backend: 'searxng_json',
+        url,
+        durationMs,
+        status: fetched.status || 0,
+        errorCode: results.length ? '' : 'no_results_parsed',
+        error: results.length ? '' : 'SearXNG returned JSON, but no result rows were parsed.',
+        retryable: results.length === 0,
+        results
+    };
+}
+
+async function runFirecrawlSearchBackend({ query, maxResults, timeoutMs, args = {} } = {}) {
+    const startedAt = Date.now();
+    const baseUrl = firecrawlBaseUrl(args);
+    const key = firecrawlApiKey(args);
+    const url = `${baseUrl}/v1/search`;
+    if (!key && baseUrl === DEFAULT_FIRECRAWL_URL) {
+        return {
+            ok: false,
+            backend: 'firecrawl_search',
+            url,
+            durationMs: Date.now() - startedAt,
+            status: 0,
+            errorCode: 'missing_firecrawl_api_key',
+            error: 'FIRECRAWL_API_KEY is not configured.',
+            retryable: false
+        };
+    }
+    const headers = key ? { Authorization: `Bearer ${key}` } : {};
+    const fetched = await fetchJsonWithNodeFetch(url, {
+        method: 'POST',
+        timeoutMs,
+        headers,
+        body: {
+            query,
+            limit: maxResults
+        }
+    });
+    const durationMs = Date.now() - startedAt;
+    if (!fetched.ok) {
+        return {
+            ok: false,
+            backend: 'firecrawl_search',
+            url,
+            durationMs,
+            status: fetched.status || 0,
+            errorCode: fetched.errorCode || (fetched.timedOut ? 'timeout' : 'firecrawl_fetch_failed'),
+            error: fetched.error || 'Firecrawl search failed.',
+            retryable: fetched.status !== 401 && fetched.status !== 403
+        };
+    }
+    const results = extractFirecrawlSearchResults(fetched.json, maxResults);
+    return {
+        ok: results.length > 0,
+        backend: 'firecrawl_search',
+        url,
+        durationMs,
+        status: fetched.status || 0,
+        errorCode: results.length ? '' : 'no_results_parsed',
+        error: results.length ? '' : 'Firecrawl returned JSON, but no result rows were parsed.',
+        retryable: results.length === 0,
+        results
+    };
+}
+
 const SEARCH_BACKENDS = Object.freeze({
+    searxng_json: Object.freeze({
+        id: 'searxng_json',
+        run: runSearxngSearchBackend
+    }),
+    firecrawl_search: Object.freeze({
+        id: 'firecrawl_search',
+        run: runFirecrawlSearchBackend
+    }),
     duckduckgo_lite: Object.freeze({
         id: 'duckduckgo_lite',
         buildUrl: (query) => `https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}`,
@@ -1864,6 +2065,55 @@ const SEARCH_BACKENDS = Object.freeze({
     })
 });
 
+function dedupeSearchBackendIds(ids = []) {
+    const seen = new Set();
+    const unique = [];
+    for (const id of ids) {
+        const normalized = normalizeString(id).toLowerCase();
+        if (!normalized || seen.has(normalized)) {
+            continue;
+        }
+        seen.add(normalized);
+        unique.push(normalized);
+    }
+    return unique;
+}
+
+function expandSearchProviderToken(token = '', query = '', { includeFallback = true } = {}) {
+    const normalized = normalizeString(token).toLowerCase();
+    if (!normalized || normalized === 'auto') {
+        const chain = ['searxng_json', 'firecrawl_search', ...HTML_SEARCH_BACKEND_IDS];
+        return isLikelyGitHubSearch(query) ? ['github_repositories', ...chain] : chain;
+    }
+    if (normalized === 'html' || normalized === 'builtin_html' || normalized === 'current_html_fallback') {
+        return [...HTML_SEARCH_BACKEND_IDS];
+    }
+    if (normalized === 'searxng') {
+        return includeFallback ? ['searxng_json', ...HTML_SEARCH_BACKEND_IDS] : ['searxng_json'];
+    }
+    if (normalized === 'firecrawl') {
+        return includeFallback ? ['firecrawl_search', ...HTML_SEARCH_BACKEND_IDS] : ['firecrawl_search'];
+    }
+    if (normalized === 'external' || normalized === 'agent_web') {
+        return ['searxng_json', 'firecrawl_search', ...HTML_SEARCH_BACKEND_IDS];
+    }
+    if (normalized === 'github') {
+        return ['github_repositories'];
+    }
+    return [normalized];
+}
+
+function expandSearchProviderIds(value = '', query = '') {
+    const tokens = String(value || 'auto')
+        .split(',')
+        .map((item) => item.trim())
+        .filter(Boolean);
+    const compound = tokens.length > 1;
+    return dedupeSearchBackendIds(
+        tokens.flatMap((item) => expandSearchProviderToken(item, query, { includeFallback: !compound }))
+    );
+}
+
 function normalizeSearchBackends(args = {}, query = '') {
     const raw = Array.isArray(args.backends)
         ? args.backends
@@ -1872,19 +2122,45 @@ function normalizeSearchBackends(args = {}, query = '') {
             .map((item) => item.trim())
             .filter(Boolean);
     const requested = raw.length
-        ? raw
-        : isLikelyGitHubSearch(query)
-            ? ['github_repositories', 'duckduckgo_lite', 'duckduckgo_html', 'bing_html', 'yahoo_html']
-            : ['bing_html', 'duckduckgo_lite', 'duckduckgo_html', 'yahoo_html'];
+        ? dedupeSearchBackendIds(raw.flatMap((item) => expandSearchProviderToken(item, query, { includeFallback: raw.length <= 1 })))
+        : expandSearchProviderIds(
+            args.provider ||
+            args.searchProvider ||
+            args.search_provider ||
+            process.env.AILIS_WEB_SEARCH_PROVIDER ||
+            'auto',
+            query
+        );
     const backends = requested
         .map((id) => SEARCH_BACKENDS[normalizeString(id).toLowerCase()])
         .filter(Boolean);
-    return backends.length ? backends : [SEARCH_BACKENDS.bing_html, SEARCH_BACKENDS.duckduckgo_lite, SEARCH_BACKENDS.duckduckgo_html, SEARCH_BACKENDS.yahoo_html];
+    return backends.length ? backends : HTML_SEARCH_BACKEND_IDS.map((id) => SEARCH_BACKENDS[id]);
 }
 
-async function runSearchBackend(backend, query, maxResults, timeoutMs) {
+async function runSearchBackend(backend, query, maxResults, timeoutMs, args = {}) {
     const startedAt = Date.now();
-    const url = backend.buildUrl(query);
+    if (typeof backend.run === 'function') {
+        try {
+            const attempt = await backend.run({ query, maxResults, timeoutMs, args });
+            return {
+                ...attempt,
+                backend: attempt.backend || backend.id,
+                durationMs: Number.isFinite(attempt.durationMs) ? attempt.durationMs : Date.now() - startedAt
+            };
+        } catch (error) {
+            return {
+                ok: false,
+                backend: backend.id,
+                durationMs: Date.now() - startedAt,
+                status: 0,
+                errorCode: 'search_backend_exception',
+                error: error?.message || String(error),
+                stderr: error?.stack || '',
+                retryable: true
+            };
+        }
+    }
+    const url = backend.buildUrl(query, maxResults, args);
     const fetched = await fetchText(url, timeoutMs);
     const durationMs = Date.now() - startedAt;
     if (!fetched.ok) {
@@ -1955,7 +2231,7 @@ async function webSearch(args = {}) {
         }
         const backend = backends[backendIndex];
         const attemptTimeoutMs = Math.min(timeoutMs, Math.max(1000, remainingMs - 750));
-        const attempt = await runSearchBackend(backend, query, maxResults, attemptTimeoutMs);
+        const attempt = await runSearchBackend(backend, query, maxResults, attemptTimeoutMs, args);
         attempts.push(attempt);
         if (!attempt.ok) {
             continue;
@@ -2465,14 +2741,139 @@ async function githubRepoRead(args = {}) {
     });
 }
 
+function crawl4aiMarkdownCandidate(value) {
+    if (typeof value === 'string') {
+        return value.trim();
+    }
+    if (!value || typeof value !== 'object') {
+        return '';
+    }
+    return normalizeString(
+        value.markdown ||
+        value.raw_markdown ||
+        value.fit_markdown ||
+        value.text ||
+        value.content
+    );
+}
+
+function extractCrawl4aiMarkdown(payload = {}) {
+    const candidates = [
+        payload,
+        payload.data,
+        payload.result,
+        Array.isArray(payload.results) ? payload.results[0] : null,
+        Array.isArray(payload.data) ? payload.data[0] : null,
+        payload.markdown
+    ];
+    for (const candidate of candidates) {
+        const markdown = crawl4aiMarkdownCandidate(candidate);
+        if (markdown) {
+            return markdown;
+        }
+    }
+    return '';
+}
+
+function extractLinksFromMarkdown(markdown = '', baseUrl = '', maxLinks = 80) {
+    const links = [];
+    const seen = new Set();
+    const pattern = /\[([^\]\n]{1,200})\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g;
+    let match;
+    while ((match = pattern.exec(markdown)) && links.length < maxLinks) {
+        const text = normalizeString(match[1]).replace(/\s+/g, ' ');
+        const href = normalizeString(match[2]);
+        let url = '';
+        try {
+            url = /^https?:\/\//i.test(href) ? href : new URL(href, baseUrl).toString();
+        } catch {
+            continue;
+        }
+        const normalized = normalizeUrlCandidate(url);
+        if (!normalized || seen.has(normalized)) {
+            continue;
+        }
+        seen.add(normalized);
+        links.push({ text: text || normalized, url: normalized });
+    }
+    return links;
+}
+
+function summarizeCrawl4aiAttempt(attempt = null) {
+    if (!attempt) {
+        return undefined;
+    }
+    return pruneEmptyDeep({
+        ok: attempt.ok === true,
+        status: attempt.status || undefined,
+        errorCode: normalizeString(attempt.errorCode),
+        error: normalizeString(attempt.error).slice(0, 300),
+        endpoint: normalizeString(attempt.crawl4aiEndpoint),
+        backend: normalizeString(attempt.backend)
+    });
+}
+
+async function maybeFetchWithCrawl4ai(url, args = {}, timeoutMs = 90000) {
+    const config = crawl4aiFetchConfig(args);
+    if (!config) {
+        return null;
+    }
+    const endpoint = `${config.baseUrl}/crawl`;
+    const fetched = await fetchJsonWithNodeFetch(endpoint, {
+        method: 'POST',
+        timeoutMs,
+        body: {
+            url,
+            urls: [url]
+        }
+    });
+    if (!fetched.ok) {
+        return {
+            ok: false,
+            status: fetched.status || 0,
+            errorCode: fetched.errorCode || 'crawl4ai_fetch_failed',
+            error: fetched.error || 'Crawl4AI fetch failed.',
+            backend: 'crawl4ai',
+            crawl4aiEndpoint: endpoint
+        };
+    }
+    const markdown = extractCrawl4aiMarkdown(fetched.json);
+    if (!markdown) {
+        return {
+            ok: false,
+            status: fetched.status || 0,
+            errorCode: 'crawl4ai_no_markdown',
+            error: 'Crawl4AI returned JSON, but no Markdown/text content was found.',
+            backend: 'crawl4ai',
+            crawl4aiEndpoint: endpoint
+        };
+    }
+    return {
+        ok: true,
+        status: fetched.status || 200,
+        contentType: 'text/markdown; charset=utf-8',
+        contentLength: markdown.length,
+        isPdf: false,
+        isBinary: false,
+        text: markdown,
+        stderr: '',
+        error: '',
+        backend: 'crawl4ai',
+        kind: 'crawl4ai_markdown',
+        links: extractLinksFromMarkdown(markdown, url, 80),
+        crawl4aiEndpoint: endpoint
+    };
+}
+
 async function webFetch(args = {}) {
     const url = normalizeString(args.url || args.uri);
     if (!/^https?:\/\//i.test(url)) {
         return errorResult('web_fetch requires http(s) url');
     }
     const maxChars = clampNumber(args.maxChars || args.max_chars, MAX_FETCH_CHARS, 1000, 80000);
-    const wikiText = await maybeFetchWikipediaWikitext(url, 90000);
-    const fetched = wikiText || await fetchText(url, 90000);
+    const crawl4aiAttempt = await maybeFetchWithCrawl4ai(url, args, 90000);
+    const wikiText = crawl4aiAttempt?.ok ? null : await maybeFetchWikipediaWikitext(url, 90000);
+    const fetched = crawl4aiAttempt?.ok ? crawl4aiAttempt : wikiText || await fetchText(url, 90000);
     if (!fetched.ok) {
         return errorResult(fetched.error || 'web_fetch fetch failed', buildHttpAccessFailureDetails(url, fetched));
     }
@@ -2483,6 +2884,7 @@ async function webFetch(args = {}) {
     const body = fetched.text;
     const rawText = fetched.kind === 'wikipedia_wikitext'
         ? stripWikiText(body)
+        : fetched.kind === 'crawl4ai_markdown' ? body.trim()
         : /html/i.test(contentType) ? stripHtml(body) : body.trim();
     const encodingRepair = repairUtf8MojibakeText(rawText);
     const text = encodingRepair.text;
@@ -2491,7 +2893,9 @@ async function webFetch(args = {}) {
         url,
         maxChars
     });
-    const extractedLinks = /html/i.test(contentType) ? extractLinksFromHtml(body, url, 80) : [];
+    const extractedLinks = /html/i.test(contentType)
+        ? extractLinksFromHtml(body, url, 80)
+        : Array.isArray(fetched.links) ? fetched.links : [];
     const linkQuery = normalizeString(args.query || args.contains || '');
     const rankedLinks = rankLinksForResearch(extractedLinks, url, linkQuery);
     const suggestedRankedLinks = filterRankedLinksForQuerySuggestions(rankedLinks, linkQuery);
@@ -2553,7 +2957,8 @@ async function webFetch(args = {}) {
         evidenceGap,
         recoveryHint,
         pageStatus: quality.pageStatus || undefined,
-        encodingRepair: encodingRepair.repaired ? 'latin1_to_utf8' : undefined
+        encodingRepair: encodingRepair.repaired ? 'latin1_to_utf8' : undefined,
+        crawl4aiAttempt: summarizeCrawl4aiAttempt(crawl4aiAttempt)
     });
 }
 
@@ -5129,6 +5534,71 @@ async function fetchTextWithNodeFetch(url, timeoutMs = 60000) {
     }
 }
 
+async function fetchJsonWithNodeFetch(url, { method = 'GET', headers = {}, body = undefined, timeoutMs = 60000 } = {}) {
+    if (typeof fetch !== 'function') {
+        return {
+            ok: false,
+            errorCode: 'node_fetch_unavailable',
+            error: 'global fetch is unavailable in this Node runtime',
+            backend: 'node_fetch_json'
+        };
+    }
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), clampNumber(timeoutMs, 60000, 1000, 600000));
+    try {
+        const hasBody = body !== undefined && body !== null;
+        const response = await fetch(url, {
+            method,
+            redirect: 'follow',
+            signal: controller.signal,
+            headers: {
+                Accept: 'application/json,text/plain;q=0.8,*/*;q=0.5',
+                ...(hasBody ? { 'Content-Type': 'application/json' } : {}),
+                ...headers
+            },
+            body: hasBody ? JSON.stringify(body) : undefined
+        });
+        const contentType = normalizeString(response.headers.get('content-type'));
+        const text = await response.text();
+        let json = null;
+        try {
+            json = text ? JSON.parse(text) : null;
+        } catch (error) {
+            return {
+                ok: false,
+                status: response.status,
+                errorCode: 'invalid_json_payload',
+                error: `invalid JSON payload: ${error.message}`,
+                contentType,
+                text: text.slice(0, 3000),
+                backend: 'node_fetch_json'
+            };
+        }
+        const ok = response.status >= 200 && response.status < 400;
+        return {
+            ok,
+            status: response.status,
+            errorCode: ok ? '' : `http_${response.status || 'unknown'}`,
+            error: ok ? '' : `HTTP ${response.status}`,
+            contentType,
+            json,
+            text,
+            backend: 'node_fetch_json'
+        };
+    } catch (error) {
+        return {
+            ok: false,
+            timedOut: error?.name === 'AbortError',
+            errorCode: error?.name === 'AbortError' ? 'timeout' : 'node_fetch_json_failed',
+            error: error?.message || String(error),
+            stderr: error?.stack || error?.message || String(error),
+            backend: 'node_fetch_json'
+        };
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
 function shouldFallbackToNodeFetch(fetched = {}) {
     if (!fetched || fetched.ok) {
         return false;
@@ -5845,7 +6315,7 @@ print(json.dumps(payload, ensure_ascii=False))
 const TOOLS = [
     {
         name: 'web_search',
-        description: 'Fallback broad public web search through AILIS managed search backends. Standard call: { "query": "specific search keywords", "maxResults": 5 }. Do not use as the first step for attached/local files, known URLs, PDFs/papers/reports, YouTube/videos, audio, images, spreadsheets, presentations, Word documents, code files, or GitHub repositories; use the dedicated MCP tool for those artifact types first. Use web_fetch for a known HTML/text URL, paper_metadata_lookup for exact paper/DOI metadata, pdf_extract_text for a known PDF URL, pdf_find_and_extract for a paper/report title when you need full text, and github_repo_read for GitHub README/tree/file evidence. General web queries default to Bing first; GitHub/code repository queries default to GitHub repository search first, then DuckDuckGo, then Bing. Returns titles, URLs, snippets, and structured backend attempts.',
+        description: 'Fallback broad public web search through AILIS managed search backends. Standard call: { "query": "specific search keywords", "maxResults": 5 }. Do not use as the first step for attached/local files, known URLs, PDFs/papers/reports, YouTube/videos, audio, images, spreadsheets, presentations, Word documents, code files, or GitHub repositories; use the dedicated MCP tool for those artifact types first. Use web_fetch for a known HTML/text URL, paper_metadata_lookup for exact paper/DOI metadata, pdf_extract_text for a known PDF URL, pdf_find_and_extract for a paper/report title when you need full text, and github_repo_read for GitHub README/tree/file evidence. General web queries default to the provider chain searxng_json, firecrawl_search, then current HTML fallback; GitHub/code repository queries keep GitHub repository search first. Configure with AILIS_SEARXNG_URL, AILIS_WEB_SEARCH_PROVIDER, and optional FIRECRAWL_API_KEY. Returns titles, URLs, snippets, relevance scores, and structured backend attempts.',
         inputSchema: {
             type: 'object',
             required: ['query'],
@@ -5858,10 +6328,14 @@ const TOOLS = [
                 limit: { type: 'number', description: 'Compatibility alias for maxResults. Prefer maxResults.' },
                 timeoutMs: { type: 'number', description: 'Per-backend timeout in milliseconds, clamped to 3000-30000. Default is 8000. Omit unless a task needs a longer wait.' },
                 overallTimeoutMs: { type: 'number', description: 'Overall search budget in milliseconds, clamped to 8000-120000. Defaults under the Gateway timeout so failures return as tool results instead of hanging.' },
-                backend: { type: 'string', description: 'Optional backend id: bing_html, duckduckgo_lite, duckduckgo_html, yahoo_html, or github_repositories. Omit for automatic fallback.' },
+                provider: { type: 'string', description: 'Optional provider chain selector: auto, searxng, firecrawl, html/current_html_fallback, external, github, or a comma-separated backend list. Prefer omitting this for automatic fallback.' },
+                searchProvider: { type: 'string', description: 'Compatibility alias for provider. Prefer provider.' },
+                searxngUrl: { type: 'string', description: 'Optional SearXNG base URL override. Prefer configuring AILIS_SEARXNG_URL instead of passing this per call.' },
+                firecrawlUrl: { type: 'string', description: 'Optional Firecrawl base URL override for self-hosted Firecrawl. FIRECRAWL_API_KEY is read from the environment and should not be passed in tool args.' },
+                backend: { type: 'string', description: 'Optional backend id or provider alias: searxng_json, firecrawl_search, bing_html, duckduckgo_lite, duckduckgo_html, yahoo_html, github_repositories, html, searxng, or firecrawl. Omit for automatic fallback.' },
                 backends: {
                     type: 'array',
-                    items: { type: 'string', enum: ['bing_html', 'duckduckgo_lite', 'duckduckgo_html', 'yahoo_html', 'github_repositories'] },
+                    items: { type: 'string', enum: ['searxng_json', 'firecrawl_search', 'bing_html', 'duckduckgo_lite', 'duckduckgo_html', 'yahoo_html', 'github_repositories', 'html', 'current_html_fallback', 'searxng', 'firecrawl'] },
                     description: 'Optional ordered backend ids. Omit for automatic fallback.'
                 }
             },
@@ -5891,7 +6365,7 @@ const TOOLS = [
     },
     {
         name: 'web_fetch',
-        description: 'Fetch a public HTTP(S) HTML or text resource and return readable text plus a structured HTML relationship map when HTML is available. The relationship map exposes title/metadata, heading sections, ranked links with context, JSON-LD entities, key-value facts, table rows, and relation triples so the model can reason over page structure instead of plain text only. Rejects PDF/binary content with unsupported_content_type; use pdf_extract_text or download_file for PDFs/files. For archive, listing, search-result, table-of-contents, or journal issue pages, pass query/contains with task terms such as author, year, topic, or answer clue so excerpts and linked resources are ranked against the task instead of newest/first links.',
+        description: 'Fetch a public HTTP(S) HTML or text resource and return readable text plus a structured HTML relationship map when HTML is available. If Crawl4AI is configured with AILIS_CRAWL4AI_URL or explicitly selected, web_fetch first asks Crawl4AI for Markdown and falls back to the current fetch/extract path when unavailable. The relationship map exposes title/metadata, heading sections, ranked links with context, JSON-LD entities, key-value facts, table rows, and relation triples so the model can reason over page structure instead of plain text only. Rejects PDF/binary content with unsupported_content_type; use pdf_extract_text or download_file for PDFs/files. For archive, listing, search-result, table-of-contents, or journal issue pages, pass query/contains with task terms such as author, year, topic, or answer clue so excerpts and linked resources are ranked against the task instead of newest/first links.',
         inputSchema: {
             type: 'object',
             required: ['url'],
@@ -5899,7 +6373,10 @@ const TOOLS = [
                 url: { type: 'string', minLength: 1 },
                 maxChars: { type: 'number' },
                 query: { type: 'string' },
-                contains: { type: 'string' }
+                contains: { type: 'string' },
+                provider: { type: 'string', description: 'Optional fetch provider selector: auto, crawl4ai, builtin/current/html. Prefer omitting this unless testing a provider.' },
+                fetchProvider: { type: 'string', description: 'Compatibility alias for provider. Prefer provider.' },
+                crawl4aiUrl: { type: 'string', description: 'Optional Crawl4AI base URL override. Prefer configuring AILIS_CRAWL4AI_URL instead of passing this per call.' }
             },
             additionalProperties: false
         }

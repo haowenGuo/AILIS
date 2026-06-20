@@ -1,84 +1,59 @@
 # Codex Memory Checkpoint
 
-Date/time: 2026-06-18 Asia/Shanghai
+Date/time: 2026-06-20 Asia/Shanghai
 Workspace: `F:\AILIS_self_evolution_runtime`
 Branch: `AILIS-self-evolution`
+Git state: based on `3f15c9d` (`Improve AILIS web search relevance reranking`); provider-chain implementation is complete and ready to commit. Worktree has many unrelated historical changes, so stage only files touched for the active task.
 
-## Current User Intent
+## Objective
+- Upgrade AILIS `web_search` from fragile built-in HTML scraping toward an agent-grade provider chain.
+- Requested provider order: `searxng_json -> firecrawl_search -> current_html_fallback`.
+- Add config: `AILIS_SEARXNG_URL`, `AILIS_WEB_SEARCH_PROVIDER`, optional `FIRECRAWL_API_KEY`.
+- Default behavior: if local SearXNG is available, prefer its JSON API and avoid Bing HTML scraping.
+- `web_fetch`: add Crawl4AI support when configured, fallback to current fetch/extract otherwise.
 
-- Restart/fresh-run AILIS and rerun the real Kaggle/strategy task to inspect the behavior chain.
-- The core acceptance target is Codex-style tool use:
-  - Small default core surface.
-  - `tool_search` exposes research/Web/MCP tools on demand.
-  - No empty `{}` direct MCP calls.
-  - `web_search` discovery must be followed by `web_fetch` evidence.
-  - Avoid shell/Bing HTML scraping when stable Web tools exist.
+## Latest User Intent
+- Implement the above provider chain and Crawl4AI fallback direction in AILIS.
+- Keep generic quality, do not hardcode the previous "小光" task.
 
-## What Changed
+## Current State
+- `scripts\mcp-ailis-research-server.cjs` now supports `searxng_json` and `firecrawl_search` backends plus the old HTML fallback chain.
+- Default `web_search` provider chain is `searxng_json -> firecrawl_search -> bing_html -> duckduckgo_lite -> duckduckgo_html -> yahoo_html`.
+- GitHub/code repository queries still keep `github_repositories` first, then the new provider chain.
+- `AILIS_WEB_SEARCH_PROVIDER` supports `auto`, `searxng`, `firecrawl`, `html/current_html_fallback`, `external`, `github`, or comma-separated backend ids.
+- `AILIS_SEARXNG_URL` / `SEARXNG_URL` configure SearXNG. If unset, AILIS briefly probes `http://127.0.0.1:8080` with a short timeout so users without SearXNG do not wait a full backend timeout.
+- `FIRECRAWL_API_KEY` enables hosted Firecrawl; self-hosted Firecrawl can use `AILIS_FIRECRAWL_URL` / `FIRECRAWL_BASE_URL`.
+- `web_fetch` can use Crawl4AI Markdown through `AILIS_CRAWL4AI_URL` / `CRAWL4AI_URL`, or explicit `provider: "crawl4ai"`, and falls back to current HTML/text extraction on failure.
 
-- `electron/ailis-runtime-budget.cjs`
-  - Preserves JSON-schema `required` arrays and `properties` objects during model-facing compaction.
-  - Fixes the failure mode where `tool_search` returned schema contracts but compacted them into strings.
-- `electron/ailis-tool-routing.cjs`
-  - Adds a public/current-web routing profile for Kaggle/latest/strategy/competition queries.
-  - Returns both `web_search` and `web_fetch`, with `web_search` ranked first.
-  - Fixes `webPenalty: 0` being ignored because of `||`.
-- `electron/ailis-turn-items.cjs`
-  - Classifies successful `web_search` output as `search_results_need_fetch`.
-  - Recovery hint tells the next model turn to call `mcp__ailis_research__web_fetch` on a high-signal URL before another broad search/final.
-- `electron/ailis-agent-runner.cjs`
-  - Temporarily disables direct tools that fail non-retryably, especially `describe_image` when the configured provider rejects `image_url`.
-  - Suppresses repeated `update_plan` direct-tool loops after 2 consecutive direct `update_plan` steps.
-  - Suppresses `tool_search` for the next turn after a successful `tool_search` has already exposed concrete tools, forcing the model to use the surfaced tool instead of repeatedly searching for tools.
-- `scripts/mcp-ailis-research-server.cjs`
-  - `describe_image` now returns actionable provider-unsupported errors and next actions.
-  - `web_fetch` now falls back from Python `requests` to Node `fetch` on transport failures such as SSL EOF.
-  - Fetch diagnostics include backend/fallback metadata and SSL failure hints.
-- `tests/ailis-tool-layer.test.mjs`
-  - Adds regression coverage for public web routing, strict MCP schemas, compacted schema preservation, empty-arg rejection, vision-failure tool suppression, `update_plan`/`tool_search` loop suppression, and `web_fetch` Node fallback.
-- `tests/ailis-turn-items.test.mjs`
-  - Adds regression coverage for `web_search -> web_fetch` evidence-gap classification.
+## Decisions And Constraints
+- Keep the new relevance reranker as the common post-processing layer across all providers.
+- Add external providers as optional runtime backends, not mandatory dependencies.
+- Do not remove current HTML fallback yet; use it as compatibility fallback.
+- Do not store API keys in this checkpoint or logs.
+- Use `apply_patch` for manual edits and commit when done unless the user explicitly says not to.
 
-## Actual Runs
+## Files And Artifacts
+- `scripts\mcp-ailis-research-server.cjs`: provider normalization, SearXNG JSON backend, Firecrawl search backend, Node JSON fetch helper, Crawl4AI Markdown fetch path, and updated tool schemas.
+- `tests\mcp-ailis-research-server.test.mjs`: provider-chain, SearXNG JSON, Firecrawl fallback, Crawl4AI success, and Crawl4AI fallback regressions.
+- `.runtime-logs\xiaoguang-rerank-summary-20260620_093040.json`: previous real task retest showed remaining failure was entity disambiguation, not result reranking.
 
-- Pre-final-fix real Gateway-only run:
-  - Log: `.runtime-logs\kaggle_strategy_gateway_only_20260618160858.json`
-  - Result: `max_steps_reached`, 24 steps.
-  - Empty args: none.
-  - Tool counts:
-    - `computer`: 1
-    - `tool_search`: 5
-    - `update_plan`: 8
-    - `mcp__ailis_research__describe_image`: 1
-    - `exec`: 2
-    - `mcp__ailis_research__web_search`: 4
-    - `mcp__ailis_research__web_fetch`: 3
-  - Important improvement: chain reached `tool_search -> web_search -> web_fetch`, including successful `web_fetch` of `https://www.kaggle.com/competitions`.
-  - Remaining failure seen in that run: after useful web evidence, the model kept searching for tools / updating plans and later searched for vision tools again.
-- Post-final-loop-fix real Gateway-only run:
-  - Log: `.runtime-logs\kaggle_strategy_gateway_only_20260618161404.json`
-  - Result: `provider_error`.
-  - Provider returned `Insufficient Balance` before any tool step, so final loop-suppression behavior could not be real-LLM validated in that run.
-
-## Validation
-
+## Commands And Results
 - `node --check scripts\mcp-ailis-research-server.cjs`: passed.
-- `node --check electron\ailis-agent-runner.cjs`: passed.
-- `node --check electron\ailis-runtime-budget.cjs electron\ailis-tool-routing.cjs electron\ailis-turn-items.cjs`: passed in earlier validation.
-- `node --test tests\ailis-tool-layer.test.mjs`: passed 15/15.
-- `node --test tests\ailis-turn-items.test.mjs`: passed 5/5.
+- `node --test tests\mcp-ailis-research-server.test.mjs`: 45/45 passed.
+- `node --test tests\ailis-tool-layer.test.mjs tests\ailis-turn-items.test.mjs`: 24/24 passed.
+- Local SearXNG check at `http://127.0.0.1:8080/search?q=ailis&format=json`: unavailable/timed out on this machine, so current runtime will fall back unless SearXNG is started or `AILIS_SEARXNG_URL` points elsewhere.
 
-## Important Constraints
+## Known Problems
+- Broad ambiguous nicknames such as "小光" still need entity disambiguation in a later change.
+- Some PowerShell commands in this large repo can be slow; use narrow `git -C ...` commands.
 
-- Do not reveal or store API keys. Desktop LLM config was read from `%APPDATA%\AILIS\desktop-state.json` only for local execution and logs redacted the key.
-- Worktree has many pre-existing rename/runtime changes. Do not reset or revert unrelated files.
-- Commit only the files directly involved in this tool-chain fix unless the user explicitly requests the broad rename commit.
+## Next Actions
+1. Stage only `.codex-memory/current.md`, `scripts/mcp-ailis-research-server.cjs`, and `tests/mcp-ailis-research-server.test.mjs`.
+2. Commit the provider-chain implementation.
+3. If the user wants live validation, start/configure SearXNG or Firecrawl, restart AILIS, then rerun the real strategy/Kaggle task.
+4. Later separate fix: add short-nickname entity disambiguation for tasks like "小光攻略".
 
-## Next Useful Checks
-
-1. Once LLM provider balance/config is restored, rerun the Gateway-only Kaggle task and verify:
-   - No empty args.
-   - After a successful `tool_search`, the next step uses exposed `web_search`/`web_fetch` instead of another `tool_search`.
-   - After 2 consecutive `update_plan`, `update_plan` disappears from native direct tools for the next turn.
-   - The run ends with final/blocked instead of `max_steps_reached`.
-2. Consider adding a real OCR/page-text fallback if the app needs to identify current browser game/competition when vision provider does not support image input.
+## Do Not Forget
+- User prefers direct execution and default commits.
+- Avoid verbose logs in chat; summarize only.
+- Never reveal local API keys or tokens.
