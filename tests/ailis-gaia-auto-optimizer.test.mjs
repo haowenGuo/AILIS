@@ -7,6 +7,7 @@ import {
     extractExecutionChain,
     normalizeAnswer,
     parseArgs,
+    resolveTaskRetries,
     selectNextTask
 } from '../scripts/run-ailis-gaia-auto-optimizer.mjs';
 
@@ -48,10 +49,13 @@ test('GAIA auto optimizer normalizes exact answers for local scoring', () => {
 });
 
 test('GAIA auto optimizer parses repair retry controls', () => {
-    const args = parseArgs(['--once', '--clear-repair', '--task-id', 'task-1']);
+    const args = parseArgs(['--once', '--clear-repair', '--task-id', 'task-1', '--task-retries', '2']);
     assert.equal(args.once, true);
     assert.equal(args.clearRepair, true);
     assert.equal(args.taskId, 'task-1');
+    assert.equal(args.taskRetries, 2);
+    assert.equal(resolveTaskRetries({ taskRetries: 0 }, args), 2);
+    assert.equal(resolveTaskRetries({ taskRetries: 1 }, { taskRetries: null }), 1);
 });
 
 test('GAIA auto optimizer classifies successful high-loop tasks as efficiency work', () => {

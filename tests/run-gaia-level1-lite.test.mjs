@@ -54,6 +54,22 @@ test('GAIA Level 1 Lite answer gate rejects explanatory finalAnswer text', () =>
     assert.equal(gate.status, 'rejected_visible_prose');
 });
 
+test('GAIA Level 1 Lite answer gate rejects direct final answers from incomplete agent runs', () => {
+    const gate = buildFinalAnswerGate({
+        question: { question: 'Return the exact answer.' },
+        response: {
+            ok: false,
+            status: 'tool_loop_guard',
+            finalAnswer: '15'
+        }
+    });
+
+    assert.equal(gate.ok, false);
+    assert.equal(gate.status, 'incomplete_agent_run');
+    assert.equal(gate.answer, '');
+    assert.equal(shouldRetryTask({ ok: false, status: gate.status, submitted_answer: '' }), true);
+});
+
 test('GAIA Level 1 Lite retries transient provider fetch failures instead of submitting empty answers', () => {
     assert.equal(shouldRetryTask({
         ok: false,

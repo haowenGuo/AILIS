@@ -28,6 +28,19 @@ function safeSegment(value, fallback = 'item') {
     return normalizeText(value, fallback).replace(/[^A-Za-z0-9_.-]+/g, '_').slice(0, 140) || fallback;
 }
 
+function resolveTaskRetries(policy = {}, args = {}) {
+    if (args.taskRetries === null || args.taskRetries === undefined) {
+        const configured = Number(policy.taskRetries);
+        return Math.max(0, Math.min(Number.isFinite(configured) ? Math.round(configured) : 0, 3));
+    }
+    const override = Number(args.taskRetries);
+    if (Number.isFinite(override)) {
+        return Math.max(0, Math.min(Math.round(override), 3));
+    }
+    const configured = Number(policy.taskRetries);
+    return Math.max(0, Math.min(Number.isFinite(configured) ? Math.round(configured) : 0, 3));
+}
+
 function parseArgs(argv = process.argv.slice(2)) {
     const args = {
         jobDir: DEFAULT_JOB_DIR,
@@ -40,6 +53,7 @@ function parseArgs(argv = process.argv.slice(2)) {
         taskId: '',
         maxIterations: 0,
         maxAgentSteps: 0,
+        taskRetries: null,
         timeoutMs: 900000,
         datasetDir: ''
     };
@@ -59,6 +73,7 @@ function parseArgs(argv = process.argv.slice(2)) {
         else if (token === '--task-id') args.taskId = normalizeText(next());
         else if (token === '--max-iterations') args.maxIterations = Math.max(0, Number(next()) || 0);
         else if (token === '--max-agent-steps') args.maxAgentSteps = Math.max(0, Number(next()) || 0);
+        else if (token === '--task-retries') args.taskRetries = Math.max(0, Math.min(Number(next()) || 0, 3));
         else if (token === '--timeout-ms') args.timeoutMs = Math.max(30000, Number(next()) || args.timeoutMs);
         else if (token === '--dataset-dir') args.datasetDir = path.resolve(next());
     }
@@ -325,7 +340,7 @@ async function runPracticeTask({ task, iterationDir, runId, policy, args }) {
             '--file-mirror', `${baseUrl}/files`,
             '--submit',
             '--limit', '1',
-            '--task-retries', String(Math.max(0, Number(policy.taskRetries) || 0)),
+            '--task-retries', String(resolveTaskRetries(policy, args)),
             '--max-agent-steps', String(args.maxAgentSteps || policy.maxAgentSteps || 20),
             '--request-timeout-ms', '300000',
             '--llm-timeout-ms', '120000',
@@ -363,7 +378,7 @@ async function runOfficialTask({ task, iterationDir, runId, policy, args }) {
         '--limit', '1',
         '--offset', String(Math.max(0, Number(task.offset) || 0)),
         '--max-agent-steps', String(args.maxAgentSteps || policy.maxAgentSteps || 20),
-        '--task-retries', String(Math.max(0, Number(policy.taskRetries) || 0)),
+        '--task-retries', String(resolveTaskRetries(policy, args)),
         '--request-timeout-ms', String(requestTimeoutMs),
         '--llm-timeout-ms', String(llmTimeoutMs),
         '--submit-timeout-ms', String(submitTimeoutMs)
@@ -871,6 +886,7 @@ export {
     extractExecutionChain,
     normalizeAnswer,
     parseArgs,
+    resolveTaskRetries,
     runController,
     selectNextTask
 };

@@ -546,20 +546,31 @@ function buildFinalAnswerGate({ question = {}, response = {}, finalizer = null }
     if (randomProcessGate) {
         return randomProcessGate;
     }
+    const responseIncomplete = response?.ok === false ||
+        /runner_error|tool_loop_guard|blocked|invalid_agent_decision|invalid_agent_tool_call|empty_response|timeout|aborted/i.test(normalizeText(response?.status || response?.error || response?.blockedReason));
     const reasonGate = buildReasonFinalAnswerGate(response, question);
     if (reasonGate?.ok) {
         return reasonGate;
     }
-    const direct = acceptExactAnswerCandidate(
-        extractSubmittedAnswer(response, { answerOnly: true, validateShape: false }),
-        {
-            question,
+    const direct = responseIncomplete
+        ? {
+            ok: false,
+            answer: '',
             source: 'agent_final_answer',
-            reason: reasonGate?.status === 'answer_reason_conflict'
-                ? reasonGate.reason
-                : 'checked agent finalAnswer/answer fields only'
+            status: 'incomplete_agent_run',
+            confidence: '',
+            reason: `agent run did not complete cleanly (${normalizeText(response?.status || response?.error || 'incomplete')}); direct final_answer is not safe to submit`
         }
-    );
+        : acceptExactAnswerCandidate(
+            extractSubmittedAnswer(response, { answerOnly: true, validateShape: false }),
+            {
+                question,
+                source: 'agent_final_answer',
+                reason: reasonGate?.status === 'answer_reason_conflict'
+                    ? reasonGate.reason
+                    : 'checked agent finalAnswer/answer fields only'
+            }
+        );
     if (reasonGate?.status === 'answer_reason_conflict') {
         return reasonGate;
     }
@@ -1533,7 +1544,7 @@ function shouldRetryTask(result = {}) {
         result.response?.error,
         result.answer_gate?.status
     ].filter(Boolean).join(' ');
-    return /runner_error|aborted|timeout|blocked|invalid_agent_decision|invalid_agent_tool_call|empty_response|fetch failed|network_error|transient_network_error|monte_carlo_only_random_process_evidence|ad_hoc_terminal_transition_evidence/i.test(text);
+    return /runner_error|aborted|timeout|blocked|invalid_agent_decision|invalid_agent_tool_call|empty_response|incomplete_agent_run|fetch failed|network_error|transient_network_error|monte_carlo_only_random_process_evidence|ad_hoc_terminal_transition_evidence/i.test(text);
 }
 
 async function submitAnswers(args, answers) {
