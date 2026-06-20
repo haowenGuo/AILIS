@@ -2141,7 +2141,8 @@ function isLikelyGitHubSearch(query = '') {
 
 const HTML_SEARCH_BACKEND_IDS = Object.freeze(['bing_html', 'duckduckgo_lite', 'duckduckgo_html', 'yahoo_html']);
 const DEFAULT_SEARXNG_URL = 'http://127.0.0.1:8080';
-const DEFAULT_FIRECRAWL_URL = 'https://api.firecrawl.dev';
+const DEFAULT_FIRECRAWL_LOCAL_URL = 'http://127.0.0.1:3002';
+const FIRECRAWL_CLOUD_URL = 'https://api.firecrawl.dev';
 const DEFAULT_CRAWL4AI_URL = 'http://127.0.0.1:11235';
 
 function normalizeBaseUrl(value = '') {
@@ -2166,17 +2167,23 @@ function hasConfiguredSearxngUrl(args = {}) {
 }
 
 function firecrawlBaseUrl(args = {}) {
-    return normalizeBaseUrl(
+    const configured = normalizeBaseUrl(
         args.firecrawlUrl ||
         args.firecrawl_url ||
         process.env.AILIS_FIRECRAWL_URL ||
-        process.env.FIRECRAWL_BASE_URL ||
-        DEFAULT_FIRECRAWL_URL
+        process.env.FIRECRAWL_BASE_URL
     );
+    if (configured) {
+        return configured;
+    }
+    return DEFAULT_FIRECRAWL_LOCAL_URL;
 }
 
-function firecrawlApiKey(args = {}) {
-    return normalizeString(args.firecrawlApiKey || args.firecrawl_api_key || process.env.FIRECRAWL_API_KEY);
+function hasConfiguredFirecrawlUrl(args = {}) {
+    return Boolean(
+        normalizeString(args.firecrawlUrl || args.firecrawl_url) ||
+        normalizeString(process.env.AILIS_FIRECRAWL_URL || process.env.FIRECRAWL_BASE_URL)
+    );
 }
 
 function crawl4aiFetchConfig(args = {}) {
@@ -2284,25 +2291,23 @@ async function runSearxngSearchBackend({ query, maxResults, timeoutMs, args = {}
 async function runFirecrawlSearchBackend({ query, maxResults, timeoutMs, args = {} } = {}) {
     const startedAt = Date.now();
     const baseUrl = firecrawlBaseUrl(args);
-    const key = firecrawlApiKey(args);
     const url = `${baseUrl}/v1/search`;
-    if (!key && baseUrl === DEFAULT_FIRECRAWL_URL) {
+    if (normalizeBaseUrl(baseUrl) === FIRECRAWL_CLOUD_URL) {
         return {
             ok: false,
             backend: 'firecrawl_search',
             url,
             durationMs: Date.now() - startedAt,
             status: 0,
-            errorCode: 'missing_firecrawl_api_key',
-            error: 'FIRECRAWL_API_KEY is not configured.',
+            errorCode: 'firecrawl_cloud_disabled',
+            error: 'AILIS local web_search does not call hosted Firecrawl. Configure AILIS_FIRECRAWL_URL to a local/self-hosted Firecrawl server instead.',
             retryable: false
         };
     }
-    const headers = key ? { Authorization: `Bearer ${key}` } : {};
+    const effectiveTimeoutMs = hasConfiguredFirecrawlUrl(args) ? timeoutMs : Math.min(timeoutMs, 1800);
     const fetched = await fetchJsonWithNodeFetch(url, {
         method: 'POST',
-        timeoutMs,
-        headers,
+        timeoutMs: effectiveTimeoutMs,
         body: {
             query,
             limit: maxResults
@@ -6643,7 +6648,7 @@ print(json.dumps(payload, ensure_ascii=False))
 const TOOLS = [
     {
         name: 'web_search',
-        description: 'Fallback broad public web search through AILIS managed search backends. Standard call: { "query": "specific search keywords", "maxResults": 5 }. Do not use as the first step for attached/local files, known URLs, PDFs/papers/reports, YouTube/videos, audio, images, spreadsheets, presentations, Word documents, code files, or GitHub repositories; use the dedicated MCP tool for those artifact types first. Use web_fetch for a known HTML/text URL, paper_metadata_lookup for exact paper/DOI metadata, pdf_extract_text for a known PDF URL, pdf_find_and_extract for a paper/report title when you need full text, and github_repo_read for GitHub README/tree/file evidence. General web queries default to the provider chain searxng_json, firecrawl_search, then current HTML fallback; GitHub/code repository queries keep GitHub repository search first. Configure with AILIS_SEARXNG_URL, AILIS_WEB_SEARCH_PROVIDER, and optional FIRECRAWL_API_KEY. Returns ranked titles/URLs/snippets, relevance scores, backend attempts, searchConfidence, and clarificationRequired/candidateChoices when the result set is too ambiguous to follow safely.',
+        description: 'Fallback broad public web search through AILIS managed search backends. Standard call: { "query": "specific search keywords", "maxResults": 5 }. Do not use as the first step for attached/local files, known URLs, PDFs/papers/reports, YouTube/videos, audio, images, spreadsheets, presentations, Word documents, code files, or GitHub repositories; use the dedicated MCP tool for those artifact types first. Use web_fetch for a known HTML/text URL, paper_metadata_lookup for exact paper/DOI metadata, pdf_extract_text for a known PDF URL, pdf_find_and_extract for a paper/report title when you need full text, and github_repo_read for GitHub README/tree/file evidence. General web queries default to the local open-source provider chain searxng_json, firecrawl_search, then current HTML fallback; GitHub/code repository queries keep GitHub repository search first. Configure with AILIS_SEARXNG_URL, AILIS_FIRECRAWL_URL, and AILIS_WEB_SEARCH_PROVIDER. Hosted Firecrawl is intentionally disabled here; run self-hosted Firecrawl locally instead. Returns ranked titles/URLs/snippets, relevance scores, backend attempts, searchConfidence, and clarificationRequired/candidateChoices when the result set is too ambiguous to follow safely.',
         inputSchema: {
             type: 'object',
             required: ['query'],
@@ -6659,7 +6664,7 @@ const TOOLS = [
                 provider: { type: 'string', description: 'Optional provider chain selector: auto, searxng, firecrawl, html/current_html_fallback, external, github, or a comma-separated backend list. Prefer omitting this for automatic fallback.' },
                 searchProvider: { type: 'string', description: 'Compatibility alias for provider. Prefer provider.' },
                 searxngUrl: { type: 'string', description: 'Optional SearXNG base URL override. Prefer configuring AILIS_SEARXNG_URL instead of passing this per call.' },
-                firecrawlUrl: { type: 'string', description: 'Optional Firecrawl base URL override for self-hosted Firecrawl. FIRECRAWL_API_KEY is read from the environment and should not be passed in tool args.' },
+                firecrawlUrl: { type: 'string', description: 'Optional Firecrawl base URL override for local/self-hosted Firecrawl. AILIS does not call hosted Firecrawl from this tool.' },
                 backend: { type: 'string', description: 'Optional backend id or provider alias: searxng_json, firecrawl_search, bing_html, duckduckgo_lite, duckduckgo_html, yahoo_html, github_repositories, html, searxng, or firecrawl. Omit for automatic fallback.' },
                 backends: {
                     type: 'array',

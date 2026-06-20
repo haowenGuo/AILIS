@@ -864,6 +864,33 @@ test('web_search falls from failed SearXNG JSON to Firecrawl search provider', a
     });
 });
 
+test('web_search Firecrawl backend defaults to local self-hosted service without API keys', async () => {
+    const result = await webSearch({
+        query: 'local open source web search smoke',
+        backends: ['firecrawl_search'],
+        maxResults: 3
+    });
+
+    assert.equal(result.isError, true);
+    assert.equal(result.structuredContent.attempts[0].backend, 'firecrawl_search');
+    assert.match(result.structuredContent.attempts[0].url, /^http:\/\/127\.0\.0\.1:3002\/v1\/search/);
+    assert.notEqual(result.structuredContent.attempts[0].errorCode, 'missing_firecrawl_api_key');
+});
+
+test('web_search Firecrawl backend refuses hosted cloud endpoint in local open-source mode', async () => {
+    const result = await webSearch({
+        query: 'hosted firecrawl should be disabled',
+        backends: ['firecrawl_search'],
+        firecrawlUrl: 'https://api.firecrawl.dev',
+        maxResults: 3
+    });
+
+    assert.equal(result.isError, true);
+    assert.equal(result.structuredContent.attempts[0].backend, 'firecrawl_search');
+    assert.equal(result.structuredContent.attempts[0].errorCode, 'firecrawl_cloud_disabled');
+    assert.match(result.structuredContent.attempts[0].error, /self-hosted Firecrawl/);
+});
+
 test('github_repo_read reads README, tree, and file evidence through GitHub API shape', async () => {
     await withServer((request, response) => {
         const url = new URL(request.url || '/', 'http://127.0.0.1');
