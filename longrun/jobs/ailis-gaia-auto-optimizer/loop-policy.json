@@ -3,10 +3,10 @@
   "taskSource": "practice_then_official",
   "durationHours": 16,
   "heartbeatMinutes": 5,
-  "maxIterationsPerControllerRun": 1,
+  "maxIterationsPerControllerRun": 20,
   "maxRepairAttemptsPerIssue": 3,
   "maxConcurrentHeavyRuns": 1,
-  "maxAgentSteps": 20,
+  "maxAgentSteps": 24,
   "taskRetries": 0,
   "stopWhen": [
     "all_tasks_passed",

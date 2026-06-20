@@ -1,0 +1,81 @@
+{
+  "taskId": "official-validation-l1-offset-1",
+  "resultTaskId": "8e867cd7-cff9-4e6c-867a-ff5ddc2550be",
+  "source": "official",
+  "title": "Official GAIA validation level 1 offset 1",
+  "expectedAnswer": "",
+  "submittedAnswer": "3",
+  "answerGate": {
+    "ok": true,
+    "answer": "3",
+    "source": "agent_final_answer",
+    "status": "accepted",
+    "confidence": "",
+    "reason": "checked agent finalAnswer/answer fields only"
+  },
+  "ok": true,
+  "status": "completed",
+  "durationMs": 45846,
+  "stepCount": 2,
+  "toolCounts": {
+    "mcp__ailis_research__web_search": 1,
+    "mcp__ailis_research__web_fetch": 1
+  },
+  "steps": [
+    {
+      "index": 0,
+      "tool": "mcp__ailis_research__web_search",
+      "title": "Search Mercedes Sosa studio albums 2000-2009 English Wikipedia 2022",
+      "args": {
+        "query": "Mercedes Sosa studio albums released between 2000 and 2009 site:wikipedia.org 2022 version"
+      },
+      "ok": true,
+      "status": "completed",
+      "error": "",
+      "evidenceQuality": "",
+      "preview": ""
+    },
+    {
+      "index": 1,
+      "tool": "mcp__ailis_research__web_fetch",
+      "title": "Fetch Mercedes Sosa related Wikipedia page to get studio album list",
+      "args": {
+        "url": "https://en.wikipedia.org/wiki/Cantora,_un_Viaje_%C3%8Dntimo",
+        "query": "Mercedes Sosa studio albums released between 2000 and 2009"
+      },
+      "ok": true,
+      "status": "completed",
+      "error": "",
+      "evidenceQuality": "",
+      "preview": ""
+    }
+  ],
+  "rawStatus": {
+    "ok": true,
+    "status": "completed",
+    "error": "",
+    "blockedReason": ""
+  },
+  "score": {
+    "username": "AILIS-local-codex",
+    "score": 100,
+    "correct_count": 1,
+    "total_attempted": 1,
+    "message": "Local GAIA validation score: 1/1",
+    "benchmark": "gaia-official-validation-l1",
+    "per_task": [
+      {
+        "task_id": "8e867cd7-cff9-4e6c-867a-ff5ddc2550be",
+        "correct": true,
+        "submitted_answer": "3",
+        "final_answer": "3"
+      }
+    ]
+  },
+  "process": {
+    "ok": true,
+    "exitCode": 0,
+    "durationMs": 51701,
+    "stderrTail": ""
+  }
+}

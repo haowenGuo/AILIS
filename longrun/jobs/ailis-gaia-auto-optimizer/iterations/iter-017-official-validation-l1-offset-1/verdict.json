@@ -1,0 +1,14 @@
+{
+  "ok": true,
+  "status": "passed",
+  "failureCategory": "",
+  "optimizationFocus": "none",
+  "generalizedCapability": "gaia_task_execution",
+  "summary": "Task passed with acceptable local verdict.",
+  "nextAction": "advance to next task",
+  "taskId": "official-validation-l1-offset-1",
+  "source": "official",
+  "chainPath": "F:\\AILIS_self_evolution_runtime\\longrun\\jobs\\ailis-gaia-auto-optimizer\\iterations\\iter-017-official-validation-l1-offset-1\\chain.json",
+  "summaryPath": "F:\\AILIS_self_evolution_runtime\\longrun\\jobs\\ailis-gaia-auto-optimizer\\iterations\\iter-017-official-validation-l1-offset-1\\eval-results\\iter-017-official-validation-l1-offset-1-2026-06-20T19-43-49-452Z.summary.json",
+  "resultPath": "F:\\AILIS_self_evolution_runtime\\longrun\\jobs\\ailis-gaia-auto-optimizer\\iterations\\iter-017-official-validation-l1-offset-1\\eval-results\\iter-017-official-validation-l1-offset-1-2026-06-20T19-43-49-452Z.jsonl"
+}
