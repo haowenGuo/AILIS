@@ -152,6 +152,25 @@ function normalizeTimeoutMs(value, fallbackValue = 25000) {
     return Math.round(Math.min(Math.max(numericValue, 5000), 120000));
 }
 
+function classifyFetchFailure(error) {
+    const name = normalizeString(error?.name);
+    const code = normalizeString(error?.code || error?.cause?.code).toUpperCase();
+    const message = normalizeString(error?.message || String(error));
+    const causeMessage = normalizeString(error?.cause?.message || '');
+    const combined = `${name} ${code} ${message} ${causeMessage}`;
+    const transient = /fetch failed|network|socket|timeout|timedout|econnreset|econnrefused|econnaborted|enotfound|eai_again|etimedout|und_err/i.test(combined);
+    return {
+        code: transient ? 'transient_network_error' : 'network_error',
+        error: message || causeMessage || '模型接口网络请求失败。',
+        details: {
+            name,
+            code,
+            causeCode: normalizeString(error?.cause?.code),
+            causeMessage
+        }
+    };
+}
+
 function normalizeTemperature(value, fallbackValue = 0.8) {
     const numericValue = Number(value);
     if (!Number.isFinite(numericValue)) {
@@ -755,14 +774,16 @@ async function fetchJsonWithTimeout(url, requestOptions, timeoutMs, externalSign
         };
     } catch (error) {
         const aborted = error?.name === 'AbortError';
+        const failure = aborted ? null : classifyFetchFailure(error);
         return {
             ok: false,
-            code: aborted ? (abortedByExternalSignal ? 'aborted' : 'timeout') : 'network_error',
+            code: aborted ? (abortedByExternalSignal ? 'aborted' : 'timeout') : failure.code,
             error: aborted
                 ? abortedByExternalSignal
                     ? '模型请求已被用户中断。'
                     : `模型请求超时（${timeoutMs}ms）`
-                : (error?.message || String(error))
+                : failure.error,
+            details: failure?.details
         };
     } finally {
         clearTimeout(timeoutId);
@@ -1591,6 +1612,7 @@ module.exports = {
     buildOllamaChatUrl,
     buildResponsesUrl,
     callDesktopLlmProvider,
+    classifyFetchFailure,
     checkDesktopLlmProvider,
     getDefaultProviderBaseUrl,
     getDefaultProviderModel,

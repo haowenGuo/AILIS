@@ -3,6 +3,7 @@ const { spawn } = require('node:child_process');
 const fs = require('node:fs/promises');
 const fsSync = require('node:fs');
 const path = require('node:path');
+const os = require('node:os');
 const readline = require('node:readline');
 const { callDesktopLlmProvider } = require('../electron/desktop-llm-provider.cjs');
 
@@ -7375,21 +7376,32 @@ print(json.dumps({
 }
 
 async function runPythonFile(args = {}) {
-    const filePath = path.resolve(normalizeString(args.path || args.file || args.filePath || args.file_path));
+    const inlineCode = normalizeString(args.code || args.inline_code || args.inlineCode || args.source || args.python);
+    const rawFilePath = normalizeString(args.path || args.file || args.filePath || args.file_path);
+    let filePath = rawFilePath ? path.resolve(rawFilePath) : '';
+    let tempDir = '';
+    if (!filePath && inlineCode) {
+        tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-python-'));
+        filePath = path.join(tempDir, 'inline.py');
+        await fs.writeFile(filePath, inlineCode, 'utf8');
+    }
     const stat = filePath ? await fs.stat(filePath).catch(() => null) : null;
     if (!stat || !stat.isFile()) {
-        return errorResult('run_python_file requires an existing path', { path: filePath });
+        return errorResult('run_python_file requires an existing path or inline code', { path: filePath, inlineCode: Boolean(inlineCode) });
     }
     const result = await runProcess('python', [filePath], {
         cwd: path.dirname(filePath),
         timeoutMs: args.timeoutMs || 120000
     });
+    if (tempDir) {
+        await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+    }
     const text = [
         result.stdout ? `STDOUT:\n${result.stdout.trim()}` : '',
         result.stderr ? `STDERR:\n${result.stderr.trim()}` : ''
     ].filter(Boolean).join('\n\n') || `exitCode=${result.exitCode}`;
     return {
-        ...textResult(text, { status: result.exitCode === 0 ? 'completed' : 'error', ...result }),
+        ...textResult(text, { status: result.exitCode === 0 ? 'completed' : 'error', ...result, inlineCode: Boolean(inlineCode) }),
         isError: result.exitCode !== 0
     };
 }
@@ -8207,7 +8219,7 @@ const TOOLS = [
     },
     {
         name: 'run_python_file',
-        description: 'Run a local Python file and return stdout/stderr. Use for benchmark code-output questions.',
+        description: 'Run a local Python file or inline Python code and return stdout/stderr. Use for benchmark code-output, deterministic calculation, and simulation questions. Prefer inline code for short one-off calculations; prefer path for larger reusable scripts.',
         inputSchema: {
             type: 'object',
             properties: {
@@ -8215,6 +8227,11 @@ const TOOLS = [
                 file: { type: 'string' },
                 filePath: { type: 'string' },
                 file_path: { type: 'string' },
+                code: { type: 'string', description: 'Inline Python source to run when no file path exists.' },
+                inline_code: { type: 'string', description: 'Compatibility alias for code.' },
+                inlineCode: { type: 'string', description: 'Compatibility alias for code.' },
+                source: { type: 'string', description: 'Compatibility alias for code.' },
+                python: { type: 'string', description: 'Compatibility alias for code.' },
                 timeoutMs: { type: 'number' }
             }
         }
@@ -8454,6 +8471,7 @@ module.exports = {
     rankSearchResultsForFollowup,
     readDocument,
     readPresentation,
+    runPythonFile,
     SEARCH_BACKENDS,
     stripWikiText,
     webExtractLinks,

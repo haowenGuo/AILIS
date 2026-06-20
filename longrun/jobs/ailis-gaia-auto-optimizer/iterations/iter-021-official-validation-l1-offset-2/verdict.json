@@ -1,0 +1,14 @@
+{
+  "ok": false,
+  "status": "failed",
+  "failureCategory": "harness_finalization",
+  "optimizationFocus": "exact_answer_finalization",
+  "generalizedCapability": "benchmark_final_answer_and_evidence_gate",
+  "summary": "Local GAIA scorer rejected the submitted answer ((empty)); expected 3.",
+  "nextAction": "repair exact-answer reasoning, unit conversion, and scorer verdict handling before advancing",
+  "taskId": "official-validation-l1-offset-2",
+  "source": "official",
+  "chainPath": "F:\\AILIS_self_evolution_runtime\\longrun\\jobs\\ailis-gaia-auto-optimizer\\iterations\\iter-021-official-validation-l1-offset-2\\chain.json",
+  "summaryPath": "F:\\AILIS_self_evolution_runtime\\longrun\\jobs\\ailis-gaia-auto-optimizer\\iterations\\iter-021-official-validation-l1-offset-2\\eval-results\\iter-021-official-validation-l1-offset-2-2026-06-20T20-36-09-707Z.summary.json",
+  "resultPath": "F:\\AILIS_self_evolution_runtime\\longrun\\jobs\\ailis-gaia-auto-optimizer\\iterations\\iter-021-official-validation-l1-offset-2\\eval-results\\iter-021-official-validation-l1-offset-2-2026-06-20T20-36-09-707Z.jsonl"
+}

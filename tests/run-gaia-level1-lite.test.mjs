@@ -8,7 +8,8 @@ import {
     extractSubmittedAnswer,
     finalizeAnswerFromEvidence,
     formatSubmittedAnswerForQuestion,
-    looksLikeShortAnswer
+    looksLikeShortAnswer,
+    shouldRetryTask
 } from '../scripts/run-gaia-level1-lite.mjs';
 
 test('GAIA Level 1 Lite answer gate accepts compact exact answers', () => {
@@ -51,6 +52,81 @@ test('GAIA Level 1 Lite answer gate rejects explanatory finalAnswer text', () =>
     });
     assert.equal(gate.ok, false);
     assert.equal(gate.status, 'rejected_visible_prose');
+});
+
+test('GAIA Level 1 Lite retries transient provider fetch failures instead of submitting empty answers', () => {
+    assert.equal(shouldRetryTask({
+        ok: false,
+        status: 'runner_error',
+        submitted_answer: '',
+        raw_status: {
+            status: 'provider_error',
+            error: 'fetch failed transient_network_error'
+        }
+    }), true);
+});
+
+test('GAIA Level 1 Lite answer gate rejects Monte Carlo-only stochastic evidence before submission', () => {
+    const gate = buildFinalAnswerGate({
+        question: {
+            question: 'At each stage one piston randomly fires. Which ball should you choose to maximize your odds of winning?'
+        },
+        response: {
+            ok: true,
+            finalAnswer: '100',
+            steps: [{
+                args: {
+                    code: [
+                        'import random',
+                        'SIM_COUNT = 20000',
+                        'for _ in range(SIM_COUNT):',
+                        '    piston = random.randint(0, 2)',
+                        'print(100)'
+                    ].join('\n')
+                },
+                response: {
+                    ok: true,
+                    result: {
+                        content: [{ type: 'text', text: '100' }]
+                    }
+                }
+            }]
+        }
+    });
+
+    assert.equal(gate.ok, false);
+    assert.equal(gate.status, 'monte_carlo_only_random_process_evidence');
+    assert.equal(shouldRetryTask({ ok: false, status: gate.status, submitted_answer: '' }), true);
+});
+
+test('GAIA Level 1 Lite answer gate rejects ad hoc terminal stochastic transitions', () => {
+    const gate = buildFinalAnswerGate({
+        question: {
+            question: 'A random device runs in stages. Which option maximizes the probability of winning?'
+        },
+        response: {
+            ok: true,
+            finalAnswer: '98',
+            steps: [{
+                args: {
+                    code: [
+                        'from collections import defaultdict',
+                        'prob = defaultdict(float)',
+                        'if idx + 1 < total_balls:',
+                        '    pass',
+                        'elif idx < total_balls:',
+                        '    win_counts[c] += p / 3 * 0.5',
+                        '    win_counts[idx + 1] += p / 3 * 0.5'
+                    ].join('\n')
+                },
+                response: { ok: true }
+            }]
+        }
+    });
+
+    assert.equal(gate.ok, false);
+    assert.equal(gate.status, 'ad_hoc_terminal_transition_evidence');
+    assert.equal(shouldRetryTask({ ok: false, status: gate.status, submitted_answer: '' }), true);
 });
 
 test('GAIA Level 1 Lite answer gate recovers final numeric conclusion from exact-answer reason', () => {

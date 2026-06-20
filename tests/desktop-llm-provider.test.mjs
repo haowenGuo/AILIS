@@ -11,6 +11,7 @@ const {
     buildOllamaChatUrl,
     buildResponsesUrl,
     callDesktopLlmProvider,
+    classifyFetchFailure,
     checkDesktopLlmProvider,
     getProviderCapabilities
 } = require('../electron/desktop-llm-provider.cjs');
@@ -253,6 +254,15 @@ describe('desktop LLM provider', () => {
 
         assert.equal(result.ok, false);
         assert.equal(result.code, 'needs_config');
+    });
+
+    it('classifies low-level fetch failures as transient network errors', () => {
+        const result = classifyFetchFailure(Object.assign(new Error('fetch failed'), {
+            cause: { code: 'ECONNRESET', message: 'socket hang up' }
+        }));
+
+        assert.equal(result.code, 'transient_network_error');
+        assert.equal(result.details.causeCode, 'ECONNRESET');
     });
 
     it('calls a vLLM OpenAI-compatible endpoint without requiring an API key', async () => {

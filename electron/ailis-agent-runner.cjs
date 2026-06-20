@@ -3941,7 +3941,7 @@ function buildLlmAgentExecutorMessages({
         'Self Debug Loop：当用户反馈 AILIS 自身 bug、工具链异常、Agent Loop 不稳定或要求 AILIS 自己修复时，优先把它当作高风险自修复任务。先加载 self_debugger 能力，按建案、收证据、诊断、提补丁、验证、确认后应用的协议推进；不要直接裸改自己的代码。',
         '工具能力索引：首轮只给 capability_catalog。详细 schema 通过 load_context、tool_search 或工具 observation 按需出现。MCP 工具优先使用 tool_search/capability_context 中的 mcp__server__tool direct spec；外部 API/Composio/OpenAPI 工具优先使用 tool_search 返回的 external__provider__tool direct spec。没有 direct spec 时，先 load/search specs，mcp_bridge/capability_manager 只作为管理、安装、修复入口。请按任务目标和证据缺口选择最小必要工具，避免关键词驱动的机械路由。',
         exactAnswerMode
-            ? `Exact-answer 模式：不要把可见 Markdown 当提交答案。必须先用工具形成 evidence_artifacts，再用 action="final" 填短 final_answer，并在 exact_answer_submission 中提供 answer、confidence、evidence_refs；evidence_refs 里的 artifact-* 是证据引用 ID，不是文件路径，也不是 artifact_query 的 context artifactId，不能调用 read/open/artifact_query 去读取它们。数值题 final 前必须完成单位换算、比例换算和四舍五入；如果题目问 how many thousand/million/billion X，answer 填缩放后的计数，不填原始 X 数值，并在 reason 简写换算式。关系/约束题如果出现表格、分配关系、人物属性、物品列表或缺失项，final 前必须做角色对齐检查：先区分题目问的目标角色和中间缺失实体，再按表格方向映射，不能把“未匹配的收件人/物品/属性”直接当成“未执行动作的人”。缺证据时继续 tool 或 blocked。`
+            ? `Exact-answer 模式：不要把可见 Markdown 当提交答案。必须先用工具形成 evidence_artifacts，再用 action="final" 填短 final_answer，并在 exact_answer_submission 中提供 answer、confidence、evidence_refs；evidence_refs 里的 artifact-* 是证据引用 ID，不是文件路径，也不是 artifact_query 的 context artifactId，不能调用 read/open/artifact_query 去读取它们。数值题 final 前必须完成单位换算、比例换算和四舍五入；如果题目问 how many thousand/million/billion X，answer 填缩放后的计数，不填原始 X 数值，并在 reason 简写换算式。随机/概率/odds/最大胜率题如果是有限状态过程，优先写 exact dynamic program / state probability transition / exhaustive enumeration；Monte Carlo 只能做 sanity check，不能作为 high-confidence final 证据；不要把固定随机机制改成按剩余元素数量随机，也不要为题面未定义的末尾/残缺状态发明 0.5、均分或其他补充概率。关系/约束题如果出现表格、分配关系、人物属性、物品列表或缺失项，final 前必须做角色对齐检查：先区分题目问的目标角色和中间缺失实体，再按表格方向映射，不能把“未匹配的收件人/物品/属性”直接当成“未执行动作的人”。缺证据时继续 tool 或 blocked。`
             : '',
         '可见回复格式：final_answer 字段是给用户看的 Markdown 字符串，可以使用自然段、短列表、代码块和加粗；blocked_reason 也按 Markdown 组织。不要输出 HTML；不要把 persona_output/persona_surface 或 emotion/intensity/gestureIntent/taskState 等内部控制字段放进任何可见回复字段。',
         '只输出 JSON，JSON 外不要输出 Markdown。',
@@ -4586,6 +4586,65 @@ function exactAnswerReasonConflict(submission = {}) {
     };
 }
 
+function collectCodeLikeStepInputs(stepResults = []) {
+    const snippets = [];
+    for (const step of Array.isArray(stepResults) ? stepResults : []) {
+        const args = step?.args || {};
+        for (const value of [args.code, args.content, args.script]) {
+            if (typeof value === 'string' && value.trim()) {
+                snippets.push(value);
+            }
+        }
+    }
+    return snippets;
+}
+
+function detectIncompleteProcessSimulation({ message = '', stepResults = [] } = {}) {
+    const question = normalizeText(message).toLowerCase();
+    const looksSequentialRandomProcess = /(?:at each stage|each stage|random(?:ly)? fire|piston|platform|ramp|advance|simulate|simulation|game show|process)/i.test(question) &&
+        /(?:probabil|odds|chance|maximi[sz]e|which .* choose|which .* select|win)/i.test(question);
+    if (!looksSequentialRandomProcess) {
+        return null;
+    }
+    const snippets = collectCodeLikeStepInputs(stepResults);
+    for (const code of snippets) {
+        const compact = code.replace(/\r/g, '');
+        const lower = compact.toLowerCase();
+        const hasMonteCarlo = /random\.(?:randint|choice|random)|np\.random|defaultdict|win_counts|num_trials/.test(lower);
+        const hasTrialLoop = /for\s+\w+\s+in\s+range\(\s*num_trials|for\s+\w+\s+in\s+range\(\s*\d+/i.test(compact);
+        const hasSingleImmediateBreak = /while\s+true\s*:\s*[\s\S]{0,900}random\.(?:randint|choice|random)[\s\S]{0,900}\bbreak\b/i.test(compact);
+        const hasNoInnerProgressionLoop = hasTrialLoop &&
+            /piston\s*=|random\.(?:randint|choice|random)/i.test(compact) &&
+            !/while\s+.+:|while\s+True\s*:|for\s+(?:step|stage|turn|round|move)\b/i.test(compact);
+        const hasExactStateMethod = /(?:dynamic\s+program|dp\b|memo|cache|lru_cache|probabilit(?:y|ies)\s*=|state_probs|transition|enumerat|fractions?\.Fraction|from\s+fractions\s+import\s+Fraction)/i.test(compact);
+        const monteCarloOnly = hasMonteCarlo &&
+            /(?:sim_count|num_trials|trials|for\s+\w+\s+in\s+range\(\s*\d{3,})/i.test(compact) &&
+            !hasExactStateMethod;
+        const updatesState = /advance|released|rolls|platform\s*=|platform\.(?:append|insert|pop|remove)|ramp\.pop|deque|state|transition/i.test(compact);
+        const inventsTerminalTransition = /(?:\*\s*0\.5|\/\s*2\b|len\(\s*platform\s*\)\s*-\s*1|random\.randint\(\s*0\s*,\s*len\()/i.test(compact) &&
+            /(?:elif\s+\w+\s*<\s*total|if\s+\w+\s*<\s*total|remaining|只剩|剩余|platform|terminal|末尾)/i.test(compact);
+        if (hasMonteCarlo && (hasSingleImmediateBreak || (hasNoInnerProgressionLoop && !updatesState))) {
+            return {
+                error: 'incomplete_process_simulation_evidence',
+                instruction: 'The executed simulation appears to sample only the first random event of a multi-stage process. Implement the full state transition loop or exact dynamic program until the chosen outcome is resolved, then compare all candidate probabilities before final_answer.'
+            };
+        }
+        if (inventsTerminalTransition) {
+            return {
+                error: 'ad_hoc_terminal_transition_evidence',
+                instruction: 'The stochastic-process code appears to invent terminal/partial-state probabilities or a variable random device that the question did not specify. Use only stated transitions; if a full next stage cannot be formed under the stated rules, do not fabricate replacement probabilities. Add a probability-mass or top-candidate audit before final_answer.'
+            };
+        }
+        if (monteCarloOnly) {
+            return {
+                error: 'monte_carlo_only_random_process_evidence',
+                instruction: 'The evidence is Monte Carlo-only for a finite stochastic exact-answer task. Build an exact state transition / dynamic program, or at minimum cross-check the simulation against the original random-event rules and compare all candidate probabilities before final_answer.'
+            };
+        }
+    }
+    return null;
+}
+
 function validateExactAnswerSubmission({ decision = {}, stepResults = [], message = '' } = {}) {
     const submission = normalizeExactAnswerSubmission(decision.exactAnswerSubmission || {});
     const availableRefs = getAvailableEvidenceRefSet(stepResults);
@@ -4614,6 +4673,10 @@ function validateExactAnswerSubmission({ decision = {}, stepResults = [], messag
     if (reasonConflict) {
         errors.push(reasonConflict.error);
     }
+    const incompleteSimulation = detectIncompleteProcessSimulation({ message, stepResults });
+    if (incompleteSimulation) {
+        errors.push(incompleteSimulation.error);
+    }
     return {
         ok: errors.length === 0,
         submission,
@@ -4621,13 +4684,15 @@ function validateExactAnswerSubmission({ decision = {}, stepResults = [], messag
         unknownRefs,
         availableEvidenceRefs: [...availableRefs],
         scaledUnitMismatch,
-        reasonConflict
+        reasonConflict,
+        incompleteSimulation
     };
 }
 
 function buildExactAnswerRepairObservation(validation = {}, { iteration = 0 } = {}) {
     const missing = validation.errors || [];
-    const nextAction = validation.reasonConflict?.instruction ||
+    const nextAction = validation.incompleteSimulation?.instruction ||
+        validation.reasonConflict?.instruction ||
         validation.scaledUnitMismatch?.instruction ||
         (missing.includes('evidence_refs_missing') || missing.includes('evidence_refs_unknown')
         ? 'Use the available evidence_artifacts ids, or call another retrieval/read/compute tool to create the missing evidence before final_answer.'
@@ -4646,12 +4711,14 @@ function buildExactAnswerRepairObservation(validation = {}, { iteration = 0 } = 
         unknownEvidenceRefs: validation.unknownRefs || [],
         scaledUnitMismatch: validation.scaledUnitMismatch || null,
         reasonConflict: validation.reasonConflict || null,
+        incompleteSimulation: validation.incompleteSimulation || null,
         content: JSON.stringify({
             exact_answer_gate: 'rejected',
             errors: missing,
             available_evidence_refs: validation.availableEvidenceRefs || [],
             scaled_unit_mismatch: validation.scaledUnitMismatch || null,
             reason_conflict: validation.reasonConflict || null,
+            incomplete_simulation: validation.incompleteSimulation || null,
             instruction: nextAction
         })
     };
@@ -4703,7 +4770,7 @@ function buildExactAnswerContractPromptObject({ exactAnswerMode = false, evidenc
             'question asks for scaled units such as thousand/million/billion but answer is the raw rounded base-unit value'
         ],
         available_evidence_refs: evidenceArtifacts.map((artifact) => artifact.id).filter(Boolean),
-        instruction: `When solved, call ${FINAL_ANSWER_TOOL_NAME} instead of writing a visible prose final. Use evidence artifact ids only as final_answer evidence_refs. They are not filesystem paths and not artifact_query context artifactIds; do not read/open/query them. For quantitative questions, finish unit conversion, rate conversion, scaling, and rounding before final; if the question asks how many thousand/million/billion units, answer with the scaled count, not the raw unit value. Keep the answer field consistent with the final numeric conclusion written in reason. For relation/constraint questions with assignments, tables, profiles, lists, or missing entities, verify the answer role against the question wording and map intermediate missing entities through the relation table direction before final. If evidence is missing, keep using tools or return blocked with a repair instruction.`
+        instruction: `When solved, call ${FINAL_ANSWER_TOOL_NAME} instead of writing a visible prose final. Use evidence artifact ids only as final_answer evidence_refs. They are not filesystem paths and not artifact_query context artifactIds; do not read/open/query them. For quantitative questions, finish unit conversion, rate conversion, scaling, and rounding before final; if the question asks how many thousand/million/billion units, answer with the scaled count, not the raw unit value. For finite stochastic/probability/odds questions, use exact state transitions, dynamic programming, or exhaustive enumeration for the final evidence; Monte Carlo may only be a sanity check; do not invent terminal probabilities or variable random devices absent from the question. Keep the answer field consistent with the final numeric conclusion written in reason. For relation/constraint questions with assignments, tables, profiles, lists, or missing entities, verify the answer role against the question wording and map intermediate missing entities through the relation table direction before final. If evidence is missing, keep using tools or return blocked with a repair instruction.`
     };
 }
 
@@ -4760,7 +4827,7 @@ function buildLlmAgentDirectToolMessages({
         '需要用户授权时调用 request_permissions。危险写入、shell、patch、邮件发送等会由本地 Gateway 审批，不要在参数中伪造 approved=true。',
         '最终答复必须是给用户看的 Markdown。没有足够证据时不要提交猜测答案，要继续调用工具或明确 blocked。',
         exactAnswerMode
-            ? `Exact-answer 模式：普通可见话术不能作为提交答案。任务完成时必须调用 ${FINAL_ANSWER_TOOL_NAME}，answer 只填短精确答案，confidence 必须 high/medium，evidence_refs 必须引用 evidence_artifacts 中的 id；这些 artifact-* 是证据引用，不是文件路径，也不是 artifact_query 的 context artifactId，不要用 read/open/artifact_query 读取它们。数值题 final 前先完成单位换算、比例换算和四舍五入；如果题目问 how many thousand/million/billion X，answer 填缩放后的计数，不填原始 X 数值，并在 reason 简写换算式。若题目是表格/分配/人物属性/物品列表/缺失项这类关系约束题，final 前必须说明目标角色、中间缺失实体、表格方向映射三者一致，否则继续推理或调用工具。`
+            ? `Exact-answer 模式：普通可见话术不能作为提交答案。任务完成时必须调用 ${FINAL_ANSWER_TOOL_NAME}，answer 只填短精确答案，confidence 必须 high/medium，evidence_refs 必须引用 evidence_artifacts 中的 id；这些 artifact-* 是证据引用，不是文件路径，也不是 artifact_query 的 context artifactId，不要用 read/open/artifact_query 读取它们。数值题 final 前先完成单位换算、比例换算和四舍五入；如果题目问 how many thousand/million/billion X，answer 填缩放后的计数，不填原始 X 数值，并在 reason 简写换算式。若题目是随机/概率/odds/最大胜率的有限状态过程，final 前必须用 exact DP、状态概率转移或枚举验证；Monte Carlo 只能 sanity check，不能直接提交；不要为题面未定义的末尾/残缺状态发明 0.5、均分或可变随机机制。若题目是表格/分配/人物属性/物品列表/缺失项这类关系约束题，final 前必须说明目标角色、中间缺失实体、表格方向映射三者一致，否则继续推理或调用工具。`
             : '',
         `最多工具轮数：${maxSteps}`,
         `工具摘要：${toolSummary || 'Direct tools are exposed as native function tools. Search more tools with tool_search.'}`

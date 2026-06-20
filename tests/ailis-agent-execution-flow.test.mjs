@@ -596,3 +596,163 @@ test('Agent exact-answer gate rejects numeric answer when reason states a differ
     assert.equal(rejected.reasonConflict.answer, '40');
     assert.deepEqual(rejected.reasonConflict.reasonFinalNumbers, ['17']);
 });
+
+test('Agent exact-answer gate rejects incomplete first-step simulations for multi-stage random processes', () => {
+    const stepResult = attachAgentEvidenceArtifacts({
+        id: 'step-sim',
+        title: 'Run simulation',
+        tool: 'mcp__ailis_research__run_python_file',
+        args: {
+            code: [
+                'import random',
+                'from collections import defaultdict',
+                'def simulate_game(num_trials=100000):',
+                '    win_counts = defaultdict(int)',
+                '    for _ in range(num_trials):',
+                '        ramp = list(range(1, 101))',
+                '        platform = [ramp.pop(0), ramp.pop(0), ramp.pop(0)]',
+                '        while True:',
+                '            piston = random.randint(0, 2)',
+                '            ejected = platform[piston]',
+                '            win_counts[ejected] += 1',
+                '            break',
+                '    return max(win_counts, key=win_counts.get)'
+            ].join('\n')
+        },
+        iteration: 1,
+        response: {
+            ok: true,
+            status: 'completed',
+            result: {
+                content: [{ type: 'text', text: 'Best ball: 1' }]
+            }
+        }
+    });
+    const evidenceRef = stepResult.evidenceArtifacts[0].id;
+    const message = [
+        'At each stage of the game, one of three pistons will randomly fire.',
+        'Balls advance on a platform and ramp after each firing.',
+        'Which ball should you choose to maximize your odds of winning?'
+    ].join(' ');
+
+    const rejected = validateExactAnswerSubmission({
+        decision: {
+            exactAnswerSubmission: normalizeExactAnswerSubmission({
+                answer: '1',
+                confidence: 'high',
+                evidence_refs: [evidenceRef],
+                reason: 'simulation says ball 1 is best'
+            })
+        },
+        stepResults: [stepResult],
+        message
+    });
+
+    assert.equal(rejected.ok, false);
+    assert.ok(rejected.errors.includes('incomplete_process_simulation_evidence'));
+    assert.match(rejected.incompleteSimulation.instruction, /full state transition loop/i);
+});
+
+test('Agent exact-answer gate rejects Monte Carlo-only evidence for finite stochastic exact-answer tasks', () => {
+    const stepResult = attachAgentEvidenceArtifacts({
+        id: 'step-monte-carlo',
+        title: 'Run stochastic simulation',
+        tool: 'mcp__ailis_research__run_python_file',
+        args: {
+            code: [
+                'import random',
+                'from collections import defaultdict',
+                'SIM_COUNT = 20000',
+                'def simulate_one_game():',
+                '    ramp = list(range(1, 101))',
+                '    platform = ramp[:3]',
+                '    ramp = ramp[3:]',
+                '    ejected = []',
+                '    while len(ejected) < 100 and len(platform) > 0:',
+                '        piston = random.randint(0, 2)',
+                '        ejected.append(platform[piston])',
+                '        platform = platform[1:]',
+                '        if ramp:',
+                '            platform.append(ramp.pop(0))',
+                '    return ejected',
+                'counts = defaultdict(int)',
+                'for _ in range(SIM_COUNT):',
+                '    for num in simulate_one_game():',
+                '        counts[num] += 1',
+                'print(max(counts, key=counts.get))'
+            ].join('\n')
+        },
+        iteration: 1,
+        response: {
+            ok: true,
+            status: 'completed',
+            result: {
+                content: [{ type: 'text', text: '100' }]
+            }
+        }
+    });
+    const evidenceRef = stepResult.evidenceArtifacts[0].id;
+
+    const rejected = validateExactAnswerSubmission({
+        decision: {
+            exactAnswerSubmission: normalizeExactAnswerSubmission({
+                answer: '100',
+                confidence: 'high',
+                evidence_refs: [evidenceRef],
+                reason: 'Monte Carlo simulation says 100 has the highest win probability.'
+            })
+        },
+        stepResults: [stepResult],
+        message: 'At each stage one piston randomly fires. Which ball should you choose to maximize your odds of winning?'
+    });
+
+    assert.equal(rejected.ok, false);
+    assert.ok(rejected.errors.includes('monte_carlo_only_random_process_evidence'));
+    assert.match(rejected.incompleteSimulation.instruction, /exact state transition/i);
+});
+
+test('Agent exact-answer gate rejects ad hoc terminal probabilities in stochastic process code', () => {
+    const stepResult = attachAgentEvidenceArtifacts({
+        id: 'step-ad-hoc-terminal',
+        title: 'Run DP',
+        tool: 'mcp__ailis_research__run_python_file',
+        args: {
+            code: [
+                'from collections import defaultdict',
+                'prob = defaultdict(float)',
+                'if idx + 1 < total_balls:',
+                '    new_prob[state] += p / 3',
+                'elif idx < total_balls:',
+                '    # guessed terminal split for remaining platform',
+                '    win_counts[c] += p / 3 * 0.5',
+                '    win_counts[idx + 1] += p / 3 * 0.5'
+            ].join('\n')
+        },
+        iteration: 1,
+        response: {
+            ok: true,
+            status: 'completed',
+            result: {
+                content: [{ type: 'text', text: '98' }]
+            }
+        }
+    });
+    const evidenceRef = stepResult.evidenceArtifacts[0].id;
+
+    const rejected = validateExactAnswerSubmission({
+        decision: {
+            exactAnswerSubmission: normalizeExactAnswerSubmission({
+                answer: '98',
+                confidence: 'high',
+                evidence_refs: [evidenceRef],
+                reason: 'DP with terminal split says 98.'
+            })
+        },
+        stepResults: [stepResult],
+        message: 'At each stage one random piston fires. Which ball maximizes your odds of winning?'
+    });
+
+    assert.equal(rejected.ok, false);
+    assert.ok(rejected.errors.includes('ad_hoc_terminal_transition_evidence'));
+    assert.match(rejected.incompleteSimulation.instruction, /terminal\/partial-state probabilities/i);
+});

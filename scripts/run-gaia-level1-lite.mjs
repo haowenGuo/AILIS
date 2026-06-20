@@ -197,6 +197,7 @@ function buildBenchmarkMessage(question, filePath) {
         'Follow the active Agentic Executor protocol from the system prompt. If direct native tools are exposed, call tools directly; if JSON planner fallback is active, use action="final" with the exact short answer in final_answer.',
         'When the task is solved, return the exact short answer.',
         'AILIS visible persona text may stay natural; the benchmark runner stores the exact final_answer into a separate answer artifact.',
+        'For finite stochastic/probability/odds/maximize-chance questions, prefer exact state-transition dynamic programming or exhaustive enumeration. Monte Carlo may be used only as a sanity check, not as the final high-confidence evidence. Do not change a fixed random mechanism into a variable one based on remaining items, and do not invent 0.5/even-split probabilities for terminal or partial states not defined by the question.',
         'Available generic MCP server: ailis_research.',
         'Prefer direct MCP tool ids instead of hand-building bridge payloads. Common direct tools: mcp__ailis_research__read_document, mcp__ailis_research__read_spreadsheet, mcp__ailis_research__read_presentation, mcp__ailis_research__paper_metadata_lookup, mcp__ailis_research__pdf_find_and_extract, mcp__ailis_research__pdf_extract_text, mcp__ailis_research__youtube_transcript, mcp__ailis_research__transcribe_audio, mcp__ailis_research__describe_image, mcp__ailis_research__run_python_file, mcp__ailis_research__github_repo_read, mcp__ailis_research__web_fetch, mcp__ailis_research__web_extract_links, mcp__ailis_research__download_file, mcp__ailis_research__web_search.',
         'Tool routing rule: mcp__ailis_research__web_search is a fallback for broad discovery only. For attached/local artifacts, known URLs, exact paper/report titles, PDFs, YouTube/videos, audio, images, code files, spreadsheets, presentations, Word documents, or GitHub repos, call the specific MCP tool first.',
@@ -472,6 +473,51 @@ function collectEvidenceAnswerCandidateTexts(response = {}) {
     return answers;
 }
 
+function collectCodeLikeStepInputs(response = {}) {
+    return (Array.isArray(response.steps) ? response.steps : [])
+        .flatMap((step) => {
+            const args = step?.args || {};
+            return [args.code, args.content, args.script, args.python, args.source];
+        })
+        .filter((value) => typeof value === 'string' && value.trim());
+}
+
+function detectUnverifiedRandomProcessEvidence({ question = {}, response = {} } = {}) {
+    const questionText = normalizeText(question.question || question).toLowerCase();
+    const looksRandomExactTask = /(?:at each stage|random(?:ly)?|odds|probabil|chance|maximi[sz]e|which .* choose|which .* select|win)/i.test(questionText);
+    if (!looksRandomExactTask) {
+        return null;
+    }
+    for (const code of collectCodeLikeStepInputs(response)) {
+        const compact = code.replace(/\r/g, '');
+        const hasMonteCarlo = /random\.(?:randint|choice|random)|np\.random|sim_count|num_trials|trials/i.test(compact);
+        const hasExactStateMethod = /(?:dynamic\s+program|dp\b|memo|cache|lru_cache|probabilit(?:y|ies)\s*=|state_probs|transition|enumerat|fractions?\.Fraction|from\s+fractions\s+import\s+Fraction)/i.test(compact);
+        const inventsTerminalTransition = /(?:\*\s*0\.5|\/\s*2\b|len\(\s*platform\s*\)\s*-\s*1|random\.randint\(\s*0\s*,\s*len\()/i.test(compact) &&
+            /(?:elif\s+\w+\s*<\s*total|if\s+\w+\s*<\s*total|remaining|只剩|剩余|platform|terminal|末尾)/i.test(compact);
+        if (inventsTerminalTransition) {
+            return {
+                ok: false,
+                answer: '',
+                source: 'evidence_quality_gate',
+                status: 'ad_hoc_terminal_transition_evidence',
+                confidence: 'low',
+                reason: 'finite stochastic exact-answer task used terminal or partial-state transition probabilities not specified by the problem'
+            };
+        }
+        if (hasMonteCarlo && !hasExactStateMethod) {
+            return {
+                ok: false,
+                answer: '',
+                source: 'evidence_quality_gate',
+                status: 'monte_carlo_only_random_process_evidence',
+                confidence: 'low',
+                reason: 'finite stochastic exact-answer task used Monte Carlo-only evidence without exact state-transition or rule-consistency verification'
+            };
+        }
+    }
+    return null;
+}
+
 function acceptEvidenceAnswerCandidate({ question = {}, response = {}, finalizer = null } = {}) {
     for (const answer of collectEvidenceAnswerCandidateTexts(response)) {
         const gate = acceptExactAnswerCandidate(answer, {
@@ -496,6 +542,10 @@ function acceptEvidenceAnswerCandidate({ question = {}, response = {}, finalizer
 }
 
 function buildFinalAnswerGate({ question = {}, response = {}, finalizer = null } = {}) {
+    const randomProcessGate = detectUnverifiedRandomProcessEvidence({ question, response });
+    if (randomProcessGate) {
+        return randomProcessGate;
+    }
     const reasonGate = buildReasonFinalAnswerGate(response, question);
     if (reasonGate?.ok) {
         return reasonGate;
@@ -1474,8 +1524,16 @@ function shouldRetryTask(result = {}) {
     if (result.ok && result.submitted_answer) {
         return false;
     }
-    const text = `${result.status || ''} ${result.error || ''} ${result.raw_status?.error || ''}`;
-    return /runner_error|aborted|timeout|blocked|invalid_agent_decision|invalid_agent_tool_call|empty_response/i.test(text);
+    const text = [
+        result.status,
+        result.error,
+        result.raw_status?.status,
+        result.raw_status?.error,
+        result.response?.status,
+        result.response?.error,
+        result.answer_gate?.status
+    ].filter(Boolean).join(' ');
+    return /runner_error|aborted|timeout|blocked|invalid_agent_decision|invalid_agent_tool_call|empty_response|fetch failed|network_error|transient_network_error|monte_carlo_only_random_process_evidence|ad_hoc_terminal_transition_evidence/i.test(text);
 }
 
 async function submitAnswers(args, answers) {
@@ -1696,5 +1754,6 @@ export {
     looksLikeFailureSurface,
     looksLikeShortAnswer,
     normalizeFinalizerConfidence,
+    shouldRetryTask,
     stripControlTags
 };

@@ -32,6 +32,7 @@ const {
     rankLinksForResearch,
     rankSearchResultsForFollowup,
     readDocument,
+    runPythonFile,
     stripWikiText,
     webExtractLinks,
     webFetch,
@@ -82,6 +83,7 @@ test('AILIS research MCP exposes Codex-aligned PDF/file tools', () => {
     const names = TOOLS.map((tool) => tool.name);
     const searchTool = TOOLS.find((tool) => tool.name === 'web_search');
     const fetchTool = TOOLS.find((tool) => tool.name === 'web_fetch');
+    const pythonTool = TOOLS.find((tool) => tool.name === 'run_python_file');
 
     assert.ok(names.includes('web_search'));
     assert.ok(names.includes('web_research'));
@@ -107,6 +109,38 @@ test('AILIS research MCP exposes Codex-aligned PDF/file tools', () => {
     assert.ok(searchTool.description.includes('AILIS_SEARXNG_URL'));
     assert.ok(fetchTool.inputSchema.properties.extract_query);
     assert.ok(fetchTool.inputSchema.properties.extractQuery);
+    assert.ok(pythonTool.inputSchema.properties.code);
+    assert.ok(pythonTool.inputSchema.properties.inline_code);
+    assert.ok(pythonTool.inputSchema.properties.inlineCode);
+    assert.ok(pythonTool.inputSchema.properties.source);
+    assert.ok(pythonTool.inputSchema.properties.python);
+});
+
+test('run_python_file supports inline Python code for one-off benchmark calculations', async () => {
+    const result = await runPythonFile({
+        code: 'print(6 * 7)'
+    });
+
+    assert.equal(result.isError, false);
+    assert.match(result.content[0].text, /42/);
+    assert.equal(result.structuredContent.status, 'completed');
+    assert.equal(result.structuredContent.inlineCode, true);
+});
+
+test('run_python_file supports common inline_code aliases', async () => {
+    const snake = await runPythonFile({
+        inline_code: 'print(7 * 8)'
+    });
+    const camel = await runPythonFile({
+        inlineCode: 'print(9 * 9)'
+    });
+
+    assert.equal(snake.isError, false);
+    assert.equal(camel.isError, false);
+    assert.match(snake.content[0].text, /56/);
+    assert.match(camel.content[0].text, /81/);
+    assert.equal(snake.structuredContent.inlineCode, true);
+    assert.equal(camel.structuredContent.inlineCode, true);
 });
 
 test('YouTube tools expose recovery affordance before broad web search', async () => {
