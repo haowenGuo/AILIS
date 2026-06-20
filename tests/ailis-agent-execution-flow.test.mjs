@@ -390,6 +390,48 @@ test('Agent evidence sufficiency treats complete parsed documents as reasoning-r
     assert.equal(sufficiency.ready_evidence[0].tool, 'mcp__ailis_research__read_document');
 });
 
+test('Agent evidence sufficiency unwraps nested MCP structuredContent readiness', () => {
+    const stepResults = [{
+        id: 'step-web-fetch',
+        title: 'Fetch evidence page',
+        tool: 'mcp__ailis_research__web_fetch',
+        args: { url: 'https://example.test/evidence' },
+        response: {
+            ok: true,
+            status: 'completed',
+            result: {
+                structuredContent: {
+                    status: 'completed',
+                    server: 'ailis_research',
+                    tool: 'web_fetch',
+                    result: {
+                        structuredContent: {
+                            status: 'completed',
+                            url: 'https://example.test/evidence',
+                            complete: true,
+                            truncated: false,
+                            reasoningReady: true,
+                            evidenceQuality: 'sufficient_evidence',
+                            observationContract: {
+                                complete: true,
+                                truncated: false,
+                                reasoning_ready: true,
+                                evidence_quality: 'sufficient_evidence'
+                            }
+                        }
+                    }
+                },
+                content: [{ type: 'text', text: 'ready web evidence' }]
+            }
+        }
+    }];
+
+    const sufficiency = buildEvidenceSufficiencyPromptObject(stepResults, { exactAnswerMode: true });
+    assert.equal(sufficiency.status, 'ready_for_reasoning');
+    assert.equal(sufficiency.ready_evidence_count, 1);
+    assert.equal(sufficiency.ready_evidence[0].tool, 'mcp__ailis_research__web_fetch');
+});
+
 test('Agent model-facing observation digest stays compact and artifact-backed', () => {
     const longSearchText = Array.from({ length: 80 }, (_, index) =>
         `${index + 1}. Result ${index}\nURL: https://example.test/${index}\nSnippet: ${'long snippet '.repeat(40)}`
@@ -465,4 +507,92 @@ test('Agent exact-answer gate requires confident known evidence refs', () => {
     assert.equal(rejected.ok, false);
     assert.ok(rejected.errors.includes('confidence_below_gate'));
     assert.ok(rejected.errors.includes('evidence_refs_unknown'));
+});
+
+test('Agent exact-answer gate rejects raw rounded units for scaled-unit questions', () => {
+    const stepResult = attachAgentEvidenceArtifacts({
+        id: 'step-web',
+        title: 'Fetch source',
+        tool: 'mcp__ailis_research__web_fetch',
+        args: { url: 'https://example.test/moon' },
+        iteration: 1,
+        response: {
+            ok: true,
+            status: 'completed',
+            result: {
+                content: [{ type: 'text', text: 'periapsis: 362600 km; marathon pace evidence available.' }]
+            }
+        }
+    });
+    const evidenceRef = stepResult.evidenceArtifacts[0].id;
+    const message = [
+        'If a runner maintained marathon pace indefinitely, how many thousand hours would it take?',
+        'Round your result to the nearest 1000 hours.'
+    ].join(' ');
+
+    const rejected = validateExactAnswerSubmission({
+        decision: {
+            exactAnswerSubmission: normalizeExactAnswerSubmission({
+                answer: '1000',
+                confidence: 'high',
+                evidence_refs: [evidenceRef],
+                reason: 'rounded to nearest 1000 hours'
+            })
+        },
+        stepResults: [stepResult],
+        message
+    });
+    assert.equal(rejected.ok, false);
+    assert.ok(rejected.errors.includes('scaled_unit_answer_mismatch'));
+    assert.match(rejected.scaledUnitMismatch.instruction, /divide by 1000/i);
+
+    const accepted = validateExactAnswerSubmission({
+        decision: {
+            exactAnswerSubmission: normalizeExactAnswerSubmission({
+                answer: '17',
+                confidence: 'high',
+                evidence_refs: [evidenceRef],
+                reason: 'raw hours rounded to 17000, then reported as 17 thousand hours'
+            })
+        },
+        stepResults: [stepResult],
+        message
+    });
+    assert.equal(accepted.ok, true);
+});
+
+test('Agent exact-answer gate rejects numeric answer when reason states a different final number', () => {
+    const stepResult = attachAgentEvidenceArtifacts({
+        id: 'step-calc',
+        title: 'Fetch and calculate',
+        tool: 'mcp__ailis_research__web_fetch',
+        args: { url: 'https://example.test/evidence' },
+        iteration: 1,
+        response: {
+            ok: true,
+            status: 'completed',
+            result: {
+                content: [{ type: 'text', text: 'The calculation gives 17 thousand hours.' }]
+            }
+        }
+    });
+    const evidenceRef = stepResult.evidenceArtifacts[0].id;
+
+    const rejected = validateExactAnswerSubmission({
+        decision: {
+            exactAnswerSubmission: normalizeExactAnswerSubmission({
+                answer: '40',
+                confidence: 'high',
+                evidence_refs: [evidenceRef],
+                reason: '356400 / 20.897 ≈ 17054 hours, rounded to 17000 hours, so the correct answer is 17.'
+            })
+        },
+        stepResults: [stepResult],
+        message: 'How many thousand hours?'
+    });
+
+    assert.equal(rejected.ok, false);
+    assert.ok(rejected.errors.includes('answer_reason_conflict'));
+    assert.equal(rejected.reasonConflict.answer, '40');
+    assert.deepEqual(rejected.reasonConflict.reasonFinalNumbers, ['17']);
 });

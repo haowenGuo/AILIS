@@ -167,6 +167,7 @@ function decodeHtml(value = '') {
         .replace(/&amp;/g, '&')
         .replace(/&lt;/g, '<')
         .replace(/&gt;/g, '>')
+        .replace(/&nbsp;|&#160;|&#xa0;/gi, ' ')
         .replace(/&quot;/g, '"')
         .replace(/&#39;|&apos;/g, "'")
         .replace(/&#x2F;/g, '/')
@@ -205,6 +206,130 @@ function extractHtmlAttribute(tag = '', name = '') {
     const pattern = new RegExp(`\\b${name}\\s*=\\s*("([^"]*)"|'([^']*)'|([^\\s>]+))`, 'i');
     const match = String(tag).match(pattern);
     return match ? decodeHtml(match[2] || match[3] || match[4] || '') : '';
+}
+
+function splitWikiTemplateParts(inner = '') {
+    return String(inner || '').split('|').map((part) => normalizeString(part));
+}
+
+function wikiTemplateNamedParts(parts = []) {
+    const named = [];
+    for (const part of parts.slice(1)) {
+        const index = part.indexOf('=');
+        if (index <= 0) {
+            continue;
+        }
+        const key = normalizeString(part.slice(0, index));
+        const value = normalizeString(part.slice(index + 1));
+        if (key && value) {
+            named.push({ key, value });
+        }
+    }
+    return named;
+}
+
+function cleanWikiTemplateValue(value = '') {
+    return decodeHtml(String(value || '')
+        .replace(/<ref[\s\S]*?<\/ref>/gi, ' ')
+        .replace(/<ref[^>]*\/>/gi, ' ')
+        .replace(/<br\s*\/?>/gi, '; ')
+        .replace(/\[\[File:[^\]]+\]\]/gi, ' ')
+        .replace(/\[\[Category:[^\]]+\]\]/gi, ' ')
+        .replace(/\[\[([^|\]]+)\|([^\]]+)\]\]/g, '$2')
+        .replace(/\[\[([^\]]+)\]\]/g, '$1')
+        .replace(/''+/g, '')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/\s*;\s*/g, '; ')
+        .replace(/[ \t]{2,}/g, ' '))
+        .trim();
+}
+
+function simplifyConvertTemplate(parts = []) {
+    const positional = parts.slice(1)
+        .filter((part) => part && !/^[a-z_][\w -]*\s*=/i.test(part));
+    if (positional.length >= 5 && /^[-–]|to$/i.test(positional[1])) {
+        return cleanWikiTemplateValue(`${positional[0]}-${positional[2]} ${positional[3]}`);
+    }
+    if (positional.length >= 2) {
+        return cleanWikiTemplateValue(`${positional[0]} ${positional[1]}`);
+    }
+    return '';
+}
+
+function simplifyValTemplate(parts = []) {
+    const named = wikiTemplateNamedParts(parts);
+    const unit = named.find((entry) => /^(?:u|ul|unit)$/i.test(entry.key))?.value || '';
+    const values = parts.slice(1)
+        .filter((part) => part && !/^[a-z_][\w -]*\s*=/i.test(part))
+        .slice(0, 3);
+    return cleanWikiTemplateValue([...values, unit].filter(Boolean).join(' '));
+}
+
+function simplifyGapsTemplate(parts = []) {
+    const values = parts.slice(1)
+        .filter((part) => part && !/^[a-z_][\w -]*\s*=/i.test(part))
+        .map((part) => cleanWikiTemplateValue(part))
+        .filter(Boolean);
+    if (!values.length) {
+        return '';
+    }
+    return values.every((part) => /^\d+$/.test(part))
+        ? values.join('')
+        : values.join(' ');
+}
+
+function simplifyWikiTemplate(match = '', inner = '') {
+    const parts = splitWikiTemplateParts(inner);
+    const name = normalizeString(parts[0]).toLowerCase();
+    if (!name) {
+        return ' ';
+    }
+    if (/^(?:convert|cvt|nowrap\scvt)$/i.test(name)) {
+        return simplifyConvertTemplate(parts) || ' ';
+    }
+    if (/^(?:val|val2)$/i.test(name)) {
+        return simplifyValTemplate(parts) || ' ';
+    }
+    if (/^(?:gaps|gapnum|formatnum)$/i.test(name)) {
+        return simplifyGapsTemplate(parts) || ' ';
+    }
+    if (/^(?:nbsp|space|spaces)$/i.test(name)) {
+        return ' ';
+    }
+    if (/^(?:nowrap|nobr|small|smaller|big|larger|lang|transl|nihongo)$/i.test(name)) {
+        const text = parts.slice(1).filter((part) => part && !/^[a-z_][\w -]*\s*=/i.test(part)).join(' ');
+        return cleanWikiTemplateValue(text) || ' ';
+    }
+    if (/^(?:ubl|plainlist|hlist|unbulleted list|flatlist)$/i.test(name)) {
+        const text = parts.slice(1).filter((part) => part && !/^[a-z_][\w -]*\s*=/i.test(part)).join('; ');
+        return cleanWikiTemplateValue(text) || ' ';
+    }
+    if (/^(?:cite|citation|sfn|efn|refn|notelist|reflist|main|see also|coord|short description)$/i.test(name)) {
+        return ' ';
+    }
+    const named = wikiTemplateNamedParts(parts)
+        .filter(({ key, value }) => {
+            const normalizedKey = key.toLowerCase();
+            if (/^(?:image.*|total_width|caption|alt|logo|map|pushpin|coordinates?)$/i.test(normalizedKey)) {
+                return false;
+            }
+            return cleanWikiTemplateValue(value).length > 0;
+        })
+        .slice(0, 80);
+    if (/^infobox\b/i.test(name) || named.length >= 2) {
+        const lines = named.map(({ key, value }) => `${cleanWikiTemplateValue(key)}: ${cleanWikiTemplateValue(value)}`)
+            .filter((line) => !/:\s*$/.test(line));
+        return lines.length ? `\n${lines.join('\n')}\n` : ' ';
+    }
+    return ' ';
+}
+
+function simplifyWikiTemplates(value = '') {
+    let text = String(value || '');
+    for (let pass = 0; pass < 24 && /\{\{[^{}]*\}\}/.test(text); pass += 1) {
+        text = text.replace(/\{\{([^{}]*)\}\}/g, simplifyWikiTemplate);
+    }
+    return text.replace(/\{\{[\s\S]*?\}\}/g, ' ');
 }
 
 function resolveHtmlUrl(value = '', baseUrl = '') {
@@ -639,6 +764,81 @@ function formatHtmlRelationGraph(graph = {}) {
     return lines.join('\n');
 }
 
+function extractWikiKeyValueFacts(text = '', query = '', limit = 36) {
+    const facts = [];
+    const seen = new Set();
+    const queryText = normalizeString(query).toLowerCase();
+    const queryTokens = significantPdfQueryTerms(queryText);
+    const synonymBoosts = [
+        { query: /\b(?:perigee|closest approach)\b/i, key: /\bperiapsis\b/i },
+        { query: /\b(?:apogee|farthest)\b/i, key: /\bapoapsis\b/i }
+    ];
+    const lines = String(text || '').split(/\r?\n/);
+    for (let index = 0; index < lines.length && facts.length < 160; index += 1) {
+        const match = lines[index].match(/^([A-Za-z][A-Za-z0-9 _./()%-]{1,90})\s*:\s*(.{1,700})$/);
+        if (!match) {
+            continue;
+        }
+        const key = cleanWikiTemplateValue(match[1]).replace(/\s+/g, ' ').trim();
+        const value = cleanWikiTemplateValue(match[2]).replace(/\s+/g, ' ').trim();
+        if (!key || !value || value.length > 650) {
+            continue;
+        }
+        const lower = `${key} ${value}`.toLowerCase();
+        if (/^(?:image|caption|alt|logo|map|module|embed)$/i.test(key)) {
+            continue;
+        }
+        const dedupeKey = `${key.toLowerCase()}:${value.toLowerCase()}`;
+        if (seen.has(dedupeKey)) {
+            continue;
+        }
+        seen.add(dedupeKey);
+        let score = Math.max(0, 120 - index);
+        for (const token of queryTokens) {
+            if (token && lower.includes(token.toLowerCase())) {
+                score += pdfEvidenceTermWeight(token) * 4;
+            }
+        }
+        for (const boost of synonymBoosts) {
+            if (boost.query.test(queryText) && boost.key.test(key)) {
+                score += 80;
+            }
+        }
+        if (/\d/.test(value)) {
+            score += 12;
+        }
+        facts.push({ key, value, source: 'wikitext_key_value', order: index, score });
+    }
+    return facts
+        .sort((a, b) => b.score - a.score || a.order - b.order)
+        .slice(0, limit)
+        .sort((a, b) => a.order - b.order)
+        .map(({ key, value, source, score }) => ({ key, value, source, score }));
+}
+
+function formatWikiKeyValueFacts(facts = []) {
+    if (!Array.isArray(facts) || !facts.length) {
+        return '';
+    }
+    const lines = ['Wiki key-value facts:'];
+    for (const fact of facts.slice(0, 16)) {
+        lines.push(`- ${fact.key}: ${fact.value}`);
+    }
+    return lines.join('\n');
+}
+
+function wikiFactsAreReasoningReady(facts = [], query = '') {
+    if (!Array.isArray(facts) || !facts.length || !normalizeString(query)) {
+        return false;
+    }
+    const numericFacts = facts.filter((fact) => /\d/.test(normalizeString(fact.value)));
+    if (!numericFacts.length) {
+        return false;
+    }
+    return numericFacts.some((fact) => Number(fact.score) >= 80) ||
+        (numericFacts.length >= 3 && facts.some((fact) => Number(fact.score) >= 60));
+}
+
 function extractDoiCandidate(value = '') {
     const text = normalizeString(value);
     if (!text) {
@@ -743,9 +943,10 @@ function summarizeRelevantLink(candidate = {}) {
     });
 }
 
-function buildSuggestedCallForLink(candidate = {}) {
+function buildSuggestedCallForLink(candidate = {}, { query = '' } = {}) {
     const url = normalizeString(candidate.url);
     const text = normalizeString(candidate.text, 'linked resource');
+    const fetchArgs = query ? { url, query } : { url };
     if (normalizeString(candidate.doi)) {
         return {
             tool: 'paper_metadata_lookup',
@@ -762,7 +963,7 @@ function buildSuggestedCallForLink(candidate = {}) {
     }
     return {
         tool: 'web_fetch',
-        args: { url },
+        args: fetchArgs,
         reason: `Read the linked page before broadening search: ${text}`
     };
 }
@@ -813,11 +1014,11 @@ function rankLinksForResearch(links = [], pageUrl = '', query = '') {
         .sort((a, b) => b.score - a.score || b.queryScore - a.queryScore || a.url.localeCompare(b.url));
 }
 
-function buildSuggestedCallsFromRankedLinks(rankedLinks = [], limit = 3) {
+function buildSuggestedCallsFromRankedLinks(rankedLinks = [], limit = 3, options = {}) {
     return dedupeSuggestedNextCalls(
         rankedLinks
             .filter((candidate) => candidate.score >= 35)
-            .map((candidate) => buildSuggestedCallForLink(candidate)),
+            .map((candidate) => buildSuggestedCallForLink(candidate, options)),
         limit
     );
 }
@@ -1726,7 +1927,7 @@ function assessSearchConfidence(rankedResults = [], query = '') {
 function buildSuggestedCallsFromSearchResults(results = [], { query = '', limit = 3 } = {}) {
     const ranked = rankSearchResultsForFollowup(results, query);
     const eligible = ranked.filter((candidate) => isRelevantSearchCandidate(candidate));
-    const directCalls = buildSuggestedCallsFromRankedLinks(eligible, limit);
+    const directCalls = buildSuggestedCallsFromRankedLinks(eligible, limit, { query });
     if (directCalls.length) {
         return directCalls;
     }
@@ -1735,7 +1936,7 @@ function buildSuggestedCallsFromSearchResults(results = [], { query = '', limit 
             .slice(0, limit)
             .map((item) => ({
                 tool: 'web_fetch',
-                args: { url: item.url },
+                args: query ? { url: item.url, query } : { url: item.url },
                 reason: `Read search result: ${normalizeString(item.title, item.url)}`
             })),
         limit
@@ -3709,23 +3910,28 @@ function buildWebFetchResult({ url, args = {}, maxChars = MAX_FETCH_CHARS, fetch
     const encodingRepair = repairUtf8MojibakeText(rawText);
     const text = encodingRepair.text;
     const focused = focusTextWindow(text, {
-        query: args.query || args.contains || '',
+        query: args.query || args.contains || args.extract_query || args.extractQuery || '',
         url,
         maxChars
     });
     const extractedLinks = /html/i.test(contentType)
         ? extractLinksFromHtml(body, url, 80)
         : Array.isArray(fetched.links) ? fetched.links : [];
-    const linkQuery = normalizeString(args.query || args.contains || '');
+    const linkQuery = normalizeString(args.query || args.contains || args.extract_query || args.extractQuery || '');
     const rankedLinks = rankLinksForResearch(extractedLinks, url, linkQuery);
     const suggestedRankedLinks = filterRankedLinksForQuerySuggestions(rankedLinks, linkQuery);
-    const suggestedNextCalls = buildSuggestedCallsFromRankedLinks(suggestedRankedLinks, 3);
+    const suggestedNextCalls = buildSuggestedCallsFromRankedLinks(suggestedRankedLinks, 3, { query: linkQuery });
     const observedLinksForGuidance = linkQuery ? suggestedRankedLinks : rankedLinks;
     const observedRelevantLinks = observedLinksForGuidance.slice(0, 5).map((candidate) => summarizeRelevantLink(candidate));
     const htmlRelations = /html/i.test(contentType)
         ? extractHtmlRelationGraph(body, { url, query: linkQuery, links: extractedLinks })
         : null;
     const htmlRelationSummary = formatHtmlRelationGraph(htmlRelations);
+    const wikiFacts = fetched.kind === 'wikipedia_wikitext'
+        ? extractWikiKeyValueFacts(text, linkQuery)
+        : [];
+    const wikiFactSummary = formatWikiKeyValueFacts(wikiFacts);
+    const wikiFactReasoningReady = wikiFactsAreReasoningReady(wikiFacts, linkQuery);
     const barrier = classifyAccessBarrierText(text);
     const truncatedForModel = focused.text.length < text.length;
     const quality = classifyWebFetchEvidenceQuality({
@@ -3738,16 +3944,20 @@ function buildWebFetchResult({ url, args = {}, maxChars = MAX_FETCH_CHARS, fetch
         truncated: truncatedForModel,
         encodingRepair
     });
-    const evidenceGap = quality.evidenceGap || '';
-    const recoveryHint = quality.recoveryHint || '';
+    const evidenceGap = wikiFactReasoningReady ? '' : (quality.evidenceGap || '');
+    const recoveryHint = wikiFactReasoningReady
+        ? 'Use the Wiki key-value facts above as structured evidence; only fetch more if another required field is missing.'
+        : (quality.recoveryHint || '');
+    const effectiveSuggestedNextCalls = wikiFactReasoningReady ? [] : suggestedNextCalls;
     const guidance = buildWebToolGuidanceText({
         evidenceGap,
         recoveryHint,
-        suggestedNextCalls,
+        suggestedNextCalls: effectiveSuggestedNextCalls,
         observedRelevantLinks
     });
-    const reasoningReady = quality.evidenceQuality === 'sufficient_evidence' && quality.isEvidence === true && !truncatedForModel;
-    return textResult([guidance, htmlRelationSummary, `Content excerpt:\n${focused.text}`].filter(Boolean).join('\n\n'), {
+    const reasoningReady = (quality.evidenceQuality === 'sufficient_evidence' && quality.isEvidence === true && !truncatedForModel) || wikiFactReasoningReady;
+    const observationTruncated = wikiFactReasoningReady ? false : truncatedForModel;
+    return textResult([guidance, htmlRelationSummary, wikiFactSummary, `Content excerpt:\n${focused.text}`].filter(Boolean).join('\n\n'), {
         status: 'completed',
         url,
         contentType,
@@ -3758,22 +3968,25 @@ function buildWebFetchResult({ url, args = {}, maxChars = MAX_FETCH_CHARS, fetch
         returnedChars: focused.text.length,
         focus: focused.focus,
         complete: reasoningReady,
-        truncated: truncatedForModel,
+        truncated: observationTruncated,
+        contentTruncated: truncatedForModel,
         reasoningReady,
         isEvidence: quality.isEvidence,
         evidenceQuality: quality.evidenceQuality,
         observationContract: {
             complete: reasoningReady,
-            truncated: truncatedForModel,
+            truncated: observationTruncated,
             reasoning_ready: reasoningReady,
             is_evidence: quality.isEvidence,
             evidence_quality: quality.evidenceQuality
         },
         observedLinkCount: extractedLinks.length,
-        suggestedNextCalls,
+        suggestedNextCalls: effectiveSuggestedNextCalls,
         observedRelevantLinks,
         htmlRelations: htmlRelations || undefined,
         htmlRelationSummary: htmlRelationSummary || undefined,
+        wikiFacts: wikiFacts.length ? wikiFacts : undefined,
+        wikiFactSummary: wikiFactSummary || undefined,
         evidenceGap,
         recoveryHint,
         pageStatus: quality.pageStatus || undefined,
@@ -4409,12 +4622,12 @@ async function webExtractLinks(args = {}) {
     if ((fetched.contentType && !isHtmlContentType(fetched.contentType)) || fetched.isBinary) {
         return unsupportedContentTypeResult('web_extract_links', url, fetched, ['web_fetch', 'download_file']);
     }
-    const linkQuery = normalizeString(args.query || args.contains || '');
+    const linkQuery = normalizeString(args.query || args.contains || args.extract_query || args.extractQuery || '');
     const links = extractLinksFromHtml(fetched.text, url, maxLinks);
     const rankedLinks = rankLinksForResearch(links, url, linkQuery);
     const orderedLinks = rankedLinks.map((candidate) => ({ text: candidate.text, url: candidate.url }));
     const suggestedRankedLinks = filterRankedLinksForQuerySuggestions(rankedLinks, linkQuery);
-    const suggestedNextCalls = buildSuggestedCallsFromRankedLinks(suggestedRankedLinks, 3);
+    const suggestedNextCalls = buildSuggestedCallsFromRankedLinks(suggestedRankedLinks, 3, { query: linkQuery });
     const observedLinksForGuidance = linkQuery ? suggestedRankedLinks : rankedLinks;
     const observedRelevantLinks = observedLinksForGuidance.slice(0, 5).map((candidate) => summarizeRelevantLink(candidate));
     const linkText = orderedLinks.length
@@ -6334,10 +6547,10 @@ async function maybeFetchWikipediaWikitext(rawUrl, timeoutMs = 90000) {
     } catch {
         return null;
     }
-    if (!/\.wikipedia\.org$/i.test(parsed.hostname) || !parsed.pathname.startsWith('/wiki/')) {
+    if (!/\.wikipedia\.org$/i.test(parsed.hostname)) {
         return null;
     }
-    const pageTitle = decodeURIComponent(parsed.pathname.replace(/^\/wiki\//, '')).split('#')[0];
+    const pageTitle = extractWikipediaPageTitle(parsed);
     if (!pageTitle || /Special:|File:|Category:/i.test(pageTitle)) {
         return null;
     }
@@ -6365,11 +6578,34 @@ async function maybeFetchWikipediaWikitext(rawUrl, timeoutMs = 90000) {
     }
 }
 
+function extractWikipediaPageTitle(parsedUrl) {
+    const parsed = parsedUrl instanceof URL ? parsedUrl : (() => {
+        try {
+            return new URL(parsedUrl);
+        } catch {
+            return null;
+        }
+    })();
+    if (!parsed || !/\.wikipedia\.org$/i.test(parsed.hostname)) {
+        return '';
+    }
+    const segments = parsed.pathname.split('/').filter(Boolean);
+    if (!segments.length || segments[0] === 'w') {
+        return '';
+    }
+    if (segments[0] === 'wiki') {
+        return decodeURIComponent(segments.slice(1).join('/')).split('#')[0];
+    }
+    if (/^[a-z]{2,3}(?:-[a-z0-9]+){0,2}$/i.test(segments[0]) && segments.length >= 2) {
+        return decodeURIComponent(segments.slice(1).join('/')).split('#')[0];
+    }
+    return '';
+}
+
 function stripWikiText(value = '') {
-    return decodeHtml(String(value)
+    return decodeHtml(simplifyWikiTemplates(value)
         .replace(/<ref[\s\S]*?<\/ref>/gi, ' ')
         .replace(/<ref[^>]*\/>/gi, ' ')
-        .replace(/\{\{[\s\S]*?\}\}/g, ' ')
         .replace(/\[\[File:[^\]]+\]\]/gi, ' ')
         .replace(/\[\[Category:[^\]]+\]\]/gi, ' ')
         .replace(/\[\[([^|\]]+)\|([^\]]+)\]\]/g, '$2')
@@ -7858,6 +8094,8 @@ const TOOLS = [
                 maxChars: { type: 'number' },
                 query: { type: 'string' },
                 contains: { type: 'string' },
+                extract_query: { type: 'string', description: 'Compatibility alias for query/contains. Use when asking web_fetch to focus the returned text around answer terms.' },
+                extractQuery: { type: 'string', description: 'Compatibility alias for query/contains. Prefer query.' },
                 provider: { type: 'string', description: 'Optional fetch provider selector: auto, crawl4ai/rendered/browser, builtin/current/html. Prefer omitting this unless testing a provider.' },
                 fetchProvider: { type: 'string', description: 'Compatibility alias for provider. Prefer provider.' },
                 crawl4aiUrl: { type: 'string', description: 'Optional Crawl4AI base URL override. Prefer configuring AILIS_CRAWL4AI_URL instead of passing this per call.' }
@@ -8200,6 +8438,7 @@ module.exports = {
     extractGenericAnchorResults,
     extractGitHubRepositoryResults,
     extractShortCjkEntityTerms,
+    extractWikipediaPageTitle,
     extractYahooResults,
     inferPaperMetadataArgsFromScholarlyQuery,
     fetchText,
@@ -8216,6 +8455,7 @@ module.exports = {
     readDocument,
     readPresentation,
     SEARCH_BACKENDS,
+    stripWikiText,
     webExtractLinks,
     webFetch,
     webResearch,

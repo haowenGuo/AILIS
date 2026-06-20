@@ -6,7 +6,7 @@ import { createRequire } from 'node:module';
 import { spawn } from 'node:child_process';
 
 const require = createRequire(import.meta.url);
-const { HumanClawGateway } = require('../electron/humanclaw-gateway.cjs');
+const { AILISGateway } = require('../electron/ailis-gateway.cjs');
 const { callDesktopLlmProvider } = require('../electron/desktop-llm-provider.cjs');
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -40,7 +40,7 @@ function parseArgs(argv = process.argv.slice(2)) {
         taskRetries: 1,
         submitTimeoutMs: 90000,
         benchmarkName: 'gaia-level1-lite-public',
-        agentCode: 'AILIS local HumanClaw Gateway GAIA Level 1 Lite runner',
+        agentCode: 'AILIS local AILIS Gateway GAIA Level 1 Lite runner',
         directToolExecutor: /^(1|true|yes|on)$/i.test(process.env.AILIS_GAIA_DIRECT_TOOL_EXECUTOR || '')
     };
 
@@ -162,7 +162,7 @@ async function ensureQuestionFile(args, question) {
 
 function readDesktopLlmSettings(args) {
     const appData = process.env.APPDATA || path.join(process.env.USERPROFILE || '', 'AppData', 'Roaming');
-    const statePath = path.join(appData, 'humanclaw', 'desktop-state.json');
+    const statePath = path.join(appData, 'ailis', 'desktop-state.json');
     if (!fsSync.existsSync(statePath)) {
         throw new Error(`desktop-state.json not found: ${statePath}`);
     }
@@ -496,14 +496,23 @@ function acceptEvidenceAnswerCandidate({ question = {}, response = {}, finalizer
 }
 
 function buildFinalAnswerGate({ question = {}, response = {}, finalizer = null } = {}) {
+    const reasonGate = buildReasonFinalAnswerGate(response, question);
+    if (reasonGate?.ok) {
+        return reasonGate;
+    }
     const direct = acceptExactAnswerCandidate(
         extractSubmittedAnswer(response, { answerOnly: true, validateShape: false }),
         {
             question,
             source: 'agent_final_answer',
-            reason: 'checked agent finalAnswer/answer fields only'
+            reason: reasonGate?.status === 'answer_reason_conflict'
+                ? reasonGate.reason
+                : 'checked agent finalAnswer/answer fields only'
         }
     );
+    if (reasonGate?.status === 'answer_reason_conflict') {
+        return reasonGate;
+    }
     if (direct.ok) {
         return direct;
     }
@@ -584,6 +593,100 @@ function extractSubmittedAnswer(response, { answerOnly = false, validateShape = 
         }
     }
     return '';
+}
+
+function parsePlainNumericAnswer(value = '') {
+    const normalized = normalizeText(value).replace(/,/g, '');
+    if (!/^[+-]?(?:\d+\.?\d*|\.\d+)$/.test(normalized)) {
+        return null;
+    }
+    const parsed = Number(normalized);
+    return Number.isFinite(parsed) ? parsed : null;
+}
+
+function normalizeNumericAnswerForComparison(value = '') {
+    const parsed = parsePlainNumericAnswer(value);
+    if (parsed === null) {
+        return '';
+    }
+    return Number.isInteger(parsed) ? String(parsed) : String(Number(parsed.toPrecision(12)));
+}
+
+function extractStrongFinalNumbersFromReason(reason = '') {
+    const text = normalizeText(reason);
+    if (!text) {
+        return [];
+    }
+    const patterns = [
+        /\b(?:final\s+answer|correct\s+answer|answer|submit(?:ted)?|therefore|so)\s*(?:is|=|:)?\s*([+-]?(?:\d+\.?\d*|\.\d+))/gi,
+        /(?:最终答案|正确答案|答案|所以|因此|得到|得出|应(?:填|为|是)|千小时(?:是|为)?)\s*(?:是|为|=|:)?\s*([+-]?(?:\d+\.?\d*|\.\d+))/g
+    ];
+    const values = [];
+    const seen = new Set();
+    for (const pattern of patterns) {
+        let match;
+        while ((match = pattern.exec(text)) !== null) {
+            const normalized = normalizeNumericAnswerForComparison(match[1]);
+            if (normalized && !seen.has(normalized)) {
+                seen.add(normalized);
+                values.push(normalized);
+            }
+        }
+    }
+    return values;
+}
+
+function extractExactAnswerSubmission(response = {}) {
+    const candidates = [
+        response?.exactAnswerSubmission,
+        response?.exact_answer_submission,
+        response?.answerGate?.submission,
+        response?.exactAnswerGate?.submission
+    ];
+    for (const candidate of candidates) {
+        if (candidate && typeof candidate === 'object') {
+            return {
+                answer: stripControlTags(candidate.answer || candidate.final_answer || candidate.finalAnswer || ''),
+                reason: normalizeText(candidate.reason || candidate.evidence_note || candidate.evidenceNote),
+                confidence: normalizeText(candidate.confidence),
+                evidenceRefs: Array.isArray(candidate.evidenceRefs)
+                    ? candidate.evidenceRefs
+                    : (Array.isArray(candidate.evidence_refs) ? candidate.evidence_refs : [])
+            };
+        }
+    }
+    return null;
+}
+
+function buildReasonFinalAnswerGate(response = {}, question = {}) {
+    const submission = extractExactAnswerSubmission(response);
+    if (!submission?.reason) {
+        return null;
+    }
+    const reasonFinalNumbers = extractStrongFinalNumbersFromReason(submission.reason);
+    if (!reasonFinalNumbers.length) {
+        return null;
+    }
+    const submittedNumber = normalizeNumericAnswerForComparison(submission.answer);
+    if (submittedNumber && reasonFinalNumbers.includes(submittedNumber)) {
+        return null;
+    }
+    if (reasonFinalNumbers.length === 1) {
+        return acceptExactAnswerCandidate(reasonFinalNumbers[0], {
+            question,
+            source: 'agent_reason_final_answer',
+            confidence: submission.confidence || 'medium',
+            reason: `recovered from exactAnswerSubmission.reason because answer field conflicted with final numeric conclusion ${reasonFinalNumbers[0]}`
+        });
+    }
+    return {
+        ok: false,
+        answer: '',
+        source: 'agent_reason_final_answer',
+        status: 'answer_reason_conflict',
+        confidence: normalizeFinalizerConfidence(submission.confidence),
+        reason: `answer field ${submission.answer || '(empty)'} conflicts with multiple final numeric conclusions in reason: ${reasonFinalNumbers.join(', ')}`
+    };
 }
 
 function formatSubmittedAnswerForQuestion(answer, question = {}) {
@@ -1421,12 +1524,12 @@ async function main() {
 
     const llmSettings = readDesktopLlmSettings(args);
     const questions = await fetchQuestions(args);
-    const gateway = new HumanClawGateway({
+    const gateway = new AILISGateway({
         host: '127.0.0.1',
         port: 0,
         workspaceDir: PROJECT_ROOT,
         auditDir: path.join(args.outputDir, 'gateway-audit', args.runId),
-        mcpConfigPath: path.join(PROJECT_ROOT, '.humanclaw-state', 'mcp-servers.json')
+        mcpConfigPath: path.join(PROJECT_ROOT, '.ailis-state', 'mcp-servers.json')
     });
     const status = await gateway.start();
     const baseUrl = `http://${status.host}:${status.port}`;

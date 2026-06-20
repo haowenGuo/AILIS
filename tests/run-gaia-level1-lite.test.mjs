@@ -53,6 +53,27 @@ test('GAIA Level 1 Lite answer gate rejects explanatory finalAnswer text', () =>
     assert.equal(gate.status, 'rejected_visible_prose');
 });
 
+test('GAIA Level 1 Lite answer gate recovers final numeric conclusion from exact-answer reason', () => {
+    const gate = buildFinalAnswerGate({
+        question: { question: 'How many thousand hours? Return only the number.' },
+        response: {
+            ok: true,
+            finalAnswer: '14',
+            displayText: '[expression:happy]14',
+            exactAnswerSubmission: {
+                answer: '14',
+                confidence: 'high',
+                evidenceRefs: ['artifact-web'],
+                reason: '356400 / 20.9 ≈ 17052 hours, rounded to 17000 hours, so the correct answer is 17.'
+            }
+        }
+    });
+
+    assert.equal(gate.ok, true);
+    assert.equal(gate.answer, '17');
+    assert.equal(gate.source, 'agent_reason_final_answer');
+});
+
 test('GAIA Level 1 Lite answer gate submits low-confidence finalizer answers with evidence status', () => {
     const response = {
         ok: true,

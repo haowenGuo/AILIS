@@ -847,7 +847,14 @@ function getToolResultDetails(stepResult = {}) {
         result?.details && typeof result.details === 'object' ? result.details : null,
         stepResult.response?.details && typeof stepResult.response.details === 'object' ? stepResult.response.details : null
     ].filter(Boolean);
-    return candidates.reduce((merged, entry) => ({ ...merged, ...entry }), {});
+    const nestedCandidates = candidates.flatMap((entry) => [
+        entry?.result?.structuredContent && typeof entry.result.structuredContent === 'object' ? entry.result.structuredContent : null,
+        entry?.result?.structured_content && typeof entry.result.structured_content === 'object' ? entry.result.structured_content : null,
+        entry?.result?.details && typeof entry.result.details === 'object' ? entry.result.details : null,
+        entry?.details?.structuredContent && typeof entry.details.structuredContent === 'object' ? entry.details.structuredContent : null,
+        entry?.details?.structured_content && typeof entry.details.structured_content === 'object' ? entry.details.structured_content : null
+    ]).filter(Boolean);
+    return [...candidates, ...nestedCandidates].reduce((merged, entry) => ({ ...merged, ...entry }), {});
 }
 
 function normalizeEvidenceBoolean(value, fallback = false) {
@@ -3934,7 +3941,7 @@ function buildLlmAgentExecutorMessages({
         'Self Debug Loop：当用户反馈 AILIS 自身 bug、工具链异常、Agent Loop 不稳定或要求 AILIS 自己修复时，优先把它当作高风险自修复任务。先加载 self_debugger 能力，按建案、收证据、诊断、提补丁、验证、确认后应用的协议推进；不要直接裸改自己的代码。',
         '工具能力索引：首轮只给 capability_catalog。详细 schema 通过 load_context、tool_search 或工具 observation 按需出现。MCP 工具优先使用 tool_search/capability_context 中的 mcp__server__tool direct spec；外部 API/Composio/OpenAPI 工具优先使用 tool_search 返回的 external__provider__tool direct spec。没有 direct spec 时，先 load/search specs，mcp_bridge/capability_manager 只作为管理、安装、修复入口。请按任务目标和证据缺口选择最小必要工具，避免关键词驱动的机械路由。',
         exactAnswerMode
-            ? `Exact-answer 模式：不要把可见 Markdown 当提交答案。必须先用工具形成 evidence_artifacts，再用 action="final" 填短 final_answer，并在 exact_answer_submission 中提供 answer、confidence、evidence_refs；evidence_refs 里的 artifact-* 是证据引用 ID，不是文件路径，也不是 artifact_query 的 context artifactId，不能调用 read/open/artifact_query 去读取它们。关系/约束题如果出现表格、分配关系、人物属性、物品列表或缺失项，final 前必须做角色对齐检查：先区分题目问的目标角色和中间缺失实体，再按表格方向映射，不能把“未匹配的收件人/物品/属性”直接当成“未执行动作的人”。缺证据时继续 tool 或 blocked。`
+            ? `Exact-answer 模式：不要把可见 Markdown 当提交答案。必须先用工具形成 evidence_artifacts，再用 action="final" 填短 final_answer，并在 exact_answer_submission 中提供 answer、confidence、evidence_refs；evidence_refs 里的 artifact-* 是证据引用 ID，不是文件路径，也不是 artifact_query 的 context artifactId，不能调用 read/open/artifact_query 去读取它们。数值题 final 前必须完成单位换算、比例换算和四舍五入；如果题目问 how many thousand/million/billion X，answer 填缩放后的计数，不填原始 X 数值，并在 reason 简写换算式。关系/约束题如果出现表格、分配关系、人物属性、物品列表或缺失项，final 前必须做角色对齐检查：先区分题目问的目标角色和中间缺失实体，再按表格方向映射，不能把“未匹配的收件人/物品/属性”直接当成“未执行动作的人”。缺证据时继续 tool 或 blocked。`
             : '',
         '可见回复格式：final_answer 字段是给用户看的 Markdown 字符串，可以使用自然段、短列表、代码块和加粗；blocked_reason 也按 Markdown 组织。不要输出 HTML；不要把 persona_output/persona_surface 或 emotion/intensity/gestureIntent/taskState 等内部控制字段放进任何可见回复字段。',
         '只输出 JSON，JSON 外不要输出 Markdown。',
@@ -4387,6 +4394,7 @@ function buildFinalAnswerNativeToolSpec() {
             'Submit the exact benchmark/task answer separately from user-visible persona text.',
             'Use only after evidence_artifacts contain the evidence_refs supporting the answer.',
             'For relation or constraint questions with tables, assignments, people, items, profiles, or lists, verify role alignment before submitting: answer the entity role asked by the question, not merely the unmatched intermediate entity.',
+            'For quantitative questions, finish the unit conversion and rounding requested by the question before submitting; if the question asks for "how many thousand/million/billion X", submit the scaled count, not the raw X value.',
             'If evidence is missing, do not call this tool; continue retrieving or report blocked.'
         ].join(' '),
         parameters: {
@@ -4491,7 +4499,94 @@ function looksLikeExplanatoryFinalAnswer(text = '') {
     return stripped.length > 240 || stripped.split(/\r?\n/).length > 3;
 }
 
-function validateExactAnswerSubmission({ decision = {}, stepResults = [] } = {}) {
+function parsePlainNumericAnswer(value = '') {
+    const normalized = normalizeText(value).replace(/,/g, '');
+    if (!/^[+-]?(?:\d+\.?\d*|\.\d+)$/.test(normalized)) {
+        return null;
+    }
+    const parsed = Number(normalized);
+    return Number.isFinite(parsed) ? parsed : null;
+}
+
+function scaledUnitAnswerMismatch({ question = '', answer = '' } = {}) {
+    const text = normalizeText(question).toLowerCase();
+    const numericAnswer = parsePlainNumericAnswer(answer);
+    if (numericAnswer === null || !text) {
+        return null;
+    }
+    const scaleMatch = text.match(/\bhow\s+many\s+(thousand|million|billion)\s+([a-z][a-z -]{0,40}?)(?:\?| would\b| does\b| did\b| to\b| for\b|$)/i);
+    if (!scaleMatch) {
+        return null;
+    }
+    const scaleName = scaleMatch[1].toLowerCase();
+    const scale = scaleName === 'thousand' ? 1000 : scaleName === 'million' ? 1000000 : 1000000000;
+    const asksRoundingInBaseUnit = new RegExp(`\\bround(?:ed)?\\b[\\s\\S]{0,80}\\bnearest\\s+${scale}\\b`, 'i').test(text) ||
+        new RegExp(`\\bnearest\\s+${scale}\\s+${scaleMatch[2].trim().split(/\s+/)[0] || ''}`, 'i').test(text);
+    if (!asksRoundingInBaseUnit) {
+        return null;
+    }
+    const looksLikeRawRoundedBaseUnit = Math.abs(numericAnswer) >= scale && Math.abs(numericAnswer % scale) < 1e-9;
+    if (!looksLikeRawRoundedBaseUnit) {
+        return null;
+    }
+    return {
+        error: 'scaled_unit_answer_mismatch',
+        scaleName,
+        scale,
+        instruction: `The question asks for how many ${scaleName} units. Compute the raw unit value, round as requested, then divide by ${scale} and submit that scaled count.`
+    };
+}
+
+function normalizeNumericAnswerForComparison(value = '') {
+    const parsed = parsePlainNumericAnswer(value);
+    if (parsed === null) {
+        return '';
+    }
+    return Number.isInteger(parsed) ? String(parsed) : String(Number(parsed.toPrecision(12)));
+}
+
+function extractStrongFinalNumbersFromReason(reason = '') {
+    const text = normalizeText(reason);
+    if (!text) {
+        return [];
+    }
+    const patterns = [
+        /\b(?:final\s+answer|correct\s+answer|answer|submit(?:ted)?|therefore|so)\s*(?:is|=|:)?\s*([+-]?(?:\d+\.?\d*|\.\d+))/gi,
+        /(?:最终答案|正确答案|答案|所以|因此|得到|得出|应(?:填|为|是)|千小时(?:是|为)?)\s*(?:是|为|=|:)?\s*([+-]?(?:\d+\.?\d*|\.\d+))/g
+    ];
+    const values = [];
+    const seen = new Set();
+    for (const pattern of patterns) {
+        let match;
+        while ((match = pattern.exec(text)) !== null) {
+            const normalized = normalizeNumericAnswerForComparison(match[1]);
+            if (normalized && !seen.has(normalized)) {
+                seen.add(normalized);
+                values.push(normalized);
+            }
+        }
+    }
+    return values;
+}
+
+function exactAnswerReasonConflict(submission = {}) {
+    const answerNumber = normalizeNumericAnswerForComparison(submission.answer);
+    if (!answerNumber) {
+        return null;
+    }
+    const finalNumbers = extractStrongFinalNumbersFromReason(submission.reason);
+    if (!finalNumbers.length || finalNumbers.includes(answerNumber)) {
+        return null;
+    }
+    return {
+        error: 'answer_reason_conflict',
+        answer: answerNumber,
+        reasonFinalNumbers: finalNumbers,
+        instruction: `The answer field (${answerNumber}) conflicts with the final numeric conclusion in reason (${finalNumbers.join(', ')}). Make answer match the audited final conclusion or continue calculating.`
+    };
+}
+
+function validateExactAnswerSubmission({ decision = {}, stepResults = [], message = '' } = {}) {
     const submission = normalizeExactAnswerSubmission(decision.exactAnswerSubmission || {});
     const availableRefs = getAvailableEvidenceRefSet(stepResults);
     const errors = [];
@@ -4511,20 +4606,32 @@ function validateExactAnswerSubmission({ decision = {}, stepResults = [] } = {})
     if (unknownRefs.length) {
         errors.push('evidence_refs_unknown');
     }
+    const scaledUnitMismatch = scaledUnitAnswerMismatch({ question: message, answer: submission.answer });
+    if (scaledUnitMismatch) {
+        errors.push(scaledUnitMismatch.error);
+    }
+    const reasonConflict = exactAnswerReasonConflict(submission);
+    if (reasonConflict) {
+        errors.push(reasonConflict.error);
+    }
     return {
         ok: errors.length === 0,
         submission,
         errors,
         unknownRefs,
-        availableEvidenceRefs: [...availableRefs]
+        availableEvidenceRefs: [...availableRefs],
+        scaledUnitMismatch,
+        reasonConflict
     };
 }
 
 function buildExactAnswerRepairObservation(validation = {}, { iteration = 0 } = {}) {
     const missing = validation.errors || [];
-    const nextAction = missing.includes('evidence_refs_missing') || missing.includes('evidence_refs_unknown')
+    const nextAction = validation.reasonConflict?.instruction ||
+        validation.scaledUnitMismatch?.instruction ||
+        (missing.includes('evidence_refs_missing') || missing.includes('evidence_refs_unknown')
         ? 'Use the available evidence_artifacts ids, or call another retrieval/read/compute tool to create the missing evidence before final_answer.'
-        : 'Return a short exact answer with high/medium confidence and no explanatory prose.';
+        : 'Return a short exact answer with high/medium confidence and no explanatory prose.');
     return {
         type: 'evidence_recovery',
         status: 'exact_answer_gate_rejected',
@@ -4537,10 +4644,14 @@ function buildExactAnswerRepairObservation(validation = {}, { iteration = 0 } = 
         })),
         availableEvidenceRefs: validation.availableEvidenceRefs || [],
         unknownEvidenceRefs: validation.unknownRefs || [],
+        scaledUnitMismatch: validation.scaledUnitMismatch || null,
+        reasonConflict: validation.reasonConflict || null,
         content: JSON.stringify({
             exact_answer_gate: 'rejected',
             errors: missing,
             available_evidence_refs: validation.availableEvidenceRefs || [],
+            scaled_unit_mismatch: validation.scaledUnitMismatch || null,
+            reason_conflict: validation.reasonConflict || null,
             instruction: nextAction
         })
     };
@@ -4587,10 +4698,12 @@ function buildExactAnswerContractPromptObject({ exactAnswerMode = false, evidenc
             'answer contains Markdown or explanatory prose',
             'confidence is low',
             'evidence_refs is empty',
-            'evidence_refs contains ids not present in evidence_artifacts'
+            'evidence_refs contains ids not present in evidence_artifacts',
+            'numeric answer conflicts with the final/correct answer stated in reason',
+            'question asks for scaled units such as thousand/million/billion but answer is the raw rounded base-unit value'
         ],
         available_evidence_refs: evidenceArtifacts.map((artifact) => artifact.id).filter(Boolean),
-        instruction: `When solved, call ${FINAL_ANSWER_TOOL_NAME} instead of writing a visible prose final. Use evidence artifact ids only as final_answer evidence_refs. They are not filesystem paths and not artifact_query context artifactIds; do not read/open/query them. For relation/constraint questions with assignments, tables, profiles, lists, or missing entities, verify the answer role against the question wording and map intermediate missing entities through the relation table direction before final. If evidence is missing, keep using tools or return blocked with a repair instruction.`
+        instruction: `When solved, call ${FINAL_ANSWER_TOOL_NAME} instead of writing a visible prose final. Use evidence artifact ids only as final_answer evidence_refs. They are not filesystem paths and not artifact_query context artifactIds; do not read/open/query them. For quantitative questions, finish unit conversion, rate conversion, scaling, and rounding before final; if the question asks how many thousand/million/billion units, answer with the scaled count, not the raw unit value. Keep the answer field consistent with the final numeric conclusion written in reason. For relation/constraint questions with assignments, tables, profiles, lists, or missing entities, verify the answer role against the question wording and map intermediate missing entities through the relation table direction before final. If evidence is missing, keep using tools or return blocked with a repair instruction.`
     };
 }
 
@@ -4647,7 +4760,7 @@ function buildLlmAgentDirectToolMessages({
         '需要用户授权时调用 request_permissions。危险写入、shell、patch、邮件发送等会由本地 Gateway 审批，不要在参数中伪造 approved=true。',
         '最终答复必须是给用户看的 Markdown。没有足够证据时不要提交猜测答案，要继续调用工具或明确 blocked。',
         exactAnswerMode
-            ? `Exact-answer 模式：普通可见话术不能作为提交答案。任务完成时必须调用 ${FINAL_ANSWER_TOOL_NAME}，answer 只填短精确答案，confidence 必须 high/medium，evidence_refs 必须引用 evidence_artifacts 中的 id；这些 artifact-* 是证据引用，不是文件路径，也不是 artifact_query 的 context artifactId，不要用 read/open/artifact_query 读取它们。若题目是表格/分配/人物属性/物品列表/缺失项这类关系约束题，final 前必须说明目标角色、中间缺失实体、表格方向映射三者一致，否则继续推理或调用工具。`
+            ? `Exact-answer 模式：普通可见话术不能作为提交答案。任务完成时必须调用 ${FINAL_ANSWER_TOOL_NAME}，answer 只填短精确答案，confidence 必须 high/medium，evidence_refs 必须引用 evidence_artifacts 中的 id；这些 artifact-* 是证据引用，不是文件路径，也不是 artifact_query 的 context artifactId，不要用 read/open/artifact_query 读取它们。数值题 final 前先完成单位换算、比例换算和四舍五入；如果题目问 how many thousand/million/billion X，answer 填缩放后的计数，不填原始 X 数值，并在 reason 简写换算式。若题目是表格/分配/人物属性/物品列表/缺失项这类关系约束题，final 前必须说明目标角色、中间缺失实体、表格方向映射三者一致，否则继续推理或调用工具。`
             : '',
         `最多工具轮数：${maxSteps}`,
         `工具摘要：${toolSummary || 'Direct tools are exposed as native function tools. Search more tools with tool_search.'}`
@@ -6987,7 +7100,7 @@ class AILISAgentRunner {
 
             if (decision.action === 'final') {
                 const exactAnswerValidation = exactAnswerMode
-                    ? validateExactAnswerSubmission({ decision, stepResults })
+                    ? validateExactAnswerSubmission({ decision, stepResults, message })
                     : { ok: true, submission: null };
                 if (!exactAnswerValidation.ok) {
                     const repairObservation = buildExactAnswerRepairObservation(exactAnswerValidation, { iteration });

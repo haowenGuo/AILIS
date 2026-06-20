@@ -349,6 +349,9 @@ async function runPracticeTask({ task, iterationDir, runId, policy, args }) {
 async function runOfficialTask({ task, iterationDir, runId, policy, args }) {
     const outputDir = path.join(iterationDir, 'eval-results');
     await fs.mkdir(outputDir, { recursive: true });
+    const requestTimeoutMs = Math.max(300000, Number(args.timeoutMs) || Number(policy.requestTimeoutMs) || 600000);
+    const llmTimeoutMs = Math.max(120000, Number(policy.llmTimeoutMs) || 120000);
+    const submitTimeoutMs = Math.max(90000, Number(policy.submitTimeoutMs) || 90000);
     const commandArgs = [
         'scripts/run-gaia-official.mjs',
         '--split', 'validation',
@@ -360,13 +363,16 @@ async function runOfficialTask({ task, iterationDir, runId, policy, args }) {
         '--limit', '1',
         '--offset', String(Math.max(0, Number(task.offset) || 0)),
         '--max-agent-steps', String(args.maxAgentSteps || policy.maxAgentSteps || 20),
-        '--task-retries', String(Math.max(0, Number(policy.taskRetries) || 0))
+        '--task-retries', String(Math.max(0, Number(policy.taskRetries) || 0)),
+        '--request-timeout-ms', String(requestTimeoutMs),
+        '--llm-timeout-ms', String(llmTimeoutMs),
+        '--submit-timeout-ms', String(submitTimeoutMs)
     ];
     if (task.taskId && !/^official-validation-l1-offset-/.test(task.taskId)) {
         commandArgs.push('--task-ids', task.taskId);
     }
     const processResult = await runProcess('node', commandArgs, {
-        timeoutMs: args.timeoutMs,
+        timeoutMs: Math.max(Number(args.timeoutMs) || 0, requestTimeoutMs + llmTimeoutMs + submitTimeoutMs + 60000),
         onStdout: (chunk) => process.stdout.write(chunk),
         onStderr: (chunk) => process.stderr.write(chunk)
     });
@@ -428,6 +434,7 @@ function extractExecutionChain({ task, result = {}, processResult = {}, summary 
     }
     return {
         taskId: task.taskId,
+        resultTaskId: result.task_id || '',
         source: task.source,
         title: task.title,
         expectedAnswer: task.expectedAnswer || '',
@@ -450,8 +457,33 @@ function extractExecutionChain({ task, result = {}, processResult = {}, summary 
     };
 }
 
+function findScorePerTask({ task = {}, result = {}, summary = null } = {}) {
+    const perTaskItems = Array.isArray(summary?.score?.per_task) ? summary.score.per_task : [];
+    if (!perTaskItems.length) {
+        return null;
+    }
+    const ids = [
+        task.taskId,
+        task.gaiaTaskId,
+        result.task_id,
+        result.taskId
+    ].map((item) => normalizeText(item)).filter(Boolean);
+    const byId = perTaskItems.find((item) => ids.includes(normalizeText(item.task_id)));
+    if (byId) {
+        return byId;
+    }
+    const submitted = normalizeAnswer(result.submitted_answer);
+    const bySubmittedAnswer = submitted
+        ? perTaskItems.filter((item) => normalizeAnswer(item.submitted_answer) === submitted)
+        : [];
+    if (bySubmittedAnswer.length === 1) {
+        return bySubmittedAnswer[0];
+    }
+    return perTaskItems.length === 1 ? perTaskItems[0] : null;
+}
+
 function classifyGaiaResult({ task = {}, result = {}, chain = {}, processResult = {}, summary = null } = {}) {
-    const perTask = Array.isArray(summary?.score?.per_task) ? summary.score.per_task.find((item) => item.task_id === task.taskId) : null;
+    const perTask = findScorePerTask({ task, result, summary });
     const expected = task.expectedAnswer || perTask?.final_answer || '';
     const correct = perTask
         ? perTask.correct === true
@@ -472,6 +504,19 @@ function classifyGaiaResult({ task = {}, result = {}, chain = {}, processResult 
                 ? `Task passed, but used ${chain.stepCount} steps. Optimize loop efficiency without reducing reliability.`
                 : 'Task passed with acceptable local verdict.',
             nextAction: highLoop ? 'analyze redundant steps and reduce loop count' : 'advance to next task'
+        };
+    }
+    if (perTask && perTask.correct !== true) {
+        const submitted = normalizeText(perTask.submitted_answer || result.submitted_answer || '(empty)');
+        const finalAnswer = normalizeText(perTask.final_answer || expected || '(unknown)');
+        return {
+            ok: false,
+            status: 'failed',
+            failureCategory: 'harness_finalization',
+            optimizationFocus: 'exact_answer_finalization',
+            generalizedCapability: 'benchmark_final_answer_and_evidence_gate',
+            summary: `Local GAIA scorer rejected the submitted answer (${submitted}); expected ${finalAnswer}.`,
+            nextAction: 'repair exact-answer reasoning, unit conversion, and scorer verdict handling before advancing'
         };
     }
     if (/LLM settings incomplete|desktop-state\.json|api.?key|provider_error|auth|token/i.test(statusText)) {

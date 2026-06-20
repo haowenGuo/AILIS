@@ -21,6 +21,7 @@ const {
     extractGenericAnchorResults,
     extractGitHubRepositoryResults,
     extractShortCjkEntityTerms,
+    extractWikipediaPageTitle,
     extractYahooResults,
     githubRepoRead,
     inferPaperMetadataArgsFromScholarlyQuery,
@@ -31,6 +32,7 @@ const {
     rankLinksForResearch,
     rankSearchResultsForFollowup,
     readDocument,
+    stripWikiText,
     webExtractLinks,
     webFetch,
     webResearch,
@@ -79,6 +81,7 @@ function buildSimplePdf(text = 'Hello PDF') {
 test('AILIS research MCP exposes Codex-aligned PDF/file tools', () => {
     const names = TOOLS.map((tool) => tool.name);
     const searchTool = TOOLS.find((tool) => tool.name === 'web_search');
+    const fetchTool = TOOLS.find((tool) => tool.name === 'web_fetch');
 
     assert.ok(names.includes('web_search'));
     assert.ok(names.includes('web_research'));
@@ -102,6 +105,8 @@ test('AILIS research MCP exposes Codex-aligned PDF/file tools', () => {
     assert.ok(searchTool.inputSchema.properties.backends.items.enum.includes('firecrawl_search'));
     assert.ok(searchTool.description.includes('managed search backends'));
     assert.ok(searchTool.description.includes('AILIS_SEARXNG_URL'));
+    assert.ok(fetchTool.inputSchema.properties.extract_query);
+    assert.ok(fetchTool.inputSchema.properties.extractQuery);
 });
 
 test('YouTube tools expose recovery affordance before broad web search', async () => {
@@ -1845,6 +1850,30 @@ test('web_fetch extracts HTML relationship map for model reasoning', async () =>
         assert.ok(result.structuredContent.htmlRelations.jsonLdEntities.some((entity) => entity.name === '叶瞬光攻略'));
         assert.ok(result.structuredContent.htmlRelations.relationTriples.some((triple) => triple.predicate === '建议' && triple.object === '核心技优先'));
     });
+});
+
+test('stripWikiText preserves MediaWiki infobox convert facts for numeric reasoning', () => {
+    const wikiText = [
+        '{{Infobox planet',
+        '| name = Moon',
+        '| periapsis = {{gaps |362 |600}}&nbsp;km<br />({{gaps |356 |400}}-{{gaps |370 |400}}&nbsp;km)',
+        '| apoapsis = {{convert|405400|km|mi|abbr=on}}',
+        '| orbital_period = {{nowrap|27.321661 d}}',
+        '}}',
+        'The Moon is Earth\'s only natural satellite.'
+    ].join('\n');
+
+    const text = stripWikiText(wikiText);
+
+    assert.match(text, /periapsis:\s*362600 km;\s*\(?356400-370400 km\)?/i);
+    assert.match(text, /apoapsis:\s*405400 km/i);
+    assert.match(text, /orbital_period:\s*27\.321661 d/i);
+});
+
+test('extractWikipediaPageTitle handles canonical and language-variant article paths', () => {
+    assert.equal(extractWikipediaPageTitle('https://en.wikipedia.org/wiki/Moon'), 'Moon');
+    assert.equal(extractWikipediaPageTitle('https://zh.wikipedia.org/zh-hans/%E6%9C%88%E7%90%83'), '月球');
+    assert.equal(extractWikipediaPageTitle('https://zh.wikipedia.org/w/index.php?title=%E6%9C%88%E7%90%83'), '');
 });
 
 test('web_fetch does not suggest unrelated PDFs when query terms are absent', async () => {

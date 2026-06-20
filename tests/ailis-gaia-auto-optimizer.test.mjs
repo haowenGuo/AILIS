@@ -72,6 +72,43 @@ test('GAIA auto optimizer classifies successful high-loop tasks as efficiency wo
     assert.equal(verdict.optimizationFocus, 'efficiency');
 });
 
+test('GAIA auto optimizer does not accept official runner success when scorer rejects answer', () => {
+    const task = {
+        taskId: 'official-validation-l1-offset-0',
+        source: 'official',
+        title: 'Official GAIA validation level 1 offset 0'
+    };
+    const result = {
+        ok: true,
+        status: 'completed',
+        task_id: 'e1fc63a2-da7a-432f-be78-7c4a95598703',
+        submitted_answer: '1000',
+        steps: [{
+            tool: 'mcp__ailis_research__web_fetch',
+            response: { ok: true, status: 'completed', result: { content: [{ text: 'ready evidence' }] } }
+        }]
+    };
+    const summary = {
+        score: {
+            correct_count: 0,
+            total_attempted: 1,
+            per_task: [{
+                task_id: 'e1fc63a2-da7a-432f-be78-7c4a95598703',
+                correct: false,
+                submitted_answer: '1000',
+                final_answer: '17'
+            }]
+        }
+    };
+    const chain = extractExecutionChain({ task, result, processResult: { ok: true }, summary });
+    const verdict = classifyGaiaResult({ task, result, chain, processResult: { ok: true }, summary });
+
+    assert.equal(verdict.ok, false);
+    assert.equal(verdict.failureCategory, 'harness_finalization');
+    assert.match(verdict.summary, /1000/);
+    assert.match(verdict.summary, /17/);
+});
+
 test('GAIA auto optimizer classifies artifact tool failures before model reasoning', () => {
     const task = buildPracticeTasks()[1];
     const result = {

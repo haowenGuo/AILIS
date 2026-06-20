@@ -1,0 +1,50 @@
+{
+  "taskId": "official-validation-l1-offset-0",
+  "resultTaskId": "e1fc63a2-da7a-432f-be78-7c4a95598703",
+  "source": "official",
+  "title": "Official GAIA validation level 1 offset 0",
+  "expectedAnswer": "",
+  "submittedAnswer": "",
+  "answerGate": {
+    "ok": false,
+    "answer": "",
+    "source": "none",
+    "status": "missing_exact_answer",
+    "confidence": "",
+    "reason": "checked agent finalAnswer/answer fields only"
+  },
+  "ok": false,
+  "status": "runner_error",
+  "durationMs": 308212,
+  "stepCount": 0,
+  "toolCounts": {},
+  "steps": [],
+  "rawStatus": {
+    "ok": false,
+    "status": "runner_error",
+    "error": "fetch failed",
+    "blockedReason": ""
+  },
+  "score": {
+    "username": "AILIS-local-codex",
+    "score": 0,
+    "correct_count": 0,
+    "total_attempted": 1,
+    "message": "Local GAIA validation score: 0/1",
+    "benchmark": "gaia-official-validation-l1",
+    "per_task": [
+      {
+        "task_id": "e1fc63a2-da7a-432f-be78-7c4a95598703",
+        "correct": false,
+        "submitted_answer": "",
+        "final_answer": "17"
+      }
+    ]
+  },
+  "process": {
+    "ok": false,
+    "exitCode": 0,
+    "durationMs": 900060,
+    "stderrTail": ""
+  }
+}
