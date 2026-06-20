@@ -10,6 +10,9 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const {
     TOOLS,
+    assessSearchConfidence,
+    buildEffectiveSearchQuery,
+    buildSearchClarificationChoices,
     buildSuggestedCallsFromSearchResults,
     classifyYtDlpFailure,
     extractArxivCandidatesFromAtom,
@@ -17,6 +20,7 @@ const {
     extractDuckDuckGoHtmlResults,
     extractGenericAnchorResults,
     extractGitHubRepositoryResults,
+    extractShortCjkEntityTerms,
     extractYahooResults,
     githubRepoRead,
     inferPaperMetadataArgsFromScholarlyQuery,
@@ -1024,6 +1028,79 @@ test('web_search reranks Chinese game guide results ahead of unrelated popular p
     assert.deepEqual(ranked[0].queryMatchedSites, ['bilibili.com']);
     assert.equal(calls[0].tool, 'web_fetch');
     assert.equal(calls[0].args.url, 'https://www.bilibili.com/video/BV1rXBoBoEv1/');
+});
+
+test('web_search extracts short Chinese guide targets and asks before following ambiguous results', async () => {
+    assert.deepEqual(extractShortCjkEntityTerms('做一个小光的攻略'), ['小光']);
+    assert.equal(buildEffectiveSearchQuery('做一个小光的攻略'), '小光 攻略');
+
+    const requestedQueries = [];
+    await withServer((request, response) => {
+        const url = new URL(request.url || '/', 'http://127.0.0.1');
+        assert.equal(url.pathname, '/search');
+        assert.equal(url.searchParams.get('format'), 'json');
+        requestedQueries.push(url.searchParams.get('q'));
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({
+            results: [
+                {
+                    title: '【绝区零】叶瞬光角色攻略',
+                    url: 'https://www.bilibili.com/video/BV1rXBoBoEv1/',
+                    content: '小光攻略，技能机制、输出手法、配队配装、驱动盘和音擎。'
+                },
+                {
+                    title: '《光遇》小光新手攻略',
+                    url: 'https://example.com/sky/xiaoguang-guide',
+                    content: '光遇小光任务路线、蜡烛和每日玩法攻略。'
+                },
+                {
+                    title: '小光游戏解说的个人空间',
+                    url: 'https://space.bilibili.com/3546657828375410/',
+                    content: '小光游戏解说分享的视频、文章和动态。'
+                }
+            ]
+        }));
+    }, async (baseUrl) => {
+        const result = await webSearch({
+            query: '做一个小光的攻略',
+            provider: 'searxng',
+            searxngUrl: baseUrl,
+            maxResults: 5
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.equal(result.structuredContent.backend, 'searxng_json');
+        assert.equal(result.structuredContent.backendQuery, '小光 攻略');
+        assert.deepEqual(requestedQueries, ['小光 攻略']);
+        assert.equal(result.structuredContent.clarificationRequired, true);
+        assert.equal(result.structuredContent.searchConfidence.shouldAskUser, true);
+        assert.equal(result.structuredContent.searchConfidence.level, 'low');
+        assert.equal(result.structuredContent.suggestedNextCalls.length, 0);
+        assert.ok(result.structuredContent.candidateChoices.length >= 2);
+        assert.match(result.content[0].text, /具体指哪一个|should be clarified/);
+    });
+});
+
+test('search confidence stays high when a short nickname has explicit game context', () => {
+    const ranked = rankSearchResultsForFollowup([
+        {
+            title: '【绝区零】叶瞬光角色攻略',
+            url: 'https://www.bilibili.com/video/BV1rXBoBoEv1/',
+            snippet: '小光攻略，技能机制、输出手法、配队配装、驱动盘和音擎。'
+        },
+        {
+            title: '《光遇》小光新手攻略',
+            url: 'https://example.com/sky/xiaoguang-guide',
+            snippet: '光遇小光任务路线、蜡烛和每日玩法攻略。'
+        }
+    ], '绝区零 叶瞬光 小光 攻略');
+    const confidence = assessSearchConfidence(ranked, '绝区零 叶瞬光 小光 攻略');
+    const choices = buildSearchClarificationChoices(ranked, '绝区零 叶瞬光 小光 攻略');
+
+    assert.equal(confidence.clarificationRequired, false);
+    assert.equal(confidence.shouldAskUser, false);
+    assert.equal(confidence.level, 'high');
+    assert.ok(choices.length >= 1);
 });
 
 test('web_search does not treat a site match alone as relevant evidence', () => {

@@ -3,57 +3,51 @@
 Date/time: 2026-06-20 Asia/Shanghai
 Workspace: `F:\AILIS_self_evolution_runtime`
 Branch: `AILIS-self-evolution`
-Git state: based on `3f15c9d` (`Improve AILIS web search relevance reranking`); provider-chain implementation is complete and ready to commit. Worktree has many unrelated historical changes, so stage only files touched for the active task.
+Git state: active web-search confidence/provider-chain patch ready to commit; stage only active-task files because the repo has many unrelated historical changes.
 
 ## Objective
-- Upgrade AILIS `web_search` from fragile built-in HTML scraping toward an agent-grade provider chain.
-- Requested provider order: `searxng_json -> firecrawl_search -> current_html_fallback`.
-- Add config: `AILIS_SEARXNG_URL`, `AILIS_WEB_SEARCH_PROVIDER`, optional `FIRECRAWL_API_KEY`.
-- Default behavior: if local SearXNG is available, prefer its JSON API and avoid Bing HTML scraping.
-- `web_fetch`: add Crawl4AI support when configured, fallback to current fetch/extract otherwise.
+- Make AILIS web research safer and more Codex-like.
+- `web_search` should rank results, expose confidence, and require user clarification when a short/ambiguous target is not safe to follow.
+- `web_search/web_fetch` should use the upgraded provider chain: SearXNG JSON, Firecrawl search, current HTML fallback, and Crawl4AI Markdown fetch when available.
 
 ## Latest User Intent
-- Implement the above provider chain and Crawl4AI fallback direction in AILIS.
-- Keep generic quality, do not hardcode the previous "小光" task.
+- "重要的是搜索结果要做一个排序，如果大模型判断置信度不够高，应该向用户进行询问，不该一路执行下去。并且把web_search/web_fetch 链路真正升级到 SearXNG/Firecrawl/Crawl4AI"
 
 ## Current State
-- `scripts\mcp-ailis-research-server.cjs` now supports `searxng_json` and `firecrawl_search` backends plus the old HTML fallback chain.
-- Default `web_search` provider chain is `searxng_json -> firecrawl_search -> bing_html -> duckduckgo_lite -> duckduckgo_html -> yahoo_html`.
-- GitHub/code repository queries still keep `github_repositories` first, then the new provider chain.
-- `AILIS_WEB_SEARCH_PROVIDER` supports `auto`, `searxng`, `firecrawl`, `html/current_html_fallback`, `external`, `github`, or comma-separated backend ids.
-- `AILIS_SEARXNG_URL` / `SEARXNG_URL` configure SearXNG. If unset, AILIS briefly probes `http://127.0.0.1:8080` with a short timeout so users without SearXNG do not wait a full backend timeout.
-- `FIRECRAWL_API_KEY` enables hosted Firecrawl; self-hosted Firecrawl can use `AILIS_FIRECRAWL_URL` / `FIRECRAWL_BASE_URL`.
-- `web_fetch` can use Crawl4AI Markdown through `AILIS_CRAWL4AI_URL` / `CRAWL4AI_URL`, or explicit `provider: "crawl4ai"`, and falls back to current HTML/text extraction on failure.
+- `scripts\mcp-ailis-research-server.cjs`
+  - Default `web_search` provider chain is `searxng_json -> firecrawl_search -> bing_html -> duckduckgo_lite -> duckduckgo_html -> yahoo_html`.
+  - GitHub/code queries still keep `github_repositories` first.
+  - `AILIS_WEB_SEARCH_PROVIDER` supports `auto`, `searxng`, `firecrawl`, `html/current_html_fallback`, `external`, `github`, or comma-separated backend ids.
+  - `AILIS_SEARXNG_URL` / `SEARXNG_URL` configure SearXNG. Unconfigured local SearXNG is short-probed at `http://127.0.0.1:8080`.
+  - Hosted Firecrawl uses `FIRECRAWL_API_KEY`; self-hosted Firecrawl uses `AILIS_FIRECRAWL_URL` / `FIRECRAWL_BASE_URL`.
+  - `web_fetch` auto short-probes local/configured Crawl4AI (`AILIS_CRAWL4AI_URL`, `CRAWL4AI_URL`, or `http://127.0.0.1:11235`) and falls back to current HTML/text extraction.
+  - Chinese guide-like natural queries now produce a backend search query, e.g. `做一个小光的攻略` -> `小光 攻略`, while retaining the original query for confidence/diagnostics.
+  - Search results now include `searchConfidence`, `clarificationRequired`, `candidateChoices`, `backendQuery`, and ranked relevance data.
+- `electron\ailis-turn-items.cjs`
+  - Nested MCP adapter details are unwrapped, including `structuredContent.result.structuredContent`.
+  - Low-confidence/ambiguous web search is classified as `evidence_gap=ambiguous_search_requires_clarification`.
+- `electron\ailis-agent-runner.cjs`
+  - Both JSON executor and native direct-tool prompts now tell AILIS to stop web_search/web_fetch loops and ask the user when that evidence gap appears.
 
-## Decisions And Constraints
-- Keep the new relevance reranker as the common post-processing layer across all providers.
-- Add external providers as optional runtime backends, not mandatory dependencies.
-- Do not remove current HTML fallback yet; use it as compatibility fallback.
-- Do not store API keys in this checkpoint or logs.
-- Use `apply_patch` for manual edits and commit when done unless the user explicitly says not to.
-
-## Files And Artifacts
-- `scripts\mcp-ailis-research-server.cjs`: provider normalization, SearXNG JSON backend, Firecrawl search backend, Node JSON fetch helper, Crawl4AI Markdown fetch path, and updated tool schemas.
-- `tests\mcp-ailis-research-server.test.mjs`: provider-chain, SearXNG JSON, Firecrawl fallback, Crawl4AI success, and Crawl4AI fallback regressions.
-- `.runtime-logs\xiaoguang-rerank-summary-20260620_093040.json`: previous real task retest showed remaining failure was entity disambiguation, not result reranking.
-
-## Commands And Results
+## Validation
 - `node --check scripts\mcp-ailis-research-server.cjs`: passed.
-- `node --test tests\mcp-ailis-research-server.test.mjs`: 45/45 passed.
-- `node --test tests\ailis-tool-layer.test.mjs tests\ailis-turn-items.test.mjs`: 24/24 passed.
-- Local SearXNG check at `http://127.0.0.1:8080/search?q=ailis&format=json`: unavailable/timed out on this machine, so current runtime will fall back unless SearXNG is started or `AILIS_SEARXNG_URL` points elsewhere.
+- `node --check electron\ailis-turn-items.cjs`: passed.
+- `node --check electron\ailis-agent-runner.cjs`: passed.
+- `node --test tests\mcp-ailis-research-server.test.mjs`: 47/47 passed.
+- `node --test tests\ailis-turn-items.test.mjs tests\ailis-tool-layer.test.mjs`: 25/25 passed.
+- `node --test tests\ailis-agent-runner.test.mjs`: 3/3 passed.
+- Real `webSearch({ query: "做一个小光的攻略" })` used `backendQuery: "小光 攻略"`, attempted `searxng_json` then `firecrawl_search` then `bing_html`, returned `clarificationRequired: true`, and produced no `suggestedNextCalls`.
 
 ## Known Problems
-- Broad ambiguous nicknames such as "小光" still need entity disambiguation in a later change.
-- Some PowerShell commands in this large repo can be slow; use narrow `git -C ...` commands.
+- This machine currently has no reachable local SearXNG at `127.0.0.1:8080` and no `FIRECRAWL_API_KEY`, so live default search still falls back to HTML until those services/keys are configured.
+- Ambiguous short nicknames are now stopped for clarification rather than guessed, but final answer quality still depends on the model obeying the prompt and the UI surfacing the clarification naturally.
 
 ## Next Actions
-1. Stage only `.codex-memory/current.md`, `scripts/mcp-ailis-research-server.cjs`, and `tests/mcp-ailis-research-server.test.mjs`.
-2. Commit the provider-chain implementation.
-3. If the user wants live validation, start/configure SearXNG or Firecrawl, restart AILIS, then rerun the real strategy/Kaggle task.
-4. Later separate fix: add short-nickname entity disambiguation for tasks like "小光攻略".
+1. Stage active files only.
+2. Commit the patch.
+3. Restart AILIS to test the full agent loop from UI/runtime.
 
 ## Do Not Forget
 - User prefers direct execution and default commits.
-- Avoid verbose logs in chat; summarize only.
-- Never reveal local API keys or tokens.
+- Do not reveal API keys or tokens.
+- Keep future logs summarized; avoid dumping long transcripts into chat.

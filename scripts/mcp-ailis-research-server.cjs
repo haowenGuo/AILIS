@@ -832,6 +832,15 @@ const GUIDE_QUERY_TERMS = new Set([
     'walkthrough', 'strategy', 'tier', 'team', 'teams'
 ]);
 
+const CJK_ENTITY_STOPWORDS = new Set([
+    ...CJK_SEARCH_QUERY_STOPWORDS,
+    '帮我', '请问', '请你', '我要', '想要', '给我', '看下', '看看', '查下',
+    '查查', '查询', '整理', '生成', '写个', '写一份', '做个', '做一个',
+    '做一份', '来个', '来一个', '这个', '那个', '角色', '游戏', '手游',
+    '端游', '攻略', '教程', '指南', '新手', '入门', '完整', '最新', '版本',
+    '技能', '机制', '配队', '配装', '养成', '打法', '建议'
+]);
+
 const GUIDE_SOURCE_DOMAINS = [
     'bilibili.com',
     'wiki.biligame.com',
@@ -857,6 +866,82 @@ const TOPIC_QUERY_STOPWORDS = new Set([
     'journal', 'paper', 'proceedings', 'publication', 'quoted', 'quote', 'review',
     'science', 'source', 'study', 'topic'
 ]);
+
+function pushUniqueTerm(terms, seen, term) {
+    const normalized = normalizeString(term).toLowerCase();
+    if (!normalized || seen.has(normalized)) {
+        return;
+    }
+    seen.add(normalized);
+    terms.push(normalized);
+}
+
+function stripCjkEntityAffixes(value = '') {
+    let text = normalizeString(value)
+        .replace(/[“”"'‘’()[\]{}《》【】]/g, ' ')
+        .replace(/\s+/g, '');
+    text = text
+        .replace(/^(?:帮我|请问|请你|我要|想要|给我|看下|看看|查下|查查|查询|整理|生成|写个|写一份|做个|做一个|做一份|来个|来一个)+/g, '')
+        .replace(/(?:的)?(?:完整)?(?:角色)?(?:攻略|教程|指南|解析|机制|配队|配装|养成|打法|建议)$/g, '')
+        .replace(/的$/g, '')
+        .replace(/^(?:一个|一下|这个|那个|关于)/g, '')
+        .replace(/(?:角色|游戏|手游|端游)$/g, '');
+    for (const guideTerm of GUIDE_QUERY_TERMS) {
+        if (/[\p{Script=Han}]/u.test(guideTerm)) {
+            text = text.replaceAll(guideTerm, '');
+        }
+    }
+    return text.trim();
+}
+
+function extractShortCjkEntityTerms(query = '') {
+    const sanitized = normalizeString(query)
+        .replace(/\bsite:[^\s]+/gi, ' ')
+        .replace(/\bhttps?:\/\/\S+/gi, ' ')
+        .replace(/[|,，。！？；;:：、/\\]+/g, ' ');
+    const terms = [];
+    const seen = new Set();
+    const addEntity = (candidate = '') => {
+        const stripped = stripCjkEntityAffixes(candidate);
+        const chunks = stripped.match(/[\p{Script=Han}]{2,8}/gu) || [];
+        for (const chunk of chunks) {
+            const normalized = normalizeString(chunk);
+            if (
+                normalized.length < 2 ||
+                normalized.length > 8 ||
+                CJK_ENTITY_STOPWORDS.has(normalized) ||
+                GUIDE_QUERY_TERMS.has(normalized)
+            ) {
+                continue;
+            }
+            pushUniqueTerm(terms, seen, normalized);
+        }
+    };
+    const patternCandidates = [
+        ...sanitized.matchAll(/([\p{Script=Han}]{2,10})(?:的)?(?:完整)?(?:角色)?(?:攻略|教程|指南|解析|机制|配队|配装|养成|打法|建议)/gu)
+    ];
+    for (const match of patternCandidates) {
+        addEntity(match[1]);
+    }
+    const cjkChunks = sanitized.match(/[\p{Script=Han}]{2,12}/gu) || [];
+    for (const chunk of cjkChunks) {
+        addEntity(chunk);
+    }
+    return terms.slice(0, 5);
+}
+
+function extractGuideTermsFromQuery(query = '') {
+    const normalized = normalizeString(query).toLowerCase();
+    const terms = [];
+    const seen = new Set();
+    for (const term of GUIDE_QUERY_TERMS) {
+        const normalizedTerm = normalizeString(term).toLowerCase();
+        if (normalizedTerm && normalized.includes(normalizedTerm)) {
+            pushUniqueTerm(terms, seen, normalizedTerm);
+        }
+    }
+    return terms.slice(0, 8);
+}
 
 function extractSearchQueryTerms(query = '') {
     const sanitized = normalizeString(query)
@@ -885,6 +970,18 @@ function extractSearchQueryTerms(query = '') {
         terms.push(normalized);
     };
     for (const term of rawTerms) {
+        addTerm(term);
+        if (terms.length >= 16) {
+            break;
+        }
+    }
+    for (const term of extractGuideTermsFromQuery(sanitized)) {
+        addTerm(term);
+        if (terms.length >= 16) {
+            break;
+        }
+    }
+    for (const term of extractShortCjkEntityTerms(sanitized)) {
         addTerm(term);
         if (terms.length >= 16) {
             break;
@@ -1229,6 +1326,216 @@ function rankSearchResultsForFollowup(results = [], query = '') {
             };
         })
         .sort((a, b) => b.combinedScore - a.combinedScore || b.queryScore - a.queryScore || b.researchScore - a.researchScore);
+}
+
+function extractSearchResultContextLabel(candidate = {}, entityTerms = []) {
+    const title = normalizeString(candidate.title);
+    const snippet = normalizeString(candidate.snippet);
+    const host = extractHostname(candidate.url);
+    const haystack = `${title} ${snippet}`;
+    const labels = [];
+    const bracketMatch = title.match(/[【《\[]([^】》\]]{2,28})[】》\]]/u);
+    if (bracketMatch) {
+        labels.push(bracketMatch[1]);
+    }
+    for (const term of entityTerms) {
+        const escaped = escapeRegExp(term);
+        if (!escaped) {
+            continue;
+        }
+        const contextMatch = haystack.match(new RegExp(`([\\p{Script=Han}A-Za-z0-9·._-]{0,10}${escaped}[\\p{Script=Han}A-Za-z0-9·._-]{0,10})`, 'u'));
+        if (contextMatch) {
+            labels.push(contextMatch[1]);
+        }
+    }
+    const compactLabels = labels
+        .map((label) => stripCjkEntityAffixes(label) || normalizeString(label))
+        .filter((label) => label && !CJK_ENTITY_STOPWORDS.has(label))
+        .slice(0, 2);
+    if (compactLabels.length) {
+        return compactLabels.join(' / ');
+    }
+    const cleanedTitle = title
+        .replace(/\s*[-_|].*$/u, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 36);
+    return cleanedTitle || host || 'unknown result';
+}
+
+function buildSearchClarificationChoices(rankedResults = [], query = '') {
+    const entityTerms = extractShortCjkEntityTerms(query);
+    const choices = [];
+    const seen = new Set();
+    for (const candidate of (Array.isArray(rankedResults) ? rankedResults : []).slice(0, 8)) {
+        const candidateText = compactSearchText([
+            normalizeString(candidate.title),
+            normalizeString(candidate.snippet),
+            normalizeString(candidate.url)
+        ].join(' '));
+        const entityMatched = !entityTerms.length || entityTerms.some((term) => candidateText.includes(compactSearchText(term)));
+        if (!entityMatched && !isRelevantSearchCandidate(candidate)) {
+            continue;
+        }
+        const label = extractSearchResultContextLabel(candidate, entityTerms);
+        const key = compactSearchText(label).slice(0, 48);
+        if (!key || seen.has(key)) {
+            continue;
+        }
+        seen.add(key);
+        choices.push(pruneEmptyDeep({
+            label,
+            title: normalizeString(candidate.title),
+            url: normalizeString(candidate.url),
+            host: extractHostname(candidate.url),
+            queryScore: Number.isFinite(candidate.queryScore) ? Number(candidate.queryScore.toFixed(2)) : undefined,
+            matchedTerms: candidate.queryMatchedTerms?.length ? candidate.queryMatchedTerms.slice(0, 6) : undefined
+        }));
+        if (choices.length >= 4) {
+            break;
+        }
+    }
+    return choices;
+}
+
+function hasSpecificSearchContext(query = '', entityTerms = []) {
+    const entitySet = new Set(entityTerms.map((term) => normalizeString(term).toLowerCase()));
+    if (entitySet.size > 1) {
+        return true;
+    }
+    if (extractQuotedSearchPhrases(query).length > 0) {
+        return true;
+    }
+    const siteConstraints = extractSearchSiteConstraints(query);
+    const nonGenericTerms = extractSearchQueryTerms(query).filter((term) => {
+        const normalized = normalizeString(term).toLowerCase();
+        const stripped = stripCjkEntityAffixes(normalized).toLowerCase();
+        return (
+            normalized &&
+            !entitySet.has(normalized) &&
+            !entitySet.has(stripped) &&
+            !GUIDE_QUERY_TERMS.has(normalized) &&
+            !CJK_ENTITY_STOPWORDS.has(normalized) &&
+            !SEARCH_QUERY_STOPWORDS.has(normalized) &&
+            !CJK_SEARCH_QUERY_STOPWORDS.has(normalized) &&
+            !/^(?:做一个|做一份|帮我|给我|我要|想要)/.test(normalized)
+        );
+    });
+    return nonGenericTerms.some((term) => (
+        /[a-z0-9]/i.test(term) ||
+        normalizeString(term).length >= 3
+    )) || siteConstraints.some((site) => !/^(?:bilibili\.com|youtube\.com|youtu\.be)$/i.test(site));
+}
+
+function isGenericSearchQueryTerm(term = '', entityTerms = []) {
+    const normalized = normalizeString(term).toLowerCase();
+    const stripped = stripCjkEntityAffixes(normalized).toLowerCase();
+    const entitySet = new Set(entityTerms.map((item) => normalizeString(item).toLowerCase()));
+    return (
+        !normalized ||
+        entitySet.has(normalized) ||
+        entitySet.has(stripped) ||
+        GUIDE_QUERY_TERMS.has(normalized) ||
+        CJK_ENTITY_STOPWORDS.has(normalized) ||
+        SEARCH_QUERY_STOPWORDS.has(normalized) ||
+        CJK_SEARCH_QUERY_STOPWORDS.has(normalized) ||
+        /^(?:做一个|做一份|帮我|给我|我要|想要)/.test(normalized)
+    );
+}
+
+function buildEffectiveSearchQuery(query = '') {
+    const normalized = normalizeString(query);
+    if (!normalized || !/[\p{Script=Han}]/u.test(normalized) || !isGuideSearchQuery(normalized)) {
+        return normalized;
+    }
+    const entityTerms = extractShortCjkEntityTerms(normalized);
+    if (!entityTerms.length) {
+        return normalized;
+    }
+    const terms = [];
+    const seen = new Set();
+    const add = (term = '') => {
+        const value = normalizeString(term);
+        if (!value || seen.has(value)) {
+            return;
+        }
+        seen.add(value);
+        terms.push(value);
+    };
+    for (const term of extractSearchQueryTerms(normalized)) {
+        if (!isGenericSearchQueryTerm(term, entityTerms)) {
+            add(term);
+        }
+    }
+    for (const term of entityTerms) {
+        add(term);
+    }
+    const guideTerms = extractGuideTermsFromQuery(normalized);
+    if (guideTerms.length) {
+        add(guideTerms.includes('攻略') ? '攻略' : guideTerms[0]);
+    }
+    return terms.length >= 2 ? terms.slice(0, 8).join(' ') : normalized;
+}
+
+function assessSearchConfidence(rankedResults = [], query = '') {
+    const ranked = Array.isArray(rankedResults) ? rankedResults : [];
+    const top = ranked[0] || {};
+    const second = ranked[1] || {};
+    const topQueryScore = Number(top.queryScore) || 0;
+    const secondQueryScore = Number(second.queryScore) || 0;
+    const scoreGap = Math.max(0, topQueryScore - secondQueryScore);
+    const relevantCount = ranked.filter((candidate) => isRelevantSearchCandidate(candidate)).length;
+    const entityTerms = extractShortCjkEntityTerms(query);
+    const shortEntityTerms = entityTerms.filter((term) => normalizeString(term).length <= 2);
+    const specificContext = hasSpecificSearchContext(query, entityTerms);
+    const choices = buildSearchClarificationChoices(ranked, query);
+    const ambiguousShortEntity = isGuideSearchQuery(query) &&
+        shortEntityTerms.length === 1 &&
+        entityTerms.length === 1 &&
+        !specificContext;
+    const reasons = [];
+    if (!ranked.length) {
+        reasons.push('no_search_results');
+    }
+    if (ambiguousShortEntity) {
+        reasons.push('short_entity_without_disambiguating_context');
+    }
+    if (choices.length >= 2 && ambiguousShortEntity) {
+        reasons.push('multiple_candidate_interpretations');
+    }
+    if (topQueryScore < searchOffTargetThreshold(query)) {
+        reasons.push('top_result_low_query_match');
+    }
+    if (relevantCount === 0) {
+        reasons.push('no_relevant_followup_candidates');
+    }
+    const rawScore = Math.min(1, (
+        Math.min(topQueryScore, 100) / 100 * 0.55 +
+        Math.min(relevantCount, 5) / 5 * 0.25 +
+        Math.min(scoreGap, 35) / 35 * 0.12 +
+        (specificContext ? 0.08 : 0)
+    ));
+    const shouldAskUser = ambiguousShortEntity && (choices.length >= 2 || rawScore < 0.78);
+    const score = shouldAskUser ? Math.min(rawScore, 0.44) : rawScore;
+    const level = score >= 0.72 ? 'high' : score >= 0.45 ? 'medium' : 'low';
+    const target = shortEntityTerms[0] || entityTerms[0] || normalizeString(query);
+    const choiceLabels = choices.map((choice) => choice.label).filter(Boolean).slice(0, 4);
+    return pruneEmptyDeep({
+        level,
+        score: Number(score.toFixed(2)),
+        shouldAskUser,
+        clarificationRequired: shouldAskUser,
+        entityTerms,
+        specificContext,
+        topQueryScore,
+        relevantCount,
+        scoreGap,
+        reasons,
+        candidateChoices: choices,
+        clarificationQuestion: shouldAskUser
+            ? `你说的“${target}”具体指哪一个？${choiceLabels.length ? `我搜到的候选包括：${choiceLabels.join('、')}。` : '目前搜索结果不足以唯一确定对象。'}请补充游戏名、角色全名或选择一个候选后我再继续。`
+            : ''
+    });
 }
 
 function buildSuggestedCallsFromSearchResults(results = [], { query = '', limit = 3 } = {}) {
@@ -1891,10 +2198,13 @@ function crawl4aiFetchConfig(args = {}) {
         process.env.CRAWL4AI_URL
     );
     if (configuredUrl) {
-        return { baseUrl: configuredUrl, provider };
+        return { baseUrl: configuredUrl, provider, configured: true, probe: false };
     }
     if (provider === 'crawl4ai') {
-        return { baseUrl: DEFAULT_CRAWL4AI_URL, provider };
+        return { baseUrl: DEFAULT_CRAWL4AI_URL, provider, configured: false, probe: false };
+    }
+    if (provider === 'auto') {
+        return { baseUrl: DEFAULT_CRAWL4AI_URL, provider, configured: false, probe: true };
     }
     return null;
 }
@@ -2204,10 +2514,11 @@ async function webSearch(args = {}) {
     if (!query) {
         return errorResult('web_search requires query');
     }
+    const backendQuery = buildEffectiveSearchQuery(query);
     const maxResults = clampNumber(args.maxResults || args.limit, 8, 1, 12);
     const timeoutMs = clampNumber(args.timeoutMs || args.timeout_ms, 8000, 3000, 30000);
     const attempts = [];
-    const backends = normalizeSearchBackends(args, query);
+    const backends = normalizeSearchBackends(args, backendQuery);
     const overallTimeoutMs = clampNumber(
         args.overallTimeoutMs || args.overall_timeout_ms,
         Math.min(36000, Math.max(12000, timeoutMs * backends.length)),
@@ -2231,7 +2542,7 @@ async function webSearch(args = {}) {
         }
         const backend = backends[backendIndex];
         const attemptTimeoutMs = Math.min(timeoutMs, Math.max(1000, remainingMs - 750));
-        const attempt = await runSearchBackend(backend, query, maxResults, attemptTimeoutMs, args);
+        const attempt = await runSearchBackend(backend, backendQuery, maxResults, attemptTimeoutMs, args);
         attempts.push(attempt);
         if (!attempt.ok) {
             continue;
@@ -2251,7 +2562,11 @@ async function webSearch(args = {}) {
         const topQueryScore = rankedResults[0]?.queryScore || 0;
         const searchRelevance = describeSearchRelevance(rankedResults);
         const offTarget = baseSuggestedNextCalls.length === 0 && !hasEnoughRelevantSearchEvidence(rankedResults, query);
-        const suggestedNextCalls = offTarget && looksScholarlySearchQuery(query)
+        const searchConfidence = assessSearchConfidence(rankedResults, query);
+        const clarificationRequired = searchConfidence.clarificationRequired === true;
+        const suggestedNextCalls = clarificationRequired
+            ? []
+            : offTarget && looksScholarlySearchQuery(query)
             ? dedupeSuggestedNextCalls([
                 {
                     tool: 'paper_metadata_lookup',
@@ -2261,10 +2576,14 @@ async function webSearch(args = {}) {
                 ...baseSuggestedNextCalls
             ], 3)
             : baseSuggestedNextCalls;
-        const evidenceGap = offTarget
+        const evidenceGap = clarificationRequired
+            ? `Search confidence is ${searchConfidence.level}; the query appears ambiguous and should be clarified before following any result.`
+            : offTarget
             ? `Search results look off-target for the key query terms: ${queryFocusTerms.join(', ') || query}. Refine the query with exact phrases, source names, or author names before following a result.`
             : 'Search results are discovery only. Open a result or resolve a DOI/PDF before answering.';
-        const recoveryHint = offTarget
+        const recoveryHint = clarificationRequired
+            ? searchConfidence.clarificationQuestion || 'Ask the user to disambiguate the target before calling web_fetch or another broad search.'
+            : offTarget
             ? 'Do not follow obviously unrelated popular results. Tighten the query or switch to a more specific tool before searching again.'
             : 'Prefer the suggested follow-up calls below before issuing another broad web_search.';
         const guidance = buildWebToolGuidanceText({
@@ -2276,6 +2595,7 @@ async function webSearch(args = {}) {
         return textResult([guidance, `Search results:\n${text}`].filter(Boolean).join('\n\n'), {
             status: 'completed',
             query,
+            backendQuery: backendQuery !== query ? backendQuery : undefined,
             backend: attempt.backend,
             url: attempt.url,
             durationMs: attempt.durationMs,
@@ -2285,6 +2605,9 @@ async function webSearch(args = {}) {
             results: rankedResults,
             rawResults: attempt.results,
             searchRelevance,
+            searchConfidence,
+            clarificationRequired,
+            candidateChoices: searchConfidence.candidateChoices || [],
             evidenceGap,
             recoveryHint,
             suggestedNextCalls,
@@ -2809,7 +3132,8 @@ function summarizeCrawl4aiAttempt(attempt = null) {
         errorCode: normalizeString(attempt.errorCode),
         error: normalizeString(attempt.error).slice(0, 300),
         endpoint: normalizeString(attempt.crawl4aiEndpoint),
-        backend: normalizeString(attempt.backend)
+        backend: normalizeString(attempt.backend),
+        probe: attempt.probe === true || undefined
     });
 }
 
@@ -2819,9 +3143,10 @@ async function maybeFetchWithCrawl4ai(url, args = {}, timeoutMs = 90000) {
         return null;
     }
     const endpoint = `${config.baseUrl}/crawl`;
+    const effectiveTimeoutMs = config.probe ? Math.min(timeoutMs, 1800) : timeoutMs;
     const fetched = await fetchJsonWithNodeFetch(endpoint, {
         method: 'POST',
-        timeoutMs,
+        timeoutMs: effectiveTimeoutMs,
         body: {
             url,
             urls: [url]
@@ -2834,6 +3159,7 @@ async function maybeFetchWithCrawl4ai(url, args = {}, timeoutMs = 90000) {
             errorCode: fetched.errorCode || 'crawl4ai_fetch_failed',
             error: fetched.error || 'Crawl4AI fetch failed.',
             backend: 'crawl4ai',
+            probe: config.probe === true,
             crawl4aiEndpoint: endpoint
         };
     }
@@ -2845,6 +3171,7 @@ async function maybeFetchWithCrawl4ai(url, args = {}, timeoutMs = 90000) {
             errorCode: 'crawl4ai_no_markdown',
             error: 'Crawl4AI returned JSON, but no Markdown/text content was found.',
             backend: 'crawl4ai',
+            probe: config.probe === true,
             crawl4aiEndpoint: endpoint
         };
     }
@@ -2860,6 +3187,7 @@ async function maybeFetchWithCrawl4ai(url, args = {}, timeoutMs = 90000) {
         error: '',
         backend: 'crawl4ai',
         kind: 'crawl4ai_markdown',
+        probe: config.probe === true,
         links: extractLinksFromMarkdown(markdown, url, 80),
         crawl4aiEndpoint: endpoint
     };
@@ -6315,7 +6643,7 @@ print(json.dumps(payload, ensure_ascii=False))
 const TOOLS = [
     {
         name: 'web_search',
-        description: 'Fallback broad public web search through AILIS managed search backends. Standard call: { "query": "specific search keywords", "maxResults": 5 }. Do not use as the first step for attached/local files, known URLs, PDFs/papers/reports, YouTube/videos, audio, images, spreadsheets, presentations, Word documents, code files, or GitHub repositories; use the dedicated MCP tool for those artifact types first. Use web_fetch for a known HTML/text URL, paper_metadata_lookup for exact paper/DOI metadata, pdf_extract_text for a known PDF URL, pdf_find_and_extract for a paper/report title when you need full text, and github_repo_read for GitHub README/tree/file evidence. General web queries default to the provider chain searxng_json, firecrawl_search, then current HTML fallback; GitHub/code repository queries keep GitHub repository search first. Configure with AILIS_SEARXNG_URL, AILIS_WEB_SEARCH_PROVIDER, and optional FIRECRAWL_API_KEY. Returns titles, URLs, snippets, relevance scores, and structured backend attempts.',
+        description: 'Fallback broad public web search through AILIS managed search backends. Standard call: { "query": "specific search keywords", "maxResults": 5 }. Do not use as the first step for attached/local files, known URLs, PDFs/papers/reports, YouTube/videos, audio, images, spreadsheets, presentations, Word documents, code files, or GitHub repositories; use the dedicated MCP tool for those artifact types first. Use web_fetch for a known HTML/text URL, paper_metadata_lookup for exact paper/DOI metadata, pdf_extract_text for a known PDF URL, pdf_find_and_extract for a paper/report title when you need full text, and github_repo_read for GitHub README/tree/file evidence. General web queries default to the provider chain searxng_json, firecrawl_search, then current HTML fallback; GitHub/code repository queries keep GitHub repository search first. Configure with AILIS_SEARXNG_URL, AILIS_WEB_SEARCH_PROVIDER, and optional FIRECRAWL_API_KEY. Returns ranked titles/URLs/snippets, relevance scores, backend attempts, searchConfidence, and clarificationRequired/candidateChoices when the result set is too ambiguous to follow safely.',
         inputSchema: {
             type: 'object',
             required: ['query'],
@@ -6365,7 +6693,7 @@ const TOOLS = [
     },
     {
         name: 'web_fetch',
-        description: 'Fetch a public HTTP(S) HTML or text resource and return readable text plus a structured HTML relationship map when HTML is available. If Crawl4AI is configured with AILIS_CRAWL4AI_URL or explicitly selected, web_fetch first asks Crawl4AI for Markdown and falls back to the current fetch/extract path when unavailable. The relationship map exposes title/metadata, heading sections, ranked links with context, JSON-LD entities, key-value facts, table rows, and relation triples so the model can reason over page structure instead of plain text only. Rejects PDF/binary content with unsupported_content_type; use pdf_extract_text or download_file for PDFs/files. For archive, listing, search-result, table-of-contents, or journal issue pages, pass query/contains with task terms such as author, year, topic, or answer clue so excerpts and linked resources are ranked against the task instead of newest/first links.',
+        description: 'Fetch a public HTTP(S) HTML or text resource and return readable text plus a structured HTML relationship map when HTML is available. In auto mode, web_fetch first short-probes local Crawl4AI at AILIS_CRAWL4AI_URL/CRAWL4AI_URL or http://127.0.0.1:11235 for Markdown, then falls back to the current fetch/extract path when unavailable; provider=builtin/current/html disables this. The relationship map exposes title/metadata, heading sections, ranked links with context, JSON-LD entities, key-value facts, table rows, and relation triples so the model can reason over page structure instead of plain text only. Rejects PDF/binary content with unsupported_content_type; use pdf_extract_text or download_file for PDFs/files. For archive, listing, search-result, table-of-contents, or journal issue pages, pass query/contains with task terms such as author, year, topic, or answer clue so excerpts and linked resources are ranked against the task instead of newest/first links.',
         inputSchema: {
             type: 'object',
             required: ['url'],
@@ -6703,6 +7031,9 @@ if (require.main === module) {
 
 module.exports = {
     TOOLS,
+    assessSearchConfidence,
+    buildEffectiveSearchQuery,
+    buildSearchClarificationChoices,
     buildSuggestedCallsFromSearchResults,
     classifyYtDlpFailure,
     downloadFile,
@@ -6711,6 +7042,7 @@ module.exports = {
     extractDuckDuckGoHtmlResults,
     extractGenericAnchorResults,
     extractGitHubRepositoryResults,
+    extractShortCjkEntityTerms,
     extractYahooResults,
     inferPaperMetadataArgsFromScholarlyQuery,
     fetchText,

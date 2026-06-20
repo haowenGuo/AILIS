@@ -165,6 +165,56 @@ test('Turn items classify web_search discovery output as needing web_fetch evide
     assert.ok(items[0].alternatives.includes('mcp__ailis_research__web_fetch'));
 });
 
+test('Turn items classify nested low-confidence web_search as requiring user clarification', () => {
+    const items = buildCodexLikeTurnItems({
+        stepResults: [
+            {
+                id: 'step-ambiguous-search',
+                title: 'Search short game nickname',
+                tool: 'mcp__ailis_research__web_search',
+                args: { query: '做一个小光的攻略' },
+                iteration: 1,
+                response: {
+                    ok: true,
+                    status: 'completed',
+                    result: {
+                        content: [{
+                            type: 'text',
+                            text: 'Evidence gap: Search confidence is low; the query appears ambiguous and should be clarified before following any result.'
+                        }],
+                        structuredContent: {
+                            result: {
+                                structuredContent: {
+                                    status: 'completed',
+                                    query: '做一个小光的攻略',
+                                    clarificationRequired: true,
+                                    searchConfidence: {
+                                        level: 'low',
+                                        shouldAskUser: true,
+                                        clarificationRequired: true,
+                                        clarificationQuestion: '你说的“小光”具体指哪一个？请补充游戏名或角色全名。',
+                                        candidateChoices: [
+                                            { label: '绝区零 / 叶瞬光', url: 'https://www.bilibili.com/video/BV1rXBoBoEv1/' },
+                                            { label: '光遇 / 小光', url: 'https://example.com/sky/xiaoguang-guide' }
+                                        ]
+                                    },
+                                    suggestedNextCalls: []
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        ]
+    });
+
+    assert.equal(items.length, 1);
+    assert.equal(items[0].status, 'completed');
+    assert.equal(items[0].evidence_gap, 'ambiguous_search_requires_clarification');
+    assert.match(items[0].recovery_hint, /具体指哪一个|补充游戏名/);
+    assert.ok(items[0].alternatives.includes('ask_user_clarification'));
+});
+
 test('Turn items classify web_fetch JavaScript shells as unusable evidence', () => {
     const items = buildCodexLikeTurnItems({
         stepResults: [

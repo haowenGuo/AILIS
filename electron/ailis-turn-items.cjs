@@ -95,11 +95,21 @@ function extractToolResultText(result) {
 }
 
 function getResponseDetails(response = {}) {
-    if (response?.result?.details && typeof response.result.details === 'object') {
-        return response.result.details;
-    }
-    if (response?.details && typeof response.details === 'object') {
-        return response.details;
+    const candidates = [
+        response?.result?.structuredContent?.result?.structuredContent,
+        response?.result?.structuredContent?.result?.details,
+        response?.result?.details?.result?.structuredContent,
+        response?.result?.details?.result?.details,
+        response?.result?.structuredContent,
+        response?.result?.details,
+        response?.details?.result?.structuredContent,
+        response?.details?.result?.details,
+        response?.details
+    ];
+    for (const candidate of candidates) {
+        if (candidate && typeof candidate === 'object' && !Array.isArray(candidate)) {
+            return candidate;
+        }
     }
     return {};
 }
@@ -199,20 +209,8 @@ function classifyEvidenceGapObservation({ tool = '', args = {}, response = {}, p
     }
     const toolId = normalizeText(tool);
     const action = normalizeText(args.action || args.operation || args.intent).toLowerCase();
-    const url = normalizeText(args.url || args.href || response.result?.details?.url || response.result?.url);
-    const details = (
-        response.result?.structuredContent && typeof response.result.structuredContent === 'object'
-            ? response.result.structuredContent
-            : null
-    ) || (
-        response.result?.details && typeof response.result.details === 'object'
-            ? response.result.details
-            : null
-    ) || (
-        response.details && typeof response.details === 'object'
-            ? response.details
-            : {}
-    );
+    const details = getResponseDetails(response);
+    const url = normalizeText(args.url || args.href || details.url || response.result?.url);
     const observationContract = details.observationContract || details.observation_contract || {};
     const evidenceQuality = normalizeText(details.evidenceQuality || details.evidence_quality || observationContract.evidence_quality);
     const text = `${url}\n${preview}\n${extractToolResultText(response.result)}`.toLowerCase();
@@ -221,6 +219,27 @@ function classifyEvidenceGapObservation({ tool = '', args = {}, response = {}, p
         /web_search$/.test(toolId) ||
         action === 'web_search' ||
         action === 'search';
+    const searchConfidence = details.searchConfidence || details.search_confidence || {};
+    const clarificationRequired = details.clarificationRequired === true ||
+        details.clarification_required === true ||
+        searchConfidence.clarificationRequired === true ||
+        searchConfidence.clarification_required === true ||
+        searchConfidence.shouldAskUser === true ||
+        searchConfidence.should_ask_user === true;
+    if (isWebSearch && (clarificationRequired || /search confidence is .*ambiguous|query appears ambiguous|should be clarified/i.test(text))) {
+        const question = normalizeText(
+            searchConfidence.clarificationQuestion ||
+            searchConfidence.clarification_question ||
+            details.clarificationQuestion ||
+            details.recoveryHint
+        );
+        return {
+            evidence_gap: 'ambiguous_search_requires_clarification',
+            summary: 'Web search results are ranked, but the target is ambiguous or below the confidence gate.',
+            recovery_hint: question || 'Ask the user to clarify the intended entity/source before calling web_fetch or continuing the tool loop.',
+            alternatives: ['ask_user_clarification', 'final_answer clarification', 'blocked clarification']
+        };
+    }
     if (isWebSearch && /evidence gap|discovery only|open a result|suggested next calls|high-signal links|url:/i.test(text)) {
         return {
             evidence_gap: 'search_results_need_fetch',
