@@ -823,6 +823,7 @@ function buildSuggestedCallsFromRankedLinks(rankedLinks = [], limit = 3) {
 }
 
 const SEARCH_QUERY_STOPWORDS = new Set([
+    'and', 'or',
     'about', 'after', 'article', 'before', 'between', 'from', 'have', 'into', 'journal',
     'linked', 'paper', 'question', 'related', 'report', 'site', 'that', 'their', 'there',
     'these', 'this', 'those', 'what', 'when', 'where', 'which', 'with'
@@ -853,8 +854,11 @@ const GUIDE_SOURCE_DOMAINS = [
     'taptap.cn',
     'gamersky.com',
     '17173.com',
+    '3dmgame.com',
+    'gamekee.com',
     'nga.cn',
     'bbs.nga.cn',
+    'miyoushe.com',
     'mihoyo.com',
     'hoyoverse.com',
     'hoyolab.com'
@@ -1011,6 +1015,7 @@ function extractSearchSiteConstraints(query = '') {
             .replace(/^https?:\/\//i, '')
             .replace(/^www\./i, '')
             .replace(/\/.*$/g, '')
+            .replace(/[),.;]+$/g, '')
             .toLowerCase();
         if (!raw || seen.has(raw)) {
             continue;
@@ -1284,6 +1289,10 @@ function isRelevantSearchCandidate(candidate = {}) {
     const queryScore = Number(candidate.queryScore) || 0;
     const matchedTerms = Array.isArray(candidate.queryMatchedTerms) ? candidate.queryMatchedTerms : [];
     const matchedSites = Array.isArray(candidate.queryMatchedSites) ? candidate.queryMatchedSites : [];
+    const targetCoverage = candidate.queryTargetCoverage || {};
+    if (targetCoverage.specificTargetCovered === false) {
+        return false;
+    }
     return (
         matchedTerms.length >= 2 ||
         queryScore >= 30 ||
@@ -1299,7 +1308,8 @@ function searchOffTargetThreshold(query = '') {
 
 function hasEnoughRelevantSearchEvidence(rankedResults = [], query = '') {
     const topQueryScore = rankedResults[0]?.queryScore || 0;
-    if (topQueryScore >= searchOffTargetThreshold(query)) {
+    const topTargetCoverage = rankedResults[0]?.queryTargetCoverage || {};
+    if (topTargetCoverage.specificTargetCovered !== false && topQueryScore >= searchOffTargetThreshold(query)) {
         return true;
     }
     return rankedResults.some((candidate) => isRelevantSearchCandidate(candidate));
@@ -1317,9 +1327,47 @@ function describeSearchRelevance(rankedResults = []) {
         matchedSites: candidate.queryMatchedSites?.length ? candidate.queryMatchedSites.slice(0, 3) : undefined,
         sourceBackends: candidate.sourceBackends?.length ? candidate.sourceBackends.slice(0, 5) : undefined,
         sourceEngines: candidate.sourceEngines?.length ? candidate.sourceEngines.slice(0, 5) : undefined,
+        targetCoverage: candidate.queryTargetCoverage,
         guideSource: candidate.guideSource || undefined,
         kind: normalizeString(candidate.kind)
     }));
+}
+
+function assessSearchResultTargetCoverage(result = {}, query = '') {
+    const requiredTerms = specificTargetTermsForQuery(query);
+    if (!requiredTerms.length) {
+        return undefined;
+    }
+    const text = compactSearchText([
+        normalizeString(result.title),
+        normalizeString(result.snippet),
+        normalizeString(result.url)
+    ].join(' '));
+    const strongText = compactSearchText([
+        normalizeString(result.title),
+        normalizeString(result.url)
+    ].join(' '));
+    const matchedSpecificTargetTerms = [];
+    const missingSpecificTargetTerms = [];
+    const strongMatchedSpecificTargetTerms = [];
+    for (const term of requiredTerms) {
+        const compactTerm = compactSearchText(term);
+        if (compactTerm && text.includes(compactTerm)) {
+            matchedSpecificTargetTerms.push(term);
+        } else {
+            missingSpecificTargetTerms.push(term);
+        }
+        if (compactTerm && strongText.includes(compactTerm)) {
+            strongMatchedSpecificTargetTerms.push(term);
+        }
+    }
+    return pruneEmptyDeep({
+        requiredSpecificTargetTerms: requiredTerms,
+        matchedSpecificTargetTerms,
+        strongMatchedSpecificTargetTerms,
+        missingSpecificTargetTerms,
+        specificTargetCovered: missingSpecificTargetTerms.length === 0 || strongMatchedSpecificTargetTerms.length > 0
+    });
 }
 
 function rankSearchResultsForFollowup(results = [], query = '') {
@@ -1331,6 +1379,8 @@ function rankSearchResultsForFollowup(results = [], query = '') {
             }, index);
             const queryMatch = scoreSearchResultAgainstQuery(item, query);
             const sourceConsensusScore = scoreSearchSourceConsensus(item);
+            const targetCoverage = assessSearchResultTargetCoverage(item, query);
+            const targetPenalty = targetCoverage?.specificTargetCovered === false ? 260 : 0;
             return {
                 ...item,
                 kind: research.kind,
@@ -1342,7 +1392,8 @@ function rankSearchResultsForFollowup(results = [], query = '') {
                 queryMatchedSites: queryMatch.matchedSites,
                 guideSource: queryMatch.guideSource,
                 sourceConsensusScore,
-                combinedScore: queryMatch.score * 4 + research.score + sourceConsensusScore
+                queryTargetCoverage: targetCoverage,
+                combinedScore: queryMatch.score * 4 + research.score + sourceConsensusScore - targetPenalty
             };
         })
         .sort((a, b) => b.combinedScore - a.combinedScore || b.queryScore - a.queryScore || b.researchScore - a.researchScore);
@@ -1497,6 +1548,35 @@ function buildEffectiveSearchQuery(query = '') {
     return terms.length >= 2 ? terms.slice(0, 8).join(' ') : normalized;
 }
 
+function buildGuideSourceFocusedSearchQuery({ contextTerms = [], targetTerms = [], guideTerm = '' } = {}) {
+    const quotedTargets = (Array.isArray(targetTerms) ? targetTerms : [])
+        .map((term) => normalizeString(term))
+        .filter(Boolean)
+        .slice(0, 3)
+        .map((term) => `"${term}"`);
+    const context = (Array.isArray(contextTerms) ? contextTerms : [])
+        .map((term) => normalizeString(term))
+        .filter(Boolean)
+        .slice(0, 2);
+    const sourceDomains = [
+        'miyoushe.com',
+        'taptap.cn',
+        'wiki.biligame.com',
+        'gamersky.com',
+        'bilibili.com',
+        'hoyolab.com'
+    ];
+    const base = [
+        ...context,
+        ...quotedTargets,
+        normalizeString(guideTerm, '攻略')
+    ].filter(Boolean).join(' ');
+    if (!base || !quotedTargets.length) {
+        return '';
+    }
+    return `${base} (${sourceDomains.map((domain) => `site:${domain}`).join(' OR ')})`;
+}
+
 function buildWebResearchQueryPlan(query = '', args = {}) {
     const original = normalizeString(query);
     const effective = buildEffectiveSearchQuery(original);
@@ -1525,14 +1605,6 @@ function buildWebResearchQueryPlan(query = '', args = {}) {
         role: 'original',
         reason: 'Run the literal user query first so the pipeline can detect over-broad or ambiguous intent before rewriting.'
     });
-    if (effective && effective !== original) {
-        addVariant({
-            searchQuery: effective,
-            backendQuery: effective,
-            role: 'effective_terms',
-            reason: 'Use extracted entity and guide terms to remove conversational filler and improve search precision.'
-        });
-    }
     const quotedPhrases = extractQuotedSearchPhrases(original);
     const entityTerms = extractShortCjkEntityTerms(original);
     const guideTerms = extractGuideTermsFromQuery(original);
@@ -1550,6 +1622,25 @@ function buildWebResearchQueryPlan(query = '', args = {}) {
             backendQuery: exactQuery,
             role: 'exact_entity',
             reason: 'Add exact target entity phrases for guide tasks with enough context to reduce broad source or game-homepage matches.'
+        });
+        const guideSourceQuery = buildGuideSourceFocusedSearchQuery({
+            contextTerms,
+            targetTerms: exactEntityTerms,
+            guideTerm
+        });
+        addVariant({
+            searchQuery: guideSourceQuery,
+            backendQuery: guideSourceQuery,
+            role: 'guide_sources',
+            reason: 'Search high-signal guide/community/wiki sources for entity-specific guide pages before fetching broad homepages.'
+        });
+    }
+    if (effective && effective !== original) {
+        addVariant({
+            searchQuery: effective,
+            backendQuery: effective,
+            role: 'effective_terms',
+            reason: 'Use extracted entity and guide terms to remove conversational filler and improve search precision.'
         });
     }
     if (!quotedPhrases.length && !/[\p{Script=Han}]/u.test(original)) {
@@ -1596,6 +1687,9 @@ function assessSearchConfidence(rankedResults = [], query = '') {
     }
     if (topQueryScore < searchOffTargetThreshold(query)) {
         reasons.push('top_result_low_query_match');
+    }
+    if (top.queryTargetCoverage?.specificTargetCovered === false) {
+        reasons.push('top_result_missing_specific_target_terms');
     }
     if (relevantCount === 0) {
         reasons.push('no_relevant_followup_candidates');
@@ -3694,7 +3788,8 @@ function buildMergedWebResearchSearchDetails({ query = '', searchRuns = [], maxR
             }));
         }
     }
-    const mergedRawResults = mergeSearchResultsForRerank(rawResults, Math.max(maxResults * successfulRuns.length, maxResults));
+    const mergePoolSize = Math.max(24, maxResults * 4, maxResults * successfulRuns.length * 4);
+    const mergedRawResults = mergeSearchResultsForRerank(rawResults, mergePoolSize);
     const observation = buildWebSearchSuccessObservation({
         query,
         backendQuery: successfulRuns.map((run) => run.variant.backendQuery).filter(Boolean).join(' | '),
@@ -3736,15 +3831,16 @@ function bestClarificationSearchDetails(searchRuns = []) {
 }
 
 function buildWebResearchCandidates(searchDetails = {}, limit = 3) {
-    const candidates = [];
+    const candidatePool = [];
     const seen = new Set();
-    const addCandidate = (candidate = {}, source = '') => {
+    const query = normalizeString(searchDetails.query);
+    const addCandidateToPool = (candidate = {}, source = '') => {
         const url = normalizeUrlCandidate(candidate.url || candidate.args?.url);
         if (!url || seen.has(url) || !/^https?:\/\//i.test(url) || isLikelyPdfUrl(url)) {
             return;
         }
         seen.add(url);
-        candidates.push(pruneEmptyDeep({
+        candidatePool.push(pruneEmptyDeep({
             title: normalizeString(candidate.title || candidate.text || candidate.reason || url),
             url,
             source,
@@ -3759,22 +3855,36 @@ function buildWebResearchCandidates(searchDetails = {}, limit = 3) {
     };
     for (const call of searchDetails.suggestedNextCalls || []) {
         if (normalizeString(call.tool) === 'web_fetch') {
-            addCandidate({
+            addCandidateToPool({
                 title: call.reason,
                 url: call.args?.url
             }, 'suggested_next_call');
         }
     }
     for (const [index, result] of (searchDetails.results || []).entries()) {
-        addCandidate({
+        if (!isRelevantSearchCandidate(result)) {
+            continue;
+        }
+        addCandidateToPool({
             ...result,
             searchRank: index + 1
-        }, isRelevantSearchCandidate(result) ? 'ranked_relevant_result' : 'ranked_result');
-        if (candidates.length >= limit) {
-            break;
+        }, query ? 'ranked_relevant_result' : 'ranked_result');
+    }
+    const primary = [];
+    const overflow = [];
+    const seenHosts = new Set();
+    for (const candidate of candidatePool) {
+        const host = extractHostname(candidate.url);
+        if (!host || !seenHosts.has(host)) {
+            if (host) {
+                seenHosts.add(host);
+            }
+            primary.push(candidate);
+        } else {
+            overflow.push(candidate);
         }
     }
-    return candidates.slice(0, limit);
+    return [...primary, ...overflow].slice(0, limit);
 }
 
 function extractEvidenceSnippetsFromText(text = '', query = '', limit = 4) {

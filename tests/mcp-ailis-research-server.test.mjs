@@ -1359,7 +1359,7 @@ test('web_research expands query variants and fetches the high-signal result', a
 
         assert.equal(result.isError, undefined, result.content[0].text);
         assert.equal(result.structuredContent.answerReadiness, 'ready');
-        assert.deepEqual(searchQueries, ['帮我做一个绝区零 莱特 攻略 配队', '绝区零 莱特 攻略']);
+        assert.deepEqual(searchQueries, ['帮我做一个绝区零 莱特 攻略 配队', '绝区零 "莱特" 攻略']);
         assert.deepEqual(fetchedPaths, ['/guide']);
         assert.equal(result.structuredContent.search.searchAggregation.queryPlan, true);
         assert.equal(result.structuredContent.search.searchQueries.length, 2);
@@ -1435,6 +1435,7 @@ test('web_research exact entity planning preserves specific target terms', async
 });
 
 test('web_research does not mark broad source pages ready when target terms are missing', async () => {
+    const requests = [];
     const broadBody = [
         '<h1>绝区零 WIKI 首页</h1>',
         '<p>这里包含绝区零新闻、角色索引、版本活动、基础玩法和社区入口。</p>',
@@ -1442,6 +1443,7 @@ test('web_research does not mark broad source pages ready when target terms are 
     ].join('');
     await withServer((request, response) => {
         const url = new URL(request.url || '/', 'http://127.0.0.1');
+        requests.push(url.pathname);
         if (url.pathname === '/search') {
             response.writeHead(200, { 'content-type': 'application/json' });
             response.end(JSON.stringify({
@@ -1475,10 +1477,80 @@ test('web_research does not mark broad source pages ready when target terms are 
 
         assert.equal(result.isError, undefined, result.content[0].text);
         assert.equal(result.structuredContent.answerReadiness, 'needs_followup');
-        assert.equal(result.structuredContent.evidencePages[0].evidenceQuality, 'off_target_evidence');
-        assert.equal(result.structuredContent.evidencePages[0].reasoningReady, false);
-        assert.deepEqual(result.structuredContent.evidencePages[0].targetCoverage.missingSpecificTargetTerms, ['叶瞬光', '小光']);
+        assert.deepEqual(result.structuredContent.evidencePages, []);
+        assert.equal(result.structuredContent.search.searchConfidence.level, 'low');
+        assert.ok(result.structuredContent.search.searchConfidence.reasons.includes('top_result_missing_specific_target_terms'));
+        assert.equal(requests.includes('/broad-wiki'), false);
     });
+});
+
+test('web_research diversifies fetch candidates across hosts before retrying one host', async () => {
+    const shellServer = http.createServer((request, response) => {
+        response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        response.end('<html><head><title>Loading</title></head><body><div id="root">Loading...</div><script src="/app.js"></script></body></html>');
+    });
+    const guideServer = http.createServer((request, response) => {
+        response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        response.end([
+            '<html><head><title>叶瞬光小光攻略</title></head><body>',
+            '<h1>叶瞬光小光完整攻略</h1>',
+            '<p>叶瞬光也叫小光，攻略包含技能机制、驱动盘、音擎、配队和输出手法。</p>',
+            `<p>${'叶瞬光攻略正文提供配队、驱动盘、音擎、技能机制和输出循环建议。'.repeat(90)}</p>`,
+            '</body></html>'
+        ].join(''));
+    });
+    await new Promise((resolve) => shellServer.listen(0, '127.0.0.1', resolve));
+    await new Promise((resolve) => guideServer.listen(0, '0.0.0.0', resolve));
+    const shellPort = shellServer.address().port;
+    const guidePort = guideServer.address().port;
+    try {
+        await withServer((request, response) => {
+            const url = new URL(request.url || '/', 'http://127.0.0.1');
+            if (url.pathname === '/search') {
+                response.writeHead(200, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({
+                    results: [
+                        {
+                            title: '叶瞬光小光攻略 - App Shell 1',
+                            url: `http://127.0.0.1:${shellPort}/shell-one`,
+                            content: '叶瞬光小光攻略，技能机制、驱动盘、音擎、配队。'
+                        },
+                        {
+                            title: '叶瞬光小光攻略 - App Shell 2',
+                            url: `http://127.0.0.1:${shellPort}/shell-two`,
+                            content: '叶瞬光小光攻略，技能机制、驱动盘、音擎、配队。'
+                        },
+                        {
+                            title: '叶瞬光小光完整攻略',
+                            url: `http://localhost:${guidePort}/guide`,
+                            content: '叶瞬光也叫小光，攻略包含技能机制、驱动盘、音擎、配队和输出手法。'
+                        }
+                    ]
+                }));
+                return;
+            }
+            response.writeHead(404);
+            response.end('not found');
+        }, async (baseUrl) => {
+            const result = await webResearch({
+                query: '绝区零 叶瞬光 小光 攻略',
+                provider: 'searxng',
+                fetchProvider: 'builtin',
+                searxngUrl: baseUrl,
+                maxSearchQueries: 1,
+                maxPages: 2,
+                maxCharsPerPage: 12000
+            });
+
+            assert.equal(result.isError, undefined, result.content[0].text);
+            assert.equal(result.structuredContent.answerReadiness, 'ready');
+            assert.equal(result.structuredContent.evidencePages.some((page) => page.url === `http://localhost:${guidePort}/guide`), true);
+            assert.equal(result.structuredContent.evidencePages.filter((page) => page.url.includes(`127.0.0.1:${shellPort}`)).length, 1);
+        });
+    } finally {
+        await new Promise((resolve) => shellServer.close(resolve));
+        await new Promise((resolve) => guideServer.close(resolve));
+    }
 });
 
 test('web_research reranks fetched pages by evidence score instead of search order', async () => {
