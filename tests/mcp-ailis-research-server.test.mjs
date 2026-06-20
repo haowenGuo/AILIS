@@ -1897,6 +1897,58 @@ test('web_fetch classifies JavaScript loading shells as non-evidence', async () 
     });
 });
 
+test('web_fetch retries rendered Crawl4AI-style extraction after static JavaScript shell', async () => {
+    let crawlCalls = 0;
+    await withServer((request, response) => {
+        const url = new URL(request.url || '/', 'http://127.0.0.1');
+        if (url.pathname === '/crawl') {
+            crawlCalls += 1;
+            request.resume();
+            if (crawlCalls === 1) {
+                response.writeHead(503, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({ error: 'renderer warming up' }));
+                return;
+            }
+            response.writeHead(200, { 'content-type': 'application/json' });
+            response.end(JSON.stringify({
+                markdown: [
+                    '# 绝区零 叶瞬光小光攻略',
+                    '',
+                    '叶瞬光也被玩家叫作小光。这个攻略覆盖技能机制、输出手法、配队配装、驱动盘和音擎。',
+                    '叶瞬光在绝区零中需要围绕技能循环、资源管理和队伍协同来规划。',
+                    '为了让证据足够长，这里继续说明养成优先级、队伍循环、异常积蓄和实战注意事项。'.repeat(80)
+                ].join('\n')
+            }));
+            return;
+        }
+        if (url.pathname === '/zzz/article/59714036') {
+            response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+            response.end('<html><body><div id="root">米游社 Loading...</div><script src="/app.js"></script></body></html>');
+            return;
+        }
+        response.writeHead(404, { 'content-type': 'text/plain' });
+        response.end('not found');
+    }, async (baseUrl) => {
+        const result = await webFetch({
+            url: `${baseUrl}/zzz/article/59714036`,
+            query: '绝区零 叶瞬光 小光 攻略',
+            provider: 'crawl4ai',
+            crawl4aiUrl: baseUrl
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.equal(crawlCalls, 2);
+        assert.equal(result.structuredContent.fetchBackend, 'crawl4ai');
+        assert.equal(result.structuredContent.evidenceQuality, 'sufficient_evidence');
+        assert.equal(result.structuredContent.renderedFallbackUsed, true);
+        assert.equal(result.structuredContent.renderedFallbackTrigger, 'js_shell');
+        assert.equal(result.structuredContent.crawl4aiAttempt.ok, false);
+        assert.equal(result.structuredContent.crawl4aiAttempt.errorCode, 'http_503');
+        assert.equal(result.structuredContent.renderedFallbackAttempt.ok, true);
+        assert.match(result.content[0].text, /叶瞬光也被玩家叫作小光/);
+    });
+});
+
 test('web_fetch repairs common UTF-8 mojibake before evidence classification', async () => {
     const mojibake = Buffer.from('绝区零莱特攻略：技能加点、配队、驱动盘推荐。', 'utf8').toString('latin1');
     await withServer((request, response) => {

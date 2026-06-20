@@ -2620,6 +2620,8 @@ const DEFAULT_SEARXNG_URL = 'http://127.0.0.1:8080';
 const DEFAULT_FIRECRAWL_LOCAL_URL = 'http://127.0.0.1:3002';
 const FIRECRAWL_CLOUD_URL = 'https://api.firecrawl.dev';
 const DEFAULT_CRAWL4AI_URL = 'http://127.0.0.1:11235';
+const CRAWL4AI_FETCH_PROVIDERS = new Set(['crawl4ai', 'rendered', 'browser', 'crawl4ai_rendered', 'crawl4ai-style', 'crawl4ai_style']);
+const RENDERED_FALLBACK_EVIDENCE_QUALITIES = new Set(['js_shell', 'thin_content']);
 
 function normalizeBaseUrl(value = '') {
     return normalizeString(value).replace(/\/+$/g, '');
@@ -2662,6 +2664,13 @@ function hasConfiguredFirecrawlUrl(args = {}) {
     );
 }
 
+function hasConfiguredCrawl4aiUrl(args = {}) {
+    return Boolean(
+        normalizeString(args.crawl4aiUrl || args.crawl4ai_url) ||
+        normalizeString(process.env.AILIS_CRAWL4AI_URL || process.env.CRAWL4AI_URL)
+    );
+}
+
 function crawl4aiFetchConfig(args = {}) {
     const provider = normalizeString(
         args.fetchProvider ||
@@ -2683,7 +2692,7 @@ function crawl4aiFetchConfig(args = {}) {
     if (configuredUrl) {
         return { baseUrl: configuredUrl, provider, configured: true, probe: false };
     }
-    if (provider === 'crawl4ai') {
+    if (CRAWL4AI_FETCH_PROVIDERS.has(provider)) {
         return { baseUrl: DEFAULT_CRAWL4AI_URL, provider, configured: false, probe: false };
     }
     if (provider === 'auto') {
@@ -3655,22 +3664,43 @@ async function maybeFetchWithCrawl4ai(url, args = {}, timeoutMs = 90000) {
     };
 }
 
-async function webFetch(args = {}) {
-    const url = normalizeString(args.url || args.uri);
-    if (!/^https?:\/\//i.test(url)) {
-        return errorResult('web_fetch requires http(s) url');
+function buildRenderedFallbackArgs(args = {}) {
+    return {
+        ...args,
+        provider: 'crawl4ai',
+        fetchProvider: 'crawl4ai',
+        fetch_provider: 'crawl4ai'
+    };
+}
+
+function shouldRetryRenderedFetchAfterStaticResult({ details = {}, args = {}, crawl4aiAttempt = null, fetched = {} } = {}) {
+    const evidenceQuality = normalizeString(details.evidenceQuality || details.observationContract?.evidence_quality);
+    if (!RENDERED_FALLBACK_EVIDENCE_QUALITIES.has(evidenceQuality)) {
+        return false;
     }
-    const maxChars = clampNumber(args.maxChars || args.max_chars, MAX_FETCH_CHARS, 1000, 80000);
-    const crawl4aiAttempt = await maybeFetchWithCrawl4ai(url, args, 90000);
-    const wikiText = crawl4aiAttempt?.ok ? null : await maybeFetchWikipediaWikitext(url, 90000);
-    const fetched = crawl4aiAttempt?.ok ? crawl4aiAttempt : wikiText || await fetchText(url, 90000);
-    if (!fetched.ok) {
-        return errorResult(fetched.error || 'web_fetch fetch failed', buildHttpAccessFailureDetails(url, fetched));
+    if (fetched?.kind === 'crawl4ai_markdown' || normalizeString(details.fetchBackend) === 'crawl4ai') {
+        return false;
     }
+    const provider = normalizeString(
+        args.fetchProvider ||
+        args.fetch_provider ||
+        args.provider ||
+        process.env.AILIS_WEB_FETCH_PROVIDER ||
+        'auto',
+        'auto'
+    ).toLowerCase();
+    if (provider === 'builtin' || provider === 'current' || provider === 'html') {
+        return false;
+    }
+    const explicitlyRendered = CRAWL4AI_FETCH_PROVIDERS.has(provider);
+    const configured = hasConfiguredCrawl4aiUrl(args);
+    const previousFullAttempt = crawl4aiAttempt && crawl4aiAttempt.probe !== true;
+    const defaultProbeTimedOut = crawl4aiAttempt?.probe === true && normalizeString(crawl4aiAttempt.errorCode) === 'timeout';
+    return explicitlyRendered || configured || previousFullAttempt || defaultProbeTimedOut;
+}
+
+function buildWebFetchResult({ url, args = {}, maxChars = MAX_FETCH_CHARS, fetched = {}, crawl4aiAttempt = null, renderedFallbackAttempt = null, renderedFallbackUsed = false, renderedFallbackTrigger = '' } = {}) {
     const contentType = fetched.contentType || '';
-    if (isPdfContentType(contentType) || fetched.isPdf || fetched.isBinary || !isReadableTextContentType(contentType)) {
-        return unsupportedContentTypeResult('web_fetch', url, fetched, ['pdf_extract_text', 'download_file']);
-    }
     const body = fetched.text;
     const rawText = fetched.kind === 'wikipedia_wikitext'
         ? stripWikiText(body)
@@ -3748,8 +3778,66 @@ async function webFetch(args = {}) {
         recoveryHint,
         pageStatus: quality.pageStatus || undefined,
         encodingRepair: encodingRepair.repaired ? 'latin1_to_utf8' : undefined,
-        crawl4aiAttempt: summarizeCrawl4aiAttempt(crawl4aiAttempt)
+        crawl4aiAttempt: summarizeCrawl4aiAttempt(crawl4aiAttempt),
+        renderedFallbackAttempt: summarizeCrawl4aiAttempt(renderedFallbackAttempt),
+        renderedFallbackUsed: renderedFallbackUsed || undefined,
+        renderedFallbackTrigger: normalizeString(renderedFallbackTrigger)
     });
+}
+
+async function webFetch(args = {}) {
+    const url = normalizeString(args.url || args.uri);
+    if (!/^https?:\/\//i.test(url)) {
+        return errorResult('web_fetch requires http(s) url');
+    }
+    const maxChars = clampNumber(args.maxChars || args.max_chars, MAX_FETCH_CHARS, 1000, 80000);
+    const crawl4aiAttempt = await maybeFetchWithCrawl4ai(url, args, 90000);
+    const wikiText = crawl4aiAttempt?.ok ? null : await maybeFetchWikipediaWikitext(url, 90000);
+    const fetched = crawl4aiAttempt?.ok ? crawl4aiAttempt : wikiText || await fetchText(url, 90000);
+    if (!fetched.ok) {
+        return errorResult(fetched.error || 'web_fetch fetch failed', buildHttpAccessFailureDetails(url, fetched));
+    }
+    const contentType = fetched.contentType || '';
+    if (isPdfContentType(contentType) || fetched.isPdf || fetched.isBinary || !isReadableTextContentType(contentType)) {
+        return unsupportedContentTypeResult('web_fetch', url, fetched, ['pdf_extract_text', 'download_file']);
+    }
+    const primaryResult = buildWebFetchResult({
+        url,
+        args,
+        maxChars,
+        fetched,
+        crawl4aiAttempt
+    });
+    const primaryDetails = primaryResult.structuredContent || {};
+    if (shouldRetryRenderedFetchAfterStaticResult({ details: primaryDetails, args, crawl4aiAttempt, fetched })) {
+        const renderedFallbackAttempt = await maybeFetchWithCrawl4ai(url, buildRenderedFallbackArgs(args), 90000);
+        if (renderedFallbackAttempt?.ok) {
+            return buildWebFetchResult({
+                url,
+                args,
+                maxChars,
+                fetched: {
+                    ...renderedFallbackAttempt,
+                    fallbackFrom: normalizeString(fetched.backend || fetched.kind, 'static_fetch'),
+                    primaryErrorCode: primaryDetails.evidenceQuality
+                },
+                crawl4aiAttempt,
+                renderedFallbackAttempt,
+                renderedFallbackUsed: true,
+                renderedFallbackTrigger: primaryDetails.evidenceQuality
+            });
+        }
+        return buildWebFetchResult({
+            url,
+            args,
+            maxChars,
+            fetched,
+            crawl4aiAttempt,
+            renderedFallbackAttempt,
+            renderedFallbackTrigger: primaryDetails.evidenceQuality
+        });
+    }
+    return primaryResult;
 }
 
 function extractTextFromToolResult(result = {}, maxChars = 3000) {
@@ -7750,7 +7838,7 @@ const TOOLS = [
     },
     {
         name: 'web_fetch',
-        description: 'Fetch a public HTTP(S) HTML or text resource and return readable text plus a structured HTML relationship map when HTML is available. In auto mode, web_fetch first short-probes local Crawl4AI at AILIS_CRAWL4AI_URL/CRAWL4AI_URL or http://127.0.0.1:11235 for Markdown, then falls back to the current fetch/extract path when unavailable; provider=builtin/current/html disables this. The relationship map exposes title/metadata, heading sections, ranked links with context, JSON-LD entities, key-value facts, table rows, and relation triples so the model can reason over page structure instead of plain text only. Rejects PDF/binary content with unsupported_content_type; use pdf_extract_text or download_file for PDFs/files. For archive, listing, search-result, table-of-contents, or journal issue pages, pass query/contains with task terms such as author, year, topic, or answer clue so excerpts and linked resources are ranked against the task instead of newest/first links.',
+        description: 'Fetch a public HTTP(S) HTML or text resource and return readable text plus a structured HTML relationship map when HTML is available. In auto mode, web_fetch first short-probes local Crawl4AI at AILIS_CRAWL4AI_URL/CRAWL4AI_URL or http://127.0.0.1:11235 for Markdown, then falls back to the current fetch/extract path when unavailable; if the static result is a JavaScript loading shell or thin non-evidence page, it can retry through rendered/Crawl4AI-style extraction when Crawl4AI is configured, explicitly requested with provider=crawl4ai/rendered/browser, or the default probe timed out. provider=builtin/current/html disables rendered fallback. The relationship map exposes title/metadata, heading sections, ranked links with context, JSON-LD entities, key-value facts, table rows, and relation triples so the model can reason over page structure instead of plain text only. Rejects PDF/binary content with unsupported_content_type; use pdf_extract_text or download_file for PDFs/files. For archive, listing, search-result, table-of-contents, or journal issue pages, pass query/contains with task terms such as author, year, topic, or answer clue so excerpts and linked resources are ranked against the task instead of newest/first links.',
         inputSchema: {
             type: 'object',
             required: ['url'],
@@ -7759,7 +7847,7 @@ const TOOLS = [
                 maxChars: { type: 'number' },
                 query: { type: 'string' },
                 contains: { type: 'string' },
-                provider: { type: 'string', description: 'Optional fetch provider selector: auto, crawl4ai, builtin/current/html. Prefer omitting this unless testing a provider.' },
+                provider: { type: 'string', description: 'Optional fetch provider selector: auto, crawl4ai/rendered/browser, builtin/current/html. Prefer omitting this unless testing a provider.' },
                 fetchProvider: { type: 'string', description: 'Compatibility alias for provider. Prefer provider.' },
                 crawl4aiUrl: { type: 'string', description: 'Optional Crawl4AI base URL override. Prefer configuring AILIS_CRAWL4AI_URL instead of passing this per call.' }
             },
