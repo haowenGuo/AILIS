@@ -822,6 +822,29 @@ const SEARCH_QUERY_STOPWORDS = new Set([
     'these', 'this', 'those', 'what', 'when', 'where', 'which', 'with'
 ]);
 
+const CJK_SEARCH_QUERY_STOPWORDS = new Set([
+    '一个', '一下', '什么', '怎么', '如何', '最新'
+]);
+
+const GUIDE_QUERY_TERMS = new Set([
+    '攻略', '完整攻略', '图文攻略', '角色攻略', '平民攻略', '配队', '配装', '驱动盘',
+    '音擎', '技能', '技能机制', '输出手法', '抽取建议', '养成', 'build', 'guide',
+    'walkthrough', 'strategy', 'tier', 'team', 'teams'
+]);
+
+const GUIDE_SOURCE_DOMAINS = [
+    'bilibili.com',
+    'wiki.biligame.com',
+    'taptap.cn',
+    'gamersky.com',
+    '17173.com',
+    'nga.cn',
+    'bbs.nga.cn',
+    'mihoyo.com',
+    'hoyoverse.com',
+    'hoyolab.com'
+];
+
 const MONTH_QUERY_TERMS = new Set([
     'january', 'february', 'march', 'april', 'may', 'june',
     'july', 'august', 'september', 'october', 'november', 'december'
@@ -839,34 +862,108 @@ function extractSearchQueryTerms(query = '') {
     const sanitized = normalizeString(query)
         .replace(/\bsite:[^\s]+/gi, ' ')
         .replace(/\bhttps?:\/\/\S+/gi, ' ')
-        .replace(/["'“”‘’()[\]{}]/g, ' ');
+        .replace(/["'“”‘’()[\]{}]/g, ' ')
+        .replace(/[|,，。！？；;:：、/\\]+/g, ' ');
     const rawTerms = sanitized.toLowerCase().match(/[a-z0-9]{3,}/g) || [];
     const terms = [];
     const seen = new Set();
+    const addTerm = (term) => {
+        const normalized = normalizeString(term).toLowerCase();
+        if (!normalized) {
+            return;
+        }
+        if (SEARCH_QUERY_STOPWORDS.has(normalized) || CJK_SEARCH_QUERY_STOPWORDS.has(normalized)) {
+            return;
+        }
+        if (/^\d{1,3}$/.test(normalized)) {
+            return;
+        }
+        if (seen.has(normalized)) {
+            return;
+        }
+        seen.add(normalized);
+        terms.push(normalized);
+    };
     for (const term of rawTerms) {
-        if (SEARCH_QUERY_STOPWORDS.has(term)) {
-            continue;
+        addTerm(term);
+        if (terms.length >= 16) {
+            break;
         }
-        if (/^\d{1,3}$/.test(term)) {
-            continue;
-        }
-        if (seen.has(term)) {
-            continue;
-        }
-        seen.add(term);
-        terms.push(term);
-        if (terms.length >= 10) {
+    }
+    const cjkTerms = sanitized.match(/[\p{Script=Han}]{2,16}/gu) || [];
+    for (const term of cjkTerms) {
+        addTerm(term);
+        if (terms.length >= 16) {
             break;
         }
     }
     return terms;
 }
 
+function extractSearchSiteConstraints(query = '') {
+    const sites = [];
+    const seen = new Set();
+    for (const match of normalizeString(query).matchAll(/\bsite:([^\s]+)/gi)) {
+        const raw = normalizeString(match[1])
+            .replace(/^https?:\/\//i, '')
+            .replace(/^www\./i, '')
+            .replace(/\/.*$/g, '')
+            .toLowerCase();
+        if (!raw || seen.has(raw)) {
+            continue;
+        }
+        seen.add(raw);
+        sites.push(raw);
+    }
+    return sites;
+}
+
+function normalizeSearchText(value = '') {
+    return normalizeString(value)
+        .toLowerCase()
+        .replace(/[^\p{Script=Han}a-z0-9]+/gu, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function compactSearchText(value = '') {
+    return normalizeSearchText(value).replace(/\s+/g, '');
+}
+
 function extractQuotedSearchPhrases(query = '') {
     return Array.from(normalizeString(query).matchAll(/"([^"]{3,})"/g))
-        .map((match) => normalizePaperTitle(match[1]))
+        .map((match) => normalizeSearchText(match[1]))
         .filter(Boolean)
         .slice(0, 5);
+}
+
+function extractHostname(value = '') {
+    try {
+        return new URL(normalizeString(value)).hostname.replace(/^www\./i, '').toLowerCase();
+    } catch {
+        return '';
+    }
+}
+
+function hostMatchesSiteConstraint(host = '', site = '') {
+    const normalizedHost = normalizeString(host).replace(/^www\./i, '').toLowerCase();
+    const normalizedSite = normalizeString(site).replace(/^www\./i, '').toLowerCase();
+    return Boolean(
+        normalizedHost &&
+        normalizedSite &&
+        (normalizedHost === normalizedSite || normalizedHost.endsWith(`.${normalizedSite}`))
+    );
+}
+
+function isGuideSearchQuery(query = '') {
+    const terms = extractSearchQueryTerms(query);
+    return terms.some((term) => GUIDE_QUERY_TERMS.has(term)) ||
+        /(攻略|配队|配装|驱动盘|音擎|输出手法|抽取建议|build|guide|walkthrough|strategy)/i.test(query);
+}
+
+function isGuideSourceDomain(host = '') {
+    const normalizedHost = normalizeString(host).replace(/^www\./i, '').toLowerCase();
+    return GUIDE_SOURCE_DOMAINS.some((domain) => hostMatchesSiteConstraint(normalizedHost, domain));
 }
 
 function looksScholarlySearchQuery(query = '') {
@@ -995,37 +1092,119 @@ function inferPaperMetadataArgsFromScholarlyQuery(query = '') {
 }
 
 function scoreSearchResultAgainstQuery(result = {}, query = '') {
-    const normalizedText = normalizePaperTitle([
+    const normalizedText = normalizeSearchText([
         normalizeString(result.title),
         normalizeString(result.snippet),
         normalizeString(result.url)
     ].join(' '));
-    const titleText = normalizePaperTitle(normalizeString(result.title));
+    const compactText = compactSearchText([
+        normalizeString(result.title),
+        normalizeString(result.snippet),
+        normalizeString(result.url)
+    ].join(' '));
+    const titleText = normalizeSearchText(normalizeString(result.title));
+    const compactTitle = compactSearchText(normalizeString(result.title));
     const matchedTerms = [];
     let score = 0;
     for (const term of extractSearchQueryTerms(query)) {
-        const normalizedTerm = normalizePaperTitle(term);
-        if (!normalizedTerm || !normalizedText.includes(normalizedTerm)) {
+        const normalizedTerm = normalizeSearchText(term);
+        const compactTerm = compactSearchText(term);
+        if (!normalizedTerm || !compactTerm) {
             continue;
         }
+        const isCjk = /[\p{Script=Han}]/u.test(compactTerm);
+        const matched = isCjk
+            ? compactText.includes(compactTerm)
+            : normalizedText.includes(normalizedTerm);
+        if (!matched) {
+            continue;
+        }
+        const titleMatched = isCjk
+            ? compactTitle.includes(compactTerm)
+            : titleText.includes(normalizedTerm);
         matchedTerms.push(term);
-        score += /^\d{4}$/.test(term) ? 8 : term.length >= 6 ? 18 : 12;
-        if (titleText.includes(normalizedTerm)) {
-            score += 6;
+        score += /^(?:18|19|20)\d{2}$/.test(compactTerm) ? 6 : compactTerm.length >= 6 ? 18 : 12;
+        if (isCjk) {
+            score += compactTerm.length >= 4 ? 10 : 6;
+        }
+        if (GUIDE_QUERY_TERMS.has(compactTerm)) {
+            score += 10;
+        }
+        if (titleMatched) {
+            score += isCjk ? 12 : 8;
         }
     }
     for (const phrase of extractQuotedSearchPhrases(query)) {
-        if (phrase && normalizedText.includes(phrase)) {
+        const compactPhrase = compactSearchText(phrase);
+        if (compactPhrase && compactText.includes(compactPhrase)) {
             score += 45;
         }
     }
+    const host = extractHostname(result.url);
+    const siteConstraints = extractSearchSiteConstraints(query);
+    const matchedSites = siteConstraints.filter((site) => hostMatchesSiteConstraint(host, site));
+    if (matchedSites.length && matchedTerms.length) {
+        score += 30;
+    } else if (matchedSites.length) {
+        score += 5;
+    } else if (siteConstraints.length) {
+        score -= 20;
+    }
+    const guideSource = isGuideSearchQuery(query) && isGuideSourceDomain(host);
+    if (guideSource && matchedTerms.length) {
+        score += 12;
+    }
     if (matchedTerms.length >= 2) {
-        score += 20;
+        score += 24;
+    }
+    if (matchedTerms.length >= 3) {
+        score += 18;
     }
     return {
         score,
-        matchedTerms: matchedTerms.slice(0, 6)
+        matchedTerms: matchedTerms.slice(0, 8),
+        matchedSites,
+        guideSource
     };
+}
+
+function isRelevantSearchCandidate(candidate = {}) {
+    const queryScore = Number(candidate.queryScore) || 0;
+    const matchedTerms = Array.isArray(candidate.queryMatchedTerms) ? candidate.queryMatchedTerms : [];
+    const matchedSites = Array.isArray(candidate.queryMatchedSites) ? candidate.queryMatchedSites : [];
+    return (
+        matchedTerms.length >= 2 ||
+        queryScore >= 30 ||
+        (matchedSites.length > 0 && matchedTerms.length >= 1) ||
+        (candidate.guideSource === true && matchedTerms.length >= 1) ||
+        ((candidate.kind === 'doi' || candidate.kind === 'pdf' || candidate.kind === 'paper_abs') && matchedTerms.length >= 1)
+    );
+}
+
+function searchOffTargetThreshold(query = '') {
+    return /[\p{Script=Han}]/u.test(query) ? 24 : 30;
+}
+
+function hasEnoughRelevantSearchEvidence(rankedResults = [], query = '') {
+    const topQueryScore = rankedResults[0]?.queryScore || 0;
+    if (topQueryScore >= searchOffTargetThreshold(query)) {
+        return true;
+    }
+    return rankedResults.some((candidate) => isRelevantSearchCandidate(candidate));
+}
+
+function describeSearchRelevance(rankedResults = []) {
+    return rankedResults.slice(0, 5).map((candidate) => pruneEmptyDeep({
+        title: normalizeString(candidate.title),
+        url: normalizeString(candidate.url),
+        combinedScore: Number.isFinite(candidate.combinedScore) ? Number(candidate.combinedScore.toFixed(2)) : undefined,
+        queryScore: Number.isFinite(candidate.queryScore) ? Number(candidate.queryScore.toFixed(2)) : undefined,
+        researchScore: Number.isFinite(candidate.researchScore) ? Number(candidate.researchScore.toFixed(2)) : undefined,
+        matchedTerms: candidate.queryMatchedTerms?.length ? candidate.queryMatchedTerms.slice(0, 8) : undefined,
+        matchedSites: candidate.queryMatchedSites?.length ? candidate.queryMatchedSites.slice(0, 3) : undefined,
+        guideSource: candidate.guideSource || undefined,
+        kind: normalizeString(candidate.kind)
+    }));
 }
 
 function rankSearchResultsForFollowup(results = [], query = '') {
@@ -1044,6 +1223,8 @@ function rankSearchResultsForFollowup(results = [], query = '') {
                 researchScore: research.score,
                 queryScore: queryMatch.score,
                 queryMatchedTerms: queryMatch.matchedTerms,
+                queryMatchedSites: queryMatch.matchedSites,
+                guideSource: queryMatch.guideSource,
                 combinedScore: queryMatch.score * 4 + research.score
             };
         })
@@ -1052,11 +1233,7 @@ function rankSearchResultsForFollowup(results = [], query = '') {
 
 function buildSuggestedCallsFromSearchResults(results = [], { query = '', limit = 3 } = {}) {
     const ranked = rankSearchResultsForFollowup(results, query);
-    const eligible = ranked.filter((candidate) => (
-        candidate.queryMatchedTerms.length >= 2 ||
-        candidate.queryScore >= 30 ||
-        ((candidate.kind === 'doi' || candidate.kind === 'pdf' || candidate.kind === 'paper_abs') && candidate.queryMatchedTerms.length >= 1)
-    ));
+    const eligible = ranked.filter((candidate) => isRelevantSearchCandidate(candidate));
     const directCalls = buildSuggestedCallsFromRankedLinks(eligible, limit);
     if (directCalls.length) {
         return directCalls;
@@ -1082,8 +1259,7 @@ function filterRankedLinksForQuerySuggestions(rankedLinks = [], query = '') {
     }
     return (Array.isArray(rankedLinks) ? rankedLinks : []).filter((candidate) => (
         candidate.kind === 'pagination' ||
-        Number(candidate.queryScore) >= 30 ||
-        (Array.isArray(candidate.queryMatchedTerms) && candidate.queryMatchedTerms.length >= 2) ||
+        isRelevantSearchCandidate(candidate) ||
         (Array.isArray(candidate.queryMatchedTerms) && candidate.queryMatchedTerms.some((term) => /^(?:18|19|20)\d{2}$/.test(term)))
     ));
 }
@@ -1792,12 +1968,13 @@ async function webSearch(args = {}) {
         ].join('\n')).join('\n\n');
         const baseSuggestedNextCalls = buildSuggestedCallsFromSearchResults(attempt.results, { query, limit: 3 });
         const observedRelevantLinks = rankedResults
-            .filter((candidate) => candidate.queryMatchedTerms.length >= 1 || candidate.kind !== 'web')
+            .filter((candidate) => isRelevantSearchCandidate(candidate))
             .slice(0, 5)
             .map((candidate) => summarizeRelevantLink(candidate));
         const queryFocusTerms = extractSearchQueryTerms(query).slice(0, 6);
         const topQueryScore = rankedResults[0]?.queryScore || 0;
-        const offTarget = baseSuggestedNextCalls.length === 0 && topQueryScore < 30;
+        const searchRelevance = describeSearchRelevance(rankedResults);
+        const offTarget = baseSuggestedNextCalls.length === 0 && !hasEnoughRelevantSearchEvidence(rankedResults, query);
         const suggestedNextCalls = offTarget && looksScholarlySearchQuery(query)
             ? dedupeSuggestedNextCalls([
                 {
@@ -1829,7 +2006,9 @@ async function webSearch(args = {}) {
             overallDurationMs: Date.now() - startedAt,
             overallTimeoutMs,
             attempts,
-            results: attempt.results,
+            results: rankedResults,
+            rawResults: attempt.results,
+            searchRelevance,
             evidenceGap,
             recoveryHint,
             suggestedNextCalls,
@@ -6067,6 +6246,7 @@ module.exports = {
     pdfFindAndExtract,
     pdfExtractText,
     rankLinksForResearch,
+    rankSearchResultsForFollowup,
     readDocument,
     readPresentation,
     SEARCH_BACKENDS,

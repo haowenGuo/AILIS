@@ -25,6 +25,7 @@ const {
     parseGitHubRepoRef,
     pdfFindAndExtract,
     rankLinksForResearch,
+    rankSearchResultsForFollowup,
     readDocument,
     webExtractLinks,
     webFetch,
@@ -883,6 +884,88 @@ test('search follow-up suggestions stay empty for off-target popular results', (
     ], { query: '"Emily Midkiff" Fafnir journal June 2014 dragon' });
 
     assert.deepEqual(calls, []);
+});
+
+test('web_search reranks Chinese game guide results ahead of unrelated popular pages', () => {
+    const results = [
+        {
+            title: 'Date Calculator : Add to or Subtract From a Date',
+            url: 'https://www.timeanddate.com/date/dateadd.html',
+            snippet: 'The Date Calculator adds or subtracts days, weeks, months and years.'
+        },
+        {
+            title: '【绝区零】叶瞬光角色攻略!技能机制|输出手法|配队配装|驱动盘|音擎|毕业面板',
+            url: 'https://www.bilibili.com/video/BV1rXBoBoEv1/',
+            snippet: '小光攻略来了，白毛红瞳，国风剑仙，更多实用攻略教学。'
+        },
+        {
+            title: '小光游戏解说的个人空间',
+            url: 'https://space.bilibili.com/3546657828375410/channel/collectiondetail',
+            snippet: '小光游戏解说分享的视频、音频、文章、动态、收藏等内容。'
+        }
+    ];
+    const ranked = rankSearchResultsForFollowup(results, '游戏 小光 角色 攻略 site:bilibili.com');
+    const calls = buildSuggestedCallsFromSearchResults(results, {
+        query: '游戏 小光 角色 攻略 site:bilibili.com'
+    });
+
+    assert.equal(ranked[0].url, 'https://www.bilibili.com/video/BV1rXBoBoEv1/');
+    assert.ok(ranked[0].queryScore >= 30);
+    assert.ok(ranked[0].queryMatchedTerms.includes('小光'));
+    assert.ok(ranked[0].queryMatchedTerms.includes('攻略'));
+    assert.deepEqual(ranked[0].queryMatchedSites, ['bilibili.com']);
+    assert.equal(calls[0].tool, 'web_fetch');
+    assert.equal(calls[0].args.url, 'https://www.bilibili.com/video/BV1rXBoBoEv1/');
+});
+
+test('web_search does not treat a site match alone as relevant evidence', () => {
+    const calls = buildSuggestedCallsFromSearchResults([
+        {
+            title: '哔哩哔哩 (゜-゜)つロ 干杯~-bilibili',
+            url: 'https://www.bilibili.com/',
+            snippet: '国内知名的视频弹幕网站，这里有及时的动漫新番和活跃的 ACG 氛围。'
+        },
+        {
+            title: '《流水》管平湖(全版本)_哔哩哔哩_bilibili',
+            url: 'https://www.bilibili.com/video/BV1GW41157xT/',
+            snippet: '古琴曲集和演奏视频。'
+        }
+    ], { query: '游戏 小光 角色 攻略 site:bilibili.com' });
+
+    assert.deepEqual(calls, []);
+});
+
+test('web_search site-constrained rerank prefers high-signal NGA guide threads', () => {
+    const results = [
+        {
+            title: '《绝区零》官网-3.0全新版本',
+            url: 'https://zzz.mihoyo.com/main/',
+            snippet: '《绝区零》是米哈游自研的全新都市动作冒险游戏。'
+        },
+        {
+            title: '[强度氵]平民叶瞬光照耀组队讲解大全 Nga玩家社区',
+            url: 'https://bbs.nga.cn/read.php?tid=45897738',
+            snippet: '平民叶瞬光照耀组队讲解大全，配队和养成讨论。'
+        },
+        {
+            title: '[攻略]V5叶瞬光最佳驱动盘组合 Nga玩家社区',
+            url: 'https://bbs.nga.cn/read.php?tid=45766924',
+            snippet: '叶瞬光驱动盘组合、配装和队伍建议。'
+        }
+    ];
+    const ranked = rankSearchResultsForFollowup(
+        results,
+        '绝区零 叶瞬光 小光 完整攻略 技能 配装 配队 site:nga.cn'
+    );
+    const calls = buildSuggestedCallsFromSearchResults(results, {
+        query: '绝区零 叶瞬光 小光 完整攻略 技能 配装 配队 site:nga.cn'
+    });
+
+    assert.match(ranked[0].url, /bbs\.nga\.cn/);
+    assert.deepEqual(ranked[0].queryMatchedSites, ['nga.cn']);
+    assert.ok(ranked[0].queryMatchedTerms.includes('叶瞬光'));
+    assert.equal(calls[0].tool, 'web_fetch');
+    assert.match(calls[0].args.url, /bbs\.nga\.cn/);
 });
 
 test('inferPaperMetadataArgsFromScholarlyQuery extracts author year venue and topic clues', () => {
