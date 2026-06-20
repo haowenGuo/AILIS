@@ -1367,6 +1367,120 @@ test('web_research expands query variants and fetches the high-signal result', a
     });
 });
 
+test('web_research exact entity planning preserves specific target terms', async () => {
+    const searchQueries = [];
+    const guideBody = [
+        '<h1>叶瞬光小光完整攻略</h1>',
+        '<p>叶瞬光也被玩家称为小光，攻略包含技能机制、驱动盘、音擎、配队和输出手法。</p>',
+        `<p>${'叶瞬光的队伍需要围绕核心技能窗口规划输出，驱动盘选择和音擎搭配会影响循环稳定性。'.repeat(90)}</p>`
+    ].join('');
+    await withServer((request, response) => {
+        const url = new URL(request.url || '/', 'http://127.0.0.1');
+        if (url.pathname === '/search') {
+            const query = url.searchParams.get('q') || '';
+            searchQueries.push(query);
+            response.writeHead(200, { 'content-type': 'application/json' });
+            if (query.includes('"叶瞬光"') && query.includes('"小光"')) {
+                response.end(JSON.stringify({
+                    results: [
+                        {
+                            title: '叶瞬光小光完整攻略',
+                            url: `http://${request.headers.host}/xiaoguang-guide`,
+                            content: '叶瞬光也叫小光，技能机制、驱动盘、音擎、配队和输出手法攻略。'
+                        }
+                    ]
+                }));
+                return;
+            }
+            response.end(JSON.stringify({
+                results: [
+                    {
+                        title: '《绝区零》官网',
+                        url: `http://${request.headers.host}/official-home`,
+                        content: '绝区零官方首页，新闻、版本动态和活动公告。'
+                    }
+                ]
+            }));
+            return;
+        }
+        if (url.pathname === '/xiaoguang-guide') {
+            response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+            response.end(`<html><head><title>叶瞬光小光完整攻略</title></head><body>${guideBody}</body></html>`);
+            return;
+        }
+        if (url.pathname === '/official-home') {
+            response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+            response.end('<html><body><h1>绝区零官网</h1><p>官方新闻和活动。</p></body></html>');
+            return;
+        }
+        response.writeHead(404);
+        response.end('not found');
+    }, async (baseUrl) => {
+        const result = await webResearch({
+            query: '绝区零 叶瞬光 小光 攻略',
+            provider: 'searxng',
+            fetchProvider: 'builtin',
+            searxngUrl: baseUrl,
+            maxSearchQueries: 3,
+            maxPages: 1,
+            maxCharsPerPage: 12000
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.equal(result.structuredContent.answerReadiness, 'ready');
+        assert.ok(searchQueries.includes('绝区零 "叶瞬光" "小光" 攻略'));
+        assert.equal(result.structuredContent.evidencePages[0].url, `${baseUrl}/xiaoguang-guide`);
+        assert.equal(result.structuredContent.evidencePages[0].evidenceQuality, 'sufficient_evidence');
+    });
+});
+
+test('web_research does not mark broad source pages ready when target terms are missing', async () => {
+    const broadBody = [
+        '<h1>绝区零 WIKI 首页</h1>',
+        '<p>这里包含绝区零新闻、角色索引、版本活动、基础玩法和社区入口。</p>',
+        `<p>${'绝区零是一款动作游戏，这个页面介绍游戏背景、官网入口、基础系统和版本动态。'.repeat(120)}</p>`
+    ].join('');
+    await withServer((request, response) => {
+        const url = new URL(request.url || '/', 'http://127.0.0.1');
+        if (url.pathname === '/search') {
+            response.writeHead(200, { 'content-type': 'application/json' });
+            response.end(JSON.stringify({
+                results: [
+                    {
+                        title: '绝区零 WIKI 首页',
+                        url: `http://${request.headers.host}/broad-wiki`,
+                        content: '绝区零新闻、角色索引、版本活动和基础系统。'
+                    }
+                ]
+            }));
+            return;
+        }
+        if (url.pathname === '/broad-wiki') {
+            response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+            response.end(`<html><head><title>绝区零 WIKI 首页</title></head><body>${broadBody}</body></html>`);
+            return;
+        }
+        response.writeHead(404);
+        response.end('not found');
+    }, async (baseUrl) => {
+        const result = await webResearch({
+            query: '绝区零 叶瞬光 小光 攻略',
+            provider: 'searxng',
+            fetchProvider: 'builtin',
+            searxngUrl: baseUrl,
+            maxSearchQueries: 2,
+            maxPages: 1,
+            maxCharsPerPage: 12000
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.equal(result.structuredContent.answerReadiness, 'needs_followup');
+        assert.equal(result.structuredContent.evidencePages[0].evidenceQuality, 'off_target_evidence');
+        assert.equal(result.structuredContent.evidencePages[0].reasoningReady, false);
+        assert.deepEqual(result.structuredContent.evidencePages[0].targetCoverage.missingSpecificTargetTerms, ['叶瞬光', '小光']);
+    });
+});
+
 test('web_research reranks fetched pages by evidence score instead of search order', async () => {
     const guideBody = [
         '<h1>星见雅攻略</h1>',

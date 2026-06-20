@@ -1506,7 +1506,7 @@ function buildWebResearchQueryPlan(query = '', args = {}) {
     const addVariant = ({ searchQuery = '', backendQuery = '', role = '', reason = '' } = {}) => {
         const normalizedSearchQuery = normalizeString(searchQuery);
         const normalizedBackendQuery = normalizeString(backendQuery || searchQuery);
-        const key = normalizeSearchText(`${normalizedSearchQuery}\n${normalizedBackendQuery}`);
+        const key = `${normalizedSearchQuery}\n${normalizedBackendQuery}`.replace(/\s+/g, ' ').trim().toLowerCase();
         if (!normalizedSearchQuery || !normalizedBackendQuery || seen.has(key)) {
             return;
         }
@@ -1538,11 +1538,18 @@ function buildWebResearchQueryPlan(query = '', args = {}) {
     const guideTerms = extractGuideTermsFromQuery(original);
     if (entityTerms.length && guideTerms.length && hasSpecificSearchContext(original, entityTerms)) {
         const guideTerm = guideTerms.includes('攻略') ? '攻略' : guideTerms[0];
+        const exactEntityTerms = entityTerms.length > 1 ? entityTerms.slice(1, 3) : entityTerms.slice(0, 1);
+        const contextTerms = entityTerms.length > 1 ? entityTerms.slice(0, 1) : [];
+        const exactQuery = [
+            ...contextTerms,
+            ...exactEntityTerms.map((term) => `"${term}"`),
+            guideTerm
+        ].join(' ');
         addVariant({
-            searchQuery: `"${entityTerms[0]}" ${guideTerm}`,
-            backendQuery: `"${entityTerms[0]}" ${guideTerm}`,
+            searchQuery: exactQuery,
+            backendQuery: exactQuery,
             role: 'exact_entity',
-            reason: 'Add an exact entity phrase for guide tasks with enough context to reduce noisy popularity matches.'
+            reason: 'Add exact target entity phrases for guide tasks with enough context to reduce broad source or game-homepage matches.'
         });
     }
     if (!quotedPhrases.length && !/[\p{Script=Han}]/u.test(original)) {
@@ -3805,11 +3812,50 @@ function extractEvidenceSnippetsFromText(text = '', query = '', limit = 4) {
     return snippets;
 }
 
+function specificTargetTermsForQuery(query = '') {
+    const entityTerms = extractShortCjkEntityTerms(query);
+    if (entityTerms.length <= 1) {
+        return [];
+    }
+    return entityTerms.slice(1, 4);
+}
+
+function assessWebResearchTargetCoverage(text = '', query = '', strongText = '') {
+    const requiredTerms = specificTargetTermsForQuery(query);
+    if (!requiredTerms.length) {
+        return undefined;
+    }
+    const compactText = compactSearchText(text);
+    const compactStrongText = compactSearchText(strongText);
+    const matchedSpecificTargetTerms = [];
+    const missingSpecificTargetTerms = [];
+    const strongMatchedSpecificTargetTerms = [];
+    for (const term of requiredTerms) {
+        const compactTerm = compactSearchText(term);
+        if (compactTerm && compactText.includes(compactTerm)) {
+            matchedSpecificTargetTerms.push(term);
+        } else {
+            missingSpecificTargetTerms.push(term);
+        }
+        if (compactTerm && compactStrongText.includes(compactTerm)) {
+            strongMatchedSpecificTargetTerms.push(term);
+        }
+    }
+    return pruneEmptyDeep({
+        requiredSpecificTargetTerms: requiredTerms,
+        matchedSpecificTargetTerms,
+        strongMatchedSpecificTargetTerms,
+        missingSpecificTargetTerms,
+        specificTargetCovered: missingSpecificTargetTerms.length === 0 || strongMatchedSpecificTargetTerms.length > 0
+    });
+}
+
 function scoreWebResearchPage(page = {}, query = '') {
     const qualityScores = {
         sufficient_evidence: 42,
         partial_evidence: 24,
         thin_content: 6,
+        off_target_evidence: -18,
         js_shell: -38,
         access_denied: -34,
         access_challenge: -34,
@@ -3832,8 +3878,14 @@ function scoreWebResearchPage(page = {}, query = '') {
     const snippetScore = Math.min(12, (Array.isArray(page.evidenceSnippets) ? page.evidenceSnippets.length : 0) * 3);
     const lengthScore = Math.min(12, Math.floor(returnedChars / 1200));
     const sourceScore = Math.min(8, Math.max(0, (Array.isArray(page.sourceBackends) ? page.sourceBackends.length : 0) - 1) * 4);
-    const rawScore = qualityScore + evidenceFlagScore + readyScore + relationScore + snippetScore + lengthScore + sourceScore + queryScore * 0.24;
-    const score = Math.max(0, Math.min(100, Math.round(rawScore)));
+    const targetCoverage = page.targetCoverage || {};
+    const missingTargetCount = targetCoverage.specificTargetCovered === false && Array.isArray(targetCoverage.missingSpecificTargetTerms)
+        ? targetCoverage.missingSpecificTargetTerms.length
+        : 0;
+    const targetPenalty = missingTargetCount > 0 ? 45 : 0;
+    const rawScore = qualityScore + evidenceFlagScore + readyScore + relationScore + snippetScore + lengthScore + sourceScore + queryScore * 0.24 - targetPenalty;
+    const cappedScore = missingTargetCount > 0 ? Math.min(rawScore, 45) : rawScore;
+    const score = Math.max(0, Math.min(100, Math.round(cappedScore)));
     return {
         score,
         breakdown: pruneEmptyDeep({
@@ -3844,6 +3896,7 @@ function scoreWebResearchPage(page = {}, query = '') {
             snippetScore,
             lengthScore,
             sourceScore,
+            targetPenalty,
             queryScore: Number(queryScore.toFixed(2)),
             query: normalizeString(query)
         })
@@ -3852,8 +3905,21 @@ function scoreWebResearchPage(page = {}, query = '') {
 
 function summarizeWebResearchPage(candidate = {}, fetchResult = {}, query = '') {
     const details = fetchResult.structuredContent || fetchResult.details || {};
-    const evidenceQuality = normalizeString(details.evidenceQuality || details.observationContract?.evidence_quality);
+    let evidenceQuality = normalizeString(details.evidenceQuality || details.observationContract?.evidence_quality);
     const fullText = extractTextFromToolResult(fetchResult, 16000);
+    const targetCoverage = assessWebResearchTargetCoverage([
+        candidate.title,
+        candidate.url,
+        fullText
+    ].filter(Boolean).join('\n'), query, [
+        candidate.title,
+        candidate.url
+    ].filter(Boolean).join('\n'));
+    const missingTargetTerms = targetCoverage?.missingSpecificTargetTerms || [];
+    const targetCovered = targetCoverage?.specificTargetCovered !== false;
+    if (!targetCovered && !['js_shell', 'encoding_failure', 'access_denied', 'access_challenge'].includes(evidenceQuality)) {
+        evidenceQuality = 'off_target_evidence';
+    }
     const page = pruneEmptyDeep({
         title: normalizeString(candidate.title),
         url: normalizeString(candidate.url),
@@ -3868,14 +3934,19 @@ function summarizeWebResearchPage(candidate = {}, fetchResult = {}, query = '') 
         fetchStatus: details.status || (fetchResult.isError ? 'error' : 'completed'),
         fetchBackend: normalizeString(details.fetchBackend),
         evidenceQuality,
-        isEvidence: details.isEvidence,
-        reasoningReady: details.reasoningReady === true || details.observationContract?.reasoning_ready === true,
-        complete: details.complete === true || details.observationContract?.complete === true,
+        isEvidence: targetCovered ? details.isEvidence : false,
+        reasoningReady: targetCovered && (details.reasoningReady === true || details.observationContract?.reasoning_ready === true),
+        complete: targetCovered && (details.complete === true || details.observationContract?.complete === true),
         returnedChars: details.returnedChars,
         originalChars: details.originalChars,
         pageStatus: normalizeString(details.pageStatus),
-        evidenceGap: normalizeString(details.evidenceGap),
-        recoveryHint: normalizeString(details.recoveryHint),
+        evidenceGap: !targetCovered && missingTargetTerms.length
+            ? `Fetched page does not contain the required target terms: ${missingTargetTerms.join(', ')}.`
+            : normalizeString(details.evidenceGap),
+        recoveryHint: !targetCovered && missingTargetTerms.length
+            ? 'Follow a more specific result that contains the target entity, or refine the search query with the target full name.'
+            : normalizeString(details.recoveryHint),
+        targetCoverage,
         observedRelevantLinks: Array.isArray(details.observedRelevantLinks) ? details.observedRelevantLinks.slice(0, 5) : undefined,
         suggestedNextCalls: Array.isArray(details.suggestedNextCalls) ? details.suggestedNextCalls.slice(0, 5) : undefined,
         htmlRelations: details.htmlRelations,

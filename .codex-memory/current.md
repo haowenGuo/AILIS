@@ -3,7 +3,7 @@
 Date/time: 2026-06-20 Asia/Shanghai
 Workspace: `F:\AILIS_self_evolution_runtime`
 Branch: `AILIS-self-evolution`
-Git state: latest committed work includes `7080f51` for the first `web_research` evidence-bundle pipeline. Active patch upgrades that pipeline toward product-grade SearXNG/Firecrawl/Crawl4AI-like quality with query planning, evidence scoring, diagnostics, and routing. Stage only active-task files because the repo has many unrelated historical changes.
+Git state: latest committed work includes `115fbd9` for product-grade `web_research` query planning, evidence scoring, diagnostics, and routing. Active patch comes from testing `{做一个小光的攻略}` and tightens exact-query de-duplication plus target-entity coverage. Stage only active-task files because the repo has many unrelated historical changes.
 
 ## Objective
 - Make AILIS web research safer, more Codex-like, and more generic.
@@ -24,6 +24,8 @@ Git state: latest committed work includes `7080f51` for the first `web_research`
   - Query expansion is adaptive: high-confidence results with fetch candidates stop early by default; `expandQueries:true` can force all planned variants.
   - Search results from query variants are merged, de-duplicated, re-ranked, and surfaced with `searchQueries` / `searchAggregation.queryPlan` diagnostics.
   - Fetched pages now get `evidenceScore`, `evidenceScoreBreakdown`, and `evidenceSnippets`, then are sorted by evidence quality rather than raw search order.
+  - Active patch preserves exact-query quote semantics during query-plan de-duplication, so `绝区零 叶瞬光 小光 攻略` can expand to `绝区零 "叶瞬光" "小光" 攻略`.
+  - Active patch adds target-entity coverage checks. Multi-entity guide tasks no longer treat broad source/homepage pages as ready evidence unless a specific target term is covered strongly or all required specific target terms are present.
   - `pipelineSteps` records query planning, search outcomes, candidate ranking, and fetch/evidence-quality diagnostics.
   - `web_research` stops before fetching when `searchConfidence` requires clarification, preserving the existing short-nickname ambiguity guard.
   - Default `web_search` provider chain remains `searxng_json -> firecrawl_search -> bing_html -> duckduckgo_lite -> duckduckgo_html -> yahoo_html`.
@@ -50,8 +52,10 @@ Git state: latest committed work includes `7080f51` for the first `web_research`
 ## Validation
 - `node --check scripts\mcp-ailis-research-server.cjs`: passed.
 - `node --check electron\ailis-tool-routing.cjs`: passed.
-- `node --test tests\mcp-ailis-research-server.test.mjs`: 54/54 passed.
+- `node --test tests\mcp-ailis-research-server.test.mjs`: 56/56 passed.
 - `node --test tests\ailis-tool-layer.test.mjs`: 17/17 passed.
+- Real `webResearch({query:"做一个小光的攻略"})`: returned `clarification_required`, `needs_clarification`, no pages fetched.
+- Real `webResearch({query:"绝区零 叶瞬光 小光 攻略"})`: generated exact target query; current live Bing fallback still returns broad ZZZ pages, now marked `off_target_evidence` / `needs_followup` instead of false-ready.
 - `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup-ailis-local-web-stack.ps1 -Root .local\ailis-web-stack-source-smoke -NoClone`: passed.
 - `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup-ailis-local-web-stack.ps1 -Root .local\ailis-web-stack -NoClone`: refreshed the real local source README/manifest.
 
@@ -62,7 +66,7 @@ Git state: latest committed work includes `7080f51` for the first `web_research`
 
 ## Next Actions
 1. Stage only active files for this task.
-2. Commit the product-grade web research upgrade patch.
+2. Commit the target-coverage follow-up patch.
 3. Restart AILIS if the user wants to test the full UI/agent loop.
 
 ## Do Not Forget
