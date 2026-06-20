@@ -3583,6 +3583,223 @@ async function webFetch(args = {}) {
     });
 }
 
+function extractTextFromToolResult(result = {}, maxChars = 3000) {
+    const text = normalizeString(result.content?.[0]?.text);
+    return text.length > maxChars ? `${text.slice(0, Math.max(0, maxChars - 3)).trim()}...` : text;
+}
+
+function buildWebResearchCandidates(searchDetails = {}, limit = 3) {
+    const candidates = [];
+    const seen = new Set();
+    const addCandidate = (candidate = {}, source = '') => {
+        const url = normalizeUrlCandidate(candidate.url || candidate.args?.url);
+        if (!url || seen.has(url) || !/^https?:\/\//i.test(url) || isLikelyPdfUrl(url)) {
+            return;
+        }
+        seen.add(url);
+        candidates.push(pruneEmptyDeep({
+            title: normalizeString(candidate.title || candidate.text || candidate.reason || url),
+            url,
+            source,
+            searchRank: Number(candidate.searchRank) || undefined,
+            queryScore: Number(candidate.queryScore) || undefined,
+            combinedScore: Number(candidate.combinedScore) || undefined,
+            sourceBackends: candidate.sourceBackends || undefined
+        }));
+    };
+    for (const call of searchDetails.suggestedNextCalls || []) {
+        if (normalizeString(call.tool) === 'web_fetch') {
+            addCandidate({
+                title: call.reason,
+                url: call.args?.url
+            }, 'suggested_next_call');
+        }
+    }
+    for (const [index, result] of (searchDetails.results || []).entries()) {
+        addCandidate({
+            ...result,
+            searchRank: index + 1
+        }, isRelevantSearchCandidate(result) ? 'ranked_relevant_result' : 'ranked_result');
+        if (candidates.length >= limit) {
+            break;
+        }
+    }
+    return candidates.slice(0, limit);
+}
+
+function summarizeWebResearchPage(candidate = {}, fetchResult = {}) {
+    const details = fetchResult.structuredContent || fetchResult.details || {};
+    const evidenceQuality = normalizeString(details.evidenceQuality || details.observationContract?.evidence_quality);
+    return pruneEmptyDeep({
+        title: normalizeString(candidate.title),
+        url: normalizeString(candidate.url),
+        source: normalizeString(candidate.source),
+        searchRank: candidate.searchRank,
+        queryScore: Number.isFinite(candidate.queryScore) ? Number(candidate.queryScore.toFixed(2)) : undefined,
+        combinedScore: Number.isFinite(candidate.combinedScore) ? Number(candidate.combinedScore.toFixed(2)) : undefined,
+        sourceBackends: candidate.sourceBackends?.length ? candidate.sourceBackends.slice(0, 5) : undefined,
+        fetchStatus: details.status || (fetchResult.isError ? 'error' : 'completed'),
+        fetchBackend: normalizeString(details.fetchBackend),
+        evidenceQuality,
+        isEvidence: details.isEvidence,
+        reasoningReady: details.reasoningReady === true || details.observationContract?.reasoning_ready === true,
+        complete: details.complete === true || details.observationContract?.complete === true,
+        returnedChars: details.returnedChars,
+        originalChars: details.originalChars,
+        pageStatus: normalizeString(details.pageStatus),
+        evidenceGap: normalizeString(details.evidenceGap),
+        recoveryHint: normalizeString(details.recoveryHint),
+        observedRelevantLinks: Array.isArray(details.observedRelevantLinks) ? details.observedRelevantLinks.slice(0, 5) : undefined,
+        suggestedNextCalls: Array.isArray(details.suggestedNextCalls) ? details.suggestedNextCalls.slice(0, 5) : undefined,
+        htmlRelations: details.htmlRelations,
+        excerpt: extractTextFromToolResult(fetchResult, 3600)
+    });
+}
+
+function assessWebResearchBundle(pages = [], searchDetails = {}) {
+    const evidencePages = pages.filter((page) => page.isEvidence === true);
+    const readyPages = pages.filter((page) => page.reasoningReady === true || page.evidenceQuality === 'sufficient_evidence');
+    const blockedPages = pages.filter((page) => ['js_shell', 'encoding_failure', 'access_denied', 'access_challenge'].includes(page.evidenceQuality));
+    if (searchDetails.clarificationRequired) {
+        return {
+            answerReadiness: 'needs_clarification',
+            evidenceGap: searchDetails.evidenceGap || 'Search target is ambiguous.',
+            recoveryHint: searchDetails.recoveryHint || 'Ask the user to clarify the search target before fetching pages.'
+        };
+    }
+    if (readyPages.length) {
+        return {
+            answerReadiness: 'ready',
+            evidenceGap: '',
+            recoveryHint: 'Use the evidence pages; do not run another broad search unless a specific field is missing.'
+        };
+    }
+    if (evidencePages.length) {
+        return {
+            answerReadiness: 'partial',
+            evidenceGap: 'Fetched pages contain some evidence but are not fully reasoning-ready. Follow high-signal linked resources or fetch a more specific result if needed.',
+            recoveryHint: 'Prefer suggestedNextCalls from the evidence pages before issuing another broad search.'
+        };
+    }
+    if (blockedPages.length) {
+        return {
+            answerReadiness: 'blocked',
+            evidenceGap: 'Top pages were blocked, JavaScript-only, or unusable as answer evidence.',
+            recoveryHint: 'Try alternate sources, rendered/browser extraction, or a domain-specific API/tool.'
+        };
+    }
+    return {
+        answerReadiness: 'needs_followup',
+        evidenceGap: searchDetails.evidenceGap || 'No answer-bearing evidence page was fetched.',
+        recoveryHint: searchDetails.recoveryHint || 'Refine the query or use a more specific retrieval tool.'
+    };
+}
+
+function formatWebResearchBundle({ query = '', searchDetails = {}, pages = [], bundleAssessment = {} } = {}) {
+    const lines = [
+        'AILIS web research evidence bundle:',
+        `Query: ${query}`,
+        `Answer readiness: ${bundleAssessment.answerReadiness || 'unknown'}`
+    ];
+    if (bundleAssessment.evidenceGap) {
+        lines.push(`Evidence gap: ${bundleAssessment.evidenceGap}`);
+    }
+    if (bundleAssessment.recoveryHint) {
+        lines.push(`Recovery hint: ${bundleAssessment.recoveryHint}`);
+    }
+    if (searchDetails.backend || searchDetails.searchAggregation?.successfulBackends?.length) {
+        const sources = searchDetails.searchAggregation?.successfulBackends?.length
+            ? searchDetails.searchAggregation.successfulBackends.join(', ')
+            : searchDetails.backend;
+        lines.push(`Search sources: ${sources}`);
+    }
+    if (searchDetails.searchConfidence?.level) {
+        lines.push(`Search confidence: ${searchDetails.searchConfidence.level} (${searchDetails.searchConfidence.score})`);
+    }
+    if (Array.isArray(searchDetails.candidateChoices) && searchDetails.candidateChoices.length) {
+        lines.push('Candidate choices:');
+        searchDetails.candidateChoices.slice(0, 4).forEach((choice, index) => {
+            lines.push(`- ${index + 1}. ${choice.label || choice.title || choice.url}`);
+        });
+    }
+    if (pages.length) {
+        lines.push('Evidence pages:');
+        pages.forEach((page, index) => {
+            lines.push(`- ${index + 1}. ${page.title || page.url}`);
+            lines.push(`  URL: ${page.url}`);
+            lines.push(`  Quality: ${page.evidenceQuality || 'unknown'}; reasoningReady=${page.reasoningReady === true}`);
+            if (page.evidenceGap) {
+                lines.push(`  Gap: ${page.evidenceGap}`);
+            }
+            const excerpt = normalizeString(page.excerpt).split('\n').slice(0, 18).join('\n');
+            if (excerpt) {
+                lines.push(`  Excerpt:\n${excerpt}`);
+            }
+        });
+    }
+    return lines.join('\n');
+}
+
+async function webResearch(args = {}) {
+    const query = normalizeString(args.query || args.q || args.search || args.text);
+    if (!query) {
+        return errorResult('web_research requires query');
+    }
+    const maxResults = clampNumber(args.maxResults || args.limit, 8, 1, 12);
+    const maxPages = clampNumber(args.maxPages || args.max_pages, 3, 1, 5);
+    const maxCharsPerPage = clampNumber(args.maxCharsPerPage || args.max_chars_per_page || args.maxChars, 14000, 3000, 60000);
+    const searchResult = await webSearch({
+        query,
+        maxResults,
+        timeoutMs: args.timeoutMs || args.timeout_ms,
+        overallTimeoutMs: args.overallTimeoutMs || args.overall_timeout_ms,
+        provider: args.provider || args.searchProvider || args.search_provider,
+        backend: args.backend || args.searchBackend || args.search_backend,
+        backends: args.backends,
+        searxngUrl: args.searxngUrl || args.searxng_url,
+        firecrawlUrl: args.firecrawlUrl || args.firecrawl_url,
+        aggregate: args.aggregate
+    });
+    const searchDetails = searchResult.structuredContent || searchResult.details || {};
+    if (searchResult.isError || searchDetails.clarificationRequired) {
+        const bundleAssessment = assessWebResearchBundle([], searchDetails);
+        return textResult(formatWebResearchBundle({ query, searchDetails, pages: [], bundleAssessment }), {
+            status: searchResult.isError ? 'search_failed' : 'clarification_required',
+            query,
+            search: searchDetails,
+            evidencePages: [],
+            ...bundleAssessment,
+            suggestedNextCalls: searchDetails.suggestedNextCalls || []
+        });
+    }
+    const candidates = buildWebResearchCandidates(searchDetails, maxPages);
+    const pages = [];
+    for (const candidate of candidates) {
+        const fetchResult = await webFetch({
+            url: candidate.url,
+            query,
+            maxChars: maxCharsPerPage,
+            provider: args.fetchProvider || args.fetch_provider,
+            crawl4aiUrl: args.crawl4aiUrl || args.crawl4ai_url
+        });
+        pages.push(summarizeWebResearchPage(candidate, fetchResult));
+    }
+    const bundleAssessment = assessWebResearchBundle(pages, searchDetails);
+    const suggestedNextCalls = dedupeSuggestedNextCalls([
+        ...pages.flatMap((page) => page.suggestedNextCalls || []),
+        ...(searchDetails.suggestedNextCalls || [])
+    ], 6);
+    return textResult(formatWebResearchBundle({ query, searchDetails, pages, bundleAssessment }), {
+        status: 'completed',
+        query,
+        search: searchDetails,
+        evidencePages: pages,
+        pageCount: pages.length,
+        ...bundleAssessment,
+        suggestedNextCalls
+    });
+}
+
 async function webExtractLinks(args = {}) {
     const url = normalizeString(args.url || args.uri);
     if (!/^https?:\/\//i.test(url)) {
@@ -6965,6 +7182,40 @@ const TOOLS = [
         }
     },
     {
+        name: 'web_research',
+        description: 'End-to-end AILIS web research pipeline for natural research/guide/current-info tasks. It runs web_search, de-duplicates and ranks candidates, fetches the top high-signal HTML/text pages, extracts readable content plus relationship maps, and returns an evidence bundle with answerReadiness, evidencePages, searchConfidence, and suggestedNextCalls. Use this when the user asks to research, make a guide, compare public sources, or gather current web evidence and there is no more specific artifact tool. It stops for clarification instead of fetching pages when searchConfidence says the target is ambiguous.',
+        inputSchema: {
+            type: 'object',
+            required: ['query'],
+            properties: {
+                query: { type: 'string', minLength: 1, description: 'Required research/search goal. Include disambiguating source, game, product, paper, or entity terms when known.' },
+                q: { type: 'string', description: 'Compatibility alias for query. Prefer query.' },
+                search: { type: 'string', description: 'Compatibility alias for query. Prefer query.' },
+                text: { type: 'string', description: 'Compatibility alias for query. Prefer query.' },
+                maxResults: { type: 'number', description: 'Search result count, clamped to 1-12.' },
+                limit: { type: 'number', description: 'Compatibility alias for maxResults. Prefer maxResults.' },
+                maxPages: { type: 'number', description: 'Maximum pages to fetch into the evidence bundle, clamped to 1-5.' },
+                maxCharsPerPage: { type: 'number', description: 'Maximum readable chars per fetched page, clamped to 3000-60000.' },
+                timeoutMs: { type: 'number', description: 'Per-search-backend timeout in milliseconds.' },
+                overallTimeoutMs: { type: 'number', description: 'Overall search timeout budget in milliseconds.' },
+                provider: { type: 'string', description: 'Optional search provider selector, same semantics as web_search.' },
+                searchProvider: { type: 'string', description: 'Compatibility alias for provider. Prefer provider.' },
+                fetchProvider: { type: 'string', description: 'Optional fetch provider selector, same semantics as web_fetch.' },
+                searxngUrl: { type: 'string', description: 'Optional SearXNG base URL override.' },
+                firecrawlUrl: { type: 'string', description: 'Optional local Firecrawl-compatible base URL override.' },
+                crawl4aiUrl: { type: 'string', description: 'Optional Crawl4AI base URL override.' },
+                aggregate: { type: 'boolean', description: 'Optional. true forces multi-provider search aggregation; false returns first successful search backend.' },
+                backend: { type: 'string', description: 'Optional search backend id or provider alias.' },
+                backends: {
+                    type: 'array',
+                    items: { type: 'string', enum: ['searxng_json', 'firecrawl_search', 'bing_html', 'duckduckgo_lite', 'duckduckgo_html', 'yahoo_html', 'github_repositories', 'html', 'current_html_fallback', 'searxng', 'firecrawl'] },
+                    description: 'Optional ordered search backend ids.'
+                }
+            },
+            additionalProperties: false
+        }
+    },
+    {
         name: 'github_repo_read',
         description: 'Read evidence from a public GitHub repository after search finds a repo. Use mode=readme for README, mode=tree for repository file map, and mode=file with path for a specific source/docs/config file. This reads repository contents through the GitHub API; it is not a web search, browser, or git clone tool.',
         inputSchema: {
@@ -7250,6 +7501,7 @@ async function handleToolCall(request) {
         ? request.params.arguments
         : {};
     if (name === 'web_search') return await webSearch(args);
+    if (name === 'web_research') return await webResearch(args);
     if (name === 'github_repo_read') return await githubRepoRead(args);
     if (name === 'web_fetch') return await webFetch(args);
     if (name === 'pdf_extract_text') return await pdfExtractText(args);
@@ -7355,6 +7607,7 @@ module.exports = {
     SEARCH_BACKENDS,
     webExtractLinks,
     webFetch,
+    webResearch,
     webSearch,
     youtubeTranscript,
     youtubeVideoSearch

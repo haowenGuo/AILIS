@@ -33,6 +33,7 @@ const {
     readDocument,
     webExtractLinks,
     webFetch,
+    webResearch,
     webSearch,
     youtubeTranscript,
     youtubeVideoSearch
@@ -80,6 +81,7 @@ test('AILIS research MCP exposes Codex-aligned PDF/file tools', () => {
     const searchTool = TOOLS.find((tool) => tool.name === 'web_search');
 
     assert.ok(names.includes('web_search'));
+    assert.ok(names.includes('web_research'));
     assert.ok(names.includes('github_repo_read'));
     assert.ok(names.includes('web_fetch'));
     assert.ok(names.includes('pdf_extract_text'));
@@ -1233,6 +1235,104 @@ test('web_search site-constrained rerank prefers high-signal NGA guide threads',
     assert.ok(ranked[0].queryMatchedTerms.includes('叶瞬光'));
     assert.equal(calls[0].tool, 'web_fetch');
     assert.match(calls[0].args.url, /bbs\.nga\.cn/);
+});
+
+test('web_research builds an evidence bundle from search and fetched pages', async () => {
+    const requests = [];
+    const guideBody = [
+        '<h1>莱特 - 绝区零WIKI_BWIKI</h1>',
+        '<p>莱特攻略包含技能加点、驱动盘、音擎、配队和养成材料。</p>',
+        `<p>${'莱特是一名适合火属性队伍的击破角色，攻略正文提供技能说明、配队建议、驱动盘选择和实战手法。'.repeat(80)}</p>`,
+        '<h2>配队建议</h2>',
+        '<p>推荐火属性队伍，搭配辅助角色提升输出窗口。</p>'
+    ].join('');
+    await withServer((request, response) => {
+        const url = new URL(request.url || '/', 'http://127.0.0.1');
+        requests.push(url.pathname);
+        if (url.pathname === '/search') {
+            response.writeHead(200, { 'content-type': 'application/json' });
+            response.end(JSON.stringify({
+                results: [
+                    {
+                        title: '莱特 - 绝区零WIKI_BWIKI',
+                        url: `http://${request.headers.host}/guide`,
+                        content: '莱特攻略，技能加点、驱动盘、音擎、配队和养成材料。'
+                    }
+                ]
+            }));
+            return;
+        }
+        if (url.pathname === '/guide') {
+            response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+            response.end(`<html><head><title>莱特攻略</title><meta name="description" content="绝区零莱特养成攻略"></head><body>${guideBody}</body></html>`);
+            return;
+        }
+        response.writeHead(404);
+        response.end('not found');
+    }, async (baseUrl) => {
+        const result = await webResearch({
+            query: '绝区零 莱特 攻略 配队 驱动盘',
+            provider: 'searxng',
+            fetchProvider: 'builtin',
+            searxngUrl: baseUrl,
+            maxPages: 1,
+            maxCharsPerPage: 12000
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.equal(result.structuredContent.status, 'completed');
+        assert.equal(result.structuredContent.answerReadiness, 'ready');
+        assert.equal(result.structuredContent.evidencePages.length, 1);
+        assert.equal(result.structuredContent.evidencePages[0].url, `${baseUrl}/guide`);
+        assert.equal(result.structuredContent.evidencePages[0].evidenceQuality, 'sufficient_evidence');
+        assert.equal(result.structuredContent.evidencePages[0].reasoningReady, true);
+        assert.ok(result.structuredContent.evidencePages[0].htmlRelations.sections.some((section) => section.heading === '配队建议'));
+        assert.match(result.content[0].text, /AILIS web research evidence bundle/);
+        assert.deepEqual(requests, ['/search', '/guide']);
+    });
+});
+
+test('web_research stops before fetching pages when search target is ambiguous', async () => {
+    const requests = [];
+    await withServer((request, response) => {
+        const url = new URL(request.url || '/', 'http://127.0.0.1');
+        requests.push(url.pathname);
+        if (url.pathname === '/search') {
+            response.writeHead(200, { 'content-type': 'application/json' });
+            response.end(JSON.stringify({
+                results: [
+                    {
+                        title: '【绝区零】叶瞬光角色攻略',
+                        url: `http://${request.headers.host}/zzz-xiaoguang`,
+                        content: '小光攻略，技能机制、输出手法、配队配装、驱动盘和音擎。'
+                    },
+                    {
+                        title: '《光遇》小光新手攻略',
+                        url: `http://${request.headers.host}/sky-xiaoguang`,
+                        content: '光遇小光任务路线、蜡烛和每日玩法攻略。'
+                    }
+                ]
+            }));
+            return;
+        }
+        response.writeHead(500);
+        response.end('web_research should not fetch ambiguous candidates');
+    }, async (baseUrl) => {
+        const result = await webResearch({
+            query: '做一个小光的攻略',
+            provider: 'searxng',
+            fetchProvider: 'builtin',
+            searxngUrl: baseUrl,
+            maxPages: 2
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.equal(result.structuredContent.status, 'clarification_required');
+        assert.equal(result.structuredContent.answerReadiness, 'needs_clarification');
+        assert.equal(result.structuredContent.evidencePages.length, 0);
+        assert.equal(result.structuredContent.search.clarificationRequired, true);
+        assert.deepEqual(requests, ['/search']);
+    });
 });
 
 test('inferPaperMetadataArgsFromScholarlyQuery extracts author year venue and topic clues', () => {

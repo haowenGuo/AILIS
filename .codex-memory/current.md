@@ -3,20 +3,24 @@
 Date/time: 2026-06-20 Asia/Shanghai
 Workspace: `F:\AILIS_self_evolution_runtime`
 Branch: `AILIS-self-evolution`
-Git state: active patch upgrades AILIS web search aggregation and makes the local SearXNG/Firecrawl/Crawl4AI helper source-only. Stage only active-task files because the repo has many unrelated historical changes.
+Git state: latest commit `f1a7fde` upgraded AILIS web search aggregation. Active patch adds a higher-level `web_research` evidence-bundle pipeline. Stage only active-task files because the repo has many unrelated historical changes.
 
 ## Objective
 - Make AILIS web research safer, more Codex-like, and more generic.
 - `web_search` should rank results, expose confidence, and ask the user when a short/ambiguous target is not safe to follow.
+- Build an AILIS-owned search system with quality closer to SearXNG/Firecrawl/Crawl4AI: discovery, aggregation, fetch, extraction, evidence quality, and model-facing bundles.
 - Use SearXNG/Firecrawl/Crawl4AI as local open-source references for search quality ideas, not as mandatory deployed services or hosted APIs.
 
 ## Latest User Intent
 - User clarified that they do not want a Docker/deployment solution.
 - Desired direction: reference SearXNG, Firecrawl, and Crawl4AI search optimization ideas, then migrate useful mechanisms into AILIS with minimal large-scale changes.
+- User clarified the true goal: "建立一套质量类似SearXNG/Firecrawl/Crawl4AI的搜索系统".
 - Avoid writing task-specific hacks; preserve generality.
 
 ## Current State
 - `scripts\mcp-ailis-research-server.cjs`
+  - New `web_research` tool provides an end-to-end evidence-bundle entrypoint: `web_search` -> candidate selection -> `web_fetch` on top high-signal HTML/text pages -> `evidencePages` with `answerReadiness`, `evidenceQuality`, `htmlRelations`, `suggestedNextCalls`, and `evidenceGap`.
+  - `web_research` stops before fetching when `searchConfidence` requires clarification, preserving the existing short-nickname ambiguity guard.
   - Default `web_search` provider chain remains `searxng_json -> firecrawl_search -> bing_html -> duckduckgo_lite -> duckduckgo_html -> yahoo_html`.
   - GitHub/code queries still keep `github_repositories` first.
   - Search results now preserve `sourceBackends`, `sourceEngines`, and source rank metadata.
@@ -37,7 +41,7 @@ Git state: active patch upgrades AILIS web search aggregation and makes the loca
 
 ## Validation
 - `node --check scripts\mcp-ailis-research-server.cjs`: passed.
-- `node --test tests\mcp-ailis-research-server.test.mjs`: 50/50 passed.
+- `node --test tests\mcp-ailis-research-server.test.mjs`: 52/52 passed after adding `web_research` evidence bundle tests.
 - `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup-ailis-local-web-stack.ps1 -Root .local\ailis-web-stack-source-smoke -NoClone`: passed.
 - `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup-ailis-local-web-stack.ps1 -Root .local\ailis-web-stack -NoClone`: refreshed the real local source README/manifest.
 
