@@ -733,6 +733,8 @@ function summarizeRelevantLink(candidate = {}) {
         text: normalizeString(candidate.text, '(no text)'),
         url: normalizeString(candidate.url),
         doi: normalizeString(candidate.doi),
+        queryScore: Number.isFinite(candidate.queryScore) ? Number(candidate.queryScore.toFixed(2)) : undefined,
+        sourceBackends: candidate.sourceBackends?.length ? candidate.sourceBackends.slice(0, 5) : undefined,
         score: Number.isFinite(candidate.score) ? Number(candidate.score.toFixed(2)) : undefined
     });
 }
@@ -1265,6 +1267,15 @@ function scoreSearchResultAgainstQuery(result = {}, query = '') {
     };
 }
 
+function scoreSearchSourceConsensus(result = {}) {
+    const backends = normalizeSourceList(result.sourceBackends || result.sourceBackend || result.backend);
+    const engines = normalizeSourceList(result.sourceEngines || result.engines || result.engine);
+    const backendScore = Math.max(0, backends.length - 1) * 18;
+    const engineScore = Math.max(0, engines.length - 1) * 8;
+    const shapedResultScore = normalizeString(result.snippet).length >= 80 ? 4 : 0;
+    return Math.min(44, backendScore + engineScore + shapedResultScore);
+}
+
 function isRelevantSearchCandidate(candidate = {}) {
     const queryScore = Number(candidate.queryScore) || 0;
     const matchedTerms = Array.isArray(candidate.queryMatchedTerms) ? candidate.queryMatchedTerms : [];
@@ -1297,8 +1308,11 @@ function describeSearchRelevance(rankedResults = []) {
         combinedScore: Number.isFinite(candidate.combinedScore) ? Number(candidate.combinedScore.toFixed(2)) : undefined,
         queryScore: Number.isFinite(candidate.queryScore) ? Number(candidate.queryScore.toFixed(2)) : undefined,
         researchScore: Number.isFinite(candidate.researchScore) ? Number(candidate.researchScore.toFixed(2)) : undefined,
+        sourceConsensusScore: Number.isFinite(candidate.sourceConsensusScore) ? Number(candidate.sourceConsensusScore.toFixed(2)) : undefined,
         matchedTerms: candidate.queryMatchedTerms?.length ? candidate.queryMatchedTerms.slice(0, 8) : undefined,
         matchedSites: candidate.queryMatchedSites?.length ? candidate.queryMatchedSites.slice(0, 3) : undefined,
+        sourceBackends: candidate.sourceBackends?.length ? candidate.sourceBackends.slice(0, 5) : undefined,
+        sourceEngines: candidate.sourceEngines?.length ? candidate.sourceEngines.slice(0, 5) : undefined,
         guideSource: candidate.guideSource || undefined,
         kind: normalizeString(candidate.kind)
     }));
@@ -1312,6 +1326,7 @@ function rankSearchResultsForFollowup(results = [], query = '') {
                 text: normalizeString(item.title || item.snippet)
             }, index);
             const queryMatch = scoreSearchResultAgainstQuery(item, query);
+            const sourceConsensusScore = scoreSearchSourceConsensus(item);
             return {
                 ...item,
                 kind: research.kind,
@@ -1322,7 +1337,8 @@ function rankSearchResultsForFollowup(results = [], query = '') {
                 queryMatchedTerms: queryMatch.matchedTerms,
                 queryMatchedSites: queryMatch.matchedSites,
                 guideSource: queryMatch.guideSource,
-                combinedScore: queryMatch.score * 4 + research.score
+                sourceConsensusScore,
+                combinedScore: queryMatch.score * 4 + research.score + sourceConsensusScore
             };
         })
         .sort((a, b) => b.combinedScore - a.combinedScore || b.queryScore - a.queryScore || b.researchScore - a.researchScore);
@@ -1555,6 +1571,191 @@ function buildSuggestedCallsFromSearchResults(results = [], { query = '', limit 
             })),
         limit
     );
+}
+
+function searchProviderTokens(value = '') {
+    return String(value || '')
+        .split(',')
+        .map((item) => normalizeString(item).toLowerCase())
+        .filter(Boolean);
+}
+
+function shouldAggregateSearchBackends(args = {}) {
+    if (args.aggregate === false || args.aggregateSearch === false || args.aggregate_search === false) {
+        return false;
+    }
+    if (args.aggregate === true || args.aggregateSearch === true || args.aggregate_search === true) {
+        return true;
+    }
+    const rawBackends = Array.isArray(args.backends)
+        ? args.backends.map((item) => normalizeString(item)).filter(Boolean)
+        : searchProviderTokens(args.backend || args.searchBackend || args.search_backend);
+    if (rawBackends.length > 1) {
+        return true;
+    }
+    if (rawBackends.length === 1) {
+        return false;
+    }
+    const explicitProvider = normalizeString(args.provider || args.searchProvider || args.search_provider);
+    if (explicitProvider) {
+        const tokens = searchProviderTokens(explicitProvider);
+        return tokens.length > 1 || tokens.some((token) => token === 'auto' || token === 'external' || token === 'agent_web');
+    }
+    const envProvider = normalizeString(process.env.AILIS_WEB_SEARCH_PROVIDER);
+    if (envProvider) {
+        const tokens = searchProviderTokens(envProvider);
+        return tokens.length > 1 || tokens.some((token) => token === 'auto' || token === 'external' || token === 'agent_web');
+    }
+    return true;
+}
+
+function enrichSearchResultsWithSource(results = [], attempt = {}, backendIndex = 0) {
+    return (Array.isArray(results) ? results : []).map((item, resultIndex) => {
+        const sourceHints = sourceHintsFromSearchResult(item);
+        return pruneEmptyDeep({
+            ...item,
+            sourceBackend: attempt.backend,
+            sourceBackends: normalizeSourceList([attempt.backend, ...sourceHints.sourceBackends]),
+            sourceEngines: sourceHints.sourceEngines,
+            sourceRank: resultIndex + 1,
+            sourceBackendIndex: backendIndex,
+            searchProviderUrl: attempt.url
+        });
+    });
+}
+
+function formatSearchResultForModel(item = {}, index = 0) {
+    const lines = [
+        `${index + 1}. ${item.title}`,
+        `URL: ${item.url}`
+    ];
+    const sources = normalizeSourceList(item.sourceBackends || item.sourceBackend || item.backend);
+    if (sources.length) {
+        lines.push(`Source: ${sources.join(', ')}`);
+    }
+    const matchedTerms = Array.isArray(item.queryMatchedTerms) ? item.queryMatchedTerms.slice(0, 8) : [];
+    if (matchedTerms.length || Number.isFinite(item.queryScore)) {
+        const score = Number.isFinite(item.queryScore) ? `score=${Number(item.queryScore.toFixed(2))}` : '';
+        const terms = matchedTerms.length ? `matched=${matchedTerms.join(', ')}` : '';
+        lines.push(`Relevance: ${[score, terms].filter(Boolean).join(' ')}`);
+    }
+    lines.push(`Snippet: ${item.snippet}`);
+    return lines.join('\n');
+}
+
+function buildWebSearchSuccessObservation({
+    query = '',
+    backendQuery = '',
+    attempts = [],
+    rawResults = [],
+    backend = '',
+    url = '',
+    startedAt = Date.now(),
+    overallTimeoutMs = 0,
+    aggregated = false
+} = {}) {
+    const rankedResults = rankSearchResultsForFollowup(rawResults, query);
+    const text = rankedResults.map((item, index) => formatSearchResultForModel(item, index)).join('\n\n');
+    const baseSuggestedNextCalls = buildSuggestedCallsFromSearchResults(rankedResults, { query, limit: 3 });
+    const observedRelevantLinks = rankedResults
+        .filter((candidate) => isRelevantSearchCandidate(candidate))
+        .slice(0, 5)
+        .map((candidate) => summarizeRelevantLink(candidate));
+    const queryFocusTerms = extractSearchQueryTerms(query).slice(0, 6);
+    const topQueryScore = rankedResults[0]?.queryScore || 0;
+    const searchRelevance = describeSearchRelevance(rankedResults);
+    const offTarget = baseSuggestedNextCalls.length === 0 && !hasEnoughRelevantSearchEvidence(rankedResults, query);
+    const searchConfidence = assessSearchConfidence(rankedResults, query);
+    const clarificationRequired = searchConfidence.clarificationRequired === true;
+    const suggestedNextCalls = clarificationRequired
+        ? []
+        : offTarget && looksScholarlySearchQuery(query)
+        ? dedupeSuggestedNextCalls([
+            {
+                tool: 'paper_metadata_lookup',
+                args: inferPaperMetadataArgsFromScholarlyQuery(query),
+                reason: 'Search results look off-target for a bibliographic query; switch to structured scholarly metadata lookup instead of rephrasing the same web search.'
+            },
+            ...baseSuggestedNextCalls
+        ], 3)
+        : baseSuggestedNextCalls;
+    const evidenceGap = clarificationRequired
+        ? `Search confidence is ${searchConfidence.level}; the query appears ambiguous and should be clarified before following any result.`
+        : offTarget
+        ? `Search results look off-target for the key query terms: ${queryFocusTerms.join(', ') || query}. Refine the query with exact phrases, source names, or author names before following a result.`
+        : 'Search results are discovery only. Open a result or resolve a DOI/PDF before answering.';
+    const recoveryHint = clarificationRequired
+        ? searchConfidence.clarificationQuestion || 'Ask the user to disambiguate the target before calling web_fetch or another broad search.'
+        : offTarget
+        ? 'Do not follow obviously unrelated popular results. Tighten the query or switch to a more specific tool before searching again.'
+        : 'Prefer the suggested follow-up calls below before issuing another broad web_search.';
+    const guidance = buildWebToolGuidanceText({
+        evidenceGap,
+        recoveryHint,
+        suggestedNextCalls,
+        observedRelevantLinks
+    });
+    const successfulBackends = attempts.filter((attempt) => attempt.ok).map((attempt) => attempt.backend);
+    const resultBackends = normalizeSourceList(rankedResults.flatMap((item) => item.sourceBackends || item.sourceBackend || []));
+    const response = textResult([guidance, `Search results:\n${text}`].filter(Boolean).join('\n\n'), {
+        status: 'completed',
+        query,
+        backendQuery: backendQuery !== query ? backendQuery : undefined,
+        backend: aggregated ? 'aggregated' : backend,
+        url,
+        durationMs: attempts.filter((attempt) => attempt.ok).reduce((total, attempt) => total + (Number(attempt.durationMs) || 0), 0),
+        overallDurationMs: Date.now() - startedAt,
+        overallTimeoutMs,
+        attempts,
+        results: rankedResults,
+        rawResults,
+        searchRelevance,
+        searchConfidence,
+        clarificationRequired,
+        candidateChoices: searchConfidence.candidateChoices || [],
+        evidenceGap,
+        recoveryHint,
+        suggestedNextCalls,
+        observedRelevantLinks,
+        queryFocusTerms,
+        topQueryScore,
+        searchAggregation: pruneEmptyDeep({
+            enabled: aggregated || undefined,
+            successfulBackends,
+            resultBackends,
+            mergedResultCount: rawResults.length
+        })
+    });
+    return {
+        response,
+        rankedResults,
+        suggestedNextCalls,
+        searchConfidence,
+        offTarget
+    };
+}
+
+function shouldContinueSearchAggregation({
+    args = {},
+    backends = [],
+    backendIndex = 0,
+    searchConfidence = {},
+    suggestedNextCalls = [],
+    offTarget = false
+} = {}) {
+    if (backendIndex >= backends.length - 1 || !shouldAggregateSearchBackends(args)) {
+        return false;
+    }
+    if (searchConfidence.clarificationRequired === true) {
+        return false;
+    }
+    if (offTarget) {
+        return true;
+    }
+    if (!suggestedNextCalls.length && searchConfidence.level !== 'high') {
+        return true;
+    }
+    return searchConfidence.level === 'low';
 }
 
 function filterRankedLinksForQuerySuggestions(rankedLinks = [], query = '') {
@@ -1937,12 +2138,118 @@ function dedupeSearchResults(results = [], maxResults = 8) {
             continue;
         }
         seen.add(url);
-        rows.push({ title: title || url, url, snippet });
+        rows.push(pruneEmptyDeep({
+            ...result,
+            title: title || url,
+            url,
+            snippet
+        }));
         if (rows.length >= maxResults) {
             break;
         }
     }
     return rows;
+}
+
+function normalizeSourceList(value) {
+    const raw = Array.isArray(value)
+        ? value
+        : typeof value === 'string'
+            ? value.split(/[,|]/g)
+            : [];
+    const seen = new Set();
+    const items = [];
+    for (const item of raw) {
+        const normalized = normalizeString(item).toLowerCase();
+        if (!normalized || seen.has(normalized)) {
+            continue;
+        }
+        seen.add(normalized);
+        items.push(normalized);
+    }
+    return items;
+}
+
+function canonicalSearchResultKey(rawUrl = '') {
+    const normalizedUrl = normalizeUrlCandidate(rawUrl);
+    if (!normalizedUrl) {
+        return '';
+    }
+    try {
+        const parsed = new URL(normalizedUrl);
+        parsed.hash = '';
+        for (const key of Array.from(parsed.searchParams.keys())) {
+            if (/^(?:utm_|fbclid|gclid|yclid|mc_|spm|share|from|ref|source)$/i.test(key)) {
+                parsed.searchParams.delete(key);
+            }
+        }
+        parsed.hostname = parsed.hostname.replace(/^www\./i, '').toLowerCase();
+        parsed.pathname = (parsed.pathname || '/').replace(/\/{2,}/g, '/').replace(/\/+$/g, '') || '/';
+        return `${parsed.protocol}//${parsed.hostname}${parsed.pathname}${parsed.search}`.toLowerCase();
+    } catch {
+        return normalizedUrl.replace(/[#?].*$/g, '').replace(/\/+$/g, '').toLowerCase();
+    }
+}
+
+function sourceHintsFromSearchResult(result = {}) {
+    const engineHints = [
+        ...normalizeSourceList(result.sourceEngines),
+        ...normalizeSourceList(result.engines),
+        ...normalizeSourceList(result.engine),
+        ...normalizeSourceList(result.category)
+    ];
+    const backendHints = [
+        ...normalizeSourceList(result.sourceBackends),
+        ...normalizeSourceList(result.sourceBackend),
+        ...normalizeSourceList(result.backend)
+    ];
+    return {
+        sourceBackends: backendHints,
+        sourceEngines: engineHints
+    };
+}
+
+function mergeSearchResultsForRerank(results = [], maxResults = 24) {
+    const merged = new Map();
+    for (const item of Array.isArray(results) ? results : []) {
+        const url = normalizeUrlCandidate(item.url);
+        const key = canonicalSearchResultKey(url);
+        if (!key) {
+            continue;
+        }
+        const title = stripHtml(item.title || '').replace(/\s+/g, ' ').trim() || url;
+        const snippet = stripHtml(item.snippet || '').replace(/\s+/g, ' ').trim();
+        const sourceHints = sourceHintsFromSearchResult(item);
+        const existing = merged.get(key);
+        if (!existing) {
+            merged.set(key, pruneEmptyDeep({
+                ...item,
+                title,
+                url,
+                snippet,
+                sourceBackends: sourceHints.sourceBackends,
+                sourceEngines: sourceHints.sourceEngines,
+                sourceCount: Math.max(1, sourceHints.sourceBackends.length + sourceHints.sourceEngines.length)
+            }));
+            continue;
+        }
+        if (title.length > normalizeString(existing.title).length) {
+            existing.title = title;
+        }
+        if (snippet && !normalizeString(existing.snippet).includes(snippet)) {
+            existing.snippet = truncateRelationText([existing.snippet, snippet].filter(Boolean).join(' | '), 700);
+        }
+        existing.sourceBackends = normalizeSourceList([
+            ...(existing.sourceBackends || []),
+            ...sourceHints.sourceBackends
+        ]);
+        existing.sourceEngines = normalizeSourceList([
+            ...(existing.sourceEngines || []),
+            ...sourceHints.sourceEngines
+        ]);
+        existing.sourceCount = Math.max(1, existing.sourceBackends.length + existing.sourceEngines.length);
+    }
+    return Array.from(merged.values()).slice(0, maxResults);
 }
 
 function extractGenericAnchorResults(html = '', maxResults = 8) {
@@ -2235,7 +2542,10 @@ function extractSearxngJsonResults(payload = {}, maxResults = 8) {
     return dedupeSearchResults(rows.map((item) => ({
         title: item.title || item.pretty_url || item.url,
         url: item.url,
-        snippet: item.content || item.snippet || item.description || item.engine || ''
+        snippet: item.content || item.snippet || item.description || item.engine || '',
+        sourceEngines: Array.isArray(item.engines) ? item.engines : [item.engine].filter(Boolean),
+        category: item.category || '',
+        publishedDate: item.publishedDate || item.published_date || ''
     })), maxResults);
 }
 
@@ -2251,7 +2561,9 @@ function extractFirecrawlSearchResults(payload = {}, maxResults = 8) {
         return {
             title: item.title || metadata.title || item.url,
             url: item.url || item.link,
-            snippet: item.description || item.snippet || metadata.description || markdown.slice(0, 500)
+            snippet: item.description || item.snippet || metadata.description || markdown.slice(0, 500),
+            sourceEngines: ['firecrawl'],
+            contentKind: markdown ? 'markdown' : ''
         };
     }), maxResults);
 }
@@ -2531,6 +2843,10 @@ async function webSearch(args = {}) {
         120000
     );
     const startedAt = Date.now();
+    const aggregateAcrossBackends = shouldAggregateSearchBackends(args);
+    let collectedResults = [];
+    let lastSuccessObservation = null;
+    let lastSuccessfulAttempt = null;
     for (let backendIndex = 0; backendIndex < backends.length; backendIndex += 1) {
         const elapsedMs = Date.now() - startedAt;
         const remainingMs = overallTimeoutMs - elapsedMs;
@@ -2552,74 +2868,46 @@ async function webSearch(args = {}) {
         if (!attempt.ok) {
             continue;
         }
-        const rankedResults = rankSearchResultsForFollowup(attempt.results, query);
-        const text = rankedResults.map((item, index) => [
-            `${index + 1}. ${item.title}`,
-            `URL: ${item.url}`,
-            `Snippet: ${item.snippet}`
-        ].join('\n')).join('\n\n');
-        const baseSuggestedNextCalls = buildSuggestedCallsFromSearchResults(attempt.results, { query, limit: 3 });
-        const observedRelevantLinks = rankedResults
-            .filter((candidate) => isRelevantSearchCandidate(candidate))
-            .slice(0, 5)
-            .map((candidate) => summarizeRelevantLink(candidate));
-        const queryFocusTerms = extractSearchQueryTerms(query).slice(0, 6);
-        const topQueryScore = rankedResults[0]?.queryScore || 0;
-        const searchRelevance = describeSearchRelevance(rankedResults);
-        const offTarget = baseSuggestedNextCalls.length === 0 && !hasEnoughRelevantSearchEvidence(rankedResults, query);
-        const searchConfidence = assessSearchConfidence(rankedResults, query);
-        const clarificationRequired = searchConfidence.clarificationRequired === true;
-        const suggestedNextCalls = clarificationRequired
-            ? []
-            : offTarget && looksScholarlySearchQuery(query)
-            ? dedupeSuggestedNextCalls([
-                {
-                    tool: 'paper_metadata_lookup',
-                    args: inferPaperMetadataArgsFromScholarlyQuery(query),
-                    reason: 'Search results look off-target for a bibliographic query; switch to structured scholarly metadata lookup instead of rephrasing the same web search.'
-                },
-                ...baseSuggestedNextCalls
-            ], 3)
-            : baseSuggestedNextCalls;
-        const evidenceGap = clarificationRequired
-            ? `Search confidence is ${searchConfidence.level}; the query appears ambiguous and should be clarified before following any result.`
-            : offTarget
-            ? `Search results look off-target for the key query terms: ${queryFocusTerms.join(', ') || query}. Refine the query with exact phrases, source names, or author names before following a result.`
-            : 'Search results are discovery only. Open a result or resolve a DOI/PDF before answering.';
-        const recoveryHint = clarificationRequired
-            ? searchConfidence.clarificationQuestion || 'Ask the user to disambiguate the target before calling web_fetch or another broad search.'
-            : offTarget
-            ? 'Do not follow obviously unrelated popular results. Tighten the query or switch to a more specific tool before searching again.'
-            : 'Prefer the suggested follow-up calls below before issuing another broad web_search.';
-        const guidance = buildWebToolGuidanceText({
-            evidenceGap,
-            recoveryHint,
-            suggestedNextCalls,
-            observedRelevantLinks
-        });
-        return textResult([guidance, `Search results:\n${text}`].filter(Boolean).join('\n\n'), {
-            status: 'completed',
+        const enrichedResults = enrichSearchResultsWithSource(attempt.results, attempt, backendIndex);
+        collectedResults = aggregateAcrossBackends
+            ? mergeSearchResultsForRerank([...collectedResults, ...enrichedResults], maxResults * 3)
+            : enrichedResults;
+        const observation = buildWebSearchSuccessObservation({
             query,
-            backendQuery: backendQuery !== query ? backendQuery : undefined,
+            backendQuery,
+            attempts,
+            rawResults: collectedResults,
             backend: attempt.backend,
             url: attempt.url,
-            durationMs: attempt.durationMs,
-            overallDurationMs: Date.now() - startedAt,
+            startedAt,
             overallTimeoutMs,
-            attempts,
-            results: rankedResults,
-            rawResults: attempt.results,
-            searchRelevance,
-            searchConfidence,
-            clarificationRequired,
-            candidateChoices: searchConfidence.candidateChoices || [],
-            evidenceGap,
-            recoveryHint,
-            suggestedNextCalls,
-            observedRelevantLinks,
-            queryFocusTerms,
-            topQueryScore
+            aggregated: aggregateAcrossBackends && attempts.filter((entry) => entry.ok).length > 1
         });
+        lastSuccessObservation = observation;
+        lastSuccessfulAttempt = attempt;
+        if (!shouldContinueSearchAggregation({
+            args,
+            backends,
+            backendIndex,
+            searchConfidence: observation.searchConfidence,
+            suggestedNextCalls: observation.suggestedNextCalls,
+            offTarget: observation.offTarget
+        })) {
+            return observation.response;
+        }
+    }
+    if (lastSuccessObservation && lastSuccessfulAttempt) {
+        return buildWebSearchSuccessObservation({
+            query,
+            backendQuery,
+            attempts,
+            rawResults: collectedResults,
+            backend: lastSuccessfulAttempt.backend,
+            url: lastSuccessfulAttempt.url,
+            startedAt,
+            overallTimeoutMs,
+            aggregated: aggregateAcrossBackends && attempts.filter((entry) => entry.ok).length > 1
+        }).response;
     }
     return errorResult('web_search failed across all configured search backends', {
         status: 'search_failed',
@@ -6648,7 +6936,7 @@ print(json.dumps(payload, ensure_ascii=False))
 const TOOLS = [
     {
         name: 'web_search',
-        description: 'Fallback broad public web search through AILIS managed search backends. Standard call: { "query": "specific search keywords", "maxResults": 5 }. Do not use as the first step for attached/local files, known URLs, PDFs/papers/reports, YouTube/videos, audio, images, spreadsheets, presentations, Word documents, code files, or GitHub repositories; use the dedicated MCP tool for those artifact types first. Use web_fetch for a known HTML/text URL, paper_metadata_lookup for exact paper/DOI metadata, pdf_extract_text for a known PDF URL, pdf_find_and_extract for a paper/report title when you need full text, and github_repo_read for GitHub README/tree/file evidence. General web queries default to the local open-source provider chain searxng_json, firecrawl_search, then current HTML fallback; GitHub/code repository queries keep GitHub repository search first. Configure with AILIS_SEARXNG_URL, AILIS_FIRECRAWL_URL, and AILIS_WEB_SEARCH_PROVIDER. Hosted Firecrawl is intentionally disabled here; run self-hosted Firecrawl locally instead. Returns ranked titles/URLs/snippets, relevance scores, backend attempts, searchConfidence, and clarificationRequired/candidateChoices when the result set is too ambiguous to follow safely.',
+        description: 'Fallback broad public web search through AILIS managed search backends. Standard call: { "query": "specific search keywords", "maxResults": 5 }. Do not use as the first step for attached/local files, known URLs, PDFs/papers/reports, YouTube/videos, audio, images, spreadsheets, presentations, Word documents, code files, or GitHub repositories; use the dedicated MCP tool for those artifact types first. Use web_fetch for a known HTML/text URL, paper_metadata_lookup for exact paper/DOI metadata, pdf_extract_text for a known PDF URL, pdf_find_and_extract for a paper/report title when you need full text, and github_repo_read for GitHub README/tree/file evidence. General web queries use a SearXNG-style provider chain: SearXNG JSON, Firecrawl-compatible local search, then current HTML fallback; GitHub/code repository queries keep GitHub repository search first. Configure with AILIS_SEARXNG_URL, AILIS_FIRECRAWL_URL, and AILIS_WEB_SEARCH_PROVIDER when local endpoints exist. Hosted Firecrawl is intentionally disabled here. Results from multiple successful providers are normalized, de-duplicated, source-tagged, re-ranked, and returned with searchConfidence plus clarificationRequired/candidateChoices when the result set is too ambiguous to follow safely.',
         inputSchema: {
             type: 'object',
             required: ['query'],
@@ -6661,6 +6949,7 @@ const TOOLS = [
                 limit: { type: 'number', description: 'Compatibility alias for maxResults. Prefer maxResults.' },
                 timeoutMs: { type: 'number', description: 'Per-backend timeout in milliseconds, clamped to 3000-30000. Default is 8000. Omit unless a task needs a longer wait.' },
                 overallTimeoutMs: { type: 'number', description: 'Overall search budget in milliseconds, clamped to 8000-120000. Defaults under the Gateway timeout so failures return as tool results instead of hanging.' },
+                aggregate: { type: 'boolean', description: 'Optional. true forces multi-provider aggregation; false returns the first successful backend. Omit for automatic aggregation in auto/provider-chain mode.' },
                 provider: { type: 'string', description: 'Optional provider chain selector: auto, searxng, firecrawl, html/current_html_fallback, external, github, or a comma-separated backend list. Prefer omitting this for automatic fallback.' },
                 searchProvider: { type: 'string', description: 'Compatibility alias for provider. Prefer provider.' },
                 searxngUrl: { type: 'string', description: 'Optional SearXNG base URL override. Prefer configuring AILIS_SEARXNG_URL instead of passing this per call.' },

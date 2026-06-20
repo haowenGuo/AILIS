@@ -864,6 +864,61 @@ test('web_search falls from failed SearXNG JSON to Firecrawl search provider', a
     });
 });
 
+test('web_search aggregates provider chain when the first successful backend is off-target', async () => {
+    const requests = [];
+    await withServer((request, response) => {
+        const url = new URL(request.url || '/', 'http://127.0.0.1');
+        requests.push({ method: request.method, pathname: url.pathname });
+        if (url.pathname === '/search') {
+            response.writeHead(200, { 'content-type': 'application/json' });
+            response.end(JSON.stringify({
+                results: [
+                    {
+                        title: 'Date Calculator : Add to or Subtract From a Date',
+                        url: 'https://www.timeanddate.com/date/dateadd.html',
+                        content: 'The Date Calculator adds or subtracts days, weeks, months and years.'
+                    }
+                ]
+            }));
+            return;
+        }
+        if (url.pathname === '/v1/search') {
+            response.writeHead(200, { 'content-type': 'application/json' });
+            response.end(JSON.stringify({
+                success: true,
+                data: [
+                    {
+                        title: 'Crawl4AI agent web extraction guide',
+                        url: 'https://docs.crawl4ai.com/core/quickstart/',
+                        description: 'Crawl4AI extracts Markdown for LLM agent web tasks and preserves useful links.'
+                    }
+                ]
+            }));
+            return;
+        }
+        response.writeHead(404, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ error: 'not found' }));
+    }, async (baseUrl) => {
+        const result = await webSearch({
+            query: 'Crawl4AI agent web extraction guide',
+            provider: 'searxng,firecrawl',
+            searxngUrl: baseUrl,
+            firecrawlUrl: baseUrl,
+            maxResults: 5
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.equal(result.structuredContent.backend, 'aggregated');
+        assert.deepEqual(requests.map((item) => item.pathname), ['/search', '/v1/search']);
+        assert.equal(result.structuredContent.results[0].url, 'https://docs.crawl4ai.com/core/quickstart/');
+        assert.ok(result.structuredContent.results[0].sourceBackends.includes('firecrawl_search'));
+        assert.ok(result.structuredContent.searchAggregation.enabled);
+        assert.ok(result.structuredContent.searchAggregation.successfulBackends.includes('searxng_json'));
+        assert.ok(result.structuredContent.searchAggregation.successfulBackends.includes('firecrawl_search'));
+        assert.equal(result.structuredContent.suggestedNextCalls[0].tool, 'web_fetch');
+    });
+});
+
 test('web_search Firecrawl backend defaults to local self-hosted service without API keys', async () => {
     const result = await webSearch({
         query: 'local open source web search smoke',

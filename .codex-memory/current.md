@@ -3,64 +3,53 @@
 Date/time: 2026-06-20 Asia/Shanghai
 Workspace: `F:\AILIS_self_evolution_runtime`
 Branch: `AILIS-self-evolution`
-Git state: latest committed web-search confidence patch is `66355a8`; active follow-up patch changes Firecrawl to local/open-source only and adds a local web stack setup script. Stage only active-task files because the repo has many unrelated historical changes.
+Git state: active patch upgrades AILIS web search aggregation and makes the local SearXNG/Firecrawl/Crawl4AI helper source-only. Stage only active-task files because the repo has many unrelated historical changes.
 
 ## Objective
-- Make AILIS web research safer and more Codex-like.
-- `web_search` should rank results, expose confidence, and require user clarification when a short/ambiguous target is not safe to follow.
-- `web_search/web_fetch` should use the upgraded provider chain: SearXNG JSON, Firecrawl search, current HTML fallback, and Crawl4AI Markdown fetch when available.
-- Use local/open-source SearXNG, Firecrawl, and Crawl4AI code rather than hosted Firecrawl or extra cloud keys.
+- Make AILIS web research safer, more Codex-like, and more generic.
+- `web_search` should rank results, expose confidence, and ask the user when a short/ambiguous target is not safe to follow.
+- Use SearXNG/Firecrawl/Crawl4AI as local open-source references for search quality ideas, not as mandatory deployed services or hosted APIs.
 
 ## Latest User Intent
-- "重要的是搜索结果要做一个排序，如果大模型判断置信度不够高，应该向用户进行询问，不该一路执行下去。并且把web_search/web_fetch 链路真正升级到 SearXNG/Firecrawl/Crawl4AI"
-- Follow-up correction from user: use open-source code locally; do not call hosted Firecrawl or introduce another API key. AILIS LLM API/key is unrelated to these local retrieval services.
+- User clarified that they do not want a Docker/deployment solution.
+- Desired direction: reference SearXNG, Firecrawl, and Crawl4AI search optimization ideas, then migrate useful mechanisms into AILIS with minimal large-scale changes.
+- Avoid writing task-specific hacks; preserve generality.
 
 ## Current State
 - `scripts\mcp-ailis-research-server.cjs`
-  - Default `web_search` provider chain is `searxng_json -> firecrawl_search -> bing_html -> duckduckgo_lite -> duckduckgo_html -> yahoo_html`.
+  - Default `web_search` provider chain remains `searxng_json -> firecrawl_search -> bing_html -> duckduckgo_lite -> duckduckgo_html -> yahoo_html`.
   - GitHub/code queries still keep `github_repositories` first.
-  - `AILIS_WEB_SEARCH_PROVIDER` supports `auto`, `searxng`, `firecrawl`, `html/current_html_fallback`, `external`, `github`, or comma-separated backend ids.
-  - `AILIS_SEARXNG_URL` / `SEARXNG_URL` configure SearXNG. Unconfigured local SearXNG is short-probed at `http://127.0.0.1:8080`.
-  - Firecrawl now defaults to local/self-hosted `http://127.0.0.1:3002`; hosted `https://api.firecrawl.dev` is blocked with `firecrawl_cloud_disabled`.
-  - `FIRECRAWL_API_KEY` is not used by the main AILIS research MCP.
-  - `web_fetch` auto short-probes local/configured Crawl4AI (`AILIS_CRAWL4AI_URL`, `CRAWL4AI_URL`, or `http://127.0.0.1:11235`) and falls back to current HTML/text extraction.
-  - Chinese guide-like natural queries now produce a backend search query, e.g. `做一个小光的攻略` -> `小光 攻略`, while retaining the original query for confidence/diagnostics.
-  - Search results now include `searchConfidence`, `clarificationRequired`, `candidateChoices`, `backendQuery`, and ranked relevance data.
-- `electron\ailis-turn-items.cjs`
-  - Nested MCP adapter details are unwrapped, including `structuredContent.result.structuredContent`.
-  - Low-confidence/ambiguous web search is classified as `evidence_gap=ambiguous_search_requires_clarification`.
-- `electron\ailis-agent-runner.cjs`
-  - Both JSON executor and native direct-tool prompts now tell AILIS to stop web_search/web_fetch loops and ask the user when that evidence gap appears.
+  - Search results now preserve `sourceBackends`, `sourceEngines`, and source rank metadata.
+  - Result ranking includes a small source-consensus score, inspired by meta-search result merging.
+  - Auto/provider-chain mode can aggregate multiple successful providers when the first success is off-target, then de-duplicate, re-rank, and return a single observation.
+  - Short ambiguous guide queries still stop for clarification instead of broadening blindly.
+  - Hosted Firecrawl remains disabled; `FIRECRAWL_API_KEY` is not used by the main AILIS research MCP.
+  - `web_fetch` still probes optional Crawl4AI Markdown output and falls back to built-in HTML/text extraction.
 - `scripts\setup-ailis-local-web-stack.ps1`
-  - Clones/downloads open-source SearXNG, Firecrawl, and Crawl4AI code under `.local\ailis-web-stack\src`.
-  - Generates local endpoint env files and a Docker compose file for SearXNG + Crawl4AI.
-  - Starts Firecrawl from its cloned source compose when `-Start` is used.
-  - Handles flaky GitHub git clone by falling back to codeload zip, and excludes Windows-invalid SearXNG Linux template paths.
-- Local source has been downloaded on this machine:
+  - Now source-only: clones/downloads SearXNG, Firecrawl, and Crawl4AI under `.local\ailis-web-stack\src`.
+  - Writes `sources.json` and `README.md` provenance/reference notes.
+  - Does not create deployment files, runtime env files, or service startup flows.
+  - Notes licenses: SearXNG/Firecrawl are AGPL-family, Crawl4AI is Apache-2.0.
+- Local source code is present on this machine:
   - `.local\ailis-web-stack\src\searxng`
   - `.local\ailis-web-stack\src\firecrawl`
   - `.local\ailis-web-stack\src\crawl4ai`
 
 ## Validation
 - `node --check scripts\mcp-ailis-research-server.cjs`: passed.
-- `node --check electron\ailis-turn-items.cjs`: passed.
-- `node --check electron\ailis-agent-runner.cjs`: passed.
-- `node --test tests\mcp-ailis-research-server.test.mjs`: 49/49 passed after local-only Firecrawl tests.
-- `node --test tests\ailis-turn-items.test.mjs tests\ailis-tool-layer.test.mjs`: 25/25 passed.
-- `node --test tests\ailis-agent-runner.test.mjs`: 3/3 passed.
-- `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup-ailis-local-web-stack.ps1 -Root .local\ailis-web-stack-smoke2 -NoClone`: passed.
-- `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup-ailis-local-web-stack.ps1 -Root .local\ailis-web-stack`: succeeded; GitHub git clone was unstable, but zip fallback downloaded the sources.
-- Real `webSearch({ query: "做一个小光的攻略" })` used `backendQuery: "小光 攻略"`, attempted `searxng_json` then `firecrawl_search` then `bing_html`, returned `clarificationRequired: true`, and produced no `suggestedNextCalls`.
+- `node --test tests\mcp-ailis-research-server.test.mjs`: 50/50 passed.
+- `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup-ailis-local-web-stack.ps1 -Root .local\ailis-web-stack-source-smoke -NoClone`: passed.
+- `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup-ailis-local-web-stack.ps1 -Root .local\ailis-web-stack -NoClone`: refreshed the real local source README/manifest.
 
-## Known Problems
-- Local source code is present, but Docker services have not been started in this turn. Until SearXNG/Firecrawl/Crawl4AI are running on their local ports, live search still falls back to current HTML providers.
-- Ambiguous short nicknames are now stopped for clarification rather than guessed, but final answer quality still depends on the model obeying the prompt and the UI surfacing the clarification naturally.
+## Known Constraints
+- The local source repositories are references. AILIS does not require those projects to be running to use its built-in search/fetch fallbacks.
+- Direct code copying from SearXNG/Firecrawl needs AGPL compliance review. Prefer reimplementing portable ideas unless the project intentionally accepts those obligations.
+- The repo has many unrelated historical changes; do not stage broad rename/build artifacts unless the user explicitly asks.
 
 ## Next Actions
-1. Stage active files only.
+1. Stage only active files for this task.
 2. Commit the patch.
-3. To start local retrieval services later, run `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup-ailis-local-web-stack.ps1 -Root .local\ailis-web-stack -Start`.
-4. Restart AILIS to test the full agent loop from UI/runtime.
+3. Restart AILIS if the user wants to test the full UI/agent loop.
 
 ## Do Not Forget
 - User prefers direct execution and default commits.
