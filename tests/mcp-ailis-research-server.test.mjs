@@ -155,6 +155,10 @@ test('read_document extracts Word paragraphs and tables as structured JSON', asy
         assert.equal(result.structuredContent.document.paragraphs[0].text, 'Employees');
         assert.deepEqual(result.structuredContent.document.tables[0].rows[1], ['Fred', 'Rebecca']);
         assert.equal(result.structuredContent.completeness.fullDocumentRead, true);
+        assert.equal(result.structuredContent.complete, true);
+        assert.equal(result.structuredContent.truncated, false);
+        assert.equal(result.structuredContent.reasoningReady, true);
+        assert.equal(result.structuredContent.observationContract.reasoning_ready, true);
     } finally {
         fs.rmSync(tmpDir, { recursive: true, force: true });
     }

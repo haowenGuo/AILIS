@@ -165,6 +165,61 @@ test('Turn items classify web_search discovery output as needing web_fetch evide
     assert.ok(items[0].alternatives.includes('mcp__ailis_research__web_fetch'));
 });
 
+test('Turn items preserve complete structured document table previews for reasoning', () => {
+    const tableRows = Array.from({ length: 90 }, (_, index) => `Person ${index + 1} | Recipient ${index + 1} | ${'profile clue '.repeat(3)}`).join('\n');
+    const documentText = [
+        '# DOCUMENT_READ_COMPLETE',
+        '',
+        'paragraph_count: 8',
+        'table_count: 1',
+        'truncated: false',
+        '',
+        '## Paragraphs',
+        '[0] Employees',
+        '[1] Gift Assignments',
+        '',
+        '## Tables',
+        'Table 1 rows=29',
+        'Giver | Recipient',
+        tableRows,
+        'Final Sender | Final Recipient'
+    ].join('\n');
+
+    const items = buildCodexLikeTurnItems({
+        stepResults: [{
+            id: 'step-doc',
+            title: 'Read DOCX',
+            tool: 'mcp__ailis_research__read_document',
+            args: { path: 'task.docx' },
+            iteration: 1,
+            response: {
+                ok: true,
+                status: 'completed',
+                result: {
+                    content: [{ type: 'text', text: documentText }],
+                    details: {
+                        status: 'completed',
+                        complete: true,
+                        truncated: false,
+                        reasoningReady: true,
+                        paragraphCount: 8,
+                        tableCount: 1,
+                        observationContract: {
+                            complete: true,
+                            truncated: false,
+                            reasoning_ready: true
+                        }
+                    }
+                }
+            }
+        }]
+    });
+
+    assert.equal(items.length, 1);
+    assert.match(items[0].preview, /Final Sender \| Final Recipient/);
+    assert.doesNotMatch(items[0].preview, /truncated for model budget/);
+});
+
 test('Turn items classify nested low-confidence web_search as requiring user clarification', () => {
     const items = buildCodexLikeTurnItems({
         stepResults: [

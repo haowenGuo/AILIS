@@ -45,6 +45,7 @@ const {
 
 const DEFAULT_RUN_TIMEOUT_MS = 90000;
 const MAX_RESULT_PREVIEW_CHARS = 2600;
+const STRUCTURED_TOOL_RESULT_PREVIEW_CHARS = 12000;
 const MAX_PROMPT_PROGRESS_CHARS = 700;
 const MAX_PROMPT_MEMORY_CHARS = 20000;
 const MAX_MCP_TOOL_DESCRIPTION_CHARS = 900;
@@ -56,6 +57,7 @@ const DEFAULT_VISION_AGENT_DECISION_TIMEOUT_MS = 90000;
 const MAX_AGENT_DECISION_TIMEOUT_MS = 120000;
 const PENDING_STORE_VERSION = 1;
 const FINAL_ANSWER_TOOL_NAME = 'final_answer';
+const DIRECT_TOOL_PROGRESS_NOTE_FIELD = 'progress_note';
 const AGENT_DECISION_REASONING_EFFORT_VALUES = new Set(['none', 'minimal', 'low', 'medium', 'high', 'xhigh']);
 const DEFAULT_AGENT_DECISION_REASONING_EFFORT = '';
 
@@ -531,6 +533,17 @@ function normalizePublicReasoningText(value, fallback = '') {
     return summarize(text, 220);
 }
 
+function normalizeProgressNoteText(value, fallback = '') {
+    const text = normalizePublicReasoningText(value, fallback)
+        .replace(/\b(progress_note|public_reasoning|ailis_progress_note)\b/gi, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+    if (!text || /^(正在处理|我在处理|我在思考|继续处理|继续确认|处理中|思考中)[。.!！]*$/i.test(text)) {
+        return '';
+    }
+    return text;
+}
+
 function normalizeAgentDecisionTimeoutMs(value, fallbackValue = DEFAULT_AGENT_DECISION_TIMEOUT_MS) {
     const numericValue = Number(value);
     const fallback = Number.isFinite(Number(fallbackValue))
@@ -849,16 +862,19 @@ function normalizeEvidenceBoolean(value, fallback = false) {
 
 function buildReadyEvidenceFromStep(stepResult = {}) {
     const details = getToolResultDetails(stepResult);
+    const resultText = extractToolResultText(stepResult.response?.result) || stepResult.response?.error || '';
+    const documentReadComplete = /#\s*DOCUMENT_READ_COMPLETE\b/i.test(resultText);
+    const textSaysNotTruncated = /\btruncated:\s*false\b/i.test(resultText);
     const observationContract = details.observationContract || details.observation_contract || {};
     const evidence = details.evidence && typeof details.evidence === 'object' ? details.evidence : {};
     const coveredByEvidence = details.coveredByEvidence && typeof details.coveredByEvidence === 'object'
         ? details.coveredByEvidence
         : null;
-    const complete = normalizeEvidenceBoolean(details.complete, normalizeEvidenceBoolean(observationContract.complete, normalizeEvidenceBoolean(evidence.complete)));
-    const truncated = normalizeEvidenceBoolean(details.truncated, normalizeEvidenceBoolean(observationContract.truncated, normalizeEvidenceBoolean(evidence.truncated)));
+    const complete = normalizeEvidenceBoolean(details.complete, normalizeEvidenceBoolean(observationContract.complete, normalizeEvidenceBoolean(evidence.complete, documentReadComplete && textSaysNotTruncated)));
+    const truncated = normalizeEvidenceBoolean(details.truncated, normalizeEvidenceBoolean(observationContract.truncated, normalizeEvidenceBoolean(evidence.truncated, documentReadComplete ? !textSaysNotTruncated : false)));
     const reasoningReady = normalizeEvidenceBoolean(
         details.reasoningReady,
-        normalizeEvidenceBoolean(details.reasoning_ready, normalizeEvidenceBoolean(observationContract.reasoning_ready, normalizeEvidenceBoolean(evidence.reasoningReady)))
+        normalizeEvidenceBoolean(details.reasoning_ready, normalizeEvidenceBoolean(observationContract.reasoning_ready, normalizeEvidenceBoolean(evidence.reasoningReady, documentReadComplete && textSaysNotTruncated)))
     );
     if (stepResult.response?.ok !== true || complete !== true || truncated === true || reasoningReady !== true) {
         return null;
@@ -894,6 +910,29 @@ function buildReadyEvidenceFromStep(stepResult = {}) {
             truncated: coverage.truncated
         } : null
     };
+}
+
+function previewBudgetForAgentToolResult(stepResult = {}) {
+    const tool = normalizeText(stepResult.tool).toLowerCase();
+    const resultText = extractToolResultText(stepResult.response?.result) || stepResult.response?.error || '';
+    const details = getToolResultDetails(stepResult);
+    const structuredDocument =
+        details.document ||
+        details.paragraphCount !== undefined ||
+        details.tableCount !== undefined ||
+        /#\s*DOCUMENT_READ_COMPLETE\b|## Tables|Table \d+ rows=/i.test(resultText);
+    const structuredSpreadsheet =
+        details.workbook ||
+        details.sheetCount !== undefined ||
+        /read_xlsx_workbook|spreadsheet|workbook|sheet=/i.test(`${tool}\n${resultText}`);
+    if (
+        /read_document|read_spreadsheet|read_xlsx_workbook|read_presentation/.test(tool) ||
+        structuredDocument ||
+        structuredSpreadsheet
+    ) {
+        return STRUCTURED_TOOL_RESULT_PREVIEW_CHARS;
+    }
+    return 1600;
 }
 
 function buildEvidenceSufficiencyPromptObject(stepResults = [], { exactAnswerMode = false } = {}) {
@@ -2650,7 +2689,8 @@ function buildToolContextText(toolId, { emailProfiles = {} } = {}) {
     if (toolId === 'artifact_query') {
         return appendToolContractText('artifact_query', [
             'TOOL artifact_query schema：',
-            'AILIS Context Artifact 查询工具。复杂文件解析、长日志、大文本和大工具输出会保存成 artifactId；不要 raw read 这些 payload 文件。',
+            'AILIS Context Artifact 查询工具。只接受工具结果 details.artifactId/contextArtifact.id 返回的 queryable context artifactId；evidence_artifacts 里的 artifact-* 证据引用不能传给 artifact_query。',
+            '复杂文件解析、长日志、大文本和大工具输出会保存成 context artifactId；不要 raw read 这些 payload 文件。',
             '表格动作：summary 查看概要；grid 查看紧凑网格；range 按 A1:D20 读取局部；search 按文本/颜色/地址搜索。',
             '大文本动作：text_schema 查看行数/字符数；text_range 按行号或 offset 读片段；text_search 搜索匹配行和上下文；text_tail 查看尾部。',
             '文档动作：document_schema 查看页/section；document_search 搜索；document_page 读取指定页；document_section 读取指定章节。',
@@ -3741,12 +3781,13 @@ function buildPromptBudgetReport(messages = []) {
 }
 
 function buildToolResultEvent(stepResult) {
+    const previewBudget = previewBudgetForAgentToolResult(stepResult);
     const basePreview = summarize(
         extractToolResultText(stepResult.response?.result) ||
             stepResult.response?.error ||
             stepResult.response?.result ||
             stepResult.response,
-        1600
+        previewBudget
     );
     const failure = stepResult.response?.ok === true
         ? null
@@ -3772,7 +3813,7 @@ function buildToolResultEvent(stepResult) {
         args: stepResult.args,
         status: stepResult.response?.status || 'unknown',
         ok: stepResult.response?.ok === true,
-        preview: summarize([basePreview, formatFailureHint(failure), formatEvidenceGapHint(evidenceGap)].filter(Boolean).join('\n'), 1600),
+        preview: summarize([basePreview, formatFailureHint(failure), formatEvidenceGapHint(evidenceGap)].filter(Boolean).join('\n'), previewBudget),
         evidenceRefs: getStepEvidenceRefs(stepResult),
         evidenceArtifacts: getEvidenceArtifactsPromptObject(stepResult.evidenceArtifacts || []),
         errorType: failure?.error_type || '',
@@ -3885,7 +3926,7 @@ function buildLlmAgentExecutorMessages({
         '视觉感知能力声明：vision.capture_context 是只读截图理解工具。是否调用由你根据“当前目标 + 已有 observation + 证据缺口”自行决定，不做关键词硬触发。Runtime 负责审批与边界仲裁；没有截图 observation 时不得声称“已经看到了屏幕内容”。',
         '长期记忆：user payload 中的 memory_context 是 AILIS 的本地长期记忆和关系记忆。它只作为辅助上下文；若与用户当前明确指令冲突，以当前指令为准；不要主动向用户暴露内部好感度数值。',
         '文件附件：user payload 中的 attached_files 是用户本轮从聊天窗选择或拖入的本地文件/文件夹元数据，不包含文件内容。用户问“这个文件/附件/刚拖进来的内容”时优先引用 attached_files.path；需要读取内容时调用 computer 工具的 stat/read/read_binary/tree 等只读动作。不要凭文件名臆造内容；修改、移动、删除附件仍按正常审批和安全策略执行。',
-        '公开思考流：如果这一轮在执行任务，可以给 public_reasoning 写一句给用户看的短进度摘要，说明你基于 observation 准备做什么或已经确认了什么。不要泄露隐藏推理链，不要写工具日志，不要写“第 N 步/我在看本机状态”这类低信息量模板；没有实质信息时可以留空。',
+        '公开进展文本：只有出现重要变化时才给 public_reasoning 写一句自然、短、给用户看的进展，例如策略切换、发现关键证据、证据足够准备收敛、工具失败后的恢复方向、权限/环境阻塞。不要泄露隐藏推理链，不要写工具日志/JSON/“第 N 步”/“正在处理”这类低信息量模板；没有实质信息时留空。',
         '人物表现：使用顶层 persona_output 给出自然可见文本、气泡文本、语音风格，以及 emotion/intensity/socialTone/gestureIntent/taskState/speechEnergy/gazeTarget/durationHint。不要把 persona_output JSON 复制到 final_answer、blocked_reason、public_reasoning、Markdown 或代码块里；不要直接选择 VRM 动作名；工具执行语义仍由 action/tool_call 决定。',
         '工具 experience：工具 contract 里的 experience 字段说明这个工具在人物体验里代表什么，审批、等待、失败和成功要按 AILIS 的自然表达呈现，不要把 tool_call、approvalId、raw observation 当用户回复。',
         '运行环境协议：user payload 里的 runtime_environment 是当前这一轮的真实执行环境，来自 Platform Adapter，不属于长期记忆。生成 shell、路径、重定向、管道、环境变量和文件命令时必须先看 runtime_environment.family/default_shell/path_style/command_guidance；不要默认自己在 Linux、Windows 或 macOS。',
@@ -3893,7 +3934,7 @@ function buildLlmAgentExecutorMessages({
         'Self Debug Loop：当用户反馈 AILIS 自身 bug、工具链异常、Agent Loop 不稳定或要求 AILIS 自己修复时，优先把它当作高风险自修复任务。先加载 self_debugger 能力，按建案、收证据、诊断、提补丁、验证、确认后应用的协议推进；不要直接裸改自己的代码。',
         '工具能力索引：首轮只给 capability_catalog。详细 schema 通过 load_context、tool_search 或工具 observation 按需出现。MCP 工具优先使用 tool_search/capability_context 中的 mcp__server__tool direct spec；外部 API/Composio/OpenAPI 工具优先使用 tool_search 返回的 external__provider__tool direct spec。没有 direct spec 时，先 load/search specs，mcp_bridge/capability_manager 只作为管理、安装、修复入口。请按任务目标和证据缺口选择最小必要工具，避免关键词驱动的机械路由。',
         exactAnswerMode
-            ? `Exact-answer 模式：不要把可见 Markdown 当提交答案。必须先用工具形成 evidence_artifacts，再用 action="final" 填短 final_answer，并在 exact_answer_submission 中提供 answer、confidence、evidence_refs；artifact id 只用于 evidence_refs，不是文件路径，不要调用 read/open 读取它们；缺证据时继续 tool 或 blocked。`
+            ? `Exact-answer 模式：不要把可见 Markdown 当提交答案。必须先用工具形成 evidence_artifacts，再用 action="final" 填短 final_answer，并在 exact_answer_submission 中提供 answer、confidence、evidence_refs；evidence_refs 里的 artifact-* 是证据引用 ID，不是文件路径，也不是 artifact_query 的 context artifactId，不能调用 read/open/artifact_query 去读取它们。关系/约束题如果出现表格、分配关系、人物属性、物品列表或缺失项，final 前必须做角色对齐检查：先区分题目问的目标角色和中间缺失实体，再按表格方向映射，不能把“未匹配的收件人/物品/属性”直接当成“未执行动作的人”。缺证据时继续 tool 或 blocked。`
             : '',
         '可见回复格式：final_answer 字段是给用户看的 Markdown 字符串，可以使用自然段、短列表、代码块和加粗；blocked_reason 也按 Markdown 组织。不要输出 HTML；不要把 persona_output/persona_surface 或 emotion/intensity/gestureIntent/taskState 等内部控制字段放进任何可见回复字段。',
         '只输出 JSON，JSON 外不要输出 Markdown。',
@@ -4097,6 +4138,46 @@ function hardenKnownNativeToolSchema(toolName = '', schema = {}) {
     return schema;
 }
 
+function withNativeProgressNoteParameter(schema = {}) {
+    if (!isNativeObjectSchema(schema)) {
+        return schema;
+    }
+    const next = {
+        ...schema,
+        properties: {
+            ...(schema.properties || {})
+        }
+    };
+    if (!next.properties[DIRECT_TOOL_PROGRESS_NOTE_FIELD]) {
+        next.properties[DIRECT_TOOL_PROGRESS_NOTE_FIELD] = {
+            type: 'string',
+            description: [
+                'Optional short user-visible AILIS progress note in the same natural language as the user.',
+                'Use only when there is a meaningful change: strategy shift, key evidence found, failure recovery, permission/environment blocker, or ready-to-answer signal.',
+                'Leave empty for routine tool calls. Do not reveal hidden chain-of-thought, raw tool logs, JSON, step numbers, or generic "I am thinking" text.'
+            ].join(' ')
+        };
+    }
+    return next;
+}
+
+function splitNativeProgressNoteArgs(args = {}) {
+    if (!args || typeof args !== 'object' || Array.isArray(args)) {
+        return {
+            args: {},
+            progressNote: ''
+        };
+    }
+    const {
+        [DIRECT_TOOL_PROGRESS_NOTE_FIELD]: progressNote,
+        ...cleanArgs
+    } = args;
+    return {
+        args: cleanArgs,
+        progressNote: normalizeProgressNoteText(progressNote)
+    };
+}
+
 function normalizeNativeToolSpec(spec = {}) {
     if (!spec || typeof spec !== 'object') {
         return null;
@@ -4111,10 +4192,10 @@ function normalizeNativeToolSpec(spec = {}) {
         additionalProperties: true,
         properties: {}
     };
-    const repairedParameters = hardenKnownNativeToolSchema(name, repairNativeToolJsonSchema(compactToolSchema(parameters, {
+    const repairedParameters = withNativeProgressNoteParameter(hardenKnownNativeToolSchema(name, repairNativeToolJsonSchema(compactToolSchema(parameters, {
         maxBytes: 6000,
         maxDepth: 4
-    })));
+    }))));
     return {
         type: 'function',
         name,
@@ -4305,6 +4386,7 @@ function buildFinalAnswerNativeToolSpec() {
         description: [
             'Submit the exact benchmark/task answer separately from user-visible persona text.',
             'Use only after evidence_artifacts contain the evidence_refs supporting the answer.',
+            'For relation or constraint questions with tables, assignments, people, items, profiles, or lists, verify role alignment before submitting: answer the entity role asked by the question, not merely the unmatched intermediate entity.',
             'If evidence is missing, do not call this tool; continue retrieving or report blocked.'
         ].join(' '),
         parameters: {
@@ -4333,7 +4415,7 @@ function buildFinalAnswerNativeToolSpec() {
                 },
                 reason: {
                     type: 'string',
-                    description: 'Brief private evidence note for audit. Do not put this in answer.'
+                    description: 'Brief private evidence note for audit. For relation/constraint tasks, include the target role, intermediate missing entity, and relation table direction check. Do not put this in answer.'
                 },
                 persona_text: {
                     type: 'string',
@@ -4508,7 +4590,7 @@ function buildExactAnswerContractPromptObject({ exactAnswerMode = false, evidenc
             'evidence_refs contains ids not present in evidence_artifacts'
         ],
         available_evidence_refs: evidenceArtifacts.map((artifact) => artifact.id).filter(Boolean),
-        instruction: `When solved, call ${FINAL_ANSWER_TOOL_NAME} instead of writing a visible prose final. Use artifact ids only as evidence_refs; do not read/open artifact ids as filesystem paths. If evidence is missing, keep using tools or return blocked with a repair instruction.`
+        instruction: `When solved, call ${FINAL_ANSWER_TOOL_NAME} instead of writing a visible prose final. Use evidence artifact ids only as final_answer evidence_refs. They are not filesystem paths and not artifact_query context artifactIds; do not read/open/query them. For relation/constraint questions with assignments, tables, profiles, lists, or missing entities, verify the answer role against the question wording and map intermediate missing entities through the relation table direction before final. If evidence is missing, keep using tools or return blocked with a repair instruction.`
     };
 }
 
@@ -4555,6 +4637,7 @@ function buildLlmAgentDirectToolMessages({
         '不要输出 JSON 决策协议，不要手写 tool_call/tool/args 包装对象；如果要执行工具，使用原生工具调用。每轮最多调用一个工具。',
         '如果缺工具、缺 API、缺文档解析、缺视频/视觉能力，先调用 tool_search；tool_search 返回的 mcp__... 或 external__... 在下一轮会变成可直接调用的原生工具。',
         '只调用本轮 tools 数组中实际暴露的原生工具；不要根据历史提示或其他系统经验虚构工具名。',
+        '公开进展文本：每个 direct tool 参数里都有可选 progress_note。只有出现重要变化时，顺手填一句自然、短、给用户看的进展，例如策略切换、发现关键证据、证据足够准备收敛、工具失败后的恢复方向、权限/环境阻塞；例行工具调用留空。不要泄露隐藏推理链，不要写工具日志/JSON/“第 N 步”/“正在处理”这类低信息量模板。',
         '工具失败、证据不足、字段没找到时，要根据 latest_failed_observation、recovery_hint 和 lossless_tool_observations 改换策略，不要机械重复同一个 web_search。',
         '歧义澄清协议：如果 latest_failed_observation/latest_observation 或任何 tool_result 显示 evidence_gap=ambiguous_search_requires_clarification，或 recovery_hint 要求用户澄清搜索目标，停止继续调用 web_search/web_fetch，直接用最终可见回复问用户选择候选或补充游戏名/角色全名。',
         '证据充分时要收敛：如果 user payload 的 evidence_sufficiency.status 是 ready_for_reasoning，且 ready_evidence 已覆盖当前问题所需字段/范围/计算结果，应推理或最终回答，不要继续重复读取 covered artifact/range。',
@@ -4564,7 +4647,7 @@ function buildLlmAgentDirectToolMessages({
         '需要用户授权时调用 request_permissions。危险写入、shell、patch、邮件发送等会由本地 Gateway 审批，不要在参数中伪造 approved=true。',
         '最终答复必须是给用户看的 Markdown。没有足够证据时不要提交猜测答案，要继续调用工具或明确 blocked。',
         exactAnswerMode
-            ? `Exact-answer 模式：普通可见话术不能作为提交答案。任务完成时必须调用 ${FINAL_ANSWER_TOOL_NAME}，answer 只填短精确答案，confidence 必须 high/medium，evidence_refs 必须引用 evidence_artifacts 中的 id；这些 artifact id 不是文件路径，不要用 read/open 读取它们。`
+            ? `Exact-answer 模式：普通可见话术不能作为提交答案。任务完成时必须调用 ${FINAL_ANSWER_TOOL_NAME}，answer 只填短精确答案，confidence 必须 high/medium，evidence_refs 必须引用 evidence_artifacts 中的 id；这些 artifact-* 是证据引用，不是文件路径，也不是 artifact_query 的 context artifactId，不要用 read/open/artifact_query 读取它们。若题目是表格/分配/人物属性/物品列表/缺失项这类关系约束题，final 前必须说明目标角色、中间缺失实体、表格方向映射三者一致，否则继续推理或调用工具。`
             : '',
         `最多工具轮数：${maxSteps}`,
         `工具摘要：${toolSummary || 'Direct tools are exposed as native function tools. Search more tools with tool_search.'}`
@@ -4714,12 +4797,15 @@ async function callLlmAgentDirectToolDecision(settings, payload, { hasToolHistor
         if (directToolCall.name === FINAL_ANSWER_TOOL_NAME) {
             const exactAnswerSubmission = normalizeExactAnswerSubmission(directToolCall.arguments || {});
             const visibleText = exactAnswerSubmission.personaText || exactAnswerSubmission.answer;
+            const argumentProgressNote = normalizeProgressNoteText(directToolCall.arguments?.[DIRECT_TOOL_PROGRESS_NOTE_FIELD]);
+            const contentProgressNote = normalizeProgressNoteText(response.content);
+            const progressNote = argumentProgressNote || contentProgressNote;
             return {
                 ok: true,
                 mode: 'task',
                 intent: 'exact_answer_final',
                 summary: 'Exact answer submitted through native final_answer tool.',
-                publicReasoning: normalizePublicReasoningText(response.content),
+                publicReasoning: progressNote,
                 riskLevel: 'low',
                 action: 'final',
                 finalAnswer: exactAnswerSubmission.answer,
@@ -4727,6 +4813,7 @@ async function callLlmAgentDirectToolDecision(settings, payload, { hasToolHistor
                 toolCall: null,
                 capabilityRequest: sanitizeCapabilityRequest({}),
                 planUpdates: [],
+                progressNoteSource: argumentProgressNote ? 'model_tool_progress_note' : (contentProgressNote ? 'model_message_content' : ''),
                 personaOutput: sanitizePersonaOutput({
                     text: visibleText,
                     emotion: 'focused',
@@ -4762,11 +4849,16 @@ async function callLlmAgentDirectToolDecision(settings, payload, { hasToolHistor
                 directToolFallback: true
             };
         }
+        const {
+            args: cleanNativeArgs,
+            progressNote
+        } = splitNativeProgressNoteArgs(nativeValidation.args);
+        const contentProgressNote = normalizeProgressNoteText(response.content);
         const toolCall = sanitizeAgentToolCall({
             id: directToolCall.id,
             title: directToolCall.name,
             tool: directToolCall.name,
-            args: nativeValidation.args
+            args: cleanNativeArgs
         }, 0, 'execute');
         if (!toolCall) {
             return {
@@ -4783,7 +4875,7 @@ async function callLlmAgentDirectToolDecision(settings, payload, { hasToolHistor
             mode: 'task',
             intent: `direct_tool:${directToolCall.name}`,
             summary: `Direct native tool call: ${directToolCall.name}`,
-            publicReasoning: normalizePublicReasoningText(response.content),
+            publicReasoning: progressNote || contentProgressNote,
             riskLevel: normalizeText('', agentStepNeedsConfirmation(toolCall) ? 'medium' : 'low'),
             action: 'tool',
             finalAnswer: '',
@@ -4791,6 +4883,7 @@ async function callLlmAgentDirectToolDecision(settings, payload, { hasToolHistor
             toolCall,
             capabilityRequest: sanitizeCapabilityRequest({}),
             planUpdates: [],
+            progressNoteSource: progressNote ? 'model_tool_progress_note' : (contentProgressNote ? 'model_message_content' : ''),
             personaOutput: null,
             legacyPlan: false,
             raw: {
@@ -5152,6 +5245,7 @@ async function callLlmAgentDecision(settings, payload) {
         toolCall,
         capabilityRequest,
         planUpdates: normalizePlanUpdates(json.plan_update || json.planUpdate || json.plan),
+        progressNoteSource: 'model_public_reasoning',
         personaOutput,
         exactAnswerSubmission: exactAnswerSubmission.answer || exactAnswerSubmission.evidenceRefs.length || exactAnswerSubmission.confidence
             ? exactAnswerSubmission
@@ -6696,6 +6790,7 @@ class AILISAgentRunner {
                     intent: decision.intent,
                     summary: decision.summary,
                     publicReasoning: decision.publicReasoning,
+                    progressNoteSource: decision.progressNoteSource || '',
                     riskLevel: decision.riskLevel,
                     toolCall: decision.toolCall
                         ? {
@@ -6750,30 +6845,44 @@ class AILISAgentRunner {
                     nextAction: '检查或更换 LLM provider/API key 后重新运行'
                 });
             }
-            if (decision.ok && decision.action !== 'final' && decision.publicReasoning) {
+            const progressNote = normalizeProgressNoteText(decision.publicReasoning);
+            if (decision.ok && decision.action !== 'final' && progressNote) {
+                const progressNoteSource = decision.progressNoteSource || 'model_public_reasoning';
                 const reasoningEvent = {
-                    type: 'reasoning',
+                    type: 'progress_note',
                     status: 'delta',
                     iteration,
-                    text: decision.publicReasoning
+                    text: progressNote,
+                    source: progressNoteSource
                 };
                 events.push(reasoningEvent);
+                this.gateway.emitGatewayEvent?.('agent.progress.note', {
+                    runId,
+                    sessionId,
+                    iteration,
+                    text: progressNote,
+                    action: decision.action,
+                    intent: decision.intent,
+                    source: progressNoteSource
+                });
                 this.gateway.emitGatewayEvent?.('agent.reasoning.delta', {
                     runId,
                     sessionId,
                     iteration,
-                    text: decision.publicReasoning,
+                    text: progressNote,
                     action: decision.action,
-                    intent: decision.intent
+                    intent: decision.intent,
+                    source: progressNoteSource
                 });
                 await appendRuntimeItem({
-                    type: 'agent.reasoning',
+                    type: 'agent.progress_note',
                     status: 'delta',
                     payload: {
                         iteration,
-                        text: decision.publicReasoning,
+                        text: progressNote,
                         action: decision.action,
-                        intent: decision.intent
+                        intent: decision.intent,
+                        source: progressNoteSource
                     }
                 });
             }
@@ -8335,6 +8444,7 @@ module.exports = {
     sanitizeAgentToolCall,
     isExactAnswerExecutionMode,
     normalizeExactAnswerSubmission,
+    splitNativeProgressNoteArgs,
     stripControlTags,
     validateAgentToolLoopGuard,
     validateNativeDirectToolCall,

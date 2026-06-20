@@ -1,0 +1,19 @@
+{
+  "jobId": "ailis-gaia-auto-optimizer",
+  "taskSource": "practice_then_official",
+  "durationHours": 16,
+  "heartbeatMinutes": 5,
+  "maxIterationsPerControllerRun": 1,
+  "maxRepairAttemptsPerIssue": 3,
+  "maxConcurrentHeavyRuns": 1,
+  "maxAgentSteps": 20,
+  "taskRetries": 0,
+  "stopWhen": [
+    "all_tasks_passed",
+    "repair_required",
+    "duration_expired",
+    "user_stop_flag"
+  ],
+  "repairMode": "repair_ticket",
+  "reportPath": "longrun/jobs/ailis-gaia-auto-optimizer/report.md"
+}

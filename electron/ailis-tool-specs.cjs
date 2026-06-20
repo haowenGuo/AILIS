@@ -56,7 +56,7 @@ const AILIS_RUNTIME_TOOL_DEFINITIONS = Object.freeze([
     Object.freeze({
         id: 'artifact_query',
         label: 'artifact_query',
-        description: 'Query managed AILIS context artifacts by artifactId without dumping large payload files into the model context. Use spreadsheet grid/range/search, text_range/text_search/text_tail, or document_search/document_page/document_section instead of raw read on artifact payloads.',
+        description: 'Query managed AILIS context artifacts by details.artifactId/contextArtifact.id without dumping large payload files into the model context. Do not pass evidence_refs artifact-* ids here. Use spreadsheet grid/range/search, text_range/text_search/text_tail, or document_search/document_page/document_section instead of raw read on artifact payloads.',
         sectionId: 'context-artifacts',
         route: 'ailis-runtime',
         materialized: true,

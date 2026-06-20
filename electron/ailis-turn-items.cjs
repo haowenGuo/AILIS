@@ -4,6 +4,7 @@ const {
 
 const DEFAULT_MAX_TURN_ITEMS = 16;
 const DEFAULT_PREVIEW_CHARS = 1000;
+const STRUCTURED_ARTIFACT_PREVIEW_CHARS = 12000;
 const DEFAULT_RECENT_FULL_ITEMS = 6;
 const DEFAULT_OLDER_PREVIEW_CHARS = 280;
 
@@ -85,6 +86,14 @@ function extractToolResultText(result) {
     if (typeof result.content === 'string') {
         return result.content;
     }
+    if (Array.isArray(result.content)) {
+        const chunks = result.content
+            .map((part) => (typeof part?.text === 'string' ? part.text : ''))
+            .filter(Boolean);
+        if (chunks.length) {
+            return chunks.join('\n').trim();
+        }
+    }
     if (typeof result.stdout === 'string') {
         return result.stdout;
     }
@@ -112,6 +121,29 @@ function getResponseDetails(response = {}) {
         }
     }
     return {};
+}
+
+function previewBudgetForToolResult({ tool = '', response = {}, result = {} } = {}) {
+    const normalizedTool = normalizeText(tool).toLowerCase();
+    const details = getResponseDetails(response);
+    const text = extractToolResultText(result || response?.result || response);
+    const structuredDocument =
+        details.document ||
+        details.paragraphCount !== undefined ||
+        details.tableCount !== undefined ||
+        /document_read_complete|## tables|table \d+ rows=/i.test(text);
+    const structuredSpreadsheet =
+        details.workbook ||
+        details.sheetCount !== undefined ||
+        /read_xlsx_workbook|spreadsheet|workbook|sheet=/i.test(`${normalizedTool}\n${text}`);
+    if (
+        /read_document|read_spreadsheet|read_xlsx_workbook|read_presentation/.test(normalizedTool) ||
+        structuredDocument ||
+        structuredSpreadsheet
+    ) {
+        return STRUCTURED_ARTIFACT_PREVIEW_CHARS;
+    }
+    return DEFAULT_PREVIEW_CHARS;
 }
 
 function getArtifactEvidenceSummary(response = {}) {
@@ -355,10 +387,16 @@ function buildToolCallItem(event = {}) {
 }
 
 function buildToolResultItem(event = {}) {
+    const response = event.response || event.result || {};
+    const previewBudget = previewBudgetForToolResult({
+        tool: event.tool,
+        response,
+        result: event.result
+    });
     const failure = event.ok ? null : classifyToolFailureObservation({
         tool: event.tool,
         args: event.args,
-        response: event.response || event.result || {},
+        response,
         preview: event.preview || event.error || ''
     });
     const evidenceGap = event.ok ? (
@@ -366,7 +404,7 @@ function buildToolResultItem(event = {}) {
             ? event.evidenceGap
             : null
     ) : null;
-    const preview = summarizeValue(event.preview || event.error || event.result || '', DEFAULT_PREVIEW_CHARS);
+    const preview = summarizeValue(event.preview || event.error || event.result || '', previewBudget);
     return {
         type: 'tool_result',
         status: event.ok ? 'completed' : 'failed',
@@ -375,7 +413,7 @@ function buildToolResultItem(event = {}) {
         tool: event.tool || null,
         ok: event.ok === true,
         result_status: event.status || 'unknown',
-        preview: summarizeValue([preview, formatFailureHint(failure), formatEvidenceGapHint(evidenceGap)].filter(Boolean).join('\n'), DEFAULT_PREVIEW_CHARS),
+        preview: summarizeValue([preview, formatFailureHint(failure), formatEvidenceGapHint(evidenceGap)].filter(Boolean).join('\n'), previewBudget),
         error_type: failure?.error_type || null,
         evidence_gap: evidenceGap?.evidence_gap || null,
         artifact_evidence: getArtifactEvidenceSummary(event.response || event.result || {}),
@@ -387,9 +425,14 @@ function buildToolResultItem(event = {}) {
 
 function buildToolResultItemFromStep(stepResult = {}) {
     const response = stepResult.response || {};
+    const previewBudget = previewBudgetForToolResult({
+        tool: stepResult.tool,
+        response,
+        result: response.result
+    });
     const basePreview = summarizeValue(
         extractToolResultText(response.result) || response.error || response.result || response,
-        DEFAULT_PREVIEW_CHARS
+        previewBudget
     );
     const failure = response.ok === true ? null : classifyToolFailureObservation({
         tool: stepResult.tool,
@@ -411,7 +454,7 @@ function buildToolResultItemFromStep(stepResult = {}) {
         tool: stepResult.tool || null,
         ok: response.ok === true,
         result_status: response.status || 'unknown',
-        preview: summarizeValue([basePreview, formatFailureHint(failure), formatEvidenceGapHint(evidenceGap)].filter(Boolean).join('\n'), DEFAULT_PREVIEW_CHARS),
+        preview: summarizeValue([basePreview, formatFailureHint(failure), formatEvidenceGapHint(evidenceGap)].filter(Boolean).join('\n'), previewBudget),
         error_type: failure?.error_type || null,
         evidence_gap: evidenceGap?.evidence_gap || null,
         artifact_evidence: getArtifactEvidenceSummary(response),

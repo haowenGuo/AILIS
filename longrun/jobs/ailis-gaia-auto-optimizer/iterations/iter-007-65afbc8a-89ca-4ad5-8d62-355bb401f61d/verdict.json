@@ -1,0 +1,14 @@
+{
+  "ok": false,
+  "status": "failed",
+  "failureCategory": "harness_finalization",
+  "optimizationFocus": "exact_answer_finalization",
+  "generalizedCapability": "benchmark_final_answer_and_evidence_gate",
+  "summary": "The agent did not produce an acceptable exact answer or the answer gate rejected it.",
+  "nextAction": "repair exact-answer finalization and evidence digest handling",
+  "taskId": "65afbc8a-89ca-4ad5-8d62-355bb401f61d",
+  "source": "practice",
+  "chainPath": "F:\\AILIS_self_evolution_runtime\\longrun\\jobs\\ailis-gaia-auto-optimizer\\iterations\\iter-007-65afbc8a-89ca-4ad5-8d62-355bb401f61d\\chain.json",
+  "summaryPath": "",
+  "resultPath": ""
+}

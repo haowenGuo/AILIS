@@ -7239,15 +7239,26 @@ print(json.dumps({
     }
     const details = {
         status: 'completed',
+        ok: true,
         path: filePath,
         paragraphCount: Number(document.paragraph_count || 0),
         tableCount: Number(document.table_count || 0),
+        complete: true,
         truncated: false,
+        reasoningReady: true,
+        evidenceQuality: 'sufficient_evidence',
         completeness: {
             paragraphsReturned: Number(document.paragraph_count || 0),
             tablesReturned: Number(document.table_count || 0),
             tableRowsReturned: (document.tables || []).reduce((sum, table) => sum + (Array.isArray(table.rows) ? table.rows.length : 0), 0),
             fullDocumentRead: true
+        },
+        observationContract: {
+            complete: true,
+            truncated: false,
+            reasoning_ready: true,
+            is_evidence: true,
+            evidence_quality: 'sufficient_evidence'
         },
         nextActionHint: 'Use structuredContent.document directly and submit/finalize if it contains the needed evidence; do not fall back to raw DOCX/ZIP reads after read_document completes.'
     };
