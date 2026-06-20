@@ -223,12 +223,12 @@ const ROUTING_PROFILES = Object.freeze([
             /\b(kaggle|competition|contest|leaderboard|benchmark|challenge|latest|current|recent|today|news|strategy|guide|walkthrough|attack|defense|adversarial)\b/i,
             /(最新|当前|今天|最近|新闻|攻略|比赛|竞赛|挑战|排行榜|攻防|对抗|安全|检索|搜索|查找)/i
         ],
-        tools: ['web_search', 'web_fetch'],
-        primaryTools: ['web_search'],
+        tools: ['web_research', 'web_search', 'web_fetch'],
+        primaryTools: ['web_research', 'web_search'],
         bonus: 86,
-        primaryBonus: 20,
+        primaryBonus: 28,
         webPenalty: 0,
-        advice: 'Use web_search for public/current web discovery queries such as latest competitions, leaderboards, news, strategy, and guide requests; then use web_fetch on a high-signal result URL before answering.'
+        advice: 'Use web_research for public/current web evidence tasks such as latest competitions, leaderboards, news, strategy, and guide requests because it plans queries, searches, fetches, ranks evidence pages, and stops for clarification when ambiguous. Use bare web_search only for discovery-only result lists.'
     })
 ]);
 
@@ -277,6 +277,9 @@ function toolSpecificityScore(toolName = '') {
     }
     if (toolName === 'web_search') {
         return -20;
+    }
+    if (toolName === 'web_research') {
+        return 10;
     }
     if (toolName === 'web_fetch' || toolName === 'web_extract_links') {
         return 4;

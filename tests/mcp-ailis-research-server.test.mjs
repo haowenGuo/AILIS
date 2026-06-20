@@ -1286,9 +1286,144 @@ test('web_research builds an evidence bundle from search and fetched pages', asy
         assert.equal(result.structuredContent.evidencePages[0].url, `${baseUrl}/guide`);
         assert.equal(result.structuredContent.evidencePages[0].evidenceQuality, 'sufficient_evidence');
         assert.equal(result.structuredContent.evidencePages[0].reasoningReady, true);
+        assert.ok(result.structuredContent.evidencePages[0].evidenceScore >= 70);
+        assert.ok(result.structuredContent.evidencePages[0].evidenceSnippets.length >= 1);
+        assert.equal(result.structuredContent.pipelineSteps[0].stage, 'query_plan');
+        assert.equal(result.structuredContent.search.searchQueries[0].role, 'original');
         assert.ok(result.structuredContent.evidencePages[0].htmlRelations.sections.some((section) => section.heading === '配队建议'));
         assert.match(result.content[0].text, /AILIS web research evidence bundle/);
         assert.deepEqual(requests, ['/search', '/guide']);
+    });
+});
+
+test('web_research expands query variants and fetches the high-signal result', async () => {
+    const searchQueries = [];
+    const fetchedPaths = [];
+    const guideBody = [
+        '<h1>绝区零莱特攻略</h1>',
+        '<p>莱特攻略包含技能机制、配队、驱动盘、音擎和输出手法。</p>',
+        `<p>${'莱特是击破角色，攻略正文提供配队思路、驱动盘词条、音擎选择和实战循环。'.repeat(90)}</p>`
+    ].join('');
+    await withServer((request, response) => {
+        const url = new URL(request.url || '/', 'http://127.0.0.1');
+        if (url.pathname === '/search') {
+            const query = url.searchParams.get('q') || '';
+            searchQueries.push(query);
+            response.writeHead(200, { 'content-type': 'application/json' });
+            if (/帮我做一个/.test(query)) {
+                response.end(JSON.stringify({
+                    results: [
+                        {
+                            title: '莱特咖啡店活动资讯',
+                            url: `http://${request.headers.host}/noise`,
+                            content: '活动新闻、门店优惠和无关资讯。'
+                        }
+                    ]
+                }));
+                return;
+            }
+            response.end(JSON.stringify({
+                results: [
+                    {
+                        title: '绝区零莱特完整攻略',
+                        url: `http://${request.headers.host}/guide`,
+                        content: '莱特攻略，技能机制、配队、驱动盘、音擎和输出手法。'
+                    }
+                ]
+            }));
+            return;
+        }
+        fetchedPaths.push(url.pathname);
+        if (url.pathname === '/guide') {
+            response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+            response.end(`<html><head><title>绝区零莱特攻略</title></head><body>${guideBody}</body></html>`);
+            return;
+        }
+        if (url.pathname === '/noise') {
+            response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+            response.end('<html><body><p>无关新闻。</p></body></html>');
+            return;
+        }
+        response.writeHead(404);
+        response.end('not found');
+    }, async (baseUrl) => {
+        const result = await webResearch({
+            query: '帮我做一个绝区零 莱特 攻略 配队',
+            provider: 'searxng',
+            fetchProvider: 'builtin',
+            searxngUrl: baseUrl,
+            maxSearchQueries: 2,
+            maxPages: 1,
+            maxCharsPerPage: 12000
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.equal(result.structuredContent.answerReadiness, 'ready');
+        assert.deepEqual(searchQueries, ['帮我做一个绝区零 莱特 攻略 配队', '绝区零 莱特 攻略']);
+        assert.deepEqual(fetchedPaths, ['/guide']);
+        assert.equal(result.structuredContent.search.searchAggregation.queryPlan, true);
+        assert.equal(result.structuredContent.search.searchQueries.length, 2);
+        assert.equal(result.structuredContent.evidencePages[0].url, `${baseUrl}/guide`);
+    });
+});
+
+test('web_research reranks fetched pages by evidence score instead of search order', async () => {
+    const guideBody = [
+        '<h1>星见雅攻略</h1>',
+        '<p>星见雅攻略包含技能加点、驱动盘、音擎、配队和输出循环。</p>',
+        '<h2>驱动盘</h2>',
+        '<p>推荐优先强化核心输出词条，并根据队伍选择暴击、异常或攻击属性。</p>',
+        `<p>${'星见雅配队需要兼顾站场输出、增益覆盖和异常积蓄，攻略给出不同队伍的打法。'.repeat(100)}</p>`
+    ].join('');
+    await withServer((request, response) => {
+        const url = new URL(request.url || '/', 'http://127.0.0.1');
+        if (url.pathname === '/search') {
+            response.writeHead(200, { 'content-type': 'application/json' });
+            response.end(JSON.stringify({
+                results: [
+                    {
+                        title: '星见雅攻略 - 加载中',
+                        url: `http://${request.headers.host}/shell`,
+                        content: '星见雅攻略、驱动盘、配队。'
+                    },
+                    {
+                        title: '星见雅完整攻略',
+                        url: `http://${request.headers.host}/guide`,
+                        content: '星见雅攻略包含技能加点、驱动盘、音擎、配队和输出循环。'
+                    }
+                ]
+            }));
+            return;
+        }
+        if (url.pathname === '/shell') {
+            response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+            response.end('<html><head><title>星见雅攻略</title></head><body><div id="app">Loading...</div><script src="/app.js"></script></body></html>');
+            return;
+        }
+        if (url.pathname === '/guide') {
+            response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+            response.end(`<html><head><title>星见雅完整攻略</title></head><body>${guideBody}</body></html>`);
+            return;
+        }
+        response.writeHead(404);
+        response.end('not found');
+    }, async (baseUrl) => {
+        const result = await webResearch({
+            query: '绝区零 星见雅 攻略 驱动盘 配队',
+            provider: 'searxng',
+            fetchProvider: 'builtin',
+            searxngUrl: baseUrl,
+            maxPages: 2,
+            maxCharsPerPage: 12000
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.equal(result.structuredContent.answerReadiness, 'ready');
+        assert.equal(result.structuredContent.evidencePages.length, 2);
+        assert.equal(result.structuredContent.evidencePages[0].url, `${baseUrl}/guide`);
+        assert.equal(result.structuredContent.evidencePages[0].evidenceQuality, 'sufficient_evidence');
+        assert.equal(result.structuredContent.evidencePages[1].url, `${baseUrl}/shell`);
+        assert.ok(result.structuredContent.evidencePages[0].evidenceScore > result.structuredContent.evidencePages[1].evidenceScore);
     });
 });
 

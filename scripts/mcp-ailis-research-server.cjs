@@ -26,6 +26,10 @@ function clampNumber(value, fallback, min, max) {
     return Math.max(min, Math.min(Math.round(numeric), max));
 }
 
+function optionIsTrue(value) {
+    return value === true || /^(?:true|1|yes|on)$/i.test(normalizeString(value));
+}
+
 function readDesktopLlmSettings() {
     const appData = process.env.APPDATA || path.join(process.env.USERPROFILE || '', 'AppData', 'Roaming');
     const statePath = path.join(appData, 'ailis', 'desktop-state.json');
@@ -1493,6 +1497,70 @@ function buildEffectiveSearchQuery(query = '') {
     return terms.length >= 2 ? terms.slice(0, 8).join(' ') : normalized;
 }
 
+function buildWebResearchQueryPlan(query = '', args = {}) {
+    const original = normalizeString(query);
+    const effective = buildEffectiveSearchQuery(original);
+    const maxQueries = clampNumber(args.maxSearchQueries || args.max_search_queries, 3, 1, 5);
+    const variants = [];
+    const seen = new Set();
+    const addVariant = ({ searchQuery = '', backendQuery = '', role = '', reason = '' } = {}) => {
+        const normalizedSearchQuery = normalizeString(searchQuery);
+        const normalizedBackendQuery = normalizeString(backendQuery || searchQuery);
+        const key = normalizeSearchText(`${normalizedSearchQuery}\n${normalizedBackendQuery}`);
+        if (!normalizedSearchQuery || !normalizedBackendQuery || seen.has(key)) {
+            return;
+        }
+        seen.add(key);
+        variants.push(pruneEmptyDeep({
+            index: variants.length + 1,
+            role,
+            query: normalizedSearchQuery,
+            backendQuery: normalizedBackendQuery,
+            reason
+        }));
+    };
+    addVariant({
+        searchQuery: original,
+        backendQuery: original,
+        role: 'original',
+        reason: 'Run the literal user query first so the pipeline can detect over-broad or ambiguous intent before rewriting.'
+    });
+    if (effective && effective !== original) {
+        addVariant({
+            searchQuery: effective,
+            backendQuery: effective,
+            role: 'effective_terms',
+            reason: 'Use extracted entity and guide terms to remove conversational filler and improve search precision.'
+        });
+    }
+    const quotedPhrases = extractQuotedSearchPhrases(original);
+    const entityTerms = extractShortCjkEntityTerms(original);
+    const guideTerms = extractGuideTermsFromQuery(original);
+    if (entityTerms.length && guideTerms.length && hasSpecificSearchContext(original, entityTerms)) {
+        const guideTerm = guideTerms.includes('攻略') ? '攻略' : guideTerms[0];
+        addVariant({
+            searchQuery: `"${entityTerms[0]}" ${guideTerm}`,
+            backendQuery: `"${entityTerms[0]}" ${guideTerm}`,
+            role: 'exact_entity',
+            reason: 'Add an exact entity phrase for guide tasks with enough context to reduce noisy popularity matches.'
+        });
+    }
+    if (!quotedPhrases.length && !/[\p{Script=Han}]/u.test(original)) {
+        const importantTerms = extractSearchQueryTerms(original)
+            .filter((term) => normalizeString(term).length >= 4)
+            .slice(0, 5);
+        if (importantTerms.length >= 2) {
+            addVariant({
+                searchQuery: `"${importantTerms.slice(0, 3).join(' ')}" ${importantTerms.slice(3).join(' ')}`.trim(),
+                backendQuery: `"${importantTerms.slice(0, 3).join(' ')}" ${importantTerms.slice(3).join(' ')}`.trim(),
+                role: 'exact_topic',
+                reason: 'Try an exact-topic phrase for non-CJK research queries when the first result set is too broad.'
+            });
+        }
+    }
+    return variants.slice(0, maxQueries);
+}
+
 function assessSearchConfidence(rankedResults = [], query = '') {
     const ranked = Array.isArray(rankedResults) ? rankedResults : [];
     const top = ranked[0] || {};
@@ -2831,7 +2899,7 @@ async function webSearch(args = {}) {
     if (!query) {
         return errorResult('web_search requires query');
     }
-    const backendQuery = buildEffectiveSearchQuery(query);
+    const backendQuery = normalizeString(args.backendQuery || args.backend_query) || buildEffectiveSearchQuery(query);
     const maxResults = clampNumber(args.maxResults || args.limit, 8, 1, 12);
     const timeoutMs = clampNumber(args.timeoutMs || args.timeout_ms, 8000, 3000, 30000);
     const attempts = [];
@@ -3588,6 +3656,78 @@ function extractTextFromToolResult(result = {}, maxChars = 3000) {
     return text.length > maxChars ? `${text.slice(0, Math.max(0, maxChars - 3)).trim()}...` : text;
 }
 
+function annotateSearchResultsForQueryVariant(results = [], variant = {}) {
+    return (Array.isArray(results) ? results : []).map((item, index) => pruneEmptyDeep({
+        ...item,
+        queryVariant: variant.query,
+        queryVariantRole: variant.role,
+        queryVariantIndex: variant.index,
+        queryVariantRank: index + 1
+    }));
+}
+
+function buildMergedWebResearchSearchDetails({ query = '', searchRuns = [], maxResults = 8, startedAt = Date.now(), overallTimeoutMs = 0 } = {}) {
+    const successfulRuns = searchRuns.filter((run) => !run.result?.isError && run.details?.status === 'completed');
+    if (!successfulRuns.length) {
+        return null;
+    }
+    const rawResults = [];
+    const attempts = [];
+    for (const run of successfulRuns) {
+        const rows = Array.isArray(run.details.rawResults) && run.details.rawResults.length
+            ? run.details.rawResults
+            : run.details.results || [];
+        rawResults.push(...annotateSearchResultsForQueryVariant(rows, run.variant));
+        for (const attempt of run.details.attempts || []) {
+            attempts.push(pruneEmptyDeep({
+                ...attempt,
+                queryVariant: run.variant.query,
+                queryVariantRole: run.variant.role,
+                queryVariantIndex: run.variant.index
+            }));
+        }
+    }
+    const mergedRawResults = mergeSearchResultsForRerank(rawResults, Math.max(maxResults * successfulRuns.length, maxResults));
+    const observation = buildWebSearchSuccessObservation({
+        query,
+        backendQuery: successfulRuns.map((run) => run.variant.backendQuery).filter(Boolean).join(' | '),
+        attempts,
+        rawResults: mergedRawResults,
+        backend: successfulRuns.length > 1 ? 'query_plan_aggregated' : successfulRuns[0]?.details?.backend,
+        url: successfulRuns[0]?.details?.url,
+        startedAt,
+        overallTimeoutMs,
+        aggregated: successfulRuns.length > 1 || successfulRuns.some((run) => run.details?.backend === 'aggregated')
+    });
+    const details = observation.response.structuredContent || {};
+    return pruneEmptyDeep({
+        ...details,
+        backend: successfulRuns.length > 1 ? 'query_plan_aggregated' : details.backend,
+        searchQueries: searchRuns.map((run) => pruneEmptyDeep({
+            ...run.variant,
+            status: run.details?.status || (run.result?.isError ? 'error' : 'unknown'),
+            isError: run.result?.isError === true || undefined,
+            searchConfidence: run.details?.searchConfidence,
+            resultCount: Array.isArray(run.details?.results) ? run.details.results.length : undefined,
+            error: run.details?.error
+        })),
+        searchAggregation: pruneEmptyDeep({
+            ...(details.searchAggregation || {}),
+            queryPlan: true,
+            queryVariantCount: searchRuns.length,
+            successfulQueryVariants: successfulRuns.map((run) => run.variant.role || run.variant.query)
+        })
+    });
+}
+
+function searchRunRequiresClarification(searchRuns = []) {
+    return searchRuns.some((run) => run.details?.clarificationRequired === true);
+}
+
+function bestClarificationSearchDetails(searchRuns = []) {
+    return searchRuns.find((run) => run.details?.clarificationRequired === true)?.details || null;
+}
+
 function buildWebResearchCandidates(searchDetails = {}, limit = 3) {
     const candidates = [];
     const seen = new Set();
@@ -3604,7 +3744,10 @@ function buildWebResearchCandidates(searchDetails = {}, limit = 3) {
             searchRank: Number(candidate.searchRank) || undefined,
             queryScore: Number(candidate.queryScore) || undefined,
             combinedScore: Number(candidate.combinedScore) || undefined,
-            sourceBackends: candidate.sourceBackends || undefined
+            sourceBackends: candidate.sourceBackends || undefined,
+            queryVariant: candidate.queryVariant || undefined,
+            queryVariantRole: candidate.queryVariantRole || undefined,
+            queryVariantIndex: candidate.queryVariantIndex || undefined
         }));
     };
     for (const call of searchDetails.suggestedNextCalls || []) {
@@ -3627,10 +3770,91 @@ function buildWebResearchCandidates(searchDetails = {}, limit = 3) {
     return candidates.slice(0, limit);
 }
 
-function summarizeWebResearchPage(candidate = {}, fetchResult = {}) {
+function extractEvidenceSnippetsFromText(text = '', query = '', limit = 4) {
+    const source = normalizeString(text).replace(/\s+/g, ' ');
+    if (!source) {
+        return [];
+    }
+    const terms = [
+        ...extractQuotedSearchPhrases(query),
+        ...extractSearchQueryTerms(query)
+    ]
+        .map(normalizeString)
+        .filter((term) => term.length >= 2)
+        .slice(0, 10);
+    const snippets = [];
+    const seen = new Set();
+    for (const term of terms) {
+        const index = source.toLowerCase().indexOf(term.toLowerCase());
+        if (index < 0) {
+            continue;
+        }
+        const start = Math.max(0, index - 180);
+        const end = Math.min(source.length, index + term.length + 240);
+        const snippet = truncateRelationText(source.slice(start, end).trim(), 460);
+        const key = normalizeSearchText(snippet).slice(0, 120);
+        if (!snippet || seen.has(key)) {
+            continue;
+        }
+        seen.add(key);
+        snippets.push(snippet);
+        if (snippets.length >= limit) {
+            break;
+        }
+    }
+    return snippets;
+}
+
+function scoreWebResearchPage(page = {}, query = '') {
+    const qualityScores = {
+        sufficient_evidence: 42,
+        partial_evidence: 24,
+        thin_content: 6,
+        js_shell: -38,
+        access_denied: -34,
+        access_challenge: -34,
+        encoding_failure: -30,
+        access_barrier: -30
+    };
+    const htmlRelations = page.htmlRelations || {};
+    const relationScore = Math.min(18, (
+        (Array.isArray(htmlRelations.sections) ? htmlRelations.sections.length : 0) * 2 +
+        (Array.isArray(htmlRelations.keyValues) ? htmlRelations.keyValues.length : 0) * 2 +
+        (Array.isArray(htmlRelations.tables) ? htmlRelations.tables.length : 0) * 4 +
+        (Array.isArray(htmlRelations.relationTriples) ? htmlRelations.relationTriples.length : 0) +
+        (Array.isArray(htmlRelations.rankedLinks) ? htmlRelations.rankedLinks.length : 0)
+    ));
+    const returnedChars = Number(page.returnedChars) || normalizeString(page.excerpt).length;
+    const queryScore = Math.min(100, Math.max(0, Number(page.queryScore) || 0));
+    const qualityScore = qualityScores[page.evidenceQuality] ?? 0;
+    const evidenceFlagScore = page.isEvidence === true ? 14 : 0;
+    const readyScore = page.reasoningReady === true ? 16 : 0;
+    const snippetScore = Math.min(12, (Array.isArray(page.evidenceSnippets) ? page.evidenceSnippets.length : 0) * 3);
+    const lengthScore = Math.min(12, Math.floor(returnedChars / 1200));
+    const sourceScore = Math.min(8, Math.max(0, (Array.isArray(page.sourceBackends) ? page.sourceBackends.length : 0) - 1) * 4);
+    const rawScore = qualityScore + evidenceFlagScore + readyScore + relationScore + snippetScore + lengthScore + sourceScore + queryScore * 0.24;
+    const score = Math.max(0, Math.min(100, Math.round(rawScore)));
+    return {
+        score,
+        breakdown: pruneEmptyDeep({
+            qualityScore,
+            evidenceFlagScore,
+            readyScore,
+            relationScore,
+            snippetScore,
+            lengthScore,
+            sourceScore,
+            queryScore: Number(queryScore.toFixed(2)),
+            query: normalizeString(query)
+        })
+    };
+}
+
+function summarizeWebResearchPage(candidate = {}, fetchResult = {}, query = '') {
     const details = fetchResult.structuredContent || fetchResult.details || {};
     const evidenceQuality = normalizeString(details.evidenceQuality || details.observationContract?.evidence_quality);
-    return pruneEmptyDeep({
+    const fullText = extractTextFromToolResult(fetchResult, 16000);
+    const page = pruneEmptyDeep({
         title: normalizeString(candidate.title),
         url: normalizeString(candidate.url),
         source: normalizeString(candidate.source),
@@ -3638,6 +3862,9 @@ function summarizeWebResearchPage(candidate = {}, fetchResult = {}) {
         queryScore: Number.isFinite(candidate.queryScore) ? Number(candidate.queryScore.toFixed(2)) : undefined,
         combinedScore: Number.isFinite(candidate.combinedScore) ? Number(candidate.combinedScore.toFixed(2)) : undefined,
         sourceBackends: candidate.sourceBackends?.length ? candidate.sourceBackends.slice(0, 5) : undefined,
+        queryVariant: normalizeString(candidate.queryVariant),
+        queryVariantRole: normalizeString(candidate.queryVariantRole),
+        queryVariantIndex: candidate.queryVariantIndex,
         fetchStatus: details.status || (fetchResult.isError ? 'error' : 'completed'),
         fetchBackend: normalizeString(details.fetchBackend),
         evidenceQuality,
@@ -3652,7 +3879,14 @@ function summarizeWebResearchPage(candidate = {}, fetchResult = {}) {
         observedRelevantLinks: Array.isArray(details.observedRelevantLinks) ? details.observedRelevantLinks.slice(0, 5) : undefined,
         suggestedNextCalls: Array.isArray(details.suggestedNextCalls) ? details.suggestedNextCalls.slice(0, 5) : undefined,
         htmlRelations: details.htmlRelations,
-        excerpt: extractTextFromToolResult(fetchResult, 3600)
+        evidenceSnippets: extractEvidenceSnippetsFromText(fullText, query),
+        excerpt: fullText.length > 3600 ? `${fullText.slice(0, 3597).trim()}...` : fullText
+    });
+    const evidenceScore = scoreWebResearchPage(page, query);
+    return pruneEmptyDeep({
+        ...page,
+        evidenceScore: evidenceScore.score,
+        evidenceScoreBreakdown: evidenceScore.breakdown
     });
 }
 
@@ -3695,7 +3929,7 @@ function assessWebResearchBundle(pages = [], searchDetails = {}) {
     };
 }
 
-function formatWebResearchBundle({ query = '', searchDetails = {}, pages = [], bundleAssessment = {} } = {}) {
+function formatWebResearchBundle({ query = '', searchDetails = {}, pages = [], bundleAssessment = {}, pipelineSteps = [] } = {}) {
     const lines = [
         'AILIS web research evidence bundle:',
         `Query: ${query}`,
@@ -3716,6 +3950,12 @@ function formatWebResearchBundle({ query = '', searchDetails = {}, pages = [], b
     if (searchDetails.searchConfidence?.level) {
         lines.push(`Search confidence: ${searchDetails.searchConfidence.level} (${searchDetails.searchConfidence.score})`);
     }
+    if (Array.isArray(searchDetails.searchQueries) && searchDetails.searchQueries.length) {
+        lines.push('Search query plan:');
+        searchDetails.searchQueries.slice(0, 5).forEach((item) => {
+            lines.push(`- ${item.index || '?'}. ${item.role || 'query'}: ${item.backendQuery || item.query}`);
+        });
+    }
     if (Array.isArray(searchDetails.candidateChoices) && searchDetails.candidateChoices.length) {
         lines.push('Candidate choices:');
         searchDetails.candidateChoices.slice(0, 4).forEach((choice, index) => {
@@ -3727,14 +3967,24 @@ function formatWebResearchBundle({ query = '', searchDetails = {}, pages = [], b
         pages.forEach((page, index) => {
             lines.push(`- ${index + 1}. ${page.title || page.url}`);
             lines.push(`  URL: ${page.url}`);
-            lines.push(`  Quality: ${page.evidenceQuality || 'unknown'}; reasoningReady=${page.reasoningReady === true}`);
+            lines.push(`  Quality: ${page.evidenceQuality || 'unknown'}; reasoningReady=${page.reasoningReady === true}; evidenceScore=${page.evidenceScore ?? 'n/a'}`);
             if (page.evidenceGap) {
                 lines.push(`  Gap: ${page.evidenceGap}`);
+            }
+            if (Array.isArray(page.evidenceSnippets) && page.evidenceSnippets.length) {
+                lines.push('  Evidence snippets:');
+                page.evidenceSnippets.slice(0, 3).forEach((snippet) => lines.push(`  - ${snippet}`));
             }
             const excerpt = normalizeString(page.excerpt).split('\n').slice(0, 18).join('\n');
             if (excerpt) {
                 lines.push(`  Excerpt:\n${excerpt}`);
             }
+        });
+    }
+    if (Array.isArray(pipelineSteps) && pipelineSteps.length) {
+        lines.push('Pipeline diagnostics:');
+        pipelineSteps.slice(0, 12).forEach((step) => {
+            lines.push(`- ${step.stage || 'step'}: ${step.status || 'unknown'}${step.note ? `; ${step.note}` : ''}`);
         });
     }
     return lines.join('\n');
@@ -3748,31 +3998,96 @@ async function webResearch(args = {}) {
     const maxResults = clampNumber(args.maxResults || args.limit, 8, 1, 12);
     const maxPages = clampNumber(args.maxPages || args.max_pages, 3, 1, 5);
     const maxCharsPerPage = clampNumber(args.maxCharsPerPage || args.max_chars_per_page || args.maxChars, 14000, 3000, 60000);
-    const searchResult = await webSearch({
-        query,
-        maxResults,
-        timeoutMs: args.timeoutMs || args.timeout_ms,
-        overallTimeoutMs: args.overallTimeoutMs || args.overall_timeout_ms,
-        provider: args.provider || args.searchProvider || args.search_provider,
-        backend: args.backend || args.searchBackend || args.search_backend,
-        backends: args.backends,
-        searxngUrl: args.searxngUrl || args.searxng_url,
-        firecrawlUrl: args.firecrawlUrl || args.firecrawl_url,
-        aggregate: args.aggregate
+    const queryPlan = buildWebResearchQueryPlan(query, args);
+    const searchRuns = [];
+    const pipelineSteps = [{
+        stage: 'query_plan',
+        status: 'planned',
+        note: `${queryPlan.length} search quer${queryPlan.length === 1 ? 'y' : 'ies'}`
+    }];
+    const startedAt = Date.now();
+    const overallTimeoutMs = clampNumber(
+        args.overallTimeoutMs || args.overall_timeout_ms,
+        Math.min(90000, Math.max(18000, queryPlan.length * 24000)),
+        8000,
+        180000
+    );
+    for (const variant of queryPlan) {
+        const elapsedMs = Date.now() - startedAt;
+        const remainingMs = overallTimeoutMs - elapsedMs;
+        if (remainingMs < 2000) {
+            pipelineSteps.push({
+                stage: 'search',
+                status: 'skipped',
+                note: `timeout budget exhausted before ${variant.role || variant.query}`
+            });
+            break;
+        }
+        const searchResult = await webSearch({
+            query: variant.query,
+            backendQuery: variant.backendQuery,
+            maxResults,
+            timeoutMs: args.timeoutMs || args.timeout_ms,
+            overallTimeoutMs: Math.min(remainingMs, args.searchOverallTimeoutMs || args.search_overall_timeout_ms || 36000),
+            provider: args.provider || args.searchProvider || args.search_provider,
+            backend: args.backend || args.searchBackend || args.search_backend,
+            backends: args.backends,
+            searxngUrl: args.searxngUrl || args.searxng_url,
+            firecrawlUrl: args.firecrawlUrl || args.firecrawl_url,
+            aggregate: args.aggregate
+        });
+        const details = searchResult.structuredContent || searchResult.details || {};
+        searchRuns.push({ variant, result: searchResult, details });
+        pipelineSteps.push({
+            stage: 'search',
+            status: searchResult.isError ? 'error' : details.clarificationRequired ? 'clarification_required' : details.status || 'completed',
+            note: `${variant.role || 'query'} -> ${details.searchConfidence?.level || details.error || 'no_confidence'}`
+        });
+        if (details.clarificationRequired) {
+            break;
+        }
+        if (
+            details.searchConfidence?.level === 'high' &&
+            Array.isArray(details.suggestedNextCalls) &&
+            details.suggestedNextCalls.length > 0 &&
+            !optionIsTrue(args.expandQueries || args.expand_queries)
+        ) {
+            break;
+        }
+    }
+    const clarificationDetails = bestClarificationSearchDetails(searchRuns);
+    const mergedSearchDetails = searchRunRequiresClarification(searchRuns)
+        ? clarificationDetails
+        : buildMergedWebResearchSearchDetails({ query, searchRuns, maxResults, startedAt, overallTimeoutMs });
+    const searchDetails = pruneEmptyDeep({
+        ...(mergedSearchDetails || searchRuns.find((run) => run.details)?.details || {}),
+        searchQueries: (mergedSearchDetails?.searchQueries || searchRuns.map((run) => pruneEmptyDeep({
+            ...run.variant,
+            status: run.details?.status || (run.result?.isError ? 'error' : 'unknown'),
+            isError: run.result?.isError === true || undefined,
+            searchConfidence: run.details?.searchConfidence,
+            resultCount: Array.isArray(run.details?.results) ? run.details.results.length : undefined,
+            error: run.details?.error
+        })))
     });
-    const searchDetails = searchResult.structuredContent || searchResult.details || {};
-    if (searchResult.isError || searchDetails.clarificationRequired) {
+    if (!searchDetails || searchRuns.every((run) => run.result?.isError) || searchDetails.clarificationRequired) {
         const bundleAssessment = assessWebResearchBundle([], searchDetails);
-        return textResult(formatWebResearchBundle({ query, searchDetails, pages: [], bundleAssessment }), {
-            status: searchResult.isError ? 'search_failed' : 'clarification_required',
+        return textResult(formatWebResearchBundle({ query, searchDetails, pages: [], bundleAssessment, pipelineSteps }), {
+            status: searchDetails.clarificationRequired ? 'clarification_required' : 'search_failed',
             query,
             search: searchDetails,
             evidencePages: [],
+            pipelineSteps,
             ...bundleAssessment,
             suggestedNextCalls: searchDetails.suggestedNextCalls || []
         });
     }
     const candidates = buildWebResearchCandidates(searchDetails, maxPages);
+    pipelineSteps.push({
+        stage: 'candidate_rank',
+        status: candidates.length ? 'completed' : 'empty',
+        note: `${candidates.length} fetch candidate${candidates.length === 1 ? '' : 's'}`
+    });
     const pages = [];
     for (const candidate of candidates) {
         const fetchResult = await webFetch({
@@ -3782,19 +4097,31 @@ async function webResearch(args = {}) {
             provider: args.fetchProvider || args.fetch_provider,
             crawl4aiUrl: args.crawl4aiUrl || args.crawl4ai_url
         });
-        pages.push(summarizeWebResearchPage(candidate, fetchResult));
+        const page = summarizeWebResearchPage(candidate, fetchResult, query);
+        pages.push(page);
+        pipelineSteps.push({
+            stage: 'fetch',
+            status: page.fetchStatus || (fetchResult.isError ? 'error' : 'completed'),
+            note: `${page.evidenceQuality || 'unknown'} score=${page.evidenceScore ?? 'n/a'} ${candidate.url}`
+        });
     }
-    const bundleAssessment = assessWebResearchBundle(pages, searchDetails);
+    const orderedPages = pages.sort((left, right) =>
+        (Number(right.evidenceScore) || 0) - (Number(left.evidenceScore) || 0) ||
+        (Number(right.queryScore) || 0) - (Number(left.queryScore) || 0) ||
+        (Number(left.searchRank) || 999) - (Number(right.searchRank) || 999)
+    );
+    const bundleAssessment = assessWebResearchBundle(orderedPages, searchDetails);
     const suggestedNextCalls = dedupeSuggestedNextCalls([
-        ...pages.flatMap((page) => page.suggestedNextCalls || []),
+        ...orderedPages.flatMap((page) => page.suggestedNextCalls || []),
         ...(searchDetails.suggestedNextCalls || [])
     ], 6);
-    return textResult(formatWebResearchBundle({ query, searchDetails, pages, bundleAssessment }), {
+    return textResult(formatWebResearchBundle({ query, searchDetails, pages: orderedPages, bundleAssessment, pipelineSteps }), {
         status: 'completed',
         query,
         search: searchDetails,
-        evidencePages: pages,
-        pageCount: pages.length,
+        evidencePages: orderedPages,
+        pageCount: orderedPages.length,
+        pipelineSteps,
         ...bundleAssessment,
         suggestedNextCalls
     });
@@ -7195,6 +7522,10 @@ const TOOLS = [
                 maxResults: { type: 'number', description: 'Search result count, clamped to 1-12.' },
                 limit: { type: 'number', description: 'Compatibility alias for maxResults. Prefer maxResults.' },
                 maxPages: { type: 'number', description: 'Maximum pages to fetch into the evidence bundle, clamped to 1-5.' },
+                maxSearchQueries: { type: 'number', description: 'Maximum planned query variants to run before fetching pages, clamped to 1-5. Defaults to 3 for product-grade recall without open-ended loops.' },
+                max_search_queries: { type: 'number', description: 'Compatibility alias for maxSearchQueries. Prefer maxSearchQueries.' },
+                expandQueries: { type: 'boolean', description: 'Optional. true forces all planned query variants even after a high-confidence search hit. Defaults to false/adaptive.' },
+                expand_queries: { type: 'boolean', description: 'Compatibility alias for expandQueries. Prefer expandQueries.' },
                 maxCharsPerPage: { type: 'number', description: 'Maximum readable chars per fetched page, clamped to 3000-60000.' },
                 timeoutMs: { type: 'number', description: 'Per-search-backend timeout in milliseconds.' },
                 overallTimeoutMs: { type: 'number', description: 'Overall search timeout budget in milliseconds.' },

@@ -3,7 +3,7 @@
 Date/time: 2026-06-20 Asia/Shanghai
 Workspace: `F:\AILIS_self_evolution_runtime`
 Branch: `AILIS-self-evolution`
-Git state: latest commit `f1a7fde` upgraded AILIS web search aggregation. Active patch adds a higher-level `web_research` evidence-bundle pipeline. Stage only active-task files because the repo has many unrelated historical changes.
+Git state: latest committed work includes `7080f51` for the first `web_research` evidence-bundle pipeline. Active patch upgrades that pipeline toward product-grade SearXNG/Firecrawl/Crawl4AI-like quality with query planning, evidence scoring, diagnostics, and routing. Stage only active-task files because the repo has many unrelated historical changes.
 
 ## Objective
 - Make AILIS web research safer, more Codex-like, and more generic.
@@ -20,6 +20,11 @@ Git state: latest commit `f1a7fde` upgraded AILIS web search aggregation. Active
 ## Current State
 - `scripts\mcp-ailis-research-server.cjs`
   - New `web_research` tool provides an end-to-end evidence-bundle entrypoint: `web_search` -> candidate selection -> `web_fetch` on top high-signal HTML/text pages -> `evidencePages` with `answerReadiness`, `evidenceQuality`, `htmlRelations`, `suggestedNextCalls`, and `evidenceGap`.
+  - Active patch adds query planning for `web_research`: original query, effective term rewrite, and exact phrase variants when there is enough context.
+  - Query expansion is adaptive: high-confidence results with fetch candidates stop early by default; `expandQueries:true` can force all planned variants.
+  - Search results from query variants are merged, de-duplicated, re-ranked, and surfaced with `searchQueries` / `searchAggregation.queryPlan` diagnostics.
+  - Fetched pages now get `evidenceScore`, `evidenceScoreBreakdown`, and `evidenceSnippets`, then are sorted by evidence quality rather than raw search order.
+  - `pipelineSteps` records query planning, search outcomes, candidate ranking, and fetch/evidence-quality diagnostics.
   - `web_research` stops before fetching when `searchConfidence` requires clarification, preserving the existing short-nickname ambiguity guard.
   - Default `web_search` provider chain remains `searxng_json -> firecrawl_search -> bing_html -> duckduckgo_lite -> duckduckgo_html -> yahoo_html`.
   - GitHub/code queries still keep `github_repositories` first.
@@ -38,10 +43,15 @@ Git state: latest commit `f1a7fde` upgraded AILIS web search aggregation. Active
   - `.local\ailis-web-stack\src\searxng`
   - `.local\ailis-web-stack\src\firecrawl`
   - `.local\ailis-web-stack\src\crawl4ai`
+- `electron\ailis-tool-routing.cjs`
+  - Public/current information tasks now prefer `web_research` while preserving `web_search` fallback when `web_research` is unavailable.
+  - Routing advice tells the model to use `web_research` for guide/latest/research evidence tasks and bare `web_search` only for discovery-only result lists.
 
 ## Validation
 - `node --check scripts\mcp-ailis-research-server.cjs`: passed.
-- `node --test tests\mcp-ailis-research-server.test.mjs`: 52/52 passed after adding `web_research` evidence bundle tests.
+- `node --check electron\ailis-tool-routing.cjs`: passed.
+- `node --test tests\mcp-ailis-research-server.test.mjs`: 54/54 passed.
+- `node --test tests\ailis-tool-layer.test.mjs`: 17/17 passed.
 - `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup-ailis-local-web-stack.ps1 -Root .local\ailis-web-stack-source-smoke -NoClone`: passed.
 - `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup-ailis-local-web-stack.ps1 -Root .local\ailis-web-stack -NoClone`: refreshed the real local source README/manifest.
 
@@ -52,7 +62,7 @@ Git state: latest commit `f1a7fde` upgraded AILIS web search aggregation. Active
 
 ## Next Actions
 1. Stage only active files for this task.
-2. Commit the patch.
+2. Commit the product-grade web research upgrade patch.
 3. Restart AILIS if the user wants to test the full UI/agent loop.
 
 ## Do Not Forget

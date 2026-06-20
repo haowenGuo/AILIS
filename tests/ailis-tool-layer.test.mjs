@@ -290,8 +290,9 @@ test('AILIS tool routing prefers artifact-specific MCP tools over broad web_sear
     assert.match(buildToolRoutingAdvice('attached docx Word document table', candidates), /read_document/);
 });
 
-test('AILIS tool routing exposes web_search for public current-information tasks', () => {
+test('AILIS tool routing prefers web_research for public current-information evidence tasks', () => {
     const candidates = [
+        mcpTool('web_research', 'End-to-end public web research with search, fetch, evidence scoring, and clarification.'),
         mcpTool('web_search', 'Fallback broad public web search.'),
         mcpTool('web_fetch', 'Fetch a known HTML page URL.'),
         mcpTool('describe_image', 'Describe a local screenshot image.'),
@@ -305,17 +306,17 @@ test('AILIS tool routing exposes web_search for public current-information tasks
         'Kaggle AI攻防比赛 2026 最新 competition 攻略',
         3
     );
-    assert.equal(kaggleRanked[0].tool, 'web_search');
+    assert.equal(kaggleRanked[0].tool, 'web_research');
+    assert.ok(kaggleRanked.some((tool) => tool.tool === 'web_research'));
     assert.ok(kaggleRanked.some((tool) => tool.tool === 'web_search'));
-    assert.ok(kaggleRanked.some((tool) => tool.tool === 'web_fetch'));
 
     const latestRanked = rankToolSearchResults(
         candidates,
         'latest adversarial machine learning challenge strategy guide',
         3
     );
-    assert.equal(latestRanked[0].tool, 'web_search');
-    assert.ok(latestRanked.some((tool) => tool.tool === 'web_fetch'));
+    assert.equal(latestRanked[0].tool, 'web_research');
+    assert.match(buildToolRoutingAdvice('latest adversarial machine learning challenge strategy guide', latestRanked), /web_research/);
 });
 
 test('AILIS tool routing can rank output store tools when an experimental surface provides them', () => {
