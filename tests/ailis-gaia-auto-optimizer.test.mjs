@@ -8,7 +8,8 @@ import {
     normalizeAnswer,
     parseArgs,
     resolveTaskRetries,
-    selectNextTask
+    selectNextTask,
+    shouldContinueAfterFailure
 } from '../scripts/run-ailis-gaia-auto-optimizer.mjs';
 
 test('GAIA auto optimizer exposes the two local practice tasks', () => {
@@ -56,6 +57,12 @@ test('GAIA auto optimizer parses repair retry controls', () => {
     assert.equal(args.taskRetries, 2);
     assert.equal(resolveTaskRetries({ taskRetries: 0 }, args), 2);
     assert.equal(resolveTaskRetries({ taskRetries: 1 }, { taskRetries: null }), 1);
+});
+
+test('GAIA auto optimizer can continue after failed tasks when policy allows backlog repair', () => {
+    assert.equal(shouldContinueAfterFailure({ continueAfterFailure: true, stopWhen: ['repair_required'] }), true);
+    assert.equal(shouldContinueAfterFailure({ stopWhen: ['all_tasks_passed'] }), true);
+    assert.equal(shouldContinueAfterFailure({ stopWhen: ['repair_required'] }), false);
 });
 
 test('GAIA auto optimizer classifies successful high-loop tasks as efficiency work', () => {

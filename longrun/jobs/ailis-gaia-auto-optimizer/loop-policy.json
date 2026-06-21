@@ -10,10 +10,10 @@
   "taskRetries": 1,
   "stopWhen": [
     "all_tasks_passed",
-    "repair_required",
     "duration_expired",
     "user_stop_flag"
   ],
+  "continueAfterFailure": true,
   "repairMode": "codex_heartbeat_repair_then_clear",
   "reportPath": "longrun/jobs/ailis-gaia-auto-optimizer/report.md"
 }

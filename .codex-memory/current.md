@@ -1,75 +1,108 @@
 # Codex Memory Checkpoint
 
-Date/time: 2026-06-20 Asia/Shanghai
+Date/time: 2026-06-21 11:55 Asia/Shanghai
 Workspace: `F:\AILIS_self_evolution_runtime`
 Branch: `AILIS-self-evolution`
-Git state: latest committed work includes `115fbd9` for product-grade `web_research` query planning, evidence scoring, diagnostics, and routing. Active patch comes from testing `{做一个小光的攻略}` and tightens exact-query de-duplication plus target-entity coverage. Stage only active-task files because the repo has many unrelated historical changes.
+Git state: repo has many unrelated historical dirty files. Only stage active GAIA auto-optimizer files unless explicitly asked otherwise.
 
 ## Objective
-- Make AILIS web research safer, more Codex-like, and more generic.
-- `web_search` should rank results, expose confidence, and ask the user when a short/ambiguous target is not safe to follow.
-- Build an AILIS-owned search system with quality closer to SearXNG/Firecrawl/Crawl4AI: discovery, aggregation, fetch, extraction, evidence quality, and model-facing bundles.
-- Use SearXNG/Firecrawl/Crawl4AI as local open-source references for search quality ideas, not as mandatory deployed services or hosted APIs.
+- Keep the AILIS GAIA self-evolution controller running continuously.
+- After each GAIA task: if passed, advance and later optimize efficiency; if failed, queue it in the repair backlog, mine the chain, fix generalized TOOLS/MCP/HARNESS bottlenecks, test, commit, and keep the main GAIA cursor moving.
+- Avoid task-specific hardcoding; optimize generic capabilities.
 
 ## Latest User Intent
-- User clarified that they do not want a Docker/deployment solution.
-- Desired direction: reference SearXNG, Firecrawl, and Crawl4AI search optimization ideas, then migrate useful mechanisms into AILIS with minimal large-scale changes.
-- User clarified the true goal: "建立一套质量类似SearXNG/Firecrawl/Crawl4AI的搜索系统".
-- Avoid writing task-specific hacks; preserve generality.
+- User asked: “持续跑啊，持续监控啊，不要停止，每跑完一个任务就开启下一个任务”.
+- A 5-minute heartbeat automation exists: `ailis-gaia-auto-optimizer-heartbeat`. It checks process/progress/state, avoids duplicate heavy runs, restarts the controller when idle and safe, and repairs when `repairRequired=true`.
+- Because the user explicitly wants continuous execution, `loop-policy.json` now enables `continueAfterFailure`. A failed task should enter `repairBacklog` instead of stopping the whole controller.
 
 ## Current State
-- `scripts\mcp-ailis-research-server.cjs`
-  - New `web_research` tool provides an end-to-end evidence-bundle entrypoint: `web_search` -> candidate selection -> `web_fetch` on top high-signal HTML/text pages -> `evidencePages` with `answerReadiness`, `evidenceQuality`, `htmlRelations`, `suggestedNextCalls`, and `evidenceGap`.
-  - Active patch adds query planning for `web_research`: original query, effective term rewrite, and exact phrase variants when there is enough context.
-  - Query expansion is adaptive: high-confidence results with fetch candidates stop early by default; `expandQueries:true` can force all planned variants.
-  - Search results from query variants are merged, de-duplicated, re-ranked, and surfaced with `searchQueries` / `searchAggregation.queryPlan` diagnostics.
-  - Fetched pages now get `evidenceScore`, `evidenceScoreBreakdown`, and `evidenceSnippets`, then are sorted by evidence quality rather than raw search order.
-  - Active patch preserves exact-query quote semantics during query-plan de-duplication, so `绝区零 叶瞬光 小光 攻略` can expand to `绝区零 "叶瞬光" "小光" 攻略`.
-  - Active patch adds target-entity coverage checks. Multi-entity guide tasks no longer treat broad source/homepage pages as ready evidence unless a specific target term is covered strongly or all required specific target terms are present.
-  - `pipelineSteps` records query planning, search outcomes, candidate ranking, and fetch/evidence-quality diagnostics.
-  - `web_research` stops before fetching when `searchConfidence` requires clarification, preserving the existing short-nickname ambiguity guard.
-  - Default `web_search` provider chain remains `searxng_json -> firecrawl_search -> bing_html -> duckduckgo_lite -> duckduckgo_html -> yahoo_html`.
-  - GitHub/code queries still keep `github_repositories` first.
-  - Search results now preserve `sourceBackends`, `sourceEngines`, and source rank metadata.
-  - Result ranking includes a small source-consensus score, inspired by meta-search result merging.
-  - Auto/provider-chain mode can aggregate multiple successful providers when the first success is off-target, then de-duplicate, re-rank, and return a single observation.
-  - Short ambiguous guide queries still stop for clarification instead of broadening blindly.
-  - Hosted Firecrawl remains disabled; `FIRECRAWL_API_KEY` is not used by the main AILIS research MCP.
-  - `web_fetch` still probes optional Crawl4AI Markdown output and falls back to built-in HTML/text extraction.
-- `scripts\setup-ailis-local-web-stack.ps1`
-  - Now source-only: clones/downloads SearXNG, Firecrawl, and Crawl4AI under `.local\ailis-web-stack\src`.
-  - Writes `sources.json` and `README.md` provenance/reference notes.
-  - Does not create deployment files, runtime env files, or service startup flows.
-  - Notes licenses: SearXNG/Firecrawl are AGPL-family, Crawl4AI is Apache-2.0.
-- Local source code is present on this machine:
-  - `.local\ailis-web-stack\src\searxng`
-  - `.local\ailis-web-stack\src\firecrawl`
-  - `.local\ailis-web-stack\src\crawl4ai`
-- `electron\ailis-tool-routing.cjs`
-  - Public/current information tasks now prefer `web_research` while preserving `web_search` fallback when `web_research` is unavailable.
-  - Routing advice tells the model to use `web_research` for guide/latest/research evidence tasks and bare `web_search` only for discovery-only result lists.
+- Background controller is running:
+  - controller PID: `5796`
+  - runner PID: `29012`
+  - command: `node scripts\run-ailis-gaia-auto-optimizer.mjs --loop --task-retries 1 --timeout-ms 900000`
+  - current task: `official-validation-l1-offset-16`
+  - current iteration: `iter-042-official-validation-l1-offset-16`
+  - latest progress: `longrun/jobs/ailis-gaia-auto-optimizer/progress.json`
+- Durable state after queueing the latest failed task:
+  - `officialCursor`: `16`
+  - completed official offsets: `0` through `12`
+  - failed backlog: `official-validation-l1-offset-13`, `official-validation-l1-offset-14`, `official-validation-l1-offset-15`
+  - `repairRequired`: `false`
+  - last pass artifact: `longrun/jobs/ailis-gaia-auto-optimizer/iterations/iter-038-official-validation-l1-offset-12/verdict.json`
+- Offset 13 remains open and is not counted as passed. It is queued for repair because BASE/API access is blocked from this environment and the local search stack produced noise/empty evidence. Do not hardcode the answer; repair should stay generic.
+- Offset 14 failed under the old evidence gate: empty submission, expected `Maktay mato apple`. It is queued in repair backlog.
+- Offset 15 failed and is queued in repair backlog. It submitted `ZnO`; local gold expected `diamond`. It is a Scientific Reports/nano-compound retrieval task; observed issue included `pdf_find_and_extract` timing out after 90000ms and then settling on the wrong compound.
+- Offset 16 started at `2026-06-21T03:52:27Z`; process is alive and stderr is empty as of this checkpoint. It has one attachment.
+
+## Recent Fixes
+- Commit `a3b17e5 Fix GAIA DOCX evidence finalization`
+  - Fixed DOCX Secret Santa relation finalization.
+  - Added full DOCX fallback parsing from `filePath` when agent step preview is truncated.
+  - Offset 7 passed with `Fred`.
+- Commit `741f631 Add HTML fallback for GAIA quote evidence`
+  - Added `pdf_find_and_extract` HTML full-text fallback when discovered PDF links are unreadable/challenge HTML.
+  - Added answer-candidate finalizer and quote-word evidence forcing so title-like direct answers do not bypass evidence.
+  - Offset 12 initially failed `tricksy` vs expected `fluffy`, then passed after repair with `fluffy`.
+  - Offsets 8, 9, 10, 11 also passed during continuous run.
+- Current uncommitted changes:
+  - `scripts/mcp-ailis-research-server.cjs`: exact-answer query planning, direct web_search rewrite for English fact questions, typed country answer candidates, and TLS certificate fallback for web_fetch.
+  - `scripts/run-ailis-gaia-auto-optimizer.mjs`: `continueAfterFailure` repair-backlog behavior so one failed task does not halt the full GAIA sweep.
+  - `scripts/run-gaia-level1-lite.mjs`: answer gate accepts structured web_search country candidates.
+  - `electron/ailis-agent-runner.cjs` and `electron/ailis-evidence-artifacts.cjs`: exact-answer mode now creates a conservative `QuestionEvidence/source_question` artifact for self-contained logic/math/grammar/translation/rule tasks, so the evidence gate can accept problem-statement evidence without forcing pointless web/tool calls.
+  - Tests updated for exact-answer planning, country candidates, answer gate, and continuous backlog policy.
 
 ## Validation
-- `node --check scripts\mcp-ailis-research-server.cjs`: passed.
-- `node --check electron\ailis-tool-routing.cjs`: passed.
-- `node --test tests\mcp-ailis-research-server.test.mjs`: 56/56 passed.
-- `node --test tests\ailis-tool-layer.test.mjs`: 17/17 passed.
-- Real `webResearch({query:"做一个小光的攻略"})`: returned `clarification_required`, `needs_clarification`, no pages fetched.
-- Real `webResearch({query:"绝区零 叶瞬光 小光 攻略"})`: generated exact target query; current live Bing fallback still returns broad ZZZ pages, now marked `off_target_evidence` / `needs_followup` instead of false-ready.
-- `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup-ailis-local-web-stack.ps1 -Root .local\ailis-web-stack-source-smoke -NoClone`: passed.
-- `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup-ailis-local-web-stack.ps1 -Root .local\ailis-web-stack -NoClone`: refreshed the real local source README/manifest.
+- `node --test tests\mcp-ailis-research-server.test.mjs tests\run-gaia-level1-lite.test.mjs tests\ailis-gaia-auto-optimizer.test.mjs`: 95/95 passed after continuous backlog/search-candidate repair.
+- `node --test tests\ailis-agent-execution-flow.test.mjs tests\run-gaia-level1-lite.test.mjs tests\ailis-gaia-auto-optimizer.test.mjs`: 48/48 passed after source_question repair.
+- `node --test tests\mcp-ailis-research-server.test.mjs tests\ailis-agent-execution-flow.test.mjs tests\run-gaia-level1-lite.test.mjs tests\ailis-gaia-auto-optimizer.test.mjs`: 114/114 passed.
+- GAIA verification:
+  - offset 7: passed, `Fred`
+  - offset 8: passed, `right`
+  - offset 9: passed, `No`
+  - offset 10: passed, `(¬A → B) ↔ (A ∨ ¬B)`
+  - offset 11: passed, `2`
+  - offset 12: passed, `fluffy`
+  - offset 13: failed/open, expected `Guatemala`, queued in repair backlog rather than blocking the sweep
+  - offset 14: failed/open, expected `Maktay mato apple`, queued in repair backlog; root cause repaired generically by `QuestionEvidence/source_question`
+  - offset 15: failed/open, submitted `ZnO`, expected `diamond`, queued in repair backlog
+  - offset 16: running
 
-## Known Constraints
-- The local source repositories are references. AILIS does not require those projects to be running to use its built-in search/fetch fallbacks.
-- Direct code copying from SearXNG/Firecrawl needs AGPL compliance review. Prefer reimplementing portable ideas unless the project intentionally accepts those obligations.
-- The repo has many unrelated historical changes; do not stage broad rename/build artifacts unless the user explicitly asks.
+## Files And Artifacts
+- `scripts/run-gaia-level1-lite.mjs`: DOCX finalizer, quote evidence forcing, deterministic answerCandidates, web_search country candidate answer gate.
+- `scripts/mcp-ailis-research-server.cjs`: `pdf_find_and_extract` HTML full-text fallback, exact-answer query planning, TLS fallback, typed country candidate extraction.
+- `scripts/run-ailis-gaia-auto-optimizer.mjs`: restartable GAIA controller and repair-backlog continuation.
+- `electron/ailis-agent-runner.cjs`: exact-answer source-question evidence injection and validation.
+- `electron/ailis-evidence-artifacts.cjs`: `QuestionEvidence` evidence artifact type.
+- `tests/run-gaia-level1-lite.test.mjs`: DOCX fallback, quoted-word gate, and country candidate answer gate regressions.
+- `tests/mcp-ailis-research-server.test.mjs`: HTML fallback and exact-answer/country-candidate regressions.
+- `tests/ailis-gaia-auto-optimizer.test.mjs`: controller backlog continuation regression.
+- `tests/ailis-agent-execution-flow.test.mjs`: source_question positive/negative exact-answer regressions.
+- `longrun/jobs/ailis-gaia-auto-optimizer/state.json`: cursor/status projection.
+- `longrun/jobs/ailis-gaia-auto-optimizer/progress.json`: live progress projection.
+- `longrun/jobs/ailis-gaia-auto-optimizer/event-log.jsonl`: durable event log.
+- `longrun/jobs/ailis-gaia-auto-optimizer/iterations/iter-039-official-validation-l1-offset-13/`: failed offset 13 evidence.
+- `longrun/jobs/ailis-gaia-auto-optimizer/iterations/iter-040-official-validation-l1-offset-13/`: retry evidence for offset 13, also failed/open.
+- `longrun/jobs/ailis-gaia-auto-optimizer/iterations/iter-040-official-validation-l1-offset-14/`: failed offset 14 evidence.
+- `longrun/jobs/ailis-gaia-auto-optimizer/iterations/iter-041-official-validation-l1-offset-15/`: failed offset 15 evidence.
+- `longrun/jobs/ailis-gaia-auto-optimizer/iterations/iter-042-official-validation-l1-offset-16/`: current in-progress offset 16 iteration.
+
+## Known Problems
+- Offset 13 remains unresolved. Known generalized issue: local retrieval cannot reliably reach BASE or recover high-quality evidence, and broad HTML search can return SEO/noise. Repair web_search/web_fetch generically; do not write task-specific answer logic.
+- Offset 14 should be rerun later using the new `source_question` repair; do not mark it passed until an actual rerun passes.
+- Offset 15 needs retrieval-quality repair. Do not hardcode `diamond`; inspect the chain and improve PDF/search extraction generically.
+- Offset 16 is currently running. If it exceeds timeout or stalls after result files appear, inspect `iter-042-official-validation-l1-offset-16/eval-results`, `gateway-audit`, `chain.json`, and `verdict.json`.
+- `progress.json.lastUpdateAgeSeconds` is a stored projection and does not self-increment; use process checks and file mtimes to detect real staleness.
+- `controller.stdout.log` and `controller.stderr.log` are untracked runtime logs; summarize them, do not paste huge logs.
+- The repo contains many unrelated dirty rename/build/docs changes from earlier work; do not stage them.
 
 ## Next Actions
-1. Stage only active files for this task.
-2. Commit the target-coverage follow-up patch.
-3. Restart AILIS if the user wants to test the full UI/agent loop.
+1. Continue monitoring controller PID `5796` and current runner PID `10432`.
+2. If offset 16 passes, let controller immediately continue to offset 17.
+3. If offset 16 fails, it should be queued in `repairBacklog` and the controller should advance unless the failure is a controller/runtime bug.
+4. Repair backlog items generically: offset 14 can be rerun after the `source_question` repair; offsets 13 and 15 still need retrieval quality work.
+5. Keep heartbeat ACTIVE; do not launch duplicate controllers if one is already running.
 
 ## Do Not Forget
-- User prefers direct execution and default commits.
-- Do not reveal API keys or tokens.
-- Keep future logs summarized; avoid dumping long transcripts into chat.
+- User prefers direct execution, continuous monitoring, and default commits after meaningful work.
+- Do not store or print API keys/tokens/secrets.
+- Keep outputs compact; summarize long logs.

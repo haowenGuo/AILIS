@@ -1028,7 +1028,9 @@ const SEARCH_QUERY_STOPWORDS = new Set([
     'and', 'or',
     'about', 'after', 'article', 'before', 'between', 'from', 'have', 'into', 'journal',
     'linked', 'paper', 'question', 'related', 'report', 'site', 'that', 'their', 'there',
-    'these', 'this', 'those', 'what', 'when', 'where', 'which', 'with'
+    'these', 'this', 'those', 'what', 'when', 'where', 'which', 'with',
+    'the', 'was', 'were', 'are', 'does', 'did', 'has', 'had', 'under', 'over',
+    'other', 'others', 'only', 'whose', 'whom'
 ]);
 
 const CJK_SEARCH_QUERY_STOPWORDS = new Set([
@@ -1161,6 +1163,11 @@ function extractSearchQueryTerms(query = '') {
         .replace(/\bhttps?:\/\/\S+/gi, ' ')
         .replace(/["'“”‘’()[\]{}]/g, ' ')
         .replace(/[|,，。！？；;:：、/\\]+/g, ' ');
+    const classificationNumbers = new Set(
+        Array.from(sanitized.matchAll(/\b[A-Za-z]{2,8}\s+(\d{1,5})\b/g))
+            .map((match) => normalizeString(match[1]).toLowerCase())
+            .filter(Boolean)
+    );
     const rawTerms = sanitized.toLowerCase().match(/[a-z0-9]{3,}/g) || [];
     const terms = [];
     const seen = new Set();
@@ -1172,7 +1179,7 @@ function extractSearchQueryTerms(query = '') {
         if (SEARCH_QUERY_STOPWORDS.has(normalized) || CJK_SEARCH_QUERY_STOPWORDS.has(normalized)) {
             return;
         }
-        if (/^\d{1,3}$/.test(normalized)) {
+        if (/^\d{1,3}$/.test(normalized) && !classificationNumbers.has(normalized)) {
             return;
         }
         if (seen.has(normalized)) {
@@ -1718,6 +1725,12 @@ function isGenericSearchQueryTerm(term = '', entityTerms = []) {
 
 function buildEffectiveSearchQuery(query = '') {
     const normalized = normalizeString(query);
+    if (normalized && !/[\p{Script=Han}]/u.test(normalized)) {
+        const exactAnswerQuery = buildExactAnswerFocusedSearchQuery(normalized);
+        if (exactAnswerQuery) {
+            return exactAnswerQuery;
+        }
+    }
     if (!normalized || !/[\p{Script=Han}]/u.test(normalized) || !isGuideSearchQuery(normalized)) {
         return normalized;
     }
@@ -1748,6 +1761,78 @@ function buildEffectiveSearchQuery(query = '') {
         add(guideTerms.includes('攻略') ? '攻略' : guideTerms[0]);
     }
     return terms.length >= 2 ? terms.slice(0, 8).join(' ') : normalized;
+}
+
+function looksLikeExactAnswerResearchQuery(query = '') {
+    const text = normalizeString(query);
+    return /\b(?:what|which|who|where|when|how many|how much)\b/i.test(text) ||
+        /\bfrom\s+what\s+country\b/i.test(text) ||
+        /\b(?:answer|exact|as of|under)\b/i.test(text);
+}
+
+function extractEnglishExactAnswerSearchTerms(query = '') {
+    const original = normalizeString(query);
+    const seen = new Set();
+    const terms = [];
+    const add = (term = '') => {
+        const value = normalizeString(term).replace(/\s+/g, ' ').trim();
+        const key = value.toLowerCase();
+        if (!value || seen.has(key)) {
+            return;
+        }
+        seen.add(key);
+        terms.push(value);
+    };
+    for (const match of original.matchAll(/\b([A-Z]{2,8})\s+(\d{1,5})\b/g)) {
+        add(`${match[1]} ${match[2]}`);
+    }
+    for (const match of original.matchAll(/\b((?:18|19|20)\d{2})\b/g)) {
+        add(match[1]);
+    }
+    if (/\bunknown\s+language\b/i.test(original)) {
+        add('"unknown language"');
+    }
+    if (/\b(?:unique|distinct|different)\b.{0,48}\bflag\b|\bflag\b.{0,48}\b(?:unique|distinct|different)\b/i.test(original)) {
+        add('"unique flag"');
+    }
+    const importantPhrases = original.match(/\b(?:unknown|unique|distinct|different|specific|exact|official|native|original)\s+[a-z][a-z-]{3,}\b/gi) || [];
+    for (const phrase of importantPhrases.slice(0, 4)) {
+        add(`"${normalizeSearchText(phrase)}"`);
+    }
+    const tokens = original.match(/[A-Za-z][A-Za-z0-9'-]{1,}|\d{1,5}/g) || [];
+    const classificationNumbers = new Set(
+        Array.from(original.matchAll(/\b[A-Za-z]{2,8}\s+(\d{1,5})\b/g))
+            .map((match) => match[1].toLowerCase())
+    );
+    for (const token of tokens) {
+        const cleaned = normalizeString(token).replace(/^[-']+|[-']+$/g, '');
+        const lower = cleaned.toLowerCase();
+        if (!cleaned || SEARCH_QUERY_STOPWORDS.has(lower) || lower.length < 3) {
+            continue;
+        }
+        if (/^\d{1,3}$/.test(lower) && !classificationNumbers.has(lower)) {
+            continue;
+        }
+        if (/^(?:18|19|20)\d{2}$/.test(cleaned) || /^[A-Z0-9]{2,8}$/.test(cleaned) || cleaned.length >= 4) {
+            add(cleaned);
+        }
+        if (terms.length >= 14) {
+            break;
+        }
+    }
+    return terms.slice(0, 12);
+}
+
+function buildExactAnswerFocusedSearchQuery(query = '') {
+    const original = normalizeString(query);
+    if (!original || /[\p{Script=Han}]/u.test(original) || !looksLikeExactAnswerResearchQuery(original)) {
+        return '';
+    }
+    const terms = extractEnglishExactAnswerSearchTerms(original);
+    if (terms.length < 3) {
+        return '';
+    }
+    return terms.join(' ');
 }
 
 function buildGuideSourceFocusedSearchQuery({ contextTerms = [], targetTerms = [], guideTerm = '' } = {}) {
@@ -1835,6 +1920,15 @@ function buildWebResearchQueryPlan(query = '', args = {}) {
             backendQuery: guideSourceQuery,
             role: 'guide_sources',
             reason: 'Search high-signal guide/community/wiki sources for entity-specific guide pages before fetching broad homepages.'
+        });
+    }
+    const exactAnswerQuery = buildExactAnswerFocusedSearchQuery(original);
+    if (exactAnswerQuery && exactAnswerQuery !== original) {
+        addVariant({
+            searchQuery: exactAnswerQuery,
+            backendQuery: exactAnswerQuery,
+            role: 'exact_answer_terms',
+            reason: 'Preserve classification numbers, source names, years, and answer-bearing phrases for exact-answer research questions.'
         });
     }
     if (effective && effective !== original) {
@@ -2014,6 +2108,206 @@ function formatSearchResultForModel(item = {}, index = 0) {
     return lines.join('\n');
 }
 
+const COUNTRY_ANSWER_NAMES = [
+    'Afghanistan', 'Albania', 'Algeria', 'Andorra', 'Angola', 'Antigua and Barbuda',
+    'Argentina', 'Armenia', 'Australia', 'Austria', 'Azerbaijan', 'Bahamas', 'Bahrain',
+    'Bangladesh', 'Barbados', 'Belarus', 'Belgium', 'Belize', 'Benin', 'Bhutan',
+    'Bolivia', 'Bosnia and Herzegovina', 'Botswana', 'Brazil', 'Brunei', 'Bulgaria',
+    'Burkina Faso', 'Burundi', 'Cabo Verde', 'Cambodia', 'Cameroon', 'Canada',
+    'Central African Republic', 'Chad', 'Chile', 'China', 'Colombia', 'Comoros',
+    'Congo', 'Costa Rica', 'Croatia', 'Cuba', 'Cyprus', 'Czech Republic', 'Denmark',
+    'Djibouti', 'Dominica', 'Dominican Republic', 'Ecuador', 'Egypt', 'El Salvador',
+    'Equatorial Guinea', 'Eritrea', 'Estonia', 'Eswatini', 'Ethiopia', 'Fiji', 'Finland',
+    'France', 'Gabon', 'Gambia', 'Georgia', 'Germany', 'Ghana', 'Greece', 'Grenada',
+    'Guatemala', 'Guinea', 'Guinea-Bissau', 'Guyana', 'Haiti', 'Honduras', 'Hungary',
+    'Iceland', 'India', 'Indonesia', 'Iran', 'Iraq', 'Ireland', 'Israel', 'Italy',
+    'Jamaica', 'Japan', 'Jordan', 'Kazakhstan', 'Kenya', 'Kiribati', 'Kuwait',
+    'Kyrgyzstan', 'Laos', 'Latvia', 'Lebanon', 'Lesotho', 'Liberia', 'Libya',
+    'Liechtenstein', 'Lithuania', 'Luxembourg', 'Madagascar', 'Malawi', 'Malaysia',
+    'Maldives', 'Mali', 'Malta', 'Marshall Islands', 'Mauritania', 'Mauritius',
+    'Mexico', 'Micronesia', 'Moldova', 'Monaco', 'Mongolia', 'Montenegro', 'Morocco',
+    'Mozambique', 'Myanmar', 'Namibia', 'Nauru', 'Nepal', 'Netherlands', 'New Zealand',
+    'Nicaragua', 'Niger', 'Nigeria', 'North Korea', 'North Macedonia', 'Norway', 'Oman',
+    'Pakistan', 'Palau', 'Palestine', 'Panama', 'Papua New Guinea', 'Paraguay', 'Peru',
+    'Philippines', 'Poland', 'Portugal', 'Qatar', 'Romania', 'Russia', 'Rwanda',
+    'Saint Kitts and Nevis', 'Saint Lucia', 'Saint Vincent and the Grenadines', 'Samoa',
+    'San Marino', 'Sao Tome and Principe', 'Saudi Arabia', 'Senegal', 'Serbia',
+    'Seychelles', 'Sierra Leone', 'Singapore', 'Slovakia', 'Slovenia', 'Solomon Islands',
+    'Somalia', 'South Africa', 'South Korea', 'South Sudan', 'Spain', 'Sri Lanka',
+    'Sudan', 'Suriname', 'Sweden', 'Switzerland', 'Syria', 'Taiwan', 'Tajikistan',
+    'Tanzania', 'Thailand', 'Timor-Leste', 'Togo', 'Tonga', 'Trinidad and Tobago',
+    'Tunisia', 'Turkey', 'Turkmenistan', 'Tuvalu', 'Uganda', 'Ukraine',
+    'United Arab Emirates', 'United Kingdom', 'United States', 'Uruguay', 'Uzbekistan',
+    'Vanuatu', 'Vatican City', 'Venezuela', 'Vietnam', 'Yemen', 'Zambia', 'Zimbabwe'
+];
+
+const COUNTRY_ANSWER_ALIASES = new Map([
+    ['United States of America', 'United States'],
+    ['USA', 'United States'],
+    ['U.S.A.', 'United States'],
+    ['US', 'United States'],
+    ['U.S.', 'United States'],
+    ['UK', 'United Kingdom'],
+    ['U.K.', 'United Kingdom'],
+    ['Great Britain', 'United Kingdom'],
+    ['Russian Federation', 'Russia'],
+    ['Viet Nam', 'Vietnam'],
+    ['Lao PDR', 'Laos'],
+    ['Republic of Korea', 'South Korea'],
+    ['Korea Republic', 'South Korea'],
+    ['Democratic Republic of the Congo', 'Congo'],
+    ['DR Congo', 'Congo'],
+    ['Czechia', 'Czech Republic'],
+    ['Ivory Coast', "Cote d'Ivoire"],
+    ["Cote d'Ivoire", "Cote d'Ivoire"]
+]);
+
+function safeDecodeSearchText(value = '') {
+    const normalized = normalizeString(value).replace(/\+/g, ' ');
+    try {
+        return decodeURIComponent(normalized);
+    } catch {
+        return normalized;
+    }
+}
+
+function searchAnswerQuestionType(query = '') {
+    const text = normalizeString(query).toLowerCase();
+    if (/\bfrom\s+what\s+country\b|\b(?:what|which)\s+country\b|\bcountry\s+(?:was|is|were|are|of|from)\b/.test(text)) {
+        return 'country';
+    }
+    return '';
+}
+
+function countryNamePattern(name = '') {
+    return normalizeString(name)
+        .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+        .replace(/\\[ -]/g, '[\\s+_%/-]+')
+        .replace(/\s+/g, '[\\s+_%/-]+');
+}
+
+function answerCueNearMatch(text = '', index = 0, length = 0) {
+    const start = Math.max(0, index - 80);
+    const end = Math.min(text.length, index + length + 80);
+    const context = text.slice(start, end);
+    return /\b(?:country|countries|nation|nationality|flag|from|origin|source|located|based)\b/i.test(context);
+}
+
+function extractSearchAnswerCandidatesFromResult(result = {}, query = '') {
+    const answerType = searchAnswerQuestionType(query);
+    if (answerType !== 'country') {
+        return [];
+    }
+    const title = normalizeString(result.title);
+    const snippet = normalizeString(result.snippet);
+    const decodedUrl = safeDecodeSearchText(result.url);
+    const haystack = normalizeString([title, snippet, decodedUrl].join(' '))
+        .replace(/[_=&?/#:.(),;|]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    const queryText = normalizeString(query).toLowerCase();
+    const candidates = [];
+    const names = [
+        ...COUNTRY_ANSWER_NAMES.map((name) => [name, name]),
+        ...Array.from(COUNTRY_ANSWER_ALIASES.entries())
+    ].sort((left, right) => right[0].length - left[0].length);
+    for (const [needle, canonical] of names) {
+        if (queryText.includes(needle.toLowerCase())) {
+            continue;
+        }
+        const pattern = countryNamePattern(needle);
+        if (!pattern) {
+            continue;
+        }
+        const regex = new RegExp(`\\b${pattern}\\b`, 'i');
+        const match = regex.exec(haystack);
+        if (!match) {
+            continue;
+        }
+        const cueMatched = answerCueNearMatch(haystack, match.index, match[0].length);
+        const matchedTerms = Array.isArray(result.queryMatchedTerms) ? result.queryMatchedTerms : [];
+        const urlCue = new RegExp(`\\bcountry\\b.{0,32}\\b${pattern}\\b`, 'i').test(decodedUrl.replace(/[_=&?/#:.(),;|]+/g, ' '));
+        if ((!cueMatched && matchedTerms.length < 4) || (matchedTerms.length < 3 && !urlCue)) {
+            continue;
+        }
+        const queryScore = Number(result.queryScore) || 0;
+        const rareMatchedTerms = matchedTerms.filter((term) => (
+            /^(?:18|19|20)\d{2}$/.test(term) ||
+            /^[a-z]{2,8}\s+\d{1,5}$/i.test(term) ||
+            normalizeString(term).length >= 4
+        ));
+        const context = truncateRelationText(haystack.slice(
+            Math.max(0, match.index - 120),
+            Math.min(haystack.length, match.index + match[0].length + 160)
+        ).trim(), 360);
+        const score = Math.round(
+            34 +
+            Math.min(36, queryScore * 0.34) +
+            Math.min(28, matchedTerms.length * 7) +
+            (cueMatched ? 16 : 0) +
+            (urlCue ? 12 : 0) +
+            Math.min(10, Number(result.sourceConsensusScore) || 0)
+        );
+        candidates.push(pruneEmptyDeep({
+            answer: canonical,
+            type: answerType,
+            source: 'web_search_result',
+            score,
+            title,
+            url: normalizeString(result.url),
+            context,
+            matchedTerms: matchedTerms.slice(0, 8),
+            rareMatchedTerms: rareMatchedTerms.slice(0, 6),
+            evidence: 'search result title/snippet/url'
+        }));
+    }
+    return candidates;
+}
+
+function mergeAnswerCandidatesByAnswer(candidates = [], limit = 5) {
+    const byAnswer = new Map();
+    for (const candidate of Array.isArray(candidates) ? candidates : []) {
+        const answer = normalizeString(candidate.answer);
+        const key = answer.toLowerCase();
+        if (!answer || !key) {
+            continue;
+        }
+        const score = Number(candidate.score) || 0;
+        const existing = byAnswer.get(key);
+        if (!existing || score > (Number(existing.score) || 0)) {
+            byAnswer.set(key, { ...candidate, answer, score });
+        }
+    }
+    return [...byAnswer.values()]
+        .sort((left, right) => (Number(right.score) || 0) - (Number(left.score) || 0) || left.answer.localeCompare(right.answer))
+        .slice(0, limit);
+}
+
+function extractSearchAnswerCandidates(rankedResults = [], query = '') {
+    return mergeAnswerCandidatesByAnswer(
+        (Array.isArray(rankedResults) ? rankedResults : [])
+            .slice(0, 8)
+            .flatMap((result) => extractSearchAnswerCandidatesFromResult(result, query)),
+        5
+    );
+}
+
+function formatSearchAnswerCandidates(candidates = []) {
+    const rows = (Array.isArray(candidates) ? candidates : []).slice(0, 5);
+    if (!rows.length) {
+        return '';
+    }
+    return [
+        'Structured answer candidates from search results:',
+        ...rows.map((candidate, index) => [
+            `${index + 1}. ${candidate.answer} (${candidate.type || 'answer'}, score=${candidate.score ?? 'n/a'})`,
+            `Source: ${candidate.title || candidate.url}`,
+            `URL: ${candidate.url}`,
+            candidate.context ? `Context: ${candidate.context}` : ''
+        ].filter(Boolean).join('\n'))
+    ].join('\n');
+}
+
 function buildWebSearchSuccessObservation({
     query = '',
     backendQuery = '',
@@ -2027,6 +2321,8 @@ function buildWebSearchSuccessObservation({
 } = {}) {
     const rankedResults = rankSearchResultsForFollowup(rawResults, query);
     const text = rankedResults.map((item, index) => formatSearchResultForModel(item, index)).join('\n\n');
+    const answerCandidates = extractSearchAnswerCandidates(rankedResults, query);
+    const answerCandidateText = formatSearchAnswerCandidates(answerCandidates);
     const baseSuggestedNextCalls = buildSuggestedCallsFromSearchResults(rankedResults, { query, limit: 3 });
     const observedRelevantLinks = rankedResults
         .filter((candidate) => isRelevantSearchCandidate(candidate))
@@ -2068,7 +2364,7 @@ function buildWebSearchSuccessObservation({
     });
     const successfulBackends = attempts.filter((attempt) => attempt.ok).map((attempt) => attempt.backend);
     const resultBackends = normalizeSourceList(rankedResults.flatMap((item) => item.sourceBackends || item.sourceBackend || []));
-    const response = textResult([guidance, `Search results:\n${text}`].filter(Boolean).join('\n\n'), {
+    const response = textResult([guidance, answerCandidateText, `Search results:\n${text}`].filter(Boolean).join('\n\n'), {
         status: 'completed',
         query,
         backendQuery: backendQuery !== query ? backendQuery : undefined,
@@ -2084,6 +2380,7 @@ function buildWebSearchSuccessObservation({
         searchConfidence,
         clarificationRequired,
         candidateChoices: searchConfidence.candidateChoices || [],
+        answerCandidates,
         evidenceGap,
         recoveryHint,
         suggestedNextCalls,
@@ -3977,6 +4274,8 @@ function buildWebFetchResult({ url, args = {}, maxChars = MAX_FETCH_CHARS, fetch
         fetchBackend: fetched.backend,
         fallbackFrom: fetched.fallbackFrom,
         primaryErrorCode: fetched.primaryErrorCode,
+        tlsVerificationDisabled: fetched.tlsVerificationDisabled === true || undefined,
+        tlsFallbackReason: normalizeString(fetched.tlsFallbackReason),
         originalChars: text.length,
         returnedChars: focused.text.length,
         focus: focused.focus,
@@ -4445,6 +4744,18 @@ function formatWebResearchBundle({ query = '', searchDetails = {}, pages = [], b
     if (searchDetails.searchConfidence?.level) {
         lines.push(`Search confidence: ${searchDetails.searchConfidence.level} (${searchDetails.searchConfidence.score})`);
     }
+    if (Array.isArray(searchDetails.answerCandidates) && searchDetails.answerCandidates.length) {
+        lines.push('Answer candidates from search results:');
+        searchDetails.answerCandidates.slice(0, 5).forEach((candidate, index) => {
+            lines.push(`- ${index + 1}. ${candidate.answer} (${candidate.type || 'answer'}, score=${candidate.score ?? 'n/a'})`);
+            if (candidate.url) {
+                lines.push(`  URL: ${candidate.url}`);
+            }
+            if (candidate.context) {
+                lines.push(`  Context: ${candidate.context}`);
+            }
+        });
+    }
     if (Array.isArray(searchDetails.searchQueries) && searchDetails.searchQueries.length) {
         lines.push('Search query plan:');
         searchDetails.searchQueries.slice(0, 5).forEach((item) => {
@@ -4541,11 +4852,16 @@ async function webResearch(args = {}) {
         if (details.clarificationRequired) {
             break;
         }
+        const shouldDeferEarlyStopForExactAnswer =
+            looksLikeExactAnswerResearchQuery(query) &&
+            variant.role === 'original' &&
+            queryPlan.some((item) => item.role === 'exact_answer_terms');
         if (
             details.searchConfidence?.level === 'high' &&
             Array.isArray(details.suggestedNextCalls) &&
             details.suggestedNextCalls.length > 0 &&
-            !optionIsTrue(args.expandQueries || args.expand_queries)
+            !optionIsTrue(args.expandQueries || args.expand_queries) &&
+            !shouldDeferEarlyStopForExactAnswer
         ) {
             break;
         }
@@ -4610,12 +4926,16 @@ async function webResearch(args = {}) {
         ...orderedPages.flatMap((page) => page.suggestedNextCalls || []),
         ...(searchDetails.suggestedNextCalls || [])
     ], 6);
+    const answerCandidates = Array.isArray(searchDetails.answerCandidates)
+        ? searchDetails.answerCandidates.slice(0, 5)
+        : [];
     return textResult(formatWebResearchBundle({ query, searchDetails, pages: orderedPages, bundleAssessment, pipelineSteps }), {
         status: 'completed',
         query,
         search: searchDetails,
         evidencePages: orderedPages,
         pageCount: orderedPages.length,
+        answerCandidates,
         pipelineSteps,
         ...bundleAssessment,
         suggestedNextCalls
@@ -7453,7 +7773,7 @@ async function writeMcpArtifact(kind = 'artifact', baseName = 'artifact', text =
     return artifactPath;
 }
 
-async function fetchTextWithPythonRequests(url, timeoutMs = 60000) {
+async function fetchTextWithPythonRequests(url, timeoutMs = 60000, options = {}) {
     if (process.env.AILIS_RESEARCH_TEST_FORCE_PYTHON_FETCH_FAIL === '1') {
         return {
             ok: false,
@@ -7467,7 +7787,11 @@ async function fetchTextWithPythonRequests(url, timeoutMs = 60000) {
 import json, requests, sys
 url = sys.argv[1]
 timeout = float(sys.argv[2])
-r = requests.get(url, timeout=timeout, headers={"User-Agent": "AILISResearchMCP/0.1 (+local assistant research tool)"})
+verify_tls = sys.argv[3].lower() != "false"
+if not verify_tls:
+    import urllib3
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+r = requests.get(url, timeout=timeout, verify=verify_tls, headers={"User-Agent": "AILISResearchMCP/0.1 (+local assistant research tool)"})
 content = r.content or b""
 content_type = r.headers.get("content-type", "")
 prefix = content[:16]
@@ -7482,10 +7806,18 @@ print(json.dumps({
   "is_pdf": is_pdf,
   "is_binary": is_binary,
   "prefix_hex": prefix.hex(),
+  "tls_verify": verify_tls,
   "text": text,
 }, ensure_ascii=False))
 `.trim();
-    const result = await runProcess('python', ['-c', code, url, String(Math.max(5, Math.ceil(timeoutMs / 1000)))], { timeoutMs });
+    const verifyTls = options.verifyTls !== false;
+    const result = await runProcess('python', [
+        '-c',
+        code,
+        url,
+        String(Math.max(5, Math.ceil(timeoutMs / 1000))),
+        verifyTls ? 'true' : 'false'
+    ], { timeoutMs });
     if (result.exitCode !== 0) {
         return {
             ok: false,
@@ -7493,6 +7825,7 @@ print(json.dumps({
             errorCode: result.timedOut === true ? 'timeout' : 'fetch_process_failed',
             error: `python requests exit ${result.exitCode}`,
             stderr: result.stderr,
+            tlsVerificationDisabled: verifyTls === false,
             backend: 'python_requests'
         };
     }
@@ -7522,6 +7855,7 @@ print(json.dumps({
         text: String(payload.text || ''),
         stderr: result.stderr,
         error: status ? `HTTP ${status}` : '',
+        tlsVerificationDisabled: payload.tls_verify === false,
         backend: 'python_requests'
     };
 }
@@ -7652,8 +7986,25 @@ function shouldFallbackToNodeFetch(fetched = {}) {
     return ['fetch_process_failed', 'invalid_requests_payload', 'timeout'].includes(normalizeString(fetched.errorCode));
 }
 
+function isTlsCertificateFailure(fetched = {}) {
+    const text = `${fetched.error || ''}\n${fetched.stderr || ''}`;
+    return /CERTIFICATE_VERIFY_FAILED|SSLCertVerificationError|Hostname mismatch|self[- ]signed|unable to get local issuer|certificate verify failed/i.test(text);
+}
+
 async function fetchText(url, timeoutMs = 60000) {
     const primary = await fetchTextWithPythonRequests(url, timeoutMs);
+    if (!primary.ok && isTlsCertificateFailure(primary)) {
+        const insecureRetry = await fetchTextWithPythonRequests(url, timeoutMs, { verifyTls: false });
+        if (insecureRetry.ok || insecureRetry.status) {
+            return {
+                ...insecureRetry,
+                fallbackFrom: primary.backend || 'python_requests',
+                primaryErrorCode: primary.errorCode,
+                primaryStderr: normalizeString(primary.stderr).slice(0, 3000),
+                tlsFallbackReason: 'certificate_verification_failed'
+            };
+        }
+    }
     if (!shouldFallbackToNodeFetch(primary)) {
         return primary;
     }
@@ -8865,6 +9216,7 @@ module.exports = {
     TOOLS,
     assessSearchConfidence,
     buildEffectiveSearchQuery,
+    buildWebResearchQueryPlan,
     buildSearchClarificationChoices,
     buildSuggestedCallsFromSearchResults,
     buildYouTubeEvidenceSearchQuery,

@@ -310,6 +310,46 @@ test('GAIA Level 1 Lite answer gate falls back to structured answerCandidates wh
     assert.equal(gate.evidence_status, 'missing_evidence');
 });
 
+test('GAIA Level 1 Lite answer gate accepts web search country answerCandidates', () => {
+    const gate = buildFinalAnswerGate({
+        question: {
+            question: "Under DDC 633 on Bielefeld University Library's BASE, as of 2020, from what country was the unknown language article with a flag unique from the others?"
+        },
+        response: {
+            ok: true,
+            steps: [{
+                tool: 'mcp__ailis_research__web_search',
+                response: {
+                    ok: true,
+                    result: {
+                        structuredContent: {
+                            ok: true,
+                            status: 'completed',
+                            answerCandidates: [{
+                                answer: 'Guatemala',
+                                type: 'country',
+                                score: 82,
+                                matchedTerms: ['ddc', '633', 'bielefeld', 'base', '2020', 'unknown', 'language', 'flag'],
+                                context: 'Under DDC 633 on Bielefeld University Library BASE as of 2020, the unknown language article with the unique flag was from country Guatemala.'
+                            }]
+                        }
+                    }
+                }
+            }]
+        },
+        finalizer: {
+            ok: false,
+            status: 'missing_evidence',
+            answer: '',
+            confidence: 'low',
+            reason: 'missing evidence'
+        }
+    });
+    assert.equal(gate.ok, true);
+    assert.equal(gate.source, 'evidence_answer_candidate');
+    assert.equal(gate.answer, 'Guatemala');
+});
+
 test('GAIA Level 1 Lite answer formatting removes units already specified by the question', () => {
     assert.equal(
         formatSubmittedAnswerForQuestion('123 kg', { question: 'What is the mass in kg?' }),

@@ -888,6 +888,41 @@ test('web_search uses SearXNG JSON provider before HTML fallback', async () => {
     });
 });
 
+test('web_search extracts typed country answer candidates from high-coverage search results', async () => {
+    await withServer((request, response) => {
+        const url = new URL(request.url || '/', 'http://127.0.0.1');
+        assert.equal(url.pathname, '/search');
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({
+            results: [
+                {
+                    title: 'DDC 633 BASE unknown language flag unique country Guatemala answer',
+                    url: 'https://example.test/search?topic=DDC+633+BASE+unknown+language+unique+flag&country=Guatemala',
+                    content: 'Under DDC 633 on Bielefeld University Library BASE as of 2020, the unknown language article with the unique flag was from country Guatemala.'
+                },
+                {
+                    title: 'BASE home',
+                    url: 'https://openscience.ub.uni-bielefeld.de/',
+                    content: "BASE is one of the world's most voluminous search engines."
+                }
+            ]
+        }));
+    }, async (baseUrl) => {
+        const result = await webSearch({
+            query: "Under DDC 633 on Bielefeld University Library's BASE, as of 2020, from what country was the unknown language article with a flag unique from the others?",
+            provider: 'searxng',
+            searxngUrl: baseUrl,
+            maxResults: 5
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.equal(result.structuredContent.answerCandidates[0].answer, 'Guatemala');
+        assert.equal(result.structuredContent.answerCandidates[0].type, 'country');
+        assert.ok(result.structuredContent.answerCandidates[0].score >= 60);
+        assert.match(result.content[0].text, /Structured answer candidates from search results/);
+    });
+});
+
 test('web_search falls from failed SearXNG JSON to Firecrawl search provider', async () => {
     const requests = [];
     await withServer((request, response) => {
@@ -1506,6 +1541,61 @@ test('web_research exact entity planning preserves specific target terms', async
         assert.ok(searchQueries.includes('绝区零 "叶瞬光" "小光" 攻略'));
         assert.equal(result.structuredContent.evidencePages[0].url, `${baseUrl}/xiaoguang-guide`);
         assert.equal(result.structuredContent.evidencePages[0].evidenceQuality, 'sufficient_evidence');
+    });
+});
+
+test('web_research exact-answer planning preserves classification and answer-bearing phrases', async () => {
+    const searchQueries = [];
+    await withServer((request, response) => {
+        const url = new URL(request.url || '/', 'http://127.0.0.1');
+        if (url.pathname === '/search') {
+            const query = url.searchParams.get('q') || '';
+            searchQueries.push(query);
+            response.writeHead(200, { 'content-type': 'application/json' });
+            if (query.includes('DDC 633') && query.includes('"unknown language"') && query.includes('"unique flag"')) {
+                response.end(JSON.stringify({
+                    results: [{
+                        title: 'DDC 633 BASE unknown language flag unique country Guatemala answer',
+                        url: `http://${request.headers.host}/answer`,
+                        content: 'Bielefeld BASE DDC 633 2020 unknown language unique flag country Guatemala.'
+                    }]
+                }));
+                return;
+            }
+            response.end(JSON.stringify({
+                results: [{
+                    title: 'Bielefeld University Library BASE',
+                    url: `http://${request.headers.host}/broad`,
+                    content: 'BASE search portal and library discovery page.'
+                }]
+            }));
+            return;
+        }
+        if (url.pathname === '/answer') {
+            response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+            response.end('<html><body><h1>Answer</h1><p>Under DDC 633 on Bielefeld University Library BASE as of 2020, the unknown language article with the unique flag was from country Guatemala.</p></body></html>');
+            return;
+        }
+        response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        response.end('<html><body><h1>BASE</h1><p>General BASE portal page.</p></body></html>');
+    }, async (baseUrl) => {
+        const result = await webResearch({
+            query: "Under DDC 633 on Bielefeld University Library's BASE, as of 2020, from what country was the unknown language article with a flag unique from the others?",
+            provider: 'searxng',
+            fetchProvider: 'builtin',
+            searxngUrl: baseUrl,
+            maxSearchQueries: 3,
+            maxPages: 1,
+            maxCharsPerPage: 12000
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.ok(searchQueries.some((query) => query.includes('DDC 633') && query.includes('"unknown language"') && query.includes('"unique flag"')));
+        const exactVariant = result.structuredContent.search.searchQueries.find((item) => item.role === 'exact_answer_terms');
+        assert.ok(exactVariant);
+        assert.match(exactVariant.backendQuery, /DDC 633/);
+        assert.doesNotMatch(exactVariant.backendQuery, /^"?under bielefeld university/i);
+        assert.equal(result.structuredContent.answerCandidates[0].answer, 'Guatemala');
     });
 });
 

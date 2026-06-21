@@ -57,6 +57,8 @@ const DEFAULT_VISION_AGENT_DECISION_TIMEOUT_MS = 90000;
 const MAX_AGENT_DECISION_TIMEOUT_MS = 120000;
 const PENDING_STORE_VERSION = 1;
 const FINAL_ANSWER_TOOL_NAME = 'final_answer';
+const SOURCE_QUESTION_EVIDENCE_TASK_TYPE = 'agent_exact_answer_source';
+const SOURCE_QUESTION_EVIDENCE_ID = 'source_question';
 const DIRECT_TOOL_PROGRESS_NOTE_FIELD = 'progress_note';
 const AGENT_DECISION_REASONING_EFFORT_VALUES = new Set(['none', 'minimal', 'low', 'medium', 'high', 'xhigh']);
 const DEFAULT_AGENT_DECISION_REASONING_EFFORT = '';
@@ -826,16 +828,79 @@ function attachAgentEvidenceArtifacts(stepResult = {}, { taskType = 'ailis_agent
     };
 }
 
+function looksLikeSelfContainedExactAnswerQuestion(message = '') {
+    const text = normalizeText(message);
+    if (text.length < 24) {
+        return false;
+    }
+    const externalEvidenceClues = [
+        /https?:\/\//i,
+        /\bwww\./i,
+        /\bdoi\b|arxiv|youtube|youtu\.be/i,
+        /\battached file path\b|\bfile path\b|\battached file\b/i,
+        /\.(?:pdf|docx?|xlsx?|csv|pptx?|png|jpe?g|mp3|wav|mp4)\b/i,
+        /\b(?:website|webpage|web page|article|paper|journal|report|news|database|library catalog|archive|dataset|BASE)\b/i,
+        /\b(?:as of|published|retrieved|according to|from what country|which country)\b/i
+    ];
+    if (externalEvidenceClues.some((pattern) => pattern.test(text))) {
+        return false;
+    }
+    const selfContainedClues = [
+        /\b(?:fictional language|translate|translation|sentence|grammar|nominative|accusative|genitive|root verb|preterit|imperfect)\b/i,
+        /\b(?:given|suppose|assume|let|if|when|where|arranged|defined as|rules?|constraints?)\b/i,
+        /\b(?:logic|puzzle|calculate|compute|solve|what is the value|how many|probability|odds|chance|random|dice|cards|maximi[sz]e)\b/i,
+        /\b(?:truth table|expression|equation|sequence|integer|number|word that indicates|form)\b/i
+    ];
+    return selfContainedClues.some((pattern) => pattern.test(text));
+}
+
+function buildSourceQuestionEvidenceArtifact(message = '', { exactAnswerMode = false } = {}) {
+    if (exactAnswerMode !== true || !looksLikeSelfContainedExactAnswerQuestion(message)) {
+        return null;
+    }
+    const text = normalizeText(message);
+    const artifact = createEvidenceArtifact({
+        taskType: SOURCE_QUESTION_EVIDENCE_TASK_TYPE,
+        evidenceId: SOURCE_QUESTION_EVIDENCE_ID,
+        observation: {
+            id: 'source-question',
+            title: 'Original exact-answer question',
+            tool: 'user_prompt',
+            action: SOURCE_QUESTION_EVIDENCE_ID,
+            status: 'provided',
+            ok: true,
+            iteration: 0,
+            resultText: text,
+            preview: text,
+            response: {
+                ok: true,
+                status: 'provided',
+                result: {
+                    content: [{ type: 'text', text }]
+                }
+            }
+        }
+    });
+    return artifact?.validation?.ok === true ? artifact : null;
+}
+
+function buildBaseAgentEvidenceArtifacts({ message = '', exactAnswerMode = false } = {}) {
+    return [buildSourceQuestionEvidenceArtifact(message, { exactAnswerMode })].filter(Boolean);
+}
+
 function getStepEvidenceRefs(stepResult = {}) {
     return (Array.isArray(stepResult.evidenceArtifacts) ? stepResult.evidenceArtifacts : [])
         .map((artifact) => artifact.id)
         .filter(Boolean);
 }
 
-function buildAgentEvidenceArtifactsPromptObject(stepResults = []) {
-    const artifacts = stepResults.flatMap((stepResult) =>
+function buildAgentEvidenceArtifactsPromptObject(stepResults = [], options = {}) {
+    const artifacts = [
+        ...buildBaseAgentEvidenceArtifacts(options),
+        ...stepResults.flatMap((stepResult) =>
         Array.isArray(stepResult.evidenceArtifacts) ? stepResult.evidenceArtifacts : []
-    );
+        )
+    ];
     return getEvidenceArtifactsPromptObject(artifacts).slice(-16);
 }
 
@@ -942,18 +1007,40 @@ function previewBudgetForAgentToolResult(stepResult = {}) {
     return 1600;
 }
 
-function buildEvidenceSufficiencyPromptObject(stepResults = [], { exactAnswerMode = false } = {}) {
-    const readyEvidence = (Array.isArray(stepResults) ? stepResults : [])
+function buildEvidenceSufficiencyPromptObject(stepResults = [], { exactAnswerMode = false, message = '' } = {}) {
+    const sourceQuestionArtifact = buildSourceQuestionEvidenceArtifact(message, { exactAnswerMode });
+    const toolReadyEvidence = (Array.isArray(stepResults) ? stepResults : [])
         .map(buildReadyEvidenceFromStep)
         .filter(Boolean)
         .slice(-8);
+    const sourceQuestionReady = sourceQuestionArtifact
+        ? [{
+            stepId: 'source-question',
+            tool: 'user_prompt',
+            title: 'Original exact-answer question',
+            action: SOURCE_QUESTION_EVIDENCE_ID,
+            artifactId: null,
+            sheet: null,
+            range: null,
+            evidenceId: sourceQuestionArtifact.id,
+            coveredByEvidence: null,
+            resultSummary: null,
+            coverage: {
+                kind: 'source_question',
+                complete: true,
+                truncated: false,
+                reasoningReady: true
+            }
+        }]
+        : [];
+    const readyEvidence = [...sourceQuestionReady, ...toolReadyEvidence].slice(-8);
     const latestReady = readyEvidence[readyEvidence.length - 1] || null;
     const latestFailed = [...(Array.isArray(stepResults) ? stepResults : [])].reverse()
         .find((stepResult) => stepResult?.response && stepResult.response.ok !== true) || null;
     const repeatedCoveredReads = readyEvidence.filter((entry) => entry.coveredByEvidence?.evidenceId).slice(-6);
     const hasComputeEvidence = readyEvidence.some((entry) => entry.tool === 'artifact_compute');
     const status = readyEvidence.length
-        ? (latestFailed ? 'ready_with_later_failure' : 'ready_for_reasoning')
+        ? (latestFailed ? 'ready_with_later_failure' : (sourceQuestionReady.length && !toolReadyEvidence.length ? 'source_question_ready_for_reasoning' : 'ready_for_reasoning'))
         : 'needs_more_evidence';
     return {
         model: 'ailis_evidence_sufficiency.v1',
@@ -961,7 +1048,9 @@ function buildEvidenceSufficiencyPromptObject(stepResults = [], { exactAnswerMod
         ready: readyEvidence.length > 0,
         exact_answer_mode: exactAnswerMode === true,
         recommended_next_action: readyEvidence.length
-            ? 'Use the ready evidence to reason or final if it answers the user goal; do not repeat covered artifact reads. Call a narrower query/compute only if a specific missing field remains.'
+            ? (sourceQuestionReady.length && !toolReadyEvidence.length
+                ? 'For this self-contained exact-answer task, reason from the source_question evidence and submit that evidence ref. Use tools only if a specific external/file evidence gap remains.'
+                : 'Use the ready evidence to reason or final if it answers the user goal; do not repeat covered artifact reads. Call a narrower query/compute only if a specific missing field remains.')
             : 'Gather complete, non-truncated, reasoning-ready evidence with read/query/compute tools before final.',
         ready_evidence_count: readyEvidence.length,
         ready_evidence: readyEvidence,
@@ -979,8 +1068,11 @@ function buildEvidenceSufficiencyPromptObject(stepResults = [], { exactAnswerMod
     };
 }
 
-function getAvailableEvidenceRefSet(stepResults = []) {
-    return new Set(stepResults.flatMap(getStepEvidenceRefs));
+function getAvailableEvidenceRefSet(stepResults = [], options = {}) {
+    return new Set([
+        ...buildBaseAgentEvidenceArtifacts(options).map((artifact) => artifact.id).filter(Boolean),
+        ...stepResults.flatMap(getStepEvidenceRefs)
+    ]);
 }
 
 function getLatestUserMessage(request = {}) {
@@ -3902,8 +3994,14 @@ function buildLlmAgentExecutorMessages({
     const initialPlanHint = buildInitialPlanHint(initialPlan);
     const capabilityCatalog = buildAgentCapabilityCatalog();
     const recentConversation = normalizeConversationHistory(messageHistory);
-    const evidenceArtifacts = buildAgentEvidenceArtifactsPromptObject(stepResults);
-    const evidenceSufficiency = buildEvidenceSufficiencyPromptObject(stepResults, { exactAnswerMode });
+    const evidenceArtifacts = buildAgentEvidenceArtifactsPromptObject(stepResults, {
+        message,
+        exactAnswerMode
+    });
+    const evidenceSufficiency = buildEvidenceSufficiencyPromptObject(stepResults, {
+        exactAnswerMode,
+        message
+    });
     const exactAnswerContract = buildExactAnswerContractPromptObject({
         exactAnswerMode,
         evidenceArtifacts
@@ -3941,7 +4039,7 @@ function buildLlmAgentExecutorMessages({
         'Self Debug Loop：当用户反馈 AILIS 自身 bug、工具链异常、Agent Loop 不稳定或要求 AILIS 自己修复时，优先把它当作高风险自修复任务。先加载 self_debugger 能力，按建案、收证据、诊断、提补丁、验证、确认后应用的协议推进；不要直接裸改自己的代码。',
         '工具能力索引：首轮只给 capability_catalog。详细 schema 通过 load_context、tool_search 或工具 observation 按需出现。MCP 工具优先使用 tool_search/capability_context 中的 mcp__server__tool direct spec；外部 API/Composio/OpenAPI 工具优先使用 tool_search 返回的 external__provider__tool direct spec。没有 direct spec 时，先 load/search specs，mcp_bridge/capability_manager 只作为管理、安装、修复入口。请按任务目标和证据缺口选择最小必要工具，避免关键词驱动的机械路由。',
         exactAnswerMode
-            ? `Exact-answer 模式：不要把可见 Markdown 当提交答案。必须先用工具形成 evidence_artifacts，再用 action="final" 填短 final_answer，并在 exact_answer_submission 中提供 answer、confidence、evidence_refs；evidence_refs 里的 artifact-* 是证据引用 ID，不是文件路径，也不是 artifact_query 的 context artifactId，不能调用 read/open/artifact_query 去读取它们。数值题 final 前必须完成单位换算、比例换算和四舍五入；如果题目问 how many thousand/million/billion X，answer 填缩放后的计数，不填原始 X 数值，并在 reason 简写换算式。随机/概率/odds/最大胜率题如果是有限状态过程，优先写 exact dynamic program / state probability transition / exhaustive enumeration；Monte Carlo 只能做 sanity check，不能作为 high-confidence final 证据；不要把固定随机机制改成按剩余元素数量随机，也不要为题面未定义的末尾/残缺状态发明 0.5、均分或其他补充概率。关系/约束题如果出现表格、分配关系、人物属性、物品列表或缺失项，final 前必须做角色对齐检查：先区分题目问的目标角色和中间缺失实体，再按表格方向映射，不能把“未匹配的收件人/物品/属性”直接当成“未执行动作的人”。缺证据时继续 tool 或 blocked。`
+            ? `Exact-answer 模式：不要把可见 Markdown 当提交答案。必须先形成 evidence_artifacts，再用 action="final" 填短 final_answer，并在 exact_answer_submission 中提供 answer、confidence、evidence_refs；evidence_refs 里的 artifact-* 是证据引用 ID，不是文件路径，也不是 artifact_query 的 context artifactId，不能调用 read/open/artifact_query 去读取它们。若 evidence_artifacts 包含 QuestionEvidence/source_question，且题目是自包含逻辑、数学、语法、翻译或规则推导题，可以引用它作为题面证据；网页、论文、文件、新闻或 as-of 查询仍必须先检索/读取外部证据。数值题 final 前必须完成单位换算、比例换算和四舍五入；如果题目问 how many thousand/million/billion X，answer 填缩放后的计数，不填原始 X 数值，并在 reason 简写换算式。随机/概率/odds/最大胜率题如果是有限状态过程，优先写 exact dynamic program / state probability transition / exhaustive enumeration；Monte Carlo 只能做 sanity check，不能作为 high-confidence final 证据；不要把固定随机机制改成按剩余元素数量随机，也不要为题面未定义的末尾/残缺状态发明 0.5、均分或其他补充概率。关系/约束题如果出现表格、分配关系、人物属性、物品列表或缺失项，final 前必须做角色对齐检查：先区分题目问的目标角色和中间缺失实体，再按表格方向映射，不能把“未匹配的收件人/物品/属性”直接当成“未执行动作的人”。缺证据时继续 tool 或 blocked。`
             : '',
         '可见回复格式：final_answer 字段是给用户看的 Markdown 字符串，可以使用自然段、短列表、代码块和加粗；blocked_reason 也按 Markdown 组织。不要输出 HTML；不要把 persona_output/persona_surface 或 emotion/intensity/gestureIntent/taskState 等内部控制字段放进任何可见回复字段。',
         '只输出 JSON，JSON 外不要输出 Markdown。',
@@ -4393,6 +4491,7 @@ function buildFinalAnswerNativeToolSpec() {
         description: [
             'Submit the exact benchmark/task answer separately from user-visible persona text.',
             'Use only after evidence_artifacts contain the evidence_refs supporting the answer.',
+            'For self-contained logic, math, grammar, translation, or rules questions, QuestionEvidence/source_question can support reasoning from the problem statement itself.',
             'For relation or constraint questions with tables, assignments, people, items, profiles, or lists, verify role alignment before submitting: answer the entity role asked by the question, not merely the unmatched intermediate entity.',
             'For quantitative questions, finish the unit conversion and rounding requested by the question before submitting; if the question asks for "how many thousand/million/billion X", submit the scaled count, not the raw X value.',
             'If evidence is missing, do not call this tool; continue retrieving or report blocked.'
@@ -4647,7 +4746,10 @@ function detectIncompleteProcessSimulation({ message = '', stepResults = [] } = 
 
 function validateExactAnswerSubmission({ decision = {}, stepResults = [], message = '' } = {}) {
     const submission = normalizeExactAnswerSubmission(decision.exactAnswerSubmission || {});
-    const availableRefs = getAvailableEvidenceRefSet(stepResults);
+    const availableRefs = getAvailableEvidenceRefSet(stepResults, {
+        message,
+        exactAnswerMode: true
+    });
     const errors = [];
     if (!submission.answer) {
         errors.push('answer_missing');
@@ -4770,7 +4872,7 @@ function buildExactAnswerContractPromptObject({ exactAnswerMode = false, evidenc
             'question asks for scaled units such as thousand/million/billion but answer is the raw rounded base-unit value'
         ],
         available_evidence_refs: evidenceArtifacts.map((artifact) => artifact.id).filter(Boolean),
-        instruction: `When solved, call ${FINAL_ANSWER_TOOL_NAME} instead of writing a visible prose final. Use evidence artifact ids only as final_answer evidence_refs. They are not filesystem paths and not artifact_query context artifactIds; do not read/open/query them. For quantitative questions, finish unit conversion, rate conversion, scaling, and rounding before final; if the question asks how many thousand/million/billion units, answer with the scaled count, not the raw unit value. For finite stochastic/probability/odds questions, use exact state transitions, dynamic programming, or exhaustive enumeration for the final evidence; Monte Carlo may only be a sanity check; do not invent terminal probabilities or variable random devices absent from the question. Keep the answer field consistent with the final numeric conclusion written in reason. For relation/constraint questions with assignments, tables, profiles, lists, or missing entities, verify the answer role against the question wording and map intermediate missing entities through the relation table direction before final. If evidence is missing, keep using tools or return blocked with a repair instruction.`
+        instruction: `When solved, call ${FINAL_ANSWER_TOOL_NAME} instead of writing a visible prose final. Use evidence artifact ids only as final_answer evidence_refs. They are not filesystem paths and not artifact_query context artifactIds; do not read/open/query them. If evidence_artifacts includes QuestionEvidence/source_question and the task is self-contained, use that ref for reasoning from the problem statement itself; otherwise retrieve external/file evidence first. For quantitative questions, finish unit conversion, rate conversion, scaling, and rounding before final; if the question asks how many thousand/million/billion units, answer with the scaled count, not the raw unit value. For finite stochastic/probability/odds questions, use exact state transitions, dynamic programming, or exhaustive enumeration for the final evidence; Monte Carlo may only be a sanity check; do not invent terminal probabilities or variable random devices absent from the question. Keep the answer field consistent with the final numeric conclusion written in reason. For relation/constraint questions with assignments, tables, profiles, lists, or missing entities, verify the answer role against the question wording and map intermediate missing entities through the relation table direction before final. If evidence is missing, keep using tools or return blocked with a repair instruction.`
     };
 }
 
@@ -4802,8 +4904,14 @@ function buildLlmAgentDirectToolMessages({
     const compactMemoryContext = memoryContext
         ? summarizeForModel(memoryContext, MAX_PROMPT_MEMORY_CHARS)
         : null;
-    const evidenceArtifacts = buildAgentEvidenceArtifactsPromptObject(stepResults);
-    const evidenceSufficiency = buildEvidenceSufficiencyPromptObject(stepResults, { exactAnswerMode });
+    const evidenceArtifacts = buildAgentEvidenceArtifactsPromptObject(stepResults, {
+        message,
+        exactAnswerMode
+    });
+    const evidenceSufficiency = buildEvidenceSufficiencyPromptObject(stepResults, {
+        exactAnswerMode,
+        message
+    });
     const exactAnswerContract = buildExactAnswerContractPromptObject({
         exactAnswerMode,
         evidenceArtifacts
@@ -4827,7 +4935,7 @@ function buildLlmAgentDirectToolMessages({
         '需要用户授权时调用 request_permissions。危险写入、shell、patch、邮件发送等会由本地 Gateway 审批，不要在参数中伪造 approved=true。',
         '最终答复必须是给用户看的 Markdown。没有足够证据时不要提交猜测答案，要继续调用工具或明确 blocked。',
         exactAnswerMode
-            ? `Exact-answer 模式：普通可见话术不能作为提交答案。任务完成时必须调用 ${FINAL_ANSWER_TOOL_NAME}，answer 只填短精确答案，confidence 必须 high/medium，evidence_refs 必须引用 evidence_artifacts 中的 id；这些 artifact-* 是证据引用，不是文件路径，也不是 artifact_query 的 context artifactId，不要用 read/open/artifact_query 读取它们。数值题 final 前先完成单位换算、比例换算和四舍五入；如果题目问 how many thousand/million/billion X，answer 填缩放后的计数，不填原始 X 数值，并在 reason 简写换算式。若题目是随机/概率/odds/最大胜率的有限状态过程，final 前必须用 exact DP、状态概率转移或枚举验证；Monte Carlo 只能 sanity check，不能直接提交；不要为题面未定义的末尾/残缺状态发明 0.5、均分或可变随机机制。若题目是表格/分配/人物属性/物品列表/缺失项这类关系约束题，final 前必须说明目标角色、中间缺失实体、表格方向映射三者一致，否则继续推理或调用工具。`
+            ? `Exact-answer 模式：普通可见话术不能作为提交答案。任务完成时必须调用 ${FINAL_ANSWER_TOOL_NAME}，answer 只填短精确答案，confidence 必须 high/medium，evidence_refs 必须引用 evidence_artifacts 中的 id；这些 artifact-* 是证据引用，不是文件路径，也不是 artifact_query 的 context artifactId，不要用 read/open/artifact_query 读取它们。若 evidence_artifacts 包含 QuestionEvidence/source_question，且题目是自包含逻辑、数学、语法、翻译或规则推导题，可以引用它作为题面证据；网页、论文、文件、新闻或 as-of 查询仍必须先检索/读取外部证据。数值题 final 前先完成单位换算、比例换算和四舍五入；如果题目问 how many thousand/million/billion X，answer 填缩放后的计数，不填原始 X 数值，并在 reason 简写换算式。若题目是随机/概率/odds/最大胜率的有限状态过程，final 前必须用 exact DP、状态概率转移或枚举验证；Monte Carlo 只能 sanity check，不能直接提交；不要为题面未定义的末尾/残缺状态发明 0.5、均分或可变随机机制。若题目是表格/分配/人物属性/物品列表/缺失项这类关系约束题，final 前必须说明目标角色、中间缺失实体、表格方向映射三者一致，否则继续推理或调用工具。`
             : '',
         `最多工具轮数：${maxSteps}`,
         `工具摘要：${toolSummary || 'Direct tools are exposed as native function tools. Search more tools with tool_search.'}`
@@ -8619,10 +8727,12 @@ module.exports = {
     buildAgentEvidenceArtifactsPromptObject,
     buildEvidenceSufficiencyPromptObject,
     buildFinalAnswerNativeToolSpec,
+    buildSourceQuestionEvidenceArtifact,
     buildLosslessToolObservationDigest,
     buildToolResultEvent,
     sanitizeAgentToolCall,
     isExactAnswerExecutionMode,
+    looksLikeSelfContainedExactAnswerQuestion,
     normalizeExactAnswerSubmission,
     splitNativeProgressNoteArgs,
     stripControlTags,

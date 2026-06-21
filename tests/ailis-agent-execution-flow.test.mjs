@@ -10,9 +10,11 @@ const {
     buildAgentEvidenceArtifactsPromptObject,
     buildEvidenceSufficiencyPromptObject,
     buildFinalAnswerNativeToolSpec,
+    buildSourceQuestionEvidenceArtifact,
     buildToolResultEvent,
     buildLosslessToolObservationDigest,
     isExactAnswerExecutionMode,
+    looksLikeSelfContainedExactAnswerQuestion,
     normalizeExactAnswerSubmission,
     sanitizeAgentToolCall,
     validateExactAnswerSubmission
@@ -57,6 +59,7 @@ test('Agent direct tool specs inject native final_answer only for exact-answer m
 test('final_answer contract reminds relation tasks to verify answer role alignment', () => {
     const spec = buildFinalAnswerNativeToolSpec();
     assert.match(spec.description, /role alignment/);
+    assert.match(spec.description, /QuestionEvidence\/source_question/);
     assert.match(spec.parameters.properties.reason.description, /target role/);
     assert.match(spec.parameters.properties.reason.description, /relation table direction/);
 });
@@ -506,6 +509,76 @@ test('Agent exact-answer gate requires confident known evidence refs', () => {
     });
     assert.equal(rejected.ok, false);
     assert.ok(rejected.errors.includes('confidence_below_gate'));
+    assert.ok(rejected.errors.includes('evidence_refs_unknown'));
+});
+
+test('Agent exact-answer mode exposes source_question evidence for self-contained reasoning tasks', () => {
+    const question = [
+        'In the fictional language of Tizin, basic sentences are arranged with the Verb first, followed by the direct object, followed by the subject of the sentence.',
+        'The word that indicates oneself is "Pa" is the nominative form, "Mato" is the accusative form, and "Sing" is the genitive form.',
+        'The root verb that indicates an intense like for something is "Maktay".',
+        'The word for apples is "Apple" is the nominative form, "Zapple" is the accusative form, and "Izapple" is the genitive form.',
+        'Please translate "I like apples" to Tizin.'
+    ].join('\n');
+
+    assert.equal(looksLikeSelfContainedExactAnswerQuestion(question), true);
+    const sourceArtifact = buildSourceQuestionEvidenceArtifact(question, { exactAnswerMode: true });
+    assert.equal(sourceArtifact.type, 'QuestionEvidence');
+
+    const promptArtifacts = buildAgentEvidenceArtifactsPromptObject([], {
+        message: question,
+        exactAnswerMode: true
+    });
+    assert.equal(promptArtifacts.length, 1);
+    assert.equal(promptArtifacts[0].id, sourceArtifact.id);
+    assert.equal(promptArtifacts[0].evidenceId, 'source_question');
+
+    const sufficiency = buildEvidenceSufficiencyPromptObject([], {
+        message: question,
+        exactAnswerMode: true
+    });
+    assert.equal(sufficiency.status, 'source_question_ready_for_reasoning');
+    assert.equal(sufficiency.ready, true);
+    assert.equal(sufficiency.ready_evidence[0].evidenceId, sourceArtifact.id);
+
+    const accepted = validateExactAnswerSubmission({
+        message: question,
+        decision: {
+            exactAnswerSubmission: {
+                answer: 'Maktay Mato Apple',
+                confidence: 'high',
+                evidence_refs: [sourceArtifact.id],
+                reason: 'The source question defines present Maktay, accusative Mato for the liker, nominative Apple for apples, and verb-object-subject order.'
+            }
+        },
+        stepResults: []
+    });
+    assert.equal(accepted.ok, true);
+});
+
+test('Agent exact-answer mode does not expose source_question evidence for external retrieval tasks', () => {
+    const question = 'Under DDC 633 on Bielefeld University Library BASE, as of 2020, from what country was the unknown language article with a flag unique from the others?';
+
+    assert.equal(looksLikeSelfContainedExactAnswerQuestion(question), false);
+    assert.equal(buildSourceQuestionEvidenceArtifact(question, { exactAnswerMode: true }), null);
+    assert.deepEqual(buildAgentEvidenceArtifactsPromptObject([], {
+        message: question,
+        exactAnswerMode: true
+    }), []);
+
+    const rejected = validateExactAnswerSubmission({
+        message: question,
+        decision: {
+            exactAnswerSubmission: {
+                answer: 'Guatemala',
+                confidence: 'high',
+                evidence_refs: ['artifact-source-question'],
+                reason: 'This should still require external retrieval evidence.'
+            }
+        },
+        stepResults: []
+    });
+    assert.equal(rejected.ok, false);
     assert.ok(rejected.errors.includes('evidence_refs_unknown'));
 });
 

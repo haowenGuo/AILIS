@@ -41,6 +41,13 @@ function resolveTaskRetries(policy = {}, args = {}) {
     return Math.max(0, Math.min(Number.isFinite(configured) ? Math.round(configured) : 0, 3));
 }
 
+function shouldContinueAfterFailure(policy = {}) {
+    if (policy.continueAfterFailure === true) {
+        return true;
+    }
+    return !(Array.isArray(policy.stopWhen) && policy.stopWhen.includes('repair_required'));
+}
+
 function parseArgs(argv = process.argv.slice(2)) {
     const args = {
         jobDir: DEFAULT_JOB_DIR,
@@ -757,7 +764,7 @@ async function runController(args = parseArgs()) {
             await appendEvent(jobDir, { type: 'JOB_STOPPED', iteration: state.iteration || 0, summary: 'stop.flag present' });
             break;
         }
-        if (state.repairRequired && !args.dryRun) {
+        if (state.repairRequired && !args.dryRun && !shouldContinueAfterFailure(policy)) {
             const previousProgress = await readJson(path.join(jobDir, 'progress.json'), {});
             await updateProgress(jobDir, {
                 status: 'repair_required',
@@ -832,11 +839,13 @@ async function runController(args = parseArgs()) {
         state.status = verdict.ok ? 'running' : (args.dryRun ? 'dry_run' : 'repair_required');
         state.completedTaskIds = Array.isArray(state.completedTaskIds) ? state.completedTaskIds : [];
         state.failedTaskIds = Array.isArray(state.failedTaskIds) ? state.failedTaskIds : [];
+        state.repairBacklog = Array.isArray(state.repairBacklog) ? state.repairBacklog : [];
         if (verdict.ok) {
             if (!state.completedTaskIds.includes(task.taskId)) {
                 state.completedTaskIds.push(task.taskId);
             }
             state.failedTaskIds = state.failedTaskIds.filter((taskId) => taskId !== task.taskId);
+            state.repairBacklog = state.repairBacklog.filter((item) => item.taskId !== task.taskId);
             if (task.source === 'practice') state.practiceCursor = Math.max(Number(state.practiceCursor) || 0, buildPracticeTasks().findIndex((item) => item.taskId === task.taskId) + 1);
             if (task.source === 'official') state.officialCursor = Math.max(Number(state.officialCursor) || 0, Number(task.offset) + 1);
             state.repairRequired = false;
@@ -844,22 +853,49 @@ async function runController(args = parseArgs()) {
             if (!state.failedTaskIds.includes(task.taskId)) {
                 state.failedTaskIds.push(task.taskId);
             }
-            state.repairRequired = true;
+            state.repairBacklog = [
+                ...state.repairBacklog.filter((item) => item.taskId !== task.taskId),
+                {
+                    taskId: task.taskId,
+                    source: task.source,
+                    offset: task.offset,
+                    verdictPath: paths.verdictPath,
+                    failureCategory: verdict.failureCategory || '',
+                    optimizationFocus: verdict.optimizationFocus || '',
+                    summary: verdict.summary,
+                    queuedAt: isoNow()
+                }
+            ].slice(-200);
+            if (shouldContinueAfterFailure(policy)) {
+                if (task.source === 'practice') state.practiceCursor = Math.max(Number(state.practiceCursor) || 0, buildPracticeTasks().findIndex((item) => item.taskId === task.taskId) + 1);
+                if (task.source === 'official') state.officialCursor = Math.max(Number(state.officialCursor) || 0, Number(task.offset) + 1);
+                state.status = 'running_with_repair_backlog';
+                state.repairRequired = false;
+                await appendEvent(jobDir, {
+                    type: 'REPAIR_QUEUED',
+                    iteration,
+                    summary: `queued repair for ${task.taskId} and continuing to the next task`,
+                    artifactPaths: [paths.verdictPath].filter(Boolean),
+                    failureCategory: verdict.failureCategory || null
+                });
+            } else {
+                state.repairRequired = true;
+            }
         }
         await saveState(jobDir, state);
         await updateProgress(jobDir, {
             status: state.status,
             iteration,
-            currentAction: args.dryRun ? 'dry run planned' : (verdict.ok ? 'iteration accepted' : 'repair ticket created'),
+            currentAction: args.dryRun ? 'dry run planned' : (verdict.ok ? 'iteration accepted' : (shouldContinueAfterFailure(policy) ? 'repair ticket queued; continuing' : 'repair ticket created')),
             activeAgentRuns: 0,
             completedSteps: state.completedTaskIds.length,
             failedSteps: state.failedTaskIds.length,
             latestArtifactPath: paths.verdictPath,
             latestEvidence: verdict.summary,
-            nextAction: verdict.nextAction,
-            risk: verdict.failureCategory || 'none'
+            nextAction: verdict.ok ? verdict.nextAction : (shouldContinueAfterFailure(policy) ? 'continue with next task while repair backlog remains open' : verdict.nextAction),
+            risk: verdict.ok ? 'none' : (shouldContinueAfterFailure(policy) ? `repair_backlog:${verdict.failureCategory || 'unknown'}` : (verdict.failureCategory || 'none'))
         });
-        if (!verdict.ok && !args.dryRun && (policy.stopWhen || []).includes('repair_required')) {
+        if (!verdict.ok && !args.dryRun && (policy.stopWhen || []).includes('repair_required') && !shouldContinueAfterFailure(policy)) {
             break;
         }
     }
@@ -889,5 +925,6 @@ export {
     parseArgs,
     resolveTaskRetries,
     runController,
+    shouldContinueAfterFailure,
     selectNextTask
 };
