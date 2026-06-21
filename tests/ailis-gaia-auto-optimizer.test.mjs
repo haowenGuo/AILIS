@@ -9,7 +9,8 @@ import {
     parseArgs,
     resolveTaskRetries,
     selectNextTask,
-    shouldContinueAfterFailure
+    shouldContinueAfterFailure,
+    shouldContinueAfterVerdict
 } from '../scripts/run-ailis-gaia-auto-optimizer.mjs';
 
 test('GAIA auto optimizer exposes the two local practice tasks', () => {
@@ -63,6 +64,8 @@ test('GAIA auto optimizer can continue after failed tasks when policy allows bac
     assert.equal(shouldContinueAfterFailure({ continueAfterFailure: true, stopWhen: ['repair_required'] }), true);
     assert.equal(shouldContinueAfterFailure({ stopWhen: ['all_tasks_passed'] }), true);
     assert.equal(shouldContinueAfterFailure({ stopWhen: ['repair_required'] }), false);
+    assert.equal(shouldContinueAfterVerdict({ continueAfterFailure: true, stopWhen: ['repair_required'] }, { failureCategory: 'web_retrieval_mcp' }), true);
+    assert.equal(shouldContinueAfterVerdict({ continueAfterFailure: true, stopWhen: ['repair_required'] }, { failureCategory: 'environment' }), false);
 });
 
 test('GAIA auto optimizer classifies successful high-loop tasks as efficiency work', () => {
@@ -118,6 +121,42 @@ test('GAIA auto optimizer does not accept official runner success when scorer re
     assert.equal(verdict.failureCategory, 'harness_finalization');
     assert.match(verdict.summary, /1000/);
     assert.match(verdict.summary, /17/);
+});
+
+test('GAIA auto optimizer classifies provider failures before scorer empty-answer rejection', () => {
+    const task = {
+        taskId: 'official-validation-l1-offset-33',
+        source: 'official',
+        title: 'Official GAIA validation level 1 offset 33'
+    };
+    const result = {
+        ok: false,
+        status: 'provider_error',
+        submitted_answer: '',
+        raw_status: {
+            ok: false,
+            status: 'provider_error',
+            error: 'The request failed because your account has an overdue balance.'
+        }
+    };
+    const summary = {
+        score: {
+            correct_count: 0,
+            total_attempted: 1,
+            per_task: [{
+                task_id: '0383a3ee-47a7-41a4-b493-519bdefe0488',
+                correct: false,
+                submitted_answer: '',
+                final_answer: 'Rockhopper penguin'
+            }]
+        }
+    };
+    const chain = extractExecutionChain({ task, result, processResult: { ok: true }, summary });
+    const verdict = classifyGaiaResult({ task, result, chain, processResult: { ok: true }, summary });
+
+    assert.equal(verdict.ok, false);
+    assert.equal(verdict.failureCategory, 'environment');
+    assert.equal(verdict.optimizationFocus, 'configuration_and_provider_readiness');
 });
 
 test('GAIA auto optimizer classifies artifact tool failures before model reasoning', () => {

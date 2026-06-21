@@ -4114,7 +4114,7 @@ function isTerminalProviderErrorMessage(error = '') {
     if (!text) {
         return false;
     }
-    return /insufficient\s+balance|insufficient\s+credit|billing|payment|required\s+balance|quota\s+exceeded|out\s+of\s+quota|invalid\s+(api\s*)?key|api\s*key\s*(invalid|missing|required)|authentication|unauthorized|forbidden/.test(text);
+    return /insufficient\s+balance|insufficient\s+credit|overdue|past\s+due|unpaid|billing|payment|required\s+balance|quota\s+exceeded|out\s+of\s+quota|invalid\s+(api\s*)?key|api\s*key\s*(invalid|missing|required)|authentication|unauthorized|forbidden/.test(text);
 }
 
 function isTerminalProviderDecisionError(decision = {}) {

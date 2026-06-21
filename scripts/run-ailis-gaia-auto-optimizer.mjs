@@ -48,6 +48,18 @@ function shouldContinueAfterFailure(policy = {}) {
     return !(Array.isArray(policy.stopWhen) && policy.stopWhen.includes('repair_required'));
 }
 
+function shouldContinueAfterVerdict(policy = {}, verdict = {}) {
+    if (!shouldContinueAfterFailure(policy)) {
+        return false;
+    }
+    // Environment/provider failures are systemic. Continuing would only turn
+    // more tasks into duplicate empty-answer repair backlog entries.
+    if (normalizeText(verdict.failureCategory) === 'environment') {
+        return false;
+    }
+    return true;
+}
+
 function parseArgs(argv = process.argv.slice(2)) {
     const args = {
         jobDir: DEFAULT_JOB_DIR,
@@ -528,6 +540,17 @@ function classifyGaiaResult({ task = {}, result = {}, chain = {}, processResult 
             nextAction: highLoop ? 'analyze redundant steps and reduce loop count' : 'advance to next task'
         };
     }
+    if (/LLM settings incomplete|desktop-state\.json|api.?key|provider_error|auth|token/i.test(statusText)) {
+        return {
+            ok: false,
+            status: 'failed',
+            failureCategory: 'environment',
+            optimizationFocus: 'configuration_and_provider_readiness',
+            generalizedCapability: 'llm_provider_and_dataset_environment',
+            summary: 'Task could not run because local provider, auth, or dataset environment is incomplete.',
+            nextAction: 'repair environment detection and readiness reporting before rerunning'
+        };
+    }
     if (perTask && perTask.correct !== true) {
         const submitted = normalizeText(perTask.submitted_answer || result.submitted_answer || '(empty)');
         const finalAnswer = normalizeText(perTask.final_answer || expected || '(unknown)');
@@ -539,17 +562,6 @@ function classifyGaiaResult({ task = {}, result = {}, chain = {}, processResult 
             generalizedCapability: 'benchmark_final_answer_and_evidence_gate',
             summary: `Local GAIA scorer rejected the submitted answer (${submitted}); expected ${finalAnswer}.`,
             nextAction: 'repair exact-answer reasoning, unit conversion, and scorer verdict handling before advancing'
-        };
-    }
-    if (/LLM settings incomplete|desktop-state\.json|api.?key|provider_error|auth|token/i.test(statusText)) {
-        return {
-            ok: false,
-            status: 'failed',
-            failureCategory: 'environment',
-            optimizationFocus: 'configuration_and_provider_readiness',
-            generalizedCapability: 'llm_provider_and_dataset_environment',
-            summary: 'Task could not run because local provider, auth, or dataset environment is incomplete.',
-            nextAction: 'repair environment detection and readiness reporting before rerunning'
         };
     }
     if (/web_fetch|web_search|js_shell|thin_content|HTTP 403|HTTP 404|access_challenge|miyoushe|crawl4ai/i.test(statusText)) {
@@ -827,6 +839,7 @@ async function runController(args = parseArgs()) {
             risk: 'none'
         });
         const { verdict, paths } = await executeTask({ task, iterationDir, runId, policy, args });
+        const canContinueAfterVerdict = !verdict.ok && shouldContinueAfterVerdict(policy, verdict);
         await appendEvent(jobDir, {
             type: 'VERDICT_CREATED',
             iteration,
@@ -866,7 +879,7 @@ async function runController(args = parseArgs()) {
                     queuedAt: isoNow()
                 }
             ].slice(-200);
-            if (shouldContinueAfterFailure(policy)) {
+            if (canContinueAfterVerdict) {
                 if (task.source === 'practice') state.practiceCursor = Math.max(Number(state.practiceCursor) || 0, buildPracticeTasks().findIndex((item) => item.taskId === task.taskId) + 1);
                 if (task.source === 'official') state.officialCursor = Math.max(Number(state.officialCursor) || 0, Number(task.offset) + 1);
                 state.status = 'running_with_repair_backlog';
@@ -886,16 +899,16 @@ async function runController(args = parseArgs()) {
         await updateProgress(jobDir, {
             status: state.status,
             iteration,
-            currentAction: args.dryRun ? 'dry run planned' : (verdict.ok ? 'iteration accepted' : (shouldContinueAfterFailure(policy) ? 'repair ticket queued; continuing' : 'repair ticket created')),
+            currentAction: args.dryRun ? 'dry run planned' : (verdict.ok ? 'iteration accepted' : (canContinueAfterVerdict ? 'repair ticket queued; continuing' : 'repair ticket created')),
             activeAgentRuns: 0,
             completedSteps: state.completedTaskIds.length,
             failedSteps: state.failedTaskIds.length,
             latestArtifactPath: paths.verdictPath,
             latestEvidence: verdict.summary,
-            nextAction: verdict.ok ? verdict.nextAction : (shouldContinueAfterFailure(policy) ? 'continue with next task while repair backlog remains open' : verdict.nextAction),
-            risk: verdict.ok ? 'none' : (shouldContinueAfterFailure(policy) ? `repair_backlog:${verdict.failureCategory || 'unknown'}` : (verdict.failureCategory || 'none'))
+            nextAction: verdict.ok ? verdict.nextAction : (canContinueAfterVerdict ? 'continue with next task while repair backlog remains open' : verdict.nextAction),
+            risk: verdict.ok ? 'none' : (canContinueAfterVerdict ? `repair_backlog:${verdict.failureCategory || 'unknown'}` : (verdict.failureCategory || 'none'))
         });
-        if (!verdict.ok && !args.dryRun && (policy.stopWhen || []).includes('repair_required') && !shouldContinueAfterFailure(policy)) {
+        if (!verdict.ok && !args.dryRun && (policy.stopWhen || []).includes('repair_required') && !canContinueAfterVerdict) {
             break;
         }
     }
@@ -926,5 +939,6 @@ export {
     resolveTaskRetries,
     runController,
     shouldContinueAfterFailure,
+    shouldContinueAfterVerdict,
     selectNextTask
 };
