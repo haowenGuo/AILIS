@@ -1,0 +1,265 @@
+{
+  "taskId": "official-validation-l1-offset-4",
+  "resultTaskId": "a1e91b78-d3d8-4675-bb8d-62741b4b68a6",
+  "source": "official",
+  "title": "Official GAIA validation level 1 offset 4",
+  "expectedAnswer": "",
+  "submittedAnswer": "3",
+  "answerGate": {
+    "ok": true,
+    "answer": "3",
+    "source": "agent_final_answer",
+    "status": "accepted",
+    "confidence": "",
+    "reason": "checked agent finalAnswer/answer fields only"
+  },
+  "ok": true,
+  "status": "completed",
+  "durationMs": 231473,
+  "stepCount": 15,
+  "toolCounts": {
+    "mcp__ailis_research__youtube_transcript": 3,
+    "mcp__ailis_research__web_search": 6,
+    "mcp__ailis_research__web_fetch": 6
+  },
+  "steps": [
+    {
+      "index": 0,
+      "tool": "mcp__ailis_research__youtube_transcript",
+      "title": "获取YouTube视频字幕",
+      "args": {
+        "video_id": "L1vXCYZAYYM",
+        "extract_query": "highest number of bird species on camera simultaneously, 同时出现的鸟类物种数量"
+      },
+      "ok": false,
+      "status": "error",
+      "error": "",
+      "evidenceQuality": "",
+      "preview": ""
+    },
+    {
+      "index": 1,
+      "tool": "mcp__ailis_research__youtube_transcript",
+      "title": "获取YouTube视频字幕",
+      "args": {
+        "video_id": "L1vXCYZAYYM"
+      },
+      "ok": false,
+      "status": "error",
+      "error": "",
+      "evidenceQuality": "",
+      "preview": ""
+    },
+    {
+      "index": 2,
+      "tool": "mcp__ailis_research__web_search",
+      "title": "搜索该YouTube视频相关信息",
+      "args": {
+        "query": "Penguin Chicks Stand Up To Giant Petrel...With The Help of a Friend! John Downer Productions highest number of bird species on camera simultaneously",
+        "maxResults": 5
+      },
+      "ok": true,
+      "status": "completed",
+      "error": "",
+      "evidenceQuality": "",
+      "preview": ""
+    },
+    {
+      "index": 3,
+      "tool": "mcp__ailis_research__web_fetch",
+      "title": "获取搜索结果相关页面内容",
+      "args": {
+        "url": "https://www.youtube.com/watch?v=L1vXCYZAYYM",
+        "query": "highest number of bird species on camera simultaneously, 同时出现的鸟类物种数量"
+      },
+      "ok": true,
+      "status": "completed",
+      "error": "",
+      "evidenceQuality": "",
+      "preview": ""
+    },
+    {
+      "index": 4,
+      "tool": "mcp__ailis_research__web_search",
+      "title": "精准搜索该YouTube视频相关内容",
+      "args": {
+        "query": "Penguin Chicks Stand Up To Giant Petrel highest number of bird species on camera at the same time John Downer",
+        "maxResults": 10
+      },
+      "ok": true,
+      "status": "completed",
+      "error": "",
+      "evidenceQuality": "",
+      "preview": ""
+    },
+    {
+      "index": 5,
+      "tool": "mcp__ailis_research__web_fetch",
+      "title": "获取高相关搜索页面内容",
+      "args": {
+        "url": "https://kids.nationalgeographic.com/animals/birds/facts/emperor-penguin",
+        "query": "Penguin Chicks Stand Up To Giant Petrel highest number of bird species on camera at the same time John Downer"
+      },
+      "ok": true,
+      "status": "completed",
+      "error": "",
+      "evidenceQuality": "",
+      "preview": ""
+    },
+    {
+      "index": 6,
+      "tool": "mcp__ailis_research__web_search",
+      "title": "精准搜索该视频的物种计数信息",
+      "args": {
+        "query": "YouTube L1vXCYZAYYM how many bird species at once count",
+        "maxResults": 5
+      },
+      "ok": true,
+      "status": "completed",
+      "error": "",
+      "evidenceQuality": "",
+      "preview": ""
+    },
+    {
+      "index": 7,
+      "tool": "mcp__ailis_research__youtube_transcript",
+      "title": "带cookie获取目标YouTube视频字幕",
+      "args": {
+        "video_url": "https://www.youtube.com/watch?v=L1vXCYZAYYM",
+        "allow_cookies": true,
+        "cookies_from_browser": "chrome"
+      },
+      "ok": false,
+      "status": "error",
+      "error": "",
+      "evidenceQuality": "",
+      "preview": ""
+    },
+    {
+      "index": 8,
+      "tool": "mcp__ailis_research__web_search",
+      "title": "搜索视频相关字幕和计数信息",
+      "args": {
+        "query": "\"Penguin Chicks Stand Up To Giant Petrel...With The Help of a Friend!\" \"John Downer Productions\" how many bird species at same time",
+        "maxResults": 5
+      },
+      "ok": true,
+      "status": "completed",
+      "error": "",
+      "evidenceQuality": "",
+      "preview": ""
+    },
+    {
+      "index": 9,
+      "tool": "mcp__ailis_research__web_fetch",
+      "title": "获取Britannica页面内容查找答案",
+      "args": {
+        "url": "https://www.britannica.com/animal/penguin",
+        "query": "\"Penguin Chicks Stand Up To Giant Petrel...With The Help of a Friend!\" \"John Downer Productions\" highest number of bird species on camera simultaneously"
+      },
+      "ok": false,
+      "status": "error",
+      "error": "",
+      "evidenceQuality": "",
+      "preview": ""
+    },
+    {
+      "index": 10,
+      "tool": "mcp__ailis_research__web_fetch",
+      "title": "获取Wikipedia企鹅物种页面查找答案",
+      "args": {
+        "url": "https://en.wikipedia.org/wiki/List_of_penguin_species",
+        "query": "\"Penguin Chicks Stand Up To Giant Petrel...With The Help of a Friend!\" \"John Downer Productions\" highest number of bird species on camera simultaneously"
+      },
+      "ok": false,
+      "status": "error",
+      "error": "",
+      "evidenceQuality": "",
+      "preview": ""
+    },
+    {
+      "index": 11,
+      "tool": "mcp__ailis_research__web_search",
+      "title": "搜索视频企鹅大战海燕同框物种数量",
+      "args": {
+        "query": "Penguin Chicks Stand Up To Giant Petrel highest number of bird species on camera at same time",
+        "maxResults": 5
+      },
+      "ok": true,
+      "status": "completed",
+      "error": "",
+      "evidenceQuality": "",
+      "preview": ""
+    },
+    {
+      "index": 12,
+      "tool": "mcp__ailis_research__web_fetch",
+      "title": "获取animalspot企鹅页面内容查找答案",
+      "args": {
+        "url": "https://www.animalspot.net/penguin",
+        "query": "Penguin Chicks Stand Up To Giant Petrel highest number of bird species on camera at same time"
+      },
+      "ok": true,
+      "status": "completed",
+      "error": "",
+      "evidenceQuality": "",
+      "preview": ""
+    },
+    {
+      "index": 13,
+      "tool": "mcp__ailis_research__web_search",
+      "title": "搜索目标YouTube视频的同框鸟类物种数量信息",
+      "args": {
+        "query": "https://www.youtube.com/watch?v=L1vXCYZAYYM highest number of bird species on camera at the same time",
+        "maxResults": 5
+      },
+      "ok": true,
+      "status": "completed",
+      "error": "",
+      "evidenceQuality": "",
+      "preview": ""
+    },
+    {
+      "index": 14,
+      "tool": "mcp__ailis_research__web_fetch",
+      "title": "获取Yandex搜索结果页面查找答案",
+      "args": {
+        "url": "https://wap.yandex.com/search?text=3%20species%20on%20+camera%20simultaneously%20l%201%20vxcyzayym&lr=21206&missword=1",
+        "query": "https://www.youtube.com/watch?v=L1vXCYZAYYM highest number of bird species on camera at the same time"
+      },
+      "ok": true,
+      "status": "completed",
+      "error": "",
+      "evidenceQuality": "",
+      "preview": ""
+    }
+  ],
+  "rawStatus": {
+    "ok": true,
+    "status": "completed",
+    "error": "",
+    "blockedReason": ""
+  },
+  "score": {
+    "username": "AILIS-local-codex",
+    "score": 100,
+    "correct_count": 1,
+    "total_attempted": 1,
+    "message": "Local GAIA validation score: 1/1",
+    "benchmark": "gaia-official-validation-l1",
+    "per_task": [
+      {
+        "task_id": "a1e91b78-d3d8-4675-bb8d-62741b4b68a6",
+        "correct": true,
+        "submitted_answer": "3",
+        "final_answer": "3"
+      }
+    ]
+  },
+  "process": {
+    "ok": true,
+    "exitCode": 0,
+    "durationMs": 234175,
+    "stderrTail": ""
+  }
+}
