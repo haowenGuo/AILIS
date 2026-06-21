@@ -6220,6 +6220,51 @@ function pushPdfCandidate(candidates, seen, candidate = {}, query = '', source =
     });
 }
 
+function isLikelyHtmlFullTextCandidate(url = '', text = '') {
+    const combined = `${url} ${text}`;
+    if (!/^https?:\/\//i.test(url) || isLikelyPdfUrl(url, text)) {
+        return false;
+    }
+    if (/semanticscholar\.org|openalex\.org|crossref\.org|doi\.org\/?$|facebook\.com|twitter\.com|x\.com/i.test(url)) {
+        return false;
+    }
+    return /\/articles?\b|\/article\/view\/|\/article\/abstract\/|full\s*text|journal|archive|paper|publication|proceedings/i.test(combined);
+}
+
+function scoreHtmlFullTextCandidate(candidate = {}, query = '') {
+    const haystack = `${candidate.url || ''} ${candidate.text || ''} ${candidate.title || ''} ${candidate.snippet || ''}`;
+    let score = scoreDocumentSearchResult(candidate, query);
+    if (/\/articles?\b|full\s*text|article|paper|journal|archive/i.test(haystack)) {
+        score += 60;
+    }
+    if (/abstract/i.test(haystack) && !/full\s*text|\/articles?\b/i.test(haystack)) {
+        score -= 20;
+    }
+    if (/download|pdf/i.test(haystack) && !/html|article|full\s*text/i.test(haystack)) {
+        score -= 30;
+    }
+    return score;
+}
+
+function pushHtmlFullTextCandidate(candidates, seen, candidate = {}, query = '', source = '') {
+    const url = normalizeString(candidate.url);
+    const descriptor = `${candidate.text || ''} ${candidate.title || ''} ${candidate.snippet || ''}`;
+    if (!isLikelyHtmlFullTextCandidate(url, descriptor) || seen.has(url)) {
+        return;
+    }
+    const score = Math.max(scoreHtmlFullTextCandidate(candidate, query), Number(candidate.score) || 0);
+    if (score < 55) {
+        return;
+    }
+    seen.add(url);
+    candidates.push({
+        ...candidate,
+        url,
+        source,
+        score
+    });
+}
+
 function buildOjsPdfGuesses(pageUrl = '') {
     try {
         const parsed = new URL(pageUrl);
@@ -6268,9 +6313,11 @@ function evaluateExtractedEvidenceMatch(text = '', evidenceQuery = '') {
     };
 }
 
-async function addPdfCandidatesFromUrl({ url, query, candidates, seen, maxLinks, timeoutMs, depth = 0 }) {
+async function addPdfCandidatesFromUrl({ url, query, candidates, seen, htmlCandidates = [], htmlSeen = new Set(), maxLinks, timeoutMs, depth = 0 }) {
     if (isLikelyPdfUrl(url)) {
         pushPdfCandidate(candidates, seen, { url, text: 'direct PDF-like URL' }, query, 'direct_url');
+    } else {
+        pushHtmlFullTextCandidate(htmlCandidates, htmlSeen, { url, text: `source HTML page for ${query}` }, query, 'source_url_html');
     }
     for (const guess of buildOjsPdfGuesses(url)) {
         pushPdfCandidate(candidates, seen, { url: guess, text: `OJS PDF download guess for ${query}` }, query, 'ojs_guess');
@@ -6292,11 +6339,21 @@ async function addPdfCandidatesFromUrl({ url, query, candidates, seen, maxLinks,
     if (!isHtmlContentType(fetched.contentType) && fetched.contentType && !isReadableTextContentType(fetched.contentType)) {
         return { ok: false, url, status: fetched.status || 0, error: `unsupported content type: ${fetched.contentType}` };
     }
+    const pageTitle = extractHtmlDocumentTitle(fetched.text || '');
+    const pagePreview = stripHtml(fetched.text || '').slice(0, 1200);
+    pushHtmlFullTextCandidate(htmlCandidates, htmlSeen, {
+        url,
+        title: pageTitle,
+        snippet: pagePreview
+    }, query, 'fetched_html_page');
     const rawLinks = extractLinksFromHtml(fetched.text || '', url, maxLinks)
         .map((link) => ({
             ...link,
             score: scorePdfCandidate(link, query)
         }));
+    for (const link of rawLinks) {
+        pushHtmlFullTextCandidate(htmlCandidates, htmlSeen, link, query, 'page_html_link');
+    }
     const links = rawLinks
         .filter((link) => isLikelyPdfUrl(link.url, link.text) || /pdf|full\s*text/i.test(`${link.text} ${link.url}`))
         .sort((a, b) => b.score - a.score);
@@ -6344,6 +6401,8 @@ async function addPdfCandidatesFromUrl({ url, query, candidates, seen, maxLinks,
                 query,
                 candidates,
                 seen,
+                htmlCandidates,
+                htmlSeen,
                 maxLinks,
                 timeoutMs,
                 depth: depth + 1
@@ -6378,9 +6437,12 @@ async function pdfFindAndExtract(args = {}) {
     const timeoutMs = clampNumber(args.timeoutMs || args.timeout_ms, 120000, 5000, 300000);
     const candidates = [];
     const seen = new Set();
+    const htmlCandidates = [];
+    const htmlSeen = new Set();
     const discovery = [];
     const attempts = [];
     const attemptedUrls = new Set();
+    const attemptedHtmlUrls = new Set();
     const startedAt = Date.now();
 
     function remainingBudgetMs() {
@@ -6476,11 +6538,106 @@ async function pdfFindAndExtract(args = {}) {
         return null;
     }
 
+    async function tryExtractHtmlRankedCandidates() {
+        const rankedCandidates = htmlCandidates
+            .sort((a, b) => b.score - a.score)
+            .slice(0, maxCandidates);
+        for (const candidate of rankedCandidates) {
+            if (attemptedHtmlUrls.has(candidate.url)) {
+                continue;
+            }
+            const remainingMs = remainingBudgetMs();
+            if (remainingMs < 5000) {
+                attempts.push({
+                    url: candidate.url,
+                    source: candidate.source,
+                    score: candidate.score,
+                    kind: 'html',
+                    ok: false,
+                    status: 'timeout_budget_exhausted',
+                    error: 'HTML fallback skipped because pdf_find_and_extract time budget was exhausted.'
+                });
+                break;
+            }
+            attemptedHtmlUrls.add(candidate.url);
+            const fetched = await webFetch({
+                url: candidate.url,
+                query: evidenceQuery || query,
+                maxChars,
+                timeoutMs: Math.min(45000, timeoutMs, remainingMs),
+                provider: args.fetchProvider || args.fetch_provider || args.webFetchProvider || args.web_fetch_provider
+            });
+            attempts.push({
+                url: candidate.url,
+                source: candidate.source,
+                score: candidate.score,
+                kind: 'html',
+                ok: !fetched.isError,
+                status: fetched.details?.status || '',
+                error: fetched.isError ? (fetched.details?.error || fetched.content?.[0]?.text || '') : ''
+            });
+            if (fetched.isError) {
+                continue;
+            }
+            const extractedText = fetched.content?.[0]?.text || '';
+            const evidenceMatch = evaluateExtractedEvidenceMatch(extractedText, evidenceQuery || query);
+            attempts[attempts.length - 1].evidenceMatched = evidenceMatch.ok;
+            attempts[attempts.length - 1].matchedTerms = evidenceMatch.matchedTerms;
+            attempts[attempts.length - 1].missingRareTerms = evidenceMatch.missingRareTerms;
+            if (!evidenceMatch.ok) {
+                attempts[attempts.length - 1].error = 'extracted HTML did not match enough evidence query terms';
+                continue;
+            }
+            const focused = focusTextWindow(extractedText, {
+                query: evidenceQuery || query,
+                url: candidate.url,
+                maxChars
+            });
+            const evidenceSnippets = buildEvidenceSnippets(focused.text, evidenceQuery || query);
+            const answerCandidates = mergeAnswerCandidates(
+                extractQuotedAnswerCandidates(extractedText, evidenceQuery || query),
+                extractIdentifierAnswerCandidates(extractedText, evidenceQuery || query)
+            );
+            const answerCandidateText = formatAnswerCandidates(answerCandidates);
+            const returnedText = [
+                answerCandidateText ? 'HTML answer candidates:' : '',
+                answerCandidateText,
+                answerCandidateText && evidenceSnippets ? '' : '',
+                evidenceSnippets ? 'HTML focused evidence snippets:' : '',
+                evidenceSnippets,
+                (answerCandidateText || evidenceSnippets) ? '' : '',
+                (answerCandidateText || evidenceSnippets) ? '--- Extracted HTML text window ---' : '',
+                focused.text
+            ].filter((part) => part !== '').join('\n');
+            return textResult(returnedText, {
+                status: 'completed',
+                query,
+                evidenceQuery,
+                sourceUrl,
+                htmlUrl: candidate.url,
+                htmlFallback: true,
+                candidate,
+                attempts,
+                discovery,
+                originalChars: fetched.details?.originalChars,
+                returnedChars: returnedText.length,
+                focus: focused.focus,
+                evidenceSnippets,
+                answerCandidates
+            });
+        }
+        return null;
+    }
+
     if (sourceUrl) {
-        discovery.push(await addPdfCandidatesFromUrl({ url: sourceUrl, query, candidates, seen, maxLinks, timeoutMs }));
+        discovery.push(await addPdfCandidatesFromUrl({ url: sourceUrl, query, candidates, seen, htmlCandidates, htmlSeen, maxLinks, timeoutMs }));
         const extracted = await tryExtractRankedCandidates();
         if (extracted) {
             return extracted;
+        }
+        const htmlExtracted = await tryExtractHtmlRankedCandidates();
+        if (htmlExtracted) {
+            return htmlExtracted;
         }
     }
 
@@ -6491,6 +6648,8 @@ async function pdfFindAndExtract(args = {}) {
                 query,
                 candidates,
                 seen,
+                htmlCandidates,
+                htmlSeen,
                 maxLinks,
                 timeoutMs: Math.max(5000, Math.min(remainingBudgetMs(), 30000))
             }));
@@ -6498,6 +6657,10 @@ async function pdfFindAndExtract(args = {}) {
         const knownOjsExtracted = await tryExtractRankedCandidates();
         if (knownOjsExtracted) {
             return knownOjsExtracted;
+        }
+        const knownOjsHtmlExtracted = await tryExtractHtmlRankedCandidates();
+        if (knownOjsHtmlExtracted) {
+            return knownOjsHtmlExtracted;
         }
 
         const maxSearchResults = clampNumber(args.maxResults || args.max_results, 8, 1, 12);
@@ -6516,12 +6679,16 @@ async function pdfFindAndExtract(args = {}) {
         for (const result of scholarly.results || []) {
             if (isLikelyPdfUrl(result.url, `${result.title || ''} ${result.snippet || ''}`)) {
                 pushPdfCandidate(candidates, seen, result, query, 'search_result');
+            } else {
+                pushHtmlFullTextCandidate(htmlCandidates, htmlSeen, result, query, 'scholarly_search_html');
             }
             discovery.push(await addPdfCandidatesFromUrl({
                 url: result.url,
                 query,
                 candidates,
                 seen,
+                htmlCandidates,
+                htmlSeen,
                 maxLinks,
                 timeoutMs: Math.max(5000, Math.min(remainingBudgetMs(), 30000))
             }));
@@ -6532,6 +6699,10 @@ async function pdfFindAndExtract(args = {}) {
         const scholarlyExtracted = await tryExtractRankedCandidates();
         if (scholarlyExtracted) {
             return scholarlyExtracted;
+        }
+        const scholarlyHtmlExtracted = await tryExtractHtmlRankedCandidates();
+        if (scholarlyHtmlExtracted) {
+            return scholarlyHtmlExtracted;
         }
         const documentBudgetMs = Math.max(5000, Math.min(45000, remainingBudgetMs() - 5000));
         const search = await searchDocumentCandidates(query, {
@@ -6558,12 +6729,16 @@ async function pdfFindAndExtract(args = {}) {
         for (const result of search.results || []) {
             if (isLikelyPdfUrl(result.url, `${result.title || ''} ${result.snippet || ''}`)) {
                 pushPdfCandidate(candidates, seen, result, query, 'search_result');
+            } else {
+                pushHtmlFullTextCandidate(htmlCandidates, htmlSeen, result, query, 'document_search_html');
             }
             discovery.push(await addPdfCandidatesFromUrl({
                 url: result.url,
                 query,
                 candidates,
                 seen,
+                htmlCandidates,
+                htmlSeen,
                 maxLinks,
                 timeoutMs: Math.max(5000, Math.min(remainingBudgetMs(), 30000))
             }));
@@ -6577,6 +6752,10 @@ async function pdfFindAndExtract(args = {}) {
     if (extracted) {
         return extracted;
     }
+    const htmlExtracted = await tryExtractHtmlRankedCandidates();
+    if (htmlExtracted) {
+        return htmlExtracted;
+    }
     const ranked = candidates
         .sort((a, b) => b.score - a.score)
         .slice(0, maxCandidates);
@@ -6586,9 +6765,12 @@ async function pdfFindAndExtract(args = {}) {
         query,
         sourceUrl,
         candidates: ranked,
+        htmlCandidates: htmlCandidates
+            .sort((a, b) => b.score - a.score)
+            .slice(0, maxCandidates),
         attempts,
         discovery,
-        evidenceGap: 'No high-confidence PDF/article candidate was found or extracted. Try a known article URL, DOI, author name, journal/source name, or a quoted exact title.',
+        evidenceGap: 'No high-confidence PDF/article/full-text HTML candidate was found or extracted. Try a known article URL, DOI, author name, journal/source name, or a quoted exact title.',
         suggestedTools: ['web_search', 'web_extract_links', 'download_file', 'pdf_extract_text']
     });
 }

@@ -1,0 +1,7 @@
+{
+  "source": "official",
+  "taskId": "official-validation-l1-offset-12",
+  "offset": 12,
+  "datasetDir": "F:\\AIGril\\build-cache\\hf-datasets\\gaia-benchmark-GAIA",
+  "title": "Official GAIA validation level 1 offset 12"
+}

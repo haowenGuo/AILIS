@@ -13,6 +13,7 @@ import {
     finalizeAnswerFromEvidence,
     formatSubmittedAnswerForQuestion,
     looksLikeShortAnswer,
+    shouldForceEvidenceFinalizer,
     shouldRetryTask
 } from '../scripts/run-gaia-level1-lite.mjs';
 
@@ -638,6 +639,62 @@ test('GAIA finalizer falls back to attached DOCX when agent evidence preview is 
     } finally {
         await fs.rm(tmpDir, { recursive: true, force: true });
     }
+});
+
+test('GAIA finalizer overrides title-like direct answers for quoted-word web evidence', async () => {
+    const question = {
+        question: "In Emily Midkiff's June 2014 article in a journal named for the one of Hreidmar's sons that guarded his house, what word was quoted from two different authors in distaste for the nature of dragon depictions?"
+    };
+    const response = {
+        ok: true,
+        finalAnswer: 'tricksy',
+        steps: [{
+            id: 'step-pdf-html',
+            title: 'Find article evidence',
+            tool: 'mcp__ailis_research__pdf_find_and_extract',
+            args: {
+                title: 'Dragons are Tricksy: The Uncanny Dragons of Children Literature',
+                extract_query: 'quoted from two different authors distaste dragon depictions'
+            },
+            response: {
+                ok: true,
+                status: 'completed',
+                result: {
+                    structuredContent: {
+                        ok: true,
+                        status: 'completed',
+                        htmlFallback: true,
+                        htmlUrl: 'https://journal.example/articles/dragons-are-tricksy',
+                        evidenceQuery: 'quoted from two different authors distaste dragon depictions',
+                        answerCandidates: [{
+                            answer: 'fluffy',
+                            score: 57,
+                            matchedTerms: ['distaste', 'dragon'],
+                            rareMatchedTerms: ['distaste'],
+                            context: 'Ruth Stein in 1968 and Margaret Blount in 1974 both comment with distaste on the increasingly cuddly, "fluffy" nature of dragons in children literature.'
+                        }, {
+                            answer: 'Dragons are Tricksy',
+                            score: 35,
+                            context: 'article title'
+                        }],
+                        evidenceSnippets: 'Ruth Stein in 1968 and Margaret Blount in 1974 both comment with distaste on the increasingly cuddly, "fluffy" nature of dragons in children literature.'
+                    }
+                }
+            }
+        }]
+    };
+
+    assert.equal(shouldForceEvidenceFinalizer({ question, response }), true);
+    const result = await finalizeAnswerFromEvidence({
+        question,
+        filePath: '',
+        llmSettings: {},
+        response
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.answer, 'fluffy');
+    assert.equal(result.confidence, 'high');
 });
 
 test('GAIA finalizer counts semantic crustacean slides from presentation text', async () => {

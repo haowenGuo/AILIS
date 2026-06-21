@@ -1068,6 +1068,72 @@ function compactPdfEvidenceObservation(value) {
     }), null, 2), 12000);
 }
 
+function collectAnswerCandidatesFromResponse(response = {}) {
+    const candidates = [];
+    for (const step of Array.isArray(response.steps) ? response.steps : []) {
+        if (step.response?.ok !== true) {
+            continue;
+        }
+        const toolName = normalizeText(step.tool || step.args?.tool || step.args?.tool_name || '');
+        for (const value of [
+            step.response?.result?.structuredContent,
+            step.response?.result?.details,
+            ...collectStepObservationValues(step)
+        ]) {
+            const payload = findPdfEvidencePayload(value);
+            for (const candidate of Array.isArray(payload?.answerCandidates) ? payload.answerCandidates : []) {
+                const answer = stripControlTags(candidate?.answer || candidate?.text || candidate?.value || '');
+                if (answer) {
+                    candidates.push({
+                        ...candidate,
+                        answer,
+                        sourceTool: toolName,
+                        sourceStep: step.id || step.title || ''
+                    });
+                }
+            }
+        }
+    }
+    return candidates;
+}
+
+function deterministicAnswerCandidateAnswer({ question = {}, response = {} } = {}) {
+    const questionText = normalizeText(question.question || question).toLowerCase();
+    const deduped = new Map();
+    for (const candidate of collectAnswerCandidatesFromResponse(response)) {
+        const key = candidate.answer.toLowerCase();
+        const score = Number(candidate.score) || 0;
+        const existing = deduped.get(key);
+        if (!existing || score > (Number(existing.score) || 0)) {
+            deduped.set(key, { ...candidate, score });
+        }
+    }
+    const candidates = [...deduped.values()]
+        .filter((candidate) => looksLikeShortAnswer(candidate.answer))
+        .sort((a, b) => b.score - a.score || a.answer.localeCompare(b.answer));
+    if (!candidates.length) {
+        return null;
+    }
+    const top = candidates[0];
+    const runnerUp = candidates[1];
+    const asksForQuotedValue = /\b(?:what|which)\s+(?:word|phrase|term|expression|name)\b/.test(questionText) ||
+        /\b(?:word|phrase|term|expression|name)\s+(?:was|were)\s+(?:quoted|used|called|described|referred)/.test(questionText);
+    const hasEvidenceTerms = (Array.isArray(top.rareMatchedTerms) && top.rareMatchedTerms.length) ||
+        (Array.isArray(top.matchedTerms) && top.matchedTerms.length >= 2) ||
+        normalizeText(top.context).length > 40;
+    const clearlyLeads = !runnerUp || top.score >= runnerUp.score + 5;
+    if (top.score >= 40 && clearlyLeads && (hasEvidenceTerms || asksForQuotedValue)) {
+        return {
+            ok: true,
+            status: 'completed',
+            answer: top.answer,
+            confidence: 'high',
+            reason: `deterministically selected top evidence answer candidate from ${top.sourceTool || 'tool evidence'}: ${top.answer}`
+        };
+    }
+    return null;
+}
+
 function getEvidenceObservationText(step = {}) {
     const observationValues = collectStepObservationValues(step);
     const rawText = stringifyObservationValue(observationValues[0]);
@@ -1584,6 +1650,10 @@ function deterministicGiftAssignmentAnswer({ question = {}, response = {}, docum
 }
 
 async function finalizeAnswerDeterministically({ question = {}, filePath = '', response = {} } = {}) {
+    const candidateAnswer = deterministicAnswerCandidateAnswer({ question, response });
+    if (candidateAnswer) {
+        return candidateAnswer;
+    }
     const clinicalTrialsAnswer = deterministicClinicalTrialsAnswer({ question, response });
     if (clinicalTrialsAnswer) {
         return clinicalTrialsAnswer;
@@ -1603,6 +1673,21 @@ function shouldForceDocumentRelationFinalizer({ question = {}, filePath = '' } =
         return false;
     }
     return /who\s+did\s+not|did\s+not\s+give|didn't\s+give|missing|assignment|assigned|recipient|giftee|gift|present|profile|interest/.test(questionText);
+}
+
+function responseHasWebOrPdfEvidence(response = {}) {
+    return (Array.isArray(response.steps) ? response.steps : []).some((step) => {
+        const toolName = normalizeText(step.tool || step.args?.tool || step.args?.tool_name || '').toLowerCase();
+        return /web_search|web_fetch|web_research|pdf_extract|pdf_find|paper_metadata/.test(toolName);
+    });
+}
+
+function shouldForceQuotedEvidenceFinalizer({ question = {}, response = {} } = {}) {
+    const questionText = normalizeText(question.question || question).toLowerCase();
+    const asksForQuotedValue = /\b(?:what|which)\s+(?:word|phrase|term|expression|name)\b/.test(questionText) ||
+        /\b(?:word|phrase|term|expression|name)\s+(?:was|were)\s+(?:quoted|used|called|described|referred)/.test(questionText);
+    const citesEvidenceContext = /\b(?:quoted|quote|authors?|article|paper|journal|source|passage|text|called|described|referred)\b/.test(questionText);
+    return asksForQuotedValue && citesEvidenceContext && responseHasWebOrPdfEvidence(response);
 }
 
 function buildEvidenceDigest(response = {}) {
@@ -1674,6 +1759,8 @@ async function finalizeAnswerFromEvidence({ question, filePath, response, llmSet
                     'For spreadsheet/CSV questions, answer only when the observations include a full-file computation or the complete relevant table.',
                     'For webpage/news questions with an exact date in the question, only use evidence from pages whose observed date/title match that exact target; if the evidence points to a different day or article, return missing evidence.',
                     'If the question already specifies the unit, return the bare value without repeating the unit.',
+                    'For quote/word/phrase questions, prefer answerCandidates and focused evidence snippets over page titles, article titles, metadata, or search result titles.',
+                    'For quote/word/phrase questions, do not answer from a title unless the evidence snippet shows that exact value in the requested quoted/body context.',
                     'If the observations do not contain enough evidence, return {"answer":"","confidence":"low","reason":"missing evidence"}.',
                     'Return strict JSON only: {"answer":"short exact answer","confidence":"high|medium|low","reason":"brief evidence note"}.'
                 ].join('\n')
@@ -1707,13 +1794,16 @@ async function finalizeAnswerFromEvidence({ question, filePath, response, llmSet
     };
 }
 
-function shouldForceEvidenceFinalizer({ question = {}, filePath = '' } = {}) {
+function shouldForceEvidenceFinalizer({ question = {}, filePath = '', response = {} } = {}) {
     const questionText = normalizeText(question.question || question).toLowerCase();
     const extension = path.extname(filePath || '').toLowerCase();
     if (['.ppt', '.pptx'].includes(extension) && /slides?/.test(questionText) && /how many|count|number/.test(questionText)) {
         return true;
     }
     if (shouldForceDocumentRelationFinalizer({ question, filePath })) {
+        return true;
+    }
+    if (shouldForceQuotedEvidenceFinalizer({ question, response })) {
         return true;
     }
     return false;
@@ -1798,7 +1888,7 @@ async function callAgent({ baseUrl, args, question, filePath, llmSettings }) {
     }, args.requestTimeoutMs);
     let finalizer = null;
     let answerGate = buildFinalAnswerGate({ question, response });
-    const forceEvidenceFinalizer = shouldForceEvidenceFinalizer({ question, filePath });
+    const forceEvidenceFinalizer = shouldForceEvidenceFinalizer({ question, filePath, response });
     if (!answerGate.ok || forceEvidenceFinalizer) {
         finalizer = await finalizeAnswerFromEvidence({ question, filePath, response, llmSettings }).catch((error) => ({
             ok: false,
@@ -2059,6 +2149,7 @@ export {
     looksLikeFailureSurface,
     looksLikeShortAnswer,
     normalizeFinalizerConfidence,
+    shouldForceEvidenceFinalizer,
     shouldRetryTask,
     stripControlTags
 };

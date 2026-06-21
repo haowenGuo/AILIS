@@ -2191,6 +2191,58 @@ test('pdf_find_and_extract promotes quoted answer candidates near rare evidence 
     });
 });
 
+test('pdf_find_and_extract falls back to full-text HTML when discovered PDFs are unreadable', async () => {
+    const htmlText = [
+        '<html><body>',
+        '<a href="/files/challenge.pdf">Download PDF</a>',
+        '<a href="/articles/dragons-are-tricksy">Full text HTML</a>',
+        '<article>',
+        '<h1>"Dragons are Tricksy": The Uncanny Dragons of Children Literature</h1>',
+        '<p>Earlier dragon lore describes guardians and conflicts without the target evidence.</p>',
+        '<p>Ruth Stein in 1968 and Margaret Blount in 1974 both comment with distaste on the increasingly cuddly, "fluffy" nature of dragons in children literature.</p>',
+        '</article>',
+        '</body></html>'
+    ].join('');
+    await withServer((request, response) => {
+        if (request.url === '/paper') {
+            response.writeHead(200, { 'content-type': 'text/html' });
+            response.end([
+                '<html><body>',
+                '<a href="/files/challenge.pdf">PDF</a>',
+                '<a href="/articles/dragons-are-tricksy">"Dragons are Tricksy" full text article</a>',
+                '</body></html>'
+            ].join(''));
+            return;
+        }
+        if (request.url === '/files/challenge.pdf') {
+            response.writeHead(200, { 'content-type': 'text/html' });
+            response.end('<html><title>Making sure you are not a bot</title><body>not a PDF file</body></html>');
+            return;
+        }
+        if (request.url === '/articles/dragons-are-tricksy') {
+            response.writeHead(200, { 'content-type': 'text/html' });
+            response.end(htmlText);
+            return;
+        }
+        response.writeHead(404, { 'content-type': 'text/plain' });
+        response.end('not found');
+    }, async (baseUrl) => {
+        const result = await pdfFindAndExtract({
+            url: `${baseUrl}/paper`,
+            title: '"Dragons are Tricksy": The Uncanny Dragons of Children Literature',
+            extract_query: 'quoted from two different authors distaste dragon depictions',
+            maxChars: 5000
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.equal(result.structuredContent.htmlFallback, true);
+        assert.equal(result.structuredContent.htmlUrl, `${baseUrl}/articles/dragons-are-tricksy`);
+        assert.equal(result.structuredContent.answerCandidates[0].answer, 'fluffy');
+        assert.match(result.content[0].text, /^HTML answer candidates:/);
+        assert.match(result.structuredContent.evidenceSnippets, /distaste/i);
+    });
+});
+
 test('pdf_find_and_extract searches beyond the returned text window for award identifiers', async () => {
     const longPrefix = 'background filament population discussion '.repeat(900);
     const pdfText = `${longPrefix}\nWork by R.G.A. was supported by NASA under award number 80GSFC21M0002.`;
