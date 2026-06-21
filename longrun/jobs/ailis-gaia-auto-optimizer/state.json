@@ -1,9 +1,9 @@
 {
   "jobId": "ailis-gaia-auto-optimizer",
   "status": "running",
-  "iteration": 27,
+  "iteration": 32,
   "practiceCursor": 2,
-  "officialCursor": 5,
+  "officialCursor": 8,
   "completedTaskIds": [
     "cffe0e32-c9a6-4c52-9877-78ceb4aaa9fb",
     "65afbc8a-89ca-4ad5-8d62-355bb401f61d",
@@ -11,10 +11,13 @@
     "official-validation-l1-offset-1",
     "official-validation-l1-offset-2",
     "official-validation-l1-offset-3",
-    "official-validation-l1-offset-4"
+    "official-validation-l1-offset-4",
+    "official-validation-l1-offset-5",
+    "official-validation-l1-offset-6",
+    "official-validation-l1-offset-7"
   ],
   "failedTaskIds": [],
   "repairRequired": false,
-  "lastVerdictPath": "F:\\AILIS_self_evolution_runtime\\longrun\\jobs\\ailis-gaia-auto-optimizer\\iterations\\iter-027-official-validation-l1-offset-4\\verdict.json",
-  "updatedAt": "2026-06-21T01:27:18.618Z"
+  "lastVerdictPath": "F:\\AILIS_self_evolution_runtime\\longrun\\jobs\\ailis-gaia-auto-optimizer\\iterations\\iter-032-official-validation-l1-offset-7\\verdict.json",
+  "updatedAt": "2026-06-21T01:58:46.192Z"
 }

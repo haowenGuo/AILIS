@@ -1,4 +1,8 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
 
 import {
@@ -11,6 +15,70 @@ import {
     looksLikeShortAnswer,
     shouldRetryTask
 } from '../scripts/run-gaia-level1-lite.mjs';
+
+async function createSecretSantaDocx() {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-gaia-secret-santa-'));
+    const docxPath = path.join(tmpDir, 'secret-santa.docx');
+    const code = String.raw`
+from docx import Document
+import sys
+
+doc = Document()
+for text in [
+    "Employees", "Harry", "Rebecca", "Georgette", "Micah", "Perry", "Tyson", "Lucy", "Jun", "Sara", "Miguel", "Fred", "Alex",
+    "Gift Assignments", "Profiles",
+    "Harry: Fishing, Camping, Wine",
+    "Rebecca: Cars, Dogs, Chocolate",
+    "Georgette: Yoga, Cooking, Green Energy",
+    "Micah: Knitting, Rainy Weather, Books",
+    "Perry: Old Movies, Rats, Journaling",
+    "Tyson: Historical Fiction Novels, Biking, Parakeets",
+    "Lucy: Coffee, Physics, Board Games",
+    "Jun: Woodworking, Barbecue, JavaScript",
+    "Sara: Tabletop RPGs, Spas, Music",
+    "Miguel: Astronomy, Decorative Washi Tape, Ketchup",
+    "Fred: Chemistry, Perl, Cats",
+    "Alex: Surfing, Audrey Hepburn, Manga",
+    "Gifts:",
+    "Galileo Galilei biography",
+    "Fishing reel",
+    "Raku programming guide",
+    "Chisel set",
+    "Custom dice",
+    "War and Peace American film copy",
+    "Yarn",
+    "One Piece graphic novel",
+    "War and Peace novel",
+    "Starbucks gift card",
+    "Foam exercise mat",
+]:
+    doc.add_paragraph(text)
+
+rows = [
+    ("Giver", "Recipient"),
+    ("Harry", "Miguel"),
+    ("Rebecca", "Micah"),
+    ("Georgette", "Lucy"),
+    ("Micah", "Jun"),
+    ("Perry", "Georgette"),
+    ("Tyson", "Fred"),
+    ("Lucy", "Alex"),
+    ("Jun", "Harry"),
+    ("Sara", "Perry"),
+    ("Fred", "Rebecca"),
+    ("Miguel", "Sara"),
+    ("Alex", "Tyson"),
+]
+table = doc.add_table(rows=len(rows), cols=2)
+for row_index, (giver, recipient) in enumerate(rows):
+    table.cell(row_index, 0).text = giver
+    table.cell(row_index, 1).text = recipient
+doc.save(sys.argv[1])
+`.trim();
+    const created = spawnSync('python', ['-c', code, docxPath], { encoding: 'utf8' });
+    assert.equal(created.status, 0, created.stderr || created.stdout);
+    return { tmpDir, docxPath };
+}
 
 test('GAIA Level 1 Lite answer gate accepts compact exact answers', () => {
     for (const answer of ['Extremely', 'rockhopper penguin', 'b, e', '90', 'BaseLabelPropagation']) {
@@ -427,6 +495,149 @@ test('GAIA finalizer deterministically extracts ClinicalTrials actual enrollment
     assert.equal(result.ok, true);
     assert.equal(result.answer, '90');
     assert.equal(result.confidence, 'high');
+});
+
+test('GAIA finalizer maps Secret Santa gifts through recipient interests to missing giver', async () => {
+    const result = await finalizeAnswerFromEvidence({
+        question: {
+            question: 'An office held a Secret Santa gift exchange where each employee was assigned one other employee to present with a gift. Only eleven gifts were given, each one specific to one of the recipient interests. Based on the document, who did not give a gift?'
+        },
+        filePath: 'secret-santa.docx',
+        llmSettings: {},
+        response: {
+            steps: [{
+                id: 'step-docx',
+                title: 'Read Secret Santa document',
+                tool: 'mcp__ailis_research__read_document',
+                args: { path: 'secret-santa.docx' },
+                response: {
+                    ok: true,
+                    status: 'completed',
+                    result: {
+                        structuredContent: {
+                            ok: true,
+                            status: 'completed',
+                            document: {
+                                path: 'secret-santa.docx',
+                                paragraphs: [
+                                    { index: 0, text: 'Employees' },
+                                    { index: 1, text: 'Harry' },
+                                    { index: 2, text: 'Rebecca' },
+                                    { index: 3, text: 'Georgette' },
+                                    { index: 4, text: 'Micah' },
+                                    { index: 5, text: 'Perry' },
+                                    { index: 6, text: 'Tyson' },
+                                    { index: 7, text: 'Lucy' },
+                                    { index: 8, text: 'Jun' },
+                                    { index: 9, text: 'Sara' },
+                                    { index: 10, text: 'Miguel' },
+                                    { index: 11, text: 'Fred' },
+                                    { index: 12, text: 'Alex' },
+                                    { index: 13, text: 'Gift Assignments' },
+                                    { index: 14, text: 'Profiles' },
+                                    { index: 15, text: 'Harry: Fishing, Camping, Wine' },
+                                    { index: 16, text: 'Rebecca: Cars, Dogs, Chocolate' },
+                                    { index: 17, text: 'Georgette: Yoga, Cooking, Green Energy' },
+                                    { index: 18, text: 'Micah: Knitting, Rainy Weather, Books' },
+                                    { index: 19, text: 'Perry: Old Movies, Rats, Journaling' },
+                                    { index: 20, text: 'Tyson: Historical Fiction Novels, Biking, Parakeets' },
+                                    { index: 21, text: 'Lucy: Coffee, Physics, Board Games' },
+                                    { index: 22, text: 'Jun: Woodworking, Barbecue, JavaScript' },
+                                    { index: 23, text: 'Sara: Tabletop RPGs, Spas, Music' },
+                                    { index: 24, text: 'Miguel: Astronomy, Decorative Washi Tape, Ketchup' },
+                                    { index: 25, text: 'Fred: Chemistry, Perl, Cats' },
+                                    { index: 26, text: 'Alex: Surfing, Audrey Hepburn, Manga' },
+                                    { index: 27, text: 'Gifts:' },
+                                    { index: 28, text: 'Galileo Galilei biography' },
+                                    { index: 29, text: 'Fishing reel' },
+                                    { index: 30, text: 'Raku programming guide' },
+                                    { index: 31, text: 'Chisel set' },
+                                    { index: 32, text: 'Custom dice' },
+                                    { index: 33, text: '“War and Peace” American film copy' },
+                                    { index: 34, text: 'Yarn' },
+                                    { index: 35, text: '“One Piece” graphic novel' },
+                                    { index: 36, text: '“War and Peace” novel' },
+                                    { index: 37, text: 'Starbucks gift card' },
+                                    { index: 38, text: 'Foam exercise mat' }
+                                ],
+                                tables: [{
+                                    index: 0,
+                                    rows: [
+                                        ['Giftee', 'Recipient'],
+                                        ['Harry', 'Miguel'],
+                                        ['Rebecca', 'Micah'],
+                                        ['Georgette', 'Lucy'],
+                                        ['Micah', 'Jun'],
+                                        ['Perry', 'Georgette'],
+                                        ['Tyson', 'Fred'],
+                                        ['Lucy', 'Alex'],
+                                        ['Jun', 'Harry'],
+                                        ['Sara', 'Perry'],
+                                        ['Fred', 'Rebecca'],
+                                        ['Miguel', 'Sara'],
+                                        ['Alex', 'Tyson']
+                                    ]
+                                }]
+                            }
+                        }
+                    }
+                }
+            }]
+        }
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.answer, 'Fred');
+    assert.equal(result.confidence, 'high');
+});
+
+test('GAIA finalizer falls back to attached DOCX when agent evidence preview is truncated', async () => {
+    const { tmpDir, docxPath } = await createSecretSantaDocx();
+    try {
+        const result = await finalizeAnswerFromEvidence({
+            question: {
+                question: 'An office held a Secret Santa gift exchange where each employee was assigned one other employee to present with a gift. Only eleven gifts were given, each one specific to one of the recipient interests. Based on the document, who did not give a gift?'
+            },
+            filePath: docxPath,
+            llmSettings: {},
+            response: {
+                ok: true,
+                finalAnswer: 'Tyson',
+                steps: [{
+                    id: 'step-docx',
+                    title: 'Read Secret Santa document',
+                    tool: 'mcp__ailis_research__read_document',
+                    args: { path: docxPath },
+                    response: {
+                        ok: true,
+                        status: 'completed',
+                        result: {
+                            content: [{
+                                text: [
+                                    '# DOCUMENT_READ_COMPLETE',
+                                    'paragraph_count: 39',
+                                    'table_count: 1',
+                                    'Use structuredContent.document.paragraphs and structuredContent.document.tables directly.',
+                                    '## Paragraphs',
+                                    '[0] Employees',
+                                    '[2] Harry',
+                                    '[3] Rebecca',
+                                    '[34] Gifts:',
+                                    '[36] Galileo Galilei biography'
+                                ].join('\n')
+                            }]
+                        }
+                    }
+                }]
+            }
+        });
+
+        assert.equal(result.ok, true);
+        assert.equal(result.answer, 'Fred');
+        assert.equal(result.confidence, 'high');
+    } finally {
+        await fs.rm(tmpDir, { recursive: true, force: true });
+    }
 });
 
 test('GAIA finalizer counts semantic crustacean slides from presentation text', async () => {
