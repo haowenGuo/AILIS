@@ -3207,11 +3207,23 @@ async function runSearchBackend(backend, query, maxResults, timeoutMs, args = {}
 }
 
 async function webSearch(args = {}) {
-    const query = normalizeString(args.query || args.q || args.search || args.text);
+    const exactKeywords = Array.isArray(args.exact_keywords)
+        ? args.exact_keywords
+        : (Array.isArray(args.exactKeywords) ? args.exactKeywords : []);
+    const normalizedExactKeywords = exactKeywords
+        .map((item) => normalizeString(item))
+        .filter(Boolean);
+    const query = normalizeString(args.query || args.q || args.search || args.text) || normalizedExactKeywords.join(' ');
     if (!query) {
         return errorResult('web_search requires query');
     }
-    const backendQuery = normalizeString(args.backendQuery || args.backend_query) || buildEffectiveSearchQuery(query);
+    const queryWithExactKeywords = [
+        query,
+        ...normalizedExactKeywords
+            .filter((term) => !query.toLowerCase().includes(term.toLowerCase()))
+            .map((term) => quoteSearchTerm(term))
+    ].filter(Boolean).join(' ');
+    const backendQuery = normalizeString(args.backendQuery || args.backend_query) || buildEffectiveSearchQuery(queryWithExactKeywords);
     const maxResults = clampNumber(args.maxResults || args.limit, 8, 1, 12);
     const timeoutMs = clampNumber(args.timeoutMs || args.timeout_ms, 8000, 3000, 30000);
     const attempts = [];
@@ -5208,6 +5220,46 @@ async function fetchJsonUrl(url, timeoutMs = 30000) {
     }
 }
 
+async function fetchJsonUrlWithPowerShell(url, timeoutMs = 30000) {
+    if (process.platform !== 'win32') {
+        return { ok: false, error: 'powershell_json_fetch_unavailable', status: 0 };
+    }
+    const timeoutSec = Math.max(1, Math.ceil(clampNumber(timeoutMs, 30000, 1000, 30000) / 1000));
+    const psUrl = normalizeString(url).replace(/'/g, "''");
+    const script = [
+        '$ErrorActionPreference = "Stop"',
+        '$ProgressPreference = "SilentlyContinue"',
+        '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8',
+        `$Url = '${psUrl}'`,
+        `$TimeoutSec = ${timeoutSec}`,
+        '$headers = @{ Accept = "application/json"; "User-Agent" = "AILISResearchMCP/0.1 (+local assistant research tool)" }',
+        '$response = Invoke-WebRequest -UseBasicParsing -Uri $Url -Headers $headers -TimeoutSec $TimeoutSec',
+        '$response.Content'
+    ].join('; ');
+    const result = await runProcess('powershell.exe', [
+        '-NoLogo',
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        script
+    ], {
+        timeoutMs: timeoutSec * 1000 + 5000
+    });
+    if (result.exitCode !== 0) {
+        return {
+            ok: false,
+            error: normalizeString(result.stderr || result.stdout || 'powershell_json_fetch_failed').slice(0, 1000),
+            status: 0
+        };
+    }
+    const text = normalizeString(result.stdout);
+    try {
+        return { ok: true, json: JSON.parse(text || '{}'), status: 200, backend: 'powershell' };
+    } catch (error) {
+        return { ok: false, error: `invalid JSON: ${error.message}`, status: 0, text: text.slice(0, 1000) };
+    }
+}
+
 function readScholarlyApiConfig() {
     return {
         openAlexApiKey: normalizeString(process.env.OPENALEX_API_KEY || process.env.AILIS_OPENALEX_API_KEY),
@@ -7030,6 +7082,147 @@ function classifyYtDlpFailure(stderr = '') {
     };
 }
 
+function extractYouTubeVideoId(value = '') {
+    const text = normalizeString(value);
+    if (!text) return '';
+    if (/^[A-Za-z0-9_-]{11}$/.test(text)) return text;
+    const patterns = [
+        /(?:youtu\.be\/|youtube\.com\/(?:watch\?[^#\s]*[?&]v=|embed\/|shorts\/))([A-Za-z0-9_-]{6,})/i,
+        /[?&]v=([A-Za-z0-9_-]{6,})/i
+    ];
+    for (const pattern of patterns) {
+        const match = text.match(pattern);
+        if (match?.[1]) return match[1].slice(0, 32);
+    }
+    return '';
+}
+
+function buildYouTubeWatchUrl(value = '') {
+    const videoId = extractYouTubeVideoId(value);
+    return videoId ? `https://www.youtube.com/watch?v=${videoId}` : '';
+}
+
+function buildYouTubeOEmbedUrl(value = '') {
+    const watchUrl = buildYouTubeWatchUrl(value);
+    return watchUrl
+        ? `https://www.youtube.com/oembed?url=${encodeURIComponent(watchUrl)}&format=json`
+        : '';
+}
+
+async function fetchYouTubeOEmbedMetadata(value = '', timeoutMs = 30000) {
+    const videoId = extractYouTubeVideoId(value);
+    const watchUrl = buildYouTubeWatchUrl(value);
+    const oembedUrl = buildYouTubeOEmbedUrl(value);
+    if (!videoId || !watchUrl || !oembedUrl) {
+        return { ok: false, error: 'not_youtube_video_url' };
+    }
+    const budgetMs = clampNumber(timeoutMs, 30000, 1000, 30000);
+    let response = await fetchJsonUrl(oembedUrl, Math.min(budgetMs, 6000));
+    if (!response.ok && process.platform === 'win32') {
+        const fallback = await fetchJsonUrlWithPowerShell(oembedUrl, Math.min(budgetMs, 20000));
+        if (fallback.ok) {
+            response = fallback;
+        } else {
+            response = {
+                ...response,
+                fallbackError: fallback.error || ''
+            };
+        }
+    }
+    if (!response.ok) {
+        return {
+            ok: false,
+            error: response.error || 'youtube_oembed_failed',
+            fallbackError: response.fallbackError || '',
+            status: response.status || 0
+        };
+    }
+    const json = response.json || {};
+    const title = normalizeString(json.title);
+    if (!title) {
+        return { ok: false, error: 'youtube_oembed_missing_title', status: response.status || 0 };
+    }
+    const author = normalizeString(json.author_name);
+    return {
+        ok: true,
+        video: {
+            id: videoId,
+            url: watchUrl,
+            title,
+            uploader: author,
+            channel: author,
+            thumbnail_url: normalizeString(json.thumbnail_url),
+            provider_name: normalizeString(json.provider_name),
+            source: 'youtube_oembed',
+            metadataOnly: true
+        }
+    };
+}
+
+function quoteSearchTerm(value = '') {
+    const text = normalizeString(value).replace(/"/g, '');
+    return text ? `"${text}"` : '';
+}
+
+function buildYouTubeEvidenceSearchQuery(video = {}, args = {}) {
+    const taskTerms = normalizeString(
+        args.question ||
+        args.context ||
+        args.extract_query ||
+        args.extractQuery ||
+        ''
+    );
+    const fallbackEvidenceTerms = taskTerms || 'transcript captions visual evidence';
+    return [
+        quoteSearchTerm(video.title),
+        quoteSearchTerm(video.uploader || video.channel),
+        fallbackEvidenceTerms
+    ].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
+}
+
+function buildYouTubeOEmbedSuggestedCalls(video = {}, args = {}) {
+    const language = normalizeString(args.language || args.lang, 'en');
+    return [
+        {
+            tool: 'youtube_transcript',
+            args: { url: video.url, language }
+        },
+        {
+            tool: 'web_search',
+            args: { query: buildYouTubeEvidenceSearchQuery(video, args), maxResults: 5 }
+        }
+    ];
+}
+
+function youtubeOEmbedMetadataResult(video = {}, args = {}, failure = {}) {
+    const suggestedNextCalls = buildYouTubeOEmbedSuggestedCalls(video, args);
+    const lines = [
+        'YouTube metadata recovered via oEmbed.',
+        '',
+        `title: ${video.title || ''}`,
+        `channel: ${video.channel || video.uploader || ''}`,
+        `url: ${video.url || ''}`,
+        `thumbnail_url: ${video.thumbnail_url || ''}`,
+        '',
+        'evidence_gap: metadata_only; this is not transcript, audio, or frame evidence.',
+        'Use the exact title/channel above for follow-up search or media fallback before answering visual/audio questions.',
+        '',
+        'Suggested next calls:',
+        `1. youtube_transcript ${JSON.stringify(suggestedNextCalls[0].args)}`,
+        `2. web_search ${JSON.stringify(suggestedNextCalls[1].args)}`
+    ];
+    return textResult(lines.join('\n'), {
+        ...failure,
+        status: 'metadata_only',
+        evidenceQuality: 'metadata_only',
+        metadataOnly: true,
+        evidenceGap: 'yt-dlp could not provide transcript/video evidence; oEmbed only recovered title/channel/thumbnail metadata.',
+        videos: [video],
+        metadata: video,
+        suggestedNextCalls
+    });
+}
+
 function renderDocumentMarkdown(document = {}) {
     const lines = [
         '# DOCUMENT_READ_COMPLETE',
@@ -7731,7 +7924,8 @@ async function describeImage(args = {}) {
 }
 
 async function youtubeVideoSearch(args = {}) {
-    const explicitUrl = normalizeString(args.url || args.videoUrl || args.video_url);
+    const videoId = normalizeString(args.video_id || args.videoId || args.id);
+    const explicitUrl = normalizeString(args.url || args.videoUrl || args.video_url) || buildYouTubeWatchUrl(videoId);
     const query = normalizeString(args.query || args.q || args.title || args.search || args.keywords);
     const channel = normalizeString(args.channel || args.uploader);
     const maxResults = clampNumber(args.maxResults || args.max_results || args.limit, 5, 1, 10);
@@ -7791,6 +7985,17 @@ print(json.dumps({"query": target, "videos": videos[:max_results]}, ensure_ascii
     });
     if (result.exitCode !== 0) {
         const failure = classifyYtDlpFailure(result.stderr);
+        if (explicitUrl) {
+            const oembed = await fetchYouTubeOEmbedMetadata(explicitUrl, args.timeoutMs || 30000);
+            if (oembed.ok) {
+                return youtubeOEmbedMetadataResult(oembed.video, args, {
+                    ...failure,
+                    originalStatus: result.timedOut ? 'timeout' : failure.status,
+                    query: searchQuery,
+                    stderr: result.stderr.slice(0, 3000)
+                });
+            }
+        }
         return actionableErrorResult('youtube_video_search failed', {
             ...failure,
             status: result.timedOut ? 'timeout' : failure.status,
@@ -7852,6 +8057,10 @@ print(json.dumps({"query": target, "videos": videos[:max_results]}, ensure_ascii
 
 async function youtubeTranscript(args = {}) {
     let url = normalizeString(args.url || args.videoUrl || args.video_url);
+    const videoId = normalizeString(args.video_id || args.videoId || args.id);
+    if (!url && videoId) {
+        url = buildYouTubeWatchUrl(videoId);
+    }
     const query = normalizeString(args.query || args.q || args.title || args.search || args.keywords);
     if (!url && query) {
         const resolved = await youtubeVideoSearch({
@@ -7954,13 +8163,10 @@ print(json.dumps(payload, ensure_ascii=False))
     });
     if (result.exitCode !== 0) {
         const failure = classifyYtDlpFailure(result.stderr);
-        return actionableErrorResult('youtube_transcript failed', {
-            ...failure,
-            status: result.timedOut ? 'timeout' : failure.status,
-            url,
-            stderr: result.stderr.slice(0, 3000),
-            nextActions: failure.nextActions,
-            suggestedNextCalls: [
+        const oembed = await fetchYouTubeOEmbedMetadata(url, args.timeoutMs || 30000);
+        const suggestedNextCalls = oembed.ok
+            ? buildYouTubeOEmbedSuggestedCalls(oembed.video, args)
+            : [
                 {
                     tool: 'youtube_video_search',
                     args: { url, maxResults: 1 }
@@ -7969,7 +8175,21 @@ print(json.dumps(payload, ensure_ascii=False))
                     tool: 'web_search',
                     args: { query: `${url} transcript`, maxResults: 5 }
                 }
-            ]
+            ];
+        return actionableErrorResult('youtube_transcript failed', {
+            ...failure,
+            status: result.timedOut ? 'timeout' : failure.status,
+            url,
+            stderr: result.stderr.slice(0, 3000),
+            metadata: oembed.ok ? oembed.video : {},
+            videos: oembed.ok ? [oembed.video] : [],
+            metadataOnly: oembed.ok,
+            evidenceQuality: oembed.ok ? 'metadata_only' : 'none',
+            evidenceGap: oembed.ok
+                ? 'yt-dlp could not provide transcript/video evidence; oEmbed only recovered title/channel/thumbnail metadata.'
+                : 'yt-dlp could not provide transcript/video evidence and oEmbed metadata was unavailable.',
+            nextActions: failure.nextActions,
+            suggestedNextCalls
         });
     }
     let payload = null;
@@ -8017,6 +8237,16 @@ const TOOLS = [
                 q: { type: 'string', description: 'Compatibility alias for query. Prefer query.' },
                 search: { type: 'string', description: 'Compatibility alias for query. Prefer query.' },
                 text: { type: 'string', description: 'Compatibility alias for query. Prefer query.' },
+                exact_keywords: {
+                    type: 'array',
+                    items: { type: 'string' },
+                    description: 'Optional exact terms that should stay in the effective backend query. Prefer including them in query directly; this is an explicit compatibility field, not a replacement for query.'
+                },
+                exactKeywords: {
+                    type: 'array',
+                    items: { type: 'string' },
+                    description: 'Compatibility alias for exact_keywords.'
+                },
                 maxResults: { type: 'number', description: 'Requested result count, clamped to 1-12. Use 3-8 for normal tasks.' },
                 limit: { type: 'number', description: 'Compatibility alias for maxResults. Prefer maxResults.' },
                 timeoutMs: { type: 'number', description: 'Per-backend timeout in milliseconds, clamped to 3000-30000. Default is 8000. Omit unless a task needs a longer wait.' },
@@ -8320,7 +8550,7 @@ const TOOLS = [
     },
     {
         name: 'youtube_video_search',
-        description: 'Search or resolve YouTube videos with yt-dlp using title, channel, or URL. Use this when a YouTube/video task gives only a title/channel or when fetching youtube.com search pages would be low-value.',
+        description: 'Search or resolve YouTube videos with yt-dlp using title, channel, or URL. Use this when a YouTube/video task gives only a title/channel or when fetching youtube.com search pages would be low-value. If yt-dlp is blocked for a known URL, this tool recovers metadata through YouTube oEmbed and returns metadata_only plus exact-title follow-up search suggestions; do not treat metadata_only as transcript/frame evidence.',
         inputSchema: {
             type: 'object',
             properties: {
@@ -8331,22 +8561,29 @@ const TOOLS = [
                 url: { type: 'string', description: 'Known YouTube URL to resolve metadata for.' },
                 videoUrl: { type: 'string', description: 'Compatibility alias for url.' },
                 video_url: { type: 'string', description: 'Compatibility alias for url.' },
+                video_id: { type: 'string', description: 'Compatibility alias for a known YouTube video id; normalized to a watch URL.' },
+                videoId: { type: 'string', description: 'Compatibility alias for video_id.' },
+                id: { type: 'string', description: 'Compatibility alias for video_id.' },
                 channel: { type: 'string', description: 'Optional channel/uploader name to add to search terms.' },
                 maxResults: { type: 'number', description: 'Maximum videos to return, 1-10.' },
                 max_results: { type: 'number', description: 'Compatibility alias for maxResults.' },
                 timeoutMs: { type: 'number' }
-            }
+            },
+            additionalProperties: false
         }
     },
     {
         name: 'youtube_transcript',
-        description: 'Fetch YouTube metadata and available subtitles/auto-captions with yt-dlp. Use for known YouTube URLs before guessing from search snippets; if only a title/query is known, this can resolve a URL through youtube_video_search first.',
+        description: 'Fetch YouTube metadata and available subtitles/auto-captions with yt-dlp. Use for known YouTube URLs before guessing from search snippets; if only a title/query is known, this can resolve a URL through youtube_video_search first. If yt-dlp is blocked, the failure result may include oEmbed metadata and exact-title suggestedNextCalls; follow those before broad web_search, but do not answer visual/audio questions from metadata_only.',
         inputSchema: {
             type: 'object',
             properties: {
                 url: { type: 'string' },
                 videoUrl: { type: 'string' },
                 video_url: { type: 'string' },
+                video_id: { type: 'string', description: 'Compatibility alias for a known YouTube video id; normalized to a watch URL.' },
+                videoId: { type: 'string', description: 'Compatibility alias for video_id.' },
+                id: { type: 'string', description: 'Compatibility alias for video_id.' },
                 query: { type: 'string' },
                 q: { type: 'string' },
                 title: { type: 'string' },
@@ -8356,7 +8593,8 @@ const TOOLS = [
                 cookies_from_browser: { type: 'string', description: 'Browser name for yt-dlp cookies-from-browser, for example chrome, edge, firefox.' },
                 maxChars: { type: 'number' },
                 timeoutMs: { type: 'number' }
-            }
+            },
+            additionalProperties: false
         }
     }
 ];
@@ -8447,6 +8685,8 @@ module.exports = {
     buildEffectiveSearchQuery,
     buildSearchClarificationChoices,
     buildSuggestedCallsFromSearchResults,
+    buildYouTubeEvidenceSearchQuery,
+    buildYouTubeOEmbedUrl,
     classifyYtDlpFailure,
     downloadFile,
     extractBingResults,
@@ -8455,6 +8695,7 @@ module.exports = {
     extractGenericAnchorResults,
     extractGitHubRepositoryResults,
     extractShortCjkEntityTerms,
+    extractYouTubeVideoId,
     extractWikipediaPageTitle,
     extractYahooResults,
     inferPaperMetadataArgsFromScholarlyQuery,

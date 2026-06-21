@@ -758,13 +758,14 @@ async function runController(args = parseArgs()) {
             break;
         }
         if (state.repairRequired && !args.dryRun) {
+            const previousProgress = await readJson(path.join(jobDir, 'progress.json'), {});
             await updateProgress(jobDir, {
                 status: 'repair_required',
-                currentAction: 'waiting_for_codex_repair',
+                currentAction: 'paused_before_duplicate_retry',
                 latestArtifactPath: state.lastVerdictPath || '',
-                latestEvidence: 'previous iteration requires generalized repair',
-                nextAction: 'open latest repair-ticket.md and patch the generalized bottleneck',
-                risk: 'repair_required'
+                latestEvidence: previousProgress.latestEvidence || 'previous iteration requires generalized repair',
+                nextAction: 'Codex heartbeat/current session should patch the generalized bottleneck, run focused tests, then resume with --clear-repair; do not rerun the same failing task before repair.',
+                risk: previousProgress.risk || 'repair_required'
             });
             await appendEvent(jobDir, { type: 'JOB_BLOCKED', iteration: state.iteration || 0, summary: 'repair required before next task', failureCategory: 'blocked' });
             break;

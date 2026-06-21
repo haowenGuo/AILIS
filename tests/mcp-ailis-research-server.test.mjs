@@ -14,6 +14,8 @@ const {
     buildEffectiveSearchQuery,
     buildSearchClarificationChoices,
     buildSuggestedCallsFromSearchResults,
+    buildYouTubeEvidenceSearchQuery,
+    buildYouTubeOEmbedUrl,
     classifyYtDlpFailure,
     extractArxivCandidatesFromAtom,
     extractBingResults,
@@ -21,6 +23,7 @@ const {
     extractGenericAnchorResults,
     extractGitHubRepositoryResults,
     extractShortCjkEntityTerms,
+    extractYouTubeVideoId,
     extractWikipediaPageTitle,
     extractYahooResults,
     githubRepoRead,
@@ -84,6 +87,8 @@ test('AILIS research MCP exposes Codex-aligned PDF/file tools', () => {
     const searchTool = TOOLS.find((tool) => tool.name === 'web_search');
     const fetchTool = TOOLS.find((tool) => tool.name === 'web_fetch');
     const pythonTool = TOOLS.find((tool) => tool.name === 'run_python_file');
+    const youtubeSearchTool = TOOLS.find((tool) => tool.name === 'youtube_video_search');
+    const youtubeTranscriptTool = TOOLS.find((tool) => tool.name === 'youtube_transcript');
 
     assert.ok(names.includes('web_search'));
     assert.ok(names.includes('web_research'));
@@ -101,6 +106,8 @@ test('AILIS research MCP exposes Codex-aligned PDF/file tools', () => {
     assert.ok(searchTool.inputSchema.properties.backends);
     assert.ok(searchTool.inputSchema.properties.provider);
     assert.ok(searchTool.inputSchema.properties.searxngUrl);
+    assert.ok(searchTool.inputSchema.properties.exact_keywords);
+    assert.ok(searchTool.inputSchema.properties.exactKeywords);
     assert.ok(searchTool.inputSchema.properties.backends.items.enum.includes('duckduckgo_html'));
     assert.ok(searchTool.inputSchema.properties.backends.items.enum.includes('github_repositories'));
     assert.ok(searchTool.inputSchema.properties.backends.items.enum.includes('searxng_json'));
@@ -114,6 +121,12 @@ test('AILIS research MCP exposes Codex-aligned PDF/file tools', () => {
     assert.ok(pythonTool.inputSchema.properties.inlineCode);
     assert.ok(pythonTool.inputSchema.properties.source);
     assert.ok(pythonTool.inputSchema.properties.python);
+    assert.equal(youtubeSearchTool.inputSchema.additionalProperties, false);
+    assert.equal(youtubeTranscriptTool.inputSchema.additionalProperties, false);
+    assert.ok(youtubeSearchTool.inputSchema.properties.video_id);
+    assert.ok(youtubeTranscriptTool.inputSchema.properties.video_id);
+    assert.match(youtubeSearchTool.description, /oEmbed/);
+    assert.match(youtubeTranscriptTool.description, /metadata_only/);
 });
 
 test('run_python_file supports inline Python code for one-off benchmark calculations', async () => {
@@ -149,11 +162,30 @@ test('YouTube tools expose recovery affordance before broad web search', async (
     assert.equal(search.structuredContent.status, 'invalid_args');
     assert.equal(search.structuredContent.suggestedNextCalls[0].tool, 'youtube_video_search');
 
-    const transcript = await youtubeTranscript({ video_id: 'L1vXCYZAYYM' });
+    const transcript = await youtubeTranscript({});
     assert.equal(transcript.isError, true);
     assert.equal(transcript.structuredContent.status, 'invalid_args');
     assert.equal(transcript.structuredContent.suggestedNextCalls[0].tool, 'youtube_video_search');
     assert.match(transcript.content[0].text, /suggested_next_calls/);
+});
+
+test('YouTube oEmbed helpers preserve exact video identity and task terms', () => {
+    assert.equal(extractYouTubeVideoId('https://www.youtube.com/watch?v=L1vXCYZAYYM&t=12s'), 'L1vXCYZAYYM');
+    assert.equal(extractYouTubeVideoId('https://youtu.be/L1vXCYZAYYM?si=abc'), 'L1vXCYZAYYM');
+
+    const oembedUrl = buildYouTubeOEmbedUrl('https://www.youtube.com/watch?v=L1vXCYZAYYM');
+    assert.match(oembedUrl, /^https:\/\/www\.youtube\.com\/oembed\?/);
+    assert.match(decodeURIComponent(oembedUrl), /watch\?v=L1vXCYZAYYM/);
+
+    const evidenceQuery = buildYouTubeEvidenceSearchQuery({
+        title: 'Penguin Chicks Stand Up To Giant Petrel',
+        uploader: 'John Downer Productions'
+    }, {
+        question: 'highest number of bird species on camera simultaneously'
+    });
+    assert.match(evidenceQuery, /"Penguin Chicks Stand Up To Giant Petrel"/);
+    assert.match(evidenceQuery, /"John Downer Productions"/);
+    assert.match(evidenceQuery, /highest number of bird species/);
 });
 
 test('yt-dlp failures classify YouTube anti-bot blocks as non-query problems', () => {
