@@ -4,9 +4,14 @@ import test from 'node:test';
 import {
     buildPracticeTasks,
     classifyGaiaResult,
+    ensureSafetyState,
+    evaluateSafetyGate,
     extractExecutionChain,
+    isEmptyAnswerVerdict,
     normalizeAnswer,
     parseArgs,
+    recordSafetyOutcome,
+    resolveSafetyPolicy,
     resolveTaskRetries,
     selectNextTask,
     shouldContinueAfterFailure,
@@ -204,4 +209,94 @@ test('GAIA auto optimizer classifies web JS shell failures as web retrieval MCP 
     const chain = extractExecutionChain({ task, result, processResult: { ok: true }, summary: null });
     const verdict = classifyGaiaResult({ task, result, chain, processResult: { ok: true }, summary: null });
     assert.equal(verdict.failureCategory, 'web_retrieval_mcp');
+});
+
+test('GAIA auto optimizer resolves conservative spend-safety defaults', () => {
+    const safety = resolveSafetyPolicy({});
+    assert.equal(safety.enabled, true);
+    assert.equal(safety.maxRepairBacklog, 5);
+    assert.equal(safety.maxConsecutiveFailures, 3);
+    assert.equal(safety.maxEmptyAnswerStreak, 2);
+    assert.equal(safety.maxSameTaskAttempts, 2);
+    assert.equal(safety.stopOnEnvironmentFailure, true);
+});
+
+test('GAIA auto optimizer blocks when repair backlog grows beyond safety limit', () => {
+    const state = {
+        repairBacklog: Array.from({ length: 5 }, (_, index) => ({ taskId: `task-${index}` }))
+    };
+    const gate = evaluateSafetyGate({}, state);
+    assert.equal(gate.block, true);
+    assert.equal(gate.reason, 'max_repair_backlog');
+});
+
+test('GAIA auto optimizer tracks empty answers and blocks repeated paid failures', () => {
+    const state = {};
+    const policy = { safety: { maxEmptyAnswerStreak: 2, maxRepairBacklog: 0 } };
+    const task = { taskId: 'official-validation-l1-offset-1' };
+    const emptyVerdict = {
+        ok: false,
+        failureCategory: 'harness_finalization',
+        summary: 'Local GAIA scorer rejected the submitted answer ((empty)); expected Fred.',
+        emptyAnswer: true
+    };
+
+    ensureSafetyState(state, policy);
+    recordSafetyOutcome(state, { task, verdict: emptyVerdict, policy });
+    assert.equal(isEmptyAnswerVerdict(emptyVerdict), true);
+    assert.equal(evaluateSafetyGate(policy, state, { task, verdict: emptyVerdict }).block, false);
+
+    recordSafetyOutcome(state, { task: { taskId: 'official-validation-l1-offset-2' }, verdict: emptyVerdict, policy });
+    const gate = evaluateSafetyGate(policy, state, { task, verdict: emptyVerdict });
+    assert.equal(gate.block, true);
+    assert.equal(gate.reason, 'max_empty_answer_streak');
+});
+
+test('GAIA auto optimizer blocks repeated attempts of the same task', () => {
+    const state = {};
+    const policy = { safety: { maxSameTaskAttempts: 2, maxRepairBacklog: 0, maxEmptyAnswerStreak: 0 } };
+    const task = { taskId: 'same-task' };
+    const verdict = {
+        ok: false,
+        failureCategory: 'model_reasoning',
+        summary: 'Wrong answer.',
+        emptyAnswer: false
+    };
+
+    recordSafetyOutcome(state, { task, verdict, policy });
+    assert.equal(evaluateSafetyGate(policy, state, { task, verdict }).block, false);
+    recordSafetyOutcome(state, { task, verdict, policy });
+    const gate = evaluateSafetyGate(policy, state, { task, verdict });
+    assert.equal(gate.block, true);
+    assert.equal(gate.reason, 'max_same_task_attempts');
+});
+
+test('GAIA auto optimizer blocks low recent pass rate before spending another batch', () => {
+    const state = {};
+    const policy = {
+        safety: {
+            maxRepairBacklog: 0,
+            maxConsecutiveFailures: 0,
+            maxEmptyAnswerStreak: 0,
+            maxSameTaskAttempts: 0,
+            recentWindow: 4,
+            minRecentSample: 4,
+            minRecentPassRate: 0.5
+        }
+    };
+    for (let index = 0; index < 4; index += 1) {
+        recordSafetyOutcome(state, {
+            task: { taskId: `task-${index}` },
+            verdict: {
+                ok: index === 0,
+                failureCategory: index === 0 ? '' : 'harness_finalization',
+                summary: index === 0 ? 'Task passed.' : 'Wrong answer.',
+                emptyAnswer: false
+            },
+            policy
+        });
+    }
+    const gate = evaluateSafetyGate(policy, state);
+    assert.equal(gate.block, true);
+    assert.equal(gate.reason, 'low_recent_pass_rate');
 });

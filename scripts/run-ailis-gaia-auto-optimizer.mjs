@@ -60,6 +60,141 @@ function shouldContinueAfterVerdict(policy = {}, verdict = {}) {
     return true;
 }
 
+function resolvePolicyNumber(value, fallback, { min = 0, max = Number.MAX_SAFE_INTEGER } = {}) {
+    const parsed = Number(value);
+    const effective = Number.isFinite(parsed) ? parsed : fallback;
+    return Math.max(min, Math.min(effective, max));
+}
+
+function resolveSafetyPolicy(policy = {}) {
+    const safety = typeof policy.safety === 'object' && policy.safety ? policy.safety : {};
+    return {
+        enabled: safety.enabled !== false && policy.safetyEnabled !== false,
+        maxRepairBacklog: resolvePolicyNumber(safety.maxRepairBacklog ?? policy.maxRepairBacklog, 5, { min: 0, max: 200 }),
+        maxConsecutiveFailures: resolvePolicyNumber(safety.maxConsecutiveFailures ?? policy.maxConsecutiveFailures, 3, { min: 0, max: 50 }),
+        maxEmptyAnswerStreak: resolvePolicyNumber(safety.maxEmptyAnswerStreak ?? policy.maxEmptyAnswerStreak, 2, { min: 0, max: 50 }),
+        maxSameTaskAttempts: resolvePolicyNumber(safety.maxSameTaskAttempts ?? policy.maxSameTaskAttempts, 2, { min: 0, max: 20 }),
+        recentWindow: Math.round(resolvePolicyNumber(safety.recentWindow ?? policy.recentWindow, 8, { min: 1, max: 100 })),
+        minRecentSample: Math.round(resolvePolicyNumber(safety.minRecentSample ?? policy.minRecentSample, 4, { min: 1, max: 100 })),
+        minRecentPassRate: resolvePolicyNumber(safety.minRecentPassRate ?? policy.minRecentPassRate, 0.25, { min: 0, max: 1 }),
+        stopOnEnvironmentFailure: safety.stopOnEnvironmentFailure !== false && policy.stopOnEnvironmentFailure !== false
+    };
+}
+
+function isEmptyAnswerVerdict(verdict = {}) {
+    const text = [
+        verdict.summary,
+        verdict.status,
+        verdict.optimizationFocus,
+        verdict.nextAction
+    ].map((item) => normalizeText(item)).join(' ');
+    return verdict.emptyAnswer === true ||
+        /\(\s*empty\s*\)|empty answer|no submitted|missing_exact_answer|submitted answer \(\s*\)/i.test(text);
+}
+
+function ensureSafetyState(state = {}, policy = {}) {
+    const safetyPolicy = resolveSafetyPolicy(policy);
+    const existing = typeof state.safety === 'object' && state.safety ? state.safety : {};
+    const recentVerdicts = Array.isArray(existing.recentVerdicts) ? existing.recentVerdicts : [];
+    const taskAttemptCounts = typeof existing.taskAttemptCounts === 'object' && existing.taskAttemptCounts
+        ? existing.taskAttemptCounts
+        : {};
+    state.safety = {
+        consecutiveFailures: Math.max(0, Number(existing.consecutiveFailures) || 0),
+        emptyAnswerStreak: Math.max(0, Number(existing.emptyAnswerStreak) || 0),
+        taskAttemptCounts,
+        recentVerdicts: recentVerdicts.slice(-Math.max(1, safetyPolicy.recentWindow)),
+        lastSafetyBlock: existing.lastSafetyBlock || null
+    };
+    return state.safety;
+}
+
+function recordSafetyOutcome(state = {}, { task = {}, verdict = {}, policy = {} } = {}) {
+    const safetyPolicy = resolveSafetyPolicy(policy);
+    const safety = ensureSafetyState(state, policy);
+    const taskId = normalizeText(task.taskId || verdict.taskId, 'unknown-task');
+    safety.taskAttemptCounts[taskId] = Math.max(0, Number(safety.taskAttemptCounts[taskId]) || 0) + 1;
+    const emptyAnswer = isEmptyAnswerVerdict(verdict);
+    safety.consecutiveFailures = verdict.ok ? 0 : safety.consecutiveFailures + 1;
+    safety.emptyAnswerStreak = verdict.ok ? 0 : (emptyAnswer ? safety.emptyAnswerStreak + 1 : 0);
+    safety.recentVerdicts = [
+        ...(Array.isArray(safety.recentVerdicts) ? safety.recentVerdicts : []),
+        {
+            at: isoNow(),
+            taskId,
+            ok: verdict.ok === true,
+            failureCategory: normalizeText(verdict.failureCategory),
+            optimizationFocus: normalizeText(verdict.optimizationFocus),
+            emptyAnswer
+        }
+    ].slice(-Math.max(1, safetyPolicy.recentWindow));
+    return safety;
+}
+
+function buildSafetyBlock(reason, summary, extra = {}) {
+    return {
+        block: true,
+        reason,
+        failureCategory: 'spend_safety',
+        summary,
+        nextAction: 'stop paid execution, inspect accumulated chain data offline, repair the generalized bottleneck, then resume with a tiny canary batch',
+        ...extra
+    };
+}
+
+function evaluateSafetyGate(policy = {}, state = {}, { verdict = null, task = null } = {}) {
+    const safetyPolicy = resolveSafetyPolicy(policy);
+    if (!safetyPolicy.enabled) {
+        return { block: false, reason: 'disabled' };
+    }
+    const safety = ensureSafetyState(state, policy);
+    const repairBacklogCount = Array.isArray(state.repairBacklog) ? state.repairBacklog.length : 0;
+    if (safetyPolicy.maxRepairBacklog > 0 && repairBacklogCount >= safetyPolicy.maxRepairBacklog) {
+        return buildSafetyBlock(
+            'max_repair_backlog',
+            `Repair backlog reached ${repairBacklogCount}, limit ${safetyPolicy.maxRepairBacklog}.`
+        );
+    }
+    if (verdict && safetyPolicy.stopOnEnvironmentFailure && normalizeText(verdict.failureCategory) === 'environment') {
+        return buildSafetyBlock(
+            'environment_failure',
+            `Environment/provider failure is terminal for paid runs: ${normalizeText(verdict.summary, 'provider/environment failure')}`,
+            { failureCategory: 'environment' }
+        );
+    }
+    if (safetyPolicy.maxConsecutiveFailures > 0 && safety.consecutiveFailures >= safetyPolicy.maxConsecutiveFailures) {
+        return buildSafetyBlock(
+            'max_consecutive_failures',
+            `Consecutive failures reached ${safety.consecutiveFailures}, limit ${safetyPolicy.maxConsecutiveFailures}.`
+        );
+    }
+    if (safetyPolicy.maxEmptyAnswerStreak > 0 && safety.emptyAnswerStreak >= safetyPolicy.maxEmptyAnswerStreak) {
+        return buildSafetyBlock(
+            'max_empty_answer_streak',
+            `Empty-answer streak reached ${safety.emptyAnswerStreak}, limit ${safetyPolicy.maxEmptyAnswerStreak}.`
+        );
+    }
+    const taskId = normalizeText(task?.taskId || verdict?.taskId);
+    const taskAttempts = taskId ? Math.max(0, Number(safety.taskAttemptCounts?.[taskId]) || 0) : 0;
+    if (taskId && safetyPolicy.maxSameTaskAttempts > 0 && taskAttempts >= safetyPolicy.maxSameTaskAttempts) {
+        return buildSafetyBlock(
+            'max_same_task_attempts',
+            `Task ${taskId} reached ${taskAttempts} attempts, limit ${safetyPolicy.maxSameTaskAttempts}.`
+        );
+    }
+    const recent = Array.isArray(safety.recentVerdicts) ? safety.recentVerdicts.slice(-safetyPolicy.recentWindow) : [];
+    if (recent.length >= safetyPolicy.minRecentSample) {
+        const passRate = recent.filter((item) => item.ok === true).length / recent.length;
+        if (passRate < safetyPolicy.minRecentPassRate) {
+            return buildSafetyBlock(
+                'low_recent_pass_rate',
+                `Recent pass rate ${passRate.toFixed(2)} over ${recent.length} runs is below ${safetyPolicy.minRecentPassRate}.`
+            );
+        }
+    }
+    return { block: false, reason: 'ok' };
+}
+
 function parseArgs(argv = process.argv.slice(2)) {
     const args = {
         jobDir: DEFAULT_JOB_DIR,
@@ -537,10 +672,11 @@ function classifyGaiaResult({ task = {}, result = {}, chain = {}, processResult 
             summary: highLoop
                 ? `Task passed, but used ${chain.stepCount} steps. Optimize loop efficiency without reducing reliability.`
                 : 'Task passed with acceptable local verdict.',
-            nextAction: highLoop ? 'analyze redundant steps and reduce loop count' : 'advance to next task'
+            nextAction: highLoop ? 'analyze redundant steps and reduce loop count' : 'advance to next task',
+            emptyAnswer: false
         };
     }
-    if (/LLM settings incomplete|desktop-state\.json|api.?key|provider_error|auth|token/i.test(statusText)) {
+    if (/LLM settings incomplete|desktop-state\.json|api.?key|provider_error|auth|token|overdue|past due|unpaid|quota|billing|balance|欠费|余额不足|额度/i.test(statusText)) {
         return {
             ok: false,
             status: 'failed',
@@ -548,7 +684,8 @@ function classifyGaiaResult({ task = {}, result = {}, chain = {}, processResult 
             optimizationFocus: 'configuration_and_provider_readiness',
             generalizedCapability: 'llm_provider_and_dataset_environment',
             summary: 'Task could not run because local provider, auth, or dataset environment is incomplete.',
-            nextAction: 'repair environment detection and readiness reporting before rerunning'
+            nextAction: 'repair environment detection and readiness reporting before rerunning',
+            emptyAnswer: !normalizeText(result.submitted_answer)
         };
     }
     if (perTask && perTask.correct !== true) {
@@ -561,7 +698,8 @@ function classifyGaiaResult({ task = {}, result = {}, chain = {}, processResult 
             optimizationFocus: 'exact_answer_finalization',
             generalizedCapability: 'benchmark_final_answer_and_evidence_gate',
             summary: `Local GAIA scorer rejected the submitted answer (${submitted}); expected ${finalAnswer}.`,
-            nextAction: 'repair exact-answer reasoning, unit conversion, and scorer verdict handling before advancing'
+            nextAction: 'repair exact-answer reasoning, unit conversion, and scorer verdict handling before advancing',
+            emptyAnswer: normalizeAnswer(submitted) === normalizeAnswer('(empty)')
         };
     }
     if (/web_fetch|web_search|js_shell|thin_content|HTTP 403|HTTP 404|access_challenge|miyoushe|crawl4ai/i.test(statusText)) {
@@ -572,7 +710,8 @@ function classifyGaiaResult({ task = {}, result = {}, chain = {}, processResult 
             optimizationFocus: 'web_search_web_fetch_mcp',
             generalizedCapability: 'robust_web_retrieval_and_rendered_extraction',
             summary: 'Failure chain involves web discovery/fetch quality, blocked pages, JS shell, or source-followup behavior.',
-            nextAction: 'patch generalized web_search/web_fetch evidence selection or rendered extraction'
+            nextAction: 'patch generalized web_search/web_fetch evidence selection or rendered extraction',
+            emptyAnswer: !normalizeText(result.submitted_answer)
         };
     }
     if (/read_document|read_spreadsheet|read_presentation|pdf_extract|pdf_find|transcribe_audio|describe_image|download_file/i.test(statusText)) {
@@ -583,7 +722,8 @@ function classifyGaiaResult({ task = {}, result = {}, chain = {}, processResult 
             optimizationFocus: 'artifact_tools_mcp',
             generalizedCapability: task.capabilityClass || 'artifact_reading_tools',
             summary: 'Failure chain involves artifact-specific tool or MCP behavior.',
-            nextAction: 'patch the artifact tool/MCP contract and add a focused regression'
+            nextAction: 'patch the artifact tool/MCP contract and add a focused regression',
+            emptyAnswer: !normalizeText(result.submitted_answer)
         };
     }
     if (/missing_exact_answer|rejected_visible_prose|finalizer|answer_gate|exact answer|no submitted/i.test(statusText) || !normalizeText(result.submitted_answer)) {
@@ -594,7 +734,8 @@ function classifyGaiaResult({ task = {}, result = {}, chain = {}, processResult 
             optimizationFocus: 'exact_answer_finalization',
             generalizedCapability: 'benchmark_final_answer_and_evidence_gate',
             summary: 'The agent did not produce an acceptable exact answer or the answer gate rejected it.',
-            nextAction: 'repair exact-answer finalization and evidence digest handling'
+            nextAction: 'repair exact-answer finalization and evidence digest handling',
+            emptyAnswer: !normalizeText(result.submitted_answer)
         };
     }
     if (Number(chain.stepCount) >= 15 || /loop_guard|repeated|same .* tried twice|tool_search/i.test(statusText)) {
@@ -605,7 +746,8 @@ function classifyGaiaResult({ task = {}, result = {}, chain = {}, processResult 
             optimizationFocus: 'agent_stopping_and_tool_choice',
             generalizedCapability: 'agent_loop_control_and_ready_evidence_stopping',
             summary: 'The chain suggests poor stopping behavior, repeated tool calls, or bad tool choice.',
-            nextAction: 'patch Agent/Harness only if Tools/MCP evidence is already sufficient'
+            nextAction: 'patch Agent/Harness only if Tools/MCP evidence is already sufficient',
+            emptyAnswer: !normalizeText(result.submitted_answer)
         };
     }
     return {
@@ -615,7 +757,8 @@ function classifyGaiaResult({ task = {}, result = {}, chain = {}, processResult 
         optimizationFocus: 'reasoning_from_evidence',
         generalizedCapability: task.capabilityClass || 'gaia_reasoning',
         summary: 'Evidence may have been available, but the final answer was wrong or absent without a clearer tool failure.',
-        nextAction: 'inspect chain and decide whether evidence extraction or reasoning prompt needs generalized repair'
+        nextAction: 'inspect chain and decide whether evidence extraction or reasoning prompt needs generalized repair',
+        emptyAnswer: !normalizeText(result.submitted_answer)
     };
 }
 
@@ -749,13 +892,42 @@ async function saveState(jobDir, state) {
     });
 }
 
+async function blockForSafetyGate(jobDir, state, gate, { iteration = 0, policy = {} } = {}) {
+    ensureSafetyState(state, policy);
+    state.status = 'repair_required';
+    state.repairRequired = true;
+    state.safety.lastSafetyBlock = {
+        at: isoNow(),
+        reason: gate.reason,
+        summary: gate.summary
+    };
+    await saveState(jobDir, state);
+    await updateProgress(jobDir, {
+        status: 'repair_required',
+        currentAction: `safety gate blocked: ${gate.reason}`,
+        activeAgentRuns: 0,
+        latestArtifactPath: state.lastVerdictPath || '',
+        latestEvidence: gate.summary,
+        nextAction: gate.nextAction,
+        risk: gate.failureCategory === 'environment' ? 'environment' : `spend_safety:${gate.reason}`
+    });
+    await appendEvent(jobDir, {
+        type: 'JOB_BLOCKED',
+        iteration,
+        summary: gate.summary,
+        failureCategory: gate.failureCategory || 'spend_safety'
+    });
+}
+
 async function runController(args = parseArgs()) {
     const jobDir = args.jobDir;
     await fs.mkdir(path.join(jobDir, 'iterations'), { recursive: true });
     let { policy, state } = await loadStateAndPolicy(jobDir);
+    ensureSafetyState(state, policy);
     if (args.clearRepair) {
         state.repairRequired = false;
         state.status = 'ready_after_repair';
+        state.safety.lastSafetyBlock = null;
         await saveState(jobDir, state);
         await appendEvent(jobDir, {
             type: 'REPAIR_CLEARED',
@@ -787,6 +959,11 @@ async function runController(args = parseArgs()) {
                 risk: previousProgress.risk || 'repair_required'
             });
             await appendEvent(jobDir, { type: 'JOB_BLOCKED', iteration: state.iteration || 0, summary: 'repair required before next task', failureCategory: 'blocked' });
+            break;
+        }
+        const preRunSafetyGate = evaluateSafetyGate(policy, state);
+        if (!args.dryRun && preRunSafetyGate.block) {
+            await blockForSafetyGate(jobDir, state, preRunSafetyGate, { iteration: state.iteration || 0, policy });
             break;
         }
         const task = selectNextTask({ state, policy, args });
@@ -839,7 +1016,6 @@ async function runController(args = parseArgs()) {
             risk: 'none'
         });
         const { verdict, paths } = await executeTask({ task, iterationDir, runId, policy, args });
-        const canContinueAfterVerdict = !verdict.ok && shouldContinueAfterVerdict(policy, verdict);
         await appendEvent(jobDir, {
             type: 'VERDICT_CREATED',
             iteration,
@@ -853,6 +1029,11 @@ async function runController(args = parseArgs()) {
         state.completedTaskIds = Array.isArray(state.completedTaskIds) ? state.completedTaskIds : [];
         state.failedTaskIds = Array.isArray(state.failedTaskIds) ? state.failedTaskIds : [];
         state.repairBacklog = Array.isArray(state.repairBacklog) ? state.repairBacklog : [];
+        recordSafetyOutcome(state, { task, verdict, policy });
+        const postVerdictSafetyGate = !verdict.ok && !args.dryRun
+            ? evaluateSafetyGate(policy, state, { verdict, task })
+            : { block: false, reason: 'ok' };
+        const canContinueAfterVerdict = !verdict.ok && !postVerdictSafetyGate.block && shouldContinueAfterVerdict(policy, verdict);
         if (verdict.ok) {
             if (!state.completedTaskIds.includes(task.taskId)) {
                 state.completedTaskIds.push(task.taskId);
@@ -893,21 +1074,47 @@ async function runController(args = parseArgs()) {
                 });
             } else {
                 state.repairRequired = true;
+                if (postVerdictSafetyGate.block) {
+                    state.safety.lastSafetyBlock = {
+                        at: isoNow(),
+                        reason: postVerdictSafetyGate.reason,
+                        summary: postVerdictSafetyGate.summary
+                    };
+                }
             }
         }
         await saveState(jobDir, state);
         await updateProgress(jobDir, {
             status: state.status,
             iteration,
-            currentAction: args.dryRun ? 'dry run planned' : (verdict.ok ? 'iteration accepted' : (canContinueAfterVerdict ? 'repair ticket queued; continuing' : 'repair ticket created')),
+            currentAction: args.dryRun
+                ? 'dry run planned'
+                : (verdict.ok
+                    ? 'iteration accepted'
+                    : (postVerdictSafetyGate.block ? `safety gate blocked: ${postVerdictSafetyGate.reason}` : (canContinueAfterVerdict ? 'repair ticket queued; continuing' : 'repair ticket created'))),
             activeAgentRuns: 0,
             completedSteps: state.completedTaskIds.length,
             failedSteps: state.failedTaskIds.length,
             latestArtifactPath: paths.verdictPath,
-            latestEvidence: verdict.summary,
-            nextAction: verdict.ok ? verdict.nextAction : (canContinueAfterVerdict ? 'continue with next task while repair backlog remains open' : verdict.nextAction),
-            risk: verdict.ok ? 'none' : (canContinueAfterVerdict ? `repair_backlog:${verdict.failureCategory || 'unknown'}` : (verdict.failureCategory || 'none'))
+            latestEvidence: postVerdictSafetyGate.block ? postVerdictSafetyGate.summary : verdict.summary,
+            nextAction: verdict.ok
+                ? verdict.nextAction
+                : (postVerdictSafetyGate.block ? postVerdictSafetyGate.nextAction : (canContinueAfterVerdict ? 'continue with next task while repair backlog remains open' : verdict.nextAction)),
+            risk: verdict.ok
+                ? 'none'
+                : (postVerdictSafetyGate.block
+                    ? (postVerdictSafetyGate.failureCategory === 'environment' ? 'environment' : `spend_safety:${postVerdictSafetyGate.reason}`)
+                    : (canContinueAfterVerdict ? `repair_backlog:${verdict.failureCategory || 'unknown'}` : (verdict.failureCategory || 'none')))
         });
+        if (!verdict.ok && !args.dryRun && !canContinueAfterVerdict) {
+            await appendEvent(jobDir, {
+                type: 'JOB_BLOCKED',
+                iteration,
+                summary: postVerdictSafetyGate.block ? postVerdictSafetyGate.summary : verdict.nextAction,
+                artifactPaths: [paths.verdictPath].filter(Boolean),
+                failureCategory: postVerdictSafetyGate.block ? (postVerdictSafetyGate.failureCategory || 'spend_safety') : (verdict.failureCategory || 'blocked')
+            });
+        }
         if (!verdict.ok && !args.dryRun && (policy.stopWhen || []).includes('repair_required') && !canContinueAfterVerdict) {
             break;
         }
@@ -933,9 +1140,14 @@ export {
     buildPracticeTasks,
     classifyGaiaResult,
     discoverOfficialDatasetDir,
+    ensureSafetyState,
+    evaluateSafetyGate,
     extractExecutionChain,
+    isEmptyAnswerVerdict,
     normalizeAnswer,
     parseArgs,
+    recordSafetyOutcome,
+    resolveSafetyPolicy,
     resolveTaskRetries,
     runController,
     shouldContinueAfterFailure,
