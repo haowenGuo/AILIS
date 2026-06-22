@@ -197,7 +197,7 @@ class AILISToolRuntimeRegistry {
     }
 
     async dispatchDirectMcpTool(directMcp, args = {}, context = {}) {
-        const { toolArgs, meta } = normalizeAilisMcpCallArgs(args);
+        const { toolArgs, meta } = normalizeAilisMcpCallArgs(args, { tool: directMcp.tool });
         const output = await this.runtime.executeMcpBridge(
             {
                 action: 'call_tool',

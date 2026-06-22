@@ -20,6 +20,10 @@ function normalizeText(value, fallback = '') {
     return trimmed || fallback;
 }
 
+function stripJsonBom(text = '') {
+    return typeof text === 'string' ? text.replace(/^\uFEFF/, '') : '';
+}
+
 function isoNow() {
     return new Date().toISOString();
 }
@@ -236,7 +240,7 @@ function parseArgs(argv = process.argv.slice(2)) {
 
 async function readJson(filePath, fallback) {
     try {
-        return JSON.parse(await fs.readFile(filePath, 'utf8'));
+        return JSON.parse(stripJsonBom(await fs.readFile(filePath, 'utf8')));
     } catch {
         return fallback;
     }
@@ -552,14 +556,14 @@ async function readJsonIfExists(filePath) {
     if (!filePath || !fsSync.existsSync(filePath)) {
         return null;
     }
-    return JSON.parse(await fs.readFile(filePath, 'utf8'));
+    return JSON.parse(stripJsonBom(await fs.readFile(filePath, 'utf8')));
 }
 
 async function readJsonlIfExists(filePath) {
     if (!filePath || !fsSync.existsSync(filePath)) {
         return [];
     }
-    const lines = (await fs.readFile(filePath, 'utf8')).split(/\r?\n/).filter(Boolean);
+    const lines = stripJsonBom(await fs.readFile(filePath, 'utf8')).split(/\r?\n/).filter(Boolean);
     return lines.map((line) => {
         try {
             return JSON.parse(line);
@@ -597,6 +601,7 @@ function summarizeStep(step = {}, index = 0) {
 function extractExecutionChain({ task, result = {}, processResult = {}, summary = null } = {}) {
     const steps = Array.isArray(result.steps) ? result.steps.map(summarizeStep) : [];
     const toolCounts = {};
+    const perTask = findScorePerTask({ task, result, summary });
     for (const step of steps) {
         const key = step.tool || '(unknown)';
         toolCounts[key] = (toolCounts[key] || 0) + 1;
@@ -606,9 +611,13 @@ function extractExecutionChain({ task, result = {}, processResult = {}, summary 
         resultTaskId: result.task_id || '',
         source: task.source,
         title: task.title,
-        expectedAnswer: task.expectedAnswer || '',
+        question: normalizeText(task.question || result.question),
+        fileName: normalizeText(task.fileName || result.file_name),
+        filePath: normalizeText(task.filePath || result.file_path),
+        expectedAnswer: task.expectedAnswer || perTask?.final_answer || '',
         submittedAnswer: result.submitted_answer || '',
         answerGate: result.answer_gate || null,
+        finalizer: result.finalizer || null,
         ok: result.ok === true,
         status: result.status || '',
         durationMs: result.durationMs || processResult.durationMs || 0,
@@ -624,6 +633,33 @@ function extractExecutionChain({ task, result = {}, processResult = {}, summary 
             stderrTail: normalizeText(processResult.stderr).slice(-2000)
         }
     };
+}
+
+function enrichTaskFromGaiaResult(task = {}, result = {}) {
+    const enriched = { ...task };
+    const question = normalizeText(result.question);
+    const fileName = normalizeText(result.file_name);
+    const filePath = normalizeText(result.file_path);
+    const resultTaskId = normalizeText(result.task_id);
+    if (question && !normalizeText(enriched.question)) {
+        enriched.question = question;
+    }
+    if (fileName && !normalizeText(enriched.fileName)) {
+        enriched.fileName = fileName;
+    }
+    if (filePath && !normalizeText(enriched.filePath)) {
+        enriched.filePath = filePath;
+    }
+    if (resultTaskId && resultTaskId !== normalizeText(enriched.taskId)) {
+        enriched.gaiaTaskId = resultTaskId;
+    }
+    if (result.answer_gate) {
+        enriched.lastAnswerGate = result.answer_gate;
+    }
+    if (result.finalizer) {
+        enriched.lastFinalizer = result.finalizer;
+    }
+    return enriched;
 }
 
 function findScorePerTask({ task = {}, result = {}, summary = null } = {}) {
@@ -691,6 +727,30 @@ function classifyGaiaResult({ task = {}, result = {}, chain = {}, processResult 
     if (perTask && perTask.correct !== true) {
         const submitted = normalizeText(perTask.submitted_answer || result.submitted_answer || '(empty)');
         const finalAnswer = normalizeText(perTask.final_answer || expected || '(unknown)');
+        if (/web_fetch|web_search|js_shell|thin_content|HTTP 403|HTTP 404|access_challenge|miyoushe|crawl4ai/i.test(statusText)) {
+            return {
+                ok: false,
+                status: 'failed',
+                failureCategory: 'web_retrieval_mcp',
+                optimizationFocus: 'web_search_web_fetch_mcp',
+                generalizedCapability: 'robust_web_retrieval_and_rendered_extraction',
+                summary: `Local GAIA scorer rejected web-derived answer (${submitted}); expected ${finalAnswer}. The failed chain should be repaired at the retrieval/evidence layer before finalization.`,
+                nextAction: 'patch generalized web_search/web_fetch evidence selection, source following, or rendered extraction before rerunning',
+                emptyAnswer: normalizeAnswer(submitted) === normalizeAnswer('(empty)')
+            };
+        }
+        if (/describe_image|read_document|read_spreadsheet|read_presentation|pdf_extract|pdf_find|transcribe_audio|download_file/i.test(statusText)) {
+            return {
+                ok: false,
+                status: 'failed',
+                failureCategory: 'tools_mcp',
+                optimizationFocus: /describe_image/i.test(statusText) ? 'vision_artifact_extraction_mcp' : 'artifact_tools_mcp',
+                generalizedCapability: /describe_image/i.test(statusText) ? 'robust_image_ocr_and_visual_extraction' : (task.capabilityClass || 'artifact_reading_tools'),
+                summary: `Local GAIA scorer rejected tool-derived answer (${submitted}); expected ${finalAnswer}. The failed chain used artifact/MCP tools, so repair extraction/schema/evidence quality before changing the agent.`,
+                nextAction: 'patch the relevant MCP/tool contract, extraction quality, or evidence handoff and add a focused regression',
+                emptyAnswer: normalizeAnswer(submitted) === normalizeAnswer('(empty)')
+            };
+        }
         return {
             ok: false,
             status: 'failed',
@@ -768,6 +828,9 @@ function buildRepairTicket({ task, chain, verdict }) {
         '',
         `- Source: ${task.source}`,
         `- Title: ${task.title}`,
+        task.question ? `- Question: ${normalizeText(task.question).slice(0, 1000)}` : null,
+        task.fileName ? `- File: ${task.fileName}` : null,
+        task.filePath ? `- File path: ${task.filePath}` : null,
         `- Failure category: ${verdict.failureCategory || '(none)'}`,
         `- Optimization focus: ${verdict.optimizationFocus || '(none)'}`,
         `- Generalized capability: ${verdict.generalizedCapability || '(none)'}`,
@@ -799,7 +862,7 @@ function buildRepairTicket({ task, chain, verdict }) {
             ''
         ].join('\n')),
         ''
-    ].join('\n');
+    ].filter((line) => line !== null).join('\n');
 }
 
 async function analyzeRun({ task, iterationDir, runId, outputDir, processResult }) {
@@ -812,22 +875,28 @@ async function analyzeRun({ task, iterationDir, runId, outputDir, processResult 
         status: processResult.ok ? 'missing_result_jsonl' : 'runner_error',
         error: processResult.error || processResult.stderr || 'result jsonl missing'
     };
-    const chain = extractExecutionChain({ task, result, processResult, summary });
-    const verdict = classifyGaiaResult({ task, result, chain, processResult, summary });
+    const enrichedTask = enrichTaskFromGaiaResult(task, result);
+    const chain = extractExecutionChain({ task: enrichedTask, result, processResult, summary });
+    const verdict = classifyGaiaResult({ task: enrichedTask, result, chain, processResult, summary });
     const chainPath = path.join(iterationDir, 'chain.json');
     const verdictPath = path.join(iterationDir, 'verdict.json');
     const repairTicketPath = path.join(iterationDir, 'repair-ticket.md');
+    await writeJson(path.join(iterationDir, 'task.json'), enrichedTask);
     await writeJson(chainPath, chain);
     await writeJson(verdictPath, {
         ...verdict,
-        taskId: task.taskId,
-        source: task.source,
+        taskId: enrichedTask.taskId,
+        source: enrichedTask.source,
+        gaiaTaskId: enrichedTask.gaiaTaskId || '',
+        question: enrichedTask.question || '',
+        fileName: enrichedTask.fileName || '',
+        filePath: enrichedTask.filePath || '',
         chainPath,
         summaryPath: fsSync.existsSync(summaryPath) ? summaryPath : '',
         resultPath: fsSync.existsSync(resultPath) ? resultPath : ''
     });
     if (!verdict.ok || verdict.optimizationFocus === 'efficiency') {
-        await fs.writeFile(repairTicketPath, buildRepairTicket({ task, chain, verdict }), 'utf8');
+        await fs.writeFile(repairTicketPath, buildRepairTicket({ task: enrichedTask, chain, verdict }), 'utf8');
     }
     return { chain, verdict, paths: { chainPath, verdictPath, repairTicketPath, summaryPath, resultPath } };
 }
@@ -1140,6 +1209,7 @@ export {
     buildPracticeTasks,
     classifyGaiaResult,
     discoverOfficialDatasetDir,
+    enrichTaskFromGaiaResult,
     ensureSafetyState,
     evaluateSafetyGate,
     extractExecutionChain,

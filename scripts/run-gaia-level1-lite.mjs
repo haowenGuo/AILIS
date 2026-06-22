@@ -214,6 +214,7 @@ function buildBenchmarkMessage(question, filePath) {
         'For attached PowerPoint files, prefer mcp__ailis_research__read_presentation. For category/count questions such as "slides that mention crustaceans", count semantic members of the category (for example crab, crayfish, isopod), not only exact occurrences of the category word.',
         'For attached Word/DOCX files, prefer mcp__ailis_research__read_document so paragraphs and tables remain structured evidence for the finalizer. If read_document succeeds, reason from its returned structure and move to final_answer; do not fall back to exec/raw DOCX reads unless the parser is missing the needed section.',
         'For attached audio/image/code files, use the file contents as primary evidence; do not guess from the filename.',
+        'For attached image OCR/list-extraction tasks, ask describe_image to separate raw visible text from the final requested answer. If the question asks for sample-problem answers, solve those samples and do not include the unsolved operands unless the question explicitly asks for them. For long ordered lists, verify count/order before final_answer.',
         '',
         'Question:',
         question.question

@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
     buildPracticeTasks,
     classifyGaiaResult,
+    enrichTaskFromGaiaResult,
     ensureSafetyState,
     evaluateSafetyGate,
     extractExecutionChain,
@@ -91,7 +92,7 @@ test('GAIA auto optimizer classifies successful high-loop tasks as efficiency wo
     assert.equal(verdict.optimizationFocus, 'efficiency');
 });
 
-test('GAIA auto optimizer does not accept official runner success when scorer rejects answer', () => {
+test('GAIA auto optimizer routes rejected web-derived answers to retrieval repair', () => {
     const task = {
         taskId: 'official-validation-l1-offset-0',
         source: 'official',
@@ -123,7 +124,8 @@ test('GAIA auto optimizer does not accept official runner success when scorer re
     const verdict = classifyGaiaResult({ task, result, chain, processResult: { ok: true }, summary });
 
     assert.equal(verdict.ok, false);
-    assert.equal(verdict.failureCategory, 'harness_finalization');
+    assert.equal(verdict.failureCategory, 'web_retrieval_mcp');
+    assert.equal(verdict.optimizationFocus, 'web_search_web_fetch_mcp');
     assert.match(verdict.summary, /1000/);
     assert.match(verdict.summary, /17/);
 });
@@ -209,6 +211,71 @@ test('GAIA auto optimizer classifies web JS shell failures as web retrieval MCP 
     const chain = extractExecutionChain({ task, result, processResult: { ok: true }, summary: null });
     const verdict = classifyGaiaResult({ task, result, chain, processResult: { ok: true }, summary: null });
     assert.equal(verdict.failureCategory, 'web_retrieval_mcp');
+});
+
+test('GAIA auto optimizer classifies rejected describe_image answers as tool extraction work', () => {
+    const task = { taskId: 'official-validation-l1-offset-21', source: 'official', title: 'image fractions' };
+    const result = {
+        ok: true,
+        status: 'completed',
+        submitted_answer: '3/4,1/4,6/8,4/60',
+        steps: [{
+            tool: 'mcp__ailis_research__describe_image',
+            title: 'Extract ordered fractions from image',
+            args: { image_path: 'fraction-page.png' },
+            response: {
+                ok: true,
+                status: 'completed',
+                result: {
+                    content: [{ type: 'text', text: '3/4,1/4,6/8,4/60' }],
+                    structuredContent: {
+                        ok: true,
+                        status: 'completed',
+                        path: 'fraction-page.png'
+                    }
+                }
+            }
+        }]
+    };
+    const summary = {
+        score: {
+            per_task: [{
+                task_id: 'official-gaia-image-task',
+                correct: false,
+                submitted_answer: result.submitted_answer,
+                final_answer: '3/4,1/4,3/4,1/15'
+            }]
+        }
+    };
+    const chain = extractExecutionChain({ task, result, processResult: { ok: true }, summary });
+    const verdict = classifyGaiaResult({ task, result, chain, processResult: { ok: true }, summary });
+    assert.equal(verdict.failureCategory, 'tools_mcp');
+    assert.equal(verdict.optimizationFocus, 'vision_artifact_extraction_mcp');
+    assert.equal(verdict.generalizedCapability, 'robust_image_ocr_and_visual_extraction');
+});
+
+test('GAIA auto optimizer enriches official task shells from runner result evidence', () => {
+    const task = {
+        source: 'official',
+        taskId: 'official-validation-l1-offset-21',
+        offset: 21,
+        title: 'Official GAIA validation level 1 offset 21'
+    };
+    const result = {
+        task_id: '9318445f-fe6a-4e1b-acbf-c68228c9906a',
+        question: 'Using the provided image provide all fractions and sample answers.',
+        file_name: '9318445f-fe6a-4e1b-acbf-c68228c9906a.png',
+        file_path: '2023/validation/9318445f-fe6a-4e1b-acbf-c68228c9906a.png',
+        answer_gate: { source: 'agent_final_answer', status: 'accepted' },
+        finalizer: { ok: false, status: 'missing_evidence' }
+    };
+    const enriched = enrichTaskFromGaiaResult(task, result);
+    assert.equal(enriched.gaiaTaskId, result.task_id);
+    assert.equal(enriched.question, result.question);
+    assert.equal(enriched.fileName, result.file_name);
+    assert.equal(enriched.filePath, result.file_path);
+    assert.deepEqual(enriched.lastAnswerGate, result.answer_gate);
+    assert.deepEqual(enriched.lastFinalizer, result.finalizer);
 });
 
 test('GAIA auto optimizer resolves conservative spend-safety defaults', () => {

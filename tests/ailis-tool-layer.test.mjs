@@ -26,6 +26,7 @@ const {
 const {
     createAilisDirectMcpToolSpec,
     normalizeAilisMcpCallArgs,
+    normalizeAilisMcpToolArgs,
     parseAilisDirectMcpToolId
 } = require('../electron/ailis-mcp-adapter.cjs');
 const {
@@ -242,6 +243,23 @@ test('AILIS MCP adapter parses direct MCP ids and creates stable specs', () => {
     });
     assert.deepEqual(toolArgs, { text: 'hello' });
     assert.deepEqual(meta, { reason: 'test' });
+
+    const imageArgs = normalizeAilisMcpToolArgs({
+        tool: 'describe_image',
+        args: {
+            image_path: 'C:\\tmp\\screen.png',
+            question: 'What is shown?'
+        }
+    });
+    assert.equal(imageArgs.path, 'C:\\tmp\\screen.png');
+    assert.equal(imageArgs.image_path, 'C:\\tmp\\screen.png');
+
+    const normalizedImageCall = normalizeAilisMcpCallArgs({
+        imagePath: 'C:\\tmp\\screen-2.png',
+        _meta: { reason: 'vision retry' }
+    }, { tool: 'describe_image' });
+    assert.equal(normalizedImageCall.toolArgs.path, 'C:\\tmp\\screen-2.png');
+    assert.deepEqual(normalizedImageCall.meta, { reason: 'vision retry' });
 });
 
 function mcpTool(name, description = '') {

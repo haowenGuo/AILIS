@@ -172,6 +172,30 @@ function buildAilisMcpToolCallArgs({ tool = '', schemaProperties = [], inputSche
     return Object.fromEntries((schemaProperties || []).map((key) => [key, `<${key}>`]));
 }
 
+function pickFirstString(source = {}, keys = []) {
+    for (const key of keys) {
+        const value = source?.[key];
+        if (typeof value === 'string' && value.trim()) {
+            return value.trim();
+        }
+    }
+    return '';
+}
+
+function normalizeAilisMcpToolArgs({ tool = '', args = {} } = {}) {
+    const normalizedTool = normalizeString(tool).toLowerCase();
+    const toolArgs = args && typeof args === 'object' && !Array.isArray(args)
+        ? { ...args }
+        : {};
+    if (normalizedTool === 'describe_image' && !normalizeString(toolArgs.path)) {
+        const pathAlias = pickFirstString(toolArgs, ['image_path', 'imagePath', 'file_path', 'filePath', 'file']);
+        if (pathAlias) {
+            toolArgs.path = pathAlias;
+        }
+    }
+    return toolArgs;
+}
+
 function sanitizeCodexMcpNamePart(value, fallback = '') {
     const raw = normalizeString(value, fallback);
     const sanitized = raw
@@ -290,14 +314,17 @@ function createAilisDirectMcpToolSpec({ id, server, tool, name, title, descripti
     };
 }
 
-function normalizeAilisMcpCallArgs(args = {}) {
+function normalizeAilisMcpCallArgs(args = {}, options = {}) {
     const toolArgs = args && typeof args === 'object' && !Array.isArray(args)
         ? { ...args }
         : {};
     const meta = toolArgs._meta || toolArgs.meta;
     delete toolArgs._meta;
     delete toolArgs.meta;
-    return { toolArgs, meta };
+    return {
+        toolArgs: normalizeAilisMcpToolArgs({ tool: options.tool, args: toolArgs }),
+        meta
+    };
 }
 
 module.exports = {
@@ -308,6 +335,7 @@ module.exports = {
     createAilisDirectMcpToolSpec,
     enhanceAilisMcpToolSchema,
     normalizeAilisMcpCallArgs,
+    normalizeAilisMcpToolArgs,
     parseAilisDirectMcpToolId,
     sanitizeCodexMcpNamePart
 };
