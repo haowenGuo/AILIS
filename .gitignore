@@ -23,6 +23,7 @@ tmp/
 build-cache/
 logs/
 .codex-run/
+longrun/
 .ailis-rollback/
 .ailis-state/
 .runtime-logs/
