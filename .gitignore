@@ -50,6 +50,7 @@ longrun/jobs/**/iterations/**/gateway-audit/
 longrun/jobs/**/iterations/**/artifacts/
 
 # Local task scratch files
+_santa_dump.txt
 kaggle_current.png
 search_result*.html
 search_result*.txt
