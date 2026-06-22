@@ -1,11 +1,14 @@
 appId: com.ailis.desktop
 productName: AILIS
 artifactName: ${productName}-${version}-${arch}.${ext}
+icon: build/icon.png
 directories:
   output: F:/AILIS/Build/AILIS
 files:
   - dist/**/*
   - electron/**/*
+  - scripts/mcp-ailis-research-server.cjs
+  - scripts/ailis-crawl4ai-worker.py
   - package.json
 extraResources:
   - from: Resources/speech-models
@@ -14,13 +17,17 @@ extraResources:
     to: openclaw-runtime
   - from: build-cache/openclaw-vendor
     to: openclaw-vendor
+  - from: build-cache/ailis-web-runtime
+    to: ailis-web-runtime
 extraMetadata:
   main: electron/main.cjs
 asar: true
 asarUnpack:
   - electron/**/*.py
+  - scripts/**/*.py
 npmRebuild: false
 win:
+  icon: build/icon.ico
   executableName: AILIS
   signAndEditExecutable: false
   target:
@@ -35,6 +42,7 @@ nsis:
 portable:
   artifactName: ${productName}-Portable-${version}-win-${arch}.${ext}
 linux:
+  icon: build/icon.png
   executableName: ailis
   category: Utility
   target:

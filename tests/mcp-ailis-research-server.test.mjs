@@ -17,6 +17,7 @@ const {
     buildYouTubeEvidenceSearchQuery,
     buildYouTubeOEmbedUrl,
     classifyYtDlpFailure,
+    crawl4aiFetchConfig,
     extractArxivCandidatesFromAtom,
     extractBingResults,
     extractDuckDuckGoHtmlResults,
@@ -1937,6 +1938,92 @@ print(json.dumps({
         assert.equal(result.structuredContent.observedLinkCount, 1);
         assert.match(result.content[0].text, /local Crawl4AI worker/);
     });
+});
+
+test('web_fetch Crawl4AI config prefers packaged private web runtime Python', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ailis-web-runtime-'));
+    const runtimeDir = path.join(tempDir, 'ailis-web-runtime');
+    const workerPath = path.join(tempDir, 'fake-crawl4ai-worker.py');
+    const browsersPath = path.join(runtimeDir, 'ms-playwright');
+    const venvPython = process.platform === 'win32'
+        ? path.join(runtimeDir, 'crawl4ai-venv', 'Scripts', 'python.exe')
+        : path.join(runtimeDir, 'crawl4ai-venv', 'bin', 'python');
+    fs.mkdirSync(path.dirname(venvPython), { recursive: true });
+    fs.mkdirSync(path.dirname(workerPath), { recursive: true });
+    fs.mkdirSync(browsersPath, { recursive: true });
+    fs.writeFileSync(venvPython, '', 'utf8');
+    fs.writeFileSync(workerPath, '', 'utf8');
+
+    const previousRuntimeDir = process.env.AILIS_WEB_RUNTIME_DIR;
+    const previousCrawl4aiPython = process.env.AILIS_CRAWL4AI_PYTHON;
+    const previousAilisPython = process.env.AILIS_PYTHON;
+    const previousAilisPlaywrightBrowsersPath = process.env.AILIS_PLAYWRIGHT_BROWSERS_PATH;
+    const previousPlaywrightBrowsersPath = process.env.PLAYWRIGHT_BROWSERS_PATH;
+    try {
+        process.env.AILIS_WEB_RUNTIME_DIR = runtimeDir;
+        delete process.env.AILIS_CRAWL4AI_PYTHON;
+        delete process.env.AILIS_PYTHON;
+        delete process.env.AILIS_PLAYWRIGHT_BROWSERS_PATH;
+        delete process.env.PLAYWRIGHT_BROWSERS_PATH;
+
+        const config = crawl4aiFetchConfig({
+            provider: 'crawl4ai',
+            crawl4aiWorker: workerPath
+        });
+
+        assert.equal(config.mode, 'local_worker');
+        assert.equal(path.normalize(config.workerPath), path.normalize(workerPath));
+        assert.equal(path.normalize(config.python), path.normalize(venvPython));
+        assert.equal(path.normalize(config.playwrightBrowsersPath), path.normalize(browsersPath));
+    } finally {
+        if (previousRuntimeDir === undefined) delete process.env.AILIS_WEB_RUNTIME_DIR;
+        else process.env.AILIS_WEB_RUNTIME_DIR = previousRuntimeDir;
+        if (previousCrawl4aiPython === undefined) delete process.env.AILIS_CRAWL4AI_PYTHON;
+        else process.env.AILIS_CRAWL4AI_PYTHON = previousCrawl4aiPython;
+        if (previousAilisPython === undefined) delete process.env.AILIS_PYTHON;
+        else process.env.AILIS_PYTHON = previousAilisPython;
+        if (previousAilisPlaywrightBrowsersPath === undefined) delete process.env.AILIS_PLAYWRIGHT_BROWSERS_PATH;
+        else process.env.AILIS_PLAYWRIGHT_BROWSERS_PATH = previousAilisPlaywrightBrowsersPath;
+        if (previousPlaywrightBrowsersPath === undefined) delete process.env.PLAYWRIGHT_BROWSERS_PATH;
+        else process.env.PLAYWRIGHT_BROWSERS_PATH = previousPlaywrightBrowsersPath;
+    }
+});
+
+test('web_fetch Crawl4AI config can resolve uv-managed packaged Python layout', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ailis-web-runtime-managed-python-'));
+    const runtimeDir = path.join(tempDir, 'ailis-web-runtime');
+    const workerPath = path.join(tempDir, 'fake-crawl4ai-worker.py');
+    const managedPython = process.platform === 'win32'
+        ? path.join(runtimeDir, 'python', 'cpython-3.12-windows-x86_64-none', 'python.exe')
+        : path.join(runtimeDir, 'python', 'cpython-3.12-linux-x86_64-gnu', 'bin', 'python');
+    fs.mkdirSync(path.dirname(managedPython), { recursive: true });
+    fs.mkdirSync(path.dirname(workerPath), { recursive: true });
+    fs.writeFileSync(managedPython, '', 'utf8');
+    fs.writeFileSync(workerPath, '', 'utf8');
+
+    const previousRuntimeDir = process.env.AILIS_WEB_RUNTIME_DIR;
+    const previousCrawl4aiPython = process.env.AILIS_CRAWL4AI_PYTHON;
+    const previousAilisPython = process.env.AILIS_PYTHON;
+    try {
+        process.env.AILIS_WEB_RUNTIME_DIR = runtimeDir;
+        delete process.env.AILIS_CRAWL4AI_PYTHON;
+        delete process.env.AILIS_PYTHON;
+
+        const config = crawl4aiFetchConfig({
+            provider: 'crawl4ai',
+            crawl4aiWorker: workerPath
+        });
+
+        assert.equal(config.mode, 'local_worker');
+        assert.equal(path.normalize(config.python), path.normalize(managedPython));
+    } finally {
+        if (previousRuntimeDir === undefined) delete process.env.AILIS_WEB_RUNTIME_DIR;
+        else process.env.AILIS_WEB_RUNTIME_DIR = previousRuntimeDir;
+        if (previousCrawl4aiPython === undefined) delete process.env.AILIS_CRAWL4AI_PYTHON;
+        else process.env.AILIS_CRAWL4AI_PYTHON = previousCrawl4aiPython;
+        if (previousAilisPython === undefined) delete process.env.AILIS_PYTHON;
+        else process.env.AILIS_PYTHON = previousAilisPython;
+    }
 });
 
 test('web_fetch reports local Crawl4AI missing dependency and falls back safely', async () => {

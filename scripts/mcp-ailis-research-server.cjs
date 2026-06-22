@@ -3122,6 +3122,95 @@ const DEFAULT_CRAWL4AI_URL = 'http://127.0.0.1:11235';
 const DEFAULT_CRAWL4AI_WORKER = path.join(__dirname, 'ailis-crawl4ai-worker.py');
 const CRAWL4AI_FETCH_PROVIDERS = new Set(['crawl4ai', 'rendered', 'browser', 'crawl4ai_rendered', 'crawl4ai-style', 'crawl4ai_style']);
 const RENDERED_FALLBACK_EVIDENCE_QUALITIES = new Set(['js_shell', 'thin_content']);
+const PROJECT_ROOT = path.resolve(__dirname, '..');
+
+function executableName(name) {
+    return process.platform === 'win32' ? `${name}.exe` : name;
+}
+
+function venvPythonPath(venvDir) {
+    return process.platform === 'win32'
+        ? path.join(venvDir, 'Scripts', 'python.exe')
+        : path.join(venvDir, 'bin', 'python');
+}
+
+function asarUnpackedPath(filePath = '') {
+    return normalizeString(filePath).replace(/\.asar([/\\])/, '.asar.unpacked$1');
+}
+
+function firstExistingPath(paths = []) {
+    for (const candidate of paths) {
+        const normalized = normalizeString(candidate);
+        if (normalized && fsSync.existsSync(normalized)) {
+            return normalized;
+        }
+    }
+    return '';
+}
+
+function managedPythonExecutableCandidates(pythonRoot = '') {
+    const root = normalizeString(pythonRoot);
+    if (!root) {
+        return [];
+    }
+    const candidates = [
+        path.join(root, executableName('python')),
+        path.join(root, 'python.exe'),
+        path.join(root, 'bin', 'python')
+    ];
+    try {
+        for (const entry of fsSync.readdirSync(root, { withFileTypes: true })) {
+            if (!entry.isDirectory()) {
+                continue;
+            }
+            const child = path.join(root, entry.name);
+            candidates.push(path.join(child, executableName('python')));
+            candidates.push(path.join(child, 'python.exe'));
+            candidates.push(path.join(child, 'bin', 'python'));
+            candidates.push(path.join(child, 'install', 'bin', 'python'));
+        }
+    } catch {
+        // Missing runtime directories are expected in development and fallback mode.
+    }
+    return candidates;
+}
+
+function ailisWebRuntimeRoots() {
+    const roots = [
+        process.env.AILIS_WEB_RUNTIME_DIR,
+        process.env.AILIS_LOCAL_RUNTIME_DIR,
+        process.resourcesPath ? path.join(process.resourcesPath, 'ailis-web-runtime') : '',
+        path.join(PROJECT_ROOT, 'build-cache', 'ailis-web-runtime'),
+        path.join(PROJECT_ROOT, '.ailis-runtime')
+    ];
+    return roots.map((root) => normalizeString(root)).filter(Boolean);
+}
+
+function resolveBundledCrawl4aiPython() {
+    const candidates = [];
+    for (const root of ailisWebRuntimeRoots()) {
+        candidates.push(venvPythonPath(path.join(root, 'crawl4ai-venv')));
+        candidates.push(...managedPythonExecutableCandidates(path.join(root, 'python')));
+    }
+    return firstExistingPath(candidates);
+}
+
+function resolveBundledPlaywrightBrowsersPath() {
+    const candidates = [];
+    for (const root of ailisWebRuntimeRoots()) {
+        candidates.push(path.join(root, 'ms-playwright'));
+        candidates.push(path.join(root, 'playwright-browsers'));
+    }
+    return firstExistingPath(candidates);
+}
+
+function resolveBundledCrawl4aiWorker() {
+    return firstExistingPath([
+        asarUnpackedPath(DEFAULT_CRAWL4AI_WORKER),
+        process.resourcesPath ? path.join(process.resourcesPath, 'app.asar.unpacked', 'scripts', 'ailis-crawl4ai-worker.py') : '',
+        DEFAULT_CRAWL4AI_WORKER
+    ]) || DEFAULT_CRAWL4AI_WORKER;
+}
 
 function normalizeBaseUrl(value = '') {
     return normalizeString(value).replace(/\/+$/g, '');
@@ -3183,7 +3272,7 @@ function crawl4aiWorkerPath(args = {}) {
     return path.resolve(
         normalizeString(args.crawl4aiWorker || args.crawl4ai_worker) ||
         normalizeString(process.env.AILIS_CRAWL4AI_WORKER || process.env.CRAWL4AI_WORKER) ||
-        DEFAULT_CRAWL4AI_WORKER
+        resolveBundledCrawl4aiWorker()
     );
 }
 
@@ -3204,6 +3293,7 @@ function crawl4aiFetchConfig(args = {}) {
         args.crawl4ai_python ||
         process.env.AILIS_CRAWL4AI_PYTHON ||
         process.env.AILIS_PYTHON ||
+        resolveBundledCrawl4aiPython() ||
         'python',
         'python'
     );
@@ -3218,8 +3308,15 @@ function crawl4aiFetchConfig(args = {}) {
     }
     const workerPath = crawl4aiWorkerPath(args);
     const workerConfigured = hasConfiguredCrawl4aiWorker(args);
+    const playwrightBrowsersPath = normalizeString(
+        args.playwrightBrowsersPath ||
+        args.playwright_browsers_path ||
+        process.env.AILIS_PLAYWRIGHT_BROWSERS_PATH ||
+        process.env.PLAYWRIGHT_BROWSERS_PATH ||
+        resolveBundledPlaywrightBrowsersPath()
+    );
     if (CRAWL4AI_FETCH_PROVIDERS.has(provider)) {
-        return { mode: 'local_worker', workerPath, python, provider, configured: workerConfigured, probe: false };
+        return { mode: 'local_worker', workerPath, python, provider, configured: workerConfigured, probe: false, playwrightBrowsersPath };
     }
     if (provider === 'auto' && fsSync.existsSync(workerPath)) {
         return {
@@ -3228,7 +3325,8 @@ function crawl4aiFetchConfig(args = {}) {
             python,
             provider,
             configured: workerConfigured,
-            probe: !workerConfigured
+            probe: !workerConfigured,
+            playwrightBrowsersPath
         };
     }
     if (provider === 'auto') {
@@ -4222,7 +4320,12 @@ async function fetchWithLocalCrawl4aiWorker(url, config = {}, args = {}, timeout
     if (delayMs) {
         processArgs.push('--delay-ms', String(delayMs));
     }
-    const result = await runProcess(command, processArgs, { timeoutMs: effectiveTimeoutMs + 1000 });
+    const result = await runProcess(command, processArgs, {
+        timeoutMs: effectiveTimeoutMs + 1000,
+        env: config.playwrightBrowsersPath
+            ? { PLAYWRIGHT_BROWSERS_PATH: config.playwrightBrowsersPath }
+            : {}
+    });
     const payload = parseJsonFromProcessStdout(result.stdout);
     if (!payload) {
         return {
@@ -7705,7 +7808,11 @@ function runProcess(command, args, options = {}) {
         const child = spawn(command, args, {
             cwd: options.cwd || process.cwd(),
             windowsHide: true,
-            shell: false
+            shell: false,
+            env: {
+                ...process.env,
+                ...(options.env || {})
+            }
         });
         let stdout = '';
         let stderr = '';
@@ -9411,6 +9518,8 @@ module.exports = {
     buildYouTubeEvidenceSearchQuery,
     buildYouTubeOEmbedUrl,
     classifyYtDlpFailure,
+    crawl4aiFetchConfig,
+    crawl4aiWorkerPath,
     downloadFile,
     extractBingResults,
     extractArxivCandidatesFromAtom,
