@@ -162,3 +162,34 @@ test('voice runtime fast summary avoids full Python probing before diagnosis', (
     assert.equal(summary.status, 'needs_setup');
     assert.ok(summary.installPlan.steps.some((step) => step.id === 'install_portable_python'));
 });
+
+test('voice runtime fast summary detects packaged ASR runtime independently from TTS runtime', () => {
+    const bootstrap = createBootstrap();
+    const runtimeRoot = path.join(tempRoot, 'project', 'build-cache', 'ailis-asr-runtime');
+    fs.mkdirSync(runtimeRoot, { recursive: true });
+    const paths = bootstrap.getPaths();
+    fs.mkdirSync(path.dirname(paths.packagedAsrVenvPython), { recursive: true });
+    fs.writeFileSync(paths.packagedAsrVenvPython, '');
+    fs.mkdirSync(path.join(paths.packagedAsrCacheDir, 'hub', 'models--openai--whisper-small'), {
+        recursive: true
+    });
+    fs.writeFileSync(path.join(paths.packagedAsrRuntimeRoot, 'manifest.json'), JSON.stringify({
+        asrVenv: 'asr-venv',
+        asrPython: path.relative(paths.packagedAsrRuntimeRoot, paths.packagedAsrVenvPython).replace(/\\/g, '/'),
+        asrCache: 'asr-cache',
+        asrDependenciesReady: true,
+        dependencies: {
+            numpy: true,
+            torch: true,
+            transformers: true
+        }
+    }), 'utf8');
+
+    const summary = bootstrap.getFastSummary();
+
+    assert.equal(summary.asr.ok, true);
+    assert.equal(summary.asr.modelCached, true);
+    assert.equal(summary.preferredAsrPython, paths.packagedAsrVenvPython);
+    assert.equal(summary.preferredPython, '');
+    assert.equal(summary.cosyVoice3.ok, false);
+});

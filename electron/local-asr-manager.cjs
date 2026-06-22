@@ -4,6 +4,110 @@ const readline = require('readline');
 const { spawn, spawnSync } = require('child_process');
 const { getVenvPythonPath } = require('./voice-runtime-bootstrap.cjs');
 
+const PACKAGED_ASR_RUNTIME_DIRNAME = 'ailis-asr-runtime';
+const SPEECH_MODEL_DIRNAME = 'speech-models';
+
+function normalizeString(value) {
+    return String(value || '').trim();
+}
+
+function safeStat(filePath) {
+    try {
+        return fs.statSync(filePath);
+    } catch {
+        return null;
+    }
+}
+
+function isDirectory(filePath) {
+    return Boolean(safeStat(filePath)?.isDirectory());
+}
+
+function isFile(filePath) {
+    return Boolean(safeStat(filePath)?.isFile());
+}
+
+function uniqueCandidates(candidates = []) {
+    const seen = new Set();
+    return candidates.filter((candidate) => {
+        const key = path.resolve(normalizeString(candidate || '')).toLowerCase();
+        if (!key || seen.has(key)) {
+            return false;
+        }
+        seen.add(key);
+        return true;
+    });
+}
+
+function readJsonFile(filePath) {
+    try {
+        if (!isFile(filePath)) {
+            return null;
+        }
+        return JSON.parse(fs.readFileSync(filePath, 'utf8').replace(/^\uFEFF/, ''));
+    } catch {
+        return null;
+    }
+}
+
+function normalizeRelativePath(rootDir, relativePath) {
+    const rawPath = normalizeString(relativePath);
+    if (!rawPath) {
+        return '';
+    }
+    return path.isAbsolute(rawPath)
+        ? rawPath
+        : path.join(rootDir, rawPath);
+}
+
+function pythonLooksLikeAsrRuntime(command, args = [], env = {}) {
+    const probe = [
+        'import importlib.util, sys',
+        'missing = [name for name in ("numpy", "torch", "transformers") if importlib.util.find_spec(name) is None]',
+        'sys.exit(1 if missing else 0)'
+    ].join('; ');
+    const result = spawnSync(command, [...args, '-c', probe], {
+        windowsHide: true,
+        timeout: 20000,
+        encoding: 'utf8',
+        env: {
+            ...process.env,
+            ...env
+        }
+    });
+    return !result.error && result.status === 0;
+}
+
+function normalizeManifestPathList(rootDir, value) {
+    const values = Array.isArray(value)
+        ? value
+        : normalizeString(value)
+            ? String(value).split(path.delimiter)
+            : [];
+    return values
+        .map((item) => normalizeRelativePath(rootDir, item))
+        .filter(Boolean);
+}
+
+function buildRuntimeEnv(runtimeRoot, manifest = {}) {
+    const pythonPathEntries = normalizeManifestPathList(runtimeRoot, manifest.pythonPath);
+    const pathEntries = normalizeManifestPathList(runtimeRoot, manifest.pathAppend);
+    const env = {};
+    if (pythonPathEntries.length) {
+        env.PYTHONPATH = [
+            ...pythonPathEntries,
+            process.env.PYTHONPATH || ''
+        ].filter(Boolean).join(path.delimiter);
+    }
+    if (pathEntries.length) {
+        env.PATH = [
+            ...pathEntries,
+            process.env.PATH || ''
+        ].filter(Boolean).join(path.delimiter);
+    }
+    return env;
+}
+
 function normalizeBinaryPayload(payload) {
     if (!payload) {
         return Buffer.alloc(0);
@@ -82,7 +186,8 @@ class DesktopASRManager {
     }
 
     getCacheDir() {
-        return path.join(this.app.getPath('userData'), 'asr-cache');
+        return normalizeString(process.env.AILIS_ASR_CACHE_DIR) ||
+            path.join(this.app.getPath('userData'), 'asr-cache');
     }
 
     getLegacyCacheDirs() {
@@ -98,11 +203,57 @@ class DesktopASRManager {
             if (!cacheDir || !fs.existsSync(cacheDir)) {
                 return false;
             }
-            const entries = fs.readdirSync(cacheDir, { withFileTypes: true });
-            return entries.some((entry) => entry.isDirectory() && /^models--/i.test(entry.name));
+            const candidateDirs = [
+                cacheDir,
+                path.join(cacheDir, 'hub'),
+                path.join(cacheDir, 'transformers')
+            ];
+            return candidateDirs.some((candidateDir) => {
+                if (!isDirectory(candidateDir)) {
+                    return false;
+                }
+                return fs.readdirSync(candidateDir, { withFileTypes: true })
+                    .some((entry) => entry.isDirectory() && /^models--/i.test(entry.name));
+            });
         } catch {
             return false;
         }
+    }
+
+    getPackagedAsrRuntimeRoots() {
+        const candidates = [
+            process.env.AILIS_ASR_RUNTIME_DIR,
+            process.resourcesPath ? path.join(process.resourcesPath, PACKAGED_ASR_RUNTIME_DIRNAME) : '',
+            path.join(getProjectRoot(), 'build-cache', PACKAGED_ASR_RUNTIME_DIRNAME),
+            path.join(getProjectRoot(), '.ailis-runtime', 'asr-runtime')
+        ];
+        return uniqueCandidates(candidates).filter((candidate) => isDirectory(candidate));
+    }
+
+    getAsrRuntimeManifest(runtimeRoot) {
+        return readJsonFile(path.join(runtimeRoot, 'manifest.json')) || {};
+    }
+
+    getPackagedAsrCacheDirs() {
+        const runtimeCacheDirs = this.getPackagedAsrRuntimeRoots()
+            .flatMap((runtimeRoot) => {
+                const manifest = this.getAsrRuntimeManifest(runtimeRoot);
+                return [
+                    normalizeRelativePath(runtimeRoot, manifest.asrCache),
+                    path.join(runtimeRoot, 'asr-cache')
+                ];
+            });
+        const speechModelDirs = [
+            process.env.AILIS_ASR_BUNDLED_CACHE_DIR,
+            process.resourcesPath ? path.join(process.resourcesPath, SPEECH_MODEL_DIRNAME, 'asr-cache') : '',
+            process.resourcesPath ? path.join(process.resourcesPath, SPEECH_MODEL_DIRNAME) : '',
+            path.join(getProjectRoot(), 'Resources', SPEECH_MODEL_DIRNAME, 'asr-cache'),
+            path.join(getProjectRoot(), 'Resources', SPEECH_MODEL_DIRNAME),
+            path.join(getProjectRoot(), 'dist', 'Resources', SPEECH_MODEL_DIRNAME, 'asr-cache'),
+            path.join(getProjectRoot(), 'dist', 'Resources', SPEECH_MODEL_DIRNAME)
+        ];
+        return uniqueCandidates([...runtimeCacheDirs, ...speechModelDirs])
+            .filter((candidate) => isDirectory(candidate));
     }
 
     resolveCacheDir() {
@@ -115,6 +266,13 @@ class DesktopASRManager {
         if (legacyCacheDir) {
             console.log(`[ASR] 当前缓存为空，复用旧模型缓存：${legacyCacheDir}`);
             return legacyCacheDir;
+        }
+
+        const packagedCacheDir = this.getPackagedAsrCacheDirs()
+            .find((candidate) => this.cacheHasModel(candidate));
+        if (packagedCacheDir) {
+            console.log(`[ASR] 使用随包本地模型缓存：${packagedCacheDir}`);
+            return packagedCacheDir;
         }
 
         return currentCacheDir;
@@ -149,13 +307,48 @@ class DesktopASRManager {
 
         if (envAsrPython) {
             candidates.push({
+                source: 'AILIS_ASR_PYTHON',
                 command: envAsrPython,
                 args: []
             });
         }
 
+        for (const runtimeRoot of this.getPackagedAsrRuntimeRoots()) {
+            const manifest = this.getAsrRuntimeManifest(runtimeRoot);
+            const runtimeEnv = buildRuntimeEnv(runtimeRoot, manifest);
+            const manifestReady = Boolean(
+                manifest.asrDependenciesReady ||
+                (
+                    manifest.dependencies &&
+                    manifest.dependencies.numpy &&
+                    manifest.dependencies.torch &&
+                    manifest.dependencies.transformers
+                )
+            );
+            const manifestPython = normalizeRelativePath(runtimeRoot, manifest.asrPython || manifest.python);
+            if (manifestPython) {
+                candidates.push({
+                    source: 'packaged-asr-runtime',
+                    command: manifestPython,
+                    args: [],
+                    env: runtimeEnv,
+                    trustedAsrRuntime: manifestReady
+                });
+            }
+
+            const asrVenvDir = normalizeRelativePath(runtimeRoot, manifest.asrVenv || 'asr-venv');
+            candidates.push({
+                source: 'packaged-asr-runtime',
+                command: getVenvPythonPath(asrVenvDir, process.platform),
+                args: [],
+                env: runtimeEnv,
+                trustedAsrRuntime: manifestReady
+            });
+        }
+
         if (envVoicePython) {
             candidates.push({
+                source: 'AILIS_VOICE_PYTHON',
                 command: envVoicePython,
                 args: []
             });
@@ -163,20 +356,21 @@ class DesktopASRManager {
 
         if (envPython) {
             candidates.push({
+                source: 'AILIS_PYTHON',
                 command: envPython,
                 args: []
             });
         }
 
         candidates.push(
-            { command: privateVoicePython, args: [] },
-            { command: projectVoicePython, args: [] }
+            { source: 'voice-venv', command: privateVoicePython, args: [] },
+            { source: 'cosyvoice3-venv', command: projectVoicePython, args: [] }
         );
 
         candidates.push(
-            { command: 'python', args: [] },
-            { command: 'py', args: ['-3.12'] },
-            { command: 'py', args: [] }
+            { source: 'python', command: 'python', args: [] },
+            { source: 'py-3.12', command: 'py', args: ['-3.12'] },
+            { source: 'py', command: 'py', args: [] }
         );
 
         for (const candidate of candidates) {
@@ -193,10 +387,21 @@ class DesktopASRManager {
                 const result = spawnSync(candidate.command, [...candidate.args, '--version'], {
                     windowsHide: true,
                     timeout: 10000,
-                    encoding: 'utf8'
+                    encoding: 'utf8',
+                    env: {
+                        ...process.env,
+                        ...(candidate.env || {})
+                    }
                 });
 
                 if (!result.error && result.status === 0) {
+                    if (
+                        candidate.source === 'packaged-asr-runtime' &&
+                        !candidate.trustedAsrRuntime &&
+                        !pythonLooksLikeAsrRuntime(candidate.command, candidate.args, candidate.env)
+                    ) {
+                        continue;
+                    }
                     this.pythonCommand = candidate;
                     return candidate;
                 }
@@ -229,6 +434,7 @@ class DesktopASRManager {
                 stdio: ['pipe', 'pipe', 'pipe'],
                 env: {
                     ...process.env,
+                    ...(python.env || {}),
                     AILIS_PROJECT_ROOT: getProjectRoot(),
                     AILIS_USER_DATA: this.app.getPath('userData'),
                     AILIS_ASR_MODEL_ID: process.env.AILIS_ASR_MODEL_ID || 'openai/whisper-small',

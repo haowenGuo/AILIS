@@ -19,6 +19,8 @@ extraResources:
     to: openclaw-vendor
   - from: build-cache/ailis-web-runtime
     to: ailis-web-runtime
+  - from: build-cache/ailis-asr-runtime
+    to: ailis-asr-runtime
 extraMetadata:
   main: electron/main.cjs
 asar: true

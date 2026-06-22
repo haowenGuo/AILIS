@@ -15,6 +15,8 @@ const DEFAULT_VOICE_PYTHON_VERSION = '3.12';
 const DEFAULT_TIMEOUT_MS = 12000;
 const INSTALL_TIMEOUT_MS = 30 * 60 * 1000;
 const MAX_CAPTURE_CHARS = 24000;
+const PACKAGED_ASR_RUNTIME_DIRNAME = 'ailis-asr-runtime';
+const SPEECH_MODEL_DIRNAME = 'speech-models';
 
 const BASE_VOICE_PACKAGES = Object.freeze([
     'numpy>=1.26,<3.0',
@@ -66,6 +68,57 @@ function isDirectory(filePath) {
 function isFile(filePath) {
     const stat = safeStat(filePath);
     return Boolean(stat?.isFile());
+}
+
+function readJsonFile(filePath) {
+    try {
+        if (!isFile(filePath)) {
+            return null;
+        }
+        return JSON.parse(fs.readFileSync(filePath, 'utf8').replace(/^\uFEFF/, ''));
+    } catch {
+        return null;
+    }
+}
+
+function normalizeRelativePath(rootDir, relativePath) {
+    const rawPath = normalizeString(relativePath);
+    if (!rawPath) {
+        return '';
+    }
+    return path.isAbsolute(rawPath)
+        ? rawPath
+        : path.join(rootDir, rawPath);
+}
+
+function normalizeManifestPathList(rootDir, value) {
+    const values = Array.isArray(value)
+        ? value
+        : normalizeString(value)
+            ? String(value).split(path.delimiter)
+            : [];
+    return values
+        .map((item) => normalizeRelativePath(rootDir, item))
+        .filter(Boolean);
+}
+
+function buildRuntimeEnv(runtimeRoot, manifest = {}) {
+    const pythonPathEntries = normalizeManifestPathList(runtimeRoot, manifest.pythonPath);
+    const pathEntries = normalizeManifestPathList(runtimeRoot, manifest.pathAppend);
+    const env = {};
+    if (pythonPathEntries.length) {
+        env.PYTHONPATH = [
+            ...pythonPathEntries,
+            process.env.PYTHONPATH || ''
+        ].filter(Boolean).join(path.delimiter);
+    }
+    if (pathEntries.length) {
+        env.PATH = [
+            ...pathEntries,
+            process.env.PATH || ''
+        ].filter(Boolean).join(path.delimiter);
+    }
+    return env;
 }
 
 function formatBytes(bytes) {
@@ -261,8 +314,8 @@ function runCommandAsync(command, args = [], options = {}) {
     });
 }
 
-function inspectPython(command, args = []) {
-    const version = runCommand(command, [...args, '--version']);
+function inspectPython(command, args = [], env = {}) {
+    const version = runCommand(command, [...args, '--version'], { env });
     if (!version.ok) {
         return {
             ok: false,
@@ -294,7 +347,7 @@ except Exception as exc:
     info["onnxruntime_error"] = str(exc)
 print(json.dumps(info, ensure_ascii=False))
 `;
-    const probeResult = runCommand(command, [...args, '-c', probe], { timeoutMs: 20000 });
+    const probeResult = runCommand(command, [...args, '-c', probe], { timeoutMs: 20000, env });
     let details = {};
     if (probeResult.ok && probeResult.stdout) {
         try {
@@ -320,7 +373,12 @@ print(json.dumps(info, ensure_ascii=False))
 function uniquePythonCandidates(candidates) {
     const seen = new Set();
     return candidates.filter((candidate) => {
-        const key = `${candidate.command}\u0000${(candidate.args || []).join('\u0000')}`;
+        const key = [
+            candidate.command,
+            ...(candidate.args || []),
+            candidate.env?.PYTHONPATH || '',
+            candidate.env?.PATH || ''
+        ].join('\u0000');
         if (!candidate.command || seen.has(key)) {
             return false;
         }
@@ -334,8 +392,18 @@ function hasAsrModel(cacheDir) {
         if (!isDirectory(cacheDir)) {
             return false;
         }
-        return fs.readdirSync(cacheDir, { withFileTypes: true })
-            .some((entry) => entry.isDirectory() && /^models--/i.test(entry.name));
+        const candidateDirs = [
+            cacheDir,
+            path.join(cacheDir, 'hub'),
+            path.join(cacheDir, 'transformers')
+        ];
+        return candidateDirs.some((candidateDir) => {
+            if (!isDirectory(candidateDir)) {
+                return false;
+            }
+            return fs.readdirSync(candidateDir, { withFileTypes: true })
+                .some((entry) => entry.isDirectory() && /^models--/i.test(entry.name));
+        });
     } catch {
         return false;
     }
@@ -547,6 +615,94 @@ class VoiceRuntimeBootstrap {
         this.lastBootstrapRun = null;
     }
 
+    getPackagedAsrRuntimeRoots() {
+        const candidates = [
+            process.env.AILIS_ASR_RUNTIME_DIR,
+            process.resourcesPath ? path.join(process.resourcesPath, PACKAGED_ASR_RUNTIME_DIRNAME) : '',
+            path.join(this.projectRoot, 'build-cache', PACKAGED_ASR_RUNTIME_DIRNAME),
+            path.join(this.projectRoot, '.ailis-runtime', 'asr-runtime')
+        ];
+        const seen = new Set();
+        return candidates
+            .map((candidate) => normalizeString(candidate))
+            .filter(Boolean)
+            .filter((candidate) => {
+                const key = path.resolve(candidate).toLowerCase();
+                if (seen.has(key)) {
+                    return false;
+                }
+                seen.add(key);
+                return true;
+            })
+            .filter((candidate) => isDirectory(candidate));
+    }
+
+    getAsrRuntimeManifest(runtimeRoot) {
+        return readJsonFile(path.join(runtimeRoot, 'manifest.json')) || {};
+    }
+
+    getPackagedAsrRuntimeInfo() {
+        for (const runtimeRoot of this.getPackagedAsrRuntimeRoots()) {
+            const manifest = this.getAsrRuntimeManifest(runtimeRoot);
+            const asrVenv = normalizeRelativePath(runtimeRoot, manifest.asrVenv || 'asr-venv');
+            const asrPython = normalizeRelativePath(runtimeRoot, manifest.asrPython || manifest.python) ||
+                getVenvPythonPath(asrVenv, this.platform);
+            const asrCache = normalizeRelativePath(runtimeRoot, manifest.asrCache) ||
+                path.join(runtimeRoot, 'asr-cache');
+            const env = buildRuntimeEnv(runtimeRoot, manifest);
+            return {
+                runtimeRoot,
+                manifest,
+                asrVenv,
+                asrPython,
+                asrCache,
+                env
+            };
+        }
+        return null;
+    }
+
+    getPackagedAsrCacheDirs() {
+        const runtimeCacheDirs = this.getPackagedAsrRuntimeRoots()
+            .flatMap((runtimeRoot) => {
+                const manifest = this.getAsrRuntimeManifest(runtimeRoot);
+                return [
+                    normalizeRelativePath(runtimeRoot, manifest.asrCache),
+                    path.join(runtimeRoot, 'asr-cache')
+                ];
+            });
+        const speechModelDirs = [
+            process.env.AILIS_ASR_BUNDLED_CACHE_DIR,
+            process.resourcesPath ? path.join(process.resourcesPath, SPEECH_MODEL_DIRNAME, 'asr-cache') : '',
+            process.resourcesPath ? path.join(process.resourcesPath, SPEECH_MODEL_DIRNAME) : '',
+            path.join(this.projectRoot, 'Resources', SPEECH_MODEL_DIRNAME, 'asr-cache'),
+            path.join(this.projectRoot, 'Resources', SPEECH_MODEL_DIRNAME),
+            path.join(this.projectRoot, 'dist', 'Resources', SPEECH_MODEL_DIRNAME, 'asr-cache'),
+            path.join(this.projectRoot, 'dist', 'Resources', SPEECH_MODEL_DIRNAME)
+        ];
+        const seen = new Set();
+        return [...runtimeCacheDirs, ...speechModelDirs]
+            .map((candidate) => normalizeString(candidate))
+            .filter(Boolean)
+            .filter((candidate) => {
+                const key = path.resolve(candidate).toLowerCase();
+                if (seen.has(key)) {
+                    return false;
+                }
+                seen.add(key);
+                return true;
+            })
+            .filter((candidate) => isDirectory(candidate));
+    }
+
+    resolveAsrCacheDir(paths = this.getPaths()) {
+        if (hasAsrModel(paths.asrCacheDir)) {
+            return paths.asrCacheDir;
+        }
+        return this.getPackagedAsrCacheDirs().find((candidate) => hasAsrModel(candidate)) ||
+            paths.asrCacheDir;
+    }
+
     getPaths() {
         const buildCacheRoot = path.join(this.projectRoot, 'build-cache');
         const localRuntimeRoot = path.join(this.userDataPath, 'local-runtimes');
@@ -569,6 +725,7 @@ class VoiceRuntimeBootstrap {
         const cosyVoice3VenvPython = getVenvPythonPath(cosyVoice3Venv, this.platform);
         const asrCacheDir = normalizeString(process.env.AILIS_ASR_CACHE_DIR) ||
             path.join(this.userDataPath, 'asr-cache');
+        const packagedAsrRuntime = this.getPackagedAsrRuntimeInfo();
 
         return {
             projectRoot: this.projectRoot,
@@ -589,7 +746,12 @@ class VoiceRuntimeBootstrap {
             cosyVoice3ModelDir,
             cosyVoice3Venv,
             cosyVoice3VenvPython,
-            asrCacheDir
+            asrCacheDir,
+            packagedAsrRuntimeRoot: packagedAsrRuntime?.runtimeRoot || '',
+            packagedAsrVenv: packagedAsrRuntime?.asrVenv || '',
+            packagedAsrVenvPython: packagedAsrRuntime?.asrPython || '',
+            packagedAsrCacheDir: packagedAsrRuntime?.asrCache || '',
+            packagedAsrEnv: packagedAsrRuntime?.env || {}
         };
     }
 
@@ -597,7 +759,9 @@ class VoiceRuntimeBootstrap {
         const candidates = [
             { source: 'AILIS_COSYVOICE3_PYTHON', command: normalizeString(process.env.AILIS_COSYVOICE3_PYTHON), args: [] },
             { source: 'AILIS_VOICE_PYTHON', command: normalizeString(process.env.AILIS_VOICE_PYTHON), args: [] },
+            { source: 'AILIS_ASR_PYTHON', command: normalizeString(process.env.AILIS_ASR_PYTHON), args: [] },
             { source: 'AILIS_PYTHON', command: normalizeString(process.env.AILIS_PYTHON), args: [] },
+            { source: 'packaged-asr-runtime', command: paths.packagedAsrVenvPython, args: [], env: paths.packagedAsrEnv || {} },
             { source: 'voice-venv', command: paths.voiceVenvPython, args: [] },
             { source: 'cosyvoice3-venv', command: paths.cosyVoice3VenvPython, args: [] },
             { source: 'python', command: 'python', args: [] },
@@ -612,7 +776,7 @@ class VoiceRuntimeBootstrap {
         return this.findPythonCandidates(paths)
             .map((candidate) => ({
                 source: candidate.source,
-                ...inspectPython(candidate.command, candidate.args)
+                ...inspectPython(candidate.command, candidate.args, candidate.env)
             }));
     }
 
@@ -635,15 +799,42 @@ class VoiceRuntimeBootstrap {
             null;
     }
 
+    chooseBestAsrPython(inspections = []) {
+        const preferredSources = new Set([
+            'packaged-asr-runtime',
+            'AILIS_ASR_PYTHON',
+            'AILIS_VOICE_PYTHON',
+            'voice-venv',
+            'cosyvoice3-venv'
+        ]);
+        return inspections.find((entry) =>
+            entry.ok &&
+            preferredSources.has(entry.source) &&
+            entry.details?.has_torch &&
+            entry.details?.has_transformers
+        ) ||
+            inspections.find((entry) =>
+                entry.ok &&
+                entry.details?.has_torch &&
+                entry.details?.has_transformers
+            ) ||
+            inspections.find((entry) => entry.ok && preferredSources.has(entry.source)) ||
+            inspections.find((entry) => entry.ok) ||
+            null;
+    }
+
     diagnose() {
         const startedAt = Date.now();
         const paths = this.getPaths();
         const python = this.inspectPythonCandidates(paths);
         const bestPython = this.chooseBestPython(python);
+        const bestAsrPython = this.chooseBestAsrPython(python);
         const bestDetails = bestPython?.details || {};
+        const bestAsrDetails = bestAsrPython?.details || {};
         const gpu = inspectGpu(this.platform);
         const cosyModelSizeBytes = directorySizeBytes(paths.cosyVoice3ModelDir, { maxFiles: 40000 });
-        const asrCacheSizeBytes = directorySizeBytes(paths.asrCacheDir, { maxFiles: 40000 });
+        const resolvedAsrCacheDir = this.resolveAsrCacheDir(paths);
+        const asrCacheSizeBytes = directorySizeBytes(resolvedAsrCacheDir, { maxFiles: 40000 });
 
         const cosyVoice3 = {
             ok: isDirectory(paths.cosyVoiceRoot) &&
@@ -687,20 +878,21 @@ class VoiceRuntimeBootstrap {
         };
 
         const asr = {
-            ok: Boolean(bestPython?.ok && bestDetails.has_transformers && bestDetails.has_torch && hasAsrModel(paths.asrCacheDir)),
-            cacheDir: paths.asrCacheDir,
+            ok: Boolean(bestAsrPython?.ok && bestAsrDetails.has_transformers && bestAsrDetails.has_torch && hasAsrModel(resolvedAsrCacheDir)),
+            cacheDir: resolvedAsrCacheDir,
             modelId: normalizeString(process.env.AILIS_ASR_MODEL_ID) || DEFAULT_ASR_MODEL_ID,
-            modelCached: hasAsrModel(paths.asrCacheDir),
+            modelCached: hasAsrModel(resolvedAsrCacheDir),
             cacheSizeBytes: asrCacheSizeBytes,
             cacheSizeText: formatBytes(asrCacheSizeBytes),
-            pythonSource: bestPython?.source || '',
+            pythonSource: bestAsrPython?.source || '',
+            pythonCommand: bestAsrPython?.command || '',
             dependencies: {
-                pip: Boolean(bestDetails.has_pip),
-                torch: Boolean(bestDetails.has_torch),
-                torchaudio: Boolean(bestDetails.has_torchaudio),
-                transformers: Boolean(bestDetails.has_transformers),
-                numpy: Boolean(bestDetails.has_numpy),
-                funasr: Boolean(bestDetails.has_funasr)
+                pip: Boolean(bestAsrDetails.has_pip),
+                torch: Boolean(bestAsrDetails.has_torch),
+                torchaudio: Boolean(bestAsrDetails.has_torchaudio),
+                transformers: Boolean(bestAsrDetails.has_transformers),
+                numpy: Boolean(bestAsrDetails.has_numpy),
+                funasr: Boolean(bestAsrDetails.has_funasr)
             }
         };
 
@@ -725,6 +917,15 @@ class VoiceRuntimeBootstrap {
                     args: bestPython.args,
                     version: bestPython.version,
                     details: bestPython.details
+                }
+                : null,
+            selectedAsrPython: bestAsrPython
+                ? {
+                    source: bestAsrPython.source,
+                    command: bestAsrPython.command,
+                    args: bestAsrPython.args,
+                    version: bestAsrPython.version,
+                    details: bestAsrPython.details
                 }
                 : null,
             cosyVoice3,
@@ -893,7 +1094,28 @@ class VoiceRuntimeBootstrap {
             return paths.cosyVoice3VenvPython;
         }
         const selected = this.cachedSnapshot?.selectedPython;
+        if (selected?.source === 'packaged-asr-runtime') {
+            return '';
+        }
         return selected?.command || '';
+    }
+
+    getPreferredAsrPythonPath() {
+        const paths = this.getPaths();
+        const selectedAsr = this.cachedSnapshot?.selectedAsrPython;
+        if (selectedAsr?.command) {
+            return selectedAsr.command;
+        }
+        if (pathExists(paths.packagedAsrVenvPython)) {
+            return paths.packagedAsrVenvPython;
+        }
+        if (pathExists(paths.voiceVenvPython)) {
+            return paths.voiceVenvPython;
+        }
+        if (pathExists(paths.cosyVoice3VenvPython)) {
+            return paths.cosyVoice3VenvPython;
+        }
+        return '';
     }
 
     getUvEnv(paths = this.getPaths()) {
@@ -1364,8 +1586,10 @@ class VoiceRuntimeBootstrap {
     getFastSummary() {
         const paths = this.getPaths();
         const preferredPython = this.getPreferredVoicePythonPath();
+        const preferredAsrPython = this.getPreferredAsrPythonPath();
         const cosyModelSizeBytes = directorySizeBytes(paths.cosyVoice3ModelDir, { maxFiles: 4000 });
-        const asrCacheSizeBytes = directorySizeBytes(paths.asrCacheDir, { maxFiles: 4000 });
+        const resolvedAsrCacheDir = this.resolveAsrCacheDir(paths);
+        const asrCacheSizeBytes = directorySizeBytes(resolvedAsrCacheDir, { maxFiles: 4000 });
         const cachedAcceleration = this.cachedSnapshot?.cosyVoice3?.acceleration;
         const cachedDependencies = this.cachedSnapshot?.asr?.dependencies;
         const cosyVoice3 = {
@@ -1386,12 +1610,13 @@ class VoiceRuntimeBootstrap {
             }
         };
         const asr = {
-            ok: Boolean(preferredPython && hasAsrModel(paths.asrCacheDir)),
-            cacheDir: paths.asrCacheDir,
+            ok: Boolean(preferredAsrPython && hasAsrModel(resolvedAsrCacheDir)),
+            cacheDir: resolvedAsrCacheDir,
             modelId: normalizeString(process.env.AILIS_ASR_MODEL_ID) || DEFAULT_ASR_MODEL_ID,
-            modelCached: hasAsrModel(paths.asrCacheDir),
+            modelCached: hasAsrModel(resolvedAsrCacheDir),
             cacheSizeBytes: asrCacheSizeBytes,
             cacheSizeText: formatBytes(asrCacheSizeBytes),
+            pythonCommand: preferredAsrPython,
             dependencies: cachedDependencies || {}
         };
         const snapshot = {
@@ -1416,6 +1641,20 @@ class VoiceRuntimeBootstrap {
                     }
                 }
                 : null,
+            selectedAsrPython: preferredAsrPython
+                ? {
+                    source: 'fast-asr-path',
+                    command: preferredAsrPython,
+                    args: [],
+                    version: '',
+                    details: {
+                        has_pip: true,
+                        has_torch: true,
+                        has_torchaudio: true,
+                        has_transformers: true
+                    }
+                }
+                : null,
             cosyVoice3,
             asr
         };
@@ -1428,6 +1667,7 @@ class VoiceRuntimeBootstrap {
             cosyVoice3: snapshot.cosyVoice3,
             asr: snapshot.asr,
             preferredPython,
+            preferredAsrPython,
             installStepCount: snapshot.installPlan.steps.length,
             installPlan: snapshot.installPlan,
             bootstrap: this.getBootstrapStatus(),
@@ -1457,9 +1697,11 @@ class VoiceRuntimeBootstrap {
             asr: {
                 ok: this.cachedSnapshot.asr.ok,
                 modelCached: this.cachedSnapshot.asr.modelCached,
-                dependencies: this.cachedSnapshot.asr.dependencies
+                dependencies: this.cachedSnapshot.asr.dependencies,
+                pythonCommand: this.cachedSnapshot.asr.pythonCommand || ''
             },
             preferredPython: this.getPreferredVoicePythonPath(),
+            preferredAsrPython: this.getPreferredAsrPythonPath(),
             installStepCount: this.cachedSnapshot.installPlan.steps.length,
             installPlan: this.cachedSnapshot.installPlan,
             bootstrap: this.getBootstrapStatus()
