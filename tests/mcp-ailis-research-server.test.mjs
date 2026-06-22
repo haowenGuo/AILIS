@@ -1897,6 +1897,91 @@ test('web_fetch uses Crawl4AI Markdown when configured', async () => {
     });
 });
 
+test('web_fetch can use the local Crawl4AI worker without Docker or HTTP service', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ailis-crawl4ai-worker-'));
+    const workerPath = path.join(tempDir, 'fake-crawl4ai-worker.py');
+    fs.writeFileSync(workerPath, `
+import argparse, json
+parser = argparse.ArgumentParser()
+parser.add_argument("--url", required=True)
+parser.add_argument("--query", default="")
+parser.add_argument("--timeout-ms", default="90000")
+parser.add_argument("--max-links", default="80")
+args = parser.parse_args()
+assert args.url.endswith("/guide")
+print(json.dumps({
+  "ok": True,
+  "status": 200,
+  "contentType": "text/markdown; charset=utf-8",
+  "markdown": "# Local Crawl4AI guide\\n\\nThis page was extracted by the local Crawl4AI worker. It includes target terms and answer evidence.",
+  "links": [{"text": "Team details", "url": "/teams"}],
+  "metadata": {"title": "Local Crawl4AI guide"}
+}, ensure_ascii=False))
+`.trim(), 'utf8');
+
+    await withServer((request, response) => {
+        response.writeHead(500, { 'content-type': 'text/plain' });
+        response.end('web_fetch should not hit the original page when the local Crawl4AI worker succeeds');
+    }, async (baseUrl) => {
+        const result = await webFetch({
+            url: `${baseUrl}/guide`,
+            query: 'local Crawl4AI guide target terms',
+            provider: 'crawl4ai',
+            crawl4aiWorker: workerPath
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.equal(result.structuredContent.fetchBackend, 'crawl4ai_local');
+        assert.equal(result.structuredContent.crawl4aiAttempt.ok, true);
+        assert.equal(result.structuredContent.crawl4aiAttempt.mode, 'local_worker');
+        assert.equal(result.structuredContent.observedLinkCount, 1);
+        assert.match(result.content[0].text, /local Crawl4AI worker/);
+    });
+});
+
+test('web_fetch reports local Crawl4AI missing dependency and falls back safely', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ailis-crawl4ai-missing-'));
+    const workerPath = path.join(tempDir, 'missing-crawl4ai-worker.py');
+    fs.writeFileSync(workerPath, `
+import json
+print(json.dumps({
+  "ok": False,
+  "status": 0,
+  "errorCode": "crawl4ai_missing_dependency",
+  "error": "ModuleNotFoundError: No module named crawl4ai",
+  "backend": "crawl4ai_local",
+  "installCommands": [
+    "python -m pip install -U crawl4ai",
+    "python -m playwright install chromium"
+  ],
+  "recoveryHint": "Install Crawl4AI in the configured Python environment, then retry web_fetch."
+}, ensure_ascii=False))
+raise SystemExit(2)
+`.trim(), 'utf8');
+
+    await withServer((request, response) => {
+        response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        response.end('<html><body><h1>Fallback page</h1><p>Built-in fetch remains available after Crawl4AI dependency failure.</p></body></html>');
+    }, async (baseUrl) => {
+        const result = await webFetch({
+            url: `${baseUrl}/fallback`,
+            query: 'Fallback page Crawl4AI dependency failure',
+            provider: 'crawl4ai',
+            crawl4aiWorker: workerPath
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.notEqual(result.structuredContent.fetchBackend, 'crawl4ai_local');
+        assert.equal(result.structuredContent.crawl4aiAttempt.ok, false);
+        assert.equal(result.structuredContent.crawl4aiAttempt.errorCode, 'crawl4ai_missing_dependency');
+        assert.deepEqual(result.structuredContent.crawl4aiAttempt.installCommands, [
+            'python -m pip install -U crawl4ai',
+            'python -m playwright install chromium'
+        ]);
+        assert.match(result.content[0].text, /Built-in fetch remains available/);
+    });
+});
+
 test('web_fetch falls back to current HTML extraction when Crawl4AI is unavailable', async () => {
     await withServer((request, response) => {
         const url = new URL(request.url || '/', 'http://127.0.0.1');

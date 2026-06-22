@@ -3119,6 +3119,7 @@ const DEFAULT_SEARXNG_URL = 'http://127.0.0.1:8080';
 const DEFAULT_FIRECRAWL_LOCAL_URL = 'http://127.0.0.1:3002';
 const FIRECRAWL_CLOUD_URL = 'https://api.firecrawl.dev';
 const DEFAULT_CRAWL4AI_URL = 'http://127.0.0.1:11235';
+const DEFAULT_CRAWL4AI_WORKER = path.join(__dirname, 'ailis-crawl4ai-worker.py');
 const CRAWL4AI_FETCH_PROVIDERS = new Set(['crawl4ai', 'rendered', 'browser', 'crawl4ai_rendered', 'crawl4ai-style', 'crawl4ai_style']);
 const RENDERED_FALLBACK_EVIDENCE_QUALITIES = new Set(['js_shell', 'thin_content']);
 
@@ -3170,6 +3171,22 @@ function hasConfiguredCrawl4aiUrl(args = {}) {
     );
 }
 
+function hasConfiguredCrawl4aiWorker(args = {}) {
+    return Boolean(
+        normalizeString(args.crawl4aiWorker || args.crawl4ai_worker) ||
+        normalizeString(process.env.AILIS_CRAWL4AI_WORKER || process.env.CRAWL4AI_WORKER) ||
+        optionIsTrue(process.env.AILIS_CRAWL4AI_ENABLED)
+    );
+}
+
+function crawl4aiWorkerPath(args = {}) {
+    return path.resolve(
+        normalizeString(args.crawl4aiWorker || args.crawl4ai_worker) ||
+        normalizeString(process.env.AILIS_CRAWL4AI_WORKER || process.env.CRAWL4AI_WORKER) ||
+        DEFAULT_CRAWL4AI_WORKER
+    );
+}
+
 function crawl4aiFetchConfig(args = {}) {
     const provider = normalizeString(
         args.fetchProvider ||
@@ -3182,6 +3199,14 @@ function crawl4aiFetchConfig(args = {}) {
     if (provider === 'builtin' || provider === 'current' || provider === 'html') {
         return null;
     }
+    const python = normalizeString(
+        args.crawl4aiPython ||
+        args.crawl4ai_python ||
+        process.env.AILIS_CRAWL4AI_PYTHON ||
+        process.env.AILIS_PYTHON ||
+        'python',
+        'python'
+    );
     const configuredUrl = normalizeBaseUrl(
         args.crawl4aiUrl ||
         args.crawl4ai_url ||
@@ -3189,13 +3214,25 @@ function crawl4aiFetchConfig(args = {}) {
         process.env.CRAWL4AI_URL
     );
     if (configuredUrl) {
-        return { baseUrl: configuredUrl, provider, configured: true, probe: false };
+        return { mode: 'http', baseUrl: configuredUrl, provider, configured: true, probe: false };
     }
+    const workerPath = crawl4aiWorkerPath(args);
+    const workerConfigured = hasConfiguredCrawl4aiWorker(args);
     if (CRAWL4AI_FETCH_PROVIDERS.has(provider)) {
-        return { baseUrl: DEFAULT_CRAWL4AI_URL, provider, configured: false, probe: false };
+        return { mode: 'local_worker', workerPath, python, provider, configured: workerConfigured, probe: false };
+    }
+    if (provider === 'auto' && fsSync.existsSync(workerPath)) {
+        return {
+            mode: 'local_worker',
+            workerPath,
+            python,
+            provider,
+            configured: workerConfigured,
+            probe: !workerConfigured
+        };
     }
     if (provider === 'auto') {
-        return { baseUrl: DEFAULT_CRAWL4AI_URL, provider, configured: false, probe: true };
+        return { mode: 'http', baseUrl: DEFAULT_CRAWL4AI_URL, provider, configured: false, probe: true };
     }
     return null;
 }
@@ -4114,16 +4151,142 @@ function summarizeCrawl4aiAttempt(attempt = null) {
         errorCode: normalizeString(attempt.errorCode),
         error: normalizeString(attempt.error).slice(0, 300),
         endpoint: normalizeString(attempt.crawl4aiEndpoint),
+        worker: normalizeString(attempt.crawl4aiWorker),
         backend: normalizeString(attempt.backend),
-        probe: attempt.probe === true || undefined
+        mode: normalizeString(attempt.mode),
+        probe: attempt.probe === true || undefined,
+        installCommands: Array.isArray(attempt.installCommands) ? attempt.installCommands.slice(0, 3) : undefined,
+        recoveryHint: normalizeString(attempt.recoveryHint)
     });
 }
 
-async function maybeFetchWithCrawl4ai(url, args = {}, timeoutMs = 90000) {
-    const config = crawl4aiFetchConfig(args);
-    if (!config) {
+function parseJsonFromProcessStdout(stdout = '') {
+    const text = normalizeString(stdout);
+    if (!text) {
         return null;
     }
+    try {
+        return JSON.parse(text);
+    } catch {
+        const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+        for (let index = lines.length - 1; index >= 0; index -= 1) {
+            try {
+                return JSON.parse(lines[index]);
+            } catch {
+                // Keep looking for the final JSON payload if a dependency printed a banner.
+            }
+        }
+    }
+    return null;
+}
+
+async function fetchWithLocalCrawl4aiWorker(url, config = {}, args = {}, timeoutMs = 90000) {
+    const workerPath = normalizeString(config.workerPath || DEFAULT_CRAWL4AI_WORKER);
+    if (!workerPath || !fsSync.existsSync(workerPath)) {
+        return {
+            ok: false,
+            status: 0,
+            errorCode: 'crawl4ai_worker_missing',
+            error: `Crawl4AI worker script not found: ${workerPath || '(empty)'}`,
+            backend: 'crawl4ai_local',
+            mode: 'local_worker',
+            probe: config.probe === true,
+            crawl4aiWorker: workerPath,
+            installCommands: [
+                'python -m pip install -U crawl4ai',
+                'python -m playwright install chromium'
+            ]
+        };
+    }
+    const effectiveTimeoutMs = config.probe ? Math.min(timeoutMs, 5000) : timeoutMs;
+    const maxLinks = clampNumber(args.maxLinks || args.max_links, 80, 1, 200);
+    const command = normalizeString(config.python, 'python');
+    const processArgs = [
+        workerPath,
+        '--url',
+        url,
+        '--timeout-ms',
+        String(effectiveTimeoutMs),
+        '--max-links',
+        String(maxLinks)
+    ];
+    const query = normalizeString(args.query || args.contains || args.extract_query || args.extractQuery);
+    if (query) {
+        processArgs.push('--query', query);
+    }
+    const waitFor = normalizeString(args.waitFor || args.wait_for);
+    if (waitFor) {
+        processArgs.push('--wait-for', waitFor);
+    }
+    const delayMs = clampNumber(args.delayMs || args.delay_ms, 0, 0, 30000);
+    if (delayMs) {
+        processArgs.push('--delay-ms', String(delayMs));
+    }
+    const result = await runProcess(command, processArgs, { timeoutMs: effectiveTimeoutMs + 1000 });
+    const payload = parseJsonFromProcessStdout(result.stdout);
+    if (!payload) {
+        return {
+            ok: false,
+            status: 0,
+            errorCode: result.timedOut ? 'timeout' : 'crawl4ai_worker_invalid_json',
+            error: result.timedOut ? 'Crawl4AI local worker timed out.' : 'Crawl4AI local worker returned invalid JSON.',
+            stderr: result.stderr,
+            backend: 'crawl4ai_local',
+            mode: 'local_worker',
+            probe: config.probe === true,
+            crawl4aiWorker: workerPath
+        };
+    }
+    if (!payload?.ok) {
+        return {
+            ok: false,
+            status: Number(payload?.status || 0),
+            errorCode: normalizeString(payload?.errorCode, result.exitCode === 0 ? 'crawl4ai_worker_failed' : `crawl4ai_worker_exit_${result.exitCode}`),
+            error: normalizeString(payload?.error, result.stderr || 'Crawl4AI local worker failed.'),
+            stderr: normalizeString(result.stderr || payload?.traceback),
+            backend: 'crawl4ai_local',
+            mode: 'local_worker',
+            probe: config.probe === true,
+            crawl4aiWorker: workerPath,
+            installCommands: Array.isArray(payload?.installCommands) ? payload.installCommands : undefined,
+            recoveryHint: normalizeString(payload?.recoveryHint)
+        };
+    }
+    const markdown = normalizeString(payload.markdown || payload.text || payload.content);
+    if (!markdown) {
+        return {
+            ok: false,
+            status: Number(payload.status || 0),
+            errorCode: 'crawl4ai_no_markdown',
+            error: 'Crawl4AI local worker returned ok=true but no Markdown/text content.',
+            stderr: result.stderr,
+            backend: 'crawl4ai_local',
+            mode: 'local_worker',
+            probe: config.probe === true,
+            crawl4aiWorker: workerPath
+        };
+    }
+    return {
+        ok: true,
+        status: Number(payload.status || 200),
+        contentType: normalizeString(payload.contentType, 'text/markdown; charset=utf-8'),
+        contentLength: markdown.length,
+        isPdf: false,
+        isBinary: false,
+        text: markdown,
+        stderr: result.stderr,
+        error: '',
+        backend: 'crawl4ai_local',
+        mode: 'local_worker',
+        kind: 'crawl4ai_markdown',
+        probe: config.probe === true,
+        links: Array.isArray(payload.links) ? payload.links : extractLinksFromMarkdown(markdown, url, 80),
+        metadata: payload.metadata,
+        crawl4aiWorker: workerPath
+    };
+}
+
+async function fetchWithCrawl4aiHttp(url, config = {}, timeoutMs = 90000) {
     const endpoint = `${config.baseUrl}/crawl`;
     const effectiveTimeoutMs = config.probe ? Math.min(timeoutMs, 1800) : timeoutMs;
     const fetched = await fetchJsonWithNodeFetch(endpoint, {
@@ -4141,6 +4304,7 @@ async function maybeFetchWithCrawl4ai(url, args = {}, timeoutMs = 90000) {
             errorCode: fetched.errorCode || 'crawl4ai_fetch_failed',
             error: fetched.error || 'Crawl4AI fetch failed.',
             backend: 'crawl4ai',
+            mode: 'http',
             probe: config.probe === true,
             crawl4aiEndpoint: endpoint
         };
@@ -4153,6 +4317,7 @@ async function maybeFetchWithCrawl4ai(url, args = {}, timeoutMs = 90000) {
             errorCode: 'crawl4ai_no_markdown',
             error: 'Crawl4AI returned JSON, but no Markdown/text content was found.',
             backend: 'crawl4ai',
+            mode: 'http',
             probe: config.probe === true,
             crawl4aiEndpoint: endpoint
         };
@@ -4168,11 +4333,23 @@ async function maybeFetchWithCrawl4ai(url, args = {}, timeoutMs = 90000) {
         stderr: '',
         error: '',
         backend: 'crawl4ai',
+        mode: 'http',
         kind: 'crawl4ai_markdown',
         probe: config.probe === true,
         links: extractLinksFromMarkdown(markdown, url, 80),
         crawl4aiEndpoint: endpoint
     };
+}
+
+async function maybeFetchWithCrawl4ai(url, args = {}, timeoutMs = 90000) {
+    const config = crawl4aiFetchConfig(args);
+    if (!config) {
+        return null;
+    }
+    if (config.mode === 'local_worker') {
+        return await fetchWithLocalCrawl4aiWorker(url, config, args, timeoutMs);
+    }
+    return await fetchWithCrawl4aiHttp(url, config, timeoutMs);
 }
 
 function buildRenderedFallbackArgs(args = {}) {
@@ -4204,7 +4381,7 @@ function shouldRetryRenderedFetchAfterStaticResult({ details = {}, args = {}, cr
         return false;
     }
     const explicitlyRendered = CRAWL4AI_FETCH_PROVIDERS.has(provider);
-    const configured = hasConfiguredCrawl4aiUrl(args);
+    const configured = hasConfiguredCrawl4aiUrl(args) || hasConfiguredCrawl4aiWorker(args);
     const previousFullAttempt = crawl4aiAttempt && crawl4aiAttempt.probe !== true;
     const defaultProbeTimedOut = crawl4aiAttempt?.probe === true && normalizeString(crawl4aiAttempt.errorCode) === 'timeout';
     return explicitlyRendered || configured || previousFullAttempt || defaultProbeTimedOut;
@@ -4316,9 +4493,10 @@ async function webFetch(args = {}) {
         return errorResult('web_fetch requires http(s) url');
     }
     const maxChars = clampNumber(args.maxChars || args.max_chars, MAX_FETCH_CHARS, 1000, 80000);
-    const crawl4aiAttempt = await maybeFetchWithCrawl4ai(url, args, 90000);
-    const wikiText = crawl4aiAttempt?.ok ? null : await maybeFetchWikipediaWikitext(url, 90000);
-    const fetched = crawl4aiAttempt?.ok ? crawl4aiAttempt : wikiText || await fetchText(url, 90000);
+    const timeoutMs = clampNumber(args.timeoutMs || args.timeout_ms, 90000, 1000, 300000);
+    const crawl4aiAttempt = await maybeFetchWithCrawl4ai(url, args, timeoutMs);
+    const wikiText = crawl4aiAttempt?.ok ? null : await maybeFetchWikipediaWikitext(url, timeoutMs);
+    const fetched = crawl4aiAttempt?.ok ? crawl4aiAttempt : wikiText || await fetchText(url, timeoutMs);
     if (!fetched.ok) {
         return errorResult(fetched.error || 'web_fetch fetch failed', buildHttpAccessFailureDetails(url, fetched));
     }
@@ -4335,7 +4513,7 @@ async function webFetch(args = {}) {
     });
     const primaryDetails = primaryResult.structuredContent || {};
     if (shouldRetryRenderedFetchAfterStaticResult({ details: primaryDetails, args, crawl4aiAttempt, fetched })) {
-        const renderedFallbackAttempt = await maybeFetchWithCrawl4ai(url, buildRenderedFallbackArgs(args), 90000);
+        const renderedFallbackAttempt = await maybeFetchWithCrawl4ai(url, buildRenderedFallbackArgs(args), timeoutMs);
         if (renderedFallbackAttempt?.ok) {
             return buildWebFetchResult({
                 url,
@@ -4906,7 +5084,9 @@ async function webResearch(args = {}) {
             query,
             maxChars: maxCharsPerPage,
             provider: args.fetchProvider || args.fetch_provider,
-            crawl4aiUrl: args.crawl4aiUrl || args.crawl4ai_url
+            crawl4aiUrl: args.crawl4aiUrl || args.crawl4ai_url,
+            crawl4aiWorker: args.crawl4aiWorker || args.crawl4ai_worker,
+            crawl4aiPython: args.crawl4aiPython || args.crawl4ai_python
         });
         const page = summarizeWebResearchPage(candidate, fetchResult, query);
         pages.push(page);
@@ -6885,7 +7065,10 @@ async function pdfFindAndExtract(args = {}) {
                 query: evidenceQuery || query,
                 maxChars,
                 timeoutMs: Math.min(45000, timeoutMs, remainingMs),
-                provider: args.fetchProvider || args.fetch_provider || args.webFetchProvider || args.web_fetch_provider
+                provider: args.fetchProvider || args.fetch_provider || args.webFetchProvider || args.web_fetch_provider,
+                crawl4aiUrl: args.crawl4aiUrl || args.crawl4ai_url,
+                crawl4aiWorker: args.crawl4aiWorker || args.crawl4ai_worker,
+                crawl4aiPython: args.crawl4aiPython || args.crawl4ai_python
             });
             attempts.push({
                 url: candidate.url,
@@ -8825,7 +9008,9 @@ const TOOLS = [
                 fetchProvider: { type: 'string', description: 'Optional fetch provider selector, same semantics as web_fetch.' },
                 searxngUrl: { type: 'string', description: 'Optional SearXNG base URL override.' },
                 firecrawlUrl: { type: 'string', description: 'Optional local Firecrawl-compatible base URL override.' },
-                crawl4aiUrl: { type: 'string', description: 'Optional Crawl4AI base URL override.' },
+                crawl4aiUrl: { type: 'string', description: 'Optional legacy Crawl4AI HTTP base URL override. Prefer the local worker unless you intentionally run a service.' },
+                crawl4aiWorker: { type: 'string', description: 'Optional local Crawl4AI worker path. Defaults to scripts/ailis-crawl4ai-worker.py and does not require Docker.' },
+                crawl4aiPython: { type: 'string', description: 'Optional Python executable for the local Crawl4AI worker. Defaults to AILIS_CRAWL4AI_PYTHON, AILIS_PYTHON, or python.' },
                 aggregate: { type: 'boolean', description: 'Optional. true forces multi-provider search aggregation; false returns first successful search backend.' },
                 backend: { type: 'string', description: 'Optional search backend id or provider alias.' },
                 backends: {
@@ -8860,7 +9045,7 @@ const TOOLS = [
     },
     {
         name: 'web_fetch',
-        description: 'Fetch a public HTTP(S) HTML or text resource and return readable text plus a structured HTML relationship map when HTML is available. In auto mode, web_fetch first short-probes local Crawl4AI at AILIS_CRAWL4AI_URL/CRAWL4AI_URL or http://127.0.0.1:11235 for Markdown, then falls back to the current fetch/extract path when unavailable; if the static result is a JavaScript loading shell or thin non-evidence page, it can retry through rendered/Crawl4AI-style extraction when Crawl4AI is configured, explicitly requested with provider=crawl4ai/rendered/browser, or the default probe timed out. provider=builtin/current/html disables rendered fallback. The relationship map exposes title/metadata, heading sections, ranked links with context, JSON-LD entities, key-value facts, table rows, and relation triples so the model can reason over page structure instead of plain text only. Rejects PDF/binary content with unsupported_content_type; use pdf_extract_text or download_file for PDFs/files. For archive, listing, search-result, table-of-contents, or journal issue pages, pass query/contains with task terms such as author, year, topic, or answer clue so excerpts and linked resources are ranked against the task instead of newest/first links.',
+        description: 'Fetch a public HTTP(S) HTML or text resource and return readable text plus a structured relationship map. AILIS now prefers a local Python Crawl4AI worker (scripts/ailis-crawl4ai-worker.py, configurable with AILIS_CRAWL4AI_WORKER/AILIS_CRAWL4AI_PYTHON) for rendered Markdown extraction; Docker is not required. Legacy Crawl4AI HTTP service URLs remain supported through AILIS_CRAWL4AI_URL/CRAWL4AI_URL. In auto mode, web_fetch probes Crawl4AI and falls back to builtin fetch/extract when unavailable; if static fetch returns a JavaScript shell or thin non-evidence page, it can retry through full rendered Crawl4AI extraction when configured or requested with provider=crawl4ai/rendered/browser. provider=builtin/current/html disables rendered fallback. Rejects PDF/binary content with unsupported_content_type; use pdf_extract_text or download_file for PDFs/files. For archive, listing, search-result, table-of-contents, or journal issue pages, pass query/contains with task terms such as author, year, topic, or answer clue so excerpts and linked resources are ranked against the task instead of newest/first links.',
         inputSchema: {
             type: 'object',
             required: ['url'],
@@ -8873,7 +9058,11 @@ const TOOLS = [
                 extractQuery: { type: 'string', description: 'Compatibility alias for query/contains. Prefer query.' },
                 provider: { type: 'string', description: 'Optional fetch provider selector: auto, crawl4ai/rendered/browser, builtin/current/html. Prefer omitting this unless testing a provider.' },
                 fetchProvider: { type: 'string', description: 'Compatibility alias for provider. Prefer provider.' },
-                crawl4aiUrl: { type: 'string', description: 'Optional Crawl4AI base URL override. Prefer configuring AILIS_CRAWL4AI_URL instead of passing this per call.' }
+                crawl4aiUrl: { type: 'string', description: 'Optional legacy Crawl4AI HTTP base URL override. Prefer local worker configuration unless running a service intentionally.' },
+                crawl4aiWorker: { type: 'string', description: 'Optional local Crawl4AI worker path. Defaults to scripts/ailis-crawl4ai-worker.py and does not require Docker.' },
+                crawl4aiPython: { type: 'string', description: 'Optional Python executable for the local Crawl4AI worker. Defaults to AILIS_CRAWL4AI_PYTHON, AILIS_PYTHON, or python.' },
+                waitFor: { type: 'string', description: 'Optional Crawl4AI wait_for selector/condition for JS-rendered pages.' },
+                delayMs: { type: 'number', description: 'Optional Crawl4AI delay before reading rendered HTML, in milliseconds.' }
             },
             additionalProperties: false
         }
