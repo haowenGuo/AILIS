@@ -1,0 +1,680 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AILIS 体验</title>
+    <meta name="description" content="AILIS 在线体验页，打开即可与 3D 虚拟助手互动。">
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        :root {
+            color-scheme: light;
+            --bg: #f6fbff;
+            --surface: rgba(255, 255, 255, 0.92);
+            --surface-strong: #ffffff;
+            --line: rgba(42, 97, 124, 0.16);
+            --text: #18384c;
+            --muted: #5e7888;
+            --accent: #2e99bd;
+            --accent-strong: #1d789a;
+            --warm: #d76693;
+            --gold: #d1a22a;
+            --shadow: 0 16px 50px rgba(27, 75, 102, 0.14);
+            --radius: 8px;
+            --font: "Microsoft YaHei", -apple-system, BlinkMacSystemFont, "PingFang SC", "Noto Sans SC", sans-serif;
+        }
+
+        html,
+        body {
+            width: 100%;
+            min-height: 100%;
+            margin: 0;
+        }
+
+        body {
+            font-family: var(--font);
+            color: var(--text);
+            background:
+                linear-gradient(180deg, #f7fcff 0%, #edf7fb 48%, #fff7fb 100%);
+            overflow-x: hidden;
+        }
+
+        a {
+            color: inherit;
+            text-decoration: none;
+        }
+
+        button,
+        textarea {
+            font: inherit;
+        }
+
+        .app-shell {
+            min-height: 100vh;
+            display: grid;
+            grid-template-rows: auto 1fr;
+        }
+
+        .topbar {
+            position: sticky;
+            top: 0;
+            z-index: 20;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 18px;
+            height: 64px;
+            padding: 0 24px;
+            background: rgba(246, 251, 255, 0.86);
+            border-bottom: 1px solid var(--line);
+            backdrop-filter: blur(16px);
+        }
+
+        .brand {
+            display: flex;
+            align-items: baseline;
+            gap: 10px;
+            min-width: 0;
+            font-weight: 800;
+            letter-spacing: 0;
+        }
+
+        .brand span {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            font-size: 20px;
+        }
+
+        .brand small {
+            color: var(--muted);
+            font-size: 12px;
+            font-weight: 600;
+            white-space: nowrap;
+        }
+
+        .nav-actions {
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .nav-link,
+        .nav-button,
+        .quick-button,
+        .send-button {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 38px;
+            border-radius: var(--radius);
+            border: 1px solid var(--line);
+            cursor: pointer;
+            font-weight: 700;
+            letter-spacing: 0;
+            transition: transform 0.18s ease, border-color 0.18s ease, background 0.18s ease;
+        }
+
+        .nav-link,
+        .nav-button {
+            padding: 8px 12px;
+            color: var(--muted);
+            background: rgba(255, 255, 255, 0.54);
+        }
+
+        .nav-button {
+            color: #ffffff;
+            border-color: transparent;
+            background: var(--accent);
+        }
+
+        .nav-link:hover,
+        .nav-button:hover,
+        .quick-button:hover,
+        .send-button:hover:enabled {
+            transform: translateY(-1px);
+            border-color: rgba(46, 153, 189, 0.34);
+        }
+
+        .experience {
+            min-height: calc(100vh - 64px);
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) minmax(340px, 420px);
+            gap: 18px;
+            padding: 18px;
+        }
+
+        .avatar-stage {
+            position: relative;
+            min-height: 620px;
+            border: 1px solid var(--line);
+            border-radius: var(--radius);
+            overflow: hidden;
+            background:
+                linear-gradient(180deg, rgba(255, 255, 255, 0.62), rgba(229, 244, 251, 0.78)),
+                linear-gradient(135deg, rgba(46, 153, 189, 0.16), rgba(215, 102, 147, 0.12));
+        }
+
+        .avatar-stage::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            background:
+                linear-gradient(rgba(46, 153, 189, 0.06) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(46, 153, 189, 0.06) 1px, transparent 1px);
+            background-size: 42px 42px;
+            mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.7), rgba(0, 0, 0, 0.08));
+        }
+
+        .stage-header {
+            position: absolute;
+            z-index: 2;
+            left: 18px;
+            top: 18px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 10px;
+            border-radius: var(--radius);
+            border: 1px solid var(--line);
+            color: var(--muted);
+            background: rgba(255, 255, 255, 0.76);
+            backdrop-filter: blur(14px);
+            box-shadow: 0 10px 28px rgba(27, 75, 102, 0.1);
+        }
+
+        .status-dot {
+            width: 9px;
+            height: 9px;
+            flex: 0 0 auto;
+            border-radius: 999px;
+            background: var(--gold);
+            box-shadow: 0 0 0 4px rgba(209, 162, 42, 0.14);
+        }
+
+        .status-dot.ready {
+            background: #34a853;
+            box-shadow: 0 0 0 4px rgba(52, 168, 83, 0.14);
+        }
+
+        .pet-frame {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            border: 0;
+            background: transparent;
+        }
+
+        .chat-panel {
+            min-height: 620px;
+            display: grid;
+            grid-template-rows: auto 1fr auto;
+            border: 1px solid var(--line);
+            border-radius: var(--radius);
+            overflow: hidden;
+            background: var(--surface);
+            box-shadow: var(--shadow);
+        }
+
+        .panel-header {
+            padding: 18px;
+            border-bottom: 1px solid var(--line);
+            background: var(--surface-strong);
+        }
+
+        .panel-title {
+            margin: 0;
+            font-size: 20px;
+            line-height: 1.25;
+            letter-spacing: 0;
+        }
+
+        .panel-subtitle {
+            margin: 8px 0 0;
+            color: var(--muted);
+            font-size: 13px;
+            line-height: 1.6;
+        }
+
+        .message-list {
+            min-height: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            overflow: auto;
+            padding: 16px;
+            background: rgba(245, 251, 255, 0.62);
+        }
+
+        .message {
+            max-width: 92%;
+            padding: 10px 12px;
+            border-radius: var(--radius);
+            font-size: 14px;
+            line-height: 1.65;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        .message-user {
+            align-self: flex-end;
+            color: #ffffff;
+            background: var(--accent);
+        }
+
+        .message-assistant {
+            align-self: flex-start;
+            color: var(--text);
+            border: 1px solid var(--line);
+            background: #ffffff;
+        }
+
+        .message-system,
+        .message-loading {
+            align-self: center;
+            max-width: 100%;
+            color: var(--muted);
+            background: rgba(255, 255, 255, 0.72);
+            border: 1px solid rgba(42, 97, 124, 0.1);
+            font-size: 12px;
+        }
+
+        .composer {
+            display: grid;
+            gap: 12px;
+            padding: 14px;
+            border-top: 1px solid var(--line);
+            background: var(--surface-strong);
+        }
+
+        .quick-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .quick-button {
+            min-height: 32px;
+            padding: 6px 10px;
+            color: var(--muted);
+            background: rgba(46, 153, 189, 0.08);
+        }
+
+        .input-row {
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 10px;
+            align-items: end;
+        }
+
+        .chat-input {
+            width: 100%;
+            min-height: 72px;
+            max-height: 160px;
+            resize: vertical;
+            border: 1px solid var(--line);
+            border-radius: var(--radius);
+            padding: 11px 12px;
+            color: var(--text);
+            background: #f8fcff;
+            outline: none;
+            line-height: 1.55;
+        }
+
+        .chat-input:focus {
+            border-color: rgba(46, 153, 189, 0.62);
+            background: #ffffff;
+        }
+
+        .send-button {
+            min-width: 74px;
+            min-height: 72px;
+            padding: 10px 14px;
+            color: #ffffff;
+            border-color: transparent;
+            background: var(--warm);
+        }
+
+        .send-button:disabled {
+            cursor: not-allowed;
+            opacity: 0.56;
+            transform: none;
+        }
+
+        @media (max-width: 980px) {
+            .experience {
+                grid-template-columns: 1fr;
+            }
+
+            .avatar-stage,
+            .chat-panel {
+                min-height: 520px;
+            }
+        }
+
+        @media (max-width: 720px) {
+            .topbar {
+                height: auto;
+                min-height: 64px;
+                align-items: flex-start;
+                flex-direction: column;
+                padding: 12px 14px;
+            }
+
+            .nav-actions {
+                width: 100%;
+                justify-content: flex-start;
+            }
+
+            .experience {
+                min-height: auto;
+                padding: 12px;
+                gap: 12px;
+            }
+
+            .avatar-stage {
+                min-height: 440px;
+            }
+
+            .chat-panel {
+                min-height: 520px;
+            }
+
+            .input-row {
+                grid-template-columns: 1fr;
+            }
+
+            .send-button {
+                min-height: 44px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="app-shell">
+        <header class="topbar">
+            <a class="brand" href="./" aria-label="AILIS 体验首页">
+                <span>AILIS</span>
+                <small>在线体验</small>
+            </a>
+            <nav class="nav-actions" aria-label="主要入口">
+                <a class="nav-link" href="../about-ailis.html">主页介绍</a>
+                <a class="nav-link" href="../about-ailis.html#membership">会员中心</a>
+                <a class="nav-button" href="../about-ailis.html#membership">登录 / 开通</a>
+            </nav>
+        </header>
+
+        <main class="experience">
+            <section class="avatar-stage" aria-label="AILIS 3D 体验">
+                <div class="stage-header" aria-live="polite">
+                    <span id="stage-dot" class="status-dot"></span>
+                    <span id="stage-status">加载 3D 体验中</span>
+                </div>
+                <iframe
+                    id="pet-frame"
+                    class="pet-frame"
+                    title="AILIS 3D 桌宠"
+                    allow="autoplay"
+                    src="../pet.html?demo=1&amp;speechMode=local"
+                ></iframe>
+            </section>
+
+            <section class="chat-panel" aria-label="AILIS 聊天体验">
+                <header class="panel-header">
+                    <h1 class="panel-title">AILIS 体验</h1>
+                    <p id="panel-subtitle" class="panel-subtitle">公开网页演示模式，账号和会员入口在主页介绍页。</p>
+                </header>
+
+                <div id="message-list" class="message-list" aria-live="polite">
+                    <div class="message message-system" data-local-message="true">正在准备体验环境。</div>
+                </div>
+
+                <form id="composer" class="composer">
+                    <div class="quick-actions" aria-label="快速体验">
+                        <button class="quick-button" type="button" data-prompt="你好，介绍一下你自己">你好</button>
+                        <button class="quick-button" type="button" data-prompt="跳舞">跳舞</button>
+                        <button class="quick-button" type="button" data-prompt="惊讶一下">惊讶</button>
+                        <button class="quick-button" type="button" data-prompt="陪我放松一下">放松</button>
+                    </div>
+                    <div class="input-row">
+                        <textarea id="chat-input" class="chat-input" placeholder="和 AILIS 说点什么"></textarea>
+                        <button id="send-button" class="send-button" type="submit" disabled>发送</button>
+                    </div>
+                </form>
+            </section>
+        </main>
+    </div>
+
+    <script>
+        (() => {
+            const petFrame = document.getElementById('pet-frame');
+            const stageDot = document.getElementById('stage-dot');
+            const stageStatus = document.getElementById('stage-status');
+            const panelSubtitle = document.getElementById('panel-subtitle');
+            const messageList = document.getElementById('message-list');
+            const composer = document.getElementById('composer');
+            const chatInput = document.getElementById('chat-input');
+            const sendButton = document.getElementById('send-button');
+            const quickButtons = Array.from(document.querySelectorAll('[data-prompt]'));
+
+            const state = {
+                attachedWindow: null,
+                isReady: false,
+                isBusy: false
+            };
+
+            function setStatus(text, ready = state.isReady) {
+                stageStatus.textContent = text;
+                stageDot.classList.toggle('ready', Boolean(ready));
+            }
+
+            function getPetWindow() {
+                try {
+                    return petFrame.contentWindow;
+                } catch (error) {
+                    return null;
+                }
+            }
+
+            function getMessageClassName(role) {
+                if (role === 'user') {
+                    return 'message message-user';
+                }
+                if (role === 'assistant') {
+                    return 'message message-assistant';
+                }
+                if (role === 'loading') {
+                    return 'message message-loading';
+                }
+                return 'message message-system';
+            }
+
+            function scrollMessages() {
+                messageList.scrollTop = messageList.scrollHeight;
+            }
+
+            function clearLocalMessage() {
+                const localMessage = messageList.querySelector('[data-local-message="true"]');
+                localMessage?.remove();
+            }
+
+            function upsertMessage(message) {
+                if (!message || !message.id) {
+                    return;
+                }
+
+                clearLocalMessage();
+                let element = messageList.querySelector(`[data-message-id="${CSS.escape(message.id)}"]`);
+                if (!element) {
+                    element = document.createElement('div');
+                    element.dataset.messageId = message.id;
+                    messageList.appendChild(element);
+                }
+
+                element.className = getMessageClassName(message.role);
+                element.textContent = message.content || '';
+                scrollMessages();
+            }
+
+            function removeMessage(id) {
+                if (!id) {
+                    return;
+                }
+                messageList.querySelector(`[data-message-id="${CSS.escape(id)}"]`)?.remove();
+                scrollMessages();
+            }
+
+            function renderSnapshot(messages) {
+                messageList.innerHTML = '';
+                if (!messages?.length) {
+                    const element = document.createElement('div');
+                    element.className = 'message message-system';
+                    element.dataset.localMessage = 'true';
+                    element.textContent = '体验环境已就绪。';
+                    messageList.appendChild(element);
+                    return;
+                }
+                messages.forEach(upsertMessage);
+            }
+
+            function updateComposer() {
+                const canSend = state.isReady && !state.isBusy && chatInput.value.trim().length > 0;
+                sendButton.disabled = !canSend;
+                quickButtons.forEach((button) => {
+                    button.disabled = !state.isReady || state.isBusy;
+                });
+            }
+
+            function handlePetEvent(payload = {}) {
+                if (payload.type === 'snapshot') {
+                    renderSnapshot(payload.messages || []);
+                    if (typeof payload.isBusy === 'boolean') {
+                        state.isBusy = payload.isBusy;
+                    }
+                    updateComposer();
+                    return;
+                }
+
+                if (payload.type === 'message-added' || payload.type === 'message-updated') {
+                    upsertMessage(payload.message);
+                    return;
+                }
+
+                if (payload.type === 'message-removed') {
+                    removeMessage(payload.id);
+                    return;
+                }
+
+                if (payload.type === 'state' && typeof payload.isBusy === 'boolean') {
+                    state.isBusy = payload.isBusy;
+                    panelSubtitle.textContent = state.isBusy
+                        ? 'AILIS 正在回应。'
+                        : '公开网页演示模式，账号和会员入口在主页介绍页。';
+                    updateComposer();
+                }
+            }
+
+            function syncSnapshot() {
+                const petWindow = getPetWindow();
+                const chatSystem = petWindow?.chatSystem;
+                if (!chatSystem?.getTranscriptSnapshot) {
+                    return;
+                }
+
+                renderSnapshot(chatSystem.getTranscriptSnapshot());
+                state.isBusy = Boolean(chatSystem.isBusy);
+                state.isReady = Boolean(petWindow.vrmSystem?.isModelLoaded || state.isReady);
+                if (state.isReady) {
+                    setStatus('3D 体验已就绪', true);
+                }
+                updateComposer();
+            }
+
+            function attachPetWindow() {
+                const petWindow = getPetWindow();
+                if (!petWindow || state.attachedWindow === petWindow) {
+                    return;
+                }
+
+                state.attachedWindow = petWindow;
+                state.isReady = false;
+                setStatus('加载 3D 体验中', false);
+                updateComposer();
+
+                petWindow.addEventListener('ailis-chat-ui-event', (event) => {
+                    handlePetEvent(event.detail || {});
+                });
+                petWindow.addEventListener('modelLoaded', () => {
+                    state.isReady = true;
+                    setStatus('3D 体验已就绪', true);
+                    syncSnapshot();
+                    updateComposer();
+                });
+                petWindow.addEventListener('modelLoadError', () => {
+                    state.isReady = false;
+                    setStatus('模型资源加载失败', false);
+                    panelSubtitle.textContent = '模型资源暂时没有加载成功，请稍后刷新。';
+                    updateComposer();
+                });
+
+                window.setTimeout(syncSnapshot, 250);
+                window.setTimeout(syncSnapshot, 900);
+                window.setTimeout(syncSnapshot, 1800);
+            }
+
+            async function sendPrompt(content) {
+                const text = String(content || '').trim();
+                const petWindow = getPetWindow();
+                if (!text || state.isBusy || !petWindow?.chatSystem?.sendExternalMessage) {
+                    updateComposer();
+                    return;
+                }
+
+                chatInput.value = '';
+                updateComposer();
+
+                try {
+                    await petWindow.chatSystem.sendExternalMessage(text);
+                    syncSnapshot();
+                } catch (error) {
+                    const element = document.createElement('div');
+                    element.className = 'message message-system';
+                    element.textContent = `体验请求失败：${error.message || '请稍后再试'}`;
+                    messageList.appendChild(element);
+                    scrollMessages();
+                } finally {
+                    updateComposer();
+                }
+            }
+
+            petFrame.addEventListener('load', attachPetWindow);
+            chatInput.addEventListener('input', updateComposer);
+            chatInput.addEventListener('keydown', (event) => {
+                if (event.key === 'Enter' && !event.shiftKey) {
+                    event.preventDefault();
+                    composer.requestSubmit();
+                }
+            });
+            composer.addEventListener('submit', (event) => {
+                event.preventDefault();
+                void sendPrompt(chatInput.value);
+            });
+            quickButtons.forEach((button) => {
+                button.addEventListener('click', () => {
+                    void sendPrompt(button.dataset.prompt || '');
+                });
+            });
+
+            attachPetWindow();
+            updateComposer();
+        })();
+    </script>
+</body>
+</html>
