@@ -10,7 +10,7 @@ const blogRoot = resolve(projectRoot, 'backend', 'blog_content');
 const sitePath = resolve(blogRoot, 'site.json');
 const postsPath = resolve(blogRoot, 'posts.json');
 const basePath = normalizeBasePath(
-    process.env.AILIS_BLOG_BASE_PATH || process.env.AIGRIL_BLOG_BASE_PATH || '/AIGril'
+    process.env.AILIS_BLOG_BASE_PATH || process.env.AIGRIL_BLOG_BASE_PATH || '/AIGL-Assistant'
 );
 
 if (!existsSync(sitePath) || !existsSync(postsPath)) {
@@ -300,7 +300,7 @@ function renderLayout(locale, page) {
         <main>${page.content}</main>
         <footer class="site-footer">
             <span>${escapeHtml(config.site_title)}</span>
-            <a href="${basePath}/?backend=https://airi-backend.onrender.com">AIGril Demo</a>
+            <a href="${basePath}/?backend=https://airi-backend.onrender.com">AIGL-Assistant Demo</a>
             <a href="${escapeAttribute(config.github || '#')}">GitHub</a>
         </footer>
     </div>

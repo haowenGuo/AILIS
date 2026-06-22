@@ -8,7 +8,7 @@
 
 ## 2. 当前交付基线
 
-- 线上仓库：haowenGuo/AIGril
+- 线上仓库：haowenGuo/AIGL-Assistant
 - Render 服务：airi-backend.onrender.com
 - 教学入口：/edu
 - 当前重点模块：仿真课堂
