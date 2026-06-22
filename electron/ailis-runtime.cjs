@@ -1,4 +1,5 @@
 const fsp = require('fs/promises');
+const fsSync = require('fs');
 const path = require('path');
 const { randomUUID } = require('crypto');
 const { AILISMcpManager } = require('./ailis-mcp-session.cjs');
@@ -105,6 +106,37 @@ function normalizeAction(value, fallback = '') {
     return normalizeString(value, fallback).toLowerCase().replace(/[-\s]+/g, '_');
 }
 
+function asarUnpackedPath(filePath = '') {
+    return normalizeString(filePath).replace(/\.asar(?=$|[/\\])/, '.asar.unpacked');
+}
+
+function firstExistingPath(paths = []) {
+    for (const candidate of paths) {
+        const normalized = normalizeString(candidate);
+        if (normalized && fsSync.existsSync(normalized)) {
+            return normalized;
+        }
+    }
+    return '';
+}
+
+function firstSpawnCwd(paths = []) {
+    for (const candidate of paths) {
+        const normalized = normalizeString(candidate);
+        if (!normalized || /\.asar(?=$|[/\\])/.test(normalized)) {
+            continue;
+        }
+        try {
+            if (fsSync.statSync(normalized).isDirectory()) {
+                return normalized;
+            }
+        } catch {
+            // Try the next packaged/development candidate.
+        }
+    }
+    return process.cwd();
+}
+
 function createBuiltinAilisResearchMcpServers(options = {}) {
     if (
         options.disableBuiltinAilisResearchMcp === true ||
@@ -114,7 +146,16 @@ function createBuiltinAilisResearchMcpServers(options = {}) {
         return {};
     }
     const projectRoot = path.resolve(options.projectRoot || path.resolve(__dirname, '..'));
-    const serverPath = path.join(projectRoot, 'scripts', 'mcp-ailis-research-server.cjs');
+    const defaultServerPath = path.join(projectRoot, 'scripts', 'mcp-ailis-research-server.cjs');
+    const serverPath = firstExistingPath([
+        asarUnpackedPath(defaultServerPath),
+        process.resourcesPath
+            ? path.join(process.resourcesPath, 'app.asar.unpacked', 'scripts', 'mcp-ailis-research-server.cjs')
+            : '',
+        defaultServerPath
+    ]) || defaultServerPath;
+    const serverRoot = path.resolve(path.dirname(serverPath), '..');
+    const cwd = firstSpawnCwd([serverRoot, path.dirname(serverPath), projectRoot]);
     const command = normalizeString(
         process.env.AILIS_MCP_NODE_PATH ||
             process.env.AILIS_MCP_NODE_PATH ||
@@ -127,7 +168,7 @@ function createBuiltinAilisResearchMcpServers(options = {}) {
             transport: 'stdio',
             command,
             args: [serverPath],
-            cwd: projectRoot,
+            cwd,
             env: {
                 ELECTRON_RUN_AS_NODE: '1',
                 AILIS_RESEARCH_MCP_BUILTIN: '1'

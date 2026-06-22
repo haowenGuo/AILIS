@@ -1,4 +1,4 @@
-import { cpSync, existsSync, mkdirSync, rmSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -13,17 +13,26 @@ const projectRoot = resolve(__dirname, '..');
 const distRoot = resolve(projectRoot, 'dist');
 
 // 只复制前端实际会访问到的 VRM 与 VRMA 资源，避免把无关的大文件一起打进 Pages 产物。
+const resourcesRoot = resolve(projectRoot, 'Resources');
 const assetsToCopy = [
-    {
-        source: resolve(projectRoot, 'Resources', 'AILIS.vrm'),
-        target: resolve(distRoot, 'Resources', 'AILIS.vrm')
-    },
     {
         source: resolve(projectRoot, 'Resources', 'Emotes'),
         target: resolve(distRoot, 'Resources', 'Emotes'),
         replaceExisting: true
     }
 ];
+
+if (existsSync(resourcesRoot)) {
+    for (const entry of readdirSync(resourcesRoot, { withFileTypes: true })) {
+        if (!entry.isFile() || !entry.name.toLowerCase().endsWith('.vrm')) {
+            continue;
+        }
+        assetsToCopy.push({
+            source: resolve(resourcesRoot, entry.name),
+            target: resolve(distRoot, 'Resources', entry.name)
+        });
+    }
+}
 
 const loadableMotionTargets = new Set(
     getLoadableMotionFiles().map((motionFile) => resolve(distRoot, motionFile.path))

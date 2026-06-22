@@ -356,7 +356,17 @@ function getProjectRoot() {
     return path.resolve(__dirname, '..');
 }
 
+function getGatewayWorkspaceRoot() {
+    if (app.isPackaged) {
+        return path.join(app.getPath('userData'), 'workspace');
+    }
+    return getProjectRoot();
+}
+
 function getDefaultAILISStateDir() {
+    if (app.isPackaged) {
+        return path.join(app.getPath('userData'), AILIS_STATE_DIRNAME);
+    }
     return path.join(getProjectRoot(), AILIS_STATE_DIRNAME);
 }
 
@@ -365,9 +375,10 @@ function resolveAILISStateDir(value = '') {
     if (!normalized) {
         return getDefaultAILISStateDir();
     }
+    const relativeBaseDir = app.isPackaged ? app.getPath('userData') : getProjectRoot();
     return path.isAbsolute(normalized)
         ? path.resolve(normalized)
-        : path.resolve(getProjectRoot(), normalized);
+        : path.resolve(relativeBaseDir, normalized);
 }
 
 function getPersistedAILISStateDir() {
@@ -1863,7 +1874,7 @@ function ensureAILISGateway() {
     ailisGateway = new AILISGateway({
         app,
         projectRoot: getProjectRoot(),
-        workspaceRoot: getProjectRoot(),
+        workspaceRoot: getGatewayWorkspaceRoot(),
         auditDir: getPersistedAILISStateDir(),
         getDefaultContext: () => getAILISDefaultContext(),
         getEmailProfiles: () => getPersistedEmailProfiles(),
