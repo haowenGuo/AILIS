@@ -102,6 +102,7 @@ const LOSSLESS_EVENT_TYPES = new Set([
     'agent.run.finished',
     'agent.step.started',
     'agent.step.finished',
+    'agent.progress.note',
     'agent.plan.updated',
     'context_artifact.created',
     'subagent.event',
@@ -554,6 +555,9 @@ function timelineTitle(type = '', payload = {}) {
     }
     if (type === 'context_artifact.created') {
         return `${prefix}上下文产物 ${payload.artifactId || ''}`.trim();
+    }
+    if (type === 'agent.progress_note') {
+        return `${prefix}公开进展`;
     }
     if (type === 'agent.reasoning') {
         return `${prefix}推理摘要`;
@@ -2697,6 +2701,7 @@ class AILISGateway extends EventEmitter {
                     decision: null,
                     llmCalls: [],
                     tools: [],
+                    progressNotes: [],
                     notes: []
                 });
             }
@@ -2734,10 +2739,21 @@ class AILISGateway extends EventEmitter {
                     intent: payload.intent || '',
                     summary: payload.summary || '',
                     publicReasoning: payload.publicReasoning || '',
+                    progressNoteSource: payload.progressNoteSource || '',
                     riskLevel: payload.riskLevel || '',
                     toolCall: payload.toolCall || null,
                     error: payload.error || ''
                 };
+                continue;
+            }
+            if (item.type === 'agent.progress_note') {
+                ensureRound(iteration).progressNotes.push({
+                    text: payload.text || '',
+                    source: payload.source || '',
+                    action: payload.action || '',
+                    intent: payload.intent || '',
+                    status: item.status || payload.status || ''
+                });
                 continue;
             }
             if (item.type === 'tool.call') {

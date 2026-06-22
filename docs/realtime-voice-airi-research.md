@@ -38,7 +38,7 @@ ASR 快速出字工程
 - `src/speech-provider.js`
 - `src/tts-audio-player.js`
 - `src/ailis-companion-chat-service.js`
-- `src/humanclaw-chat-service.js`
+- `src/ailis-chat-service.js`
 
 当前路径：
 

@@ -15,7 +15,7 @@ import numpy as np
 ENGINE = os.environ.get("AILIS_ASR_ENGINE", os.environ.get("AILIS_ASR_PROVIDER", "whisper")).strip().lower() or "whisper"
 MODEL_ID = os.environ.get("AILIS_ASR_MODEL_ID", "openai/whisper-small").strip() or "openai/whisper-small"
 SENSEVOICE_MODEL_ID = os.environ.get("AILIS_SENSEVOICE_MODEL_ID", "FunAudioLLM/SenseVoiceSmall").strip() or "FunAudioLLM/SenseVoiceSmall"
-MODEL_ENDPOINT = os.environ.get("AILIS_ASR_MODEL_ENDPOINT", "https://hf-mirror.com").strip()
+MODEL_ENDPOINT = os.environ.get("AILIS_ASR_MODEL_ENDPOINT", "").strip()
 CACHE_DIR = os.environ.get("AILIS_ASR_CACHE_DIR", os.path.join(os.path.dirname(__file__), "..", ".local", "asr-cache"))
 LANGUAGE = os.environ.get("AILIS_ASR_LANGUAGE", "zh").strip()
 SENSEVOICE_LANGUAGE = os.environ.get("AILIS_SENSEVOICE_LANGUAGE", "auto").strip() or "auto"
@@ -25,11 +25,30 @@ BATCH_SIZE = int(os.environ.get("AILIS_ASR_BATCH_SIZE", "8"))
 SILENCE_RMS_THRESHOLD = float(os.environ.get("AILIS_ASR_SILENCE_RMS_THRESHOLD", "0.0010"))
 SILENCE_PEAK_THRESHOLD = float(os.environ.get("AILIS_ASR_SILENCE_PEAK_THRESHOLD", "0.0060"))
 
-os.environ.setdefault("HF_ENDPOINT", MODEL_ENDPOINT)
+def env_flag(name: str, default: bool = False) -> bool:
+    raw_value = os.environ.get(name)
+    if raw_value is None:
+        return default
+    normalized_value = str(raw_value).strip().lower()
+    if normalized_value in {"0", "false", "no", "off"}:
+        return False
+    if normalized_value in {"1", "true", "yes", "on"}:
+        return True
+    return default
+
+
+LOCAL_ONLY = env_flag("AILIS_ASR_LOCAL_ONLY", True)
+
+if MODEL_ENDPOINT and not LOCAL_ONLY:
+    os.environ.setdefault("HF_ENDPOINT", MODEL_ENDPOINT)
 os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
 os.environ.setdefault("HF_HOME", CACHE_DIR)
 os.environ.setdefault("HF_HUB_CACHE", os.path.join(CACHE_DIR, "hub"))
 os.environ.setdefault("TRANSFORMERS_CACHE", os.path.join(CACHE_DIR, "transformers"))
+if LOCAL_ONLY:
+    os.environ.setdefault("HF_HUB_OFFLINE", "1")
+    os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+    os.environ.setdefault("HF_DATASETS_OFFLINE", "1")
 
 PIPELINE = None
 SENSEVOICE_MODEL = None
@@ -119,6 +138,17 @@ def is_effective_silence(audio_array: np.ndarray) -> bool:
     return rms < SILENCE_RMS_THRESHOLD and peak < SILENCE_PEAK_THRESHOLD
 
 
+def raise_local_model_error(model_id: str, exc: Exception) -> None:
+    if not LOCAL_ONLY:
+        raise exc
+
+    raise RuntimeError(
+        f"本地 ASR 模型未安装或缓存不完整：{model_id}。"
+        f"当前只使用本地模型缓存，不会联网下载；请先把完整模型缓存放到 {CACHE_DIR}。"
+        f"底层错误类型：{type(exc).__name__}"
+    ) from exc
+
+
 def ensure_pipeline():
     global PIPELINE
     if PIPELINE is not None:
@@ -134,18 +164,27 @@ def ensure_pipeline():
 
     log(f"[worker] loading Whisper model: {MODEL_ID}")
 
-    model = AutoModelForSpeechSeq2Seq.from_pretrained(
-        MODEL_ID,
-        cache_dir=CACHE_DIR,
-        torch_dtype=torch_dtype,
-        low_cpu_mem_usage=True
-    )
+    try:
+        model = AutoModelForSpeechSeq2Seq.from_pretrained(
+            MODEL_ID,
+            cache_dir=CACHE_DIR,
+            torch_dtype=torch_dtype,
+            low_cpu_mem_usage=True,
+            local_files_only=LOCAL_ONLY
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise_local_model_error(MODEL_ID, exc)
+
     model.to(model_device)
 
-    processor = AutoProcessor.from_pretrained(
-        MODEL_ID,
-        cache_dir=CACHE_DIR
-    )
+    try:
+        processor = AutoProcessor.from_pretrained(
+            MODEL_ID,
+            cache_dir=CACHE_DIR,
+            local_files_only=LOCAL_ONLY
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise_local_model_error(MODEL_ID, exc)
 
     PIPELINE = pipeline(
         "automatic-speech-recognition",
@@ -178,13 +217,17 @@ def ensure_sensevoice_model():
 
     device = "cuda:0" if torch.cuda.is_available() else "cpu"
     log(f"[worker] loading SenseVoice model: {SENSEVOICE_MODEL_ID} on {device}")
-    SENSEVOICE_MODEL = AutoModel(
-        model=SENSEVOICE_MODEL_ID,
-        trust_remote_code=True,
-        device=device,
-        hub="hf",
-        cache_dir=CACHE_DIR
-    )
+    try:
+        SENSEVOICE_MODEL = AutoModel(
+            model=SENSEVOICE_MODEL_ID,
+            trust_remote_code=True,
+            device=device,
+            hub="hf",
+            cache_dir=CACHE_DIR
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise_local_model_error(SENSEVOICE_MODEL_ID, exc)
+
     SENSEVOICE_POSTPROCESS = rich_transcription_postprocess
     log("[worker] SenseVoice model ready")
     return SENSEVOICE_MODEL, SENSEVOICE_POSTPROCESS
@@ -382,11 +425,15 @@ def main() -> None:
                 "result": result
             })
         except Exception as exc:  # noqa: BLE001
-            log(traceback.format_exc())
+            error_message = str(exc)
+            if error_message.startswith("本地 ASR 模型未安装或缓存不完整："):
+                log(error_message)
+            else:
+                log(traceback.format_exc())
             send({
                 "id": request_id,
                 "ok": False,
-                "error": str(exc)
+                "error": error_message
             })
 
 

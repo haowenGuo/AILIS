@@ -7,9 +7,9 @@ const { spawn, spawnSync } = require('child_process');
 const { pathToFileURL } = require('url');
 
 const PROJECT_ROOT = path.resolve(__dirname, '..');
-const EXTERNAL_RUNTIME_ROOT = 'F:\\HumanClaw\\HumanClaw\\build-cache\\openclaw-runtime';
-const EXTERNAL_VENDOR_ROOT = 'F:\\HumanClaw\\HumanClaw\\build-cache\\openclaw-vendor';
-const EXTERNAL_OPENCLAW_HOME = 'F:\\HumanClaw\\Runtime\\OpenClawHome';
+const EXTERNAL_RUNTIME_ROOT = 'F:\\AILIS\\AILIS\\build-cache\\openclaw-runtime';
+const EXTERNAL_VENDOR_ROOT = 'F:\\AILIS\\AILIS\\build-cache\\openclaw-vendor';
+const EXTERNAL_OPENCLAW_HOME = 'F:\\AILIS\\Runtime\\OpenClawHome';
 
 const DEFAULT_GATEWAY_URL =
     process.env.AILIS_OPENCLAW_GATEWAY_URL ||
@@ -128,7 +128,7 @@ function resolveRuntimeRootCandidates(app) {
         path.join(appPath, 'build-cache', 'openclaw-runtime'),
         path.resolve(appPath, '..', 'build-cache', 'openclaw-runtime'),
         path.join(PROJECT_ROOT, 'build-cache', 'openclaw-runtime'),
-        path.resolve(PROJECT_ROOT, '..', 'HumanClaw', 'HumanClaw', 'build-cache', 'openclaw-runtime'),
+        path.resolve(PROJECT_ROOT, '..', 'AILIS', 'AILIS', 'build-cache', 'openclaw-runtime'),
         EXTERNAL_RUNTIME_ROOT,
         ...envRepoRoots
     ]);
@@ -160,7 +160,7 @@ function resolveVendorNodePath(app) {
         path.join(appPath, 'build-cache', 'openclaw-vendor', nodeBinaryName),
         path.resolve(appPath, '..', 'build-cache', 'openclaw-vendor', nodeBinaryName),
         path.join(PROJECT_ROOT, 'build-cache', 'openclaw-vendor', nodeBinaryName),
-        path.resolve(PROJECT_ROOT, '..', 'HumanClaw', 'HumanClaw', 'build-cache', 'openclaw-vendor', nodeBinaryName),
+        path.resolve(PROJECT_ROOT, '..', 'AILIS', 'AILIS', 'build-cache', 'openclaw-vendor', nodeBinaryName),
         path.join(EXTERNAL_VENDOR_ROOT, nodeBinaryName)
     ]);
 }
@@ -169,7 +169,7 @@ function resolveOpenClawHomeRoot(app) {
     const candidates = dedupeStrings([
         process.env.AILIS_OPENCLAW_HOME,
         process.env.OPENCLAW_HOME,
-        process.env.HUMANCLAW_OPENCLAW_HOME,
+        process.env.AILIS_OPENCLAW_HOME,
         EXTERNAL_OPENCLAW_HOME,
         app?.getPath?.('userData') ? path.join(app.getPath('userData'), 'openclaw-home') : '',
         path.join(PROJECT_ROOT, 'tmp', 'openclaw-home')

@@ -53,7 +53,7 @@ This matters because it means the problem is not "the model is just dumb". The f
 
 In AILIS, the first-turn tool catalog is explicitly deferred:
 
-- `electron/humanclaw-agent-runner.cjs:1950-1970`
+- `electron/ailis-agent-runner.cjs:1950-1970`
 
 Key point:
 - `contract: 'deferred'`
@@ -67,10 +67,10 @@ The decision schema then lets the model emit one big object with:
 - `tool_call.args`
 
 See:
-- `electron/humanclaw-agent-runner.cjs:3320-3389`
+- `electron/ailis-agent-runner.cjs:3320-3389`
 
 And when native tool calling is enabled, AILIS still only gives the model one tool:
-- `electron/humanclaw-agent-runner.cjs:3409-3419`
+- `electron/ailis-agent-runner.cjs:3409-3419`
 
 The important line is effectively:
 
@@ -108,9 +108,9 @@ This means the model is not asked to invent a nested `args` blob from prose. It 
 In AILIS, nested tool args are weakly constrained until after planning.
 
 Evidence:
-- `electron/humanclaw-gateway.cjs:1450-1457` validates only local core tool contracts before execution
-- `electron/humanclaw-tool-contracts.cjs:1468-1475` says unknown tools return `ok: true` with `status: 'no_contract'`
-- external virtual tools skip this core validation path entirely: `electron/humanclaw-gateway.cjs:1450-1451`
+- `electron/ailis-gateway.cjs:1450-1457` validates only local core tool contracts before execution
+- `electron/ailis-tool-contracts.cjs:1468-1475` says unknown tools return `ok: true` with `status: 'no_contract'`
+- external virtual tools skip this core validation path entirely: `electron/ailis-gateway.cjs:1450-1451`
 
 So for MCP direct tools and external direct tools, the model often reaches execution with only partial or deferred contract visibility.
 
@@ -137,7 +137,7 @@ Important details:
 - It is designed as part of the real tool runtime, not just as guidance text
 
 AILIS has a similar idea in Gateway:
-- `electron/humanclaw-gateway.cjs:686-742`
+- `electron/ailis-gateway.cjs:686-742`
 
 That is good progress. But the model still reaches `tool_search` through the meta-decision JSON path, and its args are not enforced by the actual `tool_search` function schema at generation time.
 
@@ -175,7 +175,7 @@ Delegated subagents and parent sessions route approvals through a proper bridge:
 - `codex-rs/core/src/codex_delegate.rs:795-813`
 
 AILIS already has the concept and the prompt tells the model to use it:
-- `electron/humanclaw-agent-runner.cjs:3225`
+- `electron/ailis-agent-runner.cjs:3225`
 
 So permissions are not the main GAIA blocker right now. But Codex's implementation shows what "tool-native approval flow" looks like.
 
@@ -208,7 +208,7 @@ The AILIS system prompt is already telling the model many correct things:
 - request permissions via tool
 
 See:
-- `electron/humanclaw-agent-runner.cjs:3220-3248`
+- `electron/ailis-agent-runner.cjs:3220-3248`
 - `scripts/run-gaia-level1-lite.mjs:156-166`
 
 So the prompt is not empty or naive. It is already fairly good.
@@ -218,9 +218,9 @@ But when behavior still fails after all that prose, the remaining issue is not "
 ### 5.2 AILIS contracts are real, but still mostly core-tool schemas
 
 The core contract layer is useful:
-- `electron/humanclaw-tool-contracts.cjs:58-112`
-- `electron/humanclaw-tool-contracts.cjs:555-685`
-- `tests/humanclaw-tool-contracts.test.mjs:14-205`
+- `electron/ailis-tool-contracts.cjs:58-112`
+- `electron/ailis-tool-contracts.cjs:555-685`
+- `tests/ailis-tool-contracts.test.mjs:14-205`
 
 What it has:
 - versioned schemas
@@ -242,9 +242,9 @@ Notice the difference:
 ### 5.3 Observation quality is still too summary-heavy
 
 The turn-item layer builds compact observations and recovery hints:
-- `electron/humanclaw-turn-items.cjs:155-203`
-- `electron/humanclaw-turn-items.cjs:242-304`
-- `electron/humanclaw-turn-items.cjs:386-413`
+- `electron/ailis-turn-items.cjs:155-203`
+- `electron/ailis-turn-items.cjs:242-304`
+- `electron/ailis-turn-items.cjs:386-413`
 
 This is a good start, but it is still mostly:
 - preview text
@@ -327,7 +327,7 @@ What AILIS actually did:
 
 Evidence:
 - `scripts/mcp-ailis-research-server.cjs:2407-2478` requires a YouTube URL
-- `electron/humanclaw-tool-contracts.cjs:661-685` makes `tool_search` require `query`/`q`
+- `electron/ailis-tool-contracts.cjs:661-685` makes `tool_search` require `query`/`q`
 
 Why this is not mainly the base model being dumb:
 - the runtime made the model express nested tool args through a meta decision object
@@ -477,7 +477,7 @@ For structured or document tools, persist:
 
 5. Fix adapter smoke testing with real canonical examples.
 The current external ClinicalTrials smoke test proves the toy adapter shape, not the real production call path:
-- `tests/humanclaw-gateway.test.mjs:193-259`
+- `tests/ailis-gateway.test.mjs:193-259`
 
 6. Harden the benchmark finalizer.
 Do not submit finalizer answers when:

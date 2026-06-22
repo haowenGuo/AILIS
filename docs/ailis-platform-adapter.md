@@ -8,7 +8,7 @@ AILIS keeps Windows as the first-class desktop target, but platform-specific beh
 AILIS Core
 Agent Loop / Memory / Skills / MCP / Eval / Persona Surface
         |
-HumanClaw Tool Contracts
+AILIS Tool Contracts
         |
 Computer and Vision Tool Interfaces
         |
@@ -32,7 +32,7 @@ They may read `platform` metadata from observations, but should not hard-code Wi
 
 ## Adapter Surface
 
-The base adapter lives in `electron/humanclaw-platform-adapter.cjs`.
+The base adapter lives in `electron/ailis-platform-adapter.cjs`.
 
 It currently owns:
 
@@ -49,7 +49,7 @@ It currently owns:
 
 The first connected consumer is `computer`. Gateway and Runtime also expose platform status so tools and evals can verify the active platform.
 
-The Electron shell adapter lives in `electron/humanclaw-desktop-platform-adapter.cjs`.
+The Electron shell adapter lives in `electron/ailis-desktop-platform-adapter.cjs`.
 
 It owns desktop-shell behavior that previously leaked into `electron/main.cjs`:
 
@@ -140,7 +140,7 @@ Expected backends:
 
 When adding platform-specific behavior:
 
-1. Put the generic tool contract in `humanclaw-tool-contracts.cjs`.
+1. Put the generic tool contract in `ailis-tool-contracts.cjs`.
 2. Put platform-neutral orchestration in Agent/Runtime.
-3. Put OS-specific command/API decisions in `humanclaw-platform-adapter.cjs` or a platform-specific adapter module.
+3. Put OS-specific command/API decisions in `ailis-platform-adapter.cjs` or a platform-specific adapter module.
 4. Add a test that simulates at least Windows and one non-Windows adapter.

@@ -27,7 +27,7 @@ node scripts/setup-ailis-standard-tool-packs.mjs --dry-run
 Write exposure state:
 
 ```bash
-pnpm humanclaw:setup-standard-tool-packs
+pnpm ailis:setup-standard-tool-packs
 ```
 
 Expose only public read-only tools:
@@ -45,7 +45,7 @@ node scripts/setup-ailis-standard-tool-packs.mjs --write --pack academic_metadat
 Expose auth/local adapters and run smoke verification:
 
 ```bash
-pnpm humanclaw:setup-standard-tool-packs:verify
+pnpm ailis:setup-standard-tool-packs:verify
 ```
 
 Run tests:
@@ -72,7 +72,7 @@ pnpm test:ailis-standard-tool-packs
 
 ## Current Smoke Findings
 
-- `pnpm humanclaw:setup-standard-tool-packs:verify` promoted public OpenAlex/Crossref/Semantic Scholar contracts and local `python_document_extract`; Gmail/Graph/Composio/Firecrawl/Tavily remained `needs_config`; Docling/MarkItDown remained `missing_dependency`.
+- `pnpm ailis:setup-standard-tool-packs:verify` promoted public OpenAlex/Crossref/Semantic Scholar contracts and local `python_document_extract`; Gmail/Graph/Composio/Firecrawl/Tavily remained `needs_config`; Docling/MarkItDown remained `missing_dependency`.
 - Real yt-dlp search smoke resolved `BBC Earth Top 5 Silliest Animal Moments` to `https://www.youtube.com/watch?v=2Njmx-UuU3M`.
 - Real transcript smoke for that URL returned `anti_bot_blocked`, because YouTube required browser cookies; this is an access/cookie/backend issue, not a query wording problem.
 - GAIA targeted retest after the YouTube affordance change passed `0383a3ee-47a7-41a4-b493-519bdefe0488` with `Rockhopper penguin`.

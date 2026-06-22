@@ -26,7 +26,7 @@ pub(crate) struct ContextManager {
 
 AILIS 对应落点：
 
-- `F:\AILIS\electron\humanclaw-turn-items.cjs`
+- `F:\AILIS\electron\ailis-turn-items.cjs`
 - 使用 `recent_turn_items` 作为模型可见的 Codex-like runtime items。
 - 每个 item 表示 `tool_call`、`tool_result`、`context` 或 `runtime_note`。
 
@@ -80,7 +80,7 @@ estimated_tokens_of_items_added_since_last_successful_api_response:
 
 AILIS 对应落点：
 
-- `F:\AILIS\electron\humanclaw-agent-runner.cjs`
+- `F:\AILIS\electron\ailis-agent-runner.cjs`
 - 已有 `agent.prompt_budget`，记录 `system_chars`、`user_chars`、`total_chars`、`approx_input_tokens`。
 - 这次新增 `recent_turn_items.retention` 和 `prompt_compaction.omitted_turn_items`，后续跑慢任务时可以直接看 prompt 是否被压住。
 
@@ -132,7 +132,7 @@ AILIS 对应落点：
 
 ## 2. AILIS 这次具体调整
 
-### 2.1 `humanclaw-turn-items.cjs`
+### 2.1 `ailis-turn-items.cjs`
 
 新增行为：
 
@@ -145,7 +145,7 @@ AILIS 对应落点：
 
 这对应 Codex 的“工具输出不是永久 transcript 主体”的原则。
 
-### 2.2 `humanclaw-agent-runner.cjs`
+### 2.2 `ailis-agent-runner.cjs`
 
 原来每轮 user payload 同时包含：
 
@@ -175,9 +175,9 @@ AILIS 对应落点：
 最小检查：
 
 ```powershell
-node --check F:\AILIS\electron\humanclaw-turn-items.cjs
-node --check F:\AILIS\electron\humanclaw-agent-runner.cjs
-node --test F:\AILIS\tests\humanclaw-turn-items.test.mjs F:\AILIS\tests\humanclaw-llm-planner.test.mjs
+node --check F:\AILIS\electron\ailis-turn-items.cjs
+node --check F:\AILIS\electron\ailis-agent-runner.cjs
+node --test F:\AILIS\tests\ailis-turn-items.test.mjs F:\AILIS\tests\ailis-llm-planner.test.mjs
 ```
 
 慢任务验证：

@@ -25,7 +25,7 @@ sources = {
     "patch_perm": ".refs/openai-codex/codex-rs/core/src/tools/handlers/apply_patch.rs:301,313,363,442,502,515；request_permissions.rs:32,55,64,78；permissions_instructions.rs:62",
     "output": ".refs/openai-codex/codex-rs/core/src/tools/context.rs:66,148,235,308,318,404,427；events.rs:54,167,316,337,395",
     "skills": ".refs/openai-codex/codex-rs/core-skills/src/loader.rs:56,83,89,161,812；core-plugins/src/manifest.rs:14,38,48,140,240；gpt_5_codex_prompt.md:1,5,11",
-    "ailis": "F:/AILIS/electron/humanclaw-agent-runner.cjs:3544,3545,3561,3562,5175,5197,5223,5484,5607,5678,5798；humanclaw-tool-contracts.cjs:538,584,661,682；humanclaw-runtime.cjs:471,528,771,923；humanclaw-gateway.cjs:663,717,734,885,1635,1695",
+    "ailis": "F:/AILIS/electron/ailis-agent-runner.cjs:3544,3545,3561,3562,5175,5197,5223,5484,5607,5678,5798；ailis-tool-contracts.cjs:538,584,661,682；ailis-runtime.cjs:471,528,771,923；ailis-gateway.cjs:663,717,734,885,1635,1695",
     "gaia": "F:/AILIS/scripts/run-gaia-level1-lite.mjs:328,355,414,425,600,622；F:/AILIS/eval-results/engineering/gaia-official/*20260611*.summary.json；F:/AILIS/docs/ailis-vs-codex-gaia-failure-source-report-20260611.md",
 }
 

@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
 const { spawn, spawnSync } = require('child_process');
+const { getVenvPythonPath } = require('./voice-runtime-bootstrap.cjs');
 
 function normalizeBinaryPayload(payload) {
     if (!payload) {
@@ -55,6 +56,10 @@ function normalizeAsrPreset(value) {
     return 'balanced';
 }
 
+function getProjectRoot() {
+    return path.resolve(__dirname, '..');
+}
+
 function normalizeTranscribePayload(payload) {
     const audioBytes = normalizeBinaryPayload(payload);
     const rawPreset = isPlainTranscribePayload(payload)
@@ -80,6 +85,41 @@ class DesktopASRManager {
         return path.join(this.app.getPath('userData'), 'asr-cache');
     }
 
+    getLegacyCacheDirs() {
+        const appDataDir = this.app.getPath('appData');
+        return [
+            path.join(appDataDir, 'ailis', 'asr-cache'),
+            path.join(appDataDir, 'AIGril', 'asr-cache')
+        ].filter((candidate) => candidate !== this.getCacheDir());
+    }
+
+    cacheHasModel(cacheDir) {
+        try {
+            if (!cacheDir || !fs.existsSync(cacheDir)) {
+                return false;
+            }
+            const entries = fs.readdirSync(cacheDir, { withFileTypes: true });
+            return entries.some((entry) => entry.isDirectory() && /^models--/i.test(entry.name));
+        } catch {
+            return false;
+        }
+    }
+
+    resolveCacheDir() {
+        const currentCacheDir = this.getCacheDir();
+        if (this.cacheHasModel(currentCacheDir)) {
+            return currentCacheDir;
+        }
+
+        const legacyCacheDir = this.getLegacyCacheDirs().find((candidate) => this.cacheHasModel(candidate));
+        if (legacyCacheDir) {
+            console.log(`[ASR] 当前缓存为空，复用旧模型缓存：${legacyCacheDir}`);
+            return legacyCacheDir;
+        }
+
+        return currentCacheDir;
+    }
+
     getWorkerScriptPath() {
         if (this.app.isPackaged) {
             return path.join(process.resourcesPath, 'app.asar.unpacked', 'electron', 'desktop_asr_worker.py');
@@ -93,8 +133,33 @@ class DesktopASRManager {
             return this.pythonCommand;
         }
 
+        const projectRoot = getProjectRoot();
         const envPython = String(process.env.AILIS_PYTHON || '').trim();
+        const envVoicePython = String(process.env.AILIS_VOICE_PYTHON || '').trim();
+        const envAsrPython = String(process.env.AILIS_ASR_PYTHON || '').trim();
+        const privateVoicePython = getVenvPythonPath(
+            path.join(this.app.getPath('userData'), 'local-runtimes', 'voice-venv'),
+            process.platform
+        );
+        const projectVoicePython = getVenvPythonPath(
+            path.join(projectRoot, 'build-cache', 'cosyvoice3-venv'),
+            process.platform
+        );
         const candidates = [];
+
+        if (envAsrPython) {
+            candidates.push({
+                command: envAsrPython,
+                args: []
+            });
+        }
+
+        if (envVoicePython) {
+            candidates.push({
+                command: envVoicePython,
+                args: []
+            });
+        }
 
         if (envPython) {
             candidates.push({
@@ -104,12 +169,26 @@ class DesktopASRManager {
         }
 
         candidates.push(
+            { command: privateVoicePython, args: [] },
+            { command: projectVoicePython, args: [] }
+        );
+
+        candidates.push(
             { command: 'python', args: [] },
             { command: 'py', args: ['-3.12'] },
             { command: 'py', args: [] }
         );
 
         for (const candidate of candidates) {
+            if (!candidate.command) {
+                continue;
+            }
+            if (
+                path.isAbsolute(candidate.command) &&
+                !fs.existsSync(candidate.command)
+            ) {
+                continue;
+            }
             try {
                 const result = spawnSync(candidate.command, [...candidate.args, '--version'], {
                     windowsHide: true,
@@ -126,7 +205,7 @@ class DesktopASRManager {
             }
         }
 
-        throw new Error('未找到可用的 Python 运行时，请安装 Python 3.12 或设置 AILIS_PYTHON');
+        throw new Error('未找到 AILIS 可用的 Python 运行时；请在控制面板执行“本地语音运行时诊断/一键修复”，或设置 AILIS_ASR_PYTHON / AILIS_VOICE_PYTHON。');
     }
 
     ensureWorker() {
@@ -140,6 +219,7 @@ class DesktopASRManager {
         }
 
         const python = this.resolvePythonCommand();
+        const cacheDir = this.resolveCacheDir();
         const child = spawn(
             python.command,
             [...python.args, '-u', workerScriptPath],
@@ -149,13 +229,16 @@ class DesktopASRManager {
                 stdio: ['pipe', 'pipe', 'pipe'],
                 env: {
                     ...process.env,
+                    AILIS_PROJECT_ROOT: getProjectRoot(),
+                    AILIS_USER_DATA: this.app.getPath('userData'),
                     AILIS_ASR_MODEL_ID: process.env.AILIS_ASR_MODEL_ID || 'openai/whisper-small',
-                    AILIS_ASR_MODEL_ENDPOINT: process.env.AILIS_ASR_MODEL_ENDPOINT || 'https://hf-mirror.com',
+                    AILIS_ASR_MODEL_ENDPOINT: process.env.AILIS_ASR_MODEL_ENDPOINT || '',
+                    AILIS_ASR_LOCAL_ONLY: process.env.AILIS_ASR_LOCAL_ONLY || '1',
                     AILIS_ASR_LANGUAGE: process.env.AILIS_ASR_LANGUAGE || 'zh',
                     AILIS_ASR_TASK: process.env.AILIS_ASR_TASK || 'transcribe',
                     AILIS_ASR_CHUNK_LENGTH_S: process.env.AILIS_ASR_CHUNK_LENGTH_S || '15',
                     AILIS_ASR_BATCH_SIZE: process.env.AILIS_ASR_BATCH_SIZE || '4',
-                    AILIS_ASR_CACHE_DIR: this.getCacheDir()
+                    AILIS_ASR_CACHE_DIR: cacheDir
                 }
             }
         );

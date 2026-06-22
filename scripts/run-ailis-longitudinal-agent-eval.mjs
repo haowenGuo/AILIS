@@ -7,7 +7,7 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const { callDesktopLlmProvider } = require('../electron/desktop-llm-provider.cjs');
-const { HumanClawGateway } = require('../electron/humanclaw-gateway.cjs');
+const { AILISGateway } = require('../electron/ailis-gateway.cjs');
 const {
     HARD_FAIL_FLAGS,
     HUMANLIKE_METRICS,
@@ -202,8 +202,8 @@ function detectGithubCliStatus() {
 }
 
 function loadDesktopStateSettings() {
-    const statePath = path.join(process.env.APPDATA || '', 'humanclaw', 'desktop-state.json');
-    const mcpConfigPath = path.join(process.env.APPDATA || '', 'humanclaw', 'humanclaw-gateway', 'mcp-servers.json');
+    const statePath = path.join(process.env.APPDATA || '', 'ailis', 'desktop-state.json');
+    const mcpConfigPath = path.join(process.env.APPDATA || '', 'ailis', 'ailis-gateway', 'mcp-servers.json');
     const github = detectGithubCliStatus();
     const fallback = {
         baseUrl: '',
@@ -552,7 +552,7 @@ async function startStandaloneGateway(args) {
     if (desktopState.mcpConfigPath) {
         gatewayOptions.mcpConfigPath = desktopState.mcpConfigPath;
     }
-    const gateway = new HumanClawGateway(gatewayOptions);
+    const gateway = new AILISGateway(gatewayOptions);
     const status = await gateway.start();
     return { gateway, baseUrl: status.url, status };
 }

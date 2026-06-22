@@ -72,7 +72,7 @@ Actual Codex behavior:
 AILIS current mapping:
 
 - AILIS already has file-based skills in `F:\AILIS\electron\skills\<skill_id>\SKILL.md`.
-- AILIS loader is in `F:\AILIS\electron\humanclaw-skills.cjs`.
+- AILIS loader is in `F:\AILIS\electron\ailis-skills.cjs`.
 - Current skill IDs include `vision`, `computer`, `email`, `file_manager`, `code`, `mcp_bridge`, `capability_manager`, `self_debugger`.
 
 AILIS adjustment rule:
@@ -232,7 +232,7 @@ Actual Codex behavior:
 
 AILIS current mapping:
 
-- AILIS has `executeMcpBridge` in `F:\AILIS\electron\humanclaw-runtime.cjs`.
+- AILIS has `executeMcpBridge` in `F:\AILIS\electron\ailis-runtime.cjs`.
 - It exposes actions like `list_servers`, `list_tools`, `read_resource`, `call_tool`.
 - Current issue: the model often sees one indirect `mcp_bridge` tool and must discover server/tool/schema itself.
 
@@ -422,13 +422,13 @@ Actual Codex behavior:
 
 AILIS current mapping:
 
-- AILIS has `AGENT_SKILL_CATALOG` and `AGENT_TOOL_CATALOG` in `humanclaw-agent-runner.cjs`.
-- AILIS can build skill context with `buildHumanClawSkillContextText`.
+- AILIS has `AGENT_SKILL_CATALOG` and `AGENT_TOOL_CATALOG` in `ailis-agent-runner.cjs`.
+- AILIS can build skill context with `buildAILISSkillContextText`.
 - AILIS currently appends tool contracts inside skill context:
 
 Source:
 
-- `F:\AILIS\electron\humanclaw-skills.cjs:217`
+- `F:\AILIS\electron\ailis-skills.cjs:217`
 
 Short AILIS excerpt:
 
@@ -562,13 +562,13 @@ create_tool_spec(tool_info)
 
 AILIS current mapping:
 
-- AILIS has deterministic contract validation in `F:\AILIS\electron\humanclaw-tool-contracts.cjs`.
+- AILIS has deterministic contract validation in `F:\AILIS\electron\ailis-tool-contracts.cjs`.
 - Validation function:
 
 Source:
 
-- `F:\AILIS\electron\humanclaw-tool-contracts.cjs:1036`
-- `F:\AILIS\electron\humanclaw-tool-contracts.cjs:1206`
+- `F:\AILIS\electron\ailis-tool-contracts.cjs:1036`
+- `F:\AILIS\electron\ailis-tool-contracts.cjs:1206`
 
 Short AILIS excerpts:
 
@@ -636,8 +636,8 @@ Codex anchor:
 
 AILIS target files:
 
-- `F:\AILIS\electron\humanclaw-runtime.cjs`
-- new optional file: `F:\AILIS\electron\humanclaw-mcp-tool-registry.cjs`
+- `F:\AILIS\electron\ailis-runtime.cjs`
+- new optional file: `F:\AILIS\electron\ailis-mcp-tool-registry.cjs`
 
 ### Step 2: Expose direct MCP tools for normal execution
 
@@ -653,8 +653,8 @@ Codex anchor:
 
 AILIS target files:
 
-- `F:\AILIS\electron\humanclaw-agent-runner.cjs`
-- `F:\AILIS\electron\humanclaw-tool-contracts.cjs`
+- `F:\AILIS\electron\ailis-agent-runner.cjs`
+- `F:\AILIS\electron\ailis-tool-contracts.cjs`
 
 ### Step 3: Add deferred `tool_search`
 
@@ -688,11 +688,11 @@ Codex anchor:
 
 AILIS target file:
 
-- `F:\AILIS\electron\humanclaw-skills.cjs`
+- `F:\AILIS\electron\ailis-skills.cjs`
 
 Specific adjustment:
 
-- `buildHumanClawSkillContextText(skillId)` should return skill body only.
+- `buildAILISSkillContextText(skillId)` should return skill body only.
 - A separate `buildRelevantToolSchemaContext(toolIds)` should handle schemas.
 
 ### Step 5: Convert capabilities into plugin-like bundles
@@ -778,8 +778,8 @@ Codex Plugin sources:
 
 AILIS comparison sources:
 
-- `F:\AILIS\electron\humanclaw-skills.cjs`
-- `F:\AILIS\electron\humanclaw-runtime.cjs`
-- `F:\AILIS\electron\humanclaw-tool-contracts.cjs`
+- `F:\AILIS\electron\ailis-skills.cjs`
+- `F:\AILIS\electron\ailis-runtime.cjs`
+- `F:\AILIS\electron\ailis-tool-contracts.cjs`
 - `F:\AILIS\electron\skills\mcp_bridge\SKILL.md`
 - `F:\AILIS\scripts\mcp-ailis-research-server.cjs`

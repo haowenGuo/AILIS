@@ -184,10 +184,10 @@ Compiler 会自动增强为：
 最小验证：
 
 ```bash
-pnpm test:humanclaw-contract-compiler
-pnpm test:humanclaw-tool-acquisition
-pnpm test:humanclaw-capability-manager
-pnpm test:humanclaw-tool-contracts
+pnpm test:ailis-contract-compiler
+pnpm test:ailis-tool-acquisition
+pnpm test:ailis-capability-manager
+pnpm test:ailis-tool-contracts
 ```
 
 通过 contract lint 只是第一关。外部 MCP 仍必须通过 smoke test；任务能力仍要跑 GAIA / code task regression。

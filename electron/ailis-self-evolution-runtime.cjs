@@ -139,7 +139,7 @@ class AilisSelfEvolutionRuntime {
     constructor(options = {}) {
         this.workspaceRoot = path.resolve(options.workspaceRoot || process.cwd());
         this.projectRoot = path.resolve(options.projectRoot || this.workspaceRoot);
-        this.auditDir = path.resolve(options.auditDir || path.join(this.projectRoot, '.humanclaw-state'));
+        this.auditDir = path.resolve(options.auditDir || path.join(this.projectRoot, '.ailis-state'));
         this.stateDir = path.resolve(options.stateDir || path.join(this.auditDir, 'self-evolution'));
         this.statePath = path.join(this.stateDir, 'evolution-state.json');
         this.memoryRuntime = options.memoryRuntime || null;
@@ -479,15 +479,15 @@ class AilisSelfEvolutionRuntime {
     inferValidationCommands(toolId = '') {
         const normalized = toolId.toLowerCase();
         if (normalized.includes('mcp')) {
-            return ['pnpm humanclaw:mcp-soak', 'pnpm test:humanclaw-runtime'];
+            return ['pnpm ailis:mcp-soak', 'pnpm test:ailis-runtime'];
         }
         if (normalized.includes('capability') || normalized.includes('skill')) {
-            return ['pnpm test:humanclaw-capability-manager', 'pnpm test:humanclaw-skills'];
+            return ['pnpm test:ailis-capability-manager', 'pnpm test:ailis-skills'];
         }
         if (normalized.includes('agent')) {
-            return ['pnpm test:humanclaw-agent'];
+            return ['pnpm test:ailis-agent'];
         }
-        return ['pnpm humanclaw:validate-harness', 'pnpm humanclaw:tool-doctor:plan'];
+        return ['pnpm ailis:validate-harness', 'pnpm ailis:tool-doctor:plan'];
     }
 
     async markProposal(args = {}) {

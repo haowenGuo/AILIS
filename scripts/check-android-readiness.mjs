@@ -134,7 +134,7 @@ async function main() {
         }
     }
     const installableArtifacts = await findFiles(['dist', 'release', 'build-cache'], new Set(['.apk', '.aab']));
-    const adb = findExecutable('adb', ['HUMANCLAW_ANDROID_ADB', 'ANDROID_ADB', 'ADB']);
+    const adb = findExecutable('adb', ['AILIS_ANDROID_ADB', 'ANDROID_ADB', 'ADB']);
     const checks = {
         projectRoot,
         package: {

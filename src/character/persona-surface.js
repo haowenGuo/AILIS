@@ -242,8 +242,8 @@ function inferGestureIntentFromText(text = '') {
 }
 
 function inferTaskStateFromPayload(payload = {}) {
-    const result = payload.humanclaw && typeof payload.humanclaw === 'object'
-        ? payload.humanclaw
+    const result = payload.ailis && typeof payload.ailis === 'object'
+        ? payload.ailis
         : {};
     const status = normalizeText(result.status || payload.status).toLowerCase();
     if (status === 'needs_approval') {

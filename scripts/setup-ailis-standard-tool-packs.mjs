@@ -5,8 +5,8 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const {
-    HumanClawToolAcquisitionGateway
-} = require('../electron/humanclaw-tool-acquisition-gateway.cjs');
+    AILISToolAcquisitionGateway
+} = require('../electron/ailis-tool-acquisition-gateway.cjs');
 const {
     listStandardToolPacks
 } = require('../electron/ailis-standard-tool-packs.cjs');
@@ -163,10 +163,10 @@ async function writeReport({ reportDir, result, packs, searched }) {
 async function main() {
     const args = parseArgs(process.argv.slice(2));
     const workspaceRoot = process.cwd();
-    const stateDir = process.env.HUMANCLAW_TOOL_ACQUISITION_STATE_DIR ||
-        path.join(workspaceRoot, '.humanclaw-state', 'tool-acquisition');
+    const stateDir = process.env.AILIS_TOOL_ACQUISITION_STATE_DIR ||
+        path.join(workspaceRoot, '.ailis-state', 'tool-acquisition');
     const reportDir = args.reportDir || path.join(workspaceRoot, 'eval-results', 'engineering', 'standard-tool-packs');
-    const gateway = new HumanClawToolAcquisitionGateway({
+    const gateway = new AILISToolAcquisitionGateway({
         workspaceRoot,
         projectRoot: workspaceRoot,
         stateDir

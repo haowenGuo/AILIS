@@ -67,7 +67,7 @@ Recommended public-facing order:
 | --- | --- |
 | AILIS Humanlike Eval | Product regression for persona, memory, relationship stage, low tool feeling, multimodal consistency. |
 | Longitudinal Companionship Eval | Internal long-term companion quality and failure analysis. |
-| HumanClaw Execution Benchmark | Local harness regression for tools, approval, audit, transcript, command/session/code repair. |
+| AILIS Execution Benchmark | Local harness regression for tools, approval, audit, transcript, command/session/code repair. |
 
 These can be shown, but label them as internal product-quality evals. They should not replace OSWorld/SWE-bench/GAIA/τ-bench-style public scores.
 
@@ -103,7 +103,7 @@ Interpretation:
 
 | Eval | Scope | Current Result | Use In Demo? |
 | --- | --- | --- | --- |
-| HumanClaw Execution Benchmark | Code repair, long process session, safety gates | Passed all task groups; 17 audit entries; 36 transcript items | Yes, primary local task demo |
+| AILIS Execution Benchmark | Code repair, long process session, safety gates | Passed all task groups; 17 audit entries; 36 transcript items | Yes, primary local task demo |
 | Computer Tool Smoke | Windows computer actions, approval gate, OpenClaw tool-surface validation | Passed | Yes, infrastructure slide |
 | Code Tool Smoke | Code operation smoke | Passed | Yes, simple code demo |
 | SWE-bench Execution Selftest | Local tiny SWE-style harness selftest | 1 / 1 verified | Yes, as harness readiness, not public SWE-bench score |
@@ -156,9 +156,9 @@ Target display:
 Run:
 
 ```powershell
-pnpm humanclaw:benchmark-execution
-pnpm humanclaw:smoke-computer
-pnpm humanclaw:smoke-code
+pnpm ailis:benchmark-execution
+pnpm ailis:smoke-computer
+pnpm ailis:smoke-code
 pnpm bench:swebench-lite:selftest
 ```
 
@@ -372,7 +372,7 @@ Script:
 1. Create or open a tiny failing Node project.
 2. AILIS runs tests, sees failure.
 3. AILIS edits code and reruns tests.
-4. Overlay: HumanClaw Execution Benchmark passed, SWE-style selftest 1/1 verified.
+4. Overlay: AILIS Execution Benchmark passed, SWE-style selftest 1/1 verified.
 
 ### Scene 4: Desktop Computer Control
 

@@ -164,10 +164,10 @@ flowchart TD
 
 ## 3. 本地目录设计
 
-默认目录放在 HumanClaw 状态目录下：
+默认目录放在 AILIS 状态目录下：
 
 ```text
-F:\AILIS\.humanclaw-state\memory\
+F:\AILIS\.ailis-state\memory\
   memory.sqlite
   memory.sqlite-wal
   capsules\
@@ -672,7 +672,7 @@ score = clamp(score + delta, 0, 100)
 模块：
 
 ```text
-electron/humanclaw-secret-vault.cjs
+electron/ailis-secret-vault.cjs
 ```
 
 接口：
@@ -880,9 +880,9 @@ Project memory 与 relationship memory 不混写
 新增：
 
 ```text
-electron/humanclaw-memory-store.cjs
-electron/humanclaw-memory-blocks.cjs
-electron/humanclaw-context-compiler.cjs
+electron/ailis-memory-store.cjs
+electron/ailis-memory-blocks.cjs
+electron/ailis-context-compiler.cjs
 ```
 
 能力：
@@ -898,8 +898,8 @@ electron/humanclaw-context-compiler.cjs
 新增：
 
 ```text
-electron/humanclaw-secret-vault.cjs
-electron/humanclaw-affinity.cjs
+electron/ailis-secret-vault.cjs
+electron/ailis-affinity.cjs
 ```
 
 能力：
@@ -914,7 +914,7 @@ electron/humanclaw-affinity.cjs
 新增：
 
 ```text
-electron/humanclaw-memory-curator.cjs
+electron/ailis-memory-curator.cjs
 ```
 
 能力：
@@ -929,7 +929,7 @@ electron/humanclaw-memory-curator.cjs
 新增：
 
 ```text
-electron/humanclaw-memory-reflection.cjs
+electron/ailis-memory-reflection.cjs
 ```
 
 能力：

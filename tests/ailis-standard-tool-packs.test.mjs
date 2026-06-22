@@ -12,9 +12,9 @@ const {
     searchStandardToolPacks,
     collectStandardToolPackContracts
 } = require('../electron/ailis-standard-tool-packs.cjs');
-const { compileAndLintAilisContract } = require('../electron/humanclaw-contract-compiler.cjs');
-const { HumanClawToolAcquisitionGateway } = require('../electron/humanclaw-tool-acquisition-gateway.cjs');
-const { validateToolContract } = require('../electron/humanclaw-tool-contracts.cjs');
+const { compileAndLintAilisContract } = require('../electron/ailis-contract-compiler.cjs');
+const { AILISToolAcquisitionGateway } = require('../electron/ailis-tool-acquisition-gateway.cjs');
+const { validateToolContract } = require('../electron/ailis-tool-contracts.cjs');
 
 async function makeWorkspace(prefix) {
     return await fs.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -62,7 +62,7 @@ test('AILIS standard tool packs are searchable by task shape', () => {
 
 test('Tool Acquisition Gateway surfaces standard pack candidates and public academic tools', async () => {
     const workspaceRoot = await makeWorkspace('ailis-standard-packs-');
-    const gateway = new HumanClawToolAcquisitionGateway({
+    const gateway = new AILISToolAcquisitionGateway({
         workspaceRoot,
         projectRoot: workspaceRoot,
         stateDir: path.join(workspaceRoot, '.state', 'tool-acquisition'),
@@ -113,7 +113,7 @@ test('Capability manager contract accepts standard tool pack actions', () => {
 
 test('AILIS standard tool pack exposure writes verified public tools and contract-only backends', async () => {
     const workspaceRoot = await makeWorkspace('ailis-standard-pack-expose-');
-    const gateway = new HumanClawToolAcquisitionGateway({
+    const gateway = new AILISToolAcquisitionGateway({
         workspaceRoot,
         projectRoot: workspaceRoot,
         stateDir: path.join(workspaceRoot, '.state', 'tool-acquisition'),
@@ -171,7 +171,7 @@ test('AILIS standard auth adapters configure env profiles but do not promote mis
     delete process.env.FIRECRAWL_API_KEY;
     delete process.env.TAVILY_API_KEY;
     try {
-        const gateway = new HumanClawToolAcquisitionGateway({
+        const gateway = new AILISToolAcquisitionGateway({
             workspaceRoot,
             projectRoot: workspaceRoot,
             stateDir: path.join(workspaceRoot, '.state', 'tool-acquisition'),
@@ -212,7 +212,7 @@ test('AILIS standard local document adapters promote only after dependency smoke
     const samplePath = path.join(workspaceRoot, 'sample.txt');
     await fs.writeFile(samplePath, 'Secret Santa table: Alice gives to Bob.', 'utf8');
     const calls = [];
-    const gateway = new HumanClawToolAcquisitionGateway({
+    const gateway = new AILISToolAcquisitionGateway({
         workspaceRoot,
         projectRoot: workspaceRoot,
         stateDir: path.join(workspaceRoot, '.state', 'tool-acquisition'),

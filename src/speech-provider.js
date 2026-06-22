@@ -3,70 +3,23 @@ import { createChunkedTtsSession } from './realtime-voice/chunked-tts-session.js
 import { deriveTtsSpeechText } from './tts-speech-text.js';
 
 function isDesktopRuntime() {
-    return window.ailisDesktop?.platform === 'electron';
+    return typeof window !== 'undefined' && window.ailisDesktop?.platform === 'electron';
 }
-
-const ZH_FEMALE_VOICE_HINTS = [
-    'xiaoxiao',
-    'xiaoyi',
-    'xiaomo',
-    'xiaoxuan',
-    'xiaorui',
-    'xiaoshuang',
-    'xiaoyan',
-    'xiaoyou',
-    'xiaoqiu',
-    'xiaorou',
-    'huihui',
-    'yaoyao',
-    '晓晓',
-    '晓伊',
-    '晓墨',
-    '晓颜',
-    '晓悠',
-    '晓秋',
-    '晓柔',
-    '女'
-];
-
-const ZH_MALE_VOICE_HINTS = [
-    'yunxi',
-    'yunyang',
-    'yunjian',
-    '云希',
-    '云扬',
-    '云健',
-    '男'
-];
-
-const EN_FEMALE_VOICE_HINTS = [
-    'aria',
-    'jenny',
-    'sara',
-    'emma',
-    'aria',
-    'female',
-    'woman',
-    'girl'
-];
-
-const EN_MALE_VOICE_HINTS = [
-    'guy',
-    'davis',
-    'tony',
-    'male',
-    'man',
-    'boy'
-];
 
 function normalizeSpeechMode(mode) {
     const requestedMode = String(mode || '').trim().toLowerCase();
 
-    if (['cosyvoice3', 'kokoro', 'vits', 'server', 'local', 'off', 'auto'].includes(requestedMode)) {
+    if (['off', 'server', 'cosyvoice3'].includes(requestedMode)) {
         return requestedMode;
     }
+    if (['elevenlabs', 'eleven-labs', 'eleven_labs', 'server_tts', 'cloud'].includes(requestedMode)) {
+        return 'server';
+    }
+    if (['cosyvoice', 'cosy-voice', 'cosy_voice'].includes(requestedMode)) {
+        return 'cosyvoice3';
+    }
 
-    return '';
+    return 'off';
 }
 
 function resolveSpeechMode(modeOverride = null) {
@@ -74,152 +27,19 @@ function resolveSpeechMode(modeOverride = null) {
 
     const desktopRuntime = isDesktopRuntime();
 
-    if (requestedMode === 'vits') {
-        return desktopRuntime ? 'vits' : 'server';
-    }
-
     if (requestedMode === 'cosyvoice3') {
-        return desktopRuntime ? 'cosyvoice3' : 'server';
-    }
-
-    if (requestedMode === 'kokoro') {
-        return desktopRuntime ? 'kokoro' : 'server';
+        return desktopRuntime ? 'cosyvoice3' : 'off';
     }
 
     if (requestedMode === 'server') {
         return 'server';
     }
 
-    if (requestedMode === 'local') {
-        return 'local';
-    }
-
     if (requestedMode === 'off') {
         return 'off';
     }
 
-    if (requestedMode === 'auto') {
-        return desktopRuntime ? 'local' : 'server';
-    }
-
-    return desktopRuntime ? 'local' : 'server';
-}
-
-function normalizeVoiceName(value) {
-    return String(value || '').trim().toLowerCase();
-}
-
-function hasAnyHint(text, hints) {
-    return hints.some((hint) => text.includes(hint));
-}
-
-async function loadNativeVoices(timeoutMs = 1200) {
-    if (!('speechSynthesis' in window)) {
-        return [];
-    }
-
-    const synth = window.speechSynthesis;
-    const existingVoices = synth.getVoices?.() || [];
-    if (existingVoices.length) {
-        return existingVoices;
-    }
-
-    return new Promise((resolve) => {
-        let resolved = false;
-        const finish = () => {
-            if (resolved) {
-                return;
-            }
-            resolved = true;
-            window.clearTimeout(timeoutId);
-            synth.removeEventListener?.('voiceschanged', handleVoicesChanged);
-            resolve(synth.getVoices?.() || []);
-        };
-        const handleVoicesChanged = () => {
-            finish();
-        };
-        const timeoutId = window.setTimeout(finish, timeoutMs);
-
-        synth.addEventListener?.('voiceschanged', handleVoicesChanged, { once: true });
-    });
-}
-
-function scoreNativeVoice(voice, text) {
-    const normalizedLang = normalizeVoiceName(voice?.lang);
-    const normalizedName = normalizeVoiceName(voice?.name);
-
-    const hasChinese = /[\u3400-\u9fff]/.test(text);
-    if (hasChinese) {
-        if (!/^zh\b/i.test(normalizedLang)) {
-            return Number.NEGATIVE_INFINITY;
-        }
-
-        let score = 40;
-        if (normalizedLang.includes('cn') || normalizedLang.includes('hans')) {
-            score += 12;
-        }
-        if (hasAnyHint(normalizedName, ZH_FEMALE_VOICE_HINTS)) {
-            score += 70;
-        }
-        if (hasAnyHint(normalizedName, ZH_MALE_VOICE_HINTS)) {
-            score -= 40;
-        }
-        if (normalizedName.includes('natural')) {
-            score += 18;
-        }
-        if (voice?.localService === false) {
-            score += 10;
-        }
-
-        return score;
-    }
-
-    let score = /^en\b/i.test(normalizedLang) ? 30 : 0;
-    if (hasAnyHint(normalizedName, EN_FEMALE_VOICE_HINTS)) {
-        score += 40;
-    }
-    if (hasAnyHint(normalizedName, EN_MALE_VOICE_HINTS)) {
-        score -= 20;
-    }
-    if (normalizedName.includes('natural')) {
-        score += 12;
-    }
-    return score;
-}
-
-async function pickNativeVoice(text, { preferDesktopFemale = false } = {}) {
-    const voices = await loadNativeVoices();
-    if (!voices.length) {
-        return null;
-    }
-
-    const rankedVoices = voices
-        .map((voice) => ({
-            voice,
-            score: scoreNativeVoice(voice, text)
-        }))
-        .filter(({ score }) => Number.isFinite(score))
-        .sort((left, right) => right.score - left.score);
-
-    if (!rankedVoices.length) {
-        return null;
-    }
-
-    const bestMatch = rankedVoices[0];
-    if (preferDesktopFemale && bestMatch.score < 35) {
-        return null;
-    }
-
-    return bestMatch.voice;
-}
-
-function getNativeSpeechSettings(text) {
-    const hasChinese = /[\u3400-\u9fff]/.test(text);
-    return {
-        rate: hasChinese ? CONFIG.DESKTOP_NATIVE_TTS_RATE : 1,
-        pitch: hasChinese ? CONFIG.DESKTOP_NATIVE_TTS_PITCH : 1,
-        volume: CONFIG.DESKTOP_NATIVE_TTS_VOLUME
-    };
+    return 'off';
 }
 
 function normalizeSpeechText(value) {
@@ -408,66 +228,6 @@ class ServerTTSCandidate {
     }
 }
 
-class LocalVitsTTSCandidate {
-    constructor() {
-        this.id = 'local-vits-tts';
-        this.replyMode = 'stream_text';
-    }
-
-    get supportsTTS() {
-        return isDesktopRuntime();
-    }
-
-    async synthesizeSpeech(text) {
-        const { synthesizeLocalVitsSpeech } = await import('./local-vits-tts.js');
-        const result = await synthesizeLocalVitsSpeech(text);
-        return normalizeSynthesisResult(result);
-    }
-
-    async synthesizeChunk(text) {
-        return this.synthesizeSpeech(text);
-    }
-
-    async speak({
-        payload,
-        displayText,
-        audioPlayer,
-        updateMessageContent,
-        scrollToBottom,
-        onAvatarPlaybackStart
-    }) {
-        if (!this.supportsTTS || !displayText) {
-            return false;
-        }
-
-        updateMessageContent(displayText);
-        scrollToBottom();
-
-        const speechText = deriveTtsSpeechText(payload, displayText);
-        if (!speechText) {
-            return false;
-        }
-        const result = await this.synthesizeSpeech(speechText);
-        await audioPlayer.playSpeech({
-            audioBase64: result.audioBase64,
-            mimeType: result.mimeType,
-            displayText,
-            alignment: null,
-            onPlaybackStart: () => {
-                onAvatarPlaybackStart?.();
-                updateMessageContent(displayText);
-                scrollToBottom();
-            },
-            onPlaybackEnd: () => {
-                updateMessageContent(displayText);
-                scrollToBottom();
-            }
-        });
-
-        return true;
-    }
-}
-
 class CosyVoice3TTSCandidate {
     constructor() {
         this.id = 'cosyvoice3-anime-shy-soft';
@@ -534,203 +294,6 @@ class CosyVoice3TTSCandidate {
     }
 }
 
-class KokoroZhTTSCandidate {
-    constructor() {
-        this.id = 'kokoro-82m-zh';
-        this.replyMode = 'stream_text';
-    }
-
-    get supportsTTS() {
-        return isDesktopRuntime() && typeof window.ailisDesktop?.tts?.synthesize === 'function';
-    }
-
-    async synthesizeSpeech(text) {
-        const result = await window.ailisDesktop.tts.synthesize({
-            provider: 'kokoro',
-            voice: 'zf_003',
-            text,
-            speed: 0.98,
-            timeoutMs: 120000
-        });
-
-        return normalizeSynthesisResult(result);
-    }
-
-    async synthesizeChunk(text) {
-        return this.synthesizeSpeech(text);
-    }
-
-    async speak({
-        payload,
-        displayText,
-        audioPlayer,
-        updateMessageContent,
-        scrollToBottom,
-        onAvatarPlaybackStart
-    }) {
-        if (!this.supportsTTS || !displayText) {
-            return false;
-        }
-
-        updateMessageContent(displayText);
-        scrollToBottom();
-
-        const speechText = deriveTtsSpeechText(payload, displayText);
-        if (!speechText) {
-            return false;
-        }
-        const result = await this.synthesizeSpeech(speechText);
-
-        await audioPlayer.playSpeech({
-            audioBase64: result.audioBase64,
-            mimeType: result.mimeType,
-            displayText,
-            alignment: null,
-            onPlaybackStart: () => {
-                onAvatarPlaybackStart?.();
-                updateMessageContent(displayText);
-                scrollToBottom();
-            },
-            onPlaybackEnd: () => {
-                updateMessageContent(displayText);
-                scrollToBottom();
-            }
-        });
-
-        return true;
-    }
-}
-
-class NativeSpeechSynthesisCandidate {
-    constructor({ id = 'browser-native-tts', allowDesktop = false, preferDesktopFemale = false } = {}) {
-        this.id = id;
-        this.replyMode = 'stream_text';
-        this.allowDesktop = allowDesktop;
-        this.preferDesktopFemale = preferDesktopFemale;
-    }
-
-    get supportsTTS() {
-        return (
-            (this.allowDesktop || !isDesktopRuntime()) &&
-            (this.allowDesktop || CONFIG.WEB_NATIVE_TTS_FALLBACK_ENABLED) &&
-            'speechSynthesis' in window &&
-            typeof window.SpeechSynthesisUtterance !== 'undefined'
-        );
-    }
-
-    async synthesizeSpeech(text, context = {}) {
-        const displayText = normalizeSpeechText(text);
-        if (!displayText) {
-            throw new Error('TTS 输入文本不能为空');
-        }
-        return {
-            play: async ({ onPlaybackStart } = {}) => this.playNativeSpeech({
-                displayText,
-                vrmSystem: context.vrmSystem,
-                updateMessageContent: () => {},
-                scrollToBottom: () => {},
-                onAvatarPlaybackStart: onPlaybackStart
-            })
-        };
-    }
-
-    async playNativeSpeech({
-        displayText,
-        vrmSystem,
-        updateMessageContent,
-        scrollToBottom,
-        onAvatarPlaybackStart
-    }) {
-        if (!this.supportsTTS || !displayText) {
-            return false;
-        }
-        if (!vrmSystem) {
-            throw new Error('浏览器原生语音缺少角色语音状态控制器');
-        }
-
-        const updateVisibleText = typeof updateMessageContent === 'function'
-            ? updateMessageContent
-            : () => {};
-        const scroll = typeof scrollToBottom === 'function'
-            ? scrollToBottom
-            : () => {};
-
-        const synth = window.speechSynthesis;
-        const utterance = new SpeechSynthesisUtterance(displayText);
-        const preferredVoice = await pickNativeVoice(displayText, {
-            preferDesktopFemale: this.preferDesktopFemale
-        });
-        const speechSettings = getNativeSpeechSettings(displayText);
-
-        if (preferredVoice) {
-            utterance.voice = preferredVoice;
-            utterance.lang = preferredVoice.lang;
-        } else if (this.preferDesktopFemale && isDesktopRuntime()) {
-            return false;
-        }
-        utterance.rate = speechSettings.rate;
-        utterance.pitch = speechSettings.pitch;
-        utterance.volume = speechSettings.volume;
-
-        synth.cancel();
-
-        await new Promise((resolve, reject) => {
-            let started = false;
-
-            utterance.onstart = () => {
-                started = true;
-                vrmSystem.startFallbackSpeech();
-                onAvatarPlaybackStart?.();
-                updateVisibleText(displayText);
-                scroll();
-            };
-
-            utterance.onboundary = (event) => {
-                if (typeof event.charIndex !== 'number' || event.charIndex < 0) {
-                    return;
-                }
-
-                const visibleLength = Math.min(displayText.length, event.charIndex + 1);
-                updateVisibleText(displayText.slice(0, visibleLength));
-                scroll();
-            };
-
-            utterance.onend = () => {
-                vrmSystem.stopSpeaking();
-                updateVisibleText(displayText);
-                scroll();
-                resolve();
-            };
-
-            utterance.onerror = (event) => {
-                vrmSystem.stopSpeaking();
-                reject(new Error(event?.error || '浏览器原生语音播放失败'));
-            };
-
-            try {
-                synth.speak(utterance);
-                window.setTimeout(() => {
-                    if (!started && synth.speaking === false && synth.pending === false) {
-                        reject(new Error('浏览器原生语音没有成功启动'));
-                    }
-                }, 800);
-            } catch (error) {
-                reject(error);
-            }
-        });
-
-        return true;
-    }
-
-    async speak(options) {
-        return this.playNativeSpeech(options);
-    }
-
-    dispose() {
-        window.speechSynthesis?.cancel?.();
-    }
-}
-
 export class SpeechProvider {
     constructor({ ttsCandidates = [], mode = 'server' } = {}) {
         this.ttsCandidates = ttsCandidates.filter(Boolean);
@@ -751,6 +314,10 @@ export class SpeechProvider {
     }
 
     get replyModeFallbackChain() {
+        if (this.isSpeechDisabled) {
+            return ['stream_text'];
+        }
+
         const firstCandidate = this.ttsCandidates.find((candidate) => candidateSupportsTTS(candidate));
         if (!firstCandidate) {
             return ['stream_text'];
@@ -868,60 +435,15 @@ export function createSpeechProvider({
     enableTTS = true,
     speechMode = null
 } = {}) {
-    const desktopRuntime = isDesktopRuntime();
     const resolvedMode = resolveSpeechMode(speechMode);
 
     const ttsCandidates = [];
-    if (enableTTS && resolvedMode === 'vits') {
-        ttsCandidates.push(new LocalVitsTTSCandidate());
-        if (desktopRuntime) {
-            ttsCandidates.push(new NativeSpeechSynthesisCandidate({
-                id: 'browser-speech-synthesis',
-                allowDesktop: true,
-                preferDesktopFemale: true
-            }));
-        }
-    }
-
     if (enableTTS && resolvedMode === 'cosyvoice3') {
         ttsCandidates.push(new CosyVoice3TTSCandidate());
-        if (desktopRuntime) {
-            ttsCandidates.push(new NativeSpeechSynthesisCandidate({
-                id: 'browser-speech-synthesis',
-                allowDesktop: true,
-                preferDesktopFemale: true
-            }));
-        }
-    }
-
-    if (enableTTS && resolvedMode === 'kokoro') {
-        ttsCandidates.push(new KokoroZhTTSCandidate());
-        if (desktopRuntime) {
-            ttsCandidates.push(new NativeSpeechSynthesisCandidate({
-                id: 'browser-speech-synthesis',
-                allowDesktop: true,
-                preferDesktopFemale: true
-            }));
-        }
     }
 
     if (enableTTS && resolvedMode === 'server') {
         ttsCandidates.push(new ServerTTSCandidate());
-        if (desktopRuntime || CONFIG.WEB_NATIVE_TTS_FALLBACK_ENABLED) {
-            ttsCandidates.push(new NativeSpeechSynthesisCandidate({
-                id: 'browser-speech-synthesis',
-                allowDesktop: desktopRuntime,
-                preferDesktopFemale: desktopRuntime
-            }));
-        }
-    }
-
-    if (enableTTS && resolvedMode === 'local') {
-        ttsCandidates.push(new NativeSpeechSynthesisCandidate({
-            id: 'browser-speech-synthesis',
-            allowDesktop: desktopRuntime,
-            preferDesktopFemale: desktopRuntime
-        }));
     }
 
     return new SpeechProvider({

@@ -50,9 +50,9 @@ Important boundary: do not turn the global `tool_search` implementation into a p
 Repository mapping:
 
 - [ailis-tool-routing.cjs](F:/AILIS/electron/ailis-tool-routing.cjs)
-- [humanclaw-mcp-session.cjs](F:/AILIS/electron/humanclaw-mcp-session.cjs)
-- [humanclaw-gateway.cjs](F:/AILIS/electron/humanclaw-gateway.cjs)
-- [humanclaw-tool-runtime.cjs](F:/AILIS/electron/humanclaw-tool-runtime.cjs)
+- [ailis-mcp-session.cjs](F:/AILIS/electron/ailis-mcp-session.cjs)
+- [ailis-gateway.cjs](F:/AILIS/electron/ailis-gateway.cjs)
+- [ailis-tool-runtime.cjs](F:/AILIS/electron/ailis-tool-runtime.cjs)
 
 ### 2. Structured retrieval before HTML scraping
 

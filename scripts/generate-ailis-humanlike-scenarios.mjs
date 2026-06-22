@@ -23,7 +23,7 @@ const SHARED_PREFERENCES = [
 ];
 
 const PROJECT_NOTES = [
-    '用户长期在做 AILIS/HumanClaw 桌面私人助手。',
+    '用户长期在做 AILIS/AILIS 桌面私人助手。',
     '项目核心是拟人体验，不是强工具感控制台。',
     '视觉能力被定位为人物感知层，只做理解、解释、建议，不自动操作屏幕。',
     '记忆系统采用 Letta/MemGPT 风格记忆块、Claude Code 项目记忆和轻量反思。',

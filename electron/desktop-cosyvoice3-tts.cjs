@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
+const { getVenvPythonPath } = require('./voice-runtime-bootstrap.cjs');
 
 const DEFAULT_TIMEOUT_MS = 240000;
 
@@ -20,18 +21,27 @@ function getProjectRoot() {
     return path.resolve(__dirname, '..');
 }
 
-function resolvePythonPath(projectRoot) {
+function resolvePythonPath(projectRoot, userDataPath = '') {
     const configuredPath = normalizeString(process.env.AILIS_COSYVOICE3_PYTHON);
     if (configuredPath) {
         return configuredPath;
     }
 
-    const bundledVenvPython = path.join(
-        projectRoot,
-        'build-cache',
-        'cosyvoice3-venv',
-        'Scripts',
-        'python.exe'
+    const sharedVoicePython = normalizeString(process.env.AILIS_VOICE_PYTHON);
+    if (sharedVoicePython) {
+        return sharedVoicePython;
+    }
+
+    const privateVoiceVenv = userDataPath
+        ? getVenvPythonPath(path.join(userDataPath, 'local-runtimes', 'voice-venv'), process.platform)
+        : '';
+    if (privateVoiceVenv && fs.existsSync(privateVoiceVenv)) {
+        return privateVoiceVenv;
+    }
+
+    const bundledVenvPython = getVenvPythonPath(
+        path.join(projectRoot, 'build-cache', 'cosyvoice3-venv'),
+        process.platform
     );
     if (fs.existsSync(bundledVenvPython)) {
         return bundledVenvPython;
@@ -41,14 +51,28 @@ function resolvePythonPath(projectRoot) {
 }
 
 class CosyVoice3TTSManager {
-    constructor({ projectRoot = getProjectRoot() } = {}) {
+    constructor({ projectRoot = getProjectRoot(), userDataPath = '', pythonPath = '' } = {}) {
         this.projectRoot = projectRoot;
+        this.userDataPath = userDataPath;
         this.workerPath = path.join(projectRoot, 'electron', 'cosyvoice3_tts_worker.py');
-        this.pythonPath = resolvePythonPath(projectRoot);
+        this.pythonPath = normalizeString(pythonPath);
         this.child = null;
         this.stdoutBuffer = '';
         this.pendingRequests = new Map();
         this.nextRequestId = 1;
+    }
+
+    configure({ projectRoot, userDataPath, pythonPath } = {}) {
+        if (projectRoot) {
+            this.projectRoot = projectRoot;
+            this.workerPath = path.join(projectRoot, 'electron', 'cosyvoice3_tts_worker.py');
+        }
+        if (userDataPath) {
+            this.userDataPath = userDataPath;
+        }
+        if (pythonPath !== undefined) {
+            this.pythonPath = normalizeString(pythonPath);
+        }
     }
 
     ensureWorker() {
@@ -60,13 +84,19 @@ class CosyVoice3TTSManager {
             throw new Error(`CosyVoice3 worker 不存在：${this.workerPath}`);
         }
 
-        this.child = spawn(this.pythonPath, [this.workerPath], {
+        const pythonPath = this.pythonPath || resolvePythonPath(this.projectRoot, this.userDataPath);
+        this.child = spawn(pythonPath, [this.workerPath], {
             cwd: this.projectRoot,
             stdio: ['pipe', 'pipe', 'pipe'],
             windowsHide: true,
             env: {
                 ...process.env,
                 AILIS_PROJECT_ROOT: this.projectRoot,
+                AILIS_USER_DATA: this.userDataPath || process.env.AILIS_USER_DATA || '',
+                AILIS_COSYVOICE3_LOCAL_ONLY: process.env.AILIS_COSYVOICE3_LOCAL_ONLY || '1',
+                AILIS_COSYVOICE3_DISABLE_REMOTE_TEXT_FRONTEND:
+                    process.env.AILIS_COSYVOICE3_DISABLE_REMOTE_TEXT_FRONTEND || '1',
+                AILIS_COSYVOICE3_ACCELERATION: process.env.AILIS_COSYVOICE3_ACCELERATION || 'auto',
                 PYTHONIOENCODING: 'utf-8',
                 KMP_DUPLICATE_LIB_OK: 'TRUE'
             }
@@ -261,6 +291,10 @@ class CosyVoice3TTSManager {
 
 const defaultManager = new CosyVoice3TTSManager();
 
+function configureCosyVoice3TTS(options = {}) {
+    defaultManager.configure(options);
+}
+
 async function synthesizeCosyVoice3Speech(_settings = {}, payload = {}) {
     return defaultManager.synthesize(payload);
 }
@@ -276,6 +310,7 @@ function closeCosyVoice3TTS() {
 module.exports = {
     CosyVoice3TTSManager,
     closeCosyVoice3TTS,
+    configureCosyVoice3TTS,
     synthesizeCosyVoice3Speech,
     warmupCosyVoice3TTS
 };

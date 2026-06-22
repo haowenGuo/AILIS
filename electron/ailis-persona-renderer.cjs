@@ -1,4 +1,4 @@
-const { getToolContract } = require('./humanclaw-tool-contracts.cjs');
+const { getToolContract } = require('./ailis-tool-contracts.cjs');
 
 const RENDERER_VERSION = 3;
 const DEFAULT_EXPRESSION = 'relaxed';
@@ -91,7 +91,7 @@ const INTERNAL_TEXT_REPLACEMENTS = Object.freeze([
     [/\bmcp_bridge\b/gi, '外部工具连接'],
     [/\bsubagents?\b/gi, '并行助手'],
     [/context\.approved\s*=\s*true/gi, '已确认'],
-    [/HUMANCLAW_[A-Z0-9_<>]+/g, '本地配置项']
+    [/AILIS_[A-Z0-9_<>]+/g, '本地配置项']
 ]);
 
 function normalizeText(value, fallback = '') {
@@ -615,7 +615,7 @@ function renderPersonaSurfaceGateway(input = {}) {
             !emailConfigMissing &&
             requestedText &&
             !isInternalFailureDetail(requestedText) &&
-            !/HUMANCLAW_|<PROVIDER>|tool_call|raw observation/i.test(requestedText);
+            !/AILIS_|<PROVIDER>|tool_call|raw observation/i.test(requestedText);
         if (canUseRequestedFailureText) {
             return createPersonaSurface({
                 text: requestedText,
@@ -680,7 +680,7 @@ function renderPersonaSurfaceGateway(input = {}) {
         const canUseRequestedText =
             requestedText &&
             !isInternalFailureDetail(requestedText) &&
-            !/HUMANCLAW_|<PROVIDER>|tool_call|raw observation/i.test(requestedText);
+            !/AILIS_|<PROVIDER>|tool_call|raw observation/i.test(requestedText);
         const evidenceLine = evidenceState === 'missing' || evidenceState === 'none'
             ? '这轮还没拿到足够的实际证据。'
             : '这轮已经停下，还没有继续执行新的动作。';

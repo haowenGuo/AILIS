@@ -214,7 +214,7 @@ pnpm eval:ailis-humanlike:longitudinal-agent
 pnpm eval:ailis-humanlike -- --responses evals/ailis-humanlike/example-responses.jsonl --judge-base-url <base> --judge-model <model> --judge-api-key <key>
 ```
 
-连接正在运行的 HumanClaw Gateway，生成真实 AILIS 回复后再评：
+连接正在运行的 AILIS Gateway，生成真实 AILIS 回复后再评：
 
 ```powershell
 pnpm eval:ailis-humanlike -- --generate-with-agent --gateway-url http://127.0.0.1:19777 --judge-base-url <base> --judge-model <model> --judge-api-key <key>

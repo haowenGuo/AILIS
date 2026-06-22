@@ -1059,8 +1059,8 @@ Current AILIS status after the Codex-aligned tool runtime pass:
 
 | Target | AILIS status |
 | --- | --- |
-| `ToolExecutor`-like object | Implemented in `electron/humanclaw-tool-runtime.cjs` as `HumanClawRuntimeTool`. |
-| Central `ToolRegistry` | Implemented as `HumanClawToolRuntimeRegistry`; runtime and gateway dispatch through it first. |
+| `ToolExecutor`-like object | Implemented in `electron/ailis-tool-runtime.cjs` as `AILISRuntimeTool`. |
+| Central `ToolRegistry` | Implemented as `AILISToolRuntimeRegistry`; runtime and gateway dispatch through it first. |
 | Tool exposure | Implemented as `TOOL_EXPOSURE.DIRECT/DEFERRED/HIDDEN`. |
 | Runtime `tool_search` | Implemented as a real callable tool returning loadable specs for runtime, gateway, and MCP tools. |
 | Direct MCP tool ids | Implemented as `mcp__server__tool` for the model-facing canonical id, with legacy `mcp:<server>:<tool>` accepted as a compatibility alias; the registry converts either form to MCP `tools/call`. |
@@ -1167,9 +1167,9 @@ AILIS is already closer than before, but there are still real differences that e
 AILIS asks the model to emit an intermediate JSON decision:
 
 ```text
-F:\AILIS\electron\humanclaw-agent-runner.cjs:2863
-F:\AILIS\electron\humanclaw-agent-runner.cjs:2879
-F:\AILIS\electron\humanclaw-agent-runner.cjs:2921
+F:\AILIS\electron\ailis-agent-runner.cjs:2863
+F:\AILIS\electron\ailis-agent-runner.cjs:2879
+F:\AILIS\electron\ailis-agent-runner.cjs:2921
 ```
 
 AILIS-side shape:
@@ -1197,9 +1197,9 @@ For AILIS, the model can fail before it reaches the real tool layer. In the Play
 AILIS runtime route:
 
 ```text
-F:\AILIS\electron\humanclaw-runtime.cjs:1087
-F:\AILIS\electron\humanclaw-runtime.cjs:1566
-F:\AILIS\electron\humanclaw-runtime.cjs:1789
+F:\AILIS\electron\ailis-runtime.cjs:1087
+F:\AILIS\electron\ailis-runtime.cjs:1566
+F:\AILIS\electron\ailis-runtime.cjs:1789
 ```
 
 AILIS exposes `mcp_bridge` actions such as:
@@ -1233,7 +1233,7 @@ Ok(ToolSpec::Namespace(ResponsesApiNamespace {
 
 Current consequence:
 
-AILIS keeps `mcp_bridge` for management actions such as server registration, health checks, resource reads, prompts, and schema discovery. Normal MCP tool calls no longer have to go through the bridge: `HumanClawToolRuntimeRegistry.dispatch()` recognizes canonical `mcp__server__tool` ids and also accepts legacy `mcp:<server>:<tool>` aliases, then forwards the original args to MCP `tools/call`.
+AILIS keeps `mcp_bridge` for management actions such as server registration, health checks, resource reads, prompts, and schema discovery. Normal MCP tool calls no longer have to go through the bridge: `AILISToolRuntimeRegistry.dispatch()` recognizes canonical `mcp__server__tool` ids and also accepts legacy `mcp:<server>:<tool>` aliases, then forwards the original args to MCP `tools/call`.
 
 Remaining gap:
 
@@ -1244,9 +1244,9 @@ Codex represents MCP tools as provider-native namespace/function specs. AILIS no
 AILIS has a deferred first-turn catalog:
 
 ```text
-F:\AILIS\electron\humanclaw-agent-runner.cjs:1832
-F:\AILIS\electron\humanclaw-agent-runner.cjs:1848
-F:\AILIS\electron\humanclaw-agent-runner.cjs:4152
+F:\AILIS\electron\ailis-agent-runner.cjs:1832
+F:\AILIS\electron\ailis-agent-runner.cjs:1848
+F:\AILIS\electron\ailis-agent-runner.cjs:4152
 ```
 
 This is conceptually aligned with Codex:
@@ -1372,14 +1372,14 @@ Concrete AILIS mapping:
 
 | Codex module | AILIS module to align | Required shape |
 | --- | --- | --- |
-| `ToolExecutor` | `humanclaw-tool-runtime.cjs` or equivalent | one object owns `id/spec/exposure/handle/output` |
-| `ToolSpec` | `humanclaw-tool-contracts.cjs` | separate model-visible schema from prose skill |
+| `ToolExecutor` | `ailis-tool-runtime.cjs` or equivalent | one object owns `id/spec/exposure/handle/output` |
+| `ToolSpec` | `ailis-tool-contracts.cjs` | separate model-visible schema from prose skill |
 | `ToolExposure` | `capability_catalog` | direct/deferred/hidden instead of all prompt text |
 | `ToolSearchHandler` | `capability_manager` or new `tool_search` runtime tool | returns loadable specs, not only prose |
-| `McpHandler` | `humanclaw-mcp-session.cjs` + runtime adapter | one MCP tool becomes one direct callable spec |
-| `ToolRegistry` | `HumanClawRuntime.executeTool` | central dispatch with payload-kind validation |
+| `McpHandler` | `ailis-mcp-session.cjs` + runtime adapter | one MCP tool becomes one direct callable spec |
+| `ToolRegistry` | `AILISRuntime.executeTool` | central dispatch with payload-kind validation |
 | `ToolOutput` | runtime response normalizer | raw result, model context, telemetry, persona text separated |
-| `ThreadItem` | `humanclaw-turn-items.cjs` | chronological tool calls/results, no completion gate |
+| `ThreadItem` | `ailis-turn-items.cjs` | chronological tool calls/results, no completion gate |
 
 This preserves the user's product direction:
 

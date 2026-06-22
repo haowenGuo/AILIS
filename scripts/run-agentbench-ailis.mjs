@@ -7,7 +7,7 @@ import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { HumanClawGateway } = require('../electron/humanclaw-gateway.cjs');
+const { AILISGateway } = require('../electron/ailis-gateway.cjs');
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(__dirname, '..');
@@ -167,7 +167,7 @@ function filterTasks(tasks, args) {
 
 function readDesktopLlmSettings(args) {
     const appData = process.env.APPDATA || path.join(process.env.USERPROFILE || '', 'AppData', 'Roaming');
-    const statePath = path.join(appData, 'humanclaw', 'desktop-state.json');
+    const statePath = path.join(appData, 'ailis', 'desktop-state.json');
     if (!fsSync.existsSync(statePath)) {
         throw new Error(`desktop-state.json not found: ${statePath}`);
     }
@@ -975,12 +975,12 @@ async function runTask({ args, gateway, baseUrl, llmSettings, task }) {
 }
 
 async function runTaskWithGateway({ args, llmSettings, task }) {
-    const gateway = new HumanClawGateway({
+    const gateway = new AILISGateway({
         host: '127.0.0.1',
         port: 0,
         workspaceDir: PROJECT_ROOT,
         auditDir: path.join(args.outputDir, 'gateway-audit', args.runId),
-        mcpConfigPath: path.join(PROJECT_ROOT, '.humanclaw-state', 'mcp-servers.json')
+        mcpConfigPath: path.join(PROJECT_ROOT, '.ailis-state', 'mcp-servers.json')
     });
     const status = await gateway.start();
     const baseUrl = `http://${status.host}:${status.port}`;

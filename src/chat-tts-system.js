@@ -189,6 +189,14 @@ export class ChatTTSSystem {
     applyRuntimePreferences(preferences = {}) {
         if ('chunkedTtsEnabled' in preferences) {
             this.chunkedTtsEnabled = preferences.chunkedTtsEnabled !== false;
+            if (!this.chunkedTtsEnabled) {
+                this.stopLingeringSpeech('chunked-tts-disabled');
+            }
+        }
+
+        if (preferences.speechMode === 'off' || this.speechProvider?.isSpeechDisabled) {
+            this.stopLingeringSpeech('speech-disabled');
+            this.vrmSystem.stopSpeaking();
         }
 
         if (this.inputEl.disabled) {
@@ -425,11 +433,18 @@ export class ChatTTSSystem {
         Promise.resolve(this.audioPlayer?.stop?.()).catch((error) => {
             console.warn('停止上一段音频失败：', error);
         });
+        try {
+            window.speechSynthesis?.cancel?.();
+        } catch (error) {
+            console.warn('停止浏览器原生语音失败：', error);
+        }
     }
 
     startAvatarPlayback(payload, displayText, aiMessageDiv) {
         this.executeAvatarCue(payload, aiMessageDiv);
-        this.startAvatarSpeech(payload, displayText, aiMessageDiv);
+        if (!this.speechProvider?.isSpeechDisabled) {
+            this.startAvatarSpeech(payload, displayText, aiMessageDiv);
+        }
     }
 
     notifyMessageAdded(element, role) {
@@ -523,6 +538,10 @@ export class ChatTTSSystem {
     setSpeechProvider(nextProvider) {
         this.speechProvider = nextProvider;
         this.hasShownSpeechProviderHint = false;
+        if (nextProvider?.isSpeechDisabled) {
+            this.stopLingeringSpeech('speech-disabled');
+            this.vrmSystem.stopSpeaking();
+        }
     }
 
     setChatService(nextChatService) {
@@ -887,7 +906,9 @@ export class ChatTTSSystem {
         }
 
         if (payload.fallbackMode || !payload.audio_base64 || !this.speechProvider?.supportsTTS) {
-            await this.playFallbackSpeech(displayText, aiMessageDiv, speechPayload);
+            this.vrmSystem.stopSpeaking();
+            this.updateMessageContent(aiMessageDiv, displayText);
+            this.scrollToBottom();
             if (!this.hasShownTextFallbackHint) {
                 this.addSystemMessage('当前语音服务不可用，已自动切换为纯文本回复。');
                 this.hasShownTextFallbackHint = true;

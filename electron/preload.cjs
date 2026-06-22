@@ -25,7 +25,7 @@ contextBridge.exposeInMainWorld('ailisDesktop', {
     getControlPanelState: () => ipcRenderer.invoke('ailis:get-control-panel-state'),
     savePreferences: (payload) => ipcRenderer.invoke('ailis:save-preferences', payload),
     restoreDefaultPreferences: () => ipcRenderer.invoke('ailis:restore-default-preferences'),
-    chooseHumanClawStateDir: () => ipcRenderer.invoke('ailis:choose-humanclaw-state-dir'),
+    chooseAILISStateDir: () => ipcRenderer.invoke('ailis:choose-ailis-state-dir'),
     toggleChatWindow: () => ipcRenderer.invoke('ailis:toggle-chat-window'),
     showChatWindow: () => ipcRenderer.invoke('ailis:show-chat-window'),
     hideChatWindow: () => ipcRenderer.invoke('ailis:hide-chat-window'),
@@ -39,7 +39,8 @@ contextBridge.exposeInMainWorld('ailisDesktop', {
     setPreferredMicDevice: (deviceId) => ipcRenderer.invoke('ailis:set-preferred-mic-device', deviceId),
     llm: {
         chat: (payload) => ipcRenderer.invoke('ailis:llm-chat', payload || {}),
-        healthCheck: (payload) => ipcRenderer.invoke('ailis:llm-health-check', payload || {})
+        healthCheck: (payload) => ipcRenderer.invoke('ailis:llm-health-check', payload || {}),
+        searchVllmModels: (payload) => ipcRenderer.invoke('ailis:vllm-model-catalog-search', payload || {})
     },
     files: {
         choose: (payload) => ipcRenderer.invoke('ailis:chat-files-choose', payload || {}),
@@ -76,6 +77,17 @@ contextBridge.exposeInMainWorld('ailisDesktop', {
     },
     tts: {
         synthesize: (payload) => ipcRenderer.invoke('ailis:tts-synthesize', payload || {})
+    },
+    voiceRuntime: {
+        diagnose: () => ipcRenderer.invoke('ailis:voice-runtime-diagnose'),
+        getStatus: () => ipcRenderer.invoke('ailis:voice-runtime-status'),
+        bootstrap: (payload) => ipcRenderer.invoke('ailis:voice-runtime-bootstrap', payload || {})
+    },
+    vllmRuntime: {
+        diagnose: (payload) => ipcRenderer.invoke('ailis:vllm-runtime-diagnose', payload || {}),
+        getStatus: () => ipcRenderer.invoke('ailis:vllm-runtime-status'),
+        deploy: (payload) => ipcRenderer.invoke('ailis:vllm-runtime-deploy', payload || {}),
+        cancel: () => ipcRenderer.invoke('ailis:vllm-runtime-cancel')
     },
     transcribeAudio: (audioBytes) => ipcRenderer.invoke('ailis:asr-transcribe', audioBytes),
     beginDragPetWindow: () => {

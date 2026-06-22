@@ -338,6 +338,35 @@ function renderTools(round) {
     });
 }
 
+function renderProgressNotes(round) {
+    const notes = Array.isArray(round.progressNotes) ? round.progressNotes.filter((note) => note?.text) : [];
+    if (!notes.length && !round.decision?.publicReasoning) {
+        return;
+    }
+    const card = append(elements.roundDetail, 'detail-card');
+    const head = append(card, 'panel-head');
+    append(head, 'panel-title', '模型公开进展');
+    append(head, 'panel-copy', '这里展示模型主动给用户看的关键进展，不展示隐藏推理链。');
+    const body = append(card, 'detail-body');
+    const visibleNotes = notes.length
+        ? notes
+        : [{
+              text: round.decision.publicReasoning,
+              source: round.decision.progressNoteSource || 'model_public_reasoning',
+              action: round.decision.action || '',
+              intent: round.decision.intent || ''
+          }];
+    visibleNotes.forEach((note) => {
+        const item = append(body, 'summary-line');
+        append(item, 'message-role', [
+            note.source || 'model_progress',
+            note.action ? `action=${note.action}` : '',
+            note.intent ? `intent=${note.intent}` : ''
+        ].filter(Boolean).join(' | '));
+        append(item, 'message-text', note.text);
+    });
+}
+
 function renderRoundDetail() {
     clear(elements.roundDetail);
     const rounds = Array.isArray(analysis?.rounds) ? analysis.rounds : [];
@@ -361,6 +390,7 @@ function renderRoundDetail() {
     if (targetTool) {
         append(body, 'summary-line', `计划调用工具：${targetTool.tool || '-'}，标题：${targetTool.title || '-'}。`);
     }
+    renderProgressNotes(round);
     renderTools(round);
     renderMessages(round);
 }

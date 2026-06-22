@@ -1,4 +1,4 @@
-import { HumanClawDesktopChatService } from './humanclaw-chat-service.js';
+import { AILISDesktopChatService } from './ailis-chat-service.js';
 import { createAilisCompanionChatService } from './ailis-companion-chat-service.js';
 
 function normalizeConversationMode(preferences = {}) {
@@ -12,7 +12,7 @@ export function createChatService(preferences = window.ailisDesktop?.preferences
     const mode = normalizeConversationMode(preferences);
     const service = mode === 'daily'
         ? createAilisCompanionChatService()
-        : new HumanClawDesktopChatService();
+        : new AILISDesktopChatService();
     service.conversationMode = mode;
     return service;
 }

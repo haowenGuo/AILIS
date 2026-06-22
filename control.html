@@ -3,6 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" type="image/png" href="./favicon.png">
     <title>AILIS Control Panel</title>
     <style>
         * {
@@ -1049,6 +1050,41 @@
                             <div class="field-help">日常对话优先选低延迟模型；复杂任务再选更强的 Pro/Max/Sonnet 类模型。</div>
                         </label>
 
+                        <div class="field" id="vllm-model-catalog-panel" hidden>
+                            <div class="field-meta">
+                                <span class="field-label">vLLM 开源模型目录</span>
+                                <button id="vllm-model-refresh-btn" class="ghost-btn" type="button">实时查找</button>
+                            </div>
+                            <div class="split-2">
+                                <label class="field">
+                                    <div class="field-meta">
+                                        <span class="field-label">来源</span>
+                                    </div>
+                                    <select id="vllm-model-source">
+                                        <option value="both">HF + 魔塔</option>
+                                        <option value="hf">Hugging Face</option>
+                                        <option value="modelscope">ModelScope 魔塔</option>
+                                    </select>
+                                </label>
+                                <label class="field">
+                                    <div class="field-meta">
+                                        <span class="field-label">关键词</span>
+                                    </div>
+                                    <input id="vllm-model-query" type="search" placeholder="例如 Qwen3、DeepSeek、Llama、Coder">
+                                </label>
+                            </div>
+                            <div class="field-meta">
+                                <select id="vllm-model-catalog"></select>
+                                <button id="vllm-model-apply-btn" class="ghost-btn" type="button">使用选中模型</button>
+                                <button id="vllm-runtime-diagnose-btn" class="ghost-btn" type="button">诊断环境</button>
+                                <button id="vllm-runtime-deploy-btn" class="primary-btn" type="button">自动配置并部署</button>
+                                <button id="vllm-runtime-cancel-btn" class="ghost-btn" type="button" disabled>取消部署</button>
+                            </div>
+                            <div class="field-help" id="vllm-model-catalog-status">选择 vLLM 后可从 Hugging Face / ModelScope 实时查找最新开源模型。</div>
+                            <div class="field-help" id="vllm-runtime-status">vLLM 本地运行时尚未诊断。</div>
+                            <pre class="field-help" id="vllm-runtime-log" style="white-space: pre-wrap; max-height: 160px; overflow: auto;"></pre>
+                        </div>
+
                         <label class="field">
                             <div class="field-meta">
                                 <span class="field-label">API Key</span>
@@ -1321,6 +1357,18 @@
                             <div class="field-help">快速 ASR 会更早收尾并优先低延迟；自动 ASR 会持续监听，并先做人声/噪音门禁。</div>
                         </label>
 
+                        <div class="field">
+                            <div class="field-meta">
+                                <span class="field-label">本地语音运行时</span>
+                                <span>
+                                    <button id="voice-runtime-diagnose-btn" class="ghost-btn" type="button">诊断</button>
+                                    <button id="voice-runtime-bootstrap-btn" class="ghost-btn" type="button">一键修复</button>
+                                </span>
+                            </div>
+                            <div class="field-help" id="voice-runtime-status">本地语音运行时尚未诊断。</div>
+                            <div class="field-help" id="voice-runtime-plan"></div>
+                        </div>
+
                         <details class="advanced-section">
                             <summary>高级本地语音参数</summary>
                             <div class="section-body">
@@ -1360,12 +1408,12 @@
                                 <div class="field-meta">
                                     <span class="field-label">AILIS 状态目录</span>
                                     <span class="field-actions">
-                                        <button id="choose-humanclaw-state-dir-btn" class="ghost-btn" type="button">选择目录</button>
-                                        <button id="reset-humanclaw-state-dir-btn" class="ghost-btn" type="button">使用默认</button>
+                                        <button id="choose-ailis-state-dir-btn" class="ghost-btn" type="button">选择目录</button>
+                                        <button id="reset-ailis-state-dir-btn" class="ghost-btn" type="button">使用默认</button>
                                     </span>
                                 </div>
-                                <input id="humanclaw-state-dir" type="text" autocomplete="off" placeholder="留空使用软件根目录下的 .humanclaw-state">
-                                <div class="field-help" id="humanclaw-state-dir-help">默认目录读取中...</div>
+                                <input id="ailis-state-dir" type="text" autocomplete="off" placeholder="留空使用软件根目录下的 .ailis-state">
+                                <div class="field-help" id="ailis-state-dir-help">默认目录读取中...</div>
                             </label>
 
                             <div class="field">

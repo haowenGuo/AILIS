@@ -24,10 +24,10 @@ V1 采用混合架构：
 
 ## Local Layout
 
-记忆默认放在 HumanClaw 本地状态目录下：
+记忆默认放在 AILIS 本地状态目录下：
 
 ```text
-F:\AILIS\.humanclaw-state\memory\
+F:\AILIS\.ailis-state\memory\
   memory.sqlite
   capsules\
     user.md
@@ -301,12 +301,12 @@ Tool/vision/voice state
 
 ```text
 electron/
-  humanclaw-memory-store.cjs
-  humanclaw-memory-curator.cjs
-  humanclaw-memory-reflection.cjs
-  humanclaw-context-compiler.cjs
-  humanclaw-secret-vault.cjs
-  humanclaw-affinity.cjs
+  ailis-memory-store.cjs
+  ailis-memory-curator.cjs
+  ailis-memory-reflection.cjs
+  ailis-context-compiler.cjs
+  ailis-secret-vault.cjs
+  ailis-affinity.cjs
 ```
 
 职责：

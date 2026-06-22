@@ -5,7 +5,7 @@ import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
 
 const require = createRequire(import.meta.url);
-const { getToolContract } = require('../electron/humanclaw-tool-contracts.cjs');
+const { getToolContract } = require('../electron/ailis-tool-contracts.cjs');
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);

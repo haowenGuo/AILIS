@@ -88,7 +88,7 @@ async def tts_synthesize_endpoint(request: TTSSynthesizeRequest):
     """
     仅负责把已有文本交给 ElevenLabs 合成音频。
 
-    桌面端 HumanClaw 的回复由本地 Agent Loop 产生，因此不能复用 /chat/tts
+    桌面端 AILIS 的回复由本地 Agent Loop 产生，因此不能复用 /chat/tts
     的“生成回复 + 合成音频”一体流程，否则会绕开任务执行结果。
     """
     clean_text = (request.text or "").strip()

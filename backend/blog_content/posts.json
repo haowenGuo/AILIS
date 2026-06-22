@@ -152,21 +152,21 @@
     }
   },
   {
-    "slug": "humanclaw-desktop-pet-openclaw-bridge",
+    "slug": "ailis-desktop-pet-openclaw-bridge",
     "published_at": "2026-04-22",
     "reading_time": "6 min",
     "featured": false,
     "tags": ["electron", "desktop-pet", "openclaw", "voice"],
     "translations": {
       "zh": {
-        "title": "HumanClaw：把桌宠界面和 OpenClaw 运行时分清楚",
-        "summary": "这篇文章基于 HumanClaw 的 README、package.json 和 requirements.txt，介绍它如何把 Electron 桌宠界面、Python companion backend 与本地 OpenClaw Gateway 运行时拆成清晰的产品边界。",
-        "body_file": "posts/zh/humanclaw-desktop-pet-openclaw-bridge.md"
+        "title": "AILIS：把桌宠界面和 OpenClaw 运行时分清楚",
+        "summary": "这篇文章基于 AILIS 的 README、package.json 和 requirements.txt，介绍它如何把 Electron 桌宠界面、Python companion backend 与本地 OpenClaw Gateway 运行时拆成清晰的产品边界。",
+        "body_file": "posts/zh/ailis-desktop-pet-openclaw-bridge.md"
       },
       "en": {
-        "title": "HumanClaw: Separating the Desktop Pet from the OpenClaw Runtime",
-        "summary": "This post uses HumanClaw's README, package.json, and requirements.txt to explain how the project separates its Electron desktop pet, Python companion backend, and local OpenClaw Gateway runtime.",
-        "body_file": "posts/en/humanclaw-desktop-pet-openclaw-bridge.md"
+        "title": "AILIS: Separating the Desktop Pet from the OpenClaw Runtime",
+        "summary": "This post uses AILIS's README, package.json, and requirements.txt to explain how the project separates its Electron desktop pet, Python companion backend, and local OpenClaw Gateway runtime.",
+        "body_file": "posts/en/ailis-desktop-pet-openclaw-bridge.md"
       }
     }
   },

@@ -513,7 +513,7 @@ async function runLiteRunner(args, baseUrl) {
         '--temperature', String(args.temperature),
         '--task-retries', String(args.taskRetries),
         '--benchmark-name', args.benchmarkName,
-        '--agent-code', `AILIS local HumanClaw Gateway ${args.benchmarkName} runner`
+        '--agent-code', `AILIS local AILIS Gateway ${args.benchmarkName} runner`
     ];
     if (/^(1|true|yes|on)$/i.test(process.env.AILIS_GAIA_DIRECT_TOOL_EXECUTOR || '')) {
         liteArgs.push('--direct-tool-executor');

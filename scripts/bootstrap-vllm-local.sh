@@ -87,8 +87,46 @@ if [[ -z "${MODEL}" ]]; then
 fi
 
 PYTHON_BIN="${PYTHON_BIN:-python3}"
+
+try_install_python() {
+  if command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
+    return 0
+  fi
+  echo "[AILIS vLLM] python3 was not found. Trying to install Python runtime automatically..."
+  if command -v apt-get >/dev/null 2>&1; then
+    if command -v sudo >/dev/null 2>&1; then
+      sudo apt-get update
+      sudo apt-get install -y python3 python3-venv python3-pip
+    else
+      apt-get update
+      apt-get install -y python3 python3-venv python3-pip
+    fi
+    return 0
+  fi
+  if command -v dnf >/dev/null 2>&1; then
+    if command -v sudo >/dev/null 2>&1; then
+      sudo dnf install -y python3 python3-pip
+    else
+      dnf install -y python3 python3-pip
+    fi
+    return 0
+  fi
+  if command -v yum >/dev/null 2>&1; then
+    if command -v sudo >/dev/null 2>&1; then
+      sudo yum install -y python3 python3-pip
+    else
+      yum install -y python3 python3-pip
+    fi
+    return 0
+  fi
+  echo "[AILIS vLLM] python3 was not found and no supported package manager was available." >&2
+  return 1
+}
+
+try_install_python || exit 3
+
 if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
-  echo "[AILIS vLLM] python3 was not found. Install Python 3.10+ in WSL/Linux first." >&2
+  echo "[AILIS vLLM] python3 is still unavailable after automatic installation attempt." >&2
   exit 3
 fi
 
@@ -103,7 +141,38 @@ import sys
 raise SystemExit(0 if sys.version_info >= (3, 10) else 1)
 PY
 then
-  echo "[AILIS vLLM] Python ${PYTHON_VERSION} is too old. Use Python 3.10+." >&2
+  echo "[AILIS vLLM] Python ${PYTHON_VERSION} is too old. Trying package-manager upgrade/install..."
+  try_install_python || true
+  if ! "${PYTHON_BIN}" - <<'PY'
+import sys
+raise SystemExit(0 if sys.version_info >= (3, 10) else 1)
+PY
+  then
+    echo "[AILIS vLLM] Python ${PYTHON_VERSION} is too old. Use Python 3.10+." >&2
+    exit 3
+  fi
+  PYTHON_VERSION="$("${PYTHON_BIN}" - <<'PY'
+import sys
+print(f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}")
+PY
+)"
+fi
+
+if ! "${PYTHON_BIN}" -m venv --help >/dev/null 2>&1; then
+  echo "[AILIS vLLM] python3-venv is missing. Trying to install it automatically..."
+  if command -v apt-get >/dev/null 2>&1; then
+    if command -v sudo >/dev/null 2>&1; then
+      sudo apt-get update
+      sudo apt-get install -y python3-venv python3-pip
+    else
+      apt-get update
+      apt-get install -y python3-venv python3-pip
+    fi
+  fi
+fi
+
+if ! "${PYTHON_BIN}" -m venv --help >/dev/null 2>&1; then
+  echo "[AILIS vLLM] python3-venv is still unavailable after automatic installation attempt." >&2
   exit 3
 fi
 

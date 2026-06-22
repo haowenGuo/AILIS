@@ -6,7 +6,7 @@ import { createRequire } from 'node:module';
 import { spawn } from 'node:child_process';
 
 const require = createRequire(import.meta.url);
-const { HumanClawGateway } = require('../electron/humanclaw-gateway.cjs');
+const { AILISGateway } = require('../electron/ailis-gateway.cjs');
 const {
     paperMetadataLookup,
     readDocument
@@ -218,12 +218,12 @@ function summarizeParsedJson(label, parsed) {
 }
 
 async function collectGatewayInventory(args) {
-    const gateway = new HumanClawGateway({
+    const gateway = new AILISGateway({
         host: '127.0.0.1',
         port: 0,
         workspaceDir: PROJECT_ROOT,
         auditDir: path.join(args.outputDir, 'gateway-audit', args.runId),
-        mcpConfigPath: path.join(PROJECT_ROOT, '.humanclaw-state', 'mcp-servers.json')
+        mcpConfigPath: path.join(PROJECT_ROOT, '.ailis-state', 'mcp-servers.json')
     });
     const status = await gateway.start();
     try {
@@ -291,7 +291,7 @@ async function collectGatewayInventory(args) {
                 spec: compactSpec(definition.spec || {})
             })),
             mcp: {
-                configPath: path.join(PROJECT_ROOT, '.humanclaw-state', 'mcp-servers.json'),
+                configPath: path.join(PROJECT_ROOT, '.ailis-state', 'mcp-servers.json'),
                 servers,
                 health: mcpHealth,
                 toolSpecs: Array.isArray(mcpToolSpecs)

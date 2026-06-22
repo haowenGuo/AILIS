@@ -218,6 +218,26 @@ test('SpeechProvider wraps any synthesizable TTS candidate as chunked TTS', asyn
     assert.deepEqual(played, synthCalls);
 });
 
+test('createSpeechProvider keeps disabled speech strictly text-only', () => {
+    for (const speechMode of ['off', 'local', 'vits', 'kokoro', 'auto', 'unknown']) {
+        const provider = createSpeechProvider({ speechMode });
+        assert.equal(provider.isSpeechDisabled, true);
+        assert.equal(provider.supportsTTS, false);
+        assert.equal(provider.createChunkedSession({}), null);
+        assert.deepEqual(provider.replyModeFallbackChain, ['stream_text']);
+    }
+});
+
+test('createSpeechProvider exposes only approved high-quality modes', () => {
+    const elevenLabsProvider = createSpeechProvider({ speechMode: 'elevenlabs' });
+    assert.equal(elevenLabsProvider.isSpeechDisabled, false);
+    assert.equal(elevenLabsProvider.getPrimaryModeLabel(), 'server-tts');
+
+    const cosyProvider = createSpeechProvider({ speechMode: 'cosyvoice' });
+    assert.equal(cosyProvider.isSpeechDisabled, true);
+    assert.equal(cosyProvider.getPrimaryModeLabel(), 'off');
+});
+
 test('SpeechProvider chunk synthesis falls back across candidate chain', async () => {
     const played = [];
     const provider = new SpeechProvider({

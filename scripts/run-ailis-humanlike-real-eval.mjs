@@ -8,7 +8,7 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const { callDesktopLlmProvider } = require('../electron/desktop-llm-provider.cjs');
-const { HumanClawGateway } = require('../electron/humanclaw-gateway.cjs');
+const { AILISGateway } = require('../electron/ailis-gateway.cjs');
 const {
     aggregateHumanlikeEvalResults,
     buildHumanlikeJudgeMessages,
@@ -182,8 +182,8 @@ function detectGithubCliStatus() {
 }
 
 function loadDesktopStateSettings() {
-    const statePath = path.join(process.env.APPDATA || '', 'humanclaw', 'desktop-state.json');
-    const mcpConfigPath = path.join(process.env.APPDATA || '', 'humanclaw', 'humanclaw-gateway', 'mcp-servers.json');
+    const statePath = path.join(process.env.APPDATA || '', 'ailis', 'desktop-state.json');
+    const mcpConfigPath = path.join(process.env.APPDATA || '', 'ailis', 'ailis-gateway', 'mcp-servers.json');
     const github = detectGithubCliStatus();
     const fallback = {
         baseUrl: '',
@@ -253,7 +253,7 @@ async function startStandaloneGateway(args) {
     if (desktopState.mcpConfigPath) {
         gatewayOptions.mcpConfigPath = desktopState.mcpConfigPath;
     }
-    const gateway = new HumanClawGateway(gatewayOptions);
+    const gateway = new AILISGateway(gatewayOptions);
     const status = await gateway.start();
     return { gateway, baseUrl: status.url, status };
 }
@@ -488,7 +488,7 @@ function buildMarkdownReport({ args, summary, results, startedAt, finishedAt }) 
         '',
         '## Interpretation',
         '',
-        '这份报告是真实 Agent 回复经过 LLM-as-judge 打分后的结果，不是数据集覆盖报告。候选回复来自 HumanClaw Gateway 的 Agent Loop，Judge 使用同一套 AILIS 拟人化体验 rubric。分数低的样例应优先查看 candidate、judge.issues、hard_fail_flags 和 better_answer_direction。'
+        '这份报告是真实 Agent 回复经过 LLM-as-judge 打分后的结果，不是数据集覆盖报告。候选回复来自 AILIS Gateway 的 Agent Loop，Judge 使用同一套 AILIS 拟人化体验 rubric。分数低的样例应优先查看 candidate、judge.issues、hard_fail_flags 和 better_answer_direction。'
     ].join('\n');
 }
 

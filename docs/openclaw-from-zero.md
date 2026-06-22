@@ -1,6 +1,6 @@
 # 从 0 到 1 手搓一个小型 OpenClaw 参考
 
-本文基于 `openclaw/openclaw` 上游源码做结构拆解，并给出一个适合当前 HumanClaw / AILIS 桌宠项目的“小型 OpenClaw”实现路线。
+本文基于 `openclaw/openclaw` 上游源码做结构拆解，并给出一个适合当前 AILIS / AILIS 桌宠项目的“小型 OpenClaw”实现路线。
 
 参考源码已下载到：
 
@@ -760,7 +760,7 @@ sequenceDiagram
 
 ## 关键取舍
 
-第一版不要追求“像 OpenClaw 一样完整”，而是追求“协议像、数据流像、能接桌宠”。只要 `connect`、`chat.history`、`chat.send`、`chat` 事件和 `session.message` 事件稳定，HumanClaw 就已经拥有了 OpenClaw 式的本地助手核心。
+第一版不要追求“像 OpenClaw 一样完整”，而是追求“协议像、数据流像、能接桌宠”。只要 `connect`、`chat.history`、`chat.send`、`chat` 事件和 `session.message` 事件稳定，AILIS 就已经拥有了 OpenClaw 式的本地助手核心。
 
 ## OpenClaw 借用的标准、SDK 和开源实现
 
@@ -957,7 +957,7 @@ OpenClaw 自己补的是这部分最难的工程化部分：
 
 ## 对你手搓 MiniClaw 的直接建议
 
-如果你的目标不是复刻整个 OpenClaw，而是先做一个“能跑起来、能扩展”的 HumanClaw，我建议依赖顺序这样选：
+如果你的目标不是复刻整个 OpenClaw，而是先做一个“能跑起来、能扩展”的 AILIS，我建议依赖顺序这样选：
 
 1. 模型工具调用：先选一家 provider，先跑通 OpenAI Responses tools 或 Gemini function calling。
 2. 外部工具协议：优先接 MCP，不要先自造远程工具协议。

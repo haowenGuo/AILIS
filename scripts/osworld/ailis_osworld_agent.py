@@ -340,13 +340,13 @@ def _candidate_desktop_state_paths() -> List[Path]:
 
     appdata = _normalize_string(os.environ.get("APPDATA"))
     if appdata:
-        paths.append(Path(appdata) / "humanclaw" / "desktop-state.json")
+        paths.append(Path(appdata) / "ailis" / "desktop-state.json")
 
     username = _normalize_string(os.environ.get("USERNAME")) or _normalize_string(os.environ.get("USER"))
     if username:
-        paths.append(Path(f"/mnt/c/Users/{username}/AppData/Roaming/humanclaw/desktop-state.json"))
-    paths.append(Path("/mnt/c/Users/Lenovo/AppData/Roaming/humanclaw/desktop-state.json"))
-    paths.append(Path("/mnt/f/AILIS/.humanclaw-state/desktop-state.json"))
+        paths.append(Path(f"/mnt/c/Users/{username}/AppData/Roaming/ailis/desktop-state.json"))
+    paths.append(Path("/mnt/c/Users/Lenovo/AppData/Roaming/ailis/desktop-state.json"))
+    paths.append(Path("/mnt/f/AILIS/.ailis-state/desktop-state.json"))
     return paths
 
 

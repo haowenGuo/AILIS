@@ -4,12 +4,12 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { HumanClawGateway } = require('../electron/humanclaw-gateway.cjs');
+const { AILISGateway } = require('../electron/ailis-gateway.cjs');
 
 const PROJECT_ROOT = path.resolve(new URL('..', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
 const LOG_DIR = path.join(PROJECT_ROOT, 'logs');
 const TMP_DIR = path.join(PROJECT_ROOT, 'tmp');
-const MCP_CONFIG_PATH = path.join(PROJECT_ROOT, '.humanclaw-state', 'mcp-servers.json');
+const MCP_CONFIG_PATH = path.join(PROJECT_ROOT, '.ailis-state', 'mcp-servers.json');
 
 function timestampId() {
     return new Date().toISOString().replace(/[:.]/g, '-');
@@ -18,7 +18,7 @@ function timestampId() {
 function readDesktopLlmSettings() {
     const appData = process.env.APPDATA || '';
     const candidates = [
-        path.join(appData, 'humanclaw', 'desktop-state.json'),
+        path.join(appData, 'ailis', 'desktop-state.json'),
         path.join(appData, 'AILIS', 'desktop-state.json')
     ];
     for (const filePath of candidates) {
@@ -41,10 +41,10 @@ function readDesktopLlmSettings() {
         } catch {}
     }
     return {
-        provider: process.env.HUMANCLAW_AGENT_LLM_PROVIDER || 'openai-compatible',
-        baseUrl: process.env.HUMANCLAW_AGENT_LLM_BASE_URL || process.env.AILIS_LLM_BASE_URL || '',
-        apiKey: process.env.HUMANCLAW_AGENT_LLM_API_KEY || process.env.AILIS_LLM_API_KEY || '',
-        model: process.env.HUMANCLAW_AGENT_LLM_MODEL || process.env.AILIS_LLM_MODEL || '',
+        provider: process.env.AILIS_AGENT_LLM_PROVIDER || 'openai-compatible',
+        baseUrl: process.env.AILIS_AGENT_LLM_BASE_URL || process.env.AILIS_LLM_BASE_URL || '',
+        apiKey: process.env.AILIS_AGENT_LLM_API_KEY || process.env.AILIS_LLM_API_KEY || '',
+        model: process.env.AILIS_AGENT_LLM_MODEL || process.env.AILIS_LLM_MODEL || '',
         temperature: 0.2,
         timeoutMs: 120000
     };
@@ -192,10 +192,10 @@ async function main() {
 
     const llmSettings = readDesktopLlmSettings();
     if (!llmSettings.baseUrl || !llmSettings.model || !llmSettings.apiKey) {
-        throw new Error('Missing LLM settings. Configure desktop-state.json or HUMANCLAW_AGENT_LLM_* env vars.');
+        throw new Error('Missing LLM settings. Configure desktop-state.json or AILIS_AGENT_LLM_* env vars.');
     }
 
-    const gateway = new HumanClawGateway({
+    const gateway = new AILISGateway({
         port: 0,
         workspaceRoot,
         projectRoot: PROJECT_ROOT,

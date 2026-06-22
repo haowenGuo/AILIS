@@ -35,17 +35,18 @@ export function createPersonaProgressFrame(event = {}, options = {}) {
         return null;
     }
 
-    if (type === 'agent.reasoning.delta') {
+    if (type === 'agent.reasoning.delta' || type === 'agent.progress.note') {
         const text = normalizeProgressText(payload.text || payload.delta || payload.summary);
         if (!text) {
             return null;
         }
         return {
-            phase: 'reasoning_delta',
+            phase: type === 'agent.progress.note' ? 'progress_note' : 'reasoning_delta',
             text,
             bubbleText: text,
             taskState: 'thinking',
-            gestureIntent: 'thinking'
+            gestureIntent: 'thinking',
+            source: payload.source || (type === 'agent.progress.note' ? 'model_progress_note' : 'model_public_reasoning')
         };
     }
 
@@ -69,20 +70,19 @@ export function createPersonaProgressFrame(event = {}, options = {}) {
 
     if (type === 'agent.step.finished') {
         const tool = normalizeToolId(payload.tool);
-        if (INTERNAL_PROGRESS_TOOLS.has(tool)) {
+        const text = normalizeProgressText(payload.progressNote || payload.progress_note || payload.text || payload.summary);
+        if (INTERNAL_PROGRESS_TOOLS.has(tool) || !text) {
             return null;
         }
-        if (payload.ok === false) {
-            return {
-                phase: 'step_blocked',
-                tool,
-                text: '有一步没有顺利通过，我会换个更稳的办法确认。',
-                bubbleText: '我换个办法确认。',
-                taskState: 'failed',
-                gestureIntent: 'thinking'
-            };
-        }
-        return null;
+        return {
+            phase: payload.ok === false ? 'step_blocked' : 'step_note',
+            tool,
+            text,
+            bubbleText: text,
+            taskState: payload.ok === false ? 'failed' : 'working',
+            gestureIntent: 'thinking',
+            source: payload.source || 'model_step_progress'
+        };
     }
 
     return null;

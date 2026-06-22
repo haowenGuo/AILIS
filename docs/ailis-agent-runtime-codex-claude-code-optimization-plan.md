@@ -137,9 +137,9 @@ This belongs in turn/runtime context, not in long-term user memory. It changes w
 
 Likely files:
 
-- `F:\AILIS_self_evolution_runtime\electron\humanclaw-agent-runner.cjs`
-- `F:\AILIS_self_evolution_runtime\electron\humanclaw-runtime.cjs`
-- `F:\AILIS_self_evolution_runtime\electron\humanclaw-gateway.cjs`
+- `F:\AILIS_self_evolution_runtime\electron\ailis-agent-runner.cjs`
+- `F:\AILIS_self_evolution_runtime\electron\ailis-runtime.cjs`
+- `F:\AILIS_self_evolution_runtime\electron\ailis-gateway.cjs`
 
 Add a model-visible context block similar to:
 
@@ -240,10 +240,10 @@ The tool should return a structured observation:
 
 Likely files:
 
-- `F:\AILIS_self_evolution_runtime\electron\humanclaw-computer-tool.cjs`
-- `F:\AILIS_self_evolution_runtime\electron\humanclaw-tool-runtime.cjs`
-- `F:\AILIS_self_evolution_runtime\electron\humanclaw-tool-contracts.cjs`
-- `F:\AILIS_self_evolution_runtime\electron\humanclaw-agent-runner.cjs`
+- `F:\AILIS_self_evolution_runtime\electron\ailis-computer-tool.cjs`
+- `F:\AILIS_self_evolution_runtime\electron\ailis-tool-runtime.cjs`
+- `F:\AILIS_self_evolution_runtime\electron\ailis-tool-contracts.cjs`
+- `F:\AILIS_self_evolution_runtime\electron\ailis-agent-runner.cjs`
 
 Required changes:
 
@@ -310,7 +310,7 @@ AILIS should not try to put all exec output in model context. It should implemen
 
 ```text
 exec_command
-  -> write full stdout/stderr to .humanclaw-state/output-store/{callId}.log
+  -> write full stdout/stderr to .ailis-state/output-store/{callId}.log
   -> return preview, outputId, byte counts, line counts, truncation status
   -> let model call output_read/output_tail/output_search
   -> let Agent Lab show full output outside model context
@@ -320,9 +320,9 @@ exec_command
 
 Likely files:
 
-- `F:\AILIS_self_evolution_runtime\electron\humanclaw-computer-tool.cjs`
-- `F:\AILIS_self_evolution_runtime\electron\humanclaw-tool-runtime.cjs`
-- new optional file: `F:\AILIS_self_evolution_runtime\electron\humanclaw-exec-output-store.cjs`
+- `F:\AILIS_self_evolution_runtime\electron\ailis-computer-tool.cjs`
+- `F:\AILIS_self_evolution_runtime\electron\ailis-tool-runtime.cjs`
+- new optional file: `F:\AILIS_self_evolution_runtime\electron\ailis-exec-output-store.cjs`
 - tests under `F:\AILIS_self_evolution_runtime\tests\`
 
 Required tools:
@@ -409,9 +409,9 @@ AILIS `read` should become a structured read tool:
 
 Likely files:
 
-- `F:\AILIS_self_evolution_runtime\electron\humanclaw-computer-tool.cjs`
-- `F:\AILIS_self_evolution_runtime\electron\humanclaw-tool-contracts.cjs`
-- `F:\AILIS_self_evolution_runtime\electron\humanclaw-tool-runtime.cjs`
+- `F:\AILIS_self_evolution_runtime\electron\ailis-computer-tool.cjs`
+- `F:\AILIS_self_evolution_runtime\electron\ailis-tool-contracts.cjs`
+- `F:\AILIS_self_evolution_runtime\electron\ailis-tool-runtime.cjs`
 
 Required behavior:
 
@@ -505,9 +505,9 @@ For repeated artifact ranges:
 
 Likely files:
 
-- `F:\AILIS_self_evolution_runtime\electron\humanclaw-context-artifact-store.cjs`
-- `F:\AILIS_self_evolution_runtime\electron\humanclaw-computer-tool.cjs`
-- `F:\AILIS_self_evolution_runtime\electron\humanclaw-agent-runner.cjs`
+- `F:\AILIS_self_evolution_runtime\electron\ailis-context-artifact-store.cjs`
+- `F:\AILIS_self_evolution_runtime\electron\ailis-computer-tool.cjs`
+- `F:\AILIS_self_evolution_runtime\electron\ailis-agent-runner.cjs`
 
 Required behavior:
 
@@ -590,10 +590,10 @@ Each artifact should have:
 
 Existing relevant files:
 
-- `F:\AILIS_self_evolution_runtime\electron\humanclaw-context-artifact-store.cjs`
-- `F:\AILIS_self_evolution_runtime\electron\humanclaw-xlsx-workbook-tool.cjs`
-- `F:\AILIS_self_evolution_runtime\electron\humanclaw-gateway.cjs`
-- `F:\AILIS_self_evolution_runtime\electron\humanclaw-tool-runtime.cjs`
+- `F:\AILIS_self_evolution_runtime\electron\ailis-context-artifact-store.cjs`
+- `F:\AILIS_self_evolution_runtime\electron\ailis-xlsx-workbook-tool.cjs`
+- `F:\AILIS_self_evolution_runtime\electron\ailis-gateway.cjs`
+- `F:\AILIS_self_evolution_runtime\electron\ailis-tool-runtime.cjs`
 
 Required next tools:
 
@@ -673,9 +673,9 @@ If the model later asks for `A10:I13`, runtime should detect coverage and return
 
 Likely files:
 
-- `F:\AILIS_self_evolution_runtime\electron\humanclaw-context-artifact-store.cjs`
-- `F:\AILIS_self_evolution_runtime\electron\humanclaw-agent-runner.cjs`
-- `F:\AILIS_self_evolution_runtime\electron\humanclaw-gateway.cjs`
+- `F:\AILIS_self_evolution_runtime\electron\ailis-context-artifact-store.cjs`
+- `F:\AILIS_self_evolution_runtime\electron\ailis-agent-runner.cjs`
+- `F:\AILIS_self_evolution_runtime\electron\ailis-gateway.cjs`
 
 Required behavior:
 
@@ -759,8 +759,8 @@ Existing likely files:
 
 - `F:\AILIS_self_evolution_runtime\electron\ailis-tool-routing.cjs`
 - `F:\AILIS_self_evolution_runtime\electron\ailis-tool-specs.cjs`
-- `F:\AILIS_self_evolution_runtime\electron\humanclaw-agent-runner.cjs`
-- `F:\AILIS_self_evolution_runtime\electron\humanclaw-tool-contracts.cjs`
+- `F:\AILIS_self_evolution_runtime\electron\ailis-agent-runner.cjs`
+- `F:\AILIS_self_evolution_runtime\electron\ailis-tool-contracts.cjs`
 
 Required behavior:
 
@@ -831,13 +831,13 @@ model tool name -> MCP server -> MCP tool -> input schema -> risk metadata
 
 New or refactored module:
 
-- `F:\AILIS_self_evolution_runtime\electron\humanclaw-mcp-tool-registry.cjs`
+- `F:\AILIS_self_evolution_runtime\electron\ailis-mcp-tool-registry.cjs`
 
 Affected files:
 
-- `F:\AILIS_self_evolution_runtime\electron\humanclaw-runtime.cjs`
-- `F:\AILIS_self_evolution_runtime\electron\humanclaw-tool-runtime.cjs`
-- `F:\AILIS_self_evolution_runtime\electron\humanclaw-tool-contracts.cjs`
+- `F:\AILIS_self_evolution_runtime\electron\ailis-runtime.cjs`
+- `F:\AILIS_self_evolution_runtime\electron\ailis-tool-runtime.cjs`
+- `F:\AILIS_self_evolution_runtime\electron\ailis-tool-contracts.cjs`
 - `F:\AILIS_self_evolution_runtime\electron\ailis-tool-routing.cjs`
 
 Required behavior:
@@ -920,8 +920,8 @@ electron/skills/spreadsheet-analysis/
 
 Likely files:
 
-- `F:\AILIS_self_evolution_runtime\electron\humanclaw-agent-runner.cjs`
-- `F:\AILIS_self_evolution_runtime\electron\humanclaw-tool-contracts.cjs`
+- `F:\AILIS_self_evolution_runtime\electron\ailis-agent-runner.cjs`
+- `F:\AILIS_self_evolution_runtime\electron\ailis-tool-contracts.cjs`
 - existing skill folders under `F:\AILIS_self_evolution_runtime\electron\skills\`
 
 Required behavior:
@@ -998,9 +998,9 @@ Do not let raw transcript equal model prompt.
 
 Likely files:
 
-- `F:\AILIS_self_evolution_runtime\electron\humanclaw-agent-runner.cjs`
-- `F:\AILIS_self_evolution_runtime\electron\humanclaw-gateway.cjs`
-- `F:\AILIS_self_evolution_runtime\electron\humanclaw-memory-store.cjs`
+- `F:\AILIS_self_evolution_runtime\electron\ailis-agent-runner.cjs`
+- `F:\AILIS_self_evolution_runtime\electron\ailis-gateway.cjs`
+- `F:\AILIS_self_evolution_runtime\electron\ailis-memory-store.cjs`
 
 Required behavior:
 
@@ -1088,9 +1088,9 @@ When truncated:
 
 Likely files:
 
-- `F:\AILIS_self_evolution_runtime\electron\humanclaw-tool-runtime.cjs`
-- `F:\AILIS_self_evolution_runtime\electron\humanclaw-tool-contracts.cjs`
-- `F:\AILIS_self_evolution_runtime\electron\humanclaw-gateway.cjs`
+- `F:\AILIS_self_evolution_runtime\electron\ailis-tool-runtime.cjs`
+- `F:\AILIS_self_evolution_runtime\electron\ailis-tool-contracts.cjs`
+- `F:\AILIS_self_evolution_runtime\electron\ailis-gateway.cjs`
 
 Required behavior:
 
@@ -1161,7 +1161,7 @@ query affordances
 
 Likely files:
 
-- `F:\AILIS_self_evolution_runtime\electron\humanclaw-gateway.cjs`
+- `F:\AILIS_self_evolution_runtime\electron\ailis-gateway.cjs`
 - `F:\AILIS_self_evolution_runtime\src\control-panel-app.js`
 - Agent Lab frontend components if split later.
 
@@ -1229,9 +1229,9 @@ For spreadsheet/path/log/document tasks, the data worker can:
 
 Likely files:
 
-- `F:\AILIS_self_evolution_runtime\electron\humanclaw-context-artifact-store.cjs`
-- `F:\AILIS_self_evolution_runtime\electron\humanclaw-agent-runner.cjs`
-- new optional file: `F:\AILIS_self_evolution_runtime\electron\humanclaw-artifact-compute.cjs`
+- `F:\AILIS_self_evolution_runtime\electron\ailis-context-artifact-store.cjs`
+- `F:\AILIS_self_evolution_runtime\electron\ailis-agent-runner.cjs`
+- new optional file: `F:\AILIS_self_evolution_runtime\electron\ailis-artifact-compute.cjs`
 
 Required behavior:
 
@@ -1296,9 +1296,9 @@ Every failure should be returned as reasoned structured observation:
 
 Likely files:
 
-- `F:\AILIS_self_evolution_runtime\electron\humanclaw-tool-runtime.cjs`
-- `F:\AILIS_self_evolution_runtime\electron\humanclaw-tool-contracts.cjs`
-- `F:\AILIS_self_evolution_runtime\electron\humanclaw-agent-runner.cjs`
+- `F:\AILIS_self_evolution_runtime\electron\ailis-tool-runtime.cjs`
+- `F:\AILIS_self_evolution_runtime\electron\ailis-tool-contracts.cjs`
+- `F:\AILIS_self_evolution_runtime\electron\ailis-agent-runner.cjs`
 
 Required behavior:
 

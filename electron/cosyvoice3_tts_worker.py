@@ -1,4 +1,7 @@
 import base64
+import builtins
+from contextlib import contextmanager
+import importlib.util
 import json
 import os
 import sys
@@ -20,9 +23,36 @@ DEFAULT_INSTRUCT_TEXT = (
 )
 
 
+def env_flag(name, default=False):
+    raw_value = os.environ.get(name)
+    if raw_value is None:
+        return default
+    normalized_value = str(raw_value).strip().lower()
+    if normalized_value in {"0", "false", "no", "off"}:
+        return False
+    if normalized_value in {"1", "true", "yes", "on"}:
+        return True
+    return default
+
+
+LOCAL_ONLY = env_flag("AILIS_COSYVOICE3_LOCAL_ONLY", True)
+DISABLE_REMOTE_TEXT_FRONTEND = env_flag(
+    "AILIS_COSYVOICE3_DISABLE_REMOTE_TEXT_FRONTEND",
+    LOCAL_ONLY,
+)
+ACCELERATION_MODE = str(os.environ.get("AILIS_COSYVOICE3_ACCELERATION") or "auto").strip().lower()
+
+if LOCAL_ONLY:
+    os.environ.setdefault("HF_HUB_OFFLINE", "1")
+    os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+    os.environ.setdefault("HF_DATASETS_OFFLINE", "1")
+    os.environ.setdefault("MODELSCOPE_OFFLINE", "1")
+
+
 model = None
 torch = None
 torchaudio = None
+model_acceleration = None
 JSON_STDOUT = sys.stdout
 
 
@@ -40,6 +70,27 @@ class redirect_stdout_to_stderr:
         sys.stdout = self.previous_stdout
 
 
+@contextmanager
+def block_remote_text_frontend_imports():
+    if not DISABLE_REMOTE_TEXT_FRONTEND:
+        yield
+        return
+
+    original_import = builtins.__import__
+
+    def guarded_import(name, globals=None, locals=None, fromlist=(), level=0):
+        root_name = str(name or "").split(".", 1)[0]
+        if root_name == "wetext":
+            raise ImportError("wetext text frontend is disabled in AILIS_COSYVOICE3_LOCAL_ONLY mode")
+        return original_import(name, globals, locals, fromlist, level)
+
+    builtins.__import__ = guarded_import
+    try:
+        yield
+    finally:
+        builtins.__import__ = original_import
+
+
 def get_prompt_wav():
     raw_path = os.environ.get("AILIS_COSYVOICE3_PROMPT_WAV")
     candidates = [
@@ -53,8 +104,126 @@ def get_prompt_wav():
     raise FileNotFoundError("CosyVoice3 参考音频不存在")
 
 
+def has_python_module(name):
+    try:
+        return importlib.util.find_spec(name) is not None
+    except Exception:
+        return False
+
+
+def get_onnxruntime_providers():
+    try:
+        import onnxruntime
+        return list(onnxruntime.get_available_providers())
+    except Exception:
+        return []
+
+
+def get_cuda_devices(torch_module):
+    if not torch_module.cuda.is_available():
+        return []
+    devices = []
+    for index in range(torch_module.cuda.device_count()):
+        try:
+            devices.append(torch_module.cuda.get_device_name(index))
+        except Exception:
+            devices.append(f"cuda:{index}")
+    return devices
+
+
+def existing_trt_plan_for(fp16):
+    precision = "fp16" if fp16 else "fp32"
+    return MODEL_DIR / f"flow.decoder.estimator.{precision}.mygpu.plan"
+
+
+def choose_acceleration(torch_module):
+    cuda_available = bool(torch_module.cuda.is_available())
+    has_vllm = has_python_module("vllm")
+    has_tensorrt = has_python_module("tensorrt")
+    onnx_providers = get_onnxruntime_providers()
+    requested_mode = ACCELERATION_MODE if ACCELERATION_MODE in {
+        "auto",
+        "cpu",
+        "torch",
+        "cuda",
+        "vllm",
+        "trt",
+        "trt-vllm",
+        "vllm-trt",
+    } else "auto"
+
+    fp16 = env_flag("AILIS_COSYVOICE3_FP16", cuda_available)
+    allow_trt_build = env_flag("AILIS_COSYVOICE3_ALLOW_TRT_BUILD", False)
+    load_vllm = False
+    load_trt = False
+    notes = []
+
+    if requested_mode == "cpu":
+        fp16 = False
+        notes.append("forced_cpu")
+    elif not cuda_available:
+        fp16 = False
+        notes.append("cuda_unavailable")
+    else:
+        if requested_mode in {"auto", "vllm", "trt-vllm", "vllm-trt"}:
+            load_vllm = has_vllm
+            if not has_vllm and requested_mode != "auto":
+                notes.append("vllm_requested_but_not_installed")
+
+        if requested_mode in {"auto", "trt", "trt-vllm", "vllm-trt"}:
+            selected_trt_plan = existing_trt_plan_for(fp16)
+            can_use_trt = has_tensorrt and (selected_trt_plan.exists() or allow_trt_build)
+            load_trt = can_use_trt
+            if not has_tensorrt and requested_mode != "auto":
+                notes.append("trt_requested_but_tensorrt_not_installed")
+            elif has_tensorrt and not selected_trt_plan.exists() and not allow_trt_build:
+                notes.append("trt_plan_missing_and_build_disabled")
+
+    backend = "cpu"
+    if cuda_available and fp16:
+        backend = "torch-cuda-fp16"
+    elif cuda_available:
+        backend = "torch-cuda-fp32"
+    if load_vllm and load_trt:
+        backend = f"{backend}+vllm+trt"
+    elif load_vllm:
+        backend = f"{backend}+vllm"
+    elif load_trt:
+        backend = f"{backend}+trt"
+
+    if cuda_available and "CUDAExecutionProvider" not in onnx_providers:
+        notes.append("onnxruntime_cuda_provider_unavailable")
+
+    return {
+        "mode": requested_mode,
+        "backend": backend,
+        "cudaAvailable": cuda_available,
+        "cudaDevices": get_cuda_devices(torch_module),
+        "torchVersion": getattr(torch_module, "__version__", ""),
+        "torchCudaVersion": str(getattr(torch_module.version, "cuda", "") or ""),
+        "onnxRuntimeProviders": onnx_providers,
+        "hasVllm": has_vllm,
+        "hasTensorRT": has_tensorrt,
+        "fp16": fp16,
+        "loadVllm": load_vllm,
+        "loadTrt": load_trt,
+        "trtPlan": str(existing_trt_plan_for(fp16)),
+        "allowTrtBuild": allow_trt_build,
+        "notes": notes,
+    }
+
+
+def create_auto_model(AutoModel, acceleration):
+    return AutoModel(
+        model_dir=str(MODEL_DIR),
+        load_trt=bool(acceleration["loadTrt"]),
+        load_vllm=bool(acceleration["loadVllm"]),
+        fp16=bool(acceleration["fp16"]),
+    )
+
+
 def ensure_model():
-    global model, torch, torchaudio
+    global model, torch, torchaudio, model_acceleration
     if model is not None:
         return model
 
@@ -69,16 +238,41 @@ def ensure_model():
     with redirect_stdout_to_stderr():
         import torch as torch_module
         import torchaudio as torchaudio_module
-        from cosyvoice.cli.cosyvoice import AutoModel
+        with block_remote_text_frontend_imports():
+            from cosyvoice.cli.cosyvoice import AutoModel
 
-        torch = torch_module
-        torchaudio = torchaudio_module
-        model = AutoModel(
-            model_dir=str(MODEL_DIR),
-            load_trt=False,
-            load_vllm=False,
-            fp16=torch.cuda.is_available(),
-        )
+            torch = torch_module
+            torchaudio = torchaudio_module
+            model_acceleration = choose_acceleration(torch)
+            sys.stderr.write(
+                "[cosyvoice3] acceleration selected: "
+                + json.dumps(model_acceleration, ensure_ascii=False)
+                + "\n"
+            )
+            sys.stderr.flush()
+            try:
+                model = create_auto_model(AutoModel, model_acceleration)
+            except Exception:
+                if (
+                    model_acceleration["mode"] != "auto"
+                    or (not model_acceleration["loadVllm"] and not model_acceleration["loadTrt"])
+                ):
+                    raise
+                sys.stderr.write("[cosyvoice3] accelerated backend failed, falling back to torch backend\n")
+                sys.stderr.flush()
+                fallback_backend = "cpu"
+                if model_acceleration["cudaAvailable"] and model_acceleration["fp16"]:
+                    fallback_backend = "torch-cuda-fp16"
+                elif model_acceleration["cudaAvailable"]:
+                    fallback_backend = "torch-cuda-fp32"
+                model_acceleration = {
+                    **model_acceleration,
+                    "backend": fallback_backend,
+                    "loadVllm": False,
+                    "loadTrt": False,
+                    "notes": [*model_acceleration.get("notes", []), "accelerated_backend_fallback"],
+                }
+                model = create_auto_model(AutoModel, model_acceleration)
     return model
 
 
@@ -146,6 +340,7 @@ def synthesize(request):
         "sampleRate": sample_rate,
         "durationSeconds": round(duration_seconds, 3),
         "elapsedSeconds": round(time.time() - started_at, 3),
+        "acceleration": model_acceleration,
     }
 
 
@@ -168,6 +363,7 @@ def warmup():
         "voicePreset": "anime_shy_soft",
         "type": "warmup",
         "elapsedSeconds": round(time.time() - started_at, 3),
+        "acceleration": model_acceleration,
     }
 
 

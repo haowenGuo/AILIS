@@ -15596,7 +15596,7 @@
       "relationship_arc": "familiarizing -> close",
       "user_profile": {
         "project": "Agent Harness",
-        "repo": "humanclaw-runtime",
+        "repo": "ailis-runtime",
         "document": "Tool Contract 设计稿.docx",
         "spreadsheet": "工具风险分级.xlsx",
         "recurring_stress": "评审说工具层还是不够稳"
@@ -16041,7 +16041,7 @@
           "dialogues": [
             {
               "turn": 1,
-              "user": "帮我把代码提交到 GitHub，仓库是 humanclaw-runtime。",
+              "user": "帮我把代码提交到 GitHub，仓库是 ailis-runtime。",
               "type": "github_task",
               "expected_agent_behavior": "进入任务执行模式，但最终表达要压成自然摘要，不暴露工具日志。"
             },
@@ -17933,7 +17933,7 @@
           "dialogues": [
             {
               "turn": 1,
-              "user": "这个月快结束了，帮我准备一下 humanclaw-runtime 的发布。",
+              "user": "这个月快结束了，帮我准备一下 ailis-runtime 的发布。",
               "type": "github_task",
               "expected_agent_behavior": "更熟悉自然，可以引用共同经历，但不要乱编。"
             },

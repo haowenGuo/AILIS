@@ -9,15 +9,15 @@ const PET_BASE_WIDTH = 720;
 const PET_BASE_HEIGHT = 960;
 const PET_SCALE_OPTIONS = [0.3, 0.4, 0.5, 0.6, 0.7, 0.85, 1, 1.15, 1.3];
 const DEFAULT_PET_SCALE = 0.85;
-const SPEECH_MODE_OPTIONS = ['cosyvoice3', 'kokoro', 'local', 'server', 'vits', 'off'];
+const SPEECH_MODE_OPTIONS = ['off', 'server', 'cosyvoice3'];
 const RECOGNITION_MODE_OPTIONS = ['fast-vad', 'auto-vad', 'continuous', 'manual'];
 const CONVERSATION_MODE_OPTIONS = ['assistant', 'daily'];
 const DEFAULT_CONVERSATION_MODE = 'assistant';
-const BACKEND_MODE_OPTIONS = ['humanclaw'];
+const BACKEND_MODE_OPTIONS = ['ailis'];
 const DEFAULT_BACKEND_BASE_URL = '';
-const DEFAULT_BACKEND_MODE = 'humanclaw';
+const DEFAULT_BACKEND_MODE = 'ailis';
 const DEFAULT_OPENCLAW_GATEWAY_URL = 'ws://127.0.0.1:19011';
-const DEFAULT_HUMANCLAW_STATE_DIR = '';
+const DEFAULT_AILIS_STATE_DIR = '';
 const LLM_PROVIDER_OPTIONS = ['openai-compatible', 'openai-responses', 'anthropic', 'gemini', 'vllm', 'ollama'];
 const DEFAULT_LLM_PROVIDER = 'openai-compatible';
 const DEFAULT_LLM_BASE_URL = 'https://ark.cn-beijing.volces.com/api/v3';
@@ -211,7 +211,7 @@ function normalizeOpenClawGatewayUrl(value) {
     return `ws://${normalizedValue}`;
 }
 
-function normalizeHumanClawStateDir(value) {
+function normalizeAILISStateDir(value) {
     return String(value || '').trim().replace(/^["']|["']$/g, '');
 }
 
@@ -423,7 +423,16 @@ function normalizeEmailProfiles(value = {}) {
 
 function normalizeSpeechMode(mode) {
     const normalizedMode = String(mode || '').trim().toLowerCase();
-    return SPEECH_MODE_OPTIONS.includes(normalizedMode) ? normalizedMode : 'cosyvoice3';
+    if (SPEECH_MODE_OPTIONS.includes(normalizedMode)) {
+        return normalizedMode;
+    }
+    if (['elevenlabs', 'eleven-labs', 'eleven_labs', 'server_tts', 'cloud'].includes(normalizedMode)) {
+        return 'server';
+    }
+    if (['cosyvoice', 'cosy-voice', 'cosy_voice'].includes(normalizedMode)) {
+        return 'cosyvoice3';
+    }
+    return 'off';
 }
 
 function normalizeRecognitionMode(mode) {
@@ -666,14 +675,14 @@ function getDefaultState() {
         preferences: {
             petSkipTaskbar: true,
             petScale,
-            speechMode: 'cosyvoice3',
+            speechMode: 'off',
             recognitionMode: 'auto-vad',
             conversationMode: DEFAULT_CONVERSATION_MODE,
             preferredMicDeviceId: '',
             backendBaseUrl: DEFAULT_BACKEND_BASE_URL,
             backendMode: DEFAULT_BACKEND_MODE,
             openclawGatewayUrl: DEFAULT_OPENCLAW_GATEWAY_URL,
-            humanClawStateDir: DEFAULT_HUMANCLAW_STATE_DIR,
+            ailisStateDir: DEFAULT_AILIS_STATE_DIR,
             llmProvider: DEFAULT_LLM_PROVIDER,
             llmBaseUrl: DEFAULT_LLM_BASE_URL,
             llmModel: DEFAULT_LLM_MODEL,
@@ -774,21 +783,6 @@ function normalizeState(inputState) {
         }
     };
 
-    if ((nextState.version || 0) < 8 && normalizedState.preferences.speechMode === 'local') {
-        normalizedState.preferences.speechMode = 'server';
-    }
-    if ((nextState.version || 0) < 10 && normalizedState.preferences.speechMode === 'server') {
-        normalizedState.preferences.speechMode = 'vits';
-    }
-    if ((nextState.version || 0) < 11 && normalizedState.preferences.speechMode === 'vits') {
-        normalizedState.preferences.speechMode = 'server';
-    }
-    if ((nextState.version || 0) < 12 && normalizedState.preferences.speechMode === 'server') {
-        normalizedState.preferences.speechMode = 'local';
-    }
-    if ((nextState.version || 0) < 13 && normalizedState.preferences.speechMode === 'local') {
-        normalizedState.preferences.speechMode = 'cosyvoice3';
-    }
     if ((nextState.version || 0) < 15 && normalizedState.preferences.recognitionMode === 'manual') {
         normalizedState.preferences.recognitionMode = 'auto-vad';
     }
@@ -838,8 +832,8 @@ function normalizeState(inputState) {
     normalizedState.preferences.openclawGatewayUrl = normalizeOpenClawGatewayUrl(
         normalizedState.preferences.openclawGatewayUrl
     );
-    normalizedState.preferences.humanClawStateDir = normalizeHumanClawStateDir(
-        normalizedState.preferences.humanClawStateDir
+    normalizedState.preferences.ailisStateDir = normalizeAILISStateDir(
+        normalizedState.preferences.ailisStateDir
     );
     normalizedState.preferences.llmProvider = normalizeLlmProvider(
         normalizedState.preferences.llmProvider
@@ -1161,7 +1155,7 @@ module.exports = {
     DEFAULT_ELEVENLABS_USE_SPEAKER_BOOST,
     DEFAULT_ELEVENLABS_VOICE_ID,
     DEFAULT_ELEVENLABS_VOICE_PROFILES,
-    DEFAULT_HUMANCLAW_STATE_DIR,
+    DEFAULT_AILIS_STATE_DIR,
     DEFAULT_COMPUTER_CONTROL_ENABLED,
     DEFAULT_OPENCLAW_GATEWAY_URL,
     DEFAULT_PET_SCALE,
@@ -1236,7 +1230,7 @@ module.exports = {
     normalizeLlmTemperature,
     normalizeEmailProfiles,
     normalizeOpenClawGatewayUrl,
-    normalizeHumanClawStateDir,
+    normalizeAILISStateDir,
     normalizePetMouseHitTestDebug,
     normalizePetMouseHitTestEnabled,
     normalizePetMouseHitTestHeightRatio,

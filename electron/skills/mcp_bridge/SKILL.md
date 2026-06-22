@@ -1,7 +1,7 @@
 ---
 id: mcp_bridge
 label: MCP Skill
-description: Discover configured MCP servers, resources, prompts, and direct MCP tool specs through HumanClaw MCP sessions.
+description: Discover configured MCP servers, resources, prompts, and direct MCP tool specs through AILIS MCP sessions.
 when: 需要接入外部 MCP Server、发现外部工具、读取 MCP resources/prompts 时。
 tools:
   - mcp_bridge

@@ -62,7 +62,7 @@ function fetchTextOverHttps(url, { timeoutMs = 60000 } = {}) {
                 timeout: timeoutMs,
                 headers: {
                     accept: 'application/json',
-                    'user-agent': 'HumanClaw-SWE-bench-smoke/1.0'
+                    'user-agent': 'AILIS-SWE-bench-smoke/1.0'
                 }
             },
             (response) => {

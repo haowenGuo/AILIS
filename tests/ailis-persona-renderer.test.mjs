@@ -134,11 +134,11 @@ test('AILIS persona renderer hides raw email config errors from user-facing fail
         response: {
             ok: false,
             status: 'needs_config',
-            error: 'email 工具需要 account/email 参数，或设置 HUMANCLAW_EMAIL_<PROVIDER>_ACCOUNT。'
+            error: 'email 工具需要 account/email 参数，或设置 AILIS_EMAIL_<PROVIDER>_ACCOUNT。'
         },
         userMessage: '帮我看看有没有 GitHub 的新邮件',
         intent: 'email_management',
-        fallbackText: '需要设置 HUMANCLAW_EMAIL_QQ_SECRET'
+        fallbackText: '需要设置 AILIS_EMAIL_QQ_SECRET'
     });
 
     assert.equal(surface.source, 'tool_failure');
@@ -146,6 +146,6 @@ test('AILIS persona renderer hides raw email config errors from user-facing fail
     assert.match(surface.text, /邮箱账号/);
     assert.match(surface.text, /不会假装已经看过邮件/);
     assert.match(surface.bubbleText, /邮箱还没连上/);
-    assert.doesNotMatch(surface.text, /HUMANCLAW_EMAIL|<PROVIDER>|tool_call|raw observation|SECRET/);
-    assert.doesNotMatch(surface.bubbleText, /HUMANCLAW_EMAIL|<PROVIDER>|tool_call|raw observation|SECRET/);
+    assert.doesNotMatch(surface.text, /AILIS_EMAIL|<PROVIDER>|tool_call|raw observation|SECRET/);
+    assert.doesNotMatch(surface.bubbleText, /AILIS_EMAIL|<PROVIDER>|tool_call|raw observation|SECRET/);
 });

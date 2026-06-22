@@ -4,9 +4,9 @@ import { DEFAULT_RENDER_PROFILE_ID, normalizeRenderProfileId } from './character
 
 const DEFAULT_BACKEND_BASE_URL = 'https://airi-backend.onrender.com';
 const DEFAULT_DESKTOP_BACKEND_BASE_URL = '';
-const DEFAULT_BACKEND_MODE = 'humanclaw';
-const DEFAULT_SPEECH_MODE = 'server';
-const DEFAULT_DESKTOP_SPEECH_MODE = 'cosyvoice3';
+const DEFAULT_BACKEND_MODE = 'ailis';
+const DEFAULT_SPEECH_MODE = 'off';
+const DEFAULT_DESKTOP_SPEECH_MODE = 'off';
 const DEFAULT_CAMERA_DISTANCE = 1.1;
 const DEFAULT_CAMERA_HEIGHT = 1.3;
 const DEFAULT_CAMERA_TARGET_Y = 1;
@@ -40,9 +40,16 @@ function normalizeBackendMode(value) {
 
 function normalizeSpeechMode(value, fallbackValue = DEFAULT_SPEECH_MODE) {
     const normalizedValue = String(value || '').trim().toLowerCase();
-    return ['cosyvoice3', 'kokoro', 'vits', 'server', 'local', 'off', 'auto'].includes(normalizedValue)
-        ? normalizedValue
-        : fallbackValue;
+    if (['off', 'server', 'cosyvoice3'].includes(normalizedValue)) {
+        return normalizedValue;
+    }
+    if (['elevenlabs', 'eleven-labs', 'eleven_labs', 'server_tts', 'cloud'].includes(normalizedValue)) {
+        return 'server';
+    }
+    if (['cosyvoice', 'cosy-voice', 'cosy_voice'].includes(normalizedValue)) {
+        return 'cosyvoice3';
+    }
+    return ['off', 'server', 'cosyvoice3'].includes(fallbackValue) ? fallbackValue : 'off';
 }
 
 function normalizeNumber(value, minimum, maximum, fallbackValue, digits = 2) {
@@ -409,7 +416,7 @@ export const CONFIG = {
     ASR_CONTINUOUS_VOICE_FRAMES: 3,
     ASR_WAKE_WORD: '老婆',
     ASR_WAKE_WORD_ALIASES: ['老婆', '老 婆', '我老婆'],
-    WEB_NATIVE_TTS_FALLBACK_ENABLED: true,
+    WEB_NATIVE_TTS_FALLBACK_ENABLED: false,
     DESKTOP_NATIVE_TTS_RATE: DEFAULT_DESKTOP_NATIVE_TTS_RATE,
     DESKTOP_NATIVE_TTS_PITCH: DEFAULT_DESKTOP_NATIVE_TTS_PITCH,
     DESKTOP_NATIVE_TTS_VOLUME: DEFAULT_DESKTOP_NATIVE_TTS_VOLUME,

@@ -101,7 +101,7 @@ const PROFILES = [
         title: 'MCP、Tool、Skill 和 Harness 能力成长',
         startAffinity: 55,
         endAffinity: 80,
-        repo: 'humanclaw-runtime',
+        repo: 'ailis-runtime',
         project: 'Agent Harness',
         paper: 'The Model Context Protocol Specification',
         doc: 'Tool Contract 设计稿.docx',

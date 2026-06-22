@@ -27,11 +27,11 @@ AILIS 的目标不是把一个工具控制台套上二次元皮肤，也不是�
 
 当前项目已经有不少扎实基础：
 
-- `HumanClawGateway` 已经能统一工具入口、审批、事件、audit。
-- `HumanClawAgentRunner` 已经具备 Agent Loop、工具调用、pending approval、恢复。
-- `humanclaw-tool-contracts.cjs` 已经有 tool contract 雏形。
-- `humanclaw-memory-store.cjs` 已经有 Persona Memory Runtime、好感度、密钥索引。
-- `humanclaw-vision-tool.cjs` 已经把视觉能力做成只读工具和 VisionUnderstandingSkill。
+- `AILISGateway` 已经能统一工具入口、审批、事件、audit。
+- `AILISAgentRunner` 已经具备 Agent Loop、工具调用、pending approval、恢复。
+- `ailis-tool-contracts.cjs` 已经有 tool contract 雏形。
+- `ailis-memory-store.cjs` 已经有 Persona Memory Runtime、好感度、密钥索引。
+- `ailis-vision-tool.cjs` 已经把视觉能力做成只读工具和 VisionUnderstandingSkill。
 - `ailis-humanlike-eval.cjs` 已经能评估拟人化体验、多模态同步、低工具感和关系阶段。
 
 问题不在于架构完全错了，而在于 **交互语义、执行工具和人物表现还混在同一层里**。
@@ -241,7 +241,7 @@ Agent 的主决策应该从简单的 `action=final|tool|load_context|blocked` �
 
 ## 5. 工具层：Tool Contract + Experience Metadata
 
-现有 `humanclaw-tool-contracts.cjs` 重点是 schema、风险和错误码。建议在此基础上增加 experience metadata。
+现有 `ailis-tool-contracts.cjs` 重点是 schema、风险和错误码。建议在此基础上增加 experience metadata。
 
 示例：
 
@@ -499,7 +499,7 @@ Eval 发现问题后，优先调整协议、工具 metadata、renderer、memory 
 目标：
 
 - 统一桌面聊天、视觉附件、语音输入、Agent Loop 的 turn path。
-- 减少 `src/*chat-service`、`electron/main.cjs`、`humanclaw-agent-runner.cjs` 之间的重复话术。
+- 减少 `src/*chat-service`、`electron/main.cjs`、`ailis-agent-runner.cjs` 之间的重复话术。
 - 让所有用户可见文本都经过 Persona Renderer 或同等协议。
 
 ## 12. 非目标
@@ -526,12 +526,12 @@ Eval 发现问题后，优先调整协议、工具 metadata、renderer、memory 
 架构微调后，至少要满足：
 
 ```powershell
-pnpm test:humanclaw-tool-contracts
-pnpm test:humanclaw-skills
-pnpm test:humanclaw-memory
-pnpm test:humanclaw-gateway
-pnpm test:humanclaw-agent
-pnpm test:humanclaw-llm-planner
+pnpm test:ailis-tool-contracts
+pnpm test:ailis-skills
+pnpm test:ailis-memory
+pnpm test:ailis-gateway
+pnpm test:ailis-agent
+pnpm test:ailis-llm-planner
 pnpm test:ailis-humanlike-eval
 ```
 

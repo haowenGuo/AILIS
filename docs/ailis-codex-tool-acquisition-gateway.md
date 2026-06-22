@@ -45,9 +45,9 @@ Codex 的 MCP server config 里有 transport、默认审批模式、enabled_tool
 
 AILIS 对齐：
 
-- `F:\AILIS\electron\humanclaw-mcp-session.cjs` 已有 stdio/http MCP session、config store、tool schema cache。
-- `F:\AILIS\electron\humanclaw-tool-acquisition-gateway.cjs:258` 把 Registry server 归一化成 AILIS 可安装的 mcpConfig。
-- `F:\AILIS\electron\humanclaw-runtime.cjs:937` 把 `plan_mcp_candidate`、`record_tool_outcome` 等动作纳入权限分类。
+- `F:\AILIS\electron\ailis-mcp-session.cjs` 已有 stdio/http MCP session、config store、tool schema cache。
+- `F:\AILIS\electron\ailis-tool-acquisition-gateway.cjs:258` 把 Registry server 归一化成 AILIS 可安装的 mcpConfig。
+- `F:\AILIS\electron\ailis-runtime.cjs:937` 把 `plan_mcp_candidate`、`record_tool_outcome` 等动作纳入权限分类。
 
 ### 2. MCP 连接管理
 
@@ -63,9 +63,9 @@ Codex 的 `McpConnectionManager` 负责 server startup、status event、list too
 
 AILIS 对齐：
 
-- `F:\AILIS\electron\humanclaw-mcp-session.cjs:722` 是 AILIS 的 MCP Manager。
-- `F:\AILIS\electron\humanclaw-capability-manager.cjs:549` 使用 Tool Acquisition Gateway 生成 plan，再交给已有安装器。
-- `F:\AILIS\electron\humanclaw-capability-manager.cjs:568` 暴露临时 smoke test，但要求 approval。
+- `F:\AILIS\electron\ailis-mcp-session.cjs:722` 是 AILIS 的 MCP Manager。
+- `F:\AILIS\electron\ailis-capability-manager.cjs:549` 使用 Tool Acquisition Gateway 生成 plan，再交给已有安装器。
+- `F:\AILIS\electron\ailis-capability-manager.cjs:568` 暴露临时 smoke test，但要求 approval。
 
 ### 3. MCP tool spec 转换
 
@@ -84,9 +84,9 @@ Codex 的 `McpHandler` 做三件事：
 
 AILIS 对齐：
 
-- `F:\AILIS\electron\humanclaw-mcp-session.cjs:129` 已有 `makeMcpToolSpec`，输出 `mcp__server__tool` direct spec。
-- `F:\AILIS\electron\humanclaw-mcp-session.cjs:936` 已有 `listToolSpecs`。
-- `F:\AILIS\electron\humanclaw-mcp-session.cjs:941` 已有 `searchToolSpecs`。
+- `F:\AILIS\electron\ailis-mcp-session.cjs:129` 已有 `makeMcpToolSpec`，输出 `mcp__server__tool` direct spec。
+- `F:\AILIS\electron\ailis-mcp-session.cjs:936` 已有 `listToolSpecs`。
+- `F:\AILIS\electron\ailis-mcp-session.cjs:941` 已有 `searchToolSpecs`。
 
 ### 4. 直接曝光 vs 延迟搜索
 
@@ -101,8 +101,8 @@ Codex 有 `DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD = 100`。工具少时直接暴露�
 AILIS 对齐：
 
 - `F:\AILIS\electron\ailis-tool-specs.cjs` 已定义 direct/deferred tool exposure。
-- `F:\AILIS\electron\humanclaw-agent-runner.cjs:1853` 已要求普通任务优先用 `mcp__server__tool` direct tool，`mcp_bridge` 只做管理。
-- 本次新增 `F:\AILIS\electron\humanclaw-tool-acquisition-gateway.cjs:413`，把“还没安装的 MCP 候选”也放到延迟搜索层，而不是直接暴露。
+- `F:\AILIS\electron\ailis-agent-runner.cjs:1853` 已要求普通任务优先用 `mcp__server__tool` direct tool，`mcp_bridge` 只做管理。
+- 本次新增 `F:\AILIS\electron\ailis-tool-acquisition-gateway.cjs:413`，把“还没安装的 MCP 候选”也放到延迟搜索层，而不是直接暴露。
 
 ### 5. Tool Search
 
@@ -117,9 +117,9 @@ Codex 使用 BM25 搜索 deferred tools，然后 coalesce 成可加载 tool spec
 
 AILIS 对齐：
 
-- `F:\AILIS\electron\humanclaw-tool-acquisition-gateway.cjs:413`：搜索核心工具和 MCP Registry。
-- `F:\AILIS\electron\humanclaw-tool-acquisition-gateway.cjs:496`：搜索官方 Registry。
-- `F:\AILIS\electron\humanclaw-capability-manager.cjs:545`：通过 `capability_manager.search_tool_candidates` 暴露给 Agent。
+- `F:\AILIS\electron\ailis-tool-acquisition-gateway.cjs:413`：搜索核心工具和 MCP Registry。
+- `F:\AILIS\electron\ailis-tool-acquisition-gateway.cjs:496`：搜索官方 Registry。
+- `F:\AILIS\electron\ailis-capability-manager.cjs:545`：通过 `capability_manager.search_tool_candidates` 暴露给 Agent。
 
 ### 6. 工具失败后的恢复搜索
 
@@ -146,10 +146,10 @@ AILIS 按 Codex 边界对齐，不在 runtime 里自动调用 `recommend_tools` 
 
 对应 AILIS 文件：
 
-- `F:\AILIS\electron\humanclaw-agent-runner.cjs`：`buildToolResultEvent` 负责构造模型可见失败 observation。
-- `F:\AILIS\electron\humanclaw-turn-items.cjs`：`buildTurnItemsPromptObject` 保留 `latest_failed_observation`。
-- `F:\AILIS\electron\humanclaw-agent-runner.cjs`：Agent Prompt 明确说明工具失败不是最终阻塞，下一轮可以换工具、换策略、请求上下文或 final。
-- `F:\AILIS\electron\humanclaw-agent-runner.cjs`：`sanitizeLlmStep` 允许模型直接调用 `tool_search`、`capability_manager`、`request_permissions`。
+- `F:\AILIS\electron\ailis-agent-runner.cjs`：`buildToolResultEvent` 负责构造模型可见失败 observation。
+- `F:\AILIS\electron\ailis-turn-items.cjs`：`buildTurnItemsPromptObject` 保留 `latest_failed_observation`。
+- `F:\AILIS\electron\ailis-agent-runner.cjs`：Agent Prompt 明确说明工具失败不是最终阻塞，下一轮可以换工具、换策略、请求上下文或 final。
+- `F:\AILIS\electron\ailis-agent-runner.cjs`：`sanitizeLlmStep` 允许模型直接调用 `tool_search`、`capability_manager`、`request_permissions`。
 
 这意味着外部 MCP Registry 搜索、工具推荐、安装计划和 smoke test 都必须由模型显式选择，不由 runtime 在失败后偷偷触发。
 
@@ -157,7 +157,7 @@ AILIS 按 Codex 边界对齐，不在 runtime 里自动调用 `recommend_tools` 
 
 ### 1. 内置少量核心工具目录
 
-实现：`F:\AILIS\electron\humanclaw-tool-acquisition-gateway.cjs:10`
+实现：`F:\AILIS\electron\ailis-tool-acquisition-gateway.cjs:10`
 
 核心能力包：
 
@@ -172,7 +172,7 @@ AILIS 按 Codex 边界对齐，不在 runtime 里自动调用 `recommend_tools` 
 
 这些会进入 Capability Registry：
 
-- `F:\AILIS\electron\humanclaw-capability-manager.cjs:706`
+- `F:\AILIS\electron\ailis-capability-manager.cjs:706`
 
 ### 2. MCP Registry 接入
 
@@ -184,9 +184,9 @@ AILIS 按 Codex 边界对齐，不在 runtime 里自动调用 `recommend_tools` 
 
 实现：
 
-- `F:\AILIS\electron\humanclaw-tool-acquisition-gateway.cjs:7`
-- `F:\AILIS\electron\humanclaw-tool-acquisition-gateway.cjs:496`
-- `F:\AILIS\electron\humanclaw-tool-acquisition-gateway.cjs:527`
+- `F:\AILIS\electron\ailis-tool-acquisition-gateway.cjs:7`
+- `F:\AILIS\electron\ailis-tool-acquisition-gateway.cjs:496`
+- `F:\AILIS\electron\ailis-tool-acquisition-gateway.cjs:527`
 
 Registry entry 会被归一化成：
 
@@ -211,16 +211,16 @@ Registry entry 会被归一化成：
 如果 remote MCP 要求 Authorization header，AILIS 会生成约定环境变量名，例如：
 
 ```js
-HUMANCLAW_MCP_IO_EXAMPLE_SECURE_MAIL_TOKEN
+AILIS_MCP_IO_EXAMPLE_SECURE_MAIL_TOKEN
 ```
 
 ### 3. MCP 验收机制
 
 实现：
 
-- `F:\AILIS\electron\humanclaw-tool-acquisition-gateway.cjs:330`
-- `F:\AILIS\electron\humanclaw-tool-acquisition-gateway.cjs:686`
-- `F:\AILIS\electron\humanclaw-capability-manager.cjs:568`
+- `F:\AILIS\electron\ailis-tool-acquisition-gateway.cjs:330`
+- `F:\AILIS\electron\ailis-tool-acquisition-gateway.cjs:686`
+- `F:\AILIS\electron\ailis-capability-manager.cjs:568`
 
 验收规则：
 
@@ -232,21 +232,21 @@ HUMANCLAW_MCP_IO_EXAMPLE_SECURE_MAIL_TOKEN
 
 已有安装链路已经做了健康检查和回滚：
 
-- `F:\AILIS\electron\humanclaw-capability-manager.cjs:850` 附近注册 MCP。
-- `F:\AILIS\electron\humanclaw-capability-manager.cjs:861` 附近 health check。
-- `F:\AILIS\electron\humanclaw-capability-manager.cjs:873` 附近 list tools。
+- `F:\AILIS\electron\ailis-capability-manager.cjs:850` 附近注册 MCP。
+- `F:\AILIS\electron\ailis-capability-manager.cjs:861` 附近 health check。
+- `F:\AILIS\electron\ailis-capability-manager.cjs:873` 附近 list tools。
 
 ### 4. 任务到工具学习表
 
 实现：
 
-- `F:\AILIS\electron\humanclaw-tool-acquisition-gateway.cjs:755`
-- `F:\AILIS\electron\humanclaw-tool-acquisition-gateway.cjs:832`
+- `F:\AILIS\electron\ailis-tool-acquisition-gateway.cjs:755`
+- `F:\AILIS\electron\ailis-tool-acquisition-gateway.cjs:832`
 
 状态文件：
 
 ```text
-F:\AILIS\.humanclaw-state\tool-acquisition\tool-learning.json
+F:\AILIS\.ailis-state\tool-acquisition\tool-learning.json
 ```
 
 记录格式是：
@@ -286,24 +286,24 @@ Agent 使用方式：
 
 契约位置：
 
-- `F:\AILIS\electron\humanclaw-tool-contracts.cjs`
+- `F:\AILIS\electron\ailis-tool-contracts.cjs`
 - `F:\AILIS\electron\skills\capability_manager\SKILL.md`
-- `F:\AILIS\electron\humanclaw-agent-runner.cjs:1865`
+- `F:\AILIS\electron\ailis-agent-runner.cjs:1865`
 
 ## 已跑验收
 
 新增/相关测试：
 
-- `pnpm test:humanclaw-tool-acquisition`
-- `pnpm test:humanclaw-tool-contracts`
-- `pnpm test:humanclaw-capability-manager`
-- `pnpm test:humanclaw-skills`
+- `pnpm test:ailis-tool-acquisition`
+- `pnpm test:ailis-tool-contracts`
+- `pnpm test:ailis-capability-manager`
+- `pnpm test:ailis-skills`
 
 测试覆盖：
 
-- `F:\AILIS\tests\humanclaw-tool-acquisition-gateway.test.mjs:82`：核心工具 + Registry 候选搜索。
-- `F:\AILIS\tests\humanclaw-tool-acquisition-gateway.test.mjs:116`：任务-工具学习与推荐。
-- `F:\AILIS\tests\humanclaw-tool-acquisition-gateway.test.mjs:144`：Capability Manager 通过 Registry 候选生成 MCP 安装计划。
+- `F:\AILIS\tests\ailis-tool-acquisition-gateway.test.mjs:82`：核心工具 + Registry 候选搜索。
+- `F:\AILIS\tests\ailis-tool-acquisition-gateway.test.mjs:116`：任务-工具学习与推荐。
+- `F:\AILIS\tests\ailis-tool-acquisition-gateway.test.mjs:144`：Capability Manager 通过 Registry 候选生成 MCP 安装计划。
 
 ## 与 Codex 仍有差距
 
