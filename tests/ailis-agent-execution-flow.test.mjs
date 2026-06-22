@@ -430,9 +430,14 @@ test('Agent evidence sufficiency unwraps nested MCP structuredContent readiness'
     }];
 
     const sufficiency = buildEvidenceSufficiencyPromptObject(stepResults, { exactAnswerMode: true });
-    assert.equal(sufficiency.status, 'ready_for_reasoning');
-    assert.equal(sufficiency.ready_evidence_count, 1);
-    assert.equal(sufficiency.ready_evidence[0].tool, 'mcp__ailis_research__web_fetch');
+    assert.equal(sufficiency.status, 'audit_required');
+    assert.equal(sufficiency.ready, false);
+    assert.equal(sufficiency.ready_evidence_count, 0);
+    assert.equal(sufficiency.audit_required, true);
+    assert.equal(sufficiency.evidence_audit_candidates.length, 1);
+    assert.equal(sufficiency.evidence_audit_candidates[0].tool, 'mcp__ailis_research__web_fetch');
+    assert.equal(sufficiency.evidence_audit_contract.required, true);
+    assert.match(sufficiency.evidence_audit_contract.final_answer_rule, /supported_claims/);
 });
 
 test('Agent model-facing observation digest stays compact and artifact-backed', () => {

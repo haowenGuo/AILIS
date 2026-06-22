@@ -1840,6 +1840,62 @@ test('inferPaperMetadataArgsFromScholarlyQuery keeps single-author surname clues
     assert.match(args.topic, /Lepidoptera/i);
 });
 
+test('web_research requires audit instead of marking video metadata pages ready', async () => {
+    const videoBody = [
+        '<html><head><title>【绝区零】叶瞬光 超详细养成攻略教学_攻略</title></head><body>',
+        '<nav>首页 番剧 直播 游戏中心 会员购 漫画 赛事 投稿</nav>',
+        '<h1>【绝区零】叶瞬光 超详细养成攻略教学</h1>',
+        '<p>31.2万 654 2025-12-30 09:37:12 未经作者授权，禁止转载 正在缓冲...</p>',
+        '<p>叶瞬光 小光 攻略 绝区零 推荐视频 相关推荐 搜索更多视频。</p>',
+        `<section>${'相关推荐 视频播放 弹幕 投稿 收藏 转发 评论。'.repeat(80)}</section>`,
+        '</body></html>'
+    ].join('');
+    await withServer((request, response) => {
+        const url = new URL(request.url || '/', 'http://127.0.0.1');
+        if (url.pathname === '/search') {
+            response.writeHead(200, { 'content-type': 'application/json' });
+            response.end(JSON.stringify({
+                results: [
+                    {
+                        title: '【绝区零】叶瞬光 超详细养成攻略教学_攻略',
+                        url: `http://${request.headers.host}/video/BV1GevbBxEs8/`,
+                        content: '叶瞬光小光攻略视频，技能、驱动盘、音擎、配队。'
+                    }
+                ]
+            }));
+            return;
+        }
+        if (url.pathname === '/video/BV1GevbBxEs8/') {
+            response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+            response.end(videoBody);
+            return;
+        }
+        response.writeHead(404);
+        response.end('not found');
+    }, async (baseUrl) => {
+        const result = await webResearch({
+            query: '绝区零 叶瞬光 小光 攻略 技能 配队 音擎 驱动盘',
+            provider: 'searxng',
+            fetchProvider: 'builtin',
+            searxngUrl: baseUrl,
+            maxPages: 1,
+            maxCharsPerPage: 12000
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.equal(result.structuredContent.answerReadiness, 'partial');
+        assert.equal(result.structuredContent.requiresEvidenceAudit, true);
+        assert.match(result.structuredContent.evidenceAuditInstruction, /LLM evidence audit/i);
+        assert.equal(result.structuredContent.evidencePages.length, 1);
+        assert.equal(result.structuredContent.evidencePages[0].pageType, 'video_page');
+        assert.equal(result.structuredContent.evidencePages[0].evidenceQuality, 'metadata_only');
+        assert.equal(result.structuredContent.evidencePages[0].reasoningReady, false);
+        assert.match(result.structuredContent.evidencePages[0].recoveryHint, /transcript|video-specific|ASR/i);
+        assert.match(result.content[0].text, /Retrieval readiness: partial/);
+        assert.match(result.content[0].text, /Evidence audit required: true/);
+    });
+});
+
 test('web_fetch rejects PDF/binary content instead of returning raw PDF bytes', async () => {
     await withServer((request, response) => {
         response.writeHead(200, { 'content-type': 'application/pdf' });
@@ -2162,7 +2218,8 @@ test('web_fetch extracts HTML relationship map for model reasoning', async () =>
     }, async (baseUrl) => {
         const result = await webFetch({
             url: `${baseUrl}/guide`,
-            query: '绝区零 叶瞬光 攻略 配队 技能'
+            query: '绝区零 叶瞬光 攻略 配队 技能',
+            provider: 'builtin'
         });
 
         assert.equal(result.isError, undefined, result.content[0].text);
@@ -2316,7 +2373,7 @@ test('web_fetch repairs common UTF-8 mojibake before evidence classification', a
         response.writeHead(200, { 'content-type': 'text/html' });
         response.end(`<html><body><article>${mojibake}</article></body></html>`);
     }, async (baseUrl) => {
-        const result = await webFetch({ url: `${baseUrl}/guide`, query: '绝区零 莱特 攻略' });
+        const result = await webFetch({ url: `${baseUrl}/guide`, query: '绝区零 莱特 攻略', provider: 'builtin' });
 
         assert.equal(result.isError, undefined, result.content[0].text);
         assert.match(result.content[0].text, /绝区零莱特攻略/);

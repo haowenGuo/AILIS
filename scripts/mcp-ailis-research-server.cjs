@@ -2595,24 +2595,68 @@ function isMandatoryEvidenceFollowup(call = {}) {
     return ['paper_metadata_lookup', 'pdf_extract_text', 'pdf_find_and_extract', 'download_file'].includes(tool);
 }
 
+function classifyFetchedPageType({ text = '', url = '', contentType = '', suggestedNextCalls = [] } = {}) {
+    const normalizedText = normalizeString(text);
+    const normalizedUrl = normalizeString(url).toLowerCase();
+    if (looksLikeJavaScriptShellText(normalizedText, url)) {
+        return 'js_shell';
+    }
+    if (
+        /(?:^|[/?#&])(search|s)(?:[/?#&=]|$)/i.test(normalizedUrl) ||
+        /[?&](?:q|query|keyword|search|wd|text)=/i.test(normalizedUrl) ||
+        /搜索结果|search results|related searches|筛选结果/i.test(normalizedText)
+    ) {
+        return 'search_results_page';
+    }
+    if (
+        /(?:youtube\.com\/watch|youtu\.be\/|bilibili\.com\/video\/|\/video\/|vimeo\.com\/)/i.test(normalizedUrl) ||
+        (
+            /视频|播放|弹幕|views?|subscribers?|正在缓冲|未经作者授权/i.test(normalizedText) &&
+            /播放量|弹幕|video|watch|投稿|recommend|相关推荐/i.test(normalizedText)
+        )
+    ) {
+        return 'video_page';
+    }
+    const linkLikeCount = (normalizedText.match(/\]\(|https?:\/\/|^\s*\*/gim) || []).length;
+    const headingLikeCount = (normalizedText.match(/^#{1,4}\s+|<h[1-6]\b/gim) || []).length;
+    const paragraphishCount = (normalizedText.match(/[。.!?！？]\s/g) || []).length;
+    const hasManySuggestedLinks = Array.isArray(suggestedNextCalls) && suggestedNextCalls.length >= 2;
+    if (
+        normalizedText.length >= 600 &&
+        (linkLikeCount >= 18 || hasManySuggestedLinks) &&
+        headingLikeCount <= 3 &&
+        paragraphishCount <= 8 &&
+        /首页|导航|版块|分类|频道|更多|热门|排行|index|home|menu|category/i.test(normalizedText)
+    ) {
+        return 'navigation_page';
+    }
+    if (/html|markdown|text/i.test(contentType) && (headingLikeCount > 0 || paragraphishCount >= 4)) {
+        return 'article_or_document_page';
+    }
+    return 'unknown_page';
+}
+
 function classifyWebFetchEvidenceQuality({ text = '', url = '', query = '', contentType = '', barrier = null, suggestedNextCalls = [], truncated = false, encodingRepair = null } = {}) {
     const normalizedText = normalizeString(text);
+    const pageType = classifyFetchedPageType({ text, url, contentType, suggestedNextCalls });
     if (barrier) {
         return {
             evidenceQuality: barrier.status || 'access_barrier',
             isEvidence: false,
             evidenceGap: barrier.evidenceGap,
             recoveryHint: barrier.recoveryHint,
-            pageStatus: barrier.status
+            pageStatus: barrier.status,
+            pageType
         };
     }
-    if (looksLikeJavaScriptShellText(normalizedText, url)) {
+    if (pageType === 'js_shell') {
         return {
             evidenceQuality: 'js_shell',
             isEvidence: false,
             evidenceGap: 'The fetched page is only a JavaScript loading shell, not answer-bearing page content.',
             recoveryHint: 'Do not refetch the same URL. Use an accessible source, a reader/backend that can render JavaScript, or a different search result.',
-            pageStatus: 'js_shell'
+            pageStatus: 'js_shell',
+            pageType
         };
     }
     if (encodingRepair?.suspected) {
@@ -2621,7 +2665,8 @@ function classifyWebFetchEvidenceQuality({ text = '', url = '', query = '', cont
             isEvidence: false,
             evidenceGap: 'The fetched text appears mojibake/incorrectly decoded, so it is not reliable answer evidence.',
             recoveryHint: 'Retry through an encoding-aware fetch backend or choose another accessible source instead of reasoning from mojibake.',
-            pageStatus: 'encoding_failure'
+            pageStatus: 'encoding_failure',
+            pageType
         };
     }
     if (normalizedText.length < 200) {
@@ -2630,7 +2675,28 @@ function classifyWebFetchEvidenceQuality({ text = '', url = '', query = '', cont
             isEvidence: false,
             evidenceGap: 'The fetched page text is too short to be reliable answer evidence.',
             recoveryHint: 'Open a higher-signal result or use a domain-specific source instead of repeating this thin page.',
-            pageStatus: 'thin_content'
+            pageStatus: 'thin_content',
+            pageType
+        };
+    }
+    if (pageType === 'video_page') {
+        return {
+            evidenceQuality: 'metadata_only',
+            isEvidence: true,
+            evidenceGap: 'The fetched page is video metadata/page chrome, not the transcript or answer-bearing guide content.',
+            recoveryHint: 'Use a transcript/video-specific tool, ASR, page description, or an accessible text guide before generating detailed claims.',
+            pageStatus: 'video_metadata',
+            pageType
+        };
+    }
+    if (pageType === 'search_results_page' || pageType === 'navigation_page') {
+        return {
+            evidenceQuality: 'link_hub',
+            isEvidence: false,
+            evidenceGap: 'The fetched page is a search/navigation/link hub rather than answer-bearing content.',
+            recoveryHint: 'Follow the most relevant high-signal linked source with web_fetch or a domain-specific reader instead of answering from this page.',
+            pageStatus: pageType,
+            pageType
         };
     }
     const mandatoryFollowup = suggestedNextCalls.some(isMandatoryEvidenceFollowup);
@@ -2640,7 +2706,8 @@ function classifyWebFetchEvidenceQuality({ text = '', url = '', query = '', cont
             isEvidence: true,
             evidenceGap: 'This page excerpt is not enough on its own. Follow the linked DOI/PDF/document candidate before answering.',
             recoveryHint: 'Prefer following the high-signal linked resources below instead of broadening back to web_search.',
-            pageStatus: 'partial_evidence'
+            pageStatus: 'partial_evidence',
+            pageType
         };
     }
     const matchedTerms = countEvidenceTermMatches(normalizedText, query);
@@ -2653,7 +2720,8 @@ function classifyWebFetchEvidenceQuality({ text = '', url = '', query = '', cont
             isEvidence: true,
             evidenceGap: '',
             recoveryHint: 'Use this page content to answer if it matches the user goal; do not refetch the same URL unless a specific missing field remains.',
-            pageStatus: encodingRepair?.repaired ? 'encoding_repaired' : 'content_ready'
+            pageStatus: encodingRepair?.repaired ? 'encoding_repaired' : 'content_ready',
+            pageType
         };
     }
     return {
@@ -2663,7 +2731,8 @@ function classifyWebFetchEvidenceQuality({ text = '', url = '', query = '', cont
             ? 'This is a page excerpt. If the answer depends on missing details, inspect a more specific link or source next.'
             : '',
         recoveryHint: '',
-        pageStatus: encodingRepair?.repaired ? 'encoding_repaired' : 'partial_evidence'
+        pageStatus: encodingRepair?.repaired ? 'encoding_repaired' : 'partial_evidence',
+        pageType
     };
 }
 
@@ -4565,12 +4634,16 @@ function buildWebFetchResult({ url, args = {}, maxChars = MAX_FETCH_CHARS, fetch
         reasoningReady,
         isEvidence: quality.isEvidence,
         evidenceQuality: quality.evidenceQuality,
+        pageType: quality.pageType,
+        contentQuality: quality.evidenceQuality,
         observationContract: {
             complete: reasoningReady,
             truncated: observationTruncated,
             reasoning_ready: reasoningReady,
             is_evidence: quality.isEvidence,
-            evidence_quality: quality.evidenceQuality
+            evidence_quality: quality.evidenceQuality,
+            page_type: quality.pageType,
+            final_answer_requires_llm_evidence_audit: true
         },
         observedLinkCount: extractedLinks.length,
         suggestedNextCalls: effectiveSuggestedNextCalls,
@@ -4582,6 +4655,7 @@ function buildWebFetchResult({ url, args = {}, maxChars = MAX_FETCH_CHARS, fetch
         evidenceGap,
         recoveryHint,
         pageStatus: quality.pageStatus || undefined,
+        finalAnswerRequiresEvidenceAudit: true,
         encodingRepair: encodingRepair.repaired ? 'latin1_to_utf8' : undefined,
         crawl4aiAttempt: summarizeCrawl4aiAttempt(crawl4aiAttempt),
         renderedFallbackAttempt: summarizeCrawl4aiAttempt(renderedFallbackAttempt),
@@ -4858,6 +4932,8 @@ function scoreWebResearchPage(page = {}, query = '') {
     const qualityScores = {
         sufficient_evidence: 42,
         partial_evidence: 24,
+        metadata_only: 8,
+        link_hub: 2,
         thin_content: 6,
         off_target_evidence: -18,
         js_shell: -38,
@@ -4938,6 +5014,9 @@ function summarizeWebResearchPage(candidate = {}, fetchResult = {}, query = '') 
         fetchStatus: details.status || (fetchResult.isError ? 'error' : 'completed'),
         fetchBackend: normalizeString(details.fetchBackend),
         evidenceQuality,
+        pageType: normalizeString(details.pageType || details.observationContract?.page_type),
+        contentQuality: normalizeString(details.contentQuality || evidenceQuality),
+        finalAnswerRequiresEvidenceAudit: details.finalAnswerRequiresEvidenceAudit !== false,
         isEvidence: targetCovered ? details.isEvidence : false,
         reasoningReady: targetCovered && (details.reasoningReady === true || details.observationContract?.reasoning_ready === true),
         complete: targetCovered && (details.complete === true || details.observationContract?.complete === true),
@@ -4972,6 +5051,8 @@ function assessWebResearchBundle(pages = [], searchDetails = {}) {
     if (searchDetails.clarificationRequired) {
         return {
             answerReadiness: 'needs_clarification',
+            readinessAuthority: 'retrieval_heuristic',
+            requiresEvidenceAudit: false,
             evidenceGap: searchDetails.evidenceGap || 'Search target is ambiguous.',
             recoveryHint: searchDetails.recoveryHint || 'Ask the user to clarify the search target before fetching pages.'
         };
@@ -4979,6 +5060,9 @@ function assessWebResearchBundle(pages = [], searchDetails = {}) {
     if (readyPages.length) {
         return {
             answerReadiness: 'ready',
+            readinessAuthority: 'retrieval_heuristic',
+            requiresEvidenceAudit: true,
+            evidenceAuditInstruction: 'Before final answer, an LLM evidence auditor must verify that supported claims cover the user goal and identify missing fields; tool readiness is retrieval quality, not final answer authority.',
             evidenceGap: '',
             recoveryHint: 'Use the evidence pages; do not run another broad search unless a specific field is missing.'
         };
@@ -4986,6 +5070,9 @@ function assessWebResearchBundle(pages = [], searchDetails = {}) {
     if (evidencePages.length) {
         return {
             answerReadiness: 'partial',
+            readinessAuthority: 'retrieval_heuristic',
+            requiresEvidenceAudit: true,
+            evidenceAuditInstruction: 'Run an LLM evidence audit over the fetched evidence. If required answer fields are missing, continue retrieval or state the gap instead of filling with generic claims.',
             evidenceGap: 'Fetched pages contain some evidence but are not fully reasoning-ready. Follow high-signal linked resources or fetch a more specific result if needed.',
             recoveryHint: 'Prefer suggestedNextCalls from the evidence pages before issuing another broad search.'
         };
@@ -4993,12 +5080,18 @@ function assessWebResearchBundle(pages = [], searchDetails = {}) {
     if (blockedPages.length) {
         return {
             answerReadiness: 'blocked',
+            readinessAuthority: 'retrieval_heuristic',
+            requiresEvidenceAudit: true,
+            evidenceAuditInstruction: 'An LLM evidence audit should reject final answering from blocked pages and choose alternate retrieval or explicit gap reporting.',
             evidenceGap: 'Top pages were blocked, JavaScript-only, or unusable as answer evidence.',
             recoveryHint: 'Try alternate sources, rendered/browser extraction, or a domain-specific API/tool.'
         };
     }
     return {
         answerReadiness: 'needs_followup',
+        readinessAuthority: 'retrieval_heuristic',
+        requiresEvidenceAudit: true,
+        evidenceAuditInstruction: 'No final answer should be generated from this bundle until an LLM evidence audit finds sufficient supported claims.',
         evidenceGap: searchDetails.evidenceGap || 'No answer-bearing evidence page was fetched.',
         recoveryHint: searchDetails.recoveryHint || 'Refine the query or use a more specific retrieval tool.'
     };
@@ -5008,8 +5101,13 @@ function formatWebResearchBundle({ query = '', searchDetails = {}, pages = [], b
     const lines = [
         'AILIS web research evidence bundle:',
         `Query: ${query}`,
-        `Answer readiness: ${bundleAssessment.answerReadiness || 'unknown'}`
+        `Retrieval readiness: ${bundleAssessment.answerReadiness || 'unknown'}`,
+        `Readiness authority: ${bundleAssessment.readinessAuthority || 'retrieval_heuristic'}`,
+        `Evidence audit required: ${bundleAssessment.requiresEvidenceAudit !== false}`
     ];
+    if (bundleAssessment.evidenceAuditInstruction) {
+        lines.push(`Evidence audit instruction: ${bundleAssessment.evidenceAuditInstruction}`);
+    }
     if (bundleAssessment.evidenceGap) {
         lines.push(`Evidence gap: ${bundleAssessment.evidenceGap}`);
     }
@@ -5055,6 +5153,9 @@ function formatWebResearchBundle({ query = '', searchDetails = {}, pages = [], b
             lines.push(`- ${index + 1}. ${page.title || page.url}`);
             lines.push(`  URL: ${page.url}`);
             lines.push(`  Quality: ${page.evidenceQuality || 'unknown'}; reasoningReady=${page.reasoningReady === true}; evidenceScore=${page.evidenceScore ?? 'n/a'}`);
+            if (page.pageType || page.contentQuality) {
+                lines.push(`  Page type: ${page.pageType || 'unknown'}; contentQuality=${page.contentQuality || page.evidenceQuality || 'unknown'}`);
+            }
             if (page.evidenceGap) {
                 lines.push(`  Gap: ${page.evidenceGap}`);
             }
@@ -9091,7 +9192,7 @@ const TOOLS = [
     },
     {
         name: 'web_research',
-        description: 'End-to-end AILIS web research pipeline for natural research/guide/current-info tasks. It runs web_search, de-duplicates and ranks candidates, fetches the top high-signal HTML/text pages, extracts readable content plus relationship maps, and returns an evidence bundle with answerReadiness, evidencePages, searchConfidence, and suggestedNextCalls. Use this when the user asks to research, make a guide, compare public sources, or gather current web evidence and there is no more specific artifact tool. It stops for clarification instead of fetching pages when searchConfidence says the target is ambiguous.',
+        description: 'End-to-end AILIS web research pipeline for natural research/guide/current-info tasks. It runs web_search, de-duplicates and ranks candidates, fetches the top high-signal HTML/text pages, extracts readable content plus relationship maps, and returns a retrieval evidence bundle with retrieval-readiness metadata, page types, evidencePages, searchConfidence, and suggestedNextCalls. Retrieval readiness is only a tool-layer heuristic: final answering requires an LLM evidence audit over supported claims, missing fields, and rejected/non-answer-bearing sources. Use this when the user asks to research, make a guide, compare public sources, or gather current web evidence and there is no more specific artifact tool. It stops for clarification instead of fetching pages when searchConfidence says the target is ambiguous.',
         inputSchema: {
             type: 'object',
             required: ['query'],

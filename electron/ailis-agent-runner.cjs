@@ -932,6 +932,96 @@ function normalizeEvidenceBoolean(value, fallback = false) {
     return fallback;
 }
 
+function isWebEvidenceToolName(tool = '') {
+    const normalized = normalizeText(tool).toLowerCase();
+    return /(?:^|__|:|\.)(web_search|web_fetch|web_research|web_extract_links)$/.test(normalized) ||
+        ['web_search', 'web_fetch', 'web_research', 'web_extract_links'].includes(normalized);
+}
+
+function buildEvidenceAuditCandidateFromStep(stepResult = {}) {
+    const tool = normalizeText(stepResult.tool);
+    if (!isWebEvidenceToolName(tool) || stepResult.response?.ok !== true) {
+        return null;
+    }
+    const details = getToolResultDetails(stepResult);
+    const observationContract = details.observationContract || details.observation_contract || {};
+    const resultText = extractToolResultText(stepResult.response?.result) || stepResult.response?.error || '';
+    const pages = Array.isArray(details.evidencePages)
+        ? details.evidencePages
+        : (Array.isArray(details.pages) ? details.pages : []);
+    const summarizedPages = pages.slice(0, 5).map((page) => ({
+        title: page.title || null,
+        url: page.url || null,
+        pageType: page.pageType || page.page_type || null,
+        contentQuality: page.contentQuality || page.content_quality || page.evidenceQuality || null,
+        evidenceQuality: page.evidenceQuality || page.evidence_quality || null,
+        reasoningReady: page.reasoningReady === true || page.reasoning_ready === true,
+        evidenceScore: Number.isFinite(Number(page.evidenceScore)) ? Number(page.evidenceScore) : undefined,
+        evidenceGap: summarize(page.evidenceGap || '', 220),
+        recoveryHint: summarize(page.recoveryHint || '', 220),
+        snippets: Array.isArray(page.evidenceSnippets) ? page.evidenceSnippets.slice(0, 2).map((snippet) => summarize(snippet, 220)) : []
+    }));
+    return {
+        stepId: stepResult.id || null,
+        tool,
+        title: stepResult.title || null,
+        query: details.query || stepResult.args?.query || stepResult.args?.q || stepResult.args?.search || null,
+        url: details.url || stepResult.args?.url || null,
+        retrievalReadiness: details.answerReadiness || details.retrievalReadiness || details.retrieval_readiness || null,
+        readinessAuthority: details.readinessAuthority || details.readiness_authority || 'retrieval_heuristic',
+        pageType: details.pageType || observationContract.page_type || null,
+        contentQuality: details.contentQuality || details.evidenceQuality || observationContract.evidence_quality || null,
+        evidenceQuality: details.evidenceQuality || observationContract.evidence_quality || null,
+        reasoningReady: details.reasoningReady === true || details.reasoning_ready === true || observationContract.reasoning_ready === true,
+        isEvidence: details.isEvidence === true || observationContract.is_evidence === true,
+        focus: details.focus || null,
+        evidenceGap: summarize(details.evidenceGap || '', 360),
+        recoveryHint: summarize(details.recoveryHint || '', 360),
+        evidencePages: summarizedPages,
+        preview: summarize(resultText, 1200)
+    };
+}
+
+function buildEvidenceAuditContractPromptObject(auditCandidates = [], { message = '' } = {}) {
+    if (!Array.isArray(auditCandidates) || !auditCandidates.length) {
+        return null;
+    }
+    return {
+        model: 'ailis_llm_evidence_auditor.v1',
+        required: true,
+        user_goal: summarize(message, 500),
+        instruction: [
+            'Before final answer, audit whether the available retrieval evidence is sufficient for the user goal.',
+            'This LLM audit overrides retrieval/readiness labels from tools.',
+            'Do not invent unsupported fields; if key fields are missing, continue retrieval, switch tools, ask clarification, or state the evidence gap.'
+        ].join(' '),
+        output_schema: {
+            ready: 'boolean',
+            confidence: 'high|medium|low',
+            task_type: 'short task category inferred from the user goal',
+            answerable_scope: 'what can be answered from current evidence',
+            supported_claims: [
+                {
+                    claim: 'claim that can be stated',
+                    evidence_ref: 'stepId or source URL',
+                    quote_or_snippet: 'short supporting excerpt',
+                    confidence: 'high|medium|low'
+                }
+            ],
+            missing_fields: ['required user-goal fields not supported by evidence'],
+            rejected_evidence: [
+                {
+                    evidence_ref: 'stepId or source URL',
+                    reason: 'why it is not answer-bearing'
+                }
+            ],
+            next_action: 'final|continue_retrieval|use_specialized_tool|ask_clarification|blocked'
+        },
+        final_answer_rule: 'Final answers may use only supported_claims. If ready=false, do not fill missing_fields with generic knowledge or plausible templates.',
+        candidates: auditCandidates
+    };
+}
+
 function buildReadyEvidenceFromStep(stepResult = {}) {
     const details = getToolResultDetails(stepResult);
     const resultText = extractToolResultText(stepResult.response?.result) || stepResult.response?.error || '';
@@ -948,6 +1038,9 @@ function buildReadyEvidenceFromStep(stepResult = {}) {
         details.reasoningReady,
         normalizeEvidenceBoolean(details.reasoning_ready, normalizeEvidenceBoolean(observationContract.reasoning_ready, normalizeEvidenceBoolean(evidence.reasoningReady, documentReadComplete && textSaysNotTruncated)))
     );
+    if (isWebEvidenceToolName(stepResult.tool) && details.finalAnswerRequiresEvidenceAudit !== false && observationContract.final_answer_requires_llm_evidence_audit !== false) {
+        return null;
+    }
     if (stepResult.response?.ok !== true || complete !== true || truncated === true || reasoningReady !== true) {
         return null;
     }
@@ -1009,6 +1102,10 @@ function previewBudgetForAgentToolResult(stepResult = {}) {
 
 function buildEvidenceSufficiencyPromptObject(stepResults = [], { exactAnswerMode = false, message = '' } = {}) {
     const sourceQuestionArtifact = buildSourceQuestionEvidenceArtifact(message, { exactAnswerMode });
+    const evidenceAuditCandidates = (Array.isArray(stepResults) ? stepResults : [])
+        .map(buildEvidenceAuditCandidateFromStep)
+        .filter(Boolean)
+        .slice(-6);
     const toolReadyEvidence = (Array.isArray(stepResults) ? stepResults : [])
         .map(buildReadyEvidenceFromStep)
         .filter(Boolean)
@@ -1039,21 +1136,30 @@ function buildEvidenceSufficiencyPromptObject(stepResults = [], { exactAnswerMod
         .find((stepResult) => stepResult?.response && stepResult.response.ok !== true) || null;
     const repeatedCoveredReads = readyEvidence.filter((entry) => entry.coveredByEvidence?.evidenceId).slice(-6);
     const hasComputeEvidence = readyEvidence.some((entry) => entry.tool === 'artifact_compute');
-    const status = readyEvidence.length
-        ? (latestFailed ? 'ready_with_later_failure' : (sourceQuestionReady.length && !toolReadyEvidence.length ? 'source_question_ready_for_reasoning' : 'ready_for_reasoning'))
+    const auditRequired = evidenceAuditCandidates.length > 0;
+    const status = auditRequired && !readyEvidence.length
+        ? 'audit_required'
+        : readyEvidence.length
+        ? (auditRequired ? 'ready_with_web_audit_required' : (latestFailed ? 'ready_with_later_failure' : (sourceQuestionReady.length && !toolReadyEvidence.length ? 'source_question_ready_for_reasoning' : 'ready_for_reasoning')))
         : 'needs_more_evidence';
+    const evidenceAuditContract = buildEvidenceAuditContractPromptObject(evidenceAuditCandidates, { message });
     return {
         model: 'ailis_evidence_sufficiency.v1',
         status,
         ready: readyEvidence.length > 0,
+        audit_required: auditRequired,
         exact_answer_mode: exactAnswerMode === true,
-        recommended_next_action: readyEvidence.length
+        recommended_next_action: auditRequired
+            ? 'Run the structured LLM evidence audit. If ready=false or required fields are missing, continue retrieval/use a specialized tool/ask clarification instead of finalizing from generic knowledge.'
+            : readyEvidence.length
             ? (sourceQuestionReady.length && !toolReadyEvidence.length
                 ? 'For this self-contained exact-answer task, reason from the source_question evidence and submit that evidence ref. Use tools only if a specific external/file evidence gap remains.'
                 : 'Use the ready evidence to reason or final if it answers the user goal; do not repeat covered artifact reads. Call a narrower query/compute only if a specific missing field remains.')
             : 'Gather complete, non-truncated, reasoning-ready evidence with read/query/compute tools before final.',
         ready_evidence_count: readyEvidence.length,
         ready_evidence: readyEvidence,
+        evidence_audit_contract: evidenceAuditContract,
+        evidence_audit_candidates: evidenceAuditCandidates,
         latest_ready_evidence: latestReady,
         repeated_covered_reads: repeatedCoveredReads,
         has_compute_evidence: hasComputeEvidence,
@@ -4015,6 +4121,7 @@ function buildLlmAgentExecutorMessages({
         'recent_turn_items 是 Codex-like 执行记录：tool_call 表示工具已开始，tool_result 表示工具成功或失败，context 表示能力说明已加载，runtime_note 是诊断信息。工具失败也是 observation，应进入下一轮决策；不要因为单个工具失败就僵死，可以换工具、换策略、请求上下文或诚实 final。',
         '证据缺口协议：如果 latest_observation 或 tool_result 中出现 evidence_gap/recovery_hint，说明上一个工具虽然可能成功，但证据不足；优先按 recovery_hint 调用 tool_search 寻找结构化 API、文档解析、视频帧采样或视觉工具，不要机械重复同一个 web_fetch/search。',
         '歧义澄清协议：如果 latest_observation/tool_result 的 evidence_gap 是 ambiguous_search_requires_clarification，或 recovery_hint 要求用户澄清搜索目标，立即 action="final" 或 action="blocked" 向用户提出简短澄清问题并列出候选；不要继续调用 web_search、web_fetch 或按低置信度结果猜测执行。',
+        '证据审计协议：如果 user payload 的 evidence_sufficiency.audit_required 为 true，必须先按 evidence_audit_contract 形成结构化 evidence_audit（ready、confidence、supported_claims、missing_fields、rejected_evidence、next_action）。这个 LLM 审计可以推翻工具返回的 ready/reasoningReady；final_answer 只能使用 supported_claims，missing_fields 不能用常识模板补齐。',
         '证据充分协议：如果 user payload 的 evidence_sufficiency.status 是 ready_for_reasoning，且 ready_evidence 已覆盖当前问题所需字段/范围/计算结果，应进入推理或 final；不要继续重复读取 covered artifact/range，除非能说明缺少哪个具体字段。',
         '工具选择路由：如果任务提到附件、文件路径、DOCX/Word、PPT/PPTX、表格/CSV/XLSX、PDF/论文/报告、YouTube/视频、音频、图片、代码文件、GitHub 仓库或已知 URL，先用 tool_search 查对应 artifact/tool 类型并调用返回的专用 direct 工具（本地工具、mcp__... 或 external__...）；web_search 只作为没有专用工具或专用工具失败后的兜底。',
         '遇到任务时按 Codex/OpenClaw 风格逐步执行：观察当前状态，决定下一步，调用一个工具，等待 observation，再决定下一步。不要一次性输出完整 steps 当作完成，也不要只说计划。',
@@ -4044,7 +4151,7 @@ function buildLlmAgentExecutorMessages({
         '可见回复格式：final_answer 字段是给用户看的 Markdown 字符串，可以使用自然段、短列表、代码块和加粗；blocked_reason 也按 Markdown 组织。不要输出 HTML；不要把 persona_output/persona_surface 或 emotion/intensity/gestureIntent/taskState 等内部控制字段放进任何可见回复字段。',
         '只输出 JSON，JSON 外不要输出 Markdown。',
         'persona_output 字段示例：{"text":"自然可见回复","bubble_text":"可选气泡短句","speech_text":"可选语音文本","emotion":"happy|relaxed|shy|sad|angry|surprised|anxious|tired|thinking|focused|comforting","intensity":0.55,"socialTone":"soft|bright|calm|serious|playful|quiet","gestureIntent":"none|greeting|farewell|thinking|working|approval|success|celebrate|shy|comfort|apologize|surprised|angry|dance","taskState":"idle|listening|thinking|speaking|working|waiting_approval|happy_success|apologizing|comforting|blocked|failed","speechEnergy":0.45,"gazeTarget":"user|side|down|screen|away|none","durationHint":"short|medium|long|hold","tts_style":"..."}',
-        'JSON 格式：{"mode":"conversation|task","intent":"...","summary":"...","public_reasoning":"给用户看的短进度摘要，可空","action":"load_context|tool|final|blocked","capability_request":{"skills":[],"tools":[],"mcp":[],"reason":"..."},"plan_update":["..."],"tool_call":{"tool":"vision.capture_context|computer|email|code|file_manager|artifact_verifier|artifact_query|artifact_compute|read_xlsx_workbook|tool_search|request_permissions|mcp_bridge|capability_manager|self_debugger|self_evolution|subagents|update_plan|read|write|exec|apply_patch|mcp__server__tool|external__provider__tool","title":"...","args":{"action":"...","target":"screen|chat-window|active-window|region","reason":"...","question":"..."}},"persona_output":{},"final_answer":"Markdown...","exact_answer_submission":{"answer":"短答案","confidence":"high|medium|low","evidence_refs":["artifact-..."],"format_type":"plain|number|date|list|name|url|json","reason":"brief evidence note"},"blocked_reason":"Markdown..."}',
+        'JSON 格式：{"mode":"conversation|task","intent":"...","summary":"...","public_reasoning":"给用户看的短进度摘要，可空","action":"load_context|tool|final|blocked","capability_request":{"skills":[],"tools":[],"mcp":[],"reason":"..."},"plan_update":["..."],"tool_call":{"tool":"vision.capture_context|computer|email|code|file_manager|artifact_verifier|artifact_query|artifact_compute|read_xlsx_workbook|tool_search|request_permissions|mcp_bridge|capability_manager|self_debugger|self_evolution|subagents|update_plan|read|write|exec|apply_patch|mcp__server__tool|external__provider__tool","title":"...","args":{"action":"...","target":"screen|chat-window|active-window|region","reason":"...","question":"..."}},"evidence_audit":{"ready":false,"confidence":"low|medium|high","task_type":"...","answerable_scope":"...","supported_claims":[],"missing_fields":[],"rejected_evidence":[],"next_action":"final|continue_retrieval|use_specialized_tool|ask_clarification|blocked"},"persona_output":{},"final_answer":"Markdown...","exact_answer_submission":{"answer":"短答案","confidence":"high|medium|low","evidence_refs":["artifact-..."],"format_type":"plain|number|date|list|name|url|json","reason":"brief evidence note"},"blocked_reason":"Markdown..."}',
         '当 tool_call.tool 是 mcp_bridge 时，只能用于 MCP 管理/发现/修复动作，不要用它包装 call_tool。执行具体 MCP 工具必须使用 mcp__server__tool direct id。',
         `最多工具轮数：${maxSteps}`,
         `工具摘要：${toolSummary || 'Core tools are indexed in capability_catalog; detailed contracts and MCP tool specs are deferred.'}`
@@ -4928,6 +5035,7 @@ function buildLlmAgentDirectToolMessages({
         '公开进展文本：每个 direct tool 参数里都有可选 progress_note。只有出现重要变化时，顺手填一句自然、短、给用户看的进展，例如策略切换、发现关键证据、证据足够准备收敛、工具失败后的恢复方向、权限/环境阻塞；例行工具调用留空。不要泄露隐藏推理链，不要写工具日志/JSON/“第 N 步”/“正在处理”这类低信息量模板。',
         '工具失败、证据不足、字段没找到时，要根据 latest_failed_observation、recovery_hint 和 lossless_tool_observations 改换策略，不要机械重复同一个 web_search。',
         '歧义澄清协议：如果 latest_failed_observation/latest_observation 或任何 tool_result 显示 evidence_gap=ambiguous_search_requires_clarification，或 recovery_hint 要求用户澄清搜索目标，停止继续调用 web_search/web_fetch，直接用最终可见回复问用户选择候选或补充游戏名/角色全名。',
+        '证据审计协议：如果 user payload 的 evidence_sufficiency.audit_required 为 true，必须先按 evidence_audit_contract 结构审计当前证据：ready、confidence、supported_claims、missing_fields、rejected_evidence、next_action。这个审计可以推翻工具 ready；最终答复只能写 supported_claims 支撑的内容，缺失字段要继续检索、换专用工具、询问澄清或明确说明证据不足。',
         '证据充分时要收敛：如果 user payload 的 evidence_sufficiency.status 是 ready_for_reasoning，且 ready_evidence 已覆盖当前问题所需字段/范围/计算结果，应推理或最终回答，不要继续重复读取 covered artifact/range。',
         '运行环境协议：user payload 里的 runtime_environment 是当前这一轮的真实执行环境，来自 Platform Adapter，不属于长期记忆。生成 shell、路径、重定向、管道、环境变量和文件命令时必须先看 runtime_environment.family/default_shell/path_style/command_guidance；不要默认自己在 Linux、Windows 或 macOS。',
         'GitHub Pages 路由：任务涉及 GitHub Pages、gh-pages、github.io、部署验收、Pages 404 或发布目录时，先用 tool_search 查 github_pages，再调用返回的 direct 工具；不要先用裸 exec 拼 git/curl/head 作为主要诊断路径。',
