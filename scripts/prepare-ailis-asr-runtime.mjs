@@ -16,7 +16,9 @@ const SOURCE_PRIVATE_PYTHON_DIR = path.join(SOURCE_RUNTIME_ROOT, 'python');
 const SOURCE_UV_DIR = path.join(SOURCE_RUNTIME_ROOT, 'uv');
 const SOURCE_DOWNLOADS_DIR = path.join(SOURCE_RUNTIME_ROOT, 'downloads');
 const SOURCE_UV_CACHE_DIR = path.join(SOURCE_RUNTIME_ROOT, 'uv-cache');
-const OUTPUT_RUNTIME_DIR = path.join(PROJECT_ROOT, 'build-cache', 'ailis-asr-runtime');
+const OUTPUT_RUNTIME_DIR = process.env.AILIS_ASR_RUNTIME_OUTPUT_DIR
+    ? path.resolve(process.env.AILIS_ASR_RUNTIME_OUTPUT_DIR)
+    : path.join(PROJECT_ROOT, 'build-cache', 'ailis-asr-runtime');
 const DEFAULT_PYTHON_VERSION = '3.12';
 const DEFAULT_MODEL_ID = 'openai/whisper-small';
 const INSTALL_TIMEOUT_MS = 45 * 60 * 1000;

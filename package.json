@@ -1,6 +1,6 @@
 {
   "name": "ailis",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "AILIS desktop embodied-agent companion with VRM avatar, realtime voice, memory, and optional OpenClaw runtime integration.",
   "type": "module",
   "main": "electron/main.cjs",
