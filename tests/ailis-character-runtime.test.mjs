@@ -12,6 +12,12 @@ import { mixExpressionsForSurface } from '../src/character/emotion-mixer.js';
 import { isMotionApproved, listMotionLibrary, selectMotionForSurface } from '../src/character/motion-library.js';
 import { getLoadableMotionFiles, listMotionIntakeEntries, listMotionIntakeSources } from '../src/character/motion-intake-catalog.js';
 import { createPersonaSurfaceFromPayload, normalizePersonaSurfaceState } from '../src/character/persona-surface.js';
+import { CONFIG } from '../src/config.js';
+
+test('default avatar model uses the approved AILIS VRM asset', () => {
+    assert.equal(CONFIG.MODEL_PATH, 'Resources/AILIS.vrm');
+    assert.ok(!CONFIG.MODEL_PATH.includes('AILIS_18.vrm'));
+});
 
 test('persona surface normalizes legacy avatar cue into semantic state', () => {
     const surface = createPersonaSurfaceFromPayload({

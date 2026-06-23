@@ -14,6 +14,7 @@ const distRoot = resolve(projectRoot, 'dist');
 
 // 只复制前端实际会访问到的 VRM 与 VRMA 资源，避免把无关的大文件一起打进 Pages 产物。
 const resourcesRoot = resolve(projectRoot, 'Resources');
+const safeVrmFiles = new Set(['ailis.vrm']);
 const assetsToCopy = [
     {
         source: resolve(projectRoot, 'Resources', 'Emotes'),
@@ -25,6 +26,12 @@ const assetsToCopy = [
 if (existsSync(resourcesRoot)) {
     for (const entry of readdirSync(resourcesRoot, { withFileTypes: true })) {
         if (!entry.isFile() || !entry.name.toLowerCase().endsWith('.vrm')) {
+            continue;
+        }
+        if (!safeVrmFiles.has(entry.name.toLowerCase())) {
+            const staleTarget = resolve(distRoot, 'Resources', entry.name);
+            rmSync(staleTarget, { force: true });
+            console.log(`[build] skipped unsafe/unapproved VRM asset: ${entry.name}`);
             continue;
         }
         assetsToCopy.push({
