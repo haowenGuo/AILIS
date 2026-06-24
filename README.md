@@ -1,73 +1,98 @@
-# AILIS Assistant
+<div align="center">
+  <h1>AILIS Assistant</h1>
+  <p><strong>An open-source desktop embodied AI assistant with a VRM character, realtime voice, vision, memory, and a Codex-style agent harness.</strong></p>
+  <p>
+    <img alt="Version" src="https://img.shields.io/badge/version-1.0.6-2563eb?style=for-the-badge">
+    <img alt="Runtime" src="https://img.shields.io/badge/runtime-Electron-0f172a?style=for-the-badge">
+    <img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-059669?style=for-the-badge">
+  </p>
+  <p>
+    <a href="README.md">English</a> ·
+    <a href="README.zh-CN.md">简体中文</a> ·
+    <a href="README.ja.md">日本語</a> ·
+    <a href="README.ko.md">한국어</a> ·
+    <a href="README.fr.md">Français</a> ·
+    <a href="README.de.md">Deutsch</a>
+  </p>
+</div>
 
-AILIS Assistant is a desktop embodied-agent project built around a VRM character, a local Electron runtime, speech interaction, visual understanding, memory, and an AILIS-style tool harness.
+---
 
-This repository is no longer just a browser companion demo. It keeps some avatar and frontend foundations from the earlier AILIS work, but its product direction is different: AILIS Assistant is meant to feel like a personal desktop assistant that can talk, see context when permitted, remember preferences, and help with real tasks through a stable agent runtime.
+## What AILIS Is
 
-## Product Direction
+AILIS Assistant is a desktop-first embodied AI assistant. It combines a 3D VRM character, Electron desktop windows, voice interaction, screenshot-aware visual context, memory, and a structured agent runtime for real task execution.
 
-The project has two goals that must stay balanced:
+The goal is not to ship another web chatbot. AILIS is designed to feel like a personal desktop companion that can speak with the user, perceive context when permitted, remember useful preferences, and perform work through explicit, auditable tools.
 
-- Humanlike experience: AILIS should feel like a character sharing the desktop with the user, not a control panel wrapped around a chatbot.
-- Reliable task execution: tools, approvals, memory, vision, and model calls should be structured enough to support complex work without making the user feel they are operating a developer console.
+## Why It Matters
 
-In short, the bottom layer should be engineering-stable like Codex or Claude Code, while the top layer should feel like a warm desktop character.
+Most assistant projects split into two weak forms: expressive avatars without reliable execution, or powerful automation tools that feel like developer consoles. AILIS tries to hold both sides together:
 
-## What Makes This Different From AILIS
-
-The older AILIS project focused mainly on a web/desktop-pet companion experience. AILIS Assistant is moving toward a fuller local assistant architecture:
-
-- Desktop-first Electron runtime instead of a public web demo first
-- AILIS agent loop for planning, tool calls, approvals, event flow, and recovery
-- Vision tools for chat-window, full-screen, and region screenshots as model context
-- Speech routes focused on safe defaults, ElevenLabs cloud output, and a bundled CosyVoice3 local runtime path
-- Local ASR direction with automatic voice activity detection
-- Memory blocks, project memory, relationship state, and lightweight reflection
-- Humanlike experience evals for persona, tone, memory use, emotion response, and low tool-feel
-- Codex-style tool discovery with deferred MCP/Web/research tools, stricter schemas, and evidence-aware stopping
-- Local-first retrieval upgrades with Crawl4AI-style rendered fetch fallback and bundled runtime preparation
+- A character layer that feels present, expressive, and emotionally readable.
+- An agent harness that plans, routes tools, handles approvals, records evidence, and recovers from failures.
+- A local-first desktop runtime where private settings, memory, logs, and model configuration stay under the user's control.
 
 ## Current Capabilities
 
-- VRM desktop character with expressions, actions, lip sync, and dialogue bubble rendering
-- Electron desktop shell with pet window, chat window, control panel, and local settings
-- Chat flow backed by an OpenAI-compatible model provider
-- Screenshot-based visual understanding through a permission-aware vision layer
-- AILIS tool layer for file, code, computer, email, MCP, and vision skills
-- Durable pending approval and local state storage
-- Speech output through desktop TTS workers and cloud TTS providers
-- Local speech recognition worker and recognition-mode controls
-- AILIS humanlike eval dataset, judge rules, runners, and long-term companionship cases
-- Local LLM provider configuration for OpenAI-compatible APIs, vLLM, and Ollama-oriented workflows
-
-## Release Status
-
-Current release candidate: `v1.0.5`.
-
-This release line focuses on making AILIS feel shippable as a desktop assistant: AILIS naming cleanup, safer default voice behavior, memory controls, local-model setup guidance, stronger Web/Search evidence handling, Crawl4AI-backed fetch preparation, and GAIA-derived tool-loop hardening.
+- VRM desktop character with expressions, motions, lip sync, and dialogue bubbles.
+- Electron pet window, chat window, control panel, tray integration, and local persistent state.
+- OpenAI-compatible model provider configuration, including custom base URLs and local-provider workflows.
+- Voice output through desktop TTS workers and cloud provider paths.
+- Optional local speech recognition worker for desktop voice input.
+- Permission-aware visual context through screenshot, window, and region capture flows.
+- Memory blocks, project context, relationship state, and lightweight reflection.
+- Tool layer for file operations, code work, computer actions, email, MCP skills, web/search support, and local runtime utilities.
+- Approval-aware execution model for actions that can affect files, apps, accounts, or external services.
+- Humanlike experience evals, tool-contract tests, gateway checks, and agent execution smoke tests.
 
 ## Architecture
 
 ```text
-electron/   Desktop main process, AILIS runtime, TTS/ASR workers, tool implementations
-src/        Renderer apps for chat, pet avatar, control panel, speech, vision UI, and bubbles
-backend/    Optional FastAPI backend, API schemas, education/Vivix services, and static assets
-Resources/  VRM model, VRMA motions, and reference voice assets
-evals/      AILIS humanlike experience scenarios and dataset plans
-tests/      Node test suites for AILIS, memory, tools, evals, provider, and runtime behavior
-docs/       Architecture notes, OpenClaw research, AILIS design, memory, vision, and eval docs
-scripts/    Validation, smoke tests, eval runners, generation tools, and build helpers
+User / Voice / Screen
+        |
+        v
+AILIS Desktop UI
+  - VRM character
+  - Chat window
+  - Control panel
+        |
+        v
+Agent Harness
+  - planner
+  - tool router
+  - approval gate
+  - evidence log
+  - recovery loop
+        |
+        v
+Runtime Services
+  - model providers
+  - voice / ASR / TTS
+  - vision capture
+  - memory store
+  - local tools / MCP
+        |
+        v
+Validation
+  - tests
+  - evals
+  - smoke checks
 ```
 
-Core design documents:
+## Repository Layout
 
-- [Embodied Agent Architecture](docs/ailis-embodied-agent-architecture.md)
-- [Memory Architecture V2](docs/ailis-memory-architecture-v2.md)
-- [Humanlike Eval](docs/ailis-humanlike-eval.md)
-- [OpenClaw From Zero](docs/openclaw-from-zero.md)
-- [Tool Ecosystem Driver Guide](docs/tool-ecosystem-driver-guide.md)
+```text
+electron/   Desktop main process, preload bridge, runtime services, local tool adapters
+src/        Renderer apps for the pet, chat, control panel, speech, vision UI, and bubbles
+backend/    Optional FastAPI backend, API schemas, memory services, and static assets
+Resources/  VRM model, VRMA motions, reference audio, and character assets
+docs/       Architecture notes, memory design, tool ecosystem, evaluation, and release planning
+evals/      Humanlike experience scenarios and long-term companionship evaluation data
+scripts/    Runtime preparation, validation, smoke tests, benchmarks, and packaging helpers
+tests/      Node test suites for runtime, memory, tools, contracts, gateway, and agent behavior
+```
 
-## Local Development
+## Quick Start
 
 Install dependencies:
 
@@ -103,45 +128,56 @@ copy backend\.env.example backend\.env
 python -m uvicorn backend.main:app --reload
 ```
 
-## Configuration
+## Model And Voice Setup
 
-Most desktop settings are managed through the Electron control panel and local desktop state. The project supports OpenAI-compatible providers, including custom base URLs, model names, request timeouts, and local/private credentials.
+AILIS is provider-agnostic at the application layer. Configure providers through the desktop control panel or local environment files:
 
-Useful environment examples live in:
+- OpenAI-compatible cloud providers.
+- Local vLLM endpoints.
+- Ollama-oriented local workflows.
+- Custom base URLs, model names, request timeouts, and private API keys.
+- Optional local ASR and desktop TTS runtime preparation.
 
-- `backend/.env.example`
-- `requirements-desktop-asr.txt`
-- `package.json`
+Never commit real API keys, account credentials, chat transcripts, local model caches, runtime logs, or generated eval outputs.
 
-Local caches, downloaded models, runtime logs, eval outputs, and AILIS state are intentionally ignored by Git. They are machine-local data, not source assets.
-
-## Validation
-
-Common checks:
+## Useful Commands
 
 ```bash
-pnpm test:ailis-memory
-pnpm test:ailis-humanlike-eval
 pnpm test:ailis-runtime
+pnpm test:ailis-agent
 pnpm test:ailis-tool-contracts
+pnpm test:ailis-memory
+pnpm ailis:validate-harness
+```
+
+Full gateway validation is heavier and runs a larger set of runtime, contract, tool, memory, agent, and smoke checks:
+
+```bash
 pnpm ailis:validate-gateway
 ```
 
-Humanlike eval commands:
+## Core Documents
 
-```bash
-pnpm eval:ailis-humanlike:validate
-pnpm eval:ailis-humanlike:generate
-pnpm eval:ailis-humanlike:report
-pnpm eval:ailis-humanlike:long-term:validate
-```
+- [Embodied Agent Architecture](docs/ailis-embodied-agent-architecture.md)
+- [Memory Architecture V2](docs/ailis-memory-architecture-v2.md)
+- [Humanlike Eval](docs/ailis-humanlike-eval.md)
+- [Tool Ecosystem Driver Guide](docs/tool-ecosystem-driver-guide.md)
 
-## Privacy Notes
+## Project Status
 
-AILIS Assistant is designed as a personal desktop assistant, so local secrets and private memory can exist on the user's own machine. The codebase should still avoid committing real API keys, runtime transcripts, logs, local model caches, generated eval results, or downloaded model weights.
+Current release line: `v1.0.6`.
 
-Vision is treated as a perception layer, not a screen-control agent. Screenshots are intended to help the model understand context and answer better, not to silently click, type, purchase, send, or submit actions.
+AILIS is in active development. It already has a substantial desktop runtime, agent harness, tool layer, and evaluation surface, but it should still be treated as an alpha-stage product/runtime rather than a production-grade Agent OS. The near-term priority is reliability: clearer tool contracts, safer approvals, stronger memory behavior, better local model setup, and higher-quality end-to-end evaluation.
 
-## Status
+## Privacy And Safety
 
-This project is in active development. The current priority is to keep the existing stable runtime intact while improving the presentation layer, memory quality, speech/vision experience, tool contracts, and eval coverage.
+AILIS is designed for personal desktop use, so privacy and control are part of the architecture:
+
+- Vision capture is permission-aware and should be used to understand context, not to silently act.
+- Mutating or high-risk tool actions should pass through explicit approval.
+- Local memory and runtime state should remain machine-local unless the user chooses otherwise.
+- Secrets belong in local configuration, never in source control.
+
+## License
+
+AILIS source code is released under the [Apache License 2.0](LICENSE). Some bundled or third-party assets, models, motions, and voice resources may have their own licenses; check asset-specific notes before redistribution.

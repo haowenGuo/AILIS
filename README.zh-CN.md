@@ -1,69 +1,125 @@
 <div align="center">
-  <h1>AILIS</h1>
-  <p><strong>一个围绕 AILIS 构建的虚拟陪伴项目，同时提供网页体验与 Electron 桌宠版本，重点是 3D VRM 虚拟形象、流式对话、动作表情联动，以及轻量记忆能力。</strong></p>
+  <h1>AILIS Assistant</h1>
+  <p><strong>开源桌面具身 AI 助手：集成 VRM 角色、实时语音、视觉上下文、记忆系统，以及接近 Codex 工作方式的 Agent Harness。</strong></p>
   <p>
-    <a href="https://haowenGuo.github.io/AILIS/?backend=https://airi-backend.onrender.com"><img alt="Try AILIS" src="https://img.shields.io/badge/Try%20AILIS-完整体验-2563eb?style=for-the-badge"></a>
-    <a href="https://haowenGuo.github.io/AILIS/"><img alt="Frontend Demo" src="https://img.shields.io/badge/GitHub%20Pages-前端展示-0f172a?style=for-the-badge"></a>
-    <a href="https://airi-backend.onrender.com/docs"><img alt="Backend API" src="https://img.shields.io/badge/Backend-FastAPI%20文档-059669?style=for-the-badge"></a>
+    <img alt="Version" src="https://img.shields.io/badge/version-1.0.6-2563eb?style=for-the-badge">
+    <img alt="Runtime" src="https://img.shields.io/badge/runtime-Electron-0f172a?style=for-the-badge">
+    <img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-059669?style=for-the-badge">
   </p>
   <p>
     <a href="README.md">English</a> ·
     <a href="README.zh-CN.md">简体中文</a> ·
-    <a href="README.ja.md">日本語</a>
+    <a href="README.ja.md">日本語</a> ·
+    <a href="README.ko.md">한국어</a> ·
+    <a href="README.fr.md">Français</a> ·
+    <a href="README.de.md">Deutsch</a>
   </p>
 </div>
 
 ---
 
-## 项目简介
+## AILIS 是什么
 
-AILIS 现在已经有两条可以实际使用的产品形态：
+AILIS Assistant 是一个桌面优先的具身 AI 助手项目。它把 3D VRM 角色、Electron 桌面窗口、语音交互、截图视觉上下文、长期记忆，以及结构化 Agent Runtime 放在同一个系统里。
 
-- 网页版：适合在线体验、前端展示和后端联调
-- 桌宠版：适合常驻桌面、随时唤起聊天的陪伴场景
+它不只是一个网页聊天机器人。AILIS 的目标是成为真正常驻桌面的个人 AI 助手：可以和用户自然交流，在得到许可时理解屏幕上下文，记住有价值的偏好，并通过可审计、可批准的工具完成实际任务。
 
-两者共用 AILIS 的 VRM 形象、动作系统、聊天流程和后端能力，只是在运行外壳和交互方式上不同。
+## 项目定位
 
-## 在线体验
+多数 AI 助手项目容易分成两种：一种有角色表现力，但没有稳定执行能力；另一种有自动化能力，却像开发者控制台。AILIS 希望同时保留两边的优势：
 
-- 完整体验版：[https://haowenGuo.github.io/AILIS/?backend=https://airi-backend.onrender.com](https://haowenGuo.github.io/AILIS/?backend=https://airi-backend.onrender.com)
-- 纯前端展示版：[https://haowenGuo.github.io/AILIS/](https://haowenGuo.github.io/AILIS/)
-- 后端接口文档：[https://airi-backend.onrender.com/docs](https://airi-backend.onrender.com/docs)
+- 表层是有存在感、表情、动作、语音和关系感的角色体验。
+- 底层是可规划、可路由、可审批、可记录证据、可恢复的 Agent Harness。
+- 运行时优先本地桌面，让用户自己的设置、记忆、日志和模型配置留在自己机器上。
 
-## 桌宠版功能
+## 当前能力
 
-- 无边框透明桌宠窗口
-- 常驻置顶，并记住位置、缩放、大小和显示状态
-- 点击人物弹出聊天窗
-- 右键菜单支持 `聊天`、`语音模式`、`缩放`、`退出`
-- 系统托盘支持显示隐藏和任务栏选项
-- 聊天窗与桌宠运行时同步
-- 语音输出支持服务端语音、本地简易语音和关闭语音三种模式
-- 桌面端聊天窗支持手动触发的本地语音识别
+- VRM 桌面角色，支持表情、动作、口型同步和对话气泡。
+- Electron 桌宠窗口、聊天窗口、控制面板、托盘集成和本地持久化状态。
+- OpenAI 兼容模型提供商配置，支持自定义 base URL 和本地模型工作流。
+- 桌面 TTS worker、云端语音路径和可选本地语音识别 worker。
+- 基于截图、窗口和区域捕获的权限感知视觉上下文。
+- 记忆块、项目上下文、关系状态和轻量反思机制。
+- 文件、代码、电脑操作、邮件、MCP 技能、Web/Search 和本地运行时工具层。
+- 对文件、应用、账号或外部服务有影响的动作使用显式审批模型。
+- 人类化体验评测、工具契约测试、Gateway 检查和 Agent 执行烟测。
 
-## 核心功能
+## 架构概览
 
-- 流式文本对话，降低等待体感
-- 虚拟角色动作控制，如待机、跳舞、惊讶、挥手、生气
-- 表情预设，如开心、难过、放松、惊讶、俏皮眨眼
-- 在文本到达过程中执行说话状态动画和 fallback 口型
-- 会话记忆存储与定时摘要压缩
+```text
+用户 / 语音 / 屏幕
+        |
+        v
+AILIS 桌面 UI
+  - VRM 角色
+  - 聊天窗口
+  - 控制面板
+        |
+        v
+Agent Harness
+  - 规划器
+  - 工具路由
+  - 审批门禁
+  - 证据日志
+  - 恢复循环
+        |
+        v
+运行时服务
+  - 模型提供商
+  - 语音 / ASR / TTS
+  - 视觉捕获
+  - 记忆存储
+  - 本地工具 / MCP
+        |
+        v
+验证体系
+  - 测试
+  - 评测
+  - 烟测
+```
 
-## 技术栈
+## 仓库结构
 
-- 前端：Vite、Three.js、`@pixiv/three-vrm`
-- 桌面端外壳：Electron
-- 后端：FastAPI、SQLAlchemy、SQLite
-- 大模型接入：OpenAI 兼容接口
-- 部署：GitHub Pages + Render
+```text
+electron/   Electron 主进程、预加载桥、本地运行时服务和工具适配器
+src/        桌宠、聊天、控制面板、语音、视觉 UI、气泡等渲染端应用
+backend/    可选 FastAPI 后端、API schema、记忆服务和静态资源
+Resources/  VRM 模型、VRMA 动作、参考音频和角色资源
+docs/       架构、记忆、工具生态、评测和发布规划文档
+evals/      人类化体验场景和长期陪伴评测数据
+scripts/    运行时准备、验证、烟测、基准测试和打包脚本
+tests/      Runtime、Memory、Tools、Contracts、Gateway、Agent 等测试
+```
 
-## 本地启动
+## 快速启动
 
-### 网页版
+安装依赖：
 
 ```bash
 pnpm install
-pnpm dev
+```
+
+以开发模式启动桌面端：
+
+```bash
+pnpm desktop:dev
+```
+
+构建并启动桌面端：
+
+```bash
+pnpm desktop:start
+```
+
+打包 Windows 桌面应用：
+
+```bash
+pnpm desktop:package
+```
+
+可选后端启动：
+
+```bash
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
@@ -71,63 +127,56 @@ copy backend\.env.example backend\.env
 python -m uvicorn backend.main:app --reload
 ```
 
-### 桌宠版
+## 模型与语音配置
+
+AILIS 在应用层不绑定单一模型供应商。可以通过桌面控制面板或本地环境文件配置：
+
+- OpenAI 兼容云端提供商。
+- 本地 vLLM endpoint。
+- Ollama 方向的本地工作流。
+- 自定义 base URL、模型名、请求超时和私有 API Key。
+- 可选本地 ASR 和桌面 TTS 运行时准备。
+
+不要把真实 API Key、账号凭证、聊天记录、本地模型缓存、运行日志或生成的评测结果提交到仓库。
+
+## 常用命令
 
 ```bash
-pnpm install
-python -m pip install -r requirements-desktop-asr.txt
-pnpm desktop:start
+pnpm test:ailis-runtime
+pnpm test:ailis-agent
+pnpm test:ailis-tool-contracts
+pnpm test:ailis-memory
+pnpm ailis:validate-harness
 ```
 
-补充说明：
-
-- 本地语音识别是 Electron 桌面端的可选能力
-- 当前桌面端 ASR 使用本地 Python worker + Whisper Small
-- 首次使用时会自动下载并缓存识别模型
-
-### 桌宠开发模式
+完整 Gateway 验证较重，会运行更多 Runtime、契约、工具、记忆、Agent 和烟测检查：
 
 ```bash
-pnpm desktop:dev
+pnpm ailis:validate-gateway
 ```
 
-至少需要配置：
+## 核心文档
 
-```env
-LLM_API_KEY=your_llm_api_key
-```
+- [具身 Agent 架构](docs/ailis-embodied-agent-architecture.md)
+- [记忆架构 V2](docs/ailis-memory-architecture-v2.md)
+- [人类化体验评测](docs/ailis-humanlike-eval.md)
+- [工具生态驱动指南](docs/tool-ecosystem-driver-guide.md)
 
-## 打包
+## 项目状态
 
-生成最新版 Windows 桌宠安装包与便携版：
+当前发布线：`v1.0.6`。
 
-```bash
-pnpm desktop:package
-```
+AILIS 正在积极开发。它已经具备较完整的桌面运行时、Agent Harness、工具层和评测面，但仍应被视为 alpha 阶段产品/运行时，而不是生产级 Agent OS。近期重点是可靠性：更清晰的工具契约、更安全的审批、更稳定的记忆行为、更顺滑的本地模型配置，以及更高质量的端到端评测。
 
-产物会输出到 [`release/`](release) 目录，包括：
+## 隐私与安全
 
-- `AILIS-Setup-<version>-win-x64.exe`
-- `AILIS-Portable-<version>-win-x64.exe`
-- `release/win-unpacked/AILIS.exe`
+AILIS 面向个人桌面使用，所以隐私和控制是架构的一部分：
 
-## 项目结构
+- 视觉捕获需要权限意识，目的是理解上下文，不是静默操作。
+- 会影响文件、应用、账号或外部服务的动作应经过显式审批。
+- 本地记忆和运行时状态默认留在用户机器上。
+- 密钥应放在本地配置中，绝不能进入源码仓库。
 
-```text
-backend/   FastAPI 接口、记忆逻辑、部署配置
-electron/  Electron 主进程、预加载桥接、桌宠状态管理
-src/       VRM 数字人、聊天运行时、桌面端渲染入口
-Resources/ VRM 模型与 VRMA 动作资源
-scripts/   静态构建辅助脚本
-examples/  独立开发示例
-```
+## 开源许可
 
-## 部署方式
-
-- 公开前端：GitHub Pages
-- 公开后端：Render
-- Render 配置文件：[`render.yaml`](render.yaml)
-
-## 项目目标
-
-让 AILIS 既能作为网页中的虚拟角色，也能作为真正的桌宠常驻桌面，在保持响应速度和表现力的同时，继续方便工程化迭代。
+AILIS 源代码采用 [Apache License 2.0](LICENSE) 开源。部分随包资源、第三方模型、动作和语音资源可能有独立许可；重新分发前请确认对应资源说明。
