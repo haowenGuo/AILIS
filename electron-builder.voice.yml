@@ -2,6 +2,7 @@ appId: com.ailis.desktop
 productName: AILIS
 artifactName: ${productName}-${version}-offline-voice-${arch}.${ext}
 icon: build/icon.png
+afterPack: scripts/fix-windows-exe-icon.cjs
 directories:
   output: D:/AILIS/Build/AILIS-voice
 files:

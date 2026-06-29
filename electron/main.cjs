@@ -296,6 +296,7 @@ const SPEECH_MODEL_REMOTE_HOSTS = {
 };
 const PET_CURSOR_TRACK_INTERVAL_MS = 50;
 const APP_ICON_PATH = path.join(__dirname, 'assets', 'ailis-icon.png');
+const APP_WINDOWS_ICON_PATH = path.join(__dirname, '..', 'build', 'icon.ico');
 const APP_TRAY_ICON_PATH = path.join(__dirname, 'assets', 'ailis-tray.png');
 
 function getExistingImagePath(...candidatePaths) {
@@ -308,7 +309,11 @@ function getExistingImagePath(...candidatePaths) {
 }
 
 function getAppIconPath() {
-    return getExistingImagePath(APP_ICON_PATH);
+    if (process.platform === 'win32') {
+        // Windows taskbar/window icons are most reliable with .ico, especially in dev Electron runs.
+        return getExistingImagePath(APP_WINDOWS_ICON_PATH, APP_ICON_PATH);
+    }
+    return getExistingImagePath(APP_ICON_PATH, APP_WINDOWS_ICON_PATH);
 }
 
 function getTrayIconPath() {

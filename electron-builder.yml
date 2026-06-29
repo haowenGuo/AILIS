@@ -2,6 +2,7 @@ appId: com.ailis.desktop
 productName: AILIS
 artifactName: ${productName}-${version}-${arch}.${ext}
 icon: build/icon.png
+afterPack: scripts/fix-windows-exe-icon.cjs
 directories:
   output: F:/AILIS/Build/AILIS
 files:
