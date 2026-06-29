@@ -2,6 +2,7 @@ const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
 const { pathToFileURL } = require('url');
+const { spawn } = require('child_process');
 const {
     app,
     BrowserWindow,
@@ -26,15 +27,15 @@ const {
 } = require('./desktop-cosyvoice3-tts.cjs');
 const { VoiceRuntimeBootstrap } = require('./voice-runtime-bootstrap.cjs');
 const {
-    OpenClawGatewayManager,
-    OpenClawRuntimeSupervisor
+    AILISGatewayBridgeManager,
+    AILISAgentRuntimeSupervisor
 } = require('./openclaw-runtime.cjs');
 const { AILISGateway } = require('./ailis-gateway.cjs');
 const { createAILISDesktopPlatformAdapter } = require('./ailis-desktop-platform-adapter.cjs');
 const {
-    getOpenClawToolSurface,
-    getOpenClawToolSurfaceSummary,
-    validateOpenClawToolSurface
+    getOpenClawToolSurface: getAgentToolSurface,
+    getOpenClawToolSurfaceSummary: getAgentToolSurfaceSummary,
+    validateOpenClawToolSurface: validateAgentToolSurface
 } = require('./openclaw-tool-surface.cjs');
 const {
     callDesktopLlmProvider,
@@ -44,7 +45,17 @@ const {
     getProviderCapabilities
 } = require('./desktop-llm-provider.cjs');
 const { searchVllmModelCatalog } = require('./vllm-model-catalog.cjs');
-const { VllmLocalDeployer } = require('./vllm-local-deployer.cjs');
+const { searchOllamaModelCatalog } = require('./ollama-model-catalog.cjs');
+const {
+    VllmLocalDeployer,
+    inspectDownloadTarget
+} = require('./vllm-local-deployer.cjs');
+const {
+    OllamaLocalRuntime,
+    describeOllamaLocalModelPath,
+    normalizeOllamaTarget
+} = require('./ollama-local-runtime.cjs');
+const { AssetPackRuntime } = require('./asset-pack-runtime.cjs');
 const {
     BACKEND_MODE_OPTIONS,
     DEFAULT_AUTO_CHAT_ENABLED,
@@ -55,6 +66,7 @@ const {
     DEFAULT_BACKEND_BASE_URL,
     DEFAULT_BACKEND_MODE,
     DEFAULT_CONVERSATION_MODE,
+    DEFAULT_UI_LANGUAGE,
     DEFAULT_CAMERA_DISTANCE,
     DEFAULT_CAMERA_HEIGHT,
     DEFAULT_CAMERA_TARGET_Y,
@@ -96,19 +108,21 @@ const {
     DEFAULT_ELEVENLABS_VOICE_ID,
     DEFAULT_ELEVENLABS_VOICE_PROFILES,
     DEFAULT_AILIS_STATE_DIR,
-    DEFAULT_OPENCLAW_GATEWAY_URL,
+    DEFAULT_AGENT_RUNTIME_GATEWAY_URL,
     DEFAULT_PET_SCALE,
     EMAIL_PROVIDER_OPTIONS,
     ELEVENLABS_LANGUAGE_CODES,
     LLM_PROVIDER_OPTIONS,
     PET_SCALE_OPTIONS,
     CONVERSATION_MODE_OPTIONS,
+    UI_LANGUAGE_OPTIONS,
     RECOGNITION_MODE_OPTIONS,
     RENDER_PROFILE_OPTIONS,
     SPEECH_MODE_OPTIONS,
     getDefaultState,
     getScaledPetSize,
     loadDesktopState,
+    createLlmApiKeyId,
     normalizeAutoChatEnabled,
     normalizeAutoChatMaxIntervalSec,
     normalizeAutoChatMinIntervalSec,
@@ -123,6 +137,7 @@ const {
     normalizeCameraHeight,
     normalizeCameraTargetY,
     normalizeConversationMode,
+    normalizeUiLanguage,
     normalizeComputerControlEnabled,
     normalizeRenderProfileId,
     normalizeRenderLightYawDeg,
@@ -155,13 +170,15 @@ const {
     normalizeElevenLabsVoiceId,
     normalizeEmailProfiles,
     normalizeAILISStateDir,
+    normalizeVoiceRuntimeRoot,
     normalizeLlmApiKey,
+    normalizeLlmApiKeyProfiles,
     normalizeLlmBaseUrl,
     normalizeLlmModel,
     normalizeLlmProvider,
     normalizeLlmRequestTimeoutMs,
     normalizeLlmTemperature,
-    normalizeOpenClawGatewayUrl,
+    normalizeAgentRuntimeGatewayUrl,
     normalizePetMouseHitTestDebug,
     normalizePetMouseHitTestEnabled,
     normalizePetMouseHitTestHeightRatio,
@@ -192,6 +209,7 @@ const PET_DIALOGUE_MAX_EXTRA_TOP = 360;
 const PET_DIALOGUE_MAX_EXTRA_WIDTH = 520;
 const COSYVOICE3_WARMUP_DELAY_MS = 6500;
 const LOCAL_RESOURCE_PROTOCOL = 'ailis-resource';
+const ASSET_PACK_PROTOCOL = 'ailis-asset';
 const SPEECH_MODEL_PROTOCOL = 'ailis-model';
 const SPEECH_MODEL_CACHE_DIRNAME = 'speech-models';
 const VISION_CACHE_DIRNAME = 'vision-snapshots';
@@ -201,6 +219,77 @@ const CHAT_FILE_ATTACHMENT_LIMIT = 12;
 const VISION_REGION_MIN_SIZE_DIP = 12;
 const VISION_MODEL_MAX_EDGE = 1800;
 const VISION_MODEL_JPEG_QUALITY = 88;
+const UI_LANGUAGE_LABELS = Object.freeze({
+    'zh-CN': '简体中文',
+    en: 'English',
+    ja: '日本語',
+    ko: '한국어'
+});
+const MENU_I18N = Object.freeze({
+    en: Object.freeze({
+        showPet: 'Show Avatar',
+        hidePet: 'Hide Avatar',
+        controlPanel: 'Control Panel',
+        chat: 'Chat',
+        language: 'Language',
+        speechMode: 'Voice Mode',
+        speechOff: 'Voice Off',
+        speechServer: 'ElevenLabs Cloud Voice',
+        speechCosyVoice3: 'CosyVoice3 Local High Quality',
+        scale: 'Scale',
+        showInTaskbar: 'Show avatar in taskbar',
+        quit: 'Quit',
+        undo: 'Undo',
+        redo: 'Redo',
+        cut: 'Cut',
+        copy: 'Copy',
+        paste: 'Paste',
+        selectAll: 'Select All',
+        trayTooltip: 'AILIS Avatar'
+    }),
+    ja: Object.freeze({
+        showPet: 'アバターを表示',
+        hidePet: 'アバターを隠す',
+        controlPanel: 'コントロールパネル',
+        chat: 'チャット',
+        language: '言語',
+        speechMode: '音声モード',
+        speechOff: '音声オフ',
+        speechServer: 'ElevenLabs クラウド音声',
+        speechCosyVoice3: 'CosyVoice3 ローカル高品質',
+        scale: '倍率',
+        showInTaskbar: 'アバターをタスクバーに表示',
+        quit: '終了',
+        undo: '元に戻す',
+        redo: 'やり直し',
+        cut: '切り取り',
+        copy: 'コピー',
+        paste: '貼り付け',
+        selectAll: 'すべて選択',
+        trayTooltip: 'AILIS アバター'
+    }),
+    ko: Object.freeze({
+        showPet: '아바타 표시',
+        hidePet: '아바타 숨기기',
+        controlPanel: '제어판',
+        chat: '채팅',
+        language: '언어',
+        speechMode: '음성 모드',
+        speechOff: '음성 끄기',
+        speechServer: 'ElevenLabs 클라우드 음성',
+        speechCosyVoice3: 'CosyVoice3 로컬 고품질',
+        scale: '크기',
+        showInTaskbar: '작업 표시줄에 아바타 표시',
+        quit: '종료',
+        undo: '실행 취소',
+        redo: '다시 실행',
+        cut: '잘라내기',
+        copy: '복사',
+        paste: '붙여넣기',
+        selectAll: '모두 선택',
+        trayTooltip: 'AILIS 아바타'
+    })
+});
 const SPEECH_MODEL_REMOTE_HOSTS = {
     modelscope: 'https://www.modelscope.cn/models/',
     huggingface: 'https://huggingface.co/'
@@ -241,10 +330,14 @@ let desktopState = null;
 let desktopASRManager = null;
 let voiceRuntimeBootstrap = null;
 let vllmLocalDeployer = null;
+let ollamaLocalRuntime = null;
+let assetPackRuntime = null;
 let assistantGateway = null;
-let openclawRuntimeSupervisor = null;
+let agentRuntimeSupervisor = null;
 let ailisGateway = null;
 let ailisGatewayStartPromise = null;
+let runtimeComponentsInstallRun = null;
+let lastRuntimeComponentsInstallRun = null;
 let petDialogueCollapsedBounds = null;
 let petDialogueExpanded = false;
 let petDialogueExtraTop = 0;
@@ -280,6 +373,16 @@ if (typeof protocol?.registerSchemesAsPrivileged === 'function') {
             }
         },
         {
+            scheme: ASSET_PACK_PROTOCOL,
+            privileges: {
+                standard: true,
+                secure: true,
+                supportFetchAPI: true,
+                corsEnabled: true,
+                stream: true
+            }
+        },
+        {
             scheme: SPEECH_MODEL_PROTOCOL,
             privileges: {
                 standard: true,
@@ -299,6 +402,12 @@ function isDevMode() {
 function buildRendererUrl(pageName) {
     if (isDevMode()) {
         return `${devServerUrl || DEFAULT_DEV_SERVER_URL}/${pageName}`;
+    }
+    const unpackedRendererPath = process.resourcesPath
+        ? path.join(process.resourcesPath, 'app.asar.unpacked', 'dist', pageName)
+        : '';
+    if (unpackedRendererPath && fs.existsSync(unpackedRendererPath)) {
+        return unpackedRendererPath;
     }
     return path.join(__dirname, '..', 'dist', pageName);
 }
@@ -356,6 +465,362 @@ function getProjectRoot() {
     return path.resolve(__dirname, '..');
 }
 
+function readJsonFromCandidates(candidates = []) {
+    const errors = [];
+    for (const candidate of candidates.filter(Boolean)) {
+        try {
+            if (!fs.existsSync(candidate)) {
+                continue;
+            }
+            return {
+                ok: true,
+                path: candidate,
+                data: JSON.parse(fs.readFileSync(candidate, 'utf8')),
+                error: ''
+            };
+        } catch (error) {
+            errors.push(`${candidate}: ${error?.message || error}`);
+        }
+    }
+    return {
+        ok: false,
+        path: '',
+        data: null,
+        error: errors.join('\n')
+    };
+}
+
+function getRuntimeComponentManifest() {
+    const candidates = [
+        path.join(app.getAppPath(), 'installer', 'ailis-runtime-components.json'),
+        path.join(getProjectRoot(), 'installer', 'ailis-runtime-components.json')
+    ];
+    const result = readJsonFromCandidates(candidates);
+    const components = Array.isArray(result.data?.components) ? result.data.components : [];
+    return {
+        ok: result.ok && components.length > 0,
+        path: result.path,
+        schemaVersion: result.data?.schemaVersion || 0,
+        product: result.data?.product || 'AILIS',
+        installMode: result.data?.installMode || 'deferred-runtime-components',
+        components,
+        error: result.error
+    };
+}
+
+function getRuntimeComponentSelection() {
+    const candidates = [
+        process.resourcesPath ? path.join(process.resourcesPath, 'ailis-runtime-components.selected.json') : '',
+        app.isPackaged ? path.join(path.dirname(process.execPath), 'resources', 'ailis-runtime-components.selected.json') : '',
+        path.join(getProjectRoot(), 'tmp', 'ailis-runtime-components.selected.json')
+    ];
+    const result = readJsonFromCandidates(candidates);
+    const components = result.data?.components && typeof result.data.components === 'object'
+        ? result.data.components
+        : {};
+    const selectedIds = Object.entries(components)
+        .filter(([, selected]) => selected === true)
+        .map(([id]) => id);
+
+    return {
+        ok: result.ok,
+        path: result.path,
+        source: result.data?.source || '',
+        installMode: result.data?.installMode || '',
+        components,
+        selectedIds,
+        error: result.error
+    };
+}
+
+function normalizeRuntimeComponentIds(ids = []) {
+    return [...new Set((Array.isArray(ids) ? ids : [])
+        .map((id) => String(id || '').trim())
+        .filter(Boolean))];
+}
+
+function getRuntimeComponentById(id, manifest = getRuntimeComponentManifest()) {
+    return (manifest.components || []).find((component) => component.id === id) || null;
+}
+
+function expandRuntimeComponentDependencies(ids = [], manifest = getRuntimeComponentManifest()) {
+    const expanded = new Set();
+    const visit = (id) => {
+        if (!id || expanded.has(id)) {
+            return;
+        }
+        const component = getRuntimeComponentById(id, manifest);
+        for (const dependencyId of component?.dependsOn || []) {
+            visit(dependencyId);
+        }
+        expanded.add(id);
+    };
+    normalizeRuntimeComponentIds(ids).forEach(visit);
+    return [...expanded];
+}
+
+function resolveRuntimeComponentPackName(component = {}) {
+    return String(component.packName || '').replace(/\$\{version\}/g, app.getVersion());
+}
+
+function getRuntimePackSearchDirs() {
+    return [
+        normalizeRuntimePackDir(process.env.AILIS_RUNTIME_PACK_DIR || ''),
+        process.resourcesPath ? path.join(process.resourcesPath, 'runtime-packs') : '',
+        app.isPackaged ? path.join(path.dirname(process.execPath), 'runtime-packs') : '',
+        app.isPackaged ? path.join(path.dirname(process.execPath), 'resources', 'runtime-packs') : '',
+        path.join(getProjectRoot(), 'runtime-packs'),
+        path.join(getProjectRoot(), 'build-cache', 'runtime-packs')
+    ].filter(Boolean);
+}
+
+function normalizeRuntimePackDir(value = '') {
+    const text = String(value || '').trim();
+    return text ? path.resolve(text) : '';
+}
+
+function resolveRuntimeComponentPack(component = {}) {
+    const packName = resolveRuntimeComponentPackName(component);
+    if (!packName) {
+        return {
+            available: false,
+            path: '',
+            packName,
+            searchDirs: getRuntimePackSearchDirs()
+        };
+    }
+    const searchDirs = getRuntimePackSearchDirs();
+    const foundPath = searchDirs
+        .map((dir) => path.join(dir, packName))
+        .find((candidate) => {
+            try {
+                return fs.existsSync(candidate) && fs.statSync(candidate).isFile();
+            } catch {
+                return false;
+            }
+        }) || '';
+    return {
+        available: Boolean(foundPath),
+        path: foundPath,
+        packName,
+        searchDirs
+    };
+}
+
+function resolveRuntimeExtractRoot(component = {}) {
+    const extractTo = String(component.extractTo || 'resources').replace(/\\/g, '/').replace(/^\/+/, '');
+    if (path.isAbsolute(extractTo)) {
+        return extractTo;
+    }
+    if (extractTo === 'resources' || extractTo.startsWith('resources/')) {
+        const rest = extractTo === 'resources' ? '' : extractTo.slice('resources/'.length);
+        return app.isPackaged && process.resourcesPath
+            ? path.join(process.resourcesPath, rest)
+            : path.join(getProjectRoot(), rest);
+    }
+    return app.isPackaged && process.resourcesPath
+        ? path.join(process.resourcesPath, extractTo)
+        : path.join(getProjectRoot(), extractTo);
+}
+
+function resolveRuntimeComponentInstallRoot(component = {}) {
+    const installRoot = String(component.installRoot || '').replace(/\\/g, '/').replace(/^\/+/, '');
+    if (!installRoot) {
+        return '';
+    }
+    if (path.isAbsolute(installRoot)) {
+        return installRoot;
+    }
+    if (installRoot === 'resources' || installRoot.startsWith('resources/')) {
+        const rest = installRoot === 'resources' ? '' : installRoot.slice('resources/'.length);
+        return app.isPackaged && process.resourcesPath
+            ? path.join(process.resourcesPath, rest)
+            : path.join(getProjectRoot(), rest);
+    }
+    return app.isPackaged && process.resourcesPath
+        ? path.join(process.resourcesPath, installRoot)
+        : path.join(getProjectRoot(), installRoot);
+}
+
+function runtimePathExists(targetPath = '') {
+    try {
+        return Boolean(targetPath && fs.existsSync(targetPath));
+    } catch {
+        return false;
+    }
+}
+
+function runRuntimeProcess(command, args = [], options = {}) {
+    return new Promise((resolve) => {
+        const logs = [];
+        const child = spawn(command, args, {
+            cwd: options.cwd || getProjectRoot(),
+            windowsHide: true,
+            shell: false,
+            env: {
+                ...process.env,
+                ...(options.env || {})
+            }
+        });
+        const append = (chunk) => {
+            const text = String(chunk || '');
+            if (!text) {
+                return;
+            }
+            text.split(/\r?\n/)
+                .map((line) => line.trim())
+                .filter(Boolean)
+                .forEach((line) => logs.push(line));
+            if (logs.length > 160) {
+                logs.splice(0, logs.length - 160);
+            }
+        };
+        child.stdout?.on('data', append);
+        child.stderr?.on('data', append);
+        child.on('error', (error) => {
+            resolve({
+                ok: false,
+                code: -1,
+                error: error?.message || String(error),
+                logs
+            });
+        });
+        child.on('close', (code) => {
+            resolve({
+                ok: code === 0,
+                code,
+                error: code === 0 ? '' : `${command} exited with code ${code}`,
+                logs
+            });
+        });
+    });
+}
+
+async function extractRuntimePack(component, pack) {
+    const extractRoot = resolveRuntimeExtractRoot(component);
+    await fsp.mkdir(extractRoot, { recursive: true });
+    if (process.platform === 'win32') {
+        const script = [
+            '$ErrorActionPreference = "Stop"',
+            `Expand-Archive -LiteralPath ${JSON.stringify(pack.path)} -DestinationPath ${JSON.stringify(extractRoot)} -Force`
+        ].join('; ');
+        return await runRuntimeProcess('powershell.exe', [
+            '-NoProfile',
+            '-ExecutionPolicy',
+            'Bypass',
+            '-Command',
+            script
+        ], {
+            cwd: getProjectRoot()
+        });
+    }
+    const unzipResult = await runRuntimeProcess('unzip', ['-o', pack.path, '-d', extractRoot], {
+        cwd: getProjectRoot()
+    });
+    if (unzipResult.ok) {
+        return unzipResult;
+    }
+    return {
+        ...unzipResult,
+        error: unzipResult.error || 'unzip command failed; install unzip or provide an extracted runtime directory.'
+    };
+}
+
+function getRuntimeComponentReadiness(component, voiceSummary = getVoiceRuntimeBootstrap().getFastSummary()) {
+    const installRoot = resolveRuntimeComponentInstallRoot(component);
+    const base = {
+        id: component.id,
+        title: component.title || component.id,
+        kind: component.kind || 'runtime',
+        selected: false,
+        status: 'missing',
+        ready: false,
+        detail: component.description || '',
+        estimatedUnpackedSize: component.estimatedUnpackedSize || '',
+        installRoot,
+        installRootExists: runtimePathExists(installRoot)
+    };
+    if (component.id === 'python-runtime') {
+        const ready = Boolean(voiceSummary.preferredPython || base.installRootExists);
+        return {
+            ...base,
+            ready,
+            status: ready ? 'ready' : 'missing',
+            detail: ready
+                ? `Python 运行时可用：${voiceSummary.preferredPython || installRoot}`
+                : '缺少 AILIS 私有 Python runtime。'
+        };
+    }
+    if (component.id === 'cosyvoice3-runtime') {
+        const ready = Boolean(voiceSummary.cosyVoice3?.ok);
+        const partial = Boolean(voiceSummary.cosyVoice3?.sourceExists || voiceSummary.cosyVoice3?.modelExists || base.installRootExists);
+        return {
+            ...base,
+            ready,
+            status: ready ? 'ready' : partial ? 'partial' : 'missing',
+            detail: ready
+                ? 'CosyVoice3 已通过本地合成验证。'
+                : partial
+                    ? 'CosyVoice3 文件部分存在，需要继续诊断或验证。'
+                    : '缺少 CosyVoice3 源码、依赖或模型。'
+        };
+    }
+    if (component.id === 'asr-runtime') {
+        const ready = Boolean(voiceSummary.asr?.ok);
+        const partial = Boolean(voiceSummary.asr?.modelCached || base.installRootExists);
+        return {
+            ...base,
+            ready,
+            status: ready ? 'ready' : partial ? 'partial' : 'missing',
+            detail: ready
+                ? '本地 ASR 已通过模型加载验证。'
+                : partial
+                    ? 'ASR 模型或运行时部分存在，需要继续验证。'
+                    : '缺少本地 ASR runtime 或模型缓存。'
+        };
+    }
+    if (component.id === 'web-runtime') {
+        const manifestPath = installRoot ? path.join(installRoot, 'manifest.json') : '';
+        const ready = runtimePathExists(manifestPath) || base.installRootExists;
+        return {
+            ...base,
+            ready,
+            status: ready ? 'ready' : 'missing',
+            detail: ready
+                ? `Web/Search runtime 已存在：${manifestPath || installRoot}`
+                : '缺少 AILIS Web/Search 本地运行时。'
+        };
+    }
+    return base;
+}
+
+function getRuntimeComponentsState() {
+    const manifest = getRuntimeComponentManifest();
+    const selection = getRuntimeComponentSelection();
+    const selectedIds = selection.selectedIds || [];
+    const expandedSelectedIds = expandRuntimeComponentDependencies(selectedIds, manifest);
+    const voiceSummary = getVoiceRuntimeBootstrap().getFastSummary();
+    const components = (manifest.components || []).map((component) => {
+        const pack = resolveRuntimeComponentPack(component);
+        return {
+            ...getRuntimeComponentReadiness(component, voiceSummary),
+            selected: selectedIds.includes(component.id),
+            selectedByDependency: !selectedIds.includes(component.id) && expandedSelectedIds.includes(component.id),
+            dependsOn: component.dependsOn || [],
+            pack
+        };
+    });
+    return {
+        manifest,
+        selection,
+        components,
+        selectedIds,
+        expandedSelectedIds,
+        hasInstallerSelection: Boolean(selection.ok),
+        installRun: runtimeComponentsInstallRun || lastRuntimeComponentsInstallRun || null
+    };
+}
+
 function getGatewayWorkspaceRoot() {
     if (app.isPackaged) {
         return path.join(app.getPath('userData'), 'workspace');
@@ -385,16 +850,66 @@ function getPersistedAILISStateDir() {
     return resolveAILISStateDir(desktopState?.preferences?.ailisStateDir);
 }
 
+function getDefaultVoiceRuntimeRoot() {
+    const packagedCandidates = [
+        process.resourcesPath ? path.join(process.resourcesPath, 'models', 'voice-runtime') : '',
+        app.isPackaged ? path.join(path.dirname(process.execPath), 'resources', 'models', 'voice-runtime') : ''
+    ].filter(Boolean);
+    const packagedRuntimeRoot = packagedCandidates.find((candidate) => {
+        try {
+            return Boolean(candidate && fs.existsSync(candidate) && fs.statSync(candidate).isDirectory());
+        } catch {
+            return false;
+        }
+    });
+    if (packagedRuntimeRoot) {
+        return packagedRuntimeRoot;
+    }
+    if (app.isPackaged) {
+        return path.join(app.getPath('userData'), 'local-runtimes');
+    }
+    return path.join(getProjectRoot(), 'models', 'voice-runtime');
+}
+
+function resolveVoiceRuntimeRoot(value = '') {
+    const normalized = normalizeVoiceRuntimeRoot(value);
+    if (!normalized) {
+        return getDefaultVoiceRuntimeRoot();
+    }
+    const relativeBaseDir = app.isPackaged ? app.getPath('userData') : getProjectRoot();
+    return path.isAbsolute(normalized)
+        ? path.resolve(normalized)
+        : path.resolve(relativeBaseDir, normalized);
+}
+
+function getPersistedVoiceRuntimeRoot() {
+    return resolveVoiceRuntimeRoot(desktopState?.preferences?.voiceRuntimeRoot);
+}
+
 function getVoiceRuntimeBootstrap() {
     if (!voiceRuntimeBootstrap) {
         voiceRuntimeBootstrap = new VoiceRuntimeBootstrap({
             projectRoot: getProjectRoot(),
             userDataPath: app.getPath('userData'),
             appDataPath: app.getPath('appData'),
+            runtimeRoot: getPersistedVoiceRuntimeRoot(),
             platform: process.platform
         });
     }
     return voiceRuntimeBootstrap;
+}
+
+function configureCosyVoice3Runtime() {
+    const runtime = getVoiceRuntimeBootstrap();
+    const paths = runtime.getPaths();
+    configureCosyVoice3TTS({
+        projectRoot: getProjectRoot(),
+        userDataPath: app.getPath('userData'),
+        voiceRuntimeRoot: paths.localRuntimeRoot,
+        cosyVoiceRoot: paths.cosyVoiceRoot,
+        cosyVoice3ModelDir: paths.cosyVoice3ModelDir,
+        pythonPath: ''
+    });
 }
 
 function getVllmLocalDeployer() {
@@ -407,14 +922,276 @@ function getVllmLocalDeployer() {
     return vllmLocalDeployer;
 }
 
+function getOllamaLocalRuntime() {
+    if (!ollamaLocalRuntime) {
+        ollamaLocalRuntime = new OllamaLocalRuntime({
+            platform: process.platform
+        });
+    }
+    return ollamaLocalRuntime;
+}
+
+function getOllamaRuntimeBusyResult(settings = {}) {
+    if (normalizeLlmProvider(settings.provider || settings.llmProvider) !== 'ollama') {
+        return null;
+    }
+    const runtime = getOllamaLocalRuntime().getStatus();
+    if (!runtime?.running) {
+        return null;
+    }
+    const phaseLabels = {
+        diagnosing: '诊断环境',
+        preparing: '准备运行时',
+        starting_service: '启动服务',
+        pulling: '下载模型',
+        importing: '导入本地模型',
+        verifying: '验证推理',
+        switching_backend: '切换 GPU 后端'
+    };
+    const phase = phaseLabels[runtime.phase] || '配置本地模型';
+    return {
+        ok: false,
+        provider: 'ollama',
+        code: 'local_runtime_busy',
+        status: 'local_runtime_busy',
+        error: `Ollama 本地模型正在${phase}，请等部署完成后再开始对话。`,
+        runtimeSetup: {
+            status: runtime.status,
+            phase: runtime.phase,
+            modelId: runtime.modelId,
+            baseUrl: runtime.baseUrl
+        }
+    };
+}
+
+function getAssetPackRuntime() {
+    if (!assetPackRuntime) {
+        assetPackRuntime = new AssetPackRuntime({
+            projectRoot: getProjectRoot(),
+            userDataPath: app.getPath('userData'),
+            appVersion: app.getVersion()
+        });
+    }
+    return assetPackRuntime;
+}
+
 async function bootstrapVoiceRuntime(payload = {}) {
     const result = await getVoiceRuntimeBootstrap().bootstrap(payload || {});
-    configureCosyVoice3TTS({
-        projectRoot: getProjectRoot(),
-        userDataPath: app.getPath('userData'),
-        pythonPath: getVoiceRuntimeBootstrap().getPreferredVoicePythonPath()
-    });
+    configureCosyVoice3Runtime();
     return result;
+}
+
+function getVoiceBootstrapStepIdsForRuntimeComponents(componentIds = []) {
+    const ids = new Set(normalizeRuntimeComponentIds(componentIds));
+    const stepIds = new Set();
+    if (ids.has('python-runtime') || ids.has('cosyvoice3-runtime') || ids.has('asr-runtime')) {
+        stepIds.add('install_portable_python');
+    }
+    if (ids.has('cosyvoice3-runtime') || ids.has('asr-runtime')) {
+        stepIds.add('install_voice_python_packages');
+    }
+    if (ids.has('cosyvoice3-runtime')) {
+        stepIds.add('install_cosyvoice_source');
+        stepIds.add('install_cosyvoice3_model');
+        stepIds.add('verify_cosyvoice3_runtime');
+    }
+    if (ids.has('asr-runtime')) {
+        stepIds.add('install_asr_model');
+        stepIds.add('verify_asr_runtime');
+    }
+    return [...stepIds];
+}
+
+async function bootstrapVoiceRuntimeComponentSteps(componentIds = [], run) {
+    const targetStepIds = getVoiceBootstrapStepIdsForRuntimeComponents(componentIds);
+    const completed = new Set();
+    const results = [];
+    for (let pass = 0; pass < 4; pass += 1) {
+        const snapshot = getVoiceRuntimeBootstrap().diagnose();
+        const runnableIds = (snapshot.installPlan?.steps || [])
+            .filter((step) => targetStepIds.includes(step.id) && !completed.has(step.id))
+            .map((step) => step.id);
+        if (!runnableIds.length) {
+            break;
+        }
+        run.logs.push(`语音运行时安装 pass ${pass + 1}：${runnableIds.join(', ')}`);
+        const result = await bootstrapVoiceRuntime({
+            allowNetwork: true,
+            includeOptional: false,
+            stepIds: runnableIds
+        });
+        results.push(result);
+        for (const step of result.steps || []) {
+            if (step.status === 'completed' || step.status === 'skipped') {
+                completed.add(step.id);
+            }
+            for (const entry of step.logs || []) {
+                const text = String(entry.text || '').trim();
+                if (text) {
+                    run.logs.push(text);
+                }
+            }
+            if (step.error) {
+                run.logs.push(`${step.title || step.id}：${step.error}`);
+            }
+        }
+        if (!result.ok && result.status !== 'completed_with_warnings') {
+            return result;
+        }
+    }
+    return results[results.length - 1] || {
+        ok: true,
+        status: 'completed',
+        message: '选中的语音运行时组件已经就绪或没有需要执行的步骤。'
+    };
+}
+
+async function installRuntimeComponents(payload = {}) {
+    if (runtimeComponentsInstallRun?.status === 'running') {
+        return {
+            ...runtimeComponentsInstallRun,
+            ok: false,
+            error: 'runtime_components_install_already_running'
+        };
+    }
+    const manifest = getRuntimeComponentManifest();
+    const selection = getRuntimeComponentSelection();
+    const requestedIds = normalizeRuntimeComponentIds(payload.componentIds || payload.components || []);
+    const selectedIds = requestedIds.length ? requestedIds : normalizeRuntimeComponentIds(selection.selectedIds || []);
+    const expandedIds = expandRuntimeComponentDependencies(selectedIds, manifest);
+    const run = {
+        id: `runtime-components-install-${Date.now()}`,
+        ok: false,
+        status: 'running',
+        startedAt: new Date().toISOString(),
+        requestedIds: selectedIds,
+        expandedIds,
+        steps: [],
+        logs: []
+    };
+    runtimeComponentsInstallRun = run;
+    lastRuntimeComponentsInstallRun = run;
+
+    const finish = (ok, status = ok ? 'completed' : 'failed', error = '') => {
+        run.ok = ok;
+        run.status = status;
+        run.error = error;
+        run.finishedAt = new Date().toISOString();
+        runtimeComponentsInstallRun = null;
+        lastRuntimeComponentsInstallRun = run;
+        return run;
+    };
+
+    try {
+        if (!expandedIds.length) {
+            return finish(true, 'completed', '');
+        }
+        const voiceIds = [];
+        for (const id of expandedIds) {
+            const component = getRuntimeComponentById(id, manifest);
+            if (!component) {
+                run.steps.push({ id, status: 'skipped', title: id, detail: 'manifest 中不存在该组件。' });
+                continue;
+            }
+            const pack = resolveRuntimeComponentPack(component);
+            const readinessBefore = getRuntimeComponentReadiness(component);
+            if (readinessBefore.ready) {
+                run.steps.push({
+                    id,
+                    title: component.title || id,
+                    status: 'skipped',
+                    detail: '组件已经就绪。'
+                });
+                continue;
+            }
+            if (pack.available) {
+                const step = {
+                    id,
+                    title: `导入 ${component.title || id}`,
+                    status: 'running',
+                    packPath: pack.path,
+                    installRoot: resolveRuntimeComponentInstallRoot(component),
+                    startedAt: new Date().toISOString(),
+                    logs: []
+                };
+                run.steps.push(step);
+                run.logs.push(`导入 runtime pack：${pack.path}`);
+                const result = await extractRuntimePack(component, pack);
+                step.logs = result.logs || [];
+                step.finishedAt = new Date().toISOString();
+                if (!result.ok) {
+                    step.status = 'failed';
+                    step.error = result.error || 'runtime pack 解压失败。';
+                    return finish(false, 'failed', step.error);
+                }
+                step.status = 'completed';
+                continue;
+            }
+            if (['python-runtime', 'cosyvoice3-runtime', 'asr-runtime'].includes(id)) {
+                voiceIds.push(id);
+                run.steps.push({
+                    id,
+                    title: component.title || id,
+                    status: 'queued',
+                    detail: '未找到离线 runtime pack，将交给 Voice Runtime Installer 自动安装。'
+                });
+                continue;
+            }
+            const packName = resolveRuntimeComponentPackName(component);
+            const error = `缺少 ${component.title || id} 的 runtime pack：${packName}。请把 runtime-packs 目录放在安装器旁边，或放到 ${process.resourcesPath || 'resources'}/runtime-packs。`;
+            run.steps.push({
+                id,
+                title: component.title || id,
+                status: 'failed',
+                error,
+                searched: pack.searchDirs
+            });
+            return finish(false, 'failed', error);
+        }
+
+        if (voiceIds.length) {
+            const step = {
+                id: 'voice-runtime-bootstrap',
+                title: '自动安装选中的语音运行时组件',
+                status: 'running',
+                componentIds: voiceIds,
+                startedAt: new Date().toISOString(),
+                logs: []
+            };
+            run.steps.push(step);
+            const result = await bootstrapVoiceRuntimeComponentSteps(voiceIds, run);
+            step.status = result.ok || result.status === 'completed_with_warnings'
+                ? 'completed'
+                : 'failed';
+            step.finishedAt = new Date().toISOString();
+            step.resultStatus = result.status;
+            step.error = result.ok ? '' : result.error || '语音运行时安装未完全通过。';
+            step.logs = run.logs.slice(-80);
+            if (!result.ok && result.status !== 'completed_with_warnings') {
+                return finish(false, 'failed', step.error);
+            }
+        }
+
+        configureCosyVoice3Runtime();
+        const finalState = getRuntimeComponentsState();
+        const unresolved = finalState.components.filter((component) =>
+            expandedIds.includes(component.id) &&
+            !component.ready &&
+            component.id !== 'python-runtime'
+        );
+        if (unresolved.length) {
+            run.unresolved = unresolved.map((component) => ({
+                id: component.id,
+                title: component.title,
+                status: component.status,
+                detail: component.detail
+            }));
+            return finish(false, 'completed_with_warnings', '部分组件已安装，但仍需要重新检查或完成验证。');
+        }
+        return finish(true);
+    } catch (error) {
+        return finish(false, 'failed', error?.message || String(error));
+    }
 }
 
 function getVisionSnapshotLabel(target) {
@@ -942,6 +1719,19 @@ async function handleLocalResourceProtocol(request) {
     }
 }
 
+async function handleAssetPackProtocol(request) {
+    try {
+        return createFileResponse(getAssetPackRuntime().resolveAssetPathFromUrl(request.url));
+    } catch (error) {
+        return new Response(String(error.message || error), {
+            status: 404,
+            headers: {
+                'content-type': 'text/plain; charset=utf-8'
+            }
+        });
+    }
+}
+
 async function findBundledSpeechModelFile(asset) {
     for (const rootDir of getBundledSpeechModelRoots()) {
         for (const variant of getSpeechAssetVariants(asset)) {
@@ -1350,19 +2140,157 @@ function resolveDesktopBackendMode() {
     );
 }
 
-function resolveOpenClawGatewayUrl() {
+function resolveAgentRuntimeGatewayUrl() {
     const envGatewayUrl = String(
         process.env.AILIS_OPENCLAW_GATEWAY_URL ||
         process.env.OPENCLAW_GATEWAY_URL ||
         ''
     ).trim();
     if (envGatewayUrl) {
-        return normalizeOpenClawGatewayUrl(envGatewayUrl);
+        return normalizeAgentRuntimeGatewayUrl(envGatewayUrl);
     }
 
-    return normalizeOpenClawGatewayUrl(
-        desktopState?.preferences?.openclawGatewayUrl || DEFAULT_OPENCLAW_GATEWAY_URL
+    return normalizeAgentRuntimeGatewayUrl(
+        desktopState?.preferences?.agentRuntimeGatewayUrl ||
+        desktopState?.preferences?.openclawGatewayUrl ||
+        DEFAULT_AGENT_RUNTIME_GATEWAY_URL
     );
+}
+
+function maskLlmApiKey(value = '') {
+    const key = normalizeLlmApiKey(value);
+    if (!key) {
+        return '';
+    }
+    if (key.length <= 8) {
+        return `****${key.slice(-2)}`;
+    }
+    return `${key.slice(0, 4)}...${key.slice(-4)}`;
+}
+
+function getPersistedLlmApiKeyProfiles(preferences = desktopState?.preferences || {}) {
+    return normalizeLlmApiKeyProfiles(preferences.llmApiKeyProfiles, {
+        provider: preferences.llmProvider || DEFAULT_LLM_PROVIDER,
+        apiKey: preferences.llmApiKey || '',
+        label: '默认 Key'
+    });
+}
+
+function getLlmApiKeyProfileForProvider(provider = DEFAULT_LLM_PROVIDER, preferences = desktopState?.preferences || {}) {
+    const normalizedProvider = normalizeLlmProvider(provider);
+    const profiles = getPersistedLlmApiKeyProfiles(preferences);
+    return profiles[normalizedProvider] || { activeKeyId: '', keys: [] };
+}
+
+function getActiveLlmApiKeyEntry(provider = DEFAULT_LLM_PROVIDER, preferences = desktopState?.preferences || {}) {
+    const profile = getLlmApiKeyProfileForProvider(provider, preferences);
+    return profile.keys.find((entry) => entry.id === profile.activeKeyId) || profile.keys[0] || null;
+}
+
+function getPersistedLlmApiKeyForProvider(provider = DEFAULT_LLM_PROVIDER, preferences = desktopState?.preferences || {}) {
+    return normalizeLlmApiKey(getActiveLlmApiKeyEntry(provider, preferences)?.value || '');
+}
+
+function getPersistedLlmApiKeyById(provider = DEFAULT_LLM_PROVIDER, keyId = '', preferences = desktopState?.preferences || {}) {
+    const profile = getLlmApiKeyProfileForProvider(provider, preferences);
+    const requestedKeyId = String(keyId || '').trim();
+    return normalizeLlmApiKey(profile.keys.find((entry) => entry.id === requestedKeyId)?.value || '');
+}
+
+function getActiveLlmApiKeyFromProfiles(profiles = {}, provider = DEFAULT_LLM_PROVIDER) {
+    const normalizedProvider = normalizeLlmProvider(provider);
+    const normalizedProfiles = normalizeLlmApiKeyProfiles(profiles);
+    const profile = normalizedProfiles[normalizedProvider] || { activeKeyId: '', keys: [] };
+    return normalizeLlmApiKey(
+        (profile.keys.find((entry) => entry.id === profile.activeKeyId) || profile.keys[0] || {}).value || ''
+    );
+}
+
+function getRendererLlmApiKeyProfiles(preferences = desktopState?.preferences || {}) {
+    const profiles = getPersistedLlmApiKeyProfiles(preferences);
+    return Object.fromEntries(Object.entries(profiles).map(([provider, profile]) => [
+        provider,
+        {
+            activeKeyId: profile.activeKeyId || '',
+            keys: (profile.keys || []).map((entry) => ({
+                id: entry.id,
+                label: entry.label || '默认 Key',
+                masked: maskLlmApiKey(entry.value),
+                createdAt: entry.createdAt || '',
+                updatedAt: entry.updatedAt || '',
+                lastUsedAt: entry.lastUsedAt || ''
+            }))
+        }
+    ]));
+}
+
+function upsertLlmApiKeyProfile(profiles = {}, provider = DEFAULT_LLM_PROVIDER, apiKey = '', label = '') {
+    const normalizedProvider = normalizeLlmProvider(provider);
+    const cleanKey = normalizeLlmApiKey(apiKey);
+    if (!cleanKey) {
+        return normalizeLlmApiKeyProfiles(profiles);
+    }
+    const nextProfiles = normalizeLlmApiKeyProfiles(profiles);
+    const profile = nextProfiles[normalizedProvider] || { activeKeyId: '', keys: [] };
+    const keyId = createLlmApiKeyId(normalizedProvider, cleanKey);
+    const now = new Date().toISOString();
+    const existing = profile.keys.find((entry) => entry.id === keyId || entry.value === cleanKey);
+    if (existing) {
+        existing.label = String(label || existing.label || '默认 Key').trim().slice(0, 80) || '默认 Key';
+        existing.value = cleanKey;
+        existing.updatedAt = now;
+        existing.lastUsedAt = now;
+        profile.activeKeyId = existing.id;
+    } else {
+        profile.keys.unshift({
+            id: keyId,
+            label: String(label || `${llmProviderLabelsForLog(normalizedProvider)} Key`).trim().slice(0, 80) || '默认 Key',
+            value: cleanKey,
+            createdAt: now,
+            updatedAt: now,
+            lastUsedAt: now
+        });
+        profile.activeKeyId = keyId;
+    }
+    nextProfiles[normalizedProvider] = normalizeLlmApiKeyProfiles({ [normalizedProvider]: profile })[normalizedProvider];
+    return nextProfiles;
+}
+
+function selectLlmApiKeyProfile(profiles = {}, provider = DEFAULT_LLM_PROVIDER, keyId = '') {
+    const normalizedProvider = normalizeLlmProvider(provider);
+    const nextProfiles = normalizeLlmApiKeyProfiles(profiles);
+    const profile = nextProfiles[normalizedProvider] || { activeKeyId: '', keys: [] };
+    const requestedKeyId = String(keyId || '').trim();
+    if (profile.keys.some((entry) => entry.id === requestedKeyId)) {
+        profile.activeKeyId = requestedKeyId;
+        const selected = profile.keys.find((entry) => entry.id === requestedKeyId);
+        if (selected) {
+            selected.lastUsedAt = new Date().toISOString();
+        }
+    }
+    nextProfiles[normalizedProvider] = profile;
+    return nextProfiles;
+}
+
+function removeLlmApiKeyProfile(profiles = {}, provider = DEFAULT_LLM_PROVIDER, keyId = '') {
+    const normalizedProvider = normalizeLlmProvider(provider);
+    const nextProfiles = normalizeLlmApiKeyProfiles(profiles);
+    const profile = nextProfiles[normalizedProvider] || { activeKeyId: '', keys: [] };
+    const removeId = String(keyId || profile.activeKeyId || '').trim();
+    profile.keys = profile.keys.filter((entry) => entry.id !== removeId);
+    profile.activeKeyId = profile.keys[0]?.id || '';
+    nextProfiles[normalizedProvider] = profile;
+    return nextProfiles;
+}
+
+function llmProviderLabelsForLog(provider = DEFAULT_LLM_PROVIDER) {
+    return {
+        'openai-compatible': 'OpenAI-compatible',
+        'openai-responses': 'OpenAI',
+        anthropic: 'Anthropic',
+        gemini: 'Gemini',
+        ollama: 'Ollama'
+    }[normalizeLlmProvider(provider)] || 'LLM';
 }
 
 function getPersistedLlmSettings() {
@@ -1376,7 +2304,8 @@ function getPersistedLlmSettings() {
         model: normalizeLlmModel(
             preferences.llmModel || getDefaultProviderModel(provider) || DEFAULT_LLM_MODEL
         ),
-        apiKey: normalizeLlmApiKey(preferences.llmApiKey || ''),
+        apiKey: getPersistedLlmApiKeyForProvider(provider, preferences) ||
+            normalizeLlmApiKey(preferences.llmApiKey || ''),
         temperature: normalizeLlmTemperature(
             preferences.llmTemperature ?? DEFAULT_LLM_TEMPERATURE
         ),
@@ -1444,10 +2373,8 @@ function isLocalLlmProvider(provider = DEFAULT_LLM_PROVIDER) {
 function getResolvedLlmSettings() {
     const persistedSettings = getPersistedLlmSettings();
     const environmentApiKey = getEnvironmentLlmApiKey(persistedSettings.provider);
-    const apiKey = isLocalLlmProvider(persistedSettings.provider)
-        ? environmentApiKey
-        : persistedSettings.apiKey || environmentApiKey;
-    const apiKeySource = apiKey && persistedSettings.apiKey && !isLocalLlmProvider(persistedSettings.provider)
+    const apiKey = persistedSettings.apiKey || environmentApiKey;
+    const apiKeySource = apiKey && persistedSettings.apiKey
         ? 'saved'
         : apiKey
         ? 'environment'
@@ -1479,6 +2406,7 @@ function buildTemporaryLlmSettings(settings = {}) {
         apiKey: normalizeLlmApiKey(
             settings.apiKey ||
                 settings.llmApiKey ||
+                getPersistedLlmApiKeyForProvider(provider) ||
                 getEnvironmentLlmApiKey(provider) ||
                 ''
         ),
@@ -1555,9 +2483,41 @@ function getRendererLlmPreferences() {
         llmModel: settings.model,
         llmApiKeyConfigured: Boolean(settings.apiKey),
         llmApiKeySource: settings.apiKeySource,
+        llmApiKeyProfiles: getRendererLlmApiKeyProfiles(),
+        llmActiveApiKeyId: getActiveLlmApiKeyEntry(settings.provider)?.id || '',
         llmTemperature: settings.temperature,
         llmRequestTimeoutMs: settings.timeoutMs,
         llmCapabilities: getProviderCapabilities(settings)
+    };
+}
+
+function ollamaSourceToLegacyMode(source = '') {
+    if (source === 'local_import') {
+        return 'local';
+    }
+    if (source === 'online_pull') {
+        return 'online';
+    }
+    return 'installed';
+}
+
+function getRendererOllamaTargetPreferences(preferences = desktopState?.preferences || {}) {
+    const target = normalizeOllamaTarget({
+        target: preferences.ollamaTarget,
+        ollamaDeploymentMode: preferences.ollamaDeploymentMode,
+        modelId: preferences.llmModel || LLM_PROVIDER_DEFAULT_MODELS.ollama,
+        localModelPath: preferences.ollamaLocalModelPath
+    });
+    return {
+        ollamaTarget: target,
+        ollamaDeploymentMode: ollamaSourceToLegacyMode(target.source),
+        ollamaLocalModelPath: target.localPath || String(preferences.ollamaLocalModelPath || '').trim(),
+        ollamaInstalledModels: Array.isArray(preferences.ollamaInstalledModels)
+            ? preferences.ollamaInstalledModels
+            : [],
+        ollamaUsedModels: Array.isArray(preferences.ollamaUsedModels)
+            ? preferences.ollamaUsedModels
+            : []
     };
 }
 
@@ -1566,6 +2526,11 @@ function detectElevenLabsLanguageFromText(text) {
     const kanaCount = (source.match(/[\u3040-\u30ff]/g) || []).length;
     if (kanaCount > 0) {
         return 'ja';
+    }
+
+    const hangulCount = (source.match(/[\uac00-\ud7af\u1100-\u11ff\u3130-\u318f]/g) || []).length;
+    if (hangulCount > 0) {
+        return 'ko';
     }
 
     const cjkCount = (source.match(/[\u3400-\u9fff]/g) || []).length;
@@ -1757,8 +2722,13 @@ function attachAilisMemoryToLlmPayload(payload = {}) {
 }
 
 async function callDesktopLlm(payload = {}) {
+    const settings = getResolvedLlmSettings();
+    const busy = getOllamaRuntimeBusyResult(settings);
+    if (busy) {
+        return busy;
+    }
     const enrichedPayload = attachAilisMemoryToLlmPayload(payload);
-    const result = await callDesktopLlmProvider(getResolvedLlmSettings(), enrichedPayload);
+    const result = await callDesktopLlmProvider(settings, enrichedPayload);
     if (payload.includeAilisMemory === true) {
         try {
             ensureAILISGateway().memoryRuntime?.recordTurn?.({
@@ -1786,11 +2756,12 @@ async function callDesktopTts(payload = {}) {
         const runtime = getVoiceRuntimeBootstrap();
         const summary = runtime.getFastSummary();
         if (!summary.cosyVoice3?.ok) {
+            const requiredStepCount = (summary.installPlan?.steps || []).filter((step) => !step.optional).length;
             return {
                 ok: false,
                 provider: 'cosyvoice3',
                 code: 'voice_runtime_needs_setup',
-                error: `CosyVoice3 本地运行时尚未就绪，需要完成 ${summary.installStepCount || 0} 个安装/修复步骤。`,
+                error: `CosyVoice3 本地运行时尚未就绪，需要完成 ${requiredStepCount} 个 TTS 必需步骤。`,
                 runtimeSetup: summary
             };
         }
@@ -1807,37 +2778,83 @@ async function callDesktopTts(payload = {}) {
     return callDesktopElevenLabsTts(payload);
 }
 
-function warmupDesktopSpeechMode(mode, { delayMs = 0 } = {}) {
+function warmupDesktopSpeechMode(mode, { delayMs = 0, waitForCompletion = false, reason = '' } = {}) {
     const normalizedMode = normalizeSpeechMode(mode);
-    const runWarmup = () => {
+    const runWarmup = async () => {
         if (normalizedMode === 'cosyvoice3') {
             const runtime = getVoiceRuntimeBootstrap();
             const summary = runtime.getFastSummary();
             if (!summary.cosyVoice3?.ok) {
-                console.warn(`[cosyvoice3] 本地运行时尚未就绪，需要 ${summary.installStepCount || 0} 个安装/修复步骤。`);
-                return;
+                const requiredStepCount = (summary.installPlan?.steps || []).filter((step) => !step.optional).length;
+                console.warn(`[cosyvoice3] 本地运行时尚未就绪，需要 ${requiredStepCount} 个 TTS 必需步骤。`);
+                return {
+                    ok: false,
+                    provider: 'cosyvoice3',
+                    skipped: true,
+                    reason: 'voice_runtime_needs_setup',
+                    requiredStepCount
+                };
             }
-            warmupCosyVoice3TTS({ timeoutMs: 300000 })
-                .then((result) => {
-                    if (!result?.ok) {
-                        console.warn('[cosyvoice3] 后台预热失败：', result?.error || result);
-                        return;
-                    }
-                    console.log(`[cosyvoice3] 后台预热完成：${result.elapsedSeconds}s`);
-                })
-                .catch((error) => {
-                    console.warn('[cosyvoice3] 后台预热失败：', error.message || error);
-                });
-            return;
+            try {
+                const result = await warmupCosyVoice3TTS({ timeoutMs: 300000 });
+                if (!result?.ok) {
+                    console.warn('[cosyvoice3] 后台预热失败：', result?.error || result);
+                    return result || {
+                        ok: false,
+                        provider: 'cosyvoice3',
+                        error: 'CosyVoice3 预热失败'
+                    };
+                }
+                const elapsedText = result.alreadyWarm
+                    ? '已是热状态'
+                    : `${result.elapsedSeconds}s`;
+                console.log(`[cosyvoice3] 后台预热完成：${elapsedText}${reason ? ` (${reason})` : ''}`);
+                return result;
+            } catch (error) {
+                console.warn('[cosyvoice3] 后台预热失败：', error.message || error);
+                return {
+                    ok: false,
+                    provider: 'cosyvoice3',
+                    error: error.message || String(error)
+                };
+            }
         }
 
+        return {
+            ok: true,
+            skipped: true,
+            provider: normalizedMode,
+            reason: 'speech_mode_not_cosyvoice3'
+        };
     };
 
     if (delayMs > 0) {
-        setTimeout(runWarmup, delayMs);
-        return;
+        const delayedWarmup = new Promise((resolve) => {
+            setTimeout(() => {
+                resolve(runWarmup());
+            }, delayMs);
+        });
+        if (waitForCompletion) {
+            return delayedWarmup;
+        }
+        void delayedWarmup;
+        return Promise.resolve({
+            ok: true,
+            scheduled: true,
+            provider: normalizedMode,
+            delayMs
+        });
     }
-    runWarmup();
+    const warmupPromise = runWarmup();
+    if (waitForCompletion) {
+        return warmupPromise;
+    }
+    void warmupPromise;
+    return Promise.resolve({
+        ok: true,
+        scheduled: true,
+        provider: normalizedMode
+    });
 }
 
 function getOpenWindows() {
@@ -1919,23 +2936,23 @@ async function getAILISGatewayStatusEnsuringStarted(reason = 'status') {
     }
 }
 
-function ensureOpenClawRuntimeSupervisor() {
-    if (openclawRuntimeSupervisor) {
-        return openclawRuntimeSupervisor;
+function ensureAgentRuntimeSupervisor() {
+    if (agentRuntimeSupervisor) {
+        return agentRuntimeSupervisor;
     }
 
-    openclawRuntimeSupervisor = new OpenClawRuntimeSupervisor({
+    agentRuntimeSupervisor = new AILISAgentRuntimeSupervisor({
         app,
-        gatewayUrl: resolveOpenClawGatewayUrl()
+        gatewayUrl: resolveAgentRuntimeGatewayUrl()
     });
-    openclawRuntimeSupervisor.on('status', (status) => {
+    agentRuntimeSupervisor.on('status', (status) => {
         broadcastAssistantEvent({
             type: 'operator.runtime',
             payload: status
         });
     });
 
-    return openclawRuntimeSupervisor;
+    return agentRuntimeSupervisor;
 }
 
 function ensureAssistantGateway() {
@@ -1943,11 +2960,11 @@ function ensureAssistantGateway() {
         return assistantGateway;
     }
 
-    assistantGateway = new OpenClawGatewayManager({
+    assistantGateway = new AILISGatewayBridgeManager({
         app,
         clientVersion: app.getVersion(),
         enabled: true,
-        gatewayUrl: resolveOpenClawGatewayUrl()
+        gatewayUrl: resolveAgentRuntimeGatewayUrl()
     });
     assistantGateway.on('status', (status) => {
         broadcastAssistantEvent({
@@ -1971,24 +2988,24 @@ async function resetAssistantBridge() {
 
 function getAssistantStatusSnapshot() {
     const gateway = ensureAssistantGateway();
-    const supervisor = ensureOpenClawRuntimeSupervisor();
+    const supervisor = ensureAgentRuntimeSupervisor();
     const status = {
         ...gateway.getStatus(),
         selectedBackendMode: resolveDesktopBackendMode()
     };
 
     status.managedRuntime = supervisor.getStatus();
-    status.toolSurface = getOpenClawToolSurfaceSummary();
-    status.toolSurfaceValidation = validateOpenClawToolSurface().summary;
+    status.toolSurface = getAgentToolSurfaceSummary();
+    status.toolSurfaceValidation = validateAgentToolSurface().summary;
     status.humanGateway = ensureAILISGateway().getStatus();
 
     return status;
 }
 
-async function syncOpenClawSelection({ ensureReady = false } = {}) {
-    const gatewayUrl = resolveOpenClawGatewayUrl();
+async function syncAgentRuntimeSelection({ ensureReady = false } = {}) {
+    const gatewayUrl = resolveAgentRuntimeGatewayUrl();
     const backendMode = resolveDesktopBackendMode();
-    const supervisor = ensureOpenClawRuntimeSupervisor();
+    const supervisor = ensureAgentRuntimeSupervisor();
 
     supervisor.configure({
         gatewayUrl
@@ -2043,14 +3060,21 @@ function getRendererPreferences() {
         conversationMode: normalizeConversationMode(
             desktopState?.preferences?.conversationMode || DEFAULT_CONVERSATION_MODE
         ),
+        uiLanguage: getCurrentUiLanguage(),
         preferredMicDeviceId: normalizePreferredMicDeviceId(desktopState?.preferences?.preferredMicDeviceId),
         backendBaseUrl: resolveDesktopBackendBaseUrl(),
         backendMode: resolveDesktopBackendMode(),
-        openclawGatewayUrl: resolveOpenClawGatewayUrl(),
+        agentRuntimeGatewayUrl: resolveAgentRuntimeGatewayUrl(),
+        openclawGatewayUrl: resolveAgentRuntimeGatewayUrl(),
         ailisStateDir: normalizeAILISStateDir(desktopState?.preferences?.ailisStateDir),
         ailisResolvedStateDir: getPersistedAILISStateDir(),
         ailisDefaultStateDir: getDefaultAILISStateDir(),
+        voiceRuntimeRoot: normalizeVoiceRuntimeRoot(desktopState?.preferences?.voiceRuntimeRoot),
+        voiceRuntimeResolvedRoot: getPersistedVoiceRuntimeRoot(),
+        voiceRuntimeDefaultRoot: getDefaultVoiceRuntimeRoot(),
+        characterAssets: getAssetPackRuntime().getSnapshot(),
         ...getRendererLlmPreferences(),
+        ...getRendererOllamaTargetPreferences(),
         ...getRendererElevenLabsPreferences(),
         computerControlEnabled: getPersistedComputerControlEnabled(),
         emailProfiles: getRendererEmailProfiles(),
@@ -2167,6 +3191,7 @@ function getControlPanelState() {
             speechModeOptions: SPEECH_MODE_OPTIONS,
             recognitionModeOptions: RECOGNITION_MODE_OPTIONS,
             conversationModeOptions: CONVERSATION_MODE_OPTIONS,
+            uiLanguageOptions: UI_LANGUAGE_OPTIONS,
             backendModeOptions: BACKEND_MODE_OPTIONS,
             llmProviderOptions: LLM_PROVIDER_OPTIONS,
             llmProviderDefaultBaseUrls: LLM_PROVIDER_DEFAULT_BASE_URLS,
@@ -2186,11 +3211,12 @@ function getControlPanelState() {
         assistant: {
             selectedBackendMode: 'ailis',
             humanGateway: ensureAILISGateway().getStatus(),
-            toolSurface: getOpenClawToolSurfaceSummary(),
-            toolSurfaceValidation: validateOpenClawToolSurface().summary
+            toolSurface: getAgentToolSurfaceSummary(),
+            toolSurfaceValidation: validateAgentToolSurface().summary
         },
         voiceRuntime: getVoiceRuntimeBootstrap().getFastSummary(),
-        vllmRuntime: getVllmLocalDeployer().getStatus(),
+        ollamaRuntime: getOllamaLocalRuntime().getStatus(),
+        runtimeComponents: getRuntimeComponentsState(),
         environment: {
             version: app.getVersion(),
             isPackaged: app.isPackaged,
@@ -2472,15 +3498,20 @@ function applyPreferencesPatch(partialPreferences = {}) {
         speechMode: rendererPreferences.speechMode,
         recognitionMode: rendererPreferences.recognitionMode,
         conversationMode: rendererPreferences.conversationMode,
+        uiLanguage: rendererPreferences.uiLanguage,
         preferredMicDeviceId: rendererPreferences.preferredMicDeviceId,
         backendBaseUrl: resolveDesktopBackendBaseUrl(),
         backendMode: rendererPreferences.backendMode,
-        openclawGatewayUrl: rendererPreferences.openclawGatewayUrl,
+        agentRuntimeGatewayUrl: rendererPreferences.agentRuntimeGatewayUrl || rendererPreferences.openclawGatewayUrl,
+        openclawGatewayUrl: rendererPreferences.openclawGatewayUrl || rendererPreferences.agentRuntimeGatewayUrl,
         ailisStateDir: rendererPreferences.ailisStateDir,
+        voiceRuntimeRoot: rendererPreferences.voiceRuntimeRoot,
         llmProvider: currentLlmSettings.provider,
         llmBaseUrl: currentLlmSettings.baseUrl,
         llmModel: currentLlmSettings.model,
+        ...getRendererOllamaTargetPreferences(rendererPreferences),
         llmApiKey: currentLlmSettings.apiKey,
+        llmApiKeyProfiles: getPersistedLlmApiKeyProfiles(),
         llmTemperature: currentLlmSettings.temperature,
         llmRequestTimeoutMs: currentLlmSettings.timeoutMs,
         elevenLabsApiBase: currentElevenLabsSettings.apiBase,
@@ -2539,6 +3570,9 @@ function applyPreferencesPatch(partialPreferences = {}) {
     if ('conversationMode' in partialPreferences) {
         nextPreferences.conversationMode = normalizeConversationMode(partialPreferences.conversationMode);
     }
+    if ('uiLanguage' in partialPreferences) {
+        nextPreferences.uiLanguage = normalizeUiLanguage(partialPreferences.uiLanguage);
+    }
     if ('preferredMicDeviceId' in partialPreferences) {
         nextPreferences.preferredMicDeviceId = normalizePreferredMicDeviceId(
             partialPreferences.preferredMicDeviceId
@@ -2548,13 +3582,18 @@ function applyPreferencesPatch(partialPreferences = {}) {
     if ('backendMode' in partialPreferences) {
         nextPreferences.backendMode = normalizeBackendMode(partialPreferences.backendMode);
     }
-    if ('openclawGatewayUrl' in partialPreferences) {
-        nextPreferences.openclawGatewayUrl = normalizeOpenClawGatewayUrl(
-            partialPreferences.openclawGatewayUrl
+    if ('agentRuntimeGatewayUrl' in partialPreferences || 'openclawGatewayUrl' in partialPreferences) {
+        const gatewayUrl = normalizeAgentRuntimeGatewayUrl(
+            partialPreferences.agentRuntimeGatewayUrl || partialPreferences.openclawGatewayUrl
         );
+        nextPreferences.agentRuntimeGatewayUrl = gatewayUrl;
+        nextPreferences.openclawGatewayUrl = gatewayUrl;
     }
     if ('ailisStateDir' in partialPreferences) {
         nextPreferences.ailisStateDir = normalizeAILISStateDir(partialPreferences.ailisStateDir);
+    }
+    if ('voiceRuntimeRoot' in partialPreferences) {
+        nextPreferences.voiceRuntimeRoot = normalizeVoiceRuntimeRoot(partialPreferences.voiceRuntimeRoot);
     }
     if ('llmProvider' in partialPreferences) {
         nextPreferences.llmProvider = normalizeLlmProvider(partialPreferences.llmProvider);
@@ -2565,14 +3604,83 @@ function applyPreferencesPatch(partialPreferences = {}) {
     if ('llmModel' in partialPreferences) {
         nextPreferences.llmModel = normalizeLlmModel(partialPreferences.llmModel);
     }
+    if ('ollamaTarget' in partialPreferences) {
+        const target = normalizeOllamaTarget({
+            target: partialPreferences.ollamaTarget,
+            modelId: nextPreferences.llmModel,
+            localModelPath: nextPreferences.ollamaLocalModelPath,
+            ollamaDeploymentMode: nextPreferences.ollamaDeploymentMode
+        });
+        nextPreferences.ollamaTarget = target;
+        nextPreferences.ollamaDeploymentMode = ollamaSourceToLegacyMode(target.source);
+        nextPreferences.ollamaLocalModelPath = target.localPath || nextPreferences.ollamaLocalModelPath || '';
+    }
+    if ('ollamaDeploymentMode' in partialPreferences) {
+        const target = normalizeOllamaTarget({
+            target: nextPreferences.ollamaTarget,
+            ollamaDeploymentMode: partialPreferences.ollamaDeploymentMode,
+            modelId: nextPreferences.llmModel,
+            localModelPath: nextPreferences.ollamaLocalModelPath
+        });
+        nextPreferences.ollamaTarget = target;
+        nextPreferences.ollamaDeploymentMode = ollamaSourceToLegacyMode(target.source);
+    }
+    if ('ollamaLocalModelPath' in partialPreferences) {
+        nextPreferences.ollamaLocalModelPath = String(partialPreferences.ollamaLocalModelPath || '').trim();
+        nextPreferences.ollamaTarget = normalizeOllamaTarget({
+            target: nextPreferences.ollamaTarget,
+            modelId: nextPreferences.llmModel,
+            localModelPath: nextPreferences.ollamaLocalModelPath,
+            ollamaDeploymentMode: nextPreferences.ollamaDeploymentMode
+        });
+        nextPreferences.ollamaDeploymentMode = ollamaSourceToLegacyMode(nextPreferences.ollamaTarget.source);
+    }
+    if ('ollamaInstalledModels' in partialPreferences && Array.isArray(partialPreferences.ollamaInstalledModels)) {
+        nextPreferences.ollamaInstalledModels = partialPreferences.ollamaInstalledModels
+            .map((model) => String(model || '').trim())
+            .filter(Boolean)
+            .slice(0, 80);
+    }
+    if ('ollamaUsedModels' in partialPreferences && Array.isArray(partialPreferences.ollamaUsedModels)) {
+        nextPreferences.ollamaUsedModels = partialPreferences.ollamaUsedModels
+            .map((model) => String(model || '').trim())
+            .filter(Boolean)
+            .slice(0, 80);
+    }
+    if ('llmApiKeySelectedId' in partialPreferences) {
+        nextPreferences.llmApiKeyProfiles = selectLlmApiKeyProfile(
+            nextPreferences.llmApiKeyProfiles,
+            nextPreferences.llmProvider,
+            partialPreferences.llmApiKeySelectedId
+        );
+    }
     if ('llmApiKey' in partialPreferences) {
         const nextApiKey = normalizeLlmApiKey(partialPreferences.llmApiKey);
         if (nextApiKey) {
-            nextPreferences.llmApiKey = nextApiKey;
+            nextPreferences.llmApiKeyProfiles = upsertLlmApiKeyProfile(
+                nextPreferences.llmApiKeyProfiles,
+                nextPreferences.llmProvider,
+                nextApiKey,
+                partialPreferences.llmApiKeyLabel || ''
+            );
         }
     }
     if (partialPreferences.llmApiKeyAction === 'clear') {
         nextPreferences.llmApiKey = '';
+        nextPreferences.llmApiKeyProfiles = removeLlmApiKeyProfile(
+            nextPreferences.llmApiKeyProfiles,
+            nextPreferences.llmProvider,
+            partialPreferences.llmApiKeySelectedId || ''
+        );
+    }
+    if ('llmProvider' in partialPreferences ||
+        'llmApiKeySelectedId' in partialPreferences ||
+        'llmApiKey' in partialPreferences ||
+        partialPreferences.llmApiKeyAction === 'clear') {
+        nextPreferences.llmApiKey = getActiveLlmApiKeyFromProfiles(
+            nextPreferences.llmApiKeyProfiles,
+            nextPreferences.llmProvider
+        );
     }
     if ('llmTemperature' in partialPreferences) {
         nextPreferences.llmTemperature = normalizeLlmTemperature(partialPreferences.llmTemperature);
@@ -2854,6 +3962,8 @@ function applyPreferencesPatch(partialPreferences = {}) {
     const petScaleChanged = nextPreferences.petScale !== rendererPreferences.petScale;
     const ailisStateDirChanged =
         resolveAILISStateDir(nextPreferences.ailisStateDir) !== rendererPreferences.ailisResolvedStateDir;
+    const voiceRuntimeRootChanged =
+        resolveVoiceRuntimeRoot(nextPreferences.voiceRuntimeRoot) !== rendererPreferences.voiceRuntimeResolvedRoot;
 
     desktopState.preferences = {
         ...desktopState.preferences,
@@ -2914,6 +4024,7 @@ function applyPreferencesPatch(partialPreferences = {}) {
     const allowBlankCredentials = [];
     if (partialPreferences.llmApiKeyAction === 'clear') {
         allowBlankCredentials.push('llmApiKey');
+        allowBlankCredentials.push('llmApiKeyProfiles');
     }
     if (partialPreferences.elevenLabsApiKeyAction === 'clear') {
         allowBlankCredentials.push('elevenLabsApiKey');
@@ -2927,15 +4038,27 @@ function applyPreferencesPatch(partialPreferences = {}) {
     persistDesktopState({ allowBlankCredentials });
     broadcastPreferencesUpdated();
 
-    if ('speechMode' in partialPreferences) {
-        warmupDesktopSpeechMode(nextPreferences.speechMode);
+    if (voiceRuntimeRootChanged) {
+        voiceRuntimeBootstrap = null;
+        closeCosyVoice3TTS();
+        configureCosyVoice3Runtime();
     }
 
-    if ('backendMode' in partialPreferences || 'openclawGatewayUrl' in partialPreferences) {
-        void syncOpenClawSelection({
+    if ('speechMode' in partialPreferences) {
+        void warmupDesktopSpeechMode(nextPreferences.speechMode, {
+            reason: 'preferences_changed'
+        });
+    }
+
+    if (
+        'backendMode' in partialPreferences ||
+        'agentRuntimeGatewayUrl' in partialPreferences ||
+        'openclawGatewayUrl' in partialPreferences
+    ) {
+        void syncAgentRuntimeSelection({
             ensureReady: nextPreferences.backendMode === 'openclaw'
         }).catch((error) => {
-            console.warn('[openclaw] 运行链路切换失败：', error.message || error);
+            console.warn('[agent-runtime] 运行链路切换失败：', error.message || error);
         });
     }
 
@@ -2974,31 +4097,80 @@ function buildPetScaleMenu() {
     }));
 }
 
+function getCurrentUiLanguage() {
+    return normalizeUiLanguage(desktopState?.preferences?.uiLanguage || DEFAULT_UI_LANGUAGE);
+}
+
+function menuText(key) {
+    const language = getCurrentUiLanguage();
+    return MENU_I18N[language]?.[key] || {
+        showPet: '显示桌宠',
+        hidePet: '隐藏桌宠',
+        controlPanel: '控制面板',
+        chat: '聊天',
+        language: '语言',
+        speechMode: '语音模式',
+        speechOff: '关闭语音',
+        speechServer: 'ElevenLabs 云端语音',
+        speechCosyVoice3: 'CosyVoice3 本地高质量',
+        scale: '缩放',
+        showInTaskbar: '桌宠显示在任务栏',
+        quit: '退出',
+        undo: '撤销',
+        redo: '重做',
+        cut: '剪切',
+        copy: '复制',
+        paste: '粘贴',
+        selectAll: '全选',
+        trayTooltip: 'AILIS 桌宠'
+    }[key] || key;
+}
+
+function updateUiLanguage(nextLanguage) {
+    return applyPreferencesPatch({
+        uiLanguage: nextLanguage
+    });
+}
+
+function buildUiLanguageMenu() {
+    const currentLanguage = getCurrentUiLanguage();
+    return UI_LANGUAGE_OPTIONS.map((language) => ({
+        label: UI_LANGUAGE_LABELS[language] || language,
+        type: 'radio',
+        checked: currentLanguage === language,
+        click: () => updateUiLanguage(language)
+    }));
+}
+
 function getSpeechModeLabel(mode) {
     if (mode === 'off') {
-        return '关闭语音';
+        return menuText('speechOff');
     }
     if (mode === 'server') {
-        return 'ElevenLabs 云端语音';
+        return menuText('speechServer');
     }
     if (mode === 'cosyvoice3') {
-        return 'CosyVoice3 本地高质量';
+        return menuText('speechCosyVoice3');
     }
-    return '关闭语音';
+    return menuText('speechOff');
 }
 
 function buildControlMenuTemplate({ includeTaskbarToggle = false } = {}) {
     const template = [
         {
-            label: '控制面板',
+            label: menuText('controlPanel'),
             click: () => showControlPanel()
         },
         {
-            label: '聊天',
+            label: menuText('chat'),
             click: () => showChatWindow()
         },
         {
-            label: '语音模式',
+            label: menuText('language'),
+            submenu: buildUiLanguageMenu()
+        },
+        {
+            label: menuText('speechMode'),
             submenu: SPEECH_MODE_OPTIONS.map((mode) => ({
                 label: getSpeechModeLabel(mode),
                 type: 'radio',
@@ -3007,7 +4179,7 @@ function buildControlMenuTemplate({ includeTaskbarToggle = false } = {}) {
             }))
         },
         {
-            label: '缩放',
+            label: menuText('scale'),
             submenu: buildPetScaleMenu()
         }
     ];
@@ -3016,7 +4188,7 @@ function buildControlMenuTemplate({ includeTaskbarToggle = false } = {}) {
         template.push(
             { type: 'separator' },
             {
-                label: '桌宠显示在任务栏',
+                label: menuText('showInTaskbar'),
                 type: 'checkbox',
                 checked: !desktopState.preferences.petSkipTaskbar,
                 click: (menuItem) => {
@@ -3031,7 +4203,7 @@ function buildControlMenuTemplate({ includeTaskbarToggle = false } = {}) {
     template.push(
         { type: 'separator' },
         {
-            label: '退出',
+            label: menuText('quit'),
             click: () => quitApplication()
         }
     );
@@ -3065,16 +4237,16 @@ function buildTextEditMenuTemplate({ isEditable = false, hasSelection = false, e
 
     if (editable) {
         template.push(
-            { label: '撤销', role: 'undo', enabled: hasFlag('canUndo', true) },
-            { label: '重做', role: 'redo', enabled: hasFlag('canRedo', true) },
+            { label: menuText('undo'), role: 'undo', enabled: hasFlag('canUndo', true) },
+            { label: menuText('redo'), role: 'redo', enabled: hasFlag('canRedo', true) },
             { type: 'separator' },
-            { label: '剪切', role: 'cut', enabled: hasFlag('canCut', selection) },
-            { label: '复制', role: 'copy', enabled: hasFlag('canCopy', selection) },
-            { label: '粘贴', role: 'paste', enabled: hasFlag('canPaste', true) }
+            { label: menuText('cut'), role: 'cut', enabled: hasFlag('canCut', selection) },
+            { label: menuText('copy'), role: 'copy', enabled: hasFlag('canCopy', selection) },
+            { label: menuText('paste'), role: 'paste', enabled: hasFlag('canPaste', true) }
         );
     } else {
         template.push({
-            label: '复制',
+            label: menuText('copy'),
             role: 'copy',
             enabled: hasFlag('canCopy', selection)
         });
@@ -3082,7 +4254,7 @@ function buildTextEditMenuTemplate({ isEditable = false, hasSelection = false, e
 
     template.push(
         { type: 'separator' },
-        { label: '全选', role: 'selectAll', enabled: hasFlag('canSelectAll', true) }
+        { label: menuText('selectAll'), role: 'selectAll', enabled: hasFlag('canSelectAll', true) }
     );
 
     return template;
@@ -3359,7 +4531,7 @@ function refreshTrayMenu() {
 
     const menu = Menu.buildFromTemplate([
         {
-            label: petWindow?.isVisible() ? '隐藏桌宠' : '显示桌宠',
+            label: petWindow?.isVisible() ? menuText('hidePet') : menuText('showPet'),
             click: () => {
                 if (!petWindow) {
                     createPetWindow();
@@ -3378,7 +4550,7 @@ function refreshTrayMenu() {
     ]);
 
     tray.setContextMenu(menu);
-    tray.setToolTip('AILIS 桌宠');
+    tray.setToolTip(menuText('trayTooltip'));
 }
 
 function createTray() {
@@ -3394,10 +4566,22 @@ function createTray() {
     refreshTrayMenu();
 }
 
-function updateSpeechMode(nextMode) {
-    return applyPreferencesPatch({
+async function updateSpeechMode(nextMode) {
+    const preferences = applyPreferencesPatch({
         speechMode: nextMode
     });
+    const normalizedMode = normalizeSpeechMode(nextMode);
+    if (normalizedMode !== 'cosyvoice3') {
+        return preferences;
+    }
+    const voiceWarmup = await warmupDesktopSpeechMode(normalizedMode, {
+        waitForCompletion: true,
+        reason: 'speech_mode_enabled'
+    });
+    return {
+        ...preferences,
+        voiceWarmup
+    };
 }
 
 function updatePreferredMicDevice(nextDeviceId) {
@@ -3438,6 +4622,142 @@ async function chooseAILISStateDir() {
     };
 }
 
+async function chooseVoiceRuntimeRoot() {
+    const result = await dialog.showOpenDialog(controlWindow || BrowserWindow.getFocusedWindow() || petWindow, {
+        title: '选择 CosyVoice3 本地语音安装目录',
+        defaultPath: getPersistedVoiceRuntimeRoot(),
+        properties: ['openDirectory', 'createDirectory']
+    });
+    if (result.canceled || !result.filePaths?.[0]) {
+        return {
+            ok: false,
+            canceled: true
+        };
+    }
+    const selectedPath = path.resolve(result.filePaths[0]);
+    return {
+        ok: true,
+        path: selectedPath,
+        runtimeRoot: selectedPath
+    };
+}
+
+async function describeVllmLocalModelPath(modelPath) {
+    const normalizedPath = String(modelPath || '').trim();
+    const result = {
+        ok: false,
+        path: normalizedPath,
+        name: normalizedPath ? path.basename(normalizedPath) : '',
+        suggestedModelName: '',
+        format: 'unknown',
+        canUseVllm: false,
+        complete: false,
+        weightFiles: [],
+        blockers: [],
+        warnings: []
+    };
+    if (!normalizedPath) {
+        result.blockers.push('没有选择模型目录。');
+        return result;
+    }
+    const stat = await fsp.stat(normalizedPath).catch(() => null);
+    if (!stat?.isDirectory()) {
+        result.blockers.push('请选择一个模型文件夹。');
+        return result;
+    }
+    const entries = await fsp.readdir(normalizedPath, { withFileTypes: true }).catch(() => []);
+    const fileNames = entries.filter((entry) => entry.isFile()).map((entry) => entry.name);
+    const lowerNames = new Set(fileNames.map((name) => name.toLowerCase()));
+    const hasConfig = lowerNames.has('config.json');
+    const hasTokenizer = fileNames.some((name) => /^(tokenizer|vocab|merges|sentencepiece|spiece).*\.?(json|txt|model)?$/i.test(name));
+    const weightFiles = fileNames
+        .filter((name) => /\.(safetensors|bin|pt|gguf)$/i.test(name))
+        .sort((a, b) => a.localeCompare(b))
+        .slice(0, 12);
+    const hasGguf = weightFiles.some((name) => /\.gguf$/i.test(name));
+    const hasTransformersWeights = weightFiles.some((name) => /\.(safetensors|bin|pt)$/i.test(name));
+    if (hasGguf && !hasTransformersWeights) {
+        result.format = 'GGUF（更适合 Ollama）';
+        result.blockers.push('这个目录看起来是 GGUF；vLLM 不适合直接部署，建议改用 Ollama。');
+    } else if (hasConfig && hasTransformersWeights) {
+        result.format = hasTokenizer ? 'HF/ModelScope Transformers' : 'HF/ModelScope 权重目录';
+        if (!hasTokenizer) {
+            result.blockers.push('缺少 tokenizer/vocab/merges/sentencepiece 等分词器文件，请确认选择的是完整模型根目录。');
+        } else {
+            result.complete = true;
+            result.canUseVllm = true;
+        }
+    } else if (hasTransformersWeights) {
+        result.format = '权重目录';
+        result.blockers.push('检测到权重文件，但没有看到 config.json；请确认选择的是完整 HF/ModelScope 模型根目录。');
+    } else {
+        result.blockers.push('没有检测到 safetensors/bin/pt/gguf 权重文件，请确认选择的是模型根目录。');
+    }
+    const safeBaseName = (result.name || 'local-model')
+        .replace(/[_\s]+/g, '-')
+        .replace(/[^A-Za-z0-9./-]+/g, '-')
+        .replace(/-+/g, '-')
+        .replace(/^-|-$/g, '') || 'local-model';
+    result.suggestedModelName = `local-${safeBaseName}`.slice(0, 120);
+    result.weightFiles = weightFiles;
+    result.ok = result.blockers.length === 0;
+    return result;
+}
+
+async function chooseVllmLocalModelFolder() {
+    const result = await dialog.showOpenDialog(controlWindow || BrowserWindow.getFocusedWindow() || petWindow, {
+        title: '选择本地 vLLM 模型目录',
+        properties: ['openDirectory']
+    });
+    if (result.canceled || !result.filePaths?.[0]) {
+        return {
+            ok: false,
+            canceled: true
+        };
+    }
+    return describeVllmLocalModelPath(result.filePaths[0]);
+}
+
+async function chooseVllmDownloadFolder(payload = {}) {
+    const result = await dialog.showOpenDialog(controlWindow || BrowserWindow.getFocusedWindow() || petWindow, {
+        title: '选择 vLLM 模型安装目录',
+        defaultPath: payload.defaultPath || 'F:\\models',
+        properties: ['openDirectory', 'createDirectory']
+    });
+    if (result.canceled || !result.filePaths?.[0]) {
+        return {
+            ok: false,
+            canceled: true
+        };
+    }
+    return {
+        ok: true,
+        ...inspectDownloadTarget({
+            downloadDir: result.filePaths[0],
+            modelId: payload.modelId || '',
+            modelSizeBytes: payload.modelSizeBytes || 0
+        })
+    };
+}
+
+async function chooseOllamaLocalModelPath() {
+    const result = await dialog.showOpenDialog(controlWindow || BrowserWindow.getFocusedWindow() || petWindow, {
+        title: '选择 Ollama 本地模型文件或目录',
+        properties: ['openFile', 'openDirectory'],
+        filters: [
+            { name: 'Ollama / HF 模型', extensions: ['gguf', 'safetensors', 'json'] },
+            { name: '所有文件', extensions: ['*'] }
+        ]
+    });
+    if (result.canceled || !result.filePaths?.[0]) {
+        return {
+            ok: false,
+            canceled: true
+        };
+    }
+    return describeOllamaLocalModelPath(result.filePaths[0]);
+}
+
 async function chooseChatFiles(sourceWindow = null) {
     const result = await dialog.showOpenDialog(sourceWindow || chatWindow || BrowserWindow.getFocusedWindow() || petWindow, {
         title: '选择要交给 AILIS 的文件',
@@ -3456,21 +4776,85 @@ async function chooseChatFiles(sourceWindow = null) {
     return describeChatFilePaths(result.filePaths);
 }
 
+async function installAssetPackFromFolder(sourceWindow = null) {
+    const result = await dialog.showOpenDialog(sourceWindow || controlWindow || BrowserWindow.getFocusedWindow() || petWindow, {
+        title: '选择包含 manifest.json 的人物包或皮肤包目录',
+        properties: ['openDirectory']
+    });
+    if (result.canceled || !result.filePaths?.[0]) {
+        return {
+            ok: false,
+            canceled: true,
+            snapshot: getAssetPackRuntime().getSnapshot()
+        };
+    }
+    const installResult = await getAssetPackRuntime().installFromPath(result.filePaths[0]);
+    broadcastPreferencesUpdated();
+    return installResult;
+}
+
+async function installBundledSampleAssetPack() {
+    const sampleDir = path.join(getProjectRoot(), 'sample-asset-packs', 'ailis-cinematic-skin');
+    const installResult = await getAssetPackRuntime().installFromPath(sampleDir);
+    broadcastPreferencesUpdated();
+    return installResult;
+}
+
+async function activateAssetPack(payload = {}) {
+    const result = await getAssetPackRuntime().activate(payload.id || payload.packId);
+    broadcastPreferencesUpdated();
+    return result;
+}
+
+async function resetActiveAssetPack(payload = {}) {
+    const result = await getAssetPackRuntime().resetActive(payload || {});
+    broadcastPreferencesUpdated();
+    return result;
+}
+
+async function uninstallAssetPack(payload = {}) {
+    const result = await getAssetPackRuntime().uninstall(payload.id || payload.packId);
+    broadcastPreferencesUpdated();
+    return result;
+}
+
 function registerIpc() {
     ipcMain.on('ailis:get-preferences-sync', (event) => {
         event.returnValue = getRendererPreferences();
     });
 
     ipcMain.handle('ailis:get-control-panel-state', () => getControlPanelState());
-    ipcMain.handle('ailis:save-preferences', (_event, payload = {}) => applyPreferencesPatch(payload));
+    ipcMain.handle('ailis:save-preferences', async (_event, payload = {}) => {
+        const preferences = applyPreferencesPatch(payload);
+        if ('speechMode' in (payload || {}) && normalizeSpeechMode(payload.speechMode) === 'cosyvoice3') {
+            const voiceWarmup = await warmupDesktopSpeechMode('cosyvoice3', {
+                waitForCompletion: true,
+                reason: 'preferences_saved'
+            });
+            return {
+                ...preferences,
+                voiceWarmup
+            };
+        }
+        return preferences;
+    });
     ipcMain.handle('ailis:restore-default-preferences', () => restoreDefaultPreferences());
     ipcMain.handle('ailis:choose-ailis-state-dir', () => chooseAILISStateDir());
+    ipcMain.handle('ailis:voice-runtime-choose-install-dir', () => chooseVoiceRuntimeRoot());
     ipcMain.handle('ailis:chat-files-choose', (event) =>
         chooseChatFiles(BrowserWindow.fromWebContents(event.sender))
     );
     ipcMain.handle('ailis:chat-files-describe', async (_event, payload = {}) =>
         describeChatFilePaths(payload?.paths || payload?.filePaths || [])
     );
+    ipcMain.handle('ailis:asset-packs-list', () => getAssetPackRuntime().getSnapshot());
+    ipcMain.handle('ailis:asset-packs-install-folder', (event) =>
+        installAssetPackFromFolder(BrowserWindow.fromWebContents(event.sender))
+    );
+    ipcMain.handle('ailis:asset-packs-install-sample', () => installBundledSampleAssetPack());
+    ipcMain.handle('ailis:asset-packs-activate', async (_event, payload = {}) => activateAssetPack(payload));
+    ipcMain.handle('ailis:asset-packs-reset-active', async (_event, payload = {}) => resetActiveAssetPack(payload));
+    ipcMain.handle('ailis:asset-packs-uninstall', async (_event, payload = {}) => uninstallAssetPack(payload));
     ipcMain.handle('ailis:toggle-chat-window', () => toggleChatWindow());
     ipcMain.handle('ailis:show-chat-window', () => {
         showChatWindow();
@@ -3507,6 +4891,12 @@ function registerIpc() {
     ipcMain.handle('ailis:voice-runtime-bootstrap', async (_event, payload = {}) =>
         bootstrapVoiceRuntime(payload || {})
     );
+    ipcMain.handle('ailis:runtime-components-status', async () =>
+        getRuntimeComponentsState()
+    );
+    ipcMain.handle('ailis:runtime-components-install', async (_event, payload = {}) =>
+        installRuntimeComponents(payload || {})
+    );
     ipcMain.handle('ailis:set-pet-dialogue-expanded', (_event, payload = {}) =>
         setPetDialogueWindowExpanded(
             Boolean(payload.expanded),
@@ -3530,9 +4920,13 @@ function registerIpc() {
                 incomingSettings.llmApiKey ||
                 ''
         );
+        const selectedApiKey = getPersistedLlmApiKeyById(
+            incomingProvider,
+            incomingSettings.apiKeySelectedId || incomingSettings.llmApiKeySelectedId || ''
+        );
         const fallbackApiKey = isLocalLlmProvider(incomingProvider)
-            ? getEnvironmentLlmApiKey(incomingProvider)
-            : currentSettings.apiKey;
+            ? selectedApiKey || getPersistedLlmApiKeyForProvider(incomingProvider) || getEnvironmentLlmApiKey(incomingProvider)
+            : selectedApiKey || getPersistedLlmApiKeyForProvider(incomingProvider) || getEnvironmentLlmApiKey(incomingProvider);
         const settings = payload?.settings
             ? buildTemporaryLlmSettings({
                 ...currentSettings,
@@ -3550,6 +4944,9 @@ function registerIpc() {
     ipcMain.handle('ailis:vllm-model-catalog-search', async (_event, payload = {}) =>
         searchVllmModelCatalog(payload || {})
     );
+    ipcMain.handle('ailis:ollama-model-catalog-search', async (_event, payload = {}) =>
+        searchOllamaModelCatalog(payload || {})
+    );
     ipcMain.handle('ailis:vllm-runtime-diagnose', async (_event, payload = {}) =>
         getVllmLocalDeployer().diagnose(payload || {})
     );
@@ -3561,6 +4958,36 @@ function registerIpc() {
     );
     ipcMain.handle('ailis:vllm-runtime-cancel', async () =>
         getVllmLocalDeployer().cancel()
+    );
+    ipcMain.handle('ailis:vllm-local-model-folder-choose', async () =>
+        chooseVllmLocalModelFolder()
+    );
+    ipcMain.handle('ailis:vllm-local-model-path-describe', async (_event, payload = {}) =>
+        describeVllmLocalModelPath(payload?.path || payload?.modelPath || payload || '')
+    );
+    ipcMain.handle('ailis:vllm-download-folder-choose', async (_event, payload = {}) =>
+        chooseVllmDownloadFolder(payload || {})
+    );
+    ipcMain.handle('ailis:ollama-runtime-diagnose', async (_event, payload = {}) =>
+        getOllamaLocalRuntime().diagnose(payload || {})
+    );
+    ipcMain.handle('ailis:ollama-local-model-path-choose', async () =>
+        chooseOllamaLocalModelPath()
+    );
+    ipcMain.handle('ailis:ollama-local-model-path-describe', async (_event, payload = {}) =>
+        describeOllamaLocalModelPath(payload?.path || payload?.modelPath || payload || '')
+    );
+    ipcMain.handle('ailis:ollama-runtime-status', async () =>
+        getOllamaLocalRuntime().getStatus()
+    );
+    ipcMain.handle('ailis:ollama-installed-models-inspect', async (_event, payload = {}) =>
+        getOllamaLocalRuntime().inspectInstalledModels(payload || {})
+    );
+    ipcMain.handle('ailis:ollama-runtime-deploy', async (_event, payload = {}) =>
+        getOllamaLocalRuntime().start(payload || {})
+    );
+    ipcMain.handle('ailis:ollama-runtime-cancel', async () =>
+        getOllamaLocalRuntime().cancel()
     );
     ipcMain.handle('ailis:memory-snapshot', async (_event, payload = {}) =>
         ensureAILISGateway().getMemorySnapshot(payload || {})
@@ -3602,32 +5029,32 @@ function registerIpc() {
         return desktopASRManager.transcribeAudioBytes(audioBytes);
     });
     ipcMain.handle('ailis:assistant-status', async () => getAssistantStatusSnapshot());
-    ipcMain.handle('ailis:assistant-tool-surface', async () => getOpenClawToolSurface());
-    ipcMain.handle('ailis:assistant-validate-tool-surface', async () => validateOpenClawToolSurface());
+    ipcMain.handle('ailis:assistant-tool-surface', async () => getAgentToolSurface());
+    ipcMain.handle('ailis:assistant-validate-tool-surface', async () => validateAgentToolSurface());
     ipcMain.handle('ailis:assistant-history', async (_event, payload = {}) => {
-        await syncOpenClawSelection({ ensureReady: true });
+        await syncAgentRuntimeSelection({ ensureReady: true });
         return ensureAssistantGateway().getHistory(Number(payload.limit) || 200);
     });
     ipcMain.handle('ailis:assistant-send-message', async (_event, payload = {}) => {
-        await syncOpenClawSelection({ ensureReady: true });
+        await syncAgentRuntimeSelection({ ensureReady: true });
         return ensureAssistantGateway().sendMessage(payload.content || '', {
             timeoutMs: Number(payload.timeoutMs) || undefined
         });
     });
     ipcMain.handle('ailis:assistant-abort-run', async (_event, payload = {}) => {
-        await syncOpenClawSelection({ ensureReady: true });
+        await syncAgentRuntimeSelection({ ensureReady: true });
         return ensureAssistantGateway().abortRun(payload.runId || '');
     });
     ipcMain.handle('ailis:assistant-list-sessions', async (_event, payload = {}) => {
-        await syncOpenClawSelection({ ensureReady: true });
+        await syncAgentRuntimeSelection({ ensureReady: true });
         return ensureAssistantGateway().listSessions(Number(payload.limit) || 20);
     });
     ipcMain.handle('ailis:assistant-set-session-key', async (_event, payload = {}) => {
-        await syncOpenClawSelection({ ensureReady: true });
+        await syncAgentRuntimeSelection({ ensureReady: true });
         return ensureAssistantGateway().setSessionKey(payload.sessionKey || '');
     });
     ipcMain.handle('ailis:assistant-patch-session', async (_event, payload = {}) => {
-        await syncOpenClawSelection({ ensureReady: true });
+        await syncAgentRuntimeSelection({ ensureReady: true });
         return ensureAssistantGateway().patchSession(payload || {});
     });
     ipcMain.handle('ailis:gateway-status', async () =>
@@ -3844,11 +5271,7 @@ app.whenReady().then(() => {
     desktopState = loadDesktopState(app);
     process.env.AILIS_PROJECT_ROOT = getProjectRoot();
     process.env.AILIS_USER_DATA = app.getPath('userData');
-    configureCosyVoice3TTS({
-        projectRoot: getProjectRoot(),
-        userDataPath: app.getPath('userData'),
-        pythonPath: getVoiceRuntimeBootstrap().getPreferredVoicePythonPath()
-    });
+    configureCosyVoice3Runtime();
     if (!desktopState.preferences.llmBaseUrl || desktopState.preferences.llmBaseUrl === 'https://api.openai.com/v1') {
         desktopState.preferences.llmBaseUrl = DEFAULT_LLM_BASE_URL;
     }
@@ -3862,8 +5285,15 @@ app.whenReady().then(() => {
     desktopState.preferences.conversationMode = normalizeConversationMode(
         desktopState.preferences.conversationMode || DEFAULT_CONVERSATION_MODE
     );
-    desktopState.preferences.openclawGatewayUrl = normalizeOpenClawGatewayUrl(
-        desktopState.preferences.openclawGatewayUrl || DEFAULT_OPENCLAW_GATEWAY_URL
+    desktopState.preferences.agentRuntimeGatewayUrl = normalizeAgentRuntimeGatewayUrl(
+        desktopState.preferences.agentRuntimeGatewayUrl ||
+        desktopState.preferences.openclawGatewayUrl ||
+        DEFAULT_AGENT_RUNTIME_GATEWAY_URL
+    );
+    desktopState.preferences.openclawGatewayUrl = normalizeAgentRuntimeGatewayUrl(
+        desktopState.preferences.openclawGatewayUrl ||
+        desktopState.preferences.agentRuntimeGatewayUrl ||
+        DEFAULT_AGENT_RUNTIME_GATEWAY_URL
     );
     desktopState.preferences.llmProvider = normalizeLlmProvider(
         desktopState.preferences.llmProvider || DEFAULT_LLM_PROVIDER
@@ -3937,6 +5367,7 @@ app.whenReady().then(() => {
     Menu.setApplicationMenu(null);
     registerMediaPermissionHandlers();
     protocol.handle(LOCAL_RESOURCE_PROTOCOL, handleLocalResourceProtocol);
+    protocol.handle(ASSET_PACK_PROTOCOL, handleAssetPackProtocol);
     protocol.handle(SPEECH_MODEL_PROTOCOL, handleSpeechModelProtocol);
     registerIpc();
     void ensureAILISGatewayStarted('app_ready').catch((error) => {
@@ -3985,7 +5416,7 @@ app.on('before-quit', () => {
     desktopASRManager?.close?.();
     const gatewayShutdown = assistantGateway?.shutdown?.();
     gatewayShutdown?.catch?.(() => {});
-    const runtimeShutdown = openclawRuntimeSupervisor?.shutdown?.();
+    const runtimeShutdown = agentRuntimeSupervisor?.shutdown?.();
     runtimeShutdown?.catch?.(() => {});
     const humanGatewayShutdown = ailisGateway?.stop?.();
     humanGatewayShutdown?.catch?.(() => {});

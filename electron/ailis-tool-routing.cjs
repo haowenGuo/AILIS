@@ -161,19 +161,6 @@ const ROUTING_PROFILES = Object.freeze([
         advice: 'Use web_fetch or web_extract_links for a known page URL before broad web_search. For archive/listing/search/table-of-contents pages, pass query or contains with the task clues so links are ranked by relevance instead of page order.'
     }),
     Object.freeze({
-        id: 'youtube_video',
-        patterns: [
-            /\b(youtube|youtu\.be|video|transcript|caption|subtitle)\b/i,
-            /(视频|字幕|转录|youtube)/i
-        ],
-        tools: ['youtube_video_search', 'youtube_transcript'],
-        primaryTools: ['youtube_video_search', 'youtube_transcript'],
-        bonus: 88,
-        primaryBonus: 10,
-        webPenalty: 80,
-        advice: 'Use youtube_video_search when the video URL is unknown; use youtube_transcript for a known YouTube URL before web_search.'
-    }),
-    Object.freeze({
         id: 'audio',
         patterns: [
             /\b(mp3|wav|m4a|flac|audio|recording|transcribe|speech)\b/i,
@@ -237,6 +224,11 @@ function queryExplicitlyRequestsWebSearch(query = '') {
         /(联网搜索|网页搜索|网络搜索|公开网页|搜索一下|检索一下|查一下)/i.test(query);
 }
 
+function queryExplicitlyMentionsYoutube(query = '') {
+    return /\b(youtube|youtu\.be|youtube\.com|yt-dlp)\b/i.test(query) ||
+        /(YouTube|youtube|油管)/i.test(query);
+}
+
 function matchingRoutingProfiles(query = '') {
     const normalized = normalizeString(query);
     if (!normalized) {
@@ -290,7 +282,10 @@ function toolSpecificityScore(toolName = '') {
     if (/^artifact_(query|compute)$/.test(toolName)) {
         return 14;
     }
-    if (/^(read_|pdf_|youtube_|transcribe_|describe_|github_|run_python)/.test(toolName)) {
+    if (/^youtube_/.test(toolName)) {
+        return 1;
+    }
+    if (/^(read_|pdf_|transcribe_|describe_|github_|run_python)/.test(toolName)) {
         return 12;
     }
     return 1;
@@ -303,6 +298,10 @@ function scoreToolForQuery(entry = {}, query = '') {
     const explicitWebSearch = queryExplicitlyRequestsWebSearch(query);
     const profiles = matchingRoutingProfiles(query);
     let score = baseTextScore(query, text);
+
+    if (/^youtube_/.test(toolName) && !queryExplicitlyMentionsYoutube(query)) {
+        return 0;
+    }
 
     if (needle && toolName && (needle === toolName || needle.includes(toolName) || text.includes(needle))) {
         score += 18;
@@ -352,17 +351,10 @@ function scoreToolForQuery(entry = {}, query = '') {
         }
     }
 
-    if (toolName === 'youtube_transcript' && /\bhttps?:\/\/\S*(youtube\.com|youtu\.be)\S*/i.test(query)) {
-        score += 30;
-    }
-    if (toolName === 'youtube_video_search' && !/\bhttps?:\/\/\S*(youtube\.com|youtu\.be)\S*/i.test(query) && /\b(youtube|video|bbc earth|channel|title)\b/i.test(query)) {
-        score += 32;
-    }
-
     if (
         toolName === 'web_search' &&
         !explicitWebSearch &&
-        /\b(attached|attachment|file|local|pdf|document|video|audio|image|spreadsheet|presentation|schema|api)\b/i.test(query) &&
+        /\b(attached|attachment|file|local|pdf|document|audio|image|spreadsheet|presentation|schema|api)\b/i.test(query) &&
         !profiles.some((profile) => profile.id === 'public_web_discovery')
     ) {
         score -= 25;

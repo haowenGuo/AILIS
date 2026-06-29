@@ -507,6 +507,14 @@ const TOOL_EXPERIENCE = Object.freeze({
         failureStyle: 'plain_explain',
         userFacingVerb: '查询上下文产物'
     }),
+    artifact_import: makeExperienceMetadata({
+        embodiedAction: 'import_artifact',
+        permissionStyle: 'silent_read',
+        progressStyle: 'focused',
+        successStyle: 'summarize_result',
+        failureStyle: 'plain_explain',
+        userFacingVerb: '导入上下文产物'
+    }),
     artifact_compute: makeExperienceMetadata({
         embodiedAction: 'analyze_artifact',
         permissionStyle: 'silent_read',
@@ -864,7 +872,7 @@ const TOOL_CONTRACTS = Object.freeze({
                 prompt: stringSchema(),
                 wait: booleanSchema(),
                 waitTimeoutMs: numberSchema({ minimum: 1000, maximum: 24 * 60 * 60 * 1000 }),
-                maxAgentSteps: numberSchema({ minimum: 1, maximum: 50 })
+                maxAgentSteps: numberSchema({ minimum: 1, maximum: 12 })
             }
         )
     }),
@@ -1511,6 +1519,10 @@ const TOOL_CONTRACTS = Object.freeze({
             'grid',
             'range',
             'search',
+            'runtime_schema',
+            'chunk_search',
+            'runtime_search',
+            'hybrid_search',
             'tail',
             'text_schema',
             'text_range',

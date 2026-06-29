@@ -273,7 +273,11 @@ describe('desktop LLM provider', () => {
             timeoutMs: 5000
         }, {
             messages: [{ role: 'user', content: '你好' }],
-            temperature: 0.2
+            temperature: 0.2,
+            parallel_tool_calls: false,
+            reasoning_effort: 'low',
+            max_completion_tokens: 128,
+            service_tier: 'default'
         });
 
         assert.equal(result.ok, true);
@@ -283,6 +287,10 @@ describe('desktop LLM provider', () => {
         assert.equal(receivedRequest.authorization, undefined);
         assert.equal(receivedRequest.body.model, 'demo-local-model');
         assert.equal(receivedRequest.body.temperature, 0.2);
+        assert.equal('parallel_tool_calls' in receivedRequest.body, false);
+        assert.equal('reasoning_effort' in receivedRequest.body, false);
+        assert.equal('max_completion_tokens' in receivedRequest.body, false);
+        assert.equal('service_tier' in receivedRequest.body, false);
     });
 
     it('calls an Ollama /api/chat endpoint without requiring an API key', async () => {
@@ -314,11 +322,48 @@ describe('desktop LLM provider', () => {
         assert.equal(receivedRequest.authorization, undefined);
         assert.equal(receivedRequest.body.model, 'llama3.2');
         assert.equal(receivedRequest.body.stream, false);
+        assert.equal(receivedRequest.body.think, false);
         assert.deepEqual(receivedRequest.body.messages, [
             { role: 'system', content: 'persona' },
             { role: 'user', content: '你好' }
         ]);
         assert.equal(receivedRequest.body.options.temperature, 0.3);
+    });
+
+    it('limits Ollama output when maxTokens or max_tokens is provided', async () => {
+        const result = await callDesktopLlmProvider({
+            provider: 'ollama',
+            baseUrl: serverUrl,
+            model: 'qwen3.5:4b',
+            timeoutMs: 5000
+        }, {
+            messages: [
+                { role: 'user', content: 'OK' }
+            ],
+            temperature: 0,
+            maxTokens: 16
+        });
+
+        assert.equal(result.ok, true);
+        assert.equal(receivedRequest.url, '/api/chat');
+        assert.equal(receivedRequest.body.think, false);
+        assert.equal(receivedRequest.body.options.num_predict, 16);
+
+        const snakeCaseResult = await callDesktopLlmProvider({
+            provider: 'ollama',
+            baseUrl: serverUrl,
+            model: 'qwen3.5:4b',
+            timeoutMs: 5000
+        }, {
+            messages: [
+                { role: 'user', content: 'OK' }
+            ],
+            temperature: 0,
+            max_tokens: 24
+        });
+
+        assert.equal(snakeCaseResult.ok, true);
+        assert.equal(receivedRequest.body.options.num_predict, 24);
     });
 
     it('passes image inputs through as OpenAI-compatible content parts', async () => {

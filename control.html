@@ -13,6 +13,10 @@
             font-family: "Microsoft YaHei", -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
         }
 
+        [hidden] {
+            display: none !important;
+        }
+
         :root {
             color-scheme: light;
             --bg: #f3f5f7;
@@ -183,7 +187,7 @@
             padding: 20px 26px 120px;
         }
 
-        #section-grid {
+        .section-grid {
             display: grid;
             grid-template-columns: repeat(2, minmax(0, 1fr));
             gap: 18px;
@@ -315,6 +319,46 @@
             font-size: 12px;
             line-height: 1.55;
             white-space: pre-wrap;
+        }
+
+        .asset-pack-list {
+            display: grid;
+            gap: 10px;
+        }
+
+        .asset-pack-card {
+            display: grid;
+            gap: 9px;
+            padding: 12px;
+            border: 1px solid rgba(29, 49, 62, 0.1);
+            border-radius: 8px;
+            background: rgba(248, 251, 250, 0.92);
+        }
+
+        .asset-pack-card.is-active {
+            border-color: rgba(23, 133, 107, 0.34);
+            background: rgba(23, 133, 107, 0.08);
+        }
+
+        .asset-pack-title {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            font-size: 14px;
+            font-weight: 700;
+        }
+
+        .asset-pack-meta {
+            color: var(--text-muted);
+            font-size: 12px;
+            line-height: 1.5;
+        }
+
+        .asset-pack-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
         }
 
         input[type="text"],
@@ -463,7 +507,7 @@
         }
 
         @media (max-width: 980px) {
-            #section-grid {
+            .section-grid {
                 grid-template-columns: 1fr;
             }
         }
@@ -526,11 +570,36 @@
             box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
         }
 
+        .language-switch {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            min-height: 32px;
+            padding: 3px 6px 3px 10px;
+            border: 1px solid var(--border);
+            border-radius: 999px;
+            background: #ffffff;
+            color: var(--text-muted);
+            font-size: 12px;
+            box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+            white-space: nowrap;
+        }
+
+        .language-switch select {
+            width: auto;
+            min-width: 112px;
+            min-height: 26px;
+            padding: 2px 26px 2px 9px;
+            border-radius: 999px;
+            font-size: 12px;
+            background-color: #ffffff;
+        }
+
         #content {
             padding: 18px 22px 96px;
         }
 
-        #section-grid {
+        .section-grid {
             gap: 14px;
         }
 
@@ -701,6 +770,957 @@
             font-size: 12px;
         }
 
+        /* AILIS open-source control room refresh */
+        :root {
+            --bg: #f4efe6;
+            --panel: rgba(255, 252, 246, 0.94);
+            --panel-soft: #fbf4e8;
+            --panel-quiet: rgba(255, 255, 255, 0.72);
+            --border: rgba(58, 47, 35, 0.12);
+            --border-strong: rgba(58, 47, 35, 0.2);
+            --text-main: #27231e;
+            --text-muted: #70685e;
+            --accent: #0e806a;
+            --accent-deep: #085f50;
+            --accent-soft: rgba(14, 128, 106, 0.12);
+            --accent-warm: #b55731;
+            --accent-warm-soft: rgba(181, 87, 49, 0.12);
+            --gold: #b9903f;
+            --shadow: 0 18px 50px rgba(62, 49, 34, 0.11);
+            --shadow-soft: 0 10px 28px rgba(62, 49, 34, 0.08);
+            --radius-lg: 22px;
+            --radius-md: 16px;
+            --font-ui: "LXGW WenKai Screen", "HarmonyOS Sans SC", "Microsoft YaHei", "PingFang SC", sans-serif;
+        }
+
+        * {
+            font-family: var(--font-ui);
+        }
+
+        html,
+        body {
+            background:
+                radial-gradient(circle at 8% 5%, rgba(185, 144, 63, 0.18), transparent 28%),
+                radial-gradient(circle at 94% 4%, rgba(14, 128, 106, 0.16), transparent 26%),
+                linear-gradient(135deg, #fffaf0 0%, #f4efe6 46%, #edf4ef 100%);
+        }
+
+        body::before {
+            content: "";
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+            background-image:
+                linear-gradient(rgba(58, 47, 35, 0.035) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(58, 47, 35, 0.028) 1px, transparent 1px);
+            background-size: 34px 34px;
+            mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.72), transparent 80%);
+        }
+
+        #header {
+            padding: 18px 28px 16px;
+            background: rgba(255, 250, 240, 0.88);
+            border-bottom: 1px solid var(--border);
+            box-shadow: 0 10px 30px rgba(62, 49, 34, 0.06);
+        }
+
+        #eyebrow {
+            color: var(--accent);
+            font-size: 12px;
+            letter-spacing: 0.12em;
+        }
+
+        #title {
+            margin-top: 5px;
+            font-size: 27px;
+            letter-spacing: -0.02em;
+        }
+
+        #subtitle {
+            max-width: 900px;
+            color: #655c51;
+            font-size: 13px;
+        }
+
+        .pill,
+        .icon-btn {
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.78);
+            border-color: var(--border);
+            box-shadow: var(--shadow-soft);
+        }
+
+        #content {
+            padding: 18px 32px 132px 28px;
+            scrollbar-gutter: stable;
+        }
+
+        #control-nav {
+            position: sticky;
+            top: 0;
+            z-index: 10;
+            display: flex;
+            gap: 8px;
+            padding: 8px;
+            margin-bottom: 14px;
+            border: 1px solid var(--border);
+            border-radius: 999px;
+            background: rgba(255, 252, 246, 0.82);
+            box-shadow: var(--shadow-soft);
+            backdrop-filter: blur(16px);
+        }
+
+        #control-nav button {
+            flex: 1;
+            min-height: 34px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0 12px;
+            border: 0;
+            border-radius: 999px;
+            background: transparent;
+            color: var(--text-muted);
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 800;
+            transition: background-color 0.18s ease, box-shadow 0.18s ease, color 0.18s ease;
+        }
+
+        #control-nav button:hover {
+            background: var(--accent-soft);
+            color: var(--accent-deep);
+        }
+
+        #control-nav button.is-active {
+            background: linear-gradient(135deg, rgba(14, 128, 106, 0.16), rgba(204, 143, 54, 0.16));
+            box-shadow: inset 0 0 0 1px rgba(14, 128, 106, 0.18);
+            color: var(--accent-deep);
+        }
+
+        #control-pages {
+            min-height: 0;
+        }
+
+        .control-page {
+            display: none;
+            animation: page-fade-in 0.18s ease both;
+        }
+
+        .control-page.is-active {
+            display: block;
+        }
+
+        @keyframes page-fade-in {
+            from {
+                opacity: 0;
+                transform: translateY(6px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .page-intro {
+            margin-bottom: 16px;
+            padding: 18px 20px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            background:
+                linear-gradient(135deg, rgba(255, 255, 255, 0.84), rgba(237, 246, 241, 0.72)),
+                var(--panel);
+            box-shadow: var(--shadow-soft);
+        }
+
+        .page-eyebrow {
+            color: var(--gold);
+            font-size: 11px;
+            font-weight: 900;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+        }
+
+        .page-title {
+            margin-top: 8px;
+            font-size: 20px;
+            font-weight: 900;
+            letter-spacing: -0.02em;
+        }
+
+        .page-copy {
+            margin-top: 8px;
+            max-width: 820px;
+            color: var(--text-muted);
+            font-size: 13px;
+            line-height: 1.7;
+        }
+
+        #control-overview {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 14px;
+        }
+
+        .overview-card {
+            min-height: 128px;
+            padding: 18px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            background:
+                linear-gradient(145deg, rgba(255, 255, 255, 0.9), rgba(255, 246, 232, 0.74)),
+                var(--panel);
+            box-shadow: var(--shadow-soft);
+            color: inherit;
+            cursor: pointer;
+            text-align: left;
+            transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+        }
+
+        .overview-card:hover {
+            transform: translateY(-2px);
+            border-color: rgba(14, 128, 106, 0.28);
+            box-shadow: var(--shadow);
+        }
+
+        .overview-kicker {
+            color: var(--gold);
+            font-size: 11px;
+            font-weight: 900;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+        }
+
+        .overview-title {
+            margin-top: 9px;
+            font-size: 18px;
+            font-weight: 900;
+        }
+
+        .overview-copy {
+            margin-top: 7px;
+            color: var(--text-muted);
+            font-size: 12px;
+            line-height: 1.55;
+        }
+
+        .section-grid {
+            display: grid;
+            grid-template-columns: repeat(12, minmax(0, 1fr));
+            gap: 16px;
+        }
+
+        .section-grid > .panel-section {
+            grid-column: span 4;
+        }
+
+        .control-page[data-control-page="appearance"] .section-display,
+        .control-page[data-control-page="appearance"] .section-character {
+            grid-column: span 6;
+        }
+
+        .control-page[data-control-page="appearance"] .section-dialogue,
+        .control-page[data-control-page="agent"] .section-permissions,
+        .control-page[data-control-page="model"] .section-model,
+        .control-page[data-control-page="voice"] .section-speech,
+        .control-page[data-control-page="advanced"] .section-runtime {
+            grid-column: span 12 !important;
+        }
+
+        .control-page[data-control-page="model"] .section-email {
+            grid-column: span 12;
+        }
+
+        .section-display { order: 10; }
+        .section-character { order: 20; }
+        .section-permissions { order: 30; }
+        .section-model {
+            order: 40;
+            grid-column: span 8 !important;
+        }
+        .section-speech { order: 50; }
+        .section-email { order: 60; }
+        .section-dialogue { order: 70; }
+        .section-runtime { order: 80; }
+
+        .panel-section {
+            border-radius: var(--radius-lg);
+            background: var(--panel);
+            border-color: var(--border);
+            box-shadow: var(--shadow-soft);
+        }
+
+        .section-head {
+            padding: 17px 18px 13px;
+            background:
+                linear-gradient(120deg, rgba(255, 248, 236, 0.96), rgba(237, 246, 241, 0.82));
+            border-bottom-color: var(--border);
+        }
+
+        .section-title {
+            font-size: 16px;
+            font-weight: 900;
+            letter-spacing: -0.01em;
+        }
+
+        .section-copy {
+            color: var(--text-muted);
+        }
+
+        .section-body {
+            padding: 16px 18px 18px;
+        }
+
+        .field {
+            gap: 8px;
+        }
+
+        .field.inline,
+        .toggle-row,
+        .field:has(> .field-meta + .field-help:not(:empty)):not(:has(input)):not(:has(select)) {
+            padding: 12px;
+            border: 1px solid rgba(58, 47, 35, 0.08);
+            border-radius: var(--radius-md);
+            background: rgba(255, 255, 255, 0.52);
+        }
+
+        .field-meta {
+            align-items: flex-start;
+        }
+
+        .field-label {
+            font-size: 13px;
+            font-weight: 900;
+        }
+
+        .field-help {
+            color: var(--text-muted);
+        }
+
+        .field-value {
+            color: var(--accent-deep);
+        }
+
+        input[type="text"],
+        input[type="password"],
+        input[type="number"],
+        input[type="search"],
+        select {
+            min-height: 42px;
+            border-radius: 13px;
+            border-color: rgba(58, 47, 35, 0.16);
+            background: rgba(255, 255, 255, 0.84);
+        }
+
+        input[type="text"]:focus,
+        input[type="password"]:focus,
+        input[type="number"]:focus,
+        input[type="search"]:focus,
+        select:focus {
+            border-color: rgba(14, 128, 106, 0.48);
+            box-shadow: 0 0 0 4px rgba(14, 128, 106, 0.12);
+        }
+
+        .ghost-btn,
+        .primary-btn,
+        .danger-btn {
+            border-radius: 999px;
+            font-weight: 900;
+        }
+
+        .primary-btn {
+            background: linear-gradient(135deg, var(--accent), var(--accent-deep));
+            border-color: transparent;
+            box-shadow: 0 10px 20px rgba(14, 128, 106, 0.18);
+        }
+
+        .primary-btn:hover:enabled {
+            background: linear-gradient(135deg, #11947a, #076453);
+        }
+
+        .ghost-btn {
+            background: rgba(255, 255, 255, 0.72);
+        }
+
+        .danger-btn {
+            background: rgba(181, 87, 49, 0.09);
+        }
+
+        .advanced-section {
+            border-radius: var(--radius-md);
+            border-color: rgba(58, 47, 35, 0.1);
+            background: rgba(255, 255, 255, 0.42);
+        }
+
+        .advanced-section summary {
+            display: flex;
+            align-items: center;
+            min-height: 44px;
+            padding: 12px 14px;
+            color: #4e473f;
+            font-weight: 900;
+        }
+
+        .advanced-panel {
+            box-shadow: none;
+            background: transparent;
+            border-color: transparent;
+        }
+
+        .advanced-panel .advanced-section {
+            background: rgba(255, 252, 246, 0.62);
+            border-style: dashed;
+        }
+
+        .model-console {
+            display: grid;
+            gap: 18px;
+        }
+
+        .model-status-board {
+            display: grid;
+            grid-template-columns: minmax(0, 1.05fr) minmax(0, 1.35fr);
+            gap: 14px;
+            padding: 16px;
+            border: 1px solid rgba(14, 128, 106, 0.16);
+            border-radius: 22px;
+            background:
+                radial-gradient(circle at top left, rgba(14, 128, 106, 0.18), transparent 38%),
+                linear-gradient(135deg, rgba(255, 252, 246, 0.9), rgba(244, 250, 247, 0.78));
+        }
+
+        .model-status-main {
+            display: grid;
+            align-content: center;
+            gap: 8px;
+            min-height: 142px;
+        }
+
+        .model-status-kicker,
+        .runtime-kicker {
+            color: #0d6f5e;
+            font-size: 11px;
+            font-weight: 950;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+        }
+
+        .model-status-title {
+            color: #26221d;
+            font-size: clamp(22px, 3vw, 32px);
+            font-weight: 950;
+            letter-spacing: -0.04em;
+            line-height: 1.05;
+        }
+
+        .model-status-copy {
+            max-width: 560px;
+            color: #665d53;
+            font-size: 13px;
+            font-weight: 700;
+            line-height: 1.65;
+        }
+
+        .model-status-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 10px;
+        }
+
+        .model-status-cell {
+            min-height: 76px;
+            padding: 12px;
+            border: 1px solid rgba(58, 47, 35, 0.08);
+            border-radius: 16px;
+            background: rgba(255, 255, 255, 0.62);
+        }
+
+        .model-status-label {
+            margin-bottom: 5px;
+            color: #81776b;
+            font-size: 11px;
+            font-weight: 900;
+        }
+
+        .model-status-value {
+            color: #332d26;
+            font-size: 13px;
+            font-weight: 900;
+            line-height: 1.45;
+            overflow-wrap: anywhere;
+        }
+
+        .model-next-step {
+            grid-column: 1 / -1;
+            border-color: rgba(185, 144, 63, 0.2);
+            background: rgba(255, 248, 230, 0.72);
+        }
+
+        .model-choice-grid {
+            display: grid;
+            grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+            gap: 12px;
+        }
+
+        .model-field-card {
+            padding: 14px;
+            border: 1px solid rgba(58, 47, 35, 0.08);
+            border-radius: 18px;
+            background: rgba(255, 255, 255, 0.62);
+        }
+
+        .runtime-shell {
+            display: grid;
+            gap: 14px;
+        }
+
+        .runtime-header {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: 12px;
+            align-items: center;
+        }
+
+        .runtime-title {
+            color: #2f2a25;
+            font-size: 18px;
+            font-weight: 950;
+            letter-spacing: -0.02em;
+        }
+
+        .runtime-copy {
+            margin-top: 4px;
+            color: #70675d;
+            font-size: 12px;
+            font-weight: 700;
+            line-height: 1.55;
+        }
+
+        .runtime-stepper {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .runtime-step {
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
+            padding: 7px 10px;
+            border-radius: 999px;
+            background: rgba(14, 128, 106, 0.1);
+            color: #145e51;
+            font-size: 12px;
+            font-weight: 950;
+            white-space: nowrap;
+        }
+
+        .runtime-step strong {
+            display: inline-grid;
+            place-items: center;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: rgba(14, 128, 106, 0.16);
+        }
+
+        .local-llm-runtime-panel {
+            border-color: rgba(14, 128, 106, 0.16) !important;
+            background:
+                linear-gradient(135deg, rgba(14, 128, 106, 0.08), rgba(185, 144, 63, 0.08)),
+                rgba(255, 255, 255, 0.56) !important;
+        }
+
+        .local-voice-runtime-panel {
+            padding: 16px;
+            border: 1px solid rgba(14, 128, 106, 0.16);
+            border-radius: var(--radius-md);
+            background: rgba(255, 255, 255, 0.68);
+        }
+
+        .runtime-path-row {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: 10px;
+            align-items: end;
+        }
+
+        .runtime-path-row .field {
+            margin: 0;
+        }
+
+        .runtime-log {
+            white-space: pre-wrap;
+            max-height: 180px;
+            overflow: auto;
+            padding: 12px;
+            border: 1px solid rgba(58, 47, 35, 0.08);
+            border-radius: 14px;
+            background: rgba(42, 36, 30, 0.92);
+            color: #f6efe4;
+            font-family: "Cascadia Mono", "Consolas", monospace;
+            font-size: 11px;
+            line-height: 1.55;
+        }
+
+        .local-llm-provider-panel {
+            display: grid;
+            gap: 14px;
+            padding: 12px;
+            border: 1px solid rgba(58, 47, 35, 0.08);
+            border-radius: var(--radius-md);
+            background: rgba(255, 255, 255, 0.56);
+        }
+
+        .ollama-target-summary {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: 12px;
+            align-items: center;
+            padding: 14px;
+            border: 1px solid rgba(14, 128, 106, 0.16);
+            border-radius: 18px;
+            background:
+                linear-gradient(135deg, rgba(14, 128, 106, 0.1), rgba(37, 99, 235, 0.07)),
+                rgba(255, 255, 255, 0.82);
+        }
+
+        .ollama-target-model {
+            margin-top: 3px;
+            color: #122f2a;
+            font-size: 19px;
+            font-weight: 950;
+            letter-spacing: -0.02em;
+            overflow-wrap: anywhere;
+        }
+
+        .ollama-mode-selector {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 10px;
+        }
+
+        .ollama-mode-btn {
+            display: grid;
+            gap: 5px;
+            min-height: 86px;
+            padding: 13px;
+            border: 1px solid rgba(58, 47, 35, 0.1);
+            border-radius: 18px;
+            background: rgba(255, 255, 255, 0.72);
+            color: #40382f;
+            text-align: left;
+            cursor: pointer;
+        }
+
+        .ollama-mode-btn strong {
+            font-size: 14px;
+            font-weight: 950;
+        }
+
+        .ollama-mode-btn span {
+            color: #70675d;
+            font-size: 12px;
+            font-weight: 700;
+            line-height: 1.4;
+        }
+
+        .ollama-mode-btn.is-active {
+            border-color: rgba(14, 128, 106, 0.36);
+            background:
+                linear-gradient(135deg, rgba(14, 128, 106, 0.16), rgba(37, 99, 235, 0.08)),
+                #ffffff;
+            box-shadow: 0 12px 24px rgba(14, 128, 106, 0.12);
+        }
+
+        .ollama-mode-btn.is-active span {
+            color: #145e51;
+        }
+
+        .ollama-mode-section {
+            padding: 14px;
+            border: 1px solid rgba(58, 47, 35, 0.08);
+            border-radius: 18px;
+            background: rgba(255, 255, 255, 0.72);
+        }
+
+        .asset-pack-card,
+        .memory-block {
+            border-radius: var(--radius-md);
+            background: rgba(255, 255, 255, 0.6);
+        }
+
+        .asset-pack-card.is-active {
+            border-color: rgba(14, 128, 106, 0.34);
+            background: rgba(14, 128, 106, 0.09);
+        }
+
+        .runtime-diagnostics {
+            display: grid;
+            gap: 12px;
+            color: #40382f;
+        }
+
+        .runtime-outcome {
+            display: grid;
+            gap: 7px;
+            padding: 14px;
+            border: 1px solid rgba(58, 47, 35, 0.1);
+            border-radius: 16px;
+            background: rgba(255, 255, 255, 0.64);
+        }
+
+        .runtime-outcome.is-ready {
+            border-color: rgba(14, 128, 106, 0.22);
+            background: rgba(14, 128, 106, 0.09);
+        }
+
+        .runtime-outcome.is-running {
+            border-color: rgba(185, 144, 63, 0.22);
+            background: rgba(255, 248, 230, 0.72);
+        }
+
+        .runtime-outcome.is-blocked,
+        .runtime-outcome.is-failed {
+            border-color: rgba(181, 87, 49, 0.22);
+            background: rgba(181, 87, 49, 0.08);
+        }
+
+        .runtime-outcome-title {
+            color: #2f2a25;
+            font-size: 17px;
+            font-weight: 950;
+            letter-spacing: -0.02em;
+        }
+
+        .runtime-outcome-copy {
+            color: #6b6257;
+            font-size: 12px;
+            font-weight: 750;
+            line-height: 1.6;
+        }
+
+        .runtime-component-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+            gap: 8px;
+        }
+
+        .runtime-component {
+            display: grid;
+            gap: 7px;
+            padding: 10px 11px;
+            border: 1px solid rgba(58, 47, 35, 0.1);
+            border-radius: 14px;
+            background: rgba(255, 255, 255, 0.58);
+        }
+
+        .runtime-component.is-ready {
+            border-color: rgba(14, 128, 106, 0.22);
+            background: rgba(14, 128, 106, 0.08);
+        }
+
+        .runtime-component.is-running {
+            border-color: rgba(185, 144, 63, 0.24);
+            background: rgba(255, 248, 230, 0.76);
+        }
+
+        .runtime-component.is-blocked,
+        .runtime-component.is-failed {
+            border-color: rgba(181, 87, 49, 0.22);
+            background: rgba(181, 87, 49, 0.08);
+        }
+
+        .runtime-component-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+        }
+
+        .runtime-component-title {
+            color: #2f2a25;
+            font-size: 12px;
+            font-weight: 950;
+        }
+
+        .runtime-component-badge {
+            padding: 4px 7px;
+            border-radius: 999px;
+            background: rgba(58, 47, 35, 0.08);
+            color: #5f554a;
+            font-size: 10px;
+            font-weight: 950;
+            white-space: nowrap;
+        }
+
+        .runtime-component-copy {
+            color: #70675d;
+            font-size: 11px;
+            font-weight: 700;
+            line-height: 1.5;
+        }
+
+        .runtime-section {
+            display: grid;
+            gap: 8px;
+        }
+
+        .runtime-section-title {
+            color: #756b5f;
+            font-size: 11px;
+            font-weight: 950;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+
+        .runtime-list {
+            display: grid;
+            gap: 7px;
+            margin: 0;
+            padding: 0;
+            list-style: none;
+        }
+
+        .runtime-list li {
+            padding: 9px 10px;
+            border: 1px solid rgba(58, 47, 35, 0.08);
+            border-radius: 12px;
+            background: rgba(255, 252, 246, 0.72);
+            color: #4c443b;
+            font-size: 12px;
+            font-weight: 760;
+            line-height: 1.55;
+        }
+
+        .runtime-list.is-action li {
+            border-color: rgba(14, 128, 106, 0.14);
+            background: rgba(14, 128, 106, 0.07);
+        }
+
+        .runtime-detail-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 8px;
+        }
+
+        .runtime-detail {
+            padding: 9px 10px;
+            border: 1px solid rgba(58, 47, 35, 0.08);
+            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.56);
+            overflow-wrap: anywhere;
+        }
+
+        .runtime-detail-label {
+            margin-bottom: 3px;
+            color: #81776b;
+            font-size: 10px;
+            font-weight: 950;
+        }
+
+        .runtime-detail-value {
+            color: #332d26;
+            font-size: 12px;
+            font-weight: 850;
+            line-height: 1.45;
+        }
+
+        .dialogue-preview-stage {
+            border-radius: var(--radius-md);
+        }
+
+        #footer-bar {
+            left: 18px;
+            right: 30px;
+            bottom: 14px;
+            padding: 12px 14px 12px 18px;
+            border: 1px solid var(--border);
+            border-radius: 999px;
+            background: rgba(255, 252, 246, 0.9);
+            box-shadow: var(--shadow);
+        }
+
+        #status-text {
+            color: #5f584f;
+            font-weight: 700;
+        }
+
+        @media (max-width: 1180px) {
+            #control-overview {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+
+            .model-status-board,
+            .model-choice-grid,
+            .ollama-mode-selector,
+            .runtime-path-row,
+            .runtime-header {
+                grid-template-columns: 1fr;
+            }
+
+            .ollama-target-summary {
+                grid-template-columns: 1fr;
+            }
+
+            .section-grid > .panel-section {
+                grid-column: span 6;
+            }
+
+            .section-model {
+                grid-column: span 12 !important;
+            }
+        }
+
+        @media (max-width: 760px) {
+            .model-status-grid {
+                grid-template-columns: 1fr;
+            }
+
+            #header {
+                align-items: flex-start;
+                flex-direction: column;
+            }
+
+            #header-actions {
+                width: 100%;
+                justify-content: space-between;
+            }
+
+            #content {
+                padding: 14px 14px 132px;
+            }
+
+            #control-nav {
+                border-radius: var(--radius-md);
+                flex-wrap: wrap;
+            }
+
+            #control-nav button {
+                flex: 1 1 42%;
+            }
+
+            #control-overview,
+            .section-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .section-grid > .panel-section,
+            .section-model {
+                grid-column: 1 / -1 !important;
+            }
+
+            .split-2 {
+                grid-template-columns: 1fr;
+            }
+
+            #footer-bar {
+                left: 10px;
+                right: 10px;
+                border-radius: var(--radius-md);
+            }
+        }
+
     </style>
 </head>
 <body>
@@ -712,14 +1732,64 @@
                 <div id="subtitle">普通设置只保留日常会用到的选择；复杂参数收在高级设置里。保存后会立即同步到角色窗口和聊天窗。</div>
             </div>
             <div id="header-actions">
+                <label class="language-switch" for="ui-language">
+                    <span>语言</span>
+                    <select id="ui-language" aria-label="界面语言"></select>
+                </label>
                 <div class="pill"><strong id="app-version">v1.0.0</strong><span>桌面版</span></div>
                 <button id="close-btn" class="icon-btn" type="button" aria-label="关闭控制面板">×</button>
             </div>
         </header>
 
         <main id="content">
-            <div id="section-grid">
-                <section class="panel-section">
+            <nav id="control-nav" role="tablist" aria-label="控制面板页面">
+                <button id="tab-overview" class="is-active" type="button" role="tab" aria-selected="true" aria-controls="page-overview" data-control-page-target="overview">总览</button>
+                <button id="tab-appearance" type="button" role="tab" aria-selected="false" aria-controls="page-appearance" data-control-page-target="appearance">角色外观</button>
+                <button id="tab-agent" type="button" role="tab" aria-selected="false" aria-controls="page-agent" data-control-page-target="agent">任务能力</button>
+                <button id="tab-model" type="button" role="tab" aria-selected="false" aria-controls="page-model" data-control-page-target="model">模型账号</button>
+                <button id="tab-voice" type="button" role="tab" aria-selected="false" aria-controls="page-voice" data-control-page-target="voice">语音</button>
+                <button id="tab-advanced" type="button" role="tab" aria-selected="false" aria-controls="page-advanced" data-control-page-target="advanced">诊断</button>
+            </nav>
+
+            <div id="control-pages">
+                <section class="control-page is-active" id="page-overview" data-control-page="overview" role="tabpanel" aria-labelledby="tab-overview">
+                    <div class="page-intro">
+                        <div class="page-eyebrow">Control Room</div>
+                        <div class="page-title">选择一个工作区</div>
+                        <div class="page-copy">控制面板现在按页面拆开，顶部导航负责切换工作区；常用入口放在这里，避免所有模块挤在同一个长页面里。</div>
+                    </div>
+                    <section id="control-overview" aria-label="控制面板概览">
+                        <button class="overview-card" type="button" data-control-page-target="appearance">
+                            <div class="overview-kicker">Character</div>
+                            <div class="overview-title">角色体验</div>
+                            <div class="overview-copy">调整桌宠尺寸、渲染风格和本地人物包，日常只看这里就够。</div>
+                        </button>
+                        <button class="overview-card" type="button" data-control-page-target="model">
+                            <div class="overview-kicker">Brain</div>
+                            <div class="overview-title">模型账号</div>
+                            <div class="overview-copy">云端 Key、本地 Ollama、邮箱账号和连接测试收在同一个工作区。</div>
+                        </button>
+                        <button class="overview-card" type="button" data-control-page-target="voice">
+                            <div class="overview-kicker">Voice</div>
+                            <div class="overview-title">声音通道</div>
+                            <div class="overview-copy">先选语音路线和麦克风，高级音色参数默认安静收纳。</div>
+                        </button>
+                        <button class="overview-card" type="button" data-control-page-target="agent">
+                            <div class="overview-kicker">Agent</div>
+                            <div class="overview-title">任务调试</div>
+                            <div class="overview-copy">权限开关和 Agent Lab 单独成区，避免混进普通偏好设置。</div>
+                        </button>
+                    </section>
+                </section>
+
+                <section class="control-page" id="page-appearance" data-control-page="appearance" role="tabpanel" aria-labelledby="tab-appearance">
+                    <div class="page-intro">
+                        <div class="page-eyebrow">Character</div>
+                        <div class="page-title">角色外观</div>
+                        <div class="page-copy">桌宠大小、渲染风格、人物包和对话框校准集中在这里。高级参数默认折叠，避免日常配置被细节淹没。</div>
+                    </div>
+                    <div class="section-grid">
+                <section class="panel-section section-display" id="section-appearance">
                     <div class="section-head">
                         <div class="section-title">桌宠显示</div>
                         <div class="section-copy">只保留角色大小、渲染风格和任务栏显示，细节调参放在高级设置里。</div>
@@ -935,7 +2005,39 @@
                     </div>
                 </section>
 
-                <section class="panel-section advanced-panel">
+                <section class="panel-section section-character" id="section-character">
+                    <div class="section-head">
+                        <div class="section-title">我的人物</div>
+                        <div class="section-copy">本地安装人物包和皮肤包，面向 MIT 开源社区扩展；完全本地使用，适合社区自愿分享。</div>
+                    </div>
+                    <div class="section-body">
+                        <div class="field">
+                            <div class="field-meta">
+                                <span class="field-label">当前启用</span>
+                                <span class="field-value" id="character-active-type">默认</span>
+                            </div>
+                            <div class="field-help" id="character-active-summary">正在读取人物资产状态...</div>
+                        </div>
+
+                        <div class="field-actions">
+                            <button id="character-install-folder-btn" class="ghost-btn" type="button">安装本地包</button>
+                            <button id="character-install-sample-btn" class="ghost-btn" type="button">安装测试包</button>
+                            <button id="character-reset-active-btn" class="danger-btn" type="button">恢复默认人物</button>
+                        </div>
+
+                        <div class="field">
+                            <div class="field-meta">
+                                <span class="field-label">已安装人物包 / 皮肤包</span>
+                            </div>
+                            <div id="character-pack-list" class="asset-pack-list">
+                                <div class="field-help">还没有安装本地人物包。</div>
+                            </div>
+                            <div class="field-help" id="character-pack-root">安装目录读取中...</div>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="panel-section advanced-panel section-dialogue" id="section-dialogue">
                     <details class="advanced-section">
                         <summary>高级设置：人物对话框</summary>
                         <div class="section-body">
@@ -994,8 +2096,17 @@
                         </div>
                     </details>
                 </section>
+                    </div>
+                </section>
 
-                <section class="panel-section">
+                <section class="control-page" id="page-agent" data-control-page="agent" role="tabpanel" aria-labelledby="tab-agent">
+                    <div class="page-intro">
+                        <div class="page-eyebrow">Agent</div>
+                        <div class="page-title">任务能力</div>
+                        <div class="page-copy">这里放和任务执行有关的用户决策：对话模式、执行权限、Agent Lab。内部工具细节不塞进普通设置页。</div>
+                    </div>
+                    <div class="section-grid">
+                <section class="panel-section section-permissions" id="section-agent">
                     <div class="section-head">
                         <div class="section-title">任务权限</div>
                         <div class="section-copy">只保留用户需要决定的安全开关，内部实现细节不在控制面板展示。</div>
@@ -1026,71 +2137,186 @@
                         </div>
                     </div>
                 </section>
+                    </div>
+                </section>
 
-                <section class="panel-section">
+                <section class="control-page" id="page-model" data-control-page="model" role="tabpanel" aria-labelledby="tab-model">
+                    <div class="page-intro">
+                        <div class="page-eyebrow">Brain & Accounts</div>
+                        <div class="page-title">模型账号</div>
+                        <div class="page-copy">模型服务、本地 Ollama 部署入口、API Key 和邮箱账号集中在这里；需要联网或诊断的动作只在用户点击时触发。</div>
+                    </div>
+                    <div class="section-grid">
+                <section class="panel-section section-model" id="section-model">
                     <div class="section-head">
                         <div class="section-title">模型 API</div>
-                        <div class="section-copy">云端模型填写 Key；Ollama/vLLM 本地模型通常只需要服务地址和模型名。</div>
+                        <div class="section-copy">云端模型填写 Key；Ollama 本地模型通常只需要服务地址和模型名。</div>
                     </div>
-                    <div class="section-body">
-                        <label class="field">
+                    <div class="section-body model-console">
+                        <section class="model-status-board" aria-label="当前模型状态">
+                            <div class="model-status-main">
+                                <div class="model-status-kicker">Current Brain</div>
+                                <div class="model-status-title" id="model-active-summary">正在读取模型状态...</div>
+                                <div class="model-status-copy" id="model-active-subtitle">这里会显示 AILIS 当前准备使用的模型，以及是否还需要保存、部署或测试。</div>
+                            </div>
+                            <div class="model-status-grid">
+                                <div class="model-status-cell">
+                                    <div class="model-status-label">服务商</div>
+                                    <div class="model-status-value" id="model-active-provider">-</div>
+                                </div>
+                                <div class="model-status-cell">
+                                    <div class="model-status-label">模型 ID</div>
+                                    <div class="model-status-value" id="model-active-model">-</div>
+                                </div>
+                                <div class="model-status-cell">
+                                    <div class="model-status-label">连接地址</div>
+                                    <div class="model-status-value" id="model-active-base">-</div>
+                                </div>
+                                <div class="model-status-cell">
+                                    <div class="model-status-label">Key / 运行时</div>
+                                    <div class="model-status-value" id="model-active-key">-</div>
+                                </div>
+                                <div class="model-status-cell">
+                                    <div class="model-status-label">服务状态</div>
+                                    <div class="model-status-value" id="model-active-runtime">-</div>
+                                </div>
+                                <div class="model-status-cell model-next-step">
+                                    <div class="model-status-label">下一步</div>
+                                    <div class="model-status-value" id="model-active-next-step">选择服务商后，AILIS 会提示你下一步该做什么。</div>
+                                </div>
+                            </div>
+                        </section>
+
+                        <div class="model-choice-grid">
+                        <label class="field model-field-card">
                             <div class="field-meta">
                                 <span class="field-label">服务商</span>
                             </div>
                             <select id="llm-preset"></select>
-                            <div class="field-help" id="llm-preset-help">选择服务商后填写对应配置；本地 Ollama/vLLM 通常不需要 API Key。</div>
-                            <div class="field-help" id="llm-setup-help">本地模型：先启动 Ollama 或 vLLM 服务，再在这里选择对应预设。</div>
+                            <div class="field-help" id="llm-preset-help">选择服务商后填写对应配置；本地 Ollama 通常不需要 API Key。</div>
+                            <div class="field-help" id="llm-setup-help">本地模型：选择 Ollama 后，AILIS 会引导自动诊断、部署并启用。</div>
                         </label>
 
-                        <label class="field">
+                        <label class="field model-field-card" id="llm-model-card">
                             <div class="field-meta">
-                                <span class="field-label">模型</span>
+                                <span class="field-label" id="llm-model-label">模型</span>
                             </div>
                             <select id="llm-model-preset"></select>
-                            <div class="field-help">日常对话优先选低延迟模型；复杂任务再选更强的 Pro/Max/Sonnet 类模型。</div>
+                            <div class="field-help" id="llm-model-help">日常对话优先选低延迟模型；复杂任务再选更强的 Pro/Max/Sonnet 类模型。</div>
                         </label>
+                        </div>
 
-                        <div class="field" id="vllm-model-catalog-panel" hidden>
-                            <div class="field-meta">
-                                <span class="field-label">vLLM 开源模型目录</span>
-                                <button id="vllm-model-refresh-btn" class="ghost-btn" type="button">实时查找</button>
+                        <div class="field local-llm-runtime-panel" id="local-llm-runtime-panel" hidden>
+                            <div class="runtime-shell">
+                            <div class="runtime-header">
+                                <div>
+                                    <div class="runtime-kicker">Local Runtime</div>
+                                    <div class="runtime-title" id="local-llm-runtime-title">本地模型运行时</div>
+                                    <div class="runtime-copy" id="local-llm-runtime-copy">选择一种模型来源后，AILIS 会按该来源检查、部署并启用。</div>
+                                </div>
+                                <div class="runtime-stepper" aria-label="本地模型部署步骤">
+                                    <span class="runtime-step"><strong>1</strong>选择模型</span>
+                                    <span class="runtime-step"><strong>2</strong>自动部署服务</span>
+                                    <span class="runtime-step"><strong>3</strong>自动启用</span>
+                                </div>
                             </div>
-                            <div class="split-2">
-                                <label class="field">
-                                    <div class="field-meta">
-                                        <span class="field-label">来源</span>
+
+                            <div class="local-llm-provider-panel" id="ollama-runtime-panel" hidden>
+                                <div class="ollama-target-summary">
+                                    <div>
+                                        <div class="runtime-kicker">当前目标模型</div>
+                                        <div class="ollama-target-model" id="ollama-target-model">qwen2.5:1.5b</div>
+                                        <div class="runtime-copy" id="ollama-target-copy">先选择模型来源，再执行对应的本地操作。</div>
                                     </div>
-                                    <select id="vllm-model-source">
-                                        <option value="both">HF + 魔塔</option>
-                                        <option value="hf">Hugging Face</option>
-                                        <option value="modelscope">ModelScope 魔塔</option>
-                                    </select>
-                                </label>
-                                <label class="field">
+                                    <button id="ollama-runtime-check-btn" class="ghost-btn" type="button">诊断环境</button>
+                                </div>
+
+                                <div class="ollama-mode-selector" role="tablist" aria-label="Ollama 部署方式">
+                                    <button class="ollama-mode-btn" type="button" data-ollama-mode="installed">
+                                        <strong>已安装模型</strong>
+                                        <span>使用 ollama list 里已有的模型名</span>
+                                    </button>
+                                    <button class="ollama-mode-btn" type="button" data-ollama-mode="local">
+                                        <strong>导入本地文件</strong>
+                                        <span>选择 GGUF 文件或 HF 模型目录</span>
+                                    </button>
+                                    <button class="ollama-mode-btn" type="button" data-ollama-mode="online">
+                                        <strong>在线下载模型</strong>
+                                        <span>从 Ollama 官方库搜索并 pull</span>
+                                    </button>
+                                </div>
+
+                                <div class="field ollama-mode-section" id="ollama-installed-model-section">
                                     <div class="field-meta">
-                                        <span class="field-label">关键词</span>
+                                        <span class="field-label">已安装模型名</span>
+                                        <span class="field-actions">
+                                            <button id="ollama-installed-model-refresh-btn" class="ghost-btn" type="button">检查本机模型</button>
+                                            <button id="ollama-installed-model-use-btn" class="ghost-btn" type="button">使用此模型名</button>
+                                        </span>
                                     </div>
-                                    <input id="vllm-model-query" type="search" placeholder="例如 Qwen3、DeepSeek、Llama、Coder">
-                                </label>
+                                    <select id="ollama-installed-model-list"></select>
+                                    <input id="ollama-installed-model-id" type="text" placeholder="例如 qwen3.5:4b、llama3.2:1b，必须已经出现在 ollama list 里">
+                                    <div class="field-help" id="ollama-installed-model-status">适合已经能在 ollama list 里看到的模型；这个模式只检查和启用本机模型，不会联网下载。</div>
+                                </div>
+
+                                <div class="field ollama-mode-section" id="ollama-local-model-section">
+                                    <div class="field-meta">
+                                        <span class="field-label">本地模型文件或目录</span>
+                                        <span class="field-actions">
+                                            <button id="ollama-local-model-browse-btn" class="ghost-btn" type="button">选择本地模型</button>
+                                            <button id="ollama-local-model-use-btn" class="ghost-btn" type="button">使用此模型</button>
+                                            <button id="ollama-local-model-clear-btn" class="ghost-btn" type="button">清除</button>
+                                        </span>
+                                    </div>
+                                    <input id="ollama-local-model-path" type="text" placeholder="选择 .gguf 文件，或 HF / ModelScope Safetensors 模型目录">
+                                    <div class="field-help" id="ollama-local-model-status">AILIS 会检查路径、权重文件、模型仓库空间和 Ollama 版本；本地导入不会下载模型权重。</div>
+                                </div>
+                                <div class="field ollama-mode-section" id="ollama-online-model-section">
+                                    <div class="field-meta">
+                                        <span class="field-label">在线查找 Ollama 模型</span>
+                                        <span class="field-actions">
+                                            <button id="ollama-model-search-btn" class="ghost-btn" type="button">搜索模型</button>
+                                            <button id="ollama-model-use-btn" class="ghost-btn" type="button">使用选中模型</button>
+                                        </span>
+                                    </div>
+                                    <input id="ollama-model-query" type="text" placeholder="例如 Qwen3、Llama、DeepSeek、Coder">
+                                    <select id="ollama-model-catalog"></select>
+                                    <div class="field-help" id="ollama-model-catalog-status">本机没有合适模型时使用这里；选中后会联网下载到 Ollama 模型仓库。</div>
+                                </div>
+                                <div class="field ollama-mode-section" id="ollama-used-model-section">
+                                    <div class="field-meta">
+                                        <span class="field-label">最近使用模型</span>
+                                        <span class="field-actions">
+                                            <button id="ollama-used-model-use-btn" class="ghost-btn" type="button">使用选中模型</button>
+                                        </span>
+                                    </div>
+                                    <select id="ollama-used-model-list"></select>
+                                    <div class="field-help" id="ollama-used-model-status">AILIS 会记住成功启用或保存过的 Ollama 模型，重启后也能快速切回。</div>
+                                </div>
+                                <div class="field">
+                                    <div class="field-meta">
+                                        <span class="field-label">Ollama 本地服务</span>
+                                        <span class="field-actions">
+                                            <button id="ollama-runtime-deploy-btn" class="primary-btn" type="button">启用模型</button>
+                                            <button id="ollama-runtime-cancel-btn" class="ghost-btn" type="button" disabled>取消</button>
+                                        </span>
+                                    </div>
+                                    <div class="field-help" id="ollama-runtime-status">AILIS 会按当前模型来源执行：已安装模型只连接和启用；本地文件只导入；在线模型才下载。</div>
+                                    <pre class="field-help" id="ollama-runtime-log" style="white-space: pre-wrap; max-height: 140px; overflow: auto;"></pre>
+                                </div>
                             </div>
-                            <div class="field-meta">
-                                <select id="vllm-model-catalog"></select>
-                                <button id="vllm-model-apply-btn" class="ghost-btn" type="button">使用选中模型</button>
-                                <button id="vllm-runtime-diagnose-btn" class="ghost-btn" type="button">诊断环境</button>
-                                <button id="vllm-runtime-deploy-btn" class="primary-btn" type="button">自动配置并部署</button>
-                                <button id="vllm-runtime-cancel-btn" class="ghost-btn" type="button" disabled>取消部署</button>
+
                             </div>
-                            <div class="field-help" id="vllm-model-catalog-status">选择 vLLM 后可从 Hugging Face / ModelScope 实时查找最新开源模型。</div>
-                            <div class="field-help" id="vllm-runtime-status">vLLM 本地运行时尚未诊断。</div>
-                            <pre class="field-help" id="vllm-runtime-log" style="white-space: pre-wrap; max-height: 160px; overflow: auto;"></pre>
                         </div>
 
                         <label class="field">
                             <div class="field-meta">
                                 <span class="field-label">API Key</span>
-                                <button id="clear-llm-key-btn" class="ghost-btn" type="button">清除 Key</button>
+                                <button id="clear-llm-key-btn" class="ghost-btn" type="button">移除当前 Key</button>
                             </div>
-                            <input id="llm-api-key" type="password" autocomplete="off" placeholder="本地可留空；云端留空表示保留已保存 Key">
+                            <select id="llm-api-key-select"></select>
+                            <input id="llm-api-key-label" type="text" autocomplete="off" placeholder="Key 名称，可选：例如 DeepSeek 主 Key、OpenAI 备用 Key">
+                            <input id="llm-api-key" type="password" autocomplete="off" placeholder="粘贴新 Key 后保存；留空则使用上方选中的已保存 Key">
                             <div class="field-help" id="llm-key-state">Key 状态读取中...</div>
                         </label>
 
@@ -1103,7 +2329,7 @@
                         </div>
 
                         <details class="advanced-section">
-                            <summary>高级模型参数</summary>
+                            <summary>高级：手动覆盖 Provider / API Base / 模型 ID</summary>
                             <div class="section-body">
                         <label class="field">
                             <div class="field-meta">
@@ -1153,7 +2379,7 @@
                     </div>
                 </section>
 
-                <section class="panel-section">
+                <section class="panel-section section-email" id="section-email">
                     <div class="section-head">
                         <div class="section-title">邮箱账号</div>
                         <div class="section-copy">邮件工具会优先使用这里保存的本机账号配置。QQ 使用邮箱授权码，Gmail/Outlook 可用应用密码或 OAuth2 token。</div>
@@ -1211,8 +2437,17 @@
                         </div>
                     </div>
                 </section>
+                    </div>
+                </section>
 
-                <section class="panel-section">
+                <section class="control-page" id="page-voice" data-control-page="voice" role="tabpanel" aria-labelledby="tab-voice">
+                    <div class="page-intro">
+                        <div class="page-eyebrow">Voice</div>
+                        <div class="page-title">语音与麦克风</div>
+                        <div class="page-copy">语音输出、ElevenLabs、CosyVoice、本地 ASR 和麦克风设置集中在这里；诊断和修复仍然保持用户主动触发。</div>
+                    </div>
+                    <div class="section-grid">
+                <section class="panel-section section-speech" id="section-voice">
                     <div class="section-head">
                         <div class="section-title">语音与麦克风</div>
                         <div class="section-copy">普通用户只需要选择语音路线、麦克风和 ASR 模式；音频细节放在高级设置里。</div>
@@ -1265,6 +2500,7 @@
                                     <option value="zh">中文温柔二次元</option>
                                     <option value="en">English gentle anime</option>
                                     <option value="ja">日本語やさしいアニメ</option>
+                                    <option value="ko">한국어 gentle anime</option>
                                 </select>
                                 <div class="field-help">切换语言会套用对应的高质量 ElevenLabs 参数。</div>
                             </label>
@@ -1357,16 +2593,46 @@
                             <div class="field-help">快速 ASR 会更早收尾并优先低延迟；自动 ASR 会持续监听，并先做人声/噪音门禁。</div>
                         </label>
 
-                        <div class="field">
-                            <div class="field-meta">
-                                <span class="field-label">本地语音运行时</span>
-                                <span>
-                                    <button id="voice-runtime-diagnose-btn" class="ghost-btn" type="button">诊断</button>
-                                    <button id="voice-runtime-bootstrap-btn" class="ghost-btn" type="button">一键修复</button>
-                                </span>
+                        <div class="field local-voice-runtime-panel">
+                            <div class="runtime-header">
+                                <div>
+                                    <div class="runtime-title">CosyVoice3 本地语音</div>
+                                    <div class="runtime-copy">选择安装位置后，AILIS 会自动检查、安装并复用本地语音运行时。</div>
+                                </div>
+                                <div class="field-actions">
+                                    <button id="voice-runtime-diagnose-btn" class="ghost-btn" type="button">检查</button>
+                                    <button id="voice-runtime-bootstrap-btn" class="primary-btn" type="button">安装并启用</button>
+                                </div>
                             </div>
-                            <div class="field-help" id="voice-runtime-status">本地语音运行时尚未诊断。</div>
+                            <div class="runtime-path-row">
+                                <label class="field">
+                                    <div class="field-meta">
+                                        <span class="field-label">安装位置</span>
+                                    </div>
+                                    <input id="voice-runtime-root" type="text" placeholder="默认使用 AILIS 根目录 models/voice-runtime">
+                                </label>
+                                <button id="voice-runtime-browse-btn" class="ghost-btn" type="button">选择目录</button>
+                            </div>
+                            <div class="field-help" id="voice-runtime-path-help">源码、模型、Python 和 ASR 缓存都会放在这里；保存后重启会继续使用。</div>
+                            <div id="voice-runtime-status" class="runtime-diagnostics">尚未检查本地语音。</div>
                             <div class="field-help" id="voice-runtime-plan"></div>
+                            <pre class="runtime-log" id="voice-runtime-log" hidden></pre>
+                        </div>
+
+                        <div class="field local-voice-runtime-panel" id="runtime-components-panel">
+                            <div class="runtime-header">
+                                <div>
+                                    <div class="runtime-title">安装包可选运行时</div>
+                                    <div class="runtime-copy">安装器里选择的 Python、CosyVoice3、ASR、Web/Search 会在这里继续安装、导入或验证。</div>
+                                </div>
+                                <div class="field-actions">
+                                    <button id="runtime-components-refresh-btn" class="ghost-btn" type="button">检查</button>
+                                    <button id="runtime-components-install-btn" class="primary-btn" type="button">安装已选组件</button>
+                                </div>
+                            </div>
+                            <div id="runtime-components-status" class="runtime-diagnostics">运行时组件状态读取中...</div>
+                            <div class="field-help" id="runtime-components-plan"></div>
+                            <pre class="runtime-log" id="runtime-components-log" hidden></pre>
                         </div>
 
                         <details class="advanced-section">
@@ -1399,8 +2665,17 @@
                         </details>
                     </div>
                 </section>
+                    </div>
+                </section>
 
-                <section class="panel-section advanced-panel">
+                <section class="control-page" id="page-advanced" data-control-page="advanced" role="tabpanel" aria-labelledby="tab-advanced">
+                    <div class="page-intro">
+                        <div class="page-eyebrow">Diagnostics</div>
+                        <div class="page-title">诊断与状态</div>
+                        <div class="page-copy">运行状态、工具状态、记忆目录和低频维护入口放在这里，避免它们拖慢或干扰首屏常用设置。</div>
+                    </div>
+                    <div class="section-grid">
+                <section class="panel-section advanced-panel section-runtime" id="section-advanced">
                     <details class="advanced-section">
                         <summary>高级设置：运行状态与记忆目录</summary>
                         <div class="section-body">
@@ -1420,8 +2695,8 @@
                                 <div class="field-meta">
                                     <span class="field-label">运行状态</span>
                                 </div>
-                                <div class="field-help" id="openclaw-status-text">状态读取中...</div>
-                                <div class="field-help" id="openclaw-runtime-text"></div>
+                                <div class="field-help" id="agent-runtime-status-text">状态读取中...</div>
+                                <div class="field-help" id="agent-runtime-detail-text"></div>
                             </div>
 
                             <div class="field">
@@ -1447,6 +2722,8 @@
                             </div>
                         </div>
                     </details>
+                </section>
+                    </div>
                 </section>
 
             </div>

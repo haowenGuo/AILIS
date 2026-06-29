@@ -28,6 +28,7 @@ const DEFAULT_RENDER_SHADOW_QUALITY = 3;
 const DEFAULT_RENDER_OUTLINE_ENABLED = true;
 const DEFAULT_RENDER_ANTIALIAS_ENABLED = true;
 const RENDER_FPS_LIMIT_OPTIONS = [24, 30, 45, 60];
+const DEFAULT_MODEL_PATH = getDesktopResourceUrl('Resources/AILIS.vrm');
 
 function normalizeBackendBaseUrl(value, fallbackValue = DEFAULT_BACKEND_BASE_URL) {
     const normalizedValue = String(value || '').trim().replace(/\/+$/, '');
@@ -245,9 +246,18 @@ function applyDesktopSpeechSettings(preferences = {}) {
 }
 
 function applyRenderProfileSettings(preferences = {}) {
+    const characterRenderProfileId = preferences.characterAssets?.effective?.renderProfileId;
     CONFIG.RENDER_PROFILE_ID = normalizeRenderProfileId(
-        preferences.renderProfileId || CONFIG.RENDER_PROFILE_ID || DEFAULT_RENDER_PROFILE_ID
+        characterRenderProfileId ||
+            preferences.renderProfileId ||
+            CONFIG.RENDER_PROFILE_ID ||
+            DEFAULT_RENDER_PROFILE_ID
     );
+}
+
+function applyCharacterAssetSettings(preferences = {}) {
+    const effectiveCharacter = preferences.characterAssets?.effective || {};
+    CONFIG.MODEL_PATH = effectiveCharacter.modelUrl || DEFAULT_MODEL_PATH;
 }
 
 function applyRenderLookSettings(preferences = {}) {
@@ -330,7 +340,7 @@ function applyAutoChatSettings(preferences = {}) {
 const runtimeSettings = getRuntimeSettings();
 
 export const CONFIG = {
-    MODEL_PATH: getDesktopResourceUrl('Resources/AILIS.vrm'),
+    MODEL_PATH: DEFAULT_MODEL_PATH,
     ANIMATION_FILES: getDesktopLoadableMotionFiles(),
     IDLE_ACTION_LIST: ['idle', 'idle1', 'idle2'],
     DANCE_ACTION_LIST: ['vrma17', 'vrma25'],
@@ -444,6 +454,7 @@ export function applyDesktopPreferencesToConfig(preferences = {}) {
     }
 
     applyCameraSettings(preferences);
+    applyCharacterAssetSettings(preferences);
     applyRenderProfileSettings(preferences);
     applyRenderQualitySettings(preferences);
     applyRenderLookSettings(preferences);

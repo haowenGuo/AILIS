@@ -29,6 +29,9 @@ const {
     extractYahooResults,
     githubRepoRead,
     inferPaperMetadataArgsFromScholarlyQuery,
+    loadManagedSearxngManifest,
+    managedSearxngAllowedForSearch,
+    managedSearxngPortCandidates,
     normalizeSearchBackends,
     paperMetadataLookup,
     parseGitHubRepoRef,
@@ -107,13 +110,18 @@ test('AILIS research MCP exposes Codex-aligned PDF/file tools', () => {
     assert.ok(searchTool.inputSchema.properties.backends);
     assert.ok(searchTool.inputSchema.properties.provider);
     assert.ok(searchTool.inputSchema.properties.searxngUrl);
+    assert.ok(searchTool.inputSchema.properties.disableManagedSearxng);
+    assert.ok(searchTool.inputSchema.properties.managedSearxngManifest);
+    assert.ok(searchTool.inputSchema.properties.managedSearxngPort);
     assert.ok(searchTool.inputSchema.properties.exact_keywords);
     assert.ok(searchTool.inputSchema.properties.exactKeywords);
     assert.ok(searchTool.inputSchema.properties.backends.items.enum.includes('duckduckgo_html'));
     assert.ok(searchTool.inputSchema.properties.backends.items.enum.includes('github_repositories'));
     assert.ok(searchTool.inputSchema.properties.backends.items.enum.includes('searxng_json'));
     assert.ok(searchTool.inputSchema.properties.backends.items.enum.includes('firecrawl_search'));
+    assert.ok(searchTool.inputSchema.properties.backends.items.enum.includes('python_search'));
     assert.ok(searchTool.description.includes('managed search backends'));
+    assert.ok(searchTool.description.includes('automatically'));
     assert.ok(searchTool.description.includes('AILIS_SEARXNG_URL'));
     assert.ok(fetchTool.inputSchema.properties.extract_query);
     assert.ok(fetchTool.inputSchema.properties.extractQuery);
@@ -831,20 +839,36 @@ test('web_search can parse GitHub repository API fallback results', () => {
     );
 });
 
-test('web_search chooses provider chain while keeping GitHub backend first for repository queries', () => {
+test('web_search auto chain uses no-Docker Python search while skipping unconfigured local JSON services', () => {
     const previousProvider = process.env.AILIS_WEB_SEARCH_PROVIDER;
+    const previousSearxng = process.env.AILIS_SEARXNG_URL;
+    const previousFirecrawl = process.env.AILIS_FIRECRAWL_URL;
     delete process.env.AILIS_WEB_SEARCH_PROVIDER;
+    delete process.env.AILIS_SEARXNG_URL;
+    delete process.env.AILIS_FIRECRAWL_URL;
     try {
         const githubBackends = normalizeSearchBackends({}, 'site:github.com Attention Is All You Need implementation').map((backend) => backend.id);
         assert.equal(githubBackends[0], 'github_repositories');
-        assert.equal(githubBackends[1], 'searxng_json');
-        assert.ok(githubBackends.includes('firecrawl_search'));
+        assert.equal(githubBackends[1], 'python_search');
+        assert.ok(!githubBackends.includes('searxng_json'));
+        assert.ok(!githubBackends.includes('firecrawl_search'));
+        assert.ok(githubBackends.includes('bing_html'));
         assert.ok(githubBackends.includes('duckduckgo_lite'));
 
         const generalBackends = normalizeSearchBackends({}, 'Playwright locator waitFor official docs').map((backend) => backend.id);
-        assert.equal(generalBackends[0], 'searxng_json');
-        assert.equal(generalBackends[1], 'firecrawl_search');
+        assert.equal(generalBackends[0], 'python_search');
+        assert.ok(!generalBackends.includes('searxng_json'));
+        assert.ok(!generalBackends.includes('firecrawl_search'));
         assert.ok(generalBackends.includes('bing_html'));
+
+        const configuredBackends = normalizeSearchBackends({
+            searxngUrl: 'http://127.0.0.1:18080',
+            firecrawlUrl: 'http://127.0.0.1:13002'
+        }, 'Playwright locator waitFor official docs').map((backend) => backend.id);
+        assert.equal(configuredBackends[0], 'searxng_json');
+        assert.equal(configuredBackends[1], 'firecrawl_search');
+        assert.equal(configuredBackends[2], 'python_search');
+        assert.ok(configuredBackends.includes('bing_html'));
 
         const htmlBackends = normalizeSearchBackends({ provider: 'html' }, 'Playwright locator waitFor official docs').map((backend) => backend.id);
         assert.deepEqual(htmlBackends, ['bing_html', 'duckduckgo_lite', 'duckduckgo_html', 'yahoo_html']);
@@ -854,7 +878,98 @@ test('web_search chooses provider chain while keeping GitHub backend first for r
         } else {
             process.env.AILIS_WEB_SEARCH_PROVIDER = previousProvider;
         }
+        if (previousSearxng === undefined) {
+            delete process.env.AILIS_SEARXNG_URL;
+        } else {
+            process.env.AILIS_SEARXNG_URL = previousSearxng;
+        }
+        if (previousFirecrawl === undefined) {
+            delete process.env.AILIS_FIRECRAWL_URL;
+        } else {
+            process.env.AILIS_FIRECRAWL_URL = previousFirecrawl;
+        }
     }
+});
+
+test('managed SearXNG manifest is resolved without requiring a user URL', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ailis-managed-searxng-'));
+    const configDir = path.join(tempDir, 'searxng-config');
+    fs.mkdirSync(configDir, { recursive: true });
+    fs.writeFileSync(path.join(configDir, 'settings.yml'), 'use_default_settings: true\n', 'utf8');
+    const manifestPath = path.join(tempDir, 'managed-searxng.json');
+    fs.writeFileSync(manifestPath, JSON.stringify({
+        python: process.execPath,
+        args: ['-e', ''],
+        cwd: '.',
+        settingsPath: 'searxng-config/settings.yml',
+        defaultPort: 18889,
+        bindAddress: '127.0.0.1',
+        env: {
+            SEARXNG_SETTINGS_PATH: 'searxng-config/settings.yml'
+        }
+    }), 'utf8');
+    try {
+        const manifest = loadManagedSearxngManifest({ managedSearxngManifest: manifestPath });
+        assert.equal(manifest.command, process.execPath);
+        assert.equal(manifest.defaultPort, 18889);
+        assert.equal(manifest.env.SEARXNG_SETTINGS_PATH, path.join(configDir, 'settings.yml'));
+        assert.deepEqual(managedSearxngPortCandidates(manifest, { managedSearxngPort: 19001 }).slice(0, 2), [19001, 18889]);
+        assert.equal(managedSearxngAllowedForSearch({}), true);
+        assert.equal(managedSearxngAllowedForSearch({ provider: 'html' }), false);
+        assert.equal(managedSearxngAllowedForSearch({ backends: ['python_search'] }), false);
+        assert.equal(managedSearxngAllowedForSearch({ provider: 'searxng' }), true);
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test('web_search auto-start path reuses an AILIS-managed local SearXNG service', async () => {
+    await withServer((request, response) => {
+        const url = new URL(request.url || '/', 'http://127.0.0.1');
+        assert.equal(url.pathname, '/search');
+        assert.equal(url.searchParams.get('format'), 'json');
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({
+            results: [
+                {
+                    title: 'AILIS managed SearXNG result',
+                    url: 'https://example.test/managed-searxng',
+                    content: 'Managed SearXNG returned this result through the automatic local service path.'
+                }
+            ]
+        }));
+    }, async (baseUrl) => {
+        const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ailis-managed-searxng-'));
+        const configDir = path.join(tempDir, 'searxng-config');
+        fs.mkdirSync(configDir, { recursive: true });
+        fs.writeFileSync(path.join(configDir, 'settings.yml'), 'use_default_settings: true\n', 'utf8');
+        const manifestPath = path.join(tempDir, 'managed-searxng.json');
+        fs.writeFileSync(manifestPath, JSON.stringify({
+            python: process.execPath,
+            args: ['-e', 'setTimeout(() => {}, 60000)'],
+            cwd: '.',
+            settingsPath: 'searxng-config/settings.yml',
+            defaultPort: Number(new URL(baseUrl).port),
+            bindAddress: '127.0.0.1',
+            healthPath: '/search?q=ailis&format=json'
+        }), 'utf8');
+        try {
+            const result = await webSearch({
+                query: 'managed searxng automatic local service',
+                managedSearxngManifest: manifestPath,
+                managedSearxngPort: Number(new URL(baseUrl).port),
+                maxResults: 3,
+                timeoutMs: 3000,
+                overallTimeoutMs: 9000
+            });
+            assert.equal(result.isError, undefined, result.content[0].text);
+            assert.equal(result.structuredContent.backend, 'searxng_json');
+            assert.equal(result.structuredContent.managedSearxng.source, 'existing');
+            assert.equal(result.structuredContent.results[0].url, 'https://example.test/managed-searxng');
+        } finally {
+            fs.rmSync(tempDir, { recursive: true, force: true });
+        }
+    });
 });
 
 test('web_search uses SearXNG JSON provider before HTML fallback', async () => {
@@ -886,6 +1001,39 @@ test('web_search uses SearXNG JSON provider before HTML fallback', async () => {
         assert.equal(result.structuredContent.attempts[0].backend, 'searxng_json');
         assert.equal(result.structuredContent.results[0].url, 'https://www.bilibili.com/video/BV1rXBoBoEv1/');
         assert.equal(result.structuredContent.suggestedNextCalls[0].tool, 'web_fetch');
+    });
+});
+
+test('web_search python_search backend can call SearXNG-compatible JSON without Docker', async () => {
+    await withServer((request, response) => {
+        const url = new URL(request.url || '/', 'http://127.0.0.1');
+        assert.equal(url.pathname, '/search');
+        assert.equal(url.searchParams.get('format'), 'json');
+        assert.match(url.searchParams.get('q') || '', /Top 5 Silliest Animal Moments/);
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({
+            results: [
+                {
+                    title: 'BBC Earth Top 5 Silliest Animal Moments transcript',
+                    url: 'https://example.test/bbc-earth-silliest-animal-moments',
+                    content: 'The segment mentions rockhopper penguins as the silly bird moment.'
+                }
+            ]
+        }));
+    }, async (baseUrl) => {
+        const result = await webSearch({
+            query: 'BBC Earth Top 5 Silliest Animal Moments bird species',
+            backends: ['python_search'],
+            searxngUrl: baseUrl,
+            maxResults: 5
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.equal(result.structuredContent.backend, 'python_search');
+        assert.equal(result.structuredContent.attempts[0].backend, 'python_search');
+        assert.equal(result.structuredContent.attempts[0].workerAttempts[0].backend, 'searxng_json_python');
+        assert.equal(result.structuredContent.results[0].url, 'https://example.test/bbc-earth-silliest-animal-moments');
+        assert.match(result.content[0].text, /rockhopper penguins/i);
     });
 });
 
@@ -1840,7 +1988,7 @@ test('inferPaperMetadataArgsFromScholarlyQuery keeps single-author surname clues
     assert.match(args.topic, /Lepidoptera/i);
 });
 
-test('web_research requires audit instead of marking video metadata pages ready', async () => {
+test('web_research returns candidate evidence for video metadata pages without a hard audit gate', async () => {
     const videoBody = [
         '<html><head><title>【绝区零】叶瞬光 超详细养成攻略教学_攻略</title></head><body>',
         '<nav>首页 番剧 直播 游戏中心 会员购 漫画 赛事 投稿</nav>',
@@ -1884,15 +2032,17 @@ test('web_research requires audit instead of marking video metadata pages ready'
 
         assert.equal(result.isError, undefined, result.content[0].text);
         assert.equal(result.structuredContent.answerReadiness, 'partial');
-        assert.equal(result.structuredContent.requiresEvidenceAudit, true);
-        assert.match(result.structuredContent.evidenceAuditInstruction, /LLM evidence audit/i);
+        assert.equal(result.structuredContent.requiresEvidenceAudit, false);
+        assert.equal(result.structuredContent.evidenceDecision, 'model_judges_candidate_evidence');
         assert.equal(result.structuredContent.evidencePages.length, 1);
         assert.equal(result.structuredContent.evidencePages[0].pageType, 'video_page');
         assert.equal(result.structuredContent.evidencePages[0].evidenceQuality, 'metadata_only');
         assert.equal(result.structuredContent.evidencePages[0].reasoningReady, false);
         assert.match(result.structuredContent.evidencePages[0].recoveryHint, /transcript|video-specific|ASR/i);
-        assert.match(result.content[0].text, /Retrieval readiness: partial/);
-        assert.match(result.content[0].text, /Evidence audit required: true/);
+        assert.match(result.content[0].text, /Observation policy: snippets, fetched pages, and diagnostics are candidate material only/);
+        assert.doesNotMatch(result.content[0].text, /Retrieval readiness:/);
+        assert.doesNotMatch(result.content[0].text, /Evidence decision:/);
+        assert.match(result.content[0].text, /Candidate snippets from search results/);
     });
 });
 
@@ -2180,8 +2330,8 @@ test('web_fetch surfaces linked DOI and PDF follow-up actions from HTML pages', 
         assert.equal(result.structuredContent.suggestedNextCalls[0].args.doi, '10.3847/2041-8213/acd54b');
         assert.equal(result.structuredContent.suggestedNextCalls[1].tool, 'pdf_extract_text');
         assert.equal(result.structuredContent.observedRelevantLinks[0].kind, 'doi');
-        assert.match(result.content[0].text, /Suggested next calls:/);
-        assert.match(result.content[0].text, /High-signal links:/);
+        assert.match(result.content[0].text, /Available follow-up calls derived from retrieved links\/results/);
+        assert.match(result.content[0].text, /Candidate links observed by the fetcher/);
     });
 });
 

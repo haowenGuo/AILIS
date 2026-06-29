@@ -6,6 +6,7 @@ import { createSpeechProvider } from './speech-provider.js';
 import { CONFIG, applyDesktopPreferencesToConfig } from './config.js';
 import { installAvatarDialogueBubble } from './avatar-dialogue-bubble.js';
 import { installPetMouseHitTest } from './pet-mouse-hit-test.js';
+import { setUiLanguage } from './i18n.js';
 
 const PET_RENDER_AVATAR_REFERENCE_HEIGHT = 560;
 const PET_RENDER_WINDOW_FRAME_HEIGHT = 960;
@@ -96,6 +97,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     const canvasContainerEl = document.getElementById('canvas-container');
     const initialPreferences = window.ailisDesktop?.preferences || {};
     applyDesktopPreferencesToConfig(initialPreferences);
+    setUiLanguage(initialPreferences.uiLanguage || 'zh-CN');
     applyPetWindowFrameCameraCompensation();
     const vrmSystem = new VRMModelSystem();
     installAvatarDialogueBubble({
@@ -153,7 +155,13 @@ window.addEventListener('DOMContentLoaded', async () => {
     });
 
     window.ailisDesktop?.onPreferencesUpdated?.(({ preferences = {} } = {}) => {
+        const previousModelPath = CONFIG.MODEL_PATH;
         applyDesktopPreferencesToConfig(preferences);
+        setUiLanguage(preferences.uiLanguage || 'zh-CN');
+        if (CONFIG.MODEL_PATH !== previousModelPath) {
+            window.location.reload();
+            return;
+        }
         applyPetWindowFrameCameraCompensation();
         speechProvider?.dispose?.();
         speechProvider = buildSpeechProvider(preferences.speechMode);

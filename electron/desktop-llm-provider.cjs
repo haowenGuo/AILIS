@@ -30,7 +30,7 @@ const DEFAULT_PROVIDER_MODELS = Object.freeze({
     [ANTHROPIC_PROVIDER]: 'claude-3-5-haiku-latest',
     [GEMINI_PROVIDER]: 'gemini-2.0-flash',
     [VLLM_PROVIDER]: 'Qwen/Qwen2.5-7B-Instruct',
-    [OLLAMA_PROVIDER]: 'llama3.2'
+    [OLLAMA_PROVIDER]: 'qwen2.5:1.5b'
 });
 
 const PROVIDER_CAPABILITY_TABLE = Object.freeze({
@@ -198,12 +198,17 @@ function resolvePayloadReasoningEffort(payload = {}) {
     return normalizeReasoningEffort(payload.reasoning_effort || payload.reasoningEffort);
 }
 
-function applyOpenAiCompatibleRequestControls(body, payload = {}) {
+function shouldUseConservativeOpenAiCompatibleControls(provider = DEFAULT_PROVIDER) {
+    return normalizeProvider(provider) === VLLM_PROVIDER;
+}
+
+function applyOpenAiCompatibleRequestControls(body, payload = {}, { provider = DEFAULT_PROVIDER } = {}) {
+    const conservativeControls = shouldUseConservativeOpenAiCompatibleControls(provider);
     const reasoningEffort = resolvePayloadReasoningEffort(payload);
-    if (reasoningEffort) {
+    if (!conservativeControls && reasoningEffort) {
         body.reasoning_effort = reasoningEffort;
     }
-    if (payload.thinking && typeof payload.thinking === 'object' && !Array.isArray(payload.thinking)) {
+    if (!conservativeControls && payload.thinking && typeof payload.thinking === 'object' && !Array.isArray(payload.thinking)) {
         body.thinking = payload.thinking;
     }
     const maxTokens = normalizePositiveInteger(payload.max_tokens ?? payload.maxTokens, {
@@ -220,14 +225,14 @@ function applyOpenAiCompatibleRequestControls(body, payload = {}) {
             max: 128000
         }
     );
-    if (maxCompletionTokens !== null) {
+    if (!conservativeControls && maxCompletionTokens !== null) {
         body.max_completion_tokens = maxCompletionTokens;
     }
-    if (typeof payload.parallel_tool_calls === 'boolean') {
+    if (!conservativeControls && typeof payload.parallel_tool_calls === 'boolean') {
         body.parallel_tool_calls = payload.parallel_tool_calls;
     }
     const serviceTier = normalizeString(payload.service_tier || payload.serviceTier);
-    if (serviceTier) {
+    if (!conservativeControls && serviceTier) {
         body.service_tier = serviceTier;
     }
 }
@@ -869,7 +874,7 @@ async function callOpenAiCompatible(settings, payload, messages) {
         temperature: normalizeTemperature(payload.temperature ?? settings.temperature),
         stream: false
     };
-    applyOpenAiCompatibleRequestControls(body, payload);
+    applyOpenAiCompatibleRequestControls(body, payload, { provider: settings.provider });
 
     if (responseFormat) {
         body.response_format = responseFormat;
@@ -949,6 +954,14 @@ function extractOllamaOutput(data = {}) {
     return normalizeString(data.message?.content || data.response || '');
 }
 
+function normalizeOllamaNumPredict(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric) || numeric <= 0) {
+        return null;
+    }
+    return Math.max(1, Math.min(8192, Math.floor(numeric)));
+}
+
 async function callOllama(settings, payload, messages) {
     const invalid = validateProviderInput(settings, messages);
     if (invalid) {
@@ -959,10 +972,22 @@ async function callOllama(settings, payload, messages) {
         model: settings.model,
         messages: convertMessagesForOllama(messages, payload),
         stream: false,
+        think: payload.think === true,
         options: {
             temperature: normalizeTemperature(payload.temperature ?? settings.temperature)
         }
     };
+    const numPredict = normalizeOllamaNumPredict(
+        payload.numPredict ??
+            payload.num_predict ??
+            payload.maxTokens ??
+            payload.max_tokens ??
+            payload.maxOutputTokens ??
+            payload.max_output_tokens
+    );
+    if (numPredict) {
+        body.options.num_predict = numPredict;
+    }
     if (shouldRequestJson(payload)) {
         body.format = 'json';
     }
@@ -1515,6 +1540,7 @@ async function checkDesktopLlmProvider(settings = {}, options = {}) {
     result.checks.basic = await runHealthCheckStep(resolvedSettings, {
         timeoutMs,
         temperature: 0,
+        maxTokens: resolvedSettings.provider === OLLAMA_PROVIDER ? 16 : undefined,
         messages: [
             { role: 'system', content: 'You are a health checker.' },
             { role: 'user', content: 'Reply with exactly OK.' }
@@ -1524,6 +1550,7 @@ async function checkDesktopLlmProvider(settings = {}, options = {}) {
     result.checks.json = await runHealthCheckStep(resolvedSettings, {
         timeoutMs,
         temperature: 0,
+        maxTokens: resolvedSettings.provider === OLLAMA_PROVIDER ? 48 : undefined,
         jsonMode: true,
         messages: buildHealthJsonMessages()
     });

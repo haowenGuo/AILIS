@@ -581,6 +581,15 @@ test('AILIS Gateway exposes context artifact query and guards raw payload reads'
         const artifactId = xlsx.body.result.details.artifactId;
         assert.ok(artifactId);
         assert.doesNotMatch(xlsx.body.result.content[0].text, /fullJsonPath/);
+        assert.match(xlsx.body.result.content[0].text, /artifact_compute actions profile\/find_path/);
+        assert.match(xlsx.body.result.content[0].text, /Candidate compute call: artifact_compute/);
+        assert.ok(xlsx.body.result.details.contextArtifact.queryHints.includes('find_path'));
+        assert.ok(xlsx.body.result.structuredContent.artifact.candidateComputeCalls.some((call) =>
+            call.tool === 'artifact_compute' &&
+            call.args.action === 'find_path' &&
+            call.args.startValue === 'START' &&
+            call.args.endValue === 'END'
+        ));
         assert.ok(gateway.eventLog.some((event) =>
             event.type === 'context_artifact.created' &&
             event.payload?.artifactId === artifactId &&

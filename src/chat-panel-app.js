@@ -12,6 +12,7 @@ import {
     isVadRecognitionMode,
     normalizeAsrRecognitionMode
 } from './realtime-voice/asr-latency-presets.js';
+import { applyI18n, setUiLanguage, t } from './i18n.js';
 
 function getMessageClassName(role) {
     if (role === 'user') {
@@ -27,6 +28,7 @@ function getMessageClassName(role) {
 }
 
 window.addEventListener('DOMContentLoaded', () => {
+    setUiLanguage(window.ailisDesktop?.preferences?.uiLanguage || 'zh-CN');
     const messageListEl = document.getElementById('message-list');
     const inputEl = document.getElementById('message-input');
     const sendBtnEl = document.getElementById('send-btn');
@@ -67,6 +69,7 @@ window.addEventListener('DOMContentLoaded', () => {
     let continuousPausedUntil = 0;
     let activeContinuousRecording = false;
     const speechRecognition = createDesktopSpeechRecognitionService();
+    applyI18n(document, { skipSelectors: ['#message-list', '#file-preview'] });
 
     function scrollToBottom() {
         messageListEl.scrollTop = messageListEl.scrollHeight;
@@ -74,30 +77,30 @@ window.addEventListener('DOMContentLoaded', () => {
 
     function getStatusText() {
         if (isCapturingVision) {
-            return 'AILIS 正在看截图...';
+            return t('AILIS 正在看截图...');
         }
         if (isRecording) {
-            return speechStatusText || '正在听你说话...';
+            return speechStatusText || t('正在听你说话...');
         }
         if (isTranscribing) {
-            return speechStatusText || '正在本地识别语音...';
+            return speechStatusText || t('正在本地识别语音...');
         }
         if (speechStatusText) {
             return speechStatusText;
         }
         if (interruptPending) {
-            return '正在中断当前对话...';
+            return t('正在中断当前对话...');
         }
         if (isBusy) {
-            return 'AILIS 正在思考或说话...';
+            return t('AILIS 正在思考或说话...');
         }
         if (getRecognitionMode() === 'continuous') {
-            return '自动 ASR 已开启，等待你说话...';
+            return t('自动 ASR 已开启，等待你说话...');
         }
         if (getRecognitionMode() === 'fast-vad') {
-            return '快速 ASR 已就绪';
+            return t('快速 ASR 已就绪');
         }
-        return '已连接桌宠';
+        return t('已连接桌宠');
     }
 
     function setIconButtonLabel(button, label) {
@@ -115,7 +118,7 @@ window.addEventListener('DOMContentLoaded', () => {
     function updateComposerState() {
         const hasDraft = Boolean(inputEl.value.trim() || pendingVisionAttachment || pendingFileAttachments.length);
         sendBtnEl.dataset.mode = isBusy ? 'interrupt' : 'send';
-        setIconButtonLabel(sendBtnEl, isBusy ? (interruptPending ? '正在中断' : '中断对话') : '发送');
+        setIconButtonLabel(sendBtnEl, isBusy ? (interruptPending ? t('正在中断') : t('中断对话')) : t('发送'));
         sendBtnEl.disabled = isRecording ||
             isTranscribing ||
             isCapturingVision ||
@@ -132,14 +135,14 @@ window.addEventListener('DOMContentLoaded', () => {
             voiceBtnEl.dataset.recording = isRecording ? 'true' : 'false';
             if (getRecognitionMode() === 'continuous') {
                 voiceBtnEl.dataset.state = 'pause';
-                setIconButtonLabel(voiceBtnEl, '暂停自动听');
+                setIconButtonLabel(voiceBtnEl, t('暂停自动听'));
             } else if (isRecording) {
                 const isVadMode = isVadRecognitionMode(getRecognitionMode());
                 voiceBtnEl.dataset.state = isVadMode ? 'cancel' : 'stop';
-                setIconButtonLabel(voiceBtnEl, isVadMode ? '取消语音输入' : '停止录音');
+                setIconButtonLabel(voiceBtnEl, isVadMode ? t('取消语音输入') : t('停止录音'));
             } else {
                 voiceBtnEl.dataset.state = 'mic';
-                setIconButtonLabel(voiceBtnEl, isVadRecognitionMode(getRecognitionMode()) ? '自动听' : '语音输入');
+                setIconButtonLabel(voiceBtnEl, isVadRecognitionMode(getRecognitionMode()) ? t('自动听') : t('语音输入'));
             }
         }
 
@@ -174,7 +177,7 @@ window.addEventListener('DOMContentLoaded', () => {
             type: 'vision',
             id: String(attachment.id || ''),
             source: String(attachment.source || ''),
-            label: String(attachment.label || '截图'),
+            label: String(attachment.label || t('截图')),
             dataUrl: String(attachment.dataUrl || ''),
             thumbnailDataUrl: String(attachment.thumbnailDataUrl || attachment.dataUrl || ''),
             mimeType,
@@ -195,24 +198,24 @@ window.addEventListener('DOMContentLoaded', () => {
 
     function getVisionTargetLabel(target) {
         if (target === 'region') {
-            return '矩形截图';
+            return t('矩形截图');
         }
         if (target === 'screen') {
-            return '全屏截图';
+            return t('全屏截图');
         }
         if (target === 'pet-window') {
-            return '桌宠截图';
+            return t('桌宠截图');
         }
         if (target === 'control-window') {
-            return '控制面板截图';
+            return t('控制面板截图');
         }
-        return '对话窗截图';
+        return t('对话窗截图');
     }
 
     function formatVisionMeta(attachment) {
         const sizeText = attachment.width && attachment.height
             ? `${attachment.width} × ${attachment.height}`
-            : '已捕获';
+            : t('已捕获');
         return `${getVisionTargetLabel(attachment.source)} · ${sizeText}`;
     }
 
@@ -229,7 +232,7 @@ window.addEventListener('DOMContentLoaded', () => {
             visionPreviewImgEl.src = pendingVisionAttachment.thumbnailDataUrl || pendingVisionAttachment.dataUrl;
         }
         if (visionPreviewTitleEl) {
-            visionPreviewTitleEl.textContent = pendingVisionAttachment.label || '已准备截图';
+            visionPreviewTitleEl.textContent = pendingVisionAttachment.label || t('已准备截图');
         }
         if (visionPreviewMetaEl) {
             visionPreviewMetaEl.textContent = formatVisionMeta(pendingVisionAttachment);
@@ -244,7 +247,7 @@ window.addEventListener('DOMContentLoaded', () => {
 
     function formatFileMeta(attachment) {
         const chunks = [
-            attachment.kind === 'directory' ? '文件夹' : (attachment.sizeText || '文件'),
+            attachment.kind === 'directory' ? t('文件夹') : (attachment.sizeText || t('文件')),
             attachment.extension || attachment.mimeType || '',
             attachment.path || ''
         ].filter(Boolean);
@@ -266,7 +269,7 @@ window.addEventListener('DOMContentLoaded', () => {
 
             const title = document.createElement('div');
             title.className = 'file-preview-title';
-            title.textContent = attachment.name || attachment.label || '文件';
+            title.textContent = attachment.name || attachment.label || t('文件');
             textWrap.appendChild(title);
 
             const meta = document.createElement('div');
@@ -279,7 +282,7 @@ window.addEventListener('DOMContentLoaded', () => {
             removeButton.className = 'file-preview-remove';
             removeButton.type = 'button';
             removeButton.textContent = '×';
-            removeButton.setAttribute('aria-label', `移除 ${attachment.name || '文件'}`);
+            removeButton.setAttribute('aria-label', `${t('移除')} ${attachment.name || t('文件')}`);
             removeButton.addEventListener('click', () => {
                 pendingFileAttachments = pendingFileAttachments.filter((item) => item.path !== attachment.path);
                 renderFilePreview();
@@ -318,14 +321,14 @@ window.addEventListener('DOMContentLoaded', () => {
             const result = await window.ailisDesktop.files.describe({ paths: cleanPaths, source });
             const addedCount = mergePendingFileAttachments(result?.files || []);
             if (result?.skipped?.length) {
-                setTransientStatus(`有 ${result.skipped.length} 个文件无法添加`);
+                setTransientStatus(t('有 {count} 个文件无法添加', { count: result.skipped.length }));
             } else if (addedCount > 0) {
-                setTransientStatus(`已添加 ${addedCount} 个文件`);
+                setTransientStatus(t('已添加 {count} 个文件', { count: addedCount }));
             }
             return addedCount;
         } catch (error) {
             console.error('添加文件失败：', error);
-            setTransientStatus(`添加文件失败：${error.message || '无法读取文件路径'}`);
+            setTransientStatus(t('添加文件失败：{reason}', { reason: error.message || t('无法读取文件路径') }));
             return 0;
         }
     }
@@ -341,11 +344,11 @@ window.addEventListener('DOMContentLoaded', () => {
             }
             mergePendingFileAttachments(result?.files || []);
             if (result?.files?.length) {
-                setTransientStatus(`已添加 ${result.files.length} 个文件`);
+                setTransientStatus(t('已添加 {count} 个文件', { count: result.files.length }));
             }
         } catch (error) {
             console.error('选择文件失败：', error);
-            setTransientStatus(`选择文件失败：${error.message || '系统文件选择器不可用'}`);
+            setTransientStatus(t('选择文件失败：{reason}', { reason: error.message || t('系统文件选择器不可用') }));
         }
     }
 
@@ -422,23 +425,23 @@ window.addEventListener('DOMContentLoaded', () => {
         try {
             const payload = await window.ailisDesktop.vision.capture({ target });
             if (!payload?.ok || !payload.snapshot) {
-                throw new Error(payload?.error || '截图失败');
+                throw new Error(payload?.error || t('截图失败'));
             }
 
             const attachment = normalizeVisionAttachment(payload.snapshot);
             if (!attachment) {
-                throw new Error('截图数据为空');
+                throw new Error(t('截图数据为空'));
             }
 
             pendingVisionAttachment = attachment;
             renderVisionPreview();
             if (transientStatus) {
-                setTransientStatus('截图已经准备好了，可以直接问我');
+                setTransientStatus(t('截图已经准备好了，可以直接问我'));
             }
             return attachment;
         } catch (error) {
             console.error('视觉截图失败：', error);
-            setTransientStatus(`截图失败：${error.message || '无法读取屏幕'}`);
+            setTransientStatus(t('截图失败：{reason}', { reason: error.message || t('无法读取屏幕') }));
             return null;
         } finally {
             isCapturingVision = false;
@@ -463,7 +466,7 @@ window.addEventListener('DOMContentLoaded', () => {
             card.className = 'message-attachment-card';
 
             const image = document.createElement('img');
-            image.alt = attachment.label || '截图';
+            image.alt = attachment.label || t('截图');
             image.src = attachment.thumbnailDataUrl || attachment.dataUrl;
             card.appendChild(image);
 
@@ -483,7 +486,7 @@ window.addEventListener('DOMContentLoaded', () => {
             title.className = 'message-attachment-meta';
             title.style.marginTop = '0';
             title.style.fontWeight = '600';
-            title.textContent = attachment.name || attachment.label || '文件';
+            title.textContent = attachment.name || attachment.label || t('文件');
             card.appendChild(title);
 
             const meta = document.createElement('div');
@@ -558,13 +561,13 @@ window.addEventListener('DOMContentLoaded', () => {
                     : message.role || 'Message';
         const attachmentText = splitChatAttachments(message.attachments || []);
         const attachmentLines = [
-            ...attachmentText.vision.map((attachment) => `- 截图：${attachment.label || attachment.source || '截图'}`),
-            ...attachmentText.files.map((attachment) => `- 文件：${attachment.name || attachment.label || '文件'} ${attachment.path || ''}`.trim())
+            ...attachmentText.vision.map((attachment) => `- ${t('截图')}：${attachment.label || attachment.source || t('截图')}`),
+            ...attachmentText.files.map((attachment) => `- ${t('文件')}：${attachment.name || attachment.label || t('文件')} ${attachment.path || ''}`.trim())
         ];
         return [
             `## ${roleLabel}`,
             String(message.content || '').trim(),
-            attachmentLines.length ? ['附件：', ...attachmentLines].join('\n') : ''
+            attachmentLines.length ? [t('附件：'), ...attachmentLines].join('\n') : ''
         ].filter(Boolean).join('\n\n');
     }
 
@@ -575,24 +578,24 @@ window.addEventListener('DOMContentLoaded', () => {
             .join('\n\n---\n\n')
             .trim();
         if (!text) {
-            setTransientStatus('当前没有可复制的会话');
+            setTransientStatus(t('当前没有可复制的会话'));
             return;
         }
         try {
             await navigator.clipboard.writeText(text);
-            setTransientStatus('会话已复制到剪贴板');
+            setTransientStatus(t('会话已复制到剪贴板'));
         } catch (error) {
             console.error('复制会话失败：', error);
-            setTransientStatus(`复制失败：${error.message || '剪贴板不可用'}`);
+            setTransientStatus(t('复制失败：{reason}', { reason: error.message || t('剪贴板不可用') }));
         }
     }
 
     function clearConversation() {
         if (isBusy || isRecording || isTranscribing || isCapturingVision) {
-            setTransientStatus('当前正在处理，稍后再清空');
+            setTransientStatus(t('当前正在处理，稍后再清空'));
             return;
         }
-        if (!window.confirm('清空当前对话窗口？长期记忆不会被删除。')) {
+        if (!window.confirm(t('清空当前对话窗口？长期记忆不会被删除。'))) {
             return;
         }
         pendingVisionAttachment = null;
@@ -612,7 +615,7 @@ window.addEventListener('DOMContentLoaded', () => {
                 type: 'interrupt-conversation',
                 source: 'chat-panel'
             });
-            setTransientStatus('正在中断当前对话...');
+            setTransientStatus(t('正在中断当前对话...'));
             updateComposerState();
             return;
         }
@@ -716,7 +719,7 @@ window.addEventListener('DOMContentLoaded', () => {
         if (recorderController) {
             void stopVoiceInput({ cancel: true });
         }
-        setTransientStatus('自动 ASR 已暂停一小会儿');
+        setTransientStatus(t('自动 ASR 已暂停一小会儿'));
         window.setTimeout(() => {
             syncContinuousAsr(0);
         }, durationMs + 50);
@@ -773,7 +776,7 @@ window.addEventListener('DOMContentLoaded', () => {
         activeAsrPreset = asrPreset;
         const autoVadMode = asrPreset.autoVad;
         activeContinuousRecording = Boolean(continuous);
-        speechStatusText = '正在请求麦克风权限...';
+        speechStatusText = t('正在请求麦克风权限...');
         updateComposerState();
 
         try {
@@ -783,16 +786,16 @@ window.addEventListener('DOMContentLoaded', () => {
             });
             isRecording = true;
             speechStatusText = continuous
-                ? '自动 ASR 监听中...'
+                ? t('自动 ASR 监听中...')
                 : isFastAsrMode(recognitionMode)
-                ? '快速 ASR：我在听，直接说...'
+                ? t('快速 ASR：我在听，直接说...')
                 : autoVadMode
-                ? '我在听，直接开口就好...'
-                : '正在听你说话...';
+                ? t('我在听，直接开口就好...')
+                : t('正在听你说话...');
 
             if (recorderController.usedFallbackDevice?.()) {
                 currentPreferredMicDeviceId = '';
-                setTransientStatus('已切回系统默认麦克风', 2200);
+                setTransientStatus(t('已切回系统默认麦克风'), 2200);
             }
 
             updateComposerState();
@@ -841,20 +844,20 @@ window.addEventListener('DOMContentLoaded', () => {
                                 speechStarted = true;
                                 speechStartAt = now;
                                 lastVoiceAt = now;
-                                speechStatusText = continuous ? '听到了，继续说...' : '听到了，继续说...';
+                                speechStatusText = t('听到了，继续说...');
                             } else {
-                                speechStatusText = continuous ? '检测到疑似人声...' : '听到一点声音了...';
+                                speechStatusText = continuous ? t('检测到疑似人声...') : t('听到一点声音了...');
                             }
                         } else {
                             voicedFrameCount = 0;
                             speechStatusText = currentLevel >= silenceLevel
-                                ? (continuous ? '自动 ASR：过滤环境声...' : '我在听，声音有点小...')
-                                : (continuous ? '自动 ASR 监听中...' : '我在听，直接开口就好...');
+                                ? (continuous ? t('自动 ASR：过滤环境声...') : t('我在听，声音有点小...'))
+                                : (continuous ? t('自动 ASR 监听中...') : t('我在听，直接开口就好...'));
                         }
 
                         if (!speechStarted && now - listenStartedAt >= asrPreset.idleMs) {
                             if (!continuous) {
-                                setTransientStatus('这次没有听到你说话');
+                                setTransientStatus(t('这次没有听到你说话'));
                             }
                             finishAutoVad({ cancel: true });
                             return;
@@ -879,25 +882,25 @@ window.addEventListener('DOMContentLoaded', () => {
                         speechDurationMs >= asrPreset.minSpeechMs &&
                         silenceDurationMs >= asrPreset.silenceMs
                     ) {
-                        speechStatusText = '收到，我来识别...';
+                        speechStatusText = t('收到，我来识别...');
                         updateComposerState();
                         finishAutoVad();
                         return;
                     }
 
                     speechStatusText = silenceDurationMs >= asrPreset.pauseHintMs
-                        ? '检测到停顿，马上收尾...'
-                        : '正在听你说...';
+                        ? t('检测到停顿，马上收尾...')
+                        : t('正在听你说...');
                     updateComposerState();
                     return;
                 }
 
                 if (currentLevel >= 0.04) {
-                    speechStatusText = '正在听你说话... 音量正常';
+                    speechStatusText = t('正在听你说话... 音量正常');
                 } else if (currentLevel >= CONFIG.ASR_MIN_INPUT_LEVEL) {
-                    speechStatusText = '正在听你说话... 声音有点小';
+                    speechStatusText = t('正在听你说话... 声音有点小');
                 } else {
-                    speechStatusText = '正在听你说话... 目前几乎没有收到声音';
+                    speechStatusText = t('正在听你说话... 目前几乎没有收到声音');
                 }
                 updateComposerState();
             }, asrPreset.levelPollingMs);
@@ -907,7 +910,7 @@ window.addEventListener('DOMContentLoaded', () => {
             }, asrPreset.maxRecordMs);
         } catch (error) {
             console.error('启动本地语音识别失败：', error);
-            setTransientStatus(`语音识别失败：${error.message || '无法打开麦克风'}`);
+            setTransientStatus(t('语音识别失败：{reason}', { reason: error.message || t('无法打开麦克风') }));
             activeContinuousRecording = false;
             activeAsrPreset = null;
             syncContinuousAsr(3000);
@@ -932,8 +935,8 @@ window.addEventListener('DOMContentLoaded', () => {
 
         if (!cancel) {
             speechStatusText = asrPreset.asrPreset === 'fast'
-                ? '快速 ASR 正在识别...'
-                : '正在本地识别语音，首次加载会稍慢...';
+                ? t('快速 ASR 正在识别...')
+                : t('正在本地识别语音，首次加载会稍慢...');
         } else {
             speechStatusText = '';
         }
@@ -961,14 +964,14 @@ window.addEventListener('DOMContentLoaded', () => {
 
             if (!transcript || isLikelyTranscriptNoise(transcript, result)) {
                 if (!wasContinuousRecording) {
-                    setTransientStatus('没有听清楚，再说一次吧');
+                    setTransientStatus(t('没有听清楚，再说一次吧'));
                 }
                 return;
             }
 
             const visionTarget = inferVisionTargetFromText(transcript);
             if (visionTarget) {
-                speechStatusText = '我先看一眼屏幕...';
+                speechStatusText = t('我先看一眼屏幕...');
                 updateComposerState();
                 await captureVision(visionTarget, { transientStatus: false });
             }
@@ -981,7 +984,7 @@ window.addEventListener('DOMContentLoaded', () => {
         } catch (error) {
             console.error('本地语音识别失败：', error);
             if (!wasContinuousRecording) {
-                setTransientStatus(`语音识别失败：${error.message || '本地模型未完成识别'}`);
+                setTransientStatus(t('语音识别失败：{reason}', { reason: error.message || t('本地模型未完成识别') }));
             }
         } finally {
             isTranscribing = false;
@@ -1129,6 +1132,10 @@ window.addEventListener('DOMContentLoaded', () => {
 
     window.ailisDesktop?.onPreferencesUpdated?.(({ preferences = {} } = {}) => {
         const previousMode = getRecognitionMode();
+        if ('uiLanguage' in preferences) {
+            setUiLanguage(preferences.uiLanguage || 'zh-CN');
+            applyI18n(document, { skipSelectors: ['#message-list', '#file-preview'] });
+        }
         currentRecognitionMode = preferences.recognitionMode || 'auto-vad';
         currentPreferredMicDeviceId = preferences.preferredMicDeviceId || '';
         if (previousMode === 'continuous' && getRecognitionMode() !== 'continuous' && recorderController) {

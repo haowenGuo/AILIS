@@ -437,14 +437,57 @@ function formatGridPreview(sheet, maxRows = 40) {
     return lines.join('\n');
 }
 
+function sheetHasDisplay(sheet = {}, value = '') {
+    const needle = normalizeString(value).toLowerCase();
+    return (sheet.nonEmptyCells || []).some((cell) => normalizeString(cell.value).toLowerCase() === needle);
+}
+
+function likelyBlueFill(sheet = {}) {
+    const colors = sheet.colorLegend || [];
+    return colors.find((entry) => /^0099ff$/i.test(entry.rgb || ''))?.rgb || '';
+}
+
+function buildSpreadsheetComputeHints(payload = {}) {
+    const artifactId = payload.contextArtifact?.id;
+    if (!artifactId) {
+        return [];
+    }
+    const hints = [];
+    for (const sheet of payload.workbook?.sheets || []) {
+        if (!sheetHasDisplay(sheet, 'START') || !sheetHasDisplay(sheet, 'END')) {
+            continue;
+        }
+        const blueFill = likelyBlueFill(sheet);
+        const args = {
+            artifactId,
+            action: 'find_path',
+            sheet: sheet.name,
+            startValue: 'START',
+            endValue: 'END',
+            blockedFills: blueFill ? [blueFill] : [],
+            cellsPerTurn: '<set from task, if any>',
+            targetTurn: '<set from task, if any>',
+            extractField: 'fill'
+        };
+        hints.push({
+            tool: 'artifact_compute',
+            action: 'find_path',
+            reason: 'Candidate only: use for spreadsheet map/path/maze tasks after checking the user task rules.',
+            args
+        });
+    }
+    return hints;
+}
+
 function buildPreview(payload, maxChars = DEFAULT_PREVIEW_CHARS) {
+    const computeHints = buildSpreadsheetComputeHints(payload);
     const lines = [
         'XLSX_WORKBOOK_READ_COMPLETE',
         `path=${payload.path}`,
         `sheets=${payload.workbook.sheetCount}`,
         `selectedSheets=${payload.workbook.sheets.map((sheet) => sheet.name).join(', ')}`,
         payload.contextArtifact?.id ? `artifactId=${payload.contextArtifact.id}` : '',
-        payload.contextArtifact?.id ? 'queryWith=artifact_query actions summary/grid/range/search' : '',
+        payload.contextArtifact?.id ? 'queryWith=artifact_query actions summary/grid/range/search/runtime_schema/chunk_search; artifact_compute actions profile/find_path' : '',
         'observation_contract=complete:true reasoning_ready:true'
     ].filter(Boolean);
     for (const sheet of payload.workbook.sheets) {
@@ -467,6 +510,10 @@ function buildPreview(payload, maxChars = DEFAULT_PREVIEW_CHARS) {
     if (payload.contextArtifact?.id) {
         lines.push('');
         lines.push(`To inspect more: artifact_query {"artifactId":"${payload.contextArtifact.id}","action":"range","sheet":"${payload.workbook.sheets[0]?.name || ''}","range":"A1:D20"}`);
+        for (const hint of computeHints.slice(0, 3)) {
+            lines.push(`Candidate compute call: ${hint.tool} ${JSON.stringify(hint.args)}`);
+            lines.push(`Candidate compute note: ${hint.reason}`);
+        }
     }
     return truncateMiddle(lines.join('\n'), maxChars);
 }
@@ -517,6 +564,7 @@ function buildArtifactSummary(payload = {}) {
 }
 
 function publicStructuredContent(payload = {}) {
+    const candidateComputeCalls = buildSpreadsheetComputeHints(payload);
     return {
         ok: true,
         status: 'completed',
@@ -529,7 +577,9 @@ function publicStructuredContent(payload = {}) {
                   kind: payload.contextArtifact.kind,
                   type: payload.contextArtifact.type,
                   summary: payload.contextArtifact.summary,
-                  queryHints: payload.contextArtifact.queryHints
+                  queryHints: payload.contextArtifact.queryHints,
+                  affordances: ['artifact_query.summary', 'artifact_query.grid', 'artifact_query.range', 'artifact_query.search', 'artifact_query.runtime_schema', 'artifact_query.chunk_search', 'artifact_compute.profile', 'artifact_compute.find_path'],
+                  candidateComputeCalls
               }
             : null,
         workbook: {
@@ -550,7 +600,7 @@ function publicStructuredContent(payload = {}) {
             truncated: payload.completeness?.allSelectedSheetsComplete === false,
             reasoning_ready: true,
             next: payload.contextArtifact?.id
-                ? 'Use artifact_query summary/grid/range/search by artifactId for more evidence; do not raw-read artifact payload files.'
+                ? 'Use artifact_query for localized evidence or RAGFlow-lite chunk_search, and artifact_compute for deterministic spreadsheet analysis such as profile/find_path; do not raw-read artifact payload files.'
                 : 'Use narrower read_xlsx_workbook range if more evidence is needed.'
         }
     };
@@ -574,7 +624,7 @@ async function registerContextArtifact(payload, runtime = {}, context = {}) {
                 allSelectedSheetsComplete: payload.completeness?.allSelectedSheetsComplete !== false
             },
             modelView: publicStructuredContent(payload),
-            queryHints: ['summary', 'grid', 'range', 'search']
+            queryHints: ['summary', 'grid', 'range', 'search', 'runtime_schema', 'chunk_search', 'runtime_search', 'profile', 'find_path', 'artifact_compute']
         });
         return {
             id: record.id,

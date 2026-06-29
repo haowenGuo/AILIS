@@ -1,0 +1,109 @@
+{
+  "name": "ailis-ragflow-lite-extraction",
+  "version": 1,
+  "upstream": {
+    "project": "RAGFlow",
+    "repository": "https://github.com/infiniflow/ragflow",
+    "license": "Apache-2.0",
+    "snapshotDirectory": "vendor/ragflow-lite/upstream",
+    "note": "Selective source snapshot for extracting the artifact parsing/chunking runtime into AILIS."
+  },
+  "boundary": {
+    "ragflow_lite_owns": [
+      "parser selection",
+      "parser backend logic",
+      "domain chunkers",
+      "RAGFlow chunk fields",
+      "future search semantics"
+    ],
+    "ailis_owns": [
+      "context artifact storage",
+      "tool schema",
+      "agent-chain routing",
+      "compact observations",
+      "deterministic compute tools"
+    ]
+  },
+  "sourceFiles": [
+    {
+      "snapshot": "rag__svr__task_executor.py",
+      "upstreamPath": "rag/svr/task_executor.py",
+      "role": "task pipeline, parser factory, chunk/embedding/index orchestration",
+      "extract": "factory and lifecycle concepts; avoid Redis/DB/platform services"
+    },
+    {
+      "snapshot": "common__constants.py",
+      "upstreamPath": "common/constants.py",
+      "role": "ParserType, PipelineTaskType, LLMType enums",
+      "extract": "parser/task vocabulary"
+    },
+    {
+      "snapshot": "common__doc_store__doc_store_base.py",
+      "upstreamPath": "common/doc_store/doc_store_base.py",
+      "role": "doc-store search expression abstraction",
+      "extract": "MatchTextExpr, MatchDenseExpr, FusionExpr, OrderByExpr semantics"
+    },
+    {
+      "snapshot": "rag__app__table.py",
+      "upstreamPath": "rag/app/table.py",
+      "role": "Excel/table parsing and row chunking",
+      "extract": "table artifact worker first"
+    },
+    {
+      "snapshot": "rag__app__naive.py",
+      "upstreamPath": "rag/app/naive.py",
+      "role": "general document parser/chunker over multiple parser backends",
+      "extract": "document artifact worker after table"
+    },
+    {
+      "snapshot": "rag__nlp__query.py",
+      "upstreamPath": "rag/nlp/query.py",
+      "role": "weighted full-text query construction",
+      "extract": "search expression generation after chunk bridge is stable"
+    },
+    {
+      "snapshot": "rag__nlp__search.py",
+      "upstreamPath": "rag/nlp/search.py",
+      "role": "hybrid search, rerank, citation insertion",
+      "extract": "candidate retrieval semantics; no tool sufficiency judgement"
+    },
+    {
+      "snapshot": "rag__prompts__generator.py",
+      "upstreamPath": "rag/prompts/generator.py",
+      "role": "chunk formatting, prompt packing, citations, TOC workflows",
+      "extract": "context composer after import/search workers"
+    },
+    {
+      "snapshot": "deepdoc__README.md",
+      "upstreamPath": "deepdoc/README.md",
+      "role": "OCR, layout recognition, table structure recognition overview",
+      "extract": "optional high-fidelity parser backend"
+    }
+  ],
+  "ailisBridge": {
+    "module": "electron/ailis-artifact-runtime.cjs",
+    "behavior": "accepts normalized RAGFlow-lite runtime chunks and exposes runtime_schema/chunk_search; does not synthesize chunks from raw files",
+    "tableWorker": "scripts/ailis-ragflow-lite-worker.py",
+    "tableWorkerStatus": "minimal upstream rag.app.table.chunk path is callable with platform shims",
+    "requiredEnvelope": {
+      "runtime": "ragflow_lite_bridge",
+      "source": "ragflow_extractor",
+      "status": "ready",
+      "parserType": "table|naive|presentation|picture|qa|audio|email",
+      "chunks": [
+        {
+          "id": "string",
+          "content_with_weight": "string",
+          "position_int": "array",
+          "chunk_order_int": "number",
+          "chunk_data": "object"
+        }
+      ]
+    }
+  },
+  "nextImplementation": [
+    "Build scripts/ailis-ragflow-lite-worker.py around the vendored RAGFlow table parser dependency closure.",
+    "Emit ragflowLiteRuntime chunks into AILIS context artifacts.",
+    "Only after this worker exists, replace direct XLSX workbook payload-derived views with RAGFlow-lite extractor output where appropriate."
+  ]
+}

@@ -267,18 +267,13 @@ function classifyEvidenceGapObservation({ tool = '', args = {}, response = {}, p
         );
         return {
             evidence_gap: 'ambiguous_search_requires_clarification',
-            summary: 'Web search results are ranked, but the target is ambiguous or below the confidence gate.',
+            summary: 'Web search returned multiple plausible target clusters.',
             recovery_hint: question || 'Ask the user to clarify the intended entity/source before calling web_fetch or continuing the tool loop.',
             alternatives: ['ask_user_clarification', 'final_answer clarification', 'blocked clarification']
         };
     }
-    if (isWebSearch && /evidence gap|discovery only|open a result|suggested next calls|high-signal links|url:/i.test(text)) {
-        return {
-            evidence_gap: 'search_results_need_fetch',
-            summary: 'Web search returned discovery links, but the answer still needs an opened page as evidence.',
-            recovery_hint: 'Call mcp__ailis_research__web_fetch with a high-signal result URL from the search output before issuing another broad web_search or final answer.',
-            alternatives: ['mcp__ailis_research__web_fetch', 'web_fetch']
-        };
+    if (isWebSearch && /evidence gap|discovery only|candidate evidence|open a result|suggested next calls|high-signal links|url:/i.test(text)) {
+        return null;
     }
     const isWebFetch = toolId === 'web_fetch' ||
         toolId === 'mcp__ailis_research__web_fetch' ||

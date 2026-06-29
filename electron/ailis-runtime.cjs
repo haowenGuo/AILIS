@@ -1698,7 +1698,7 @@ class AILISRuntime {
             planner: normalizeString(args.planner || context.planner, 'llm'),
             agentLoop: normalizeString(args.agentLoop || context.agentLoop, 'llm'),
             agentMode: normalizeString(args.agentMode || context.agentMode, 'llm'),
-            maxAgentSteps: Number(args.maxAgentSteps || context.maxAgentSteps || 50)
+            maxAgentSteps: Number(args.maxAgentSteps || context.maxAgentSteps || 12)
         };
     }
 

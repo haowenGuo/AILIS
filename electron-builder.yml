@@ -9,22 +9,14 @@ files:
   - electron/**/*
   - scripts/mcp-ailis-research-server.cjs
   - scripts/ailis-crawl4ai-worker.py
+  - scripts/ailis-python-search-worker.py
+  - installer/ailis-runtime-components.json
   - package.json
-extraResources:
-  - from: Resources/speech-models
-    to: speech-models
-  - from: build-cache/openclaw-runtime
-    to: openclaw-runtime
-  - from: build-cache/openclaw-vendor
-    to: openclaw-vendor
-  - from: build-cache/ailis-web-runtime
-    to: ailis-web-runtime
-  - from: build-cache/ailis-asr-runtime
-    to: ailis-asr-runtime
 extraMetadata:
   main: electron/main.cjs
 asar: true
 asarUnpack:
+  - dist/**/*
   - electron/**/*.cjs
   - electron/**/*.py
   - scripts/**/*.cjs
@@ -43,6 +35,9 @@ win:
         - x64
 nsis:
   artifactName: ${productName}-Setup-${version}-win-${arch}.${ext}
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  include: installer/ailis-runtime-components.nsh
 portable:
   artifactName: ${productName}-Portable-${version}-win-${arch}.${ext}
 linux:

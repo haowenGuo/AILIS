@@ -9,6 +9,7 @@ const require = createRequire(import.meta.url);
 const { AILISGateway } = require('../electron/ailis-gateway.cjs');
 const {
     buildAgentDirectToolSpecs,
+    isAgentLlmSettingsMissing,
     splitNativeProgressNoteArgs,
     stripControlTags
 } = require('../electron/ailis-agent-runner.cjs');
@@ -90,6 +91,29 @@ test('AILIS direct tool specs allow model-authored progress notes without passin
 
     assert.deepEqual(split.args, { path: 'note.txt' });
     assert.match(split.progressNote, /确认这份文件/);
+});
+
+test('AILIS Agent Runner accepts local vLLM and Ollama settings without API keys', () => {
+    assert.equal(isAgentLlmSettingsMissing({
+        provider: 'vllm',
+        baseUrl: 'http://127.0.0.1:8000/v1',
+        model: 'Qwen/Qwen2-0.5B-Instruct',
+        apiKey: ''
+    }), false);
+
+    assert.equal(isAgentLlmSettingsMissing({
+        provider: 'ollama',
+        baseUrl: 'http://127.0.0.1:11434',
+        model: 'llama3.2',
+        apiKey: ''
+    }), false);
+
+    assert.equal(isAgentLlmSettingsMissing({
+        provider: 'openai-compatible',
+        baseUrl: 'https://api.example.test/v1',
+        model: 'demo-model',
+        apiKey: ''
+    }), true);
 });
 
 test('AILIS Agent Runner plans chat and executes file tasks through the Gateway', async () => {

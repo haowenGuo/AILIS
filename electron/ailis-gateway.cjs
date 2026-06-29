@@ -14,7 +14,7 @@ const {
     getOpenClawToolSurfaceSummary,
     validateOpenClawToolSurface
 } = require('./openclaw-tool-surface.cjs');
-const { OpenClawRuntimeSupervisor } = require('./openclaw-runtime.cjs');
+const { AILISAgentRuntimeSupervisor } = require('./openclaw-runtime.cjs');
 const { AILISRuntime } = require('./ailis-runtime.cjs');
 const {
     TOOL_EXPOSURE,
@@ -34,6 +34,7 @@ const { FILE_MANAGER_TOOL_ID, executeFileManagerTool } = require('./ailis-file-m
 const { COMPUTER_TOOL_ID, AILISComputerTool } = require('./ailis-computer-tool.cjs');
 const { CODE_TOOL_ID, executeCodeTool } = require('./ailis-code-tool.cjs');
 const { ARTIFACT_VERIFIER_TOOL_ID, executeArtifactVerifierTool } = require('./ailis-artifact-verifier-tool.cjs');
+const { ARTIFACT_IMPORT_TOOL_ID, executeArtifactImportTool } = require('./ailis-artifact-import-tool.cjs');
 const { GITHUB_PAGES_TOOL_ID, executeGitHubPagesTool } = require('./ailis-github-pages-tool.cjs');
 const {
     READ_XLSX_WORKBOOK_TOOL_ID,
@@ -185,6 +186,16 @@ const AILIS_LOCAL_TOOL_DEFINITIONS = Object.freeze([
         label: 'artifact_verifier',
         description: 'Read-only structured artifact verification for JSON/JSONL/CSV/TSV/YAML/TOML/Markdown/log/text files.',
         sectionId: 'artifact-verification',
+        route: 'ailis-local',
+        materialized: true,
+        status: 'available',
+        needsApprovalActions: Object.freeze([])
+    }),
+    Object.freeze({
+        id: ARTIFACT_IMPORT_TOOL_ID,
+        label: 'artifact_import',
+        description: 'Import local files through extracted RAGFlow-lite artifact workers and register queryable AILIS context artifacts.',
+        sectionId: 'context-artifacts',
         route: 'ailis-local',
         materialized: true,
         status: 'available',
@@ -736,12 +747,12 @@ class AILISGateway extends EventEmitter {
                     : TOOL_EXPOSURE.DEFERRED
             })),
             ...['read', 'write', 'exec', 'apply_patch'].map((id) => {
-                const openClawDefinition = OPENCLAW_CORE_TOOL_DEFINITIONS.find((tool) => tool.id === id) || {};
+                const toolSurfaceDefinition = OPENCLAW_CORE_TOOL_DEFINITIONS.find((tool) => tool.id === id) || {};
                 return {
                     id,
-                    label: openClawDefinition.label || id,
-                    description: openClawDefinition.description || `Local core ${id} tool.`,
-                    sectionId: openClawDefinition.sectionId || 'local-core',
+                    label: toolSurfaceDefinition.label || id,
+                    description: toolSurfaceDefinition.description || `Local core ${id} tool.`,
+                    sectionId: toolSurfaceDefinition.sectionId || 'local-core',
                     route: 'ailis-local-core',
                     materialized: true,
                     status: 'available',
@@ -962,6 +973,8 @@ class AILISGateway extends EventEmitter {
         const address = this.getAddress();
         const gatewayToolDefinitions = this.gatewayToolRuntimeRegistry?.listDefinitions?.() || [];
         const directGatewayTools = this.gatewayToolRuntimeRegistry?.modelVisibleSpecs?.() || [];
+        const agentToolSurface = getOpenClawToolSurfaceSummary();
+        const agentToolSurfaceValidation = validateOpenClawToolSurface().summary;
         return {
             enabled: true,
             running: Boolean(this.server),
@@ -973,8 +986,10 @@ class AILISGateway extends EventEmitter {
             platform: this.platformAdapter.getStatus(),
             auditLogPath: this.auditLogPath,
             toolGatewayUrl: this.toolGatewayUrl,
-            openClawToolSurface: getOpenClawToolSurfaceSummary(),
-            openClawToolSurfaceValidation: validateOpenClawToolSurface().summary,
+            agentToolSurface,
+            agentToolSurfaceValidation,
+            openClawToolSurface: agentToolSurface,
+            openClawToolSurfaceValidation: agentToolSurfaceValidation,
             toolContracts: {
                 version: 1,
                 count: listToolContracts().length
@@ -1686,7 +1701,7 @@ class AILISGateway extends EventEmitter {
             }
             const result = await withTimeout(
                 Number(context.timeoutMs || request.timeoutMs || TOOL_CALL_TIMEOUT_MS),
-                () => this.callOpenClawTool({ callId, toolId, args, context, workspaceDir })
+                () => this.callAgentRuntimeTool({ callId, toolId, args, context, workspaceDir })
             );
             const guardedResult = this.runtime.guardToolResult(result, { toolId, callId });
             const status = classifyToolResult(guardedResult);
@@ -1862,7 +1877,7 @@ class AILISGateway extends EventEmitter {
             sessionId: subagent?.childSessionId || context.sessionId || context.sessionKey,
             agentLoop: 'llm',
             planner: 'llm',
-            maxAgentSteps: Number(args.maxAgentSteps || context.maxAgentSteps || 50),
+            maxAgentSteps: Number(args.maxAgentSteps || context.maxAgentSteps || 12),
             context: this.mergeDefaultContext({
                 ...context,
                 parentRunId: subagent?.runId,
@@ -1873,7 +1888,7 @@ class AILISGateway extends EventEmitter {
                 sessionKey: subagent?.childSessionId || context.sessionKey,
                 agentLoop: 'llm',
                 planner: 'llm',
-                maxAgentSteps: Number(args.maxAgentSteps || context.maxAgentSteps || 50)
+                maxAgentSteps: Number(args.maxAgentSteps || context.maxAgentSteps || 12)
             })
         });
         const result = signal
@@ -1920,7 +1935,7 @@ class AILISGateway extends EventEmitter {
         };
     }
 
-    async callOpenClawTool({ callId = '', toolId, args, context, workspaceDir }) {
+    async callAgentRuntimeTool({ callId = '', toolId, args, context, workspaceDir }) {
         if (isExternalVirtualToolId(toolId)) {
             const result = await this.runtime?.capabilityManager?.executeVirtualExternalTool?.(toolId, args, {
                 ...context,
@@ -1967,7 +1982,7 @@ class AILISGateway extends EventEmitter {
 
         const finalArgs = this.prepareToolArgs({ toolId, args, context, workspaceDir });
         if (GATEWAY_BACKED_TOOL_IDS.has(toolId) || SESSION_BOUND_TOOL_IDS.has(toolId)) {
-            return await this.withDefaultOpenClawGatewayEnv(() => tool.execute(`ailis-${toolId}`, finalArgs));
+            return await this.withDefaultAgentRuntimeGatewayEnv(() => tool.execute(`ailis-${toolId}`, finalArgs));
         }
         return await tool.execute(`ailis-${toolId}`, finalArgs);
     }
@@ -2021,6 +2036,14 @@ class AILISGateway extends EventEmitter {
                 workspaceDir,
                 workspaceRoot: this.workspaceRoot,
                 projectRoot: this.projectRoot
+            });
+        }
+        if (toolId === ARTIFACT_IMPORT_TOOL_ID) {
+            return await executeArtifactImportTool(args, context, {
+                workspaceDir,
+                workspaceRoot: this.workspaceRoot,
+                projectRoot: this.projectRoot,
+                contextArtifactStore: this.runtime.contextArtifactStore
             });
         }
         if (toolId === READ_XLSX_WORKBOOK_TOOL_ID) {
@@ -2455,7 +2478,7 @@ class AILISGateway extends EventEmitter {
 
     async ensureToolGatewayReady() {
         if (!this.toolRuntimeSupervisor) {
-            this.toolRuntimeSupervisor = new OpenClawRuntimeSupervisor({
+            this.toolRuntimeSupervisor = new AILISAgentRuntimeSupervisor({
                 app: this.app,
                 gatewayUrl: this.toolGatewayUrl
             });
@@ -2463,23 +2486,23 @@ class AILISGateway extends EventEmitter {
         return await this.toolRuntimeSupervisor.ensureReady();
     }
 
-    async withDefaultOpenClawGatewayEnv(action) {
-        const priorOpenClawGatewayUrl = process.env.OPENCLAW_GATEWAY_URL;
-        const priorAilisOpenClawGatewayUrl = process.env.AILIS_OPENCLAW_GATEWAY_URL;
+    async withDefaultAgentRuntimeGatewayEnv(action) {
+        const priorAgentRuntimeGatewayUrl = process.env.OPENCLAW_GATEWAY_URL;
+        const priorAilisAgentRuntimeGatewayUrl = process.env.AILIS_OPENCLAW_GATEWAY_URL;
         try {
             delete process.env.OPENCLAW_GATEWAY_URL;
             delete process.env.AILIS_OPENCLAW_GATEWAY_URL;
             return await action();
         } finally {
-            if (priorOpenClawGatewayUrl === undefined) {
+            if (priorAgentRuntimeGatewayUrl === undefined) {
                 delete process.env.OPENCLAW_GATEWAY_URL;
             } else {
-                process.env.OPENCLAW_GATEWAY_URL = priorOpenClawGatewayUrl;
+                process.env.OPENCLAW_GATEWAY_URL = priorAgentRuntimeGatewayUrl;
             }
-            if (priorAilisOpenClawGatewayUrl === undefined) {
+            if (priorAilisAgentRuntimeGatewayUrl === undefined) {
                 delete process.env.AILIS_OPENCLAW_GATEWAY_URL;
             } else {
-                process.env.AILIS_OPENCLAW_GATEWAY_URL = priorAilisOpenClawGatewayUrl;
+                process.env.AILIS_OPENCLAW_GATEWAY_URL = priorAilisAgentRuntimeGatewayUrl;
             }
         }
     }
