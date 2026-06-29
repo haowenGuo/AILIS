@@ -1,4 +1,5 @@
 const STICKER_ASSET_ROOT = 'Resources/Emotes/ailis';
+const STICKER_INLINE_ASSET_ROOT = 'Resources/Emotes/ailis-small';
 
 export const AILIS_EMOTE_STICKERS = Object.freeze([
     {
@@ -200,6 +201,14 @@ function createResourceUrl(relativePath = '') {
     return normalizedPath;
 }
 
+function getInlineStickerAsset(sticker = {}) {
+    const asset = String(sticker.inlineAsset || sticker.asset || '').replace(/\\/g, '/');
+    if (!asset) {
+        return '';
+    }
+    return asset.replace(`${STICKER_ASSET_ROOT}/`, `${STICKER_INLINE_ASSET_ROOT}/`);
+}
+
 export function resolveAilisEmoteSticker(token) {
     return TOKEN_TO_STICKER.get(token) || null;
 }
@@ -254,14 +263,22 @@ export function appendTextWithAilisEmotes(parent, text = '', { enabled = false }
             continue;
         }
         const image = document.createElement('img');
+        const inlineAsset = getInlineStickerAsset(part.sticker);
+        const fallbackAsset = part.sticker.asset;
         image.className = 'ailis-emote-sticker';
-        image.src = createResourceUrl(part.sticker.asset);
+        image.src = createResourceUrl(inlineAsset || fallbackAsset);
         image.alt = part.sticker.label;
         image.title = `${part.sticker.label}（${part.token}）`;
         image.loading = 'lazy';
         image.decoding = 'async';
         image.dataset.ailisEmote = part.sticker.id;
         image.dataset.originalToken = part.token;
+        image.onerror = () => {
+            const fallbackUrl = createResourceUrl(fallbackAsset);
+            if (fallbackUrl && image.src !== fallbackUrl) {
+                image.src = fallbackUrl;
+            }
+        };
         parent.appendChild(image);
     }
 }
