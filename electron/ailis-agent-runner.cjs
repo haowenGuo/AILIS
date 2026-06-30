@@ -19,7 +19,8 @@ const {
     classifyEvidenceGapObservation,
     classifyToolFailureObservation,
     formatEvidenceGapHint,
-    formatFailureHint
+    formatFailureHint,
+    sanitizeToolArgsForPrompt
 } = require('./ailis-turn-items.cjs');
 const {
     attachPersonaSurface,
@@ -48,9 +49,17 @@ const MAX_RESULT_PREVIEW_CHARS = 2600;
 const STRUCTURED_TOOL_RESULT_PREVIEW_CHARS = 12000;
 const MAX_PROMPT_PROGRESS_CHARS = 700;
 const MAX_PROMPT_MEMORY_CHARS = 20000;
+const LOCAL_AGENT_PROMPT_MEMORY_CHARS = 1200;
+const LOCAL_AGENT_PROMPT_HISTORY_ITEMS = 4;
+const LOCAL_AGENT_PROMPT_HISTORY_CHARS = 280;
+const LOCAL_AGENT_PROMPT_TURN_ITEMS = 3;
+const LOCAL_AGENT_PROMPT_EXTERNAL_TOOL_LIMIT = 2;
+const TOOL_OBSERVATION_TEXT_CHARS = 1200;
+const ARTIFACT_OBSERVATION_LOSSLESS_TEXT_CHARS = 12000;
+const ARTIFACT_OBSERVATION_ROW_WINDOW_TEXT_CHARS = 8000;
 const MAX_MCP_TOOL_DESCRIPTION_CHARS = 900;
-const DEFAULT_AGENT_LOOP_STEPS = 50;
-const MAX_AGENT_LOOP_STEPS = 50;
+const DEFAULT_AGENT_LOOP_STEPS = 12;
+const MAX_AGENT_LOOP_STEPS = 12;
 const DEFAULT_PENDING_PLAN_TTL_MS = 30 * 60 * 1000;
 const DEFAULT_AGENT_DECISION_TIMEOUT_MS = 45000;
 const DEFAULT_VISION_AGENT_DECISION_TIMEOUT_MS = 90000;
@@ -166,8 +175,9 @@ const AGENT_TOOL_CATALOG = Object.freeze([
     Object.freeze({ id: 'code', label: 'code', summary: '代码操作、Git、测试和重构入口。' }),
     Object.freeze({ id: 'artifact_verifier', label: 'artifact_verifier', summary: '只读结构化产物验收：JSON/JSONL/CSV/TSV/YAML/TOML/Markdown/log/text。' }),
     Object.freeze({ id: 'artifact_query', label: 'artifact_query', summary: 'AILIS Context Artifact 查询入口：用 artifactId 查询 summary/grid/range/search，避免把大 payload 文件读进主上下文。' }),
+    Object.freeze({ id: 'artifact_tools', label: 'artifact_tools', summary: 'AILIS Artifact Tools 统一工件运行时：本地附件/文件的 open、index、search、query、inspect、render、trace、edit、export、roundtrip，优先接管 XLSX/PDF/DOCX/PPTX/CSV/图片等 artifact 类任务。' }),
+    Object.freeze({ id: 'artifact_import', label: 'artifact_import', summary: 'AILIS Context Artifact 导入入口：用 RAGFlow-lite worker 解析本地文件并注册可查询 artifactId。' }),
     Object.freeze({ id: 'artifact_compute', label: 'artifact_compute', summary: 'AILIS Context Artifact 计算入口：在 artifact 上做 profile/find_path 等确定性数据分析，返回短证据而不是大 payload。' }),
-    Object.freeze({ id: 'read_xlsx_workbook', label: 'read_xlsx_workbook', summary: '只读 Excel/XLSX/XLSM 工作簿解析：sheet、单元格值、公式、填充颜色、合并区域和紧凑网格。' }),
     Object.freeze({ id: 'github_pages', label: 'github_pages', summary: 'GitHub Pages/gh-pages/github.io 发布诊断、关键阻塞和公开 URL 验收证据。' }),
     Object.freeze({ id: 'exec', label: 'exec', summary: '在当前 runtime_environment shell 中运行一条命令，返回 stdout/stderr/exitCode/duration/workdir；适合已有脚本、测试、构建、诊断和短命令。' }),
     Object.freeze({ id: 'update_plan', label: 'update_plan', summary: '更新任务计划和进度。' }),
@@ -210,21 +220,46 @@ const CAPABILITY_ID_ALIASES = new Map([
     ['database', 'mcp_bridge'],
     ['db', 'mcp_bridge'],
     ['sql', 'mcp_bridge'],
-    ['artifact', 'artifact_verifier'],
+    ['artifact', 'artifact_tools'],
     ['artifact_query', 'artifact_query'],
+    ['artifact_tools', 'artifact_tools'],
+    ['artifact_runtime', 'artifact_tools'],
+    ['artifact_adapter', 'artifact_tools'],
+    ['artifact_import', 'artifact_import'],
+    ['import_artifact', 'artifact_import'],
+    ['ragflow_lite', 'artifact_import'],
     ['artifact_compute', 'artifact_compute'],
     ['data_worker', 'artifact_compute'],
     ['context_artifact', 'artifact_query'],
     ['payload', 'artifact_query'],
     ['verifier', 'artifact_verifier'],
-    ['csv', 'artifact_verifier'],
+    ['file_artifact', 'artifact_tools'],
+    ['local_artifact', 'artifact_tools'],
+    ['attachment', 'artifact_tools'],
+    ['attached_file', 'artifact_tools'],
+    ['csv', 'artifact_tools'],
+    ['tsv', 'artifact_tools'],
     ['json', 'artifact_verifier'],
     ['markdown', 'artifact_verifier'],
-    ['xlsx', 'read_xlsx_workbook'],
-    ['xlsm', 'read_xlsx_workbook'],
-    ['excel', 'read_xlsx_workbook'],
-    ['workbook', 'read_xlsx_workbook'],
-    ['spreadsheet', 'read_xlsx_workbook'],
+    ['xlsx', 'artifact_tools'],
+    ['xlsm', 'artifact_tools'],
+    ['xls', 'artifact_tools'],
+    ['excel', 'artifact_tools'],
+    ['workbook', 'artifact_tools'],
+    ['worksheet', 'artifact_tools'],
+    ['spreadsheet', 'artifact_tools'],
+    ['pdf', 'artifact_tools'],
+    ['docx', 'artifact_tools'],
+    ['docm', 'artifact_tools'],
+    ['pptx', 'artifact_tools'],
+    ['ppt', 'artifact_tools'],
+    ['presentation', 'artifact_tools'],
+    ['slides', 'artifact_tools'],
+    ['image', 'artifact_tools'],
+    ['png', 'artifact_tools'],
+    ['jpg', 'artifact_tools'],
+    ['jpeg', 'artifact_tools'],
+    ['webp', 'artifact_tools'],
     ['mcp', 'mcp_bridge'],
     ['tools', 'tool_search'],
     ['tool_discovery', 'tool_search'],
@@ -650,10 +685,12 @@ function buildAgentDecisionLowLatencyPayload(payload = {}, { settings = {}, requ
             : settings.agentDecisionThinking && typeof settings.agentDecisionThinking === 'object'
             ? settings.agentDecisionThinking
             : null;
+    const localConstrainedProvider = isConstrainedLocalAgentProvider(settings.provider);
+    const defaultMaxTokens = localConstrainedProvider ? 320 : 0;
     const maxTokens = Number(
         requestContext.agentDecisionMaxTokens ||
             settings.agentDecisionMaxTokens ||
-            0
+            defaultMaxTokens
     );
     const nextPayload = {
         ...payload,
@@ -669,7 +706,9 @@ function buildAgentDecisionLowLatencyPayload(payload = {}, { settings = {}, requ
         nextPayload.thinking = thinking;
     }
     if (Number.isFinite(maxTokens) && maxTokens > 0) {
-        nextPayload.max_tokens = Math.round(Math.min(Math.max(maxTokens, 256), 8192));
+        const minTokens = localConstrainedProvider ? 64 : 256;
+        const maxTokenLimit = localConstrainedProvider ? 1024 : 8192;
+        nextPayload.max_tokens = Math.round(Math.min(Math.max(maxTokens, minTokens), maxTokenLimit));
     }
     return nextPayload;
 }
@@ -732,6 +771,19 @@ function isExactAnswerExecutionMode(request = {}, requestContext = {}) {
     );
 }
 
+function looksLikeArtifactAnswerQuestion({ message = '', fileAttachments = [] } = {}) {
+    const text = normalizeText(message);
+    const attachments = normalizeFileAttachments(fileAttachments);
+    const hasArtifactAttachment = attachments.length > 0 ||
+        /\b[A-Z]:\\[^\n]+\.(?:xlsx|xls|xlsm|csv|tsv|docx|doc|pptx|ppt|pdf|png|jpe?g|webp|gif)\b/i.test(text) ||
+        /\b[^\s]+\.(?:xlsx|xls|xlsm|csv|tsv|docx|doc|pptx|ppt|pdf|png|jpe?g|webp|gif)\b/i.test(text) ||
+        /附带本地文件|attached local file|local file/i.test(text);
+    if (!hasArtifactAttachment) {
+        return false;
+    }
+    return /[?？]|\bwhat\b|\bwhich\b|\bhow many\b|\bwhere\b|\bwhen\b|\bwho\b|\bfind\b|\banswer\b|是什么|是哪|哪个|多少|几|答案|求出|找出|颜色|hex code/i.test(text);
+}
+
 function normalizeFinalAnswerConfidence(value) {
     const confidence = normalizeText(value).toLowerCase();
     if (/^(high|sure|certain|confident|高)/.test(confidence)) {
@@ -783,7 +835,7 @@ function inferAgentEvidenceId(stepResult = {}) {
         }
         return 'operation_result';
     }
-    if (/web_fetch|pdf|artifact_compute|artifact_query|read_xlsx_workbook|read_spreadsheet|spreadsheet|workbook|xlsx|csv|extract|download|transcript|github_repo_read|read|fetch/.test(haystack)) {
+    if (/web_fetch|pdf|artifact_tools|artifact_import|artifact_compute|artifact_query|read_spreadsheet|spreadsheet|workbook|xlsx|csv|extract|download|transcript|github_repo_read|read|fetch/.test(haystack)) {
         return /pdf|document|spreadsheet|csv|transcript|extract|read/.test(haystack)
             ? 'research_read_result'
             : 'parsed_content';
@@ -1017,7 +1069,7 @@ function buildEvidenceAuditContractPromptObject(auditCandidates = [], { message 
             ],
             next_action: 'final|continue_retrieval|use_specialized_tool|ask_clarification|blocked'
         },
-        final_answer_rule: 'Final answers may use only supported_claims. If ready=false, do not fill missing_fields with generic knowledge or plausible templates.',
+        final_answer_rule: 'Evidence labels are advisory only. The model decides whether the available observations are sufficient for a final answer.',
         candidates: auditCandidates
     };
 }
@@ -1038,10 +1090,7 @@ function buildReadyEvidenceFromStep(stepResult = {}) {
         details.reasoningReady,
         normalizeEvidenceBoolean(details.reasoning_ready, normalizeEvidenceBoolean(observationContract.reasoning_ready, normalizeEvidenceBoolean(evidence.reasoningReady, documentReadComplete && textSaysNotTruncated)))
     );
-    if (isWebEvidenceToolName(stepResult.tool) && details.finalAnswerRequiresEvidenceAudit !== false && observationContract.final_answer_requires_llm_evidence_audit !== false) {
-        return null;
-    }
-    if (stepResult.response?.ok !== true || complete !== true || truncated === true || reasoningReady !== true) {
+    if (stepResult.response?.ok !== true) {
         return null;
     }
     const coverage = details.coverage && typeof details.coverage === 'object'
@@ -1073,7 +1122,14 @@ function buildReadyEvidenceFromStep(stepResult = {}) {
             range: coverage.range,
             complete: coverage.complete,
             truncated: coverage.truncated
-        } : null
+        } : {
+            kind: isWebEvidenceToolName(stepResult.tool) ? 'web_observation' : 'tool_observation',
+            complete,
+            truncated,
+            reasoningReady,
+            evidenceQuality: details.evidenceQuality || details.evidence_quality || observationContract.evidence_quality || null,
+            isEvidence: details.isEvidence ?? details.is_evidence ?? observationContract.is_evidence ?? null
+        }
     };
 }
 
@@ -1089,9 +1145,9 @@ function previewBudgetForAgentToolResult(stepResult = {}) {
     const structuredSpreadsheet =
         details.workbook ||
         details.sheetCount !== undefined ||
-        /read_xlsx_workbook|spreadsheet|workbook|sheet=/i.test(`${tool}\n${resultText}`);
+        /spreadsheet|workbook|sheet=/i.test(`${tool}\n${resultText}`);
     if (
-        /read_document|read_spreadsheet|read_xlsx_workbook|read_presentation/.test(tool) ||
+        /read_document|read_spreadsheet|read_presentation/.test(tool) ||
         structuredDocument ||
         structuredSpreadsheet
     ) {
@@ -1136,29 +1192,22 @@ function buildEvidenceSufficiencyPromptObject(stepResults = [], { exactAnswerMod
         .find((stepResult) => stepResult?.response && stepResult.response.ok !== true) || null;
     const repeatedCoveredReads = readyEvidence.filter((entry) => entry.coveredByEvidence?.evidenceId).slice(-6);
     const hasComputeEvidence = readyEvidence.some((entry) => entry.tool === 'artifact_compute');
-    const auditRequired = evidenceAuditCandidates.length > 0;
-    const status = auditRequired && !readyEvidence.length
-        ? 'audit_required'
-        : readyEvidence.length
-        ? (auditRequired ? 'ready_with_web_audit_required' : (latestFailed ? 'ready_with_later_failure' : (sourceQuestionReady.length && !toolReadyEvidence.length ? 'source_question_ready_for_reasoning' : 'ready_for_reasoning')))
-        : 'needs_more_evidence';
-    const evidenceAuditContract = buildEvidenceAuditContractPromptObject(evidenceAuditCandidates, { message });
+    const auditRequired = false;
+    const status = readyEvidence.length
+        ? 'model_judges_evidence'
+        : 'no_tool_observations';
     return {
-        model: 'ailis_evidence_sufficiency.v1',
+        model: 'ailis_evidence_observations.v1',
         status,
         ready: readyEvidence.length > 0,
         audit_required: auditRequired,
         exact_answer_mode: exactAnswerMode === true,
-        recommended_next_action: auditRequired
-            ? 'Run the structured LLM evidence audit. If ready=false or required fields are missing, continue retrieval/use a specialized tool/ask clarification instead of finalizing from generic knowledge.'
-            : readyEvidence.length
-            ? (sourceQuestionReady.length && !toolReadyEvidence.length
-                ? 'For this self-contained exact-answer task, reason from the source_question evidence and submit that evidence ref. Use tools only if a specific external/file evidence gap remains.'
-                : 'Use the ready evidence to reason or final if it answers the user goal; do not repeat covered artifact reads. Call a narrower query/compute only if a specific missing field remains.')
-            : 'Gather complete, non-truncated, reasoning-ready evidence with read/query/compute tools before final.',
+        recommended_next_action: readyEvidence.length
+            ? 'Use your own judgment to decide whether the observations are enough to answer, continue searching, ask a clarification, or state uncertainty. Do not wait for a code-level evidence gate.'
+            : 'No successful tool observation is available yet. Decide whether to call a tool, answer from general knowledge, ask clarification, or explain uncertainty.',
         ready_evidence_count: readyEvidence.length,
         ready_evidence: readyEvidence,
-        evidence_audit_contract: evidenceAuditContract,
+        evidence_audit_contract: null,
         evidence_audit_candidates: evidenceAuditCandidates,
         latest_ready_evidence: latestReady,
         repeated_covered_reads: repeatedCoveredReads,
@@ -1199,17 +1248,22 @@ function getLatestUserMessage(request = {}) {
     return '';
 }
 
-function normalizeConversationHistory(messageHistory = []) {
+function normalizeConversationHistory(messageHistory = [], {
+    maxItems = 16,
+    maxChars = 1200
+} = {}) {
     if (!Array.isArray(messageHistory)) {
         return [];
     }
 
+    const itemLimit = Math.max(1, Math.min(Number(maxItems) || 16, 32));
+    const charLimit = Math.max(120, Math.min(Number(maxChars) || 1200, 2000));
     return messageHistory
         .filter((message) => ['user', 'assistant'].includes(message?.role))
-        .slice(-16)
+        .slice(-itemLimit)
         .map((message) => ({
             role: message.role,
-            content: summarize(normalizeText(message.content), 1200)
+            content: summarize(normalizeText(message.content), charLimit)
         }))
         .filter((message) => message.content);
 }
@@ -2442,6 +2496,69 @@ function resolveAgentLlmSettings(request = {}, requestContext = {}) {
     };
 }
 
+function isLocalAgentLlmProvider(provider = '') {
+    const normalizedProvider = normalizeText(provider).toLowerCase();
+    return normalizedProvider === 'vllm' || normalizedProvider === 'ollama';
+}
+
+function isConstrainedLocalAgentProvider(provider = '') {
+    const normalizedProvider = normalizeText(provider).toLowerCase();
+    return normalizedProvider === 'ollama';
+}
+
+function resolveAgentPromptProfile(settings = {}, requestContext = {}) {
+    const explicitProfile = normalizeText(
+        requestContext.agentPromptProfile ||
+            requestContext.promptProfile ||
+            settings.agentPromptProfile ||
+            ''
+    ).toLowerCase();
+    const exactAnswerCompact = requestContext.exactAnswerMode === true ||
+        requestContext.exactAnswer === true ||
+        requestContext.exact_answer_mode === true;
+    const taskCompact = requestContext.taskCompactPrompt === true ||
+        requestContext.artifactQuestionCompact === true ||
+        requestContext.artifact_answer_question === true;
+    const compact =
+        explicitProfile === 'compact' ||
+        explicitProfile === 'local_compact' ||
+        requestContext.compactAgentPrompt === true ||
+        settings.compactAgentPrompt === true ||
+        (explicitProfile !== 'full' && exactAnswerCompact) ||
+        (explicitProfile !== 'full' && taskCompact) ||
+        (explicitProfile !== 'full' && isConstrainedLocalAgentProvider(settings.provider));
+    if (!compact) {
+        return {
+            id: 'full',
+            compact: false,
+            memoryChars: MAX_PROMPT_MEMORY_CHARS,
+            historyItems: 16,
+            historyChars: 1200,
+            turnItems: 12,
+            externalToolExposureLimit: 16
+        };
+    }
+    return {
+        id: 'local_compact',
+        compact: true,
+        reason: exactAnswerCompact
+            ? 'exact_answer_task'
+            : (taskCompact ? 'artifact_answer_task' : 'local_constrained_llm'),
+        memoryChars: LOCAL_AGENT_PROMPT_MEMORY_CHARS,
+        historyItems: LOCAL_AGENT_PROMPT_HISTORY_ITEMS,
+        historyChars: LOCAL_AGENT_PROMPT_HISTORY_CHARS,
+        turnItems: LOCAL_AGENT_PROMPT_TURN_ITEMS,
+        externalToolExposureLimit: LOCAL_AGENT_PROMPT_EXTERNAL_TOOL_LIMIT
+    };
+}
+
+function isAgentLlmSettingsMissing(settings = {}) {
+    if (!settings.baseUrl || !settings.model) {
+        return true;
+    }
+    return !isLocalAgentLlmProvider(settings.provider) && !settings.apiKey;
+}
+
 function extractJsonObject(text) {
     const normalized = normalizeText(text);
     if (!normalized) {
@@ -2610,7 +2727,7 @@ function buildMcpBridgeSkillText() {
         'Codex-like 用法：Runtime 会把 MCP tools 暴露成 namespace/function 风格的直接工具名，例如 mcp__ailis_research__web_fetch。普通任务优先调用这种 direct tool，不要手工拼 mcp_bridge.call_tool。',
         'mcp_bridge 主要用于 list_servers、health_check、list_tool_specs、search_tools、list_resources、read_resource、list_prompts/get_prompt、注册/关闭 server 等管理和修复动作。',
         '如果 capability_context 给出了 mcp__server__tool 形式的 direct spec，可以直接把 tool_call.tool 写成该 id；Runtime 会保留原始 args 并路由到对应 MCP server/tool。',
-        '研究/网页类工具边界：web_search 是兜底检索，不是默认第一步；附件/本地文件、PDF/论文、视频、音频、图片、代码和 GitHub 仓库优先用 tool_search 找专用 direct MCP 工具。web_fetch 只读 HTML/纯文本；PDF 或二进制不要继续用 web_fetch；已知 PDF URL/路径用 pdf_extract_text，不知道 PDF 直链但知道论文/报告标题或文章页时优先用 pdf_find_and_extract；PDF/论文题知道标题时把标题放 title，把要找的字段放 extract_query，不要把答案字段当唯一 query；必要时再 download_file。',
+        '研究/网页类工具边界：web_search 是兜底检索，不是默认第一步；附件/本地文件、PDF/论文、音频、图片、代码和 GitHub 仓库优先用 tool_search 找专用 direct MCP 工具。web_fetch 只读 HTML/纯文本；PDF 或二进制不要继续用 web_fetch；已知 PDF URL/路径用 pdf_extract_text，不知道 PDF 直链但知道论文/报告标题或文章页时优先用 pdf_find_and_extract；PDF/论文题知道标题时把标题放 title，把要找的字段放 extract_query，不要把答案字段当唯一 query；必要时再 download_file。',
         'mcp_bridge 管理 action：schema/list_servers/register_server/remove_server/health_check/list_tools/list_tool_specs/search_tools/list_resources/read_resource/list_prompts/get_prompt/shutdown_server。'
     ].join('\n');
 }
@@ -2716,7 +2833,32 @@ function buildDeferredCapabilityIndexEntry(entry = {}, lane = 'tools') {
     };
 }
 
-function buildAgentCapabilityCatalog() {
+function buildAgentCapabilityCatalog({ compact = false } = {}) {
+    if (compact) {
+        return {
+            model: 'capability_index_compact',
+            note: 'Compact local-model capability index. Use tool_search or load_context to discover detailed skills/tools/MCP contracts only when the current user goal truly needs them.',
+            core_tools: [
+                'tool_search',
+                'read',
+                'write',
+                'exec',
+                'artifact_query',
+                'artifact_tools',
+                'artifact_import',
+                'request_permissions'
+            ],
+            deferred_contracts: true,
+            load_protocol: {
+                action: 'load_context',
+                request_shape: {
+                    skills: ['computer'],
+                    tools: ['computer'],
+                    mcp: []
+                }
+            }
+        };
+    }
     return {
         model: 'capability_index',
         note: 'This first-turn catalog is only an index. Detailed tool contracts, input schemas, return schemas, and usage limits are deferred into capability_context via load_context. MCP tools are Codex-like namespace tools: load/search MCP specs, then call returned mcp__server__tool direct ids. mcp_bridge is for discovery, resources, server management, and repair.',
@@ -2903,6 +3045,25 @@ function buildToolContextText(toolId, { emailProfiles = {} } = {}) {
             '返回包含 complete/truncated/reasoning_ready。若 complete=true 且 reasoning_ready=true，应基于证据推理或回答，不要反复读取同一大 payload。'
         ].join('\n'));
     }
+    if (toolId === 'artifact_tools') {
+        return appendToolContractText('artifact_tools', [
+            'TOOL artifact_tools schema：',
+            'AILIS Artifact Tools 是本地文件/附件 artifact 的统一运行时入口。文件类任务优先调用它，让 adapter 暴露结构、索引、检索、渲染和 compact evidence；XLSX/CSV/表格也走这一统一入口。',
+            '支持按 adapter 对 XLSX/XLSM/CSV/TSV/PDF/DOCX/PPTX/图片等执行 schema、list_adapters、plan_import、open_session、index/build_index、search/artifact_search、query/aggregate、inspect、render、trace、recalculate、edit、rollback、export、roundtrip、run_checks。',
+            '典型调用：{"tool":"artifact_tools","args":{"action":"inspect","path":"F:/path/file.xlsx","include":["summary","styles","formulas","tables","comments"]}}；需要检索证据时用 search/query，视觉验收用 render/run_checks。',
+            '若 observation 标记 truncatedForModelText 或给出 continuation，继续用 artifact_tools 的 continuation/nextActions 取缺失范围；这不是 adapter 缺能力。',
+            '如果 artifact_tools 返回 no_matching_adapter、adapter_*_not_implemented 或明确缺能力，由模型根据 observation 自行选择通用工具、其他专用工具或向用户澄清。'
+        ].join('\n'));
+    }
+    if (toolId === 'artifact_import') {
+        return appendToolContractText('artifact_import', [
+            'TOOL artifact_import schema：',
+            'AILIS Context Artifact 导入工具。把本地文件交给抽取出的 RAGFlow-lite worker 解析，并注册成可用 artifact_query 查询的 context artifactId。',
+            '这是旧 context-artifact/RAGFlow-lite 导入层；新的本地文件 artifact 默认先走 artifact_tools。只有需要兼容已有 artifact_query chunk 检索链路时再使用 artifact_import。',
+            '典型调用：{"tool":"artifact_import","args":{"path":"F:/path/file.xlsx","parserId":"table","language":"English"}}。',
+            '返回 artifactId、chunk 数和 warnings；后续用 artifact_query runtime_schema/chunk_search 让模型按需检索 worker chunk。'
+        ].join('\n'));
+    }
     if (toolId === 'artifact_compute') {
         return appendToolContractText('artifact_compute', [
             'TOOL artifact_compute schema：',
@@ -2910,15 +3071,6 @@ function buildToolContextText(toolId, { emailProfiles = {} } = {}) {
             '常用动作：profile 查看 artifact/sheet 结构和颜色/公式/合并概况；find_path 在二维 spreadsheet grid 上按 start/end/passable/blocked 参数搜索路径。',
             '典型调用：{"tool":"artifact_compute","args":{"artifactId":"ctx-spreadsheet-...","action":"find_path","sheet":"Map","startValue":"START","endValue":"END","blockedFills":["000000"]}}。',
             '返回短文本 + structuredContent，包含 complete/truncated/reasoning_ready。拿到 reasoning_ready=true 的 compute 结果后，应优先推理/回答，而不是继续重复读取同一 grid。'
-        ].join('\n'));
-    }
-    if (toolId === 'read_xlsx_workbook') {
-        return appendToolContractText('read_xlsx_workbook', [
-            'TOOL read_xlsx_workbook schema：',
-            '只读 Excel/XLSX/XLSM 工作簿解析工具，用于本地附件、表格地图、颜色网格、公式、合并单元格和多 sheet 检查。',
-            '优先场景：用户给出 .xlsx/.xlsm 文件、问题依赖单元格颜色/填充色/公式/合并区域/二维网格布局，或 read 返回 binary_file 并建议寻找表格解析工具。',
-            '常用参数：{path, sheet, range, maxRows, maxCols, includeStyles:true, includeFormulas:true}；不传 action 时 runtime 默认 inspect。',
-            '返回：人类可读预览 + artifactId + observation_contract。需要更多证据时用 artifact_query 的 summary/grid/range/search 按需查询；不要 raw read artifact payload，也不要用 exec dump 二进制。'
         ].join('\n'));
     }
     if (toolId === 'github_pages') {
@@ -3068,7 +3220,7 @@ async function enrichCapabilityContextWithMcpToolSpecs(capabilityEvent, runtime,
         return capabilityEvent;
     }
     const reason = normalizeText(capabilityEvent.request?.reason || '');
-    const query = [reason, 'direct MCP tool document pdf spreadsheet presentation video transcript image audio API repository file'].filter(Boolean).join(' ');
+    const query = [reason, 'direct MCP tool document pdf spreadsheet presentation image audio API repository file'].filter(Boolean).join(' ');
     try {
         const specs = await mcpManager.searchToolSpecs({
             query,
@@ -4035,7 +4187,7 @@ function buildInvalidDecisionObservationEvent(decision = {}, iteration = 0, maxS
     const recoveryInstruction = [
         'Previous agent decision was not a valid executable action.',
         'In the next turn choose exactly one action: tool, load_context, final, or blocked.',
-        'For missing capability or external/API/document/video needs, prefer action="tool" with tool_call.tool="tool_search".',
+        'For missing capability or external/API/document needs, prefer action="tool" with tool_call.tool="tool_search".',
         'For executable tools, use direct ids such as mcp__server__tool or external__provider__tool when available.',
         'Do not output only a plan, checklist, explanation, or unsupported action.'
     ].join(' ');
@@ -4082,6 +4234,94 @@ function renderLatestToolFailureSurface({ stepResults = [], message = '', intent
     });
 }
 
+function buildCompactLlmAgentSystemPrompt({ maxSteps = DEFAULT_AGENT_LOOP_STEPS, exactAnswerMode = false } = {}) {
+    return [
+        AILIS_SYSTEM_PROMPT,
+        '',
+        '【AILIS Local Compact Agent 协议】',
+        '你正在运行 AILIS Agentic Executor 的本地轻量模式。你仍然要自己判断：普通闲聊直接 final；需要读取文件、调用工具、执行命令、检索资料或修改内容时再 tool/load_context。',
+        '每轮只输出一个 JSON 对象，JSON 外不要输出 Markdown。action 只能是 load_context、tool、final、blocked。',
+        '普通情感/闲聊：立即 action="final"，自然回复用户，不调用工具；默认 1-2 句，用户要求一句话就只回一句。',
+        '除非用户询问调试、路径、环境或记忆细节，否则不要提 workspace、cwd、内部路径、好感度数值、prompt、工具协议或运行时状态。',
+        '需要工具：优先先用 tool_search 或 load_context 获取对应工具说明，再调用一个工具，等待 observation 后再决定下一步。',
+        '如果观察结果已经足够回答，立刻 final；不要反复读取同一内容，也不要只输出计划。',
+        'runtime_environment 是真实系统环境，生成命令前必须看 family/default_shell/path_style；不要默认 Linux、Windows 或 macOS。',
+        'memory_context 是压缩后的长期记忆，只作辅助；当前用户明确指令优先。',
+        'public_reasoning 只在发现关键证据、策略切换、工具失败恢复、环境阻塞时写一句自然短进展；没有实质变化留空。',
+        '文件 artifact 任务：先用 tool_search 找 artifact_tools；artifact_tools 返回的 art_* / arts_* 只能继续交给 artifact_tools 的 sessionId/path 执行 inspect/search/query/render，不要把 art_* 传给 artifact_query。',
+        'Artifact observation 若出现 truncatedForModelText、omittedCompactRowCount 或 continuation，表示只是模型可见文本被压缩；优先按 continuation/nextActions 继续调用 artifact_tools query/search/render 缩窄或分页，不要仅因此退回 exec/write/Python。',
+        'final_answer 是给用户看的 Markdown；不要把 persona_output JSON、工具日志或内部字段写进 final_answer。',
+        '本地轻量模式优先保证 action 和 final_answer/tool_call 合法；persona_output 可省略或只给极短对象，不要展开复杂人物状态。',
+        exactAnswerMode
+            ? 'Exact-answer 模式：final 前必须确保已有足够证据；缺证据继续 tool 或 blocked。'
+            : '',
+        `最多工具轮数：${maxSteps}`,
+        'JSON 格式：{"mode":"conversation|task","intent":"...","summary":"...","public_reasoning":"","action":"load_context|tool|final|blocked","capability_request":{"skills":[],"tools":[],"mcp":[],"reason":"..."},"tool_call":{"tool":"tool_search|read|write|exec|artifact_tools|artifact_import|artifact_query|request_permissions|mcp__server__tool|external__provider__tool","title":"...","args":{}},"persona_output":{},"final_answer":"Markdown...","blocked_reason":"Markdown..."}'
+    ].filter(Boolean).join('\n');
+}
+
+function hasObjectKeys(value) {
+    return Boolean(value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length);
+}
+
+function compactRuntimeEnvironmentForLocalModel(runtimeEnvironment = null) {
+    if (!runtimeEnvironment || typeof runtimeEnvironment !== 'object') {
+        return runtimeEnvironment;
+    }
+    const environment = runtimeEnvironment.environment || runtimeEnvironment;
+    return {
+        model: runtimeEnvironment.model || 'runtime_environment',
+        environment: {
+            family: environment.family || '',
+            platform: environment.platform || '',
+            default_shell: environment.default_shell || '',
+            path_style: environment.path_style || '',
+            command_guidance: environment.command_guidance || ''
+        }
+    };
+}
+
+function compactAgentUserPayloadForLocalModel(payload = {}) {
+    const next = {
+        user_goal: payload.user_goal,
+        recent_conversation: Array.isArray(payload.recent_conversation) && payload.recent_conversation.length
+            ? payload.recent_conversation
+            : undefined,
+        memory_context: payload.memory_context || undefined,
+        runtime_environment: compactRuntimeEnvironmentForLocalModel(payload.runtime_environment),
+        capability_catalog: payload.capability_catalog,
+        prompt_profile: payload.prompt_profile
+    };
+    if (payload.attached_files?.length) {
+        next.attached_files = payload.attached_files;
+    }
+    if (payload.recent_turn_items?.items?.length) {
+        next.recent_turn_items = payload.recent_turn_items;
+    }
+    if (Array.isArray(payload.tool_observations) && payload.tool_observations.length) {
+        next.tool_observations = payload.tool_observations;
+    }
+    if (payload.initial_plan_hint && hasObjectKeys(payload.initial_plan_hint)) {
+        next.initial_plan_hint = payload.initial_plan_hint;
+    }
+    if (Array.isArray(payload.evidence_artifacts) && payload.evidence_artifacts.length) {
+        next.evidence_artifacts = payload.evidence_artifacts;
+    }
+    if (payload.evidence_sufficiency?.status && payload.evidence_sufficiency.status !== 'needs_more_evidence') {
+        next.evidence_sufficiency = payload.evidence_sufficiency;
+    }
+    if (payload.exact_answer_contract) {
+        next.exact_answer_contract = payload.exact_answer_contract;
+    }
+    if (payload.external_tool_exposure?.tools?.length) {
+        next.external_tool_exposure = payload.external_tool_exposure;
+    }
+    if (payload.current_progress?.latest_observation || payload.current_progress?.latest_failed_observation || payload.current_progress?.text) {
+        next.current_progress = payload.current_progress;
+    }
+    return Object.fromEntries(Object.entries(next).filter(([, value]) => value !== undefined && value !== null && value !== ''));
+}
+
 function buildLlmAgentExecutorMessages({
     message,
     messageHistory = [],
@@ -4095,11 +4335,18 @@ function buildLlmAgentExecutorMessages({
     fileAttachments = [],
     externalToolExposure = null,
     exactAnswerMode = false,
-    runtimeEnvironment = null
+    runtimeEnvironment = null,
+    promptProfile = null
 }) {
+    const activePromptProfile = promptProfile || resolveAgentPromptProfile();
     const initialPlanHint = buildInitialPlanHint(initialPlan);
-    const capabilityCatalog = buildAgentCapabilityCatalog();
-    const recentConversation = normalizeConversationHistory(messageHistory);
+    const capabilityCatalog = buildAgentCapabilityCatalog({
+        compact: activePromptProfile.compact
+    });
+    const recentConversation = normalizeConversationHistory(messageHistory, {
+        maxItems: activePromptProfile.historyItems,
+        maxChars: activePromptProfile.historyChars
+    });
     const evidenceArtifacts = buildAgentEvidenceArtifactsPromptObject(stepResults, {
         message,
         exactAnswerMode
@@ -4112,18 +4359,22 @@ function buildLlmAgentExecutorMessages({
         exactAnswerMode,
         evidenceArtifacts
     });
-    const system = [
+    const system = activePromptProfile.compact
+        ? buildCompactLlmAgentSystemPrompt({ maxSteps, exactAnswerMode })
+        : [
         AILIS_SYSTEM_PROMPT,
         '',
         '【AILIS Codex-like 执行协议】',
         '在保持 AILIS 人设、语气、动作/表情指令规范的前提下，你同时运行 AILIS Agentic Executor，一个桌面任务执行智能体。',
         '你自己判断用户当前输入是普通情感/闲聊，还是需要执行任务；不要依赖外部分类结果。',
         'recent_turn_items 是 Codex-like 执行记录：tool_call 表示工具已开始，tool_result 表示工具成功或失败，context 表示能力说明已加载，runtime_note 是诊断信息。工具失败也是 observation，应进入下一轮决策；不要因为单个工具失败就僵死，可以换工具、换策略、请求上下文或诚实 final。',
-        '证据缺口协议：如果 latest_observation 或 tool_result 中出现 evidence_gap/recovery_hint，说明上一个工具虽然可能成功，但证据不足；优先按 recovery_hint 调用 tool_search 寻找结构化 API、文档解析、视频帧采样或视觉工具，不要机械重复同一个 web_fetch/search。',
+        '工具观察协议：latest_observation、tool_result、evidence_gap、recovery_hint 和 retrieval diagnostic 只是工具层诊断材料，不是证据充分性判断，也不是继续检索命令。你必须自己判断：候选片段/页面是否已足够回答；足够就 final，不足才继续工具、换策略、询问澄清或说明不确定。',
         '歧义澄清协议：如果 latest_observation/tool_result 的 evidence_gap 是 ambiguous_search_requires_clarification，或 recovery_hint 要求用户澄清搜索目标，立即 action="final" 或 action="blocked" 向用户提出简短澄清问题并列出候选；不要继续调用 web_search、web_fetch 或按低置信度结果猜测执行。',
-        '证据审计协议：如果 user payload 的 evidence_sufficiency.audit_required 为 true，必须先按 evidence_audit_contract 形成结构化 evidence_audit（ready、confidence、supported_claims、missing_fields、rejected_evidence、next_action）。这个 LLM 审计可以推翻工具返回的 ready/reasoningReady；final_answer 只能使用 supported_claims，missing_fields 不能用常识模板补齐。',
-        '证据充分协议：如果 user payload 的 evidence_sufficiency.status 是 ready_for_reasoning，且 ready_evidence 已覆盖当前问题所需字段/范围/计算结果，应进入推理或 final；不要继续重复读取 covered artifact/range，除非能说明缺少哪个具体字段。',
-        '工具选择路由：如果任务提到附件、文件路径、DOCX/Word、PPT/PPTX、表格/CSV/XLSX、PDF/论文/报告、YouTube/视频、音频、图片、代码文件、GitHub 仓库或已知 URL，先用 tool_search 查对应 artifact/tool 类型并调用返回的专用 direct 工具（本地工具、mcp__... 或 external__...）；web_search 只作为没有专用工具或专用工具失败后的兜底。',
+        '证据判断协议：工具返回的 evidence_sufficiency / evidence_observations 只是观察材料和质量提示，不是硬性闸门。由你自己判断证据是否足够；够就 final，不够就继续工具、询问澄清或说明不确定。',
+        '不要机械等待 ready_for_reasoning、reasoningReady 或完整网页抓取；搜索摘要、元数据、片段、多个弱来源的一致性都可以作为你判断的一部分。',
+        '工具选择路由：如果任务提到附件、本地文件路径、DOCX/Word、PPT/PPTX、表格/CSV/XLSX、PDF、图片或其他文件 artifact，优先用 tool_search 查 artifact_tools 并让 AILIS Artifact Tools 接管 open/index/search/query/inspect/render/trace/edit/export。音频、代码文件、GitHub 仓库、已知 URL 仍按对应专用工具或 MCP direct spec 处理；web_search 只作为没有专用工具或专用工具失败后的兜底。',
+        'Artifact Tools 协议：artifact_tools 返回的 art_* / arts_* 属于 artifact_tools 运行时；继续用 artifact_tools 的 sessionId/path 执行 inspect/search/query/render。不要把 art_* 传给 artifact_query；artifact_query 只用于 context artifactId。',
+        'Artifact Tools 截断恢复：truncatedForModelText/omittedCompactRowCount/continuation 说明只是模型文本预算压缩，优先用 continuation 或更窄 range 继续 artifact_tools query/search/render；不要仅因模型可见文本压缩就切到 exec/write/Python。',
         '遇到任务时按 Codex/OpenClaw 风格逐步执行：观察当前状态，决定下一步，调用一个工具，等待 observation，再决定下一步。不要一次性输出完整 steps 当作完成，也不要只说计划。',
         '权限协议：如果 observation 显示 permission_profile_read_only、network_access_disabled 或需要额外文件/网络权限，使用 request_permissions 精确请求 permissions，不要只在 final_answer 里口头请求授权。',
         '外部资料与产物规则：如果用户要求读取 URL/PDF/网页/技术文档/API/官方文档/版本化库行为/文件/邮箱/仓库/屏幕，或要求生成、修改、提交某个文件，不能只凭模型记忆 final。你必须先调用最小必要工具拿到 observation；如果用户要求输出文件，写入后还要用 read/stat/artifact_verifier 复核，再 final。',
@@ -4151,7 +4402,7 @@ function buildLlmAgentExecutorMessages({
         '可见回复格式：final_answer 字段是给用户看的 Markdown 字符串，可以使用自然段、短列表、代码块和加粗；blocked_reason 也按 Markdown 组织。不要输出 HTML；不要把 persona_output/persona_surface 或 emotion/intensity/gestureIntent/taskState 等内部控制字段放进任何可见回复字段。',
         '只输出 JSON，JSON 外不要输出 Markdown。',
         'persona_output 字段示例：{"text":"自然可见回复","bubble_text":"可选气泡短句","speech_text":"可选语音文本","emotion":"happy|relaxed|shy|sad|angry|surprised|anxious|tired|thinking|focused|comforting","intensity":0.55,"socialTone":"soft|bright|calm|serious|playful|quiet","gestureIntent":"none|greeting|farewell|thinking|working|approval|success|celebrate|shy|comfort|apologize|surprised|angry|dance","taskState":"idle|listening|thinking|speaking|working|waiting_approval|happy_success|apologizing|comforting|blocked|failed","speechEnergy":0.45,"gazeTarget":"user|side|down|screen|away|none","durationHint":"short|medium|long|hold","tts_style":"..."}',
-        'JSON 格式：{"mode":"conversation|task","intent":"...","summary":"...","public_reasoning":"给用户看的短进度摘要，可空","action":"load_context|tool|final|blocked","capability_request":{"skills":[],"tools":[],"mcp":[],"reason":"..."},"plan_update":["..."],"tool_call":{"tool":"vision.capture_context|computer|email|code|file_manager|artifact_verifier|artifact_query|artifact_compute|read_xlsx_workbook|tool_search|request_permissions|mcp_bridge|capability_manager|self_debugger|self_evolution|subagents|update_plan|read|write|exec|apply_patch|mcp__server__tool|external__provider__tool","title":"...","args":{"action":"...","target":"screen|chat-window|active-window|region","reason":"...","question":"..."}},"evidence_audit":{"ready":false,"confidence":"low|medium|high","task_type":"...","answerable_scope":"...","supported_claims":[],"missing_fields":[],"rejected_evidence":[],"next_action":"final|continue_retrieval|use_specialized_tool|ask_clarification|blocked"},"persona_output":{},"final_answer":"Markdown...","exact_answer_submission":{"answer":"短答案","confidence":"high|medium|low","evidence_refs":["artifact-..."],"format_type":"plain|number|date|list|name|url|json","reason":"brief evidence note"},"blocked_reason":"Markdown..."}',
+        'JSON 格式：{"mode":"conversation|task","intent":"...","summary":"...","public_reasoning":"给用户看的短进度摘要，可空","action":"load_context|tool|final|blocked","capability_request":{"skills":[],"tools":[],"mcp":[],"reason":"..."},"plan_update":["..."],"tool_call":{"tool":"vision.capture_context|computer|email|code|file_manager|artifact_verifier|artifact_tools|artifact_import|artifact_query|artifact_compute|tool_search|request_permissions|mcp_bridge|capability_manager|self_debugger|self_evolution|subagents|update_plan|read|write|exec|apply_patch|mcp__server__tool|external__provider__tool","title":"...","args":{"action":"...","target":"screen|chat-window|active-window|region","reason":"...","question":"..."}},"evidence_audit":{"ready":false,"confidence":"low|medium|high","task_type":"...","answerable_scope":"...","supported_claims":[],"missing_fields":[],"rejected_evidence":[],"next_action":"final|continue_retrieval|use_specialized_tool|ask_clarification|blocked"},"persona_output":{},"final_answer":"Markdown...","exact_answer_submission":{"answer":"短答案","confidence":"high|medium|low","evidence_refs":["artifact-..."],"format_type":"plain|number|date|list|name|url|json","reason":"brief evidence note"},"blocked_reason":"Markdown..."}',
         '当 tool_call.tool 是 mcp_bridge 时，只能用于 MCP 管理/发现/修复动作，不要用它包装 call_tool。执行具体 MCP 工具必须使用 mcp__server__tool direct id。',
         `最多工具轮数：${maxSteps}`,
         `工具摘要：${toolSummary || 'Core tools are indexed in capability_catalog; detailed contracts and MCP tool specs are deferred.'}`
@@ -4159,7 +4410,7 @@ function buildLlmAgentExecutorMessages({
     const recentTurnItems = buildTurnItemsPromptObject({
         events,
         stepResults,
-        maxItems: 12
+        maxItems: activePromptProfile.turnItems
     });
     const progressSnapshot = buildAgentPromptProgressSnapshot({
         events,
@@ -4167,40 +4418,53 @@ function buildLlmAgentExecutorMessages({
         turnItems: recentTurnItems
     });
     const compactMemoryContext = memoryContext
-        ? summarizeForModel(memoryContext, MAX_PROMPT_MEMORY_CHARS)
+        ? summarizeForModel(memoryContext, activePromptProfile.memoryChars)
         : null;
+    const promptPayload = {
+        user_goal: message,
+        recent_conversation: recentConversation,
+        memory_context: compactMemoryContext,
+        attached_files: getAttachedFilesPromptObject(fileAttachments),
+        runtime_environment: runtimeEnvironment,
+        recent_turn_items: recentTurnItems,
+        tool_observations: buildToolObservationDigest(stepResults),
+        initial_plan_hint: initialPlanHint,
+        evidence_artifacts: evidenceArtifacts,
+        evidence_sufficiency: evidenceSufficiency,
+        exact_answer_contract: exactAnswerContract,
+        capability_catalog: capabilityCatalog,
+        external_tool_exposure: externalToolExposure,
+        current_progress: progressSnapshot,
+        prompt_profile: {
+            id: activePromptProfile.id,
+            compact: activePromptProfile.compact,
+            reason: activePromptProfile.reason || '',
+            memory_budget_chars: activePromptProfile.memoryChars,
+            history_items: activePromptProfile.historyItems,
+            turn_items: activePromptProfile.turnItems
+        },
+        prompt_compaction: {
+            status: 'active',
+            removed_duplicate_observations_field: true,
+            original_event_count: Array.isArray(events) ? events.length : 0,
+            retained_turn_items: recentTurnItems.items.length,
+            omitted_turn_items: recentTurnItems.retention?.omitted_items || 0,
+            turn_items_retention: recentTurnItems.retention,
+            memory_context_chars: memoryContext ? memoryContext.length : 0,
+            memory_context_compacted_chars: compactMemoryContext ? compactMemoryContext.length : 0
+        }
+    };
+    const modelPayload = activePromptProfile.compact
+        ? compactAgentUserPayloadForLocalModel(promptPayload)
+        : promptPayload;
     return [
         { role: 'system', content: system },
         {
             role: 'user',
             content: JSON.stringify(
-                {
-                    user_goal: message,
-                    recent_conversation: recentConversation,
-                    memory_context: compactMemoryContext,
-                    attached_files: getAttachedFilesPromptObject(fileAttachments),
-                    runtime_environment: runtimeEnvironment,
-                    recent_turn_items: recentTurnItems,
-                    initial_plan_hint: initialPlanHint,
-                    evidence_artifacts: evidenceArtifacts,
-                    evidence_sufficiency: evidenceSufficiency,
-                    exact_answer_contract: exactAnswerContract,
-                    capability_catalog: capabilityCatalog,
-                    external_tool_exposure: externalToolExposure,
-                    current_progress: progressSnapshot,
-                    prompt_compaction: {
-                        status: 'active',
-                        removed_duplicate_observations_field: true,
-                        original_event_count: Array.isArray(events) ? events.length : 0,
-                        retained_turn_items: recentTurnItems.items.length,
-                        omitted_turn_items: recentTurnItems.retention?.omitted_items || 0,
-                        turn_items_retention: recentTurnItems.retention,
-                        memory_context_chars: memoryContext ? memoryContext.length : 0,
-                        memory_context_compacted_chars: compactMemoryContext ? compactMemoryContext.length : 0
-                    }
-                },
+                modelPayload,
                 null,
-                2
+                activePromptProfile.compact ? 0 : 2
             )
         }
     ];
@@ -4226,6 +4490,64 @@ function isTerminalProviderErrorMessage(error = '') {
 
 function isTerminalProviderDecisionError(decision = {}) {
     return decision?.status === 'provider_error' && isTerminalProviderErrorMessage(decision.error);
+}
+
+function isTerminalAgentDecisionFailure(decision = {}) {
+    const status = normalizeText(decision?.status).toLowerCase();
+    const httpStatus = Number(decision?.httpStatus || decision?.statusCode || 0);
+    if (isTerminalProviderDecisionError(decision)) {
+        return true;
+    }
+    if (status === 'timeout' || status === 'aborted' || status === 'network_error' || status === 'transient_network_error') {
+        return true;
+    }
+    if (status !== 'provider_error') {
+        return false;
+    }
+    if (Number.isFinite(httpStatus) && (httpStatus === 408 || httpStatus === 429 || httpStatus >= 500)) {
+        return true;
+    }
+    const error = normalizeText(decision?.error).toLowerCase();
+    return /timeout|timed\s*out|econnreset|econnrefused|econnaborted|etimedout|fetch failed|socket|network/.test(error);
+}
+
+function describeTerminalAgentDecisionFailure(decision = {}) {
+    const status = normalizeText(decision?.status, 'provider_error');
+    const error = normalizeText(decision?.error, status);
+    if (status === 'timeout') {
+        return {
+            status: 'timeout',
+            intent: 'llm_decision_timeout',
+            source: 'llm_decision_timeout',
+            nextAction: '缩短上下文、换更快的本地模型，或提高本地模型推理速度后重试',
+            displayText: `模型决策调用超时：${error}`
+        };
+    }
+    if (status === 'aborted') {
+        return {
+            status: 'aborted',
+            intent: 'llm_decision_aborted',
+            source: 'llm_decision_aborted',
+            nextAction: '用户中断后可从当前任务重新开始',
+            displayText: error || '模型决策调用已被中断。'
+        };
+    }
+    if (status === 'network_error' || status === 'transient_network_error') {
+        return {
+            status,
+            intent: 'llm_provider_unavailable',
+            source: 'llm_provider_unavailable',
+            nextAction: '检查本地/云端模型服务连接后重试',
+            displayText: `模型服务连接失败：${error}`
+        };
+    }
+    return {
+        status: 'provider_error',
+        intent: 'llm_provider_unavailable',
+        source: 'llm_provider_unavailable',
+        nextAction: '检查或更换 LLM provider/API key 后重新运行',
+        displayText: `模型服务不可用：${error}`
+    };
 }
 
 function isValidNativeToolName(name = '') {
@@ -4449,6 +4771,10 @@ function extractSearchToolsFromStepResult(stepResult = {}) {
         return [];
     }
     const result = stepResult.response?.result || {};
+    const rawTools = result.__ailisRawToolSearchTools;
+    if (Array.isArray(rawTools)) {
+        return rawTools;
+    }
     const directTools =
         result.structuredContent?.tools ||
         result.details?.tools ||
@@ -4457,9 +4783,35 @@ function extractSearchToolsFromStepResult(stepResult = {}) {
     return Array.isArray(directTools) ? directTools : [];
 }
 
-function buildNativeSpecFromSearchToolEntry(entry = {}) {
+function resolveCanonicalRuntimeToolSpec(gateway, entry = {}) {
+    const toolId = directToolEntryId(entry);
+    if (!toolId) {
+        return null;
+    }
+    const registries = [
+        gateway?.gatewayToolRuntimeRegistry,
+        gateway?.runtime?.toolRuntimeRegistry,
+        gateway?.runtime?.gatewayToolRuntimeRegistry
+    ].filter(Boolean);
+    for (const registry of registries) {
+        const definition = registry?.definition?.(toolId);
+        if (definition?.spec) {
+            return normalizeNativeToolSpec({
+                ...definition.spec,
+                defer_loading: false
+            });
+        }
+    }
+    return null;
+}
+
+function buildNativeSpecFromSearchToolEntry(entry = {}, gateway = null) {
     if (entry.callable === false || entry.modelFacing === false) {
         return null;
+    }
+    const canonicalSpec = resolveCanonicalRuntimeToolSpec(gateway, entry);
+    if (canonicalSpec) {
+        return canonicalSpec;
     }
     if (entry.spec) {
         return normalizeNativeToolSpec({
@@ -4577,16 +4929,16 @@ function collectTemporarilySuppressedCoreDirectTools(stepResults = [], requestCo
     return suppressed;
 }
 
-function buildDynamicDirectToolSpecsFromObservations(stepResults = []) {
+function buildDynamicDirectToolSpecsFromObservations(stepResults = [], gateway = null) {
     const specs = [];
     const seen = new Set();
     const disabledTools = collectTemporarilyDisabledDirectTools(stepResults);
-    for (const stepResult of stepResults.slice(-8)) {
+    for (const stepResult of stepResults.slice(-32)) {
         for (const entry of extractSearchToolsFromStepResult(stepResult)) {
             if (disabledTools.has(directToolEntryId(entry))) {
                 continue;
             }
-            pushUniqueNativeToolSpec(specs, seen, buildNativeSpecFromSearchToolEntry(entry));
+            pushUniqueNativeToolSpec(specs, seen, buildNativeSpecFromSearchToolEntry(entry, gateway));
         }
     }
     return specs;
@@ -4661,7 +5013,7 @@ function buildAgentDirectToolSpecs(gateway, { stepResults = [], requestContext =
         }
         pushUniqueNativeToolSpec(specs, seen, spec);
     }
-    for (const spec of buildDynamicDirectToolSpecsFromObservations(stepResults)) {
+    for (const spec of buildDynamicDirectToolSpecsFromObservations(stepResults, gateway)) {
         pushUniqueNativeToolSpec(specs, seen, spec);
     }
     const limit = Math.max(4, Math.min(Number(requestContext.directToolLimit || 16), 40));
@@ -4864,14 +5216,8 @@ function validateExactAnswerSubmission({ decision = {}, stepResults = [], messag
     if (looksLikeExplanatoryFinalAnswer(submission.answer)) {
         errors.push('answer_not_exact_shape');
     }
-    if (!['high', 'medium'].includes(submission.confidence)) {
-        errors.push('confidence_below_gate');
-    }
-    if (!submission.evidenceRefs.length) {
-        errors.push('evidence_refs_missing');
-    }
     const unknownRefs = submission.evidenceRefs.filter((ref) => !availableRefs.has(ref));
-    if (unknownRefs.length) {
+    if (submission.evidenceRefs.length && unknownRefs.length) {
         errors.push('evidence_refs_unknown');
     }
     const scaledUnitMismatch = scaledUnitAnswerMismatch({ question: message, answer: submission.answer });
@@ -4903,9 +5249,9 @@ function buildExactAnswerRepairObservation(validation = {}, { iteration = 0 } = 
     const nextAction = validation.incompleteSimulation?.instruction ||
         validation.reasonConflict?.instruction ||
         validation.scaledUnitMismatch?.instruction ||
-        (missing.includes('evidence_refs_missing') || missing.includes('evidence_refs_unknown')
-        ? 'Use the available evidence_artifacts ids, or call another retrieval/read/compute tool to create the missing evidence before final_answer.'
-        : 'Return a short exact answer with high/medium confidence and no explanatory prose.');
+        (missing.includes('evidence_refs_unknown')
+        ? 'Use only known evidence_artifacts ids if you choose to cite evidence, or omit evidence_refs.'
+        : 'Return a short exact answer with the confidence you judge appropriate and no explanatory prose.');
     return {
         type: 'evidence_recovery',
         status: 'exact_answer_gate_rejected',
@@ -4933,32 +5279,248 @@ function buildExactAnswerRepairObservation(validation = {}, { iteration = 0 } = 
     };
 }
 
-function buildLosslessToolObservationDigest(stepResults = []) {
+function sanitizeWebStructuredContentForPrompt(value, depth = 0) {
+    if (depth > 6 || value === null || value === undefined) {
+        return value;
+    }
+    if (Array.isArray(value)) {
+        return value.map((item) => sanitizeWebStructuredContentForPrompt(item, depth + 1));
+    }
+    if (typeof value !== 'object') {
+        return value;
+    }
+    const omittedKeys = new Set([
+        'searchConfidence',
+        'search_confidence',
+        'answerReadiness',
+        'answer_readiness',
+        'retrievalReadiness',
+        'retrieval_readiness',
+        'readinessAuthority',
+        'readiness_authority',
+        'evidenceDecision',
+        'evidence_decision',
+        'requiresEvidenceAudit',
+        'requires_evidence_audit',
+        'evidenceGap',
+        'evidence_gap',
+        'recoveryHint',
+        'recovery_hint',
+        'evidenceQuality',
+        'evidence_quality',
+        'contentQuality',
+        'content_quality',
+        'evidenceScore',
+        'evidence_score',
+        'evidenceScoreBreakdown',
+        'evidence_score_breakdown',
+        'reasoningReady',
+        'reasoning_ready',
+        'modelJudgesEvidence',
+        'model_judges_evidence',
+        'isEvidence',
+        'is_evidence',
+        'complete'
+    ]);
+    return Object.fromEntries(Object.entries(value)
+        .filter(([key]) => !omittedKeys.has(key))
+        .map(([key, item]) => [key, sanitizeWebStructuredContentForPrompt(item, depth + 1)]));
+}
+
+function getArtifactObservationFromParsedResult(parsed = {}) {
+    const candidates = [
+        parsed?.observation,
+        parsed?.result?.observation,
+        parsed?.structuredContent?.observation,
+        parsed?.structuredContent?.result?.observation
+    ];
+    return candidates.find((entry) => entry && typeof entry === 'object' && !Array.isArray(entry)) || null;
+}
+
+function getArtifactRowsFromObservation(observation = {}) {
+    return Array.isArray(observation?.compactRows) ? observation.compactRows : [];
+}
+
+function buildArtifactContinuationFromRows(view = {}, omittedRows = []) {
+    const observation = getArtifactObservationFromParsedResult(view) || {};
+    const sheetName = normalizeText(observation.sheetName);
+    const columns = Array.isArray(observation.columns) ? observation.columns.filter(Boolean) : [];
+    if (!sheetName || !columns.length || !omittedRows.length) {
+        return observation.continuation || null;
+    }
+    const first = omittedRows[0]?.rowNumber;
+    const last = omittedRows[omittedRows.length - 1]?.rowNumber;
+    if (!Number.isFinite(Number(first)) || !Number.isFinite(Number(last))) {
+        return observation.continuation || null;
+    }
+    return {
+        action: 'query',
+        reason: 'prompt_view_omitted_middle_rows; fetch this row range before answering if the omitted rows might affect the task',
+        args: {
+            action: 'query',
+            sessionId: view.artifact?.sessionId || observation.sessionId || '',
+            sheet: sheetName,
+            range: `${sheetName}!${columns[0]}${first}:${columns[columns.length - 1]}${last}`,
+            include: ['values', 'fills', 'styles', 'formulas', 'comments']
+        }
+    };
+}
+
+function compactArtifactPromptRows(view = {}, maxChars = ARTIFACT_OBSERVATION_ROW_WINDOW_TEXT_CHARS) {
+    const observation = getArtifactObservationFromParsedResult(view);
+    const rows = getArtifactRowsFromObservation(observation);
+    if (!observation || !rows.length) {
+        const text = JSON.stringify(view, null, 2);
+        return {
+            text: summarizeForModel(text, maxChars),
+            lossless: text.length <= maxChars
+        };
+    }
+
+    const baseView = JSON.parse(JSON.stringify(view));
+    const baseObservation = getArtifactObservationFromParsedResult(baseView);
+    const originalRowCount = rows.length;
+    const makeView = (visibleRows) => {
+        const headCount = Math.ceil(visibleRows * 0.65);
+        const tailCount = Math.max(1, visibleRows - headCount);
+        const head = rows.slice(0, headCount);
+        const tail = rows.slice(Math.max(head.length, rows.length - tailCount));
+        const omittedRows = rows.slice(head.length, Math.max(head.length, rows.length - tail.length));
+        baseObservation.compactRows = [...head, ...tail];
+        baseObservation.promptCompression = {
+            lossless: false,
+            reason: 'artifact_tool_observation_exceeded_prompt_budget',
+            preservedStructure: 'compactRows are kept as whole row objects; no string middle-cut is applied to rows',
+            visibleRowStrategy: 'head_tail_rows',
+            originalCompactRowCount: originalRowCount,
+            visibleCompactRowCount: baseObservation.compactRows.length,
+            omittedCompactRowCount: omittedRows.length,
+            omittedCompactRowRange: omittedRows.length
+                ? `${omittedRows[0]?.rowNumber || ''}:${omittedRows[omittedRows.length - 1]?.rowNumber || ''}`
+                : '',
+            requiredNextStep: omittedRows.length
+                ? 'Call artifact_tools query with the continuation/range below if omitted rows may affect the answer.'
+                : ''
+        };
+        const continuation = buildArtifactContinuationFromRows(baseView, omittedRows);
+        if (continuation) {
+            baseObservation.continuation = continuation;
+            baseView.nextActions = [continuation, ...(Array.isArray(baseView.nextActions) ? baseView.nextActions : [])].slice(0, 6);
+        }
+        return JSON.stringify(baseView, null, 2);
+    };
+
+    let visibleRows = Math.min(rows.length, 16);
+    let text = makeView(visibleRows);
+    while (text.length > maxChars && visibleRows > 4) {
+        visibleRows = Math.max(4, visibleRows - 2);
+        text = makeView(visibleRows);
+    }
+    return {
+        text: text.length > maxChars ? summarizeForModel(text, maxChars) : text,
+        lossless: false
+    };
+}
+
+function buildArtifactToolObservationPromptText(resultText = '') {
+    const parsed = safeJsonParse(resultText);
+    if (!parsed || typeof parsed !== 'object') {
+        const text = summarizeForModel(resultText, ARTIFACT_OBSERVATION_ROW_WINDOW_TEXT_CHARS);
+        return {
+            text,
+            lossless: text === resultText,
+            compression: text === resultText ? null : {
+                reason: 'artifact_tool_text_not_json',
+                originalTextChars: resultText.length,
+                promptTextChars: text.length
+            }
+        };
+    }
+    const observation = getArtifactObservationFromParsedResult(parsed);
+    const promptAlreadyTruncated = resultText.includes('[truncated for model budget]') ||
+        observation?.truncatedForModelText === true ||
+        Number(observation?.omittedCompactRowCount || 0) > 0;
+    if (resultText.length <= ARTIFACT_OBSERVATION_LOSSLESS_TEXT_CHARS && !promptAlreadyTruncated) {
+        return {
+            text: resultText,
+            lossless: true,
+            compression: null
+        };
+    }
+    const compacted = compactArtifactPromptRows(parsed);
+    return {
+        text: compacted.text,
+        lossless: compacted.lossless,
+        compression: compacted.lossless ? null : {
+            reason: promptAlreadyTruncated
+                ? 'artifact_tool_observation_was_already_model_truncated'
+                : 'artifact_tool_observation_exceeded_prompt_budget',
+            originalTextChars: resultText.length,
+            promptTextChars: compacted.text.length,
+            instruction: 'The prompt view is compressed structurally. Use observation.promptCompression and continuation/nextActions to fetch omitted rows before answering if needed.'
+        }
+    };
+}
+
+function buildGenericToolObservationPromptText(resultText = '', response = {}) {
+    const sourceText = resultText || response.error || summarize(response, TOOL_OBSERVATION_TEXT_CHARS);
+    const text = summarizeForModel(sourceText, TOOL_OBSERVATION_TEXT_CHARS);
+    const lossless = text === sourceText;
+    return {
+        text,
+        lossless,
+        compression: lossless ? null : {
+            reason: 'generic_tool_observation_text_exceeded_prompt_budget',
+            originalTextChars: sourceText.length,
+            promptTextChars: text.length,
+            instruction: 'This is a compressed preview. Re-run or narrow the tool call if the omitted text may matter.'
+        }
+    };
+}
+
+function buildToolObservationDigest(stepResults = []) {
     return stepResults.slice(-4).map((stepResult) => {
         const response = stepResult.response || {};
         const result = response.result || {};
         const evidenceRefs = getStepEvidenceRefs(stepResult);
+        const webTool = isWebEvidenceToolName(stepResult.tool);
+        const resultText = extractToolResultText(result) || response.error || '';
+        const promptText = stepResult.tool === 'artifact_tools'
+            ? buildArtifactToolObservationPromptText(resultText)
+            : buildGenericToolObservationPromptText(resultText, response);
+        const detailsForPrompt = webTool && result.details
+            ? sanitizeWebStructuredContentForPrompt(result.details)
+            : result.details;
+        const structuredContentForPrompt = webTool && result.structuredContent
+            ? sanitizeWebStructuredContentForPrompt(result.structuredContent)
+            : result.structuredContent;
         return {
             id: stepResult.id || null,
             tool: stepResult.tool || null,
             title: stepResult.title || null,
-            args: stepResult.args || null,
+            args: sanitizeToolArgsForPrompt(stepResult.args || null),
             ok: response.ok === true,
             status: response.status || 'unknown',
-            text: summarizeForModel(extractToolResultText(result) || response.error || response, 1200),
+            text: promptText.text,
+            lossless: promptText.lossless,
+            textChars: resultText.length,
+            promptTextChars: promptText.text.length,
+            compression: promptText.compression,
             evidenceRefs,
             note: evidenceRefs.length
                 ? 'Full observation is retained in transcript/evidence artifact; use evidenceRefs for final_answer.'
                 : '',
-            details: result.details
-                ? summarizeForModel(JSON.stringify(result.details), 500)
+            details: detailsForPrompt
+                ? summarizeForModel(JSON.stringify(detailsForPrompt), 500)
                 : null,
-            structuredContent: result.structuredContent
-                ? summarizeForModel(JSON.stringify(result.structuredContent), 500)
+            structuredContent: structuredContentForPrompt
+                ? summarizeForModel(JSON.stringify(structuredContentForPrompt), 500)
                 : null
         };
     });
 }
+
+const buildLosslessToolObservationDigest = buildToolObservationDigest;
 
 function buildExactAnswerContractPromptObject({ exactAnswerMode = false, evidenceArtifacts = [] } = {}) {
     if (!exactAnswerMode) {
@@ -4967,19 +5529,16 @@ function buildExactAnswerContractPromptObject({ exactAnswerMode = false, evidenc
     return {
         mode: 'exact_answer_eval',
         final_answer_tool: FINAL_ANSWER_TOOL_NAME,
-        required_fields: ['answer', 'confidence', 'evidence_refs'],
-        accept_confidence: ['high', 'medium'],
+        required_fields: ['answer'],
+        accept_confidence: ['high', 'medium', 'low'],
         reject_if: [
             'answer is empty',
             'answer contains Markdown or explanatory prose',
-            'confidence is low',
-            'evidence_refs is empty',
-            'evidence_refs contains ids not present in evidence_artifacts',
             'numeric answer conflicts with the final/correct answer stated in reason',
             'question asks for scaled units such as thousand/million/billion but answer is the raw rounded base-unit value'
         ],
         available_evidence_refs: evidenceArtifacts.map((artifact) => artifact.id).filter(Boolean),
-        instruction: `When solved, call ${FINAL_ANSWER_TOOL_NAME} instead of writing a visible prose final. Use evidence artifact ids only as final_answer evidence_refs. They are not filesystem paths and not artifact_query context artifactIds; do not read/open/query them. If evidence_artifacts includes QuestionEvidence/source_question and the task is self-contained, use that ref for reasoning from the problem statement itself; otherwise retrieve external/file evidence first. For quantitative questions, finish unit conversion, rate conversion, scaling, and rounding before final; if the question asks how many thousand/million/billion units, answer with the scaled count, not the raw unit value. For finite stochastic/probability/odds questions, use exact state transitions, dynamic programming, or exhaustive enumeration for the final evidence; Monte Carlo may only be a sanity check; do not invent terminal probabilities or variable random devices absent from the question. Keep the answer field consistent with the final numeric conclusion written in reason. For relation/constraint questions with assignments, tables, profiles, lists, or missing entities, verify the answer role against the question wording and map intermediate missing entities through the relation table direction before final. If evidence is missing, keep using tools or return blocked with a repair instruction.`
+        instruction: `When solved, call ${FINAL_ANSWER_TOOL_NAME} instead of writing a visible prose final. Evidence artifact ids are optional references, not a hard gate. Use your own judgment about whether evidence is sufficient; if it is not, continue tools or return blocked. For quantitative questions, finish unit conversion, rate conversion, scaling, and rounding before final; if the question asks how many thousand/million/billion X, answer with the scaled count, not the raw unit value. For finite stochastic/probability/odds questions, use exact state transitions, dynamic programming, or exhaustive enumeration when needed; Monte Carlo may be a sanity check. Keep the answer field consistent with the final numeric conclusion written in reason.`
     };
 }
 
@@ -4994,14 +5553,21 @@ function buildLlmAgentDirectToolMessages({
     fileAttachments = [],
     externalToolExposure = null,
     exactAnswerMode = false,
-    runtimeEnvironment = null
+    runtimeEnvironment = null,
+    promptProfile = null
 }) {
-    const capabilityCatalog = buildAgentCapabilityCatalog();
-    const recentConversation = normalizeConversationHistory(messageHistory);
+    const activePromptProfile = promptProfile || resolveAgentPromptProfile();
+    const capabilityCatalog = buildAgentCapabilityCatalog({
+        compact: activePromptProfile.compact
+    });
+    const recentConversation = normalizeConversationHistory(messageHistory, {
+        maxItems: activePromptProfile.historyItems,
+        maxChars: activePromptProfile.historyChars
+    });
     const recentTurnItems = buildTurnItemsPromptObject({
         events,
         stepResults,
-        maxItems: 12
+        maxItems: activePromptProfile.turnItems
     });
     const progressSnapshot = buildAgentPromptProgressSnapshot({
         events,
@@ -5009,7 +5575,7 @@ function buildLlmAgentDirectToolMessages({
         turnItems: recentTurnItems
     });
     const compactMemoryContext = memoryContext
-        ? summarizeForModel(memoryContext, MAX_PROMPT_MEMORY_CHARS)
+        ? summarizeForModel(memoryContext, activePromptProfile.memoryChars)
         : null;
     const evidenceArtifacts = buildAgentEvidenceArtifactsPromptObject(stepResults, {
         message,
@@ -5030,16 +5596,18 @@ function buildLlmAgentDirectToolMessages({
         '你正在运行 AILIS 的任务执行层。普通情感/闲聊可以直接自然回复；需要读取、检索、操作电脑、解析文件、调用 API、写代码或复核证据时，必须调用一个可用工具，而不是用自然语言假装完成。',
         '本模式只把本轮最小必要工具作为原生 function tools 暴露给你。默认核心通常只有 tool_search、update_plan、computer/read/write/exec/apply_patch、request_permissions；研究/Web/MCP/文档/表格/API 等工具需要先通过 tool_search 搜索命中，下一轮才会作为 direct tool 出现。',
         '不要输出 JSON 决策协议，不要手写 tool_call/tool/args 包装对象；如果要执行工具，使用原生工具调用。每轮最多调用一个工具。',
-        '如果缺工具、缺 API、缺文档解析、缺视频/视觉能力，先调用 tool_search；tool_search 返回的 mcp__... 或 external__... 在下一轮会变成可直接调用的原生工具。',
+        '如果缺工具、缺 API、缺文档解析或视觉能力，先调用 tool_search；tool_search 返回的 mcp__... 或 external__... 在下一轮会变成可直接调用的原生工具。',
         '只调用本轮 tools 数组中实际暴露的原生工具；不要根据历史提示或其他系统经验虚构工具名。',
         '公开进展文本：每个 direct tool 参数里都有可选 progress_note。只有出现重要变化时，顺手填一句自然、短、给用户看的进展，例如策略切换、发现关键证据、证据足够准备收敛、工具失败后的恢复方向、权限/环境阻塞；例行工具调用留空。不要泄露隐藏推理链，不要写工具日志/JSON/“第 N 步”/“正在处理”这类低信息量模板。',
-        '工具失败、证据不足、字段没找到时，要根据 latest_failed_observation、recovery_hint 和 lossless_tool_observations 改换策略，不要机械重复同一个 web_search。',
+        '工具失败、字段没找到或你自己判断候选材料不足时，再结合 latest_failed_observation、retrieval diagnostics 和 tool_observations 改换策略。tool_observations 每条会标明 lossless/compression；不要把 recovery_hint 当成必须执行的下一步，也不要机械重复同一个 web_search。',
         '歧义澄清协议：如果 latest_failed_observation/latest_observation 或任何 tool_result 显示 evidence_gap=ambiguous_search_requires_clarification，或 recovery_hint 要求用户澄清搜索目标，停止继续调用 web_search/web_fetch，直接用最终可见回复问用户选择候选或补充游戏名/角色全名。',
-        '证据审计协议：如果 user payload 的 evidence_sufficiency.audit_required 为 true，必须先按 evidence_audit_contract 结构审计当前证据：ready、confidence、supported_claims、missing_fields、rejected_evidence、next_action。这个审计可以推翻工具 ready；最终答复只能写 supported_claims 支撑的内容，缺失字段要继续检索、换专用工具、询问澄清或明确说明证据不足。',
-        '证据充分时要收敛：如果 user payload 的 evidence_sufficiency.status 是 ready_for_reasoning，且 ready_evidence 已覆盖当前问题所需字段/范围/计算结果，应推理或最终回答，不要继续重复读取 covered artifact/range。',
+        '证据判断协议：工具返回的 evidence_sufficiency / evidence_observations 只是观察材料和质量提示，不是硬性闸门。由你自己判断证据是否足够；够就 final，不够就继续工具、询问澄清或说明不确定。',
+        '不要机械等待 ready_for_reasoning、reasoningReady 或完整网页抓取；搜索摘要、元数据、片段、多个弱来源的一致性都可以作为你判断的一部分。',
         '运行环境协议：user payload 里的 runtime_environment 是当前这一轮的真实执行环境，来自 Platform Adapter，不属于长期记忆。生成 shell、路径、重定向、管道、环境变量和文件命令时必须先看 runtime_environment.family/default_shell/path_style/command_guidance；不要默认自己在 Linux、Windows 或 macOS。',
         'GitHub Pages 路由：任务涉及 GitHub Pages、gh-pages、github.io、部署验收、Pages 404 或发布目录时，先用 tool_search 查 github_pages，再调用返回的 direct 工具；不要先用裸 exec 拼 git/curl/head 作为主要诊断路径。',
-        '工具选择路由：如果任务提到附件、文件路径、DOCX/Word、PPT/PPTX、表格/CSV/XLSX、PDF/论文/报告、YouTube/视频、音频、图片、代码文件、GitHub 仓库或已知 URL，先用 tool_search 查对应 artifact/tool 类型并调用返回的专用 direct 工具（本地工具、mcp__... 或 external__...）；web_search 只作为没有专用工具或专用工具失败后的兜底。',
+        '工具选择路由：如果任务提到附件、本地文件路径、DOCX/Word、PPT/PPTX、表格/CSV/XLSX、PDF、图片或其他文件 artifact，优先用 tool_search 查 artifact_tools 并让 AILIS Artifact Tools 接管 open/index/search/query/inspect/render/trace/edit/export。音频、代码文件、GitHub 仓库、已知 URL 仍按对应专用工具或 MCP direct spec 处理；web_search 只作为没有专用工具或专用工具失败后的兜底。',
+        'Artifact Tools 协议：artifact_tools 返回的 art_* / arts_* 属于 artifact_tools 运行时；继续用 artifact_tools 的 sessionId/path 执行 inspect/search/query/render。不要把 art_* 传给 artifact_query；artifact_query 只用于 context artifactId。',
+        'Artifact Tools 截断恢复：truncatedForModelText/omittedCompactRowCount/continuation 说明只是模型文本预算压缩，优先用 continuation 或更窄 range 继续 artifact_tools query/search/render；不要仅因模型可见文本压缩就切到 exec/write/Python。',
         '需要用户授权时调用 request_permissions。危险写入、shell、patch、邮件发送等会由本地 Gateway 审批，不要在参数中伪造 approved=true。',
         '最终答复必须是给用户看的 Markdown。没有足够证据时不要提交猜测答案，要继续调用工具或明确 blocked。',
         exactAnswerMode
@@ -5060,7 +5628,7 @@ function buildLlmAgentDirectToolMessages({
                     attached_files: getAttachedFilesPromptObject(fileAttachments),
                     runtime_environment: runtimeEnvironment,
                     recent_turn_items: recentTurnItems,
-                    lossless_tool_observations: buildLosslessToolObservationDigest(stepResults),
+                    tool_observations: buildToolObservationDigest(stepResults),
                     evidence_artifacts: evidenceArtifacts,
                     evidence_sufficiency: evidenceSufficiency,
                     exact_answer_contract: exactAnswerContract,
@@ -5069,7 +5637,7 @@ function buildLlmAgentDirectToolMessages({
                     current_progress: progressSnapshot
                 },
                 null,
-                2
+                activePromptProfile.compact ? 0 : 2
             )
         }
     ];
@@ -5178,14 +5746,17 @@ async function callLlmAgentDirectToolDecision(settings, payload, { hasToolHistor
         parallel_tool_calls: false
     });
     if (!response.ok) {
+        const failureDecision = {
+            status: response.code || 'provider_error',
+            httpStatus: response.status,
+            error: response.error || 'Direct tool executor LLM call failed.'
+        };
         return {
             ok: false,
-            status: response.code || 'provider_error',
-            error: response.error || 'Direct tool executor LLM call failed.',
-            directToolFallback:
-                response.code !== 'timeout' &&
-                response.code !== 'aborted' &&
-                !(response.code === 'provider_error' && isTerminalProviderErrorMessage(response.error))
+            status: failureDecision.status,
+            httpStatus: failureDecision.httpStatus,
+            error: failureDecision.error,
+            directToolFallback: !isTerminalAgentDecisionFailure(failureDecision)
         };
     }
     const directToolCall = (response.toolCalls || []).find((call) => call?.name && call.name !== 'ailis_agent_decision');
@@ -5531,6 +6102,7 @@ async function callLlmAgentDecision(settings, payload) {
         return {
             ok: false,
             status: response.code || 'llm_error',
+            httpStatus: response.status,
             error: response.error || 'LLM agent failed'
         };
     }
@@ -5681,7 +6253,7 @@ function buildAgentDecisionRepairMessages(messages = [], decision = {}) {
                     required_output_shape: {
                         action: 'load_context|tool|final|blocked',
                         tool_call: {
-                            tool: 'tool_search|request_permissions|mcp__server__tool|external__provider__tool|mcp_bridge|computer|code|email|file_manager|artifact_verifier|artifact_query|artifact_compute|read_xlsx_workbook|vision.capture_context|subagents|capability_manager|self_debugger|self_evolution|read|write|exec|apply_patch',
+                            tool: 'tool_search|request_permissions|mcp__server__tool|external__provider__tool|mcp_bridge|computer|code|email|file_manager|artifact_verifier|artifact_tools|artifact_import|artifact_query|artifact_compute|vision.capture_context|subagents|capability_manager|self_debugger|self_evolution|read|write|exec|apply_patch',
                             title: 'short action title',
                             args: {}
                         },
@@ -6715,7 +7287,7 @@ class AILISAgentRunner {
     }) {
         const settings = settingsOverride || resolveAgentLlmSettings(request, requestContext);
         const fileAttachments = getLatestUserFileAttachments(request);
-        const missingSettings = !settings.baseUrl || !settings.model || !settings.apiKey;
+        const missingSettings = isAgentLlmSettingsMissing(settings);
         if (missingSettings) {
             const displayText = '我还没有拿到可用的大模型配置，所以现在不能由 Agent Loop 判断并执行这句话。请先在控制面板里配置 API Base、模型和 Key。';
             return this.presentUserResult({
@@ -6998,9 +7570,20 @@ class AILISAgentRunner {
                 stepResults,
                 requestContext
             });
+            const taskCompactPrompt = looksLikeArtifactAnswerQuestion({
+                message,
+                fileAttachments
+            });
+            const promptProfile = resolveAgentPromptProfile(decisionSettings, {
+                ...requestContext,
+                exactAnswerMode,
+                taskCompactPrompt
+            });
             const externalToolExposure = await buildExternalToolExposurePromptObject(this.gateway, {
                 query: message,
-                limit: requestContext.externalToolExposureLimit || request.externalToolExposureLimit || 16
+                limit: requestContext.externalToolExposureLimit ||
+                    request.externalToolExposureLimit ||
+                    promptProfile.externalToolExposureLimit
             });
             const directToolSpecs = buildAgentDirectToolSpecs(this.gateway, {
                 stepResults,
@@ -7024,6 +7607,7 @@ class AILISAgentRunner {
                 externalToolExposure,
                 exactAnswerMode,
                 runtimeEnvironment,
+                promptProfile,
                 toolSummary: useDirectToolExecutor
                     ? `Native direct tools exposed: ${directToolSpecs.map((tool) => tool.name).slice(0, 16).join(', ')}${directToolSpecs.length > 16 ? ', ...' : ''}.`
                     : 'Codex-like capability index only. Load detailed tool contracts with load_context; load MCP/external tools through tool_search/capability_context as mcp__server__tool or external__provider__tool direct specs. Use mcp_bridge/capability_manager for discovery, auth, install, resources, and server management.'
@@ -7037,6 +7621,7 @@ class AILISAgentRunner {
                 sessionId,
                 iteration,
                 ...promptBudget,
+                promptProfile: promptProfile.id,
                 executorMode: useDirectToolExecutor ? 'native_direct_tools' : 'json_meta_decision',
                 directToolCount: directToolSpecs.length
             });
@@ -7046,6 +7631,7 @@ class AILISAgentRunner {
                 payload: {
                     iteration,
                     promptBudget,
+                    promptProfile,
                     executorMode: useDirectToolExecutor ? 'native_direct_tools' : 'json_meta_decision',
                     directTools: directToolSpecs.map((tool) => tool.name),
                     runtimeEnvironment,
@@ -7094,7 +7680,7 @@ class AILISAgentRunner {
                 !decision.ok &&
                 (decision.directToolFallback === true ||
                     (DIRECT_TOOL_EXECUTOR_FALLBACK_STATUSES.has(decision.status) &&
-                        !isTerminalProviderDecisionError(decision)))
+                        !isTerminalAgentDecisionFailure(decision)))
             ) {
                 const fallbackNote = {
                     type: 'runtime_note',
@@ -7211,16 +7797,17 @@ class AILISAgentRunner {
             if (interruptedAfterDecision) {
                 return interruptedAfterDecision;
             }
-            if (!decision.ok && isTerminalProviderDecisionError(decision)) {
-                const displayText = `LLM provider is unavailable: ${decision.error || 'provider_error'}`;
+            if (!decision.ok && isTerminalAgentDecisionFailure(decision)) {
+                const terminalFailure = describeTerminalAgentDecisionFailure(decision);
+                const displayText = terminalFailure.displayText;
                 return await finishRuntimeRun(attachPersonaSurface({
                     ok: false,
                     runId,
                     sessionId,
-                    status: 'provider_error',
+                    status: terminalFailure.status,
                     mode: 'task',
                     planner: 'llm-agentic-executor',
-                    intent: 'llm_provider_unavailable',
+                    intent: terminalFailure.intent,
                     executionRequired: stepResults.length > 0,
                     durationMs: Date.now() - startedAt,
                     message,
@@ -7232,13 +7819,13 @@ class AILISAgentRunner {
                     events
                 }, renderStatusSurface({
                     text: displayText,
-                    status: 'provider_error',
+                    status: terminalFailure.status,
                     ok: false,
-                    source: 'llm_provider_unavailable',
+                    source: terminalFailure.source,
                     expression: 'anxious'
                 })), {
-                    source: 'llm_provider_unavailable',
-                    nextAction: '检查或更换 LLM provider/API key 后重新运行'
+                    source: terminalFailure.source,
+                    nextAction: terminalFailure.nextAction
                 });
             }
             const progressNote = normalizeProgressNoteText(decision.publicReasoning);
@@ -7409,7 +7996,7 @@ class AILISAgentRunner {
                         continue;
                     }
                     const blockedText = [
-                        '我还不能提交这个精确答案，因为证据闸门没有通过。',
+                        '我还不能提交这个精确答案，因为答案格式检查没有通过。',
                         `原因：${exactAnswerValidation.errors.join(', ') || 'missing exact-answer evidence'}`,
                         repairObservation.nextAction
                     ].filter(Boolean).join('\n');
@@ -7441,20 +8028,12 @@ class AILISAgentRunner {
                 }
                 const exactAnswerSubmission = exactAnswerValidation.submission || null;
                 const displayText = stripControlTags(decision.finalAnswer || decision.summary || '任务完成。');
-                const failureSurface = renderLatestToolFailureSurface({
-                    stepResults,
-                    message,
-                    intent: decision.intent,
-                    fallbackText: displayText
-                });
-                const visibleText = failureSurface?.text || displayText;
+                const visibleText = displayText;
                 const result = {
-                    ok: !failureSurface,
+                    ok: true,
                     runId,
                     sessionId,
-                    status: failureSurface
-                        ? normalizeText(getLatestFailedToolStepResult(stepResults)?.response?.status, 'tool_failed')
-                        : 'completed',
+                    status: 'completed',
                     mode: decision.mode,
                     planner: 'llm-agentic-executor',
                     intent: decision.intent,
@@ -7465,20 +8044,14 @@ class AILISAgentRunner {
                     exactAnswerSubmission,
                     exactAnswerGate: exactAnswerMode ? exactAnswerValidation : null,
                     displayText: visibleText,
-                    speechText: failureSurface
-                        ? visibleText.replace(/\n/g, ' ')
-                        : stripControlTags(decision.personaOutput?.speechText || visibleText.replace(/\n/g, ' ')),
-                    bubbleText: failureSurface
-                        ? ''
-                        : stripControlTags(decision.personaOutput?.bubbleText),
+                    speechText: stripControlTags(decision.personaOutput?.speechText || visibleText.replace(/\n/g, ' ')),
+                    bubbleText: stripControlTags(decision.personaOutput?.bubbleText),
                     plan: [],
                     steps: stepResults,
                     events,
                     planUpdates: decision.planUpdates,
                     usage: decision.usage,
-                    personaOutput: failureSurface
-                        ? null
-                        : {
+                    personaOutput: {
                               text: stripControlTags(decision.personaOutput?.text || visibleText),
                               speechText: stripControlTags(decision.personaOutput?.speechText),
                               bubbleText: stripControlTags(decision.personaOutput?.bubbleText),
@@ -7496,8 +8069,8 @@ class AILISAgentRunner {
                           }
                 };
                 return await finishRuntimeRun(
-                    failureSurface ? attachPersonaSurface(result, failureSurface) : result,
-                    { source: failureSurface ? 'tool_failure' : 'agent_final' }
+                    result,
+                    { source: 'agent_final' }
                 );
             }
 
@@ -8521,7 +9094,20 @@ class AILISAgentRunner {
             }
         }
 
-        if (!request.classifyOnly && shouldUseLlmAgent(request, requestContext)) {
+        const requestFileAttachments = getLatestUserFileAttachments(request);
+        const forceLlmForArtifactQuestion = looksLikeArtifactAnswerQuestion({
+            message,
+            fileAttachments: requestFileAttachments
+        });
+        const llmRequestContext = forceLlmForArtifactQuestion
+            ? {
+                ...requestContext,
+                agentLoop: 'llm',
+                planner: 'llm',
+                taskCompactPrompt: true
+            }
+            : requestContext;
+        if (!request.classifyOnly && (shouldUseLlmAgent(request, requestContext) || forceLlmForArtifactQuestion)) {
             this.setActiveRun(runId, {
                 runId,
                 sessionId,
@@ -8541,7 +9127,7 @@ class AILISAgentRunner {
                 request,
                 message,
                 sessionId,
-                requestContext,
+                requestContext: llmRequestContext,
                 startedAt,
                 runId,
                 dryRun
@@ -8563,7 +9149,7 @@ class AILISAgentRunner {
                         sessionId,
                         dryRun
                     },
-                    context: requestContext,
+                    context: llmRequestContext,
                     resultPreview: summarize(llmResult.displayText)
                 });
                 this.recordMemoryTurn({
@@ -8586,7 +9172,7 @@ class AILISAgentRunner {
                 return this.presentUserResult({
                     result: llmResult,
                     message,
-                    requestContext
+                    requestContext: llmRequestContext
                 });
             }
             this.activeRuns.delete(runId);
@@ -8842,6 +9428,8 @@ module.exports = {
     isExactAnswerExecutionMode,
     looksLikeSelfContainedExactAnswerQuestion,
     normalizeExactAnswerSubmission,
+    isAgentLlmSettingsMissing,
+    resolveAgentPromptProfile,
     splitNativeProgressNoteArgs,
     stripControlTags,
     validateAgentToolLoopGuard,

@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "product": "AILIS",
+  "installMode": "deferred-runtime-components",
+  "components": [
+    {
+      "id": "python-runtime",
+      "title": "AILIS private Python runtime",
+      "kind": "runtime",
+      "optional": true,
+      "defaultSelected": false,
+      "estimatedUnpackedSize": "50 MB",
+      "extractTo": "resources",
+      "installRoot": "resources/models/voice-runtime/python",
+      "packName": "AILIS-Runtime-python-runtime-${version}.zip",
+      "description": "Small private Python base used by local runtime components. This is not enough by itself to enable TTS or ASR."
+    },
+    {
+      "id": "cosyvoice3-runtime",
+      "title": "CosyVoice3 local TTS runtime",
+      "kind": "tts",
+      "optional": true,
+      "defaultSelected": false,
+      "dependsOn": ["python-runtime"],
+      "estimatedUnpackedSize": "11.7 GB",
+      "extractTo": "resources",
+      "installRoot": "resources/models/voice-runtime",
+      "packName": "AILIS-Runtime-cosyvoice3-runtime-${version}.zip",
+      "description": "High-quality offline TTS runtime. Very large because it includes Torch/CUDA dependencies and CosyVoice3 model files."
+    },
+    {
+      "id": "asr-runtime",
+      "title": "Local ASR runtime",
+      "kind": "asr",
+      "optional": true,
+      "defaultSelected": false,
+      "dependsOn": ["python-runtime"],
+      "estimatedUnpackedSize": "4.8 GB",
+      "extractTo": "resources",
+      "installRoot": "resources/ailis-asr-runtime",
+      "packName": "AILIS-Runtime-asr-runtime-${version}.zip",
+      "description": "Offline speech recognition runtime. Users can skip it and use text-only or cloud recognition flows."
+    },
+    {
+      "id": "web-runtime",
+      "title": "Local Web/Search runtime",
+      "kind": "web",
+      "optional": true,
+      "defaultSelected": false,
+      "estimatedUnpackedSize": "1.4 GB",
+      "extractTo": "resources",
+      "installRoot": "resources/ailis-web-runtime",
+      "packName": "AILIS-Runtime-web-runtime-${version}.zip",
+      "description": "Optional local web/search stack. It should not be bundled into the default installer."
+    }
+  ]
+}

@@ -507,6 +507,22 @@ const TOOL_EXPERIENCE = Object.freeze({
         failureStyle: 'plain_explain',
         userFacingVerb: '查询上下文产物'
     }),
+    artifact_tools: makeExperienceMetadata({
+        embodiedAction: 'operate_artifact_runtime',
+        permissionStyle: 'silent_internal',
+        progressStyle: 'focused',
+        successStyle: 'summarize_result',
+        failureStyle: 'plain_explain',
+        userFacingVerb: '操作工件运行时'
+    }),
+    artifact_import: makeExperienceMetadata({
+        embodiedAction: 'import_artifact',
+        permissionStyle: 'silent_read',
+        progressStyle: 'focused',
+        successStyle: 'summarize_result',
+        failureStyle: 'plain_explain',
+        userFacingVerb: '导入上下文产物'
+    }),
     artifact_compute: makeExperienceMetadata({
         embodiedAction: 'analyze_artifact',
         permissionStyle: 'silent_read',
@@ -864,7 +880,7 @@ const TOOL_CONTRACTS = Object.freeze({
                 prompt: stringSchema(),
                 wait: booleanSchema(),
                 waitTimeoutMs: numberSchema({ minimum: 1000, maximum: 24 * 60 * 60 * 1000 }),
-                maxAgentSteps: numberSchema({ minimum: 1, maximum: 50 })
+                maxAgentSteps: numberSchema({ minimum: 1, maximum: 12 })
             }
         )
     }),
@@ -1511,6 +1527,10 @@ const TOOL_CONTRACTS = Object.freeze({
             'grid',
             'range',
             'search',
+            'runtime_schema',
+            'chunk_search',
+            'runtime_search',
+            'hybrid_search',
             'tail',
             'text_schema',
             'text_range',
@@ -1568,6 +1588,176 @@ const TOOL_CONTRACTS = Object.freeze({
             maxChars: numberSchema({ minimum: 1000, maximum: 30000 }),
             max_chars: numberSchema({ minimum: 1000, maximum: 30000 })
         })
+    }),
+    artifact_tools: Object.freeze({
+        id: 'artifact_tools',
+        version: CONTRACT_VERSION,
+        mutates: true,
+        risk: 'medium',
+        approval: 'never',
+        experience: TOOL_EXPERIENCE.artifact_tools,
+        returns: defaultReturns(),
+        errors: defaultErrors([
+            'no_matching_adapter',
+            'adapter_not_found',
+            'adapter_edit_not_implemented',
+            'adapter_export_not_implemented',
+            'adapter_index_not_implemented',
+            'adapter_search_not_implemented',
+            'adapter_query_not_implemented',
+            'adapter_trace_not_implemented',
+            'adapter_recalculate_not_implemented',
+            'adapter_rollback_not_implemented',
+            'unsupported_action'
+        ]),
+        schema: actionSchema([
+            'schema',
+            'list_adapters',
+            'plan_import',
+            'open_session',
+            'load',
+            'index',
+            'build_index',
+            'search',
+            'artifact_search',
+            'query',
+            'aggregate',
+            'inspect',
+            'render',
+            'validate',
+            'edit',
+            'trace',
+            'recalculate',
+            'rollback',
+            'export',
+            'roundtrip',
+            'run_checks',
+            'list_sessions',
+            'list_eval_cases',
+            'list_evaluation_cases'
+        ], {
+            path: stringSchema({ minLength: 1 }),
+            file: stringSchema({ minLength: 1 }),
+            filePath: stringSchema({ minLength: 1 }),
+            file_path: stringSchema({ minLength: 1 }),
+            sourcePath: stringSchema({ minLength: 1 }),
+            source_path: stringSchema({ minLength: 1 }),
+            format: stringSchema(),
+            kind: stringSchema(),
+            artifactKind: stringSchema(),
+            artifact_kind: stringSchema(),
+            adapterId: stringSchema(),
+            adapter_id: stringSchema(),
+            adapter: stringSchema(),
+            parserId: stringSchema(),
+            parser_id: stringSchema(),
+            capability: stringSchema(),
+            requiredCapability: stringSchema(),
+            required_capability: stringSchema(),
+            requiredCapabilities: { anyOf: [stringSchema(), arraySchema(stringSchema())] },
+            required_capabilities: { anyOf: [stringSchema(), arraySchema(stringSchema())] },
+            includeOptional: booleanSchema(),
+            include_optional: booleanSchema(),
+            sessionId: stringSchema(),
+            session_id: stringSchema(),
+            artifactId: stringSchema(),
+            artifact_id: stringSchema(),
+            summary: stringSchema(),
+            query: stringSchema(),
+            text: stringSchema(),
+            term: stringSchema(),
+            searchKind: stringSchema(),
+            search_kind: stringSchema(),
+            table: stringSchema(),
+            tableName: stringSchema(),
+            table_name: stringSchema(),
+            filter: objectSchema({ additionalProperties: true }),
+            where: objectSchema({ additionalProperties: true }),
+            groupBy: stringSchema(),
+            group_by: stringSchema(),
+            aggregate: objectSchema({ additionalProperties: true }),
+            aggregation: objectSchema({ additionalProperties: true }),
+            op: stringSchema(),
+            column: stringSchema(),
+            valueColumn: stringSchema(),
+            value_column: stringSchema(),
+            sortBy: stringSchema(),
+            sort_by: stringSchema(),
+            descending: booleanSchema(),
+            order: stringSchema(),
+            top: numberSchema({ minimum: 1 }),
+            limit: numberSchema({ minimum: 1 }),
+            topGroups: numberSchema({ minimum: 1 }),
+            top_groups: numberSchema({ minimum: 1 }),
+            target: stringSchema(),
+            range: stringSchema(),
+            sheet: stringSchema(),
+            sheetName: stringSchema(),
+            sheet_name: stringSchema(),
+            fillRgb: stringSchema(),
+            fill: stringSchema(),
+            color: stringSchema(),
+            error: stringSchema(),
+            errorCode: stringSchema(),
+            error_code: stringSchema(),
+            maxResults: numberSchema({ minimum: 1 }),
+            max_results: numberSchema({ minimum: 1 }),
+            maxRows: numberSchema({ minimum: 1 }),
+            max_rows: numberSchema({ minimum: 1 }),
+            maxCols: numberSchema({ minimum: 1 }),
+            max_cols: numberSchema({ minimum: 1 }),
+            include: { anyOf: [stringSchema(), arraySchema(stringSchema())] },
+            backupPath: stringSchema(),
+            backup_path: stringSchema(),
+            outputPath: stringSchema(),
+            output_path: stringSchema(),
+            operationId: stringSchema(),
+            operation_id: stringSchema()
+        })
+    }),
+    artifact_import: Object.freeze({
+        id: 'artifact_import',
+        version: CONTRACT_VERSION,
+        mutates: false,
+        risk: 'low',
+        approval: 'never',
+        experience: TOOL_EXPERIENCE.artifact_import,
+        returns: defaultReturns(),
+        errors: defaultErrors([
+            'missing_path',
+            'file_not_found',
+            'path_outside_workspace',
+            'unsupported_parser',
+            'worker_not_found',
+            'worker_failed',
+            'artifact_store_unavailable'
+        ]),
+        schema: actionSchema(['schema', 'import', 'table'], {
+            path: stringSchema({ minLength: 1 }),
+            file: stringSchema({ minLength: 1 }),
+            filePath: stringSchema({ minLength: 1 }),
+            file_path: stringSchema({ minLength: 1 }),
+            target: stringSchema({ minLength: 1 }),
+            parserId: stringSchema(),
+            parser_id: stringSchema(),
+            parser: stringSchema(),
+            kind: stringSchema(),
+            language: stringSchema(),
+            lang: stringSchema(),
+            parserConfig: objectSchema({ additionalProperties: true }),
+            parser_config: objectSchema({ additionalProperties: true }),
+            config: objectSchema({ additionalProperties: true }),
+            python: stringSchema(),
+            timeoutMs: numberSchema({ minimum: 1000, maximum: 10 * 60 * 1000 }),
+            timeout_ms: numberSchema({ minimum: 1000, maximum: 10 * 60 * 1000 })
+        }),
+        customValidate(args = {}) {
+            const action = normalizeAction(args.action || args.operation || args.intent, 'import');
+            if (action !== 'schema' && !normalizeString(args.path || args.file || args.filePath || args.file_path || args.target)) {
+                return ['artifact_import requires path/file/filePath/target except for action=schema'];
+            }
+            return [];
+        }
     }),
     artifact_compute: Object.freeze({
         id: 'artifact_compute',
@@ -1886,15 +2076,15 @@ function normalizeArgsForContract(toolId, args = {}) {
         return {};
     }
     const normalized = { ...args };
-    if (['email', 'file_manager', 'computer', 'code', 'artifact_verifier', 'artifact_query', 'artifact_compute', 'read_xlsx_workbook', 'github_pages', 'mcp_bridge', 'tool_doctor', 'capability_manager', 'self_debugger', 'self_evolution', 'subagents', 'vision.capture_context'].includes(toolId)) {
+    if (['email', 'file_manager', 'computer', 'code', 'artifact_verifier', 'artifact_query', 'artifact_tools', 'artifact_import', 'artifact_compute', 'github_pages', 'mcp_bridge', 'tool_doctor', 'capability_manager', 'self_debugger', 'self_evolution', 'subagents', 'vision.capture_context'].includes(toolId)) {
         const fallbackAction = toolId === 'vision.capture_context'
             ? 'capture_context'
             : toolId === 'self_evolution'
                 ? 'analyze'
-                : toolId === 'read_xlsx_workbook'
-                    ? 'inspect'
-                    : toolId === 'artifact_compute'
-                        ? 'profile'
+                : toolId === 'artifact_compute'
+                    ? 'profile'
+                    : toolId === 'artifact_import'
+                        ? 'import'
                         : toolId === 'artifact_query'
                             ? 'summary'
                             : 'schema';
@@ -1954,8 +2144,16 @@ function getToolContract(toolId) {
     return TOOL_CONTRACTS[toolId] || null;
 }
 
+const HIDDEN_MODEL_TOOL_CONTRACT_IDS = new Set([
+    'read_xlsx_workbook'
+]);
+
+function isModelVisibleToolContract(contract = {}) {
+    return !HIDDEN_MODEL_TOOL_CONTRACT_IDS.has(contract.id);
+}
+
 function listToolContracts() {
-    return Object.values(TOOL_CONTRACTS).map((contract) => ({
+    return Object.values(TOOL_CONTRACTS).filter(isModelVisibleToolContract).map((contract) => ({
         id: contract.id,
         version: contract.version,
         mutates: contract.mutates,
@@ -1996,7 +2194,7 @@ function getToolContractPromptText(toolId) {
 function buildToolContractsPrompt(toolIds = []) {
     const ids = Array.isArray(toolIds) && toolIds.length
         ? toolIds
-        : Object.keys(TOOL_CONTRACTS);
+        : Object.keys(TOOL_CONTRACTS).filter((id) => !HIDDEN_MODEL_TOOL_CONTRACT_IDS.has(id));
     return ids
         .map((id) => getToolContractPromptText(id))
         .filter(Boolean)

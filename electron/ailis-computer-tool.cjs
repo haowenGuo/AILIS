@@ -1316,7 +1316,7 @@ async function actionRead(args, context, runtime) {
                 });
             }
             const structuredQuery = /Excel|XLSX|spreadsheet/i.test(fileKind)
-                ? 'read_xlsx_workbook xlsx workbook cell values fill colors formulas merged ranges'
+                ? 'artifact_tools xlsx workbook cell values fill colors formulas merged ranges'
                 : `${fileKind} extract text tables content artifact_query document_search`;
             return createErrorResult(
                 'binary_file',

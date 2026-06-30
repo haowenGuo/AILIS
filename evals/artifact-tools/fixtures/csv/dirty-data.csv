@@ -1,0 +1,6 @@
+id,name,score,joined,active
+1,Ada,98,2026-01-03,true
+2,Bo,,2026-01-04,false
+3,Cy,not-a-number,2026-13-01,true
+4,Dee,87,2026-02-10,true,extra-field
+5,Eli,91,2026-02-11

@@ -7,6 +7,7 @@ import {
 import { markdownToPlainText, setMarkdownContent, setPlainTextContent } from './markdown-renderer.js';
 import { AVATAR_SPEECH_EVENT_NAME } from './avatar-dialogue-bubble.js';
 import { deriveTtsSpeechText, normalizeTtsSpeechText } from './tts-speech-text.js';
+import { t } from './i18n.js';
 
 const CHAT_UI_EVENT_NAME = 'ailis-chat-ui-event';
 const CHAT_EXPRESSIVE_GESTURE_INTENTS = new Set([
@@ -142,7 +143,7 @@ export class ChatTTSSystem {
         window.addEventListener('modelLoaded', () => {
             const welcomeMessage = this.chatService?.getWelcomeMessage?.() ||
                 'AILIS到啦！现在可以聊天啦~';
-            this.addSystemMessage(welcomeMessage);
+            this.addSystemMessage(t(welcomeMessage));
             this.inputEl.disabled = false;
             this.sendBtnEl.disabled = false;
             this.startAutoChatTimer();
@@ -517,7 +518,7 @@ export class ChatTTSSystem {
 
     clearConversation() {
         if (this.isBusy) {
-            this.addSystemMessage('AILIS 正在执行当前请求，完成后再清空会话。');
+            this.addSystemMessage(t('AILIS 正在执行当前请求，完成后再清空会话。'));
             return false;
         }
         this.messageHistory = [];
@@ -900,7 +901,7 @@ export class ChatTTSSystem {
         if (this.speechProvider?.supportsTTS && !speechResult?.played) {
             const failureMessage = this.speechProvider.getLastTTSFailureMessage();
             if (failureMessage && !this.hasShownSpeechProviderHint) {
-                this.addSystemMessage(`语音播放暂时不可用：${failureMessage}`);
+                this.addSystemMessage(t('语音播放暂时不可用：{reason}', { reason: failureMessage }));
                 this.hasShownSpeechProviderHint = true;
             }
         }
@@ -910,7 +911,7 @@ export class ChatTTSSystem {
             this.updateMessageContent(aiMessageDiv, displayText);
             this.scrollToBottom();
             if (!this.hasShownTextFallbackHint) {
-                this.addSystemMessage('当前语音服务不可用，已自动切换为纯文本回复。');
+                this.addSystemMessage(t('当前语音服务不可用，已自动切换为纯文本回复。'));
                 this.hasShownTextFallbackHint = true;
             }
             return;
@@ -1043,7 +1044,7 @@ export class ChatTTSSystem {
     addLoadingMessage() {
         const div = document.createElement('div');
         div.className = 'message-loading';
-        this.renderMessageContent(div, 'AILIS正在思考...', 'text');
+        this.renderMessageContent(div, t('AILIS正在思考...'), 'text');
         this.messageListEl.appendChild(div);
         this.notifyMessageAdded(div, 'loading');
         this.scrollToBottom();

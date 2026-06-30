@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-const { spawn } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 const fs = require('node:fs/promises');
 const fsSync = require('node:fs');
 const path = require('node:path');
@@ -2091,21 +2091,36 @@ function enrichSearchResultsWithSource(results = [], attempt = {}, backendIndex 
 
 function formatSearchResultForModel(item = {}, index = 0) {
     const lines = [
-        `${index + 1}. ${item.title}`,
-        `URL: ${item.url}`
+        `${index + 1}. ${truncateRelationText(normalizeString(item.title, '(untitled)'), 220)}`,
+        `URL: ${normalizeString(item.url)}`
     ];
     const sources = normalizeSourceList(item.sourceBackends || item.sourceBackend || item.backend);
     if (sources.length) {
         lines.push(`Source: ${sources.join(', ')}`);
     }
     const matchedTerms = Array.isArray(item.queryMatchedTerms) ? item.queryMatchedTerms.slice(0, 8) : [];
-    if (matchedTerms.length || Number.isFinite(item.queryScore)) {
-        const score = Number.isFinite(item.queryScore) ? `score=${Number(item.queryScore.toFixed(2))}` : '';
-        const terms = matchedTerms.length ? `matched=${matchedTerms.join(', ')}` : '';
-        lines.push(`Relevance: ${[score, terms].filter(Boolean).join(' ')}`);
+    if (matchedTerms.length) {
+        lines.push(`Query term matches: ${matchedTerms.join(', ')}`);
     }
-    lines.push(`Snippet: ${item.snippet}`);
+    const snippet = truncateRelationText(normalizeString(item.snippet), 520);
+    if (snippet) {
+        lines.push(`Snippet: ${snippet}`);
+    }
     return lines.join('\n');
+}
+
+function formatCandidateSearchEvidence(rankedResults = [], limit = 8) {
+    const rows = (Array.isArray(rankedResults) ? rankedResults : [])
+        .slice(0, limit)
+        .map((item, index) => formatSearchResultForModel(item, index))
+        .filter(Boolean);
+    if (!rows.length) {
+        return '';
+    }
+    return [
+        'Candidate snippets from search results:',
+        rows.join('\n\n')
+    ].join('\n');
 }
 
 const COUNTRY_ANSWER_NAMES = [
@@ -2315,12 +2330,13 @@ function buildWebSearchSuccessObservation({
     rawResults = [],
     backend = '',
     url = '',
+    managedSearxng = null,
     startedAt = Date.now(),
     overallTimeoutMs = 0,
     aggregated = false
 } = {}) {
     const rankedResults = rankSearchResultsForFollowup(rawResults, query);
-    const text = rankedResults.map((item, index) => formatSearchResultForModel(item, index)).join('\n\n');
+    const candidateEvidenceText = formatCandidateSearchEvidence(rankedResults, 8);
     const answerCandidates = extractSearchAnswerCandidates(rankedResults, query);
     const answerCandidateText = formatSearchAnswerCandidates(answerCandidates);
     const baseSuggestedNextCalls = buildSuggestedCallsFromSearchResults(rankedResults, { query, limit: 3 });
@@ -2347,15 +2363,15 @@ function buildWebSearchSuccessObservation({
         ], 3)
         : baseSuggestedNextCalls;
     const evidenceGap = clarificationRequired
-        ? `Search confidence is ${searchConfidence.level}; the query appears ambiguous and should be clarified before following any result.`
+        ? 'Search results contain multiple plausible target clusters for the query.'
         : offTarget
-        ? `Search results look off-target for the key query terms: ${queryFocusTerms.join(', ') || query}. Refine the query with exact phrases, source names, or author names before following a result.`
-        : 'Search results are discovery only. Open a result or resolve a DOI/PDF before answering.';
+        ? `Search results contain few matches for the key query terms: ${queryFocusTerms.join(', ') || query}.`
+        : 'Candidate snippets and URLs returned for model inspection.';
     const recoveryHint = clarificationRequired
         ? searchConfidence.clarificationQuestion || 'Ask the user to disambiguate the target before calling web_fetch or another broad search.'
         : offTarget
-        ? 'Do not follow obviously unrelated popular results. Tighten the query or switch to a more specific tool before searching again.'
-        : 'Prefer the suggested follow-up calls below before issuing another broad web_search.';
+        ? 'Potential next retrieval inputs include exact phrases, source names, author names, or a more specific tool.'
+        : '';
     const guidance = buildWebToolGuidanceText({
         evidenceGap,
         recoveryHint,
@@ -2364,7 +2380,7 @@ function buildWebSearchSuccessObservation({
     });
     const successfulBackends = attempts.filter((attempt) => attempt.ok).map((attempt) => attempt.backend);
     const resultBackends = normalizeSourceList(rankedResults.flatMap((item) => item.sourceBackends || item.sourceBackend || []));
-    const response = textResult([guidance, answerCandidateText, `Search results:\n${text}`].filter(Boolean).join('\n\n'), {
+    const response = textResult([answerCandidateText, candidateEvidenceText, guidance].filter(Boolean).join('\n\n'), {
         status: 'completed',
         query,
         backendQuery: backendQuery !== query ? backendQuery : undefined,
@@ -2387,6 +2403,7 @@ function buildWebSearchSuccessObservation({
         observedRelevantLinks,
         queryFocusTerms,
         topQueryScore,
+        managedSearxng,
         searchAggregation: pruneEmptyDeep({
             enabled: aggregated || undefined,
             successfulBackends,
@@ -2461,16 +2478,16 @@ function formatRelevantLinks(links = []) {
 function buildWebToolGuidanceText({ evidenceGap = '', recoveryHint = '', suggestedNextCalls = [], observedRelevantLinks = [] } = {}) {
     const sections = [];
     if (evidenceGap) {
-        sections.push(`Evidence gap: ${evidenceGap}`);
+        sections.push(`Retrieval diagnostic: ${evidenceGap}`);
     }
     if (recoveryHint) {
-        sections.push(`Recovery hint: ${recoveryHint}`);
-    }
-    if (Array.isArray(suggestedNextCalls) && suggestedNextCalls.length) {
-        sections.push(`Suggested next calls:\n${formatSuggestedNextCalls(suggestedNextCalls)}`);
+        sections.push(`Additional retrieval context: ${recoveryHint}`);
     }
     if (Array.isArray(observedRelevantLinks) && observedRelevantLinks.length) {
-        sections.push(`High-signal links:\n${formatRelevantLinks(observedRelevantLinks)}`);
+        sections.push(`Candidate links observed by the fetcher:\n${formatRelevantLinks(observedRelevantLinks)}`);
+    }
+    if (Array.isArray(suggestedNextCalls) && suggestedNextCalls.length) {
+        sections.push(`Available follow-up calls derived from retrieved links/results:\n${formatSuggestedNextCalls(suggestedNextCalls)}`);
     }
     return sections.join('\n\n');
 }
@@ -2684,7 +2701,7 @@ function classifyWebFetchEvidenceQuality({ text = '', url = '', query = '', cont
             evidenceQuality: 'metadata_only',
             isEvidence: true,
             evidenceGap: 'The fetched page is video metadata/page chrome, not the transcript or answer-bearing guide content.',
-            recoveryHint: 'Use a transcript/video-specific tool, ASR, page description, or an accessible text guide before generating detailed claims.',
+            recoveryHint: 'Available alternate material may include accessible text, transcript, ASR, page description, or another public source.',
             pageStatus: 'video_metadata',
             pageType
         };
@@ -3189,9 +3206,14 @@ const DEFAULT_FIRECRAWL_LOCAL_URL = 'http://127.0.0.1:3002';
 const FIRECRAWL_CLOUD_URL = 'https://api.firecrawl.dev';
 const DEFAULT_CRAWL4AI_URL = 'http://127.0.0.1:11235';
 const DEFAULT_CRAWL4AI_WORKER = path.join(__dirname, 'ailis-crawl4ai-worker.py');
+const DEFAULT_PYTHON_SEARCH_WORKER = path.join(__dirname, 'ailis-python-search-worker.py');
+const MANAGED_SEARXNG_MANIFEST = 'managed-searxng.json';
+const MANAGED_SEARXNG_DEFAULT_PORT = 18888;
+const MANAGED_SEARXNG_STARTUP_TIMEOUT_MS = 30000;
 const CRAWL4AI_FETCH_PROVIDERS = new Set(['crawl4ai', 'rendered', 'browser', 'crawl4ai_rendered', 'crawl4ai-style', 'crawl4ai_style']);
 const RENDERED_FALLBACK_EVIDENCE_QUALITIES = new Set(['js_shell', 'thin_content']);
 const PROJECT_ROOT = path.resolve(__dirname, '..');
+let managedSearxngState = null;
 
 function executableName(name) {
     return process.platform === 'win32' ? `${name}.exe` : name;
@@ -3279,6 +3301,309 @@ function resolveBundledCrawl4aiWorker() {
         process.resourcesPath ? path.join(process.resourcesPath, 'app.asar.unpacked', 'scripts', 'ailis-crawl4ai-worker.py') : '',
         DEFAULT_CRAWL4AI_WORKER
     ]) || DEFAULT_CRAWL4AI_WORKER;
+}
+
+function resolveBundledPythonSearchWorker() {
+    return firstExistingPath([
+        asarUnpackedPath(DEFAULT_PYTHON_SEARCH_WORKER),
+        process.resourcesPath ? path.join(process.resourcesPath, 'app.asar.unpacked', 'scripts', 'ailis-python-search-worker.py') : '',
+        DEFAULT_PYTHON_SEARCH_WORKER
+    ]) || DEFAULT_PYTHON_SEARCH_WORKER;
+}
+
+function readJsonFileSync(filePath = '') {
+    try {
+        return JSON.parse(fsSync.readFileSync(filePath, 'utf8'));
+    } catch {
+        return null;
+    }
+}
+
+function resolveRuntimeRelativePath(baseDir = '', value = '') {
+    const normalized = normalizeString(value);
+    if (!normalized) {
+        return '';
+    }
+    return path.isAbsolute(normalized) ? normalized : path.resolve(baseDir, normalized);
+}
+
+function managedSearxngManifestCandidates() {
+    const candidates = [];
+    for (const root of ailisWebRuntimeRoots()) {
+        candidates.push(path.join(root, MANAGED_SEARXNG_MANIFEST));
+        candidates.push(path.join(root, 'searxng', MANAGED_SEARXNG_MANIFEST));
+    }
+    candidates.push(path.join(PROJECT_ROOT, '.ailis-runtime', MANAGED_SEARXNG_MANIFEST));
+    return dedupeSearchStrings(candidates.map((candidate) => asarUnpackedPath(candidate)));
+}
+
+function loadManagedSearxngManifest(args = {}) {
+    const explicitManifest = normalizeString(
+        args.managedSearxngManifest ||
+        args.managed_searxng_manifest ||
+        process.env.AILIS_MANAGED_SEARXNG_MANIFEST
+    );
+    const manifestPath = firstExistingPath([
+        explicitManifest,
+        ...managedSearxngManifestCandidates()
+    ]);
+    if (!manifestPath) {
+        return null;
+    }
+    const manifest = readJsonFileSync(manifestPath);
+    if (!manifest || typeof manifest !== 'object') {
+        return null;
+    }
+    const manifestDir = path.dirname(manifestPath);
+    const command = resolveRuntimeRelativePath(manifestDir, manifest.python || manifest.command);
+    const settingsPath = resolveRuntimeRelativePath(manifestDir, manifest.settingsPath || manifest.settings_path || '');
+    if (!command || !fsSync.existsSync(command)) {
+        return null;
+    }
+    if (settingsPath && !fsSync.existsSync(settingsPath)) {
+        return null;
+    }
+    const cwd = resolveRuntimeRelativePath(manifestDir, manifest.cwd || '.');
+    const env = {};
+    if (manifest.env && typeof manifest.env === 'object') {
+        for (const [key, value] of Object.entries(manifest.env)) {
+            env[key] = /path$/i.test(key) ? resolveRuntimeRelativePath(manifestDir, value) : String(value);
+        }
+    }
+    if (settingsPath) {
+        env.SEARXNG_SETTINGS_PATH = settingsPath;
+    }
+    return {
+        manifestPath,
+        manifestDir,
+        command,
+        args: Array.isArray(manifest.args) ? manifest.args.map(String) : ['-m', 'searx.webapp'],
+        cwd: fsSync.existsSync(cwd) ? cwd : manifestDir,
+        env,
+        defaultPort: clampNumber(manifest.defaultPort || manifest.port, MANAGED_SEARXNG_DEFAULT_PORT, 1024, 65535),
+        bindAddress: normalizeString(manifest.bindAddress || manifest.bind_address, '127.0.0.1'),
+        healthPath: normalizeString(manifest.healthPath || manifest.health_path, '/search?q=ailis&format=json')
+    };
+}
+
+function managedSearxngDisabled(args = {}) {
+    return optionIsTrue(args.disableManagedSearxng || args.disable_managed_searxng) ||
+        /^(?:0|false|no|off)$/i.test(normalizeString(process.env.AILIS_MANAGED_SEARXNG, '1'));
+}
+
+function requestedSearchBackends(args = {}) {
+    if (Array.isArray(args.backends)) {
+        return args.backends.map((item) => normalizeString(item).toLowerCase()).filter(Boolean);
+    }
+    return String(args.backend || args.searchBackend || args.search_backend || '')
+        .split(',')
+        .map((item) => normalizeString(item).toLowerCase())
+        .filter(Boolean);
+}
+
+function managedSearxngAllowedForSearch(args = {}) {
+    if (managedSearxngDisabled(args) || hasConfiguredSearxngUrl(args)) {
+        return false;
+    }
+    const explicitBackends = requestedSearchBackends(args);
+    if (explicitBackends.length) {
+        return explicitBackends.some((id) => ['searxng', 'searxng_json', 'auto', 'external', 'agent_web'].includes(id));
+    }
+    const providerText = normalizeString(
+        args.provider ||
+        args.searchProvider ||
+        args.search_provider ||
+        process.env.AILIS_WEB_SEARCH_PROVIDER ||
+        'auto',
+        'auto'
+    );
+    const providers = providerText.split(',').map((item) => normalizeString(item).toLowerCase()).filter(Boolean);
+    if (!providers.length) {
+        return true;
+    }
+    if (providers.some((provider) => ['auto', 'external', 'agent_web', 'searxng'].includes(provider))) {
+        return true;
+    }
+    if (providers.every((provider) => ['html', 'builtin_html', 'current_html_fallback', 'python', 'python_search', 'python-search', 'github'].includes(provider))) {
+        return false;
+    }
+    return false;
+}
+
+function managedSearxngPortCandidates(manifest = {}, args = {}) {
+    const rawPorts = [
+        args.managedSearxngPort,
+        args.managed_searxng_port,
+        process.env.AILIS_MANAGED_SEARXNG_PORT,
+        process.env.SEARXNG_PORT,
+        manifest.defaultPort,
+        MANAGED_SEARXNG_DEFAULT_PORT,
+        18080,
+        8080
+    ];
+    const seen = new Set();
+    const ports = [];
+    for (const value of rawPorts) {
+        const numeric = Number(value);
+        if (!Number.isFinite(numeric)) {
+            continue;
+        }
+        const port = Math.max(1024, Math.min(Math.round(numeric), 65535));
+        if (!port || seen.has(port)) {
+            continue;
+        }
+        seen.add(port);
+        ports.push(port);
+    }
+    return ports;
+}
+
+function managedSearxngBaseUrl(port, bindAddress = '127.0.0.1') {
+    const host = normalizeString(bindAddress, '127.0.0.1') === '0.0.0.0'
+        ? '127.0.0.1'
+        : normalizeString(bindAddress, '127.0.0.1');
+    return `http://${host}:${port}`;
+}
+
+function managedSearxngHealthUrl(baseUrl = '', healthPath = '/search?q=ailis&format=json') {
+    const normalizedBase = normalizeBaseUrl(baseUrl);
+    const suffix = normalizeString(healthPath, '/search?q=ailis&format=json');
+    return `${normalizedBase}${suffix.startsWith('/') ? suffix : `/${suffix}`}`;
+}
+
+async function probeManagedSearxng(baseUrl = '', healthPath = '/search?q=ailis&format=json', timeoutMs = 1200) {
+    if (!baseUrl) {
+        return false;
+    }
+    const fetched = await fetchJsonWithNodeFetch(managedSearxngHealthUrl(baseUrl, healthPath), { timeoutMs });
+    return Boolean(fetched.ok && fetched.status >= 200 && fetched.status < 300 && fetched.json && typeof fetched.json === 'object');
+}
+
+function killManagedSearxngChild(child) {
+    if (!child || child.killed) {
+        return;
+    }
+    try {
+        if (process.platform === 'win32' && child.pid) {
+            spawnSync('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], {
+                windowsHide: true,
+                stdio: 'ignore'
+            });
+            return;
+        }
+        child.kill();
+    } catch {
+        // Ignore cleanup failures.
+    }
+}
+
+async function waitForManagedSearxngReady({ baseUrl, healthPath, timeoutMs = 12000 } = {}) {
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < timeoutMs) {
+        if (await probeManagedSearxng(baseUrl, healthPath, 1200)) {
+            return true;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 350));
+    }
+    return false;
+}
+
+async function ensureManagedSearxng(args = {}) {
+    if (!managedSearxngAllowedForSearch(args)) {
+        return null;
+    }
+    if (managedSearxngState?.baseUrl && await probeManagedSearxng(managedSearxngState.baseUrl, managedSearxngState.healthPath, 900)) {
+        return {
+            ok: true,
+            baseUrl: managedSearxngState.baseUrl,
+            source: managedSearxngState.source || 'running',
+            manifestPath: managedSearxngState.manifestPath || '',
+            pid: managedSearxngState.child?.pid || 0
+        };
+    }
+    const manifest = loadManagedSearxngManifest(args);
+    if (!manifest) {
+        return null;
+    }
+    for (const port of managedSearxngPortCandidates(manifest, args)) {
+        const baseUrl = managedSearxngBaseUrl(port, manifest.bindAddress);
+        if (await probeManagedSearxng(baseUrl, manifest.healthPath, 900)) {
+            managedSearxngState = {
+                baseUrl,
+                healthPath: manifest.healthPath,
+                manifestPath: manifest.manifestPath,
+                source: 'existing'
+            };
+            return { ok: true, baseUrl, source: 'existing', manifestPath: manifest.manifestPath, pid: 0 };
+        }
+        const stderr = [];
+        const stdout = [];
+        const child = spawn(manifest.command, manifest.args, {
+            cwd: manifest.cwd,
+            windowsHide: true,
+            stdio: ['ignore', 'pipe', 'pipe'],
+            env: {
+                ...process.env,
+                ...manifest.env,
+                SEARXNG_BIND_ADDRESS: manifest.bindAddress,
+                SEARXNG_PORT: String(port),
+                SEARXNG_LIMITER: 'false',
+                SEARXNG_PUBLIC_INSTANCE: 'false'
+            }
+        });
+        child.stdout?.on('data', (chunk) => {
+            stdout.push(String(chunk).slice(0, 1200));
+            if (stdout.length > 8) stdout.shift();
+        });
+        child.stderr?.on('data', (chunk) => {
+            stderr.push(String(chunk).slice(0, 1200));
+            if (stderr.length > 8) stderr.shift();
+        });
+        const exited = new Promise((resolve) => child.once('exit', (code) => resolve(code)));
+        const spawnFailed = new Promise((resolve) => child.once('error', (error) => resolve(error)));
+        const ready = await Promise.race([
+            waitForManagedSearxngReady({ baseUrl, healthPath: manifest.healthPath, timeoutMs: MANAGED_SEARXNG_STARTUP_TIMEOUT_MS }),
+            spawnFailed.then((error) => {
+                stderr.push(error?.message || String(error));
+                return false;
+            }),
+            exited.then(() => false)
+        ]);
+        if (ready) {
+            managedSearxngState = {
+                baseUrl,
+                healthPath: manifest.healthPath,
+                manifestPath: manifest.manifestPath,
+                source: 'spawned',
+                child,
+                command: manifest.command,
+                args: manifest.args,
+                port
+            };
+            return { ok: true, baseUrl, source: 'spawned', manifestPath: manifest.manifestPath, pid: child.pid || 0 };
+        }
+        killManagedSearxngChild(child);
+        managedSearxngState = {
+            baseUrl,
+            healthPath: manifest.healthPath,
+            manifestPath: manifest.manifestPath,
+            source: 'failed',
+            lastError: normalizeString(stderr.join('\n') || stdout.join('\n')).slice(0, 3000)
+        };
+    }
+    return null;
+}
+
+async function webSearchArgsWithManagedSearxng(args = {}) {
+    const managed = await ensureManagedSearxng(args);
+    if (!managed?.ok || !managed.baseUrl) {
+        return args;
+    }
+    return {
+        ...args,
+        searxngUrl: managed.baseUrl,
+        __managedSearxng: managed
+    };
 }
 
 function normalizeBaseUrl(value = '') {
@@ -3533,6 +3858,122 @@ async function runFirecrawlSearchBackend({ query, maxResults, timeoutMs, args = 
     };
 }
 
+async function runPythonSearchBackend({ query, maxResults, timeoutMs, args = {} } = {}) {
+    const startedAt = Date.now();
+    const firecrawlCloudEnabled = optionIsTrue(args.allowFirecrawlCloud || args.allow_firecrawl_cloud || process.env.AILIS_ENABLE_FIRECRAWL_CLOUD);
+    const configuredProvider = hasConfiguredSearxngUrl(args) || hasConfiguredFirecrawlUrl(args) || firecrawlCloudEnabled;
+    const effectiveTimeoutMs = configuredProvider ? timeoutMs : Math.min(timeoutMs, 5000);
+    const workerPath = path.resolve(
+        normalizeString(args.pythonSearchWorker || args.python_search_worker) ||
+        normalizeString(process.env.AILIS_PYTHON_SEARCH_WORKER) ||
+        resolveBundledPythonSearchWorker()
+    );
+    const pythonCandidates = dedupeSearchStrings([
+        args.pythonSearchPython,
+        args.python_search_python,
+        process.env.AILIS_PYTHON_SEARCH_PYTHON,
+        process.env.AILIS_PYTHON,
+        'python',
+        resolveBundledCrawl4aiPython()
+    ]);
+    const payload = pruneEmptyDeep({
+        query,
+        maxResults,
+        timeoutSeconds: configuredProvider
+            ? Math.max(3, Math.ceil(effectiveTimeoutMs / 1000))
+            : Math.max(2, Math.min(4, Math.ceil(effectiveTimeoutMs / 2000))),
+        searxngUrl: args.searxngUrl || args.searxng_url,
+        firecrawlUrl: args.firecrawlUrl || args.firecrawl_url,
+        allowFirecrawlCloud: firecrawlCloudEnabled
+    });
+    const failures = [];
+    for (const python of pythonCandidates) {
+        const remainingTimeoutMs = Math.max(0, effectiveTimeoutMs - (Date.now() - startedAt));
+        if (remainingTimeoutMs < 1000) {
+            break;
+        }
+        const result = await runProcess(python, [workerPath, JSON.stringify(payload)], {
+            cwd: PROJECT_ROOT,
+            timeoutMs: remainingTimeoutMs
+        });
+        const durationMs = Date.now() - startedAt;
+        let payloadResult = null;
+        try {
+            payloadResult = JSON.parse(result.stdout || '{}');
+        } catch (error) {
+            const failure = {
+                python,
+                exitCode: result.exitCode,
+                errorCode: 'invalid_python_search_payload',
+                error: `Python search worker returned invalid JSON: ${error.message}`,
+                stderr: normalizeString(result.stderr || result.stdout).slice(0, 3000)
+            };
+            failures.push(failure);
+            if (/ModuleNotFoundError|No module named/i.test(failure.stderr)) {
+                continue;
+            }
+            return {
+                ok: false,
+                backend: 'python_search',
+                url: workerPath,
+                durationMs,
+                status: 0,
+                retryable: true,
+                python,
+                pythonFailures: failures,
+                ...failure
+            };
+        }
+        const rows = dedupeSearchResults((Array.isArray(payloadResult.results) ? payloadResult.results : []).map((item) => ({
+            title: item.title,
+            url: item.url,
+            snippet: item.snippet || item.description || '',
+            sourceEngines: item.sourceEngines || ['python_search']
+        })), maxResults);
+        const ok = result.exitCode === 0 && rows.length > 0 && payloadResult.ok !== false;
+        if (ok) {
+            return {
+                ok,
+                backend: 'python_search',
+                url: workerPath,
+                durationMs,
+                status: 200,
+                errorCode: '',
+                error: '',
+                stderr: normalizeString(result.stderr).slice(0, 3000),
+                retryable: true,
+                python,
+                pythonFailures: failures.length ? failures : undefined,
+                workerAttempts: payloadResult.attempts || [],
+                results: rows
+            };
+        }
+        failures.push({
+            python,
+            exitCode: result.exitCode,
+            errorCode: normalizeString(payloadResult.errorCode) || (result.timedOut ? 'timeout' : 'python_search_failed'),
+            error: normalizeString(payloadResult.error) || `Python search worker exit ${result.exitCode}`,
+            stderr: normalizeString(result.stderr).slice(0, 3000),
+            workerAttempts: payloadResult.attempts || []
+        });
+    }
+    const last = failures[failures.length - 1] || {};
+    return {
+        ok: false,
+        backend: 'python_search',
+        url: workerPath,
+        durationMs: Date.now() - startedAt,
+        status: 0,
+        errorCode: last.errorCode || 'python_search_failed',
+        error: last.error || 'Python search worker failed for all configured Python candidates.',
+        stderr: last.stderr || '',
+        retryable: true,
+        pythonFailures: failures,
+        workerAttempts: last.workerAttempts || [],
+        results: []
+    };
+}
+
 const SEARCH_BACKENDS = Object.freeze({
     searxng_json: Object.freeze({
         id: 'searxng_json',
@@ -3541,6 +3982,10 @@ const SEARCH_BACKENDS = Object.freeze({
     firecrawl_search: Object.freeze({
         id: 'firecrawl_search',
         run: runFirecrawlSearchBackend
+    }),
+    python_search: Object.freeze({
+        id: 'python_search',
+        run: runPythonSearchBackend
     }),
     duckduckgo_lite: Object.freeze({
         id: 'duckduckgo_lite',
@@ -3587,23 +4032,52 @@ function dedupeSearchBackendIds(ids = []) {
     return unique;
 }
 
-function expandSearchProviderToken(token = '', query = '', { includeFallback = true } = {}) {
+function dedupeSearchStrings(values = []) {
+    const seen = new Set();
+    const rows = [];
+    for (const value of values) {
+        const normalized = normalizeString(value);
+        const key = normalized.toLowerCase();
+        if (!normalized || seen.has(key)) {
+            continue;
+        }
+        seen.add(key);
+        rows.push(normalized);
+    }
+    return rows;
+}
+
+function configuredJsonSearchBackendIds(args = {}, query = '') {
+    const chain = [];
+    if (hasConfiguredSearxngUrl(args)) {
+        chain.push('searxng_json');
+    }
+    if (hasConfiguredFirecrawlUrl(args)) {
+        chain.push('firecrawl_search');
+    }
+    chain.push('python_search', ...HTML_SEARCH_BACKEND_IDS);
+    return isLikelyGitHubSearch(query) ? ['github_repositories', ...chain] : chain;
+}
+
+function expandSearchProviderToken(token = '', query = '', { includeFallback = true, args = {} } = {}) {
     const normalized = normalizeString(token).toLowerCase();
     if (!normalized || normalized === 'auto') {
-        const chain = ['searxng_json', 'firecrawl_search', ...HTML_SEARCH_BACKEND_IDS];
-        return isLikelyGitHubSearch(query) ? ['github_repositories', ...chain] : chain;
+        return configuredJsonSearchBackendIds(args, query);
     }
     if (normalized === 'html' || normalized === 'builtin_html' || normalized === 'current_html_fallback') {
         return [...HTML_SEARCH_BACKEND_IDS];
     }
     if (normalized === 'searxng') {
-        return includeFallback ? ['searxng_json', ...HTML_SEARCH_BACKEND_IDS] : ['searxng_json'];
+        return includeFallback ? ['searxng_json', 'python_search', ...HTML_SEARCH_BACKEND_IDS] : ['searxng_json'];
     }
     if (normalized === 'firecrawl') {
-        return includeFallback ? ['firecrawl_search', ...HTML_SEARCH_BACKEND_IDS] : ['firecrawl_search'];
+        return includeFallback ? ['firecrawl_search', 'python_search', ...HTML_SEARCH_BACKEND_IDS] : ['firecrawl_search'];
+    }
+    if (normalized === 'python' || normalized === 'python_search' || normalized === 'python-search') {
+        return includeFallback ? ['python_search', ...HTML_SEARCH_BACKEND_IDS] : ['python_search'];
     }
     if (normalized === 'external' || normalized === 'agent_web') {
-        return ['searxng_json', 'firecrawl_search', ...HTML_SEARCH_BACKEND_IDS];
+        return configuredJsonSearchBackendIds(args, query);
     }
     if (normalized === 'github') {
         return ['github_repositories'];
@@ -3611,14 +4085,14 @@ function expandSearchProviderToken(token = '', query = '', { includeFallback = t
     return [normalized];
 }
 
-function expandSearchProviderIds(value = '', query = '') {
+function expandSearchProviderIds(value = '', query = '', args = {}) {
     const tokens = String(value || 'auto')
         .split(',')
         .map((item) => item.trim())
         .filter(Boolean);
     const compound = tokens.length > 1;
     return dedupeSearchBackendIds(
-        tokens.flatMap((item) => expandSearchProviderToken(item, query, { includeFallback: !compound }))
+        tokens.flatMap((item) => expandSearchProviderToken(item, query, { includeFallback: !compound, args }))
     );
 }
 
@@ -3630,14 +4104,15 @@ function normalizeSearchBackends(args = {}, query = '') {
             .map((item) => item.trim())
             .filter(Boolean);
     const requested = raw.length
-        ? dedupeSearchBackendIds(raw.flatMap((item) => expandSearchProviderToken(item, query, { includeFallback: raw.length <= 1 })))
+        ? dedupeSearchBackendIds(raw.flatMap((item) => expandSearchProviderToken(item, query, { includeFallback: raw.length <= 1, args })))
         : expandSearchProviderIds(
             args.provider ||
             args.searchProvider ||
             args.search_provider ||
             process.env.AILIS_WEB_SEARCH_PROVIDER ||
             'auto',
-            query
+            query,
+            args
         );
     const backends = requested
         .map((id) => SEARCH_BACKENDS[normalizeString(id).toLowerCase()])
@@ -3728,15 +4203,16 @@ async function webSearch(args = {}) {
     const maxResults = clampNumber(args.maxResults || args.limit, 8, 1, 12);
     const timeoutMs = clampNumber(args.timeoutMs || args.timeout_ms, 8000, 3000, 30000);
     const attempts = [];
-    const backends = normalizeSearchBackends(args, backendQuery);
+    const effectiveArgs = await webSearchArgsWithManagedSearxng(args);
+    const backends = normalizeSearchBackends(effectiveArgs, backendQuery);
     const overallTimeoutMs = clampNumber(
-        args.overallTimeoutMs || args.overall_timeout_ms,
+        effectiveArgs.overallTimeoutMs || effectiveArgs.overall_timeout_ms,
         Math.min(36000, Math.max(12000, timeoutMs * backends.length)),
         8000,
         120000
     );
     const startedAt = Date.now();
-    const aggregateAcrossBackends = shouldAggregateSearchBackends(args);
+    const aggregateAcrossBackends = shouldAggregateSearchBackends(effectiveArgs);
     let collectedResults = [];
     let lastSuccessObservation = null;
     let lastSuccessfulAttempt = null;
@@ -3756,7 +4232,7 @@ async function webSearch(args = {}) {
         }
         const backend = backends[backendIndex];
         const attemptTimeoutMs = Math.min(timeoutMs, Math.max(1000, remainingMs - 750));
-        const attempt = await runSearchBackend(backend, backendQuery, maxResults, attemptTimeoutMs, args);
+        const attempt = await runSearchBackend(backend, backendQuery, maxResults, attemptTimeoutMs, effectiveArgs);
         attempts.push(attempt);
         if (!attempt.ok) {
             continue;
@@ -3772,6 +4248,7 @@ async function webSearch(args = {}) {
             rawResults: collectedResults,
             backend: attempt.backend,
             url: attempt.url,
+            managedSearxng: effectiveArgs.__managedSearxng || null,
             startedAt,
             overallTimeoutMs,
             aggregated: aggregateAcrossBackends && attempts.filter((entry) => entry.ok).length > 1
@@ -3779,7 +4256,7 @@ async function webSearch(args = {}) {
         lastSuccessObservation = observation;
         lastSuccessfulAttempt = attempt;
         if (!shouldContinueSearchAggregation({
-            args,
+            args: effectiveArgs,
             backends,
             backendIndex,
             searchConfidence: observation.searchConfidence,
@@ -3797,6 +4274,7 @@ async function webSearch(args = {}) {
             rawResults: collectedResults,
             backend: lastSuccessfulAttempt.backend,
             url: lastSuccessfulAttempt.url,
+            managedSearxng: effectiveArgs.__managedSearxng || null,
             startedAt,
             overallTimeoutMs,
             aggregated: aggregateAcrossBackends && attempts.filter((entry) => entry.ok).length > 1
@@ -4643,11 +5121,12 @@ function buildWebFetchResult({ url, args = {}, maxChars = MAX_FETCH_CHARS, fetch
             is_evidence: quality.isEvidence,
             evidence_quality: quality.evidenceQuality,
             page_type: quality.pageType,
-            final_answer_requires_llm_evidence_audit: true
+            evidence_judged_by_model: true
         },
         observedLinkCount: extractedLinks.length,
         suggestedNextCalls: effectiveSuggestedNextCalls,
         observedRelevantLinks,
+        contentExcerpt: focused.text,
         htmlRelations: htmlRelations || undefined,
         htmlRelationSummary: htmlRelationSummary || undefined,
         wikiFacts: wikiFacts.length ? wikiFacts : undefined,
@@ -4655,7 +5134,7 @@ function buildWebFetchResult({ url, args = {}, maxChars = MAX_FETCH_CHARS, fetch
         evidenceGap,
         recoveryHint,
         pageStatus: quality.pageStatus || undefined,
-        finalAnswerRequiresEvidenceAudit: true,
+        modelJudgesEvidence: true,
         encodingRepair: encodingRepair.repaired ? 'latin1_to_utf8' : undefined,
         crawl4aiAttempt: summarizeCrawl4aiAttempt(crawl4aiAttempt),
         renderedFallbackAttempt: summarizeCrawl4aiAttempt(renderedFallbackAttempt),
@@ -4813,6 +5292,7 @@ function buildWebResearchCandidates(searchDetails = {}, limit = 3) {
             url,
             source,
             searchRank: Number(candidate.searchRank) || undefined,
+            snippet: normalizeString(candidate.snippet),
             queryScore: Number(candidate.queryScore) || undefined,
             combinedScore: Number(candidate.combinedScore) || undefined,
             sourceBackends: candidate.sourceBackends || undefined,
@@ -4821,14 +5301,6 @@ function buildWebResearchCandidates(searchDetails = {}, limit = 3) {
             queryVariantIndex: candidate.queryVariantIndex || undefined
         }));
     };
-    for (const call of searchDetails.suggestedNextCalls || []) {
-        if (normalizeString(call.tool) === 'web_fetch') {
-            addCandidateToPool({
-                title: call.reason,
-                url: call.args?.url
-            }, 'suggested_next_call');
-        }
-    }
     for (const [index, result] of (searchDetails.results || []).entries()) {
         if (!isRelevantSearchCandidate(result)) {
             continue;
@@ -4837,6 +5309,14 @@ function buildWebResearchCandidates(searchDetails = {}, limit = 3) {
             ...result,
             searchRank: index + 1
         }, query ? 'ranked_relevant_result' : 'ranked_result');
+    }
+    for (const call of searchDetails.suggestedNextCalls || []) {
+        if (normalizeString(call.tool) === 'web_fetch') {
+            addCandidateToPool({
+                title: call.reason,
+                url: call.args?.url
+            }, 'optional_followup_call');
+        }
     }
     const primary = [];
     const overflow = [];
@@ -4986,13 +5466,16 @@ function scoreWebResearchPage(page = {}, query = '') {
 function summarizeWebResearchPage(candidate = {}, fetchResult = {}, query = '') {
     const details = fetchResult.structuredContent || fetchResult.details || {};
     let evidenceQuality = normalizeString(details.evidenceQuality || details.observationContract?.evidence_quality);
-    const fullText = extractTextFromToolResult(fetchResult, 16000);
+    const contentExcerpt = normalizeString(details.contentExcerpt || details.content_excerpt);
+    const fullText = contentExcerpt || extractTextFromToolResult(fetchResult, 16000);
     const targetCoverage = assessWebResearchTargetCoverage([
         candidate.title,
+        candidate.snippet,
         candidate.url,
         fullText
     ].filter(Boolean).join('\n'), query, [
         candidate.title,
+        candidate.snippet,
         candidate.url
     ].filter(Boolean).join('\n'));
     const missingTargetTerms = targetCoverage?.missingSpecificTargetTerms || [];
@@ -5007,6 +5490,7 @@ function summarizeWebResearchPage(candidate = {}, fetchResult = {}, query = '') 
         searchRank: candidate.searchRank,
         queryScore: Number.isFinite(candidate.queryScore) ? Number(candidate.queryScore.toFixed(2)) : undefined,
         combinedScore: Number.isFinite(candidate.combinedScore) ? Number(candidate.combinedScore.toFixed(2)) : undefined,
+        searchSnippet: normalizeString(candidate.snippet),
         sourceBackends: candidate.sourceBackends?.length ? candidate.sourceBackends.slice(0, 5) : undefined,
         queryVariant: normalizeString(candidate.queryVariant),
         queryVariantRole: normalizeString(candidate.queryVariantRole),
@@ -5016,7 +5500,7 @@ function summarizeWebResearchPage(candidate = {}, fetchResult = {}, query = '') 
         evidenceQuality,
         pageType: normalizeString(details.pageType || details.observationContract?.page_type),
         contentQuality: normalizeString(details.contentQuality || evidenceQuality),
-        finalAnswerRequiresEvidenceAudit: details.finalAnswerRequiresEvidenceAudit !== false,
+        modelJudgesEvidence: details.modelJudgesEvidence !== false,
         isEvidence: targetCovered ? details.isEvidence : false,
         reasoningReady: targetCovered && (details.reasoningReady === true || details.observationContract?.reasoning_ready === true),
         complete: targetCovered && (details.complete === true || details.observationContract?.complete === true),
@@ -5033,7 +5517,11 @@ function summarizeWebResearchPage(candidate = {}, fetchResult = {}, query = '') 
         observedRelevantLinks: Array.isArray(details.observedRelevantLinks) ? details.observedRelevantLinks.slice(0, 5) : undefined,
         suggestedNextCalls: Array.isArray(details.suggestedNextCalls) ? details.suggestedNextCalls.slice(0, 5) : undefined,
         htmlRelations: details.htmlRelations,
-        evidenceSnippets: extractEvidenceSnippetsFromText(fullText, query),
+        evidenceSnippets: extractEvidenceSnippetsFromText([
+            candidate.title,
+            candidate.snippet,
+            fullText
+        ].filter(Boolean).join('\n'), query),
         excerpt: fullText.length > 3600 ? `${fullText.slice(0, 3597).trim()}...` : fullText
     });
     const evidenceScore = scoreWebResearchPage(page, query);
@@ -5051,8 +5539,9 @@ function assessWebResearchBundle(pages = [], searchDetails = {}) {
     if (searchDetails.clarificationRequired) {
         return {
             answerReadiness: 'needs_clarification',
-            readinessAuthority: 'retrieval_heuristic',
+            readinessAuthority: 'retrieval_summary_model_decides',
             requiresEvidenceAudit: false,
+            evidenceDecision: 'ask_user_before_evidence_judgment',
             evidenceGap: searchDetails.evidenceGap || 'Search target is ambiguous.',
             recoveryHint: searchDetails.recoveryHint || 'Ask the user to clarify the search target before fetching pages.'
         };
@@ -5060,38 +5549,38 @@ function assessWebResearchBundle(pages = [], searchDetails = {}) {
     if (readyPages.length) {
         return {
             answerReadiness: 'ready',
-            readinessAuthority: 'retrieval_heuristic',
-            requiresEvidenceAudit: true,
-            evidenceAuditInstruction: 'Before final answer, an LLM evidence auditor must verify that supported claims cover the user goal and identify missing fields; tool readiness is retrieval quality, not final answer authority.',
+            readinessAuthority: 'retrieval_summary_model_decides',
+            requiresEvidenceAudit: false,
+            evidenceDecision: 'model_judges_candidate_evidence',
             evidenceGap: '',
-            recoveryHint: 'Use the evidence pages; do not run another broad search unless a specific field is missing.'
+            recoveryHint: 'Candidate evidence is ready for model judgment; continue retrieval only if the model sees a missing field.'
         };
     }
     if (evidencePages.length) {
         return {
             answerReadiness: 'partial',
-            readinessAuthority: 'retrieval_heuristic',
-            requiresEvidenceAudit: true,
-            evidenceAuditInstruction: 'Run an LLM evidence audit over the fetched evidence. If required answer fields are missing, continue retrieval or state the gap instead of filling with generic claims.',
-            evidenceGap: 'Fetched pages contain some evidence but are not fully reasoning-ready. Follow high-signal linked resources or fetch a more specific result if needed.',
-            recoveryHint: 'Prefer suggestedNextCalls from the evidence pages before issuing another broad search.'
+            readinessAuthority: 'retrieval_summary_model_decides',
+            requiresEvidenceAudit: false,
+            evidenceDecision: 'model_judges_candidate_evidence',
+            evidenceGap: 'Fetched pages contain some candidate evidence but may be incomplete.',
+            recoveryHint: 'Answer if the model judges the snippets/pages sufficient; otherwise follow a specific high-signal link or refine the query.'
         };
     }
     if (blockedPages.length) {
         return {
             answerReadiness: 'blocked',
-            readinessAuthority: 'retrieval_heuristic',
-            requiresEvidenceAudit: true,
-            evidenceAuditInstruction: 'An LLM evidence audit should reject final answering from blocked pages and choose alternate retrieval or explicit gap reporting.',
+            readinessAuthority: 'retrieval_summary_model_decides',
+            requiresEvidenceAudit: false,
+            evidenceDecision: 'model_judges_candidate_evidence',
             evidenceGap: 'Top pages were blocked, JavaScript-only, or unusable as answer evidence.',
             recoveryHint: 'Try alternate sources, rendered/browser extraction, or a domain-specific API/tool.'
         };
     }
     return {
         answerReadiness: 'needs_followup',
-        readinessAuthority: 'retrieval_heuristic',
-        requiresEvidenceAudit: true,
-        evidenceAuditInstruction: 'No final answer should be generated from this bundle until an LLM evidence audit finds sufficient supported claims.',
+        readinessAuthority: 'retrieval_summary_model_decides',
+        requiresEvidenceAudit: false,
+        evidenceDecision: 'model_judges_candidate_evidence',
         evidenceGap: searchDetails.evidenceGap || 'No answer-bearing evidence page was fetched.',
         recoveryHint: searchDetails.recoveryHint || 'Refine the query or use a more specific retrieval tool.'
     };
@@ -5101,32 +5590,18 @@ function formatWebResearchBundle({ query = '', searchDetails = {}, pages = [], b
     const lines = [
         'AILIS web research evidence bundle:',
         `Query: ${query}`,
-        `Retrieval readiness: ${bundleAssessment.answerReadiness || 'unknown'}`,
-        `Readiness authority: ${bundleAssessment.readinessAuthority || 'retrieval_heuristic'}`,
-        `Evidence audit required: ${bundleAssessment.requiresEvidenceAudit !== false}`
+        'Observation policy: snippets, fetched pages, and diagnostics are candidate material only; the tool does not judge answer confidence or evidence sufficiency.'
     ];
-    if (bundleAssessment.evidenceAuditInstruction) {
-        lines.push(`Evidence audit instruction: ${bundleAssessment.evidenceAuditInstruction}`);
-    }
-    if (bundleAssessment.evidenceGap) {
-        lines.push(`Evidence gap: ${bundleAssessment.evidenceGap}`);
-    }
-    if (bundleAssessment.recoveryHint) {
-        lines.push(`Recovery hint: ${bundleAssessment.recoveryHint}`);
-    }
     if (searchDetails.backend || searchDetails.searchAggregation?.successfulBackends?.length) {
         const sources = searchDetails.searchAggregation?.successfulBackends?.length
             ? searchDetails.searchAggregation.successfulBackends.join(', ')
             : searchDetails.backend;
         lines.push(`Search sources: ${sources}`);
     }
-    if (searchDetails.searchConfidence?.level) {
-        lines.push(`Search confidence: ${searchDetails.searchConfidence.level} (${searchDetails.searchConfidence.score})`);
-    }
     if (Array.isArray(searchDetails.answerCandidates) && searchDetails.answerCandidates.length) {
-        lines.push('Answer candidates from search results:');
+        lines.push('Search-extracted candidate strings:');
         searchDetails.answerCandidates.slice(0, 5).forEach((candidate, index) => {
-            lines.push(`- ${index + 1}. ${candidate.answer} (${candidate.type || 'answer'}, score=${candidate.score ?? 'n/a'})`);
+            lines.push(`- ${index + 1}. ${candidate.answer} (${candidate.type || 'answer'})`);
             if (candidate.url) {
                 lines.push(`  URL: ${candidate.url}`);
             }
@@ -5147,20 +5622,26 @@ function formatWebResearchBundle({ query = '', searchDetails = {}, pages = [], b
             lines.push(`- ${index + 1}. ${choice.label || choice.title || choice.url}`);
         });
     }
+    const searchEvidenceText = formatCandidateSearchEvidence(searchDetails.results || [], 8);
+    if (searchEvidenceText) {
+        lines.push(searchEvidenceText);
+    }
     if (pages.length) {
-        lines.push('Evidence pages:');
+        lines.push('Fetched pages:');
         pages.forEach((page, index) => {
             lines.push(`- ${index + 1}. ${page.title || page.url}`);
             lines.push(`  URL: ${page.url}`);
-            lines.push(`  Quality: ${page.evidenceQuality || 'unknown'}; reasoningReady=${page.reasoningReady === true}; evidenceScore=${page.evidenceScore ?? 'n/a'}`);
-            if (page.pageType || page.contentQuality) {
-                lines.push(`  Page type: ${page.pageType || 'unknown'}; contentQuality=${page.contentQuality || page.evidenceQuality || 'unknown'}`);
+            if (page.pageType || page.fetchStatus || page.pageStatus || page.returnedChars || page.originalChars) {
+                lines.push(`  Fetch diagnostic: pageType=${page.pageType || 'unknown'}; status=${page.fetchStatus || page.pageStatus || 'unknown'}; returnedChars=${page.returnedChars ?? 'n/a'}; originalChars=${page.originalChars ?? 'n/a'}`);
             }
             if (page.evidenceGap) {
-                lines.push(`  Gap: ${page.evidenceGap}`);
+                lines.push(`  Retrieval note: ${page.evidenceGap}`);
+            }
+            if (page.searchSnippet) {
+                lines.push(`  Search snippet: ${truncateRelationText(page.searchSnippet, 460)}`);
             }
             if (Array.isArray(page.evidenceSnippets) && page.evidenceSnippets.length) {
-                lines.push('  Evidence snippets:');
+                lines.push('  Candidate snippets:');
                 page.evidenceSnippets.slice(0, 3).forEach((snippet) => lines.push(`  - ${snippet}`));
             }
             const excerpt = normalizeString(page.excerpt).split('\n').slice(0, 18).join('\n');
@@ -5229,7 +5710,7 @@ async function webResearch(args = {}) {
         pipelineSteps.push({
             stage: 'search',
             status: searchResult.isError ? 'error' : details.clarificationRequired ? 'clarification_required' : details.status || 'completed',
-            note: `${variant.role || 'query'} -> ${details.searchConfidence?.level || details.error || 'no_confidence'}`
+            note: `${variant.role || 'query'}; results=${Array.isArray(details.results) ? details.results.length : 0}${details.error ? `; error=${details.error}` : ''}`
         });
         if (details.clarificationRequired) {
             break;
@@ -5297,7 +5778,7 @@ async function webResearch(args = {}) {
         pipelineSteps.push({
             stage: 'fetch',
             status: page.fetchStatus || (fetchResult.isError ? 'error' : 'completed'),
-            note: `${page.evidenceQuality || 'unknown'} score=${page.evidenceScore ?? 'n/a'} ${candidate.url}`
+            note: `${page.pageType || page.fetchStatus || 'page'} ${candidate.url}`
         });
     }
     const orderedPages = pages.sort((left, right) =>
@@ -5351,8 +5832,8 @@ async function webExtractLinks(args = {}) {
         ? orderedLinks.map((link, index) => `${index + 1}. ${link.text || '(no text)'}\nURL: ${link.url}`).join('\n\n')
         : `No links extracted from: ${url}`;
     const guidance = buildWebToolGuidanceText({
-        evidenceGap: orderedLinks.length ? 'Extracted links are candidates only. Follow a DOI/PDF/article link before answering.' : '',
-        recoveryHint: suggestedNextCalls.length ? 'Prefer the high-signal links below over another broad web_search.' : '',
+        evidenceGap: orderedLinks.length ? 'Links extracted from the page; link text is not page content.' : '',
+        recoveryHint: suggestedNextCalls.length ? 'Follow-up call arguments below were derived from extracted links.' : '',
         suggestedNextCalls,
         observedRelevantLinks
     });
@@ -5361,8 +5842,7 @@ async function webExtractLinks(args = {}) {
         url,
         links: orderedLinks,
         suggestedNextCalls,
-        observedRelevantLinks,
-        evidenceGap: orderedLinks.length ? 'Links alone are not evidence; follow one of them.' : undefined
+        observedRelevantLinks
     });
 }
 
@@ -7946,8 +8426,7 @@ function classifyYtDlpFailure(stderr = '') {
             message: 'YouTube/yt-dlp was blocked by anti-bot or requires browser cookies.',
             nextActions: [
                 'Retry with allow_cookies=true and cookies_from_browser set to an installed browser if the user permits cookie access.',
-                'Use a video frame sampling or ASR backend if video/audio download is available.',
-                'Do not keep rewriting web_search queries for the same YouTube video.'
+                'Use another evidence source if it is more likely to answer the task.'
             ]
         };
     }
@@ -7964,7 +8443,7 @@ function classifyYtDlpFailure(stderr = '') {
             status: 'transcript_unavailable',
             failureReason: 'transcript_unavailable',
             message: 'No subtitles or automatic captions were available.',
-            nextActions: ['Use audio ASR or video frame sampling instead of retrying transcript.']
+            nextActions: ['Use another evidence source if it is more likely to answer the task.']
         };
     }
     return {
@@ -8074,12 +8553,7 @@ function buildYouTubeEvidenceSearchQuery(video = {}, args = {}) {
 }
 
 function buildYouTubeOEmbedSuggestedCalls(video = {}, args = {}) {
-    const language = normalizeString(args.language || args.lang, 'en');
     return [
-        {
-            tool: 'youtube_transcript',
-            args: { url: video.url, language }
-        },
         {
             tool: 'web_search',
             args: { query: buildYouTubeEvidenceSearchQuery(video, args), maxResults: 5 }
@@ -8097,12 +8571,10 @@ function youtubeOEmbedMetadataResult(video = {}, args = {}, failure = {}) {
         `url: ${video.url || ''}`,
         `thumbnail_url: ${video.thumbnail_url || ''}`,
         '',
-        'evidence_gap: metadata_only; this is not transcript, audio, or frame evidence.',
-        'Use the exact title/channel above for follow-up search or media fallback before answering visual/audio questions.',
+        'retrieval_diagnostic: metadata_only; this is not transcript, audio, or frame evidence.',
         '',
-        'Suggested next calls:',
-        `1. youtube_transcript ${JSON.stringify(suggestedNextCalls[0].args)}`,
-        `2. web_search ${JSON.stringify(suggestedNextCalls[1].args)}`
+        'Available follow-up calls derived from the recovered metadata:',
+        `1. web_search ${JSON.stringify(suggestedNextCalls[0].args)}`
     ];
     return textResult(lines.join('\n'), {
         ...failure,
@@ -8958,24 +9430,14 @@ print(json.dumps({"query": target, "videos": videos[:max_results]}, ensure_ascii
             ]
         });
     }
-    const suggestedNextCalls = [
-        {
-            tool: 'youtube_transcript',
-            args: { url: videos[0].url, language: normalizeString(args.language || args.lang, 'en') }
-        }
-    ];
     const lines = [
         'YouTube search results:',
-        ...videos.map((video, index) => `${index + 1}. ${video.title || '(untitled)'} | ${video.channel || video.uploader || 'unknown channel'} | ${video.url}`),
-        '',
-        `Suggested next calls:`,
-        `1. youtube_transcript ${JSON.stringify(suggestedNextCalls[0].args)}`
+        ...videos.map((video, index) => `${index + 1}. ${video.title || '(untitled)'} | ${video.channel || video.uploader || 'unknown channel'} | ${video.url}`)
     ];
     return textResult(lines.join('\n'), {
         status: 'completed',
         query: searchQuery,
-        videos,
-        suggestedNextCalls
+        videos
     });
 }
 
@@ -9092,10 +9554,6 @@ print(json.dumps(payload, ensure_ascii=False))
             ? buildYouTubeOEmbedSuggestedCalls(oembed.video, args)
             : [
                 {
-                    tool: 'youtube_video_search',
-                    args: { url, maxResults: 1 }
-                },
-                {
                     tool: 'web_search',
                     args: { query: `${url} transcript`, maxResults: 5 }
                 }
@@ -9134,10 +9592,6 @@ print(json.dumps(payload, ensure_ascii=False))
         evidenceGap: transcript ? '' : 'No subtitles or automatic captions were available in yt-dlp metadata.',
         suggestedNextCalls: transcript ? [] : [
             {
-                tool: 'youtube_video_search',
-                args: { url, maxResults: 1 }
-            },
-            {
                 tool: 'web_search',
                 args: { query: `${payload?.title || url} transcript species visual evidence`, maxResults: 5 }
             }
@@ -9145,14 +9599,14 @@ print(json.dumps(payload, ensure_ascii=False))
     };
     const text = result.stdout.trim() + (transcript
         ? ''
-        : `\n\nevidence_gap=${details.evidenceGap}\nSuggested next calls:\n1. youtube_video_search ${JSON.stringify(details.suggestedNextCalls[0].args)}\n2. web_search ${JSON.stringify(details.suggestedNextCalls[1].args)}`);
+        : `\n\nretrieval_diagnostic=${details.evidenceGap}\nAvailable follow-up calls derived from metadata:\n1. web_search ${JSON.stringify(details.suggestedNextCalls[0].args)}`);
     return textResult(text, details);
 }
 
 const TOOLS = [
     {
         name: 'web_search',
-        description: 'Fallback broad public web search through AILIS managed search backends. Standard call: { "query": "specific search keywords", "maxResults": 5 }. Do not use as the first step for attached/local files, known URLs, PDFs/papers/reports, YouTube/videos, audio, images, spreadsheets, presentations, Word documents, code files, or GitHub repositories; use the dedicated MCP tool for those artifact types first. Use web_fetch for a known HTML/text URL, paper_metadata_lookup for exact paper/DOI metadata, pdf_extract_text for a known PDF URL, pdf_find_and_extract for a paper/report title when you need full text, and github_repo_read for GitHub README/tree/file evidence. General web queries use a SearXNG-style provider chain: SearXNG JSON, Firecrawl-compatible local search, then current HTML fallback; GitHub/code repository queries keep GitHub repository search first. Configure with AILIS_SEARXNG_URL, AILIS_FIRECRAWL_URL, and AILIS_WEB_SEARCH_PROVIDER when local endpoints exist. Hosted Firecrawl is intentionally disabled here. Results from multiple successful providers are normalized, de-duplicated, source-tagged, re-ranked, and returned with searchConfidence plus clarificationRequired/candidateChoices when the result set is too ambiguous to follow safely.',
+        description: 'Fallback broad public web search through AILIS managed search backends. Standard call: { "query": "specific search keywords", "maxResults": 5 }. Do not use as the first step for attached/local files, known URLs, PDFs/papers/reports, audio, images, spreadsheets, presentations, Word documents, code files, or GitHub repositories; use the dedicated MCP tool for those artifact types first. Use web_fetch for a known HTML/text URL, paper_metadata_lookup for exact paper/DOI metadata, pdf_extract_text for a known PDF URL, pdf_find_and_extract for a paper/report title when you need full text, and github_repo_read for GitHub README/tree/file evidence. General web queries first try an AILIS-packaged local SearXNG service when available; AILIS starts it automatically from managed-searxng.json and users do not need to deploy Docker or provide a URL. Explicit AILIS_SEARXNG_URL/per-call searxngUrl still overrides the managed service. The fallback chain then uses configured local Firecrawl, the no-Docker local Python search worker, then current HTML fallback backends. GitHub/code repository queries keep GitHub repository search first. Hosted Firecrawl is used only when FIRECRAWL_API_KEY and AILIS_ENABLE_FIRECRAWL_CLOUD=1 are explicitly configured. Results from multiple successful providers are normalized, de-duplicated, source-tagged, re-ranked, and returned as compact candidate snippets plus source URLs. The tool does not judge answer confidence or evidence sufficiency.',
         inputSchema: {
             type: 'object',
             required: ['query'],
@@ -9176,14 +9630,17 @@ const TOOLS = [
                 timeoutMs: { type: 'number', description: 'Per-backend timeout in milliseconds, clamped to 3000-30000. Default is 8000. Omit unless a task needs a longer wait.' },
                 overallTimeoutMs: { type: 'number', description: 'Overall search budget in milliseconds, clamped to 8000-120000. Defaults under the Gateway timeout so failures return as tool results instead of hanging.' },
                 aggregate: { type: 'boolean', description: 'Optional. true forces multi-provider aggregation; false returns the first successful backend. Omit for automatic aggregation in auto/provider-chain mode.' },
-                provider: { type: 'string', description: 'Optional provider chain selector: auto, searxng, firecrawl, html/current_html_fallback, external, github, or a comma-separated backend list. Prefer omitting this for automatic fallback.' },
+                provider: { type: 'string', description: 'Optional provider chain selector: auto, searxng, firecrawl, python_search, html/current_html_fallback, external, github, or a comma-separated backend list. Prefer omitting this for automatic fallback.' },
                 searchProvider: { type: 'string', description: 'Compatibility alias for provider. Prefer provider.' },
-                searxngUrl: { type: 'string', description: 'Optional SearXNG base URL override. Prefer configuring AILIS_SEARXNG_URL instead of passing this per call.' },
+                searxngUrl: { type: 'string', description: 'Optional SearXNG base URL override. Normally omit this; AILIS can auto-start its packaged local SearXNG service.' },
                 firecrawlUrl: { type: 'string', description: 'Optional Firecrawl base URL override for local/self-hosted Firecrawl. AILIS does not call hosted Firecrawl from this tool.' },
-                backend: { type: 'string', description: 'Optional backend id or provider alias: searxng_json, firecrawl_search, bing_html, duckduckgo_lite, duckduckgo_html, yahoo_html, github_repositories, html, searxng, or firecrawl. Omit for automatic fallback.' },
+                disableManagedSearxng: { type: 'boolean', description: 'Optional test/diagnostic switch. true disables AILIS auto-start of its packaged local SearXNG service for this call.' },
+                managedSearxngManifest: { type: 'string', description: 'Optional test/diagnostic manifest override. Normal users should omit this.' },
+                managedSearxngPort: { type: 'number', description: 'Optional test/diagnostic port override for the AILIS-managed local SearXNG process.' },
+                backend: { type: 'string', description: 'Optional backend id or provider alias: searxng_json, firecrawl_search, python_search, bing_html, duckduckgo_lite, duckduckgo_html, yahoo_html, github_repositories, html, searxng, or firecrawl. Omit for automatic fallback.' },
                 backends: {
                     type: 'array',
-                    items: { type: 'string', enum: ['searxng_json', 'firecrawl_search', 'bing_html', 'duckduckgo_lite', 'duckduckgo_html', 'yahoo_html', 'github_repositories', 'html', 'current_html_fallback', 'searxng', 'firecrawl'] },
+                    items: { type: 'string', enum: ['searxng_json', 'firecrawl_search', 'python_search', 'bing_html', 'duckduckgo_lite', 'duckduckgo_html', 'yahoo_html', 'github_repositories', 'html', 'current_html_fallback', 'searxng', 'firecrawl', 'python'] },
                     description: 'Optional ordered backend ids. Omit for automatic fallback.'
                 }
             },
@@ -9192,7 +9649,7 @@ const TOOLS = [
     },
     {
         name: 'web_research',
-        description: 'End-to-end AILIS web research pipeline for natural research/guide/current-info tasks. It runs web_search, de-duplicates and ranks candidates, fetches the top high-signal HTML/text pages, extracts readable content plus relationship maps, and returns a retrieval evidence bundle with retrieval-readiness metadata, page types, evidencePages, searchConfidence, and suggestedNextCalls. Retrieval readiness is only a tool-layer heuristic: final answering requires an LLM evidence audit over supported claims, missing fields, and rejected/non-answer-bearing sources. Use this when the user asks to research, make a guide, compare public sources, or gather current web evidence and there is no more specific artifact tool. It stops for clarification instead of fetching pages when searchConfidence says the target is ambiguous.',
+        description: 'End-to-end AILIS web research pipeline for natural research/guide/current-info tasks. It runs web_search, de-duplicates and ranks candidates, fetches likely relevant HTML/text pages, extracts readable content plus relationship maps, and returns a compact candidate-material bundle with search snippets, fetched page excerpts, source URLs, page diagnostics, and available follow-up calls derived from retrieved links/results. The tool does not judge answer confidence or evidence sufficiency; the model must inspect the returned snippets/pages itself and decide whether to answer, search differently, ask clarification, or state uncertainty. Use this when the user asks to research, make a guide, compare public sources, or gather current web evidence and there is no more specific artifact tool.',
         inputSchema: {
             type: 'object',
             required: ['query'],
@@ -9223,7 +9680,7 @@ const TOOLS = [
                 backend: { type: 'string', description: 'Optional search backend id or provider alias.' },
                 backends: {
                     type: 'array',
-                    items: { type: 'string', enum: ['searxng_json', 'firecrawl_search', 'bing_html', 'duckduckgo_lite', 'duckduckgo_html', 'yahoo_html', 'github_repositories', 'html', 'current_html_fallback', 'searxng', 'firecrawl'] },
+                    items: { type: 'string', enum: ['searxng_json', 'firecrawl_search', 'python_search', 'bing_html', 'duckduckgo_lite', 'duckduckgo_html', 'yahoo_html', 'github_repositories', 'html', 'current_html_fallback', 'searxng', 'firecrawl', 'python'] },
                     description: 'Optional ordered search backend ids.'
                 }
             },
@@ -9480,7 +9937,7 @@ const TOOLS = [
     },
     {
         name: 'youtube_video_search',
-        description: 'Search or resolve YouTube videos with yt-dlp using title, channel, or URL. Use this when a YouTube/video task gives only a title/channel or when fetching youtube.com search pages would be low-value. If yt-dlp is blocked for a known URL, this tool recovers metadata through YouTube oEmbed and returns metadata_only plus exact-title follow-up search suggestions; do not treat metadata_only as transcript/frame evidence.',
+        description: 'Search or resolve YouTube videos with yt-dlp using title, channel, or URL. This tool is for YouTube/youtu.be sources, not generic video platforms. If yt-dlp is blocked for a known URL, this tool recovers metadata through YouTube oEmbed and returns metadata_only plus exact-title follow-up search suggestions; do not treat metadata_only as transcript/frame evidence.',
         inputSchema: {
             type: 'object',
             properties: {
@@ -9504,7 +9961,7 @@ const TOOLS = [
     },
     {
         name: 'youtube_transcript',
-        description: 'Fetch YouTube metadata and available subtitles/auto-captions with yt-dlp. Use for known YouTube URLs before guessing from search snippets; if only a title/query is known, this can resolve a URL through youtube_video_search first. If yt-dlp is blocked, the failure result may include oEmbed metadata and exact-title suggestedNextCalls; follow those before broad web_search, but do not answer visual/audio questions from metadata_only.',
+        description: 'Fetch YouTube metadata and available subtitles/auto-captions with yt-dlp. This tool is for YouTube/youtu.be sources. If only a title/query is known, it can resolve a URL through youtube_video_search. If yt-dlp is blocked, the failure result may include oEmbed metadata and exact-title suggestedNextCalls; do not answer visual/audio questions from metadata_only alone.',
         inputSchema: {
             type: 'object',
             properties: {
@@ -9636,6 +10093,10 @@ module.exports = {
     githubRepoRead,
     handleRequest,
     handleToolCall,
+    loadManagedSearxngManifest,
+    managedSearxngAllowedForSearch,
+    managedSearxngManifestCandidates,
+    managedSearxngPortCandidates,
     normalizeSearchBackends,
     parseGitHubRepoRef,
     paperMetadataLookup,

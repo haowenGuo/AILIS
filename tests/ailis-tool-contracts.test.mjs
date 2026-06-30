@@ -115,6 +115,24 @@ test('AILIS tool contracts expose versioned schemas and validate common failures
     assert.equal(validArtifactCompute.ok, true);
     assert.equal(validArtifactCompute.args.action, 'profile');
 
+    const validArtifactToolsPlan = validateToolContract('artifact_tools', {
+        action: 'plan_import',
+        path: 'report.pdf',
+        requiredCapabilities: ['load', 'inspect', 'render']
+    });
+    assert.equal(validArtifactToolsPlan.ok, true);
+
+    const validArtifactImport = validateToolContract('artifact_import', {
+        path: 'inventory.xlsx',
+        parserId: 'table'
+    });
+    assert.equal(validArtifactImport.ok, true);
+    assert.equal(validArtifactImport.args.action, 'import');
+
+    const badArtifactImport = validateToolContract('artifact_import', {});
+    assert.equal(badArtifactImport.ok, false);
+    assert.ok(badArtifactImport.errors.some((error) => error.includes('requires path')));
+
     const badArtifactCompute = validateToolContract('artifact_compute', {
         action: 'find_path',
         sheet: 'Map'
@@ -243,6 +261,14 @@ test('AILIS tool contracts generate prompt and summary text from the same source
     assert.match(artifactComputePrompt, /artifact_compute/);
     assert.match(artifactComputePrompt, /find_path/);
 
+    const artifactToolsPrompt = getToolContractPromptText('artifact_tools');
+    assert.match(artifactToolsPrompt, /artifact_tools/);
+    assert.match(artifactToolsPrompt, /plan_import/);
+
+    const artifactImportPrompt = getToolContractPromptText('artifact_import');
+    assert.match(artifactImportPrompt, /artifact_import/);
+    assert.match(artifactImportPrompt, /parserId/);
+
     const doctorPrompt = getToolContractPromptText('tool_doctor');
     assert.match(doctorPrompt, /discover_mcp/);
     assert.match(doctorPrompt, /检查工具健康/);
@@ -260,5 +286,5 @@ test('AILIS tool contracts generate prompt and summary text from the same source
     assert.match(selfEvolutionPrompt, /分析并优化自己/);
 
     const subagentPrompt = getToolContractPromptText('subagents');
-    assert.match(subagentPrompt, /"maximum": 50/);
+    assert.match(subagentPrompt, /"maximum": 12/);
 });

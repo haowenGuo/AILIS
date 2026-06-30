@@ -77,6 +77,47 @@ test('normalizes Hugging Face search results for vLLM selection', async () => {
     assert.match(calls[0], /huggingface\.co\/api\/models/);
 });
 
+test('filters model formats that are not suitable for vLLM one-click deployment', async () => {
+    const fetchImpl = async () => createJsonResponse([
+        {
+            id: 'mlx-community/Qwen2.5-7B-Instruct-4bit',
+            downloads: 10000,
+            likes: 400,
+            tags: ['text-generation', 'mlx', 'chat'],
+            pipeline_tag: 'text-generation'
+        },
+        {
+            id: 'amd/Qwen2.5-3B-Instruct-onnx-ryzenai',
+            downloads: 9000,
+            likes: 300,
+            tags: ['text-generation', 'onnx', 'chat'],
+            pipeline_tag: 'text-generation'
+        },
+        {
+            id: 'bartowski/Qwen2.5-7B-Instruct-GGUF',
+            downloads: 8000,
+            likes: 200,
+            tags: ['text-generation', 'gguf', 'chat'],
+            pipeline_tag: 'text-generation'
+        },
+        {
+            id: 'Qwen/Qwen2.5-7B-Instruct',
+            downloads: 100,
+            likes: 10,
+            tags: ['transformers', 'safetensors', 'text-generation', 'chat'],
+            pipeline_tag: 'text-generation'
+        }
+    ]);
+
+    const result = await searchVllmModelCatalog(
+        { source: 'hf', query: 'Qwen', limit: 10 },
+        { fetchImpl }
+    );
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.models.map((model) => model.id), ['Qwen/Qwen2.5-7B-Instruct']);
+});
+
 test('normalizes ModelScope OpenAPI search results for vLLM selection', async () => {
     const fetchImpl = async () => createJsonResponse({
         success: true,

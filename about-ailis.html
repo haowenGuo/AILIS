@@ -849,7 +849,7 @@
             color: var(--primary-deep);
         }
 
-        /* ===== 会员 / 支付 ===== */
+        /* ===== 开源 / 社区 ===== */
         .support-section {
             padding: 90px 24px;
             background: linear-gradient(180deg, rgba(240, 168, 200, 0.08) 0%, rgba(168, 216, 240, 0.08) 100%);
@@ -976,13 +976,13 @@
             font-weight: 700;
         }
 
-        .membership-list {
+        .community-list {
             display: grid;
             gap: 10px;
             margin-top: 18px;
         }
 
-        .membership-list div {
+        .community-list div {
             padding: 12px 14px;
             border: 1px solid rgba(168, 216, 240, 0.22);
             border-radius: var(--radius-sm);
@@ -1061,22 +1061,19 @@
         }
 
         .account-actions,
-        .membership-actions {
+        .community-actions {
             display: grid;
             grid-template-columns: 1fr 1fr;
             gap: 10px;
         }
 
         .account-actions .btn,
-        .membership-actions .btn {
+        .community-actions .btn {
             width: 100%;
             min-height: 44px;
             justify-content: center;
         }
 
-        #billing-portal-btn {
-            grid-column: 1 / -1;
-        }
 
         .member-status {
             display: grid;
@@ -1155,158 +1152,6 @@
             color: #26785a;
         }
 
-        .payment-modal {
-            position: fixed;
-            inset: 0;
-            z-index: 200;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            padding: 20px;
-            background: rgba(31, 54, 72, 0.26);
-            backdrop-filter: blur(10px);
-            -webkit-backdrop-filter: blur(10px);
-        }
-
-        .payment-modal[hidden] {
-            display: none;
-        }
-
-        .payment-dialog {
-            width: min(460px, 100%);
-            max-height: min(760px, calc(100dvh - 40px));
-            overflow: auto;
-            border: 1px solid rgba(115, 184, 229, 0.28);
-            border-radius: 12px;
-            background: rgba(255, 255, 255, 0.97);
-            box-shadow: 0 20px 70px rgba(44, 62, 80, 0.24);
-        }
-
-        .payment-header {
-            display: flex;
-            justify-content: space-between;
-            gap: 16px;
-            padding: 18px 18px 12px;
-            border-bottom: 1px solid rgba(168, 216, 240, 0.22);
-            background: linear-gradient(180deg, #f7fcff 0%, rgba(255, 255, 255, 0.98) 100%);
-        }
-
-        .payment-title {
-            font-size: 18px;
-            font-weight: 800;
-            color: var(--text);
-            line-height: 1.25;
-        }
-
-        .payment-subtitle {
-            margin-top: 5px;
-            color: var(--text-light);
-            font-size: 13px;
-        }
-
-        #payment-close-btn {
-            width: 32px;
-            height: 32px;
-            flex: 0 0 auto;
-            border: none;
-            border-radius: 8px;
-            background: rgba(168, 216, 240, 0.18);
-            color: var(--text);
-            cursor: pointer;
-            font-size: 18px;
-            line-height: 1;
-        }
-
-        #payment-close-btn:hover {
-            background: rgba(168, 216, 240, 0.32);
-        }
-
-        .payment-body {
-            padding: 16px 18px 18px;
-        }
-
-        .payment-plan-tabs {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 8px;
-            margin-bottom: 14px;
-            padding: 4px;
-            border-radius: 10px;
-            background: rgba(168, 216, 240, 0.14);
-        }
-
-        .payment-plan-btn {
-            min-height: 48px;
-            border: none;
-            border-radius: 8px;
-            background: transparent;
-            color: var(--text-light);
-            cursor: pointer;
-            font-family: var(--font);
-            font-size: 13px;
-            font-weight: 700;
-            line-height: 1.25;
-        }
-
-        .payment-plan-btn span {
-            display: block;
-            margin-top: 3px;
-            font-size: 12px;
-            font-weight: 500;
-            color: var(--text-light);
-        }
-
-        .payment-plan-btn.is-active {
-            background: #fff;
-            color: var(--primary-deep);
-            box-shadow: 0 8px 24px rgba(88, 150, 192, 0.14);
-        }
-
-        .stripe-element-shell {
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
-        }
-
-        #stripe-contact-element,
-        #stripe-payment-element {
-            min-height: 44px;
-        }
-
-        #payment-submit-btn {
-            width: 100%;
-            min-height: 46px;
-            margin-top: 14px;
-            border: none;
-            border-radius: 10px;
-            background: var(--primary-gradient);
-            color: #fff;
-            cursor: pointer;
-            font-family: var(--font);
-            font-size: 15px;
-            font-weight: 800;
-        }
-
-        #payment-submit-btn:disabled {
-            opacity: 0.56;
-            cursor: not-allowed;
-        }
-
-        #payment-status {
-            min-height: 20px;
-            margin-top: 12px;
-            color: var(--text-light);
-            font-size: 13px;
-            line-height: 1.5;
-        }
-
-        #payment-status.is-error {
-            color: #b94a5f;
-        }
-
-        #payment-status.is-success {
-            color: #26785a;
-        }
 
         /* ===== 响应式 ===== */
         @media (max-width: 768px) {
@@ -1328,24 +1173,11 @@
             }
 
             .account-actions,
-            .membership-actions,
+            .community-actions,
             .support-price-grid,
             .account-security-row,
             .usage-grid {
                 grid-template-columns: 1fr;
-            }
-
-            .payment-modal {
-                align-items: flex-end;
-                padding: 0;
-            }
-
-            .payment-dialog {
-                max-height: min(86dvh, 720px);
-                border-right: none;
-                border-bottom: none;
-                border-left: none;
-                border-radius: 20px 20px 0 0;
             }
 
             .bench-grid {
@@ -1434,7 +1266,7 @@
             <li><a href="#skills">能力</a></li>
             <li><a href="#project">项目</a></li>
             <li><a href="#download">下载</a></li>
-            <li><a href="#membership">会员</a></li>
+            <li><a href="#opensource">开源</a></li>
             <li><a href="#bench">评测</a></li>
             <li><a href="#arch">架构</a></li>
         </ul>
@@ -1442,7 +1274,7 @@
 
     <!-- ===== Hero ===== -->
     <section class="hero" id="home">
-        <div class="hero-badge">✦ 桌面虚拟助手 · AILIS v1.0.5</div>
+        <div class="hero-badge">✦ 桌面虚拟助手 · AILIS v1.0.7</div>
         <h1>
             你好，我是<br>
             <span class="highlight">AILIS</span> <span class="highlight-pink">✦</span>
@@ -1456,7 +1288,7 @@
             <a href="#about" class="btn btn-secondary">💬 认识我</a>
             <a href="#project" class="btn btn-secondary">🚀 了解项目</a>
             <a href="#download" class="btn btn-secondary">⬇ 下载</a>
-            <a href="#membership" class="btn btn-secondary">💳 会员中心</a>
+            <a href="#opensource" class="btn btn-secondary">📖 MIT 开源</a>
         </div>
         <div class="scroll-indicator">
             <span>向下滚动</span>
@@ -1546,7 +1378,7 @@
         <div class="section-title">🚀 <span class="highlight">AILIS</span> 项目</div>
 
         <div class="project-header">
-            <div class="repo-badge">📁 AILIS · v1.0.5 · Release Ready</div>
+            <div class="repo-badge">📁 AILIS · v1.0.7 · MIT Open Source</div>
             <p class="section-sub" style="margin-bottom:0">
                 AILIS —— 当前最新的 <strong>AILIS</strong> 主线项目。
                 它让我（AILIS）能跑在桌面上，能对话、能看上下文、能记住偏好，也能通过工具层执行真实任务！
@@ -1586,7 +1418,7 @@
                     <span class="tech-tag">RAG / 记忆</span>
                 </div>
                 <p style="margin-top:16px; color:var(--text-light); font-size:0.95rem;">
-                    GitHub 主线仓库是 <code style="background:rgba(168,216,240,0.12); padding:2px 8px; border-radius:4px;">haowenGuo/AIGL-Assistant</code>，
+                    GitHub 主线仓库是 <code style="background:rgba(168,216,240,0.12); padding:2px 8px; border-radius:4px;">haowenGuo/AILIS</code>，
                     采用桌面优先的 AILIS 架构持续迭代中～
                 </p>
             </div>
@@ -1606,25 +1438,28 @@
     <!-- ===== 下载 ===== -->
     <section class="download-section" id="download">
         <div class="section-title">⬇ AILIS <span class="highlight">下载</span></div>
-        <p class="section-sub">Windows 最新公开版本为 AILIS v1.0.5 portable；旧版 HumanClaw 1.0.4 保留作兼容下载。</p>
+        <p class="section-sub">Windows 最新公开版本为 AILIS v1.0.7；默认下载为轻量桌面包，不内置大型 CosyVoice3 / ASR 模型，旧版 HumanClaw 1.0.4 保留作兼容下载。</p>
 
         <div class="download-panel">
             <div class="download-grid">
                 <div class="download-card recommended">
                     <div class="download-head">
-                        <h3>Windows · AILIS 1.0.5</h3>
+                        <h3>Windows · AILIS 1.0.7</h3>
                         <span class="download-chip">最新公开版本</span>
                     </div>
                     <p>
-                        最新 Windows 便携版，包含 AILIS 对话、任务执行、本地模型配置、Crawl4AI 风格网页抓取与桌面运行时。
+                        最新 Windows 轻量桌面版，包含 AILIS 对话、任务执行、本地模型配置、Crawl4AI 风格网页抓取与桌面运行时。
                     </p>
                     <div class="download-actions">
-                        <a class="download-btn primary" href="https://github.com/haowenGuo/AIGL-Assistant/releases/download/v1.0.5/AILIS-Portable-1.0.5-win-x64.exe" target="_blank" rel="noopener noreferrer">
+                        <a class="download-btn primary" href="https://github.com/haowenGuo/AILIS/releases/download/v1.0.7/AILIS-Setup-1.0.7-win-x64.exe" target="_blank" rel="noopener noreferrer">
+                            <span>安装版 .exe</span><span>↗</span>
+                        </a>
+                        <a class="download-btn" href="https://github.com/haowenGuo/AILIS/releases/download/v1.0.7/AILIS-Portable-1.0.7-win-x64.exe" target="_blank" rel="noopener noreferrer">
                             <span>便携版 .exe</span><span>↗</span>
                         </a>
                     </div>
                     <div class="download-meta">
-                        来源：<a href="https://github.com/haowenGuo/AIGL-Assistant/releases/tag/v1.0.5" target="_blank" rel="noopener noreferrer">AILIS v1.0.5 Release</a>
+                        来源：<a href="https://github.com/haowenGuo/AILIS/releases/tag/v1.0.7" target="_blank" rel="noopener noreferrer">AILIS v1.0.7 Release</a>
                     </div>
                 </div>
 
@@ -1634,105 +1469,60 @@
                         <span class="download-chip">旧版兼容包</span>
                     </div>
                     <p>
-                        如果你需要上一版 HumanClaw 运行时，可继续下载 AIGL-Assistant v1.0.4 的安装版或便携版。
+                        如果你需要上一版 HumanClaw 运行时，可继续下载 AILIS 仓库内保留的 v1.0.4 安装版或便携版。
                     </p>
                     <div class="download-actions">
-                        <a class="download-btn primary" href="https://github.com/haowenGuo/AIGL-Assistant/releases/download/v1.0.4/HumanClaw-Setup-1.0.4-win-x64.exe" target="_blank" rel="noopener noreferrer">
+                        <a class="download-btn primary" href="https://github.com/haowenGuo/AILIS/releases/download/v1.0.4/HumanClaw-Setup-1.0.4-win-x64.exe" target="_blank" rel="noopener noreferrer">
                             <span>安装版 .exe</span><span>↗</span>
                         </a>
-                        <a class="download-btn" href="https://github.com/haowenGuo/AIGL-Assistant/releases/download/v1.0.4/HumanClaw-Portable-1.0.4-win-x64.exe" target="_blank" rel="noopener noreferrer">
+                        <a class="download-btn" href="https://github.com/haowenGuo/AILIS/releases/download/v1.0.4/HumanClaw-Portable-1.0.4-win-x64.exe" target="_blank" rel="noopener noreferrer">
                             <span>便携版 .exe</span><span>↗</span>
                         </a>
                     </div>
                     <div class="download-meta">
-                        来源：<a href="https://github.com/haowenGuo/AIGL-Assistant/releases/tag/v1.0.4" target="_blank" rel="noopener noreferrer">HumanClaw v1.0.4 Release</a>
+                        来源：<a href="https://github.com/haowenGuo/AILIS/releases/tag/v1.0.4" target="_blank" rel="noopener noreferrer">HumanClaw v1.0.4 Release</a>
                     </div>
                 </div>
             </div>
         </div>
     </section>
 
-    <!-- ===== 账号 / 会员 ===== -->
-    <section class="support-section" id="membership">
+    <!-- ===== MIT 开源 / 社区扩展 ===== -->
+    <section class="support-section" id="opensource">
         <div class="support-panel">
             <div class="support-copy">
-                <div class="section-title" style="text-align:left; margin-bottom:10px;">💳 <span class="highlight">会员</span>中心</div>
+                <div class="section-title" style="text-align:left; margin-bottom:10px;">📖 <span class="highlight">MIT</span> 开源</div>
                 <p>
-                    AILIS 开源运行时保持可下载；云端模型 API、TTS API 和会员能力需要登录账号后开通。
-                    支付表单由 Stripe Elements 渲染，银行卡等敏感信息不会进入 AILIS 服务器。
+                    AILIS 改为 MIT 开源模式：桌面运行时、Agent 工具链和本地人物扩展保持开放，
+                    用户可以自带模型 API Key、使用本地模型，或者在社区里分享人物包、皮肤包和技能扩展。
                 </p>
-                <div class="membership-list">
-                    <div>账号系统负责注册、登录和会话管理，后端用当前账号绑定 Stripe Customer。</div>
-                    <div>付款完成后账号会升级为会员，模型 API 与 TTS API 会校验会员状态。</div>
-                    <div>测试环境默认使用 Stripe test mode，上线时切换 live key 与 webhook。</div>
+                <div class="community-list">
+                    <div>源代码采用 MIT License，方便学习、二次开发和社区贡献。</div>
+                    <div>人物包与皮肤包走本地 asset-pack runtime，不绑定在线账号或中心化服务。</div>
+                    <div>云端模型、语音服务和第三方资产仍需遵守各自服务商或素材作者的许可。</div>
                 </div>
             </div>
             <div class="support-card">
                 <div class="account-card-head">
                     <div>
-                        <div class="account-kicker">AILIS Account</div>
-                        <h3>登录后开通云端会员</h3>
+                        <div class="account-kicker">AILIS Open Source</div>
+                        <h3>本地优先，社区共建</h3>
                     </div>
-                    <div id="session-chip" class="session-chip">Cookie 会话</div>
+                    <div id="session-chip" class="session-chip">MIT License</div>
                 </div>
                 <div class="account-security-row">
-                    <div class="account-security-chip"><strong>会话</strong><span>HttpOnly Cookie</span></div>
-                    <div class="account-security-chip"><strong>支付</strong><span>Stripe Elements</span></div>
+                    <div class="account-security-chip"><strong>运行时</strong><span>Electron 本地桌面</span></div>
+                    <div class="account-security-chip"><strong>扩展</strong><span>人物包 / 皮肤包</span></div>
                 </div>
-                <div class="account-tabs" role="tablist" aria-label="账号操作">
-                    <button class="account-tab is-active" type="button" data-auth-mode="login">登录</button>
-                    <button class="account-tab" type="button" data-auth-mode="register">注册</button>
+                <div class="community-list" style="margin-top:18px;">
+                    <div>开发者可以 fork 项目，修复工具链、Agent Lab、语音、多模态和本地模型接入。</div>
+                    <div>用户可以自由配置自己的 LLM / TTS / ASR Key，也可以选择完全本地模型。</div>
+                    <div>社区资产包不应包含私钥、账号凭证或未授权第三方模型资源。</div>
                 </div>
-                <div class="account-form">
-                    <label class="account-field">
-                        <span>邮箱</span>
-                        <input id="account-email" type="email" autocomplete="email" placeholder="you@example.com">
-                    </label>
-                    <label class="account-field" id="account-name-field" hidden>
-                        <span>昵称</span>
-                        <input id="account-display-name" type="text" autocomplete="name" placeholder="AILIS 朋友">
-                    </label>
-                    <label class="account-field">
-                        <span>密码</span>
-                        <input id="account-password" type="password" autocomplete="current-password" placeholder="至少 8 位">
-                    </label>
-                    <div class="account-actions">
-                        <button id="account-submit-btn" class="btn btn-primary" type="button">登录</button>
-                        <button id="account-logout-btn" class="btn btn-secondary" type="button" disabled>退出</button>
-                    </div>
-                    <div id="account-status" role="status" aria-live="polite"></div>
-                </div>
-                <div class="member-status">
-                    <strong id="member-status-title">未登录</strong>
-                    <span id="member-status-detail">登录或注册后，可以在当前账号上开通会员。</span>
-                </div>
-                <div class="usage-grid">
-                    <div class="usage-card">
-                        <strong>模型 API</strong>
-                        <span id="model-usage-text">-- / --</span>
-                        <div class="usage-bar" aria-hidden="true"><i id="model-usage-bar"></i></div>
-                    </div>
-                    <div class="usage-card">
-                        <strong>TTS API</strong>
-                        <span id="tts-usage-text">-- / --</span>
-                        <div class="usage-bar" aria-hidden="true"><i id="tts-usage-bar"></i></div>
-                    </div>
-                </div>
-                <div class="support-price-grid">
-                    <div class="support-price">
-                        <strong>30 天会员</strong>
-                        <span>$10.00</span>
-                    </div>
-                    <div class="support-price">
-                        <strong>月度会员</strong>
-                        <span>$10.00 / 月</span>
-                    </div>
-                </div>
-                <p>付款前请先登录；会员状态会绑定到当前账号，而不是浏览器页面。</p>
-                <div class="membership-actions">
-                    <button class="btn btn-secondary" type="button" data-open-payment data-payment-mode="payment">30 天会员</button>
-                    <button class="btn btn-primary" type="button" data-open-payment data-payment-mode="subscription">开通月度会员</button>
-                    <button id="billing-portal-btn" class="btn btn-secondary" type="button" disabled>管理订阅 / 账单</button>
+                <div class="community-actions" style="margin-top:20px;">
+                    <a class="btn btn-primary" href="https://github.com/haowenGuo/AILIS" target="_blank" rel="noopener noreferrer">查看 GitHub</a>
+                    <a class="btn btn-secondary" href="./LICENSE">查看 MIT License</a>
+                    <a class="btn btn-secondary" href="./docs/ailis-open-source-asset-pack-runtime.md">人物包运行时文档</a>
                 </div>
             </div>
         </div>
@@ -1926,7 +1716,7 @@
             <a href="#skills">能力</a>
             <a href="#project">项目</a>
             <a href="#download">下载</a>
-            <a href="#membership">会员</a>
+            <a href="#opensource">开源</a>
             <a href="#bench">评测</a>
             <a href="#arch">架构</a>
         </div>
@@ -1935,586 +1725,6 @@
             Made with 💙 and lots of ☕
         </p>
     </footer>
-
-    <div id="payment-modal" class="payment-modal" hidden>
-        <div class="payment-dialog" role="dialog" aria-modal="true" aria-labelledby="payment-title">
-            <div class="payment-header">
-                <div>
-                    <div id="payment-title" class="payment-title">AILIS 会员支付</div>
-                    <div class="payment-subtitle">当前账号完成付款后自动更新会员状态</div>
-                </div>
-                <button id="payment-close-btn" title="关闭" aria-label="关闭">×</button>
-            </div>
-            <div class="payment-body">
-                <div class="payment-plan-tabs" role="tablist" aria-label="会员方案">
-                    <button class="payment-plan-btn is-active" type="button" data-payment-mode="subscription">
-                        月度会员<span>$10.00 / 月</span>
-                    </button>
-                    <button class="payment-plan-btn" type="button" data-payment-mode="payment">
-                        30 天会员<span>$10.00</span>
-                    </button>
-                </div>
-                <div class="stripe-element-shell">
-                    <div id="stripe-contact-element"></div>
-                    <div id="stripe-payment-element"></div>
-                </div>
-                <button id="payment-submit-btn" type="button" disabled>继续</button>
-                <div id="payment-status" role="status" aria-live="polite"></div>
-            </div>
-        </div>
-    </div>
-
-    <script>
-        (function () {
-            const STRIPE_JS_URL = 'https://js.stripe.com/dahlia/stripe.js';
-            const TOKEN_KEY = 'ailis_account_token';
-            const BACKEND_KEY = 'ailis_backend_base_url';
-            const USE_TOKEN_FALLBACK = window.location.protocol === 'file:';
-
-            const state = {
-                mode: 'subscription',
-                authMode: 'login',
-                token: USE_TOKEN_FALLBACK ? (window.localStorage.getItem(TOKEN_KEY) || '') : '',
-                currentUser: null,
-                stripe: null,
-                checkout: null,
-                actions: null,
-                elements: [],
-                openToken: 0,
-                configPromise: null
-            };
-
-            if (!USE_TOKEN_FALLBACK) {
-                window.localStorage.removeItem(TOKEN_KEY);
-            }
-
-            const modal = document.getElementById('payment-modal');
-            const closeButton = document.getElementById('payment-close-btn');
-            const submitButton = document.getElementById('payment-submit-btn');
-            const statusNode = document.getElementById('payment-status');
-            const contactMount = document.getElementById('stripe-contact-element');
-            const paymentMount = document.getElementById('stripe-payment-element');
-            const modalPlanButtons = Array.from(document.querySelectorAll('.payment-plan-btn[data-payment-mode]'));
-            const openButtons = Array.from(document.querySelectorAll('[data-open-payment]'));
-
-            const authTabs = Array.from(document.querySelectorAll('[data-auth-mode]'));
-            const emailInput = document.getElementById('account-email');
-            const passwordInput = document.getElementById('account-password');
-            const displayNameInput = document.getElementById('account-display-name');
-            const displayNameField = document.getElementById('account-name-field');
-            const accountSubmitButton = document.getElementById('account-submit-btn');
-            const logoutButton = document.getElementById('account-logout-btn');
-            const accountStatusNode = document.getElementById('account-status');
-            const memberTitle = document.getElementById('member-status-title');
-            const memberDetail = document.getElementById('member-status-detail');
-            const billingPortalButton = document.getElementById('billing-portal-btn');
-            const sessionChip = document.getElementById('session-chip');
-            const modelUsageText = document.getElementById('model-usage-text');
-            const modelUsageBar = document.getElementById('model-usage-bar');
-            const ttsUsageText = document.getElementById('tts-usage-text');
-            const ttsUsageBar = document.getElementById('tts-usage-bar');
-
-            function getBackendBaseUrl() {
-                const url = new URL(window.location.href);
-                const queryBackend = url.searchParams.get('backend')?.trim();
-                if (queryBackend) {
-                    window.localStorage.setItem(BACKEND_KEY, queryBackend.replace(/\/+$/, ''));
-                    return queryBackend.replace(/\/+$/, '');
-                }
-
-                const storedBackend = window.localStorage.getItem(BACKEND_KEY)?.trim();
-                if (storedBackend) {
-                    return storedBackend.replace(/\/+$/, '');
-                }
-
-                if (['localhost', '127.0.0.1'].includes(window.location.hostname) || window.location.protocol === 'file:') {
-                    return 'http://127.0.0.1:8000';
-                }
-
-                return 'https://airi-backend.onrender.com';
-            }
-
-            const backendBaseUrl = getBackendBaseUrl();
-
-            function setPaymentStatus(message, tone) {
-                statusNode.textContent = message || '';
-                statusNode.classList.toggle('is-error', tone === 'error');
-                statusNode.classList.toggle('is-success', tone === 'success');
-            }
-
-            function setAccountStatus(message, tone) {
-                accountStatusNode.textContent = message || '';
-                accountStatusNode.classList.toggle('is-error', tone === 'error');
-                accountStatusNode.classList.toggle('is-success', tone === 'success');
-            }
-
-            function formatError(error) {
-                return error?.message || error?.detail || '服务暂时不可用。';
-            }
-
-            function clearNode(node) {
-                while (node.firstChild) {
-                    node.removeChild(node.firstChild);
-                }
-            }
-
-            function authHeaders() {
-                return USE_TOKEN_FALLBACK && state.token ? { Authorization: `Bearer ${state.token}` } : {};
-            }
-
-            async function fetchJson(path, options = {}) {
-                const response = await fetch(`${backendBaseUrl}${path}`, {
-                    ...options,
-                    credentials: 'include',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        ...authHeaders(),
-                        ...(options.headers || {})
-                    }
-                });
-                const payload = await response.json().catch(() => ({}));
-                if (!response.ok) {
-                    const error = new Error(payload.detail || payload.message || `请求失败：${response.status}`);
-                    error.status = response.status;
-                    throw error;
-                }
-                return payload;
-            }
-
-            async function loadStripeJs() {
-                if (window.Stripe) {
-                    return window.Stripe;
-                }
-
-                return new Promise((resolve, reject) => {
-                    const existing = document.querySelector(`script[src="${STRIPE_JS_URL}"]`);
-                    if (existing) {
-                        existing.addEventListener('load', () => resolve(window.Stripe), { once: true });
-                        existing.addEventListener('error', () => reject(new Error('Stripe.js 加载失败')), { once: true });
-                        return;
-                    }
-
-                    const script = document.createElement('script');
-                    script.src = STRIPE_JS_URL;
-                    script.async = true;
-                    script.addEventListener('load', () => resolve(window.Stripe), { once: true });
-                    script.addEventListener('error', () => reject(new Error('Stripe.js 加载失败')), { once: true });
-                    document.head.appendChild(script);
-                });
-            }
-
-            function fetchConfig() {
-                state.configPromise ||= fetchJson('/api/stripe/config');
-                return state.configPromise;
-            }
-
-            function resetCheckout() {
-                state.elements.forEach((element) => element?.destroy?.());
-                state.elements = [];
-                state.checkout = null;
-                state.actions = null;
-                clearNode(contactMount);
-                clearNode(paymentMount);
-            }
-
-            function selectMode(mode) {
-                state.mode = mode === 'payment' ? 'payment' : 'subscription';
-                modalPlanButtons.forEach((button) => {
-                    const active = button.dataset.paymentMode === state.mode;
-                    button.classList.toggle('is-active', active);
-                    button.setAttribute('aria-selected', String(active));
-                });
-            }
-
-            function selectAuthMode(mode) {
-                state.authMode = mode === 'register' ? 'register' : 'login';
-                authTabs.forEach((button) => {
-                    const active = button.dataset.authMode === state.authMode;
-                    button.classList.toggle('is-active', active);
-                    button.setAttribute('aria-selected', String(active));
-                });
-                displayNameField.hidden = state.authMode !== 'register';
-                accountSubmitButton.textContent = state.authMode === 'register' ? '注册' : '登录';
-                passwordInput.autocomplete = state.authMode === 'register' ? 'new-password' : 'current-password';
-            }
-
-            function formatMembership(user) {
-                if (!user) {
-                    return {
-                        title: '未登录',
-                        detail: '登录或注册后，可以在当前账号上开通会员。'
-                    };
-                }
-
-                const membership = user.membership || {};
-                if (membership.active) {
-                    const planText = membership.plan === 'subscription' ? '月度会员' : '30 天会员';
-                    const expiryText = membership.expiresAt
-                        ? `，有效期至 ${new Date(membership.expiresAt).toLocaleString()}`
-                        : '';
-                    return {
-                        title: `${planText}已开通`,
-                        detail: `${user.email} 已拥有模型 API 与 TTS API 访问权限${expiryText}。`
-                    };
-                }
-
-                return {
-                    title: '免费账号',
-                    detail: `${user.email} 已登录，开通会员后可使用模型 API 与 TTS API。`
-                };
-            }
-
-            function formatUsageValue(usage) {
-                if (!usage || typeof usage.used !== 'number') {
-                    return { text: '-- / --', percent: 0 };
-                }
-                const limit = Number(usage.limit || 0);
-                if (limit <= 0) {
-                    return { text: `${usage.used} / 不限`, percent: 100 };
-                }
-                return {
-                    text: `${usage.used} / ${limit}`,
-                    percent: Math.max(0, Math.min(100, Math.round((usage.used / limit) * 100)))
-                };
-            }
-
-            function updateUsageUi(user) {
-                const modelUsage = formatUsageValue(user?.usage?.model);
-                const ttsUsage = formatUsageValue(user?.usage?.tts);
-                modelUsageText.textContent = modelUsage.text;
-                modelUsageBar.style.width = `${modelUsage.percent}%`;
-                ttsUsageText.textContent = ttsUsage.text;
-                ttsUsageBar.style.width = `${ttsUsage.percent}%`;
-            }
-
-            function updateAccountUi() {
-                const loggedIn = Boolean(state.currentUser);
-                const membership = formatMembership(state.currentUser);
-                memberTitle.textContent = membership.title;
-                memberDetail.textContent = membership.detail;
-                sessionChip.textContent = USE_TOKEN_FALLBACK ? '本地 Token' : 'Cookie 会话';
-                logoutButton.disabled = !loggedIn;
-                billingPortalButton.disabled = !loggedIn;
-                openButtons.forEach((button) => {
-                    button.disabled = !loggedIn;
-                    button.title = loggedIn ? '' : '请先登录或注册账号';
-                });
-                if (loggedIn && state.currentUser.email && !emailInput.value) {
-                    emailInput.value = state.currentUser.email;
-                }
-                updateUsageUi(state.currentUser);
-            }
-
-            function storeSession(payload) {
-                state.token = payload.token || state.token || '';
-                state.currentUser = payload.user || state.currentUser;
-                if (USE_TOKEN_FALLBACK && state.token) {
-                    window.localStorage.setItem(TOKEN_KEY, state.token);
-                }
-                updateAccountUi();
-            }
-
-            function clearSession() {
-                state.token = '';
-                state.currentUser = null;
-                if (USE_TOKEN_FALLBACK) {
-                    window.localStorage.removeItem(TOKEN_KEY);
-                }
-                updateAccountUi();
-            }
-
-            async function refreshAccount() {
-                if (USE_TOKEN_FALLBACK && !state.token) {
-                    updateAccountUi();
-                    return;
-                }
-
-                try {
-                    const payload = await fetchJson('/api/account/me');
-                    if (payload.user) {
-                        state.currentUser = payload.user;
-                    } else {
-                        clearSession();
-                    }
-                } catch (error) {
-                    if (error.status === 401) {
-                        clearSession();
-                    } else {
-                        setAccountStatus(formatError(error), 'error');
-                    }
-                }
-                updateAccountUi();
-            }
-
-            async function handleAuthSubmit() {
-                const email = emailInput.value.trim();
-                const password = passwordInput.value;
-                if (!email || !password) {
-                    setAccountStatus('请输入邮箱和密码。', 'error');
-                    return;
-                }
-                if (state.authMode === 'register' && password.length < 8) {
-                    setAccountStatus('注册密码至少需要 8 位。', 'error');
-                    return;
-                }
-
-                accountSubmitButton.disabled = true;
-                setAccountStatus(state.authMode === 'register' ? '正在注册...' : '正在登录...');
-
-                try {
-                    const payload = await fetchJson(`/api/account/${state.authMode}`, {
-                        method: 'POST',
-                        body: JSON.stringify({
-                            email,
-                            password,
-                            displayName: displayNameInput.value.trim()
-                        })
-                    });
-                    storeSession(payload);
-                    passwordInput.value = '';
-                    setAccountStatus(state.authMode === 'register' ? '注册成功，已登录。' : '登录成功。', 'success');
-                } catch (error) {
-                    setAccountStatus(formatError(error), 'error');
-                } finally {
-                    accountSubmitButton.disabled = false;
-                }
-            }
-
-            async function handleLogout() {
-                logoutButton.disabled = true;
-                try {
-                    await fetchJson('/api/account/logout', { method: 'POST' });
-                } catch (error) {
-                    setAccountStatus(formatError(error), 'error');
-                } finally {
-                    clearSession();
-                    setAccountStatus('已退出登录。');
-                }
-            }
-
-            async function openBillingPortal() {
-                if (!state.currentUser) {
-                    setAccountStatus('请先登录账号，再管理订阅。', 'error');
-                    return;
-                }
-
-                billingPortalButton.disabled = true;
-                billingPortalButton.textContent = '正在打开...';
-                setAccountStatus('正在连接 Stripe 账单门户...');
-                try {
-                    const returnPath = window.location.protocol === 'file:'
-                        ? '/about-ailis.html'
-                        : (window.location.pathname || '/about-ailis.html');
-                    const payload = await fetchJson('/api/stripe/customer-portal', {
-                        method: 'POST',
-                        body: JSON.stringify({ return_path: returnPath })
-                    });
-                    window.location.href = payload.url;
-                } catch (error) {
-                    setAccountStatus(formatError(error), 'error');
-                    billingPortalButton.disabled = false;
-                    billingPortalButton.textContent = '管理订阅 / 账单';
-                }
-            }
-
-            function closeModal() {
-                modal.hidden = true;
-                resetCheckout();
-            }
-
-            function updateSubmit(session) {
-                const canConfirm = Boolean(session?.canConfirm && state.actions);
-                submitButton.disabled = !canConfirm;
-                submitButton.textContent = canConfirm ? '确认支付' : '继续';
-            }
-
-            async function createCheckout() {
-                if (!state.currentUser) {
-                    throw new Error('请先登录或注册账号，再开通会员。');
-                }
-
-                const openToken = ++state.openToken;
-                resetCheckout();
-                modal.hidden = false;
-                submitButton.disabled = true;
-                submitButton.textContent = '准备中...';
-                setPaymentStatus('正在连接 Stripe...');
-
-                const config = await fetchConfig();
-                if (!config.configured || !config.publishableKey) {
-                    throw new Error('Stripe 后端还没有配置完成。');
-                }
-                if (!config.modes?.[state.mode]) {
-                    throw new Error('当前会员方案还没有配置价格。');
-                }
-
-                const Stripe = await loadStripeJs();
-                state.stripe ||= Stripe(config.publishableKey);
-
-                const returnPath = window.location.protocol === 'file:'
-                    ? '/about-ailis.html'
-                    : (window.location.pathname || '/about-ailis.html');
-                const clientSecretPromise = fetchJson('/api/stripe/checkout-session', {
-                    method: 'POST',
-                    body: JSON.stringify({
-                        mode: state.mode,
-                        quantity: 1,
-                        return_path: returnPath
-                    })
-                }).then((payload) => payload.clientSecret);
-
-                if (openToken !== state.openToken) {
-                    return;
-                }
-
-                state.checkout = state.stripe.initCheckoutElementsSdk({
-                    clientSecret: clientSecretPromise,
-                    elementsOptions: {
-                        appearance: {
-                            theme: 'stripe',
-                            variables: {
-                                colorPrimary: '#73b8e5',
-                                colorText: '#2c3e50',
-                                colorDanger: '#b94a5f',
-                                borderRadius: '10px',
-                                fontFamily: '"Microsoft YaHei", -apple-system, BlinkMacSystemFont, "PingFang SC", "Noto Sans SC", sans-serif'
-                            }
-                        }
-                    }
-                });
-
-                state.checkout.on('change', updateSubmit);
-
-                const contactElement = state.checkout.createContactDetailsElement();
-                const paymentElement = state.checkout.createPaymentElement();
-                contactElement.mount(contactMount);
-                paymentElement.mount(paymentMount);
-                state.elements = [contactElement, paymentElement];
-
-                const actionResult = await state.checkout.loadActions();
-                if (openToken !== state.openToken) {
-                    return;
-                }
-                if (actionResult.type !== 'success') {
-                    throw new Error(formatError(actionResult.error));
-                }
-
-                state.actions = actionResult.actions;
-                submitButton.disabled = true;
-                submitButton.textContent = '继续';
-                setPaymentStatus('');
-            }
-
-            async function openPayment(mode) {
-                selectMode(mode || state.mode);
-                if (!state.currentUser) {
-                    setAccountStatus('请先登录或注册账号，再开通会员。', 'error');
-                    document.getElementById('membership')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                    return;
-                }
-
-                try {
-                    await createCheckout();
-                } catch (error) {
-                    modal.hidden = false;
-                    submitButton.disabled = false;
-                    submitButton.textContent = '重试';
-                    setPaymentStatus(formatError(error), 'error');
-                }
-            }
-
-            async function confirmPayment() {
-                if (!state.actions) {
-                    await openPayment(state.mode);
-                    return;
-                }
-
-                submitButton.disabled = true;
-                submitButton.textContent = '处理中...';
-                setPaymentStatus('正在确认支付...');
-
-                const returnUrl = `${window.location.origin}${window.location.pathname || '/about-ailis.html'}?payment=return`;
-                const result = await state.actions.confirm({
-                    returnUrl,
-                    redirect: 'if_required'
-                });
-
-                if (result.error) {
-                    submitButton.disabled = false;
-                    submitButton.textContent = '确认支付';
-                    setPaymentStatus(formatError(result.error), 'error');
-                    return;
-                }
-
-                setPaymentStatus('支付已确认，正在刷新会员状态。', 'success');
-                submitButton.textContent = '已完成';
-                await refreshAccount();
-            }
-
-            async function showReturnedSessionStatus() {
-                const url = new URL(window.location.href);
-                const sessionId = url.searchParams.get('session_id');
-                if (url.searchParams.get('payment') !== 'return' || !sessionId) {
-                    return;
-                }
-
-                modal.hidden = false;
-                submitButton.disabled = true;
-                submitButton.textContent = '完成';
-                setPaymentStatus('正在确认支付结果...');
-
-                if (USE_TOKEN_FALLBACK && !state.token) {
-                    setPaymentStatus('请先登录原账号，再刷新会员状态。', 'error');
-                    return;
-                }
-
-                try {
-                    const session = await fetchJson(`/api/stripe/session-status?session_id=${encodeURIComponent(sessionId)}`);
-                    const paid = session.paymentStatus === 'paid' || session.status === 'complete';
-                    if (session.user) {
-                        state.currentUser = session.user;
-                        updateAccountUi();
-                    }
-                    setPaymentStatus(paid ? '支付成功，会员状态已更新。' : '支付还在处理中，请稍后刷新。', paid ? 'success' : 'neutral');
-                    url.searchParams.delete('payment');
-                    url.searchParams.delete('session_id');
-                    window.history.replaceState({}, '', url.toString());
-                } catch (error) {
-                    setPaymentStatus(formatError(error), 'error');
-                }
-            }
-
-            authTabs.forEach((button) => {
-                button.addEventListener('click', () => selectAuthMode(button.dataset.authMode || 'login'));
-            });
-            accountSubmitButton.addEventListener('click', handleAuthSubmit);
-            passwordInput.addEventListener('keydown', (event) => {
-                if (event.key === 'Enter') {
-                    handleAuthSubmit();
-                }
-            });
-            logoutButton.addEventListener('click', handleLogout);
-            billingPortalButton.addEventListener('click', openBillingPortal);
-            openButtons.forEach((button) => {
-                button.addEventListener('click', () => openPayment(button.dataset.paymentMode || state.mode));
-            });
-            modalPlanButtons.forEach((button) => {
-                button.addEventListener('click', () => openPayment(button.dataset.paymentMode || 'subscription'));
-            });
-            closeButton.addEventListener('click', closeModal);
-            modal.addEventListener('click', (event) => {
-                if (event.target === modal) {
-                    closeModal();
-                }
-            });
-            submitButton.addEventListener('click', confirmPayment);
-
-            selectAuthMode(state.authMode);
-            selectMode(state.mode);
-            updateAccountUi();
-            refreshAccount().then(showReturnedSessionStatus);
-        })();
-    </script>
 
 </body>
 </html>

@@ -65,19 +65,18 @@ test('final_answer contract reminds relation tasks to verify answer role alignme
 });
 
 test('Agent tool-call sanitizer does not maintain a hardcoded runtime tool whitelist', () => {
-    const xlsxCall = sanitizeAgentToolCall({
+    const futureToolCall = sanitizeAgentToolCall({
         tool_call: {
-            tool: 'read_xlsx_workbook',
-            title: 'Read workbook',
+            tool: 'future_runtime_tool',
+            title: 'Use future tool',
             args: {
-                path: 'task.xlsx',
-                includeStyles: true
+                example: true
             }
         }
     }, 0);
 
-    assert.equal(xlsxCall.tool, 'read_xlsx_workbook');
-    assert.equal(xlsxCall.args.path, 'task.xlsx');
+    assert.equal(futureToolCall.tool, 'future_runtime_tool');
+    assert.equal(futureToolCall.args.example, true);
 
     const githubPagesCall = sanitizeAgentToolCall({
         tool: 'github_pages',
@@ -88,15 +87,6 @@ test('Agent tool-call sanitizer does not maintain a hardcoded runtime tool white
     }, 1);
 
     assert.equal(githubPagesCall.tool, 'github_pages');
-
-    const futureToolCall = sanitizeAgentToolCall({
-        tool: 'future_runtime_tool',
-        args: {
-            example: true
-        }
-    }, 2);
-
-    assert.equal(futureToolCall.tool, 'future_runtime_tool');
     assert.equal(sanitizeAgentToolCall({ args: {} }, 3), null);
 });
 
@@ -471,6 +461,35 @@ test('Agent model-facing observation digest stays compact and artifact-backed', 
     assert.ok(JSON.stringify(digest[0].details).length < 1800);
     assert.deepEqual(digest[0].evidenceRefs, stepResult.evidenceArtifacts.map((artifact) => artifact.id));
     assert.equal(stepResult.evidenceArtifacts[0].type, 'ResearchSourceEvidence');
+});
+
+test('Agent model-facing observation digest summarizes large tool args', () => {
+    const script = 'print("solver")\n'.repeat(1200);
+    const stepResult = {
+        id: 'step-write',
+        title: 'Write solver script',
+        tool: 'write',
+        args: {
+            path: 'solve_puzzle.py',
+            content: script
+        },
+        response: {
+            ok: true,
+            status: 'completed',
+            result: {
+                content: [{ type: 'text', text: 'Wrote solve_puzzle.py' }]
+            }
+        }
+    };
+
+    const digest = buildLosslessToolObservationDigest([stepResult]);
+    assert.equal(digest.length, 1);
+    assert.equal(digest[0].args.path, 'solve_puzzle.py');
+    assert.equal(digest[0].args.content.omitted, true);
+    assert.equal(digest[0].args.content.chars, script.length);
+    assert.match(digest[0].args.content.sha1, /^[a-f0-9]{12}$/);
+    assert.ok(JSON.stringify(digest).length < 1800);
+    assert.doesNotMatch(JSON.stringify(digest), /solver"\)\nprint\("solver"\)\nprint\("solver/);
 });
 
 test('Agent exact-answer gate requires confident known evidence refs', () => {

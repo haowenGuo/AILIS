@@ -38,6 +38,40 @@ test('Turn items map tool calls and results into Codex-like chronological items'
     assert.match(promptObject.items[1].preview, /reflection/);
 });
 
+test('Turn items summarize large tool call args before they enter the prompt', () => {
+    const script = [
+        'from openpyxl import load_workbook',
+        'wb = load_workbook("task.xlsx")',
+        'print("answer", "F478A7")'
+    ].join('\n') + '\n' + 'print("padding")\n'.repeat(900);
+
+    const promptObject = buildTurnItemsPromptObject({
+        events: [{
+            type: 'tool_call',
+            id: 'step-write',
+            title: 'Write solver script',
+            tool: 'write',
+            args: {
+                path: 'solve_puzzle.py',
+                content: script,
+                api_token: 'secret-value'
+            },
+            iteration: 4
+        }]
+    });
+
+    const item = promptObject.items[0];
+    assert.equal(item.type, 'tool_call');
+    assert.equal(item.args.path, 'solve_puzzle.py');
+    assert.equal(item.args.api_token, '__REDACTED__');
+    assert.equal(item.args.content.omitted, true);
+    assert.equal(item.args.content.kind, 'large_text_arg');
+    assert.equal(item.args.content.chars, script.length);
+    assert.match(item.args.content.sha1, /^[a-f0-9]{12}$/);
+    assert.ok(JSON.stringify(promptObject).length < 2000);
+    assert.doesNotMatch(JSON.stringify(promptObject), /padding"\)\nprint\("padding"\)\nprint\("padding/);
+});
+
 test('Turn items compact older observations while keeping recent observations detailed', () => {
     const events = Array.from({ length: 18 }, (_, index) => ({
         type: 'tool_result',
@@ -129,7 +163,7 @@ test('Turn items classify Windows command-not-found failures with recovery hints
     assert.ok(items[0].alternatives.includes('node'));
 });
 
-test('Turn items classify web_search discovery output as needing web_fetch evidence', () => {
+test('Turn items keep web_search snippets neutral instead of adding evidence-gap follow-up hints', () => {
     const items = buildCodexLikeTurnItems({
         stepResults: [
             {
@@ -145,10 +179,8 @@ test('Turn items classify web_search discovery output as needing web_fetch evide
                         content: [{
                             type: 'text',
                             text: [
-                                'Evidence gap: Search results are discovery only. Open a result before answering.',
-                                'Suggested next calls:',
-                                '1. web_fetch {"url":"https://www.kaggle.com/"}',
-                                'High-signal links:',
+                                'Candidate snippets from search results:',
+                                '1. Kaggle AI strategy guide',
                                 'URL: https://www.kaggle.com/'
                             ].join('\n')
                         }]
@@ -160,9 +192,9 @@ test('Turn items classify web_search discovery output as needing web_fetch evide
 
     assert.equal(items.length, 1);
     assert.equal(items[0].status, 'completed');
-    assert.equal(items[0].evidence_gap, 'search_results_need_fetch');
-    assert.match(items[0].recovery_hint, /mcp__ailis_research__web_fetch/);
-    assert.ok(items[0].alternatives.includes('mcp__ailis_research__web_fetch'));
+    assert.equal(items[0].evidence_gap, null);
+    assert.equal(items[0].recovery_hint, null);
+    assert.deepEqual(items[0].alternatives, []);
 });
 
 test('Turn items preserve complete structured document table previews for reasoning', () => {

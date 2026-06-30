@@ -468,7 +468,7 @@ async function loadAnalysis(runId, { silent = false } = {}) {
 
 function buildRunPayload({ stepMode = false } = {}) {
     const sessionId = elements.sessionInput.value.trim() || 'agent-lab';
-    const maxAgentSteps = Math.max(1, Math.min(Number(elements.maxStepsInput.value || 12), 80));
+    const maxAgentSteps = Math.max(1, Math.min(Number(elements.maxStepsInput.value || 12), 12));
     const autoConfirm = elements.autoConfirmCheck.checked === true;
     return {
         message: elements.taskInput.value.trim(),

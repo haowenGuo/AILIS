@@ -232,6 +232,16 @@ function compactJsonForModel(value, options = {}, depth = 0, parentKey = '') {
         return value;
     }
     if (depth >= maxDepth) {
+        try {
+            const serialized = JSON.stringify(value);
+            const smallArray = Array.isArray(value) && value.length <= maxArrayItems;
+            const smallObject = !Array.isArray(value) && Object.keys(value).length <= Math.min(maxObjectKeys, 12);
+            if ((smallArray || smallObject) && serialized.length <= maxStringChars) {
+                return cloneJson(value);
+            }
+        } catch {
+            // Fall through to the normal summarizer.
+        }
         if (Array.isArray(value) && (
             parentKey === 'required' ||
             parentKey === 'enum' ||

@@ -1,6 +1,12 @@
 const fsp = require('fs/promises');
 const path = require('path');
 const { createHash, randomUUID } = require('crypto');
+const {
+    buildArtifactRuntimeEnvelope,
+    buildArtifactRuntimeSchema,
+    searchArtifactRuntime,
+    formatArtifactRuntimeSearch
+} = require('./ailis-artifact-runtime.cjs');
 
 const DEFAULT_MAX_TEXT_CHARS = 8000;
 const DEFAULT_GRID_ROWS = 80;
@@ -52,6 +58,10 @@ function cloneJson(value) {
     } catch {
         return value;
     }
+}
+
+function uniqueStrings(values = []) {
+    return [...new Set(values.map((value) => normalizeString(String(value))).filter(Boolean))];
 }
 
 function truncateText(text = '', maxChars = DEFAULT_MAX_TEXT_CHARS) {
@@ -430,7 +440,7 @@ function formatSpreadsheetSummary(record = {}, payload = {}) {
         record.summary ? `summary=${record.summary}` : '',
         `sheets=${sheets.map((sheet) => sheet.name).join(', ') || '(none)'}`,
         'observation_contract=complete:true truncated:false reasoning_ready:true',
-        'query_tools=artifact_query actions: summary, grid, range, search, schema'
+        'query_tools=artifact_query actions: summary, grid, range, search, runtime_schema, chunk_search, schema'
     ].filter(Boolean);
     for (const sheet of sheets.slice(0, 12)) {
         lines.push(
@@ -524,7 +534,7 @@ function formatSpreadsheetRange(sheet = {}, args = {}) {
     const coverage = buildSpreadsheetRangeCoverage(sheet, parsedRange, outsideStoredRange, returnedCells);
     if (outsideStoredRange) {
         lines.push(`storedRange=${cellAddress(firstRow, firstCol)}:${cellAddress(lastRow, lastCol)}`);
-        lines.push('outsideStoredRange=true; complete=false; reasoning_ready=false; rerun read_xlsx_workbook with a wider range/maxRows/maxCols.');
+        lines.push('outsideStoredRange=true; complete=false; reasoning_ready=false; query a wider range/maxRows/maxCols through artifact_tools or artifact_query.');
     } else {
         lines.push('truncated=false; complete=true; reasoning_ready=true');
     }
@@ -659,7 +669,7 @@ function formatTextArtifactSummary(record = {}, textArtifact = {}) {
         `source=${record.sourcePath || textArtifact.path || ''}`,
         `bytes=${record.payloadBytes || textArtifact.bytes || 0} chars=${text.length} lines=${lines.length}`,
         `encoding=${textArtifact.encoding || 'utf8'} type=${textArtifact.type || record.type || 'text'}`,
-        'query_tools=artifact_query actions: text_schema, text_range, text_search, text_tail',
+        'query_tools=artifact_query actions: text_schema, text_range, text_search, text_tail, runtime_schema, chunk_search',
         'observation_contract=complete:true truncated:false reasoning_ready:true',
         '--- first lines ---',
         numberedLines(previewLines, 1),
@@ -896,7 +906,7 @@ function formatDocumentArtifactSummary(record = {}, documentArtifact = {}) {
         `source=${record.sourcePath || documentArtifact.path || ''}`,
         `format=${documentArtifact.format || record.type || 'document'} parser=${documentArtifact.parser || 'unknown'}`,
         `pages=${pages.length} sections=${sections.length} chars=${text.length} lines=${splitLines(text).length}`,
-        'query_tools=artifact_query actions: document_schema, document_search, document_page, document_section',
+        'query_tools=artifact_query actions: document_schema, document_search, document_page, document_section, runtime_schema, chunk_search',
         'observation_contract=complete:true truncated:false reasoning_ready:true',
         '--- preview ---',
         preview.text
@@ -1602,10 +1612,30 @@ class AILISContextArtifactStore {
         const sourceName = safeSegment(path.basename(normalizeString(input.sourcePath || input.name, kind)), kind);
         const id = `ctx-${safeSegment(kind)}-${Date.now()}-${randomUUID().slice(0, 8)}`;
         const payloadPath = path.join(this.payloadDir, `${id}-${sourceName}.json`);
-        const payload = cloneJson(input.payload || {});
+        const rawPayload = cloneJson(input.payload || {});
+        const runtimeEnvelope = buildArtifactRuntimeEnvelope({
+            artifactId: id,
+            kind,
+            type: normalizeString(input.type || kind),
+            sourcePath: normalizeString(input.sourcePath),
+            summary: normalizeString(input.summary),
+            payload: rawPayload,
+            metadata: cloneJson(input.metadata || {})
+        });
+        const payload = rawPayload && typeof rawPayload === 'object' && !Array.isArray(rawPayload)
+            ? { ...rawPayload, artifactRuntime: runtimeEnvelope.payload }
+            : { value: rawPayload, artifactRuntime: runtimeEnvelope.payload };
         await fsp.mkdir(this.payloadDir, { recursive: true });
         await fsp.writeFile(payloadPath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
         const stat = await fsp.stat(payloadPath).catch(() => ({ size: 0 }));
+        const metadata = {
+            ...cloneJson(input.metadata || {}),
+            artifactRuntime: runtimeEnvelope.metadata
+        };
+        const modelView = {
+            ...cloneJson(input.modelView || {}),
+            artifactRuntime: runtimeEnvelope.modelView
+        };
         const record = {
             id,
             kind,
@@ -1620,9 +1650,12 @@ class AILISContextArtifactStore {
             payloadPath,
             payloadBytes: stat.size || 0,
             summary: normalizeString(input.summary),
-            metadata: cloneJson(input.metadata || {}),
-            modelView: cloneJson(input.modelView || {}),
-            queryHints: Array.isArray(input.queryHints) ? input.queryHints.map(String) : []
+            metadata,
+            modelView,
+            queryHints: uniqueStrings([
+                ...(Array.isArray(input.queryHints) ? input.queryHints.map(String) : []),
+                ...runtimeEnvelope.queryHints
+            ])
         };
         const prior = await this.readIndex();
         const next = [record, ...prior.filter((entry) => entry.id !== record.id && path.resolve(entry.payloadPath || '') !== path.resolve(payloadPath))];
@@ -1709,6 +1742,9 @@ class AILISContextArtifactStore {
                 'grid',
                 'range',
                 'search',
+                'runtime_schema',
+                'chunk_search',
+                'runtime_search',
                 'text_schema',
                 'text_range',
                 'text_search',
@@ -1719,11 +1755,11 @@ class AILISContextArtifactStore {
                 'document_section'
             ],
             args: {
-                artifactId: 'required for summary/grid/range/search',
-                action: 'schema|list|summary|grid|range|search',
+                artifactId: 'required for summary/grid/range/search/chunk_search',
+                action: 'schema|list|summary|grid|range|search|runtime_schema|chunk_search',
                 sheet: 'optional sheet name for spreadsheet artifacts',
                 range: 'A1:D20 style range for spreadsheet range queries',
-                query: 'text/color/address query for search',
+                query: 'text/color/address query for search or chunk_search',
                 startLine: '1-based line start for text_range',
                 endLine: '1-based line end for text_range',
                 page: '1-based page for document_page'
@@ -1792,7 +1828,7 @@ class AILISContextArtifactStore {
             return createTextResult(JSON.stringify({
                 status: 'completed',
                 artifacts,
-                note: 'Use artifact_query with artifactId for summary/grid/range/search.'
+                note: 'Use artifact_query with artifactId for summary/grid/range/search or runtime_schema/chunk_search.'
             }, null, 2), {
                 status: 'completed',
                 ok: true,
@@ -1831,6 +1867,34 @@ class AILISContextArtifactStore {
                 artifactId,
                 payloadPath: record.payloadPath
             });
+        }
+
+        if (action === 'runtime_schema' || action === 'artifact_runtime_schema') {
+            const schema = buildArtifactRuntimeSchema(record, payload);
+            return createTextResult(JSON.stringify(schema, null, 2), {
+                status: 'completed',
+                ok: true,
+                action: 'runtime_schema',
+                artifactId: record.id,
+                complete: true,
+                truncated: false,
+                reasoningReady: true
+            }, schema);
+        }
+        if (action === 'chunk_search' || action === 'runtime_search' || action === 'hybrid_search') {
+            const searchResult = searchArtifactRuntime(payload, args, record);
+            return createTextResult(formatArtifactRuntimeSearch(record, searchResult), {
+                status: 'completed',
+                ok: true,
+                action: 'chunk_search',
+                artifactId: record.id,
+                query: searchResult.query,
+                matchCount: searchResult.matches.length,
+                totalMatches: searchResult.total,
+                truncated: searchResult.truncated,
+                complete: true,
+                reasoningReady: true
+            }, searchResult);
         }
 
         if (record.kind === 'spreadsheet' || payload?.workbook?.sheets) {
@@ -1930,7 +1994,7 @@ class AILISContextArtifactStore {
         }
         return createErrorResult('unsupported_action', `Unsupported text artifact_query action: ${action}.`, {
             action,
-            supportedActions: ['schema', 'list', 'summary', 'text_schema', 'text_range', 'text_search', 'text_tail']
+            supportedActions: ['schema', 'list', 'summary', 'runtime_schema', 'chunk_search', 'text_schema', 'text_range', 'text_search', 'text_tail']
         });
     }
 
@@ -1970,7 +2034,7 @@ class AILISContextArtifactStore {
         }
         return createErrorResult('unsupported_action', `Unsupported document artifact_query action: ${action}.`, {
             action,
-            supportedActions: ['schema', 'list', 'summary', 'document_schema', 'document_search', 'document_page', 'document_section']
+            supportedActions: ['schema', 'list', 'summary', 'runtime_schema', 'chunk_search', 'document_schema', 'document_search', 'document_page', 'document_section']
         });
     }
 
@@ -2033,7 +2097,7 @@ class AILISContextArtifactStore {
         }
         return createErrorResult('unsupported_action', `Unsupported spreadsheet artifact_query action: ${action}.`, {
             action,
-            supportedActions: ['schema', 'list', 'summary', 'grid', 'range', 'search']
+            supportedActions: ['schema', 'list', 'summary', 'runtime_schema', 'chunk_search', 'grid', 'range', 'search']
         });
     }
 
@@ -2104,7 +2168,7 @@ class AILISContextArtifactStore {
         }
         return createErrorResult('unsupported_action', `Unsupported artifact_query action for ${record.kind}: ${action}.`, {
             action,
-            supportedActions: ['schema', 'list', 'summary', 'search']
+            supportedActions: ['schema', 'list', 'summary', 'runtime_schema', 'chunk_search', 'search']
         });
     }
 }

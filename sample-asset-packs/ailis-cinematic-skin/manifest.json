@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "ailis.skin.cinematic-wave.v1",
+  "type": "skin_pack",
+  "displayName": "AILIS Cinematic Wave Skin",
+  "version": "1.0.0",
+  "publisher": "AILIS Local Sample",
+  "description": "A local sample skin pack for validating install, activate, uninstall, and visual style switching in the open-source runtime.",
+  "renderProfileId": "ailis_cinematic_rim_toon",
+  "assets": {
+    "renderProfile": "assets/render-profile.json",
+    "personaStyle": "assets/persona-style.json",
+    "voiceProfile": "assets/voice-profile.json"
+  },
+  "compatibility": {
+    "minAilisVersion": "1.0.6",
+    "runtime": [
+      "desktop"
+    ]
+  }
+}

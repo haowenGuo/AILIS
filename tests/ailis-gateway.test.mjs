@@ -458,8 +458,8 @@ test('AILIS Gateway tool_search ranks specific MCP artifact tools before web_sea
         assert.equal(result.details.tools.length, 1);
         assert.equal(Object.hasOwn(result.details, 'discovery'), false);
         assert.equal(Object.hasOwn(result.details, 'searched_content'), false);
-        assert.equal(result.details.tools[0].tool, 'read_presentation');
-        assert.match(result.details.routing_advice, /read_presentation/);
+        assert.equal(result.details.tools[0].id, 'artifact_tools');
+        assert.match(result.details.routing_advice, /artifact_tools/);
 
         const docxResult = await gateway.executeGatewayToolSearch({
             query: 'DOCX word document extract text content',
@@ -468,9 +468,9 @@ test('AILIS Gateway tool_search ranks specific MCP artifact tools before web_sea
         });
 
         assert.equal(docxResult.details.tools.length, 1);
-        assert.equal(docxResult.details.tools[0].tool, 'read_document');
+        assert.equal(docxResult.details.tools[0].id, 'artifact_tools');
         assert.notEqual(docxResult.details.tools[0].id, 'artifact_verifier');
-        assert.match(docxResult.details.routing_advice, /read_document/);
+        assert.match(docxResult.details.routing_advice, /artifact_tools/);
 
         const xlsxResult = await gateway.executeGatewayToolSearch({
             query: 'attached xlsx spreadsheet cell colors fill formulas merged map',
@@ -479,9 +479,9 @@ test('AILIS Gateway tool_search ranks specific MCP artifact tools before web_sea
             limit: 3
         });
 
-        assert.ok(xlsxResult.details.tools.some((tool) => tool.id === 'read_xlsx_workbook'));
-        assert.equal(xlsxResult.details.tools[0].id, 'read_xlsx_workbook');
-        assert.match(xlsxResult.details.routing_advice, /read_xlsx_workbook/);
+        assert.equal(xlsxResult.details.tools[0].id, 'artifact_tools');
+        assert.equal(xlsxResult.details.tools.some((tool) => tool.id === 'read_xlsx_workbook'), false);
+        assert.match(xlsxResult.details.routing_advice, /artifact_tools/);
 
         const artifactQueryResult = await gateway.executeGatewayToolSearch({
             query: 'artifact_query artifactId fullJsonPath payload range grid search',
@@ -493,6 +493,15 @@ test('AILIS Gateway tool_search ranks specific MCP artifact tools before web_sea
         assert.ok(artifactQueryResult.details.tools.some((tool) => tool.id === 'artifact_query'));
         assert.equal(artifactQueryResult.details.tools[0].id, 'artifact_query');
         assert.match(artifactQueryResult.details.routing_advice, /artifact_query/);
+
+        const artifactImportResult = await gateway.executeGatewayToolSearch({
+            query: 'artifact_import ragflow lite table parser import local file chunks',
+            includeExternal: false,
+            includeMcp: false,
+            limit: 5
+        });
+
+        assert.ok(artifactImportResult.details.tools.some((tool) => tool.id === 'artifact_import'));
     } finally {
         await gateway.stop();
         await fs.rm(workspaceRoot, { recursive: true, force: true });
@@ -546,41 +555,60 @@ test('AILIS Gateway exposes context artifact query and guards raw payload reads'
         projectRoot: path.resolve('.'),
         auditDir: path.join(workspaceRoot, '.audit')
     });
-    const workbookPath = path.join(workspaceRoot, 'map.xlsx');
 
     try {
-        const workbook = new ExcelJS.Workbook();
-        const sheet = workbook.addWorksheet('Map');
-        sheet.getCell('A1').value = 'START';
-        sheet.getCell('B1').fill = {
-            type: 'pattern',
-            pattern: 'solid',
-            fgColor: { argb: 'FF0099FF' }
-        };
-        sheet.getCell('C2').value = 'END';
-        await workbook.xlsx.writeFile(workbookPath);
-
         const status = await gateway.start();
         const baseUrl = status.url;
-
-        const xlsx = await jsonFetch(`${baseUrl}/tools/call`, {
-            method: 'POST',
-            body: JSON.stringify({
-                tool: 'read_xlsx_workbook',
-                args: {
-                    path: workbookPath,
-                    sheet: 'Map',
-                    maxRows: 4,
-                    maxCols: 4,
-                    includeStyles: true
-                },
-                context: { workspace: workspaceRoot, runId: 'artifact-run-1', sessionId: 'artifact-session-1' }
-            })
+        const artifactRecord = await gateway.runtime.contextArtifactStore.createArtifact({
+            kind: 'spreadsheet',
+            type: 'test_spreadsheet',
+            tool: 'test_fixture',
+            runId: 'artifact-run-1',
+            sessionId: 'artifact-session-1',
+            sourcePath: path.join(workspaceRoot, 'map-fixture.xlsx'),
+            summary: 'Test spreadsheet map fixture',
+            payload: {
+                workbook: {
+                    sheets: [{
+                        name: 'Map',
+                        dimensions: {
+                            inspectedRange: 'A1:C2',
+                            rowCount: 2,
+                            columnCount: 3
+                        },
+                        grids: {
+                            display: [
+                                ['START', '', ''],
+                                ['', '', 'END']
+                            ],
+                            fills: [
+                                ['', '0099FF', ''],
+                                ['', '', '']
+                            ],
+                            rowNumbers: [1, 2],
+                            columns: ['A', 'B', 'C']
+                        },
+                        cells: [
+                            { address: 'A1', value: 'START', text: 'START' },
+                            { address: 'B1', value: '', text: '', fill: { fgRgb: '0099FF' } },
+                            { address: 'C2', value: 'END', text: 'END' }
+                        ],
+                        nonEmptyCells: [
+                            { address: 'A1', value: 'START', fill: '' },
+                            { address: 'B1', value: '', fill: '0099FF' },
+                            { address: 'C2', value: 'END', fill: '' }
+                        ],
+                        colorLegend: [{ rgb: '0099FF', count: 1 }],
+                        formulas: [],
+                        mergedRanges: [],
+                        completeness: { allRequestedCellsIncluded: true }
+                    }]
+                }
+            },
+            queryHints: ['summary', 'grid', 'range', 'search']
         });
-        assert.equal(xlsx.body.ok, true, xlsx.body.error);
-        const artifactId = xlsx.body.result.details.artifactId;
+        const artifactId = artifactRecord.id;
         assert.ok(artifactId);
-        assert.doesNotMatch(xlsx.body.result.content[0].text, /fullJsonPath/);
         assert.ok(gateway.eventLog.some((event) =>
             event.type === 'context_artifact.created' &&
             event.payload?.artifactId === artifactId &&
@@ -623,13 +651,13 @@ test('AILIS Gateway exposes context artifact query and guards raw payload reads'
         assert.match(compute.body.result.content[0].text, /ARTIFACT_COMPUTE_FIND_PATH/);
         assert.equal(compute.body.result.details.result.pathFound, true);
 
-        const record = await gateway.runtime.contextArtifactStore.getRecord(artifactId);
-        assert.ok(record.payloadPath);
+        const storedRecord = await gateway.runtime.contextArtifactStore.getRecord(artifactId);
+        assert.ok(storedRecord.payloadPath);
         const rawRead = await jsonFetch(`${baseUrl}/tools/call`, {
             method: 'POST',
             body: JSON.stringify({
                 tool: 'read',
-                args: { path: record.payloadPath },
+                args: { path: storedRecord.payloadPath },
                 context: { workspace: workspaceRoot }
             })
         });
@@ -637,6 +665,66 @@ test('AILIS Gateway exposes context artifact query and guards raw payload reads'
         assert.equal(rawRead.body.status, 'blocked');
         assert.equal(rawRead.body.result.details.code, 'context_artifact_raw_read_blocked');
         assert.equal(rawRead.body.result.details.suggestedNext.tool, 'artifact_query');
+    } finally {
+        await gateway.stop();
+        await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
+});
+
+test('AILIS Gateway imports RAGFlow-lite worker output into queryable artifacts', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-artifact-import-gateway-'));
+    const gateway = new AILISGateway({
+        port: 0,
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit')
+    });
+    const workbookPath = path.join(workspaceRoot, 'inventory.xlsx');
+
+    try {
+        const workbook = new ExcelJS.Workbook();
+        const sheet = workbook.addWorksheet('Inventory');
+        sheet.addRow(['Product', 'Color', 'Stock']);
+        sheet.addRow(['Widget', 'Red', 12]);
+        sheet.addRow(['Gadget', 'Blue', 5]);
+        await workbook.xlsx.writeFile(workbookPath);
+
+        const status = await gateway.start();
+        const baseUrl = status.url;
+
+        const imported = await jsonFetch(`${baseUrl}/tools/call`, {
+            method: 'POST',
+            body: JSON.stringify({
+                tool: 'artifact_import',
+                args: {
+                    path: workbookPath,
+                    parserId: 'table',
+                    language: 'English'
+                },
+                context: { workspace: workspaceRoot, runId: 'artifact-import-run-1', sessionId: 'artifact-import-session-1' }
+            })
+        });
+        assert.equal(imported.body.ok, true, imported.body.error);
+        assert.match(imported.body.result.content[0].text, /ARTIFACT_IMPORT_COMPLETE/);
+        assert.ok(imported.body.result.details.artifactId);
+        assert.ok(imported.body.result.details.chunkCount >= 2);
+
+        const search = await jsonFetch(`${baseUrl}/tools/call`, {
+            method: 'POST',
+            body: JSON.stringify({
+                tool: 'artifact_query',
+                args: {
+                    action: 'chunk_search',
+                    artifactId: imported.body.result.details.artifactId,
+                    query: 'Widget',
+                    limit: 5
+                },
+                context: { workspace: workspaceRoot }
+            })
+        });
+        assert.equal(search.body.ok, true, search.body.error);
+        assert.match(search.body.result.content[0].text, /ARTIFACT_CHUNK_SEARCH/);
+        assert.match(search.body.result.content[0].text, /Widget/);
     } finally {
         await gateway.stop();
         await fs.rm(workspaceRoot, { recursive: true, force: true });

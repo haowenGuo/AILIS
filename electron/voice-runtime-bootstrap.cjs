@@ -12,36 +12,129 @@ const DEFAULT_COSYVOICE3_MODEL_REPO = 'FunAudioLLM/Fun-CosyVoice3-0.5B-2512';
 const DEFAULT_COSYVOICE_GIT_URL = 'https://github.com/FunAudioLLM/CosyVoice.git';
 const DEFAULT_MATCHA_GIT_URL = 'https://github.com/shivammehta25/Matcha-TTS.git';
 const DEFAULT_VOICE_PYTHON_VERSION = '3.12';
+const DEFAULT_UV_PYTHON_INSTALL_MIRRORS = Object.freeze([
+    'https://python-standalone.org/mirror/astral-sh/python-build-standalone',
+    'https://mirrors.tuna.tsinghua.edu.cn/github-release/astral-sh/python-build-standalone',
+    'https://mirror.nju.edu.cn/github-release/astral-sh/python-build-standalone',
+    ''
+]);
+const DEFAULT_PIP_INDEX_URLS = Object.freeze([
+    'https://pypi.tuna.tsinghua.edu.cn/simple',
+    'https://mirrors.aliyun.com/pypi/simple',
+    'https://mirror.nju.edu.cn/pypi/web/simple',
+    'https://mirrors.ustc.edu.cn/pypi/simple',
+    ''
+]);
+const DEFAULT_VOICE_PIP_EXTRA_INDEX_URLS = Object.freeze([
+    'https://download.pytorch.org/whl/cu121'
+]);
 const DEFAULT_TIMEOUT_MS = 12000;
 const INSTALL_TIMEOUT_MS = 30 * 60 * 1000;
 const MAX_CAPTURE_CHARS = 24000;
 const PACKAGED_ASR_RUNTIME_DIRNAME = 'ailis-asr-runtime';
 const SPEECH_MODEL_DIRNAME = 'speech-models';
+const VOICE_RUNTIME_INSTALLER_VERSION = 2;
+const VOICE_RUNTIME_MANIFEST_FILENAME = 'voice-runtime-manifest.json';
+
+const COSYVOICE_SOURCE_REQUIRED_GROUPS = Object.freeze([
+    { id: 'cosyvoice_entry', label: 'CosyVoice 入口代码', anyOf: ['cosyvoice/cli/cosyvoice.py'] },
+    { id: 'matcha_tts', label: 'Matcha-TTS 子模块', anyOf: ['third_party/Matcha-TTS'] },
+    { id: 'prompt_wav', label: '默认参考音频', anyOf: ['asset/zero_shot_prompt.wav'] }
+]);
+
+const COSYVOICE3_MODEL_REQUIRED_GROUPS = Object.freeze([
+    { id: 'config', label: 'CosyVoice3 配置', anyOf: ['cosyvoice3.yaml'] },
+    { id: 'llm', label: 'LLM 权重', anyOf: ['llm.pt', 'llm.fp16.pt'] },
+    { id: 'flow', label: 'Flow 权重', anyOf: ['flow.pt', 'flow.fp16.pt'] },
+    { id: 'hift', label: 'HiFT 权重', anyOf: ['hift.pt', 'hift.fp16.pt'] },
+    { id: 'speaker_encoder', label: '说话人编码器', anyOf: ['campplus.onnx'] },
+    { id: 'speech_tokenizer', label: '语音 tokenizer', anyOf: ['speech_tokenizer_v3.batch.onnx', 'speech_tokenizer_v3.onnx'] },
+    { id: 'blanken_model', label: 'BlankEN 文本模型', anyOf: ['CosyVoice-BlankEN/model.safetensors'] },
+    { id: 'blanken_tokenizer', label: 'BlankEN tokenizer', anyOf: ['CosyVoice-BlankEN/tokenizer_config.json'] }
+]);
+
+const COSYVOICE3_MODEL_ALLOW_PATTERNS = Object.freeze([
+    '*.json',
+    '*.yaml',
+    '*.yml',
+    '*.pt',
+    '*.onnx',
+    'README.md',
+    '.gitattributes',
+    'asset/*',
+    'CosyVoice-BlankEN/*'
+]);
+
+const ASR_MODEL_REQUIRED_GROUPS = Object.freeze([
+    { id: 'config', label: 'ASR 配置', anyOf: ['config.json'] },
+    { id: 'processor', label: 'ASR 预处理配置', anyOf: ['preprocessor_config.json'] },
+    { id: 'tokenizer', label: 'ASR tokenizer', anyOf: ['tokenizer.json', 'vocab.json'] },
+    { id: 'weights', label: 'ASR safetensors 权重', anyOf: ['model.safetensors'] }
+]);
+
+const ASR_MODEL_ALLOW_PATTERNS = Object.freeze([
+    '*.json',
+    '*.txt',
+    '*.md',
+    '.gitattributes',
+    'model.safetensors',
+    '*.safetensors'
+]);
+
+const ASR_MODEL_IGNORE_PATTERNS = Object.freeze([
+    '*.bin',
+    '*.msgpack',
+    '*.h5',
+    '*.onnx'
+]);
 
 const BASE_VOICE_PACKAGES = Object.freeze([
-    'numpy>=1.26,<3.0',
-    'torch>=2.6,<3.0',
-    'torchaudio>=2.6,<3.0',
-    'transformers>=4.52,<6.0',
+    'numpy==1.26.4',
+    'torch==2.3.1',
+    'torchaudio==2.3.1',
+    'transformers==4.51.3',
     'accelerate>=1.0,<2.0',
     'huggingface_hub>=0.24',
-    'modelscope>=1.20',
-    'onnxruntime>=1.18',
-    'soundfile>=0.12',
-    'librosa>=0.10',
-    'HyperPyYAML>=1.2',
-    'hydra-core>=1.3',
-    'omegaconf>=2.3',
-    'inflect>=7',
+    'modelscope==1.20.0',
+    'onnxruntime==1.18.0',
+    'soundfile==0.12.1',
+    'librosa==0.10.2',
+    'HyperPyYAML==1.2.3',
+    'hydra-core==1.3.2',
+    'omegaconf==2.3.0',
+    'inflect==7.3.1',
     'conformer==0.3.2',
-    'diffusers>=0.29',
-    'openai-whisper>=20231117',
-    'rich>=13.7',
-    'wget>=3.2'
+    'diffusers==0.29.0',
+    'openai-whisper==20231117',
+    'lightning==2.2.4',
+    'matplotlib==3.7.5',
+    'pyarrow==18.1.0',
+    'pydantic==2.7.0',
+    'protobuf==4.25.8',
+    'pyworld==0.3.4',
+    'x-transformers==2.11.24',
+    'gdown==5.1.0',
+    'rich==13.7.1',
+    'wget==3.2'
 ]);
 
 function normalizeString(value) {
     return String(value || '').trim();
+}
+
+function splitList(value) {
+    return String(value || '')
+        .split(/[;,\n]/)
+        .map((entry) => normalizeString(entry))
+        .filter(Boolean);
+}
+
+function normalizeMirrorUrl(value) {
+    return normalizeString(value).replace(/\/+$/g, '');
+}
+
+function normalizeIndexUrl(value) {
+    return normalizeString(value).replace(/\/+$/g, '');
 }
 
 function pathExists(filePath) {
@@ -169,6 +262,159 @@ function directorySizeBytes(rootPath, { maxFiles = 20000 } = {}) {
         }
     }
     return total;
+}
+
+function toPortablePath(filePath) {
+    return normalizeString(filePath).replace(/\\/g, '/');
+}
+
+function fileExistsUnder(rootDir, relativePath) {
+    const target = path.join(rootDir, ...toPortablePath(relativePath).split('/').filter(Boolean));
+    return pathExists(target);
+}
+
+function findFilesRecursive(rootDir, predicate, { maxFiles = 50000 } = {}) {
+    const matches = [];
+    if (!isDirectory(rootDir)) {
+        return matches;
+    }
+    const stack = [rootDir];
+    let visited = 0;
+    while (stack.length && visited < maxFiles) {
+        const current = stack.pop();
+        let entries = [];
+        try {
+            entries = fs.readdirSync(current, { withFileTypes: true });
+        } catch {
+            continue;
+        }
+        for (const entry of entries) {
+            const entryPath = path.join(current, entry.name);
+            if (entry.isDirectory()) {
+                stack.push(entryPath);
+                continue;
+            }
+            if (!entry.isFile()) {
+                continue;
+            }
+            visited += 1;
+            if (predicate(entryPath, entry)) {
+                matches.push(entryPath);
+            }
+            if (visited >= maxFiles) {
+                break;
+            }
+        }
+    }
+    return matches;
+}
+
+function checkRequiredGroups(rootDir, groups = []) {
+    const present = [];
+    const missing = [];
+    if (!isDirectory(rootDir)) {
+        return {
+            ok: false,
+            rootDir,
+            present,
+            missing: groups.map((group) => ({
+                id: group.id,
+                label: group.label,
+                anyOf: group.anyOf
+            }))
+        };
+    }
+
+    for (const group of groups) {
+        const found = (group.anyOf || []).find((candidate) => fileExistsUnder(rootDir, candidate));
+        if (found) {
+            present.push({
+                id: group.id,
+                label: group.label,
+                path: found
+            });
+        } else {
+            missing.push({
+                id: group.id,
+                label: group.label,
+                anyOf: group.anyOf || []
+            });
+        }
+    }
+
+    return {
+        ok: missing.length === 0,
+        rootDir,
+        present,
+        missing
+    };
+}
+
+function findIncompleteFiles(rootDir) {
+    return findFilesRecursive(rootDir, (filePath) => /\.incomplete$/i.test(filePath), { maxFiles: 20000 });
+}
+
+function getHfCacheRepoDir(cacheDir, modelId) {
+    const repoName = `models--${normalizeString(modelId).replace(/[\\/]/g, '--')}`;
+    return path.join(cacheDir, repoName);
+}
+
+function getHfSnapshotDirs(cacheDir, modelId) {
+    const roots = [
+        cacheDir,
+        path.join(cacheDir, 'hub'),
+        path.join(cacheDir, 'transformers')
+    ];
+    const dirs = [];
+    const seen = new Set();
+    for (const root of roots) {
+        const repoDir = getHfCacheRepoDir(root, modelId);
+        const snapshotsDir = path.join(repoDir, 'snapshots');
+        if (!isDirectory(snapshotsDir)) {
+            continue;
+        }
+        let entries = [];
+        try {
+            entries = fs.readdirSync(snapshotsDir, { withFileTypes: true });
+        } catch {
+            continue;
+        }
+        for (const entry of entries) {
+            if (!entry.isDirectory()) {
+                continue;
+            }
+            const snapshotDir = path.join(snapshotsDir, entry.name);
+            const key = path.resolve(snapshotDir).toLowerCase();
+            if (!seen.has(key)) {
+                seen.add(key);
+                dirs.push(snapshotDir);
+            }
+        }
+    }
+    return dirs;
+}
+
+function summarizeRequirementCheck(check) {
+    return (check.missing || [])
+        .map((item) => `${item.label || item.id}(${(item.anyOf || []).join(' 或 ')})`)
+        .join('；');
+}
+
+function summarizeCommandFailure(result, fallbackMessage) {
+    const rawLines = `${result?.stderr || ''}\n${result?.stdout || ''}\n${result?.error || ''}`
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean);
+    const signalLines = rawLines.filter((line) =>
+        !/^Fetching\s+\d+\s+files:/i.test(line) &&
+        !/^warnings\.warn/i.test(line) &&
+        !/UserWarning:/i.test(line) &&
+        !/resume_download.*deprecated/i.test(line) &&
+        !/HF Hub.*symlinks/i.test(line) &&
+        !/unauthenticated requests to the HF Hub/i.test(line)
+    );
+    const tail = (signalLines.length ? signalLines : rawLines).slice(-8).join('\n');
+    return tail || fallbackMessage;
 }
 
 function trimCapture(value) {
@@ -327,9 +573,10 @@ function inspectPython(command, args = [], env = {}) {
 
     const probe = `
 import importlib.util, json, sys
-info = {"python": sys.executable, "version": sys.version.split()[0]}
+info = {"python": sys.executable, "version": sys.version.split()[0], "version_info": list(sys.version_info[:3])}
 for name in ["pip", "numpy", "torch", "torchaudio", "transformers", "onnxruntime", "vllm", "tensorrt", "modelscope", "huggingface_hub", "funasr"]:
     info["has_" + name] = importlib.util.find_spec(name) is not None
+info["has_venv"] = importlib.util.find_spec("venv") is not None
 try:
     import torch
     info["torch_version"] = torch.__version__
@@ -387,26 +634,48 @@ function uniquePythonCandidates(candidates) {
     });
 }
 
-function hasAsrModel(cacheDir) {
-    try {
-        if (!isDirectory(cacheDir)) {
-            return false;
-        }
-        const candidateDirs = [
-            cacheDir,
-            path.join(cacheDir, 'hub'),
-            path.join(cacheDir, 'transformers')
-        ];
-        return candidateDirs.some((candidateDir) => {
-            if (!isDirectory(candidateDir)) {
-                return false;
-            }
-            return fs.readdirSync(candidateDir, { withFileTypes: true })
-                .some((entry) => entry.isDirectory() && /^models--/i.test(entry.name));
-        });
-    } catch {
-        return false;
-    }
+function checkAsrModelCache(cacheDir, modelId = DEFAULT_ASR_MODEL_ID) {
+    const snapshots = getHfSnapshotDirs(cacheDir, modelId);
+    const incompleteFiles = findIncompleteFiles(cacheDir);
+    const checks = snapshots.map((snapshotDir) => ({
+        snapshotDir,
+        ...checkRequiredGroups(snapshotDir, ASR_MODEL_REQUIRED_GROUPS)
+    }));
+    const usable = checks.find((check) => check.ok) || null;
+    return {
+        ok: Boolean(usable),
+        cacheDir,
+        modelId,
+        snapshotDir: usable?.snapshotDir || '',
+        snapshots: checks,
+        missing: usable ? [] : (checks[0]?.missing || ASR_MODEL_REQUIRED_GROUPS),
+        incompleteFileCount: incompleteFiles.length,
+        incompleteFiles: incompleteFiles.slice(0, 12)
+    };
+}
+
+function hasAsrModel(cacheDir, modelId = DEFAULT_ASR_MODEL_ID) {
+    return checkAsrModelCache(cacheDir, modelId).ok;
+}
+
+function checkCosyVoiceSource(rootDir) {
+    const check = checkRequiredGroups(rootDir, COSYVOICE_SOURCE_REQUIRED_GROUPS);
+    const incompleteFiles = findIncompleteFiles(rootDir);
+    return {
+        ...check,
+        incompleteFileCount: incompleteFiles.length,
+        incompleteFiles: incompleteFiles.slice(0, 12)
+    };
+}
+
+function checkCosyVoice3ModelDir(modelDir) {
+    const check = checkRequiredGroups(modelDir, COSYVOICE3_MODEL_REQUIRED_GROUPS);
+    const incompleteFiles = findIncompleteFiles(modelDir);
+    return {
+        ...check,
+        incompleteFileCount: incompleteFiles.length,
+        incompleteFiles: incompleteFiles.slice(0, 12)
+    };
 }
 
 function buildStep({
@@ -418,6 +687,8 @@ function buildStep({
     requiresNetwork = false,
     requiresApproval = true,
     mutatesSystem = false,
+    optional = false,
+    componentId = '',
     estimatedSize = '',
     command = null,
     notes = []
@@ -431,6 +702,8 @@ function buildStep({
         requiresNetwork,
         requiresApproval,
         mutatesSystem,
+        optional,
+        componentId,
         estimatedSize,
         command,
         notes
@@ -604,11 +877,13 @@ class VoiceRuntimeBootstrap {
         projectRoot,
         userDataPath,
         appDataPath,
+        runtimeRoot,
         platform = process.platform
     } = {}) {
         this.projectRoot = path.resolve(projectRoot || path.join(__dirname, '..'));
         this.userDataPath = path.resolve(userDataPath || path.join(this.projectRoot, '.local', 'user-data'));
         this.appDataPath = path.resolve(appDataPath || path.dirname(this.userDataPath));
+        this.runtimeRoot = normalizeString(runtimeRoot) ? path.resolve(runtimeRoot) : '';
         this.platform = platform;
         this.cachedSnapshot = null;
         this.activeBootstrapRun = null;
@@ -705,8 +980,14 @@ class VoiceRuntimeBootstrap {
 
     getPaths() {
         const buildCacheRoot = path.join(this.projectRoot, 'build-cache');
-        const localRuntimeRoot = path.join(this.userDataPath, 'local-runtimes');
+        const configuredRuntimeRoot = normalizeString(process.env.AILIS_VOICE_RUNTIME_ROOT) || this.runtimeRoot;
+        const runtimeRootConfigured = Boolean(configuredRuntimeRoot);
+        const localRuntimeRoot = runtimeRootConfigured
+            ? path.resolve(configuredRuntimeRoot)
+            : path.join(this.userDataPath, 'local-runtimes');
         const downloadCacheDir = path.join(localRuntimeRoot, 'downloads');
+        const pipCacheDir = path.join(localRuntimeRoot, 'pip-cache');
+        const manifestPath = path.join(localRuntimeRoot, VOICE_RUNTIME_MANIFEST_FILENAME);
         const uvRoot = path.join(localRuntimeRoot, 'uv');
         const uvBin = path.join(uvRoot, getExecutableName('uv', this.platform));
         const uvCacheDir = path.join(localRuntimeRoot, 'uv-cache');
@@ -717,14 +998,18 @@ class VoiceRuntimeBootstrap {
         const projectCosyVoiceRoot = path.join(buildCacheRoot, 'CosyVoice');
         const localCosyVoiceRoot = path.join(localRuntimeRoot, 'CosyVoice');
         const cosyVoiceRoot = normalizeString(process.env.AILIS_COSYVOICE_ROOT) ||
-            (isDirectory(projectCosyVoiceRoot) ? projectCosyVoiceRoot : localCosyVoiceRoot);
+            (runtimeRootConfigured
+                ? localCosyVoiceRoot
+                : (isDirectory(projectCosyVoiceRoot) ? projectCosyVoiceRoot : localCosyVoiceRoot));
         const cosyVoice3ModelDir = normalizeString(process.env.AILIS_COSYVOICE3_MODEL_DIR) ||
             path.join(cosyVoiceRoot, 'pretrained_models', DEFAULT_COSYVOICE3_MODEL_DIRNAME);
 
         const cosyVoice3Venv = path.join(buildCacheRoot, 'cosyvoice3-venv');
         const cosyVoice3VenvPython = getVenvPythonPath(cosyVoice3Venv, this.platform);
         const asrCacheDir = normalizeString(process.env.AILIS_ASR_CACHE_DIR) ||
-            path.join(this.userDataPath, 'asr-cache');
+            (runtimeRootConfigured
+                ? path.join(localRuntimeRoot, 'asr-cache')
+                : path.join(this.userDataPath, 'asr-cache'));
         const packagedAsrRuntime = this.getPackagedAsrRuntimeInfo();
 
         return {
@@ -732,8 +1017,11 @@ class VoiceRuntimeBootstrap {
             userDataPath: this.userDataPath,
             appDataPath: this.appDataPath,
             buildCacheRoot,
+            runtimeRootConfigured,
             localRuntimeRoot,
             downloadCacheDir,
+            pipCacheDir,
+            manifestPath,
             uvRoot,
             uvBin,
             uvCacheDir,
@@ -755,12 +1043,165 @@ class VoiceRuntimeBootstrap {
         };
     }
 
+    createRuntimeManifest(paths = this.getPaths()) {
+        return {
+            schema: 'ailis.voiceRuntimeManifest',
+            installerVersion: VOICE_RUNTIME_INSTALLER_VERSION,
+            runtimeRoot: paths.localRuntimeRoot,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            components: {}
+        };
+    }
+
+    readRuntimeManifest(paths = this.getPaths()) {
+        const manifest = readJsonFile(paths.manifestPath) || this.createRuntimeManifest(paths);
+        return {
+            ...manifest,
+            installerVersion: Number(manifest.installerVersion || 1),
+            runtimeRoot: manifest.runtimeRoot || paths.localRuntimeRoot,
+            components: manifest.components && typeof manifest.components === 'object'
+                ? manifest.components
+                : {}
+        };
+    }
+
+    async writeRuntimeManifest(paths = this.getPaths(), manifest = {}) {
+        const nextManifest = {
+            ...this.createRuntimeManifest(paths),
+            ...(manifest || {}),
+            schema: 'ailis.voiceRuntimeManifest',
+            installerVersion: VOICE_RUNTIME_INSTALLER_VERSION,
+            runtimeRoot: paths.localRuntimeRoot,
+            updatedAt: new Date().toISOString(),
+            components: manifest.components && typeof manifest.components === 'object'
+                ? manifest.components
+                : {}
+        };
+        await fsp.mkdir(path.dirname(paths.manifestPath), { recursive: true });
+        await fsp.writeFile(paths.manifestPath, JSON.stringify(nextManifest, null, 2), 'utf8');
+        return nextManifest;
+    }
+
+    async updateRuntimeComponent(paths = this.getPaths(), componentId, patch = {}) {
+        const manifest = this.readRuntimeManifest(paths);
+        const previous = manifest.components?.[componentId] || {};
+        const nextComponent = {
+            ...previous,
+            ...patch,
+            id: componentId,
+            updatedAt: new Date().toISOString()
+        };
+        return this.writeRuntimeManifest(paths, {
+            ...manifest,
+            components: {
+                ...(manifest.components || {}),
+                [componentId]: nextComponent
+            }
+        });
+    }
+
+    buildRuntimeComponents({ paths, manifest, selectedPython, selectedAsrPython, cosySourceCheck, cosyModelCheck, asrModelCheck }) {
+        const details = selectedPython?.details || {};
+        const asrDetails = selectedAsrPython?.details || {};
+        const manifestVoicePython = normalizeRelativePath(paths.localRuntimeRoot, manifest.voicePython || manifest.python || '');
+        const privatePythonReady = pathExists(paths.voiceVenvPython) ||
+            pathExists(manifestVoicePython) ||
+            (!paths.runtimeRootConfigured && pathExists(paths.cosyVoice3VenvPython));
+        const voicePackagesReady = Boolean(
+            details.has_pip &&
+            details.has_torch &&
+            details.has_torchaudio &&
+            details.has_transformers &&
+            details.has_huggingface_hub
+        );
+        const ttsSmoke = manifest.components?.cosyvoice3_smoke || {};
+        const asrSmoke = manifest.components?.asr_smoke || {};
+        const ttsSmokeVerified = ttsSmoke.status === 'verified' &&
+            ttsSmoke.modelDir === paths.cosyVoice3ModelDir &&
+            ttsSmoke.sourceDir === paths.cosyVoiceRoot;
+        const asrSmokeVerified = asrSmoke.status === 'verified' &&
+            asrSmoke.modelId === (asrModelCheck.modelId || DEFAULT_ASR_MODEL_ID) &&
+            asrSmoke.cacheDir === asrModelCheck.cacheDir;
+
+        return {
+            python: {
+                id: 'python',
+                title: 'AILIS 私有 Python',
+                requiredFor: ['tts', 'asr'],
+                ok: Boolean(privatePythonReady && selectedPython?.ok !== false),
+                status: privatePythonReady ? 'ready' : 'missing',
+                detail: privatePythonReady ? '私有 Python venv 已存在' : '需要创建私有 Python venv'
+            },
+            voice_packages: {
+                id: 'voice_packages',
+                title: '语音 Python 依赖',
+                requiredFor: ['tts', 'asr'],
+                ok: voicePackagesReady,
+                status: voicePackagesReady ? 'ready' : 'missing',
+                detail: voicePackagesReady ? 'torch/torchaudio/transformers 已可用' : '缺少语音运行依赖'
+            },
+            cosyvoice_source: {
+                id: 'cosyvoice_source',
+                title: 'CosyVoice 源码',
+                requiredFor: ['tts'],
+                ok: cosySourceCheck.ok,
+                status: cosySourceCheck.ok ? 'ready' : 'missing',
+                detail: cosySourceCheck.ok ? '源码完整' : summarizeRequirementCheck(cosySourceCheck),
+                check: cosySourceCheck
+            },
+            cosyvoice3_model: {
+                id: 'cosyvoice3_model',
+                title: 'CosyVoice3 模型',
+                requiredFor: ['tts'],
+                ok: cosyModelCheck.ok,
+                status: cosyModelCheck.ok ? 'ready' : 'incomplete',
+                detail: cosyModelCheck.ok ? '必需模型文件完整' : summarizeRequirementCheck(cosyModelCheck),
+                check: cosyModelCheck
+            },
+            cosyvoice3_smoke: {
+                id: 'cosyvoice3_smoke',
+                title: 'CosyVoice3 真实验证',
+                requiredFor: ['tts'],
+                ok: Boolean(ttsSmokeVerified),
+                status: ttsSmokeVerified ? 'verified' : 'pending',
+                detail: ttsSmokeVerified ? '已完成本地合成预热验证' : '需要真实加载模型并合成短音频'
+            },
+            asr_model: {
+                id: 'asr_model',
+                title: '本地 ASR 模型',
+                requiredFor: ['asr'],
+                optional: true,
+                ok: asrModelCheck.ok,
+                status: asrModelCheck.ok ? 'ready' : 'missing',
+                detail: asrModelCheck.ok ? 'ASR 最小模型文件完整' : summarizeRequirementCheck(asrModelCheck),
+                check: asrModelCheck
+            },
+            asr_smoke: {
+                id: 'asr_smoke',
+                title: 'ASR 真实验证',
+                requiredFor: ['asr'],
+                optional: true,
+                ok: Boolean(asrSmokeVerified && asrDetails.has_torch && asrDetails.has_transformers),
+                status: asrSmokeVerified ? 'verified' : 'pending',
+                detail: asrSmokeVerified ? '已完成本地 ASR 模型加载验证' : '需要真实加载 ASR 模型'
+            }
+        };
+    }
+
     findPythonCandidates(paths = this.getPaths()) {
+        const voiceRuntimeManifest = this.readRuntimeManifest(paths);
+        const packagedVoicePython = normalizeRelativePath(
+            paths.localRuntimeRoot,
+            voiceRuntimeManifest.voicePython || voiceRuntimeManifest.python || ''
+        );
+        const packagedVoiceEnv = buildRuntimeEnv(paths.localRuntimeRoot, voiceRuntimeManifest);
         const candidates = [
             { source: 'AILIS_COSYVOICE3_PYTHON', command: normalizeString(process.env.AILIS_COSYVOICE3_PYTHON), args: [] },
             { source: 'AILIS_VOICE_PYTHON', command: normalizeString(process.env.AILIS_VOICE_PYTHON), args: [] },
             { source: 'AILIS_ASR_PYTHON', command: normalizeString(process.env.AILIS_ASR_PYTHON), args: [] },
             { source: 'AILIS_PYTHON', command: normalizeString(process.env.AILIS_PYTHON), args: [] },
+            { source: 'packaged-voice-runtime', command: packagedVoicePython, args: [], env: packagedVoiceEnv },
             { source: 'packaged-asr-runtime', command: paths.packagedAsrVenvPython, args: [], env: paths.packagedAsrEnv || {} },
             { source: 'voice-venv', command: paths.voiceVenvPython, args: [] },
             { source: 'cosyvoice3-venv', command: paths.cosyVoice3VenvPython, args: [] },
@@ -784,6 +1225,7 @@ class VoiceRuntimeBootstrap {
         const privateSources = new Set([
             'AILIS_COSYVOICE3_PYTHON',
             'AILIS_VOICE_PYTHON',
+            'packaged-voice-runtime',
             'voice-venv',
             'cosyvoice3-venv'
         ]);
@@ -802,6 +1244,7 @@ class VoiceRuntimeBootstrap {
     chooseBestAsrPython(inspections = []) {
         const preferredSources = new Set([
             'packaged-asr-runtime',
+            'packaged-voice-runtime',
             'AILIS_ASR_PYTHON',
             'AILIS_VOICE_PYTHON',
             'voice-venv',
@@ -823,6 +1266,47 @@ class VoiceRuntimeBootstrap {
             null;
     }
 
+    canSeedPrivateVenvFromPython(candidate = null) {
+        if (!candidate || candidate.ok === false || !candidate.command) {
+            return false;
+        }
+        const privateSources = new Set([
+            'packaged-asr-runtime',
+            'packaged-voice-runtime',
+            'voice-venv',
+            'cosyvoice3-venv'
+        ]);
+        if (privateSources.has(candidate.source)) {
+            return false;
+        }
+        const details = candidate.details || {};
+        if (details.has_venv === false) {
+            return false;
+        }
+        const versionInfo = Array.isArray(details.version_info)
+            ? details.version_info.map((part) => Number(part))
+            : [];
+        if (versionInfo.length >= 2 && Number.isFinite(versionInfo[0]) && Number.isFinite(versionInfo[1])) {
+            return versionInfo[0] > 3 || (versionInfo[0] === 3 && versionInfo[1] >= 10);
+        }
+        const versionText = String(details.version || candidate.version || '');
+        const match = versionText.match(/(\d+)\.(\d+)/);
+        if (!match) {
+            return true;
+        }
+        const major = Number(match[1]);
+        const minor = Number(match[2]);
+        return major > 3 || (major === 3 && minor >= 10);
+    }
+
+    getPrivateVenvSeedPython(snapshot = this.cachedSnapshot || {}) {
+        const selected = snapshot.selectedPython;
+        if (this.canSeedPrivateVenvFromPython(selected)) {
+            return selected;
+        }
+        return null;
+    }
+
     diagnose() {
         const startedAt = Date.now();
         const paths = this.getPaths();
@@ -832,17 +1316,47 @@ class VoiceRuntimeBootstrap {
         const bestDetails = bestPython?.details || {};
         const bestAsrDetails = bestAsrPython?.details || {};
         const gpu = inspectGpu(this.platform);
+        const manifest = this.readRuntimeManifest(paths);
+        const cosySourceCheck = checkCosyVoiceSource(paths.cosyVoiceRoot);
+        const cosyModelCheck = checkCosyVoice3ModelDir(paths.cosyVoice3ModelDir);
         const cosyModelSizeBytes = directorySizeBytes(paths.cosyVoice3ModelDir, { maxFiles: 40000 });
         const resolvedAsrCacheDir = this.resolveAsrCacheDir(paths);
+        const asrModelId = normalizeString(process.env.AILIS_ASR_MODEL_ID) || DEFAULT_ASR_MODEL_ID;
+        const asrModelCheck = checkAsrModelCache(resolvedAsrCacheDir, asrModelId);
         const asrCacheSizeBytes = directorySizeBytes(resolvedAsrCacheDir, { maxFiles: 40000 });
+        const components = this.buildRuntimeComponents({
+            paths,
+            manifest,
+            selectedPython: bestPython,
+            selectedAsrPython: bestAsrPython,
+            cosySourceCheck,
+            cosyModelCheck,
+            asrModelCheck
+        });
+        const ttsReady = Boolean(
+            components.python.ok &&
+            components.voice_packages.ok &&
+            components.cosyvoice_source.ok &&
+            components.cosyvoice3_model.ok &&
+            components.cosyvoice3_smoke.ok
+        );
+        const asrReady = Boolean(
+            components.python.ok &&
+            components.voice_packages.ok &&
+            components.asr_model.ok &&
+            components.asr_smoke.ok
+        );
 
         const cosyVoice3 = {
-            ok: isDirectory(paths.cosyVoiceRoot) &&
-                isDirectory(paths.cosyVoice3ModelDir) &&
-                bestPython?.ok &&
-                Boolean(bestDetails.has_torch && bestDetails.has_torchaudio),
-            sourceExists: isDirectory(paths.cosyVoiceRoot),
-            modelExists: isDirectory(paths.cosyVoice3ModelDir),
+            ok: ttsReady,
+            playable: ttsReady,
+            sourceExists: cosySourceCheck.ok,
+            sourceDirExists: isDirectory(paths.cosyVoiceRoot),
+            sourceCheck: cosySourceCheck,
+            modelExists: cosyModelCheck.ok,
+            modelDirExists: isDirectory(paths.cosyVoice3ModelDir),
+            modelCheck: cosyModelCheck,
+            smokeVerified: components.cosyvoice3_smoke.ok,
             localRuntimeExists: isDirectory(paths.localRuntimeRoot),
             voiceVenvExists: isDirectory(paths.voiceVenv),
             voiceVenvPythonExists: pathExists(paths.voiceVenvPython),
@@ -878,10 +1392,12 @@ class VoiceRuntimeBootstrap {
         };
 
         const asr = {
-            ok: Boolean(bestAsrPython?.ok && bestAsrDetails.has_transformers && bestAsrDetails.has_torch && hasAsrModel(resolvedAsrCacheDir)),
+            ok: asrReady,
             cacheDir: resolvedAsrCacheDir,
-            modelId: normalizeString(process.env.AILIS_ASR_MODEL_ID) || DEFAULT_ASR_MODEL_ID,
-            modelCached: hasAsrModel(resolvedAsrCacheDir),
+            modelId: asrModelId,
+            modelCached: asrModelCheck.ok,
+            modelCheck: asrModelCheck,
+            smokeVerified: components.asr_smoke.ok,
             cacheSizeBytes: asrCacheSizeBytes,
             cacheSizeText: formatBytes(asrCacheSizeBytes),
             pythonSource: bestAsrPython?.source || '',
@@ -897,9 +1413,10 @@ class VoiceRuntimeBootstrap {
         };
 
         const snapshot = {
-            ok: Boolean(cosyVoice3.ok && asr.ok),
+            ok: Boolean(cosyVoice3.ok),
             generatedAt: new Date().toISOString(),
             durationMs: Date.now() - startedAt,
+            installerVersion: VOICE_RUNTIME_INSTALLER_VERSION,
             platform: {
                 os: this.platform,
                 arch: process.arch,
@@ -909,6 +1426,19 @@ class VoiceRuntimeBootstrap {
                 totalMemoryText: formatBytes(os.totalmem())
             },
             paths,
+            manifest,
+            components,
+            capabilities: {
+                tts: {
+                    ok: Boolean(cosyVoice3.ok),
+                    provider: 'cosyvoice3'
+                },
+                asr: {
+                    ok: Boolean(asr.ok),
+                    optional: true,
+                    provider: 'whisper'
+                }
+            },
             python,
             selectedPython: bestPython
                 ? {
@@ -938,57 +1468,95 @@ class VoiceRuntimeBootstrap {
 
     buildInstallPlan(snapshot = this.cachedSnapshot || {}) {
         const paths = snapshot.paths || this.getPaths();
+        const components = snapshot.components || {};
         const selectedPython = snapshot.selectedPython;
         const details = selectedPython?.details || {};
-        const privatePythonReady = pathExists(paths.voiceVenvPython) || pathExists(paths.cosyVoice3VenvPython);
+        const privatePythonReady = components.python?.ok ?? (
+            pathExists(paths.voiceVenvPython) ||
+            (!paths.runtimeRootConfigured && pathExists(paths.cosyVoice3VenvPython))
+        );
+        const venvSeedPython = this.getPrivateVenvSeedPython(snapshot);
+        const voiceDependenciesReady = components.voice_packages?.ok ?? Boolean(
+            details.has_pip &&
+            details.has_torch &&
+            details.has_torchaudio &&
+            details.has_transformers &&
+            details.has_huggingface_hub
+        );
         const steps = [];
 
         if (!selectedPython || !privatePythonReady) {
             steps.push(buildStep({
                 id: 'install_portable_python',
-                title: '安装 AILIS 私有 Python runtime',
-                reason: selectedPython
-                    ? '检测到系统 Python，但产品运行不应依赖用户全局环境；需要创建 AILIS 私有语音 venv。'
-                    : '未检测到可用 Python。产品不应要求用户手动安装系统 Python。',
+                title: venvSeedPython ? '创建 AILIS 私有 Python venv' : '安装 AILIS 私有 Python runtime',
+                reason: venvSeedPython
+                    ? `检测到可用 Python（${venvSeedPython.command}），将用它创建 AILIS 私有语音 venv，不下载 portable Python。`
+                    : selectedPython
+                        ? '检测到 Python，但它不能稳定创建 venv；需要下载 AILIS 私有 portable Python。'
+                        : '未检测到可用 Python。产品不应要求用户手动安装系统 Python。',
                 category: 'python',
                 automatic: true,
-                requiresNetwork: true,
+                requiresNetwork: !venvSeedPython,
                 mutatesSystem: false,
-                estimatedSize: '约 100-250 MB',
+                componentId: 'python',
+                estimatedSize: venvSeedPython ? '通常小于 50 MB（不含后续依赖）' : '约 100-250 MB',
                 command: {
-                    tool: 'uv',
-                    args: ['venv', paths.voiceVenv, '--python', DEFAULT_VOICE_PYTHON_VERSION, '--seed']
+                    tool: venvSeedPython ? venvSeedPython.command : 'uv',
+                    args: venvSeedPython
+                        ? [...(venvSeedPython.args || []), '-m', 'venv', '--clear', paths.voiceVenv]
+                        : ['venv', paths.voiceVenv, '--python', DEFAULT_VOICE_PYTHON_VERSION, '--seed']
                 },
                 notes: [
                     `目标目录：${paths.voiceVenv}`,
-                    '通过 uv managed Python 创建私有 venv，不写入系统 PATH。',
-                    'uv 本身也会安装到 AILIS 私有 local-runtimes 目录。'
+                    venvSeedPython
+                        ? '优先复用本机 Python 创建隔离 venv，不写入系统 PATH，也不修改系统 Python。'
+                        : '通过 uv managed Python 创建私有 venv，不写入系统 PATH。',
+                    venvSeedPython
+                        ? '只有完全没有可用 Python 时，才会下载 portable Python。'
+                        : 'uv 本身也会安装到当前语音运行时目录。'
                 ]
             }));
         }
 
-        if (!details.has_pip || !details.has_torch || !details.has_torchaudio || !details.has_transformers) {
+        if (!privatePythonReady || !voiceDependenciesReady) {
             steps.push(buildStep({
                 id: 'install_voice_python_packages',
                 title: '安装语音运行所需 Python 包',
-                reason: '缺少 pip/torch/torchaudio/transformers 等本地语音运行依赖。',
+                reason: privatePythonReady
+                    ? '缺少 pip/torch/torchaudio/transformers/huggingface_hub 等本地语音运行依赖。'
+                    : '将创建新的 AILIS 私有语音 venv，需要把 torch/torchaudio/transformers/huggingface_hub 等依赖安装进去。',
                 category: 'python-packages',
                 automatic: true,
                 requiresNetwork: true,
                 mutatesSystem: false,
+                componentId: 'voice_packages',
                 estimatedSize: '约 2-6 GB，取决于 CUDA/CPU wheel',
                 command: {
                     tool: 'python',
-                    args: ['-m', 'pip', 'install', '--upgrade', ...BASE_VOICE_PACKAGES]
+                    args: [
+                        '-m',
+                        'pip',
+                        'install',
+                        '--upgrade',
+                        '--prefer-binary',
+                        '--timeout',
+                        '120',
+                        '--retries',
+                        '10',
+                        '--cache-dir',
+                        paths.pipCacheDir,
+                        ...BASE_VOICE_PACKAGES
+                    ]
                 },
                 notes: [
                     '安装到 AILIS 私有 voice-venv，而不是系统 Python。',
-                    'pip 会按当前平台选择 CPU/CUDA/MPS 可用 wheel；检测到 GPU 后再尝试安装可选加速包。'
+                    'pip 会优先尝试清华/阿里/南大/中科大镜像，失败后自动换源，最后才回退 PyPI 官方源。',
+                    '下载的大 wheel 会进入 AILIS pip-cache，后续重试可以复用缓存，避免每次从头下载。'
                 ]
             }));
         }
 
-        if (!snapshot.cosyVoice3?.sourceExists) {
+        if (!(components.cosyvoice_source?.ok ?? snapshot.cosyVoice3?.sourceExists)) {
             steps.push(buildStep({
                 id: 'install_cosyvoice_source',
                 title: '安装 CosyVoice3 源码运行时',
@@ -997,6 +1565,7 @@ class VoiceRuntimeBootstrap {
                 automatic: true,
                 requiresNetwork: true,
                 mutatesSystem: false,
+                componentId: 'cosyvoice_source',
                 estimatedSize: '约 100-300 MB',
                 command: {
                     tool: 'git',
@@ -1009,7 +1578,7 @@ class VoiceRuntimeBootstrap {
             }));
         }
 
-        if (!snapshot.cosyVoice3?.modelExists) {
+        if (!(components.cosyvoice3_model?.ok ?? snapshot.cosyVoice3?.modelExists)) {
             steps.push(buildStep({
                 id: 'install_cosyvoice3_model',
                 title: '安装 CosyVoice3 本地模型',
@@ -1018,6 +1587,7 @@ class VoiceRuntimeBootstrap {
                 automatic: true,
                 requiresNetwork: true,
                 mutatesSystem: false,
+                componentId: 'cosyvoice3_model',
                 estimatedSize: '约 7-8 GB',
                 command: {
                     tool: 'huggingface_hub.snapshot_download',
@@ -1030,7 +1600,35 @@ class VoiceRuntimeBootstrap {
             }));
         }
 
-        if (!snapshot.asr?.modelCached) {
+        const canVerifyTts = Boolean(
+            (components.python?.ok ?? privatePythonReady) &&
+            (components.voice_packages?.ok ?? voiceDependenciesReady) &&
+            (components.cosyvoice_source?.ok ?? snapshot.cosyVoice3?.sourceExists) &&
+            (components.cosyvoice3_model?.ok ?? snapshot.cosyVoice3?.modelExists)
+        );
+        if (canVerifyTts && !(components.cosyvoice3_smoke?.ok ?? snapshot.cosyVoice3?.smokeVerified)) {
+            steps.push(buildStep({
+                id: 'verify_cosyvoice3_runtime',
+                title: '验证 CosyVoice3 本地合成',
+                reason: '模型文件存在后，需要真实加载模型并合成短音频，避免目录存在但运行失败。',
+                category: 'verification',
+                automatic: true,
+                requiresNetwork: false,
+                mutatesSystem: false,
+                componentId: 'cosyvoice3_smoke',
+                estimatedSize: '无需下载',
+                command: {
+                    tool: 'python',
+                    args: ['electron/cosyvoice3_tts_worker.py', 'warmup']
+                },
+                notes: [
+                    '这一步会真实加载 CosyVoice3 模型；首次可能较慢，但通过后会写入 manifest。',
+                    '未通过时不会假装语音已就绪。'
+                ]
+            }));
+        }
+
+        if (!(components.asr_model?.ok ?? snapshot.asr?.modelCached)) {
             steps.push(buildStep({
                 id: 'install_asr_model',
                 title: '安装本地 ASR 模型',
@@ -1039,6 +1637,8 @@ class VoiceRuntimeBootstrap {
                 automatic: true,
                 requiresNetwork: true,
                 mutatesSystem: false,
+                optional: true,
+                componentId: 'asr_model',
                 estimatedSize: '约 1-2 GB',
                 command: {
                     tool: 'huggingface_hub.snapshot_download',
@@ -1063,14 +1663,55 @@ class VoiceRuntimeBootstrap {
                 automatic: true,
                 requiresNetwork: true,
                 mutatesSystem: false,
+                optional: true,
                 estimatedSize: '约 200-500 MB',
                 command: {
                     tool: 'python',
-                    args: ['-m', 'pip', 'install', '--upgrade', 'onnxruntime-gpu']
+                    args: [
+                        '-m',
+                        'pip',
+                        'install',
+                        '--upgrade',
+                        '--prefer-binary',
+                        '--timeout',
+                        '120',
+                        '--retries',
+                        '10',
+                        '--cache-dir',
+                        paths.pipCacheDir,
+                        'onnxruntime-gpu'
+                    ]
                 },
                 notes: [
-                    '需要匹配 CUDA/驱动版本；失败时应回退到 CPU provider。',
+                    '需要匹配 CUDA/驱动版本；失败时应回退到 CPU provider，安装时同样使用镜像和本地 pip-cache。',
                     '这是性能优化，不应阻塞基本语音功能。'
+                ]
+            }));
+        }
+
+        const canVerifyAsr = Boolean(
+            (components.python?.ok ?? privatePythonReady) &&
+            (components.voice_packages?.ok ?? voiceDependenciesReady) &&
+            (components.asr_model?.ok ?? snapshot.asr?.modelCached)
+        );
+        if (canVerifyAsr && !(components.asr_smoke?.ok ?? snapshot.asr?.smokeVerified)) {
+            steps.push(buildStep({
+                id: 'verify_asr_runtime',
+                title: '验证本地 ASR 模型加载',
+                reason: 'ASR 模型缓存存在后，需要真实加载一次，避免半下载缓存被误判成功。',
+                category: 'verification',
+                automatic: true,
+                requiresNetwork: false,
+                mutatesSystem: false,
+                optional: true,
+                componentId: 'asr_smoke',
+                estimatedSize: '无需下载',
+                command: {
+                    tool: 'python',
+                    args: ['electron/desktop_asr_worker.py', 'load-model']
+                },
+                notes: [
+                    'ASR 是可选能力；验证失败不会阻塞 CosyVoice3 语音播放。'
                 ]
             }));
         }
@@ -1087,8 +1728,16 @@ class VoiceRuntimeBootstrap {
 
     getPreferredVoicePythonPath() {
         const paths = this.getPaths();
+        const manifest = this.readRuntimeManifest(paths);
+        const manifestVoicePython = normalizeRelativePath(paths.localRuntimeRoot, manifest.voicePython || manifest.python || '');
+        if (pathExists(manifestVoicePython)) {
+            return manifestVoicePython;
+        }
         if (pathExists(paths.voiceVenvPython)) {
             return paths.voiceVenvPython;
+        }
+        if (paths.runtimeRootConfigured) {
+            return '';
         }
         if (pathExists(paths.cosyVoice3VenvPython)) {
             return paths.cosyVoice3VenvPython;
@@ -1118,10 +1767,128 @@ class VoiceRuntimeBootstrap {
         return '';
     }
 
-    getUvEnv(paths = this.getPaths()) {
+    getUvPythonInstallMirrorCandidates() {
+        const configured = [
+            ...splitList(process.env.AILIS_UV_PYTHON_INSTALL_MIRRORS),
+            ...splitList(process.env.AILIS_PYTHON_INSTALL_MIRRORS),
+            normalizeString(process.env.AILIS_UV_PYTHON_INSTALL_MIRROR),
+            normalizeString(process.env.UV_PYTHON_INSTALL_MIRROR)
+        ].filter(Boolean);
+        const seen = new Set();
+        return [...configured, ...DEFAULT_UV_PYTHON_INSTALL_MIRRORS]
+            .map((entry) => normalizeMirrorUrl(entry))
+            .filter((entry) => {
+                const key = entry || '<default>';
+                if (seen.has(key)) {
+                    return false;
+                }
+                seen.add(key);
+                return true;
+            });
+    }
+
+    getPipIndexUrlCandidates() {
+        const explicit = [
+            ...splitList(process.env.AILIS_PIP_INDEX_URLS),
+            normalizeString(process.env.AILIS_PIP_INDEX_URL)
+        ].filter(Boolean);
+        const environment = [normalizeString(process.env.PIP_INDEX_URL)].filter(Boolean);
+        const seen = new Set();
+        return [...explicit, ...DEFAULT_PIP_INDEX_URLS, ...environment]
+            .map((entry) => normalizeIndexUrl(entry))
+            .filter((entry) => {
+                const key = entry || '<default>';
+                if (seen.has(key)) {
+                    return false;
+                }
+                seen.add(key);
+                return true;
+            });
+    }
+
+    pipSupportsResumeRetries(python) {
+        const result = runCommand(python, ['-m', 'pip', 'install', '--help'], {
+            cwd: this.projectRoot,
+            timeoutMs: 15000
+        });
+        return Boolean(result.ok && /--resume-retries/.test(`${result.stdout}\n${result.stderr}`));
+    }
+
+    buildPipInstallArgs({ paths = this.getPaths(), indexUrl = '', extraIndexUrls = [], packages = [], resumeRetries = false } = {}) {
+        const normalizedExtraIndexUrls = extraIndexUrls
+            .map((entry) => normalizeIndexUrl(entry))
+            .filter(Boolean);
+        const noBuildIsolation = packages.some((item) => /^openai-whisper(?:==|>=|<=|~=|$)/i.test(String(item || '').trim()));
+        return [
+            '-m',
+            'pip',
+            'install',
+            '--upgrade',
+            '--prefer-binary',
+            ...(noBuildIsolation ? ['--no-build-isolation'] : []),
+            '--disable-pip-version-check',
+            '--progress-bar',
+            'off',
+            '--timeout',
+            '120',
+            '--retries',
+            '10',
+            ...(resumeRetries ? ['--resume-retries', '20'] : []),
+            '--cache-dir',
+            paths.pipCacheDir,
+            ...(indexUrl ? ['--index-url', indexUrl] : []),
+            ...normalizedExtraIndexUrls.flatMap((url) => ['--extra-index-url', url]),
+            ...packages
+        ];
+    }
+
+    async installPipPackages({ paths = this.getPaths(), python, packages = [], extraIndexUrls = [], description = 'Python packages', onOutput } = {}) {
+        const installPython = normalizeString(python);
+        if (!installPython) {
+            throw new Error(`缺少 Python，无法安装 ${description}`);
+        }
+        await fsp.mkdir(paths.pipCacheDir, { recursive: true });
+        const indexes = this.getPipIndexUrlCandidates();
+        const resumeRetries = this.pipSupportsResumeRetries(installPython);
+        let lastError = '';
+        for (const indexUrl of indexes) {
+            const sourceLabel = indexUrl || 'PyPI 官方源';
+            onOutput?.({
+                stream: 'stdout',
+                text: `[AILIS runtime] installing ${description} from ${sourceLabel}\n`
+            });
+            const result = await runCommandAsync(installPython, this.buildPipInstallArgs({
+                paths,
+                indexUrl,
+                extraIndexUrls,
+                packages,
+                resumeRetries
+            }), {
+                cwd: this.projectRoot,
+                timeoutMs: INSTALL_TIMEOUT_MS,
+                onOutput
+            });
+            if (result.ok) {
+                return result;
+            }
+            lastError = [
+                lastError,
+                `[${sourceLabel}] ${result.stderr || result.error || `${description} 安装失败`}`
+            ].filter(Boolean).join('\n');
+            onOutput?.({
+                stream: 'stderr',
+                text: `[AILIS runtime] pip install failed from ${sourceLabel}; trying next source if available.\n`
+            });
+        }
+        throw new Error(`${description} 安装失败，已尝试 ${indexes.length} 个 pip 源。\n${lastError}`);
+    }
+
+    getUvEnv(paths = this.getPaths(), options = {}) {
+        const mirror = normalizeMirrorUrl(options.pythonInstallMirror);
         return {
             UV_CACHE_DIR: paths.uvCacheDir,
             UV_PYTHON_INSTALL_DIR: paths.pythonInstallDir,
+            ...(mirror ? { UV_PYTHON_INSTALL_MIRROR: mirror } : {}),
             UV_LINK_MODE: 'copy'
         };
     }
@@ -1210,23 +1977,80 @@ class VoiceRuntimeBootstrap {
 
     async installPrivatePython({ paths = this.getPaths(), onOutput } = {}) {
         await fsp.mkdir(paths.localRuntimeRoot, { recursive: true });
-        const uv = await this.ensureUv({ paths, onOutput });
-        const env = this.getUvEnv(paths);
+        const seedPython = this.getPrivateVenvSeedPython();
+        if (seedPython) {
+            onOutput?.({
+                stream: 'stdout',
+                text: `[AILIS runtime] creating voice venv with existing Python: ${seedPython.command}\n`
+            });
+            const venv = await runCommandAsync(seedPython.command, [
+                ...(seedPython.args || []),
+                '-m',
+                'venv',
+                '--clear',
+                paths.voiceVenv
+            ], {
+                cwd: this.projectRoot,
+                timeoutMs: INSTALL_TIMEOUT_MS,
+                onOutput
+            });
+            if (venv.ok && isFile(paths.voiceVenvPython)) {
+                await this.installPipPackages({
+                    paths,
+                    python: paths.voiceVenvPython,
+                    packages: ['pip', 'setuptools<81', 'wheel'],
+                    description: 'pip bootstrap packages',
+                    onOutput
+                });
+                return paths.voiceVenvPython;
+            }
+            onOutput?.({
+                stream: 'stderr',
+                text: `[AILIS runtime] existing Python venv creation failed; falling back to uv managed Python.\n${venv.stderr || venv.error || ''}\n`
+            });
+        }
 
-        const pythonInstall = await runCommandAsync(uv, [
-            'python',
-            'install',
-            '--install-dir',
-            paths.pythonInstallDir,
-            DEFAULT_VOICE_PYTHON_VERSION
-        ], {
-            cwd: this.projectRoot,
-            env,
-            timeoutMs: INSTALL_TIMEOUT_MS,
-            onOutput
-        });
-        if (!pythonInstall.ok) {
-            throw new Error(pythonInstall.stderr || pythonInstall.error || 'AILIS 私有 Python 下载/安装失败');
+        const uv = await this.ensureUv({ paths, onOutput });
+        const mirrors = this.getUvPythonInstallMirrorCandidates();
+        let env = this.getUvEnv(paths);
+        let lastPythonInstallError = '';
+        for (const mirror of mirrors) {
+            const sourceLabel = mirror || 'uv 默认源（GitHub）';
+            const attemptEnv = this.getUvEnv(paths, { pythonInstallMirror: mirror });
+            const args = [
+                'python',
+                'install',
+                '--install-dir',
+                paths.pythonInstallDir,
+                ...(mirror ? ['--mirror', mirror] : []),
+                DEFAULT_VOICE_PYTHON_VERSION
+            ];
+            onOutput?.({
+                stream: 'stdout',
+                text: `[AILIS runtime] installing managed Python from ${sourceLabel}\n`
+            });
+            const pythonInstall = await runCommandAsync(uv, args, {
+                cwd: this.projectRoot,
+                env: attemptEnv,
+                timeoutMs: INSTALL_TIMEOUT_MS,
+                onOutput
+            });
+            if (pythonInstall.ok) {
+                env = attemptEnv;
+                lastPythonInstallError = '';
+                break;
+            }
+            lastPythonInstallError = [
+                lastPythonInstallError,
+                `[${sourceLabel}] ${pythonInstall.stderr || pythonInstall.error || 'AILIS 私有 Python 下载/安装失败'}`
+            ].filter(Boolean).join('\n');
+            onOutput?.({
+                stream: 'stderr',
+                text: `[AILIS runtime] managed Python install failed from ${sourceLabel}; trying next source if available.\n`
+            });
+        }
+        if (lastPythonInstallError) {
+            throw new Error(`AILIS 私有 Python 下载/安装失败，已尝试 ${mirrors.length} 个源。\n${lastPythonInstallError}`);
         }
 
         const venv = await runCommandAsync(uv, [
@@ -1249,22 +2073,13 @@ class VoiceRuntimeBootstrap {
             throw new Error(`AILIS 私有 Python 创建后仍未找到：${paths.voiceVenvPython}`);
         }
 
-        const pip = await runCommandAsync(paths.voiceVenvPython, [
-            '-m',
-            'pip',
-            'install',
-            '--upgrade',
-            'pip',
-            'setuptools',
-            'wheel'
-        ], {
-            cwd: this.projectRoot,
-            timeoutMs: INSTALL_TIMEOUT_MS,
+        await this.installPipPackages({
+            paths,
+            python: paths.voiceVenvPython,
+            packages: ['pip', 'setuptools<81', 'wheel'],
+            description: 'pip bootstrap packages',
             onOutput
         });
-        if (!pip.ok) {
-            throw new Error(pip.stderr || pip.error || 'pip 初始化失败');
-        }
         return paths.voiceVenvPython;
     }
 
@@ -1272,7 +2087,7 @@ class VoiceRuntimeBootstrap {
         if (isFile(paths.voiceVenvPython)) {
             return paths.voiceVenvPython;
         }
-        if (isFile(paths.cosyVoice3VenvPython)) {
+        if (!paths.runtimeRootConfigured && isFile(paths.cosyVoice3VenvPython)) {
             return paths.cosyVoice3VenvPython;
         }
         return this.installPrivatePython({ paths, onOutput });
@@ -1280,21 +2095,14 @@ class VoiceRuntimeBootstrap {
 
     async installVoicePackages({ paths = this.getPaths(), onOutput } = {}) {
         const python = await this.getInstallPython({ paths, onOutput });
-        const result = await runCommandAsync(python, [
-            '-m',
-            'pip',
-            'install',
-            '--upgrade',
-            ...BASE_VOICE_PACKAGES
-        ], {
-            cwd: this.projectRoot,
-            timeoutMs: INSTALL_TIMEOUT_MS,
+        return this.installPipPackages({
+            paths,
+            python,
+            packages: BASE_VOICE_PACKAGES,
+            extraIndexUrls: DEFAULT_VOICE_PIP_EXTRA_INDEX_URLS,
+            description: 'voice runtime Python packages',
             onOutput
         });
-        if (!result.ok) {
-            throw new Error(result.stderr || result.error || '语音 Python 依赖安装失败');
-        }
-        return result;
     }
 
     async installGitHubZip({ url, targetDir, name, onOutput }) {
@@ -1379,16 +2187,25 @@ class VoiceRuntimeBootstrap {
         await fsp.mkdir(path.dirname(paths.cosyVoice3ModelDir), { recursive: true });
         const repoId = normalizeString(process.env.AILIS_COSYVOICE3_MODEL_REPO) || DEFAULT_COSYVOICE3_MODEL_REPO;
         const code = [
+            'import os',
+            'os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")',
             'from huggingface_hub import snapshot_download',
-            `snapshot_download(${JSON.stringify(repoId)}, local_dir=${JSON.stringify(paths.cosyVoice3ModelDir)}, local_dir_use_symlinks=False, resume_download=True)`
+            `snapshot_download(${JSON.stringify(repoId)}, local_dir=${JSON.stringify(paths.cosyVoice3ModelDir)}, local_dir_use_symlinks=False, allow_patterns=${JSON.stringify(COSYVOICE3_MODEL_ALLOW_PATTERNS)}, max_workers=4)`
         ].join('\n');
         const result = await runCommandAsync(python, ['-c', code], {
             cwd: this.projectRoot,
             timeoutMs: INSTALL_TIMEOUT_MS,
-            onOutput
+            onOutput,
+            env: {
+                HF_HUB_DISABLE_SYMLINKS_WARNING: '1'
+            }
         });
         if (!result.ok) {
-            throw new Error(result.stderr || result.error || 'CosyVoice3 模型下载失败');
+            throw new Error(summarizeCommandFailure(result, 'CosyVoice3 模型下载失败'));
+        }
+        const check = checkCosyVoice3ModelDir(paths.cosyVoice3ModelDir);
+        if (!check.ok) {
+            throw new Error(`CosyVoice3 模型下载后仍不完整：${summarizeRequirementCheck(check)}`);
         }
         return result;
     }
@@ -1398,37 +2215,119 @@ class VoiceRuntimeBootstrap {
         await fsp.mkdir(paths.asrCacheDir, { recursive: true });
         const modelId = normalizeString(process.env.AILIS_ASR_MODEL_ID) || DEFAULT_ASR_MODEL_ID;
         const code = [
+            'import os',
+            'os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")',
             'from huggingface_hub import snapshot_download',
-            `snapshot_download(${JSON.stringify(modelId)}, cache_dir=${JSON.stringify(paths.asrCacheDir)}, resume_download=True)`
+            `snapshot_download(${JSON.stringify(modelId)}, cache_dir=${JSON.stringify(paths.asrCacheDir)}, allow_patterns=${JSON.stringify(ASR_MODEL_ALLOW_PATTERNS)}, ignore_patterns=${JSON.stringify(ASR_MODEL_IGNORE_PATTERNS)}, max_workers=4)`
         ].join('\n');
         const result = await runCommandAsync(python, ['-c', code], {
             cwd: this.projectRoot,
             timeoutMs: INSTALL_TIMEOUT_MS,
-            onOutput
+            onOutput,
+            env: {
+                HF_HUB_DISABLE_SYMLINKS_WARNING: '1'
+            }
         });
         if (!result.ok) {
-            throw new Error(result.stderr || result.error || 'ASR 模型下载失败');
+            throw new Error(summarizeCommandFailure(result, 'ASR 模型下载失败'));
         }
+        const check = checkAsrModelCache(paths.asrCacheDir, modelId);
+        if (!check.ok) {
+            throw new Error(`ASR 模型下载后仍不完整：${summarizeRequirementCheck(check)}`);
+        }
+        return result;
+    }
+
+    async verifyCosyVoice3Runtime({ paths = this.getPaths(), onOutput } = {}) {
+        const python = await this.getInstallPython({ paths, onOutput });
+        const code = [
+            'import importlib.util, json, os',
+            `worker_path = ${JSON.stringify(path.join(this.projectRoot, 'electron', 'cosyvoice3_tts_worker.py'))}`,
+            'spec = importlib.util.spec_from_file_location("ailis_cosyvoice3_tts_worker", worker_path)',
+            'module = importlib.util.module_from_spec(spec)',
+            'spec.loader.exec_module(module)',
+            'result = module.warmup()',
+            'print(json.dumps({"ok": True, "result": result}, ensure_ascii=False))'
+        ].join('\n');
+        const result = await runCommandAsync(python, ['-c', code], {
+            cwd: this.projectRoot,
+            timeoutMs: INSTALL_TIMEOUT_MS,
+            onOutput,
+            env: {
+                AILIS_PROJECT_ROOT: this.projectRoot,
+                AILIS_VOICE_RUNTIME_ROOT: paths.localRuntimeRoot,
+                AILIS_COSYVOICE_ROOT: paths.cosyVoiceRoot,
+                AILIS_COSYVOICE3_MODEL_DIR: paths.cosyVoice3ModelDir,
+                AILIS_COSYVOICE3_LOCAL_ONLY: '1',
+                AILIS_COSYVOICE3_DISABLE_REMOTE_TEXT_FRONTEND: '1',
+                KMP_DUPLICATE_LIB_OK: 'TRUE',
+                HF_HUB_OFFLINE: '1',
+                TRANSFORMERS_OFFLINE: '1',
+                HF_DATASETS_OFFLINE: '1',
+                MODELSCOPE_OFFLINE: '1'
+            }
+        });
+        if (!result.ok) {
+            throw new Error(summarizeCommandFailure(result, 'CosyVoice3 真实验证失败'));
+        }
+        await this.updateRuntimeComponent(paths, 'cosyvoice3_smoke', {
+            status: 'verified',
+            modelDir: paths.cosyVoice3ModelDir,
+            sourceDir: paths.cosyVoiceRoot,
+            verifiedAt: new Date().toISOString(),
+            durationMs: result.durationMs || 0
+        });
+        return result;
+    }
+
+    async verifyAsrRuntime({ paths = this.getPaths(), onOutput } = {}) {
+        const python = await this.getInstallPython({ paths, onOutput });
+        const modelId = normalizeString(process.env.AILIS_ASR_MODEL_ID) || DEFAULT_ASR_MODEL_ID;
+        const cacheDir = this.resolveAsrCacheDir(paths);
+        const code = [
+            'import importlib.util, json',
+            `worker_path = ${JSON.stringify(path.join(this.projectRoot, 'electron', 'desktop_asr_worker.py'))}`,
+            'spec = importlib.util.spec_from_file_location("ailis_desktop_asr_worker", worker_path)',
+            'module = importlib.util.module_from_spec(spec)',
+            'spec.loader.exec_module(module)',
+            'module.ensure_pipeline()',
+            'print(json.dumps({"ok": True, "model": module.MODEL_ID}, ensure_ascii=False))'
+        ].join('\n');
+        const result = await runCommandAsync(python, ['-c', code], {
+            cwd: this.projectRoot,
+            timeoutMs: INSTALL_TIMEOUT_MS,
+            onOutput,
+            env: {
+                AILIS_ASR_MODEL_ID: modelId,
+                AILIS_ASR_CACHE_DIR: cacheDir,
+                AILIS_ASR_LOCAL_ONLY: '1',
+                HF_HUB_OFFLINE: '1',
+                TRANSFORMERS_OFFLINE: '1',
+                HF_DATASETS_OFFLINE: '1'
+            }
+        });
+        if (!result.ok) {
+            throw new Error(summarizeCommandFailure(result, 'ASR 真实验证失败'));
+        }
+        await this.updateRuntimeComponent(paths, 'asr_smoke', {
+            status: 'verified',
+            modelId,
+            cacheDir,
+            verifiedAt: new Date().toISOString(),
+            durationMs: result.durationMs || 0
+        });
         return result;
     }
 
     async installOnnxRuntimeGpu({ paths = this.getPaths(), onOutput } = {}) {
         const python = await this.getInstallPython({ paths, onOutput });
-        const result = await runCommandAsync(python, [
-            '-m',
-            'pip',
-            'install',
-            '--upgrade',
-            'onnxruntime-gpu'
-        ], {
-            cwd: this.projectRoot,
-            timeoutMs: INSTALL_TIMEOUT_MS,
+        return this.installPipPackages({
+            paths,
+            python,
+            packages: ['onnxruntime-gpu'],
+            description: 'ONNX Runtime GPU',
             onOutput
         });
-        if (!result.ok) {
-            throw new Error(result.stderr || result.error || 'ONNX Runtime GPU 安装失败');
-        }
-        return result;
     }
 
     async runInstallStep(step, { run, dryRun = false } = {}) {
@@ -1468,6 +2367,14 @@ class VoiceRuntimeBootstrap {
         }
 
         try {
+            if (step.componentId) {
+                await this.updateRuntimeComponent(paths, step.componentId, {
+                    status: step.id.startsWith('verify_') ? 'verifying' : 'installing',
+                    stepId: step.id,
+                    title: step.title,
+                    startedAt: stepRun.startedAt
+                });
+            }
             let result;
             if (step.id === 'install_portable_python') {
                 result = await this.installPrivatePython({ paths, onOutput });
@@ -1481,6 +2388,10 @@ class VoiceRuntimeBootstrap {
                 result = await this.installAsrModel({ paths, onOutput });
             } else if (step.id === 'install_onnxruntime_gpu') {
                 result = await this.installOnnxRuntimeGpu({ paths, onOutput });
+            } else if (step.id === 'verify_cosyvoice3_runtime') {
+                result = await this.verifyCosyVoice3Runtime({ paths, onOutput });
+            } else if (step.id === 'verify_asr_runtime') {
+                result = await this.verifyAsrRuntime({ paths, onOutput });
             } else {
                 throw new Error(`未知安装步骤：${step.id}`);
             }
@@ -1492,6 +2403,15 @@ class VoiceRuntimeBootstrap {
                 stderr: result?.stderr || '',
                 durationMs: result?.durationMs || undefined
             };
+            if (step.componentId) {
+                await this.updateRuntimeComponent(paths, step.componentId, {
+                    status: step.id.startsWith('verify_') ? 'verified' : 'installed',
+                    stepId: step.id,
+                    title: step.title,
+                    completedAt: new Date().toISOString(),
+                    durationMs: result?.durationMs || undefined
+                });
+            }
         } catch (error) {
             stepRun.status = 'failed';
             stepRun.error = error?.message || String(error);
@@ -1499,6 +2419,15 @@ class VoiceRuntimeBootstrap {
                 ok: false,
                 error: stepRun.error
             };
+            if (step.componentId) {
+                await this.updateRuntimeComponent(paths, step.componentId, {
+                    status: 'failed',
+                    stepId: step.id,
+                    title: step.title,
+                    failedAt: new Date().toISOString(),
+                    error: stepRun.error
+                });
+            }
             throw error;
         } finally {
             stepRun.finishedAt = new Date().toISOString();
@@ -1517,19 +2446,37 @@ class VoiceRuntimeBootstrap {
 
         const dryRun = Boolean(options.dryRun);
         const allowNetwork = Boolean(options.allowNetwork);
-        const snapshot = this.diagnose();
+        const includeOptional = Boolean(options.includeOptional);
         const requestedStepIds = Array.isArray(options.stepIds)
             ? new Set(options.stepIds.map((id) => String(id || '').trim()).filter(Boolean))
             : null;
-        const steps = snapshot.installPlan.steps.filter((step) =>
-            !requestedStepIds || requestedStepIds.has(step.id)
-        );
+        const selectRunnableSteps = (currentSnapshot, completedStepIds = new Set()) =>
+            (currentSnapshot.installPlan?.steps || []).filter((step) => {
+                if (completedStepIds.has(step.id)) {
+                    return false;
+                }
+                if (requestedStepIds) {
+                    return requestedStepIds.has(step.id);
+                }
+                return includeOptional || !step.optional;
+            });
+
+        let snapshot = this.diagnose();
+        let steps = selectRunnableSteps(snapshot);
+        const completedStepIds = new Set();
+        const isStepInScope = (step) => {
+            if (requestedStepIds) {
+                return requestedStepIds.has(step.id);
+            }
+            return includeOptional || !step.optional;
+        };
         const run = {
             id: `voice-runtime-bootstrap-${Date.now()}`,
             ok: false,
             status: 'running',
             dryRun,
             allowNetwork,
+            includeOptional,
             startedAt: new Date().toISOString(),
             steps: [],
             initialSnapshot: snapshot
@@ -1545,16 +2492,46 @@ class VoiceRuntimeBootstrap {
                 return run;
             }
 
-            const blockedNetworkStep = steps.find((step) => step.requiresNetwork && !allowNetwork && !dryRun);
-            if (blockedNetworkStep) {
-                run.status = 'blocked';
-                run.ok = false;
-                run.error = `安装步骤需要联网授权：${blockedNetworkStep.title}`;
-                return run;
-            }
+            for (let pass = 0; pass < 6; pass += 1) {
+                steps = selectRunnableSteps(snapshot, completedStepIds);
+                if (!steps.length) {
+                    break;
+                }
 
-            for (const step of steps) {
-                await this.runInstallStep(step, { run, dryRun });
+                const blockedNetworkStep = steps.find((step) => step.requiresNetwork && !allowNetwork && !dryRun);
+                if (blockedNetworkStep) {
+                    run.status = 'blocked';
+                    run.ok = false;
+                    run.error = `安装步骤需要联网授权：${blockedNetworkStep.title}`;
+                    return run;
+                }
+
+                for (const step of steps) {
+                    try {
+                        await this.runInstallStep(step, { run, dryRun });
+                        completedStepIds.add(step.id);
+                    } catch (error) {
+                        if (!step.optional) {
+                            throw error;
+                        }
+                        completedStepIds.add(step.id);
+                        run.warnings = [
+                            ...(run.warnings || []),
+                            `${step.title} 未完成：${error?.message || error}`
+                        ];
+                    }
+                }
+
+                if (dryRun || requestedStepIds) {
+                    break;
+                }
+
+                snapshot = this.diagnose();
+                const nextRequiredSteps = (snapshot.installPlan?.steps || [])
+                    .filter((step) => isStepInScope(step) && !completedStepIds.has(step.id));
+                if (!nextRequiredSteps.length) {
+                    break;
+                }
             }
 
             run.finalSnapshot = dryRun ? snapshot : this.diagnose();
@@ -1587,15 +2564,78 @@ class VoiceRuntimeBootstrap {
         const paths = this.getPaths();
         const preferredPython = this.getPreferredVoicePythonPath();
         const preferredAsrPython = this.getPreferredAsrPythonPath();
+        const manifest = this.readRuntimeManifest(paths);
+        const cosySourceCheck = checkCosyVoiceSource(paths.cosyVoiceRoot);
+        const cosyModelCheck = checkCosyVoice3ModelDir(paths.cosyVoice3ModelDir);
         const cosyModelSizeBytes = directorySizeBytes(paths.cosyVoice3ModelDir, { maxFiles: 4000 });
         const resolvedAsrCacheDir = this.resolveAsrCacheDir(paths);
+        const asrModelId = normalizeString(process.env.AILIS_ASR_MODEL_ID) || DEFAULT_ASR_MODEL_ID;
+        const asrModelCheck = checkAsrModelCache(resolvedAsrCacheDir, asrModelId);
         const asrCacheSizeBytes = directorySizeBytes(resolvedAsrCacheDir, { maxFiles: 4000 });
         const cachedAcceleration = this.cachedSnapshot?.cosyVoice3?.acceleration;
         const cachedDependencies = this.cachedSnapshot?.asr?.dependencies;
+        const fastPython = preferredPython
+            ? {
+                ok: true,
+                source: 'fast-path',
+                command: preferredPython,
+                args: [],
+                details: {
+                    has_pip: true,
+                    has_torch: true,
+                    has_torchaudio: true,
+                    has_transformers: true,
+                    has_huggingface_hub: true
+                }
+            }
+            : null;
+        const fastAsrPython = preferredAsrPython
+            ? {
+                ok: true,
+                source: 'fast-asr-path',
+                command: preferredAsrPython,
+                args: [],
+                details: {
+                    has_pip: true,
+                    has_torch: true,
+                    has_torchaudio: true,
+                    has_transformers: true,
+                    has_huggingface_hub: true
+                }
+            }
+            : fastPython;
+        const components = this.buildRuntimeComponents({
+            paths,
+            manifest,
+            selectedPython: fastPython,
+            selectedAsrPython: fastAsrPython,
+            cosySourceCheck,
+            cosyModelCheck,
+            asrModelCheck
+        });
+        const ttsReady = Boolean(
+            components.python.ok &&
+            components.voice_packages.ok &&
+            components.cosyvoice_source.ok &&
+            components.cosyvoice3_model.ok &&
+            components.cosyvoice3_smoke.ok
+        );
+        const asrReady = Boolean(
+            components.python.ok &&
+            components.voice_packages.ok &&
+            components.asr_model.ok &&
+            components.asr_smoke.ok
+        );
         const cosyVoice3 = {
-            ok: Boolean(preferredPython && isDirectory(paths.cosyVoiceRoot) && isDirectory(paths.cosyVoice3ModelDir)),
-            sourceExists: isDirectory(paths.cosyVoiceRoot),
-            modelExists: isDirectory(paths.cosyVoice3ModelDir),
+            ok: ttsReady,
+            playable: ttsReady,
+            sourceExists: cosySourceCheck.ok,
+            sourceDirExists: isDirectory(paths.cosyVoiceRoot),
+            sourceCheck: cosySourceCheck,
+            modelExists: cosyModelCheck.ok,
+            modelDirExists: isDirectory(paths.cosyVoice3ModelDir),
+            modelCheck: cosyModelCheck,
+            smokeVerified: components.cosyvoice3_smoke.ok,
             modelDir: paths.cosyVoice3ModelDir,
             modelSizeBytes: cosyModelSizeBytes,
             modelSizeText: formatBytes(cosyModelSizeBytes),
@@ -1610,23 +2650,39 @@ class VoiceRuntimeBootstrap {
             }
         };
         const asr = {
-            ok: Boolean(preferredAsrPython && hasAsrModel(resolvedAsrCacheDir)),
+            ok: asrReady,
             cacheDir: resolvedAsrCacheDir,
-            modelId: normalizeString(process.env.AILIS_ASR_MODEL_ID) || DEFAULT_ASR_MODEL_ID,
-            modelCached: hasAsrModel(resolvedAsrCacheDir),
+            modelId: asrModelId,
+            modelCached: asrModelCheck.ok,
+            modelCheck: asrModelCheck,
+            smokeVerified: components.asr_smoke.ok,
             cacheSizeBytes: asrCacheSizeBytes,
             cacheSizeText: formatBytes(asrCacheSizeBytes),
             pythonCommand: preferredAsrPython,
             dependencies: cachedDependencies || {}
         };
         const snapshot = {
-            ok: Boolean(cosyVoice3.ok && asr.ok),
+            ok: Boolean(cosyVoice3.ok),
             generatedAt: new Date().toISOString(),
+            installerVersion: VOICE_RUNTIME_INSTALLER_VERSION,
             platform: {
                 os: this.platform,
                 arch: process.arch
             },
             paths,
+            manifest,
+            components,
+            capabilities: {
+                tts: {
+                    ok: Boolean(cosyVoice3.ok),
+                    provider: 'cosyvoice3'
+                },
+                asr: {
+                    ok: Boolean(asr.ok),
+                    optional: true,
+                    provider: 'whisper'
+                }
+            },
             selectedPython: preferredPython
                 ? {
                     source: 'fast-path',
@@ -1637,7 +2693,8 @@ class VoiceRuntimeBootstrap {
                         has_pip: true,
                         has_torch: true,
                         has_torchaudio: true,
-                        has_transformers: true
+                        has_transformers: true,
+                        has_huggingface_hub: true
                     }
                 }
                 : null,
@@ -1651,7 +2708,8 @@ class VoiceRuntimeBootstrap {
                         has_pip: true,
                         has_torch: true,
                         has_torchaudio: true,
-                        has_transformers: true
+                        has_transformers: true,
+                        has_huggingface_hub: true
                     }
                 }
                 : null,
@@ -1666,8 +2724,12 @@ class VoiceRuntimeBootstrap {
             platform: snapshot.platform,
             cosyVoice3: snapshot.cosyVoice3,
             asr: snapshot.asr,
+            components: snapshot.components,
+            capabilities: snapshot.capabilities,
+            installerVersion: snapshot.installerVersion,
             preferredPython,
             preferredAsrPython,
+            paths,
             installStepCount: snapshot.installPlan.steps.length,
             installPlan: snapshot.installPlan,
             bootstrap: this.getBootstrapStatus(),
@@ -1687,16 +2749,25 @@ class VoiceRuntimeBootstrap {
             ok: this.cachedSnapshot.ok,
             status: this.cachedSnapshot.ok ? 'ready' : 'needs_setup',
             generatedAt: this.cachedSnapshot.generatedAt,
+            installerVersion: this.cachedSnapshot.installerVersion || VOICE_RUNTIME_INSTALLER_VERSION,
             platform: this.cachedSnapshot.platform,
+            paths: this.cachedSnapshot.paths,
+            components: this.cachedSnapshot.components || {},
+            capabilities: this.cachedSnapshot.capabilities || {
+                tts: { ok: Boolean(this.cachedSnapshot.cosyVoice3?.ok), provider: 'cosyvoice3' },
+                asr: { ok: Boolean(this.cachedSnapshot.asr?.ok), optional: true, provider: 'whisper' }
+            },
             cosyVoice3: {
                 ok: this.cachedSnapshot.cosyVoice3.ok,
                 sourceExists: this.cachedSnapshot.cosyVoice3.sourceExists,
                 modelExists: this.cachedSnapshot.cosyVoice3.modelExists,
+                smokeVerified: this.cachedSnapshot.cosyVoice3.smokeVerified,
                 acceleration: this.cachedSnapshot.cosyVoice3.acceleration
             },
             asr: {
                 ok: this.cachedSnapshot.asr.ok,
                 modelCached: this.cachedSnapshot.asr.modelCached,
+                smokeVerified: this.cachedSnapshot.asr.smokeVerified,
                 dependencies: this.cachedSnapshot.asr.dependencies,
                 pythonCommand: this.cachedSnapshot.asr.pythonCommand || ''
             },

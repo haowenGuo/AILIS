@@ -1,9 +1,10 @@
 const fs = require('fs');
+const crypto = require('crypto');
 const path = require('path');
 const { screen } = require('electron');
 
 const STATE_FILE_NAME = 'desktop-state.json';
-const STATE_VERSION = 26;
+const STATE_VERSION = 29;
 // Transparent Electron frame size. Avatar visual size is compensated in the pet renderer.
 const PET_BASE_WIDTH = 720;
 const PET_BASE_HEIGHT = 960;
@@ -13,12 +14,15 @@ const SPEECH_MODE_OPTIONS = ['off', 'server', 'cosyvoice3'];
 const RECOGNITION_MODE_OPTIONS = ['fast-vad', 'auto-vad', 'continuous', 'manual'];
 const CONVERSATION_MODE_OPTIONS = ['assistant', 'daily'];
 const DEFAULT_CONVERSATION_MODE = 'assistant';
+const UI_LANGUAGE_OPTIONS = ['zh-CN', 'en', 'ja', 'ko'];
+const DEFAULT_UI_LANGUAGE = 'zh-CN';
 const BACKEND_MODE_OPTIONS = ['ailis'];
 const DEFAULT_BACKEND_BASE_URL = '';
 const DEFAULT_BACKEND_MODE = 'ailis';
-const DEFAULT_OPENCLAW_GATEWAY_URL = 'ws://127.0.0.1:19011';
+const DEFAULT_AGENT_RUNTIME_GATEWAY_URL = 'ws://127.0.0.1:19011';
+const DEFAULT_OPENCLAW_GATEWAY_URL = DEFAULT_AGENT_RUNTIME_GATEWAY_URL;
 const DEFAULT_AILIS_STATE_DIR = '';
-const LLM_PROVIDER_OPTIONS = ['openai-compatible', 'openai-responses', 'anthropic', 'gemini', 'vllm', 'ollama'];
+const LLM_PROVIDER_OPTIONS = ['openai-compatible', 'openai-responses', 'anthropic', 'gemini', 'ollama'];
 const DEFAULT_LLM_PROVIDER = 'openai-compatible';
 const DEFAULT_LLM_BASE_URL = 'https://ark.cn-beijing.volces.com/api/v3';
 const DEFAULT_LLM_MODEL = 'doubao-seed-2-0-mini-260215';
@@ -36,7 +40,7 @@ const LLM_PROVIDER_DEFAULT_MODELS = Object.freeze({
     anthropic: 'claude-3-5-haiku-latest',
     gemini: 'gemini-2.0-flash',
     vllm: 'Qwen/Qwen2.5-7B-Instruct',
-    ollama: 'llama3.2'
+    ollama: 'qwen2.5:1.5b'
 });
 const DEFAULT_LLM_API_KEY = '';
 const DEFAULT_LLM_TEMPERATURE = 0.8;
@@ -54,7 +58,7 @@ const DEFAULT_ELEVENLABS_SIMILARITY_BOOST = 0.78;
 const DEFAULT_ELEVENLABS_STYLE = 0.05;
 const DEFAULT_ELEVENLABS_SPEED = 0.9;
 const DEFAULT_ELEVENLABS_USE_SPEAKER_BOOST = true;
-const ELEVENLABS_LANGUAGE_CODES = ['zh', 'en', 'ja'];
+const ELEVENLABS_LANGUAGE_CODES = ['zh', 'en', 'ja', 'ko'];
 const DEFAULT_ELEVENLABS_VOICE_PROFILES = Object.freeze({
     zh: Object.freeze({
         voiceId: DEFAULT_ELEVENLABS_VOICE_ID,
@@ -90,6 +94,18 @@ const DEFAULT_ELEVENLABS_VOICE_PROFILES = Object.freeze({
         similarityBoost: 0.78,
         style: 0.08,
         speed: 0.88,
+        useSpeakerBoost: true
+    }),
+    ko: Object.freeze({
+        voiceId: DEFAULT_ELEVENLABS_VOICE_ID,
+        modelId: DEFAULT_ELEVENLABS_MODEL_ID,
+        languageCode: 'ko',
+        outputFormat: DEFAULT_ELEVENLABS_OUTPUT_FORMAT,
+        optimizeStreamingLatency: 0,
+        stability: 0.54,
+        similarityBoost: 0.78,
+        style: 0.08,
+        speed: 0.9,
         useSpeakerBoost: true
     })
 });
@@ -197,10 +213,33 @@ function normalizeConversationMode(mode) {
         : DEFAULT_CONVERSATION_MODE;
 }
 
-function normalizeOpenClawGatewayUrl(value) {
+function normalizeUiLanguage(value) {
+    const normalizedValue = String(value || '').trim();
+    if (UI_LANGUAGE_OPTIONS.includes(normalizedValue)) {
+        return normalizedValue;
+    }
+
+    const normalizedAlias = normalizedValue.toLowerCase().replace(/_/g, '-');
+    if (['zh', 'zh-cn', 'zh-hans', 'cn', 'chinese'].includes(normalizedAlias)) {
+        return 'zh-CN';
+    }
+    if (['en', 'en-us', 'en-gb', 'english'].includes(normalizedAlias)) {
+        return 'en';
+    }
+    if (['ja', 'ja-jp', 'jp', 'japanese'].includes(normalizedAlias)) {
+        return 'ja';
+    }
+    if (['ko', 'ko-kr', 'kr', 'korean'].includes(normalizedAlias)) {
+        return 'ko';
+    }
+
+    return DEFAULT_UI_LANGUAGE;
+}
+
+function normalizeAgentRuntimeGatewayUrl(value) {
     const normalizedValue = String(value || '').trim();
     if (!normalizedValue) {
-        return DEFAULT_OPENCLAW_GATEWAY_URL;
+        return DEFAULT_AGENT_RUNTIME_GATEWAY_URL;
     }
     if (/^wss?:\/\//i.test(normalizedValue)) {
         return normalizedValue;
@@ -211,7 +250,15 @@ function normalizeOpenClawGatewayUrl(value) {
     return `ws://${normalizedValue}`;
 }
 
+function normalizeOpenClawGatewayUrl(value) {
+    return normalizeAgentRuntimeGatewayUrl(value);
+}
+
 function normalizeAILISStateDir(value) {
+    return String(value || '').trim().replace(/^["']|["']$/g, '');
+}
+
+function normalizeVoiceRuntimeRoot(value) {
     return String(value || '').trim().replace(/^["']|["']$/g, '');
 }
 
@@ -232,8 +279,186 @@ function normalizeLlmModel(value) {
     return normalizedValue || DEFAULT_LLM_MODEL;
 }
 
+function normalizeOllamaModelHistory(value) {
+    const items = Array.isArray(value) ? value : [];
+    const seen = new Set();
+    const result = [];
+    for (const item of items) {
+        const model = String(item || '').trim();
+        const key = model.toLowerCase();
+        if (!model || seen.has(key)) {
+            continue;
+        }
+        seen.add(key);
+        result.push(model.slice(0, 200));
+        if (result.length >= 80) {
+            break;
+        }
+    }
+    return result;
+}
+
+function normalizeOllamaTargetSource(value = '') {
+    const normalized = String(value || '').trim().toLowerCase();
+    if (['installed', 'existing', 'manual'].includes(normalized)) {
+        return 'installed';
+    }
+    if (['local', 'local_import', 'local-import', 'file'].includes(normalized)) {
+        return 'local_import';
+    }
+    if (['online', 'online_pull', 'online-pull', 'remote', 'pull'].includes(normalized)) {
+        return 'online_pull';
+    }
+    return '';
+}
+
+function ollamaSourceToLegacyMode(source = '') {
+    const normalized = normalizeOllamaTargetSource(source);
+    if (normalized === 'local_import') {
+        return 'local';
+    }
+    if (normalized === 'online_pull') {
+        return 'online';
+    }
+    return 'installed';
+}
+
+function normalizeOllamaTarget(value = {}, fallback = {}) {
+    const target = value && typeof value === 'object' ? value : {};
+    const source = normalizeOllamaTargetSource(
+        target.source ||
+        target.deploymentMode ||
+        target.ollamaDeploymentMode ||
+        fallback.source ||
+        fallback.ollamaDeploymentMode ||
+        fallback.deploymentMode
+    ) || (target.localPath || target.localModelPath || fallback.localModelPath ? 'local_import' : 'installed');
+    const modelId = normalizeLlmModel(
+        target.modelId ||
+        target.model ||
+        fallback.modelId ||
+        fallback.model ||
+        fallback.llmModel ||
+        LLM_PROVIDER_DEFAULT_MODELS.ollama
+    );
+    const localPath = String(
+        target.localPath ||
+        target.localModelPath ||
+        fallback.localModelPath ||
+        ''
+    ).trim();
+    const remoteModelId = normalizeLlmModel(
+        target.remoteModelId ||
+        target.remoteModel ||
+        fallback.remoteModelId ||
+        (source === 'online_pull' ? modelId : '')
+    );
+    return {
+        source,
+        modelId,
+        localPath: source === 'local_import' ? localPath : '',
+        remoteModelId: source === 'online_pull' ? remoteModelId : ''
+    };
+}
+
 function normalizeLlmApiKey(value) {
     return String(value || '').trim();
+}
+
+function createLlmApiKeyId(provider = DEFAULT_LLM_PROVIDER, value = '') {
+    const source = `${normalizeLlmProvider(provider)}\u0000${normalizeLlmApiKey(value)}`;
+    return `key_${crypto.createHash('sha256').update(source).digest('hex').slice(0, 16)}`;
+}
+
+function normalizeLlmApiKeyLabel(value = '', fallback = '默认 Key') {
+    return String(value || fallback).trim().slice(0, 80) || fallback;
+}
+
+function normalizeLlmApiKeyProfile(provider, profile = {}) {
+    const normalizedProvider = normalizeLlmProvider(provider);
+    const rawProfile = profile && typeof profile === 'object' ? profile : {};
+    const rawKeys = Array.isArray(rawProfile.keys)
+        ? rawProfile.keys
+        : Array.isArray(rawProfile)
+            ? rawProfile
+            : [];
+    const keys = [];
+    const seenIds = new Set();
+    const seenValues = new Set();
+
+    rawKeys.forEach((entry, index) => {
+        const rawEntry = entry && typeof entry === 'object'
+            ? entry
+            : { value: entry };
+        const value = normalizeLlmApiKey(
+            rawEntry.value ||
+            rawEntry.apiKey ||
+            rawEntry.key ||
+            rawEntry.secret ||
+            ''
+        );
+        if (!value) {
+            return;
+        }
+        const id = String(rawEntry.id || createLlmApiKeyId(normalizedProvider, value)).trim();
+        const valueFingerprint = createLlmApiKeyId(normalizedProvider, value);
+        if (!id || seenIds.has(id) || seenValues.has(valueFingerprint)) {
+            return;
+        }
+        seenIds.add(id);
+        seenValues.add(valueFingerprint);
+        keys.push({
+            id,
+            label: normalizeLlmApiKeyLabel(rawEntry.label || rawEntry.name, `Key ${index + 1}`),
+            value,
+            createdAt: String(rawEntry.createdAt || ''),
+            updatedAt: String(rawEntry.updatedAt || ''),
+            lastUsedAt: String(rawEntry.lastUsedAt || '')
+        });
+    });
+
+    const requestedActiveId = String(rawProfile.activeKeyId || rawProfile.selectedKeyId || '').trim();
+    const activeKeyId = keys.some((entry) => entry.id === requestedActiveId)
+        ? requestedActiveId
+        : keys[0]?.id || '';
+    return {
+        activeKeyId,
+        keys
+    };
+}
+
+function normalizeLlmApiKeyProfiles(value = {}, fallback = {}) {
+    const source = value && typeof value === 'object' ? value : {};
+    const providerIds = new Set([
+        ...LLM_PROVIDER_OPTIONS,
+        ...Object.keys(source || {}),
+        normalizeLlmProvider(fallback.provider || fallback.llmProvider || '')
+    ].filter(Boolean));
+    const profiles = {};
+    for (const providerId of providerIds) {
+        profiles[providerId] = normalizeLlmApiKeyProfile(providerId, source[providerId]);
+    }
+
+    const fallbackProvider = normalizeLlmProvider(fallback.provider || fallback.llmProvider || DEFAULT_LLM_PROVIDER);
+    const fallbackKey = normalizeLlmApiKey(fallback.apiKey || fallback.llmApiKey || '');
+    if (fallbackKey) {
+        const profile = profiles[fallbackProvider] || { activeKeyId: '', keys: [] };
+        const keyId = createLlmApiKeyId(fallbackProvider, fallbackKey);
+        if (!profile.keys.some((entry) => entry.id === keyId || entry.value === fallbackKey)) {
+            profile.keys.unshift({
+                id: keyId,
+                label: normalizeLlmApiKeyLabel(fallback.label, '默认 Key'),
+                value: fallbackKey,
+                createdAt: '',
+                updatedAt: '',
+                lastUsedAt: ''
+            });
+        }
+        profile.activeKeyId = profile.activeKeyId || keyId;
+        profiles[fallbackProvider] = normalizeLlmApiKeyProfile(fallbackProvider, profile);
+    }
+
+    return profiles;
 }
 
 function normalizeElevenLabsApiBase(value) {
@@ -678,15 +903,29 @@ function getDefaultState() {
             speechMode: 'off',
             recognitionMode: 'auto-vad',
             conversationMode: DEFAULT_CONVERSATION_MODE,
+            uiLanguage: DEFAULT_UI_LANGUAGE,
             preferredMicDeviceId: '',
             backendBaseUrl: DEFAULT_BACKEND_BASE_URL,
             backendMode: DEFAULT_BACKEND_MODE,
+            agentRuntimeGatewayUrl: DEFAULT_AGENT_RUNTIME_GATEWAY_URL,
             openclawGatewayUrl: DEFAULT_OPENCLAW_GATEWAY_URL,
             ailisStateDir: DEFAULT_AILIS_STATE_DIR,
+            voiceRuntimeRoot: '',
             llmProvider: DEFAULT_LLM_PROVIDER,
             llmBaseUrl: DEFAULT_LLM_BASE_URL,
             llmModel: DEFAULT_LLM_MODEL,
+            ollamaTarget: {
+                source: 'installed',
+                modelId: LLM_PROVIDER_DEFAULT_MODELS.ollama,
+                localPath: '',
+                remoteModelId: ''
+            },
+            ollamaDeploymentMode: 'installed',
+            ollamaLocalModelPath: '',
+            ollamaInstalledModels: [],
+            ollamaUsedModels: [],
             llmApiKey: DEFAULT_LLM_API_KEY,
+            llmApiKeyProfiles: normalizeLlmApiKeyProfiles(),
             llmTemperature: DEFAULT_LLM_TEMPERATURE,
             llmRequestTimeoutMs: DEFAULT_LLM_REQUEST_TIMEOUT_MS,
             elevenLabsApiBase: DEFAULT_ELEVENLABS_API_BASE,
@@ -820,6 +1059,9 @@ function normalizeState(inputState) {
     normalizedState.preferences.conversationMode = normalizeConversationMode(
         normalizedState.preferences.conversationMode
     );
+    normalizedState.preferences.uiLanguage = normalizeUiLanguage(
+        normalizedState.preferences.uiLanguage
+    );
     normalizedState.preferences.preferredMicDeviceId = normalizePreferredMicDeviceId(
         normalizedState.preferences.preferredMicDeviceId
     );
@@ -829,23 +1071,64 @@ function normalizeState(inputState) {
     normalizedState.preferences.backendMode = normalizeBackendMode(
         normalizedState.preferences.backendMode
     );
-    normalizedState.preferences.openclawGatewayUrl = normalizeOpenClawGatewayUrl(
+    normalizedState.preferences.agentRuntimeGatewayUrl = normalizeAgentRuntimeGatewayUrl(
+        normalizedState.preferences.agentRuntimeGatewayUrl ||
         normalizedState.preferences.openclawGatewayUrl
+    );
+    normalizedState.preferences.openclawGatewayUrl = normalizeOpenClawGatewayUrl(
+        normalizedState.preferences.openclawGatewayUrl ||
+        normalizedState.preferences.agentRuntimeGatewayUrl
     );
     normalizedState.preferences.ailisStateDir = normalizeAILISStateDir(
         normalizedState.preferences.ailisStateDir
     );
-    normalizedState.preferences.llmProvider = normalizeLlmProvider(
-        normalizedState.preferences.llmProvider
+    normalizedState.preferences.voiceRuntimeRoot = normalizeVoiceRuntimeRoot(
+        normalizedState.preferences.voiceRuntimeRoot
     );
+    const legacyLlmProvider = String(normalizedState.preferences.llmProvider || '').trim().toLowerCase();
+    normalizedState.preferences.llmProvider = legacyLlmProvider === 'vllm'
+        ? 'ollama'
+        : normalizeLlmProvider(normalizedState.preferences.llmProvider);
     normalizedState.preferences.llmBaseUrl = normalizeLlmBaseUrl(
-        normalizedState.preferences.llmBaseUrl
+        legacyLlmProvider === 'vllm'
+            ? LLM_PROVIDER_DEFAULT_BASE_URLS.ollama
+            : normalizedState.preferences.llmBaseUrl
     );
     normalizedState.preferences.llmModel = normalizeLlmModel(
-        normalizedState.preferences.llmModel
+        legacyLlmProvider === 'vllm'
+            ? LLM_PROVIDER_DEFAULT_MODELS.ollama
+            : normalizedState.preferences.llmModel
+    );
+    normalizedState.preferences.ollamaLocalModelPath = String(
+        normalizedState.preferences.ollamaLocalModelPath || ''
+    ).trim();
+    normalizedState.preferences.ollamaTarget = normalizeOllamaTarget(
+        normalizedState.preferences.ollamaTarget,
+        {
+            ollamaDeploymentMode: normalizedState.preferences.ollamaDeploymentMode,
+            llmModel: normalizedState.preferences.llmModel,
+            localModelPath: normalizedState.preferences.ollamaLocalModelPath
+        }
+    );
+    normalizedState.preferences.ollamaDeploymentMode = ollamaSourceToLegacyMode(
+        normalizedState.preferences.ollamaTarget.source
+    );
+    normalizedState.preferences.ollamaInstalledModels = normalizeOllamaModelHistory(
+        normalizedState.preferences.ollamaInstalledModels
+    );
+    normalizedState.preferences.ollamaUsedModels = normalizeOllamaModelHistory(
+        normalizedState.preferences.ollamaUsedModels
     );
     normalizedState.preferences.llmApiKey = normalizeLlmApiKey(
         normalizedState.preferences.llmApiKey
+    );
+    normalizedState.preferences.llmApiKeyProfiles = normalizeLlmApiKeyProfiles(
+        normalizedState.preferences.llmApiKeyProfiles,
+        {
+            provider: normalizedState.preferences.llmProvider,
+            apiKey: normalizedState.preferences.llmApiKey,
+            label: '默认 Key'
+        }
     );
     normalizedState.preferences.llmTemperature = normalizeLlmTemperature(
         normalizedState.preferences.llmTemperature
@@ -1039,6 +1322,11 @@ function preserveExistingValue(nextPreferences, existingPreferences, key, allowB
     }
 }
 
+function hasStoredLlmApiKeyProfiles(preferences = {}) {
+    const profiles = preferences.llmApiKeyProfiles || {};
+    return Object.values(profiles).some((profile) => Array.isArray(profile?.keys) && profile.keys.length > 0);
+}
+
 function preserveExistingEmailSecrets(nextPreferences, existingPreferences, allowBlankCredentials) {
     if (!nextPreferences.emailProfiles || !existingPreferences.emailProfiles) {
         return;
@@ -1082,7 +1370,14 @@ function preserveExistingCredentials(filePath, normalized, options = {}) {
         const existingPreferences = existing.preferences || {};
         const allowBlankCredentials = new Set(options.allowBlankCredentials || []);
 
-        preserveExistingValue(nextPreferences, existingPreferences, 'llmApiKey', allowBlankCredentials);
+        if (!hasStoredLlmApiKeyProfiles(nextPreferences)) {
+            preserveExistingValue(nextPreferences, existingPreferences, 'llmApiKey', allowBlankCredentials);
+        }
+        if (!allowBlankCredentials.has('llmApiKeyProfiles') &&
+            !hasStoredLlmApiKeyProfiles(nextPreferences) &&
+            hasStoredLlmApiKeyProfiles(existingPreferences)) {
+            nextPreferences.llmApiKeyProfiles = existingPreferences.llmApiKeyProfiles;
+        }
         preserveExistingValue(nextPreferences, existingPreferences, 'elevenLabsApiKey', allowBlankCredentials);
         preserveExistingValue(nextPreferences, existingPreferences, 'elevenLabsVoiceId', allowBlankCredentials);
         preserveExistingElevenLabsProfileVoiceIds(nextPreferences, existingPreferences, allowBlankCredentials);
@@ -1115,6 +1410,7 @@ module.exports = {
     DEFAULT_BACKEND_BASE_URL,
     DEFAULT_BACKEND_MODE,
     DEFAULT_CONVERSATION_MODE,
+    DEFAULT_UI_LANGUAGE,
     DEFAULT_CAMERA_DISTANCE,
     DEFAULT_CAMERA_HEIGHT,
     DEFAULT_CAMERA_TARGET_Y,
@@ -1156,6 +1452,7 @@ module.exports = {
     DEFAULT_ELEVENLABS_VOICE_ID,
     DEFAULT_ELEVENLABS_VOICE_PROFILES,
     DEFAULT_AILIS_STATE_DIR,
+    DEFAULT_AGENT_RUNTIME_GATEWAY_URL,
     DEFAULT_COMPUTER_CONTROL_ENABLED,
     DEFAULT_OPENCLAW_GATEWAY_URL,
     DEFAULT_PET_SCALE,
@@ -1171,12 +1468,14 @@ module.exports = {
     LLM_PROVIDER_OPTIONS,
     PET_SCALE_OPTIONS,
     CONVERSATION_MODE_OPTIONS,
+    UI_LANGUAGE_OPTIONS,
     RECOGNITION_MODE_OPTIONS,
     RENDER_PROFILE_OPTIONS,
     SPEECH_MODE_OPTIONS,
     getDefaultState,
     getScaledPetSize,
     loadDesktopState,
+    createLlmApiKeyId,
     normalizeAutoChatEnabled,
     normalizeAutoChatMaxIntervalSec,
     normalizeAutoChatMinIntervalSec,
@@ -1188,6 +1487,7 @@ module.exports = {
     normalizeBackendBaseUrl,
     normalizeBackendMode,
     normalizeConversationMode,
+    normalizeUiLanguage,
     normalizeCameraDistance,
     normalizeCameraHeight,
     normalizeCameraTargetY,
@@ -1223,14 +1523,17 @@ module.exports = {
     normalizeElevenLabsVoiceProfiles,
     normalizeElevenLabsVoiceId,
     normalizeLlmApiKey,
+    normalizeLlmApiKeyProfiles,
     normalizeLlmBaseUrl,
     normalizeLlmModel,
     normalizeLlmProvider,
     normalizeLlmRequestTimeoutMs,
     normalizeLlmTemperature,
     normalizeEmailProfiles,
+    normalizeAgentRuntimeGatewayUrl,
     normalizeOpenClawGatewayUrl,
     normalizeAILISStateDir,
+    normalizeVoiceRuntimeRoot,
     normalizePetMouseHitTestDebug,
     normalizePetMouseHitTestEnabled,
     normalizePetMouseHitTestHeightRatio,

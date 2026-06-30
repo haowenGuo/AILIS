@@ -14,7 +14,7 @@ const {
     getOpenClawToolSurfaceSummary,
     validateOpenClawToolSurface
 } = require('./openclaw-tool-surface.cjs');
-const { OpenClawRuntimeSupervisor } = require('./openclaw-runtime.cjs');
+const { AILISAgentRuntimeSupervisor } = require('./openclaw-runtime.cjs');
 const { AILISRuntime } = require('./ailis-runtime.cjs');
 const {
     TOOL_EXPOSURE,
@@ -24,6 +24,8 @@ const {
 const { createAILISPlatformAdapter } = require('./ailis-platform-adapter.cjs');
 const { AILISAgentRunner } = require('./ailis-agent-runner.cjs');
 const { AILISMemoryRuntime } = require('./ailis-memory-store.cjs');
+const { AILISRawMemoryLedger } = require('./ailis-raw-memory-ledger.cjs');
+const { AILISUserProfileCurator } = require('./ailis-user-profile-curator.cjs');
 const { AilisSelfEvolutionRuntime } = require('./ailis-self-evolution-runtime.cjs');
 const {
     listToolContracts,
@@ -34,11 +36,8 @@ const { FILE_MANAGER_TOOL_ID, executeFileManagerTool } = require('./ailis-file-m
 const { COMPUTER_TOOL_ID, AILISComputerTool } = require('./ailis-computer-tool.cjs');
 const { CODE_TOOL_ID, executeCodeTool } = require('./ailis-code-tool.cjs');
 const { ARTIFACT_VERIFIER_TOOL_ID, executeArtifactVerifierTool } = require('./ailis-artifact-verifier-tool.cjs');
+const { ARTIFACT_IMPORT_TOOL_ID, executeArtifactImportTool } = require('./ailis-artifact-import-tool.cjs');
 const { GITHUB_PAGES_TOOL_ID, executeGitHubPagesTool } = require('./ailis-github-pages-tool.cjs');
-const {
-    READ_XLSX_WORKBOOK_TOOL_ID,
-    executeReadXlsxWorkbookTool
-} = require('./ailis-xlsx-workbook-tool.cjs');
 const {
     AILIS_VISION_TOOL_DEFINITION,
     VISION_TOOL_ID,
@@ -65,6 +64,8 @@ const TOOL_CALL_TIMEOUT_MS = 45000;
 const DEFAULT_EVENT_REPLAY_LIMIT = 2000;
 const MAX_EVENT_REPLAY_LIMIT = 10000;
 const MAX_SSE_WRITABLE_BYTES = 1024 * 1024;
+const DEFAULT_PROFILE_CURATION_START_DELAY_MS = Number(process.env.AILIS_PROFILE_CURATION_START_DELAY_MS || 60 * 1000);
+const DEFAULT_PROFILE_CURATION_CHECK_INTERVAL_MS = Number(process.env.AILIS_PROFILE_CURATION_CHECK_INTERVAL_MS || 6 * 60 * 60 * 1000);
 
 const GATEWAY_BACKED_TOOL_IDS = new Set(['sessions_list', 'gateway', 'cron', 'nodes']);
 const SESSION_BOUND_TOOL_IDS = new Set([
@@ -191,10 +192,10 @@ const AILIS_LOCAL_TOOL_DEFINITIONS = Object.freeze([
         needsApprovalActions: Object.freeze([])
     }),
     Object.freeze({
-        id: READ_XLSX_WORKBOOK_TOOL_ID,
-        label: 'read_xlsx_workbook',
-        description: 'Read local XLSX/XLSM workbooks as structured sheets, cells, formulas, merged ranges, fill colors, and compact grids. Use for Excel attachments before ad hoc Python or raw binary reads.',
-        sectionId: 'spreadsheet-reading',
+        id: ARTIFACT_IMPORT_TOOL_ID,
+        label: 'artifact_import',
+        description: 'Import local files through extracted RAGFlow-lite artifact workers and register queryable AILIS context artifacts.',
+        sectionId: 'context-artifacts',
         route: 'ailis-local',
         materialized: true,
         status: 'available',
@@ -388,6 +389,29 @@ function classifyToolResult(result) {
         return 'error';
     }
     return 'completed';
+}
+
+function extractToolSearchToolsForDirectExposure(result = {}) {
+    const tools =
+        result?.structuredContent?.tools ||
+        result?.details?.tools ||
+        [];
+    return Array.isArray(tools) ? tools : [];
+}
+
+function attachRawToolSearchToolsForDirectExposure(guardedResult, rawResult) {
+    if (!guardedResult || typeof guardedResult !== 'object') {
+        return;
+    }
+    const tools = extractToolSearchToolsForDirectExposure(rawResult);
+    if (!tools.length) {
+        return;
+    }
+    Object.defineProperty(guardedResult, '__ailisRawToolSearchTools', {
+        value: tools,
+        enumerable: false,
+        configurable: true
+    });
 }
 
 function makeExternalVirtualToolResult(result = {}, { toolId = '' } = {}) {
@@ -676,11 +700,16 @@ class AILISGateway extends EventEmitter {
         this.auditLogPath = path.join(this.auditDir, 'audit.jsonl');
         this.smokeReportPath = path.join(this.projectRoot, 'tmp', 'openclaw-tool-smoke', 'last-report.json');
         this.platformAdapter = createAILISPlatformAdapter(options.platformAdapter || options.platform || {});
+        this.rawMemoryLedger = options.rawMemoryLedger || new AILISRawMemoryLedger({
+            rootDir: path.join(this.auditDir, 'raw-memory'),
+            workspaceRoot: this.workspaceRoot
+        });
         this.runtime = new AILISRuntime({
             auditDir: this.auditDir,
             workspaceRoot: this.workspaceRoot,
             projectRoot: this.projectRoot,
             platformAdapter: this.platformAdapter,
+            rawMemoryLedger: this.rawMemoryLedger,
             emitGatewayEvent: (type, payload) => this.emitGatewayEvent(type, payload),
             mcpServers: options.mcpServers,
             mcpConfigPath: options.mcpConfigPath || path.join(this.auditDir, 'mcp-servers.json'),
@@ -698,6 +727,12 @@ class AILISGateway extends EventEmitter {
         this.toolRuntimeModulePromise = null;
         this.toolSets = new Map();
         this.toolRuntimeSupervisor = null;
+        this.profileCurationEnabled = options.profileCurationEnabled !== false;
+        this.profileCurationStartDelayMs = Math.max(1000, Number(options.profileCurationStartDelayMs) || DEFAULT_PROFILE_CURATION_START_DELAY_MS);
+        this.profileCurationCheckIntervalMs = Math.max(60 * 1000, Number(options.profileCurationCheckIntervalMs) || DEFAULT_PROFILE_CURATION_CHECK_INTERVAL_MS);
+        this.profileCurationStartTimer = null;
+        this.profileCurationIntervalTimer = null;
+        this.profileCurationRunning = false;
         this.computerTool = new AILISComputerTool({
             workspaceRoot: this.workspaceRoot,
             platformAdapter: this.platformAdapter
@@ -712,6 +747,13 @@ class AILISGateway extends EventEmitter {
         this.memoryRuntime = options.memoryRuntime || new AILISMemoryRuntime({
             rootDir: path.join(this.auditDir, 'memory'),
             workspaceRoot: this.workspaceRoot
+        });
+        this.userProfileCurator = options.userProfileCurator || new AILISUserProfileCurator({
+            rootDir: path.join(this.auditDir, 'memory'),
+            workspaceRoot: this.workspaceRoot,
+            rawMemoryLedger: this.rawMemoryLedger,
+            llmClient: typeof options.profileCurationLlm === 'function' ? options.profileCurationLlm : null,
+            emitGatewayEvent: (type, payload) => this.emitGatewayEvent(type, payload)
         });
         this.selfEvolutionRuntime = options.selfEvolutionRuntime || new AilisSelfEvolutionRuntime({
             auditDir: this.auditDir,
@@ -736,12 +778,12 @@ class AILISGateway extends EventEmitter {
                     : TOOL_EXPOSURE.DEFERRED
             })),
             ...['read', 'write', 'exec', 'apply_patch'].map((id) => {
-                const openClawDefinition = OPENCLAW_CORE_TOOL_DEFINITIONS.find((tool) => tool.id === id) || {};
+                const toolSurfaceDefinition = OPENCLAW_CORE_TOOL_DEFINITIONS.find((tool) => tool.id === id) || {};
                 return {
                     id,
-                    label: openClawDefinition.label || id,
-                    description: openClawDefinition.description || `Local core ${id} tool.`,
-                    sectionId: openClawDefinition.sectionId || 'local-core',
+                    label: toolSurfaceDefinition.label || id,
+                    description: toolSurfaceDefinition.description || `Local core ${id} tool.`,
+                    sectionId: toolSurfaceDefinition.sectionId || 'local-core',
                     route: 'ailis-local-core',
                     materialized: true,
                     status: 'available',
@@ -882,7 +924,7 @@ class AILISGateway extends EventEmitter {
 
     async start() {
         if (this.server) {
-            return this.getStatus();
+            return this.getStatus({ includeAgentRunner: false });
         }
 
         await fsp.mkdir(this.auditDir, { recursive: true });
@@ -906,11 +948,13 @@ class AILISGateway extends EventEmitter {
             });
         });
 
-        this.emitGatewayEvent('gateway.started', this.getStatus());
-        return this.getStatus();
+        this.emitGatewayEvent('gateway.started', this.getStatus({ includeAgentRunner: false }));
+        this.startProfileCurationScheduler();
+        return this.getStatus({ includeAgentRunner: false });
     }
 
     async stop() {
+        this.stopProfileCurationScheduler();
         for (const client of this.sseClients) {
             try {
                 client.res?.end?.();
@@ -932,14 +976,68 @@ class AILISGateway extends EventEmitter {
         }
 
         if (!this.server) {
-            return this.getStatus();
+            return this.getStatus({ includeAgentRunner: false });
         }
 
         const server = this.server;
         this.server = null;
         await new Promise((resolve) => server.close(resolve));
         this.emitGatewayEvent('gateway.stopped', {});
-        return this.getStatus();
+        return this.getStatus({ includeAgentRunner: false });
+    }
+
+    startProfileCurationScheduler() {
+        if (!this.profileCurationEnabled || !this.userProfileCurator) {
+            return;
+        }
+        this.stopProfileCurationScheduler();
+        this.profileCurationStartTimer = setTimeout(() => {
+            void this.runScheduledProfileCuration('startup');
+        }, this.profileCurationStartDelayMs);
+        this.profileCurationStartTimer.unref?.();
+        this.profileCurationIntervalTimer = setInterval(() => {
+            void this.runScheduledProfileCuration('interval');
+        }, this.profileCurationCheckIntervalMs);
+        this.profileCurationIntervalTimer.unref?.();
+    }
+
+    stopProfileCurationScheduler() {
+        if (this.profileCurationStartTimer) {
+            clearTimeout(this.profileCurationStartTimer);
+            this.profileCurationStartTimer = null;
+        }
+        if (this.profileCurationIntervalTimer) {
+            clearInterval(this.profileCurationIntervalTimer);
+            this.profileCurationIntervalTimer = null;
+        }
+    }
+
+    async runScheduledProfileCuration(trigger = 'scheduled') {
+        if (this.profileCurationRunning || !this.profileCurationEnabled || !this.userProfileCurator) {
+            return { ok: false, status: 'profile_curation_not_started' };
+        }
+        this.profileCurationRunning = true;
+        try {
+            const result = await this.curateUserProfile({ trigger });
+            this.emitGatewayEvent('memory.profile_curation.scheduled', {
+                trigger,
+                ok: result?.ok === true,
+                status: result?.status || '',
+                processedEntryCount: result?.run?.processedEntryCount || 0,
+                profileUpdateCount: result?.run?.profileUpdateCount || 0,
+                relationshipUpdateCount: result?.run?.relationshipUpdateCount || 0,
+                affinityChanged: result?.run?.affinityChanged === true
+            });
+            return result;
+        } catch (error) {
+            this.emitGatewayEvent('memory.profile_curation.error', {
+                trigger,
+                error: error?.message || String(error)
+            });
+            return { ok: false, status: 'profile_curation_error', error: error?.message || String(error) };
+        } finally {
+            this.profileCurationRunning = false;
+        }
     }
 
     getAddress() {
@@ -958,10 +1056,13 @@ class AILISGateway extends EventEmitter {
         };
     }
 
-    getStatus() {
+    getStatus(options = {}) {
+        const includeAgentRunner = options.includeAgentRunner !== false;
         const address = this.getAddress();
         const gatewayToolDefinitions = this.gatewayToolRuntimeRegistry?.listDefinitions?.() || [];
         const directGatewayTools = this.gatewayToolRuntimeRegistry?.modelVisibleSpecs?.() || [];
+        const agentToolSurface = getOpenClawToolSurfaceSummary();
+        const agentToolSurfaceValidation = validateOpenClawToolSurface().summary;
         return {
             enabled: true,
             running: Boolean(this.server),
@@ -973,8 +1074,10 @@ class AILISGateway extends EventEmitter {
             platform: this.platformAdapter.getStatus(),
             auditLogPath: this.auditLogPath,
             toolGatewayUrl: this.toolGatewayUrl,
-            openClawToolSurface: getOpenClawToolSurfaceSummary(),
-            openClawToolSurfaceValidation: validateOpenClawToolSurface().summary,
+            agentToolSurface,
+            agentToolSurfaceValidation,
+            openClawToolSurface: agentToolSurface,
+            openClawToolSurfaceValidation: agentToolSurfaceValidation,
             toolContracts: {
                 version: 1,
                 count: listToolContracts().length
@@ -988,9 +1091,23 @@ class AILISGateway extends EventEmitter {
             defaultContext: redactObject(this.resolveDefaultContext()),
             runtime: this.runtime.getStatus(),
             memory: this.memoryRuntime?.getStatus?.() || null,
+            rawMemory: this.rawMemoryLedger?.getStatus?.() || null,
+            userProfileCuration: this.userProfileCurator?.getStatus?.() || null,
+            userProfileCurationScheduler: {
+                enabled: this.profileCurationEnabled,
+                running: this.profileCurationRunning,
+                startDelayMs: this.profileCurationStartDelayMs,
+                checkIntervalMs: this.profileCurationCheckIntervalMs,
+                scheduled: Boolean(this.profileCurationStartTimer || this.profileCurationIntervalTimer)
+            },
             selfEvolution: this.selfEvolutionRuntime?.getStatus?.() || null,
             toolRuntimeGateway: this.toolRuntimeSupervisor?.getStatus?.() || null,
-            agentRunner: this.ensureAgentRunner().getStatus(),
+            agentRunner: includeAgentRunner
+                ? this.ensureAgentRunner().getStatus()
+                : (this.agentRunner?.getStatus?.() || {
+                    enabled: false,
+                    status: 'not_loaded'
+                }),
             events: {
                 seq: this.eventSeq,
                 buffered: this.eventLog.length,
@@ -1015,6 +1132,43 @@ class AILISGateway extends EventEmitter {
         return this.memoryRuntime?.getSnapshot?.(options) || {
             ok: false,
             status: 'memory_not_configured'
+        };
+    }
+
+    getRawMemoryStatus() {
+        return this.rawMemoryLedger?.getStatus?.() || {
+            ok: false,
+            status: 'raw_memory_not_configured'
+        };
+    }
+
+    replayRawMemory(options = {}) {
+        return this.rawMemoryLedger?.replay?.(options || {}) || {
+            ok: false,
+            status: 'raw_memory_not_configured',
+            entries: []
+        };
+    }
+
+    listRawMemorySessions(limit = 100) {
+        return this.rawMemoryLedger?.listSessions?.(limit) || {
+            ok: false,
+            status: 'raw_memory_not_configured',
+            sessions: []
+        };
+    }
+
+    async curateUserProfile(options = {}) {
+        return await this.userProfileCurator?.runDailyCuration?.(options || {}) || {
+            ok: false,
+            status: 'user_profile_curator_not_configured'
+        };
+    }
+
+    async getUserProfileCurationState() {
+        return await this.userProfileCurator?.getState?.() || {
+            ok: false,
+            status: 'user_profile_curator_not_configured'
         };
     }
 
@@ -1274,6 +1428,46 @@ class AILISGateway extends EventEmitter {
                     { transcriptLimit: Number(url.searchParams.get('limit') || 2000) }
                 )
             );
+            return;
+        }
+
+        if (url.pathname === '/raw-memory/status' && req.method === 'GET') {
+            this.sendJson(res, 200, this.getRawMemoryStatus());
+            return;
+        }
+
+        if (url.pathname === '/raw-memory/sessions' && req.method === 'GET') {
+            this.sendJson(res, 200, this.listRawMemorySessions(Number(url.searchParams.get('limit') || 100)));
+            return;
+        }
+
+        if (url.pathname === '/raw-memory/replay' && req.method === 'GET') {
+            this.sendJson(res, 200, this.replayRawMemory({
+                sessionId: url.searchParams.get('sessionId') || '',
+                runId: url.searchParams.get('runId') || '',
+                type: url.searchParams.get('type') || '',
+                source: url.searchParams.get('source') || '',
+                since: url.searchParams.get('since') || '',
+                until: url.searchParams.get('until') || '',
+                includePayload: url.searchParams.get('includePayload') !== 'false',
+                limit: Number(url.searchParams.get('limit') || 200)
+            }));
+            return;
+        }
+
+        if (url.pathname === '/memory/profile/state' && req.method === 'GET') {
+            this.sendJson(res, 200, await this.getUserProfileCurationState());
+            return;
+        }
+
+        if (url.pathname === '/memory/profile/curate' && (req.method === 'GET' || req.method === 'POST')) {
+            const body = req.method === 'POST' ? await this.readJsonBody(req) : {};
+            this.sendJson(res, 200, await this.curateUserProfile({
+                ...(body || {}),
+                force: body.force === true || url.searchParams.get('force') === 'true',
+                rawLimit: body.rawLimit || Number(url.searchParams.get('rawLimit') || 5000),
+                evidenceLimit: body.evidenceLimit || Number(url.searchParams.get('evidenceLimit') || 120)
+            }));
             return;
         }
 
@@ -1686,9 +1880,12 @@ class AILISGateway extends EventEmitter {
             }
             const result = await withTimeout(
                 Number(context.timeoutMs || request.timeoutMs || TOOL_CALL_TIMEOUT_MS),
-                () => this.callOpenClawTool({ callId, toolId, args, context, workspaceDir })
+                () => this.callAgentRuntimeTool({ callId, toolId, args, context, workspaceDir })
             );
             const guardedResult = this.runtime.guardToolResult(result, { toolId, callId });
+            if (toolId === 'tool_search') {
+                attachRawToolSearchToolsForDirectExposure(guardedResult, result);
+            }
             const status = classifyToolResult(guardedResult);
             const response = {
                 ok: status === 'completed',
@@ -1862,7 +2059,7 @@ class AILISGateway extends EventEmitter {
             sessionId: subagent?.childSessionId || context.sessionId || context.sessionKey,
             agentLoop: 'llm',
             planner: 'llm',
-            maxAgentSteps: Number(args.maxAgentSteps || context.maxAgentSteps || 50),
+            maxAgentSteps: Number(args.maxAgentSteps || context.maxAgentSteps || 12),
             context: this.mergeDefaultContext({
                 ...context,
                 parentRunId: subagent?.runId,
@@ -1873,7 +2070,7 @@ class AILISGateway extends EventEmitter {
                 sessionKey: subagent?.childSessionId || context.sessionKey,
                 agentLoop: 'llm',
                 planner: 'llm',
-                maxAgentSteps: Number(args.maxAgentSteps || context.maxAgentSteps || 50)
+                maxAgentSteps: Number(args.maxAgentSteps || context.maxAgentSteps || 12)
             })
         });
         const result = signal
@@ -1920,7 +2117,7 @@ class AILISGateway extends EventEmitter {
         };
     }
 
-    async callOpenClawTool({ callId = '', toolId, args, context, workspaceDir }) {
+    async callAgentRuntimeTool({ callId = '', toolId, args, context, workspaceDir }) {
         if (isExternalVirtualToolId(toolId)) {
             const result = await this.runtime?.capabilityManager?.executeVirtualExternalTool?.(toolId, args, {
                 ...context,
@@ -1967,7 +2164,7 @@ class AILISGateway extends EventEmitter {
 
         const finalArgs = this.prepareToolArgs({ toolId, args, context, workspaceDir });
         if (GATEWAY_BACKED_TOOL_IDS.has(toolId) || SESSION_BOUND_TOOL_IDS.has(toolId)) {
-            return await this.withDefaultOpenClawGatewayEnv(() => tool.execute(`ailis-${toolId}`, finalArgs));
+            return await this.withDefaultAgentRuntimeGatewayEnv(() => tool.execute(`ailis-${toolId}`, finalArgs));
         }
         return await tool.execute(`ailis-${toolId}`, finalArgs);
     }
@@ -2023,12 +2220,11 @@ class AILISGateway extends EventEmitter {
                 projectRoot: this.projectRoot
             });
         }
-        if (toolId === READ_XLSX_WORKBOOK_TOOL_ID) {
-            return await executeReadXlsxWorkbookTool(args, context, {
+        if (toolId === ARTIFACT_IMPORT_TOOL_ID) {
+            return await executeArtifactImportTool(args, context, {
                 workspaceDir,
                 workspaceRoot: this.workspaceRoot,
                 projectRoot: this.projectRoot,
-                auditDir: this.auditDir,
                 contextArtifactStore: this.runtime.contextArtifactStore
             });
         }
@@ -2455,7 +2651,7 @@ class AILISGateway extends EventEmitter {
 
     async ensureToolGatewayReady() {
         if (!this.toolRuntimeSupervisor) {
-            this.toolRuntimeSupervisor = new OpenClawRuntimeSupervisor({
+            this.toolRuntimeSupervisor = new AILISAgentRuntimeSupervisor({
                 app: this.app,
                 gatewayUrl: this.toolGatewayUrl
             });
@@ -2463,23 +2659,23 @@ class AILISGateway extends EventEmitter {
         return await this.toolRuntimeSupervisor.ensureReady();
     }
 
-    async withDefaultOpenClawGatewayEnv(action) {
-        const priorOpenClawGatewayUrl = process.env.OPENCLAW_GATEWAY_URL;
-        const priorAilisOpenClawGatewayUrl = process.env.AILIS_OPENCLAW_GATEWAY_URL;
+    async withDefaultAgentRuntimeGatewayEnv(action) {
+        const priorAgentRuntimeGatewayUrl = process.env.OPENCLAW_GATEWAY_URL;
+        const priorAilisAgentRuntimeGatewayUrl = process.env.AILIS_OPENCLAW_GATEWAY_URL;
         try {
             delete process.env.OPENCLAW_GATEWAY_URL;
             delete process.env.AILIS_OPENCLAW_GATEWAY_URL;
             return await action();
         } finally {
-            if (priorOpenClawGatewayUrl === undefined) {
+            if (priorAgentRuntimeGatewayUrl === undefined) {
                 delete process.env.OPENCLAW_GATEWAY_URL;
             } else {
-                process.env.OPENCLAW_GATEWAY_URL = priorOpenClawGatewayUrl;
+                process.env.OPENCLAW_GATEWAY_URL = priorAgentRuntimeGatewayUrl;
             }
-            if (priorAilisOpenClawGatewayUrl === undefined) {
+            if (priorAilisAgentRuntimeGatewayUrl === undefined) {
                 delete process.env.AILIS_OPENCLAW_GATEWAY_URL;
             } else {
-                process.env.AILIS_OPENCLAW_GATEWAY_URL = priorAilisOpenClawGatewayUrl;
+                process.env.AILIS_OPENCLAW_GATEWAY_URL = priorAilisAgentRuntimeGatewayUrl;
             }
         }
     }

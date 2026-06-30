@@ -20,6 +20,9 @@ const {
     rankToolSearchResults,
     toolMatchesRoutingProfile
 } = require('./ailis-tool-routing.cjs');
+const {
+    createDefaultArtifactToolsRuntime
+} = require('./ailis-artifact-tools-runtime.cjs');
 
 const TOOL_EXPOSURE = AILIS_TOOL_EXPOSURE;
 const CORE_RUNTIME_TOOL_DEFINITIONS = AILIS_RUNTIME_TOOL_DEFINITIONS;
@@ -47,8 +50,148 @@ function cloneJson(value) {
 
 const parseDirectMcpToolId = parseAilisDirectMcpToolId;
 
-function makeTextResult({ status = 'completed', text = '', details = {}, isError = false } = {}) {
-    return makeAilisToolResult({ status, text, details, isError });
+function makeTextResult({ status = 'completed', text = '', details = {}, structuredContent = null, isError = false } = {}) {
+    return makeAilisToolResult({ status, text, details, structuredContent, isError });
+}
+
+function compactModelPath(value = '') {
+    const text = String(value || '');
+    if (!text || text.length <= 140) {
+        return text;
+    }
+    const normalized = text.replace(/\\/g, '/');
+    const slashIndex = normalized.lastIndexOf('/');
+    const baseName = slashIndex >= 0 ? normalized.slice(slashIndex + 1) : normalized;
+    return baseName.length <= 120 ? `.../${baseName}` : `.../${baseName.slice(0, 48)}...${baseName.slice(-48)}`;
+}
+
+function compactArtifactModelTextView(value = {}) {
+    const view = cloneJson(value || {});
+    if (view.artifact) {
+        view.artifact = {
+            ...view.artifact,
+            sourcePath: compactModelPath(view.artifact.sourcePath)
+        };
+    }
+    if (view.observation?.sourcePath) {
+        view.observation.sourcePath = compactModelPath(view.observation.sourcePath);
+    }
+    if (view.plan) {
+        view.plan = {
+            format: view.plan.format || '',
+            kind: view.plan.kind || '',
+            adapterId: view.plan.adapterId || '',
+            adapterStatus: view.plan.adapterStatus || '',
+            route: {
+                currentTool: view.plan.route?.currentTool || 'artifact_tools',
+                actions: Array.isArray(view.plan.route?.actions) ? view.plan.route.actions.slice(0, 12) : [],
+                nextActions: Array.isArray(view.plan.route?.nextActions) ? view.plan.route.nextActions.slice(0, 5) : [],
+                note: view.plan.route?.note || ''
+            },
+            diagnostics: Array.isArray(view.plan.diagnostics) ? view.plan.diagnostics.slice(0, 8) : []
+        };
+    }
+    if (Array.isArray(view.observation?.compactRows)) {
+        view.observation.compactRows = view.observation.compactRows.map((row) => ({
+            rowNumber: row.rowNumber,
+            cells: Array.isArray(row.cells) ? row.cells.join(' | ') : row.cells
+        }));
+        view.observation.cellSeparator = ' | ';
+    }
+    return view;
+}
+
+function buildContinuationRange(observation = {}, rows = []) {
+    const sheetName = normalizeString(observation.sheetName);
+    const columns = Array.isArray(observation.columns) ? observation.columns.filter(Boolean) : [];
+    if (!sheetName || columns.length === 0 || rows.length < 2) {
+        return '';
+    }
+    const first = rows[0]?.rowNumber;
+    const last = rows[rows.length - 1]?.rowNumber;
+    if (!first || !last || last < first) {
+        return '';
+    }
+    return `${sheetName}!${columns[0]}${first}:${columns[columns.length - 1]}${last}`;
+}
+
+function compactRowsHeadTail(rows = [], visibleLimit = 12) {
+    if (!Array.isArray(rows) || rows.length <= visibleLimit) {
+        return {
+            rows,
+            omittedCount: 0,
+            omittedRows: [],
+            omittedRange: ''
+        };
+    }
+    const tailCount = Math.min(4, Math.max(1, Math.floor(visibleLimit / 3)));
+    const headCount = Math.max(1, visibleLimit - tailCount);
+    const head = rows.slice(0, headCount);
+    const tail = rows.slice(-tailCount);
+    const omittedRows = rows.slice(headCount, rows.length - tailCount);
+    return {
+        rows: [...head, ...tail],
+        omittedCount: omittedRows.length,
+        omittedRows,
+        omittedRange: omittedRows.length
+            ? `${omittedRows[0]?.rowNumber || ''}:${omittedRows[omittedRows.length - 1]?.rowNumber || ''}`
+            : ''
+    };
+}
+
+function addArtifactQueryContinuation(view = {}, omittedRows = []) {
+    const observation = view.observation || {};
+    const range = buildContinuationRange(observation, omittedRows);
+    const args = {
+        action: 'query',
+        sessionId: view.artifact?.sessionId || observation.sessionId || '',
+        sheet: observation.sheetName || '',
+        range,
+        include: ['values', 'styles', 'formulas', 'comments']
+    };
+    const continuation = {
+        action: 'query',
+        reason: 'model_text_compacted; fetch the omitted middle rows or ask a narrower range with artifact_tools before falling back to exec',
+        args: Object.fromEntries(Object.entries(args).filter(([, value]) => {
+            if (Array.isArray(value)) {
+                return value.length > 0;
+            }
+            return Boolean(value);
+        }))
+    };
+    view.observation.continuation = continuation;
+    view.nextActions = [continuation, ...(Array.isArray(view.nextActions) ? view.nextActions : [])].slice(0, 6);
+    return view;
+}
+
+function stringifyArtifactModelResult(result = {}) {
+    const fallback = {
+        ok: result?.ok === true,
+        status: result?.status || (result?.ok === false ? 'failed' : 'completed'),
+        action: result?.action || '',
+        diagnostics: result?.diagnostics || []
+    };
+    let view = compactArtifactModelTextView(result?.modelView || result?.observation || fallback);
+    let text = JSON.stringify(view, null, 2);
+    if (text.length <= 5600) {
+        return text;
+    }
+    if (view.plan) {
+        view = { ...view, plan: undefined };
+        text = JSON.stringify(view, null, 2);
+    }
+    const rows = view.observation?.compactRows;
+    if (text.length > 5600 && Array.isArray(rows) && rows.length > 12) {
+        const compacted = compactRowsHeadTail(rows, 12);
+        view.observation.compactRows = compacted.rows;
+        view.observation.omittedCompactRowCount = compacted.omittedCount;
+        view.observation.omittedCompactRowRange = compacted.omittedRange;
+        view.observation.visibleRowStrategy = 'head_tail';
+        view.observation.truncatedForModelText = true;
+        addArtifactQueryContinuation(view, compacted.omittedRows);
+        text = JSON.stringify(view, null, 2);
+    }
+    return text;
 }
 
 function normalizeToolOutput(result = {}, { toolId = '' } = {}) {
@@ -272,6 +415,8 @@ async function executeToolSearch(registry, args = {}) {
 function createAILISToolRuntimeRegistry(runtime) {
     const registry = new AILISToolRuntimeRegistry({ runtime });
     const definitionById = Object.fromEntries(CORE_RUNTIME_TOOL_DEFINITIONS.map((definition) => [definition.id, definition]));
+    const artifactToolsRuntime = runtime.artifactToolsRuntime || createDefaultArtifactToolsRuntime();
+    runtime.artifactToolsRuntime = artifactToolsRuntime;
     registry.register(new AILISRuntimeTool({
         definition: definitionById.update_plan,
         handle: async (args, context) => runtime.updatePlan({
@@ -284,6 +429,25 @@ function createAILISToolRuntimeRegistry(runtime) {
     registry.register(new AILISRuntimeTool({
         definition: definitionById.tool_search,
         handle: async (args) => executeToolSearch(registry, args)
+    }));
+    registry.register(new AILISRuntimeTool({
+        definition: definitionById.artifact_tools,
+        handle: async (args) => {
+            const result = await artifactToolsRuntime.execute(args);
+            const modelResult = result?.modelView || result?.observation || {
+                ok: result?.ok === true,
+                status: result?.status || (result?.ok === false ? 'failed' : 'completed'),
+                action: result?.action || args.action || '',
+                diagnostics: result?.diagnostics || []
+            };
+            return makeTextResult({
+                status: result.status || (result.ok === false ? 'failed' : 'completed'),
+                text: stringifyArtifactModelResult({ ...result, modelView: modelResult }),
+                details: result,
+                structuredContent: result,
+                isError: result.ok === false
+            });
+        }
     }));
     registry.register(new AILISRuntimeTool({
         definition: definitionById.artifact_query,

@@ -65,6 +65,17 @@ const AILIS_RUNTIME_TOOL_DEFINITIONS = Object.freeze([
         exposure: AILIS_TOOL_EXPOSURE.DEFERRED
     }),
     Object.freeze({
+        id: 'artifact_tools',
+        label: 'artifact_tools',
+        description: 'Canonical AILIS Artifact Tools runtime for local file artifacts and attachments: open/index/search/query/aggregate/inspect/render/trace/recalculate/edit/export/roundtrip across XLSX/XLSM/CSV/TSV/PDF/DOCX/PPTX/image adapters. Use for artifact-style tasks involving files, Office documents, spreadsheets, cell colors, formulas, merges, tables, PDFs, pages, images, rendering, or compact evidence.',
+        sectionId: 'context-artifacts',
+        route: 'ailis-runtime',
+        materialized: true,
+        status: 'available',
+        needsApproval: false,
+        exposure: AILIS_TOOL_EXPOSURE.DEFERRED
+    }),
+    Object.freeze({
         id: 'artifact_compute',
         label: 'artifact_compute',
         description: 'Run deterministic data-worker computations on managed context artifacts, such as spreadsheet profiling and grid path search, returning compact reasoning-ready evidence instead of raw payloads.',

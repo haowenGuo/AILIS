@@ -9,7 +9,10 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { AILISGateway } = require('../electron/ailis-gateway.cjs');
 const { AILISPlatformAdapter } = require('../electron/ailis-platform-adapter.cjs');
-const { resolveAgentDecisionTimeoutMs } = require('../electron/ailis-agent-runner.cjs');
+const {
+    resolveAgentDecisionTimeoutMs,
+    resolveAgentPromptProfile
+} = require('../electron/ailis-agent-runner.cjs');
 const { buildTurnItemsPromptObject } = require('../electron/ailis-turn-items.cjs');
 
 async function jsonFetch(url, options = {}) {
@@ -75,6 +78,42 @@ test('Agent turn items mark successful web fetches with structured API evidence 
     assert.equal(turnItems.latest_observation.evidence_gap, 'structured_api_preferred');
     assert.match(turnItems.latest_observation.recovery_hint, /ClinicalTrials API/);
     assert.match(JSON.stringify(turnItems.items), /external__clinicaltrials|ClinicalTrials API/);
+});
+
+test('Agent prompt profile uses compact budgets for Ollama without changing cloud providers', () => {
+    const ollamaProfile = resolveAgentPromptProfile({ provider: 'ollama' });
+    assert.equal(ollamaProfile.id, 'local_compact');
+    assert.equal(ollamaProfile.compact, true);
+    assert.ok(ollamaProfile.memoryChars < 5000);
+    assert.ok(ollamaProfile.externalToolExposureLimit < 16);
+
+    const cloudProfile = resolveAgentPromptProfile({ provider: 'openai-compatible' });
+    assert.equal(cloudProfile.id, 'full');
+    assert.equal(cloudProfile.compact, false);
+    assert.ok(cloudProfile.memoryChars >= 20000);
+
+    const exactAnswerProfile = resolveAgentPromptProfile(
+        { provider: 'openai-compatible' },
+        { exactAnswerMode: true }
+    );
+    assert.equal(exactAnswerProfile.id, 'local_compact');
+    assert.equal(exactAnswerProfile.compact, true);
+    assert.equal(exactAnswerProfile.reason, 'exact_answer_task');
+
+    const artifactQuestionProfile = resolveAgentPromptProfile(
+        { provider: 'openai-compatible' },
+        { taskCompactPrompt: true }
+    );
+    assert.equal(artifactQuestionProfile.id, 'local_compact');
+    assert.equal(artifactQuestionProfile.compact, true);
+    assert.equal(artifactQuestionProfile.reason, 'artifact_answer_task');
+
+    const explicitFullProfile = resolveAgentPromptProfile(
+        { provider: 'openai-compatible' },
+        { taskCompactPrompt: true, exactAnswerMode: true, agentPromptProfile: 'full' }
+    );
+    assert.equal(explicitFullProfile.id, 'full');
+    assert.equal(explicitFullProfile.compact, false);
 });
 
 async function createMockChatCompletionsServer() {
@@ -757,6 +796,61 @@ test('Agentic Executor fails fast on terminal LLM provider billing errors', asyn
             result.body.events.some((event) => event.type === 'agent.invalid_decision_observation'),
             false
         );
+    } finally {
+        await gateway.stop();
+        await llmServer.close();
+        await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
+});
+
+test('Agentic Executor fails fast when the LLM decision request times out upstream', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-provider-timeout-agent-'));
+    const llmServer = await createProviderErrorChatCompletionsServer({
+        status: 504,
+        message: 'upstream model request timed out'
+    });
+    const gateway = new AILISGateway({
+        port: 0,
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit')
+    });
+
+    try {
+        const status = await gateway.start();
+        const result = await runAgent(status.url, {
+            sessionId: 'provider-timeout-fail-fast-test',
+            message: '你好',
+            agentLoop: 'llm',
+            maxAgentSteps: 5,
+            llmSettings: {
+                provider: 'openai-compatible',
+                baseUrl: llmServer.url,
+                apiKey: 'test-key',
+                model: 'mock-provider-timeout',
+                temperature: 0,
+                timeoutMs: 10000
+            },
+            context: {
+                workspace: workspaceRoot,
+                directToolExecutor: true,
+                nativeDirectTools: true,
+                computerControlEnabled: true,
+                permissionProfile: 'danger-full-access',
+                approvalPolicy: 'auto',
+                approved: true,
+                autoConfirm: true
+            }
+        });
+
+        assert.equal(result.body.ok, false, JSON.stringify(result.body));
+        assert.equal(result.body.status, 'provider_error');
+        assert.equal(result.body.intent, 'llm_provider_unavailable');
+        assert.match(result.body.displayText, /timed out/);
+        assert.equal(result.body.steps.length, 0);
+        assert.equal(llmServer.calls.length, 1);
+        assert.equal(result.body.events.some((event) => event.type === 'agent.invalid_decision_observation'), false);
+        assert.notEqual(result.body.status, 'max_steps_reached');
     } finally {
         await gateway.stop();
         await llmServer.close();

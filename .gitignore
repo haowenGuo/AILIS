@@ -21,7 +21,11 @@ input/
 output/
 tmp/
 build-cache/
+vendor/ragflow-lite/python-deps/
+vendor/ragflow-lite/nltk-data/
 logs/
+models/
+state/
 .codex-run/
 longrun/
 .ailis-rollback/
@@ -68,6 +72,13 @@ solve_map.py
 gaia-practice-tasks/*.txt
 gaia-practice-tasks/parse_*.py
 gaia-practice-tasks/*_output.*
+email_config.json
+emails_output.txt
+fetch_emails.py
+map_puzzle.xlsx
+map_solver.py
+map_solver2.py
+vendor/**/__pycache__/
 
 # Legacy / generated assets not needed in the published repo
 /main.js

@@ -2,9 +2,9 @@
   <h1>AILIS Assistant</h1>
   <p><strong>An open-source desktop embodied AI assistant with a VRM character, realtime voice, vision, memory, and a Codex-style agent harness.</strong></p>
   <p>
-    <img alt="Version" src="https://img.shields.io/badge/version-1.0.6-2563eb?style=for-the-badge">
+    <img alt="Version" src="https://img.shields.io/badge/version-1.0.7-2563eb?style=for-the-badge">
     <img alt="Runtime" src="https://img.shields.io/badge/runtime-Electron-0f172a?style=for-the-badge">
-    <img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-059669?style=for-the-badge">
+    <img alt="License" src="https://img.shields.io/badge/license-MIT-059669?style=for-the-badge">
   </p>
   <p>
     <a href="README.md">English</a> ·
@@ -165,7 +165,7 @@ pnpm ailis:validate-gateway
 
 ## Project Status
 
-Current release line: `v1.0.6`.
+Current release line: `v1.0.7`.
 
 AILIS is in active development. It already has a substantial desktop runtime, agent harness, tool layer, and evaluation surface, but it should still be treated as an alpha-stage product/runtime rather than a production-grade Agent OS. The near-term priority is reliability: clearer tool contracts, safer approvals, stronger memory behavior, better local model setup, and higher-quality end-to-end evaluation.
 
@@ -180,4 +180,4 @@ AILIS is designed for personal desktop use, so privacy and control are part of t
 
 ## License
 
-AILIS source code is released under the [Apache License 2.0](LICENSE). Some bundled or third-party assets, models, motions, and voice resources may have their own licenses; check asset-specific notes before redistribution.
+AILIS source code is released under the [MIT License](LICENSE). Some bundled or third-party assets, models, motions, and voice resources may have their own licenses; check asset-specific notes before redistribution.
