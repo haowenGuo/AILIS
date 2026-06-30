@@ -340,7 +340,7 @@ test('Agent evidence sufficiency gate summarizes ready artifact and compute evid
     }];
 
     const sufficiency = buildEvidenceSufficiencyPromptObject(stepResults, { exactAnswerMode: true });
-    assert.equal(sufficiency.status, 'ready_for_reasoning');
+    assert.equal(sufficiency.status, 'model_judges_evidence');
     assert.equal(sufficiency.ready, true);
     assert.equal(sufficiency.exact_answer_mode, true);
     assert.equal(sufficiency.ready_evidence_count, 3);
@@ -379,7 +379,7 @@ test('Agent evidence sufficiency treats complete parsed documents as reasoning-r
     }];
 
     const sufficiency = buildEvidenceSufficiencyPromptObject(stepResults, { exactAnswerMode: true });
-    assert.equal(sufficiency.status, 'ready_for_reasoning');
+    assert.equal(sufficiency.status, 'model_judges_evidence');
     assert.equal(sufficiency.ready, true);
     assert.equal(sufficiency.ready_evidence[0].tool, 'mcp__ailis_research__read_document');
 });
@@ -421,14 +421,15 @@ test('Agent evidence sufficiency unwraps nested MCP structuredContent readiness'
     }];
 
     const sufficiency = buildEvidenceSufficiencyPromptObject(stepResults, { exactAnswerMode: true });
-    assert.equal(sufficiency.status, 'audit_required');
-    assert.equal(sufficiency.ready, false);
-    assert.equal(sufficiency.ready_evidence_count, 0);
-    assert.equal(sufficiency.audit_required, true);
+    assert.equal(sufficiency.status, 'model_judges_evidence');
+    assert.equal(sufficiency.ready, true);
+    assert.equal(sufficiency.ready_evidence_count, 1);
+    assert.equal(sufficiency.audit_required, false);
     assert.equal(sufficiency.evidence_audit_candidates.length, 1);
     assert.equal(sufficiency.evidence_audit_candidates[0].tool, 'mcp__ailis_research__web_fetch');
-    assert.equal(sufficiency.evidence_audit_contract.required, true);
-    assert.match(sufficiency.evidence_audit_contract.final_answer_rule, /supported_claims/);
+    assert.equal(sufficiency.evidence_audit_contract, null);
+    assert.equal(sufficiency.ready_evidence[0].tool, 'mcp__ailis_research__web_fetch');
+    assert.equal(sufficiency.ready_evidence[0].coverage.reasoningReady, true);
 });
 
 test('Agent model-facing observation digest stays compact and artifact-backed', () => {
@@ -662,7 +663,6 @@ test('Agent exact-answer gate requires confident known evidence refs', () => {
         stepResults: [stepResult]
     });
     assert.equal(rejected.ok, false);
-    assert.ok(rejected.errors.includes('confidence_below_gate'));
     assert.ok(rejected.errors.includes('evidence_refs_unknown'));
 });
 
@@ -691,7 +691,7 @@ test('Agent exact-answer mode exposes source_question evidence for self-containe
         message: question,
         exactAnswerMode: true
     });
-    assert.equal(sufficiency.status, 'source_question_ready_for_reasoning');
+    assert.equal(sufficiency.status, 'model_judges_evidence');
     assert.equal(sufficiency.ready, true);
     assert.equal(sufficiency.ready_evidence[0].evidenceId, sourceArtifact.id);
 

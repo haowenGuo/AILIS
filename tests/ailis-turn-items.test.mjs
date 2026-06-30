@@ -252,6 +252,58 @@ test('Turn items preserve complete structured document table previews for reason
     assert.doesNotMatch(items[0].preview, /truncated for model budget/);
 });
 
+test('Turn items preserve artifact_tools preview-only query observations for reasoning', () => {
+    const rows = Array.from({ length: 20 }, (_, index) => ({
+        rowNumber: index + 1,
+        cells: index === 0
+            ? 'START | #0099FF | #0099FF | #0099FF'
+            : (index === 19
+                ? '#0099FF | #92D050 | #F478A7 | END'
+                : `#F478A7 | #0099FF | #92D050 | row-${index + 1}`)
+    }));
+    const artifactPreview = JSON.stringify({
+        schema: 'ailis.artifact_tools.tool_api_result.v1',
+        ok: true,
+        status: 'completed',
+        action: 'query',
+        adapterId: 'xlsx',
+        observation: {
+            schema: 'ailis.artifact_tools.compact_observation.v1',
+            format: 'xlsx',
+            action: 'query',
+            sheetName: 'Sheet1',
+            range: 'Sheet1!A1:D20',
+            rowCount: 20,
+            columnCount: 4,
+            truncated: false,
+            columns: ['A', 'B', 'C', 'D'],
+            compactRows: rows,
+            candidateCount: rows.length,
+            diagnostics: []
+        }
+    }, null, 2);
+    assert.ok(artifactPreview.length > 1000);
+
+    const promptObject = buildTurnItemsPromptObject({
+        events: [{
+            type: 'tool_result',
+            id: 'step-artifact-query',
+            title: 'artifact_tools',
+            tool: 'artifact_tools',
+            status: 'completed',
+            ok: true,
+            preview: artifactPreview,
+            iteration: 4
+        }]
+    });
+
+    assert.equal(promptObject.items.length, 1);
+    assert.match(promptObject.items[0].preview, /START/);
+    assert.match(promptObject.items[0].preview, /rowNumber": 11/);
+    assert.match(promptObject.items[0].preview, /END/);
+    assert.doesNotMatch(promptObject.items[0].preview, /truncated for model budget/);
+});
+
 test('Turn items classify nested low-confidence web_search as requiring user clarification', () => {
     const items = buildCodexLikeTurnItems({
         stepResults: [
