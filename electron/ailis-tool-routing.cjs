@@ -82,6 +82,31 @@ function canonicalToolName(entry = {}) {
 
 const ROUTING_PROFILES = Object.freeze([
     Object.freeze({
+        id: 'artifact_file_runtime',
+        patterns: [
+            /\b(artifact_tools|artifact runtime|artifact tool|artifact adapter|file artifact|local artifact)\b/i,
+            /\b(attachment|attached file|local file|file path|uploaded file|binary file)\b.*\b(pdf|docx|docm|pptx|ppt|xlsx|xlsm|xls|csv|tsv|png|jpg|jpeg|webp|image|spreadsheet|workbook|document|presentation)\b/i,
+            /\b(pdf|docx|docm|pptx|ppt|xlsx|xlsm|xls|csv|tsv|png|jpg|jpeg|webp)\b/i,
+            /(附件|本地文件|文件路径|产物|工件).*(pdf|docx|pptx|xlsx|xlsm|csv|tsv|图片|图像|表格|文档|演示文稿)/i
+        ],
+        tools: [
+            'artifact_tools',
+            'artifact_query',
+            'artifact_compute',
+            'read_spreadsheet',
+            'read_document',
+            'read_presentation',
+            'pdf_extract_text',
+            'pdf_find_and_extract',
+            'describe_image'
+        ],
+        primaryTools: ['artifact_tools'],
+        bonus: 115,
+        primaryBonus: 70,
+        webPenalty: 90,
+        advice: 'Use artifact_tools as the canonical local file artifact runtime for Office/PDF/table/image artifacts. If a capability is missing, decide from the observation whether to use a general tool such as exec/code or ask for clarification.'
+    }),
+    Object.freeze({
         id: 'word_document',
         patterns: [
             /\b(docx|docm)\b/i,
@@ -90,10 +115,12 @@ const ROUTING_PROFILES = Object.freeze([
             /附件.*(word|docx|docm|文档|表格)/i,
             /(word|docx|docm|文档).*附件/i
         ],
-        tools: ['read_document'],
+        tools: ['artifact_tools', 'read_document'],
+        primaryTools: ['artifact_tools'],
         bonus: 90,
+        primaryBonus: 48,
         webPenalty: 80,
-        advice: 'Use read_document for local Word/DOCX content before web_search.'
+        advice: 'Use artifact_tools for local Word/DOCX artifacts first; fall back to read_document only if the artifact runtime lacks the needed adapter/capability.'
     }),
     Object.freeze({
         id: 'presentation',
@@ -101,10 +128,12 @@ const ROUTING_PROFILES = Object.freeze([
             /\b(ppt|pptx|powerpoint|presentation|slide deck|slides?)\b/i,
             /(幻灯片|演示文稿|pptx|ppt|powerpoint)/i
         ],
-        tools: ['read_presentation'],
+        tools: ['artifact_tools', 'read_presentation'],
+        primaryTools: ['artifact_tools'],
         bonus: 90,
+        primaryBonus: 48,
         webPenalty: 80,
-        advice: 'Use read_presentation for local PowerPoint/PPTX content before web_search.'
+        advice: 'Use artifact_tools for local PowerPoint/PPTX artifacts first; fall back to read_presentation only if the artifact runtime lacks the needed adapter/capability.'
     }),
     Object.freeze({
         id: 'spreadsheet',
@@ -113,12 +142,12 @@ const ROUTING_PROFILES = Object.freeze([
             /\b(cell colors?|fill colors?|merged cells?|formula cells?|grid map|spreadsheet map)\b/i,
             /(电子表格|工作簿|表格|列|行|求和|总和|单元格|填充色|颜色|公式|合并单元格)/i
         ],
-        tools: ['read_xlsx_workbook', 'read_spreadsheet'],
-        primaryTools: ['read_xlsx_workbook'],
+        tools: ['artifact_tools', 'read_spreadsheet', 'artifact_query', 'artifact_compute'],
+        primaryTools: ['artifact_tools'],
         bonus: 90,
-        primaryBonus: 30,
+        primaryBonus: 56,
         webPenalty: 80,
-        advice: 'Use read_xlsx_workbook for Excel/XLSX/XLSM attachments, especially when cell colors, formulas, merged cells, or grid layout matter; use read_spreadsheet only for plain table summaries.'
+        advice: 'Use artifact_tools for spreadsheet/workbook artifacts, especially colors, formulas, merges, renders, indexes, search/query, and grid-map tasks.'
     }),
     Object.freeze({
         id: 'context_artifact',
@@ -127,12 +156,26 @@ const ROUTING_PROFILES = Object.freeze([
             /\b(read artifact|artifact range|artifact grid|artifact search|spreadsheet range|grid query|artifact compute|data worker|find path|path search)\b/i,
             /(上下文产物|产物查询|证据产物|大文件载荷|查询证据|产物计算|路径搜索|数据工人)/i
         ],
-        tools: ['artifact_query', 'artifact_compute'],
-        primaryTools: ['artifact_query', 'artifact_compute'],
+        tools: ['artifact_tools', 'artifact_query', 'artifact_compute'],
+        primaryTools: ['artifact_tools'],
         bonus: 95,
-        primaryBonus: 40,
+        primaryBonus: 58,
         webPenalty: 90,
-        advice: 'Use artifact_query for managed AILIS context artifacts by artifactId; use artifact_compute for deterministic data-worker analysis such as spreadsheet profiling or grid path search. Do not raw-read artifact payload files into the model context.'
+        advice: 'Use artifact_tools as the artifact runtime control surface for indexing/search/query/compute/render/edit flows. Use artifact_query/artifact_compute only as lower-level compatibility tools for already-managed context artifact ids.'
+    }),
+    Object.freeze({
+        id: 'pdf_artifact',
+        patterns: [
+            /\b(local|attached|attachment|file|path|downloaded)\b.*\b(pdf)\b/i,
+            /\b(pdf)\b.*\b(local|attached|attachment|file|path|downloaded|extract|render|page|search)\b/i,
+            /(本地|附件|文件|路径).*(pdf|PDF|论文|报告)/i
+        ],
+        tools: ['artifact_tools', 'pdf_extract_text', 'pdf_find_and_extract', 'artifact_query'],
+        primaryTools: ['artifact_tools'],
+        bonus: 92,
+        primaryBonus: 50,
+        webPenalty: 75,
+        advice: 'Use artifact_tools for local PDF artifacts first so parsing, page search, render checks, and adapter diagnostics stay inside the artifact runtime. Use pdf_extract_text/pdf_find_and_extract as fallback extractors.'
     }),
     Object.freeze({
         id: 'paper_report_pdf_discovery',
@@ -177,10 +220,12 @@ const ROUTING_PROFILES = Object.freeze([
             /\b(png|jpg|jpeg|webp|image|photo|picture|screenshot|vision|visual)\b/i,
             /(图片|图像|截图|照片|视觉)/i
         ],
-        tools: ['describe_image'],
+        tools: ['artifact_tools', 'describe_image'],
+        primaryTools: ['artifact_tools'],
         bonus: 86,
+        primaryBonus: 36,
         webPenalty: 75,
-        advice: 'Use describe_image for local image evidence before web_search.'
+        advice: 'Use artifact_tools for local image artifacts first for metadata/render/nonblank checks; use describe_image when the user needs semantic visual understanding.'
     }),
     Object.freeze({
         id: 'python_code',
@@ -279,6 +324,9 @@ function toolSpecificityScore(toolName = '') {
     if (/^output_(read|tail|search)$/.test(toolName)) {
         return 14;
     }
+    if (toolName === 'artifact_tools') {
+        return 24;
+    }
     if (/^artifact_(query|compute)$/.test(toolName)) {
         return 14;
     }
@@ -311,6 +359,12 @@ function scoreToolForQuery(entry = {}, query = '') {
         /\b(outputid|output_id|previewtruncated|exec output|stdout|stderr|full output|stored output|output store|tail output|search output)\b/i.test(query)
     ) {
         score += 36;
+    }
+    if (
+        toolName === 'artifact_tools' &&
+        /\b(artifact_tools|artifact runtime|artifact tool|artifact adapter|file artifact|local artifact|attached file|attachment|local file|file path|pdf|docx|docm|pptx|ppt|xlsx|xlsm|xls|csv|tsv|spreadsheet|workbook|worksheet|cell|formula|merge|render|roundtrip|image|png|jpg|jpeg|webp)\b/i.test(query)
+    ) {
+        score += 62;
     }
     if (
         toolName === 'artifact_query' &&

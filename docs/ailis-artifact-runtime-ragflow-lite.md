@@ -246,8 +246,9 @@ artifact_verify
   Check generated outputs and evidence references.
 ```
 
-AILIS currently has `artifact_query` and `artifact_compute`. `artifact_import`,
-`artifact_search`, and `artifact_render` should be the next modules.
+AILIS currently has `artifact_query`, `artifact_compute`, and a first
+`artifact_import` implementation for the RAGFlow-lite table worker.
+`artifact_search` and `artifact_render` are still next modules.
 
 ## Next Engineering Phases
 
@@ -262,6 +263,14 @@ AILIS currently has `artifact_query` and `artifact_compute`. `artifact_import`,
   - supported actions
   - render availability
   - compute availability
+- Current implementation:
+  - `electron/ailis-artifact-import-tool.cjs` calls
+    `scripts/ailis-ragflow-lite-worker.py table`.
+  - Worker output is stored under `payload.ragflowLiteRuntime`.
+  - `artifact_query runtime_schema/chunk_search` reads the stored worker chunks
+    directly.
+  - `tests/ailis-artifact-import-tool.test.mjs` and
+    `tests/ailis-gateway.test.mjs` cover the import -> query chain.
 
 ### Phase 2: Extracted RAGFlow Worker
 
@@ -274,7 +283,14 @@ RAGFlow-lite dependency closure:
 - Images/scans: start from RAGFlow picture/DeepDoc path.
 
 The worker emits `ragflowLiteRuntime` chunks into AILIS; AILIS stores and exposes
-them.
+them. Local Python deps are installed with:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\bootstrap-ragflow-lite-deps.ps1
+```
+
+The bootstrap installs `xpinyin`, `infinity-sdk`, and NLTK `punkt_tab` into
+ignored local directories under `vendor/ragflow-lite/`.
 
 ### Phase 3: RAGFlow-Lite Search
 

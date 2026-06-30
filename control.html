@@ -107,6 +107,53 @@
             -webkit-app-region: no-drag;
         }
 
+        .window-controls {
+            display: inline-flex;
+            align-items: center;
+            gap: 2px;
+            margin-left: 2px;
+            border: 1px solid rgba(29, 49, 62, 0.08);
+            border-radius: 10px;
+            overflow: hidden;
+            background: rgba(255, 255, 255, 0.9);
+            -webkit-app-region: no-drag;
+        }
+
+        .window-control-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 38px;
+            height: 34px;
+            border: 0;
+            border-radius: 0;
+            background: transparent;
+            color: var(--text-main);
+            cursor: pointer;
+            pointer-events: auto;
+            transition: background-color 0.16s ease, color 0.16s ease;
+            -webkit-app-region: no-drag;
+        }
+
+        .window-control-btn svg {
+            width: 15px;
+            height: 15px;
+            fill: none;
+            stroke: currentColor;
+            stroke-width: 2;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+        }
+
+        .window-control-btn:hover {
+            background: rgba(29, 49, 62, 0.07);
+        }
+
+        .window-control-btn.is-close:hover {
+            background: #e5484d;
+            color: #ffffff;
+        }
+
         .pill {
             display: inline-flex;
             align-items: center;
@@ -1737,7 +1784,17 @@
                     <select id="ui-language" aria-label="界面语言"></select>
                 </label>
                 <div class="pill"><strong id="app-version">v1.0.0</strong><span>桌面版</span></div>
-                <button id="close-btn" class="icon-btn" type="button" aria-label="关闭控制面板">×</button>
+                <div class="window-controls" role="group" aria-label="窗口控制">
+                    <button id="minimize-btn" class="window-control-btn" type="button" aria-label="最小化控制面板" title="最小化">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 18h12"></path></svg>
+                    </button>
+                    <button id="maximize-btn" class="window-control-btn" type="button" aria-label="最大化或还原控制面板" title="最大化 / 还原">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.8"></rect></svg>
+                    </button>
+                    <button id="close-btn" class="window-control-btn is-close" type="button" aria-label="关闭控制面板" title="关闭">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg>
+                    </button>
+                </div>
             </div>
         </header>
 

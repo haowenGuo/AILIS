@@ -23,7 +23,6 @@ tmp/
 build-cache/
 vendor/ragflow-lite/python-deps/
 vendor/ragflow-lite/nltk-data/
-vendor/ragflow-lite/nltk-data/
 logs/
 models/
 state/
@@ -80,7 +79,6 @@ map_puzzle.xlsx
 map_solver.py
 map_solver2.py
 vendor/**/__pycache__/
-vendor/ragflow-lite/python-deps/
 
 # Legacy / generated assets not needed in the published repo
 /main.js

@@ -60,27 +60,19 @@ test('AILIS memory runtime persists blocks, events, affinity, and redacted secre
     assert.ok((await fs.readFile(path.join(rootDir, 'memory', 'events.jsonl'), 'utf8')).includes('memory-test'));
 });
 
-test('AILIS memory affinity stages match AILIS relationship design', async () => {
+test('AILIS memory prompt no longer uses legacy affinity score when curated relation state is absent', async () => {
     const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-affinity-'));
     const memory = new AILISMemoryRuntime({
         rootDir: path.join(rootDir, 'memory'),
         workspaceRoot: rootDir
     });
 
-    memory.resetAffinity(50);
-    let context = memory.compileContext({ sessionId: 'affinity-test', message: '你好' });
-    assert.match(context, /50\/100（familiarizing）/);
-    assert.match(context, /温和、熟悉但不过分亲密/);
-
-    memory.resetAffinity(70);
-    context = memory.compileContext({ sessionId: 'affinity-test', message: '继续聊项目' });
-    assert.match(context, /70\/100（trusted）/);
-    assert.match(context, /更熟悉、更自然、更有陪伴感/);
-
     memory.resetAffinity(80);
-    context = memory.compileContext({ sessionId: 'affinity-test', message: '陪我聊会儿' });
-    assert.match(context, /80\/100（close）/);
-    assert.match(context, /允许明显亲密、主动、轻微撒娇和更多默契表达/);
+    const context = memory.compileContext({ sessionId: 'affinity-test', message: '陪我聊会儿' });
+    assert.match(context, /关系状态（Raw Memory Ledger 抽取）/);
+    assert.match(context, /暂无 Raw Memory Ledger 抽取出的关系状态/);
+    assert.equal(context.includes('80/100'), false);
+    assert.equal(context.includes('允许明显亲密、主动、轻微撒娇'), false);
     assert.match(context, /不影响安全、隐私、事实准确性、工具审批/);
 });
 
@@ -152,4 +144,80 @@ test('AILIS memory compiles larger structured context and clears memory while pr
     assert.equal((await fs.readFile(path.join(rootDir, 'memory', 'events.jsonl'), 'utf8')), '');
     assert.equal(memory.searchMemory('memoryanchor').events.length, 0);
     assert.ok(memory.listSecrets().secrets.some((secret) => secret.name === 'local-test-token'));
+});
+
+test('AILIS memory prompt uses curated raw-ledger profile instead of legacy user relationship affinity blocks', async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-curated-prompt-'));
+    const memoryRoot = path.join(rootDir, 'memory');
+    const memory = new AILISMemoryRuntime({
+        rootDir: memoryRoot,
+        workspaceRoot: rootDir
+    });
+
+    memory.updateBlock('user', 'OLD USER BLOCK SHOULD NOT BE IN PROMPT');
+    memory.updateBlock('relationship', 'OLD RELATIONSHIP BLOCK SHOULD NOT BE IN PROMPT');
+    memory.updateBlock('affinity', 'OLD AFFINITY BLOCK SHOULD NOT BE IN PROMPT');
+
+    await fs.writeFile(path.join(memoryRoot, 'user-profile.json'), JSON.stringify({
+        version: 1,
+        items: [
+            {
+                id: 'profile-direct',
+                category: 'communication_style',
+                claim: '用户希望 AILIS 回答直接、具体，并基于证据。',
+                confidence: 0.94,
+                stability: 'stable',
+                status: 'active',
+                evidenceIds: ['raw-direct-style']
+            }
+        ]
+    }, null, 2));
+    await fs.writeFile(path.join(memoryRoot, 'relationship-profile.json'), JSON.stringify({
+        version: 1,
+        items: [
+            {
+                id: 'relationship-risk-first',
+                claim: '当用户担心乱改代码时，AILIS 应先解释边界和风险。',
+                confidence: 0.88,
+                stability: 'stable',
+                status: 'active',
+                evidenceIds: ['raw-repair-signal']
+            }
+        ]
+    }, null, 2));
+    await fs.writeFile(path.join(memoryRoot, 'affinity-state.json'), JSON.stringify({
+        version: 1,
+        trust: 0.52,
+        familiarity: 0.64,
+        warmth: 0.58,
+        friction: 0.31,
+        repairState: 'recovering',
+        relationshipStage: 'trusted',
+        evidenceIds: ['raw-repair-signal']
+    }, null, 2));
+    await fs.writeFile(path.join(memoryRoot, 'profile-curation-state.json'), JSON.stringify({
+        version: 1,
+        lastRunDate: '2026-06-30',
+        cursor: {
+            lastProcessedIso: '2026-06-29T12:00:00.000Z',
+            lastProcessedEntryId: 'raw-repair-signal'
+        },
+        lastRun: {
+            iso: '2026-06-30T02:00:00.000Z'
+        }
+    }, null, 2));
+
+    const context = memory.compileContext({
+        sessionId: 'curated-prompt-test',
+        message: '继续'
+    });
+    assert.match(context, /用户画像（Raw Memory Ledger 抽取）/);
+    assert.match(context, /用户希望 AILIS 回答直接、具体，并基于证据/);
+    assert.match(context, /关系画像（Raw Memory Ledger 抽取）/);
+    assert.match(context, /先解释边界和风险/);
+    assert.match(context, /trust=0\.52/);
+    assert.match(context, /repairState|修复状态：recovering/);
+    assert.equal(context.includes('OLD USER BLOCK SHOULD NOT BE IN PROMPT'), false);
+    assert.equal(context.includes('OLD RELATIONSHIP BLOCK SHOULD NOT BE IN PROMPT'), false);
+    assert.equal(context.includes('OLD AFFINITY BLOCK SHOULD NOT BE IN PROMPT'), false);
 });

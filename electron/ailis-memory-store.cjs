@@ -518,6 +518,97 @@ function buildAffinityBlock(affinity) {
     ].join('\n');
 }
 
+function evidencePreview(ids = []) {
+    const normalized = Array.isArray(ids) ? ids.map((id) => normalizeText(String(id))).filter(Boolean) : [];
+    if (!normalized.length) {
+        return '';
+    }
+    return `证据：${normalized.slice(0, 4).join(', ')}${normalized.length > 4 ? '…' : ''}`;
+}
+
+function confidenceLabel(value) {
+    const confidence = clampNumber(value, 0, 1, 0);
+    return confidence ? confidence.toFixed(2) : 'unknown';
+}
+
+function formatCuratedProfileItems(items = [], { includeCategory = true, maxItems = 24 } = {}) {
+    const activeItems = (Array.isArray(items) ? items : [])
+        .filter((item) => item && item.status !== 'inactive' && normalizeText(item.claim))
+        .sort((left, right) =>
+            (right.stability === 'stable' ? 1 : 0) - (left.stability === 'stable' ? 1 : 0) ||
+            (Number(right.confidence) || 0) - (Number(left.confidence) || 0) ||
+            String(right.updatedAt || right.lastSeen || '').localeCompare(String(left.updatedAt || left.lastSeen || ''))
+        )
+        .slice(0, maxItems);
+    if (!activeItems.length) {
+        return '- 暂无已抽取的稳定画像。不要根据旧规则块脑补用户偏好；只根据当前请求和明确证据行动。';
+    }
+    return activeItems.map((item) => {
+        const parts = [];
+        if (includeCategory) {
+            parts.push(normalizeText(item.category, 'uncategorized'));
+        }
+        parts.push(normalizeText(item.stability, 'candidate'));
+        parts.push(`confidence=${confidenceLabel(item.confidence)}`);
+        const evidence = evidencePreview(item.evidenceIds);
+        return `- [${parts.join(' | ')}] ${normalizeText(item.claim)}${evidence ? `（${evidence}）` : ''}`;
+    }).join('\n');
+}
+
+function formatCuratedAffinityState(affinity = null) {
+    if (!affinity || typeof affinity !== 'object') {
+        return [
+            '- 暂无 Raw Memory Ledger 抽取出的关系状态，默认采用中性、稳健、少脑补的协作语气。',
+            '- 关系状态只影响表达风格、主动性和陪伴感，不影响安全、隐私、事实准确性、工具审批和基础帮助质量。'
+        ].join('\n');
+    }
+    const trust = clampNumber(affinity.trust, 0, 1, 0.5);
+    const familiarity = clampNumber(affinity.familiarity, 0, 1, 0.5);
+    const warmth = clampNumber(affinity.warmth, 0, 1, 0.5);
+    const friction = clampNumber(affinity.friction, 0, 1, 0.2);
+    const stage = normalizeText(affinity.relationshipStage, 'familiarizing');
+    const repairState = normalizeText(affinity.repairState, 'stable');
+    const evidence = evidencePreview(affinity.evidenceIds);
+    const toneHint = friction >= 0.55 || repairState === 'recovering' || repairState === 'strained'
+        ? '先解释证据、边界和风险，减少卖萌和跳步执行，优先恢复信任。'
+        : trust >= 0.75 && warmth >= 0.65
+            ? '可以更自然、更熟悉、更有陪伴感，但仍保持事实和执行边界。'
+            : '保持温和、清晰、可靠，先把事情做好，再自然表达陪伴感。';
+    return [
+        `- 关系阶段：${stage}；修复状态：${repairState}。`,
+        `- 维度：trust=${trust.toFixed(2)}, familiarity=${familiarity.toFixed(2)}, warmth=${warmth.toFixed(2)}, friction=${friction.toFixed(2)}。`,
+        `- 语气影响：${toneHint}`,
+        evidence ? `- ${evidence}` : '- 暂无可追溯证据 id。',
+        '- 关系状态是内部表达调节数据，不影响安全、隐私、事实准确性、工具审批和基础帮助质量。'
+    ].join('\n');
+}
+
+function loadCuratedPromptMemory(rootDir) {
+    const userProfile = readJsonFileSync(path.join(rootDir, 'user-profile.json'), null);
+    const relationshipProfile = readJsonFileSync(path.join(rootDir, 'relationship-profile.json'), null);
+    const affinityState = readJsonFileSync(path.join(rootDir, 'affinity-state.json'), null);
+    const curatorState = readJsonFileSync(path.join(rootDir, 'profile-curation-state.json'), null);
+    const sourceLine = [
+        '来源：Raw Memory Ledger 日级抽取。',
+        curatorState?.lastRun?.iso ? `最近抽取：${curatorState.lastRun.iso}。` : '',
+        curatorState?.cursor?.lastProcessedIso ? `已处理到：${curatorState.cursor.lastProcessedIso}。` : ''
+    ].filter(Boolean).join(' ');
+    return {
+        userProfileText: [
+            sourceLine,
+            formatCuratedProfileItems(userProfile?.items || [], { includeCategory: true, maxItems: 28 })
+        ].filter(Boolean).join('\n'),
+        relationshipText: [
+            sourceLine,
+            formatCuratedProfileItems(relationshipProfile?.items || [], { includeCategory: false, maxItems: 16 })
+        ].filter(Boolean).join('\n'),
+        affinityText: [
+            sourceLine,
+            formatCuratedAffinityState(affinityState)
+        ].filter(Boolean).join('\n')
+    };
+}
+
 function encodeSecretValue(value) {
     return Buffer.from(String(value || ''), 'utf8').toString('base64');
 }
@@ -664,20 +755,21 @@ class AILISMemoryRuntime {
         ].join('\n');
         const relevantEvents = this.searchMemory(query || message, { limit: DEFAULT_RELEVANT_EVENT_LIMIT }).events;
         const blocks = state.blocks || {};
+        const curatedPromptMemory = loadCuratedPromptMemory(this.rootDir);
         const sections = [
             '【AILIS 长期记忆上下文】',
-            '使用原则：这些记忆是辅助上下文。若与用户当前明确指令冲突，以当前指令为准；不要向用户暴露“系统记忆/好感度数值”，除非用户主动询问。',
+            '使用原则：这些记忆是辅助上下文。用户画像、关系画像和关系状态以 Raw Memory Ledger 日级抽取结果为准；若与用户当前明确指令冲突，以当前指令为准；不要向用户暴露“系统记忆/好感度数值”，除非用户主动询问。',
             '',
             `会话：${sessionId}`,
             '',
-            `## ${blocks.affinity?.label || '好感度状态'}`,
-            blocks.affinity?.value || buildAffinityBlock(state.affinity || {}),
+            '## 关系状态（Raw Memory Ledger 抽取）',
+            curatedPromptMemory.affinityText,
             '',
-            `## ${blocks.user?.label || '用户偏好记忆'}`,
-            blocks.user?.value || '',
+            '## 用户画像（Raw Memory Ledger 抽取）',
+            curatedPromptMemory.userProfileText,
             '',
-            `## ${blocks.relationship?.label || '关系与语气记忆'}`,
-            blocks.relationship?.value || '',
+            '## 关系画像（Raw Memory Ledger 抽取）',
+            curatedPromptMemory.relationshipText,
             '',
             `## ${blocks.project?.label || '项目记忆'}`,
             blocks.project?.value || '',

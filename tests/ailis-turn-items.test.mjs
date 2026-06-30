@@ -38,6 +38,40 @@ test('Turn items map tool calls and results into Codex-like chronological items'
     assert.match(promptObject.items[1].preview, /reflection/);
 });
 
+test('Turn items summarize large tool call args before they enter the prompt', () => {
+    const script = [
+        'from openpyxl import load_workbook',
+        'wb = load_workbook("task.xlsx")',
+        'print("answer", "F478A7")'
+    ].join('\n') + '\n' + 'print("padding")\n'.repeat(900);
+
+    const promptObject = buildTurnItemsPromptObject({
+        events: [{
+            type: 'tool_call',
+            id: 'step-write',
+            title: 'Write solver script',
+            tool: 'write',
+            args: {
+                path: 'solve_puzzle.py',
+                content: script,
+                api_token: 'secret-value'
+            },
+            iteration: 4
+        }]
+    });
+
+    const item = promptObject.items[0];
+    assert.equal(item.type, 'tool_call');
+    assert.equal(item.args.path, 'solve_puzzle.py');
+    assert.equal(item.args.api_token, '__REDACTED__');
+    assert.equal(item.args.content.omitted, true);
+    assert.equal(item.args.content.kind, 'large_text_arg');
+    assert.equal(item.args.content.chars, script.length);
+    assert.match(item.args.content.sha1, /^[a-f0-9]{12}$/);
+    assert.ok(JSON.stringify(promptObject).length < 2000);
+    assert.doesNotMatch(JSON.stringify(promptObject), /padding"\)\nprint\("padding"\)\nprint\("padding/);
+});
+
 test('Turn items compact older observations while keeping recent observations detailed', () => {
     const events = Array.from({ length: 18 }, (_, index) => ({
         type: 'tool_result',

@@ -2732,8 +2732,21 @@ async function callDesktopLlm(payload = {}) {
     if (busy) {
         return busy;
     }
+    const startedAt = Date.now();
     const enrichedPayload = attachAilisMemoryToLlmPayload(payload);
     const result = await callDesktopLlmProvider(settings, enrichedPayload);
+    try {
+        ensureAILISGateway().rawMemoryLedger?.recordChatTurn?.({
+            sessionId: payload.sessionId || payload.sessionKey || 'main',
+            source: payload.memorySource || 'direct_llm',
+            requestPayload: payload,
+            enrichedPayload,
+            result,
+            durationMs: Date.now() - startedAt
+        });
+    } catch (error) {
+        console.warn('[ailis-raw-memory] 写入原始对话账本失败：', error.message || error);
+    }
     if (payload.includeAilisMemory === true) {
         try {
             ensureAILISGateway().memoryRuntime?.recordTurn?.({
@@ -2900,6 +2913,7 @@ function ensureAILISGateway() {
         auditDir: getPersistedAILISStateDir(),
         getDefaultContext: () => getAILISDefaultContext(),
         getEmailProfiles: () => getPersistedEmailProfiles(),
+        profileCurationLlm: (payload) => callDesktopLlmProvider(getResolvedLlmSettings(), payload || {}),
         visionServices: {
             permissionPolicy: 'manual',
             getLlmSettings: () => getResolvedLlmSettings(),
@@ -2914,8 +2928,8 @@ function ensureAILISGateway() {
 
 async function ensureAILISGatewayStarted(reason = 'manual') {
     const gateway = ensureAILISGateway();
-    if (gateway.getStatus().running) {
-        return gateway.getStatus();
+    if (gateway.server) {
+        return gateway.getStatus({ includeAgentRunner: false });
     }
     if (!ailisGatewayStartPromise) {
         ailisGatewayStartPromise = gateway.start()
@@ -2932,10 +2946,11 @@ async function ensureAILISGatewayStarted(reason = 'manual') {
 
 async function getAILISGatewayStatusEnsuringStarted(reason = 'status') {
     try {
-        return await ensureAILISGatewayStarted(reason);
+        await ensureAILISGatewayStarted(reason);
+        return ensureAILISGateway().getStatus();
     } catch (error) {
         return {
-            ...ensureAILISGateway().getStatus(),
+            ...ensureAILISGateway().getStatus({ includeAgentRunner: false }),
             startError: error?.message || String(error)
         };
     }
@@ -3213,15 +3228,6 @@ function getControlPanelState() {
             renderProfileOptions: RENDER_PROFILE_OPTIONS,
             emailProviderOptions: EMAIL_PROVIDER_OPTIONS
         },
-        assistant: {
-            selectedBackendMode: 'ailis',
-            humanGateway: ensureAILISGateway().getStatus(),
-            toolSurface: getAgentToolSurfaceSummary(),
-            toolSurfaceValidation: validateAgentToolSurface().summary
-        },
-        voiceRuntime: getVoiceRuntimeBootstrap().getFastSummary(),
-        ollamaRuntime: getOllamaLocalRuntime().getStatus(),
-        runtimeComponents: getRuntimeComponentsState(),
         environment: {
             version: app.getVersion(),
             isPackaged: app.isPackaged,
@@ -3432,13 +3438,12 @@ function showControlPanel() {
 
     controlWindow.__ailisShowWhenReady = true;
     const isControlLoaded = Boolean(controlWindow.__ailisDidFinishLoad);
-    if (!controlWindow.isVisible() && isControlLoaded) {
+    if (!controlWindow.isVisible()) {
         controlWindow.show();
     }
 
-    if (isControlLoaded) {
-        controlWindow.focus();
-    } else {
+    controlWindow.focus();
+    if (!isControlLoaded) {
         controlWindowLoadPromise?.then(() => {
             if (!controlWindow || controlWindow.isDestroyed()) {
                 return;
@@ -3446,7 +3451,6 @@ function showControlPanel() {
             if (controlWindow.__ailisShowWhenReady && !controlWindow.isVisible()) {
                 controlWindow.show();
             }
-            controlWindow.focus();
         }).catch((error) => {
             console.error('[window] 控制面板延迟显示失败：', error);
         });
@@ -3487,6 +3491,49 @@ function showAgentLabWindow() {
 function quitApplication() {
     isQuitting = true;
     app.quit();
+}
+
+function getWindowFromIpcEvent(event) {
+    return BrowserWindow.fromWebContents(event.sender);
+}
+
+function getWindowControlState(window) {
+    if (!window || window.isDestroyed()) {
+        return {
+            ok: false,
+            isMaximized: false,
+            isMinimized: false,
+            isFullScreen: false
+        };
+    }
+    return {
+        ok: true,
+        isMaximized: window.isMaximized(),
+        isMinimized: window.isMinimized(),
+        isFullScreen: window.isFullScreen()
+    };
+}
+
+function minimizeWindowFromEvent(event) {
+    const sourceWindow = getWindowFromIpcEvent(event);
+    if (!sourceWindow || sourceWindow.isDestroyed()) {
+        return getWindowControlState(sourceWindow);
+    }
+    sourceWindow.minimize();
+    return getWindowControlState(sourceWindow);
+}
+
+function toggleMaximizeWindowFromEvent(event) {
+    const sourceWindow = getWindowFromIpcEvent(event);
+    if (!sourceWindow || sourceWindow.isDestroyed()) {
+        return getWindowControlState(sourceWindow);
+    }
+    if (sourceWindow.isMaximized()) {
+        sourceWindow.unmaximize();
+    } else {
+        sourceWindow.maximize();
+    }
+    return getWindowControlState(sourceWindow);
 }
 
 function applyPreferencesPatch(partialPreferences = {}) {
@@ -4410,7 +4457,7 @@ function createControlWindow(options = {}) {
         backgroundColor: '#f4f6f8',
         hasShadow: true,
         resizable: true,
-        show: false,
+        show: showWhenReady,
         skipTaskbar: false,
         title: 'AILIS Control Panel'
     });
@@ -4420,6 +4467,9 @@ function createControlWindow(options = {}) {
         bounds: controlBounds,
         showWhenReady
     });
+    if (showWhenReady) {
+        controlWindow.focus();
+    }
 
     openExternalLinks(controlWindow);
     hookRendererDiagnostics(controlWindow, 'control');
@@ -4448,8 +4498,9 @@ function createControlWindow(options = {}) {
             }
             controlWindow.__ailisDidFinishLoad = true;
             if (controlWindow.__ailisShowWhenReady) {
-                controlWindow.show();
-                controlWindow.focus();
+                if (!controlWindow.isVisible()) {
+                    controlWindow.show();
+                }
             }
         })
         .catch((error) => {
@@ -4828,6 +4879,7 @@ function registerIpc() {
         event.returnValue = getRendererPreferences();
     });
 
+    ipcMain.handle('ailis:get-preferences', () => getRendererPreferences());
     ipcMain.handle('ailis:get-control-panel-state', () => getControlPanelState());
     ipcMain.handle('ailis:save-preferences', async (_event, payload = {}) => {
         const preferences = applyPreferencesPatch(payload);
@@ -4879,6 +4931,9 @@ function registerIpc() {
         const sourceWindow = BrowserWindow.fromWebContents(event.sender);
         return showTextEditMenu(sourceWindow || BrowserWindow.getFocusedWindow(), payload || {});
     });
+    ipcMain.handle('ailis:minimize-current-window', (event) => minimizeWindowFromEvent(event));
+    ipcMain.handle('ailis:toggle-maximize-current-window', (event) => toggleMaximizeWindowFromEvent(event));
+    ipcMain.handle('ailis:get-current-window-state', (event) => getWindowControlState(getWindowFromIpcEvent(event)));
     ipcMain.handle('ailis:close-current-window', (event) => {
         const sourceWindow = BrowserWindow.fromWebContents(event.sender);
         sourceWindow?.hide();
@@ -5017,6 +5072,21 @@ function registerIpc() {
     );
     ipcMain.handle('ailis:memory-delete-secret', async (_event, payload = {}) =>
         ensureAILISGateway().deleteMemorySecret(payload.name || payload.id || '')
+    );
+    ipcMain.handle('ailis:raw-memory-status', async () =>
+        ensureAILISGateway().getRawMemoryStatus()
+    );
+    ipcMain.handle('ailis:raw-memory-replay', async (_event, payload = {}) =>
+        ensureAILISGateway().replayRawMemory(payload || {})
+    );
+    ipcMain.handle('ailis:raw-memory-sessions', async (_event, payload = {}) =>
+        ensureAILISGateway().listRawMemorySessions(Number(payload.limit) || 100)
+    );
+    ipcMain.handle('ailis:memory-profile-state', async () =>
+        ensureAILISGateway().getUserProfileCurationState()
+    );
+    ipcMain.handle('ailis:memory-profile-curate', async (_event, payload = {}) =>
+        ensureAILISGateway().curateUserProfile(payload || {})
     );
     ipcMain.on('ailis:vision-region-selected', (event, payload = {}) => {
         completeVisionRegionSelection(event, payload.selection || payload);

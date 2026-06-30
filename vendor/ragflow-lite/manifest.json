@@ -83,8 +83,22 @@
   "ailisBridge": {
     "module": "electron/ailis-artifact-runtime.cjs",
     "behavior": "accepts normalized RAGFlow-lite runtime chunks and exposes runtime_schema/chunk_search; does not synthesize chunks from raw files",
+    "artifactImportTool": "electron/ailis-artifact-import-tool.cjs",
     "tableWorker": "scripts/ailis-ragflow-lite-worker.py",
-    "tableWorkerStatus": "minimal upstream rag.app.table.chunk path is callable with platform shims",
+    "tableWorkerStatus": "upstream rag.app.table.chunk path is callable with platform shims and local Python deps",
+    "dependencyBootstrap": {
+      "script": "scripts/bootstrap-ragflow-lite-deps.ps1",
+      "requirements": "vendor/ragflow-lite/requirements.txt",
+      "ignoredTargets": [
+        "vendor/ragflow-lite/python-deps",
+        "vendor/ragflow-lite/nltk-data"
+      ],
+      "packages": [
+        "xpinyin",
+        "infinity-sdk",
+        "nltk punkt_tab"
+      ]
+    },
     "requiredEnvelope": {
       "runtime": "ragflow_lite_bridge",
       "source": "ragflow_extractor",
@@ -102,8 +116,8 @@
     }
   },
   "nextImplementation": [
-    "Build scripts/ailis-ragflow-lite-worker.py around the vendored RAGFlow table parser dependency closure.",
-    "Emit ragflowLiteRuntime chunks into AILIS context artifacts.",
-    "Only after this worker exists, replace direct XLSX workbook payload-derived views with RAGFlow-lite extractor output where appropriate."
+    "Extract RAGFlow query.py/search.py semantics into local artifact_search over stored ragflowLiteRuntime chunks.",
+    "Extract non-table naive.py document chunking after table import/search is stable.",
+    "Keep read_xlsx_workbook/artifact_compute for exact Excel styles because RAGFlow table.py chunks do not preserve fill colors."
   ]
 }

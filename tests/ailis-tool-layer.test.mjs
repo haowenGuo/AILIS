@@ -402,7 +402,7 @@ test('AILIS Gateway exposes a small Codex-style core surface by default', async 
     for (const expected of ['tool_search', 'update_plan', 'computer', 'read', 'write', 'exec', 'apply_patch', 'request_permissions']) {
         assert.ok(directNames.includes(expected), `${expected} should be a core direct tool`);
     }
-    for (const deferred of ['read_xlsx_workbook', 'artifact_query', 'artifact_compute', 'github_pages', 'mcp_bridge', 'subagents']) {
+    for (const deferred of ['artifact_tools', 'artifact_query', 'artifact_compute', 'github_pages', 'mcp_bridge', 'subagents']) {
         assert.equal(directNames.includes(deferred), false, `${deferred} should be loaded through tool_search`);
     }
 
@@ -418,7 +418,8 @@ test('AILIS Gateway exposes a small Codex-style core surface by default', async 
         includeExternal: false,
         limit: 5
     });
-    assert.ok(searchResult.structuredContent.tools.some((tool) => tool.id === 'read_xlsx_workbook'));
+    assert.equal(searchResult.structuredContent.tools[0].id, 'artifact_tools');
+    assert.equal(searchResult.structuredContent.tools.some((tool) => tool.id === 'read_xlsx_workbook'), false);
 
     const nextSpecs = buildAgentDirectToolSpecs(gateway, {
         requestContext: { nativeDirectTools: true },
@@ -430,7 +431,8 @@ test('AILIS Gateway exposes a small Codex-style core surface by default', async 
             }
         }]
     });
-    assert.equal(nextSpecs.some((tool) => tool.name === 'read_xlsx_workbook'), true);
+    assert.equal(nextSpecs.some((tool) => tool.name === 'artifact_tools'), true);
+    assert.equal(nextSpecs.some((tool) => tool.name === 'read_xlsx_workbook'), false);
     assert.equal(nextSpecs.some((tool) => tool.name === 'tool_search'), false);
 
     const repeatedSearchSpecs = buildAgentDirectToolSpecs(gateway, {
@@ -447,6 +449,187 @@ test('AILIS Gateway exposes a small Codex-style core surface by default', async 
         }]
     });
     assert.equal(repeatedSearchSpecs.some((tool) => tool.name === 'tool_search'), true);
+});
+
+test('AILIS rebuilds local runtime direct tool specs from registry after compressed tool_search observations', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-compressed-tool-schema-'));
+    const gateway = new AILISGateway({
+        port: 0,
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit')
+    });
+    try {
+        const compressedArtifactSearchResult = {
+            content: [{ type: 'text', text: 'compressed tool_search observation' }],
+            details: {
+                status: 'completed',
+                query: 'xlsx cell fill color',
+                tools: []
+            },
+            structuredContent: {
+                status: 'completed',
+                query: 'xlsx cell fill color',
+                tools: [{
+                    id: 'artifact_tools',
+                    type: 'gateway_or_runtime_tool',
+                    exposure: 'deferred',
+                    spec: {
+                        type: 'function',
+                        name: 'artifact_tools',
+                        description: 'Compressed model-visible copy of the tool schema.',
+                        parameters: {
+                            type: 'object',
+                            additionalProperties: false,
+                            required: ['action'],
+                            properties: {
+                                action: { type: 'string', enum: ['open_session', 'inspect'] },
+                                path: { type: 'string' },
+                                sheet: { type: 'string' },
+                                fill: { type: 'string' },
+                                __omitted_keys: 77
+                            }
+                        }
+                    }
+                }]
+            }
+        };
+
+        const nextSpecs = buildAgentDirectToolSpecs(gateway, {
+            requestContext: { nativeDirectTools: true },
+            stepResults: [{
+                tool: 'tool_search',
+                response: {
+                    ok: true,
+                    result: compressedArtifactSearchResult
+                }
+            }]
+        });
+        const artifactSpec = nextSpecs.find((tool) => tool.name === 'artifact_tools');
+        assert.ok(artifactSpec, 'artifact_tools should be exposed after tool_search');
+        assert.ok(artifactSpec.parameters.properties.include, 'registry schema should restore include');
+        assert.ok(artifactSpec.parameters.properties.sessionId, 'registry schema should restore sessionId');
+        assert.ok(artifactSpec.parameters.properties.range, 'registry schema should restore range');
+        assert.equal(artifactSpec.parameters.properties.__omitted_keys, undefined);
+
+        const valid = validateNativeDirectToolCall({
+            name: 'artifact_tools',
+            arguments: {
+                action: 'inspect',
+                sessionId: 'arts_test',
+                range: 'A1:B2',
+                include: ['style', 'formula']
+            }
+        }, nextSpecs);
+        assert.equal(valid.ok, true, valid.errors.join('; '));
+    } finally {
+        await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
+});
+
+test('AILIS keeps raw tool_search specs hidden from model JSON but available for dynamic direct tools', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-raw-tool-schema-cache-'));
+    const gateway = new AILISGateway({
+        port: 0,
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit')
+    });
+    try {
+        const rawTools = [{
+            id: 'external__mock__lookup',
+            type: 'external_tool',
+            callable: true,
+            spec: {
+                type: 'function',
+                name: 'external__mock__lookup',
+                description: 'Lookup with a larger schema than the compact observation copy.',
+                parameters: {
+                    type: 'object',
+                    additionalProperties: false,
+                    required: ['query', 'include'],
+                    properties: {
+                        query: { type: 'string' },
+                        include: { type: 'array', items: { type: 'string' } },
+                        region: { type: 'string' }
+                    }
+                }
+            }
+        }];
+        const compactedSearchResult = {
+            content: [{ type: 'text', text: 'compressed external tool_search observation' }],
+            structuredContent: {
+                status: 'completed',
+                query: 'external lookup',
+                tools: [{
+                    id: 'external__mock__lookup',
+                    type: 'external_tool',
+                    callable: true,
+                    spec: {
+                        type: 'function',
+                        name: 'external__mock__lookup',
+                        parameters: {
+                            type: 'object',
+                            additionalProperties: false,
+                            properties: {
+                                query: { type: 'string' },
+                                __omitted_keys: 2
+                            }
+                        }
+                    }
+                }]
+            }
+        };
+        Object.defineProperty(compactedSearchResult, '__ailisRawToolSearchTools', {
+            value: rawTools,
+            enumerable: false,
+            configurable: true
+        });
+
+        assert.equal(JSON.stringify(compactedSearchResult).includes('__ailisRawToolSearchTools'), false);
+
+        const nextSpecs = buildAgentDirectToolSpecs(gateway, {
+            requestContext: { nativeDirectTools: true },
+            stepResults: [{
+                tool: 'tool_search',
+                response: {
+                    ok: true,
+                    result: compactedSearchResult
+                }
+            }]
+        });
+        const externalSpec = nextSpecs.find((tool) => tool.name === 'external__mock__lookup');
+        assert.ok(externalSpec, 'external tool should be exposed from hidden raw tool_search specs');
+        assert.ok(externalSpec.parameters.properties.include, 'hidden raw schema should restore include');
+        assert.equal(externalSpec.parameters.properties.__omitted_keys, undefined);
+
+        const valid = validateNativeDirectToolCall({
+            name: 'external__mock__lookup',
+            arguments: {
+                query: 'alpha',
+                include: ['metadata']
+            }
+        }, nextSpecs);
+        assert.equal(valid.ok, true, valid.errors.join('; '));
+
+        const gatewaySearch = await gateway.callTool({
+            tool: 'tool_search',
+            args: {
+                query: 'xlsx excel cell fill color',
+                includeMcp: false,
+                includeExternal: false,
+                limit: 5
+            },
+            context: {
+                workspace: workspaceRoot,
+                approved: true
+            }
+        });
+        assert.ok(Array.isArray(gatewaySearch.result.__ailisRawToolSearchTools));
+        assert.equal(Object.keys(gatewaySearch.result).includes('__ailisRawToolSearchTools'), false);
+    } finally {
+        await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
 });
 
 test('AILIS suppresses repeated update_plan direct-tool loops without hiding other core tools', async () => {
@@ -780,9 +963,9 @@ test('AILIS runtime budget preserves primary tool text beyond structured string 
     assert.equal(compacted.details.stdout.length < text.length, true);
 });
 
-test('AILIS tool routing ranks artifact_compute for managed artifact data-worker tasks', () => {
+test('AILIS tool routing ranks artifact_tools first for artifact-class tasks', () => {
     const artifactTools = AILIS_RUNTIME_TOOL_DEFINITIONS
-        .filter((tool) => ['artifact_query', 'artifact_compute'].includes(tool.id))
+        .filter((tool) => ['artifact_tools', 'artifact_query', 'artifact_compute'].includes(tool.id))
         .map((tool) => ({
             id: tool.id,
             type: 'runtime_tool',
@@ -790,9 +973,52 @@ test('AILIS tool routing ranks artifact_compute for managed artifact data-worker
             spec: createAilisFunctionToolSpec(tool)
         }));
 
-    const ranked = rankToolSearchResults(artifactTools, 'artifactId spreadsheet data worker find path grid compute', 2);
-    assert.equal(ranked[0].id, 'artifact_compute');
-    assert.match(buildToolRoutingAdvice('artifact compute path search', artifactTools), /artifact_compute/);
+    const ranked = rankToolSearchResults(artifactTools, 'xlsx spreadsheet data worker find path grid compute render artifact', 3);
+    assert.equal(ranked[0].id, 'artifact_tools');
+    assert.match(buildToolRoutingAdvice('xlsx spreadsheet path search artifact', ranked), /artifact_tools/);
+});
+
+test('AILIS tool routing keeps artifact_tools ahead of generic artifact readers', () => {
+    const entries = [
+        {
+            id: 'artifact_tools',
+            type: 'runtime_tool',
+            exposure: 'deferred',
+            spec: createAilisFunctionToolSpec(AILIS_RUNTIME_TOOL_DEFINITIONS.find((tool) => tool.id === 'artifact_tools'))
+        },
+        ...[
+            ['mcp__ailis_research__read_document', 'Read local Word DOCX documents and tables.'],
+            ['mcp__ailis_research__read_presentation', 'Read local PowerPoint PPTX slide decks.'],
+            ['mcp__ailis_research__pdf_extract_text', 'Extract text from local PDF files.'],
+            ['mcp__ailis_research__describe_image', 'Describe a local image photo screenshot.']
+        ].map(([id, description]) => ({
+            id,
+            type: id.startsWith('mcp__') ? 'mcp_tool' : 'gateway_or_runtime_tool',
+            exposure: 'deferred',
+            spec: {
+                type: 'function',
+                name: id,
+                description,
+                parameters: {
+                    type: 'object',
+                    properties: {
+                        path: { type: 'string' }
+                    }
+                }
+            }
+        }))
+    ];
+
+    for (const query of [
+        'read xlsx excel cell color fill',
+        'local docx document attachment table',
+        'pptx presentation slide deck file',
+        'local pdf file extract page render',
+        'attached png image nonblank render'
+    ]) {
+        const ranked = rankToolSearchResults(entries, query, 5);
+        assert.equal(ranked[0].id, 'artifact_tools', `${query} should route through artifact_tools first`);
+    }
 });
 
 test('AILIS direct MCP specs expose compact model-facing schema', () => {

@@ -1,12 +1,36 @@
 const {
     summarizeForModel
 } = require('./ailis-runtime-budget.cjs');
+const { createHash } = require('node:crypto');
 
 const DEFAULT_MAX_TURN_ITEMS = 16;
 const DEFAULT_PREVIEW_CHARS = 1000;
 const STRUCTURED_ARTIFACT_PREVIEW_CHARS = 12000;
 const DEFAULT_RECENT_FULL_ITEMS = 6;
 const DEFAULT_OLDER_PREVIEW_CHARS = 280;
+const DEFAULT_ARG_STRING_CHARS = 900;
+const LARGE_TEXT_ARG_PREVIEW_CHARS = 260;
+const COMMAND_ARG_CHARS = 700;
+const MAX_ARG_OBJECT_KEYS = 40;
+const MAX_ARG_ARRAY_ITEMS = 16;
+const MAX_ARG_DEPTH = 5;
+const LARGE_TEXT_ARG_KEYS = new Set([
+    'content',
+    'text',
+    'body',
+    'script',
+    'code',
+    'patch',
+    'stdin',
+    'input',
+    'markdown',
+    'html',
+    'xml',
+    'csv',
+    'data'
+]);
+const COMMAND_ARG_KEYS = new Set(['command', 'cmd']);
+const SECRET_ARG_KEY_RE = /(^|[_-])(api[_-]?key|token|secret|password|passwd|authorization|cookie|credential|private[_-]?key)([_-]|$)/i;
 
 function normalizeText(value = '') {
     return String(value || '').trim();
@@ -21,6 +45,70 @@ function summarizeValue(value, maxChars = DEFAULT_PREVIEW_CHARS) {
         return '';
     }
     return summarizeForModel(text, maxChars);
+}
+
+function hashTextForPrompt(text = '') {
+    return createHash('sha1').update(String(text)).digest('hex').slice(0, 12);
+}
+
+function summarizeLargeArgString(value = '', key = '', maxPreviewChars = LARGE_TEXT_ARG_PREVIEW_CHARS) {
+    const text = String(value || '');
+    return {
+        omitted: true,
+        kind: 'large_text_arg',
+        key,
+        chars: text.length,
+        sha1: hashTextForPrompt(text),
+        preview: summarizeForModel(text, maxPreviewChars)
+    };
+}
+
+function sanitizeArgValueForPrompt(value, key = '', depth = 0) {
+    const normalizedKey = normalizeText(key).toLowerCase();
+    if (SECRET_ARG_KEY_RE.test(normalizedKey)) {
+        return '__REDACTED__';
+    }
+    if (typeof value === 'string') {
+        const isLargeTextField = LARGE_TEXT_ARG_KEYS.has(normalizedKey);
+        const maxChars = COMMAND_ARG_KEYS.has(normalizedKey)
+            ? COMMAND_ARG_CHARS
+            : (isLargeTextField ? LARGE_TEXT_ARG_PREVIEW_CHARS : DEFAULT_ARG_STRING_CHARS);
+        if (value.length > maxChars) {
+            return summarizeLargeArgString(value, normalizedKey || key, isLargeTextField ? LARGE_TEXT_ARG_PREVIEW_CHARS : maxChars);
+        }
+        return value;
+    }
+    if (value == null || typeof value !== 'object') {
+        return value;
+    }
+    if (depth >= MAX_ARG_DEPTH) {
+        return summarizeLargeArgString(JSON.stringify(value), normalizedKey || key, LARGE_TEXT_ARG_PREVIEW_CHARS);
+    }
+    if (Array.isArray(value)) {
+        const items = value.slice(0, MAX_ARG_ARRAY_ITEMS).map((entry) =>
+            sanitizeArgValueForPrompt(entry, key, depth + 1)
+        );
+        if (value.length > MAX_ARG_ARRAY_ITEMS) {
+            items.push({ omitted_items: value.length - MAX_ARG_ARRAY_ITEMS });
+        }
+        return items;
+    }
+    const out = {};
+    const entries = Object.entries(value);
+    for (const [entryKey, entryValue] of entries.slice(0, MAX_ARG_OBJECT_KEYS)) {
+        out[entryKey] = sanitizeArgValueForPrompt(entryValue, entryKey, depth + 1);
+    }
+    if (entries.length > MAX_ARG_OBJECT_KEYS) {
+        out.__omitted_keys = entries.length - MAX_ARG_OBJECT_KEYS;
+    }
+    return out;
+}
+
+function sanitizeToolArgsForPrompt(args = null) {
+    if (args == null) {
+        return null;
+    }
+    return sanitizeArgValueForPrompt(args);
 }
 
 function itemSummaryForPrompt(item = {}, maxChars = 360) {
@@ -135,9 +223,9 @@ function previewBudgetForToolResult({ tool = '', response = {}, result = {} } = 
     const structuredSpreadsheet =
         details.workbook ||
         details.sheetCount !== undefined ||
-        /read_xlsx_workbook|spreadsheet|workbook|sheet=/i.test(`${normalizedTool}\n${text}`);
+        /spreadsheet|workbook|sheet=/i.test(`${normalizedTool}\n${text}`);
     if (
-        /read_document|read_spreadsheet|read_xlsx_workbook|read_presentation/.test(normalizedTool) ||
+        /read_document|read_spreadsheet|read_presentation/.test(normalizedTool) ||
         structuredDocument ||
         structuredSpreadsheet
     ) {
@@ -376,7 +464,7 @@ function buildToolCallItem(event = {}) {
         id: event.id || null,
         title: event.title || event.tool || 'tool call',
         tool: event.tool || null,
-        args: event.args || null,
+        args: sanitizeToolArgsForPrompt(event.args || null),
         iteration: Number.isFinite(event.iteration) ? event.iteration : null
     };
 }
@@ -574,5 +662,6 @@ module.exports = {
     classifyEvidenceGapObservation,
     classifyToolFailureObservation,
     formatEvidenceGapHint,
-    formatFailureHint
+    formatFailureHint,
+    sanitizeToolArgsForPrompt
 };

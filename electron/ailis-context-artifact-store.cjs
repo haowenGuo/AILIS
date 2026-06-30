@@ -534,7 +534,7 @@ function formatSpreadsheetRange(sheet = {}, args = {}) {
     const coverage = buildSpreadsheetRangeCoverage(sheet, parsedRange, outsideStoredRange, returnedCells);
     if (outsideStoredRange) {
         lines.push(`storedRange=${cellAddress(firstRow, firstCol)}:${cellAddress(lastRow, lastCol)}`);
-        lines.push('outsideStoredRange=true; complete=false; reasoning_ready=false; rerun read_xlsx_workbook with a wider range/maxRows/maxCols.');
+        lines.push('outsideStoredRange=true; complete=false; reasoning_ready=false; query a wider range/maxRows/maxCols through artifact_tools or artifact_query.');
     } else {
         lines.push('truncated=false; complete=true; reasoning_ready=true');
     }

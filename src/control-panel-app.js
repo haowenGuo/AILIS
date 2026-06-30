@@ -31,6 +31,8 @@ const elements = {
     cameraTargetYValue: document.getElementById('camera-target-y-value'),
     chunkedTtsEnabled: document.getElementById('chunked-tts-enabled'),
     closeBtn: document.getElementById('close-btn'),
+    maximizeBtn: document.getElementById('maximize-btn'),
+    minimizeBtn: document.getElementById('minimize-btn'),
     computerControlEnabled: document.getElementById('computer-control-enabled'),
     conversationMode: document.getElementById('conversation-mode'),
     characterActiveSummary: document.getElementById('character-active-summary'),
@@ -612,6 +614,35 @@ function scheduleMemoryStatusRefresh(delayMs = 600) {
     }, delayMs);
 }
 
+function renderPackageStateText() {
+    if (!elements.packageStateText) {
+        return;
+    }
+    const launchModeLabel = panelState?.environment?.isPackaged
+        ? '已从安装包或便携版启动'
+        : '开发模式运行中';
+    const packageStateParts = [
+        launchModeLabel,
+        formatRuntimeComponentSelection(panelState?.runtimeComponents || {})
+    ].filter(Boolean);
+    elements.packageStateText.textContent = packageStateParts.join(' | ');
+}
+
+function renderDeferredRuntimeStatusPlaceholders() {
+    renderAgentRuntimeStatus({ deferred: true });
+    renderVoiceRuntimeStatus({ status: 'not_diagnosed', deferred: true });
+    renderRuntimeComponentsStatus({
+        status: 'deferred',
+        components: [],
+        selection: {},
+        selectedIds: [],
+        expandedSelectedIds: [],
+        hasInstallerSelection: false
+    });
+    renderOllamaRuntimeStatus({ status: 'idle' });
+    renderPackageStateText();
+}
+
 function scheduleStartupDeferredWork() {
     if (startupDeferredWorkScheduled) {
         return;
@@ -624,8 +655,17 @@ function scheduleStartupDeferredWork() {
         scheduleAgentRuntimeStatusRefresh(0);
     }, 260);
     scheduleAfterFirstPaint(() => {
-        scheduleMemoryStatusRefresh(0);
+        void refreshVoiceRuntimeStatus({ diagnose: false, silent: true });
     }, 420);
+    scheduleAfterFirstPaint(() => {
+        void refreshRuntimeComponentsStatus({ silent: true });
+    }, 620);
+    scheduleAfterFirstPaint(() => {
+        void refreshOllamaRuntimeStatus({ diagnose: false, silent: true });
+    }, 820);
+    scheduleAfterFirstPaint(() => {
+        scheduleMemoryStatusRefresh(0);
+    }, 1040);
 }
 
 function isLocalLlmProvider(provider = elements.llmProvider?.value) {
@@ -824,6 +864,7 @@ async function refreshRuntimeComponentsStatus({ silent = false } = {}) {
             runtimeComponents
         };
         renderRuntimeComponentsStatus(runtimeComponents);
+        renderPackageStateText();
         if (!silent) {
             setStatus('安装包可选运行时状态已更新。');
         }
@@ -5028,6 +5069,12 @@ function renderAgentRuntimeStatus(status = {}) {
         return;
     }
 
+    if (status?.deferred) {
+        elements.agentRuntimeStatusText.textContent = 'AILIS 运行时状态正在后台刷新...';
+        elements.agentRuntimeDetailText.textContent = '控制面板首屏已先渲染；Gateway、Agent Runtime 和工具状态会随后更新。';
+        return;
+    }
+
     assistantStatusCache = {
         ...(assistantStatusCache || {}),
         ...(status || {}),
@@ -5085,14 +5132,31 @@ async function refreshAgentRuntimeStatus() {
         return;
     }
 
-    if (!window.ailisDesktop?.gateway?.getStatus) {
+    if (!window.ailisDesktop?.gateway?.getStatus && !window.ailisDesktop?.assistant?.getStatus) {
         elements.agentRuntimeStatusText.textContent = '当前环境不支持 AILIS Gateway。';
         elements.agentRuntimeDetailText.textContent = '';
         return;
     }
 
     try {
-        renderAgentRuntimeStatus(await window.ailisDesktop.gateway.getStatus());
+        const statusResults = await Promise.allSettled([
+            window.ailisDesktop?.gateway?.getStatus
+                ? window.ailisDesktop.gateway.getStatus()
+                : Promise.resolve(null),
+            window.ailisDesktop?.assistant?.getStatus
+                ? window.ailisDesktop.assistant.getStatus()
+                : Promise.resolve(null)
+        ]);
+        const gatewayStatus = statusResults[0].status === 'fulfilled' ? statusResults[0].value : null;
+        const assistantStatus = statusResults[1].status === 'fulfilled' ? statusResults[1].value : null;
+        if (!gatewayStatus && !assistantStatus) {
+            const firstError = statusResults.find((result) => result.status === 'rejected')?.reason;
+            throw firstError || new Error('未能读取 AILIS 运行时状态');
+        }
+        renderAgentRuntimeStatus({
+            ...(assistantStatus || {}),
+            ...(gatewayStatus ? { humanGateway: gatewayStatus } : {})
+        });
     } catch (error) {
         elements.agentRuntimeStatusText.textContent = `读取 AILIS 状态失败：${error.message || error}`;
         elements.agentRuntimeDetailText.textContent = '';
@@ -6364,10 +6428,7 @@ async function initialize() {
             }, 180);
         }
         renderCharacterAssets(panelState.preferences?.characterAssets || {});
-        renderAgentRuntimeStatus(panelState.assistant?.humanGateway || panelState.assistant || {});
-        renderVoiceRuntimeStatus(panelState.voiceRuntime || {});
-        renderRuntimeComponentsStatus(panelState.runtimeComponents || {});
-        renderOllamaRuntimeStatus(panelState.ollamaRuntime || {});
+        renderDeferredRuntimeStatusPlaceholders();
 
         elements.appVersion.textContent = `v${panelState.environment?.version || '1.0.0'}`;
         if (elements.userDataPath) {
@@ -6378,18 +6439,9 @@ async function initialize() {
                 panelState.preferences?.recognitionMode ||
                 'auto-vad';
         }
-        if (elements.packageStateText) {
-            const launchModeLabel = panelState.environment?.isPackaged
-                ? '已从安装包或便携版启动'
-                : '开发模式运行中';
-            const packageStateParts = [
-                launchModeLabel,
-                formatRuntimeComponentSelection(panelState.runtimeComponents || {})
-            ].filter(Boolean);
-            elements.packageStateText.textContent = packageStateParts.join(' | ');
-        }
+        renderPackageStateText();
 
-        setStatus(t('配置已就绪。修改后点击右下角保存。'));
+        setStatus(t('配置已就绪。运行时状态正在后台刷新。修改后点击右下角保存。'));
         scheduleStartupDeferredWork();
     } catch (error) {
         setStatus(t('读取配置失败：{reason}', { reason: error.message || error }));
@@ -6977,8 +7029,36 @@ elements.openAgentLabBtn?.addEventListener('click', () => {
     void window.ailisDesktop?.showAgentLab?.();
 });
 
-elements.closeBtn.addEventListener('click', () => {
-    void window.ailisDesktop?.closeCurrentWindow?.();
+function reportMissingWindowControlApi() {
+    setStatus('窗口控制接口尚未加载。请重启桌面版，让新的 main/preload 生效。');
+}
+
+elements.minimizeBtn?.addEventListener('click', async () => {
+    if (!window.ailisDesktop?.minimizeCurrentWindow) {
+        reportMissingWindowControlApi();
+        return;
+    }
+    await window.ailisDesktop.minimizeCurrentWindow();
+});
+
+elements.maximizeBtn?.addEventListener('click', async () => {
+    if (!window.ailisDesktop?.toggleMaximizeCurrentWindow) {
+        reportMissingWindowControlApi();
+        return;
+    }
+    const state = await window.ailisDesktop.toggleMaximizeCurrentWindow();
+    if (state?.ok && elements.maximizeBtn) {
+        elements.maximizeBtn.title = state.isMaximized ? '还原' : '最大化';
+        elements.maximizeBtn.setAttribute('aria-label', state.isMaximized ? '还原控制面板' : '最大化控制面板');
+    }
+});
+
+elements.closeBtn?.addEventListener('click', () => {
+    if (window.ailisDesktop?.closeCurrentWindow) {
+        void window.ailisDesktop.closeCurrentWindow();
+        return;
+    }
+    window.close();
 });
 
 window.ailisDesktop?.onPreferencesUpdated?.(({ preferences = {} } = {}) => {

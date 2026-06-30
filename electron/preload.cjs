@@ -1,6 +1,21 @@
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
-const initialPreferences = ipcRenderer.sendSync('ailis:get-preferences-sync');
+function getCurrentPageName() {
+    try {
+        return String(window.location?.pathname || '').split('/').pop() || '';
+    } catch {
+        return '';
+    }
+}
+
+const currentPageName = getCurrentPageName();
+const shouldLoadPreferencesSynchronously = !new Set([
+    'control.html',
+    'agent-lab.html'
+]).has(currentPageName);
+const initialPreferences = shouldLoadPreferencesSynchronously
+    ? ipcRenderer.sendSync('ailis:get-preferences-sync')
+    : {};
 
 function createResourceUrl(relativePath = '') {
     const cleanPath = String(relativePath || '')
@@ -23,6 +38,7 @@ contextBridge.exposeInMainWorld('ailisDesktop', {
         node: process.versions.node
     },
     getControlPanelState: () => ipcRenderer.invoke('ailis:get-control-panel-state'),
+    getPreferences: () => ipcRenderer.invoke('ailis:get-preferences'),
     savePreferences: (payload) => ipcRenderer.invoke('ailis:save-preferences', payload),
     restoreDefaultPreferences: () => ipcRenderer.invoke('ailis:restore-default-preferences'),
     chooseAILISStateDir: () => ipcRenderer.invoke('ailis:choose-ailis-state-dir'),
@@ -33,6 +49,9 @@ contextBridge.exposeInMainWorld('ailisDesktop', {
     showAgentLab: () => ipcRenderer.invoke('ailis:show-agent-lab'),
     showControlMenu: () => ipcRenderer.invoke('ailis:show-control-menu'),
     showTextEditMenu: (payload) => ipcRenderer.invoke('ailis:show-text-edit-menu', payload || {}),
+    minimizeCurrentWindow: () => ipcRenderer.invoke('ailis:minimize-current-window'),
+    toggleMaximizeCurrentWindow: () => ipcRenderer.invoke('ailis:toggle-maximize-current-window'),
+    getCurrentWindowState: () => ipcRenderer.invoke('ailis:get-current-window-state'),
     closeCurrentWindow: () => ipcRenderer.invoke('ailis:close-current-window'),
     setSpeechMode: (mode) => ipcRenderer.invoke('ailis:set-speech-mode', mode),
     setRecognitionMode: (mode) => ipcRenderer.invoke('ailis:set-recognition-mode', mode),
@@ -74,6 +93,15 @@ contextBridge.exposeInMainWorld('ailisDesktop', {
         forget: (payload) => ipcRenderer.invoke('ailis:memory-forget', payload || {}),
         saveSecret: (payload) => ipcRenderer.invoke('ailis:memory-save-secret', payload || {}),
         deleteSecret: (payload) => ipcRenderer.invoke('ailis:memory-delete-secret', payload || {})
+    },
+    rawMemory: {
+        status: () => ipcRenderer.invoke('ailis:raw-memory-status'),
+        replay: (payload) => ipcRenderer.invoke('ailis:raw-memory-replay', payload || {}),
+        sessions: (payload) => ipcRenderer.invoke('ailis:raw-memory-sessions', payload || {})
+    },
+    memoryProfile: {
+        state: () => ipcRenderer.invoke('ailis:memory-profile-state'),
+        curate: (payload) => ipcRenderer.invoke('ailis:memory-profile-curate', payload || {})
     },
     vision: {
         capture: (payload) => ipcRenderer.invoke('ailis:vision-capture', payload || {}),

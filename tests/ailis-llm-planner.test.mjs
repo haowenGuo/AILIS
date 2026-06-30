@@ -91,6 +91,29 @@ test('Agent prompt profile uses compact budgets for Ollama without changing clou
     assert.equal(cloudProfile.id, 'full');
     assert.equal(cloudProfile.compact, false);
     assert.ok(cloudProfile.memoryChars >= 20000);
+
+    const exactAnswerProfile = resolveAgentPromptProfile(
+        { provider: 'openai-compatible' },
+        { exactAnswerMode: true }
+    );
+    assert.equal(exactAnswerProfile.id, 'local_compact');
+    assert.equal(exactAnswerProfile.compact, true);
+    assert.equal(exactAnswerProfile.reason, 'exact_answer_task');
+
+    const artifactQuestionProfile = resolveAgentPromptProfile(
+        { provider: 'openai-compatible' },
+        { taskCompactPrompt: true }
+    );
+    assert.equal(artifactQuestionProfile.id, 'local_compact');
+    assert.equal(artifactQuestionProfile.compact, true);
+    assert.equal(artifactQuestionProfile.reason, 'artifact_answer_task');
+
+    const explicitFullProfile = resolveAgentPromptProfile(
+        { provider: 'openai-compatible' },
+        { taskCompactPrompt: true, exactAnswerMode: true, agentPromptProfile: 'full' }
+    );
+    assert.equal(explicitFullProfile.id, 'full');
+    assert.equal(explicitFullProfile.compact, false);
 });
 
 async function createMockChatCompletionsServer() {

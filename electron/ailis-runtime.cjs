@@ -539,6 +539,7 @@ class AILISRuntime {
             rootDir: options.contextArtifactStoreDir || path.join(this.auditDir, 'context-artifacts'),
             emitGatewayEvent: (type, payload) => this.emitGatewayEvent(type, payload)
         });
+        this.rawMemoryLedger = options.rawMemoryLedger || null;
         this.subagentExecutor = typeof options.subagentExecutor === 'function' ? options.subagentExecutor : null;
         this.platformAdapter = createAILISPlatformAdapter(options.platformAdapter || options.platform || {});
         this.runs = new Map();
@@ -716,6 +717,7 @@ class AILISRuntime {
             capabilityManager: this.capabilityManager.getStatus(),
             selfDebugger: this.selfDebugger.getStatus(),
             selfEvolution: this.selfEvolutionRuntime?.getStatus?.() || null,
+            rawMemory: this.rawMemoryLedger?.getStatus?.() || null,
             runtimeTools: this.toolRuntimeRegistry.listDefinitions().map((tool) => tool.id),
             contextArtifacts: {
                 rootDir: this.contextArtifactStore.rootDir,
@@ -856,6 +858,15 @@ class AILISRuntime {
         };
         await fsp.mkdir(path.dirname(run.transcriptPath), { recursive: true });
         await fsp.appendFile(run.transcriptPath, `${JSON.stringify(transcriptItem)}\n`, 'utf8');
+        try {
+            this.rawMemoryLedger?.recordRuntimeItem?.(transcriptItem);
+        } catch (error) {
+            this.emitGatewayEvent('raw_memory.error', {
+                runId: id,
+                sessionId: transcriptItem.sessionId,
+                error: error?.message || String(error)
+            });
+        }
         this.emitGatewayEvent('runtime.item', {
             runId: id,
             sessionId: transcriptItem.sessionId,

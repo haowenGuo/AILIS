@@ -664,35 +664,46 @@ xlsx/csv/txt -> RAGFlow table chunks -> AILIS artifact envelope
 Implementation targets:
 
 - `scripts/ailis-ragflow-lite-worker.py`
-- `vendor/ragflow-lite/ailis_shims/settings.py`
-- `vendor/ragflow-lite/ailis_shims/knowledgebase_service.py`
-- `vendor/ragflow-lite/ailis_shims/callback.py`
+- `scripts/bootstrap-ragflow-lite-deps.ps1`
+- `vendor/ragflow-lite/requirements.txt`
+- `electron/ailis-artifact-import-tool.cjs`
 
 Hard dependency decisions:
 
-- How to package `infinity.rag_tokenizer`.
+- `xpinyin` and `infinity.rag_tokenizer` are packaged as local Python deps via
+  `vendor/ragflow-lite/requirements.txt`.
+- NLTK `punkt_tab` is downloaded into `vendor/ragflow-lite/nltk-data`.
 - Whether VLM spreadsheet image description is enabled or stubbed.
-- Whether `field_map` persists only in envelope or also in AILIS store.
+- `field_map`, table column names, warnings, and chunks persist in the AILIS
+  context artifact payload under `ragflowLiteRuntime`.
 
 Current status:
 
 - `scripts/ailis-ragflow-lite-worker.py` exists.
 - It dynamically loads upstream `vendor/ragflow-lite/upstream/rag__app__table.py`.
+- `scripts/bootstrap-ragflow-lite-deps.ps1` installs the two small runtime deps
+  into `vendor/ragflow-lite/python-deps` and NLTK data into
+  `vendor/ragflow-lite/nltk-data`; both directories are intentionally ignored
+  by Git.
 - It uses shims for RAGFlow platform services:
   - `KnowledgebaseService.update_parser_config`
   - `common.settings`
   - spreadsheet figure parser
-  - tokenizer fallback when `infinity.rag_tokenizer` is absent
+- `artifact_import` now calls the worker, registers the returned
+  `ragflowLiteRuntime` in `AILISContextArtifactStore`, and returns next-step
+  `artifact_query runtime_schema/chunk_search` hints.
 - Test coverage:
   - `tests/ailis-ragflow-lite-worker.test.mjs`
+  - `tests/ailis-artifact-import-tool.test.mjs`
+  - `tests/ailis-gateway.test.mjs`
 
 Known degraded pieces:
 
-- `xpinyin` is missing locally, so Chinese field-id generation currently uses a
-  fallback shim.
-- `infinity.rag_tokenizer` is missing locally, so tokenizer output is degraded.
 - Spreadsheet embedded image descriptions are disabled until the figure parser
   path is extracted.
+- RAGFlow `table.py` row chunks do not preserve Excel fill colors. GAIA-style
+  color map tasks still need `read_xlsx_workbook` / `artifact_compute` for exact
+  styles while `artifact_import` provides RAGFlow-shaped table chunks.
 
 ### Phase 2: Local RAGFlow Search
 
@@ -768,7 +779,7 @@ Likely required Python packages:
 - xpinyin
 - Pillow
 - chardet
-- infinity tokenizer package or equivalent upstream dependency
+- infinity-sdk for `infinity.rag_tokenizer`
 
 RAGFlow modules:
 

@@ -46,6 +46,8 @@ window.addEventListener('DOMContentLoaded', () => {
     const visionPreviewMetaEl = document.getElementById('vision-preview-meta');
     const visionPreviewClearEl = document.getElementById('vision-preview-clear');
     const closeBtnEl = document.getElementById('close-btn');
+    const maximizeBtnEl = document.getElementById('maximize-btn');
+    const minimizeBtnEl = document.getElementById('minimize-btn');
     const settingsBtnEl = document.getElementById('settings-btn');
     const statusEl = document.getElementById('chat-status');
 
@@ -1085,11 +1087,43 @@ window.addEventListener('DOMContentLoaded', () => {
         void addDroppedFiles(event.dataTransfer?.files);
     });
 
-    closeBtnEl.addEventListener('click', async () => {
+    function reportMissingWindowControlApi() {
+        statusEl.textContent = '窗口控制接口尚未加载，请重启桌面版。';
+    }
+
+    minimizeBtnEl?.addEventListener('click', async () => {
+        if (!window.ailisDesktop?.minimizeCurrentWindow) {
+            reportMissingWindowControlApi();
+            return;
+        }
+        await window.ailisDesktop.minimizeCurrentWindow();
+    });
+
+    maximizeBtnEl?.addEventListener('click', async () => {
+        if (!window.ailisDesktop?.toggleMaximizeCurrentWindow) {
+            reportMissingWindowControlApi();
+            return;
+        }
+        const state = await window.ailisDesktop.toggleMaximizeCurrentWindow();
+        if (state?.ok && maximizeBtnEl) {
+            maximizeBtnEl.title = state.isMaximized ? '还原' : '最大化';
+            maximizeBtnEl.setAttribute('aria-label', state.isMaximized ? '还原聊天窗' : '最大化聊天窗');
+        }
+    });
+
+    closeBtnEl?.addEventListener('click', async () => {
         if (recorderController) {
             await stopVoiceInput({ cancel: true });
         }
-        await window.ailisDesktop?.hideChatWindow?.();
+        if (window.ailisDesktop?.hideChatWindow) {
+            await window.ailisDesktop.hideChatWindow();
+            return;
+        }
+        if (window.ailisDesktop?.closeCurrentWindow) {
+            await window.ailisDesktop.closeCurrentWindow();
+            return;
+        }
+        window.close();
     });
 
     settingsBtnEl?.addEventListener('click', () => {
