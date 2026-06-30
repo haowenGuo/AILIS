@@ -9422,6 +9422,7 @@ module.exports = {
     buildEvidenceSufficiencyPromptObject,
     buildFinalAnswerNativeToolSpec,
     buildSourceQuestionEvidenceArtifact,
+    buildToolObservationDigest,
     buildLosslessToolObservationDigest,
     buildToolResultEvent,
     sanitizeAgentToolCall,
