@@ -1186,6 +1186,53 @@ droppedItemsManifest 告诉模型哪些内容被压缩、为什么压缩、如�
 toolSummary 只列本轮核心工具和已 materialized deferred tools，不塞全量工具说明。
 ```
 
+#### 5.1.3A 精准上下文构建优先级
+
+Context package 的核心不是“越短越好”，而是“当前决策所需信息足够，历史噪声最小”。每次编译上下文时按下面的优先级保留。
+
+必须保留：
+
+```text
+1. 当前用户目标、最新用户约束、输出格式要求、明确禁止事项。
+2. 当前 taskState：phase、已完成子目标、仍缺字段、下一步预期动作。
+3. 未完成或刚完成的 call/output 配对；缺 output 时插入 diagnostic output，不静默丢失。
+4. 最近一次失败工具调用及其失败层：validation/tool/timeout/env/provider/permission。
+5. final 可能引用的 pinnedEvidenceManifest，包括 source、summary、complete、truncated、coverage。
+6. 可回查的大输出 refs：outputId/artifactId/path/hash，以及 read/search/tail 的建议。
+7. 本轮已 materialized 的 deferred tool specs；没有被加载的工具不要写长说明。
+```
+
+优先压缩：
+
+```text
+1. 重复搜索结果、重复 web_fetch、重复 capability catalog。
+2. 旧的 exploratory tool output，尤其是没有产生 evidence 的输出。
+3. 大 HTML、大 JSON、大表格、大 transcript、大日志原文。
+4. persona/chatty 文本、UI 展示文本、非任务证据的小动作/表情文本。
+5. 已被 evidence manifest 覆盖的 raw observation。
+```
+
+允许丢弃但必须记录到 droppedItemsManifest：
+
+```text
+1. 旧失败路径且已有 replacement strategy。
+2. 旧工具说明且仍可通过 tool_search 重新 materialize。
+3. 旧输出原文且已有 outputId/artifactId 可回查。
+4. 旧中间推理草稿，但最终事实、计算脚本、证据摘要必须保留。
+```
+
+禁止丢弃：
+
+```text
+1. 当前用户最新请求。
+2. 未配对的 tool call 或 tool output。
+3. final answer 所需的证据摘要和引用 ref。
+4. 影响答案格式、单位、范围、语言、提交策略的约束。
+5. 仍未解决的 blocker、permission/env/provider 错误。
+```
+
+精确构建目标：模型每轮看到的是“任务状态机 + 证据索引 + 最近动作”，不是完整聊天记录。这样即使历史被压缩，模型也能知道自己在哪、证据在哪、下一步应该做什么。
+
 #### 5.1.4 工具输出即时压缩规则
 
 工具输出不能等到历史快爆了才压缩。每次 `normalizeAilisToolOutput()` 后立刻做分层处理：
@@ -1259,6 +1306,63 @@ tokensUntilCompaction
 compactionLevel: none|soft|precompact|hard|stop
 ```
 
+#### 5.1.6A Budget 精确定义
+
+Budget 必须有明确分母，否则 70% 没有执行意义。
+
+Token 来源优先级：
+
+```text
+1. provider/API 返回的 token_info 或 usage。
+2. AILIS approxTokenCount，按 UTF-8 bytes / 4 粗估。
+3. 如果只能拿到字符数，使用 chars / 3 的保守估算，并标记 estimateSource=chars_fallback。
+```
+
+核心字段定义：
+
+```text
+modelContextWindowTokens: 当前模型声明或配置的最大上下文窗口。
+reservedCompletionTokens: 为下一次模型输出预留的 token，默认 max(2048, configuredMaxOutputTokens)。
+safetyMarginTokens: 安全余量，默认 max(1024, modelContextWindowTokens * 0.05)。
+effectiveInputLimitTokens: modelContextWindowTokens - reservedCompletionTokens - safetyMarginTokens。
+staticPrefixTokens: system/developer/persona/runtime/core tool specs 的估算 token。
+dynamicBodyTokens: task state + evidence manifest + recent items + output refs + dropped manifest。
+modelVisibleTokensEstimate: staticPrefixTokens + dynamicBodyTokens。
+activeContextTokens: 如果 provider 返回真实 active usage，则用真实值；否则等于 modelVisibleTokensEstimate。
+targetContextTokens: min(effectiveInputLimitTokens, configuredTaskInputBudgetTokens || effectiveInputLimitTokens)。
+budgetUsedRatio: modelVisibleTokensEstimate / targetContextTokens。
+tokensUntilCompaction: targetContextTokens * 0.70 - modelVisibleTokensEstimate。
+```
+
+分账要求：
+
+```text
+staticPrefixTokens 应尽量稳定，允许占 targetContextTokens 的 20%-35%。
+toolSpecsTokens 默认不超过 targetContextTokens 的 15%；超过时必须把 deferred tools 收回 tool_search。
+pinnedEvidenceTokens 默认不超过 targetContextTokens 的 25%；超过时压缩 evidence summary，但不能删除 refs。
+recentItemsTokens 默认不超过 targetContextTokens 的 30%；超过时按 user/fork turn 边界压缩。
+toolOutputPreviewTokens 默认不超过 targetContextTokens 的 20%；超过时旧输出转 output refs。
+droppedItemsManifest 默认不超过 targetContextTokens 的 5%；只记录可恢复索引，不写长摘要。
+```
+
+触发级别使用 `budgetUsedRatio`，不是单纯字符数：
+
+```text
+none: < 0.50
+soft: >= 0.50 and < 0.65
+precompact: >= 0.65 and < 0.70
+hard: >= 0.70 and < 0.80
+stop: >= 0.80 或 effectiveInputLimitTokens 已不可满足最小上下文包
+```
+
+最小上下文包必须能装下：
+
+```text
+current user goal + latest constraints + taskState + core tools + pinned evidence refs + latest 2 call/output pairs + budgetReport。
+```
+
+如果最小上下文包都超过 budget，不应继续调用模型硬跑，应输出 `nextAction=blocked` 或开启新 context window / longrun checkpoint。
+
 #### 5.1.7 Prompt Cache 友好的上下文顺序
 
 为了减少 token 成本和保持模型稳定，模型输入顺序应固定：
@@ -1279,13 +1383,47 @@ compactionLevel: none|soft|precompact|hard|stop
 
 #### 5.1.8 Finalizer 与证据压缩的关系
 
-Finalizer 不能只看最近对话文本。它必须看 evidence manifest 和 output refs：
+Finalizer 不能只看最近对话文本，但也不能把所有任务都按 benchmark 严格模式卡死。它必须看 evidence manifest 和 output refs，同时按任务类型选择 gate 强度。
+
+Finalizer mode：
 
 ```text
-final answer 引用的 evidenceId 必须存在。
-如果 evidence 只来自 truncated preview，finalizer 必须要求 output_read/output_search 取回关键片段。
-如果 droppedItemsManifest 显示关键步骤被压缩，但没有 evidence summary，禁止 high confidence final。
-如果模型无法判断证据是否足够，nextAction 应是 ask_user 或 continue，而不是猜。
+strict: GAIA/exact-answer/自动提交/高风险事实/需要外部证据的问题。必须有可验证 evidence refs。
+balanced: 普通研究、攻略、网页问答、代码分析。优先要求 evidence refs；不足时允许 caveat final 或 ask_user。
+light: 纯创作、UI 文案、计划、用户明确只要建议、无需外部事实的代码修改总结。可以基于当前上下文和已执行步骤 final，不强制 evidence refs。
+local_verification: 本地代码/脚本/文件任务。证据可以是测试结果、diff、命令输出 outputId、文件路径和摘要，不要求网页/PDF evidence。
+```
+
+防误卡规则：
+
+```text
+1. 如果任务已经由本地确定性执行完成，例如代码修改、测试通过、文件生成成功，finalizer 不应因为没有 web evidence 而 blocked。
+2. 如果 output preview 已包含完整答案字段且 complete=true、truncatedForModel=false，可以 final，不必再 output_read。
+3. 如果 preview 被截断，但 evidence summary 已覆盖答案所需字段，也可以 final；只有答案依赖 omitted 区域时才要求 output_read/output_search。
+4. 如果用户问题是主观建议、写作、规划或无需事实检索，evidencePolicy=not_required，可以 final，但不要伪造证据 refs。
+5. 如果 evidence refs 缺失但任务可回答，balanced mode 应返回 allow_with_caveat，而不是 blocked。
+6. blocked 只用于：缺少用户决策、权限/环境不可用、最小上下文包不可满足、关键证据缺失且没有可行下一步。
+```
+
+Finalizer 判断顺序：
+
+```text
+1. classify task evidencePolicy: strict|required|preferred|not_required|local_verification。
+2. 检查 answer 是否满足格式、单位、范围、语言和用户约束。
+3. 检查 evidence manifest 是否覆盖 answer 的关键 claims。
+4. 对 truncated evidence，只判断关键 claim 是否落在 summary/preview/known range；不机械拒绝。
+5. 若缺 evidence，先判断是否还有低成本下一步；有则 continue，没有则 ask_user 或 allow_with_caveat。
+6. 只有 strict mode 且关键 evidence 缺失时 reject final。
+```
+
+最终输出不应只有 ok/blocked 二值，而应支持：
+
+```text
+final: 可以回答。
+allow_with_caveat: 可以回答，但必须说明证据不足或范围限制。
+continue: 继续工具调用，且给出具体 next tool / missing field。
+ask_user: 需要用户选择或澄清。
+blocked: 当前系统无法继续，且不能可靠回答。
 ```
 
 #### 5.1.9 长程任务的 checkpoint 语义
@@ -1341,10 +1479,14 @@ FinalizerGate 输出：
   "ok": true,
   "answer": "...",
   "confidence": "high|medium|low",
+  "evidencePolicy": "strict|required|preferred|not_required|local_verification",
+  "evidenceCoverage": "complete|partial|missing|not_required",
   "evidenceRefs": [],
+  "outputRefs": [],
   "warnings": [],
   "missingFields": [],
-  "nextAction": "final|continue|ask_user|blocked"
+  "nextAction": "final|allow_with_caveat|continue|ask_user|blocked",
+  "nextToolHint": null
 }
 ```
 
@@ -1352,9 +1494,10 @@ FinalizerGate 输出：
 
 ```text
 exact-answer benchmark: low confidence 不提交。
-引用不存在 evidence ref -> reject 或 warning，按模式决定。
-complete=false/truncated=true 的证据不能单独支撑 final。
-工具失败后不能用“猜测”补 final。
+引用不存在 evidence ref -> strict mode reject；balanced/light mode warning，不必自动 blocked。
+complete=false/truncated=true 的证据不能单独支撑 strict final，但可作为 partial evidence 支撑 allow_with_caveat。
+local_verification 任务可引用 diff/test/outputId/file path 作为证据，不要求网页或外部 evidence。
+工具失败后不能用“猜测”补 strict final；普通用户任务必须明确 caveat 或 ask_user。
 ```
 
 验收：
