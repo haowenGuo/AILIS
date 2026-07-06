@@ -4,6 +4,12 @@ const DEFAULT_TEXT_BUDGET_CHARS = 6000;
 const DEFAULT_JSON_STRING_BUDGET_CHARS = 1200;
 const DEFAULT_JSON_ARRAY_ITEMS = 24;
 const DEFAULT_JSON_OBJECT_KEYS = 80;
+const DEFAULT_CONTEXT_INPUT_LIMIT_TOKENS = 128000;
+const DEFAULT_CONTEXT_RESERVED_OUTPUT_TOKENS = 4096;
+const DEFAULT_CONTEXT_SYSTEM_RESERVE_TOKENS = 8192;
+const DEFAULT_CONTEXT_SOFT_RATIO = 0.5;
+const DEFAULT_CONTEXT_HARD_RATIO = 0.7;
+const DEFAULT_CONTEXT_STOP_RATIO = 0.8;
 
 function normalizeString(value, fallback = '') {
     if (typeof value !== 'string') {
@@ -116,6 +122,140 @@ function truncateMiddleText(value, maxChars = DEFAULT_TEXT_BUDGET_CHARS) {
     const head = Math.ceil(remaining * 0.6);
     const tail = Math.max(0, remaining - head);
     return `${text.slice(0, head)}${marker}${tail ? text.slice(-tail) : ''}`;
+}
+
+function makeHeadTailPreview(value, maxChars = DEFAULT_TEXT_BUDGET_CHARS, options = {}) {
+    const text = normalizeString(value);
+    const budget = Math.max(0, Number(maxChars) || 0);
+    const headRatio = Math.min(0.85, Math.max(0.15, Number(options.headRatio || 0.6)));
+    if (!budget || text.length <= budget) {
+        return {
+            text,
+            strategy: 'complete',
+            truncated: false,
+            originalTextChars: text.length,
+            visibleTextChars: text.length,
+            omittedTextChars: 0
+        };
+    }
+    if (budget <= 16) {
+        const preview = `${text.slice(0, Math.max(0, budget - 3))}...`;
+        return {
+            text: preview,
+            strategy: 'head_tail',
+            truncated: true,
+            originalTextChars: text.length,
+            visibleTextChars: preview.length,
+            omittedTextChars: Math.max(0, text.length - preview.length)
+        };
+    }
+    const marker = '\n... [middle omitted for model budget; use output refs for exact slices when available] ...\n';
+    const remaining = Math.max(0, budget - marker.length);
+    const head = Math.ceil(remaining * headRatio);
+    const tail = Math.max(0, remaining - head);
+    const preview = `${text.slice(0, head)}${marker}${tail ? text.slice(-tail) : ''}`;
+    return {
+        text: preview,
+        strategy: 'head_tail',
+        truncated: true,
+        originalTextChars: text.length,
+        visibleTextChars: preview.length,
+        omittedTextChars: Math.max(0, text.length - preview.length)
+    };
+}
+
+function normalizeBudgetParts(parts = {}) {
+    if (Array.isArray(parts)) {
+        return parts
+            .map((part, index) => ({
+                name: normalizeString(part?.name, `part_${index}`),
+                value: Object.prototype.hasOwnProperty.call(part || {}, 'value') ? part.value : part
+            }))
+            .filter((part) => part.name);
+    }
+    if (!parts || typeof parts !== 'object') {
+        return [{ name: 'value', value: parts }];
+    }
+    return Object.entries(parts).map(([name, value]) => ({ name, value }));
+}
+
+function measureBudgetPart(name, value) {
+    let text = '';
+    try {
+        text = typeof value === 'string' ? value : JSON.stringify(value || '');
+    } catch {
+        text = String(value || '');
+    }
+    return {
+        name,
+        chars: text.length,
+        bytes: Buffer.byteLength(text, 'utf8'),
+        approxTokens: approxTokenCount(text)
+    };
+}
+
+function classifyCompactionLevel(ratio = 0, thresholds = {}) {
+    const soft = Number(thresholds.soft ?? DEFAULT_CONTEXT_SOFT_RATIO);
+    const hard = Number(thresholds.hard ?? DEFAULT_CONTEXT_HARD_RATIO);
+    const stop = Number(thresholds.stop ?? DEFAULT_CONTEXT_STOP_RATIO);
+    if (ratio >= stop) {
+        return 'stop';
+    }
+    if (ratio >= hard) {
+        return 'hard';
+    }
+    if (ratio >= soft) {
+        return 'soft';
+    }
+    return 'ok';
+}
+
+function buildContextBudgetReport(parts = {}, config = {}) {
+    const inputLimitTokens = Math.max(1, Number(
+        config.effectiveInputLimitTokens ||
+        config.inputLimitTokens ||
+        DEFAULT_CONTEXT_INPUT_LIMIT_TOKENS
+    ));
+    const reservedOutputTokens = Math.max(0, Number(config.reservedOutputTokens ?? DEFAULT_CONTEXT_RESERVED_OUTPUT_TOKENS));
+    const systemReserveTokens = Math.max(0, Number(config.systemReserveTokens ?? DEFAULT_CONTEXT_SYSTEM_RESERVE_TOKENS));
+    const effectiveInputLimitTokens = Math.max(1, Number(config.effectiveInputLimitTokens || (
+        inputLimitTokens - reservedOutputTokens - systemReserveTokens
+    )));
+    const thresholds = {
+        soft: Number(config.softRatio ?? DEFAULT_CONTEXT_SOFT_RATIO),
+        hard: Number(config.hardRatio ?? DEFAULT_CONTEXT_HARD_RATIO),
+        stop: Number(config.stopRatio ?? DEFAULT_CONTEXT_STOP_RATIO)
+    };
+    const measuredParts = normalizeBudgetParts(parts).map((part) => measureBudgetPart(part.name, part.value));
+    const totalPromptTokens = measuredParts.reduce((sum, part) => sum + part.approxTokens, 0);
+    const ratio = totalPromptTokens / effectiveInputLimitTokens;
+    const level = classifyCompactionLevel(ratio, thresholds);
+    const largestParts = measuredParts
+        .slice()
+        .sort((a, b) => b.approxTokens - a.approxTokens)
+        .slice(0, 8);
+    return {
+        schema: 'ailis.context_budget_report.v1',
+        inputLimitTokens,
+        reservedOutputTokens,
+        systemReserveTokens,
+        effectiveInputLimitTokens,
+        totalPromptTokens,
+        ratio,
+        level,
+        shouldCompact: level === 'soft' || level === 'hard' || level === 'stop',
+        mustStopAndCheckpoint: level === 'stop',
+        thresholds,
+        parts: measuredParts,
+        largestParts,
+        action: level === 'stop'
+            ? 'checkpoint_or_drop_nonessential_context_before_next_model_call'
+            : level === 'hard'
+                ? 'compact_tool_outputs_and_refresh_evidence_manifest'
+                : level === 'soft'
+                    ? 'prefer_refs_and_head_tail_previews_for_new_tool_outputs'
+                    : 'continue'
+    };
 }
 
 function buildModelVisibleTruncationNotice({
@@ -501,14 +641,23 @@ function compactToolResultForModel(result = {}, options = {}) {
 }
 
 module.exports = {
+    DEFAULT_CONTEXT_HARD_RATIO,
+    DEFAULT_CONTEXT_INPUT_LIMIT_TOKENS,
+    DEFAULT_CONTEXT_RESERVED_OUTPUT_TOKENS,
+    DEFAULT_CONTEXT_SOFT_RATIO,
+    DEFAULT_CONTEXT_STOP_RATIO,
+    DEFAULT_CONTEXT_SYSTEM_RESERVE_TOKENS,
     DEFAULT_JSON_STRING_BUDGET_CHARS,
     DEFAULT_SCHEMA_BUDGET_BYTES,
     DEFAULT_SCHEMA_DEPTH,
     DEFAULT_TEXT_BUDGET_CHARS,
     approxTokenCount,
+    buildContextBudgetReport,
+    classifyCompactionLevel,
     compactJsonForModel,
     compactToolResultForModel,
     compactToolSchema,
+    makeHeadTailPreview,
     summarizeForModel,
     truncateMiddleText,
     stripModelGuidance

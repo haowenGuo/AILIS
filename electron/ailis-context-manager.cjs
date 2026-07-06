@@ -10,7 +10,10 @@ const {
     isOutputItem,
     responseItemOutputToText
 } = require('./ailis-response-model.cjs');
-const { summarizeForModel } = require('./ailis-runtime-budget.cjs');
+const {
+    buildContextBudgetReport,
+    summarizeForModel
+} = require('./ailis-runtime-budget.cjs');
 
 const DEFAULT_TOOL_OUTPUT_CHARS = 24000;
 const DEFAULT_RECENT_TOOL_OUTPUTS = 4;
@@ -90,6 +93,90 @@ function extractObservationHeaderLines(text = '') {
         .filter((line) => /^(Status|Error|DurationMs|OutputArtifact|OutputArtifactTools|OutputArtifactHint|exitCode|outputId|bytes|outputComplete|outputTruncatedForModel|modelHint)\b/i.test(line) ||
             /\b(reasoning[_-]?ready|complete|truncated)\s*[:=]/i.test(line))
         .slice(0, 18);
+}
+
+function extractOutputRefsFromText(text = '') {
+    const refs = [];
+    const seen = new Set();
+    const patterns = [
+        /\b(?:outputId|output_id|OutputArtifact|artifactId)\s*[:=]\s*([A-Za-z0-9._:-]+)/gi,
+        /\boutputRef\.?outputId\s*[:=]\s*([A-Za-z0-9._:-]+)/gi
+    ];
+    for (const pattern of patterns) {
+        for (const match of String(text || '').matchAll(pattern)) {
+            const outputId = String(match?.[1] || '').trim();
+            if (!outputId || seen.has(outputId)) {
+                continue;
+            }
+            seen.add(outputId);
+            refs.push({
+                outputId,
+                readTools: ['output_read', 'output_tail', 'output_search']
+            });
+        }
+    }
+    return refs;
+}
+
+function collectAvailableOutputRefs(items = []) {
+    const refs = [];
+    const seen = new Set();
+    for (const item of Array.isArray(items) ? items : []) {
+        if (!isToolOutputItem(item) && item?.type !== 'tool_search_output') {
+            continue;
+        }
+        const text = responseItemOutputToText(item);
+        for (const ref of extractOutputRefsFromText(text)) {
+            if (seen.has(ref.outputId)) {
+                continue;
+            }
+            seen.add(ref.outputId);
+            refs.push({
+                ...ref,
+                callId: callIdOf(item) || null,
+                sourceType: item.type
+            });
+        }
+    }
+    return refs;
+}
+
+function buildDroppedItemsManifest(items = []) {
+    let compactedToolObservations = 0;
+    let imageOmissions = 0;
+    for (const item of Array.isArray(items) ? items : []) {
+        const text = item?.type === 'message'
+            ? JSON.stringify(item.content || [])
+            : responseItemOutputToText(item);
+        if (String(text || '').includes('OLDER_TOOL_OBSERVATION_COMPACTED')) {
+            compactedToolObservations += 1;
+        }
+        if (String(text || '').includes(IMAGE_CONTENT_OMITTED_PLACEHOLDER)) {
+            imageOmissions += 1;
+        }
+    }
+    return {
+        compactedToolObservations,
+        imageOmissions
+    };
+}
+
+function normalizeContextPackageValue(value, maxChars = 4000) {
+    if (value == null || value === '') {
+        return null;
+    }
+    if (typeof value === 'string') {
+        return summarizeForModel(value, maxChars);
+    }
+    try {
+        const text = JSON.stringify(value);
+        if (text.length <= maxChars) {
+            return cloneJson(value);
+        }
+    } catch {
+        return String(value);
+    }
+    return summarizeForModel(value, maxChars);
 }
 
 function compactToolOutputPayload(payload = '', maxChars = DEFAULT_STALE_TOOL_OUTPUT_CHARS) {
@@ -249,10 +336,73 @@ class ContextManager {
         });
     }
 
-    forPrompt({ inputModalities = [] } = {}) {
+    forPrompt(options = {}) {
+        const { inputModalities = [] } = options || {};
         const clone = this.clone();
         clone.normalizeHistory(inputModalities);
+        clone.compactForBudget(options);
         return clone.rawItems();
+    }
+
+    forPromptPackage(options = {}) {
+        const { inputModalities = [] } = options || {};
+        const clone = this.clone();
+        clone.normalizeHistory(inputModalities);
+        clone.compactForBudget(options);
+        return clone.buildContextPackage(options);
+    }
+
+    contextBudgetReport(options = {}) {
+        return buildContextBudgetReport({
+            staticPrefix: options.staticPrefix || '',
+            goal: options.goal || '',
+            runtimeEnvironment: options.runtimeEnvironment || null,
+            taskState: options.taskState || null,
+            referenceContextItem: this.reference_context_item,
+            tokenInfo: this.token_info,
+            recentResponseItems: this.items,
+            toolSummary: options.toolSummary || null,
+            pinnedEvidenceManifest: options.pinnedEvidenceManifest || options.evidenceManifest || null,
+            availableOutputRefs: collectAvailableOutputRefs(this.items)
+        }, options.budgetConfig || options.contextBudget || {});
+    }
+
+    compactForBudget(options = {}) {
+        let report = this.contextBudgetReport(options);
+        if (report.level === 'soft' || report.level === 'hard' || report.level === 'stop') {
+            this.compactStaleToolOutputs({ force: true });
+            report = this.contextBudgetReport(options);
+        }
+        if (report.level === 'stop') {
+            this.compactStaleToolOutputs({
+                force: true,
+                maxChars: Math.max(300, Math.floor(DEFAULT_STALE_TOOL_OUTPUT_CHARS / 2))
+            });
+            report = this.contextBudgetReport(options);
+        }
+        this.last_context_budget_report = report;
+        return report;
+    }
+
+    buildContextPackage(options = {}) {
+        const items = this.rawItems();
+        const budgetReport = this.last_context_budget_report || this.contextBudgetReport(options);
+        return {
+            schema: 'ailis.context_package.v1',
+            historyVersion: this.history_version,
+            goal: normalizeContextPackageValue(options.goal || '', 2000),
+            runtimeEnvironment: normalizeContextPackageValue(options.runtimeEnvironment || null, 3000),
+            taskState: normalizeContextPackageValue(options.taskState || null, 3000),
+            referenceContextItem: this.reference_context_item ? cloneJson(this.reference_context_item) : null,
+            recentResponseItems: items,
+            toolSummary: normalizeContextPackageValue(options.toolSummary || null, 4000),
+            pinnedEvidenceManifest: Array.isArray(options.pinnedEvidenceManifest || options.evidenceManifest)
+                ? cloneJson(options.pinnedEvidenceManifest || options.evidenceManifest)
+                : [],
+            availableOutputRefs: collectAvailableOutputRefs(items),
+            droppedItemsManifest: buildDroppedItemsManifest(items),
+            budgetReport
+        };
     }
 
     normalizeHistory(inputModalities = []) {
@@ -264,11 +414,12 @@ class ContextManager {
         }
     }
 
-    compactStaleToolOutputs() {
+    compactStaleToolOutputs({ force = false, maxChars = DEFAULT_STALE_TOOL_OUTPUT_CHARS } = {}) {
         const outputIndices = this.items
             .map((item, index) => (isToolOutputItem(item) ? index : -1))
             .filter((index) => index >= 0);
-        if (outputIndices.length <= DEFAULT_COMPACTION_TRIGGER_OUTPUTS &&
+        if (!force &&
+            outputIndices.length <= DEFAULT_COMPACTION_TRIGGER_OUTPUTS &&
             this.totalModelVisibleChars() <= DEFAULT_COMPACTION_TRIGGER_CHARS) {
             return;
         }
@@ -292,7 +443,7 @@ class ContextManager {
             }
             return {
                 ...cloneJson(item),
-                output: compactToolOutputPayload(item.output, DEFAULT_STALE_TOOL_OUTPUT_CHARS)
+                output: compactToolOutputPayload(item.output, maxChars)
             };
         });
     }
