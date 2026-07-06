@@ -1099,362 +1099,660 @@ Context package：
 call/output 配对不丢失。
 ```
 
-### Phase 5.1: 上下文管控协议（替代“截短字符串”的执行口径）
+### Phase 5.1: 上下文管控确定性实现蓝图
 
-结论：原 Phase 5 方向正确，但不够可执行。真正要对齐 Codex-style Harness，不能只在 `forPrompt()` 里截短字符串，而要把上下文管理拆成“完整事实源”和“模型可见视图”两套语义：完整事实源保存在 trace/output/evidence/checkpoint 中，模型每轮只收到按预算编译出的 context package。
+本节替代所有非契约性描述。实现时不新增正式模块；只修改现有模块内部函数。若代码实现和本节冲突，以本节伪代码为准。
 
-#### 5.1.1 设计启发
-
-本地 Codex 源码里可以看到几个稳定原则：
+确定性评估：
 
 ```text
-context_manager/history.rs: history 是 ResponseItem 流，不是 raw transcript。
-context_manager/normalize.rs: 每次发给模型前修复 call/output 配对，孤儿 output 会被移除或诊断。
-session/context_window.rs: 有 active_context_tokens、auto_compact_scope_tokens、tokens_until_compaction。
-unified_exec/head_tail_buffer.rs: 大输出保留 head + tail，中间丢弃并统计 omitted_bytes。
-tools/handlers/shell_spec.rs: 工具输出 schema 带 original_token_count、wall_time、exit_code、output。
-thread_rollout_truncation.rs: 长历史按 user/fork turn 边界裁剪，而不是按字符随机裁剪。
+当前文档可实现把握：80%。
+剩余不确定性来自：不同模型实际上下文窗口、provider 是否返回真实 token usage、现有 output store 语义是否能无痛承载所有工具输出、旧 transcript replay 覆盖是否足够。
+把握提升条件：先实现本节 6 个单元测试，再跑 2-3 条旧失败链路 replay。
+不得直接进入 GAIA 大规模循环：除非 context budget、large output、finalizer gate 三组测试都通过。
 ```
 
-OpenAI/OAI 的 Responses/Agents 思路也类似：长任务不要把所有历史反复塞回模型，而是使用 conversation item、previous response/state chain、compaction item、trace 等机制；静态前缀和工具定义尽量稳定，动态历史放在后部，便于 prompt cache 和局部压缩。
+#### 5.1.1 Codex 源码算法映射
 
-#### 5.1.2 AILIS 的四层上下文事实源
-
-不新增正式模块，只在现有模块内实现四层语义：
+这些是 AILIS 要照搬思想的 Codex 本地源码位置，不是泛泛参考。
 
 ```text
-L0 Raw Trace: 完整链路事实源，包含每个 tool call、args digest、raw output ref、duration、error type。
-L1 Output Store Semantics: 完整工具输出的可回查记录，至少包含 outputId、bytes、lines、approxTokens、hash、head/tail preview、complete。
-L2 Evidence Manifest: 可支撑回答的证据清单，只放 source、evidenceId、outputId、confidence、completeness、summary、引用范围。
-L3 Model Context Package: 每轮真正给模型的压缩视图，只包含当前目标、最近少量 ResponseItem、pinned evidence、available output refs、budget report、dropped manifest。
+F:\AIGril\AIGrilClaw\.refs\openai-codex\codex-rs\core\src\context_manager\history.rs
+- record_items: 只记录 API/message/tool 需要的 ResponseItem，并在写入时按 truncation policy 处理工具输出。
+- for_prompt: 发送给模型前运行 normalize_history，输出模型可见 ResponseItem。
+- estimate_token_count: base instructions + items token 估算。
+- remove_first_item/drop_last_n_user_turns: 删除历史时按 call/output 和 user turn 边界维护一致性。
+- truncate_function_output_payload: 工具输出在进入历史时即被预算化。
+
+F:\AIGril\AIGrilClaw\.refs\openai-codex\codex-rs\core\src\context_manager\normalize.rs
+- ensure_call_outputs_present: call 缺 output 时插入稳定 synthetic output。
+- remove_orphan_outputs: output 没有对应 call 时移除或诊断。
+- remove_corresponding_for: 删除 call 或 output 时同步删除另一半。
+- strip_images_when_unsupported: 模型不支持图片时替换为占位文本。
+
+F:\AIGril\AIGrilClaw\.refs\openai-codex\codex-rs\core\src\session\context_window.rs
+- context_window_token_status: active_context_tokens、auto_compact_scope_tokens、tokens_until_compaction、token_limit_reached。
+- AutoCompactTokenLimitScope::BodyAfterPrefix: 静态前缀和动态 body 分开计算。
+
+F:\AIGril\AIGrilClaw\.refs\openai-codex\codex-rs\core\src\unified_exec\head_tail_buffer.rs
+- HeadTailBuffer: 大输出保留 head 和 tail，中间丢弃，记录 omitted_bytes。
+
+F:\AIGril\AIGrilClaw\.refs\openai-codex\codex-rs\core\src\tools\context.rs
+- ExecCommandToolOutput: 输出保留 raw_output、wall_time、exit_code、max_output_tokens、original_token_count。
+- formatted_output: 按 truncation policy 生成模型可见文本。
 ```
 
-实现落点仍然是现有文件：
+#### 5.1.2 AILIS 修改范围
+
+只修改以下现有文件中的函数，不新增正式 Harness 模块。
 
 ```text
-electron/ailis-tool-result.cjs: 工具结果出生时先标准化和预算化。
-electron/ailis-tool-runtime.cjs: dispatch 后统一补 outputId/evidenceIds/complete/truncatedForModel。
-electron/ailis-context-manager.cjs: 编译 L3 Model Context Package，不保存无限历史原文。
-electron/ailis-evidence-artifacts.cjs: 维护 L2 Evidence Manifest。
-electron/ailis-agent-runner.cjs: 每轮调用前检查 budget report，必要时触发压缩或追问。
-scripts/run-ailis-gaia-auto-optimizer.mjs: 长程任务以 chain/verdict/artifacts 为事实源，不依赖对话窗口。
+electron/ailis-runtime-budget.cjs
+electron/ailis-tool-result.cjs
+electron/ailis-tool-runtime.cjs
+electron/ailis-context-manager.cjs
+electron/ailis-evidence-artifacts.cjs
+electron/ailis-agent-runner.cjs
+scripts/run-gaia-level1-lite.mjs
+scripts/run-ailis-gaia-auto-optimizer.mjs
 ```
 
-#### 5.1.3 每轮 Context Package Contract
+#### 5.1.3 `ailis-runtime-budget.cjs`
 
-`ContextManager.forPrompt()` 不应该只返回一串历史 items。目标返回语义上等价于下面的 package，再由 runner 展开成 ResponseItem：
+函数契约：提供唯一预算计算入口；任何调用方不得自行计算 70% 压缩阈值。
 
-```json
-{
-  "schema": "ailis.context_package.v1",
-  "goal": "current user/task goal",
-  "runtimeEnvironment": {
-    "cwd": "...",
-    "shell": "powershell",
-    "permissions": "...",
-    "network": "..."
-  },
-  "taskState": {
-    "phase": "plan|search|read|compute|finalize|blocked",
-    "openQuestions": [],
-    "knownConstraints": [],
-    "nextExpectedAction": "tool|final|ask_user|compact"
-  },
-  "recentResponseItems": [],
-  "pinnedEvidenceManifest": [],
-  "availableOutputRefs": [],
-  "toolSummary": [],
-  "budgetReport": {
-    "activeContextTokens": 0,
-    "targetContextTokens": 0,
-    "tokensUntilCompaction": 0,
-    "modelVisibleChars": 0,
-    "toolOutputChars": 0,
-    "droppedItemCount": 0
-  },
-  "droppedItemsManifest": []
+```js
+/**
+ * Estimate tokens in the same spirit as Codex approx_token_count.
+ * Priority:
+ * 1. Provider usage/token_info when available.
+ * 2. UTF-8 bytes / 4 estimate.
+ * 3. chars / 3 fallback only when byte length is unavailable.
+ */
+function approxTokenCount(value) {
+  const text = typeof value === 'string' ? value : JSON.stringify(value ?? '');
+  return Math.ceil(Buffer.byteLength(text, 'utf8') / 4);
+}
+
+/**
+ * Compute a deterministic budget report before every LLM call.
+ * This is the AILIS equivalent of Codex context_window_token_status.
+ */
+function buildContextBudgetReport(parts, config) {
+  const modelContextWindowTokens =
+    config.modelContextWindowTokens ??
+    config.providerTokenInfo?.contextWindow ??
+    32000;
+
+  const reservedCompletionTokens = Math.max(
+    2048,
+    Number(config.maxOutputTokens || config.max_tokens || 0)
+  );
+
+  const safetyMarginTokens = Math.max(
+    1024,
+    Math.ceil(modelContextWindowTokens * 0.05)
+  );
+
+  const effectiveInputLimitTokens =
+    modelContextWindowTokens - reservedCompletionTokens - safetyMarginTokens;
+
+  const configuredTaskInputBudgetTokens =
+    Number(config.taskInputBudgetTokens || 0) || effectiveInputLimitTokens;
+
+  const targetContextTokens = Math.max(
+    1024,
+    Math.min(effectiveInputLimitTokens, configuredTaskInputBudgetTokens)
+  );
+
+  const staticPrefixTokens = approxTokenCount(parts.staticPrefix);
+  const toolSpecsTokens = approxTokenCount(parts.toolSpecs);
+  const taskStateTokens = approxTokenCount(parts.taskState);
+  const pinnedEvidenceTokens = approxTokenCount(parts.pinnedEvidenceManifest);
+  const recentItemsTokens = approxTokenCount(parts.recentResponseItems);
+  const toolOutputPreviewTokens = approxTokenCount(parts.toolOutputPreviews);
+  const droppedManifestTokens = approxTokenCount(parts.droppedItemsManifest);
+
+  const modelVisibleTokensEstimate =
+    staticPrefixTokens +
+    toolSpecsTokens +
+    taskStateTokens +
+    pinnedEvidenceTokens +
+    recentItemsTokens +
+    toolOutputPreviewTokens +
+    droppedManifestTokens;
+
+  const activeContextTokens =
+    Number(config.providerTokenInfo?.activeContextTokens) ||
+    modelVisibleTokensEstimate;
+
+  const budgetUsedRatio = modelVisibleTokensEstimate / targetContextTokens;
+  const tokensUntilCompaction =
+    Math.floor(targetContextTokens * 0.70 - modelVisibleTokensEstimate);
+
+  return {
+    schema: 'ailis.context_budget_report.v1',
+    estimateSource: config.providerTokenInfo ? 'provider_usage' : 'utf8_bytes_div_4',
+    modelContextWindowTokens,
+    reservedCompletionTokens,
+    safetyMarginTokens,
+    effectiveInputLimitTokens,
+    targetContextTokens,
+    staticPrefixTokens,
+    toolSpecsTokens,
+    taskStateTokens,
+    pinnedEvidenceTokens,
+    recentItemsTokens,
+    toolOutputPreviewTokens,
+    droppedManifestTokens,
+    modelVisibleTokensEstimate,
+    activeContextTokens,
+    budgetUsedRatio,
+    tokensUntilCompaction,
+    compactionLevel: classifyCompactionLevel(budgetUsedRatio, effectiveInputLimitTokens)
+  };
+}
+
+function classifyCompactionLevel(ratio, effectiveInputLimitTokens) {
+  if (effectiveInputLimitTokens < 4096) return 'stop';
+  if (ratio >= 0.80) return 'stop';
+  if (ratio >= 0.70) return 'hard';
+  if (ratio >= 0.65) return 'precompact';
+  if (ratio >= 0.50) return 'soft';
+  return 'none';
 }
 ```
 
-关键约束：
+预算分账硬规则：
 
 ```text
-recentResponseItems 只保留最近 N 个必要 call/output 对。
-pinnedEvidenceManifest 保留所有 final 可能引用的证据，但只放摘要和 ref。
-availableOutputRefs 告诉模型旧输出存在以及如何 read/search/tail。
-droppedItemsManifest 告诉模型哪些内容被压缩、为什么压缩、如何取回。
-toolSummary 只列本轮核心工具和已 materialized deferred tools，不塞全量工具说明。
+toolSpecsTokens > targetContextTokens * 0.15 -> hide deferred specs, keep tool_search only.
+pinnedEvidenceTokens > targetContextTokens * 0.25 -> compress evidence summaries, never drop ids.
+recentItemsTokens > targetContextTokens * 0.30 -> keep latest 2-4 call/output pairs, compact older pairs.
+toolOutputPreviewTokens > targetContextTokens * 0.20 -> convert old previews to output refs.
+droppedManifestTokens > targetContextTokens * 0.05 -> keep only ids/reasons/recovery tool, drop prose.
 ```
 
-#### 5.1.3A 精准上下文构建优先级
+#### 5.1.4 `ailis-runtime-budget.cjs` Head/Tail 伪代码
 
-Context package 的核心不是“越短越好”，而是“当前决策所需信息足够，历史噪声最小”。每次编译上下文时按下面的优先级保留。
+Codex `HeadTailBuffer` 的策略必须替代大输出的 middle truncate。
 
-必须保留：
+```js
+/**
+ * Keep stable head and tail, drop the middle.
+ * Used for command output, logs, HTML, long JSON text, transcript text.
+ */
+function makeHeadTailPreview(text, maxChars) {
+  const source = String(text || '').replace(/\r\n/g, '\n');
+  if (source.length <= maxChars) {
+    return {
+      text: source,
+      truncatedForModel: false,
+      omittedChars: 0,
+      originalTextChars: source.length,
+      visibleTextChars: source.length
+    };
+  }
+
+  const marker = '\n... [middle omitted for model budget] ...\n';
+  const remaining = Math.max(0, maxChars - marker.length);
+  const headChars = Math.ceil(remaining * 0.55);
+  const tailChars = remaining - headChars;
+  const head = source.slice(0, headChars);
+  const tail = tailChars > 0 ? source.slice(-tailChars) : '';
+
+  return {
+    text: [
+      'OUTPUT_TRUNCATED_FOR_MODEL: true',
+      `originalTextChars=${source.length}`,
+      `visibleTextChars<=${maxChars}`,
+      `omittedChars=${source.length - head.length - tail.length}`,
+      '--- head ---',
+      head,
+      '--- omitted middle ---',
+      marker.trim(),
+      '--- tail ---',
+      tail
+    ].join('\n'),
+    truncatedForModel: true,
+    omittedChars: source.length - head.length - tail.length,
+    originalTextChars: source.length,
+    visibleTextChars: head.length + tail.length
+  };
+}
+```
+
+#### 5.1.5 `ailis-tool-result.cjs`
+
+函数契约：工具输出出生时必须变成预算化 observation；禁止先把 1MB 文本塞进 `ContextManager` 后再补救。
+
+```js
+/**
+ * Normalize every tool output into a model-safe observation.
+ * Raw/full output is not placed in model text when it exceeds budget.
+ */
+function normalizeAilisToolOutput(result, { toolId, outputStore, evidenceStore }) {
+  const raw = coerceToolResult(result);
+  const rawText = extractPrimaryText(raw);
+  const rawBytes = Buffer.byteLength(rawText, 'utf8');
+  const rawLines = rawText ? rawText.split(/\r?\n/).length : 0;
+  const approxOriginalTokens = approxTokenCount(rawText);
+
+  const shouldExternalize =
+    rawBytes > 6000 ||
+    rawLines > 120 ||
+    approxOriginalTokens > 1500 ||
+    containsLargeStructuredPayload(raw.structuredContent);
+
+  let outputRef = null;
+  if (shouldExternalize) {
+    outputRef = outputStore.write({
+      toolId,
+      rawText,
+      structuredContent: raw.structuredContent,
+      rawBytes,
+      rawLines,
+      approxOriginalTokens,
+      hash: sha256(rawText)
+    });
+  }
+
+  const preview = makeHeadTailPreview(rawText, shouldExternalize ? 6000 : 12000);
+
+  return {
+    content: [{
+      type: 'text',
+      text: renderObservationText({
+        status: raw.status,
+        toolId,
+        outputId: outputRef?.outputId ?? null,
+        complete: raw.complete !== false,
+        truncatedForModel: preview.truncatedForModel,
+        originalTokens: approxOriginalTokens,
+        preview: preview.text,
+        nextTools: outputRef ? ['output_read', 'output_tail', 'output_search'] : []
+      })
+    }],
+    isError: raw.isError === true,
+    details: compactDetails(raw.details),
+    structuredContent: compactStructuredContent(raw.structuredContent),
+    outputRef,
+    modelBudget: {
+      status: 'compacted',
+      rawBytes,
+      rawLines,
+      approxOriginalTokens,
+      visibleTextChars: preview.visibleTextChars,
+      truncatedForModel: preview.truncatedForModel
+    }
+  };
+}
+```
+
+#### 5.1.6 `ailis-tool-runtime.cjs`
+
+运行契约：所有 runtime tool 和 direct MCP tool 必须走同一校验、输出预算、证据生成路径。
+
+```js
+/**
+ * Dispatch one tool call.
+ * Contract validation happens before handler execution.
+ * Output normalization happens after handler execution.
+ */
+async function dispatch(toolId, args, context) {
+  const tool = resolveToolOrDirectMcp(toolId);
+  if (!tool) return toolError('not_materialized');
+
+  const validation = validateToolContract(toolId, args);
+  if (!validation.ok) {
+    return normalizedValidationObservation(validation);
+  }
+
+  const startedAt = Date.now();
+  try {
+    const rawResult = await tool.handle(validation.args, context);
+    const normalized = normalizeAilisToolOutput(rawResult, {
+      toolId,
+      outputStore: context.outputStore,
+      evidenceStore: context.evidenceStore
+    });
+    normalized.trace = {
+      toolId,
+      durationMs: Date.now() - startedAt,
+      argsDigest: digestArgs(validation.args),
+      status: normalized.isError ? 'failed' : 'completed'
+    };
+    return normalized;
+  } catch (error) {
+    return normalizeAilisToolOutput(toolExceptionToResult(error), { toolId });
+  }
+}
+```
+
+#### 5.1.7 `ailis-context-manager.cjs`
+
+函数契约：`ContextManager` 保存 ResponseItem 历史；`forPrompt()` 必须编译 context package，禁止只返回 raw history 的浅拷贝。
+
+```js
+/**
+ * Record model/API items.
+ * Tool outputs are processed immediately with model-visible truncation.
+ */
+ContextManager.prototype.recordItems = function(items, policy) {
+  for (const item of items) {
+    if (!isResponseItemLike(item)) continue;
+    this.items.push(this.processItem(item, policy));
+  }
+  this.history_version += 1;
+};
+
+/**
+ * Prepare input for the next model call.
+ * Algorithm mirrors Codex ContextManager::for_prompt + normalize_history,
+ * but returns a package that can be rendered into ResponseItems.
+ */
+ContextManager.prototype.forPrompt = function(options) {
+  const work = this.clone();
+  work.normalizeHistory(options.inputModalities);
+
+  let pkg = work.buildContextPackage(options);
+  let budget = buildContextBudgetReport(pkg.parts, options.budgetConfig);
+
+  if (budget.compactionLevel === 'soft') {
+    work.compactExploratoryToolOutputs({ stalePreviewChars: 1200 });
+    pkg = work.buildContextPackage(options);
+    budget = buildContextBudgetReport(pkg.parts, options.budgetConfig);
+  }
+
+  if (budget.compactionLevel === 'precompact') {
+    work.compactOldTurnsToDroppedManifest({ keepRecentPairs: 4 });
+    work.compressEvidenceSummaries({ keepIds: true });
+    pkg = work.buildContextPackage(options);
+    budget = buildContextBudgetReport(pkg.parts, options.budgetConfig);
+  }
+
+  if (budget.compactionLevel === 'hard') {
+    work.keepOnlyMinimalPromptState({
+      keepRecentPairs: 2,
+      keepLatestFailure: true,
+      keepPinnedEvidence: true,
+      keepOutputRefs: true
+    });
+    pkg = work.buildContextPackage(options);
+    budget = buildContextBudgetReport(pkg.parts, options.budgetConfig);
+  }
+
+  if (budget.compactionLevel === 'stop') {
+    return renderBlockedContextPackage({
+      reason: 'context_budget_exhausted',
+      budget,
+      checkpoint: work.toCheckpoint()
+    });
+  }
+
+  pkg.budgetReport = budget;
+  return renderContextPackageAsResponseItems(pkg);
+};
+```
+
+#### 5.1.8 `ContextManager.normalizeHistory`
+
+Codex 对应 `normalize.rs`，AILIS 必须保持同样不变量。
+
+```js
+/**
+ * Invariants after normalizeHistory:
+ * 1. Every tool/function/custom/tool_search call has exactly one output.
+ * 2. No orphan output remains unless it is a server tool_search output.
+ * 3. If model does not support images, image payloads become placeholder text.
+ * 4. Removing an item never leaves its call/output counterpart behind.
+ */
+ContextManager.prototype.normalizeHistory = function(inputModalities) {
+  this.ensureCallOutputsPresent();
+  this.removeOrphanOutputs();
+  if (!supportsImages(inputModalities)) {
+    this.stripImagesWhenUnsupported();
+  }
+};
+```
+
+#### 5.1.9 `ContextManager.buildContextPackage`
+
+```js
+/**
+ * Build a precise state package, not a transcript dump.
+ */
+ContextManager.prototype.buildContextPackage = function(options) {
+  const pairs = collectCallOutputPairs(this.items);
+  const latestFailure = findLatestFailure(pairs);
+  const recentPairs = takeRecentPairs(pairs, options.keepRecentPairs ?? 4);
+  const pinnedEvidence = collectPinnedEvidence(this.items, {
+    maxItems: options.maxPinnedEvidence ?? 24,
+    maxSummaryChars: 700
+  });
+  const outputRefs = collectAvailableOutputRefs(this.items, {
+    maxRefs: options.maxOutputRefs ?? 48
+  });
+  const dropped = this.droppedItemsManifest ?? [];
+
+  return {
+    schema: 'ailis.context_package.v1',
+    goal: options.goal,
+    runtimeEnvironment: options.runtimeEnvironment,
+    taskState: inferTaskState({
+      latestFailure,
+      pinnedEvidence,
+      recentPairs,
+      userGoal: options.goal
+    }),
+    recentResponseItems: flattenPairs(recentPairs),
+    pinnedEvidenceManifest: pinnedEvidence,
+    availableOutputRefs: outputRefs,
+    toolSummary: options.toolSummary,
+    droppedItemsManifest: compactDroppedManifest(dropped),
+    parts: {
+      staticPrefix: options.staticPrefix,
+      toolSpecs: options.toolSummary,
+      taskState: inferTaskState(...),
+      pinnedEvidenceManifest: pinnedEvidence,
+      recentResponseItems: flattenPairs(recentPairs),
+      toolOutputPreviews: collectVisibleToolPreviews(recentPairs),
+      droppedItemsManifest: compactDroppedManifest(dropped)
+    }
+  };
+};
+```
+
+#### 5.1.10 Context package 保留规则
 
 ```text
-1. 当前用户目标、最新用户约束、输出格式要求、明确禁止事项。
-2. 当前 taskState：phase、已完成子目标、仍缺字段、下一步预期动作。
-3. 未完成或刚完成的 call/output 配对；缺 output 时插入 diagnostic output，不静默丢失。
-4. 最近一次失败工具调用及其失败层：validation/tool/timeout/env/provider/permission。
-5. final 可能引用的 pinnedEvidenceManifest，包括 source、summary、complete、truncated、coverage。
-6. 可回查的大输出 refs：outputId/artifactId/path/hash，以及 read/search/tail 的建议。
-7. 本轮已 materialized 的 deferred tool specs；没有被加载的工具不要写长说明。
+MUST_KEEP:
+- latest user goal and explicit constraints
+- output format/unit/language requirements
+- pending call/output pairs
+- latest failed tool call and failure layer
+- latest successful evidence-producing observation
+- pinnedEvidenceManifest ids and summaries
+- availableOutputRefs for every externalized output used by evidence
+- active permission/env/provider blocker
+
+CAN_COMPACT:
+- old exploratory tool outputs
+- repeated search/fetch attempts
+- old tool specs reloadable through tool_search
+- persona/UI/chitchat text unrelated to task
+- raw observation already covered by evidence manifest
+
+CAN_DROP_WITH_MANIFEST:
+- old raw output with outputId/artifactId
+- abandoned failed path after replacement strategy exists
+- old intermediate reasoning text
+- old capability catalog entries reloadable by tool_search
+
+NEVER_DROP:
+- current user request
+- final answer format constraints
+- evidence summary needed by current answer
+- call without output / output without call
+- unresolved blocker
 ```
 
-优先压缩：
+#### 5.1.11 Finalizer gate 伪代码
+
+运行契约：Finalizer 必须按 evidencePolicy 分级；普通任务不得被 strict 证据门槛误卡，GAIA/exact-answer 不得低置信提交。
+
+```js
+/**
+ * Classify how much evidence is required for this task.
+ */
+function classifyEvidencePolicy(task) {
+  if (task.exactAnswerMode || task.autoSubmit || task.benchmark === 'GAIA') {
+    return 'strict';
+  }
+  if (task.highRiskFact || task.requiresExternalEvidence) {
+    return 'required';
+  }
+  if (task.localCodeChange || task.localFileGeneration || task.testRun) {
+    return 'local_verification';
+  }
+  if (task.creative || task.brainstorming || task.userAsksForOpinion) {
+    return 'not_required';
+  }
+  return 'preferred';
+}
+
+/**
+ * Finalizer returns one of:
+ * final | allow_with_caveat | continue | ask_user | blocked
+ */
+function finalizerGate(candidate, contextPackage) {
+  const evidencePolicy = classifyEvidencePolicy(contextPackage.taskState);
+  const formatOk = validateAnswerFormat(candidate, contextPackage.taskState);
+  if (!formatOk.ok) {
+    return continueWithFix('answer_format_invalid', formatOk);
+  }
+
+  const coverage = evaluateEvidenceCoverage({
+    answer: candidate.answer,
+    evidenceManifest: contextPackage.pinnedEvidenceManifest,
+    outputRefs: contextPackage.availableOutputRefs,
+    localVerification: contextPackage.taskState.localVerification
+  });
+
+  if (evidencePolicy === 'strict') {
+    if (candidate.confidence === 'low') return continueOrBlocked('low_confidence');
+    if (coverage.status !== 'complete') return continueOrBlocked('strict_evidence_missing');
+    return final(candidate, coverage);
+  }
+
+  if (evidencePolicy === 'required') {
+    if (coverage.status === 'complete') return final(candidate, coverage);
+    if (coverage.hasLowCostNextStep) return continueWithTool(coverage.nextToolHint);
+    return allowWithCaveat(candidate, coverage);
+  }
+
+  if (evidencePolicy === 'local_verification') {
+    if (coverage.localDiffOrTestOrOutputRef) return final(candidate, coverage);
+    if (contextPackage.taskState.completedLocally) return allowWithCaveat(candidate, coverage);
+    return continueWithTool('run focused local verification');
+  }
+
+  if (evidencePolicy === 'not_required') {
+    return final(candidate, { status: 'not_required' });
+  }
+
+  if (coverage.status === 'complete' || coverage.status === 'partial') {
+    return finalOrCaveat(candidate, coverage);
+  }
+  if (coverage.hasLowCostNextStep) return continueWithTool(coverage.nextToolHint);
+  return allowWithCaveat(candidate, coverage);
+}
+```
+
+Blocked 只允许在以下条件出现：
 
 ```text
-1. 重复搜索结果、重复 web_fetch、重复 capability catalog。
-2. 旧的 exploratory tool output，尤其是没有产生 evidence 的输出。
-3. 大 HTML、大 JSON、大表格、大 transcript、大日志原文。
-4. persona/chatty 文本、UI 展示文本、非任务证据的小动作/表情文本。
-5. 已被 evidence manifest 覆盖的 raw observation。
+- permission/env/provider blocker prevents progress
+- user decision is required
+- strict evidence is missing and no low-cost next step exists
+- minimal context package cannot fit within budget
+- tool schema/runtime corruption prevents reliable execution
 ```
 
-允许丢弃但必须记录到 droppedItemsManifest：
+普通用户任务不得因为缺少 evidenceId 自动 blocked。
+
+#### 5.1.12 长程任务 checkpoint 伪代码
+
+```js
+/**
+ * Called after every longrun iteration.
+ * Conversation window is only a projector; disk artifacts are source of truth.
+ */
+function persistLongrunIteration(jobDir, iteration, result) {
+  writeJson(`${jobDir}/iterations/${iteration}/chain.json`, {
+    steps: result.steps,
+    outputRefs: result.outputRefs,
+    evidenceRefs: result.evidenceRefs,
+    budgetReports: result.budgetReports
+  });
+
+  writeJson(`${jobDir}/iterations/${iteration}/verdict.json`, {
+    status: result.status,
+    failureLayer: classifyFailureLayer(result),
+    confidence: result.confidence,
+    cost: result.cost,
+    loopCount: result.steps.length
+  });
+
+  writeJson(`${jobDir}/iterations/${iteration}/context-package.json`, {
+    contextPackage: result.nextContextPackage,
+    budgetReport: result.nextContextPackage.budgetReport
+  });
+
+  if (result.status !== 'success') {
+    writeText(`${jobDir}/iterations/${iteration}/repair-ticket.md`,
+      renderRepairTicket(result)
+    );
+  }
+}
+```
+
+#### 5.1.13 必须先通过的测试
 
 ```text
-1. 旧失败路径且已有 replacement strategy。
-2. 旧工具说明且仍可通过 tool_search 重新 materialize。
-3. 旧输出原文且已有 outputId/artifactId 可回查。
-4. 旧中间推理草稿，但最终事实、计算脚本、证据摘要必须保留。
+tests/ailis-context-manager-budget.test.mjs
+- buildContextBudgetReport has deterministic denominator.
+- 70% hard gate triggers before next LLM call.
+- minimal context package produces blocked/new-window signal when it cannot fit.
+
+tests/ailis-tool-output-compaction.test.mjs
+- 1MB output yields <= 6000 chars model preview.
+- preview contains head, tail, omitted count, outputId, nextTools.
+- output_search can recover a middle sentinel string.
+
+tests/ailis-context-package.test.mjs
+- 50 tool calls keep call/output pairing.
+- latest user request and format constraints are never dropped.
+- old output becomes droppedItemsManifest + outputRef.
+
+tests/ailis-finalizer-gate.test.mjs
+- GAIA exact low-confidence answer is rejected.
+- local code/test success can final without web evidence.
+- preferred evidence missing returns allow_with_caveat, not blocked.
+- truncated evidence with sufficient summary can final.
 ```
 
-禁止丢弃：
+#### 5.1.14 实现顺序
 
 ```text
-1. 当前用户最新请求。
-2. 未配对的 tool call 或 tool output。
-3. final answer 所需的证据摘要和引用 ref。
-4. 影响答案格式、单位、范围、语言、提交策略的约束。
-5. 仍未解决的 blocker、permission/env/provider 错误。
+1. ailis-runtime-budget.cjs: buildContextBudgetReport + makeHeadTailPreview。
+2. ailis-tool-result.cjs: normalizeAilisToolOutput 立刻生成 safe preview + outputRef metadata。
+3. ailis-context-manager.cjs: forPrompt 改为 buildContextPackage + budget gate。
+4. ailis-evidence-artifacts.cjs: evidence manifest 只放 ref/summary/coverage/completeness。
+5. ailis-agent-runner.cjs: buildLlmAgentDirectToolPrompt 使用 context package，不再读 raw transcript。
+6. GAIA/LongRun: finalizerGate 使用 evidencePolicy，checkpoint 写 context-package.json。
+7. 跑 5.1.13 测试，再跑旧失败 transcript replay。
 ```
-
-精确构建目标：模型每轮看到的是“任务状态机 + 证据索引 + 最近动作”，不是完整聊天记录。这样即使历史被压缩，模型也能知道自己在哪、证据在哪、下一步应该做什么。
-
-#### 5.1.4 工具输出即时压缩规则
-
-工具输出不能等到历史快爆了才压缩。每次 `normalizeAilisToolOutput()` 后立刻做分层处理：
-
-```text
-1. 计算 rawTextBytes、rawTextLines、approxOriginalTokens、hash。
-2. 若输出超过 small threshold，立即生成 outputId，并把完整内容进入 trace/artifact/runtime output 事实源。
-3. 模型可见 text 永远只放 preview：状态头 + head/tail + omitted 统计 + 读取提示。
-4. structuredContent 中的大数组、大 HTML、大 transcript、大表格必须只保留 schema/摘要/行列范围。
-5. complete=false 或 truncatedForModel=true 的输出不能单独支撑 final answer。
-```
-
-建议阈值：
-
-```text
-singleToolPreviewChars: 4000-6000
-staleToolPreviewChars: 800-1200
-recentFullToolOutputs: 0-2（只有 very small output 才允许完整可见）
-recentToolOutputPairs: 4
-toolOutputSoftChars: 24000
-toolOutputHardChars: 32000
-largeOutputExternalizeChars: 6000
-```
-
-这意味着“大多数工具输出从出生起就是 compacted observation”，而不是先污染上下文再补救。
-
-#### 5.1.5 Head/Tail 优先于 Middle Truncate
-
-工具输出的 preview 应优先使用 head/tail，不建议只保留开头或中间截断：
-
-```text
-head: 命令、状态、错误头、网页标题、表格列名、前几条搜索结果。
-tail: 最终统计、错误堆栈尾部、命令结论、最后几行日志、最终答案候选。
-omitted: 明确记录中间省略的 bytes/chars/tokens/lines。
-```
-
-模型看到的文本必须包含：
-
-```text
-OUTPUT_TRUNCATED_FOR_MODEL: true
-originalTokens: <approx>
-visibleTokens: <approx>
-omittedBytes: <n>
-outputId: out_...
-nextTools: output_read/output_tail/output_search
-```
-
-#### 5.1.6 自动压缩触发阈值
-
-沿用用户要求：70% 之前就开始压缩。AILIS 应该有独立的 budget status，不靠感觉。
-
-```text
-<50%: 正常运行，但大工具输出仍即时外置。
-50%-65%: soft compaction，旧工具输出转 stale preview，保留 evidence manifest。
-65%-70%: pre-compact，生成/刷新 task summary、dropped manifest、available output refs。
->=70%: hard compaction gate；下一轮模型调用前必须压缩，不允许继续堆工具输出。
->=80%: stop-or-new-window；长程任务写 checkpoint，当前对话只汇报状态或建议新线程。
-```
-
-`budgetReport` 至少包含：
-
-```text
-activeContextTokens
-modelVisibleTokensEstimate
-recentItemsTokens
-pinnedEvidenceTokens
-toolOutputPreviewTokens
-toolSpecsTokens
-staticPrefixTokens
-tokensUntilCompaction
-compactionLevel: none|soft|precompact|hard|stop
-```
-
-#### 5.1.6A Budget 精确定义
-
-Budget 必须有明确分母，否则 70% 没有执行意义。
-
-Token 来源优先级：
-
-```text
-1. provider/API 返回的 token_info 或 usage。
-2. AILIS approxTokenCount，按 UTF-8 bytes / 4 粗估。
-3. 如果只能拿到字符数，使用 chars / 3 的保守估算，并标记 estimateSource=chars_fallback。
-```
-
-核心字段定义：
-
-```text
-modelContextWindowTokens: 当前模型声明或配置的最大上下文窗口。
-reservedCompletionTokens: 为下一次模型输出预留的 token，默认 max(2048, configuredMaxOutputTokens)。
-safetyMarginTokens: 安全余量，默认 max(1024, modelContextWindowTokens * 0.05)。
-effectiveInputLimitTokens: modelContextWindowTokens - reservedCompletionTokens - safetyMarginTokens。
-staticPrefixTokens: system/developer/persona/runtime/core tool specs 的估算 token。
-dynamicBodyTokens: task state + evidence manifest + recent items + output refs + dropped manifest。
-modelVisibleTokensEstimate: staticPrefixTokens + dynamicBodyTokens。
-activeContextTokens: 如果 provider 返回真实 active usage，则用真实值；否则等于 modelVisibleTokensEstimate。
-targetContextTokens: min(effectiveInputLimitTokens, configuredTaskInputBudgetTokens || effectiveInputLimitTokens)。
-budgetUsedRatio: modelVisibleTokensEstimate / targetContextTokens。
-tokensUntilCompaction: targetContextTokens * 0.70 - modelVisibleTokensEstimate。
-```
-
-分账要求：
-
-```text
-staticPrefixTokens 应尽量稳定，允许占 targetContextTokens 的 20%-35%。
-toolSpecsTokens 默认不超过 targetContextTokens 的 15%；超过时必须把 deferred tools 收回 tool_search。
-pinnedEvidenceTokens 默认不超过 targetContextTokens 的 25%；超过时压缩 evidence summary，但不能删除 refs。
-recentItemsTokens 默认不超过 targetContextTokens 的 30%；超过时按 user/fork turn 边界压缩。
-toolOutputPreviewTokens 默认不超过 targetContextTokens 的 20%；超过时旧输出转 output refs。
-droppedItemsManifest 默认不超过 targetContextTokens 的 5%；只记录可恢复索引，不写长摘要。
-```
-
-触发级别使用 `budgetUsedRatio`，不是单纯字符数：
-
-```text
-none: < 0.50
-soft: >= 0.50 and < 0.65
-precompact: >= 0.65 and < 0.70
-hard: >= 0.70 and < 0.80
-stop: >= 0.80 或 effectiveInputLimitTokens 已不可满足最小上下文包
-```
-
-最小上下文包必须能装下：
-
-```text
-current user goal + latest constraints + taskState + core tools + pinned evidence refs + latest 2 call/output pairs + budgetReport。
-```
-
-如果最小上下文包都超过 budget，不应继续调用模型硬跑，应输出 `nextAction=blocked` 或开启新 context window / longrun checkpoint。
-
-#### 5.1.7 Prompt Cache 友好的上下文顺序
-
-为了减少 token 成本和保持模型稳定，模型输入顺序应固定：
-
-```text
-1. Static system/developer/persona policy（尽量稳定）
-2. Runtime environment snapshot（字段稳定，值可变）
-3. Core direct tool specs（少量、稳定）
-4. Deferred/materialized tool specs（本轮必要工具）
-5. Current task state
-6. Evidence manifest
-7. Recent response items
-8. Dropped/output refs manifest
-9. Current user request / next action instruction
-```
-
-不要把大段动态工具输出放在静态前缀前面，否则 prompt cache 和模型注意力都会变差。
-
-#### 5.1.8 Finalizer 与证据压缩的关系
-
-Finalizer 不能只看最近对话文本，但也不能把所有任务都按 benchmark 严格模式卡死。它必须看 evidence manifest 和 output refs，同时按任务类型选择 gate 强度。
-
-Finalizer mode：
-
-```text
-strict: GAIA/exact-answer/自动提交/高风险事实/需要外部证据的问题。必须有可验证 evidence refs。
-balanced: 普通研究、攻略、网页问答、代码分析。优先要求 evidence refs；不足时允许 caveat final 或 ask_user。
-light: 纯创作、UI 文案、计划、用户明确只要建议、无需外部事实的代码修改总结。可以基于当前上下文和已执行步骤 final，不强制 evidence refs。
-local_verification: 本地代码/脚本/文件任务。证据可以是测试结果、diff、命令输出 outputId、文件路径和摘要，不要求网页/PDF evidence。
-```
-
-防误卡规则：
-
-```text
-1. 如果任务已经由本地确定性执行完成，例如代码修改、测试通过、文件生成成功，finalizer 不应因为没有 web evidence 而 blocked。
-2. 如果 output preview 已包含完整答案字段且 complete=true、truncatedForModel=false，可以 final，不必再 output_read。
-3. 如果 preview 被截断，但 evidence summary 已覆盖答案所需字段，也可以 final；只有答案依赖 omitted 区域时才要求 output_read/output_search。
-4. 如果用户问题是主观建议、写作、规划或无需事实检索，evidencePolicy=not_required，可以 final，但不要伪造证据 refs。
-5. 如果 evidence refs 缺失但任务可回答，balanced mode 应返回 allow_with_caveat，而不是 blocked。
-6. blocked 只用于：缺少用户决策、权限/环境不可用、最小上下文包不可满足、关键证据缺失且没有可行下一步。
-```
-
-Finalizer 判断顺序：
-
-```text
-1. classify task evidencePolicy: strict|required|preferred|not_required|local_verification。
-2. 检查 answer 是否满足格式、单位、范围、语言和用户约束。
-3. 检查 evidence manifest 是否覆盖 answer 的关键 claims。
-4. 对 truncated evidence，只判断关键 claim 是否落在 summary/preview/known range；不机械拒绝。
-5. 若缺 evidence，先判断是否还有低成本下一步；有则 continue，没有则 ask_user 或 allow_with_caveat。
-6. 只有 strict mode 且关键 evidence 缺失时 reject final。
-```
-
-最终输出不应只有 ok/blocked 二值，而应支持：
-
-```text
-final: 可以回答。
-allow_with_caveat: 可以回答，但必须说明证据不足或范围限制。
-continue: 继续工具调用，且给出具体 next tool / missing field。
-ask_user: 需要用户选择或澄清。
-blocked: 当前系统无法继续，且不能可靠回答。
-```
-
-#### 5.1.9 长程任务的 checkpoint 语义
-
-长程任务不应该依赖当前对话窗口保存全部信息。每轮 iteration 结束必须写：
-
-```text
-chain.json: 完整执行链路和 output/evidence refs。
-verdict.json: success/failure、failure layer、confidence、cost、loop count。
-context-package.json: 下一轮可恢复的压缩上下文包。
-repair-ticket.md: 失败时的最小复现、失败工具、证据缺口、建议修复。
-progress.json/state.json/event-log.jsonl: controller 的事实源。
-```
-
-恢复时只读 state/progress/latest context-package，不把旧 transcript 全量塞回模型。
-
-#### 5.1.10 必须新增的回归测试场景
-
-这些测试优先于继续堆 web_search/web_fetch 优化：
-
-```text
-1. 单个工具输出 1MB：模型视图 <= 6k chars，output_search 能找回中间答案。
-2. 连续 50 次工具调用：prompt package 不超过预算，call/output 配对不丢。
-3. 旧 evidence 被压缩：finalizer 仍能通过 evidenceId 找到摘要和 source。
-4. 截断 preview 包含错误结尾：head/tail 都保留，tail 中错误不丢。
-5. 70% budget gate：下一次 LLM 调用前必须生成 precompact context package。
-6. 长程任务恢复：只用 context-package/state/progress 能继续，不读全量 transcript。
-```
-
-如果以上测试没有通过，不应进入 GAIA 大规模自动迭代，否则会继续烧 API 而不是提升 Harness。
-
 ### Phase 6: FinalizerGate 通用化
 
 目标：把 GAIA finalizer 的经验迁移成通用 final gate。
