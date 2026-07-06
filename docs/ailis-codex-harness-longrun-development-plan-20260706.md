@@ -233,7 +233,7 @@ AILIS 已经有：
 
 现状判断：
 
-- AILIS 的 tool runtime 方向是对的。
+- AILIS 的 tool runtime 结构选择成立。
 - `tool_search` 已经注册为真实 runtime tool，不只是 prompt 文本。
 - MCP direct tools 可以通过 `mcp__server__tool` 路由，不必普通任务走 `mcp_bridge.call_tool`。
 
@@ -264,12 +264,12 @@ AILIS 已经支持：
 现状判断：
 
 - AILIS 已经把 MCP 从“纯概念”做成了运行时能力。
-- 这和 Codex 通过 MCP runtime snapshot、connection manager、tool exposure 的方向一致。
+- 这和 Codex 通过 MCP runtime snapshot、connection manager、tool exposure 的结构一致。
 
 问题：
 
 - `mcp_bridge` 仍是模型可见的诱惑路径之一。
-- 普通任务应该只看到 direct MCP tool specs；`mcp_bridge` 应限制在管理/调试/doctor 模式。
+- 普通任务必须只看到 direct MCP tool specs；`mcp_bridge` 必须限制在管理/调试/doctor 模式。
 
 ### 3.5 Context Manager
 
@@ -294,13 +294,13 @@ AILIS 已经有：
 现状判断：
 
 - AILIS 已经具备“不要把完整历史塞回模型”的意识。
-- 这和 Codex `context_manager/history.rs` 的方向一致。
+- 这和 Codex `context_manager/history.rs` 的结构一致。
 
 问题：
 
 - AILIS 主要以字符预算处理工具输出；Codex 同时记录 token usage、估算 token、按 ResponseItem 类型处理。
-- AILIS 还需要更强的“raw trace 与 model prompt 分离”，不要把 UI/Persona/Debug 文本混进 evidence context。
-- 对长程任务，context manager 还应显式输出 `context_budget_report`、`pinned_evidence_manifest`、`dropped_items_manifest`。
+- AILIS 还必须具备更强的“raw trace 与 model prompt 分离”，不要把 UI/Persona/Debug 文本混进 evidence context。
+- 对长程任务，context manager 还必须显式输出 `context_budget_report`、`pinned_evidence_manifest`、`dropped_items_manifest`。
 
 ### 3.6 Evidence Artifacts
 
@@ -356,8 +356,8 @@ confidence
 问题：
 
 - Evidence artifact 仍偏“从观察结果推断”，不是所有工具都原生返回标准 evidence contract。
-- Finalizer 仍可能把 advisory refs 当参考，而不是强约束。
-- 应把 evidence contract 前移到工具返回规范，而不是后处理猜测。
+- Finalizer 存在风险：会把 advisory refs 当参考，而不是强约束。
+- 必须把 evidence contract 前移到工具返回规范，而不是后处理猜测。
 
 ### 3.7 GAIA Runner 与 Auto Optimizer
 
@@ -392,7 +392,7 @@ AILIS 已有：
 问题：
 
 - GAIA lite runner 中存在越来越多 task/domain-specific heuristic，例如 ClinicalTrials、gift assignment、presentation、quote 等 deterministic extraction。它们短期提分，但长期应迁移为通用 artifact/evidence adapters 或 test fixtures，不要让 benchmark runner 变成任务特判集合。
-- Auto optimizer 还应更明确区分：controller、worker、conversation projector。之前 API 花费过大，说明安全预算、采样策略、失败聚类和人工闸门还不够硬。
+- Auto optimizer 还必须更明确区分：controller、worker、conversation projector。之前 API 花费过大，说明安全预算、采样策略、失败聚类和人工闸门还不够硬。
 
 ## 4. Codex Harness 架构抽取
 
@@ -423,7 +423,7 @@ Codex shell 处理也按 shell 类型分支：PowerShell、cmd、bash/zsh/sh 不
 
 ```text
 RuntimeEnvironment 不能只是 prompt 文本，也不能写死 Windows。
-它应该是每一轮的结构化输入，并被 exec/read/write/MCP runtime 共享。
+它必须是每一轮的结构化输入，并被 exec/read/write/MCP runtime 共享。
 ```
 
 ### 4.2 ToolSpec 是真实工具边界，不是二级 JSON 决策
@@ -465,8 +465,8 @@ additionalProperties: false
 对 AILIS 的启发：
 
 ```text
-任务模式应尽量少用 meta-decision JSON。
-模型应该直接调用真实工具，运行时在工具边界强校验。
+任务模式必须默认不使用 meta-decision JSON。
+模型必须直接调用真实工具，运行时在工具边界强校验。
 ```
 
 ### 4.3 Tool Registry 是运行时中心
@@ -495,7 +495,7 @@ telemetry_tags
 对 AILIS 的启发：
 
 ```text
-AILISRuntimeTool 已经是正确方向。
+AILISRuntimeTool 已经是正确契约。
 下一步要把所有 core/MCP/external/artifact/subagent 工具都纳入一个统一 ToolSpecRegistry + ToolRuntimeRegistry。
 ```
 
@@ -562,7 +562,7 @@ MCP runtime 有 snapshot/manager/runtime_context，MCP server 刷新、连接、
 对 AILIS 的启发：
 
 ```text
-普通模型调用 MCP 时，应该看到 mcp__server__tool direct spec。
+普通模型调用 MCP 时，必须看到 mcp__server__tool direct spec。
 mcp_bridge 只做管理、health、resource、debug，不做普通任务主路径。
 ```
 
@@ -600,7 +600,7 @@ Sandbox denied 也会转换成 model-visible exec output，而不是吞掉错误
 
 ```text
 长程任务不能只靠一次 exec 返回字符串。
-AILIS 需要统一 Exec Output Store：完整 stdout/stderr 写入 store，模型看到摘要、outputId、line/byte/token 统计和下一步读取工具。
+AILIS 必须统一 Exec Output Store：完整 stdout/stderr 写入 store，模型看到摘要、outputId、line/byte/token 统计和下一步读取工具。
 ```
 
 ### 4.7 Context Manager 管 ResponseItem，不是 raw transcript
@@ -685,7 +685,7 @@ AILIS 的 subagents 适合并行调查、独立修复、回归测试，不适合
 | 长程任务 | 运行时/会话/工具/上下文稳定 | GAIA auto optimizer 已有 controller 雏形 | 泛化 LongRun Controller，任务无关 |
 | 可观测性 | registry hooks、telemetry、tool output | Agent events/evidence artifacts | Agent Lab 用 trace graph 展示完整链路 |
 
-## 6. 当前最关键差距
+## 6. 当前缺口
 
 ### 6.1 Runner 过大，Harness 边界不清
 
@@ -704,13 +704,13 @@ legacy JSON planner
 final answer normalization
 ```
 
-这会让每次修一个 GAIA 问题都可能碰到其它产品行为。需要在现有模块内部收紧 Harness 职责边界，避免继续扩张模块。
+这会让每次修一个 GAIA 问题都会影响其它产品行为。必须在现有模块内部收紧 Harness 职责边界，避免继续扩张模块。
 
 ### 6.2 Direct Tool 与 Legacy Planner 混用
 
 AILIS prompt 已经说“不要输出 custom JSON decision object”，但代码里仍存在 legacy planner 和 capability_context 多路径。长程任务里，路径越多，失败分类越难。
 
-目标：
+阶段契约：
 
 ```text
 task_agent 主路径：ResponseItem + direct tools + ToolRuntimeRegistry。
@@ -741,7 +741,7 @@ Codex `ExecCommandToolOutput` 保留 raw output、wall time、exit code、sessio
 
 ### 6.4 Evidence Gate 还不够硬
 
-AILIS 已有 evidence artifact 和 final_answer refs，但 refs 仍偏 advisory。长程任务/GAIA 需要：
+AILIS 已有 evidence artifact 和 final_answer refs，但 refs 仍偏 advisory。长程任务/GAIA 契约：
 
 ```text
 final_answer 必须引用 available evidence refs。
@@ -761,7 +761,7 @@ complete=false/truncated=true 的证据不能单独支撑 exact answer。
 benchmark runner 只负责运行、评分、final gate、记录链路。
 ```
 
-### 6.6 LongRun Controller 需要泛化
+### 6.6 LongRun Controller 必须泛化
 
 `run-ailis-gaia-auto-optimizer.mjs` 已有：
 
@@ -869,7 +869,7 @@ heartbeat 只做投影和小修复，不启动重复重任务。
 
 ### Phase 0: 固化源码基线与现状快照
 
-目标：先建立可重复对照，不直接改行为。
+阶段契约：先建立可重复对照，不直接改行为。
 
 工作项：
 
@@ -894,7 +894,7 @@ pnpm test:ailis-tool-contracts
 
 ### Phase 1: 收紧 Harness Core 代码边界
 
-目标：不新增模块，不改表层架构；先在现有文件里把 Harness 职责从“提示词拼装 + 零散守卫”收敛为稳定、可测、可审计的内部代码路径。
+阶段契约：不新增模块，不改表层架构；先在现有文件里把 Harness 职责从“提示词拼装 + 零散守卫”收敛为稳定、可测、可审计的内部代码路径。
 
 现有落点：
 
@@ -928,7 +928,7 @@ focused unit tests 直接覆盖这些现有函数。
 
 ### Phase 2: Codex-style ToolSpecRegistry
 
-目标：让所有工具统一成 Codex-style runtime object。
+阶段契约：让所有工具统一成 Codex-style runtime object。
 
 工作项：
 
@@ -982,7 +982,7 @@ tool_search("web") 返回 web_search/web_fetch specs，但不把 tool_search 解
 
 ### Phase 3: MCP Direct Path 收敛
 
-目标：普通任务不再通过 `mcp_bridge.call_tool` 执行 MCP 工具。
+阶段契约：普通任务不再通过 `mcp_bridge.call_tool` 执行 MCP 工具。
 
 工作项：
 
@@ -1011,12 +1011,12 @@ additionalProperties false 时拒绝未知字段。
 ```text
 普通任务 transcript 中不出现 mcp_bridge.call_tool。
 错误参数会产生 structured validation error。
-web_fetch(PDF) 返回 unsupported_content_type，并建议 pdf_extract_text。
+web_fetch(PDF) 返回 unsupported_content_type，并返回 nextToolHint=pdf_extract_text。
 ```
 
 ### Phase 4: Unified Exec 与 Output Store 语义内嵌
 
-目标：解决长程任务中 stdout/stderr 丢失、截断不可追、脚本运行后 finalizer 看不到证据的问题。这里的 Output Store 是现有 runtime 的内部语义，不新增正式模块。
+阶段契约：解决长程任务中 stdout/stderr 丢失、截断不可追、脚本运行后 finalizer 看不到证据的问题。这里的 Output Store 是现有 runtime 的内部语义，不新增正式模块。
 
 现有落点：
 
@@ -1067,7 +1067,7 @@ Finalizer 可引用 outputId/evidenceId。
 
 ### Phase 5: Context Compiler 与 Evidence Manifest
 
-目标：上下文压缩不再靠“把文本截短”，而是编译出一份稳定上下文包。
+阶段契约：上下文压缩不再靠“把文本截短”，而是编译出一份稳定上下文包。
 
 Context package：
 
@@ -1118,7 +1118,7 @@ call/output 配对不丢失。
 
 ```text
 F:\AIGril\AIGrilClaw\.refs\openai-codex\codex-rs\core\src\context_manager\history.rs
-- record_items: 只记录 API/message/tool 需要的 ResponseItem，并在写入时按 truncation policy 处理工具输出。
+- record_items: 只记录 API/message/tool 所需 ResponseItem，并在写入时按 truncation policy 处理工具输出。
 - for_prompt: 发送给模型前运行 normalize_history，输出模型可见 ResponseItem。
 - estimate_token_count: base instructions + items token 估算。
 - remove_first_item/drop_last_n_user_turns: 删除历史时按 call/output 和 user turn 边界维护一致性。
@@ -1755,7 +1755,7 @@ tests/ailis-finalizer-gate.test.mjs
 ```
 ### Phase 6: FinalizerGate 通用化
 
-目标：把 GAIA finalizer 的经验迁移成通用 final gate。
+阶段契约：把 GAIA finalizer 的经验迁移成通用 final gate。
 
 FinalizerGate 输入：
 
@@ -1807,7 +1807,7 @@ GAIA low-confidence finalizer 不提交空/猜测答案。
 
 ### Phase 7: LongRun Controller 泛化
 
-目标：把 GAIA auto optimizer 的模式抽象成通用长期任务框架。
+阶段契约：把 GAIA auto optimizer 的模式抽象成通用长期任务框架。
 
 沿用并规范现有 longrun 目录契约：
 
@@ -1863,7 +1863,7 @@ heartbeat 只读 progress，不重复启动重任务。
 
 ### Phase 8: Replay 和回归测试
 
-目标：每次修复不是“感觉变好”，而是用链路证明。
+阶段契约：每次修复不是“感觉变好”，而是用链路证明。
 
 测试层级：
 
@@ -1875,7 +1875,7 @@ cost guard benchmark: 禁止大规模无闸门循环
 manual desktop smoke: AILIS 桌面端真实任务
 ```
 
-验收命令建议：
+验收命令：
 
 ```text
 pnpm ailis:validate-harness
@@ -1894,13 +1894,13 @@ node scripts/run-gaia-level1-lite.mjs --max-agent-steps 5 --task-retries 0 --no-
 
 文件：`electron/ailis-agent-runner.cjs`
 
-| 函数 | 当前职责 | 修改方向 | 验收点 |
+| 函数 | 当前职责 | 实现契约 | 验收点 |
 | --- | --- | --- | --- |
 | `buildRuntimeEnvironmentPromptObject` | 生成运行环境提示对象 | 固定 runtime snapshot 字段：cwd、shell、权限、网络、日期、工具暴露模式、预算；避免把环境信息散落到自由文本 | 同一环境两次生成结构稳定，测试只比较结构字段 |
 | `buildEvidenceSufficiencyPromptObject` | 让模型判断证据是否足够 | 输出结构化审计要求：`sufficient/confidence/missing_fields/next_action/evidence_refs`；不要让模型自由发挥成普通回复 | 低证据任务返回 continue 或 ask_user，不直接 final |
 | `buildLlmAgentDirectToolPrompt` | 拼 direct tool prompt | 只放少量核心 direct tools + tool_search；MCP/Web/PDF 通过 tool_search 暴露；不要把所有 schema 塞进 prompt | transcript 中工具说明显著变短，tool_search 能返回可执行 spec |
 | `validateNativeDirectToolCall` | 校验模型工具调用 | 对 required、additionalProperties、空 `{}`、未知工具、桥接工具暴露模式做统一拒绝 | 失败 transcript 不再出现空参数 MCP 调用继续执行 |
-| `callLlmAgentDirectToolDecision` | 请求模型下一步动作 | 固定 direct-tool 决策路径，减少 legacy planner 分叉；模型输出无效时进入 repair prompt，而不是硬执行 | 无效 tool call 有 structured validation error 和下一步修复建议 |
+| `callLlmAgentDirectToolDecision` | 请求模型下一步动作 | 固定 direct-tool 决策路径，减少 legacy planner 分叉；模型输出无效时进入 repair prompt，而不是硬执行 | 无效 tool call 有 structured validation error 和下一步修复实现要求 |
 | `validateAgentToolLoopGuard` | loop 守卫 | 从步数守卫升级为预算、重复搜索、无新证据、同 URL 重抓、低置信 final 的综合守卫 | 5 步任务能早停、追问或给出证据不足，而不是空转 |
 | `validateExactAnswerSubmission` | 最终答案校验 | 只保留通用 final answer gate：答案格式、证据引用、置信度、缺失字段；不要写 GAIA/游戏/网页特判 | 普通任务和 GAIA 共享同一类 final gate 语义 |
 
@@ -1908,7 +1908,7 @@ node scripts/run-gaia-level1-lite.mjs --max-agent-steps 5 --task-retries 0 --no-
 
 文件：`electron/ailis-tool-contracts.cjs`
 
-| 函数/区域 | 修改方向 | 验收点 |
+| 函数/区域 | 实现契约 | 验收点 |
 | --- | --- | --- |
 | `validateAgainstSchema` | 补齐 Codex-style schema contract：required 必须满足，`additionalProperties:false` 拒绝未知字段，类型错误返回可读 path | 单测覆盖缺 required、未知字段、类型错误、嵌套对象 |
 | `normalizeArgsForContract` | 只做安全、显式、可解释的 normalization；禁止把 `{}` 猜成默认搜索/默认抓取 | `web_search.query`、`web_fetch.url`、`describe_image.path` 缺失时直接拒绝 |
@@ -1921,7 +1921,7 @@ node scripts/run-gaia-level1-lite.mjs --max-agent-steps 5 --task-retries 0 --no-
 
 文件：`electron/ailis-tool-runtime.cjs`
 
-| 函数/类 | 修改方向 | 验收点 |
+| 函数/类 | 实现契约 | 验收点 |
 | --- | --- | --- |
 | `AILISRuntimeTool.searchInfo` | 输出短 metadata：name、namespace、description、required fields、exposure、score hints | tool_search 返回可加载工具，而不是长说明书 |
 | `AILISToolRuntimeRegistry.search` | 按 query 做 deferred tool 检索和重排；优先返回精确工具，再返回相关工具 | `tool_search("web fetch")` 能稳定露出 `web_fetch`，不是泛泛说明 |
@@ -1935,7 +1935,7 @@ node scripts/run-gaia-level1-lite.mjs --max-agent-steps 5 --task-retries 0 --no-
 
 文件：`electron/ailis-mcp-session.cjs`
 
-| 函数/类 | 修改方向 | 验收点 |
+| 函数/类 | 实现契约 | 验收点 |
 | --- | --- | --- |
 | `schemaPropertyNames` | 更准确抽取 required、properties、additionalProperties、description | MCP spec 进入 tool_search 后不会丢字段 |
 | `AILISMcpManager.searchToolSpecs` | 返回 Codex-style loadable specs：server、tool、namespace、inputSchema、required、exposure | `tool_search("pdf")` 能返回 `mcp__...__pdf_extract_text` 这类 direct spec |
@@ -1946,7 +1946,7 @@ node scripts/run-gaia-level1-lite.mjs --max-agent-steps 5 --task-retries 0 --no-
 
 文件：`electron/ailis-context-manager.cjs`
 
-| 函数 | 修改方向 | 验收点 |
+| 函数 | 实现契约 | 验收点 |
 | --- | --- | --- |
 | `recordItems` | 写入 response item 时保留 call/output 配对、outputId、evidenceId、tool status | replay 可以恢复完整链路 |
 | `forPrompt` | 输出上下文包：recent items、pinned evidence manifest、available output ids、budget report、dropped items manifest | 压缩后模型仍知道可引用证据 |
@@ -1958,7 +1958,7 @@ node scripts/run-gaia-level1-lite.mjs --max-agent-steps 5 --task-retries 0 --no-
 
 文件：`electron/ailis-evidence-artifacts.cjs`
 
-| 函数 | 修改方向 | 验收点 |
+| 函数 | 实现契约 | 验收点 |
 | --- | --- | --- |
 | `artifactEvidencePayload` / `payloadForArtifact` | 区分网页、PDF、截图、命令输出、ASR/TTS、文件读取等证据类型 | finalizer 能判断证据类型和完整性 |
 | `confidenceFromText` | 只做弱启发，不替代模型证据判断；置信度来源要标注 | 不把启发式分数当最终事实 |
@@ -1970,17 +1970,17 @@ node scripts/run-gaia-level1-lite.mjs --max-agent-steps 5 --task-retries 0 --no-
 
 文件：`electron/ailis-tool-executor.cjs`
 
-| 函数 | 修改方向 | 验收点 |
+| 函数 | 实现契约 | 验收点 |
 | --- | --- | --- |
 | `executeToolStep` | step started/finished/error 统一记录 tool name、args digest、validation、duration、outputId、evidenceIds | Agent Lab 和 replay 能还原每步 |
 | `executeToolStep` error path | 区分 validation_error、tool_error、timeout、permission_required、environment_error | 自动优化器能按层分类修复 |
-| `executeToolStep` result path | 返回给 runner 的永远是 normalized observation | runner 不需要理解每个工具私有格式 |
+| `executeToolStep` result path | 返回给 runner 的永远是 normalized observation | runner 禁止依赖每个工具私有格式 |
 
 ### 9.8 GAIA 与 LongRun Harness
 
 文件：`scripts/run-gaia-level1-lite.mjs`、`scripts/run-ailis-gaia-auto-optimizer.mjs`
 
-| 函数/区域 | 修改方向 | 验收点 |
+| 函数/区域 | 实现契约 | 验收点 |
 | --- | --- | --- |
 | `buildFinalAnswerGate` | 复用通用 final gate 语义：证据 refs、置信度、缺失字段、nextAction | GAIA 不再单独积累一堆特判 |
 | `buildEvidenceDigest` | 输入 evidence manifest，而不是从 transcript 文本里猜证据 | evidence digest 可回放、可检查 |
@@ -2024,18 +2024,18 @@ node scripts/run-gaia-level1-lite.mjs --max-agent-steps 5 --task-retries 0 --no-
 
 ## 11. 最小可交付目标
 
-第一轮不要追求全部重构。最小可交付版本：
+本轮范围固定为以下最小可交付实现：
 
 ```text
 1. 文档与代码级修改矩阵。
-2. tool contracts 严格校验 MVP。
-3. runtime outputId / evidenceId 引用 MVP。
+2. tool contracts 严格校验 最小实现。
+3. runtime outputId / evidenceId 引用 最小实现。
 4. MCP bridge exposure 降级，tool_search 返回 direct specs。
 5. 2-3 个旧失败 transcript replay 通过。
 6. GAIA canary 在低步数和低预算下能给出明确 chain/verdict。
 ```
 
-如果这一轮完成，AILIS 会从“有很多 Agent 能力”向“有可恢复、可审计、可控制成本的 Harness”迈出关键一步。
+完成本轮范围后，AILIS 必须具备可恢复、可审计、可控制成本的 Harness 基线。
 
 ## 12. 一句话架构原则
 
@@ -2045,4 +2045,4 @@ Model owns intent, reasoning, next-action choice, and evidence sufficiency judgm
 AILIS Surface owns warmth, persona, voice, expression, and user experience.
 ```
 
-这就是 AILIS 对齐 Codex Harness 的核心方向。
+这就是 AILIS 对齐 Codex Harness 的核心契约。
