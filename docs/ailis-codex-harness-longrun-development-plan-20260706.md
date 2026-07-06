@@ -1099,6 +1099,224 @@ Context package：
 call/output 配对不丢失。
 ```
 
+### Phase 5.1: 上下文管控协议（替代“截短字符串”的执行口径）
+
+结论：原 Phase 5 方向正确，但不够可执行。真正要对齐 Codex-style Harness，不能只在 `forPrompt()` 里截短字符串，而要把上下文管理拆成“完整事实源”和“模型可见视图”两套语义：完整事实源保存在 trace/output/evidence/checkpoint 中，模型每轮只收到按预算编译出的 context package。
+
+#### 5.1.1 设计启发
+
+本地 Codex 源码里可以看到几个稳定原则：
+
+```text
+context_manager/history.rs: history 是 ResponseItem 流，不是 raw transcript。
+context_manager/normalize.rs: 每次发给模型前修复 call/output 配对，孤儿 output 会被移除或诊断。
+session/context_window.rs: 有 active_context_tokens、auto_compact_scope_tokens、tokens_until_compaction。
+unified_exec/head_tail_buffer.rs: 大输出保留 head + tail，中间丢弃并统计 omitted_bytes。
+tools/handlers/shell_spec.rs: 工具输出 schema 带 original_token_count、wall_time、exit_code、output。
+thread_rollout_truncation.rs: 长历史按 user/fork turn 边界裁剪，而不是按字符随机裁剪。
+```
+
+OpenAI/OAI 的 Responses/Agents 思路也类似：长任务不要把所有历史反复塞回模型，而是使用 conversation item、previous response/state chain、compaction item、trace 等机制；静态前缀和工具定义尽量稳定，动态历史放在后部，便于 prompt cache 和局部压缩。
+
+#### 5.1.2 AILIS 的四层上下文事实源
+
+不新增正式模块，只在现有模块内实现四层语义：
+
+```text
+L0 Raw Trace: 完整链路事实源，包含每个 tool call、args digest、raw output ref、duration、error type。
+L1 Output Store Semantics: 完整工具输出的可回查记录，至少包含 outputId、bytes、lines、approxTokens、hash、head/tail preview、complete。
+L2 Evidence Manifest: 可支撑回答的证据清单，只放 source、evidenceId、outputId、confidence、completeness、summary、引用范围。
+L3 Model Context Package: 每轮真正给模型的压缩视图，只包含当前目标、最近少量 ResponseItem、pinned evidence、available output refs、budget report、dropped manifest。
+```
+
+实现落点仍然是现有文件：
+
+```text
+electron/ailis-tool-result.cjs: 工具结果出生时先标准化和预算化。
+electron/ailis-tool-runtime.cjs: dispatch 后统一补 outputId/evidenceIds/complete/truncatedForModel。
+electron/ailis-context-manager.cjs: 编译 L3 Model Context Package，不保存无限历史原文。
+electron/ailis-evidence-artifacts.cjs: 维护 L2 Evidence Manifest。
+electron/ailis-agent-runner.cjs: 每轮调用前检查 budget report，必要时触发压缩或追问。
+scripts/run-ailis-gaia-auto-optimizer.mjs: 长程任务以 chain/verdict/artifacts 为事实源，不依赖对话窗口。
+```
+
+#### 5.1.3 每轮 Context Package Contract
+
+`ContextManager.forPrompt()` 不应该只返回一串历史 items。目标返回语义上等价于下面的 package，再由 runner 展开成 ResponseItem：
+
+```json
+{
+  "schema": "ailis.context_package.v1",
+  "goal": "current user/task goal",
+  "runtimeEnvironment": {
+    "cwd": "...",
+    "shell": "powershell",
+    "permissions": "...",
+    "network": "..."
+  },
+  "taskState": {
+    "phase": "plan|search|read|compute|finalize|blocked",
+    "openQuestions": [],
+    "knownConstraints": [],
+    "nextExpectedAction": "tool|final|ask_user|compact"
+  },
+  "recentResponseItems": [],
+  "pinnedEvidenceManifest": [],
+  "availableOutputRefs": [],
+  "toolSummary": [],
+  "budgetReport": {
+    "activeContextTokens": 0,
+    "targetContextTokens": 0,
+    "tokensUntilCompaction": 0,
+    "modelVisibleChars": 0,
+    "toolOutputChars": 0,
+    "droppedItemCount": 0
+  },
+  "droppedItemsManifest": []
+}
+```
+
+关键约束：
+
+```text
+recentResponseItems 只保留最近 N 个必要 call/output 对。
+pinnedEvidenceManifest 保留所有 final 可能引用的证据，但只放摘要和 ref。
+availableOutputRefs 告诉模型旧输出存在以及如何 read/search/tail。
+droppedItemsManifest 告诉模型哪些内容被压缩、为什么压缩、如何取回。
+toolSummary 只列本轮核心工具和已 materialized deferred tools，不塞全量工具说明。
+```
+
+#### 5.1.4 工具输出即时压缩规则
+
+工具输出不能等到历史快爆了才压缩。每次 `normalizeAilisToolOutput()` 后立刻做分层处理：
+
+```text
+1. 计算 rawTextBytes、rawTextLines、approxOriginalTokens、hash。
+2. 若输出超过 small threshold，立即生成 outputId，并把完整内容进入 trace/artifact/runtime output 事实源。
+3. 模型可见 text 永远只放 preview：状态头 + head/tail + omitted 统计 + 读取提示。
+4. structuredContent 中的大数组、大 HTML、大 transcript、大表格必须只保留 schema/摘要/行列范围。
+5. complete=false 或 truncatedForModel=true 的输出不能单独支撑 final answer。
+```
+
+建议阈值：
+
+```text
+singleToolPreviewChars: 4000-6000
+staleToolPreviewChars: 800-1200
+recentFullToolOutputs: 0-2（只有 very small output 才允许完整可见）
+recentToolOutputPairs: 4
+toolOutputSoftChars: 24000
+toolOutputHardChars: 32000
+largeOutputExternalizeChars: 6000
+```
+
+这意味着“大多数工具输出从出生起就是 compacted observation”，而不是先污染上下文再补救。
+
+#### 5.1.5 Head/Tail 优先于 Middle Truncate
+
+工具输出的 preview 应优先使用 head/tail，不建议只保留开头或中间截断：
+
+```text
+head: 命令、状态、错误头、网页标题、表格列名、前几条搜索结果。
+tail: 最终统计、错误堆栈尾部、命令结论、最后几行日志、最终答案候选。
+omitted: 明确记录中间省略的 bytes/chars/tokens/lines。
+```
+
+模型看到的文本必须包含：
+
+```text
+OUTPUT_TRUNCATED_FOR_MODEL: true
+originalTokens: <approx>
+visibleTokens: <approx>
+omittedBytes: <n>
+outputId: out_...
+nextTools: output_read/output_tail/output_search
+```
+
+#### 5.1.6 自动压缩触发阈值
+
+沿用用户要求：70% 之前就开始压缩。AILIS 应该有独立的 budget status，不靠感觉。
+
+```text
+<50%: 正常运行，但大工具输出仍即时外置。
+50%-65%: soft compaction，旧工具输出转 stale preview，保留 evidence manifest。
+65%-70%: pre-compact，生成/刷新 task summary、dropped manifest、available output refs。
+>=70%: hard compaction gate；下一轮模型调用前必须压缩，不允许继续堆工具输出。
+>=80%: stop-or-new-window；长程任务写 checkpoint，当前对话只汇报状态或建议新线程。
+```
+
+`budgetReport` 至少包含：
+
+```text
+activeContextTokens
+modelVisibleTokensEstimate
+recentItemsTokens
+pinnedEvidenceTokens
+toolOutputPreviewTokens
+toolSpecsTokens
+staticPrefixTokens
+tokensUntilCompaction
+compactionLevel: none|soft|precompact|hard|stop
+```
+
+#### 5.1.7 Prompt Cache 友好的上下文顺序
+
+为了减少 token 成本和保持模型稳定，模型输入顺序应固定：
+
+```text
+1. Static system/developer/persona policy（尽量稳定）
+2. Runtime environment snapshot（字段稳定，值可变）
+3. Core direct tool specs（少量、稳定）
+4. Deferred/materialized tool specs（本轮必要工具）
+5. Current task state
+6. Evidence manifest
+7. Recent response items
+8. Dropped/output refs manifest
+9. Current user request / next action instruction
+```
+
+不要把大段动态工具输出放在静态前缀前面，否则 prompt cache 和模型注意力都会变差。
+
+#### 5.1.8 Finalizer 与证据压缩的关系
+
+Finalizer 不能只看最近对话文本。它必须看 evidence manifest 和 output refs：
+
+```text
+final answer 引用的 evidenceId 必须存在。
+如果 evidence 只来自 truncated preview，finalizer 必须要求 output_read/output_search 取回关键片段。
+如果 droppedItemsManifest 显示关键步骤被压缩，但没有 evidence summary，禁止 high confidence final。
+如果模型无法判断证据是否足够，nextAction 应是 ask_user 或 continue，而不是猜。
+```
+
+#### 5.1.9 长程任务的 checkpoint 语义
+
+长程任务不应该依赖当前对话窗口保存全部信息。每轮 iteration 结束必须写：
+
+```text
+chain.json: 完整执行链路和 output/evidence refs。
+verdict.json: success/failure、failure layer、confidence、cost、loop count。
+context-package.json: 下一轮可恢复的压缩上下文包。
+repair-ticket.md: 失败时的最小复现、失败工具、证据缺口、建议修复。
+progress.json/state.json/event-log.jsonl: controller 的事实源。
+```
+
+恢复时只读 state/progress/latest context-package，不把旧 transcript 全量塞回模型。
+
+#### 5.1.10 必须新增的回归测试场景
+
+这些测试优先于继续堆 web_search/web_fetch 优化：
+
+```text
+1. 单个工具输出 1MB：模型视图 <= 6k chars，output_search 能找回中间答案。
+2. 连续 50 次工具调用：prompt package 不超过预算，call/output 配对不丢。
+3. 旧 evidence 被压缩：finalizer 仍能通过 evidenceId 找到摘要和 source。
+4. 截断 preview 包含错误结尾：head/tail 都保留，tail 中错误不丢。
+5. 70% budget gate：下一次 LLM 调用前必须生成 precompact context package。
+6. 长程任务恢复：只用 context-package/state/progress 能继续，不读全量 transcript。
+```
+
+如果以上测试没有通过，不应进入 GAIA 大规模自动迭代，否则会继续烧 API 而不是提升 Harness。
+
 ### Phase 6: FinalizerGate 通用化
 
 目标：把 GAIA finalizer 的经验迁移成通用 final gate。
