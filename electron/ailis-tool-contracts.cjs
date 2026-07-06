@@ -743,24 +743,80 @@ const TOOL_CONTRACTS = Object.freeze({
         risk: 'low',
         approval: 'never',
         experience: TOOL_EXPERIENCE.update_plan,
-        returns: defaultReturns(),
+        returns: (() => {
+            const schema = defaultReturns();
+            const progressOnlyPayload = makeObjectSchema({
+                required: ['status', 'completion_scope', 'semantic_role', 'produces_evidence', 'task_advanced', 'plan'],
+                properties: {
+                    status: stringSchema({
+                        enum: ['completed'],
+                        description: 'The update_plan tool call completed. This is not task completion.'
+                    }),
+                    completion_scope: stringSchema({
+                        enum: ['progress_recorded_only'],
+                        description: 'Only the user-visible progress checklist was recorded.'
+                    }),
+                    semantic_role: stringSchema({
+                        enum: ['progress_ui_only'],
+                        description: 'This result is only for user-visible progress bookkeeping.'
+                    }),
+                    produces_evidence: booleanSchema({
+                        enum: [false],
+                        description: 'update_plan never produces evidence for the task answer.'
+                    }),
+                    task_advanced: booleanSchema({
+                        enum: [false],
+                        description: 'update_plan does not inspect files, query data, execute commands, or otherwise advance the task.'
+                    }),
+                    execution_effect: stringSchema(),
+                    next_step_guidance: stringSchema(),
+                    explanation: stringSchema(),
+                    plan: arraySchema(makeObjectSchema({
+                        properties: {
+                            id: stringSchema(),
+                            step: stringSchema(),
+                            status: stringSchema({ enum: ['pending', 'in_progress', 'completed'] })
+                        },
+                        additionalProperties: true
+                    }))
+                },
+                additionalProperties: true
+            });
+            schema.properties.structuredContent = progressOnlyPayload;
+            schema.properties.details = progressOnlyPayload;
+            return schema;
+        })(),
         errors: defaultErrors(['invalid_plan']),
-        schema: makeObjectSchema({
-            required: ['plan'],
-            properties: {
-                explanation: stringSchema(),
-                plan: arraySchema(makeObjectSchema({
-                    required: ['step', 'status'],
-                    properties: {
-                        id: stringSchema(),
-                        step: stringSchema({ minLength: 1 }),
-                        status: stringSchema({ enum: ['pending', 'in_progress', 'completed'] })
-                    },
-                    additionalProperties: true
-                }), { minItems: 1 })
-            },
-            additionalProperties: true
-        })
+        schema: {
+            ...makeObjectSchema({
+                required: ['plan'],
+                properties: {
+                    explanation: stringSchema({
+                        description: 'Optional user-visible progress note. This is not evidence and does not mean the task advanced.'
+                    }),
+                    plan: arraySchema(makeObjectSchema({
+                        required: ['step', 'status'],
+                        properties: {
+                            id: stringSchema(),
+                            step: stringSchema({
+                                minLength: 1,
+                                description: 'A user-visible checklist item. Writing it does not execute the step.'
+                            }),
+                            status: stringSchema({
+                                enum: ['pending', 'in_progress', 'completed'],
+                                description: 'Checklist display status only, not proof that the task evidence was obtained.'
+                            })
+                        },
+                        additionalProperties: true
+                    }), {
+                        minItems: 1,
+                        description: 'Progress checklist for the user interface only. Do not call this instead of real tools.'
+                    })
+                },
+                additionalProperties: true
+            }),
+            description: 'Progress UI only. update_plan does not inspect files, retrieve data, execute actions, compute answers, or produce evidence. Use real tools for task progress.'
+        }
     }),
     tool_search: Object.freeze({
         id: 'tool_search',
@@ -880,7 +936,7 @@ const TOOL_CONTRACTS = Object.freeze({
                 prompt: stringSchema(),
                 wait: booleanSchema(),
                 waitTimeoutMs: numberSchema({ minimum: 1000, maximum: 24 * 60 * 60 * 1000 }),
-                maxAgentSteps: numberSchema({ minimum: 1, maximum: 12 })
+                maxAgentSteps: numberSchema({ minimum: 1, maximum: 30 })
             }
         )
     }),
@@ -1622,6 +1678,8 @@ const TOOL_CONTRACTS = Object.freeze({
             'artifact_search',
             'query',
             'aggregate',
+            'materialize',
+            'workbench_materialize',
             'inspect',
             'render',
             'validate',
@@ -1663,6 +1721,23 @@ const TOOL_CONTRACTS = Object.freeze({
             artifactId: stringSchema(),
             artifact_id: stringSchema(),
             summary: stringSchema(),
+            fromAction: stringSchema(),
+            from_action: stringSchema(),
+            sourceAction: stringSchema(),
+            source_action: stringSchema(),
+            materializeFrom: stringSchema(),
+            materialize_from: stringSchema(),
+            runId: stringSchema(),
+            run_id: stringSchema(),
+            agentRunId: stringSchema(),
+            agent_run_id: stringSchema(),
+            inputId: stringSchema(),
+            input_id: stringSchema(),
+            filename: stringSchema(),
+            fileName: stringSchema(),
+            file_name: stringSchema(),
+            workbenchRoot: stringSchema(),
+            workbench_root: stringSchema(),
             query: stringSchema(),
             text: stringSchema(),
             term: stringSchema(),

@@ -56,7 +56,7 @@ async function startLocalHttpServer(handler) {
     };
 }
 
-test('AILIS tool specs keep Codex-like shape without Codex naming', () => {
+test('AILIS tool specs keep Responses-compatible shape without leaking old layer names', () => {
     assert.ok(AILIS_RUNTIME_TOOL_DEFINITIONS.some((tool) => tool.id === 'tool_search'));
     assert.ok(AILIS_RUNTIME_TOOL_DEFINITIONS.some((tool) => tool.id === 'artifact_compute'));
     assert.ok(AILIS_RUNTIME_TOOL_DEFINITIONS.some((tool) => tool.id === 'output_read'));
@@ -73,7 +73,7 @@ test('AILIS tool specs keep Codex-like shape without Codex naming', () => {
 
     const artifactCompute = AILIS_RUNTIME_TOOL_DEFINITIONS.find((tool) => tool.id === 'artifact_compute');
     assert.equal(artifactCompute.route, 'ailis-runtime');
-    assert.equal(artifactCompute.exposure, AILIS_TOOL_EXPOSURE.DEFERRED);
+    assert.equal(artifactCompute.exposure, AILIS_TOOL_EXPOSURE.HIDDEN);
 
     const spec = createAilisFunctionToolSpec(toolSearch);
     assert.equal(spec.type, 'function');
@@ -389,7 +389,7 @@ test('AILIS MCP manager search uses tool routing before returning specs', async 
     assert.ok(publicWebSpecs.some((tool) => tool.tool === 'web_fetch'));
 });
 
-test('AILIS Gateway exposes a small Codex-style core surface by default', async () => {
+test('AILIS Gateway exposes a small Responses-compatible core surface by default', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-tool-surface-'));
     const gateway = new AILISGateway({
         port: 0,
@@ -402,9 +402,10 @@ test('AILIS Gateway exposes a small Codex-style core surface by default', async 
     for (const expected of ['tool_search', 'update_plan', 'computer', 'read', 'write', 'exec', 'apply_patch', 'request_permissions']) {
         assert.ok(directNames.includes(expected), `${expected} should be a core direct tool`);
     }
-    for (const deferred of ['artifact_tools', 'artifact_query', 'artifact_compute', 'github_pages', 'mcp_bridge', 'subagents']) {
+    for (const deferred of ['artifact_tools', 'artifact_query', 'github_pages', 'mcp_bridge', 'subagents']) {
         assert.equal(directNames.includes(deferred), false, `${deferred} should be loaded through tool_search`);
     }
+    assert.equal(directNames.includes('artifact_compute'), false, 'artifact_compute should stay hidden from model-facing tool surfaces');
 
     const initialSpecs = buildAgentDirectToolSpecs(gateway, {
         requestContext: { nativeDirectTools: true }
@@ -965,7 +966,7 @@ test('AILIS runtime budget preserves primary tool text beyond structured string 
 
 test('AILIS tool routing ranks artifact_tools first for artifact-class tasks', () => {
     const artifactTools = AILIS_RUNTIME_TOOL_DEFINITIONS
-        .filter((tool) => ['artifact_tools', 'artifact_query', 'artifact_compute'].includes(tool.id))
+        .filter((tool) => ['artifact_tools', 'artifact_query'].includes(tool.id))
         .map((tool) => ({
             id: tool.id,
             type: 'runtime_tool',
@@ -973,9 +974,9 @@ test('AILIS tool routing ranks artifact_tools first for artifact-class tasks', (
             spec: createAilisFunctionToolSpec(tool)
         }));
 
-    const ranked = rankToolSearchResults(artifactTools, 'xlsx spreadsheet data worker find path grid compute render artifact', 3);
+    const ranked = rankToolSearchResults(artifactTools, 'xlsx spreadsheet grid render artifact', 3);
     assert.equal(ranked[0].id, 'artifact_tools');
-    assert.match(buildToolRoutingAdvice('xlsx spreadsheet path search artifact', ranked), /artifact_tools/);
+    assert.match(buildToolRoutingAdvice('xlsx spreadsheet artifact render', ranked), /artifact_tools/);
 });
 
 test('AILIS tool routing keeps artifact_tools ahead of generic artifact readers', () => {
@@ -987,6 +988,7 @@ test('AILIS tool routing keeps artifact_tools ahead of generic artifact readers'
             spec: createAilisFunctionToolSpec(AILIS_RUNTIME_TOOL_DEFINITIONS.find((tool) => tool.id === 'artifact_tools'))
         },
         ...[
+            ['mcp__ailis_research__read_spreadsheet', 'Value-only pandas preview for simple CSV/XLSX tables. Does not preserve Excel fills/colors, styles, formulas, comments, or render layout.'],
             ['mcp__ailis_research__read_document', 'Read local Word DOCX documents and tables.'],
             ['mcp__ailis_research__read_presentation', 'Read local PowerPoint PPTX slide decks.'],
             ['mcp__ailis_research__pdf_extract_text', 'Extract text from local PDF files.'],
@@ -1018,7 +1020,44 @@ test('AILIS tool routing keeps artifact_tools ahead of generic artifact readers'
     ]) {
         const ranked = rankToolSearchResults(entries, query, 5);
         assert.equal(ranked[0].id, 'artifact_tools', `${query} should route through artifact_tools first`);
+        assert.equal(
+            ranked.some((tool) => /read_spreadsheet|read_document|read_presentation|pdf_extract_text|describe_image/.test(tool.id)),
+            false,
+            `${query} should not expose value-only readers beside artifact_tools`
+        );
     }
+});
+
+test('AILIS tool routing still allows explicit value-only spreadsheet fallback by name', () => {
+    const entries = [
+        {
+            id: 'artifact_tools',
+            type: 'runtime_tool',
+            exposure: 'deferred',
+            spec: createAilisFunctionToolSpec(AILIS_RUNTIME_TOOL_DEFINITIONS.find((tool) => tool.id === 'artifact_tools'))
+        },
+        {
+            id: 'mcp__ailis_research__read_spreadsheet',
+            type: 'mcp_tool',
+            tool: 'read_spreadsheet',
+            exposure: 'deferred',
+            spec: {
+                type: 'function',
+                name: 'mcp__ailis_research__read_spreadsheet',
+                description: 'Value-only pandas preview for simple CSV/XLSX tables.',
+                parameters: {
+                    type: 'object',
+                    properties: {
+                        path: { type: 'string' },
+                        maxRows: { type: 'number' }
+                    }
+                }
+            }
+        }
+    ];
+
+    const ranked = rankToolSearchResults(entries, 'explicitly use read_spreadsheet for csv numeric_sums', 5);
+    assert.ok(ranked.some((tool) => tool.id === 'mcp__ailis_research__read_spreadsheet'));
 });
 
 test('AILIS direct MCP specs expose compact model-facing schema', () => {

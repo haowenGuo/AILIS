@@ -20,6 +20,9 @@ const {
     compactJsonForModel,
     compactToolResultForModel
 } = require('./ailis-runtime-budget.cjs');
+const {
+    RolloutItem
+} = require('./ailis-prompt-model.cjs');
 
 const DEFAULT_MAX_RESULT_TEXT_CHARS = 6000;
 const DEFAULT_MAX_TRANSCRIPT_ITEMS = 500;
@@ -228,6 +231,23 @@ function cloneJson(value) {
     } catch {
         return { value: String(value) };
     }
+}
+
+function buildModelVisibleTruncationNotice({
+    filePath = '',
+    originalTextChars = 0,
+    visibleChars = 0,
+    maxTextChars = DEFAULT_MAX_RESULT_TEXT_CHARS
+} = {}) {
+    const normalizedPath = normalizeString(filePath);
+    const lines = [
+        'MODEL_VISIBLE_CONTENT_TRUNCATED:',
+        `originalTextChars=${originalTextChars || 'unknown'}; visibleTextChars<=${visibleChars || maxTextChars}; truncationScope=model_visible_tool_result_text;`
+    ];
+    if (normalizedPath) {
+        lines.push(`sourcePath=${normalizedPath}`);
+    }
+    return `${lines.join('\n')}\n\n`;
 }
 
 function isAbortError(error) {
@@ -724,7 +744,6 @@ class AILISRuntime {
                 indexPath: this.contextArtifactStore.indexPath
             },
             toolRuntime: {
-                model: 'codex_like_tool_runtime_registry',
                 directToolCount: this.toolRuntimeRegistry.modelVisibleSpecs().length,
                 registeredToolCount: this.toolRuntimeRegistry.listDefinitions().length
             },
@@ -875,6 +894,47 @@ class AILISRuntime {
             itemId: transcriptItem.id
         });
         return transcriptItem;
+    }
+
+    async appendContextCompaction(runId, {
+        sessionId = '',
+        compactedItem = {},
+        referenceContextItem = null,
+        contextManagerCheckpoint = null,
+        reason = ''
+    } = {}) {
+        const compacted = RolloutItem.compacted(compactedItem);
+        const written = [];
+        const compactionItem = await this.appendItem(runId, {
+            type: 'agent.context_compaction',
+            sessionId,
+            status: 'installed',
+            payload: {
+                reason,
+                rollout_item: compacted,
+                compacted_item: compacted.payload,
+                context_manager_checkpoint: contextManagerCheckpoint || null
+            }
+        });
+        if (compactionItem) {
+            written.push(compactionItem);
+        }
+        if (referenceContextItem) {
+            const turnContext = RolloutItem.turnContext(referenceContextItem);
+            const turnContextItem = await this.appendItem(runId, {
+                type: 'agent.turn_context',
+                sessionId,
+                status: 'captured',
+                payload: {
+                    rollout_item: turnContext,
+                    reference_context_item: turnContext.payload
+                }
+            });
+            if (turnContextItem) {
+                written.push(turnContextItem);
+            }
+        }
+        return written;
     }
 
     async completeRun(runId, result = {}) {
@@ -1063,14 +1123,42 @@ class AILISRuntime {
         if (!Array.isArray(guarded.content)) {
             guarded.content = [];
         }
+        let modelVisibleTruncation = null;
         guarded.content = guarded.content.map((part) => {
             if (!part || typeof part !== 'object') {
                 return { type: 'text', text: summarize(part, maxTextChars) };
             }
             const next = redactObject(part);
             if (typeof next.text === 'string' && next.text.length > maxTextChars) {
-                next.text = `${next.text.slice(0, maxTextChars - 3)}...`;
+                const originalTextChars = Number.isFinite(Number(next.originalTextChars))
+                    ? Number(next.originalTextChars)
+                    : next.text.length;
+                const notice = buildModelVisibleTruncationNotice({
+                    filePath: guarded.details?.path,
+                    originalTextChars,
+                    visibleChars: maxTextChars,
+                    maxTextChars
+                });
+                const sliceBudget = Math.max(128, maxTextChars - notice.length - 3);
+                next.text = `${notice}${next.text.slice(0, sliceBudget)}...`;
                 next.truncated = true;
+                next.modelVisibleTruncated = true;
+                modelVisibleTruncation = {
+                    status: 'model_visible_truncated',
+                    tool: toolId,
+                    callId,
+                    reason: 'model_budget_guard',
+                    maxTextChars,
+                    originalTextChars,
+                    visibleTextChars: Math.min(maxTextChars, next.text.length),
+                    filePath: normalizeString(guarded.details?.path),
+                    fullFileReadTruncated: Boolean(guarded.details?.truncated),
+                    semantics: {
+                        contentTruncated: true,
+                        detailsTruncatedMeansToolLevelTruncation: true,
+                        contentTruncatedMeansModelVisibleProjectionTruncation: true
+                    }
+                };
             }
             return next;
         });
@@ -1106,9 +1194,19 @@ class AILISRuntime {
             callId,
             maxTextChars
         };
+        if (modelVisibleTruncation) {
+            guarded.details.modelVisibleContent = modelVisibleTruncation;
+        }
         return compactToolResultForModel(guarded, {
             maxTextChars,
-            maxStructuredStringChars: 1200
+            maxStructuredStringChars: 1200,
+            preserveGuidanceKeys: (
+                guarded.isError === true ||
+                guarded.details?.ok === false ||
+                !['completed', 'success'].includes(normalizeString(guarded.details?.status).toLowerCase())
+            )
+                ? ['suggestedNext', 'suggested_next']
+                : []
         });
     }
 
@@ -1537,26 +1635,26 @@ class AILISRuntime {
             explanation: state.explanation,
             plan: items
         });
+        const modelView = {
+            status: 'completed',
+            completion_scope: 'progress_recorded_only',
+            semantic_role: 'progress_ui_only',
+            produces_evidence: false,
+            task_advanced: false,
+            execution_effect: 'updated_user_visible_progress_checklist_only',
+            next_step_guidance: 'This did not inspect files, retrieve data, execute commands, compute answers, or produce task evidence. Continue with the real task tool when work remains.',
+            explanation: state.explanation,
+            plan: items
+        };
         return {
             content: [
                 {
                     type: 'text',
-                    text: JSON.stringify(
-                        {
-                            status: 'completed',
-                            explanation: state.explanation,
-                            plan: items
-                        },
-                        null,
-                        2
-                    )
+                    text: JSON.stringify(modelView, null, 2)
                 }
             ],
-            details: {
-                status: 'completed',
-                explanation: state.explanation,
-                plan: items
-            }
+            structuredContent: modelView,
+            details: modelView
         };
     }
 
@@ -1709,7 +1807,7 @@ class AILISRuntime {
             planner: normalizeString(args.planner || context.planner, 'llm'),
             agentLoop: normalizeString(args.agentLoop || context.agentLoop, 'llm'),
             agentMode: normalizeString(args.agentMode || context.agentMode, 'llm'),
-            maxAgentSteps: Number(args.maxAgentSteps || context.maxAgentSteps || 12)
+            maxAgentSteps: Number(args.maxAgentSteps || context.maxAgentSteps || 30)
         };
     }
 

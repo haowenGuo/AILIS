@@ -1,0 +1,77 @@
+{
+  "version": 1,
+  "updatedAt": "2026-07-01T02:55:19.268Z",
+  "outputDir": "F:\\AILIS_self_evolution_runtime\\evals\\core-smoke",
+  "requestedCounts": {
+    "gaia": 10,
+    "terminalBench": 10,
+    "agentBenchDb": 10,
+    "agentBenchOs": 10,
+    "locomoSamples": 2,
+    "locomoQaPerSample": 20
+  },
+  "files": {
+    "gaia": "F:\\AILIS_self_evolution_runtime\\evals\\core-smoke\\gaia-10.json",
+    "terminalBench": "F:\\AILIS_self_evolution_runtime\\evals\\core-smoke\\terminal-bench-10.json",
+    "agentBenchDb": "F:\\AILIS_self_evolution_runtime\\evals\\core-smoke\\agentbench-db-10.json",
+    "agentBenchOs": "F:\\AILIS_self_evolution_runtime\\evals\\core-smoke\\agentbench-os-10.json",
+    "locomo": "F:\\AILIS_self_evolution_runtime\\evals\\core-smoke\\locomo-2x20qa.json"
+  },
+  "statuses": {
+    "gaia": "ready_from_local_history",
+    "terminalBench": "ready",
+    "agentBenchDb": "ready",
+    "agentBenchOs": "ready",
+    "locomo": "ready"
+  },
+  "counts": {
+    "gaia": 10,
+    "terminalBench": 10,
+    "agentBenchDb": 10,
+    "agentBenchOs": 10,
+    "locomoSamples": 2,
+    "locomoQa": 40
+  },
+  "costPlan": {
+    "model": "deepseek-v4-flash",
+    "pricingReference": {
+      "inputCacheMissUsdPerMillion": 0.14,
+      "outputUsdPerMillion": 0.28
+    },
+    "intendedUse": "Smoke only. Stop on repeated loop failures; do not use full benchmark budgets until adapters are stable.",
+    "roughUpperBounds": {
+      "gaia10": {
+        "inputTokens": 800000,
+        "outputTokens": 80000
+      },
+      "terminalBench10": {
+        "inputTokens": 800000,
+        "outputTokens": 80000
+      },
+      "agentBenchDb10": {
+        "inputTokens": 600000,
+        "outputTokens": 50000
+      },
+      "agentBenchOs10": {
+        "inputTokens": 800000,
+        "outputTokens": 80000
+      },
+      "locomo40Qa": {
+        "inputTokens": 800000,
+        "outputTokens": 80000
+      }
+    },
+    "totalRoughUpperBound": {
+      "inputTokens": 3800000,
+      "outputTokens": 370000,
+      "usdNoCache": 0.636
+    },
+    "availableTaskCounts": {
+      "gaia": 10,
+      "terminalBench": 10,
+      "agentBenchDb": 10,
+      "agentBenchOs": 10,
+      "locomoQa": 40
+    }
+  }
+}

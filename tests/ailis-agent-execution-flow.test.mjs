@@ -14,11 +14,17 @@ const {
     buildToolResultEvent,
     buildToolObservationDigest,
     buildLosslessToolObservationDigest,
+    buildAgentDecisionLowLatencyPayload,
     isExactAnswerExecutionMode,
+    isAgentDecisionDeepThinkingMode,
+    isDeepThinkingAgentDecisionModel,
     looksLikeSelfContainedExactAnswerQuestion,
     normalizeExactAnswerSubmission,
+    resolveAgentDecisionSettings,
+    resolveAgentDecisionTimeoutMs,
     sanitizeAgentToolCall,
-    validateExactAnswerSubmission
+    validateExactAnswerSubmission,
+    validateNativeDirectToolCall
 } = require('../electron/ailis-agent-runner.cjs');
 
 test('Agent execution flow detects exact-answer evaluation mode', () => {
@@ -28,7 +34,7 @@ test('Agent execution flow detects exact-answer evaluation mode', () => {
     assert.equal(isExactAnswerExecutionMode({}, {}), false);
 });
 
-test('Agent direct tool specs inject native final_answer only for exact-answer mode', () => {
+test('Agent direct tool specs inject native final_answer for exact-answer mode but not ordinary tasks', () => {
     const gateway = {
         gatewayToolRuntimeRegistry: {
             modelVisibleSpecs: () => [{
@@ -47,7 +53,7 @@ test('Agent direct tool specs inject native final_answer only for exact-answer m
         requestContext: {},
         exactAnswerMode: true
     });
-    assert.equal(exactSpecs[0].name, 'final_answer');
+    assert.equal(exactSpecs.at(-1).name, 'final_answer');
     assert.ok(exactSpecs.some((spec) => spec.name === 'tool_search'));
 
     const ordinarySpecs = buildAgentDirectToolSpecs(gateway, {
@@ -57,12 +63,293 @@ test('Agent direct tool specs inject native final_answer only for exact-answer m
     assert.equal(ordinarySpecs.some((spec) => spec.name === 'final_answer'), false);
 });
 
+test('Agent direct tool specs expose registered tools consistently for artifact tasks', () => {
+    const spec = (name) => ({
+        name,
+        description: `${name} spec`,
+        parameters: {
+            type: 'object',
+            additionalProperties: true,
+            properties: {}
+        }
+    });
+    const gateway = {
+        gatewayToolRuntimeRegistry: {
+            modelVisibleSpecs: () => [
+                spec('artifact_tools'),
+                spec('tool_search'),
+                spec('update_plan'),
+                spec('request_permissions'),
+                spec('artifact_query'),
+                spec('artifact_import'),
+                spec('mcp__ailis_research__read_spreadsheet')
+            ],
+            definition: (toolId) => (toolId === 'artifact_tools' ? { spec: spec('artifact_tools') } : null)
+        }
+    };
+
+    const specs = buildAgentDirectToolSpecs(gateway, {
+        requestContext: { taskCompactPrompt: true },
+        exactAnswerMode: false
+    });
+    const names = specs.map((entry) => entry.name);
+
+    assert.ok(names.includes('artifact_tools'));
+    assert.equal(names.includes('final_answer'), false);
+    assert.ok(names.includes('request_permissions'));
+    assert.ok(names.includes('tool_search'));
+    assert.ok(names.includes('update_plan'));
+    assert.ok(names.includes('artifact_query'));
+    assert.ok(names.includes('artifact_import'));
+    assert.equal(names.includes('artifact_compute'), false);
+    assert.ok(names.includes('mcp__ailis_research__read_spreadsheet'));
+});
+
+test('Agent direct tool specs keep artifact tools available without forcing final_answer after query evidence', () => {
+    const spec = (name) => ({
+        name,
+        description: `${name} spec`,
+        parameters: {
+            type: 'object',
+            additionalProperties: true,
+            properties: {}
+        }
+    });
+    const gateway = {
+        gatewayToolRuntimeRegistry: {
+            modelVisibleSpecs: () => [
+                spec('artifact_tools'),
+                spec('exec'),
+                spec('read'),
+                spec('write'),
+                spec('apply_patch'),
+                spec('request_permissions')
+            ],
+            definition: (toolId) => (toolId === 'artifact_tools' ? { spec: spec('artifact_tools') } : null)
+        }
+    };
+    const stepResults = [{
+        id: 'query-grid',
+        tool: 'artifact_tools',
+        args: { action: 'query', sessionId: 'arts_fixture', sheet: 'Sheet1', range: 'A1:I20' },
+        response: {
+            ok: true,
+            status: 'completed',
+            result: {
+                content: [{
+                    type: 'text',
+                    text: JSON.stringify({
+                        ok: true,
+                        status: 'completed',
+                        action: 'query',
+                        observation: {
+                            action: 'query',
+                            sheetName: 'Sheet1',
+                            range: 'Sheet1!A1:I20',
+                            rowCount: 2,
+                            columnCount: 2,
+                            truncated: false,
+                            compactRows: [
+                                { rowNumber: 1, cells: 'START | #0099FF' },
+                                { rowNumber: 2, cells: '#92D050 | END' }
+                            ]
+                        }
+                    })
+                }]
+            }
+        }
+    }];
+
+    const specs = buildAgentDirectToolSpecs(gateway, {
+        stepResults,
+        requestContext: { taskCompactPrompt: true },
+        exactAnswerMode: false
+    });
+    const names = specs.map((entry) => entry.name);
+
+    assert.equal(names.includes('final_answer'), false);
+    assert.ok(names.includes('artifact_tools'));
+    assert.ok(names.includes('exec'));
+});
+
+test('Agent direct tool specs keep artifact tools available without forcing final_answer after range inspect evidence', () => {
+    const spec = (name) => ({
+        name,
+        description: `${name} spec`,
+        parameters: {
+            type: 'object',
+            additionalProperties: true,
+            properties: {}
+        }
+    });
+    const gateway = {
+        gatewayToolRuntimeRegistry: {
+            modelVisibleSpecs: () => [
+                spec('artifact_tools'),
+                spec('exec'),
+                spec('read'),
+                spec('write'),
+                spec('apply_patch'),
+                spec('request_permissions')
+            ],
+            definition: (toolId) => (toolId === 'artifact_tools' ? { spec: spec('artifact_tools') } : null)
+        }
+    };
+    const stepResults = [{
+        id: 'inspect-grid',
+        tool: 'artifact_tools',
+        args: { action: 'inspect', sessionId: 'arts_fixture', sheet: 'Sheet1', range: 'A1:I20' },
+        response: {
+            ok: true,
+            status: 'completed',
+            result: {
+                content: [{
+                    type: 'text',
+                    text: JSON.stringify({
+                        ok: true,
+                        status: 'completed',
+                        action: 'inspect',
+                        observation: {
+                            action: 'inspect',
+                            kind: 'range',
+                            sheetName: 'Sheet1',
+                            range: 'Sheet1!A1:I20',
+                            rowCount: 2,
+                            columnCount: 2,
+                            truncated: false,
+                            matrixRows: [
+                                { rowNumber: 1, values: ['START', ''], fills: ['', '0099FF'] },
+                                { rowNumber: 2, values: ['', 'END'], fills: ['92D050', ''] }
+                            ]
+                        }
+                    })
+                }]
+            }
+        }
+    }];
+
+    const specs = buildAgentDirectToolSpecs(gateway, {
+        stepResults,
+        requestContext: { taskCompactPrompt: true },
+        exactAnswerMode: false
+    });
+    const names = specs.map((entry) => entry.name);
+
+    assert.equal(names.includes('final_answer'), false);
+    assert.ok(names.includes('artifact_tools'));
+    assert.ok(names.includes('exec'));
+});
+
+test('Agent decision timeout gives artifact and exact-answer tasks a 300s budget', () => {
+    assert.equal(resolveAgentDecisionTimeoutMs({}, {}), 45000);
+    assert.equal(resolveAgentDecisionTimeoutMs({}, {
+        requestContext: { taskCompactPrompt: true }
+    }), 300000);
+    assert.equal(resolveAgentDecisionTimeoutMs({}, {
+        requestContext: { exactAnswerMode: true }
+    }), 300000);
+    assert.equal(resolveAgentDecisionTimeoutMs({}, {
+        stepResults: [{ tool: 'artifact_tools', response: { ok: true } }]
+    }), 300000);
+});
+
+test('Agent decision model routing avoids deep-thinking models unless explicit or unavoidable', () => {
+    assert.equal(isDeepThinkingAgentDecisionModel('deepseek-reasoner'), true);
+    assert.equal(isDeepThinkingAgentDecisionModel('doubao-seed-1-6-thinking-250715'), true);
+    assert.equal(isDeepThinkingAgentDecisionModel('openai/o4-mini'), true);
+    assert.equal(isDeepThinkingAgentDecisionModel('kimi-k2.7-code'), true);
+    assert.equal(isDeepThinkingAgentDecisionModel('deepseek-chat'), false);
+
+    assert.deepEqual(
+        {
+            model: resolveAgentDecisionSettings({
+                model: 'deepseek-reasoner',
+                lowLatencyModel: 'deepseek-chat'
+            }).model,
+            source: resolveAgentDecisionSettings({
+                model: 'deepseek-reasoner',
+                lowLatencyModel: 'deepseek-chat'
+            })._agentDecisionModelSource
+        },
+        { model: 'deepseek-chat', source: 'settings.lowLatencyModel' }
+    );
+
+    const explicitReasoner = resolveAgentDecisionSettings({
+        model: 'deepseek-chat',
+        agentDecisionModel: 'o4-mini'
+    });
+    assert.equal(explicitReasoner.model, 'o4-mini');
+    assert.equal(explicitReasoner._agentDecisionModelExplicit, true);
+    assert.equal(explicitReasoner._agentDecisionDeepThinkingModel, true);
+});
+
+test('Agent decision thinking controls are explicit and deep-thinking mode gets a 10 minute timeout', () => {
+    const ordinaryPayload = buildAgentDecisionLowLatencyPayload(
+        { messages: [] },
+        {
+            settings: {
+                model: 'deepseek-chat',
+                reasoningEffort: 'high',
+                thinking: { type: 'enabled' }
+            },
+            requestContext: {}
+        }
+    );
+    assert.equal(Object.hasOwn(ordinaryPayload, 'reasoning_effort'), false);
+    assert.equal(Object.hasOwn(ordinaryPayload, 'thinking'), false);
+    assert.equal(isAgentDecisionDeepThinkingMode({ model: 'deepseek-chat' }, {}), false);
+
+    const explicitPayload = buildAgentDecisionLowLatencyPayload(
+        { messages: [] },
+        {
+            settings: {
+                model: 'deepseek-chat',
+                agentDecisionReasoningEffort: 'high',
+                agentDecisionThinking: { type: 'enabled' }
+            },
+            requestContext: {}
+        }
+    );
+    assert.equal(explicitPayload.reasoning_effort, 'high');
+    assert.deepEqual(explicitPayload.thinking, { type: 'enabled' });
+    assert.equal(
+        resolveAgentDecisionTimeoutMs({
+            model: 'deepseek-chat',
+            agentDecisionReasoningEffort: 'high'
+        }, {}),
+        600000
+    );
+    assert.equal(resolveAgentDecisionTimeoutMs({ model: 'o3' }, {}), 600000);
+});
+
 test('final_answer contract reminds relation tasks to verify answer role alignment', () => {
     const spec = buildFinalAnswerNativeToolSpec();
     assert.match(spec.description, /role alignment/);
     assert.match(spec.description, /QuestionEvidence\/source_question/);
     assert.match(spec.parameters.properties.reason.description, /target role/);
     assert.match(spec.parameters.properties.reason.description, /relation table direction/);
+});
+
+test('final_answer native tool contract keeps answer required but does not hard-gate audit metadata', () => {
+    const spec = buildFinalAnswerNativeToolSpec();
+    assert.deepEqual(spec.parameters.required, ['answer']);
+    assert.equal(spec.parameters.additionalProperties, true);
+    assert.equal(Object.hasOwn(spec.parameters.properties.confidence, 'enum'), false);
+    assert.equal(Object.hasOwn(spec.parameters.properties.evidence_refs, 'minItems'), false);
+
+    const lowConfidenceToolCall = {
+        name: 'final_answer',
+        arguments: {
+            answer: 'I need to first inspect the Excel file to understand the map layout.',
+            confidence: 'low',
+            evidence_refs: [],
+            repair_instruction: 'Need to inspect the Excel file first.'
+        }
+    };
+    const validation = validateNativeDirectToolCall(lowConfidenceToolCall, [spec]);
+
+    assert.equal(validation.ok, true);
+    assert.deepEqual(validation.errors, []);
 });
 
 test('Agent tool-call sanitizer does not maintain a hardcoded runtime tool whitelist', () => {
@@ -531,7 +818,7 @@ test('Agent tool observations keep small artifact query compactRows lossless', (
     assert.doesNotMatch(digest[0].text, /truncated for model budget/);
 });
 
-test('Agent tool observations compress large artifact query results by row window with continuation', () => {
+test('Agent tool observations compress large artifact query results by row window without next-step hints', () => {
     const rows = Array.from({ length: 220 }, (_, index) => ({
         rowNumber: index + 1,
         cells: `R${index + 1}C1 | R${index + 1}C2 | R${index + 1}C3 | #${String(index).padStart(6, '0')}`
@@ -589,7 +876,7 @@ test('Agent tool observations compress large artifact query results by row windo
     assert.equal(parsed.observation.promptCompression.lossless, false);
     assert.equal(parsed.observation.promptCompression.visibleRowStrategy, 'head_tail_rows');
     assert.ok(parsed.observation.promptCompression.omittedCompactRowCount > 0);
-    assert.equal(parsed.observation.continuation.args.range, 'Map!A12:D215');
+    assert.equal(parsed.observation.continuation, undefined);
     assert.ok(parsed.observation.compactRows.every((row) => row.rowNumber && typeof row.cells === 'string'));
     assert.doesNotMatch(digest[0].text, /truncated for model budget/);
 });
@@ -623,7 +910,7 @@ test('Agent model-facing observation digest summarizes large tool args', () => {
     assert.doesNotMatch(JSON.stringify(digest), /solver"\)\nprint\("solver"\)\nprint\("solver/);
 });
 
-test('Agent exact-answer gate requires confident known evidence refs', () => {
+test('Agent exact-answer audit flags unknown evidence refs when evidence exists', () => {
     const stepResult = attachAgentEvidenceArtifacts({
         id: 'step-2',
         title: 'Fetch source',
@@ -652,7 +939,7 @@ test('Agent exact-answer gate requires confident known evidence refs', () => {
     });
     assert.equal(accepted.ok, true);
 
-    const rejected = validateExactAnswerSubmission({
+    const degraded = validateExactAnswerSubmission({
         decision: {
             exactAnswerSubmission: normalizeExactAnswerSubmission({
                 answer: 'BaseLabelPropagation',
@@ -662,8 +949,10 @@ test('Agent exact-answer gate requires confident known evidence refs', () => {
         },
         stepResults: [stepResult]
     });
-    assert.equal(rejected.ok, false);
-    assert.ok(rejected.errors.includes('evidence_refs_unknown'));
+    assert.equal(degraded.ok, true);
+    assert.deepEqual(degraded.errors, []);
+    assert.ok(degraded.warnings.includes('evidence_refs_unknown'));
+    assert.deepEqual(degraded.unknownRefs, ['artifact-missing']);
 });
 
 test('Agent exact-answer mode exposes source_question evidence for self-contained reasoning tasks', () => {
@@ -720,7 +1009,7 @@ test('Agent exact-answer mode does not expose source_question evidence for exter
         exactAnswerMode: true
     }), []);
 
-    const rejected = validateExactAnswerSubmission({
+    const audited = validateExactAnswerSubmission({
         message: question,
         decision: {
             exactAnswerSubmission: {
@@ -732,11 +1021,13 @@ test('Agent exact-answer mode does not expose source_question evidence for exter
         },
         stepResults: []
     });
-    assert.equal(rejected.ok, false);
-    assert.ok(rejected.errors.includes('evidence_refs_unknown'));
+    assert.equal(audited.ok, true);
+    assert.deepEqual(audited.errors, []);
+    assert.ok(audited.warnings.includes('evidence_missing'));
+    assert.ok(audited.warnings.includes('evidence_refs_unknown'));
 });
 
-test('Agent exact-answer gate rejects raw rounded units for scaled-unit questions', () => {
+test('Agent exact-answer audit flags raw rounded units for scaled-unit questions', () => {
     const stepResult = attachAgentEvidenceArtifacts({
         id: 'step-web',
         title: 'Fetch source',
@@ -757,7 +1048,7 @@ test('Agent exact-answer gate rejects raw rounded units for scaled-unit question
         'Round your result to the nearest 1000 hours.'
     ].join(' ');
 
-    const rejected = validateExactAnswerSubmission({
+    const audited = validateExactAnswerSubmission({
         decision: {
             exactAnswerSubmission: normalizeExactAnswerSubmission({
                 answer: '1000',
@@ -769,9 +1060,10 @@ test('Agent exact-answer gate rejects raw rounded units for scaled-unit question
         stepResults: [stepResult],
         message
     });
-    assert.equal(rejected.ok, false);
-    assert.ok(rejected.errors.includes('scaled_unit_answer_mismatch'));
-    assert.match(rejected.scaledUnitMismatch.instruction, /divide by 1000/i);
+    assert.equal(audited.ok, true);
+    assert.deepEqual(audited.errors, []);
+    assert.ok(audited.warnings.includes('scaled_unit_answer_mismatch'));
+    assert.match(audited.scaledUnitMismatch.instruction, /divide by 1000/i);
 
     const accepted = validateExactAnswerSubmission({
         decision: {
@@ -788,7 +1080,7 @@ test('Agent exact-answer gate rejects raw rounded units for scaled-unit question
     assert.equal(accepted.ok, true);
 });
 
-test('Agent exact-answer gate rejects numeric answer when reason states a different final number', () => {
+test('Agent exact-answer audit flags numeric answer when reason states a different final number', () => {
     const stepResult = attachAgentEvidenceArtifacts({
         id: 'step-calc',
         title: 'Fetch and calculate',
@@ -805,7 +1097,7 @@ test('Agent exact-answer gate rejects numeric answer when reason states a differ
     });
     const evidenceRef = stepResult.evidenceArtifacts[0].id;
 
-    const rejected = validateExactAnswerSubmission({
+    const audited = validateExactAnswerSubmission({
         decision: {
             exactAnswerSubmission: normalizeExactAnswerSubmission({
                 answer: '40',
@@ -818,13 +1110,14 @@ test('Agent exact-answer gate rejects numeric answer when reason states a differ
         message: 'How many thousand hours?'
     });
 
-    assert.equal(rejected.ok, false);
-    assert.ok(rejected.errors.includes('answer_reason_conflict'));
-    assert.equal(rejected.reasonConflict.answer, '40');
-    assert.deepEqual(rejected.reasonConflict.reasonFinalNumbers, ['17']);
+    assert.equal(audited.ok, true);
+    assert.deepEqual(audited.errors, []);
+    assert.ok(audited.warnings.includes('answer_reason_conflict'));
+    assert.equal(audited.reasonConflict.answer, '40');
+    assert.deepEqual(audited.reasonConflict.reasonFinalNumbers, ['17']);
 });
 
-test('Agent exact-answer gate rejects incomplete first-step simulations for multi-stage random processes', () => {
+test('Agent exact-answer audit flags incomplete first-step simulations for multi-stage random processes', () => {
     const stepResult = attachAgentEvidenceArtifacts({
         id: 'step-sim',
         title: 'Run simulation',
@@ -862,7 +1155,7 @@ test('Agent exact-answer gate rejects incomplete first-step simulations for mult
         'Which ball should you choose to maximize your odds of winning?'
     ].join(' ');
 
-    const rejected = validateExactAnswerSubmission({
+    const audited = validateExactAnswerSubmission({
         decision: {
             exactAnswerSubmission: normalizeExactAnswerSubmission({
                 answer: '1',
@@ -875,12 +1168,13 @@ test('Agent exact-answer gate rejects incomplete first-step simulations for mult
         message
     });
 
-    assert.equal(rejected.ok, false);
-    assert.ok(rejected.errors.includes('incomplete_process_simulation_evidence'));
-    assert.match(rejected.incompleteSimulation.instruction, /full state transition loop/i);
+    assert.equal(audited.ok, true);
+    assert.deepEqual(audited.errors, []);
+    assert.ok(audited.warnings.includes('incomplete_process_simulation_evidence'));
+    assert.match(audited.incompleteSimulation.instruction, /full state transition loop/i);
 });
 
-test('Agent exact-answer gate rejects Monte Carlo-only evidence for finite stochastic exact-answer tasks', () => {
+test('Agent exact-answer audit flags Monte Carlo-only evidence for finite stochastic exact-answer tasks', () => {
     const stepResult = attachAgentEvidenceArtifacts({
         id: 'step-monte-carlo',
         title: 'Run stochastic simulation',
@@ -920,7 +1214,7 @@ test('Agent exact-answer gate rejects Monte Carlo-only evidence for finite stoch
     });
     const evidenceRef = stepResult.evidenceArtifacts[0].id;
 
-    const rejected = validateExactAnswerSubmission({
+    const audited = validateExactAnswerSubmission({
         decision: {
             exactAnswerSubmission: normalizeExactAnswerSubmission({
                 answer: '100',
@@ -933,12 +1227,13 @@ test('Agent exact-answer gate rejects Monte Carlo-only evidence for finite stoch
         message: 'At each stage one piston randomly fires. Which ball should you choose to maximize your odds of winning?'
     });
 
-    assert.equal(rejected.ok, false);
-    assert.ok(rejected.errors.includes('monte_carlo_only_random_process_evidence'));
-    assert.match(rejected.incompleteSimulation.instruction, /exact state transition/i);
+    assert.equal(audited.ok, true);
+    assert.deepEqual(audited.errors, []);
+    assert.ok(audited.warnings.includes('monte_carlo_only_random_process_evidence'));
+    assert.match(audited.incompleteSimulation.instruction, /exact state transition/i);
 });
 
-test('Agent exact-answer gate rejects ad hoc terminal probabilities in stochastic process code', () => {
+test('Agent exact-answer audit flags ad hoc terminal probabilities in stochastic process code', () => {
     const stepResult = attachAgentEvidenceArtifacts({
         id: 'step-ad-hoc-terminal',
         title: 'Run DP',
@@ -966,7 +1261,7 @@ test('Agent exact-answer gate rejects ad hoc terminal probabilities in stochasti
     });
     const evidenceRef = stepResult.evidenceArtifacts[0].id;
 
-    const rejected = validateExactAnswerSubmission({
+    const audited = validateExactAnswerSubmission({
         decision: {
             exactAnswerSubmission: normalizeExactAnswerSubmission({
                 answer: '98',
@@ -979,7 +1274,8 @@ test('Agent exact-answer gate rejects ad hoc terminal probabilities in stochasti
         message: 'At each stage one random piston fires. Which ball maximizes your odds of winning?'
     });
 
-    assert.equal(rejected.ok, false);
-    assert.ok(rejected.errors.includes('ad_hoc_terminal_transition_evidence'));
-    assert.match(rejected.incompleteSimulation.instruction, /terminal\/partial-state probabilities/i);
+    assert.equal(audited.ok, true);
+    assert.deepEqual(audited.errors, []);
+    assert.ok(audited.warnings.includes('ad_hoc_terminal_transition_evidence'));
+    assert.match(audited.incompleteSimulation.instruction, /terminal\/partial-state probabilities/i);
 });

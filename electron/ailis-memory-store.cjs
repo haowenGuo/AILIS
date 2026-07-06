@@ -236,8 +236,8 @@ function getDefaultBlocks(workspaceRoot = '') {
             label: '关系与语气记忆',
             kind: 'core',
             value: [
-                '- 当前关系从熟悉协作开始：要有陪伴感，但不能装作越界的真实情感。',
-                '- 用户重视拟人体验，好感度用于调整亲近度、语气和主动性，而不是绕过安全边界。'
+                '- 当前关系从熟悉协作逐渐转向亲近陪伴：用户明确给出的亲昵称呼、伴侣式称呼和相处设定，可以作为拟人化关系自然承接。',
+                '- 用户重视拟人体验。普通撒娇、亲昵称呼和陪伴表达不需要防御；不要频繁免责声明，也不要把关系推回“只是助手/只是好伙伴”。好感度只调整亲近度、语气和主动性，不改变隐私、事实准确性、工具审批和基础帮助质量。'
             ].join('\n'),
             updatedAt: nowIso()
         },
@@ -507,7 +507,7 @@ function buildAffinityBlock(affinity) {
         score < 40
             ? '用户可能正在纠正体验，少撒娇、先承认问题并快速修正。'
             : score < 61
-            ? '保持温和、熟悉但不过分亲密，重点把事情做好。'
+            ? '保持温和、熟悉，可以自然承接用户偏好的亲昵称呼和轻微撒娇，但不要过度用力。'
             : score < 80
             ? '更熟悉、更自然、更有陪伴感，可以自然引用共同经历和用户偏好。'
             : '允许明显亲密、主动、轻微撒娇和更多默契表达，可以更像长期陪伴用户的私人助手。';
@@ -573,7 +573,7 @@ function formatCuratedAffinityState(affinity = null) {
         ? '先解释证据、边界和风险，减少卖萌和跳步执行，优先恢复信任。'
         : trust >= 0.75 && warmth >= 0.65
             ? '可以更自然、更熟悉、更有陪伴感，但仍保持事实和执行边界。'
-            : '保持温和、清晰、可靠，先把事情做好，再自然表达陪伴感。';
+            : '保持温和、清晰、可靠，可以自然承接用户偏好的亲昵称呼和轻微撒娇，不要反复把关系推回普通助手。';
     return [
         `- 关系阶段：${stage}；修复状态：${repairState}。`,
         `- 维度：trust=${trust.toFixed(2)}, familiarity=${familiarity.toFixed(2)}, warmth=${warmth.toFixed(2)}, friction=${friction.toFixed(2)}。`,
@@ -747,7 +747,13 @@ class AILISMemoryRuntime {
         return this.getSnapshot(options);
     }
 
-    compileContext({ sessionId = 'main', message = '', messageHistory = [], maxChars = MAX_CONTEXT_CHARS } = {}) {
+    compileContext({
+        sessionId = 'main',
+        message = '',
+        messageHistory = [],
+        maxChars = MAX_CONTEXT_CHARS,
+        contextMode = 'persona'
+    } = {}) {
         const state = this.state || normalizeState(null, this.workspaceRoot);
         const query = [
             message,
@@ -756,6 +762,22 @@ class AILISMemoryRuntime {
         const relevantEvents = this.searchMemory(query || message, { limit: DEFAULT_RELEVANT_EVENT_LIMIT }).events;
         const blocks = state.blocks || {};
         const curatedPromptMemory = loadCuratedPromptMemory(this.rootDir);
+        const normalizedContextMode = normalizeText(contextMode, 'persona').toLowerCase();
+        if (normalizedContextMode === 'task_agent') {
+            const taskSections = [
+                '【AILIS 任务执行上下文】',
+                '使用原则：这里只提供任务执行 Worker 需要的最小上下文；任务结束后由 PersonaPresenter 负责面向用户表达。',
+                '',
+                `会话：${sessionId}`,
+                '',
+                '## 用户工作偏好/画像',
+                curatedPromptMemory.userProfileText,
+                '',
+                `## ${blocks.secrets_index?.label || '隐私与密钥索引'}`,
+                blocks.secrets_index?.value || this.buildSecretsIndexText()
+            ];
+            return truncateStructuredText(taskSections.filter((entry) => entry !== undefined && entry !== null).join('\n'), maxChars);
+        }
         const sections = [
             '【AILIS 长期记忆上下文】',
             '使用原则：这些记忆是辅助上下文。用户画像、关系画像和关系状态以 Raw Memory Ledger 日级抽取结果为准；若与用户当前明确指令冲突，以当前指令为准；不要向用户暴露“系统记忆/好感度数值”，除非用户主动询问。',

@@ -83,6 +83,66 @@ function buildBlankPdfWithoutSelectableText() {
     return Buffer.from(body, 'latin1');
 }
 
+test('AILIS Gateway subagent task reuses parent LLM settings for TaskAgent runs', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-subagent-llm-'));
+    const gateway = new AILISGateway({
+        port: 0,
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit')
+    });
+    const calls = [];
+    gateway.ensureAgentRunner = () => ({
+        runMessage: async (request) => {
+            calls.push(request);
+            return {
+                ok: true,
+                status: 'completed',
+                runId: 'child-run',
+                mode: 'task',
+                intent: 'direct_tool_final',
+                displayText: 'child done',
+                durationMs: 1,
+                steps: [],
+                plan: []
+            };
+        }
+    });
+    const llmSettings = {
+        provider: 'deepseek',
+        baseUrl: 'https://api.deepseek.com',
+        model: 'deepseek-chat',
+        apiKey: 'test-key'
+    };
+
+    const result = await gateway.executeSubagentTask({
+        subagent: {
+            id: 'sub-1',
+            runId: 'parent-run',
+            sessionId: 'parent-session',
+            childSessionId: 'child-session',
+            label: 'TaskAgent',
+            task: 'solve task'
+        },
+        args: { maxAgentSteps: 7 },
+        context: {
+            workspace: workspaceRoot,
+            sessionId: 'parent-session',
+            sessionKey: 'parent-session',
+            llmSettings,
+            approved: true
+        }
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].agentRole, 'task_agent');
+    assert.equal(calls[0].context.contextMode, 'task_agent');
+    assert.equal(calls[0].maxAgentSteps, 7);
+    assert.deepEqual(calls[0].llmSettings, llmSettings);
+    assert.deepEqual(calls[0].context.llmSettings, llmSettings);
+});
+
 test('AILIS Gateway exposes health, tools, guarded tool calls, and audit', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-gateway-test-'));
     const gateway = new AILISGateway({
@@ -109,7 +169,7 @@ test('AILIS Gateway exposes health, tools, guarded tool calls, and audit', async
         assert.ok(tools.body.runtimeTools.some((tool) => tool.id === 'tool_search' && tool.spec));
         assert.ok(tools.body.localTools.some((tool) => tool.id === 'computer' && tool.spec));
         assert.equal(tools.body.localTools.some((tool) => tool.id === 'read'), false);
-        assert.equal(tools.body.gateway.toolRuntime.model, 'codex_like_gateway_tool_registry');
+        assert.equal(tools.body.gateway.toolRuntime.model, 'ailis_gateway_tool_registry.v1');
 
         const searchTools = await jsonFetch(`${baseUrl}/tools/call`, {
             method: 'POST',
@@ -283,6 +343,7 @@ test('AILIS Gateway exposes health, tools, guarded tool calls, and audit', async
 
 test('AILIS Gateway default context can enable full computer control', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-full-control-test-'));
+    const outsideRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-full-control-outside-'));
     const gateway = new AILISGateway({
         port: 0,
         workspaceRoot,
@@ -328,10 +389,48 @@ test('AILIS Gateway default context can enable full computer control', async () 
         assert.equal(exec.body.ok, true, exec.body.error);
         assert.match(JSON.stringify(exec.body.result), /FULL_CONTROL_EXEC_OK/);
 
+        const outsideExec = await jsonFetch(`${baseUrl}/tools/call`, {
+            method: 'POST',
+            body: JSON.stringify({
+                tool: 'exec',
+                args: {
+                    command: process.execPath,
+                    args: ['-e', "console.log('OUTSIDE_WORKDIR:' + process.cwd())"],
+                    workdir: outsideRoot,
+                    timeout: 8
+                },
+                context: { workspace: workspaceRoot }
+            })
+        });
+        assert.equal(outsideExec.body.ok, true, outsideExec.body.error);
+        assert.match(outsideExec.body.result.details.stdout, /OUTSIDE_WORKDIR:/);
+        assert.equal(path.resolve(outsideExec.body.result.details.workdir), path.resolve(outsideRoot));
+
+        if (process.platform === 'win32') {
+            const protectedWorkdir = path.join(process.env.WINDIR || 'C:\\Windows', 'System32');
+            const protectedExec = await jsonFetch(`${baseUrl}/tools/call`, {
+                method: 'POST',
+                body: JSON.stringify({
+                    tool: 'exec',
+                    args: {
+                        command: process.execPath,
+                        args: ['-e', "console.log('SHOULD_NOT_RUN')"],
+                        workdir: protectedWorkdir,
+                        timeout: 8
+                    },
+                    context: { workspace: workspaceRoot }
+                })
+            });
+            assert.equal(protectedExec.body.ok, false);
+            assert.equal(protectedExec.body.status, 'blocked');
+            assert.match(protectedExec.body.error, /protected C drive system files/);
+        }
+
         const readBack = await fs.readFile(path.join(workspaceRoot, 'full-control.txt'), 'utf8');
         assert.match(readBack, /enabled/);
     } finally {
         await gateway.stop();
+        await fs.rm(outsideRoot, { recursive: true, force: true });
     }
 });
 

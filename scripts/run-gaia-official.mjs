@@ -58,7 +58,8 @@ function parseArgs(argv = process.argv.slice(2)) {
         taskRetries: 1,
         downloadOnly: false,
         skipDownload: false,
-        localSubmit: null
+        localSubmit: null,
+        directToolExecutor: /^(1|true|yes|on)$/i.test(process.env.AILIS_GAIA_DIRECT_TOOL_EXECUTOR || '')
     };
     for (let index = 0; index < argv.length; index += 1) {
         const token = argv[index];
@@ -85,6 +86,8 @@ function parseArgs(argv = process.argv.slice(2)) {
         else if (token === '--skip-download') args.skipDownload = true;
         else if (token === '--local-submit') args.localSubmit = true;
         else if (token === '--no-local-submit') args.localSubmit = false;
+        else if (token === '--direct-tool-executor') args.directToolExecutor = true;
+        else if (token === '--no-direct-tool-executor') args.directToolExecutor = false;
     }
     if (!['validation', 'test'].includes(args.split)) {
         throw new Error(`Unsupported --split ${args.split}; expected validation or test.`);
@@ -515,7 +518,7 @@ async function runLiteRunner(args, baseUrl) {
         '--benchmark-name', args.benchmarkName,
         '--agent-code', `AILIS local AILIS Gateway ${args.benchmarkName} runner`
     ];
-    if (/^(1|true|yes|on)$/i.test(process.env.AILIS_GAIA_DIRECT_TOOL_EXECUTOR || '')) {
+    if (args.directToolExecutor) {
         liteArgs.push('--direct-tool-executor');
     }
     if (args.localSubmit) {

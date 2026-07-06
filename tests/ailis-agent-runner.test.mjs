@@ -8,6 +8,7 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { AILISGateway } = require('../electron/ailis-gateway.cjs');
 const {
+    AILISAgentRunner,
     buildAgentDirectToolSpecs,
     isAgentLlmSettingsMissing,
     splitNativeProgressNoteArgs,
@@ -91,6 +92,115 @@ test('AILIS direct tool specs allow model-authored progress notes without passin
 
     assert.deepEqual(split.args, { path: 'note.txt' });
     assert.match(split.progressNote, /确认这份文件/);
+});
+
+test('AILIS Agent Runner passes parent LLM settings only to subagent tool calls', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-subagent-tool-context-'));
+    const calls = [];
+    const gateway = {
+        workspaceRoot,
+        auditDir: path.join(workspaceRoot, '.audit'),
+        runtime: {},
+        emitGatewayEvent() {},
+        async callTool(request) {
+            calls.push(request);
+            return {
+                ok: true,
+                status: 'completed',
+                content: [],
+                details: { status: 'completed' }
+            };
+        }
+    };
+    const runner = new AILISAgentRunner({
+        gateway,
+        workspaceRoot,
+        pendingStorePath: path.join(workspaceRoot, 'pending-agent-state.json')
+    });
+    const llmSettings = {
+        provider: 'deepseek',
+        baseUrl: 'https://api.deepseek.com',
+        model: 'deepseek-chat',
+        apiKey: 'test-key'
+    };
+
+    await runner.executeAgentToolStep({
+        runId: 'run-parent',
+        step: {
+            id: 'step-subagent',
+            title: 'Spawn task agent',
+            tool: 'subagents',
+            args: { action: 'spawn', task: 'solve task', wait: true }
+        },
+        toolContext: { workspace: workspaceRoot, sessionKey: 'main' },
+        request: { llmSettings },
+        iteration: 0
+    });
+
+    assert.deepEqual(calls[0].context.llmSettings, llmSettings);
+
+    calls.length = 0;
+    await runner.executeAgentToolStep({
+        runId: 'run-parent',
+        step: {
+            id: 'step-exec',
+            title: 'Run command',
+            tool: 'exec',
+            args: { command: 'echo ok' }
+        },
+        toolContext: { workspace: workspaceRoot, sessionKey: 'main' },
+        request: { llmSettings },
+        iteration: 1
+    });
+
+    assert.equal(calls[0].context.llmSettings, undefined);
+});
+
+test('AILIS persona orchestrator only exposes subagent task handoff tool', () => {
+    const subagentSpec = {
+        name: 'subagents',
+        description: 'Spawn child task agents.',
+        parameters: {
+            type: 'object',
+            properties: {
+                action: { type: 'string' },
+                task: { type: 'string' },
+                wait: { type: 'boolean' }
+            }
+        }
+    };
+    const gateway = {
+        gatewayToolRuntimeRegistry: {
+            modelVisibleSpecs: () => [
+                {
+                    name: 'read',
+                    description: 'Read a file.',
+                    parameters: { type: 'object', properties: { path: { type: 'string' } } }
+                },
+                {
+                    name: 'exec',
+                    description: 'Run a command.',
+                    parameters: { type: 'object', properties: { command: { type: 'string' } } }
+                }
+            ],
+            definition: (toolId) => toolId === 'subagents' ? { spec: subagentSpec } : null
+        }
+    };
+
+    const personaSpecs = buildAgentDirectToolSpecs(gateway, {
+        requestContext: {
+            agentRole: 'persona_orchestrator'
+        }
+    });
+    assert.deepEqual(personaSpecs.map((spec) => spec.name), ['subagents']);
+
+    const taskSpecs = buildAgentDirectToolSpecs(gateway, {
+        requestContext: {
+            agentRole: 'task_agent'
+        }
+    });
+    assert.ok(taskSpecs.some((spec) => spec.name === 'read'));
+    assert.ok(taskSpecs.some((spec) => spec.name === 'exec'));
 });
 
 test('AILIS Agent Runner accepts local vLLM and Ollama settings without API keys', () => {

@@ -290,11 +290,15 @@ class AILISPlatformAdapter {
             const systemDrive = this.env.SystemDrive || 'C:';
             const windir = this.env.WINDIR || `${systemDrive}\\Windows`;
             return this.uniquePaths([
-                `${systemDrive}\\`,
                 windir,
                 `${systemDrive}\\Program Files`,
                 `${systemDrive}\\Program Files (x86)`,
-                `${systemDrive}\\ProgramData`
+                `${systemDrive}\\ProgramData`,
+                `${systemDrive}\\Recovery`,
+                `${systemDrive}\\System Volume Information`,
+                `${systemDrive}\\$Recycle.Bin`,
+                `${systemDrive}\\Boot`,
+                `${systemDrive}\\Config.Msi`
             ]);
         }
         if (this.isHostMacOS()) {

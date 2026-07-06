@@ -1,0 +1,241 @@
+{
+  "version": 1,
+  "updatedAt": "2026-06-30",
+  "purpose": "Benchmark catalog for AILIS optimization. Benchmarks are regression signals, not hard-coded task solvers.",
+  "local": [
+    {
+      "id": "ailis-artifact-tools",
+      "category": "artifact_runtime",
+      "script": "pnpm eval:artifact-tools:run",
+      "status": "runnable",
+      "latestLocalResult": {
+        "total": 10,
+        "passed": 10,
+        "failed": 0,
+        "blocked": 0
+      },
+      "measures": ["large_file_handling", "artifact_search", "render", "roundtrip", "tool_observation_compaction"],
+      "gaps": ["larger stress fixtures", "scanned PDF/OCR", "native DOCX/PPTX layout renderer", "large JSON/CSV"]
+    },
+    {
+      "id": "ailis-humanlike",
+      "category": "persona_memory_relationship",
+      "script": "pnpm eval:ailis-humanlike:validate",
+      "status": "runnable",
+      "latestLocalResult": {
+        "scenarios": 1000,
+        "validation": "passed"
+      },
+      "measures": ["persona_style", "affinity_stage", "memory_context_use", "anti_pattern_avoidance"],
+      "gaps": ["real LLM judge", "Raw Memory Ledger extraction evaluation", "longitudinal preference drift checks"]
+    },
+    {
+      "id": "ailis-execution-bench",
+      "category": "tool_execution_runtime",
+      "script": "pnpm ailis:benchmark-execution",
+      "status": "runnable",
+      "latestLocalResult": {
+        "codeRepair": true,
+        "processSession": true,
+        "safety": true,
+        "transcript": true
+      },
+      "measures": ["code_repair", "pty_session", "permission_policy", "transcript_integrity"],
+      "gaps": ["real model task loop", "cross-platform shell matrix", "token and cost metrics"]
+    },
+    {
+      "id": "ailis-speed-bench",
+      "category": "performance_cost",
+      "script": "node scripts/run-ailis-speed-bench.mjs",
+      "status": "too_heavy_for_default_smoke",
+      "latestLocalResult": {
+        "taskId": "playwright_waiting_comparison",
+        "status": "max_steps_reached",
+        "durationMs": 110726,
+        "modelWaitMs": 102103,
+        "toolMs": 8120,
+        "maxApproxInputTokens": 12933
+      },
+      "measures": ["llm_wait", "tool_wait", "prompt_size", "agent_steps", "output_success"],
+      "gaps": ["smoke mode", "task limit", "hard timeout summary", "short no-network tasks"]
+    },
+    {
+      "id": "osworld-readiness",
+      "category": "desktop_gui_agent",
+      "script": "pnpm bench:osworld:readiness",
+      "status": "blocked",
+      "latestLocalResult": {
+        "officialRunReady": false,
+        "blockers": [
+          "OSWorld repo is missing",
+          "OSWorld Python dependencies are not installed"
+        ]
+      },
+      "measures": ["environment_readiness", "desktop_gui_dependencies"],
+      "gaps": ["OSWorld repo", "Python dependency setup", "deterministic smoke run"]
+    },
+    {
+      "id": "agentbench-ailis",
+      "category": "agent_task_suite",
+      "script": "pnpm bench:agentbench:ailis:list",
+      "status": "data_missing_or_unprepared",
+      "measures": ["workspace_task_success", "process_score", "robustness_score"],
+      "gaps": ["AgentBench task root", "prepare script", "fixed smoke subset"]
+    },
+    {
+      "id": "gaia",
+      "category": "general_assistant_agent",
+      "script": "pnpm bench:gaia:official:l1",
+      "status": "script_exists",
+      "measures": ["answer_accuracy", "tool_use", "search_file_reasoning", "visual_optional"],
+      "gaps": ["fixed smoke subset", "no-visual and visual split", "current rerun"]
+    },
+    {
+      "id": "swebench-lite",
+      "category": "software_engineering_agent",
+      "script": "pnpm bench:swebench-lite:execute",
+      "status": "sample_data_exists",
+      "measures": ["patch_success", "test_pass", "environment_setup", "code_navigation"],
+      "gaps": ["stable wheelhouse", "fixed small sample", "nightly run"]
+    }
+  ],
+  "external": [
+    {
+      "id": "gaia",
+      "priority": "P0",
+      "category": "general_assistant_agent",
+      "source": "https://huggingface.co/datasets/gaia-benchmark/GAIA",
+      "recommendedUse": "Fixed L1/L2 smoke plus official validation reruns."
+    },
+    {
+      "id": "swebench-lite",
+      "priority": "P0",
+      "category": "software_engineering_agent",
+      "source": "https://www.swebench.com/",
+      "recommendedUse": "Small deterministic code repair subset."
+    },
+    {
+      "id": "osworld",
+      "priority": "P0",
+      "category": "desktop_gui_agent",
+      "source": "https://github.com/xlang-ai/OSWorld",
+      "recommendedUse": "Desktop GUI readiness and deterministic smoke."
+    },
+    {
+      "id": "agentbench",
+      "priority": "P0",
+      "category": "agent_task_suite",
+      "source": "https://github.com/THUDM/AgentBench",
+      "recommendedUse": "Workspace/data-analysis/memory subsets."
+    },
+    {
+      "id": "webarena",
+      "priority": "P0",
+      "category": "web_browser_agent",
+      "source": "https://github.com/web-arena-x/webarena",
+      "recommendedUse": "Browser navigation and web task robustness."
+    },
+    {
+      "id": "browsergym",
+      "priority": "P0",
+      "category": "web_browser_agent",
+      "source": "https://github.com/ServiceNow/BrowserGym",
+      "recommendedUse": "Unified browser-agent environment when web tools mature."
+    },
+    {
+      "id": "appworld",
+      "priority": "P0",
+      "category": "api_tool_agent",
+      "source": "https://github.com/StonyBrookNLP/appworld",
+      "recommendedUse": "Stateful API/tool-use evaluation."
+    },
+    {
+      "id": "bfcl",
+      "priority": "P0",
+      "category": "tool_calling",
+      "source": "https://gorilla.cs.berkeley.edu/leaderboard.html",
+      "recommendedUse": "Function calling schema and parameter accuracy."
+    },
+    {
+      "id": "terminal-bench",
+      "priority": "P0",
+      "category": "terminal_agent",
+      "source": "https://github.com/laude-institute/terminal-bench",
+      "recommendedUse": "Terminal command and shell robustness."
+    },
+    {
+      "id": "workarena",
+      "priority": "P1",
+      "category": "business_web_workflow",
+      "source": "https://github.com/ServiceNow/WorkArena",
+      "recommendedUse": "Enterprise browser workflow tasks."
+    },
+    {
+      "id": "tau-bench",
+      "priority": "P1",
+      "category": "stateful_tool_agent",
+      "source": "https://github.com/sierra-research/tau-bench",
+      "recommendedUse": "Tool/API state consistency."
+    },
+    {
+      "id": "longbench",
+      "priority": "P1",
+      "category": "long_context",
+      "source": "https://github.com/THUDM/LongBench",
+      "recommendedUse": "Context compiler and long-document compression checks."
+    },
+    {
+      "id": "ragbench",
+      "priority": "P1",
+      "category": "rag_evidence",
+      "source": "https://github.com/rungalileo/ragbench",
+      "recommendedUse": "Evidence retrieval and citation quality."
+    },
+    {
+      "id": "locomo",
+      "priority": "P1",
+      "category": "long_term_memory",
+      "source": "https://github.com/snap-research/locomo",
+      "recommendedUse": "Personal memory and long-term conversation recall."
+    },
+    {
+      "id": "longmemeval",
+      "priority": "P1",
+      "category": "long_term_memory",
+      "source": "https://github.com/xiaowu0162/LongMemEval",
+      "recommendedUse": "Cross-session memory retrieval evaluation."
+    },
+    {
+      "id": "common-voice",
+      "priority": "P1",
+      "category": "asr_multilingual",
+      "source": "https://commonvoice.mozilla.org/en/datasets",
+      "recommendedUse": "Chinese/English/Japanese/Korean ASR WER."
+    },
+    {
+      "id": "librispeech",
+      "priority": "P1",
+      "category": "asr_english",
+      "source": "https://www.openslr.org/12",
+      "recommendedUse": "English ASR WER and latency baseline."
+    }
+  ],
+  "recommendedDailyGates": [
+    "artifact_tools",
+    "humanlike_validate",
+    "execution_bench",
+    "speed_smoke",
+    "installer_smoke"
+  ],
+  "failureTaxonomy": [
+    "model_quality",
+    "context_overload",
+    "tool_selection",
+    "tool_contract",
+    "tool_runtime",
+    "environment",
+    "verification_gap",
+    "ui_runtime",
+    "voice_runtime"
+  ]
+}

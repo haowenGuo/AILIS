@@ -196,7 +196,7 @@ function normalizeAilisMcpToolArgs({ tool = '', args = {} } = {}) {
     return toolArgs;
 }
 
-function sanitizeCodexMcpNamePart(value, fallback = '') {
+function sanitizeAilisMcpNamePart(value, fallback = '') {
     const raw = normalizeString(value, fallback);
     const sanitized = raw
         .replace(/[^A-Za-z0-9_-]+/g, '_')
@@ -205,14 +205,14 @@ function sanitizeCodexMcpNamePart(value, fallback = '') {
     return sanitized || fallback;
 }
 
-function codexMcpNamespaceForServer(server = '') {
-    const normalizedServer = sanitizeCodexMcpNamePart(server, 'server');
+function ailisMcpNamespaceForServer(server = '') {
+    const normalizedServer = sanitizeAilisMcpNamePart(server, 'server');
     return `mcp__${normalizedServer}__`;
 }
 
-function codexMcpToolId({ server = '', tool = '' } = {}) {
-    const namespace = codexMcpNamespaceForServer(server);
-    const normalizedTool = sanitizeCodexMcpNamePart(tool, 'tool');
+function ailisMcpToolId({ server = '', tool = '' } = {}) {
+    const namespace = ailisMcpNamespaceForServer(server);
+    const normalizedTool = sanitizeAilisMcpNamePart(tool, 'tool');
     return `${namespace}${normalizedTool}`;
 }
 
@@ -226,10 +226,10 @@ function parseAilisDirectMcpToolId(value) {
         const server = normalizeString(match[1]);
         const tool = normalizeString(match[2]);
         return {
-            id: codexMcpToolId({ server, tool }),
+            id: ailisMcpToolId({ server, tool }),
             legacyId: `mcp:${server}:${tool}`,
-            namespace: codexMcpNamespaceForServer(server),
-            callableName: sanitizeCodexMcpNamePart(tool, 'tool'),
+            namespace: ailisMcpNamespaceForServer(server),
+            callableName: sanitizeAilisMcpNamePart(tool, 'tool'),
             server,
             tool
         };
@@ -239,10 +239,10 @@ function parseAilisDirectMcpToolId(value) {
         const server = normalizeString(match[1]);
         const tool = normalizeString(match[2]);
         return {
-            id: codexMcpToolId({ server, tool }),
+            id: ailisMcpToolId({ server, tool }),
             legacyId: `mcp:${server}:${tool}`,
-            namespace: codexMcpNamespaceForServer(server),
-            callableName: sanitizeCodexMcpNamePart(tool, 'tool'),
+            namespace: ailisMcpNamespaceForServer(server),
+            callableName: sanitizeAilisMcpNamePart(tool, 'tool'),
             server,
             tool
         };
@@ -252,10 +252,10 @@ function parseAilisDirectMcpToolId(value) {
         const server = normalizeString(match[1]);
         const tool = normalizeString(match[2]);
         return {
-            id: codexMcpToolId({ server, tool }),
+            id: ailisMcpToolId({ server, tool }),
             legacyId: `mcp:${server}:${tool}`,
-            namespace: codexMcpNamespaceForServer(server),
-            callableName: sanitizeCodexMcpNamePart(tool, 'tool'),
+            namespace: ailisMcpNamespaceForServer(server),
+            callableName: sanitizeAilisMcpNamePart(tool, 'tool'),
             server,
             tool
         };
@@ -266,12 +266,12 @@ function parseAilisDirectMcpToolId(value) {
 function createAilisDirectMcpToolSpec({ id, server, tool, name, title, description, inputSchema, schemaProperties, callPattern, descriptionAddendum } = {}) {
     const normalizedServer = normalizeString(server);
     const normalizedTool = normalizeString(tool || name);
-    const normalizedId = normalizeString(id) || codexMcpToolId({ server: normalizedServer, tool: normalizedTool });
+    const normalizedId = normalizeString(id) || ailisMcpToolId({ server: normalizedServer, tool: normalizedTool });
     const parsedId = parseAilisDirectMcpToolId(normalizedId);
-    const modelId = parsedId?.id || codexMcpToolId({ server: normalizedServer, tool: normalizedTool });
+    const modelId = parsedId?.id || ailisMcpToolId({ server: normalizedServer, tool: normalizedTool });
     const legacyId = parsedId?.legacyId || `mcp:${normalizedServer}:${normalizedTool}`;
-    const namespace = parsedId?.namespace || codexMcpNamespaceForServer(normalizedServer);
-    const callableName = parsedId?.callableName || sanitizeCodexMcpNamePart(normalizedTool, 'tool');
+    const namespace = parsedId?.namespace || ailisMcpNamespaceForServer(normalizedServer);
+    const callableName = parsedId?.callableName || sanitizeAilisMcpNamePart(normalizedTool, 'tool');
     const enhancedSchema = enhanceAilisMcpToolSchema({
         tool: normalizedTool,
         inputSchema: inputSchema || {}
@@ -330,12 +330,12 @@ function normalizeAilisMcpCallArgs(args = {}, options = {}) {
 module.exports = {
     buildAilisMcpToolCallArgs,
     buildAilisMcpToolDescriptionAddendum,
-    codexMcpNamespaceForServer,
-    codexMcpToolId,
+    ailisMcpNamespaceForServer,
+    ailisMcpToolId,
     createAilisDirectMcpToolSpec,
     enhanceAilisMcpToolSchema,
     normalizeAilisMcpCallArgs,
     normalizeAilisMcpToolArgs,
     parseAilisDirectMcpToolId,
-    sanitizeCodexMcpNamePart
+    sanitizeAilisMcpNamePart
 };

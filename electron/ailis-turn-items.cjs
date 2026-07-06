@@ -2,6 +2,10 @@ const {
     summarizeForModel
 } = require('./ailis-runtime-budget.cjs');
 const { createHash } = require('node:crypto');
+const {
+    normalizeToolOutput,
+    toolOutputToThreadItem
+} = require('./ailis-agent-object-model.cjs');
 
 const DEFAULT_MAX_TURN_ITEMS = 16;
 const DEFAULT_PREVIEW_CHARS = 1000;
@@ -116,6 +120,7 @@ function itemSummaryForPrompt(item = {}, maxChars = 360) {
         return null;
     }
     return {
+        id: item.id || null,
         type: item.type || null,
         status: item.status || null,
         tool: item.tool || null,
@@ -125,7 +130,6 @@ function itemSummaryForPrompt(item = {}, maxChars = 360) {
         error_type: item.error_type || item.errorType || null,
         evidence_gap: item.evidence_gap || item.evidenceGap || null,
         artifact_evidence: item.artifact_evidence || item.artifactEvidence || null,
-        recovery_hint: item.recovery_hint || item.recoveryHint || null,
         preview: item.preview ? summarizeValue(item.preview, maxChars) : undefined,
         compacted: item.compacted === true
     };
@@ -300,27 +304,21 @@ function classifyToolFailureObservation({ tool = '', args = {}, response = {}, p
             error_type: 'missing_dependency',
             summary: program
                 ? `Command not found on this Windows machine: ${program}.`
-                : 'Command not found on this Windows machine.',
-            recovery_hint: 'Treat this as a failed tool observation and try an available cross-platform path, such as PowerShell, Node.js, curl, built-in read/web_fetch, artifact_verifier, or an installed Python launcher.',
-            alternatives: ['powershell', 'node', 'curl', 'read', 'web_fetch', 'artifact_verifier']
+                : 'Command not found on this Windows machine.'
         };
     }
 
     if (tool === 'computer' && action === 'exec' && Number.isFinite(exitCode) && exitCode !== 0) {
         return {
             error_type: 'command_failed',
-            summary: `Command exited with code ${exitCode}.`,
-            recovery_hint: 'Inspect the tool output and choose a different command, parser, or built-in tool before stopping.',
-            alternatives: ['inspect_output', 'retry_with_simpler_command', 'use_builtin_tool']
+            summary: `Command exited with code ${exitCode}.`
         };
     }
 
     if (/timeout|timed out|超时/.test(text)) {
         return {
             error_type: 'timeout',
-            summary: 'Tool call timed out.',
-            recovery_hint: 'Retry with a smaller operation, narrower input, or a more direct tool.',
-            alternatives: ['narrow_input', 'retry', 'use_direct_tool']
+            summary: 'Tool call timed out.'
         };
     }
 
@@ -354,14 +352,13 @@ function classifyEvidenceGapObservation({ tool = '', args = {}, response = {}, p
         const question = normalizeText(
             searchConfidence.clarificationQuestion ||
             searchConfidence.clarification_question ||
-            details.clarificationQuestion ||
-            details.recoveryHint
+            details.clarificationQuestion
         );
         return {
             evidence_gap: 'ambiguous_search_requires_clarification',
-            summary: 'Web search returned multiple plausible target clusters.',
-            recovery_hint: question || 'Ask the user to clarify the intended entity/source before calling web_fetch or continuing the tool loop.',
-            alternatives: ['ask_user_clarification', 'final_answer clarification', 'blocked clarification']
+            summary: question
+                ? `Web search returned multiple plausible target clusters. Clarification question from tool: ${question}`
+                : 'Web search returned multiple plausible target clusters.'
         };
     }
     if (isWebSearch && /evidence gap|discovery only|candidate evidence|open a result|suggested next calls|high-signal links|url:/i.test(text)) {
@@ -381,57 +378,43 @@ function classifyEvidenceGapObservation({ tool = '', args = {}, response = {}, p
     if (evidenceQuality === 'js_shell') {
         return {
             evidence_gap: 'js_shell_no_content',
-            summary: 'Web fetch returned a JavaScript loading shell, not answer-bearing page content.',
-            recovery_hint: 'Do not refetch the same URL. Use an accessible source, a JavaScript-rendering reader/backend, or a different search result.',
-            alternatives: ['different web_fetch URL', 'web_search with source/domain terms', 'browser/rendered page reader']
+            summary: 'Web fetch returned a JavaScript loading shell, not answer-bearing page content.'
         };
     }
     if (evidenceQuality === 'encoding_failure') {
         return {
             evidence_gap: 'encoding_failure',
-            summary: 'Web fetch returned mojibake/incorrectly decoded text that is not reliable evidence.',
-            recovery_hint: 'Retry with an encoding-aware fetch path or choose another accessible source instead of reasoning from mojibake.',
-            alternatives: ['encoding-aware web_fetch', 'different source', 'reader backend']
+            summary: 'Web fetch returned mojibake/incorrectly decoded text that is not reliable evidence.'
         };
     }
     if (evidenceQuality === 'thin_content') {
         return {
             evidence_gap: 'thin_content',
-            summary: 'Web fetch returned too little text to support an answer.',
-            recovery_hint: 'Open a higher-signal result or switch source instead of repeating this thin page.',
-            alternatives: ['different web_fetch URL', 'web_search with exact/source terms']
+            summary: 'Web fetch returned too little text to support an answer.'
         };
     }
     if (/clinicaltrials\.gov|nct\d{8}/i.test(text)) {
         return {
             evidence_gap: 'structured_api_preferred',
-            summary: 'Web fetch returned page text, but this task likely needs a structured ClinicalTrials.gov study field.',
-            recovery_hint: 'try tool_search: ClinicalTrials API NCT enrollment OpenAPI; if a callable external__clinicaltrials__... tool appears, call it directly with the NCT id.',
-            alternatives: ['tool_search: ClinicalTrials API NCT enrollment OpenAPI', 'external__clinicaltrials__get_study', 'ClinicalTrials.gov v2 studies API']
+            summary: 'Web fetch returned page text, but this task likely needs a structured ClinicalTrials.gov study field.'
         };
     }
     if (/youtube\.com|youtu\.be/.test(text)) {
         return {
             evidence_gap: 'video_evidence_required',
-            summary: 'A fetched YouTube page is not enough for visual counting or frame-level questions.',
-            recovery_hint: 'try tool_search: video frame sampling, youtube transcript, download video, or vision frame analysis.',
-            alternatives: ['tool_search: youtube transcript', 'tool_search: video frame sampling', 'vision frame analysis']
+            summary: 'A fetched YouTube page is not enough for visual counting or frame-level questions.'
         };
     }
     if (/\.pdf(\?|#|$)|application\/pdf|pdf/.test(text)) {
         return {
             evidence_gap: 'document_parser_preferred',
-            summary: 'The target appears to be a PDF or paper; page fetch alone may miss the answer-bearing text.',
-            recovery_hint: 'try mcp__ailis_research__pdf_find_and_extract for unknown PDF links, or pdf_extract_text for a direct PDF URL/path.',
-            alternatives: ['mcp__ailis_research__pdf_find_and_extract', 'mcp__ailis_research__pdf_extract_text', 'download_file']
+            summary: 'The target appears to be a PDF or paper; page fetch alone may miss the answer-bearing text.'
         };
     }
     if (/\.docx(\?|#|$)|wordprocessingml|secret santa/.test(text)) {
         return {
             evidence_gap: 'document_parser_preferred',
-            summary: 'The target appears to be a DOCX/document task; raw web or zip text is not reliable evidence.',
-            recovery_hint: 'try tool_search: DOCX parser, office document text extraction, or document reader before final answer.',
-            alternatives: ['tool_search: DOCX parser', 'document text extraction', 'read attached document']
+            summary: 'The target appears to be a DOCX/document task; raw web or zip text is not reliable evidence.'
         };
     }
     return null;
@@ -443,9 +426,7 @@ function formatFailureHint(failure = null) {
     }
     return [
         `error_type=${failure.error_type}`,
-        failure.summary,
-        failure.recovery_hint,
-        failure.alternatives?.length ? `available_alternatives=${failure.alternatives.join(', ')}` : ''
+        failure.summary
     ].filter(Boolean).join(' | ');
 }
 
@@ -455,9 +436,7 @@ function formatEvidenceGapHint(gap = null) {
     }
     return [
         `evidence_gap=${gap.evidence_gap}`,
-        gap.summary,
-        gap.recovery_hint,
-        gap.alternatives?.length ? `available_alternatives=${gap.alternatives.join(', ')}` : ''
+        gap.summary
     ].filter(Boolean).join(' | ');
 }
 
@@ -505,13 +484,12 @@ function buildToolResultItem(event = {}) {
         error_type: failure?.error_type || null,
         evidence_gap: evidenceGap?.evidence_gap || null,
         artifact_evidence: getArtifactEvidenceSummary(event.response || event.result || {}),
-        recovery_hint: failure?.recovery_hint || evidenceGap?.recovery_hint || null,
-        alternatives: failure?.alternatives || evidenceGap?.alternatives || [],
         iteration: Number.isFinite(event.iteration) ? event.iteration : null
     };
 }
 
 function buildToolResultItemFromStep(stepResult = {}) {
+    const toolOutput = normalizeToolOutput(stepResult, 0);
     const response = stepResult.response || {};
     const previewBudget = previewBudgetForToolResult({
         tool: stepResult.tool,
@@ -534,8 +512,9 @@ function buildToolResultItemFromStep(stepResult = {}) {
         response,
         preview: basePreview
     }) : null;
+    const baseItem = toolOutputToThreadItem(toolOutput);
     return {
-        type: 'tool_result',
+        ...baseItem,
         status: response.ok === true ? 'completed' : 'failed',
         id: stepResult.id || null,
         title: stepResult.title || stepResult.tool || 'tool result',
@@ -546,8 +525,6 @@ function buildToolResultItemFromStep(stepResult = {}) {
         error_type: failure?.error_type || null,
         evidence_gap: evidenceGap?.evidence_gap || null,
         artifact_evidence: getArtifactEvidenceSummary(response),
-        recovery_hint: failure?.recovery_hint || evidenceGap?.recovery_hint || null,
-        alternatives: failure?.alternatives || evidenceGap?.alternatives || [],
         iteration: Number.isFinite(stepResult.iteration) ? stepResult.iteration : null
     };
 }
@@ -590,7 +567,7 @@ function eventToTurnItem(event = {}) {
     return buildNoteItem(event);
 }
 
-function collectCodexLikeTurnItems({
+function collectAilisThreadItems({
     events = [],
     stepResults = []
 } = {}) {
@@ -615,14 +592,14 @@ function collectCodexLikeTurnItems({
     return items;
 }
 
-function buildCodexLikeTurnItems({
+function buildCompactedAilisThreadItems({
     events = [],
     stepResults = [],
     maxItems = DEFAULT_MAX_TURN_ITEMS,
     recentFullItems = DEFAULT_RECENT_FULL_ITEMS,
     olderPreviewChars = DEFAULT_OLDER_PREVIEW_CHARS
 } = {}) {
-    const items = collectCodexLikeTurnItems({ events, stepResults });
+    const items = collectAilisThreadItems({ events, stepResults });
     const retained = items.slice(-Math.max(1, maxItems));
     return compactRetainedTurnItems({
         items: retained,
@@ -631,9 +608,13 @@ function buildCodexLikeTurnItems({
     });
 }
 
-function buildTurnItemsPromptObject(input = {}) {
+function buildAilisThreadItems(input = {}) {
+    return buildCompactedAilisThreadItems(input);
+}
+
+function buildObservationLedgerPromptObject(input = {}) {
     const maxItems = Math.max(1, input.maxItems || DEFAULT_MAX_TURN_ITEMS);
-    const allItems = collectCodexLikeTurnItems(input);
+    const allItems = collectAilisThreadItems(input);
     const retainedItems = allItems.slice(-maxItems);
     const items = compactRetainedTurnItems({
         items: retainedItems,
@@ -645,10 +626,11 @@ function buildTurnItemsPromptObject(input = {}) {
         item.type === 'tool_result' && item.status === 'failed'
     ) || null;
     return {
-        model: 'codex_like_turn_items',
-        note: 'These are chronological runtime items. Recent observations stay detailed; older observations are compacted. Tool failures are observations for the next decision, not final blockers.',
+        model: 'ailis_observation_ledger',
+        schema: 'ailis.observation_ledger.v1',
+        note: 'Chronological runtime observations derived from canonical AILIS tool outputs. Recent observations stay detailed; older observations are compacted. This is an observation ledger, not the model-visible ResponseItem history.',
         retention: {
-            strategy: 'codex_like_recent_observation_window',
+            strategy: 'ailis_recent_observation_window',
             max_items: maxItems,
             retained_items: items.length,
             omitted_items: Math.max(0, allItems.length - retainedItems.length),
@@ -662,8 +644,8 @@ function buildTurnItemsPromptObject(input = {}) {
 }
 
 module.exports = {
-    buildCodexLikeTurnItems,
-    buildTurnItemsPromptObject,
+    buildAilisThreadItems,
+    buildObservationLedgerPromptObject,
     classifyEvidenceGapObservation,
     classifyToolFailureObservation,
     formatEvidenceGapHint,

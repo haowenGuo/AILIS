@@ -188,6 +188,19 @@ function protectedRoots(runtime = {}) {
     return getRuntimePlatform(runtime).protectedRoots();
 }
 
+function isFullControlContext(context = {}) {
+    const rawProfile = typeof context.permissionProfile === 'string'
+        ? context.permissionProfile
+        : context.permissionProfile?.id || context.permissions || context.policy || context.sandbox;
+    const profile = normalizeString(rawProfile).toLowerCase();
+    return (
+        profile === 'danger-full-access' ||
+        profile === 'full-access' ||
+        context.allowComputerWideAccess === true ||
+        (context.computerControlEnabled === true && context.allowOutsideWorkspace === true)
+    );
+}
+
 function resolveTargetPath(rawPath, runtime = {}) {
     const value = normalizeString(rawPath);
     if (!value) {
@@ -212,6 +225,19 @@ function guardPath(targetPath, action, context = {}, runtime = {}) {
     const readOnly = READ_ONLY_ACTIONS.has(action);
     const commonRoots = commonUserRoots(runtime);
     const platformAdapter = getRuntimePlatform(runtime);
+    const protectedHit = protectedRoots(runtime).find((root) => isPathInside(root, targetPath, platformAdapter));
+    if (protectedHit && isFullControlContext(context)) {
+        return createErrorResult(
+            'blocked',
+            '完全控制模式仍然拒绝访问 C 盘系统保护路径。',
+            {
+                path: targetPath,
+                protectedRoot: protectedHit,
+                action,
+                permissionProfile: context.permissionProfile || context.policy || context.sandbox || 'full-control'
+            }
+        );
+    }
     const insideCommon = commonRoots.some((root) => isPathInside(root, targetPath, platformAdapter));
     if (insideCommon) {
         return null;
@@ -228,7 +254,6 @@ function guardPath(targetPath, action, context = {}, runtime = {}) {
             }
         );
     }
-    const protectedHit = protectedRoots(runtime).find((root) => isPathInside(root, targetPath, platformAdapter));
     if (protectedHit && !readOnly && context.allowSystemMutation !== true) {
         return createErrorResult(
             'blocked',
@@ -2048,6 +2073,7 @@ function formatExecContent(details = {}) {
         const previewTruncated = outputStore.previewTruncated === true;
         const lines = [
             `exitCode=${details.exitCode ?? details.exit_code}`,
+            `outputId=${outputStore.outputId}`,
             `bytes=${outputStore.bytes ?? 0} lines=${outputStore.lineCount ?? 0} stdoutBytes=${outputStore.stdoutBytes ?? 0} stderrBytes=${outputStore.stderrBytes ?? 0}`,
             `outputComplete=${previewTruncated ? 'false' : 'true'}`,
             `outputTruncatedForModel=${previewTruncated ? 'true' : 'false'}`
@@ -2055,6 +2081,9 @@ function formatExecContent(details = {}) {
         if (previewTruncated) {
             lines.push(
                 'fullOutput=stored_for_agent_lab',
+                `outputRead={"outputId":"${outputStore.outputId}"}`,
+                `outputTail={"outputId":"${outputStore.outputId}"}`,
+                `outputSearch={"outputId":"${outputStore.outputId}","query":"<text>"}`,
                 'modelHint=Visible output is incomplete. Use tool_search query "exec output outputId search tail read" to load output_search/output_tail/output_read, then inspect only the needed slice. Do not rerun the command just to recover truncated output.'
             );
         } else {
@@ -3280,7 +3309,7 @@ function schemaResult(runtime) {
             platform: getRuntimePlatform(runtime).getStatus(),
             mutationsRequireApproval: true,
             outsideWorkspaceRequires: 'context.allowOutsideWorkspace=true',
-            protectedMutationRequires: 'context.allowSystemMutation=true plus approval',
+            protectedMutationRequires: 'context.allowSystemMutation=true plus approval; full-control still keeps C drive system roots blocked',
             deleteDefault: 'trash/quarantine; permanent delete requires allowPermanentDelete=true and dangerous=true',
             rollbackJournal: rollbackJournalPath(runtime),
             ptyOptional: loadNodePty().ok,

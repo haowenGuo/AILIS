@@ -21,6 +21,74 @@ function cloneJson(value) {
     }
 }
 
+const MODEL_GUIDANCE_KEYS = new Set([
+    'nextActions',
+    'next_actions',
+    'suggestedNext',
+    'suggested_next',
+    'suggestedNextCalls',
+    'suggested_next_calls',
+    'suggestedActions',
+    'suggested_actions',
+    'recoveryHint',
+    'recovery_hint',
+    'recommended_next_action',
+    'requiredNextStep',
+    'required_next_step',
+    'instruction',
+    'instructions',
+    'repairInstruction',
+    'repair_instruction',
+    'continuation',
+    'queryHints',
+    'alternatives',
+    'readingGuide'
+]);
+
+function stripModelGuidance(value, options = {}) {
+    const preserveGuidanceKeys = new Set(Array.isArray(options.preserveGuidanceKeys) ? options.preserveGuidanceKeys : []);
+    if (Array.isArray(value)) {
+        return value.map((entry) => stripModelGuidance(entry, options));
+    }
+    if (!value || typeof value !== 'object') {
+        return value;
+    }
+    const out = {};
+    for (const [key, entry] of Object.entries(value)) {
+        if (MODEL_GUIDANCE_KEYS.has(key) && !preserveGuidanceKeys.has(key)) {
+            continue;
+        }
+        out[key] = stripModelGuidance(entry, options);
+    }
+    return out;
+}
+
+function shouldStripJsonTextGuidance(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return false;
+    }
+    const schema = normalizeString(value.schema);
+    return schema.startsWith('ailis.artifact_tools.') ||
+        schema.startsWith('ailis.active_artifact_observation.') ||
+        value?.protocol?.tool === 'artifact_tools';
+}
+
+function stripGuidanceFromModelText(text = '') {
+    const source = normalizeString(text);
+    if (!/^\s*[\[{]/.test(source)) {
+        return source;
+    }
+    try {
+        const parsed = JSON.parse(source);
+        if (!shouldStripJsonTextGuidance(parsed)) {
+            return source;
+        }
+        return JSON.stringify(stripModelGuidance(parsed), null, 2);
+    } catch {
+        return source;
+    }
+}
+
 function approxTokenCount(value = '') {
     const text = typeof value === 'string' ? value : JSON.stringify(value || '');
     return Math.ceil(Buffer.byteLength(text || '', 'utf8') / 4);
@@ -48,6 +116,16 @@ function truncateMiddleText(value, maxChars = DEFAULT_TEXT_BUDGET_CHARS) {
     const head = Math.ceil(remaining * 0.6);
     const tail = Math.max(0, remaining - head);
     return `${text.slice(0, head)}${marker}${tail ? text.slice(-tail) : ''}`;
+}
+
+function buildModelVisibleTruncationNotice({
+    originalTextChars = 0,
+    visibleTextChars = 0
+} = {}) {
+    return [
+        'MODEL_VISIBLE_CONTENT_TRUNCATED:',
+        `originalTextChars=${Number(originalTextChars) || 'unknown'}; visibleTextChars<=${Number(visibleTextChars) || 'unknown'}; truncationScope=model_visible_tool_result_text;`
+    ].join('\n');
 }
 
 function stripSchemaDescriptions(value) {
@@ -299,7 +377,9 @@ function summarizeForModel(value, maxChars = DEFAULT_TEXT_BUDGET_CHARS) {
 function compactToolResultForModel(result = {}, options = {}) {
     const maxTextChars = Math.max(256, Number(options.maxTextChars || DEFAULT_TEXT_BUDGET_CHARS));
     const maxStructuredStringChars = Math.max(128, Number(options.maxStructuredStringChars || DEFAULT_JSON_STRING_BUDGET_CHARS));
-    const output = cloneJson(result || {});
+    const output = stripModelGuidance(cloneJson(result || {}), {
+        preserveGuidanceKeys: options.preserveGuidanceKeys
+    });
     if (!output || typeof output !== 'object') {
         return {
             content: [{ type: 'text', text: summarizeForModel(output, maxTextChars) }],
@@ -324,12 +404,45 @@ function compactToolResultForModel(result = {}, options = {}) {
                     maxObjectKeys: 48,
                     maxDepth: 5
                 });
+                const sourceText = stripGuidanceFromModelText(part.text);
                 const originalTextChars = Number.isFinite(Number(part.originalTextChars))
                     ? Number(part.originalTextChars)
-                    : part.text.length;
-                next.text = truncateMiddleText(part.text, remaining || 128);
+                    : sourceText.length;
+                const jsonLikeText = /^\s*[\[{]/.test(sourceText);
+                let modelText = sourceText;
+                let structurallyCompacted = false;
+                if (jsonLikeText && sourceText.length > maxTextChars) {
+                    try {
+                        modelText = JSON.stringify(compactJsonForModel(JSON.parse(sourceText), {
+                            maxStringChars: maxStructuredStringChars,
+                            maxArrayItems: 32,
+                            maxObjectKeys: 80,
+                            maxDepth: 8
+                        }), null, 2);
+                        structurallyCompacted = modelText.length < sourceText.length;
+                    } catch {
+                        modelText = sourceText;
+                    }
+                }
+                next.text = jsonLikeText ? modelText : truncateMiddleText(modelText, remaining || 128);
                 next.originalTextChars = originalTextChars;
-                next.truncated = Boolean(part.truncated) || next.text.length < part.text.length || originalTextChars > next.text.length;
+                const modelViewShortened = structurallyCompacted || next.text.length < sourceText.length || originalTextChars > next.text.length;
+                next.truncated = Boolean(part.truncated) || modelViewShortened;
+                if (modelViewShortened) {
+                    const notice = buildModelVisibleTruncationNotice({
+                        originalTextChars,
+                        visibleTextChars: next.text.length
+                    });
+                    next.modelVisibleTruncation = {
+                        originalTextChars,
+                        visibleTextChars: next.text.length,
+                        truncationScope: 'model_visible_tool_result_text'
+                    };
+                    if (!jsonLikeText) {
+                        const noticeBudget = remaining || 128;
+                        next.text = truncateMiddleText(`${notice}\n\n${next.text}`, noticeBudget);
+                    }
+                }
                 remaining = Math.max(0, remaining - next.text.length);
                 return next;
             }
@@ -342,7 +455,22 @@ function compactToolResultForModel(result = {}, options = {}) {
             if (typeof next.text === 'string') {
                 next.originalTextChars = part.text.length;
                 next.text = truncateMiddleText(next.text, remaining || 128);
-                next.truncated = next.truncated || next.text.length < part.text.length;
+                const modelViewShortened = next.text.length < part.text.length;
+                next.truncated = next.truncated || modelViewShortened;
+                if (modelViewShortened) {
+                    const notice = buildModelVisibleTruncationNotice({
+                        originalTextChars: next.originalTextChars,
+                        visibleTextChars: next.text.length
+                    });
+                    next.modelVisibleTruncation = {
+                        originalTextChars: next.originalTextChars,
+                        visibleTextChars: next.text.length,
+                        truncationScope: 'model_visible_tool_result_text'
+                    };
+                    if (!/^\s*[\[{]/.test(part.text)) {
+                        next.text = truncateMiddleText(`${notice}\n\n${next.text}`, remaining || 128);
+                    }
+                }
                 remaining = Math.max(0, remaining - next.text.length);
             }
             return next;
@@ -382,5 +510,6 @@ module.exports = {
     compactToolResultForModel,
     compactToolSchema,
     summarizeForModel,
-    truncateMiddleText
+    truncateMiddleText,
+    stripModelGuidance
 };

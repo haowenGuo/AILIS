@@ -119,9 +119,16 @@ function normalizeAilisToolOutput(result = {}, { toolId = '', status = 'complete
         status: 'normalized',
         tool: toolId
     };
+    const resultStatus = String(output.details?.status || '').trim().toLowerCase();
+    const preserveControlGuidance = output.isError === true ||
+        output.details?.ok === false ||
+        !['completed', 'success'].includes(resultStatus);
     return compactToolResultForModel(output, {
         maxTextChars: 6000,
-        maxStructuredStringChars: 1200
+        maxStructuredStringChars: 1200,
+        preserveGuidanceKeys: preserveControlGuidance
+            ? ['suggestedNext', 'suggested_next']
+            : []
     });
 }
 

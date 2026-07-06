@@ -151,6 +151,44 @@ test('desktop store normalizes render profile preferences', () => {
     }).preferences.renderFpsLimit, 45);
 });
 
+test('desktop store migrates known OpenAI-compatible preset provider keys by base URL', () => {
+    const normalized = store.normalizeState({
+        preferences: {
+            llmProvider: 'openai-compatible',
+            llmBaseUrl: 'https://api.deepseek.com/',
+            llmModel: 'deepseek-v4-flash',
+            llmApiKey: 'sk-ds-test'
+        }
+    });
+
+    assert.equal(normalized.preferences.llmProvider, 'deepseek');
+    assert.equal(normalized.preferences.llmBaseUrl, 'https://api.deepseek.com');
+    assert.equal(normalized.preferences.llmApiKeyProfiles.deepseek.keys.length, 1);
+    assert.equal(normalized.preferences.llmApiKeyProfiles.deepseek.keys[0].value, 'sk-ds-test');
+    assert.equal(store.normalizeLlmProvider('qwen'), 'qwen');
+
+    const legacyProfileOnly = store.normalizeState({
+        preferences: {
+            llmProvider: 'openai-compatible',
+            llmBaseUrl: 'https://api.deepseek.com',
+            llmModel: 'deepseek-v4-flash',
+            llmApiKeyProfiles: {
+                'openai-compatible': {
+                    activeKeyId: 'legacy-ds',
+                    keys: [{
+                        id: 'legacy-ds',
+                        label: 'DeepSeek 主 Key',
+                        value: 'sk-ds-profile-only'
+                    }]
+                }
+            }
+        }
+    });
+    assert.equal(legacyProfileOnly.preferences.llmProvider, 'deepseek');
+    assert.equal(legacyProfileOnly.preferences.llmApiKeyProfiles.deepseek.keys[0].value, 'sk-ds-profile-only');
+    assert.equal(legacyProfileOnly.preferences.llmApiKeyProfiles.deepseek.keys[0].label, 'DeepSeek 主 Key');
+});
+
 test('MToon render profile controller applies group-specific tuning and restores from original snapshot', () => {
     const skin = createMockMToonMaterial('AILIS_skin_face');
     const hair = createMockMToonMaterial('AILIS_hair_main');

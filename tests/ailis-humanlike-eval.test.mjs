@@ -32,7 +32,7 @@ test('AILIS humanlike eval relationship stages match product affinity design', (
     assert.equal(relationshipStageFromAffinity(50), 'familiarizing');
     assert.equal(relationshipStageFromAffinity(70), 'trusted');
     assert.equal(relationshipStageFromAffinity(80), 'close');
-    assert.match(relationshipExpectationFromAffinity(50), /温和、熟悉但不过分亲密/);
+    assert.match(relationshipExpectationFromAffinity(50), /自然承接用户偏好的亲昵称呼/);
     assert.match(relationshipExpectationFromAffinity(70), /更熟悉、更自然、更有陪伴感/);
     assert.match(relationshipExpectationFromAffinity(90), /允许明显亲密、主动、轻微撒娇/);
 });

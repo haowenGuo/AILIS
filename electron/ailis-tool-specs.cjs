@@ -18,11 +18,13 @@ const AILIS_TOOL_KIND = Object.freeze({
 });
 
 function isExperimentalOutputStoreToolsEnabled() {
+    const surfaceMode = String(process.env.AILIS_TOOL_SURFACE_MODE || process.env.AIGL_TOOL_SURFACE_MODE || '').toLowerCase();
     return (
         process.env.AILIS_EXPERIMENTAL_OUTPUT_TOOLS === '1' ||
         process.env.AIGL_EXPERIMENTAL_OUTPUT_TOOLS === '1' ||
-        process.env.AILIS_TOOL_SURFACE_MODE === 'codex' ||
-        process.env.AIGL_TOOL_SURFACE_MODE === 'codex'
+        surfaceMode === 'responses' ||
+        surfaceMode === 'full' ||
+        surfaceMode === 'codex'
     );
 }
 
@@ -34,7 +36,11 @@ const AILIS_RUNTIME_TOOL_DEFINITIONS = Object.freeze([
     Object.freeze({
         id: 'update_plan',
         label: 'update_plan',
-        description: 'Update the visible agent plan as a first-class runtime tool.',
+        description: [
+            'Update only the user-visible progress checklist.',
+            'This is a UI/progress bookkeeping tool: it does not inspect files, retrieve data, execute actions, compute answers, or produce task evidence.',
+            'Use sparingly after meaningful progress; if the next step requires real work, call the real tool such as artifact_tools, read, exec, or search instead.'
+        ].join(' '),
         sectionId: 'runtime',
         route: 'ailis-runtime',
         materialized: true,
@@ -67,7 +73,7 @@ const AILIS_RUNTIME_TOOL_DEFINITIONS = Object.freeze([
     Object.freeze({
         id: 'artifact_tools',
         label: 'artifact_tools',
-        description: 'Canonical AILIS Artifact Tools runtime for local file artifacts and attachments: open/index/search/query/aggregate/inspect/render/trace/recalculate/edit/export/roundtrip across XLSX/XLSM/CSV/TSV/PDF/DOCX/PPTX/image adapters. Use for artifact-style tasks involving files, Office documents, spreadsheets, cell colors, formulas, merges, tables, PDFs, pages, images, rendering, or compact evidence.',
+        description: 'Canonical AILIS Artifact Tools runtime for local file artifacts and attachments: open/index/search/query/materialize/aggregate/inspect/render/trace/recalculate/edit/export/roundtrip across XLSX/XLSM/CSV/TSV/PDF/DOCX/PPTX/image adapters. Use materialize to write complex structured evidence such as matrixRows into .ailis-state/workbench/<runId>/inputs for script-based reasoning. Use for artifact-style tasks involving files, Office documents, spreadsheets, cell colors, formulas, merges, tables, PDFs, pages, images, rendering, or compact evidence.',
         sectionId: 'context-artifacts',
         route: 'ailis-runtime',
         materialized: true,
@@ -78,13 +84,13 @@ const AILIS_RUNTIME_TOOL_DEFINITIONS = Object.freeze([
     Object.freeze({
         id: 'artifact_compute',
         label: 'artifact_compute',
-        description: 'Run deterministic data-worker computations on managed context artifacts, such as spreadsheet profiling and grid path search, returning compact reasoning-ready evidence instead of raw payloads.',
+        description: 'Internal compatibility surface for legacy managed context artifact computations. Hidden from model-facing tool discovery; artifact-style file tasks should use artifact_tools.',
         sectionId: 'context-artifacts',
         route: 'ailis-runtime',
         materialized: true,
         status: 'available',
         needsApproval: false,
-        exposure: AILIS_TOOL_EXPOSURE.DEFERRED
+        exposure: AILIS_TOOL_EXPOSURE.HIDDEN
     }),
     Object.freeze({
         id: 'output_read',

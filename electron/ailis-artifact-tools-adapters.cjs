@@ -205,6 +205,41 @@ function normalizeInclude(value = [], fallback = ['values', 'formulas', 'styles'
     return new Set(fallback);
 }
 
+function includeHasCellLevelRequest(include = new Set()) {
+    return [
+        'value',
+        'values',
+        'style',
+        'styles',
+        'fill',
+        'fills',
+        'color',
+        'colors',
+        'formula',
+        'formulas',
+        'comment',
+        'comments',
+        'validation',
+        'datavalidation'
+    ].some((entry) => include.has(entry));
+}
+
+function normalizeXlsxInspectKind(input = {}) {
+    const explicit = String(input.kind || input.inspectKind || input.inspect_kind || '').trim().toLowerCase();
+    if (explicit) {
+        return explicit;
+    }
+    const target = String(input.target || input.range || input.addressRange || input.address_range || '').trim();
+    if (target) {
+        return 'range';
+    }
+    const include = normalizeInclude(input.include, []);
+    if ((input.sheet || input.sheetName || input.sheet_name) && includeHasCellLevelRequest(include)) {
+        return 'range';
+    }
+    return 'workbook';
+}
+
 function clampNumber(value, fallback, min, max) {
     const number = Number(value);
     if (!Number.isFinite(number)) {
@@ -906,7 +941,7 @@ function summarizeWorksheet(sheet, options = {}) {
 }
 
 function buildXlsxInspectView(workbookSummary, input = {}) {
-    const kind = String(input.kind || input.inspectKind || input.inspect_kind || 'workbook').toLowerCase();
+    const kind = normalizeXlsxInspectKind(input);
     const target = input.target || input.range || '';
     const defaultSheetName = input.sheetName || input.sheet || workbookSummary.workbook.sheetNames[0] || '';
     const parsedTarget = parseWorkbookTarget(target, defaultSheetName);
@@ -1314,6 +1349,114 @@ function compactCandidate(match = {}) {
         base.mergeRefs = match.mergeRefs;
     }
     return base;
+}
+
+function compactMatrixValue(value) {
+    if (value === null || typeof value === 'undefined') {
+        return '';
+    }
+    if (typeof value === 'number' || typeof value === 'boolean') {
+        return value;
+    }
+    if (value instanceof Date) {
+        return value.toISOString();
+    }
+    if (typeof value === 'object') {
+        const text = value.text ?? value.result ?? value.hyperlink ?? value.error;
+        if (typeof text !== 'undefined') {
+            return compactMatrixValue(text);
+        }
+        const serialized = JSON.stringify(value);
+        return serialized && serialized.length > 80 ? `${serialized.slice(0, 77)}...` : serialized;
+    }
+    return String(value);
+}
+
+function buildRangeMatrixRows(query = {}) {
+    const rows = Array.isArray(query.rows) ? query.rows : [];
+    const rowCount = Number(query.rowCount || rows.length || 0);
+    const columnCount = Number(query.columnCount || query.columns?.length || 0);
+    const maxMatrixCells = clampNumber(query.maxMatrixCells || query.max_matrix_cells, 250, 1, 2000);
+    if (
+        !rows.length ||
+        !Number.isFinite(rowCount) ||
+        !Number.isFinite(columnCount) ||
+        rowCount * columnCount > maxMatrixCells
+    ) {
+        return [];
+    }
+    return rows.map((row) => {
+        const cells = Array.isArray(row.cells) ? row.cells : [];
+        const values = cells.map((cell) => compactMatrixValue(cell.text || cell.value || ''));
+        const fills = cells.map((cell) => normalizeHex(cell.fillRgb || ''));
+        const formulas = cells.map((cell) => cell.formula || '');
+        const errors = cells.map((cell) => cell.error || '');
+        const output = {
+            rowNumber: row.rowNumber,
+            values,
+            fills
+        };
+        if (formulas.some(Boolean)) {
+            output.formulas = formulas;
+        }
+        if (errors.some(Boolean)) {
+            output.errors = errors;
+        }
+        return output;
+    });
+}
+
+function buildRangeAnchors(matrixRows = [], columns = [], sheetName = '') {
+    const anchors = [];
+    for (const row of Array.isArray(matrixRows) ? matrixRows : []) {
+        const values = Array.isArray(row.values) ? row.values : [];
+        const fills = Array.isArray(row.fills) ? row.fills : [];
+        const formulas = Array.isArray(row.formulas) ? row.formulas : [];
+        const errors = Array.isArray(row.errors) ? row.errors : [];
+        for (let index = 0; index < Math.max(values.length, fills.length, formulas.length, errors.length); index += 1) {
+            const column = columns[index] || colName(index + 1);
+            const ref = `${sheetName ? `${sheetName}!` : ''}${column}${row.rowNumber}`;
+            const value = values[index];
+            const formula = formulas[index] || '';
+            const error = errors[index] || '';
+            const fillRgb = normalizeHex(fills[index] || '');
+            const text = String(value ?? '').trim();
+            if (!text && !formula && !error) {
+                continue;
+            }
+            anchors.push({
+                ref,
+                row: row.rowNumber,
+                col: index + 1,
+                value: text,
+                fillRgb,
+                formula,
+                error
+            });
+            if (anchors.length >= 40) {
+                return anchors;
+            }
+        }
+    }
+    return anchors;
+}
+
+function buildFillLegend(fillHistogram = {}) {
+    return Object.entries(fillHistogram || {})
+        .map(([fillRgb, count]) => ({
+            fillRgb: normalizeHex(fillRgb),
+            count: Number(count || 0)
+        }))
+        .filter((entry) => entry.fillRgb)
+        .sort((left, right) => right.count - left.count || left.fillRgb.localeCompare(right.fillRgb));
+}
+
+function buildRangeReadingGuide(query = {}, compactRows = [], matrixRows = []) {
+    return {
+        completeCompactRows: query.truncated !== true,
+        rowDisplayRule: 'compactRows cells are left-to-right display values; color-only cells are shown as #RRGGBB.',
+        matrixRowsSchema: 'rows[].{rowNumber, values[], fills[], formulas?, errors?}; ref = columns[index] + rowNumber'
+    };
 }
 
 function buildCompactXlsxObservation(input = {}) {
@@ -2268,10 +2411,14 @@ function buildQueryObservation(query = {}) {
             rowNumber: row.rowNumber,
             cells: row.cells
         }));
+        const matrixRows = buildRangeMatrixRows(query);
+        const anchors = buildRangeAnchors(matrixRows, query.columns || [], query.sheetName || '');
+        const fillLegend = buildFillLegend(query.fillHistogram || {});
+        const compactRowSchema = buildRangeReadingGuide(query, compactRows, matrixRows);
         return {
             schema: 'ailis.artifact_tools.compact_observation.v1',
             format: 'xlsx',
-            action: 'query',
+            action: query.action || 'query',
             sourcePath: query.sourcePath || '',
             kind: 'range',
             sheetName: query.sheetName || '',
@@ -2286,21 +2433,14 @@ function buildQueryObservation(query = {}) {
             truncated: query.truncated === true,
             columns: query.columns || [],
             fillHistogram: query.fillHistogram || {},
+            anchors,
+            fillLegend,
+            compactRowSchema,
             compactRows,
+            matrixRows,
+            cellRefRule: matrixRows.length ? 'ref = columns[index] + rowNumber' : '',
+            matrixRowsLossless: matrixRows.length > 0 && query.truncated !== true,
             candidateCount: compactRows.length,
-            nextActions: query.truncated === true ? [{
-                action: 'query',
-                reason: 'range_result_truncated_by_maxRows_or_maxCols',
-                args: {
-                    action: 'query',
-                    sessionId: query.sessionId || '',
-                    sheet: query.sheetName || '',
-                    range: query.range || '',
-                    include: ['values', 'styles', 'formulas', 'comments'],
-                    maxRows: query.requestedRows || query.rowCount || 80,
-                    maxCols: query.requestedColumns || query.columnCount || 40
-                }
-            }] : [],
             diagnostics: (query.diagnostics || []).slice(0, 20).map((diagnostic) => ({
                 code: diagnostic.code,
                 severity: diagnostic.severity,
@@ -2485,6 +2625,51 @@ async function inspectXlsxArtifact(input = {}) {
     const viewMatches = Array.isArray(view.cells)
         ? view.cells.map((cell) => ({ ...cell, kind: 'cell', fullRef: `${view.sheetName}!${cell.ref}`, sheetName: view.sheetName }))
         : [];
+    const rangeData = view.kind === 'range' || view.kind === 'table' || view.kind === 'style' || view.kind === 'computedstyle'
+        ? buildXlsxRangeRows(index, {
+            ...input,
+            action: 'inspect',
+            sheet: view.sheetName || input.sheet || input.sheetName,
+            range: view.target || input.range || input.target,
+            maxRows: input.maxRows || input.max_rows,
+            maxCols: input.maxCols || input.max_cols,
+            maxMatrixCells: input.maxMatrixCells || input.max_matrix_cells
+        })
+        : null;
+    const observation = rangeData?.passed === true
+        ? buildQueryObservation({
+            schema: 'ailis.xlsx.inspect.v1',
+            adapterId: 'xlsx',
+            format: 'xlsx',
+            sourcePath: index.sourcePath,
+            sessionId: input.sessionId || input.session_id || '',
+            action: 'inspect',
+            kind: 'range',
+            passed: true,
+            sheetName: rangeData.sheetName || '',
+            range: rangeData.range || '',
+            requestedRange: rangeData.requestedRange || rangeData.range || '',
+            usedRange: rangeData.usedRange || '',
+            returnedRange: rangeData.returnedRange || '',
+            rowCount: rangeData.rowCount || 0,
+            columnCount: rangeData.columnCount || 0,
+            requestedRows: rangeData.requestedRows || 0,
+            requestedColumns: rangeData.requestedColumns || 0,
+            truncated: rangeData.truncated === true,
+            columns: rangeData.columns || [],
+            rows: rangeData.rows || [],
+            compactGrid: rangeData.compactGrid || [],
+            fillHistogram: rangeData.fillHistogram || {},
+            diagnostics: [...(rangeData.diagnostics || []), ...(validation.diagnostics || [])],
+            maxMatrixCells: input.maxMatrixCells || input.max_matrix_cells
+        })
+        : buildCompactXlsxObservation({
+            index: { ...index, structure: workbookSummary },
+            matches: viewMatches,
+            action: 'inspect',
+            query: input.target || input.range || input.kind || '',
+            diagnostics: [...(rangeData?.diagnostics || []), ...(validation.diagnostics || [])]
+        });
     return {
         format: 'xlsx',
         adapterId: 'xlsx',
@@ -2496,13 +2681,7 @@ async function inspectXlsxArtifact(input = {}) {
             summary: index.summary,
             signature: index.signature
         },
-        observation: buildCompactXlsxObservation({
-            index: { ...index, structure: workbookSummary },
-            matches: viewMatches,
-            action: 'inspect',
-            query: input.target || input.kind || '',
-            diagnostics: validation.diagnostics
-        }),
+        observation,
         validation,
         text: workbookSummary.sheets.flatMap((sheet) => sheet.cells.map((cell) => cell.text).filter(Boolean)).join('\n'),
         diagnostics: validation.diagnostics

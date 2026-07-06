@@ -2291,6 +2291,12 @@ function removeLlmApiKeyProfile(profiles = {}, provider = DEFAULT_LLM_PROVIDER, 
 function llmProviderLabelsForLog(provider = DEFAULT_LLM_PROVIDER) {
     return {
         'openai-compatible': 'OpenAI-compatible',
+        doubao: 'Doubao',
+        deepseek: 'DeepSeek',
+        qwen: 'DashScope',
+        kimi: 'Kimi',
+        zhipu: 'Zhipu',
+        openrouter: 'OpenRouter',
         'openai-responses': 'OpenAI',
         anthropic: 'Anthropic',
         gemini: 'Gemini',
@@ -2357,6 +2363,46 @@ function getEnvironmentLlmApiKey(provider = DEFAULT_LLM_PROVIDER) {
                 process.env.GOOGLE_API_KEY ||
                 process.env.GOOGLE_GENERATIVE_AI_API_KEY ||
                 process.env.AILIS_GEMINI_API_KEY ||
+                ''
+        );
+    }
+    if (normalizedProvider === 'deepseek') {
+        return normalizeLlmApiKey(
+            process.env.DEEPSEEK_API_KEY ||
+                process.env.AILIS_DEEPSEEK_API_KEY ||
+                ''
+        );
+    }
+    if (normalizedProvider === 'qwen') {
+        return normalizeLlmApiKey(
+            process.env.DASHSCOPE_API_KEY ||
+                process.env.QWEN_API_KEY ||
+                process.env.AILIS_DASHSCOPE_API_KEY ||
+                process.env.AILIS_QWEN_API_KEY ||
+                ''
+        );
+    }
+    if (normalizedProvider === 'kimi') {
+        return normalizeLlmApiKey(
+            process.env.MOONSHOT_API_KEY ||
+                process.env.KIMI_API_KEY ||
+                process.env.AILIS_MOONSHOT_API_KEY ||
+                process.env.AILIS_KIMI_API_KEY ||
+                ''
+        );
+    }
+    if (normalizedProvider === 'zhipu') {
+        return normalizeLlmApiKey(
+            process.env.ZHIPU_API_KEY ||
+                process.env.GLM_API_KEY ||
+                process.env.AILIS_ZHIPU_API_KEY ||
+                ''
+        );
+    }
+    if (normalizedProvider === 'openrouter') {
+        return normalizeLlmApiKey(
+            process.env.OPENROUTER_API_KEY ||
+                process.env.AILIS_OPENROUTER_API_KEY ||
                 ''
         );
     }
@@ -2448,7 +2494,7 @@ function getAILISDefaultContext() {
             executeExternal: true,
             allowOutsideWorkspace: true,
             allowComputerWideAccess: true,
-            allowSystemMutation: true
+            allowSystemMutation: false
         };
     }
 

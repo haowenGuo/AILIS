@@ -8,6 +8,8 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { AILISRuntime } = require('../electron/ailis-runtime.cjs');
 const { AILISGateway } = require('../electron/ailis-gateway.cjs');
+const { CompactedItem } = require('../electron/ailis-prompt-model.cjs');
+const { ResponseItem } = require('../electron/ailis-response-model.cjs');
 
 async function jsonFetch(url, options = {}) {
     const response = await fetch(url, {
@@ -48,6 +50,30 @@ test('AILIS runtime guards tool results and repairs incomplete transcripts', asy
     assert.equal(guarded.content[0].truncated, true);
     assert.equal(guarded.details.apiKey, '__REDACTED__');
     assert.equal(guarded.details.guard.tool, 'read');
+    assert.equal(guarded.details.modelVisibleContent.status, 'model_visible_truncated');
+
+    const guardedWorkbenchRead = runtime.guardToolResult(
+        {
+            content: [{ type: 'text', text: `${'{"row":1}\n'.repeat(2000)}`, originalTextChars: 18000 }],
+            details: {
+                status: 'completed',
+                action: 'read',
+                path: path.join(workspaceRoot, '.ailis-state', 'workbench', 'run-map', 'inputs', 'matrixRows.json'),
+                bytesRead: 18000,
+                size: 18000,
+                truncated: false
+            }
+        },
+        { toolId: 'read', callId: 'guard-workbench-read', maxTextChars: 512 }
+    );
+    assert.equal(guardedWorkbenchRead.content[0].modelVisibleTruncated, true);
+    assert.match(guardedWorkbenchRead.content[0].text, /MODEL_VISIBLE_CONTENT_TRUNCATED/);
+    assert.match(guardedWorkbenchRead.content[0].text, /truncationScope=model_visible_tool_result_text/);
+    assert.equal(guardedWorkbenchRead.details.modelVisibleContent.fullFileReadTruncated, false);
+    assert.equal(
+        guardedWorkbenchRead.details.modelVisibleContent.semantics.contentTruncatedMeansModelVisibleProjectionTruncation,
+        true
+    );
 
     await runtime.startRun({
         runId,
@@ -79,6 +105,60 @@ test('AILIS runtime guards tool results and repairs incomplete transcripts', asy
     assert.equal(transcript.ok, true);
     assert.ok(transcript.items.some((item) => item.type === 'tool.result' && item.status === 'repaired_missing_result'));
     assert.ok(transcript.items.some((item) => item.type === 'transcript.repair'));
+});
+
+test('AILIS runtime persists ContextCompaction rollout items and reference context', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-runtime-compaction-'));
+    const auditDir = path.join(workspaceRoot, '.audit');
+    const runtime = new AILISRuntime({
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir
+    });
+    const runId = 'runtime-compaction-run';
+    const sessionId = 'runtime-compaction';
+    const replacementHistory = [
+        ResponseItem.message({ role: 'user', text: 'current task summary' }),
+        ResponseItem.message({ role: 'assistant', text: 'Known fact: START=A1.' })
+    ];
+    const compactedItem = CompactedItem.create({
+        message: 'Compacted task state.',
+        replacement_history: replacementHistory
+    });
+
+    await runtime.startRun({
+        runId,
+        sessionId,
+        message: 'compact this run',
+        planner: 'test'
+    });
+    const written = await runtime.appendContextCompaction(runId, {
+        sessionId,
+        compactedItem,
+        referenceContextItem: {
+            cwd: workspaceRoot,
+            model: 'test-model'
+        },
+        contextManagerCheckpoint: {
+            history_version: 1,
+            items: replacementHistory
+        },
+        reason: 'test_compaction'
+    });
+
+    assert.equal(written.length, 2);
+
+    const transcript = await runtime.readTranscript(runId);
+    const compaction = transcript.items.find((item) => item.type === 'agent.context_compaction');
+    const turnContext = transcript.items.find((item) => item.type === 'agent.turn_context');
+
+    assert.equal(compaction.status, 'installed');
+    assert.equal(compaction.payload.rollout_item.type, 'compacted');
+    assert.deepEqual(compaction.payload.compacted_item.replacement_history, replacementHistory);
+    assert.equal(compaction.payload.context_manager_checkpoint.history_version, 1);
+    assert.equal(turnContext.status, 'captured');
+    assert.equal(turnContext.payload.rollout_item.type, 'turn_context');
+    assert.equal(turnContext.payload.reference_context_item.model, 'test-model');
 });
 
 test('AILIS Gateway exposes runtime tools, update_plan, policy checks, and transcripts', async () => {
@@ -114,6 +194,11 @@ test('AILIS Gateway exposes runtime tools, update_plan, policy checks, and trans
         });
         assert.equal(plan.body.ok, true, plan.body.error);
         assert.equal(plan.body.status, 'completed');
+        assert.equal(plan.body.result.details.completion_scope, 'progress_recorded_only');
+        assert.equal(plan.body.result.details.semantic_role, 'progress_ui_only');
+        assert.equal(plan.body.result.details.produces_evidence, false);
+        assert.equal(plan.body.result.details.task_advanced, false);
+        assert.match(plan.body.result.content[0].text, /did not inspect files/);
         assert.equal(plan.body.result.details.plan[0].step, 'wire the runtime');
 
         const blocked = await callTool(baseUrl, {

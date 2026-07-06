@@ -9855,7 +9855,7 @@ const TOOLS = [
     },
     {
         name: 'read_spreadsheet',
-        description: 'Read an xlsx/xls/csv file and return shape, columns, rows, numeric_sums, and total_numeric_sum as JSON text. Set maxRows high enough when the full table is needed.',
+        description: 'Value-only pandas preview for simple CSV/XLSX tables: returns shape, columns, first rows, numeric_sums, and total_numeric_sum as JSON text. It does not preserve Excel fills/colors, styles, merged cells, formulas, comments, images, hidden metadata, or render layout. For artifact-style spreadsheet tasks, especially cell colors, formulas, maps, comments, tables, hidden rows/sheets, or exact workbook structure, use artifact_tools open/query/inspect/materialize/render instead.',
         inputSchema: {
             type: 'object',
             properties: {

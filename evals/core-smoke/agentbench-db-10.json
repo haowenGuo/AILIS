@@ -1,0 +1,3498 @@
+{
+  "status": "ready",
+  "requested": 10,
+  "available": 10,
+  "sourcePath": "F:\\AILIS_self_evolution_runtime\\build-cache\\benchmarks\\agentbench-main\\data\\dbbench\\dev.jsonl",
+  "tasks": [
+    {
+      "benchmark": "agentbench-db",
+      "smokeId": "agentbench-db-01",
+      "taskId": "dbbench-dev-1",
+      "sourcePath": "F:\\AILIS_self_evolution_runtime\\build-cache\\benchmarks\\agentbench-main\\data\\dbbench\\dev.jsonl",
+      "description": "What is the Presentation of Credentials has a Termination of Mission listed as August 15, 2000?",
+      "label": [
+        "March 19, 1998"
+      ],
+      "create": {
+        "database": "wikisql",
+        "init": "wikisql_init.sql"
+      },
+      "table": {
+        "table_name": "US Ambassadors and Envoy Extraordinary to Colombia",
+        "table_info": {
+          "columns": [
+            {
+              "name": "Representative",
+              "type": "TEXT"
+            },
+            {
+              "name": "Title",
+              "type": "TEXT"
+            },
+            {
+              "name": "Presentation of Credentials",
+              "type": "TEXT"
+            },
+            {
+              "name": "Termination of Mission",
+              "type": "TEXT"
+            },
+            {
+              "name": "Appointed by",
+              "type": "TEXT"
+            }
+          ],
+          "rows": [
+            [
+              "Dabney H. Maury",
+              "Envoy Extraordinary and Minister Plenipotentiary",
+              "January 20, 1887",
+              "June 22, 1889",
+              "Grover Cleveland"
+            ],
+            [
+              "Luther F. McKinney",
+              "Envoy Extraordinary and Minister Plenipotentiary",
+              "July 17, 1893",
+              "December 6, 1896",
+              "Grover Cleveland"
+            ],
+            [
+              "Charles Burdett Hart",
+              "Envoy Extraordinary and Minister Plenipotentiary",
+              "July 19, 1897",
+              "March 19, 1903",
+              "William McKinley"
+            ],
+            [
+              "Arthur M. Beaupre",
+              "Envoy Extraordinary and Minister Plenipotentiary",
+              "April 13, 1903",
+              "December 19, 1903",
+              "Theodore Roosevelt"
+            ],
+            [
+              "William W. Russell",
+              "Envoy Extraordinary and Minister Plenipotentiary",
+              "December 9, 1904",
+              "May 24, 1905",
+              "Theodore Roosevelt"
+            ],
+            [
+              "John Barrett",
+              "Envoy Extraordinary and Minister Plenipotentiary",
+              "November 27, 1905",
+              "September 24, 1906",
+              "Theodore Roosevelt"
+            ],
+            [
+              "Thomas C. Dawson",
+              "Envoy Extraordinary and Minister Plenipotentiary",
+              "October 16, 1907",
+              "April 25, 1909",
+              "Theodore Roosevelt"
+            ],
+            [
+              "Elliott Northcott",
+              "Envoy Extraordinary and Minister Plenipotentiary",
+              "August 13, 1909",
+              "September 16, 1910",
+              "William H. Taft"
+            ],
+            [
+              "Thaddeus Austin Thompson",
+              "Envoy Extraordinary and Minister Plenipotentiary",
+              "August 30, 1913",
+              "June 26, 1916",
+              "Woodrow Wilson"
+            ],
+            [
+              "Hoffman Philip",
+              "Envoy Extraordinary and Minister Plenipotentiary",
+              "February 22, 1919",
+              "May 29, 1922",
+              "Woodrow Wilson"
+            ],
+            [
+              "Samuel H. Piles",
+              "Envoy Extraordinary and Minister Plenipotentiary",
+              "May 29, 1922",
+              "September 17, 1928",
+              "Warren G. Harding"
+            ],
+            [
+              "Jefferson Caffery",
+              "Envoy Extraordinary and Minister Plenipotentiary",
+              "November 28, 1928",
+              "May 20, 1933",
+              "Calvin Coolidge"
+            ],
+            [
+              "Sheldon Whitehouse",
+              "Envoy Extraordinary and Minister Plenipotentiary",
+              "December 6, 1933",
+              "December 8, 1934",
+              "Franklin D. Roosevelt"
+            ],
+            [
+              "Spruille Braden",
+              "Ambassador Extraordinary and Plenipotentiary",
+              "February 15, 1939",
+              "March 12, 1942",
+              "Franklin D. Roosevelt"
+            ],
+            [
+              "John C. Wiley",
+              "Ambassador Extraordinary and Plenipotentiary",
+              "December 16, 1944",
+              "May 3, 1947",
+              "Franklin D. Roosevelt"
+            ],
+            [
+              "Willard L. Beaulac",
+              "Ambassador Extraordinary and Plenipotentiary",
+              "September 30, 1947",
+              "June 29, 1951",
+              "Harry S. Truman"
+            ],
+            [
+              "Capus M. Waynick",
+              "Ambassador Extraordinary and Plenipotentiary",
+              "August 23, 1951",
+              "September 21, 1953",
+              "Harry S. Truman"
+            ],
+            [
+              "Rudolf E. Schoenfeld",
+              "Ambassador Extraordinary and Plenipotentiary",
+              "January 28, 1954",
+              "January 26, 1955",
+              "Dwight D. Eisenhower"
+            ],
+            [
+              "Philip W. Bonsal",
+              "Ambassador Extraordinary and Plenipotentiary",
+              "April 1, 1955",
+              "April 24, 1957",
+              "Dwight D. Eisenhower"
+            ],
+            [
+              "Dempster McIntosh",
+              "Ambassador Extraordinary and Plenipotentiary",
+              "July 30, 1959",
+              "January 6, 1961",
+              "Dwight D. Eisenhower"
+            ],
+            [
+              "Fulton Freeman",
+              "Ambassador Extraordinary and Plenipotentiary",
+              "June 15, 1961",
+              "March 14, 1964",
+              "John F. Kennedy"
+            ],
+            [
+              "Covey T. Oliver",
+              "Ambassador Extraordinary and Plenipotentiary",
+              "August 13, 1964",
+              "August 29, 1966",
+              "Lyndon B. Johnson"
+            ],
+            [
+              "Viron P. Vaky",
+              "Ambassador Extraordinary and Plenipotentiary",
+              "April 5, 1974",
+              "June 23, 1976",
+              "Richard Nixon"
+            ],
+            [
+              "Diego C. Asencio",
+              "Ambassador Extraordinary and Plenipotentiary",
+              "December 6, 1977",
+              "June 22, 1980",
+              "Jimmy Carter"
+            ],
+            [
+              "Thomas D. Boyatt",
+              "Ambassador Extraordinary and Plenipotentiary",
+              "December 3, 1980",
+              "April 14, 1983",
+              "Jimmy Carter"
+            ],
+            [
+              "Lewis Arthur Tambs",
+              "Ambassador Extraordinary and Plenipotentiary",
+              "May 2, 1983",
+              "February 15, 1985",
+              "Ronald Reagan"
+            ],
+            [
+              "Thomas Edmund McNamara",
+              "Ambassador Extraordinary and Plenipotentiary",
+              "October 4, 1988",
+              "August 14, 1991",
+              "Ronald Reagan"
+            ],
+            [
+              "John Doe",
+              "Ambassador Extraordinary and Plenipotentiary",
+              "January 1, 2020",
+              "December 31, 2022",
+              "Donald Trump"
+            ],
+            [
+              "Jane Smith",
+              "Envoy Extraordinary and Minister Plenipotentiary",
+              "June 1, 2018",
+              "May 31, 2021",
+              "Barack Obama"
+            ],
+            [
+              "Robert Jones",
+              "Ambassador Extraordinary and Plenipotentiary",
+              "March 1, 2019",
+              "February 28, 2022",
+              "Joe Biden"
+            ],
+            [
+              "Amanda Lee",
+              "Envoy Extraordinary and Minister Plenipotentiary",
+              "September 1, 2020",
+              "August 31, 2023",
+              "Donald Trump"
+            ],
+            [
+              "Kevin Kim",
+              "Ambassador Extraordinary and Plenipotentiary",
+              "December 1, 2021",
+              "November 30, 2024",
+              "Joe Biden"
+            ],
+            [
+              "Sarah Johnson",
+              "Envoy Extraordinary and Minister Plenipotentiary",
+              "July 1, 2019",
+              "June 30, 2022",
+              "Donald Trump"
+            ],
+            [
+              "Michael Brown",
+              "Ambassador Extraordinary and Plenipotentiary",
+              "August 1, 2020",
+              "July 31, 2023",
+              "Joe Biden"
+            ],
+            [
+              "Rachel Garcia",
+              "Envoy Extraordinary and Minister Plenipotentiary",
+              "October 1, 2022",
+              "September 30, 2025",
+              "Kamala Harris"
+            ],
+            [
+              "Daniel Lee",
+              "Ambassador Extraordinary and Plenipotentiary",
+              "February 1, 2023",
+              "January 31, 2026",
+              "Joe Biden"
+            ],
+            [
+              "Alexis Kim",
+              "Envoy Extraordinary and Minister Plenipotentiary",
+              "April 1, 2024",
+              "March 31, 2027",
+              "Hillary Clinton"
+            ]
+          ]
+        }
+      },
+      "estimatedBudget": {
+        "maxAgentSteps": 6,
+        "maxInputTokens": 60000,
+        "maxOutputTokens": 5000
+      }
+    },
+    {
+      "benchmark": "agentbench-db",
+      "smokeId": "agentbench-db-02",
+      "taskId": "dbbench-dev-2",
+      "sourcePath": "F:\\AILIS_self_evolution_runtime\\build-cache\\benchmarks\\agentbench-main\\data\\dbbench\\dev.jsonl",
+      "description": "his nickname is \"jimmy,\" but what is his full name?",
+      "label": [
+        "Checco D'Angelo"
+      ],
+      "create": {
+        "database": "wikitq",
+        "init": "wikitq_init.sql"
+      },
+      "table": {
+        "table_name": "race_results",
+        "table_info": {
+          "columns": [
+            {
+              "name": "Class",
+              "type": "TEXT"
+            },
+            {
+              "name": "No",
+              "type": "INT"
+            },
+            {
+              "name": "Team",
+              "type": "TEXT"
+            },
+            {
+              "name": "Drivers",
+              "type": "TEXT"
+            },
+            {
+              "name": "Chassis",
+              "type": "TEXT"
+            },
+            {
+              "name": "Engine",
+              "type": "TEXT"
+            },
+            {
+              "name": "Laps",
+              "type": "INT"
+            }
+          ],
+          "rows": [
+            [
+              "S\\n1.6",
+              "160",
+              "Silvestre Semilia",
+              "Silvestre Semilia\\n Giuseppe Crescenti",
+              "Alfa Romeo Giulia Spider",
+              "Alfa Romeo 1.6 I4",
+              "6"
+            ],
+            [
+              "GT\\n1.6",
+              "186",
+              "Luigi Rinaldi",
+              "Luigi Rinaldi\\n Mario Radicella",
+              "Alfa Romeo GTA",
+              "Alfa Romeo 1.6 I4",
+              "6"
+            ],
+            [
+              "P\\n3.0",
+              "14",
+              "Autodelta SpA",
+              "Toine Hezemans\\n Masten Gregory",
+              "Alfa Romeo T33/3",
+              "Alfa Romeo 3.0L V8",
+              "5"
+            ],
+            [
+              "P\\n2.0",
+              "52",
+              "Etna",
+              "\"Peter von Serzawa\"\\n Santo Scigliano",
+              "Fiat 124 Spider",
+              "Fiat 2.0L I4",
+              "5"
+            ],
+            [
+              "GT\\n1.6",
+              "188",
+              "Etna",
+              "Checco D'Angelo\\n \"Jimmy\"",
+              "Alfa Romeo GTA",
+              "Alfa Romeo 1.6L I4",
+              "5"
+            ],
+            [
+              "GT\\n1.3",
+              "288",
+              "V10 Kleber",
+              "Ferdi Bökmann\\n Hans E. Böhm",
+              "Simca 1300",
+              "Simca 1.3L I4",
+              "5"
+            ],
+            [
+              "GT\\n2.0",
+              "128",
+              "",
+              "Ignazio Capuano\\n Giancarlo Barba",
+              "Porsche 911S",
+              "Porsche 2.0L Flat-6",
+              "4"
+            ],
+            [
+              "GT\\n1.6",
+              "180",
+              "Scuderia Pegaso",
+              "Paolo de Luca\\n Giuseppe Vassallo",
+              "Alfa Romeo GTA",
+              "Alfa Romeo 1.6L I4",
+              "4"
+            ],
+            [
+              "S\\n1.6",
+              "156",
+              "Scuderia Pegaso",
+              "Salvatore Barraco\\n \"Amphicar\"",
+              "Alfa Romeo Giulia TZ",
+              "Alfa Romeo 1.6L I4",
+              "3"
+            ],
+            [
+              "S\\n1.6",
+              "156",
+              "Etna",
+              "Giuseppe D'Amico\\n Girolamo Perniciaro",
+              "Alfa Romeo Giulia TZ",
+              "Alfa Romeo 1.6L I4",
+              "3"
+            ],
+            [
+              "GT\\n1.6",
+              "192",
+              "Scuderia Pegaso",
+              "Giovanni Dell'Olio\\n Vincenzo Virgilio",
+              "Alfa Romeo GTA",
+              "Alfa Romeo 1.6L I4",
+              "3"
+            ],
+            [
+              "GT\\n1.6",
+              "198",
+              "Salvatore Gagliano",
+              "Salvatore Gagliano\\n Alfonso di Garbo",
+              "Alfa Romeo GTA",
+              "Alfa Romeo 1.6L I4",
+              "3"
+            ],
+            [
+              "GT\\n1.6",
+              "204",
+              "Gianluigi Verna",
+              "Francesco Cosentino\\n Gianluigi Verna",
+              "Alfa Romeo GTA",
+              "Alfa Romeo 1.6L I4",
+              "3"
+            ],
+            [
+              "P\\n1.0",
+              "254",
+              "Romano Martini",
+              "Francesco Patané\\n \"Oras\"",
+              "Fiat-Abarth 1000SP",
+              "Abarth 1.0L I4",
+              "3"
+            ],
+            [
+              "GT\\n1.6",
+              "264",
+              "Romano Martini",
+              "Romano Martini\\n Alessandro Federico",
+              "ATS 1000 SP",
+              "Ford 1.0L I4",
+              "3"
+            ],
+            [
+              "P\\n3.0",
+              "38",
+              "Abarth-Osella",
+              "Arturo Merzario\\n Johannes Ortner",
+              "Abarth 3000SP",
+              "Abarth 3.0L V8",
+              "2"
+            ],
+            [
+              "P\\n1.0",
+              "256",
+              "Scuderia Brescia Corse",
+              "Luigi Moreschi\\n \"Patrizia\"",
+              "AMS SP",
+              "Ford 1.0L I4",
+              "2"
+            ],
+            [
+              "P\\n1.0",
+              "266",
+              "\"Gero\"",
+              "\"Gero\"\\n \"Roger\"",
+              "De Sanctis",
+              "Ford 1.0L I4",
+              "2"
+            ],
+            [
+              "GT\\n1.6",
+              "276",
+              "Scuderia Pegaso",
+              "Antonio Catalano\\n Marco de Bartoli",
+              "Lancia Fulvia HF",
+              "Lancia 1.6L V4",
+              "2"
+            ],
+            [
+              "GT\\n2.0",
+              "124",
+              "Giampaolo Baruffi",
+              "Giancarlo Sala\\n Giampaolo Baruffi",
+              "Porsche 911",
+              "Porsche 2.0L Flat-6",
+              "1"
+            ],
+            [
+              "GT\\n1.6",
+              "196",
+              "Giovanni Rizzo",
+              "Giovanni Rizzo\\n Stefano Alongi",
+              "Alfa Romeo GTA",
+              "Alfa Romeo 1.6L I4",
+              "1"
+            ],
+            [
+              "S\\n1.3",
+              "232",
+              "Aldo Bersano",
+              "Aldo Bersano\\n William Scheeren",
+              "Abarth 1300S",
+              "Abarth 1.3L I4",
+              "1"
+            ],
+            [
+              "GT\\n1.3",
+              "272",
+              "Jolly Club",
+              "Antonio Trenti\\n Alberto Fasce",
+              "Lancia Fulvia HF",
+              "Lancia 1.6L V4",
+              "1"
+            ],
+            [
+              "P\\n3.0",
+              "20",
+              "Porsche System",
+              "Vic Elford\\n Hans Herrmann",
+              "Porsche 908/03",
+              "Porsche 3.0L Flat-8",
+              "0"
+            ],
+            [
+              "P\\n3.0",
+              "32",
+              "Autodelta SpA",
+              "Umberto Maglioli\\n Nanni Galli",
+              "Alfa Romeo T33/3",
+              "Alfa Romeo 3.0L V8",
+              "0"
+            ],
+            [
+              "GT\\n1.6",
+              "204",
+              "Antonio Guagliardo",
+              "Antonio La Luce\\n Antonio Guagliardo",
+              "Abarth 2000S",
+              "Alfa Romeo 1.6L I4",
+              "0"
+            ],
+            [
+              "P\\n1.3",
+              "220",
+              "Jack Wheeler",
+              "Jack Wheeler\\n Martin Davidson",
+              "Jerboa SP",
+              "BMC 1.3L I4",
+              "0"
+            ],
+            [
+              "S\\n1.3",
+              "234",
+              "Settecolli",
+              "Enzo Buzzetti\\n Gianni Marini",
+              "Abarth 1300S",
+              "Abarth 1.6L I4",
+              "0"
+            ],
+            [
+              "GT\\n1.3",
+              "280",
+              "Scuderia Pegaso",
+              "Giuseppe Chiaramonte\\n Giuseppe Spatafora",
+              "Lancia Fulvia HF",
+              "Lancia 1.6L V4",
+              "0"
+            ],
+            [
+              "Class TEXT",
+              "No INT",
+              "Team TEXT",
+              "Drivers TEXT",
+              "Chassis TEXT",
+              "Engine TEXT",
+              "Laps INT"
+            ],
+            [
+              "GT\\n1.6",
+              "190",
+              "Scuderia Pegaso",
+              "Giovanni Florio\\n Dr. Piero Baruffi",
+              "Alfa Romeo GTA",
+              "Alfa Romeo 1.6L I4",
+              "5"
+            ],
+            [
+              "P\\n3.0",
+              "26",
+              "Autodelta SpA",
+              "Franco Labate\\n Andrea Niccolai",
+              "Alfa Romeo T33/3",
+              "Alfa Romeo 3.0L V8",
+              "4"
+            ],
+            [
+              "GT\\n2.0",
+              "120",
+              "Scuderia Pegaso",
+              "Pino Castello\\n Filippo Caldara",
+              "Porsche 911",
+              "Porsche 2.0L Flat-6",
+              "6"
+            ],
+            [
+              "S\\n1.6",
+              "162",
+              "Giovanni d'Amico",
+              "Giovanni d'Amico\\n Mario Attard",
+              "Alfa Romeo GTA",
+              "Alfa Romeo 1.6L I4",
+              "4"
+            ],
+            [
+              "GT\\n1.6",
+              "194",
+              "Scuderia Pegaso",
+              "Ninì Todaro\\n Giovanni Mollica",
+              "Alfa Romeo GTA",
+              "Alfa Romeo 1.6L I4",
+              "3"
+            ],
+            [
+              "GT\\n1.6",
+              "200",
+              "Giuseppe Simone",
+              "Giuseppe Simone\\n Giuseppe Rabito",
+              "Alfa Romeo GTA",
+              "Alfa Romeo 1.6L I4",
+              "3"
+            ],
+            [
+              "P\\n1.0",
+              "260",
+              "Scuderia Brescia Corse",
+              "Giorgio Moreschi\\n Franco Morosini",
+              "AMS SP",
+              "Ford 1.0L I4",
+              "2"
+            ],
+            [
+              "GT\\n1.6",
+              "286",
+              "Scuderia Pegaso",
+              "Francesco Restivo\\n Salvatore Cali",
+              "Fiat-Abarth 1000",
+              "Abarth 1.0L I4",
+              "2"
+            ],
+            [
+              "P\\n3.0",
+              "44",
+              "David Piper Racing",
+              "David Piper\\n Tony Maggs",
+              "Ferrari 365 P2",
+              "Ferrari 4.0L V12",
+              "1"
+            ]
+          ]
+        }
+      },
+      "estimatedBudget": {
+        "maxAgentSteps": 6,
+        "maxInputTokens": 60000,
+        "maxOutputTokens": 5000
+      }
+    },
+    {
+      "benchmark": "agentbench-db",
+      "smokeId": "agentbench-db-03",
+      "taskId": "dbbench-dev-3",
+      "sourcePath": "F:\\AILIS_self_evolution_runtime\\build-cache\\benchmarks\\agentbench-main\\data\\dbbench\\dev.jsonl",
+      "description": "how many weeks did julie covington's \"don't cry for me argentina\" spend at the top of australia's singles chart?",
+      "label": [
+        "7"
+      ],
+      "create": {
+        "database": "wikitq",
+        "init": "wikitq_init.sql"
+      },
+      "table": {
+        "table_name": "Music Chart History",
+        "table_info": {
+          "columns": [
+            {
+              "name": "#",
+              "type": "INT"
+            },
+            {
+              "name": "Title",
+              "type": "TEXT"
+            },
+            {
+              "name": "Artist",
+              "type": "TEXT"
+            },
+            {
+              "name": "Highest pos. reached",
+              "type": "INT"
+            },
+            {
+              "name": "weeks at No. 1",
+              "type": "TEXT"
+            }
+          ],
+          "rows": [
+            [
+              "1.",
+              "\"Don't Cry for Me Argentina\"",
+              "Julie Covington",
+              "1",
+              "7"
+            ],
+            [
+              "2.",
+              "\"The Way You That You Do It\"",
+              "Pussyfoot",
+              "1",
+              "7"
+            ],
+            [
+              "3.",
+              "\"I Just Want to Be Your Everything\"",
+              "Andy Gibb",
+              "1",
+              "7"
+            ],
+            [
+              "4.",
+              "\"That's Rock and Roll\"",
+              "Shaun Cassidy",
+              "2",
+              ""
+            ],
+            [
+              "5.",
+              "\"Living Next Door to Alice\"",
+              "Smokie",
+              "2",
+              ""
+            ],
+            [
+              "6.",
+              "\"I Go To Rio\"",
+              "Peter Allen",
+              "1",
+              "5"
+            ],
+            [
+              "7.",
+              "\"Torn Between Two Lovers\"",
+              "Mary McGregor",
+              "1",
+              "4"
+            ],
+            [
+              "8.",
+              "\"Walk Right In\"",
+              "Dr Hook",
+              "1",
+              "5"
+            ],
+            [
+              "9.",
+              "\"You're Moving Out Today\"",
+              "Carole Bayer Sager",
+              "1",
+              "4"
+            ],
+            [
+              "10.",
+              "\"If You Leave Me Now\"",
+              "Chicago",
+              "1",
+              "5 (pkd #1 in 76 & 77)"
+            ],
+            [
+              "11.",
+              "\"Don't Give Up on Us\"",
+              "David Soul",
+              "1",
+              "3"
+            ],
+            [
+              "12.",
+              "\"Lido Shuffle\" / \"What Can I Say\"",
+              "Boz Scaggs",
+              "2",
+              ""
+            ],
+            [
+              "13.",
+              "\"You and Me\"",
+              "Alice Cooper",
+              "2",
+              ""
+            ],
+            [
+              "14.",
+              "\"Dance Little Lady Dance\"",
+              "Tina Charles",
+              "4",
+              ""
+            ],
+            [
+              "15.",
+              "\"When I Need You\"",
+              "Leo Sayer",
+              "8",
+              ""
+            ],
+            [
+              "16.",
+              "\"Don't Fall in Love\"",
+              "Ferrets",
+              "2",
+              ""
+            ],
+            [
+              "17.",
+              "\"I Feel Love\"",
+              "Donna Summer",
+              "1",
+              "1"
+            ],
+            [
+              "18.",
+              "\"Help is on its Way\"",
+              "Little River Band",
+              "1",
+              "1"
+            ],
+            [
+              "19.",
+              "\"You Gotta Get Up and Dance\"",
+              "Supercharge",
+              "3",
+              ""
+            ],
+            [
+              "20.",
+              "\"Mull of Kintyre\"",
+              "Wings",
+              "1",
+              "11 (pkd #1 in 77 & 78)"
+            ],
+            [
+              "21.",
+              "\"Don't Leave Me This Way\"",
+              "Thelma Houston",
+              "6",
+              ""
+            ],
+            [
+              "22.",
+              "\"Ain't Gonna Bump No More with No Big Fat Woman\"",
+              "Joe Tex",
+              "2",
+              ""
+            ],
+            [
+              "23.",
+              "\"You're in My Heart\"",
+              "Rod Stewart",
+              "1",
+              "1"
+            ],
+            [
+              "24.",
+              "\"Ma Baker\"",
+              "Boney M",
+              "5",
+              ""
+            ],
+            [
+              "25.",
+              "\"Lucille\"",
+              "Kenny Rogers",
+              "7",
+              ""
+            ],
+            [
+              "26.",
+              "\"Livin' la Vida Loca\"",
+              "Ricky Martin",
+              "1",
+              "3"
+            ],
+            [
+              "27.",
+              "\"Smooth\"",
+              "Santana featuring Rob Thomas",
+              "1",
+              "12"
+            ],
+            [
+              "28.",
+              "\"No Scrubs\"",
+              "TLC",
+              "3",
+              ""
+            ],
+            [
+              "29.",
+              "\"All Star\"",
+              "Smash Mouth",
+              "4",
+              ""
+            ],
+            [
+              "30.",
+              "\"Baby One More Time\"",
+              "Britney Spears",
+              "1",
+              "2"
+            ],
+            [
+              "31.",
+              "\"Say My Name\"",
+              "Destiny's Child",
+              "1",
+              "3"
+            ],
+            [
+              "32.",
+              "\"Genie in a Bottle\"",
+              "Christina Aguilera",
+              "1",
+              "5"
+            ],
+            [
+              "33.",
+              "\"Smooth Criminal\"",
+              "Michael Jackson",
+              "7",
+              ""
+            ],
+            [
+              "34.",
+              "\"I Will Always Love You\"",
+              "Whitney Houston",
+              "1",
+              "10"
+            ],
+            [
+              "35.",
+              "\"You Are Not Alone\"",
+              "Michael Jackson",
+              "1",
+              "5"
+            ]
+          ]
+        }
+      },
+      "estimatedBudget": {
+        "maxAgentSteps": 6,
+        "maxInputTokens": 60000,
+        "maxOutputTokens": 5000
+      }
+    },
+    {
+      "benchmark": "agentbench-db",
+      "smokeId": "agentbench-db-04",
+      "taskId": "dbbench-dev-4",
+      "sourcePath": "F:\\AILIS_self_evolution_runtime\\build-cache\\benchmarks\\agentbench-main\\data\\dbbench\\dev.jsonl",
+      "description": "how many floors does the capitol square have?",
+      "label": [
+        "26"
+      ],
+      "create": {
+        "database": "wikitq",
+        "init": "wikitq_init.sql"
+      },
+      "table": {
+        "table_name": "skyscrapers_in_Columbus",
+        "table_info": {
+          "columns": [
+            {
+              "name": "Rank",
+              "type": "integer"
+            },
+            {
+              "name": "Name",
+              "type": "TEXT"
+            },
+            {
+              "name": "Height\\nft / m",
+              "type": "TEXT"
+            },
+            {
+              "name": "Floors",
+              "type": "integer"
+            },
+            {
+              "name": "Year",
+              "type": "integer"
+            },
+            {
+              "name": "Notes",
+              "type": "TEXT"
+            }
+          ],
+          "rows": [
+            [
+              "1",
+              "Rhodes State Office Tower",
+              "629 / 192",
+              "41",
+              "1973",
+              "Has been the tallest building in Columbus and the tallest mid-block skyscraper in Ohio since 1973. Tallest building constructed in Columbus in the 1970s."
+            ],
+            [
+              "2",
+              "LeVeque Tower",
+              "555 / 169",
+              "47",
+              "1927",
+              "Tallest building constructed in Columbus in the 1920s."
+            ],
+            [
+              "3",
+              "William Green Building",
+              "530 / 162",
+              "33",
+              "1990",
+              "Tallest building constructed in Columbus in the 1990s."
+            ],
+            [
+              "4",
+              "Huntington Center",
+              "512 / 156",
+              "37",
+              "1984",
+              "Tallest building constructed in Columbus in the 1980s."
+            ],
+            [
+              "5",
+              "Vern Riffe State Office Tower",
+              "503 / 153",
+              "32",
+              "1988",
+              ""
+            ],
+            [
+              "6",
+              "One Nationwide Plaza",
+              "485 / 148",
+              "40",
+              "1976",
+              ""
+            ],
+            [
+              "7",
+              "Franklin County Courthouse",
+              "464 / 141",
+              "27",
+              "1991",
+              ""
+            ],
+            [
+              "8",
+              "AEP Building",
+              "456 / 139",
+              "31",
+              "1983",
+              ""
+            ],
+            [
+              "9",
+              "Borden Building",
+              "438 / 134",
+              "34",
+              "1974",
+              ""
+            ],
+            [
+              "10",
+              "Three Nationwide Plaza",
+              "408 / 124",
+              "27",
+              "1989",
+              ""
+            ],
+            [
+              "11",
+              "One Columbus Center",
+              "366 / 112",
+              "26",
+              "1987",
+              ""
+            ],
+            [
+              "12",
+              "Columbus Center",
+              "357 / 109",
+              "25",
+              "1964",
+              "Tallest building constructed in Columbus in the 1960s. Was built as the Bank One Tower."
+            ],
+            [
+              "13",
+              "Capitol Square",
+              "350 / 107",
+              "26",
+              "1984",
+              ""
+            ],
+            [
+              "14",
+              "Continental Center",
+              "348 / 106",
+              "26",
+              "1973",
+              ""
+            ],
+            [
+              "15",
+              "PNC Bank Building",
+              "317 / 97",
+              "25",
+              "1977",
+              ""
+            ],
+            [
+              "16",
+              "Miranova Condominiums",
+              "314 / 96",
+              "26",
+              "2001",
+              "Tallest residential building in the state of Ohio. Tallest building built in the 2000s."
+            ],
+            [
+              "17",
+              "Fifth Third Center",
+              "302 / 92",
+              "25",
+              "1998",
+              ""
+            ],
+            [
+              "18",
+              "Motorists Mutual Building",
+              "286 / 87",
+              "21",
+              "1973",
+              ""
+            ],
+            [
+              "19",
+              "Midland Building",
+              "280 / 85",
+              "21",
+              "1970",
+              ""
+            ],
+            [
+              "20",
+              "The Condominiums at North Bank Park",
+              "267 / 81",
+              "20",
+              "2007",
+              ""
+            ],
+            [
+              "21=",
+              "Lincoln Tower Dormitory",
+              "260 / 79",
+              "26",
+              "1967",
+              ""
+            ],
+            [
+              "21=",
+              "Morrill Tower Dormitory",
+              "260 / 79",
+              "26",
+              "1967",
+              ""
+            ],
+            [
+              "23",
+              "Hyatt Regency Columbus",
+              "256 / 78",
+              "20",
+              "1980",
+              ""
+            ],
+            [
+              "24",
+              "Key Bank Building",
+              "253 / 77",
+              "20",
+              "1963",
+              ""
+            ],
+            [
+              "25",
+              "Adam's Mark Hotel",
+              "243 / 74",
+              "16",
+              "1961",
+              ""
+            ],
+            [
+              "26",
+              "Town Center",
+              "226 / 69",
+              "17",
+              "1974",
+              ""
+            ],
+            [
+              "27",
+              "8 East Broad Street",
+              "212 / 64.6",
+              "17",
+              "1906",
+              ""
+            ],
+            [
+              "28",
+              "Huntington Building",
+              "202 / 59.4",
+              "13",
+              "1926",
+              ""
+            ],
+            [
+              "29",
+              "Ohio Judicial Center",
+              "200 / 57.9",
+              "14",
+              "1933",
+              ""
+            ],
+            [
+              "30",
+              "16 East Broad Street",
+              "180 / 64.4",
+              "13",
+              "1900",
+              ""
+            ],
+            [
+              "31",
+              "ABC Building",
+              "300 / 91",
+              "25",
+              "1995",
+              ""
+            ],
+            [
+              "32",
+              "XYZ Tower",
+              "450 / 137",
+              "35",
+              "2005",
+              "Tallest building in the city."
+            ],
+            [
+              "33",
+              "Def Plaza",
+              "280 / 85",
+              "22",
+              "2010",
+              ""
+            ],
+            [
+              "34",
+              "GHI Tower",
+              "600 / 183",
+              "45",
+              "1990",
+              ""
+            ],
+            [
+              "35",
+              "JKL Center",
+              "350 / 107",
+              "28",
+              "1988",
+              ""
+            ],
+            [
+              "36",
+              "MNO Building",
+              "250 / 76",
+              "20",
+              "1997",
+              ""
+            ],
+            [
+              "37",
+              "PQR House",
+              "175 / 53",
+              "15",
+              "1982",
+              ""
+            ],
+            [
+              "38",
+              "STU Tower",
+              "410 / 125",
+              "33",
+              "2003",
+              ""
+            ],
+            [
+              "39",
+              "VWX Building",
+              "310 / 94",
+              "25",
+              "1999",
+              ""
+            ],
+            [
+              "40",
+              "YZA Plaza",
+              "500 / 152",
+              "40",
+              "2001",
+              ""
+            ]
+          ]
+        }
+      },
+      "estimatedBudget": {
+        "maxAgentSteps": 6,
+        "maxInputTokens": 60000,
+        "maxOutputTokens": 5000
+      }
+    },
+    {
+      "benchmark": "agentbench-db",
+      "smokeId": "agentbench-db-05",
+      "taskId": "dbbench-dev-5",
+      "sourcePath": "F:\\AILIS_self_evolution_runtime\\build-cache\\benchmarks\\agentbench-main\\data\\dbbench\\dev.jsonl",
+      "description": "What is the total game number with athlone town as the opponent?",
+      "label": [
+        "1.0"
+      ],
+      "create": {
+        "database": "wikisql",
+        "init": "wikisql_init.sql"
+      },
+      "table": {
+        "table_name": "Game Schedule",
+        "table_info": {
+          "columns": [
+            {
+              "name": "Game",
+              "type": "TEXT"
+            },
+            {
+              "name": "Date",
+              "type": "TEXT"
+            },
+            {
+              "name": "Opponent",
+              "type": "TEXT"
+            },
+            {
+              "name": "Venue",
+              "type": "TEXT"
+            },
+            {
+              "name": "Result",
+              "type": "TEXT"
+            },
+            {
+              "name": "Attendance",
+              "type": "TEXT"
+            }
+          ],
+          "rows": [
+            [
+              "1",
+              "20 July 2008",
+              "Sporting CP",
+              "Away",
+              "3–1",
+              "—"
+            ],
+            [
+              "2",
+              "22 July 2008",
+              "Vitória de Setúbal",
+              "Away",
+              "1–1",
+              "—"
+            ],
+            [
+              "3",
+              "28 July 2008",
+              "Cobh Ramblers",
+              "Away",
+              "4–0",
+              "—"
+            ],
+            [
+              "4",
+              "30 July 2008",
+              "Nottingham Forest",
+              "Away",
+              "1–0",
+              "12,573"
+            ],
+            [
+              "5",
+              "3 August 2008",
+              "Ajax",
+              "Home",
+              "0–1",
+              "19,768"
+            ],
+            [
+              "6",
+              "7 August 2008",
+              "Athlone Town",
+              "Away",
+              "6–0",
+              "—"
+            ],
+            [
+              "7",
+              "9 August 2008",
+              "Shamrock Rovers",
+              "Away",
+              "Postponed",
+              "—"
+            ],
+            [
+              "8",
+              "12 August 2008",
+              "FC Porto",
+              "Home",
+              "2–2",
+              "24,691"
+            ],
+            [
+              "9",
+              "15 August 2008",
+              "Bohemian FC",
+              "Away",
+              "3–0",
+              "—"
+            ],
+            [
+              "10",
+              "20 August 2008",
+              "St Patrick's Athletic",
+              "Home",
+              "1–0",
+              "20,407"
+            ],
+            [
+              "11",
+              "25 August 2008",
+              "Cork City",
+              "Away",
+              "2–1",
+              "—"
+            ],
+            [
+              "12",
+              "29 August 2008",
+              "Derry City",
+              "Home",
+              "0–0",
+              "18,743"
+            ],
+            [
+              "13",
+              "4 September 2008",
+              "Bray Wanderers",
+              "Away",
+              "4–1",
+              "—"
+            ],
+            [
+              "14",
+              "7 September 2008",
+              "Sligo Rovers",
+              "Home",
+              "2–0",
+              "22,692"
+            ],
+            [
+              "15",
+              "13 September 2008",
+              "Drogheda United",
+              "Away",
+              "1–0",
+              "—"
+            ],
+            [
+              "16",
+              "19 September 2008",
+              "Galway United",
+              "Home",
+              "3–1",
+              "21,873"
+            ],
+            [
+              "17",
+              "24 September 2008",
+              "UCD",
+              "Away",
+              "2–0",
+              "—"
+            ]
+          ]
+        }
+      },
+      "estimatedBudget": {
+        "maxAgentSteps": 6,
+        "maxInputTokens": 60000,
+        "maxOutputTokens": 5000
+      }
+    },
+    {
+      "benchmark": "agentbench-db",
+      "smokeId": "agentbench-db-06",
+      "taskId": "dbbench-dev-6",
+      "sourcePath": "F:\\AILIS_self_evolution_runtime\\build-cache\\benchmarks\\agentbench-main\\data\\dbbench\\dev.jsonl",
+      "description": "what is the total number of register listings from dover?",
+      "label": [
+        "17"
+      ],
+      "create": {
+        "database": "wikitq",
+        "init": "wikitq_init.sql"
+      },
+      "table": {
+        "table_name": "historic_sites",
+        "table_info": {
+          "columns": [
+            {
+              "name": "",
+              "type": "TEXT"
+            },
+            {
+              "name": "Name on the Register",
+              "type": "DATE"
+            },
+            {
+              "name": "Date listed",
+              "type": "TEXT"
+            },
+            {
+              "name": "Location",
+              "type": "TEXT"
+            },
+            {
+              "name": "City or town",
+              "type": "TEXT"
+            },
+            {
+              "name": "Summary",
+              "type": "TEXT"
+            }
+          ],
+          "rows": [
+            [
+              "1",
+              "Back River Farm",
+              "June 22, 1984\\n(#84003236)",
+              "Bay View Rd.\\n43°08′21″N 70°51′16″W﻿ / ﻿43.139167°N 70.854444°W",
+              "Dover",
+              ""
+            ],
+            [
+              "2",
+              "Canaan Chapel",
+              "March 11, 1982\\n(#82001877)",
+              "Canaan Rd.\\n43°12′09″N 71°06′04″W﻿ / ﻿43.2025°N 71.101111°W",
+              "Barrington",
+              ""
+            ],
+            [
+              "3",
+              "County Farm Bridge",
+              "May 21, 1975\\n(#75000237)",
+              "Northwest of Dover on County Farm Rd.\\n43°13′14″N 70°56′38″W﻿ / ﻿43.220556°N 70.943889°W",
+              "Dover",
+              "Over Cocheco River"
+            ],
+            [
+              "4",
+              "Durham Historic District",
+              "May 31, 1980\\n(#80000308)",
+              "Main St. and Newmarket Rd.\\n43°07′47″N 70°55′10″W﻿ / ﻿43.129722°N 70.919444°W",
+              "Durham",
+              ""
+            ],
+            [
+              "5",
+              "Farmington Town Pound",
+              "September 2, 1993\\n(#93000884)",
+              "Northwestern side of Pound Rd. 300 ft (91 m) north of the junction of Ten Rod Rd.\\n43°21′33″N 71°04′49″W﻿ / ﻿43.359167°N 71.080278°W",
+              "Farmington",
+              ""
+            ],
+            [
+              "6",
+              "First Parish Church",
+              "March 11, 1982\\n(#82001696)",
+              "218 Central Ave.\\n43°10′56″N 70°52′27″W﻿ / ﻿43.182222°N 70.874167°W",
+              "Dover",
+              ""
+            ],
+            [
+              "7",
+              "First Parish Church Site-Dover Point",
+              "May 27, 1983\\n(#83001153)",
+              "Dover Point Rd.\\n43°08′26″N 70°50′21″W﻿ / ﻿43.140556°N 70.839167°W",
+              "Dover",
+              ""
+            ],
+            [
+              "8",
+              "Free Will Baptist Church",
+              "November 13, 1980\\n(#80000310)",
+              "Ridge Top Road\\n43°23′59″N 71°09′33″W﻿ / ﻿43.399722°N 71.159167°W",
+              "New Durham",
+              ""
+            ],
+            [
+              "9",
+              "Garrison Hill Park and Tower",
+              "September 11, 1987\\n(#87001413)",
+              "Abbie Sawyer Memorial Dr.\\n43°12′34″N 70°52′13″W﻿ / ﻿43.209444°N 70.870278°W",
+              "Dover",
+              ""
+            ],
+            [
+              "10",
+              "Green Street School",
+              "March 7, 1985\\n(#85000481)",
+              "104 Green St.\\n43°15′23″N 70°51′50″W﻿ / ﻿43.256389°N 70.863889°W",
+              "Somersworth",
+              ""
+            ],
+            [
+              "11",
+              "William Hale House",
+              "November 18, 1980\\n(#80000309)",
+              "5 Hale St.\\n43°11′36″N 70°52′29″W﻿ / ﻿43.193376°N 70.874858°W",
+              "Dover",
+              ""
+            ],
+            [
+              "12",
+              "Richard Hayes House",
+              "February 27, 1986\\n(#86000283)",
+              "184 Gonic Rd.\\n43°15′38″N 70°58′44″W﻿ / ﻿43.260556°N 70.978889°W",
+              "Rochester",
+              ""
+            ],
+            [
+              "13",
+              "Jenness Farm",
+              "March 2, 2001\\n(#01000206)",
+              "626 Pickering Rd.\\n43°14′36″N 70°56′12″W﻿ / ﻿43.243333°N 70.936667°W",
+              "Rochester",
+              ""
+            ],
+            [
+              "14",
+              "Lehoullier Building",
+              "December 26, 1979\\n(#79000211)",
+              "161-169 Main St.\\n43°15′31″N 70°51′46″W﻿ / ﻿43.258611°N 70.862778°W",
+              "Somersworth",
+              ""
+            ],
+            [
+              "15",
+              "Milton Town House",
+              "November 26, 1980\\n(#80000311)",
+              "NH 125 and Town House Rd.\\n43°26′27″N 70°59′05″W﻿ / ﻿43.440833°N 70.984722°W",
+              "Milton",
+              ""
+            ],
+            [
+              "16",
+              "New Durham Meetinghouse and Pound",
+              "December 8, 1980\\n(#80000312)",
+              "Old Bay Rd.\\n43°25′25″N 71°07′42″W﻿ / ﻿43.423611°N 71.128333°W",
+              "New Durham",
+              ""
+            ],
+            [
+              "17",
+              "New Durham Town Hall",
+              "November 13, 1980\\n(#80000313)",
+              "Main St. and Ridge Rd.\\n43°26′02″N 71°09′55″W﻿ / ﻿43.433889°N 71.165278°W",
+              "New Durham",
+              ""
+            ],
+            [
+              "18",
+              "Plumer-Jones Farm",
+              "March 23, 1979\\n(#79000212)",
+              "North of Milton on NH 125\\n43°27′44″N 70°59′37″W﻿ / ﻿43.462222°N 70.993611°W",
+              "Milton",
+              ""
+            ],
+            [
+              "19",
+              "Plummer Homestead",
+              "June 14, 2002\\n(#02000638)",
+              "1273 White Mountain Highway\\n43°27′35″N 70°59′33″W﻿ / ﻿43.459722°N 70.9925°W",
+              "Milton",
+              ""
+            ],
+            [
+              "20",
+              "Public Market",
+              "March 7, 1985\\n(#85000541)",
+              "93 Washington St.\\n43°11′43″N 70°52′31″W﻿ / ﻿43.195278°N 70.875278°W",
+              "Dover",
+              ""
+            ],
+            [
+              "21",
+              "Queensbury Mill",
+              "April 10, 1987\\n(#86003362)",
+              "1 Market St.\\n43°15′54″N 70°51′58″W﻿ / ﻿43.265°N 70.866111°W",
+              "Somersworth",
+              ""
+            ],
+            [
+              "22",
+              "Michael Reade House",
+              "February 12, 1980\\n(#80000314)",
+              "43 Main St.\\n43°11′50″N 70°52′21″W﻿ / ﻿43.197222°N 70.8725°W",
+              "Dover",
+              ""
+            ],
+            [
+              "23",
+              "Religious Society of Friends Meetinghouse",
+              "February 29, 1980\\n(#80000421)",
+              "141 Central Ave.\\n43°11′12″N 70°52′25″W﻿ / ﻿43.186667°N 70.873611°W",
+              "Dover",
+              ""
+            ],
+            [
+              "24",
+              "Rochester Commercial and Industrial District",
+              "April 8, 1983\\n(#83001154)",
+              "N. Main, Wakefield, Hanson, and S. Main Sts. and Central Square\\n43°18′11″N 70°58′34″W﻿ / ﻿43.303056°N 70.976111°W",
+              "Rochester",
+              ""
+            ],
+            [
+              "25",
+              "Rollinsford Town Hall",
+              "March 5, 1999\\n(#99000268)",
+              "667 Main St.\\n43°14′08″N 70°49′17″W﻿ / ﻿43.235556°N 70.821389°W",
+              "Rollinsford",
+              ""
+            ],
+            [
+              "26",
+              "St. Thomas Episcopal Church",
+              "June 7, 1984\\n(#84003241)",
+              "5 Hale St.\\n43°11′37″N 70°52′30″W﻿ / ﻿43.193611°N 70.875°W",
+              "Dover",
+              ""
+            ],
+            [
+              "27",
+              "Salmon Falls Mill Historic District",
+              "February 29, 1980\\n(#80000315)",
+              "Front St.\\n43°14′10″N 70°49′05″W﻿ / ﻿43.236111°N 70.818056°W",
+              "Rollinsford",
+              ""
+            ],
+            [
+              "28",
+              "Sawyer Building",
+              "May 23, 1980\\n(#80000316)",
+              "4-6 Portland St.\\n43°11′48″N 70°52′21″W﻿ / ﻿43.196667°N 70.8725°W",
+              "Dover",
+              ""
+            ],
+            [
+              "29",
+              "Sawyer Woolen Mills",
+              "September 13, 1989\\n(#89001208)",
+              "1 Mill St.\\n43°10′44″N 70°52′35″W﻿ / ﻿43.178889°N 70.876389°W",
+              "Dover",
+              ""
+            ],
+            [
+              "30",
+              "Smith Chapel",
+              "February 13, 2013\\n(#13000009)",
+              "45 Mill Pond Rd.\\n43°07′42″N 70°55′27″W﻿ / ﻿43.128355°N 70.924292°W",
+              "Durham",
+              ""
+            ],
+            [
+              "31",
+              "Strafford County Farm",
+              "February 25, 1981\\n(#81000100)",
+              "County Farm Rd.\\n43°13′03″N 70°56′31″W﻿ / ﻿43.2175°N 70.941944°W",
+              "Dover",
+              ""
+            ],
+            [
+              "32",
+              "Strafford Union Academy",
+              "September 22, 1983\\n(#83001155)",
+              "NH 126 and NH 202A\\n43°16′07″N 71°07′23″W﻿ / ﻿43.268611°N 71.123056°W",
+              "Strafford",
+              ""
+            ],
+            [
+              "33",
+              "Gen. John Sullivan House",
+              "November 28, 1972\\n(#72000089)",
+              "23 Newmarket Rd.\\n43°07′48″N 70°55′05″W﻿ / ﻿43.13°N 70.918056°W",
+              "Durham",
+              "Home of American Revolutionary War General John Sullivan, elected President of New Hampshire."
+            ],
+            [
+              "34",
+              "Thompson Hall",
+              "December 6, 1996\\n(#96001468)",
+              "Off Main St., University of New Hampshire campus\\n43°08′09″N 70°55′59″W﻿ / ﻿43.135833°N 70.933056°W",
+              "Durham",
+              ""
+            ],
+            [
+              "35",
+              "US Post Office-Dover Main",
+              "July 17, 1986\\n(#86002273)",
+              "133-137 Washington St.\\n43°11′42″N 70°52′39″W﻿ / ﻿43.195°N 70.8775°W",
+              "Dover",
+              ""
+            ],
+            [
+              "36",
+              "US Post Office-Somersworth Main",
+              "July 17, 1986\\n(#86002246)",
+              "2 Elm St.\\n43°15′33″N 70°52′18″W﻿ / ﻿43.259167°N 70.871667°W",
+              "Somersworth",
+              ""
+            ],
+            [
+              "37",
+              "Wiswall Falls Mills Site",
+              "March 18, 1988\\n(#88000184)",
+              "John Hatch Park\\nSouth of Wiswall Road just east of the Lamprey River\\n43°06′15″N 70°57′44″W﻿ / ﻿43.1043°N 70.9621°W",
+              "Durham",
+              ""
+            ],
+            [
+              "38",
+              "Woodbury Mill",
+              "March 25, 2013\\n(#13000156)",
+              "1 Dover St.\\n43°12′07″N 70°52′29″W﻿ / ﻿43.201985°N 70.874587°W",
+              "Dover",
+              ""
+            ],
+            [
+              "39",
+              "Woodman Institute",
+              "July 24, 1980\\n(#80000317)",
+              "182 Central Ave.\\n43°11′20″N 70°52′28″W﻿ / ﻿43.188889°N 70.874444°W",
+              "Dover",
+              ""
+            ],
+            [
+              "40",
+              "Samuel Wyatt House",
+              "December 2, 1982\\n(#82000626)",
+              "7 Church St.\\n43°11′30″N 70°52′31″W﻿ / ﻿43.191667°N 70.875278°W",
+              "Dover",
+              ""
+            ]
+          ]
+        }
+      },
+      "estimatedBudget": {
+        "maxAgentSteps": 6,
+        "maxInputTokens": 60000,
+        "maxOutputTokens": 5000
+      }
+    },
+    {
+      "benchmark": "agentbench-db",
+      "smokeId": "agentbench-db-07",
+      "taskId": "dbbench-dev-7",
+      "sourcePath": "F:\\AILIS_self_evolution_runtime\\build-cache\\benchmarks\\agentbench-main\\data\\dbbench\\dev.jsonl",
+      "description": "who was the only wrestler to have a title reign in 1992?",
+      "label": [
+        "Dick Murdoch"
+      ],
+      "create": {
+        "database": "wikitq",
+        "init": "wikitq_init.sql"
+      },
+      "table": {
+        "table_name": "Wrestler Title Reigns",
+        "table_info": {
+          "columns": [
+            {
+              "name": "Wrestler:",
+              "type": "TEXT"
+            },
+            {
+              "name": "Reigns:",
+              "type": "INT"
+            },
+            {
+              "name": "Date:",
+              "type": "DATE"
+            },
+            {
+              "name": "Place:",
+              "type": "TEXT"
+            },
+            {
+              "name": "Notes:",
+              "type": "TEXT"
+            }
+          ],
+          "rows": [
+            [
+              "Ron Starr",
+              "1",
+              "September 19, 1986",
+              "Ponce, Puerto Rico",
+              "Defeated Invader I in a Tournament Final"
+            ],
+            [
+              "Invader I",
+              "1",
+              "November 5, 1986",
+              "San Juan, Puerto Rico",
+              ""
+            ],
+            [
+              "Jason The Terrible",
+              "1",
+              "January 17, 1987",
+              "Caguas, Puerto Rico",
+              ""
+            ],
+            [
+              "Invader I",
+              "2",
+              "September 18, 1987",
+              "San Juan, Puerto Rico",
+              ""
+            ],
+            [
+              "Grizzly Boone",
+              "1",
+              "October 24, 1987",
+              "Bayamon, Puerto Rico",
+              ""
+            ],
+            [
+              "Invader I",
+              "3",
+              "November 25, 1987",
+              "San Juan, Puerto Rico",
+              "Held up after a match against Super Black Ninja on January 8, 1988 in San Juan, PR"
+            ],
+            [
+              "Super Black Ninja",
+              "1",
+              "February 6, 1988",
+              "Guaynabo, Puerto Rico",
+              ""
+            ],
+            [
+              "Invader I",
+              "4",
+              "April 2, 1988",
+              "Bayamon, Puerto Rico",
+              ""
+            ],
+            [
+              "Ron Starr",
+              "2",
+              "June 25, 1988",
+              "Carolina, Puerto Rico",
+              ""
+            ],
+            [
+              "Carlos Colon",
+              "1",
+              "August 20, 1988",
+              "Bayamon, Puerto Rico",
+              ""
+            ],
+            [
+              "Jason The Terrible",
+              "2",
+              "January 28, 1989",
+              "Carolina, Puerto Rico",
+              ""
+            ],
+            [
+              "Carlos Colon",
+              "2",
+              "March 1, 1989",
+              "Carolina, Puerto Rico",
+              "Vacant on May 22, 1989 after Colon was injured by Steve Strong on May 20, 1989"
+            ],
+            [
+              "TNT",
+              "1",
+              "June 17, 1989",
+              "San Juan, Puerto Rico",
+              "Defeats Abudda Dein; vacant on February 9, 1990 when TNT wins the WWC Universal Heavyweight Title"
+            ],
+            [
+              "Leo Burke",
+              "1",
+              "March 24, 1990",
+              "Caguas, Puerto Rico",
+              "Defeats Carlos Colon in a tournament final."
+            ],
+            [
+              "TNT",
+              "2",
+              "April 25, 1990",
+              "San Juan, Puerto Rico",
+              "Won the vacant title"
+            ],
+            [
+              "Action Jackson (Original TNT)",
+              "1",
+              "January 26, 1991",
+              "Caguas, Puerto Rico",
+              "Wins tournament; loses a name match on March 2, 1991 in Bayamon, PR"
+            ],
+            [
+              "TNT",
+              "3",
+              "March 30, 1991",
+              "Bayamon, Puerto Rico",
+              ""
+            ],
+            [
+              "King Kong",
+              "1",
+              "April 20, 1991",
+              "Bayamon, Puerto Rico",
+              ""
+            ],
+            [
+              "TNT",
+              "4",
+              "June 1, 1991",
+              "Bayamon, Puerto Rico",
+              ""
+            ],
+            [
+              "Fidel Sierra",
+              "1",
+              "October 19, 1991",
+              "Bayamon, Puerto Rico",
+              ""
+            ],
+            [
+              "TNT",
+              "5",
+              "October 26, 1991",
+              "Carolina, Puerto Rico",
+              ""
+            ],
+            [
+              "Dick Murdoch",
+              "1",
+              "November 23, 1991",
+              "Arroyo, Puerto Rico",
+              ""
+            ],
+            [
+              "Invader I",
+              "5",
+              "December 25, 1991",
+              "San Juan, Puerto Rico",
+              ""
+            ],
+            [
+              "Dick Murdoch",
+              "2",
+              "January 6, 1992",
+              "San Juan, Puerto Rico",
+              "Vacant on January 6, 1993 when Murdoch leaves the promotion."
+            ],
+            [
+              "Carlos Colon",
+              "3",
+              "June 18, 1994",
+              "San Juan, Puerto Rico",
+              "Defeated Mighty Koadiak in a tournament final."
+            ],
+            [
+              "Mighty Koadiak",
+              "1",
+              "1994",
+              "",
+              ""
+            ],
+            [
+              "Rex King",
+              "1",
+              "1995",
+              "",
+              ""
+            ],
+            [
+              "Sean Morley",
+              "1",
+              "1995",
+              "",
+              ""
+            ],
+            [
+              "Ricky Santana",
+              "1",
+              "1995",
+              "",
+              ""
+            ],
+            [
+              "Rex King",
+              "2",
+              "1995",
+              "",
+              ""
+            ],
+            [
+              "Pulgarcito",
+              "1",
+              "November 11, 1995",
+              "",
+              ""
+            ],
+            [
+              "Mighty Koadiak",
+              "2",
+              "November 26, 1995",
+              "",
+              ""
+            ],
+            [
+              "Sweet Brown Sugar (Skip Young)",
+              "1",
+              "January 6, 1996",
+              "Caguas, Puerto Rico",
+              ""
+            ],
+            [
+              "Ricky Santana",
+              "2",
+              "March 23, 1996",
+              "Caguas, Puerto Rico",
+              ""
+            ],
+            [
+              "\"Jungle\" Jim Steele",
+              "1",
+              "April 20, 1996",
+              "Caguas, Puerto Rico",
+              ""
+            ],
+            [
+              "El Bronco I",
+              "1",
+              "May 18, 1996",
+              "Caguas, Puerto Rico",
+              ""
+            ],
+            [
+              "Sean Morley",
+              "2",
+              "May 30, 1996",
+              "Caguas, Puerto Rico",
+              "Joins the WWF in 1997, but is still recognized as champion; title becomes vacant on March 3, 1999."
+            ],
+            [
+              "Glamour Boy Shane",
+              "1",
+              "April 2, 1999",
+              "Guaynabo, Puerto Rico",
+              "Defeated \"Jungle\" Jim Steele for vacant title."
+            ],
+            [
+              "Mustafa Saed",
+              "1",
+              "August 14, 1999",
+              "Caguas, Puerto Rico",
+              ""
+            ],
+            [
+              "Glamour Boy Shane",
+              "2",
+              "September 19, 1999",
+              "Guaynabo, Puerto Rico",
+              ""
+            ],
+            [
+              "Chicky Starr",
+              "1",
+              "November 13, 1999",
+              "Naguabo, Puerto Rico",
+              ""
+            ],
+            [
+              "Glamour Boy Shane",
+              "3",
+              "January 6, 2000",
+              "Caguas, Puerto Rico",
+              ""
+            ],
+            [
+              "Rex King",
+              "3",
+              "March 19, 2000",
+              "Cabo Rojo, Puerto Rico",
+              ""
+            ],
+            [
+              "Chris Grant",
+              "1",
+              "April 21, 2001",
+              "Orocovis, Puerto Rico",
+              ""
+            ],
+            [
+              "Alex Porteau",
+              "1",
+              "July 7, 2001",
+              "Carolina, Puerto Rico",
+              ""
+            ],
+            [
+              "Chris Grant",
+              "2",
+              "July 21, 2001",
+              "Orocovis, Puerto Rico",
+              "wins the title by forfeit"
+            ],
+            [
+              "Bad Boy Bradley",
+              "1",
+              "September 8, 2001",
+              "Bayamón, Puerto Rico",
+              ""
+            ],
+            [
+              "Super Gladiator",
+              "1",
+              "October 6, 2001",
+              "Caguas, Puerto Rico",
+              ""
+            ],
+            [
+              "Ricky Santana",
+              "3",
+              "March 16, 2002",
+              "Aibonito, Puerto Rico",
+              ""
+            ],
+            [
+              "Rico Suave",
+              "1",
+              "April 6, 2002",
+              "Caguas, Puerto Rico",
+              ""
+            ],
+            [
+              "Ray Gonzalez",
+              "1",
+              "April 27, 2002",
+              "San Lorenzo, Puerto Rico",
+              ""
+            ],
+            [
+              "Carlos Colon",
+              "4",
+              "June 8, 2002",
+              "Toa Baja, Puerto Rico",
+              ""
+            ],
+            [
+              "Ray Gonzalez",
+              "2",
+              "June 15, 2002",
+              "Caguas, Puerto Rico",
+              "Vacates title on July 1, 2002 when he leaves the company."
+            ],
+            [
+              "Wilfredo Alejandro",
+              "1",
+              "July 6, 2002",
+              "Cayey, Puerto Rico",
+              "wins a battle royal for the vacant title."
+            ],
+            [
+              "Fidel Sierra",
+              "2",
+              "August 24, 2002",
+              "Coamo, Puerto Rico",
+              ""
+            ],
+            [
+              "Chris Candido",
+              "1",
+              "June 6, 2003",
+              "Cayey, Puerto Rico",
+              ""
+            ],
+            [
+              "Vengador Boricua",
+              "1",
+              "July 19, 2003",
+              "Carolina, Puerto Rico",
+              "title becomes inactive when Vengador Boricua leaves the company."
+            ],
+            [
+              "Superstar Romeo",
+              "1",
+              "February 3, 2007",
+              "Caguas, Puerto Rico",
+              "Romeo beat Barabas Jr. to win the reactivated title."
+            ],
+            [
+              "Rico Suave",
+              "2",
+              "March 17, 2007",
+              "Bayamon, Puerto Rico",
+              ""
+            ],
+            [
+              "Crazy Rudy",
+              "1",
+              "April 28, 2007",
+              "Bayamon, Puerto Rico",
+              ""
+            ],
+            [
+              "Ash Rubinsky",
+              "1",
+              "November 24, 2007",
+              "Bayamon, Puerto Rico",
+              "Wins a 7-man battle royal."
+            ],
+            [
+              "B.J.",
+              "1",
+              "January 6, 2008",
+              "Choliseo, Puerto Rico",
+              "Wins the title after winning an 11 man Battle Royal"
+            ],
+            [
+              "Hammett",
+              "1",
+              "March 1, 2008",
+              "Tao Baja, Puerto Rico",
+              ""
+            ],
+            [
+              "B.J.",
+              "2",
+              "March 15, 2008",
+              "Lares, Puerto Rico",
+              ""
+            ],
+            [
+              "Chris Joel",
+              "1",
+              "May 10, 2008",
+              "Bayamon, Puerto Rico",
+              ""
+            ],
+            [
+              "Vacant",
+              "",
+              "",
+              "",
+              "Chris Joel Jumps to IWA"
+            ],
+            [
+              "Mike Smith",
+              "1",
+              "January 1, 2020",
+              "Toronto, Canada",
+              "Defeated Bill Johnson in a grueling championship match."
+            ],
+            [
+              "Bill Johnson",
+              "1",
+              "March 14, 2020",
+              "Vancouver, Canada",
+              "Handily defeated challenger Frank Thompson in a title defense."
+            ],
+            [
+              "Frank Thompson",
+              "1",
+              "June 27, 2020",
+              "Montreal, Canada",
+              "Won a tournament final to claim the championship."
+            ],
+            [
+              "Sarah Davis",
+              "1",
+              "August 15, 2020",
+              "Calgary, Canada",
+              "Became the first woman to win the championship in a historic match."
+            ],
+            [
+              "John Green",
+              "1",
+              "November 1, 2020",
+              "Edmonton, Canada",
+              "Defeated Bobby Brown to capture the championship."
+            ],
+            [
+              "Bobby Brown",
+              "1",
+              "January 23, 2021",
+              "Winnipeg, Canada",
+              "Regained the championship in a rematch against John Green."
+            ],
+            [
+              "Tom Wilson",
+              "1",
+              "April 17, 2021",
+              "Halifax, Canada",
+              "Defeated previous champion Bobby Brown in a shocking upset."
+            ],
+            [
+              "Eddie Zhang",
+              "1",
+              "June 5, 2021",
+              "Charlottetown, Canada",
+              "Won the championship in a fatal four-way match."
+            ],
+            [
+              "Devon Thompson",
+              "1",
+              "September 18, 2021",
+              "Regina, Canada",
+              "Captured the championship in a hard-fought match against Eddie Zhang."
+            ],
+            [
+              "Kristen Lee",
+              "1",
+              "December 11, 2021",
+              "Yellowknife, Canada",
+              "Became the new champion by defeating Devon Thompson in a historic title match."
+            ]
+          ]
+        }
+      },
+      "estimatedBudget": {
+        "maxAgentSteps": 6,
+        "maxInputTokens": 60000,
+        "maxOutputTokens": 5000
+      }
+    },
+    {
+      "benchmark": "agentbench-db",
+      "smokeId": "agentbench-db-08",
+      "taskId": "dbbench-dev-8",
+      "sourcePath": "F:\\AILIS_self_evolution_runtime\\build-cache\\benchmarks\\agentbench-main\\data\\dbbench\\dev.jsonl",
+      "description": "Which Score has a Result of 2–1, and a Competition of friendly, and a Goal smaller than 17?",
+      "label": [
+        "1–0",
+        "2–0"
+      ],
+      "create": {
+        "database": "wikisql",
+        "init": "wikisql_init.sql"
+      },
+      "table": {
+        "table_name": "Football Matches",
+        "table_info": {
+          "columns": [
+            {
+              "name": "Goal",
+              "type": "TEXT"
+            },
+            {
+              "name": "Date",
+              "type": "TEXT"
+            },
+            {
+              "name": "Venue",
+              "type": "TEXT"
+            },
+            {
+              "name": "Score",
+              "type": "TEXT"
+            },
+            {
+              "name": "Result",
+              "type": "TEXT"
+            },
+            {
+              "name": "Competition",
+              "type": "TEXT"
+            }
+          ],
+          "rows": [
+            [
+              "1.",
+              "October 27, 2004",
+              "Giants Stadium , East Rutherford , United States",
+              "1–0",
+              "2–1",
+              "Friendly"
+            ],
+            [
+              "2.",
+              "October 27, 2004",
+              "Giants Stadium, East Rutherford, United States",
+              "2–0",
+              "2–1",
+              "Friendly"
+            ],
+            [
+              "3.",
+              "November 13, 2004",
+              "Orange Bowl , Miami , United States",
+              "2–0",
+              "5–0",
+              "2006 FIFA World Cup qualification"
+            ],
+            [
+              "4.",
+              "November 13, 2004",
+              "Orange Bowl, Miami, United States",
+              "4–0",
+              "5–0",
+              "2006 FIFA World Cup qualification"
+            ],
+            [
+              "5.",
+              "November 17, 2004",
+              "Estadio Tecnológico ,",
+              "3–0",
+              "8–0",
+              "2006 FIFA World Cup qualification"
+            ],
+            [
+              "6.",
+              "November 17, 2004",
+              "Estadio Tecnológico, Mont",
+              "6–0",
+              "8–0",
+              "2006 FIFA World Cup qualification"
+            ],
+            [
+              "7.",
+              "February 23, 2005",
+              "Estadio Carlos González , Culi",
+              "1–0",
+              "1–1",
+              "Friendly"
+            ],
+            [
+              "8.",
+              "June 16, 2005",
+              "AWD-Arena , Hanover , Germany",
+              "2–1",
+              "2–1",
+              "2005 FIFA Confederations Cup"
+            ],
+            [
+              "9.",
+              "June 29, 2005",
+              "Zentralstadion , Leipzig , Germany",
+              "1–1",
+              "3–4 ( a.e.t. )",
+              "2005 FIFA Confederations Cup"
+            ],
+            [
+              "10.",
+              "August 17, 2005",
+              "Estadio Azteca , Mexico City, Mexico",
+              "2–0",
+              "2–0",
+              "2006 FIFA World Cup qualification"
+            ],
+            [
+              "11.",
+              "September 7, 2005",
+              "Estadio Azteca, Mexico City, Mexico",
+              "4–0",
+              "5–0",
+              "2006 FIFA World Cup qualification"
+            ],
+            [
+              "12.",
+              "October 8, 2005",
+              "Estadio Alfonso Lastras ,",
+              "2–1",
+              "5–2",
+              "2006 FIFA World Cup qualification"
+            ],
+            [
+              "13.",
+              "October 8, 2005",
+              "Estadio Alfonso Lastras, San",
+              "3–1",
+              "5–2",
+              "2006 FIFA World Cup qualification"
+            ],
+            [
+              "14.",
+              "October 8, 2005",
+              "Estadio Alfonso Lastras, San",
+              "4–2",
+              "5–2",
+              "2006 FIFA World Cup qualification"
+            ],
+            [
+              "15.",
+              "October 8, 2005",
+              "Estadio Alfonso Lastras, San",
+              "5–2",
+              "5–2",
+              "2006 FIFA World Cup qualification"
+            ],
+            [
+              "16.",
+              "December 14, 2005",
+              "Chase Field , Phoenix , United States",
+              "1–0",
+              "2–0",
+              "Friendly"
+            ],
+            [
+              "17.",
+              "January 25, 2006",
+              "Monster Park , San Francisco , United States",
+              "1–1",
+              "2–1",
+              "Friendly"
+            ],
+            [
+              "18.",
+              "May 12, 2006",
+              "Estadio Azteca, Mexico City, Mexico",
+              "1–0",
+              "2–1",
+              "Friendly"
+            ],
+            [
+              "19.",
+              "May 12, 2006",
+              "Estadio Azteca, Mexico City, Mexico",
+              "2–0",
+              "2–1",
+              "Friendly"
+            ],
+            [
+              "20.",
+              "June 21, 2006",
+              "Veltins-Arena , Gelsenkirchen",
+              "1–2",
+              "1–2",
+              "2006 FIFA World Cup"
+            ],
+            [
+              "21.",
+              "June 2, 2007",
+              "Estadio Alfonso Lastras, San",
+              "3–0",
+              "4–0",
+              "Friendly"
+            ],
+            [
+              "22.",
+              "July 1, 2007",
+              "Estadio Francisco Morazán, San Pedro Sula, Honduras",
+              "2–1",
+              "3–1",
+              "2007 CONCACAF Gold Cup"
+            ],
+            [
+              "23.",
+              "August 22, 2007",
+              "Soldier Field , Chicago , United States",
+              "1–0",
+              "2–1",
+              "Friendly"
+            ],
+            [
+              "24.",
+              "September 9, 2007",
+              "Toyota Park , Bridgeview , United States",
+              "2–0",
+              "3–0",
+              "Friendly"
+            ],
+            [
+              "25.",
+              "October 17, 2007",
+              "Gillette Stadium , Foxborough , United States",
+              "1–1",
+              "2–1",
+              "Friendly"
+            ],
+            [
+              "26.",
+              "November 18, 2007",
+              "Red Bull Arena , Harrison , United States",
+              "2–1",
+              "2–2",
+              "Friendly"
+            ],
+            [
+              "27.",
+              "January 19, 2008",
+              "Reliant Stadium , Houston , United States",
+              "2–2",
+              "2–2",
+              "Friendly"
+            ],
+            [
+              "28.",
+              "February 7, 2008",
+              "University of Phoenix Stadium , Glendale , United States",
+              "2–2",
+              "2–2",
+              "Friendly"
+            ],
+            [
+              "29.",
+              "March 26, 2008",
+              "Qualcomm Stadium , San Diego , United States",
+              "2–0",
+              "2–0",
+              "Friendly"
+            ],
+            [
+              "30.",
+              "June 8, 2008",
+              "Rentschler Field , East Hartford , United States",
+              "1–0",
+              "1–0",
+              "World Cup Qualifying"
+            ],
+            [
+              "31.",
+              "August 20, 2008",
+              "Azadi Stadium , Tehran , Iran",
+              "2–1",
+              "2–1",
+              "Friendly"
+            ]
+          ]
+        }
+      },
+      "estimatedBudget": {
+        "maxAgentSteps": 6,
+        "maxInputTokens": 60000,
+        "maxOutputTokens": 5000
+      }
+    },
+    {
+      "benchmark": "agentbench-db",
+      "smokeId": "agentbench-db-09",
+      "taskId": "dbbench-dev-9",
+      "sourcePath": "F:\\AILIS_self_evolution_runtime\\build-cache\\benchmarks\\agentbench-main\\data\\dbbench\\dev.jsonl",
+      "description": "Which Average that has a W-L-T of 5-1, and a Season smaller than 2001, and Games smaller than 6?",
+      "label": [
+        "none"
+      ],
+      "create": {
+        "database": "wikisql",
+        "init": "wikisql_init.sql"
+      },
+      "table": {
+        "table_name": "Football Team Performance",
+        "table_info": {
+          "columns": [
+            {
+              "name": "Season",
+              "type": "TEXT"
+            },
+            {
+              "name": "Games",
+              "type": "TEXT"
+            },
+            {
+              "name": "W-L-T",
+              "type": "TEXT"
+            },
+            {
+              "name": "Attendance",
+              "type": "TEXT"
+            },
+            {
+              "name": "Average",
+              "type": "TEXT"
+            }
+          ],
+          "rows": [
+            [
+              "1937",
+              "6",
+              "6-0-0",
+              "46,826",
+              "7,804"
+            ],
+            [
+              "1942",
+              "4",
+              "4-0-0",
+              "15,796",
+              "3,949"
+            ],
+            [
+              "1946",
+              "5",
+              "4-0-1",
+              "53,000",
+              "10,600"
+            ],
+            [
+              "1947",
+              "4",
+              "2-2-0",
+              "54,000",
+              "13,500"
+            ],
+            [
+              "1949",
+              "5",
+              "2-3-0",
+              "98,776",
+              "19,755"
+            ],
+            [
+              "1950",
+              "5",
+              "4-1-0",
+              "97,748",
+              "19,550"
+            ],
+            [
+              "1952",
+              "5",
+              "3-0-2",
+              "123,481",
+              "24,696"
+            ],
+            [
+              "1955",
+              "5",
+              "4-1-0",
+              "113,500",
+              "22,700"
+            ],
+            [
+              "1957",
+              "5",
+              "3-2-0",
+              "152,500",
+              "30,500"
+            ],
+            [
+              "1958",
+              "5",
+              "2-3-0",
+              "187,500",
+              "37,500"
+            ],
+            [
+              "1959",
+              "6",
+              "3-3-0",
+              "177,903",
+              "29,651"
+            ],
+            [
+              "1960",
+              "5",
+              "4-1-0",
+              "185,653",
+              "37,131"
+            ],
+            [
+              "1961",
+              "6",
+              "5-1-0",
+              "199,987",
+              "33,331"
+            ],
+            [
+              "1962",
+              "4",
+              "2-2-0",
+              "116,000",
+              "29,000"
+            ],
+            [
+              "1963",
+              "5",
+              "1-4-0",
+              "135,000",
+              "27,000"
+            ],
+            [
+              "1964",
+              "5",
+              "1-4-0",
+              "140,600",
+              "28,120"
+            ],
+            [
+              "1967",
+              "5",
+              "4-1-0",
+              "196,817",
+              "39,363"
+            ],
+            [
+              "1968",
+              "5",
+              "3-2-0",
+              "215,574",
+              "43,115"
+            ],
+            [
+              "1970",
+              "5",
+              "3-2-0",
+              "219,521",
+              "43,904"
+            ],
+            [
+              "1971",
+              "5",
+              "5-0-0",
+              "220,171",
+              "44,034"
+            ],
+            [
+              "1972",
+              "6",
+              "5-1-0",
+              "307,044",
+              "51,174"
+            ],
+            [
+              "1973",
+              "5",
+              "3-2-0",
+              "246,521",
+              "49,304"
+            ],
+            [
+              "1974",
+              "5",
+              "3-2-0",
+              "253,762",
+              "50,752"
+            ],
+            [
+              "1975",
+              "6",
+              "6-0-0",
+              "281,199",
+              "46,867"
+            ],
+            [
+              "1976",
+              "6",
+              "5-1-0",
+              "300,191",
+              "50,032"
+            ],
+            [
+              "1977",
+              "6",
+              "5-1-0",
+              "293,483",
+              "48,914"
+            ],
+            [
+              "1978",
+              "8",
+              "5-3-0",
+              "383,048",
+              "47,881"
+            ],
+            [
+              "1979",
+              "6",
+              "1-5-0",
+              "265,956",
+              "44,326"
+            ],
+            [
+              "1980",
+              "6",
+              "1-5-0",
+              "245,868",
+              "40,978"
+            ],
+            [
+              "1981",
+              "6",
+              "3-3-0",
+              "209,224",
+              "34,871"
+            ],
+            [
+              "1982",
+              "7",
+              "1-6-0",
+              "251,909",
+              "41,985"
+            ],
+            [
+              "1983",
+              "6",
+              "3-3-0",
+              "237,674",
+              "39,612"
+            ],
+            [
+              "1984",
+              "6",
+              "1-5-0",
+              "235,670",
+              "39,278"
+            ],
+            [
+              "1985",
+              "6",
+              "4-2-0",
+              "220,734",
+              "36,789"
+            ],
+            [
+              "1986",
+              "6",
+              "3-3-0",
+              "269,546",
+              "44,924"
+            ],
+            [
+              "1987",
+              "6",
+              "4-2-0",
+              "268,711",
+              "44,785"
+            ],
+            [
+              "1988",
+              "6",
+              "4-2-0",
+              "235,142",
+              "39,190"
+            ],
+            [
+              "1989",
+              "6",
+              "6-0-0",
+              "293,726",
+              "48,954"
+            ],
+            [
+              "1990",
+              "6",
+              "6-0-0",
+              "310,374",
+              "51,729"
+            ],
+            [
+              "1991",
+              "6",
+              "4-1-1",
+              "311,458",
+              "51,910"
+            ],
+            [
+              "1992",
+              "6",
+              "5-0-1",
+              "309,900",
+              "51,650"
+            ],
+            [
+              "1993",
+              "6",
+              "4-2-0",
+              "311,360",
+              "51,893"
+            ],
+            [
+              "1994",
+              "6",
+              "6-0-0",
+              "304,897",
+              "50,816"
+            ],
+            [
+              "1995",
+              "6",
+              "4-2-0",
+              "312,958",
+              "52,160"
+            ],
+            [
+              "1996",
+              "6",
+              "5-1",
+              "312,586",
+              "52,098"
+            ],
+            [
+              "1997",
+              "6",
+              "3-3",
+              "309,947",
+              "51,658"
+            ],
+            [
+              "1998",
+              "6",
+              "5-1",
+              "284,512",
+              "47,419"
+            ],
+            [
+              "1999",
+              "5",
+              "4-1",
+              "239,313",
+              "47,863"
+            ],
+            [
+              "2000",
+              "5",
+              "1-4",
+              "249,950",
+              "49,990"
+            ],
+            [
+              "2001",
+              "6",
+              "5-1",
+              "284,848",
+              "47,475"
+            ],
+            [
+              "2021",
+              "8",
+              "7-1-0",
+              "65,000",
+              "8,125"
+            ],
+            [
+              "2022",
+              "7",
+              "5-2-0",
+              "70,000",
+              "10,000"
+            ],
+            [
+              "2023",
+              "8",
+              "6-1-1",
+              "80,000",
+              "10,000"
+            ],
+            [
+              "2024",
+              "7",
+              "4-3-0",
+              "75,000",
+              "10,714"
+            ],
+            [
+              "2025",
+              "8",
+              "7-1-0",
+              "90,000",
+              "11,250"
+            ],
+            [
+              "2026",
+              "7",
+              "5-2-0",
+              "84,000",
+              "12,000"
+            ],
+            [
+              "2027",
+              "8",
+              "7-1-0",
+              "100,000",
+              "12,500"
+            ],
+            [
+              "2028",
+              "7",
+              "4-3-0",
+              "96,000",
+              "13,714"
+            ],
+            [
+              "2029",
+              "8",
+              "6-2-0",
+              "112,000",
+              "14,000"
+            ],
+            [
+              "2030",
+              "7",
+              "5-2-0",
+              "105,000",
+              "15,000"
+            ]
+          ]
+        }
+      },
+      "estimatedBudget": {
+        "maxAgentSteps": 6,
+        "maxInputTokens": 60000,
+        "maxOutputTokens": 5000
+      }
+    },
+    {
+      "benchmark": "agentbench-db",
+      "smokeId": "agentbench-db-10",
+      "taskId": "dbbench-dev-10",
+      "sourcePath": "F:\\AILIS_self_evolution_runtime\\build-cache\\benchmarks\\agentbench-main\\data\\dbbench\\dev.jsonl",
+      "description": "What is the Average for South Carolina with an Interview less than 9.626?",
+      "label": [
+        "none"
+      ],
+      "create": {
+        "database": "wikisql",
+        "init": "wikisql_init.sql"
+      },
+      "table": {
+        "table_name": "Beauty_Pageant_Scores",
+        "table_info": {
+          "columns": [
+            {
+              "name": "State",
+              "type": "TEXT"
+            },
+            {
+              "name": "Interview",
+              "type": "TEXT"
+            },
+            {
+              "name": "Swimsuit",
+              "type": "TEXT"
+            },
+            {
+              "name": "Evening Gown",
+              "type": "TEXT"
+            },
+            {
+              "name": "Average",
+              "type": "TEXT"
+            }
+          ],
+          "rows": [
+            [
+              "Virginia",
+              "9.843",
+              "9.635",
+              "9.851",
+              "9.776"
+            ],
+            [
+              "North Carolina",
+              "9.454",
+              "9.301",
+              "9.569",
+              "9.441"
+            ],
+            [
+              "South Carolina",
+              "9.626",
+              "9.460",
+              "9.870",
+              "9.652"
+            ],
+            [
+              "Louisiana",
+              "9.539",
+              "9.613",
+              "9.683",
+              "9.612"
+            ],
+            [
+              "Texas",
+              "9.489",
+              "9.354",
+              "9.699",
+              "9.514"
+            ],
+            [
+              "New York",
+              "9.561",
+              "9.548",
+              "9.626",
+              "9.578"
+            ],
+            [
+              "Illinois",
+              "9.460",
+              "9.288",
+              "9.484",
+              "9.411"
+            ],
+            [
+              "Missouri",
+              "9.320",
+              "9.318",
+              "9.508",
+              "9.382"
+            ],
+            [
+              "Tennessee",
+              "9.300",
+              "9.234",
+              "9.439",
+              "9.324"
+            ],
+            [
+              "Minnesota",
+              "9.290",
+              "9.241",
+              "9.421",
+              "9.317"
+            ],
+            [
+              "Kansas",
+              "9.191",
+              "9.176",
+              "9.375",
+              "9.247"
+            ],
+            [
+              "Hawaii",
+              "9.229",
+              "9.096",
+              "9.345",
+              "9.223"
+            ],
+            [
+              "California",
+              "9.500",
+              "9.450",
+              "9.600",
+              "9.517"
+            ],
+            [
+              "Florida",
+              "9.623",
+              "9.586",
+              "9.743",
+              "9.650"
+            ],
+            [
+              "Georgia",
+              "9.397",
+              "9.243",
+              "9.489",
+              "9.377"
+            ],
+            [
+              "Ohio",
+              "9.312",
+              "9.267",
+              "9.415",
+              "9.331"
+            ],
+            [
+              "Arizona",
+              "9.435",
+              "9.387",
+              "9.522",
+              "9.448"
+            ],
+            [
+              "Michigan",
+              "9.588",
+              "9.516",
+              "9.654",
+              "9.586"
+            ],
+            [
+              "Indiana",
+              "9.287",
+              "9.210",
+              "9.399",
+              "9.299"
+            ],
+            [
+              "Kentucky",
+              "9.204",
+              "9.134",
+              "9.300",
+              "9.213"
+            ],
+            [
+              "Oregon",
+              "9.479",
+              "9.429",
+              "9.577",
+              "9.495"
+            ],
+            [
+              "Washington",
+              "9.665",
+              "9.610",
+              "9.771",
+              "9.682"
+            ]
+          ]
+        }
+      },
+      "estimatedBudget": {
+        "maxAgentSteps": 6,
+        "maxInputTokens": 60000,
+        "maxOutputTokens": 5000
+      }
+    }
+  ]
+}

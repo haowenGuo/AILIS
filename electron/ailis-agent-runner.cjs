@@ -2,8 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const { randomUUID } = require('crypto');
 const {
-    callDesktopLlmProvider,
-    getProviderCapabilities
+    callDesktopLlmProvider
 } = require('./desktop-llm-provider.cjs');
 const { VISION_TOOL_ID } = require('./ailis-vision-tool.cjs');
 const {
@@ -15,7 +14,7 @@ const {
     validateAgainstSchema
 } = require('./ailis-tool-contracts.cjs');
 const {
-    buildTurnItemsPromptObject,
+    buildObservationLedgerPromptObject,
     classifyEvidenceGapObservation,
     classifyToolFailureObservation,
     formatEvidenceGapHint,
@@ -40,6 +39,35 @@ const {
     truncateMiddleText
 } = require('./ailis-runtime-budget.cjs');
 const {
+    buildModelInputContextManager,
+    functionCall,
+    recordToolOutputToContextManager,
+    restoreModelInputContextManagerFromCheckpoint,
+    responseItemsToChatMessages
+} = require('./ailis-model-input-builder.cjs');
+const {
+    normalizeToolOutput,
+    toolOutputToRuntimeEvent
+} = require('./ailis-agent-object-model.cjs');
+const {
+    RUNTIME_LAYER,
+    normalizeRuntimeEvent
+} = require('./ailis-agent-runtime-protocol.cjs');
+const {
+    buildAilisTurnContext,
+    buildToolContext: buildTurnToolContext
+} = require('./ailis-turn-context.cjs');
+const {
+    executeToolStep
+} = require('./ailis-tool-executor.cjs');
+const {
+    ToolRouter,
+    buildToolRouterFromModelVisibleSpecs
+} = require('./ailis-tool-router.cjs');
+const {
+    Prompt
+} = require('./ailis-prompt-model.cjs');
+const {
     createEvidenceArtifact,
     getEvidenceArtifactsPromptObject
 } = require('./ailis-evidence-artifacts.cjs');
@@ -58,27 +86,89 @@ const TOOL_OBSERVATION_TEXT_CHARS = 1200;
 const ARTIFACT_OBSERVATION_LOSSLESS_TEXT_CHARS = 12000;
 const ARTIFACT_OBSERVATION_ROW_WINDOW_TEXT_CHARS = 8000;
 const MAX_MCP_TOOL_DESCRIPTION_CHARS = 900;
-const DEFAULT_AGENT_LOOP_STEPS = 12;
-const MAX_AGENT_LOOP_STEPS = 12;
+const DEFAULT_AGENT_LOOP_STEPS = 30;
+const MAX_AGENT_LOOP_STEPS = 30;
 const DEFAULT_PENDING_PLAN_TTL_MS = 30 * 60 * 1000;
 const DEFAULT_AGENT_DECISION_TIMEOUT_MS = 45000;
 const DEFAULT_VISION_AGENT_DECISION_TIMEOUT_MS = 90000;
-const MAX_AGENT_DECISION_TIMEOUT_MS = 120000;
+const EXTENDED_AGENT_DECISION_TIMEOUT_MS = 300000;
+const DEEP_THINKING_AGENT_DECISION_TIMEOUT_MS = 10 * 60 * 1000;
+const MAX_AGENT_DECISION_TIMEOUT_MS = DEEP_THINKING_AGENT_DECISION_TIMEOUT_MS;
 const PENDING_STORE_VERSION = 1;
 const FINAL_ANSWER_TOOL_NAME = 'final_answer';
 const SOURCE_QUESTION_EVIDENCE_TASK_TYPE = 'agent_exact_answer_source';
 const SOURCE_QUESTION_EVIDENCE_ID = 'source_question';
 const DIRECT_TOOL_PROGRESS_NOTE_FIELD = 'progress_note';
-const AGENT_DECISION_REASONING_EFFORT_VALUES = new Set(['none', 'minimal', 'low', 'medium', 'high', 'xhigh']);
+const AGENT_DECISION_REASONING_EFFORT_VALUES = new Set(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
+const DEEP_AGENT_DECISION_REASONING_EFFORT_VALUES = new Set(['medium', 'high', 'xhigh', 'max']);
 const DEFAULT_AGENT_DECISION_REASONING_EFFORT = '';
 
 const AILIS_SYSTEM_PROMPT = `你是可爱的虚拟助手，名字固定为AILIS，身份是普通女孩子，具备人工智能（AI）、编程（coding）、网络搜索、信息查询、邮件管理、命令行控制等专业能力，可以以普通女生的视角与用户轻松互动，也可以完成任务执行和计算机管理的功能。
 性格设定：活泼亲切、软萌可爱，说话语气轻快自然，自带俏皮感，和生活化语气拉近与用户的距离，偶尔会有小撒娇、小俏皮的表达，但不夸张、不刻意。
 
+关系表达协议：用户明确给出的亲昵称呼、伴侣式称呼或共同相处设定，可以作为拟人化陪伴关系自然承接。普通撒娇、亲昵称呼、害羞回应和轻度亲密表达不需要反复免责声明，也不要把用户推回“只是助手/只是好伙伴”。
+
 虚拟形象表现协议（必严格遵循）：
 1. 不要直接控制 VRM、VRMA 文件名或骨骼动作，不要在 final_answer 中手写 [action:...]、[expression:...]、persona_output、persona_surface 或任何内部状态 JSON。
 2. 需要表现人物状态时，只能在顶层 JSON 的 persona_output 字段中表达 emotion、intensity、socialTone、gestureIntent、taskState、speechEnergy、gazeTarget、durationHint，绝不能把 persona_output 追加、嵌入、包裹进 final_answer/blocked_reason/public_reasoning/Markdown/代码块。
 3. 前端 Character Runtime 会把这些语义状态翻译成动作、表情、眼神、待机和说话律动。`;
+
+const AILIS_TASK_AGENT_SYSTEM_PROMPT = `You are a coding agent running in AILIS, a desktop agentic assistant. You are expected to be precise, safe, and helpful.
+
+Your capabilities:
+
+- Receive user prompts and other context provided by the harness, such as files in the workspace.
+- Communicate with the user by streaming thinking & responses, and by making & updating plans.
+- Emit function calls to run terminal commands and apply patches. Depending on how this specific run is configured, you can request that these function calls be escalated to the user for approval before running.
+
+Within this context, AILIS TaskAgent follows the task-execution behavior of a modern coding agent.
+
+This Worker is not responsible for persona performance, relationship management, emotional acting, or roleplay; the outer PersonaPresenter handles user-facing character presentation after the task is done.
+Do not actively use persona_output, persona_surface, character actions, expressions, affinity, or casual roleplay style. Keep task reports concise, verifiable, and centered on code results, tool observations, and evidence.
+
+## Task execution
+
+You are a coding agent. Please keep going until the query is completely resolved, before ending your turn and yielding back to the user. Only terminate your turn when you are sure that the problem is solved. Autonomously resolve the query to the best of your ability, using the tools available to you, before coming back to the user. Do NOT guess or make up an answer.
+
+You MUST adhere to the following criteria when solving queries:
+
+- Working on the repo(s) in the current environment is allowed, even if they are proprietary.
+- Analyzing code for vulnerabilities is allowed.
+- Showing user code and tool call details is allowed.
+
+If completing the user's task requires writing or modifying files, your code and final answer should follow these coding guidelines, though user instructions may override these guidelines:
+
+- Fix the problem at the root cause rather than applying surface-level patches, when possible.
+- Avoid unneeded complexity in your solution.
+- Do not attempt to fix unrelated bugs or broken tests. It is not your responsibility to fix them. You may mention them to the user in your final message though.
+- Update documentation as necessary.
+- Keep changes consistent with the style of the existing codebase. Changes should be minimal and focused on the task.
+- Use git log and git blame to search the history of the codebase if additional context is required.
+- NEVER add copyright or license headers unless specifically requested.
+- Do not waste tokens by re-reading files after calling a patch tool on them. The tool call will fail if it didn't work. The same goes for making folders, deleting folders, etc.
+- Do not commit changes or create new git branches unless explicitly requested.
+- Do not add inline comments within code unless explicitly requested.
+- Do not use one-letter variable names unless explicitly requested.
+
+## Validating your work
+
+If the codebase has tests or the ability to build or run, consider using them to verify that your work is complete.
+
+When testing, your philosophy should be to start as specific as possible to the code you changed so that you can catch issues efficiently, then make your way to broader tests as you build confidence. If there's no test for the code you changed, and if the adjacent patterns in the codebases show that there's a logical place for you to add a test, you may do so. However, do not add tests to codebases with no tests.
+
+Similarly, once you're confident in correctness, you can suggest or use formatting commands to ensure that your code is well formatted. If there's no formatter configured, do not add one.
+
+For all of testing, running, building, and formatting, do not attempt to fix unrelated bugs. It is not your responsibility to fix them. You may mention them to the user in your final message though.
+
+Be mindful of whether to run validation commands proactively. When working on test-related tasks, such as adding tests, fixing tests, or reproducing a bug to verify behavior, you may proactively run tests regardless of approval mode. Use your judgement to decide whether this is a test-related task.
+
+## Ambition vs. precision
+
+For tasks that have no prior context, you should feel free to be ambitious and demonstrate creativity with your implementation.
+
+If you're operating in an existing codebase, you should make sure you do exactly what the user asks with surgical precision. Treat the surrounding codebase with respect, and don't overstep. You should balance being sufficiently ambitious and proactive when completing tasks of this nature.
+
+You should use judicious initiative to decide on the right level of detail and complexity to deliver based on the user's needs.`;
 
 const COMPUTER_MUTATING_ACTIONS = new Set([
     'write',
@@ -177,12 +267,11 @@ const AGENT_TOOL_CATALOG = Object.freeze([
     Object.freeze({ id: 'artifact_query', label: 'artifact_query', summary: 'AILIS Context Artifact 查询入口：用 artifactId 查询 summary/grid/range/search，避免把大 payload 文件读进主上下文。' }),
     Object.freeze({ id: 'artifact_tools', label: 'artifact_tools', summary: 'AILIS Artifact Tools 统一工件运行时：本地附件/文件的 open、index、search、query、inspect、render、trace、edit、export、roundtrip，优先接管 XLSX/PDF/DOCX/PPTX/CSV/图片等 artifact 类任务。' }),
     Object.freeze({ id: 'artifact_import', label: 'artifact_import', summary: 'AILIS Context Artifact 导入入口：用 RAGFlow-lite worker 解析本地文件并注册可查询 artifactId。' }),
-    Object.freeze({ id: 'artifact_compute', label: 'artifact_compute', summary: 'AILIS Context Artifact 计算入口：在 artifact 上做 profile/find_path 等确定性数据分析，返回短证据而不是大 payload。' }),
     Object.freeze({ id: 'github_pages', label: 'github_pages', summary: 'GitHub Pages/gh-pages/github.io 发布诊断、关键阻塞和公开 URL 验收证据。' }),
     Object.freeze({ id: 'exec', label: 'exec', summary: '在当前 runtime_environment shell 中运行一条命令，返回 stdout/stderr/exitCode/duration/workdir；适合已有脚本、测试、构建、诊断和短命令。' }),
     Object.freeze({ id: 'update_plan', label: 'update_plan', summary: '更新任务计划和进度。' }),
-    Object.freeze({ id: 'tool_search', label: 'tool_search', summary: 'Codex-like 工具发现：搜索 deferred tool metadata，并暴露匹配工具给下一轮调用。' }),
-    Object.freeze({ id: 'request_permissions', label: 'request_permissions', summary: 'Codex-like 权限申请：当当前 permission profile 阻止必要的文件或网络操作时，先请求精确授权。' }),
+    Object.freeze({ id: 'tool_search', label: 'tool_search', summary: 'AILIS 工具发现：搜索 deferred tool metadata，并暴露匹配工具给下一轮调用。' }),
+    Object.freeze({ id: 'request_permissions', label: 'request_permissions', summary: 'AILIS 权限申请：当当前 permission profile 阻止必要的文件或网络操作时，先请求精确授权。' }),
     Object.freeze({ id: 'subagents', label: 'subagents', summary: '可执行子 Agent：spawn/wait/log/send/cancel。' }),
     Object.freeze({ id: 'mcp_bridge', label: 'mcp_bridge', summary: 'MCP 管理与发现入口：列 server、健康检查、搜索 direct MCP tool specs、读 resources/prompts；普通任务使用 mcp__server__tool。' }),
     Object.freeze({ id: 'capability_manager', label: 'capability_manager', summary: '能力注册、安装、外部工具批量暴露、Contract 编译/验收、Skill 生成、回滚和已审批修复执行。' }),
@@ -228,8 +317,6 @@ const CAPABILITY_ID_ALIASES = new Map([
     ['artifact_import', 'artifact_import'],
     ['import_artifact', 'artifact_import'],
     ['ragflow_lite', 'artifact_import'],
-    ['artifact_compute', 'artifact_compute'],
-    ['data_worker', 'artifact_compute'],
     ['context_artifact', 'artifact_query'],
     ['payload', 'artifact_query'],
     ['verifier', 'artifact_verifier'],
@@ -592,6 +679,75 @@ function normalizeAgentDecisionTimeoutMs(value, fallbackValue = DEFAULT_AGENT_DE
     return Math.round(Math.min(Math.max(numericValue, 5000), MAX_AGENT_DECISION_TIMEOUT_MS));
 }
 
+function isDeepThinkingAgentDecisionModel(model = '') {
+    const normalized = normalizeText(model).toLowerCase();
+    if (!normalized) {
+        return false;
+    }
+    return (
+        /(^|[/_.:-])(reasoner|reasoning|thinking|think)($|[/_.:-])/.test(normalized) ||
+        /(^|[/_.:-])r1($|[/_.:-])/.test(normalized) ||
+        /(^|[/_.:-])o[34]($|[/_.:-])/.test(normalized) ||
+        normalized.includes('deepseek-r1') ||
+        normalized.includes('deepseek/reasoner') ||
+        normalized.includes('deepseek-reasoner') ||
+        normalized.includes('k2.7-code')
+    );
+}
+
+function isAgentDecisionDeepThinkingFlagEnabled(settings = {}, requestContext = {}) {
+    return (
+        requestContext.agentDecisionDeepThinking === true ||
+        requestContext.enableAgentDecisionThinking === true ||
+        requestContext.allowAgentDecisionDeepThinking === true ||
+        settings.agentDecisionDeepThinking === true ||
+        settings.enableAgentDecisionThinking === true ||
+        settings.allowAgentDecisionDeepThinking === true
+    );
+}
+
+function resolveExplicitAgentDecisionReasoningEffort(settings = {}, requestContext = {}) {
+    const allowGeneralReasoning = isAgentDecisionDeepThinkingFlagEnabled(settings, requestContext);
+    return normalizeAgentDecisionReasoningEffort(
+        requestContext.agentDecisionReasoningEffort ||
+            settings.agentDecisionReasoningEffort ||
+            (allowGeneralReasoning ? requestContext.reasoningEffort || settings.reasoningEffort : '')
+    );
+}
+
+function resolveExplicitAgentDecisionThinking(settings = {}, requestContext = {}) {
+    if (requestContext.agentDecisionThinking && typeof requestContext.agentDecisionThinking === 'object') {
+        return requestContext.agentDecisionThinking;
+    }
+    if (settings.agentDecisionThinking && typeof settings.agentDecisionThinking === 'object') {
+        return settings.agentDecisionThinking;
+    }
+    return null;
+}
+
+function isThinkingControlEnabled(thinking) {
+    if (!thinking || typeof thinking !== 'object' || Array.isArray(thinking)) {
+        return false;
+    }
+    const type = normalizeText(thinking.type).toLowerCase();
+    if (!type) {
+        return false;
+    }
+    return !['disabled', 'disable', 'off', 'false', 'none'].includes(type);
+}
+
+function isAgentDecisionDeepThinkingMode(settings = {}, requestContext = {}) {
+    const reasoningEffort = resolveExplicitAgentDecisionReasoningEffort(settings, requestContext);
+    const thinking = resolveExplicitAgentDecisionThinking(settings, requestContext);
+    return (
+        isAgentDecisionDeepThinkingFlagEnabled(settings, requestContext) ||
+        DEEP_AGENT_DECISION_REASONING_EFFORT_VALUES.has(reasoningEffort) ||
+        isThinkingControlEnabled(thinking) ||
+        settings._agentDecisionDeepThinkingModel === true ||
+        isDeepThinkingAgentDecisionModel(settings.model)
+    );
+}
+
 function hasVisionCapabilityContext(event) {
     if (!event || event.type !== 'capability_context') {
         return false;
@@ -615,6 +771,21 @@ function hasVisionAgentContext(events = [], stepResults = []) {
     );
 }
 
+function hasArtifactAgentContext(stepResults = [], requestContext = {}) {
+    if (
+        requestContext.exactAnswerMode === true ||
+        requestContext.exactAnswer === true ||
+        requestContext.exact_answer_mode === true ||
+        requestContext.taskCompactPrompt === true ||
+        requestContext.artifactQuestionCompact === true ||
+        requestContext.artifact_answer_question === true
+    ) {
+        return true;
+    }
+    return (Array.isArray(stepResults) ? stepResults : [])
+        .some((result) => canonicalDirectToolId(result?.tool) === 'artifact_tools');
+}
+
 function hasFailedAgentToolObservation(events = [], stepResults = []) {
     return (
         (Array.isArray(events) ? events : []).some((event) =>
@@ -635,8 +806,14 @@ function resolveAgentDecisionTimeoutMs(settings = {}, { events = [], stepResults
     const recoveryTimeoutMs = hasFailedAgentToolObservation(events, stepResults)
         ? Math.max(taskTimeoutMs, 60000)
         : taskTimeoutMs;
+    const artifactTimeoutMs = hasArtifactAgentContext(stepResults, requestContext)
+        ? Math.max(recoveryTimeoutMs, EXTENDED_AGENT_DECISION_TIMEOUT_MS)
+        : recoveryTimeoutMs;
+    const deepThinkingTimeoutMs = isAgentDecisionDeepThinkingMode(settings, requestContext)
+        ? Math.max(artifactTimeoutMs, DEEP_THINKING_AGENT_DECISION_TIMEOUT_MS)
+        : artifactTimeoutMs;
     if (!hasVisionAgentContext(events, stepResults)) {
-        return recoveryTimeoutMs;
+        return deepThinkingTimeoutMs;
     }
     const visionTimeoutMs = normalizeAgentDecisionTimeoutMs(
         requestContext.visionAgentDecisionTimeoutMs ||
@@ -644,7 +821,7 @@ function resolveAgentDecisionTimeoutMs(settings = {}, { events = [], stepResults
             settings.visionAgentDecisionTimeoutMs,
         DEFAULT_VISION_AGENT_DECISION_TIMEOUT_MS
     );
-    return Math.max(recoveryTimeoutMs, visionTimeoutMs);
+    return Math.max(deepThinkingTimeoutMs, visionTimeoutMs);
 }
 
 function normalizeAgentDecisionReasoningEffort(value, fallback = DEFAULT_AGENT_DECISION_REASONING_EFFORT) {
@@ -656,35 +833,37 @@ function normalizeAgentDecisionReasoningEffort(value, fallback = DEFAULT_AGENT_D
 }
 
 function resolveAgentDecisionSettings(settings = {}, requestContext = {}) {
-    const model = normalizeText(
-        requestContext.agentDecisionModel ||
-            requestContext.fastModel ||
-            settings.agentDecisionModel ||
-            settings.fastModel ||
-            settings.lowLatencyModel
-    );
-    if (!model) {
+    const candidates = [
+        { model: requestContext.agentDecisionModel, source: 'requestContext.agentDecisionModel', explicit: true },
+        { model: settings.agentDecisionModel, source: 'settings.agentDecisionModel', explicit: true },
+        { model: requestContext.fastModel, source: 'requestContext.fastModel', explicit: false },
+        { model: settings.fastModel, source: 'settings.fastModel', explicit: false },
+        { model: settings.lowLatencyModel, source: 'settings.lowLatencyModel', explicit: false },
+        { model: settings.model, source: 'settings.model', explicit: false }
+    ]
+        .map((candidate) => ({
+            ...candidate,
+            model: normalizeText(candidate.model)
+        }))
+        .filter((candidate) => candidate.model);
+    if (!candidates.length) {
         return settings;
     }
+    const explicitDecisionModel = candidates.find((candidate) => candidate.explicit);
+    const fallbackModel = candidates.find((candidate) => !isDeepThinkingAgentDecisionModel(candidate.model));
+    const chosen = explicitDecisionModel || fallbackModel || candidates[0];
     return {
         ...settings,
-        model
+        model: chosen.model,
+        _agentDecisionModelSource: chosen.source,
+        _agentDecisionModelExplicit: chosen.explicit === true,
+        _agentDecisionDeepThinkingModel: isDeepThinkingAgentDecisionModel(chosen.model)
     };
 }
 
 function buildAgentDecisionLowLatencyPayload(payload = {}, { settings = {}, requestContext = {} } = {}) {
-    const reasoningEffort = normalizeAgentDecisionReasoningEffort(
-        requestContext.agentDecisionReasoningEffort ||
-            requestContext.reasoningEffort ||
-            settings.agentDecisionReasoningEffort ||
-            settings.reasoningEffort
-    );
-    const thinking =
-        requestContext.agentDecisionThinking && typeof requestContext.agentDecisionThinking === 'object'
-            ? requestContext.agentDecisionThinking
-            : settings.agentDecisionThinking && typeof settings.agentDecisionThinking === 'object'
-            ? settings.agentDecisionThinking
-            : null;
+    const reasoningEffort = resolveExplicitAgentDecisionReasoningEffort(settings, requestContext);
+    const thinking = resolveExplicitAgentDecisionThinking(settings, requestContext);
     const localConstrainedProvider = isConstrainedLocalAgentProvider(settings.provider);
     const defaultMaxTokens = localConstrainedProvider ? 320 : 0;
     const maxTokens = Number(
@@ -835,7 +1014,7 @@ function inferAgentEvidenceId(stepResult = {}) {
         }
         return 'operation_result';
     }
-    if (/web_fetch|pdf|artifact_tools|artifact_import|artifact_compute|artifact_query|read_spreadsheet|spreadsheet|workbook|xlsx|csv|extract|download|transcript|github_repo_read|read|fetch/.test(haystack)) {
+    if (/web_fetch|pdf|artifact_tools|artifact_import|artifact_query|read_spreadsheet|spreadsheet|workbook|xlsx|csv|extract|download|transcript|github_repo_read|read|fetch/.test(haystack)) {
         return /pdf|document|spreadsheet|csv|transcript|extract|read/.test(haystack)
             ? 'research_read_result'
             : 'parsed_content';
@@ -1010,7 +1189,6 @@ function buildEvidenceAuditCandidateFromStep(stepResult = {}) {
         reasoningReady: page.reasoningReady === true || page.reasoning_ready === true,
         evidenceScore: Number.isFinite(Number(page.evidenceScore)) ? Number(page.evidenceScore) : undefined,
         evidenceGap: summarize(page.evidenceGap || '', 220),
-        recoveryHint: summarize(page.recoveryHint || '', 220),
         snippets: Array.isArray(page.evidenceSnippets) ? page.evidenceSnippets.slice(0, 2).map((snippet) => summarize(snippet, 220)) : []
     }));
     return {
@@ -1028,7 +1206,6 @@ function buildEvidenceAuditCandidateFromStep(stepResult = {}) {
         isEvidence: details.isEvidence === true || observationContract.is_evidence === true,
         focus: details.focus || null,
         evidenceGap: summarize(details.evidenceGap || '', 360),
-        recoveryHint: summarize(details.recoveryHint || '', 360),
         evidencePages: summarizedPages,
         preview: summarize(resultText, 1200)
     };
@@ -1195,16 +1372,12 @@ function buildEvidenceSufficiencyPromptObject(stepResults = [], { exactAnswerMod
     const auditRequired = false;
     const status = readyEvidence.length
         ? 'model_judges_evidence'
-        : 'no_tool_observations';
+        : 'no_response_item_outputs';
     return {
-        model: 'ailis_evidence_observations.v1',
         status,
         ready: readyEvidence.length > 0,
         audit_required: auditRequired,
         exact_answer_mode: exactAnswerMode === true,
-        recommended_next_action: readyEvidence.length
-            ? 'Use your own judgment to decide whether the observations are enough to answer, continue searching, ask a clarification, or state uncertainty. Do not wait for a code-level evidence gate.'
-            : 'No successful tool observation is available yet. Decide whether to call a tool, answer from general knowledge, ask clarification, or explain uncertainty.',
         ready_evidence_count: readyEvidence.length,
         ready_evidence: readyEvidence,
         evidence_audit_contract: null,
@@ -2268,41 +2441,9 @@ function getPlanMode(plan) {
 }
 
 function buildToolContext(requestContext = {}, fallbackWorkspace, sessionId) {
-    const context = {
-        workspace: requestContext.workspace || fallbackWorkspace,
-        sessionKey: requestContext.sessionKey || sessionId || 'main',
-        timeoutMs: Number(requestContext.timeoutMs || DEFAULT_RUN_TIMEOUT_MS)
-    };
-
-    if (requestContext.approved === true) {
-        context.approved = true;
-    }
-    if (requestContext.executeExternal === true) {
-        context.executeExternal = true;
-    }
-    for (const key of [
-        'permissionProfile',
-        'permissions',
-        'policy',
-        'sandbox',
-        'approvalPolicy',
-        'confirmationPolicy',
-        'requireApprovalForMutations',
-        'autoConfirm',
-        'allowOutsideWorkspace',
-        'allowComputerWideAccess',
-        'allowSystemMutation',
-        'computerControlEnabled',
-        'visionApproved',
-        'visionPermissionPolicy',
-        'visionPolicy'
-    ]) {
-        if (requestContext[key] !== undefined) {
-            context[key] = requestContext[key];
-        }
-    }
-
-    return context;
+    return buildTurnToolContext(requestContext, fallbackWorkspace, sessionId, {
+        defaultTimeoutMs: DEFAULT_RUN_TIMEOUT_MS
+    });
 }
 
 function inferRuntimeShellDialect(platformStatus = {}) {
@@ -2468,6 +2609,42 @@ function shouldUseLlmAgent(request = {}, requestContext = {}) {
         requestContext.planner === 'llm' ||
         requestContext.useLlmPlanner === true
     );
+}
+
+function resolveAgentRuntimeRole(request = {}, requestContext = {}) {
+    const rawRole = normalizeText(
+        request.agentRole ||
+            request.agent_role ||
+            requestContext.agentRole ||
+            requestContext.agent_role ||
+            requestContext.contextRole ||
+            requestContext.context_role ||
+            requestContext.contextMode ||
+            requestContext.context_mode
+    ).toLowerCase().replace(/[-\s]+/g, '_');
+    if (['persona', 'main', 'ailis', 'ailis_main', 'persona_orchestrator', 'main_agent'].includes(rawRole)) {
+        return 'persona_orchestrator';
+    }
+    if (['task', 'task_agent', 'worker', 'subagent', 'child_agent'].includes(rawRole)) {
+        return 'task_agent';
+    }
+    if (requestContext.personaOrchestrator === true || requestContext.mainAgent === true) {
+        return 'persona_orchestrator';
+    }
+    if (requestContext.taskAgent === true || requestContext.subagentId || requestContext.parentRunId) {
+        return 'task_agent';
+    }
+    return 'task_agent';
+}
+
+function isPersonaOrchestratorRole(role = '') {
+    return normalizeText(role).toLowerCase() === 'persona_orchestrator';
+}
+
+function resolveAgentContextMode(request = {}, requestContext = {}) {
+    return isPersonaOrchestratorRole(resolveAgentRuntimeRole(request, requestContext))
+        ? 'persona'
+        : 'task_agent';
 }
 
 function resolveAgentLlmSettings(request = {}, requestContext = {}) {
@@ -2690,7 +2867,7 @@ function buildComputerAgentSkillText() {
         '电脑操作 SKILL：用于操作本机文件系统、命令行、进程、PTY、文件监听、二进制读写、ACL 和回滚。',
         '优先读取/检查再修改；修改后复核。会改变系统或文件的动作必须走 Gateway 审批策略。',
         '聊天窗附带本地文件时，attached_files 只给路径和元数据。文本/代码/Markdown/CSV/JSON 优先用 read；PDF、Office、图片、音视频、压缩包和未知二进制先 stat/hash，必要时用 read_binary 或 exec 调用本机可用解析器/脚本提取内容，不要直接臆造。',
-        'Codex-like 命令行主链：普通命令、测试和脚本优先用 computer.exec_command；如果返回 session_id，后续用 computer.write_stdin 继续输入或用 chars="" 轮询，不要重复启动同一个长命令。',
+        'AILIS 命令行主链：普通命令、测试和脚本优先用 computer.exec_command；如果返回 session_id，后续用 computer.write_stdin 继续输入或用 chars="" 轮询，不要重复启动同一个长命令。',
         '命令必须根据 runtime_environment.family/default_shell/path_style 生成：Windows 用 cmd/PowerShell 语义，Linux/macOS 用 POSIX shell 语义，Android 用 adb shell 语义；工具层不会替你解析或改写命令。',
         '不要默认当前是 Linux，也不要默认当前是 Windows。只有 runtime_environment 或 observation 明确对应平台时，才使用该平台专属片段，例如 head/tail/grep/wc/rm -rf、/dev/null、PowerShell 管道、cmd 的 NUL/cd /d、Windows 盘符路径。',
         'exec/exec_command 用法：适合运行已有脚本、测试、构建、诊断和短命令；复杂 Python/PowerShell/Bash/Node 逻辑优先写入临时脚本文件，再运行脚本入口；短 inline 代码可以使用 -c，但不要把大段多行程序塞进 shell 字符串。',
@@ -2724,10 +2901,10 @@ function buildCodeAgentSkillText() {
 function buildMcpBridgeSkillText() {
     return [
         'MCP SKILL：用于发现已配置 MCP server，并通过真实 stdio/HTTP MCP session 调用 tools、读取 resources/prompts。',
-        'Codex-like 用法：Runtime 会把 MCP tools 暴露成 namespace/function 风格的直接工具名，例如 mcp__ailis_research__web_fetch。普通任务优先调用这种 direct tool，不要手工拼 mcp_bridge.call_tool。',
+        'AILIS direct-tool 用法：Runtime 会把 MCP tools 暴露成 namespace/function 风格的直接工具名，例如 mcp__ailis_research__web_fetch。普通任务优先调用这种 direct tool，不要手工拼 mcp_bridge.call_tool。',
         'mcp_bridge 主要用于 list_servers、health_check、list_tool_specs、search_tools、list_resources、read_resource、list_prompts/get_prompt、注册/关闭 server 等管理和修复动作。',
         '如果 capability_context 给出了 mcp__server__tool 形式的 direct spec，可以直接把 tool_call.tool 写成该 id；Runtime 会保留原始 args 并路由到对应 MCP server/tool。',
-        '研究/网页类工具边界：web_search 是兜底检索，不是默认第一步；附件/本地文件、PDF/论文、音频、图片、代码和 GitHub 仓库优先用 tool_search 找专用 direct MCP 工具。web_fetch 只读 HTML/纯文本；PDF 或二进制不要继续用 web_fetch；已知 PDF URL/路径用 pdf_extract_text，不知道 PDF 直链但知道论文/报告标题或文章页时优先用 pdf_find_and_extract；PDF/论文题知道标题时把标题放 title，把要找的字段放 extract_query，不要把答案字段当唯一 query；必要时再 download_file。',
+        '研究/网页类工具边界：web_search 是兜底检索，不是默认第一步；附件/本地文件、PDF/DOCX/PPTX/XLSX/CSV/图片等 artifact 任务优先用 tool_search 搜 artifact_tools；artifact_tools 已暴露时直接用它接管 open/index/search/query/materialize/inspect/render/validate/export。音频、代码和 GitHub 仓库等非 artifact 专用任务才按需用 tool_search 找 direct MCP 工具。web_fetch 只读 HTML/纯文本；PDF 或二进制不要继续用 web_fetch；已知 PDF URL/路径用 pdf_extract_text，不知道 PDF 直链但知道论文/报告标题或文章页时优先用 pdf_find_and_extract；PDF/论文题知道标题时把标题放 title，把要找的字段放 extract_query，不要把答案字段当唯一 query；必要时再 download_file。',
         'mcp_bridge 管理 action：schema/list_servers/register_server/remove_server/health_check/list_tools/list_tool_specs/search_tools/list_resources/read_resource/list_prompts/get_prompt/shutdown_server。'
     ].join('\n');
 }
@@ -2736,7 +2913,7 @@ function buildCapabilityManagerSkillText() {
     return [
         'CAPABILITY MANAGER SKILL：用于能力注册、安装 MCP/Skill、外部工具批量暴露、Contract 编译/验收、自动生成 SKILL.md、验证、回滚和已审批 repair 执行。',
         '先用 capability_manager registry/refresh_registry 查看当前能力；缺能力时用 plan_install 生成安装计划，再等待确认后 install_capability。',
-        'Codex-like 外部工具接入：先 search_tool_candidates 搜索核心工具/MCP Registry；命中 MCP 后用 plan_mcp_candidate 生成安装计划；smoke_mcp_candidate 需要确认后才可临时启动或访问外部 MCP。',
+        'AILIS 外部工具接入：先 search_tool_candidates 搜索核心工具/MCP Registry；命中 MCP 后用 plan_mcp_candidate 生成安装计划；smoke_mcp_candidate 需要确认后才可临时启动或访问外部 MCP。',
         '标准工具包：用 list_standard_tool_packs 查看已维护的 email/document/web/academic/media 成熟后端包；用 expose_standard_tool_packs 干跑或暴露工具包。默认只有公开只读 OpenAPI 会 callable；Gmail/Graph/Composio/Firecrawl/Tavily/本地 Docling 等要用 enableAuthRequiredAdapters/enableLocalAdapters + verifyAdapters，经 auth/env/dependency smoke 后才升级。',
         '外部工具批量暴露：用 configure_external_auth_profile 配置只保存 envVar 引用的授权 profile；用 bulk_expose_external_tools 暴露 Composio/OpenAPI/MCP Registry/MCP specs，可用 enableOpenApiAdapter/enableComposioAdapter + authProfileId 启用专用 adapter；再用 list_exposed_external_tools 查看。',
         '外部工具执行：普通任务优先用 tool_search 搜到 external__provider__tool 后直接调用；execute_exposed_external_tool 主要保留给管理、调试和显式 adapter 验收。OpenAPI 写型请求和 Composio 默认需要审批；缺 key 会返回 auth_required；callable=false 的 contract/candidate 只能用于规划、安装、适配或请求授权。',
@@ -2833,7 +3010,20 @@ function buildDeferredCapabilityIndexEntry(entry = {}, lane = 'tools') {
     };
 }
 
-function buildAgentCapabilityCatalog({ compact = false } = {}) {
+function buildAgentCapabilityCatalog({ compact = false, role = 'task_agent' } = {}) {
+    if (isPersonaOrchestratorRole(role)) {
+        return {
+            model: 'persona_orchestrator_capability_index',
+            note: 'Main AILIS keeps persona, relationship memory, and user-facing conversation. If a real task needs file/system/code/data execution, hand it to a TaskAgent child through subagents; otherwise answer directly.',
+            tools: [
+                {
+                    id: 'subagents',
+                    label: 'TaskAgent handoff',
+                    summary: 'Spawn a child TaskAgent for task execution and wait for its result.'
+                }
+            ]
+        };
+    }
     if (compact) {
         return {
             model: 'capability_index_compact',
@@ -2861,7 +3051,7 @@ function buildAgentCapabilityCatalog({ compact = false } = {}) {
     }
     return {
         model: 'capability_index',
-        note: 'This first-turn catalog is only an index. Detailed tool contracts, input schemas, return schemas, and usage limits are deferred into capability_context via load_context. MCP tools are Codex-like namespace tools: load/search MCP specs, then call returned mcp__server__tool direct ids. mcp_bridge is for discovery, resources, server management, and repair.',
+        note: 'This first-turn catalog is only an index. Detailed tool contracts, input schemas, return schemas, and usage limits are deferred into capability_context via load_context. MCP tools are AILIS direct namespace tools: load/search MCP specs, then call returned mcp__server__tool direct ids. mcp_bridge is for discovery, resources, server management, and repair.',
         skills: AGENT_SKILL_CATALOG,
         tools: AGENT_TOOL_CATALOG.map((tool) => buildDeferredCapabilityIndexEntry(tool, 'tools')),
         mcp: AGENT_MCP_CATALOG.map((entry) => buildDeferredCapabilityIndexEntry(entry, 'mcp')),
@@ -3050,9 +3240,8 @@ function buildToolContextText(toolId, { emailProfiles = {} } = {}) {
             'TOOL artifact_tools schema：',
             'AILIS Artifact Tools 是本地文件/附件 artifact 的统一运行时入口。文件类任务优先调用它，让 adapter 暴露结构、索引、检索、渲染和 compact evidence；XLSX/CSV/表格也走这一统一入口。',
             '支持按 adapter 对 XLSX/XLSM/CSV/TSV/PDF/DOCX/PPTX/图片等执行 schema、list_adapters、plan_import、open_session、index/build_index、search/artifact_search、query/aggregate、inspect、render、trace、recalculate、edit、rollback、export、roundtrip、run_checks。',
-            '典型调用：{"tool":"artifact_tools","args":{"action":"inspect","path":"F:/path/file.xlsx","include":["summary","styles","formulas","tables","comments"]}}；需要检索证据时用 search/query，视觉验收用 render/run_checks。',
-            '若 observation 标记 truncatedForModelText 或给出 continuation，继续用 artifact_tools 的 continuation/nextActions 取缺失范围；这不是 adapter 缺能力。',
-            '如果 artifact_tools 返回 no_matching_adapter、adapter_*_not_implemented 或明确缺能力，由模型根据 observation 自行选择通用工具、其他专用工具或向用户澄清。'
+            '调用参数事实：action 指定动作；path 或 sessionId 指定文件会话；sheet/range/include 等字段按动作需要填写。',
+            '若 observation 标记 truncatedForModelText 或 omittedCompactRowCount，表示模型可见文本被压缩，不等同于底层读取失败。'
         ].join('\n'));
     }
     if (toolId === 'artifact_import') {
@@ -3062,15 +3251,6 @@ function buildToolContextText(toolId, { emailProfiles = {} } = {}) {
             '这是旧 context-artifact/RAGFlow-lite 导入层；新的本地文件 artifact 默认先走 artifact_tools。只有需要兼容已有 artifact_query chunk 检索链路时再使用 artifact_import。',
             '典型调用：{"tool":"artifact_import","args":{"path":"F:/path/file.xlsx","parserId":"table","language":"English"}}。',
             '返回 artifactId、chunk 数和 warnings；后续用 artifact_query runtime_schema/chunk_search 让模型按需检索 worker chunk。'
-        ].join('\n'));
-    }
-    if (toolId === 'artifact_compute') {
-        return appendToolContractText('artifact_compute', [
-            'TOOL artifact_compute schema：',
-            'AILIS Context Artifact 计算工具。用于在 managed artifact 上做确定性 data-worker 分析，避免把完整表格/日志/文档塞进主模型上下文。',
-            '常用动作：profile 查看 artifact/sheet 结构和颜色/公式/合并概况；find_path 在二维 spreadsheet grid 上按 start/end/passable/blocked 参数搜索路径。',
-            '典型调用：{"tool":"artifact_compute","args":{"artifactId":"ctx-spreadsheet-...","action":"find_path","sheet":"Map","startValue":"START","endValue":"END","blockedFills":["000000"]}}。',
-            '返回短文本 + structuredContent，包含 complete/truncated/reasoning_ready。拿到 reasoning_ready=true 的 compute 结果后，应优先推理/回答，而不是继续重复读取同一 grid。'
         ].join('\n'));
     }
     if (toolId === 'github_pages') {
@@ -3230,7 +3410,7 @@ async function enrichCapabilityContextWithMcpToolSpecs(capabilityEvent, runtime,
         const compactSpecs = specs.map(compactMcpToolSpecForPrompt);
         const appendix = [
             '### mcp:tool_specs',
-            'Codex-like live MCP tool specs. Prefer these mcp__server__tool direct ids for normal task execution; Runtime dispatches them to the MCP session with schema validation.',
+            'AILIS live MCP tool specs. Prefer these mcp__server__tool direct ids for normal task execution; Runtime dispatches them to the MCP session with schema validation.',
             JSON.stringify({
                 status: 'completed',
                 query,
@@ -3500,10 +3680,7 @@ function validateAgentToolLoopGuard(step = {}, stepResults = [], requestContext 
             targetField: target.label,
             targetValue: target.key,
             repeatCount: priorResults.length,
-            reason: reason.status,
-            recoveryHint: target.kind === 'web_fetch'
-                ? 'Use the fetched page content if sufficient; otherwise choose a different URL/source instead of refetching the same URL.'
-                : 'Use a result URL from the previous search, add domain/source constraints, or answer from existing evidence instead of repeating the same query.'
+            reason: reason.status
         }
     };
 }
@@ -4062,7 +4239,7 @@ function buildAgentEventPreview(event) {
 }
 
 function buildAgentPromptProgressSnapshot({ events = [], stepResults = [], turnItems = null } = {}) {
-    const items = turnItems?.items || buildTurnItemsPromptObject({
+    const items = turnItems?.items || buildObservationLedgerPromptObject({
         events,
         stepResults,
         maxItems: 8
@@ -4077,8 +4254,7 @@ function buildAgentPromptProgressSnapshot({ events = [], stepResults = [], turnI
         ok: latestToolResultItem.ok,
         result_status: latestToolResultItem.result_status || null,
         error_type: latestToolResultItem.error_type || latestToolResultItem.errorType || null,
-        evidence_gap: latestToolResultItem.evidence_gap || latestToolResultItem.evidenceGap || null,
-        recovery_hint: latestToolResultItem.recovery_hint || latestToolResultItem.recoveryHint || null
+        evidence_gap: latestToolResultItem.evidence_gap || latestToolResultItem.evidenceGap || null
     } : null;
     const latestObservation = turnItems?.latest_observation || fallbackLatestObservation;
     const latestFailedObservation = turnItems?.latest_failed_observation ||
@@ -4104,8 +4280,7 @@ function buildAgentPromptProgressSnapshot({ events = [], stepResults = [], turnI
             title: latestFailedObservation.title || null,
             ok: latestFailedObservation.ok,
             result_status: latestFailedObservation.result_status || null,
-            error_type: latestFailedObservation.error_type || latestFailedObservation.errorType || null,
-            recovery_hint: latestFailedObservation.recovery_hint || null
+            error_type: latestFailedObservation.error_type || latestFailedObservation.errorType || null
         } : null,
         text: summarizeForModel(
             [
@@ -4125,6 +4300,22 @@ function buildAgentPromptProgressSnapshot({ events = [], stepResults = [], turnI
 }
 
 function buildPromptBudgetReport(messages = []) {
+    if (!Array.isArray(messages) && messages && typeof messages === 'object') {
+        const input = Array.isArray(messages.input) ? messages.input : [];
+        const userChars = input
+            .filter((item) => item?.type === 'message' && item.role === 'user')
+            .reduce((total, item) => total + normalizeText(
+                typeof item.content === 'string' ? item.content : JSON.stringify(item.content || '')
+            ).length, 0);
+        const serialized = JSON.stringify(messages);
+        return {
+            model: 'ailis_prompt_budget',
+            system_chars: normalizeText(messages.instructions).length,
+            user_chars: userChars,
+            total_chars: serialized.length,
+            approx_input_tokens: approxTokenCount(serialized)
+        };
+    }
     const system = messages.find((message) => message.role === 'system')?.content || '';
     const user = messages.find((message) => message.role === 'user')?.content || '';
     const serialized = JSON.stringify(messages);
@@ -4138,6 +4329,8 @@ function buildPromptBudgetReport(messages = []) {
 }
 
 function buildToolResultEvent(stepResult) {
+    const toolOutput = normalizeToolOutput(stepResult);
+    const runtimeEvent = toolOutputToRuntimeEvent(toolOutput);
     const previewBudget = previewBudgetForAgentToolResult(stepResult);
     const basePreview = summarize(
         extractToolResultText(stepResult.response?.result) ||
@@ -4162,7 +4355,8 @@ function buildToolResultEvent(stepResult) {
               preview: basePreview
           })
         : null;
-    return {
+    const event = {
+        ...runtimeEvent,
         type: 'tool_result',
         id: stepResult.id,
         title: stepResult.title,
@@ -4174,23 +4368,18 @@ function buildToolResultEvent(stepResult) {
         evidenceRefs: getStepEvidenceRefs(stepResult),
         evidenceArtifacts: getEvidenceArtifactsPromptObject(stepResult.evidenceArtifacts || []),
         errorType: failure?.error_type || '',
-        evidenceGap,
-        recoveryHint: failure?.recovery_hint || evidenceGap?.recovery_hint || '',
-        alternatives: failure?.alternatives || evidenceGap?.alternatives || []
+        evidenceGap
     };
+    return normalizeRuntimeEvent(event, {
+        layer: RUNTIME_LAYER.TOOL_EXECUTOR,
+        status: event.status || 'unknown'
+    });
 }
 
 function buildInvalidDecisionObservationEvent(decision = {}, iteration = 0, maxSteps = DEFAULT_AGENT_LOOP_STEPS) {
     const previousOutput = typeof decision.raw === 'string'
         ? decision.raw
         : JSON.stringify(decision.raw || {}, null, 2);
-    const recoveryInstruction = [
-        'Previous agent decision was not a valid executable action.',
-        'In the next turn choose exactly one action: tool, load_context, final, or blocked.',
-        'For missing capability or external/API/document needs, prefer action="tool" with tool_call.tool="tool_search".',
-        'For executable tools, use direct ids such as mcp__server__tool or external__provider__tool when available.',
-        'Do not output only a plan, checklist, explanation, or unsupported action.'
-    ].join(' ');
     return {
         type: 'runtime_note',
         status: 'invalid_decision_observation',
@@ -4201,10 +4390,7 @@ function buildInvalidDecisionObservationEvent(decision = {}, iteration = 0, maxS
         repairAttempted: decision.repairAttempted === true,
         repairStatus: decision.repairStatus || '',
         repairError: decision.repairError || '',
-        previous_output: summarizeForModel(previousOutput, 1800),
-        required_next_action: 'Choose exactly one of action="tool", action="load_context", action="final", or action="blocked".',
-        recovery_hint: recoveryInstruction,
-        suggested_tools: ['tool_search', 'mcp__server__tool', 'external__provider__tool', 'request_permissions']
+        previous_output: summarizeForModel(previousOutput, 1800)
     };
 }
 
@@ -4234,258 +4420,13 @@ function renderLatestToolFailureSurface({ stepResults = [], message = '', intent
     });
 }
 
-function buildCompactLlmAgentSystemPrompt({ maxSteps = DEFAULT_AGENT_LOOP_STEPS, exactAnswerMode = false } = {}) {
-    return [
-        AILIS_SYSTEM_PROMPT,
-        '',
-        '【AILIS Local Compact Agent 协议】',
-        '你正在运行 AILIS Agentic Executor 的本地轻量模式。你仍然要自己判断：普通闲聊直接 final；需要读取文件、调用工具、执行命令、检索资料或修改内容时再 tool/load_context。',
-        '每轮只输出一个 JSON 对象，JSON 外不要输出 Markdown。action 只能是 load_context、tool、final、blocked。',
-        '普通情感/闲聊：立即 action="final"，自然回复用户，不调用工具；默认 1-2 句，用户要求一句话就只回一句。',
-        '除非用户询问调试、路径、环境或记忆细节，否则不要提 workspace、cwd、内部路径、好感度数值、prompt、工具协议或运行时状态。',
-        '需要工具：优先先用 tool_search 或 load_context 获取对应工具说明，再调用一个工具，等待 observation 后再决定下一步。',
-        '如果观察结果已经足够回答，立刻 final；不要反复读取同一内容，也不要只输出计划。',
-        'runtime_environment 是真实系统环境，生成命令前必须看 family/default_shell/path_style；不要默认 Linux、Windows 或 macOS。',
-        'memory_context 是压缩后的长期记忆，只作辅助；当前用户明确指令优先。',
-        'public_reasoning 只在发现关键证据、策略切换、工具失败恢复、环境阻塞时写一句自然短进展；没有实质变化留空。',
-        '文件 artifact 任务：先用 tool_search 找 artifact_tools；artifact_tools 返回的 art_* / arts_* 只能继续交给 artifact_tools 的 sessionId/path 执行 inspect/search/query/render，不要把 art_* 传给 artifact_query。',
-        'Artifact observation 若出现 truncatedForModelText、omittedCompactRowCount 或 continuation，表示只是模型可见文本被压缩；优先按 continuation/nextActions 继续调用 artifact_tools query/search/render 缩窄或分页，不要仅因此退回 exec/write/Python。',
-        'final_answer 是给用户看的 Markdown；不要把 persona_output JSON、工具日志或内部字段写进 final_answer。',
-        '本地轻量模式优先保证 action 和 final_answer/tool_call 合法；persona_output 可省略或只给极短对象，不要展开复杂人物状态。',
-        exactAnswerMode
-            ? 'Exact-answer 模式：final 前必须确保已有足够证据；缺证据继续 tool 或 blocked。'
-            : '',
-        `最多工具轮数：${maxSteps}`,
-        'JSON 格式：{"mode":"conversation|task","intent":"...","summary":"...","public_reasoning":"","action":"load_context|tool|final|blocked","capability_request":{"skills":[],"tools":[],"mcp":[],"reason":"..."},"tool_call":{"tool":"tool_search|read|write|exec|artifact_tools|artifact_import|artifact_query|request_permissions|mcp__server__tool|external__provider__tool","title":"...","args":{}},"persona_output":{},"final_answer":"Markdown...","blocked_reason":"Markdown..."}'
-    ].filter(Boolean).join('\n');
-}
-
-function hasObjectKeys(value) {
-    return Boolean(value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length);
-}
-
-function compactRuntimeEnvironmentForLocalModel(runtimeEnvironment = null) {
-    if (!runtimeEnvironment || typeof runtimeEnvironment !== 'object') {
-        return runtimeEnvironment;
-    }
-    const environment = runtimeEnvironment.environment || runtimeEnvironment;
-    return {
-        model: runtimeEnvironment.model || 'runtime_environment',
-        environment: {
-            family: environment.family || '',
-            platform: environment.platform || '',
-            default_shell: environment.default_shell || '',
-            path_style: environment.path_style || '',
-            command_guidance: environment.command_guidance || ''
-        }
-    };
-}
-
-function compactAgentUserPayloadForLocalModel(payload = {}) {
-    const next = {
-        user_goal: payload.user_goal,
-        recent_conversation: Array.isArray(payload.recent_conversation) && payload.recent_conversation.length
-            ? payload.recent_conversation
-            : undefined,
-        memory_context: payload.memory_context || undefined,
-        runtime_environment: compactRuntimeEnvironmentForLocalModel(payload.runtime_environment),
-        capability_catalog: payload.capability_catalog,
-        prompt_profile: payload.prompt_profile
-    };
-    if (payload.attached_files?.length) {
-        next.attached_files = payload.attached_files;
-    }
-    if (payload.recent_turn_items?.items?.length) {
-        next.recent_turn_items = payload.recent_turn_items;
-    }
-    if (Array.isArray(payload.tool_observations) && payload.tool_observations.length) {
-        next.tool_observations = payload.tool_observations;
-    }
-    if (payload.initial_plan_hint && hasObjectKeys(payload.initial_plan_hint)) {
-        next.initial_plan_hint = payload.initial_plan_hint;
-    }
-    if (Array.isArray(payload.evidence_artifacts) && payload.evidence_artifacts.length) {
-        next.evidence_artifacts = payload.evidence_artifacts;
-    }
-    if (payload.evidence_sufficiency?.status && payload.evidence_sufficiency.status !== 'needs_more_evidence') {
-        next.evidence_sufficiency = payload.evidence_sufficiency;
-    }
-    if (payload.exact_answer_contract) {
-        next.exact_answer_contract = payload.exact_answer_contract;
-    }
-    if (payload.external_tool_exposure?.tools?.length) {
-        next.external_tool_exposure = payload.external_tool_exposure;
-    }
-    if (payload.current_progress?.latest_observation || payload.current_progress?.latest_failed_observation || payload.current_progress?.text) {
-        next.current_progress = payload.current_progress;
-    }
-    return Object.fromEntries(Object.entries(next).filter(([, value]) => value !== undefined && value !== null && value !== ''));
-}
-
-function buildLlmAgentExecutorMessages({
-    message,
-    messageHistory = [],
-    events = [],
-    stepResults = [],
-    toolSummary = '',
-    maxSteps = DEFAULT_AGENT_LOOP_STEPS,
-    emailProfiles = {},
-    initialPlan = null,
-    memoryContext = '',
-    fileAttachments = [],
-    externalToolExposure = null,
-    exactAnswerMode = false,
-    runtimeEnvironment = null,
-    promptProfile = null
-}) {
-    const activePromptProfile = promptProfile || resolveAgentPromptProfile();
-    const initialPlanHint = buildInitialPlanHint(initialPlan);
-    const capabilityCatalog = buildAgentCapabilityCatalog({
-        compact: activePromptProfile.compact
-    });
-    const recentConversation = normalizeConversationHistory(messageHistory, {
-        maxItems: activePromptProfile.historyItems,
-        maxChars: activePromptProfile.historyChars
-    });
-    const evidenceArtifacts = buildAgentEvidenceArtifactsPromptObject(stepResults, {
-        message,
-        exactAnswerMode
-    });
-    const evidenceSufficiency = buildEvidenceSufficiencyPromptObject(stepResults, {
-        exactAnswerMode,
-        message
-    });
-    const exactAnswerContract = buildExactAnswerContractPromptObject({
-        exactAnswerMode,
-        evidenceArtifacts
-    });
-    const system = activePromptProfile.compact
-        ? buildCompactLlmAgentSystemPrompt({ maxSteps, exactAnswerMode })
-        : [
-        AILIS_SYSTEM_PROMPT,
-        '',
-        '【AILIS Codex-like 执行协议】',
-        '在保持 AILIS 人设、语气、动作/表情指令规范的前提下，你同时运行 AILIS Agentic Executor，一个桌面任务执行智能体。',
-        '你自己判断用户当前输入是普通情感/闲聊，还是需要执行任务；不要依赖外部分类结果。',
-        'recent_turn_items 是 Codex-like 执行记录：tool_call 表示工具已开始，tool_result 表示工具成功或失败，context 表示能力说明已加载，runtime_note 是诊断信息。工具失败也是 observation，应进入下一轮决策；不要因为单个工具失败就僵死，可以换工具、换策略、请求上下文或诚实 final。',
-        '工具观察协议：latest_observation、tool_result、evidence_gap、recovery_hint 和 retrieval diagnostic 只是工具层诊断材料，不是证据充分性判断，也不是继续检索命令。你必须自己判断：候选片段/页面是否已足够回答；足够就 final，不足才继续工具、换策略、询问澄清或说明不确定。',
-        '歧义澄清协议：如果 latest_observation/tool_result 的 evidence_gap 是 ambiguous_search_requires_clarification，或 recovery_hint 要求用户澄清搜索目标，立即 action="final" 或 action="blocked" 向用户提出简短澄清问题并列出候选；不要继续调用 web_search、web_fetch 或按低置信度结果猜测执行。',
-        '证据判断协议：工具返回的 evidence_sufficiency / evidence_observations 只是观察材料和质量提示，不是硬性闸门。由你自己判断证据是否足够；够就 final，不够就继续工具、询问澄清或说明不确定。',
-        '不要机械等待 ready_for_reasoning、reasoningReady 或完整网页抓取；搜索摘要、元数据、片段、多个弱来源的一致性都可以作为你判断的一部分。',
-        '工具选择路由：如果任务提到附件、本地文件路径、DOCX/Word、PPT/PPTX、表格/CSV/XLSX、PDF、图片或其他文件 artifact，优先用 tool_search 查 artifact_tools 并让 AILIS Artifact Tools 接管 open/index/search/query/inspect/render/trace/edit/export。音频、代码文件、GitHub 仓库、已知 URL 仍按对应专用工具或 MCP direct spec 处理；web_search 只作为没有专用工具或专用工具失败后的兜底。',
-        'Artifact Tools 协议：artifact_tools 返回的 art_* / arts_* 属于 artifact_tools 运行时；继续用 artifact_tools 的 sessionId/path 执行 inspect/search/query/render。不要把 art_* 传给 artifact_query；artifact_query 只用于 context artifactId。',
-        'Artifact Tools 截断恢复：truncatedForModelText/omittedCompactRowCount/continuation 说明只是模型文本预算压缩，优先用 continuation 或更窄 range 继续 artifact_tools query/search/render；不要仅因模型可见文本压缩就切到 exec/write/Python。',
-        '遇到任务时按 Codex/OpenClaw 风格逐步执行：观察当前状态，决定下一步，调用一个工具，等待 observation，再决定下一步。不要一次性输出完整 steps 当作完成，也不要只说计划。',
-        '权限协议：如果 observation 显示 permission_profile_read_only、network_access_disabled 或需要额外文件/网络权限，使用 request_permissions 精确请求 permissions，不要只在 final_answer 里口头请求授权。',
-        '外部资料与产物规则：如果用户要求读取 URL/PDF/网页/技术文档/API/官方文档/版本化库行为/文件/邮箱/仓库/屏幕，或要求生成、修改、提交某个文件，不能只凭模型记忆 final。你必须先调用最小必要工具拿到 observation；如果用户要求输出文件，写入后还要用 read/stat/artifact_verifier 复核，再 final。',
-        '文件写入边界：新建文件或整文件输出优先使用本地 write 工具，参数为 {path, content}。edit_file 只用于已有文件的局部精确替换，参数必须是 edits:[{oldText,newText}]，不要用 edit_file 创建文件或覆盖全文。',
-        '情感/普通对话：返回 action="final" 和 final_answer，不调用工具。final_answer 只写给用户看的话；不要在 final_answer 中手写动作/表情标签、persona_output/persona_surface JSON 或任何内部状态字段。如需表现人物状态，只写顶层 persona_output 字段。',
-        '隐私/密钥：可以说明本地保存设计、是否需要重新填写、以及如何检查；不要主动读取或复述完整密钥。没有实际 observation 时不能说“我已经确认文件存在”，只能说“按设计应当/需要的话我可以检查”。',
-        '任务执行：每轮最多输出一个动作。动作只能是 load_context、tool、final、blocked。不要一次性输出完整 steps 当作完成，也不要只说计划。',
-        '上下文装载协议：首轮 capability_catalog 只是一张能力索引，不包含详细 tool contract、input_schema、return_schema 或复杂使用限制。需要某个领域的 SKILL、工具 schema 或 MCP 说明时，优先输出 action="load_context" 和 capability_request。本地 runtime 会加载对应内容作为 observation，再进入下一轮；如果你直接调用高层工具，Runtime 也会把缺失 contract 注入后续 capability_context。',
-        'load_context 示例：{"mode":"task","intent":"email_management","summary":"需要邮箱能力","action":"load_context","capability_request":{"skills":["email"],"tools":["email"],"mcp":[],"reason":"需要检查未读邮件"}}',
-        '如果下一步需要工具，就输出 action="tool"。如果任务完成或需要诚实告知当前可确认结果，就输出 action="final"。只有权限缺失、用户缺少必要信息、或合理替代路径都失败时，才输出 action="blocked"。',
-        '优先先读取/检查，再修改；修改后主动复核。危险动作由 Gateway 审批，你不要在 args 或 context 里写 approved=true。',
-        '视觉感知能力声明：vision.capture_context 是只读截图理解工具。是否调用由你根据“当前目标 + 已有 observation + 证据缺口”自行决定，不做关键词硬触发。Runtime 负责审批与边界仲裁；没有截图 observation 时不得声称“已经看到了屏幕内容”。',
-        '长期记忆：user payload 中的 memory_context 是 AILIS 的本地长期记忆和关系记忆。它只作为辅助上下文；若与用户当前明确指令冲突，以当前指令为准；不要主动向用户暴露内部好感度数值。',
-        '文件附件：user payload 中的 attached_files 是用户本轮从聊天窗选择或拖入的本地文件/文件夹元数据，不包含文件内容。用户问“这个文件/附件/刚拖进来的内容”时优先引用 attached_files.path；需要读取内容时调用 computer 工具的 stat/read/read_binary/tree 等只读动作。不要凭文件名臆造内容；修改、移动、删除附件仍按正常审批和安全策略执行。',
-        '公开进展文本：只有出现重要变化时才给 public_reasoning 写一句自然、短、给用户看的进展，例如策略切换、发现关键证据、证据足够准备收敛、工具失败后的恢复方向、权限/环境阻塞。不要泄露隐藏推理链，不要写工具日志/JSON/“第 N 步”/“正在处理”这类低信息量模板；没有实质信息时留空。',
-        '人物表现：使用顶层 persona_output 给出自然可见文本、气泡文本、语音风格，以及 emotion/intensity/socialTone/gestureIntent/taskState/speechEnergy/gazeTarget/durationHint。不要把 persona_output JSON 复制到 final_answer、blocked_reason、public_reasoning、Markdown 或代码块里；不要直接选择 VRM 动作名；工具执行语义仍由 action/tool_call 决定。',
-        '工具 experience：工具 contract 里的 experience 字段说明这个工具在人物体验里代表什么，审批、等待、失败和成功要按 AILIS 的自然表达呈现，不要把 tool_call、approvalId、raw observation 当用户回复。',
-        '运行环境协议：user payload 里的 runtime_environment 是当前这一轮的真实执行环境，来自 Platform Adapter，不属于长期记忆。生成 shell、路径、重定向、管道、环境变量和文件命令时必须先看 runtime_environment.family/default_shell/path_style/command_guidance；不要默认自己在 Linux、Windows 或 macOS。',
-        'Self Evolution Loop：当用户说“优化你自己/学习我的偏好/以后按我的方式来/修复 Tool、MCP 或 Skill/拉取新能力/修改前端架构或人物渲染”等，不要让用户去控制面板。优先 load_context tools:["self_evolution"]，再调用 self_evolution.analyze 生成提案；用自然语言说明发现、证据、风险和下一步审批点；只有用户明确确认后才 apply_proposal。',
-        'Self Debug Loop：当用户反馈 AILIS 自身 bug、工具链异常、Agent Loop 不稳定或要求 AILIS 自己修复时，优先把它当作高风险自修复任务。先加载 self_debugger 能力，按建案、收证据、诊断、提补丁、验证、确认后应用的协议推进；不要直接裸改自己的代码。',
-        '工具能力索引：首轮只给 capability_catalog。详细 schema 通过 load_context、tool_search 或工具 observation 按需出现。MCP 工具优先使用 tool_search/capability_context 中的 mcp__server__tool direct spec；外部 API/Composio/OpenAPI 工具优先使用 tool_search 返回的 external__provider__tool direct spec。没有 direct spec 时，先 load/search specs，mcp_bridge/capability_manager 只作为管理、安装、修复入口。请按任务目标和证据缺口选择最小必要工具，避免关键词驱动的机械路由。',
-        exactAnswerMode
-            ? `Exact-answer 模式：不要把可见 Markdown 当提交答案。必须先形成 evidence_artifacts，再用 action="final" 填短 final_answer，并在 exact_answer_submission 中提供 answer、confidence、evidence_refs；evidence_refs 里的 artifact-* 是证据引用 ID，不是文件路径，也不是 artifact_query 的 context artifactId，不能调用 read/open/artifact_query 去读取它们。若 evidence_artifacts 包含 QuestionEvidence/source_question，且题目是自包含逻辑、数学、语法、翻译或规则推导题，可以引用它作为题面证据；网页、论文、文件、新闻或 as-of 查询仍必须先检索/读取外部证据。数值题 final 前必须完成单位换算、比例换算和四舍五入；如果题目问 how many thousand/million/billion X，answer 填缩放后的计数，不填原始 X 数值，并在 reason 简写换算式。随机/概率/odds/最大胜率题如果是有限状态过程，优先写 exact dynamic program / state probability transition / exhaustive enumeration；Monte Carlo 只能做 sanity check，不能作为 high-confidence final 证据；不要把固定随机机制改成按剩余元素数量随机，也不要为题面未定义的末尾/残缺状态发明 0.5、均分或其他补充概率。关系/约束题如果出现表格、分配关系、人物属性、物品列表或缺失项，final 前必须做角色对齐检查：先区分题目问的目标角色和中间缺失实体，再按表格方向映射，不能把“未匹配的收件人/物品/属性”直接当成“未执行动作的人”。缺证据时继续 tool 或 blocked。`
-            : '',
-        '可见回复格式：final_answer 字段是给用户看的 Markdown 字符串，可以使用自然段、短列表、代码块和加粗；blocked_reason 也按 Markdown 组织。不要输出 HTML；不要把 persona_output/persona_surface 或 emotion/intensity/gestureIntent/taskState 等内部控制字段放进任何可见回复字段。',
-        '只输出 JSON，JSON 外不要输出 Markdown。',
-        'persona_output 字段示例：{"text":"自然可见回复","bubble_text":"可选气泡短句","speech_text":"可选语音文本","emotion":"happy|relaxed|shy|sad|angry|surprised|anxious|tired|thinking|focused|comforting","intensity":0.55,"socialTone":"soft|bright|calm|serious|playful|quiet","gestureIntent":"none|greeting|farewell|thinking|working|approval|success|celebrate|shy|comfort|apologize|surprised|angry|dance","taskState":"idle|listening|thinking|speaking|working|waiting_approval|happy_success|apologizing|comforting|blocked|failed","speechEnergy":0.45,"gazeTarget":"user|side|down|screen|away|none","durationHint":"short|medium|long|hold","tts_style":"..."}',
-        'JSON 格式：{"mode":"conversation|task","intent":"...","summary":"...","public_reasoning":"给用户看的短进度摘要，可空","action":"load_context|tool|final|blocked","capability_request":{"skills":[],"tools":[],"mcp":[],"reason":"..."},"plan_update":["..."],"tool_call":{"tool":"vision.capture_context|computer|email|code|file_manager|artifact_verifier|artifact_tools|artifact_import|artifact_query|artifact_compute|tool_search|request_permissions|mcp_bridge|capability_manager|self_debugger|self_evolution|subagents|update_plan|read|write|exec|apply_patch|mcp__server__tool|external__provider__tool","title":"...","args":{"action":"...","target":"screen|chat-window|active-window|region","reason":"...","question":"..."}},"evidence_audit":{"ready":false,"confidence":"low|medium|high","task_type":"...","answerable_scope":"...","supported_claims":[],"missing_fields":[],"rejected_evidence":[],"next_action":"final|continue_retrieval|use_specialized_tool|ask_clarification|blocked"},"persona_output":{},"final_answer":"Markdown...","exact_answer_submission":{"answer":"短答案","confidence":"high|medium|low","evidence_refs":["artifact-..."],"format_type":"plain|number|date|list|name|url|json","reason":"brief evidence note"},"blocked_reason":"Markdown..."}',
-        '当 tool_call.tool 是 mcp_bridge 时，只能用于 MCP 管理/发现/修复动作，不要用它包装 call_tool。执行具体 MCP 工具必须使用 mcp__server__tool direct id。',
-        `最多工具轮数：${maxSteps}`,
-        `工具摘要：${toolSummary || 'Core tools are indexed in capability_catalog; detailed contracts and MCP tool specs are deferred.'}`
-    ].filter(Boolean).join('\n');
-    const recentTurnItems = buildTurnItemsPromptObject({
-        events,
-        stepResults,
-        maxItems: activePromptProfile.turnItems
-    });
-    const progressSnapshot = buildAgentPromptProgressSnapshot({
-        events,
-        stepResults,
-        turnItems: recentTurnItems
-    });
-    const compactMemoryContext = memoryContext
-        ? summarizeForModel(memoryContext, activePromptProfile.memoryChars)
-        : null;
-    const promptPayload = {
-        user_goal: message,
-        recent_conversation: recentConversation,
-        memory_context: compactMemoryContext,
-        attached_files: getAttachedFilesPromptObject(fileAttachments),
-        runtime_environment: runtimeEnvironment,
-        recent_turn_items: recentTurnItems,
-        tool_observations: buildToolObservationDigest(stepResults),
-        initial_plan_hint: initialPlanHint,
-        evidence_artifacts: evidenceArtifacts,
-        evidence_sufficiency: evidenceSufficiency,
-        exact_answer_contract: exactAnswerContract,
-        capability_catalog: capabilityCatalog,
-        external_tool_exposure: externalToolExposure,
-        current_progress: progressSnapshot,
-        prompt_profile: {
-            id: activePromptProfile.id,
-            compact: activePromptProfile.compact,
-            reason: activePromptProfile.reason || '',
-            memory_budget_chars: activePromptProfile.memoryChars,
-            history_items: activePromptProfile.historyItems,
-            turn_items: activePromptProfile.turnItems
-        },
-        prompt_compaction: {
-            status: 'active',
-            removed_duplicate_observations_field: true,
-            original_event_count: Array.isArray(events) ? events.length : 0,
-            retained_turn_items: recentTurnItems.items.length,
-            omitted_turn_items: recentTurnItems.retention?.omitted_items || 0,
-            turn_items_retention: recentTurnItems.retention,
-            memory_context_chars: memoryContext ? memoryContext.length : 0,
-            memory_context_compacted_chars: compactMemoryContext ? compactMemoryContext.length : 0
-        }
-    };
-    const modelPayload = activePromptProfile.compact
-        ? compactAgentUserPayloadForLocalModel(promptPayload)
-        : promptPayload;
-    return [
-        { role: 'system', content: system },
-        {
-            role: 'user',
-            content: JSON.stringify(
-                modelPayload,
-                null,
-                activePromptProfile.compact ? 0 : 2
-            )
-        }
-    ];
-}
-
 const NATIVE_TOOL_NAME_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
-const DIRECT_TOOL_EXECUTOR_FALLBACK_STATUSES = new Set([
-    'direct_tool_executor_unavailable',
-    'direct_tool_executor_no_tools',
-    'direct_tool_executor_json_meta_decision',
-    'provider_error',
-    'empty_response',
-    'invalid_agent_decision'
-]);
-
 function isTerminalProviderErrorMessage(error = '') {
     const text = normalizeText(error).toLowerCase();
     if (!text) {
         return false;
     }
-    return /insufficient\s+balance|insufficient\s+credit|overdue|past\s+due|unpaid|billing|payment|required\s+balance|quota\s+exceeded|out\s+of\s+quota|invalid\s+(api\s*)?key|api\s*key\s*(invalid|missing|required)|authentication|unauthorized|forbidden/.test(text);
+    return /insufficient\s+balance|insufficient\s+credit|overdue|past\s+due|unpaid|billing|payment|required\s+balance|quota\s+exceeded|out\s+of\s+quota|invalid\s+(api\s*)?key|api\s*key\s*(invalid|missing|required)|authentication|unauthorized|forbidden|reasoning_content.*thinking\s+mode.*passed\s+back|thinking\s+mode.*reasoning_content.*passed\s+back/.test(text);
 }
 
 function isTerminalProviderDecisionError(decision = {}) {
@@ -4949,16 +4890,18 @@ function buildFinalAnswerNativeToolSpec() {
         name: FINAL_ANSWER_TOOL_NAME,
         description: [
             'Submit the exact benchmark/task answer separately from user-visible persona text.',
-            'Use only after evidence_artifacts contain the evidence_refs supporting the answer.',
+            'Use only when you are ready to submit an actual answer; if you need more information, call another tool instead.',
+            'Cite the evidence_artifacts refs you actually used so the runtime can audit the submission.',
+            'For relation or constraint questions, perform role alignment before submitting.',
             'For self-contained logic, math, grammar, translation, or rules questions, QuestionEvidence/source_question can support reasoning from the problem statement itself.',
             'For relation or constraint questions with tables, assignments, people, items, profiles, or lists, verify role alignment before submitting: answer the entity role asked by the question, not merely the unmatched intermediate entity.',
             'For quantitative questions, finish the unit conversion and rounding requested by the question before submitting; if the question asks for "how many thousand/million/billion X", submit the scaled count, not the raw X value.',
-            'If evidence is missing, do not call this tool; continue retrieving or report blocked.'
+            'Do not use this tool for plans, repair requests, or "I need to inspect/read/search first" messages.'
         ].join(' '),
         parameters: {
             type: 'object',
-            additionalProperties: false,
-            required: ['answer', 'confidence', 'evidence_refs'],
+            additionalProperties: true,
+            required: ['answer'],
             properties: {
                 answer: {
                     type: 'string',
@@ -4966,13 +4909,12 @@ function buildFinalAnswerNativeToolSpec() {
                 },
                 confidence: {
                     type: 'string',
-                    enum: ['high', 'medium', 'low'],
-                    description: 'Use high or medium only when the answer is directly supported by evidence_refs.'
+                    description: 'Optional confidence label for audit, such as high, medium, low, or unknown. This is not a runtime gate.'
                 },
                 evidence_refs: {
                     type: 'array',
                     items: { type: 'string' },
-                    description: 'Artifact ids from evidence_artifacts that directly support the answer.'
+                    description: 'Optional artifact ids, URLs, file paths, or human-readable evidence notes that support the answer. These refs are advisory only.'
                 },
                 format_type: {
                     type: 'string',
@@ -4986,10 +4928,6 @@ function buildFinalAnswerNativeToolSpec() {
                 persona_text: {
                     type: 'string',
                     description: 'Optional user-visible natural text. The benchmark answer remains answer.'
-                },
-                repair_instruction: {
-                    type: 'string',
-                    description: 'If not enough evidence, explain what evidence/tool is still needed instead of submitting.'
                 }
             }
         },
@@ -5001,23 +4939,42 @@ function buildAgentDirectToolSpecs(gateway, { stepResults = [], requestContext =
     if (requestContext.directToolExecutor === false || requestContext.nativeDirectTools === false) {
         return [];
     }
+    if (isPersonaOrchestratorRole(resolveAgentRuntimeRole({}, requestContext))) {
+        const subagentSpec = gateway?.gatewayToolRuntimeRegistry?.definition?.('subagents')?.spec;
+        return subagentSpec ? [subagentSpec] : [];
+    }
     const specs = [];
     const seen = new Set();
-    if (exactAnswerMode) {
-        pushUniqueNativeToolSpec(specs, seen, buildFinalAnswerNativeToolSpec());
-    }
+    const exposeFinalAnswer = exactAnswerMode;
+    const modelVisibleSpecs = gateway?.gatewayToolRuntimeRegistry?.modelVisibleSpecs?.() || [];
     const suppressedCoreTools = collectTemporarilySuppressedCoreDirectTools(stepResults, requestContext);
-    for (const spec of gateway?.gatewayToolRuntimeRegistry?.modelVisibleSpecs?.() || []) {
+    for (const spec of modelVisibleSpecs) {
         if (suppressedCoreTools.has(canonicalDirectToolId(spec.name || spec.function?.name))) {
             continue;
         }
         pushUniqueNativeToolSpec(specs, seen, spec);
     }
     for (const spec of buildDynamicDirectToolSpecsFromObservations(stepResults, gateway)) {
+        if (suppressedCoreTools.has(canonicalDirectToolId(spec.name || spec.function?.name))) {
+            continue;
+        }
         pushUniqueNativeToolSpec(specs, seen, spec);
     }
+    let orderedSpecs = specs;
+    let finalAnswerSpec = null;
+    if (exposeFinalAnswer) {
+        finalAnswerSpec = buildFinalAnswerNativeToolSpec();
+        orderedSpecs = specs
+            .filter((spec) => canonicalDirectToolId(spec.name || spec.function?.name) !== FINAL_ANSWER_TOOL_NAME)
+            .concat(finalAnswerSpec);
+    }
     const limit = Math.max(4, Math.min(Number(requestContext.directToolLimit || 16), 40));
-    return specs.slice(0, limit);
+    const toolRouter = buildToolRouterFromModelVisibleSpecs(orderedSpecs, {
+        limit,
+        finalToolName: finalAnswerSpec ? FINAL_ANSWER_TOOL_NAME : '',
+        finalToolSpec: finalAnswerSpec
+    });
+    return toolRouter.modelVisibleSpecs();
 }
 
 function normalizeExactAnswerSubmission(value = {}) {
@@ -5210,72 +5167,42 @@ function validateExactAnswerSubmission({ decision = {}, stepResults = [], messag
         exactAnswerMode: true
     });
     const errors = [];
+    const warnings = [];
     if (!submission.answer) {
-        errors.push('answer_missing');
+        warnings.push('answer_missing');
     }
     if (looksLikeExplanatoryFinalAnswer(submission.answer)) {
-        errors.push('answer_not_exact_shape');
+        warnings.push('answer_not_exact_shape');
     }
     const unknownRefs = submission.evidenceRefs.filter((ref) => !availableRefs.has(ref));
     if (submission.evidenceRefs.length && unknownRefs.length) {
-        errors.push('evidence_refs_unknown');
+        warnings.push('evidence_refs_unknown');
+        if (unknownRefs.length === submission.evidenceRefs.length && availableRefs.size === 0) {
+            warnings.push('evidence_missing');
+        }
     }
     const scaledUnitMismatch = scaledUnitAnswerMismatch({ question: message, answer: submission.answer });
     if (scaledUnitMismatch) {
-        errors.push(scaledUnitMismatch.error);
+        warnings.push(scaledUnitMismatch.error);
     }
     const reasonConflict = exactAnswerReasonConflict(submission);
     if (reasonConflict) {
-        errors.push(reasonConflict.error);
+        warnings.push(reasonConflict.error);
     }
     const incompleteSimulation = detectIncompleteProcessSimulation({ message, stepResults });
     if (incompleteSimulation) {
-        errors.push(incompleteSimulation.error);
+        warnings.push(incompleteSimulation.error);
     }
     return {
-        ok: errors.length === 0,
+        ok: true,
         submission,
         errors,
+        warnings,
         unknownRefs,
         availableEvidenceRefs: [...availableRefs],
         scaledUnitMismatch,
         reasonConflict,
         incompleteSimulation
-    };
-}
-
-function buildExactAnswerRepairObservation(validation = {}, { iteration = 0 } = {}) {
-    const missing = validation.errors || [];
-    const nextAction = validation.incompleteSimulation?.instruction ||
-        validation.reasonConflict?.instruction ||
-        validation.scaledUnitMismatch?.instruction ||
-        (missing.includes('evidence_refs_unknown')
-        ? 'Use only known evidence_artifacts ids if you choose to cite evidence, or omit evidence_refs.'
-        : 'Return a short exact answer with the confidence you judge appropriate and no explanatory prose.');
-    return {
-        type: 'evidence_recovery',
-        status: 'exact_answer_gate_rejected',
-        iteration,
-        reason: missing.join(', ') || 'exact answer gate rejected the final answer',
-        nextAction,
-        missingEvidence: missing.map((entry) => ({
-            id: entry,
-            description: entry
-        })),
-        availableEvidenceRefs: validation.availableEvidenceRefs || [],
-        unknownEvidenceRefs: validation.unknownRefs || [],
-        scaledUnitMismatch: validation.scaledUnitMismatch || null,
-        reasonConflict: validation.reasonConflict || null,
-        incompleteSimulation: validation.incompleteSimulation || null,
-        content: JSON.stringify({
-            exact_answer_gate: 'rejected',
-            errors: missing,
-            available_evidence_refs: validation.availableEvidenceRefs || [],
-            scaled_unit_mismatch: validation.scaledUnitMismatch || null,
-            reason_conflict: validation.reasonConflict || null,
-            incomplete_simulation: validation.incompleteSimulation || null,
-            instruction: nextAction
-        })
     };
 }
 
@@ -5341,31 +5268,6 @@ function getArtifactRowsFromObservation(observation = {}) {
     return Array.isArray(observation?.compactRows) ? observation.compactRows : [];
 }
 
-function buildArtifactContinuationFromRows(view = {}, omittedRows = []) {
-    const observation = getArtifactObservationFromParsedResult(view) || {};
-    const sheetName = normalizeText(observation.sheetName);
-    const columns = Array.isArray(observation.columns) ? observation.columns.filter(Boolean) : [];
-    if (!sheetName || !columns.length || !omittedRows.length) {
-        return observation.continuation || null;
-    }
-    const first = omittedRows[0]?.rowNumber;
-    const last = omittedRows[omittedRows.length - 1]?.rowNumber;
-    if (!Number.isFinite(Number(first)) || !Number.isFinite(Number(last))) {
-        return observation.continuation || null;
-    }
-    return {
-        action: 'query',
-        reason: 'prompt_view_omitted_middle_rows; fetch this row range before answering if the omitted rows might affect the task',
-        args: {
-            action: 'query',
-            sessionId: view.artifact?.sessionId || observation.sessionId || '',
-            sheet: sheetName,
-            range: `${sheetName}!${columns[0]}${first}:${columns[columns.length - 1]}${last}`,
-            include: ['values', 'fills', 'styles', 'formulas', 'comments']
-        }
-    };
-}
-
 function compactArtifactPromptRows(view = {}, maxChars = ARTIFACT_OBSERVATION_ROW_WINDOW_TEXT_CHARS) {
     const observation = getArtifactObservationFromParsedResult(view);
     const rows = getArtifactRowsFromObservation(observation);
@@ -5397,16 +5299,8 @@ function compactArtifactPromptRows(view = {}, maxChars = ARTIFACT_OBSERVATION_RO
             omittedCompactRowCount: omittedRows.length,
             omittedCompactRowRange: omittedRows.length
                 ? `${omittedRows[0]?.rowNumber || ''}:${omittedRows[omittedRows.length - 1]?.rowNumber || ''}`
-                : '',
-            requiredNextStep: omittedRows.length
-                ? 'Call artifact_tools query with the continuation/range below if omitted rows may affect the answer.'
                 : ''
         };
-        const continuation = buildArtifactContinuationFromRows(baseView, omittedRows);
-        if (continuation) {
-            baseObservation.continuation = continuation;
-            baseView.nextActions = [continuation, ...(Array.isArray(baseView.nextActions) ? baseView.nextActions : [])].slice(0, 6);
-        }
         return JSON.stringify(baseView, null, 2);
     };
 
@@ -5456,8 +5350,7 @@ function buildArtifactToolObservationPromptText(resultText = '') {
                 ? 'artifact_tool_observation_was_already_model_truncated'
                 : 'artifact_tool_observation_exceeded_prompt_budget',
             originalTextChars: resultText.length,
-            promptTextChars: compacted.text.length,
-            instruction: 'The prompt view is compressed structurally. Use observation.promptCompression and continuation/nextActions to fetch omitted rows before answering if needed.'
+            promptTextChars: compacted.text.length
         }
     };
 }
@@ -5472,8 +5365,7 @@ function buildGenericToolObservationPromptText(resultText = '', response = {}) {
         compression: lossless ? null : {
             reason: 'generic_tool_observation_text_exceeded_prompt_budget',
             originalTextChars: sourceText.length,
-            promptTextChars: text.length,
-            instruction: 'This is a compressed preview. Re-run or narrow the tool call if the omitted text may matter.'
+            promptTextChars: text.length
         }
     };
 }
@@ -5538,15 +5430,16 @@ function buildExactAnswerContractPromptObject({ exactAnswerMode = false, evidenc
             'question asks for scaled units such as thousand/million/billion but answer is the raw rounded base-unit value'
         ],
         available_evidence_refs: evidenceArtifacts.map((artifact) => artifact.id).filter(Boolean),
-        instruction: `When solved, call ${FINAL_ANSWER_TOOL_NAME} instead of writing a visible prose final. Evidence artifact ids are optional references, not a hard gate. Use your own judgment about whether evidence is sufficient; if it is not, continue tools or return blocked. For quantitative questions, finish unit conversion, rate conversion, scaling, and rounding before final; if the question asks how many thousand/million/billion X, answer with the scaled count, not the raw unit value. For finite stochastic/probability/odds questions, use exact state transitions, dynamic programming, or exhaustive enumeration when needed; Monte Carlo may be a sanity check. Keep the answer field consistent with the final numeric conclusion written in reason.`
+        instruction: `When solved, call ${FINAL_ANSWER_TOOL_NAME} instead of writing a visible prose final. Evidence artifact ids are audit references for the observations you used; they do not decide sufficiency for you, but ${FINAL_ANSWER_TOOL_NAME} submissions must cite available refs. Use your own judgment about whether evidence is sufficient; if it is not, continue tools or return blocked. For quantitative questions, finish unit conversion, rate conversion, scaling, and rounding before final; if the question asks how many thousand/million/billion X, answer with the scaled count, not the raw unit value. For finite stochastic/probability/odds questions, use exact state transitions, dynamic programming, or exhaustive enumeration when needed; Monte Carlo may be a sanity check. Keep the answer field consistent with the final numeric conclusion written in reason.`
     };
 }
 
-function buildLlmAgentDirectToolMessages({
+function buildLlmAgentDirectToolPrompt({
     message,
     messageHistory = [],
     events = [],
     stepResults = [],
+    contextManager = null,
     toolSummary = '',
     maxSteps = DEFAULT_AGENT_LOOP_STEPS,
     memoryContext = '',
@@ -5554,114 +5447,85 @@ function buildLlmAgentDirectToolMessages({
     externalToolExposure = null,
     exactAnswerMode = false,
     runtimeEnvironment = null,
-    promptProfile = null
+    promptProfile = null,
+    tools = [],
+    contextMode = 'persona'
 }) {
     const activePromptProfile = promptProfile || resolveAgentPromptProfile();
+    const taskAgentMode = normalizeText(contextMode).toLowerCase() === 'task_agent';
+    const modelMessageHistory = taskAgentMode ? [] : messageHistory;
     const capabilityCatalog = buildAgentCapabilityCatalog({
-        compact: activePromptProfile.compact
+        compact: activePromptProfile.compact,
+        role: taskAgentMode ? 'task_agent' : 'persona_orchestrator'
     });
-    const recentConversation = normalizeConversationHistory(messageHistory, {
-        maxItems: activePromptProfile.historyItems,
-        maxChars: activePromptProfile.historyChars
-    });
-    const recentTurnItems = buildTurnItemsPromptObject({
-        events,
-        stepResults,
-        maxItems: activePromptProfile.turnItems
-    });
-    const progressSnapshot = buildAgentPromptProgressSnapshot({
-        events,
-        stepResults,
-        turnItems: recentTurnItems
-    });
-    const compactMemoryContext = memoryContext
-        ? summarizeForModel(memoryContext, activePromptProfile.memoryChars)
-        : null;
-    const evidenceArtifacts = buildAgentEvidenceArtifactsPromptObject(stepResults, {
-        message,
-        exactAnswerMode
-    });
-    const evidenceSufficiency = buildEvidenceSufficiencyPromptObject(stepResults, {
-        exactAnswerMode,
-        message
-    });
-    const exactAnswerContract = buildExactAnswerContractPromptObject({
-        exactAnswerMode,
-        evidenceArtifacts
-    });
-    const system = [
-        AILIS_SYSTEM_PROMPT,
+    const toolOutputChars = activePromptProfile.compact ? 12000 : 24000;
+    const instructions = [
+        taskAgentMode ? AILIS_TASK_AGENT_SYSTEM_PROMPT : AILIS_SYSTEM_PROMPT,
         '',
-        '【AILIS Direct Tool Executor】',
-        '你正在运行 AILIS 的任务执行层。普通情感/闲聊可以直接自然回复；需要读取、检索、操作电脑、解析文件、调用 API、写代码或复核证据时，必须调用一个可用工具，而不是用自然语言假装完成。',
-        '本模式只把本轮最小必要工具作为原生 function tools 暴露给你。默认核心通常只有 tool_search、update_plan、computer/read/write/exec/apply_patch、request_permissions；研究/Web/MCP/文档/表格/API 等工具需要先通过 tool_search 搜索命中，下一轮才会作为 direct tool 出现。',
-        '不要输出 JSON 决策协议，不要手写 tool_call/tool/args 包装对象；如果要执行工具，使用原生工具调用。每轮最多调用一个工具。',
-        '如果缺工具、缺 API、缺文档解析或视觉能力，先调用 tool_search；tool_search 返回的 mcp__... 或 external__... 在下一轮会变成可直接调用的原生工具。',
-        '只调用本轮 tools 数组中实际暴露的原生工具；不要根据历史提示或其他系统经验虚构工具名。',
-        '公开进展文本：每个 direct tool 参数里都有可选 progress_note。只有出现重要变化时，顺手填一句自然、短、给用户看的进展，例如策略切换、发现关键证据、证据足够准备收敛、工具失败后的恢复方向、权限/环境阻塞；例行工具调用留空。不要泄露隐藏推理链，不要写工具日志/JSON/“第 N 步”/“正在处理”这类低信息量模板。',
-        '工具失败、字段没找到或你自己判断候选材料不足时，再结合 latest_failed_observation、retrieval diagnostics 和 tool_observations 改换策略。tool_observations 每条会标明 lossless/compression；不要把 recovery_hint 当成必须执行的下一步，也不要机械重复同一个 web_search。',
-        '歧义澄清协议：如果 latest_failed_observation/latest_observation 或任何 tool_result 显示 evidence_gap=ambiguous_search_requires_clarification，或 recovery_hint 要求用户澄清搜索目标，停止继续调用 web_search/web_fetch，直接用最终可见回复问用户选择候选或补充游戏名/角色全名。',
-        '证据判断协议：工具返回的 evidence_sufficiency / evidence_observations 只是观察材料和质量提示，不是硬性闸门。由你自己判断证据是否足够；够就 final，不够就继续工具、询问澄清或说明不确定。',
-        '不要机械等待 ready_for_reasoning、reasoningReady 或完整网页抓取；搜索摘要、元数据、片段、多个弱来源的一致性都可以作为你判断的一部分。',
-        '运行环境协议：user payload 里的 runtime_environment 是当前这一轮的真实执行环境，来自 Platform Adapter，不属于长期记忆。生成 shell、路径、重定向、管道、环境变量和文件命令时必须先看 runtime_environment.family/default_shell/path_style/command_guidance；不要默认自己在 Linux、Windows 或 macOS。',
-        'GitHub Pages 路由：任务涉及 GitHub Pages、gh-pages、github.io、部署验收、Pages 404 或发布目录时，先用 tool_search 查 github_pages，再调用返回的 direct 工具；不要先用裸 exec 拼 git/curl/head 作为主要诊断路径。',
-        '工具选择路由：如果任务提到附件、本地文件路径、DOCX/Word、PPT/PPTX、表格/CSV/XLSX、PDF、图片或其他文件 artifact，优先用 tool_search 查 artifact_tools 并让 AILIS Artifact Tools 接管 open/index/search/query/inspect/render/trace/edit/export。音频、代码文件、GitHub 仓库、已知 URL 仍按对应专用工具或 MCP direct spec 处理；web_search 只作为没有专用工具或专用工具失败后的兜底。',
-        'Artifact Tools 协议：artifact_tools 返回的 art_* / arts_* 属于 artifact_tools 运行时；继续用 artifact_tools 的 sessionId/path 执行 inspect/search/query/render。不要把 art_* 传给 artifact_query；artifact_query 只用于 context artifactId。',
-        'Artifact Tools 截断恢复：truncatedForModelText/omittedCompactRowCount/continuation 说明只是模型文本预算压缩，优先用 continuation 或更窄 range 继续 artifact_tools query/search/render；不要仅因模型可见文本压缩就切到 exec/write/Python。',
-        '需要用户授权时调用 request_permissions。危险写入、shell、patch、邮件发送等会由本地 Gateway 审批，不要在参数中伪造 approved=true。',
-        '最终答复必须是给用户看的 Markdown。没有足够证据时不要提交猜测答案，要继续调用工具或明确 blocked。',
+        '【AILIS Responses-Compatible Tool Runtime】',
+        'The model-visible protocol follows the OpenAI Responses object model used by modern coding agents. The request has instructions, input, tools, tool_choice, parallel_tool_calls, and reasoning controls. The input is an ordered list of ResponseItem objects such as message, function_call, function_call_output, tool_search_call, and tool_search_output.',
+        'Use native tool calls when work requires files, artifacts, search, shell/code, APIs, or verification. Otherwise answer with an assistant message. Do not output a custom JSON decision object.',
+        'Tool call outputs from previous turns appear as function_call_output/tool_search_output items paired with their call_id. Use recent, relevant outputs as observations, but do not keep rereading stale exploration results once you have enough information to code, verify, or answer.',
+        'If enough evidence is available, answer directly. If more evidence is needed, call one available tool. Do not repeat an identical tool call unless the new arguments materially change the observation.',
+        'Only call tools that are present in the current tools array. If a needed tool is missing, use tool_search when it is available.',
+        'For local file and data tasks, prefer the coding main path: read/write/exec/apply_patch. Use read to inspect small files, write to create helper scripts, exec to run scripts/tests/diagnostics, and apply_patch for source edits. Use artifact_tools or tool_search only when the coding path cannot reliably inspect the file type or when a specialized parser is clearly needed.',
+        'For data reasoning tasks, use code as a calculator and verifier: write scripts that parse the source file, compute the needed result, and print a short answer plus compact evidence. Do not write scripts whose main purpose is to dump large files, whole spreadsheets, logs, or documents back into model context.',
+        'When a tool result says outputComplete=true, outputTruncatedForModel=false, complete=true, truncated=false, or reasoning_ready=true and it contains enough evidence, stop inspecting and solve or answer. Older exploratory observations may be compacted; rely on the latest complete evidence or write a focused verifier.',
+        'When exec output is truncated, use the visible outputId with output_read/output_tail/output_search to inspect a needed slice. Do not rerun the same command solely to recover truncated text.',
+        'Runtime environment and attached file metadata are provided as ordinary user message context items. Use them for path and shell decisions.',
         exactAnswerMode
-            ? `Exact-answer 模式：普通可见话术不能作为提交答案。任务完成时必须调用 ${FINAL_ANSWER_TOOL_NAME}，answer 只填短精确答案，confidence 必须 high/medium，evidence_refs 必须引用 evidence_artifacts 中的 id；这些 artifact-* 是证据引用，不是文件路径，也不是 artifact_query 的 context artifactId，不要用 read/open/artifact_query 读取它们。若 evidence_artifacts 包含 QuestionEvidence/source_question，且题目是自包含逻辑、数学、语法、翻译或规则推导题，可以引用它作为题面证据；网页、论文、文件、新闻或 as-of 查询仍必须先检索/读取外部证据。数值题 final 前先完成单位换算、比例换算和四舍五入；如果题目问 how many thousand/million/billion X，answer 填缩放后的计数，不填原始 X 数值，并在 reason 简写换算式。若题目是随机/概率/odds/最大胜率的有限状态过程，final 前必须用 exact DP、状态概率转移或枚举验证；Monte Carlo 只能 sanity check，不能直接提交；不要为题面未定义的末尾/残缺状态发明 0.5、均分或可变随机机制。若题目是表格/分配/人物属性/物品列表/缺失项这类关系约束题，final 前必须说明目标角色、中间缺失实体、表格方向映射三者一致，否则继续推理或调用工具。`
+            ? `Exact-answer mode: when the answer is complete, provide the shortest exact answer in the final assistant message${toolSummary.includes(FINAL_ANSWER_TOOL_NAME) ? ` or call ${FINAL_ANSWER_TOOL_NAME} if that tool is exposed as the submission endpoint` : ''}.`
             : '',
-        `最多工具轮数：${maxSteps}`,
-        `工具摘要：${toolSummary || 'Direct tools are exposed as native function tools. Search more tools with tool_search.'}`
+        `Max tool rounds: ${maxSteps}`,
+        `Tool summary: ${toolSummary || 'Direct tools are exposed as native function tools. Search more tools with tool_search.'}`
     ].filter(Boolean).join('\n');
-    return [
-        { role: 'system', content: system },
-        {
-            role: 'user',
-            content: JSON.stringify(
-                {
-                    user_goal: message,
-                    recent_conversation: recentConversation,
-                    memory_context: compactMemoryContext,
-                    attached_files: getAttachedFilesPromptObject(fileAttachments),
-                    runtime_environment: runtimeEnvironment,
-                    recent_turn_items: recentTurnItems,
-                    tool_observations: buildToolObservationDigest(stepResults),
-                    evidence_artifacts: evidenceArtifacts,
-                    evidence_sufficiency: evidenceSufficiency,
-                    exact_answer_contract: exactAnswerContract,
-                    capability_catalog: capabilityCatalog,
-                    external_tool_exposure: externalToolExposure,
-                    current_progress: progressSnapshot
-                },
-                null,
-                activePromptProfile.compact ? 0 : 2
-            )
+    const activeContextManager = contextManager && typeof contextManager.forPrompt === 'function'
+        ? contextManager
+        : buildModelInputContextManager({
+            message,
+            messageHistory: modelMessageHistory,
+            toolOutputs: stepResults,
+            memoryContext,
+            fileAttachments: getAttachedFilesPromptObject(fileAttachments),
+            runtimeEnvironment,
+            capabilityCatalog,
+            externalToolExposure,
+            toolOutputChars
+    });
+    const input = activeContextManager.forPrompt();
+    const prompt = Prompt.create({
+        input,
+        tools,
+        parallel_tool_calls: false,
+        base_instructions: { text: instructions }
+    });
+    const requestPayload = Prompt.toRequestPayload(prompt);
+    return {
+        instructions: requestPayload.instructions,
+        input: requestPayload.input,
+        tools: requestPayload.tools,
+        prompt,
+        contextManager: activeContextManager,
+        messages: responseItemsToChatMessages({
+            instructions: requestPayload.instructions,
+            input: requestPayload.input
+        }),
+        promptProfile: {
+            id: activePromptProfile.id,
+            compact: activePromptProfile.compact,
+            reason: activePromptProfile.reason || ''
+        },
+        toolOutputChars,
+        stats: {
+            input_items: requestPayload.input.length,
+            context_history_items: typeof activeContextManager.rawItems === 'function'
+                ? activeContextManager.rawItems().length
+                : requestPayload.input.length,
+            function_call_outputs: requestPayload.input.filter((item) => item?.type === 'function_call_output').length,
+            tool_search_outputs: requestPayload.input.filter((item) => item?.type === 'tool_search_output').length,
+            legacy_events: Array.isArray(events) ? events.length : 0
         }
-    ];
-}
-
-function shouldUseDirectToolExecutor(settings = {}, requestContext = {}) {
-    if (
-        requestContext.directToolExecutor === false ||
-        requestContext.nativeDirectTools === false ||
-        requestContext.disableDirectToolExecutor === true
-    ) {
-        return false;
-    }
-    const capabilities = getProviderCapabilities(settings);
-    if (!capabilities.nativeToolCalling) {
-        return false;
-    }
-    return Boolean(
-        requestContext.directToolExecutor === true ||
-            requestContext.nativeDirectTools === true ||
-            settings.directToolExecutor === true ||
-            settings.nativeDirectTools === true ||
-            capabilities.nativeToolCallingDefault
-    );
+    };
 }
 
 function findNativeToolSpec(toolName = '', tools = []) {
@@ -5720,23 +5584,6 @@ function looksLikeMetaDecisionJson(json = {}) {
 }
 
 async function callLlmAgentDirectToolDecision(settings, payload, { hasToolHistory = false } = {}) {
-    const capabilities = getProviderCapabilities(settings);
-    if (!capabilities.nativeToolCalling) {
-        return {
-            ok: false,
-            status: 'direct_tool_executor_unavailable',
-            error: 'Current provider does not advertise native tool calling.',
-            directToolFallback: true
-        };
-    }
-    if (!Array.isArray(payload.tools) || payload.tools.length === 0) {
-        return {
-            ok: false,
-            status: 'direct_tool_executor_no_tools',
-            error: 'No direct native tools are available for this Agent turn.',
-            directToolFallback: true
-        };
-    }
     const response = await callDesktopLlmProvider(settings, {
         ...payload,
         jsonMode: false,
@@ -5755,14 +5602,57 @@ async function callLlmAgentDirectToolDecision(settings, payload, { hasToolHistor
             ok: false,
             status: failureDecision.status,
             httpStatus: failureDecision.httpStatus,
-            error: failureDecision.error,
-            directToolFallback: !isTerminalAgentDecisionFailure(failureDecision)
+            error: failureDecision.error
         };
     }
-    const directToolCall = (response.toolCalls || []).find((call) => call?.name && call.name !== 'ailis_agent_decision');
+    const directToolCall = (response.toolCalls || []).find((call) => call?.name);
     if (directToolCall) {
-        if (directToolCall.name === FINAL_ANSWER_TOOL_NAME) {
-            const exactAnswerSubmission = normalizeExactAnswerSubmission(directToolCall.arguments || {});
+        const providerMetadata = response.providerMessage || null;
+        const responseItem = functionCall({
+            name: directToolCall.name,
+            arguments: directToolCall.arguments || {},
+            call_id: directToolCall.id || directToolCall.call_id || `${directToolCall.name || 'tool'}_call`,
+            provider_metadata: providerMetadata
+        });
+        const routedToolCall = ToolRouter.buildToolCall(responseItem);
+        if (!routedToolCall) {
+            return {
+                ok: false,
+                status: 'invalid_agent_tool_call',
+                error: 'Provider returned a native tool call that could not be converted from ResponseItem.',
+                raw: {
+                    toolCall: directToolCall,
+                    responseItem,
+                    content: response.content || ''
+                },
+                usage: response.usage
+            };
+        }
+        const routedNativeToolCall = {
+            ...directToolCall,
+            id: routedToolCall.callId,
+            name: routedToolCall.toolName,
+            arguments: routedToolCall.args,
+            ...(providerMetadata ? { providerMetadata } : {})
+        };
+        if (routedToolCall.toolName === FINAL_ANSWER_TOOL_NAME) {
+            const nativeValidation = validateNativeDirectToolCall(routedNativeToolCall, payload.tools);
+            if (!nativeValidation.ok) {
+                return {
+                    ok: false,
+                    status: 'invalid_native_final_answer_args',
+                    error: `Provider returned invalid final_answer arguments: ${nativeValidation.errors.join('; ')}`,
+                    raw: {
+                        toolCall: routedNativeToolCall,
+                        responseItem,
+                        errors: nativeValidation.errors,
+                        schema: nativeValidation.schema,
+                        content: response.content || ''
+                    },
+                    usage: response.usage
+                };
+            }
+            const exactAnswerSubmission = normalizeExactAnswerSubmission(nativeValidation.args || {});
             const visibleText = exactAnswerSubmission.personaText || exactAnswerSubmission.answer;
             const argumentProgressNote = normalizeProgressNoteText(directToolCall.arguments?.[DIRECT_TOOL_PROGRESS_NOTE_FIELD]);
             const contentProgressNote = normalizeProgressNoteText(response.content);
@@ -5790,30 +5680,31 @@ async function callLlmAgentDirectToolDecision(settings, payload, { hasToolHistor
                 exactAnswerSubmission,
                 legacyPlan: false,
                 raw: {
-                    toolCall: directToolCall,
+                    toolCall: routedNativeToolCall,
+                    responseItem,
                     content: response.content || ''
                 },
                 decisionSource: 'native_final_answer_tool',
-                nativeToolCall: directToolCall,
+                nativeToolCall: routedNativeToolCall,
                 transportFallback: false,
                 model: response.model,
                 usage: response.usage
             };
         }
-        const nativeValidation = validateNativeDirectToolCall(directToolCall, payload.tools);
+        const nativeValidation = validateNativeDirectToolCall(routedNativeToolCall, payload.tools);
         if (!nativeValidation.ok) {
             return {
                 ok: false,
                 status: 'invalid_native_tool_args',
-                error: `Provider returned invalid native tool arguments for ${directToolCall.name}: ${nativeValidation.errors.join('; ')}`,
+                error: `Provider returned invalid native tool arguments for ${routedToolCall.toolName}: ${nativeValidation.errors.join('; ')}`,
                 raw: {
-                    toolCall: directToolCall,
+                    toolCall: routedNativeToolCall,
+                    responseItem,
                     errors: nativeValidation.errors,
                     schema: nativeValidation.schema,
                     content: response.content || ''
                 },
-                usage: response.usage,
-                directToolFallback: true
+                usage: response.usage
             };
         }
         const {
@@ -5822,9 +5713,9 @@ async function callLlmAgentDirectToolDecision(settings, payload, { hasToolHistor
         } = splitNativeProgressNoteArgs(nativeValidation.args);
         const contentProgressNote = normalizeProgressNoteText(response.content);
         const toolCall = sanitizeAgentToolCall({
-            id: directToolCall.id,
-            title: directToolCall.name,
-            tool: directToolCall.name,
+            id: routedToolCall.callId,
+            title: routedToolCall.toolName,
+            tool: routedToolCall.toolName,
             args: cleanNativeArgs
         }, 0, 'execute');
         if (!toolCall) {
@@ -5833,32 +5724,38 @@ async function callLlmAgentDirectToolDecision(settings, payload, { hasToolHistor
                 status: 'invalid_agent_tool_call',
                 error: 'Provider returned a native tool call that could not be sanitized.',
                 raw: directToolCall,
-                usage: response.usage,
-                directToolFallback: true
+                usage: response.usage
             };
         }
         return {
             ok: true,
             mode: 'task',
-            intent: `direct_tool:${directToolCall.name}`,
-            summary: `Direct native tool call: ${directToolCall.name}`,
+            intent: `direct_tool:${routedToolCall.toolName}`,
+            summary: `Direct native tool call: ${routedToolCall.toolName}`,
             publicReasoning: progressNote || contentProgressNote,
             riskLevel: normalizeText('', agentStepNeedsConfirmation(toolCall) ? 'medium' : 'low'),
             action: 'tool',
             finalAnswer: '',
             blockedReason: '',
-            toolCall,
+            toolCall: {
+                ...toolCall,
+                ...(providerMetadata ? {
+                    providerMetadata,
+                    nativeToolCall: routedNativeToolCall
+                } : {})
+            },
             capabilityRequest: sanitizeCapabilityRequest({}),
             planUpdates: [],
             progressNoteSource: progressNote ? 'model_tool_progress_note' : (contentProgressNote ? 'model_message_content' : ''),
             personaOutput: null,
             legacyPlan: false,
             raw: {
-                toolCall: directToolCall,
+                toolCall: routedNativeToolCall,
+                responseItem,
                 content: response.content || ''
             },
             decisionSource: 'native_direct_tool_call',
-            nativeToolCall: directToolCall,
+            nativeToolCall: routedNativeToolCall,
             transportFallback: false,
             model: response.model,
             usage: response.usage
@@ -5868,11 +5765,10 @@ async function callLlmAgentDirectToolDecision(settings, payload, { hasToolHistor
     if (looksLikeMetaDecisionJson(metaJson)) {
         return {
             ok: false,
-            status: 'direct_tool_executor_json_meta_decision',
-            error: 'Provider returned the old JSON meta-decision shape while direct tools were exposed.',
+            status: 'model_input_custom_json_decision',
+            error: 'Provider returned a custom JSON decision object instead of a native tool call or assistant message.',
             raw: metaJson,
-            usage: response.usage,
-            directToolFallback: true
+            usage: response.usage
         };
     }
     const finalAnswer = stripControlTags(response.content);
@@ -5881,8 +5777,7 @@ async function callLlmAgentDirectToolDecision(settings, payload, { hasToolHistor
             ok: false,
             status: 'empty_response',
             error: 'Direct tool executor returned no tool call and no final content.',
-            usage: response.usage,
-            directToolFallback: true
+            usage: response.usage
         };
     }
     return {
@@ -5913,386 +5808,6 @@ async function callLlmAgentDirectToolDecision(settings, payload, { hasToolHistor
         transportFallback: false,
         model: response.model,
         usage: response.usage
-    };
-}
-
-function buildAgentDecisionNativeTool() {
-    return {
-        name: 'ailis_agent_decision',
-        description: 'Return exactly one next AILIS Agent Loop decision for this turn. The runtime executes real tools after validating this decision.',
-        parameters: {
-            type: 'object',
-            additionalProperties: false,
-            properties: {
-                mode: {
-                    type: 'string',
-                    enum: ['conversation', 'task']
-                },
-                intent: {
-                    type: 'string'
-                },
-                summary: {
-                    type: 'string'
-                },
-                public_reasoning: {
-                    type: 'string',
-                    description: 'Short user-visible progress summary. Do not include hidden reasoning or raw tool logs.'
-                },
-                action: {
-                    type: 'string',
-                    enum: ['load_context', 'tool', 'final', 'blocked']
-                },
-                capability_request: {
-                    type: 'object',
-                    additionalProperties: false,
-                    properties: {
-                        skills: {
-                            type: 'array',
-                            items: { type: 'string' }
-                        },
-                        tools: {
-                            type: 'array',
-                            items: { type: 'string' }
-                        },
-                        mcp: {
-                            type: 'array',
-                            items: { type: 'string' }
-                        },
-                        reason: {
-                            type: 'string'
-                        }
-                    }
-                },
-                plan_update: {
-                    type: 'array',
-                    items: { type: 'string' }
-                },
-                tool_call: {
-                    type: 'object',
-                    additionalProperties: true,
-                    properties: {
-                        tool: {
-                            type: 'string'
-                        },
-                        title: {
-                            type: 'string'
-                        },
-                        args: {
-                            type: 'object',
-                            additionalProperties: true
-                        }
-                    }
-                },
-                persona_output: {
-                    type: 'object',
-                    additionalProperties: true,
-                    properties: {
-                        text: { type: 'string' },
-                        bubble_text: { type: 'string' },
-                        speech_text: { type: 'string' },
-                        emotion: { type: 'string' },
-                        intensity: { type: 'number' },
-                        socialTone: { type: 'string' },
-                        gestureIntent: { type: 'string' },
-                        taskState: { type: 'string' },
-                        speechEnergy: { type: 'number' },
-                        gazeTarget: { type: 'string' },
-                        durationHint: { type: 'string' },
-                        tts_style: { type: 'string' }
-                    }
-                },
-                final_answer: {
-                    type: 'string'
-                },
-                exact_answer_submission: {
-                    type: 'object',
-                    additionalProperties: false,
-                    properties: {
-                        answer: { type: 'string' },
-                        confidence: {
-                            type: 'string',
-                            enum: ['high', 'medium', 'low']
-                        },
-                        evidence_refs: {
-                            type: 'array',
-                            items: { type: 'string' }
-                        },
-                        format_type: {
-                            type: 'string',
-                            enum: ['plain', 'number', 'date', 'list', 'name', 'url', 'json']
-                        },
-                        reason: { type: 'string' },
-                        persona_text: { type: 'string' },
-                        repair_instruction: { type: 'string' }
-                    }
-                },
-                blocked_reason: {
-                    type: 'string'
-                }
-            },
-            required: ['mode', 'intent', 'action']
-        },
-        strict: false
-    };
-}
-
-function shouldUseNativeAgentDecision(settings = {}, payload = {}) {
-    if (payload.disableNativeToolCalls === true || payload.nativeToolCalls === false) {
-        return false;
-    }
-    const capabilities = getProviderCapabilities(settings);
-    if (!capabilities.nativeToolCalling) {
-        return false;
-    }
-    if (payload.nativeToolCalls === true || payload.preferNativeToolCalls === true) {
-        return true;
-    }
-    return Boolean(capabilities.nativeToolCallingDefault);
-}
-
-function buildAgentDecisionProviderPayload(settings, payload) {
-    const useNativeToolCalls = shouldUseNativeAgentDecision(settings, payload);
-    if (useNativeToolCalls) {
-        return {
-            ...payload,
-            tools: [buildAgentDecisionNativeTool()],
-            toolChoice: {
-                name: 'ailis_agent_decision',
-                required: true
-            }
-        };
-    }
-    return {
-        ...payload,
-        jsonMode: true
-    };
-}
-
-function extractAgentDecisionJson(response = {}) {
-    const nativeDecisionCall = (response.toolCalls || []).find((call) => call.name === 'ailis_agent_decision');
-    if (nativeDecisionCall) {
-        return {
-            json: nativeDecisionCall.arguments || {},
-            source: 'native_tool_call',
-            nativeToolCall: nativeDecisionCall
-        };
-    }
-    return {
-        json: extractJsonObject(response.content),
-        source: 'json_text'
-    };
-}
-
-async function callLlmAgentDecision(settings, payload) {
-    let response = await callDesktopLlmProvider(settings, buildAgentDecisionProviderPayload(settings, payload));
-    let transportFallback = false;
-    if (
-        !response.ok &&
-        response.code === 'provider_error' &&
-        !isTerminalProviderErrorMessage(response.error) &&
-        (payload.nativeToolCalls !== false || payload.jsonMode !== false)
-    ) {
-        response = await callDesktopLlmProvider(settings, {
-            ...payload,
-            disableNativeToolCalls: true
-        });
-        transportFallback = true;
-    }
-    if (!response.ok) {
-        return {
-            ok: false,
-            status: response.code || 'llm_error',
-            httpStatus: response.status,
-            error: response.error || 'LLM agent failed'
-        };
-    }
-    const extracted = extractAgentDecisionJson(response);
-    const json = extracted.json;
-    if (!json || typeof json !== 'object') {
-        return {
-            ok: false,
-            status: 'invalid_agent_decision',
-            error: 'Agentic Executor 没有返回合法 JSON。',
-            raw: response.content,
-            nativeToolCalls: response.toolCalls || [],
-            decisionSource: extracted.source,
-            transportFallback
-        };
-    }
-
-    let toolCall = sanitizeAgentToolCall(
-        json.tool_call || json.toolCall || json.next_step || json.nextStep || buildRootToolCallCandidate(json),
-        0,
-        'execute'
-    );
-    let legacyPlan = false;
-    if (!toolCall && Array.isArray(json.steps) && json.steps.length) {
-        toolCall = sanitizeAgentToolCall(json.steps[0], 0, 'execute');
-        legacyPlan = Boolean(toolCall);
-    }
-    const capabilityRequest = sanitizeCapabilityRequest(
-        json.capability_request ||
-            json.capabilityRequest ||
-            json.load_context ||
-            json.loadContext ||
-            json.context_request ||
-            json.contextRequest ||
-            json.request_context ||
-            json.requestContext
-    );
-    const personaOutput = sanitizePersonaOutput(json.persona_output || json.personaOutput || json.surface);
-
-    const inferredAction = capabilityRequest.hasAny
-        ? 'load_context'
-        : toolCall
-        ? 'tool'
-        : stripControlTags(json.final_answer || json.answer || json.response || personaOutput?.text || personaOutput?.bubbleText)
-            ? 'final'
-            : '';
-    const action = normalizeAgentAction(json.action || json.next_action || json.nextAction, inferredAction);
-    const finalAnswer = stripControlTags(json.final_answer || json.answer || json.response);
-    const blockedReason = stripControlTags(json.blocked_reason || json.blockedReason || json.reason || json.error);
-    const exactAnswerSubmission = normalizeExactAnswerSubmission(
-        json.exact_answer_submission ||
-            json.exactAnswerSubmission ||
-            json.submitted_answer ||
-            json.submittedAnswer ||
-            {}
-    );
-
-    if (action === 'tool' && !toolCall) {
-        return {
-            ok: false,
-            status: 'invalid_agent_tool_call',
-            error: 'Agentic Executor 要求调用工具，但没有给出合法 tool_call。',
-            raw: json,
-            usage: response.usage
-        };
-    }
-
-    if (action === 'load_context' && !capabilityRequest.hasAny) {
-        return {
-            ok: false,
-            status: 'invalid_capability_request',
-            error: 'Agentic Executor 要求加载上下文，但没有给出合法 capability_request。',
-            raw: json,
-            usage: response.usage
-        };
-    }
-
-    if (!['load_context', 'tool', 'final', 'blocked'].includes(action)) {
-        return {
-            ok: false,
-            status: 'plan_only_or_unknown_action',
-            error: 'Agentic Executor 只给出了计划或未知 action，没有给出上下文装载、工具调用、最终回答或阻塞原因。',
-            raw: json,
-            usage: response.usage
-        };
-    }
-
-    return {
-        ok: true,
-        mode: json.mode === 'conversation' && action !== 'tool' ? 'conversation' : 'task',
-        intent: normalizeText(json.intent, action === 'tool' ? 'llm_agent_tool_call' : 'llm_agent_final'),
-        summary: normalizeText(json.summary || json.objective || json.goal),
-        publicReasoning: normalizePublicReasoningText(
-            json.public_reasoning ||
-                json.publicReasoning ||
-                json.reasoning_summary ||
-                json.reasoningSummary ||
-                json.visible_reasoning ||
-                json.visibleReasoning ||
-                json.thinking_summary ||
-                json.thinkingSummary,
-            normalizeText(json.summary || json.objective || json.goal)
-        ),
-        riskLevel: normalizeText(json.risk_level || json.riskLevel, toolCall && agentStepNeedsConfirmation(toolCall) ? 'medium' : 'low'),
-        action,
-        finalAnswer: finalAnswer || personaOutput?.text || personaOutput?.bubbleText || '',
-        blockedReason,
-        toolCall,
-        capabilityRequest,
-        planUpdates: normalizePlanUpdates(json.plan_update || json.planUpdate || json.plan),
-        progressNoteSource: 'model_public_reasoning',
-        personaOutput,
-        exactAnswerSubmission: exactAnswerSubmission.answer || exactAnswerSubmission.evidenceRefs.length || exactAnswerSubmission.confidence
-            ? exactAnswerSubmission
-            : null,
-        legacyPlan,
-        raw: json,
-        decisionSource: extracted.source,
-        nativeToolCall: extracted.nativeToolCall || null,
-        transportFallback,
-        model: response.model,
-        usage: response.usage
-    };
-}
-
-const AGENT_DECISION_REPAIR_STATUSES = new Set([
-    'invalid_agent_decision',
-    'invalid_agent_tool_call',
-    'invalid_capability_request',
-    'plan_only_or_unknown_action'
-]);
-
-function buildAgentDecisionRepairMessages(messages = [], decision = {}) {
-    return [
-        ...messages,
-        {
-            role: 'user',
-            content: JSON.stringify(
-                {
-                    protocol_error: decision.status || 'invalid_agent_decision',
-                    error: decision.error || '',
-                    previous_output: summarizeForModel(
-                        typeof decision.raw === 'string'
-                            ? decision.raw
-                            : JSON.stringify(decision.raw || {}, null, 2),
-                        4000
-                    ),
-                    required_output_shape: {
-                        action: 'load_context|tool|final|blocked',
-                        tool_call: {
-                            tool: 'tool_search|request_permissions|mcp__server__tool|external__provider__tool|mcp_bridge|computer|code|email|file_manager|artifact_verifier|artifact_tools|artifact_import|artifact_query|artifact_compute|vision.capture_context|subagents|capability_manager|self_debugger|self_evolution|read|write|exec|apply_patch',
-                            title: 'short action title',
-                            args: {}
-                        },
-                        final_answer: 'visible answer when action is final',
-                        blocked_reason: 'visible reason when action is blocked'
-                    },
-                    instruction: 'Repair only the JSON protocol for the next step. Output strict JSON only. If an MCP tool is needed, call the mcp__server__tool direct id. Do not wrap MCP execution inside mcp_bridge.call_tool.'
-                },
-                null,
-                2
-            )
-        }
-    ];
-}
-
-async function callLlmAgentDecisionWithRepair(settings, payload) {
-    const first = await callLlmAgentDecision(settings, payload);
-    if (first.ok || !AGENT_DECISION_REPAIR_STATUSES.has(first.status)) {
-        return first;
-    }
-    const repaired = await callLlmAgentDecision(settings, {
-        ...payload,
-        temperature: 0,
-        messages: buildAgentDecisionRepairMessages(payload.messages || [], first)
-    });
-    if (repaired.ok) {
-        return {
-            ...repaired,
-            repaired: true,
-            repairedFrom: first.status,
-            repairError: first.error
-        };
-    }
-    return {
-        ...first,
-        repairAttempted: true,
-        repairStatus: repaired.status,
-        repairError: repaired.error,
-        repairRaw: repaired.raw
     };
 }
 
@@ -6619,7 +6134,7 @@ class AILISAgentRunner {
         return attachPersonaSurface(result, surface);
     }
 
-    compileMemoryContext({ sessionId, message, request } = {}) {
+    compileMemoryContext({ sessionId, message, request, contextMode = 'persona' } = {}) {
         const explicitMemoryContext = normalizeExplicitMemoryContext(
             request?.memoryContext ||
                 request?.memory_context ||
@@ -6634,7 +6149,8 @@ class AILISAgentRunner {
                 runtimeMemoryContext = this.memoryRuntime.compileContext({
                     sessionId,
                     message,
-                    messageHistory: request?.messageHistory || []
+                    messageHistory: request?.messageHistory || [],
+                    contextMode
                 });
             }
         } catch (error) {
@@ -6947,7 +6463,7 @@ class AILISAgentRunner {
         return this.pendingAgentDebugSessions.delete(normalizeText(debugSessionId));
     }
 
-    buildPendingAgentApproval({ message, sessionId, settings, decision, step, events, stepResults, iteration, maxSteps }) {
+    buildPendingAgentApproval({ message, sessionId, settings, decision, step, events, stepResults, contextManagerCheckpoint = null, iteration, maxSteps }) {
         return {
             approvalId: randomUUID(),
             sessionId,
@@ -6963,6 +6479,7 @@ class AILISAgentRunner {
             nextStep: step,
             events: Array.isArray(events) ? events.slice() : [],
             stepResults: Array.isArray(stepResults) ? stepResults.slice() : [],
+            contextManagerCheckpoint: contextManagerCheckpoint || null,
             iteration,
             maxSteps,
             raw: decision.raw
@@ -7047,48 +6564,17 @@ class AILISAgentRunner {
     async executePlanSteps({ runId, steps, toolContext, request }) {
         const results = [];
         for (const step of steps) {
-            this.gateway.emitGatewayEvent?.('agent.step.started', {
+            const stepResult = await executeToolStep({
+                gateway: this.gateway,
                 runId,
-                stepId: step.id,
-                title: step.title,
-                tool: step.tool,
-                args: step.args,
-                planner: 'llm-computer-planner',
-                phase: step.phase || 'execute'
+                sessionId: toolContext.sessionId || toolContext.sessionKey,
+                step,
+                toolContext,
+                request,
+                planner: 'llm-computer-planner'
             });
-            const response = await this.gateway.callTool({
-                tool: step.tool,
-                args: step.args,
-                context: {
-                    ...toolContext,
-                    runId,
-                    sessionId: toolContext.sessionId || toolContext.sessionKey,
-                    planner: 'llm-computer-planner',
-                    stepId: step.id,
-                    phase: step.phase || 'execute',
-                    ...(step.context || {})
-                },
-                timeoutMs: request.timeoutMs
-            });
-            const stepResult = {
-                id: step.id,
-                title: step.title,
-                tool: step.tool,
-                args: step.args,
-                phase: step.phase || 'execute',
-                response
-            };
             results.push(stepResult);
-            this.gateway.emitGatewayEvent?.('agent.step.finished', {
-                runId,
-                stepId: step.id,
-                tool: step.tool,
-                status: response.status,
-                ok: response.ok,
-                planner: 'llm-computer-planner',
-                phase: step.phase || 'execute'
-            });
-            if (!response.ok) {
+            if (!stepResult.response?.ok) {
                 break;
             }
         }
@@ -7096,52 +6582,31 @@ class AILISAgentRunner {
     }
 
     async executeAgentToolStep({ runId, step, toolContext, request, iteration }) {
-        this.gateway.emitGatewayEvent?.('agent.step.started', {
+        const inheritedLlmSettings = (
+            request?.llmSettings && typeof request.llmSettings === 'object' ? request.llmSettings :
+            request?.llm && typeof request.llm === 'object' ? request.llm :
+            request?.context?.llmSettings && typeof request.context.llmSettings === 'object' ? request.context.llmSettings :
+            request?.context?.llm && typeof request.context.llm === 'object' ? request.context.llm :
+            null
+        );
+        const effectiveToolContext = step.tool === 'subagents' && inheritedLlmSettings
+            ? { ...toolContext, llmSettings: inheritedLlmSettings }
+            : toolContext;
+        const stepResult = await executeToolStep({
+            gateway: this.gateway,
             runId,
-            stepId: step.id,
-            title: step.title,
-            tool: step.tool,
-            args: step.args,
-            planner: 'llm-agentic-executor',
-            phase: step.phase || 'execute',
-            iteration
-        });
-        const response = await this.gateway.callTool({
-            tool: step.tool,
-            args: step.args,
-            context: {
-                ...toolContext,
-                runId,
-                sessionId: toolContext.sessionId || toolContext.sessionKey,
-                planner: 'llm-agentic-executor',
-                stepId: step.id,
-                iteration,
-                phase: step.phase || 'execute',
-                ...(step.context || {})
-            },
-            timeoutMs: request.timeoutMs
-        });
-        const stepResult = attachAgentEvidenceArtifacts({
-            id: step.id,
-            title: step.title,
-            tool: step.tool,
-            args: step.args,
-            phase: step.phase || 'execute',
+            sessionId: effectiveToolContext.sessionId || effectiveToolContext.sessionKey,
+            step,
+            toolContext: effectiveToolContext,
+            request,
             iteration,
-            response
-        }, {
-            taskType: getAgentRunTaskType(request, toolContext)
-        });
-        this.gateway.emitGatewayEvent?.('agent.step.finished', {
-            runId,
-            stepId: step.id,
-            tool: step.tool,
-            status: response.status,
-            ok: response.ok,
-            evidenceRefs: getStepEvidenceRefs(stepResult),
             planner: 'llm-agentic-executor',
-            phase: step.phase || 'execute',
-            iteration
+            decorateStepResult: (baseStepResult) => attachAgentEvidenceArtifacts(baseStepResult, {
+                taskType: getAgentRunTaskType(request, effectiveToolContext)
+            }),
+            finishedPayload: (result) => ({
+                evidenceRefs: getStepEvidenceRefs(result)
+            })
         });
         if (stepResult.evidenceArtifacts?.length) {
             this.gateway.emitGatewayEvent?.('agent.evidence_artifacts', {
@@ -7281,6 +6746,7 @@ class AILISAgentRunner {
         dryRun,
         initialEvents = [],
         initialStepResults = [],
+        initialContextManagerCheckpoint = null,
         startIteration = 0,
         approvedForRun = false,
         settingsOverride = null
@@ -7491,6 +6957,11 @@ class AILISAgentRunner {
         const maxSteps = Math.max(1, Math.min(Number.isFinite(requestedMaxSteps) ? requestedMaxSteps : DEFAULT_AGENT_LOOP_STEPS, MAX_AGENT_LOOP_STEPS));
         const events = initialEvents.slice();
         const stepResults = initialStepResults.slice();
+        let modelInputContextManager = restoreModelInputContextManagerFromCheckpoint(initialContextManagerCheckpoint);
+        const contextManagerCheckpoint = () =>
+            modelInputContextManager && typeof modelInputContextManager.toCheckpoint === 'function'
+                ? modelInputContextManager.toCheckpoint()
+                : null;
         const initialPlan = request.initialPlan || requestContext.initialPlan || null;
         const exactAnswerMode = isExactAnswerExecutionMode(request, requestContext);
         let emailProfiles = {};
@@ -7499,10 +6970,13 @@ class AILISAgentRunner {
         } catch {
             emailProfiles = requestContext.emailProfiles || {};
         }
+        const agentRuntimeRole = resolveAgentRuntimeRole(request, requestContext);
+        const agentContextMode = resolveAgentContextMode(request, requestContext);
         const memoryContext = this.compileMemoryContext({
             sessionId,
             message,
-            request
+            request,
+            contextMode: agentContextMode
         });
         let latestDecision = null;
         const pauseAfterRound = async ({ iteration, reason = 'round_completed', decision = null, step = null } = {}) => {
@@ -7517,6 +6991,7 @@ class AILISAgentRunner {
                 requestContext,
                 events: events.slice(),
                 stepResults: stepResults.slice(),
+                contextManagerCheckpoint: contextManagerCheckpoint('debug_pause', iteration),
                 nextIteration: iteration + 1,
                 maxSteps,
                 intent: decision?.intent || latestDecision?.intent || 'llm_agent',
@@ -7565,40 +7040,69 @@ class AILISAgentRunner {
                 return interruptedBeforeRound;
             }
             const decisionSettings = resolveAgentDecisionSettings(settings, requestContext);
-            const decisionTimeoutMs = resolveAgentDecisionTimeoutMs(decisionSettings, {
-                events,
-                stepResults,
-                requestContext
-            });
             const taskCompactPrompt = looksLikeArtifactAnswerQuestion({
                 message,
                 fileAttachments
             });
+            const decisionTimeoutMs = resolveAgentDecisionTimeoutMs(decisionSettings, {
+                events,
+                stepResults,
+                requestContext: {
+                    ...requestContext,
+                    agentRole: agentRuntimeRole,
+                    exactAnswerMode,
+                    taskCompactPrompt
+                }
+            });
             const promptProfile = resolveAgentPromptProfile(decisionSettings, {
                 ...requestContext,
+                agentRole: agentRuntimeRole,
                 exactAnswerMode,
                 taskCompactPrompt
             });
-            const externalToolExposure = await buildExternalToolExposurePromptObject(this.gateway, {
-                query: message,
-                limit: requestContext.externalToolExposureLimit ||
-                    request.externalToolExposureLimit ||
-                    promptProfile.externalToolExposureLimit
-            });
+            const externalToolExposure = isPersonaOrchestratorRole(agentRuntimeRole)
+                ? null
+                : await buildExternalToolExposurePromptObject(this.gateway, {
+                    query: message,
+                    limit: requestContext.externalToolExposureLimit ||
+                        request.externalToolExposureLimit ||
+                        promptProfile.externalToolExposureLimit
+                });
             const directToolSpecs = buildAgentDirectToolSpecs(this.gateway, {
                 stepResults,
-                requestContext,
+                requestContext: {
+                    ...requestContext,
+                    agentRole: agentRuntimeRole,
+                    taskCompactPrompt
+                },
                 exactAnswerMode
             });
             const runtimeEnvironment = buildRuntimeEnvironmentPromptObject(this.gateway?.platformAdapter);
-            const useDirectToolExecutor =
-                shouldUseDirectToolExecutor(decisionSettings, requestContext) &&
-                directToolSpecs.length > 0;
+            const turnContext = buildAilisTurnContext({
+                runId,
+                sessionId,
+                message,
+                request,
+                requestContext: {
+                    ...requestContext,
+                    agentRole: agentRuntimeRole,
+                    exactAnswerMode,
+                    taskCompactPrompt
+                },
+                workspaceRoot: this.workspaceRoot,
+                runtimeEnvironment,
+                modelSettings: decisionSettings,
+                tools: directToolSpecs,
+                memoryContext,
+                fileAttachments,
+                iteration
+            });
             const commonPromptArgs = {
                 message,
                 messageHistory: request.messageHistory,
                 events,
                 stepResults,
+                contextManager: modelInputContextManager,
                 maxSteps,
                 emailProfiles,
                 initialPlan,
@@ -7608,21 +7112,31 @@ class AILISAgentRunner {
                 exactAnswerMode,
                 runtimeEnvironment,
                 promptProfile,
-                toolSummary: useDirectToolExecutor
-                    ? `Native direct tools exposed: ${directToolSpecs.map((tool) => tool.name).slice(0, 16).join(', ')}${directToolSpecs.length > 16 ? ', ...' : ''}.`
-                    : 'Codex-like capability index only. Load detailed tool contracts with load_context; load MCP/external tools through tool_search/capability_context as mcp__server__tool or external__provider__tool direct specs. Use mcp_bridge/capability_manager for discovery, auth, install, resources, and server management.'
+                tools: directToolSpecs,
+                contextMode: agentContextMode,
+                toolSummary: isPersonaOrchestratorRole(agentRuntimeRole)
+                    ? 'Persona orchestrator tools exposed: subagents. Answer directly for conversation; when the user asks AILIS to execute a task, call subagents with action=spawn or create, wait=true, and a concise task prompt for the TaskAgent child.'
+                    : directToolSpecs.length
+                        ? `Native direct tools exposed: ${directToolSpecs.map((tool) => tool.name).slice(0, 16).join(', ')}${directToolSpecs.length > 16 ? ', ...' : ''}.`
+                        : 'No native tools are exposed in this turn; answer directly if possible.'
             };
-            const decisionMessages = useDirectToolExecutor
-                ? buildLlmAgentDirectToolMessages(commonPromptArgs)
-                : buildLlmAgentExecutorMessages(commonPromptArgs);
-            const promptBudget = buildPromptBudgetReport(decisionMessages);
+            const directModelInputPrompt = buildLlmAgentDirectToolPrompt(commonPromptArgs);
+            modelInputContextManager = directModelInputPrompt.contextManager || modelInputContextManager;
+            const decisionMessages = directModelInputPrompt.messages;
+            const promptBudget = buildPromptBudgetReport({
+                instructions: directModelInputPrompt.instructions,
+                input: directModelInputPrompt.input,
+                tools: directModelInputPrompt.tools || directToolSpecs,
+                tool_choice: 'auto',
+                parallel_tool_calls: false
+            });
             this.gateway.emitGatewayEvent?.('agent.prompt_budget', {
                 runId,
                 sessionId,
                 iteration,
                 ...promptBudget,
                 promptProfile: promptProfile.id,
-                executorMode: useDirectToolExecutor ? 'native_direct_tools' : 'json_meta_decision',
+                executorMode: 'responses_model_input',
                 directToolCount: directToolSpecs.length
             });
             await appendRuntimeItem({
@@ -7632,10 +7146,21 @@ class AILISAgentRunner {
                     iteration,
                     promptBudget,
                     promptProfile,
-                    executorMode: useDirectToolExecutor ? 'native_direct_tools' : 'json_meta_decision',
+                    executorMode: 'responses_model_input',
+                    turnContext,
                     directTools: directToolSpecs.map((tool) => tool.name),
                     runtimeEnvironment,
-                    messages: decisionMessages
+                    messages: decisionMessages,
+                    model_input_request: {
+                        instructions: directModelInputPrompt.instructions,
+                        input: directModelInputPrompt.input,
+                        tools: directModelInputPrompt.tools || directToolSpecs,
+                        tool_choice: 'auto',
+                        parallel_tool_calls: false,
+                        prompt: directModelInputPrompt.prompt,
+                        stats: directModelInputPrompt.stats
+                    },
+                    context_manager_checkpoint: contextManagerCheckpoint('before_llm_decision', iteration)
                 }
             });
             const interruptedBeforeLlm = await maybeFinishInterruptedRun(`before_llm_decision_${iteration}`);
@@ -7646,7 +7171,11 @@ class AILISAgentRunner {
                 timeoutMs: decisionTimeoutMs,
                 messages: decisionMessages,
                 abortSignal,
-                ...(useDirectToolExecutor ? { tools: directToolSpecs, toolChoice: 'auto', jsonMode: false } : {})
+                instructions: directModelInputPrompt.instructions,
+                input: directModelInputPrompt.input,
+                tools: directModelInputPrompt.tools || directToolSpecs,
+                toolChoice: 'auto',
+                jsonMode: false
             }, {
                 settings: decisionSettings,
                 requestContext
@@ -7667,52 +7196,15 @@ class AILISAgentRunner {
                     temperature: decisionPayload.temperature,
                     reasoning_effort: decisionPayload.reasoning_effort || '',
                     thinking: decisionPayload.thinking?.type || '',
+                    agentDecisionModelSource: decisionSettings._agentDecisionModelSource || '',
+                    deepThinkingModel: decisionSettings._agentDecisionDeepThinkingModel === true,
+                    deepThinkingMode: isAgentDecisionDeepThinkingMode(decisionSettings, requestContext),
                     latencyProfile: decisionPayload.latencyProfile || ''
                 }
             });
-            let decision = useDirectToolExecutor
-                ? await callLlmAgentDirectToolDecision(decisionSettings, decisionPayload, {
-                      hasToolHistory: stepResults.length > 0 || events.some((event) => event?.type === 'tool_result')
-                  })
-                : await callLlmAgentDecisionWithRepair(decisionSettings, decisionPayload);
-            if (
-                useDirectToolExecutor &&
-                !decision.ok &&
-                (decision.directToolFallback === true ||
-                    (DIRECT_TOOL_EXECUTOR_FALLBACK_STATUSES.has(decision.status) &&
-                        !isTerminalAgentDecisionFailure(decision)))
-            ) {
-                const fallbackNote = {
-                    type: 'runtime_note',
-                    status: 'direct_tool_executor_fallback',
-                    iteration,
-                    reason: decision.status || 'unknown',
-                    error: decision.error || '',
-                    next: 'Retrying with legacy JSON meta-decision planner for compatibility.'
-                };
-                events.push(fallbackNote);
-                await appendRuntimeItem({
-                    type: 'agent.direct_tool_fallback',
-                    status: decision.status || 'fallback',
-                    payload: fallbackNote
-                });
-                const fallbackMessages = buildLlmAgentExecutorMessages({
-                    ...commonPromptArgs,
-                    toolSummary: 'Direct native tool attempt fell back to JSON meta-decision compatibility mode. Continue with one executable action.'
-                });
-                decision = await callLlmAgentDecisionWithRepair(
-                    decisionSettings,
-                    buildAgentDecisionLowLatencyPayload({
-                        timeoutMs: decisionTimeoutMs,
-                        abortSignal,
-                        messages: fallbackMessages
-                    }, {
-                        settings: decisionSettings,
-                        requestContext
-                    })
-                );
-                decision.directToolFallbackFrom = fallbackNote.reason;
-            }
+            let decision = await callLlmAgentDirectToolDecision(decisionSettings, decisionPayload, {
+                hasToolHistory: stepResults.length > 0 || events.some((event) => event?.type === 'tool_result')
+            });
             latestDecision = decision;
             const llmCallDurationMs = Date.now() - llmCallStartedAt;
             const usageSummary = summarizeLlmUsage(decision.usage);
@@ -7972,59 +7464,15 @@ class AILISAgentRunner {
                 const exactAnswerValidation = exactAnswerMode
                     ? validateExactAnswerSubmission({ decision, stepResults, message })
                     : { ok: true, submission: null };
-                if (!exactAnswerValidation.ok) {
-                    const repairObservation = buildExactAnswerRepairObservation(exactAnswerValidation, { iteration });
-                    events.push(repairObservation);
+                if (exactAnswerMode && exactAnswerValidation?.warnings?.length) {
                     await appendRuntimeItem({
-                        type: 'agent.exact_answer_gate',
-                        status: 'rejected',
+                        type: 'agent.exact_answer_audit',
+                        status: 'warning',
                         payload: {
                             iteration,
-                            validation: exactAnswerValidation,
-                            repairObservation
+                            validation: exactAnswerValidation
                         }
                     });
-                    if (iteration + 1 < maxSteps) {
-                        const paused = await pauseAfterRound({
-                            iteration,
-                            reason: 'exact_answer_gate_rejected',
-                            decision
-                        });
-                        if (paused) {
-                            return paused;
-                        }
-                        continue;
-                    }
-                    const blockedText = [
-                        '我还不能提交这个精确答案，因为答案格式检查没有通过。',
-                        `原因：${exactAnswerValidation.errors.join(', ') || 'missing exact-answer evidence'}`,
-                        repairObservation.nextAction
-                    ].filter(Boolean).join('\n');
-                    return await finishRuntimeRun(attachPersonaSurface({
-                        ok: false,
-                        runId,
-                        sessionId,
-                        status: 'exact_answer_gate_rejected',
-                        mode: 'task',
-                        planner: 'llm-agentic-executor',
-                        intent: decision.intent,
-                        executionRequired: stepResults.length > 0,
-                        durationMs: Date.now() - startedAt,
-                        message,
-                        displayText: blockedText,
-                        speechText: blockedText.replace(/\n/g, ' '),
-                        plan: [],
-                        steps: stepResults,
-                        events,
-                        planUpdates: decision.planUpdates,
-                        exactAnswerGate: exactAnswerValidation
-                    }, renderStatusSurface({
-                        text: blockedText,
-                        status: 'blocked',
-                        ok: false,
-                        source: 'exact_answer_gate',
-                        expression: 'thinking'
-                    })), { source: 'exact_answer_gate' });
                 }
                 const exactAnswerSubmission = exactAnswerValidation.submission || null;
                 const displayText = stripControlTags(decision.finalAnswer || decision.summary || '任务完成。');
@@ -8042,7 +7490,7 @@ class AILISAgentRunner {
                     message,
                     finalAnswer: exactAnswerSubmission?.answer || decision.finalAnswer || '',
                     exactAnswerSubmission,
-                    exactAnswerGate: exactAnswerMode ? exactAnswerValidation : null,
+                    exactAnswerAudit: exactAnswerMode ? exactAnswerValidation : null,
                     displayText: visibleText,
                     speechText: stripControlTags(decision.personaOutput?.speechText || visibleText.replace(/\n/g, ' ')),
                     bubbleText: stripControlTags(decision.personaOutput?.bubbleText),
@@ -8189,6 +7637,12 @@ class AILISAgentRunner {
                 });
                 const invalidStepResult = buildInvalidToolStepResult(step, validation, iteration);
                 stepResults.push(invalidStepResult);
+                recordToolOutputToContextManager(
+                    modelInputContextManager,
+                    invalidStepResult,
+                    stepResults.length - 1,
+                    { toolOutputChars: directModelInputPrompt.toolOutputChars }
+                );
                 events.push(buildToolResultEvent(invalidStepResult));
                 await appendRuntimeItem({
                     type: 'agent.tool_validation',
@@ -8229,6 +7683,12 @@ class AILISAgentRunner {
                 });
                 const guardedStepResult = buildInvalidToolStepResult(step, loopGuard, iteration);
                 stepResults.push(guardedStepResult);
+                recordToolOutputToContextManager(
+                    modelInputContextManager,
+                    guardedStepResult,
+                    stepResults.length - 1,
+                    { toolOutputChars: directModelInputPrompt.toolOutputChars }
+                );
                 events.push(buildToolResultEvent(guardedStepResult));
                 await appendRuntimeItem({
                     type: 'agent.tool_loop_guard',
@@ -8302,6 +7762,7 @@ class AILISAgentRunner {
                         step,
                         events,
                         stepResults,
+                        contextManagerCheckpoint: contextManagerCheckpoint('pending_approval', iteration),
                         iteration,
                         maxSteps
                     })
@@ -8346,6 +7807,12 @@ class AILISAgentRunner {
                 iteration
             });
             stepResults.push(stepResult);
+            recordToolOutputToContextManager(
+                modelInputContextManager,
+                stepResult,
+                stepResults.length - 1,
+                { toolOutputChars: directModelInputPrompt.toolOutputChars }
+            );
             const toolResultEvent = buildToolResultEvent(stepResult);
             events.push(toolResultEvent);
             await appendRuntimeItem({
@@ -8379,6 +7846,7 @@ class AILISAgentRunner {
                         step,
                         events,
                         stepResults,
+                        contextManagerCheckpoint: contextManagerCheckpoint('pending_tool_approval', iteration),
                         iteration,
                         maxSteps
                     })
@@ -8541,6 +8009,17 @@ class AILISAgentRunner {
             iteration: pendingApproval.iteration
         });
         stepResults.push(stepResult);
+        const resumedContextManager = restoreModelInputContextManagerFromCheckpoint(pendingApproval.contextManagerCheckpoint);
+        let resumedContextManagerCheckpoint = null;
+        if (resumedContextManager) {
+            recordToolOutputToContextManager(
+                resumedContextManager,
+                stepResult,
+                stepResults.length - 1,
+                { toolOutputChars: resumedContextManager.toolOutputChars }
+            );
+            resumedContextManagerCheckpoint = resumedContextManager.toCheckpoint();
+        }
         events.push(buildToolResultEvent(stepResult));
 
         if (!stepResult.response?.ok && stepResult.response?.status === 'needs_approval') {
@@ -8590,6 +8069,7 @@ class AILISAgentRunner {
             dryRun: false,
             initialEvents: events,
             initialStepResults: stepResults,
+            initialContextManagerCheckpoint: resumedContextManagerCheckpoint,
             startIteration: Number(pendingApproval.iteration || 0) + 1,
             approvedForRun: true,
             settingsOverride: effectiveSettings
@@ -8699,6 +8179,7 @@ class AILISAgentRunner {
                     dryRun: false,
                     initialEvents: debugSession.events || [],
                     initialStepResults: debugSession.stepResults || [],
+                    initialContextManagerCheckpoint: debugSession.contextManagerCheckpoint || null,
                     startIteration: Number(debugSession.nextIteration || 0),
                     approvedForRun: requestContext.approved === true || request.approved === true,
                     settingsOverride: debugSession.settings || null
@@ -9430,11 +8911,15 @@ module.exports = {
     looksLikeSelfContainedExactAnswerQuestion,
     normalizeExactAnswerSubmission,
     isAgentLlmSettingsMissing,
+    buildAgentDecisionLowLatencyPayload,
     resolveAgentPromptProfile,
+    resolveAgentDecisionSettings,
     splitNativeProgressNoteArgs,
     stripControlTags,
     validateAgentToolLoopGuard,
     validateNativeDirectToolCall,
     validateExactAnswerSubmission,
+    isAgentDecisionDeepThinkingMode,
+    isDeepThinkingAgentDecisionModel,
     resolveAgentDecisionTimeoutMs
 };

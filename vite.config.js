@@ -11,10 +11,18 @@ export default defineConfig({
         port: 5173,
         watch: {
             ignored: [
+                '**/.ailis-runtime/**',
+                '**/.ailis-state/**',
+                '**/.humanclaw-state/**',
+                '**/.local/**',
+                '**/build-cache/**',
+                '**/models/**',
+                '**/node_modules/**',
                 '**/release/**',
                 '**/logs/**',
                 '**/eval-results/**',
                 '**/references/**',
+                '**/vendor/**',
                 '**/android/**'
             ]
         }

@@ -83,11 +83,16 @@ test('AILIS artifact tools runtime registers cross-format adapters without makin
 
     assert.equal(schema.ok, true);
     assert.equal(schema.schema.runtimeId, 'ailis_artifact_tools');
+    assert.ok(schema.schema.actions.includes('materialize'));
     assert.ok(schema.schema.adapters.some((adapter) => adapter.id === 'xlsx'));
     assert.ok(schema.schema.adapters.find((adapter) => adapter.id === 'xlsx').capabilities.includes('query'));
+    assert.ok(schema.schema.adapters.find((adapter) => adapter.id === 'xlsx').capabilities.includes('materialize'));
     assert.ok(schema.schema.adapters.some((adapter) => adapter.id === 'pdf'));
     assert.ok(schema.schema.adapters.some((adapter) => adapter.id === 'docx'));
     assert.ok(schema.schema.adapters.some((adapter) => adapter.id === 'pptx'));
+    for (const adapterId of ['pdf', 'docx', 'pptx', 'image']) {
+        assert.ok(schema.schema.adapters.find((adapter) => adapter.id === adapterId).capabilities.includes('materialize'));
+    }
     assert.ok(schema.schema.adapters.some((adapter) => adapter.id === 'ragflow_lite_table'));
     assert.match(schema.schema.boundaries.core, /local deterministic/);
 
@@ -112,8 +117,9 @@ test('AILIS artifact tools runtime plans imports through canonical adapter regis
     assert.equal(xlsxPlan.plan.kind, 'workbook');
     assert.equal(xlsxPlan.plan.route.currentTool, 'artifact_tools');
     assert.ok(xlsxPlan.plan.route.actions.includes('run_checks'));
+    assert.ok(xlsxPlan.plan.route.actions.includes('query'));
     assert.equal(xlsxPlan.plan.route.queryTools, undefined);
-    assert.ok(xlsxPlan.plan.route.nextActions.some((entry) => entry.action === 'query'));
+    assert.equal(xlsxPlan.plan.route.nextActions, undefined);
     assert.notEqual(xlsxPlan.plan.adapter.id, 'ragflow_lite_table');
 
     const pdfPlan = runtime.execute({
@@ -302,11 +308,165 @@ test('AILIS artifact_tools range query uses usedRange for no-table map workbooks
     assert.equal(modelView.observation.range, 'Sheet1!A1:I20');
     assert.equal(modelView.observation.requestedRange, 'Sheet1!A1:Z30');
     assert.equal(modelView.observation.compactRows.length, 20);
+    assert.equal(modelView.observation.matrixRowsAvailable.rowCount, 20);
+    assert.equal(modelView.observation.matrixRowsLossless, true);
     assert.equal(modelView.observation.truncatedForModelText, undefined);
     assert.match(JSON.stringify(modelView.observation.compactRows), /START/);
     assert.match(JSON.stringify(modelView.observation.compactRows), /END/);
+    assert.equal(modelView.observation.compactRowSchema.completeCompactRows, true);
+    assert.equal(modelView.observation.nextActions, undefined);
+
+    const inspectedRange = await registry.dispatch('artifact_tools', {
+        action: 'inspect',
+        sessionId,
+        sheet: 'Sheet1',
+        range: 'A1:I20',
+        include: ['fill', 'value']
+    });
+    assert.equal(inspectedRange.isError, false);
+    assert.equal(inspectedRange.structuredContent.inspection.observation.action, 'inspect');
+    assert.equal(inspectedRange.structuredContent.inspection.observation.kind, 'range');
+    assert.equal(inspectedRange.structuredContent.inspection.observation.range, 'Sheet1!A1:I20');
+    assert.equal(inspectedRange.structuredContent.inspection.observation.matrixRows.length, 20);
+    assert.equal(inspectedRange.structuredContent.inspection.observation.matrixRows[0].values[0], 'START');
+    assert.equal(inspectedRange.structuredContent.inspection.observation.matrixRows[19].values[8], 'END');
+    assert.equal(inspectedRange.structuredContent.inspection.observation.matrixRows[0].fills.length, 9);
+
+    const inspectModelView = parseToolText(inspectedRange);
+    assert.equal(inspectModelView.action, 'inspect');
+    assert.equal(inspectModelView.observation.action, 'inspect');
+    assert.equal(inspectModelView.observation.kind, 'range');
+    assert.equal(inspectModelView.observation.compactRows.length, 20);
+    assert.equal(inspectModelView.observation.matrixRowsAvailable.rowCount, 20);
+    assert.equal(inspectModelView.observation.truncatedForModelText, undefined);
+
+    const inspectedCell = await registry.dispatch('artifact_tools', {
+        action: 'inspect',
+        sessionId,
+        sheet: 'Sheet1',
+        range: 'A1',
+        include: 'fill'
+    });
+    const inspectedCellView = parseToolText(inspectedCell);
+    assert.equal(inspectedCellView.observation.action, 'inspect');
+    assert.equal(inspectedCellView.observation.kind, 'range');
+    assert.equal(inspectedCellView.observation.range, 'Sheet1!A1:A1');
+    assert.match(inspectedCellView.observation.compactRows[0].cells, /START/);
+    assert.equal(inspectedCellView.observation.matrixRowsAvailable.rowCount, 1);
 
     await fs.rm(fixturePath, { force: true });
+});
+
+test('AILIS artifact_tools materializes XLSX matrixRows for script-based map reasoning', async () => {
+    const fixturePath = 'evals/artifact-tools/fixtures/xlsx/map-path-color.xlsx';
+    const runId = 'test-xlsx-map-materialize';
+    const workbenchRunDir = path.join(repoRoot, '.ailis-state', 'workbench', runId);
+    await fs.rm(workbenchRunDir, { recursive: true, force: true });
+
+    const noop = async () => ({ content: [{ type: 'text', text: 'noop' }], details: { status: 'completed' } });
+    const registry = createAILISToolRuntimeRegistry({
+        updatePlan: noop,
+        queryContextArtifact: noop,
+        computeContextArtifact: noop,
+        readExecOutput: noop,
+        tailExecOutput: noop,
+        searchExecOutput: noop,
+        requestPermissions: noop,
+        executeSubagentRelay: noop,
+        executeMcpBridge: noop,
+        toolDoctor: { execute: noop },
+        capabilityManager: { execute: noop },
+        selfDebugger: { execute: noop },
+        executeSelfEvolution: noop
+    });
+
+    const materialized = await registry.dispatch('artifact_tools', {
+        action: 'materialize',
+        path: fixturePath,
+        fromAction: 'query',
+        sheet: 'Map',
+        range: 'A1:G7',
+        include: ['values', 'styles'],
+        runId,
+        repoRoot
+    });
+    assert.equal(materialized.isError, false);
+    assert.equal(materialized.structuredContent.action, 'materialize');
+    assert.equal(materialized.structuredContent.materialized.kind, 'xlsx.range.matrixRows');
+    assert.equal(path.basename(materialized.structuredContent.materialized.path), 'matrixRows.json');
+
+    const manifest = JSON.parse(await fs.readFile(materialized.structuredContent.workbench.manifestPath, 'utf8'));
+    assert.equal(manifest.runId, runId);
+    assert.equal(manifest.inputs.length, 1);
+    assert.equal(manifest.inputs[0].path, materialized.structuredContent.materialized.path);
+
+    const matrixInput = JSON.parse(await fs.readFile(materialized.structuredContent.materialized.path, 'utf8'));
+    assert.equal(matrixInput.matrixRows.length, 7);
+    assert.equal(matrixInput.shape.range, 'Map!A1:G7');
+    assert.match(JSON.stringify(matrixInput.matrixRows), /START/);
+    assert.match(JSON.stringify(matrixInput.matrixRows), /END/);
+
+    const scriptPath = path.join(materialized.structuredContent.workbench.scriptsDir, 'solve-map.mjs');
+    const outputPath = path.join(materialized.structuredContent.workbench.outputsDir, 'answer.json');
+    await fs.writeFile(scriptPath, `
+import fs from 'node:fs';
+
+const input = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+const outputPath = process.argv[3];
+const blue = '0099FF';
+const columns = input.columns;
+const cells = new Map();
+let start = '';
+let end = '';
+
+for (const row of input.matrixRows) {
+  for (let index = 0; index < columns.length; index += 1) {
+    const ref = columns[index] + row.rowNumber;
+    const value = row.values[index] || '';
+    const fill = row.fills[index] || '';
+    if (fill && fill !== blue) cells.set(ref, { ref, row: row.rowNumber, col: index + 1, value, fill });
+    if (value === 'START') start = ref;
+    if (value === 'END') end = ref;
+  }
+}
+
+function refOf(col, row) {
+  return columns[col - 1] + row;
+}
+
+function neighbors(cell) {
+  return [[1, 0], [-1, 0], [0, 1], [0, -1]]
+    .map(([dc, dr]) => refOf(cell.col + dc, cell.row + dr))
+    .filter((ref) => cells.has(ref));
+}
+
+const pathRefs = [start];
+let previous = '';
+let current = start;
+while (current !== end) {
+  const next = neighbors(cells.get(current)).filter((ref) => ref !== previous);
+  if (next.length !== 1) throw new Error('expected a unique non-blue path at ' + current);
+  previous = current;
+  current = next[0];
+  pathRefs.push(current);
+}
+
+const targetIndex = 11 * 2;
+const landedRef = pathRefs[targetIndex];
+const landed = cells.get(landedRef);
+fs.writeFileSync(outputPath, JSON.stringify({ landedRef, answer: landed.fill, pathLength: pathRefs.length }, null, 2));
+console.log(landed.fill);
+`, 'utf8');
+    const executed = await execFileAsync(process.execPath, [scriptPath, materialized.structuredContent.materialized.path, outputPath], {
+        cwd: materialized.structuredContent.workbench.root,
+        maxBuffer: 1024 * 1024
+    });
+    assert.match(executed.stdout, /F478A7/);
+    const answer = JSON.parse(await fs.readFile(outputPath, 'utf8'));
+    assert.equal(answer.landedRef, 'E3');
+    assert.equal(answer.answer, 'F478A7');
+
+    await fs.rm(workbenchRunDir, { recursive: true, force: true });
 });
 
 test('AILIS artifact_tools executes XLSX declaration edits and export roundtrip', { timeout: 120000 }, async () => {

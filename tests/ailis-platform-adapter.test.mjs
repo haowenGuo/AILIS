@@ -27,6 +27,8 @@ test('AILIS platform adapter normalizes OS-specific path and shell behavior', ()
     assert.deepEqual(windows.shellArgs('echo hi'), ['/d', '/s', '/c', 'echo hi']);
     assert.equal(windows.aclSetCommand('C:\\Work\\note.txt', ['/grant', 'User:(R)']).supported, true);
     assert.equal(windows.getStatus().capabilities.aclSet, true);
+    assert.equal(windows.protectedRoots().some((root) => windows.isPathInside(root, 'C:\\Users\\Lenovo\\Documents')), false);
+    assert.equal(windows.protectedRoots().some((root) => windows.isPathInside(root, 'C:\\Windows\\System32')), true);
 
     const linux = createAILISPlatformAdapter('linux');
     assert.equal(linux.id, 'linux');

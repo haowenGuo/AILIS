@@ -4,7 +4,7 @@ const path = require('path');
 const { screen } = require('electron');
 
 const STATE_FILE_NAME = 'desktop-state.json';
-const STATE_VERSION = 29;
+const STATE_VERSION = 30;
 // Transparent Electron frame size. Avatar visual size is compensated in the pet renderer.
 const PET_BASE_WIDTH = 720;
 const PET_BASE_HEIGHT = 960;
@@ -22,12 +22,27 @@ const DEFAULT_BACKEND_MODE = 'ailis';
 const DEFAULT_AGENT_RUNTIME_GATEWAY_URL = 'ws://127.0.0.1:19011';
 const DEFAULT_OPENCLAW_GATEWAY_URL = DEFAULT_AGENT_RUNTIME_GATEWAY_URL;
 const DEFAULT_AILIS_STATE_DIR = '';
-const LLM_PROVIDER_OPTIONS = ['openai-compatible', 'openai-responses', 'anthropic', 'gemini', 'ollama'];
+const OPENAI_COMPATIBLE_PROVIDER = 'openai-compatible';
+const OPENAI_COMPATIBLE_PRESET_PROVIDER_IDS = ['doubao', 'deepseek', 'qwen', 'kimi', 'zhipu', 'openrouter'];
+const LLM_PROVIDER_OPTIONS = [
+    OPENAI_COMPATIBLE_PROVIDER,
+    ...OPENAI_COMPATIBLE_PRESET_PROVIDER_IDS,
+    'openai-responses',
+    'anthropic',
+    'gemini',
+    'ollama'
+];
 const DEFAULT_LLM_PROVIDER = 'openai-compatible';
 const DEFAULT_LLM_BASE_URL = 'https://ark.cn-beijing.volces.com/api/v3';
 const DEFAULT_LLM_MODEL = 'doubao-seed-2-0-mini-260215';
 const LLM_PROVIDER_DEFAULT_BASE_URLS = Object.freeze({
-    'openai-compatible': DEFAULT_LLM_BASE_URL,
+    [OPENAI_COMPATIBLE_PROVIDER]: DEFAULT_LLM_BASE_URL,
+    doubao: DEFAULT_LLM_BASE_URL,
+    deepseek: 'https://api.deepseek.com',
+    qwen: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    kimi: 'https://api.moonshot.cn/v1',
+    zhipu: 'https://open.bigmodel.cn/api/paas/v4',
+    openrouter: 'https://openrouter.ai/api/v1',
     'openai-responses': 'https://api.openai.com/v1',
     anthropic: 'https://api.anthropic.com',
     gemini: 'https://generativelanguage.googleapis.com/v1beta',
@@ -35,7 +50,13 @@ const LLM_PROVIDER_DEFAULT_BASE_URLS = Object.freeze({
     ollama: 'http://127.0.0.1:11434'
 });
 const LLM_PROVIDER_DEFAULT_MODELS = Object.freeze({
-    'openai-compatible': DEFAULT_LLM_MODEL,
+    [OPENAI_COMPATIBLE_PROVIDER]: DEFAULT_LLM_MODEL,
+    doubao: DEFAULT_LLM_MODEL,
+    deepseek: 'deepseek-v4-flash',
+    qwen: 'qwen-turbo',
+    kimi: 'moonshot-v1-8k',
+    zhipu: 'glm-4-flash',
+    openrouter: 'openai/gpt-4.1-mini',
     'openai-responses': 'gpt-4.1-mini',
     anthropic: 'claude-3-5-haiku-latest',
     gemini: 'gemini-2.0-flash',
@@ -267,6 +288,25 @@ function normalizeLlmProvider(provider) {
     return LLM_PROVIDER_OPTIONS.includes(normalizedProvider)
         ? normalizedProvider
         : DEFAULT_LLM_PROVIDER;
+}
+
+function normalizeLlmBaseUrlForProviderMatch(value) {
+    return String(value || '').trim().replace(/\/+$/, '').toLowerCase();
+}
+
+function inferOpenAiCompatiblePresetProvider(provider, baseUrl) {
+    const normalizedProvider = normalizeLlmProvider(provider);
+    if (normalizedProvider !== OPENAI_COMPATIBLE_PROVIDER) {
+        return normalizedProvider;
+    }
+    const normalizedBaseUrl = normalizeLlmBaseUrlForProviderMatch(baseUrl);
+    if (!normalizedBaseUrl) {
+        return normalizedProvider;
+    }
+    const matchedProvider = OPENAI_COMPATIBLE_PRESET_PROVIDER_IDS.find((providerId) =>
+        normalizeLlmBaseUrlForProviderMatch(LLM_PROVIDER_DEFAULT_BASE_URLS[providerId]) === normalizedBaseUrl
+    );
+    return matchedProvider || normalizedProvider;
 }
 
 function normalizeLlmBaseUrl(value) {
@@ -604,7 +644,7 @@ function normalizeLlmTemperature(value) {
 }
 
 function normalizeLlmRequestTimeoutMs(value) {
-    return Math.round(clampNumber(value, 5000, 120000, DEFAULT_LLM_REQUEST_TIMEOUT_MS, 0));
+    return Math.round(clampNumber(value, 5000, 300000, DEFAULT_LLM_REQUEST_TIMEOUT_MS, 0));
 }
 
 function normalizeComputerControlEnabled(value) {
@@ -1094,6 +1134,10 @@ function normalizeState(inputState) {
             ? LLM_PROVIDER_DEFAULT_BASE_URLS.ollama
             : normalizedState.preferences.llmBaseUrl
     );
+    normalizedState.preferences.llmProvider = inferOpenAiCompatiblePresetProvider(
+        normalizedState.preferences.llmProvider,
+        normalizedState.preferences.llmBaseUrl
+    );
     normalizedState.preferences.llmModel = normalizeLlmModel(
         legacyLlmProvider === 'vllm'
             ? LLM_PROVIDER_DEFAULT_MODELS.ollama
@@ -1130,6 +1174,24 @@ function normalizeState(inputState) {
             label: '默认 Key'
         }
     );
+    if (OPENAI_COMPATIBLE_PRESET_PROVIDER_IDS.includes(normalizedState.preferences.llmProvider)) {
+        const provider = normalizedState.preferences.llmProvider;
+        const targetProfile = normalizedState.preferences.llmApiKeyProfiles[provider] || { activeKeyId: '', keys: [] };
+        const legacyProfile = normalizedState.preferences.llmApiKeyProfiles[OPENAI_COMPATIBLE_PROVIDER] || { activeKeyId: '', keys: [] };
+        const legacyEntry = legacyProfile.keys.find((entry) => entry.id === legacyProfile.activeKeyId) ||
+            legacyProfile.keys[0] ||
+            null;
+        if (!targetProfile.keys.length && legacyEntry?.value) {
+            normalizedState.preferences.llmApiKeyProfiles = normalizeLlmApiKeyProfiles(
+                normalizedState.preferences.llmApiKeyProfiles,
+                {
+                    provider,
+                    apiKey: legacyEntry.value,
+                    label: legacyEntry.label || '默认 Key'
+                }
+            );
+        }
+    }
     normalizedState.preferences.llmTemperature = normalizeLlmTemperature(
         normalizedState.preferences.llmTemperature
     );

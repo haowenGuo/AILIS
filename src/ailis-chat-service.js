@@ -552,7 +552,8 @@ export class AILISDesktopChatService {
                 context: {
                     workspace: status.workspaceRoot,
                     agentLoop: 'llm',
-                    directToolExecutor: true
+                    directToolExecutor: true,
+                    agentRole: 'persona_orchestrator'
                 }
             });
         } finally {

@@ -6,6 +6,13 @@ const { EventEmitter } = require('events');
 const { randomUUID } = require('crypto');
 const { pathToFileURL } = require('url');
 const { approxTokenCount } = require('./ailis-runtime-budget.cjs');
+const {
+    normalizeToolOutput,
+    toolOutputToThreadItem
+} = require('./ailis-agent-object-model.cjs');
+const {
+    runtimeEventMetadata
+} = require('./ailis-agent-runtime-protocol.cjs');
 
 const {
     OPENCLAW_CORE_TOOL_DEFINITIONS,
@@ -64,6 +71,7 @@ const TOOL_CALL_TIMEOUT_MS = 45000;
 const DEFAULT_EVENT_REPLAY_LIMIT = 2000;
 const MAX_EVENT_REPLAY_LIMIT = 10000;
 const MAX_SSE_WRITABLE_BYTES = 1024 * 1024;
+const DEFAULT_HTTP_REQUEST_TIMEOUT_MS = Math.max(0, Number(process.env.AILIS_GATEWAY_HTTP_REQUEST_TIMEOUT_MS || 0) || 0);
 const DEFAULT_PROFILE_CURATION_START_DELAY_MS = Number(process.env.AILIS_PROFILE_CURATION_START_DELAY_MS || 60 * 1000);
 const DEFAULT_PROFILE_CURATION_CHECK_INTERVAL_MS = Number(process.env.AILIS_PROFILE_CURATION_CHECK_INTERVAL_MS || 6 * 60 * 60 * 1000);
 
@@ -293,6 +301,19 @@ function formatSseEvent(event) {
 
 function isPathInside(rootPath, targetPath) {
     return createAILISPlatformAdapter().isPathInside(rootPath, targetPath);
+}
+
+function isFullControlContext(context = {}) {
+    const rawProfile = typeof context.permissionProfile === 'string'
+        ? context.permissionProfile
+        : context.permissionProfile?.id || context.permissions || context.policy || context.sandbox;
+    const profile = normalizeString(rawProfile).toLowerCase();
+    return (
+        profile === 'danger-full-access' ||
+        profile === 'full-access' ||
+        context.allowComputerWideAccess === true ||
+        (context.computerControlEnabled === true && context.allowOutsideWorkspace === true)
+    );
 }
 
 function summarize(value, maxChars = 600) {
@@ -724,6 +745,10 @@ class AILISGateway extends EventEmitter {
             100,
             Math.min(Number(options.eventLogLimit || DEFAULT_EVENT_REPLAY_LIMIT), MAX_EVENT_REPLAY_LIMIT)
         );
+        this.httpRequestTimeoutMs = Math.max(
+            0,
+            Number(options.httpRequestTimeoutMs ?? options.requestTimeoutMs ?? DEFAULT_HTTP_REQUEST_TIMEOUT_MS) || 0
+        );
         this.toolRuntimeModulePromise = null;
         this.toolSets = new Map();
         this.toolRuntimeSupervisor = null;
@@ -938,6 +963,8 @@ class AILISGateway extends EventEmitter {
                 });
             });
         });
+        this.server.requestTimeout = this.httpRequestTimeoutMs;
+        this.server.timeout = this.httpRequestTimeoutMs;
 
         await new Promise((resolve, reject) => {
             this.server.once('error', reject);
@@ -1083,7 +1110,7 @@ class AILISGateway extends EventEmitter {
                 count: listToolContracts().length
             },
             toolRuntime: {
-                model: 'codex_like_gateway_tool_registry',
+                model: 'ailis_gateway_tool_registry.v1',
                 registeredToolCount: gatewayToolDefinitions.length,
                 directToolCount: directGatewayTools.length,
                 deferredToolCount: gatewayToolDefinitions.filter((tool) => tool.exposure === TOOL_EXPOSURE.DEFERRED).length
@@ -1247,11 +1274,13 @@ class AILISGateway extends EventEmitter {
 
     emitGatewayEvent(type, payload = {}) {
         this.eventSeq += 1;
+        const protocolMetadata = runtimeEventMetadata({ type, payload });
         const event = {
             id: `evt-${this.eventSeq}`,
             seq: this.eventSeq,
             ts: Date.now(),
             type,
+            ...protocolMetadata,
             payload,
             delivery: isLosslessGatewayEvent(type) ? 'lossless' : 'best_effort'
         };
@@ -1825,14 +1854,16 @@ class AILISGateway extends EventEmitter {
                     });
                 }
             }
-            const workspaceDir = this.resolveWorkspace(context.workspace);
+            const workspaceDir = this.resolveWorkspace(context.workspace, context);
             if (transcriptRunId) {
                 await this.runtime.appendItem(transcriptRunId, {
                     type: 'tool.call',
                     sessionId: transcriptSessionId,
                     status: 'started',
                     payload: {
+                        schema: 'ailis.tool_call.v1',
                         callId,
+                        toolName: toolId,
                         tool: toolId,
                         args,
                         context: {
@@ -1895,6 +1926,13 @@ class AILISGateway extends EventEmitter {
                 durationMs: Date.now() - startedAt,
                 result: guardedResult
             };
+            const canonicalToolOutput = normalizeToolOutput({
+                id: callId,
+                callId,
+                tool: toolId,
+                args,
+                response
+            });
             await this.appendAudit({
                 ...auditBase,
                 status,
@@ -1908,11 +1946,16 @@ class AILISGateway extends EventEmitter {
                     sessionId: transcriptSessionId,
                     status,
                     payload: {
+                        schema: canonicalToolOutput.schema,
                         callId,
+                        toolName: canonicalToolOutput.toolName,
                         tool: toolId,
                         ok: response.ok,
                         status,
                         durationMs: response.durationMs,
+                        outputPreview: canonicalToolOutput.outputPreview,
+                        errorSummary: canonicalToolOutput.errorSummary,
+                        threadItem: toolOutputToThreadItem(canonicalToolOutput),
                         result: guardedResult
                     }
                 });
@@ -1975,16 +2018,31 @@ class AILISGateway extends EventEmitter {
                     },
                     { toolId, callId }
                 );
+                const canonicalToolOutput = normalizeToolOutput({
+                    id: callId,
+                    callId,
+                    tool: toolId,
+                    args,
+                    response: {
+                        ...response,
+                        result: guardedError
+                    }
+                });
                 await this.runtime.appendItem(transcriptRunId, {
                     type: 'tool.result',
                     sessionId: transcriptSessionId,
                     status,
                     payload: {
+                        schema: canonicalToolOutput.schema,
                         callId,
+                        toolName: canonicalToolOutput.toolName,
                         tool: toolId,
                         ok: false,
                         status,
                         durationMs: response.durationMs,
+                        outputPreview: canonicalToolOutput.outputPreview,
+                        errorSummary: canonicalToolOutput.errorSummary,
+                        threadItem: toolOutputToThreadItem(canonicalToolOutput),
                         result: guardedError
                     }
                 });
@@ -2045,6 +2103,28 @@ class AILISGateway extends EventEmitter {
                 displayText: 'Subagent task is empty.'
             };
         }
+        const parentLlmSettings = (
+            args.llmSettings && typeof args.llmSettings === 'object' ? args.llmSettings :
+            args.llm && typeof args.llm === 'object' ? args.llm :
+            context.llmSettings && typeof context.llmSettings === 'object' ? context.llmSettings :
+            context.llm && typeof context.llm === 'object' ? context.llm :
+            null
+        );
+        const childContext = this.mergeDefaultContext({
+            ...context,
+            ...(parentLlmSettings ? { llmSettings: parentLlmSettings } : {}),
+            parentRunId: subagent?.runId,
+            parentSessionId: subagent?.sessionId,
+            subagentId: subagent?.id,
+            subagentLabel: subagent?.label,
+            sessionId: subagent?.childSessionId || context.sessionId,
+            sessionKey: subagent?.childSessionId || context.sessionKey,
+            agentLoop: 'llm',
+            planner: 'llm',
+            agentRole: 'task_agent',
+            contextMode: 'task_agent',
+            maxAgentSteps: Number(args.maxAgentSteps || context.maxAgentSteps || 30)
+        });
         await onEvent?.({
             type: 'subagent.runner.started',
             status: 'running',
@@ -2059,19 +2139,10 @@ class AILISGateway extends EventEmitter {
             sessionId: subagent?.childSessionId || context.sessionId || context.sessionKey,
             agentLoop: 'llm',
             planner: 'llm',
-            maxAgentSteps: Number(args.maxAgentSteps || context.maxAgentSteps || 12),
-            context: this.mergeDefaultContext({
-                ...context,
-                parentRunId: subagent?.runId,
-                parentSessionId: subagent?.sessionId,
-                subagentId: subagent?.id,
-                subagentLabel: subagent?.label,
-                sessionId: subagent?.childSessionId || context.sessionId,
-                sessionKey: subagent?.childSessionId || context.sessionKey,
-                agentLoop: 'llm',
-                planner: 'llm',
-                maxAgentSteps: Number(args.maxAgentSteps || context.maxAgentSteps || 12)
-            })
+            agentRole: 'task_agent',
+            ...(parentLlmSettings ? { llmSettings: parentLlmSettings } : {}),
+            maxAgentSteps: Number(args.maxAgentSteps || context.maxAgentSteps || 30),
+            context: childContext
         });
         const result = signal
             ? await new Promise((resolve, reject) => {
@@ -2154,6 +2225,7 @@ class AILISGateway extends EventEmitter {
         }
 
         const tools = await this.getToolSet({
+            ...context,
             workspace: workspaceDir,
             sessionKey: context.sessionKey || args.sessionKey || 'main'
         });
@@ -2170,7 +2242,7 @@ class AILISGateway extends EventEmitter {
     }
 
     async executeGatewayLocalTool(toolId, args, context = {}) {
-        const workspaceDir = context.workspaceDir || this.resolveWorkspace(context.workspace);
+        const workspaceDir = context.workspaceDir || this.resolveWorkspace(context.workspace, context);
         if (toolId === EMAIL_TOOL_ID) {
             const { executeEmailTool } = loadEmailToolModule();
             return await executeEmailTool(args, {
@@ -2193,7 +2265,7 @@ class AILISGateway extends EventEmitter {
             if (['exec_command', 'exec', 'run'].includes(action)) {
                 const interceptedPatch = this.extractPatchFromCommand(args.cmd || args.command);
                 if (interceptedPatch) {
-                    return await this.executeLocalApplyPatch(interceptedPatch, workspaceDir);
+                    return await this.executeLocalApplyPatch(interceptedPatch, workspaceDir, context);
                 }
             }
             return await this.computerTool.execute(args, context, {
@@ -2395,12 +2467,12 @@ class AILISGateway extends EventEmitter {
         return text;
     }
 
-    async executeLocalApplyPatch(input, workspaceDir) {
-        this.assertPatchInsideWorkspace(input, workspaceDir);
+    async executeLocalApplyPatch(input, workspaceDir, context = {}) {
+        this.assertPatchInsideWorkspace(input, workspaceDir, context);
         const operations = this.parseLocalPatch(input);
         const changedFiles = [];
         for (const operation of operations) {
-            const target = this.resolveToolPath(operation.path, workspaceDir, 'patchPath');
+            const target = this.resolveToolPath(operation.path, workspaceDir, 'patchPath', context);
             if (operation.type === 'add') {
                 const content = this.patchBodyToText(operation.body);
                 await fsp.mkdir(path.dirname(target), { recursive: true });
@@ -2432,7 +2504,7 @@ class AILISGateway extends EventEmitter {
 
     async executeLocalCoreTool({ toolId, args, context, workspaceDir }) {
         if (toolId === 'read') {
-            const target = this.resolveToolPath(args.path, workspaceDir, 'path');
+            const target = this.resolveToolPath(args.path, workspaceDir, 'path', context);
             const artifactRecord = await this.runtime.contextArtifactStore?.findByPath?.(target).catch(() => null);
             if (artifactRecord?.payloadPath && path.resolve(artifactRecord.payloadPath) === path.resolve(target)) {
                 return this.runtime.contextArtifactStore.guardReadResult(artifactRecord, target);
@@ -2474,7 +2546,7 @@ class AILISGateway extends EventEmitter {
         }
 
         if (toolId === 'write') {
-            const target = this.resolveToolPath(args.path, workspaceDir, 'path');
+            const target = this.resolveToolPath(args.path, workspaceDir, 'path', context);
             const content = typeof args.content === 'string' ? args.content : '';
             await fsp.mkdir(path.dirname(target), { recursive: true });
             await fsp.writeFile(target, content, args.encoding || 'utf8');
@@ -2490,13 +2562,13 @@ class AILISGateway extends EventEmitter {
         }
 
         if (toolId === 'apply_patch') {
-            return await this.executeLocalApplyPatch(args.input || args.patch, workspaceDir);
+            return await this.executeLocalApplyPatch(args.input || args.patch, workspaceDir, context);
         }
 
         if (toolId === 'exec') {
             const interceptedPatch = this.extractPatchFromCommand(args.command || args.cmd);
             if (interceptedPatch) {
-                return await this.executeLocalApplyPatch(interceptedPatch, workspaceDir);
+                return await this.executeLocalApplyPatch(interceptedPatch, workspaceDir, context);
             }
             const finalArgs = this.prepareToolArgs({ toolId, args, context, workspaceDir });
             return await this.computerTool.execute(
@@ -2527,10 +2599,10 @@ class AILISGateway extends EventEmitter {
     prepareToolArgs({ toolId, args, context, workspaceDir }) {
         const finalArgs = { ...args };
         if (FILE_TOOL_IDS.has(toolId)) {
-            this.assertToolPathInsideWorkspace(finalArgs.path, workspaceDir, 'path');
+            this.assertToolPathInsideWorkspace(finalArgs.path, workspaceDir, 'path', context);
         }
         if (toolId === 'apply_patch') {
-            this.assertPatchInsideWorkspace(finalArgs.input, workspaceDir);
+            this.assertPatchInsideWorkspace(finalArgs.input, workspaceDir, context);
         }
         if (toolId === 'exec') {
             if (context.approved !== true && finalArgs.approved !== true) {
@@ -2545,7 +2617,7 @@ class AILISGateway extends EventEmitter {
                     finalArgs.timeoutMs = timeout < 1000 ? timeout * 1000 : timeout;
                 }
             }
-            finalArgs.workdir = this.resolveToolPath(finalArgs.workdir || workspaceDir, workspaceDir, 'workdir');
+            finalArgs.workdir = this.resolveToolPath(finalArgs.workdir || workspaceDir, workspaceDir, 'workdir', context);
             finalArgs.host = finalArgs.host || 'gateway';
             finalArgs.security = finalArgs.security || 'full';
             finalArgs.ask = finalArgs.ask || 'off';
@@ -2556,10 +2628,34 @@ class AILISGateway extends EventEmitter {
         return finalArgs;
     }
 
-    resolveWorkspace(rawWorkspace) {
+    getProtectedPathRoot(targetPath) {
+        const target = path.resolve(targetPath);
+        return this.platformAdapter.protectedRoots().find((root) => this.platformAdapter.isPathInside(root, target)) || '';
+    }
+
+    assertFullControlPathAllowed(targetPath, context = {}, fieldName = 'path') {
+        if (!isFullControlContext(context)) {
+            return;
+        }
+        const protectedRoot = this.getProtectedPathRoot(targetPath);
+        if (protectedRoot) {
+            throwBlocked(`${fieldName} targets protected C drive system files`, {
+                fieldName,
+                target: path.resolve(targetPath),
+                protectedRoot,
+                permissionProfile: context.permissionProfile || context.policy || context.sandbox || 'full-control'
+            });
+        }
+    }
+
+    resolveWorkspace(rawWorkspace, context = {}) {
         const workspace = normalizeString(rawWorkspace)
             ? path.resolve(rawWorkspace)
             : this.workspaceRoot;
+        if (isFullControlContext(context)) {
+            this.assertFullControlPathAllowed(workspace, context, 'workspace');
+            return workspace;
+        }
         if (!isPathInside(this.workspaceRoot, workspace)) {
             throwBlocked('workspace must stay inside the configured AILIS workspace root', {
                 workspace,
@@ -2569,12 +2665,16 @@ class AILISGateway extends EventEmitter {
         return workspace;
     }
 
-    resolveToolPath(rawPath, workspaceDir, fieldName) {
+    resolveToolPath(rawPath, workspaceDir, fieldName, context = {}) {
         const value = normalizeString(rawPath);
         if (!value) {
             throwBlocked(`${fieldName} is required`);
         }
         const target = path.isAbsolute(value) ? path.resolve(value) : path.resolve(workspaceDir, value);
+        if (isFullControlContext(context)) {
+            this.assertFullControlPathAllowed(target, context, fieldName);
+            return target;
+        }
         if (!isPathInside(workspaceDir, target)) {
             throwBlocked(`${fieldName} must stay inside workspace`, {
                 fieldName,
@@ -2585,11 +2685,11 @@ class AILISGateway extends EventEmitter {
         return target;
     }
 
-    assertToolPathInsideWorkspace(rawPath, workspaceDir, fieldName) {
-        this.resolveToolPath(rawPath, workspaceDir, fieldName);
+    assertToolPathInsideWorkspace(rawPath, workspaceDir, fieldName, context = {}) {
+        this.resolveToolPath(rawPath, workspaceDir, fieldName, context);
     }
 
-    assertPatchInsideWorkspace(rawPatch, workspaceDir) {
+    assertPatchInsideWorkspace(rawPatch, workspaceDir, context = {}) {
         const patch = normalizeString(rawPatch);
         if (!patch) {
             throwBlocked('apply_patch input is required');
@@ -2604,7 +2704,7 @@ class AILISGateway extends EventEmitter {
                     workspaceDir
                 });
             }
-            this.resolveToolPath(patchPath, workspaceDir, 'patchPath');
+            this.resolveToolPath(patchPath, workspaceDir, 'patchPath', context);
             match = pattern.exec(patch);
         }
     }
@@ -2625,7 +2725,7 @@ class AILISGateway extends EventEmitter {
     }
 
     async getToolSet(context = {}) {
-        const workspaceDir = this.resolveWorkspace(context.workspace);
+        const workspaceDir = this.resolveWorkspace(context.workspace, context);
         const sessionKey = normalizeString(context.sessionKey, 'main');
         const cacheKey = `${workspaceDir}|${sessionKey}`;
         if (this.toolSets.has(cacheKey)) {
@@ -2956,7 +3056,7 @@ class AILISGateway extends EventEmitter {
                 const callId = normalizeString(payload.callId || item.id);
                 const tool = {
                     callId,
-                    tool: payload.tool || '',
+                    tool: payload.toolName || payload.tool || '',
                     status: 'started',
                     ok: null,
                     durationMs: 0,
@@ -2974,12 +3074,12 @@ class AILISGateway extends EventEmitter {
                 if (!tool) {
                     tool = {
                         callId,
-                        tool: payload.tool || '',
+                        tool: payload.toolName || payload.tool || '',
                         status: payload.status || item.status || '',
                         ok: payload.ok === true,
                         durationMs: Number(payload.durationMs) || 0,
                         args: null,
-                        resultPreview: summarizeForAnalysis(payload.result || payload.error || '', 900),
+                        resultPreview: payload.outputPreview || summarizeForAnalysis(payload.result || payload.error || '', 900),
                         outputStore: this.extractOutputStoreFromToolPayload(payload)
                     };
                     ensureRound(iteration).tools.push(tool);
@@ -2987,7 +3087,7 @@ class AILISGateway extends EventEmitter {
                     tool.status = payload.status || item.status || tool.status;
                     tool.ok = payload.ok === true;
                     tool.durationMs = Number(payload.durationMs) || tool.durationMs;
-                    tool.resultPreview = summarizeForAnalysis(payload.result || payload.error || '', 900);
+                    tool.resultPreview = payload.outputPreview || summarizeForAnalysis(payload.result || payload.error || '', 900);
                     tool.outputStore = this.extractOutputStoreFromToolPayload(payload) || tool.outputStore;
                 }
             }
@@ -3009,7 +3109,7 @@ class AILISGateway extends EventEmitter {
             }
             const existing = calls.get(callId) || {
                 callId,
-                tool: payload.tool || '',
+                tool: payload.toolName || payload.tool || '',
                 startedAt: null,
                 completedAt: null,
                 status: 'started',
@@ -3022,16 +3122,16 @@ class AILISGateway extends EventEmitter {
             };
             if (item.type === 'tool.call') {
                 existing.startedAt = analysisTimestamp(item);
-                existing.tool = payload.tool || existing.tool;
+                existing.tool = payload.toolName || payload.tool || existing.tool;
                 existing.args = payload.args || existing.args;
                 existing.iteration = getPayloadIteration(payload);
             } else {
                 existing.completedAt = analysisTimestamp(item);
-                existing.tool = payload.tool || existing.tool;
+                existing.tool = payload.toolName || payload.tool || existing.tool;
                 existing.status = payload.status || item.status || existing.status;
                 existing.ok = payload.ok === true;
                 existing.durationMs = Number(payload.durationMs) || existing.durationMs;
-                existing.resultPreview = summarizeForAnalysis(payload.result || payload.error || '', 900);
+                existing.resultPreview = payload.outputPreview || summarizeForAnalysis(payload.result || payload.error || '', 900);
                 existing.outputStore = this.extractOutputStoreFromToolPayload(payload) || existing.outputStore;
             }
             calls.set(callId, existing);

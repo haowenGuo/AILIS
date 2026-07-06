@@ -85,7 +85,6 @@ function compactArtifactModelTextView(value = {}) {
             route: {
                 currentTool: view.plan.route?.currentTool || 'artifact_tools',
                 actions: Array.isArray(view.plan.route?.actions) ? view.plan.route.actions.slice(0, 12) : [],
-                nextActions: Array.isArray(view.plan.route?.nextActions) ? view.plan.route.nextActions.slice(0, 5) : [],
                 note: view.plan.route?.note || ''
             },
             diagnostics: Array.isArray(view.plan.diagnostics) ? view.plan.diagnostics.slice(0, 8) : []
@@ -97,6 +96,20 @@ function compactArtifactModelTextView(value = {}) {
             cells: Array.isArray(row.cells) ? row.cells.join(' | ') : row.cells
         }));
         view.observation.cellSeparator = ' | ';
+    }
+    if (Array.isArray(view.observation?.matrixRows) && view.observation.matrixRows.length) {
+        const matrixRowCount = view.observation.matrixRows.length;
+        const hasFormulas = view.observation.matrixRows.some((row) => Array.isArray(row.formulas) && row.formulas.some(Boolean));
+        const hasErrors = view.observation.matrixRows.some((row) => Array.isArray(row.errors) && row.errors.some(Boolean));
+        delete view.observation.matrixRows;
+        view.observation.matrixRowsAvailable = {
+            status: 'available_in_structuredContent_details_and_artifact_tools_materialize',
+            rowCount: matrixRowCount,
+            hasFormulas,
+            hasErrors,
+            rowSchema: 'rows[].{rowNumber, values[], fills[], formulas?, errors?}; ref = columns[index] + rowNumber'
+        };
+        view.observation.matrixRowsOmittedForModelText = 'raw matrixRows object omitted from visible text to keep the model workspace readable; compactRows remains the complete visible grid when truncated=false.';
     }
     return view;
 }
@@ -139,28 +152,10 @@ function compactRowsHeadTail(rows = [], visibleLimit = 12) {
     };
 }
 
-function addArtifactQueryContinuation(view = {}, omittedRows = []) {
+function addArtifactOmittedRangeMetadata(view = {}, omittedRows = []) {
     const observation = view.observation || {};
     const range = buildContinuationRange(observation, omittedRows);
-    const args = {
-        action: 'query',
-        sessionId: view.artifact?.sessionId || observation.sessionId || '',
-        sheet: observation.sheetName || '',
-        range,
-        include: ['values', 'styles', 'formulas', 'comments']
-    };
-    const continuation = {
-        action: 'query',
-        reason: 'model_text_compacted; fetch the omitted middle rows or ask a narrower range with artifact_tools before falling back to exec',
-        args: Object.fromEntries(Object.entries(args).filter(([, value]) => {
-            if (Array.isArray(value)) {
-                return value.length > 0;
-            }
-            return Boolean(value);
-        }))
-    };
-    view.observation.continuation = continuation;
-    view.nextActions = [continuation, ...(Array.isArray(view.nextActions) ? view.nextActions : [])].slice(0, 6);
+    view.observation.omittedRange = range;
     return view;
 }
 
@@ -172,24 +167,39 @@ function stringifyArtifactModelResult(result = {}) {
         diagnostics: result?.diagnostics || []
     };
     let view = compactArtifactModelTextView(result?.modelView || result?.observation || fallback);
+    const visibleTextLimit = 5600;
     let text = JSON.stringify(view, null, 2);
-    if (text.length <= 5600) {
+    if (text.length <= visibleTextLimit) {
         return text;
     }
-    if (view.plan) {
-        view = { ...view, plan: undefined };
+    if (view.plan || view.protocol) {
+        view = { ...view, protocol: undefined, plan: undefined };
+        if (view.observation?.sourcePath) {
+            delete view.observation.sourcePath;
+        }
         text = JSON.stringify(view, null, 2);
+        if (text.length <= visibleTextLimit) {
+            return text;
+        }
+        const compactText = JSON.stringify(view);
+        if (compactText.length <= 5900) {
+            return compactText;
+        }
     }
     const rows = view.observation?.compactRows;
-    if (text.length > 5600 && Array.isArray(rows) && rows.length > 12) {
+    if (text.length > visibleTextLimit && Array.isArray(rows) && rows.length > 12) {
         const compacted = compactRowsHeadTail(rows, 12);
         view.observation.compactRows = compacted.rows;
         view.observation.omittedCompactRowCount = compacted.omittedCount;
         view.observation.omittedCompactRowRange = compacted.omittedRange;
         view.observation.visibleRowStrategy = 'head_tail';
+        view.observation.compactRowsTruncatedForModelText = true;
         view.observation.truncatedForModelText = true;
-        addArtifactQueryContinuation(view, compacted.omittedRows);
+        addArtifactOmittedRangeMetadata(view, compacted.omittedRows);
         text = JSON.stringify(view, null, 2);
+    }
+    if (text.length > visibleTextLimit) {
+        text = JSON.stringify(view);
     }
     return text;
 }

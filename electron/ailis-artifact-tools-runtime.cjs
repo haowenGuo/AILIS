@@ -1,3 +1,4 @@
+const fs = require('fs/promises');
 const path = require('path');
 const {
     ARTIFACT_CAPABILITIES,
@@ -44,7 +45,7 @@ const DEFAULT_ADAPTER_DEFINITIONS = Object.freeze([
         priority: 10,
         formats: ['xlsx', 'xlsm'],
         kinds: ['workbook'],
-        capabilities: ['load', 'summary', 'inspect', 'index', 'search', 'query', 'edit', 'render', 'validate', 'export', 'trace', 'recalculate', 'rollback', 'diff', 'roundtrip'],
+        capabilities: ['load', 'summary', 'inspect', 'index', 'search', 'query', 'materialize', 'edit', 'render', 'validate', 'export', 'trace', 'recalculate', 'rollback', 'diff', 'roundtrip'],
         engines: {
             parser: 'exceljs/openpyxl/ooxml',
             renderer: 'native-range-renderer/libreoffice',
@@ -60,7 +61,7 @@ const DEFAULT_ADAPTER_DEFINITIONS = Object.freeze([
         priority: 20,
         formats: ['pdf'],
         kinds: ['pdf'],
-        capabilities: ['load', 'summary', 'inspect', 'index', 'search', 'render', 'validate', 'trace'],
+        capabilities: ['load', 'summary', 'inspect', 'index', 'search', 'materialize', 'render', 'validate', 'trace'],
         engines: {
             parser: 'pypdf/pdfplumber/pdfjs',
             renderer: 'poppler/pdfium/pdfjs',
@@ -76,7 +77,7 @@ const DEFAULT_ADAPTER_DEFINITIONS = Object.freeze([
         priority: 30,
         formats: ['docx'],
         kinds: ['document'],
-        capabilities: ['load', 'summary', 'inspect', 'index', 'search', 'edit', 'render', 'validate', 'export', 'diff', 'roundtrip'],
+        capabilities: ['load', 'summary', 'inspect', 'index', 'search', 'materialize', 'edit', 'render', 'validate', 'export', 'diff', 'roundtrip'],
         engines: {
             parser: 'python-docx/ooxml',
             renderer: 'libreoffice-headless',
@@ -92,7 +93,7 @@ const DEFAULT_ADAPTER_DEFINITIONS = Object.freeze([
         priority: 40,
         formats: ['pptx'],
         kinds: ['presentation'],
-        capabilities: ['load', 'summary', 'inspect', 'index', 'search', 'edit', 'render', 'validate', 'export', 'diff', 'roundtrip'],
+        capabilities: ['load', 'summary', 'inspect', 'index', 'search', 'materialize', 'edit', 'render', 'validate', 'export', 'diff', 'roundtrip'],
         engines: {
             parser: 'python-pptx/ooxml',
             renderer: 'libreoffice-headless',
@@ -108,7 +109,7 @@ const DEFAULT_ADAPTER_DEFINITIONS = Object.freeze([
         priority: 50,
         formats: ['csv', 'tsv'],
         kinds: ['table'],
-        capabilities: ['load', 'summary', 'inspect', 'index', 'search', 'edit', 'validate', 'export', 'roundtrip'],
+        capabilities: ['load', 'summary', 'inspect', 'index', 'search', 'materialize', 'edit', 'validate', 'export', 'roundtrip'],
         engines: {
             parser: 'csv-parser/pandas',
             renderer: 'table-preview',
@@ -124,7 +125,7 @@ const DEFAULT_ADAPTER_DEFINITIONS = Object.freeze([
         priority: 70,
         formats: ['png', 'jpg', 'jpeg', 'webp', 'tif', 'tiff'],
         kinds: ['image'],
-        capabilities: ['load', 'summary', 'inspect', 'index', 'search', 'render', 'validate', 'export', 'roundtrip'],
+        capabilities: ['load', 'summary', 'inspect', 'index', 'search', 'materialize', 'render', 'validate', 'export', 'roundtrip'],
         engines: {
             parser: 'pillow/sharp',
             renderer: 'native-image',
@@ -201,9 +202,7 @@ function compactRouteAdvice(route = {}) {
     }
     return {
         currentTool: normalizeString(route.currentTool, 'artifact_tools'),
-        actions: Array.isArray(route.actions) ? route.actions.slice(0, 16).map((entry) => normalizeString(entry)).filter(Boolean) : [],
-        nextActions: Array.isArray(route.nextActions) ? route.nextActions.slice(0, 8) : [],
-        note: normalizeString(route.note)
+        actions: Array.isArray(route.actions) ? route.actions.slice(0, 16).map((entry) => normalizeString(entry)).filter(Boolean) : []
     };
 }
 
@@ -271,14 +270,7 @@ function buildOpenSessionObservation(result = {}) {
         format: normalizeString(artifact.format || result.plan?.format),
         kind: normalizeString(artifact.kind || result.plan?.kind),
         status: normalizeString(session.status, 'completed'),
-        diagnostics: compactDiagnostics(session.diagnostics || result.plan?.diagnostics || []),
-        nextActions: [
-            { action: 'inspect', args: ['sessionId', 'kind', 'target/range', 'include'] },
-            { action: 'query', args: ['sessionId', 'sheet/range', 'include'] },
-            { action: 'search', args: ['sessionId', 'searchKind', 'query/fillRgb'] },
-            { action: 'render', args: ['sessionId', 'target/range'] },
-            { action: 'validate', args: ['sessionId', 'checks/expected'] }
-        ]
+        diagnostics: compactDiagnostics(session.diagnostics || result.plan?.diagnostics || [])
     };
 }
 
@@ -332,8 +324,7 @@ function buildModelView(result = {}) {
         },
         plan: result.plan ? compactPlanForProtocol(result.plan) : undefined,
         observation,
-        diagnostics: compactDiagnostics(result.diagnostics || result.plan?.diagnostics || observation?.diagnostics || []),
-        nextActions: observation?.nextActions || result.plan?.route?.nextActions || []
+        diagnostics: compactDiagnostics(result.diagnostics || result.plan?.diagnostics || observation?.diagnostics || [])
     };
 }
 
@@ -355,6 +346,180 @@ function createOkResult(payload = {}) {
         status: 'completed',
         ...payload
     });
+}
+
+function safePathSegment(value = '', fallback = 'item') {
+    const normalized = normalizeString(value, fallback)
+        .replace(/[^A-Za-z0-9_.-]+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .slice(0, 96);
+    return normalized || fallback;
+}
+
+function nowIso() {
+    return new Date().toISOString();
+}
+
+function resolveWorkbenchPaths(input = {}, adapterInput = {}) {
+    const repoRoot = path.resolve(normalizeString(
+        input.repoRoot ||
+        input.repo_root ||
+        adapterInput.repoRoot ||
+        process.cwd()
+    ));
+    const workbenchRoot = path.resolve(
+        normalizeString(input.workbenchRoot || input.workbench_root)
+            ? normalizeString(input.workbenchRoot || input.workbench_root)
+            : path.join(repoRoot, '.ailis-state', 'workbench')
+    );
+    const runId = safePathSegment(
+        input.runId ||
+        input.run_id ||
+        input.agentRunId ||
+        input.agent_run_id ||
+        input.sessionId ||
+        input.session_id ||
+        createId('run'),
+        'run'
+    );
+    const runDir = path.join(workbenchRoot, runId);
+    return {
+        repoRoot,
+        workbenchRoot,
+        runId,
+        runDir,
+        inputsDir: path.join(runDir, 'inputs'),
+        scriptsDir: path.join(runDir, 'scripts'),
+        outputsDir: path.join(runDir, 'outputs'),
+        manifestPath: path.join(runDir, 'manifest.json')
+    };
+}
+
+async function ensureWorkbenchDirs(paths = {}) {
+    await fs.mkdir(paths.inputsDir, { recursive: true });
+    await fs.mkdir(paths.scriptsDir, { recursive: true });
+    await fs.mkdir(paths.outputsDir, { recursive: true });
+}
+
+async function readWorkbenchManifest(paths = {}) {
+    try {
+        const text = await fs.readFile(paths.manifestPath, 'utf8');
+        const parsed = JSON.parse(text);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            return parsed;
+        }
+    } catch {
+        // New workbench run or a corrupt manifest; rebuild the envelope below.
+    }
+    const createdAt = nowIso();
+    return {
+        schema: 'ailis.workbench.manifest.v1',
+        runId: paths.runId,
+        root: paths.runDir,
+        repoRoot: paths.repoRoot,
+        dirs: {
+            inputs: paths.inputsDir,
+            scripts: paths.scriptsDir,
+            outputs: paths.outputsDir
+        },
+        inputs: [],
+        scripts: [],
+        outputs: [],
+        createdAt,
+        updatedAt: createdAt
+    };
+}
+
+function upsertManifestEntry(list = [], entry = {}) {
+    const index = list.findIndex((item) => item.id === entry.id || item.path === entry.path);
+    if (index >= 0) {
+        list[index] = { ...list[index], ...entry };
+        return list;
+    }
+    list.push(entry);
+    return list;
+}
+
+async function writeWorkbenchManifest(paths = {}, manifest = {}) {
+    manifest.updatedAt = nowIso();
+    await fs.writeFile(paths.manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+}
+
+function pickMaterializedObservation(sourceResult = {}) {
+    return sourceResult.observation ||
+        sourceResult.inspection?.observation ||
+        sourceResult.query?.observation ||
+        sourceResult.index?.observation ||
+        null;
+}
+
+function buildMaterializedInputPayload({ id, plan = {}, adapterInput = {}, materializeFrom = '', sourceResult = {}, observation = null } = {}) {
+    const query = sourceResult.kind ? sourceResult : sourceResult.query || {};
+    const inspection = sourceResult.inspection || sourceResult;
+    const sourcePath = normalizeString(
+        plan.sourcePath ||
+        adapterInput.sourcePath ||
+        observation?.sourcePath ||
+        query.sourcePath ||
+        inspection.sourcePath
+    );
+    const shape = {
+        sheetName: normalizeString(observation?.sheetName || query.sheetName || adapterInput.sheet || adapterInput.sheetName),
+        range: normalizeString(observation?.range || query.range || adapterInput.range || adapterInput.target),
+        requestedRange: normalizeString(observation?.requestedRange || query.requestedRange),
+        returnedRange: normalizeString(observation?.returnedRange || query.returnedRange || observation?.range || query.range),
+        rowCount: Number(observation?.rowCount || query.rowCount || 0) || 0,
+        columnCount: Number(observation?.columnCount || query.columnCount || 0) || 0,
+        columns: Array.isArray(observation?.columns) ? observation.columns : (Array.isArray(query.columns) ? query.columns : [])
+    };
+    const matrixRows = Array.isArray(observation?.matrixRows) ? observation.matrixRows : [];
+    const compactRows = Array.isArray(observation?.compactRows) ? observation.compactRows : [];
+    return {
+        schema: 'ailis.workbench.materialized_input.v1',
+        id,
+        kind: matrixRows.length ? 'xlsx.range.matrixRows' : `${normalizeString(plan.adapter?.id || sourceResult.adapterId || 'artifact')}.${materializeFrom || 'data'}`,
+        createdAt: nowIso(),
+        source: {
+            action: materializeFrom || normalizeString(sourceResult.action || observation?.action),
+            adapterId: normalizeString(plan.adapter?.id || sourceResult.adapterId),
+            sourcePath,
+            format: normalizeString(plan.format || observation?.format),
+            artifactKind: normalizeString(plan.kind),
+            sessionId: normalizeString(adapterInput.sessionId || observation?.sessionId)
+        },
+        shape,
+        fillHistogram: observation?.fillHistogram || query.fillHistogram || {},
+        matrixRows,
+        compactRows,
+        rows: Array.isArray(query.rows) ? query.rows : [],
+        columns: shape.columns,
+        data: matrixRows.length || compactRows.length
+            ? undefined
+            : cloneJson(sourceResult)
+    };
+}
+
+function buildMaterializeObservation({ plan = {}, adapterInput = {}, materializeFrom = '', materialized = {}, paths = {}, observation = null } = {}) {
+    return {
+        schema: 'ailis.artifact_tools.compact_observation.v1',
+        action: 'materialize',
+        adapterId: normalizeString(plan.adapter?.id),
+        sourcePath: normalizeString(plan.sourcePath || adapterInput.sourcePath || observation?.sourcePath),
+        format: normalizeString(plan.format || observation?.format),
+        kind: normalizeString(plan.kind || observation?.kind),
+        fromAction: materializeFrom,
+        workbench: {
+            schema: 'ailis.workbench.ref.v1',
+            runId: paths.runId,
+            root: paths.runDir,
+            manifestPath: paths.manifestPath,
+            inputsDir: paths.inputsDir,
+            scriptsDir: paths.scriptsDir,
+            outputsDir: paths.outputsDir
+        },
+        materialized,
+        diagnostics: compactDiagnostics(plan.diagnostics || [])
+    };
 }
 
 class AILISArtifactToolsRuntime {
@@ -411,8 +576,7 @@ class AILISArtifactToolsRuntime {
                     diagnostics: [createArtifactDiagnostic({
                         code: 'adapter_not_found',
                         severity: 'error',
-                        message: `No artifact adapter is registered for ${explicitId}.`,
-                        suggestedActions: ['list_adapters']
+                        message: `No artifact adapter is registered for ${explicitId}.`
                     })]
                 };
             }
@@ -421,8 +585,7 @@ class AILISArtifactToolsRuntime {
                 diagnostics: adapterSupports(explicit, request) ? [] : [createArtifactDiagnostic({
                     code: 'adapter_mismatch',
                     severity: 'warning',
-                    message: `Adapter ${explicit.id} was requested but does not perfectly match the format/kind/capability filter.`,
-                    suggestedActions: ['inspect adapter capabilities', 'choose a matching adapter']
+                    message: `Adapter ${explicit.id} was requested but does not perfectly match the format/kind/capability filter.`
                 })]
             };
         }
@@ -433,8 +596,7 @@ class AILISArtifactToolsRuntime {
                 diagnostics: [createArtifactDiagnostic({
                     code: 'no_matching_adapter',
                     severity: 'error',
-                    message: 'No artifact adapter matches the requested format, kind, and capability.',
-                    suggestedActions: ['list_adapters', 'register adapter', 'use a format-specific fallback tool']
+                    message: 'No artifact adapter matches the requested format, kind, and capability.'
                 })]
             };
         }
@@ -472,8 +634,7 @@ class AILISArtifactToolsRuntime {
                 code: 'missing_source_path',
                 severity: 'warning',
                 message: 'No source path was provided. The plan describes adapter selection only.',
-                recoverable: true,
-                suggestedActions: ['provide path']
+                recoverable: true
             }));
         }
         const route = adapter ? this.buildRouteAdvice({ adapter, format, kind, requiredCapabilities }) : {};
@@ -494,30 +655,19 @@ class AILISArtifactToolsRuntime {
         if (adapter.id === 'xlsx') {
             return {
                 currentTool: 'artifact_tools',
-                actions: ['inspect', 'index', 'search', 'query', 'edit', 'render', 'validate', 'trace', 'recalculate', 'rollback', 'export', 'roundtrip', 'run_checks'],
-                nextActions: [
-                    { action: 'inspect', fields: ['path or sessionId', 'kind=workbook|sheet|range|formula|comment|definedName|relationship|image'] },
-                    { action: 'query', fields: ['path or sessionId', 'sheet/range', 'include=values,styles,formulas,comments'] },
-                    { action: 'search', fields: ['path or sessionId', 'kind=text|style|formula|error|table|merge|comment|hidden', 'query/fill'] },
-                    { action: 'render', fields: ['path or sessionId', 'sheet/range'] }
-                ],
-                note: 'Use artifact_tools itself for exact cell values, fills, formulas, tables, merges, declaration edits, export, and roundtrip checks. art_* and arts_* ids belong to artifact_tools; do not pass them to artifact_query.'
+                actions: ['inspect', 'index', 'search', 'query', 'materialize', 'edit', 'render', 'validate', 'trace', 'recalculate', 'rollback', 'export', 'roundtrip', 'run_checks']
             };
         }
         if (adapter.id === 'ragflow_lite_table') {
             return {
                 currentTool: 'artifact_import',
                 parserId: 'table',
-                queryTools: ['artifact_query'],
-                note: 'Legacy optional chunk backend. Do not use when exact styles/layout matter.'
+                queryTools: ['artifact_query']
             };
         }
         return {
             currentTool: IMPLEMENTED_ADAPTER_IDS.includes(adapter.id) ? 'artifact_tools' : 'artifact_tools.open_session',
-            actions: IMPLEMENTED_ADAPTER_IDS.includes(adapter.id) ? ['inspect', 'render', 'roundtrip', 'run_checks'] : ['open_session'],
-            note: IMPLEMENTED_ADAPTER_IDS.includes(adapter.id)
-                ? `${adapter.id || kind || format} adapter is available for local deterministic checks. Continue with artifact_tools actions using path or sessionId.`
-                : `${adapter.id || kind || format} adapter is architecturally registered; implementation should provide ${requiredCapabilities.join(', ') || 'load/inspect'}.`
+            actions: IMPLEMENTED_ADAPTER_IDS.includes(adapter.id) ? ['inspect', 'materialize', 'render', 'roundtrip', 'run_checks'] : ['open_session']
         };
     }
 
@@ -728,6 +878,128 @@ class AILISArtifactToolsRuntime {
         });
     }
 
+    async materialize(input = {}) {
+        const plan = this.planImport(input);
+        const blocked = this.ensureImplementedAdapter(plan);
+        if (blocked) {
+            return blocked;
+        }
+        const adapterInput = this.buildAdapterInput(input, plan);
+        const requestedAction = normalizeAction(
+            input.fromAction ||
+            input.from_action ||
+            input.sourceAction ||
+            input.source_action ||
+            input.materializeFrom ||
+            input.materialize_from ||
+            '',
+            plan.adapter.id === 'xlsx' ? 'query' : 'inspect'
+        );
+        const materializeFrom = requestedAction === 'aggregate'
+            ? 'query'
+            : (requestedAction === 'structure' ? 'inspect' : requestedAction);
+        let sourceResult = null;
+        if (materializeFrom === 'query') {
+            if (plan.adapter.id !== 'xlsx') {
+                return createErrorResult('adapter_query_not_implemented', `Query materialization is not implemented for adapter ${plan.adapter.id}; use fromAction=inspect/index/render.`, { plan });
+            }
+            sourceResult = await queryXlsxArtifact(adapterInput);
+        } else if (materializeFrom === 'inspect') {
+            sourceResult = await inspectArtifact(adapterInput);
+        } else if (materializeFrom === 'index' || materializeFrom === 'build_index') {
+            sourceResult = plan.adapter.id === 'xlsx'
+                ? await indexXlsxArtifact(adapterInput)
+                : await indexFileArtifact(adapterInput);
+        } else if (materializeFrom === 'search' || materializeFrom === 'artifact_search') {
+            sourceResult = plan.adapter.id === 'xlsx'
+                ? await searchXlsxArtifact(adapterInput)
+                : await searchArtifact(adapterInput);
+        } else if (materializeFrom === 'render') {
+            const inspection = await inspectArtifact(adapterInput);
+            sourceResult = await renderArtifactPreview({ ...adapterInput, inspection });
+        } else {
+            return createErrorResult('unsupported_materialize_source_action', `Cannot materialize from action ${materializeFrom}.`, {
+                supportedFromActions: ['query', 'inspect', 'index', 'search', 'render'],
+                plan
+            });
+        }
+
+        const observation = pickMaterializedObservation(sourceResult);
+        const paths = resolveWorkbenchPaths(input, adapterInput);
+        await ensureWorkbenchDirs(paths);
+
+        const inputId = safePathSegment(
+            input.inputId ||
+            input.input_id ||
+            `${normalizeString(plan.adapter.id, 'artifact')}-${materializeFrom}-${Date.now()}`,
+            'input'
+        );
+        const payload = buildMaterializedInputPayload({
+            id: inputId,
+            plan,
+            adapterInput,
+            materializeFrom,
+            sourceResult,
+            observation
+        });
+        const requestedFilename = normalizeString(input.filename || input.fileName || input.file_name);
+        const defaultFilename = payload.kind === 'xlsx.range.matrixRows'
+            ? 'matrixRows.json'
+            : `${safePathSegment(materializeFrom, 'artifact')}.json`;
+        const filename = requestedFilename
+            ? `${safePathSegment(requestedFilename.replace(/\.json$/i, ''), 'input')}.json`
+            : defaultFilename;
+        const dataPath = path.join(paths.inputsDir, filename);
+        await fs.writeFile(dataPath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+        const stat = await fs.stat(dataPath);
+
+        const materialized = {
+            id: inputId,
+            kind: payload.kind,
+            path: dataPath,
+            relativePath: path.relative(paths.repoRoot, dataPath),
+            bytes: stat.size,
+            source: payload.source,
+            shape: payload.shape,
+            counts: {
+                matrixRows: payload.matrixRows.length,
+                compactRows: payload.compactRows.length,
+                rows: payload.rows.length
+            },
+            createdAt: payload.createdAt
+        };
+        const manifest = await readWorkbenchManifest(paths);
+        manifest.inputs = upsertManifestEntry(Array.isArray(manifest.inputs) ? manifest.inputs : [], materialized);
+        manifest.latestInputId = inputId;
+        await writeWorkbenchManifest(paths, manifest);
+
+        const compactObservation = buildMaterializeObservation({
+            plan,
+            adapterInput,
+            materializeFrom,
+            materialized,
+            paths,
+            observation
+        });
+        return createOkResult({
+            action: 'materialize',
+            adapterId: plan.adapter.id,
+            session: this.getSession(adapterInput.sessionId),
+            plan,
+            sourceAction: materializeFrom,
+            materialized,
+            workbench: {
+                runId: paths.runId,
+                root: paths.runDir,
+                manifestPath: paths.manifestPath,
+                inputsDir: paths.inputsDir,
+                scriptsDir: paths.scriptsDir,
+                outputsDir: paths.outputsDir
+            },
+            observation: compactObservation
+        });
+    }
+
     async render(input = {}) {
         const plan = this.planImport(input);
         const blocked = this.ensureImplementedAdapter(plan);
@@ -927,6 +1199,9 @@ class AILISArtifactToolsRuntime {
         if (action === 'query' || action === 'aggregate') {
             return this.query(args);
         }
+        if (action === 'materialize' || action === 'workbench_materialize') {
+            return this.materialize(args);
+        }
         if (action === 'inspect' || action === 'structure') {
             return this.inspect(args);
         }
@@ -958,7 +1233,7 @@ class AILISArtifactToolsRuntime {
             return this.runChecks(args);
         }
         return createErrorResult('unsupported_action', `Unsupported artifact runtime action: ${action}`, {
-            supportedActions: ['schema', 'list_adapters', 'plan_import', 'open_session', 'index', 'search', 'query', 'aggregate', 'inspect', 'render', 'validate', 'edit', 'trace', 'recalculate', 'rollback', 'export', 'roundtrip', 'run_checks', 'list_sessions', 'list_eval_cases']
+            supportedActions: ['schema', 'list_adapters', 'plan_import', 'open_session', 'index', 'search', 'query', 'aggregate', 'materialize', 'inspect', 'render', 'validate', 'edit', 'trace', 'recalculate', 'rollback', 'export', 'roundtrip', 'run_checks', 'list_sessions', 'list_eval_cases']
         });
     }
 }

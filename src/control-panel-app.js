@@ -371,6 +371,12 @@ const ELEVENLABS_LANGUAGE_CODES = Object.freeze(Object.keys(elevenLabsLanguagePr
 
 const llmProviderLabels = {
     'openai-compatible': 'OpenAI-compatible',
+    doubao: '豆包 / 火山方舟',
+    deepseek: 'DeepSeek',
+    qwen: '通义千问 / DashScope',
+    kimi: 'Kimi / Moonshot',
+    zhipu: '智谱 GLM',
+    openrouter: 'OpenRouter',
     'openai-responses': 'OpenAI Responses',
     anthropic: 'Anthropic Claude',
     gemini: 'Google Gemini',
@@ -379,6 +385,12 @@ const llmProviderLabels = {
 
 const fallbackLlmProviderDefaultBaseUrls = {
     'openai-compatible': 'https://ark.cn-beijing.volces.com/api/v3',
+    doubao: 'https://ark.cn-beijing.volces.com/api/v3',
+    deepseek: 'https://api.deepseek.com',
+    qwen: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    kimi: 'https://api.moonshot.cn/v1',
+    zhipu: 'https://open.bigmodel.cn/api/paas/v4',
+    openrouter: 'https://openrouter.ai/api/v1',
     'openai-responses': 'https://api.openai.com/v1',
     anthropic: 'https://api.anthropic.com',
     gemini: 'https://generativelanguage.googleapis.com/v1beta',
@@ -387,6 +399,12 @@ const fallbackLlmProviderDefaultBaseUrls = {
 
 const fallbackLlmProviderDefaultModels = {
     'openai-compatible': 'doubao-seed-2-0-mini-260215',
+    doubao: 'doubao-seed-2-0-mini-260215',
+    deepseek: 'deepseek-v4-flash',
+    qwen: 'qwen-turbo',
+    kimi: 'moonshot-v1-8k',
+    zhipu: 'glm-4-flash',
+    openrouter: 'openai/gpt-4.1-mini',
     'openai-responses': 'gpt-4.1-mini',
     anthropic: 'claude-3-5-haiku-latest',
     gemini: 'gemini-2.0-flash',
@@ -399,11 +417,17 @@ const llmPresetCatalog = [
         id: 'doubao',
         label: '豆包 / 火山方舟',
         help: '国内低延迟优先；日常对话建议 mini，复杂任务建议 pro。',
-        provider: 'openai-compatible',
+        provider: 'doubao',
         baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
         models: [
+            { id: 'doubao-seed-2-1-turbo-260628', label: 'Doubao Seed 2.1 Turbo（推荐复杂任务）' },
+            { id: 'doubao-seed-2-1-pro-260628', label: 'Doubao Seed 2.1 Pro（更强推理）' },
             { id: 'doubao-seed-2-0-mini-260215', label: 'Doubao Seed 2.0 Mini（低延迟）' },
-            { id: 'doubao-seed-2-0-pro-260215', label: 'Doubao Seed 2.0 Pro（复杂任务）' }
+            { id: 'doubao-seed-2-0-pro-260215', label: 'Doubao Seed 2.0 Pro（复杂任务）' },
+            { id: 'doubao-seed-1-6-thinking-250715', label: 'Doubao Seed 1.6 Thinking（思考模型）' },
+            { id: 'doubao-1-5-pro-32k-250115', label: 'Doubao 1.5 Pro 32K（长上下文）' },
+            { id: 'doubao-1-5-lite-32k-250115', label: 'Doubao 1.5 Lite 32K（经济）' },
+            { id: 'doubao-vision-pro-32k-241028', label: 'Doubao Vision Pro 32K（视觉）' }
         ]
     },
     {
@@ -413,8 +437,17 @@ const llmPresetCatalog = [
         provider: 'openai-responses',
         baseUrl: 'https://api.openai.com/v1',
         models: [
-            { id: 'gpt-4.1-mini', label: 'GPT-4.1 mini（较快）' },
-            { id: 'gpt-4.1', label: 'GPT-4.1（更强）' }
+            { id: 'gpt-5.5', label: 'GPT-5.5（旗舰）' },
+            { id: 'gpt-5.4', label: 'GPT-5.4（高质量通用）' },
+            { id: 'gpt-5.4-mini', label: 'GPT-5.4 mini（均衡）' },
+            { id: 'gpt-5.4-nano', label: 'GPT-5.4 nano（低延迟）' },
+            { id: 'gpt-5', label: 'GPT-5（通用）' },
+            { id: 'gpt-5-mini', label: 'GPT-5 mini（较快）' },
+            { id: 'gpt-4.1', label: 'GPT-4.1（经典强模型）' },
+            { id: 'gpt-4.1-mini', label: 'GPT-4.1 mini（兼容低延迟）' },
+            { id: 'gpt-4o', label: 'GPT-4o（多模态）' },
+            { id: 'o3', label: 'o3（推理）' },
+            { id: 'o4-mini', label: 'o4-mini（快速推理）' }
         ]
     },
     {
@@ -424,8 +457,17 @@ const llmPresetCatalog = [
         provider: 'anthropic',
         baseUrl: 'https://api.anthropic.com',
         models: [
-            { id: 'claude-3-5-haiku-latest', label: 'Claude Haiku（低延迟）' },
-            { id: 'claude-3-5-sonnet-latest', label: 'Claude Sonnet（更强）' }
+            { id: 'claude-fable-5', label: 'Claude Fable 5（旗舰）' },
+            { id: 'claude-opus-4-8', label: 'Claude Opus 4.8（复杂 Agent / 代码）' },
+            { id: 'claude-sonnet-5', label: 'Claude Sonnet 5（均衡强模型）' },
+            { id: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5（低延迟）' },
+            { id: 'claude-sonnet-4-5-20250929', label: 'Claude Sonnet 4.5（推荐）' },
+            { id: 'claude-opus-4-1-20250805', label: 'Claude Opus 4.1（高质量）' },
+            { id: 'claude-opus-4-20250514', label: 'Claude Opus 4' },
+            { id: 'claude-sonnet-4-20250514', label: 'Claude Sonnet 4' },
+            { id: 'claude-3-7-sonnet-latest', label: 'Claude 3.7 Sonnet（兼容）' },
+            { id: 'claude-3-5-sonnet-latest', label: 'Claude 3.5 Sonnet（兼容）' },
+            { id: 'claude-3-5-haiku-latest', label: 'Claude 3.5 Haiku（兼容低延迟）' }
         ]
     },
     {
@@ -435,40 +477,65 @@ const llmPresetCatalog = [
         provider: 'gemini',
         baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
         models: [
+            { id: 'gemini-3.5-flash', label: 'Gemini 3.5 Flash（最新 Flash）' },
+            { id: 'gemini-3.1-pro-preview', label: 'Gemini 3.1 Pro Preview（强推理）' },
+            { id: 'gemini-3.1-flash-lite-preview', label: 'Gemini 3.1 Flash-Lite Preview（轻量）' },
+            { id: 'gemini-3-flash-preview', label: 'Gemini 3 Flash Preview' },
+            { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro（强模型）' },
+            { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash（推荐）' },
+            { id: 'gemini-2.5-flash-lite', label: 'Gemini 2.5 Flash-Lite（低延迟）' },
             { id: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash（低延迟）' },
-            { id: 'gemini-2.0-pro', label: 'Gemini 2.0 Pro（更强）' }
+            { id: 'gemini-2.0-flash-lite', label: 'Gemini 2.0 Flash-Lite（经济）' },
+            { id: 'gemini-1.5-pro', label: 'Gemini 1.5 Pro（兼容长上下文）' }
         ]
     },
     {
         id: 'deepseek',
         label: 'DeepSeek',
         help: 'OpenAI-compatible；复杂任务建议 V4 Pro，低延迟任务建议 V4 Flash。',
-        provider: 'openai-compatible',
+        provider: 'deepseek',
         baseUrl: 'https://api.deepseek.com',
         models: [
+            { id: 'deepseek-chat', label: 'DeepSeek Chat（官方通用别名）' },
+            { id: 'deepseek-reasoner', label: 'DeepSeek Reasoner（官方推理别名）' },
             { id: 'deepseek-v4-pro', label: 'DeepSeek V4 Pro（复杂任务）' },
-            { id: 'deepseek-v4-flash', label: 'DeepSeek V4 Flash（低延迟）' }
+            { id: 'deepseek-v4-flash', label: 'DeepSeek V4 Flash（低延迟）' },
+            { id: 'deepseek-r1', label: 'DeepSeek R1（推理，兼容）' },
+            { id: 'deepseek-v3', label: 'DeepSeek V3（通用，兼容）' }
         ]
     },
     {
         id: 'qwen',
         label: '通义千问 / DashScope',
         help: 'OpenAI-compatible 兼容模式；适合中文和通用任务。',
-        provider: 'openai-compatible',
+        provider: 'qwen',
         baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
         models: [
+            { id: 'qwen3.7-max', label: 'Qwen3.7 Max（旗舰）' },
+            { id: 'qwen3.7-plus', label: 'Qwen3.7 Plus（均衡）' },
+            { id: 'qwen3.6-flash', label: 'Qwen3.6 Flash（低延迟）' },
+            { id: 'qwen3-coder-plus', label: 'Qwen3 Coder Plus（代码）' },
+            { id: 'qwen3-max', label: 'Qwen3 Max' },
+            { id: 'qwen3-plus', label: 'Qwen3 Plus' },
+            { id: 'qwen3-turbo', label: 'Qwen3 Turbo' },
+            { id: 'qwq-plus', label: 'QwQ Plus（推理）' },
+            { id: 'qwen-vl-max-latest', label: 'Qwen VL Max（视觉）' },
+            { id: 'qwen3.5-omni-plus', label: 'Qwen3.5 Omni Plus（多模态）' },
             { id: 'qwen-turbo', label: 'Qwen Turbo（低延迟）' },
             { id: 'qwen-plus', label: 'Qwen Plus（均衡）' },
-            { id: 'qwen-max', label: 'Qwen Max（更强）' }
+            { id: 'qwen-max', label: 'Qwen Max（兼容）' }
         ]
     },
     {
         id: 'kimi',
         label: 'Kimi / Moonshot',
         help: 'OpenAI-compatible；适合中文长上下文和资料阅读。',
-        provider: 'openai-compatible',
+        provider: 'kimi',
         baseUrl: 'https://api.moonshot.cn/v1',
         models: [
+            { id: 'kimi-k2.7-code', label: 'Kimi K2.7 Code（代码）' },
+            { id: 'kimi-k2.6', label: 'Kimi K2.6（通用）' },
+            { id: 'kimi-k2.5', label: 'Kimi K2.5（通用）' },
             { id: 'moonshot-v1-8k', label: 'Moonshot 8K（低延迟）' },
             { id: 'moonshot-v1-32k', label: 'Moonshot 32K' },
             { id: 'moonshot-v1-128k', label: 'Moonshot 128K（长上下文）' }
@@ -478,9 +545,14 @@ const llmPresetCatalog = [
         id: 'zhipu',
         label: '智谱 GLM',
         help: 'OpenAI-compatible；适合中文通用任务。',
-        provider: 'openai-compatible',
+        provider: 'zhipu',
         baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
         models: [
+            { id: 'glm-5.2', label: 'GLM-5.2（旗舰）' },
+            { id: 'glm-4.5', label: 'GLM-4.5（强模型）' },
+            { id: 'glm-4.5-flash', label: 'GLM-4.5 Flash（低延迟）' },
+            { id: 'glm-4-air', label: 'GLM-4 Air（均衡）' },
+            { id: 'glm-4v-plus', label: 'GLM-4V Plus（视觉）' },
             { id: 'glm-4-flash', label: 'GLM-4 Flash（低延迟）' },
             { id: 'glm-4-plus', label: 'GLM-4 Plus（更强）' }
         ]
@@ -489,9 +561,22 @@ const llmPresetCatalog = [
         id: 'openrouter',
         label: 'OpenRouter',
         help: '一个 Key 接多家模型；模型 ID 可以在高级模型 ID 中自行替换。',
-        provider: 'openai-compatible',
+        provider: 'openrouter',
         baseUrl: 'https://openrouter.ai/api/v1',
         models: [
+            { id: 'openai/gpt-5.5', label: 'OpenAI GPT-5.5' },
+            { id: 'openai/gpt-5.4', label: 'OpenAI GPT-5.4' },
+            { id: 'openai/gpt-5.4-mini', label: 'OpenAI GPT-5.4 mini' },
+            { id: 'anthropic/claude-fable-5', label: 'Claude Fable 5' },
+            { id: 'anthropic/claude-sonnet-4.5', label: 'Claude Sonnet 4.5' },
+            { id: 'anthropic/claude-opus-4.1', label: 'Claude Opus 4.1' },
+            { id: 'google/gemini-3.5-flash', label: 'Gemini 3.5 Flash' },
+            { id: 'google/gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
+            { id: 'google/gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
+            { id: 'deepseek/deepseek-r1', label: 'DeepSeek R1' },
+            { id: 'deepseek/deepseek-chat', label: 'DeepSeek Chat' },
+            { id: 'qwen/qwen3-max', label: 'Qwen3 Max' },
+            { id: 'qwen/qwen3-coder', label: 'Qwen3 Coder' },
             { id: 'openai/gpt-4.1-mini', label: 'OpenAI GPT-4.1 mini' },
             { id: 'anthropic/claude-3.5-haiku', label: 'Claude Haiku' },
             { id: 'google/gemini-2.0-flash-001', label: 'Gemini Flash' },
@@ -510,8 +595,15 @@ const llmPresetCatalog = [
             { id: 'llama3.2:1b', label: 'Llama 3.2 1B（轻量英文）' },
             { id: 'qwen2.5:7b', label: 'Qwen2.5 7B（中文/通用）' },
             { id: 'qwen2.5:14b', label: 'Qwen2.5 14B（更强）' },
+            { id: 'qwen3:8b', label: 'Qwen3 8B（新一代中文/通用）' },
+            { id: 'qwen3:14b', label: 'Qwen3 14B（更强）' },
             { id: 'llama3.1:8b', label: 'Llama 3.1 8B' },
-            { id: 'gemma3:4b', label: 'Gemma 3 4B（轻量）' }
+            { id: 'llama3.3:70b', label: 'Llama 3.3 70B（强模型，需要高配置）' },
+            { id: 'deepseek-r1:7b', label: 'DeepSeek R1 7B（推理）' },
+            { id: 'deepseek-r1:14b', label: 'DeepSeek R1 14B（推理，更强）' },
+            { id: 'gemma3:4b', label: 'Gemma 3 4B（轻量）' },
+            { id: 'mistral:7b', label: 'Mistral 7B' },
+            { id: 'llava:7b', label: 'LLaVA 7B（视觉）' }
         ]
     },
     {
@@ -1336,7 +1428,7 @@ function normalizePreferences(preferences = {}) {
         Math.max(0, Number(preferences.llmTemperature ?? 0.8))
     );
     const llmTimeout = Math.min(
-        120000,
+        300000,
         Math.max(5000, Number(preferences.llmRequestTimeoutMs ?? 25000))
     );
 
@@ -2182,8 +2274,15 @@ function syncLlmKeyState() {
         return;
     }
 
-    if (selected || currentPreferences?.llmApiKeyConfigured) {
-        if (currentPreferences.llmApiKeySource === 'environment') {
+    const sameProviderAsSaved = provider === currentPreferences?.llmProvider;
+    const providerHasSavedKey = Boolean(selected || profile.activeKeyId || profile.keys.length);
+    const providerUsesEnvironmentKey = Boolean(
+        sameProviderAsSaved &&
+        currentPreferences?.llmApiKeyConfigured &&
+        currentPreferences?.llmApiKeySource === 'environment'
+    );
+    if (providerHasSavedKey || providerUsesEnvironmentKey) {
+        if (providerUsesEnvironmentKey) {
             elements.llmKeyState.textContent = elements.llmApiKey.value.trim()
                 ? '保存后会把新 Key 保存到当前服务商，本地保存优先于环境变量。'
                 : 'Key 状态：已从环境变量读取。';
@@ -2216,11 +2315,12 @@ function formatCapabilityFlag(value) {
 function estimateLlmCapabilities(provider, model) {
     const providerCaps = panelState?.options?.llmProviderCapabilities?.[provider] || {};
     const lowerModel = String(model || '').toLowerCase();
-    const vision = provider === 'openai-compatible'
+    const openAiCompatibleLike = ['openai-compatible', 'doubao', 'deepseek', 'qwen', 'kimi', 'zhipu', 'openrouter'].includes(provider);
+    const vision = openAiCompatibleLike
         ? /(vision|vl|omni|gpt-4o|gpt-4\.1|gpt-5|qwen.*vl|glm-4v|doubao.*vision|seed.*vision|kimi.*vision)/i.test(lowerModel)
         : Boolean(providerCaps.vision);
     const lowLatency = /(mini|flash|haiku|turbo|lite|fast|speed|doubao|deepseek-chat)/i.test(lowerModel);
-    const longContext = provider === 'openai-compatible'
+    const longContext = openAiCompatibleLike
         ? /(128k|200k|1m|long|qwen|doubao|deepseek)/i.test(lowerModel)
         : Boolean(providerCaps.longContext);
     return {
@@ -2289,7 +2389,11 @@ function hasUnsavedModelChanges() {
         return false;
     }
     const selectedKeyId = elements.llmApiKeySelect?.value || '';
-    const savedKeyId = currentPreferences.llmActiveApiKeyId || getCurrentLlmApiKeyProfile(currentPreferences.llmProvider).activeKeyId || '';
+    const provider = elements.llmProvider?.value || currentPreferences.llmProvider;
+    const providerProfile = getCurrentLlmApiKeyProfile(provider);
+    const savedKeyId = provider === currentPreferences.llmProvider
+        ? currentPreferences.llmActiveApiKeyId || providerProfile.activeKeyId || ''
+        : providerProfile.activeKeyId || '';
     const pendingKeyInput = elements.llmApiKey?.value?.trim() || '';
     return Boolean(elements.llmApiKey?.value?.trim()) ||
         Boolean(pendingKeyInput && elements.llmApiKeyLabel?.value?.trim()) ||
@@ -2354,10 +2458,18 @@ function renderModelActivationState() {
     const localProvider = isLocalLlmProvider(provider);
     const hasUnsaved = hasUnsavedModelChanges();
     const selectedSavedKey = getSelectedLlmApiKeyMeta(provider);
+    const providerProfile = getCurrentLlmApiKeyProfile(provider);
+    const sameProviderAsSaved = provider === currentPreferences?.llmProvider;
+    const providerEnvironmentKeyReady = Boolean(
+        sameProviderAsSaved &&
+        currentPreferences?.llmApiKeyConfigured &&
+        currentPreferences?.llmApiKeySource === 'environment'
+    );
     const keyReady = localProvider ||
         Boolean(elements.llmApiKey?.value?.trim()) ||
         Boolean(selectedSavedKey && !pendingClearLlmKey) ||
-        Boolean(currentPreferences?.llmApiKeyConfigured && !pendingClearLlmKey);
+        Boolean(providerProfile.activeKeyId && !pendingClearLlmKey) ||
+        Boolean(providerEnvironmentKeyReady && !pendingClearLlmKey);
     const runtimeText = localProvider ? getLocalRuntimeStatusText(provider) : '云端 API，需通过连接测试确认';
     const keyText = localProvider
         ? '本地服务通常无需 Key'
@@ -6159,7 +6271,7 @@ async function runAgentLabTask() {
         return;
     }
     const sessionId = elements.agentLabSession?.value.trim() || 'agent-lab';
-    const maxAgentSteps = Math.max(1, Math.min(Number(elements.agentLabMaxSteps?.value || 12), 12));
+    const maxAgentSteps = Math.max(1, Math.min(Number(elements.agentLabMaxSteps?.value || 30), 30));
     const dryRun = elements.agentLabDryRun?.checked === true;
     const classifyOnly = elements.agentLabClassifyOnly?.checked === true;
     const approved = elements.agentLabApproved?.checked === true;

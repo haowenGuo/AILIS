@@ -702,8 +702,8 @@ function extractExactAnswerSubmission(response = {}) {
     const candidates = [
         response?.exactAnswerSubmission,
         response?.exact_answer_submission,
-        response?.answerGate?.submission,
-        response?.exactAnswerGate?.submission
+        response?.exactAnswerAudit?.submission,
+        response?.answerAudit?.submission
     ];
     for (const candidate of candidates) {
         if (candidate && typeof candidate === 'object') {
@@ -751,11 +751,79 @@ function buildReasonFinalAnswerGate(response = {}, question = {}) {
     };
 }
 
+const SCALED_UNIT_MULTIPLIERS = {
+    thousand: 1000,
+    million: 1000000,
+    billion: 1000000000
+};
+
+const SIMPLE_NUMBER_PATTERN = '[-+]?\\d{1,3}(?:,\\d{3})*(?:\\.\\d+)?|[-+]?\\d+(?:\\.\\d+)?';
+
+function normalizeSubmittedNumberText(value = '') {
+    const text = normalizeText(value).replace(/,/g, '');
+    const number = Number(text);
+    if (!Number.isFinite(number)) {
+        return text;
+    }
+    return Number.isInteger(number) ? String(number) : String(Number(number.toPrecision(12)));
+}
+
+function requestedScaledUnit(questionText = '') {
+    const text = normalizeText(questionText);
+    for (const [word, multiplier] of Object.entries(SCALED_UNIT_MULTIPLIERS)) {
+        const pattern = new RegExp(
+            `\\b(?:how\\s+many\\s+${word}s?|in\\s+${word}s?|number\\s+of\\s+${word}s?|amount\\s+in\\s+${word}s?)\\b`,
+            'i'
+        );
+        if (pattern.test(text)) {
+            return { word, multiplier };
+        }
+    }
+    return null;
+}
+
+function formatScaledUnitAnswerForQuestion(answerText = '', questionText = '') {
+    const scale = requestedScaledUnit(questionText);
+    if (!scale) {
+        return answerText;
+    }
+    const scaledAnswerPattern = new RegExp(
+        `^\\s*(${SIMPLE_NUMBER_PATTERN})\\s+${scale.word}s?(?:\\s+[A-Za-z][A-Za-z0-9%/^.-]*)*\\.?\\s*$`,
+        'i'
+    );
+    const scaledAnswer = answerText.match(scaledAnswerPattern);
+    if (scaledAnswer) {
+        return normalizeSubmittedNumberText(scaledAnswer[1]);
+    }
+    const rawNumberPattern = new RegExp(
+        `^\\s*(${SIMPLE_NUMBER_PATTERN})(?:\\s+[A-Za-z][A-Za-z0-9%/^.-]*)?\\.?\\s*$`,
+        'i'
+    );
+    const rawNumber = answerText.match(rawNumberPattern);
+    if (!rawNumber) {
+        return answerText;
+    }
+    const numeric = Number(rawNumber[1].replace(/,/g, ''));
+    if (!Number.isFinite(numeric) || Math.abs(numeric) < scale.multiplier) {
+        return answerText;
+    }
+    const scaled = numeric / scale.multiplier;
+    const nearestInteger = Math.round(scaled);
+    if (Math.abs(scaled - nearestInteger) > 1e-9) {
+        return answerText;
+    }
+    return String(nearestInteger);
+}
+
 function formatSubmittedAnswerForQuestion(answer, question = {}) {
     const text = stripControlTags(answer);
     const questionText = normalizeText(typeof question === 'string' ? question : question.question);
     if (!text || !questionText) {
         return text;
+    }
+    const scaled = formatScaledUnitAnswerForQuestion(text, questionText);
+    if (scaled !== text) {
+        return scaled;
     }
     const unitSpecified = /\b(?:in|unit|units|measured in)\s+(?:m\^?3|m\u00b3|cubic meters?|kg|kilograms?|g|grams?|km|kilometers?|m|meters?|cm|centimeters?|mm|millimeters?|%|percent|percentage)\b/i.test(questionText) ||
         /\b(?:m\^?3|m\u00b3|cubic meters?|kg|kilograms?|%|percent|percentage)\b/i.test(questionText);
@@ -1759,6 +1827,7 @@ async function finalizeAnswerFromEvidence({ question, filePath, response, llmSet
                     'For spreadsheet/CSV questions, answer only when the observations include a full-file computation or the complete relevant table.',
                     'For webpage/news questions with an exact date in the question, only use evidence from pages whose observed date/title match that exact target; if the evidence points to a different day or article, return missing evidence.',
                     'If the question already specifies the unit, return the bare value without repeating the unit.',
+                    'If the question asks for a scaled unit such as how many thousand, million, or billion items, return the scaled count, not the raw base-unit amount. Example: 17000 hours means 17 thousand hours, so answer 17.',
                     'For quote/word/phrase questions, prefer answerCandidates and focused evidence snippets over page titles, article titles, metadata, or search result titles.',
                     'For quote/word/phrase questions, do not answer from a title unless the evidence snippet shows that exact value in the requested quoted/body context.',
                     'If the observations do not contain enough evidence, return {"answer":"","confidence":"low","reason":"missing evidence"}.',

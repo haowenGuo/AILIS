@@ -89,22 +89,12 @@ const ROUTING_PROFILES = Object.freeze([
             /\b(pdf|docx|docm|pptx|ppt|xlsx|xlsm|xls|csv|tsv|png|jpg|jpeg|webp)\b/i,
             /(附件|本地文件|文件路径|产物|工件).*(pdf|docx|pptx|xlsx|xlsm|csv|tsv|图片|图像|表格|文档|演示文稿)/i
         ],
-        tools: [
-            'artifact_tools',
-            'artifact_query',
-            'artifact_compute',
-            'read_spreadsheet',
-            'read_document',
-            'read_presentation',
-            'pdf_extract_text',
-            'pdf_find_and_extract',
-            'describe_image'
-        ],
+        tools: ['artifact_tools'],
         primaryTools: ['artifact_tools'],
         bonus: 115,
         primaryBonus: 70,
         webPenalty: 90,
-        advice: 'Use artifact_tools as the canonical local file artifact runtime for Office/PDF/table/image artifacts. If a capability is missing, decide from the observation whether to use a general tool such as exec/code or ask for clarification.'
+        advice: 'Use artifact_tools as the canonical local file artifact runtime for Office/PDF/table/image artifacts. Value-only readers such as read_spreadsheet are fallback tools, not peers of artifact_tools. If a capability is missing, decide from the observation whether to use a general tool such as exec/code or ask for clarification.'
     }),
     Object.freeze({
         id: 'word_document',
@@ -115,12 +105,12 @@ const ROUTING_PROFILES = Object.freeze([
             /附件.*(word|docx|docm|文档|表格)/i,
             /(word|docx|docm|文档).*附件/i
         ],
-        tools: ['artifact_tools', 'read_document'],
+        tools: ['artifact_tools'],
         primaryTools: ['artifact_tools'],
         bonus: 90,
         primaryBonus: 48,
         webPenalty: 80,
-        advice: 'Use artifact_tools for local Word/DOCX artifacts first; fall back to read_document only if the artifact runtime lacks the needed adapter/capability.'
+        advice: 'Use artifact_tools for local Word/DOCX artifacts first; use read_document only as an explicit fallback when artifact_tools reports a missing capability.'
     }),
     Object.freeze({
         id: 'presentation',
@@ -128,12 +118,12 @@ const ROUTING_PROFILES = Object.freeze([
             /\b(ppt|pptx|powerpoint|presentation|slide deck|slides?)\b/i,
             /(幻灯片|演示文稿|pptx|ppt|powerpoint)/i
         ],
-        tools: ['artifact_tools', 'read_presentation'],
+        tools: ['artifact_tools'],
         primaryTools: ['artifact_tools'],
         bonus: 90,
         primaryBonus: 48,
         webPenalty: 80,
-        advice: 'Use artifact_tools for local PowerPoint/PPTX artifacts first; fall back to read_presentation only if the artifact runtime lacks the needed adapter/capability.'
+        advice: 'Use artifact_tools for local PowerPoint/PPTX artifacts first; use read_presentation only as an explicit fallback when artifact_tools reports a missing capability.'
     }),
     Object.freeze({
         id: 'spreadsheet',
@@ -142,26 +132,26 @@ const ROUTING_PROFILES = Object.freeze([
             /\b(cell colors?|fill colors?|merged cells?|formula cells?|grid map|spreadsheet map)\b/i,
             /(电子表格|工作簿|表格|列|行|求和|总和|单元格|填充色|颜色|公式|合并单元格)/i
         ],
-        tools: ['artifact_tools', 'read_spreadsheet', 'artifact_query', 'artifact_compute'],
+        tools: ['artifact_tools'],
         primaryTools: ['artifact_tools'],
         bonus: 90,
         primaryBonus: 56,
         webPenalty: 80,
-        advice: 'Use artifact_tools for spreadsheet/workbook artifacts, especially colors, formulas, merges, renders, indexes, search/query, and grid-map tasks.'
+        advice: 'Use artifact_tools for spreadsheet/workbook artifacts, especially colors, formulas, merges, renders, indexes, search/query, materialize, and grid/map tasks. read_spreadsheet is only a value-only fallback and cannot see fills/styles/merged cells/formulas/comments/images.'
     }),
     Object.freeze({
         id: 'context_artifact',
         patterns: [
-            /\b(artifactid|artifact_id|artifact_query|artifact_compute|context artifact|artifact payload|payload file|fulljsonpath|managed artifact|query artifact)\b/i,
-            /\b(read artifact|artifact range|artifact grid|artifact search|spreadsheet range|grid query|artifact compute|data worker|find path|path search)\b/i,
-            /(上下文产物|产物查询|证据产物|大文件载荷|查询证据|产物计算|路径搜索|数据工人)/i
+            /\b(artifactid|artifact_id|artifact_query|context artifact|artifact payload|payload file|fulljsonpath|managed artifact|query artifact)\b/i,
+            /\b(read artifact|artifact range|artifact grid|artifact search|spreadsheet range|grid query)\b/i,
+            /(上下文产物|产物查询|证据产物|大文件载荷|查询证据)/i
         ],
-        tools: ['artifact_tools', 'artifact_query', 'artifact_compute'],
+        tools: ['artifact_tools', 'artifact_query'],
         primaryTools: ['artifact_tools'],
         bonus: 95,
         primaryBonus: 58,
         webPenalty: 90,
-        advice: 'Use artifact_tools as the artifact runtime control surface for indexing/search/query/compute/render/edit flows. Use artifact_query/artifact_compute only as lower-level compatibility tools for already-managed context artifact ids.'
+        advice: 'Use artifact_tools as the artifact runtime control surface for indexing/search/query/render/edit flows. Use artifact_query only as a lower-level compatibility tool for already-managed context artifact ids.'
     }),
     Object.freeze({
         id: 'pdf_artifact',
@@ -170,12 +160,12 @@ const ROUTING_PROFILES = Object.freeze([
             /\b(pdf)\b.*\b(local|attached|attachment|file|path|downloaded|extract|render|page|search)\b/i,
             /(本地|附件|文件|路径).*(pdf|PDF|论文|报告)/i
         ],
-        tools: ['artifact_tools', 'pdf_extract_text', 'pdf_find_and_extract', 'artifact_query'],
+        tools: ['artifact_tools'],
         primaryTools: ['artifact_tools'],
         bonus: 92,
         primaryBonus: 50,
         webPenalty: 75,
-        advice: 'Use artifact_tools for local PDF artifacts first so parsing, page search, render checks, and adapter diagnostics stay inside the artifact runtime. Use pdf_extract_text/pdf_find_and_extract as fallback extractors.'
+        advice: 'Use artifact_tools for local PDF artifacts first so parsing, page search, render checks, and adapter diagnostics stay inside the artifact runtime. Use pdf_extract_text/pdf_find_and_extract only as explicit fallback extractors.'
     }),
     Object.freeze({
         id: 'paper_report_pdf_discovery',
@@ -220,12 +210,12 @@ const ROUTING_PROFILES = Object.freeze([
             /\b(png|jpg|jpeg|webp|image|photo|picture|screenshot|vision|visual)\b/i,
             /(图片|图像|截图|照片|视觉)/i
         ],
-        tools: ['artifact_tools', 'describe_image'],
+        tools: ['artifact_tools'],
         primaryTools: ['artifact_tools'],
         bonus: 86,
         primaryBonus: 36,
         webPenalty: 75,
-        advice: 'Use artifact_tools for local image artifacts first for metadata/render/nonblank checks; use describe_image when the user needs semantic visual understanding.'
+        advice: 'Use artifact_tools for local image artifacts first for metadata/render/nonblank checks; use describe_image only when the user needs semantic visual understanding that artifact_tools does not provide.'
     }),
     Object.freeze({
         id: 'python_code',
@@ -262,6 +252,24 @@ const ROUTING_PROFILES = Object.freeze([
         webPenalty: 0,
         advice: 'Use web_research for public/current web evidence tasks such as latest competitions, leaderboards, news, strategy, and guide requests because it plans queries, searches, fetches, ranks evidence pages, and stops for clarification when ambiguous. Use bare web_search only for discovery-only result lists.'
     })
+]);
+
+const ARTIFACT_FIRST_PROFILE_IDS = new Set([
+    'artifact_file_runtime',
+    'word_document',
+    'presentation',
+    'spreadsheet',
+    'pdf_artifact',
+    'image'
+]);
+
+const VALUE_ONLY_ARTIFACT_READER_TOOLS = new Set([
+    'read_spreadsheet',
+    'read_document',
+    'read_presentation',
+    'pdf_extract_text',
+    'pdf_find_and_extract',
+    'describe_image'
 ]);
 
 function queryExplicitlyRequestsWebSearch(query = '') {
@@ -327,7 +335,7 @@ function toolSpecificityScore(toolName = '') {
     if (toolName === 'artifact_tools') {
         return 24;
     }
-    if (/^artifact_(query|compute)$/.test(toolName)) {
+    if (toolName === 'artifact_query') {
         return 14;
     }
     if (/^youtube_/.test(toolName)) {
@@ -337,6 +345,30 @@ function toolSpecificityScore(toolName = '') {
         return 12;
     }
     return 1;
+}
+
+function queryExplicitlyRequestsTool(query = '', toolName = '') {
+    const needle = normalizeForSearch(query);
+    const normalizedTool = normalizeForSearch(toolName);
+    if (!needle || !normalizedTool) {
+        return false;
+    }
+    return needle.includes(normalizedTool) ||
+        needle.includes(`mcp__ailis_research__${normalizedTool}`) ||
+        needle.includes(normalizedTool.replace(/_/g, ' '));
+}
+
+function shouldSuppressValueOnlyArtifactReader({ toolName = '', query = '', profiles = [], hasArtifactTools = false } = {}) {
+    if (!hasArtifactTools || !VALUE_ONLY_ARTIFACT_READER_TOOLS.has(toolName)) {
+        return false;
+    }
+    if (!profiles.some((profile) => ARTIFACT_FIRST_PROFILE_IDS.has(profile.id))) {
+        return false;
+    }
+    if (queryExplicitlyRequestsTool(query, toolName)) {
+        return false;
+    }
+    return true;
 }
 
 function scoreToolForQuery(entry = {}, query = '') {
@@ -369,12 +401,6 @@ function scoreToolForQuery(entry = {}, query = '') {
     if (
         toolName === 'artifact_query' &&
         /\b(artifactid|artifact_id|artifact_query|context artifact|artifact payload|payload file|fulljsonpath|managed artifact|query artifact|artifact range|artifact grid|artifact search)\b/i.test(query)
-    ) {
-        score += 44;
-    }
-    if (
-        toolName === 'artifact_compute' &&
-        /\b(artifactid|artifact_id|artifact_compute|context artifact|managed artifact|artifact compute|data worker|spreadsheet profile|find path|path search|grid path|maze)\b/i.test(query)
     ) {
         score += 44;
     }
@@ -419,6 +445,9 @@ function scoreToolForQuery(entry = {}, query = '') {
 
 function rankToolSearchResults(entries = [], query = '', limit = 8) {
     const boundedLimit = Math.max(1, Math.min(Number(limit) || 8, 50));
+    const normalizedEntries = Array.isArray(entries) ? entries : [];
+    const profiles = matchingRoutingProfiles(query);
+    const hasArtifactTools = normalizedEntries.some((entry) => canonicalToolName(entry) === 'artifact_tools');
     return (Array.isArray(entries) ? entries : [])
         .map((entry, index) => {
             const score = scoreToolForQuery(entry, query);
@@ -426,11 +455,18 @@ function rankToolSearchResults(entries = [], query = '', limit = 8) {
             return {
                 entry,
                 score,
+                toolName,
                 specificity: toolSpecificityScore(toolName),
                 index,
                 id: normalizeForSearch(entry?.id || entry?.name || toolName)
             };
         })
+        .filter(({ toolName }) => !shouldSuppressValueOnlyArtifactReader({
+            toolName,
+            query,
+            profiles,
+            hasArtifactTools
+        }))
         .filter(({ score }) => score > 0)
         .sort((left, right) =>
             right.score - left.score ||

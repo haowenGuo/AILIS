@@ -13,6 +13,7 @@ const {
     callDesktopLlmProvider,
     classifyFetchFailure,
     checkDesktopLlmProvider,
+    getDefaultProviderBaseUrl,
     getProviderCapabilities
 } = require('../electron/desktop-llm-provider.cjs');
 
@@ -169,6 +170,7 @@ describe('desktop LLM provider', () => {
                                         }
                                     }
                                 ],
+                                reasoning_content: 'think-before-tool',
                                 content: ''
                             }
                         }
@@ -234,6 +236,93 @@ describe('desktop LLM provider', () => {
             { role: 'user', content: '你好' }
         ]);
         assert.equal(JSON.stringify(result).includes('test-secret-key'), false);
+    });
+
+    it('round-trips DeepSeek reasoning_content for native tool-call history', async () => {
+        const first = await callDesktopLlmProvider({
+            provider: 'deepseek',
+            baseUrl: `${serverUrl}/v1`,
+            apiKey: 'deepseek-secret',
+            model: 'deepseek-v4-flash',
+            timeoutMs: 5000
+        }, {
+            messages: [{ role: 'user', content: 'inspect file' }],
+            tools: [{
+                name: 'inspect_file',
+                description: 'inspect',
+                parameters: { type: 'object', properties: {} }
+            }]
+        });
+
+        assert.equal(first.ok, true);
+        assert.equal(first.providerMessage.reasoning_content, 'think-before-tool');
+        assert.equal(first.toolCalls[0].name, 'inspect_file');
+
+        await callDesktopLlmProvider({
+            provider: 'deepseek',
+            baseUrl: `${serverUrl}/v1`,
+            apiKey: 'deepseek-secret',
+            model: 'deepseek-v4-flash',
+            timeoutMs: 5000
+        }, {
+            messages: [
+                {
+                    role: 'assistant',
+                    content: '',
+                    providerMetadata: first.providerMessage,
+                    toolCalls: [{
+                        id: 'call-chat-1',
+                        type: 'function',
+                        function: {
+                            name: 'inspect_file',
+                            arguments: JSON.stringify({ ok: true })
+                        }
+                    }]
+                },
+                {
+                    role: 'tool',
+                    toolCallId: 'call-chat-1',
+                    content: 'Status: completed\nOutput:\n{}'
+                },
+                { role: 'user', content: 'continue' }
+            ]
+        });
+
+        assert.equal(receivedRequest.body.messages[0].reasoning_content, 'think-before-tool');
+    });
+
+    it('does not send provider reasoning metadata to unrelated OpenAI-compatible endpoints', async () => {
+        await callDesktopLlmProvider({
+            provider: 'openai-compatible',
+            baseUrl: `${serverUrl}/v1`,
+            apiKey: 'test-secret-key',
+            model: 'demo-model',
+            timeoutMs: 5000
+        }, {
+            messages: [
+                {
+                    role: 'assistant',
+                    content: '',
+                    providerMetadata: { reasoning_content: 'do-not-send' },
+                    toolCalls: [{
+                        id: 'call-chat-1',
+                        type: 'function',
+                        function: {
+                            name: 'inspect_file',
+                            arguments: '{}'
+                        }
+                    }]
+                },
+                {
+                    role: 'tool',
+                    toolCallId: 'call-chat-1',
+                    content: 'Status: completed\nOutput:\n{}'
+                },
+                { role: 'user', content: 'continue' }
+            ]
+        });
+
+        assert.equal(Object.prototype.hasOwnProperty.call(receivedRequest.body.messages[0], 'reasoning_content'), false);
     });
 
     it('accepts a full chat completions URL without duplicating the path', () => {
@@ -594,6 +683,27 @@ describe('desktop LLM provider', () => {
         assert.equal(caps.nativeToolCalling, true);
         assert.equal(caps.vision, true);
         assert.equal(caps.lowLatency, true);
+    });
+
+    it('keeps OpenAI-compatible preset providers distinct while using chat completions', () => {
+        const providers = [
+            ['doubao', 'https://ark.cn-beijing.volces.com/api/v3'],
+            ['deepseek', 'https://api.deepseek.com'],
+            ['qwen', 'https://dashscope.aliyuncs.com/compatible-mode/v1'],
+            ['kimi', 'https://api.moonshot.cn/v1'],
+            ['zhipu', 'https://open.bigmodel.cn/api/paas/v4'],
+            ['openrouter', 'https://openrouter.ai/api/v1']
+        ];
+
+        for (const [provider, baseUrl] of providers) {
+            const caps = getProviderCapabilities({
+                provider,
+                model: provider === 'deepseek' ? 'deepseek-v4-flash' : 'qwen-turbo'
+            });
+            assert.equal(caps.provider, provider);
+            assert.equal(caps.transport, 'chat-completions');
+            assert.equal(getDefaultProviderBaseUrl(provider), baseUrl);
+        }
     });
 
     it('reports local provider capabilities as model-dependent without native tool forcing', () => {
