@@ -704,7 +704,7 @@ legacy JSON planner
 final answer normalization
 ```
 
-这会让每次修一个 GAIA 问题都可能碰到其它产品行为。需要把 Harness Core 拆成独立模块。
+这会让每次修一个 GAIA 问题都可能碰到其它产品行为。需要在现有模块内部收紧 Harness 职责边界，避免继续扩张模块。
 
 ### 6.2 Direct Tool 与 Legacy Planner 混用
 
@@ -873,8 +873,8 @@ heartbeat 只做投影和小修复，不启动重复重任务。
 
 工作项：
 
-1. 新增 `docs/ailis-codex-harness-longrun-development-plan-20260706.md`。
-2. 新增或更新一个 harness inventory 脚本，列出当前 direct tools、deferred tools、MCP tools、broad action tools、legacy planner paths。
+1. 保持 `docs/ailis-codex-harness-longrun-development-plan-20260706.md` 作为开发事实源。
+2. 用现有测试、临时审计命令或已有脚本列出当前 direct tools、deferred tools、MCP tools、broad action tools、legacy planner paths；不要为“看清现状”先扩张正式模块。
 3. 运行轻量验证：
 
 ```text
@@ -892,36 +892,38 @@ pnpm test:ailis-tool-contracts
 不触碰大规模行为。
 ```
 
-### Phase 1: 拆出 Harness Core 边界
+### Phase 1: 收紧 Harness Core 代码边界
 
-目标：把 `ailis-agent-runner.cjs` 中的 Harness 职责拆成独立模块，但保持行为兼容。
+目标：不新增模块，不改表层架构；先在现有文件里把 Harness 职责从“提示词拼装 + 零散守卫”收敛为稳定、可测、可审计的内部代码路径。
 
-建议新模块：
+现有落点：
 
 ```text
-electron/ailis-runtime-environment.cjs
-electron/ailis-context-compiler.cjs
-electron/ailis-loop-controller.cjs
-electron/ailis-finalizer-gate.cjs
-electron/ailis-trace-store.cjs
+electron/ailis-agent-runner.cjs
+electron/ailis-tool-runtime.cjs
+electron/ailis-tool-contracts.cjs
+electron/ailis-context-manager.cjs
+electron/ailis-evidence-artifacts.cjs
+electron/ailis-mcp-session.cjs
+electron/ailis-tool-executor.cjs
 ```
 
-迁移内容：
+函数级收敛：
 
 ```text
-buildRuntimeEnvironmentPromptObject -> ailis-runtime-environment.cjs
-buildLlmAgentDirectToolPrompt 的上下文组装 -> ailis-context-compiler.cjs
-validateAgentToolLoopGuard -> ailis-loop-controller.cjs
-validateExactAnswerSubmission/final_answer audit -> ailis-finalizer-gate.cjs
-agent.context_snapshot / evidence events -> ailis-trace-store.cjs
+buildRuntimeEnvironmentPromptObject: 输出稳定 runtime snapshot，不继续把环境信息散落进 prompt 文本。
+buildLlmAgentDirectToolPrompt: 只组装已编译上下文包，不直接拼接大段工具说明。
+validateAgentToolLoopGuard: 从简单轮次限制升级为 budget/重复调用/无证据推进/低置信提交守卫。
+validateExactAnswerSubmission: 只做 final answer gate，不承担任务专门判断。
+callLlmAgentDirectToolDecision: 固定 direct tool 决策路径，减少 legacy planner 分叉。
 ```
 
 验收：
 
 ```text
 Runner 仍通过现有测试。
-新模块有 focused unit tests。
-行为不变，只改变边界。
+focused unit tests 直接覆盖这些现有函数。
+行为边界变清晰，但文件/模块数量不扩张。
 ```
 
 ### Phase 2: Codex-style ToolSpecRegistry
@@ -1012,26 +1014,25 @@ additionalProperties false 时拒绝未知字段。
 web_fetch(PDF) 返回 unsupported_content_type，并建议 pdf_extract_text。
 ```
 
-### Phase 4: Unified Exec 与 Output Store
+### Phase 4: Unified Exec 与 Output Store 语义内嵌
 
-目标：解决长程任务中 stdout/stderr 丢失、截断不可追、脚本运行后 finalizer 看不到证据的问题。
+目标：解决长程任务中 stdout/stderr 丢失、截断不可追、脚本运行后 finalizer 看不到证据的问题。这里的 Output Store 是现有 runtime 的内部语义，不新增正式模块。
 
-建议新模块：
+现有落点：
 
 ```text
-electron/ailis-output-store.cjs
-electron/ailis-unified-exec-runtime.cjs
+electron/ailis-tool-executor.cjs: executeToolStep 统一写入 step trace。
+electron/ailis-tool-runtime.cjs: normalizeToolOutput / dispatch 包装 outputId、preview、complete、truncatedForModel。
+electron/ailis-context-manager.cjs: recordItems / forPrompt 只把 preview + outputId 放入模型上下文。
+electron/ailis-evidence-artifacts.cjs: 将可引用输出升级为 evidence artifact。
 ```
 
-工具：
+工具语义：
 
 ```text
-exec_command
-write_stdin
-output_read
-output_tail
-output_search
-output_summary
+exec_command / write_stdin 继续沿用现有入口。
+output_search 继续沿用现有 runtime tool，并补齐 outputId 引用能力。
+output_tail / output_summary 如已有入口则加固；没有入口时先不新增工具，先让 output_search 覆盖最小闭环。
 ```
 
 输出 contract：
@@ -1149,7 +1150,7 @@ GAIA low-confidence finalizer 不提交空/猜测答案。
 
 目标：把 GAIA auto optimizer 的模式抽象成通用长期任务框架。
 
-建议路径：
+沿用并规范现有 longrun 目录契约：
 
 ```text
 longrun/jobs/<job-id>/mission.md
@@ -1226,88 +1227,127 @@ pnpm test:ailis-runtime
 node scripts/run-gaia-level1-lite.mjs --max-agent-steps 5 --task-retries 0 --no-submit --task-ids <canary>
 ```
 
-## 9. 第一批具体开发任务
+## 9. 代码级修改矩阵（不新增模块）
 
-### Task A: Harness Inventory Report
+这一章是执行口径：不再优先新增 Harness 模块，也不把表层架构重新命名。开发重点是现有模块内部函数的约束、数据结构、状态保存、错误分类和回归测试，让行为更接近 Codex-style Harness。
 
-新增脚本：
+### 9.1 Agent Runner 主循环
+
+文件：`electron/ailis-agent-runner.cjs`
+
+| 函数 | 当前职责 | 修改方向 | 验收点 |
+| --- | --- | --- | --- |
+| `buildRuntimeEnvironmentPromptObject` | 生成运行环境提示对象 | 固定 runtime snapshot 字段：cwd、shell、权限、网络、日期、工具暴露模式、预算；避免把环境信息散落到自由文本 | 同一环境两次生成结构稳定，测试只比较结构字段 |
+| `buildEvidenceSufficiencyPromptObject` | 让模型判断证据是否足够 | 输出结构化审计要求：`sufficient/confidence/missing_fields/next_action/evidence_refs`；不要让模型自由发挥成普通回复 | 低证据任务返回 continue 或 ask_user，不直接 final |
+| `buildLlmAgentDirectToolPrompt` | 拼 direct tool prompt | 只放少量核心 direct tools + tool_search；MCP/Web/PDF 通过 tool_search 暴露；不要把所有 schema 塞进 prompt | transcript 中工具说明显著变短，tool_search 能返回可执行 spec |
+| `validateNativeDirectToolCall` | 校验模型工具调用 | 对 required、additionalProperties、空 `{}`、未知工具、桥接工具暴露模式做统一拒绝 | 失败 transcript 不再出现空参数 MCP 调用继续执行 |
+| `callLlmAgentDirectToolDecision` | 请求模型下一步动作 | 固定 direct-tool 决策路径，减少 legacy planner 分叉；模型输出无效时进入 repair prompt，而不是硬执行 | 无效 tool call 有 structured validation error 和下一步修复建议 |
+| `validateAgentToolLoopGuard` | loop 守卫 | 从步数守卫升级为预算、重复搜索、无新证据、同 URL 重抓、低置信 final 的综合守卫 | 5 步任务能早停、追问或给出证据不足，而不是空转 |
+| `validateExactAnswerSubmission` | 最终答案校验 | 只保留通用 final answer gate：答案格式、证据引用、置信度、缺失字段；不要写 GAIA/游戏/网页特判 | 普通任务和 GAIA 共享同一类 final gate 语义 |
+
+### 9.2 Tool Contract 严格化
+
+文件：`electron/ailis-tool-contracts.cjs`
+
+| 函数/区域 | 修改方向 | 验收点 |
+| --- | --- | --- |
+| `validateAgainstSchema` | 补齐 Codex-style schema contract：required 必须满足，`additionalProperties:false` 拒绝未知字段，类型错误返回可读 path | 单测覆盖缺 required、未知字段、类型错误、嵌套对象 |
+| `normalizeArgsForContract` | 只做安全、显式、可解释的 normalization；禁止把 `{}` 猜成默认搜索/默认抓取 | `web_search.query`、`web_fetch.url`、`describe_image.path` 缺失时直接拒绝 |
+| `validateToolContract` | 返回 structured validation result：`ok/error/path/retryable/suggestedFix` | runner 可以把错误反馈给模型重试，而不是吞掉后继续 |
+| `getToolContractPromptText` / `compactSchemaForPrompt` | prompt 中只给必要字段和 required 信息；完整 schema 留在 runtime 校验 | 上下文减少，但校验严格性不下降 |
+| `tool_search` contract | 明确 query 必填；tool_search 只搜工具，不承担网页搜索 | `tool_search` 空参数被拒绝，带 query 时返回 deferred/direct tool specs |
+| `mcp_bridge` contract | 普通任务默认 hidden/debug；只保留 doctor/admin 兜底 | 正常任务 transcript 不再依赖 bridge 执行 MCP |
+
+### 9.3 Tool Runtime 与 tool_search
+
+文件：`electron/ailis-tool-runtime.cjs`
+
+| 函数/类 | 修改方向 | 验收点 |
+| --- | --- | --- |
+| `AILISRuntimeTool.searchInfo` | 输出短 metadata：name、namespace、description、required fields、exposure、score hints | tool_search 返回可加载工具，而不是长说明书 |
+| `AILISToolRuntimeRegistry.search` | 按 query 做 deferred tool 检索和重排；优先返回精确工具，再返回相关工具 | `tool_search("web fetch")` 能稳定露出 `web_fetch`，不是泛泛说明 |
+| `AILISToolRuntimeRegistry.dispatch` | dispatch 前统一调用 contract validation；失败返回 validation observation，不执行 handler | handler 不再收到 `{}` 或错误字段 |
+| `dispatchDirectMcpTool` | direct MCP tool 走同一 validator、trace、output normalization | MCP direct path 和 core tool 行为一致 |
+| `normalizeToolOutput` | 所有工具输出统一成 `status/preview/outputId/evidenceIds/complete/truncatedForModel/nextTools` | 大输出不直接塞进上下文，完整内容可回查 |
+| default registry 的 `tool_search` | 只暴露工具检索语义；搜索网页必须由返回的 `web_search` 工具执行 | 模型不再把 tool_search 当 web search |
+| default registry 的 `output_search` | 补强 outputId / artifactId 搜索和摘要 | finalizer 能引用旧输出证据 |
+
+### 9.4 MCP Manager
+
+文件：`electron/ailis-mcp-session.cjs`
+
+| 函数/类 | 修改方向 | 验收点 |
+| --- | --- | --- |
+| `schemaPropertyNames` | 更准确抽取 required、properties、additionalProperties、description | MCP spec 进入 tool_search 后不会丢字段 |
+| `AILISMcpManager.searchToolSpecs` | 返回 Codex-style loadable specs：server、tool、namespace、inputSchema、required、exposure | `tool_search("pdf")` 能返回 `mcp__...__pdf_extract_text` 这类 direct spec |
+| `AILISMcpManager.callTool` | call 前复用严格 schema validation；call 后统一 output normalization | MCP error/timeout/schema error 可分类 |
+| direct MCP spec 生成路径 | direct path 是主路径，`mcp_bridge.call_tool` 只作调试兜底 | 普通任务不再通过 bridge 绕过 schema |
+
+### 9.5 Context Manager
+
+文件：`electron/ailis-context-manager.cjs`
+
+| 函数 | 修改方向 | 验收点 |
+| --- | --- | --- |
+| `recordItems` | 写入 response item 时保留 call/output 配对、outputId、evidenceId、tool status | replay 可以恢复完整链路 |
+| `forPrompt` | 输出上下文包：recent items、pinned evidence manifest、available output ids、budget report、dropped items manifest | 压缩后模型仍知道可引用证据 |
+| `truncateFunctionOutputPayload` | 只压缩模型视图，不删除完整输出引用；preview 必须标注 truncated/complete | 大输出不会污染上下文 |
+| `ensureCallOutputsPresent` | 把缺失 output 变成 structured diagnostic，不要静默丢失 | transcript 不再有孤儿 tool call |
+| `fromCheckpoint` | 恢复时保留 output/evidence manifest 和预算状态 | 长程任务中断后可继续 |
+
+### 9.6 Evidence Artifacts
+
+文件：`electron/ailis-evidence-artifacts.cjs`
+
+| 函数 | 修改方向 | 验收点 |
+| --- | --- | --- |
+| `artifactEvidencePayload` / `payloadForArtifact` | 区分网页、PDF、截图、命令输出、ASR/TTS、文件读取等证据类型 | finalizer 能判断证据类型和完整性 |
+| `confidenceFromText` | 只做弱启发，不替代模型证据判断；置信度来源要标注 | 不把启发式分数当最终事实 |
+| `validateEvidenceArtifact` | 校验证据必须有 source、payload、confidence、completeness、createdAt、引用 id | 无效证据不能支撑 final |
+| `createEvidenceArtifact` | tool output 成功后统一生成可引用证据；失败输出只生成 diagnostic evidence | 答案引用的 evidenceId 可追溯 |
+| `getEvidenceArtifactsPromptObject` | 给模型一份 evidence manifest，不直接塞入所有原文 | 上下文更短，证据链更稳定 |
+
+### 9.7 Tool Executor 与 Trace
+
+文件：`electron/ailis-tool-executor.cjs`
+
+| 函数 | 修改方向 | 验收点 |
+| --- | --- | --- |
+| `executeToolStep` | step started/finished/error 统一记录 tool name、args digest、validation、duration、outputId、evidenceIds | Agent Lab 和 replay 能还原每步 |
+| `executeToolStep` error path | 区分 validation_error、tool_error、timeout、permission_required、environment_error | 自动优化器能按层分类修复 |
+| `executeToolStep` result path | 返回给 runner 的永远是 normalized observation | runner 不需要理解每个工具私有格式 |
+
+### 9.8 GAIA 与 LongRun Harness
+
+文件：`scripts/run-gaia-level1-lite.mjs`、`scripts/run-ailis-gaia-auto-optimizer.mjs`
+
+| 函数/区域 | 修改方向 | 验收点 |
+| --- | --- | --- |
+| `buildFinalAnswerGate` | 复用通用 final gate 语义：证据 refs、置信度、缺失字段、nextAction | GAIA 不再单独积累一堆特判 |
+| `buildEvidenceDigest` | 输入 evidence manifest，而不是从 transcript 文本里猜证据 | evidence digest 可回放、可检查 |
+| `finalizeAnswerFromEvidence` | low confidence / missing refs / truncated-only evidence 不提交 | 省 API 钱，避免错误提交 |
+| `acceptExactAnswerCandidate` / `acceptEvidenceAnswerCandidate` | 接受条件来自 final gate，不来自任务私有字符串 | 泛化到非 GAIA benchmark |
+| `classifyGaiaResult` | 分类维度固定为 MCP/TOOLS/AGENT/HARNESS/ENV/PROVIDER/DATA | repair ticket 更可执行 |
+| `buildRepairTicket` | 自动包含 failing step、tool call、validation error、evidence gap、最小复现命令 | 修复从链路出发，不从答案出发 |
+| `shouldContinueAfterVerdict` / `evaluateSafetyGate` | 成本和安全闸门前置：余额/环境失败/连续失败时停止重跑 | 不再烧 API 空转 |
+
+### 9.9 第一批实现顺序
+
+1. 先改 `ailis-tool-contracts.cjs`：让错误参数不能进入工具执行。
+2. 再改 `ailis-tool-runtime.cjs` 和 `ailis-mcp-session.cjs`：让 tool_search 暴露 direct specs，MCP bridge 降级。
+3. 再改 `ailis-context-manager.cjs` 和 `ailis-evidence-artifacts.cjs`：让输出和证据可引用、可压缩、可回放。
+4. 再改 `ailis-agent-runner.cjs`：减少 prompt 堆叠，增强 loop guard 和 final gate。
+5. 最后改 GAIA/LongRun 脚本：把失败分类、repair ticket、成本闸门接到统一 evidence/trace 结构上。
+
+### 9.10 不做什么
 
 ```text
-scripts/audit-ailis-harness-core.mjs
+不新增正式 Harness 模块。
+不重命名表层架构。
+不把 GAIA 某题写成特判。
+不为了一个网页、一个游戏、一个 PDF 源定制 runtime。
+不让“新增工具”替代 schema、context、evidence、trace 的硬化。
 ```
-
-输出：
-
-```text
-runtime tools count
-core direct tools
-deferred tools
-hidden/debug tools
-broad action tools
-MCP direct tools
-legacy planner entrypoints
-schema strictness summary
-output/evidence contract coverage
-```
-
-价值：
-
-```text
-先看清工具面，避免继续靠感觉修。
-```
-
-### Task B: Output Store MVP
-
-新增：
-
-```text
-electron/ailis-output-store.cjs
-```
-
-接入：
-
-```text
-exec/code/computer/MCP/artifact_tools 返回大输出时写 output store。
-ContextManager 只保留 preview + outputId。
-```
-
-### Task C: FinalizerGate MVP
-
-新增：
-
-```text
-electron/ailis-finalizer-gate.cjs
-```
-
-迁移：
-
-```text
-validateExactAnswerSubmission
-unknown evidence refs warning
-low-confidence exact answer reject
-missing evidence handling
-```
-
-### Task D: MCP Bridge Exposure 降级
-
-改动：
-
-```text
-mcp_bridge 普通 task_agent 不默认暴露。
-tool_search 返回 direct MCP specs。
-管理/调试/doctor 模式才暴露 mcp_bridge。
-```
-
-### Task E: LongRun Generic Job Contract
-
-新增：
-
-```text
-scripts/run-ailis-longrun-controller.mjs
-```
-
-先不要替换 GAIA optimizer，而是让 GAIA optimizer 适配同一 job contract。
-
 ## 10. 禁止事项
 
 为了保持泛化，禁止以下优化方式：
@@ -1328,10 +1368,10 @@ scripts/run-ailis-longrun-controller.mjs
 第一轮不要追求全部重构。最小可交付版本：
 
 ```text
-1. 文档与 inventory 脚本。
-2. Output Store MVP。
-3. FinalizerGate MVP。
-4. MCP bridge exposure 降级。
+1. 文档与代码级修改矩阵。
+2. tool contracts 严格校验 MVP。
+3. runtime outputId / evidenceId 引用 MVP。
+4. MCP bridge exposure 降级，tool_search 返回 direct specs。
 5. 2-3 个旧失败 transcript replay 通过。
 6. GAIA canary 在低步数和低预算下能给出明确 chain/verdict。
 ```
