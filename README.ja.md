@@ -2,7 +2,7 @@
   <h1>AILIS Assistant</h1>
   <p><strong>VRM キャラクター、リアルタイム音声、視覚コンテキスト、記憶、Codex 風の Agent Harness を備えたオープンソースのデスクトップ具身 AI アシスタントです。</strong></p>
   <p>
-    <img alt="Version" src="https://img.shields.io/badge/version-1.0.6-2563eb?style=for-the-badge">
+    <img alt="Version" src="https://img.shields.io/badge/version-1.1.0-2563eb?style=for-the-badge">
     <img alt="Runtime" src="https://img.shields.io/badge/runtime-Electron-0f172a?style=for-the-badge">
     <img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-059669?style=for-the-badge">
   </p>
@@ -157,7 +157,7 @@ pnpm ailis:validate-gateway
 
 ## 状態
 
-現在の release line: `v1.0.6`。
+現在の release line: `v1.1.0`。
 
 AILIS は活発に開発中です。デスクトップ runtime、Agent Harness、ツール層、評価基盤はすでに大きく育っていますが、現時点では production-grade Agent OS ではなく alpha 段階の product/runtime として扱うべきです。短期的な重点は、ツール契約、承認、安全性、記憶品質、ローカルモデル設定、end-to-end 評価の改善です。
 

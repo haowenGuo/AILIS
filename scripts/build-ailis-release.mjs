@@ -82,7 +82,10 @@ async function collectArtifacts(outputDir) {
             if (!entry.isFile()) {
                 continue;
             }
-            if (!/\.(exe|zip|AppImage|deb|tar\.gz|yml|json)$/i.test(entry.name)) {
+            if (/^AILIS-Release-.+\.json$/i.test(entry.name)) {
+                continue;
+            }
+            if (!/(\.blockmap|\.(exe|zip|AppImage|deb|tar\.gz|yml|json))$/i.test(entry.name)) {
                 continue;
             }
             const stat = await fsp.stat(child);

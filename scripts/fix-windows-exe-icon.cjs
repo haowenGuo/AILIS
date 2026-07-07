@@ -10,6 +10,26 @@ function findFirstExisting(paths) {
     return paths.find((candidate) => candidate && fs.existsSync(candidate)) || '';
 }
 
+function sleepSync(ms) {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function runRceditWithRetry(rceditPath, args, options) {
+    let lastResult = null;
+    for (let attempt = 1; attempt <= 5; attempt += 1) {
+        lastResult = spawnSync(rceditPath, args, options);
+        if (lastResult.status === 0) {
+            return lastResult;
+        }
+        const output = `${lastResult.stdout || ''}\n${lastResult.stderr || ''}`;
+        if (!/Unable to commit changes|being used by another process|access is denied|EPERM|EBUSY/i.test(output)) {
+            return lastResult;
+        }
+        sleepSync(350 * attempt);
+    }
+    return lastResult;
+}
+
 function findRcedit(projectRoot) {
     const explicit = normalizeString(process.env.AILIS_RCEDIT_PATH);
     if (explicit && fs.existsSync(explicit)) {
@@ -109,7 +129,13 @@ function fixWindowsExeIcon(context = {}) {
         throw new Error('[AILIS icon] rcedit.exe not found. Install dependencies or set AILIS_RCEDIT_PATH.');
     }
 
-    const result = spawnSync(rceditPath, [
+    try {
+        fs.chmodSync(exePath, 0o666);
+    } catch {
+        // Best effort only; rcedit will report the real failure if the file remains locked.
+    }
+
+    const rceditArgs = [
         exePath,
         '--set-icon',
         iconPath,
@@ -125,7 +151,8 @@ function fixWindowsExeIcon(context = {}) {
         '--set-version-string',
         'OriginalFilename',
         'AILIS.exe'
-    ], {
+    ];
+    const result = runRceditWithRetry(rceditPath, rceditArgs, {
         cwd: projectRoot,
         encoding: 'utf8'
     });
