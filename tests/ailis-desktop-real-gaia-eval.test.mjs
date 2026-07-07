@@ -90,3 +90,15 @@ test('desktop-real visible scorer accepts scaled thousand-unit equivalent only w
     assert.equal(withQuestion.ok, true);
     assert.equal(withQuestion.answer, '17000');
 });
+
+test('desktop-real visible scorer extracts inline final result after rendering', () => {
+    const response = {
+        ok: true,
+        status: 'completed',
+        displayText: '总小时数约为 17054.89 小时，四舍五入后，最终结果：**17000**'
+    };
+    const question = 'How many thousand hours would it take? Round your result to the nearest 1000 hours.';
+    const score = scoreVisibleAnswer({ response, gold: '17', question });
+    assert.equal(score.ok, true);
+    assert.equal(score.answer, '17000');
+});
