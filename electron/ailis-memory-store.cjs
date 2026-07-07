@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { randomUUID } = require('crypto');
+const { buildMessageHistorySearchText } = require('./ailis-message-history.cjs');
 
 const MEMORY_STORE_VERSION = 1;
 const DEFAULT_AFFINITY_SCORE = 50;
@@ -755,10 +756,7 @@ class AILISMemoryRuntime {
         contextMode = 'persona'
     } = {}) {
         const state = this.state || normalizeState(null, this.workspaceRoot);
-        const query = [
-            message,
-            ...(Array.isArray(messageHistory) ? messageHistory.slice(-6).map((entry) => entry?.content || '') : [])
-        ].join('\n');
+        const query = buildMessageHistorySearchText(message, messageHistory, { maxHistoryItems: 6 });
         const relevantEvents = this.searchMemory(query || message, { limit: DEFAULT_RELEVANT_EVENT_LIMIT }).events;
         const blocks = state.blocks || {};
         const curatedPromptMemory = loadCuratedPromptMemory(this.rootDir);

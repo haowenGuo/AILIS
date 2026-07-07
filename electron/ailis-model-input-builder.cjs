@@ -13,6 +13,7 @@ const {
     normalizeToolOutput,
     toolOutputToResponseItems
 } = require('./ailis-agent-object-model.cjs');
+const { dropTrailingDuplicateUserMessage } = require('./ailis-message-history.cjs');
 
 function textContent(text = '') {
     const normalized = normalizeText(text);
@@ -97,21 +98,6 @@ function conversationToResponseItems(messageHistory = [], options = {}) {
         .filter(Boolean);
 }
 
-function stripTrailingDuplicateUserMessage(messageHistory = [], message = '') {
-    const history = Array.isArray(messageHistory) ? messageHistory : [];
-    const currentMessage = normalizeText(message);
-    if (!history.length || !currentMessage) {
-        return history;
-    }
-    const latestEntry = history[history.length - 1] || {};
-    const latestRole = latestEntry.role === 'assistant' ? 'assistant' : 'user';
-    const latestText = normalizeText(latestEntry.content || latestEntry.text || latestEntry.message || '');
-    if (latestRole === 'user' && latestText === currentMessage) {
-        return history.slice(0, -1);
-    }
-    return history;
-}
-
 function buildContextMessage({
     memoryContext = '',
     fileAttachments = [],
@@ -181,7 +167,7 @@ function buildModelInputContextManager({
     toolOutputChars = 24000
 } = {}) {
     const history = new ContextManager({ toolOutputChars });
-    const priorMessageHistory = stripTrailingDuplicateUserMessage(messageHistory, message);
+    const priorMessageHistory = dropTrailingDuplicateUserMessage(messageHistory, message);
     history.recordItems(conversationToResponseItems(priorMessageHistory));
     const contextMessage = buildContextMessage({
         memoryContext,

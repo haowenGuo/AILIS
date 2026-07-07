@@ -1421,26 +1421,6 @@ function getLatestUserMessage(request = {}) {
     return '';
 }
 
-function normalizeConversationHistory(messageHistory = [], {
-    maxItems = 16,
-    maxChars = 1200
-} = {}) {
-    if (!Array.isArray(messageHistory)) {
-        return [];
-    }
-
-    const itemLimit = Math.max(1, Math.min(Number(maxItems) || 16, 32));
-    const charLimit = Math.max(120, Math.min(Number(maxChars) || 1200, 2000));
-    return messageHistory
-        .filter((message) => ['user', 'assistant'].includes(message?.role))
-        .slice(-itemLimit)
-        .map((message) => ({
-            role: message.role,
-            content: summarize(normalizeText(message.content), charLimit)
-        }))
-        .filter((message) => message.content);
-}
-
 function safeJsonParse(text) {
     try {
         return JSON.parse(text);

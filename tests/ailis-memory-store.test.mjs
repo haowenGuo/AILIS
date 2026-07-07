@@ -146,6 +146,37 @@ test('AILIS memory compiles larger structured context and clears memory while pr
     assert.ok(memory.listSecrets().secrets.some((secret) => secret.name === 'local-test-token'));
 });
 
+test('AILIS memory search query drops trailing duplicate current user message', async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-memory-query-dedupe-'));
+    const memory = new AILISMemoryRuntime({
+        rootDir: path.join(rootDir, 'memory'),
+        workspaceRoot: rootDir
+    });
+    let observedQuery = '';
+    const searchMemory = memory.searchMemory.bind(memory);
+    memory.searchMemory = (query, options = {}) => {
+        observedQuery = query;
+        return searchMemory(query, options);
+    };
+
+    memory.compileContext({
+        sessionId: 'query-dedupe-test',
+        message: 'Solve this long GAIA task with a verifier.',
+        messageHistory: [
+            { role: 'user', content: '你好' },
+            { role: 'assistant', content: '你好，我在。' },
+            { role: 'user', content: 'Solve this long GAIA task with a verifier.' }
+        ]
+    });
+
+    assert.equal(
+        observedQuery.split('Solve this long GAIA task with a verifier.').length - 1,
+        1
+    );
+    assert.match(observedQuery, /你好/);
+    assert.match(observedQuery, /你好，我在。/);
+});
+
 test('AILIS memory prompt uses curated raw-ledger profile instead of legacy user relationship affinity blocks', async () => {
     const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-curated-prompt-'));
     const memoryRoot = path.join(rootDir, 'memory');
