@@ -1,0 +1,149 @@
+# AILIS Desktop-Real GAIA Evaluation
+
+This document defines the GAIA evaluation path that is intended to measure
+AILIS as users actually experience it in the desktop app.
+
+## Why This Exists
+
+AILIS has two different GAIA-like evaluation needs:
+
+1. Strict exact-answer submission.
+   This is the leaderboard-style path. It requires a clean machine-readable
+   answer field such as `final_answer`.
+
+2. Desktop-real product evaluation.
+   This is the user-facing path. It should use the same gateway shape as the
+   desktop chat UI: message history, attachments, persona orchestration, direct
+   tool execution, and normal visible replies.
+
+The previous full L1 run used the strict exact-answer harness with direct tool
+execution disabled by default. That is useful for testing a submission protocol,
+but it is not a faithful measurement of the desktop product path.
+
+## Runner
+
+Use:
+
+```powershell
+pnpm bench:gaia:desktop-real:smoke
+```
+
+or:
+
+```powershell
+pnpm bench:gaia:desktop-real:l1
+```
+
+Direct script usage:
+
+```powershell
+node scripts/run-ailis-desktop-real-gaia-eval.mjs --limit 5
+```
+
+Dry plan without spending model tokens:
+
+```powershell
+node scripts/run-ailis-desktop-real-gaia-eval.mjs --limit 5 --plan-only
+```
+
+## Runtime Contract
+
+The runner intentionally mirrors the desktop chat path:
+
+- `directToolExecutor: true`
+- `nativeDirectTools: true`
+- `agentRole: persona_orchestrator`
+- `messageHistory` contains the latest user turn
+- file attachments are passed through the same attachment shape used by chat
+- no `exact_answer_eval` execution profile is injected
+- no `answerOnly: true` context flag is injected
+
+This means the score answers a different question from the strict GAIA runner:
+
+> Did the real desktop-style AILIS interaction produce a visible answer that
+> contains the correct result?
+
+## Metrics
+
+Each run emits:
+
+- `*.jsonl`: one final row per task.
+- `*.summary.json`: aggregate metrics.
+- `*.report.md`: readable report.
+- `gateway-audit/<run-id>`: full gateway audit artifacts.
+- `*.progress.jsonl`: append-only progress stream.
+
+Headline metrics:
+
+- `visibleCorrect`: visible answer matched the gold answer.
+- `responseOk`: the agent run completed without runtime failure.
+- `manualReview`: the visible response had content but no safe deterministic
+  answer extraction.
+- `durationMs`, `avgDurationMs`, `p50/p90/p95DurationMs`.
+- token usage from gateway LLM events and response usage.
+- optional estimated cost when `--cost-input-per-1m` and
+  `--cost-output-per-1m` are provided.
+- tool call count and tool error count in each task row.
+
+## Scoring Policy
+
+The desktop-real runner does not require a separate `final_answer` field.
+It accepts:
+
+- structured answer fields when available;
+- visible answer lines such as `Answer: 3`, `Final answer: ...`, or `答案是...`;
+- exact visible containment for longer non-ambiguous gold answers;
+- list answers when all list parts appear.
+
+For very short gold answers such as `3`, `b`, or `No`, the runner does not
+count a random occurrence in a long paragraph. It requires a visible answer
+line or a structured answer candidate.
+
+This keeps the product score closer to user perception while avoiding obvious
+false positives.
+
+## Relationship To Strict GAIA
+
+Use the strict runner when the question is:
+
+> Can AILIS produce a machine-submittable GAIA answer field?
+
+Use desktop-real when the question is:
+
+> Can AILIS, as a desktop embodied assistant, solve the task for the user?
+
+Both metrics matter. They should be reported separately.
+
+## Common Commands
+
+Run three tasks:
+
+```powershell
+node scripts/run-ailis-desktop-real-gaia-eval.mjs --limit 3
+```
+
+Run one task by task id:
+
+```powershell
+node scripts/run-ailis-desktop-real-gaia-eval.mjs --task-ids ec09fa32-d03f-4bf8-84b0-1f16922c3ae4
+```
+
+Run with explicit cost estimates:
+
+```powershell
+node scripts/run-ailis-desktop-real-gaia-eval.mjs --limit 10 --cost-input-per-1m 0.27 --cost-output-per-1m 1.10
+```
+
+Use an already running gateway:
+
+```powershell
+node scripts/run-ailis-desktop-real-gaia-eval.mjs --gateway-url http://127.0.0.1:3100 --limit 3
+```
+
+## Guardrails
+
+- Start with `--plan-only` or `--limit 3` before a full L1 run.
+- Report strict GAIA score and desktop-real score separately.
+- Do not submit desktop-real visible-answer scores as official GAIA leaderboard
+  results.
+- Keep API keys out of reports; the runner redacts LLM settings.
