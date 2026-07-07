@@ -10,10 +10,33 @@ const __dirname = path.dirname(__filename);
 const PROJECT_ROOT = path.resolve(__dirname, '..');
 const PACKAGE_JSON = JSON.parse(await fsp.readFile(path.join(PROJECT_ROOT, 'package.json'), 'utf8'));
 const VERSION = PACKAGE_JSON.version || '0.0.0';
+
+function readOption(args, name, fallback = '') {
+    const prefix = `--${name}=`;
+    const inline = args.find((arg) => arg.startsWith(prefix));
+    if (inline) {
+        return inline.slice(prefix.length);
+    }
+    const index = args.indexOf(`--${name}`);
+    if (index >= 0 && args[index + 1] && !args[index + 1].startsWith('--')) {
+        return args[index + 1];
+    }
+    return fallback;
+}
+
+function parseList(value = '') {
+    return String(value || '')
+        .split(',')
+        .map((item) => item.trim())
+        .filter(Boolean);
+}
+
+const CLI_ARGS = process.argv.slice(2);
 const OUTPUT_ROOT = path.resolve(
-    process.env.AILIS_RUNTIME_PACK_OUTPUT || 'F:/AILIS/Build/AILIS/runtime-packs'
+    readOption(CLI_ARGS, 'output', process.env.AILIS_RUNTIME_PACK_OUTPUT || 'F:/AILIS/Build/AILIS/runtime-packs')
 );
-const MANIFEST_ONLY = process.argv.includes('--manifest-only');
+const MANIFEST_ONLY = CLI_ARGS.includes('--manifest-only');
+const SELECTED_COMPONENT_IDS = parseList(readOption(CLI_ARGS, 'components', ''));
 
 const EXCLUDE_SEGMENTS = new Set([
     '__pycache__',
@@ -212,7 +235,15 @@ async function createPack(component) {
 async function main() {
     await fsp.mkdir(OUTPUT_ROOT, { recursive: true });
     const components = [];
-    for (const component of COMPONENTS) {
+    const requested = new Set(SELECTED_COMPONENT_IDS);
+    const unknown = [...requested].filter((id) => !COMPONENTS.some((component) => component.id === id));
+    if (unknown.length) {
+        throw new Error(`Unknown runtime component(s): ${unknown.join(', ')}`);
+    }
+    const selectedComponents = requested.size
+        ? COMPONENTS.filter((component) => requested.has(component.id))
+        : COMPONENTS;
+    for (const component of selectedComponents) {
         const stats = await collectComponentStats(component);
         const packPath = path.join(OUTPUT_ROOT, component.packName);
         if (!MANIFEST_ONLY && stats.exists) {
@@ -245,6 +276,7 @@ async function main() {
         generatedAt: new Date().toISOString(),
         outputRoot: OUTPUT_ROOT,
         mode: MANIFEST_ONLY ? 'manifest-only' : 'packs-built',
+        selectedComponents: selectedComponents.map((component) => component.id),
         components
     };
     const manifestPath = path.join(OUTPUT_ROOT, `AILIS-Runtime-Components-${VERSION}.json`);
