@@ -18,17 +18,16 @@ const AILIS_TOOL_KIND = Object.freeze({
 });
 
 function isExperimentalOutputStoreToolsEnabled() {
-    const surfaceMode = String(process.env.AILIS_TOOL_SURFACE_MODE || process.env.AIGL_TOOL_SURFACE_MODE || '').toLowerCase();
+    const surfaceMode = String(process.env.AILIS_TOOL_SURFACE_MODE || '').toLowerCase();
     return (
         process.env.AILIS_EXPERIMENTAL_OUTPUT_TOOLS === '1' ||
-        process.env.AIGL_EXPERIMENTAL_OUTPUT_TOOLS === '1' ||
         surfaceMode === 'responses' ||
         surfaceMode === 'full'
     );
 }
 
 function normalizeToolSurfaceMode() {
-    return String(process.env.AILIS_TOOL_SURFACE_MODE || process.env.AIGL_TOOL_SURFACE_MODE || 'codex')
+    return String(process.env.AILIS_TOOL_SURFACE_MODE || 'codex')
         .trim()
         .toLowerCase();
 }
@@ -37,8 +36,7 @@ function isExtendedAilisToolSurfaceEnabled() {
     const mode = normalizeToolSurfaceMode();
     return (
         process.env.AILIS_ENABLE_EXTENDED_TOOLS === '1' ||
-        process.env.AIGL_ENABLE_EXTENDED_TOOLS === '1' ||
-        ['ailis', 'aigl', 'extended', 'full', 'legacy'].includes(mode)
+        ['ailis', 'extended', 'full', 'legacy'].includes(mode)
     );
 }
 

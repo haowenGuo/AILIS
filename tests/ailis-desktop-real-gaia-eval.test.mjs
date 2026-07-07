@@ -74,3 +74,19 @@ test('desktop-real visible scorer ignores task-id shaped contextual noise', () =
     assert.equal(score.ok, false);
     assert.equal(score.candidates.some((candidate) => candidate.answer.includes('8e867cd7')), false);
 });
+
+test('desktop-real visible scorer accepts scaled thousand-unit equivalent only with question context', () => {
+    const response = {
+        ok: true,
+        status: 'completed',
+        displayText: '最终结果：**17000**'
+    };
+    const question = 'How many thousand hours would it take? Round your result to the nearest 1000 hours.';
+
+    const withoutQuestion = scoreVisibleAnswer({ response, gold: '17' });
+    assert.equal(withoutQuestion.ok, false);
+
+    const withQuestion = scoreVisibleAnswer({ response, gold: '17', question });
+    assert.equal(withQuestion.ok, true);
+    assert.equal(withQuestion.answer, '17000');
+});

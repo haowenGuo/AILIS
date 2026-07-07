@@ -52,6 +52,8 @@ function parseArgs(argv = process.argv.slice(2)) {
         temperature: 0.2,
         startGateway: true,
         gatewayUrl: '',
+        workspaceRoot: '',
+        isolatedWorkspace: false,
         directToolExecutor: true,
         agentRole: 'persona_orchestrator',
         planOnly: false,
@@ -79,6 +81,9 @@ function parseArgs(argv = process.argv.slice(2)) {
             args.startGateway = false;
         } else if (token === '--start-gateway') args.startGateway = true;
         else if (token === '--no-start-gateway') args.startGateway = false;
+        else if (token === '--workspace-root') args.workspaceRoot = path.resolve(next());
+        else if (token === '--isolated-workspace') args.isolatedWorkspace = true;
+        else if (token === '--desktop-workspace') args.isolatedWorkspace = false;
         else if (token === '--direct-tool-executor') args.directToolExecutor = true;
         else if (token === '--no-direct-tool-executor') args.directToolExecutor = false;
         else if (token === '--agent-role') args.agentRole = normalizeText(next(), args.agentRole);
@@ -95,7 +100,10 @@ function parseArgs(argv = process.argv.slice(2)) {
     args.reportPath = path.join(args.outputDir, `${args.runId}.report.md`);
     args.progressPath = path.join(args.outputDir, `${args.runId}.progress.jsonl`);
     args.auditDir = path.join(args.outputDir, 'gateway-audit', args.runId);
-    args.workspaceRoot = path.join(PROJECT_ROOT, 'tmp', `ailis-desktop-real-gaia-workspace-${safeFileSegment(args.runId)}`);
+    args.workspaceRoot = args.isolatedWorkspace
+        ? path.join(PROJECT_ROOT, 'tmp', `ailis-desktop-real-gaia-workspace-${safeFileSegment(args.runId)}`)
+        : path.resolve(args.workspaceRoot || PROJECT_ROOT);
+    args.workspaceMode = args.isolatedWorkspace ? 'isolated_temp_workspace' : 'desktop_project_workspace';
     return args;
 }
 
@@ -289,19 +297,26 @@ function buildFileAttachment(task) {
     };
 }
 
+function buildDesktopRealEvalTaskText(task, attachments = []) {
+    const lines = [task.question];
+    const fileLines = attachments
+        .filter((attachment) => attachment?.path)
+        .map((attachment, index) => (
+            `${index + 1}. ${attachment.name || path.basename(attachment.path)} | path=${attachment.path} | kind=${attachment.kind || 'file'} | size=${attachment.size || 0}`
+        ));
+    if (fileLines.length) {
+        lines.push('', 'Attached files available to the task:', ...fileLines);
+    }
+    return lines.join('\n');
+}
+
 function buildDesktopRealPayload({ args, task, llmSettings }) {
     const attachments = [buildFileAttachment(task)].filter(Boolean);
-    const messageHistory = [
-        {
-            role: 'user',
-            content: task.question,
-            attachments
-        }
-    ];
+    const desktopRealEvalTaskText = buildDesktopRealEvalTaskText(task, attachments);
     return {
         sessionId: `desktop-real-gaia-${args.runId}-${task.task_id}`,
         message: task.question,
-        messageHistory,
+        messageHistory: [],
         attachments,
         agentLoop: 'llm',
         planner: 'llm',
@@ -321,6 +336,8 @@ function buildDesktopRealPayload({ args, task, llmSettings }) {
             agentRole: args.agentRole,
             desktopRealEval: true,
             desktopRealEvalTaskId: task.task_id,
+            desktopRealEvalTaskText,
+            desktopRealEvalWorkspaceMode: args.workspaceMode,
             approved: true,
             autoConfirm: true,
             approvalPolicy: 'auto',
@@ -481,6 +498,47 @@ function answersEquivalent(candidate = '', gold = '') {
     return false;
 }
 
+function parseVisibleNumber(value = '') {
+    const normalized = normalizeAnswerForScore(value).replace(/,/g, '');
+    const match = normalized.match(/[+-]?(?:\d+\.?\d*|\.\d+)/);
+    if (!match) {
+        return null;
+    }
+    const parsed = Number(match[0]);
+    return Number.isFinite(parsed) ? parsed : null;
+}
+
+function getQuestionNumericScale(question = '') {
+    const text = normalizeText(question).toLowerCase();
+    if (/\bhow\s+many\s+thousand\b|\bin\s+thousands\b|\bthousand\s+(?:hours?|kilometers?|metres?|meters?|dollars?|people|years?)\b/.test(text)) {
+        return 1000;
+    }
+    if (/\bhow\s+many\s+million\b|\bin\s+millions\b|\bmillion\s+(?:hours?|kilometers?|metres?|meters?|dollars?|people|years?)\b/.test(text)) {
+        return 1_000_000;
+    }
+    if (/\bhow\s+many\s+billion\b|\bin\s+billions\b|\bbillion\s+(?:hours?|kilometers?|metres?|meters?|dollars?|people|years?)\b/.test(text)) {
+        return 1_000_000_000;
+    }
+    return 0;
+}
+
+function answersEquivalentForQuestion(candidate = '', gold = '', question = '') {
+    if (answersEquivalent(candidate, gold)) {
+        return true;
+    }
+    const scale = getQuestionNumericScale(question);
+    if (!scale) {
+        return false;
+    }
+    const candidateNumber = parseVisibleNumber(candidate);
+    const goldNumber = parseNumber(gold);
+    if (candidateNumber === null || goldNumber === null) {
+        return false;
+    }
+    const expected = goldNumber * scale;
+    return Math.abs(candidateNumber - expected) <= Math.max(1e-9, Math.abs(expected) * 1e-9);
+}
+
 function cleanCandidateLine(value = '') {
     return stripControlTags(value)
         .replace(/^[-*>\s]+/, '')
@@ -516,7 +574,8 @@ function extractAnswerCandidatesFromVisibleText(text = '') {
     const visible = String(text || '');
     const candidates = [];
     const patterns = [
-        /(?:^|\n)\s*(?:final\s+answer|answer|the\s+answer|答案|最终答案)\s*(?:is|=|:|：|为|是)?\s*([^\n\r]+)/gi,
+        /(?:^|\n)\s*(?:final\s+answer|final\s+result|result|answer|the\s+answer|答案|结果|最终答案|最终结果)\s*(?:is|=|:|：|为|是)?\s*([^\n\r]+)/gi,
+        /(?:\bfinal\s+answer\b|\bfinal\s+result\b|\bthe\s+answer\b|\banswer\b|答案|最终答案|最终结果)\s*(?:is|=|:|：|为|是)?\s*([^\n\r。.!；;]+)/gi,
         /(?:^|\n)\s*(?:therefore|so)\s*,?\s*(?:the\s+answer\s+is)?\s*([^\n\r]+)/gi
     ];
     for (const pattern of patterns) {
@@ -567,14 +626,14 @@ function extractStructuredAnswerCandidates(response = {}) {
         .filter((item) => item.answer);
 }
 
-function scoreVisibleAnswer({ response = {}, gold = '' } = {}) {
+function scoreVisibleAnswer({ response = {}, gold = '', question = '' } = {}) {
     const displayText = normalizeText(response.displayText || response.display_text || response.message || response.speechText || '');
     const candidates = [
         ...extractStructuredAnswerCandidates(response),
         ...extractAnswerCandidatesFromVisibleText(displayText)
     ];
     for (const candidate of candidates) {
-        if (answersEquivalent(candidate.answer, gold)) {
+        if (answersEquivalentForQuestion(candidate.answer, gold, question)) {
             return {
                 ok: true,
                 status: 'visible_answer_match',
@@ -752,7 +811,7 @@ async function readExistingCompleted(resultPath) {
 }
 
 function buildTaskResult({ args, task, response, durationMs, eventSummary, payloadPreview }) {
-    const visibleScore = scoreVisibleAnswer({ response, gold: task.final_answer });
+    const visibleScore = scoreVisibleAnswer({ response, gold: task.final_answer, question: task.question });
     const responseOk = response?.ok === true;
     const status = normalizeText(response?.status, responseOk ? 'completed' : 'unknown');
     const steps = Array.isArray(response?.steps) ? response.steps : [];
@@ -816,6 +875,7 @@ function aggregateSummary({ args, results, startedAt, finishedAt, runtimeSetting
         workspaceRoot: args.workspaceRoot,
         mode: {
             desktopRealPayload: true,
+            workspaceMode: args.workspaceMode,
             directToolExecutor: args.directToolExecutor,
             agentRole: args.agentRole,
             answerPolicy: 'visible answer counts when it matches the gold answer; short numeric answers require an answer line or structured answer candidate'
@@ -889,6 +949,8 @@ function buildMarkdownReport(summary, results) {
         '## Scope',
         '',
         '- This runner evaluates the AILIS desktop-style agent path, not the strict GAIA exact-answer submission path.',
+        `- Workspace mode: ${summary.mode.workspaceMode}`,
+        `- Workspace root: \`${summary.workspaceRoot}\``,
         `- Direct tool executor: ${summary.mode.directToolExecutor}`,
         `- Agent role: ${summary.mode.agentRole}`,
         `- Source: \`${summary.sourceJsonl}\``,
@@ -998,8 +1060,10 @@ async function main() {
         mode: {
             directToolExecutor: args.directToolExecutor,
             agentRole: args.agentRole,
-            startGateway: args.startGateway
+            startGateway: args.startGateway,
+            workspaceMode: args.workspaceMode
         },
+        workspaceRoot: args.workspaceRoot,
         runtime: {
             desktopStatePath: runtimeSettings.statePath,
             mcpConfigPath: runtimeSettings.mcpConfigPath,

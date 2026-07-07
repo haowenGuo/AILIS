@@ -53,7 +53,10 @@ The runner intentionally mirrors the desktop chat path:
 - `directToolExecutor: true`
 - `nativeDirectTools: true`
 - `agentRole: persona_orchestrator`
-- `messageHistory` contains the latest user turn
+- `workspaceRoot` defaults to the project root, matching the development
+  desktop Gateway workspace
+- `messageHistory` is empty by default for benchmark tasks, so the current
+  question is not duplicated into both `message` and synthetic history
 - file attachments are passed through the same attachment shape used by chat
 - no `exact_answer_eval` execution profile is injected
 - no `answerOnly: true` context flag is injected
@@ -94,6 +97,9 @@ It accepts:
 - visible answer lines such as `Answer: 3`, `Final answer: ...`, or `答案是...`;
 - exact visible containment for longer non-ambiguous gold answers;
 - list answers when all list parts appear.
+- scaled-unit equivalents when the question explicitly asks for a scaled unit,
+  such as accepting `17000 hours` as the visible desktop equivalent of `17`
+  thousand hours.
 
 For very short gold answers such as `3`, `b`, or `No`, the runner does not
 count a random occurrence in a long paragraph. It requires a visible answer
@@ -126,6 +132,18 @@ Run one task by task id:
 
 ```powershell
 node scripts/run-ailis-desktop-real-gaia-eval.mjs --task-ids ec09fa32-d03f-4bf8-84b0-1f16922c3ae4
+```
+
+Run against a deliberately isolated temporary workspace:
+
+```powershell
+node scripts/run-ailis-desktop-real-gaia-eval.mjs --limit 3 --isolated-workspace
+```
+
+Use a specific workspace root:
+
+```powershell
+node scripts/run-ailis-desktop-real-gaia-eval.mjs --workspace-root F:\AILIS_self_evolution_runtime --limit 3
 ```
 
 Run with explicit cost estimates:

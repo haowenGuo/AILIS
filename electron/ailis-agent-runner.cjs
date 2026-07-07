@@ -4844,11 +4844,19 @@ function isSubagentSpawnStep(step = {}) {
     return ['spawn', 'create'].includes(action);
 }
 
-function normalizePersonaTaskAgentHandoffStep(step = {}) {
+function normalizePersonaTaskAgentHandoffStep(step = {}, request = {}) {
     if (!isSubagentSpawnStep(step)) {
         return step;
     }
     const args = step.args && typeof step.args === 'object' ? { ...step.args } : {};
+    const desktopRealEvalTaskText = request?.context?.desktopRealEval === true
+        ? normalizeText(request?.context?.desktopRealEvalTaskText || getLatestUserMessage(request))
+        : '';
+    if (desktopRealEvalTaskText) {
+        args.task = desktopRealEvalTaskText;
+        args.message = desktopRealEvalTaskText;
+        delete args.prompt;
+    }
     const existingWaitTimeoutMs = Number(args.waitTimeoutMs || args.timeoutMs);
     const existingRunTimeoutMs = Number(args.runTimeoutMs);
     const existingMaxAgentSteps = Number(args.maxAgentSteps);
@@ -5545,7 +5553,7 @@ function buildLlmAgentDirectToolPrompt({
         'For data reasoning tasks, use code as a calculator and verifier: write scripts that parse the source file, compute the needed result, and print a short answer plus compact evidence. Do not write scripts whose main purpose is to dump large files, whole spreadsheets, logs, or documents back into model context.',
         taskAgentMode
             ? 'You may call subagents to delegate an independent subtask to a fresh TaskAgent child. A child TaskAgent starts with a clean message history and does not inherit your prior tool observations; use it for isolated subtasks whose result can be summarized back to you, not for every simple local operation.'
-            : 'You are the user-facing AILIS persona. For ordinary conversation, answer directly. If the current user message is a task execution request, do not solve it in the persona layer and do not spend time planning; immediately call subagents exactly once with action=spawn, wait=true, and task/message containing the whole user task. Then present the TaskAgent result. Treat file analysis, code/data/math simulation, web research, computer operation, benchmarks, and GAIA-style questions as task execution. Do not inspect tools yourself or spawn multiple children for the same user task.',
+            : 'You are the user-facing AILIS persona. For ordinary conversation, answer directly. If the current user message is a task execution request, do not solve it in the persona layer and do not spend time planning; immediately call subagents exactly once with action=spawn, wait=true, and task/message containing the whole user task. The subagent task must preserve the user request verbatim first, especially units, date ranges, answer shape, rounding rules, file paths, URLs, and constraints; do not replace it with a lossy summary. Then present the TaskAgent result. Treat file analysis, code/data/math simulation, web research, computer operation, benchmarks, and GAIA-style questions as task execution. Do not inspect tools yourself or spawn multiple children for the same user task.',
         'When a tool result says outputComplete=true, outputTruncatedForModel=false, complete=true, truncated=false, or reasoning_ready=true and it contains enough evidence, stop inspecting and solve or answer. Older exploratory observations may be compacted; rely on the latest complete evidence or write a focused verifier.',
         'When exec output is truncated, use the visible outputId with output_read/output_tail/output_search to inspect a needed slice. Do not rerun the same command solely to recover truncated text.',
         'Runtime environment and attached file metadata are provided as ordinary user message context items. Use them for path and shell decisions.',
@@ -7210,7 +7218,7 @@ class AILISAgentRunner {
                 tools: directToolSpecs,
                 contextMode: agentContextMode,
                 toolSummary: isPersonaOrchestratorRole(agentRuntimeRole)
-                    ? 'Persona orchestrator tools exposed: subagents only. Answer directly for ordinary conversation. If the current user message is task execution, immediately call subagents once with action=spawn/create and wait=true to hand the whole task to one fresh TaskAgent child; the runtime will stop the outer persona loop after that handoff result.'
+                    ? 'Persona orchestrator tools exposed: subagents only. Answer directly for ordinary conversation. If the current user message is task execution, immediately call subagents once with action=spawn/create and wait=true to hand the whole task to one fresh TaskAgent child. Preserve the current user task verbatim in the child task before adding any notes; never rewrite away units, answer shape, rounding rules, file paths, URLs, or constraints. The runtime will stop the outer persona loop after that handoff result.'
                     : directToolSpecs.length
                         ? `Native direct tools exposed: ${directToolSpecs.map((tool) => tool.name).slice(0, 16).join(', ')}${directToolSpecs.length > 16 ? ', ...' : ''}.`
                         : 'No native tools are exposed in this turn; answer directly if possible.'
@@ -7683,7 +7691,7 @@ class AILISAgentRunner {
             }
             const personaTaskAgentHandoff = isPersonaOrchestratorRole(agentRuntimeRole) && isSubagentSpawnStep(step);
             if (personaTaskAgentHandoff) {
-                step = normalizePersonaTaskAgentHandoffStep(step);
+                step = normalizePersonaTaskAgentHandoffStep(step, request);
                 await appendRuntimeItem({
                     type: 'agent.handoff',
                     status: 'task_agent_handoff_prepared',
