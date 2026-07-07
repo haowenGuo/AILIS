@@ -2904,7 +2904,7 @@ function buildMcpBridgeSkillText() {
         'AILIS direct-tool 用法：Runtime 会把 MCP tools 暴露成 namespace/function 风格的直接工具名，例如 mcp__ailis_research__web_fetch。普通任务优先调用这种 direct tool，不要手工拼 mcp_bridge.call_tool。',
         'mcp_bridge 主要用于 list_servers、health_check、list_tool_specs、search_tools、list_resources、read_resource、list_prompts/get_prompt、注册/关闭 server 等管理和修复动作。',
         '如果 capability_context 给出了 mcp__server__tool 形式的 direct spec，可以直接把 tool_call.tool 写成该 id；Runtime 会保留原始 args 并路由到对应 MCP server/tool。',
-        '研究/网页类工具边界：web_search 是兜底检索，不是默认第一步；附件/本地文件、PDF/DOCX/PPTX/XLSX/CSV/图片等 artifact 任务优先用 tool_search 搜 artifact_tools；artifact_tools 已暴露时直接用它接管 open/index/search/query/materialize/inspect/render/validate/export。音频、代码和 GitHub 仓库等非 artifact 专用任务才按需用 tool_search 找 direct MCP 工具。web_fetch 只读 HTML/纯文本；PDF 或二进制不要继续用 web_fetch；已知 PDF URL/路径用 pdf_extract_text，不知道 PDF 直链但知道论文/报告标题或文章页时优先用 pdf_find_and_extract；PDF/论文题知道标题时把标题放 title，把要找的字段放 extract_query，不要把答案字段当唯一 query；必要时再 download_file。',
+        '研究/网页类工具边界：web_search 是兜底检索，不是默认第一步；本地文件、PDF/DOCX/PPTX/XLSX/CSV/图片等任务默认走 Codex-style coding path：read 小文件、exec 跑脚本/解析器、apply_patch 改代码。只有当前 tools 里确实暴露了专用 MCP/direct tool 时才直接调用它；缺工具时用 tool_search 找 direct MCP 工具。web_fetch 只读 HTML/纯文本；PDF 或二进制不要继续用 web_fetch；已知 PDF URL/路径用 pdf_extract_text，不知道 PDF 直链但知道论文/报告标题或文章页时优先用 pdf_find_and_extract；PDF/论文题知道标题时把标题放 title，把要找的字段放 extract_query，不要把答案字段当唯一 query；必要时再 download_file。',
         'mcp_bridge 管理 action：schema/list_servers/register_server/remove_server/health_check/list_tools/list_tool_specs/search_tools/list_resources/read_resource/list_prompts/get_prompt/shutdown_server。'
     ].join('\n');
 }
@@ -3030,6 +3030,7 @@ function buildAgentCapabilityCatalog({ compact = false, role = 'task_agent' } = 
             note: 'Compact local-model capability index. Use tool_search or load_context to discover detailed skills/tools/MCP contracts only when the current user goal truly needs them.',
             core_tools: [
                 'tool_search',
+                'subagents',
                 'read',
                 'write',
                 'exec',
@@ -4376,6 +4377,56 @@ function buildToolResultEvent(stepResult) {
     });
 }
 
+function extractSubagentHandoffOutcome(stepResult = {}) {
+    const response = stepResult.response || {};
+    const toolResult = response.result || {};
+    const details = toolResult.details && typeof toolResult.details === 'object'
+        ? toolResult.details
+        : {};
+    const parsedText = extractJsonObject(extractToolResultText(toolResult));
+    const payload = details.status ? details : (parsedText && typeof parsedText === 'object' ? parsedText : {});
+    const subagent = payload.subagent && typeof payload.subagent === 'object' ? payload.subagent : {};
+    const childResult = payload.result && typeof payload.result === 'object'
+        ? payload.result
+        : (subagent.result && typeof subagent.result === 'object' ? subagent.result : {});
+    const status = normalizeText(
+        payload.status ||
+            childResult.status ||
+            subagent.status ||
+            response.status,
+        response.ok === true ? 'completed' : 'failed'
+    );
+    const failedStatus = ['failed', 'error', 'cancelled', 'timeout', 'not_found', 'needs_approval'];
+    const ok = response.ok === true &&
+        !failedStatus.includes(status) &&
+        childResult.ok !== false &&
+        subagent.ok !== false;
+    const displayText = stripControlTags(normalizeText(
+        childResult.displayText ||
+            childResult.finalAnswer ||
+            childResult.answer ||
+            childResult.summary ||
+            childResult.message ||
+            payload.displayText ||
+            payload.summary ||
+            extractToolResultText(toolResult) ||
+            response.error,
+        ok
+            ? 'TaskAgent 已经完成这次任务。'
+            : status === 'running'
+                ? 'TaskAgent 还在执行这次任务，我先把外层交接停住，避免重复开子任务。'
+                : 'TaskAgent 没有完成这次任务，具体原因请看 Agent Lab 的子任务链路。'
+    ));
+    return {
+        ok,
+        status,
+        displayText,
+        childResult,
+        subagent,
+        payload
+    };
+}
+
 function buildInvalidDecisionObservationEvent(decision = {}, iteration = 0, maxSteps = DEFAULT_AGENT_LOOP_STEPS) {
     const previousOutput = typeof decision.raw === 'string'
         ? decision.raw
@@ -4801,6 +4852,45 @@ function canonicalDirectToolId(value = '') {
     return parsedMcp?.id || normalized;
 }
 
+const PERSONA_TASKAGENT_HANDOFF_WAIT_TIMEOUT_MS = 3 * 60 * 1000;
+const PERSONA_TASKAGENT_HANDOFF_RUN_TIMEOUT_MS = 15 * 60 * 1000;
+const PERSONA_TASKAGENT_HANDOFF_MAX_STEPS = 30;
+
+function isSubagentSpawnStep(step = {}) {
+    if (canonicalDirectToolId(step?.tool) !== 'subagents') {
+        return false;
+    }
+    const action = normalizeText(step.args?.action || 'spawn').toLowerCase();
+    return ['spawn', 'create'].includes(action);
+}
+
+function normalizePersonaTaskAgentHandoffStep(step = {}) {
+    if (!isSubagentSpawnStep(step)) {
+        return step;
+    }
+    const args = step.args && typeof step.args === 'object' ? { ...step.args } : {};
+    const existingWaitTimeoutMs = Number(args.waitTimeoutMs || args.timeoutMs);
+    const existingRunTimeoutMs = Number(args.runTimeoutMs);
+    const existingMaxAgentSteps = Number(args.maxAgentSteps);
+    return {
+        ...step,
+        args: {
+            ...args,
+            action: normalizeText(args.action || 'spawn').toLowerCase(),
+            wait: true,
+            waitTimeoutMs: Number.isFinite(existingWaitTimeoutMs) && existingWaitTimeoutMs > 0
+                ? Math.max(existingWaitTimeoutMs, PERSONA_TASKAGENT_HANDOFF_WAIT_TIMEOUT_MS)
+                : PERSONA_TASKAGENT_HANDOFF_WAIT_TIMEOUT_MS,
+            runTimeoutMs: Number.isFinite(existingRunTimeoutMs) && existingRunTimeoutMs > 0
+                ? Math.max(existingRunTimeoutMs, PERSONA_TASKAGENT_HANDOFF_RUN_TIMEOUT_MS)
+                : PERSONA_TASKAGENT_HANDOFF_RUN_TIMEOUT_MS,
+            maxAgentSteps: Number.isFinite(existingMaxAgentSteps) && existingMaxAgentSteps > 0
+                ? Math.max(existingMaxAgentSteps, PERSONA_TASKAGENT_HANDOFF_MAX_STEPS)
+                : PERSONA_TASKAGENT_HANDOFF_MAX_STEPS
+        }
+    };
+}
+
 function directToolEntryId(entry = {}) {
     return canonicalDirectToolId(
         entry.spec?.name ||
@@ -4939,8 +5029,8 @@ function buildAgentDirectToolSpecs(gateway, { stepResults = [], requestContext =
     if (requestContext.directToolExecutor === false || requestContext.nativeDirectTools === false) {
         return [];
     }
+    const subagentSpec = gateway?.gatewayToolRuntimeRegistry?.definition?.('subagents')?.spec;
     if (isPersonaOrchestratorRole(resolveAgentRuntimeRole({}, requestContext))) {
-        const subagentSpec = gateway?.gatewayToolRuntimeRegistry?.definition?.('subagents')?.spec;
         return subagentSpec ? [subagentSpec] : [];
     }
     const specs = [];
@@ -4953,6 +5043,9 @@ function buildAgentDirectToolSpecs(gateway, { stepResults = [], requestContext =
             continue;
         }
         pushUniqueNativeToolSpec(specs, seen, spec);
+    }
+    if (requestContext.exposeSubagentsDirectTool === true) {
+        pushUniqueNativeToolSpec(specs, seen, subagentSpec);
     }
     for (const spec of buildDynamicDirectToolSpecsFromObservations(stepResults, gateway)) {
         if (suppressedCoreTools.has(canonicalDirectToolId(spec.name || spec.function?.name))) {
@@ -5468,8 +5561,11 @@ function buildLlmAgentDirectToolPrompt({
         'Tool call outputs from previous turns appear as function_call_output/tool_search_output items paired with their call_id. Use recent, relevant outputs as observations, but do not keep rereading stale exploration results once you have enough information to code, verify, or answer.',
         'If enough evidence is available, answer directly. If more evidence is needed, call one available tool. Do not repeat an identical tool call unless the new arguments materially change the observation.',
         'Only call tools that are present in the current tools array. If a needed tool is missing, use tool_search when it is available.',
-        'For local file and data tasks, prefer the coding main path: read/write/exec/apply_patch. Use read to inspect small files, write to create helper scripts, exec to run scripts/tests/diagnostics, and apply_patch for source edits. Use artifact_tools or tool_search only when the coding path cannot reliably inspect the file type or when a specialized parser is clearly needed.',
+        'For local file and data tasks, prefer the coding main path: read/write/exec/apply_patch. Use read to inspect small files, write to create helper scripts, exec to run scripts/tests/diagnostics, and apply_patch for source edits. Use tool_search only when the coding path cannot reliably inspect the file type or when a specialized direct MCP/tool is clearly needed.',
         'For data reasoning tasks, use code as a calculator and verifier: write scripts that parse the source file, compute the needed result, and print a short answer plus compact evidence. Do not write scripts whose main purpose is to dump large files, whole spreadsheets, logs, or documents back into model context.',
+        taskAgentMode
+            ? 'You may call subagents to delegate an independent subtask to a fresh TaskAgent child. A child TaskAgent starts with a clean message history and does not inherit your prior tool observations; use it for isolated subtasks whose result can be summarized back to you, not for every simple local operation.'
+            : 'You are the user-facing AILIS persona. For ordinary conversation, answer directly. For real task execution, call subagents exactly once to hand the whole task to a fresh TaskAgent child with wait=true, then present the child result; do not inspect tools yourself or spawn multiple children for the same user task.',
         'When a tool result says outputComplete=true, outputTruncatedForModel=false, complete=true, truncated=false, or reasoning_ready=true and it contains enough evidence, stop inspecting and solve or answer. Older exploratory observations may be compacted; rely on the latest complete evidence or write a focused verifier.',
         'When exec output is truncated, use the visible outputId with output_read/output_tail/output_search to inspect a needed slice. Do not rerun the same command solely to recover truncated text.',
         'Runtime environment and attached file metadata are provided as ordinary user message context items. Use them for path and shell decisions.',
@@ -6592,17 +6688,36 @@ class AILISAgentRunner {
         const effectiveToolContext = step.tool === 'subagents' && inheritedLlmSettings
             ? { ...toolContext, llmSettings: inheritedLlmSettings }
             : toolContext;
+        const subagentWaitTimeoutMs = step.tool === 'subagents'
+            ? Number(step.args?.waitTimeoutMs || step.args?.timeoutMs)
+            : 0;
+        const effectiveRequest = subagentWaitTimeoutMs > 0
+            ? {
+                ...request,
+                timeoutMs: Math.max(
+                    Number(request?.timeoutMs || request?.context?.timeoutMs || DEFAULT_RUN_TIMEOUT_MS),
+                    subagentWaitTimeoutMs + 5000
+                )
+            }
+            : request;
+        const effectiveToolCallTimeoutMs = Number(effectiveRequest?.timeoutMs || 0);
+        const finalToolContext = step.tool === 'subagents' && effectiveToolCallTimeoutMs > 0
+            ? {
+                ...effectiveToolContext,
+                timeoutMs: Math.max(Number(effectiveToolContext?.timeoutMs || 0), effectiveToolCallTimeoutMs)
+            }
+            : effectiveToolContext;
         const stepResult = await executeToolStep({
             gateway: this.gateway,
             runId,
-            sessionId: effectiveToolContext.sessionId || effectiveToolContext.sessionKey,
+            sessionId: finalToolContext.sessionId || finalToolContext.sessionKey,
             step,
-            toolContext: effectiveToolContext,
-            request,
+            toolContext: finalToolContext,
+            request: effectiveRequest,
             iteration,
             planner: 'llm-agentic-executor',
             decorateStepResult: (baseStepResult) => attachAgentEvidenceArtifacts(baseStepResult, {
-                taskType: getAgentRunTaskType(request, effectiveToolContext)
+                taskType: getAgentRunTaskType(request, finalToolContext)
             }),
             finishedPayload: (result) => ({
                 evidenceRefs: getStepEvidenceRefs(result)
@@ -7115,7 +7230,7 @@ class AILISAgentRunner {
                 tools: directToolSpecs,
                 contextMode: agentContextMode,
                 toolSummary: isPersonaOrchestratorRole(agentRuntimeRole)
-                    ? 'Persona orchestrator tools exposed: subagents. Answer directly for conversation; when the user asks AILIS to execute a task, call subagents with action=spawn or create, wait=true, and a concise task prompt for the TaskAgent child.'
+                    ? 'Persona orchestrator tools exposed: subagents only. Answer directly for conversation. For task execution, call subagents once with action=spawn/create and wait=true to hand the whole task to one fresh TaskAgent child; the runtime will stop the outer persona loop after that handoff result.'
                     : directToolSpecs.length
                         ? `Native direct tools exposed: ${directToolSpecs.map((tool) => tool.name).slice(0, 16).join(', ')}${directToolSpecs.length > 16 ? ', ...' : ''}.`
                         : 'No native tools are exposed in this turn; answer directly if possible.'
@@ -7586,6 +7701,26 @@ class AILISAgentRunner {
                     expression: 'surprised'
                 })));
             }
+            const personaTaskAgentHandoff = isPersonaOrchestratorRole(agentRuntimeRole) && isSubagentSpawnStep(step);
+            if (personaTaskAgentHandoff) {
+                step = normalizePersonaTaskAgentHandoffStep(step);
+                await appendRuntimeItem({
+                    type: 'agent.handoff',
+                    status: 'task_agent_handoff_prepared',
+                    payload: {
+                        iteration,
+                        tool: step.tool,
+                        args: {
+                            action: step.args?.action,
+                            wait: step.args?.wait,
+                            waitTimeoutMs: step.args?.waitTimeoutMs,
+                            runTimeoutMs: step.args?.runTimeoutMs,
+                            maxAgentSteps: step.args?.maxAgentSteps
+                        },
+                        reason: 'persona_orchestrator hands executable tasks to one clean TaskAgent child and stops the outer persona loop after the result'
+                    }
+                });
+            }
 
             const deferredToolContract = buildDeferredToolContractRequest(step, events);
             if (deferredToolContract) {
@@ -7859,6 +7994,61 @@ class AILISAgentRunner {
                     pendingApproval,
                     dryRun: false
                 }));
+            }
+
+            if (personaTaskAgentHandoff) {
+                const outcome = extractSubagentHandoffOutcome(stepResult);
+                const finalAnswer = stripControlTags(normalizeText(
+                    normalizeText(outcome.childResult.finalAnswer) ||
+                        normalizeText(outcome.childResult.answer) ||
+                        outcome.displayText
+                ));
+                await appendRuntimeItem({
+                    type: 'agent.handoff',
+                    status: outcome.ok ? 'task_agent_handoff_completed' : 'task_agent_handoff_incomplete',
+                    payload: {
+                        iteration,
+                        ok: outcome.ok,
+                        status: outcome.status,
+                        subagentId: outcome.subagent?.id || outcome.subagent?.subagentId || '',
+                        childRunId: outcome.subagent?.childRunId || outcome.subagent?.runId || '',
+                        childStatus: outcome.subagent?.status || '',
+                        childOk: outcome.subagent?.ok,
+                        displayText: outcome.displayText
+                    }
+                });
+                const status = outcome.ok
+                    ? 'completed'
+                    : outcome.status === 'running'
+                        ? 'subagent_running'
+                        : outcome.status || 'subagent_incomplete';
+                const surface = renderStatusSurface({
+                    text: outcome.displayText,
+                    status,
+                    ok: outcome.ok,
+                    source: 'persona_taskagent_handoff_result',
+                    expression: outcome.ok ? 'focused' : 'surprised'
+                });
+                return await finishRuntimeRun(attachPersonaSurface({
+                    ok: outcome.ok,
+                    runId,
+                    sessionId,
+                    status,
+                    mode: 'task',
+                    planner: 'persona-taskagent-handoff',
+                    intent: decision.intent || 'taskagent_handoff',
+                    executionRequired: true,
+                    durationMs: Date.now() - startedAt,
+                    message,
+                    finalAnswer,
+                    displayText: outcome.displayText,
+                    speechText: outcome.displayText.replace(/\n/g, ' '),
+                    plan: [],
+                    steps: stepResults,
+                    events,
+                    subagent: outcome.subagent,
+                    taskAgentResult: outcome.childResult
+                }, surface));
             }
 
             const paused = await pauseAfterRound({

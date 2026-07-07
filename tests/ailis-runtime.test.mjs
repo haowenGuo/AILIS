@@ -676,11 +676,13 @@ test('AILIS runtime persists MCP server registry to local config', async () => {
 
 test('AILIS runtime subagents execute child runner lifecycle and retain logs', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-subagent-runtime-'));
+    const childContexts = [];
     const runtime = new AILISRuntime({
         workspaceRoot,
         projectRoot: path.resolve('.'),
         auditDir: path.join(workspaceRoot, '.audit'),
-        subagentExecutor: async ({ subagent, onEvent }) => {
+        subagentExecutor: async ({ subagent, context, onEvent }) => {
+            childContexts.push(context);
             await onEvent({
                 type: 'subagent.progress',
                 status: 'running',
@@ -696,11 +698,16 @@ test('AILIS runtime subagents execute child runner lifecycle and retain logs', a
 
     const spawned = await runtime.executeTool(
         'subagents',
-        { action: 'spawn', subagentId: 'worker-1', task: 'summarize repo', wait: true, waitTimeoutMs: 2000 },
+        { action: 'spawn', subagentId: 'worker-1', task: 'summarize repo', waitTimeoutMs: 2000 },
         { runId: 'subagent-run', sessionId: 'main' }
     );
     assert.equal(spawned.details.subagent.status, 'completed');
     assert.match(spawned.details.subagent.result.displayText, /done:summarize repo/);
+    assert.match(spawned.details.result.displayText, /done:summarize repo/);
+    assert.equal(spawned.details.subagent.result.status, 'completed');
+    assert.equal(childContexts[0].contextMode, 'task_agent');
+    assert.equal(childContexts[0].cleanContext, true);
+    assert.match(childContexts[0].sessionId, /:subagent:worker-1$/);
 
     const log = await runtime.executeTool(
         'subagents',

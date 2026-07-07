@@ -156,7 +156,7 @@ test('AILIS Agent Runner passes parent LLM settings only to subagent tool calls'
     assert.equal(calls[0].context.llmSettings, undefined);
 });
 
-test('AILIS persona orchestrator only exposes subagent task handoff tool', () => {
+test('AILIS persona exposes subagent handoff while TaskAgent keeps Codex core by default', () => {
     const subagentSpec = {
         name: 'subagents',
         description: 'Spawn child task agents.',
@@ -201,6 +201,15 @@ test('AILIS persona orchestrator only exposes subagent task handoff tool', () =>
     });
     assert.ok(taskSpecs.some((spec) => spec.name === 'read'));
     assert.ok(taskSpecs.some((spec) => spec.name === 'exec'));
+    assert.equal(taskSpecs.some((spec) => spec.name === 'subagents'), false);
+
+    const explicitTaskSpecs = buildAgentDirectToolSpecs(gateway, {
+        requestContext: {
+            agentRole: 'task_agent',
+            exposeSubagentsDirectTool: true
+        }
+    });
+    assert.ok(explicitTaskSpecs.some((spec) => spec.name === 'subagents'));
 });
 
 test('AILIS Agent Runner accepts local vLLM and Ollama settings without API keys', () => {

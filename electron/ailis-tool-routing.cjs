@@ -89,12 +89,12 @@ const ROUTING_PROFILES = Object.freeze([
             /\b(pdf|docx|docm|pptx|ppt|xlsx|xlsm|xls|csv|tsv|png|jpg|jpeg|webp)\b/i,
             /(附件|本地文件|文件路径|产物|工件).*(pdf|docx|pptx|xlsx|xlsm|csv|tsv|图片|图像|表格|文档|演示文稿)/i
         ],
-        tools: ['artifact_tools'],
-        primaryTools: ['artifact_tools'],
+        tools: ['read_document', 'read_presentation', 'read_spreadsheet', 'pdf_extract_text', 'pdf_find_and_extract', 'describe_image', 'transcribe_audio'],
+        primaryTools: ['read_document', 'read_presentation', 'read_spreadsheet', 'pdf_extract_text', 'pdf_find_and_extract', 'describe_image'],
         bonus: 115,
         primaryBonus: 70,
         webPenalty: 90,
-        advice: 'Use artifact_tools as the canonical local file artifact runtime for Office/PDF/table/image artifacts. Value-only readers such as read_spreadsheet are fallback tools, not peers of artifact_tools. If a capability is missing, decide from the observation whether to use a general tool such as exec/code or ask for clarification.'
+        advice: 'Use the Codex-style coding path first for local files: read small text, exec scripts/parsers for structured files, and use strict direct MCP readers only when tool_search exposes them. Do not assume an extended artifact runtime exists on the default surface.'
     }),
     Object.freeze({
         id: 'word_document',
@@ -105,12 +105,12 @@ const ROUTING_PROFILES = Object.freeze([
             /附件.*(word|docx|docm|文档|表格)/i,
             /(word|docx|docm|文档).*附件/i
         ],
-        tools: ['artifact_tools'],
-        primaryTools: ['artifact_tools'],
+        tools: ['read_document'],
+        primaryTools: ['read_document'],
         bonus: 90,
         primaryBonus: 48,
         webPenalty: 80,
-        advice: 'Use artifact_tools for local Word/DOCX artifacts first; use read_document only as an explicit fallback when artifact_tools reports a missing capability.'
+        advice: 'Use read for small text files and exec for custom extraction. If tool_search exposes read_document with a strict schema, use it for Word/DOCX paragraphs and tables.'
     }),
     Object.freeze({
         id: 'presentation',
@@ -118,12 +118,12 @@ const ROUTING_PROFILES = Object.freeze([
             /\b(ppt|pptx|powerpoint|presentation|slide deck|slides?)\b/i,
             /(幻灯片|演示文稿|pptx|ppt|powerpoint)/i
         ],
-        tools: ['artifact_tools'],
-        primaryTools: ['artifact_tools'],
+        tools: ['read_presentation'],
+        primaryTools: ['read_presentation'],
         bonus: 90,
         primaryBonus: 48,
         webPenalty: 80,
-        advice: 'Use artifact_tools for local PowerPoint/PPTX artifacts first; use read_presentation only as an explicit fallback when artifact_tools reports a missing capability.'
+        advice: 'Use read/exec when a script can inspect the deck. If tool_search exposes read_presentation with a strict schema, use it for PowerPoint/PPTX slide content.'
     }),
     Object.freeze({
         id: 'spreadsheet',
@@ -132,12 +132,12 @@ const ROUTING_PROFILES = Object.freeze([
             /\b(cell colors?|fill colors?|merged cells?|formula cells?|grid map|spreadsheet map)\b/i,
             /(电子表格|工作簿|表格|列|行|求和|总和|单元格|填充色|颜色|公式|合并单元格)/i
         ],
-        tools: ['artifact_tools'],
-        primaryTools: ['artifact_tools'],
+        tools: ['read_spreadsheet'],
+        primaryTools: ['read_spreadsheet'],
         bonus: 90,
         primaryBonus: 56,
         webPenalty: 80,
-        advice: 'Use artifact_tools for spreadsheet/workbook artifacts, especially colors, formulas, merges, renders, indexes, search/query, materialize, and grid/map tasks. read_spreadsheet is only a value-only fallback and cannot see fills/styles/merged cells/formulas/comments/images.'
+        advice: 'Use exec with spreadsheet libraries for colors, formulas, merges, renders, and grid/map tasks. Use read_spreadsheet only when a strict MCP schema is exposed and value-level extraction is sufficient.'
     }),
     Object.freeze({
         id: 'context_artifact',
@@ -146,12 +146,12 @@ const ROUTING_PROFILES = Object.freeze([
             /\b(read artifact|artifact range|artifact grid|artifact search|spreadsheet range|grid query)\b/i,
             /(上下文产物|产物查询|证据产物|大文件载荷|查询证据)/i
         ],
-        tools: ['artifact_tools', 'artifact_query'],
-        primaryTools: ['artifact_tools'],
+        tools: ['output_read', 'output_tail', 'output_search'],
+        primaryTools: ['output_search', 'output_read'],
         bonus: 95,
         primaryBonus: 58,
         webPenalty: 90,
-        advice: 'Use artifact_tools as the artifact runtime control surface for indexing/search/query/render/edit flows. Use artifact_query only as a lower-level compatibility tool for already-managed context artifact ids.'
+        advice: 'Use output_read/output_tail/output_search for stored execution outputs. For local artifact payloads, prefer read/exec and only use specialized tools that are actually exposed in the current tool set.'
     }),
     Object.freeze({
         id: 'pdf_artifact',
@@ -160,12 +160,12 @@ const ROUTING_PROFILES = Object.freeze([
             /\b(pdf)\b.*\b(local|attached|attachment|file|path|downloaded|extract|render|page|search)\b/i,
             /(本地|附件|文件|路径).*(pdf|PDF|论文|报告)/i
         ],
-        tools: ['artifact_tools'],
-        primaryTools: ['artifact_tools'],
+        tools: ['pdf_extract_text', 'pdf_find_and_extract'],
+        primaryTools: ['pdf_extract_text', 'pdf_find_and_extract'],
         bonus: 92,
         primaryBonus: 50,
         webPenalty: 75,
-        advice: 'Use artifact_tools for local PDF artifacts first so parsing, page search, render checks, and adapter diagnostics stay inside the artifact runtime. Use pdf_extract_text/pdf_find_and_extract only as explicit fallback extractors.'
+        advice: 'For local PDFs, use exec with PDF tooling when available. If strict MCP tools are exposed, use pdf_extract_text for known PDF paths/URLs and pdf_find_and_extract when discovery is still needed.'
     }),
     Object.freeze({
         id: 'paper_report_pdf_discovery',
@@ -210,12 +210,12 @@ const ROUTING_PROFILES = Object.freeze([
             /\b(png|jpg|jpeg|webp|image|photo|picture|screenshot|vision|visual)\b/i,
             /(图片|图像|截图|照片|视觉)/i
         ],
-        tools: ['artifact_tools'],
-        primaryTools: ['artifact_tools'],
+        tools: ['describe_image'],
+        primaryTools: ['describe_image'],
         bonus: 86,
         primaryBonus: 36,
         webPenalty: 75,
-        advice: 'Use artifact_tools for local image artifacts first for metadata/render/nonblank checks; use describe_image only when the user needs semantic visual understanding that artifact_tools does not provide.'
+        advice: 'Use normal file inspection for metadata and describe_image only when a strict vision tool is exposed and the user needs semantic visual understanding.'
     }),
     Object.freeze({
         id: 'python_code',
@@ -280,6 +280,10 @@ function queryExplicitlyRequestsWebSearch(query = '') {
 function queryExplicitlyMentionsYoutube(query = '') {
     return /\b(youtube|youtu\.be|youtube\.com|yt-dlp)\b/i.test(query) ||
         /(YouTube|youtube|油管)/i.test(query);
+}
+
+function queryContainsYoutubeUrl(query = '') {
+    return /\bhttps?:\/\/(?:www\.)?(?:youtube\.com|youtu\.be)\S+/i.test(query);
 }
 
 function matchingRoutingProfiles(query = '') {
@@ -381,6 +385,19 @@ function scoreToolForQuery(entry = {}, query = '') {
 
     if (/^youtube_/.test(toolName) && !queryExplicitlyMentionsYoutube(query)) {
         return 0;
+    }
+    if (toolName === 'youtube_transcript' && queryContainsYoutubeUrl(query)) {
+        score += 90;
+    }
+    if (toolName === 'web_fetch' && queryContainsYoutubeUrl(query) && /\b(transcript|字幕|转写)\b/i.test(query)) {
+        score -= 40;
+    }
+    if (
+        toolName === 'youtube_video_search' &&
+        queryExplicitlyMentionsYoutube(query) &&
+        !queryContainsYoutubeUrl(query)
+    ) {
+        score += 18;
     }
 
     if (needle && toolName && (needle === toolName || needle.includes(toolName) || text.includes(needle))) {

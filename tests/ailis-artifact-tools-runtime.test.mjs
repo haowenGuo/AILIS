@@ -194,7 +194,7 @@ test('AILIS artifact tools runtime carries evaluation cases as first-class archi
     assert.ok(csvCases.evaluationCases.every((entry) => entry.format === 'csv'));
 });
 
-test('AILIS artifact_tools is exposed through the runtime tool registry', async () => {
+test('AILIS artifact_tools remains callable but is hidden from the Codex-style default search surface', async () => {
     const noop = async () => ({ content: [{ type: 'text', text: 'noop' }], details: { status: 'completed' } });
     const registry = createAILISToolRuntimeRegistry({
         updatePlan: noop,
@@ -215,11 +215,10 @@ test('AILIS artifact_tools is exposed through the runtime tool registry', async 
     assert.ok(registry.has('artifact_tools'));
     const search = await registry.dispatch('tool_search', {
         query: 'artifact tools adapter registry import planning',
-        includeDirect: true,
         limit: 8
     });
     assert.equal(search.isError, false);
-    assert.ok(search.details.tools.some((tool) => tool.id === 'artifact_tools'));
+    assert.equal(search.details.tools.some((tool) => tool.id === 'artifact_tools'), false);
 
     const planned = await registry.dispatch('artifact_tools', {
         action: 'plan_import',

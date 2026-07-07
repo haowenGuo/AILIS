@@ -1783,6 +1783,7 @@ class AILISRuntime {
     }
 
     buildSubagentContext(subagent, args = {}, context = {}) {
+        const parentSubagentDepth = Math.max(0, Number(context.subagentDepth || context.parentSubagentDepth || 0) || 0);
         const inherited = {
             permissionProfile: context.permissionProfile || context.permissions || context.policy || context.sandbox,
             approvalPolicy: context.approvalPolicy || context.confirmationPolicy,
@@ -1807,6 +1808,10 @@ class AILISRuntime {
             planner: normalizeString(args.planner || context.planner, 'llm'),
             agentLoop: normalizeString(args.agentLoop || context.agentLoop, 'llm'),
             agentMode: normalizeString(args.agentMode || context.agentMode, 'llm'),
+            contextMode: 'task_agent',
+            cleanContext: true,
+            parentSubagentDepth,
+            subagentDepth: parentSubagentDepth + 1,
             maxAgentSteps: Number(args.maxAgentSteps || context.maxAgentSteps || 30)
         };
     }
@@ -1988,11 +1993,13 @@ class AILISRuntime {
                 payload: this.publicSubagent(subagent)
             });
             this.startSubagentRun(subagent, args, context);
-            if (args.wait === true) {
+            const shouldWait = args.wait !== false;
+            if (shouldWait) {
                 const waited = await this.waitForSubagent(subagentId, args.waitTimeoutMs || DEFAULT_SUBAGENT_WAIT_TIMEOUT_MS);
                 const response = {
                     status: waited.status === 'completed' ? 'completed' : waited.status,
-                    subagent: waited.subagent
+                    subagent: waited.subagent,
+                    result: waited.subagent?.result || null
                 };
                 return {
                     content: [

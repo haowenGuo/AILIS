@@ -62,6 +62,8 @@ test('AILIS tool specs keep Responses-compatible shape without leaking old layer
     assert.ok(AILIS_RUNTIME_TOOL_DEFINITIONS.some((tool) => tool.id === 'output_read'));
     assert.ok(AILIS_RUNTIME_TOOL_DEFINITIONS.some((tool) => tool.id === 'output_tail'));
     assert.ok(AILIS_RUNTIME_TOOL_DEFINITIONS.some((tool) => tool.id === 'output_search'));
+    assert.equal(AILIS_RUNTIME_TOOL_DEFINITIONS.find((tool) => tool.id === 'artifact_query').exposure, AILIS_TOOL_EXPOSURE.HIDDEN);
+    assert.equal(AILIS_RUNTIME_TOOL_DEFINITIONS.find((tool) => tool.id === 'artifact_tools').exposure, AILIS_TOOL_EXPOSURE.HIDDEN);
     assert.equal(AILIS_RUNTIME_TOOL_DEFINITIONS.find((tool) => tool.id === 'output_read').exposure, AILIS_TOOL_EXPOSURE.DEFERRED);
     assert.equal(AILIS_RUNTIME_TOOL_DEFINITIONS.find((tool) => tool.id === 'output_tail').exposure, AILIS_TOOL_EXPOSURE.DEFERRED);
     assert.equal(AILIS_RUNTIME_TOOL_DEFINITIONS.find((tool) => tool.id === 'output_search').exposure, AILIS_TOOL_EXPOSURE.DEFERRED);
@@ -79,15 +81,18 @@ test('AILIS tool specs keep Responses-compatible shape without leaking old layer
     assert.equal(spec.type, 'function');
     assert.equal(spec.name, 'tool_search');
     assert.match(spec.description, /Tool discovery/i);
+    assert.equal(spec.strict, true);
     assert.equal(spec.parameters.type, 'object');
     assert.deepEqual(spec.parameters.required, ['query']);
     assert.equal(spec.parameters.additionalProperties, false);
+    assert.deepEqual(Object.keys(spec.parameters.properties), ['query', 'limit']);
     assert.ok(spec.output_schema.properties.content);
     assert.equal(Object.prototype.hasOwnProperty.call(spec, 'metadata'), false);
 
     const mcpBridge = AILIS_RUNTIME_TOOL_DEFINITIONS.find((tool) => tool.id === 'mcp_bridge');
     const mcpBridgeSpec = createAilisFunctionToolSpec(mcpBridge);
-    assert.equal(mcpBridgeSpec.defer_loading, true);
+    assert.equal(mcpBridge.exposure, AILIS_TOOL_EXPOSURE.HIDDEN);
+    assert.equal(mcpBridgeSpec.defer_loading, undefined);
     assert.ok(mcpBridgeSpec.parameters.properties.action.enum.includes('health_check'));
     assert.ok(mcpBridgeSpec.parameters.properties.action.enum.includes('search_tools'));
     assert.equal(mcpBridgeSpec.parameters.properties.action.enum.includes('call_tool'), false);
@@ -237,6 +242,20 @@ test('AILIS MCP adapter parses direct MCP ids and creates stable specs', () => {
     assert.deepEqual(describeImageSpec.input_schema.required, ['path']);
     assert.equal(describeImageSpec.input_schema.properties.path.minLength, 1);
 
+    const weakSpec = createAilisDirectMcpToolSpec({
+        server: 'ailis_research',
+        tool: 'optional_lookup',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                query: { type: 'string' }
+            }
+        }
+    });
+    assert.equal(weakSpec.callable, false);
+    assert.equal(weakSpec.modelFacing, false);
+    assert.equal(weakSpec.schema_status, 'weak_schema');
+
     const { toolArgs, meta } = normalizeAilisMcpCallArgs({
         text: 'hello',
         _meta: { reason: 'test' }
@@ -305,7 +324,8 @@ test('AILIS tool routing prefers artifact-specific MCP tools over broad web_sear
         rankToolSearchResults(candidates, 'https://www.youtube.com/watch?v=L1vXCYZAYYM transcript evidence', 2)[0].tool,
         'youtube_transcript'
     );
-    assert.match(buildToolRoutingAdvice('attached docx Word document table', candidates), /read_document/);
+    assert.match(buildToolRoutingAdvice('attached docx Word document table', candidates), /Codex-style/);
+    assert.match(buildToolRoutingAdvice('attached docx Word document table', candidates), /strict direct MCP/);
 });
 
 test('AILIS tool routing prefers web_research for public current-information evidence tasks', () => {
@@ -398,28 +418,34 @@ test('AILIS Gateway exposes a small Responses-compatible core surface by default
         auditDir: path.join(workspaceRoot, '.audit')
     });
 
-    const directNames = gateway.gatewayToolRuntimeRegistry.modelVisibleSpecs().map((tool) => tool.name);
-    for (const expected of ['tool_search', 'update_plan', 'computer', 'read', 'write', 'exec', 'apply_patch', 'request_permissions']) {
+    const directSpecs = gateway.gatewayToolRuntimeRegistry.modelVisibleSpecs();
+    const directNames = directSpecs.map((tool) => tool.name);
+    assert.deepEqual(directNames.sort(), ['apply_patch', 'exec', 'read', 'request_permissions', 'tool_search', 'update_plan', 'write'].sort());
+    for (const expected of ['tool_search', 'update_plan', 'read', 'write', 'exec', 'apply_patch', 'request_permissions']) {
         assert.ok(directNames.includes(expected), `${expected} should be a core direct tool`);
     }
-    for (const deferred of ['artifact_tools', 'artifact_query', 'github_pages', 'mcp_bridge', 'subagents']) {
+    for (const deferred of ['artifact_tools', 'artifact_query', 'github_pages', 'mcp_bridge', 'subagents', 'computer']) {
         assert.equal(directNames.includes(deferred), false, `${deferred} should be loaded through tool_search`);
     }
+    assert.ok(directSpecs.every((tool) => tool.strict === true), 'core direct tools should use strict schemas');
+    assert.deepEqual(directSpecs.find((tool) => tool.name === 'tool_search').parameters.required, ['query']);
+    assert.deepEqual(directSpecs.find((tool) => tool.name === 'exec').parameters.required, ['command']);
     assert.equal(directNames.includes('artifact_compute'), false, 'artifact_compute should stay hidden from model-facing tool surfaces');
 
     const initialSpecs = buildAgentDirectToolSpecs(gateway, {
         requestContext: { nativeDirectTools: true }
     });
     assert.equal(initialSpecs.some((tool) => tool.name === 'tool_search'), true);
+    assert.equal(initialSpecs.some((tool) => tool.name === 'subagents'), false);
     assert.equal(initialSpecs.some((tool) => tool.name === 'read_xlsx_workbook'), false);
 
     const searchResult = await gateway.executeGatewayToolSearch({
-        query: 'xlsx spreadsheet workbook',
+        query: 'subagent task',
         includeMcp: false,
         includeExternal: false,
         limit: 5
     });
-    assert.equal(searchResult.structuredContent.tools[0].id, 'artifact_tools');
+    assert.equal(searchResult.structuredContent.tools[0].id, 'subagents');
     assert.equal(searchResult.structuredContent.tools.some((tool) => tool.id === 'read_xlsx_workbook'), false);
 
     const nextSpecs = buildAgentDirectToolSpecs(gateway, {
@@ -432,7 +458,7 @@ test('AILIS Gateway exposes a small Responses-compatible core surface by default
             }
         }]
     });
-    assert.equal(nextSpecs.some((tool) => tool.name === 'artifact_tools'), true);
+    assert.equal(nextSpecs.some((tool) => tool.name === 'subagents'), true);
     assert.equal(nextSpecs.some((tool) => tool.name === 'read_xlsx_workbook'), false);
     assert.equal(nextSpecs.some((tool) => tool.name === 'tool_search'), false);
 
@@ -616,9 +642,7 @@ test('AILIS keeps raw tool_search specs hidden from model JSON but available for
         const gatewaySearch = await gateway.callTool({
             tool: 'tool_search',
             args: {
-                query: 'xlsx excel cell fill color',
-                includeMcp: false,
-                includeExternal: false,
+                query: 'subagent task',
                 limit: 5
             },
             context: {
@@ -783,6 +807,17 @@ test('AILIS tool_search returns strict direct MCP specs and native preflight blo
                     path: { type: 'string' }
                 }
             }
+        }),
+        createAilisDirectMcpToolSpec({
+            server: 'ailis_research',
+            tool: 'weak_lookup',
+            description: 'Weak schema tool should not be surfaced.',
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    query: { type: 'string' }
+                }
+            }
         })
     ];
 
@@ -794,6 +829,7 @@ test('AILIS tool_search returns strict direct MCP specs and native preflight blo
     const webSearch = searchResult.structuredContent.tools.find((tool) => tool.id === 'mcp__ailis_research__web_search');
     const webFetch = searchResult.structuredContent.tools.find((tool) => tool.id === 'mcp__ailis_research__web_fetch');
     const describeImage = searchResult.structuredContent.tools.find((tool) => tool.id === 'mcp__ailis_research__describe_image');
+    assert.equal(searchResult.structuredContent.tools.some((tool) => tool.id === 'mcp__ailis_research__weak_lookup'), false);
     assert.deepEqual(webSearch.spec.parameters.required, ['query']);
     assert.equal(webSearch.spec.parameters.additionalProperties, false);
     assert.deepEqual(webFetch.spec.parameters.required, ['url']);
@@ -964,29 +1000,8 @@ test('AILIS runtime budget preserves primary tool text beyond structured string 
     assert.equal(compacted.details.stdout.length < text.length, true);
 });
 
-test('AILIS tool routing ranks artifact_tools first for artifact-class tasks', () => {
-    const artifactTools = AILIS_RUNTIME_TOOL_DEFINITIONS
-        .filter((tool) => ['artifact_tools', 'artifact_query'].includes(tool.id))
-        .map((tool) => ({
-            id: tool.id,
-            type: 'runtime_tool',
-            exposure: tool.exposure,
-            spec: createAilisFunctionToolSpec(tool)
-        }));
-
-    const ranked = rankToolSearchResults(artifactTools, 'xlsx spreadsheet grid render artifact', 3);
-    assert.equal(ranked[0].id, 'artifact_tools');
-    assert.match(buildToolRoutingAdvice('xlsx spreadsheet artifact render', ranked), /artifact_tools/);
-});
-
-test('AILIS tool routing keeps artifact_tools ahead of generic artifact readers', () => {
+test('AILIS tool routing prefers strict MCP readers on the Codex-style default surface', () => {
     const entries = [
-        {
-            id: 'artifact_tools',
-            type: 'runtime_tool',
-            exposure: 'deferred',
-            spec: createAilisFunctionToolSpec(AILIS_RUNTIME_TOOL_DEFINITIONS.find((tool) => tool.id === 'artifact_tools'))
-        },
         ...[
             ['mcp__ailis_research__read_spreadsheet', 'Value-only pandas preview for simple CSV/XLSX tables. Does not preserve Excel fills/colors, styles, formulas, comments, or render layout.'],
             ['mcp__ailis_research__read_document', 'Read local Word DOCX documents and tables.'],
@@ -1003,6 +1018,8 @@ test('AILIS tool routing keeps artifact_tools ahead of generic artifact readers'
                 description,
                 parameters: {
                     type: 'object',
+                    required: ['path'],
+                    additionalProperties: false,
                     properties: {
                         path: { type: 'string' }
                     }
@@ -1011,31 +1028,21 @@ test('AILIS tool routing keeps artifact_tools ahead of generic artifact readers'
         }))
     ];
 
-    for (const query of [
-        'read xlsx excel cell color fill',
-        'local docx document attachment table',
-        'pptx presentation slide deck file',
-        'local pdf file extract page render',
-        'attached png image nonblank render'
+    for (const [query, expected] of [
+        ['read xlsx excel cell color fill', 'mcp__ailis_research__read_spreadsheet'],
+        ['local docx document attachment table', 'mcp__ailis_research__read_document'],
+        ['pptx presentation slide deck file', 'mcp__ailis_research__read_presentation'],
+        ['local pdf file extract page render', 'mcp__ailis_research__pdf_extract_text'],
+        ['attached png image semantic visual description', 'mcp__ailis_research__describe_image']
     ]) {
         const ranked = rankToolSearchResults(entries, query, 5);
-        assert.equal(ranked[0].id, 'artifact_tools', `${query} should route through artifact_tools first`);
-        assert.equal(
-            ranked.some((tool) => /read_spreadsheet|read_document|read_presentation|pdf_extract_text|describe_image/.test(tool.id)),
-            false,
-            `${query} should not expose value-only readers beside artifact_tools`
-        );
+        assert.equal(ranked[0].id, expected, `${query} should route through ${expected}`);
+        assert.doesNotMatch(buildToolRoutingAdvice(query, ranked), /artifact_tools/);
     }
 });
 
-test('AILIS tool routing still allows explicit value-only spreadsheet fallback by name', () => {
+test('AILIS tool routing still allows explicit spreadsheet reader by name', () => {
     const entries = [
-        {
-            id: 'artifact_tools',
-            type: 'runtime_tool',
-            exposure: 'deferred',
-            spec: createAilisFunctionToolSpec(AILIS_RUNTIME_TOOL_DEFINITIONS.find((tool) => tool.id === 'artifact_tools'))
-        },
         {
             id: 'mcp__ailis_research__read_spreadsheet',
             type: 'mcp_tool',
@@ -1047,6 +1054,8 @@ test('AILIS tool routing still allows explicit value-only spreadsheet fallback b
                 description: 'Value-only pandas preview for simple CSV/XLSX tables.',
                 parameters: {
                     type: 'object',
+                    required: ['path'],
+                    additionalProperties: false,
                     properties: {
                         path: { type: 'string' },
                         maxRows: { type: 'number' }

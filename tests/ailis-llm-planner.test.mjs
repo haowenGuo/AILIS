@@ -496,6 +496,102 @@ test('Persona orchestrator prompt stays in AILIS persona and only exposes subage
     }
 });
 
+test('Persona orchestrator stops after one TaskAgent handoff result', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-persona-handoff-once-'));
+    const llmServer = await createScriptedChatCompletionsServer(({ decisionCount }) => {
+        if (decisionCount === 1) {
+            return {
+                action: 'tool',
+                summary: '交给干净的 TaskAgent 执行。',
+                tool_call: {
+                    tool: 'subagents',
+                    args: {
+                        action: 'spawn',
+                        task: 'Solve the attached benchmark task and return the final answer.',
+                        wait: true
+                    }
+                }
+            };
+        }
+        return {
+            action: 'final',
+            final_answer: 'SHOULD_NOT_NEED_SECOND_LLM_CALL'
+        };
+    });
+    const gateway = new AILISGateway({
+        port: 0,
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit')
+    });
+    const subagentCalls = [];
+    const gatewayToolCalls = [];
+    const originalCallTool = gateway.callTool.bind(gateway);
+    gateway.callTool = async (request) => {
+        if (request?.tool === 'subagents') {
+            gatewayToolCalls.push({
+                timeoutMs: request.timeoutMs,
+                contextTimeoutMs: request.context?.timeoutMs,
+                waitTimeoutMs: request.args?.waitTimeoutMs
+            });
+        }
+        return originalCallTool(request);
+    };
+
+    try {
+        gateway.runtime.subagentExecutor = async ({ subagent, args, context }) => {
+            subagentCalls.push({ subagent, args, context });
+            return {
+                ok: true,
+                status: 'completed',
+                displayText: 'TaskAgent final answer: 42',
+                finalAnswer: '42'
+            };
+        };
+        const status = await gateway.start();
+        const result = await runAgent(status.url, {
+            sessionId: 'persona-handoff-once-test',
+            message: '请执行一个需要工具的任务',
+            agentLoop: 'llm',
+            llmSettings: {
+                provider: 'openai-compatible',
+                baseUrl: llmServer.url,
+                apiKey: 'test-key',
+                model: 'mock-persona-handoff',
+                temperature: 0,
+                timeoutMs: 10000
+            },
+            context: {
+                workspace: workspaceRoot,
+                agentLoop: 'llm',
+                directToolExecutor: true,
+                approved: true,
+                agentRole: 'persona_orchestrator'
+            }
+        });
+
+        assert.equal(result.body.ok, true, JSON.stringify(result.body));
+        assert.equal(result.body.planner, 'persona-taskagent-handoff');
+        assert.match(result.body.displayText, /TaskAgent final answer: 42/);
+        assert.equal(result.body.finalAnswer, '42');
+        assert.equal(llmServer.calls.length, 1);
+        assert.equal(subagentCalls.length, 1);
+        assert.equal(subagentCalls[0].args.wait, true);
+        assert.equal(subagentCalls[0].args.maxAgentSteps, 30);
+        assert.ok(subagentCalls[0].args.waitTimeoutMs >= 180000);
+        assert.equal(subagentCalls[0].context.cleanContext, true);
+        assert.equal(subagentCalls[0].context.contextMode, 'task_agent');
+        assert.equal(gatewayToolCalls.length, 1);
+        assert.ok(gatewayToolCalls[0].waitTimeoutMs >= 180000);
+        assert.ok(gatewayToolCalls[0].timeoutMs >= gatewayToolCalls[0].waitTimeoutMs + 5000);
+        assert.equal(gatewayToolCalls[0].contextTimeoutMs, gatewayToolCalls[0].timeoutMs);
+    } finally {
+        await gateway.stop();
+        await llmServer.close();
+        await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
+});
+
 test('AILIS Agent run can be interrupted while preserving transcript data', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-interrupt-test-'));
     const llmServer = await createDelayedChatCompletionsServer(5000);

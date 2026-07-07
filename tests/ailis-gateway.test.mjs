@@ -120,6 +120,7 @@ test('AILIS Gateway subagent task reuses parent LLM settings for TaskAgent runs'
             id: 'sub-1',
             runId: 'parent-run',
             sessionId: 'parent-session',
+            childRunId: 'child-run-request',
             childSessionId: 'child-session',
             label: 'TaskAgent',
             task: 'solve task'
@@ -136,7 +137,10 @@ test('AILIS Gateway subagent task reuses parent LLM settings for TaskAgent runs'
 
     assert.equal(result.ok, true);
     assert.equal(calls.length, 1);
+    assert.equal(calls[0].runId, 'child-run-request');
     assert.equal(calls[0].agentRole, 'task_agent');
+    assert.deepEqual(calls[0].messageHistory, []);
+    assert.equal(calls[0].context.cleanContext, true);
     assert.equal(calls[0].context.contextMode, 'task_agent');
     assert.equal(calls[0].maxAgentSteps, 7);
     assert.deepEqual(calls[0].llmSettings, llmSettings);
@@ -175,12 +179,12 @@ test('AILIS Gateway exposes health, tools, guarded tool calls, and audit', async
             method: 'POST',
             body: JSON.stringify({
                 tool: 'tool_search',
-                args: { query: 'computer file write', includeMcp: false, limit: 5 },
+                args: { query: 'subagent task', limit: 5 },
                 context: { workspace: workspaceRoot }
             })
         });
         assert.equal(searchTools.body.ok, true, searchTools.body.error);
-        assert.match(JSON.stringify(searchTools.body.result), /computer/);
+        assert.match(JSON.stringify(searchTools.body.result), /subagents/);
         assert.equal(Object.hasOwn(searchTools.body.result.details, 'discovery'), false);
         assert.equal(Object.hasOwn(searchTools.body.result.details, 'searched_web'), false);
         assert.equal(Object.hasOwn(searchTools.body.result.details, 'note'), false);
@@ -270,7 +274,7 @@ test('AILIS Gateway exposes health, tools, guarded tool calls, and audit', async
                         ].join(';')
                     ],
                     timeout: 8,
-                    maxPreviewChars: 1200
+                    maxOutputBytes: 1200
                 },
                 context: { workspace: workspaceRoot, approved: true }
             })
@@ -486,7 +490,7 @@ test('AILIS Gateway tool_search surfaces and executes external virtual direct to
             method: 'POST',
             body: JSON.stringify({
                 tool: 'tool_search',
-                args: { query: 'ClinicalTrials enrollment NCT API', includeMcp: false, limit: 5 },
+                args: { query: 'ClinicalTrials enrollment NCT API', limit: 5 },
                 context: { workspace: workspaceRoot }
             })
         });
@@ -511,7 +515,7 @@ test('AILIS Gateway tool_search surfaces and executes external virtual direct to
     }
 });
 
-test('AILIS Gateway tool_search ranks specific MCP artifact tools before web_search', async () => {
+test('AILIS Gateway tool_search ranks strict MCP readers before broad web_search', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-tool-routing-test-'));
     const gateway = new AILISGateway({
         port: 0,
@@ -528,6 +532,8 @@ test('AILIS Gateway tool_search ranks specific MCP artifact tools before web_sea
         description,
         inputSchema: {
             type: 'object',
+            required: ['path'],
+            additionalProperties: false,
             properties: {
                 path: { type: 'string' },
                 query: { type: 'string' },
@@ -545,6 +551,7 @@ test('AILIS Gateway tool_search ranks specific MCP artifact tools before web_sea
             mcpTool('web_search', 'Fallback broad public web search.'),
             mcpTool('read_presentation', 'Read PowerPoint PPTX slides.'),
             mcpTool('read_document', 'Read Word DOCX documents with paragraphs and tables.'),
+            mcpTool('read_spreadsheet', 'Read XLSX spreadsheets values.'),
             mcpTool('youtube_transcript', 'Read YouTube video transcripts.')
         ];
 
@@ -557,8 +564,8 @@ test('AILIS Gateway tool_search ranks specific MCP artifact tools before web_sea
         assert.equal(result.details.tools.length, 1);
         assert.equal(Object.hasOwn(result.details, 'discovery'), false);
         assert.equal(Object.hasOwn(result.details, 'searched_content'), false);
-        assert.equal(result.details.tools[0].id, 'artifact_tools');
-        assert.match(result.details.routing_advice, /artifact_tools/);
+        assert.equal(result.details.tools[0].id, 'mcp__ailis_research__read_presentation');
+        assert.doesNotMatch(result.details.routing_advice, /artifact_tools/);
 
         const docxResult = await gateway.executeGatewayToolSearch({
             query: 'DOCX word document extract text content',
@@ -567,20 +574,19 @@ test('AILIS Gateway tool_search ranks specific MCP artifact tools before web_sea
         });
 
         assert.equal(docxResult.details.tools.length, 1);
-        assert.equal(docxResult.details.tools[0].id, 'artifact_tools');
+        assert.equal(docxResult.details.tools[0].id, 'mcp__ailis_research__read_document');
         assert.notEqual(docxResult.details.tools[0].id, 'artifact_verifier');
-        assert.match(docxResult.details.routing_advice, /artifact_tools/);
+        assert.doesNotMatch(docxResult.details.routing_advice, /artifact_tools/);
 
         const xlsxResult = await gateway.executeGatewayToolSearch({
             query: 'attached xlsx spreadsheet cell colors fill formulas merged map',
             includeExternal: false,
-            includeMcp: false,
             limit: 3
         });
 
-        assert.equal(xlsxResult.details.tools[0].id, 'artifact_tools');
+        assert.equal(xlsxResult.details.tools[0].id, 'mcp__ailis_research__read_spreadsheet');
         assert.equal(xlsxResult.details.tools.some((tool) => tool.id === 'read_xlsx_workbook'), false);
-        assert.match(xlsxResult.details.routing_advice, /artifact_tools/);
+        assert.doesNotMatch(xlsxResult.details.routing_advice, /artifact_tools/);
 
         const artifactQueryResult = await gateway.executeGatewayToolSearch({
             query: 'artifact_query artifactId fullJsonPath payload range grid search',
@@ -589,9 +595,8 @@ test('AILIS Gateway tool_search ranks specific MCP artifact tools before web_sea
             limit: 3
         });
 
-        assert.ok(artifactQueryResult.details.tools.some((tool) => tool.id === 'artifact_query'));
-        assert.equal(artifactQueryResult.details.tools[0].id, 'artifact_query');
-        assert.match(artifactQueryResult.details.routing_advice, /artifact_query/);
+        assert.equal(artifactQueryResult.details.tools.some((tool) => tool.id === 'artifact_query'), false);
+        assert.doesNotMatch(artifactQueryResult.details.routing_advice, /artifact_query/);
 
         const artifactImportResult = await gateway.executeGatewayToolSearch({
             query: 'artifact_import ragflow lite table parser import local file chunks',
@@ -600,7 +605,7 @@ test('AILIS Gateway tool_search ranks specific MCP artifact tools before web_sea
             limit: 5
         });
 
-        assert.ok(artifactImportResult.details.tools.some((tool) => tool.id === 'artifact_import'));
+        assert.equal(artifactImportResult.details.tools.some((tool) => tool.id === 'artifact_import'), false);
     } finally {
         await gateway.stop();
         await fs.rm(workspaceRoot, { recursive: true, force: true });

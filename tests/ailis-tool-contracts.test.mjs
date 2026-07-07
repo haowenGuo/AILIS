@@ -286,5 +286,5 @@ test('AILIS tool contracts generate prompt and summary text from the same source
     assert.match(selfEvolutionPrompt, /分析并优化自己/);
 
     const subagentPrompt = getToolContractPromptText('subagents');
-    assert.match(subagentPrompt, /"maximum": 12/);
+    assert.match(subagentPrompt, /"maximum": 30/);
 });

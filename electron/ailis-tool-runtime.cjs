@@ -17,8 +17,7 @@ const {
 } = require('./ailis-mcp-adapter.cjs');
 const {
     buildToolRoutingAdvice,
-    rankToolSearchResults,
-    toolMatchesRoutingProfile
+    rankToolSearchResults
 } = require('./ailis-tool-routing.cjs');
 const {
     createDefaultArtifactToolsRuntime
@@ -213,10 +212,7 @@ function createToolSpec(definition = {}) {
 }
 
 function shouldIncludeDirectToolInSearch(entry, query, includeDirect) {
-    if (includeDirect || entry.exposure !== TOOL_EXPOSURE.DIRECT) {
-        return true;
-    }
-    return toolMatchesRoutingProfile(entry, query);
+    return includeDirect === true || entry.exposure !== TOOL_EXPOSURE.DIRECT;
 }
 
 class AILISRuntimeTool {
@@ -385,17 +381,19 @@ async function executeToolSearch(registry, args = {}) {
                 query,
                 limit,
                 timeoutMs: args.timeoutMs
-            })).map((spec) => createAilisDirectMcpToolSpec({
-                id: spec.id,
-                server: spec.server,
-                tool: spec.tool || spec.name,
-                name: spec.name,
-                title: spec.title,
-                description: spec.description || spec.title || '',
-                inputSchema: spec.inputSchema || spec.input_schema || spec.parameters || {},
-                schemaProperties: spec.schemaProperties || spec.schema_properties,
-                callPattern: spec.callPattern || spec.call_pattern
-            }));
+            }))
+                .map((spec) => createAilisDirectMcpToolSpec({
+                    id: spec.id,
+                    server: spec.server,
+                    tool: spec.tool || spec.name,
+                    name: spec.name,
+                    title: spec.title,
+                    description: spec.description || spec.title || '',
+                    inputSchema: spec.inputSchema || spec.input_schema || spec.parameters || {},
+                    schemaProperties: spec.schemaProperties || spec.schema_properties,
+                    callPattern: spec.callPattern || spec.call_pattern
+                }))
+                .filter((spec) => spec.callable !== false && spec.modelFacing !== false);
         } catch (error) {
             mcp = [{
                 type: 'mcp_tool_search_error',

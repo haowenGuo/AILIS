@@ -14,6 +14,8 @@ const {
 
 const DEFAULT_TOOL_OUTPUT_CHARS = 24000;
 const DEFAULT_THREAD_ITEM_PREVIEW_CHARS = 1200;
+const TOOL_SEARCH_OUTPUT_DESCRIPTION_CHARS = 220;
+const TOOL_SEARCH_OUTPUT_PROPERTIES_LIMIT = 32;
 
 function cloneJson(value) {
     if (value == null || typeof value !== 'object') {
@@ -164,6 +166,67 @@ function buildModelVisibleToolMetadata(toolOutput = {}) {
     ].filter(Boolean);
 }
 
+function firstObject(...values) {
+    return values.find((value) => value && typeof value === 'object' && !Array.isArray(value)) || {};
+}
+
+function normalizeStringList(values = [], limit = TOOL_SEARCH_OUTPUT_PROPERTIES_LIMIT) {
+    return (Array.isArray(values) ? values : [])
+        .map((entry) => normalizeText(entry))
+        .filter(Boolean)
+        .slice(0, limit);
+}
+
+function schemaForToolSearchResult(tool = {}) {
+    return firstObject(
+        tool.input_schema,
+        tool.inputSchema,
+        tool.parameters,
+        tool.schema,
+        tool.spec?.parameters,
+        tool.function?.parameters,
+        tool.modelFacing?.parameters,
+        tool.model_facing?.parameters,
+        tool.contract?.schema,
+        tool.contract?.inputSchema,
+        tool.contract?.input_schema
+    );
+}
+
+function compactToolSearchResultForHistory(tool = {}) {
+    const schema = schemaForToolSearchResult(tool);
+    const id = normalizeText(tool.id || tool.name || tool.spec?.name || tool.function?.name);
+    const name = normalizeText(tool.name || tool.spec?.name || tool.function?.name || id);
+    const properties = normalizeStringList(
+        Array.isArray(tool.schema_properties)
+            ? tool.schema_properties
+            : Object.keys(firstObject(schema.properties))
+    );
+    return {
+        id,
+        name,
+        server: normalizeText(tool.server || tool.provider || tool.namespace),
+        tool: normalizeText(tool.tool || tool.callable_name || name),
+        description: summarizeForModel(
+            normalizeText(
+                tool.description ||
+                    tool.spec?.description ||
+                    tool.modelFacing?.description ||
+                    tool.model_facing?.description ||
+                    tool.contract?.purpose ||
+                    tool.contract?.description ||
+                    tool.summary ||
+                    tool.title ||
+                    name
+            ),
+            TOOL_SEARCH_OUTPUT_DESCRIPTION_CHARS
+        ),
+        required: normalizeStringList(schema.required),
+        properties,
+        spec_ref: normalizeText(tool.spec_ref || tool.specRef || (id ? `tool_registry:${id}` : 'tool_registry:unknown'))
+    };
+}
+
 function toolOutputToResponseItems(toolOutput = {}, options = {}) {
     const toolName = normalizeText(toolOutput.toolName);
     if (!toolName) {
@@ -171,7 +234,9 @@ function toolOutputToResponseItems(toolOutput = {}, options = {}) {
     }
     const callId = canonicalCallId(toolOutput);
     if (toolName === 'tool_search') {
-        const tools = Array.isArray(toolOutput.details?.tools) ? toolOutput.details.tools : [];
+        const tools = Array.isArray(toolOutput.details?.tools)
+            ? toolOutput.details.tools.map(compactToolSearchResultForHistory)
+            : [];
         return [
             ResponseItem.toolSearchCall({
                 call_id: callId,

@@ -85,6 +85,8 @@ function closeObjectSchemas(schema = {}) {
         }
         if (typeof schema.additionalProperties !== 'boolean') {
             schema.additionalProperties = Object.keys(schema.properties).length ? false : true;
+        } else if (schema.additionalProperties === true && Object.keys(schema.properties).length) {
+            schema.additionalProperties = false;
         }
         ensureRequired(schema, []);
         for (const child of Object.values(schema.properties)) {
@@ -153,6 +155,57 @@ function enhanceAilisMcpToolSchema({ tool = '', inputSchema = {} } = {}) {
         tool: normalizedTool,
         inputSchema: schema
     })));
+}
+
+function assessMcpToolSchemaStrength(schema = {}) {
+    if (!schema || typeof schema !== 'object' || Array.isArray(schema)) {
+        return {
+            callable: false,
+            reason: 'schema_not_object'
+        };
+    }
+    if (schema.type !== 'object') {
+        return {
+            callable: false,
+            reason: 'schema_not_object_type'
+        };
+    }
+    const properties = schema.properties && typeof schema.properties === 'object' && !Array.isArray(schema.properties)
+        ? schema.properties
+        : {};
+    const propertyNames = Object.keys(properties);
+    if (!propertyNames.length) {
+        return {
+            callable: false,
+            reason: 'schema_has_no_properties'
+        };
+    }
+    const required = Array.isArray(schema.required)
+        ? schema.required.filter((entry) => typeof entry === 'string' && entry)
+        : [];
+    if (!required.length) {
+        return {
+            callable: false,
+            reason: 'schema_has_no_required_fields'
+        };
+    }
+    const missingRequired = required.filter((field) => !Object.prototype.hasOwnProperty.call(properties, field));
+    if (missingRequired.length) {
+        return {
+            callable: false,
+            reason: `required_fields_missing_from_properties:${missingRequired.join(',')}`
+        };
+    }
+    if (schema.additionalProperties !== false) {
+        return {
+            callable: false,
+            reason: 'schema_allows_additional_properties'
+        };
+    }
+    return {
+        callable: true,
+        reason: 'strict_schema'
+    };
 }
 
 function buildAilisMcpToolCallArgs({ tool = '', schemaProperties = [], inputSchema = {} } = {}) {
@@ -276,6 +329,7 @@ function createAilisDirectMcpToolSpec({ id, server, tool, name, title, descripti
         tool: normalizedTool,
         inputSchema: inputSchema || {}
     });
+    const schemaAssessment = assessMcpToolSchemaStrength(enhancedSchema);
     const addendum = Array.isArray(descriptionAddendum) && descriptionAddendum.length
         ? [...descriptionAddendum]
         : buildAilisMcpToolDescriptionAddendum({ tool: normalizedTool, inputSchema: enhancedSchema });
@@ -286,7 +340,8 @@ function createAilisDirectMcpToolSpec({ id, server, tool, name, title, descripti
         type: 'function',
         name: modelId,
         description: truncateMiddleText([normalizeString(description), ...addendum].filter(Boolean).join(' '), 1200),
-        parameters: enhancedSchema
+        parameters: enhancedSchema,
+        ...(schemaAssessment.callable ? { strict: true } : {})
     };
     return {
         id: modelId,
@@ -300,6 +355,10 @@ function createAilisDirectMcpToolSpec({ id, server, tool, name, title, descripti
         name: `${namespace}${callableName}`,
         display_name: normalizeString(name || tool) || `${normalizedServer}.${normalizedTool}`,
         description: modelSpec.description,
+        callable: schemaAssessment.callable,
+        modelFacing: schemaAssessment.callable,
+        schema_status: schemaAssessment.callable ? 'strict' : 'weak_schema',
+        weak_schema_reason: schemaAssessment.callable ? '' : schemaAssessment.reason,
         input_schema: enhancedSchema,
         schema_properties: properties,
         spec: modelSpec,
@@ -330,6 +389,7 @@ function normalizeAilisMcpCallArgs(args = {}, options = {}) {
 module.exports = {
     buildAilisMcpToolCallArgs,
     buildAilisMcpToolDescriptionAddendum,
+    assessMcpToolSchemaStrength,
     ailisMcpNamespaceForServer,
     ailisMcpToolId,
     createAilisDirectMcpToolSpec,

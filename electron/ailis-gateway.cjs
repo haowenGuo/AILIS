@@ -55,12 +55,14 @@ const {
 } = require('./ailis-tool-acquisition-gateway.cjs');
 const {
     buildToolRoutingAdvice,
-    rankToolSearchResults,
-    toolMatchesRoutingProfile
+    rankToolSearchResults
 } = require('./ailis-tool-routing.cjs');
 const {
     createAilisDirectMcpToolSpec
 } = require('./ailis-mcp-adapter.cjs');
+const {
+    isExtendedAilisToolSurfaceEnabled
+} = require('./ailis-tool-specs.cjs');
 
 const PROJECT_ROOT = path.resolve(__dirname, '..');
 const DEFAULT_PORT = Number(process.env.AILIS_GATEWAY_PORT || 19777);
@@ -122,12 +124,14 @@ const LOSSLESS_EVENT_TYPES = new Set([
 ]);
 const LOSSLESS_EVENT_PREFIXES = ['approval.', 'subagent.', 'mcp.', 'agent.'];
 const CODEX_STYLE_DIRECT_LOCAL_TOOL_IDS = new Set([
-    COMPUTER_TOOL_ID,
     'read',
     'write',
     'exec',
     'apply_patch'
 ]);
+const EXTENDED_LOCAL_TOOL_EXPOSURE = isExtendedAilisToolSurfaceEnabled()
+    ? TOOL_EXPOSURE.DEFERRED
+    : TOOL_EXPOSURE.HIDDEN;
 const AILIS_LOCAL_TOOL_DEFINITIONS = Object.freeze([
     Object.freeze({
         id: EMAIL_TOOL_ID,
@@ -242,10 +246,7 @@ function loadEmailToolModule() {
 }
 
 function shouldIncludeDirectToolInSearch(entry, query, includeDirect) {
-    if (includeDirect || entry.exposure !== TOOL_EXPOSURE.DIRECT) {
-        return true;
-    }
-    return toolMatchesRoutingProfile(entry, query);
+    return includeDirect === true || entry.exposure !== TOOL_EXPOSURE.DIRECT;
 }
 
 function safeListEmailProviderDetails() {
@@ -800,7 +801,7 @@ class AILISGateway extends EventEmitter {
                 ...definition,
                 exposure: CODEX_STYLE_DIRECT_LOCAL_TOOL_IDS.has(definition.id)
                     ? TOOL_EXPOSURE.DIRECT
-                    : TOOL_EXPOSURE.DEFERRED
+                    : EXTENDED_LOCAL_TOOL_EXPOSURE
             })),
             ...['read', 'write', 'exec', 'apply_patch'].map((id) => {
                 const toolSurfaceDefinition = OPENCLAW_CORE_TOOL_DEFINITIONS.find((tool) => tool.id === id) || {};
@@ -866,17 +867,19 @@ class AILISGateway extends EventEmitter {
                     query,
                     limit,
                     timeoutMs: args.timeoutMs
-                })).map((spec) => createAilisDirectMcpToolSpec({
-                    id: spec.id,
-                    server: spec.server,
-                    tool: spec.tool || spec.name,
-                    name: spec.name,
-                    title: spec.title,
-                    description: spec.description || spec.title || '',
-                    inputSchema: spec.inputSchema || spec.input_schema || spec.parameters || {},
-                    schemaProperties: spec.schemaProperties || spec.schema_properties,
-                    callPattern: spec.callPattern || spec.call_pattern
-                }));
+                }))
+                    .map((spec) => createAilisDirectMcpToolSpec({
+                        id: spec.id,
+                        server: spec.server,
+                        tool: spec.tool || spec.name,
+                        name: spec.name,
+                        title: spec.title,
+                        description: spec.description || spec.title || '',
+                        inputSchema: spec.inputSchema || spec.input_schema || spec.parameters || {},
+                        schemaProperties: spec.schemaProperties || spec.schema_properties,
+                        callPattern: spec.callPattern || spec.call_pattern
+                    }))
+                    .filter((spec) => spec.callable !== false && spec.modelFacing !== false);
             } catch (error) {
                 mcp = [{
                     type: 'mcp_tool_search_error',
@@ -1910,7 +1913,7 @@ class AILISGateway extends EventEmitter {
                 });
             }
             const result = await withTimeout(
-                Number(context.timeoutMs || request.timeoutMs || TOOL_CALL_TIMEOUT_MS),
+                Number(request.timeoutMs || context.timeoutMs || TOOL_CALL_TIMEOUT_MS),
                 () => this.callAgentRuntimeTool({ callId, toolId, args, context, workspaceDir })
             );
             const guardedResult = this.runtime.guardToolResult(result, { toolId, callId });
@@ -2117,12 +2120,14 @@ class AILISGateway extends EventEmitter {
             parentSessionId: subagent?.sessionId,
             subagentId: subagent?.id,
             subagentLabel: subagent?.label,
+            runId: subagent?.childRunId || context.runId,
             sessionId: subagent?.childSessionId || context.sessionId,
             sessionKey: subagent?.childSessionId || context.sessionKey,
             agentLoop: 'llm',
             planner: 'llm',
             agentRole: 'task_agent',
             contextMode: 'task_agent',
+            cleanContext: true,
             maxAgentSteps: Number(args.maxAgentSteps || context.maxAgentSteps || 30)
         });
         await onEvent?.({
@@ -2135,7 +2140,9 @@ class AILISGateway extends EventEmitter {
             }
         });
         const runPromise = this.ensureAgentRunner().runMessage({
+            runId: subagent?.childRunId,
             message: task,
+            messageHistory: [],
             sessionId: subagent?.childSessionId || context.sessionId || context.sessionKey,
             agentLoop: 'llm',
             planner: 'llm',

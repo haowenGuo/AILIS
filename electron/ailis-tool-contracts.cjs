@@ -575,7 +575,7 @@ const TOOL_CONTRACTS = Object.freeze({
                 encoding: stringSchema(),
                 maxBytes: numberSchema({ minimum: 1, maximum: 5 * 1024 * 1024 })
             },
-            additionalProperties: true
+            additionalProperties: false
         })
     }),
     write: Object.freeze({
@@ -594,7 +594,7 @@ const TOOL_CONTRACTS = Object.freeze({
                 content: stringSchema(),
                 encoding: stringSchema()
             },
-            additionalProperties: true
+            additionalProperties: false
         })
     }),
     edit: Object.freeze({
@@ -631,7 +631,7 @@ const TOOL_CONTRACTS = Object.freeze({
             properties: {
                 input: stringSchema({ minLength: 1 })
             },
-            additionalProperties: true
+            additionalProperties: false
         })
     }),
     exec: Object.freeze({
@@ -644,14 +644,11 @@ const TOOL_CONTRACTS = Object.freeze({
         returns: defaultReturns(),
         errors: defaultErrors(['exec_blocked', 'exec_failed', 'shell_access_disabled']),
         schema: makeObjectSchema({
+            required: ['command'],
             properties: {
                 command: stringSchema({
                     minLength: 1,
                     description: 'Command line to run in the current runtime_environment shell. Use for existing scripts, tests, builds, diagnostics, and short one-shot commands.'
-                }),
-                cmd: stringSchema({
-                    minLength: 1,
-                    description: 'Alias for command.'
                 }),
                 args: arraySchema(stringSchema(), {
                     description: 'Optional argv list for direct-spawn style execution when supported; prefer args for complex paths or parameters to reduce shell quoting issues.'
@@ -676,11 +673,11 @@ const TOOL_CONTRACTS = Object.freeze({
                     description: 'Additional environment variables for this command.'
                 })
             },
-            additionalProperties: true
+            additionalProperties: false
         }),
         customValidate(args = {}) {
-            if (!normalizeString(args.command || args.cmd)) {
-                return ['exec requires command or cmd'];
+            if (!normalizeString(args.command)) {
+                return ['exec requires command'];
             }
             return [];
         }
@@ -828,28 +825,23 @@ const TOOL_CONTRACTS = Object.freeze({
         returns: defaultReturns(),
         errors: defaultErrors(['empty_query']),
         schema: makeObjectSchema({
+            required: ['query'],
             properties: {
                 query: stringSchema({
                     minLength: 1,
                     description: 'Search query for deferred tools.'
                 }),
-                q: stringSchema({
-                    minLength: 1,
-                    description: 'Alias for query.'
-                }),
                 limit: numberSchema({
                     minimum: 1,
                     maximum: 50,
                     description: 'Maximum number of tools to return.'
-                }),
-                includeDeferred: booleanSchema(),
-                includeMcp: booleanSchema()
+                })
             },
-            additionalProperties: true
+            additionalProperties: false
         }),
         customValidate(args = {}) {
-            if (!normalizeString(args.query || args.q)) {
-                return ['tool_search requires query/q'];
+            if (!normalizeString(args.query)) {
+                return ['tool_search requires query'];
             }
             return [];
         }

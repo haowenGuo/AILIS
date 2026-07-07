@@ -98,7 +98,84 @@ test('tool_search step uses tool_search_call and tool_search_output item names',
     assert.equal(items.length, 2);
     assert.equal(items[0].type, 'tool_search_call');
     assert.equal(items[1].type, 'tool_search_output');
-    assert.deepEqual(items[1].tools, [{ name: 'artifact_tools' }]);
+    assert.deepEqual(items[1].tools, [{
+        id: 'artifact_tools',
+        name: 'artifact_tools',
+        server: '',
+        tool: 'artifact_tools',
+        description: 'artifact_tools',
+        required: [],
+        properties: [],
+        spec_ref: 'tool_registry:artifact_tools'
+    }]);
+});
+
+test('tool_search output keeps only compact tool index fields in model history', () => {
+    const items = toolOutputToModelInputItems({
+        id: 'search-compact-1',
+        tool: 'tool_search',
+        args: { query: 'youtube video analysis' },
+        response: {
+            ok: true,
+            status: 'completed',
+            result: {
+                structuredContent: {
+                    tools: [{
+                        id: 'mcp__ailis_research__web_research',
+                        name: 'mcp__ailis_research__web_research',
+                        server: 'ailis_research',
+                        tool: 'web_research',
+                        description: 'Search the web and return structured evidence. '.repeat(20),
+                        input_schema: {
+                            type: 'object',
+                            required: ['query'],
+                            properties: {
+                                query: { type: 'string', description: 'Search query. '.repeat(30) },
+                                maxResults: { type: 'number', description: 'Maximum results.' },
+                                timeoutMs: { type: 'number', description: 'Timeout.' }
+                            }
+                        },
+                        schema_properties: ['query', 'maxResults', 'timeoutMs'],
+                        spec: {
+                            type: 'function',
+                            name: 'mcp__ailis_research__web_research',
+                            description: 'Duplicated model-facing function spec.',
+                            parameters: {
+                                type: 'object',
+                                required: ['query'],
+                                properties: {
+                                    query: { type: 'string', description: 'Duplicated query schema.' }
+                                }
+                            }
+                        },
+                        call_pattern: {
+                            tool: 'mcp__ailis_research__web_research',
+                            args: { query: '<query>', maxResults: '<maxResults>', timeoutMs: '<timeoutMs>' }
+                        }
+                    }]
+                }
+            }
+        }
+    });
+
+    const [tool] = items[1].tools;
+    assert.deepEqual(Object.keys(tool), [
+        'id',
+        'name',
+        'server',
+        'tool',
+        'description',
+        'required',
+        'properties',
+        'spec_ref'
+    ]);
+    assert.deepEqual(tool.required, ['query']);
+    assert.deepEqual(tool.properties, ['query', 'maxResults', 'timeoutMs']);
+    assert.equal(tool.spec_ref, 'tool_registry:mcp__ailis_research__web_research');
+    assert.equal(Object.hasOwn(tool, 'input_schema'), false);
+    assert.equal(Object.hasOwn(tool, 'spec'), false);
+    assert.equal(Object.hasOwn(tool, 'call_pattern'), false);
+    assert.ok(JSON.stringify(items[1]).length < 900);
 });
 
 test('tool_search preserves provider reasoning metadata for chat provider round-trip', () => {

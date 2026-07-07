@@ -220,7 +220,8 @@ test('ToolExecutor executes one step and lets AgentRunner decorate the result', 
         toolContext: {
             workspace: 'F:/repo',
             sessionKey: 'session_1',
-            approved: true
+            approved: true,
+            timeoutMs: 90000
         },
         request: { timeoutMs: 5000 },
         iteration: 1,
@@ -242,6 +243,8 @@ test('ToolExecutor executes one step and lets AgentRunner decorate the result', 
     assert.deepEqual(result.evidenceArtifacts, [{ id: 'ev_1' }]);
     assert.equal(calls.length, 1);
     assert.equal(calls[0].tool, 'read');
+    assert.equal(calls[0].timeoutMs, 5000);
+    assert.equal(calls[0].context.timeoutMs, 90000);
     assert.equal(calls[0].context.runId, 'run_1');
     assert.equal(calls[0].context.sessionId, 'session_1');
     assert.equal(calls[0].context.iteration, 1);
