@@ -483,6 +483,7 @@ test('Persona orchestrator prompt stays in AILIS persona and only exposes subage
         assert.doesNotMatch(llmServer.calls[0].system, /AILIS TaskAgent|coding agent running in AILIS/);
         assert.match(llmServer.calls[0].system, /可爱的虚拟助手，名字固定为AILIS/);
         assert.match(llmServer.calls[0].system, /关系表达协议/);
+        assert.match(llmServer.calls[0].system, /If the current user message is a task execution request/);
         const toolNames = (llmServer.calls[0].payload.tools || []).map((tool) => tool.function?.name || tool.name);
         assert.deepEqual(toolNames, ['subagents']);
         const contextPayload = parseModelContextPayload(llmServer.calls[0]);

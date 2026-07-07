@@ -97,6 +97,21 @@ function conversationToResponseItems(messageHistory = [], options = {}) {
         .filter(Boolean);
 }
 
+function stripTrailingDuplicateUserMessage(messageHistory = [], message = '') {
+    const history = Array.isArray(messageHistory) ? messageHistory : [];
+    const currentMessage = normalizeText(message);
+    if (!history.length || !currentMessage) {
+        return history;
+    }
+    const latestEntry = history[history.length - 1] || {};
+    const latestRole = latestEntry.role === 'assistant' ? 'assistant' : 'user';
+    const latestText = normalizeText(latestEntry.content || latestEntry.text || latestEntry.message || '');
+    if (latestRole === 'user' && latestText === currentMessage) {
+        return history.slice(0, -1);
+    }
+    return history;
+}
+
 function buildContextMessage({
     memoryContext = '',
     fileAttachments = [],
@@ -166,7 +181,8 @@ function buildModelInputContextManager({
     toolOutputChars = 24000
 } = {}) {
     const history = new ContextManager({ toolOutputChars });
-    history.recordItems(conversationToResponseItems(messageHistory));
+    const priorMessageHistory = stripTrailingDuplicateUserMessage(messageHistory, message);
+    history.recordItems(conversationToResponseItems(priorMessageHistory));
     const contextMessage = buildContextMessage({
         memoryContext,
         fileAttachments,

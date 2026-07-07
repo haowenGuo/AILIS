@@ -234,6 +234,28 @@ test('buildModelInput keeps user message and prior tool observations in one orde
     assert.equal(input[2].type, 'function_call_output');
 });
 
+test('buildModelInput drops trailing duplicate current user message from history', () => {
+    const input = buildModelInput({
+        message: 'Solve this GAIA task with a Python verifier.',
+        messageHistory: [
+            { role: 'user', content: '你好呀' },
+            { role: 'assistant', content: '你好，我在。' },
+            { role: 'user', content: 'Solve this GAIA task with a Python verifier.' }
+        ],
+        memoryContext: 'Project memory should sit before the current user task.'
+    });
+    const texts = input
+        .filter((item) => item.type === 'message')
+        .map((item) => item.content?.[0]?.text || '');
+
+    assert.equal(
+        texts.filter((text) => text === 'Solve this GAIA task with a Python verifier.').length,
+        1
+    );
+    assert.match(texts.at(-2), /Project memory/);
+    assert.equal(texts.at(-1), 'Solve this GAIA task with a Python verifier.');
+});
+
 test('responseItemsToChatMessages preserves native tool call/output pairing for chat providers', () => {
     const messages = responseItemsToChatMessages({
         instructions: 'base instructions',
