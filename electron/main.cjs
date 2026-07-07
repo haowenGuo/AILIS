@@ -46,6 +46,7 @@ const {
 } = require('./desktop-llm-provider.cjs');
 const { searchVllmModelCatalog } = require('./vllm-model-catalog.cjs');
 const { searchOllamaModelCatalog } = require('./ollama-model-catalog.cjs');
+const { RuntimeAssetManager } = require('./runtime-asset-manager.cjs');
 const {
     VllmLocalDeployer,
     inspectDownloadTarget
@@ -337,6 +338,7 @@ let voiceRuntimeBootstrap = null;
 let vllmLocalDeployer = null;
 let ollamaLocalRuntime = null;
 let assetPackRuntime = null;
+let runtimeAssetManager = null;
 let assistantGateway = null;
 let agentRuntimeSupervisor = null;
 let ailisGateway = null;
@@ -978,6 +980,15 @@ function getAssetPackRuntime() {
         });
     }
     return assetPackRuntime;
+}
+
+function getRuntimeAssetManager() {
+    if (!runtimeAssetManager) {
+        runtimeAssetManager = new RuntimeAssetManager({
+            projectRoot: getProjectRoot()
+        });
+    }
+    return runtimeAssetManager;
 }
 
 async function bootstrapVoiceRuntime(payload = {}) {
@@ -4744,6 +4755,38 @@ async function chooseVoiceRuntimeRoot() {
     };
 }
 
+async function chooseRuntimeAssetMigrationRoot(payload = {}) {
+    const assetId = String(payload?.assetId || '').trim();
+    const manager = getRuntimeAssetManager();
+    const definition = manager.getDefinition(assetId);
+    const roots = manager.getRoots();
+    const sourcePath = definition ? manager.resolveAssetPath(definition) : '';
+    const recommendedRoot = definition
+        ? roots.recommended[definition.preferredRoot || 'runtimes'] || roots.recommended.runtimes
+        : roots.recommended.runtimes;
+    const defaultPath = sourcePath
+        ? path.dirname(path.join(recommendedRoot, path.basename(sourcePath)))
+        : recommendedRoot;
+    const result = await dialog.showOpenDialog(controlWindow || BrowserWindow.getFocusedWindow() || petWindow, {
+        title: '选择运行时资产迁移目录',
+        defaultPath,
+        properties: ['openDirectory', 'createDirectory']
+    });
+    if (result.canceled || !result.filePaths?.[0]) {
+        return {
+            ok: false,
+            canceled: true
+        };
+    }
+    const targetRoot = path.resolve(result.filePaths[0]);
+    return {
+        ok: true,
+        path: targetRoot,
+        targetRoot,
+        plan: assetId ? await getRuntimeAssetManager().planMigration(assetId, targetRoot) : null
+    };
+}
+
 async function describeVllmLocalModelPath(modelPath) {
     const normalizedPath = String(modelPath || '').trim();
     const result = {
@@ -5003,6 +5046,26 @@ function registerIpc() {
     ipcMain.handle('ailis:runtime-components-install', async (_event, payload = {}) =>
         installRuntimeComponents(payload || {})
     );
+    ipcMain.handle('ailis:runtime-assets-scan', async () =>
+        getRuntimeAssetManager().scan()
+    );
+    ipcMain.handle('ailis:runtime-assets-delete', async (_event, payload = {}) =>
+        getRuntimeAssetManager().deleteAsset(payload?.assetId || payload?.id || '', payload || {})
+    );
+    ipcMain.handle('ailis:runtime-assets-choose-migration-root', async (_event, payload = {}) =>
+        chooseRuntimeAssetMigrationRoot(payload || {})
+    );
+    ipcMain.handle('ailis:runtime-assets-migrate', async (_event, payload = {}) => {
+        const result = await getRuntimeAssetManager().migrateAsset(
+            payload?.assetId || payload?.id || '',
+            payload?.targetRoot || payload?.path || '',
+            payload || {}
+        );
+        if (result?.preferencePatch && Object.keys(result.preferencePatch).length) {
+            applyPreferencesPatch(result.preferencePatch);
+        }
+        return result;
+    });
     ipcMain.handle('ailis:set-pet-dialogue-expanded', (_event, payload = {}) =>
         setPetDialogueWindowExpanded(
             Boolean(payload.expanded),

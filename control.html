@@ -1608,6 +1608,77 @@
             line-height: 1.5;
         }
 
+        .runtime-asset-list {
+            display: grid;
+            gap: 10px;
+        }
+
+        .runtime-asset-card {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: 12px;
+            padding: 13px;
+            border: 1px solid rgba(58, 47, 35, 0.1);
+            border-radius: 16px;
+            background: rgba(255, 255, 255, 0.66);
+        }
+
+        .runtime-asset-card.is-low {
+            border-color: rgba(14, 128, 106, 0.18);
+        }
+
+        .runtime-asset-card.is-medium {
+            border-color: rgba(185, 144, 63, 0.26);
+            background: rgba(255, 248, 230, 0.54);
+        }
+
+        .runtime-asset-card.is-high {
+            border-color: rgba(181, 87, 49, 0.24);
+            background: rgba(181, 87, 49, 0.07);
+        }
+
+        .runtime-asset-main {
+            min-width: 0;
+        }
+
+        .runtime-asset-title {
+            color: #2f2a25;
+            font-size: 14px;
+            font-weight: 950;
+        }
+
+        .runtime-asset-meta,
+        .runtime-asset-path {
+            margin-top: 5px;
+            color: #70675d;
+            font-size: 11px;
+            font-weight: 750;
+            line-height: 1.45;
+        }
+
+        .runtime-asset-path {
+            overflow-wrap: anywhere;
+            font-family: "Cascadia Mono", "Consolas", monospace;
+        }
+
+        .runtime-asset-actions {
+            display: flex;
+            flex-wrap: wrap;
+            align-content: start;
+            justify-content: end;
+            gap: 8px;
+        }
+
+        .runtime-asset-empty {
+            padding: 14px;
+            border: 1px dashed rgba(58, 47, 35, 0.16);
+            border-radius: 16px;
+            color: #70675d;
+            font-size: 12px;
+            font-weight: 750;
+            line-height: 1.6;
+        }
+
         .runtime-section {
             display: grid;
             gap: 8px;
@@ -2776,6 +2847,23 @@
                                 <div class="field-help" id="memory-status-text">记忆状态读取中...</div>
                                 <div class="field-help" id="memory-path-text"></div>
                                 <div class="memory-list" id="memory-block-list"></div>
+                            </div>
+
+                            <div class="field local-voice-runtime-panel">
+                                <div class="runtime-header">
+                                    <div>
+                                        <div class="runtime-title">运行时资产管理</div>
+                                        <div class="runtime-copy">统一扫描、迁移和清理 models、.ailis-runtime、build-cache 中的可重建资产；不会自动删除任何文件。</div>
+                                    </div>
+                                    <div class="field-actions">
+                                        <button id="runtime-assets-scan-btn" class="ghost-btn" type="button">扫描资产</button>
+                                    </div>
+                                </div>
+                                <div id="runtime-assets-summary" class="runtime-diagnostics">
+                                    点击“扫描资产”后查看本地运行时体积和可清理项。
+                                </div>
+                                <div class="field-help" id="runtime-assets-status"></div>
+                                <div id="runtime-assets-list" class="runtime-asset-list"></div>
                             </div>
                         </div>
                     </details>

@@ -230,7 +230,11 @@ const elements = {
     runtimeComponentsLog: document.getElementById('runtime-components-log'),
     runtimeComponentsPlan: document.getElementById('runtime-components-plan'),
     runtimeComponentsRefreshBtn: document.getElementById('runtime-components-refresh-btn'),
-    runtimeComponentsStatus: document.getElementById('runtime-components-status')
+    runtimeComponentsStatus: document.getElementById('runtime-components-status'),
+    runtimeAssetsList: document.getElementById('runtime-assets-list'),
+    runtimeAssetsScanBtn: document.getElementById('runtime-assets-scan-btn'),
+    runtimeAssetsStatus: document.getElementById('runtime-assets-status'),
+    runtimeAssetsSummary: document.getElementById('runtime-assets-summary')
 };
 
 const CONTROL_PAGE_ORDER = Object.freeze(['overview', 'appearance', 'agent', 'model', 'voice', 'advanced']);
@@ -1038,6 +1042,190 @@ async function installSelectedRuntimeComponents() {
     } finally {
         stopRuntimeComponentsPolling();
         await refreshRuntimeComponentsStatus({ silent: true });
+    }
+}
+
+function getRuntimeAssetRiskLabel(risk = '') {
+    if (risk === 'high') {
+        return '高风险';
+    }
+    if (risk === 'medium') {
+        return '中风险';
+    }
+    return '低风险';
+}
+
+function getRuntimeAssetActionText(action = '') {
+    const labels = {
+        not_installed: '未安装',
+        delete_if_not_building_or_evaluating: '不用构建/评测时可清理',
+        keep_or_migrate_after_confirming_feature_disabled: '确认功能不用后再迁移或删除',
+        migrate_or_delete_when_not_in_use: '不用时可迁移或删除'
+    };
+    return labels[action] || action || '按需处理';
+}
+
+function renderRuntimeAssets(scan = {}) {
+    if (!elements.runtimeAssetsSummary || !elements.runtimeAssetsList) {
+        return;
+    }
+    const assets = Array.isArray(scan.assets) ? scan.assets : [];
+    const totals = scan.totals || {};
+    elements.runtimeAssetsSummary.innerHTML = '';
+    elements.runtimeAssetsSummary.className = 'runtime-diagnostics';
+    const outcome = createRuntimeElement('div', 'runtime-outcome is-ready');
+    outcome.appendChild(createRuntimeElement('div', 'runtime-outcome-title', assets.length
+        ? `已扫描 ${totals.existingCount || 0}/${totals.assetCount || assets.length} 个运行时资产`
+        : '尚未扫描运行时资产'));
+    outcome.appendChild(createRuntimeElement('div', 'runtime-outcome-copy', assets.length
+        ? `总占用 ${formatBytesCompact(totals.totalBytes) || '0B'}；低/中风险可回收约 ${formatBytesCompact(totals.reclaimableBytes) || '0B'}。推荐外置目录：${compactPath(scan.roots?.recommended?.runtimes || '')}`
+        : '扫描只会访问 AILIS 已登记的运行时目录，不会扫描整块磁盘。'));
+    elements.runtimeAssetsSummary.appendChild(outcome);
+
+    elements.runtimeAssetsList.innerHTML = '';
+    const existingAssets = assets.filter((asset) => asset.exists);
+    if (!existingAssets.length) {
+        elements.runtimeAssetsList.appendChild(createRuntimeElement(
+            'div',
+            'runtime-asset-empty',
+            assets.length ? '未发现已安装的运行时资产。' : '点击“扫描资产”后会在这里显示可管理目录。'
+        ));
+        return;
+    }
+
+    for (const asset of existingAssets) {
+        const card = createRuntimeElement('div', `runtime-asset-card is-${asset.risk || 'medium'}`);
+        const main = createRuntimeElement('div', 'runtime-asset-main');
+        main.appendChild(createRuntimeElement('div', 'runtime-asset-title', asset.label || asset.id));
+        main.appendChild(createRuntimeElement('div', 'runtime-asset-meta', [
+            formatBytesCompact(asset.bytes) || '0B',
+            asset.category,
+            getRuntimeAssetRiskLabel(asset.risk),
+            getRuntimeAssetActionText(asset.recommendedAction)
+        ].filter(Boolean).join(' · ')));
+        main.appendChild(createRuntimeElement('div', 'runtime-asset-path', asset.path || ''));
+        if (asset.description) {
+            main.appendChild(createRuntimeElement('div', 'runtime-asset-meta', asset.description));
+        }
+        if (asset.migratable && asset.recommendedPath) {
+            main.appendChild(createRuntimeElement('div', 'runtime-asset-meta', `建议迁移到：${compactPath(asset.recommendedPath)}`));
+        }
+        card.appendChild(main);
+
+        const actions = createRuntimeElement('div', 'runtime-asset-actions');
+        const migrateButton = createRuntimeElement('button', 'ghost-btn', '迁移');
+        migrateButton.type = 'button';
+        migrateButton.disabled = !asset.migratable;
+        migrateButton.addEventListener('click', () => {
+            void migrateRuntimeAsset(asset.id);
+        });
+        actions.appendChild(migrateButton);
+
+        const deleteButton = createRuntimeElement('button', 'danger-btn', '删除');
+        deleteButton.type = 'button';
+        deleteButton.disabled = !asset.deletable;
+        deleteButton.addEventListener('click', () => {
+            void deleteRuntimeAsset(asset);
+        });
+        actions.appendChild(deleteButton);
+        card.appendChild(actions);
+        elements.runtimeAssetsList.appendChild(card);
+    }
+}
+
+async function refreshRuntimeAssets() {
+    if (!window.ailisDesktop?.runtimeAssets?.scan) {
+        setStatus('当前环境不支持运行时资产管理。');
+        return;
+    }
+    if (elements.runtimeAssetsScanBtn) {
+        elements.runtimeAssetsScanBtn.disabled = true;
+        elements.runtimeAssetsScanBtn.textContent = '扫描中...';
+    }
+    if (elements.runtimeAssetsStatus) {
+        elements.runtimeAssetsStatus.textContent = '正在扫描已登记运行时目录；如果模型和 Python 环境很大，可能需要一段时间。';
+    }
+    try {
+        const scan = await window.ailisDesktop.runtimeAssets.scan();
+        panelState = {
+            ...(panelState || {}),
+            runtimeAssets: scan
+        };
+        renderRuntimeAssets(scan);
+        if (elements.runtimeAssetsStatus) {
+            elements.runtimeAssetsStatus.textContent = `扫描完成：${scan.scannedAt || ''}`;
+        }
+        setStatus('运行时资产扫描完成。');
+    } catch (error) {
+        if (elements.runtimeAssetsStatus) {
+            elements.runtimeAssetsStatus.textContent = `扫描失败：${error.message || error}`;
+        }
+        setStatus(`运行时资产扫描失败：${error.message || error}`);
+    } finally {
+        if (elements.runtimeAssetsScanBtn) {
+            elements.runtimeAssetsScanBtn.disabled = false;
+            elements.runtimeAssetsScanBtn.textContent = '扫描资产';
+        }
+    }
+}
+
+async function deleteRuntimeAsset(asset = {}) {
+    if (!window.ailisDesktop?.runtimeAssets?.delete) {
+        setStatus('当前环境不支持删除运行时资产。');
+        return;
+    }
+    const confirmed = window.confirm(
+        `将删除运行时资产：${asset.label || asset.id}\n\n路径：${asset.path}\n体积：${formatBytesCompact(asset.bytes) || '0B'}\n风险：${getRuntimeAssetRiskLabel(asset.risk)}\n\n删除后相关能力需要重新安装或重新指定路径。继续吗？`
+    );
+    if (!confirmed) {
+        return;
+    }
+    setStatus(`正在删除运行时资产：${asset.label || asset.id}...`);
+    try {
+        const result = await window.ailisDesktop.runtimeAssets.delete({ assetId: asset.id });
+        setStatus(result.deleted
+            ? `已删除 ${asset.label || asset.id}，释放 ${formatBytesCompact(result.bytesFreed) || '0B'}。`
+            : `${asset.label || asset.id} 已不存在。`);
+        await refreshRuntimeAssets();
+    } catch (error) {
+        setStatus(`删除运行时资产失败：${error.message || error}`);
+    }
+}
+
+async function migrateRuntimeAsset(assetId) {
+    if (!window.ailisDesktop?.runtimeAssets?.chooseMigrationRoot || !window.ailisDesktop?.runtimeAssets?.migrate) {
+        setStatus('当前环境不支持迁移运行时资产。');
+        return;
+    }
+    try {
+        const selection = await window.ailisDesktop.runtimeAssets.chooseMigrationRoot({ assetId });
+        if (!selection?.ok || !selection.targetRoot) {
+            return;
+        }
+        const plan = selection.plan || {};
+        const confirmed = window.confirm(
+            `将迁移运行时资产：${assetId}\n\n从：${plan.sourcePath || ''}\n到：${plan.targetPath || selection.targetRoot}\n\n迁移期间请不要使用相关本地运行时。继续吗？`
+        );
+        if (!confirmed) {
+            return;
+        }
+        setStatus(`正在迁移运行时资产：${assetId}...`);
+        const result = await window.ailisDesktop.runtimeAssets.migrate({
+            assetId,
+            targetRoot: selection.targetRoot
+        });
+        setStatus(result.migrated
+            ? `运行时资产已迁移到：${result.targetPath}`
+            : '迁移未执行。');
+        if (result.preferencePatch && Object.keys(result.preferencePatch).length) {
+            const latest = await window.ailisDesktop.getPreferences?.();
+            if (latest) {
+                fillForm(latest);
+            }
+        }
+        await refreshRuntimeAssets();
+    } catch (error) {
+        setStatus(`迁移运行时资产失败：${error.message || error}`);
     }
 }
 
@@ -7123,6 +7311,10 @@ elements.runtimeComponentsRefreshBtn?.addEventListener('click', () => {
 
 elements.runtimeComponentsInstallBtn?.addEventListener('click', () => {
     void installSelectedRuntimeComponents();
+});
+
+elements.runtimeAssetsScanBtn?.addEventListener('click', () => {
+    void refreshRuntimeAssets();
 });
 
 elements.refreshMemoryBtn?.addEventListener('click', () => {

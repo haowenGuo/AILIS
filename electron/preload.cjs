@@ -125,6 +125,13 @@ contextBridge.exposeInMainWorld('ailisDesktop', {
         getStatus: () => ipcRenderer.invoke('ailis:runtime-components-status'),
         installSelected: (payload) => ipcRenderer.invoke('ailis:runtime-components-install', payload || {})
     },
+    runtimeAssets: {
+        scan: () => ipcRenderer.invoke('ailis:runtime-assets-scan'),
+        delete: (payload) => ipcRenderer.invoke('ailis:runtime-assets-delete', payload || {}),
+        chooseMigrationRoot: (payload) =>
+            ipcRenderer.invoke('ailis:runtime-assets-choose-migration-root', payload || {}),
+        migrate: (payload) => ipcRenderer.invoke('ailis:runtime-assets-migrate', payload || {})
+    },
     vllmRuntime: {
         diagnose: (payload) => ipcRenderer.invoke('ailis:vllm-runtime-diagnose', payload || {}),
         getStatus: () => ipcRenderer.invoke('ailis:vllm-runtime-status'),
