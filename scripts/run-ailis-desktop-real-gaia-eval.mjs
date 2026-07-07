@@ -490,6 +490,28 @@ function cleanCandidateLine(value = '') {
         .replace(/[。.!！]+$/g, '');
 }
 
+function isLikelyIdentifierNoise(value = '') {
+    const text = cleanCandidateLine(value);
+    if (!text) {
+        return true;
+    }
+    if (/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(text)) {
+        return true;
+    }
+    if (/^[a-z0-9]{6,}(?:-[a-z0-9]{4,}){2,}$/i.test(text)) {
+        return true;
+    }
+    return false;
+}
+
+function pushAnswerCandidate(candidates, source, rawAnswer, maxLength = 240) {
+    const answer = cleanCandidateLine(rawAnswer).slice(0, maxLength);
+    if (!answer || isLikelyIdentifierNoise(answer)) {
+        return;
+    }
+    candidates.push({ source, answer });
+}
+
 function extractAnswerCandidatesFromVisibleText(text = '') {
     const visible = String(text || '');
     const candidates = [];
@@ -500,10 +522,7 @@ function extractAnswerCandidatesFromVisibleText(text = '') {
     for (const pattern of patterns) {
         let match;
         while ((match = pattern.exec(visible)) !== null) {
-            const candidate = cleanCandidateLine(match[1]).slice(0, 240);
-            if (candidate) {
-                candidates.push({ source: 'visible_answer_line', answer: candidate });
-            }
+            pushAnswerCandidate(candidates, 'visible_answer_line', match[1], 240);
         }
     }
     const compact = visible.replace(/\s+/g, ' ');
@@ -515,10 +534,7 @@ function extractAnswerCandidatesFromVisibleText(text = '') {
     for (const pattern of contextualPatterns) {
         let match;
         while ((match = pattern.exec(compact)) !== null) {
-            const candidate = cleanCandidateLine(match[1]).slice(0, 120);
-            if (candidate) {
-                candidates.push({ source: 'visible_contextual_answer', answer: candidate });
-            }
+            pushAnswerCandidate(candidates, 'visible_contextual_answer', match[1], 120);
         }
     }
     return candidates;
@@ -943,6 +959,22 @@ async function startGateway(args, runtimeSettings) {
     return { gateway, baseUrl: status.url };
 }
 
+async function withTimeout(promise, timeoutMs, timeoutValue) {
+    let timer = null;
+    try {
+        return await Promise.race([
+            promise,
+            new Promise((resolve) => {
+                timer = setTimeout(() => resolve(timeoutValue), timeoutMs);
+            })
+        ]);
+    } finally {
+        if (timer) {
+            clearTimeout(timer);
+        }
+    }
+}
+
 async function main() {
     const args = parseArgs();
     await fs.mkdir(args.outputDir, { recursive: true });
@@ -992,6 +1024,7 @@ async function main() {
     const existing = args.resume ? await readExistingCompleted(args.resultPath) : new Map();
     const results = [...existing.values()];
     const { gateway, baseUrl } = await startGateway(args, runtimeSettings);
+    let gatewayStopStatus = { ok: true, status: 'not_started' };
 
     try {
         for (const task of tasks) {
@@ -1049,7 +1082,28 @@ async function main() {
         }
     } finally {
         if (gateway) {
-            await gateway.stop().catch(() => {});
+            gatewayStopStatus = await withTimeout(
+                gateway.stop()
+                    .then(() => ({ ok: true, status: 'stopped' }))
+                    .catch((error) => ({
+                        ok: false,
+                        status: 'stop_error',
+                        error: error?.message || String(error)
+                    })),
+                15000,
+                {
+                    ok: false,
+                    status: 'stop_timeout',
+                    error: 'gateway.stop timed out after 15000ms'
+                }
+            );
+            if (!gatewayStopStatus.ok) {
+                await appendJsonl(args.progressPath, {
+                    ts: new Date().toISOString(),
+                    type: 'gateway.stop.warning',
+                    ...gatewayStopStatus
+                }).catch(() => {});
+            }
         }
     }
 
@@ -1071,10 +1125,14 @@ async function main() {
         p95DurationMs: summary.performance.p95DurationMs,
         totalTokens: summary.cost.usage.totalTokens,
         estimatedCostUsd: summary.cost.estimatedCostUsd,
+        gatewayStopStatus,
         resultPath: args.resultPath,
         summaryPath: args.summaryPath,
         reportPath: args.reportPath
     }, null, 2));
+    if (gatewayStopStatus.status === 'stop_timeout') {
+        process.exit(0);
+    }
 }
 
 export {

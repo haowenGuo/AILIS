@@ -59,3 +59,18 @@ test('desktop-real event summary does not double count token usage mirrors', () 
     assert.equal(summary.usage.completionTokens, 12);
     assert.equal(summary.usage.totalTokens, 42);
 });
+
+test('desktop-real visible scorer ignores task-id shaped contextual noise', () => {
+    const response = {
+        ok: false,
+        status: 'subagent_running',
+        displayText: [
+            'TOOL_OUTPUT_MODEL_PREVIEW:',
+            'task_id: 8e867cd7-cff9-4e6c-867a-ff5ddc2550be',
+            'task: Find out how many studio albums were published by Mercedes Sosa.'
+        ].join('\n')
+    };
+    const score = scoreVisibleAnswer({ response, gold: '3' });
+    assert.equal(score.ok, false);
+    assert.equal(score.candidates.some((candidate) => candidate.answer.includes('8e867cd7')), false);
+});
