@@ -241,7 +241,7 @@ test('Agent direct tool specs keep artifact tools available without forcing fina
 });
 
 test('Agent decision timeout gives artifact and exact-answer tasks a 300s budget', () => {
-    assert.equal(resolveAgentDecisionTimeoutMs({}, {}), 45000);
+    assert.equal(resolveAgentDecisionTimeoutMs({}, {}), 120000);
     assert.equal(resolveAgentDecisionTimeoutMs({}, {
         requestContext: { taskCompactPrompt: true }
     }), 300000);
