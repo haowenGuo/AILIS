@@ -109,6 +109,18 @@ test('desktop-real visible scorer extracts inline final result after rendering',
     assert.equal(score.answer, '17000');
 });
 
+test('desktop-real visible scorer extracts Chinese conclusion answer line', () => {
+    const response = {
+        ok: true,
+        status: 'completed',
+        displayText: '四舍五入到最近千位：**17,000 小时**\n**结论：17000**'
+    };
+    const question = 'How many thousand hours would it take? Round your result to the nearest 1000 hours.';
+    const score = scoreVisibleAnswer({ response, gold: '17', question });
+    assert.equal(score.ok, true);
+    assert.equal(score.answer, '17000');
+});
+
 test('desktop-real visible scorer accepts count answer with semantic unit suffix', () => {
     const response = {
         ok: true,

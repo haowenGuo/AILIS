@@ -594,8 +594,8 @@ function extractAnswerCandidatesFromVisibleText(text = '') {
     const visible = String(text || '');
     const candidates = [];
     const patterns = [
-        /(?:^|\n)\s*(?:final\s+answer|final\s+result|result|answer|the\s+answer|答案|结果|最终答案|最终结果)\s*(?:is|=|:|：|为|是)?\s*([^\n\r]+)/gi,
-        /(?:\bfinal\s+answer\b|\bfinal\s+result\b|\bthe\s+answer\b|\banswer\b|答案|最终答案|最终结果)\s*(?:is|=|:|：|为|是)?\s*([^\n\r。.!；;]+)/gi,
+        /(?:^|\n)\s*(?:final\s+answer|final\s+result|result|answer|the\s+answer|conclusion|答案|结果|结论|最终答案|最终结果|最终结论)\s*(?:is|=|:|：|为|是)?\s*([^\n\r]+)/gi,
+        /(?:\bfinal\s+answer\b|\bfinal\s+result\b|\bthe\s+answer\b|\banswer\b|\bconclusion\b|答案|结论|最终答案|最终结果|最终结论)\s*(?:is|=|:|：|为|是)?\s*([^\n\r。.!；;]+)/gi,
         /(?:^|\n)\s*(?:therefore|so)\s*,?\s*(?:the\s+answer\s+is)?\s*([^\n\r]+)/gi
     ];
     for (const pattern of patterns) {
