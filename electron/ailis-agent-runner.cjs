@@ -3585,11 +3585,50 @@ function getWebToolRepeatTarget(step = {}) {
     const parsedMcp = parseDirectMcpToolId(step.tool);
     const baseName = normalizeText(parsedMcp?.tool || step.tool).toLowerCase();
     if (baseName === 'web_fetch') {
-        const url = normalizeText(step.args?.url || step.args?.uri)
+        const rawUrl = normalizeText(step.args?.url || step.args?.uri);
+        const hashIndex = rawUrl.indexOf('#');
+        const url = rawUrl
             .replace(/#.*$/g, '')
             .replace(/\/+$/g, '')
             .toLowerCase();
-        return url ? { kind: 'web_fetch', key: url, label: 'url' } : null;
+        if (!url) {
+            return null;
+        }
+        const viewportParts = [];
+        const query = normalizeText(
+            step.args?.query ||
+                step.args?.q ||
+                step.args?.search ||
+                step.args?.text ||
+                step.args?.contains ||
+                step.args?.extractQuery ||
+                step.args?.extract_query
+        ).replace(/\s+/g, ' ').toLowerCase();
+        if (query) {
+            viewportParts.push(`query:${query}`);
+        }
+        const lineNumber = Number(
+            step.args?.lineno ??
+                step.args?.line ??
+                step.args?.lineNumber ??
+                step.args?.startLine ??
+                step.args?.start
+        );
+        if (Number.isFinite(lineNumber) && lineNumber > 0) {
+            viewportParts.push(`line:${Math.floor(lineNumber)}`);
+        }
+        const maxLines = Number(step.args?.maxLines ?? step.args?.max_lines ?? step.args?.lineCount);
+        if (Number.isFinite(maxLines) && maxLines > 0) {
+            viewportParts.push(`max:${Math.floor(maxLines)}`);
+        }
+        if (hashIndex >= 0) {
+            const fragment = normalizeText(rawUrl.slice(hashIndex + 1)).replace(/\s+/g, ' ').toLowerCase();
+            if (fragment) {
+                viewportParts.push(`hash:${fragment}`);
+            }
+        }
+        const viewport = viewportParts.length ? viewportParts.join('|') : 'page';
+        return { kind: 'web_fetch', key: `${url}::${viewport}`, label: 'url+viewport' };
     }
     if (baseName === 'web_search') {
         const query = normalizeText(step.args?.query || step.args?.q || step.args?.search || step.args?.text)

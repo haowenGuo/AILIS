@@ -729,12 +729,53 @@ test('AILIS loop guard blocks repeated web_fetch after reasoning-ready evidence'
 
     const guard = validateAgentToolLoopGuard({
         tool: 'mcp__ailis_research__web_fetch',
-        args: { url: 'https://wiki.biligame.com/zzz/%E8%8E%B1%E7%89%B9#section' }
+        args: { url: 'https://wiki.biligame.com/zzz/%E8%8E%B1%E7%89%B9/' }
     }, [previousFetch]);
 
     assert.equal(guard.ok, false);
     assert.equal(guard.status, 'tool_loop_guard');
     assert.equal(guard.details.reason, 'repeated_ready_evidence');
+});
+
+test('AILIS loop guard allows web_fetch source viewport navigation on the same URL', () => {
+    const previousFetch = {
+        tool: 'mcp__ailis_research__web_fetch',
+        args: { url: 'https://en.wikipedia.org/wiki/Mercedes_Sosa', lineno: 120, maxLines: 80 },
+        response: {
+            ok: true,
+            status: 'completed',
+            result: {
+                details: {
+                    evidenceQuality: 'sufficient_evidence',
+                    isEvidence: true,
+                    complete: true,
+                    truncated: false,
+                    reasoningReady: true,
+                    observationContract: {
+                        evidence_quality: 'sufficient_evidence',
+                        reasoning_ready: true
+                    }
+                }
+            }
+        }
+    };
+
+    const nextLine = validateAgentToolLoopGuard({
+        tool: 'mcp__ailis_research__web_fetch',
+        args: { url: 'https://en.wikipedia.org/wiki/Mercedes_Sosa', lineno: 200, maxLines: 80 }
+    }, [previousFetch]);
+    const nextQuery = validateAgentToolLoopGuard({
+        tool: 'mcp__ailis_research__web_fetch',
+        args: { url: 'https://en.wikipedia.org/wiki/Mercedes_Sosa', query: '2000 studio album' }
+    }, [previousFetch]);
+    const nextHash = validateAgentToolLoopGuard({
+        tool: 'mcp__ailis_research__web_fetch',
+        args: { url: 'https://en.wikipedia.org/wiki/Mercedes_Sosa#Discography' }
+    }, [previousFetch]);
+
+    assert.equal(nextLine.ok, true);
+    assert.equal(nextQuery.ok, true);
+    assert.equal(nextHash.ok, true);
 });
 
 test('AILIS loop guard blocks a third identical web_search query', () => {
