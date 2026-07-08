@@ -199,6 +199,40 @@ function summarize(value, maxChars = 800) {
     return text.length > maxChars ? `${text.slice(0, maxChars - 3)}...` : text;
 }
 
+function buildSubagentRelayText(response = {}) {
+    const status = normalizeString(response.status, 'unknown');
+    const subagent = response.subagent && typeof response.subagent === 'object' ? response.subagent : {};
+    const result = response.result && typeof response.result === 'object' ? response.result : {};
+    const task = summarize(normalizeString(subagent.task || response.task), 180);
+    if (status === 'completed') {
+        return normalizeString(
+            result.finalAnswer ||
+                result.displayText ||
+                result.answer ||
+                result.summary ||
+                result.message,
+            'TaskAgent 已完成。'
+        );
+    }
+    if (status === 'running') {
+        return [
+            'TaskAgent 仍在执行，尚未产生最终答案。',
+            subagent.id ? `subagentId=${subagent.id}` : '',
+            subagent.childRunId ? `childRunId=${subagent.childRunId}` : '',
+            task ? `task=${task}` : ''
+        ].filter(Boolean).join('\n');
+    }
+    return normalizeString(
+        result.error ||
+            response.error ||
+            subagent.error ||
+            result.displayText ||
+            result.summary ||
+            result.message,
+        `TaskAgent status: ${status}`
+    );
+}
+
 function isSafeTokenMetricKey(key = '') {
     return /^(prompt|completion|input|output|total|reasoning|cached|candidates)Tokens$/i.test(key) ||
         /^(prompt|completion|input|output|total|reasoning|cached)_tokens$/i.test(key) ||
@@ -2001,11 +2035,12 @@ class AILISRuntime {
                     subagent: waited.subagent,
                     result: waited.subagent?.result || null
                 };
+                const relayText = buildSubagentRelayText(response);
                 return {
                     content: [
                         {
                             type: 'text',
-                            text: JSON.stringify(response, null, 2)
+                            text: relayText
                         }
                     ],
                     details: response,
@@ -2017,7 +2052,7 @@ class AILISRuntime {
                 content: [
                     {
                         type: 'text',
-                        text: JSON.stringify({ status: 'running', subagent: publicRecord }, null, 2)
+                        text: buildSubagentRelayText({ status: 'running', subagent: publicRecord })
                     }
                 ],
                 details: {

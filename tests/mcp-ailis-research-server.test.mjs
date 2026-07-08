@@ -43,6 +43,7 @@ const {
     stripWikiText,
     webExtractLinks,
     webFetch,
+    webFind,
     webResearch,
     webSearch,
     youtubeTranscript,
@@ -98,6 +99,7 @@ test('AILIS research MCP exposes Codex-aligned PDF/file tools', () => {
     assert.ok(names.includes('web_research'));
     assert.ok(names.includes('github_repo_read'));
     assert.ok(names.includes('web_fetch'));
+    assert.ok(names.includes('web_find'));
     assert.ok(names.includes('pdf_extract_text'));
     assert.ok(names.includes('paper_metadata_lookup'));
     assert.ok(names.includes('pdf_find_and_extract'));
@@ -123,8 +125,22 @@ test('AILIS research MCP exposes Codex-aligned PDF/file tools', () => {
     assert.ok(searchTool.description.includes('managed search backends'));
     assert.ok(searchTool.description.includes('automatically'));
     assert.ok(searchTool.description.includes('AILIS_SEARXNG_URL'));
-    assert.ok(fetchTool.inputSchema.properties.extract_query);
-    assert.ok(fetchTool.inputSchema.properties.extractQuery);
+    assert.deepEqual(fetchTool.inputSchema.required, ['url']);
+    assert.ok(fetchTool.inputSchema.properties.url);
+    assert.ok(fetchTool.inputSchema.properties.lineno);
+    assert.ok(fetchTool.inputSchema.properties.query);
+    assert.ok(fetchTool.inputSchema.properties.maxLines);
+    assert.equal(fetchTool.inputSchema.properties.lineStart, undefined);
+    assert.equal(fetchTool.inputSchema.properties.lineEnd, undefined);
+    assert.equal(fetchTool.inputSchema.properties.viewportChars, undefined);
+    assert.equal(fetchTool.inputSchema.properties.extract_query, undefined);
+    assert.ok(fetchTool.description.includes('Codex-style source viewport'));
+    const findTool = TOOLS.find((tool) => tool.name === 'web_find');
+    assert.deepEqual(findTool.inputSchema.required, ['url', 'pattern']);
+    assert.equal(findTool.inputSchema.properties.ref_id, undefined);
+    assert.ok(findTool.inputSchema.properties.url);
+    assert.ok(findTool.inputSchema.properties.pattern);
+    assert.ok(findTool.inputSchema.properties.contextLines);
     assert.ok(pythonTool.inputSchema.properties.code);
     assert.ok(pythonTool.inputSchema.properties.inline_code);
     assert.ok(pythonTool.inputSchema.properties.inlineCode);
@@ -1540,6 +1556,11 @@ test('web_research builds an evidence bundle from search and fetched pages', asy
 
         assert.equal(result.isError, undefined, result.content[0].text);
         assert.equal(result.structuredContent.status, 'completed');
+        assert.equal(result.structuredContent.type, 'function_call_output');
+        assert.equal(result.structuredContent.webSearchCall.type, 'web_search_call');
+        assert.equal(result.structuredContent.webSearchCall.action.type, 'search');
+        assert.equal(result.structuredContent.webSearchItem.type, 'web_search');
+        assert.equal(result.structuredContent.webSearchOutput.type, 'function_call_output');
         assert.equal(result.structuredContent.answerReadiness, 'ready');
         assert.equal(result.structuredContent.evidencePages.length, 1);
         assert.equal(result.structuredContent.evidencePages[0].url, `${baseUrl}/guide`);
@@ -1551,7 +1572,8 @@ test('web_research builds an evidence bundle from search and fetched pages', asy
         assert.equal(result.structuredContent.search.searchQueries[0].role, 'original');
         assert.ok(result.structuredContent.evidencePages[0].htmlRelations.sections.some((section) => section.heading === '配队建议'));
         assert.match(result.content[0].text, /AILIS web research evidence bundle/);
-        assert.deepEqual(requests, ['/search', '/guide']);
+        assert.ok(requests.filter((pathname) => pathname === '/search').length >= 1);
+        assert.ok(requests.includes('/guide'));
     });
 });
 
@@ -1966,7 +1988,8 @@ test('web_research stops before fetching pages when search target is ambiguous',
         assert.equal(result.structuredContent.answerReadiness, 'needs_clarification');
         assert.equal(result.structuredContent.evidencePages.length, 0);
         assert.equal(result.structuredContent.search.clarificationRequired, true);
-        assert.deepEqual(requests, ['/search']);
+        assert.ok(requests.length >= 1);
+        assert.ok(requests.every((pathname) => pathname === '/search'));
     });
 });
 
@@ -2039,7 +2062,8 @@ test('web_research returns candidate evidence for video metadata pages without a
         assert.equal(result.structuredContent.evidencePages[0].evidenceQuality, 'metadata_only');
         assert.equal(result.structuredContent.evidencePages[0].reasoningReady, false);
         assert.match(result.structuredContent.evidencePages[0].recoveryHint, /transcript|video-specific|ASR/i);
-        assert.match(result.content[0].text, /Observation policy: snippets, fetched pages, and diagnostics are candidate material only/);
+        assert.match(result.content[0].text, /Codex object: web_search_call action=search/);
+        assert.match(result.content[0].text, /Output policy: snippets, fetched pages, and diagnostics are candidate material only/);
         assert.doesNotMatch(result.content[0].text, /Retrieval readiness:/);
         assert.doesNotMatch(result.content[0].text, /Evidence decision:/);
         assert.match(result.content[0].text, /Candidate snippets from search results/);
@@ -2552,6 +2576,98 @@ test('web_fetch marks long relevant HTML text as reasoning-ready evidence', asyn
         assert.equal(result.structuredContent.reasoningReady, true);
         assert.equal(result.structuredContent.observationContract.reasoning_ready, true);
         assert.equal(result.structuredContent.evidenceGap, '');
+    });
+});
+
+test('web_fetch returns Codex-style source viewport with line navigation', async () => {
+    const lines = Array.from({ length: 70 }, (_, index) => `filler line ${index + 1}`);
+    lines[29] = '## Discography';
+    lines[30] = '### Studio albums';
+    lines[35] = '2005 Corazon Libre';
+    lines[36] = '2009 Cantora 1';
+    lines[37] = '2009 Cantora 2';
+    await withServer((request, response) => {
+        response.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' });
+        response.end(lines.join('\n'));
+    }, async (baseUrl) => {
+        const result = await webFetch({
+            url: `${baseUrl}/mercedes`,
+            query: 'Studio albums',
+            provider: 'builtin',
+            maxLines: 20
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.match(result.content[0].text, /Source viewport:/);
+        assert.match(result.content[0].text, /Total lines: 70/);
+        assert.match(result.content[0].text, /L31: ### Studio albums/);
+        assert.doesNotMatch(result.content[0].text, /outputComplete=false/);
+        assert.equal(result.structuredContent.modelVisibleMode, 'source_viewport');
+        assert.equal(result.structuredContent.model_visible_mode, 'source_viewport');
+        assert.equal(result.structuredContent.sourceRetrievalComplete, true);
+        assert.equal(result.structuredContent.source_retrieval_complete, true);
+        assert.equal(result.structuredContent.source.type, 'source_viewport');
+        assert.equal(result.structuredContent.source.tool, 'web_fetch');
+        assert.equal(result.structuredContent.source.line_start, 27);
+        assert.equal(result.structuredContent.source.total_lines, 70);
+        assert.ok(result.structuredContent.source.lines.some((line) => line.lineno === 31 && /Studio albums/.test(line.text)));
+        assert.equal(result.structuredContent.source_window.type, 'source_viewport');
+        assert.equal(result.structuredContent.sourceWindow.type, 'source_viewport');
+        assert.equal(result.structuredContent.sourceWindow.action.type, 'web_fetch');
+        assert.ok(result.structuredContent.sourceWindow.lines.some((line) => /Studio albums/.test(line.text)));
+        assert.equal(result.structuredContent.observationContract.source_window, true);
+        assert.equal(result.structuredContent.observationContract.source_viewport.tool, 'web_fetch');
+
+        const lineResult = await webFetch({
+            url: `${baseUrl}/mercedes`,
+            lineno: 36,
+            maxLines: 3,
+            provider: 'builtin'
+        });
+        assert.equal(lineResult.structuredContent.sourceWindow.lineStart, 36);
+        assert.equal(lineResult.structuredContent.source.line_start, 36);
+        assert.match(lineResult.content[0].text, /L36: 2005 Corazon Libre/);
+        assert.match(lineResult.content[0].text, /L38: 2009 Cantora 2/);
+    });
+});
+
+test('web_find opens a Codex-style source viewport around a pattern', async () => {
+    const lines = [
+        'alpha',
+        'beta',
+        '## Discography',
+        '### Studio albums',
+        '2005 Corazon Libre',
+        '2009 Cantora 1',
+        '2009 Cantora 2',
+        'omega'
+    ];
+    await withServer((request, response) => {
+        response.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' });
+        response.end(lines.join('\n'));
+    }, async (baseUrl) => {
+        const result = await webFind({
+            url: `${baseUrl}/mercedes`,
+            pattern: 'Cantora',
+            contextLines: 2,
+            provider: 'builtin'
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.match(result.content[0].text, /Find results for pattern: Cantora/);
+        assert.match(result.content[0].text, /Source viewport:/);
+        assert.match(result.content[0].text, /L6: 2009 Cantora 1/);
+        assert.equal(result.structuredContent.modelVisibleMode, 'source_viewport_find');
+        assert.equal(result.structuredContent.model_visible_mode, 'source_viewport_find');
+        assert.equal(result.structuredContent.source.tool, 'web_find');
+        assert.equal(result.structuredContent.source.line_start, 3);
+        assert.equal(result.structuredContent.source_window.tool, 'web_find');
+        assert.equal(result.structuredContent.sourceWindow.type, 'source_viewport');
+        assert.equal(result.structuredContent.sourceWindow.action.type, 'find_in_page');
+        assert.equal(result.structuredContent.matchCount, 2);
+        assert.equal(result.structuredContent.match_count, 2);
+        assert.deepEqual(result.structuredContent.matches.map((match) => match.lineNumber), [6, 7]);
+        assert.deepEqual(result.structuredContent.matches.map((match) => match.lineno), [6, 7]);
     });
 });
 

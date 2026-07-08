@@ -873,10 +873,9 @@ export class ChatTTSSystem {
             speech_text: speechText
         };
         if (this.speechProvider?.isSpeechDisabled) {
-            this.vrmSystem.stopSpeaking();
-            this.executeAvatarCue(speechPayload, aiMessageDiv);
-            this.updateMessageContent(aiMessageDiv, displayText);
-            this.scrollToBottom();
+            await this.playFallbackSpeech(displayText, aiMessageDiv, speechPayload, {
+                revealText: !payload.streamMode
+            });
             return;
         }
 
@@ -907,9 +906,9 @@ export class ChatTTSSystem {
         }
 
         if (payload.fallbackMode || !payload.audio_base64 || !this.speechProvider?.supportsTTS) {
-            this.vrmSystem.stopSpeaking();
-            this.updateMessageContent(aiMessageDiv, displayText);
-            this.scrollToBottom();
+            await this.playFallbackSpeech(displayText, aiMessageDiv, speechPayload, {
+                revealText: !payload.streamMode
+            });
             if (!this.hasShownTextFallbackHint) {
                 this.addSystemMessage(t('当前语音服务不可用，已自动切换为纯文本回复。'));
                 this.hasShownTextFallbackHint = true;
@@ -952,12 +951,13 @@ export class ChatTTSSystem {
         }
     }
 
-    async playFallbackSpeech(displayText, aiMessageDiv, payload = {}) {
+    async playFallbackSpeech(displayText, aiMessageDiv, payload = {}, options = {}) {
         const speechText = deriveTtsSpeechText(payload, displayText);
         const durationMs = Math.min(
             CONFIG.TEXT_ONLY_SPEECH_MAX_MS,
             Math.max(CONFIG.TEXT_ONLY_SPEECH_MIN_MS, (speechText || displayText).length * CONFIG.TEXT_ONLY_SPEECH_CHAR_MS)
         );
+        const revealText = options.revealText !== false;
 
         this.vrmSystem.startFallbackSpeech();
         this.executeAvatarCue(payload, aiMessageDiv);
@@ -965,6 +965,15 @@ export class ChatTTSSystem {
             ...payload,
             speech_text: speechText
         }, displayText, aiMessageDiv);
+
+        if (!revealText) {
+            this.updateMessageContent(aiMessageDiv, displayText);
+            this.scrollToBottom();
+            await new Promise((resolve) => window.setTimeout(resolve, durationMs));
+            this.vrmSystem.stopSpeaking();
+            this.endAvatarSpeech(aiMessageDiv);
+            return;
+        }
 
         await new Promise((resolve) => {
             const startTime = performance.now();

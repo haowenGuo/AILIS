@@ -2884,7 +2884,7 @@ function buildMcpBridgeSkillText() {
         'AILIS direct-tool 用法：Runtime 会把 MCP tools 暴露成 namespace/function 风格的直接工具名，例如 mcp__ailis_research__web_fetch。普通任务优先调用这种 direct tool，不要手工拼 mcp_bridge.call_tool。',
         'mcp_bridge 主要用于 list_servers、health_check、list_tool_specs、search_tools、list_resources、read_resource、list_prompts/get_prompt、注册/关闭 server 等管理和修复动作。',
         '如果 capability_context 给出了 mcp__server__tool 形式的 direct spec，可以直接把 tool_call.tool 写成该 id；Runtime 会保留原始 args 并路由到对应 MCP server/tool。',
-        '研究/网页类工具边界：web_search 是兜底检索，不是默认第一步；本地文件、PDF/DOCX/PPTX/XLSX/CSV/图片等任务默认走 Codex-style coding path：read 小文件、exec 跑脚本/解析器、apply_patch 改代码。只有当前 tools 里确实暴露了专用 MCP/direct tool 时才直接调用它；缺工具时用 tool_search 找 direct MCP 工具。web_fetch 只读 HTML/纯文本；PDF 或二进制不要继续用 web_fetch；已知 PDF URL/路径用 pdf_extract_text，不知道 PDF 直链但知道论文/报告标题或文章页时优先用 pdf_find_and_extract；PDF/论文题知道标题时把标题放 title，把要找的字段放 extract_query，不要把答案字段当唯一 query；必要时再 download_file。',
+        '研究/网页类工具边界：web_research 是网页研究、攻略、当前资料整理的优先入口；它会在一个结构化 retrieval action 内部并行规划 query、搜索、抓页并返回证据包。web_search 是兜底检索，不是默认第一步；本地文件、PDF/DOCX/PPTX/XLSX/CSV/图片等任务默认走 Codex-style coding path：read 小文件、exec 跑脚本/解析器、apply_patch 改代码。只有当前 tools 里确实暴露了专用 MCP/direct tool 时才直接调用它；缺工具时用 tool_search 找 direct MCP 工具。web_fetch 只读 HTML/纯文本；PDF 或二进制不要继续用 web_fetch；已知 PDF URL/路径用 pdf_extract_text，不知道 PDF 直链但知道论文/报告标题或文章页时优先用 pdf_find_and_extract；PDF/论文题知道标题时把标题放 title，把要找的字段放 extract_query，不要把答案字段当唯一 query；必要时再 download_file。',
         'mcp_bridge 管理 action：schema/list_servers/register_server/remove_server/health_check/list_tools/list_tool_specs/search_tools/list_resources/read_resource/list_prompts/get_prompt/shutdown_server。'
     ].join('\n');
 }
@@ -3558,6 +3558,8 @@ function buildInvalidToolStepResult(step, validation, iteration) {
         title: step.title,
         tool: step.tool,
         args: step.args,
+        providerMetadata: step.providerMetadata || step.provider_metadata || step.nativeToolCall?.providerMetadata || step.nativeToolCall?.provider_metadata || null,
+        nativeToolCall: step.nativeToolCall || step.native_tool_call || null,
         phase: step.phase || 'execute',
         iteration,
         response: {
@@ -4363,7 +4365,8 @@ function extractSubagentHandoffOutcome(stepResult = {}) {
     const details = toolResult.details && typeof toolResult.details === 'object'
         ? toolResult.details
         : {};
-    const parsedText = extractJsonObject(extractToolResultText(toolResult));
+    const toolText = extractToolResultText(toolResult);
+    const parsedText = extractJsonObject(toolText);
     const payload = details.status ? details : (parsedText && typeof parsedText === 'object' ? parsedText : {});
     const subagent = payload.subagent && typeof payload.subagent === 'object' ? payload.subagent : {};
     const childResult = payload.result && typeof payload.result === 'object'
@@ -4381,22 +4384,15 @@ function extractSubagentHandoffOutcome(stepResult = {}) {
         !failedStatus.includes(status) &&
         childResult.ok !== false &&
         subagent.ok !== false;
-    const displayText = stripControlTags(normalizeText(
-        childResult.displayText ||
-            childResult.finalAnswer ||
-            childResult.answer ||
-            childResult.summary ||
-            childResult.message ||
-            payload.displayText ||
-            payload.summary ||
-            extractToolResultText(toolResult) ||
-            response.error,
-        ok
-            ? 'TaskAgent 已经完成这次任务。'
-            : status === 'running'
-                ? 'TaskAgent 还在执行这次任务，我先把外层交接停住，避免重复开子任务。'
-                : 'TaskAgent 没有完成这次任务，具体原因请看 Agent Lab 的子任务链路。'
-    ));
+    const displayText = stripControlTags(buildPersonaTaskAgentHandoffDisplayText({
+        ok,
+        status,
+        childResult,
+        payload,
+        subagent,
+        response,
+        toolText
+    }));
     return {
         ok,
         status,
@@ -4832,8 +4828,8 @@ function canonicalDirectToolId(value = '') {
     return parsedMcp?.id || normalized;
 }
 
-const PERSONA_TASKAGENT_HANDOFF_WAIT_TIMEOUT_MS = 3 * 60 * 1000;
 const PERSONA_TASKAGENT_HANDOFF_RUN_TIMEOUT_MS = 15 * 60 * 1000;
+const PERSONA_TASKAGENT_HANDOFF_WAIT_TIMEOUT_MS = PERSONA_TASKAGENT_HANDOFF_RUN_TIMEOUT_MS;
 const PERSONA_TASKAGENT_HANDOFF_MAX_STEPS = 30;
 
 function isSubagentSpawnStep(step = {}) {
@@ -4860,6 +4856,9 @@ function normalizePersonaTaskAgentHandoffStep(step = {}, request = {}) {
     const existingWaitTimeoutMs = Number(args.waitTimeoutMs || args.timeoutMs);
     const existingRunTimeoutMs = Number(args.runTimeoutMs);
     const existingMaxAgentSteps = Number(args.maxAgentSteps);
+    const runTimeoutMs = Number.isFinite(existingRunTimeoutMs) && existingRunTimeoutMs > 0
+        ? Math.max(existingRunTimeoutMs, PERSONA_TASKAGENT_HANDOFF_RUN_TIMEOUT_MS)
+        : PERSONA_TASKAGENT_HANDOFF_RUN_TIMEOUT_MS;
     return {
         ...step,
         args: {
@@ -4867,16 +4866,61 @@ function normalizePersonaTaskAgentHandoffStep(step = {}, request = {}) {
             action: normalizeText(args.action || 'spawn').toLowerCase(),
             wait: true,
             waitTimeoutMs: Number.isFinite(existingWaitTimeoutMs) && existingWaitTimeoutMs > 0
-                ? Math.max(existingWaitTimeoutMs, PERSONA_TASKAGENT_HANDOFF_WAIT_TIMEOUT_MS)
-                : PERSONA_TASKAGENT_HANDOFF_WAIT_TIMEOUT_MS,
-            runTimeoutMs: Number.isFinite(existingRunTimeoutMs) && existingRunTimeoutMs > 0
-                ? Math.max(existingRunTimeoutMs, PERSONA_TASKAGENT_HANDOFF_RUN_TIMEOUT_MS)
-                : PERSONA_TASKAGENT_HANDOFF_RUN_TIMEOUT_MS,
+                ? Math.max(existingWaitTimeoutMs, runTimeoutMs, PERSONA_TASKAGENT_HANDOFF_WAIT_TIMEOUT_MS)
+                : runTimeoutMs,
+            runTimeoutMs,
             maxAgentSteps: Number.isFinite(existingMaxAgentSteps) && existingMaxAgentSteps > 0
                 ? Math.max(existingMaxAgentSteps, PERSONA_TASKAGENT_HANDOFF_MAX_STEPS)
                 : PERSONA_TASKAGENT_HANDOFF_MAX_STEPS
         }
     };
+}
+
+function buildPersonaTaskAgentHandoffDisplayText({
+    ok = false,
+    status = '',
+    childResult = {},
+    payload = {},
+    subagent = {},
+    response = {},
+    toolText = ''
+} = {}) {
+    const normalizedStatus = normalizeText(status, ok ? 'completed' : 'failed');
+    if (normalizedStatus === 'running') {
+        const task = summarize(normalizeText(subagent.task || payload.task), 180);
+        return [
+            'TaskAgent 还在执行这次任务，我会等它完成后再把结果整理给你。',
+            task ? `当前任务：${task}` : ''
+        ].filter(Boolean).join('\n');
+    }
+    const primaryText = normalizeText(
+        childResult.displayText ||
+            childResult.finalAnswer ||
+            childResult.answer ||
+            childResult.summary ||
+            childResult.message ||
+            payload.displayText ||
+            payload.summary
+    );
+    if (primaryText) {
+        return primaryText;
+    }
+    const fallbackText = normalizeText(toolText);
+    const fallbackLooksLikeStatusJson = /^\s*\{[\s\S]*"status"[\s\S]*\}\s*$/.test(fallbackText) &&
+        /"subagent"|"并行助手"|"childRunId"|"childSessionId"/.test(fallbackText);
+    if (ok || normalizedStatus === 'completed') {
+        return fallbackText && !fallbackLooksLikeStatusJson
+            ? fallbackText
+            : 'TaskAgent 已经完成这次任务，但没有返回可直接展示的文本结果。';
+    }
+    return normalizeText(
+        childResult.error ||
+            payload.error ||
+            response.error ||
+            subagent.error ||
+            (fallbackLooksLikeStatusJson ? '' : fallbackText),
+        'TaskAgent 没有完成这次任务，具体原因请看 Agent Lab 的子任务链路。'
+    );
 }
 
 function directToolEntryId(entry = {}) {
@@ -5287,52 +5331,87 @@ function validateExactAnswerSubmission({ decision = {}, stepResults = [], messag
     };
 }
 
-function sanitizeWebStructuredContentForPrompt(value, depth = 0) {
+function sanitizeWebStructuredContentForPrompt(value, depth = 0, context = {}) {
     if (depth > 6 || value === null || value === undefined) {
         return value;
     }
     if (Array.isArray(value)) {
-        return value.map((item) => sanitizeWebStructuredContentForPrompt(item, depth + 1));
+        return value.map((item) => sanitizeWebStructuredContentForPrompt(item, depth + 1, context));
     }
     if (typeof value !== 'object') {
         return value;
     }
+    const type = normalizeText(value.type);
+    const webSearchCallType = normalizeText(value.webSearchCall?.type || value.web_search_call?.type);
+    const webSearchItemType = normalizeText(value.webSearchItem?.type || value.web_search_item?.type);
+    const nestedWebSearchCallType = normalizeText(value.webSearchOutput?.webSearchCall?.type || value.web_search_output?.web_search_call?.type);
+    const isCodexWebSearchObject = type === 'web_search_call' ||
+        type === 'web_search' ||
+        webSearchCallType === 'web_search_call' ||
+        webSearchItemType === 'web_search' ||
+        nestedWebSearchCallType === 'web_search_call';
+    if (type === 'function_call_output' && isCodexWebSearchObject) {
+        return sanitizeWebStructuredContentForPrompt({
+            type,
+            status: value.status,
+            query: value.query,
+            webSearchCall: value.webSearchCall || value.web_search_call,
+            webSearchItem: value.webSearchItem || value.web_search_item,
+            functionCallOutput: value.functionCallOutput || value.function_call_output,
+            webSearchOutput: value.webSearchOutput || value.web_search_output,
+            executionMode: value.executionMode,
+            parallelism: value.parallelism,
+            pageCount: value.pageCount,
+            answerReadiness: value.answerReadiness,
+            evidenceGap: value.evidenceGap,
+            recoveryHint: value.recoveryHint,
+            suggestedNextCalls: value.suggestedNextCalls
+        }, depth + 1, { ...context, keepWebReadinessFields: true });
+    }
+    const childContext = isCodexWebSearchObject
+        ? { ...context, keepWebReadinessFields: true }
+        : context;
+    const keepReadinessFields = childContext.keepWebReadinessFields === true;
     const omittedKeys = new Set([
         'searchConfidence',
         'search_confidence',
-        'answerReadiness',
-        'answer_readiness',
-        'retrievalReadiness',
-        'retrieval_readiness',
-        'readinessAuthority',
-        'readiness_authority',
-        'evidenceDecision',
-        'evidence_decision',
-        'requiresEvidenceAudit',
-        'requires_evidence_audit',
-        'evidenceGap',
-        'evidence_gap',
-        'recoveryHint',
-        'recovery_hint',
-        'evidenceQuality',
-        'evidence_quality',
-        'contentQuality',
-        'content_quality',
+        ...(keepReadinessFields ? [] : [
+            'answerReadiness',
+            'answer_readiness',
+            'retrievalReadiness',
+            'retrieval_readiness',
+            'readinessAuthority',
+            'readiness_authority',
+            'evidenceDecision',
+            'evidence_decision',
+            'requiresEvidenceAudit',
+            'requires_evidence_audit',
+            'evidenceGap',
+            'evidence_gap',
+            'recoveryHint',
+            'recovery_hint',
+            'evidenceQuality',
+            'evidence_quality',
+            'contentQuality',
+            'content_quality'
+        ]),
         'evidenceScore',
         'evidence_score',
         'evidenceScoreBreakdown',
         'evidence_score_breakdown',
-        'reasoningReady',
-        'reasoning_ready',
-        'modelJudgesEvidence',
-        'model_judges_evidence',
-        'isEvidence',
-        'is_evidence',
-        'complete'
+        ...(keepReadinessFields ? [] : [
+            'reasoningReady',
+            'reasoning_ready',
+            'modelJudgesEvidence',
+            'model_judges_evidence',
+            'isEvidence',
+            'is_evidence',
+            'complete'
+        ]),
     ]);
     return Object.fromEntries(Object.entries(value)
         .filter(([key]) => !omittedKeys.has(key))
-        .map(([key, item]) => [key, sanitizeWebStructuredContentForPrompt(item, depth + 1)]));
+        .map(([key, item]) => [key, sanitizeWebStructuredContentForPrompt(item, depth + 1, childContext)]));
 }
 
 function getArtifactObservationFromParsedResult(parsed = {}) {
@@ -5549,6 +5628,7 @@ function buildLlmAgentDirectToolPrompt({
         'Tool call outputs from previous turns appear as function_call_output/tool_search_output items paired with their call_id. Use recent, relevant outputs as observations, but do not keep rereading stale exploration results once you have enough information to code, verify, or answer.',
         'If enough evidence is available, answer directly. If more evidence is needed, call one available tool. Do not repeat an identical tool call unless the new arguments materially change the observation.',
         'Only call tools that are present in the current tools array. If a needed tool is missing, use tool_search when it is available.',
+        'For broad public web research, guides, current information, or comparison tasks, prefer one mcp__ailis_research__web_research call when available. It is a Codex-style structured retrieval action that can run multiple query variants and fetch multiple pages internally; do not manually chain web_search and web_fetch unless web_research is unavailable or its bundle names a concrete missing field.',
         'For local file and data tasks, prefer the coding main path: read/write/exec/apply_patch. Use read to inspect small files, write to create helper scripts, exec to run scripts/tests/diagnostics, and apply_patch for source edits. Use tool_search only when the coding path cannot reliably inspect the file type or when a specialized direct MCP/tool is clearly needed.',
         'For data reasoning tasks, use code as a calculator and verifier: write scripts that parse the source file, compute the needed result, and print a short answer plus compact evidence. Do not write scripts whose main purpose is to dump large files, whole spreadsheets, logs, or documents back into model context.',
         taskAgentMode

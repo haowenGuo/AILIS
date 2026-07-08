@@ -66,12 +66,12 @@ function hasStablePreferenceSignal(text) {
 
 function looksLikeOneOffTask(text) {
     const normalized = normalizeText(text);
-    return /https?:\/\/|输出.*\.(md|txt|json|js|py|docx|xlsx|pdf)|保存成|生成.*文件|帮我读|帮我查|分析.*项目|提交到|运行|测试|截图|打开|邮件|GitHub|Playwright|arxiv|论文/i.test(normalized);
+    return /https?:\/\/|输出.*\.(md|txt|json|js|py|docx|xlsx|pdf)|保存成|生成.*文件|帮我读|帮我查|帮我搜|查一下|搜一下|搜索|查询|调研|攻略|指南|整理.*信息|最新.*信息|请提供|请返回|分析.*项目|提交到|运行|测试|截图|打开|邮件|GitHub|Playwright|arxiv|论文|角色攻略|培养|配队|技能|强度|节奏榜|正式上线版本/i.test(normalized);
 }
 
 function hasExplicitPersistentPreference(text) {
     const normalized = normalizeText(text);
-    return /以后记住|请记住|记住|我希望|希望你|以后|必须|不要|自我修改|自我进化|自我迭代|用户偏好|长期偏好/.test(normalized);
+    return /以后记住|请记住|记住我的|记住我|长期记住|长期偏好|用户偏好|每次都|以后都|默认|始终|固定为|我希望你|希望你以后|不要再|以后不要|自我修改|自我进化|自我迭代/.test(normalized);
 }
 
 function appendUniqueBullet(bullets, bullet) {
@@ -84,6 +84,11 @@ function appendUniqueBullet(bullets, bullet) {
 function buildUserPreferenceBullets(userText) {
     const user = normalizeText(userText);
     if (!user || !hasStablePreferenceSignal(user)) {
+        return [];
+    }
+    const oneOffTask = looksLikeOneOffTask(user);
+    const explicitPersistentPreference = hasExplicitPersistentPreference(user);
+    if (oneOffTask && !explicitPersistentPreference) {
         return [];
     }
 
@@ -132,7 +137,7 @@ function buildUserPreferenceBullets(userText) {
         );
     }
 
-    if (!bullets.length && (hasExplicitPersistentPreference(user) || !looksLikeOneOffTask(user))) {
+    if (!bullets.length && (explicitPersistentPreference || !oneOffTask)) {
         appendUniqueBullet(bullets, `用户表达了稳定偏好：${truncateText(user, 180)}`);
     }
     return bullets;

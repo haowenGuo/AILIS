@@ -31,6 +31,80 @@ function optionIsTrue(value) {
     return value === true || /^(?:true|1|yes|on)$/i.test(normalizeString(value));
 }
 
+function optionIsFalse(value) {
+    return value === false || /^(?:false|0|no|off)$/i.test(normalizeString(value));
+}
+
+async function runBoundedParallel(items = [], concurrency = 1, worker = async () => null, options = {}) {
+    const list = Array.isArray(items) ? items : [];
+    const limit = clampNumber(concurrency, 1, 1, Math.max(1, list.length || 1));
+    const keyFn = typeof options.keyFn === 'function' ? options.keyFn : null;
+    const perKeyConcurrency = keyFn
+        ? clampNumber(options.perKeyConcurrency, 1, 1, limit)
+        : limit;
+    const activeByKey = new Map();
+    const started = new Array(list.length).fill(false);
+    const results = new Array(list.length);
+    let active = 0;
+    let completed = 0;
+    const keyForItem = (item, index) => {
+        if (!keyFn) return '';
+        return normalizeString(keyFn(item, index), `__item_${index}`);
+    };
+    const canStart = (index) => {
+        if (started[index]) return false;
+        if (!keyFn) return true;
+        const key = keyForItem(list[index], index);
+        return (activeByKey.get(key) || 0) < perKeyConcurrency;
+    };
+    const markActive = (index, delta) => {
+        if (!keyFn) return;
+        const key = keyForItem(list[index], index);
+        const next = Math.max(0, (activeByKey.get(key) || 0) + delta);
+        if (next) {
+            activeByKey.set(key, next);
+        } else {
+            activeByKey.delete(key);
+        }
+    };
+    return await new Promise((resolve) => {
+        const pump = () => {
+            while (active < limit) {
+                const index = list.findIndex((_item, itemIndex) => canStart(itemIndex));
+                if (index < 0) break;
+                started[index] = true;
+                active += 1;
+                markActive(index, 1);
+                Promise.resolve()
+                    .then(() => worker(list[index], index))
+                    .then((result) => {
+                        results[index] = result;
+                    })
+                    .catch((error) => {
+                        results[index] = {
+                            error,
+                            message: error?.message || String(error)
+                        };
+                    })
+                    .finally(() => {
+                        active -= 1;
+                        completed += 1;
+                        markActive(index, -1);
+                        if (completed >= list.length) {
+                            resolve(results);
+                        } else {
+                            pump();
+                        }
+                    });
+            }
+            if (list.length === 0) {
+                resolve(results);
+            }
+        };
+        pump();
+    });
+}
+
 function readDesktopLlmSettings() {
     const appData = process.env.APPDATA || path.join(process.env.USERPROFILE || '', 'AppData', 'Roaming');
     const statePath = path.join(appData, 'ailis', 'desktop-state.json');
@@ -1868,6 +1942,11 @@ function buildWebResearchQueryPlan(query = '', args = {}) {
     const original = normalizeString(query);
     const effective = buildEffectiveSearchQuery(original);
     const maxQueries = clampNumber(args.maxSearchQueries || args.max_search_queries, 3, 1, 5);
+    const explicitQueries = [
+        ...(Array.isArray(args.queries) ? args.queries : []),
+        ...(Array.isArray(args.searchQueries) ? args.searchQueries : []),
+        ...(Array.isArray(args.search_queries) ? args.search_queries : [])
+    ];
     const variants = [];
     const seen = new Set();
     const addVariant = ({ searchQuery = '', backendQuery = '', role = '', reason = '' } = {}) => {
@@ -1891,6 +1970,22 @@ function buildWebResearchQueryPlan(query = '', args = {}) {
         backendQuery: original,
         role: 'original',
         reason: 'Run the literal user query first so the pipeline can detect over-broad or ambiguous intent before rewriting.'
+    });
+    explicitQueries.forEach((item, index) => {
+        const itemQuery = typeof item === 'string'
+            ? item
+            : normalizeString(item?.query || item?.q || item?.search || item?.text);
+        const itemBackendQuery = typeof item === 'string'
+            ? item
+            : normalizeString(item?.backendQuery || item?.backend_query || itemQuery);
+        addVariant({
+            searchQuery: itemQuery,
+            backendQuery: itemBackendQuery,
+            role: typeof item === 'object' ? normalizeString(item.role, 'explicit_query') : 'explicit_query',
+            reason: typeof item === 'object'
+                ? normalizeString(item.reason, 'Explicit query variant supplied by the model as part of a single structured research action.')
+                : `Explicit query variant ${index + 1} supplied by the model as part of a single structured research action.`
+        });
     });
     const quotedPhrases = extractQuotedSearchPhrases(original);
     const entityTerms = extractShortCjkEntityTerms(original);
@@ -5046,15 +5141,32 @@ function buildWebFetchResult({ url, args = {}, maxChars = MAX_FETCH_CHARS, fetch
         : /html/i.test(contentType) ? stripHtml(body) : body.trim();
     const encodingRepair = repairUtf8MojibakeText(rawText);
     const text = encodingRepair.text;
+    const linkQuery = normalizeString(args.query || args.contains || args.extract_query || args.extractQuery || '');
+    const viewportChars = clampNumber(
+        args.viewportChars || args.viewport_chars || Math.min(maxChars, 4800),
+        Math.min(maxChars, 4800),
+        1000,
+        5200
+    );
     const focused = focusTextWindow(text, {
-        query: args.query || args.contains || args.extract_query || args.extractQuery || '',
+        query: linkQuery,
         url,
-        maxChars
+        maxChars: viewportChars
     });
+    const sourceWindow = buildSourceLineWindow(text, {
+        url,
+        contentType,
+        query: linkQuery,
+        maxChars: viewportChars,
+        lineStart: args.lineno || args.lineNo || args.line_no || args.lineStart || args.line_start,
+        lineEnd: args.lineEnd || args.line_end,
+        maxLines: args.maxLines || args.max_lines,
+        focus: focused.focus
+    });
+    const sourceWindowText = formatSourceLineWindow(sourceWindow);
     const extractedLinks = /html/i.test(contentType)
         ? extractLinksFromHtml(body, url, 80)
         : Array.isArray(fetched.links) ? fetched.links : [];
-    const linkQuery = normalizeString(args.query || args.contains || args.extract_query || args.extractQuery || '');
     const rankedLinks = rankLinksForResearch(extractedLinks, url, linkQuery);
     const suggestedRankedLinks = filterRankedLinksForQuerySuggestions(rankedLinks, linkQuery);
     const suggestedNextCalls = buildSuggestedCallsFromRankedLinks(suggestedRankedLinks, 3, { query: linkQuery });
@@ -5070,7 +5182,7 @@ function buildWebFetchResult({ url, args = {}, maxChars = MAX_FETCH_CHARS, fetch
     const wikiFactSummary = formatWikiKeyValueFacts(wikiFacts);
     const wikiFactReasoningReady = wikiFactsAreReasoningReady(wikiFacts, linkQuery);
     const barrier = classifyAccessBarrierText(text);
-    const truncatedForModel = focused.text.length < text.length;
+    const sourceHasMore = sourceWindow.hasMoreBefore || sourceWindow.hasMoreAfter;
     const quality = classifyWebFetchEvidenceQuality({
         text,
         url,
@@ -5078,73 +5190,155 @@ function buildWebFetchResult({ url, args = {}, maxChars = MAX_FETCH_CHARS, fetch
         contentType,
         barrier,
         suggestedNextCalls,
-        truncated: truncatedForModel,
+        truncated: false,
         encodingRepair
     });
     const evidenceGap = wikiFactReasoningReady ? '' : (quality.evidenceGap || '');
     const recoveryHint = wikiFactReasoningReady
         ? 'Use the Wiki key-value facts above as structured evidence; only fetch more if another required field is missing.'
         : (quality.recoveryHint || '');
-    const effectiveSuggestedNextCalls = wikiFactReasoningReady ? [] : suggestedNextCalls;
+    const sourceWindowFollowups = buildSourceWindowFollowups(sourceWindow, linkQuery);
+    const sourceWindowPlainText = (Array.isArray(sourceWindow.lines) ? sourceWindow.lines : [])
+        .map((line) => line.text)
+        .join('\n');
+    const sourceWindowCoversTask = sourceWindowCoversQuery(sourceWindowPlainText, linkQuery);
+    const reasoningReady = (
+        quality.evidenceQuality === 'sufficient_evidence' &&
+        quality.isEvidence === true &&
+        sourceWindowCoversTask
+    ) || wikiFactReasoningReady;
+    const effectiveSuggestedNextCalls = reasoningReady
+        ? []
+        : dedupeSuggestedNextCalls([...suggestedNextCalls, ...sourceWindowFollowups], 5);
     const guidance = buildWebToolGuidanceText({
         evidenceGap,
         recoveryHint,
         suggestedNextCalls: effectiveSuggestedNextCalls,
         observedRelevantLinks
     });
-    const reasoningReady = (quality.evidenceQuality === 'sufficient_evidence' && quality.isEvidence === true && !truncatedForModel) || wikiFactReasoningReady;
-    const observationTruncated = wikiFactReasoningReady ? false : truncatedForModel;
-    return textResult([guidance, htmlRelationSummary, wikiFactSummary, `Content excerpt:\n${focused.text}`].filter(Boolean).join('\n\n'), {
+    const compactHtmlRelationSummary = htmlRelationSummary && htmlRelationSummary.length <= 1200
+        ? htmlRelationSummary
+        : '';
+    const source = pruneEmptyDeep({
+        type: 'source_viewport',
+        tool: 'web_fetch',
+        url,
+        ref_id: url,
+        lineno: sourceWindow.lineno || sourceWindow.lineStart,
+        line_start: sourceWindow.line_start || sourceWindow.lineStart,
+        line_end: sourceWindow.line_end || sourceWindow.lineEnd,
+        total_lines: sourceWindow.total_lines || sourceWindow.totalLines,
+        has_more_before: sourceWindow.has_more_before ?? sourceWindow.hasMoreBefore,
+        has_more_after: sourceWindow.has_more_after ?? sourceWindow.hasMoreAfter,
+        content_type: sourceWindow.content_type || sourceWindow.contentType,
+        selection_reason: sourceWindow.selection_reason || sourceWindow.selectionReason,
+        lines: (Array.isArray(sourceWindow.lines) ? sourceWindow.lines : []).map((line) => pruneEmptyDeep({
+            lineno: line.lineno || line.lineNumber,
+            line_number: line.line_number || line.lineNumber,
+            text: line.text
+        }))
+    });
+    return textResult([guidance, compactHtmlRelationSummary, wikiFactSummary, sourceWindowText].filter(Boolean).join('\n\n'), {
+        ok: true,
         status: 'completed',
         url,
+        ref_id: url,
         contentType,
+        content_type: contentType,
         fetchBackend: fetched.backend,
+        fetch_backend: fetched.backend,
         fallbackFrom: fetched.fallbackFrom,
+        fallback_from: fetched.fallbackFrom,
         primaryErrorCode: fetched.primaryErrorCode,
+        primary_error_code: fetched.primaryErrorCode,
         tlsVerificationDisabled: fetched.tlsVerificationDisabled === true || undefined,
+        tls_verification_disabled: fetched.tlsVerificationDisabled === true || undefined,
         tlsFallbackReason: normalizeString(fetched.tlsFallbackReason),
+        tls_fallback_reason: normalizeString(fetched.tlsFallbackReason),
         originalChars: text.length,
-        returnedChars: focused.text.length,
+        original_chars: text.length,
+        returnedChars: sourceWindowText.length,
+        returned_chars: sourceWindowText.length,
         focus: focused.focus,
         complete: reasoningReady,
-        truncated: observationTruncated,
-        contentTruncated: truncatedForModel,
+        truncated: false,
+        contentTruncated: sourceHasMore,
+        content_truncated: sourceHasMore,
+        sourceRetrievalComplete: true,
+        source_retrieval_complete: true,
+        modelVisibleMode: 'source_viewport',
+        model_visible_mode: 'source_viewport',
+        source,
+        source_window: source,
+        sourceWindow,
+        sourceViewport: source,
+        sourceWindowCoversTask,
+        source_window_covers_query: sourceWindowCoversTask,
         reasoningReady,
+        reasoning_ready: reasoningReady,
         isEvidence: quality.isEvidence,
+        is_evidence: quality.isEvidence,
         evidenceQuality: quality.evidenceQuality,
+        evidence_quality: quality.evidenceQuality,
         pageType: quality.pageType,
+        page_type: quality.pageType,
         contentQuality: quality.evidenceQuality,
+        content_quality: quality.evidenceQuality,
         observationContract: {
             complete: reasoningReady,
-            truncated: observationTruncated,
+            truncated: false,
             reasoning_ready: reasoningReady,
             is_evidence: quality.isEvidence,
             evidence_quality: quality.evidenceQuality,
             page_type: quality.pageType,
+            source_window: true,
+            source_viewport: source,
+            source_retrieval_complete: true,
+            line_start: sourceWindow.lineStart,
+            line_end: sourceWindow.lineEnd,
+            total_lines: sourceWindow.totalLines,
+            has_more_source_lines: sourceHasMore,
+            source_window_covers_task: sourceWindowCoversTask,
             evidence_judged_by_model: true
         },
         observedLinkCount: extractedLinks.length,
+        observed_link_count: extractedLinks.length,
         suggestedNextCalls: effectiveSuggestedNextCalls,
+        suggested_next_calls: effectiveSuggestedNextCalls,
         observedRelevantLinks,
-        contentExcerpt: focused.text,
+        observed_relevant_links: observedRelevantLinks,
+        contentExcerpt: sourceWindowText,
         htmlRelations: htmlRelations || undefined,
+        html_relations: htmlRelations || undefined,
         htmlRelationSummary: htmlRelationSummary || undefined,
+        html_relation_summary: htmlRelationSummary || undefined,
         wikiFacts: wikiFacts.length ? wikiFacts : undefined,
+        wiki_facts: wikiFacts.length ? wikiFacts : undefined,
         wikiFactSummary: wikiFactSummary || undefined,
+        wiki_fact_summary: wikiFactSummary || undefined,
         evidenceGap,
+        evidence_gap: evidenceGap,
         recoveryHint,
+        recovery_hint: recoveryHint,
         pageStatus: quality.pageStatus || undefined,
+        page_status: quality.pageStatus || undefined,
         modelJudgesEvidence: true,
+        model_judges_evidence: true,
         encodingRepair: encodingRepair.repaired ? 'latin1_to_utf8' : undefined,
+        encoding_repair: encodingRepair.repaired ? 'latin1_to_utf8' : undefined,
         crawl4aiAttempt: summarizeCrawl4aiAttempt(crawl4aiAttempt),
+        crawl4ai_attempt: summarizeCrawl4aiAttempt(crawl4aiAttempt),
         renderedFallbackAttempt: summarizeCrawl4aiAttempt(renderedFallbackAttempt),
+        rendered_fallback_attempt: summarizeCrawl4aiAttempt(renderedFallbackAttempt),
         renderedFallbackUsed: renderedFallbackUsed || undefined,
-        renderedFallbackTrigger: normalizeString(renderedFallbackTrigger)
+        rendered_fallback_used: renderedFallbackUsed || undefined,
+        renderedFallbackTrigger: normalizeString(renderedFallbackTrigger),
+        rendered_fallback_trigger: normalizeString(renderedFallbackTrigger)
     });
 }
 
 async function webFetch(args = {}) {
-    const url = normalizeString(args.url || args.uri);
+    const url = normalizeString(args.url || args.ref_id || args.refId || args.uri);
     if (!/^https?:\/\//i.test(url)) {
         return errorResult('web_fetch requires http(s) url');
     }
@@ -5197,6 +5391,89 @@ async function webFetch(args = {}) {
         });
     }
     return primaryResult;
+}
+
+async function webFind(args = {}) {
+    const url = normalizeString(args.url || args.ref_id || args.refId || args.uri);
+    const pattern = normalizeString(args.pattern || args.query || args.q || args.text);
+    if (!/^https?:\/\//i.test(url)) {
+        return errorResult('web_find requires http(s) url');
+    }
+    if (!pattern) {
+        return errorResult('web_find requires pattern');
+    }
+    const maxLines = clampNumber(args.maxLines || args.max_lines || ((Number(args.contextLines || args.context_lines) || 3) * 2 + 7), 20, 3, 120);
+    const fetchResult = await webFetch({
+        ...args,
+        url,
+        query: pattern,
+        maxLines,
+        viewportChars: args.viewportChars || args.viewport_chars || 5200
+    });
+    if (fetchResult.isError) {
+        return fetchResult;
+    }
+    const details = fetchResult.structuredContent || fetchResult.details || {};
+    const sourceWindow = details.sourceWindow || details.sourceViewport || {};
+    const findSourceWindow = pruneEmptyDeep({
+        ...sourceWindow,
+        action: {
+            type: 'find_in_page',
+            url,
+            pattern
+        }
+    });
+    const normalizedPattern = pattern.toLowerCase();
+    const matches = (Array.isArray(findSourceWindow.lines) ? findSourceWindow.lines : [])
+        .filter((line) => String(line.text || '').toLowerCase().includes(normalizedPattern))
+        .map((line) => ({
+            lineNumber: line.lineNumber,
+            lineno: line.lineno || line.lineNumber,
+            line_number: line.line_number || line.lineNumber,
+            text: line.text
+        }));
+    const source = pruneEmptyDeep({
+        type: 'source_viewport',
+        tool: 'web_find',
+        url,
+        ref_id: url,
+        pattern,
+        lineno: findSourceWindow.lineno || findSourceWindow.lineStart,
+        line_start: findSourceWindow.line_start || findSourceWindow.lineStart,
+        line_end: findSourceWindow.line_end || findSourceWindow.lineEnd,
+        total_lines: findSourceWindow.total_lines || findSourceWindow.totalLines,
+        has_more_before: findSourceWindow.has_more_before ?? findSourceWindow.hasMoreBefore,
+        has_more_after: findSourceWindow.has_more_after ?? findSourceWindow.hasMoreAfter,
+        content_type: findSourceWindow.content_type || findSourceWindow.contentType,
+        lines: (Array.isArray(findSourceWindow.lines) ? findSourceWindow.lines : []).map((line) => pruneEmptyDeep({
+            lineno: line.lineno || line.lineNumber,
+            line_number: line.line_number || line.lineNumber,
+            text: line.text
+        }))
+    });
+    const lines = [
+        `Find results for pattern: ${pattern}`,
+        `URL: ${url}`,
+        `Match count in current viewport: ${matches.length}`,
+        '',
+        formatSourceLineWindow(findSourceWindow)
+    ];
+    return textResult(lines.join('\n'), {
+        ...details,
+        status: 'completed',
+        url,
+        pattern,
+        matchCount: matches.length,
+        match_count: matches.length,
+        matches,
+        source,
+        source_window: source,
+        sourceWindow: findSourceWindow,
+        sourceViewport: source,
+        source_viewport: source,
+        modelVisibleMode: 'source_viewport_find',
+        model_visible_mode: 'source_viewport_find'
+    });
 }
 
 function extractTextFromToolResult(result = {}, maxChars = 3000) {
@@ -5590,8 +5867,18 @@ function formatWebResearchBundle({ query = '', searchDetails = {}, pages = [], b
     const lines = [
         'AILIS web research evidence bundle:',
         `Query: ${query}`,
-        'Observation policy: snippets, fetched pages, and diagnostics are candidate material only; the tool does not judge answer confidence or evidence sufficiency.'
+        'Codex object: web_search_call action=search',
+        'Output policy: snippets, fetched pages, and diagnostics are candidate material only; the tool does not judge final answer confidence.'
     ];
+    if (bundleAssessment.answerReadiness || bundleAssessment.evidenceGap || bundleAssessment.recoveryHint) {
+        lines.push(`Readiness: ${bundleAssessment.answerReadiness || 'unknown'}`);
+        if (bundleAssessment.evidenceGap) {
+            lines.push(`Evidence gap: ${bundleAssessment.evidenceGap}`);
+        }
+        if (bundleAssessment.recoveryHint) {
+            lines.push(`Recovery hint: ${bundleAssessment.recoveryHint}`);
+        }
+    }
     if (searchDetails.backend || searchDetails.searchAggregation?.successfulBackends?.length) {
         const sources = searchDetails.searchAggregation?.successfulBackends?.length
             ? searchDetails.searchAggregation.successfulBackends.join(', ')
@@ -5659,8 +5946,166 @@ function formatWebResearchBundle({ query = '', searchDetails = {}, pages = [], b
     return lines.join('\n');
 }
 
+function summarizeWebResearchSource(page = {}, index = 0) {
+    return pruneEmptyDeep({
+        id: `source_${index + 1}`,
+        title: normalizeString(page.title || page.url),
+        url: normalizeString(page.url),
+        host: extractHostname(page.url),
+        source: normalizeString(page.source),
+        sourceBackends: Array.isArray(page.sourceBackends) ? page.sourceBackends.slice(0, 5) : undefined,
+        status: normalizeString(page.fetchStatus || page.pageStatus),
+        pageType: normalizeString(page.pageType),
+        evidenceQuality: normalizeString(page.evidenceQuality || page.contentQuality),
+        isEvidence: page.isEvidence === true,
+        reasoningReady: page.reasoningReady === true,
+        complete: page.complete === true,
+        score: Number.isFinite(Number(page.evidenceScore)) ? Number(page.evidenceScore) : undefined,
+        returnedChars: Number.isFinite(Number(page.returnedChars)) ? Number(page.returnedChars) : undefined,
+        originalChars: Number.isFinite(Number(page.originalChars)) ? Number(page.originalChars) : undefined,
+        queryVariant: normalizeString(page.queryVariant),
+        queryVariantRole: normalizeString(page.queryVariantRole),
+        searchRank: page.searchRank,
+        searchSnippet: truncateRelationText(page.searchSnippet, 360),
+        evidenceSnippets: Array.isArray(page.evidenceSnippets) ? page.evidenceSnippets.slice(0, 4) : undefined,
+        evidenceGap: normalizeString(page.evidenceGap),
+        recoveryHint: normalizeString(page.recoveryHint)
+    });
+}
+
+function summarizeWebResearchSearchResult(result = {}, index = 0) {
+    return pruneEmptyDeep({
+        id: `candidate_${index + 1}`,
+        title: normalizeString(result.title || result.text || result.url),
+        url: normalizeString(result.url),
+        host: extractHostname(result.url),
+        sourceBackend: normalizeString(result.sourceBackend),
+        sourceBackends: Array.isArray(result.sourceBackends) ? result.sourceBackends.slice(0, 5) : undefined,
+        queryVariant: normalizeString(result.queryVariant),
+        queryVariantRole: normalizeString(result.queryVariantRole),
+        rank: index + 1,
+        score: Number.isFinite(Number(result.queryScore)) ? Number(result.queryScore) : undefined,
+        snippet: truncateRelationText(result.snippet, 360)
+    });
+}
+
+function buildCodexWebSearchOutput({
+    query = '',
+    queryPlan = [],
+    searchDetails = {},
+    candidates = [],
+    pages = [],
+    bundleAssessment = {},
+    pipelineSteps = [],
+    startedAt = Date.now(),
+    overallTimeoutMs = 0,
+    executionMode = 'sequential',
+    parallelism = {},
+    answerCandidates = [],
+    suggestedNextCalls = []
+} = {}) {
+    const sources = (Array.isArray(pages) ? pages : []).map(summarizeWebResearchSource);
+    const candidateResults = Array.isArray(searchDetails.results)
+        ? searchDetails.results.slice(0, 12).map(summarizeWebResearchSearchResult)
+        : [];
+    const fetchedCount = sources.filter((source) => source.status === 'completed').length;
+    const failedCount = sources.filter((source) => source.status && source.status !== 'completed').length;
+    const ready = bundleAssessment.answerReadiness === 'ready' ||
+        sources.some((source) => source.reasoningReady === true || source.evidenceQuality === 'sufficient_evidence');
+    const queries = (Array.isArray(queryPlan) ? queryPlan : []).map((item) => pruneEmptyDeep({
+        index: item.index,
+        role: normalizeString(item.role),
+        query: normalizeString(item.query),
+        backendQuery: normalizeString(item.backendQuery),
+        reason: normalizeString(item.reason)
+    }));
+    const webSearchAction = pruneEmptyDeep({
+        type: 'search',
+        query,
+        queries,
+        maxResults: searchDetails.maxResults,
+        maxPages: candidates.length || sources.length
+    });
+    const webSearchCall = pruneEmptyDeep({
+        type: 'web_search_call',
+        status: bundleAssessment.answerReadiness === 'blocked' ? 'failed' : 'completed',
+        action: webSearchAction
+    });
+    const webSearchItem = pruneEmptyDeep({
+        type: 'web_search',
+        id: 'web_research',
+        query,
+        action: webSearchAction
+    });
+    return pruneEmptyDeep({
+        type: 'function_call_output',
+        webSearchCall,
+        webSearchItem,
+        functionCallOutput: {
+            type: 'function_call_output',
+            status: webSearchCall.status,
+            outputKind: 'web_search_bundle'
+        },
+        action: webSearchAction,
+        execution: {
+            mode: executionMode,
+            durationMs: Date.now() - startedAt,
+            overallTimeoutMs,
+            parallelism,
+            pipeline: (Array.isArray(pipelineSteps) ? pipelineSteps : []).map((step) => pruneEmptyDeep({
+                stage: normalizeString(step.stage),
+                status: normalizeString(step.status),
+                note: normalizeString(step.note)
+            }))
+        },
+        search: {
+            status: normalizeString(searchDetails.status, 'completed'),
+            backend: normalizeString(searchDetails.backend),
+            sourceBackends: searchDetails.searchAggregation?.successfulBackends,
+            resultCount: Array.isArray(searchDetails.results) ? searchDetails.results.length : undefined,
+            candidates: candidateResults
+        },
+        fetch: {
+            candidateCount: candidates.length,
+            pageCount: sources.length,
+            completedCount: fetchedCount,
+            failedCount,
+            sources
+        },
+        evidence: {
+            sources: sources.filter((source) => source.isEvidence || source.reasoningReady || source.evidenceQuality),
+            answerCandidates: Array.isArray(answerCandidates) ? answerCandidates.slice(0, 8) : []
+        },
+        readiness: {
+            status: normalizeString(bundleAssessment.answerReadiness, ready ? 'ready' : 'needs_followup'),
+            reasoningReady: ready,
+            authority: normalizeString(bundleAssessment.readinessAuthority),
+            evidenceDecision: normalizeString(bundleAssessment.evidenceDecision),
+            requiresEvidenceAudit: bundleAssessment.requiresEvidenceAudit === true,
+            evidenceGap: normalizeString(bundleAssessment.evidenceGap),
+            recoveryHint: normalizeString(bundleAssessment.recoveryHint)
+        },
+        followup: {
+            suggestedNextCalls: Array.isArray(suggestedNextCalls) ? suggestedNextCalls.slice(0, 8) : []
+        },
+        legacy: {
+            pageCount: sources.length,
+            answerReadiness: bundleAssessment.answerReadiness
+        }
+    });
+}
+
 async function webResearch(args = {}) {
-    const query = normalizeString(args.query || args.q || args.search || args.text);
+    const explicitQueryItems = [
+        ...(Array.isArray(args.queries) ? args.queries : []),
+        ...(Array.isArray(args.searchQueries) ? args.searchQueries : []),
+        ...(Array.isArray(args.search_queries) ? args.search_queries : [])
+    ];
+    const firstExplicitQuery = explicitQueryItems
+        .map((item) => typeof item === 'string' ? item : item?.query || item?.q || item?.search || item?.text)
+        .map(normalizeString)
+        .find(Boolean);
+    const query = normalizeString(args.query || args.q || args.search || args.text) || firstExplicitQuery;
     if (!query) {
         return errorResult('web_research requires query');
     }
@@ -5669,10 +6114,19 @@ async function webResearch(args = {}) {
     const maxCharsPerPage = clampNumber(args.maxCharsPerPage || args.max_chars_per_page || args.maxChars, 14000, 3000, 60000);
     const queryPlan = buildWebResearchQueryPlan(query, args);
     const searchRuns = [];
+    const serialRequested = optionIsFalse(args.parallel) ||
+        optionIsFalse(args.parallelSearch) ||
+        optionIsFalse(args.parallel_search) ||
+        optionIsTrue(args.serial) ||
+        optionIsTrue(args.sequential);
+    const parallelSearch = !serialRequested && queryPlan.length > 1;
+    const searchConcurrency = parallelSearch
+        ? clampNumber(args.searchConcurrency || args.search_concurrency, Math.min(3, queryPlan.length), 1, 5)
+        : 1;
     const pipelineSteps = [{
         stage: 'query_plan',
         status: 'planned',
-        note: `${queryPlan.length} search quer${queryPlan.length === 1 ? 'y' : 'ies'}`
+        note: `${queryPlan.length} search quer${queryPlan.length === 1 ? 'y' : 'ies'}; mode=${parallelSearch ? `parallel:${searchConcurrency}` : 'sequential'}`
     }];
     const startedAt = Date.now();
     const overallTimeoutMs = clampNumber(
@@ -5681,17 +6135,22 @@ async function webResearch(args = {}) {
         8000,
         180000
     );
-    for (const variant of queryPlan) {
+    const runSearchVariant = async (variant) => {
         const elapsedMs = Date.now() - startedAt;
         const remainingMs = overallTimeoutMs - elapsedMs;
         if (remainingMs < 2000) {
-            pipelineSteps.push({
-                stage: 'search',
-                status: 'skipped',
-                note: `timeout budget exhausted before ${variant.role || variant.query}`
-            });
-            break;
+            return {
+                variant,
+                result: null,
+                details: {
+                    status: 'skipped',
+                    error: 'timeout_budget_exhausted',
+                    results: []
+                },
+                durationMs: 0
+            };
         }
+        const searchStartedAt = Date.now();
         const searchResult = await webSearch({
             query: variant.query,
             backendQuery: variant.backendQuery,
@@ -5706,28 +6165,62 @@ async function webResearch(args = {}) {
             aggregate: args.aggregate
         });
         const details = searchResult.structuredContent || searchResult.details || {};
-        searchRuns.push({ variant, result: searchResult, details });
+        return {
+            variant,
+            result: searchResult,
+            details,
+            durationMs: Date.now() - searchStartedAt
+        };
+    };
+    if (parallelSearch) {
+        const parallelRuns = await runBoundedParallel(queryPlan, searchConcurrency, runSearchVariant);
+        parallelRuns.forEach((run, index) => {
+            if (run?.variant) {
+                searchRuns.push(run);
+            } else {
+                searchRuns.push({
+                    variant: queryPlan[index],
+                    result: null,
+                    details: {
+                        status: 'error',
+                        error: run?.message || 'parallel search worker failed',
+                        results: []
+                    },
+                    durationMs: 0
+                });
+            }
+        });
+    } else {
+        for (const variant of queryPlan) {
+            const run = await runSearchVariant(variant);
+            searchRuns.push(run);
+            if (run.details?.status === 'skipped') {
+                break;
+            }
+            if (run.details?.clarificationRequired) {
+                break;
+            }
+            const shouldDeferEarlyStopForExactAnswer =
+                looksLikeExactAnswerResearchQuery(query) &&
+                variant.role === 'original' &&
+                queryPlan.some((item) => item.role === 'exact_answer_terms');
+            if (
+                run.details?.searchConfidence?.level === 'high' &&
+                Array.isArray(run.details?.suggestedNextCalls) &&
+                run.details.suggestedNextCalls.length > 0 &&
+                !optionIsTrue(args.expandQueries || args.expand_queries) &&
+                !shouldDeferEarlyStopForExactAnswer
+            ) {
+                break;
+            }
+        }
+    }
+    for (const run of searchRuns) {
         pipelineSteps.push({
             stage: 'search',
-            status: searchResult.isError ? 'error' : details.clarificationRequired ? 'clarification_required' : details.status || 'completed',
-            note: `${variant.role || 'query'}; results=${Array.isArray(details.results) ? details.results.length : 0}${details.error ? `; error=${details.error}` : ''}`
+            status: run.result?.isError ? 'error' : run.details?.clarificationRequired ? 'clarification_required' : run.details?.status || 'completed',
+            note: `${run.variant?.role || 'query'}; results=${Array.isArray(run.details?.results) ? run.details.results.length : 0}; durationMs=${run.durationMs || 0}${run.details?.error ? `; error=${run.details.error}` : ''}`
         });
-        if (details.clarificationRequired) {
-            break;
-        }
-        const shouldDeferEarlyStopForExactAnswer =
-            looksLikeExactAnswerResearchQuery(query) &&
-            variant.role === 'original' &&
-            queryPlan.some((item) => item.role === 'exact_answer_terms');
-        if (
-            details.searchConfidence?.level === 'high' &&
-            Array.isArray(details.suggestedNextCalls) &&
-            details.suggestedNextCalls.length > 0 &&
-            !optionIsTrue(args.expandQueries || args.expand_queries) &&
-            !shouldDeferEarlyStopForExactAnswer
-        ) {
-            break;
-        }
     }
     const clarificationDetails = bestClarificationSearchDetails(searchRuns);
     const mergedSearchDetails = searchRunRequiresClarification(searchRuns)
@@ -5744,16 +6237,50 @@ async function webResearch(args = {}) {
             error: run.details?.error
         })))
     });
-    if (!searchDetails || searchRuns.every((run) => run.result?.isError) || searchDetails.clarificationRequired) {
+    const allSearchRunsFailed = !searchRuns.length || searchRuns.every((run) => {
+        const status = normalizeString(run.details?.status);
+        return run.result?.isError === true || ['error', 'skipped', 'search_failed'].includes(status);
+    });
+    if (!searchDetails || allSearchRunsFailed || searchDetails.clarificationRequired) {
         const bundleAssessment = assessWebResearchBundle([], searchDetails);
-        return textResult(formatWebResearchBundle({ query, searchDetails, pages: [], bundleAssessment, pipelineSteps }), {
-            status: searchDetails.clarificationRequired ? 'clarification_required' : 'search_failed',
+        const webSearchOutput = buildCodexWebSearchOutput({
             query,
+            queryPlan,
+            searchDetails,
+            candidates: [],
+            pages: [],
+            bundleAssessment,
+            pipelineSteps,
+            startedAt,
+            overallTimeoutMs,
+            executionMode: parallelSearch ? 'bounded_parallel' : 'sequential',
+            parallelism: pruneEmptyDeep({
+                search: {
+                    enabled: parallelSearch,
+                    concurrency: searchConcurrency,
+                    queryCount: queryPlan.length
+                },
+                fetch: {
+                    enabled: false,
+                    concurrency: 1,
+                    candidateCount: 0
+                }
+            }),
+            suggestedNextCalls: searchDetails?.suggestedNextCalls || []
+        });
+        return textResult(formatWebResearchBundle({ query, searchDetails, pages: [], bundleAssessment, pipelineSteps }), {
+            type: 'function_call_output',
+            status: searchDetails?.clarificationRequired ? 'clarification_required' : 'search_failed',
+            query,
+            webSearchCall: webSearchOutput.webSearchCall,
+            webSearchItem: webSearchOutput.webSearchItem,
+            functionCallOutput: webSearchOutput.functionCallOutput,
+            webSearchOutput,
             search: searchDetails,
             evidencePages: [],
             pipelineSteps,
             ...bundleAssessment,
-            suggestedNextCalls: searchDetails.suggestedNextCalls || []
+            suggestedNextCalls: searchDetails?.suggestedNextCalls || []
         });
     }
     const candidates = buildWebResearchCandidates(searchDetails, maxPages);
@@ -5763,23 +6290,89 @@ async function webResearch(args = {}) {
         note: `${candidates.length} fetch candidate${candidates.length === 1 ? '' : 's'}`
     });
     const pages = [];
-    for (const candidate of candidates) {
+    const parallelFetch = !serialRequested && candidates.length > 1;
+    const fetchConcurrency = parallelFetch
+        ? clampNumber(args.fetchConcurrency || args.fetch_concurrency, Math.min(3, candidates.length), 1, 5)
+        : 1;
+    const perDomainFetchConcurrency = parallelFetch
+        ? clampNumber(args.perDomainFetchConcurrency || args.per_domain_fetch_concurrency, 1, 1, fetchConcurrency)
+        : 1;
+    const fetchTimeoutBudgetMs = clampNumber(
+        args.fetchTimeoutMs || args.fetch_timeout_ms,
+        Math.min(60000, Math.max(12000, overallTimeoutMs - (Date.now() - startedAt))),
+        3000,
+        180000
+    );
+    if (candidates.length) {
+        pipelineSteps.push({
+            stage: 'fetch_plan',
+            status: 'planned',
+            note: `mode=${parallelFetch ? `parallel:${fetchConcurrency}` : 'sequential'}; perDomain=${perDomainFetchConcurrency}; candidates=${candidates.length}; fetchTimeoutMs=${fetchTimeoutBudgetMs}`
+        });
+    }
+    const fetchRuns = await runBoundedParallel(candidates, fetchConcurrency, async (candidate) => {
+        const fetchStartedAt = Date.now();
+        const remainingMs = overallTimeoutMs - (fetchStartedAt - startedAt);
+        if (remainingMs < 2000) {
+            return {
+                candidate,
+                page: pruneEmptyDeep({
+                    title: candidate.title || candidate.url,
+                    url: candidate.url,
+                    fetchStatus: 'skipped',
+                    evidenceQuality: 'timeout_budget_exhausted',
+                    evidenceGap: 'web_research overall timeout budget was exhausted before this page could be fetched.',
+                    recoveryHint: 'Call web_fetch on this URL directly only if the source remains essential.'
+                }),
+                durationMs: 0
+            };
+        }
+        const pageTimeoutMs = Math.min(fetchTimeoutBudgetMs, Math.max(1000, remainingMs - 750));
         const fetchResult = await webFetch({
             url: candidate.url,
             query,
             maxChars: maxCharsPerPage,
+            timeoutMs: pageTimeoutMs,
             provider: args.fetchProvider || args.fetch_provider,
             crawl4aiUrl: args.crawl4aiUrl || args.crawl4ai_url,
             crawl4aiWorker: args.crawl4aiWorker || args.crawl4ai_worker,
             crawl4aiPython: args.crawl4aiPython || args.crawl4ai_python
         });
         const page = summarizeWebResearchPage(candidate, fetchResult, query);
-        pages.push(page);
-        pipelineSteps.push({
-            stage: 'fetch',
-            status: page.fetchStatus || (fetchResult.isError ? 'error' : 'completed'),
-            note: `${page.pageType || page.fetchStatus || 'page'} ${candidate.url}`
-        });
+        return {
+            candidate,
+            fetchResult,
+            page,
+            durationMs: Date.now() - fetchStartedAt
+        };
+    }, {
+        keyFn: (candidate) => extractHostname(candidate.url),
+        perKeyConcurrency: perDomainFetchConcurrency
+    });
+    for (const run of fetchRuns) {
+        if (run?.page) {
+            pages.push(run.page);
+            pipelineSteps.push({
+                stage: 'fetch',
+                status: run.page.fetchStatus || (run.fetchResult?.isError ? 'error' : 'completed'),
+                note: `${run.page.pageType || run.page.fetchStatus || 'page'} ${run.candidate?.url || run.page.url}; durationMs=${run.durationMs || 0}`
+            });
+        } else if (run?.candidate) {
+            const failedPage = pruneEmptyDeep({
+                title: run.candidate.title || run.candidate.url,
+                url: run.candidate.url,
+                fetchStatus: 'error',
+                evidenceQuality: 'fetch_worker_error',
+                evidenceGap: run.message || 'Parallel fetch worker failed.',
+                recoveryHint: 'Try fetching this URL directly with web_fetch if it remains important.'
+            });
+            pages.push(failedPage);
+            pipelineSteps.push({
+                stage: 'fetch',
+                status: 'error',
+                note: `${run.candidate.url}; error=${run.message || 'parallel fetch worker failed'}`
+            });
+        }
     }
     const orderedPages = pages.sort((left, right) =>
         (Number(right.evidenceScore) || 0) - (Number(left.evidenceScore) || 0) ||
@@ -5794,9 +6387,46 @@ async function webResearch(args = {}) {
     const answerCandidates = Array.isArray(searchDetails.answerCandidates)
         ? searchDetails.answerCandidates.slice(0, 5)
         : [];
+    const executionMode = parallelSearch || parallelFetch ? 'bounded_parallel' : 'sequential';
+    const parallelism = pruneEmptyDeep({
+        search: {
+            enabled: parallelSearch,
+            concurrency: searchConcurrency,
+            queryCount: queryPlan.length
+        },
+        fetch: {
+            enabled: parallelFetch,
+            concurrency: fetchConcurrency,
+            perDomainConcurrency: perDomainFetchConcurrency,
+            timeoutMs: fetchTimeoutBudgetMs,
+            candidateCount: candidates.length
+        }
+    });
+    const webSearchOutput = buildCodexWebSearchOutput({
+        query,
+        queryPlan,
+        searchDetails,
+        candidates,
+        pages: orderedPages,
+        bundleAssessment,
+        pipelineSteps,
+        startedAt,
+        overallTimeoutMs,
+        executionMode,
+        parallelism,
+        answerCandidates,
+        suggestedNextCalls
+    });
     return textResult(formatWebResearchBundle({ query, searchDetails, pages: orderedPages, bundleAssessment, pipelineSteps }), {
+        type: 'function_call_output',
         status: 'completed',
         query,
+        webSearchCall: webSearchOutput.webSearchCall,
+        webSearchItem: webSearchOutput.webSearchItem,
+        functionCallOutput: webSearchOutput.functionCallOutput,
+        webSearchOutput,
+        executionMode,
+        parallelism,
         search: searchDetails,
         evidencePages: orderedPages,
         pageCount: orderedPages.length,
@@ -7430,6 +8060,29 @@ function scoreHtmlFullTextCandidate(candidate = {}, query = '') {
     return score;
 }
 
+function htmlFullTextCandidatePriority(candidate = {}) {
+    const source = normalizeString(candidate.source);
+    const haystack = `${candidate.url || ''} ${candidate.text || ''} ${candidate.title || ''} ${candidate.snippet || ''}`;
+    let priority = 0;
+    if (/page_html_link/i.test(source)) {
+        priority += 120;
+    } else if (/scholarly_search_html|document_search_html/i.test(source)) {
+        priority += 90;
+    } else if (/fetched_html_page/i.test(source)) {
+        priority += 20;
+    }
+    if (/full\s*text|\/articles?\b|\/article\/view\/|html/i.test(haystack)) {
+        priority += 40;
+    }
+    if (/abstract/i.test(haystack) && !/full\s*text|\/articles?\b/i.test(haystack)) {
+        priority -= 20;
+    }
+    if (/download|pdf/i.test(haystack) && !/html|article|full\s*text/i.test(haystack)) {
+        priority -= 30;
+    }
+    return priority;
+}
+
 function pushHtmlFullTextCandidate(candidates, seen, candidate = {}, query = '', source = '') {
     const url = normalizeString(candidate.url);
     const descriptor = `${candidate.text || ''} ${candidate.title || ''} ${candidate.snippet || ''}`;
@@ -7445,7 +8098,8 @@ function pushHtmlFullTextCandidate(candidates, seen, candidate = {}, query = '',
         ...candidate,
         url,
         source,
-        score
+        score,
+        priority: htmlFullTextCandidatePriority({ ...candidate, url, source, score })
     });
 }
 
@@ -7500,8 +8154,6 @@ function evaluateExtractedEvidenceMatch(text = '', evidenceQuery = '') {
 async function addPdfCandidatesFromUrl({ url, query, candidates, seen, htmlCandidates = [], htmlSeen = new Set(), maxLinks, timeoutMs, depth = 0 }) {
     if (isLikelyPdfUrl(url)) {
         pushPdfCandidate(candidates, seen, { url, text: 'direct PDF-like URL' }, query, 'direct_url');
-    } else {
-        pushHtmlFullTextCandidate(htmlCandidates, htmlSeen, { url, text: `source HTML page for ${query}` }, query, 'source_url_html');
     }
     for (const guess of buildOjsPdfGuesses(url)) {
         pushPdfCandidate(candidates, seen, { url: guess, text: `OJS PDF download guess for ${query}` }, query, 'ojs_guess');
@@ -7724,7 +8376,10 @@ async function pdfFindAndExtract(args = {}) {
 
     async function tryExtractHtmlRankedCandidates() {
         const rankedCandidates = htmlCandidates
-            .sort((a, b) => b.score - a.score)
+            .sort((a, b) =>
+                (Number(b.priority) || 0) - (Number(a.priority) || 0) ||
+                b.score - a.score
+            )
             .slice(0, maxCandidates);
         for (const candidate of rankedCandidates) {
             if (attemptedHtmlUrls.has(candidate.url)) {
@@ -7766,7 +8421,15 @@ async function pdfFindAndExtract(args = {}) {
             if (fetched.isError) {
                 continue;
             }
-            const extractedText = fetched.content?.[0]?.text || '';
+            const fetchedDetails = fetched.structuredContent || fetched.details || {};
+            const sourceLines = fetchedDetails.sourceWindow?.lines ||
+                fetchedDetails.sourceViewport?.lines ||
+                fetchedDetails.source?.lines ||
+                fetchedDetails.source_window?.lines ||
+                [];
+            const extractedText = Array.isArray(sourceLines) && sourceLines.length
+                ? sourceLines.map((line) => normalizeString(line.text)).filter(Boolean).join('\n')
+                : (fetched.content?.[0]?.text || '');
             const evidenceMatch = evaluateExtractedEvidenceMatch(extractedText, evidenceQuery || query);
             attempts[attempts.length - 1].evidenceMatched = evidenceMatch.ok;
             attempts[attempts.length - 1].matchedTerms = evidenceMatch.matchedTerms;
@@ -8133,10 +8796,208 @@ function focusTextWindow(text, { query = '', url = '', maxChars = MAX_FETCH_CHAR
         focus: {
             mode: 'window',
             term: selectedTerm,
+            selectedIndex,
             start,
             end
         }
     };
+}
+
+function sourceLines(text = '') {
+    return String(text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+}
+
+function lineNumberForOffset(text = '', offset = 0) {
+    const boundedOffset = Math.max(0, Math.min(String(text || '').length, Number(offset) || 0));
+    const before = String(text || '').slice(0, boundedOffset);
+    return before ? before.split(/\n/).length : 1;
+}
+
+function extractSourceWindowYearTerms(query = '') {
+    return Array.from(new Set(String(query || '').match(/\b(?:18|19|20)\d{2}\b/g) || []));
+}
+
+function sourceWindowCoversQuery(text = '', query = '') {
+    const normalizedQuery = normalizeString(query);
+    if (!normalizedQuery) {
+        return true;
+    }
+    const normalizedText = String(text || '').toLowerCase();
+    const yearTerms = extractSourceWindowYearTerms(normalizedQuery);
+    if (yearTerms.length) {
+        return yearTerms.some((year) => normalizedText.includes(year.toLowerCase()));
+    }
+    const queryTokens = significantPdfQueryTerms(normalizedQuery)
+        .filter((token) => pdfEvidenceTermWeight(token) >= 4)
+        .slice(0, 8);
+    if (!queryTokens.length) {
+        return true;
+    }
+    return queryTokens.some((token) => normalizedText.includes(String(token || '').toLowerCase()));
+}
+
+function firstLineWithQueryYear(lines = [], query = '', startLine = 1) {
+    const yearTerms = extractSourceWindowYearTerms(query);
+    if (!yearTerms.length) {
+        return 0;
+    }
+    const startIndex = Math.max(0, Number(startLine || 1) - 1);
+    for (let index = startIndex; index < lines.length; index += 1) {
+        const line = String(lines[index] || '');
+        if (yearTerms.some((year) => line.includes(year))) {
+            return index + 1;
+        }
+    }
+    return 0;
+}
+
+function buildSourceLineWindow(text = '', {
+    url = '',
+    contentType = '',
+    query = '',
+    maxChars = 4800,
+    lineStart = 0,
+    lineEnd = 0,
+    maxLines = 120,
+    focus = null
+} = {}) {
+    const normalizedText = String(text || '');
+    const lines = sourceLines(normalizedText);
+    const totalLines = lines.length;
+    const requestedLine = clampNumber(lineStart, 0, 0, totalLines || 1);
+    const requestedEnd = clampNumber(lineEnd, 0, 0, totalLines || 1);
+    const focusSelectedIndex = Number(focus?.selectedIndex);
+    const focusStart = Number.isFinite(focusSelectedIndex) && focusSelectedIndex >= 0
+        ? focusSelectedIndex
+        : Number(focus?.start);
+    let focusLine = Number.isFinite(focusStart) && focusStart >= 0
+        ? Math.max(1, lineNumberForOffset(normalizedText, focusStart) - 4)
+        : 1;
+    const yearLine = !requestedLine ? firstLineWithQueryYear(lines, query, focusLine) : 0;
+    if (yearLine) {
+        focusLine = Math.max(1, yearLine - 6);
+    }
+    const startLine = Math.max(1, requestedLine || focusLine || 1);
+    const lineBudget = Math.max(1, clampNumber(maxLines, 120, 1, 300));
+    const charBudget = Math.max(1000, clampNumber(maxChars, 4800, 1000, 5200));
+    const targetEndLine = requestedEnd && requestedEnd >= startLine
+        ? Math.min(totalLines, requestedEnd)
+        : Math.min(totalLines, startLine + lineBudget - 1);
+    const selected = [];
+    let visibleChars = 0;
+    for (let index = startLine; index <= targetEndLine; index += 1) {
+        const textLine = lines[index - 1] ?? '';
+        const rendered = `L${index}: ${textLine}`;
+        if (selected.length && visibleChars + rendered.length + 1 > charBudget) {
+            break;
+        }
+        selected.push({
+            lineNumber: index,
+            text: textLine,
+            rendered
+        });
+        visibleChars += rendered.length + 1;
+    }
+    const lineEndActual = selected.length ? selected[selected.length - 1].lineNumber : startLine;
+    const selectionReason = requestedLine
+        ? 'requested_line_window'
+        : normalizeString(query)
+        ? `focused around query/hash: ${normalizeString(query)}`
+        : 'document_head';
+    return {
+        type: 'source_viewport',
+        action: {
+            type: 'web_fetch',
+            url,
+            lineno: startLine
+        },
+        url,
+        ref_id: url,
+        contentType,
+        content_type: contentType,
+        totalLines,
+        total_lines: totalLines,
+        lineno: startLine,
+        lineStart: startLine,
+        line_start: startLine,
+        lineEnd: lineEndActual,
+        line_end: lineEndActual,
+        hasMoreBefore: startLine > 1,
+        has_more_before: startLine > 1,
+        hasMoreAfter: lineEndActual < totalLines,
+        has_more_after: lineEndActual < totalLines,
+        selectionReason,
+        selection_reason: selectionReason,
+        focus: focus || undefined,
+        lines: selected.map((line) => ({
+            ...line,
+            lineno: line.lineNumber,
+            line_number: line.lineNumber
+        }))
+    };
+}
+
+function buildSourceWindowFollowups(sourceWindow = {}, query = '') {
+    const calls = [];
+    const url = normalizeString(sourceWindow.url);
+    if (!url) {
+        return calls;
+    }
+    const maxLines = Math.max(1, Number(sourceWindow.lineEnd || 0) - Number(sourceWindow.lineStart || 0) + 1) || 120;
+    if (sourceWindow.hasMoreBefore) {
+        calls.push({
+            tool: 'web_fetch',
+            args: {
+                url,
+                lineno: Math.max(1, Number(sourceWindow.lineStart || 1) - maxLines),
+                maxLines
+            },
+            reason: 'Open the previous source window if a missing field is above the current viewport.'
+        });
+    }
+    if (sourceWindow.hasMoreAfter) {
+        calls.push({
+            tool: 'web_fetch',
+            args: {
+                url,
+                lineno: Number(sourceWindow.lineEnd || 0) + 1,
+                maxLines
+            },
+            reason: 'Open the next source window if a missing field is below the current viewport.'
+        });
+    }
+    const normalizedQuery = normalizeString(query);
+    if (normalizedQuery) {
+        calls.push({
+            tool: 'web_fetch',
+            args: {
+                url,
+                query: normalizedQuery,
+                maxLines
+            },
+            reason: 'Re-open the same source around a specific missing phrase rather than refetching the whole page.'
+        });
+    }
+    return calls.slice(0, 3);
+}
+
+function formatSourceLineWindow(sourceWindow = {}) {
+    const renderedLines = (Array.isArray(sourceWindow.lines) ? sourceWindow.lines : [])
+        .map((line) => normalizeString(line.rendered))
+        .filter(Boolean)
+        .join('\n');
+    return [
+        'Source viewport:',
+        `Content type: ${normalizeString(sourceWindow.content_type || sourceWindow.contentType, 'text/plain')}`,
+        `Source: web_fetch({"url":${JSON.stringify(sourceWindow.url || sourceWindow.ref_id || '')},"lineno":${Number(sourceWindow.lineno || sourceWindow.line_start || sourceWindow.lineStart || 1)}})`,
+        `Total lines: ${Number(sourceWindow.total_lines || sourceWindow.totalLines || 0)}`,
+        `Line range: L${Number(sourceWindow.line_start || sourceWindow.lineStart || 1)}-L${Number(sourceWindow.line_end || sourceWindow.lineEnd || sourceWindow.line_start || sourceWindow.lineStart || 1)}`,
+        `Has more before: ${(sourceWindow.has_more_before ?? sourceWindow.hasMoreBefore) ? 'true' : 'false'}`,
+        `Has more after: ${(sourceWindow.has_more_after ?? sourceWindow.hasMoreAfter) ? 'true' : 'false'}`,
+        'Note: this is a focused source viewport, not a failed or incomplete fetch. If it contains enough answer-bearing evidence, answer. If a specific field is missing, fetch another line window or query-focused window.',
+        '',
+        renderedLines
+    ].filter((line) => line !== '').join('\n');
 }
 
 function buildEvidenceSnippets(text = '', query = '', { maxSnippets = 3 } = {}) {
@@ -9649,7 +10510,7 @@ const TOOLS = [
     },
     {
         name: 'web_research',
-        description: 'End-to-end AILIS web research pipeline for natural research/guide/current-info tasks. It runs web_search, de-duplicates and ranks candidates, fetches likely relevant HTML/text pages, extracts readable content plus relationship maps, and returns a compact candidate-material bundle with search snippets, fetched page excerpts, source URLs, page diagnostics, and available follow-up calls derived from retrieved links/results. The tool does not judge answer confidence or evidence sufficiency; the model must inspect the returned snippets/pages itself and decide whether to answer, search differently, ask clarification, or state uncertainty. Use this when the user asks to research, make a guide, compare public sources, or gather current web evidence and there is no more specific artifact tool.',
+        description: 'End-to-end AILIS web research pipeline for natural research/guide/current-info tasks. Codex-style behavior: treat this as one structured retrieval action, not as many manual web_search/web_fetch turns. It can run multiple query variants with bounded parallelism, de-duplicate and rank candidates, fetch likely relevant HTML/text pages with bounded parallelism, extract readable content plus relationship maps, and return one compact evidence bundle with snippets, fetched excerpts, source URLs, page diagnostics, timings, and follow-up calls. Use query for the main research goal; optionally pass queries when you already know 2-5 useful query variants. Prefer this over repeatedly calling web_search then web_fetch for broad public research. The tool does not produce the final answer; inspect the bundle and answer when sufficient, search again only for a concrete missing field.',
         inputSchema: {
             type: 'object',
             required: ['query'],
@@ -9658,11 +10519,39 @@ const TOOLS = [
                 q: { type: 'string', description: 'Compatibility alias for query. Prefer query.' },
                 search: { type: 'string', description: 'Compatibility alias for query. Prefer query.' },
                 text: { type: 'string', description: 'Compatibility alias for query. Prefer query.' },
+                queries: {
+                    type: 'array',
+                    items: { type: 'string' },
+                    description: 'Optional Codex-style multi-query action. Provide 2-5 query variants when helpful; web_research will run them inside one bounded-parallel retrieval pipeline and return one merged evidence bundle.'
+                },
+                searchQueries: {
+                    type: 'array',
+                    items: { type: 'string' },
+                    description: 'Compatibility alias for queries. Prefer queries.'
+                },
+                search_queries: {
+                    type: 'array',
+                    items: { type: 'string' },
+                    description: 'Compatibility alias for queries. Prefer queries.'
+                },
                 maxResults: { type: 'number', description: 'Search result count, clamped to 1-12.' },
                 limit: { type: 'number', description: 'Compatibility alias for maxResults. Prefer maxResults.' },
                 maxPages: { type: 'number', description: 'Maximum pages to fetch into the evidence bundle, clamped to 1-5.' },
                 maxSearchQueries: { type: 'number', description: 'Maximum planned query variants to run before fetching pages, clamped to 1-5. Defaults to 3 for product-grade recall without open-ended loops.' },
                 max_search_queries: { type: 'number', description: 'Compatibility alias for maxSearchQueries. Prefer maxSearchQueries.' },
+                parallel: { type: 'boolean', description: 'Optional. Defaults to true. false forces the old sequential/adaptive pipeline for diagnostics.' },
+                parallelSearch: { type: 'boolean', description: 'Compatibility alias for parallel search execution. Prefer parallel.' },
+                parallel_search: { type: 'boolean', description: 'Compatibility alias for parallel search execution. Prefer parallel.' },
+                serial: { type: 'boolean', description: 'Optional diagnostic alias. true forces sequential execution.' },
+                sequential: { type: 'boolean', description: 'Compatibility alias for serial. true forces sequential execution.' },
+                searchConcurrency: { type: 'number', description: 'Optional search query concurrency, clamped to 1-5. Default is 3 when multiple query variants exist.' },
+                search_concurrency: { type: 'number', description: 'Compatibility alias for searchConcurrency.' },
+                fetchConcurrency: { type: 'number', description: 'Optional page fetch concurrency, clamped to 1-5. Default is 3 when multiple candidate pages exist.' },
+                fetch_concurrency: { type: 'number', description: 'Compatibility alias for fetchConcurrency.' },
+                perDomainFetchConcurrency: { type: 'number', description: 'Optional same-host fetch concurrency, clamped to 1-fetchConcurrency. Default is 1 to avoid hammering one site while still fetching different domains in parallel.' },
+                per_domain_fetch_concurrency: { type: 'number', description: 'Compatibility alias for perDomainFetchConcurrency.' },
+                fetchTimeoutMs: { type: 'number', description: 'Optional timeout budget per fetched page, clamped to 3000-180000 and further limited by overallTimeoutMs. Defaults to a conservative slice of the remaining research budget.' },
+                fetch_timeout_ms: { type: 'number', description: 'Compatibility alias for fetchTimeoutMs.' },
                 expandQueries: { type: 'boolean', description: 'Optional. true forces all planned query variants even after a high-confidence search hit. Defaults to false/adaptive.' },
                 expand_queries: { type: 'boolean', description: 'Compatibility alias for expandQueries. Prefer expandQueries.' },
                 maxCharsPerPage: { type: 'number', description: 'Maximum readable chars per fetched page, clamped to 3000-60000.' },
@@ -9710,24 +10599,32 @@ const TOOLS = [
     },
     {
         name: 'web_fetch',
-        description: 'Fetch a public HTTP(S) HTML or text resource and return readable text plus a structured relationship map. AILIS now prefers a local Python Crawl4AI worker (scripts/ailis-crawl4ai-worker.py, configurable with AILIS_CRAWL4AI_WORKER/AILIS_CRAWL4AI_PYTHON) for rendered Markdown extraction; Docker is not required. Legacy Crawl4AI HTTP service URLs remain supported through AILIS_CRAWL4AI_URL/CRAWL4AI_URL. In auto mode, web_fetch probes Crawl4AI and falls back to builtin fetch/extract when unavailable; if static fetch returns a JavaScript shell or thin non-evidence page, it can retry through full rendered Crawl4AI extraction when configured or requested with provider=crawl4ai/rendered/browser. provider=builtin/current/html disables rendered fallback. Rejects PDF/binary content with unsupported_content_type; use pdf_extract_text or download_file for PDFs/files. For archive, listing, search-result, table-of-contents, or journal issue pages, pass query/contains with task terms such as author, year, topic, or answer clue so excerpts and linked resources are ranked against the task instead of newest/first links.',
+        description: 'Open a public HTTP(S) HTML/text URL and return a Codex-style source viewport with line numbers. Standard calls: { "url": "https://..." }, { "url": "https://...", "lineno": 120 }, or { "url": "https://...", "query": "answer-bearing phrase" }. The result is source evidence with total_lines, line_start/line_end, has_more_before/has_more_after, and L123: lines. If a field is missing, call web_fetch again with the same url and a new lineno or query; do not refetch or scrape with shell. Rejects PDF/binary content with unsupported_content_type; use pdf_extract_text or download_file for PDFs/files.',
         inputSchema: {
             type: 'object',
             required: ['url'],
             properties: {
-                url: { type: 'string', minLength: 1 },
-                maxChars: { type: 'number' },
-                query: { type: 'string' },
-                contains: { type: 'string' },
-                extract_query: { type: 'string', description: 'Compatibility alias for query/contains. Use when asking web_fetch to focus the returned text around answer terms.' },
-                extractQuery: { type: 'string', description: 'Compatibility alias for query/contains. Prefer query.' },
-                provider: { type: 'string', description: 'Optional fetch provider selector: auto, crawl4ai/rendered/browser, builtin/current/html. Prefer omitting this unless testing a provider.' },
-                fetchProvider: { type: 'string', description: 'Compatibility alias for provider. Prefer provider.' },
-                crawl4aiUrl: { type: 'string', description: 'Optional legacy Crawl4AI HTTP base URL override. Prefer local worker configuration unless running a service intentionally.' },
-                crawl4aiWorker: { type: 'string', description: 'Optional local Crawl4AI worker path. Defaults to scripts/ailis-crawl4ai-worker.py and does not require Docker.' },
-                crawl4aiPython: { type: 'string', description: 'Optional Python executable for the local Crawl4AI worker. Defaults to AILIS_CRAWL4AI_PYTHON, AILIS_PYTHON, or python.' },
-                waitFor: { type: 'string', description: 'Optional Crawl4AI wait_for selector/condition for JS-rendered pages.' },
-                delayMs: { type: 'number', description: 'Optional Crawl4AI delay before reading rendered HTML, in milliseconds.' }
+                url: { type: 'string', minLength: 1, description: 'Required public HTTP(S) HTML/text URL. Do not call with empty args.' },
+                lineno: { type: 'number', description: 'Optional 1-based source line number to open near, matching Codex open(..., lineno).' },
+                query: { type: 'string', description: 'Optional answer-bearing phrase used only to focus the returned source viewport.' },
+                maxLines: { type: 'number', description: 'Optional maximum source lines in the viewport, clamped to 1-300. Omit unless a narrower/wider viewport is needed.' },
+                timeoutMs: { type: 'number', description: 'Optional request timeout in milliseconds. Omit by default.' }
+            },
+            additionalProperties: false
+        }
+    },
+    {
+        name: 'web_find',
+        description: 'Find an exact phrase inside a known public HTTP(S) HTML/text URL and return a Codex-style line-numbered source viewport around the match. Standard call: { "url": "https://...", "pattern": "exact phrase" }. This is not a broad web search.',
+        inputSchema: {
+            type: 'object',
+            required: ['url', 'pattern'],
+            properties: {
+                url: { type: 'string', minLength: 1, description: 'Required public HTTP(S) HTML/text URL to inspect.' },
+                pattern: { type: 'string', minLength: 1, description: 'Required exact phrase or keyword to find inside the source.' },
+                contextLines: { type: 'number', description: 'Approximate context lines around the match. Defaults to 3.' },
+                maxLines: { type: 'number', description: 'Maximum source lines in the returned viewport, clamped to 3-120.' },
+                timeoutMs: { type: 'number', description: 'Request timeout in milliseconds.' }
             },
             additionalProperties: false
         }
@@ -9995,6 +10892,7 @@ async function handleToolCall(request) {
     if (name === 'web_research') return await webResearch(args);
     if (name === 'github_repo_read') return await githubRepoRead(args);
     if (name === 'web_fetch') return await webFetch(args);
+    if (name === 'web_find') return await webFind(args);
     if (name === 'pdf_extract_text') return await pdfExtractText(args);
     if (name === 'paper_metadata_lookup') return await paperMetadataLookup(args);
     if (name === 'pdf_find_and_extract') return await pdfFindAndExtract(args);
@@ -10111,6 +11009,7 @@ module.exports = {
     stripWikiText,
     webExtractLinks,
     webFetch,
+    webFind,
     webResearch,
     webSearch,
     youtubeTranscript,
