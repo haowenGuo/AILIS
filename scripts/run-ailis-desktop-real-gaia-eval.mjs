@@ -58,6 +58,7 @@ function parseArgs(argv = process.argv.slice(2)) {
         agentRole: 'persona_orchestrator',
         planOnly: false,
         resume: true,
+        subagentSettleTimeoutMs: Number(process.env.AILIS_EVAL_SUBAGENT_SETTLE_TIMEOUT_MS || 180000),
         costInputPerMillion: Number(process.env.AILIS_EVAL_INPUT_USD_PER_1M || 0),
         costOutputPerMillion: Number(process.env.AILIS_EVAL_OUTPUT_USD_PER_1M || 0)
     };
@@ -90,6 +91,8 @@ function parseArgs(argv = process.argv.slice(2)) {
         else if (token === '--plan-only') args.planOnly = true;
         else if (token === '--resume') args.resume = true;
         else if (token === '--no-resume') args.resume = false;
+        else if (token === '--subagent-settle-timeout-ms') args.subagentSettleTimeoutMs = Math.max(0, Number(next()) || 0);
+        else if (token === '--no-subagent-settle') args.subagentSettleTimeoutMs = 0;
         else if (token === '--cost-input-per-1m') args.costInputPerMillion = Number(next()) || 0;
         else if (token === '--cost-output-per-1m') args.costOutputPerMillion = Number(next()) || 0;
     }
@@ -794,6 +797,241 @@ function summarizeEvents(events = []) {
     };
 }
 
+function collectSubagentRefsFromValue(value, refs = [], depth = 0) {
+    if (!value || depth > 8) {
+        return refs;
+    }
+    if (typeof value === 'string') {
+        const childRunMatch = value.match(/"childRunId"\s*:\s*"([^"]+)"/i);
+        const subagentIdMatch = value.match(/"subagentId"\s*:\s*"([^"]+)"/i);
+        if (childRunMatch || subagentIdMatch) {
+            refs.push({
+                subagentId: normalizeText(subagentIdMatch?.[1]),
+                childRunId: normalizeText(childRunMatch?.[1]),
+                source: 'text'
+            });
+        }
+        return refs;
+    }
+    if (typeof value !== 'object') {
+        return refs;
+    }
+    const hasNestedSubagent = value.subagent && typeof value.subagent === 'object';
+    const subagent = hasNestedSubagent ? value.subagent : value;
+    const looksLikeSubagent = hasNestedSubagent ||
+        Boolean(value.subagentId || value.childRunId || value.childSessionId || subagent.childRunId || subagent.childSessionId) ||
+        /^subagent[-_]/i.test(normalizeText(subagent.id));
+    const subagentId = normalizeText(
+        value.subagentId ||
+            (looksLikeSubagent ? value.id : '') ||
+            subagent.subagentId ||
+            (looksLikeSubagent ? subagent.id : '')
+    );
+    const childRunId = normalizeText(value.childRunId || subagent.childRunId || (looksLikeSubagent ? subagent.runId : ''));
+    const childSessionId = normalizeText(value.childSessionId || subagent.childSessionId);
+    if (subagentId || childRunId || childSessionId) {
+        refs.push({
+            subagentId,
+            childRunId,
+            childSessionId,
+            source: 'object'
+        });
+    }
+    for (const item of Object.values(value)) {
+        if (item && typeof item === 'object') {
+            collectSubagentRefsFromValue(item, refs, depth + 1);
+        }
+    }
+    return refs;
+}
+
+function uniqueSubagentRefs(refs = []) {
+    const seen = new Set();
+    const unique = [];
+    for (const ref of refs) {
+        const normalized = {
+            subagentId: normalizeText(ref.subagentId),
+            childRunId: normalizeText(ref.childRunId),
+            childSessionId: normalizeText(ref.childSessionId),
+            source: normalizeText(ref.source)
+        };
+        if (!normalized.subagentId && !normalized.childRunId && !normalized.childSessionId) {
+            continue;
+        }
+        const key = `${normalized.subagentId}|${normalized.childRunId}|${normalized.childSessionId}`;
+        if (seen.has(key)) {
+            continue;
+        }
+        seen.add(key);
+        unique.push(normalized);
+    }
+    return unique;
+}
+
+function collectSubagentRefs(response = {}, events = []) {
+    const refs = collectSubagentRefsFromValue(response);
+    for (const event of events || []) {
+        const payload = event?.payload || {};
+        if (/subagent/i.test(normalizeText(event?.type)) || payload.subagentId || payload.childRunId || payload.subagent) {
+            collectSubagentRefsFromValue(payload, refs);
+        }
+    }
+    return uniqueSubagentRefs(refs);
+}
+
+function shouldSettleSubagentResponse(response = {}) {
+    const status = normalizeText(response.status || response.raw_status);
+    return status === 'subagent_running' || (
+        /subagent/i.test(status) &&
+        isIncompleteStatus(status)
+    );
+}
+
+function getRuntimeItemText(item = {}) {
+    const payload = item.payload || {};
+    return normalizeText(
+        payload.displayText ||
+            payload.speechText ||
+            payload.finalAnswer ||
+            payload.answer ||
+            payload.text ||
+            payload.message ||
+            item.displayText ||
+            item.speechText ||
+            item.text ||
+            item.message
+    );
+}
+
+function extractFinalResponseFromTranscriptItems(items = []) {
+    const finalItem = [...items].reverse().find((item) =>
+        ['agent.final', 'turn.completed', 'agent.blocked'].includes(normalizeText(item.type))
+    );
+    if (!finalItem) {
+        return null;
+    }
+    const payload = finalItem.payload || {};
+    const text = getRuntimeItemText(finalItem);
+    const status = normalizeText(finalItem.status || payload.status, finalItem.type === 'agent.final' ? 'completed' : 'unknown');
+    const ok = payload.ok === true || (finalItem.type === 'agent.final' && !['failed', 'error', 'blocked', 'max_steps_reached'].includes(status));
+    return {
+        ok,
+        status,
+        displayText: text,
+        speechText: normalizeText(payload.speechText || text),
+        finalAnswer: normalizeText(payload.finalAnswer || payload.answer || text),
+        source: 'child_transcript_final'
+    };
+}
+
+function buildSettledSubagentResponse(parentResponse = {}, waited = {}, transcriptResult = null) {
+    const subagent = waited.subagent && typeof waited.subagent === 'object' ? waited.subagent : {};
+    const childResult = waited.result && typeof waited.result === 'object'
+        ? waited.result
+        : (subagent.result && typeof subagent.result === 'object' ? subagent.result : {});
+    const childStatus = normalizeText(
+        transcriptResult?.status ||
+            childResult.status ||
+            waited.status ||
+            subagent.status,
+        'unknown'
+    );
+    const childText = normalizeText(
+        transcriptResult?.displayText ||
+            childResult.displayText ||
+            childResult.speechText ||
+            childResult.finalAnswer ||
+            childResult.answer ||
+            childResult.summary ||
+            childResult.message ||
+            subagent.result?.displayText ||
+            subagent.result?.message ||
+            parentResponse.displayText ||
+            parentResponse.message
+    );
+    const terminalOk = Boolean(
+        transcriptResult?.ok === true ||
+            childResult.ok === true ||
+            subagent.ok === true ||
+            (childStatus === 'completed' && childText)
+    );
+    const failedStatus = ['failed', 'error', 'cancelled', 'timeout', 'max_steps_reached', 'not_found'];
+    return {
+        ...parentResponse,
+        ok: terminalOk && !failedStatus.includes(childStatus),
+        status: terminalOk && !failedStatus.includes(childStatus) ? 'completed' : childStatus,
+        displayText: childText || parentResponse.displayText || parentResponse.message || '',
+        speechText: normalizeText(
+            transcriptResult?.speechText ||
+                childResult.speechText ||
+                childText ||
+                parentResponse.speechText
+        ),
+        finalAnswer: normalizeText(transcriptResult?.finalAnswer || childResult.finalAnswer || childResult.answer),
+        answer: normalizeText(childResult.answer || transcriptResult?.finalAnswer),
+        taskAgentResult: childResult,
+        subagent,
+        desktopRealEvalSubagentSettlement: {
+            settled: Boolean(terminalOk || childStatus),
+            source: transcriptResult?.source || (childResult ? 'subagent_result' : 'subagent_status'),
+            childStatus,
+            subagentId: normalizeText(subagent.id || subagent.subagentId),
+            childRunId: normalizeText(subagent.childRunId || subagent.runId),
+            childSessionId: normalizeText(subagent.childSessionId),
+            parentStatus: normalizeText(parentResponse.status)
+        }
+    };
+}
+
+async function readChildFinalFromRuntime(gateway, childRunId) {
+    if (!gateway?.runtime?.readTranscript || !childRunId) {
+        return null;
+    }
+    const transcript = await gateway.runtime.readTranscript(childRunId, 3000).catch(() => null);
+    return extractFinalResponseFromTranscriptItems(transcript?.items || []);
+}
+
+async function waitForSubagentSettlement({ args, gateway, response, taskEvents }) {
+    if (!shouldSettleSubagentResponse(response) || !gateway || Number(args.subagentSettleTimeoutMs) <= 0) {
+        return { response, settled: false, refs: [] };
+    }
+    const refs = collectSubagentRefs(response, taskEvents);
+    for (const ref of refs) {
+        const startedAt = Date.now();
+        let waited = null;
+        if (ref.subagentId && gateway.runtime?.waitForSubagent) {
+            waited = await gateway.runtime.waitForSubagent(ref.subagentId, args.subagentSettleTimeoutMs).catch((error) => ({
+                status: 'settle_error',
+                error: error?.message || String(error),
+                subagent: { id: ref.subagentId, childRunId: ref.childRunId }
+            }));
+        }
+        const childRunId = normalizeText(
+            waited?.subagent?.childRunId ||
+                waited?.subagent?.runId ||
+                ref.childRunId
+        );
+        const transcriptResult = await readChildFinalFromRuntime(gateway, childRunId);
+        const settledResponse = buildSettledSubagentResponse(response, waited || {
+            status: transcriptResult?.status || 'not_found',
+            subagent: {
+                id: ref.subagentId,
+                childRunId,
+                childSessionId: ref.childSessionId
+            }
+        }, transcriptResult);
+        settledResponse.desktopRealEvalSubagentSettlement = {
+            ...(settledResponse.desktopRealEvalSubagentSettlement || {}),
+            settleDurationMs: Date.now() - startedAt,
+            refs
+        };
+        if (transcriptResult || !isIncompleteStatus(settledResponse.status)) {
+            return { response: settledResponse, settled: true, refs };
+        }
+    }
+    return { response, settled: false, refs };
+}
+
 function quantile(values = [], q = 0.5) {
     const sorted = values.filter((value) => Number.isFinite(value)).sort((a, b) => a - b);
     if (!sorted.length) {
@@ -897,6 +1135,7 @@ function aggregateSummary({ args, results, startedAt, finishedAt, runtimeSetting
             workspaceMode: args.workspaceMode,
             directToolExecutor: args.directToolExecutor,
             agentRole: args.agentRole,
+            subagentSettleTimeoutMs: args.subagentSettleTimeoutMs,
             answerPolicy: 'visible answer counts when it matches the gold answer; short numeric answers require an answer line or structured answer candidate'
         },
         runtime: {
@@ -1103,7 +1342,8 @@ async function main() {
             directToolExecutor: args.directToolExecutor,
             agentRole: args.agentRole,
             startGateway: args.startGateway,
-            workspaceMode: args.workspaceMode
+            workspaceMode: args.workspaceMode,
+            subagentSettleTimeoutMs: args.subagentSettleTimeoutMs
         },
         workspaceRoot: args.workspaceRoot,
         runtime: {
@@ -1151,6 +1391,35 @@ async function main() {
             let agentResult;
             try {
                 agentResult = await callAgent({ args, gateway, baseUrl, task, llmSettings: runtimeSettings.llmSettings });
+                const settlement = await waitForSubagentSettlement({
+                    args,
+                    gateway,
+                    response: agentResult.response,
+                    taskEvents
+                });
+                if (settlement.settled) {
+                    await appendJsonl(args.progressPath, {
+                        ts: new Date().toISOString(),
+                        type: 'subagent.settle.finished',
+                        task_id: task.task_id,
+                        status: settlement.response.status,
+                        ok: settlement.response.ok === true,
+                        refs: settlement.refs
+                    });
+                    agentResult = {
+                        ...agentResult,
+                        response: settlement.response,
+                        durationMs: agentResult.durationMs + Number(settlement.response.desktopRealEvalSubagentSettlement?.settleDurationMs || 0)
+                    };
+                } else if (settlement.refs.length) {
+                    await appendJsonl(args.progressPath, {
+                        ts: new Date().toISOString(),
+                        type: 'subagent.settle.incomplete',
+                        task_id: task.task_id,
+                        status: agentResult.response?.status || '',
+                        refs: settlement.refs
+                    });
+                }
             } finally {
                 gateway?.off?.('event', listener);
             }
@@ -1244,10 +1513,15 @@ async function main() {
 export {
     answersEquivalent,
     answersEquivalentForQuestion,
+    buildSettledSubagentResponse,
+    collectSubagentRefs,
+    extractFinalResponseFromTranscriptItems,
     isIncompleteStatus,
     normalizeAnswerForScore,
     scoreVisibleAnswer,
-    summarizeEvents
+    shouldSettleSubagentResponse,
+    summarizeEvents,
+    waitForSubagentSettlement
 };
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
