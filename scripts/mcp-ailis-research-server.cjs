@@ -5810,57 +5810,12 @@ function summarizeWebResearchPage(candidate = {}, fetchResult = {}, query = '') 
 }
 
 function assessWebResearchBundle(pages = [], searchDetails = {}) {
-    const evidencePages = pages.filter((page) => page.isEvidence === true);
-    const readyPages = pages.filter((page) => page.reasoningReady === true || page.evidenceQuality === 'sufficient_evidence');
     const blockedPages = pages.filter((page) => ['js_shell', 'encoding_failure', 'access_denied', 'access_challenge'].includes(page.evidenceQuality));
-    if (searchDetails.clarificationRequired) {
-        return {
-            answerReadiness: 'needs_clarification',
-            readinessAuthority: 'retrieval_summary_model_decides',
-            requiresEvidenceAudit: false,
-            evidenceDecision: 'ask_user_before_evidence_judgment',
-            evidenceGap: searchDetails.evidenceGap || 'Search target is ambiguous.',
-            recoveryHint: searchDetails.recoveryHint || 'Ask the user to clarify the search target before fetching pages.'
-        };
-    }
-    if (readyPages.length) {
-        return {
-            answerReadiness: 'ready',
-            readinessAuthority: 'retrieval_summary_model_decides',
-            requiresEvidenceAudit: false,
-            evidenceDecision: 'answer_from_available_evidence',
-            evidenceGap: '',
-            recoveryHint: 'Use the evidence bundle to answer when it covers the question. Continue retrieval only for a named missing field.'
-        };
-    }
-    if (evidencePages.length) {
-        return {
-            answerReadiness: 'partial',
-            readinessAuthority: 'retrieval_summary_model_decides',
-            requiresEvidenceAudit: false,
-            evidenceDecision: 'model_judges_candidate_evidence',
-            evidenceGap: 'Fetched pages contain some candidate evidence but may be incomplete.',
-            recoveryHint: 'Answer if the model judges the snippets/pages sufficient; otherwise follow a specific high-signal link or refine the query.'
-        };
-    }
-    if (blockedPages.length) {
-        return {
-            answerReadiness: 'blocked',
-            readinessAuthority: 'retrieval_summary_model_decides',
-            requiresEvidenceAudit: false,
-            evidenceDecision: 'model_judges_candidate_evidence',
-            evidenceGap: 'Top pages were blocked, JavaScript-only, or unusable as answer evidence.',
-            recoveryHint: 'Try alternate sources, rendered/browser extraction, or a domain-specific API/tool.'
-        };
-    }
-    return {
-        answerReadiness: 'needs_followup',
-        readinessAuthority: 'retrieval_summary_model_decides',
-        requiresEvidenceAudit: false,
-        evidenceDecision: 'model_judges_candidate_evidence',
-        evidenceGap: searchDetails.evidenceGap || 'No answer-bearing evidence page was fetched.',
-        recoveryHint: searchDetails.recoveryHint || 'Refine the query or use a more specific retrieval tool.'
-    };
+    return pruneEmptyDeep({
+        fetchedPageCount: pages.length,
+        blockedPageCount: blockedPages.length,
+        searchTarget: normalizeString(searchDetails.targetLabel || searchDetails.query)
+    });
 }
 
 function formatWebResearchBundle({ query = '', searchDetails = {}, pages = [], bundleAssessment = {}, pipelineSteps = [] } = {}) {
@@ -5868,16 +5823,11 @@ function formatWebResearchBundle({ query = '', searchDetails = {}, pages = [], b
         'AILIS web research evidence bundle:',
         `Query: ${query}`,
         'Codex object: web_search_call action=search',
-        'Output policy: snippets, fetched pages, and diagnostics are source evidence. If the visible evidence answers the question, answer directly; fetch more only for a specific missing field.'
+        'Bundle contents: search result snippets, fetched page excerpts, source URLs, and retrieval diagnostics.'
     ];
-    if (bundleAssessment.answerReadiness || bundleAssessment.evidenceGap || bundleAssessment.recoveryHint) {
-        lines.push(`Readiness: ${bundleAssessment.answerReadiness || 'unknown'}`);
-        if (bundleAssessment.evidenceGap) {
-            lines.push(`Evidence gap: ${bundleAssessment.evidenceGap}`);
-        }
-        if (bundleAssessment.recoveryHint) {
-            lines.push(`Recovery hint: ${bundleAssessment.recoveryHint}`);
-        }
+    if (bundleAssessment.fetchedPageCount !== undefined) {
+        lines.push(`Fetched page count: ${bundleAssessment.fetchedPageCount}`);
+        lines.push(`Blocked pages: ${bundleAssessment.blockedPageCount || 0}`);
     }
     if (searchDetails.backend || searchDetails.searchAggregation?.successfulBackends?.length) {
         const sources = searchDetails.searchAggregation?.successfulBackends?.length
@@ -5921,9 +5871,6 @@ function formatWebResearchBundle({ query = '', searchDetails = {}, pages = [], b
             if (page.pageType || page.fetchStatus || page.pageStatus || page.returnedChars || page.originalChars) {
                 lines.push(`  Fetch diagnostic: pageType=${page.pageType || 'unknown'}; status=${page.fetchStatus || page.pageStatus || 'unknown'}; returnedChars=${page.returnedChars ?? 'n/a'}; originalChars=${page.originalChars ?? 'n/a'}`);
             }
-            if (page.evidenceGap) {
-                lines.push(`  Retrieval note: ${page.evidenceGap}`);
-            }
             if (page.searchSnippet) {
                 lines.push(`  Search snippet: ${truncateRelationText(page.searchSnippet, 460)}`);
             }
@@ -5956,21 +5903,65 @@ function summarizeWebResearchSource(page = {}, index = 0) {
         sourceBackends: Array.isArray(page.sourceBackends) ? page.sourceBackends.slice(0, 5) : undefined,
         status: normalizeString(page.fetchStatus || page.pageStatus),
         pageType: normalizeString(page.pageType),
-        evidenceQuality: normalizeString(page.evidenceQuality || page.contentQuality),
-        isEvidence: page.isEvidence === true,
-        reasoningReady: page.reasoningReady === true,
-        complete: page.complete === true,
-        score: Number.isFinite(Number(page.evidenceScore)) ? Number(page.evidenceScore) : undefined,
         returnedChars: Number.isFinite(Number(page.returnedChars)) ? Number(page.returnedChars) : undefined,
         originalChars: Number.isFinite(Number(page.originalChars)) ? Number(page.originalChars) : undefined,
         queryVariant: normalizeString(page.queryVariant),
         queryVariantRole: normalizeString(page.queryVariantRole),
         searchRank: page.searchRank,
         searchSnippet: truncateRelationText(page.searchSnippet, 360),
-        evidenceSnippets: Array.isArray(page.evidenceSnippets) ? page.evidenceSnippets.slice(0, 4) : undefined,
-        evidenceGap: normalizeString(page.evidenceGap),
-        recoveryHint: normalizeString(page.recoveryHint)
+        evidenceSnippets: Array.isArray(page.evidenceSnippets) ? page.evidenceSnippets.slice(0, 4) : undefined
     });
+}
+
+function stripWebResearchBehaviorFields(page = {}) {
+    const {
+        modelJudgesEvidence,
+        model_judges_evidence,
+        isEvidence,
+        is_evidence,
+        reasoningReady,
+        reasoning_ready,
+        complete,
+        recoveryHint,
+        recovery_hint,
+        evidenceGap,
+        evidence_gap,
+        suggestedNextCalls,
+        suggested_next_calls,
+        evidenceScore,
+        evidence_score,
+        evidenceScoreBreakdown,
+        evidence_score_breakdown,
+        evidenceQuality,
+        evidence_quality,
+        contentQuality,
+        content_quality,
+        ...rest
+    } = page && typeof page === 'object' ? page : {};
+    return pruneEmptyDeep(rest);
+}
+
+function stripWebResearchSearchBehaviorFields(details = {}) {
+    const {
+        recoveryHint,
+        recovery_hint,
+        evidenceGap,
+        evidence_gap,
+        suggestedNextCalls,
+        suggested_next_calls,
+        clarificationRequired,
+        clarification_required,
+        answerReadiness,
+        answer_readiness,
+        readinessAuthority,
+        readiness_authority,
+        evidenceDecision,
+        evidence_decision,
+        requiresEvidenceAudit,
+        requires_evidence_audit,
+        ...rest
+    } = details && typeof details === 'object' ? details : {};
+    return pruneEmptyDeep(rest);
 }
 
 function summarizeWebResearchSearchResult(result = {}, index = 0) {
@@ -6001,8 +5992,7 @@ function buildCodexWebSearchOutput({
     overallTimeoutMs = 0,
     executionMode = 'sequential',
     parallelism = {},
-    answerCandidates = [],
-    suggestedNextCalls = []
+    answerCandidates = []
 } = {}) {
     const sources = (Array.isArray(pages) ? pages : []).map(summarizeWebResearchSource);
     const candidateResults = Array.isArray(searchDetails.results)
@@ -6010,8 +6000,6 @@ function buildCodexWebSearchOutput({
         : [];
     const fetchedCount = sources.filter((source) => source.status === 'completed').length;
     const failedCount = sources.filter((source) => source.status && source.status !== 'completed').length;
-    const ready = bundleAssessment.answerReadiness === 'ready' ||
-        sources.some((source) => source.reasoningReady === true || source.evidenceQuality === 'sufficient_evidence');
     const queries = (Array.isArray(queryPlan) ? queryPlan : []).map((item) => pruneEmptyDeep({
         index: item.index,
         role: normalizeString(item.role),
@@ -6028,7 +6016,7 @@ function buildCodexWebSearchOutput({
     });
     const webSearchCall = pruneEmptyDeep({
         type: 'web_search_call',
-        status: bundleAssessment.answerReadiness === 'blocked' ? 'failed' : 'completed',
+        status: 'completed',
         action: webSearchAction
     });
     const webSearchItem = pruneEmptyDeep({
@@ -6073,24 +6061,15 @@ function buildCodexWebSearchOutput({
             sources
         },
         evidence: {
-            sources: sources.filter((source) => source.isEvidence || source.reasoningReady || source.evidenceQuality),
+            sources: sources.filter((source) => source.evidenceSnippets?.length),
             answerCandidates: Array.isArray(answerCandidates) ? answerCandidates.slice(0, 8) : []
         },
-        readiness: {
-            status: normalizeString(bundleAssessment.answerReadiness, ready ? 'ready' : 'needs_followup'),
-            reasoningReady: ready,
-            authority: normalizeString(bundleAssessment.readinessAuthority),
-            evidenceDecision: normalizeString(bundleAssessment.evidenceDecision),
-            requiresEvidenceAudit: bundleAssessment.requiresEvidenceAudit === true,
-            evidenceGap: normalizeString(bundleAssessment.evidenceGap),
-            recoveryHint: normalizeString(bundleAssessment.recoveryHint)
-        },
-        followup: {
-            suggestedNextCalls: Array.isArray(suggestedNextCalls) ? suggestedNextCalls.slice(0, 8) : []
+        retrievalDiagnostics: {
+            fetchedPageCount: bundleAssessment.fetchedPageCount,
+            blockedPageCount: bundleAssessment.blockedPageCount
         },
         legacy: {
-            pageCount: sources.length,
-            answerReadiness: bundleAssessment.answerReadiness
+            pageCount: sources.length
         }
     });
 }
@@ -6237,6 +6216,7 @@ async function webResearch(args = {}) {
             error: run.details?.error
         })))
     });
+    const publicSearchDetails = stripWebResearchSearchBehaviorFields(searchDetails);
     const allSearchRunsFailed = !searchRuns.length || searchRuns.every((run) => {
         const status = normalizeString(run.details?.status);
         return run.result?.isError === true || ['error', 'skipped', 'search_failed'].includes(status);
@@ -6246,7 +6226,7 @@ async function webResearch(args = {}) {
         const webSearchOutput = buildCodexWebSearchOutput({
             query,
             queryPlan,
-            searchDetails,
+            searchDetails: publicSearchDetails,
             candidates: [],
             pages: [],
             bundleAssessment,
@@ -6265,10 +6245,9 @@ async function webResearch(args = {}) {
                     concurrency: 1,
                     candidateCount: 0
                 }
-            }),
-            suggestedNextCalls: searchDetails?.suggestedNextCalls || []
+            })
         });
-        return textResult(formatWebResearchBundle({ query, searchDetails, pages: [], bundleAssessment, pipelineSteps }), {
+        return textResult(formatWebResearchBundle({ query, searchDetails: publicSearchDetails, pages: [], bundleAssessment, pipelineSteps }), {
             type: 'function_call_output',
             status: searchDetails?.clarificationRequired ? 'clarification_required' : 'search_failed',
             query,
@@ -6276,11 +6255,10 @@ async function webResearch(args = {}) {
             webSearchItem: webSearchOutput.webSearchItem,
             functionCallOutput: webSearchOutput.functionCallOutput,
             webSearchOutput,
-            search: searchDetails,
+            search: publicSearchDetails,
             evidencePages: [],
             pipelineSteps,
-            ...bundleAssessment,
-            suggestedNextCalls: searchDetails?.suggestedNextCalls || []
+            ...bundleAssessment
         });
     }
     const candidates = buildWebResearchCandidates(searchDetails, maxPages);
@@ -6380,10 +6358,7 @@ async function webResearch(args = {}) {
         (Number(left.searchRank) || 999) - (Number(right.searchRank) || 999)
     );
     const bundleAssessment = assessWebResearchBundle(orderedPages, searchDetails);
-    const suggestedNextCalls = dedupeSuggestedNextCalls([
-        ...orderedPages.flatMap((page) => page.suggestedNextCalls || []),
-        ...(searchDetails.suggestedNextCalls || [])
-    ], 6);
+    const publicPages = orderedPages.map(stripWebResearchBehaviorFields);
     const answerCandidates = Array.isArray(searchDetails.answerCandidates)
         ? searchDetails.answerCandidates.slice(0, 5)
         : [];
@@ -6405,19 +6380,18 @@ async function webResearch(args = {}) {
     const webSearchOutput = buildCodexWebSearchOutput({
         query,
         queryPlan,
-        searchDetails,
+        searchDetails: publicSearchDetails,
         candidates,
-        pages: orderedPages,
+        pages: publicPages,
         bundleAssessment,
         pipelineSteps,
         startedAt,
         overallTimeoutMs,
         executionMode,
         parallelism,
-        answerCandidates,
-        suggestedNextCalls
+        answerCandidates
     });
-    return textResult(formatWebResearchBundle({ query, searchDetails, pages: orderedPages, bundleAssessment, pipelineSteps }), {
+    return textResult(formatWebResearchBundle({ query, searchDetails: publicSearchDetails, pages: publicPages, bundleAssessment, pipelineSteps }), {
         type: 'function_call_output',
         status: 'completed',
         query,
@@ -6427,13 +6401,12 @@ async function webResearch(args = {}) {
         webSearchOutput,
         executionMode,
         parallelism,
-        search: searchDetails,
-        evidencePages: orderedPages,
-        pageCount: orderedPages.length,
+        search: publicSearchDetails,
+        evidencePages: publicPages,
+        pageCount: publicPages.length,
         answerCandidates,
         pipelineSteps,
-        ...bundleAssessment,
-        suggestedNextCalls
+        ...bundleAssessment
     });
 }
 

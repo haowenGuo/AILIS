@@ -5422,52 +5422,42 @@ function sanitizeWebStructuredContentForPrompt(value, depth = 0, context = {}) {
             executionMode: value.executionMode,
             parallelism: value.parallelism,
             pageCount: value.pageCount,
-            answerReadiness: value.answerReadiness,
-            evidenceGap: value.evidenceGap,
-            recoveryHint: value.recoveryHint,
-            suggestedNextCalls: value.suggestedNextCalls
-        }, depth + 1, { ...context, keepWebReadinessFields: true });
+            retrievalDiagnostics: value.retrievalDiagnostics || value.retrieval_diagnostics
+        }, depth + 1, context);
     }
-    const childContext = isCodexWebSearchObject
-        ? { ...context, keepWebReadinessFields: true }
-        : context;
-    const keepReadinessFields = childContext.keepWebReadinessFields === true;
+    const childContext = context;
     const omittedKeys = new Set([
         'searchConfidence',
         'search_confidence',
-        ...(keepReadinessFields ? [] : [
-            'answerReadiness',
-            'answer_readiness',
-            'retrievalReadiness',
-            'retrieval_readiness',
-            'readinessAuthority',
-            'readiness_authority',
-            'evidenceDecision',
-            'evidence_decision',
-            'requiresEvidenceAudit',
-            'requires_evidence_audit',
-            'evidenceGap',
-            'evidence_gap',
-            'recoveryHint',
-            'recovery_hint',
-            'evidenceQuality',
-            'evidence_quality',
-            'contentQuality',
-            'content_quality'
-        ]),
+        'answerReadiness',
+        'answer_readiness',
+        'retrievalReadiness',
+        'retrieval_readiness',
+        'readinessAuthority',
+        'readiness_authority',
+        'evidenceDecision',
+        'evidence_decision',
+        'requiresEvidenceAudit',
+        'requires_evidence_audit',
+        'evidenceGap',
+        'evidence_gap',
+        'recoveryHint',
+        'recovery_hint',
+        'evidenceQuality',
+        'evidence_quality',
+        'contentQuality',
+        'content_quality',
         'evidenceScore',
         'evidence_score',
         'evidenceScoreBreakdown',
         'evidence_score_breakdown',
-        ...(keepReadinessFields ? [] : [
-            'reasoningReady',
-            'reasoning_ready',
-            'modelJudgesEvidence',
-            'model_judges_evidence',
-            'isEvidence',
-            'is_evidence',
-            'complete'
-        ]),
+        'reasoningReady',
+        'reasoning_ready',
+        'modelJudgesEvidence',
+        'model_judges_evidence',
+        'isEvidence',
+        'is_evidence',
+        'complete',
     ]);
     return Object.fromEntries(Object.entries(value)
         .filter(([key]) => !omittedKeys.has(key))
@@ -5688,7 +5678,7 @@ function buildLlmAgentDirectToolPrompt({
         'Tool call outputs from previous turns appear as function_call_output/tool_search_output items paired with their call_id. Use recent, relevant outputs as observations, but do not keep rereading stale exploration results once you have enough information to code, verify, or answer.',
         'Answer directly once the available evidence supports a reasonable answer. Use another tool only when you can name the specific missing field or uncertainty that blocks the answer. Do not repeat an identical tool call unless the new arguments materially change the observation.',
         'Only call tools that are present in the current tools array. If a needed tool is missing, use tool_search when it is available.',
-        'For broad public web research, guides, current information, or comparison tasks, prefer one mcp__ailis_research__web_research call when available. It is a Codex-style structured retrieval action that can run multiple query variants and fetch multiple pages internally; do not manually chain web_search and web_fetch unless web_research is unavailable or its bundle names a concrete missing field.',
+        'For broad public web research, guides, current information, or comparison tasks, prefer one mcp__ailis_research__web_research call when available. It is a Codex-style structured retrieval action that can run multiple query variants and fetch multiple pages internally; do not manually chain web_search and web_fetch unless web_research is unavailable or the user asks to inspect a specific source.',
         'For local file and data tasks, prefer the coding main path: read/write/exec/apply_patch. Use read to inspect small files, write to create helper scripts, exec to run scripts/tests/diagnostics, and apply_patch for source edits. Use tool_search only when the coding path cannot reliably inspect the file type or when a specialized direct MCP/tool is clearly needed.',
         'For data reasoning tasks, use code as a calculator and verifier: write scripts that parse the source file, compute the needed result, and print a short answer plus compact evidence. Do not write scripts whose main purpose is to dump large files, whole spreadsheets, logs, or documents back into model context.',
         'For long-running work, you may attach progress_note to a tool call or include a short public progress sentence only at meaningful milestones: plan changed, key evidence found, strategy changed after failure, blocker/recovery identified, or evidence is sufficient and you are preparing the final answer. Leave progress_note empty for routine tool calls. Do not expose raw JSON, hidden reasoning, internal IDs, stack traces, token counts, or generic "I am thinking" text.',

@@ -1561,17 +1561,20 @@ test('web_research builds an evidence bundle from search and fetched pages', asy
         assert.equal(result.structuredContent.webSearchCall.action.type, 'search');
         assert.equal(result.structuredContent.webSearchItem.type, 'web_search');
         assert.equal(result.structuredContent.webSearchOutput.type, 'function_call_output');
-        assert.equal(result.structuredContent.answerReadiness, 'ready');
+        assert.equal(result.structuredContent.answerReadiness, undefined);
+        assert.equal(result.structuredContent.fetchedPageCount, 1);
         assert.equal(result.structuredContent.evidencePages.length, 1);
         assert.equal(result.structuredContent.evidencePages[0].url, `${baseUrl}/guide`);
-        assert.equal(result.structuredContent.evidencePages[0].evidenceQuality, 'sufficient_evidence');
-        assert.equal(result.structuredContent.evidencePages[0].reasoningReady, true);
-        assert.ok(result.structuredContent.evidencePages[0].evidenceScore >= 70);
+        assert.equal(result.structuredContent.evidencePages[0].evidenceQuality, undefined);
+        assert.equal(result.structuredContent.evidencePages[0].reasoningReady, undefined);
+        assert.equal(result.structuredContent.evidencePages[0].isEvidence, undefined);
+        assert.equal(result.structuredContent.evidencePages[0].evidenceGap, undefined);
         assert.ok(result.structuredContent.evidencePages[0].evidenceSnippets.length >= 1);
         assert.equal(result.structuredContent.pipelineSteps[0].stage, 'query_plan');
         assert.equal(result.structuredContent.search.searchQueries[0].role, 'original');
         assert.ok(result.structuredContent.evidencePages[0].htmlRelations.sections.some((section) => section.heading === '配队建议'));
         assert.match(result.content[0].text, /AILIS web research evidence bundle/);
+        assert.doesNotMatch(result.content[0].text, /Readiness:|Recovery hint:|Output policy:|Evidence gap:|Retrieval note:/);
         assert.ok(requests.filter((pathname) => pathname === '/search').length >= 1);
         assert.ok(requests.includes('/guide'));
     });
@@ -1639,7 +1642,8 @@ test('web_research expands query variants and fetches the high-signal result', a
         });
 
         assert.equal(result.isError, undefined, result.content[0].text);
-        assert.equal(result.structuredContent.answerReadiness, 'ready');
+        assert.equal(result.structuredContent.answerReadiness, undefined);
+        assert.equal(result.structuredContent.fetchedPageCount, 1);
         assert.deepEqual(searchQueries, ['帮我做一个绝区零 莱特 攻略 配队', '绝区零 "莱特" 攻略']);
         assert.deepEqual(fetchedPaths, ['/guide']);
         assert.equal(result.structuredContent.search.searchAggregation.queryPlan, true);
@@ -1708,10 +1712,11 @@ test('web_research exact entity planning preserves specific target terms', async
         });
 
         assert.equal(result.isError, undefined, result.content[0].text);
-        assert.equal(result.structuredContent.answerReadiness, 'ready');
+        assert.equal(result.structuredContent.answerReadiness, undefined);
+        assert.equal(result.structuredContent.fetchedPageCount, 1);
         assert.ok(searchQueries.includes('绝区零 "叶瞬光" "小光" 攻略'));
         assert.equal(result.structuredContent.evidencePages[0].url, `${baseUrl}/xiaoguang-guide`);
-        assert.equal(result.structuredContent.evidencePages[0].evidenceQuality, 'sufficient_evidence');
+        assert.equal(result.structuredContent.evidencePages[0].evidenceQuality, undefined);
     });
 });
 
@@ -1812,7 +1817,8 @@ test('web_research does not mark broad source pages ready when target terms are 
         });
 
         assert.equal(result.isError, undefined, result.content[0].text);
-        assert.equal(result.structuredContent.answerReadiness, 'needs_followup');
+        assert.equal(result.structuredContent.answerReadiness, undefined);
+        assert.equal(result.structuredContent.fetchedPageCount, 0);
         assert.deepEqual(result.structuredContent.evidencePages, []);
         assert.equal(result.structuredContent.search.searchConfidence.level, 'low');
         assert.ok(result.structuredContent.search.searchConfidence.reasons.includes('top_result_missing_specific_target_terms'));
@@ -1879,7 +1885,8 @@ test('web_research diversifies fetch candidates across hosts before retrying one
             });
 
             assert.equal(result.isError, undefined, result.content[0].text);
-            assert.equal(result.structuredContent.answerReadiness, 'ready');
+            assert.equal(result.structuredContent.answerReadiness, undefined);
+            assert.equal(result.structuredContent.fetchedPageCount, 2);
             assert.equal(result.structuredContent.evidencePages.some((page) => page.url === `http://localhost:${guidePort}/guide`), true);
             assert.equal(result.structuredContent.evidencePages.filter((page) => page.url.includes(`127.0.0.1:${shellPort}`)).length, 1);
         });
@@ -1940,12 +1947,13 @@ test('web_research reranks fetched pages by evidence score instead of search ord
         });
 
         assert.equal(result.isError, undefined, result.content[0].text);
-        assert.equal(result.structuredContent.answerReadiness, 'ready');
+        assert.equal(result.structuredContent.answerReadiness, undefined);
+        assert.equal(result.structuredContent.fetchedPageCount, 2);
         assert.equal(result.structuredContent.evidencePages.length, 2);
         assert.equal(result.structuredContent.evidencePages[0].url, `${baseUrl}/guide`);
-        assert.equal(result.structuredContent.evidencePages[0].evidenceQuality, 'sufficient_evidence');
+        assert.equal(result.structuredContent.evidencePages[0].evidenceQuality, undefined);
         assert.equal(result.structuredContent.evidencePages[1].url, `${baseUrl}/shell`);
-        assert.ok(result.structuredContent.evidencePages[0].evidenceScore > result.structuredContent.evidencePages[1].evidenceScore);
+        assert.equal(result.structuredContent.evidencePages[0].evidenceScore, undefined);
     });
 });
 
@@ -1985,9 +1993,11 @@ test('web_research stops before fetching pages when search target is ambiguous',
 
         assert.equal(result.isError, undefined, result.content[0].text);
         assert.equal(result.structuredContent.status, 'clarification_required');
-        assert.equal(result.structuredContent.answerReadiness, 'needs_clarification');
+        assert.equal(result.structuredContent.answerReadiness, undefined);
+        assert.equal(result.structuredContent.clarificationRequired, undefined);
+        assert.equal(result.structuredContent.search.candidateChoices.length, 2);
         assert.equal(result.structuredContent.evidencePages.length, 0);
-        assert.equal(result.structuredContent.search.clarificationRequired, true);
+        assert.equal(result.structuredContent.search.clarificationRequired, undefined);
         assert.ok(requests.length >= 1);
         assert.ok(requests.every((pathname) => pathname === '/search'));
     });
@@ -2054,18 +2064,18 @@ test('web_research returns candidate evidence for video metadata pages without a
         });
 
         assert.equal(result.isError, undefined, result.content[0].text);
-        assert.equal(result.structuredContent.answerReadiness, 'partial');
-        assert.equal(result.structuredContent.requiresEvidenceAudit, false);
-        assert.equal(result.structuredContent.evidenceDecision, 'model_judges_candidate_evidence');
+        assert.equal(result.structuredContent.answerReadiness, undefined);
+        assert.equal(result.structuredContent.requiresEvidenceAudit, undefined);
+        assert.equal(result.structuredContent.evidenceDecision, undefined);
         assert.equal(result.structuredContent.evidencePages.length, 1);
         assert.equal(result.structuredContent.evidencePages[0].pageType, 'video_page');
-        assert.equal(result.structuredContent.evidencePages[0].evidenceQuality, 'metadata_only');
-        assert.equal(result.structuredContent.evidencePages[0].reasoningReady, false);
-        assert.match(result.structuredContent.evidencePages[0].recoveryHint, /transcript|video-specific|ASR/i);
+        assert.equal(result.structuredContent.evidencePages[0].evidenceQuality, undefined);
+        assert.equal(result.structuredContent.evidencePages[0].reasoningReady, undefined);
+        assert.equal(result.structuredContent.evidencePages[0].recoveryHint, undefined);
+        assert.equal(result.structuredContent.evidencePages[0].evidenceGap, undefined);
         assert.match(result.content[0].text, /Codex object: web_search_call action=search/);
-        assert.match(result.content[0].text, /Output policy: snippets, fetched pages, and diagnostics are source evidence/);
-        assert.doesNotMatch(result.content[0].text, /Retrieval readiness:/);
-        assert.doesNotMatch(result.content[0].text, /Evidence decision:/);
+        assert.match(result.content[0].text, /Bundle contents: search result snippets/);
+        assert.doesNotMatch(result.content[0].text, /Readiness:|Recovery hint:|Output policy:|Evidence decision:|Evidence gap:|Retrieval note:/);
         assert.match(result.content[0].text, /Candidate snippets from search results/);
     });
 });
