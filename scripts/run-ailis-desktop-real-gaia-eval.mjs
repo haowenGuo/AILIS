@@ -11,8 +11,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(__dirname, '..');
 const DEFAULT_GAIA_DIR = path.join(PROJECT_ROOT, 'eval-results', 'engineering', 'gaia-official');
 const DEFAULT_OUTPUT_DIR = path.join(PROJECT_ROOT, 'eval-results', 'engineering', 'gaia-desktop-real');
-const DEFAULT_SOURCE_JSONL = path.join(DEFAULT_GAIA_DIR, 'seed-gaia-l1-full-retest-20260612.jsonl');
-const DEFAULT_SOURCE_SUMMARY = path.join(DEFAULT_GAIA_DIR, 'seed-gaia-l1-full-retest-20260612.summary.json');
+const DEFAULT_SOURCE_JSONL = path.join(DEFAULT_GAIA_DIR, 'ailis-l1-full-current-20260707.jsonl');
+const DEFAULT_SOURCE_SUMMARY = path.join(DEFAULT_GAIA_DIR, 'ailis-l1-full-current-20260707.summary.json');
 
 function normalizeText(value, fallback = '') {
     if (typeof value === 'number' && Number.isFinite(value)) {
@@ -508,6 +508,11 @@ function parseVisibleNumber(value = '') {
     return Number.isFinite(parsed) ? parsed : null;
 }
 
+function isCountQuestion(question = '') {
+    const text = normalizeText(question).toLowerCase();
+    return /\bhow\s+many\b|\bnumber\s+of\b|\bcount\b|多少|几个|几位|数量/.test(text);
+}
+
 function getQuestionNumericScale(question = '') {
     const text = normalizeText(question).toLowerCase();
     if (/\bhow\s+many\s+thousand\b|\bin\s+thousands\b|\bthousand\s+(?:hours?|kilometers?|metres?|meters?|dollars?|people|years?)\b/.test(text)) {
@@ -526,17 +531,29 @@ function answersEquivalentForQuestion(candidate = '', gold = '', question = '') 
     if (answersEquivalent(candidate, gold)) {
         return true;
     }
+    const goldNumber = parseNumber(gold);
+    const candidateNumber = parseVisibleNumber(candidate);
+    if (
+        isCountQuestion(question) &&
+        goldNumber !== null &&
+        candidateNumber !== null &&
+        Math.abs(candidateNumber - goldNumber) <= Math.max(1e-9, Math.abs(goldNumber) * 1e-9)
+    ) {
+        return true;
+    }
     const scale = getQuestionNumericScale(question);
     if (!scale) {
         return false;
     }
-    const candidateNumber = parseVisibleNumber(candidate);
-    const goldNumber = parseNumber(gold);
     if (candidateNumber === null || goldNumber === null) {
         return false;
     }
     const expected = goldNumber * scale;
     return Math.abs(candidateNumber - expected) <= Math.max(1e-9, Math.abs(expected) * 1e-9);
+}
+
+function isIncompleteStatus(status = '') {
+    return /\b(?:subagent_running|running|queued|pending|incomplete|timeout|timed_out)\b/i.test(normalizeText(status));
 }
 
 function cleanCandidateLine(value = '') {
@@ -849,6 +866,8 @@ function aggregateSummary({ args, results, startedAt, finishedAt, runtimeSetting
     const total = results.length;
     const responseOk = results.filter((row) => row.response_ok).length;
     const visibleCorrect = results.filter((row) => row.visible_score?.ok).length;
+    const incomplete = results.filter((row) => !row.visible_score?.ok && isIncompleteStatus(row.raw_status || row.status)).length;
+    const failed = Math.max(0, total - visibleCorrect - incomplete);
     const manualReview = results.filter((row) => row.visible_score?.needsManualReview && !row.visible_score?.ok).length;
     const durations = results.map((row) => Number(row.durationMs) || 0);
     const usage = results.reduce(
@@ -889,7 +908,9 @@ function aggregateSummary({ args, results, startedAt, finishedAt, runtimeSetting
             total,
             responseOk,
             visibleCorrect,
-            failed: total - visibleCorrect,
+            failed,
+            incomplete,
+            notCorrect: total - visibleCorrect,
             manualReview,
             responseOkRate: formatPercent(responseOk, total),
             visibleSuccessRate: formatPercent(visibleCorrect, total)
@@ -922,7 +943,12 @@ function markdownTable(headers, rows) {
 }
 
 function buildMarkdownReport(summary, results) {
-    const failures = results.filter((row) => !row.visible_score?.ok).slice(0, 20);
+    const failures = results
+        .filter((row) => !row.visible_score?.ok && !isIncompleteStatus(row.raw_status || row.status))
+        .slice(0, 20);
+    const incomplete = results
+        .filter((row) => !row.visible_score?.ok && isIncompleteStatus(row.raw_status || row.status))
+        .slice(0, 20);
     const taskRows = results.map((row) => [
         row.index,
         `\`${row.task_id}\``,
@@ -936,6 +962,14 @@ function buildMarkdownReport(summary, results) {
         row.final_answer || '(missing)'
     ]);
     const failureRows = failures.map((row) => [
+        row.index,
+        `\`${row.task_id}\``,
+        row.status,
+        row.visible_score?.answer || '(none)',
+        row.final_answer || '(missing)',
+        row.error || row.display_text_preview.slice(0, 180)
+    ]);
+    const incompleteRows = incomplete.map((row) => [
         row.index,
         `\`${row.task_id}\``,
         row.status,
@@ -963,6 +997,8 @@ function buildMarkdownReport(summary, results) {
                 ['Tasks', summary.totals.total],
                 ['Visible success', `${summary.totals.visibleCorrect}/${summary.totals.total} (${summary.totals.visibleSuccessRate})`],
                 ['Response OK', `${summary.totals.responseOk}/${summary.totals.total} (${summary.totals.responseOkRate})`],
+                ['Current true failures', summary.totals.failed],
+                ['Incomplete / still running', summary.totals.incomplete],
                 ['Manual review candidates', summary.totals.manualReview],
                 ['Avg duration ms', summary.performance.avgDurationMs],
                 ['P95 duration ms', summary.performance.p95DurationMs],
@@ -982,11 +1018,17 @@ function buildMarkdownReport(summary, results) {
             taskRows
         ),
         '',
-        '## Failure / Review Samples',
+        '## Current True Failure / Review Samples',
         '',
         failures.length
             ? markdownTable(['Index', 'Task', 'Status', 'Extracted', 'Gold', 'Preview'], failureRows)
-            : 'No failed samples.',
+            : 'No current true failed samples.',
+        '',
+        '## Incomplete / Still Running Samples',
+        '',
+        incomplete.length
+            ? markdownTable(['Index', 'Task', 'Status', 'Extracted', 'Gold', 'Preview'], incompleteRows)
+            : 'No incomplete samples.',
         '',
         '## Artifacts',
         '',
@@ -1201,6 +1243,8 @@ async function main() {
 
 export {
     answersEquivalent,
+    answersEquivalentForQuestion,
+    isIncompleteStatus,
     normalizeAnswerForScore,
     scoreVisibleAnswer,
     summarizeEvents

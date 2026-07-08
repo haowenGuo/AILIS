@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+    isIncompleteStatus,
     scoreVisibleAnswer,
     summarizeEvents
 } from '../scripts/run-ailis-desktop-real-gaia-eval.mjs';
@@ -101,4 +102,25 @@ test('desktop-real visible scorer extracts inline final result after rendering',
     const score = scoreVisibleAnswer({ response, gold: '17', question });
     assert.equal(score.ok, true);
     assert.equal(score.answer, '17000');
+});
+
+test('desktop-real visible scorer accepts count answer with semantic unit suffix', () => {
+    const response = {
+        ok: true,
+        status: 'completed',
+        displayText: 'Mercedes Sosa released **3 studio albums** between 2000 and 2009. **Answer: 3 studio albums.**'
+    };
+    const question = 'How many studio albums were published by Mercedes Sosa between 2000 and 2009 (included)?';
+
+    const score = scoreVisibleAnswer({ response, gold: '3', question });
+    assert.equal(score.ok, true);
+    assert.equal(score.status, 'visible_answer_match');
+    assert.equal(score.answer, '3 studio albums');
+});
+
+test('desktop-real eval classifies still-running subagents as incomplete, not true failures', () => {
+    assert.equal(isIncompleteStatus('subagent_running'), true);
+    assert.equal(isIncompleteStatus('running'), true);
+    assert.equal(isIncompleteStatus('completed'), false);
+    assert.equal(isIncompleteStatus('answer_candidate_mismatch'), false);
 });
