@@ -2063,7 +2063,7 @@ test('web_research returns candidate evidence for video metadata pages without a
         assert.equal(result.structuredContent.evidencePages[0].reasoningReady, false);
         assert.match(result.structuredContent.evidencePages[0].recoveryHint, /transcript|video-specific|ASR/i);
         assert.match(result.content[0].text, /Codex object: web_search_call action=search/);
-        assert.match(result.content[0].text, /Output policy: snippets, fetched pages, and diagnostics are candidate material only/);
+        assert.match(result.content[0].text, /Output policy: snippets, fetched pages, and diagnostics are source evidence/);
         assert.doesNotMatch(result.content[0].text, /Retrieval readiness:/);
         assert.doesNotMatch(result.content[0].text, /Evidence decision:/);
         assert.match(result.content[0].text, /Candidate snippets from search results/);

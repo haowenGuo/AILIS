@@ -5828,9 +5828,9 @@ function assessWebResearchBundle(pages = [], searchDetails = {}) {
             answerReadiness: 'ready',
             readinessAuthority: 'retrieval_summary_model_decides',
             requiresEvidenceAudit: false,
-            evidenceDecision: 'model_judges_candidate_evidence',
+            evidenceDecision: 'answer_from_available_evidence',
             evidenceGap: '',
-            recoveryHint: 'Candidate evidence is ready for model judgment; continue retrieval only if the model sees a missing field.'
+            recoveryHint: 'Use the evidence bundle to answer when it covers the question. Continue retrieval only for a named missing field.'
         };
     }
     if (evidencePages.length) {
@@ -5868,7 +5868,7 @@ function formatWebResearchBundle({ query = '', searchDetails = {}, pages = [], b
         'AILIS web research evidence bundle:',
         `Query: ${query}`,
         'Codex object: web_search_call action=search',
-        'Output policy: snippets, fetched pages, and diagnostics are candidate material only; the tool does not judge final answer confidence.'
+        'Output policy: snippets, fetched pages, and diagnostics are source evidence. If the visible evidence answers the question, answer directly; fetch more only for a specific missing field.'
     ];
     if (bundleAssessment.answerReadiness || bundleAssessment.evidenceGap || bundleAssessment.recoveryHint) {
         lines.push(`Readiness: ${bundleAssessment.answerReadiness || 'unknown'}`);
