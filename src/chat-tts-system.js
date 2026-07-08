@@ -8,6 +8,7 @@ import { markdownToPlainText, setMarkdownContent, setPlainTextContent } from './
 import { AVATAR_SPEECH_EVENT_NAME } from './avatar-dialogue-bubble.js';
 import { deriveTtsSpeechText, normalizeTtsSpeechText } from './tts-speech-text.js';
 import { t } from './i18n.js';
+import { ProactiveCompanionManager } from './proactive-companion-manager.js';
 
 const CHAT_UI_EVENT_NAME = 'ailis-chat-ui-event';
 const CHAT_EXPRESSIVE_GESTURE_INTENTS = new Set([
@@ -113,6 +114,16 @@ export class ChatTTSSystem {
         this.activeChunkedSpeechSession = null;
         this.activeTurn = null;
         this.cancelledTurnIds = new Set();
+        this.proactiveCompanion = new ProactiveCompanionManager({
+            getConfig: () => CONFIG,
+            getChatState: () => this.getProactiveChatState(),
+            requestOpportunity: (payload) => this.chatService?.evaluateProactiveOpportunity?.({
+                sessionId: this.sessionId,
+                messageHistory: this.createMessageHistorySnapshot(),
+                ...payload
+            }),
+            onSpeak: (decision) => this.triggerAutoChat(decision)
+        });
 
         this.inputEl.disabled = true;
         this.sendBtnEl.disabled = true;
@@ -165,26 +176,21 @@ export class ChatTTSSystem {
     }
 
     startAutoChatTimer() {
-        if (this.autoChatTimer) {
-            clearTimeout(this.autoChatTimer);
-            this.autoChatTimer = null;
-        }
-
-        if (!CONFIG.AUTO_CHAT_ENABLED) {
-            console.log('⏸️ 主动搭话已关闭');
-            return;
-        }
-
-        if (this.chatService?.supportsAutoChat === false) {
+        if (this.chatService?.supportsAutoChat === false || typeof this.chatService?.evaluateProactiveOpportunity !== 'function') {
             console.log('⏸️ 当前聊天后端不支持主动搭话');
             return;
         }
+        this.proactiveCompanion.start('schedule');
+    }
 
-        const randomDelay = CONFIG.AUTO_CHAT_MIN_INTERVAL +
-            Math.random() * (CONFIG.AUTO_CHAT_MAX_INTERVAL - CONFIG.AUTO_CHAT_MIN_INTERVAL);
-
-        console.log(`⏱️ 下一次主动对话将在 ${(randomDelay / 1000).toFixed(1)} 秒后`);
-        this.autoChatTimer = setTimeout(() => this.triggerAutoChat(), randomDelay);
+    getProactiveChatState() {
+        return {
+            isBusy: this.isBusy,
+            userTyping: Boolean(this.inputEl?.value?.trim()),
+            inputDisabled: Boolean(this.inputEl?.disabled),
+            voicePlaying: Boolean(this.activeChunkedSpeechSession),
+            messageHistory: this.messageHistory
+        };
     }
 
     applyRuntimePreferences(preferences = {}) {
@@ -550,7 +556,7 @@ export class ChatTTSSystem {
         this.startAutoChatTimer();
     }
 
-    async triggerAutoChat() {
+    async triggerAutoChat(opportunity = null) {
         if (this.chatService?.supportsAutoChat === false) {
             return;
         }
@@ -571,16 +577,17 @@ export class ChatTTSSystem {
         const messageHistorySnapshot = this.createMessageHistorySnapshot();
 
         try {
-            const payload = await this.fetchAssistantTurnWithFallback(true, (partialPayload) => {
-                if (!this.isTurnActive(turn)) {
-                    return;
-                }
-                this.renderStreamingAssistantReply(partialPayload, aiMessageDiv);
-                this.appendChunkedSpeechProgress(chunkedSpeechSession, partialPayload);
-            }, {
-                messageHistory: messageHistorySnapshot,
-                shouldContinue: () => this.isTurnActive(turn)
-            });
+            const payload = opportunity?.payload || await this.fetchAssistantTurnWithFallback(true, (partialPayload) => {
+                    if (!this.isTurnActive(turn)) {
+                        return;
+                    }
+                    this.renderStreamingAssistantReply(partialPayload, aiMessageDiv);
+                    this.appendChunkedSpeechProgress(chunkedSpeechSession, partialPayload);
+                }, {
+                    messageHistory: messageHistorySnapshot,
+                    shouldContinue: () => this.isTurnActive(turn),
+                    proactiveContext: opportunity?.context || null
+                });
             if (!this.isTurnActive(turn)) {
                 return;
             }
@@ -598,7 +605,12 @@ export class ChatTTSSystem {
             } else {
                 await this.renderAssistantReply(payload, aiMessageDiv);
             }
-            this.messageHistory.push({ role: 'assistant', content: payload.display_text });
+            this.messageHistory.push({
+                role: 'assistant',
+                content: payload.display_text,
+                source: 'proactive_companion',
+                createdAt: new Date().toISOString()
+            });
         } catch (error) {
             await chunkedSpeechSession?.cancel?.('auto-chat-error');
             this.removeMessageElement(aiMessageDiv);
@@ -641,8 +653,10 @@ export class ChatTTSSystem {
         this.messageHistory.push({
             role: 'user',
             content: messageContent,
-            attachments
+            attachments,
+            createdAt: new Date().toISOString()
         });
+        this.proactiveCompanion.noteUserTurn();
 
         const loadingEl = this.addLoadingMessage();
         const aiMessageDiv = this.createAIMessage();
@@ -683,7 +697,12 @@ export class ChatTTSSystem {
             } else {
                 await this.renderAssistantReply(payload, aiMessageDiv);
             }
-            this.messageHistory.push({ role: 'assistant', content: payload.display_text });
+            this.messageHistory.push({
+                role: 'assistant',
+                content: payload.display_text,
+                createdAt: new Date().toISOString()
+            });
+            this.proactiveCompanion.noteAssistantTurn();
         } catch (error) {
             await chunkedSpeechSession?.cancel?.('chat-turn-error');
             this.removeMessageElement(loadingEl);
@@ -762,14 +781,15 @@ export class ChatTTSSystem {
         };
     }
 
-    async fetchAssistantTurn(isAutoChat = false, onProgress, messageHistory = this.messageHistory) {
+    async fetchAssistantTurn(isAutoChat = false, onProgress, messageHistory = this.messageHistory, options = {}) {
         return this.chatService.fetchAssistantTurn({
             sessionId: this.sessionId,
             messageHistory,
             is_auto_chat: isAutoChat,
             isAutoChat,
             replyMode: 'stream_text',
-            onProgress
+            onProgress,
+            proactiveContext: options.proactiveContext || null
         });
     }
 
@@ -794,7 +814,8 @@ export class ChatTTSSystem {
                     is_auto_chat: isAutoChat,
                     isAutoChat,
                     replyMode,
-                    onProgress: replyMode === 'stream_text' ? onProgress : null
+                    onProgress: replyMode === 'stream_text' ? onProgress : null,
+                    proactiveContext: options.proactiveContext || null
                 });
             } catch (error) {
                 if (!shouldContinue()) {

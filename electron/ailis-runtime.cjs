@@ -202,7 +202,9 @@ function summarize(value, maxChars = 800) {
 function buildSubagentRelayText(response = {}) {
     const status = normalizeString(response.status, 'unknown');
     const subagent = response.subagent && typeof response.subagent === 'object' ? response.subagent : {};
-    const result = response.result && typeof response.result === 'object' ? response.result : {};
+    const result = response.result && typeof response.result === 'object'
+        ? response.result
+        : (subagent.result && typeof subagent.result === 'object' ? subagent.result : {});
     const task = summarize(normalizeString(subagent.task || response.task), 180);
     if (status === 'completed') {
         return normalizeString(
@@ -215,12 +217,17 @@ function buildSubagentRelayText(response = {}) {
         );
     }
     if (status === 'running') {
-        return [
-            'TaskAgent 仍在执行，尚未产生最终答案。',
-            subagent.id ? `subagentId=${subagent.id}` : '',
-            subagent.childRunId ? `childRunId=${subagent.childRunId}` : '',
-            task ? `task=${task}` : ''
-        ].filter(Boolean).join('\n');
+        return task
+            ? `TaskAgent 仍在执行，尚未产生最终答案。当前任务：${task}`
+            : 'TaskAgent 仍在执行，尚未产生最终答案。';
+    }
+    if (status === 'queued') {
+        return task
+            ? `TaskAgent 已排队，准备处理：${task}`
+            : 'TaskAgent 已排队，准备开始处理。';
+    }
+    if (status === 'not_found') {
+        return '没有找到这个 TaskAgent 子任务。';
     }
     return normalizeString(
         result.error ||
@@ -1786,9 +1793,13 @@ class AILISRuntime {
             subagent.events = subagent.events.slice(-200);
         }
         this.emitGatewayEvent('subagent.event', {
+            runId: subagent.runId,
+            parentRunId: subagent.runId,
+            parentSessionId: subagent.sessionId,
             subagentId: subagent.id,
             childRunId: subagent.childRunId,
             sessionId: subagent.childSessionId,
+            childSessionId: subagent.childSessionId,
             type: entry.type,
             status: entry.status,
             message: entry.message,
@@ -1807,6 +1818,8 @@ class AILISRuntime {
             sessionId: subagent.sessionId,
             status: normalizeString(event.status, subagent.status),
             payload: {
+                parentRunId: subagent.runId,
+                parentSessionId: subagent.sessionId,
                 subagentId: subagent.id,
                 childRunId: subagent.childRunId,
                 childSessionId: subagent.childSessionId,
@@ -1988,14 +2001,21 @@ class AILISRuntime {
         const sessionId = normalizeString(context.sessionId || context.sessionKey || args.sessionId, 'main');
         if (action === 'list') {
             const subagents = [...this.subagents.values()].map((subagent) => this.publicSubagent(subagent));
+            const text = subagents.length
+                ? `当前有 ${subagents.length} 个 TaskAgent 子任务记录。`
+                : '当前没有 TaskAgent 子任务记录。';
             return {
                 content: [
                     {
                         type: 'text',
-                        text: JSON.stringify({ status: 'completed', subagents }, null, 2)
+                        text
                     }
                 ],
                 details: {
+                    status: 'completed',
+                    subagents
+                },
+                structuredContent: {
                     status: 'completed',
                     subagents
                 }
@@ -2044,43 +2064,41 @@ class AILISRuntime {
                         }
                     ],
                     details: response,
+                    structuredContent: response,
                     isError: !['completed', 'running'].includes(response.status)
                 };
             }
             const publicRecord = this.publicSubagent(subagent);
+            const response = {
+                status: 'running',
+                subagent: publicRecord
+            };
             return {
                 content: [
                     {
                         type: 'text',
-                        text: buildSubagentRelayText({ status: 'running', subagent: publicRecord })
+                        text: buildSubagentRelayText(response)
                     }
                 ],
-                details: {
-                    status: 'running',
-                    subagent: publicRecord
-                }
+                details: response,
+                structuredContent: response
             };
         }
         if (['status', 'info'].includes(action)) {
             const subagent = this.subagents.get(normalizeString(args.subagentId || args.id));
+            const response = {
+                status: subagent ? normalizeString(subagent.status, 'completed') : 'not_found',
+                subagent: subagent ? this.publicSubagent(subagent) : null
+            };
             return {
                 content: [
                     {
                         type: 'text',
-                        text: JSON.stringify(
-                            {
-                                status: subagent ? 'completed' : 'not_found',
-                                subagent: subagent ? this.publicSubagent(subagent) : null
-                            },
-                            null,
-                            2
-                        )
+                        text: buildSubagentRelayText(response)
                     }
                 ],
-                details: {
-                    status: subagent ? 'completed' : 'not_found',
-                    subagent: subagent ? this.publicSubagent(subagent) : null
-                },
+                details: response,
+                structuredContent: response,
                 isError: !subagent
             };
         }
@@ -2091,10 +2109,11 @@ class AILISRuntime {
                 content: [
                     {
                         type: 'text',
-                        text: JSON.stringify(waited, null, 2)
+                        text: buildSubagentRelayText(waited)
                     }
                 ],
                 details: waited,
+                structuredContent: waited,
                 isError: waited.status === 'not_found'
             };
         }
@@ -2102,17 +2121,21 @@ class AILISRuntime {
             const subagent = this.subagents.get(normalizeString(args.subagentId || args.id));
             const limit = Math.max(1, Math.min(Number(args.limit || 50), 200));
             const events = subagent ? (subagent.events || []).slice(-limit) : [];
+            const response = {
+                status: subagent ? 'completed' : 'not_found',
+                events
+            };
             return {
                 content: [
                     {
                         type: 'text',
-                        text: JSON.stringify({ status: subagent ? 'completed' : 'not_found', events }, null, 2)
+                        text: subagent
+                            ? `已找到最近 ${events.length} 条 TaskAgent 事件，完整日志已记录到 Agent Lab。`
+                            : '没有找到这个 TaskAgent 子任务日志。'
                     }
                 ],
-                details: {
-                    status: subagent ? 'completed' : 'not_found',
-                    events
-                },
+                details: response,
+                structuredContent: response,
                 isError: !subagent
             };
         }
@@ -2129,24 +2152,19 @@ class AILISRuntime {
                     }
                 });
             }
+            const response = {
+                status: subagent ? 'queued' : 'not_found',
+                subagent: subagent ? this.publicSubagent(subagent) : null
+            };
             return {
                 content: [
                     {
                         type: 'text',
-                        text: JSON.stringify(
-                            {
-                                status: subagent ? 'queued' : 'not_found',
-                                subagent: subagent ? this.publicSubagent(subagent) : null
-                            },
-                            null,
-                            2
-                        )
+                        text: subagent ? '已把新输入转交给 TaskAgent。' : buildSubagentRelayText(response)
                     }
                 ],
-                details: {
-                    status: subagent ? 'queued' : 'not_found',
-                    subagent: subagent ? this.publicSubagent(subagent) : null
-                },
+                details: response,
+                structuredContent: response,
                 isError: !subagent
             };
         }
@@ -2172,24 +2190,19 @@ class AILISRuntime {
                     }
                 });
             }
+            const response = {
+                status: subagent ? 'completed' : 'not_found',
+                subagent: subagent ? this.publicSubagent(subagent) : null
+            };
             return {
                 content: [
                     {
                         type: 'text',
-                        text: JSON.stringify(
-                            {
-                                status: subagent ? 'completed' : 'not_found',
-                                subagent: subagent ? this.publicSubagent(subagent) : null
-                            },
-                            null,
-                            2
-                        )
+                        text: subagent ? '已向 TaskAgent 发送停止请求。' : buildSubagentRelayText(response)
                     }
                 ],
-                details: {
-                    status: subagent ? 'completed' : 'not_found',
-                    subagent: subagent ? this.publicSubagent(subagent) : null
-                },
+                details: response,
+                structuredContent: response,
                 isError: !subagent
             };
         }
@@ -2197,11 +2210,15 @@ class AILISRuntime {
             content: [
                 {
                     type: 'text',
-                    text: JSON.stringify({ status: 'unsupported_action', action }, null, 2)
+                    text: `不支持的 TaskAgent 操作：${action}`
                 }
             ],
             isError: true,
             details: {
+                status: 'unsupported_action',
+                action
+            },
+            structuredContent: {
                 status: 'unsupported_action',
                 action
             }

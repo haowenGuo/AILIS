@@ -2265,6 +2265,32 @@
                         </div>
                     </div>
                 </section>
+                <section class="panel-section section-proactive-companion" id="section-proactive-companion">
+                    <div class="section-head">
+                        <div class="section-title">主动陪伴</div>
+                        <div class="section-copy">选择 AILIS 的主动性边界。用户只需要选模式，具体判断频率、冷却和打扰控制由系统自动处理。</div>
+                    </div>
+                    <div class="section-body">
+                        <label class="field">
+                            <div class="field-meta">
+                                <span class="field-label">主动模式</span>
+                            </div>
+                            <select id="auto-chat-mode">
+                                <option value="off">默认模式：问一句答一句</option>
+                                <option value="companion">陪伴模式：空闲时偶尔自然开口</option>
+                                <option value="cowork">共事模式：长任务反馈优先，平时更克制</option>
+                                <option value="autonomous">自主任务模式：需要目标、预算和停止条件后才启用</option>
+                            </select>
+                            <div class="field-help">陪伴和共事模式都会先让模型判断“现在说一句是否有价值”；没有明确价值就保持安静。</div>
+                        </label>
+
+                        <div class="field-help">
+                            默认模式最稳；陪伴模式适合日常聊天；共事模式适合长任务中持续给你反馈；自主任务模式当前只保存意图，不会擅自连续执行工具。
+                        </div>
+
+                        <div class="field-help">机会判断主要看最近对话；完整记忆只用于调整语气和分寸，判断过程不会写入记忆。</div>
+                    </div>
+                </section>
                     </div>
                 </section>
 

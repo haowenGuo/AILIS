@@ -165,8 +165,9 @@ const DEFAULT_DESKTOP_NATIVE_TTS_PITCH = 1.12;
 const DEFAULT_DESKTOP_NATIVE_TTS_VOLUME = 1;
 const DEFAULT_CHUNKED_TTS_ENABLED = true;
 const DEFAULT_AUTO_CHAT_ENABLED = false;
-const DEFAULT_AUTO_CHAT_MIN_INTERVAL_SEC = 60;
-const DEFAULT_AUTO_CHAT_MAX_INTERVAL_SEC = 120;
+const DEFAULT_AUTO_CHAT_MODE = 'off';
+const DEFAULT_AUTO_CHAT_MIN_INTERVAL_SEC = 15 * 60;
+const DEFAULT_AUTO_CHAT_MAX_INTERVAL_SEC = 45 * 60;
 const DEFAULT_AVATAR_DIALOGUE_BUBBLE_LEFT = 8;
 const DEFAULT_AVATAR_DIALOGUE_BUBBLE_TOP = 8;
 const DEFAULT_AVATAR_DIALOGUE_BUBBLE_SCALE = 1;
@@ -803,7 +804,19 @@ function normalizeDesktopNativeTTSVolume(value) {
 }
 
 function normalizeAutoChatEnabled(value) {
-    return false;
+    return normalizeBoolean(value, DEFAULT_AUTO_CHAT_ENABLED);
+}
+
+function normalizeAutoChatMode(value, enabled = DEFAULT_AUTO_CHAT_ENABLED) {
+    const mode = String(value || '').trim().toLowerCase();
+    if (['off', 'companion', 'cowork', 'autonomous'].includes(mode)) {
+        return mode;
+    }
+    return normalizeAutoChatEnabled(enabled) ? 'companion' : DEFAULT_AUTO_CHAT_MODE;
+}
+
+function isAutoChatModeEnabled(mode) {
+    return ['companion', 'cowork'].includes(normalizeAutoChatMode(mode));
 }
 
 function normalizeAutoChatMinIntervalSec(value) {
@@ -1001,6 +1014,7 @@ function getDefaultState() {
             desktopNativeTtsPitch: DEFAULT_DESKTOP_NATIVE_TTS_PITCH,
             desktopNativeTtsVolume: DEFAULT_DESKTOP_NATIVE_TTS_VOLUME,
             chunkedTtsEnabled: DEFAULT_CHUNKED_TTS_ENABLED,
+            autoChatMode: DEFAULT_AUTO_CHAT_MODE,
             autoChatEnabled: DEFAULT_AUTO_CHAT_ENABLED,
             autoChatMinIntervalSec: DEFAULT_AUTO_CHAT_MIN_INTERVAL_SEC,
             autoChatMaxIntervalSec: DEFAULT_AUTO_CHAT_MAX_INTERVAL_SEC,
@@ -1303,8 +1317,12 @@ function normalizeState(inputState) {
     normalizedState.preferences.chunkedTtsEnabled = normalizeChunkedTtsEnabled(
         normalizedState.preferences.chunkedTtsEnabled
     );
-    normalizedState.preferences.autoChatEnabled = normalizeAutoChatEnabled(
+    normalizedState.preferences.autoChatMode = normalizeAutoChatMode(
+        normalizedState.preferences.autoChatMode,
         normalizedState.preferences.autoChatEnabled
+    );
+    normalizedState.preferences.autoChatEnabled = isAutoChatModeEnabled(
+        normalizedState.preferences.autoChatMode
     );
     normalizedState.preferences.autoChatMinIntervalSec = normalizeAutoChatMinIntervalSec(
         normalizedState.preferences.autoChatMinIntervalSec
@@ -1462,6 +1480,7 @@ function saveDesktopState(app, nextState, options = {}) {
 module.exports = {
     BACKEND_MODE_OPTIONS,
     DEFAULT_AUTO_CHAT_ENABLED,
+    DEFAULT_AUTO_CHAT_MODE,
     DEFAULT_AUTO_CHAT_MAX_INTERVAL_SEC,
     DEFAULT_AUTO_CHAT_MIN_INTERVAL_SEC,
     DEFAULT_AVATAR_DIALOGUE_BUBBLE_EXTRA_TOP,
@@ -1539,6 +1558,7 @@ module.exports = {
     loadDesktopState,
     createLlmApiKeyId,
     normalizeAutoChatEnabled,
+    normalizeAutoChatMode,
     normalizeAutoChatMaxIntervalSec,
     normalizeAutoChatMinIntervalSec,
     normalizeAvatarDialogueBubbleExtraTop,

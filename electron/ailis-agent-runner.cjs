@@ -668,6 +668,27 @@ function normalizeProgressNoteText(value, fallback = '') {
     return text;
 }
 
+function buildRunLineagePayload(requestContext = {}, runId = '', sessionId = '') {
+    const parentRunId = normalizeText(requestContext.parentRunId || requestContext.parent_run_id);
+    const parentSessionId = normalizeText(requestContext.parentSessionId || requestContext.parent_session_id);
+    const subagentId = normalizeText(requestContext.subagentId || requestContext.subagent_id);
+    const subagentLabel = normalizeText(requestContext.subagentLabel || requestContext.subagent_label);
+    const lineage = {};
+    if (parentRunId && parentRunId !== normalizeText(runId)) {
+        lineage.parentRunId = parentRunId;
+    }
+    if (parentSessionId && parentSessionId !== normalizeText(sessionId)) {
+        lineage.parentSessionId = parentSessionId;
+    }
+    if (subagentId) {
+        lineage.subagentId = subagentId;
+    }
+    if (subagentLabel) {
+        lineage.subagentLabel = subagentLabel;
+    }
+    return lineage;
+}
+
 function normalizeAgentDecisionTimeoutMs(value, fallbackValue = DEFAULT_AGENT_DECISION_TIMEOUT_MS) {
     const numericValue = Number(value);
     const fallback = Number.isFinite(Number(fallbackValue))
@@ -5670,6 +5691,7 @@ function buildLlmAgentDirectToolPrompt({
         'For broad public web research, guides, current information, or comparison tasks, prefer one mcp__ailis_research__web_research call when available. It is a Codex-style structured retrieval action that can run multiple query variants and fetch multiple pages internally; do not manually chain web_search and web_fetch unless web_research is unavailable or its bundle names a concrete missing field.',
         'For local file and data tasks, prefer the coding main path: read/write/exec/apply_patch. Use read to inspect small files, write to create helper scripts, exec to run scripts/tests/diagnostics, and apply_patch for source edits. Use tool_search only when the coding path cannot reliably inspect the file type or when a specialized direct MCP/tool is clearly needed.',
         'For data reasoning tasks, use code as a calculator and verifier: write scripts that parse the source file, compute the needed result, and print a short answer plus compact evidence. Do not write scripts whose main purpose is to dump large files, whole spreadsheets, logs, or documents back into model context.',
+        'For long-running work, you may attach progress_note to a tool call or include a short public progress sentence only at meaningful milestones: plan changed, key evidence found, strategy changed after failure, blocker/recovery identified, or evidence is sufficient and you are preparing the final answer. Leave progress_note empty for routine tool calls. Do not expose raw JSON, hidden reasoning, internal IDs, stack traces, token counts, or generic "I am thinking" text.',
         taskAgentMode
             ? 'You may call subagents to delegate an independent subtask to a fresh TaskAgent child. A child TaskAgent starts with a clean message history and does not inherit your prior tool observations; use it for isolated subtasks whose result can be summarized back to you, not for every simple local operation.'
             : 'You are the user-facing AILIS persona. For ordinary conversation, answer directly. If the current user message is a task execution request, do not solve it in the persona layer and do not spend time planning; immediately call subagents exactly once with action=spawn, wait=true, and task/message containing the whole user task. The subagent task must preserve the user request verbatim first, especially units, date ranges, answer shape, rounding rules, file paths, URLs, and constraints; do not replace it with a lossy summary. Then present the TaskAgent result. Treat file analysis, code/data/math simulation, web research, computer operation, benchmarks, and GAIA-style questions as task execution. Do not inspect tools yourself or spawn multiple children for the same user task.',
@@ -6974,6 +6996,7 @@ class AILISAgentRunner {
         settingsOverride = null
     }) {
         const settings = settingsOverride || resolveAgentLlmSettings(request, requestContext);
+        const runLineage = buildRunLineagePayload(requestContext, runId, sessionId);
         const fileAttachments = getLatestUserFileAttachments(request);
         const missingSettings = isAgentLlmSettingsMissing(settings);
         if (missingSettings) {
@@ -7556,6 +7579,7 @@ class AILISAgentRunner {
                 this.gateway.emitGatewayEvent?.('agent.progress.note', {
                     runId,
                     sessionId,
+                    ...runLineage,
                     iteration,
                     text: progressNote,
                     action: decision.action,
@@ -7565,6 +7589,7 @@ class AILISAgentRunner {
                 this.gateway.emitGatewayEvent?.('agent.reasoning.delta', {
                     runId,
                     sessionId,
+                    ...runLineage,
                     iteration,
                     text: progressNote,
                     action: decision.action,

@@ -1,6 +1,7 @@
 <div align="center">
-  <h1>AILIS Assistant</h1>
-  <p><strong>An open-source desktop embodied AI assistant with a VRM character, realtime voice, vision, memory, and a Codex-style agent harness.</strong></p>
+  <img alt="AILIS character waving" src="Resources/Emotes/ailis-small/wave.png" width="156">
+  <h1>AILIS</h1>
+  <p><strong>A desktop AI companion with a visible character, voice, memory, and a Codex-style tool runtime.</strong></p>
   <p>
     <img alt="Version" src="https://img.shields.io/badge/version-1.1.0-2563eb?style=for-the-badge">
     <img alt="Runtime" src="https://img.shields.io/badge/runtime-Electron-0f172a?style=for-the-badge">
@@ -14,25 +15,41 @@
     <a href="README.fr.md">Français</a> ·
     <a href="README.de.md">Deutsch</a>
   </p>
+  <p>
+    <a href="https://haowenguo.github.io/AILIS/">Homepage</a> ·
+    <a href="https://github.com/haowenGuo/AILIS/releases/tag/v1.1.0">Download</a> ·
+    <a href="docs/ailis-embodied-agent-architecture.md">Architecture</a> ·
+    <a href="docs/ailis-demo-benchmark-scorecard.md">Benchmarks</a>
+  </p>
 </div>
 
 ---
 
-## What AILIS Is
+<p align="center">
+  <img alt="How people use AILIS as a desktop AI companion" src="docs/assets/ailis-zhihu/ailis-user-flow-image2.png">
+</p>
 
-AILIS Assistant is a desktop-first embodied AI assistant. It combines a 3D VRM character, Electron desktop windows, voice interaction, screenshot-aware visual context, memory, and a structured agent runtime for real task execution.
+## Meet AILIS
 
-The goal is not to ship another web chatbot. AILIS is designed to feel like a personal desktop companion that can speak with the user, perceive context when permitted, remember useful preferences, and perform work through explicit, auditable tools.
+AILIS is built to feel less like a blank chat box and more like a presence on your desktop. It combines a 3D character surface, realtime dialogue, voice output, memory, screen/file context, and a tool-using agent runtime for real work.
 
-## Why It Matters
+The product direction is simple: a companion you can talk with naturally, and a work partner that can switch into task mode when you need help with code, research, files, email, or desktop workflows.
 
-Most assistant projects split into two weak forms: expressive avatars without reliable execution, or powerful automation tools that feel like developer consoles. AILIS tries to hold both sides together:
+## Product Surface
 
-- A character layer that feels present, expressive, and emotionally readable.
-- An agent harness that plans, routes tools, handles approvals, records evidence, and recovers from failures.
-- A local-first desktop runtime where private settings, memory, logs, and model configuration stay under the user's control.
+<p align="center">
+  <img alt="AILIS happy expression" src="Resources/Emotes/ailis-small/happy.png" width="128">
+  <img alt="AILIS thinking expression" src="Resources/Emotes/ailis-small/thinking.png" width="128">
+  <img alt="AILIS sparkle expression" src="Resources/Emotes/ailis-small/sparkle.png" width="128">
+</p>
 
-## Current Capabilities
+AILIS brings three layers together:
+
+- **Character layer**: VRM character, expressions, motions, lip sync, speech bubbles, tray and desktop windows.
+- **Companion layer**: conversational style, user preferences, memory blocks, relationship state, and lightweight reflection.
+- **Agent layer**: tool routing, approvals, evidence logs, recovery loops, model provider configuration, and local runtime utilities.
+
+## What It Can Do
 
 - VRM desktop character with expressions, motions, lip sync, and dialogue bubbles.
 - Electron pet window, chat window, control panel, tray integration, and local persistent state.
@@ -45,7 +62,20 @@ Most assistant projects split into two weak forms: expressive avatars without re
 - Approval-aware execution model for actions that can affect files, apps, accounts, or external services.
 - Humanlike experience evals, tool-contract tests, gateway checks, and agent execution smoke tests.
 
+## Why It Is Different
+
+AILIS is not only an expressive avatar and not only an automation console. The interesting part is the bridge:
+
+- It can stay soft and conversational during daily interaction.
+- It can become explicit and auditable during task execution.
+- It keeps provider, memory, model, voice, and local runtime choices under the user's control.
+- It is open source under MIT, so the character surface and the agent harness can evolve together.
+
 ## Architecture
+
+<p align="center">
+  <img alt="AILIS desktop AI runtime architecture" src="docs/assets/ailis-zhihu/ailis-architecture-image2.png">
+</p>
 
 ```text
 User / Voice / Screen

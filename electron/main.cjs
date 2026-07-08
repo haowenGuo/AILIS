@@ -60,6 +60,7 @@ const { AssetPackRuntime } = require('./asset-pack-runtime.cjs');
 const {
     BACKEND_MODE_OPTIONS,
     DEFAULT_AUTO_CHAT_ENABLED,
+    DEFAULT_AUTO_CHAT_MODE,
     DEFAULT_AUTO_CHAT_MAX_INTERVAL_SEC,
     DEFAULT_AUTO_CHAT_MIN_INTERVAL_SEC,
     DEFAULT_AVATAR_DIALOGUE_BUBBLE_EXTRA_TOP,
@@ -125,6 +126,7 @@ const {
     loadDesktopState,
     createLlmApiKeyId,
     normalizeAutoChatEnabled,
+    normalizeAutoChatMode,
     normalizeAutoChatMaxIntervalSec,
     normalizeAutoChatMinIntervalSec,
     normalizeAvatarDialogueBubbleExtraTop,
@@ -2790,21 +2792,24 @@ async function callDesktopLlm(payload = {}) {
         return busy;
     }
     const startedAt = Date.now();
+    const shouldRecordMemory = payload.recordMemory !== false;
     const enrichedPayload = attachAilisMemoryToLlmPayload(payload);
     const result = await callDesktopLlmProvider(settings, enrichedPayload);
-    try {
-        ensureAILISGateway().rawMemoryLedger?.recordChatTurn?.({
-            sessionId: payload.sessionId || payload.sessionKey || 'main',
-            source: payload.memorySource || 'direct_llm',
-            requestPayload: payload,
-            enrichedPayload,
-            result,
-            durationMs: Date.now() - startedAt
-        });
-    } catch (error) {
-        console.warn('[ailis-raw-memory] 写入原始对话账本失败：', error.message || error);
+    if (shouldRecordMemory) {
+        try {
+            ensureAILISGateway().rawMemoryLedger?.recordChatTurn?.({
+                sessionId: payload.sessionId || payload.sessionKey || 'main',
+                source: payload.memorySource || 'direct_llm',
+                requestPayload: payload,
+                enrichedPayload,
+                result,
+                durationMs: Date.now() - startedAt
+            });
+        } catch (error) {
+            console.warn('[ailis-raw-memory] 写入原始对话账本失败：', error.message || error);
+        }
     }
-    if (payload.includeAilisMemory === true) {
+    if (payload.includeAilisMemory === true && shouldRecordMemory && payload.recordLongTermMemory !== false) {
         try {
             ensureAILISGateway().memoryRuntime?.recordTurn?.({
                 sessionId: payload.sessionId || payload.sessionKey || 'main',
@@ -3209,9 +3214,14 @@ function getRendererPreferences() {
         chunkedTtsEnabled: normalizeChunkedTtsEnabled(
             desktopState?.preferences?.chunkedTtsEnabled ?? DEFAULT_CHUNKED_TTS_ENABLED
         ),
-        autoChatEnabled: normalizeAutoChatEnabled(
+        autoChatMode: normalizeAutoChatMode(
+            desktopState?.preferences?.autoChatMode,
             desktopState?.preferences?.autoChatEnabled ?? DEFAULT_AUTO_CHAT_ENABLED
         ),
+        autoChatEnabled: ['companion', 'cowork'].includes(normalizeAutoChatMode(
+            desktopState?.preferences?.autoChatMode,
+            desktopState?.preferences?.autoChatEnabled ?? DEFAULT_AUTO_CHAT_ENABLED
+        )),
         autoChatMinIntervalSec: normalizeAutoChatMinIntervalSec(
             desktopState?.preferences?.autoChatMinIntervalSec || DEFAULT_AUTO_CHAT_MIN_INTERVAL_SEC
         ),
@@ -3647,6 +3657,7 @@ function applyPreferencesPatch(partialPreferences = {}) {
         desktopNativeTtsPitch: rendererPreferences.desktopNativeTtsPitch,
         desktopNativeTtsVolume: rendererPreferences.desktopNativeTtsVolume,
         chunkedTtsEnabled: rendererPreferences.chunkedTtsEnabled,
+        autoChatMode: rendererPreferences.autoChatMode,
         autoChatEnabled: rendererPreferences.autoChatEnabled,
         autoChatMinIntervalSec: rendererPreferences.autoChatMinIntervalSec,
         autoChatMaxIntervalSec: rendererPreferences.autoChatMaxIntervalSec,
@@ -3990,6 +4001,13 @@ function applyPreferencesPatch(partialPreferences = {}) {
     }
     if ('autoChatEnabled' in partialPreferences) {
         nextPreferences.autoChatEnabled = normalizeAutoChatEnabled(partialPreferences.autoChatEnabled);
+    }
+    if ('autoChatMode' in partialPreferences) {
+        nextPreferences.autoChatMode = normalizeAutoChatMode(
+            partialPreferences.autoChatMode,
+            nextPreferences.autoChatEnabled
+        );
+        nextPreferences.autoChatEnabled = ['companion', 'cowork'].includes(nextPreferences.autoChatMode);
     }
     if ('avatarDialogueBubbleLeft' in partialPreferences) {
         nextPreferences.avatarDialogueBubbleLeft = normalizeAvatarDialogueBubbleLeft(

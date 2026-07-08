@@ -13,6 +13,7 @@ import { extractTtsSpeechTextFromDisplay, normalizeTtsSpeechText } from './tts-s
 const CONTROL_TAG_PATTERN = /\[(action|expression):([^\]]*)\]/g;
 const LEADING_INCOMPLETE_CONTROL_TAG_PATTERN = /^(?:\[(?:action|expression):[^\]]*)+/;
 const VISION_LLM_TIMEOUT_MS = 90000;
+const PROACTIVE_LLM_TIMEOUT_MS = 30000;
 const PROGRESS_MIN_INTERVAL_MS = 1200;
 const EMBODIED_COMMAND_TASK_WORD_PATTERN = /写|代码|脚本|文件|邮件|查|搜索|整理|生成|测试|运行|打开|读取|分析|修复|优化|提交|commit|debug|report|文档/i;
 
@@ -23,6 +24,16 @@ function normalizeText(value) {
     return value.replace(/[ \t]+/g, ' ').trim();
 }
 
+function eventBelongsToRun(payload = {}, runId = '') {
+    const activeRunId = normalizeText(runId);
+    if (!activeRunId) {
+        return false;
+    }
+    const eventRunId = normalizeText(payload.runId);
+    const parentRunId = normalizeText(payload.parentRunId || payload.parent_run_id);
+    return eventRunId === activeRunId || parentRunId === activeRunId;
+}
+
 function getLatestUserEntry(messageHistory = []) {
     for (let index = messageHistory.length - 1; index >= 0; index -= 1) {
         if (messageHistory[index]?.role === 'user') {
@@ -30,6 +41,102 @@ function getLatestUserEntry(messageHistory = []) {
         }
     }
     return null;
+}
+
+function compactConversationTurns(messageHistory = [], limit = 10) {
+    return messageHistory
+        .filter((message) => ['user', 'assistant'].includes(message?.role))
+        .slice(-limit)
+        .map((message) => ({
+            role: normalizeText(message.role),
+            text: normalizeText(message.content || message.text).slice(0, 900),
+            source: normalizeText(message.source),
+            createdAt: normalizeText(message.createdAt)
+        }))
+        .filter((message) => message.text);
+}
+
+function extractJsonObjectFromText(value) {
+    if (!value || typeof value !== 'string') {
+        return null;
+    }
+    const text = value.trim();
+    const candidates = [text];
+    const start = text.indexOf('{');
+    const end = text.lastIndexOf('}');
+    if (start >= 0 && end > start) {
+        candidates.push(text.slice(start, end + 1));
+    }
+    for (const candidate of candidates) {
+        try {
+            const parsed = JSON.parse(candidate);
+            if (parsed && typeof parsed === 'object') {
+                return parsed;
+            }
+        } catch {}
+    }
+    return null;
+}
+
+function buildProactiveOpportunitySystemPrompt() {
+    return [
+        '你是 AILIS 的主动陪伴机会判断器，不是任务执行 Agent。',
+        '你只判断此刻是否值得让 AILIS 主动开口，并给出一句用户可见的自然陪伴文本。',
+        '优先根据 recentContext 判断：刚刚聊了什么、是否有自然延续、是否有未完成情绪或问题、任务是否刚结束。',
+        '长期记忆和用户画像只用于语气、分寸和称呼，不用于凭空开启新话题。',
+        '不要调用工具，不要联网，不要读文件，不要执行任务；如果需要行动，只能温柔询问用户是否要继续。',
+        '不要暴露内部记忆、好感度数值、系统状态、JSON、token、runId、工具名或隐藏推理。',
+        '如果没有明确价值，shouldSpeak 必须为 false。',
+        '只返回 JSON：{"shouldSpeak":boolean,"intent":"soft_checkin|topic_followup|task_resume_offer|celebrate|comfort|quiet_presence","text":"一句自然的话","emotion":"relaxed|happy|soft|comforting|curious","cooldownSec":number,"reasonType":"recent_context_followup|task_state|not_enough_reason|cooldown"}'
+    ].join('\n');
+}
+
+function normalizeProactiveDecision(rawDecision = {}) {
+    const shouldSpeak = rawDecision.shouldSpeak === true;
+    const text = normalizeMarkdownSource(rawDecision.text || '');
+    const intent = normalizeText(rawDecision.intent || 'quiet_presence') || 'quiet_presence';
+    const emotion = normalizeText(rawDecision.emotion || 'relaxed') || 'relaxed';
+    const cooldownSec = Math.round(Math.min(Math.max(Number(rawDecision.cooldownSec) || 900, 180), 24 * 60 * 60));
+    if (!shouldSpeak || !text || text.length > 260) {
+        return {
+            shouldSpeak: false,
+            intent,
+            emotion,
+            cooldownSec,
+            reasonType: normalizeText(rawDecision.reasonType || rawDecision.reason || 'not_enough_reason')
+        };
+    }
+    return {
+        shouldSpeak: true,
+        intent,
+        text,
+        emotion,
+        cooldownSec,
+        reasonType: normalizeText(rawDecision.reasonType || 'recent_context_followup')
+    };
+}
+
+function proactiveEmotionToSurface(decision = {}) {
+    const emotion = normalizeText(decision.emotion || 'relaxed');
+    const expression = /happy|celebrate/.test(emotion) ? 'happy' :
+        /comfort|soft/.test(emotion) ? 'relaxed' : 'relaxed';
+    const taskState = /comfort/.test(emotion) ? 'comforting' : 'idle';
+    return {
+        text: decision.text,
+        speechText: decision.text,
+        bubbleText: decision.text,
+        action: null,
+        expression,
+        emotion,
+        intensity: 0.34,
+        socialTone: 'soft',
+        gestureIntent: /curious/.test(emotion) ? 'thinking' : 'comfort',
+        taskState,
+        speechEnergy: 0.24,
+        gazeTarget: 'user',
+        durationHint: 'short',
+        source: 'proactive_companion'
+    };
 }
 
 function createProgressPayload(frames = []) {
@@ -89,7 +196,7 @@ export function createGatewayProgressBridge({ gateway, sessionId, onProgress, on
             pushFrame(createPersonaProgressFrame(event), { force: true });
             return;
         }
-        if (!state.runId || normalizeText(payload.runId) !== state.runId) {
+        if (!state.runId || !eventBelongsToRun(payload, state.runId)) {
             return;
         }
         if (type === 'agent.run.finished' || type === 'agent.run.interrupted') {
@@ -110,7 +217,7 @@ export function createGatewayProgressBridge({ gateway, sessionId, onProgress, on
             }
             return;
         }
-        if (type === 'agent.reasoning.delta' || type === 'agent.progress.note' || type === 'agent.message.delta') {
+        if (type === 'agent.reasoning.delta' || type === 'agent.progress.note' || type === 'agent.message.delta' || type === 'subagent.event') {
             pushFrame(createPersonaProgressFrame(event), { force: type === 'agent.reasoning.delta' || type === 'agent.progress.note' });
             return;
         }
@@ -463,7 +570,7 @@ function getAvatarCue(result = {}) {
 export class AILISDesktopChatService {
     constructor() {
         this.gateway = window.ailisDesktop?.gateway || null;
-        this.supportsAutoChat = false;
+        this.supportsAutoChat = true;
         this.prefersThinkingState = true;
         this.activeRunId = '';
         this.activeSessionId = '';
@@ -493,10 +600,19 @@ export class AILISDesktopChatService {
         messageHistory,
         isAutoChat = false,
         replyMode = 'stream_text',
-        onProgress
+        onProgress,
+        proactiveContext = null
     }) {
         if (isAutoChat) {
-            throw new Error('桌面助手版本已关闭主动对话');
+            const opportunity = await this.evaluateProactiveOpportunity({
+                sessionId,
+                messageHistory,
+                context: proactiveContext || {}
+            });
+            if (!opportunity.shouldSpeak || !opportunity.payload) {
+                throw new Error('proactive_companion_no_opportunity');
+            }
+            return attachServerTtsIfRequested(opportunity.payload, replyMode);
         }
 
         const latestUserEntry = getLatestUserEntry(messageHistory);
@@ -569,6 +685,88 @@ export class AILISDesktopChatService {
         const payload = toAILISPayload(result);
 
         return attachServerTtsIfRequested(payload, replyMode);
+    }
+
+    async evaluateProactiveOpportunity({
+        sessionId = 'main',
+        messageHistory = [],
+        context = {}
+    } = {}) {
+        if (typeof window.ailisDesktop?.llm?.chat !== 'function') {
+            return {
+                shouldSpeak: false,
+                reasonType: 'llm_unavailable'
+            };
+        }
+        const recentTurns = compactConversationTurns(messageHistory, 10);
+        if (!recentTurns.length) {
+            return {
+                shouldSpeak: false,
+                reasonType: 'no_recent_context'
+            };
+        }
+        const latestUser = [...recentTurns].reverse().find((message) => message.role === 'user');
+        const decisionContext = {
+            ...context,
+            recentContext: {
+                ...(context.recentContext || {}),
+                lastVisibleTurns: recentTurns,
+                latestUserText: latestUser?.text || context.recentContext?.latestUserText || ''
+            }
+        };
+        const result = await window.ailisDesktop.llm.chat({
+            includeAilisMemory: true,
+            recordMemory: false,
+            memorySource: 'proactive_companion_opportunity',
+            memoryUserMessage: latestUser?.text || '主动陪伴机会判断',
+            messageHistory,
+            sessionId,
+            messages: [
+                {
+                    role: 'system',
+                    content: buildProactiveOpportunitySystemPrompt()
+                },
+                {
+                    role: 'user',
+                    content: JSON.stringify(decisionContext, null, 2)
+                }
+            ],
+            jsonMode: true,
+            expectJson: true,
+            outputFormat: 'json',
+            temperature: 0.45,
+            maxTokens: 520,
+            timeoutMs: PROACTIVE_LLM_TIMEOUT_MS
+        });
+        if (!result?.ok) {
+            return {
+                shouldSpeak: false,
+                reasonType: result?.code || 'llm_failed',
+                error: result?.error || ''
+            };
+        }
+        const parsed = extractJsonObjectFromText(result.content);
+        const decision = normalizeProactiveDecision(parsed || {});
+        if (!decision.shouldSpeak) {
+            return decision;
+        }
+        const surface = proactiveEmotionToSurface(decision);
+        return {
+            ...decision,
+            context: decisionContext,
+            payload: toAssistantPayload(decision.text, {
+                expression: surface.expression,
+                action: surface.action,
+                speechText: decision.text,
+                bubbleText: decision.text,
+                surface,
+                proactiveCompanion: {
+                    intent: decision.intent,
+                    reasonType: decision.reasonType,
+                    model: result.model || ''
+                }
+            })
+        };
     }
 
     async abortCurrentTurn({ sessionId = '', reason = 'chat_user_interrupt' } = {}) {

@@ -167,6 +167,7 @@ const elements = {
     agentRuntimeDetailText: document.getElementById('agent-runtime-detail-text'),
     agentRuntimeStatusText: document.getElementById('agent-runtime-status-text'),
     openAgentLabBtn: document.getElementById('open-agent-lab-btn'),
+    autoChatMode: document.getElementById('auto-chat-mode'),
     packageStateText: document.getElementById('package-state-text'),
     petMouseHitTestEnabled: document.getElementById('pet-mouse-hit-test-enabled'),
     petMouseHitTestShape: document.getElementById('pet-mouse-hit-test-shape'),
@@ -239,6 +240,40 @@ const elements = {
 
 const CONTROL_PAGE_ORDER = Object.freeze(['overview', 'appearance', 'agent', 'model', 'voice', 'advanced']);
 const CONTROL_PAGE_DEFAULT = CONTROL_PAGE_ORDER[0];
+const AUTO_CHAT_MODE_SETTINGS = Object.freeze({
+    off: {
+        enabled: false,
+        minIntervalSec: 15 * 60,
+        maxIntervalSec: 45 * 60
+    },
+    companion: {
+        enabled: true,
+        minIntervalSec: 15 * 60,
+        maxIntervalSec: 45 * 60
+    },
+    cowork: {
+        enabled: true,
+        minIntervalSec: 30 * 60,
+        maxIntervalSec: 60 * 60
+    },
+    autonomous: {
+        enabled: false,
+        minIntervalSec: 15 * 60,
+        maxIntervalSec: 45 * 60
+    }
+});
+
+function normalizeAutoChatMode(value, legacyEnabled = false) {
+    const mode = String(value || '').trim().toLowerCase();
+    if (Object.prototype.hasOwnProperty.call(AUTO_CHAT_MODE_SETTINGS, mode)) {
+        return mode;
+    }
+    return legacyEnabled ? 'companion' : 'off';
+}
+
+function getAutoChatModeSettings(mode) {
+    return AUTO_CHAT_MODE_SETTINGS[normalizeAutoChatMode(mode)] || AUTO_CHAT_MODE_SETTINGS.off;
+}
 
 function normalizeControlPageId(value) {
     const pageId = String(value || '').replace(/^#/, '').replace(/^page-/, '').trim();
@@ -1625,6 +1660,11 @@ function normalizePreferences(preferences = {}) {
         preferences.elevenLabsVoiceProfiles,
         preferences
     );
+    const autoChatMode = normalizeAutoChatMode(
+        preferences.autoChatMode,
+        preferences.autoChatEnabled
+    );
+    const autoChatModeSettings = getAutoChatModeSettings(autoChatMode);
 
     const rawLlmProvider = String(preferences.llmProvider || 'openai-compatible');
     const normalizedLlmProvider = rawLlmProvider === 'vllm' ? 'ollama' : rawLlmProvider;
@@ -1697,6 +1737,10 @@ function normalizePreferences(preferences = {}) {
         elevenLabsApiKeyConfigured: Boolean(preferences.elevenLabsApiKeyConfigured),
         elevenLabsApiKeySource: String(preferences.elevenLabsApiKeySource || 'none'),
         computerControlEnabled: preferences.computerControlEnabled !== false,
+        autoChatMode,
+        autoChatEnabled: autoChatModeSettings.enabled,
+        autoChatMinIntervalSec: autoChatModeSettings.minIntervalSec,
+        autoChatMaxIntervalSec: autoChatModeSettings.maxIntervalSec,
         emailProfiles,
         cameraDistance: Number(preferences.cameraDistance ?? 1.1),
         cameraHeight: Number(preferences.cameraHeight ?? 1.3),
@@ -2065,6 +2109,7 @@ function readFormPreferences({ includeSecret = false } = {}) {
             ? 'none'
             : String(currentPreferences?.elevenLabsApiKeySource || 'none'),
         computerControlEnabled: elements.computerControlEnabled.checked,
+        autoChatMode: elements.autoChatMode?.value || currentPreferences?.autoChatMode || 'off',
         emailProfiles: readEmailFormProfiles({ includeSecret }),
         cameraDistance: Number(elements.cameraDistance.value),
         cameraHeight: Number(elements.cameraHeight.value),
@@ -5311,6 +5356,9 @@ function fillForm(preferences) {
         draftElevenLabsActiveLanguageCode
     );
     elements.computerControlEnabled.checked = normalized.computerControlEnabled;
+    if (elements.autoChatMode) {
+        elements.autoChatMode.value = normalized.autoChatMode;
+    }
     for (const [providerId, entry] of Object.entries(emailElements)) {
         const profile = normalized.emailProfiles?.[providerId] || {};
         if (entry.account) {
@@ -6861,6 +6909,7 @@ function endDialoguePreviewDrag(event) {
     elements.elevenLabsStyle,
     elements.chunkedTtsEnabled,
     elements.computerControlEnabled,
+    elements.autoChatMode,
     elements.conversationMode,
     elements.emailQqAccount,
     elements.emailGmailAccount,

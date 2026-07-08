@@ -13,18 +13,19 @@
         }
 
         :root {
-            --primary: #a8d8f0;
-            --primary-deep: #73b8e5;
-            --primary-gradient: linear-gradient(135deg, #a8d8f0 0%, #73b8e5 100%);
-            --accent: #f0a8c8;
-            --accent-gradient: linear-gradient(135deg, #f0a8c8 0%, #e887b0 100%);
-            --bg: #f5faff;
+            --primary: #8ecdf0;
+            --primary-deep: #307fb5;
+            --primary-gradient: linear-gradient(135deg, #72c6ef 0%, #8f7cf7 100%);
+            --accent: #f08fb8;
+            --accent-gradient: linear-gradient(135deg, #f08fb8 0%, #f4b45f 100%);
+            --ink: #172033;
+            --bg: #f6fbff;
             --card-bg: rgba(255, 255, 255, 0.85);
-            --text: #2c3e50;
-            --text-light: #6b7b8d;
-            --shadow: 0 8px 32px rgba(168, 216, 240, 0.20);
-            --radius: 16px;
-            --radius-sm: 10px;
+            --text: #253348;
+            --text-light: #617085;
+            --shadow: 0 18px 48px rgba(48, 127, 181, 0.16);
+            --radius: 8px;
+            --radius-sm: 8px;
             --font: "Microsoft YaHei", -apple-system, BlinkMacSystemFont, "PingFang SC", "Noto Sans SC", sans-serif;
         }
 
@@ -34,7 +35,7 @@
 
         body {
             font-family: var(--font);
-            background: var(--bg);
+            background: linear-gradient(180deg, #f6fbff 0%, #ffffff 44%, #f7f3ff 100%);
             color: var(--text);
             line-height: 1.7;
             overflow-x: hidden;
@@ -56,10 +57,10 @@
             left: 0;
             right: 0;
             z-index: 100;
-            background: rgba(255, 255, 255, 0.75);
-            backdrop-filter: blur(12px);
-            -webkit-backdrop-filter: blur(12px);
-            border-bottom: 1px solid rgba(168, 216, 240, 0.25);
+            background: rgba(255, 255, 255, 0.84);
+            backdrop-filter: blur(18px);
+            -webkit-backdrop-filter: blur(18px);
+            border-bottom: 1px solid rgba(48, 127, 181, 0.12);
             padding: 0 24px;
             height: 64px;
             display: flex;
@@ -118,58 +119,74 @@
 
         /* ===== Hero ===== */
         .hero {
-            min-height: 100vh;
+            min-height: 92vh;
             display: flex;
-            flex-direction: column;
-            align-items: center;
+            align-items: stretch;
             justify-content: center;
-            text-align: center;
-            padding: 100px 24px 80px;
+            text-align: left;
+            padding: 104px 28px 72px;
             position: relative;
             overflow: hidden;
+            background:
+                linear-gradient(120deg, rgba(255,255,255,0.72), rgba(246,251,255,0.28));
         }
 
         .hero::before {
             content: '';
             position: absolute;
-            top: -30%;
-            left: -20%;
-            width: 70%;
-            height: 100%;
-            background: radial-gradient(ellipse at 30% 40%, rgba(168, 216, 240, 0.30) 0%, transparent 70%);
+            inset: 64px 0 auto 0;
+            height: 1px;
+            background: linear-gradient(90deg, transparent, rgba(48,127,181,0.22), transparent);
             pointer-events: none;
         }
 
         .hero::after {
             content: '';
             position: absolute;
-            bottom: -20%;
-            right: -15%;
-            width: 60%;
-            height: 80%;
-            background: radial-gradient(ellipse at 70% 60%, rgba(240, 168, 200, 0.18) 0%, transparent 70%);
+            inset: auto 0 0;
+            height: 112px;
+            background: linear-gradient(180deg, rgba(255,255,255,0), rgba(255,255,255,0.82));
             pointer-events: none;
         }
 
+        .hero-shell {
+            position: relative;
+            z-index: 1;
+            width: min(1180px, 100%);
+            margin: 0 auto;
+            display: grid;
+            grid-template-columns: minmax(0, 1.02fr) minmax(360px, 0.98fr);
+            gap: clamp(28px, 6vw, 72px);
+            align-items: center;
+        }
+
+        .hero-copy {
+            max-width: 640px;
+        }
+
         .hero-badge {
-            display: inline-block;
-            background: rgba(168, 216, 240, 0.20);
-            border: 1px solid rgba(168, 216, 240, 0.30);
-            border-radius: 50px;
-            padding: 6px 18px;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            background: rgba(255, 255, 255, 0.76);
+            border: 1px solid rgba(48, 127, 181, 0.18);
+            border-radius: var(--radius-sm);
+            padding: 7px 12px;
             font-size: 13px;
             color: var(--primary-deep);
-            font-weight: 500;
+            font-weight: 700;
             margin-bottom: 24px;
-            letter-spacing: 1px;
+            letter-spacing: 0;
+            box-shadow: 0 8px 28px rgba(48, 127, 181, 0.10);
         }
 
         .hero h1 {
-            font-size: clamp(2.6rem, 7vw, 4.5rem);
+            font-size: clamp(3.2rem, 8vw, 6.4rem);
             font-weight: 800;
-            line-height: 1.2;
-            margin-bottom: 12px;
+            line-height: 0.96;
+            margin-bottom: 22px;
             position: relative;
+            color: var(--ink);
         }
 
         .hero h1 .highlight {
@@ -187,10 +204,10 @@
         }
 
         .hero-sub {
-            font-size: clamp(1.05rem, 2vw, 1.35rem);
+            font-size: clamp(1.05rem, 1.8vw, 1.26rem);
             color: var(--text-light);
-            max-width: 600px;
-            margin: 12px auto 36px;
+            max-width: 560px;
+            margin: 0 0 30px;
             position: relative;
         }
 
@@ -198,8 +215,139 @@
             display: flex;
             gap: 16px;
             flex-wrap: wrap;
-            justify-content: center;
+            justify-content: flex-start;
             position: relative;
+        }
+
+        .hero-proof-row {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 10px;
+            margin-top: 28px;
+            max-width: 620px;
+        }
+
+        .hero-proof {
+            min-height: 86px;
+            padding: 14px;
+            border-radius: var(--radius);
+            background: rgba(255, 255, 255, 0.78);
+            border: 1px solid rgba(48, 127, 181, 0.12);
+            box-shadow: 0 10px 32px rgba(48, 127, 181, 0.10);
+        }
+
+        .hero-proof strong {
+            display: block;
+            color: var(--ink);
+            font-size: 0.96rem;
+            margin-bottom: 4px;
+        }
+
+        .hero-proof span {
+            color: var(--text-light);
+            font-size: 0.84rem;
+            line-height: 1.45;
+        }
+
+        .hero-visual {
+            position: relative;
+            min-height: 520px;
+        }
+
+        .hero-character {
+            position: absolute;
+            right: min(6vw, 52px);
+            bottom: 44px;
+            width: clamp(210px, 20vw, 270px);
+            z-index: 2;
+            filter: drop-shadow(0 24px 34px rgba(23, 32, 51, 0.22));
+            animation: float 5s ease-in-out infinite;
+        }
+
+        .hero-window {
+            position: absolute;
+            left: 0;
+            top: 36px;
+            width: min(440px, 92%);
+            z-index: 1;
+            border-radius: var(--radius);
+            background: rgba(255, 255, 255, 0.88);
+            border: 1px solid rgba(48, 127, 181, 0.16);
+            box-shadow: 0 28px 80px rgba(23, 32, 51, 0.16);
+            overflow: hidden;
+        }
+
+        .hero-window-bar {
+            height: 38px;
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            padding: 0 14px;
+            background: rgba(246, 251, 255, 0.88);
+            border-bottom: 1px solid rgba(48, 127, 181, 0.10);
+        }
+
+        .hero-window-bar i {
+            width: 9px;
+            height: 9px;
+            border-radius: 999px;
+            background: #f08fb8;
+        }
+
+        .hero-window-bar i:nth-child(2) {
+            background: #f4b45f;
+        }
+
+        .hero-window-bar i:nth-child(3) {
+            background: #72c6ef;
+        }
+
+        .hero-window-body {
+            padding: 18px;
+        }
+
+        .hero-message {
+            border-radius: var(--radius);
+            background: #f8fbff;
+            border: 1px solid rgba(48, 127, 181, 0.10);
+            padding: 14px;
+            margin-bottom: 12px;
+        }
+
+        .hero-message strong {
+            display: block;
+            color: var(--ink);
+            margin-bottom: 4px;
+        }
+
+        .hero-message span {
+            color: var(--text-light);
+            font-size: 0.92rem;
+        }
+
+        .hero-task-list {
+            display: grid;
+            gap: 9px;
+        }
+
+        .hero-task {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            align-items: center;
+            padding: 10px 12px;
+            border-radius: var(--radius-sm);
+            background: rgba(255,255,255,0.82);
+            border: 1px solid rgba(48, 127, 181, 0.10);
+            color: var(--text);
+            font-size: 0.9rem;
+        }
+
+        .hero-task em {
+            font-style: normal;
+            color: #26785a;
+            font-weight: 700;
+            white-space: nowrap;
         }
 
         .btn {
@@ -207,7 +355,7 @@
             align-items: center;
             gap: 8px;
             padding: 12px 32px;
-            border-radius: 50px;
+            border-radius: var(--radius-sm);
             font-size: 15px;
             font-weight: 600;
             border: none;
@@ -270,6 +418,46 @@
         @keyframes bounce {
             0%, 100% { transform: translateX(-50%) translateY(0); }
             50% { transform: translateX(-50%) translateY(8px); }
+        }
+
+        /* ===== 展示图 ===== */
+        .showcase-section {
+            padding: 0 24px 86px;
+            position: relative;
+            z-index: 2;
+        }
+
+        .showcase-inner {
+            width: min(1180px, 100%);
+            margin: 0 auto;
+        }
+
+        .showcase-frame {
+            border-radius: var(--radius);
+            border: 1px solid rgba(48, 127, 181, 0.14);
+            background: rgba(255, 255, 255, 0.84);
+            box-shadow: 0 28px 80px rgba(23, 32, 51, 0.12);
+            overflow: hidden;
+        }
+
+        .showcase-frame img {
+            display: block;
+            width: 100%;
+            height: auto;
+        }
+
+        .showcase-note {
+            display: flex;
+            justify-content: space-between;
+            gap: 18px;
+            align-items: center;
+            margin-top: 16px;
+            color: var(--text-light);
+            font-size: 0.95rem;
+        }
+
+        .showcase-note strong {
+            color: var(--ink);
         }
 
         /* ===== 通用 section ===== */
@@ -1201,6 +1389,54 @@
             .hero {
                 padding: 80px 20px 60px;
             }
+
+            .hero-shell {
+                grid-template-columns: 1fr;
+                gap: 24px;
+            }
+
+            .hero-copy {
+                max-width: none;
+                text-align: center;
+            }
+
+            .hero-sub {
+                margin-left: auto;
+                margin-right: auto;
+            }
+
+            .hero-actions {
+                justify-content: center;
+            }
+
+            .hero-proof-row {
+                grid-template-columns: 1fr;
+                max-width: 520px;
+                margin-left: auto;
+                margin-right: auto;
+            }
+
+            .hero-visual {
+                min-height: 360px;
+            }
+
+            .hero-window {
+                left: 50%;
+                transform: translateX(-50%);
+                width: min(420px, 100%);
+            }
+
+            .hero-character {
+                right: 50%;
+                transform: translateX(48%);
+                width: 220px;
+                animation: none;
+            }
+
+            .showcase-note {
+                align-items: flex-start;
+                flex-direction: column;
+            }
         }
 
         @media (max-width: 480px) {
@@ -1215,6 +1451,25 @@
             }
             .section {
                 padding: 60px 16px;
+            }
+
+            .showcase-section {
+                padding: 0 16px 54px;
+            }
+
+            .hero {
+                background-size: 150px auto;
+            }
+
+            .hero h1 {
+                font-size: clamp(2.7rem, 17vw, 4rem);
+            }
+
+            .hero-actions .btn {
+                width: 100%;
+                justify-content: center;
+                padding-left: 18px;
+                padding-right: 18px;
             }
 
             .download-section {
@@ -1274,25 +1529,72 @@
 
     <!-- ===== Hero ===== -->
     <section class="hero" id="home">
-        <div class="hero-badge">✦ 桌面虚拟助手 · AILIS v1.0.6</div>
-        <h1>
-            你好，我是<br>
-            <span class="highlight">AILIS</span> <span class="highlight-pink">✦</span>
-        </h1>
-        <p class="hero-sub">
-            可爱的虚拟助手 · 普通女孩子 · 专业搭档<br>
-            既能陪你轻松聊天，也能搞定编程、搜索、邮件和系统管理～
-        </p>
-        <div class="hero-actions">
-            <a href="./Test/" class="btn btn-primary">进入体验页</a>
-            <a href="#about" class="btn btn-secondary">💬 认识我</a>
-            <a href="#project" class="btn btn-secondary">🚀 了解项目</a>
-            <a href="#download" class="btn btn-secondary">⬇ 下载</a>
-            <a href="#opensource" class="btn btn-secondary">📖 MIT 开源</a>
+        <div class="hero-shell">
+            <div class="hero-copy">
+                <div class="hero-badge">桌面虚拟助手 · AILIS v1.1.0</div>
+                <h1>
+                    AILIS<br>
+                    <span class="highlight">醒在你的桌面上</span>
+                </h1>
+                <p class="hero-sub">
+                    一个有角色形象、语音、记忆和工具执行能力的桌面 AI 伙伴。
+                    她可以自然聊天，也可以在你允许时读文件、写代码、搜索资料、整理任务。
+                </p>
+                <div class="hero-actions">
+                    <a href="#download" class="btn btn-primary">下载 Windows 版</a>
+                    <a href="./Test/" class="btn btn-secondary">打开体验页</a>
+                    <a href="https://github.com/haowenGuo/AILIS" target="_blank" rel="noopener noreferrer" class="btn btn-secondary">GitHub</a>
+                </div>
+                <div class="hero-proof-row" aria-label="AILIS 主要能力">
+                    <div class="hero-proof">
+                        <strong>可见的陪伴</strong>
+                        <span>VRM 角色、表情、动作、口型和对话气泡。</span>
+                    </div>
+                    <div class="hero-proof">
+                        <strong>真实的执行</strong>
+                        <span>接近 Codex 风格的工具调用、审批和任务链路。</span>
+                    </div>
+                    <div class="hero-proof">
+                        <strong>本地优先</strong>
+                        <span>模型、语音、记忆和运行时配置由你掌控。</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="hero-visual" aria-label="AILIS desktop preview">
+                <div class="hero-window">
+                    <div class="hero-window-bar"><i></i><i></i><i></i></div>
+                    <div class="hero-window-body">
+                        <div class="hero-message">
+                            <strong>AILIS</strong>
+                            <span>我在。今天想轻松聊会儿，还是把任务交给我？</span>
+                        </div>
+                        <div class="hero-task-list">
+                            <div class="hero-task"><span>理解屏幕和文件上下文</span><em>ready</em></div>
+                            <div class="hero-task"><span>调用工具完成真实任务</span><em>active</em></div>
+                            <div class="hero-task"><span>保留长期偏好与记忆</span><em>local</em></div>
+                        </div>
+                    </div>
+                </div>
+                <img class="hero-character" src="Resources/Emotes/ailis-small/wave.png" alt="AILIS 角色挥手">
+            </div>
         </div>
         <div class="scroll-indicator">
             <span>向下滚动</span>
             <div class="arrow"></div>
+        </div>
+    </section>
+
+    <!-- ===== 产品展示 ===== -->
+    <section class="showcase-section" aria-label="AILIS 使用流程">
+        <div class="showcase-inner">
+            <div class="showcase-frame">
+                <img src="docs/assets/ailis-zhihu/ailis-user-flow-image2.png" alt="普通人怎么用 AILIS：打开桌面角色、说出任务、看屏幕读文件、调用工具、记住偏好">
+            </div>
+            <div class="showcase-note">
+                <strong>从陪伴到执行，是 AILIS 的主线。</strong>
+                <span>图片来自 AILIS 知乎文章，用来说明桌面角色、任务理解、工具调用和长期记忆如何连成一个体验。</span>
+            </div>
         </div>
     </section>
 
@@ -1378,7 +1680,7 @@
         <div class="section-title">🚀 <span class="highlight">AILIS</span> 项目</div>
 
         <div class="project-header">
-            <div class="repo-badge">📁 AILIS · v1.0.6 · MIT Open Source</div>
+            <div class="repo-badge">📁 AILIS · v1.1.0 · MIT Open Source</div>
             <p class="section-sub" style="margin-bottom:0">
                 AILIS —— 当前最新的 <strong>AILIS</strong> 主线项目。
                 它让我（AILIS）能跑在桌面上，能对话、能看上下文、能记住偏好，也能通过工具层执行真实任务！
@@ -1418,7 +1720,7 @@
                     <span class="tech-tag">RAG / 记忆</span>
                 </div>
                 <p style="margin-top:16px; color:var(--text-light); font-size:0.95rem;">
-                    GitHub 主线仓库是 <code style="background:rgba(168,216,240,0.12); padding:2px 8px; border-radius:4px;">haowenGuo/AIGL-Assistant</code>，
+                    GitHub 主线仓库是 <code style="background:rgba(168,216,240,0.12); padding:2px 8px; border-radius:4px;">haowenGuo/AILIS</code>，
                     采用桌面优先的 AILIS 架构持续迭代中～
                 </p>
             </div>
@@ -1438,25 +1740,28 @@
     <!-- ===== 下载 ===== -->
     <section class="download-section" id="download">
         <div class="section-title">⬇ AILIS <span class="highlight">下载</span></div>
-        <p class="section-sub">Windows 最新公开版本为 AILIS v1.0.6 portable；项目源码采用 MIT License 开源，旧版 HumanClaw 1.0.4 保留作兼容下载。</p>
+        <p class="section-sub">Windows 最新公开版本为 AILIS v1.1.0；默认下载为轻量桌面包，不内置大型 CosyVoice3 / ASR 模型，可选运行时可按需安装或通过 runtime pack 导入。</p>
 
         <div class="download-panel">
             <div class="download-grid">
                 <div class="download-card recommended">
                     <div class="download-head">
-                        <h3>Windows · AILIS 1.0.6</h3>
+                        <h3>Windows · AILIS 1.1.0</h3>
                         <span class="download-chip">最新公开版本</span>
                     </div>
                     <p>
-                        最新 Windows 便携版，包含 AILIS 对话、任务执行、本地模型配置、Crawl4AI 风格网页抓取与桌面运行时。
+                        最新 Windows 轻量桌面版，包含 AILIS 对话、任务执行、本地模型配置、Crawl4AI 风格网页抓取与桌面运行时。
                     </p>
                     <div class="download-actions">
-                        <a class="download-btn primary" href="https://github.com/haowenGuo/AIGL-Assistant/releases/download/v1.0.6/AILIS-Portable-1.0.6-win-x64.exe" target="_blank" rel="noopener noreferrer">
+                        <a class="download-btn primary" href="https://github.com/haowenGuo/AILIS/releases/download/v1.1.0/AILIS-Setup-1.1.0-win-x64.exe" target="_blank" rel="noopener noreferrer">
+                            <span>安装版 .exe</span><span>↗</span>
+                        </a>
+                        <a class="download-btn" href="https://github.com/haowenGuo/AILIS/releases/download/v1.1.0/AILIS-Portable-1.1.0-win-x64.exe" target="_blank" rel="noopener noreferrer">
                             <span>便携版 .exe</span><span>↗</span>
                         </a>
                     </div>
                     <div class="download-meta">
-                        来源：<a href="https://github.com/haowenGuo/AIGL-Assistant/releases/tag/v1.0.6" target="_blank" rel="noopener noreferrer">AILIS v1.0.6 Release</a>
+                        来源：<a href="https://github.com/haowenGuo/AILIS/releases/tag/v1.1.0" target="_blank" rel="noopener noreferrer">AILIS v1.1.0 Release</a>
                     </div>
                 </div>
 
@@ -1466,18 +1771,18 @@
                         <span class="download-chip">旧版兼容包</span>
                     </div>
                     <p>
-                        如果你需要上一版 HumanClaw 运行时，可继续下载 AIGL-Assistant v1.0.4 的安装版或便携版。
+                        如果你需要上一版 HumanClaw 运行时，可继续下载 AILIS 仓库内保留的 v1.0.4 安装版或便携版。
                     </p>
                     <div class="download-actions">
-                        <a class="download-btn primary" href="https://github.com/haowenGuo/AIGL-Assistant/releases/download/v1.0.4/HumanClaw-Setup-1.0.4-win-x64.exe" target="_blank" rel="noopener noreferrer">
+                        <a class="download-btn primary" href="https://github.com/haowenGuo/AILIS/releases/download/v1.0.4/HumanClaw-Setup-1.0.4-win-x64.exe" target="_blank" rel="noopener noreferrer">
                             <span>安装版 .exe</span><span>↗</span>
                         </a>
-                        <a class="download-btn" href="https://github.com/haowenGuo/AIGL-Assistant/releases/download/v1.0.4/HumanClaw-Portable-1.0.4-win-x64.exe" target="_blank" rel="noopener noreferrer">
+                        <a class="download-btn" href="https://github.com/haowenGuo/AILIS/releases/download/v1.0.4/HumanClaw-Portable-1.0.4-win-x64.exe" target="_blank" rel="noopener noreferrer">
                             <span>便携版 .exe</span><span>↗</span>
                         </a>
                     </div>
                     <div class="download-meta">
-                        来源：<a href="https://github.com/haowenGuo/AIGL-Assistant/releases/tag/v1.0.4" target="_blank" rel="noopener noreferrer">HumanClaw v1.0.4 Release</a>
+                        来源：<a href="https://github.com/haowenGuo/AILIS/releases/tag/v1.0.4" target="_blank" rel="noopener noreferrer">HumanClaw v1.0.4 Release</a>
                     </div>
                 </div>
             </div>
@@ -1517,7 +1822,7 @@
                     <div>社区资产包不应包含私钥、账号凭证或未授权第三方模型资源。</div>
                 </div>
                 <div class="community-actions" style="margin-top:20px;">
-                    <a class="btn btn-primary" href="https://github.com/haowenGuo/AIGL-Assistant" target="_blank" rel="noopener noreferrer">查看 GitHub</a>
+                    <a class="btn btn-primary" href="https://github.com/haowenGuo/AILIS" target="_blank" rel="noopener noreferrer">查看 GitHub</a>
                     <a class="btn btn-secondary" href="./LICENSE">查看 MIT License</a>
                     <a class="btn btn-secondary" href="./docs/ailis-open-source-asset-pack-runtime.md">人物包运行时文档</a>
                 </div>
