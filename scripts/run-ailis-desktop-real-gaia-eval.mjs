@@ -619,6 +619,31 @@ function extractAnswerCandidatesFromVisibleText(text = '') {
     return candidates;
 }
 
+function extractQuestionAwareAnswerCandidatesFromVisibleText(text = '', question = '') {
+    const candidates = [];
+    if (!isCountQuestion(question)) {
+        return candidates;
+    }
+    const lines = String(text || '').split(/\r?\n/);
+    const patterns = [
+        /(?:^|\s)(?:total|total\s+count|count|number|数量|总数|总计|合计|一共|共)\s*(?:is|are|=|:|：|为|是)?\s*(?:\*\*)?\s*([+-]?\d+(?:\.\d+)?(?:\s+[A-Za-z][A-Za-z\s-]{0,80})?)/i,
+        /(?:there\s+(?:are|were|is|was)|共有|一共有)\s*(?:\*\*)?\s*([+-]?\d+(?:\.\d+)?(?:\s+[A-Za-z][A-Za-z\s-]{0,80})?)/i
+    ];
+    for (const line of lines) {
+        const cleaned = cleanCandidateLine(line);
+        if (!cleaned || /\btotal\s+(?:lines?|tokens?|duration|cost)\b/i.test(cleaned)) {
+            continue;
+        }
+        for (const pattern of patterns) {
+            const match = cleaned.match(pattern);
+            if (match) {
+                pushAnswerCandidate(candidates, 'visible_count_total', match[1], 160);
+            }
+        }
+    }
+    return candidates;
+}
+
 function looksLikeStructuredAnswerShape(value = '') {
     const text = cleanCandidateLine(value);
     if (!text) {
@@ -650,6 +675,7 @@ function scoreVisibleAnswer({ response = {}, gold = '', question = '' } = {}) {
     const displayText = normalizeText(response.displayText || response.display_text || response.message || response.speechText || '');
     const candidates = [
         ...extractStructuredAnswerCandidates(response),
+        ...extractQuestionAwareAnswerCandidatesFromVisibleText(displayText, question),
         ...extractAnswerCandidatesFromVisibleText(displayText)
     ];
     for (const candidate of candidates) {

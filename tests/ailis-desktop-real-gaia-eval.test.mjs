@@ -135,6 +135,28 @@ test('desktop-real visible scorer accepts count answer with semantic unit suffix
     assert.equal(score.answer, '3 studio albums');
 });
 
+test('desktop-real visible scorer prefers explicit total count over table years', () => {
+    const response = {
+        ok: true,
+        status: 'completed',
+        displayText: [
+            'According to the Wikipedia discography section for Mercedes Sosa, the studio albums published between 2000 and 2009 inclusive are:',
+            '| Year | Album | Notes |',
+            '| 2005 | Corazón Libre | Label: Edge |',
+            '| 2009 | Cantora 1 | Label: RCA |',
+            '| 2009 | Cantora 2 | Label: RCA |',
+            'Total: 3 studio albums.'
+        ].join('\n')
+    };
+    const question = 'How many studio albums were published by Mercedes Sosa between 2000 and 2009 (included)?';
+
+    const score = scoreVisibleAnswer({ response, gold: '3', question });
+    assert.equal(score.ok, true);
+    assert.equal(score.status, 'visible_answer_match');
+    assert.equal(score.answer, '3 studio albums');
+    assert.equal(score.source, 'visible_count_total');
+});
+
 test('desktop-real eval classifies still-running subagents as incomplete, not true failures', () => {
     assert.equal(isIncompleteStatus('subagent_running'), true);
     assert.equal(isIncompleteStatus('running'), true);
