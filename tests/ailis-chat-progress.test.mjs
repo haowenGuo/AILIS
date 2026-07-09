@@ -194,6 +194,71 @@ test('chat progress bridge shows model progress notes', () => {
     assert.equal(outputs[0].surface.source, 'persona_progress_surface');
 });
 
+test('chat progress bridge surfaces final run text when the run finishes', () => {
+    const fake = createFakeGateway();
+    const outputs = [];
+    const finished = [];
+    createGatewayProgressBridge({
+        gateway: fake.gateway,
+        sessionId: 'main',
+        onProgress: (payload) => outputs.push(payload),
+        onRunFinished: (payload) => finished.push(payload)
+    });
+
+    fake.emit({
+        type: 'agent.run.started',
+        payload: {
+            runId: 'run-final',
+            sessionId: 'main'
+        }
+    });
+    fake.emit({
+        type: 'agent.run.finished',
+        payload: {
+            runId: 'run-final',
+            sessionId: 'main',
+            ok: true,
+            status: 'completed',
+            displayText: '已全部完成，文件保存好了。'
+        }
+    });
+
+    assert.equal(outputs.length, 1);
+    assert.match(outputs[0].display_text, /已全部完成/);
+    assert.equal(outputs[0].agentProgressFinal, true);
+    assert.equal(finished.length, 1);
+});
+
+test('chat progress bridge surfaces final message completion text', () => {
+    const fake = createFakeGateway();
+    const outputs = [];
+    createGatewayProgressBridge({
+        gateway: fake.gateway,
+        sessionId: 'main',
+        onProgress: (payload) => outputs.push(payload)
+    });
+
+    fake.emit({
+        type: 'agent.run.started',
+        payload: {
+            runId: 'run-message-complete',
+            sessionId: 'main'
+        }
+    });
+    fake.emit({
+        type: 'agent.message.completed',
+        payload: {
+            runId: 'run-message-complete',
+            sessionId: 'main',
+            text: '任务代理完成了最终整理。'
+        }
+    });
+
+    assert.equal(outputs.length, 1);
+    assert.match(outputs[0].display_text, /最终整理/);
+    assert.equal(outputs[0].agentProgressFinal, true);
+});
+
 test('chat progress bridge does not invent failure wording without a model note', () => {
     const fake = createFakeGateway();
     const outputs = [];

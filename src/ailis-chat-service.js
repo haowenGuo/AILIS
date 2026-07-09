@@ -200,11 +200,33 @@ export function createGatewayProgressBridge({ gateway, sessionId, onProgress, on
             return;
         }
         if (type === 'agent.run.finished' || type === 'agent.run.interrupted') {
+            const finalText = normalizeMarkdownSource(payload.displayText || payload.text || payload.summary || payload.error || '');
+            if (finalText) {
+                onProgress(toAssistantPayload(finalText, {
+                    speechText: payload.speechText || payload.speech_text || finalText,
+                    bubbleText: payload.bubbleText || payload.bubble_text || '',
+                    surface: payload.surface || null,
+                    agentProgressFinal: true
+                }));
+            }
             onRunFinished?.({
                 runId: state.runId,
                 sessionId: normalizeText(payload.sessionId),
                 payload
             });
+            return;
+        }
+        if (type === 'agent.message.completed') {
+            const finalText = normalizeMarkdownSource(payload.text || payload.displayText || payload.summary || '');
+            if (finalText) {
+                onProgress(toAssistantPayload(finalText, {
+                    speechText: payload.speechText || payload.speech_text || finalText,
+                    bubbleText: payload.bubbleText || payload.bubble_text || '',
+                    surface: payload.surface || null,
+                    agentProgressFinal: true
+                }));
+            }
+            return;
         }
         if (type === 'agent.step.started') {
             const frame = createPersonaProgressFrame(event, {
