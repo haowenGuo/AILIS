@@ -178,6 +178,114 @@ test('tool_search output keeps only compact tool index fields in model history',
     assert.ok(JSON.stringify(items[1]).length < 900);
 });
 
+test('tool_search output never exposes object-coerced schema property names', () => {
+    const items = toolOutputToModelInputItems({
+        id: 'search-schema-object-1',
+        tool: 'tool_search',
+        args: { query: 'web search' },
+        response: {
+            ok: true,
+            status: 'completed',
+            result: {
+                structuredContent: {
+                    tools: [{
+                        id: 'mcp__ailis_research__web_search',
+                        name: 'mcp__ailis_research__web_search',
+                        description: 'Search the web.',
+                        input_schema: {
+                            type: 'object',
+                            required: ['query'],
+                            properties: {
+                                query: { type: 'string' }
+                            }
+                        },
+                        schema_properties: [
+                            { name: 'query' },
+                            { key: 'maxResults' },
+                            { unexpected: 'ignored' },
+                            'timeoutMs'
+                        ]
+                    }]
+                }
+            }
+        }
+    });
+
+    assert.deepEqual(items[1].tools[0].properties, ['query', 'maxResults', 'timeoutMs']);
+    assert.equal(items[1].tools[0].properties.includes('[object Object]'), false);
+});
+
+test('web research tool output is projected as web_search_call plus content_items, not a faux Codex text label', () => {
+    const items = toolOutputToModelInputItems({
+        id: 'web-research-1',
+        tool: 'mcp__ailis_research__web_research',
+        args: { query: '终末地 洛茜 攻略' },
+        response: {
+            ok: true,
+            status: 'completed',
+            result: {
+                content: [{
+                    type: 'text',
+                    text: 'AILIS web research evidence bundle:\nCodex object: web_search_call action=search\nlarge legacy text'
+                }],
+                structuredContent: {
+                    webSearchOutput: {
+                        type: 'function_call_output',
+                        webSearchCall: {
+                            type: 'web_search_call',
+                            status: 'completed',
+                            action: {
+                                type: 'search',
+                                query: '终末地 洛茜 攻略',
+                                search_context_size: 'medium'
+                            }
+                        },
+                        search: {
+                            candidates: [{
+                                title: '终末地洛茜攻略',
+                                url: 'https://example.test/loxi',
+                                snippet: '技能、配队、装备与实战手法。'
+                            }]
+                        },
+                        fetch: {
+                            sources: [{
+                                title: '终末地洛茜攻略',
+                                url: 'https://example.test/loxi',
+                                host: 'example.test',
+                                status: 'completed',
+                                pageType: 'html',
+                                evidenceSnippets: ['洛茜定位为辅助，攻略包含技能与队伍。']
+                            }]
+                        },
+                        execution: {
+                            mode: 'bounded_parallel',
+                            durationMs: 1234,
+                            pipeline: [{ stage: 'search', status: 'completed', note: 'results=1' }]
+                        },
+                        retrievalDiagnostics: {
+                            fetchedPageCount: 1,
+                            blockedPageCount: 0
+                        }
+                    }
+                }
+            }
+        }
+    });
+
+    assert.equal(items.length, 3);
+    assert.equal(items[0].type, 'function_call');
+    assert.equal(items[1].type, 'web_search_call');
+    assert.equal(items[1].action.type, 'search');
+    assert.equal(items[1].action.query, '终末地 洛茜 攻略');
+    assert.equal(items[2].type, 'function_call_output');
+    assert.equal(items[2].output.body.kind, 'content_items');
+    const text = FunctionCallOutputPayload.toText(items[2].output);
+    assert.match(text, /Search results:/);
+    assert.match(text, /Sources:/);
+    assert.match(text, /source:1/);
+    assert.doesNotMatch(text, /Codex object: web_search_call/);
+});
+
 test('tool_search preserves provider reasoning metadata for chat provider round-trip', () => {
     const items = toolOutputToModelInputItems({
         id: 'search-1',

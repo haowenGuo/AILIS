@@ -2,6 +2,7 @@
 
 const { summarizeForModel } = require('./ailis-runtime-budget.cjs');
 const {
+    ContentItem,
     FunctionCallOutputPayload,
     ResponseItem,
     normalizeText,
@@ -55,6 +56,12 @@ function extractText(value) {
     return safeJsonStringify(value, '');
 }
 
+function mergeObjects(...values) {
+    return values
+        .filter((value) => value && typeof value === 'object' && !Array.isArray(value))
+        .reduce((merged, value) => ({ ...merged, ...cloneJson(value) }), {});
+}
+
 function canonicalCallId(input = {}, index = 0) {
     return normalizeText(
         input.callId ||
@@ -81,7 +88,13 @@ function normalizeProviderMetadata(input = {}) {
 function normalizeToolOutput(input = {}, index = 0, options = {}) {
     const response = input.response || input.result || {};
     const result = response.result ?? input.output ?? response.output ?? null;
-    const details = response.details || response.result?.details || response.result?.structuredContent || {};
+    const details = mergeObjects(
+        response.result?.structuredContent,
+        response.result?.details,
+        response.structuredContent,
+        response.structured_content,
+        response.details
+    );
     const ok = response.ok === true || input.ok === true;
     const errorSummary = normalizeText(
         response.error ||
@@ -172,7 +185,13 @@ function firstObject(...values) {
 
 function normalizeStringList(values = [], limit = TOOL_SEARCH_OUTPUT_PROPERTIES_LIMIT) {
     return (Array.isArray(values) ? values : [])
-        .map((entry) => normalizeText(entry))
+        .map((entry) => {
+            if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
+                return normalizeText(entry.name || entry.id || entry.key || entry.property || entry.path);
+            }
+            return normalizeText(entry);
+        })
+        .filter((entry) => entry !== '[object Object]')
         .filter(Boolean)
         .slice(0, limit);
 }
@@ -201,6 +220,7 @@ function compactToolSearchResultForHistory(tool = {}) {
         Array.isArray(tool.schema_properties)
             ? tool.schema_properties
             : Object.keys(firstObject(schema.properties))
+                .filter((property) => property && property !== '[object Object]')
     );
     return {
         id,
@@ -225,6 +245,132 @@ function compactToolSearchResultForHistory(tool = {}) {
         properties,
         spec_ref: normalizeText(tool.spec_ref || tool.specRef || (id ? `tool_registry:${id}` : 'tool_registry:unknown'))
     };
+}
+
+function webSearchOutputFromToolOutput(toolOutput = {}) {
+    const details = firstObject(toolOutput.details);
+    const candidates = [
+        details.webSearchOutput,
+        details.web_search_output,
+        details,
+        details.structuredContent?.webSearchOutput,
+        details.structured_content?.web_search_output
+    ];
+    return candidates.find((candidate) => {
+        const value = firstObject(candidate);
+        return normalizeText(value.webSearchCall?.type || value.web_search_call?.type) === 'web_search_call' ||
+            normalizeText(value.type) === 'web_search_call';
+    }) || null;
+}
+
+function normalizeWebSearchCall(webSearchOutput = {}, callId = '') {
+    const sourceCall = firstObject(
+        webSearchOutput.webSearchCall,
+        webSearchOutput.web_search_call,
+        normalizeText(webSearchOutput.type) === 'web_search_call' ? webSearchOutput : null
+    );
+    const action = firstObject(sourceCall.action, webSearchOutput.action);
+    return ResponseItem.webSearchCall({
+        id: sourceCall.id || (callId ? `${callId}_web_search` : null),
+        status: sourceCall.status || webSearchOutput.status || 'completed',
+        action
+    });
+}
+
+function formatWebSearchCandidates(webSearchOutput = {}) {
+    const candidates = Array.isArray(webSearchOutput.search?.candidates)
+        ? webSearchOutput.search.candidates
+        : [];
+    if (!candidates.length) {
+        return '';
+    }
+    const lines = ['Search results:'];
+    candidates.slice(0, 8).forEach((candidate, index) => {
+        lines.push(`${index + 1}. ${candidate.title || candidate.url || '(untitled)'}`);
+        if (candidate.url) {
+            lines.push(`   URL: ${candidate.url}`);
+        }
+        if (candidate.snippet) {
+            lines.push(`   Snippet: ${candidate.snippet}`);
+        }
+    });
+    return lines.join('\n');
+}
+
+function formatWebSearchSources(webSearchOutput = {}) {
+    const sources = Array.isArray(webSearchOutput.fetch?.sources)
+        ? webSearchOutput.fetch.sources
+        : [];
+    if (!sources.length) {
+        return '';
+    }
+    const lines = ['Sources:'];
+    sources.slice(0, 8).forEach((source, index) => {
+        lines.push(`[source:${index + 1}] ${source.title || source.url || '(untitled)'}`);
+        if (source.url) {
+            lines.push(`URL: ${source.url}`);
+        }
+        const meta = [
+            source.host ? `host=${source.host}` : '',
+            source.status ? `status=${source.status}` : '',
+            source.pageType ? `page_type=${source.pageType}` : ''
+        ].filter(Boolean).join('; ');
+        if (meta) {
+            lines.push(meta);
+        }
+        if (Array.isArray(source.evidenceSnippets) && source.evidenceSnippets.length) {
+            lines.push('Evidence snippets:');
+            source.evidenceSnippets.slice(0, 3).forEach((snippet) => lines.push(`- ${snippet}`));
+        } else if (source.searchSnippet) {
+            lines.push(`Search snippet: ${source.searchSnippet}`);
+        }
+    });
+    return lines.join('\n');
+}
+
+function formatWebSearchDiagnostics(webSearchOutput = {}) {
+    const execution = firstObject(webSearchOutput.execution);
+    const diagnostics = firstObject(webSearchOutput.retrievalDiagnostics, webSearchOutput.retrieval_diagnostics);
+    const lines = ['Retrieval diagnostics:'];
+    if (execution.mode) {
+        lines.push(`mode=${execution.mode}`);
+    }
+    if (execution.durationMs != null) {
+        lines.push(`duration_ms=${execution.durationMs}`);
+    }
+    if (diagnostics.fetchedPageCount != null) {
+        lines.push(`fetched_page_count=${diagnostics.fetchedPageCount}`);
+    }
+    if (diagnostics.blockedPageCount != null) {
+        lines.push(`blocked_page_count=${diagnostics.blockedPageCount}`);
+    }
+    const pipeline = Array.isArray(execution.pipeline) ? execution.pipeline : [];
+    if (pipeline.length) {
+        lines.push('Pipeline:');
+        pipeline.slice(0, 10).forEach((step) => {
+            lines.push(`- ${step.stage || 'step'}: ${step.status || 'unknown'}${step.note ? `; ${step.note}` : ''}`);
+        });
+    }
+    return lines.length > 1 ? lines.join('\n') : '';
+}
+
+function buildWebSearchFunctionOutput(toolOutput = {}, webSearchOutput = {}) {
+    const contentItems = [
+        ContentItem.inputText([
+            'Web search completed.',
+            `Tool: ${toolOutput.toolName}`,
+            toolOutput.durationMs != null ? `duration_ms=${toolOutput.durationMs}` : ''
+        ].filter(Boolean).join('\n')),
+        ContentItem.inputText(formatWebSearchCandidates(webSearchOutput)),
+        ContentItem.inputText(formatWebSearchSources(webSearchOutput)),
+        ContentItem.inputText(formatWebSearchDiagnostics(webSearchOutput))
+    ].filter(Boolean);
+    if (!contentItems.length) {
+        contentItems.push(ContentItem.inputText('Web search completed. Structured results are available in the preceding web_search_call item.'));
+    }
+    return FunctionCallOutputPayload.fromContentItems(contentItems, {
+        success: toolOutput.ok === true ? true : toolOutput.ok === false ? false : null
+    });
 }
 
 function toolOutputToResponseItems(toolOutput = {}, options = {}) {
@@ -252,6 +398,22 @@ function toolOutputToResponseItems(toolOutput = {}, options = {}) {
                 tools
             })
         ];
+    }
+    const webSearchOutput = webSearchOutputFromToolOutput(toolOutput);
+    if (webSearchOutput) {
+        return [
+            ResponseItem.functionCall({
+                name: toolName,
+                arguments: toolOutput.args || {},
+                provider_metadata: toolOutput.providerMetadata || null,
+                call_id: callId
+            }),
+            normalizeWebSearchCall(webSearchOutput, callId),
+            ResponseItem.functionCallOutput({
+                call_id: callId,
+                output: buildWebSearchFunctionOutput(toolOutput, webSearchOutput)
+            })
+        ].filter(Boolean);
     }
     const metadataLines = buildModelVisibleToolMetadata(toolOutput);
     const output = [
