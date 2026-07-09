@@ -2418,6 +2418,82 @@ function formatSearchAnswerCandidates(candidates = []) {
     ].join('\n');
 }
 
+function normalizeSearchContextSize(value = '', fallback = 'medium') {
+    const normalized = normalizeString(value || fallback).toLowerCase();
+    return ['low', 'medium', 'high'].includes(normalized) ? normalized : fallback;
+}
+
+function buildCanonicalWebSearchOutput({
+    query = '',
+    backendQuery = '',
+    rankedResults = [],
+    attempts = [],
+    startedAt = Date.now(),
+    overallTimeoutMs = 0,
+    searchContextSize = 'medium',
+    aggregated = false,
+    backend = ''
+} = {}) {
+    const results = (Array.isArray(rankedResults) ? rankedResults : [])
+        .slice(0, 10)
+        .map((result, index) => pruneEmptyDeep({
+            id: `result_${index + 1}`,
+            title: normalizeString(result.title || result.text || result.url),
+            url: normalizeString(result.url),
+            snippet: normalizeString(result.snippet || result.content),
+            source: normalizeString(result.sourceBackend || result.source || backend),
+            rank: index + 1
+        }));
+    const action = pruneEmptyDeep({
+        type: 'search',
+        query,
+        search_context_size: normalizeSearchContextSize(searchContextSize),
+        max_results: results.length || undefined
+    });
+    return pruneEmptyDeep({
+        type: 'function_call_output',
+        webSearchCall: {
+            type: 'web_search_call',
+            status: 'completed',
+            action
+        },
+        web_search_call: {
+            type: 'web_search_call',
+            status: 'completed',
+            action
+        },
+        functionCallOutput: {
+            type: 'function_call_output',
+            status: 'completed',
+            output_kind: 'web_search_results'
+        },
+        function_call_output: {
+            type: 'function_call_output',
+            status: 'completed',
+            output_kind: 'web_search_results'
+        },
+        search: {
+            query,
+            backend_query: backendQuery && backendQuery !== query ? backendQuery : undefined,
+            status: 'completed',
+            mode: aggregated ? 'aggregated' : 'single_backend',
+            results,
+            candidates: results
+        },
+        execution: {
+            duration_ms: Date.now() - startedAt,
+            overall_timeout_ms: overallTimeoutMs,
+            attempts: (Array.isArray(attempts) ? attempts : []).map((attempt) => pruneEmptyDeep({
+                ok: attempt.ok === true,
+                backend: normalizeString(attempt.backend),
+                duration_ms: attempt.durationMs,
+                status: attempt.status,
+                error_code: attempt.errorCode
+            }))
+        }
+    });
+}
+
 function buildWebSearchSuccessObservation({
     query = '',
     backendQuery = '',
@@ -2428,9 +2504,21 @@ function buildWebSearchSuccessObservation({
     managedSearxng = null,
     startedAt = Date.now(),
     overallTimeoutMs = 0,
-    aggregated = false
+    aggregated = false,
+    searchContextSize = 'medium'
 } = {}) {
     const rankedResults = rankSearchResultsForFollowup(rawResults, query);
+    const webSearchOutput = buildCanonicalWebSearchOutput({
+        query,
+        backendQuery,
+        rankedResults,
+        attempts,
+        startedAt,
+        overallTimeoutMs,
+        searchContextSize,
+        aggregated,
+        backend
+    });
     const candidateEvidenceText = formatCandidateSearchEvidence(rankedResults, 8);
     const answerCandidates = extractSearchAnswerCandidates(rankedResults, query);
     const answerCandidateText = formatSearchAnswerCandidates(answerCandidates);
@@ -2499,6 +2587,12 @@ function buildWebSearchSuccessObservation({
         queryFocusTerms,
         topQueryScore,
         managedSearxng,
+        webSearchOutput,
+        webSearchCall: webSearchOutput.webSearchCall,
+        web_search_call: webSearchOutput.web_search_call,
+        functionCallOutput: webSearchOutput.functionCallOutput,
+        function_call_output: webSearchOutput.function_call_output,
+        search_context_size: normalizeSearchContextSize(searchContextSize),
         searchAggregation: pruneEmptyDeep({
             enabled: aggregated || undefined,
             successfulBackends,
@@ -4296,6 +4390,7 @@ async function webSearch(args = {}) {
     ].filter(Boolean).join(' ');
     const backendQuery = normalizeString(args.backendQuery || args.backend_query) || buildEffectiveSearchQuery(queryWithExactKeywords);
     const maxResults = clampNumber(args.maxResults || args.limit, 8, 1, 12);
+    const searchContextSize = normalizeSearchContextSize(args.search_context_size || args.searchContextSize);
     const timeoutMs = clampNumber(args.timeoutMs || args.timeout_ms, 8000, 3000, 30000);
     const attempts = [];
     const effectiveArgs = await webSearchArgsWithManagedSearxng(args);
@@ -4346,7 +4441,8 @@ async function webSearch(args = {}) {
             managedSearxng: effectiveArgs.__managedSearxng || null,
             startedAt,
             overallTimeoutMs,
-            aggregated: aggregateAcrossBackends && attempts.filter((entry) => entry.ok).length > 1
+            aggregated: aggregateAcrossBackends && attempts.filter((entry) => entry.ok).length > 1,
+            searchContextSize
         });
         lastSuccessObservation = observation;
         lastSuccessfulAttempt = attempt;
@@ -4372,7 +4468,8 @@ async function webSearch(args = {}) {
             managedSearxng: effectiveArgs.__managedSearxng || null,
             startedAt,
             overallTimeoutMs,
-            aggregated: aggregateAcrossBackends && attempts.filter((entry) => entry.ok).length > 1
+            aggregated: aggregateAcrossBackends && attempts.filter((entry) => entry.ok).length > 1,
+            searchContextSize
         }).response;
     }
     return errorResult('web_search failed across all configured search backends', {
@@ -10440,43 +10537,14 @@ print(json.dumps(payload, ensure_ascii=False))
 const TOOLS = [
     {
         name: 'web_search',
-        description: 'Fallback broad public web search through AILIS managed search backends. Standard call: { "query": "specific search keywords", "maxResults": 5 }. Do not use as the first step for attached/local files, known URLs, PDFs/papers/reports, audio, images, spreadsheets, presentations, Word documents, code files, or GitHub repositories; use the dedicated MCP tool for those artifact types first. Use web_fetch for a known HTML/text URL, paper_metadata_lookup for exact paper/DOI metadata, pdf_extract_text for a known PDF URL, pdf_find_and_extract for a paper/report title when you need full text, and github_repo_read for GitHub README/tree/file evidence. General web queries first try an AILIS-packaged local SearXNG service when available; AILIS starts it automatically from managed-searxng.json and users do not need to deploy Docker or provide a URL. Explicit AILIS_SEARXNG_URL/per-call searxngUrl still overrides the managed service. The fallback chain then uses configured local Firecrawl, the no-Docker local Python search worker, then current HTML fallback backends. GitHub/code repository queries keep GitHub repository search first. Hosted Firecrawl is used only when FIRECRAWL_API_KEY and AILIS_ENABLE_FIRECRAWL_CLOUD=1 are explicitly configured. Results from multiple successful providers are normalized, de-duplicated, source-tagged, re-ranked, and returned as compact candidate snippets plus source URLs. The tool does not judge answer confidence or evidence sufficiency.',
+        description: 'Search the public web. Codex/OAI-style action: search. Standard call: { "query": "specific search keywords", "maxResults": 5, "search_context_size": "medium" }. Use this for discovery; use web_fetch/open_page for a selected result URL and web_find/find_in_page for an exact phrase inside a known page. Do not use for attached/local files, known PDFs, audio, images, spreadsheets, Word documents, code files, or GitHub repositories when a dedicated tool exists. Results are normalized, de-duplicated, re-ranked, and returned as compact search results with URLs; the model judges evidence sufficiency.',
         inputSchema: {
             type: 'object',
             required: ['query'],
             properties: {
-                query: { type: 'string', minLength: 1, description: 'Required search keywords. Prefer this field over q/search/text. Example: "Playwright wait for selector timeout official docs". Do not call web_search with empty arguments.' },
-                q: { type: 'string', description: 'Compatibility alias for query. Prefer query.' },
-                search: { type: 'string', description: 'Compatibility alias for query. Prefer query.' },
-                text: { type: 'string', description: 'Compatibility alias for query. Prefer query.' },
-                exact_keywords: {
-                    type: 'array',
-                    items: { type: 'string' },
-                    description: 'Optional exact terms that should stay in the effective backend query. Prefer including them in query directly; this is an explicit compatibility field, not a replacement for query.'
-                },
-                exactKeywords: {
-                    type: 'array',
-                    items: { type: 'string' },
-                    description: 'Compatibility alias for exact_keywords.'
-                },
+                query: { type: 'string', minLength: 1, description: 'Required public web search query. Do not call web_search with empty arguments.' },
                 maxResults: { type: 'number', description: 'Requested result count, clamped to 1-12. Use 3-8 for normal tasks.' },
-                limit: { type: 'number', description: 'Compatibility alias for maxResults. Prefer maxResults.' },
-                timeoutMs: { type: 'number', description: 'Per-backend timeout in milliseconds, clamped to 3000-30000. Default is 8000. Omit unless a task needs a longer wait.' },
-                overallTimeoutMs: { type: 'number', description: 'Overall search budget in milliseconds, clamped to 8000-120000. Defaults under the Gateway timeout so failures return as tool results instead of hanging.' },
-                aggregate: { type: 'boolean', description: 'Optional. true forces multi-provider aggregation; false returns the first successful backend. Omit for automatic aggregation in auto/provider-chain mode.' },
-                provider: { type: 'string', description: 'Optional provider chain selector: auto, searxng, firecrawl, python_search, html/current_html_fallback, external, github, or a comma-separated backend list. Prefer omitting this for automatic fallback.' },
-                searchProvider: { type: 'string', description: 'Compatibility alias for provider. Prefer provider.' },
-                searxngUrl: { type: 'string', description: 'Optional SearXNG base URL override. Normally omit this; AILIS can auto-start its packaged local SearXNG service.' },
-                firecrawlUrl: { type: 'string', description: 'Optional Firecrawl base URL override for local/self-hosted Firecrawl. AILIS does not call hosted Firecrawl from this tool.' },
-                disableManagedSearxng: { type: 'boolean', description: 'Optional test/diagnostic switch. true disables AILIS auto-start of its packaged local SearXNG service for this call.' },
-                managedSearxngManifest: { type: 'string', description: 'Optional test/diagnostic manifest override. Normal users should omit this.' },
-                managedSearxngPort: { type: 'number', description: 'Optional test/diagnostic port override for the AILIS-managed local SearXNG process.' },
-                backend: { type: 'string', description: 'Optional backend id or provider alias: searxng_json, firecrawl_search, python_search, bing_html, duckduckgo_lite, duckduckgo_html, yahoo_html, github_repositories, html, searxng, or firecrawl. Omit for automatic fallback.' },
-                backends: {
-                    type: 'array',
-                    items: { type: 'string', enum: ['searxng_json', 'firecrawl_search', 'python_search', 'bing_html', 'duckduckgo_lite', 'duckduckgo_html', 'yahoo_html', 'github_repositories', 'html', 'current_html_fallback', 'searxng', 'firecrawl', 'python'] },
-                    description: 'Optional ordered backend ids. Omit for automatic fallback.'
-                }
+                search_context_size: { type: 'string', enum: ['low', 'medium', 'high'], description: 'Amount of search context to return. Defaults to medium.' }
             },
             additionalProperties: false
         }
@@ -10572,7 +10640,7 @@ const TOOLS = [
     },
     {
         name: 'web_fetch',
-        description: 'Open a public HTTP(S) HTML/text URL and return a Codex-style source viewport with line numbers. Standard calls: { "url": "https://..." }, { "url": "https://...", "lineno": 120 }, or { "url": "https://...", "query": "answer-bearing phrase" }. The result is source evidence with total_lines, line_start/line_end, has_more_before/has_more_after, and L123: lines. If a field is missing, call web_fetch again with the same url and a new lineno or query; do not refetch or scrape with shell. Rejects PDF/binary content with unsupported_content_type; use pdf_extract_text or download_file for PDFs/files.',
+        description: 'Open a public HTTP(S) HTML/text URL. Codex/OAI-style action: open_page. Standard calls: { "url": "https://..." }, { "url": "https://...", "lineno": 120 }, or { "url": "https://...", "query": "answer-bearing phrase" }. Returns a line-numbered source_viewport with total_lines, line_start/line_end, has_more_before/has_more_after, and L123 lines. If a field is missing, open another viewport on the same URL with a new lineno or query; do not scrape with shell. Rejects PDF/binary content with unsupported_content_type; use pdf_extract_text or download_file for PDFs/files.',
         inputSchema: {
             type: 'object',
             required: ['url'],
@@ -10588,7 +10656,7 @@ const TOOLS = [
     },
     {
         name: 'web_find',
-        description: 'Find an exact phrase inside a known public HTTP(S) HTML/text URL and return a Codex-style line-numbered source viewport around the match. Standard call: { "url": "https://...", "pattern": "exact phrase" }. This is not a broad web search.',
+        description: 'Find an exact phrase inside a known public HTTP(S) HTML/text URL. Codex/OAI-style action: find_in_page. Standard call: { "url": "https://...", "pattern": "exact phrase" }. Returns a line-numbered source_viewport around matches. This is not a broad web search.',
         inputSchema: {
             type: 'object',
             required: ['url', 'pattern'],

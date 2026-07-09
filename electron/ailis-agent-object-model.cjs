@@ -278,7 +278,9 @@ function normalizeWebSearchCall(webSearchOutput = {}, callId = '') {
 }
 
 function formatWebSearchCandidates(webSearchOutput = {}) {
-    const candidates = Array.isArray(webSearchOutput.search?.candidates)
+    const candidates = Array.isArray(webSearchOutput.search?.results)
+        ? webSearchOutput.search.results
+        : Array.isArray(webSearchOutput.search?.candidates)
         ? webSearchOutput.search.candidates
         : [];
     if (!candidates.length) {

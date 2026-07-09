@@ -286,6 +286,49 @@ test('web research tool output is projected as web_search_call plus content_item
     assert.doesNotMatch(text, /Codex object: web_search_call/);
 });
 
+test('web_search canonical results are projected as search web_search_call', () => {
+    const items = toolOutputToModelInputItems({
+        id: 'web-search-1',
+        tool: 'mcp__ailis_research__web_search',
+        args: { query: 'OpenAI Responses web search' },
+        response: {
+            ok: true,
+            status: 'completed',
+            result: {
+                structuredContent: {
+                    webSearchOutput: {
+                        type: 'function_call_output',
+                        webSearchCall: {
+                            type: 'web_search_call',
+                            status: 'completed',
+                            action: {
+                                type: 'search',
+                                query: 'OpenAI Responses web search',
+                                search_context_size: 'medium'
+                            }
+                        },
+                        search: {
+                            results: [{
+                                title: 'OpenAI Web Search',
+                                url: 'https://platform.openai.com/docs/guides/tools-web-search',
+                                snippet: 'Use web search in the Responses API.'
+                            }]
+                        }
+                    }
+                }
+            }
+        }
+    });
+
+    assert.equal(items.length, 3);
+    assert.equal(items[1].type, 'web_search_call');
+    assert.equal(items[1].action.type, 'search');
+    assert.equal(items[1].action.search_context_size, 'medium');
+    const text = FunctionCallOutputPayload.toText(items[2].output);
+    assert.match(text, /Search results:/);
+    assert.match(text, /OpenAI Web Search/);
+});
+
 test('web_fetch source viewport is projected as open_page web_search_call', () => {
     const items = toolOutputToModelInputItems({
         id: 'web-fetch-1',
