@@ -407,15 +407,19 @@ function sourceViewportFromToolOutput(toolOutput = {}) {
     ) || 1;
     return {
         sourceWindow,
-        action: {
-            ...cloneJson(action),
-            type: normalizedActionType,
-            ...(url ? { url } : {}),
-            ...(normalizedActionType === 'find_in_page' && normalizeText(action.pattern || details.pattern)
-                ? { pattern: normalizeText(action.pattern || details.pattern) }
-                : {}),
-            ...(normalizedActionType === 'open_page' ? { lineno: lineStart } : {})
-        },
+        action: normalizedActionType === 'find_in_page'
+            ? {
+                type: 'find_in_page',
+                ...(url ? { url } : {}),
+                ...(normalizeText(action.pattern || details.pattern)
+                    ? { pattern: normalizeText(action.pattern || details.pattern) }
+                    : {})
+            }
+            : {
+                type: 'open_page',
+                ...(url ? { url } : {}),
+                lineno: lineStart
+            },
         details
     };
 }

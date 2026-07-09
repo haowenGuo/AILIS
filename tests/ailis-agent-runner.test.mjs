@@ -10,6 +10,7 @@ const { AILISGateway } = require('../electron/ailis-gateway.cjs');
 const {
     AILISAgentRunner,
     buildAgentDirectToolSpecs,
+    buildToolObservationDigest,
     isAgentLlmSettingsMissing,
     splitNativeProgressNoteArgs,
     stripControlTags
@@ -92,6 +93,54 @@ test('AILIS direct tool specs allow model-authored progress notes without passin
 
     assert.deepEqual(split.args, { path: 'note.txt' });
     assert.match(split.progressNote, /确认这份文件/);
+});
+
+test('web source viewport prompt digest uses only canonical Codex/OAI names', () => {
+    const [digest] = buildToolObservationDigest([{
+        id: 'fetch-1',
+        tool: 'mcp__ailis_research__web_fetch',
+        title: 'web_fetch',
+        args: { url: 'https://example.test/page', lineno: 10 },
+        response: {
+            ok: true,
+            status: 'completed',
+            result: {
+                content: [{
+                    type: 'text',
+                    text: 'Source viewport:\nL10: answer bearing line'
+                }],
+                structuredContent: {
+                    sourceWindow: {
+                        type: 'source_viewport',
+                        action: {
+                            type: 'web_fetch',
+                            url: 'https://example.test/page',
+                            lineno: 10
+                        },
+                        url: 'https://example.test/page',
+                        contentType: 'text/html',
+                        totalLines: 20,
+                        lineStart: 10,
+                        lineEnd: 11,
+                        hasMoreBefore: true,
+                        hasMoreAfter: false,
+                        lines: [
+                            { lineNumber: 10, line_number: 10, lineno: 10, text: 'answer bearing line' }
+                        ]
+                    },
+                    sourceViewport: { type: 'source_viewport' },
+                    modelVisibleMode: 'source_viewport',
+                    sourceRetrievalComplete: true
+                }
+            }
+        }
+    }]);
+
+    assert.match(digest.structuredContent, /"source_viewport"/);
+    assert.match(digest.structuredContent, /"type":"open_page"/);
+    assert.match(digest.structuredContent, /"lineno":10/);
+    assert.doesNotMatch(digest.structuredContent, /sourceWindow|sourceViewport|modelVisibleMode|sourceRetrievalComplete/);
+    assert.doesNotMatch(digest.structuredContent, /lineNumber|line_number|web_fetch/);
 });
 
 test('AILIS Agent Runner passes parent LLM settings only to subagent tool calls', async () => {

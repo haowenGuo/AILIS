@@ -5483,6 +5483,97 @@ function validateExactAnswerSubmission({ decision = {}, stepResults = [], messag
     };
 }
 
+function firstPromptObject(...values) {
+    return values.find((value) => value && typeof value === 'object' && !Array.isArray(value)) || null;
+}
+
+function cleanPromptObject(value = {}) {
+    return Object.fromEntries(Object.entries(value)
+        .filter(([, item]) => item !== undefined && item !== null && item !== ''));
+}
+
+function normalizeWebSourceActionType(action = {}, tool = '') {
+    const actionType = normalizeText(action.type);
+    if (actionType === 'find_in_page' || actionType === 'open_page' || actionType === 'search') {
+        return actionType;
+    }
+    return /(?:^|__)web_find$/.test(normalizeText(tool)) ? 'find_in_page' : 'open_page';
+}
+
+function canonicalSourceViewportForPrompt(value = {}, context = {}) {
+    const source = firstPromptObject(value);
+    if (!source || normalizeText(source.type) !== 'source_viewport') {
+        return null;
+    }
+    const action = firstPromptObject(source.action) || {};
+    const actionType = normalizeWebSourceActionType(action, context.tool);
+    const url = normalizeText(source.url || source.ref_id || action.url || context.url);
+    const lineno = Number(
+        source.lineno ||
+            source.line_start ||
+            source.lineStart ||
+            action.lineno ||
+            context.lineno ||
+            1
+    ) || 1;
+    const lineStart = Number(source.line_start || source.lineStart || lineno) || lineno;
+    const lineEnd = Number(source.line_end || source.lineEnd || lineStart) || lineStart;
+    const totalLines = Number(source.total_lines || source.totalLines || 0) || undefined;
+    const pattern = normalizeText(source.pattern || action.pattern || context.pattern);
+    return cleanPromptObject({
+        type: 'source_viewport',
+        action: cleanPromptObject({
+            type: actionType,
+            ...(url ? { url } : {}),
+            ...(actionType === 'open_page' ? { lineno } : {}),
+            ...(actionType === 'find_in_page' && pattern ? { pattern } : {})
+        }),
+        ...(url ? { url, ref_id: url } : {}),
+        lineno,
+        line_start: lineStart,
+        line_end: lineEnd,
+        total_lines: totalLines,
+        has_more_before: source.has_more_before ?? source.hasMoreBefore,
+        has_more_after: source.has_more_after ?? source.hasMoreAfter,
+        content_type: source.content_type || source.contentType,
+        selection_reason: source.selection_reason || source.selectionReason,
+        lines: (Array.isArray(source.lines) ? source.lines : []).map((line) => cleanPromptObject({
+            lineno: Number(line.lineno || line.line_number || line.lineNumber || 0) || undefined,
+            text: line.text
+        })).filter((line) => line.lineno || normalizeText(line.text))
+    });
+}
+
+function canonicalSourceViewportResultForPrompt(value = {}, context = {}) {
+    const sourceViewport = canonicalSourceViewportForPrompt(firstPromptObject(
+        value.source_window,
+        value.sourceWindow,
+        value.source_viewport,
+        value.sourceViewport,
+        value.source
+    ), {
+        ...context,
+        tool: value.tool || context.tool,
+        url: value.url || context.url,
+        pattern: value.pattern || context.pattern,
+        lineno: value.lineno || context.lineno
+    });
+    if (!sourceViewport) {
+        return null;
+    }
+    const matches = (Array.isArray(value.matches) ? value.matches : []).map((match) => cleanPromptObject({
+        lineno: Number(match.lineno || match.line_number || match.lineNumber || 0) || undefined,
+        text: match.text
+    })).filter((match) => match.lineno || normalizeText(match.text));
+    return cleanPromptObject({
+        type: sourceViewport.action?.type === 'find_in_page' ? 'find_in_page' : 'open_page',
+        action: sourceViewport.action,
+        source_viewport: sourceViewport,
+        match_count: matches.length ? matches.length : undefined,
+        matches: matches.length ? matches : undefined
+    });
+}
+
 function sanitizeWebStructuredContentForPrompt(value, depth = 0, context = {}) {
     if (depth > 6 || value === null || value === undefined) {
         return value;
@@ -5507,18 +5598,35 @@ function sanitizeWebStructuredContentForPrompt(value, depth = 0, context = {}) {
             type,
             status: value.status,
             query: value.query,
-            webSearchCall: value.webSearchCall || value.web_search_call,
-            webSearchItem: value.webSearchItem || value.web_search_item,
-            functionCallOutput: value.functionCallOutput || value.function_call_output,
-            webSearchOutput: value.webSearchOutput || value.web_search_output,
-            executionMode: value.executionMode,
+            web_search_call: value.webSearchCall || value.web_search_call,
+            web_search: value.webSearchItem || value.web_search_item,
+            function_call_output: value.functionCallOutput || value.function_call_output,
+            web_search_output: value.webSearchOutput || value.web_search_output,
+            execution_mode: value.executionMode || value.execution_mode,
             parallelism: value.parallelism,
-            pageCount: value.pageCount,
-            retrievalDiagnostics: value.retrievalDiagnostics || value.retrieval_diagnostics
+            page_count: value.pageCount || value.page_count,
+            retrieval_diagnostics: value.retrievalDiagnostics || value.retrieval_diagnostics
         }, depth + 1, context);
+    }
+    const sourceViewport = canonicalSourceViewportForPrompt(value, context) ||
+        canonicalSourceViewportResultForPrompt(value, context);
+    if (sourceViewport) {
+        return sourceViewport;
     }
     const childContext = context;
     const omittedKeys = new Set([
+        'sourceWindow',
+        'source_window',
+        'sourceViewport',
+        'source_viewport',
+        'modelVisibleMode',
+        'model_visible_mode',
+        'sourceRetrievalComplete',
+        'source_retrieval_complete',
+        'sourceWindowCoversTask',
+        'source_window_covers_query',
+        'lineNumber',
+        'line_number',
         'searchConfidence',
         'search_confidence',
         'answerReadiness',

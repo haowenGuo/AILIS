@@ -327,6 +327,7 @@ test('web_fetch source viewport is projected as open_page web_search_call', () =
     assert.equal(items[1].action.type, 'open_page');
     assert.equal(items[1].action.url, 'https://example.test/guide');
     assert.equal(items[1].action.lineno, 12);
+    assert.deepEqual(Object.keys(items[1].action), ['type', 'url', 'lineno']);
     assert.equal(items[2].output.body.kind, 'content_items');
     const text = FunctionCallOutputPayload.toText(items[2].output);
     assert.match(text, /Opened page source viewport/);
@@ -375,6 +376,7 @@ test('web_find source viewport is projected as find_in_page web_search_call', ()
     assert.equal(items[1].type, 'web_search_call');
     assert.equal(items[1].action.type, 'find_in_page');
     assert.equal(items[1].action.pattern, 'Cantora');
+    assert.deepEqual(Object.keys(items[1].action), ['type', 'url', 'pattern']);
     const text = FunctionCallOutputPayload.toText(items[2].output);
     assert.match(text, /Find in page completed/);
     assert.match(text, /Find matches: 1/);
