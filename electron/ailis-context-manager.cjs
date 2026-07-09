@@ -82,15 +82,15 @@ function isToolOutputItem(item = {}) {
 
 function isPinnedCompleteObservationText(text = '') {
     return /reasoning[_-]?ready\s*[:=]\s*true/i.test(text) ||
-        /\bcomplete\s*[:=]\s*true\b/i.test(text) && /\btruncated\s*[:=]\s*false\b/i.test(text) ||
-        /\boutputComplete\s*=\s*true\b/i.test(text) && /\boutputTruncatedForModel\s*=\s*false\b/i.test(text);
+        /\bcomplete\s*[:=]\s*true\b/i.test(text) && /\btruncated\s*[:=]\s*false\b/i.test(text);
 }
 
 function extractObservationHeaderLines(text = '') {
     return String(text || '')
         .split(/\r?\n/)
         .map((line) => line.trim())
-        .filter((line) => /^(Status|Error|DurationMs|OutputArtifact|OutputArtifactTools|OutputArtifactHint|exitCode|outputId|bytes|outputComplete|outputTruncatedForModel|modelHint)\b/i.test(line) ||
+        .filter((line) => /^(Status|Error|DurationMs|OutputArtifact|OutputArtifactTools|OutputArtifactHint|exitCode|outputId|bytes|modelHint)\b/i.test(line) ||
+            /^<truncated\b/i.test(line) ||
             /\b(reasoning[_-]?ready|complete|truncated)\s*[:=]/i.test(line))
         .slice(0, 18);
 }

@@ -66,7 +66,7 @@ test('toolOutputToModelInputItems exposes exec output store handles to the model
                 }
             },
             result: {
-                text: 'MODEL_VISIBLE_CONTENT_TRUNCATED:\noutputComplete=false\noutputTruncatedForModel=true\n--- preview ---\nlarge output preview'
+                text: 'MODEL_VISIBLE_CONTENT_TRUNCATED:\n<truncated omitted_approx_tokens="512" />\n--- preview ---\nlarge output preview'
             }
         }
     });
@@ -388,7 +388,7 @@ test('ContextManager compacts stale tool observations but keeps recent and compl
     for (let index = 0; index < 8; index += 1) {
         const callId = `call_${index}`;
         const completeEvidence = index === 2
-            ? '\noutputComplete=true\noutputTruncatedForModel=false\nPINNED_COMPLETE_EVIDENCE'
+            ? '\nreasoning_ready=true\nPINNED_COMPLETE_EVIDENCE'
             : '';
         history.recordItems([
             ResponseItem.functionCall({

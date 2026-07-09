@@ -281,8 +281,10 @@ function buildModelVisibleTruncationNotice({
     maxTextChars = DEFAULT_MAX_RESULT_TEXT_CHARS
 } = {}) {
     const normalizedPath = normalizeString(filePath);
+    const omittedApproxTokens = Math.max(1, Math.ceil(Math.max(0, Number(originalTextChars) - Number(visibleChars || maxTextChars)) / 4));
     const lines = [
         'MODEL_VISIBLE_CONTENT_TRUNCATED:',
+        `<truncated omitted_approx_tokens="${omittedApproxTokens}" />`,
         `originalTextChars=${originalTextChars || 'unknown'}; visibleTextChars<=${visibleChars || maxTextChars}; truncationScope=model_visible_tool_result_text;`
     ];
     if (normalizedPath) {

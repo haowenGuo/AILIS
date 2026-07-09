@@ -2071,20 +2071,23 @@ function formatExecContent(details = {}) {
     if (details.outputStore?.outputId) {
         const outputStore = details.outputStore;
         const previewTruncated = outputStore.previewTruncated === true;
+        const previewBytes = Buffer.byteLength(String(outputStore.preview || ''), 'utf8');
+        const omittedApproxTokens = previewTruncated
+            ? Math.max(1, Math.ceil(Math.max(0, Number(outputStore.bytes || 0) - previewBytes) / 4))
+            : 0;
         const lines = [
             `exitCode=${details.exitCode ?? details.exit_code}`,
             `outputId=${outputStore.outputId}`,
-            `bytes=${outputStore.bytes ?? 0} lines=${outputStore.lineCount ?? 0} stdoutBytes=${outputStore.stdoutBytes ?? 0} stderrBytes=${outputStore.stderrBytes ?? 0}`,
-            `outputComplete=${previewTruncated ? 'false' : 'true'}`,
-            `outputTruncatedForModel=${previewTruncated ? 'true' : 'false'}`
+            `bytes=${outputStore.bytes ?? 0} lines=${outputStore.lineCount ?? 0} stdoutBytes=${outputStore.stdoutBytes ?? 0} stderrBytes=${outputStore.stderrBytes ?? 0}`
         ];
         if (previewTruncated) {
             lines.push(
+                `<truncated omitted_approx_tokens="${omittedApproxTokens}" />`,
                 'fullOutput=stored_for_agent_lab',
                 `outputRead={"outputId":"${outputStore.outputId}"}`,
                 `outputTail={"outputId":"${outputStore.outputId}"}`,
                 `outputSearch={"outputId":"${outputStore.outputId}","query":"<text>"}`,
-                'modelHint=Visible output is incomplete. Use tool_search query "exec output outputId search tail read" to load output_search/output_tail/output_read, then inspect only the needed slice. Do not rerun the command just to recover truncated output.'
+                'modelHint=Visible stdout/stderr is a preview with omitted bytes. Use tool_search query "exec output outputId search tail read" to load output_search/output_tail/output_read, then inspect only the needed slice. Do not rerun the command just to recover omitted output.'
             );
         } else {
             lines.push('modelHint=Visible stdout/stderr below is complete for this command.');

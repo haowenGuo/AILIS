@@ -262,8 +262,10 @@ function buildModelVisibleTruncationNotice({
     originalTextChars = 0,
     visibleTextChars = 0
 } = {}) {
+    const omittedApproxTokens = Math.max(1, Math.ceil(Math.max(0, Number(originalTextChars) - Number(visibleTextChars)) / 4));
     return [
         'MODEL_VISIBLE_CONTENT_TRUNCATED:',
+        `<truncated omitted_approx_tokens="${omittedApproxTokens}" />`,
         `originalTextChars=${Number(originalTextChars) || 'unknown'}; visibleTextChars<=${Number(visibleTextChars) || 'unknown'}; truncationScope=model_visible_tool_result_text;`
     ].join('\n');
 }

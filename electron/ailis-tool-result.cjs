@@ -92,14 +92,17 @@ function applyModelVisiblePreview(output = {}, {
                 visibleTextChars: 0,
                 originalLines: 0,
                 approxOriginalTokens: 0,
-                outputComplete: true,
-                outputTruncatedForModel: false
+                truncated: false,
+                omittedApproxTokens: 0
             }
         };
     }
     const previewBudget = Math.max(512, Number(maxTextChars || DEFAULT_MODEL_VISIBLE_TEXT_CHARS) - 512);
     const preview = makeHeadTailPreview(text, previewBudget);
     const outputRef = extractOutputRef(output, text);
+    const omittedApproxTokens = preview.truncated
+        ? Math.max(1, approxTokenCount(text) - approxTokenCount(preview.text))
+        : 0;
     const budget = {
         status: preview.truncated ? 'previewed' : 'complete',
         tool: toolId,
@@ -109,8 +112,8 @@ function applyModelVisiblePreview(output = {}, {
         omittedTextChars: preview.omittedTextChars,
         originalLines: countLines(text),
         approxOriginalTokens: approxTokenCount(text),
-        outputComplete: !preview.truncated,
-        outputTruncatedForModel: Boolean(preview.truncated),
+        truncated: Boolean(preview.truncated),
+        omittedApproxTokens,
         ...(outputRef ? { outputRef } : {})
     };
     if (!preview.truncated) {
@@ -124,8 +127,7 @@ function applyModelVisiblePreview(output = {}, {
             `originalTextChars=${budget.originalTextChars}`,
             `visibleTextChars<=${budget.visibleTextChars}`,
             `originalLines=${budget.originalLines}`,
-            'outputComplete=false',
-            'outputTruncatedForModel=true',
+            `<truncated omitted_approx_tokens="${budget.omittedApproxTokens}" />`,
             outputRef ? `outputId=${outputRef.outputId}` : '',
             outputRef ? `readTools=${outputRef.readTools.join(',')}` : '',
             '--- preview ---',
@@ -244,7 +246,7 @@ function normalizeAilisToolOutput(result = {}, {
     compacted.modelBudget = {
         ...(compacted.modelBudget || {}),
         ...previewed.budget,
-        status: previewed.budget.outputTruncatedForModel ? 'previewed_and_compacted' : 'compacted'
+        status: previewed.budget.truncated ? 'previewed_and_compacted' : 'compacted'
     };
     compacted.details = {
         ...(compacted.details || {}),

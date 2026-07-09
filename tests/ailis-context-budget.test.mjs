@@ -59,11 +59,16 @@ test('normalizeAilisToolOutput turns large text into a model-visible preview wit
         maxTextChars: 1800
     });
 
-    assert.equal(result.modelBudget.outputTruncatedForModel, true);
-    assert.equal(result.modelBudget.outputComplete, false);
+    assert.equal(result.modelBudget.truncated, true);
+    assert.ok(result.modelBudget.omittedApproxTokens > 0);
     assert.equal(result.details.outputRef.outputId, 'fetch-123');
     assert.ok(result.content[0].text.length <= 1800);
-    assert.match(result.content[0].text, /outputTruncatedForModel=true|MODEL_VISIBLE_CONTENT_TRUNCATED/);
+    assert.match(result.content[0].text, /<truncated omitted_approx_tokens="\d+" \/>/);
+    const deprecatedPreviewFields = new RegExp([
+        ['output', 'Complete'].join(''),
+        ['output', 'TruncatedForModel'].join('')
+    ].join('|'));
+    assert.doesNotMatch(result.content[0].text, deprecatedPreviewFields);
 });
 
 test('ContextManager can build an auditable context package and compact stale tool outputs', () => {

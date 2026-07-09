@@ -2611,7 +2611,8 @@ test('web_fetch returns Codex-style source viewport with line navigation', async
         assert.match(result.content[0].text, /Source viewport:/);
         assert.match(result.content[0].text, /Total lines: 70/);
         assert.match(result.content[0].text, /L31: ### Studio albums/);
-        assert.doesNotMatch(result.content[0].text, /outputComplete=false/);
+        const deprecatedPreviewMarker = new RegExp(['output', 'Complete=false'].join(''));
+        assert.doesNotMatch(result.content[0].text, deprecatedPreviewMarker);
         assert.equal(result.structuredContent.modelVisibleMode, 'source_viewport');
         assert.equal(result.structuredContent.model_visible_mode, 'source_viewport');
         assert.equal(result.structuredContent.sourceRetrievalComplete, true);
