@@ -61,6 +61,17 @@ async function withServer(handler, run) {
     }
 }
 
+async function reserveUnusedPort() {
+    const server = http.createServer((_request, response) => {
+        response.writeHead(404);
+        response.end('closed');
+    });
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const { port } = server.address();
+    await new Promise((resolve) => server.close(resolve));
+    return port;
+}
+
 function buildSimplePdf(text = 'Hello PDF') {
     const escapedText = String(text).replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)');
     const objects = [
@@ -981,6 +992,58 @@ test('web_search auto-start path reuses an AILIS-managed local SearXNG service',
     });
 });
 
+test('web_search fast-falls back when managed SearXNG startup is unhealthy', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ailis-managed-searxng-fail-'));
+    const configDir = path.join(tempDir, 'searxng-config');
+    fs.mkdirSync(configDir, { recursive: true });
+    fs.writeFileSync(path.join(configDir, 'settings.yml'), 'use_default_settings: true\n', 'utf8');
+    const port = await reserveUnusedPort();
+    const manifestPath = path.join(tempDir, 'managed-searxng.json');
+    fs.writeFileSync(manifestPath, JSON.stringify({
+        python: process.execPath,
+        args: ['-e', 'setTimeout(() => {}, 60000)'],
+        cwd: '.',
+        settingsPath: 'searxng-config/settings.yml',
+        defaultPort: port,
+        bindAddress: '127.0.0.1',
+        healthPath: '/search?q=ailis&format=json'
+    }), 'utf8');
+    try {
+        const startedAt = Date.now();
+        const result = await webSearch({
+            query: 'managed searxng unhealthy fallback',
+            backends: ['searxng_json'],
+            managedSearxngManifest: manifestPath,
+            managedSearxngPort: port,
+            managedSearxngStartupTimeoutMs: 200,
+            managedSearxngFailureCooldownMs: 60000,
+            timeoutMs: 1000,
+            overallTimeoutMs: 2500,
+            maxResults: 1
+        });
+        const firstElapsedMs = Date.now() - startedAt;
+        assert.equal(result.isError, true);
+        assert.ok(firstElapsedMs < 5000, `unhealthy managed SearXNG should not block web_search for ${firstElapsedMs}ms`);
+
+        const secondStartedAt = Date.now();
+        await webSearch({
+            query: 'managed searxng unhealthy fallback',
+            backends: ['searxng_json'],
+            managedSearxngManifest: manifestPath,
+            managedSearxngPort: port,
+            managedSearxngStartupTimeoutMs: 5000,
+            managedSearxngFailureCooldownMs: 60000,
+            timeoutMs: 1000,
+            overallTimeoutMs: 2500,
+            maxResults: 1
+        });
+        const secondElapsedMs = Date.now() - secondStartedAt;
+        assert.ok(secondElapsedMs < 3000, `recent managed SearXNG failure should be cooldown-skipped, got ${secondElapsedMs}ms`);
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
 test('web_search uses SearXNG JSON provider before HTML fallback', async () => {
     await withServer((request, response) => {
         const url = new URL(request.url || '/', 'http://127.0.0.1');
@@ -1508,6 +1571,57 @@ test('web_search site-constrained rerank prefers high-signal NGA guide threads',
     assert.ok(ranked[0].queryMatchedTerms.includes('叶瞬光'));
     assert.equal(calls[0].tool, 'web_fetch');
     assert.match(calls[0].args.url, /bbs\.nga\.cn/);
+});
+
+test('web_search reranks official source documents ahead of mirrors and portal noise', () => {
+    const results = [
+        {
+            title: 'List of predictor base commands in scikit-learn july 2017 changelog AIs',
+            url: 'https://theresanaiforthat.com/s/list+of+predictor+base+commands+in+scikit-learn+july+2017+changelog/',
+            snippet: 'Browse 13 AIs for productivity, LLM management, data analysis and spreadsheets.'
+        },
+        {
+            title: 'Scribd Scikit-learn Release Notes July 2017 | PDF',
+            url: 'https://www.scribd.com/document/660158268/Scikit-learn',
+            snippet: 'Scikit-learn release notes mirrored as a PDF document.'
+        },
+        {
+            title: 'Yahoo',
+            url: 'https://www.yahoo.com/',
+            snippet: 'Yahoo homepage.'
+        },
+        {
+            title: 'scikit-learn: machine learning in Python',
+            url: 'https://scikit-learn.org/stable/index.html',
+            snippet: 'scikit-learn is a machine learning library for Python.'
+        },
+        {
+            title: 'Release History - scikit-learn documentation',
+            url: 'https://scikit-learn.org/stable/whats_new.html',
+            snippet: 'Release notes and changelog for scikit-learn versions.'
+        },
+        {
+            title: 'scikit-learn/doc/whats_new/v0.19.rst at main',
+            url: 'https://github.com/scikit-learn/scikit-learn/blob/main/doc/whats_new/v0.19.rst',
+            snippet: 'Bug fixes, July 2017, Other predictors.'
+        },
+        {
+            title: 'v0.19.rst.txt',
+            url: 'https://scikit-learn.org/dev/_sources/whats_new/v0.19.rst.txt',
+            snippet: 'July 2017 changelog source text. Other predictors and bug fixes.'
+        }
+    ];
+    const ranked = rankSearchResultsForFollowup(
+        results,
+        'Scikit-Learn July 2017 changelog predictor base command'
+    );
+
+    assert.equal(ranked[0].url, 'https://scikit-learn.org/dev/_sources/whats_new/v0.19.rst.txt');
+    assert.ok(ranked[0].sourceQualityScore > 0);
+    assert.ok(ranked.findIndex((item) => /theresanaiforthat\.com/.test(item.url)) >= 2);
+    assert.ok(ranked.findIndex((item) => /scribd\.com/.test(item.url)) >= 2);
+    assert.ok(ranked.findIndex((item) => /yahoo\.com/.test(item.url)) > 2);
+    assert.ok(ranked.findIndex((item) => /stable\/index\.html/.test(item.url)) > 2);
 });
 
 test('web_research builds an evidence bundle from search and fetched pages', async () => {

@@ -1568,6 +1568,161 @@ function scoreSearchSourceConsensus(result = {}) {
     return Math.min(44, backendScore + engineScore + shapedResultScore);
 }
 
+const SEARCH_MIRROR_OR_LOW_AUTHORITY_HOSTS = Object.freeze([
+    'scribd.com',
+    'studocu.com',
+    'coursehero.com',
+    'docsity.com',
+    'pdfcoffee.com',
+    'slideshare.net',
+    'slideshare.com',
+    'issuu.com'
+]);
+
+const SEARCH_AI_DIRECTORY_HOSTS = Object.freeze([
+    'theresanaiforthat.com',
+    'futuretools.io',
+    'aitoolsdirectory.com',
+    'toolify.ai',
+    'insidr.ai'
+]);
+
+function searchQueryMentionsHost(query = '', host = '') {
+    const normalizedQuery = normalizeString(query).toLowerCase();
+    const normalizedHost = normalizeString(host).replace(/^www\./i, '').toLowerCase();
+    if (!normalizedQuery || !normalizedHost) {
+        return false;
+    }
+    if (normalizedQuery.includes(normalizedHost)) {
+        return true;
+    }
+    return extractSearchSiteConstraints(query).some((site) => hostMatchesSiteConstraint(normalizedHost, site));
+}
+
+function importantSearchQueryTerms(query = '') {
+    return extractSearchQueryTerms(query)
+        .map((term) => normalizeSearchText(term))
+        .filter((term) => (
+            term &&
+            term.length >= 4 &&
+            !SEARCH_QUERY_STOPWORDS.has(term) &&
+            !GUIDE_QUERY_TERMS.has(term)
+        ))
+        .slice(0, 12);
+}
+
+function hostMatchesImportantQueryTerm(host = '', terms = []) {
+    const compactHost = compactSearchText(normalizeString(host).replace(/[.-]+/g, ' '));
+    return terms.some((term) => {
+        const compactTerm = compactSearchText(term);
+        return compactTerm.length >= 4 && compactHost.includes(compactTerm);
+    });
+}
+
+function temporalAnchorsFromSearchQuery(query = '') {
+    const text = normalizeString(query).toLowerCase();
+    const years = Array.from(text.matchAll(/\b((?:18|19|20)\d{2})\b/g)).map((match) => match[1]);
+    const months = Array.from(text.matchAll(/\b(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)\b/g)).map((match) => match[1]);
+    return {
+        years: Array.from(new Set(years)),
+        months: Array.from(new Set(months))
+    };
+}
+
+function scoreSearchSourceQualityPrior(result = {}, query = '') {
+    const url = normalizeString(result.url);
+    const title = normalizeString(result.title);
+    const snippet = normalizeString(result.snippet);
+    let parsed = null;
+    try {
+        parsed = new URL(url);
+    } catch {
+        return 0;
+    }
+    const host = parsed.hostname.replace(/^www\./i, '').toLowerCase();
+    const pathname = parsed.pathname || '/';
+    const text = normalizeSearchText(`${title} ${snippet} ${url}`);
+    const terms = importantSearchQueryTerms(query);
+    const queryMentionsHost = searchQueryMentionsHost(query, host);
+    let score = 0;
+
+    if (hostMatchesImportantQueryTerm(host, terms)) {
+        score += 34;
+    }
+    if (
+        hostMatchesImportantQueryTerm(host, terms) &&
+        !/^github\.com$/i.test(host) &&
+        /(?:^|\/)(?:_sources?|docs?|doc|documentation|whats_new|changelog|release[-_]?notes?|api|reference)(?:\/|$)/i.test(pathname)
+    ) {
+        score += 48;
+    }
+    if (/\b(?:changelog|release notes?|whats new|what's new|api|docs?|documentation|reference|source)\b/i.test(`${title} ${pathname}`)) {
+        score += 24;
+    }
+    if (/(?:^|\/)(?:_sources?|docs?|doc|documentation|whats_new|changelog|release[-_]?notes?|api|reference)(?:\/|$)/i.test(pathname)) {
+        score += 38;
+    }
+    if (/\.(?:rst|md|txt|py|ts|js|json|ya?ml)(?:$|[?#])/i.test(pathname)) {
+        score += 26;
+    }
+    if (/^github\.com$/i.test(host) && /\/(?:blob|raw|tree)\/[^/]+\/(?:docs?|doc|source|src|examples?|tests?)\//i.test(pathname)) {
+        score += 46;
+    } else if (/^github\.com$/i.test(host) && /\/(?:blob|raw|tree)\//i.test(pathname)) {
+        score += 28;
+    }
+    if (/readthedocs\.io$/i.test(host) || /(?:^|\.)docs\./i.test(host) || /(?:^|\.)developer\./i.test(host)) {
+        score += 26;
+    }
+    if (extractQuotedSearchPhrases(query).some((phrase) => compactSearchText(phrase) && compactSearchText(text).includes(compactSearchText(phrase)))) {
+        score += 28;
+    }
+    if (queryMentionsHost) {
+        score += 28;
+    }
+    const temporalAnchors = temporalAnchorsFromSearchQuery(query);
+    if (temporalAnchors.months.length || temporalAnchors.years.length) {
+        const lowerEvidenceText = `${title} ${snippet} ${url}`.toLowerCase();
+        const monthMatched = temporalAnchors.months.some((month) => new RegExp(`\\b${escapeRegExp(month)}\\b`, 'i').test(lowerEvidenceText));
+        const yearMatched = temporalAnchors.years.some((year) => lowerEvidenceText.includes(year));
+        if (temporalAnchors.months.length && !monthMatched) {
+            score -= 70;
+        }
+        if (temporalAnchors.years.length && !yearMatched) {
+            score -= monthMatched ? 20 : 50;
+        }
+    }
+
+    const lowAuthorityHost = SEARCH_MIRROR_OR_LOW_AUTHORITY_HOSTS.some((domain) => hostMatchesSiteConstraint(host, domain));
+    if (lowAuthorityHost && !queryMentionsHost) {
+        score -= 120;
+        if (/\b(?:pdf|document|mirror|mirrored|download|release notes?)\b/i.test(`${title} ${snippet}`)) {
+            score -= 80;
+        }
+    }
+    const exactFactOrDocQuery = /\b(?:changelog|release notes?|bug fixes?|official|documentation|source|api|reference|wikipedia|predictor|base command)\b/i.test(query);
+    const aiDirectoryHost = SEARCH_AI_DIRECTORY_HOSTS.some((domain) => hostMatchesSiteConstraint(host, domain));
+    if (
+        exactFactOrDocQuery &&
+        !queryMentionsHost &&
+        (aiDirectoryHost || /\b(?:AI tools?|AIs|LLM tools?|productivity tools?)\b/i.test(`${title} ${snippet}`))
+    ) {
+        score -= 700;
+    }
+    const portalHomePage = (
+        (host === 'yahoo.com' || host.endsWith('.yahoo.com')) &&
+        /^\/(?:$|news\/?$|finance\/?$|sports\/?$|entertainment\/?$)/i.test(pathname)
+    );
+    if (portalHomePage && !queryMentionsHost) {
+        score -= 120;
+    }
+    const rootLikePath = /^\/(?:$|index\.(?:html?|php)$|stable\/index\.html?$)/i.test(pathname);
+    const queryLooksForSpecificDocument = /\b(?:changelog|release notes?|whats new|what's new|july|version|v\d+(?:\.\d+)*|api|reference|method|class|command|bug fix)\b/i.test(query);
+    if (rootLikePath && queryLooksForSpecificDocument && !/\b(?:changelog|release notes?|whats new|what's new|api|reference)\b/i.test(`${title} ${snippet}`)) {
+        score -= 48;
+    }
+    return score;
+}
+
 function isRelevantSearchCandidate(candidate = {}) {
     const queryScore = Number(candidate.queryScore) || 0;
     const matchedTerms = Array.isArray(candidate.queryMatchedTerms) ? candidate.queryMatchedTerms : [];
@@ -1606,6 +1761,7 @@ function describeSearchRelevance(rankedResults = []) {
         queryScore: Number.isFinite(candidate.queryScore) ? Number(candidate.queryScore.toFixed(2)) : undefined,
         researchScore: Number.isFinite(candidate.researchScore) ? Number(candidate.researchScore.toFixed(2)) : undefined,
         sourceConsensusScore: Number.isFinite(candidate.sourceConsensusScore) ? Number(candidate.sourceConsensusScore.toFixed(2)) : undefined,
+        sourceQualityScore: Number.isFinite(candidate.sourceQualityScore) ? Number(candidate.sourceQualityScore.toFixed(2)) : undefined,
         matchedTerms: candidate.queryMatchedTerms?.length ? candidate.queryMatchedTerms.slice(0, 8) : undefined,
         matchedSites: candidate.queryMatchedSites?.length ? candidate.queryMatchedSites.slice(0, 3) : undefined,
         sourceBackends: candidate.sourceBackends?.length ? candidate.sourceBackends.slice(0, 5) : undefined,
@@ -1662,6 +1818,7 @@ function rankSearchResultsForFollowup(results = [], query = '') {
             }, index);
             const queryMatch = scoreSearchResultAgainstQuery(item, query);
             const sourceConsensusScore = scoreSearchSourceConsensus(item);
+            const sourceQualityScore = scoreSearchSourceQualityPrior(item, query);
             const targetCoverage = assessSearchResultTargetCoverage(item, query);
             const targetPenalty = targetCoverage?.specificTargetCovered === false ? 260 : 0;
             return {
@@ -1675,8 +1832,9 @@ function rankSearchResultsForFollowup(results = [], query = '') {
                 queryMatchedSites: queryMatch.matchedSites,
                 guideSource: queryMatch.guideSource,
                 sourceConsensusScore,
+                sourceQualityScore,
                 queryTargetCoverage: targetCoverage,
-                combinedScore: queryMatch.score * 4 + research.score + sourceConsensusScore - targetPenalty
+                combinedScore: queryMatch.score * 4 + research.score + sourceConsensusScore + sourceQualityScore - targetPenalty
             };
         })
         .sort((a, b) => b.combinedScore - a.combinedScore || b.queryScore - a.queryScore || b.researchScore - a.researchScore);
@@ -3447,7 +3605,8 @@ const DEFAULT_CRAWL4AI_WORKER = path.join(__dirname, 'ailis-crawl4ai-worker.py')
 const DEFAULT_PYTHON_SEARCH_WORKER = path.join(__dirname, 'ailis-python-search-worker.py');
 const MANAGED_SEARXNG_MANIFEST = 'managed-searxng.json';
 const MANAGED_SEARXNG_DEFAULT_PORT = 18888;
-const MANAGED_SEARXNG_STARTUP_TIMEOUT_MS = 30000;
+const MANAGED_SEARXNG_STARTUP_TIMEOUT_MS = 5000;
+const MANAGED_SEARXNG_FAILURE_COOLDOWN_MS = 120000;
 const CRAWL4AI_FETCH_PROVIDERS = new Set(['crawl4ai', 'rendered', 'browser', 'crawl4ai_rendered', 'crawl4ai-style', 'crawl4ai_style']);
 const RENDERED_FALLBACK_EVIDENCE_QUALITIES = new Set(['js_shell', 'thin_content']);
 const PROJECT_ROOT = path.resolve(__dirname, '..');
@@ -3696,6 +3855,36 @@ function managedSearxngPortCandidates(manifest = {}, args = {}) {
     return ports;
 }
 
+function managedSearxngStartupTimeoutMs(args = {}) {
+    return clampNumber(
+        args.managedSearxngStartupTimeoutMs ||
+        args.managed_searxng_startup_timeout_ms ||
+        process.env.AILIS_MANAGED_SEARXNG_STARTUP_TIMEOUT_MS,
+        MANAGED_SEARXNG_STARTUP_TIMEOUT_MS,
+        1000,
+        30000
+    );
+}
+
+function managedSearxngFailureCooldownMs(args = {}) {
+    return clampNumber(
+        args.managedSearxngFailureCooldownMs ||
+        args.managed_searxng_failure_cooldown_ms ||
+        process.env.AILIS_MANAGED_SEARXNG_FAILURE_COOLDOWN_MS,
+        MANAGED_SEARXNG_FAILURE_COOLDOWN_MS,
+        0,
+        600000
+    );
+}
+
+function managedSearxngSpawnPortCandidates(manifest = {}, args = {}) {
+    const explicitPort = Number(args.managedSearxngPort || args.managed_searxng_port || process.env.AILIS_MANAGED_SEARXNG_PORT || process.env.SEARXNG_PORT);
+    if (Number.isFinite(explicitPort) && explicitPort >= 1024 && explicitPort <= 65535) {
+        return [Math.round(explicitPort)];
+    }
+    return [clampNumber(manifest.defaultPort, MANAGED_SEARXNG_DEFAULT_PORT, 1024, 65535)];
+}
+
 function managedSearxngBaseUrl(port, bindAddress = '127.0.0.1') {
     const host = normalizeString(bindAddress, '127.0.0.1') === '0.0.0.0'
         ? '127.0.0.1'
@@ -3750,6 +3939,16 @@ async function ensureManagedSearxng(args = {}) {
     if (!managedSearxngAllowedForSearch(args)) {
         return null;
     }
+    const cooldownMs = managedSearxngFailureCooldownMs(args);
+    if (
+        managedSearxngState?.source === 'failed' &&
+        cooldownMs > 0 &&
+        Number.isFinite(managedSearxngState.lastFailureAt) &&
+        Date.now() - managedSearxngState.lastFailureAt < cooldownMs &&
+        !optionIsTrue(args.forceManagedSearxng || args.force_managed_searxng)
+    ) {
+        return null;
+    }
     if (managedSearxngState?.baseUrl && await probeManagedSearxng(managedSearxngState.baseUrl, managedSearxngState.healthPath, 900)) {
         return {
             ok: true,
@@ -3774,9 +3973,14 @@ async function ensureManagedSearxng(args = {}) {
             };
             return { ok: true, baseUrl, source: 'existing', manifestPath: manifest.manifestPath, pid: 0 };
         }
+    }
+    for (const port of managedSearxngSpawnPortCandidates(manifest, args)) {
+        const baseUrl = managedSearxngBaseUrl(port, manifest.bindAddress);
         const stderr = [];
         const stdout = [];
-        const child = spawn(manifest.command, manifest.args, {
+        let child = null;
+        try {
+            child = spawn(manifest.command, manifest.args, {
             cwd: manifest.cwd,
             windowsHide: true,
             stdio: ['ignore', 'pipe', 'pipe'],
@@ -3788,7 +3992,18 @@ async function ensureManagedSearxng(args = {}) {
                 SEARXNG_LIMITER: 'false',
                 SEARXNG_PUBLIC_INSTANCE: 'false'
             }
-        });
+            });
+        } catch (error) {
+            managedSearxngState = {
+                baseUrl,
+                healthPath: manifest.healthPath,
+                manifestPath: manifest.manifestPath,
+                source: 'failed',
+                lastFailureAt: Date.now(),
+                lastError: normalizeString(error?.message || String(error)).slice(0, 3000)
+            };
+            continue;
+        }
         child.stdout?.on('data', (chunk) => {
             stdout.push(String(chunk).slice(0, 1200));
             if (stdout.length > 8) stdout.shift();
@@ -3800,7 +4015,7 @@ async function ensureManagedSearxng(args = {}) {
         const exited = new Promise((resolve) => child.once('exit', (code) => resolve(code)));
         const spawnFailed = new Promise((resolve) => child.once('error', (error) => resolve(error)));
         const ready = await Promise.race([
-            waitForManagedSearxngReady({ baseUrl, healthPath: manifest.healthPath, timeoutMs: MANAGED_SEARXNG_STARTUP_TIMEOUT_MS }),
+            waitForManagedSearxngReady({ baseUrl, healthPath: manifest.healthPath, timeoutMs: managedSearxngStartupTimeoutMs(args) }),
             spawnFailed.then((error) => {
                 stderr.push(error?.message || String(error));
                 return false;
@@ -3826,6 +4041,7 @@ async function ensureManagedSearxng(args = {}) {
             healthPath: manifest.healthPath,
             manifestPath: manifest.manifestPath,
             source: 'failed',
+            lastFailureAt: Date.now(),
             lastError: normalizeString(stderr.join('\n') || stdout.join('\n')).slice(0, 3000)
         };
     }
