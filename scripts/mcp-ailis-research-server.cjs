@@ -2494,6 +2494,55 @@ function buildCanonicalWebSearchOutput({
     });
 }
 
+function buildCanonicalSourceViewportOutput({ sourceViewport = {}, action = {}, matches = [] } = {}) {
+    const actionType = normalizeString(action.type, 'open_page');
+    const url = normalizeString(action.url || sourceViewport.url || sourceViewport.ref_id);
+    const canonicalAction = pruneEmptyDeep({
+        type: actionType === 'find_in_page' ? 'find_in_page' : 'open_page',
+        ...(url ? { url } : {}),
+        ...(actionType === 'find_in_page' && normalizeString(action.pattern)
+            ? { pattern: normalizeString(action.pattern) }
+            : {}),
+        ...(actionType !== 'find_in_page'
+            ? { lineno: Number(action.lineno || sourceViewport.lineno || sourceViewport.line_start || 1) || 1 }
+            : {})
+    });
+    const normalizedMatches = (Array.isArray(matches) ? matches : []).map((match) => pruneEmptyDeep({
+        lineno: Number(match.lineno || match.lineNumber || match.line_number || 0) || undefined,
+        text: normalizeString(match.text)
+    })).filter((match) => match.lineno || match.text);
+    return pruneEmptyDeep({
+        type: 'function_call_output',
+        webSearchCall: {
+            type: 'web_search_call',
+            status: 'completed',
+            action: canonicalAction
+        },
+        web_search_call: {
+            type: 'web_search_call',
+            status: 'completed',
+            action: canonicalAction
+        },
+        functionCallOutput: {
+            type: 'function_call_output',
+            status: 'completed',
+            output_kind: 'source_viewport'
+        },
+        function_call_output: {
+            type: 'function_call_output',
+            status: 'completed',
+            output_kind: 'source_viewport'
+        },
+        source_viewport: sourceViewport,
+        ...(normalizedMatches.length ? {
+            find: {
+                match_count: normalizedMatches.length,
+                matches: normalizedMatches
+            }
+        } : {})
+    });
+}
+
 function buildWebSearchSuccessObservation({
     query = '',
     backendQuery = '',
@@ -5335,6 +5384,14 @@ function buildWebFetchResult({ url, args = {}, maxChars = MAX_FETCH_CHARS, fetch
             text: line.text
         }))
     });
+    const webSearchOutput = buildCanonicalSourceViewportOutput({
+        sourceViewport: source,
+        action: sourceWindow.action || {
+            type: 'open_page',
+            url,
+            lineno: source.line_start || source.lineno || 1
+        }
+    });
     return textResult([guidance, compactHtmlRelationSummary, wikiFactSummary, sourceWindowText].filter(Boolean).join('\n\n'), {
         ok: true,
         status: 'completed',
@@ -5365,6 +5422,11 @@ function buildWebFetchResult({ url, args = {}, maxChars = MAX_FETCH_CHARS, fetch
         source_retrieval_complete: true,
         modelVisibleMode: 'source_viewport',
         model_visible_mode: 'source_viewport',
+        webSearchOutput,
+        webSearchCall: webSearchOutput.webSearchCall,
+        web_search_call: webSearchOutput.web_search_call,
+        functionCallOutput: webSearchOutput.functionCallOutput,
+        function_call_output: webSearchOutput.function_call_output,
         source,
         source_window: source,
         sourceWindow,
@@ -5548,6 +5610,15 @@ async function webFind(args = {}) {
             text: line.text
         }))
     });
+    const webSearchOutput = buildCanonicalSourceViewportOutput({
+        sourceViewport: source,
+        action: findSourceWindow.action || {
+            type: 'find_in_page',
+            url,
+            pattern
+        },
+        matches
+    });
     const lines = [
         `Find results for pattern: ${pattern}`,
         `URL: ${url}`,
@@ -5568,6 +5639,11 @@ async function webFind(args = {}) {
         sourceWindow: findSourceWindow,
         sourceViewport: source,
         source_viewport: source,
+        webSearchOutput,
+        webSearchCall: webSearchOutput.webSearchCall,
+        web_search_call: webSearchOutput.web_search_call,
+        functionCallOutput: webSearchOutput.functionCallOutput,
+        function_call_output: webSearchOutput.function_call_output,
         modelVisibleMode: 'source_viewport_find',
         model_visible_mode: 'source_viewport_find'
     });

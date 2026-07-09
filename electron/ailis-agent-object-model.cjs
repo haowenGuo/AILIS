@@ -519,22 +519,6 @@ function toolOutputToResponseItems(toolOutput = {}, options = {}) {
             })
         ];
     }
-    const webSearchOutput = webSearchOutputFromToolOutput(toolOutput);
-    if (webSearchOutput) {
-        return [
-            ResponseItem.functionCall({
-                name: toolName,
-                arguments: toolOutput.args || {},
-                provider_metadata: toolOutput.providerMetadata || null,
-                call_id: callId
-            }),
-            normalizeWebSearchCall(webSearchOutput, callId),
-            ResponseItem.functionCallOutput({
-                call_id: callId,
-                output: buildWebSearchFunctionOutput(toolOutput, webSearchOutput)
-            })
-        ].filter(Boolean);
-    }
     const sourceViewport = sourceViewportFromToolOutput(toolOutput);
     if (sourceViewport) {
         return [
@@ -548,6 +532,22 @@ function toolOutputToResponseItems(toolOutput = {}, options = {}) {
             ResponseItem.functionCallOutput({
                 call_id: callId,
                 output: buildSourceViewportFunctionOutput(toolOutput, sourceViewport)
+            })
+        ].filter(Boolean);
+    }
+    const webSearchOutput = webSearchOutputFromToolOutput(toolOutput);
+    if (webSearchOutput) {
+        return [
+            ResponseItem.functionCall({
+                name: toolName,
+                arguments: toolOutput.args || {},
+                provider_metadata: toolOutput.providerMetadata || null,
+                call_id: callId
+            }),
+            normalizeWebSearchCall(webSearchOutput, callId),
+            ResponseItem.functionCallOutput({
+                call_id: callId,
+                output: buildWebSearchFunctionOutput(toolOutput, webSearchOutput)
             })
         ].filter(Boolean);
     }

@@ -2624,6 +2624,10 @@ test('web_fetch returns Codex-style source viewport with line navigation', async
         assert.equal(result.structuredContent.sourceWindow.type, 'source_viewport');
         assert.equal(result.structuredContent.sourceWindow.action.type, 'open_page');
         assert.ok(result.structuredContent.sourceWindow.lines.some((line) => /Studio albums/.test(line.text)));
+        assert.equal(result.structuredContent.webSearchOutput.webSearchCall.type, 'web_search_call');
+        assert.equal(result.structuredContent.webSearchOutput.webSearchCall.action.type, 'open_page');
+        assert.equal(result.structuredContent.webSearchOutput.webSearchCall.action.url, `${baseUrl}/mercedes`);
+        assert.equal(result.structuredContent.webSearchOutput.source_viewport.line_start, 27);
         assert.equal(result.structuredContent.observationContract.source_window, true);
         assert.equal(result.structuredContent.observationContract.source_viewport.tool, 'web_fetch');
 
@@ -2673,6 +2677,10 @@ test('web_find opens a Codex-style source viewport around a pattern', async () =
         assert.equal(result.structuredContent.source_window.tool, 'web_find');
         assert.equal(result.structuredContent.sourceWindow.type, 'source_viewport');
         assert.equal(result.structuredContent.sourceWindow.action.type, 'find_in_page');
+        assert.equal(result.structuredContent.webSearchOutput.webSearchCall.type, 'web_search_call');
+        assert.equal(result.structuredContent.webSearchOutput.webSearchCall.action.type, 'find_in_page');
+        assert.equal(result.structuredContent.webSearchOutput.webSearchCall.action.pattern, 'Cantora');
+        assert.equal(result.structuredContent.webSearchOutput.find.match_count, 2);
         assert.equal(result.structuredContent.matchCount, 2);
         assert.equal(result.structuredContent.match_count, 2);
         assert.deepEqual(result.structuredContent.matches.map((match) => match.lineNumber), [6, 7]);
