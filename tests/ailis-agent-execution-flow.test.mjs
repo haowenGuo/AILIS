@@ -22,6 +22,7 @@ const {
     normalizeExactAnswerSubmission,
     resolveAgentDecisionSettings,
     resolveAgentDecisionTimeoutMs,
+    resolveParallelToolCalls,
     sanitizeAgentToolCall,
     validateExactAnswerSubmission,
     validateNativeDirectToolCall
@@ -281,6 +282,23 @@ test('Agent decision model routing avoids deep-thinking models unless explicit o
     assert.equal(explicitReasoner.model, 'o4-mini');
     assert.equal(explicitReasoner._agentDecisionModelExplicit, true);
     assert.equal(explicitReasoner._agentDecisionDeepThinkingModel, true);
+});
+
+test('Agent decision parallel tool calls follow provider capability with explicit overrides', () => {
+    assert.equal(resolveParallelToolCalls({ provider: 'deepseek', model: 'deepseek-chat' }, {}), true);
+    assert.equal(resolveParallelToolCalls({ provider: 'doubao', model: 'doubao-seed-1-6' }, {}), true);
+    assert.equal(resolveParallelToolCalls({ provider: 'ollama', model: 'llama3.2' }, {}), false);
+    assert.equal(resolveParallelToolCalls({ provider: 'ollama', model: 'llama3.2' }, { parallelToolCalls: true }), true);
+    assert.equal(resolveParallelToolCalls({ provider: 'deepseek', model: 'deepseek-chat' }, { disableParallelToolCalls: true }), false);
+
+    const payload = buildAgentDecisionLowLatencyPayload(
+        { messages: [] },
+        {
+            settings: { provider: 'deepseek', model: 'deepseek-chat' },
+            requestContext: {}
+        }
+    );
+    assert.equal(payload.parallel_tool_calls, true);
 });
 
 test('Agent decision thinking controls are explicit and deep-thinking mode gets a 10 minute timeout', () => {

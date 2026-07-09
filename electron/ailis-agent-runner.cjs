@@ -882,6 +882,79 @@ function resolveAgentDecisionSettings(settings = {}, requestContext = {}) {
     };
 }
 
+function booleanFlagFromSources(sources = [], keys = []) {
+    for (const source of sources) {
+        if (!source || typeof source !== 'object') {
+            continue;
+        }
+        for (const key of keys) {
+            if (typeof source[key] === 'boolean') {
+                return source[key];
+            }
+        }
+    }
+    return null;
+}
+
+function providerLikelySupportsParallelToolCalls(provider = '', model = '', baseUrl = '') {
+    const providerText = normalizeText(provider).toLowerCase();
+    const modelText = normalizeText(model).toLowerCase();
+    const urlText = normalizeText(baseUrl).toLowerCase();
+    if (isConstrainedLocalAgentProvider(providerText) || /(?:ollama|vllm|llama\.cpp|lmstudio|lm-studio)/.test(providerText)) {
+        return false;
+    }
+    if (/(?:openai|responses|deepseek|doubao|volcengine|ark|openrouter|siliconflow|moonshot|kimi|dashscope|qwen)/.test(providerText)) {
+        return true;
+    }
+    if (/(?:openai|deepseek|volces|volcengine|doubao|ark|openrouter|siliconflow|moonshot|dashscope)/.test(urlText)) {
+        return true;
+    }
+    if (/^(?:gpt-|o\d|o-|deepseek-chat|doubao|kimi|qwen)/.test(modelText)) {
+        return true;
+    }
+    return false;
+}
+
+function resolveParallelToolCalls(settings = {}, requestContext = {}) {
+    const explicit = booleanFlagFromSources([requestContext, settings], [
+        'parallelToolCalls',
+        'parallel_tool_calls',
+        'supportsParallelToolCalls',
+        'supports_parallel_tool_calls',
+        'enableParallelToolCalls',
+        'enable_parallel_tool_calls'
+    ]);
+    if (explicit !== null) {
+        return explicit;
+    }
+    const disabled = booleanFlagFromSources([requestContext, settings], [
+        'disableParallelToolCalls',
+        'disable_parallel_tool_calls'
+    ]);
+    if (disabled === true) {
+        return false;
+    }
+    return providerLikelySupportsParallelToolCalls(
+        settings.provider || requestContext.provider,
+        settings.model || requestContext.model,
+        settings.baseUrl || settings.baseURL || requestContext.baseUrl || requestContext.baseURL
+    );
+}
+
+function looksLikeParallelToolCallsUnsupported(response = {}) {
+    const text = [
+        response.error,
+        response.message,
+        response.details,
+        response.raw,
+        response.content
+    ].map((value) => normalizeText(
+        typeof value === 'string' ? value : JSON.stringify(value || '')
+    )).join('\n').toLowerCase();
+    return /parallel[_\s-]*tool[_\s-]*calls/.test(text) &&
+        /(?:unknown|unsupported|unrecognized|invalid|not\s+support|does\s+not\s+support|extra\s+forbidden|unexpected)/.test(text);
+}
+
 function buildAgentDecisionLowLatencyPayload(payload = {}, { settings = {}, requestContext = {} } = {}) {
     const reasoningEffort = resolveExplicitAgentDecisionReasoningEffort(settings, requestContext);
     const thinking = resolveExplicitAgentDecisionThinking(settings, requestContext);
@@ -896,7 +969,7 @@ function buildAgentDecisionLowLatencyPayload(payload = {}, { settings = {}, requ
         ...payload,
         temperature: 0,
         preferNativeToolCalls: true,
-        parallel_tool_calls: false,
+        parallel_tool_calls: resolveParallelToolCalls(settings, requestContext),
         latencyProfile: 'agent_decision_fast'
     };
     if (reasoningEffort) {
@@ -4099,7 +4172,26 @@ function agentStepNeedsConfirmation(step) {
         const action = normalizeToolAction(step.args?.action || step.args?.operation || step.args?.intent, 'list');
         return EMAIL_AGENT_MUTATING_ACTIONS.has(action);
     }
-    if (['read', 'web_fetch'].includes(step.tool)) {
+    const toolId = normalizeText(step.tool).toLowerCase();
+    if (/^mcp__.*__(?:web_search|web_fetch|web_research|search|fetch|read|list|find|extract|describe_image|pdf_extract_text|pdf_find_and_extract)$/.test(toolId)) {
+        return false;
+    }
+    if ([
+        'read',
+        'web_fetch',
+        'web_search',
+        'web_research',
+        'tool_search',
+        'output_read',
+        'output_tail',
+        'output_search',
+        'pdf_extract_text',
+        'pdf_find_and_extract',
+        'read_document',
+        'read_spreadsheet',
+        'read_presentation',
+        'describe_image'
+    ].includes(toolId)) {
         return false;
     }
     if (step.tool === 'update_plan') {
@@ -5659,7 +5751,8 @@ function buildLlmAgentDirectToolPrompt({
     runtimeEnvironment = null,
     promptProfile = null,
     tools = [],
-    contextMode = 'persona'
+    contextMode = 'persona',
+    parallelToolCalls = false
 }) {
     const activePromptProfile = promptProfile || resolveAgentPromptProfile();
     const taskAgentMode = normalizeText(contextMode).toLowerCase() === 'task_agent';
@@ -5712,7 +5805,7 @@ function buildLlmAgentDirectToolPrompt({
     const prompt = Prompt.create({
         input,
         tools,
-        parallel_tool_calls: false,
+        parallel_tool_calls: parallelToolCalls === true,
         base_instructions: { text: instructions }
     });
     const requestPayload = Prompt.toRequestPayload(prompt);
@@ -5800,14 +5893,27 @@ function looksLikeMetaDecisionJson(json = {}) {
 }
 
 async function callLlmAgentDirectToolDecision(settings, payload, { hasToolHistory = false } = {}) {
-    const response = await callDesktopLlmProvider(settings, {
+    let response = await callDesktopLlmProvider(settings, {
         ...payload,
         jsonMode: false,
         expectJson: false,
         responseFormat: null,
         toolChoice: 'auto',
-        parallel_tool_calls: false
+        parallel_tool_calls: payload.parallel_tool_calls === true
     });
+    if (!response.ok && payload.parallel_tool_calls === true && looksLikeParallelToolCallsUnsupported(response)) {
+        response = await callDesktopLlmProvider(settings, {
+            ...payload,
+            jsonMode: false,
+            expectJson: false,
+            responseFormat: null,
+            toolChoice: 'auto',
+            parallel_tool_calls: false
+        });
+        if (response.ok) {
+            response.parallelToolCallsFallback = true;
+        }
+    }
     if (!response.ok) {
         const failureDecision = {
             status: response.code || 'provider_error',
@@ -5821,7 +5927,8 @@ async function callLlmAgentDirectToolDecision(settings, payload, { hasToolHistor
             error: failureDecision.error
         };
     }
-    const directToolCall = (response.toolCalls || []).find((call) => call?.name);
+    const directToolCalls = (response.toolCalls || []).filter((call) => call?.name);
+    const directToolCall = directToolCalls[0];
     if (directToolCall) {
         const providerMetadata = response.providerMessage || null;
         const responseItem = functionCall({
@@ -5943,6 +6050,85 @@ async function callLlmAgentDirectToolDecision(settings, payload, { hasToolHistor
                 usage: response.usage
             };
         }
+        const toolCalls = [{
+            ...toolCall,
+            ...(providerMetadata ? {
+                providerMetadata,
+                nativeToolCall: routedNativeToolCall
+            } : {})
+        }];
+        for (let index = 1; index < directToolCalls.length; index += 1) {
+            const nextDirectToolCall = directToolCalls[index];
+            const nextResponseItem = functionCall({
+                name: nextDirectToolCall.name,
+                arguments: nextDirectToolCall.arguments || {},
+                call_id: nextDirectToolCall.id || nextDirectToolCall.call_id || `${nextDirectToolCall.name || 'tool'}_call_${index + 1}`,
+                provider_metadata: providerMetadata
+            });
+            const nextRoutedToolCall = ToolRouter.buildToolCall(nextResponseItem);
+            if (!nextRoutedToolCall) {
+                return {
+                    ok: false,
+                    status: 'invalid_agent_tool_call',
+                    error: 'Provider returned a native tool call that could not be converted from ResponseItem.',
+                    raw: {
+                        toolCall: nextDirectToolCall,
+                        responseItem: nextResponseItem,
+                        content: response.content || ''
+                    },
+                    usage: response.usage
+                };
+            }
+            if (nextRoutedToolCall.toolName === FINAL_ANSWER_TOOL_NAME) {
+                continue;
+            }
+            const nextRoutedNativeToolCall = {
+                ...nextDirectToolCall,
+                id: nextRoutedToolCall.callId,
+                name: nextRoutedToolCall.toolName,
+                arguments: nextRoutedToolCall.args,
+                ...(providerMetadata ? { providerMetadata } : {})
+            };
+            const nextNativeValidation = validateNativeDirectToolCall(nextRoutedNativeToolCall, payload.tools);
+            if (!nextNativeValidation.ok) {
+                return {
+                    ok: false,
+                    status: 'invalid_native_tool_args',
+                    error: `Provider returned invalid native tool arguments for ${nextRoutedToolCall.toolName}: ${nextNativeValidation.errors.join('; ')}`,
+                    raw: {
+                        toolCall: nextRoutedNativeToolCall,
+                        responseItem: nextResponseItem,
+                        errors: nextNativeValidation.errors,
+                        schema: nextNativeValidation.schema,
+                        content: response.content || ''
+                    },
+                    usage: response.usage
+                };
+            }
+            const { args: nextCleanNativeArgs } = splitNativeProgressNoteArgs(nextNativeValidation.args);
+            const nextToolCall = sanitizeAgentToolCall({
+                id: nextRoutedToolCall.callId,
+                title: nextRoutedToolCall.toolName,
+                tool: nextRoutedToolCall.toolName,
+                args: nextCleanNativeArgs
+            }, index, 'execute');
+            if (!nextToolCall) {
+                return {
+                    ok: false,
+                    status: 'invalid_agent_tool_call',
+                    error: 'Provider returned a native tool call that could not be sanitized.',
+                    raw: nextDirectToolCall,
+                    usage: response.usage
+                };
+            }
+            toolCalls.push({
+                ...nextToolCall,
+                ...(providerMetadata ? {
+                    providerMetadata,
+                    nativeToolCall: nextRoutedNativeToolCall
+                } : {})
+            });
+        }
         return {
             ok: true,
             mode: 'task',
@@ -5953,13 +6139,8 @@ async function callLlmAgentDirectToolDecision(settings, payload, { hasToolHistor
             action: 'tool',
             finalAnswer: '',
             blockedReason: '',
-            toolCall: {
-                ...toolCall,
-                ...(providerMetadata ? {
-                    providerMetadata,
-                    nativeToolCall: routedNativeToolCall
-                } : {})
-            },
+            toolCall: toolCalls[0],
+            toolCalls,
             capabilityRequest: sanitizeCapabilityRequest({}),
             planUpdates: [],
             progressNoteSource: progressNote ? 'model_tool_progress_note' : (contentProgressNote ? 'model_message_content' : ''),
@@ -5967,6 +6148,7 @@ async function callLlmAgentDirectToolDecision(settings, payload, { hasToolHistor
             legacyPlan: false,
             raw: {
                 toolCall: routedNativeToolCall,
+                toolCalls,
                 responseItem,
                 content: response.content || ''
             },
@@ -7356,7 +7538,11 @@ class AILISAgentRunner {
                         ? `Native direct tools exposed: ${directToolSpecs.map((tool) => tool.name).slice(0, 16).join(', ')}${directToolSpecs.length > 16 ? ', ...' : ''}.`
                         : 'No native tools are exposed in this turn; answer directly if possible.'
             };
-            const directModelInputPrompt = buildLlmAgentDirectToolPrompt(commonPromptArgs);
+            const parallelToolCalls = resolveParallelToolCalls(decisionSettings, requestContext);
+            const directModelInputPrompt = buildLlmAgentDirectToolPrompt({
+                ...commonPromptArgs,
+                parallelToolCalls
+            });
             modelInputContextManager = directModelInputPrompt.contextManager || modelInputContextManager;
             const decisionMessages = directModelInputPrompt.messages;
             const promptBudget = buildPromptBudgetReport({
@@ -7795,6 +7981,134 @@ class AILISAgentRunner {
                     source: 'agent_blocked',
                     expression: 'relaxed'
                 })));
+            }
+
+            const parallelCandidateSteps = Array.isArray(decision.toolCalls)
+                ? decision.toolCalls.filter(Boolean)
+                : [];
+            if (parallelCandidateSteps.length > 1 && parallelToolCalls) {
+                const visibleToolRouter = buildToolRouterFromModelVisibleSpecs(
+                    directModelInputPrompt.tools || directToolSpecs
+                );
+                const plannedToolContext = buildToolContext(requestContext, this.workspaceRoot, sessionId);
+                const canExecuteParallelBatch = !dryRun && parallelCandidateSteps.every((candidateStep) => {
+                    if (!visibleToolRouter.toolSupportsParallel(candidateStep)) {
+                        return false;
+                    }
+                    if (buildDeferredToolContractRequest(candidateStep, events)) {
+                        return false;
+                    }
+                    if (!validateAgentToolStep(candidateStep).ok) {
+                        return false;
+                    }
+                    if (!validateAgentToolLoopGuard(candidateStep, stepResults, requestContext).ok) {
+                        return false;
+                    }
+                    const policyDecision = this.gateway.runtime?.evaluateToolCall?.({
+                        toolId: candidateStep.tool,
+                        args: candidateStep.args,
+                        context: plannedToolContext
+                    });
+                    const visionAutoApproved = isVisionAgentStep(candidateStep) && isVisionAutoApprovedContext(requestContext);
+                    const needsVisionConsent = isVisionAgentStep(candidateStep) && !visionAutoApproved;
+                    return !needsVisionConsent &&
+                        !policyDecision?.denied &&
+                        !policyDecision?.needsApproval &&
+                        !agentStepNeedsConfirmation(candidateStep);
+                });
+                if (canExecuteParallelBatch) {
+                    const interruptedBeforeTools = await maybeFinishInterruptedRun(`before_parallel_tools_${iteration}`);
+                    if (interruptedBeforeTools) {
+                        return interruptedBeforeTools;
+                    }
+                    await appendRuntimeItem({
+                        type: 'agent.parallel_tool_batch',
+                        status: 'started',
+                        payload: {
+                            iteration,
+                            count: parallelCandidateSteps.length,
+                            tools: parallelCandidateSteps.map((candidateStep) => candidateStep.tool)
+                        }
+                    });
+                    for (const candidateStep of parallelCandidateSteps) {
+                        events.push({
+                            type: 'tool_call',
+                            id: candidateStep.id,
+                            title: candidateStep.title,
+                            tool: candidateStep.tool,
+                            args: candidateStep.args,
+                            iteration,
+                            parallelBatch: true
+                        });
+                    }
+                    const parallelToolContext = {
+                        ...buildToolContext(
+                            approved ? { ...requestContext, approved: true } : requestContext,
+                            this.workspaceRoot,
+                            sessionId
+                        )
+                    };
+                    const parallelStepResults = await Promise.all(parallelCandidateSteps.map((candidateStep) => this.executeAgentToolStep({
+                        runId,
+                        step: candidateStep,
+                        toolContext: parallelToolContext,
+                        request,
+                        iteration
+                    })));
+                    for (const stepResult of parallelStepResults) {
+                        stepResults.push(stepResult);
+                        recordToolOutputToContextManager(
+                            modelInputContextManager,
+                            stepResult,
+                            stepResults.length - 1,
+                            { toolOutputChars: directModelInputPrompt.toolOutputChars }
+                        );
+                        const toolResultEvent = buildToolResultEvent(stepResult);
+                        events.push({
+                            ...toolResultEvent,
+                            parallelBatch: true
+                        });
+                        await appendRuntimeItem({
+                            type: 'agent.tool_result',
+                            status: stepResult.response?.status || 'unknown',
+                            payload: {
+                                iteration,
+                                stepId: stepResult.id,
+                                title: stepResult.title,
+                                tool: stepResult.tool,
+                                ok: stepResult.response?.ok === true,
+                                status: stepResult.response?.status || 'unknown',
+                                evidenceRefs: getStepEvidenceRefs(stepResult),
+                                evidenceArtifacts: getEvidenceArtifactsPromptObject(stepResult.evidenceArtifacts || []),
+                                preview: toolResultEvent.preview,
+                                parallelBatch: true
+                            }
+                        });
+                    }
+                    await appendRuntimeItem({
+                        type: 'agent.parallel_tool_batch',
+                        status: 'completed',
+                        payload: {
+                            iteration,
+                            count: parallelStepResults.length,
+                            ok: parallelStepResults.every((stepResult) => stepResult.response?.ok === true)
+                        }
+                    });
+                    const interruptedAfterTools = await maybeFinishInterruptedRun(`after_parallel_tools_${iteration}`);
+                    if (interruptedAfterTools) {
+                        return interruptedAfterTools;
+                    }
+                    const paused = await pauseAfterRound({
+                        iteration,
+                        reason: 'parallel_tools_completed',
+                        decision,
+                        step: parallelCandidateSteps[0]
+                    });
+                    if (paused) {
+                        return paused;
+                    }
+                    continue;
+                }
             }
 
             let step = decision.toolCall;

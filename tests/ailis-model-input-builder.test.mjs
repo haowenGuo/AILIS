@@ -434,6 +434,25 @@ test('ToolRouter keeps final_answer last while applying model visible limit', ()
     );
 });
 
+test('ToolRouter marks read-only search/fetch tools as parallel-safe but keeps mutating tools serial', () => {
+    const router = buildToolRouterFromModelVisibleSpecs([
+        { type: 'function', name: 'tool_search', parameters: { type: 'object' } },
+        { type: 'function', name: 'mcp__ailis_research__web_fetch', parameters: { type: 'object' } },
+        { type: 'function', name: 'exec', parameters: { type: 'object' } },
+        {
+            type: 'function',
+            name: 'custom_readonly',
+            annotations: { readOnlyHint: true },
+            parameters: { type: 'object' }
+        }
+    ]);
+
+    assert.equal(router.toolSupportsParallel({ tool: 'tool_search' }), true);
+    assert.equal(router.toolSupportsParallel({ tool: 'mcp__ailis_research__web_fetch' }), true);
+    assert.equal(router.toolSupportsParallel({ tool: 'custom_readonly' }), true);
+    assert.equal(router.toolSupportsParallel({ tool: 'exec' }), false);
+});
+
 test('ContextManager inserts missing outputs directly after function and local shell calls', () => {
     const history = new ContextManager();
     history.recordItems([

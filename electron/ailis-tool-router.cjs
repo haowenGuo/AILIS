@@ -14,6 +14,59 @@ function toolNameOf(spec = {}) {
     return normalizeName(spec.name || spec.function?.name);
 }
 
+function annotationValue(spec = {}, keys = []) {
+    const annotations = spec.annotations || spec.function?.annotations || {};
+    for (const key of keys) {
+        if (spec[key] !== undefined) {
+            return spec[key];
+        }
+        if (annotations[key] !== undefined) {
+            return annotations[key];
+        }
+    }
+    return undefined;
+}
+
+function canonicalParallelToolName(value = '') {
+    return normalizeName(value).toLowerCase().replace(/-/g, '_');
+}
+
+function inferParallelToolSupport(name = '', spec = {}) {
+    const explicit = annotationValue(spec, [
+        'supportsParallelToolCalls',
+        'supports_parallel_tool_calls'
+    ]);
+    if (typeof explicit === 'boolean') {
+        return explicit;
+    }
+    const readOnlyHint = annotationValue(spec, [
+        'readOnlyHint',
+        'read_only_hint',
+        'readOnly',
+        'read_only'
+    ]);
+    if (readOnlyHint === true) {
+        return true;
+    }
+    const canonicalName = canonicalParallelToolName(name);
+    if (!canonicalName) {
+        return false;
+    }
+    if (canonicalName === 'tool_search') {
+        return true;
+    }
+    if (canonicalName === 'read' || canonicalName === 'list' || canonicalName === 'find') {
+        return true;
+    }
+    if (/^(?:web|search|fetch|read|list|find|grep|rg|pdf|doc|document|spreadsheet|presentation|image|describe|output|artifact|github|browser_snapshot)(?:_|$)/.test(canonicalName)) {
+        return true;
+    }
+    if (/(?:__)(?:web_search|web_fetch|web_research|search|fetch|read|list|find|extract|describe_image|pdf_extract_text|pdf_find_and_extract)$/.test(canonicalName)) {
+        return true;
+    }
+    return false;
+}
+
 function safeJsonParse(value = '', fallback = {}) {
     if (value && typeof value === 'object' && !Array.isArray(value)) {
         return value;
@@ -48,10 +101,15 @@ class ToolRegistry {
         if (!name) {
             return;
         }
+        const spec = entry.spec || entry;
+        const supportsParallelToolCalls = typeof entry.supportsParallelToolCalls === 'boolean'
+            ? entry.supportsParallelToolCalls
+            : inferParallelToolSupport(name, spec);
         this.entries.push({
             name,
             exposure: entry.exposure || ToolExposure.DIRECT,
-            spec: entry.spec || entry
+            spec,
+            supportsParallelToolCalls
         });
     }
 
@@ -63,6 +121,12 @@ class ToolRegistry {
 
     all() {
         return this.entries.map((entry) => ({ ...entry }));
+    }
+
+    supportsParallelToolCalls(name = '') {
+        const normalizedName = normalizeName(name);
+        const entry = this.entries.find((candidate) => candidate.name === normalizedName);
+        return entry?.exposure !== ToolExposure.DEFERRED && entry?.supportsParallelToolCalls === true;
     }
 }
 
@@ -89,6 +153,11 @@ class ToolRouter {
 
     buildToolCall(item = {}) {
         return ToolRouter.buildToolCall(item);
+    }
+
+    toolSupportsParallel(call = {}) {
+        const toolName = normalizeName(call.toolName || call.tool || call.name);
+        return this.registry.supportsParallelToolCalls(toolName);
     }
 
     static buildToolCall(item = {}) {
@@ -203,6 +272,7 @@ module.exports = {
     ToolRegistry,
     ToolRouter,
     buildToolRouterFromModelVisibleSpecs,
+    inferParallelToolSupport,
     safeJsonParse,
     toolNameOf
 };
