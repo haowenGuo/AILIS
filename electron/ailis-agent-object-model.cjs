@@ -373,6 +373,120 @@ function buildWebSearchFunctionOutput(toolOutput = {}, webSearchOutput = {}) {
     });
 }
 
+function sourceViewportFromToolOutput(toolOutput = {}) {
+    const details = firstObject(toolOutput.details);
+    const sourceWindow = firstObject(
+        details.sourceWindow,
+        details.source_window,
+        details.sourceViewport,
+        details.source_viewport,
+        details.source
+    );
+    if (normalizeText(sourceWindow.type) !== 'source_viewport') {
+        return null;
+    }
+    const toolName = normalizeText(toolOutput.toolName);
+    const action = firstObject(sourceWindow.action);
+    const actionType = normalizeText(action.type);
+    const normalizedActionType = actionType === 'find_in_page'
+        ? 'find_in_page'
+        : actionType === 'open_page'
+        ? 'open_page'
+        : /(?:^|__)web_find$/.test(toolName)
+        ? 'find_in_page'
+        : 'open_page';
+    const url = normalizeText(sourceWindow.url || sourceWindow.ref_id || details.url);
+    const lineStart = Number(
+        sourceWindow.lineno ||
+            sourceWindow.lineStart ||
+            sourceWindow.line_start ||
+            details.lineno ||
+            details.lineStart ||
+            details.line_start ||
+            1
+    ) || 1;
+    return {
+        sourceWindow,
+        action: {
+            ...cloneJson(action),
+            type: normalizedActionType,
+            ...(url ? { url } : {}),
+            ...(normalizedActionType === 'find_in_page' && normalizeText(action.pattern || details.pattern)
+                ? { pattern: normalizeText(action.pattern || details.pattern) }
+                : {}),
+            ...(normalizedActionType === 'open_page' ? { lineno: lineStart } : {})
+        },
+        details
+    };
+}
+
+function normalizeSourceViewportWebSearchCall(sourceViewport = {}, callId = '') {
+    const action = firstObject(sourceViewport.action);
+    return ResponseItem.webSearchCall({
+        id: callId ? `${callId}_${action.type || 'open_page'}` : null,
+        status: 'completed',
+        action
+    });
+}
+
+function formatSourceViewportLines(sourceWindow = {}) {
+    const lines = Array.isArray(sourceWindow.lines) ? sourceWindow.lines : [];
+    const rendered = lines
+        .map((line) => normalizeText(line.rendered) || `L${Number(line.lineno || line.lineNumber || line.line_number || 0)}: ${line.text || ''}`)
+        .filter(Boolean)
+        .join('\n');
+    const lineStart = Number(sourceWindow.lineStart || sourceWindow.line_start || sourceWindow.lineno || 1) || 1;
+    const lineEnd = Number(sourceWindow.lineEnd || sourceWindow.line_end || lineStart) || lineStart;
+    return [
+        'Source viewport:',
+        `URL: ${sourceWindow.url || sourceWindow.ref_id || ''}`,
+        `Content type: ${sourceWindow.contentType || sourceWindow.content_type || 'text/plain'}`,
+        `Total lines: ${Number(sourceWindow.totalLines || sourceWindow.total_lines || 0) || 0}`,
+        `Line range: L${lineStart}-L${lineEnd}`,
+        `Has more before: ${(sourceWindow.hasMoreBefore ?? sourceWindow.has_more_before) ? 'true' : 'false'}`,
+        `Has more after: ${(sourceWindow.hasMoreAfter ?? sourceWindow.has_more_after) ? 'true' : 'false'}`,
+        '',
+        rendered
+    ].filter((line, index) => index === 7 || normalizeText(line)).join('\n');
+}
+
+function formatSourceViewportMatches(details = {}) {
+    const matches = Array.isArray(details.matches) ? details.matches : [];
+    if (!matches.length) {
+        return '';
+    }
+    const lines = [
+        `Find matches: ${matches.length}`
+    ];
+    matches.slice(0, 12).forEach((match) => {
+        const lineno = Number(match.lineno || match.lineNumber || match.line_number || 0) || '?';
+        lines.push(`L${lineno}: ${match.text || ''}`);
+    });
+    return lines.join('\n');
+}
+
+function buildSourceViewportFunctionOutput(toolOutput = {}, sourceViewport = {}) {
+    const { sourceWindow, action, details } = sourceViewport;
+    const header = action.type === 'find_in_page'
+        ? 'Find in page completed.'
+        : 'Opened page source viewport.';
+    const contentItems = [
+        ContentItem.inputText([
+            header,
+            `Tool: ${toolOutput.toolName}`,
+            action.url ? `url=${action.url}` : '',
+            action.type === 'find_in_page' && action.pattern ? `pattern=${action.pattern}` : '',
+            action.type === 'open_page' && action.lineno ? `lineno=${action.lineno}` : '',
+            toolOutput.durationMs != null ? `duration_ms=${toolOutput.durationMs}` : ''
+        ].filter(Boolean).join('\n')),
+        ContentItem.inputText(formatSourceViewportMatches(details)),
+        ContentItem.inputText(formatSourceViewportLines(sourceWindow))
+    ].filter(Boolean);
+    return FunctionCallOutputPayload.fromContentItems(contentItems, {
+        success: toolOutput.ok === true ? true : toolOutput.ok === false ? false : null
+    });
+}
+
 function toolOutputToResponseItems(toolOutput = {}, options = {}) {
     const toolName = normalizeText(toolOutput.toolName);
     if (!toolName) {
@@ -412,6 +526,22 @@ function toolOutputToResponseItems(toolOutput = {}, options = {}) {
             ResponseItem.functionCallOutput({
                 call_id: callId,
                 output: buildWebSearchFunctionOutput(toolOutput, webSearchOutput)
+            })
+        ].filter(Boolean);
+    }
+    const sourceViewport = sourceViewportFromToolOutput(toolOutput);
+    if (sourceViewport) {
+        return [
+            ResponseItem.functionCall({
+                name: toolName,
+                arguments: toolOutput.args || {},
+                provider_metadata: toolOutput.providerMetadata || null,
+                call_id: callId
+            }),
+            normalizeSourceViewportWebSearchCall(sourceViewport, callId),
+            ResponseItem.functionCallOutput({
+                call_id: callId,
+                output: buildSourceViewportFunctionOutput(toolOutput, sourceViewport)
             })
         ].filter(Boolean);
     }

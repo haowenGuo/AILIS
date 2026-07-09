@@ -286,6 +286,101 @@ test('web research tool output is projected as web_search_call plus content_item
     assert.doesNotMatch(text, /Codex object: web_search_call/);
 });
 
+test('web_fetch source viewport is projected as open_page web_search_call', () => {
+    const items = toolOutputToModelInputItems({
+        id: 'web-fetch-1',
+        tool: 'mcp__ailis_research__web_fetch',
+        args: { url: 'https://example.test/guide', lineno: 12 },
+        response: {
+            ok: true,
+            status: 'completed',
+            result: {
+                structuredContent: {
+                    status: 'completed',
+                    url: 'https://example.test/guide',
+                    sourceWindow: {
+                        type: 'source_viewport',
+                        action: {
+                            type: 'open_page',
+                            url: 'https://example.test/guide',
+                            lineno: 12
+                        },
+                        url: 'https://example.test/guide',
+                        contentType: 'text/html',
+                        totalLines: 30,
+                        lineStart: 12,
+                        lineEnd: 14,
+                        hasMoreBefore: true,
+                        hasMoreAfter: true,
+                        lines: [
+                            { lineNumber: 12, lineno: 12, rendered: 'L12: ## Skills', text: '## Skills' },
+                            { lineNumber: 13, lineno: 13, rendered: 'L13: Core skill details', text: 'Core skill details' }
+                        ]
+                    }
+                }
+            }
+        }
+    });
+
+    assert.equal(items.length, 3);
+    assert.equal(items[1].type, 'web_search_call');
+    assert.equal(items[1].action.type, 'open_page');
+    assert.equal(items[1].action.url, 'https://example.test/guide');
+    assert.equal(items[1].action.lineno, 12);
+    assert.equal(items[2].output.body.kind, 'content_items');
+    const text = FunctionCallOutputPayload.toText(items[2].output);
+    assert.match(text, /Opened page source viewport/);
+    assert.match(text, /Line range: L12-L14/);
+    assert.match(text, /L13: Core skill details/);
+});
+
+test('web_find source viewport is projected as find_in_page web_search_call', () => {
+    const items = toolOutputToModelInputItems({
+        id: 'web-find-1',
+        tool: 'mcp__ailis_research__web_find',
+        args: { url: 'https://example.test/guide', pattern: 'Cantora' },
+        response: {
+            ok: true,
+            status: 'completed',
+            result: {
+                structuredContent: {
+                    status: 'completed',
+                    url: 'https://example.test/guide',
+                    pattern: 'Cantora',
+                    matches: [
+                        { lineNumber: 6, lineno: 6, text: '2009 Cantora 1' }
+                    ],
+                    sourceWindow: {
+                        type: 'source_viewport',
+                        action: {
+                            type: 'find_in_page',
+                            url: 'https://example.test/guide',
+                            pattern: 'Cantora'
+                        },
+                        url: 'https://example.test/guide',
+                        contentType: 'text/plain',
+                        totalLines: 8,
+                        lineStart: 4,
+                        lineEnd: 7,
+                        lines: [
+                            { lineNumber: 6, lineno: 6, rendered: 'L6: 2009 Cantora 1', text: '2009 Cantora 1' }
+                        ]
+                    }
+                }
+            }
+        }
+    });
+
+    assert.equal(items.length, 3);
+    assert.equal(items[1].type, 'web_search_call');
+    assert.equal(items[1].action.type, 'find_in_page');
+    assert.equal(items[1].action.pattern, 'Cantora');
+    const text = FunctionCallOutputPayload.toText(items[2].output);
+    assert.match(text, /Find in page completed/);
+    assert.match(text, /Find matches: 1/);
+    assert.match(text, /L6: 2009 Cantora 1/);
+});
+
 test('tool_search preserves provider reasoning metadata for chat provider round-trip', () => {
     const items = toolOutputToModelInputItems({
         id: 'search-1',

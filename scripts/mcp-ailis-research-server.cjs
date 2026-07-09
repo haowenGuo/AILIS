@@ -8880,7 +8880,7 @@ function buildSourceLineWindow(text = '', {
     return {
         type: 'source_viewport',
         action: {
-            type: 'web_fetch',
+            type: 'open_page',
             url,
             lineno: startLine
         },

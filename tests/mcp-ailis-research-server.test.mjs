@@ -2624,7 +2624,7 @@ test('web_fetch returns Codex-style source viewport with line navigation', async
         assert.ok(result.structuredContent.source.lines.some((line) => line.lineno === 31 && /Studio albums/.test(line.text)));
         assert.equal(result.structuredContent.source_window.type, 'source_viewport');
         assert.equal(result.structuredContent.sourceWindow.type, 'source_viewport');
-        assert.equal(result.structuredContent.sourceWindow.action.type, 'web_fetch');
+        assert.equal(result.structuredContent.sourceWindow.action.type, 'open_page');
         assert.ok(result.structuredContent.sourceWindow.lines.some((line) => /Studio albums/.test(line.text)));
         assert.equal(result.structuredContent.observationContract.source_window, true);
         assert.equal(result.structuredContent.observationContract.source_viewport.tool, 'web_fetch');
