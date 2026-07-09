@@ -7550,7 +7550,7 @@ class AILISAgentRunner {
                 input: directModelInputPrompt.input,
                 tools: directModelInputPrompt.tools || directToolSpecs,
                 tool_choice: 'auto',
-                parallel_tool_calls: false
+                parallel_tool_calls: parallelToolCalls
             });
             this.gateway.emitGatewayEvent?.('agent.prompt_budget', {
                 runId,
@@ -7578,7 +7578,7 @@ class AILISAgentRunner {
                         input: directModelInputPrompt.input,
                         tools: directModelInputPrompt.tools || directToolSpecs,
                         tool_choice: 'auto',
-                        parallel_tool_calls: false,
+                        parallel_tool_calls: parallelToolCalls,
                         prompt: directModelInputPrompt.prompt,
                         stats: directModelInputPrompt.stats
                     },
@@ -7621,7 +7621,8 @@ class AILISAgentRunner {
                     agentDecisionModelSource: decisionSettings._agentDecisionModelSource || '',
                     deepThinkingModel: decisionSettings._agentDecisionDeepThinkingModel === true,
                     deepThinkingMode: isAgentDecisionDeepThinkingMode(decisionSettings, requestContext),
-                    latencyProfile: decisionPayload.latencyProfile || ''
+                    latencyProfile: decisionPayload.latencyProfile || '',
+                    parallel_tool_calls: decisionPayload.parallel_tool_calls === true
                 }
             });
             let decision = await callLlmAgentDirectToolDecision(decisionSettings, decisionPayload, {
