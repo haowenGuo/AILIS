@@ -28,6 +28,7 @@ const DEFAULT_MAX_RESULT_TEXT_CHARS = 6000;
 const DEFAULT_MAX_TRANSCRIPT_ITEMS = 500;
 const DEFAULT_SUBAGENT_WAIT_TIMEOUT_MS = 30000;
 const DEFAULT_SUBAGENT_RUN_TIMEOUT_MS = 15 * 60 * 1000;
+const TASK_AGENT_MAX_MODEL_ROUNDS = 3;
 
 const FILE_MUTATING_TOOLS = new Set(['write', 'edit', 'apply_patch']);
 const FILE_READONLY_TOOLS = new Set(['read', 'web_fetch']);
@@ -222,6 +223,11 @@ function buildSubagentRelayText(response = {}) {
         }
     }
     const task = summarize(normalizeString(subagent.task || response.task), 180);
+    const handle = {
+        subagent_id: normalizeString(subagent.id || response.subagentId),
+        child_run_id: normalizeString(subagent.childRunId || response.childRunId),
+        status
+    };
     if (status === 'completed') {
         return normalizeString(
             result.finalAnswer ||
@@ -233,14 +239,18 @@ function buildSubagentRelayText(response = {}) {
         );
     }
     if (status === 'running') {
-        return task
-            ? `TaskAgent 仍在执行，尚未产生最终答案。当前任务：${task}`
-            : 'TaskAgent 仍在执行，尚未产生最终答案。';
+        return JSON.stringify({
+            ...handle,
+            task,
+            result_available: false
+        }, null, 2);
     }
     if (status === 'queued') {
-        return task
-            ? `TaskAgent 已排队，准备处理：${task}`
-            : 'TaskAgent 已排队，准备开始处理。';
+        return JSON.stringify({
+            ...handle,
+            task,
+            result_available: false
+        }, null, 2);
     }
     if (status === 'not_found') {
         return '没有找到这个 TaskAgent 子任务。';
@@ -1955,6 +1965,7 @@ class AILISRuntime {
                 subagentId: subagent.id,
                 childRunId: subagent.childRunId,
                 childSessionId: subagent.childSessionId,
+                task: subagent.originalTask || subagent.task,
                 message: normalizeString(event.message),
                 ...(event.payload && typeof event.payload === 'object' ? event.payload : {})
             }
@@ -1981,7 +1992,14 @@ class AILISRuntime {
         ).toLowerCase())
             ? normalizeString(args.inheritanceMode || args.inheritance_mode || subagent.inheritanceMode, 'clean').toLowerCase()
             : 'clean';
-        const maxAgentSteps = Number(args.maxAgentSteps || context.maxAgentSteps);
+        const requestedMaxAgentSteps = Number(args.maxAgentSteps || context.maxAgentSteps || TASK_AGENT_MAX_MODEL_ROUNDS);
+        const maxAgentSteps = Math.max(
+            1,
+            Math.min(
+                Number.isFinite(requestedMaxAgentSteps) ? requestedMaxAgentSteps : TASK_AGENT_MAX_MODEL_ROUNDS,
+                TASK_AGENT_MAX_MODEL_ROUNDS
+            )
+        );
         return {
             ...inherited,
             ...(args.context && typeof args.context === 'object' ? args.context : {}),
@@ -2005,7 +2023,7 @@ class AILISRuntime {
                 : [],
             parentSubagentDepth,
             subagentDepth: parentSubagentDepth + 1,
-            ...(Number.isFinite(maxAgentSteps) && maxAgentSteps > 0 ? { maxAgentSteps } : {})
+            maxAgentSteps
         };
     }
 
@@ -2159,9 +2177,17 @@ class AILISRuntime {
         const sessionId = normalizeString(context.sessionId || context.sessionKey || args.sessionId, 'main');
         if (action === 'list') {
             const subagents = [...this.subagents.values()].map((subagent) => this.publicSubagent(subagent));
-            const text = subagents.length
-                ? `当前有 ${subagents.length} 个 TaskAgent 子任务记录。`
-                : '当前没有 TaskAgent 子任务记录。';
+            const modelView = subagents.map((subagent) => ({
+                subagent_id: subagent.id,
+                child_run_id: subagent.childRunId,
+                status: subagent.status,
+                task: summarize(subagent.task, 180),
+                result_available: Boolean(subagent.result)
+            }));
+            const text = JSON.stringify({
+                status: 'completed',
+                subagents: modelView
+            }, null, 2);
             return {
                 content: [
                     {

@@ -396,6 +396,11 @@ test('AILIS persona exposes subagent handoff while TaskAgent keeps Codex core by
         }
     });
     assert.deepEqual(personaSpecs.map((spec) => spec.name), ['task_results', 'subagents']);
+    const personaDelegateSpec = personaSpecs.find((spec) => spec.name === 'subagents');
+    assert.deepEqual(personaDelegateSpec.parameters.required, ['action', 'task']);
+    assert.deepEqual(personaDelegateSpec.parameters.properties.action.enum, ['spawn']);
+    assert.equal(personaDelegateSpec.parameters.properties.wait, undefined);
+    assert.equal(personaDelegateSpec.parameters.properties.subagentId, undefined);
 
     const taskSpecs = buildAgentDirectToolSpecs(gateway, {
         requestContext: {

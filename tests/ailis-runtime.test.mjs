@@ -707,7 +707,16 @@ test('AILIS runtime subagents execute child runner lifecycle and retain logs', a
     assert.equal(spawned.details.subagent.result.status, 'completed');
     assert.equal(childContexts[0].contextMode, 'task_agent');
     assert.equal(childContexts[0].cleanContext, true);
+    assert.equal(childContexts[0].maxAgentSteps, 3);
     assert.match(childContexts[0].sessionId, /:subagent:worker-1$/);
+
+    const listed = await runtime.executeTool(
+        'subagents',
+        { action: 'list' },
+        { runId: 'subagent-run', sessionId: 'main' }
+    );
+    assert.match(listed.content[0].text, /"subagent_id": "worker-1"/);
+    assert.match(listed.content[0].text, /"result_available": true/);
 
     const log = await runtime.executeTool(
         'subagents',
@@ -740,6 +749,8 @@ test('AILIS runtime delivers send input into a running TaskAgent queue', async (
         { runId: 'subagent-live-run', sessionId: 'main' }
     );
     assert.equal(spawned.details.status, 'running');
+    assert.match(spawned.content[0].text, /"subagent_id": "worker-live"/);
+    assert.match(spawned.content[0].text, /"result_available": false/);
 
     const sent = await runtime.executeTool(
         'subagents',

@@ -142,7 +142,8 @@ test('AILIS Gateway subagent task reuses parent LLM settings for TaskAgent runs'
     assert.deepEqual(calls[0].messageHistory, []);
     assert.equal(calls[0].context.cleanContext, true);
     assert.equal(calls[0].context.contextMode, 'task_agent');
-    assert.equal(calls[0].maxAgentSteps, 7);
+    assert.equal(calls[0].maxAgentSteps, 3);
+    assert.equal(calls[0].context.maxAgentSteps, 3);
     assert.deepEqual(calls[0].llmSettings, llmSettings);
     assert.deepEqual(calls[0].context.llmSettings, llmSettings);
 });

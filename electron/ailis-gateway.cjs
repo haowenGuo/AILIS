@@ -76,6 +76,7 @@ const DEFAULT_HTTP_REQUEST_TIMEOUT_MS = Math.max(0, Number(process.env.AILIS_GAT
 const DEFAULT_PROFILE_CURATION_START_DELAY_MS = Number(process.env.AILIS_PROFILE_CURATION_START_DELAY_MS || 60 * 1000);
 const DEFAULT_PROFILE_CURATION_CHECK_INTERVAL_MS = Number(process.env.AILIS_PROFILE_CURATION_CHECK_INTERVAL_MS || 6 * 60 * 60 * 1000);
 const DEFAULT_PROFILE_CURATION_DEBOUNCE_MS = Number(process.env.AILIS_PROFILE_CURATION_DEBOUNCE_MS || 2 * 60 * 1000);
+const TASK_AGENT_MAX_MODEL_ROUNDS = 3;
 
 const GATEWAY_BACKED_TOOL_IDS = new Set(['sessions_list', 'gateway', 'cron', 'nodes']);
 const SESSION_BOUND_TOOL_IDS = new Set([
@@ -1384,6 +1385,31 @@ class AILISGateway extends EventEmitter {
     }
 
     emitGatewayEvent(type, payload = {}) {
+        if (type === 'subagent.event' && payload.type === 'subagent.completed') {
+            try {
+                this.taskResultCapsules?.recordExecution?.({
+                    sessionId: payload.parentSessionId,
+                    parentRunId: payload.parentRunId,
+                    action: 'resume',
+                    task: payload.task,
+                    ok: payload.payload?.ok === true,
+                    status: payload.status,
+                    subagent: {
+                        id: payload.subagentId,
+                        childRunId: payload.childRunId,
+                        sessionId: payload.parentSessionId,
+                        task: payload.task,
+                        status: payload.status
+                    },
+                    childResult: payload.payload?.result || {}
+                });
+            } catch (error) {
+                payload = {
+                    ...payload,
+                    taskStateError: error?.message || String(error)
+                };
+            }
+        }
         this.eventSeq += 1;
         const protocolMetadata = runtimeEventMetadata({ type, payload });
         const event = {
@@ -2233,7 +2259,14 @@ class AILISGateway extends EventEmitter {
         const recentMessages = inheritanceMode === 'recent'
             ? (Array.isArray(args.recentMessages) ? args.recentMessages : context.recentMessages || [])
             : [];
-        const requestedMaxAgentSteps = Number(args.maxAgentSteps || context.maxAgentSteps);
+        const requestedMaxAgentSteps = Number(args.maxAgentSteps || context.maxAgentSteps || TASK_AGENT_MAX_MODEL_ROUNDS);
+        const taskAgentMaxSteps = Math.max(
+            1,
+            Math.min(
+                Number.isFinite(requestedMaxAgentSteps) ? requestedMaxAgentSteps : TASK_AGENT_MAX_MODEL_ROUNDS,
+                TASK_AGENT_MAX_MODEL_ROUNDS
+            )
+        );
         const childContext = this.mergeDefaultContext({
             ...context,
             ...(parentLlmSettings ? { llmSettings: parentLlmSettings } : {}),
@@ -2251,9 +2284,7 @@ class AILISGateway extends EventEmitter {
             cleanContext: inheritanceMode === 'clean',
             taskAgentInheritanceMode: inheritanceMode,
             initialContextManagerCheckpoint: inheritedCheckpoint,
-            ...(Number.isFinite(requestedMaxAgentSteps) && requestedMaxAgentSteps > 0
-                ? { maxAgentSteps: requestedMaxAgentSteps }
-                : {})
+            maxAgentSteps: taskAgentMaxSteps
         });
         await onEvent?.({
             type: 'subagent.runner.started',
@@ -2277,9 +2308,7 @@ class AILISGateway extends EventEmitter {
             taskAgentInheritanceMode: inheritanceMode,
             initialContextManagerCheckpoint: inheritedCheckpoint,
             initialStepResults: Array.isArray(args.initialStepResults) ? args.initialStepResults : [],
-            ...(Number.isFinite(requestedMaxAgentSteps) && requestedMaxAgentSteps > 0
-                ? { maxAgentSteps: requestedMaxAgentSteps }
-                : {}),
+            maxAgentSteps: taskAgentMaxSteps,
             context: childContext
         });
         const unregisterInputHandler = typeof registerInputHandler === 'function'

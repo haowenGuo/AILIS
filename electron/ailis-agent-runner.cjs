@@ -89,6 +89,8 @@ const ARTIFACT_OBSERVATION_ROW_WINDOW_TEXT_CHARS = 8000;
 const MAX_MCP_TOOL_DESCRIPTION_CHARS = 900;
 const DEFAULT_AGENT_LOOP_STEPS = 30;
 const MAX_AGENT_LOOP_STEPS = 30;
+const TASK_AGENT_MAX_MODEL_ROUNDS = 3;
+const PERSONA_TASK_AGENT_WAIT_TIMEOUT_MS = 15 * 60 * 1000;
 const DEFAULT_PENDING_PLAN_TTL_MS = 30 * 60 * 1000;
 const DEFAULT_AGENT_DECISION_TIMEOUT_MS = 120000;
 const DEFAULT_VISION_AGENT_DECISION_TIMEOUT_MS = 90000;
@@ -2893,6 +2895,10 @@ function isPersonaOrchestratorRole(role = '') {
     return normalizeText(role).toLowerCase() === 'persona_orchestrator';
 }
 
+function isTaskAgentRole(role = '') {
+    return normalizeText(role).toLowerCase() === 'task_agent';
+}
+
 function resolveAgentContextMode(request = {}, requestContext = {}) {
     return isPersonaOrchestratorRole(resolveAgentRuntimeRole(request, requestContext))
         ? 'persona'
@@ -5529,6 +5535,23 @@ function isSubagentHandoffStep(step = {}) {
     return ['spawn', 'create', 'send', 'steer', 'resume'].includes(action);
 }
 
+function applyPersonaTaskAgentLifecycle(step = {}) {
+    if (!isSubagentHandoffStep(step)) {
+        return step;
+    }
+    const args = step.args && typeof step.args === 'object' ? { ...step.args } : {};
+    delete args.timeoutMs;
+    return {
+        ...step,
+        args: {
+            ...args,
+            action: 'spawn',
+            wait: true,
+            waitTimeoutMs: PERSONA_TASK_AGENT_WAIT_TIMEOUT_MS
+        }
+    };
+}
+
 function buildPersonaTaskAgentHandoffDisplayText({
     ok = false,
     status = '',
@@ -5727,6 +5750,35 @@ function buildFinalAnswerNativeToolSpec() {
     });
 }
 
+function buildPersonaTaskDelegateSpec() {
+    return normalizeNativeToolSpec({
+        name: 'subagents',
+        description: [
+            'Delegate one self-contained execution task to TaskAgent.',
+            'Author the complete task from the visible conversation; the runtime owns waiting, lifecycle, and result delivery.',
+            'The completed or partial result returns to this same AILIS conversation as one tool observation.'
+        ].join(' '),
+        parameters: {
+            type: 'object',
+            required: ['action', 'task'],
+            additionalProperties: false,
+            properties: {
+                action: {
+                    type: 'string',
+                    enum: ['spawn'],
+                    description: 'Delegate the task. Runtime lifecycle is automatic.'
+                },
+                task: {
+                    type: 'string',
+                    minLength: 1,
+                    description: 'Complete model-authored execution task, including the goal, constraints, and expected result.'
+                }
+            }
+        },
+        strict: true
+    });
+}
+
 function buildAgentDirectToolSpecs(gateway, { stepResults = [], requestContext = {}, exactAnswerMode = false } = {}) {
     if (requestContext.directToolExecutor === false || requestContext.nativeDirectTools === false) {
         return [];
@@ -5734,7 +5786,7 @@ function buildAgentDirectToolSpecs(gateway, { stepResults = [], requestContext =
     const subagentSpec = gateway?.gatewayToolRuntimeRegistry?.definition?.('subagents')?.spec;
     const taskResultsSpec = gateway?.gatewayToolRuntimeRegistry?.definition?.('task_results')?.spec;
     if (isPersonaOrchestratorRole(resolveAgentRuntimeRole({}, requestContext))) {
-        return [taskResultsSpec, subagentSpec].filter(Boolean);
+        return [taskResultsSpec, buildPersonaTaskDelegateSpec()].filter(Boolean);
     }
     const specs = [];
     const seen = new Set();
@@ -6402,8 +6454,8 @@ function buildLlmAgentDirectToolPrompt({
         'The runtime_environment object is the authoritative host clock. Use its current_date, current_time, timezone, and utc_offset instead of assuming the training-data date.',
         'For facts that may have changed, use fresh evidence already present in the conversation or verify them through TaskAgent. Do not present pretrained knowledge as current fact when freshness matters.',
         'task_results is a read-only library of completed public work. Its output is candidate context, and you decide whether it is relevant and sufficient.',
-        'subagents is a normal tool. Author the complete TaskAgent task yourself from the conversation, current task state, constraints, and evidence. The runtime validates and executes your arguments without rewriting their meaning.',
-        'TaskAgent results return to this same AILIS conversation as tool observations. Continue reasoning with the original conversation intact, then answer the user naturally or make another tool call when you decide it is needed.',
+        'subagents is a single delegation tool. Author the complete TaskAgent task yourself from the conversation, current task state, constraints, and evidence. The runtime validates the task without rewriting its meaning, then owns waiting and child lifecycle.',
+        'TaskAgent results return to this same AILIS conversation as one tool observation. Continue with the original conversation intact, then answer the user naturally or delegate another complete task only if you decide new execution is required.',
         'Never mention TaskAgent, subagent, worker, handoff, capsule, or internal orchestration to the user.',
         'Only call tools present in the current tools array. Do not mention tool schemas, runtime state, prompt rules, or orchestration details in an ordinary conversational reply.'
     ];
@@ -6411,6 +6463,7 @@ function buildLlmAgentDirectToolPrompt({
         'The model-visible protocol follows the OpenAI Responses object model used by modern coding agents. The request has instructions, input, tools, tool_choice, parallel_tool_calls, and reasoning controls. The input is an ordered list of ResponseItem objects such as message, function_call, function_call_output, tool_search_call, and tool_search_output.',
         responseProtocolInstruction,
         'Use native tool calls when work requires files, artifacts, search, shell/code, APIs, or verification. Otherwise answer with an assistant message.',
+        `The runtime allows at most ${maxSteps} work-tool rounds for this TaskAgent, followed by one tool-free finalization. Use parallel tool calls for independent evidence and return the best supported result within this budget.`,
         'Tool call outputs from previous turns appear as function_call_output/tool_search_output items paired with their call_id. Use recent, relevant outputs as observations, but do not keep rereading stale exploration results once you have enough information to code, verify, or answer.',
         'Answer directly once the available evidence supports a reasonable answer. Use another tool only when you can name the specific missing field or uncertainty that blocks the answer. Do not repeat an identical tool call unless the new arguments materially change the observation.',
         'Only call tools that are present in the current tools array. If a needed tool is missing, use tool_search when it is available.',
@@ -6592,7 +6645,8 @@ function looksLikeMetaDecisionJson(json = {}) {
 
 async function callLlmAgentDirectToolDecision(settings, payload, {
     hasToolHistory = false,
-    forceFinalResponse = false
+    forceFinalResponse = false,
+    allowFinalizationRetry = true
 } = {}) {
     const requestedToolChoice = forceFinalResponse
         ? 'none'
@@ -6636,6 +6690,32 @@ async function callLlmAgentDirectToolDecision(settings, payload, {
     let repairMetadata = {};
     const initialToolCalls = (response.toolCalls || []).filter((call) => call?.name);
     const leakedProtocol = !initialToolCalls.length && looksLikeLeakedAgentProtocol(response.content);
+    if (forceFinalResponse && initialToolCalls.length && !allowFinalizationRetry) {
+        return {
+            ok: true,
+            mode: 'task',
+            intent: 'task_agent_round_budget_exhausted',
+            summary: 'TaskAgent reached its three-round execution budget before producing a tool-free final response.',
+            publicReasoning: '',
+            riskLevel: 'low',
+            action: 'blocked',
+            finalAnswer: '',
+            blockedReason: 'The three-round TaskAgent execution budget is exhausted. Existing observations and the semantic checkpoint are preserved for continuation.',
+            toolCall: null,
+            capabilityRequest: sanitizeCapabilityRequest({}),
+            planUpdates: [],
+            personaOutput: sanitizePersonaOutput({
+                text: '',
+                emotion: 'focused',
+                socialTone: 'calm',
+                taskState: 'blocked'
+            }),
+            budgetExhausted: true,
+            usage: response.usage,
+            provider: response.provider,
+            model: response.model
+        };
+    }
     if (leakedProtocol || (forceFinalResponse && initialToolCalls.length)) {
         const repairInstruction = forceFinalResponse
             ? 'Finalization retry: the runtime budget is exhausted. Do not call or serialize any tool. Write the best supported user-facing answer in plain prose from the existing task state and evidence. If evidence is insufficient, state the concrete blocker in plain prose. Never emit DSML, tool_calls, function_call, XML control tags, internal JSON, or protocol metadata.'
@@ -8229,8 +8309,12 @@ class AILISAgentRunner {
             request.debugBreakAfterRound === true ||
             requestContext.debugBreakAfterRound === true ||
             requestContext.agentLabStepMode === true;
+        const agentRuntimeRole = resolveAgentRuntimeRole(request, requestContext);
         const requestedMaxSteps = Number(request.maxAgentSteps || requestContext.maxAgentSteps || DEFAULT_AGENT_LOOP_STEPS);
-        const maxSteps = Math.max(1, Math.min(Number.isFinite(requestedMaxSteps) ? requestedMaxSteps : DEFAULT_AGENT_LOOP_STEPS, MAX_AGENT_LOOP_STEPS));
+        const boundedMaxSteps = Math.max(1, Math.min(Number.isFinite(requestedMaxSteps) ? requestedMaxSteps : DEFAULT_AGENT_LOOP_STEPS, MAX_AGENT_LOOP_STEPS));
+        const maxSteps = isTaskAgentRole(agentRuntimeRole)
+            ? Math.min(boundedMaxSteps, TASK_AGENT_MAX_MODEL_ROUNDS)
+            : boundedMaxSteps;
         const events = initialEvents.slice();
         const stepResults = initialStepResults.slice();
         let modelInputContextManager = restoreModelInputContextManagerFromCheckpoint(initialContextManagerCheckpoint);
@@ -8249,7 +8333,6 @@ class AILISAgentRunner {
         } catch {
             emailProfiles = requestContext.emailProfiles || {};
         }
-        const agentRuntimeRole = resolveAgentRuntimeRole(request, requestContext);
         const agentContextMode = resolveAgentContextMode(request, requestContext);
         const memoryContext = this.compileMemoryContext({
             sessionId,
@@ -8473,7 +8556,7 @@ class AILISAgentRunner {
                 unresolvedFields,
                 safetyFinalizationReason,
                 toolSummary: isPersonaOrchestratorRole(agentRuntimeRole)
-                    ? 'Persona tool surface: task_results reads completed public results; subagents executes tasks authored by AILIS. Both return observations to this same AILIS loop. Choose tools and actions from the conversation and current task state; the runtime validates but does not rewrite their meaning. Internal orchestration must remain invisible to the user.'
+                    ? 'Persona tool surface: task_results reads completed public results; subagents delegates one complete model-authored task. The runtime owns waiting and lifecycle, then returns one result observation to this same AILIS loop. Internal orchestration must remain invisible to the user.'
                     : directToolSpecs.length
                         ? `Native direct tools exposed: ${directToolSpecs.map((tool) => tool.name).slice(0, 16).join(', ')}${directToolSpecs.length > 16 ? ', ...' : ''}.`
                         : 'No native tools are exposed in this turn; answer directly if possible.'
@@ -8595,7 +8678,8 @@ class AILISAgentRunner {
             });
             let decision = await callLlmAgentDirectToolDecision(decisionSettings, decisionPayload, {
                 hasToolHistory: stepResults.length > 0 || events.some((event) => event?.type === 'tool_result'),
-                forceFinalResponse: Boolean(safetyFinalizationReason)
+                forceFinalResponse: Boolean(safetyFinalizationReason),
+                allowFinalizationRetry: !isTaskAgentRole(agentRuntimeRole)
             });
             latestDecision = decision;
             const llmCallDurationMs = Date.now() - llmCallStartedAt;
@@ -8693,6 +8777,9 @@ class AILISAgentRunner {
             const interruptedAfterDecision = await maybeFinishInterruptedRun(`after_llm_decision_${iteration}`);
             if (interruptedAfterDecision) {
                 return interruptedAfterDecision;
+            }
+            if (decision.budgetExhausted === true) {
+                break;
             }
             if (!decision.ok && isTerminalAgentDecisionFailure(decision)) {
                 const terminalFailure = describeTerminalAgentDecisionFailure(decision);
@@ -9186,6 +9273,9 @@ class AILISAgentRunner {
                 })));
             }
             const personaTaskAgentCall = isPersonaOrchestratorRole(agentRuntimeRole) && isSubagentHandoffStep(step);
+            if (personaTaskAgentCall) {
+                step = applyPersonaTaskAgentLifecycle(step);
+            }
 
             const deferredToolContract = buildDeferredToolContractRequest(step, events);
             if (deferredToolContract) {

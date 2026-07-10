@@ -641,8 +641,7 @@ test('Persona preserves a model-authored current-fact task across a short user c
                     tool: 'subagents',
                     args: {
                         action: 'spawn',
-                        task: '核验截至当前日期《原神》“木偶”桑多涅是否已经实装；使用新鲜网页证据，若已实装则完成角色攻略。',
-                        wait: true
+                        task: '核验截至当前日期《原神》“木偶”桑多涅是否已经实装；使用新鲜网页证据，若已实装则完成角色攻略。'
                     }
                 }
             };
@@ -718,15 +717,16 @@ test('Persona preserves a model-authored current-fact task across a short user c
         assert.equal(llmServer.calls.length, 2);
         assert.equal(subagentCalls.length, 1);
         assert.equal(subagentCalls[0].args.wait, true);
+        assert.equal(subagentCalls[0].args.waitTimeoutMs, 15 * 60 * 1000);
         assert.equal(
             subagentCalls[0].args.task,
             '核验截至当前日期《原神》“木偶”桑多涅是否已经实装；使用新鲜网页证据，若已实装则完成角色攻略。'
         );
-        assert.equal(subagentCalls[0].args.maxAgentSteps, undefined);
+        assert.equal(subagentCalls[0].context.maxAgentSteps, 3);
         assert.equal(subagentCalls[0].context.cleanContext, true);
         assert.equal(subagentCalls[0].context.contextMode, 'task_agent');
         assert.equal(gatewayToolCalls.length, 1);
-        assert.equal(gatewayToolCalls[0].waitTimeoutMs, undefined);
+        assert.equal(gatewayToolCalls[0].waitTimeoutMs, 15 * 60 * 1000);
         assert.match(JSON.stringify(llmServer.calls[0].payload.messages), /原神的/);
         assert.match(JSON.stringify(llmServer.calls[0].payload.messages), /已经实装了/);
         assert.match(JSON.stringify(llmServer.calls[1].payload.messages), /已核验并完成攻略/);
@@ -2022,6 +2022,60 @@ test('Agentic Executor max-step fallback does not expose raw tool logs to the us
         assert.equal(result.body.surface.source, 'agent_max_steps_handoff');
         assert.equal(result.body.surface.bubbleText, '我整理好执行现场了。');
         assert.equal(result.body.steps.length, 1);
+    } finally {
+        await gateway.stop();
+        await llmServer.close();
+    }
+});
+
+test('TaskAgent clamps caller-requested work rounds to three', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-task-agent-three-rounds-'));
+    await fs.writeFile(path.join(workspaceRoot, 'note.txt'), 'evidence\n', 'utf8');
+    const llmServer = await createScriptedChatCompletionsServer(() => ({
+        mode: 'task',
+        intent: 'bounded_task',
+        summary: '继续读取证据',
+        action: 'tool',
+        tool_call: {
+            tool: 'read',
+            title: '读取证据',
+            args: { path: 'note.txt' }
+        }
+    }));
+    const gateway = new AILISGateway({
+        port: 0,
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit')
+    });
+
+    try {
+        const status = await gateway.start();
+        const result = await runAgent(status.url, {
+            sessionId: 'task-agent-three-rounds-test',
+            message: '读取 note.txt 并整理结果',
+            agentLoop: 'llm',
+            agentRole: 'task_agent',
+            maxAgentSteps: 30,
+            llmSettings: {
+                provider: 'openai-compatible',
+                baseUrl: llmServer.url,
+                apiKey: 'test-key',
+                model: 'mock-three-round-task-agent',
+                timeoutMs: 10000
+            },
+            context: {
+                workspace: workspaceRoot,
+                agentRole: 'task_agent',
+                approved: true,
+                confirmationPolicy: 'auto'
+            }
+        });
+
+        assert.equal(result.body.status, 'max_steps_reached');
+        assert.equal(result.body.steps.length, 3);
+        assert.equal(llmServer.calls.length, 4);
+        assert.match(llmServer.calls[0].system, /at most 3 work-tool rounds/);
     } finally {
         await gateway.stop();
         await llmServer.close();
