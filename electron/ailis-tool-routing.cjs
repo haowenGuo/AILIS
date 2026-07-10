@@ -344,6 +344,17 @@ function queryExplicitlyRequestsTool(query = '', toolName = '') {
         needle.includes(normalizedTool.replace(/_/g, ' '));
 }
 
+const RELATED_TOOL_FAMILIES = Object.freeze([
+    Object.freeze(['web_research', 'web_search', 'web_fetch']),
+    Object.freeze(['output_read', 'output_tail', 'output_search'])
+]);
+
+function requestedToolFamily(query = '') {
+    return RELATED_TOOL_FAMILIES.find((family) =>
+        family.some((toolName) => queryExplicitlyRequestsTool(query, toolName))
+    ) || null;
+}
+
 function scoreToolForQuery(entry = {}, query = '') {
     const text = collectToolSearchText(entry);
     const toolName = canonicalToolName(entry);
@@ -351,6 +362,14 @@ function scoreToolForQuery(entry = {}, query = '') {
     const explicitWebSearch = queryExplicitlyRequestsWebSearch(query);
     const profiles = matchingRoutingProfiles(query);
     let score = baseTextScore(query, text);
+    const explicitlyRequested = queryExplicitlyRequestsTool(query, toolName);
+    const relatedFamily = requestedToolFamily(query);
+
+    if (explicitlyRequested) {
+        score += 80;
+    } else if (relatedFamily?.includes(toolName)) {
+        score += 36;
+    }
 
     if (/^youtube_/.test(toolName) && !queryExplicitlyMentionsYoutube(query)) {
         return 0;
