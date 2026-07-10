@@ -45,6 +45,25 @@ test('buildContextBudgetReport classifies hard budget pressure deterministically
     assert.ok(report.largestParts[0].approxTokens >= report.largestParts.at(-1).approxTokens);
 });
 
+test('buildContextBudgetReport treats provider input usage as authoritative', () => {
+    const report = buildContextBudgetReport({
+        staticPrefix: 'small',
+        tokenInfo: { promptTokens: 760 }
+    }, {
+        effectiveInputLimitTokens: 1000,
+        reservedOutputTokens: 0,
+        systemReserveTokens: 0,
+        softRatio: 0.5,
+        hardRatio: 0.7,
+        stopRatio: 0.9
+    });
+
+    assert.equal(report.level, 'hard');
+    assert.equal(report.providerInputTokens, 760);
+    assert.equal(report.effectivePromptTokens, 760);
+    assert.ok(report.estimatedPromptTokens < report.providerInputTokens);
+});
+
 test('normalizeAilisToolOutput turns large text into a model-visible preview with output ref metadata', () => {
     const result = normalizeAilisToolOutput({
         content: [{
@@ -114,4 +133,60 @@ test('ContextManager can build an auditable context package and compact stale to
     assert.ok(pkg.droppedItemsManifest.compactedToolObservations > 0);
     assert.ok(pkg.availableOutputRefs.some((ref) => ref.outputId === 'ref-0'));
     assert.equal(pkg.recentResponseItems.filter((item) => item.type === 'function_call_output').length, 8);
+});
+
+test('ContextManager semantic compaction replaces active history while preserving task state and refs', () => {
+    const originalTask = 'Research the release and answer with exact dates. Do not omit the source.';
+    const items = [
+        {
+            type: 'message',
+            role: 'user',
+            content: [{ type: 'input_text', text: JSON.stringify({ type: 'context', attached_files: [{ path: 'fixture.pdf' }] }) }]
+        },
+        {
+            type: 'message',
+            role: 'user',
+            content: [{ type: 'input_text', text: originalTask }]
+        }
+    ];
+    for (let index = 0; index < 10; index += 1) {
+        items.push({
+            type: 'function_call',
+            call_id: `semantic-call-${index}`,
+            name: 'web_fetch',
+            arguments: JSON.stringify({ url: `https://example.test/${index}` })
+        });
+        items.push({
+            type: 'function_call_output',
+            call_id: `semantic-call-${index}`,
+            output: `Status: completed\noutputId=semantic-ref-${index}\n${'evidence '.repeat(800)}`
+        });
+    }
+    const manager = new ContextManager({ items, toolOutputChars: 50000 });
+    const compacted = manager.semanticCompact({
+        force: true,
+        goal: originalTask,
+        constraints: ['Do not omit the source.'],
+        currentPlan: { items: [{ step: 'verify dates', status: 'in_progress' }] },
+        unresolvedFields: ['official publication date'],
+        taskState: { progress: { toolCalls: 10 } },
+        pinnedEvidenceManifest: [{ id: 'artifact-date', summary: 'Official date evidence' }],
+        budgetConfig: {
+            effectiveInputLimitTokens: 2000,
+            reservedOutputTokens: 0,
+            systemReserveTokens: 0
+        }
+    });
+
+    assert.equal(compacted.compacted, true);
+    assert.equal(manager.historyVersion(), 1);
+    assert.ok(manager.rawItems().length < items.length);
+    const serialized = JSON.stringify(manager.rawItems());
+    assert.match(serialized, /Research the release and answer with exact dates/);
+    assert.match(serialized, /fixture\.pdf/);
+    assert.match(serialized, /official publication date/);
+    assert.match(serialized, /artifact-date/);
+    assert.match(serialized, /semantic-ref-9/);
+    assert.equal(compacted.checkpoint.originalGoalPreservedVerbatim, true);
+    assert.equal(compacted.checkpoint.originalGoal, originalTask);
 });

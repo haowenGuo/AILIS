@@ -22,6 +22,7 @@ const {
 const {
     createDefaultArtifactToolsRuntime
 } = require('./ailis-artifact-tools-runtime.cjs');
+const { summarizeForModel } = require('./ailis-runtime-budget.cjs');
 
 const TOOL_EXPOSURE = AILIS_TOOL_EXPOSURE;
 const CORE_RUNTIME_TOOL_DEFINITIONS = AILIS_RUNTIME_TOOL_DEFINITIONS;
@@ -363,7 +364,7 @@ class AILISToolRuntimeRegistry {
 
 async function executeToolSearch(registry, args = {}) {
     const query = normalizeString(args.query || args.q);
-    const limit = Math.max(1, Math.min(Number(args.limit || 8), 50));
+    const limit = Math.max(1, Math.min(Number(args.limit || 5), 8));
     const includeMcp = args.includeMcp !== false;
     const includeDirect = args.includeDirect === true;
     const local = registry.search(query, limit)
@@ -402,22 +403,55 @@ async function executeToolSearch(registry, args = {}) {
         }
     }
     const tools = rankToolSearchResults([...local, ...mcp], query, limit);
+    const publicTools = tools.map((entry) => {
+        const spec = entry.spec && typeof entry.spec === 'object' ? entry.spec : {};
+        const schema = entry.input_schema || entry.inputSchema || entry.parameters || spec.parameters || {};
+        const properties = schema.properties && typeof schema.properties === 'object' ? schema.properties : {};
+        const compactProperties = Object.fromEntries(Object.entries(properties).slice(0, 16).map(([name, property]) => [
+            name,
+            {
+                ...(property?.type ? { type: property.type } : {}),
+                ...(Array.isArray(property?.enum) ? { enum: property.enum.slice(0, 16) } : {}),
+                ...(property?.description ? { description: summarizeForModel(property.description, 240) } : {})
+            }
+        ]));
+        const id = normalizeString(entry.id || entry.name || spec.name);
+        return {
+            id,
+            name: normalizeString(entry.name || spec.name || id),
+            description: summarizeForModel(entry.description || spec.description || entry.summary || entry.title || id, 420),
+            input_schema: {
+                type: 'object',
+                properties: compactProperties,
+                required: (Array.isArray(schema.required) ? schema.required : []).filter((name) => name in compactProperties),
+                additionalProperties: schema.additionalProperties === true
+            },
+            strict: entry.strict === true || spec.strict === true || schema.additionalProperties === false,
+            spec_ref: `tool_registry:${id}`
+        };
+    });
     const routingAdvice = buildToolRoutingAdvice(query, tools);
-    return makeTextResult({
+    const result = makeTextResult({
         status: 'completed',
         text: JSON.stringify({
             status: 'completed',
             query,
             routing_advice: routingAdvice,
-            tools
+            tools: publicTools
         }, null, 2),
         details: {
             status: 'completed',
             query,
             routing_advice: routingAdvice,
-            tools
+            tools: publicTools
         }
     });
+    Object.defineProperty(result, '__ailisRawToolSearchTools', {
+        value: tools,
+        enumerable: false,
+        configurable: true
+    });
+    return result;
 }
 
 function createAILISToolRuntimeRegistry(runtime) {

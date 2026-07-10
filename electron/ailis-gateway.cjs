@@ -5,7 +5,7 @@ const path = require('path');
 const { EventEmitter } = require('events');
 const { randomUUID } = require('crypto');
 const { pathToFileURL } = require('url');
-const { approxTokenCount } = require('./ailis-runtime-budget.cjs');
+const { approxTokenCount, summarizeForModel } = require('./ailis-runtime-budget.cjs');
 const {
     normalizeToolOutput,
     toolOutputToThreadItem
@@ -60,10 +60,6 @@ const {
 const {
     createAilisDirectMcpToolSpec
 } = require('./ailis-mcp-adapter.cjs');
-const {
-    isExtendedAilisToolSurfaceEnabled
-} = require('./ailis-tool-specs.cjs');
-
 const PROJECT_ROOT = path.resolve(__dirname, '..');
 const DEFAULT_PORT = Number(process.env.AILIS_GATEWAY_PORT || 19777);
 const DEFAULT_TOOL_GATEWAY_URL =
@@ -129,9 +125,9 @@ const CODEX_STYLE_DIRECT_LOCAL_TOOL_IDS = new Set([
     'exec',
     'apply_patch'
 ]);
-const EXTENDED_LOCAL_TOOL_EXPOSURE = isExtendedAilisToolSurfaceEnabled()
-    ? TOOL_EXPOSURE.DEFERRED
-    : TOOL_EXPOSURE.HIDDEN;
+// Extended tools stay out of the first-turn tool surface, but remain discoverable
+// through tool_search. The Registry is the source of truth for their full specs.
+const EXTENDED_LOCAL_TOOL_EXPOSURE = TOOL_EXPOSURE.DEFERRED;
 const AILIS_LOCAL_TOOL_DEFINITIONS = Object.freeze([
     Object.freeze({
         id: EMAIL_TOOL_ID,
@@ -415,10 +411,51 @@ function classifyToolResult(result) {
 
 function extractToolSearchToolsForDirectExposure(result = {}) {
     const tools =
+        result?.__ailisRawToolSearchTools ||
         result?.structuredContent?.tools ||
         result?.details?.tools ||
         [];
     return Array.isArray(tools) ? tools : [];
+}
+
+function compactToolSearchSchemaForModel(schema = {}) {
+    const source = schema && typeof schema === 'object' && !Array.isArray(schema) ? schema : {};
+    const properties = source.properties && typeof source.properties === 'object' && !Array.isArray(source.properties)
+        ? source.properties
+        : {};
+    const compactProperties = Object.fromEntries(Object.entries(properties).slice(0, 16).map(([name, property]) => {
+        const value = property && typeof property === 'object' && !Array.isArray(property) ? property : {};
+        return [name, {
+            ...(value.type ? { type: value.type } : {}),
+            ...(Array.isArray(value.enum) ? { enum: value.enum.slice(0, 16) } : {}),
+            ...(value.description ? { description: summarizeForModel(value.description, 240) } : {})
+        }];
+    }));
+    return {
+        type: 'object',
+        properties: compactProperties,
+        required: (Array.isArray(source.required) ? source.required : []).filter((name) => name in compactProperties),
+        additionalProperties: source.additionalProperties === true
+    };
+}
+
+function compactToolSearchEntryForModel(entry = {}) {
+    const spec = entry.spec && typeof entry.spec === 'object' ? entry.spec : {};
+    const schema = entry.input_schema || entry.inputSchema || entry.parameters || spec.parameters || {};
+    const id = normalizeString(entry.id || entry.name || spec.name);
+    return {
+        id,
+        name: id === VISION_TOOL_ID
+            ? 'vision_capture_context'
+            : normalizeString(entry.name || spec.name || id),
+        description: summarizeForModel(
+            entry.description || spec.description || entry.summary || entry.title || id,
+            420
+        ),
+        input_schema: compactToolSearchSchemaForModel(schema),
+        strict: entry.strict === true || spec.strict === true || schema.additionalProperties === false,
+        spec_ref: `tool_registry:${id}`
+    };
 }
 
 function attachRawToolSearchToolsForDirectExposure(guardedResult, rawResult) {
@@ -850,7 +887,7 @@ class AILISGateway extends EventEmitter {
 
     async executeGatewayToolSearch(args = {}) {
         const query = normalizeString(args.query || args.q);
-        const limit = Math.max(1, Math.min(Number(args.limit || 12), 50));
+        const limit = Math.max(1, Math.min(Number(args.limit || 5), 8));
         const includeDirect = args.includeDirect === true;
         const local = this.gatewayToolRuntimeRegistry.search(query, limit)
             .filter((entry) => shouldIncludeDirectToolInSearch(entry, query, includeDirect))
@@ -905,8 +942,9 @@ class AILISGateway extends EventEmitter {
             }
         }
         const tools = rankToolSearchResults([...external, ...local, ...mcp], query, limit);
+        const publicTools = tools.map(compactToolSearchEntryForModel);
         const routingAdvice = buildToolRoutingAdvice(query, tools);
-        return {
+        const result = {
             content: [
                 {
                     type: 'text',
@@ -914,7 +952,7 @@ class AILISGateway extends EventEmitter {
                         status: 'completed',
                         query,
                         routing_advice: routingAdvice,
-                        tools
+                        tools: publicTools
                     }, null, 2)
                 }
             ],
@@ -922,15 +960,21 @@ class AILISGateway extends EventEmitter {
                 status: 'completed',
                 query,
                 routing_advice: routingAdvice,
-                tools
+                tools: publicTools
             },
             structuredContent: {
                 status: 'completed',
                 query,
                 routing_advice: routingAdvice,
-                tools
+                tools: publicTools
             }
         };
+        Object.defineProperty(result, '__ailisRawToolSearchTools', {
+            value: tools,
+            enumerable: false,
+            configurable: true
+        });
+        return result;
     }
 
     resolveDefaultContext() {
@@ -2097,7 +2141,7 @@ class AILISGateway extends EventEmitter {
         });
     }
 
-    async executeSubagentTask({ subagent, args = {}, context = {}, signal, onEvent } = {}) {
+    async executeSubagentTask({ subagent, args = {}, context = {}, signal, onEvent, registerInputHandler } = {}) {
         const task = normalizeString(subagent?.task || args.task || args.prompt || args.message);
         if (!task) {
             return {
@@ -2113,6 +2157,19 @@ class AILISGateway extends EventEmitter {
             context.llm && typeof context.llm === 'object' ? context.llm :
             null
         );
+        const inheritanceMode = ['clean', 'recent', 'checkpoint'].includes(normalizeString(
+            args.inheritanceMode || context.taskAgentInheritanceMode,
+            'clean'
+        ).toLowerCase())
+            ? normalizeString(args.inheritanceMode || context.taskAgentInheritanceMode, 'clean').toLowerCase()
+            : 'clean';
+        const inheritedCheckpoint = inheritanceMode === 'checkpoint'
+            ? args.contextManagerCheckpoint || context.initialContextManagerCheckpoint || null
+            : null;
+        const recentMessages = inheritanceMode === 'recent'
+            ? (Array.isArray(args.recentMessages) ? args.recentMessages : context.recentMessages || [])
+            : [];
+        const requestedMaxAgentSteps = Number(args.maxAgentSteps || context.maxAgentSteps);
         const childContext = this.mergeDefaultContext({
             ...context,
             ...(parentLlmSettings ? { llmSettings: parentLlmSettings } : {}),
@@ -2127,8 +2184,12 @@ class AILISGateway extends EventEmitter {
             planner: 'llm',
             agentRole: 'task_agent',
             contextMode: 'task_agent',
-            cleanContext: true,
-            maxAgentSteps: Number(args.maxAgentSteps || context.maxAgentSteps || 30)
+            cleanContext: inheritanceMode === 'clean',
+            taskAgentInheritanceMode: inheritanceMode,
+            initialContextManagerCheckpoint: inheritedCheckpoint,
+            ...(Number.isFinite(requestedMaxAgentSteps) && requestedMaxAgentSteps > 0
+                ? { maxAgentSteps: requestedMaxAgentSteps }
+                : {})
         });
         await onEvent?.({
             type: 'subagent.runner.started',
@@ -2139,20 +2200,40 @@ class AILISGateway extends EventEmitter {
                 sessionId: subagent?.childSessionId
             }
         });
-        const runPromise = this.ensureAgentRunner().runMessage({
+        const agentRunner = this.ensureAgentRunner();
+        const runPromise = agentRunner.runMessage({
             runId: subagent?.childRunId,
             message: task,
-            messageHistory: [],
+            messageHistory: recentMessages,
             sessionId: subagent?.childSessionId || context.sessionId || context.sessionKey,
             agentLoop: 'llm',
             planner: 'llm',
             agentRole: 'task_agent',
             ...(parentLlmSettings ? { llmSettings: parentLlmSettings } : {}),
-            maxAgentSteps: Number(args.maxAgentSteps || context.maxAgentSteps || 30),
+            taskAgentInheritanceMode: inheritanceMode,
+            initialContextManagerCheckpoint: inheritedCheckpoint,
+            initialStepResults: Array.isArray(args.initialStepResults) ? args.initialStepResults : [],
+            ...(Number.isFinite(requestedMaxAgentSteps) && requestedMaxAgentSteps > 0
+                ? { maxAgentSteps: requestedMaxAgentSteps }
+                : {}),
             context: childContext
         });
-        const result = signal
-            ? await new Promise((resolve, reject) => {
+        const unregisterInputHandler = typeof registerInputHandler === 'function'
+            ? registerInputHandler((message) => {
+                  const delivered = agentRunner.enqueueRunInput({
+                      runId: subagent?.childRunId,
+                      sessionId: subagent?.childSessionId || context.sessionId || context.sessionKey,
+                      message
+                  });
+                  if (!delivered) {
+                      throw new Error('TaskAgent input queue is not available for this run.');
+                  }
+              })
+            : () => {};
+        let result;
+        try {
+            result = signal
+                ? await new Promise((resolve, reject) => {
                   if (signal.aborted) {
                       reject(new Error('subagent run aborted'));
                       return;
@@ -2169,8 +2250,11 @@ class AILISGateway extends EventEmitter {
                           reject(error);
                       }
                   );
-              })
-            : await runPromise;
+                  })
+                : await runPromise;
+        } finally {
+            unregisterInputHandler?.();
+        }
         await onEvent?.({
             type: 'subagent.runner.finished',
             status: result?.status || 'completed',
@@ -2181,15 +2265,20 @@ class AILISGateway extends EventEmitter {
                 durationMs: result?.durationMs
             }
         });
+        const taskRunHandoff = result?.taskRunHandoff ||
+            result?.task_run_handoff ||
+            result?.handoff ||
+            null;
         return {
             ok: result?.ok === true,
             status: result?.status || (result?.ok === false ? 'failed' : 'completed'),
             runId: result?.runId,
             mode: result?.mode,
             intent: result?.intent,
-            displayText: result?.displayText || result?.speechText || '',
-            speechText: result?.speechText || result?.displayText || '',
+            displayText: taskRunHandoff?.userVisibleSummary || result?.displayText || result?.speechText || '',
+            speechText: result?.speechText || taskRunHandoff?.userVisibleSummary || result?.displayText || '',
             durationMs: result?.durationMs,
+            taskRunHandoff,
             steps: result?.steps || [],
             plan: result?.plan || []
         };

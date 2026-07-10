@@ -77,7 +77,65 @@ function stripImagesFromFunctionOutput(payload = '') {
 }
 
 function isToolOutputItem(item = {}) {
-    return item?.type === 'function_call_output' || item?.type === 'custom_tool_call_output';
+    return item?.type === 'function_call_output' ||
+        item?.type === 'custom_tool_call_output' ||
+        item?.type === 'tool_search_output';
+}
+
+function messageText(item = {}) {
+    if (item?.type !== 'message') {
+        return '';
+    }
+    return (Array.isArray(item.content) ? item.content : [])
+        .map((part) => String(part?.text || part?.content || ''))
+        .filter(Boolean)
+        .join('\n')
+        .trim();
+}
+
+function isRuntimeContextMessage(item = {}) {
+    const text = messageText(item);
+    return item?.role === 'user' && /"type"\s*:\s*"context"/.test(text);
+}
+
+function uniqueMessages(items = []) {
+    const seen = new Set();
+    return (Array.isArray(items) ? items : []).filter((item) => {
+        const key = `${item?.role || ''}:${messageText(item)}`;
+        if (!messageText(item) || seen.has(key)) {
+            return false;
+        }
+        seen.add(key);
+        return true;
+    });
+}
+
+function normalizeManifestList(value = [], maxItems = 16) {
+    return (Array.isArray(value) ? value : [])
+        .slice(-maxItems)
+        .map((entry) => normalizeContextPackageValue(entry, 1200))
+        .filter(Boolean);
+}
+
+function collectRecentCallOutputPairs(items = [], pairLimit = 4) {
+    const calls = new Map();
+    for (const item of Array.isArray(items) ? items : []) {
+        if (isCallItem(item) && callIdOf(item)) {
+            calls.set(callIdOf(item), item);
+        }
+    }
+    const pairs = [];
+    for (let index = items.length - 1; index >= 0 && pairs.length < pairLimit; index -= 1) {
+        const output = items[index];
+        if (!isOutputItem(output) || !callIdOf(output)) {
+            continue;
+        }
+        const call = calls.get(callIdOf(output));
+        if (call) {
+            pairs.push([cloneJson(call), cloneJson(output)]);
+        }
+    }
+    return pairs.reverse().flat();
 }
 
 function isPinnedCompleteObservationText(text = '') {
@@ -355,6 +413,7 @@ class ContextManager {
     contextBudgetReport(options = {}) {
         return buildContextBudgetReport({
             staticPrefix: options.staticPrefix || '',
+            instructions: options.instructions || '',
             goal: options.goal || '',
             runtimeEnvironment: options.runtimeEnvironment || null,
             taskState: options.taskState || null,
@@ -362,6 +421,7 @@ class ContextManager {
             tokenInfo: this.token_info,
             recentResponseItems: this.items,
             toolSummary: options.toolSummary || null,
+            toolSchemas: options.toolSchemas || options.tools || null,
             pinnedEvidenceManifest: options.pinnedEvidenceManifest || options.evidenceManifest || null,
             availableOutputRefs: collectAvailableOutputRefs(this.items)
         }, options.budgetConfig || options.contextBudget || {});
@@ -405,6 +465,102 @@ class ContextManager {
         };
     }
 
+    buildSemanticCompactedItem(options = {}) {
+        const packageBefore = this.buildContextPackage(options);
+        const contextMessages = this.items.filter(isRuntimeContextMessage).slice(0, 1);
+        const userMessages = uniqueMessages(this.items.filter((item) =>
+            item?.type === 'message' && item?.role === 'user' && !isRuntimeContextMessage(item)
+        ));
+        const originalTaskText = String(options.goal || messageText(userMessages[0]) || '').trim();
+        const originalTask = originalTaskText
+            ? ResponseItem.message({
+                  role: 'user',
+                  content: [{ type: 'input_text', text: originalTaskText }]
+              })
+            : null;
+        const recentUserMessages = userMessages
+            .filter((item) => messageText(item) !== originalTaskText)
+            .slice(-2)
+            .map(cloneJson);
+        const checkpoint = {
+            schema: 'ailis.semantic_context_checkpoint.v1',
+            reason: String(options.compactionReason || packageBefore.budgetReport.level || 'context_budget'),
+            originalGoalPreservedVerbatim: Boolean(originalTaskText),
+            originalGoal: originalTaskText,
+            constraints: normalizeManifestList(options.constraints || options.taskState?.constraints || [], 24),
+            currentPlan: normalizeContextPackageValue(
+                options.currentPlan || options.taskState?.currentPlan || options.taskState?.plan || null,
+                5000
+            ),
+            unresolvedFields: normalizeManifestList(
+                options.unresolvedFields || options.taskState?.unresolvedFields || [],
+                24
+            ),
+            taskState: normalizeContextPackageValue(options.taskState || null, 5000),
+            evidenceManifest: normalizeManifestList(
+                options.pinnedEvidenceManifest || options.evidenceManifest || [],
+                16
+            ),
+            outputRefs: packageBefore.availableOutputRefs.slice(-24),
+            droppedItemsManifest: packageBefore.droppedItemsManifest,
+            instruction: 'Continue the same task from this checkpoint. Do not repeat completed work. Use the preserved original task and constraints as the authority.'
+        };
+        const checkpointMessage = ResponseItem.message({
+            role: 'user',
+            content: [{
+                type: 'input_text',
+                text: `<ailis_context_checkpoint>\n${JSON.stringify(checkpoint)}\n</ailis_context_checkpoint>`
+            }]
+        });
+        const recentPairs = collectRecentCallOutputPairs(
+            packageBefore.recentResponseItems,
+            Number(options.recentToolPairs || 4)
+        );
+        const replacementHistory = [
+            ...contextMessages.map(cloneJson),
+            originalTask,
+            ...recentUserMessages,
+            checkpointMessage,
+            ...recentPairs
+        ].filter(Boolean);
+        return {
+            message: `Semantic context checkpoint created for: ${summarizeForModel(originalTaskText, 240)}`,
+            replacement_history: replacementHistory,
+            checkpoint,
+            packageBefore
+        };
+    }
+
+    semanticCompact(options = {}) {
+        this.normalizeHistory(options.inputModalities || []);
+        const packageBefore = this.forPromptPackage(options);
+        const shouldCompact = options.force === true ||
+            packageBefore.budgetReport.level === 'hard' ||
+            packageBefore.budgetReport.level === 'stop';
+        if (!shouldCompact) {
+            return {
+                compacted: false,
+                packageBefore,
+                packageAfter: packageBefore,
+                historyVersion: this.history_version
+            };
+        }
+        const compactedItem = this.buildSemanticCompactedItem({
+            ...options,
+            compactionReason: options.compactionReason || packageBefore.budgetReport.level
+        });
+        this.replaceCompactedHistory(compactedItem, this.reference_context_item);
+        const packageAfter = this.forPromptPackage(options);
+        return {
+            compacted: true,
+            reason: compactedItem.checkpoint.reason,
+            checkpoint: compactedItem.checkpoint,
+            packageBefore,
+            packageAfter,
+            historyVersion: this.history_version
+        };
+    }
+
     normalizeHistory(inputModalities = []) {
         this.ensureCallOutputsPresent();
         this.removeOrphanOutputs();
@@ -440,6 +596,12 @@ class ContextManager {
         this.items = this.items.map((item, index) => {
             if (!isToolOutputItem(item) || recent.has(index) || pinned.has(index)) {
                 return cloneJson(item);
+            }
+            if (item.type === 'tool_search_output') {
+                return {
+                    ...cloneJson(item),
+                    tools: (Array.isArray(item.tools) ? item.tools : []).slice(0, 5)
+                };
             }
             return {
                 ...cloneJson(item),

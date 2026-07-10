@@ -33,6 +33,7 @@ const {
     parseAilisDirectMcpToolId
 } = require('./ailis-mcp-adapter.cjs');
 const {
+    DEFAULT_CONTEXT_INPUT_LIMIT_TOKENS,
     approxTokenCount,
     compactToolSchema,
     summarizeForModel,
@@ -128,7 +129,7 @@ Do not actively use persona_output, persona_surface, character actions, expressi
 
 ## Task execution
 
-You are a coding agent. Please keep going until the query is completely resolved, before ending your turn and yielding back to the user. Only terminate your turn when you are sure that the problem is solved. Autonomously resolve the query to the best of your ability, using the tools available to you, before coming back to the user. Do NOT guess or make up an answer.
+You are a coding agent. Continue only while a concrete tool call or reasoning step can advance the task. When the available evidence supports the requested result, answer immediately instead of searching for optional completeness. Do NOT guess or make up an answer.
 
 You MUST adhere to the following criteria when solving queries:
 
@@ -281,6 +282,7 @@ const AGENT_TOOL_CATALOG = Object.freeze([
 const AGENT_MCP_CATALOG = Object.freeze([
     Object.freeze({ id: 'mcp_bridge', label: 'MCP Bridge', summary: '发现 MCP servers/tool specs/resources/prompts；普通网页、PDF、GitHub、数据库取证任务应先获得 mcp__server__tool direct spec，再直接调用。' })
 ]);
+const VISION_NATIVE_TOOL_NAME = 'vision_capture_context';
 const CAPABILITY_ID_ALIASES = new Map([
     ['mail', 'email'],
     ['gmail', 'email'],
@@ -1057,6 +1059,87 @@ function looksLikeArtifactAnswerQuestion({ message = '', fileAttachments = [] } 
     return /[?？]|\bwhat\b|\bwhich\b|\bhow many\b|\bwhere\b|\bwhen\b|\bwho\b|\bfind\b|\banswer\b|是什么|是哪|哪个|多少|几|答案|求出|找出|颜色|hex code/i.test(text);
 }
 
+function firstPositiveNumber(values = [], fallback = 0) {
+    for (const value of Array.isArray(values) ? values : []) {
+        const numeric = Number(value);
+        if (Number.isFinite(numeric) && numeric > 0) {
+            return numeric;
+        }
+    }
+    return fallback;
+}
+
+function resolveModelContextWindowTokens(settings = {}, requestContext = {}, tokenInfo = null) {
+    const capabilities = settings.capabilities && typeof settings.capabilities === 'object'
+        ? settings.capabilities
+        : {};
+    const contextCapabilities = requestContext.modelCapabilities && typeof requestContext.modelCapabilities === 'object'
+        ? requestContext.modelCapabilities
+        : {};
+    const configured = firstPositiveNumber([
+        requestContext.contextWindowTokens,
+        requestContext.context_window_tokens,
+        requestContext.modelContextWindowTokens,
+        requestContext.maxContextTokens,
+        settings.contextWindowTokens,
+        settings.context_window_tokens,
+        settings.modelContextWindowTokens,
+        settings.maxContextTokens,
+        contextCapabilities.contextWindowTokens,
+        contextCapabilities.context_window_tokens,
+        capabilities.contextWindowTokens,
+        capabilities.context_window_tokens,
+        tokenInfo?.contextWindowTokens,
+        tokenInfo?.context_window_tokens
+    ]);
+    if (configured > 0) {
+        return {
+            tokens: Math.round(configured),
+            source: 'provider_or_model_configuration'
+        };
+    }
+    const environmentValue = firstPositiveNumber([
+        process.env.AILIS_LLM_CONTEXT_WINDOW_TOKENS,
+        process.env.AILIS_AGENT_CONTEXT_WINDOW_TOKENS
+    ]);
+    if (environmentValue > 0) {
+        return {
+            tokens: Math.round(environmentValue),
+            source: 'environment_configuration'
+        };
+    }
+    return {
+        tokens: DEFAULT_CONTEXT_INPUT_LIMIT_TOKENS,
+        source: 'conservative_runtime_fallback'
+    };
+}
+
+function buildAgentContextBudgetConfig(settings = {}, requestContext = {}, tokenInfo = null) {
+    const contextWindow = resolveModelContextWindowTokens(settings, requestContext, tokenInfo);
+    return {
+        inputLimitTokens: contextWindow.tokens,
+        reservedOutputTokens: firstPositiveNumber([
+            requestContext.reservedOutputTokens,
+            requestContext.reserved_output_tokens,
+            settings.reservedOutputTokens,
+            settings.maxOutputTokens,
+            settings.max_tokens
+        ], 4096),
+        // Instructions and schemas are measured explicitly in the context package.
+        systemReserveTokens: 0,
+        softRatio: Number(requestContext.contextSoftRatio ?? settings.contextSoftRatio ?? 0.55),
+        hardRatio: Number(requestContext.contextHardRatio ?? settings.contextHardRatio ?? 0.70),
+        stopRatio: Number(requestContext.contextStopRatio ?? settings.contextStopRatio ?? 0.86),
+        providerInputTokens: firstPositiveNumber([
+            tokenInfo?.promptTokens,
+            tokenInfo?.prompt_tokens,
+            tokenInfo?.inputTokens,
+            tokenInfo?.input_tokens
+        ]),
+        contextWindowSource: contextWindow.source
+    };
+}
+
 function normalizeFinalAnswerConfidence(value) {
     const confidence = normalizeText(value).toLowerCase();
     if (/^(high|sure|certain|confident|高)/.test(confidence)) {
@@ -1245,6 +1328,58 @@ function getToolResultDetails(stepResult = {}) {
         entry?.details?.structured_content && typeof entry.details.structured_content === 'object' ? entry.details.structured_content : null
     ]).filter(Boolean);
     return [...candidates, ...nestedCandidates].reduce((merged, entry) => ({ ...merged, ...entry }), {});
+}
+
+function collectAgentUnresolvedFields(stepResults = [], latestDecision = null) {
+    const values = [];
+    const push = (value) => {
+        if (Array.isArray(value)) {
+            value.forEach(push);
+            return;
+        }
+        const text = normalizeText(value);
+        if (text && !values.includes(text)) {
+            values.push(text);
+        }
+    };
+    for (const stepResult of (Array.isArray(stepResults) ? stepResults : []).slice(-8)) {
+        const details = getToolResultDetails(stepResult);
+        push(details.missing_fields || details.missingFields);
+        push(details.evidence_gap || details.evidenceGap);
+        if (stepResult.response?.ok === false) {
+            push(stepResult.response.error || details.error);
+        }
+    }
+    push(latestDecision?.missingFields || latestDecision?.missing_fields);
+    push(latestDecision?.blockedReason);
+    return values.slice(-24);
+}
+
+function buildAgentTaskState({
+    runId = '',
+    stepResults = [],
+    latestDecision = null,
+    currentPlan = null,
+    constraints = []
+} = {}) {
+    const successfulSteps = (Array.isArray(stepResults) ? stepResults : [])
+        .filter((stepResult) => stepResult?.response?.ok === true);
+    const failedSteps = (Array.isArray(stepResults) ? stepResults : [])
+        .filter((stepResult) => stepResult?.response?.ok === false);
+    return {
+        schema: 'ailis.agent_task_state.v1',
+        runId,
+        currentPlan: currentPlan || null,
+        constraints: Array.isArray(constraints) ? constraints.slice(-24) : [],
+        unresolvedFields: collectAgentUnresolvedFields(stepResults, latestDecision),
+        progress: {
+            toolCalls: stepResults.length,
+            successfulToolCalls: successfulSteps.length,
+            failedToolCalls: failedSteps.length,
+            latestAction: normalizeText(latestDecision?.action || latestDecision?.status),
+            latestSummary: summarizeForModel(latestDecision?.summary || '', 500)
+        }
+    };
 }
 
 function normalizeEvidenceBoolean(value, fallback = false) {
@@ -3801,6 +3936,54 @@ function validateAgentToolLoopGuard(step = {}, stepResults = [], requestContext 
     };
 }
 
+function toolProgressFingerprint(stepResult = {}) {
+    const tool = canonicalDirectToolId(stepResult?.tool);
+    const args = stepResult?.args && typeof stepResult.args === 'object' ? stepResult.args : {};
+    const target = getWebToolRepeatTarget(stepResult);
+    const evidenceRefs = getStepEvidenceRefs(stepResult).slice().sort();
+    const outputId = normalizeText(
+        stepResult?.response?.result?.details?.outputId ||
+        stepResult?.response?.result?.details?.output_id ||
+        stepResult?.response?.details?.outputId
+    );
+    return JSON.stringify({
+        tool,
+        target: target?.key || '',
+        args: target ? null : sanitizeToolArgsForPrompt(args),
+        ok: stepResult?.response?.ok === true,
+        status: normalizeText(stepResult?.response?.status),
+        evidenceRefs,
+        outputId
+    });
+}
+
+function detectAgentNoProgress(stepResults = [], requestContext = {}) {
+    if (requestContext.disableNoProgressFuse === true) {
+        return '';
+    }
+    const windowSize = Math.max(3, Math.min(Number(requestContext.noProgressWindow || 4), 8));
+    const recent = (Array.isArray(stepResults) ? stepResults : []).slice(-windowSize);
+    if (recent.length < windowSize) {
+        return '';
+    }
+    const guardFailures = recent.filter((stepResult) =>
+        normalizeText(stepResult?.response?.status) === 'tool_loop_guard'
+    ).length;
+    if (guardFailures >= Math.min(3, windowSize)) {
+        return 'repeated_tool_loop_guard';
+    }
+    const fingerprints = recent.map(toolProgressFingerprint);
+    if (new Set(fingerprints).size === 1) {
+        return 'repeated_identical_observation';
+    }
+    const evidenceRefs = new Set(recent.flatMap(getStepEvidenceRefs));
+    const allFailed = recent.every((stepResult) => stepResult?.response?.ok !== true);
+    if (allFailed && evidenceRefs.size === 0) {
+        return 'consecutive_failures_without_evidence';
+    }
+    return '';
+}
+
 function looksLikeWholeFileEditFileArgs(args = {}) {
     if (!args || typeof args !== 'object' || Array.isArray(args)) {
         return false;
@@ -4129,6 +4312,9 @@ function sanitizeAgentToolCall(toolCall, index, phase = 'execute') {
     const sanitized = sanitizeLlmStep(candidate, index);
     if (!sanitized) {
         return null;
+    }
+    if (sanitized.tool === VISION_NATIVE_TOOL_NAME) {
+        sanitized.tool = VISION_TOOL_ID;
     }
     if (sanitized.tool === 'computer') {
         return sanitizeComputerPlannerStep(sanitized, index, phase);
@@ -4511,6 +4697,232 @@ function buildToolResultEvent(stepResult) {
     });
 }
 
+function extractHandoffOutputId(details = {}, result = {}) {
+    return normalizeText(
+        details.outputId ||
+            details.output_id ||
+            details.outputStore?.outputId ||
+            details.outputStore?.id ||
+            details.output_store?.outputId ||
+            details.output_store?.id ||
+            result?.details?.outputId ||
+            result?.structuredContent?.outputId
+    );
+}
+
+function extractHandoffArtifactId(details = {}, result = {}) {
+    return normalizeText(
+        details.artifactId ||
+            details.artifact_id ||
+            details.contextArtifact?.id ||
+            details.context_artifact?.id ||
+            details.artifact?.id ||
+            result?.details?.artifactId ||
+            result?.structuredContent?.artifactId
+    );
+}
+
+function summarizeStepResultForHandoff(stepResult = {}, index = 0) {
+    const response = stepResult.response || {};
+    const result = response.result || {};
+    const details = getToolResultDetails(stepResult);
+    const resultText = extractToolResultText(result) || response.error || summarize(response, 800);
+    const evidenceRefs = getStepEvidenceRefs(stepResult);
+    const stepNumber = Number.isFinite(Number(stepResult.iteration))
+        ? Number(stepResult.iteration) + 1
+        : index + 1;
+    return {
+        step: stepNumber,
+        id: stepResult.id || '',
+        tool: stepResult.tool || '',
+        title: stepResult.title || '',
+        ok: response.ok === true,
+        status: response.status || 'unknown',
+        args: sanitizeToolArgsForPrompt(stepResult.args || null),
+        summary: summarize(resultText, response.ok === true ? 520 : 700),
+        evidenceRefs,
+        outputId: extractHandoffOutputId(details, result),
+        artifactId: extractHandoffArtifactId(details, result)
+    };
+}
+
+function buildTaskRunFailureAnalysis({ status = '', reason = '', stepResults = [], latestDecision = null } = {}) {
+    const latestFailed = [...stepResults].reverse().find((step) => step?.response && step.response.ok !== true) || null;
+    const latestFailedSummary = latestFailed
+        ? summarizeStepResultForHandoff(latestFailed, stepResults.indexOf(latestFailed))
+        : null;
+    const latestDecisionSummary = normalizeText(latestDecision?.summary);
+    const statusText = normalizeText(status).toLowerCase();
+    const reasonText = normalizeText(reason || statusText);
+    let humanReason = '任务没有形成可确认的最终结果。';
+    if (statusText === 'max_loop' || statusText === 'max_steps_reached') {
+        humanReason = '任务达到最大执行轮次，运行时已停止继续盲目调用工具。';
+    } else if (statusText === 'timeout') {
+        humanReason = '任务执行超过等待时间，运行时已保留当前进度。';
+    } else if (statusText === 'interrupted') {
+        humanReason = '任务被用户或运行时中断，已经保留中断前的上下文和工具结果。';
+    } else if (statusText === 'failed' || statusText === 'error') {
+        humanReason = latestFailedSummary?.summary || '任务执行过程中出现失败。';
+    }
+    const bottleneck = latestFailedSummary
+        ? `${latestFailedSummary.tool || '工具步骤'}：${latestFailedSummary.summary || latestFailedSummary.status}`
+        : latestDecisionSummary || humanReason;
+    return {
+        reason: humanReason,
+        rawReason: reasonText,
+        bottleneck,
+        unresolvedQuestions: latestDecisionSummary ? [latestDecisionSummary] : [],
+        latestFailedStep: latestFailedSummary,
+        likelyCause: latestFailedSummary
+            ? '最近一次工具或协议步骤没有得到可继续推理的结果。'
+            : '模型没有在当前预算内收敛到最终答案。',
+        retryable: !['cancelled'].includes(statusText)
+    };
+}
+
+function buildTaskRunHandoffDisplayText(handoff = {}) {
+    const stats = handoff.executionTrace || {};
+    const failure = handoff.failureAnalysis || {};
+    const evidence = Array.isArray(handoff.collectedData) ? handoff.collectedData : [];
+    const lines = [];
+    if (handoff.status === 'completed') {
+        return normalizeText(handoff.finalAnswer || handoff.partialAnswer || handoff.userVisibleSummary, '任务已经完成。');
+    }
+    if (handoff.status === 'max_loop') {
+        lines.push(`TaskAgent 触发了执行轮次保险丝（${stats.maxSteps || stats.stepsUsed || 0}），我先停住并整理现场，避免继续空转。`);
+    } else if (handoff.status === 'timeout') {
+        lines.push('TaskAgent 这次执行超时了，我先把已经完成的部分整理出来。');
+    } else if (handoff.status === 'interrupted') {
+        lines.push('这次任务已经中断，我把中断前的执行状态保留下来了。');
+    } else {
+        lines.push('TaskAgent 没有完成这次任务，我把失败位置和已获得的数据整理出来了。');
+    }
+    if (handoff.partialAnswer) {
+        lines.push(`目前已有结果：${handoff.partialAnswer}`);
+    }
+    if (stats.toolCalls > 0) {
+        lines.push(`执行情况：已执行 ${stats.toolCalls} 个工具步骤，其中 ${stats.successfulToolCount || 0} 个成功、${stats.failedToolCount || 0} 个失败。`);
+    }
+    if (evidence.length) {
+        const evidenceText = evidence.slice(0, 3).map((item) => {
+            const label = item.title || item.source || '工具结果';
+            const reference = item.outputId || item.artifactId || item.evidenceRefs?.[0] || '';
+            return reference ? `${label}（引用：${reference}）` : label;
+        }).filter(Boolean).join('；');
+        if (evidenceText) {
+            lines.push(`已收集到的数据：${evidenceText}`);
+        }
+    }
+    if (failure.bottleneck) {
+        lines.push(`当前卡点：${failure.bottleneck}`);
+    }
+    if (handoff.nextStep?.recommendation) {
+        lines.push(`建议下一步：${handoff.nextStep.recommendation}`);
+    }
+    return lines.filter(Boolean).join('\n');
+}
+
+function buildTaskRunHandoffPackage({
+    status = 'failed',
+    reason = '',
+    runId = '',
+    sessionId = '',
+    message = '',
+    startedAt = 0,
+    maxSteps = DEFAULT_AGENT_LOOP_STEPS,
+    stepResults = [],
+    events = [],
+    latestDecision = null,
+    finalAnswer = '',
+    partialAnswer = '',
+    contextManagerCheckpoint = null
+} = {}) {
+    const normalizedStatus = normalizeText(status, 'failed').toLowerCase();
+    const handoffStatus = normalizedStatus === 'max_steps_reached' ? 'max_loop' : normalizedStatus;
+    const safeStepResults = Array.isArray(stepResults) ? stepResults : [];
+    const safeEvents = Array.isArray(events) ? events : [];
+    const summarizedSteps = safeStepResults.map(summarizeStepResultForHandoff);
+    const successfulSteps = summarizedSteps.filter((step) => step.ok);
+    const failedSteps = summarizedSteps.filter((step) => !step.ok);
+    const collectedData = successfulSteps
+        .filter((step) => step.summary || step.evidenceRefs.length || step.outputId || step.artifactId)
+        .slice(-8)
+        .map((step) => ({
+            type: 'tool_observation',
+            title: step.title || step.tool,
+            summary: step.summary,
+            source: step.tool,
+            evidenceRefs: step.evidenceRefs,
+            outputId: step.outputId || '',
+            artifactId: step.artifactId || ''
+        }));
+    const keyEvents = summarizedSteps.slice(-12).map((step) => ({
+        step: step.step,
+        type: step.ok ? 'tool_success' : 'tool_failure',
+        summary: step.summary,
+        status: step.status,
+        tool: step.tool,
+        evidenceRefs: step.evidenceRefs
+    }));
+    const failureAnalysis = buildTaskRunFailureAnalysis({
+        status: handoffStatus,
+        reason,
+        stepResults: safeStepResults,
+        latestDecision
+    });
+    const recommendation = failedSteps.length
+        ? '先处理最近失败的工具步骤，再从当前 checkpoint 继续。'
+        : collectedData.length
+            ? '基于已收集的数据继续推理，优先收敛到答案，不要重复读取同一批资料。'
+            : '先补齐可验证的数据来源，再继续执行。';
+    const packageObject = {
+        version: 1,
+        status: handoffStatus,
+        originalStatus: normalizedStatus,
+        reason: normalizeText(reason || normalizedStatus),
+        ok: handoffStatus === 'completed',
+        runId,
+        sessionId,
+        task: normalizeText(message),
+        finalAnswer: normalizeText(finalAnswer),
+        partialAnswer: normalizeText(partialAnswer),
+        failureAnalysis,
+        executionTrace: {
+            stepsUsed: safeStepResults.length,
+            maxSteps: Number(maxSteps) || 0,
+            elapsedMs: startedAt ? Date.now() - startedAt : 0,
+            toolCalls: safeStepResults.length,
+            successfulToolCount: successfulSteps.length,
+            failedToolCount: failedSteps.length,
+            successfulTools: successfulSteps.map((step) => step.tool).filter(Boolean).slice(-12),
+            failedTools: failedSteps.map((step) => step.tool).filter(Boolean).slice(-12),
+            lastDecisionSummary: normalizeText(latestDecision?.summary),
+            lastDecisionAction: normalizeText(latestDecision?.action || latestDecision?.status)
+        },
+        collectedData,
+        keyEvents,
+        nextStep: {
+            recommendation,
+            resumeFrom: safeStepResults.length,
+            suggestedTool: failedSteps[failedSteps.length - 1]?.tool || '',
+            needsUserInput: false
+        },
+        resume: {
+            runId,
+            sessionId,
+            lastStepIndex: Math.max(0, safeStepResults.length - 1),
+            contextManagerCheckpoint: contextManagerCheckpoint || null,
+            checkpointAvailable: Boolean(contextManagerCheckpoint)
+        },
+        traceRef: runId,
+        eventCount: safeEvents.length
+    };
+    return {
+        ...packageObject,
+        userVisibleSummary: buildTaskRunHandoffDisplayText(packageObject)
+    };
+}
+
 function extractSubagentHandoffOutcome(stepResult = {}) {
     const response = stepResult.response || {};
     const toolResult = response.result || {};
@@ -4545,13 +4957,21 @@ function extractSubagentHandoffOutcome(stepResult = {}) {
         response,
         toolText
     }));
+    const taskRunHandoff = childResult.taskRunHandoff ||
+        childResult.task_run_handoff ||
+        payload.taskRunHandoff ||
+        payload.task_run_handoff ||
+        subagent.result?.taskRunHandoff ||
+        subagent.result?.task_run_handoff ||
+        null;
     return {
         ok,
         status,
         displayText,
         childResult,
         subagent,
-        payload
+        payload,
+        taskRunHandoff
     };
 }
 
@@ -4916,10 +5336,14 @@ function resolveCanonicalRuntimeToolSpec(gateway, entry = {}) {
     for (const registry of registries) {
         const definition = registry?.definition?.(toolId);
         if (definition?.spec) {
-            return normalizeNativeToolSpec({
+            const normalizedSpec = normalizeNativeToolSpec({
                 ...definition.spec,
+                ...(toolId === VISION_TOOL_ID ? { name: VISION_NATIVE_TOOL_NAME } : {}),
                 defer_loading: false
             });
+            if (normalizedSpec) {
+                return normalizedSpec;
+            }
         }
     }
     return null;
@@ -4976,24 +5400,26 @@ function canonicalDirectToolId(value = '') {
     if (!normalized) {
         return '';
     }
+    if (normalized === VISION_NATIVE_TOOL_NAME) {
+        return VISION_TOOL_ID;
+    }
     const parsedMcp = parseAilisDirectMcpToolId(normalized);
     return parsedMcp?.id || normalized;
 }
 
 const PERSONA_TASKAGENT_HANDOFF_RUN_TIMEOUT_MS = 15 * 60 * 1000;
 const PERSONA_TASKAGENT_HANDOFF_WAIT_TIMEOUT_MS = PERSONA_TASKAGENT_HANDOFF_RUN_TIMEOUT_MS;
-const PERSONA_TASKAGENT_HANDOFF_MAX_STEPS = 30;
 
-function isSubagentSpawnStep(step = {}) {
+function isSubagentHandoffStep(step = {}) {
     if (canonicalDirectToolId(step?.tool) !== 'subagents') {
         return false;
     }
     const action = normalizeText(step.args?.action || 'spawn').toLowerCase();
-    return ['spawn', 'create'].includes(action);
+    return ['spawn', 'create', 'send', 'steer', 'resume'].includes(action);
 }
 
 function normalizePersonaTaskAgentHandoffStep(step = {}, request = {}) {
-    if (!isSubagentSpawnStep(step)) {
+    if (!isSubagentHandoffStep(step)) {
         return step;
     }
     const args = step.args && typeof step.args === 'object' ? { ...step.args } : {};
@@ -5007,7 +5433,6 @@ function normalizePersonaTaskAgentHandoffStep(step = {}, request = {}) {
     }
     const existingWaitTimeoutMs = Number(args.waitTimeoutMs || args.timeoutMs);
     const existingRunTimeoutMs = Number(args.runTimeoutMs);
-    const existingMaxAgentSteps = Number(args.maxAgentSteps);
     const runTimeoutMs = Number.isFinite(existingRunTimeoutMs) && existingRunTimeoutMs > 0
         ? Math.max(existingRunTimeoutMs, PERSONA_TASKAGENT_HANDOFF_RUN_TIMEOUT_MS)
         : PERSONA_TASKAGENT_HANDOFF_RUN_TIMEOUT_MS;
@@ -5020,10 +5445,7 @@ function normalizePersonaTaskAgentHandoffStep(step = {}, request = {}) {
             waitTimeoutMs: Number.isFinite(existingWaitTimeoutMs) && existingWaitTimeoutMs > 0
                 ? Math.max(existingWaitTimeoutMs, runTimeoutMs, PERSONA_TASKAGENT_HANDOFF_WAIT_TIMEOUT_MS)
                 : runTimeoutMs,
-            runTimeoutMs,
-            maxAgentSteps: Number.isFinite(existingMaxAgentSteps) && existingMaxAgentSteps > 0
-                ? Math.max(existingMaxAgentSteps, PERSONA_TASKAGENT_HANDOFF_MAX_STEPS)
-                : PERSONA_TASKAGENT_HANDOFF_MAX_STEPS
+            runTimeoutMs
         }
     };
 }
@@ -5038,6 +5460,23 @@ function buildPersonaTaskAgentHandoffDisplayText({
     toolText = ''
 } = {}) {
     const normalizedStatus = normalizeText(status, ok ? 'completed' : 'failed');
+    const taskRunHandoff = childResult.taskRunHandoff ||
+        childResult.task_run_handoff ||
+        payload.taskRunHandoff ||
+        payload.task_run_handoff ||
+        subagent.result?.taskRunHandoff ||
+        subagent.result?.task_run_handoff ||
+        null;
+    if (taskRunHandoff && typeof taskRunHandoff === 'object') {
+        const handoffText = normalizeText(
+            taskRunHandoff.userVisibleSummary ||
+                taskRunHandoff.finalAnswer ||
+                taskRunHandoff.partialAnswer
+        );
+        if (handoffText) {
+            return handoffText;
+        }
+    }
     if (normalizedStatus === 'running') {
         const task = summarize(normalizeText(subagent.task || payload.task), 180);
         return [
@@ -5860,15 +6299,21 @@ function buildLlmAgentDirectToolPrompt({
     promptProfile = null,
     tools = [],
     contextMode = 'persona',
-    parallelToolCalls = false
+    parallelToolCalls = false,
+    taskAgentInheritanceMode = 'clean',
+    contextBudgetConfig = {},
+    taskState = null,
+    constraints = [],
+    evidenceManifest = [],
+    currentPlan = null,
+    unresolvedFields = [],
+    safetyFinalizationReason = ''
 }) {
     const activePromptProfile = promptProfile || resolveAgentPromptProfile();
     const taskAgentMode = normalizeText(contextMode).toLowerCase() === 'task_agent';
-    const modelMessageHistory = taskAgentMode ? [] : messageHistory;
-    const capabilityCatalog = buildAgentCapabilityCatalog({
-        compact: activePromptProfile.compact,
-        role: taskAgentMode ? 'task_agent' : 'persona_orchestrator'
-    });
+    const inheritanceMode = normalizeText(taskAgentInheritanceMode, 'clean').toLowerCase();
+    const modelMessageHistory = taskAgentMode && inheritanceMode === 'clean' ? [] : messageHistory;
+    const capabilityCatalog = null;
     const toolOutputChars = activePromptProfile.compact ? 12000 : 24000;
     const instructions = [
         taskAgentMode ? AILIS_TASK_AGENT_SYSTEM_PROMPT : AILIS_SYSTEM_PROMPT,
@@ -5886,14 +6331,16 @@ function buildLlmAgentDirectToolPrompt({
         'For long-running work, you may attach progress_note to a tool call or include a short public progress sentence only at meaningful milestones: plan changed, key evidence found, strategy changed after failure, blocker/recovery identified, or evidence is sufficient and you are preparing the final answer. Leave progress_note empty for routine tool calls. Do not expose raw JSON, hidden reasoning, internal IDs, stack traces, token counts, or generic "I am thinking" text.',
         taskAgentMode
             ? 'You may call subagents to delegate an independent subtask to a fresh TaskAgent child. A child TaskAgent starts with a clean message history and does not inherit your prior tool observations; use it for isolated subtasks whose result can be summarized back to you, not for every simple local operation.'
-            : 'You are the user-facing AILIS persona. For ordinary conversation, answer directly. If the current user message is a task execution request, do not solve it in the persona layer and do not spend time planning; immediately call subagents exactly once with action=spawn, wait=true, and task/message containing the whole user task. The subagent task must preserve the user request verbatim first, especially units, date ranges, answer shape, rounding rules, file paths, URLs, and constraints; do not replace it with a lossy summary. Then present the TaskAgent result. Treat file analysis, code/data/math simulation, web research, computer operation, benchmarks, and GAIA-style questions as task execution. Do not inspect tools yourself or spawn multiple children for the same user task.',
+            : 'You are the user-facing AILIS persona. For ordinary conversation, answer directly. For a new task execution request, hand the whole task to one TaskAgent with subagents action=spawn and wait=true. If the user is continuing, correcting, or narrowing the immediately preceding TaskAgent task, use subagents action=send with wait=true; subagentId may be omitted to resume the latest TaskAgent in this session. Preserve the current user message verbatim, especially units, date ranges, answer shape, rounding rules, file paths, URLs, and constraints. Then present the TaskAgent result. Do not inspect task tools yourself or create multiple children for one task.',
         'When a tool result says complete=true, truncated=false, reasoning_ready=true, or presents a Source viewport with line ranges/has-more markers, treat it like a Codex source viewport: answer from it if it covers the question. A <truncated omitted_approx_tokens="..."/> marker means model-visible context was shortened, not that the source failed. Continue only when a concrete required field is still missing. Older exploratory observations may be compacted; rely on the latest evidence or write a focused verifier.',
         'When exec output is truncated, use the visible outputId with output_read/output_tail/output_search to inspect a needed slice. Do not rerun the same command solely to recover truncated text.',
         'Runtime environment and attached file metadata are provided as ordinary user message context items. Use them for path and shell decisions.',
         exactAnswerMode
             ? `Exact-answer mode: when the answer is complete, provide the shortest exact answer in the final assistant message${toolSummary.includes(FINAL_ANSWER_TOOL_NAME) ? ` or call ${FINAL_ANSWER_TOOL_NAME} if that tool is exposed as the submission endpoint` : ''}.`
             : '',
-        `Max tool rounds: ${maxSteps}`,
+        safetyFinalizationReason
+            ? `Runtime safety budget reached (${safetyFinalizationReason}). Do not call another work tool. Produce the best supported final answer from the preserved task state and evidence, or clearly state the remaining blocker.`
+            : '',
         `Tool summary: ${toolSummary || 'Direct tools are exposed as native function tools. Search more tools with tool_search.'}`
     ].filter(Boolean).join('\n');
     const activeContextManager = contextManager && typeof contextManager.forPrompt === 'function'
@@ -5906,10 +6353,30 @@ function buildLlmAgentDirectToolPrompt({
             fileAttachments: getAttachedFilesPromptObject(fileAttachments),
             runtimeEnvironment,
             capabilityCatalog,
-            externalToolExposure,
+            externalToolExposure: null,
             toolOutputChars
     });
-    const input = activeContextManager.forPrompt();
+    const contextPackageOptions = {
+        instructions,
+        staticPrefix: instructions,
+        goal: message,
+        runtimeEnvironment,
+        taskState,
+        constraints,
+        currentPlan,
+        unresolvedFields,
+        pinnedEvidenceManifest: evidenceManifest,
+        toolSummary,
+        toolSchemas: tools,
+        budgetConfig: contextBudgetConfig
+    };
+    let contextPackage = activeContextManager.forPromptPackage(contextPackageOptions);
+    let semanticCompaction = null;
+    if (taskAgentMode && ['hard', 'stop'].includes(contextPackage.budgetReport.level)) {
+        semanticCompaction = activeContextManager.semanticCompact(contextPackageOptions);
+        contextPackage = semanticCompaction.packageAfter;
+    }
+    const input = contextPackage.recentResponseItems;
     const prompt = Prompt.create({
         input,
         tools,
@@ -5923,6 +6390,8 @@ function buildLlmAgentDirectToolPrompt({
         tools: requestPayload.tools,
         prompt,
         contextManager: activeContextManager,
+        contextPackage,
+        semanticCompaction,
         messages: responseItemsToChatMessages({
             instructions: requestPayload.instructions,
             input: requestPayload.input
@@ -5945,6 +6414,29 @@ function buildLlmAgentDirectToolPrompt({
     };
 }
 
+function appendUserInputToContextManager(contextManager, text = '') {
+    const normalized = normalizeText(text);
+    if (!contextManager || !normalized || typeof contextManager.recordItems !== 'function') {
+        return false;
+    }
+    const latestUserText = [...(contextManager.rawItems?.() || [])]
+        .reverse()
+        .find((item) => item?.type === 'message' && item?.role === 'user')
+        ?.content
+        ?.map((part) => normalizeText(part?.text || part?.content))
+        .filter(Boolean)
+        .join('\n') || '';
+    if (normalizeText(latestUserText) === normalized) {
+        return false;
+    }
+    contextManager.recordItems([{
+        type: 'message',
+        role: 'user',
+        content: [{ type: 'input_text', text: normalized }]
+    }]);
+    return true;
+}
+
 function findNativeToolSpec(toolName = '', tools = []) {
     const normalizedName = normalizeText(toolName);
     if (!normalizedName || !Array.isArray(tools)) {
@@ -5964,6 +6456,9 @@ function validateNativeDirectToolCall(toolCall = {}, tools = []) {
     const errors = [];
     if (!name) {
         errors.push('native tool call is missing name');
+    }
+    if (name && !spec) {
+        errors.push(`native tool call ${name} is not exposed for this request`);
     }
     if (toolCall.arguments === undefined || toolCall.arguments === null || typeof toolCall.arguments !== 'object' || Array.isArray(toolCall.arguments)) {
         errors.push('native tool call arguments must be a JSON object');
@@ -6493,6 +6988,36 @@ class AILISAgentRunner {
         };
         this.activeRuns.set(id, nextRecord);
         return nextRecord;
+    }
+
+    enqueueRunInput({ runId = '', sessionId = '', message = '' } = {}) {
+        const record = this.findActiveRun({ runId, sessionId });
+        const text = normalizeText(message);
+        if (!record || !text) {
+            return false;
+        }
+        record.pendingInputs = Array.isArray(record.pendingInputs) ? record.pendingInputs : [];
+        record.pendingInputs.push({
+            id: randomUUID(),
+            ts: Date.now(),
+            message: text
+        });
+        if (record.pendingInputs.length > 32) {
+            record.pendingInputs = record.pendingInputs.slice(-32);
+        }
+        this.activeRuns.set(record.runId, record);
+        return true;
+    }
+
+    drainRunInputs(runId = '') {
+        const record = this.activeRuns.get(normalizeText(runId));
+        if (!record || !Array.isArray(record.pendingInputs) || !record.pendingInputs.length) {
+            return [];
+        }
+        const pendingInputs = record.pendingInputs.slice();
+        record.pendingInputs = [];
+        this.activeRuns.set(record.runId, record);
+        return pendingInputs;
     }
 
     findActiveRun({ runId = '', sessionId = '' } = {}) {
@@ -7371,11 +7896,20 @@ class AILISAgentRunner {
             if (!interruptState.interrupted) {
                 return null;
             }
-            const displayText = [
-                '已中断当前 Agent 对话/任务。',
-                '已经产生的上下文、模型调用、工具结果和时间线都会保留在本次 run 的 transcript 里，可继续在分析台查看。',
-                latestDecision?.summary ? `中断前最近一轮判断：${latestDecision.summary}` : ''
-            ].filter(Boolean).join('\n');
+            const taskRunHandoff = buildTaskRunHandoffPackage({
+                status: 'interrupted',
+                reason: interruptState.reason || 'user_interrupt',
+                runId,
+                sessionId,
+                message,
+                startedAt,
+                maxSteps,
+                stepResults,
+                events,
+                latestDecision,
+                contextManagerCheckpoint: contextManagerCheckpoint('interrupted', stepResults.length)
+            });
+            const displayText = taskRunHandoff.userVisibleSummary;
             const interruptedEvent = {
                 type: 'agent_interrupted',
                 status: 'interrupted',
@@ -7427,13 +7961,19 @@ class AILISAgentRunner {
                 speechText: displayText.replace(/\n/g, ' '),
                 plan: [],
                 steps: stepResults,
-                events
-            }, renderStatusSurface({
+                events,
+                taskRunHandoff
+            }, renderPersonaSurfaceGateway({
                 text: displayText,
-                status: 'interrupted',
+                task_state: 'blocked',
+                approval_state: 'none',
+                evidence_state: stepResults.length > 0 ? 'present' : 'missing',
+                error_code: 'interrupted',
                 ok: false,
+                text_is_persona_safe: true,
                 source: 'agent_interrupted',
-                expression: 'surprised'
+                emotion_hint: 'surprised',
+                bubble_text: '我先停住，并把现场保留下来。'
             })), {
                 source: 'agent_interrupted',
                 nextAction: '检查分析台中已保留的上下文和工具记录'
@@ -7484,6 +8024,9 @@ class AILISAgentRunner {
         const events = initialEvents.slice();
         const stepResults = initialStepResults.slice();
         let modelInputContextManager = restoreModelInputContextManagerFromCheckpoint(initialContextManagerCheckpoint);
+        if (modelInputContextManager) {
+            appendUserInputToContextManager(modelInputContextManager, message);
+        }
         const contextManagerCheckpoint = () =>
             modelInputContextManager && typeof modelInputContextManager.toCheckpoint === 'function'
                 ? modelInputContextManager.toCheckpoint()
@@ -7505,6 +8048,19 @@ class AILISAgentRunner {
             contextMode: agentContextMode
         });
         let latestDecision = null;
+        let cumulativeInputTokens = 0;
+        let safetyFinalizationAttempted = false;
+        const initialContextWindow = resolveModelContextWindowTokens(settings, requestContext);
+        const maxLoopDurationMs = firstPositiveNumber([
+            request.agentLoopMaxDurationMs,
+            requestContext.agentLoopMaxDurationMs,
+            requestContext.maxTaskDurationMs
+        ], 15 * 60 * 1000);
+        const maxCumulativeInputTokens = firstPositiveNumber([
+            request.maxCumulativeInputTokens,
+            requestContext.maxCumulativeInputTokens,
+            settings.maxCumulativeInputTokens
+        ], initialContextWindow.tokens * 4);
         const pauseAfterRound = async ({ iteration, reason = 'round_completed', decision = null, step = null } = {}) => {
             if (!debugBreakAfterRound || iteration + 1 >= maxSteps) {
                 return null;
@@ -7560,10 +8116,43 @@ class AILISAgentRunner {
             }, { reason });
         };
 
-        for (let iteration = startIteration; iteration < maxSteps; iteration += 1) {
+        for (let iteration = startIteration; iteration <= maxSteps; iteration += 1) {
             const interruptedBeforeRound = await maybeFinishInterruptedRun(`before_round_${iteration}`);
             if (interruptedBeforeRound) {
                 return interruptedBeforeRound;
+            }
+            const noProgressReason = detectAgentNoProgress(stepResults, requestContext);
+            const safetyFinalizationReason = iteration >= maxSteps
+                ? 'maximum_tool_rounds'
+                : Date.now() - startedAt >= maxLoopDurationMs
+                    ? 'time_budget'
+                    : cumulativeInputTokens >= maxCumulativeInputTokens
+                        ? 'cumulative_input_budget'
+                        : noProgressReason;
+            if (safetyFinalizationReason && safetyFinalizationAttempted) {
+                break;
+            }
+            if (safetyFinalizationReason) {
+                safetyFinalizationAttempted = true;
+                events.push({
+                    type: 'runtime_note',
+                    status: 'safety_finalization',
+                    iteration,
+                    reason: safetyFinalizationReason,
+                    cumulativeInputTokens,
+                    elapsedMs: Date.now() - startedAt
+                });
+            }
+            if (modelInputContextManager) {
+                for (const pendingInput of this.drainRunInputs(runId)) {
+                    appendUserInputToContextManager(modelInputContextManager, pendingInput.message);
+                    events.push({
+                        type: 'user_input',
+                        status: 'received',
+                        iteration,
+                        message: pendingInput.message
+                    });
+                }
             }
             const decisionSettings = resolveAgentDecisionSettings(settings, requestContext);
             const taskCompactPrompt = looksLikeArtifactAnswerQuestion({
@@ -7586,7 +8175,8 @@ class AILISAgentRunner {
                 exactAnswerMode,
                 taskCompactPrompt
             });
-            const externalToolExposure = isPersonaOrchestratorRole(agentRuntimeRole)
+            const externalToolExposure = isPersonaOrchestratorRole(agentRuntimeRole) ||
+                requestContext.includeExternalToolExposureInPrompt !== true
                 ? null
                 : await buildExternalToolExposurePromptObject(this.gateway, {
                     query: message,
@@ -7594,7 +8184,9 @@ class AILISAgentRunner {
                         request.externalToolExposureLimit ||
                         promptProfile.externalToolExposureLimit
                 });
-            const directToolSpecs = buildAgentDirectToolSpecs(this.gateway, {
+            const directToolSpecs = safetyFinalizationReason
+                ? []
+                : buildAgentDirectToolSpecs(this.gateway, {
                 stepResults,
                 requestContext: {
                     ...requestContext,
@@ -7604,6 +8196,27 @@ class AILISAgentRunner {
                 exactAnswerMode
             });
             const runtimeEnvironment = buildRuntimeEnvironmentPromptObject(this.gateway?.platformAdapter);
+            const currentPlan = this.gateway.runtime?.planState?.get?.(runId) || initialPlan || null;
+            const constraints = Array.isArray(requestContext.taskConstraints || request.constraints)
+                ? (requestContext.taskConstraints || request.constraints)
+                : [];
+            const unresolvedFields = collectAgentUnresolvedFields(stepResults, latestDecision);
+            const taskState = buildAgentTaskState({
+                runId,
+                stepResults,
+                latestDecision,
+                currentPlan,
+                constraints
+            });
+            const evidenceManifest = buildAgentEvidenceArtifactsPromptObject(stepResults, {
+                message,
+                exactAnswerMode
+            });
+            const contextBudgetConfig = buildAgentContextBudgetConfig(
+                decisionSettings,
+                requestContext,
+                modelInputContextManager?.tokenInfo?.()
+            );
             const turnContext = buildAilisTurnContext({
                 runId,
                 sessionId,
@@ -7640,18 +8253,45 @@ class AILISAgentRunner {
                 promptProfile,
                 tools: directToolSpecs,
                 contextMode: agentContextMode,
+                taskAgentInheritanceMode: normalizeText(
+                    request.taskAgentInheritanceMode || requestContext.taskAgentInheritanceMode,
+                    'clean'
+                ),
+                contextBudgetConfig,
+                taskState,
+                constraints,
+                evidenceManifest,
+                currentPlan,
+                unresolvedFields,
+                safetyFinalizationReason,
                 toolSummary: isPersonaOrchestratorRole(agentRuntimeRole)
-                    ? 'Persona orchestrator tools exposed: subagents only. Answer directly for ordinary conversation. If the current user message is task execution, immediately call subagents once with action=spawn/create and wait=true to hand the whole task to one fresh TaskAgent child. Preserve the current user task verbatim in the child task before adding any notes; never rewrite away units, answer shape, rounding rules, file paths, URLs, or constraints. The runtime will stop the outer persona loop after that handoff result.'
+                    ? 'Persona orchestrator tools exposed: subagents only. Answer directly for ordinary conversation. Spawn one TaskAgent for a new task; send to the latest TaskAgent for a continuation or correction. Preserve the current user message verbatim. The runtime stops the outer persona loop after the handoff result.'
                     : directToolSpecs.length
                         ? `Native direct tools exposed: ${directToolSpecs.map((tool) => tool.name).slice(0, 16).join(', ')}${directToolSpecs.length > 16 ? ', ...' : ''}.`
                         : 'No native tools are exposed in this turn; answer directly if possible.'
             };
-            const parallelToolCalls = resolveParallelToolCalls(decisionSettings, requestContext);
+            const parallelToolCalls = safetyFinalizationReason
+                ? false
+                : resolveParallelToolCalls(decisionSettings, requestContext);
             const directModelInputPrompt = buildLlmAgentDirectToolPrompt({
                 ...commonPromptArgs,
                 parallelToolCalls
             });
             modelInputContextManager = directModelInputPrompt.contextManager || modelInputContextManager;
+            if (directModelInputPrompt.semanticCompaction?.compacted) {
+                await appendRuntimeItem({
+                    type: 'agent.context_compaction',
+                    status: 'completed',
+                    payload: {
+                        iteration,
+                        reason: directModelInputPrompt.semanticCompaction.reason,
+                        historyVersion: directModelInputPrompt.semanticCompaction.historyVersion,
+                        before: directModelInputPrompt.semanticCompaction.packageBefore?.budgetReport || null,
+                        after: directModelInputPrompt.semanticCompaction.packageAfter?.budgetReport || null,
+                        checkpoint: directModelInputPrompt.semanticCompaction.checkpoint || null
+                    }
+                });
+            }
             const decisionMessages = directModelInputPrompt.messages;
             const promptBudget = buildPromptBudgetReport({
                 instructions: directModelInputPrompt.instructions,
@@ -7690,6 +8330,17 @@ class AILISAgentRunner {
                         prompt: directModelInputPrompt.prompt,
                         stats: directModelInputPrompt.stats
                     },
+                    context_package: directModelInputPrompt.contextPackage
+                        ? {
+                              schema: directModelInputPrompt.contextPackage.schema,
+                              historyVersion: directModelInputPrompt.contextPackage.historyVersion,
+                              taskState: directModelInputPrompt.contextPackage.taskState,
+                              pinnedEvidenceManifest: directModelInputPrompt.contextPackage.pinnedEvidenceManifest,
+                              availableOutputRefs: directModelInputPrompt.contextPackage.availableOutputRefs,
+                              droppedItemsManifest: directModelInputPrompt.contextPackage.droppedItemsManifest,
+                              budgetReport: directModelInputPrompt.contextPackage.budgetReport
+                          }
+                        : null,
                     context_manager_checkpoint: contextManagerCheckpoint('before_llm_decision', iteration)
                 }
             });
@@ -7739,6 +8390,19 @@ class AILISAgentRunner {
             latestDecision = decision;
             const llmCallDurationMs = Date.now() - llmCallStartedAt;
             const usageSummary = summarizeLlmUsage(decision.usage);
+            if (usageSummary?.promptTokens) {
+                cumulativeInputTokens += usageSummary.promptTokens;
+            }
+            modelInputContextManager?.setTokenInfo?.({
+                ...(usageSummary || {}),
+                providerUsage: decision.usage || null,
+                cumulativeInputTokens,
+                contextWindowTokens: contextBudgetConfig.inputLimitTokens,
+                contextWindowSource: contextBudgetConfig.contextWindowSource,
+                provider: decision.provider || decisionSettings.provider || '',
+                model: decision.model || decisionSettings.model || '',
+                measuredAtIteration: iteration
+            });
             this.gateway.emitGatewayEvent?.('agent.llm_call.completed', {
                 runId,
                 sessionId,
@@ -7822,6 +8486,19 @@ class AILISAgentRunner {
             }
             if (!decision.ok && isTerminalAgentDecisionFailure(decision)) {
                 const terminalFailure = describeTerminalAgentDecisionFailure(decision);
+                const taskRunHandoff = buildTaskRunHandoffPackage({
+                    status: terminalFailure.status || 'failed',
+                    reason: decision.error || terminalFailure.status,
+                    runId,
+                    sessionId,
+                    message,
+                    startedAt,
+                    maxSteps,
+                    stepResults,
+                    events,
+                    latestDecision: decision,
+                    contextManagerCheckpoint: contextManagerCheckpoint('terminal_decision_failure', iteration)
+                });
                 const displayText = terminalFailure.displayText;
                 return await finishRuntimeRun(attachPersonaSurface({
                     ok: false,
@@ -7839,7 +8516,8 @@ class AILISAgentRunner {
                     speechText: displayText,
                     plan: [],
                     steps: stepResults,
-                    events
+                    events,
+                    taskRunHandoff
                 }, renderStatusSurface({
                     text: displayText,
                     status: terminalFailure.status,
@@ -8010,6 +8688,21 @@ class AILISAgentRunner {
                 const exactAnswerSubmission = exactAnswerValidation.submission || null;
                 const displayText = stripControlTags(decision.finalAnswer || decision.summary || '任务完成。');
                 const visibleText = displayText;
+                const taskRunHandoff = buildTaskRunHandoffPackage({
+                    status: 'completed',
+                    reason: 'final_answer',
+                    runId,
+                    sessionId,
+                    message,
+                    startedAt,
+                    maxSteps,
+                    stepResults,
+                    events,
+                    latestDecision: decision,
+                    finalAnswer: exactAnswerSubmission?.answer || decision.finalAnswer || '',
+                    partialAnswer: decision.summary || '',
+                    contextManagerCheckpoint: contextManagerCheckpoint('completed', iteration)
+                });
                 const result = {
                     ok: true,
                     runId,
@@ -8030,6 +8723,7 @@ class AILISAgentRunner {
                     plan: [],
                     steps: stepResults,
                     events,
+                    taskRunHandoff,
                     planUpdates: decision.planUpdates,
                     usage: decision.usage,
                     personaOutput: {
@@ -8064,6 +8758,20 @@ class AILISAgentRunner {
                     fallbackText: displayText
                 });
                 const visibleText = failureSurface?.text || displayText;
+                const taskRunHandoff = buildTaskRunHandoffPackage({
+                    status: 'failed',
+                    reason: decision.blockedReason || decision.summary || 'blocked',
+                    runId,
+                    sessionId,
+                    message,
+                    startedAt,
+                    maxSteps,
+                    stepResults,
+                    events,
+                    latestDecision: decision,
+                    partialAnswer: decision.summary || '',
+                    contextManagerCheckpoint: contextManagerCheckpoint('blocked', iteration)
+                });
                 return await finishRuntimeRun(attachPersonaSurface({
                     ok: false,
                     runId,
@@ -8082,6 +8790,7 @@ class AILISAgentRunner {
                     plan: [],
                     steps: stepResults,
                     events,
+                    taskRunHandoff,
                     planUpdates: decision.planUpdates
                 }, failureSurface || renderStatusSurface({
                     text: visibleText,
@@ -8222,7 +8931,20 @@ class AILISAgentRunner {
 
             let step = decision.toolCall;
             if (!step) {
-                const displayText = '我知道这轮应该继续处理，但没有拿到可执行的下一步，所以先停住。你可以让我从当前任务重新整理一下。';
+                const taskRunHandoff = buildTaskRunHandoffPackage({
+                    status: 'failed',
+                    reason: 'invalid_agent_tool_call',
+                    runId,
+                    sessionId,
+                    message,
+                    startedAt,
+                    maxSteps,
+                    stepResults,
+                    events,
+                    latestDecision: decision,
+                    contextManagerCheckpoint: contextManagerCheckpoint('invalid_agent_tool_call', iteration)
+                });
+                const displayText = taskRunHandoff.userVisibleSummary || '我知道这轮应该继续处理，但没有拿到可执行的下一步，所以先停住。你可以让我从当前任务重新整理一下。';
                 return await finishRuntimeRun(attachPersonaSurface({
                     ok: false,
                     runId,
@@ -8238,16 +8960,22 @@ class AILISAgentRunner {
                     speechText: displayText,
                     plan: [],
                     steps: stepResults,
-                    events
-                }, renderStatusSurface({
+                    events,
+                    taskRunHandoff
+                }, renderPersonaSurfaceGateway({
                     text: displayText,
-                    status: 'invalid_agent_tool_call',
+                    task_state: 'failed',
+                    approval_state: 'none',
+                    evidence_state: stepResults.length > 0 ? 'present' : 'missing',
+                    error_code: 'invalid_agent_tool_call',
                     ok: false,
+                    text_is_persona_safe: true,
                     source: 'agent_invalid_tool_call',
-                    expression: 'surprised'
+                    emotion_hint: 'surprised',
+                    bubble_text: '我没拿到有效下一步，先整理现场。'
                 })));
             }
-            const personaTaskAgentHandoff = isPersonaOrchestratorRole(agentRuntimeRole) && isSubagentSpawnStep(step);
+            const personaTaskAgentHandoff = isPersonaOrchestratorRole(agentRuntimeRole) && isSubagentHandoffStep(step);
             if (personaTaskAgentHandoff) {
                 step = normalizePersonaTaskAgentHandoffStep(step, request);
                 await appendRuntimeItem({
@@ -8405,7 +9133,23 @@ class AILISAgentRunner {
                 context: plannedToolContext
             });
             if (policyDecision?.denied) {
-                const displayText = `这一步被本地权限边界拦住了，我不会硬往下做。原因是：${policyDecision.reason}`;
+                const taskRunHandoff = buildTaskRunHandoffPackage({
+                    status: 'failed',
+                    reason: policyDecision.reason || 'policy_denied',
+                    runId,
+                    sessionId,
+                    message,
+                    startedAt,
+                    maxSteps,
+                    stepResults,
+                    events,
+                    latestDecision: decision,
+                    contextManagerCheckpoint: contextManagerCheckpoint('policy_denied', iteration)
+                });
+                const displayText = [
+                    `这一步被本地权限边界拦住了，我不会硬往下做。原因是：${policyDecision.reason}`,
+                    taskRunHandoff.userVisibleSummary
+                ].filter(Boolean).join('\n');
                 return await finishRuntimeRun(attachPersonaSurface({
                     ok: false,
                     runId,
@@ -8422,13 +9166,19 @@ class AILISAgentRunner {
                     plan: [],
                     steps: stepResults,
                     events,
-                    policyDecision
-                }, renderStatusSurface({
+                    policyDecision,
+                    taskRunHandoff
+                }, renderPersonaSurfaceGateway({
                     text: displayText,
-                    status: 'blocked',
+                    task_state: 'blocked',
+                    approval_state: 'none',
+                    evidence_state: stepResults.length > 0 ? 'present' : 'missing',
+                    error_code: 'policy_denied',
                     ok: false,
+                    text_is_persona_safe: true,
                     source: 'agent_policy_blocked',
-                    expression: 'relaxed'
+                    emotion_hint: 'neutral',
+                    bubble_text: '这一步被权限边界拦住了。'
                 })));
             }
             const visionAutoApproved = isVisionAgentStep(step) && isVisionAutoApprovedContext(requestContext);
@@ -8545,6 +9295,8 @@ class AILISAgentRunner {
             if (personaTaskAgentHandoff) {
                 const outcome = extractSubagentHandoffOutcome(stepResult);
                 const finalAnswer = stripControlTags(normalizeText(
+                    normalizeText(outcome.taskRunHandoff?.finalAnswer) ||
+                        normalizeText(outcome.taskRunHandoff?.partialAnswer) ||
                     normalizeText(outcome.childResult.finalAnswer) ||
                         normalizeText(outcome.childResult.answer) ||
                         outcome.displayText
@@ -8560,7 +9312,8 @@ class AILISAgentRunner {
                         childRunId: outcome.subagent?.childRunId || outcome.subagent?.runId || '',
                         childStatus: outcome.subagent?.status || '',
                         childOk: outcome.subagent?.ok,
-                        displayText: outcome.displayText
+                        displayText: outcome.displayText,
+                        taskRunHandoff: outcome.taskRunHandoff || null
                     }
                 });
                 const status = outcome.ok
@@ -8568,12 +9321,17 @@ class AILISAgentRunner {
                     : outcome.status === 'running'
                         ? 'subagent_running'
                         : outcome.status || 'subagent_incomplete';
-                const surface = renderStatusSurface({
+                const surface = renderPersonaSurfaceGateway({
                     text: outcome.displayText,
-                    status,
+                    task_state: outcome.ok ? 'completed' : 'blocked',
+                    approval_state: 'none',
+                    evidence_state: outcome.taskRunHandoff?.collectedData?.length ? 'present' : 'unknown',
+                    error_code: status,
                     ok: outcome.ok,
+                    text_is_persona_safe: true,
                     source: 'persona_taskagent_handoff_result',
-                    expression: outcome.ok ? 'focused' : 'surprised'
+                    emotion_hint: outcome.ok ? 'focused' : 'surprised',
+                    bubble_text: outcome.ok ? '任务代理完成了。' : '任务代理整理了执行现场。'
                 });
                 return await finishRuntimeRun(attachPersonaSurface({
                     ok: outcome.ok,
@@ -8593,7 +9351,8 @@ class AILISAgentRunner {
                     steps: stepResults,
                     events,
                     subagent: outcome.subagent,
-                    taskAgentResult: outcome.childResult
+                    taskAgentResult: outcome.childResult,
+                    taskRunHandoff: outcome.taskRunHandoff || outcome.childResult.taskRunHandoff || null
                 }, surface));
             }
 
@@ -8608,13 +9367,44 @@ class AILISAgentRunner {
             }
         }
 
-        const surface = renderMaxStepsSurface({
+        const taskRunHandoff = buildTaskRunHandoffPackage({
+            status: 'max_loop',
+            reason: 'max_steps_reached',
+            runId,
+            sessionId,
+            message,
+            startedAt,
+            maxSteps,
+            stepResults,
+            events,
+            latestDecision,
+            contextManagerCheckpoint: contextManagerCheckpoint('max_steps_reached', stepResults.length)
+        });
+        const displayText = taskRunHandoff.userVisibleSummary;
+        const fallbackSurface = renderMaxStepsSurface({
             maxSteps,
             stepCount: stepResults.length,
             latestSummary: latestDecision?.summary,
             mode: latestDecision?.mode || 'task'
         });
-        const displayText = surface.text;
+        const surface = renderPersonaSurfaceGateway({
+            task_state: 'blocked',
+            approval_state: 'none',
+            evidence_state: stepResults.length > 0 ? 'present' : 'missing',
+            error_code: 'max_steps_reached',
+            relationship_stage: 'trusted',
+            emotion_hint: 'neutral',
+            next_action: taskRunHandoff.nextStep?.recommendation || fallbackSurface.nextAction || '',
+            text: displayText || fallbackSurface.text,
+            bubble_text: '我整理好执行现场了。',
+            text_is_persona_safe: true,
+            source: 'agent_max_steps_handoff',
+            experience: {
+                ...(fallbackSurface.experience || {}),
+                userSafePreview: 'task_run_handoff',
+                maxSteps: Number(maxSteps) || 0
+            }
+        });
         return await finishRuntimeRun(attachPersonaSurface({
             ok: false,
             runId,
@@ -8630,7 +9420,8 @@ class AILISAgentRunner {
             speechText: displayText.replace(/\n/g, ' '),
             plan: [],
             steps: stepResults,
-            events
+            events,
+            taskRunHandoff
         }, surface));
     }
 
@@ -9347,7 +10138,12 @@ class AILISAgentRunner {
                 requestContext: llmRequestContext,
                 startedAt,
                 runId,
-                dryRun
+                dryRun,
+                initialEvents: Array.isArray(request.initialEvents) ? request.initialEvents : [],
+                initialStepResults: Array.isArray(request.initialStepResults) ? request.initialStepResults : [],
+                initialContextManagerCheckpoint: request.initialContextManagerCheckpoint ||
+                    llmRequestContext.initialContextManagerCheckpoint ||
+                    null
             });
             if (llmResult) {
                 this.activeRuns.delete(runId);
@@ -9650,6 +10446,7 @@ module.exports = {
     buildAgentDecisionLowLatencyPayload,
     resolveAgentPromptProfile,
     resolveAgentDecisionSettings,
+    resolveParallelToolCalls,
     splitNativeProgressNoteArgs,
     stripControlTags,
     validateAgentToolLoopGuard,

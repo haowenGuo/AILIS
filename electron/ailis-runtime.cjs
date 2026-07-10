@@ -205,6 +205,22 @@ function buildSubagentRelayText(response = {}) {
     const result = response.result && typeof response.result === 'object'
         ? response.result
         : (subagent.result && typeof subagent.result === 'object' ? subagent.result : {});
+    const taskRunHandoff = result.taskRunHandoff ||
+        result.task_run_handoff ||
+        response.taskRunHandoff ||
+        subagent.taskRunHandoff ||
+        subagent.task_run_handoff ||
+        null;
+    if (taskRunHandoff && typeof taskRunHandoff === 'object') {
+        const handoffText = normalizeString(
+            taskRunHandoff.userVisibleSummary ||
+                taskRunHandoff.finalAnswer ||
+                taskRunHandoff.partialAnswer
+        );
+        if (handoffText) {
+            return handoffText;
+        }
+    }
     const task = summarize(normalizeString(subagent.task || response.task), 180);
     if (status === 'completed') {
         return normalizeString(
@@ -238,6 +254,72 @@ function buildSubagentRelayText(response = {}) {
             result.message,
         `TaskAgent status: ${status}`
     );
+}
+
+function buildSubagentErrorHandoff({ subagent = {}, status = 'failed', error = '', durationMs = 0 } = {}) {
+    const normalizedStatus = normalizeString(status, 'failed');
+    const task = normalizeString(subagent.task);
+    const reason = normalizeString(error, normalizedStatus);
+    const statusText = normalizedStatus === 'timeout'
+        ? 'TaskAgent 执行超时，运行时已经停止等待。'
+        : normalizedStatus === 'cancelled'
+            ? 'TaskAgent 已被取消。'
+            : 'TaskAgent 执行失败。';
+    const userVisibleSummary = [
+        statusText,
+        reason ? `失败原因：${summarize(reason, 360)}` : '',
+        task ? `原任务：${summarize(task, 220)}` : '',
+        '完整事件链路已保存在 Agent Lab，可以从这个子任务记录继续排查。'
+    ].filter(Boolean).join('\n');
+    return {
+        version: 1,
+        status: normalizedStatus,
+        ok: false,
+        runId: subagent.childRunId || '',
+        sessionId: subagent.childSessionId || '',
+        task,
+        finalAnswer: '',
+        partialAnswer: '',
+        userVisibleSummary,
+        failureAnalysis: {
+            reason,
+            bottleneck: reason,
+            unresolvedQuestions: [],
+            latestFailedStep: null,
+            likelyCause: normalizedStatus === 'timeout'
+                ? '子任务超过运行时等待时间。'
+                : '子任务执行器抛出错误或被取消。',
+            retryable: normalizedStatus !== 'cancelled'
+        },
+        executionTrace: {
+            stepsUsed: 0,
+            maxSteps: 0,
+            elapsedMs: Number(durationMs) || 0,
+            toolCalls: 0,
+            successfulToolCount: 0,
+            failedToolCount: 0,
+            successfulTools: [],
+            failedTools: []
+        },
+        collectedData: [],
+        keyEvents: [],
+        nextStep: {
+            recommendation: normalizedStatus === 'timeout'
+                ? '提高任务预算或先缩小任务范围后继续。'
+                : '查看 Agent Lab 中的子任务事件，定位失败前最后一个动作。',
+            resumeFrom: 0,
+            suggestedTool: '',
+            needsUserInput: false
+        },
+        resume: {
+            runId: subagent.childRunId || '',
+            sessionId: subagent.childSessionId || '',
+            lastStepIndex: 0,
+            contextManagerCheckpoint: null,
+            checkpointAvailable: false
+        },
+        traceRef: subagent.childRunId || ''
+    };
 }
 
 function isSafeTokenMetricKey(key = '') {
@@ -611,6 +693,7 @@ class AILISRuntime {
         this.subagents = new Map();
         this.subagentRuns = new Map();
         this.subagentControllers = new Map();
+        this.subagentInputHandlers = new Map();
         this.mcpManager = new AILISMcpManager({
             workspaceRoot: this.workspaceRoot,
             projectRoot: this.projectRoot,
@@ -1779,6 +1862,53 @@ class AILISRuntime {
         return cloneJson(subagent);
     }
 
+    findLatestSubagent({ sessionId = '', runId = '' } = {}) {
+        const normalizedSessionId = normalizeString(sessionId);
+        const normalizedRunId = normalizeString(runId);
+        return [...this.subagents.values()]
+            .filter((subagent) =>
+                (!normalizedSessionId || subagent.sessionId === normalizedSessionId) &&
+                (!normalizedRunId || subagent.runId === normalizedRunId)
+            )
+            .sort((left, right) => Number(right.createdAt || 0) - Number(left.createdAt || 0))[0] || null;
+    }
+
+    registerSubagentInputHandler(subagentId = '', handler = null) {
+        const id = normalizeString(subagentId);
+        if (!id || typeof handler !== 'function') {
+            return () => {};
+        }
+        this.subagentInputHandlers.set(id, handler);
+        const subagent = this.subagents.get(id);
+        const pendingInputs = Array.isArray(subagent?.pendingInputs) ? subagent.pendingInputs.splice(0) : [];
+        for (const pendingInput of pendingInputs) {
+            Promise.resolve(handler(pendingInput.message)).catch(() => {});
+        }
+        return () => {
+            if (this.subagentInputHandlers.get(id) === handler) {
+                this.subagentInputHandlers.delete(id);
+            }
+        };
+    }
+
+    async enqueueSubagentInput(subagent, message = '') {
+        const text = normalizeString(message);
+        if (!subagent || !text) {
+            return false;
+        }
+        const handler = this.subagentInputHandlers.get(subagent.id);
+        if (handler) {
+            await handler(text);
+            return true;
+        }
+        subagent.pendingInputs = Array.isArray(subagent.pendingInputs) ? subagent.pendingInputs : [];
+        subagent.pendingInputs.push({ id: randomUUID(), ts: Date.now(), message: text });
+        if (subagent.pendingInputs.length > 32) {
+            subagent.pendingInputs = subagent.pendingInputs.slice(-32);
+        }
+        return true;
+    }
+
     appendSubagentLocalEvent(subagent, event = {}) {
         const entry = {
             id: randomUUID(),
@@ -1845,6 +1975,13 @@ class AILISRuntime {
             approved: context.approved === true,
             autoConfirm: context.autoConfirm === true
         };
+        const inheritanceMode = ['clean', 'recent', 'checkpoint'].includes(normalizeString(
+            args.inheritanceMode || args.inheritance_mode || subagent.inheritanceMode,
+            'clean'
+        ).toLowerCase())
+            ? normalizeString(args.inheritanceMode || args.inheritance_mode || subagent.inheritanceMode, 'clean').toLowerCase()
+            : 'clean';
+        const maxAgentSteps = Number(args.maxAgentSteps || context.maxAgentSteps);
         return {
             ...inherited,
             ...(args.context && typeof args.context === 'object' ? args.context : {}),
@@ -1858,10 +1995,17 @@ class AILISRuntime {
             agentLoop: normalizeString(args.agentLoop || context.agentLoop, 'llm'),
             agentMode: normalizeString(args.agentMode || context.agentMode, 'llm'),
             contextMode: 'task_agent',
-            cleanContext: true,
+            cleanContext: inheritanceMode === 'clean',
+            taskAgentInheritanceMode: inheritanceMode,
+            initialContextManagerCheckpoint: inheritanceMode === 'checkpoint'
+                ? args.contextManagerCheckpoint || args.context_manager_checkpoint || null
+                : null,
+            recentMessages: inheritanceMode === 'recent' && Array.isArray(args.recentMessages)
+                ? args.recentMessages.slice(-Math.max(1, Math.min(Number(args.recentTurns || 4), 12)))
+                : [],
             parentSubagentDepth,
             subagentDepth: parentSubagentDepth + 1,
-            maxAgentSteps: Number(args.maxAgentSteps || context.maxAgentSteps || 30)
+            ...(Number.isFinite(maxAgentSteps) && maxAgentSteps > 0 ? { maxAgentSteps } : {})
         };
     }
 
@@ -1908,6 +2052,7 @@ class AILISRuntime {
                                 args: cloneJson(args),
                                 context: this.buildSubagentContext(subagent, args, context),
                                 signal: controller.signal,
+                                registerInputHandler: (handler) => this.registerSubagentInputHandler(subagent.id, handler),
                                 onEvent: async (event) => {
                                     await this.appendSubagentTranscriptEvent(subagent, event);
                                 }
@@ -1940,22 +2085,33 @@ class AILISRuntime {
                 subagent.finishedAt = Date.now();
                 subagent.durationMs = subagent.startedAt ? subagent.finishedAt - subagent.startedAt : 0;
                 subagent.error = error?.message || String(error);
+                const taskRunHandoff = buildSubagentErrorHandoff({
+                    subagent,
+                    status: subagent.status,
+                    error: subagent.error,
+                    durationMs: subagent.durationMs
+                });
+                subagent.result = redactObject({
+                    ok: false,
+                    status: subagent.status,
+                    error: subagent.error,
+                    displayText: taskRunHandoff.userVisibleSummary,
+                    taskRunHandoff
+                });
                 await this.appendSubagentTranscriptEvent(subagent, {
                     type: 'subagent.completed',
                     status: subagent.status,
-                    message: subagent.error,
+                    message: taskRunHandoff.userVisibleSummary || subagent.error,
                     payload: {
                         ok: false,
                         durationMs: subagent.durationMs,
-                        error: subagent.error
+                        error: subagent.error,
+                        result: subagent.result
                     }
                 });
-                return {
-                    ok: false,
-                    status: subagent.status,
-                    error: subagent.error
-                };
+                return subagent.result;
             } finally {
+                this.subagentInputHandlers.delete(subagent.id);
                 this.subagentControllers.delete(subagent.id);
                 this.subagentRuns.delete(subagent.id);
             }
@@ -2026,6 +2182,30 @@ class AILISRuntime {
         if (['spawn', 'create'].includes(action)) {
             const subagentId = normalizeString(args.subagentId || args.id, `subagent-${randomUUID()}`);
             const task = normalizeString(args.task || args.prompt || args.message);
+            const inheritanceMode = ['clean', 'recent', 'checkpoint'].includes(normalizeString(
+                args.inheritanceMode || args.inheritance_mode,
+                'clean'
+            ).toLowerCase())
+                ? normalizeString(args.inheritanceMode || args.inheritance_mode, 'clean').toLowerCase()
+                : 'clean';
+            const inheritanceSource = inheritanceMode === 'clean'
+                ? null
+                : this.subagents.get(normalizeString(args.inheritFromSubagentId || args.inherit_from_subagent_id)) ||
+                    this.findLatestSubagent({ sessionId, runId });
+            const inheritedCheckpoint = inheritanceMode === 'checkpoint'
+                ? args.contextManagerCheckpoint ||
+                    args.context_manager_checkpoint ||
+                    inheritanceSource?.result?.taskRunHandoff?.resume?.contextManagerCheckpoint ||
+                    inheritanceSource?.result?.task_run_handoff?.resume?.contextManagerCheckpoint ||
+                    null
+                : null;
+            const inheritedRecentMessages = inheritanceMode === 'recent'
+                ? (Array.isArray(args.recentMessages)
+                    ? args.recentMessages
+                    : Array.isArray(context.messageHistory)
+                        ? context.messageHistory
+                        : [])
+                : [];
             const subagent = {
                 id: subagentId,
                 label: normalizeString(args.label || args.name, subagentId),
@@ -2038,8 +2218,17 @@ class AILISRuntime {
                 ),
                 status: 'queued',
                 task,
+                originalTask: task,
+                inheritanceMode,
+                inheritance: {
+                    mode: inheritanceMode,
+                    sourceSubagentId: inheritanceSource?.id || '',
+                    checkpointAvailable: Boolean(inheritedCheckpoint),
+                    recentMessageCount: inheritedRecentMessages.length
+                },
                 createdAt: Date.now(),
-                events: []
+                events: [],
+                pendingInputs: []
             };
             this.subagents.set(subagentId, subagent);
             await this.appendSubagentTranscriptEvent(subagent, {
@@ -2048,7 +2237,13 @@ class AILISRuntime {
                 message: task,
                 payload: this.publicSubagent(subagent)
             });
-            this.startSubagentRun(subagent, args, context);
+            const executionArgs = {
+                ...args,
+                inheritanceMode,
+                contextManagerCheckpoint: inheritedCheckpoint,
+                recentMessages: inheritedRecentMessages
+            };
+            this.startSubagentRun(subagent, executionArgs, context);
             const shouldWait = args.wait !== false;
             if (shouldWait) {
                 const waited = await this.waitForSubagent(subagentId, args.waitTimeoutMs || DEFAULT_SUBAGENT_WAIT_TIMEOUT_MS);
@@ -2141,28 +2336,88 @@ class AILISRuntime {
                 isError: !subagent
             };
         }
-        if (['send', 'steer'].includes(action)) {
-            const subagent = this.subagents.get(normalizeString(args.subagentId || args.id));
+        if (['send', 'steer', 'resume'].includes(action)) {
+            const requestedId = normalizeString(args.subagentId || args.id);
+            const subagent = requestedId
+                ? this.subagents.get(requestedId)
+                : this.findLatestSubagent({ sessionId, runId });
+            const message = normalizeString(args.message || args.input || args.text || args.task);
+            let delivered = false;
+            let waited = null;
             if (subagent) {
                 await this.appendSubagentTranscriptEvent(subagent, {
                     type: 'subagent.input',
                     status: 'queued',
-                    message: normalizeString(args.message || args.input || args.text),
+                    message,
                     payload: {
                         action,
-                        message: normalizeString(args.message || args.input || args.text)
+                        message
                     }
                 });
+                if (['queued', 'running', 'cancel_requested'].includes(subagent.status)) {
+                    delivered = await this.enqueueSubagentInput(subagent, message);
+                    if (delivered && args.wait !== false) {
+                        waited = await this.waitForSubagent(
+                            subagent.id,
+                            args.waitTimeoutMs || args.timeoutMs || DEFAULT_SUBAGENT_WAIT_TIMEOUT_MS
+                        );
+                    }
+                } else {
+                    const previousResult = subagent.result && typeof subagent.result === 'object'
+                        ? subagent.result
+                        : {};
+                    const checkpoint = previousResult.taskRunHandoff?.resume?.contextManagerCheckpoint ||
+                        previousResult.task_run_handoff?.resume?.contextManagerCheckpoint ||
+                        null;
+                    subagent.previousRuns = Array.isArray(subagent.previousRuns) ? subagent.previousRuns : [];
+                    subagent.previousRuns.push({
+                        childRunId: subagent.childRunId,
+                        status: subagent.status,
+                        finishedAt: subagent.finishedAt || null
+                    });
+                    subagent.previousRuns = subagent.previousRuns.slice(-12);
+                    subagent.childRunId = `child-${randomUUID()}`;
+                    subagent.status = 'queued';
+                    subagent.ok = null;
+                    subagent.error = '';
+                    subagent.finishedAt = null;
+                    subagent.task = message;
+                    subagent.inheritanceMode = checkpoint ? 'checkpoint' : 'recent';
+                    subagent.inheritance = {
+                        mode: subagent.inheritanceMode,
+                        sourceSubagentId: subagent.id,
+                        checkpointAvailable: Boolean(checkpoint),
+                        recentMessageCount: 0
+                    };
+                    this.startSubagentRun(subagent, {
+                        ...args,
+                        task: message,
+                        inheritanceMode: subagent.inheritanceMode,
+                        contextManagerCheckpoint: checkpoint,
+                        initialStepResults: Array.isArray(previousResult.steps) ? previousResult.steps : []
+                    }, context);
+                    delivered = true;
+                    if (args.wait !== false) {
+                        waited = await this.waitForSubagent(
+                            subagent.id,
+                            args.waitTimeoutMs || args.timeoutMs || DEFAULT_SUBAGENT_WAIT_TIMEOUT_MS
+                        );
+                    }
+                }
             }
             const response = {
-                status: subagent ? 'queued' : 'not_found',
-                subagent: subagent ? this.publicSubagent(subagent) : null
+                status: subagent
+                    ? normalizeString(waited?.status, delivered ? (subagent.status || 'queued') : 'queued')
+                    : 'not_found',
+                delivered,
+                subagent: subagent ? this.publicSubagent(subagent) : null,
+                result: waited?.subagent?.result || (subagent && !['queued', 'running'].includes(subagent.status) ? subagent.result : null)
             };
             return {
                 content: [
                     {
                         type: 'text',
-                        text: subagent ? '已把新输入转交给 TaskAgent。' : buildSubagentRelayText(response)
+                        text: subagent ? buildSubagentRelayText(response) : buildSubagentRelayText(response)
                     }
                 ],
                 details: response,

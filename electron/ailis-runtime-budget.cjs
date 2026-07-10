@@ -227,8 +227,24 @@ function buildContextBudgetReport(parts = {}, config = {}) {
         stop: Number(config.stopRatio ?? DEFAULT_CONTEXT_STOP_RATIO)
     };
     const measuredParts = normalizeBudgetParts(parts).map((part) => measureBudgetPart(part.name, part.value));
-    const totalPromptTokens = measuredParts.reduce((sum, part) => sum + part.approxTokens, 0);
-    const ratio = totalPromptTokens / effectiveInputLimitTokens;
+    const estimatedPromptTokens = measuredParts.reduce((sum, part) => sum + part.approxTokens, 0);
+    const tokenInfo = parts.tokenInfo && typeof parts.tokenInfo === 'object'
+        ? parts.tokenInfo
+        : {};
+    const providerInputTokens = [
+        config.providerInputTokens,
+        config.actualInputTokens,
+        tokenInfo.promptTokens,
+        tokenInfo.prompt_tokens,
+        tokenInfo.inputTokens,
+        tokenInfo.input_tokens
+    ]
+        .map((value) => Number(value))
+        .find((value) => Number.isFinite(value) && value > 0) || 0;
+    // Provider usage is authoritative for the previous request. The local estimate
+    // still protects the next request after new tool outputs have been appended.
+    const effectivePromptTokens = Math.max(estimatedPromptTokens, providerInputTokens);
+    const ratio = effectivePromptTokens / effectiveInputLimitTokens;
     const level = classifyCompactionLevel(ratio, thresholds);
     const largestParts = measuredParts
         .slice()
@@ -240,7 +256,10 @@ function buildContextBudgetReport(parts = {}, config = {}) {
         reservedOutputTokens,
         systemReserveTokens,
         effectiveInputLimitTokens,
-        totalPromptTokens,
+        totalPromptTokens: effectivePromptTokens,
+        estimatedPromptTokens,
+        providerInputTokens,
+        effectivePromptTokens,
         ratio,
         level,
         shouldCompact: level === 'soft' || level === 'hard' || level === 'stop',

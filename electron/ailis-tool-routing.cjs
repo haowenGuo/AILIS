@@ -254,24 +254,6 @@ const ROUTING_PROFILES = Object.freeze([
     })
 ]);
 
-const ARTIFACT_FIRST_PROFILE_IDS = new Set([
-    'artifact_file_runtime',
-    'word_document',
-    'presentation',
-    'spreadsheet',
-    'pdf_artifact',
-    'image'
-]);
-
-const VALUE_ONLY_ARTIFACT_READER_TOOLS = new Set([
-    'read_spreadsheet',
-    'read_document',
-    'read_presentation',
-    'pdf_extract_text',
-    'pdf_find_and_extract',
-    'describe_image'
-]);
-
 function queryExplicitlyRequestsWebSearch(query = '') {
     return /\b(web_search|web search|search the web|internet search|public web|bing|google|duckduckgo)\b/i.test(query) ||
         /(联网搜索|网页搜索|网络搜索|公开网页|搜索一下|检索一下|查一下)/i.test(query);
@@ -362,19 +344,6 @@ function queryExplicitlyRequestsTool(query = '', toolName = '') {
         needle.includes(normalizedTool.replace(/_/g, ' '));
 }
 
-function shouldSuppressValueOnlyArtifactReader({ toolName = '', query = '', profiles = [], hasArtifactTools = false } = {}) {
-    if (!hasArtifactTools || !VALUE_ONLY_ARTIFACT_READER_TOOLS.has(toolName)) {
-        return false;
-    }
-    if (!profiles.some((profile) => ARTIFACT_FIRST_PROFILE_IDS.has(profile.id))) {
-        return false;
-    }
-    if (queryExplicitlyRequestsTool(query, toolName)) {
-        return false;
-    }
-    return true;
-}
-
 function scoreToolForQuery(entry = {}, query = '') {
     const text = collectToolSearchText(entry);
     const toolName = canonicalToolName(entry);
@@ -382,6 +351,10 @@ function scoreToolForQuery(entry = {}, query = '') {
     const explicitWebSearch = queryExplicitlyRequestsWebSearch(query);
     const profiles = matchingRoutingProfiles(query);
     let score = baseTextScore(query, text);
+
+    if (queryExplicitlyRequestsTool(query, toolName)) {
+        score += 80;
+    }
 
     if (/^youtube_/.test(toolName) && !queryExplicitlyMentionsYoutube(query)) {
         return 0;
@@ -462,9 +435,6 @@ function scoreToolForQuery(entry = {}, query = '') {
 
 function rankToolSearchResults(entries = [], query = '', limit = 8) {
     const boundedLimit = Math.max(1, Math.min(Number(limit) || 8, 50));
-    const normalizedEntries = Array.isArray(entries) ? entries : [];
-    const profiles = matchingRoutingProfiles(query);
-    const hasArtifactTools = normalizedEntries.some((entry) => canonicalToolName(entry) === 'artifact_tools');
     return (Array.isArray(entries) ? entries : [])
         .map((entry, index) => {
             const score = scoreToolForQuery(entry, query);
@@ -478,12 +448,6 @@ function rankToolSearchResults(entries = [], query = '', limit = 8) {
                 id: normalizeForSearch(entry?.id || entry?.name || toolName)
             };
         })
-        .filter(({ toolName }) => !shouldSuppressValueOnlyArtifactReader({
-            toolName,
-            query,
-            profiles,
-            hasArtifactTools
-        }))
         .filter(({ score }) => score > 0)
         .sort((left, right) =>
             right.score - left.score ||

@@ -871,17 +871,21 @@ test('AILIS tool_search returns strict direct MCP specs and native preflight blo
     const webFetch = searchResult.structuredContent.tools.find((tool) => tool.id === 'mcp__ailis_research__web_fetch');
     const describeImage = searchResult.structuredContent.tools.find((tool) => tool.id === 'mcp__ailis_research__describe_image');
     assert.equal(searchResult.structuredContent.tools.some((tool) => tool.id === 'mcp__ailis_research__weak_lookup'), false);
-    assert.deepEqual(webSearch.spec.parameters.required, ['query']);
-    assert.equal(webSearch.spec.parameters.additionalProperties, false);
-    assert.deepEqual(webFetch.spec.parameters.required, ['url']);
-    assert.deepEqual(describeImage.spec.parameters.required, ['path']);
+    assert.deepEqual(webSearch.input_schema.required, ['query']);
+    assert.equal(webSearch.input_schema.additionalProperties, false);
+    assert.deepEqual(webFetch.input_schema.required, ['url']);
+    assert.deepEqual(describeImage.input_schema.required, ['path']);
+    assert.doesNotMatch(JSON.stringify(searchResult), /"spec"\s*:/);
+    const rawWebSearch = searchResult.__ailisRawToolSearchTools
+        .find((tool) => tool.id === 'mcp__ailis_research__web_search');
+    assert.deepEqual(rawWebSearch.spec.parameters.required, ['query']);
 
     const compactedSearchResult = normalizeAilisToolOutput(searchResult, { toolId: 'tool_search' });
     const compactedWebSearch = compactedSearchResult.structuredContent.tools.find((tool) => tool.id === 'mcp__ailis_research__web_search');
-    assert.deepEqual(compactedWebSearch.spec.parameters.required, ['query']);
-    assert.equal(typeof compactedWebSearch.spec.parameters.properties, 'object');
-    assert.equal(Array.isArray(compactedWebSearch.spec.parameters.properties), false);
-    assert.equal(typeof compactedWebSearch.spec.parameters.properties.query, 'object');
+    assert.deepEqual(compactedWebSearch.input_schema.required, ['query']);
+    assert.equal(typeof compactedWebSearch.input_schema.properties, 'object');
+    assert.equal(Array.isArray(compactedWebSearch.input_schema.properties), false);
+    assert.equal(typeof compactedWebSearch.input_schema.properties.query, 'object');
 
     const nextSpecs = buildAgentDirectToolSpecs(gateway, {
         requestContext: { nativeDirectTools: true },
@@ -949,7 +953,7 @@ test('AILIS tool_search returns strict direct MCP specs and native preflight blo
     assert.equal(valid.ok, true, valid.errors.join('; '));
 });
 
-test('AILIS web_fetch falls back to Node fetch when python requests transport fails', async () => {
+test('AILIS web_fetch falls back to an available local backend when python requests transport fails', async () => {
     const { server, url } = await startLocalHttpServer((request, response) => {
         response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
         response.end(`<!doctype html>
@@ -970,9 +974,11 @@ test('AILIS web_fetch falls back to Node fetch when python requests transport fa
             maxChars: 2000
         });
         assert.equal(result.structuredContent.ok, true, result.content?.[0]?.text);
-        assert.equal(result.details.fetchBackend, 'node_fetch');
-        assert.equal(result.details.fallbackFrom, 'python_requests');
-        assert.equal(result.details.primaryErrorCode, 'fetch_process_failed');
+        assert.ok(['crawl4ai_local', 'node_fetch'].includes(result.details.fetchBackend));
+        if (result.details.fetchBackend === 'node_fetch') {
+            assert.equal(result.details.fallbackFrom, 'python_requests');
+            assert.equal(result.details.primaryErrorCode, 'fetch_process_failed');
+        }
         assert.match(result.content[0].text, /Kaggle AI security competition strategy page/);
     } finally {
         if (previous === undefined) {

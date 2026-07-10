@@ -919,18 +919,33 @@ const TOOL_CONTRACTS = Object.freeze({
         returns: defaultReturns(),
         errors: defaultErrors(['subagent_not_found', 'subagent_timeout', 'subagent_cancelled']),
         schema: actionSchema(
-            ['list', 'spawn', 'create', 'status', 'info', 'wait', 'log', 'send', 'steer', 'close', 'cancel', 'kill'],
+            ['list', 'spawn', 'create', 'status', 'info', 'wait', 'log', 'send', 'steer', 'resume', 'close', 'cancel', 'kill'],
             {
                 subagentId: stringSchema(),
                 id: stringSchema(),
                 task: stringSchema(),
                 message: stringSchema(),
                 prompt: stringSchema(),
+                inheritanceMode: stringSchema({ enum: ['clean', 'recent', 'checkpoint'] }),
+                inheritFromSubagentId: stringSchema(),
+                recentTurns: numberSchema({ minimum: 1, maximum: 12 }),
+                recentMessages: arraySchema(objectSchema()),
+                contextManagerCheckpoint: objectSchema(),
                 wait: booleanSchema(),
                 waitTimeoutMs: numberSchema({ minimum: 1000, maximum: 24 * 60 * 60 * 1000 }),
                 maxAgentSteps: numberSchema({ minimum: 1, maximum: 30 })
             }
-        )
+        ),
+        customValidate(args = {}) {
+            const action = normalizeAction(args.action || args.operation || args.intent, 'list');
+            if (['spawn', 'create'].includes(action) && !normalizeString(args.task || args.prompt || args.message)) {
+                return ['subagents.spawn requires task/message/prompt'];
+            }
+            if (['send', 'steer', 'resume'].includes(action) && !normalizeString(args.message || args.task)) {
+                return ['subagents.send requires message/task'];
+            }
+            return [];
+        }
     }),
     mcp_bridge: Object.freeze({
         id: 'mcp_bridge',

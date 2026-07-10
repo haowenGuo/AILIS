@@ -595,8 +595,8 @@ test('AILIS Gateway tool_search ranks strict MCP readers before broad web_search
             limit: 3
         });
 
-        assert.equal(artifactQueryResult.details.tools.some((tool) => tool.id === 'artifact_query'), false);
-        assert.doesNotMatch(artifactQueryResult.details.routing_advice, /artifact_query/);
+        assert.equal(artifactQueryResult.details.tools.some((tool) => tool.id === 'artifact_query'), true);
+        assert.equal(artifactQueryResult.details.tools.find((tool) => tool.id === 'artifact_query').spec, undefined);
 
         const artifactImportResult = await gateway.executeGatewayToolSearch({
             query: 'artifact_import ragflow lite table parser import local file chunks',
@@ -605,7 +605,8 @@ test('AILIS Gateway tool_search ranks strict MCP readers before broad web_search
             limit: 5
         });
 
-        assert.equal(artifactImportResult.details.tools.some((tool) => tool.id === 'artifact_import'), false);
+        assert.equal(artifactImportResult.details.tools.some((tool) => tool.id === 'artifact_import'), true);
+        assert.equal(artifactImportResult.details.tools.find((tool) => tool.id === 'artifact_import').spec, undefined);
     } finally {
         await gateway.stop();
         await fs.rm(workspaceRoot, { recursive: true, force: true });
@@ -635,14 +636,17 @@ test('AILIS Gateway registers built-in AILIS research MCP for web search and dir
             limit: 10,
             timeoutMs: 30000
         });
-        assert.ok(search.details.tools.some((tool) => tool.id === 'mcp__ailis_research__web_search'));
+        assert.ok(
+            search.details.tools.some((tool) => tool.id === 'mcp__ailis_research__web_search'),
+            JSON.stringify(search.details)
+        );
 
         const fetched = await gateway.runtime.executeTool(
             'mcp__ailis_research__web_fetch',
-            { url: page.baseUrl, maxChars: 2000 },
+            { url: page.baseUrl, maxLines: 80 },
             { runId: 'builtin-research-mcp-run', workspace: workspaceRoot, timeoutMs: 30000 }
         );
-        assert.equal(fetched.details.status, 'completed');
+        assert.equal(fetched.details.status, 'completed', JSON.stringify(fetched));
         assert.match(fetched.content[0].text, /AILIS direct fetch smoke page/);
     } finally {
         await page.close();

@@ -353,7 +353,7 @@ rl.on('line', (line) => {
     return;
   }
   if (request.method === 'tools/list') {
-    send({ id: request.id, result: { tools: [{ name: 'echo', description: 'Echo input text', inputSchema: { type: 'object', properties: { text: { type: 'string' } } } }] } });
+    send({ id: request.id, result: { tools: [{ name: 'echo', description: 'Echo input text', inputSchema: { type: 'object', required: ['text'], additionalProperties: false, properties: { text: { type: 'string' } } } }] } });
     return;
   }
   if (request.method === 'tools/call') {
@@ -717,6 +717,111 @@ test('AILIS runtime subagents execute child runner lifecycle and retain logs', a
     assert.equal(log.details.status, 'completed');
     assert.ok(log.details.events.some((event) => event.type === 'subagent.progress'));
     assert.ok(log.details.events.some((event) => event.type === 'subagent.completed'));
+});
+
+test('AILIS runtime delivers send input into a running TaskAgent queue', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-subagent-input-queue-'));
+    const received = [];
+    const runtime = new AILISRuntime({
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit'),
+        subagentExecutor: async ({ registerInputHandler }) => await new Promise((resolve) => {
+            registerInputHandler((message) => {
+                received.push(message);
+                resolve({ ok: true, status: 'completed', displayText: `continued:${message}` });
+            });
+        })
+    });
+
+    const spawned = await runtime.executeTool(
+        'subagents',
+        { action: 'spawn', subagentId: 'worker-live', task: 'initial task', wait: false },
+        { runId: 'subagent-live-run', sessionId: 'main' }
+    );
+    assert.equal(spawned.details.status, 'running');
+
+    const sent = await runtime.executeTool(
+        'subagents',
+        { action: 'send', subagentId: 'worker-live', message: 'use the corrected date', wait: true, waitTimeoutMs: 2000 },
+        { runId: 'subagent-live-run', sessionId: 'main' }
+    );
+    assert.equal(sent.details.delivered, true);
+    assert.deepEqual(received, ['use the corrected date']);
+    assert.equal(sent.details.status, 'completed');
+    assert.match(sent.details.result.displayText, /continued:use the corrected date/);
+});
+
+test('AILIS runtime resumes a completed TaskAgent from its semantic checkpoint by default', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-subagent-checkpoint-resume-'));
+    const childContexts = [];
+    let executionCount = 0;
+    const checkpoint = {
+        history_version: 2,
+        items: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'preserved checkpoint' }] }]
+    };
+    const runtime = new AILISRuntime({
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit'),
+        subagentExecutor: async ({ subagent, context }) => {
+            childContexts.push(context);
+            executionCount += 1;
+            if (executionCount === 1) {
+                return {
+                    ok: true,
+                    status: 'completed',
+                    displayText: 'first result',
+                    taskRunHandoff: {
+                        status: 'completed',
+                        resume: { contextManagerCheckpoint: checkpoint }
+                    },
+                    steps: [{ id: 'old-step', tool: 'web_fetch', response: { ok: true } }]
+                };
+            }
+            return { ok: true, status: 'completed', displayText: `resumed:${subagent.task}` };
+        }
+    });
+
+    await runtime.executeTool(
+        'subagents',
+        { action: 'spawn', subagentId: 'worker-resume', task: 'first task', waitTimeoutMs: 2000 },
+        { runId: 'subagent-resume-run', sessionId: 'main' }
+    );
+    const resumed = await runtime.executeTool(
+        'subagents',
+        { action: 'send', message: 'now include the missing field', wait: true, waitTimeoutMs: 2000 },
+        { runId: 'subagent-resume-run', sessionId: 'main' }
+    );
+
+    assert.equal(executionCount, 2);
+    assert.equal(resumed.details.status, 'completed');
+    assert.equal(childContexts[1].taskAgentInheritanceMode, 'checkpoint');
+    assert.deepEqual(childContexts[1].initialContextManagerCheckpoint, checkpoint);
+    assert.match(resumed.details.result.displayText, /resumed:now include the missing field/);
+});
+
+test('AILIS runtime subagent failures retain a handoff package for the parent', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-subagent-handoff-runtime-'));
+    const runtime = new AILISRuntime({
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit'),
+        subagentExecutor: async () => {
+            throw new Error('fixture child failure');
+        }
+    });
+
+    const spawned = await runtime.executeTool(
+        'subagents',
+        { action: 'spawn', subagentId: 'worker-failed', task: 'solve hard task', waitTimeoutMs: 2000 },
+        { runId: 'subagent-failed-run', sessionId: 'main' }
+    );
+    assert.equal(spawned.details.subagent.status, 'failed');
+    assert.equal(spawned.details.subagent.result.status, 'failed');
+    assert.equal(spawned.details.subagent.result.taskRunHandoff.status, 'failed');
+    assert.match(spawned.details.subagent.result.taskRunHandoff.userVisibleSummary, /fixture child failure/);
+    assert.match(spawned.content[0].text, /fixture child failure/);
 });
 
 test('AILIS runtime exposes self_evolution as a conversation-driven agent tool', async () => {

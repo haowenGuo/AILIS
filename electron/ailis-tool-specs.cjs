@@ -43,9 +43,9 @@ function isExtendedAilisToolSurfaceEnabled() {
 const OUTPUT_STORE_TOOL_EXPOSURE = isExperimentalOutputStoreToolsEnabled()
     ? AILIS_TOOL_EXPOSURE.DIRECT
     : AILIS_TOOL_EXPOSURE.DEFERRED;
-const EXTENDED_RUNTIME_TOOL_EXPOSURE = isExtendedAilisToolSurfaceEnabled()
-    ? AILIS_TOOL_EXPOSURE.DEFERRED
-    : AILIS_TOOL_EXPOSURE.HIDDEN;
+// Keep the first-turn surface small while allowing tool_search to discover
+// extended runtime capabilities from the Registry on demand.
+const EXTENDED_RUNTIME_TOOL_EXPOSURE = AILIS_TOOL_EXPOSURE.DEFERRED;
 
 const AILIS_RUNTIME_TOOL_DEFINITIONS = Object.freeze([
     Object.freeze({
