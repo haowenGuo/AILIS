@@ -50,10 +50,17 @@ test('AILIS memory runtime persists events and redacted secret index without leg
         sessionId: 'memory-test',
         message: '继续做记忆系统'
     });
-    assert.match(context, /AILIS 长期记忆上下文/);
+    assert.match(context, /AILIS Persona 记忆快照/);
     assert.match(context, /暂无已抽取的稳定画像/);
-    assert.match(context, /doubao-api-key/);
+    assert.doesNotMatch(context, /doubao-api-key/);
     assert.equal(context.includes('test-secret-00000000-0000-4000-8000-000000000000'), false);
+
+    const taskContext = memory.compileContext({
+        sessionId: 'memory-test',
+        message: '继续做记忆系统',
+        contextMode: 'task_agent'
+    });
+    assert.match(taskContext, /doubao-api-key/);
 
     const reloaded = new AILISMemoryRuntime({
         rootDir: path.join(rootDir, 'memory'),
@@ -104,7 +111,7 @@ test('AILIS memory does not promote explicit self-evolution text through legacy 
     assert.ok(snapshot.recentEvents.some((event) => event.id === recorded.event.id));
 });
 
-test('AILIS memory compiles larger structured context and clears memory while preserving secrets', async () => {
+test('AILIS Persona memory excludes raw old turns and clears memory while preserving secrets', async () => {
     const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-memory-clear-'));
     const memory = new AILISMemoryRuntime({
         rootDir: path.join(rootDir, 'memory'),
@@ -127,10 +134,10 @@ test('AILIS memory compiles larger structured context and clears memory while pr
         });
     }
 
-    let observedLimit = 0;
+    let searchCalled = false;
     const searchMemory = memory.searchMemory.bind(memory);
     memory.searchMemory = (query, options = {}) => {
-        observedLimit = options.limit;
+        searchCalled = true;
         return searchMemory(query, options);
     };
 
@@ -138,9 +145,9 @@ test('AILIS memory compiles larger structured context and clears memory while pr
         sessionId: 'large-context-test',
         message: 'memoryanchor'
     });
-    assert.equal(observedLimit, 24);
-    assert.ok(context.length > 7600);
-    assert.match(context, /\n## 相关近期记忆\n/);
+    assert.equal(searchCalled, false);
+    assert.ok(context.length < 5000);
+    assert.doesNotMatch(context, /memoryanchor|相关近期记忆/);
 
     const cleared = memory.clearMemory();
     assert.equal(cleared.ok, true);
@@ -151,7 +158,7 @@ test('AILIS memory compiles larger structured context and clears memory while pr
     assert.ok(memory.listSecrets().secrets.some((secret) => secret.name === 'local-test-token'));
 });
 
-test('AILIS memory retrieval uses only the current user message instead of duplicating recent chat', async () => {
+test('AILIS Persona context never auto-retrieves raw conversation history', async () => {
     const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-memory-query-dedupe-'));
     const memory = new AILISMemoryRuntime({
         rootDir: path.join(rootDir, 'memory'),
@@ -174,8 +181,7 @@ test('AILIS memory retrieval uses only the current user message instead of dupli
         ]
     });
 
-    assert.equal(observedQuery, 'Solve this long GAIA task with a verifier.');
-    assert.doesNotMatch(observedQuery, /你好|你好，我在/);
+    assert.equal(observedQuery, '');
 });
 
 test('AILIS memory prompt uses curated raw-ledger profile instead of legacy user relationship affinity blocks', async () => {

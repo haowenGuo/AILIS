@@ -110,6 +110,26 @@ function uniqueMessages(items = []) {
     });
 }
 
+function collectRecentVisibleMessages(items = [], maxChars = 16000) {
+    const messages = uniqueMessages((Array.isArray(items) ? items : []).filter((item) =>
+        item?.type === 'message' &&
+        (item?.role === 'user' || item?.role === 'assistant') &&
+        !isRuntimeContextMessage(item)
+    ));
+    const selected = [];
+    let usedChars = 0;
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+        const item = messages[index];
+        const size = JSON.stringify(item || {}).length;
+        if (selected.length && usedChars + size > maxChars) {
+            break;
+        }
+        selected.push(cloneJson(item));
+        usedChars += size;
+    }
+    return selected.reverse();
+}
+
 function normalizeManifestList(value = [], maxItems = 16) {
     return (Array.isArray(value) ? value : [])
         .slice(-maxItems)
@@ -467,6 +487,8 @@ class ContextManager {
 
     buildSemanticCompactedItem(options = {}) {
         const packageBefore = this.buildContextPackage(options);
+        const contextMode = String(options.contextMode || 'task_agent').trim().toLowerCase();
+        const personaMode = contextMode === 'persona';
         const contextMessages = this.items.filter(isRuntimeContextMessage).slice(0, 1);
         const userMessages = uniqueMessages(this.items.filter((item) =>
             item?.type === 'message' && item?.role === 'user' && !isRuntimeContextMessage(item)
@@ -484,6 +506,7 @@ class ContextManager {
             .map(cloneJson);
         const checkpoint = {
             schema: 'ailis.semantic_context_checkpoint.v1',
+            contextMode,
             reason: String(options.compactionReason || packageBefore.budgetReport.level || 'context_budget'),
             originalGoalPreservedVerbatim: Boolean(originalTaskText),
             originalGoal: originalTaskText,
@@ -503,7 +526,9 @@ class ContextManager {
             ),
             outputRefs: packageBefore.availableOutputRefs.slice(-24),
             droppedItemsManifest: packageBefore.droppedItemsManifest,
-            instruction: 'Continue the same task from this checkpoint. Do not repeat completed work. Use the preserved original task and constraints as the authority.'
+            instruction: personaMode
+                ? 'Continue the same visible conversation. Use the active task state and recent user/assistant turns as context; do not invent missing history.'
+                : 'Continue the same task from this checkpoint. Do not repeat completed work. Use the preserved original task and constraints as the authority.'
         };
         const checkpointMessage = ResponseItem.message({
             role: 'user',
@@ -514,15 +539,33 @@ class ContextManager {
         });
         const recentPairs = collectRecentCallOutputPairs(
             packageBefore.recentResponseItems,
-            Number(options.recentToolPairs || 4)
+            Number(options.recentToolPairs || (personaMode ? 2 : 4))
         );
-        const replacementHistory = [
-            ...contextMessages.map(cloneJson),
-            originalTask,
-            ...recentUserMessages,
-            checkpointMessage,
-            ...recentPairs
-        ].filter(Boolean);
+        const personaVisibleBudget = Math.max(
+            6000,
+            Math.min(
+                Number(options.personaVisibleHistoryChars) ||
+                    Number(options.budgetConfig?.effectiveInputLimitTokens || 0) * 2,
+                30000
+            )
+        );
+        const recentVisibleMessages = personaMode
+            ? collectRecentVisibleMessages(this.items, personaVisibleBudget)
+            : [];
+        const replacementHistory = personaMode
+            ? [
+                  ...contextMessages.map(cloneJson),
+                  ...recentVisibleMessages,
+                  checkpointMessage,
+                  ...recentPairs
+              ].filter(Boolean)
+            : [
+                  ...contextMessages.map(cloneJson),
+                  originalTask,
+                  ...recentUserMessages,
+                  checkpointMessage,
+                  ...recentPairs
+              ].filter(Boolean);
         return {
             message: `Semantic context checkpoint created for: ${summarizeForModel(originalTaskText, 240)}`,
             replacement_history: replacementHistory,

@@ -115,3 +115,73 @@ test('AILIS task result capsules backfill completed historical subagent results 
     assert.match(result.answer, /攻略已经整理完成/);
     assert.doesNotMatch(result.answer, /expression/);
 });
+
+test('incomplete TaskAgent runs stay in active task state and never enter reusable results', async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-active-task-state-'));
+    const store = new AILISTaskResultCapsuleStore({ rootDir });
+    const recorded = store.recordExecution({
+        sessionId: 'main',
+        parentRunId: 'parent-1',
+        task: '核验原神木偶当前版本并完成攻略',
+        status: 'max_loop',
+        ok: false,
+        subagent: {
+            id: 'worker-1',
+            childRunId: 'child-1'
+        },
+        taskRunHandoff: {
+            status: 'max_loop',
+            partialAnswer: '已找到部分资料。',
+            failureAnalysis: { bottleneck: '仍缺官方版本证据' },
+            resume: {
+                contextManagerCheckpoint: { history_version: 2, items: [] }
+            }
+        }
+    });
+
+    assert.equal(recorded.active, true);
+    assert.equal(store.search('原神木偶攻略', { sessionId: 'main' }).length, 0);
+    assert.equal(store.getStatus().activeTaskCount, 1);
+    assert.match(store.buildActiveTaskContext('main'), /核验原神木偶当前版本/);
+    assert.match(store.buildActiveTaskContext('main'), /checkpoint_available: true/);
+
+    const completed = store.recordExecution({
+        sessionId: 'main',
+        parentRunId: 'parent-2',
+        action: 'resume',
+        task: '补齐官方版本证据',
+        status: 'completed',
+        ok: true,
+        subagent: {
+            id: 'worker-1',
+            childRunId: 'child-2'
+        },
+        taskRunHandoff: {
+            status: 'completed',
+            finalAnswer: '已完成攻略并核验当前版本。'
+        }
+    });
+
+    assert.equal(completed.active, false);
+    assert.equal(store.getStatus().activeTaskCount, 0);
+    assert.match(store.search('原神木偶攻略', { sessionId: 'main' })[0].answer, /已完成攻略/);
+});
+
+test('legacy failed capsules are quarantined from task_results search and get', async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-failed-capsule-'));
+    await fs.writeFile(path.join(rootDir, 'capsules.json'), JSON.stringify({
+        version: 1,
+        capsules: [{
+            id: 'failed-result',
+            taskId: 'failed-task',
+            status: 'max_loop',
+            request: '木偶攻略',
+            answer: '只搜索了本地目录。',
+            summary: '执行失败。'
+        }]
+    }), 'utf8');
+
+    const store = new AILISTaskResultCapsuleStore({ rootDir });
+    assert.equal(store.search('木偶攻略').length, 0);
+    assert.equal(store.get('failed-result'), null);
+});

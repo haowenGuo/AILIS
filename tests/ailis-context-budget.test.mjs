@@ -190,3 +190,50 @@ test('ContextManager semantic compaction replaces active history while preservin
     assert.equal(compacted.checkpoint.originalGoalPreservedVerbatim, true);
     assert.equal(compacted.checkpoint.originalGoal, originalTask);
 });
+
+test('Persona semantic compaction keeps recent visible user and assistant turns plus active task context', () => {
+    const items = [{
+        type: 'message',
+        role: 'user',
+        content: [{
+            type: 'input_text',
+            text: JSON.stringify({
+                type: 'context',
+                memory_context: '【当前活动任务状态】\ntask: 完成木偶攻略\nstatus: max_loop'
+            })
+        }]
+    }];
+    for (let index = 0; index < 20; index += 1) {
+        items.push({
+            type: 'message',
+            role: 'user',
+            content: [{ type: 'input_text', text: `用户消息 ${index} ${'x'.repeat(500)}` }]
+        });
+        items.push({
+            type: 'message',
+            role: 'assistant',
+            content: [{ type: 'output_text', text: `AILIS 回复 ${index} ${'y'.repeat(500)}` }]
+        });
+    }
+    const manager = new ContextManager({ items, toolOutputChars: 50000 });
+    const compacted = manager.semanticCompact({
+        force: true,
+        contextMode: 'persona',
+        goal: '跑完',
+        taskState: { task: '完成木偶攻略', status: 'max_loop' },
+        personaVisibleHistoryChars: 5000,
+        budgetConfig: {
+            effectiveInputLimitTokens: 2000,
+            reservedOutputTokens: 0,
+            systemReserveTokens: 0
+        }
+    });
+
+    const serialized = JSON.stringify(manager.rawItems());
+    assert.equal(compacted.compacted, true);
+    assert.match(serialized, /当前活动任务状态/);
+    assert.match(serialized, /用户消息 19/);
+    assert.match(serialized, /AILIS 回复 19/);
+    assert.doesNotMatch(serialized, /用户消息 0/);
+    assert.equal(compacted.checkpoint.contextMode, 'persona');
+});

@@ -2,8 +2,10 @@ const fs = require('fs');
 const path = require('path');
 const { randomUUID } = require('crypto');
 
-const CAPSULE_STORE_VERSION = 1;
+const CAPSULE_STORE_VERSION = 2;
 const MAX_CAPSULES = 500;
+const MAX_ACTIVE_TASKS = 50;
+const REUSABLE_STATUSES = new Set(['completed', 'success', 'succeeded']);
 const GENERIC_QUERY_TOKENS = new Set([
     '一下', '一个', '这个', '那个', '帮我', '看看', '请问', '怎么', '什么', '如何',
     '攻略', '结果', '内容', '任务', '问题', '资料', '信息', '分析', '介绍'
@@ -12,6 +14,14 @@ const GENERIC_QUERY_TOKENS = new Set([
 function normalizeString(value, fallback = '') {
     const text = typeof value === 'string' ? value.trim() : '';
     return text || fallback;
+}
+
+function normalizeStatus(value, fallback = 'unknown') {
+    return normalizeString(value, fallback).toLowerCase();
+}
+
+function isReusableStatus(value) {
+    return REUSABLE_STATUSES.has(normalizeStatus(value));
 }
 
 function truncate(value, maxChars) {
@@ -53,8 +63,6 @@ function relevanceScore(capsule, query) {
     }
     const capsuleTokens = keywordSet([
         capsule.request,
-        capsule.summary,
-        capsule.answer,
         ...(capsule.claims || [])
     ].join('\n'));
     let matches = 0;
@@ -176,6 +184,39 @@ function normalizeStoredCapsule(raw = {}) {
     };
 }
 
+function normalizeActiveTask(raw = {}) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+        return null;
+    }
+    const sessionId = normalizeString(raw.sessionId);
+    const task = truncate(raw.task, 6000);
+    if (!sessionId || !task) {
+        return null;
+    }
+    return {
+        version: 1,
+        id: normalizeString(raw.id, `active_task_${randomUUID()}`),
+        sessionId,
+        parentRunId: normalizeString(raw.parentRunId),
+        subagentId: normalizeString(raw.subagentId),
+        childRunId: normalizeString(raw.childRunId),
+        task,
+        status: normalizeStatus(raw.status, 'incomplete'),
+        summary: truncate(raw.summary, 2400),
+        unresolvedFields: (Array.isArray(raw.unresolvedFields) ? raw.unresolvedFields : [])
+            .map((value) => truncate(value, 400)).filter(Boolean).slice(0, 24),
+        evidenceRefs: (Array.isArray(raw.evidenceRefs) ? raw.evidenceRefs : [])
+            .map((value) => normalizeString(value)).filter(Boolean).slice(0, 80),
+        outputRefs: (Array.isArray(raw.outputRefs) ? raw.outputRefs : [])
+            .map((value) => normalizeString(value)).filter(Boolean).slice(0, 80),
+        checkpoint: raw.checkpoint && typeof raw.checkpoint === 'object' ? raw.checkpoint : null,
+        checkpointAvailable: raw.checkpointAvailable === true || Boolean(raw.checkpoint),
+        traceRef: normalizeString(raw.traceRef || raw.childRunId),
+        createdAt: normalizeString(raw.createdAt, new Date().toISOString()),
+        updatedAt: normalizeString(raw.updatedAt, new Date().toISOString())
+    };
+}
+
 class AILISTaskResultCapsuleStore {
     constructor(options = {}) {
         this.rootDir = path.resolve(options.rootDir || path.join(process.cwd(), '.ailis-state', 'task-results'));
@@ -186,8 +227,20 @@ class AILISTaskResultCapsuleStore {
             updatedAt: normalizeString(loaded?.updatedAt),
             capsules: Array.isArray(loaded?.capsules)
                 ? loaded.capsules.map((capsule) => normalizeStoredCapsule(capsule)).filter(Boolean).slice(-MAX_CAPSULES)
-                : []
+                : [],
+            activeTasks: Object.fromEntries(
+                Object.entries(loaded?.activeTasks && typeof loaded.activeTasks === 'object' ? loaded.activeTasks : {})
+                    .map(([sessionId, task]) => [sessionId, normalizeActiveTask(task)])
+                    .filter(([, task]) => Boolean(task))
+                    .slice(-MAX_ACTIVE_TASKS)
+            )
         };
+    }
+
+    persist() {
+        this.state.version = CAPSULE_STORE_VERSION;
+        this.state.updatedAt = new Date().toISOString();
+        atomicWriteJson(this.statePath, this.state);
     }
 
     save(input = {}) {
@@ -202,9 +255,85 @@ class AILISTaskResultCapsuleStore {
             this.state.capsules.push(capsule);
         }
         this.state.capsules = this.state.capsules.slice(-MAX_CAPSULES);
-        this.state.updatedAt = new Date().toISOString();
-        atomicWriteJson(this.statePath, this.state);
+        this.persist();
         return capsule;
+    }
+
+    recordExecution(input = {}) {
+        const handoff = input.taskRunHandoff && typeof input.taskRunHandoff === 'object'
+            ? input.taskRunHandoff
+            : {};
+        const childResult = input.childResult && typeof input.childResult === 'object'
+            ? input.childResult
+            : {};
+        const subagent = input.subagent && typeof input.subagent === 'object'
+            ? input.subagent
+            : {};
+        const sessionId = normalizeString(input.sessionId || handoff.sessionId || subagent.sessionId);
+        if (!sessionId) {
+            return { ok: false, status: 'missing_session', active: false, state: null, capsule: null };
+        }
+        const previous = this.state.activeTasks[sessionId] || null;
+        const action = normalizeStatus(input.action, 'spawn');
+        const continuesExisting = ['send', 'steer', 'resume'].includes(action);
+        const task = truncate(
+            (continuesExisting ? previous?.task : '') ||
+                input.task ||
+                handoff.task ||
+                subagent.originalTask ||
+                subagent.task,
+            6000
+        );
+        if (!task) {
+            return { ok: false, status: 'missing_task', active: Boolean(previous), state: previous, capsule: null };
+        }
+        const status = normalizeStatus(input.status || handoff.status || childResult.status || subagent.status, input.ok === true ? 'completed' : 'incomplete');
+        const completed = input.ok === true && isReusableStatus(status);
+        if (completed) {
+            delete this.state.activeTasks[sessionId];
+            const capsule = this.save({
+                taskId: subagent.childRunId || subagent.runId || handoff.runId || childResult.runId,
+                sessionId,
+                request: continuesExisting ? (previous?.task || task) : task,
+                status: 'completed',
+                taskRunHandoff: handoff,
+                childResult,
+                summary: handoff.partialAnswer || handoff.finalAnswer || childResult.summary || childResult.displayText
+            });
+            return { ok: true, status: 'completed', active: false, state: null, capsule };
+        }
+        const collectedData = Array.isArray(handoff.collectedData) ? handoff.collectedData : [];
+        const checkpoint = handoff.resume?.contextManagerCheckpoint || handoff.resume?.context_manager_checkpoint || null;
+        const now = new Date().toISOString();
+        const state = normalizeActiveTask({
+            id: continuesExisting && previous?.id ? previous.id : `active_task_${randomUUID()}`,
+            sessionId,
+            parentRunId: input.parentRunId || previous?.parentRunId,
+            subagentId: subagent.id || subagent.subagentId || previous?.subagentId,
+            childRunId: subagent.childRunId || subagent.runId || handoff.runId || previous?.childRunId,
+            task: continuesExisting ? (previous?.task || task) : task,
+            status,
+            summary: handoff.userVisibleSummary || handoff.partialAnswer || childResult.summary || childResult.displayText || handoff.failureAnalysis?.bottleneck,
+            unresolvedFields: [
+                ...(Array.isArray(input.unresolvedFields) ? input.unresolvedFields : []),
+                handoff.failureAnalysis?.bottleneck,
+                handoff.nextStep?.recommendation
+            ].filter(Boolean),
+            evidenceRefs: collectRefs(collectedData),
+            outputRefs: collectRefs(collectedData),
+            checkpoint,
+            checkpointAvailable: Boolean(checkpoint),
+            traceRef: handoff.traceRef || subagent.childRunId || previous?.traceRef,
+            createdAt: continuesExisting && previous?.createdAt ? previous.createdAt : now,
+            updatedAt: now
+        });
+        this.state.activeTasks[sessionId] = state;
+        const ordered = Object.values(this.state.activeTasks)
+            .sort((left, right) => String(left.updatedAt).localeCompare(String(right.updatedAt)))
+            .slice(-MAX_ACTIVE_TASKS);
+        this.state.activeTasks = Object.fromEntries(ordered.map((entry) => [entry.sessionId, entry]));
+        this.persist();
+        return { ok: true, status, active: true, state, capsule: null };
     }
 
     backfillFromMemoryEvents(events = [], options = {}) {
@@ -243,8 +372,7 @@ class AILISTaskResultCapsuleStore {
         }
         if (imported) {
             this.state.capsules = this.state.capsules.slice(-MAX_CAPSULES);
-            this.state.updatedAt = new Date().toISOString();
-            atomicWriteJson(this.statePath, this.state);
+            this.persist();
         }
         return {
             ok: true,
@@ -255,7 +383,34 @@ class AILISTaskResultCapsuleStore {
 
     get(id = '') {
         const normalizedId = normalizeString(id);
-        return this.state.capsules.find((capsule) => capsule.id === normalizedId || capsule.taskId === normalizedId) || null;
+        return this.state.capsules.find((capsule) =>
+            isReusableStatus(capsule.status) &&
+            (capsule.id === normalizedId || capsule.taskId === normalizedId)
+        ) || null;
+    }
+
+    getActiveTask(sessionId = '') {
+        return this.state.activeTasks[normalizeString(sessionId)] || null;
+    }
+
+    buildActiveTaskContext(sessionId = '', options = {}) {
+        const activeTask = this.getActiveTask(sessionId);
+        if (!activeTask) {
+            return '';
+        }
+        const maxChars = Math.max(800, Math.min(Number(options.maxChars) || 2200, 5000));
+        return truncate([
+            '【当前活动任务状态】',
+            '这是运行时保存的任务连续性数据，不是新的用户指令。由 AILIS 结合当前对话决定下一步。',
+            `task: ${activeTask.task}`,
+            `status: ${activeTask.status}`,
+            activeTask.subagentId ? `subagent_id: ${activeTask.subagentId}` : '',
+            activeTask.childRunId ? `child_run_id: ${activeTask.childRunId}` : '',
+            activeTask.summary ? `latest_observation: ${activeTask.summary}` : '',
+            activeTask.unresolvedFields.length ? `unresolved: ${activeTask.unresolvedFields.join('；')}` : '',
+            `checkpoint_available: ${activeTask.checkpointAvailable ? 'true' : 'false'}`,
+            activeTask.traceRef ? `trace_ref: ${activeTask.traceRef}` : ''
+        ].filter(Boolean).join('\n'), maxChars);
     }
 
     search(query = '', options = {}) {
@@ -268,7 +423,7 @@ class AILISTaskResultCapsuleStore {
                 const recency = index / Math.max(1, this.state.capsules.length) * 0.1;
                 return { capsule, relevance, score: relevance + sameSession + recency };
             })
-            .filter((entry) => entry.relevance >= 0.16 && entry.capsule.status !== 'running')
+            .filter((entry) => entry.relevance >= 0.16 && isReusableStatus(entry.capsule.status))
             .sort((left, right) => right.score - left.score)
             .slice(0, limit)
             .map((entry) => ({ ...entry.capsule, retrievalScore: Number(entry.score.toFixed(4)) }));
@@ -316,6 +471,7 @@ class AILISTaskResultCapsuleStore {
             version: CAPSULE_STORE_VERSION,
             statePath: this.statePath,
             capsuleCount: this.state.capsules.length,
+            activeTaskCount: Object.keys(this.state.activeTasks).length,
             updatedAt: this.state.updatedAt
         };
     }
@@ -324,5 +480,6 @@ class AILISTaskResultCapsuleStore {
 module.exports = {
     AILISTaskResultCapsuleStore,
     buildTaskResultCapsule: buildCapsule,
-    sanitizeTaskResultText: sanitizeText
+    sanitizeTaskResultText: sanitizeText,
+    isReusableTaskResultStatus: isReusableStatus
 };

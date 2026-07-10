@@ -625,18 +625,13 @@ class AILISMemoryRuntime {
         contextMode = 'persona'
     } = {}) {
         const state = this.state || normalizeState(null, this.workspaceRoot);
-        // Recent conversation is already present in model input. Memory retrieval should
-        // not duplicate it or let older topics overpower the current user message.
-        const query = normalizeText(message);
-        const relevantEvents = this.searchMemory(query || message, { limit: DEFAULT_RELEVANT_EVENT_LIMIT }).events;
-        const relevantEventLines = relevantEvents.map(formatPromptMemoryEvent).filter(Boolean);
         const blocks = state.blocks || {};
         const curatedPromptMemory = loadCuratedPromptMemory(this.rootDir);
         const normalizedContextMode = normalizeText(contextMode, 'persona').toLowerCase();
         if (normalizedContextMode === 'task_agent') {
             const taskSections = [
                 '【AILIS 任务执行上下文】',
-                '使用原则：这里只提供任务执行 Worker 需要的最小上下文；任务结束后由 PersonaPresenter 负责面向用户表达。',
+                '使用原则：这里只提供 TaskAgent 执行任务需要的最小上下文；执行结果会作为工具观察返回同一个外层 AILIS 对话。',
                 '',
                 `会话：${sessionId}`,
                 '',
@@ -649,8 +644,8 @@ class AILISMemoryRuntime {
             return truncateStructuredText(taskSections.filter((entry) => entry !== undefined && entry !== null).join('\n'), maxChars);
         }
         const sections = [
-            '【AILIS 长期记忆上下文】',
-            '使用原则：这些记忆是辅助上下文。用户画像、关系画像和关系状态以 Raw Memory Ledger 日级抽取结果为准；若与用户当前明确指令冲突，以当前指令为准；不要向用户暴露“系统记忆/好感度数值”，除非用户主动询问。',
+            '【AILIS Persona 记忆快照】',
+            '这是由记忆模型归纳的当前画像快照。当前可见对话和活动任务由独立上下文提供；原始旧对话不会自动注入。若与用户当前明确表达冲突，以当前表达为准。',
             '',
             `会话：${sessionId}`,
             '',
@@ -661,15 +656,7 @@ class AILISMemoryRuntime {
             curatedPromptMemory.userProfileText,
             '',
             '## 关系画像（Raw Memory Ledger 抽取）',
-            curatedPromptMemory.relationshipText,
-            '',
-            '## 相关近期记忆',
-            relevantEventLines.length
-                ? relevantEventLines.join('\n')
-                : '- 暂无与当前问题明显相关的近期记忆。',
-            '',
-            `## ${blocks.secrets_index?.label || '隐私与密钥索引'}`,
-            blocks.secrets_index?.value || this.buildSecretsIndexText()
+            curatedPromptMemory.relationshipText
         ];
         return truncateStructuredText(sections.filter((entry) => entry !== undefined && entry !== null).join('\n'), maxChars);
     }

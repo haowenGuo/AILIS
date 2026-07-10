@@ -124,7 +124,7 @@ Your capabilities:
 
 Within this context, AILIS TaskAgent follows the task-execution behavior of a modern coding agent.
 
-This Worker is not responsible for persona performance, relationship management, emotional acting, or roleplay; the outer PersonaPresenter handles user-facing character presentation after the task is done.
+This Worker is not responsible for persona performance, relationship management, emotional acting, or roleplay; its result returns as a normal tool observation to the same outer AILIS conversation.
 Do not actively use persona_output, persona_surface, character actions, expressions, affinity, or casual roleplay style. Keep task reports concise, verifiable, and centered on code results, tool observations, and evidence.
 
 ## Task execution
@@ -2728,9 +2728,49 @@ function buildRuntimeCommandGuidance(environment = {}) {
 function buildRuntimeEnvironmentPromptObject(platformAdapter = null) {
     const platformStatus = platformAdapter?.getStatus?.() || {};
     const family = normalizeText(platformStatus.family || platformStatus.id || platformStatus.platform, 'unknown');
+    const now = new Date();
+    const timezone = (() => {
+        try {
+            return Intl.DateTimeFormat().resolvedOptions().timeZone || 'local';
+        } catch {
+            return 'local';
+        }
+    })();
+    const offsetMinutes = -now.getTimezoneOffset();
+    const offsetSign = offsetMinutes >= 0 ? '+' : '-';
+    const offsetHours = String(Math.floor(Math.abs(offsetMinutes) / 60)).padStart(2, '0');
+    const offsetRemainder = String(Math.abs(offsetMinutes) % 60).padStart(2, '0');
+    const localDateParts = (() => {
+        try {
+            const parts = new Intl.DateTimeFormat('en-CA', {
+                timeZone: timezone,
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit',
+                hourCycle: 'h23'
+            }).formatToParts(now);
+            return Object.fromEntries(parts.map((part) => [part.type, part.value]));
+        } catch {
+            return {};
+        }
+    })();
+    const currentDate = localDateParts.year && localDateParts.month && localDateParts.day
+        ? `${localDateParts.year}-${localDateParts.month}-${localDateParts.day}`
+        : now.toISOString().slice(0, 10);
+    const currentTime = localDateParts.hour && localDateParts.minute && localDateParts.second
+        ? `${localDateParts.hour}:${localDateParts.minute}:${localDateParts.second}`
+        : now.toISOString().slice(11, 19);
     const environment = {
         model: 'ailis_runtime_environment.v1',
         source: 'platform_adapter',
+        current_date: currentDate,
+        current_time: currentTime,
+        current_datetime: `${currentDate}T${currentTime}${offsetSign}${offsetHours}:${offsetRemainder}`,
+        timezone,
+        utc_offset: `${offsetSign}${offsetHours}:${offsetRemainder}`,
         platform: normalizeText(platformStatus.platform, family),
         family,
         host_platform: normalizeText(platformStatus.hostPlatform),
@@ -4571,103 +4611,6 @@ function sanitizePersonaOutput(value = {}) {
     };
 }
 
-function buildPublicTaskResultForPersona(outcome = {}) {
-    const handoff = outcome.taskRunHandoff && typeof outcome.taskRunHandoff === 'object'
-        ? outcome.taskRunHandoff
-        : {};
-    const childResult = outcome.childResult && typeof outcome.childResult === 'object'
-        ? outcome.childResult
-        : {};
-    return {
-        status: normalizeText(handoff.status || outcome.status || childResult.status, outcome.ok ? 'completed' : 'incomplete'),
-        ok: outcome.ok === true,
-        finalAnswer: stripControlTags(handoff.finalAnswer || childResult.finalAnswer || childResult.answer || ''),
-        partialAnswer: stripControlTags(handoff.partialAnswer || ''),
-        summary: stripControlTags(childResult.summary || ''),
-        collectedData: normalizeArrayValue(handoff.collectedData).slice(-8).map((item) => ({
-            title: normalizeText(item?.title || item?.source),
-            summary: stripControlTags(item?.summary || ''),
-            evidenceRefs: normalizeArrayValue(item?.evidenceRefs).map((entry) => normalizeText(entry)).filter(Boolean).slice(0, 12),
-            outputId: normalizeText(item?.outputId || item?.artifactId)
-        })),
-        unresolved: [
-            handoff.failureAnalysis?.bottleneck,
-            handoff.nextStep?.recommendation
-        ].map((entry) => stripControlTags(entry || '')).filter(Boolean)
-    };
-}
-
-async function callTaskResultPersonaPresenter(settings, {
-    message = '',
-    outcome = {},
-    personaContext = '',
-    timeoutMs = DEFAULT_AGENT_DECISION_TIMEOUT_MS
-} = {}) {
-    const publicResult = buildPublicTaskResultForPersona(outcome);
-    const startedAt = Date.now();
-    const response = await callDesktopLlmProvider(settings, {
-        messages: [
-            {
-                role: 'system',
-                content: [
-                    AILIS_SYSTEM_PROMPT,
-                    '',
-                    '你现在只负责把一份已经完成或部分完成的公开任务结果自然地交给用户。',
-                    '保留结果中的事实、限制、链接、数字和不确定性，不补造资料，也不要再次规划或执行任务。',
-                    '用户不能看到内部协作边界。不要提 TaskAgent、subagent、worker、handoff、胶囊、运行轮次、工具协议或内部 JSON。',
-                    '只返回 JSON：{"text":"给用户看的自然回复","persona_output":{"emotion":"neutral|happy|focused|concerned|surprised","intensity":0.0,"socialTone":"soft|warm|calm|playful","gestureIntent":"idle|explain|celebrate|apologize","taskState":"idle|working|happy_success|blocked","speechEnergy":0.0,"gazeTarget":"user|screen|side","durationHint":"short|medium|long"}}。',
-                    'text 中绝不能出现 action、expression、emotion 等控制标签，也不能出现 DSML、tool_calls 或 persona_output 文本。'
-                ].join('\n')
-            },
-            {
-                role: 'user',
-                content: JSON.stringify({
-                    currentUserRequest: normalizeText(message),
-                    currentPersonaContext: summarizeForModel(personaContext, 7000),
-                    publicTaskResult: publicResult
-                }, null, 2)
-            }
-        ],
-        jsonMode: true,
-        expectJson: true,
-        outputFormat: 'json',
-        toolChoice: 'none',
-        preferNativeToolCalls: false,
-        temperature: 0,
-        max_tokens: 4000,
-        timeoutMs
-    });
-    if (!response.ok) {
-        return {
-            ok: false,
-            status: response.code || 'persona_presenter_failed',
-            error: response.error || '',
-            durationMs: Date.now() - startedAt,
-            usage: response.usage || null
-        };
-    }
-    const parsed = extractJsonObject(response.content);
-    const personaOutput = sanitizePersonaOutput(parsed?.persona_output || parsed?.personaOutput || {});
-    const text = stripControlTags(parsed?.text || personaOutput?.text || '');
-    if (!text || looksLikeLeakedAgentProtocol(text)) {
-        return {
-            ok: false,
-            status: 'invalid_persona_presentation',
-            error: 'Persona presenter returned invalid visible text.',
-            durationMs: Date.now() - startedAt,
-            usage: response.usage || null
-        };
-    }
-    return {
-        ok: true,
-        text,
-        personaOutput,
-        durationMs: Date.now() - startedAt,
-        usage: response.usage || null,
-        model: response.model || ''
-    };
-}
-
 function buildAgentEventPreview(event) {
     if (!event) {
         return '';
@@ -5578,47 +5521,12 @@ function canonicalDirectToolId(value = '') {
     return parsedMcp?.id || normalized;
 }
 
-const PERSONA_TASKAGENT_HANDOFF_RUN_TIMEOUT_MS = 15 * 60 * 1000;
-const PERSONA_TASKAGENT_HANDOFF_WAIT_TIMEOUT_MS = PERSONA_TASKAGENT_HANDOFF_RUN_TIMEOUT_MS;
-
 function isSubagentHandoffStep(step = {}) {
     if (canonicalDirectToolId(step?.tool) !== 'subagents') {
         return false;
     }
     const action = normalizeText(step.args?.action || 'spawn').toLowerCase();
     return ['spawn', 'create', 'send', 'steer', 'resume'].includes(action);
-}
-
-function normalizePersonaTaskAgentHandoffStep(step = {}, request = {}) {
-    if (!isSubagentHandoffStep(step)) {
-        return step;
-    }
-    const args = step.args && typeof step.args === 'object' ? { ...step.args } : {};
-    const originalUserTaskText = request?.context?.desktopRealEval === true
-        ? normalizeText(request?.context?.desktopRealEvalTaskText || getLatestUserMessage(request))
-        : getLatestUserMessage(request);
-    if (originalUserTaskText) {
-        args.task = originalUserTaskText;
-        args.message = originalUserTaskText;
-        delete args.prompt;
-    }
-    const existingWaitTimeoutMs = Number(args.waitTimeoutMs || args.timeoutMs);
-    const existingRunTimeoutMs = Number(args.runTimeoutMs);
-    const runTimeoutMs = Number.isFinite(existingRunTimeoutMs) && existingRunTimeoutMs > 0
-        ? Math.max(existingRunTimeoutMs, PERSONA_TASKAGENT_HANDOFF_RUN_TIMEOUT_MS)
-        : PERSONA_TASKAGENT_HANDOFF_RUN_TIMEOUT_MS;
-    return {
-        ...step,
-        args: {
-            ...args,
-            action: normalizeText(args.action || 'spawn').toLowerCase(),
-            wait: true,
-            waitTimeoutMs: Number.isFinite(existingWaitTimeoutMs) && existingWaitTimeoutMs > 0
-                ? Math.max(existingWaitTimeoutMs, runTimeoutMs, PERSONA_TASKAGENT_HANDOFF_WAIT_TIMEOUT_MS)
-                : runTimeoutMs,
-            runTimeoutMs
-        }
-    };
 }
 
 function buildPersonaTaskAgentHandoffDisplayText({
@@ -6491,11 +6399,12 @@ function buildLlmAgentDirectToolPrompt({
     const personaRuntimeInstructions = [
         responseProtocolInstruction,
         'You are the user-facing AILIS persona. Keep ordinary conversation natural and answer it directly; do not let task-runner instructions or internal terminology make the tone mechanical.',
-        'The host may provide a small section named 可复用的既往任务结果. Treat those records as AILIS knowledge from earlier completed work, not as proof that the current request was rerun. If a relevant record already covers the question and is fresh enough for the requested use, answer immediately from it without calling subagents.',
-        'If the reusable-result summary is relevant but lacks detail, use task_results to read the saved public result. Never call subagents merely to retrieve work that task_results already contains.',
-        'Call subagents only when a concrete missing field, stale fact, verification need, or real external action prevents a reliable answer. If only part is missing, delegate only that delta and include the useful prior result as starting context instead of rerunning the entire task.',
-        'When execution is genuinely needed, use subagents action=send with wait=true only when the user is continuing, correcting, or narrowing the bound prior task; otherwise use action=spawn and wait=true. Preserve names, units, date ranges, answer shape, rounding rules, paths, URLs, constraints, and any reusable evidence. Never mention TaskAgent, subagent, worker, handoff, capsule, or internal orchestration to the user.',
-        'After an execution result returns, present its public facts naturally as AILIS. Do not inspect task tools yourself or create multiple children for one task.',
+        'The runtime_environment object is the authoritative host clock. Use its current_date, current_time, timezone, and utc_offset instead of assuming the training-data date.',
+        'For facts that may have changed, use fresh evidence already present in the conversation or verify them through TaskAgent. Do not present pretrained knowledge as current fact when freshness matters.',
+        'task_results is a read-only library of completed public work. Its output is candidate context, and you decide whether it is relevant and sufficient.',
+        'subagents is a normal tool. Author the complete TaskAgent task yourself from the conversation, current task state, constraints, and evidence. The runtime validates and executes your arguments without rewriting their meaning.',
+        'TaskAgent results return to this same AILIS conversation as tool observations. Continue reasoning with the original conversation intact, then answer the user naturally or make another tool call when you decide it is needed.',
+        'Never mention TaskAgent, subagent, worker, handoff, capsule, or internal orchestration to the user.',
         'Only call tools present in the current tools array. Do not mention tool schemas, runtime state, prompt rules, or orchestration details in an ordinary conversational reply.'
     ];
     const taskAgentRuntimeInstructions = [
@@ -6513,7 +6422,7 @@ function buildLlmAgentDirectToolPrompt({
         'You may call subagents to delegate an independent subtask to a fresh TaskAgent child. A child TaskAgent starts with a clean message history and does not inherit your prior tool observations; use it for isolated subtasks whose result can be summarized back to you, not for every simple local operation.',
         'When a tool result says complete=true, truncated=false, reasoning_ready=true, or presents a Source viewport with line ranges/has-more markers, treat it like a source viewport: answer from it if it covers the question. A <truncated omitted_approx_tokens="..."/> marker means model-visible context was shortened, not that the source failed. Continue only when a concrete required field is still missing. Older exploratory observations may be compacted; rely on the latest evidence or write a focused verifier.',
         'When exec output is truncated, use the visible outputId with output_read/output_tail/output_search to inspect a needed slice. Do not rerun the same command solely to recover truncated text.',
-        'Runtime environment and attached file metadata are provided as ordinary user message context items. Use them for path and shell decisions.'
+        'Runtime environment and attached file metadata are provided as ordinary user message context items. Use them for path, shell, date, time, and freshness decisions.'
     ];
     const instructions = [
         taskAgentMode ? AILIS_TASK_AGENT_SYSTEM_PROMPT : AILIS_SYSTEM_PROMPT,
@@ -6544,6 +6453,7 @@ function buildLlmAgentDirectToolPrompt({
     const contextPackageOptions = {
         instructions,
         staticPrefix: instructions,
+        contextMode: taskAgentMode ? 'task_agent' : 'persona',
         goal: message,
         runtimeEnvironment,
         taskState,
@@ -6557,7 +6467,7 @@ function buildLlmAgentDirectToolPrompt({
     };
     let contextPackage = activeContextManager.forPromptPackage(contextPackageOptions);
     let semanticCompaction = null;
-    if (taskAgentMode && ['hard', 'stop'].includes(contextPackage.budgetReport.level)) {
+    if (['hard', 'stop'].includes(contextPackage.budgetReport.level)) {
         semanticCompaction = activeContextManager.semanticCompact(contextPackageOptions);
         contextPackage = semanticCompaction.packageAfter;
     }
@@ -7447,7 +7357,7 @@ class AILISAgentRunner {
             });
         }
         let preferenceContext = '';
-        let reusableTaskContext = '';
+        let activeTaskContext = '';
         if (personaMode) {
             try {
                 preferenceContext = this.preferenceState?.buildPromptContext?.({
@@ -7462,13 +7372,11 @@ class AILISAgentRunner {
                 });
             }
             try {
-                reusableTaskContext = this.taskResultCapsules?.buildPersonaContext?.(message, {
-                    sessionId,
-                    limit: 2,
-                    maxChars: 2800
+                activeTaskContext = this.taskResultCapsules?.buildActiveTaskContext?.(sessionId, {
+                    maxChars: 2200
                 }) || '';
             } catch (error) {
-                this.gateway.emitGatewayEvent?.('agent.task_result.context_error', {
+                this.gateway.emitGatewayEvent?.('agent.task_state.context_error', {
                     sessionId,
                     error: error?.message || String(error)
                 });
@@ -7476,7 +7384,7 @@ class AILISAgentRunner {
         }
         return [
             preferenceContext,
-            reusableTaskContext,
+            activeTaskContext,
             runtimeMemoryContext,
             explicitMemoryContext
                 ? [
@@ -7509,6 +7417,21 @@ class AILISAgentRunner {
                 attachments
             });
             if (recorded?.ok) {
+                this.gateway.rawMemoryLedger?.recordChatTurn?.({
+                    sessionId,
+                    source,
+                    requestPayload: {
+                        memoryUserMessage: message
+                    },
+                    enrichedPayload: {},
+                    result: {
+                        ok: result.ok !== false,
+                        status: result.status || '',
+                        intent: result.intent || '',
+                        content: result.displayText || result.finalAnswer || result.error || ''
+                    },
+                    durationMs: Number(result.durationMs) || null
+                });
                 this.gateway.scheduleProfileCurationSoon?.('agent_turn_recorded');
                 this.gateway.emitGatewayEvent?.('agent.memory.recorded', {
                     sessionId,
@@ -8550,7 +8473,7 @@ class AILISAgentRunner {
                 unresolvedFields,
                 safetyFinalizationReason,
                 toolSummary: isPersonaOrchestratorRole(agentRuntimeRole)
-                    ? 'Persona tool surface: task_results (read-only prior public results) and subagents (execution only). Prefer direct answers from conversation and relevant reusable results; read task_results when detail is needed. Delegate only a concrete missing/stale/action gap, and resume the bound prior run only for a real continuation, correction, or narrowing. Internal orchestration must remain invisible to the user.'
+                    ? 'Persona tool surface: task_results reads completed public results; subagents executes tasks authored by AILIS. Both return observations to this same AILIS loop. Choose tools and actions from the conversation and current task state; the runtime validates but does not rewrite their meaning. Internal orchestration must remain invisible to the user.'
                     : directToolSpecs.length
                         ? `Native direct tools exposed: ${directToolSpecs.map((tool) => tool.name).slice(0, 16).join(', ')}${directToolSpecs.length > 16 ? ', ...' : ''}.`
                         : 'No native tools are exposed in this turn; answer directly if possible.'
@@ -9262,26 +9185,7 @@ class AILISAgentRunner {
                     bubble_text: '我没拿到有效下一步，先整理现场。'
                 })));
             }
-            const personaTaskAgentHandoff = isPersonaOrchestratorRole(agentRuntimeRole) && isSubagentHandoffStep(step);
-            if (personaTaskAgentHandoff) {
-                step = normalizePersonaTaskAgentHandoffStep(step, request);
-                await appendRuntimeItem({
-                    type: 'agent.handoff',
-                    status: 'task_agent_handoff_prepared',
-                    payload: {
-                        iteration,
-                        tool: step.tool,
-                        args: {
-                            action: step.args?.action,
-                            wait: step.args?.wait,
-                            waitTimeoutMs: step.args?.waitTimeoutMs,
-                            runTimeoutMs: step.args?.runTimeoutMs,
-                            maxAgentSteps: step.args?.maxAgentSteps
-                        },
-                        reason: 'persona_orchestrator hands executable tasks to one clean TaskAgent child and stops the outer persona loop after the result'
-                    }
-                });
-            }
+            const personaTaskAgentCall = isPersonaOrchestratorRole(agentRuntimeRole) && isSubagentHandoffStep(step);
 
             const deferredToolContract = buildDeferredToolContractRequest(step, events);
             if (deferredToolContract) {
@@ -9579,134 +9483,42 @@ class AILISAgentRunner {
                 }));
             }
 
-            if (personaTaskAgentHandoff) {
+            if (personaTaskAgentCall) {
                 const outcome = extractSubagentHandoffOutcome(stepResult);
-                const publicTaskResult = buildPublicTaskResultForPersona(outcome);
-                let taskResultCapsule = null;
+                const authoredTask = normalizeText(step.args?.task || step.args?.prompt || step.args?.message);
+                let recordedTaskState = null;
                 try {
-                    taskResultCapsule = this.taskResultCapsules?.save?.({
-                        taskId: outcome.subagent?.childRunId || outcome.subagent?.runId || outcome.taskRunHandoff?.runId,
+                    recordedTaskState = this.taskResultCapsules?.recordExecution?.({
                         sessionId,
-                        request: message,
-                        status: publicTaskResult.status,
+                        parentRunId: runId,
+                        action: step.args?.action,
+                        task: authoredTask,
+                        ok: outcome.ok,
+                        status: outcome.status,
+                        subagent: outcome.subagent,
                         taskRunHandoff: outcome.taskRunHandoff,
-                        childResult: outcome.childResult,
-                        summary: publicTaskResult.summary || publicTaskResult.partialAnswer || publicTaskResult.finalAnswer,
-                        unresolvedFields: publicTaskResult.unresolved
+                        childResult: outcome.childResult
                     }) || null;
                 } catch (error) {
-                    this.gateway.emitGatewayEvent?.('agent.task_result.save_error', {
+                    this.gateway.emitGatewayEvent?.('agent.task_state.record_error', {
                         runId,
                         sessionId,
                         error: error?.message || String(error)
                     });
                 }
-                const personaPresentation = await callTaskResultPersonaPresenter(decisionSettings, {
-                    message,
-                    outcome,
-                    personaContext: memoryContext,
-                    timeoutMs: Math.min(decisionTimeoutMs, DEFAULT_AGENT_DECISION_TIMEOUT_MS)
-                });
-                const personaPresenterUsage = summarizeLlmUsage(personaPresentation.usage);
-                if (personaPresenterUsage?.promptTokens) {
-                    cumulativeInputTokens += personaPresenterUsage.promptTokens;
-                }
                 await appendRuntimeItem({
-                    type: 'agent.llm_call',
-                    status: personaPresentation.ok ? 'completed' : (personaPresentation.status || 'failed'),
+                    type: 'agent.task_state',
+                    status: recordedTaskState?.state?.status || outcome.status || 'unknown',
                     payload: {
                         iteration,
-                        phase: 'persona_presentation',
-                        durationMs: personaPresentation.durationMs || 0,
-                        ok: personaPresentation.ok === true,
-                        status: personaPresentation.status || (personaPresentation.ok ? 'completed' : 'failed'),
-                        provider: decisionSettings.provider || '',
-                        model: personaPresentation.model || decisionSettings.model || '',
-                        usage: personaPresenterUsage
-                    }
-                });
-                this.gateway.emitGatewayEvent?.('agent.token_usage', {
-                    runId,
-                    sessionId,
-                    iteration,
-                    phase: 'persona_presentation',
-                    usage: personaPresentation.usage || null
-                });
-                const fallbackText = stripControlTags(
-                    publicTaskResult.finalAnswer ||
-                        publicTaskResult.partialAnswer ||
-                        publicTaskResult.summary ||
-                        (publicTaskResult.unresolved.length
-                            ? `这次还没有完整收口。当前缺口：${publicTaskResult.unresolved.join('；')}`
-                            : '这次还没有拿到足够可靠的结果，我先不拿不稳的内容敷衍你。')
-                );
-                const displayText = personaPresentation.ok ? personaPresentation.text : fallbackText;
-                const finalAnswer = displayText;
-                await appendRuntimeItem({
-                    type: 'agent.handoff',
-                    status: outcome.ok ? 'task_agent_handoff_completed' : 'task_agent_handoff_incomplete',
-                    payload: {
-                        iteration,
-                        ok: outcome.ok,
-                        status: outcome.status,
+                        task: authoredTask,
+                        status: recordedTaskState?.state?.status || outcome.status || 'unknown',
                         subagentId: outcome.subagent?.id || outcome.subagent?.subagentId || '',
                         childRunId: outcome.subagent?.childRunId || outcome.subagent?.runId || '',
-                        childStatus: outcome.subagent?.status || '',
-                        childOk: outcome.subagent?.ok,
-                        displayText,
-                        taskResultCapsuleId: taskResultCapsule?.id || '',
-                        personaPresented: personaPresentation.ok === true,
-                        personaPresenterStatus: personaPresentation.status || 'completed',
-                        personaPresenterUsage,
-                        taskRunHandoff: outcome.taskRunHandoff || null
+                        capsuleId: recordedTaskState?.capsule?.id || '',
+                        active: recordedTaskState?.active === true
                     }
                 });
-                const status = outcome.ok
-                    ? 'completed'
-                    : outcome.status === 'running'
-                        ? 'subagent_running'
-                        : outcome.status || 'subagent_incomplete';
-                const surface = renderPersonaSurfaceGateway({
-                    text: displayText,
-                    task_state: outcome.ok ? 'completed' : 'blocked',
-                    approval_state: 'none',
-                    evidence_state: outcome.taskRunHandoff?.collectedData?.length ? 'present' : 'unknown',
-                    error_code: status,
-                    ok: outcome.ok,
-                    text_is_persona_safe: true,
-                    source: 'persona_taskagent_handoff_result',
-                    emotion_hint: personaPresentation.personaOutput?.emotion || (outcome.ok ? 'focused' : 'concerned'),
-                    intensity: personaPresentation.personaOutput?.intensity,
-                    social_tone: personaPresentation.personaOutput?.socialTone,
-                    gesture_intent: personaPresentation.personaOutput?.gestureIntent,
-                    surface_task_state: personaPresentation.personaOutput?.taskState,
-                    speech_energy: personaPresentation.personaOutput?.speechEnergy,
-                    gaze_target: personaPresentation.personaOutput?.gazeTarget,
-                    duration_hint: personaPresentation.personaOutput?.durationHint,
-                    bubble_text: personaPresentation.personaOutput?.bubbleText || ''
-                });
-                return await finishRuntimeRun(attachPersonaSurface({
-                    ok: outcome.ok,
-                    runId,
-                    sessionId,
-                    status,
-                    mode: 'task',
-                    planner: 'persona-taskagent-handoff',
-                    intent: decision.intent || 'taskagent_handoff',
-                    executionRequired: true,
-                    durationMs: Date.now() - startedAt,
-                    message,
-                    finalAnswer,
-                    displayText,
-                    speechText: displayText.replace(/\n/g, ' '),
-                    plan: [],
-                    steps: stepResults,
-                    events,
-                    subagent: outcome.subagent,
-                    taskAgentResult: outcome.childResult,
-                    taskResultCapsuleId: taskResultCapsule?.id || '',
-                    taskRunHandoff: outcome.taskRunHandoff || outcome.childResult.taskRunHandoff || null
-                }, surface));
             }
 
             const paused = await pauseAfterRound({
@@ -10804,7 +10616,6 @@ module.exports = {
     splitNativeProgressNoteArgs,
     stripControlTags,
     looksLikeLeakedAgentProtocol,
-    normalizePersonaTaskAgentHandoffStep,
     extractSubagentHandoffOutcome,
     validateAgentToolLoopGuard,
     validateNativeDirectToolCall,

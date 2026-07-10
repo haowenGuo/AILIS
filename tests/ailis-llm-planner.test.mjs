@@ -549,6 +549,10 @@ test('Agent prompts inject runtime_environment from the active platform adapter'
             assert.equal(userPayload.runtime_environment.family, item.expectedFamily);
             assert.equal(userPayload.runtime_environment.path_style, item.expectedPathStyle);
             assert.equal(userPayload.runtime_environment.shell_dialect, item.expectedShellDialect);
+            assert.match(userPayload.runtime_environment.current_date, /^\d{4}-\d{2}-\d{2}$/);
+            assert.match(userPayload.runtime_environment.current_time, /^\d{2}:\d{2}:\d{2}$/);
+            assert.ok(userPayload.runtime_environment.timezone);
+            assert.match(userPayload.runtime_environment.utc_offset, /^[+-]\d{2}:\d{2}$/);
             assert.match(userPayload.runtime_environment.command_guidance, /Do not assume|not Linux by default|POSIX/);
             assert.match(JSON.stringify(llmServer.calls[0].payload.messages), /runtime_environment/);
             assert.match(llmServer.calls[0].system, /Runtime environment/);
@@ -602,14 +606,23 @@ test('Persona orchestrator prompt stays in AILIS persona and only exposes subage
         assert.doesNotMatch(llmServer.calls[0].system, /AILIS TaskAgent|coding agent running in AILIS/);
         assert.match(llmServer.calls[0].system, /可爱的虚拟助手，名字固定为AILIS/);
         assert.match(llmServer.calls[0].system, /关系表达协议/);
-        assert.match(llmServer.calls[0].system, /For a new task execution request/);
-        assert.match(llmServer.calls[0].system, /action=send/);
+        assert.match(llmServer.calls[0].system, /authoritative host clock/);
+        assert.match(llmServer.calls[0].system, /Author the complete TaskAgent task yourself/);
         const toolNames = (llmServer.calls[0].payload.tools || []).map((tool) => tool.function?.name || tool.name);
-        assert.deepEqual(toolNames, ['subagents']);
+        assert.deepEqual(toolNames, ['task_results', 'subagents']);
         const contextPayload = parseModelContextPayload(llmServer.calls[0]);
-        assert.match(contextPayload.memory_context || '', /AILIS 长期记忆上下文/);
+        assert.match(contextPayload.memory_context || '', /AILIS Persona 记忆快照/);
         assert.equal(contextPayload.capability_catalog, undefined);
         assert.equal(contextPayload.external_tool_exposure, undefined);
+        const rawTurns = gateway.rawMemoryLedger.replay({
+            type: 'chat.llm_turn',
+            sessionId: 'persona-orchestrator-test',
+            includePayload: true,
+            limit: 20
+        });
+        assert.ok(rawTurns.entries.some((entry) =>
+            entry.payload?.requestPayload?.memoryUserMessage === '你好呀'
+        ));
     } finally {
         await gateway.stop();
         await llmServer.close();
@@ -617,7 +630,7 @@ test('Persona orchestrator prompt stays in AILIS persona and only exposes subage
     }
 });
 
-test('Persona orchestrator stops after one TaskAgent handoff result', async () => {
+test('Persona preserves a model-authored current-fact task across a short user correction and resumes the same loop', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-persona-handoff-once-'));
     const llmServer = await createScriptedChatCompletionsServer(({ decisionCount }) => {
         if (decisionCount === 1) {
@@ -628,7 +641,7 @@ test('Persona orchestrator stops after one TaskAgent handoff result', async () =
                     tool: 'subagents',
                     args: {
                         action: 'spawn',
-                        task: 'Solve the attached benchmark task and return the final answer.',
+                        task: '核验截至当前日期《原神》“木偶”桑多涅是否已经实装；使用新鲜网页证据，若已实装则完成角色攻略。',
                         wait: true
                     }
                 }
@@ -636,7 +649,7 @@ test('Persona orchestrator stops after one TaskAgent handoff result', async () =
         }
         return {
             action: 'final',
-            final_answer: 'SHOULD_NOT_NEED_SECOND_LLM_CALL'
+            final_answer: 'AILIS final answer: 42'
         };
     });
     const gateway = new AILISGateway({
@@ -665,14 +678,21 @@ test('Persona orchestrator stops after one TaskAgent handoff result', async () =
             return {
                 ok: true,
                 status: 'completed',
-                displayText: 'TaskAgent final answer: 42',
-                finalAnswer: '42'
+                displayText: 'TaskAgent 已核验当前资料并完成木偶攻略。',
+                finalAnswer: '已核验并完成攻略'
             };
         };
         const status = await gateway.start();
         const result = await runAgent(status.url, {
             sessionId: 'persona-handoff-once-test',
-            message: '请执行一个需要工具的任务',
+            message: '已经实装了',
+            messageHistory: [
+                { role: 'user', content: '做一套木偶的攻略' },
+                { role: 'assistant', content: '你说的是哪个作品里的木偶呀？' },
+                { role: 'user', content: '原神的' },
+                { role: 'assistant', content: '我记忆里她还没有实装。' },
+                { role: 'user', content: '已经实装了' }
+            ],
             agentLoop: 'llm',
             llmSettings: {
                 provider: 'openai-compatible',
@@ -692,20 +712,26 @@ test('Persona orchestrator stops after one TaskAgent handoff result', async () =
         });
 
         assert.equal(result.body.ok, true, JSON.stringify(result.body));
-        assert.equal(result.body.planner, 'persona-taskagent-handoff');
-        assert.match(result.body.displayText, /TaskAgent final answer: 42/);
-        assert.equal(result.body.finalAnswer, '42');
-        assert.equal(llmServer.calls.length, 1);
+        assert.equal(result.body.planner, 'llm-agentic-executor');
+        assert.equal(result.body.displayText, 'AILIS final answer: 42');
+        assert.equal(result.body.finalAnswer, 'AILIS final answer: 42');
+        assert.equal(llmServer.calls.length, 2);
         assert.equal(subagentCalls.length, 1);
         assert.equal(subagentCalls[0].args.wait, true);
+        assert.equal(
+            subagentCalls[0].args.task,
+            '核验截至当前日期《原神》“木偶”桑多涅是否已经实装；使用新鲜网页证据，若已实装则完成角色攻略。'
+        );
         assert.equal(subagentCalls[0].args.maxAgentSteps, undefined);
-        assert.ok(subagentCalls[0].args.waitTimeoutMs >= 180000);
         assert.equal(subagentCalls[0].context.cleanContext, true);
         assert.equal(subagentCalls[0].context.contextMode, 'task_agent');
         assert.equal(gatewayToolCalls.length, 1);
-        assert.ok(gatewayToolCalls[0].waitTimeoutMs >= 180000);
-        assert.ok(gatewayToolCalls[0].timeoutMs >= gatewayToolCalls[0].waitTimeoutMs + 5000);
-        assert.equal(gatewayToolCalls[0].contextTimeoutMs, gatewayToolCalls[0].timeoutMs);
+        assert.equal(gatewayToolCalls[0].waitTimeoutMs, undefined);
+        assert.match(JSON.stringify(llmServer.calls[0].payload.messages), /原神的/);
+        assert.match(JSON.stringify(llmServer.calls[0].payload.messages), /已经实装了/);
+        assert.match(JSON.stringify(llmServer.calls[1].payload.messages), /已核验并完成攻略/);
+        assert.equal(gateway.taskResultCapsules.getStatus().activeTaskCount, 0);
+        assert.ok(gateway.taskResultCapsules.search('桑多涅攻略').length > 0);
     } finally {
         await gateway.stop();
         await llmServer.close();
@@ -1598,7 +1624,7 @@ test('Agentic Executor Loop asks confirmation, resumes, observes, and keeps call
         assert.match(text, /Agentic Executor OK/);
         assert.equal(llmServer.calls.filter((call) => /Responses-Compatible Tool Runtime/.test(call.system)).length, 4);
         assert.match(llmServer.calls[0].system, /You are a coding agent running in AILIS/);
-        assert.match(llmServer.calls[0].system, /PersonaPresenter handles user-facing character presentation/);
+        assert.match(llmServer.calls[0].system, /same outer AILIS conversation/);
         assert.match(llmServer.calls[0].system, /OpenAI Responses object model/);
         assert.doesNotMatch(llmServer.calls[0].system, /名字固定为AILIS/);
         assert.doesNotMatch(llmServer.calls[0].system, /性格设定/);

@@ -15,7 +15,6 @@ const {
     extractSubagentHandoffOutcome,
     isAgentLlmSettingsMissing,
     looksLikeLeakedAgentProtocol,
-    normalizePersonaTaskAgentHandoffStep,
     splitNativeProgressNoteArgs,
     stripControlTags
 } = require('../electron/ailis-agent-runner.cjs');
@@ -76,8 +75,9 @@ test('AILIS parent Persona prompt stays conversational while TaskAgent keeps exe
     });
     assert.match(personaPrompt.instructions, /当前有效交互偏好/);
     assert.match(personaPrompt.instructions, /Keep ordinary conversation natural/);
-    assert.match(personaPrompt.instructions, /answer immediately from it without calling subagents/);
-    assert.match(personaPrompt.instructions, /delegate only that delta/);
+    assert.match(personaPrompt.instructions, /authoritative host clock/);
+    assert.match(personaPrompt.instructions, /Author the complete TaskAgent task yourself/);
+    assert.match(personaPrompt.instructions, /same AILIS conversation/);
     assert.doesNotMatch(personaPrompt.instructions, /mcp__ailis_research__web_research|For local file and data tasks|When exec output is truncated/);
 
     const taskPrompt = buildLlmAgentDirectToolPrompt({
@@ -90,7 +90,7 @@ test('AILIS parent Persona prompt stays conversational while TaskAgent keeps exe
     assert.doesNotMatch(taskPrompt.instructions, /Keep ordinary conversation natural/);
 });
 
-test('AILIS Persona receives active preferences and reusable results while TaskAgent stays isolated', async () => {
+test('AILIS Persona receives active preferences and active task state while TaskAgent stays isolated', async () => {
     const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-persona-context-'));
     const gateway = new AILISGateway({
         projectRoot: rootDir,
@@ -124,6 +124,23 @@ test('AILIS Persona receives active preferences and reusable results while TaskA
     }, { sessionId: 'main' });
     assert.equal(lookup.isError, false);
     assert.equal(lookup.structuredContent.results[0].taskId, 'old-roxy-guide');
+    gateway.taskResultCapsules.recordExecution({
+        sessionId: 'main',
+        parentRunId: 'parent-roxy-guide',
+        task: '继续完成洛茜攻略并核对配队',
+        status: 'max_loop',
+        ok: false,
+        subagent: {
+            id: 'roxy-worker',
+            childRunId: 'roxy-child'
+        },
+        taskRunHandoff: {
+            status: 'max_loop',
+            partialAnswer: '已整理技能，配队仍待核验。',
+            failureAnalysis: { bottleneck: '配队证据不足' },
+            resume: { checkpointAvailable: true, contextManagerCheckpoint: { history_version: 1, items: [] } }
+        }
+    });
     const runner = gateway.ensureAgentRunner();
     const personaContext = runner.compileMemoryContext({
         sessionId: 'main',
@@ -139,9 +156,10 @@ test('AILIS Persona receives active preferences and reusable results while TaskA
     });
 
     assert.match(personaContext, /tone\.response: 自然简洁/);
-    assert.match(personaContext, /可复用的既往任务结果/);
-    assert.match(personaContext, /洛茜的核心队伍结论/);
-    assert.doesNotMatch(taskContext, /可复用的既往任务结果|tone\.response: 自然简洁/);
+    assert.match(personaContext, /当前活动任务状态/);
+    assert.match(personaContext, /继续完成洛茜攻略并核对配队/);
+    assert.doesNotMatch(personaContext, /洛茜的核心队伍结论/);
+    assert.doesNotMatch(taskContext, /当前活动任务状态|tone\.response: 自然简洁/);
 });
 
 test('AILIS direct tool specs allow model-authored progress notes without passing them to tools', () => {
@@ -179,7 +197,7 @@ test('AILIS direct tool specs allow model-authored progress notes without passin
     assert.match(split.progressNote, /确认这份文件/);
 });
 
-test('AILIS Agent Runner rejects visible tool protocols and preserves the original TaskAgent goal', () => {
+test('AILIS Agent Runner rejects visible tool protocols', () => {
     const leaked = `<｜｜DSML｜｜tool_calls>
 <｜｜DSML｜｜invoke name="mcp__ailis_research__web_research">
 <｜｜DSML｜｜parameter name="query" string="true">Rossi guide</｜｜DSML｜｜parameter>
@@ -190,19 +208,6 @@ test('AILIS Agent Runner rejects visible tool protocols and preserves the origin
         tool_calls: [{ function: { name: 'web_search', arguments: '{}' } }]
     })), true);
     assert.equal(looksLikeLeakedAgentProtocol('已经整理好洛茜的技能、配队和培养建议。'), false);
-
-    const normalized = normalizePersonaTaskAgentHandoffStep({
-        tool: 'subagents',
-        args: {
-            action: 'spawn',
-            task: '扩写后的复杂验收清单',
-            message: '扩写后的复杂验收清单'
-        }
-    }, {
-        message: '做一套洛茜的攻略'
-    });
-    assert.equal(normalized.args.task, '做一套洛茜的攻略');
-    assert.equal(normalized.args.message, '做一套洛茜的攻略');
 
     const handoff = extractSubagentHandoffOutcome({
         response: {
