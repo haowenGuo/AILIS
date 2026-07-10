@@ -33,12 +33,15 @@ const { AILISAgentRunner } = require('./ailis-agent-runner.cjs');
 const { AILISMemoryRuntime } = require('./ailis-memory-store.cjs');
 const { AILISRawMemoryLedger } = require('./ailis-raw-memory-ledger.cjs');
 const { AILISUserProfileCurator } = require('./ailis-user-profile-curator.cjs');
+const { AILISPreferenceState } = require('./ailis-preference-state.cjs');
+const { AILISTaskResultCapsuleStore } = require('./ailis-task-result-capsules.cjs');
 const { AilisSelfEvolutionRuntime } = require('./ailis-self-evolution-runtime.cjs');
 const {
     listToolContracts,
     validateToolContract
 } = require('./ailis-tool-contracts.cjs');
 const EMAIL_TOOL_ID = 'email';
+const TASK_RESULTS_TOOL_ID = 'task_results';
 const { FILE_MANAGER_TOOL_ID, executeFileManagerTool } = require('./ailis-file-manager-tool.cjs');
 const { COMPUTER_TOOL_ID, AILISComputerTool } = require('./ailis-computer-tool.cjs');
 const { CODE_TOOL_ID, executeCodeTool } = require('./ailis-code-tool.cjs');
@@ -72,6 +75,7 @@ const MAX_SSE_WRITABLE_BYTES = 1024 * 1024;
 const DEFAULT_HTTP_REQUEST_TIMEOUT_MS = Math.max(0, Number(process.env.AILIS_GATEWAY_HTTP_REQUEST_TIMEOUT_MS || 0) || 0);
 const DEFAULT_PROFILE_CURATION_START_DELAY_MS = Number(process.env.AILIS_PROFILE_CURATION_START_DELAY_MS || 60 * 1000);
 const DEFAULT_PROFILE_CURATION_CHECK_INTERVAL_MS = Number(process.env.AILIS_PROFILE_CURATION_CHECK_INTERVAL_MS || 6 * 60 * 60 * 1000);
+const DEFAULT_PROFILE_CURATION_DEBOUNCE_MS = Number(process.env.AILIS_PROFILE_CURATION_DEBOUNCE_MS || 2 * 60 * 1000);
 
 const GATEWAY_BACKED_TOOL_IDS = new Set(['sessions_list', 'gateway', 'cron', 'nodes']);
 const SESSION_BOUND_TOOL_IDS = new Set([
@@ -129,6 +133,16 @@ const CODEX_STYLE_DIRECT_LOCAL_TOOL_IDS = new Set([
 // through tool_search. The Registry is the source of truth for their full specs.
 const EXTENDED_LOCAL_TOOL_EXPOSURE = TOOL_EXPOSURE.DEFERRED;
 const AILIS_LOCAL_TOOL_DEFINITIONS = Object.freeze([
+    Object.freeze({
+        id: TASK_RESULTS_TOOL_ID,
+        label: 'task_results',
+        description: 'Read-only access to AILIS public results from earlier completed work. Search relevant results or retrieve one result by id; this never reruns the task.',
+        sectionId: 'persona-context',
+        route: 'ailis-local',
+        materialized: true,
+        status: 'available',
+        needsApprovalActions: Object.freeze([])
+    }),
     Object.freeze({
         id: EMAIL_TOOL_ID,
         label: 'email',
@@ -795,6 +809,8 @@ class AILISGateway extends EventEmitter {
         this.profileCurationCheckIntervalMs = Math.max(60 * 1000, Number(options.profileCurationCheckIntervalMs) || DEFAULT_PROFILE_CURATION_CHECK_INTERVAL_MS);
         this.profileCurationStartTimer = null;
         this.profileCurationIntervalTimer = null;
+        this.profileCurationDebounceTimer = null;
+        this.profileCurationDebounceMs = Math.max(5000, Number(options.profileCurationDebounceMs) || DEFAULT_PROFILE_CURATION_DEBOUNCE_MS);
         this.profileCurationRunning = false;
         this.computerTool = new AILISComputerTool({
             workspaceRoot: this.workspaceRoot,
@@ -811,10 +827,28 @@ class AILISGateway extends EventEmitter {
             rootDir: path.join(this.auditDir, 'memory'),
             workspaceRoot: this.workspaceRoot
         });
+        this.preferenceState = options.preferenceState || new AILISPreferenceState({
+            rootDir: path.join(this.auditDir, 'memory')
+        });
+        this.taskResultCapsules = options.taskResultCapsules || new AILISTaskResultCapsuleStore({
+            rootDir: path.join(this.auditDir, 'task-results')
+        });
+        this.taskResultBackfill = { ok: true, imported: 0, capsuleCount: this.taskResultCapsules?.getStatus?.().capsuleCount || 0 };
+        try {
+            const memoryEvents = this.memoryRuntime?.searchMemory?.('', { limit: 500 })?.events || [];
+            this.taskResultBackfill = this.taskResultCapsules?.backfillFromMemoryEvents?.(memoryEvents) || this.taskResultBackfill;
+        } catch (error) {
+            this.taskResultBackfill = {
+                ok: false,
+                imported: 0,
+                error: error?.message || String(error)
+            };
+        }
         this.userProfileCurator = options.userProfileCurator || new AILISUserProfileCurator({
             rootDir: path.join(this.auditDir, 'memory'),
             workspaceRoot: this.workspaceRoot,
             rawMemoryLedger: this.rawMemoryLedger,
+            preferenceState: this.preferenceState,
             llmClient: typeof options.profileCurationLlm === 'function' ? options.profileCurationLlm : null,
             emitGatewayEvent: (type, payload) => this.emitGatewayEvent(type, payload)
         });
@@ -1084,15 +1118,38 @@ class AILISGateway extends EventEmitter {
             clearInterval(this.profileCurationIntervalTimer);
             this.profileCurationIntervalTimer = null;
         }
+        if (this.profileCurationDebounceTimer) {
+            clearTimeout(this.profileCurationDebounceTimer);
+            this.profileCurationDebounceTimer = null;
+        }
     }
 
-    async runScheduledProfileCuration(trigger = 'scheduled') {
-        if (this.profileCurationRunning || !this.profileCurationEnabled || !this.userProfileCurator) {
+    scheduleProfileCurationSoon(trigger = 'conversation_idle') {
+        if (!this.profileCurationEnabled || !this.userProfileCurator) {
+            return false;
+        }
+        if (this.profileCurationDebounceTimer) {
+            clearTimeout(this.profileCurationDebounceTimer);
+        }
+        this.profileCurationDebounceTimer = setTimeout(() => {
+            this.profileCurationDebounceTimer = null;
+            void this.runScheduledProfileCuration(trigger, { force: true });
+        }, this.profileCurationDebounceMs);
+        this.profileCurationDebounceTimer.unref?.();
+        return true;
+    }
+
+    async runScheduledProfileCuration(trigger = 'scheduled', options = {}) {
+        if (this.profileCurationRunning) {
+            this.scheduleProfileCurationSoon(trigger);
+            return { ok: false, status: 'profile_curation_already_running' };
+        }
+        if (!this.profileCurationEnabled || !this.userProfileCurator) {
             return { ok: false, status: 'profile_curation_not_started' };
         }
         this.profileCurationRunning = true;
         try {
-            const result = await this.curateUserProfile({ trigger });
+            const result = await this.curateUserProfile({ trigger, ...options });
             this.emitGatewayEvent('memory.profile_curation.scheduled', {
                 trigger,
                 ok: result?.ok === true,
@@ -1100,6 +1157,7 @@ class AILISGateway extends EventEmitter {
                 processedEntryCount: result?.run?.processedEntryCount || 0,
                 profileUpdateCount: result?.run?.profileUpdateCount || 0,
                 relationshipUpdateCount: result?.run?.relationshipUpdateCount || 0,
+                preferenceEventCount: result?.run?.preferenceEventCount || 0,
                 affinityChanged: result?.run?.affinityChanged === true
             });
             return result;
@@ -1166,13 +1224,17 @@ class AILISGateway extends EventEmitter {
             runtime: this.runtime.getStatus(),
             memory: this.memoryRuntime?.getStatus?.() || null,
             rawMemory: this.rawMemoryLedger?.getStatus?.() || null,
+            interactionPreferences: this.preferenceState?.getStatus?.() || null,
+            taskResultCapsules: this.taskResultCapsules?.getStatus?.() || null,
+            taskResultBackfill: this.taskResultBackfill,
             userProfileCuration: this.userProfileCurator?.getStatus?.() || null,
             userProfileCurationScheduler: {
                 enabled: this.profileCurationEnabled,
                 running: this.profileCurationRunning,
                 startDelayMs: this.profileCurationStartDelayMs,
                 checkIntervalMs: this.profileCurationCheckIntervalMs,
-                scheduled: Boolean(this.profileCurationStartTimer || this.profileCurationIntervalTimer)
+                debounceMs: this.profileCurationDebounceMs,
+                scheduled: Boolean(this.profileCurationStartTimer || this.profileCurationIntervalTimer || this.profileCurationDebounceTimer)
             },
             selfEvolution: this.selfEvolutionRuntime?.getStatus?.() || null,
             toolRuntimeGateway: this.toolRuntimeSupervisor?.getStatus?.() || null,
@@ -1196,7 +1258,9 @@ class AILISGateway extends EventEmitter {
             this.agentRunner = new AILISAgentRunner({
                 gateway: this,
                 workspaceRoot: this.workspaceRoot,
-                memoryRuntime: this.memoryRuntime
+                memoryRuntime: this.memoryRuntime,
+                preferenceState: this.preferenceState,
+                taskResultCapsules: this.taskResultCapsules
             });
         }
         return this.agentRunner;
@@ -2339,6 +2403,36 @@ class AILISGateway extends EventEmitter {
 
     async executeGatewayLocalTool(toolId, args, context = {}) {
         const workspaceDir = context.workspaceDir || this.resolveWorkspace(context.workspace, context);
+        if (toolId === TASK_RESULTS_TOOL_ID) {
+            const action = normalizeString(args.action, 'search').toLowerCase();
+            const limit = Math.max(1, Math.min(Number(args.limit) || 3, 8));
+            const sessionId = normalizeString(args.sessionId || context.sessionId || context.sessionKey);
+            if (action === 'get') {
+                const capsule = this.taskResultCapsules?.get?.(args.id) || null;
+                const payload = {
+                    status: capsule ? 'completed' : 'not_found',
+                    result: capsule
+                };
+                return {
+                    content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }],
+                    isError: !capsule,
+                    details: payload,
+                    structuredContent: payload
+                };
+            }
+            const results = this.taskResultCapsules?.search?.(args.query, { sessionId, limit }) || [];
+            const payload = {
+                status: 'completed',
+                query: normalizeString(args.query),
+                results
+            };
+            return {
+                content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }],
+                isError: false,
+                details: payload,
+                structuredContent: payload
+            };
+        }
         if (toolId === EMAIL_TOOL_ID) {
             const { executeEmailTool } = loadEmailToolModule();
             return await executeEmailTool(args, {

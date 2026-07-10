@@ -10,8 +10,26 @@ import {
 } from './ailis-progress-surface.js';
 import { extractTtsSpeechTextFromDisplay, normalizeTtsSpeechText } from './tts-speech-text.js';
 
-const CONTROL_TAG_PATTERN = /\[(action|expression):([^\]]*)\]/g;
-const LEADING_INCOMPLETE_CONTROL_TAG_PATTERN = /^(?:\[(?:action|expression):[^\]]*)+/;
+const CONTROL_TAG_PATTERN = /\[\s*(action|expression)\s*[:=：＝]\s*([^\]]*)\]/gi;
+const LEADING_INCOMPLETE_CONTROL_TAG_PATTERN = /^(?:\s*\[\s*(?:action|expression)\s*[:=：＝][^\]]*)+/i;
+const LEGACY_EXPRESSION_ALIASES = Object.freeze({
+    curious: 'surprised',
+    thinking: 'surprised',
+    focused: 'relaxed',
+    calm: 'relaxed',
+    neutral: 'relaxed',
+    soft: 'relaxed',
+    comforting: 'relaxed',
+    comfort: 'relaxed',
+    smile: 'happy',
+    joy: 'happy',
+    cheerful: 'happy',
+    blinkright: 'blinkRight',
+    shy: 'blinkRight',
+    blush: 'blinkRight',
+    embarrassed: 'blinkRight'
+});
+const LEGACY_ALLOWED_EXPRESSIONS = new Set(['happy', 'angry', 'sad', 'surprised', 'relaxed', 'blinkRight']);
 const VISION_LLM_TIMEOUT_MS = 90000;
 const PROACTIVE_LLM_TIMEOUT_MS = 30000;
 const PROGRESS_MIN_INTERVAL_MS = 1200;
@@ -22,6 +40,18 @@ function normalizeText(value) {
         return '';
     }
     return value.replace(/[ \t]+/g, ' ').trim();
+}
+
+function normalizeLegacyControlValue(kind = '', value = '') {
+    const normalized = normalizeText(value);
+    if (String(kind).toLowerCase() !== 'expression') {
+        return normalized;
+    }
+    if (LEGACY_ALLOWED_EXPRESSIONS.has(normalized)) {
+        return normalized;
+    }
+    const alias = LEGACY_EXPRESSION_ALIASES[normalized.toLowerCase()];
+    return LEGACY_ALLOWED_EXPRESSIONS.has(alias) ? alias : '';
 }
 
 function eventBelongsToRun(payload = {}, runId = '') {
@@ -196,10 +226,12 @@ export function createGatewayProgressBridge({ gateway, sessionId, onProgress, on
             pushFrame(createPersonaProgressFrame(event), { force: true });
             return;
         }
-        if (!state.runId || !eventBelongsToRun(payload, state.runId)) {
+        const payloadRunId = normalizeText(payload.runId || payload.parentRunId || payload.parent_run_id);
+        const isFinalForActiveRunWithoutRunId = type === 'agent.final' && state.runId && !payloadRunId;
+        if (!state.runId || (!eventBelongsToRun(payload, state.runId) && !isFinalForActiveRunWithoutRunId)) {
             return;
         }
-        if (type === 'agent.run.finished' || type === 'agent.run.interrupted') {
+        if (type === 'agent.run.finished' || type === 'agent.run.interrupted' || type === 'agent.final') {
             const finalText = normalizeMarkdownSource(payload.displayText || payload.text || payload.summary || payload.error || '');
             if (finalText) {
                 onProgress(toAssistantPayload(finalText, {
@@ -504,11 +536,12 @@ function parseAssistantReply(rawText) {
     let expression = null;
     const raw = typeof rawText === 'string' ? rawText : '';
     const stripped = raw.replace(CONTROL_TAG_PATTERN, (_, kind, value) => {
-        const normalizedValue = value.trim();
-        if (kind === 'action' && !action) {
+        const normalizedKind = String(kind || '').toLowerCase();
+        const normalizedValue = normalizeLegacyControlValue(normalizedKind, value);
+        if (normalizedKind === 'action' && !action && normalizedValue) {
             action = normalizedValue;
         }
-        if (kind === 'expression' && !expression) {
+        if (normalizedKind === 'expression' && !expression && normalizedValue) {
             expression = normalizedValue;
         }
         return '';

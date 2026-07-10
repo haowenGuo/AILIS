@@ -10,6 +10,7 @@ const { AILISGateway } = require('../electron/ailis-gateway.cjs');
 const {
     AILISAgentRunner,
     buildAgentDirectToolSpecs,
+    buildLlmAgentDirectToolPrompt,
     buildToolObservationDigest,
     extractSubagentHandoffOutcome,
     isAgentLlmSettingsMissing,
@@ -61,6 +62,86 @@ test('AILIS Agent Runner strips persona_output blocks from visible text', () => 
     assert.equal(embeddedJsonText, '好的啦～被你夸得有点小害羞呢。');
     assert.doesNotMatch(embeddedJsonText, /persona_output|gestureIntent|taskState/);
     assert.doesNotMatch(embeddedJsonText, /^\{|\}$/);
+
+    const fullWidthTags = stripControlTags(
+        '[expression:happy]【expression:surprised】【emotion:flustered】我没有把内部表情标签说出来。'
+    );
+    assert.equal(fullWidthTags, '我没有把内部表情标签说出来。');
+});
+
+test('AILIS parent Persona prompt stays conversational while TaskAgent keeps execution guidance', () => {
+    const personaPrompt = buildLlmAgentDirectToolPrompt({
+        message: '老婆，你的说话语气怎么有点冷漠',
+        toolSummary: 'Persona orchestrator tools exposed: subagents only.'
+    });
+    assert.match(personaPrompt.instructions, /当前有效交互偏好/);
+    assert.match(personaPrompt.instructions, /Keep ordinary conversation natural/);
+    assert.match(personaPrompt.instructions, /answer immediately from it without calling subagents/);
+    assert.match(personaPrompt.instructions, /delegate only that delta/);
+    assert.doesNotMatch(personaPrompt.instructions, /mcp__ailis_research__web_research|For local file and data tasks|When exec output is truncated/);
+
+    const taskPrompt = buildLlmAgentDirectToolPrompt({
+        message: '查找最新资料并验证结果',
+        contextMode: 'task_agent',
+        toolSummary: 'Direct tools are exposed.'
+    });
+    assert.match(taskPrompt.instructions, /mcp__ailis_research__web_research/);
+    assert.match(taskPrompt.instructions, /For local file and data tasks/);
+    assert.doesNotMatch(taskPrompt.instructions, /Keep ordinary conversation natural/);
+});
+
+test('AILIS Persona receives active preferences and reusable results while TaskAgent stays isolated', async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-persona-context-'));
+    const gateway = new AILISGateway({
+        projectRoot: rootDir,
+        workspaceRoot: rootDir,
+        auditDir: path.join(rootDir, 'audit'),
+        profileCurationEnabled: false
+    });
+    gateway.preferenceState.append({
+        slot: 'tone.response',
+        operation: 'set',
+        value: '自然简洁',
+        scope: 'persistent',
+        confidence: 0.98,
+        observedAt: '2026-07-09T10:00:00.000Z',
+        evidence: { messageId: 'pref-1', quote: '以后说得自然简洁' }
+    }, { userMessage: '以后说得自然简洁' });
+    gateway.taskResultCapsules.save({
+        taskId: 'old-roxy-guide',
+        sessionId: 'main',
+        request: '做一套洛茜攻略',
+        generatedAt: '2026-07-09T11:00:00.000Z',
+        taskRunHandoff: {
+            status: 'completed',
+            finalAnswer: '洛茜的核心队伍结论已经整理完成。'
+        }
+    });
+    const lookup = await gateway.executeGatewayLocalTool('task_results', {
+        action: 'search',
+        query: '洛茜配队',
+        limit: 2
+    }, { sessionId: 'main' });
+    assert.equal(lookup.isError, false);
+    assert.equal(lookup.structuredContent.results[0].taskId, 'old-roxy-guide');
+    const runner = gateway.ensureAgentRunner();
+    const personaContext = runner.compileMemoryContext({
+        sessionId: 'main',
+        message: '洛茜配队怎么调整',
+        request: {},
+        contextMode: 'persona'
+    });
+    const taskContext = runner.compileMemoryContext({
+        sessionId: 'main',
+        message: '洛茜配队怎么调整',
+        request: {},
+        contextMode: 'task_agent'
+    });
+
+    assert.match(personaContext, /tone\.response: 自然简洁/);
+    assert.match(personaContext, /可复用的既往任务结果/);
+    assert.match(personaContext, /洛茜的核心队伍结论/);
+    assert.doesNotMatch(taskContext, /可复用的既往任务结果|tone\.response: 自然简洁/);
 });
 
 test('AILIS direct tool specs allow model-authored progress notes without passing them to tools', () => {
@@ -256,6 +337,20 @@ test('AILIS Agent Runner passes parent LLM settings only to subagent tool calls'
 });
 
 test('AILIS persona exposes subagent handoff while TaskAgent keeps Codex core by default', () => {
+    const taskResultsSpec = {
+        name: 'task_results',
+        description: 'Read prior public task results.',
+        parameters: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['action'],
+            properties: {
+                action: { type: 'string', enum: ['search', 'get'] },
+                query: { type: 'string' },
+                id: { type: 'string' }
+            }
+        }
+    };
     const subagentSpec = {
         name: 'subagents',
         description: 'Spawn child task agents.',
@@ -282,7 +377,11 @@ test('AILIS persona exposes subagent handoff while TaskAgent keeps Codex core by
                     parameters: { type: 'object', properties: { command: { type: 'string' } } }
                 }
             ],
-            definition: (toolId) => toolId === 'subagents' ? { spec: subagentSpec } : null
+            definition: (toolId) => {
+                if (toolId === 'subagents') return { spec: subagentSpec };
+                if (toolId === 'task_results') return { spec: taskResultsSpec };
+                return null;
+            }
         }
     };
 
@@ -291,7 +390,7 @@ test('AILIS persona exposes subagent handoff while TaskAgent keeps Codex core by
             agentRole: 'persona_orchestrator'
         }
     });
-    assert.deepEqual(personaSpecs.map((spec) => spec.name), ['subagents']);
+    assert.deepEqual(personaSpecs.map((spec) => spec.name), ['task_results', 'subagents']);
 
     const taskSpecs = buildAgentDirectToolSpecs(gateway, {
         requestContext: {

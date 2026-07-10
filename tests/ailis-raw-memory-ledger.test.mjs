@@ -102,3 +102,42 @@ test('AILIS runtime mirrors transcript items into raw memory ledger', async () =
     assert.ok(replay.entries.every((entry) => entry.type === 'agent.transcript.item'));
     assert.ok(replay.entries.some((entry) => entry.payload.payload?.stdout?.includes('完整工具输出')));
 });
+
+test('AILIS raw memory ledger can replay from the oldest matching entries for curator cursors', async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-raw-order-'));
+    const ledger = new AILISRawMemoryLedger({
+        rootDir: path.join(rootDir, 'raw-memory'),
+        workspaceRoot: rootDir
+    });
+
+    for (const index of [1, 2, 3]) {
+        ledger.appendEntry({
+            id: `raw-${index}`,
+            iso: `2026-06-29T10:00:0${index}.000Z`,
+            type: 'chat.llm_turn',
+            source: 'test',
+            sessionId: 'main',
+            payload: {
+                requestPayload: {
+                    memoryUserMessage: `message ${index}`
+                }
+            }
+        });
+    }
+
+    const latest = ledger.replay({ limit: 2 });
+    assert.deepEqual(latest.entries.map((entry) => entry.id), ['raw-2', 'raw-3']);
+    assert.equal(latest.tail, true);
+
+    const oldest = ledger.replay({ limit: 2, tail: false });
+    assert.deepEqual(oldest.entries.map((entry) => entry.id), ['raw-1', 'raw-2']);
+    assert.equal(oldest.tail, false);
+
+    const afterSecond = ledger.replay({
+        since: '2026-06-29T10:00:02.000Z',
+        sinceExclusive: true,
+        limit: 2,
+        tail: false
+    });
+    assert.deepEqual(afterSecond.entries.map((entry) => entry.id), ['raw-3']);
+});

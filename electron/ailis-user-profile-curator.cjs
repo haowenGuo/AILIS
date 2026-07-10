@@ -7,6 +7,8 @@ const DEFAULT_EVIDENCE_LIMIT = 120;
 const DEFAULT_EVIDENCE_MAX_CHARS = 42000;
 const DEFAULT_ENTRY_MAX_CHARS = 2200;
 const DEFAULT_MIN_CONFIDENCE = 0.62;
+const DEFAULT_MAX_BATCHES_PER_RUN = 4;
+const MAX_BATCHES_PER_RUN = 50;
 const PROFILE_CATEGORIES = new Set([
     'communication_style',
     'work_style',
@@ -18,6 +20,8 @@ const PROFILE_CATEGORIES = new Set([
     'relationship_tone'
 ]);
 const AFFINITY_DIMENSIONS = ['trust', 'familiarity', 'warmth', 'friction'];
+const PREFERENCE_OPERATIONS = new Set(['set', 'avoid', 'clear', 'observe']);
+const PREFERENCE_SCOPES = new Set(['turn', 'session', 'day', 'until_changed', 'persistent']);
 
 function nowIso() {
     return new Date().toISOString();
@@ -228,23 +232,17 @@ function normalizeRepairState(value = '') {
     return 'stable';
 }
 
-function extractEntryText(entry = {}) {
+function extractUserEntryText(entry = {}) {
     const payload = entry.payload || {};
     if (entry.type === 'chat.llm_turn') {
-        return [
-            payload.requestPayload?.memoryUserMessage,
-            payload.requestPayload?.messages,
-            payload.result?.content,
-            payload.result?.error
-        ].filter(Boolean).map((part) => typeof part === 'string' ? part : JSON.stringify(part)).join('\n');
+        const userMessage = payload.requestPayload?.memoryUserMessage;
+        return typeof userMessage === 'string' ? userMessage : '';
     }
-    if (entry.type === 'agent.transcript.item') {
-        return JSON.stringify(payload.payload || payload, null, 2);
-    }
-    return JSON.stringify(payload, null, 2);
+    return '';
 }
 
 function renderEvidenceEntry(entry = {}, maxChars = DEFAULT_ENTRY_MAX_CHARS) {
+    const userText = truncateText(extractUserEntryText(entry), maxChars);
     return {
         id: entry.id,
         iso: entry.iso,
@@ -253,7 +251,8 @@ function renderEvidenceEntry(entry = {}, maxChars = DEFAULT_ENTRY_MAX_CHARS) {
         sessionId: entry.sessionId,
         runId: entry.runId,
         category: entry.category,
-        text: truncateText(extractEntryText(entry), maxChars)
+        userText,
+        text: userText
     };
 }
 
@@ -262,22 +261,31 @@ function buildPromptPayload({
     userProfile = createDefaultUserProfile(),
     relationshipProfile = createDefaultRelationshipProfile(),
     affinityState = createDefaultAffinityState(),
-    runDate = todayKey()
+    runDate = todayKey(),
+    batch = null,
+    currentInteractionPreferences = null
 } = {}) {
     return {
         runDate,
-        instruction: 'Extract only evidence-grounded user profile, relationship profile, and affinity updates from new Raw Memory Ledger entries.',
+        batch,
+        instruction: 'Extract only evidence-grounded user profile, relationship profile, interaction-preference events, and affinity updates from this Raw Memory Ledger evidence batch.',
         rules: [
             'Return valid JSON only.',
             'Every profile or relationship update must include evidenceIds from evidence[].id.',
             'Reject one-off emotions, temporary task details, secrets, API keys, and unsupported guesses.',
             'Do not infer private demographics or sensitive attributes.',
             'Prefer stable preferences and repeated patterns; mark weak signals as candidate.',
-            'Affinity deltas must be small and justified by evidence.'
+            'Affinity deltas must be small and justified by evidence.',
+            'This input is a batch, not the whole ledger. Do not make global absence claims from one batch.',
+            'Internal tool traces are weak evidence unless they quote an explicit user-facing preference or relationship signal.',
+            'A preference event must quote an exact substring from evidence[].userText. Never use assistant text as preference evidence.',
+            'Do not infer a reciprocal address form from a name the user used for AILIS. A bare nickname is observe, not set.',
+            'Use an existing semantic slot when it has the same meaning. Slots are extensible; values are never limited to predefined nicknames or styles.'
         ],
         allowedProfileCategories: Array.from(PROFILE_CATEGORIES),
         currentUserProfile: userProfile.items.slice(-120),
         currentRelationshipProfile: relationshipProfile.items.slice(-80),
+        currentInteractionPreferences,
         currentAffinityState: {
             trust: affinityState.trust,
             familiarity: affinityState.familiarity,
@@ -293,7 +301,7 @@ function buildPromptPayload({
 function buildSystemPrompt() {
     return [
         'You are AILIS Memory Curator.',
-        'Your job is to learn from Raw Memory Ledger evidence and propose structured, auditable memory patches.',
+        'Your job is to learn from Raw Memory Ledger evidence batches and propose structured, auditable memory patches.',
         'You must be conservative, evidence-bound, and JSON-only.',
         'Do not write a general summary. Output only the requested JSON object.'
     ].join('\n');
@@ -324,6 +332,19 @@ function buildUserPrompt(payload) {
                     stability: 'candidate|stable',
                     evidenceIds: ['raw-entry-id'],
                     reason: 'why this matters'
+                }
+            ],
+            preferenceEvents: [
+                {
+                    slot: 'extensible semantic slot, e.g. address.user_to_ailis, address.ailis_to_user, tone.response, style.length',
+                    operation: 'set|avoid|clear|observe',
+                    value: 'preference value; may be empty only for clear',
+                    scope: 'turn|session|day|until_changed|persistent',
+                    explicitness: 'explicit|implicit',
+                    confidence: 0.0,
+                    evidenceId: 'raw-entry-id',
+                    evidenceQuote: 'exact substring copied from evidence[].userText',
+                    reason: 'brief explanation of scope and operation'
                 }
             ],
             affinityUpdate: {
@@ -407,6 +428,52 @@ function normalizeRelationshipUpdate(update = {}, allowedEvidence = new Set(), m
         confidence,
         stability: normalizeStability(update.stability),
         evidenceIds,
+        reason: normalizeString(update.reason)
+    };
+}
+
+function normalizePreferenceEvent(update = {}, evidenceById = new Map(), minConfidence = DEFAULT_MIN_CONFIDENCE) {
+    if (!isPlainObject(update)) {
+        return null;
+    }
+    const slot = normalizeString(update.slot).toLowerCase();
+    const operation = normalizeString(update.operation, 'observe').toLowerCase();
+    const scope = normalizeString(update.scope, 'session').toLowerCase();
+    const value = normalizeString(update.value);
+    const confidence = clampNumber(update.confidence, 0, 1, 0);
+    const evidenceId = normalizeString(update.evidenceId || normalizeArray(update.evidenceIds)[0]);
+    const evidenceQuote = normalizeString(update.evidenceQuote || update.quote);
+    const evidence = evidenceById.get(evidenceId);
+    const userText = normalizeString(evidence?.userText);
+    if (
+        !/^[a-z][a-z0-9_.-]{2,79}$/.test(slot) ||
+        !PREFERENCE_OPERATIONS.has(operation) ||
+        !PREFERENCE_SCOPES.has(scope) ||
+        (!value && operation !== 'clear') ||
+        confidence < minConfidence ||
+        !evidence ||
+        !evidenceQuote ||
+        !userText.includes(evidenceQuote)
+    ) {
+        return null;
+    }
+    return {
+        id: stableId('preference-event', evidenceId, slot, operation, value, scope, evidenceQuote),
+        slot,
+        operation,
+        value,
+        scope,
+        explicitness: normalizeString(update.explicitness, operation === 'observe' ? 'implicit' : 'explicit').toLowerCase() === 'explicit'
+            ? 'explicit'
+            : 'implicit',
+        confidence,
+        observedAt: normalizeString(evidence.iso, nowIso()),
+        turnId: normalizeString(evidence.runId, evidenceId),
+        sessionId: normalizeString(evidence.sessionId),
+        evidence: {
+            messageId: evidenceId,
+            quote: evidenceQuote
+        },
         reason: normalizeString(update.reason)
     };
 }
@@ -547,11 +614,23 @@ function applyAffinityUpdate(affinity, update, runIso) {
     return true;
 }
 
+function normalizeBatchLimit(value, fallback = DEFAULT_MAX_BATCHES_PER_RUN) {
+    return Math.max(1, Math.min(Number(value) || fallback, MAX_BATCHES_PER_RUN));
+}
+
+function cursorForEntry(entry = {}, fallbackIso = nowIso()) {
+    return {
+        lastProcessedIso: normalizeString(entry.iso, fallbackIso),
+        lastProcessedEntryId: normalizeString(entry.id)
+    };
+}
+
 class AILISUserProfileCurator {
     constructor(options = {}) {
         this.workspaceRoot = path.resolve(options.workspaceRoot || process.cwd());
         this.rootDir = path.resolve(options.rootDir || path.join(this.workspaceRoot, '.ailis-state', 'memory'));
         this.rawMemoryLedger = options.rawMemoryLedger || null;
+        this.preferenceState = options.preferenceState || null;
         this.llmClient = typeof options.llmClient === 'function' ? options.llmClient : null;
         this.emitGatewayEvent = typeof options.emitGatewayEvent === 'function' ? options.emitGatewayEvent : () => {};
         this.profilePath = path.join(this.rootDir, 'user-profile.json');
@@ -607,29 +686,49 @@ class AILISUserProfileCurator {
             affinityPath: this.affinityPath,
             statePath: this.statePath,
             hasRawMemoryLedger: Boolean(this.rawMemoryLedger),
+            hasPreferenceState: Boolean(this.preferenceState),
             hasLlmClient: Boolean(this.llmClient),
             lastError: this.lastError
         };
     }
 
-    buildEvidencePack(entries = [], options = {}) {
+    buildEvidenceBatch(entries = [], options = {}) {
         const evidenceLimit = Math.max(1, Math.min(Number(options.evidenceLimit) || DEFAULT_EVIDENCE_LIMIT, 500));
         const maxChars = Math.max(4000, Math.min(Number(options.maxEvidenceChars) || DEFAULT_EVIDENCE_MAX_CHARS, 120000));
         const entryMaxChars = Math.max(400, Math.min(Number(options.entryMaxChars) || DEFAULT_ENTRY_MAX_CHARS, 8000));
-        const candidates = entries
-            .slice(-evidenceLimit)
-            .map((entry) => renderEvidenceEntry(entry, entryMaxChars));
+        const candidates = normalizeArray(entries);
         const output = [];
         let usedChars = 0;
-        for (const entry of candidates) {
+        let consumedCount = 0;
+        for (const rawEntry of candidates) {
+            if (output.length >= evidenceLimit) {
+                break;
+            }
+            const entry = renderEvidenceEntry(rawEntry, entryMaxChars);
+            consumedCount += 1;
+            if (!entry.userText) {
+                continue;
+            }
             const size = JSON.stringify(entry).length;
             if (output.length && usedChars + size > maxChars) {
+                consumedCount -= 1;
                 break;
             }
             output.push(entry);
             usedChars += size;
         }
-        return output;
+        return {
+            evidence: output,
+            consumedCount,
+            usedChars,
+            evidenceLimit,
+            maxChars,
+            entryMaxChars
+        };
+    }
+
+    buildEvidencePack(entries = [], options = {}) {
+        return this.buildEvidenceBatch(entries, options).evidence;
     }
 
     async callExtractor(promptPayload, options = {}) {
@@ -682,6 +781,10 @@ class AILISUserProfileCurator {
         const relationshipUpdates = normalizeArray(parsed.relationshipUpdates)
             .map((update) => normalizeRelationshipUpdate(update, allowed, minConfidence))
             .filter(Boolean);
+        const evidenceById = new Map(evidence.map((entry) => [entry.id, entry]));
+        const preferenceEvents = normalizeArray(parsed.preferenceEvents)
+            .map((update) => normalizePreferenceEvent(update, evidenceById, minConfidence))
+            .filter(Boolean);
         const affinityUpdate = normalizeAffinityUpdate(parsed.affinityUpdate, allowed);
         const rejectedSignals = normalizeArray(parsed.rejectedSignals)
             .filter(isPlainObject)
@@ -695,6 +798,7 @@ class AILISUserProfileCurator {
             daySummary: normalizeString(parsed.daySummary),
             profileUpdates,
             relationshipUpdates,
+            preferenceEvents,
             affinityUpdate,
             rejectedSignals
         };
@@ -722,12 +826,16 @@ class AILISUserProfileCurator {
         }
         const replay = this.rawMemoryLedger.replay({
             since: state.cursor.lastProcessedIso || '',
+            sinceExclusive: true,
             includePayload: true,
-            limit: Number(options.rawLimit) || 5000
+            limit: Number(options.rawLimit) || 5000,
+            tail: false
         });
+        const replayEntryCount = Math.max(Number(replay.count) || 0, 0);
         const entries = normalizeArray(replay.entries)
             .filter((entry) => !state.cursor.lastProcessedIso || String(entry.iso || '') > state.cursor.lastProcessedIso)
             .sort((left, right) => String(left.iso || '').localeCompare(String(right.iso || '')));
+        const totalSourceEntryCount = Math.max(replayEntryCount, entries.length);
         if (!entries.length) {
             const run = {
                 id: randomUUID(),
@@ -750,84 +858,229 @@ class AILISUserProfileCurator {
                 run
             };
         }
-        const evidence = this.buildEvidencePack(entries, options);
-        const promptPayload = buildPromptPayload({
-            evidence,
-            userProfile,
-            relationshipProfile,
-            affinityState,
-            runDate
-        });
-        const extraction = await this.callExtractor(promptPayload, options);
-        if (!extraction.ok) {
-            this.lastError = extraction.error || extraction.status;
-            return extraction;
-        }
-        const normalized = this.normalizeExtraction(extraction.parsed, evidence, options);
-        const appliedProfileItems = [];
-        const appliedRelationshipItems = [];
-        for (const update of normalized.profileUpdates) {
-            const item = upsertProfileItem(userProfile, update, runIso);
-            if (item) {
-                appliedProfileItems.push(item.id);
+        const maxBatches = normalizeBatchLimit(options.maxBatches ?? options.maxBatchesPerRun);
+        let offset = 0;
+        let batchCount = 0;
+        let processedEntryCount = 0;
+        let evidenceCount = 0;
+        let profileUpdateCount = 0;
+        let relationshipUpdateCount = 0;
+        let preferenceEventCount = 0;
+        let rejectedSignalCount = 0;
+        let affinityChanged = false;
+        const daySummaries = [];
+        const appliedProfileItems = new Set();
+        const appliedRelationshipItems = new Set();
+        const normalizedBatches = [];
+
+        const persistRun = async (run, extra = {}) => {
+            userProfile.updatedAt = runIso;
+            relationshipProfile.updatedAt = runIso;
+            affinityState.updatedAt = runIso;
+            if (run.status === 'completed') {
+                state.lastRunDate = runDate;
             }
-        }
-        for (const update of normalized.relationshipUpdates) {
-            const item = upsertRelationshipItem(relationshipProfile, update, runIso);
-            if (item) {
-                appliedRelationshipItems.push(item.id);
-            }
-        }
-        const affinityChanged = applyAffinityUpdate(affinityState, normalized.affinityUpdate, runIso);
-        const lastEntry = entries[entries.length - 1];
-        userProfile.updatedAt = runIso;
-        relationshipProfile.updatedAt = runIso;
-        affinityState.updatedAt = runIso;
-        state.cursor = {
-            lastProcessedIso: lastEntry.iso || runIso,
-            lastProcessedEntryId: lastEntry.id || ''
+            state.updatedAt = runIso;
+            state.runCount = Number(state.runCount || 0) + 1;
+            state.lastRun = run;
+            await Promise.all([
+                writeJsonFileAtomic(this.profilePath, userProfile),
+                writeJsonFileAtomic(this.relationshipPath, relationshipProfile),
+                writeJsonFileAtomic(this.affinityPath, affinityState),
+                writeJsonFileAtomic(this.statePath, state),
+                appendJsonl(this.runsPath, {
+                    ...run,
+                    ...extra
+                })
+            ]);
         };
-        state.lastRunDate = runDate;
-        state.updatedAt = runIso;
-        state.runCount = Number(state.runCount || 0) + 1;
+
+        while (offset < entries.length && batchCount < maxBatches) {
+            const remainingEntries = entries.slice(offset);
+            const batch = this.buildEvidenceBatch(remainingEntries, options);
+            if (!batch.consumedCount) {
+                break;
+            }
+            const batchEntries = remainingEntries.slice(0, batch.consumedCount);
+            const batchLastEntry = batchEntries[batchEntries.length - 1];
+            if (!batch.evidence.length) {
+                state.cursor = cursorForEntry(batchLastEntry, runIso);
+                processedEntryCount += batchEntries.length;
+                normalizedBatches.push({
+                    batchIndex: batchCount + 1,
+                    sourceEntryCount: batchEntries.length,
+                    evidenceIds: [],
+                    status: 'skipped_no_user_evidence'
+                });
+                offset += batchEntries.length;
+                batchCount += 1;
+                continue;
+            }
+            const promptPayload = buildPromptPayload({
+                evidence: batch.evidence,
+                userProfile,
+                relationshipProfile,
+                affinityState,
+                runDate,
+                currentInteractionPreferences: this.preferenceState?.resolve?.({ now: runIso }) || null,
+                batch: {
+                    index: batchCount + 1,
+                    maxBatches,
+                    sourceEntryCount: batchEntries.length,
+                    evidenceCount: batch.evidence.length,
+                    firstEntryIso: batchEntries[0]?.iso || '',
+                    lastEntryIso: batchLastEntry?.iso || '',
+                    remainingSourceEntryCount: Math.max(0, totalSourceEntryCount - offset - batchEntries.length),
+                    cursorBefore: { ...(state.cursor || {}) }
+                }
+            });
+            const extraction = await this.callExtractor(promptPayload, options);
+            if (!extraction.ok) {
+                this.lastError = extraction.error || extraction.status;
+                if (!processedEntryCount) {
+                    return extraction;
+                }
+                const run = {
+                    id: randomUUID(),
+                    iso: runIso,
+                    runDate,
+                    status: 'partial_failed',
+                    ok: false,
+                    error: extraction.error || extraction.status || 'profile curator batch failed',
+                    processedEntryCount,
+                    remainingEntryCount: Math.max(0, totalSourceEntryCount - processedEntryCount),
+                    batchCount,
+                    evidenceCount,
+                    profileUpdateCount,
+                    relationshipUpdateCount,
+                    preferenceEventCount,
+                    affinityChanged,
+                    rejectedSignalCount,
+                    daySummary: daySummaries.filter(Boolean).join('\n'),
+                    cursor: state.cursor,
+                    appliedProfileItems: Array.from(appliedProfileItems),
+                    appliedRelationshipItems: Array.from(appliedRelationshipItems)
+                };
+                await persistRun(run, { normalizedBatches });
+                this.emitGatewayEvent('memory.profile_curated', {
+                    runId: run.id,
+                    runDate,
+                    status: run.status,
+                    processedEntryCount: run.processedEntryCount,
+                    profileUpdateCount: run.profileUpdateCount,
+                    relationshipUpdateCount: run.relationshipUpdateCount,
+                    preferenceEventCount: run.preferenceEventCount,
+                    affinityChanged: run.affinityChanged
+                });
+                return {
+                    ok: false,
+                    status: 'partial_failed',
+                    error: run.error,
+                    run,
+                    userProfile,
+                    relationshipProfile,
+                    affinityState
+                };
+            }
+
+            const normalized = this.normalizeExtraction(extraction.parsed, batch.evidence, options);
+            for (const update of normalized.profileUpdates) {
+                const item = upsertProfileItem(userProfile, update, runIso);
+                if (item) {
+                    appliedProfileItems.add(item.id);
+                }
+            }
+            for (const update of normalized.relationshipUpdates) {
+                const item = upsertRelationshipItem(relationshipProfile, update, runIso);
+                if (item) {
+                    appliedRelationshipItems.add(item.id);
+                }
+            }
+            if (normalized.preferenceEvents.length && this.preferenceState?.appendMany) {
+                const preferenceResult = this.preferenceState.appendMany(normalized.preferenceEvents);
+                preferenceEventCount += preferenceResult.recorded || 0;
+            }
+            affinityChanged = applyAffinityUpdate(affinityState, normalized.affinityUpdate, runIso) || affinityChanged;
+            state.cursor = cursorForEntry(batchLastEntry, runIso);
+            processedEntryCount += batchEntries.length;
+            evidenceCount += batch.evidence.length;
+            profileUpdateCount += normalized.profileUpdates.length;
+            relationshipUpdateCount += normalized.relationshipUpdates.length;
+            rejectedSignalCount += normalized.rejectedSignals.length;
+            if (normalized.daySummary) {
+                daySummaries.push(normalized.daySummary);
+            }
+            normalizedBatches.push({
+                batchIndex: batchCount + 1,
+                sourceEntryCount: batchEntries.length,
+                evidenceIds: batch.evidence.map((entry) => entry.id).filter(Boolean),
+                normalized
+            });
+            offset += batchEntries.length;
+            batchCount += 1;
+        }
+
+        if (!processedEntryCount) {
+            const run = {
+                id: randomUUID(),
+                iso: runIso,
+                runDate,
+                status: 'no_processable_raw_memory',
+                processedEntryCount: 0,
+                remainingEntryCount: totalSourceEntryCount,
+                batchCount: 0,
+                cursor: state.cursor
+            };
+            state.updatedAt = runIso;
+            state.runCount = Number(state.runCount || 0) + 1;
+            state.lastRun = run;
+            await writeJsonFileAtomic(this.statePath, state);
+            await appendJsonl(this.runsPath, run);
+            return {
+                ok: true,
+                status: run.status,
+                run,
+                userProfile,
+                relationshipProfile,
+                affinityState
+            };
+        }
+
+        const remainingEntryCount = Math.max(0, totalSourceEntryCount - processedEntryCount);
+        const runStatus = remainingEntryCount > 0 ? 'partial_completed' : 'completed';
         const run = {
             id: randomUUID(),
             iso: runIso,
             runDate,
-            status: 'completed',
-            processedEntryCount: entries.length,
-            evidenceCount: evidence.length,
-            profileUpdateCount: normalized.profileUpdates.length,
-            relationshipUpdateCount: normalized.relationshipUpdates.length,
+            status: runStatus,
+            processedEntryCount,
+            remainingEntryCount,
+            batchCount,
+            evidenceCount,
+            profileUpdateCount,
+            relationshipUpdateCount,
+            preferenceEventCount,
             affinityChanged,
-            rejectedSignalCount: normalized.rejectedSignals.length,
-            daySummary: normalized.daySummary,
+            rejectedSignalCount,
+            daySummary: daySummaries.filter(Boolean).join('\n'),
             cursor: state.cursor,
-            appliedProfileItems,
-            appliedRelationshipItems
+            appliedProfileItems: Array.from(appliedProfileItems),
+            appliedRelationshipItems: Array.from(appliedRelationshipItems)
         };
-        state.lastRun = run;
-        await Promise.all([
-            writeJsonFileAtomic(this.profilePath, userProfile),
-            writeJsonFileAtomic(this.relationshipPath, relationshipProfile),
-            writeJsonFileAtomic(this.affinityPath, affinityState),
-            writeJsonFileAtomic(this.statePath, state),
-            appendJsonl(this.runsPath, {
-                ...run,
-                normalized
-            })
-        ]);
+        await persistRun(run, { normalizedBatches });
         this.emitGatewayEvent('memory.profile_curated', {
             runId: run.id,
             runDate,
+            status: run.status,
             processedEntryCount: run.processedEntryCount,
             profileUpdateCount: run.profileUpdateCount,
             relationshipUpdateCount: run.relationshipUpdateCount,
+            preferenceEventCount: run.preferenceEventCount,
             affinityChanged
         });
         return {
             ok: true,
-            status: 'completed',
+            status: run.status,
             run,
             userProfile,
             relationshipProfile,

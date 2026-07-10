@@ -424,6 +424,14 @@ const TOOL_EXPERIENCE = Object.freeze({
         progressStyle: 'background',
         userFacingVerb: '分派子任务'
     }),
+    task_results: makeExperienceMetadata({
+        embodiedAction: 'recall_task_result',
+        permissionStyle: 'silent_read',
+        progressStyle: 'quiet',
+        successStyle: 'summarize_result',
+        failureStyle: 'plain_explain',
+        userFacingVerb: '回想之前整理的结果'
+    }),
     mcp_bridge: makeExperienceMetadata({
         embodiedAction: 'use_external_tool',
         permissionStyle: 'policy',
@@ -908,6 +916,37 @@ const TOOL_CONTRACTS = Object.freeze({
             },
             additionalProperties: true
         })
+    }),
+    task_results: Object.freeze({
+        id: 'task_results',
+        version: CONTRACT_VERSION,
+        mutates: false,
+        risk: 'low',
+        approval: 'never',
+        experience: TOOL_EXPERIENCE.task_results,
+        returns: defaultReturns(),
+        errors: defaultErrors(['not_found']),
+        schema: makeObjectSchema({
+            required: ['action'],
+            properties: {
+                action: stringSchema({ enum: ['search', 'get'] }),
+                query: stringSchema({ minLength: 1 }),
+                id: stringSchema({ minLength: 1 }),
+                sessionId: stringSchema(),
+                limit: numberSchema({ minimum: 1, maximum: 8 })
+            },
+            additionalProperties: false
+        }),
+        customValidate(args = {}) {
+            const action = normalizeAction(args.action, 'search');
+            if (action === 'search' && !normalizeString(args.query)) {
+                return ['task_results.search requires query'];
+            }
+            if (action === 'get' && !normalizeString(args.id)) {
+                return ['task_results.get requires id'];
+            }
+            return [];
+        }
     }),
     subagents: Object.freeze({
         id: 'subagents',
@@ -2158,7 +2197,7 @@ function normalizeArgsForContract(toolId, args = {}) {
         return {};
     }
     const normalized = { ...args };
-    if (['email', 'file_manager', 'computer', 'code', 'artifact_verifier', 'artifact_query', 'artifact_tools', 'artifact_import', 'artifact_compute', 'github_pages', 'mcp_bridge', 'tool_doctor', 'capability_manager', 'self_debugger', 'self_evolution', 'subagents', 'vision.capture_context'].includes(toolId)) {
+    if (['email', 'file_manager', 'computer', 'code', 'artifact_verifier', 'artifact_query', 'artifact_tools', 'artifact_import', 'artifact_compute', 'github_pages', 'mcp_bridge', 'tool_doctor', 'capability_manager', 'self_debugger', 'self_evolution', 'subagents', 'task_results', 'vision.capture_context'].includes(toolId)) {
         const fallbackAction = toolId === 'vision.capture_context'
             ? 'capture_context'
             : toolId === 'self_evolution'

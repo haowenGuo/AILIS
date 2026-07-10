@@ -283,6 +283,8 @@ class AILISRawMemoryLedger {
         const since = normalizeString(options.since);
         const until = normalizeString(options.until);
         const includePayload = options.includePayload !== false;
+        const tail = options.tail !== false;
+        const sinceExclusive = options.sinceExclusive === true;
         const limit = Math.min(
             Math.max(Number(options.limit) || DEFAULT_REPLAY_LIMIT, 1),
             MAX_REPLAY_LIMIT
@@ -310,7 +312,9 @@ class AILISRawMemoryLedger {
                 if (source && entry.source !== source) {
                     continue;
                 }
-                if (since && String(entry.iso || '') < since) {
+                if (since && (sinceExclusive
+                    ? String(entry.iso || '') <= since
+                    : String(entry.iso || '') < since)) {
                     continue;
                 }
                 if (until && String(entry.iso || '') > until) {
@@ -328,13 +332,15 @@ class AILISRawMemoryLedger {
             }
         }
         entries.sort(compareIso);
+        const selectedEntries = tail ? entries.slice(-limit) : entries.slice(0, limit);
         return {
             ok: true,
             status: 'ok',
             rootDir: this.rootDir,
             count: entries.length,
             limit,
-            entries: entries.slice(-limit)
+            tail,
+            entries: selectedEntries
         };
     }
 

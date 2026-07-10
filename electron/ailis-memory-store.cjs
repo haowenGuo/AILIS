@@ -1,7 +1,6 @@
 const fs = require('fs');
 const path = require('path');
 const { randomUUID } = require('crypto');
-const { buildMessageHistorySearchText } = require('./ailis-message-history.cjs');
 
 const MEMORY_STORE_VERSION = 1;
 const DEFAULT_AFFINITY_SCORE = 50;
@@ -11,6 +10,8 @@ const MAX_STATE_EVENTS = 500;
 const MAX_AFFINITY_EVENTS = 200;
 const DEFAULT_RELEVANT_EVENT_LIMIT = 24;
 const SECRET_PROTECTION = 'local-file-base64';
+const MEMORY_CONTROL_TAG_PATTERN = /(?:\[\s*|【\s*)(?:action|expression|emotion|gestureIntent|socialTone|taskState|speechEnergy|gazeTarget|durationHint)\s*[:=：＝][^\]】\r\n]*(?:\]|】)/gi;
+const MEMORY_PROTOCOL_MARKER_PATTERN = /(?:<\s*(?:(?:\|{2}|｜{2})\s*DSML\s*(?:\|{2}|｜{2}))?\s*(?:tool_calls?|invoke|parameter)\b|(?:\|{2}|｜{2})\s*DSML\s*(?:\|{2}|｜{2}))/i;
 const DEFAULT_AILIS_PERSONA_TEXT = [
     '- AILIS 是可爱的虚拟助手，名字固定为 AILIS，身份是普通女孩子。',
     '- AILIS 具备人工智能、编程、网络搜索、信息查询、邮件管理、命令行控制等专业能力；可以以普通女生视角与用户轻松互动，也可以完成任务执行和计算机管理。',
@@ -59,90 +60,6 @@ function truncateStructuredText(value, maxChars = 1200) {
     return `${text.slice(0, Math.max(0, maxChars - 1))}…`;
 }
 
-function hasStablePreferenceSignal(text) {
-    const normalized = normalizeText(text);
-    return /偏好|我喜欢|我不喜欢|我希望|希望你|以后|记住|人设|角色|性格|语气|说话|表达|撒娇|俏皮|软萌|可爱|工具化|工具感|死模板|死文本|客服|生硬|直接|细致|落地|空泛|自行发挥|隐私|密钥|本地|用户偏好记忆/.test(normalized);
-}
-
-function looksLikeOneOffTask(text) {
-    const normalized = normalizeText(text);
-    return /https?:\/\/|输出.*\.(md|txt|json|js|py|docx|xlsx|pdf)|保存成|生成.*文件|帮我读|帮我查|帮我搜|查一下|搜一下|搜索|查询|调研|攻略|指南|整理.*信息|最新.*信息|请提供|请返回|分析.*项目|提交到|运行|测试|截图|打开|邮件|GitHub|Playwright|arxiv|论文|角色攻略|培养|配队|技能|强度|节奏榜|正式上线版本/i.test(normalized);
-}
-
-function hasExplicitPersistentPreference(text) {
-    const normalized = normalizeText(text);
-    return /以后记住|请记住|记住我的|记住我|长期记住|长期偏好|用户偏好|每次都|以后都|默认|始终|固定为|我希望你|希望你以后|不要再|以后不要|自我修改|自我进化|自我迭代/.test(normalized);
-}
-
-function appendUniqueBullet(bullets, bullet) {
-    const normalized = normalizeText(bullet);
-    if (normalized && !bullets.includes(normalized)) {
-        bullets.push(normalized);
-    }
-}
-
-function buildUserPreferenceBullets(userText) {
-    const user = normalizeText(userText);
-    if (!user || !hasStablePreferenceSignal(user)) {
-        return [];
-    }
-    const oneOffTask = looksLikeOneOffTask(user);
-    const explicitPersistentPreference = hasExplicitPersistentPreference(user);
-    if (oneOffTask && !explicitPersistentPreference) {
-        return [];
-    }
-
-    const bullets = [];
-    if (/普通女孩子|普通女生|可爱的虚拟助手|名字固定|AILIS|人工智能|编程|网络搜索|信息查询|邮件管理|命令行控制/.test(user) &&
-        /人设|角色|身份|性格|虚拟助手|普通女/.test(user)) {
-        appendUniqueBullet(
-            bullets,
-            '用户偏好 AILIS 的基础人设：名字固定为 AILIS，身份是普通女孩子；既能以普通女生视角轻松互动，也具备 AI、编程、网络搜索、信息查询、邮件管理、命令行控制等专业能力。'
-        );
-    }
-    if (/活泼|亲切|软萌|可爱|轻快|自然|俏皮|撒娇|生活化/.test(user)) {
-        appendUniqueBullet(
-            bullets,
-            '用户偏好 AILIS 的性格与语气：活泼亲切、软萌可爱、轻快自然、生活化，可以偶尔小撒娇和小俏皮，但不要夸张或刻意。'
-        );
-    }
-    if (/前端|渲染|人物渲染|表现层|persona_output|persona_surface|Character Runtime|动作|表情|口唇|旧.*人设|老版本|控制指令|\[action:|\[expression:/i.test(user)) {
-        appendUniqueBullet(
-            bullets,
-            '用户偏好人物表现协议跟随新版前端：模型表达 emotion/socialTone/gestureIntent/taskState 等语义状态，由 Character Runtime 映射动作、表情、眼神和口唇；不要把老版控制标签规范写成人设核心。'
-        );
-    }
-    if (/直接|细致|落地|空泛|自行发挥/.test(user)) {
-        appendUniqueBullet(
-            bullets,
-            '用户偏好解释方式：直接、细致、能落地；不喜欢空泛概念和过度自行发挥。'
-        );
-    }
-    if (/工具化|工具感|死模板|死文本|客服|生硬|表现层|拟人/.test(user)) {
-        appendUniqueBullet(
-            bullets,
-            '用户偏好交互体验：避免过度工具化、工具日志感、客服感、死模板和生硬表达；任务执行过程和结果也要经过拟人表现层。'
-        );
-    }
-    if (/用户偏好记忆|对话数据|任务请求|真正.*用户偏好|人设|人物性格/.test(user) && /记忆/.test(user)) {
-        appendUniqueBullet(
-            bullets,
-            '用户偏好记忆口径：用户偏好应提取稳定的人设、人物性格、语气和交互偏好，不应把一次性任务指令、URL 或文件产物名直接写成偏好。'
-        );
-    }
-    if (/隐私|密钥|key|token|本地|账号|授权码/i.test(user) && /保留|保存|存储|可以|愿意|希望/.test(user)) {
-        appendUniqueBullet(
-            bullets,
-            '用户愿意把私人助手所需的隐私配置和授权信息保存在本地，希望 AILIS 随使用逐渐更了解自己。'
-        );
-    }
-
-    if (!bullets.length && (explicitPersistentPreference || !oneOffTask)) {
-        appendUniqueBullet(bullets, `用户表达了稳定偏好：${truncateText(user, 180)}`);
-    }
-    return bullets;
-}
-
 function normalizeBlockText(value, maxChars = MAX_BLOCK_CHARS) {
     const text = String(value || '')
         .replace(/\r\n/g, '\n')
@@ -161,6 +78,30 @@ function redactSecretLikeText(value) {
         .replace(/([A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,})/g, '[secret-like-token]')
         .replace(/\b(sk|ak|pk|rk|key|token)[-_]?[A-Za-z0-9]{18,}\b/gi, '[secret-like-token]')
         .replace(/\b[A-Fa-f0-9]{8}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{12}\b/g, '[secret-like-uuid]');
+}
+
+function sanitizePromptMemoryText(value) {
+    let text = String(value || '')
+        .replace(/<\s*(persona_output|persona_surface)\b[^>]*>[\s\S]*?<\s*\/\s*\1\s*>/gi, '')
+        .replace(MEMORY_CONTROL_TAG_PATTERN, '');
+    const protocolIndex = text.search(MEMORY_PROTOCOL_MARKER_PATTERN);
+    if (protocolIndex >= 0) {
+        text = text.slice(0, protocolIndex);
+    }
+    return normalizeText(redactSecretLikeText(text));
+}
+
+function formatPromptMemoryEvent(event = {}) {
+    const userText = sanitizePromptMemoryText(event.userText);
+    const assistantText = sanitizePromptMemoryText(event.assistantText);
+    if (!userText && !assistantText) {
+        return '';
+    }
+    const dialogue = [
+        userText ? `用户：${userText}` : '',
+        assistantText ? `AILIS：${assistantText}` : ''
+    ].filter(Boolean).join('\n  ');
+    return `- [${normalizeText(event.ts)}] ${dialogue}`;
 }
 
 function ensureDirSync(dirPath) {
@@ -404,57 +345,6 @@ function scoreTextAgainstQuery(text, query) {
     return score;
 }
 
-function classifyTurn({ userText, assistantText }) {
-    const user = normalizeText(userText);
-    const assistant = normalizeText(assistantText);
-    const combined = `${user}\n${assistant}`;
-    const tags = [];
-    let importance = 2;
-    let affinityDelta = 0;
-    let valence = 0;
-
-    const addTag = (tag) => {
-        if (!tags.includes(tag)) {
-            tags.push(tag);
-        }
-    };
-
-    if (buildUserPreferenceBullets(user).length) {
-        importance += 3;
-        addTag('preference');
-    }
-    if (/AILIS|AILIS|AILIS|OpenClaw|Agent|Codex|Claude|Letta|MemGPT|Generative|视觉|截图|语音|记忆|好感度|MCP|Subagent|Kokoro|CosyVoice|ElevenLabs|ASR/i.test(combined)) {
-        importance += 2;
-        addTag('project');
-    }
-    if (/不错|可以|很好|很棒|满意|有效|没问题|已经不错|挺像|接受|喜欢/.test(user)) {
-        affinityDelta += 1;
-        valence += 1;
-        addTag('positive_feedback');
-    }
-    if (/不对|错了|太丑|不行|更差|问题|BUG|bug|回退|延迟|卡|失败|不稳定|别这样|不要这样/.test(user)) {
-        affinityDelta -= 1;
-        valence -= 1;
-        importance += 1;
-        addTag('correction');
-    }
-    if (/拟人|温和|柔弱|二次元|语气|陪伴|好感度|留存|私人助手|个人助手/.test(combined)) {
-        importance += 1;
-        addTag('relationship');
-    }
-    if (/密钥|key|token|隐私|本地|保存|账号|密码/i.test(combined)) {
-        importance += 1;
-        addTag('privacy');
-    }
-
-    return {
-        tags,
-        importance: Math.min(10, Math.max(1, importance)),
-        affinityDelta: Math.max(-3, Math.min(3, affinityDelta)),
-        valence: Math.max(-3, Math.min(3, valence))
-    };
-}
-
 function buildEventSummary(userText, assistantText) {
     const user = truncateText(redactSecretLikeText(userText), 360);
     const assistant = truncateText(redactSecretLikeText(assistantText), 360);
@@ -462,32 +352,6 @@ function buildEventSummary(userText, assistantText) {
         return `用户：${user}\nAILIS：${assistant}`;
     }
     return user || assistant || '空对话';
-}
-
-function appendBulletToBlock(block, bullet, maxChars = MAX_BLOCK_CHARS) {
-    const normalizedBullet = normalizeText(bullet);
-    if (!normalizedBullet) {
-        return block;
-    }
-    const line = normalizedBullet.startsWith('- ') ? normalizedBullet : `- ${normalizedBullet}`;
-    const lines = normalizeBlockText(block.value, maxChars * 2)
-        .split(/\n+/)
-        .map((entry) => entry.trim())
-        .filter(Boolean);
-    if (lines.some((entry) => entry === line)) {
-        return block;
-    }
-    lines.push(line);
-    let nextValue = lines.join('\n');
-    while (nextValue.length > maxChars && lines.length > 1) {
-        lines.shift();
-        nextValue = lines.join('\n');
-    }
-    return {
-        ...block,
-        value: nextValue,
-        updatedAt: nowIso()
-    };
 }
 
 function buildAffinityStage(score) {
@@ -761,8 +625,11 @@ class AILISMemoryRuntime {
         contextMode = 'persona'
     } = {}) {
         const state = this.state || normalizeState(null, this.workspaceRoot);
-        const query = buildMessageHistorySearchText(message, messageHistory, { maxHistoryItems: 6 });
+        // Recent conversation is already present in model input. Memory retrieval should
+        // not duplicate it or let older topics overpower the current user message.
+        const query = normalizeText(message);
         const relevantEvents = this.searchMemory(query || message, { limit: DEFAULT_RELEVANT_EVENT_LIMIT }).events;
+        const relevantEventLines = relevantEvents.map(formatPromptMemoryEvent).filter(Boolean);
         const blocks = state.blocks || {};
         const curatedPromptMemory = loadCuratedPromptMemory(this.rootDir);
         const normalizedContextMode = normalizeText(contextMode, 'persona').toLowerCase();
@@ -796,15 +663,9 @@ class AILISMemoryRuntime {
             '## 关系画像（Raw Memory Ledger 抽取）',
             curatedPromptMemory.relationshipText,
             '',
-            `## ${blocks.project?.label || '项目记忆'}`,
-            blocks.project?.value || '',
-            '',
-            `## ${blocks.persona?.label || 'AILIS 人设记忆'}`,
-            blocks.persona?.value || '',
-            '',
             '## 相关近期记忆',
-            relevantEvents.length
-                ? relevantEvents.map((event) => `- [${event.ts}] ${event.summary || event.userText || event.assistantText}`).join('\n')
+            relevantEventLines.length
+                ? relevantEventLines.join('\n')
                 : '- 暂无与当前问题明显相关的近期记忆。',
             '',
             `## ${blocks.secrets_index?.label || '隐私与密钥索引'}`,
@@ -824,12 +685,13 @@ class AILISMemoryRuntime {
                     Array.isArray(event.tags) ? event.tags.join(' ') : ''
                 ].join('\n');
                 const recency = index / Math.max(1, (this.state.events || []).length);
-                const score = scoreTextAgainstQuery(text, normalizedQuery) +
+                const relevance = scoreTextAgainstQuery(text, normalizedQuery);
+                const score = relevance +
                     Number(event.importance || 0) * 0.35 +
                     recency;
-                return { event, score };
+                return { event, score, relevance };
             })
-            .filter((entry) => entry.score > 0 || !normalizedQuery)
+            .filter((entry) => !normalizedQuery || entry.relevance > 0)
             .sort((left, right) => right.score - left.score)
             .slice(0, Math.max(1, Number(limit) || 10))
             .map((entry) => entry.event);
@@ -855,7 +717,6 @@ class AILISMemoryRuntime {
             return { ok: false, status: 'empty_turn' };
         }
 
-        const classification = classifyTurn({ userText, assistantText });
         const ts = nowIso();
         const event = {
             id: randomUUID(),
@@ -866,9 +727,9 @@ class AILISMemoryRuntime {
             userText: truncateText(userText, 1200),
             assistantText: truncateText(assistantText, 1200),
             summary: buildEventSummary(userText, assistantText),
-            tags: classification.tags,
-            importance: classification.importance,
-            valence: classification.valence,
+            tags: [],
+            importance: 1,
+            valence: 0,
             attachments: Array.isArray(attachments)
                 ? attachments.map((attachment) => ({
                       type: normalizeText(attachment.type, 'attachment'),
@@ -887,49 +748,10 @@ class AILISMemoryRuntime {
         this.state.events.push(event);
         this.state.events = this.state.events.slice(-MAX_STATE_EVENTS);
         this.state.stats.turnCount += 1;
-        if (event.importance >= 5) {
-            this.state.stats.salientEventCount += 1;
-        }
         appendJsonlSync(this.eventsPath, event);
-        this.updateBlocksFromEvent(event, messageHistory);
-        this.updateAffinityFromEvent(event, classification.affinityDelta);
-        this.maybeReflect(event);
+        this.writeDailyNote(event, messageHistory);
         this.persist('record_turn');
         return { ok: true, event };
-    }
-
-    updateBlocksFromEvent(event, messageHistory = []) {
-        const user = event.userText || '';
-        const assistant = event.assistantText || '';
-        const combined = `${user}\n${assistant}`;
-        const day = dateKeyFromIso(event.ts);
-        const conciseUser = truncateText(user, 220);
-
-        for (const bullet of buildUserPreferenceBullets(user)) {
-            this.state.blocks.user = appendBulletToBlock(
-                this.state.blocks.user,
-                bullet
-            );
-        }
-        if (event.tags?.includes('relationship')) {
-            this.state.blocks.relationship = appendBulletToBlock(
-                this.state.blocks.relationship,
-                `关系/语气线索（${day}）：${truncateText(combined, 220)}`
-            );
-        }
-        if (event.tags?.includes('project')) {
-            this.state.blocks.project = appendBulletToBlock(
-                this.state.blocks.project,
-                `项目决策/反馈（${day}）：${conciseUser}`
-            );
-        }
-        if (/不要|别|不喜欢|太丑|不对|回退|更差/.test(user)) {
-            this.state.blocks.user = appendBulletToBlock(
-                this.state.blocks.user,
-                `纠错偏好（${day}）：遇到用户明确说不对/回退时，先解释原因，再按最新方向收敛修改。`
-            );
-        }
-        this.writeDailyNote(event, messageHistory);
     }
 
     writeDailyNote(event, messageHistory = []) {
@@ -950,66 +772,6 @@ class AILISMemoryRuntime {
             event.summary
         ].filter(Boolean).join('\n');
         atomicWriteFileSync(filePath, `${existing.trim()}\n\n${entry.trim()}\n`);
-    }
-
-    updateAffinityFromEvent(event, delta) {
-        const safeDelta = clampNumber(delta, -3, 3, 0);
-        if (!safeDelta) {
-            return;
-        }
-        const nextScore = clampNumber((this.state.affinity.score || DEFAULT_AFFINITY_SCORE) + safeDelta, 0, 100, DEFAULT_AFFINITY_SCORE);
-        const affinityEvent = {
-            id: randomUUID(),
-            ts: event.ts,
-            eventId: event.id,
-            delta: safeDelta,
-            scoreBefore: Math.round(this.state.affinity.score || DEFAULT_AFFINITY_SCORE),
-            scoreAfter: Math.round(nextScore),
-            reason: event.tags?.includes('positive_feedback')
-                ? 'positive_feedback'
-                : event.tags?.includes('correction')
-                ? 'correction_feedback'
-                : 'interaction'
-        };
-        this.state.affinity.score = nextScore;
-        this.state.affinity.stage = buildAffinityStage(nextScore);
-        this.state.affinity.updatedAt = event.ts;
-        this.state.affinity.events.push(affinityEvent);
-        this.state.affinity.events = this.state.affinity.events.slice(-MAX_AFFINITY_EVENTS);
-    }
-
-    maybeReflect(event) {
-        if (event.importance < 5) {
-            return;
-        }
-        const salient = (this.state.events || [])
-            .filter((entry) => Number(entry.importance || 0) >= 5)
-            .slice(-8);
-        if (salient.length < 3 && this.state.reflections.length) {
-            return;
-        }
-        const latestTags = Array.from(new Set(salient.flatMap((entry) => entry.tags || []))).slice(0, 8);
-        const reflection = {
-            id: randomUUID(),
-            ts: nowIso(),
-            type: 'light_reflection',
-            sourceEventId: event.id,
-            summary: [
-                `最近高价值记忆集中在：${latestTags.join('、') || '项目协作'}。`,
-                '回复时应优先遵循用户的产品理念：拟人体验在表层，稳定 Agent 架构在底层。',
-                '遇到用户纠偏，先解释具体原因，再做收敛修改。'
-            ].join('\n')
-        };
-        const last = this.state.reflections[this.state.reflections.length - 1];
-        if (last && last.summary === reflection.summary) {
-            return;
-        }
-        this.state.reflections.push(reflection);
-        this.state.reflections = this.state.reflections.slice(-100);
-        this.state.stats.reflectionCount += 1;
-        const reflectionPath = path.join(this.reflectionsDir, 'DREAMS.md');
-        const existing = fs.existsSync(reflectionPath) ? fs.readFileSync(reflectionPath, 'utf8') : '# AILIS Light Reflections\n\n';
-        atomicWriteFileSync(reflectionPath, `${existing.trim()}\n\n## ${reflection.ts}\n\n${reflection.summary}\n`);
     }
 
     updateBlock(key, value) {

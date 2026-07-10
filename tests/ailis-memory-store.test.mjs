@@ -8,7 +8,7 @@ import test from 'node:test';
 const require = createRequire(import.meta.url);
 const { AILISMemoryRuntime } = require('../electron/ailis-memory-store.cjs');
 
-test('AILIS memory runtime persists blocks, events, affinity, and redacted secret index', async () => {
+test('AILIS memory runtime persists events and redacted secret index without legacy rule extraction', async () => {
     const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-memory-'));
     const workspaceRoot = path.join(rootDir, 'workspace');
     const memory = new AILISMemoryRuntime({
@@ -39,16 +39,19 @@ test('AILIS memory runtime persists blocks, events, affinity, and redacted secre
 
     const snapshot = memory.getSnapshot({ includeEvents: true });
     assert.equal(snapshot.ok, true);
-    assert.ok(snapshot.blocks.some((block) => block.key === 'user' && /过度工具化/.test(block.value)));
-    assert.ok(snapshot.blocks.some((block) => block.key === 'project' && /Letta/.test(block.value)));
+    assert.deepEqual(recorded.event.tags, []);
+    assert.equal(recorded.event.importance, 1);
+    assert.ok(snapshot.recentEvents.some((event) => event.id === recorded.event.id));
+    assert.ok(snapshot.blocks.every((block) => !/过度工具化 UI/.test(block.value)));
     assert.ok(snapshot.secrets.some((entry) => entry.name === 'doubao-api-key' && entry.configured));
+    assert.equal(memory.getStatus().affinityScore, 50);
 
     const context = memory.compileContext({
         sessionId: 'memory-test',
         message: '继续做记忆系统'
     });
     assert.match(context, /AILIS 长期记忆上下文/);
-    assert.match(context, /过度工具化/);
+    assert.match(context, /暂无已抽取的稳定画像/);
     assert.match(context, /doubao-api-key/);
     assert.equal(context.includes('test-secret-00000000-0000-4000-8000-000000000000'), false);
 
@@ -76,7 +79,7 @@ test('AILIS memory prompt no longer uses legacy affinity score when curated rela
     assert.match(context, /不影响安全、隐私、事实准确性、工具审批/);
 });
 
-test('AILIS memory keeps explicit self-evolution preferences even when they mention tests', async () => {
+test('AILIS memory does not promote explicit self-evolution text through legacy regex rules', async () => {
     const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-self-evolution-memory-'));
     const memory = new AILISMemoryRuntime({
         rootDir: path.join(rootDir, 'memory'),
@@ -90,13 +93,15 @@ test('AILIS memory keeps explicit self-evolution preferences even when they ment
         source: 'test'
     });
     assert.equal(recorded.ok, true);
-    assert.ok(recorded.event.tags.includes('preference'));
+    assert.deepEqual(recorded.event.tags, []);
+    assert.equal(recorded.event.importance, 1);
 
     const snapshot = memory.getSnapshot({ includeEvents: true });
     const userBlock = snapshot.blocks.find((block) => block.key === 'user');
-    assert.match(userBlock.value, /自我修改/);
-    assert.match(userBlock.value, /开新分支/);
-    assert.match(userBlock.value, /回滚方案/);
+    assert.doesNotMatch(userBlock.value, /自我修改/);
+    assert.doesNotMatch(userBlock.value, /开新分支/);
+    assert.doesNotMatch(userBlock.value, /回滚方案/);
+    assert.ok(snapshot.recentEvents.some((event) => event.id === recorded.event.id));
 });
 
 test('AILIS memory compiles larger structured context and clears memory while preserving secrets', async () => {
@@ -146,7 +151,7 @@ test('AILIS memory compiles larger structured context and clears memory while pr
     assert.ok(memory.listSecrets().secrets.some((secret) => secret.name === 'local-test-token'));
 });
 
-test('AILIS memory search query drops trailing duplicate current user message', async () => {
+test('AILIS memory retrieval uses only the current user message instead of duplicating recent chat', async () => {
     const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-memory-query-dedupe-'));
     const memory = new AILISMemoryRuntime({
         rootDir: path.join(rootDir, 'memory'),
@@ -169,12 +174,8 @@ test('AILIS memory search query drops trailing duplicate current user message', 
         ]
     });
 
-    assert.equal(
-        observedQuery.split('Solve this long GAIA task with a verifier.').length - 1,
-        1
-    );
-    assert.match(observedQuery, /你好/);
-    assert.match(observedQuery, /你好，我在。/);
+    assert.equal(observedQuery, 'Solve this long GAIA task with a verifier.');
+    assert.doesNotMatch(observedQuery, /你好|你好，我在/);
 });
 
 test('AILIS memory prompt uses curated raw-ledger profile instead of legacy user relationship affinity blocks', async () => {

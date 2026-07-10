@@ -259,6 +259,39 @@ test('chat progress bridge surfaces final message completion text', () => {
     assert.equal(outputs[0].agentProgressFinal, true);
 });
 
+test('chat progress bridge surfaces runtime final text even when final event has no run id', () => {
+    const fake = createFakeGateway();
+    const outputs = [];
+    const finished = [];
+    createGatewayProgressBridge({
+        gateway: fake.gateway,
+        sessionId: 'main',
+        onProgress: (payload) => outputs.push(payload),
+        onRunFinished: (payload) => finished.push(payload)
+    });
+
+    fake.emit({
+        type: 'agent.run.started',
+        payload: {
+            runId: 'run-runtime-final',
+            sessionId: 'main'
+        }
+    });
+    fake.emit({
+        type: 'agent.final',
+        payload: {
+            ok: true,
+            status: 'completed',
+            displayText: '现在我已经收集了足够的资料，以下是完整攻略。'
+        }
+    });
+
+    assert.equal(outputs.length, 1);
+    assert.match(outputs[0].display_text, /完整攻略/);
+    assert.equal(outputs[0].agentProgressFinal, true);
+    assert.equal(finished.length, 1);
+});
+
 test('chat progress bridge does not invent failure wording without a model note', () => {
     const fake = createFakeGateway();
     const outputs = [];

@@ -6,11 +6,41 @@ function sleep(ms) {
     return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
-const CONTROL_TAG_PATTERN = /\[(action|expression):([^\]]*)\]/g;
-const LEADING_INCOMPLETE_CONTROL_TAG_PATTERN = /^(?:\[(?:action|expression):[^\]]*)+/;
+const CONTROL_TAG_PATTERN = /\[\s*(action|expression)\s*[:=：＝]\s*([^\]]*)\]/gi;
+const LEADING_INCOMPLETE_CONTROL_TAG_PATTERN = /^(?:\s*\[\s*(?:action|expression)\s*[:=：＝][^\]]*)+/i;
 const INTERNAL_CONTROL_TAG_NAMES = 'persona_output|persona_surface|personaOutput|personaSurface|ailis_persona_output|ailis_persona_surface';
 const INTERNAL_CONTROL_KEY_PATTERN = /["']?(?:persona_output|persona_surface|personaOutput|personaSurface|ailis_persona_output|ailis_persona_surface)["']?\s*:/i;
 const DANGLING_INTERNAL_CLOSE_TAG_PATTERN = new RegExp(`<\\s*\\/\\s*(?:${INTERNAL_CONTROL_TAG_NAMES})\\s*>`, 'gi');
+const LEGACY_EXPRESSION_ALIASES = Object.freeze({
+    curious: 'surprised',
+    thinking: 'surprised',
+    focused: 'relaxed',
+    calm: 'relaxed',
+    neutral: 'relaxed',
+    soft: 'relaxed',
+    comforting: 'relaxed',
+    comfort: 'relaxed',
+    smile: 'happy',
+    joy: 'happy',
+    cheerful: 'happy',
+    blinkright: 'blinkRight',
+    shy: 'blinkRight',
+    blush: 'blinkRight',
+    embarrassed: 'blinkRight'
+});
+const LEGACY_ALLOWED_EXPRESSIONS = new Set(['happy', 'angry', 'sad', 'surprised', 'relaxed', 'blinkRight']);
+
+function normalizeLegacyControlValue(kind = '', value = '') {
+    const normalized = String(value || '').replace(/[ \t]+/g, ' ').trim();
+    if (String(kind).toLowerCase() !== 'expression') {
+        return normalized;
+    }
+    if (LEGACY_ALLOWED_EXPRESSIONS.has(normalized)) {
+        return normalized;
+    }
+    const alias = LEGACY_EXPRESSION_ALIASES[normalized.toLowerCase()];
+    return LEGACY_ALLOWED_EXPRESSIONS.has(alias) ? alias : '';
+}
 
 function makeInternalControlBlockPattern(flags = 'gi') {
     return new RegExp(`<\\s*(${INTERNAL_CONTROL_TAG_NAMES})\\b[^>]*>([\\s\\S]*?)<\\s*\\/\\s*\\1\\s*>`, flags);
@@ -160,11 +190,12 @@ function parseReplyMarkup(rawText) {
     let expression = null;
 
     const strippedText = stripInternalControlBlocks(rawText).replace(CONTROL_TAG_PATTERN, (_, kind, value) => {
-        const normalizedValue = value.trim();
-        if (kind === 'action' && !action) {
+        const normalizedKind = String(kind || '').toLowerCase();
+        const normalizedValue = normalizeLegacyControlValue(normalizedKind, value);
+        if (normalizedKind === 'action' && !action && normalizedValue) {
             action = normalizedValue;
         }
-        if (kind === 'expression' && !expression) {
+        if (normalizedKind === 'expression' && !expression && normalizedValue) {
             expression = normalizedValue;
         }
         return '';

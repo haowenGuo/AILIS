@@ -1,6 +1,6 @@
 import { markdownToPlainText, normalizeMarkdownSource } from './markdown-renderer.js';
 
-const CONTROL_TAG_PATTERN = /\[(?:action|expression|emotion|gesture|gestureIntent|taskState|tts_style|ttsStyle)\s*:[^\]]*]/gi;
+const CONTROL_TAG_PATTERN = /\[\s*(?:action|expression|emotion|gesture|gestureIntent|taskState|tts_style|ttsStyle)\s*[:=：＝][^\]]*]/gi;
 const PERSONA_BLOCK_PATTERN = /<\s*(?:persona_output|persona_surface|personaOutput|personaSurface|ailis_persona_output|ailis_persona_surface)\b[^>]*>[\s\S]*?(?:<\s*\/\s*(?:persona_output|persona_surface|personaOutput|personaSurface|ailis_persona_output|ailis_persona_surface)\s*>|$)/gi;
 const INTERNAL_JSON_KEY_PATTERN = /["']?(?:persona_output|persona_surface|personaOutput|personaSurface|ailis_persona_output|ailis_persona_surface)["']?\s*:/i;
 const MARKDOWN_IMAGE_PATTERN = /!\[[^\]]*]\([^)]+\)/g;
