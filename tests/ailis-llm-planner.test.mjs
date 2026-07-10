@@ -838,6 +838,37 @@ async function createDirectToolCallChatCompletionsServer() {
     };
 }
 
+async function createVisibleProtocolRepairServer() {
+    const calls = [];
+    let turn = 0;
+    const server = http.createServer(async (req, res) => {
+        let raw = '';
+        req.on('data', (chunk) => {
+            raw += chunk;
+        });
+        req.on('end', () => {
+            const payload = raw ? JSON.parse(raw) : {};
+            turn += 1;
+            calls.push({ url: req.url, payload, turn });
+            res.writeHead(200, { 'content-type': 'application/json' });
+            const content = turn === 1
+                ? '<｜｜DSML｜｜tool_calls>\n<｜｜DSML｜｜invoke name="mcp__ailis_research__web_research">\n</｜｜DSML｜｜invoke>\n</｜｜DSML｜｜tool_calls>'
+                : '已经根据现有证据整理出可直接展示的最终结果。';
+            res.end(JSON.stringify({
+                choices: [{ message: { content } }],
+                usage: { prompt_tokens: 20, completion_tokens: 10, total_tokens: 30 }
+            }));
+        });
+    });
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    return {
+        url: `http://127.0.0.1:${address.port}/v1`,
+        calls,
+        close: () => new Promise((resolve) => server.close(resolve))
+    };
+}
+
 async function createProviderErrorChatCompletionsServer({ status = 402, message = 'Insufficient Balance' } = {}) {
     const calls = [];
     const server = http.createServer(async (req, res) => {
@@ -1057,6 +1088,7 @@ test('Agentic Executor can execute real native direct tool calls before JSON pla
             sessionId: 'direct-native-tool-agent-test',
             message: '写入 direct-native-output.txt 并复核',
             agentLoop: 'llm',
+            maxAgentSteps: 1,
             llmSettings: {
                 provider: 'openai-compatible',
                 baseUrl: llmServer.url,
@@ -1088,8 +1120,56 @@ test('Agentic Executor can execute real native direct tool calls before JSON pla
             false
         );
         assert.equal(llmServer.calls[0].payload.tool_choice, 'auto');
+        assert.equal(llmServer.calls[1].payload.tool_choice, 'none');
+        assert.ok(llmServer.calls[1].payload.tools.some((tool) => tool.function?.name === 'write'));
         assert.match(llmServer.calls[0].payload.messages[0].content, /Responses-Compatible Tool Runtime/);
         assert.equal(result.body.steps[0].tool, 'write');
+    } finally {
+        await gateway.stop();
+        await llmServer.close();
+        await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
+});
+
+test('Agentic Executor repairs visible DSML protocol before it reaches the final response', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-protocol-repair-'));
+    const llmServer = await createVisibleProtocolRepairServer();
+    const gateway = new AILISGateway({
+        port: 0,
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit')
+    });
+
+    try {
+        const status = await gateway.start();
+        const result = await runAgent(status.url, {
+            sessionId: 'visible-protocol-repair-test',
+            message: '整理现有证据并直接回答',
+            agentLoop: 'llm',
+            llmSettings: {
+                provider: 'openai-compatible',
+                baseUrl: llmServer.url,
+                apiKey: 'test-key',
+                model: 'mock-protocol-repair',
+                temperature: 0,
+                timeoutMs: 10000
+            },
+            context: {
+                workspace: workspaceRoot,
+                directToolExecutor: true,
+                permissionProfile: 'danger-full-access',
+                approvalPolicy: 'auto',
+                approved: true,
+                autoConfirm: true
+            }
+        });
+
+        assert.equal(result.body.ok, true, JSON.stringify(result.body));
+        assert.match(result.body.displayText, /可直接展示的最终结果/);
+        assert.doesNotMatch(result.body.displayText, /DSML|tool_calls|invoke/);
+        assert.equal(llmServer.calls.length, 2);
+        assert.match(llmServer.calls[1].payload.messages[0].content, /Protocol repair/);
     } finally {
         await gateway.stop();
         await llmServer.close();

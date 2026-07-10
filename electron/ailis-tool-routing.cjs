@@ -352,10 +352,6 @@ function scoreToolForQuery(entry = {}, query = '') {
     const profiles = matchingRoutingProfiles(query);
     let score = baseTextScore(query, text);
 
-    if (queryExplicitlyRequestsTool(query, toolName)) {
-        score += 80;
-    }
-
     if (/^youtube_/.test(toolName) && !queryExplicitlyMentionsYoutube(query)) {
         return 0;
     }

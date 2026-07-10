@@ -887,7 +887,7 @@ class AILISGateway extends EventEmitter {
 
     async executeGatewayToolSearch(args = {}) {
         const query = normalizeString(args.query || args.q);
-        const limit = Math.max(1, Math.min(Number(args.limit || 5), 8));
+        const limit = Math.max(1, Math.min(Number(args.limit || 12), 50));
         const includeDirect = args.includeDirect === true;
         const local = this.gatewayToolRuntimeRegistry.search(query, limit)
             .filter((entry) => shouldIncludeDirectToolInSearch(entry, query, includeDirect))

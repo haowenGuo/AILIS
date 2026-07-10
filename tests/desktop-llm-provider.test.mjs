@@ -537,6 +537,33 @@ describe('desktop LLM provider', () => {
         assert.equal(receivedRequest.body.parallel_tool_calls, true);
     });
 
+    it('passes tool_choice none while preserving tool schemas for finalization', async () => {
+        const result = await callDesktopLlmProvider({
+            provider: 'openai-compatible',
+            baseUrl: `${serverUrl}/v1`,
+            apiKey: 'test-secret-key',
+            model: 'demo-model',
+            timeoutMs: 5000
+        }, {
+            messages: [{ role: 'user', content: 'Finalize from current evidence.' }],
+            tools: [{
+                name: 'web_fetch',
+                description: 'Fetch a page.',
+                parameters: {
+                    type: 'object',
+                    properties: { url: { type: 'string' } },
+                    required: ['url'],
+                    additionalProperties: false
+                }
+            }],
+            toolChoice: 'none'
+        });
+
+        assert.equal(result.ok, true);
+        assert.equal(receivedRequest.body.tool_choice, 'none');
+        assert.equal(receivedRequest.body.tools[0].function.name, 'web_fetch');
+    });
+
     it('extracts OpenAI-compatible native tool calls', async () => {
         const result = await callDesktopLlmProvider({
             provider: 'openai-compatible',

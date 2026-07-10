@@ -817,6 +817,20 @@ test('AILIS tool_search returns strict direct MCP specs and native preflight blo
     gateway.runtime.mcpManager.searchToolSpecs = async () => [
         createAilisDirectMcpToolSpec({
             server: 'ailis_research',
+            tool: 'web_research',
+            description: 'End-to-end public web research using search and fetch together.',
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    query: { type: 'string' },
+                    maxPages: { type: 'number' }
+                },
+                required: ['query'],
+                additionalProperties: false
+            }
+        }),
+        createAilisDirectMcpToolSpec({
+            server: 'ailis_research',
             tool: 'web_search',
             description: 'Fallback broad public web search.',
             inputSchema: {
@@ -886,6 +900,15 @@ test('AILIS tool_search returns strict direct MCP specs and native preflight blo
     assert.equal(typeof compactedWebSearch.input_schema.properties, 'object');
     assert.equal(Array.isArray(compactedWebSearch.input_schema.properties), false);
     assert.equal(typeof compactedWebSearch.input_schema.properties.query, 'object');
+
+    const exactResearchSearch = await gateway.executeGatewayToolSearch({
+        query: 'mcp__ailis_research__web_research',
+        includeExternal: false
+    });
+    const exactResearchNames = exactResearchSearch.structuredContent.tools.map((tool) => tool.id);
+    assert.ok(exactResearchNames.includes('mcp__ailis_research__web_research'));
+    assert.ok(exactResearchNames.includes('mcp__ailis_research__web_search'));
+    assert.ok(exactResearchNames.includes('mcp__ailis_research__web_fetch'));
 
     const nextSpecs = buildAgentDirectToolSpecs(gateway, {
         requestContext: { nativeDirectTools: true },

@@ -11,7 +11,10 @@ const {
     AILISAgentRunner,
     buildAgentDirectToolSpecs,
     buildToolObservationDigest,
+    extractSubagentHandoffOutcome,
     isAgentLlmSettingsMissing,
+    looksLikeLeakedAgentProtocol,
+    normalizePersonaTaskAgentHandoffStep,
     splitNativeProgressNoteArgs,
     stripControlTags
 } = require('../electron/ailis-agent-runner.cjs');
@@ -93,6 +96,53 @@ test('AILIS direct tool specs allow model-authored progress notes without passin
 
     assert.deepEqual(split.args, { path: 'note.txt' });
     assert.match(split.progressNote, /确认这份文件/);
+});
+
+test('AILIS Agent Runner rejects visible tool protocols and preserves the original TaskAgent goal', () => {
+    const leaked = `<｜｜DSML｜｜tool_calls>
+<｜｜DSML｜｜invoke name="mcp__ailis_research__web_research">
+<｜｜DSML｜｜parameter name="query" string="true">Rossi guide</｜｜DSML｜｜parameter>
+</｜｜DSML｜｜invoke>
+</｜｜DSML｜｜tool_calls>`;
+    assert.equal(looksLikeLeakedAgentProtocol(leaked), true);
+    assert.equal(looksLikeLeakedAgentProtocol(JSON.stringify({
+        tool_calls: [{ function: { name: 'web_search', arguments: '{}' } }]
+    })), true);
+    assert.equal(looksLikeLeakedAgentProtocol('已经整理好洛茜的技能、配队和培养建议。'), false);
+
+    const normalized = normalizePersonaTaskAgentHandoffStep({
+        tool: 'subagents',
+        args: {
+            action: 'spawn',
+            task: '扩写后的复杂验收清单',
+            message: '扩写后的复杂验收清单'
+        }
+    }, {
+        message: '做一套洛茜的攻略'
+    });
+    assert.equal(normalized.args.task, '做一套洛茜的攻略');
+    assert.equal(normalized.args.message, '做一套洛茜的攻略');
+
+    const handoff = extractSubagentHandoffOutcome({
+        response: {
+            ok: true,
+            status: 'completed',
+            result: {
+                details: {
+                    status: 'completed',
+                    result: {
+                        ok: true,
+                        status: 'completed',
+                        displayText: leaked,
+                        finalAnswer: leaked
+                    }
+                }
+            }
+        }
+    });
+    assert.equal(handoff.ok, false);
+    assert.equal(handoff.status, 'invalid_visible_agent_protocol');
+    assert.doesNotMatch(handoff.displayText, /DSML|tool_calls|invoke/);
 });
 
 test('web source viewport prompt digest uses only canonical Codex/OAI names', () => {

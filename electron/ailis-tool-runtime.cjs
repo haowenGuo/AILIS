@@ -364,7 +364,7 @@ class AILISToolRuntimeRegistry {
 
 async function executeToolSearch(registry, args = {}) {
     const query = normalizeString(args.query || args.q);
-    const limit = Math.max(1, Math.min(Number(args.limit || 5), 8));
+    const limit = Math.max(1, Math.min(Number(args.limit || 8), 50));
     const includeMcp = args.includeMcp !== false;
     const includeDirect = args.includeDirect === true;
     const local = registry.search(query, limit)

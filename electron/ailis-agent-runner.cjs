@@ -371,6 +371,8 @@ function normalizeText(value, fallback = '') {
 const INTERNAL_CONTROL_TAG_NAMES = 'persona_output|persona_surface|personaOutput|personaSurface|ailis_persona_output|ailis_persona_surface';
 const INTERNAL_CONTROL_KEY_PATTERN = /["']?(?:persona_output|persona_surface|personaOutput|personaSurface|ailis_persona_output|ailis_persona_surface)["']?\s*:/i;
 const DANGLING_INTERNAL_CLOSE_TAG_PATTERN = new RegExp(`<\\s*\\/\\s*(?:${INTERNAL_CONTROL_TAG_NAMES})\\s*>`, 'gi');
+const TOOL_PROTOCOL_TAG_PATTERN = /<\s*(?:(?:\|{2}|｜{2})\s*DSML\s*(?:\|{2}|｜{2}))?\s*(?:tool_calls?|invoke|parameter)\b/i;
+const TOOL_PROTOCOL_MARKER_PATTERN = /(?:\|{2}|｜{2})\s*DSML\s*(?:\|{2}|｜{2})/i;
 
 function makeInternalControlBlockPattern(flags = 'gi') {
     return new RegExp(`<\\s*(${INTERNAL_CONTROL_TAG_NAMES})\\b[^>]*>[\\s\\S]*?<\\s*\\/\\s*\\1\\s*>`, flags);
@@ -4102,6 +4104,51 @@ function stripControlTags(value) {
     return stripInternalControlBlocks(value).replace(/\[(?:action|expression):[^\]]*\]/g, '').trim();
 }
 
+function mergeLlmUsage(...usageRecords) {
+    const summaries = usageRecords.map(summarizeLlmUsage).filter(Boolean);
+    const sum = (key) => {
+        const values = summaries.map((summary) => Number(summary[key])).filter(Number.isFinite);
+        return values.length ? values.reduce((total, value) => total + value, 0) : null;
+    };
+    const promptTokens = sum('promptTokens');
+    const completionTokens = sum('completionTokens');
+    const totalTokens = sum('totalTokens');
+    const reasoningTokens = sum('reasoningTokens');
+    const cachedTokens = sum('cachedTokens');
+    return {
+        ...(promptTokens !== null ? { prompt_tokens: promptTokens } : {}),
+        ...(completionTokens !== null ? { completion_tokens: completionTokens } : {}),
+        ...(totalTokens !== null ? { total_tokens: totalTokens } : {}),
+        ...(reasoningTokens !== null ? { completion_tokens_details: { reasoning_tokens: reasoningTokens } } : {}),
+        ...(cachedTokens !== null ? { prompt_tokens_details: { cached_tokens: cachedTokens } } : {})
+    };
+}
+
+function looksLikeLeakedAgentProtocol(value) {
+    const text = normalizeText(value);
+    if (!text) {
+        return false;
+    }
+    if (TOOL_PROTOCOL_TAG_PATTERN.test(text)) {
+        return true;
+    }
+    if (TOOL_PROTOCOL_MARKER_PATTERN.test(text) && /\b(?:tool_calls?|invoke|parameter)\b/i.test(text)) {
+        return true;
+    }
+    const json = extractJsonObject(text);
+    return Boolean(
+        json &&
+        typeof json === 'object' &&
+        !Array.isArray(json) &&
+        (
+            Array.isArray(json.tool_calls) ||
+            Array.isArray(json.toolCalls) ||
+            (json.function_call && typeof json.function_call === 'object') ||
+            (json.functionCall && typeof json.functionCall === 'object')
+        )
+    );
+}
+
 function inferEmotionHintFromMessage(message = '') {
     const text = normalizeText(message);
     if (!text) {
@@ -4786,7 +4833,13 @@ function buildTaskRunHandoffDisplayText(handoff = {}) {
     const evidence = Array.isArray(handoff.collectedData) ? handoff.collectedData : [];
     const lines = [];
     if (handoff.status === 'completed') {
-        return normalizeText(handoff.finalAnswer || handoff.partialAnswer || handoff.userVisibleSummary, '任务已经完成。');
+        const completedText = normalizeText(
+            handoff.finalAnswer || handoff.partialAnswer || handoff.userVisibleSummary,
+            '任务已经完成。'
+        );
+        return looksLikeLeakedAgentProtocol(completedText)
+            ? 'TaskAgent 返回了未执行的内部调用协议，运行时已阻止展示；现有证据和检查点已经保留。'
+            : completedText;
     }
     if (handoff.status === 'max_loop') {
         lines.push(`TaskAgent 触发了执行轮次保险丝（${stats.maxSteps || stats.stepsUsed || 0}），我先停住并整理现场，避免继续空转。`);
@@ -4944,19 +4997,10 @@ function extractSubagentHandoffOutcome(stepResult = {}) {
         response.ok === true ? 'completed' : 'failed'
     );
     const failedStatus = ['failed', 'error', 'cancelled', 'timeout', 'not_found', 'needs_approval'];
-    const ok = response.ok === true &&
+    const baseOk = response.ok === true &&
         !failedStatus.includes(status) &&
         childResult.ok !== false &&
         subagent.ok !== false;
-    const displayText = stripControlTags(buildPersonaTaskAgentHandoffDisplayText({
-        ok,
-        status,
-        childResult,
-        payload,
-        subagent,
-        response,
-        toolText
-    }));
     const taskRunHandoff = childResult.taskRunHandoff ||
         childResult.task_run_handoff ||
         payload.taskRunHandoff ||
@@ -4964,9 +5008,31 @@ function extractSubagentHandoffOutcome(stepResult = {}) {
         subagent.result?.taskRunHandoff ||
         subagent.result?.task_run_handoff ||
         null;
-    return {
-        ok,
+    const rawDisplayText = buildPersonaTaskAgentHandoffDisplayText({
+        ok: baseOk,
         status,
+        childResult,
+        payload,
+        subagent,
+        response,
+        toolText
+    });
+    const protocolRejected = [
+        rawDisplayText,
+        taskRunHandoff?.userVisibleSummary,
+        taskRunHandoff?.finalAnswer,
+        taskRunHandoff?.partialAnswer,
+        childResult.displayText,
+        childResult.finalAnswer,
+        childResult.answer,
+        payload.displayText
+    ].some(looksLikeLeakedAgentProtocol);
+    const displayText = protocolRejected
+        ? 'TaskAgent 返回了未执行的内部调用协议，运行时已阻止展示；现有证据和检查点已经保留。'
+        : stripControlTags(rawDisplayText);
+    return {
+        ok: baseOk && !protocolRejected,
+        status: protocolRejected ? 'invalid_visible_agent_protocol' : status,
         displayText,
         childResult,
         subagent,
@@ -5423,12 +5489,12 @@ function normalizePersonaTaskAgentHandoffStep(step = {}, request = {}) {
         return step;
     }
     const args = step.args && typeof step.args === 'object' ? { ...step.args } : {};
-    const desktopRealEvalTaskText = request?.context?.desktopRealEval === true
+    const originalUserTaskText = request?.context?.desktopRealEval === true
         ? normalizeText(request?.context?.desktopRealEvalTaskText || getLatestUserMessage(request))
-        : '';
-    if (desktopRealEvalTaskText) {
-        args.task = desktopRealEvalTaskText;
-        args.message = desktopRealEvalTaskText;
+        : getLatestUserMessage(request);
+    if (originalUserTaskText) {
+        args.task = originalUserTaskText;
+        args.message = originalUserTaskText;
         delete args.prompt;
     }
     const existingWaitTimeoutMs = Number(args.waitTimeoutMs || args.timeoutMs);
@@ -6495,13 +6561,20 @@ function looksLikeMetaDecisionJson(json = {}) {
     );
 }
 
-async function callLlmAgentDirectToolDecision(settings, payload, { hasToolHistory = false } = {}) {
+async function callLlmAgentDirectToolDecision(settings, payload, {
+    hasToolHistory = false,
+    forceFinalResponse = false
+} = {}) {
+    const requestedToolChoice = forceFinalResponse
+        ? 'none'
+        : normalizeText(payload.toolChoice || payload.tool_choice, 'auto');
     let response = await callDesktopLlmProvider(settings, {
         ...payload,
         jsonMode: false,
         expectJson: false,
         responseFormat: null,
-        toolChoice: 'auto',
+        toolChoice: requestedToolChoice,
+        preferNativeToolCalls: !forceFinalResponse,
         parallel_tool_calls: payload.parallel_tool_calls === true
     });
     if (!response.ok && payload.parallel_tool_calls === true && looksLikeParallelToolCallsUnsupported(response)) {
@@ -6510,7 +6583,8 @@ async function callLlmAgentDirectToolDecision(settings, payload, { hasToolHistor
             jsonMode: false,
             expectJson: false,
             responseFormat: null,
-            toolChoice: 'auto',
+            toolChoice: requestedToolChoice,
+            preferNativeToolCalls: !forceFinalResponse,
             parallel_tool_calls: false
         });
         if (response.ok) {
@@ -6528,6 +6602,60 @@ async function callLlmAgentDirectToolDecision(settings, payload, { hasToolHistor
             status: failureDecision.status,
             httpStatus: failureDecision.httpStatus,
             error: failureDecision.error
+        };
+    }
+    let repairMetadata = {};
+    const initialToolCalls = (response.toolCalls || []).filter((call) => call?.name);
+    const leakedProtocol = !initialToolCalls.length && looksLikeLeakedAgentProtocol(response.content);
+    if (leakedProtocol || (forceFinalResponse && initialToolCalls.length)) {
+        const repairInstruction = forceFinalResponse
+            ? 'Finalization retry: the runtime budget is exhausted. Do not call or serialize any tool. Write the best supported user-facing answer in plain prose from the existing task state and evidence. If evidence is insufficient, state the concrete blocker in plain prose. Never emit DSML, tool_calls, function_call, XML control tags, internal JSON, or protocol metadata.'
+            : 'Protocol repair: your previous response serialized a tool call as visible text. If another tool is needed, issue it through the native function-call channel. Otherwise answer in plain user-facing prose. Never print DSML, tool_calls, function_call, XML control tags, or internal protocol JSON.';
+        const repairMessages = Array.isArray(payload.messages)
+            ? payload.messages.map((message) => ({ ...message }))
+            : [];
+        const systemIndex = repairMessages.findIndex((message) => message.role === 'system');
+        if (systemIndex >= 0) {
+            repairMessages[systemIndex].content = `${normalizeText(repairMessages[systemIndex].content)}\n\n${repairInstruction}`;
+        } else {
+            repairMessages.unshift({ role: 'system', content: repairInstruction });
+        }
+        const originalUsage = response.usage;
+        const repairedResponse = await callDesktopLlmProvider(settings, {
+            ...payload,
+            messages: repairMessages,
+            instructions: `${normalizeText(payload.instructions)}\n\n${repairInstruction}`,
+            jsonMode: false,
+            expectJson: false,
+            responseFormat: null,
+            toolChoice: forceFinalResponse ? 'none' : requestedToolChoice,
+            preferNativeToolCalls: !forceFinalResponse,
+            parallel_tool_calls: false
+        });
+        const repairedToolCalls = (repairedResponse.toolCalls || []).filter((call) => call?.name);
+        if (
+            !repairedResponse.ok ||
+            looksLikeLeakedAgentProtocol(repairedResponse.content) ||
+            (forceFinalResponse && repairedToolCalls.length)
+        ) {
+            return {
+                ok: false,
+                status: 'invalid_visible_agent_protocol',
+                error: 'Model returned an internal tool protocol instead of a user-facing final response.',
+                usage: mergeLlmUsage(originalUsage, repairedResponse.usage),
+                repairAttempted: true,
+                repairStatus: repairedResponse.ok ? 'protocol_still_visible' : (repairedResponse.code || 'provider_error')
+            };
+        }
+        response = {
+            ...repairedResponse,
+            usage: mergeLlmUsage(originalUsage, repairedResponse.usage)
+        };
+        repairMetadata = {
+            repaired: true,
+            repairedFrom: forceFinalResponse ? 'safety_finalization_tool_attempt' : 'visible_tool_protocol',
+            repairAttempted: true,
+            repairStatus: 'completed'
         };
     }
     const directToolCalls = (response.toolCalls || []).filter((call) => call?.name);
@@ -6613,6 +6741,7 @@ async function callLlmAgentDirectToolDecision(settings, payload, { hasToolHistor
                 decisionSource: 'native_final_answer_tool',
                 nativeToolCall: routedNativeToolCall,
                 transportFallback: false,
+                ...repairMetadata,
                 model: response.model,
                 usage: response.usage
             };
@@ -6758,6 +6887,7 @@ async function callLlmAgentDirectToolDecision(settings, payload, { hasToolHistor
             decisionSource: 'native_direct_tool_call',
             nativeToolCall: routedNativeToolCall,
             transportFallback: false,
+            ...repairMetadata,
             model: response.model,
             usage: response.usage
         };
@@ -6807,6 +6937,7 @@ async function callLlmAgentDirectToolDecision(settings, payload, { hasToolHistor
         decisionSource: 'native_direct_final',
         nativeToolCall: null,
         transportFallback: false,
+        ...repairMetadata,
         model: response.model,
         usage: response.usage
     };
@@ -8184,9 +8315,7 @@ class AILISAgentRunner {
                         request.externalToolExposureLimit ||
                         promptProfile.externalToolExposureLimit
                 });
-            const directToolSpecs = safetyFinalizationReason
-                ? []
-                : buildAgentDirectToolSpecs(this.gateway, {
+            const directToolSpecs = buildAgentDirectToolSpecs(this.gateway, {
                 stepResults,
                 requestContext: {
                     ...requestContext,
@@ -8273,6 +8402,7 @@ class AILISAgentRunner {
             const parallelToolCalls = safetyFinalizationReason
                 ? false
                 : resolveParallelToolCalls(decisionSettings, requestContext);
+            const directToolChoice = safetyFinalizationReason ? 'none' : 'auto';
             const directModelInputPrompt = buildLlmAgentDirectToolPrompt({
                 ...commonPromptArgs,
                 parallelToolCalls
@@ -8297,7 +8427,7 @@ class AILISAgentRunner {
                 instructions: directModelInputPrompt.instructions,
                 input: directModelInputPrompt.input,
                 tools: directModelInputPrompt.tools || directToolSpecs,
-                tool_choice: 'auto',
+                tool_choice: directToolChoice,
                 parallel_tool_calls: parallelToolCalls
             });
             this.gateway.emitGatewayEvent?.('agent.prompt_budget', {
@@ -8325,7 +8455,7 @@ class AILISAgentRunner {
                         instructions: directModelInputPrompt.instructions,
                         input: directModelInputPrompt.input,
                         tools: directModelInputPrompt.tools || directToolSpecs,
-                        tool_choice: 'auto',
+                        tool_choice: directToolChoice,
                         parallel_tool_calls: parallelToolCalls,
                         prompt: directModelInputPrompt.prompt,
                         stats: directModelInputPrompt.stats
@@ -8355,7 +8485,7 @@ class AILISAgentRunner {
                 instructions: directModelInputPrompt.instructions,
                 input: directModelInputPrompt.input,
                 tools: directModelInputPrompt.tools || directToolSpecs,
-                toolChoice: 'auto',
+                toolChoice: directToolChoice,
                 jsonMode: false
             }, {
                 settings: decisionSettings,
@@ -8385,7 +8515,8 @@ class AILISAgentRunner {
                 }
             });
             let decision = await callLlmAgentDirectToolDecision(decisionSettings, decisionPayload, {
-                hasToolHistory: stepResults.length > 0 || events.some((event) => event?.type === 'tool_result')
+                hasToolHistory: stepResults.length > 0 || events.some((event) => event?.type === 'tool_result'),
+                forceFinalResponse: Boolean(safetyFinalizationReason)
             });
             latestDecision = decision;
             const llmCallDurationMs = Date.now() - llmCallStartedAt;
@@ -9294,13 +9425,16 @@ class AILISAgentRunner {
 
             if (personaTaskAgentHandoff) {
                 const outcome = extractSubagentHandoffOutcome(stepResult);
-                const finalAnswer = stripControlTags(normalizeText(
+                const handoffFinalCandidate = normalizeText(
                     normalizeText(outcome.taskRunHandoff?.finalAnswer) ||
                         normalizeText(outcome.taskRunHandoff?.partialAnswer) ||
                     normalizeText(outcome.childResult.finalAnswer) ||
                         normalizeText(outcome.childResult.answer) ||
                         outcome.displayText
-                ));
+                );
+                const finalAnswer = looksLikeLeakedAgentProtocol(handoffFinalCandidate)
+                    ? outcome.displayText
+                    : stripControlTags(handoffFinalCandidate);
                 await appendRuntimeItem({
                     type: 'agent.handoff',
                     status: outcome.ok ? 'task_agent_handoff_completed' : 'task_agent_handoff_incomplete',
@@ -10449,6 +10583,9 @@ module.exports = {
     resolveParallelToolCalls,
     splitNativeProgressNoteArgs,
     stripControlTags,
+    looksLikeLeakedAgentProtocol,
+    normalizePersonaTaskAgentHandoffStep,
+    extractSubagentHandoffOutcome,
     validateAgentToolLoopGuard,
     validateNativeDirectToolCall,
     validateExactAnswerSubmission,

@@ -1016,8 +1016,8 @@ async function callOpenAiCompatible(settings, payload, messages) {
             type: 'function',
             function: { name: toolChoice.name }
         };
-    } else if (payload.toolChoice === 'auto' || payload.tool_choice === 'auto') {
-        body.tool_choice = 'auto';
+    } else if (toolChoice?.mode) {
+        body.tool_choice = toolChoice.mode;
     }
 
     const result = await fetchJsonWithTimeout(
@@ -1259,8 +1259,8 @@ async function callOpenAiResponses(settings, payload, messages) {
             type: 'function',
             name: toolChoice.name
         };
-    } else if (payload.toolChoice === 'auto' || payload.tool_choice === 'auto') {
-        body.tool_choice = 'auto';
+    } else if (toolChoice?.mode) {
+        body.tool_choice = toolChoice.mode;
     }
 
     const result = await fetchJsonWithTimeout(
