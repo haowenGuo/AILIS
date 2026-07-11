@@ -207,17 +207,6 @@ const AILIS_RUNTIME_TOOL_DEFINITIONS = Object.freeze([
         exposure: AILIS_TOOL_EXPOSURE.DIRECT
     }),
     Object.freeze({
-        id: 'subagents',
-        label: 'subagents',
-        description: 'Legacy compatibility surface for older AILIS subagent calls. Persona and new Agent code must use spawn_agent, followup_task, wait_agent, list_agents, and close_agent.',
-        sectionId: 'runtime',
-        route: 'ailis-runtime',
-        materialized: true,
-        status: 'available',
-        needsApprovalActions: Object.freeze(['spawn', 'create', 'send', 'close']),
-        exposure: AILIS_TOOL_EXPOSURE.HIDDEN
-    }),
-    Object.freeze({
         id: 'mcp_bridge',
         label: 'mcp_bridge',
         description: 'Manage configured MCP servers and execute tools/resources/prompts through stdio or HTTP MCP sessions.',

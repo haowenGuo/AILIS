@@ -561,10 +561,6 @@ function createAILISToolRuntimeRegistry(runtime) {
         )
     }));
     registry.register(new AILISRuntimeTool({
-        definition: definitionById.subagents,
-        handle: async (args, context) => runtime.executeSubagentRelay(args, context)
-    }));
-    registry.register(new AILISRuntimeTool({
         definition: definitionById.mcp_bridge,
         handle: async (args, context) => runtime.executeMcpBridge(args, context)
     }));

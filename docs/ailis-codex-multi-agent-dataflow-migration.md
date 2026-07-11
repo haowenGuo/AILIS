@@ -23,9 +23,9 @@ Primary source evidence:
 - `codex-rs/core/src/context/subagent_notification.rs`
 - `codex-rs/protocol/src/protocol.rs`
 
-## Correct Diagnosis
+## Replacement Status
 
-AILIS currently models a TaskAgent as a synchronous tool call:
+The former AILIS implementation modeled a TaskAgent as a synchronous compatibility tool:
 
 ```text
 Persona -> subagents(action=spawn, wait=true) -> plain answer text -> Persona
@@ -46,7 +46,9 @@ root Agent
   -> same child thread and history continue
 ```
 
-The primary bug is therefore not missing content classification. AILIS loses stable child identity and continuation context at the parent/child boundary, so the model naturally spawns another clean TaskAgent.
+That implementation has now been removed. `AgentControl` owns a session-scoped `AgentRegistry`, persistent `AgentPath` records, child execution promises, input handlers, cancellation, and mailbox delivery. `AILISRuntime` no longer owns global `subagents`, run, controller, or input-handler maps and no longer exposes `executeSubagentRelay`.
+
+The replacement deliberately reuses the existing TaskAgent model loop as the child thread executor. It does not preserve the old relay lifecycle around that executor.
 
 ## Codex-Named Object Model
 
@@ -117,7 +119,7 @@ list_agents(path_prefix?)
 close_agent(target)
 ```
 
-The old `subagents(action=...)` tool remains hidden for compatibility but is removed from the Persona model surface.
+The old `subagents(action=...)`, `sessions_spawn`, and `sessions_yield` tools are deleted rather than hidden. No compatibility route remains in contracts, tool specs, tool runtime registration, Gateway session tools, or model capability text.
 
 ## Codex Call Stack and Pseudocode
 
@@ -268,7 +270,18 @@ The next model round drains the completion notification from the mailbox. Return
 | `close_agent` | tool contracts/specs/runtime | Close the target and return `previous_status`. |
 | `keep_forked_rollout_item` | `electron/ailis-agent-runner.cjs` | Build sanitized parent ContextManager checkpoint. |
 | `drain_mailbox_input_items` | `electron/ailis-agent-runner.cjs` | Inject completion ResponseItems before each parent decision. |
-| legacy `subagents` | existing runtime | Keep hidden for UI/tests; no longer expose to Persona. |
+| legacy `subagents` | removed | Delete contract, spec, runtime dispatch, global maps, relay methods, prompts, OpenClaw surface entries, and evaluation settlement workarounds. |
+
+## Implemented Runtime Invariants
+
+- One `AgentRegistry` tree is owned per root session; `list_agents` and target resolution cannot cross session boundaries.
+- One direct child may be live under the same parent path. A second spawn returns `agent_thread_limit_reached` with the existing target instead of creating duplicate semantic work.
+- `followup_task` enters the live child input handler or resumes the same stable Agent record from its semantic checkpoint.
+- Mailbox storage is session-scoped, so a child completion is not lost when the parent HTTP run id changes.
+- Before Persona safety finalization, the Harness waits for live direct children and injects completed mailbox items into the final model request.
+- Forked history follows Codex rollout filtering and structurally removes Persona relationship memory, capability catalog, and external tool exposure while retaining runtime environment and attachments.
+- Unknown terminal provider statuses normalize to `Errored`, never `NotFound`.
+- Invalid native tool observations preserve provider `reasoning_content` for DeepSeek/Qwen chat round trips.
 
 ## Acceptance Tests
 
@@ -276,6 +289,7 @@ The next model round drains the completion notification from the mailbox. Return
 
 - Persona tools contain Codex names and exact snake_case fields.
 - Persona tools do not contain `subagents`.
+- Runtime source contains no legacy relay/global-map symbols.
 - All schemas reject unknown fields.
 
 ### History fork test
@@ -285,6 +299,13 @@ Parent history contains user messages, final assistant output, commentary, reaso
 ### Mailbox test
 
 Child completion must enqueue exactly one `InterAgentCommunication`. `wait_agent` returns only wait status. The next parent model request contains exactly one completion notification.
+
+### Isolation and lifecycle tests
+
+- Two sessions may use the same canonical task name without seeing each other's Agent records.
+- A delayed child completion remains available to a later parent run in the same session.
+- A second live direct child is rejected without starting another model call.
+- Provider failure is delivered as `{"errored":"..."}` and retains a resumable handoff package.
 
 ### Continuation test
 

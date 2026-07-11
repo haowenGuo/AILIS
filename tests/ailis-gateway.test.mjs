@@ -83,8 +83,8 @@ function buildBlankPdfWithoutSelectableText() {
     return Buffer.from(body, 'latin1');
 }
 
-test('AILIS Gateway subagent task reuses parent LLM settings for TaskAgent runs', async () => {
-    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-subagent-llm-'));
+test('AILIS Gateway TaskAgent thread reuses parent LLM settings', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-agent-llm-'));
     const gateway = new AILISGateway({
         port: 0,
         workspaceRoot,
@@ -115,9 +115,9 @@ test('AILIS Gateway subagent task reuses parent LLM settings for TaskAgent runs'
         apiKey: 'test-key'
     };
 
-    const result = await gateway.executeSubagentTask({
-        subagent: {
-            id: 'sub-1',
+    const result = await gateway.executeTaskAgent({
+        agent: {
+            id: 'agent-1',
             runId: 'parent-run',
             sessionId: 'parent-session',
             childRunId: 'child-run-request',

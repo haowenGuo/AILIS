@@ -675,7 +675,7 @@ test('Persona receives a TaskAgent completion through the Codex-style mailbox', 
         projectRoot: path.resolve('.'),
         auditDir: path.join(workspaceRoot, '.audit')
     });
-    const subagentCalls = [];
+    const agentCalls = [];
     const gatewayToolCalls = [];
     const originalCallTool = gateway.callTool.bind(gateway);
     gateway.callTool = async (request) => {
@@ -691,8 +691,8 @@ test('Persona receives a TaskAgent completion through the Codex-style mailbox', 
     };
 
     try {
-        gateway.runtime.subagentExecutor = async ({ subagent, args, context }) => {
-            subagentCalls.push({ subagent, args, context });
+        gateway.runtime.agent_control.execute_agent = async ({ agent, args, context }) => {
+            agentCalls.push({ agent, args, context });
             await new Promise((resolve) => setTimeout(resolve, 50));
             return {
                 ok: true,
@@ -735,17 +735,16 @@ test('Persona receives a TaskAgent completion through the Codex-style mailbox', 
         assert.equal(result.body.displayText, 'AILIS final answer: 42');
         assert.equal(result.body.finalAnswer, 'AILIS final answer: 42');
         assert.equal(llmServer.calls.length, 3);
-        assert.equal(subagentCalls.length, 1);
-        assert.equal(subagentCalls[0].args.wait, false);
+        assert.equal(agentCalls.length, 1);
         assert.equal(
-            subagentCalls[0].args.task,
+            agentCalls[0].args.message,
             '核验截至当前日期《原神》“木偶”桑多涅是否已经实装；使用新鲜网页证据，若已实装则完成角色攻略。'
         );
-        assert.equal(subagentCalls[0].context.maxAgentSteps, 4);
-        assert.equal(subagentCalls[0].context.cleanContext, false);
-        assert.equal(subagentCalls[0].context.taskAgentInheritanceMode, 'checkpoint');
-        assert.ok(subagentCalls[0].context.initialContextManagerCheckpoint);
-        assert.equal(subagentCalls[0].context.contextMode, 'task_agent');
+        assert.equal(agentCalls[0].context.maxAgentSteps, 4);
+        assert.equal(agentCalls[0].context.cleanContext, false);
+        assert.equal(agentCalls[0].context.taskAgentInheritanceMode, 'checkpoint');
+        assert.ok(agentCalls[0].context.initialContextManagerCheckpoint);
+        assert.equal(agentCalls[0].context.contextMode, 'task_agent');
         assert.deepEqual(gatewayToolCalls.map((call) => call.tool), ['spawn_agent', 'wait_agent']);
         assert.equal(gatewayToolCalls[1].waitTimeoutMs, 1000);
         assert.match(JSON.stringify(llmServer.calls[0].payload.messages), /原神的/);

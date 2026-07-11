@@ -13,7 +13,6 @@ const {
         buildLlmAgentDirectToolPrompt,
         build_forked_context_checkpoint,
         buildToolObservationDigest,
-    extractSubagentHandoffOutcome,
     isAgentLlmSettingsMissing,
     looksLikeLeakedAgentProtocol,
     splitNativeProgressNoteArgs,
@@ -210,26 +209,6 @@ test('AILIS Agent Runner rejects visible tool protocols', () => {
     })), true);
     assert.equal(looksLikeLeakedAgentProtocol('已经整理好洛茜的技能、配队和培养建议。'), false);
 
-    const handoff = extractSubagentHandoffOutcome({
-        response: {
-            ok: true,
-            status: 'completed',
-            result: {
-                details: {
-                    status: 'completed',
-                    result: {
-                        ok: true,
-                        status: 'completed',
-                        displayText: leaked,
-                        finalAnswer: leaked
-                    }
-                }
-            }
-        }
-    });
-    assert.equal(handoff.ok, false);
-    assert.equal(handoff.status, 'invalid_visible_agent_protocol');
-    assert.doesNotMatch(handoff.displayText, /DSML|tool_calls|invoke/);
 });
 
 test('web source viewport prompt digest uses only canonical Codex/OAI names', () => {
@@ -280,8 +259,8 @@ test('web source viewport prompt digest uses only canonical Codex/OAI names', ()
     assert.doesNotMatch(digest.structuredContent, /lineNumber|line_number|web_fetch/);
 });
 
-test('AILIS Agent Runner passes parent LLM settings only to subagent tool calls', async () => {
-    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-subagent-tool-context-'));
+test('AILIS Agent Runner passes parent LLM settings only to collaboration tool calls', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-agent-tool-context-'));
     const calls = [];
     const gateway = {
         workspaceRoot,
@@ -313,10 +292,10 @@ test('AILIS Agent Runner passes parent LLM settings only to subagent tool calls'
     await runner.executeAgentToolStep({
         runId: 'run-parent',
         step: {
-            id: 'step-subagent',
+            id: 'step-agent',
             title: 'Spawn task agent',
-            tool: 'subagents',
-            args: { action: 'spawn', task: 'solve task', wait: true }
+            tool: 'spawn_agent',
+            args: { task_name: 'solve_task', message: 'solve task', fork_turns: 'none' }
         },
         toolContext: { workspace: workspaceRoot, sessionKey: 'main' },
         request: { llmSettings },
@@ -378,11 +357,6 @@ test('AILIS persona exposes Codex-named collaboration tools while TaskAgent keep
             fork_turns: { type: 'string' }
         }
     };
-    const subagentSpec = {
-        name: 'subagents',
-        description: 'Legacy subagent compatibility tool.',
-        parameters: { type: 'object', properties: { action: { type: 'string' } } }
-    };
     const gateway = {
         gatewayToolRuntimeRegistry: {
             modelVisibleSpecs: () => [
@@ -399,7 +373,6 @@ test('AILIS persona exposes Codex-named collaboration tools while TaskAgent keep
             ],
             definition: (toolId) => {
                 if (collaborationSpecs[toolId]) return { spec: collaborationSpecs[toolId] };
-                if (toolId === 'subagents') return { spec: subagentSpec };
                 if (toolId === 'task_results') return { spec: taskResultsSpec };
                 return null;
             }
@@ -435,19 +408,17 @@ test('AILIS persona exposes Codex-named collaboration tools while TaskAgent keep
     assert.ok(taskSpecs.some((spec) => spec.name === 'exec'));
     assert.equal(taskSpecs.some((spec) => spec.name === 'subagents'), false);
 
-    const explicitTaskSpecs = buildAgentDirectToolSpecs(gateway, {
-        requestContext: {
-            agentRole: 'task_agent',
-            exposeSubagentsDirectTool: true
-        }
-    });
-    assert.ok(explicitTaskSpecs.some((spec) => spec.name === 'subagents'));
 });
 
 test('AILIS sanitized agent fork follows Codex rollout filtering rules', () => {
     const items = [
         { type: 'message', role: 'system', content: [{ type: 'input_text', text: 'system' }] },
         { type: 'message', role: 'developer', content: [{ type: 'input_text', text: 'developer' }] },
+        { type: 'message', role: 'user', content: [{ type: 'input_text', text: JSON.stringify({
+            type: 'context',
+            memory_context: 'relationship memory must not enter TaskAgent',
+            runtime_environment: { current_date: '2026-07-11' }
+        }) }] },
         { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'old goal' }] },
         { type: 'message', role: 'assistant', phase: 'commentary', content: [{ type: 'output_text', text: 'progress' }] },
         { type: 'message', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: 'old final' }] },
@@ -467,10 +438,13 @@ test('AILIS sanitized agent fork follows Codex rollout filtering rules', () => {
         'system:',
         'developer:',
         'user:',
+        'user:',
         'assistant:final_answer',
         'user:'
     ]);
     assert.equal(checkpoint.items.some((item) => item.type === 'function_call_output'), false);
+    assert.doesNotMatch(JSON.stringify(checkpoint.items), /relationship memory/);
+    assert.match(JSON.stringify(checkpoint.items), /2026-07-11/);
 
     const recentCheckpoint = build_forked_context_checkpoint(contextManager, '1');
     assert.deepEqual(recentCheckpoint.items.map((item) => item.role), ['user']);

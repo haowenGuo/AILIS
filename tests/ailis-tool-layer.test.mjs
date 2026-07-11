@@ -420,11 +420,24 @@ test('AILIS Gateway exposes a small Responses-compatible core surface by default
 
     const directSpecs = gateway.gatewayToolRuntimeRegistry.modelVisibleSpecs();
     const directNames = directSpecs.map((tool) => tool.name);
-    assert.deepEqual(directNames.sort(), ['apply_patch', 'exec', 'read', 'request_permissions', 'tool_search', 'update_plan', 'write'].sort());
-    for (const expected of ['tool_search', 'update_plan', 'read', 'write', 'exec', 'apply_patch', 'request_permissions']) {
+    assert.deepEqual(directNames.sort(), [
+        'apply_patch',
+        'close_agent',
+        'exec',
+        'followup_task',
+        'list_agents',
+        'read',
+        'request_permissions',
+        'spawn_agent',
+        'tool_search',
+        'update_plan',
+        'wait_agent',
+        'write'
+    ].sort());
+    for (const expected of ['tool_search', 'update_plan', 'read', 'write', 'exec', 'apply_patch', 'request_permissions', 'spawn_agent', 'followup_task', 'wait_agent', 'list_agents', 'close_agent']) {
         assert.ok(directNames.includes(expected), `${expected} should be a core direct tool`);
     }
-    for (const deferred of ['artifact_tools', 'artifact_query', 'github_pages', 'mcp_bridge', 'subagents', 'computer']) {
+    for (const deferred of ['artifact_tools', 'artifact_query', 'github_pages', 'mcp_bridge', 'computer']) {
         assert.equal(directNames.includes(deferred), false, `${deferred} should be loaded through tool_search`);
     }
     assert.ok(directSpecs.every((tool) => tool.strict === true), 'core direct tools should use strict schemas');
@@ -439,43 +452,7 @@ test('AILIS Gateway exposes a small Responses-compatible core surface by default
     assert.equal(initialSpecs.some((tool) => tool.name === 'subagents'), false);
     assert.equal(initialSpecs.some((tool) => tool.name === 'read_xlsx_workbook'), false);
 
-    const searchResult = await gateway.executeGatewayToolSearch({
-        query: 'subagent task',
-        includeMcp: false,
-        includeExternal: false,
-        limit: 5
-    });
-    assert.equal(searchResult.structuredContent.tools[0].id, 'subagents');
-    assert.equal(searchResult.structuredContent.tools.some((tool) => tool.id === 'read_xlsx_workbook'), false);
-
-    const nextSpecs = buildAgentDirectToolSpecs(gateway, {
-        requestContext: { nativeDirectTools: true },
-        stepResults: [{
-            tool: 'tool_search',
-            response: {
-                ok: true,
-                result: searchResult
-            }
-        }]
-    });
-    assert.equal(nextSpecs.some((tool) => tool.name === 'subagents'), true);
-    assert.equal(nextSpecs.some((tool) => tool.name === 'read_xlsx_workbook'), false);
-    assert.equal(nextSpecs.some((tool) => tool.name === 'tool_search'), false);
-
-    const repeatedSearchSpecs = buildAgentDirectToolSpecs(gateway, {
-        requestContext: {
-            nativeDirectTools: true,
-            allowRepeatedToolSearchDirectTool: true
-        },
-        stepResults: [{
-            tool: 'tool_search',
-            response: {
-                ok: true,
-                result: searchResult
-            }
-        }]
-    });
-    assert.equal(repeatedSearchSpecs.some((tool) => tool.name === 'tool_search'), true);
+    assert.equal(gateway.gatewayToolRuntimeRegistry.has('subagents'), false);
 });
 
 test('AILIS rebuilds local runtime direct tool specs from registry after compressed tool_search observations', async () => {

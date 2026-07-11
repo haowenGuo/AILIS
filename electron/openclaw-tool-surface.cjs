@@ -157,30 +157,6 @@ const OPENCLAW_CORE_TOOL_DEFINITIONS = Object.freeze([
         includeInOpenClawGroup: true
     }),
     Object.freeze({
-        id: 'sessions_spawn',
-        label: 'sessions_spawn',
-        description: SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY,
-        sectionId: 'sessions',
-        profiles: Object.freeze(['coding']),
-        includeInOpenClawGroup: true
-    }),
-    Object.freeze({
-        id: 'sessions_yield',
-        label: 'sessions_yield',
-        description: 'End turn to receive sub-agent results',
-        sectionId: 'sessions',
-        profiles: Object.freeze(['coding']),
-        includeInOpenClawGroup: true
-    }),
-    Object.freeze({
-        id: 'subagents',
-        label: 'subagents',
-        description: 'Manage sub-agents',
-        sectionId: 'sessions',
-        profiles: Object.freeze(['coding']),
-        includeInOpenClawGroup: true
-    }),
-    Object.freeze({
         id: 'session_status',
         label: 'session_status',
         description: SESSION_STATUS_TOOL_DISPLAY_SUMMARY,

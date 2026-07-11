@@ -12,11 +12,13 @@ const {
 test('OpenClaw tool surface summary stays aligned', () => {
     const summary = getOpenClawToolSurfaceSummary();
 
-    assert.equal(summary.coreToolCount, 33);
+    assert.equal(summary.coreToolCount, 30);
     assert.equal(summary.optionalRuntimeToolCount, 1);
     assert.equal(summary.channelMcpToolCount, 9);
     assert.deepEqual(summary.profileIds, ['minimal', 'coding', 'messaging', 'full']);
-    assert.ok(summary.coreToolIds.includes('sessions_spawn'));
+    assert.equal(summary.coreToolIds.includes('sessions_spawn'), false);
+    assert.equal(summary.coreToolIds.includes('sessions_yield'), false);
+    assert.equal(summary.coreToolIds.includes('subagents'), false);
     assert.ok(summary.coreToolIds.includes('nodes'));
     assert.ok(summary.optionalRuntimeToolIds.includes('pdf'));
 });

@@ -25,15 +25,11 @@ const {
 } = require('./ailis-prompt-model.cjs');
 const {
     AgentControl,
-    AgentPath,
-    AgentStatus,
-    InputQueue,
-    normalize_agent_status
+    InputQueue
 } = require('./ailis-agent-control.cjs');
 
 const DEFAULT_MAX_RESULT_TEXT_CHARS = 6000;
 const DEFAULT_MAX_TRANSCRIPT_ITEMS = 500;
-const DEFAULT_SUBAGENT_WAIT_TIMEOUT_MS = 30000;
 const DEFAULT_SUBAGENT_RUN_TIMEOUT_MS = 15 * 60 * 1000;
 const TASK_AGENT_MAX_MODEL_ROUNDS = 4;
 
@@ -207,104 +203,6 @@ function summarize(value, maxChars = 800) {
     return text.length > maxChars ? `${text.slice(0, maxChars - 3)}...` : text;
 }
 
-function buildSubagentRelayText(response = {}) {
-    const status = normalizeString(response.status, 'unknown');
-    const subagent = response.subagent && typeof response.subagent === 'object' ? response.subagent : {};
-    const result = response.result && typeof response.result === 'object'
-        ? response.result
-        : (subagent.result && typeof subagent.result === 'object' ? subagent.result : {});
-    const taskRunHandoff = result.taskRunHandoff ||
-        result.task_run_handoff ||
-        response.taskRunHandoff ||
-        subagent.taskRunHandoff ||
-        subagent.task_run_handoff ||
-        null;
-    const handle = {
-        subagent_id: normalizeString(subagent.id || response.subagentId),
-        child_run_id: normalizeString(subagent.childRunId || response.childRunId),
-        status
-    };
-    if (taskRunHandoff && typeof taskRunHandoff === 'object') {
-        const handoffStatus = normalizeString(taskRunHandoff.status, status);
-        if (handoffStatus !== 'completed') {
-            return JSON.stringify({
-                type: 'task_agent_handoff',
-                ...handle,
-                status: handoffStatus,
-                task: summarize(taskRunHandoff.task || subagent.task || response.task, 600),
-                partial_answer: summarize(taskRunHandoff.partialAnswer, 1600),
-                failure_reason: summarize(
-                    taskRunHandoff.failureAnalysis?.reason ||
-                        taskRunHandoff.failureAnalysis?.bottleneck ||
-                        taskRunHandoff.reason,
-                    700
-                ),
-                evidence: (Array.isArray(taskRunHandoff.collectedData) ? taskRunHandoff.collectedData : [])
-                    .slice(-4)
-                    .map((item) => ({
-                        source: normalizeString(item.source || item.title),
-                        summary: summarize(item.summary, 700),
-                        evidence_refs: Array.isArray(item.evidenceRefs) ? item.evidenceRefs.slice(0, 6) : [],
-                        output_ref: normalizeString(item.outputId || item.artifactId)
-                    })),
-                unresolved_fields: Array.isArray(taskRunHandoff.failureAnalysis?.unresolvedQuestions)
-                    ? taskRunHandoff.failureAnalysis.unresolvedQuestions.slice(0, 8)
-                    : [],
-                next_step: summarize(taskRunHandoff.nextStep?.recommendation, 500),
-                continuation: {
-                    available: taskRunHandoff.resume?.checkpointAvailable === true,
-                    action: 'resume'
-                }
-            }, null, 2);
-        }
-        const handoffText = normalizeString(
-            taskRunHandoff.userVisibleSummary ||
-                taskRunHandoff.finalAnswer ||
-                taskRunHandoff.partialAnswer
-        );
-        if (handoffText) {
-            return handoffText;
-        }
-    }
-    const task = summarize(normalizeString(subagent.task || response.task), 180);
-    if (status === 'completed') {
-        return normalizeString(
-            result.finalAnswer ||
-                result.displayText ||
-                result.answer ||
-                result.summary ||
-                result.message,
-            'TaskAgent 已完成。'
-        );
-    }
-    if (status === 'running') {
-        return JSON.stringify({
-            ...handle,
-            task,
-            result_available: false
-        }, null, 2);
-    }
-    if (status === 'queued') {
-        return JSON.stringify({
-            ...handle,
-            task,
-            result_available: false
-        }, null, 2);
-    }
-    if (status === 'not_found') {
-        return '没有找到这个 TaskAgent 子任务。';
-    }
-    return normalizeString(
-        result.error ||
-            response.error ||
-            subagent.error ||
-            result.displayText ||
-            result.summary ||
-            result.message,
-        `TaskAgent status: ${status}`
-    );
-}
-
 function buildSubagentErrorHandoff({ subagent = {}, status = 'failed', error = '', durationMs = 0 } = {}) {
     const normalizedStatus = normalizeString(status, 'failed');
     const task = normalizeString(subagent.task);
@@ -422,54 +320,6 @@ function buildModelVisibleTruncationNotice({
         lines.push(`sourcePath=${normalizedPath}`);
     }
     return `${lines.join('\n')}\n\n`;
-}
-
-function isAbortError(error) {
-    return error?.name === 'AbortError' || /aborted|cancelled|canceled/i.test(error?.message || '');
-}
-
-function raceWithAbort(promise, signal) {
-    if (!signal) {
-        return promise;
-    }
-    if (signal.aborted) {
-        const error = new Error('subagent run aborted');
-        error.name = 'AbortError';
-        return Promise.reject(error);
-    }
-    return new Promise((resolve, reject) => {
-        const onAbort = () => {
-            const error = new Error('subagent run aborted');
-            error.name = 'AbortError';
-            reject(error);
-        };
-        signal.addEventListener('abort', onAbort, { once: true });
-        promise.then(
-            (value) => {
-                signal.removeEventListener('abort', onAbort);
-                resolve(value);
-            },
-            (error) => {
-                signal.removeEventListener('abort', onAbort);
-                reject(error);
-            }
-        );
-    });
-}
-
-function withTimeoutPromise(promise, timeoutMs, timeoutMessage) {
-    const bounded = Math.max(1000, Math.min(Number(timeoutMs) || DEFAULT_SUBAGENT_WAIT_TIMEOUT_MS, 24 * 60 * 60 * 1000));
-    let timer = null;
-    return Promise.race([
-        promise,
-        new Promise((_, reject) => {
-            timer = setTimeout(() => reject(new Error(timeoutMessage || `operation timed out after ${bounded}ms`)), bounded);
-        })
-    ]).finally(() => {
-        if (timer) {
-            clearTimeout(timer);
-        }
-    });
 }
 
 function normalizeMcpContent(result) {
@@ -734,19 +584,20 @@ class AILISRuntime {
             emitGatewayEvent: (type, payload) => this.emitGatewayEvent(type, payload)
         });
         this.rawMemoryLedger = options.rawMemoryLedger || null;
-        this.subagentExecutor = typeof options.subagentExecutor === 'function' ? options.subagentExecutor : null;
+        this.agentExecutor = typeof options.agentExecutor === 'function' ? options.agentExecutor : null;
         this.platformAdapter = createAILISPlatformAdapter(options.platformAdapter || options.platform || {});
         this.runs = new Map();
         this.planState = new Map();
         this.permissionGrants = new Map();
-        this.subagents = new Map();
-        this.subagentRuns = new Map();
-        this.subagentControllers = new Map();
-        this.subagentInputHandlers = new Map();
         this.input_queue = new InputQueue();
         this.agent_control = new AgentControl({
-            runtime: this,
-            input_queue: this.input_queue
+            execute_agent: this.agentExecutor,
+            input_queue: this.input_queue,
+            max_threads_per_session: options.agentMaxThreads || 1,
+            run_timeout_ms: options.agentRunTimeoutMs || DEFAULT_SUBAGENT_RUN_TIMEOUT_MS,
+            build_agent_context: (agent, args, context) => this.buildAgentContext(agent, args, context),
+            build_error_result: (agent, status, error, durationMs) => this.buildAgentErrorResult(agent, status, error, durationMs),
+            emit_agent_event: (agent, event) => this.appendAgentTranscriptEvent(agent, event)
         });
         this.mcpManager = new AILISMcpManager({
             workspaceRoot: this.workspaceRoot,
@@ -909,7 +760,7 @@ class AILISRuntime {
             transcriptDir: this.transcriptDir,
             activeTranscriptRuns: this.runs.size,
             planStateCount: this.planState.size,
-            subagentCount: this.subagents.size,
+            agentCount: this.agent_control.count_agents(),
             platform: this.platformAdapter.getStatus(),
             mcpServerCount: this.mcpManager.getStatus().serverCount,
             mcp: this.mcpManager.getStatus(),
@@ -941,7 +792,7 @@ class AILISRuntime {
                 'permission_grant_store',
                 'tool_result_guard',
                 'tool_result_repair',
-                'subagent_child_runner',
+                'codex_agent_thread_tree',
                 'mcp_stdio_session_manager',
                 'mcp_http_session_manager',
                 'mcp_config_store',
@@ -968,12 +819,7 @@ class AILISRuntime {
     }
 
     async shutdown() {
-        for (const controller of this.subagentControllers.values()) {
-            try {
-                controller.abort();
-            } catch {}
-        }
-        this.subagentControllers.clear();
+        await this.agent_control.shutdown();
         await this.mcpManager.shutdown().catch(() => {});
     }
 
@@ -1419,18 +1265,9 @@ class AILISRuntime {
                     action: 'request_permissions'
                 };
             }
-            if (toolId === 'subagents') {
-                const subagentAction = normalizeAction(args.action, 'list');
-                return {
-                    class: 'subagent',
-                    mutates: ['spawn', 'create', 'send', 'close'].includes(subagentAction),
-                    requiresApprovalCapable: ['spawn', 'create', 'send', 'close'].includes(subagentAction),
-                    action: subagentAction
-                };
-            }
             if (['spawn_agent', 'followup_task', 'wait_agent', 'list_agents', 'close_agent'].includes(toolId)) {
                 return {
-                    class: 'subagent',
+                    class: 'agent_control',
                     mutates: false,
                     requiresApprovalCapable: false,
                     action: toolId
@@ -1920,275 +1757,54 @@ class AILISRuntime {
         return await this.toolRuntimeRegistry.dispatch(toolId, args, context);
     }
 
-    resolve_agent_target(target = '', context = {}) {
-        const requested = normalizeString(target);
-        if (!requested) {
-            return null;
-        }
-        if (this.subagents.has(requested)) {
-            return this.subagents.get(requested);
-        }
-        const parentPath = new AgentPath(context.agent_path || context.agentPath || '/root');
-        const canonicalPath = requested.startsWith('/')
-            ? requested
-            : String(parentPath.join(requested));
-        return [...this.subagents.values()].find((subagent) =>
-            normalizeString(subagent.agent_path || subagent.agentPath) === canonicalPath
-        ) || null;
-    }
-
-    agent_status_for_subagent(subagent = {}) {
-        if (!subagent || !Object.keys(subagent).length) {
-            return AgentStatus.NotFound;
-        }
-        if (subagent.agent_status) {
-            return subagent.agent_status;
-        }
-        const finalMessage = normalizeString(
-            subagent.result?.displayText ||
-                subagent.result?.finalAnswer ||
-                subagent.result?.speechText
-        );
-        return normalize_agent_status(subagent.status, finalMessage);
-    }
-
-    async spawn_agent_with_metadata(args = {}, context = {}) {
-        const taskName = normalizeString(args.task_name);
-        const message = normalizeString(args.message);
-        const parentPath = new AgentPath(context.agent_path || context.agentPath || '/root');
-        let childPath;
-        try {
-            childPath = parentPath.join(taskName);
-        } catch (error) {
-            return {
-                ok: false,
-                status: 'invalid_task_name',
-                error: error?.message || String(error),
-                isError: true
-            };
-        }
-        const canonicalPath = String(childPath);
-        const existing = [...this.subagents.values()].find((subagent) =>
-            normalizeString(subagent.agent_path || subagent.agentPath) === canonicalPath
-        );
-        if (existing && !existing.closedAt) {
-            return {
-                ok: false,
-                status: 'agent_path_conflict',
-                error: `agent ${canonicalPath} already exists; use followup_task with target ${taskName}`,
-                isError: true
-            };
-        }
-
-        const forkTurns = normalizeString(args.fork_turns, 'all').toLowerCase();
-        const checkpoint = forkTurns === 'none'
-            ? null
-            : context.forked_context_checkpoint || context.forkedContextCheckpoint || null;
-        const relay = await this.executeSubagentRelay({
-            action: 'spawn',
-            task: message,
-            wait: false,
-            task_name: taskName,
-            agent_path: canonicalPath,
-            parent_agent_path: String(parentPath),
-            inheritanceMode: checkpoint ? 'checkpoint' : 'clean',
-            contextManagerCheckpoint: checkpoint,
-            agent_type: args.agent_type,
-            model: args.model,
-            reasoning_effort: args.reasoning_effort,
-            service_tier: args.service_tier
-        }, {
-            ...context,
-            agent_path: String(parentPath)
-        });
-        const subagent = relay?.details?.subagent || relay?.structuredContent?.subagent || null;
-        if (!subagent) {
-            return relay;
-        }
-        return {
-            task_name: canonicalPath,
-            nickname: subagent.nickname || null
-        };
-    }
-
-    async followup_task(args = {}, context = {}) {
-        const subagent = this.resolve_agent_target(args.target, context);
-        if (!subagent) {
-            return {
-                ok: false,
-                status: 'agent_not_found',
-                error: `agent ${normalizeString(args.target)} not found`,
-                isError: true
-            };
-        }
-        const message = normalizeString(args.message);
-        subagent.last_task_message = message;
-        await this.executeSubagentRelay({
-            action: 'resume',
-            subagentId: subagent.id,
-            task: message,
-            wait: false
-        }, context);
-        return '';
-    }
-
-    list_agents(args = {}) {
-        const prefix = normalizeString(args.path_prefix);
-        const agents = [...this.subagents.values()]
-            .filter((subagent) => {
-                const pathValue = normalizeString(subagent.agent_path || subagent.agentPath);
-                return !prefix || pathValue.startsWith(prefix);
-            })
-            .map((subagent) => ({
-                agent_name: normalizeString(subagent.agent_path || subagent.agentPath || subagent.id),
-                agent_status: this.agent_status_for_subagent(subagent),
-                last_task_message: normalizeString(subagent.last_task_message || subagent.task) || null
-            }));
-        return { agents };
-    }
-
-    async close_agent(args = {}, context = {}) {
-        const subagent = this.resolve_agent_target(args.target, context);
-        if (!subagent) {
-            return { previous_status: AgentStatus.NotFound };
-        }
-        const previousStatus = this.agent_status_for_subagent(subagent);
-        await this.executeSubagentRelay({
-            action: 'close',
-            subagentId: subagent.id,
-            reason: 'close_agent'
-        }, context);
-        subagent.agent_status = AgentStatus.Shutdown;
-        return { previous_status: previousStatus };
-    }
-
     drain_mailbox_input_items(context = {}) {
         return this.agent_control.get_pending_input(context);
     }
 
-    publicSubagent(subagent = {}) {
-        return cloneJson(subagent);
-    }
-
-    findLatestSubagent({ sessionId = '', runId = '' } = {}) {
-        const normalizedSessionId = normalizeString(sessionId);
-        const normalizedRunId = normalizeString(runId);
-        return [...this.subagents.values()]
-            .filter((subagent) =>
-                (!normalizedSessionId || subagent.sessionId === normalizedSessionId) &&
-                (!normalizedRunId || subagent.runId === normalizedRunId)
-            )
-            .sort((left, right) => Number(right.createdAt || 0) - Number(left.createdAt || 0))[0] || null;
-    }
-
-    registerSubagentInputHandler(subagentId = '', handler = null) {
-        const id = normalizeString(subagentId);
-        if (!id || typeof handler !== 'function') {
-            return () => {};
-        }
-        this.subagentInputHandlers.set(id, handler);
-        const subagent = this.subagents.get(id);
-        const pendingInputs = Array.isArray(subagent?.pendingInputs) ? subagent.pendingInputs.splice(0) : [];
-        for (const pendingInput of pendingInputs) {
-            Promise.resolve(handler(pendingInput.message)).catch(() => {});
-        }
-        return () => {
-            if (this.subagentInputHandlers.get(id) === handler) {
-                this.subagentInputHandlers.delete(id);
-            }
-        };
-    }
-
-    async enqueueSubagentInput(subagent, message = '') {
-        const text = normalizeString(message);
-        if (!subagent || !text) {
-            return false;
-        }
-        const handler = this.subagentInputHandlers.get(subagent.id);
-        if (handler) {
-            await handler(text);
-            return true;
-        }
-        subagent.pendingInputs = Array.isArray(subagent.pendingInputs) ? subagent.pendingInputs : [];
-        subagent.pendingInputs.push({ id: randomUUID(), ts: Date.now(), message: text });
-        if (subagent.pendingInputs.length > 32) {
-            subagent.pendingInputs = subagent.pendingInputs.slice(-32);
-        }
-        return true;
-    }
-
-    appendSubagentLocalEvent(subagent, event = {}) {
-        const entry = {
-            id: randomUUID(),
-            ts: Date.now(),
-            iso: new Date().toISOString(),
-            type: normalizeString(event.type, 'subagent.event'),
-            status: normalizeString(event.status),
+    async appendAgentTranscriptEvent(agent = {}, event = {}) {
+        const payload = {
+            parentRunId: agent.runId,
+            parentSessionId: agent.sessionId,
+            agentId: agent.id,
+            agentPath: agent.agent_path,
+            childRunId: agent.childRunId,
+            childSessionId: agent.childSessionId,
+            task: agent.originalTask || agent.task,
             message: normalizeString(event.message),
-            payload: redactObject(event.payload || {})
+            ...(event.payload && typeof event.payload === 'object' ? event.payload : {})
         };
-        subagent.events = Array.isArray(subagent.events) ? subagent.events : [];
-        subagent.events.push(entry);
-        if (subagent.events.length > 200) {
-            subagent.events = subagent.events.slice(-200);
-        }
         this.emitGatewayEvent('subagent.event', {
-            runId: subagent.runId,
-            parentRunId: subagent.runId,
-            parentSessionId: subagent.sessionId,
-            subagentId: subagent.id,
-            childRunId: subagent.childRunId,
-            sessionId: subagent.childSessionId,
-            childSessionId: subagent.childSessionId,
-            type: entry.type,
-            status: entry.status,
-            message: entry.message,
-            payload: entry.payload
+            runId: agent.runId,
+            parentRunId: agent.runId,
+            parentSessionId: agent.sessionId,
+            subagentId: agent.id,
+            childRunId: agent.childRunId,
+            sessionId: agent.childSessionId,
+            childSessionId: agent.childSessionId,
+            type: event.type,
+            status: normalizeString(event.status, agent.status),
+            message: normalizeString(event.message),
+            task: agent.originalTask || agent.task,
+            payload
         });
-        return entry;
-    }
-
-    async appendSubagentTranscriptEvent(subagent, event = {}) {
-        this.appendSubagentLocalEvent(subagent, event);
-        if (!subagent.runId) {
+        if (!agent.runId) {
             return null;
         }
-        return await this.appendItem(subagent.runId, {
-            type: normalizeString(event.type, 'subagent.event'),
-            sessionId: subagent.sessionId,
-            status: normalizeString(event.status, subagent.status),
-            payload: {
-                parentRunId: subagent.runId,
-                parentSessionId: subagent.sessionId,
-                subagentId: subagent.id,
-                childRunId: subagent.childRunId,
-                childSessionId: subagent.childSessionId,
-                task: subagent.originalTask || subagent.task,
-                message: normalizeString(event.message),
-                ...(event.payload && typeof event.payload === 'object' ? event.payload : {})
-            }
+        return await this.appendItem(agent.runId, {
+            type: normalizeString(event.type, 'agent.event'),
+            sessionId: agent.sessionId,
+            status: normalizeString(event.status, agent.status),
+            payload
         });
     }
 
-    buildSubagentContext(subagent, args = {}, context = {}) {
-        const parentSubagentDepth = Math.max(0, Number(context.subagentDepth || context.parentSubagentDepth || 0) || 0);
-        const inherited = {
-            permissionProfile: context.permissionProfile || context.permissions || context.policy || context.sandbox,
-            approvalPolicy: context.approvalPolicy || context.confirmationPolicy,
-            toolPolicy: context.toolPolicy,
-            workspace: context.workspace || this.workspaceRoot,
-            llmSettings: context.llmSettings || context.llm,
-            emailProfiles: context.emailProfiles || context.emailAccounts,
-            visionPermissionPolicy: context.visionPermissionPolicy || context.visionPolicy,
-            computerControlEnabled: context.computerControlEnabled,
-            approved: context.approved === true,
-            autoConfirm: context.autoConfirm === true
-        };
+    buildAgentContext(agent = {}, args = {}, context = {}) {
+        const parentAgentDepth = Math.max(0, Number(context.agentDepth || context.parentAgentDepth || 0) || 0);
         const inheritanceMode = ['clean', 'recent', 'checkpoint'].includes(normalizeString(
-            args.inheritanceMode || args.inheritance_mode || subagent.inheritanceMode,
+            args.inheritanceMode || agent.inheritanceMode,
             'clean'
         ).toLowerCase())
-            ? normalizeString(args.inheritanceMode || args.inheritance_mode || subagent.inheritanceMode, 'clean').toLowerCase()
+            ? normalizeString(args.inheritanceMode || agent.inheritanceMode, 'clean').toLowerCase()
             : 'clean';
         const requestedMaxAgentSteps = Number(args.maxAgentSteps || context.maxAgentSteps || TASK_AGENT_MAX_MODEL_ROUNDS);
         const maxAgentSteps = Math.max(
@@ -2199,14 +1815,24 @@ class AILISRuntime {
             )
         );
         return {
-            ...inherited,
+            permissionProfile: context.permissionProfile || context.permissions || context.policy || context.sandbox,
+            approvalPolicy: context.approvalPolicy || context.confirmationPolicy,
+            toolPolicy: context.toolPolicy,
+            workspace: context.workspace || this.workspaceRoot,
+            llmSettings: context.llmSettings || context.llm,
+            emailProfiles: context.emailProfiles || context.emailAccounts,
+            visionPermissionPolicy: context.visionPermissionPolicy || context.visionPolicy,
+            computerControlEnabled: context.computerControlEnabled,
+            approved: context.approved === true,
+            autoConfirm: context.autoConfirm === true,
             ...(args.context && typeof args.context === 'object' ? args.context : {}),
-            parentRunId: subagent.runId,
-            parentSessionId: subagent.sessionId,
-            subagentId: subagent.id,
-            subagentLabel: subagent.label,
-            sessionId: subagent.childSessionId,
-            sessionKey: subagent.childSessionId,
+            parentRunId: agent.runId,
+            parentSessionId: agent.sessionId,
+            agentId: agent.id,
+            agentLabel: agent.label,
+            agentPath: agent.agent_path,
+            sessionId: agent.childSessionId,
+            sessionKey: agent.childSessionId,
             planner: normalizeString(args.planner || context.planner, 'llm'),
             agentLoop: normalizeString(args.agentLoop || context.agentLoop, 'llm'),
             agentMode: normalizeString(args.agentMode || context.agentMode, 'llm'),
@@ -2214,519 +1840,36 @@ class AILISRuntime {
             cleanContext: inheritanceMode === 'clean',
             taskAgentInheritanceMode: inheritanceMode,
             initialContextManagerCheckpoint: inheritanceMode === 'checkpoint'
-                ? args.contextManagerCheckpoint || args.context_manager_checkpoint || null
+                ? args.contextManagerCheckpoint || null
                 : null,
             recentMessages: inheritanceMode === 'recent' && Array.isArray(args.recentMessages)
                 ? args.recentMessages.slice(-Math.max(1, Math.min(Number(args.recentTurns || 4), 12)))
                 : [],
-            parentSubagentDepth,
-            subagentDepth: parentSubagentDepth + 1,
+            parentAgentDepth,
+            agentDepth: parentAgentDepth + 1,
             maxAgentSteps
         };
     }
 
-    async runDefaultSubagentExecutor({ subagent, onEvent, signal }) {
-        await onEvent({
-            type: 'subagent.runner.notice',
-            status: 'running',
-            message: 'No custom subagent executor was configured; using deterministic local runner.'
-        });
-        await raceWithAbort(Promise.resolve(), signal);
-        return {
-            ok: true,
-            status: 'completed',
-            displayText: `Subagent accepted task: ${subagent.task}`,
-            result: {
-                task: subagent.task
-            }
-        };
-    }
-
-    startSubagentRun(subagent, args = {}, context = {}) {
-        const controller = new AbortController();
-        this.subagentControllers.set(subagent.id, controller);
-        const runTimeoutMs = Math.max(
-            1000,
-            Math.min(Number(args.runTimeoutMs || args.timeoutMs || DEFAULT_SUBAGENT_RUN_TIMEOUT_MS), 24 * 60 * 60 * 1000)
-        );
-        const executor = this.subagentExecutor || ((payload) => this.runDefaultSubagentExecutor(payload));
-        const runPromise = (async () => {
-            subagent.status = 'running';
-            subagent.agent_status = AgentStatus.Running;
-            subagent.startedAt = Date.now();
-            await this.appendSubagentTranscriptEvent(subagent, {
-                type: 'subagent.started',
-                status: 'running',
-                message: subagent.task,
-                payload: this.publicSubagent(subagent)
-            });
-            try {
-                const result = await withTimeoutPromise(
-                    raceWithAbort(
-                        Promise.resolve(
-                            executor({
-                                subagent: this.publicSubagent(subagent),
-                                args: cloneJson(args),
-                                context: this.buildSubagentContext(subagent, args, context),
-                                signal: controller.signal,
-                                registerInputHandler: (handler) => this.registerSubagentInputHandler(subagent.id, handler),
-                                onEvent: async (event) => {
-                                    await this.appendSubagentTranscriptEvent(subagent, event);
-                                }
-                            })
-                        ),
-                        controller.signal
-                    ),
-                    runTimeoutMs,
-                    `subagent ${subagent.id} timed out after ${runTimeoutMs}ms`
-                );
-                subagent.status = normalizeString(result?.status, 'completed');
-                subagent.ok = result?.ok !== false && !['failed', 'error', 'cancelled', 'timeout'].includes(subagent.status);
-                subagent.finishedAt = Date.now();
-                subagent.durationMs = subagent.finishedAt - subagent.startedAt;
-                subagent.result = redactObject(result || {});
-                subagent.agent_status = normalize_agent_status(
-                    subagent.status,
-                    result?.displayText || result?.finalAnswer || result?.speechText || ''
-                );
-                await this.appendSubagentTranscriptEvent(subagent, {
-                    type: 'subagent.completed',
-                    status: subagent.status,
-                    message: normalizeString(result?.displayText || result?.summary, 'subagent completed'),
-                    payload: {
-                        ok: subagent.ok,
-                        durationMs: subagent.durationMs,
-                        result: subagent.result
-                    }
-                });
-                await this.agent_control.forward_child_completion_to_parent(
-                    subagent,
-                    subagent.agent_status
-                );
-                return subagent.result;
-            } catch (error) {
-                subagent.status = isAbortError(error) ? 'cancelled' : /timed out/i.test(error?.message || '') ? 'timeout' : 'failed';
-                subagent.ok = false;
-                subagent.finishedAt = Date.now();
-                subagent.durationMs = subagent.startedAt ? subagent.finishedAt - subagent.startedAt : 0;
-                subagent.error = error?.message || String(error);
-                const taskRunHandoff = buildSubagentErrorHandoff({
-                    subagent,
-                    status: subagent.status,
-                    error: subagent.error,
-                    durationMs: subagent.durationMs
-                });
-                subagent.result = redactObject({
-                    ok: false,
-                    status: subagent.status,
-                    error: subagent.error,
-                    displayText: taskRunHandoff.userVisibleSummary,
-                    taskRunHandoff
-                });
-                subagent.agent_status = AgentStatus.Errored(subagent.error);
-                await this.appendSubagentTranscriptEvent(subagent, {
-                    type: 'subagent.completed',
-                    status: subagent.status,
-                    message: taskRunHandoff.userVisibleSummary || subagent.error,
-                    payload: {
-                        ok: false,
-                        durationMs: subagent.durationMs,
-                        error: subagent.error,
-                        result: subagent.result
-                    }
-                });
-                await this.agent_control.forward_child_completion_to_parent(
-                    subagent,
-                    subagent.agent_status
-                );
-                return subagent.result;
-            } finally {
-                this.subagentInputHandlers.delete(subagent.id);
-                this.subagentControllers.delete(subagent.id);
-                this.subagentRuns.delete(subagent.id);
-            }
-        })();
-        this.subagentRuns.set(subagent.id, runPromise);
-        return runPromise;
-    }
-
-    async waitForSubagent(subagentId, timeoutMs = DEFAULT_SUBAGENT_WAIT_TIMEOUT_MS) {
-        const subagent = this.subagents.get(subagentId);
-        if (!subagent) {
-            return {
-                status: 'not_found',
-                subagent: null
-            };
-        }
-        const promise = this.subagentRuns.get(subagentId);
-        if (!promise || ['completed', 'failed', 'cancelled', 'timeout'].includes(subagent.status)) {
-            return {
-                status: subagent.status || 'completed',
-                subagent: this.publicSubagent(subagent)
-            };
-        }
-        try {
-            await withTimeoutPromise(promise, timeoutMs, `wait for subagent ${subagentId} timed out`);
-        } catch (error) {
-            if (/timed out/i.test(error?.message || '')) {
-                return {
-                    status: 'running',
-                    timedOut: true,
-                    subagent: this.publicSubagent(subagent)
-                };
-            }
-            throw error;
-        }
-        return {
-            status: subagent.status || 'completed',
-            subagent: this.publicSubagent(subagent)
-        };
-    }
-
-    async executeSubagentRelay(args = {}, context = {}) {
-        const action = normalizeAction(args.action, 'list');
-        const runId = normalizeString(context.runId || args.runId);
-        const sessionId = normalizeString(context.sessionId || context.sessionKey || args.sessionId, 'main');
-        if (action === 'list') {
-            const subagents = [...this.subagents.values()].map((subagent) => this.publicSubagent(subagent));
-            const modelView = subagents.map((subagent) => ({
-                subagent_id: subagent.id,
-                child_run_id: subagent.childRunId,
-                status: subagent.status,
-                task: summarize(subagent.task, 180),
-                result_available: Boolean(subagent.result)
-            }));
-            const text = JSON.stringify({
-                status: 'completed',
-                subagents: modelView
-            }, null, 2);
-            return {
-                content: [
-                    {
-                        type: 'text',
-                        text
-                    }
-                ],
-                details: {
-                    status: 'completed',
-                    subagents
-                },
-                structuredContent: {
-                    status: 'completed',
-                    subagents
-                }
-            };
-        }
-        if (['spawn', 'create'].includes(action)) {
-            const subagentId = normalizeString(args.subagentId || args.id, `subagent-${randomUUID()}`);
-            const task = normalizeString(args.task || args.prompt || args.message);
-            const inheritanceMode = ['clean', 'recent', 'checkpoint'].includes(normalizeString(
-                args.inheritanceMode || args.inheritance_mode,
-                'clean'
-            ).toLowerCase())
-                ? normalizeString(args.inheritanceMode || args.inheritance_mode, 'clean').toLowerCase()
-                : 'clean';
-            const inheritanceSource = inheritanceMode === 'clean'
-                ? null
-                : this.subagents.get(normalizeString(args.inheritFromSubagentId || args.inherit_from_subagent_id)) ||
-                    this.findLatestSubagent({ sessionId, runId });
-            const inheritedCheckpoint = inheritanceMode === 'checkpoint'
-                ? args.contextManagerCheckpoint ||
-                    args.context_manager_checkpoint ||
-                    inheritanceSource?.result?.taskRunHandoff?.resume?.contextManagerCheckpoint ||
-                    inheritanceSource?.result?.task_run_handoff?.resume?.contextManagerCheckpoint ||
-                    null
-                : null;
-            const inheritedRecentMessages = inheritanceMode === 'recent'
-                ? (Array.isArray(args.recentMessages)
-                    ? args.recentMessages
-                    : Array.isArray(context.messageHistory)
-                        ? context.messageHistory
-                        : [])
-                : [];
-            const subagent = {
-                id: subagentId,
-                label: normalizeString(args.label || args.name, subagentId),
-                runId,
-                sessionId,
-                childRunId: normalizeString(args.childRunId, `child-${randomUUID()}`),
-                childSessionId: normalizeString(
-                    args.childSessionId || args.childSessionKey,
-                    `${sessionId}:subagent:${subagentId}`
-                ),
-                status: 'queued',
-                agent_status: AgentStatus.PendingInit,
-                task,
-                originalTask: task,
-                task_name: normalizeString(args.task_name),
-                agent_path: normalizeString(args.agent_path),
-                parent_agent_path: normalizeString(args.parent_agent_path, '/root'),
-                nickname: normalizeString(args.nickname) || null,
-                last_task_message: task,
-                inheritanceMode,
-                inheritance: {
-                    mode: inheritanceMode,
-                    sourceSubagentId: inheritanceSource?.id || '',
-                    checkpointAvailable: Boolean(inheritedCheckpoint),
-                    recentMessageCount: inheritedRecentMessages.length
-                },
-                createdAt: Date.now(),
-                events: [],
-                pendingInputs: []
-            };
-            this.subagents.set(subagentId, subagent);
-            await this.appendSubagentTranscriptEvent(subagent, {
-                type: 'subagent.spawned',
-                status: 'queued',
-                message: task,
-                payload: this.publicSubagent(subagent)
-            });
-            const executionArgs = {
-                ...args,
-                inheritanceMode,
-                contextManagerCheckpoint: inheritedCheckpoint,
-                recentMessages: inheritedRecentMessages
-            };
-            this.startSubagentRun(subagent, executionArgs, context);
-            const shouldWait = args.wait !== false;
-            if (shouldWait) {
-                const waited = await this.waitForSubagent(subagentId, args.waitTimeoutMs || DEFAULT_SUBAGENT_WAIT_TIMEOUT_MS);
-                const response = {
-                    status: waited.status === 'completed' ? 'completed' : waited.status,
-                    subagent: waited.subagent,
-                    result: waited.subagent?.result || null
-                };
-                const relayText = buildSubagentRelayText(response);
-                return {
-                    content: [
-                        {
-                            type: 'text',
-                            text: relayText
-                        }
-                    ],
-                    details: response,
-                    structuredContent: response,
-                    isError: !['completed', 'running'].includes(response.status)
-                };
-            }
-            const publicRecord = this.publicSubagent(subagent);
-            const response = {
-                status: 'running',
-                subagent: publicRecord
-            };
-            return {
-                content: [
-                    {
-                        type: 'text',
-                        text: buildSubagentRelayText(response)
-                    }
-                ],
-                details: response,
-                structuredContent: response
-            };
-        }
-        if (['status', 'info'].includes(action)) {
-            const subagent = this.subagents.get(normalizeString(args.subagentId || args.id));
-            const response = {
-                status: subagent ? normalizeString(subagent.status, 'completed') : 'not_found',
-                subagent: subagent ? this.publicSubagent(subagent) : null
-            };
-            return {
-                content: [
-                    {
-                        type: 'text',
-                        text: buildSubagentRelayText(response)
-                    }
-                ],
-                details: response,
-                structuredContent: response,
-                isError: !subagent
-            };
-        }
-        if (action === 'wait') {
-            const subagentId = normalizeString(args.subagentId || args.id);
-            const waited = await this.waitForSubagent(subagentId, args.timeoutMs || args.waitTimeoutMs);
-            return {
-                content: [
-                    {
-                        type: 'text',
-                        text: buildSubagentRelayText(waited)
-                    }
-                ],
-                details: waited,
-                structuredContent: waited,
-                isError: waited.status === 'not_found'
-            };
-        }
-        if (action === 'log') {
-            const subagent = this.subagents.get(normalizeString(args.subagentId || args.id));
-            const limit = Math.max(1, Math.min(Number(args.limit || 50), 200));
-            const events = subagent ? (subagent.events || []).slice(-limit) : [];
-            const response = {
-                status: subagent ? 'completed' : 'not_found',
-                events
-            };
-            return {
-                content: [
-                    {
-                        type: 'text',
-                        text: subagent
-                            ? `已找到最近 ${events.length} 条 TaskAgent 事件，完整日志已记录到 Agent Lab。`
-                            : '没有找到这个 TaskAgent 子任务日志。'
-                    }
-                ],
-                details: response,
-                structuredContent: response,
-                isError: !subagent
-            };
-        }
-        if (['send', 'steer', 'resume'].includes(action)) {
-            const requestedId = normalizeString(args.subagentId || args.id);
-            const subagent = requestedId
-                ? this.subagents.get(requestedId)
-                : this.findLatestSubagent({ sessionId, runId });
-            const message = normalizeString(args.message || args.input || args.text || args.task);
-            let delivered = false;
-            let waited = null;
-            if (subagent) {
-                await this.appendSubagentTranscriptEvent(subagent, {
-                    type: 'subagent.input',
-                    status: 'queued',
-                    message,
-                    payload: {
-                        action,
-                        message
-                    }
-                });
-                if (['queued', 'running', 'cancel_requested'].includes(subagent.status)) {
-                    delivered = await this.enqueueSubagentInput(subagent, message);
-                    if (delivered && args.wait !== false) {
-                        waited = await this.waitForSubagent(
-                            subagent.id,
-                            args.waitTimeoutMs || args.timeoutMs || DEFAULT_SUBAGENT_WAIT_TIMEOUT_MS
-                        );
-                    }
-                } else {
-                    const previousResult = subagent.result && typeof subagent.result === 'object'
-                        ? subagent.result
-                        : {};
-                    const checkpoint = previousResult.taskRunHandoff?.resume?.contextManagerCheckpoint ||
-                        previousResult.task_run_handoff?.resume?.contextManagerCheckpoint ||
-                        null;
-                    subagent.previousRuns = Array.isArray(subagent.previousRuns) ? subagent.previousRuns : [];
-                    subagent.previousRuns.push({
-                        childRunId: subagent.childRunId,
-                        status: subagent.status,
-                        finishedAt: subagent.finishedAt || null
-                    });
-                    subagent.previousRuns = subagent.previousRuns.slice(-12);
-                    subagent.childRunId = `child-${randomUUID()}`;
-                    subagent.status = 'queued';
-                    subagent.agent_status = AgentStatus.PendingInit;
-                    subagent.ok = null;
-                    subagent.error = '';
-                    subagent.finishedAt = null;
-                    subagent.task = message;
-                    subagent.inheritanceMode = checkpoint ? 'checkpoint' : 'recent';
-                    subagent.inheritance = {
-                        mode: subagent.inheritanceMode,
-                        sourceSubagentId: subagent.id,
-                        checkpointAvailable: Boolean(checkpoint),
-                        recentMessageCount: 0
-                    };
-                    this.startSubagentRun(subagent, {
-                        ...args,
-                        task: message,
-                        inheritanceMode: subagent.inheritanceMode,
-                        contextManagerCheckpoint: checkpoint,
-                        initialStepResults: Array.isArray(previousResult.steps) ? previousResult.steps : []
-                    }, context);
-                    delivered = true;
-                    if (args.wait !== false) {
-                        waited = await this.waitForSubagent(
-                            subagent.id,
-                            args.waitTimeoutMs || args.timeoutMs || DEFAULT_SUBAGENT_WAIT_TIMEOUT_MS
-                        );
-                    }
-                }
-            }
-            const response = {
-                status: subagent
-                    ? normalizeString(waited?.status, delivered ? (subagent.status || 'queued') : 'queued')
-                    : 'not_found',
-                delivered,
-                subagent: subagent ? this.publicSubagent(subagent) : null,
-                result: waited?.subagent?.result || (subagent && !['queued', 'running'].includes(subagent.status) ? subagent.result : null)
-            };
-            return {
-                content: [
-                    {
-                        type: 'text',
-                        text: subagent ? buildSubagentRelayText(response) : buildSubagentRelayText(response)
-                    }
-                ],
-                details: response,
-                structuredContent: response,
-                isError: !subagent
-            };
-        }
-        if (['close', 'cancel', 'kill'].includes(action)) {
-            const subagentId = normalizeString(args.subagentId || args.id);
-            const subagent = this.subagents.get(subagentId);
-            if (subagent) {
-                const controller = this.subagentControllers.get(subagentId);
-                if (controller) {
-                    controller.abort();
-                }
-                subagent.status = ['completed', 'failed', 'cancelled', 'timeout'].includes(subagent.status)
-                    ? subagent.status
-                    : 'cancel_requested';
-                subagent.closedAt = Date.now();
-                await this.appendSubagentTranscriptEvent(subagent, {
-                    type: 'subagent.closed',
-                    status: subagent.status,
-                    message: normalizeString(args.reason, 'subagent close requested'),
-                    payload: {
-                        subagentId,
-                        reason: normalizeString(args.reason)
-                    }
-                });
-            }
-            const response = {
-                status: subagent ? 'completed' : 'not_found',
-                subagent: subagent ? this.publicSubagent(subagent) : null
-            };
-            return {
-                content: [
-                    {
-                        type: 'text',
-                        text: subagent ? '已向 TaskAgent 发送停止请求。' : buildSubagentRelayText(response)
-                    }
-                ],
-                details: response,
-                structuredContent: response,
-                isError: !subagent
-            };
-        }
-        return {
-            content: [
-                {
-                    type: 'text',
-                    text: `不支持的 TaskAgent 操作：${action}`
-                }
-            ],
-            isError: true,
-            details: {
-                status: 'unsupported_action',
-                action
+    buildAgentErrorResult(agent = {}, status = 'failed', error = '', durationMs = 0) {
+        const taskRunHandoff = buildSubagentErrorHandoff({
+            subagent: {
+                task: agent.task,
+                childRunId: agent.childRunId,
+                childSessionId: agent.childSessionId
             },
-            structuredContent: {
-                status: 'unsupported_action',
-                action
-            }
-        };
+            status,
+            error,
+            durationMs
+        });
+        return redactObject({
+            ok: false,
+            status,
+            error,
+            displayText: taskRunHandoff.userVisibleSummary,
+            taskRunHandoff
+        });
     }
-
     async executeMcpBridge(args = {}, context = {}) {
         const action = normalizeAction(args.action, 'list_servers');
         const runId = normalizeString(context.runId || args.runId);

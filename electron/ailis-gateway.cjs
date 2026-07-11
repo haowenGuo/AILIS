@@ -82,9 +82,7 @@ const GATEWAY_BACKED_TOOL_IDS = new Set(['sessions_list', 'gateway', 'cron', 'no
 const SESSION_BOUND_TOOL_IDS = new Set([
     'session_status',
     'sessions_history',
-    'sessions_send',
-    'sessions_spawn',
-    'sessions_yield'
+    'sessions_send'
 ]);
 const EXTERNAL_SIDE_EFFECT_TOOL_IDS = new Set([
     'browser',
@@ -787,7 +785,7 @@ class AILISGateway extends EventEmitter {
             emitGatewayEvent: (type, payload) => this.emitGatewayEvent(type, payload),
             mcpServers: options.mcpServers,
             mcpConfigPath: options.mcpConfigPath || path.join(this.auditDir, 'mcp-servers.json'),
-            subagentExecutor: (payload) => this.executeSubagentTask(payload)
+            agentExecutor: (payload) => this.executeTaskAgent(payload)
         });
         this.server = null;
         this.startedAt = 0;
@@ -1851,7 +1849,7 @@ class AILISGateway extends EventEmitter {
                 registeredToolIds.has(tool.id) ||
                 materializedSet.has(tool.id) ||
                 Boolean(smoke.map.get(tool.id)?.materialized),
-            needsApproval: tool.id === 'exec' || tool.id === 'subagents',
+            needsApproval: tool.id === 'exec',
             externalSideEffect: EXTERNAL_SIDE_EFFECT_TOOL_IDS.has(tool.id)
         }));
 
@@ -2231,8 +2229,8 @@ class AILISGateway extends EventEmitter {
         });
     }
 
-    async executeSubagentTask({ subagent, args = {}, context = {}, signal, onEvent, registerInputHandler } = {}) {
-        const task = normalizeString(subagent?.task || args.task || args.prompt || args.message);
+    async executeTaskAgent({ agent, args = {}, context = {}, signal, onEvent, registerInputHandler } = {}) {
+        const task = normalizeString(agent?.task || args.task || args.prompt || args.message);
         if (!task) {
             return {
                 ok: false,
@@ -2270,13 +2268,14 @@ class AILISGateway extends EventEmitter {
         const childContext = this.mergeDefaultContext({
             ...context,
             ...(parentLlmSettings ? { llmSettings: parentLlmSettings } : {}),
-            parentRunId: subagent?.runId,
-            parentSessionId: subagent?.sessionId,
-            subagentId: subagent?.id,
-            subagentLabel: subagent?.label,
-            runId: subagent?.childRunId || context.runId,
-            sessionId: subagent?.childSessionId || context.sessionId,
-            sessionKey: subagent?.childSessionId || context.sessionKey,
+            parentRunId: agent?.runId,
+            parentSessionId: agent?.sessionId,
+            agentId: agent?.id,
+            agentLabel: agent?.label,
+            agentPath: agent?.agent_path,
+            runId: agent?.childRunId || context.runId,
+            sessionId: agent?.childSessionId || context.sessionId,
+            sessionKey: agent?.childSessionId || context.sessionKey,
             agentLoop: 'llm',
             planner: 'llm',
             agentRole: 'task_agent',
@@ -2291,16 +2290,16 @@ class AILISGateway extends EventEmitter {
             status: 'running',
             message: task,
             payload: {
-                subagentId: subagent?.id,
-                sessionId: subagent?.childSessionId
+                agentId: agent?.id,
+                sessionId: agent?.childSessionId
             }
         });
         const agentRunner = this.ensureAgentRunner();
         const runPromise = agentRunner.runMessage({
-            runId: subagent?.childRunId,
+            runId: agent?.childRunId,
             message: task,
             messageHistory: recentMessages,
-            sessionId: subagent?.childSessionId || context.sessionId || context.sessionKey,
+            sessionId: agent?.childSessionId || context.sessionId || context.sessionKey,
             agentLoop: 'llm',
             planner: 'llm',
             agentRole: 'task_agent',
@@ -2314,8 +2313,8 @@ class AILISGateway extends EventEmitter {
         const unregisterInputHandler = typeof registerInputHandler === 'function'
             ? registerInputHandler((message) => {
                   const delivered = agentRunner.enqueueRunInput({
-                      runId: subagent?.childRunId,
-                      sessionId: subagent?.childSessionId || context.sessionId || context.sessionKey,
+                      runId: agent?.childRunId,
+                      sessionId: agent?.childSessionId || context.sessionId || context.sessionKey,
                       message
                   });
                   if (!delivered) {

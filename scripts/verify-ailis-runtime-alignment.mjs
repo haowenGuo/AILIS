@@ -40,7 +40,6 @@ const openclaw = {
   agentRunner: findDistFile('agent-runner.runtime-'),
   toolPolicy: findDistFile('tool-policy-'),
   tools: findDistFile('openclaw-tools-'),
-  subagentsDoc: rel('build-cache', 'openclaw-runtime', 'docs', 'tools', 'subagents.md'),
   transcriptDoc: rel('build-cache', 'openclaw-runtime', 'docs', 'reference', 'transcript-hygiene.md'),
   acpDoc: rel('build-cache', 'openclaw-runtime', 'docs', 'cli', 'acp.md'),
 };
@@ -71,7 +70,7 @@ const checks = [
     id: 'tool-exposure-and-catalog',
     verdict: 'aligned-simplified',
     evidence: [
-      ev('OpenClaw broad tool catalog', openclaw.toolPolicy, ['id: "update_plan"', 'id: "exec"', 'id: "read"', 'id: "subagents"']),
+      ev('OpenClaw broad tool catalog', openclaw.toolPolicy, ['id: "update_plan"', 'id: "exec"', 'id: "read"']),
       ev('AILIS gateway exposes registry-backed tools', human.gateway, ['const gatewayDefinitions = this.gatewayToolRuntimeRegistry.listDefinitions()', 'const runtimeTools = gatewayDefinitions', 'codex_like_gateway_tool_registry']),
       ev('AILIS runtime exposes tool definitions', human.runtime, ['getRuntimeToolDefinitions()', 'toolRuntimeRegistry']),
       ev('AILIS Codex-like tool runtime registry', human.toolRuntime, ['class AILISToolRuntimeRegistry', 'modelVisibleSpecs', 'async dispatch']),
@@ -128,14 +127,13 @@ const checks = [
     ],
   },
   {
-    id: 'subagent-relay',
-    verdict: 'aligned-simplified-child-runner',
+    id: 'codex-agent-control',
+    verdict: 'aligned-session-scoped-thread-tree',
     evidence: [
       ev('Codex child agents inherit runtime policy', codex.multiAgents, ['apply_spawn_agent_runtime_overrides', 'approval_policy', 'set_permission_profile']),
-      ev('OpenClaw subagent orchestration docs', openclaw.subagentsDoc, ['sessions_spawn', '`subagents`', 'Completion is push-based']),
-      ev('AILIS subagent runtime definition', human.toolSpecs, ["id: 'subagents'", 'AILIS_RUNTIME_TOOL_DEFINITIONS']),
-      ev('AILIS subagent runtime dispatch', human.toolRuntime, ['definitionById.subagents']),
-      ev('AILIS subagent runner surface', human.runtime, ['startSubagentRun', 'this.subagentRuns.set', "type: 'subagent.completed'"]),
+      ev('AILIS Codex collaboration tool definitions', human.toolSpecs, ["id: 'spawn_agent'", "id: 'followup_task'", "id: 'wait_agent'", "id: 'list_agents'", "id: 'close_agent'"]),
+      ev('AILIS session-scoped AgentControl', rel('electron', 'ailis-agent-control.cjs'), ['class AgentControl', 'class AgentRegistry', 'await_live_children', 'forward_child_completion_to_parent']),
+      ev('AILIS legacy relay removal', human.toolRuntime, ['definitionById.spawn_agent', 'agent_control.spawn_agent_with_metadata']),
     ],
   },
   {

@@ -92,7 +92,6 @@ const DEFAULT_AGENT_LOOP_STEPS = 30;
 const MAX_AGENT_LOOP_STEPS = 30;
 const TASK_AGENT_MAX_MODEL_ROUNDS = 4;
 const TASK_AGENT_FINALIZATION_CONTEXT_CHARS = 14000;
-const PERSONA_TASK_AGENT_WAIT_TIMEOUT_MS = 15 * 60 * 1000;
 const DEFAULT_PENDING_PLAN_TTL_MS = 30 * 60 * 1000;
 const DEFAULT_AGENT_DECISION_TIMEOUT_MS = 120000;
 const DEFAULT_VISION_AGENT_DECISION_TIMEOUT_MS = 90000;
@@ -277,7 +276,6 @@ const AGENT_TOOL_CATALOG = Object.freeze([
     Object.freeze({ id: 'update_plan', label: 'update_plan', summary: '更新任务计划和进度。' }),
     Object.freeze({ id: 'tool_search', label: 'tool_search', summary: 'AILIS 工具发现：搜索 deferred tool metadata，并暴露匹配工具给下一轮调用。' }),
     Object.freeze({ id: 'request_permissions', label: 'request_permissions', summary: 'AILIS 权限申请：当当前 permission profile 阻止必要的文件或网络操作时，先请求精确授权。' }),
-    Object.freeze({ id: 'subagents', label: 'subagents', summary: '可执行子 Agent：spawn/wait/log/send/cancel。' }),
     Object.freeze({ id: 'mcp_bridge', label: 'mcp_bridge', summary: 'MCP 管理与发现入口：列 server、健康检查、搜索 direct MCP tool specs、读 resources/prompts；普通任务使用 mcp__server__tool。' }),
     Object.freeze({ id: 'capability_manager', label: 'capability_manager', summary: '能力注册、安装、外部工具批量暴露、Contract 编译/验收、Skill 生成、回滚和已审批修复执行。' }),
     Object.freeze({ id: 'self_debugger', label: 'self_debugger', summary: 'AILIS 自身 bug 的专用排查协议：建案、收证据、诊断、提补丁、验证、审批后应用。' }),
@@ -680,8 +678,8 @@ function normalizeProgressNoteText(value, fallback = '') {
 function buildRunLineagePayload(requestContext = {}, runId = '', sessionId = '') {
     const parentRunId = normalizeText(requestContext.parentRunId || requestContext.parent_run_id);
     const parentSessionId = normalizeText(requestContext.parentSessionId || requestContext.parent_session_id);
-    const subagentId = normalizeText(requestContext.subagentId || requestContext.subagent_id);
-    const subagentLabel = normalizeText(requestContext.subagentLabel || requestContext.subagent_label);
+    const agentId = normalizeText(requestContext.agentId || requestContext.agent_id);
+    const agentLabel = normalizeText(requestContext.agentLabel || requestContext.agent_label);
     const lineage = {};
     if (parentRunId && parentRunId !== normalizeText(runId)) {
         lineage.parentRunId = parentRunId;
@@ -689,11 +687,11 @@ function buildRunLineagePayload(requestContext = {}, runId = '', sessionId = '')
     if (parentSessionId && parentSessionId !== normalizeText(sessionId)) {
         lineage.parentSessionId = parentSessionId;
     }
-    if (subagentId) {
-        lineage.subagentId = subagentId;
+    if (agentId) {
+        lineage.agentId = agentId;
     }
-    if (subagentLabel) {
-        lineage.subagentLabel = subagentLabel;
+    if (agentLabel) {
+        lineage.agentLabel = agentLabel;
     }
     return lineage;
 }
@@ -2887,7 +2885,7 @@ function resolveAgentRuntimeRole(request = {}, requestContext = {}) {
     if (requestContext.personaOrchestrator === true || requestContext.mainAgent === true) {
         return 'persona_orchestrator';
     }
-    if (requestContext.taskAgent === true || requestContext.subagentId || requestContext.parentRunId) {
+    if (requestContext.taskAgent === true || requestContext.agentId || requestContext.parentRunId) {
         return 'task_agent';
     }
     return 'task_agent';
@@ -3274,7 +3272,7 @@ function buildAgentCapabilityCatalog({ compact = false, role = 'task_agent' } = 
     if (isPersonaOrchestratorRole(role)) {
         return {
             model: 'persona_orchestrator_capability_index',
-            note: 'Main AILIS keeps persona, relationship memory, and user-facing conversation. Reuse prior public results through task_results; use subagents only when concrete execution is still required.',
+            note: 'Main AILIS keeps persona, relationship memory, and user-facing conversation. Reuse prior public results through task_results; use the Codex collaboration tools only when concrete execution is still required.',
             tools: [
                 {
                     id: 'task_results',
@@ -3282,9 +3280,9 @@ function buildAgentCapabilityCatalog({ compact = false, role = 'task_agent' } = 
                     summary: 'Search or read reusable public results without rerunning work.'
                 },
                 {
-                    id: 'subagents',
-                    label: 'TaskAgent handoff',
-                    summary: 'Spawn a child TaskAgent for task execution and wait for its result.'
+                    id: 'spawn_agent',
+                    label: 'Spawn Agent',
+                    summary: 'Spawn a persistent child Agent thread; completion arrives through the parent mailbox.'
                 }
             ]
         };
@@ -3295,7 +3293,9 @@ function buildAgentCapabilityCatalog({ compact = false, role = 'task_agent' } = 
             note: 'Compact local-model capability index. Use tool_search or load_context to discover detailed skills/tools/MCP contracts only when the current user goal truly needs them.',
             core_tools: [
                 'tool_search',
-                'subagents',
+                'spawn_agent',
+                'followup_task',
+                'wait_agent',
                 'read',
                 'write',
                 'exec',
@@ -3538,9 +3538,6 @@ function buildToolContextText(toolId, { emailProfiles = {} } = {}) {
             'Some tools may not have been provided upfront; use tool_search to search for required tools.',
             'For MCP tool discovery, use tool_search instead of list_mcp_resources or list_mcp_resource_templates.'
         ].join('\n'));
-    }
-    if (toolId === 'subagents') {
-        return appendToolContractText('subagents', 'TOOL subagents schema：用于可执行子 Agent，spawn 参数 task/message/prompt，wait=true 可同步等待结果。');
     }
     if (toolId === 'mcp_bridge') {
         return [
@@ -5032,71 +5029,6 @@ function buildTaskRunHandoffPackage({
     };
 }
 
-function extractSubagentHandoffOutcome(stepResult = {}) {
-    const response = stepResult.response || {};
-    const toolResult = response.result || {};
-    const details = toolResult.details && typeof toolResult.details === 'object'
-        ? toolResult.details
-        : {};
-    const toolText = extractToolResultText(toolResult);
-    const parsedText = extractJsonObject(toolText);
-    const payload = details.status ? details : (parsedText && typeof parsedText === 'object' ? parsedText : {});
-    const subagent = payload.subagent && typeof payload.subagent === 'object' ? payload.subagent : {};
-    const childResult = payload.result && typeof payload.result === 'object'
-        ? payload.result
-        : (subagent.result && typeof subagent.result === 'object' ? subagent.result : {});
-    const status = normalizeText(
-        payload.status ||
-            childResult.status ||
-            subagent.status ||
-            response.status,
-        response.ok === true ? 'completed' : 'failed'
-    );
-    const failedStatus = ['failed', 'error', 'cancelled', 'timeout', 'not_found', 'needs_approval'];
-    const baseOk = response.ok === true &&
-        !failedStatus.includes(status) &&
-        childResult.ok !== false &&
-        subagent.ok !== false;
-    const taskRunHandoff = childResult.taskRunHandoff ||
-        childResult.task_run_handoff ||
-        payload.taskRunHandoff ||
-        payload.task_run_handoff ||
-        subagent.result?.taskRunHandoff ||
-        subagent.result?.task_run_handoff ||
-        null;
-    const rawDisplayText = buildPersonaTaskAgentHandoffDisplayText({
-        ok: baseOk,
-        status,
-        childResult,
-        payload,
-        subagent,
-        response,
-        toolText
-    });
-    const protocolRejected = [
-        rawDisplayText,
-        taskRunHandoff?.userVisibleSummary,
-        taskRunHandoff?.finalAnswer,
-        taskRunHandoff?.partialAnswer,
-        childResult.displayText,
-        childResult.finalAnswer,
-        childResult.answer,
-        payload.displayText
-    ].some(looksLikeLeakedAgentProtocol);
-    const displayText = protocolRejected
-        ? 'TaskAgent 返回了未执行的内部调用协议，运行时已阻止展示；现有证据和检查点已经保留。'
-        : stripControlTags(rawDisplayText);
-    return {
-        ok: baseOk && !protocolRejected,
-        status: protocolRejected ? 'invalid_visible_agent_protocol' : status,
-        displayText,
-        childResult,
-        subagent,
-        payload,
-        taskRunHandoff
-    };
-}
-
 function buildInvalidDecisionObservationEvent(decision = {}, iteration = 0, maxSteps = DEFAULT_AGENT_LOOP_STEPS) {
     const previousOutput = typeof decision.raw === 'string'
         ? decision.raw
@@ -5135,7 +5067,8 @@ function recordInvalidDecisionToContextManager(contextManager, decision = {}, op
         functionCall({
             name,
             arguments: args,
-            call_id: callId
+            call_id: callId,
+            provider_metadata: rawToolCall?.providerMetadata || rawToolCall?.provider_metadata || null
         }),
         functionCallOutput({
             call_id: callId,
@@ -5560,14 +5493,6 @@ function canonicalDirectToolId(value = '') {
     return parsedMcp?.id || normalized;
 }
 
-function isSubagentHandoffStep(step = {}) {
-    if (canonicalDirectToolId(step?.tool) !== 'subagents') {
-        return false;
-    }
-    const action = normalizeText(step.args?.action || 'spawn').toLowerCase();
-    return ['spawn', 'create', 'send', 'steer', 'resume'].includes(action);
-}
-
 const CODEX_COLLABORATION_TOOL_IDS = Object.freeze([
     'spawn_agent',
     'followup_task',
@@ -5580,30 +5505,7 @@ function isCollaborationTool(stepOrTool = '') {
     const toolId = canonicalDirectToolId(
         typeof stepOrTool === 'string' ? stepOrTool : stepOrTool?.tool
     );
-    return toolId === 'subagents' || CODEX_COLLABORATION_TOOL_IDS.includes(toolId);
-}
-
-function applyPersonaTaskAgentLifecycle(step = {}) {
-    if (!isSubagentHandoffStep(step)) {
-        return step;
-    }
-    if (canonicalDirectToolId(step?.tool) !== 'subagents') {
-        return step;
-    }
-    const modelArgs = step.args && typeof step.args === 'object' ? { ...step.args } : {};
-    const args = { ...modelArgs };
-    delete args.timeoutMs;
-    const requestedAction = normalizeText(args.action || 'spawn').toLowerCase();
-    return {
-        ...step,
-        modelArgs,
-        args: {
-            ...args,
-            action: requestedAction === 'resume' ? 'resume' : 'spawn',
-            wait: true,
-            waitTimeoutMs: PERSONA_TASK_AGENT_WAIT_TIMEOUT_MS
-        }
-    };
+    return CODEX_COLLABORATION_TOOL_IDS.includes(toolId);
 }
 
 function buildPersonaTaskAgentHandoffDisplayText({
@@ -5814,7 +5716,6 @@ function buildAgentDirectToolSpecs(gateway, { stepResults = [], requestContext =
     if (requestContext.directToolExecutor === false || requestContext.nativeDirectTools === false) {
         return [];
     }
-    const subagentSpec = gateway?.gatewayToolRuntimeRegistry?.definition?.('subagents')?.spec;
     const taskResultsSpec = gateway?.gatewayToolRuntimeRegistry?.definition?.('task_results')?.spec;
     if (isPersonaOrchestratorRole(resolveAgentRuntimeRole({}, requestContext))) {
         return [taskResultsSpec, ...buildPersonaCollaborationSpecs(gateway)].filter(Boolean);
@@ -5829,9 +5730,6 @@ function buildAgentDirectToolSpecs(gateway, { stepResults = [], requestContext =
             continue;
         }
         pushUniqueNativeToolSpec(specs, seen, spec);
-    }
-    if (requestContext.exposeSubagentsDirectTool === true) {
-        pushUniqueNativeToolSpec(specs, seen, subagentSpec);
     }
     for (const spec of buildDynamicDirectToolSpecsFromObservations(stepResults, gateway)) {
         if (suppressedCoreTools.has(canonicalDirectToolId(spec.name || spec.function?.name))) {
@@ -6532,7 +6430,7 @@ function buildLlmAgentDirectToolPrompt({
         'For local file and data tasks, prefer the coding main path: read/write/exec/apply_patch. Use read to inspect small files, write to create helper scripts, exec to run scripts/tests/diagnostics, and apply_patch for source edits. Use tool_search only when the coding path cannot reliably inspect the file type or when a specialized direct MCP/tool is clearly needed.',
         'For data reasoning tasks, use code as a calculator and verifier: write scripts that parse the source file, compute the needed result, and print a short answer plus compact evidence. Do not write scripts whose main purpose is to dump large files, whole spreadsheets, logs, or documents back into model context.',
         'For long-running work, you may attach progress_note to a tool call or include a short public progress sentence only at meaningful milestones: plan changed, key evidence found, strategy changed after failure, blocker/recovery identified, or evidence is sufficient and you are preparing the final answer. Leave progress_note empty for routine tool calls. Do not expose raw JSON, hidden reasoning, internal IDs, stack traces, token counts, or generic "I am thinking" text.',
-        'You may call subagents to delegate an independent subtask to a fresh TaskAgent child. A child TaskAgent starts with a clean message history and does not inherit your prior tool observations; use it for isolated subtasks whose result can be summarized back to you, not for every simple local operation.',
+        'When collaboration tools are exposed, spawn_agent creates an independent Agent thread, followup_task continues it, and wait_agent waits for its mailbox notification. Do not create duplicate threads for the same unresolved work.',
         'When a tool result says complete=true, truncated=false, reasoning_ready=true, or presents a Source viewport with line ranges/has-more markers, treat it like a source viewport: answer from it if it covers the question. A <truncated omitted_approx_tokens="..."/> marker means model-visible context was shortened, not that the source failed. Continue only when a concrete required field is still missing. Older exploratory observations may be compacted; rely on the latest evidence or write a focused verifier.',
         'When exec output is truncated, use the visible outputId with output_read/output_tail/output_search to inspect a needed slice. Do not rerun the same command solely to recover truncated text.',
         'Runtime environment and attached file metadata are provided as ordinary user message context items. Use them for path, shell, date, time, and freshness decisions.'
@@ -6658,12 +6556,48 @@ function keep_forked_rollout_item(item = {}) {
     return ['compaction', 'context_compaction'].includes(item.type);
 }
 
+function sanitize_forked_rollout_item(item = {}) {
+    if (item?.type !== 'message' || item?.role !== 'user') {
+        return item;
+    }
+    const content = Array.isArray(item.content) ? item.content : [];
+    if (content.length !== 1) {
+        return item;
+    }
+    const text = normalizeText(content[0]?.text || content[0]?.content);
+    if (!text.startsWith('{')) {
+        return item;
+    }
+    try {
+        const parsed = JSON.parse(text);
+        if (parsed?.type !== 'context') {
+            return item;
+        }
+        const sanitized = { ...parsed };
+        delete sanitized.memory_context;
+        delete sanitized.capability_catalog;
+        delete sanitized.external_tool_exposure;
+        if (Object.keys(sanitized).length === 1) {
+            return null;
+        }
+        return {
+            ...item,
+            content: [{ ...content[0], text: JSON.stringify(sanitized) }]
+        };
+    } catch {
+        return item;
+    }
+}
+
 function build_forked_context_checkpoint(contextManager, fork_turns = 'all') {
     const mode = normalizeText(fork_turns, 'all').toLowerCase();
     if (!contextManager || typeof contextManager.rawItems !== 'function' || mode === 'none') {
         return null;
     }
-    let items = contextManager.rawItems().filter(keep_forked_rollout_item);
+    let items = contextManager.rawItems()
+        .filter(keep_forked_rollout_item)
+        .map(sanitize_forked_rollout_item)
+        .filter(Boolean);
     if (/^[1-9]\d*$/.test(mode)) {
         const turnCount = Number(mode);
         const userIndexes = items
@@ -8037,17 +7971,15 @@ class AILISAgentRunner {
         const effectiveToolContext = isCollaborationTool(step) && inheritedLlmSettings
             ? { ...toolContext, llmSettings: inheritedLlmSettings }
             : toolContext;
-        const subagentWaitTimeoutMs = canonicalDirectToolId(step.tool) === 'wait_agent'
+        const agentWaitTimeoutMs = canonicalDirectToolId(step.tool) === 'wait_agent'
             ? Number(step.args?.timeout_ms)
-            : canonicalDirectToolId(step.tool) === 'subagents'
-                ? Number(step.args?.waitTimeoutMs || step.args?.timeoutMs)
             : 0;
-        const effectiveRequest = subagentWaitTimeoutMs > 0
+        const effectiveRequest = agentWaitTimeoutMs > 0
             ? {
                 ...request,
                 timeoutMs: Math.max(
                     Number(request?.timeoutMs || request?.context?.timeoutMs || DEFAULT_RUN_TIMEOUT_MS),
-                    subagentWaitTimeoutMs + 5000
+                    agentWaitTimeoutMs + 5000
                 )
             }
             : request;
@@ -8542,6 +8474,20 @@ class AILISAgentRunner {
             const interruptedBeforeRound = await maybeFinishInterruptedRun(`before_round_${iteration}`);
             if (interruptedBeforeRound) {
                 return interruptedBeforeRound;
+            }
+            if (isPersonaOrchestratorRole(agentRuntimeRole) && iteration >= finalizationIteration) {
+                const settlement = await this.gateway.runtime?.agent_control?.await_live_children?.({
+                    sessionId,
+                    agent_path: normalizeText(requestContext.agent_path || requestContext.agentPath, '/root')
+                }, Number(request.agentWaitTimeoutMs || requestContext.agentWaitTimeoutMs || 120_000));
+                if (settlement?.waited) {
+                    events.push({
+                        type: 'agent_children_settlement',
+                        status: settlement.timed_out ? 'timed_out' : 'completed',
+                        iteration,
+                        count: settlement.count
+                    });
+                }
             }
             const mailboxItems = this.gateway.runtime?.drain_mailbox_input_items?.({
                 runId,
@@ -9448,11 +9394,6 @@ class AILISAgentRunner {
                     bubble_text: '我没拿到有效下一步，先整理现场。'
                 })));
             }
-            const personaTaskAgentCall = isPersonaOrchestratorRole(agentRuntimeRole) && isSubagentHandoffStep(step);
-            if (personaTaskAgentCall) {
-                step = applyPersonaTaskAgentLifecycle(step);
-            }
-
             const deferredToolContract = buildDeferredToolContractRequest(step, events);
             if (deferredToolContract) {
                 const note = {
@@ -9756,44 +9697,6 @@ class AILISAgentRunner {
                     pendingApproval,
                     dryRun: false
                 }));
-            }
-
-            if (personaTaskAgentCall) {
-                const outcome = extractSubagentHandoffOutcome(stepResult);
-                const authoredTask = normalizeText(step.args?.task || step.args?.prompt || step.args?.message);
-                let recordedTaskState = null;
-                try {
-                    recordedTaskState = this.taskResultCapsules?.recordExecution?.({
-                        sessionId,
-                        parentRunId: runId,
-                        action: step.args?.action,
-                        task: authoredTask,
-                        ok: outcome.ok,
-                        status: outcome.status,
-                        subagent: outcome.subagent,
-                        taskRunHandoff: outcome.taskRunHandoff,
-                        childResult: outcome.childResult
-                    }) || null;
-                } catch (error) {
-                    this.gateway.emitGatewayEvent?.('agent.task_state.record_error', {
-                        runId,
-                        sessionId,
-                        error: error?.message || String(error)
-                    });
-                }
-                await appendRuntimeItem({
-                    type: 'agent.task_state',
-                    status: recordedTaskState?.state?.status || outcome.status || 'unknown',
-                    payload: {
-                        iteration,
-                        task: authoredTask,
-                        status: recordedTaskState?.state?.status || outcome.status || 'unknown',
-                        subagentId: outcome.subagent?.id || outcome.subagent?.subagentId || '',
-                        childRunId: outcome.subagent?.childRunId || outcome.subagent?.runId || '',
-                        capsuleId: recordedTaskState?.capsule?.id || '',
-                        active: recordedTaskState?.active === true
-                    }
-                });
             }
 
             const paused = await pauseAfterRound({
@@ -10893,7 +10796,6 @@ module.exports = {
     splitNativeProgressNoteArgs,
     stripControlTags,
     looksLikeLeakedAgentProtocol,
-    extractSubagentHandoffOutcome,
     validateAgentToolLoopGuard,
     validateNativeDirectToolCall,
     validateExactAnswerSubmission,

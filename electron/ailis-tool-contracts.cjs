@@ -490,7 +490,7 @@ const TOOL_EXPERIENCE = Object.freeze({
         failureStyle: 'plain_explain',
         userFacingVerb: '查看命令输出'
     }),
-    subagents: makeExperienceMetadata({
+    collaboration: makeExperienceMetadata({
         embodiedAction: 'delegate_subtask',
         permissionStyle: 'inherits_parent_policy',
         progressStyle: 'background',
@@ -1026,9 +1026,9 @@ const TOOL_CONTRACTS = Object.freeze({
         mutates: false,
         risk: 'low',
         approval: 'never',
-        experience: TOOL_EXPERIENCE.subagents,
+        experience: TOOL_EXPERIENCE.collaboration,
         returns: spawnAgentReturns(),
-        errors: defaultErrors(['agent_path_conflict', 'invalid_task_name']),
+        errors: defaultErrors(['agent_path_conflict', 'agent_thread_limit_reached', 'invalid_task_name']),
         schema: makeObjectSchema({
             required: ['task_name', 'message'],
             properties: {
@@ -1059,7 +1059,7 @@ const TOOL_CONTRACTS = Object.freeze({
         mutates: false,
         risk: 'low',
         approval: 'never',
-        experience: TOOL_EXPERIENCE.subagents,
+        experience: TOOL_EXPERIENCE.collaboration,
         returns: makeObjectSchema({ additionalProperties: false }),
         errors: defaultErrors(['agent_not_found']),
         schema: makeObjectSchema({
@@ -1077,7 +1077,7 @@ const TOOL_CONTRACTS = Object.freeze({
         mutates: false,
         risk: 'low',
         approval: 'never',
-        experience: TOOL_EXPERIENCE.subagents,
+        experience: TOOL_EXPERIENCE.collaboration,
         returns: waitAgentReturns(),
         errors: defaultErrors(['invalid_timeout']),
         schema: makeObjectSchema({
@@ -1093,7 +1093,7 @@ const TOOL_CONTRACTS = Object.freeze({
         mutates: false,
         risk: 'low',
         approval: 'never',
-        experience: TOOL_EXPERIENCE.subagents,
+        experience: TOOL_EXPERIENCE.collaboration,
         returns: listAgentsReturns(),
         errors: defaultErrors(),
         schema: makeObjectSchema({
@@ -1109,7 +1109,7 @@ const TOOL_CONTRACTS = Object.freeze({
         mutates: false,
         risk: 'low',
         approval: 'never',
-        experience: TOOL_EXPERIENCE.subagents,
+        experience: TOOL_EXPERIENCE.collaboration,
         returns: closeAgentReturns(),
         errors: defaultErrors(['agent_not_found']),
         schema: makeObjectSchema({
@@ -1119,44 +1119,6 @@ const TOOL_CONTRACTS = Object.freeze({
             },
             additionalProperties: false
         })
-    }),
-    subagents: Object.freeze({
-        id: 'subagents',
-        version: CONTRACT_VERSION,
-        mutates: true,
-        risk: 'medium',
-        approval: 'policy',
-        experience: TOOL_EXPERIENCE.subagents,
-        returns: defaultReturns(),
-        errors: defaultErrors(['subagent_not_found', 'subagent_timeout', 'subagent_cancelled']),
-        schema: actionSchema(
-            ['list', 'spawn', 'create', 'status', 'info', 'wait', 'log', 'send', 'steer', 'resume', 'close', 'cancel', 'kill'],
-            {
-                subagentId: stringSchema(),
-                id: stringSchema(),
-                task: stringSchema(),
-                message: stringSchema(),
-                prompt: stringSchema(),
-                inheritanceMode: stringSchema({ enum: ['clean', 'recent', 'checkpoint'] }),
-                inheritFromSubagentId: stringSchema(),
-                recentTurns: numberSchema({ minimum: 1, maximum: 12 }),
-                recentMessages: arraySchema(objectSchema()),
-                contextManagerCheckpoint: objectSchema(),
-                wait: booleanSchema(),
-                waitTimeoutMs: numberSchema({ minimum: 1000, maximum: 24 * 60 * 60 * 1000 }),
-                maxAgentSteps: numberSchema({ minimum: 1, maximum: 30 })
-            }
-        ),
-        customValidate(args = {}) {
-            const action = normalizeAction(args.action || args.operation || args.intent, 'list');
-            if (['spawn', 'create'].includes(action) && !normalizeString(args.task || args.prompt || args.message)) {
-                return ['subagents.spawn requires task/message/prompt'];
-            }
-            if (['send', 'steer', 'resume'].includes(action) && !normalizeString(args.message || args.task)) {
-                return ['subagents.send requires message/task'];
-            }
-            return [];
-        }
     }),
     mcp_bridge: Object.freeze({
         id: 'mcp_bridge',
@@ -2369,7 +2331,7 @@ function normalizeArgsForContract(toolId, args = {}) {
         return {};
     }
     const normalized = { ...args };
-    if (['email', 'file_manager', 'computer', 'code', 'artifact_verifier', 'artifact_query', 'artifact_tools', 'artifact_import', 'artifact_compute', 'github_pages', 'mcp_bridge', 'tool_doctor', 'capability_manager', 'self_debugger', 'self_evolution', 'subagents', 'task_results', 'vision.capture_context'].includes(toolId)) {
+    if (['email', 'file_manager', 'computer', 'code', 'artifact_verifier', 'artifact_query', 'artifact_tools', 'artifact_import', 'artifact_compute', 'github_pages', 'mcp_bridge', 'tool_doctor', 'capability_manager', 'self_debugger', 'self_evolution', 'task_results', 'vision.capture_context'].includes(toolId)) {
         const fallbackAction = toolId === 'vision.capture_context'
             ? 'capture_context'
             : toolId === 'self_evolution'

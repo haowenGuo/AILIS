@@ -2,14 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-    buildSettledSubagentResponse,
-    collectSubagentRefs,
-    extractFinalResponseFromTranscriptItems,
     isIncompleteStatus,
     scoreVisibleAnswer,
-    shouldSettleSubagentResponse,
-    summarizeEvents,
-    waitForSubagentSettlement
+    summarizeEvents
 } from '../scripts/run-ailis-desktop-real-gaia-eval.mjs';
 
 test('desktop-real visible scorer accepts contextual best-item answer', () => {
@@ -69,7 +64,7 @@ test('desktop-real event summary does not double count token usage mirrors', () 
 test('desktop-real visible scorer ignores task-id shaped contextual noise', () => {
     const response = {
         ok: false,
-        status: 'subagent_running',
+        status: 'running',
         displayText: [
             'TOOL_OUTPUT_MODEL_PREVIEW:',
             'task_id: 8e867cd7-cff9-4e6c-867a-ff5ddc2550be',
@@ -157,121 +152,8 @@ test('desktop-real visible scorer prefers explicit total count over table years'
     assert.equal(score.source, 'visible_count_total');
 });
 
-test('desktop-real eval classifies still-running subagents as incomplete, not true failures', () => {
-    assert.equal(isIncompleteStatus('subagent_running'), true);
+test('desktop-real eval classifies still-running Agent work as incomplete, not true failures', () => {
     assert.equal(isIncompleteStatus('running'), true);
     assert.equal(isIncompleteStatus('completed'), false);
     assert.equal(isIncompleteStatus('answer_candidate_mismatch'), false);
-});
-
-test('desktop-real eval settles subagent handoff with child final answer', () => {
-    const parentResponse = {
-        ok: false,
-        status: 'subagent_running',
-        displayText: '{"status":"running","subagent":{"id":"subagent-a","childRunId":"child-a"}}',
-        subagent: {
-            id: 'subagent-a',
-            childRunId: 'child-a',
-            status: 'running'
-        }
-    };
-    const refs = collectSubagentRefs(parentResponse, []);
-    assert.deepEqual(refs.map((ref) => [ref.subagentId, ref.childRunId]), [['subagent-a', 'child-a']]);
-    assert.equal(shouldSettleSubagentResponse(parentResponse), true);
-
-    const transcriptFinal = extractFinalResponseFromTranscriptItems([
-        {
-            type: 'agent.final',
-            status: 'completed',
-            payload: {
-                ok: true,
-                displayText: 'Rounded to nearest 1000 hours: **17000**. Answer: 17000'
-            }
-        }
-    ]);
-    const settled = buildSettledSubagentResponse(parentResponse, {
-        status: 'completed',
-        subagent: {
-            id: 'subagent-a',
-            childRunId: 'child-a',
-            status: 'completed',
-            ok: true
-        }
-    }, transcriptFinal);
-    assert.equal(settled.ok, true);
-    assert.equal(settled.status, 'completed');
-
-    const score = scoreVisibleAnswer({
-        response: settled,
-        gold: '17',
-        question: 'How many thousand hours would it take? Round your result to the nearest 1000 hours.'
-    });
-    assert.equal(score.ok, true);
-    assert.equal(score.answer, '17000');
-});
-
-test('desktop-real subagent settlement waits for runtime child transcript', async () => {
-    const parentResponse = {
-        ok: false,
-        status: 'subagent_running',
-        displayText: 'TaskAgent is still running.',
-        subagent: {
-            id: 'subagent-b',
-            childRunId: 'child-b',
-            status: 'running'
-        }
-    };
-    const gateway = {
-        runtime: {
-            async waitForSubagent(subagentId) {
-                assert.equal(subagentId, 'subagent-b');
-                return {
-                    status: 'completed',
-                    subagent: {
-                        id: 'subagent-b',
-                        childRunId: 'child-b',
-                        status: 'completed',
-                        ok: true,
-                        result: {
-                            ok: true,
-                            status: 'completed',
-                            displayText: 'Answer: 3'
-                        }
-                    }
-                };
-            },
-            async readTranscript(childRunId) {
-                assert.equal(childRunId, 'child-b');
-                return {
-                    items: [
-                        {
-                            type: 'agent.final',
-                            status: 'completed',
-                            payload: {
-                                ok: true,
-                                displayText: 'The answer is **3**. Answer: 3'
-                            }
-                        }
-                    ]
-                };
-            }
-        }
-    };
-    const settlement = await waitForSubagentSettlement({
-        args: { subagentSettleTimeoutMs: 1000 },
-        gateway,
-        response: parentResponse,
-        taskEvents: []
-    });
-    assert.equal(settlement.settled, true);
-    assert.equal(settlement.response.status, 'completed');
-    assert.equal(settlement.response.ok, true);
-
-    const score = scoreVisibleAnswer({
-        response: settlement.response,
-        gold: '3',
-        question: 'Which ball should you choose? Please provide your answer as the number.'
-    });
-    assert.equal(score.ok, true);
-    assert.equal(score.answer, '3');
 });
