@@ -6527,7 +6527,7 @@ function buildLlmAgentDirectToolPrompt({
         'The model-visible protocol follows the OpenAI Responses object model used by modern coding agents. The request has instructions, input, tools, tool_choice, parallel_tool_calls, and reasoning controls. The input is an ordered list of ResponseItem objects such as message, function_call, function_call_output, tool_search_call, and tool_search_output.',
         responseProtocolInstruction,
         'Use native tool calls when work requires files, artifacts, search, shell/code, APIs, or verification. Otherwise answer with an assistant message.',
-        `The runtime allows at most ${maxSteps} work-tool rounds for this TaskAgent, followed by one tool-free finalization. Use parallel tool calls for independent evidence and return the best supported result within this budget.`,
+        `The runtime allows at most ${Math.max(1, maxSteps - 1)} work-tool rounds for this TaskAgent, followed by one tool-free finalization within the ${maxSteps}-round total budget. Use parallel tool calls for independent evidence and return the best supported result within this budget.`,
         'Tool call outputs from previous turns appear as function_call_output/tool_search_output items paired with their call_id. Use recent, relevant outputs as observations, but do not keep rereading stale exploration results once you have enough information to code, verify, or answer.',
         'Answer directly once the available evidence supports a reasonable answer. Use another tool only when you can name the specific missing field or uncertainty that blocks the answer. Do not repeat an identical tool call unless the new arguments materially change the observation.',
         'Only call tools that are present in the current tools array. If a needed tool is missing, use tool_search when it is available.',
@@ -8404,8 +8404,11 @@ class AILISAgentRunner {
         const requestedMaxSteps = Number(request.maxAgentSteps || requestContext.maxAgentSteps || DEFAULT_AGENT_LOOP_STEPS);
         const boundedMaxSteps = Math.max(1, Math.min(Number.isFinite(requestedMaxSteps) ? requestedMaxSteps : DEFAULT_AGENT_LOOP_STEPS, MAX_AGENT_LOOP_STEPS));
         const maxSteps = isTaskAgentRole(agentRuntimeRole)
-            ? Math.min(boundedMaxSteps, TASK_AGENT_MAX_MODEL_ROUNDS)
+            ? Math.max(2, Math.min(boundedMaxSteps, TASK_AGENT_MAX_MODEL_ROUNDS))
             : boundedMaxSteps;
+        const finalizationIteration = isTaskAgentRole(agentRuntimeRole)
+            ? maxSteps - 1
+            : maxSteps;
         const events = initialEvents.slice();
         const stepResults = initialStepResults.slice();
         let modelInputContextManager = restoreModelInputContextManagerFromCheckpoint(initialContextManagerCheckpoint);
@@ -8500,13 +8503,13 @@ class AILISAgentRunner {
             }, { reason });
         };
 
-        for (let iteration = startIteration; iteration <= maxSteps; iteration += 1) {
+        for (let iteration = startIteration; iteration <= finalizationIteration; iteration += 1) {
             const interruptedBeforeRound = await maybeFinishInterruptedRun(`before_round_${iteration}`);
             if (interruptedBeforeRound) {
                 return interruptedBeforeRound;
             }
             const noProgressReason = detectAgentNoProgress(stepResults, requestContext);
-            const safetyFinalizationReason = iteration >= maxSteps
+            const safetyFinalizationReason = iteration >= finalizationIteration
                 ? 'maximum_tool_rounds'
                 : Date.now() - startedAt >= maxLoopDurationMs
                     ? 'time_budget'

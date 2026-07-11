@@ -1623,7 +1623,7 @@ test('Agentic Executor Loop asks confirmation, resumes, observes, and keeps call
 
         const text = await fs.readFile(path.join(workspaceRoot, 'planner-output', 'README.txt'), 'utf8');
         assert.match(text, /Agentic Executor OK/);
-        assert.equal(llmServer.calls.filter((call) => /Responses-Compatible Tool Runtime/.test(call.system)).length, 4);
+        assert.equal(llmServer.calls.filter((call) => /Responses-Compatible Tool Runtime/.test(call.system)).length, 3);
         assert.match(llmServer.calls[0].system, /You are a coding agent running in AILIS/);
         assert.match(llmServer.calls[0].system, /same outer AILIS conversation/);
         assert.match(llmServer.calls[0].system, /OpenAI Responses object model/);
@@ -2029,7 +2029,7 @@ test('Agentic Executor max-step fallback does not expose raw tool logs to the us
     }
 });
 
-test('TaskAgent clamps caller-requested work rounds to four', async () => {
+test('TaskAgent clamps caller-requested execution to three work rounds plus one finalization round', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-task-agent-four-rounds-'));
     await fs.writeFile(path.join(workspaceRoot, 'note.txt'), 'evidence\n', 'utf8');
     const llmServer = await createScriptedChatCompletionsServer(() => ({
@@ -2074,12 +2074,13 @@ test('TaskAgent clamps caller-requested work rounds to four', async () => {
         });
 
         assert.equal(result.body.status, 'max_steps_reached');
-        assert.equal(result.body.steps.length, 4);
-        assert.equal(llmServer.calls.length, 5);
-        assert.match(llmServer.calls[0].system, /at most 4 work-tool rounds/);
-        assert.equal(llmServer.calls[4].payload.tool_choice, 'none');
-        assert.match(JSON.stringify(llmServer.calls[4].payload.messages), /TaskAgent finalization package/);
-        assert.equal(llmServer.calls[4].payload.messages.length, 2);
+        assert.equal(result.body.steps.length, 3);
+        assert.equal(llmServer.calls.length, 4);
+        assert.match(llmServer.calls[0].system, /at most 3 work-tool rounds/);
+        assert.match(llmServer.calls[0].system, /4-round total budget/);
+        assert.equal(llmServer.calls[3].payload.tool_choice, 'none');
+        assert.match(JSON.stringify(llmServer.calls[3].payload.messages), /TaskAgent finalization package/);
+        assert.equal(llmServer.calls[3].payload.messages.length, 2);
     } finally {
         await gateway.stop();
         await llmServer.close();
