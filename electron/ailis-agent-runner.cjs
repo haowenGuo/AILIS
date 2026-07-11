@@ -9080,6 +9080,46 @@ class AILISAgentRunner {
             }
 
             if (decision.action === 'final') {
+                if (isPersonaOrchestratorRole(agentRuntimeRole) && iteration < finalizationIteration) {
+                    const settlement = await this.gateway.runtime?.agent_control?.await_live_children?.({
+                        sessionId,
+                        agent_path: normalizeText(requestContext.agent_path || requestContext.agentPath, '/root')
+                    }, Number(request.agentWaitTimeoutMs || requestContext.agentWaitTimeoutMs || 120_000));
+                    if (settlement?.waited) {
+                        events.push({
+                            type: 'agent_children_settlement',
+                            status: settlement.timed_out ? 'timed_out' : 'completed',
+                            iteration,
+                            count: settlement.count,
+                            reason: 'persona_final'
+                        });
+                    }
+                    const settledMailboxItems = this.gateway.runtime?.drain_mailbox_input_items?.({
+                        runId,
+                        sessionId
+                    }) || [];
+                    if (settledMailboxItems.length && modelInputContextManager?.recordItems) {
+                        modelInputContextManager.recordItems(settledMailboxItems);
+                        events.push({
+                            type: 'agent_mailbox',
+                            status: 'received',
+                            iteration,
+                            itemCount: settledMailboxItems.length,
+                            reason: 'persona_final'
+                        });
+                        await appendRuntimeItem({
+                            type: 'agent.mailbox',
+                            status: 'received',
+                            payload: {
+                                iteration,
+                                itemCount: settledMailboxItems.length,
+                                items: settledMailboxItems,
+                                reason: 'persona_final'
+                            }
+                        });
+                        continue;
+                    }
+                }
                 const exactAnswerValidation = exactAnswerMode
                     ? validateExactAnswerSubmission({ decision, stepResults, message })
                     : { ok: true, submission: null };

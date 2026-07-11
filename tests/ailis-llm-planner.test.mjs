@@ -759,6 +759,90 @@ test('Persona receives a TaskAgent completion through the Codex-style mailbox', 
     }
 });
 
+test('Persona defers an early final until its live TaskAgent result reaches the mailbox', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-persona-early-final-'));
+    const llmServer = await createScriptedChatCompletionsServer(({ decisionCount }) => {
+        if (decisionCount === 1) {
+            return {
+                action: 'tool',
+                summary: '交给 TaskAgent 核验攻略。',
+                tool_call: {
+                    tool: 'spawn_agent',
+                    args: {
+                        task_name: 'roxy_guide',
+                        message: '核验并整理《明日方舟：终末地》洛茜攻略。',
+                        fork_turns: 'all'
+                    }
+                }
+            };
+        }
+        if (decisionCount === 2) {
+            return {
+                action: 'final',
+                final_answer: '不应提前返回的旧攻略。'
+            };
+        }
+        return {
+            action: 'final',
+            final_answer: '基于本轮 TaskAgent 结果整理的洛茜攻略。'
+        };
+    });
+    const gateway = new AILISGateway({
+        port: 0,
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit')
+    });
+    const agentCalls = [];
+
+    try {
+        gateway.runtime.agent_control.execute_agent = async ({ agent, args, context }) => {
+            agentCalls.push({ agent, args, context });
+            await new Promise((resolve) => setTimeout(resolve, 100));
+            return {
+                ok: true,
+                status: 'completed',
+                displayText: '本轮 TaskAgent 已完成洛茜攻略。',
+                finalAnswer: '洛茜攻略的新鲜证据与结论'
+            };
+        };
+        const status = await gateway.start();
+        const result = await runAgent(status.url, {
+            sessionId: 'persona-early-final-test',
+            message: '做一套洛茜的攻略，终末地的洛茜',
+            agentLoop: 'llm',
+            llmSettings: {
+                provider: 'openai-compatible',
+                baseUrl: llmServer.url,
+                apiKey: 'test-key',
+                model: 'mock-persona-early-final',
+                temperature: 0,
+                timeoutMs: 10000
+            },
+            context: {
+                workspace: workspaceRoot,
+                agentLoop: 'llm',
+                directToolExecutor: true,
+                approved: true,
+                agentRole: 'persona_orchestrator',
+                agentWaitTimeoutMs: 1000
+            }
+        });
+
+        assert.equal(result.body.ok, true, JSON.stringify(result.body));
+        assert.equal(result.body.displayText, '基于本轮 TaskAgent 结果整理的洛茜攻略。');
+        assert.equal(llmServer.calls.length, 3);
+        assert.equal(agentCalls.length, 1);
+        assert.doesNotMatch(result.body.displayText, /旧攻略/);
+        assert.match(JSON.stringify(llmServer.calls[2].payload.messages), /subagent_notification/);
+        assert.match(JSON.stringify(llmServer.calls[2].payload.messages), /本轮 TaskAgent 已完成洛茜攻略/);
+    } finally {
+        await gateway.stop();
+        await llmServer.close();
+        await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
+});
+
 test('AILIS Agent run can be interrupted while preserving transcript data', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-interrupt-test-'));
     const llmServer = await createDelayedChatCompletionsServer(5000);
