@@ -54,6 +54,20 @@ function makeTextResult({ status = 'completed', text = '', details = {}, structu
     return makeAilisToolResult({ status, text, details, structuredContent, isError });
 }
 
+function makeAgentProtocolResult(value = {}, { silent = false } = {}) {
+    const structuredContent = value && typeof value === 'object' && !Array.isArray(value)
+        ? value
+        : {};
+    const isError = structuredContent.isError === true || structuredContent.ok === false;
+    return makeTextResult({
+        status: isError ? normalizeString(structuredContent.status, 'tool_error') : 'completed',
+        text: silent ? '' : JSON.stringify(structuredContent),
+        details: structuredContent,
+        structuredContent,
+        isError
+    });
+}
+
 function compactModelPath(value = '') {
     const text = String(value || '');
     if (!text || text.length <= 140) {
@@ -514,6 +528,37 @@ function createAILISToolRuntimeRegistry(runtime) {
     registry.register(new AILISRuntimeTool({
         definition: definitionById.request_permissions,
         handle: async (args, context) => runtime.requestPermissions(args, context)
+    }));
+    registry.register(new AILISRuntimeTool({
+        definition: definitionById.spawn_agent,
+        handle: async (args, context) => makeAgentProtocolResult(
+            await runtime.agent_control.spawn_agent_with_metadata(args, context)
+        )
+    }));
+    registry.register(new AILISRuntimeTool({
+        definition: definitionById.followup_task,
+        handle: async (args, context) => makeAgentProtocolResult(
+            await runtime.agent_control.followup_task(args, context),
+            { silent: true }
+        )
+    }));
+    registry.register(new AILISRuntimeTool({
+        definition: definitionById.wait_agent,
+        handle: async (args, context) => makeAgentProtocolResult(
+            await runtime.agent_control.wait_agent(args, context)
+        )
+    }));
+    registry.register(new AILISRuntimeTool({
+        definition: definitionById.list_agents,
+        handle: async (args, context) => makeAgentProtocolResult(
+            runtime.agent_control.list_agents(args, context)
+        )
+    }));
+    registry.register(new AILISRuntimeTool({
+        definition: definitionById.close_agent,
+        handle: async (args, context) => makeAgentProtocolResult(
+            await runtime.agent_control.close_agent(args, context)
+        )
     }));
     registry.register(new AILISRuntimeTool({
         definition: definitionById.subagents,

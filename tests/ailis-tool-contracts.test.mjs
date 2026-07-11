@@ -22,10 +22,50 @@ test('AILIS tool contracts expose versioned schemas and validate common failures
     assert.ok(contracts.some((contract) => contract.id === 'self_evolution' && contract.version >= 1));
     assert.ok(contracts.some((contract) => contract.id === 'github_pages' && contract.risk === 'low'));
     assert.ok(contracts.some((contract) => contract.id === 'computer' && contract.risk === 'high'));
-    assert.ok(contracts.every((contract) => contract.returns?.properties?.content));
+    for (const toolId of ['spawn_agent', 'followup_task', 'wait_agent', 'list_agents', 'close_agent']) {
+        assert.ok(contracts.some((contract) => contract.id === toolId), `${toolId} contract is registered`);
+    }
+    const codexCollaborationTools = new Set(['spawn_agent', 'followup_task', 'wait_agent', 'list_agents', 'close_agent']);
+    assert.ok(contracts.every((contract) =>
+        codexCollaborationTools.has(contract.id) || contract.returns?.properties?.content
+    ));
     assert.ok(contracts.every((contract) => contract.errors?.includes('invalid_tool_args')));
     assert.ok(contracts.every((contract) => contract.experience?.embodiedAction));
     assert.ok(contracts.every((contract) => contract.experience?.userFacingVerb));
+
+    const validSpawnAgent = validateToolContract('spawn_agent', {
+        task_name: 'mavuika_guide',
+        message: 'Research and produce the current guide.',
+        fork_turns: 'all'
+    });
+    assert.equal(validSpawnAgent.ok, true);
+    assert.equal(validSpawnAgent.contract.approval, 'never');
+    const spawnContract = contracts.find((contract) => contract.id === 'spawn_agent');
+    assert.deepEqual(spawnContract.returns.required, ['task_name', 'nickname']);
+    assert.equal(spawnContract.returns.additionalProperties, false);
+
+    const invalidSpawnAgent = validateToolContract('spawn_agent', {
+        task_name: 'Mavuika-Guide',
+        message: 'Research the guide.',
+        unexpected: true
+    });
+    assert.equal(invalidSpawnAgent.ok, false);
+    assert.ok(invalidSpawnAgent.errors.some((error) => error.includes('task_name')));
+    assert.ok(invalidSpawnAgent.errors.some((error) => error.includes('unexpected')));
+
+    const validFollowupTask = validateToolContract('followup_task', {
+        target: 'mavuika_guide',
+        message: 'Verify the weapon ranking.'
+    });
+    assert.equal(validFollowupTask.ok, true);
+
+    const invalidWaitAgent = validateToolContract('wait_agent', { timeoutMs: 10_000 });
+    assert.equal(invalidWaitAgent.ok, false);
+    assert.ok(invalidWaitAgent.errors.some((error) => error.includes('timeoutMs')));
+    const waitContract = contracts.find((contract) => contract.id === 'wait_agent');
+    assert.deepEqual(waitContract.returns.required, ['message', 'timed_out']);
+    const listContract = contracts.find((contract) => contract.id === 'list_agents');
+    assert.deepEqual(listContract.returns.required, ['agents']);
 
     const validRead = validateToolContract('read', { path: 'package.json' });
     assert.equal(validRead.ok, true);

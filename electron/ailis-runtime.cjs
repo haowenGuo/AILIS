@@ -23,6 +23,13 @@ const {
 const {
     RolloutItem
 } = require('./ailis-prompt-model.cjs');
+const {
+    AgentControl,
+    AgentPath,
+    AgentStatus,
+    InputQueue,
+    normalize_agent_status
+} = require('./ailis-agent-control.cjs');
 
 const DEFAULT_MAX_RESULT_TEXT_CHARS = 6000;
 const DEFAULT_MAX_TRANSCRIPT_ITEMS = 500;
@@ -736,6 +743,11 @@ class AILISRuntime {
         this.subagentRuns = new Map();
         this.subagentControllers = new Map();
         this.subagentInputHandlers = new Map();
+        this.input_queue = new InputQueue();
+        this.agent_control = new AgentControl({
+            runtime: this,
+            input_queue: this.input_queue
+        });
         this.mcpManager = new AILISMcpManager({
             workspaceRoot: this.workspaceRoot,
             projectRoot: this.projectRoot,
@@ -1416,6 +1428,14 @@ class AILISRuntime {
                     action: subagentAction
                 };
             }
+            if (['spawn_agent', 'followup_task', 'wait_agent', 'list_agents', 'close_agent'].includes(toolId)) {
+                return {
+                    class: 'subagent',
+                    mutates: false,
+                    requiresApprovalCapable: false,
+                    action: toolId
+                };
+            }
             if (toolId === 'tool_doctor') {
                 const doctorAction = normalizeAction(args.action, 'health_check');
                 const mutates = ['record_observation', 'propose_repair', 'mark_repair'].includes(doctorAction)
@@ -1900,6 +1920,152 @@ class AILISRuntime {
         return await this.toolRuntimeRegistry.dispatch(toolId, args, context);
     }
 
+    resolve_agent_target(target = '', context = {}) {
+        const requested = normalizeString(target);
+        if (!requested) {
+            return null;
+        }
+        if (this.subagents.has(requested)) {
+            return this.subagents.get(requested);
+        }
+        const parentPath = new AgentPath(context.agent_path || context.agentPath || '/root');
+        const canonicalPath = requested.startsWith('/')
+            ? requested
+            : String(parentPath.join(requested));
+        return [...this.subagents.values()].find((subagent) =>
+            normalizeString(subagent.agent_path || subagent.agentPath) === canonicalPath
+        ) || null;
+    }
+
+    agent_status_for_subagent(subagent = {}) {
+        if (!subagent || !Object.keys(subagent).length) {
+            return AgentStatus.NotFound;
+        }
+        if (subagent.agent_status) {
+            return subagent.agent_status;
+        }
+        const finalMessage = normalizeString(
+            subagent.result?.displayText ||
+                subagent.result?.finalAnswer ||
+                subagent.result?.speechText
+        );
+        return normalize_agent_status(subagent.status, finalMessage);
+    }
+
+    async spawn_agent_with_metadata(args = {}, context = {}) {
+        const taskName = normalizeString(args.task_name);
+        const message = normalizeString(args.message);
+        const parentPath = new AgentPath(context.agent_path || context.agentPath || '/root');
+        let childPath;
+        try {
+            childPath = parentPath.join(taskName);
+        } catch (error) {
+            return {
+                ok: false,
+                status: 'invalid_task_name',
+                error: error?.message || String(error),
+                isError: true
+            };
+        }
+        const canonicalPath = String(childPath);
+        const existing = [...this.subagents.values()].find((subagent) =>
+            normalizeString(subagent.agent_path || subagent.agentPath) === canonicalPath
+        );
+        if (existing && !existing.closedAt) {
+            return {
+                ok: false,
+                status: 'agent_path_conflict',
+                error: `agent ${canonicalPath} already exists; use followup_task with target ${taskName}`,
+                isError: true
+            };
+        }
+
+        const forkTurns = normalizeString(args.fork_turns, 'all').toLowerCase();
+        const checkpoint = forkTurns === 'none'
+            ? null
+            : context.forked_context_checkpoint || context.forkedContextCheckpoint || null;
+        const relay = await this.executeSubagentRelay({
+            action: 'spawn',
+            task: message,
+            wait: false,
+            task_name: taskName,
+            agent_path: canonicalPath,
+            parent_agent_path: String(parentPath),
+            inheritanceMode: checkpoint ? 'checkpoint' : 'clean',
+            contextManagerCheckpoint: checkpoint,
+            agent_type: args.agent_type,
+            model: args.model,
+            reasoning_effort: args.reasoning_effort,
+            service_tier: args.service_tier
+        }, {
+            ...context,
+            agent_path: String(parentPath)
+        });
+        const subagent = relay?.details?.subagent || relay?.structuredContent?.subagent || null;
+        if (!subagent) {
+            return relay;
+        }
+        return {
+            task_name: canonicalPath,
+            nickname: subagent.nickname || null
+        };
+    }
+
+    async followup_task(args = {}, context = {}) {
+        const subagent = this.resolve_agent_target(args.target, context);
+        if (!subagent) {
+            return {
+                ok: false,
+                status: 'agent_not_found',
+                error: `agent ${normalizeString(args.target)} not found`,
+                isError: true
+            };
+        }
+        const message = normalizeString(args.message);
+        subagent.last_task_message = message;
+        await this.executeSubagentRelay({
+            action: 'resume',
+            subagentId: subagent.id,
+            task: message,
+            wait: false
+        }, context);
+        return '';
+    }
+
+    list_agents(args = {}) {
+        const prefix = normalizeString(args.path_prefix);
+        const agents = [...this.subagents.values()]
+            .filter((subagent) => {
+                const pathValue = normalizeString(subagent.agent_path || subagent.agentPath);
+                return !prefix || pathValue.startsWith(prefix);
+            })
+            .map((subagent) => ({
+                agent_name: normalizeString(subagent.agent_path || subagent.agentPath || subagent.id),
+                agent_status: this.agent_status_for_subagent(subagent),
+                last_task_message: normalizeString(subagent.last_task_message || subagent.task) || null
+            }));
+        return { agents };
+    }
+
+    async close_agent(args = {}, context = {}) {
+        const subagent = this.resolve_agent_target(args.target, context);
+        if (!subagent) {
+            return { previous_status: AgentStatus.NotFound };
+        }
+        const previousStatus = this.agent_status_for_subagent(subagent);
+        await this.executeSubagentRelay({
+            action: 'close',
+            subagentId: subagent.id,
+            reason: 'close_agent'
+        }, context);
+        subagent.agent_status = AgentStatus.Shutdown;
+        return { previous_status: previousStatus };
+    }
+
+    drain_mailbox_input_items(context = {}) {
+        return this.agent_control.get_pending_input(context);
+    }
+
     publicSubagent(subagent = {}) {
         return cloneJson(subagent);
     }
@@ -2086,6 +2252,7 @@ class AILISRuntime {
         const executor = this.subagentExecutor || ((payload) => this.runDefaultSubagentExecutor(payload));
         const runPromise = (async () => {
             subagent.status = 'running';
+            subagent.agent_status = AgentStatus.Running;
             subagent.startedAt = Date.now();
             await this.appendSubagentTranscriptEvent(subagent, {
                 type: 'subagent.started',
@@ -2118,6 +2285,10 @@ class AILISRuntime {
                 subagent.finishedAt = Date.now();
                 subagent.durationMs = subagent.finishedAt - subagent.startedAt;
                 subagent.result = redactObject(result || {});
+                subagent.agent_status = normalize_agent_status(
+                    subagent.status,
+                    result?.displayText || result?.finalAnswer || result?.speechText || ''
+                );
                 await this.appendSubagentTranscriptEvent(subagent, {
                     type: 'subagent.completed',
                     status: subagent.status,
@@ -2128,6 +2299,10 @@ class AILISRuntime {
                         result: subagent.result
                     }
                 });
+                await this.agent_control.forward_child_completion_to_parent(
+                    subagent,
+                    subagent.agent_status
+                );
                 return subagent.result;
             } catch (error) {
                 subagent.status = isAbortError(error) ? 'cancelled' : /timed out/i.test(error?.message || '') ? 'timeout' : 'failed';
@@ -2148,6 +2323,7 @@ class AILISRuntime {
                     displayText: taskRunHandoff.userVisibleSummary,
                     taskRunHandoff
                 });
+                subagent.agent_status = AgentStatus.Errored(subagent.error);
                 await this.appendSubagentTranscriptEvent(subagent, {
                     type: 'subagent.completed',
                     status: subagent.status,
@@ -2159,6 +2335,10 @@ class AILISRuntime {
                         result: subagent.result
                     }
                 });
+                await this.agent_control.forward_child_completion_to_parent(
+                    subagent,
+                    subagent.agent_status
+                );
                 return subagent.result;
             } finally {
                 this.subagentInputHandlers.delete(subagent.id);
@@ -2275,8 +2455,14 @@ class AILISRuntime {
                     `${sessionId}:subagent:${subagentId}`
                 ),
                 status: 'queued',
+                agent_status: AgentStatus.PendingInit,
                 task,
                 originalTask: task,
+                task_name: normalizeString(args.task_name),
+                agent_path: normalizeString(args.agent_path),
+                parent_agent_path: normalizeString(args.parent_agent_path, '/root'),
+                nickname: normalizeString(args.nickname) || null,
+                last_task_message: task,
                 inheritanceMode,
                 inheritance: {
                     mode: inheritanceMode,
@@ -2436,6 +2622,7 @@ class AILISRuntime {
                     subagent.previousRuns = subagent.previousRuns.slice(-12);
                     subagent.childRunId = `child-${randomUUID()}`;
                     subagent.status = 'queued';
+                    subagent.agent_status = AgentStatus.PendingInit;
                     subagent.ok = null;
                     subagent.error = '';
                     subagent.finishedAt = null;

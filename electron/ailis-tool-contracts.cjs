@@ -333,6 +333,78 @@ function defaultReturns() {
     return cloneJson(STANDARD_TOOL_RETURN_SCHEMA);
 }
 
+function agentStatusSchema() {
+    return {
+        oneOf: [
+            stringSchema({ enum: ['pending_init', 'running', 'interrupted', 'shutdown', 'not_found'] }),
+            makeObjectSchema({
+                required: ['completed'],
+                properties: {
+                    completed: { type: ['string', 'null'] }
+                },
+                additionalProperties: false
+            }),
+            makeObjectSchema({
+                required: ['errored'],
+                properties: {
+                    errored: stringSchema()
+                },
+                additionalProperties: false
+            })
+        ]
+    };
+}
+
+function spawnAgentReturns() {
+    return makeObjectSchema({
+        required: ['task_name', 'nickname'],
+        properties: {
+            task_name: stringSchema(),
+            nickname: { type: ['string', 'null'] }
+        },
+        additionalProperties: false
+    });
+}
+
+function waitAgentReturns() {
+    return makeObjectSchema({
+        required: ['message', 'timed_out'],
+        properties: {
+            message: stringSchema(),
+            timed_out: booleanSchema()
+        },
+        additionalProperties: false
+    });
+}
+
+function listAgentsReturns() {
+    return makeObjectSchema({
+        required: ['agents'],
+        properties: {
+            agents: arraySchema(makeObjectSchema({
+                required: ['agent_name', 'agent_status', 'last_task_message'],
+                properties: {
+                    agent_name: stringSchema(),
+                    agent_status: agentStatusSchema(),
+                    last_task_message: { type: ['string', 'null'] }
+                },
+                additionalProperties: false
+            }))
+        },
+        additionalProperties: false
+    });
+}
+
+function closeAgentReturns() {
+    return makeObjectSchema({
+        required: ['previous_status'],
+        properties: {
+            previous_status: agentStatusSchema()
+        },
+        additionalProperties: false
+    });
+}
+
 function defaultErrors(extra = []) {
     return [...STANDARD_TOOL_ERROR_CODES, ...extra];
 }
@@ -947,6 +1019,106 @@ const TOOL_CONTRACTS = Object.freeze({
             }
             return [];
         }
+    }),
+    spawn_agent: Object.freeze({
+        id: 'spawn_agent',
+        version: CONTRACT_VERSION,
+        mutates: false,
+        risk: 'low',
+        approval: 'never',
+        experience: TOOL_EXPERIENCE.subagents,
+        returns: spawnAgentReturns(),
+        errors: defaultErrors(['agent_path_conflict', 'invalid_task_name']),
+        schema: makeObjectSchema({
+            required: ['task_name', 'message'],
+            properties: {
+                task_name: stringSchema({ minLength: 1, pattern: '^[a-z0-9_]+$' }),
+                message: stringSchema({ minLength: 1 }),
+                agent_type: stringSchema(),
+                fork_turns: stringSchema(),
+                model: stringSchema(),
+                reasoning_effort: stringSchema(),
+                service_tier: stringSchema()
+            },
+            additionalProperties: false
+        }),
+        customValidate(args = {}) {
+            if (!/^[a-z0-9_]+$/.test(normalizeString(args.task_name))) {
+                return ['task_name must use lowercase letters, digits, and underscores'];
+            }
+            const forkTurns = normalizeString(args.fork_turns, 'all').toLowerCase();
+            if (!['none', 'all'].includes(forkTurns) && !/^[1-9]\d*$/.test(forkTurns)) {
+                return ['fork_turns must be none, all, or a positive integer string'];
+            }
+            return [];
+        }
+    }),
+    followup_task: Object.freeze({
+        id: 'followup_task',
+        version: CONTRACT_VERSION,
+        mutates: false,
+        risk: 'low',
+        approval: 'never',
+        experience: TOOL_EXPERIENCE.subagents,
+        returns: makeObjectSchema({ additionalProperties: false }),
+        errors: defaultErrors(['agent_not_found']),
+        schema: makeObjectSchema({
+            required: ['target', 'message'],
+            properties: {
+                target: stringSchema({ minLength: 1 }),
+                message: stringSchema({ minLength: 1 })
+            },
+            additionalProperties: false
+        })
+    }),
+    wait_agent: Object.freeze({
+        id: 'wait_agent',
+        version: CONTRACT_VERSION,
+        mutates: false,
+        risk: 'low',
+        approval: 'never',
+        experience: TOOL_EXPERIENCE.subagents,
+        returns: waitAgentReturns(),
+        errors: defaultErrors(['invalid_timeout']),
+        schema: makeObjectSchema({
+            properties: {
+                timeout_ms: numberSchema({ minimum: 1000, maximum: 24 * 60 * 60 * 1000 })
+            },
+            additionalProperties: false
+        })
+    }),
+    list_agents: Object.freeze({
+        id: 'list_agents',
+        version: CONTRACT_VERSION,
+        mutates: false,
+        risk: 'low',
+        approval: 'never',
+        experience: TOOL_EXPERIENCE.subagents,
+        returns: listAgentsReturns(),
+        errors: defaultErrors(),
+        schema: makeObjectSchema({
+            properties: {
+                path_prefix: stringSchema()
+            },
+            additionalProperties: false
+        })
+    }),
+    close_agent: Object.freeze({
+        id: 'close_agent',
+        version: CONTRACT_VERSION,
+        mutates: false,
+        risk: 'low',
+        approval: 'never',
+        experience: TOOL_EXPERIENCE.subagents,
+        returns: closeAgentReturns(),
+        errors: defaultErrors(['agent_not_found']),
+        schema: makeObjectSchema({
+            required: ['target'],
+            properties: {
+                target: stringSchema({ minLength: 1 })
+            },
+            additionalProperties: false
+        })
     }),
     subagents: Object.freeze({
         id: 'subagents',

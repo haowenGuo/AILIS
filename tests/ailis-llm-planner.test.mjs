@@ -565,7 +565,7 @@ test('Agent prompts inject runtime_environment from the active platform adapter'
     }
 });
 
-test('Persona orchestrator prompt stays in AILIS persona and only exposes subagent handoff', async () => {
+test('Persona orchestrator prompt stays in AILIS persona and exposes Codex collaboration tools', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-persona-orchestrator-'));
     const llmServer = await createScriptedChatCompletionsServer(() => ({
         action: 'final',
@@ -607,9 +607,16 @@ test('Persona orchestrator prompt stays in AILIS persona and only exposes subage
         assert.match(llmServer.calls[0].system, /可爱的虚拟助手，名字固定为AILIS/);
         assert.match(llmServer.calls[0].system, /关系表达协议/);
         assert.match(llmServer.calls[0].system, /authoritative host clock/);
-        assert.match(llmServer.calls[0].system, /Author the complete TaskAgent task yourself/);
+        assert.match(llmServer.calls[0].system, /Author the complete initial message/);
         const toolNames = (llmServer.calls[0].payload.tools || []).map((tool) => tool.function?.name || tool.name);
-        assert.deepEqual(toolNames, ['task_results', 'subagents']);
+        assert.deepEqual(toolNames, [
+            'task_results',
+            'spawn_agent',
+            'followup_task',
+            'wait_agent',
+            'list_agents',
+            'close_agent'
+        ]);
         const contextPayload = parseModelContextPayload(llmServer.calls[0]);
         assert.match(contextPayload.memory_context || '', /AILIS Persona 记忆快照/);
         assert.equal(contextPayload.capability_catalog, undefined);
@@ -630,7 +637,7 @@ test('Persona orchestrator prompt stays in AILIS persona and only exposes subage
     }
 });
 
-test('Persona preserves a model-authored current-fact task across a short user correction and resumes the same loop', async () => {
+test('Persona receives a TaskAgent completion through the Codex-style mailbox', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-persona-handoff-once-'));
     const llmServer = await createScriptedChatCompletionsServer(({ decisionCount }) => {
         if (decisionCount === 1) {
@@ -638,11 +645,22 @@ test('Persona preserves a model-authored current-fact task across a short user c
                 action: 'tool',
                 summary: '交给干净的 TaskAgent 执行。',
                 tool_call: {
-                    tool: 'subagents',
+                    tool: 'spawn_agent',
                     args: {
-                        action: 'spawn',
-                        task: '核验截至当前日期《原神》“木偶”桑多涅是否已经实装；使用新鲜网页证据，若已实装则完成角色攻略。'
+                        task_name: 'sandrone_guide',
+                        message: '核验截至当前日期《原神》“木偶”桑多涅是否已经实装；使用新鲜网页证据，若已实装则完成角色攻略。',
+                        fork_turns: 'all'
                     }
+                }
+            };
+        }
+        if (decisionCount === 2) {
+            return {
+                action: 'tool',
+                summary: '等待 TaskAgent 完成。',
+                tool_call: {
+                    tool: 'wait_agent',
+                    args: { timeout_ms: 1000 }
                 }
             };
         }
@@ -661,11 +679,12 @@ test('Persona preserves a model-authored current-fact task across a short user c
     const gatewayToolCalls = [];
     const originalCallTool = gateway.callTool.bind(gateway);
     gateway.callTool = async (request) => {
-        if (request?.tool === 'subagents') {
+        if (['spawn_agent', 'wait_agent'].includes(request?.tool)) {
             gatewayToolCalls.push({
+                tool: request.tool,
                 timeoutMs: request.timeoutMs,
                 contextTimeoutMs: request.context?.timeoutMs,
-                waitTimeoutMs: request.args?.waitTimeoutMs
+                waitTimeoutMs: request.args?.timeout_ms
             });
         }
         return originalCallTool(request);
@@ -674,6 +693,7 @@ test('Persona preserves a model-authored current-fact task across a short user c
     try {
         gateway.runtime.subagentExecutor = async ({ subagent, args, context }) => {
             subagentCalls.push({ subagent, args, context });
+            await new Promise((resolve) => setTimeout(resolve, 50));
             return {
                 ok: true,
                 status: 'completed',
@@ -714,25 +734,25 @@ test('Persona preserves a model-authored current-fact task across a short user c
         assert.equal(result.body.planner, 'llm-agentic-executor');
         assert.equal(result.body.displayText, 'AILIS final answer: 42');
         assert.equal(result.body.finalAnswer, 'AILIS final answer: 42');
-        assert.equal(llmServer.calls.length, 2);
+        assert.equal(llmServer.calls.length, 3);
         assert.equal(subagentCalls.length, 1);
-        assert.equal(subagentCalls[0].args.wait, true);
-        assert.equal(subagentCalls[0].args.waitTimeoutMs, 15 * 60 * 1000);
+        assert.equal(subagentCalls[0].args.wait, false);
         assert.equal(
             subagentCalls[0].args.task,
             '核验截至当前日期《原神》“木偶”桑多涅是否已经实装；使用新鲜网页证据，若已实装则完成角色攻略。'
         );
         assert.equal(subagentCalls[0].context.maxAgentSteps, 4);
-        assert.equal(subagentCalls[0].context.cleanContext, true);
+        assert.equal(subagentCalls[0].context.cleanContext, false);
+        assert.equal(subagentCalls[0].context.taskAgentInheritanceMode, 'checkpoint');
+        assert.ok(subagentCalls[0].context.initialContextManagerCheckpoint);
         assert.equal(subagentCalls[0].context.contextMode, 'task_agent');
-        assert.equal(gatewayToolCalls.length, 1);
-        assert.equal(gatewayToolCalls[0].waitTimeoutMs, 15 * 60 * 1000);
+        assert.deepEqual(gatewayToolCalls.map((call) => call.tool), ['spawn_agent', 'wait_agent']);
+        assert.equal(gatewayToolCalls[1].waitTimeoutMs, 1000);
         assert.match(JSON.stringify(llmServer.calls[0].payload.messages), /原神的/);
         assert.match(JSON.stringify(llmServer.calls[0].payload.messages), /已经实装了/);
-        assert.match(JSON.stringify(llmServer.calls[1].payload.messages), /已核验并完成攻略/);
-        assert.doesNotMatch(JSON.stringify(llmServer.calls[1].payload.messages), /waitTimeoutMs|"wait":true/);
-        assert.equal(gateway.taskResultCapsules.getStatus().activeTaskCount, 0);
-        assert.ok(gateway.taskResultCapsules.search('桑多涅攻略').length > 0);
+        assert.match(JSON.stringify(llmServer.calls[1].payload.messages), /root\/sandrone_guide/);
+        assert.match(JSON.stringify(llmServer.calls[2].payload.messages), /subagent_notification/);
+        assert.match(JSON.stringify(llmServer.calls[2].payload.messages), /TaskAgent 已核验当前资料并完成木偶攻略/);
     } finally {
         await gateway.stop();
         await llmServer.close();

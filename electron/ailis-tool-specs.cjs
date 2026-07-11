@@ -152,15 +152,70 @@ const AILIS_RUNTIME_TOOL_DEFINITIONS = Object.freeze([
         exposure: AILIS_TOOL_EXPOSURE.DIRECT
     }),
     Object.freeze({
+        id: 'spawn_agent',
+        label: 'spawn_agent',
+        description: 'Spawns an agent to work on the specified task. The spawned agent receives a canonical task name, inherits sanitized parent turns according to fork_turns, and sends its final answer back through the parent mailbox. Returns task_name and nickname; it does not wait for completion.',
+        sectionId: 'runtime',
+        route: 'ailis-runtime',
+        materialized: true,
+        status: 'available',
+        needsApproval: false,
+        exposure: AILIS_TOOL_EXPOSURE.DIRECT
+    }),
+    Object.freeze({
+        id: 'followup_task',
+        label: 'followup_task',
+        description: 'Send a message to an existing non-root target agent and trigger a turn in that target. If the target is currently mid-turn, the message is queued and used for its next turn.',
+        sectionId: 'runtime',
+        route: 'ailis-runtime',
+        materialized: true,
+        status: 'available',
+        needsApproval: false,
+        exposure: AILIS_TOOL_EXPOSURE.DIRECT
+    }),
+    Object.freeze({
+        id: 'wait_agent',
+        label: 'wait_agent',
+        description: 'Wait for a mailbox update from any live agent. Does not return the child content; the completion notification is delivered through the parent mailbox.',
+        sectionId: 'runtime',
+        route: 'ailis-runtime',
+        materialized: true,
+        status: 'available',
+        needsApproval: false,
+        exposure: AILIS_TOOL_EXPOSURE.DIRECT
+    }),
+    Object.freeze({
+        id: 'list_agents',
+        label: 'list_agents',
+        description: 'List live agents in the current root thread tree. Optionally filter by task-path prefix.',
+        sectionId: 'runtime',
+        route: 'ailis-runtime',
+        materialized: true,
+        status: 'available',
+        needsApproval: false,
+        exposure: AILIS_TOOL_EXPOSURE.DIRECT
+    }),
+    Object.freeze({
+        id: 'close_agent',
+        label: 'close_agent',
+        description: 'Close an agent when it is no longer needed and return the previous AgentStatus.',
+        sectionId: 'runtime',
+        route: 'ailis-runtime',
+        materialized: true,
+        status: 'available',
+        needsApproval: false,
+        exposure: AILIS_TOOL_EXPOSURE.DIRECT
+    }),
+    Object.freeze({
         id: 'subagents',
         label: 'subagents',
-        description: 'Spawn a fresh child TaskAgent with clean message history for an isolated subtask, wait for its result by default, and inspect or cancel child Agent runs through the AILIS runtime transcript. Use action=spawn/create with task/message/prompt; omit wait or set wait=true when you need the result returned to the parent Agent.',
+        description: 'Legacy compatibility surface for older AILIS subagent calls. Persona and new Agent code must use spawn_agent, followup_task, wait_agent, list_agents, and close_agent.',
         sectionId: 'runtime',
         route: 'ailis-runtime',
         materialized: true,
         status: 'available',
         needsApprovalActions: Object.freeze(['spawn', 'create', 'send', 'close']),
-        exposure: AILIS_TOOL_EXPOSURE.DEFERRED
+        exposure: AILIS_TOOL_EXPOSURE.HIDDEN
     }),
     Object.freeze({
         id: 'mcp_bridge',
@@ -318,7 +373,9 @@ function createModelFacingParameters(definition = {}, contract = null) {
 function createAilisFunctionToolSpec(definition = {}) {
     const contract = getToolContract(definition.id);
     const deferred = definition.exposure === AILIS_TOOL_EXPOSURE.DEFERRED;
-    const outputSchema = !deferred && contract?.returns ? compactToolSchema(contract.returns) : undefined;
+    const outputSchema = definition.id !== 'followup_task' && !deferred && contract?.returns
+        ? compactToolSchema(contract.returns)
+        : undefined;
     return {
         type: AILIS_TOOL_KIND.FUNCTION,
         name: definition.id,

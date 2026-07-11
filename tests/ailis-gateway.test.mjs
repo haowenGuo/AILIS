@@ -142,8 +142,8 @@ test('AILIS Gateway subagent task reuses parent LLM settings for TaskAgent runs'
     assert.deepEqual(calls[0].messageHistory, []);
     assert.equal(calls[0].context.cleanContext, true);
     assert.equal(calls[0].context.contextMode, 'task_agent');
-    assert.equal(calls[0].maxAgentSteps, 3);
-    assert.equal(calls[0].context.maxAgentSteps, 3);
+    assert.equal(calls[0].maxAgentSteps, 4);
+    assert.equal(calls[0].context.maxAgentSteps, 4);
     assert.deepEqual(calls[0].llmSettings, llmSettings);
     assert.deepEqual(calls[0].context.llmSettings, llmSettings);
 });
@@ -172,6 +172,11 @@ test('AILIS Gateway exposes health, tools, guarded tool calls, and audit', async
         assert.ok(tools.body.coreTools.some((tool) => tool.id === 'read'));
         assert.ok(tools.body.coreTools.some((tool) => tool.id === 'exec' && tool.needsApproval));
         assert.ok(tools.body.runtimeTools.some((tool) => tool.id === 'tool_search' && tool.spec));
+        assert.ok(tools.body.runtimeTools.some((tool) =>
+            tool.id === 'spawn_agent' &&
+            tool.spec?.parameters?.required?.includes('task_name') &&
+            tool.spec?.parameters?.additionalProperties === false
+        ));
         assert.ok(tools.body.localTools.some((tool) => tool.id === 'computer' && tool.spec));
         assert.equal(tools.body.localTools.some((tool) => tool.id === 'read'), false);
         assert.equal(tools.body.gateway.toolRuntime.model, 'ailis_gateway_tool_registry.v1');
@@ -185,7 +190,8 @@ test('AILIS Gateway exposes health, tools, guarded tool calls, and audit', async
             })
         });
         assert.equal(searchTools.body.ok, true, searchTools.body.error);
-        assert.match(JSON.stringify(searchTools.body.result), /subagents/);
+        assert.ok(searchTools.body.result.details.tools.length > 0);
+        assert.doesNotMatch(JSON.stringify(searchTools.body.result), /"id":"subagents"/);
         assert.equal(Object.hasOwn(searchTools.body.result.details, 'discovery'), false);
         assert.equal(Object.hasOwn(searchTools.body.result.details, 'searched_web'), false);
         assert.equal(Object.hasOwn(searchTools.body.result.details, 'note'), false);

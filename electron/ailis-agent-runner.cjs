@@ -5568,8 +5568,26 @@ function isSubagentHandoffStep(step = {}) {
     return ['spawn', 'create', 'send', 'steer', 'resume'].includes(action);
 }
 
+const CODEX_COLLABORATION_TOOL_IDS = Object.freeze([
+    'spawn_agent',
+    'followup_task',
+    'wait_agent',
+    'list_agents',
+    'close_agent'
+]);
+
+function isCollaborationTool(stepOrTool = '') {
+    const toolId = canonicalDirectToolId(
+        typeof stepOrTool === 'string' ? stepOrTool : stepOrTool?.tool
+    );
+    return toolId === 'subagents' || CODEX_COLLABORATION_TOOL_IDS.includes(toolId);
+}
+
 function applyPersonaTaskAgentLifecycle(step = {}) {
     if (!isSubagentHandoffStep(step)) {
+        return step;
+    }
+    if (canonicalDirectToolId(step?.tool) !== 'subagents') {
         return step;
     }
     const modelArgs = step.args && typeof step.args === 'object' ? { ...step.args } : {};
@@ -5786,33 +5804,10 @@ function buildFinalAnswerNativeToolSpec() {
     });
 }
 
-function buildPersonaTaskDelegateSpec() {
-    return normalizeNativeToolSpec({
-        name: 'subagents',
-        description: [
-            'Delegate one self-contained execution task to TaskAgent.',
-            'Author the complete task from the visible conversation; the runtime owns waiting, lifecycle, and result delivery.',
-            'The completed or partial result returns to this same AILIS conversation as one tool observation.'
-        ].join(' '),
-        parameters: {
-            type: 'object',
-            required: ['action', 'task'],
-            additionalProperties: false,
-            properties: {
-                action: {
-                    type: 'string',
-                    enum: ['spawn', 'resume'],
-                    description: 'Use spawn for a new task. Use resume after a partial or budget-limited result to continue the same TaskAgent with its preserved checkpoint and evidence.'
-                },
-                task: {
-                    type: 'string',
-                    minLength: 1,
-                    description: 'Complete model-authored execution task, including the goal, constraints, and expected result.'
-                }
-            }
-        },
-        strict: true
-    });
+function buildPersonaCollaborationSpecs(gateway) {
+    return CODEX_COLLABORATION_TOOL_IDS
+        .map((toolId) => gateway?.gatewayToolRuntimeRegistry?.definition?.(toolId)?.spec)
+        .filter(Boolean);
 }
 
 function buildAgentDirectToolSpecs(gateway, { stepResults = [], requestContext = {}, exactAnswerMode = false } = {}) {
@@ -5822,7 +5817,7 @@ function buildAgentDirectToolSpecs(gateway, { stepResults = [], requestContext =
     const subagentSpec = gateway?.gatewayToolRuntimeRegistry?.definition?.('subagents')?.spec;
     const taskResultsSpec = gateway?.gatewayToolRuntimeRegistry?.definition?.('task_results')?.spec;
     if (isPersonaOrchestratorRole(resolveAgentRuntimeRole({}, requestContext))) {
-        return [taskResultsSpec, buildPersonaTaskDelegateSpec()].filter(Boolean);
+        return [taskResultsSpec, ...buildPersonaCollaborationSpecs(gateway)].filter(Boolean);
     }
     const specs = [];
     const seen = new Set();
@@ -6517,9 +6512,10 @@ function buildLlmAgentDirectToolPrompt({
         'The runtime_environment object is the authoritative host clock. Use its current_date, current_time, timezone, and utc_offset instead of assuming the training-data date.',
         'For facts that may have changed, use fresh evidence already present in the conversation or verify them through TaskAgent. Do not present pretrained knowledge as current fact when freshness matters.',
         'task_results is a read-only library of completed public work. Its output is candidate context, and you decide whether it is relevant and sufficient.',
-        'subagents is a single delegation tool. Author the complete TaskAgent task yourself from the conversation, current task state, constraints, and evidence. The runtime validates the task without rewriting its meaning, then owns waiting and child lifecycle.',
-        'TaskAgent results return to this same AILIS conversation as one tool observation. Continue with the original conversation intact, then answer the user naturally.',
-        'If a TaskAgent returns a partial or budget-limited result for the same task, use subagents action=resume to continue its preserved checkpoint instead of spawning a duplicate TaskAgent.',
+        'spawn_agent creates a persistent TaskAgent with a canonical task_name and returns immediately. Author the complete initial message from the conversation, current task state, constraints, and evidence.',
+        'A TaskAgent final status arrives through a structured subagent_notification in the parent mailbox. Use wait_agent only when the user answer depends on that result; wait_agent itself does not contain the child answer.',
+        'For related additional work, call followup_task with the existing task_name. This continues the same TaskAgent context and evidence; do not spawn another agent for the same unresolved thread.',
+        'Use list_agents when you need to recover a canonical task_name. Use close_agent only when the persistent TaskAgent is no longer needed.',
         'Never mention TaskAgent, subagent, worker, handoff, capsule, or internal orchestration to the user.',
         'Only call tools present in the current tools array. Do not mention tool schemas, runtime state, prompt rules, or orchestration details in an ordinary conversational reply.'
     ];
@@ -6647,6 +6643,43 @@ function appendUserInputToContextManager(contextManager, text = '') {
         content: [{ type: 'input_text', text: normalized }]
     }]);
     return true;
+}
+
+function keep_forked_rollout_item(item = {}) {
+    if (!item || typeof item !== 'object') {
+        return false;
+    }
+    if (item.type === 'message') {
+        if (['system', 'developer', 'user'].includes(item.role)) {
+            return true;
+        }
+        return item.role === 'assistant' && item.phase === 'final_answer';
+    }
+    return ['compaction', 'context_compaction'].includes(item.type);
+}
+
+function build_forked_context_checkpoint(contextManager, fork_turns = 'all') {
+    const mode = normalizeText(fork_turns, 'all').toLowerCase();
+    if (!contextManager || typeof contextManager.rawItems !== 'function' || mode === 'none') {
+        return null;
+    }
+    let items = contextManager.rawItems().filter(keep_forked_rollout_item);
+    if (/^[1-9]\d*$/.test(mode)) {
+        const turnCount = Number(mode);
+        const userIndexes = items
+            .map((item, index) => item?.type === 'message' && item?.role === 'user' ? index : -1)
+            .filter((index) => index >= 0);
+        const startIndex = userIndexes[Math.max(0, userIndexes.length - turnCount)] || 0;
+        items = items.slice(startIndex);
+    }
+    return {
+        history_version: Number(contextManager.historyVersion?.() || 0),
+        token_info: null,
+        reference_context_item: mode === 'all'
+            ? contextManager.referenceContextItem?.() || null
+            : null,
+        items
+    };
 }
 
 function findNativeToolSpec(toolName = '', tools = []) {
@@ -8001,11 +8034,13 @@ class AILISAgentRunner {
             request?.context?.llm && typeof request.context.llm === 'object' ? request.context.llm :
             null
         );
-        const effectiveToolContext = step.tool === 'subagents' && inheritedLlmSettings
+        const effectiveToolContext = isCollaborationTool(step) && inheritedLlmSettings
             ? { ...toolContext, llmSettings: inheritedLlmSettings }
             : toolContext;
-        const subagentWaitTimeoutMs = step.tool === 'subagents'
-            ? Number(step.args?.waitTimeoutMs || step.args?.timeoutMs)
+        const subagentWaitTimeoutMs = canonicalDirectToolId(step.tool) === 'wait_agent'
+            ? Number(step.args?.timeout_ms)
+            : canonicalDirectToolId(step.tool) === 'subagents'
+                ? Number(step.args?.waitTimeoutMs || step.args?.timeoutMs)
             : 0;
         const effectiveRequest = subagentWaitTimeoutMs > 0
             ? {
@@ -8017,7 +8052,7 @@ class AILISAgentRunner {
             }
             : request;
         const effectiveToolCallTimeoutMs = Number(effectiveRequest?.timeoutMs || 0);
-        const finalToolContext = step.tool === 'subagents' && effectiveToolCallTimeoutMs > 0
+        const finalToolContext = isCollaborationTool(step) && effectiveToolCallTimeoutMs > 0
             ? {
                 ...effectiveToolContext,
                 timeoutMs: Math.max(Number(effectiveToolContext?.timeoutMs || 0), effectiveToolCallTimeoutMs)
@@ -8508,6 +8543,28 @@ class AILISAgentRunner {
             if (interruptedBeforeRound) {
                 return interruptedBeforeRound;
             }
+            const mailboxItems = this.gateway.runtime?.drain_mailbox_input_items?.({
+                runId,
+                sessionId
+            }) || [];
+            if (mailboxItems.length && modelInputContextManager?.recordItems) {
+                modelInputContextManager.recordItems(mailboxItems);
+                events.push({
+                    type: 'agent_mailbox',
+                    status: 'received',
+                    iteration,
+                    itemCount: mailboxItems.length
+                });
+                await appendRuntimeItem({
+                    type: 'agent.mailbox',
+                    status: 'received',
+                    payload: {
+                        iteration,
+                        itemCount: mailboxItems.length,
+                        items: mailboxItems
+                    }
+                });
+            }
             const noProgressReason = detectAgentNoProgress(stepResults, requestContext);
             const safetyFinalizationReason = iteration >= finalizationIteration
                 ? 'maximum_tool_rounds'
@@ -8650,7 +8707,7 @@ class AILISAgentRunner {
                 unresolvedFields,
                 safetyFinalizationReason,
                 toolSummary: isPersonaOrchestratorRole(agentRuntimeRole)
-                    ? 'Persona tool surface: task_results reads completed public results; subagents delegates one complete model-authored task. The runtime owns waiting and lifecycle, then returns one result observation to this same AILIS loop. Internal orchestration must remain invisible to the user.'
+                    ? 'Persona tool surface: task_results reads completed public results; spawn_agent creates a persistent TaskAgent; wait_agent synchronizes with its mailbox; followup_task continues the same task_name. Internal orchestration must remain invisible to the user.'
                     : directToolSpecs.length
                         ? `Native direct tools exposed: ${directToolSpecs.map((tool) => tool.name).slice(0, 16).join(', ')}${directToolSpecs.length > 16 ? ', ...' : ''}.`
                         : 'No native tools are exposed in this turn; answer directly if possible.'
@@ -9269,12 +9326,23 @@ class AILISAgentRunner {
                             approved ? { ...requestContext, approved: true } : requestContext,
                             this.workspaceRoot,
                             sessionId
-                        )
+                        ),
+                        agent_path: normalizeText(requestContext.agent_path || requestContext.agentPath, '/root')
                     };
                     const parallelStepResults = await Promise.all(parallelCandidateSteps.map((candidateStep) => this.executeAgentToolStep({
                         runId,
                         step: candidateStep,
-                        toolContext: parallelToolContext,
+                        toolContext: {
+                            ...parallelToolContext,
+                            ...(canonicalDirectToolId(candidateStep.tool) === 'spawn_agent'
+                                ? {
+                                      forked_context_checkpoint: build_forked_context_checkpoint(
+                                          modelInputContextManager,
+                                          candidateStep.args?.fork_turns
+                                      )
+                                  }
+                                : {})
+                        },
                         request,
                         iteration
                     })));
@@ -9621,7 +9689,16 @@ class AILISAgentRunner {
                         },
                         this.workspaceRoot,
                         sessionId
-                    )
+                    ),
+                    agent_path: normalizeText(requestContext.agent_path || requestContext.agentPath, '/root'),
+                    ...(canonicalDirectToolId(step.tool) === 'spawn_agent'
+                        ? {
+                              forked_context_checkpoint: build_forked_context_checkpoint(
+                                  modelInputContextManager,
+                                  step.args?.fork_turns
+                              )
+                          }
+                        : {})
                 },
                 request,
                 iteration
@@ -10808,6 +10885,8 @@ module.exports = {
     isAgentLlmSettingsMissing,
     buildAgentDecisionLowLatencyPayload,
     buildLlmAgentDirectToolPrompt,
+    build_forked_context_checkpoint,
+    keep_forked_rollout_item,
     resolveAgentPromptProfile,
     resolveAgentDecisionSettings,
     resolveParallelToolCalls,

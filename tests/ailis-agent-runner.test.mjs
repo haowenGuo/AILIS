@@ -9,9 +9,10 @@ const require = createRequire(import.meta.url);
 const { AILISGateway } = require('../electron/ailis-gateway.cjs');
 const {
     AILISAgentRunner,
-    buildAgentDirectToolSpecs,
-    buildLlmAgentDirectToolPrompt,
-    buildToolObservationDigest,
+        buildAgentDirectToolSpecs,
+        buildLlmAgentDirectToolPrompt,
+        build_forked_context_checkpoint,
+        buildToolObservationDigest,
     extractSubagentHandoffOutcome,
     isAgentLlmSettingsMissing,
     looksLikeLeakedAgentProtocol,
@@ -71,13 +72,13 @@ test('AILIS Agent Runner strips persona_output blocks from visible text', () => 
 test('AILIS parent Persona prompt stays conversational while TaskAgent keeps execution guidance', () => {
     const personaPrompt = buildLlmAgentDirectToolPrompt({
         message: '老婆，你的说话语气怎么有点冷漠',
-        toolSummary: 'Persona orchestrator tools exposed: subagents only.'
+        toolSummary: 'Persona orchestrator tools exposed: spawn_agent, followup_task, wait_agent.'
     });
     assert.match(personaPrompt.instructions, /当前有效交互偏好/);
     assert.match(personaPrompt.instructions, /Keep ordinary conversation natural/);
     assert.match(personaPrompt.instructions, /authoritative host clock/);
-    assert.match(personaPrompt.instructions, /Author the complete TaskAgent task yourself/);
-    assert.match(personaPrompt.instructions, /same AILIS conversation/);
+    assert.match(personaPrompt.instructions, /spawn_agent creates a persistent TaskAgent/);
+    assert.match(personaPrompt.instructions, /structured subagent_notification/);
     assert.doesNotMatch(personaPrompt.instructions, /mcp__ailis_research__web_research|For local file and data tasks|When exec output is truncated/);
 
     const taskPrompt = buildLlmAgentDirectToolPrompt({
@@ -341,7 +342,7 @@ test('AILIS Agent Runner passes parent LLM settings only to subagent tool calls'
     assert.equal(calls[0].context.llmSettings, undefined);
 });
 
-test('AILIS persona exposes subagent handoff while TaskAgent keeps Codex core by default', () => {
+test('AILIS persona exposes Codex-named collaboration tools while TaskAgent keeps Codex core by default', () => {
     const taskResultsSpec = {
         name: 'task_results',
         description: 'Read prior public task results.',
@@ -356,17 +357,31 @@ test('AILIS persona exposes subagent handoff while TaskAgent keeps Codex core by
             }
         }
     };
+    const collaborationSpecs = Object.fromEntries([
+        'spawn_agent',
+        'followup_task',
+        'wait_agent',
+        'list_agents',
+        'close_agent'
+    ].map((name) => [name, {
+        name,
+        description: `${name} contract`,
+        parameters: { type: 'object', additionalProperties: false, properties: {} }
+    }]));
+    collaborationSpecs.spawn_agent.parameters = {
+        type: 'object',
+        required: ['task_name', 'message'],
+        additionalProperties: false,
+        properties: {
+            task_name: { type: 'string' },
+            message: { type: 'string' },
+            fork_turns: { type: 'string' }
+        }
+    };
     const subagentSpec = {
         name: 'subagents',
-        description: 'Spawn child task agents.',
-        parameters: {
-            type: 'object',
-            properties: {
-                action: { type: 'string' },
-                task: { type: 'string' },
-                wait: { type: 'boolean' }
-            }
-        }
+        description: 'Legacy subagent compatibility tool.',
+        parameters: { type: 'object', properties: { action: { type: 'string' } } }
     };
     const gateway = {
         gatewayToolRuntimeRegistry: {
@@ -383,6 +398,7 @@ test('AILIS persona exposes subagent handoff while TaskAgent keeps Codex core by
                 }
             ],
             definition: (toolId) => {
+                if (collaborationSpecs[toolId]) return { spec: collaborationSpecs[toolId] };
                 if (toolId === 'subagents') return { spec: subagentSpec };
                 if (toolId === 'task_results') return { spec: taskResultsSpec };
                 return null;
@@ -395,12 +411,20 @@ test('AILIS persona exposes subagent handoff while TaskAgent keeps Codex core by
             agentRole: 'persona_orchestrator'
         }
     });
-    assert.deepEqual(personaSpecs.map((spec) => spec.name), ['task_results', 'subagents']);
-    const personaDelegateSpec = personaSpecs.find((spec) => spec.name === 'subagents');
-    assert.deepEqual(personaDelegateSpec.parameters.required, ['action', 'task']);
-    assert.deepEqual(personaDelegateSpec.parameters.properties.action.enum, ['spawn', 'resume']);
-    assert.equal(personaDelegateSpec.parameters.properties.wait, undefined);
-    assert.equal(personaDelegateSpec.parameters.properties.subagentId, undefined);
+    assert.deepEqual(personaSpecs.map((spec) => spec.name), [
+        'task_results',
+        'spawn_agent',
+        'followup_task',
+        'wait_agent',
+        'list_agents',
+        'close_agent'
+    ]);
+    const spawnSpec = personaSpecs.find((spec) => spec.name === 'spawn_agent');
+    const followupSpec = personaSpecs.find((spec) => spec.name === 'followup_task');
+    assert.deepEqual(spawnSpec.parameters.required, ['task_name', 'message']);
+    assert.equal(spawnSpec.parameters.additionalProperties, false);
+    assert.equal(followupSpec.output_schema, undefined);
+    assert.equal(personaSpecs.some((spec) => spec.name === 'subagents'), false);
 
     const taskSpecs = buildAgentDirectToolSpecs(gateway, {
         requestContext: {
@@ -418,6 +442,39 @@ test('AILIS persona exposes subagent handoff while TaskAgent keeps Codex core by
         }
     });
     assert.ok(explicitTaskSpecs.some((spec) => spec.name === 'subagents'));
+});
+
+test('AILIS sanitized agent fork follows Codex rollout filtering rules', () => {
+    const items = [
+        { type: 'message', role: 'system', content: [{ type: 'input_text', text: 'system' }] },
+        { type: 'message', role: 'developer', content: [{ type: 'input_text', text: 'developer' }] },
+        { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'old goal' }] },
+        { type: 'message', role: 'assistant', phase: 'commentary', content: [{ type: 'output_text', text: 'progress' }] },
+        { type: 'message', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: 'old final' }] },
+        { type: 'function_call', name: 'web_search', call_id: 'call-1', arguments: '{}' },
+        { type: 'function_call_output', call_id: 'call-1', output: 'large tool output' },
+        { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'current correction' }] }
+    ];
+    const contextManager = {
+        rawItems: () => items,
+        historyVersion: () => 7,
+        referenceContextItem: () => ({ type: 'turn_context', id: 'ref-1' })
+    };
+
+    const checkpoint = build_forked_context_checkpoint(contextManager, 'all');
+    assert.equal(checkpoint.history_version, 7);
+    assert.deepEqual(checkpoint.items.map((item) => `${item.role || item.type}:${item.phase || ''}`), [
+        'system:',
+        'developer:',
+        'user:',
+        'assistant:final_answer',
+        'user:'
+    ]);
+    assert.equal(checkpoint.items.some((item) => item.type === 'function_call_output'), false);
+
+    const recentCheckpoint = build_forked_context_checkpoint(contextManager, '1');
+    assert.deepEqual(recentCheckpoint.items.map((item) => item.role), ['user']);
+    assert.equal(recentCheckpoint.reference_context_item, null);
 });
 
 test('AILIS Agent Runner accepts local vLLM and Ollama settings without API keys', () => {

@@ -8,6 +8,13 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { AILISRuntime } = require('../electron/ailis-runtime.cjs');
 const { AILISGateway } = require('../electron/ailis-gateway.cjs');
+const {
+    AgentPath,
+    AgentStatus,
+    InputQueue,
+    InterAgentCommunication,
+    SubagentNotification
+} = require('../electron/ailis-agent-control.cjs');
 const { CompactedItem } = require('../electron/ailis-prompt-model.cjs');
 const { ResponseItem } = require('../electron/ailis-response-model.cjs');
 
@@ -29,6 +36,34 @@ async function callTool(baseUrl, payload) {
         body: JSON.stringify(payload)
     });
 }
+
+test('AILIS agent protocol mirrors Codex mailbox and status object shapes', async () => {
+    const childPath = new AgentPath('/root/mavuika_guide');
+    const status = AgentStatus.Completed('verified answer');
+    const notification = new SubagentNotification(childPath, status).render();
+    assert.equal(childPath.parent().toString(), '/root');
+    assert.match(notification, /^<subagent_notification>/);
+    assert.match(notification, /"agent_path":"\/root\/mavuika_guide"/);
+    assert.match(notification, /"completed":"verified answer"/);
+
+    const communication = new InterAgentCommunication({
+        author: childPath,
+        recipient: childPath.parent(),
+        content: notification
+    });
+    const item = communication.to_response_input_item();
+    assert.equal(item.role, 'assistant');
+    assert.equal(item.phase, 'commentary');
+    assert.match(item.content[0].text, /"author":"\/root\/mavuika_guide"/);
+
+    const queue = new InputQueue();
+    const context = { runId: 'parent-run', sessionId: 'parent-session' };
+    const waiting = queue.subscribe_mailbox(context, 1000);
+    queue.enqueue_mailbox_communication(context, communication);
+    assert.equal(await waiting, true);
+    assert.equal(queue.get_pending_input(context).length, 1);
+    assert.equal(queue.get_pending_input(context).length, 0);
+});
 
 test('AILIS runtime guards tool results and repairs incomplete transcripts', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-runtime-direct-'));
@@ -810,6 +845,95 @@ test('AILIS runtime resumes a completed TaskAgent from its semantic checkpoint b
     assert.equal(childContexts[1].taskAgentInheritanceMode, 'checkpoint');
     assert.deepEqual(childContexts[1].initialContextManagerCheckpoint, checkpoint);
     assert.match(resumed.details.result.displayText, /resumed:now include the missing field/);
+});
+
+test('AILIS Codex-style agent tools preserve identity and deliver completion through mailbox', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-agent-control-runtime-'));
+    const childContexts = [];
+    let executionCount = 0;
+    const childCheckpoint = {
+        history_version: 2,
+        items: [{
+            type: 'message',
+            role: 'user',
+            content: [{ type: 'input_text', text: 'verified evidence checkpoint' }]
+        }]
+    };
+    const runtime = new AILISRuntime({
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit'),
+        subagentExecutor: async ({ subagent, context }) => {
+            childContexts.push(context);
+            executionCount += 1;
+            await new Promise((resolve) => setTimeout(resolve, 20));
+            return {
+                ok: true,
+                status: 'completed',
+                displayText: `answer-${executionCount}:${subagent.task}`,
+                taskRunHandoff: {
+                    status: 'completed',
+                    resume: { contextManagerCheckpoint: childCheckpoint }
+                }
+            };
+        }
+    });
+    const context = {
+        runId: 'agent-control-parent',
+        sessionId: 'main',
+        agent_path: '/root',
+        forked_context_checkpoint: {
+            history_version: 2,
+            items: [{
+                type: 'message',
+                role: 'user',
+                content: [{ type: 'input_text', text: 'original parent request' }]
+            }]
+        }
+    };
+
+    const spawned = await runtime.executeTool('spawn_agent', {
+        task_name: 'mavuika_guide',
+        message: 'Research the current guide.',
+        fork_turns: 'all'
+    }, context);
+    assert.deepEqual(spawned.structuredContent, {
+        task_name: '/root/mavuika_guide',
+        nickname: null
+    });
+    assert.match(spawned.content[0].text, /root\/mavuika_guide/);
+
+    const firstWait = await runtime.executeTool('wait_agent', { timeout_ms: 1000 }, context);
+    assert.equal(firstWait.structuredContent.timed_out, false);
+    const firstMailbox = runtime.drain_mailbox_input_items(context);
+    assert.equal(firstMailbox.length, 1);
+    assert.match(JSON.stringify(firstMailbox[0].content), /subagent_notification/);
+    assert.match(JSON.stringify(firstMailbox[0].content), /answer-1:Research the current guide/);
+
+    const beforeFollowup = runtime.list_agents({}, context);
+    assert.equal(beforeFollowup.agents.length, 1);
+    const stableAgentName = beforeFollowup.agents[0].agent_name;
+    const stableSubagentId = [...runtime.subagents.values()][0].id;
+
+    await runtime.executeTool('followup_task', {
+        target: 'mavuika_guide',
+        message: 'Verify the weapon ranking.'
+    }, context);
+    const secondWait = await runtime.executeTool('wait_agent', { timeout_ms: 1000 }, context);
+    assert.equal(secondWait.structuredContent.timed_out, false);
+    const secondMailbox = runtime.drain_mailbox_input_items(context);
+    assert.equal(secondMailbox.length, 1);
+    assert.match(JSON.stringify(secondMailbox[0].content), /answer-2:Verify the weapon ranking/);
+
+    assert.equal(executionCount, 2);
+    assert.equal(runtime.subagents.size, 1);
+    assert.equal([...runtime.subagents.values()][0].id, stableSubagentId);
+    assert.equal(runtime.list_agents({}, context).agents[0].agent_name, stableAgentName);
+    assert.equal(childContexts[0].taskAgentInheritanceMode, 'checkpoint');
+    assert.deepEqual(childContexts[0].initialContextManagerCheckpoint, context.forked_context_checkpoint);
+    assert.equal(childContexts[1].taskAgentInheritanceMode, 'checkpoint');
+    assert.deepEqual(childContexts[1].initialContextManagerCheckpoint, childCheckpoint);
+    await runtime.shutdown();
 });
 
 test('AILIS runtime subagent failures retain a handoff package for the parent', async () => {
