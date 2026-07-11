@@ -49,6 +49,7 @@ const {
 } = require('./ailis-model-input-builder.cjs');
 const {
     normalizeToolOutput,
+    sanitizeWebToolTextForModel,
     toolOutputToRuntimeEvent
 } = require('./ailis-agent-object-model.cjs');
 const {
@@ -1349,8 +1350,6 @@ function collectAgentUnresolvedFields(stepResults = [], latestDecision = null) {
     };
     for (const stepResult of (Array.isArray(stepResults) ? stepResults : []).slice(-8)) {
         const details = getToolResultDetails(stepResult);
-        push(details.missing_fields || details.missingFields);
-        push(details.evidence_gap || details.evidenceGap);
         if (stepResult.response?.ok === false) {
             push(stepResult.response.error || details.error);
         }
@@ -6125,6 +6124,8 @@ function sanitizeWebStructuredContentForPrompt(value, depth = 0, context = {}) {
         'source_retrieval_complete',
         'sourceWindowCoversTask',
         'source_window_covers_query',
+        'observationContract',
+        'observation_contract',
         'lineNumber',
         'line_number',
         'searchConfidence',
@@ -6151,6 +6152,16 @@ function sanitizeWebStructuredContentForPrompt(value, depth = 0, context = {}) {
         'evidence_score',
         'evidenceScoreBreakdown',
         'evidence_score_breakdown',
+        'outputComplete',
+        'output_complete',
+        'outputTruncatedForModel',
+        'output_truncated_for_model',
+        'pageType',
+        'page_type',
+        'pageStatus',
+        'page_status',
+        'suggestedNextCalls',
+        'suggested_next_calls',
         'reasoningReady',
         'reasoning_ready',
         'modelJudgesEvidence',
@@ -6287,9 +6298,12 @@ function buildToolObservationDigest(stepResults = []) {
         const evidenceRefs = getStepEvidenceRefs(stepResult);
         const webTool = isWebEvidenceToolName(stepResult.tool);
         const resultText = extractToolResultText(result) || response.error || '';
+        const modelVisibleResultText = webTool
+            ? sanitizeWebToolTextForModel(resultText)
+            : resultText;
         const promptText = stepResult.tool === 'artifact_tools'
-            ? buildArtifactToolObservationPromptText(resultText)
-            : buildGenericToolObservationPromptText(resultText, response);
+            ? buildArtifactToolObservationPromptText(modelVisibleResultText)
+            : buildGenericToolObservationPromptText(modelVisibleResultText, response);
         const detailsForPrompt = webTool && result.details
             ? sanitizeWebStructuredContentForPrompt(result.details)
             : result.details;
@@ -6340,6 +6354,7 @@ function buildTaskAgentFinalizationContext({
     return summarizeForModel([
         'TaskAgent finalization package.',
         'Write the best supported final answer for the original task. Do not call or serialize tools.',
+        'Do not require exhaustive coverage or perfect evidence unless the original task explicitly requires it. Omit unsupported optional details; state a limitation only when it materially changes the answer.',
         '',
         `ORIGINAL_TASK:\n${normalizeText(message)}`,
         constraints.length ? `CONSTRAINTS:\n${JSON.stringify(constraints, null, 2)}` : '',
@@ -6410,7 +6425,7 @@ function buildLlmAgentDirectToolPrompt({
         'The runtime_environment object is the authoritative host clock. Use its current_date, current_time, timezone, and utc_offset instead of assuming the training-data date.',
         'For facts that may have changed, use fresh evidence already present in the conversation or verify them through TaskAgent. Do not present pretrained knowledge as current fact when freshness matters.',
         'task_results is a read-only library of completed public work. Its output is candidate context, and you decide whether it is relevant and sufficient.',
-        'spawn_agent creates a persistent TaskAgent with a canonical task_name and returns immediately. Author the complete initial message from the conversation, current task state, constraints, and evidence.',
+        'spawn_agent creates a persistent TaskAgent with a canonical task_name and returns immediately. Pass the user\'s actual task, relevant corrections, and already-known evidence without expanding the requested scope or inventing stricter acceptance criteria.',
         'A TaskAgent final status arrives through a structured subagent_notification in the parent mailbox. Use wait_agent only when the user answer depends on that result; wait_agent itself does not contain the child answer.',
         'For related additional work, call followup_task with the existing task_name. This continues the same TaskAgent context and evidence; do not spawn another agent for the same unresolved thread.',
         'Use list_agents when you need to recover a canonical task_name. Use close_agent only when the persistent TaskAgent is no longer needed.',
@@ -6431,7 +6446,7 @@ function buildLlmAgentDirectToolPrompt({
         'For data reasoning tasks, use code as a calculator and verifier: write scripts that parse the source file, compute the needed result, and print a short answer plus compact evidence. Do not write scripts whose main purpose is to dump large files, whole spreadsheets, logs, or documents back into model context.',
         'For long-running work, you may attach progress_note to a tool call or include a short public progress sentence only at meaningful milestones: plan changed, key evidence found, strategy changed after failure, blocker/recovery identified, or evidence is sufficient and you are preparing the final answer. Leave progress_note empty for routine tool calls. Do not expose raw JSON, hidden reasoning, internal IDs, stack traces, token counts, or generic "I am thinking" text.',
         'When collaboration tools are exposed, spawn_agent creates an independent Agent thread, followup_task continues it, and wait_agent waits for its mailbox notification. Do not create duplicate threads for the same unresolved work.',
-        'When a tool result says complete=true, truncated=false, reasoning_ready=true, or presents a Source viewport with line ranges/has-more markers, treat it like a source viewport: answer from it if it covers the question. A <truncated omitted_approx_tokens="..."/> marker means model-visible context was shortened, not that the source failed. Continue only when a concrete required field is still missing. Older exploratory observations may be compacted; rely on the latest evidence or write a focused verifier.',
+        'Tool outputs provide observations and mechanical transport metadata, not a decision about whether the user task is complete. Judge sufficiency from the original task and the source content yourself. A Source viewport line range, has-more marker, or <truncated omitted_approx_tokens="..."/> marker describes visible context only; it does not require another call when the visible evidence already supports the answer.',
         'When exec output is truncated, use the visible outputId with output_read/output_tail/output_search to inspect a needed slice. Do not rerun the same command solely to recover truncated text.',
         'Runtime environment and attached file metadata are provided as ordinary user message context items. Use them for path, shell, date, time, and freshness decisions.'
     ];
@@ -6685,7 +6700,7 @@ async function callLlmAgentDirectToolDecision(settings, payload, {
     const finalizationContext = forceFinalResponse
         ? normalizeText(payload.finalizationContext)
         : '';
-    const finalizationInstruction = 'TaskAgent finalization: answer the original task from the supplied evidence package. Do not call or serialize any tool. Return plain user-facing prose only. If evidence is incomplete, give the supported partial result and state the concrete remaining gap.';
+    const finalizationInstruction = 'TaskAgent finalization: answer the original task from the supplied evidence package. Do not call or serialize any tool. Return plain user-facing prose only. Give the best supported answer now; omit unsupported optional details, and mention a limitation only when it materially affects the answer.';
     const providerPayload = finalizationContext
         ? {
               ...payload,
@@ -8373,9 +8388,7 @@ class AILISAgentRunner {
         const maxSteps = isTaskAgentRole(agentRuntimeRole)
             ? Math.max(2, Math.min(boundedMaxSteps, TASK_AGENT_MAX_MODEL_ROUNDS))
             : boundedMaxSteps;
-        const finalizationIteration = isTaskAgentRole(agentRuntimeRole)
-            ? maxSteps - 1
-            : maxSteps;
+        const finalizationIteration = Math.max(0, maxSteps - 1);
         const events = initialEvents.slice();
         const stepResults = initialStepResults.slice();
         let modelInputContextManager = restoreModelInputContextManagerFromCheckpoint(initialContextManagerCheckpoint);

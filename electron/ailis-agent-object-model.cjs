@@ -85,6 +85,101 @@ function normalizeProviderMetadata(input = {}) {
         : null;
 }
 
+const WEB_MODEL_ADJUDICATION_KEYS = new Set([
+    'complete',
+    'outputComplete',
+    'output_complete',
+    'outputTruncatedForModel',
+    'output_truncated_for_model',
+    'sourceRetrievalComplete',
+    'source_retrieval_complete',
+    'sourceWindowCoversTask',
+    'source_window_covers_task',
+    'observationContract',
+    'observation_contract',
+    'readiness',
+    'reasoningReady',
+    'reasoning_ready',
+    'modelJudgesEvidence',
+    'model_judges_evidence',
+    'isEvidence',
+    'is_evidence',
+    'answerReadiness',
+    'answer_readiness',
+    'retrievalReadiness',
+    'retrieval_readiness',
+    'readinessAuthority',
+    'readiness_authority',
+    'evidenceDecision',
+    'evidence_decision',
+    'requiresEvidenceAudit',
+    'requires_evidence_audit',
+    'evidenceGap',
+    'evidence_gap',
+    'evidenceQuality',
+    'evidence_quality',
+    'evidenceScore',
+    'evidence_score',
+    'evidenceScoreBreakdown',
+    'evidence_score_breakdown',
+    'contentQuality',
+    'content_quality',
+    'recoveryHint',
+    'recovery_hint',
+    'suggestedNextCalls',
+    'suggested_next_calls',
+    'outputPolicy',
+    'output_policy',
+    'retrievalNote',
+    'retrieval_note',
+    'pageType',
+    'page_type',
+    'pageStatus',
+    'page_status'
+]);
+
+const WEB_MODEL_ADJUDICATION_LINE = /^\s*(?:complete|output[_ ]?(?:complete|truncated[_ ]?for[_ ]?model|policy)|source[_ ]?retrieval[_ ]?complete|source[_ ]?window[_ ]?covers[_ ]?task|observation[_ ]?contract|reasoning[_ ]?ready|model[_ ]?judges[_ ]?evidence|is[_ ]?evidence|(?:answer|retrieval)?[_ ]?readiness|readiness[_ ]?authority|evidence[_ ]?(?:decision|gap|quality|score)|content[_ ]?quality|requires[_ ]?evidence[_ ]?audit|recovery[_ ]?hint|retrieval[_ ]?note|suggested[_ ]?next[_ ]?calls|page[_ ]?(?:type|status))\s*[:=]/i;
+
+function isWebToolName(toolName = '') {
+    const normalized = normalizeText(toolName).toLowerCase();
+    return /(?:^|__|:|\.)(web_search|web_fetch|web_research|web_extract_links|open_page|find_in_page)$/.test(normalized) ||
+        ['web_search', 'web_fetch', 'web_research', 'web_extract_links', 'open_page', 'find_in_page'].includes(normalized);
+}
+
+function sanitizeWebToolDetailsForModel(value, depth = 0) {
+    if (depth > 8 || value === null || value === undefined) {
+        return value;
+    }
+    if (Array.isArray(value)) {
+        return value.map((item) => sanitizeWebToolDetailsForModel(item, depth + 1));
+    }
+    if (typeof value !== 'object') {
+        return value;
+    }
+    return Object.fromEntries(Object.entries(value)
+        .filter(([key]) => !WEB_MODEL_ADJUDICATION_KEYS.has(key))
+        .map(([key, item]) => [key, sanitizeWebToolDetailsForModel(item, depth + 1)]));
+}
+
+function sanitizeWebToolTextForModel(value = '') {
+    const text = normalizeText(value);
+    if (!text) {
+        return '';
+    }
+    if ((text.startsWith('{') && text.endsWith('}')) || (text.startsWith('[') && text.endsWith(']'))) {
+        try {
+            return safeJsonStringify(sanitizeWebToolDetailsForModel(JSON.parse(text)), text);
+        } catch {
+            // Fall through to the line-oriented representation used by MCP text output.
+        }
+    }
+    return text
+        .split(/\r?\n/)
+        .filter((line) => !WEB_MODEL_ADJUDICATION_LINE.test(line))
+        .join('\n')
+        .trim();
+}
+
 function normalizeToolOutput(input = {}, index = 0, options = {}) {
     const response = input.response || input.result || {};
     const result = response.result ?? input.output ?? response.output ?? null;
@@ -103,7 +198,14 @@ function normalizeToolOutput(input = {}, index = 0, options = {}) {
             details.error ||
             ''
     );
+    const toolName = normalizeText(input.tool || input.name || input.nativeToolCall?.name);
     const rawText = extractText(result) || errorSummary || extractText(response);
+    const outputText = isWebToolName(toolName)
+        ? sanitizeWebToolTextForModel(rawText)
+        : rawText;
+    const modelDetails = isWebToolName(toolName)
+        ? sanitizeWebToolDetailsForModel(details || {})
+        : cloneJson(details || {});
     const startedAt = Number(input.startedAt ?? input.started_at ?? 0) || null;
     const finishedAt = Number(input.finishedAt ?? input.finished_at ?? 0) || null;
     const durationMs = Number(
@@ -119,18 +221,18 @@ function normalizeToolOutput(input = {}, index = 0, options = {}) {
         schema: 'ailis.tool_output.v1',
         callId: canonicalCallId(input, index),
         sourceId: input.id || null,
-        toolName: normalizeText(input.tool || input.name || input.nativeToolCall?.name),
+        toolName,
         title: normalizeText(input.title || input.tool || input.name || 'tool'),
         args: cloneJson(input.modelArgs || input.args || input.nativeToolCall?.arguments || {}),
         status: normalizeText(response.status || input.status || (ok ? 'completed' : 'failed')),
         ok,
-        outputText: rawText,
-        outputPreview: summarizeForModel(rawText, options.previewChars || DEFAULT_THREAD_ITEM_PREVIEW_CHARS),
+        outputText,
+        outputPreview: summarizeForModel(outputText, options.previewChars || DEFAULT_THREAD_ITEM_PREVIEW_CHARS),
         errorSummary,
         evidenceRefs: Array.isArray(input.evidenceRefs) ? input.evidenceRefs.slice() : [],
         evidenceArtifacts: Array.isArray(input.evidenceArtifacts) ? cloneJson(input.evidenceArtifacts) : [],
         providerMetadata: normalizeProviderMetadata(input),
-        details: cloneJson(details || {}),
+        details: modelDetails,
         startedAt,
         finishedAt,
         durationMs: Number.isFinite(durationMs) ? durationMs : null,
@@ -630,6 +732,8 @@ module.exports = {
     extractText,
     makeRolloutItem,
     normalizeToolOutput,
+    sanitizeWebToolDetailsForModel,
+    sanitizeWebToolTextForModel,
     toolOutputToResponseItems,
     toolOutputToRuntimeEvent,
     toolOutputToThreadItem

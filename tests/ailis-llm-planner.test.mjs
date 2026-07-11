@@ -607,7 +607,7 @@ test('Persona orchestrator prompt stays in AILIS persona and exposes Codex colla
         assert.match(llmServer.calls[0].system, /可爱的虚拟助手，名字固定为AILIS/);
         assert.match(llmServer.calls[0].system, /关系表达协议/);
         assert.match(llmServer.calls[0].system, /authoritative host clock/);
-        assert.match(llmServer.calls[0].system, /Author the complete initial message/);
+        assert.match(llmServer.calls[0].system, /without expanding the requested scope/);
         const toolNames = (llmServer.calls[0].payload.tools || []).map((tool) => tool.function?.name || tool.name);
         assert.deepEqual(toolNames, [
             'task_results',

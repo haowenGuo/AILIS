@@ -8,6 +8,10 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { AILISGateway } = require('../electron/ailis-gateway.cjs');
 const {
+    normalizeToolOutput,
+    toolOutputToResponseItems
+} = require('../electron/ailis-agent-object-model.cjs');
+const {
     AILISAgentRunner,
         buildAgentDirectToolSpecs,
         buildLlmAgentDirectToolPrompt,
@@ -77,6 +81,7 @@ test('AILIS parent Persona prompt stays conversational while TaskAgent keeps exe
     assert.match(personaPrompt.instructions, /Keep ordinary conversation natural/);
     assert.match(personaPrompt.instructions, /authoritative host clock/);
     assert.match(personaPrompt.instructions, /spawn_agent creates a persistent TaskAgent/);
+    assert.match(personaPrompt.instructions, /without expanding the requested scope/);
     assert.match(personaPrompt.instructions, /structured subagent_notification/);
     assert.doesNotMatch(personaPrompt.instructions, /mcp__ailis_research__web_research|For local file and data tasks|When exec output is truncated/);
 
@@ -87,6 +92,8 @@ test('AILIS parent Persona prompt stays conversational while TaskAgent keeps exe
     });
     assert.match(taskPrompt.instructions, /mcp__ailis_research__web_research/);
     assert.match(taskPrompt.instructions, /For local file and data tasks/);
+    assert.match(taskPrompt.instructions, /mechanical transport metadata, not a decision/);
+    assert.doesNotMatch(taskPrompt.instructions, /complete=true|reasoning_ready=true/);
     assert.doesNotMatch(taskPrompt.instructions, /Keep ordinary conversation natural/);
 });
 
@@ -257,6 +264,70 @@ test('web source viewport prompt digest uses only canonical Codex/OAI names', ()
     assert.match(digest.structuredContent, /"lineno":10/);
     assert.doesNotMatch(digest.structuredContent, /sourceWindow|sourceViewport|modelVisibleMode|sourceRetrievalComplete/);
     assert.doesNotMatch(digest.structuredContent, /lineNumber|line_number|web_fetch/);
+});
+
+test('web observations keep source content but remove Harness evidence verdicts from model input', () => {
+    const toolOutput = normalizeToolOutput({
+        id: 'fetch-verdict-1',
+        tool: 'mcp__ailis_research__web_fetch',
+        response: {
+            ok: true,
+            status: 'completed',
+            result: {
+                content: [{
+                    type: 'text',
+                    text: [
+                        'Source viewport:',
+                        'L138: 洛茜是六星输出干员。',
+                        'Evidence gap: only metadata was found',
+                        'reasoning_ready=false',
+                        'suggested_next_calls: fetch another page'
+                    ].join('\n')
+                }],
+                structuredContent: {
+                    sourceWindow: {
+                        type: 'source_viewport',
+                        action: { type: 'open_page', url: 'https://example.test/guide', lineno: 138 },
+                        url: 'https://example.test/guide',
+                        lineStart: 138,
+                        lineEnd: 138,
+                        totalLines: 200,
+                        hasMoreAfter: true,
+                        lines: [{ lineno: 138, text: '洛茜是六星输出干员。' }]
+                    },
+                    complete: false,
+                    reasoningReady: false,
+                    evidenceGap: 'only metadata was found',
+                    suggestedNextCalls: [{ tool: 'web_fetch' }],
+                    outputTruncatedForModel: true
+                }
+            }
+        }
+    });
+    const serializedItems = JSON.stringify(toolOutputToResponseItems(toolOutput));
+
+    assert.match(serializedItems, /洛茜是六星输出干员/);
+    assert.match(serializedItems, /Has more after: true/);
+    assert.doesNotMatch(serializedItems, /Evidence gap|reasoning_ready|suggested_next_calls|outputTruncatedForModel|only metadata/);
+
+    const [digest] = buildToolObservationDigest([{
+        id: 'fetch-verdict-1',
+        tool: 'mcp__ailis_research__web_fetch',
+        response: {
+            ok: true,
+            status: 'completed',
+            result: {
+                content: [{ type: 'text', text: 'L138: 洛茜是六星输出干员。\nEvidence gap: only metadata was found\nreasoning_ready=false' }],
+                structuredContent: {
+                    complete: false,
+                    evidenceGap: 'only metadata was found',
+                    reasoningReady: false
+                }
+            }
+        }
+    }]);
+    assert.match(digest.text, /洛茜是六星输出干员/);
+    assert.doesNotMatch(`${digest.text}\n${digest.structuredContent}`, /Evidence gap|reasoning_ready|only metadata|"complete"/);
 });
 
 test('AILIS Agent Runner passes parent LLM settings only to collaboration tool calls', async () => {
