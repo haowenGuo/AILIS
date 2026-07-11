@@ -121,7 +121,7 @@ function normalizeToolOutput(input = {}, index = 0, options = {}) {
         sourceId: input.id || null,
         toolName: normalizeText(input.tool || input.name || input.nativeToolCall?.name),
         title: normalizeText(input.title || input.tool || input.name || 'tool'),
-        args: cloneJson(input.args || input.nativeToolCall?.arguments || {}),
+        args: cloneJson(input.modelArgs || input.args || input.nativeToolCall?.arguments || {}),
         status: normalizeText(response.status || input.status || (ok ? 'completed' : 'failed')),
         ok,
         outputText: rawText,

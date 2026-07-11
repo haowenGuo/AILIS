@@ -28,7 +28,7 @@ const DEFAULT_MAX_RESULT_TEXT_CHARS = 6000;
 const DEFAULT_MAX_TRANSCRIPT_ITEMS = 500;
 const DEFAULT_SUBAGENT_WAIT_TIMEOUT_MS = 30000;
 const DEFAULT_SUBAGENT_RUN_TIMEOUT_MS = 15 * 60 * 1000;
-const TASK_AGENT_MAX_MODEL_ROUNDS = 3;
+const TASK_AGENT_MAX_MODEL_ROUNDS = 4;
 
 const FILE_MUTATING_TOOLS = new Set(['write', 'edit', 'apply_patch']);
 const FILE_READONLY_TOOLS = new Set(['read', 'web_fetch']);
@@ -212,7 +212,44 @@ function buildSubagentRelayText(response = {}) {
         subagent.taskRunHandoff ||
         subagent.task_run_handoff ||
         null;
+    const handle = {
+        subagent_id: normalizeString(subagent.id || response.subagentId),
+        child_run_id: normalizeString(subagent.childRunId || response.childRunId),
+        status
+    };
     if (taskRunHandoff && typeof taskRunHandoff === 'object') {
+        const handoffStatus = normalizeString(taskRunHandoff.status, status);
+        if (handoffStatus !== 'completed') {
+            return JSON.stringify({
+                type: 'task_agent_handoff',
+                ...handle,
+                status: handoffStatus,
+                task: summarize(taskRunHandoff.task || subagent.task || response.task, 600),
+                partial_answer: summarize(taskRunHandoff.partialAnswer, 1600),
+                failure_reason: summarize(
+                    taskRunHandoff.failureAnalysis?.reason ||
+                        taskRunHandoff.failureAnalysis?.bottleneck ||
+                        taskRunHandoff.reason,
+                    700
+                ),
+                evidence: (Array.isArray(taskRunHandoff.collectedData) ? taskRunHandoff.collectedData : [])
+                    .slice(-4)
+                    .map((item) => ({
+                        source: normalizeString(item.source || item.title),
+                        summary: summarize(item.summary, 700),
+                        evidence_refs: Array.isArray(item.evidenceRefs) ? item.evidenceRefs.slice(0, 6) : [],
+                        output_ref: normalizeString(item.outputId || item.artifactId)
+                    })),
+                unresolved_fields: Array.isArray(taskRunHandoff.failureAnalysis?.unresolvedQuestions)
+                    ? taskRunHandoff.failureAnalysis.unresolvedQuestions.slice(0, 8)
+                    : [],
+                next_step: summarize(taskRunHandoff.nextStep?.recommendation, 500),
+                continuation: {
+                    available: taskRunHandoff.resume?.checkpointAvailable === true,
+                    action: 'resume'
+                }
+            }, null, 2);
+        }
         const handoffText = normalizeString(
             taskRunHandoff.userVisibleSummary ||
                 taskRunHandoff.finalAnswer ||
@@ -223,11 +260,6 @@ function buildSubagentRelayText(response = {}) {
         }
     }
     const task = summarize(normalizeString(subagent.task || response.task), 180);
-    const handle = {
-        subagent_id: normalizeString(subagent.id || response.subagentId),
-        child_run_id: normalizeString(subagent.childRunId || response.childRunId),
-        status
-    };
     if (status === 'completed') {
         return normalizeString(
             result.finalAnswer ||

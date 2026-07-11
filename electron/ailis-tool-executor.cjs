@@ -54,6 +54,7 @@ async function executeToolStep({
         title: step.title,
         tool: step.tool,
         args: step.args,
+        ...(step.modelArgs ? { modelArgs: step.modelArgs } : {}),
         ...(step.providerMetadata ? { providerMetadata: step.providerMetadata } : {}),
         ...(step.provider_metadata ? { provider_metadata: step.provider_metadata } : {}),
         ...(step.nativeToolCall ? { nativeToolCall: step.nativeToolCall } : {}),

@@ -42,6 +42,7 @@ const {
 const {
     buildModelInputContextManager,
     functionCall,
+    functionCallOutput,
     recordToolOutputToContextManager,
     restoreModelInputContextManagerFromCheckpoint,
     responseItemsToChatMessages
@@ -89,7 +90,8 @@ const ARTIFACT_OBSERVATION_ROW_WINDOW_TEXT_CHARS = 8000;
 const MAX_MCP_TOOL_DESCRIPTION_CHARS = 900;
 const DEFAULT_AGENT_LOOP_STEPS = 30;
 const MAX_AGENT_LOOP_STEPS = 30;
-const TASK_AGENT_MAX_MODEL_ROUNDS = 3;
+const TASK_AGENT_MAX_MODEL_ROUNDS = 4;
+const TASK_AGENT_FINALIZATION_CONTEXT_CHARS = 14000;
 const PERSONA_TASK_AGENT_WAIT_TIMEOUT_MS = 15 * 60 * 1000;
 const DEFAULT_PENDING_PLAN_TTL_MS = 30 * 60 * 1000;
 const DEFAULT_AGENT_DECISION_TIMEOUT_MS = 120000;
@@ -5113,6 +5115,37 @@ function buildInvalidDecisionObservationEvent(decision = {}, iteration = 0, maxS
     };
 }
 
+function recordInvalidDecisionToContextManager(contextManager, decision = {}, options = {}) {
+    if (!contextManager || typeof contextManager.recordItems !== 'function') {
+        return false;
+    }
+    const rawToolCall = decision.nativeToolCall || decision.raw?.toolCall;
+    const name = normalizeText(rawToolCall?.name || rawToolCall?.tool);
+    if (!name) {
+        return false;
+    }
+    const callId = normalizeText(
+        rawToolCall?.id || rawToolCall?.call_id,
+        `rejected_${name}_${randomUUID()}`
+    );
+    const args = rawToolCall?.arguments && typeof rawToolCall.arguments === 'object'
+        ? rawToolCall.arguments
+        : {};
+    contextManager.recordItems([
+        functionCall({
+            name,
+            arguments: args,
+            call_id: callId
+        }),
+        functionCallOutput({
+            call_id: callId,
+            output: `Tool call rejected by the visible schema: ${normalizeText(decision.error, decision.status)}. Correct the arguments before retrying.`,
+            success: false
+        })
+    ], options);
+    return true;
+}
+
 function isFailedToolStepResult(stepResult) {
     return Boolean(stepResult?.response && stepResult.response.ok !== true);
 }
@@ -5539,13 +5572,16 @@ function applyPersonaTaskAgentLifecycle(step = {}) {
     if (!isSubagentHandoffStep(step)) {
         return step;
     }
-    const args = step.args && typeof step.args === 'object' ? { ...step.args } : {};
+    const modelArgs = step.args && typeof step.args === 'object' ? { ...step.args } : {};
+    const args = { ...modelArgs };
     delete args.timeoutMs;
+    const requestedAction = normalizeText(args.action || 'spawn').toLowerCase();
     return {
         ...step,
+        modelArgs,
         args: {
             ...args,
-            action: 'spawn',
+            action: requestedAction === 'resume' ? 'resume' : 'spawn',
             wait: true,
             waitTimeoutMs: PERSONA_TASK_AGENT_WAIT_TIMEOUT_MS
         }
@@ -5765,8 +5801,8 @@ function buildPersonaTaskDelegateSpec() {
             properties: {
                 action: {
                     type: 'string',
-                    enum: ['spawn'],
-                    description: 'Delegate the task. Runtime lifecycle is automatic.'
+                    enum: ['spawn', 'resume'],
+                    description: 'Use spawn for a new task. Use resume after a partial or budget-limited result to continue the same TaskAgent with its preserved checkpoint and evidence.'
                 },
                 task: {
                     type: 'string',
@@ -6393,6 +6429,33 @@ function buildToolObservationDigest(stepResults = []) {
     });
 }
 
+function buildTaskAgentFinalizationContext({
+    message = '',
+    constraints = [],
+    currentPlan = null,
+    unresolvedFields = [],
+    stepResults = []
+} = {}) {
+    const evidence = buildToolObservationDigest(stepResults).map((item) => ({
+        tool: item.tool,
+        status: item.status,
+        ok: item.ok,
+        args: item.args,
+        observation: item.text,
+        evidence_refs: item.evidenceRefs
+    }));
+    return summarizeForModel([
+        'TaskAgent finalization package.',
+        'Write the best supported final answer for the original task. Do not call or serialize tools.',
+        '',
+        `ORIGINAL_TASK:\n${normalizeText(message)}`,
+        constraints.length ? `CONSTRAINTS:\n${JSON.stringify(constraints, null, 2)}` : '',
+        currentPlan ? `CURRENT_PLAN:\n${JSON.stringify(currentPlan, null, 2)}` : '',
+        unresolvedFields.length ? `UNRESOLVED_FIELDS:\n${JSON.stringify(unresolvedFields, null, 2)}` : '',
+        `EVIDENCE_OBSERVATIONS:\n${JSON.stringify(evidence, null, 2)}`
+    ].filter(Boolean).join('\n\n'), TASK_AGENT_FINALIZATION_CONTEXT_CHARS);
+}
+
 const buildLosslessToolObservationDigest = buildToolObservationDigest;
 
 function buildExactAnswerContractPromptObject({ exactAnswerMode = false, evidenceArtifacts = [] } = {}) {
@@ -6455,7 +6518,8 @@ function buildLlmAgentDirectToolPrompt({
         'For facts that may have changed, use fresh evidence already present in the conversation or verify them through TaskAgent. Do not present pretrained knowledge as current fact when freshness matters.',
         'task_results is a read-only library of completed public work. Its output is candidate context, and you decide whether it is relevant and sufficient.',
         'subagents is a single delegation tool. Author the complete TaskAgent task yourself from the conversation, current task state, constraints, and evidence. The runtime validates the task without rewriting its meaning, then owns waiting and child lifecycle.',
-        'TaskAgent results return to this same AILIS conversation as one tool observation. Continue with the original conversation intact, then answer the user naturally or delegate another complete task only if you decide new execution is required.',
+        'TaskAgent results return to this same AILIS conversation as one tool observation. Continue with the original conversation intact, then answer the user naturally.',
+        'If a TaskAgent returns a partial or budget-limited result for the same task, use subagents action=resume to continue its preserved checkpoint instead of spawning a duplicate TaskAgent.',
         'Never mention TaskAgent, subagent, worker, handoff, capsule, or internal orchestration to the user.',
         'Only call tools present in the current tools array. Do not mention tool schemas, runtime state, prompt rules, or orchestration details in an ordinary conversational reply.'
     ];
@@ -6651,18 +6715,33 @@ async function callLlmAgentDirectToolDecision(settings, payload, {
     const requestedToolChoice = forceFinalResponse
         ? 'none'
         : normalizeText(payload.toolChoice || payload.tool_choice, 'auto');
+    const finalizationContext = forceFinalResponse
+        ? normalizeText(payload.finalizationContext)
+        : '';
+    const finalizationInstruction = 'TaskAgent finalization: answer the original task from the supplied evidence package. Do not call or serialize any tool. Return plain user-facing prose only. If evidence is incomplete, give the supported partial result and state the concrete remaining gap.';
+    const providerPayload = finalizationContext
+        ? {
+              ...payload,
+              input: null,
+              messages: [
+                  { role: 'system', content: finalizationInstruction },
+                  { role: 'user', content: finalizationContext }
+              ],
+              instructions: finalizationInstruction
+          }
+        : payload;
     let response = await callDesktopLlmProvider(settings, {
-        ...payload,
+        ...providerPayload,
         jsonMode: false,
         expectJson: false,
         responseFormat: null,
         toolChoice: requestedToolChoice,
         preferNativeToolCalls: !forceFinalResponse,
-        parallel_tool_calls: payload.parallel_tool_calls === true
+        parallel_tool_calls: providerPayload.parallel_tool_calls === true
     });
-    if (!response.ok && payload.parallel_tool_calls === true && looksLikeParallelToolCallsUnsupported(response)) {
+    if (!response.ok && providerPayload.parallel_tool_calls === true && looksLikeParallelToolCallsUnsupported(response)) {
         response = await callDesktopLlmProvider(settings, {
-            ...payload,
+            ...providerPayload,
             jsonMode: false,
             expectJson: false,
             responseFormat: null,
@@ -6695,12 +6774,12 @@ async function callLlmAgentDirectToolDecision(settings, payload, {
             ok: true,
             mode: 'task',
             intent: 'task_agent_round_budget_exhausted',
-            summary: 'TaskAgent reached its three-round execution budget before producing a tool-free final response.',
+            summary: 'TaskAgent reached its work-round execution budget before producing a tool-free final response.',
             publicReasoning: '',
             riskLevel: 'low',
             action: 'blocked',
             finalAnswer: '',
-            blockedReason: 'The three-round TaskAgent execution budget is exhausted. Existing observations and the semantic checkpoint are preserved for continuation.',
+            blockedReason: 'The TaskAgent work-round execution budget is exhausted. Existing observations and the semantic checkpoint are preserved for continuation.',
             toolCall: null,
             capabilityRequest: sanitizeCapabilityRequest({}),
             planUpdates: [],
@@ -6720,20 +6799,30 @@ async function callLlmAgentDirectToolDecision(settings, payload, {
         const repairInstruction = forceFinalResponse
             ? 'Finalization retry: the runtime budget is exhausted. Do not call or serialize any tool. Write the best supported user-facing answer in plain prose from the existing task state and evidence. If evidence is insufficient, state the concrete blocker in plain prose. Never emit DSML, tool_calls, function_call, XML control tags, internal JSON, or protocol metadata.'
             : 'Protocol repair: your previous response serialized a tool call as visible text. If another tool is needed, issue it through the native function-call channel. Otherwise answer in plain user-facing prose. Never print DSML, tool_calls, function_call, XML control tags, or internal protocol JSON.';
-        const repairMessages = Array.isArray(payload.messages)
-            ? payload.messages.map((message) => ({ ...message }))
-            : [];
-        const systemIndex = repairMessages.findIndex((message) => message.role === 'system');
-        if (systemIndex >= 0) {
-            repairMessages[systemIndex].content = `${normalizeText(repairMessages[systemIndex].content)}\n\n${repairInstruction}`;
-        } else {
-            repairMessages.unshift({ role: 'system', content: repairInstruction });
+        const repairMessages = finalizationContext
+            ? [
+                  { role: 'system', content: `${finalizationInstruction}\n\n${repairInstruction}` },
+                  { role: 'user', content: finalizationContext }
+              ]
+            : Array.isArray(payload.messages)
+                ? payload.messages.map((message) => ({ ...message }))
+                : [];
+        if (!finalizationContext) {
+            const systemIndex = repairMessages.findIndex((message) => message.role === 'system');
+            if (systemIndex >= 0) {
+                repairMessages[systemIndex].content = `${normalizeText(repairMessages[systemIndex].content)}\n\n${repairInstruction}`;
+            } else {
+                repairMessages.unshift({ role: 'system', content: repairInstruction });
+            }
         }
         const originalUsage = response.usage;
         const repairedResponse = await callDesktopLlmProvider(settings, {
-            ...payload,
+            ...providerPayload,
+            input: finalizationContext ? null : providerPayload.input,
             messages: repairMessages,
-            instructions: `${normalizeText(payload.instructions)}\n\n${repairInstruction}`,
+            instructions: finalizationContext
+                ? `${finalizationInstruction}\n\n${repairInstruction}`
+                : `${normalizeText(payload.instructions)}\n\n${repairInstruction}`,
             jsonMode: false,
             expectJson: false,
             responseFormat: null,
@@ -6812,6 +6901,7 @@ async function callLlmAgentDirectToolDecision(settings, payload, {
                         schema: nativeValidation.schema,
                         content: response.content || ''
                     },
+                    nativeToolCall: routedNativeToolCall,
                     usage: response.usage
                 };
             }
@@ -6943,6 +7033,7 @@ async function callLlmAgentDirectToolDecision(settings, payload, {
                         schema: nextNativeValidation.schema,
                         content: response.content || ''
                     },
+                    nativeToolCall: nextRoutedNativeToolCall,
                     usage: response.usage
                 };
             }
@@ -8648,7 +8739,16 @@ class AILISAgentRunner {
                 input: directModelInputPrompt.input,
                 tools: directModelInputPrompt.tools || directToolSpecs,
                 toolChoice: directToolChoice,
-                jsonMode: false
+                jsonMode: false,
+                finalizationContext: safetyFinalizationReason && isTaskAgentRole(agentRuntimeRole)
+                    ? buildTaskAgentFinalizationContext({
+                          message,
+                          constraints,
+                          currentPlan,
+                          unresolvedFields,
+                          stepResults
+                      })
+                    : ''
             }, {
                 settings: decisionSettings,
                 requestContext
@@ -8870,6 +8970,11 @@ class AILISAgentRunner {
                 });
             }
             if (!decision.ok) {
+                recordInvalidDecisionToContextManager(
+                    modelInputContextManager,
+                    decision,
+                    { toolOutputChars: directModelInputPrompt.toolOutputChars }
+                );
                 const invalidDecisionObservation = buildInvalidDecisionObservationEvent(decision, iteration, maxSteps);
                 events.push(invalidDecisionObservation);
                 this.gateway.emitGatewayEvent?.('agent.invalid_decision_observation', {

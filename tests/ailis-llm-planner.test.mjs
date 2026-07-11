@@ -722,7 +722,7 @@ test('Persona preserves a model-authored current-fact task across a short user c
             subagentCalls[0].args.task,
             '核验截至当前日期《原神》“木偶”桑多涅是否已经实装；使用新鲜网页证据，若已实装则完成角色攻略。'
         );
-        assert.equal(subagentCalls[0].context.maxAgentSteps, 3);
+        assert.equal(subagentCalls[0].context.maxAgentSteps, 4);
         assert.equal(subagentCalls[0].context.cleanContext, true);
         assert.equal(subagentCalls[0].context.contextMode, 'task_agent');
         assert.equal(gatewayToolCalls.length, 1);
@@ -730,6 +730,7 @@ test('Persona preserves a model-authored current-fact task across a short user c
         assert.match(JSON.stringify(llmServer.calls[0].payload.messages), /原神的/);
         assert.match(JSON.stringify(llmServer.calls[0].payload.messages), /已经实装了/);
         assert.match(JSON.stringify(llmServer.calls[1].payload.messages), /已核验并完成攻略/);
+        assert.doesNotMatch(JSON.stringify(llmServer.calls[1].payload.messages), /waitTimeoutMs|"wait":true/);
         assert.equal(gateway.taskResultCapsules.getStatus().activeTaskCount, 0);
         assert.ok(gateway.taskResultCapsules.search('桑多涅攻略').length > 0);
     } finally {
@@ -2028,8 +2029,8 @@ test('Agentic Executor max-step fallback does not expose raw tool logs to the us
     }
 });
 
-test('TaskAgent clamps caller-requested work rounds to three', async () => {
-    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-task-agent-three-rounds-'));
+test('TaskAgent clamps caller-requested work rounds to four', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-task-agent-four-rounds-'));
     await fs.writeFile(path.join(workspaceRoot, 'note.txt'), 'evidence\n', 'utf8');
     const llmServer = await createScriptedChatCompletionsServer(() => ({
         mode: 'task',
@@ -2061,7 +2062,7 @@ test('TaskAgent clamps caller-requested work rounds to three', async () => {
                 provider: 'openai-compatible',
                 baseUrl: llmServer.url,
                 apiKey: 'test-key',
-                model: 'mock-three-round-task-agent',
+                model: 'mock-four-round-task-agent',
                 timeoutMs: 10000
             },
             context: {
@@ -2073,9 +2074,12 @@ test('TaskAgent clamps caller-requested work rounds to three', async () => {
         });
 
         assert.equal(result.body.status, 'max_steps_reached');
-        assert.equal(result.body.steps.length, 3);
-        assert.equal(llmServer.calls.length, 4);
-        assert.match(llmServer.calls[0].system, /at most 3 work-tool rounds/);
+        assert.equal(result.body.steps.length, 4);
+        assert.equal(llmServer.calls.length, 5);
+        assert.match(llmServer.calls[0].system, /at most 4 work-tool rounds/);
+        assert.equal(llmServer.calls[4].payload.tool_choice, 'none');
+        assert.match(JSON.stringify(llmServer.calls[4].payload.messages), /TaskAgent finalization package/);
+        assert.equal(llmServer.calls[4].payload.messages.length, 2);
     } finally {
         await gateway.stop();
         await llmServer.close();
