@@ -82,7 +82,9 @@ test('AILIS parent Persona prompt stays conversational while TaskAgent keeps exe
     assert.match(personaPrompt.instructions, /authoritative host clock/);
     assert.match(personaPrompt.instructions, /spawn_agent creates a persistent TaskAgent/);
     assert.match(personaPrompt.instructions, /without expanding the requested scope/);
-    assert.match(personaPrompt.instructions, /structured subagent_notification/);
+    assert.match(personaPrompt.instructions, /completed subagent_notification contains the TaskAgent final answer/);
+    assert.match(personaPrompt.instructions, /Never create a new task_name merely to supplement/);
+    assert.match(personaPrompt.instructions, /status\.completed/);
     assert.doesNotMatch(personaPrompt.instructions, /mcp__ailis_research__web_research|For local file and data tasks|When exec output is truncated/);
 
     const taskPrompt = buildLlmAgentDirectToolPrompt({
@@ -92,6 +94,8 @@ test('AILIS parent Persona prompt stays conversational while TaskAgent keeps exe
     });
     assert.match(taskPrompt.instructions, /mcp__ailis_research__web_research/);
     assert.match(taskPrompt.instructions, /For local file and data tasks/);
+    assert.match(taskPrompt.instructions, /open_page actions/);
+    assert.match(taskPrompt.instructions, /most authoritative returned source URL/);
     assert.match(taskPrompt.instructions, /mechanical transport metadata, not a decision/);
     assert.doesNotMatch(taskPrompt.instructions, /complete=true|reasoning_ready=true/);
     assert.doesNotMatch(taskPrompt.instructions, /Keep ordinary conversation natural/);

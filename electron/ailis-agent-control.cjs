@@ -405,6 +405,18 @@ class AgentControl {
         );
     }
 
+    delegated_child_for_parent_run(context = {}) {
+        const parent_path = String(new AgentPath(context.agent_path || context.agentPath || '/root'));
+        const parent_run_id = normalize_string(context.runId || context.run_id);
+        const role = normalize_string(context.agentRole || context.agent_role || context.contextMode).toLowerCase();
+        if (!parent_run_id || !['persona_orchestrator', 'persona'].includes(role)) {
+            return null;
+        }
+        return this.state.list(context).find((agent) =>
+            agent.parent_agent_path === parent_path && agent.parent_run_id === parent_run_id
+        ) || null;
+    }
+
     async spawn_agent_with_metadata(args = {}, context = {}) {
         const task_name = normalize_string(args.task_name);
         const message = normalize_string(args.message);
@@ -423,6 +435,18 @@ class AgentControl {
                 status: 'agent_path_conflict',
                 error: `agent ${canonical_path} already exists; use followup_task`,
                 target: canonical_path,
+                isError: true
+            };
+        }
+        const delegated = this.delegated_child_for_parent_run(context);
+        if (delegated) {
+            return {
+                ok: false,
+                status: 'agent_task_already_delegated',
+                error: `this parent run already delegated its user task to ${delegated.agent_path}; use followup_task for additional work or answer from its completed result`,
+                target: delegated.agent_path,
+                agent_status: clone_json(delegated.agent_status),
+                result_available: is_final(delegated.agent_status),
                 isError: true
             };
         }

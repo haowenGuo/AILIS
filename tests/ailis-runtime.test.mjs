@@ -832,6 +832,47 @@ test('AILIS Agent tree resumes a completed thread from its checkpoint', async ()
     await runtime.shutdown();
 });
 
+test('Persona parent run keeps one persistent TaskAgent owner after completion', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-persona-agent-owner-'));
+    const tasks = [];
+    const runtime = new AILISRuntime({
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit'),
+        agentExecutor: async ({ agent }) => {
+            tasks.push(agent.task);
+            return { ok: true, status: 'completed', displayText: `answer:${agent.task}` };
+        }
+    });
+    const context = {
+        runId: 'persona-parent-run',
+        sessionId: 'persona-owner-session',
+        agent_path: '/root',
+        agentRole: 'persona_orchestrator'
+    };
+    await runtime.executeTool('spawn_agent', {
+        task_name: 'guide',
+        message: 'research the guide',
+        fork_turns: 'none'
+    }, context);
+    await runtime.executeTool('wait_agent', { timeout_ms: 1000 }, context);
+    runtime.drain_mailbox_input_items(context);
+
+    const duplicate = await runtime.executeTool('spawn_agent', {
+        task_name: 'guide_supplement',
+        message: 'search for missing guide details',
+        fork_turns: 'none'
+    }, context);
+
+    assert.equal(duplicate.isError, true);
+    assert.equal(duplicate.structuredContent.status, 'agent_task_already_delegated');
+    assert.equal(duplicate.structuredContent.target, '/root/guide');
+    assert.equal(duplicate.structuredContent.result_available, true);
+    assert.equal(runtime.agent_control.state.list(context).length, 1);
+    assert.deepEqual(tasks, ['research the guide']);
+    await runtime.shutdown();
+});
+
 test('AILIS Agent trees are session scoped and enforce one live direct child', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-agent-isolation-runtime-'));
     let release;

@@ -35,6 +35,20 @@ function buildToolContext(requestContext = {}, fallbackWorkspace = '', sessionId
         context.executeExternal = true;
     }
     for (const key of [
+        'runId',
+        'run_id',
+        'sessionId',
+        'agentRole',
+        'agent_role',
+        'contextMode',
+        'context_mode',
+        'contextRole',
+        'context_role',
+        'agent_path',
+        'agentPath',
+        'taskAgent',
+        'personaOrchestrator',
+        'mainAgent',
         'permissionProfile',
         'permissions',
         'policy',

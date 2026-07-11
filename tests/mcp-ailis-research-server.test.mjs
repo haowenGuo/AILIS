@@ -1497,7 +1497,8 @@ test('web_search extracts short Chinese guide targets and asks before following 
         assert.equal(result.structuredContent.searchConfidence.level, 'low');
         assert.equal(result.structuredContent.suggestedNextCalls.length, 0);
         assert.ok(result.structuredContent.candidateChoices.length >= 2);
-        assert.match(result.content[0].text, /具体指哪一个|should be clarified/);
+        assert.match(result.structuredContent.searchConfidence.clarificationQuestion, /具体指哪一个|clarif/i);
+        assert.doesNotMatch(result.content[0].text, /Retrieval diagnostic|Additional retrieval context/);
     });
 });
 
@@ -1682,10 +1683,19 @@ test('web_research builds an evidence bundle from search and fetched pages', asy
         assert.equal(result.structuredContent.evidencePages[0].isEvidence, undefined);
         assert.equal(result.structuredContent.evidencePages[0].evidenceGap, undefined);
         assert.ok(result.structuredContent.evidencePages[0].evidenceSnippets.length >= 1);
+        assert.equal(result.structuredContent.webSearchOutput.fetch.sources[0].ref_id, 'source_1');
+        assert.deepEqual(result.structuredContent.webSearchOutput.fetch.sources[0].open_page, {
+            type: 'open_page',
+            url: `${baseUrl}/guide`,
+            lineno: 1
+        });
+        assert.match(result.structuredContent.webSearchOutput.fetch.sources[0].excerpt, /莱特是一名适合火属性队伍/);
         assert.equal(result.structuredContent.pipelineSteps[0].stage, 'query_plan');
         assert.equal(result.structuredContent.search.searchQueries[0].role, 'original');
         assert.ok(result.structuredContent.evidencePages[0].htmlRelations.sections.some((section) => section.heading === '配队建议'));
         assert.match(result.content[0].text, /AILIS web research evidence bundle/);
+        assert.match(result.content[0].text, /Open page: web_fetch/);
+        assert.doesNotMatch(result.content[0].text, /Fetch diagnostic:|Pipeline diagnostics:/);
         assert.doesNotMatch(result.content[0].text, /Readiness:|Recovery hint:|Output policy:|Evidence gap:|Retrieval note:/);
         assert.ok(requests.filter((pathname) => pathname === '/search').length >= 1);
         assert.ok(requests.includes('/guide'));
@@ -2186,7 +2196,7 @@ test('web_research returns candidate evidence for video metadata pages without a
         assert.equal(result.structuredContent.evidencePages[0].recoveryHint, undefined);
         assert.equal(result.structuredContent.evidencePages[0].evidenceGap, undefined);
         assert.match(result.content[0].text, /Codex object: web_search_call action=search/);
-        assert.match(result.content[0].text, /Bundle contents: search result snippets/);
+        assert.match(result.content[0].text, /Bundle contents: ranked search results, fetched page excerpts/);
         assert.doesNotMatch(result.content[0].text, /Readiness:|Recovery hint:|Output policy:|Evidence decision:|Evidence gap:|Retrieval note:/);
         assert.match(result.content[0].text, /Candidate snippets from search results/);
     });
@@ -2458,7 +2468,7 @@ test('web_fetch falls back to current HTML extraction when Crawl4AI is unavailab
     });
 });
 
-test('web_fetch surfaces linked DOI and PDF follow-up actions from HTML pages', async () => {
+test('web_fetch keeps linked DOI and PDF follow-up actions structured without model-visible diagnostics', async () => {
     await withServer((request, response) => {
         response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
         response.end([
@@ -2476,7 +2486,8 @@ test('web_fetch surfaces linked DOI and PDF follow-up actions from HTML pages', 
         assert.equal(result.structuredContent.suggestedNextCalls[0].args.doi, '10.3847/2041-8213/acd54b');
         assert.equal(result.structuredContent.suggestedNextCalls[1].tool, 'pdf_extract_text');
         assert.equal(result.structuredContent.observedRelevantLinks[0].kind, 'doi');
-        assert.match(result.content[0].text, /Available follow-up calls derived from retrieved links\/results/);
+        assert.doesNotMatch(result.content[0].text, /Available follow-up calls derived from retrieved links\/results/);
+        assert.doesNotMatch(result.content[0].text, /Retrieval diagnostic|Additional retrieval context/);
         assert.match(result.content[0].text, /Candidate links observed by the fetcher/);
     });
 });

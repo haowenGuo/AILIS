@@ -249,11 +249,15 @@ test('web research tool output is projected as web_search_call plus content_item
                         },
                         fetch: {
                             sources: [{
+                                id: 'source_1',
+                                ref_id: 'source_1',
                                 title: '终末地洛茜攻略',
                                 url: 'https://example.test/loxi',
                                 host: 'example.test',
                                 status: 'completed',
                                 pageType: 'html',
+                                open_page: { type: 'open_page', url: 'https://example.test/loxi', lineno: 1 },
+                                excerpt: '正文明确说明洛茜的技能机制、装备选择、队伍循环与实战手法。',
                                 evidenceSnippets: ['洛茜定位为辅助，攻略包含技能与队伍。']
                             }]
                         },
@@ -282,7 +286,11 @@ test('web research tool output is projected as web_search_call plus content_item
     const text = FunctionCallOutputPayload.toText(items[2].output);
     assert.match(text, /Search results:/);
     assert.match(text, /Sources:/);
-    assert.match(text, /source:1/);
+    assert.match(text, /\[source_1\]/);
+    assert.match(text, /Fetched excerpt:/);
+    assert.match(text, /正文明确说明洛茜的技能机制/);
+    assert.match(text, /Open page: web_fetch \{"url":"https:\/\/example\.test\/loxi","lineno":1\}/);
+    assert.doesNotMatch(text, /page_type=/);
     assert.doesNotMatch(text, /Codex object: web_search_call/);
 });
 

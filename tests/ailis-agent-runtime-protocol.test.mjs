@@ -176,6 +176,11 @@ test('ToolContext keeps approval and sandbox policy in one reusable object', () 
     const context = buildToolContext({
         workspace: 'F:/repo',
         sessionKey: 'main',
+        runId: 'persona_run_1',
+        sessionId: 'persona_session_1',
+        agentRole: 'persona_orchestrator',
+        contextMode: 'persona',
+        agent_path: '/root',
         approved: true,
         allowOutsideWorkspace: true,
         permissionProfile: 'full-access',
@@ -184,6 +189,11 @@ test('ToolContext keeps approval and sandbox policy in one reusable object', () 
 
     assert.equal(context.workspace, 'F:/repo');
     assert.equal(context.sessionKey, 'main');
+    assert.equal(context.runId, 'persona_run_1');
+    assert.equal(context.sessionId, 'persona_session_1');
+    assert.equal(context.agentRole, 'persona_orchestrator');
+    assert.equal(context.contextMode, 'persona');
+    assert.equal(context.agent_path, '/root');
     assert.equal(context.approved, true);
     assert.equal(context.allowOutsideWorkspace, true);
     assert.equal(context.permissionProfile, 'full-access');

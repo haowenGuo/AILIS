@@ -2873,17 +2873,8 @@ function formatRelevantLinks(links = []) {
 
 function buildWebToolGuidanceText({ evidenceGap = '', recoveryHint = '', suggestedNextCalls = [], observedRelevantLinks = [] } = {}) {
     const sections = [];
-    if (evidenceGap) {
-        sections.push(`Retrieval diagnostic: ${evidenceGap}`);
-    }
-    if (recoveryHint) {
-        sections.push(`Additional retrieval context: ${recoveryHint}`);
-    }
     if (Array.isArray(observedRelevantLinks) && observedRelevantLinks.length) {
         sections.push(`Candidate links observed by the fetcher:\n${formatRelevantLinks(observedRelevantLinks)}`);
-    }
-    if (Array.isArray(suggestedNextCalls) && suggestedNextCalls.length) {
-        sections.push(`Available follow-up calls derived from retrieved links/results:\n${formatSuggestedNextCalls(suggestedNextCalls)}`);
     }
     return sections.join('\n\n');
 }
@@ -6212,7 +6203,7 @@ function formatWebResearchBundle({ query = '', searchDetails = {}, pages = [], b
         'AILIS web research evidence bundle:',
         `Query: ${query}`,
         'Codex object: web_search_call action=search',
-        'Bundle contents: search result snippets, fetched page excerpts, source URLs, and retrieval diagnostics.'
+        'Bundle contents: ranked search results, fetched page excerpts, source URLs, and open_page actions.'
     ];
     if (bundleAssessment.fetchedPageCount !== undefined) {
         lines.push(`Fetched page count: ${bundleAssessment.fetchedPageCount}`);
@@ -6255,11 +6246,10 @@ function formatWebResearchBundle({ query = '', searchDetails = {}, pages = [], b
     if (pages.length) {
         lines.push('Fetched pages:');
         pages.forEach((page, index) => {
-            lines.push(`- ${index + 1}. ${page.title || page.url}`);
+            const refId = `source_${index + 1}`;
+            lines.push(`- [${refId}] ${page.title || page.url}`);
             lines.push(`  URL: ${page.url}`);
-            if (page.pageType || page.fetchStatus || page.pageStatus || page.returnedChars || page.originalChars) {
-                lines.push(`  Fetch diagnostic: pageType=${page.pageType || 'unknown'}; status=${page.fetchStatus || page.pageStatus || 'unknown'}; returnedChars=${page.returnedChars ?? 'n/a'}; originalChars=${page.originalChars ?? 'n/a'}`);
-            }
+            lines.push(`  Open page: web_fetch ${JSON.stringify({ url: page.url, lineno: 1 })}`);
             if (page.searchSnippet) {
                 lines.push(`  Search snippet: ${truncateRelationText(page.searchSnippet, 460)}`);
             }
@@ -6273,21 +6263,22 @@ function formatWebResearchBundle({ query = '', searchDetails = {}, pages = [], b
             }
         });
     }
-    if (Array.isArray(pipelineSteps) && pipelineSteps.length) {
-        lines.push('Pipeline diagnostics:');
-        pipelineSteps.slice(0, 12).forEach((step) => {
-            lines.push(`- ${step.stage || 'step'}: ${step.status || 'unknown'}${step.note ? `; ${step.note}` : ''}`);
-        });
-    }
     return lines.join('\n');
 }
 
 function summarizeWebResearchSource(page = {}, index = 0) {
+    const refId = `source_${index + 1}`;
     return pruneEmptyDeep({
-        id: `source_${index + 1}`,
+        id: refId,
+        ref_id: refId,
         title: normalizeString(page.title || page.url),
         url: normalizeString(page.url),
         host: extractHostname(page.url),
+        open_page: {
+            type: 'open_page',
+            url: normalizeString(page.url),
+            lineno: 1
+        },
         source: normalizeString(page.source),
         sourceBackends: Array.isArray(page.sourceBackends) ? page.sourceBackends.slice(0, 5) : undefined,
         status: normalizeString(page.fetchStatus || page.pageStatus),
@@ -6298,7 +6289,8 @@ function summarizeWebResearchSource(page = {}, index = 0) {
         queryVariantRole: normalizeString(page.queryVariantRole),
         searchRank: page.searchRank,
         searchSnippet: truncateRelationText(page.searchSnippet, 360),
-        evidenceSnippets: Array.isArray(page.evidenceSnippets) ? page.evidenceSnippets.slice(0, 4) : undefined
+        evidenceSnippets: Array.isArray(page.evidenceSnippets) ? page.evidenceSnippets.slice(0, 4) : undefined,
+        excerpt: truncateRelationText(page.excerpt, 2400)
     });
 }
 
@@ -6354,11 +6346,18 @@ function stripWebResearchSearchBehaviorFields(details = {}) {
 }
 
 function summarizeWebResearchSearchResult(result = {}, index = 0) {
+    const refId = `candidate_${index + 1}`;
     return pruneEmptyDeep({
-        id: `candidate_${index + 1}`,
+        id: refId,
+        ref_id: refId,
         title: normalizeString(result.title || result.text || result.url),
         url: normalizeString(result.url),
         host: extractHostname(result.url),
+        open_page: {
+            type: 'open_page',
+            url: normalizeString(result.url),
+            lineno: 1
+        },
         sourceBackend: normalizeString(result.sourceBackend),
         sourceBackends: Array.isArray(result.sourceBackends) ? result.sourceBackends.slice(0, 5) : undefined,
         queryVariant: normalizeString(result.queryVariant),
@@ -10843,7 +10842,7 @@ const TOOLS = [
     },
     {
         name: 'web_research',
-        description: 'End-to-end AILIS web research pipeline for natural research/guide/current-info tasks. Codex-style behavior: treat this as one structured retrieval action, not as many manual web_search/web_fetch turns. It can run multiple query variants with bounded parallelism, de-duplicate and rank candidates, fetch likely relevant HTML/text pages with bounded parallelism, extract readable content plus relationship maps, and return one compact evidence bundle with snippets, fetched excerpts, source URLs, page diagnostics, timings, and follow-up calls. Use query for the main research goal; optionally pass queries when you already know 2-5 useful query variants. Prefer this over repeatedly calling web_search then web_fetch for broad public research. The tool does not produce the final answer; inspect the bundle and answer when sufficient, search again only for a concrete missing field.',
+        description: 'End-to-end AILIS web research pipeline for natural research/guide/current-info tasks. Use it once for broad discovery and bounded page fetching. It returns ranked candidates and fetched sources with stable ref_id, answer-bearing excerpts, source URLs, and explicit open_page actions. If one concrete required fact is absent from the excerpts, call web_fetch on the most authoritative returned source URL; do not repeat broad web_research for the same question. The tool does not produce the final answer; the model judges evidence sufficiency.',
         inputSchema: {
             type: 'object',
             required: ['query'],

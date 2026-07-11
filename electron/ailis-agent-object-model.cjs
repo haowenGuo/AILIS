@@ -390,9 +390,11 @@ function formatWebSearchCandidates(webSearchOutput = {}) {
     }
     const lines = ['Search results:'];
     candidates.slice(0, 8).forEach((candidate, index) => {
-        lines.push(`${index + 1}. ${candidate.title || candidate.url || '(untitled)'}`);
+        const refId = normalizeText(candidate.ref_id || candidate.refId || candidate.id || `candidate_${index + 1}`);
+        lines.push(`${index + 1}. [${refId}] ${candidate.title || candidate.url || '(untitled)'}`);
         if (candidate.url) {
             lines.push(`   URL: ${candidate.url}`);
+            lines.push(`   Open page: web_fetch ${safeJsonStringify({ url: candidate.url, lineno: 1 }, '{}')}`);
         }
         if (candidate.snippet) {
             lines.push(`   Snippet: ${candidate.snippet}`);
@@ -410,19 +412,28 @@ function formatWebSearchSources(webSearchOutput = {}) {
     }
     const lines = ['Sources:'];
     sources.slice(0, 8).forEach((source, index) => {
-        lines.push(`[source:${index + 1}] ${source.title || source.url || '(untitled)'}`);
+        const refId = normalizeText(source.ref_id || source.refId || source.id || `source_${index + 1}`);
+        lines.push(`[${refId}] ${source.title || source.url || '(untitled)'}`);
         if (source.url) {
             lines.push(`URL: ${source.url}`);
+            const openPage = firstObject(source.open_page, source.openPage);
+            lines.push(`Open page: web_fetch ${safeJsonStringify({
+                url: normalizeText(openPage.url || source.url),
+                lineno: Number(openPage.lineno || 1) || 1
+            }, '{}')}`);
         }
         const meta = [
             source.host ? `host=${source.host}` : '',
-            source.status ? `status=${source.status}` : '',
-            source.pageType ? `page_type=${source.pageType}` : ''
+            source.status ? `status=${source.status}` : ''
         ].filter(Boolean).join('; ');
         if (meta) {
             lines.push(meta);
         }
-        if (Array.isArray(source.evidenceSnippets) && source.evidenceSnippets.length) {
+        const excerpt = normalizeText(source.excerpt || source.fetched_excerpt || source.fetchedExcerpt);
+        if (excerpt) {
+            lines.push('Fetched excerpt:');
+            lines.push(summarizeForModel(excerpt, 2400));
+        } else if (Array.isArray(source.evidenceSnippets) && source.evidenceSnippets.length) {
             lines.push('Evidence snippets:');
             source.evidenceSnippets.slice(0, 3).forEach((snippet) => lines.push(`- ${snippet}`));
         } else if (source.searchSnippet) {

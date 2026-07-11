@@ -843,6 +843,79 @@ test('Persona defers an early final until its live TaskAgent result reaches the 
     }
 });
 
+test('Persona cannot replace a completed TaskAgent with a renamed supplement Agent', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-persona-single-owner-'));
+    const llmServer = await createScriptedChatCompletionsServer(({ decisionCount }) => {
+        if (decisionCount === 1) {
+            return {
+                action: 'tool',
+                tool_call: {
+                    tool: 'spawn_agent',
+                    args: { task_name: 'guide', message: 'research guide', fork_turns: 'none' }
+                }
+            };
+        }
+        if (decisionCount === 2) {
+            return { action: 'tool', tool_call: { tool: 'wait_agent', args: { timeout_ms: 1000 } } };
+        }
+        if (decisionCount === 3) {
+            return {
+                action: 'tool',
+                tool_call: {
+                    tool: 'spawn_agent',
+                    args: { task_name: 'guide_supplement', message: 'search missing details', fork_turns: 'none' }
+                }
+            };
+        }
+        return { action: 'final', final_answer: 'integrated original TaskAgent result' };
+    });
+    const gateway = new AILISGateway({
+        port: 0,
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit')
+    });
+    let childRuns = 0;
+    try {
+        gateway.runtime.agent_control.execute_agent = async () => {
+            childRuns += 1;
+            return { ok: true, status: 'completed', displayText: 'guide result' };
+        };
+        const status = await gateway.start();
+        const result = await runAgent(status.url, {
+            sessionId: 'persona-single-owner-test',
+            message: 'make a guide',
+            agentLoop: 'llm',
+            maxAgentSteps: 5,
+            llmSettings: {
+                provider: 'openai-compatible',
+                baseUrl: llmServer.url,
+                apiKey: 'test-key',
+                model: 'mock-persona-single-owner',
+                timeoutMs: 10000
+            },
+            context: {
+                workspace: workspaceRoot,
+                agentLoop: 'llm',
+                directToolExecutor: true,
+                approved: true,
+                agentRole: 'persona_orchestrator'
+            }
+        });
+
+        assert.equal(result.body.displayText, 'integrated original TaskAgent result');
+        assert.equal(childRuns, 1);
+        assert.equal(gateway.runtime.agent_control.state.list({ sessionId: 'persona-single-owner-test' }).length, 1);
+        const duplicate = result.body.steps.find((step) => step.args?.task_name === 'guide_supplement');
+        assert.equal(duplicate.response.status, 'agent_task_already_delegated');
+        assert.equal(duplicate.response.result.structuredContent.target, '/root/guide');
+    } finally {
+        await gateway.stop();
+        await llmServer.close();
+        await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
+});
+
 test('AILIS Agent run can be interrupted while preserving transcript data', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-interrupt-test-'));
     const llmServer = await createDelayedChatCompletionsServer(5000);
