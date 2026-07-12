@@ -13,6 +13,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(__dirname, '..');
 const DEFAULT_AGENTBENCH_ROOT = path.join(PROJECT_ROOT, 'build-cache', 'benchmarks', 'agentbench-main');
 const DEFAULT_OUTPUT_DIR = path.join(PROJECT_ROOT, 'eval-results', 'engineering', 'agentbench-ailis');
+const OFFICIAL_DBBENCH_DEV_RELATIVE_PATH = path.join('data', 'dbbench', 'dev.jsonl');
 
 function normalizeText(value, fallback = '') {
     if (typeof value === 'number' && Number.isFinite(value)) {
@@ -151,6 +152,30 @@ async function parseTaskYamlFiles(agentbenchRoot) {
     ].join('\n');
     const result = await runProcess('python', ['-c', py, agentbenchRoot]);
     return JSON.parse(result.stdout || '[]');
+}
+
+async function parseOfficialDbBenchTasks(agentbenchRoot) {
+    const sourcePath = path.join(agentbenchRoot, OFFICIAL_DBBENCH_DEV_RELATIVE_PATH);
+    if (!fsSync.existsSync(sourcePath)) {
+        return [];
+    }
+    const rows = (await fs.readFile(sourcePath, 'utf8'))
+        .split(/\r?\n/)
+        .filter(Boolean)
+        .map((line) => JSON.parse(line));
+    return rows.map((row, index) => ({
+        id: `dbbench-dev-${index + 1}`,
+        name: `DBBench dev ${index + 1}`,
+        suite: 'dbbench',
+        difficulty: 'official-dev',
+        mode: 'official_dbbench_table_smoke',
+        description: normalizeText(row.description),
+        user_message: normalizeText(row.description),
+        expected_answers: Array.isArray(row.label) ? row.label.map((value) => String(value)) : [String(row.label || '')],
+        _official_agentbench_db: true,
+        _official_source_path: sourcePath,
+        _official_table: row.table || null
+    }));
 }
 
 function filterTasks(tasks, args) {
@@ -666,6 +691,25 @@ function buildAgentBenchExecutionProfile(task = {}) {
 }
 
 async function scoreLayer0({ args, task, workspace, beforeHashes, agentOutputs }) {
+    if (task._official_agentbench_db === true) {
+        const visibleAnswer = normalizeText(agentOutputs.join('\n')).toLowerCase().replace(/\s+/g, ' ');
+        const expectedAnswers = (Array.isArray(task.expected_answers) ? task.expected_answers : [])
+            .map((answer) => normalizeText(answer).toLowerCase().replace(/\s+/g, ' '))
+            .filter(Boolean);
+        const matches = expectedAnswers.map((answer) => ({
+            answer,
+            matched: visibleAnswer.includes(answer)
+        }));
+        return {
+            score: matches.length && matches.every((item) => item.matched) ? 100 : 0,
+            validators: [{
+                type: 'official_dbbench_label',
+                score: matches.length && matches.every((item) => item.matched) ? 100 : 0,
+                expected: expectedAnswers,
+                matches
+            }]
+        };
+    }
     const validators = getAllValidators(task);
     if (!validators.length) {
         return { score: 0, validators: [] };
@@ -771,6 +815,19 @@ function compositeScore(task = {}, layer0, layer1, layer2) {
 }
 
 function buildTaskMessage(task, workspace, inputFiles = []) {
+    if (task._official_agentbench_db === true) {
+        return [
+            'You are running an official AgentBench DBBench data smoke task for AILIS.',
+            `Workspace: ${workspace}`,
+            `The table data is stored in ${path.join(workspace, 'table.json')}.`,
+            'Use local tools or code to inspect the table and calculate the answer.',
+            'Do not use web search. Do not infer missing rows or invent data.',
+            'Return the shortest answer that directly answers the question.',
+            '',
+            'Question:',
+            normalizeText(task.description)
+        ].join('\n');
+    }
     const taskText = normalizeText(task.user_message || task.message || task.description);
     const asciiLetters = (taskText.match(/[A-Za-z]/g) || []).length;
     const cjkChars = (taskText.match(/[\u3400-\u9fff]/g) || []).length;
@@ -835,6 +892,19 @@ async function setupTaskWorkspace(args, task) {
         await fs.rm(workspace, { recursive: true, force: true });
     }
     await fs.mkdir(workspace, { recursive: true });
+    if (task._official_agentbench_db === true) {
+        await fs.writeFile(
+            path.join(workspace, 'table.json'),
+            `${JSON.stringify(task._official_table || {}, null, 2)}\n`,
+            'utf8'
+        );
+        return {
+            workspace,
+            setup: { ok: true, stdout: '', stderr: '', code: 0 },
+            beforeHashes: new Map(),
+            inputFiles: ['table.json']
+        };
+    }
     const taskDir = task._task_dir;
     await copyDir(path.join(taskDir, 'inputs'), workspace);
     await fs.mkdir(path.join(workspace, '.github', 'workflows'), { recursive: true }).catch(() => {});
@@ -1028,7 +1098,11 @@ function buildReport(args, results) {
 
 async function main() {
     const args = parseArgs();
-    const tasks = filterTasks(await parseTaskYamlFiles(args.agentbenchRoot), args);
+    const yamlTasks = await parseTaskYamlFiles(args.agentbenchRoot);
+    const availableTasks = yamlTasks.length
+        ? yamlTasks
+        : await parseOfficialDbBenchTasks(args.agentbenchRoot);
+    const tasks = filterTasks(availableTasks, args);
     if (args.list) {
         for (const task of tasks) {
             console.log(`${task.id}\t${task.suite}\t${task.difficulty}\t${task.name}`);

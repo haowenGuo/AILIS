@@ -64,7 +64,7 @@
     "bench:gaia:desktop-real:l1": "node scripts/run-ailis-desktop-real-gaia-eval.mjs",
     "bench:gaia:desktop-real:smoke": "node scripts/run-ailis-desktop-real-gaia-eval.mjs --limit 3",
     "bench:agentbench:ailis:list": "node scripts/run-agentbench-ailis.mjs --list",
-    "bench:agentbench:ailis:smoke": "node scripts/run-agentbench-ailis.mjs --task data-analysis-cross-reference --keep-workspace --max-agent-steps 20",
+    "bench:agentbench:ailis:smoke": "node scripts/run-agentbench-ailis.mjs --suite dbbench --offset 1 --limit 3 --keep-workspace --max-agent-steps 4 --task-delay-ms 0 --agent-retries 0",
     "bench:agentbench:ailis:memory": "node scripts/run-agentbench-ailis.mjs --suite memory --keep-workspace --max-agent-steps 25",
     "bench:osworld:quickstart:wsl": "node scripts/run-wsl-repo-script.mjs scripts/run-osworld-wsl-quickstart.sh",
     "bench:osworld:ailis:test-small:wsl": "node scripts/run-wsl-repo-script.mjs scripts/run-osworld-ailis-test-small-wsl.sh",
