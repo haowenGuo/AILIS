@@ -1626,6 +1626,29 @@ test('web_search reranks official source documents ahead of mirrors and portal n
     assert.ok(ranked.findIndex((item) => /stable\/index\.html/.test(item.url)) > 2);
 });
 
+test('research ranking prefers an article detail page over issue and archive collections', () => {
+    const ranked = rankSearchResultsForFollowup([
+        {
+            title: 'Vol. 1 No. 2/2014 journal issue',
+            url: 'https://journal.example/issue/view/12461',
+            snippet: 'Emily Midkiff, June 2014, dragons article, pages 41-54'
+        },
+        {
+            title: 'Journal archive 2/2014',
+            url: 'https://journal.example/archive/2014-2',
+            snippet: 'Emily Midkiff dragons article published June 2014'
+        },
+        {
+            title: 'The Uncanny Dragons of Children\'s Literature',
+            url: 'https://journal.example/article/view/164228',
+            snippet: 'Article by Emily Midkiff about dragons in Fafnir'
+        }
+    ], 'Emily Midkiff Fafnir June 2014 dragons article');
+
+    assert.equal(ranked[0].url, 'https://journal.example/article/view/164228');
+    assert.ok(ranked[0].sourceQualityScore > ranked[1].sourceQualityScore);
+});
+
 test('web_research builds an evidence bundle from search and fetched pages', async () => {
     const requests = [];
     const guideBody = [
@@ -1696,6 +1719,8 @@ test('web_research builds an evidence bundle from search and fetched pages', asy
         assert.ok(result.structuredContent.evidencePages[0].htmlRelations.sections.some((section) => section.heading === '配队建议'));
         assert.match(result.content[0].text, /AILIS web research evidence bundle/);
         assert.match(result.content[0].text, /Open page: web_fetch/);
+        assert.ok(result.content[0].text.indexOf('Highest-ranked fetched sources:') >= 0);
+        assert.ok(result.content[0].text.indexOf(`${baseUrl}/guide`) < 2000);
         assert.doesNotMatch(result.content[0].text, /Fetch diagnostic:|Pipeline diagnostics:/);
         assert.doesNotMatch(result.content[0].text, /Readiness:|Recovery hint:|Output policy:|Evidence gap:|Retrieval note:/);
         assert.ok(requests.filter((pathname) => pathname === '/search').length >= 1);
@@ -2847,6 +2872,46 @@ test('web_fetch returns Codex-style source viewport with line navigation', async
         assert.equal(lineResult.structuredContent.source.line_start, 36);
         assert.match(lineResult.content[0].text, /L36: 2005 Corazon Libre/);
         assert.match(lineResult.content[0].text, /L38: 2009 Cantora 2/);
+    });
+});
+
+test('web_fetch expands the character budget when maxLines explicitly requests a wide viewport', async () => {
+    const lines = Array.from({ length: 30 }, (_, index) => `L${index + 1} ${'context '.repeat(55)}`);
+    lines[16] = 'Ruth Stein and Margaret Blount both object to increasingly cuddly, "fluffy" dragons.';
+    await withServer((request, response) => {
+        response.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' });
+        response.end(lines.join('\n'));
+    }, async (baseUrl) => {
+        const result = await webFetch({
+            url: `${baseUrl}/wide-article`,
+            maxLines: 300,
+            provider: 'builtin'
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.match(result.content[0].text, /L17: Ruth Stein and Margaret Blount/);
+        assert.match(result.content[0].text, /"fluffy" dragons/);
+        assert.ok(result.structuredContent.source.line_end >= 17);
+    });
+});
+
+test('web_fetch keeps a section heading with its first body paragraph at the viewport boundary', async () => {
+    const lines = Array.from({ length: 20 }, (_, index) => `L${index + 1} ${'context '.repeat(56)}`);
+    lines[10] = 'Fluffy Dragons';
+    lines[11] = `Ruth Stein and Margaret Blount both object to increasingly cuddly, "fluffy" dragons. ${'detail '.repeat(60)}`;
+    await withServer((request, response) => {
+        response.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' });
+        response.end(lines.join('\n'));
+    }, async (baseUrl) => {
+        const result = await webFetch({
+            url: `${baseUrl}/section-boundary`,
+            provider: 'builtin'
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.match(result.content[0].text, /L11: Fluffy Dragons/);
+        assert.match(result.content[0].text, /L12: Ruth Stein and Margaret Blount/);
+        assert.match(result.content[0].text, /"fluffy" dragons/);
     });
 });
 

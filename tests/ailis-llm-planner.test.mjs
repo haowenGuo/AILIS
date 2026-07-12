@@ -759,6 +759,106 @@ test('Persona receives a TaskAgent completion through the Codex-style mailbox', 
     }
 });
 
+test('Persona finalizes a completed TaskAgent result at the round budget without leaking tool protocol', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-persona-budget-finalization-'));
+    const llmServer = await createScriptedChatCompletionsServer(({ decisionCount }) => {
+        if (decisionCount === 1) {
+            return {
+                action: 'tool',
+                tool_call: {
+                    tool: 'spawn_agent',
+                    args: {
+                        task_name: 'gaia_exact_answer',
+                        message: 'Research the question and return the supported exact answer.',
+                        fork_turns: 'all'
+                    }
+                }
+            };
+        }
+        if (decisionCount === 2) {
+            return {
+                action: 'tool',
+                tool_call: {
+                    tool: 'wait_agent',
+                    args: { timeout_ms: 1 }
+                }
+            };
+        }
+        if (decisionCount === 3) {
+            return {
+                action: 'tool',
+                tool_call: {
+                    tool: 'list_agents',
+                    args: {}
+                }
+            };
+        }
+        if (decisionCount === 4) {
+            return '{"tool_calls":[{"name":"task_results","arguments":{}}]}';
+        }
+        return {
+            action: 'final',
+            final_answer: 'The exact answer is 17.'
+        };
+    });
+    const gateway = new AILISGateway({
+        port: 0,
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit')
+    });
+
+    try {
+        gateway.runtime.agent_control.execute_agent = async () => {
+            await delay(50);
+            return {
+                ok: true,
+                status: 'completed',
+                displayText: 'Verified calculation and sources. Final answer: 17.',
+                finalAnswer: '17'
+            };
+        };
+        const status = await gateway.start();
+        const result = await runAgent(status.url, {
+            sessionId: 'persona-budget-finalization-test',
+            message: 'Calculate the requested value and give the exact answer.',
+            agentLoop: 'llm',
+            maxAgentSteps: 4,
+            llmSettings: {
+                provider: 'openai-compatible',
+                baseUrl: llmServer.url,
+                apiKey: 'test-key',
+                model: 'mock-persona-budget-finalization',
+                temperature: 0,
+                timeoutMs: 10000
+            },
+            context: {
+                workspace: workspaceRoot,
+                agentLoop: 'llm',
+                directToolExecutor: true,
+                approved: true,
+                agentRole: 'persona_orchestrator',
+                agentWaitTimeoutMs: 1000
+            }
+        });
+
+        assert.equal(result.body.ok, true, JSON.stringify(result.body));
+        assert.equal(result.body.status, 'completed');
+        assert.equal(result.body.displayText, 'The exact answer is 17.');
+        assert.equal(llmServer.calls.length, 5);
+        assert.deepEqual(llmServer.calls[3].payload.tools || [], []);
+        assert.deepEqual(llmServer.calls[4].payload.tools || [], []);
+        assert.match(llmServer.calls[3].system, /user-facing AILIS final response layer/);
+        assert.match(JSON.stringify(llmServer.calls[3].payload.messages), /Final answer: 17/);
+        assert.match(JSON.stringify(llmServer.calls[3].payload.messages), /ORIGINAL_USER_REQUEST/);
+        assert.doesNotMatch(result.body.displayText, /tool_calls|subagent_notification|TaskAgent/);
+    } finally {
+        await gateway.stop();
+        await llmServer.close();
+        await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
+});
+
 test('Persona defers an early final until its live TaskAgent result reaches the mailbox', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-persona-early-final-'));
     const llmServer = await createScriptedChatCompletionsServer(({ decisionCount }) => {

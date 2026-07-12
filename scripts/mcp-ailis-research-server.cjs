@@ -1679,6 +1679,15 @@ function scoreSearchSourceQualityPrior(result = {}, query = '') {
     if (queryMentionsHost) {
         score += 28;
     }
+    const asksForSpecificArticle = /\b(?:article|paper|publication|essay|study)\b/i.test(query);
+    const articleDetailPath = /(?:^|\/)(?:articles?|papers?|publications?)(?:\/view)?\/[^/]+/i.test(pathname);
+    const collectionPath = /(?:^|\/)(?:issues?|archives?|search|category|tag)(?:\/|$)/i.test(pathname);
+    if (asksForSpecificArticle && articleDetailPath) {
+        score += 140;
+    }
+    if (asksForSpecificArticle && collectionPath) {
+        score -= 36;
+    }
     const temporalAnchors = temporalAnchorsFromSearchQuery(query);
     if (temporalAnchors.months.length || temporalAnchors.years.length) {
         const lowerEvidenceText = `${title} ${snippet} ${url}`.toLowerCase();
@@ -5495,11 +5504,16 @@ function buildWebFetchResult({ url, args = {}, maxChars = MAX_FETCH_CHARS, fetch
     const encodingRepair = repairUtf8MojibakeText(rawText);
     const text = encodingRepair.text;
     const linkQuery = normalizeString(args.query || args.contains || args.extract_query || args.extractQuery || '');
+    const requestedMaxLines = Number(args.maxLines || args.max_lines || 0);
+    const defaultViewportChars = Number.isFinite(requestedMaxLines) && requestedMaxLines > 0
+        ? Math.min(maxChars, Math.max(4800, Math.round(requestedMaxLines * 100)))
+        : Math.min(maxChars, 4800);
+    const maxViewportChars = Math.max(1000, Math.min(maxChars, MAX_FETCH_CHARS));
     const viewportChars = clampNumber(
-        args.viewportChars || args.viewport_chars || Math.min(maxChars, 4800),
-        Math.min(maxChars, 4800),
+        args.viewportChars || args.viewport_chars || defaultViewportChars,
+        defaultViewportChars,
         1000,
-        5200
+        maxViewportChars
     );
     const focused = focusTextWindow(text, {
         query: linkQuery,
@@ -6298,6 +6312,15 @@ function formatWebResearchBundle({ query = '', searchDetails = {}, pages = [], b
         lines.push('Candidate choices:');
         searchDetails.candidateChoices.slice(0, 4).forEach((choice, index) => {
             lines.push(`- ${index + 1}. ${choice.label || choice.title || choice.url}`);
+        });
+    }
+    if (pages.length) {
+        lines.push('Highest-ranked fetched sources:');
+        pages.slice(0, 5).forEach((page, index) => {
+            const refId = `source_${index + 1}`;
+            lines.push(`- [${refId}] ${page.title || page.url}`);
+            lines.push(`  URL: ${page.url}`);
+            lines.push(`  Open page: web_fetch ${JSON.stringify({ url: page.url, lineno: 1 })}`);
         });
     }
     const searchEvidenceText = formatCandidateSearchEvidence(searchDetails.results || [], 8);
@@ -9273,6 +9296,14 @@ function firstLineWithQueryYear(lines = [], query = '', startLine = 1) {
     return 0;
 }
 
+function sourceLineLooksLikeSectionHeading(value = '') {
+    const text = normalizeString(value);
+    if (!text || text.length > 120 || text.split(/\s+/).length > 14) {
+        return false;
+    }
+    return !/[.!?;:]$/.test(text);
+}
+
 function buildSourceLineWindow(text = '', {
     url = '',
     contentType = '',
@@ -9301,7 +9332,7 @@ function buildSourceLineWindow(text = '', {
     }
     const startLine = Math.max(1, requestedLine || focusLine || 1);
     const lineBudget = Math.max(1, clampNumber(maxLines, 120, 1, 300));
-    const charBudget = Math.max(1000, clampNumber(maxChars, 4800, 1000, 5200));
+    const charBudget = Math.max(1000, clampNumber(maxChars, 4800, 1000, MAX_FETCH_CHARS));
     const targetEndLine = requestedEnd && requestedEnd >= startLine
         ? Math.min(totalLines, requestedEnd)
         : Math.min(totalLines, startLine + lineBudget - 1);
@@ -9319,6 +9350,20 @@ function buildSourceLineWindow(text = '', {
             rendered
         });
         visibleChars += rendered.length + 1;
+    }
+    const lastSelected = selected[selected.length - 1];
+    if (
+        lastSelected &&
+        lastSelected.lineNumber < targetEndLine &&
+        sourceLineLooksLikeSectionHeading(lastSelected.text)
+    ) {
+        const nextLineNumber = lastSelected.lineNumber + 1;
+        const nextText = lines[nextLineNumber - 1] ?? '';
+        selected.push({
+            lineNumber: nextLineNumber,
+            text: nextText,
+            rendered: `L${nextLineNumber}: ${nextText}`
+        });
     }
     const lineEndActual = selected.length ? selected[selected.length - 1].lineNumber : startLine;
     const selectionReason = requestedLine
