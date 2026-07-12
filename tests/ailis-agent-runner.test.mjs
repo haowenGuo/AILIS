@@ -15,6 +15,7 @@ const {
     AILISAgentRunner,
         buildAgentDirectToolSpecs,
         buildLlmAgentDirectToolPrompt,
+        buildTaskRunHandoffPackage,
         build_forked_context_checkpoint,
         buildToolObservationDigest,
     isAgentLlmSettingsMissing,
@@ -22,6 +23,52 @@ const {
     splitNativeProgressNoteArgs,
     stripControlTags
 } = require('../electron/ailis-agent-runner.cjs');
+
+test('TaskAgent handoff preserves structured web source refs when prose omits URLs', () => {
+    const sourceUrl = 'https://docs.example.test/guide';
+    const handoff = buildTaskRunHandoffPackage({
+        status: 'completed',
+        runId: 'task-run-source-refs',
+        sessionId: 'task-session-source-refs',
+        message: 'research the current guide with sources',
+        finalAnswer: 'The guide is complete and uses the official documentation.',
+        stepResults: [{
+            id: 'fetch-1',
+            iteration: 1,
+            tool: 'mcp__ailis_research__web_fetch',
+            title: 'Open official guide',
+            args: { url: sourceUrl, lineno: 17 },
+            response: {
+                ok: true,
+                status: 'completed',
+                result: {
+                    structuredContent: {
+                        result: {
+                            structuredContent: {
+                                source: {
+                                    ref_id: 'source_1',
+                                    title: 'Official guide',
+                                    url: sourceUrl,
+                                    lineno: 17
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }]
+    });
+
+    assert.deepEqual(handoff.sourceRefs, [{
+        ref_id: 'source_1',
+        title: 'Official guide',
+        url: sourceUrl,
+        lineno: 17
+    }]);
+    assert.match(handoff.userVisibleSummary, /Sources used:/);
+    assert.match(handoff.userVisibleSummary, /https:\/\/docs\.example\.test\/guide/);
+    assert.match(handoff.collectedData[0].sourceRefs[0].url, /docs\.example\.test/);
+});
 
 async function jsonFetch(url, options = {}) {
     const response = await fetch(url, {

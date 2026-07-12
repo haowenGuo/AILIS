@@ -4821,6 +4821,94 @@ function extractHandoffArtifactId(details = {}, result = {}) {
     );
 }
 
+function normalizeHandoffSourceRef(candidate = {}) {
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) {
+        return null;
+    }
+    const action = candidate.action && typeof candidate.action === 'object' ? candidate.action : {};
+    const url = normalizeText(candidate.url || action.url);
+    if (!url) {
+        return null;
+    }
+    try {
+        const parsed = new URL(url);
+        if (!['http:', 'https:'].includes(parsed.protocol)) {
+            return null;
+        }
+    } catch {
+        return null;
+    }
+    const lineno = Number(candidate.lineno || candidate.line_start || candidate.lineStart || action.lineno || 0);
+    return {
+        ref_id: normalizeText(candidate.ref_id || candidate.refId || candidate.id, url),
+        title: summarize(normalizeText(candidate.title || candidate.name || candidate.text, url), 180),
+        url,
+        ...(Number.isFinite(lineno) && lineno > 0 ? { lineno } : {})
+    };
+}
+
+function collectHandoffSourceRefs(stepResult = {}) {
+    const parsedMcp = parseDirectMcpToolId(stepResult.tool);
+    const tool = normalizeText(parsedMcp?.tool || stepResult.tool).toLowerCase();
+    if (!['web_research', 'web_search', 'web_fetch', 'web_find'].includes(tool)) {
+        return [];
+    }
+    const details = getToolResultDetails(stepResult);
+    const search = details.search && typeof details.search === 'object' ? details.search : {};
+    const fetch = details.fetch && typeof details.fetch === 'object' ? details.fetch : {};
+    const candidates = [
+        details.source,
+        details.source_window,
+        details.sourceWindow,
+        details.source_viewport,
+        details.sourceViewport,
+        details.webSearchOutput?.source_viewport,
+        ...(Array.isArray(fetch.sources) ? fetch.sources : []),
+        ...(Array.isArray(details.sources) ? details.sources : []),
+        ...(Array.isArray(search.details?.results) ? search.details.results : []),
+        ...(Array.isArray(search.results) ? search.results : []),
+        ...(Array.isArray(details.results) ? details.results : []),
+        stepResult.args?.url ? {
+            url: stepResult.args.url,
+            lineno: stepResult.args.lineno,
+            ref_id: stepResult.args.ref_id
+        } : null
+    ];
+    const refs = [];
+    const seen = new Set();
+    for (const candidate of candidates) {
+        const ref = normalizeHandoffSourceRef(candidate);
+        if (!ref || seen.has(ref.url)) {
+            continue;
+        }
+        seen.add(ref.url);
+        refs.push(ref);
+        if (refs.length >= 12) {
+            break;
+        }
+    }
+    return refs;
+}
+
+function mergeHandoffSourceRefs(items = [], limit = 16) {
+    const refs = [];
+    const seen = new Set();
+    for (const item of Array.isArray(items) ? items : []) {
+        for (const candidate of Array.isArray(item?.sourceRefs) ? item.sourceRefs : []) {
+            const ref = normalizeHandoffSourceRef(candidate);
+            if (!ref || seen.has(ref.url)) {
+                continue;
+            }
+            seen.add(ref.url);
+            refs.push(ref);
+            if (refs.length >= limit) {
+                return refs;
+            }
+        }
+    }
+    return refs;
+}
+
 function summarizeStepResultForHandoff(stepResult = {}, index = 0) {
     const response = stepResult.response || {};
     const result = response.result || {};
@@ -4840,6 +4928,7 @@ function summarizeStepResultForHandoff(stepResult = {}, index = 0) {
         args: sanitizeToolArgsForPrompt(stepResult.args || null),
         summary: summarize(resultText, response.ok === true ? 520 : 700),
         evidenceRefs,
+        sourceRefs: collectHandoffSourceRefs(stepResult),
         outputId: extractHandoffOutputId(details, result),
         artifactId: extractHandoffArtifactId(details, result)
     };
@@ -4889,9 +4978,21 @@ function buildTaskRunHandoffDisplayText(handoff = {}) {
             handoff.finalAnswer || handoff.partialAnswer || handoff.userVisibleSummary,
             '任务已经完成。'
         );
-        return looksLikeLeakedAgentProtocol(completedText)
-            ? 'TaskAgent 返回了未执行的内部调用协议，运行时已阻止展示；现有证据和检查点已经保留。'
-            : completedText;
+        if (looksLikeLeakedAgentProtocol(completedText)) {
+            return 'TaskAgent 返回了未执行的内部调用协议，运行时已阻止展示；现有证据和检查点已经保留。';
+        }
+        const missingSources = (Array.isArray(handoff.sourceRefs) ? handoff.sourceRefs : [])
+            .filter((source) => source?.url && !completedText.includes(source.url))
+            .slice(0, 8);
+        if (!missingSources.length) {
+            return completedText;
+        }
+        return [
+            completedText,
+            '',
+            'Sources used:',
+            ...missingSources.map((source) => `- ${source.title || source.url}: ${source.url}${source.lineno ? ` (line ${source.lineno})` : ''}`)
+        ].join('\n');
     }
     if (handoff.status === 'max_loop') {
         lines.push(`TaskAgent 触发了执行轮次保险丝（${stats.maxSteps || stats.stepsUsed || 0}），我先停住并整理现场，避免继续空转。`);
@@ -4947,6 +5048,7 @@ function buildTaskRunHandoffPackage({
     const safeStepResults = Array.isArray(stepResults) ? stepResults : [];
     const safeEvents = Array.isArray(events) ? events : [];
     const summarizedSteps = safeStepResults.map(summarizeStepResultForHandoff);
+    const sourceRefs = mergeHandoffSourceRefs(summarizedSteps);
     const successfulSteps = summarizedSteps.filter((step) => step.ok);
     const failedSteps = summarizedSteps.filter((step) => !step.ok);
     const collectedData = successfulSteps
@@ -4958,6 +5060,7 @@ function buildTaskRunHandoffPackage({
             summary: step.summary,
             source: step.tool,
             evidenceRefs: step.evidenceRefs,
+            sourceRefs: step.sourceRefs,
             outputId: step.outputId || '',
             artifactId: step.artifactId || ''
         }));
@@ -4991,6 +5094,7 @@ function buildTaskRunHandoffPackage({
         task: normalizeText(message),
         finalAnswer: normalizeText(finalAnswer),
         partialAnswer: normalizeText(partialAnswer),
+        sourceRefs,
         failureAnalysis,
         executionTrace: {
             stepsUsed: safeStepResults.length,
@@ -10841,6 +10945,7 @@ module.exports = {
     isAgentLlmSettingsMissing,
     buildAgentDecisionLowLatencyPayload,
     buildLlmAgentDirectToolPrompt,
+    buildTaskRunHandoffPackage,
     build_forked_context_checkpoint,
     keep_forked_rollout_item,
     resolveAgentPromptProfile,

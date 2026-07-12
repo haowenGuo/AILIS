@@ -20,6 +20,12 @@ test('AILIS task result capsules reuse related public results without exposing c
         taskRunHandoff: {
             status: 'completed',
             finalAnswer: '[expression:happy]洛茜适合物理输出队，核心是先叠增益再爆发。\n<｜｜DSML｜｜tool_calls>',
+            sourceRefs: [{
+                ref_id: 'source-1',
+                title: '官方角色资料',
+                url: 'https://example.test/roxy',
+                lineno: 12
+            }],
             collectedData: [
                 {
                     title: '角色资料页',
@@ -32,6 +38,12 @@ test('AILIS task result capsules reuse related public results without exposing c
     });
 
     assert.equal(capsule.status, 'completed');
+    assert.deepEqual(capsule.sourceRefs, [{
+        ref_id: 'source-1',
+        title: '官方角色资料',
+        url: 'https://example.test/roxy',
+        lineno: 12
+    }]);
     assert.doesNotMatch(capsule.answer, /expression|DSML|tool_calls/);
 
     const related = store.search('洛茜配队怎么调整', { sessionId: 'main' });
@@ -42,6 +54,7 @@ test('AILIS task result capsules reuse related public results without exposing c
     assert.match(context, /generated_at: 2026-07-09T12:00:00.000Z/);
     assert.match(context, /洛茜适合物理输出队/);
     assert.match(context, /不代表本轮重新执行/);
+    assert.match(context, /source_refs: https:\/\/example\.test\/roxy/);
     assert.doesNotMatch(context, /expression|DSML|tool_calls/);
 });
 

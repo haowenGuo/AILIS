@@ -119,6 +119,37 @@ function collectRefs(items = []) {
     return refs.slice(0, 80);
 }
 
+function normalizeSourceRefs(values = []) {
+    const refs = [];
+    const seen = new Set();
+    for (const value of Array.isArray(values) ? values : []) {
+        if (!value || typeof value !== 'object' || Array.isArray(value)) {
+            continue;
+        }
+        const url = normalizeString(value.url);
+        try {
+            const parsed = new URL(url);
+            if (!['http:', 'https:'].includes(parsed.protocol) || seen.has(url)) {
+                continue;
+            }
+        } catch {
+            continue;
+        }
+        seen.add(url);
+        const lineno = Number(value.lineno || value.line_start || value.lineStart || 0);
+        refs.push({
+            ref_id: normalizeString(value.ref_id || value.refId || value.id, url),
+            title: truncate(value.title || value.name || url, 180),
+            url,
+            ...(Number.isFinite(lineno) && lineno > 0 ? { lineno } : {})
+        });
+        if (refs.length >= 16) {
+            break;
+        }
+    }
+    return refs;
+}
+
 function buildCapsule(input = {}) {
     const handoff = input.taskRunHandoff && typeof input.taskRunHandoff === 'object'
         ? input.taskRunHandoff
@@ -150,6 +181,7 @@ function buildCapsule(input = {}) {
         claims: collectedData.map((item) => truncate(item.summary || item.title, 500)).filter(Boolean).slice(0, 24),
         evidenceRefs: collectRefs(collectedData),
         outputRefs,
+        sourceRefs: normalizeSourceRefs(handoff.sourceRefs),
         unresolvedFields: (Array.isArray(input.unresolvedFields)
             ? input.unresolvedFields
             : [handoff.failureAnalysis?.bottleneck, handoff.nextStep?.recommendation]
@@ -178,6 +210,7 @@ function normalizeStoredCapsule(raw = {}) {
         claims: (Array.isArray(raw.claims) ? raw.claims : []).map((value) => truncate(value, 500)).filter(Boolean).slice(0, 24),
         evidenceRefs: normalizeRefs(raw.evidenceRefs),
         outputRefs: normalizeRefs(raw.outputRefs),
+        sourceRefs: normalizeSourceRefs(raw.sourceRefs),
         unresolvedFields: (Array.isArray(raw.unresolvedFields) ? raw.unresolvedFields : [])
             .map((value) => truncate(value, 300)).filter(Boolean).slice(0, 24),
         source: 'task_agent_public_result'
@@ -209,6 +242,7 @@ function normalizeActiveTask(raw = {}) {
             .map((value) => normalizeString(value)).filter(Boolean).slice(0, 80),
         outputRefs: (Array.isArray(raw.outputRefs) ? raw.outputRefs : [])
             .map((value) => normalizeString(value)).filter(Boolean).slice(0, 80),
+        sourceRefs: normalizeSourceRefs(raw.sourceRefs),
         checkpoint: raw.checkpoint && typeof raw.checkpoint === 'object' ? raw.checkpoint : null,
         checkpointAvailable: raw.checkpointAvailable === true || Boolean(raw.checkpoint),
         traceRef: normalizeString(raw.traceRef || raw.childRunId),
@@ -321,6 +355,7 @@ class AILISTaskResultCapsuleStore {
             ].filter(Boolean),
             evidenceRefs: collectRefs(collectedData),
             outputRefs: collectRefs(collectedData),
+            sourceRefs: normalizeSourceRefs(handoff.sourceRefs),
             checkpoint,
             checkpointAvailable: Boolean(checkpoint),
             traceRef: handoff.traceRef || subagent.childRunId || previous?.traceRef,
@@ -451,6 +486,7 @@ class AILISTaskResultCapsuleStore {
                 `  full_result: use task_results action=get with id=${capsule.id}`,
                 capsule.evidenceRefs.length ? `  evidence_refs: ${capsule.evidenceRefs.slice(0, 8).join(', ')}` : '',
                 capsule.outputRefs.length ? `  output_refs: ${capsule.outputRefs.slice(0, 8).join(', ')}` : '',
+                capsule.sourceRefs.length ? `  source_refs: ${capsule.sourceRefs.slice(0, 8).map((source) => source.url).join(', ')}` : '',
                 capsule.unresolvedFields.length ? `  unresolved_fields: ${truncate(capsule.unresolvedFields.join('；'), 500)}` : ''
             ].filter(Boolean).join('\n');
             if (sections.join('\n').length + block.length > maxChars) {
