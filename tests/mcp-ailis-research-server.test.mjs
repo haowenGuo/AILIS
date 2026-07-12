@@ -12,6 +12,7 @@ const {
     TOOLS,
     assessSearchConfidence,
     buildEffectiveSearchQuery,
+    buildWebResearchCandidates,
     buildSearchClarificationChoices,
     buildSuggestedCallsFromSearchResults,
     buildYouTubeEvidenceSearchQuery,
@@ -1774,6 +1775,63 @@ test('web_research expands query variants and fetches the high-signal result', a
     });
 });
 
+test('web_research reserves fetch coverage for each explicit model query', () => {
+    const candidates = buildWebResearchCandidates({
+        query: 'Calculate a result from two independent facts',
+        results: [
+            {
+                title: 'Primary topic overview',
+                url: 'https://primary.example/overview',
+                queryScore: 100,
+                queryVariantRole: 'original',
+                queryVariantIndex: 1
+            },
+            {
+                title: 'First explicit fact',
+                url: 'https://first.example/fact',
+                queryScore: 90,
+                queryVariantRole: 'explicit_query',
+                queryVariantIndex: 2
+            },
+            {
+                title: 'More evidence for the first explicit fact',
+                url: 'https://first-mirror.example/fact',
+                queryScore: 80,
+                queryVariantRole: 'explicit_query',
+                queryVariantIndex: 2
+            },
+            {
+                title: 'Second explicit fact',
+                url: 'https://second.example/fact',
+                queryScore: 40,
+                queryVariantRole: 'explicit_query',
+                queryVariantIndex: 3
+            },
+            {
+                title: 'Fallback evidence for the second explicit fact',
+                url: 'https://second.example/backup',
+                queryScore: 35,
+                queryVariantRole: 'explicit_query',
+                queryVariantIndex: 3
+            },
+            {
+                title: 'Alternate-host evidence for the second explicit fact',
+                url: 'https://second-alternate.example/fact',
+                queryScore: 30,
+                queryVariantRole: 'explicit_query',
+                queryVariantIndex: 3
+            }
+        ]
+    }, 4);
+
+    assert.deepEqual(candidates.map((candidate) => candidate.url), [
+        'https://first.example/fact',
+        'https://second.example/fact',
+        'https://first-mirror.example/fact',
+        'https://second-alternate.example/fact'
+    ]);
+});
+
 test('web_research exact entity planning preserves specific target terms', async () => {
     const searchQueries = [];
     const guideBody = [
@@ -2199,6 +2257,29 @@ test('web_research returns candidate evidence for video metadata pages without a
         assert.match(result.content[0].text, /Bundle contents: ranked search results, fetched page excerpts/);
         assert.doesNotMatch(result.content[0].text, /Readiness:|Recovery hint:|Output policy:|Evidence decision:|Evidence gap:|Retrieval note:/);
         assert.match(result.content[0].text, /Candidate snippets from search results/);
+    });
+});
+
+test('web_fetch does not classify technical documentation as a video page from generic terms', async () => {
+    const technicalBody = [
+        '<h1>Rendering views and recommendations</h1>',
+        '<p>This technical reference documents video frame views, watch expressions, and recommendation APIs.</p>',
+        `<p>${'The API returns structured views for video metadata and recommends safe watch expressions. '.repeat(40)}</p>`,
+        '<h2>Reference</h2>',
+        '<p>Use the documented methods and examples to implement the feature.</p>'
+    ].join('');
+    await withServer((request, response) => {
+        response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        response.end(`<html><body>${technicalBody}</body></html>`);
+    }, async (baseUrl) => {
+        const result = await webFetch({
+            url: `${baseUrl}/documentation`,
+            provider: 'builtin'
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.equal(result.structuredContent.pageType, 'article_or_document_page');
+        assert.notEqual(result.structuredContent.evidenceQuality, 'metadata_only');
     });
 });
 

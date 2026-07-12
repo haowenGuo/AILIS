@@ -3012,12 +3012,12 @@ function classifyFetchedPageType({ text = '', url = '', contentType = '', sugges
     ) {
         return 'search_results_page';
     }
+    const knownVideoUrl = /(?:youtube\.com\/watch|youtu\.be\/|bilibili\.com\/video\/|\/video\/|vimeo\.com\/)/i.test(normalizedUrl);
+    const explicitVideoChrome = /播放量|弹幕|正在缓冲|未经作者授权|相关推荐|视频播放器|video player|watch later|share (?:this )?video|subscribers?/i.test(normalizedText);
+    const supportingVideoSignal = /视频|播放|video|watch|投稿|subscribe/i.test(normalizedText);
     if (
-        /(?:youtube\.com\/watch|youtu\.be\/|bilibili\.com\/video\/|\/video\/|vimeo\.com\/)/i.test(normalizedUrl) ||
-        (
-            /视频|播放|弹幕|views?|subscribers?|正在缓冲|未经作者授权/i.test(normalizedText) &&
-            /播放量|弹幕|video|watch|投稿|recommend|相关推荐/i.test(normalizedText)
-        )
+        knownVideoUrl ||
+        (explicitVideoChrome && supportingVideoSignal)
     ) {
         return 'video_page';
     }
@@ -5975,21 +5975,82 @@ function buildWebResearchCandidates(searchDetails = {}, limit = 3) {
             }, 'optional_followup_call');
         }
     }
+    const selected = [];
+    const selectedUrls = new Set();
+    const selectedHosts = new Set();
+    const selectCandidate = (candidate) => {
+        if (!candidate || selectedUrls.has(candidate.url) || selected.length >= limit) {
+            return false;
+        }
+        selected.push(candidate);
+        selectedUrls.add(candidate.url);
+        const host = extractHostname(candidate.url);
+        if (host) {
+            selectedHosts.add(host);
+        }
+        return true;
+    };
+    const explicitVariantGroups = new Map();
+    for (const candidate of candidatePool) {
+        const variantIndex = Number(candidate.queryVariantIndex);
+        if (
+            normalizeString(candidate.queryVariantRole) !== 'explicit_query' ||
+            !Number.isFinite(variantIndex) ||
+            variantIndex <= 0
+        ) {
+            continue;
+        }
+        if (!explicitVariantGroups.has(variantIndex)) {
+            explicitVariantGroups.set(variantIndex, []);
+        }
+        explicitVariantGroups.get(variantIndex).push(candidate);
+    }
+    const diversifyCandidateGroupByHost = (candidates = []) => {
+        const primary = [];
+        const overflow = [];
+        const seenHosts = new Set();
+        for (const candidate of candidates) {
+            const host = extractHostname(candidate.url);
+            if (!host || !seenHosts.has(host)) {
+                if (host) {
+                    seenHosts.add(host);
+                }
+                primary.push(candidate);
+            } else {
+                overflow.push(candidate);
+            }
+        }
+        return [...primary, ...overflow];
+    };
+    const explicitGroups = [...explicitVariantGroups.entries()]
+        .sort(([leftIndex], [rightIndex]) => leftIndex - rightIndex)
+        .map(([, candidates]) => diversifyCandidateGroupByHost(candidates));
+    const maxGroupDepth = Math.max(0, ...explicitGroups.map((group) => group.length));
+    for (let depth = 0; depth < maxGroupDepth && selected.length < limit; depth += 1) {
+        for (const group of explicitGroups) {
+            selectCandidate(group[depth]);
+            if (selected.length >= limit) {
+                break;
+            }
+        }
+    }
     const primary = [];
     const overflow = [];
-    const seenHosts = new Set();
     for (const candidate of candidatePool) {
+        if (selectedUrls.has(candidate.url)) {
+            continue;
+        }
         const host = extractHostname(candidate.url);
-        if (!host || !seenHosts.has(host)) {
+        if (!host || !selectedHosts.has(host)) {
             if (host) {
-                seenHosts.add(host);
+                selectedHosts.add(host);
             }
             primary.push(candidate);
         } else {
             overflow.push(candidate);
         }
     }
-    return [...primary, ...overflow].slice(0, limit);
+    return [...selected, ...primary, ...overflow].slice(0, limit);
 }
 
 function extractEvidenceSnippetsFromText(text = '', query = '', limit = 4) {
@@ -11300,6 +11361,7 @@ module.exports = {
     TOOLS,
     assessSearchConfidence,
     buildEffectiveSearchQuery,
+    buildWebResearchCandidates,
     buildWebResearchQueryPlan,
     buildSearchClarificationChoices,
     buildSuggestedCallsFromSearchResults,
