@@ -4,6 +4,8 @@ const DEFAULT_TEXT_BUDGET_CHARS = 6000;
 const DEFAULT_JSON_STRING_BUDGET_CHARS = 1200;
 const DEFAULT_JSON_ARRAY_ITEMS = 24;
 const DEFAULT_JSON_OBJECT_KEYS = 80;
+const MAX_SOURCE_VIEWPORT_LINES = 256;
+const MAX_SOURCE_VIEWPORT_TEXT_CHARS = 24000;
 const DEFAULT_CONTEXT_INPUT_LIMIT_TOKENS = 128000;
 const DEFAULT_CONTEXT_RESERVED_OUTPUT_TOKENS = 4096;
 const DEFAULT_CONTEXT_SYSTEM_RESERVE_TOKENS = 8192;
@@ -25,6 +27,30 @@ function cloneJson(value) {
     } catch {
         return value;
     }
+}
+
+function isSourceViewportLine(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value) || typeof value.text !== 'string') {
+        return false;
+    }
+    return Number.isFinite(Number(value.lineno ?? value.line_number ?? value.lineNumber));
+}
+
+function compactSourceViewportLinesForModel(lines, options = {}) {
+    const maxStringChars = Math.max(64, Number(options.maxStringChars || DEFAULT_JSON_STRING_BUDGET_CHARS));
+    const perLineTextChars = Math.max(
+        64,
+        Math.min(maxStringChars, Math.floor(MAX_SOURCE_VIEWPORT_TEXT_CHARS / Math.max(1, lines.length)))
+    );
+    return lines.map((line) => {
+        const compacted = {};
+        for (const [key, value] of Object.entries(line)) {
+            compacted[key] = typeof value === 'string'
+                ? truncateMiddleText(value, perLineTextChars)
+                : cloneJson(value);
+        }
+        return compacted;
+    });
 }
 
 const MODEL_GUIDANCE_KEYS = new Set([
@@ -469,6 +495,16 @@ function compactJsonForModel(value, options = {}, depth = 0, parentKey = '') {
     }
     if (value == null || typeof value !== 'object') {
         return value;
+    }
+    // Source viewports are already bounded by the web tool. Preserve the full
+    // line range so generic array compaction cannot discard evidence near the end.
+    if (
+        parentKey === 'lines' &&
+        Array.isArray(value) &&
+        value.length <= MAX_SOURCE_VIEWPORT_LINES &&
+        value.every(isSourceViewportLine)
+    ) {
+        return compactSourceViewportLinesForModel(value, options);
     }
     if (depth >= maxDepth) {
         try {

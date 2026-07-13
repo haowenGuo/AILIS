@@ -96,7 +96,7 @@ const MAX_MCP_TOOL_DESCRIPTION_CHARS = 900;
 const DEFAULT_AGENT_LOOP_STEPS = 30;
 const MAX_AGENT_LOOP_STEPS = 30;
 const TASK_AGENT_MAX_MODEL_ROUNDS = 4;
-const TASK_AGENT_FINALIZATION_CONTEXT_CHARS = 14000;
+const TASK_AGENT_FINALIZATION_CONTEXT_CHARS = 18000;
 const PERSONA_SUBAGENT_FINALIZATION_CONTEXT_CHARS = 24000;
 const DEFAULT_PENDING_PLAN_TTL_MS = 30 * 60 * 1000;
 const DEFAULT_AGENT_DECISION_TIMEOUT_MS = 120000;
@@ -6515,7 +6515,16 @@ function buildCanonicalWebObservationPromptText(stepResult = {}) {
     if (!sourceText) {
         return null;
     }
-    const text = summarizeForModel(sourceText, TOOL_OBSERVATION_TEXT_CHARS * 3);
+    const hasBoundedSourceViewport = items.some((item) =>
+        item?.type === 'web_search_call' &&
+        ['open_page', 'find_in_page'].includes(normalizeText(item?.action?.type))
+    );
+    const maxChars = hasBoundedSourceViewport
+        ? ARTIFACT_OBSERVATION_ROW_WINDOW_TEXT_CHARS
+        : TOOL_OBSERVATION_TEXT_CHARS * 3;
+    const text = sourceText.length <= maxChars
+        ? sourceText
+        : summarizeForModel(sourceText, maxChars);
     return {
         text,
         lossless: text === sourceText,
@@ -6573,35 +6582,6 @@ function buildToolObservationDigest(stepResults = []) {
                 : null
         };
     });
-}
-
-function buildTaskAgentFinalizationContext({
-    message = '',
-    constraints = [],
-    currentPlan = null,
-    unresolvedFields = [],
-    stepResults = []
-} = {}) {
-    const evidence = buildToolObservationDigest(stepResults).map((item) => ({
-        tool: item.tool,
-        status: item.status,
-        ok: item.ok,
-        args: item.args,
-        observation: item.text,
-        evidence_refs: item.evidenceRefs
-    }));
-    return summarizeForModel([
-        'TaskAgent finalization package.',
-        'Write the best supported final answer for the original task. Do not call or serialize tools.',
-        'Do not require exhaustive coverage or perfect evidence unless the original task explicitly requires it. Omit unsupported optional details; state a limitation only when it materially changes the answer.',
-        'Follow the user-requested answer shape, unit scaling, rounding, and brevity exactly.',
-        '',
-        `ORIGINAL_TASK:\n${normalizeText(message)}`,
-        constraints.length ? `CONSTRAINTS:\n${JSON.stringify(constraints, null, 2)}` : '',
-        currentPlan ? `CURRENT_PLAN:\n${JSON.stringify(currentPlan, null, 2)}` : '',
-        unresolvedFields.length ? `UNRESOLVED_FIELDS:\n${JSON.stringify(unresolvedFields, null, 2)}` : '',
-        `EVIDENCE_OBSERVATIONS:\n${JSON.stringify(evidence, null, 2)}`
-    ].filter(Boolean).join('\n\n'), TASK_AGENT_FINALIZATION_CONTEXT_CHARS);
 }
 
 function parseCompletedSubagentNotificationInputItem(item = {}) {
@@ -6765,6 +6745,41 @@ function buildPersonaSubagentFinalizationInstruction({ exactAnswerMode = false }
 }
 
 const buildLosslessToolObservationDigest = buildToolObservationDigest;
+
+function buildTaskAgentFinalizationContext({
+    message = '',
+    constraints = [],
+    runtimeEnvironment = null,
+    stepResults = [],
+    exactAnswerMode = false
+} = {}) {
+    return summarizeForModel([
+        'TaskAgent finalization package.',
+        'Answer the original user request using only the completed tool observations below.',
+        'Do not restart the task or request another tool. Omit unsupported optional details.',
+        exactAnswerMode
+            ? 'This is exact-answer evaluation: return the shortest exact answer requested by the user.'
+            : 'Give the best supported answer now and mention only material evidence limitations.',
+        '',
+        `ORIGINAL_USER_REQUEST:\n${normalizeText(message)}`,
+        constraints.length ? `CONSTRAINTS:\n${JSON.stringify(constraints, null, 2)}` : '',
+        runtimeEnvironment ? `RUNTIME_ENVIRONMENT:\n${JSON.stringify(runtimeEnvironment, null, 2)}` : '',
+        `TOOL_OBSERVATIONS:\n${JSON.stringify(buildToolObservationDigest(stepResults), null, 2)}`
+    ].filter(Boolean).join('\n\n'), TASK_AGENT_FINALIZATION_CONTEXT_CHARS);
+}
+
+function buildTaskAgentFinalizationInstruction({ exactAnswerMode = false } = {}) {
+    return [
+        'You are the AILIS TaskAgent final response layer.',
+        'No tools are available in this request.',
+        'Use the supplied original request and completed tool observations to answer now.',
+        'Return plain user-facing assistant text only.',
+        'Never emit DSML, tool_calls, function_call, XML control tags, internal JSON, runtime budgets, or orchestration details.',
+        exactAnswerMode
+            ? 'The user requested an exact answer. Return that exact answer plainly and without extra prose.'
+            : 'Keep the answer concise and preserve the useful supported result.'
+    ].filter(Boolean).join('\n');
+}
 
 function buildExactAnswerContractPromptObject({ exactAnswerMode = false, evidenceArtifacts = [] } = {}) {
     if (!exactAnswerMode) {
@@ -7116,6 +7131,7 @@ async function callLlmAgentDirectToolDecision(settings, payload, {
         payload.finalizationInstruction,
         'TaskAgent finalization: answer the original task from the supplied evidence package. Do not call or serialize any tool. Return plain user-facing prose only. Give the best supported answer now; omit unsupported optional details, and mention a limitation only when it materially affects the answer.'
     );
+    const finalizationTools = Array.isArray(payload.finalizationTools) ? payload.finalizationTools : [];
     const providerPayload = finalizationContext
         ? {
               ...payload,
@@ -7127,6 +7143,11 @@ async function callLlmAgentDirectToolDecision(settings, payload, {
               instructions: finalizationInstruction,
               tools: Array.isArray(payload.finalizationTools) ? payload.finalizationTools : payload.tools
           }
+        : forceFinalResponse
+            ? {
+                  ...payload,
+                  tools: finalizationTools
+              }
         : payload;
     let response = await callDesktopLlmProvider(settings, {
         ...providerPayload,
@@ -9205,15 +9226,8 @@ class AILISAgentRunner {
                 tools: directModelInputPrompt.tools || directToolSpecs,
                 toolChoice: directToolChoice,
                 jsonMode: false,
-                finalizationContext: safetyFinalizationReason && isTaskAgentRole(agentRuntimeRole)
-                    ? buildTaskAgentFinalizationContext({
-                          message,
-                          constraints,
-                          currentPlan,
-                          unresolvedFields,
-                          stepResults
-                      })
-                    : safetyFinalizationReason && isPersonaOrchestratorRole(agentRuntimeRole) && completedSubagentNotifications.length
+                finalizationContext: safetyFinalizationReason
+                    ? (isPersonaOrchestratorRole(agentRuntimeRole) && completedSubagentNotifications.length
                         ? buildPersonaSubagentFinalizationContext({
                               message,
                               constraints,
@@ -9221,13 +9235,24 @@ class AILISAgentRunner {
                               notifications: completedSubagentNotifications,
                               exactAnswerMode
                           })
-                        : '',
-                finalizationInstruction: safetyFinalizationReason && isPersonaOrchestratorRole(agentRuntimeRole) && completedSubagentNotifications.length
-                    ? buildPersonaSubagentFinalizationInstruction({ exactAnswerMode })
+                        : (isTaskAgentRole(agentRuntimeRole)
+                            ? buildTaskAgentFinalizationContext({
+                                  message,
+                                  constraints,
+                                  runtimeEnvironment,
+                                  stepResults,
+                                  exactAnswerMode
+                              })
+                            : ''))
                     : '',
-                finalizationTools: safetyFinalizationReason && isPersonaOrchestratorRole(agentRuntimeRole) && completedSubagentNotifications.length
-                    ? []
-                    : undefined
+                finalizationInstruction: safetyFinalizationReason
+                    ? (isPersonaOrchestratorRole(agentRuntimeRole) && completedSubagentNotifications.length
+                        ? buildPersonaSubagentFinalizationInstruction({ exactAnswerMode })
+                        : (isTaskAgentRole(agentRuntimeRole)
+                            ? buildTaskAgentFinalizationInstruction({ exactAnswerMode })
+                            : ''))
+                    : '',
+                finalizationTools: safetyFinalizationReason ? [] : undefined
             }, {
                 settings: decisionSettings,
                 requestContext

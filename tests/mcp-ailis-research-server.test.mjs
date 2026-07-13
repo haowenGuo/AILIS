@@ -33,12 +33,14 @@ const {
     loadManagedSearxngManifest,
     managedSearxngAllowedForSearch,
     managedSearxngPortCandidates,
+    mergeSearchResultsForRerank,
     normalizeSearchBackends,
     openPage,
     findInPage,
     continuePage,
     paperMetadataLookup,
     parseGitHubRepoRef,
+    parseWikipediaPagePayload,
     pdfFindAndExtract,
     rankLinksForResearch,
     rankSearchResultsForFollowup,
@@ -896,6 +898,7 @@ test('web_search auto chain uses no-Docker Python search while skipping unconfig
 
         const generalBackends = normalizeSearchBackends({}, 'Playwright locator waitFor official docs').map((backend) => backend.id);
         assert.equal(generalBackends[0], 'python_search');
+        assert.ok(generalBackends.includes('wikipedia_search'));
         assert.ok(!generalBackends.includes('searxng_json'));
         assert.ok(!generalBackends.includes('firecrawl_search'));
         assert.ok(generalBackends.includes('bing_html'));
@@ -928,6 +931,41 @@ test('web_search auto chain uses no-Docker Python search while skipping unconfig
             process.env.AILIS_FIRECRAWL_URL = previousFirecrawl;
         }
     }
+});
+
+test('web_search can aggregate structured Wikipedia search results without task-specific rules', async () => {
+    await withServer((request, response) => {
+        const url = new URL(request.url || '/', 'http://127.0.0.1');
+        assert.equal(url.pathname, '/w/api.php');
+        assert.equal(url.searchParams.get('action'), 'query');
+        assert.equal(url.searchParams.get('list'), 'search');
+        assert.match(url.searchParams.get('srsearch') || '', /1928 Summer Olympics/);
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({
+            query: {
+                search: [
+                    {
+                        pageid: 86224,
+                        title: '1928 Summer Olympics',
+                        snippet: 'The <span class="searchmatch">1928 Summer Olympics</span> were held in Amsterdam.'
+                    }
+                ]
+            }
+        }));
+    }, async (baseUrl) => {
+        const result = await webSearch({
+            query: '1928 Summer Olympics number of athletes by country',
+            backends: ['wikipedia_search'],
+            wikipediaSearchUrl: `${baseUrl}/w/api.php`,
+            maxResults: 5
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.equal(result.structuredContent.backend, 'wikipedia_search');
+        assert.equal(result.structuredContent.attempts[0].backend, 'wikipedia_search');
+        assert.equal(result.structuredContent.results[0].url, 'https://en.wikipedia.org/wiki/1928_Summer_Olympics');
+        assert.match(result.content[0].text, /1928 Summer Olympics/);
+    });
 });
 
 test('managed SearXNG manifest is resolved without requiring a user URL', () => {
@@ -1691,6 +1729,57 @@ test('web_search reranks official source documents ahead of mirrors and portal n
     assert.ok(ranked.findIndex((item) => /scribd\.com/.test(item.url)) >= 2);
     assert.ok(ranked.findIndex((item) => /yahoo\.com/.test(item.url)) > 2);
     assert.ok(ranked.findIndex((item) => /stable\/index\.html/.test(item.url)) > 2);
+});
+
+test('search aggregation preserves canonical metadata when duplicate SERP titles contain URL breadcrumbs', () => {
+    const url = 'https://en.wikipedia.org/wiki/1928_Summer_Olympics';
+    const merged = mergeSearchResultsForRerank([
+        {
+            title: 'Wikipedia https://en.wikipedia.org › wiki › 1928_Summer_Olympics 1928 Summer Olympics national flag bearers',
+            url,
+            snippet: 'A search-engine breadcrumb with unrelated trailing text.',
+            sourceBackend: 'python_search',
+            sourceEngines: ['html_search']
+        },
+        {
+            title: '1928 Summer Olympics',
+            url,
+            snippet: 'The 1928 Summer Olympics were held in Amsterdam.',
+            sourceBackend: 'wikipedia_search',
+            sourceEngines: ['wikipedia_api']
+        }
+    ]);
+
+    assert.equal(merged.length, 1);
+    assert.equal(merged[0].title, '1928 Summer Olympics');
+    assert.deepEqual(merged[0].sourceBackends, ['python_search', 'wikipedia_search']);
+    assert.match(merged[0].snippet, /breadcrumb/);
+    assert.match(merged[0].snippet, /held in Amsterdam/);
+    assert.equal('titleScore' in merged[0], false);
+});
+
+test('search reranking caps lexical saturation so repeated query terms do not erase source consensus', () => {
+    const query = 'Acme 2024 tournament participating teams player count';
+    const ranked = rankSearchResultsForFollowup([
+        {
+            title: 'Acme 2024 tournament participating teams player count standings',
+            url: 'https://single-source.example/acme-2024',
+            snippet: 'Acme tournament teams players count participating teams player count.',
+            sourceBackends: ['html_search'],
+            sourceEngines: ['engine_a']
+        },
+        {
+            title: 'Acme 2024 tournament',
+            url: 'https://consensus.example/acme-2024',
+            snippet: 'Participating teams and player count for the tournament.',
+            sourceBackends: ['search_a', 'search_b', 'search_c'],
+            sourceEngines: ['engine_a', 'engine_b']
+        }
+    ], query);
+
+    assert.equal(ranked[0].url, 'https://consensus.example/acme-2024');
+    assert.ok(ranked[1].queryScore > 100);
+    assert.ok(ranked[0].sourceConsensusScore > ranked[1].sourceConsensusScore);
 });
 
 test('search follow-up suggestions resolve HTML PDF wrappers with pdf_find_and_extract', () => {
@@ -2755,6 +2844,24 @@ test('stripWikiText preserves MediaWiki infobox convert facts for numeric reason
     assert.match(text, /orbital_period:\s*27\.321661 d/i);
 });
 
+test('Wikipedia page parsing prefers rendered HTML over lossy template source', () => {
+    const page = parseWikipediaPagePayload({
+        parse: {
+            text: {
+                '*': '<h3>Number of athletes</h3><table><tr><td>Cuba</td><td>1</td></tr><tr><td>Panama</td><td>1</td></tr></table>'
+            },
+            wikitext: {
+                '*': '{{flagIOC|CUB|1928 Summer|1}}\n{{flagIOC|PAN|1928 Summer|1}}'
+            }
+        }
+    });
+
+    assert.equal(page.kind, 'wikipedia_rendered_html');
+    assert.equal(page.contentType, 'text/html; charset=utf-8');
+    assert.match(page.text, /<td>Cuba<\/td><td>1<\/td>/);
+    assert.match(page.text, /<td>Panama<\/td><td>1<\/td>/);
+});
+
 test('extractWikipediaPageTitle handles canonical and language-variant article paths', () => {
     assert.equal(extractWikipediaPageTitle('https://en.wikipedia.org/wiki/Moon'), 'Moon');
     assert.equal(extractWikipediaPageTitle('https://zh.wikipedia.org/zh-hans/%E6%9C%88%E7%90%83'), '月球');
@@ -3066,6 +3173,56 @@ test('open_page, find_in_page, and continue_page share one source viewport chain
         const found = await findInPage({ url, pattern: 'Actual Enrollment', provider: 'builtin' });
         assert.equal(found.structuredContent.matchCount, 1);
         assert.match(found.content[0].text, /Actual Enrollment 90/);
+    });
+});
+
+test('web_find indexes matches across the full page instead of only the focused viewport', async () => {
+    const lines = Array.from({ length: 220 }, (_, index) => `line ${index + 1}`);
+    lines[4] = 'Participating navigation link';
+    lines[89] = '## Participating National Olympic Committees';
+    lines[100] = 'CUB 1';
+    lines[101] = 'PAN 1';
+    lines[189] = 'Participating footer link';
+    await withServer((request, response) => {
+        response.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' });
+        response.end(lines.join('\n'));
+    }, async (baseUrl) => {
+        const result = await webFind({
+            url: `${baseUrl}/multi-match`,
+            pattern: 'Participating',
+            provider: 'builtin'
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.match(result.content[0].text, /Match count in page: 3/);
+        assert.match(result.content[0].text, /L101: CUB 1/);
+        assert.match(result.content[0].text, /L102: PAN 1/);
+        assert.deepEqual(result.structuredContent.matches.map((match) => match.lineno), [5, 90, 190]);
+        assert.equal(result.structuredContent.source.line_start, 87);
+        assert.equal(result.structuredContent.webSearchOutput.find.match_count, 3);
+    });
+});
+
+test('web_find compacts image and link markup while preserving visible evidence and line numbers', async () => {
+    const lines = Array.from({ length: 180 }, (_, index) => `line ${index + 1}`);
+    lines[39] = '## Participating nations';
+    lines[48] = '![](https://example.test/cuba.png)[Cuba](https://example.test/cuba "Cuba")(1)';
+    lines[49] = '![](https://example.test/panama.png)[Panama](https://example.test/panama "Panama")(1)';
+    await withServer((request, response) => {
+        response.writeHead(200, { 'content-type': 'text/markdown; charset=utf-8' });
+        response.end(lines.join('\n'));
+    }, async (baseUrl) => {
+        const result = await webFind({
+            url: `${baseUrl}/compact-markdown`,
+            pattern: 'Participating',
+            provider: 'builtin'
+        });
+
+        const visible = result.content[0].text;
+        assert.match(visible, /L49: Cuba\(1\)/);
+        assert.match(visible, /L50: Panama\(1\)/);
+        assert.doesNotMatch(visible, /cuba\.png|example\.test\/cuba/);
+        assert.equal(result.structuredContent.source.line_start, 37);
     });
 });
 

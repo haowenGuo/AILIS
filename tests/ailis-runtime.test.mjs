@@ -110,6 +110,44 @@ test('AILIS runtime guards tool results and repairs incomplete transcripts', asy
         true
     );
 
+    const sourceLines = Array.from({ length: 60 }, (_, index) => ({
+        lineno: 330 + index,
+        text: index === 22
+            ? 'Cuba (1)'
+            : index === 47
+                ? 'Panama (1)'
+                : `country row ${index + 1}`
+    }));
+    const guardedSourceViewport = runtime.guardToolResult(
+        {
+            content: [{ type: 'text', text: 'Find results for participating nations' }],
+            details: {
+                status: 'completed',
+                sourceWindow: {
+                    type: 'source_viewport',
+                    lineStart: 330,
+                    lineEnd: 389,
+                    lines: sourceLines
+                }
+            },
+            structuredContent: {
+                status: 'completed',
+                sourceWindow: {
+                    type: 'source_viewport',
+                    lineStart: 330,
+                    lineEnd: 389,
+                    lines: sourceLines
+                }
+            }
+        },
+        { toolId: 'mcp__ailis_research__web_find', callId: 'guard-source-viewport' }
+    );
+    const guardedLines = guardedSourceViewport.structuredContent.sourceWindow.lines;
+    assert.equal(guardedLines.length, 60);
+    assert.equal(guardedLines[22].text, 'Cuba (1)');
+    assert.equal(guardedLines[47].text, 'Panama (1)');
+    assert.equal(guardedLines.some((line) => 'omitted_items' in line), false);
+
     await runtime.startRun({
         runId,
         sessionId: 'runtime-direct',

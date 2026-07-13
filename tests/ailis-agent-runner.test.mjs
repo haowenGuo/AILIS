@@ -438,6 +438,47 @@ test('web source viewport prompt digest uses only canonical Codex/OAI names', ()
     assert.equal(digest.structuredContent, null);
 });
 
+test('bounded web source viewport keeps answer-bearing middle lines in the finalization digest', () => {
+    const lines = Array.from({ length: 17 }, (_, index) => ({
+        lineno: 55 + index,
+        text: `${'table-cell '.repeat(24)}${index === 7 ? 'MIDDLE_ANSWER_EVIDENCE' : `row-${index + 1}`}`
+    }));
+    const [digest] = buildToolObservationDigest([{
+        id: 'bounded-source-viewport-1',
+        tool: 'web_run',
+        args: { open: [{ ref_id: 'turn0view0', lineno: 55 }] },
+        response: {
+            ok: true,
+            status: 'completed',
+            result: {
+                content: [{ type: 'text', text: 'Source viewport model preview' }],
+                structuredContent: {
+                    sourceWindow: {
+                        type: 'source_viewport',
+                        action: { type: 'open_page', url: 'https://example.test/table', lineno: 55 },
+                        url: 'https://example.test/table',
+                        contentType: 'text/markdown',
+                        totalLines: 110,
+                        lineStart: 55,
+                        lineEnd: 71,
+                        hasMoreBefore: true,
+                        hasMoreAfter: true,
+                        lines
+                    }
+                }
+            }
+        }
+    }]);
+
+    assert.ok(digest.text.length > 3600);
+    assert.ok(digest.text.length < 8000);
+    assert.match(digest.text, /MIDDLE_ANSWER_EVIDENCE/);
+    assert.match(digest.text, /L55:/);
+    assert.match(digest.text, /L71:/);
+    assert.equal(digest.lossless, true);
+    assert.equal(digest.compression, null);
+});
+
 test('TaskAgent finalization digest unwraps nested MCP source viewport evidence', () => {
     const [digest] = buildToolObservationDigest([{
         id: 'nested-open-page-digest-1',

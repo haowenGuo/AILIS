@@ -1432,7 +1432,7 @@ test('Agentic Executor can execute real native direct tool calls before JSON pla
         );
         assert.equal(llmServer.calls[0].payload.tool_choice, 'auto');
         assert.equal(llmServer.calls[1].payload.tool_choice, 'none');
-        assert.ok(llmServer.calls[1].payload.tools.some((tool) => tool.function?.name === 'write'));
+        assert.deepEqual(llmServer.calls[1].payload.tools || [], []);
         assert.match(llmServer.calls[0].payload.messages[0].content, /Responses-Compatible Tool Runtime/);
         assert.equal(result.body.steps[0].tool, 'write');
     } finally {
@@ -2322,9 +2322,9 @@ test('TaskAgent clamps caller-requested execution to three work rounds plus one 
         summary: '继续读取证据',
         action: 'tool',
         tool_call: {
-            tool: 'read',
+            tool: 'exec',
             title: '读取证据',
-            args: { path: 'note.txt' }
+            args: { command: 'powershell -NoProfile -Command "Get-Content -LiteralPath note.txt"' }
         }
     }));
     const gateway = new AILISGateway({
@@ -2363,8 +2363,13 @@ test('TaskAgent clamps caller-requested execution to three work rounds plus one 
         assert.match(llmServer.calls[0].system, /at most 3 work-tool rounds/);
         assert.match(llmServer.calls[0].system, /4-round total budget/);
         assert.equal(llmServer.calls[3].payload.tool_choice, 'none');
-        assert.match(JSON.stringify(llmServer.calls[3].payload.messages), /TaskAgent finalization package/);
-        assert.equal(llmServer.calls[3].payload.messages.length, 2);
+        assert.deepEqual(llmServer.calls[3].payload.tools || [], []);
+        const finalizationMessages = JSON.stringify(llmServer.calls[3].payload.messages);
+        assert.match(finalizationMessages, /TaskAgent finalization package/);
+        assert.match(finalizationMessages, /读取 note\.txt 并整理结果/);
+        assert.match(finalizationMessages, /evidence/);
+        assert.doesNotMatch(llmServer.calls[3].system, /Native direct tools exposed/);
+        assert.doesNotMatch(llmServer.calls[3].system, /Emit function calls/);
     } finally {
         await gateway.stop();
         await llmServer.close();

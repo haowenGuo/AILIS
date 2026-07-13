@@ -129,6 +129,33 @@ def search_searxng(query, limit, timeout, base_url):
     return dedupe_results(rows, limit)
 
 
+def search_wikipedia(query, limit, timeout, api_url):
+    response = requests.get(
+        norm(api_url) or "https://en.wikipedia.org/w/api.php",
+        timeout=timeout,
+        params={
+            "action": "query",
+            "list": "search",
+            "srsearch": query,
+            "format": "json",
+            "utf8": "1",
+            "srlimit": limit,
+        },
+        headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
+    )
+    response.raise_for_status()
+    rows = []
+    for item in (response.json().get("query") or {}).get("search") or []:
+        title = clean_text(item.get("title"))
+        rows.append({
+            "title": title,
+            "url": f"https://en.wikipedia.org/wiki/{quote_plus(title.replace(' ', '_'), safe='_()')}",
+            "snippet": BeautifulSoup(norm(item.get("snippet")), "html.parser").get_text(" ", strip=True),
+            "sourceEngines": ["wikipedia_api_python"],
+        })
+    return dedupe_results(rows, limit)
+
+
 def search_firecrawl(query, limit, timeout, base_url, api_key="", enable_cloud=False):
     base = normalize_base_url(base_url)
     if not base and enable_cloud and api_key:
@@ -245,19 +272,24 @@ def main():
 
     searxng_url = normalize_base_url(payload.get("searxngUrl") or os.environ.get("AILIS_SEARXNG_URL") or os.environ.get("SEARXNG_URL"))
     firecrawl_url = normalize_base_url(payload.get("firecrawlUrl") or os.environ.get("AILIS_FIRECRAWL_URL") or os.environ.get("FIRECRAWL_BASE_URL"))
+    wikipedia_search_url = norm(payload.get("wikipediaSearchUrl")) or "https://en.wikipedia.org/w/api.php"
     firecrawl_key = norm(os.environ.get("FIRECRAWL_API_KEY"))
     firecrawl_cloud = norm(payload.get("allowFirecrawlCloud") or os.environ.get("AILIS_ENABLE_FIRECRAWL_CLOUD")).lower() in {"1", "true", "yes", "on"}
+    provider = norm(payload.get("provider")).lower()
 
     providers = []
-    if searxng_url:
-        providers.append(("searxng_json_python", True, lambda: search_searxng(query, limit, timeout, searxng_url)))
-    if firecrawl_url or (firecrawl_cloud and firecrawl_key):
-        providers.append(("firecrawl_search_python", True, lambda: search_firecrawl(query, limit, timeout, firecrawl_url, firecrawl_key, firecrawl_cloud)))
-    providers.extend([
-        ("bing_html_python", False, lambda: search_bing(query, limit, timeout)),
-        ("yahoo_html_python", False, lambda: search_yahoo(query, limit, timeout)),
-        ("duckduckgo_lite_python", False, lambda: search_duckduckgo_lite(query, limit, timeout)),
-    ])
+    if provider == "wikipedia":
+        providers.append(("wikipedia_api_python", True, lambda: search_wikipedia(query, limit, timeout, wikipedia_search_url)))
+    else:
+        if searxng_url:
+            providers.append(("searxng_json_python", True, lambda: search_searxng(query, limit, timeout, searxng_url)))
+        if firecrawl_url or (firecrawl_cloud and firecrawl_key):
+            providers.append(("firecrawl_search_python", True, lambda: search_firecrawl(query, limit, timeout, firecrawl_url, firecrawl_key, firecrawl_cloud)))
+        providers.extend([
+            ("bing_html_python", False, lambda: search_bing(query, limit, timeout)),
+            ("yahoo_html_python", False, lambda: search_yahoo(query, limit, timeout)),
+            ("duckduckgo_lite_python", False, lambda: search_duckduckgo_lite(query, limit, timeout)),
+        ])
 
     attempts = []
     merged = []
