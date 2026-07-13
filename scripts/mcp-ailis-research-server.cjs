@@ -4684,6 +4684,51 @@ async function webSearch(args = {}) {
     let collectedResults = [];
     let lastSuccessObservation = null;
     let lastSuccessfulAttempt = null;
+    if (aggregateAcrossBackends && backends.length > 1) {
+        const attemptTimeoutMs = Math.min(timeoutMs, Math.max(1000, overallTimeoutMs - 750));
+        const parallelAttempts = await Promise.all(backends.map((backend) =>
+            runSearchBackend(backend, backendQuery, maxResults, attemptTimeoutMs, effectiveArgs)
+        ));
+        attempts.push(...parallelAttempts);
+        const successfulAttempts = parallelAttempts
+            .map((attempt, backendIndex) => ({ attempt, backendIndex }))
+            .filter(({ attempt }) => attempt.ok);
+        for (const { attempt, backendIndex } of successfulAttempts) {
+            const enrichedResults = enrichSearchResultsWithSource(attempt.results, attempt, backendIndex);
+            collectedResults = mergeSearchResultsForRerank(
+                [...collectedResults, ...enrichedResults],
+                maxResults * 3
+            );
+        }
+        if (successfulAttempts.length) {
+            const finalAttempt = successfulAttempts[successfulAttempts.length - 1].attempt;
+            return buildWebSearchSuccessObservation({
+                query,
+                backendQuery,
+                attempts,
+                rawResults: collectedResults,
+                backend: finalAttempt.backend,
+                url: finalAttempt.url,
+                managedSearxng: effectiveArgs.__managedSearxng || null,
+                startedAt,
+                overallTimeoutMs,
+                aggregated: successfulAttempts.length > 1,
+                searchContextSize
+            }).response;
+        }
+        return errorResult('web_search failed across all configured search backends', {
+            status: 'search_failed',
+            errorCode: 'search_backends_failed',
+            query,
+            retryable: true,
+            overallDurationMs: Date.now() - startedAt,
+            overallTimeoutMs,
+            attempts,
+            suggestedTools: ['web_fetch', 'web_extract_links'],
+            evidenceGap: 'Broad discovery failed; no evidence page was opened yet.',
+            recoveryHint: 'Try a more specific title/DOI/source query or switch to a domain-specific tool instead of repeating the same broad search.'
+        });
+    }
     for (let backendIndex = 0; backendIndex < backends.length; backendIndex += 1) {
         const elapsedMs = Date.now() - startedAt;
         const remainingMs = overallTimeoutMs - elapsedMs;

@@ -508,6 +508,13 @@ function parseVisibleNumber(value = '') {
     return Number.isFinite(parsed) ? parsed : null;
 }
 
+function parseVisibleNumbers(value = '') {
+    const normalized = normalizeAnswerForScore(value).replace(/,/g, '');
+    return [...normalized.matchAll(/[+-]?(?:\d+\.?\d*|\.\d+)/g)]
+        .map((match) => Number(match[0]))
+        .filter((number) => Number.isFinite(number));
+}
+
 function isCountQuestion(question = '') {
     const text = normalizeText(question).toLowerCase();
     return /\bhow\s+many\b|\bnumber\s+of\b|\bcount\b|多少|几个|几位|数量/.test(text);
@@ -533,6 +540,14 @@ function answersEquivalentForQuestion(candidate = '', gold = '', question = '') 
     }
     const goldNumber = parseNumber(gold);
     const candidateNumber = parseVisibleNumber(candidate);
+    const visibleNumbers = goldNumber !== null ? parseVisibleNumbers(candidate) : [];
+    if (
+        goldNumber !== null &&
+        visibleNumbers.length === 1 &&
+        Math.abs(visibleNumbers[0] - goldNumber) <= Math.max(1e-9, Math.abs(goldNumber) * 1e-9)
+    ) {
+        return true;
+    }
     if (
         isCountQuestion(question) &&
         goldNumber !== null &&

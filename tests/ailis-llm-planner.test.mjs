@@ -732,8 +732,8 @@ test('Persona receives a TaskAgent completion through the Codex-style mailbox', 
 
         assert.equal(result.body.ok, true, JSON.stringify(result.body));
         assert.equal(result.body.planner, 'llm-agentic-executor');
-        assert.equal(result.body.displayText, 'AILIS final answer: 42');
-        assert.equal(result.body.finalAnswer, 'AILIS final answer: 42');
+        assert.equal(result.body.displayText, '已核验并完成攻略');
+        assert.equal(result.body.finalAnswer, '已核验并完成攻略');
         assert.equal(llmServer.calls.length, 3);
         assert.equal(agentCalls.length, 1);
         assert.equal(
@@ -752,6 +752,7 @@ test('Persona receives a TaskAgent completion through the Codex-style mailbox', 
         assert.match(JSON.stringify(llmServer.calls[1].payload.messages), /root\/sandrone_guide/);
         assert.match(JSON.stringify(llmServer.calls[2].payload.messages), /subagent_notification/);
         assert.match(JSON.stringify(llmServer.calls[2].payload.messages), /TaskAgent 已核验当前资料并完成木偶攻略/);
+        assert.match(JSON.stringify(llmServer.calls[2].payload.messages), /may_add_facts/);
     } finally {
         await gateway.stop();
         await llmServer.close();
@@ -844,13 +845,17 @@ test('Persona finalizes a completed TaskAgent result at the round budget without
 
         assert.equal(result.body.ok, true, JSON.stringify(result.body));
         assert.equal(result.body.status, 'completed');
-        assert.equal(result.body.displayText, 'The exact answer is 17.');
+        assert.equal(result.body.displayText, '17');
+        assert.equal(result.body.finalAnswer, '17');
         assert.equal(llmServer.calls.length, 5);
         assert.deepEqual(llmServer.calls[3].payload.tools || [], []);
         assert.deepEqual(llmServer.calls[4].payload.tools || [], []);
         assert.match(llmServer.calls[3].system, /user-facing AILIS final response layer/);
-        assert.match(JSON.stringify(llmServer.calls[3].payload.messages), /Final answer: 17/);
-        assert.match(JSON.stringify(llmServer.calls[3].payload.messages), /ORIGINAL_USER_REQUEST/);
+        const finalizationMessages = JSON.stringify(llmServer.calls[3].payload.messages);
+        assert.match(finalizationMessages, /finalAnswer/);
+        assert.match(finalizationMessages, /17/);
+        assert.match(finalizationMessages, /may_add_facts/);
+        assert.match(finalizationMessages, /ORIGINAL_USER_REQUEST/);
         assert.doesNotMatch(result.body.displayText, /tool_calls|subagent_notification|TaskAgent/);
     } finally {
         await gateway.stop();
@@ -930,7 +935,8 @@ test('Persona defers an early final until its live TaskAgent result reaches the 
         });
 
         assert.equal(result.body.ok, true, JSON.stringify(result.body));
-        assert.equal(result.body.displayText, '基于本轮 TaskAgent 结果整理的洛茜攻略。');
+        assert.equal(result.body.displayText, '洛茜攻略的新鲜证据与结论');
+        assert.equal(result.body.finalAnswer, '洛茜攻略的新鲜证据与结论');
         assert.equal(llmServer.calls.length, 3);
         assert.equal(agentCalls.length, 1);
         assert.doesNotMatch(result.body.displayText, /旧攻略/);
@@ -1003,7 +1009,7 @@ test('Persona routes a renamed supplement spawn into the completed TaskAgent fol
             }
         });
 
-        assert.equal(result.body.displayText, 'integrated original TaskAgent result');
+        assert.equal(result.body.displayText, 'guide result');
         assert.equal(childRuns, 2);
         assert.equal(gateway.runtime.agent_control.state.list({ sessionId: 'persona-single-owner-test' }).length, 1);
         const duplicate = result.body.steps.find((step) => step.args?.task_name === 'guide_supplement');

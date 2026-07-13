@@ -1002,9 +1002,10 @@ test('web_search auto-start path reuses an AILIS-managed local SearXNG service',
                 overallTimeoutMs: 9000
             });
             assert.equal(result.isError, undefined, result.content[0].text);
-            assert.equal(result.structuredContent.backend, 'searxng_json');
+            assert.equal(result.structuredContent.backend, 'aggregated');
             assert.equal(result.structuredContent.managedSearxng.source, 'existing');
             assert.equal(result.structuredContent.results[0].url, 'https://example.test/managed-searxng');
+            assert.ok(result.structuredContent.searchAggregation.successfulBackends.includes('searxng_json'));
         } finally {
             fs.rmSync(tempDir, { recursive: true, force: true });
         }
@@ -1273,6 +1274,54 @@ test('web_search aggregates provider chain when the first successful backend is 
         assert.ok(result.structuredContent.searchAggregation.successfulBackends.includes('searxng_json'));
         assert.ok(result.structuredContent.searchAggregation.successfulBackends.includes('firecrawl_search'));
         assert.equal(result.structuredContent.suggestedNextCalls[0].tool, 'open_page');
+    });
+});
+
+test('web_search aggregates configured backends even when the first result looks sufficient', async () => {
+    const requests = [];
+    await withServer((request, response) => {
+        const url = new URL(request.url || '/', 'http://127.0.0.1');
+        requests.push(url.pathname);
+        if (url.pathname === '/search') {
+            response.writeHead(200, { 'content-type': 'application/json' });
+            response.end(JSON.stringify({
+                results: [{
+                    title: 'Official Example API documentation reference',
+                    url: 'https://docs.example.test/api/reference',
+                    content: 'Official Example API documentation and complete reference.'
+                }]
+            }));
+            return;
+        }
+        if (url.pathname === '/v1/search') {
+            response.writeHead(200, { 'content-type': 'application/json' });
+            response.end(JSON.stringify({
+                success: true,
+                data: [{
+                    title: 'Example API release notes',
+                    url: 'https://example.test/releases',
+                    description: 'Current release notes for the Example API.'
+                }]
+            }));
+            return;
+        }
+        response.writeHead(404, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ error: 'not found' }));
+    }, async (baseUrl) => {
+        const result = await webSearch({
+            query: 'Official Example API documentation reference',
+            provider: 'searxng,firecrawl',
+            searxngUrl: baseUrl,
+            firecrawlUrl: baseUrl,
+            maxResults: 5
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.equal(result.structuredContent.backend, 'aggregated');
+        assert.deepEqual(requests.sort(), ['/search', '/v1/search'].sort());
+        assert.equal(result.structuredContent.attempts.filter((attempt) => attempt.ok).length, 2);
+        assert.ok(result.structuredContent.searchAggregation.successfulBackends.includes('searxng_json'));
+        assert.ok(result.structuredContent.searchAggregation.successfulBackends.includes('firecrawl_search'));
     });
 });
 

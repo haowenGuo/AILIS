@@ -130,6 +130,23 @@ test('desktop-real visible scorer accepts count answer with semantic unit suffix
     assert.equal(score.answer, '3 studio albums');
 });
 
+test('desktop-real visible scorer accepts one formatted currency number as a numeric gold answer', () => {
+    const response = {
+        ok: true,
+        status: 'completed',
+        finalAnswer: 'The food-only sales total is $89,706.00 USD.',
+        displayText: 'The food-only sales total is **$89,706.00 USD**.'
+    };
+
+    const score = scoreVisibleAnswer({
+        response,
+        gold: '89706.00',
+        question: 'What were the total sales from food, not including drinks?'
+    });
+    assert.equal(score.ok, true);
+    assert.equal(score.status, 'visible_answer_match');
+});
+
 test('desktop-real visible scorer prefers explicit total count over table years', () => {
     const response = {
         ok: true,

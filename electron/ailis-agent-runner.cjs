@@ -6633,9 +6633,29 @@ function parseCompletedSubagentNotificationInputItem(item = {}) {
         if (!completed) {
             continue;
         }
+        const rawTaskResult = payload?.task_result && typeof payload.task_result === 'object'
+            ? payload.task_result
+            : null;
+        const taskResult = rawTaskResult
+            ? {
+                  status: normalizeText(rawTaskResult.status, 'completed'),
+                  finalAnswer: normalizeText(rawTaskResult.final_answer || rawTaskResult.finalAnswer),
+                  partialAnswer: normalizeText(rawTaskResult.partial_answer || rawTaskResult.partialAnswer),
+                  sourceRefs: Array.isArray(rawTaskResult.source_refs)
+                      ? rawTaskResult.source_refs
+                      : (Array.isArray(rawTaskResult.sourceRefs) ? rawTaskResult.sourceRefs : []),
+                  traceRef: normalizeText(rawTaskResult.trace_ref || rawTaskResult.traceRef),
+                  evidenceBoundary: rawTaskResult.evidence_boundary && typeof rawTaskResult.evidence_boundary === 'object'
+                      ? rawTaskResult.evidence_boundary
+                      : (rawTaskResult.evidenceBoundary && typeof rawTaskResult.evidenceBoundary === 'object'
+                          ? rawTaskResult.evidenceBoundary
+                          : null)
+              }
+            : null;
         return {
             agentPath: normalizeText(payload.agent_path || communication.author),
-            result: completed
+            result: completed,
+            taskResult
         };
     }
     return null;
@@ -6653,7 +6673,11 @@ function latestCompletedSubagentNotifications(notifications = []) {
         const agentPath = normalizeText(notification?.agentPath, '/root/task');
         const result = normalizeText(notification?.result);
         if (result) {
-            latestByAgent.set(agentPath, { agentPath, result });
+            latestByAgent.set(agentPath, {
+                agentPath,
+                result,
+                taskResult: notification?.taskResult || null
+            });
         }
     }
     return [...latestByAgent.values()];
@@ -6668,7 +6692,16 @@ function buildPersonaSubagentFinalizationContext({
 } = {}) {
     const completedResults = latestCompletedSubagentNotifications(notifications).map((notification) => ({
         agent_path: notification.agentPath,
-        completed_result: notification.result
+        task_result: notification.taskResult || {
+            status: 'completed',
+            finalAnswer: notification.result,
+            sourceRefs: [],
+            evidenceBoundary: {
+                mode: 'source_only',
+                may_rephrase: true,
+                may_add_facts: false
+            }
+        }
     }));
     return summarizeForModel([
         'Persona finalization package.',
@@ -6686,12 +6719,38 @@ function buildPersonaSubagentFinalizationContext({
     ].filter(Boolean).join('\n\n'), PERSONA_SUBAGENT_FINALIZATION_CONTEXT_CHARS);
 }
 
+function latestAuthoritativeSubagentTaskResult(notifications = []) {
+    const completed = latestCompletedSubagentNotifications(notifications);
+    for (let index = completed.length - 1; index >= 0; index -= 1) {
+        const notification = completed[index];
+        const taskResult = notification.taskResult || {};
+        const finalAnswer = normalizeText(
+            taskResult.finalAnswer ||
+                taskResult.partialAnswer ||
+                notification.result
+        );
+        if (!finalAnswer) {
+            continue;
+        }
+        return {
+            agentPath: notification.agentPath,
+            status: normalizeText(taskResult.status, 'completed'),
+            finalAnswer,
+            sourceRefs: Array.isArray(taskResult.sourceRefs) ? taskResult.sourceRefs : [],
+            traceRef: normalizeText(taskResult.traceRef),
+            evidenceBoundary: taskResult.evidenceBoundary || null
+        };
+    }
+    return null;
+}
+
 function buildPersonaSubagentFinalizationInstruction({ exactAnswerMode = false } = {}) {
     return [
         AILIS_SYSTEM_PROMPT,
         '',
         'You are the user-facing AILIS final response layer.',
         'Use the supplied completed task result to answer the original user request now.',
+        'The task_result object is the authoritative factual payload. Its finalAnswer will be preserved verbatim by the runtime; use this turn only to choose presentation metadata and do not create a replacement fact answer.',
         'Return plain user-facing prose only. Do not call or serialize tools.',
         'Never emit DSML, tool_calls, function_call, XML control tags, internal JSON, protocol metadata, or orchestration details.',
         exactAnswerMode
@@ -9547,9 +9606,13 @@ class AILISAgentRunner {
                     });
                 }
                 const exactAnswerSubmission = exactAnswerValidation.submission || null;
-                const displayText = stripControlTags(decision.finalAnswer || decision.summary || '任务完成。');
+                const authoritativeTaskResult = isPersonaOrchestratorRole(agentRuntimeRole)
+                    ? latestAuthoritativeSubagentTaskResult(completedSubagentNotifications)
+                    : null;
+                const modelDisplayText = stripControlTags(decision.finalAnswer || decision.summary || '任务完成。');
+                const displayText = stripControlTags(authoritativeTaskResult?.finalAnswer || modelDisplayText);
                 const visibleText = displayText;
-                const taskRunHandoff = buildTaskRunHandoffPackage({
+                const baseTaskRunHandoff = buildTaskRunHandoffPackage({
                     status: 'completed',
                     reason: 'final_answer',
                     runId,
@@ -9560,10 +9623,20 @@ class AILISAgentRunner {
                     stepResults,
                     events,
                     latestDecision: decision,
-                    finalAnswer: exactAnswerSubmission?.answer || decision.finalAnswer || '',
+                    finalAnswer: authoritativeTaskResult?.finalAnswer || exactAnswerSubmission?.answer || decision.finalAnswer || '',
                     partialAnswer: decision.summary || '',
                     contextManagerCheckpoint: contextManagerCheckpoint('completed', iteration)
                 });
+                const taskRunHandoff = authoritativeTaskResult
+                    ? {
+                          ...baseTaskRunHandoff,
+                          finalAnswer: visibleText,
+                          sourceRefs: authoritativeTaskResult.sourceRefs,
+                          traceRef: authoritativeTaskResult.traceRef || baseTaskRunHandoff.traceRef,
+                          evidenceBoundary: authoritativeTaskResult.evidenceBoundary,
+                          userVisibleSummary: visibleText
+                      }
+                    : baseTaskRunHandoff;
                 const result = {
                     ok: true,
                     runId,
@@ -9575,12 +9648,14 @@ class AILISAgentRunner {
                     executionRequired: stepResults.length > 0,
                     durationMs: Date.now() - startedAt,
                     message,
-                    finalAnswer: exactAnswerSubmission?.answer || decision.finalAnswer || '',
+                    finalAnswer: authoritativeTaskResult?.finalAnswer || exactAnswerSubmission?.answer || decision.finalAnswer || '',
                     exactAnswerSubmission,
                     exactAnswerAudit: exactAnswerMode ? exactAnswerValidation : null,
                     displayText: visibleText,
-                    speechText: stripControlTags(decision.personaOutput?.speechText || visibleText.replace(/\n/g, ' ')),
-                    bubbleText: stripControlTags(decision.personaOutput?.bubbleText),
+                    speechText: authoritativeTaskResult
+                        ? visibleText.replace(/\n/g, ' ')
+                        : stripControlTags(decision.personaOutput?.speechText || visibleText.replace(/\n/g, ' ')),
+                    bubbleText: authoritativeTaskResult ? '' : stripControlTags(decision.personaOutput?.bubbleText),
                     plan: [],
                     steps: stepResults,
                     events,
@@ -9588,9 +9663,13 @@ class AILISAgentRunner {
                     planUpdates: decision.planUpdates,
                     usage: decision.usage,
                     personaOutput: {
-                              text: stripControlTags(decision.personaOutput?.text || visibleText),
-                              speechText: stripControlTags(decision.personaOutput?.speechText),
-                              bubbleText: stripControlTags(decision.personaOutput?.bubbleText),
+                              text: authoritativeTaskResult
+                                  ? visibleText
+                                  : stripControlTags(decision.personaOutput?.text || visibleText),
+                              speechText: authoritativeTaskResult
+                                  ? visibleText.replace(/\n/g, ' ')
+                                  : stripControlTags(decision.personaOutput?.speechText),
+                              bubbleText: authoritativeTaskResult ? '' : stripControlTags(decision.personaOutput?.bubbleText),
                               expression: normalizeText(decision.personaOutput?.expression),
                               action: normalizeText(decision.personaOutput?.action),
                               emotion: normalizeText(decision.personaOutput?.emotion),
