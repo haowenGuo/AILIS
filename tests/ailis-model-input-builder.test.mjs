@@ -337,6 +337,75 @@ test('web_search canonical results are projected as search web_search_call', () 
     assert.match(text, /OpenAI Web Search/);
 });
 
+test('web_run search results preserve stable refs for the next open call', () => {
+    const items = toolOutputToModelInputItems({
+        id: 'web-run-search-1',
+        tool: 'web_run',
+        args: { search_query: [{ q: 'Emily Midkiff Fafnir' }] },
+        response: {
+            ok: true,
+            status: 'completed',
+            result: {
+                structuredContent: {
+                    webSearchOutput: {
+                        type: 'function_call_output',
+                        webSearchCall: {
+                            type: 'web_search_call',
+                            status: 'completed',
+                            action: { type: 'search', query: 'Emily Midkiff Fafnir' }
+                        },
+                        search: {
+                            results: [{
+                                ref_id: 'turn0search1',
+                                title: 'Dragons are Tricksy',
+                                url: 'https://example.test/article',
+                                snippet: 'Emily Midkiff article.'
+                            }]
+                        }
+                    }
+                }
+            }
+        }
+    });
+
+    const text = FunctionCallOutputPayload.toText(items[2].output);
+    assert.match(text, /Open page: web_run \{"open":\[\{"ref_id":"turn0search1","lineno":1\}\]\}/);
+    assert.doesNotMatch(text, /Open page: web_fetch/);
+});
+
+test('web_run open preserves discovered document links for the next open call', () => {
+    const pdfUrl = 'https://example.test/article.pdf';
+    const items = toolOutputToModelInputItems({
+        id: 'web-run-open-1',
+        tool: 'web_run',
+        args: { open: [{ ref_id: 'turn0search1', lineno: 1 }] },
+        response: {
+            ok: true,
+            status: 'completed',
+            result: {
+                structuredContent: {
+                    observedRelevantLinks: [{ kind: 'pdf', text: 'PDF', url: pdfUrl }],
+                    sourceWindow: {
+                        type: 'source_viewport',
+                        action: { type: 'open_page', url: 'https://example.test/article', lineno: 1 },
+                        url: 'https://example.test/article',
+                        totalLines: 2,
+                        lineStart: 1,
+                        lineEnd: 2,
+                        lines: [{ lineno: 1, text: 'Article landing page' }]
+                    }
+                }
+            }
+        }
+    });
+
+    const text = FunctionCallOutputPayload.toText(items[2].output);
+    assert.match(text, /Links:/);
+    assert.match(text, /1\. PDF/);
+    assert.match(text, /Open page: web_run \{"open":\[\{"ref_id":"https:\/\/example\.test\/article\.pdf","lineno":1\}\]\}/);
+    assert.doesNotMatch(text, /Open page: web_fetch/);
+});
+
 test('web_fetch source viewport is projected as open_page web_search_call', () => {
     const items = toolOutputToModelInputItems({
         id: 'web-fetch-1',

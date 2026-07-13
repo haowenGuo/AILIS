@@ -1489,8 +1489,8 @@ function normalizeEvidenceBoolean(value, fallback = false) {
 
 function isWebEvidenceToolName(tool = '') {
     const normalized = normalizeText(tool).toLowerCase();
-    return /(?:^|__|:|\.)(web_search|web_fetch|web_research|web_extract_links|open_page|find_in_page|continue_page|render_page)$/.test(normalized) ||
-        ['web_search', 'web_fetch', 'web_research', 'web_extract_links', 'open_page', 'find_in_page', 'continue_page', 'render_page'].includes(normalized);
+    return /(?:^|__|:|\.)(web_run|web_search|web_fetch|web_research|web_extract_links|open_page|find_in_page|continue_page|render_page)$/.test(normalized) ||
+        ['web_run', 'web_search', 'web_fetch', 'web_research', 'web_extract_links', 'open_page', 'find_in_page', 'continue_page', 'render_page'].includes(normalized);
 }
 
 function buildEvidenceAuditCandidateFromStep(stepResult = {}) {
@@ -3252,7 +3252,7 @@ function buildMcpBridgeSkillText() {
         'AILIS direct-tool 用法：Runtime 会把 MCP tools 暴露成 namespace/function 风格的直接工具名，例如 mcp__ailis_research__web_fetch。普通任务优先调用这种 direct tool，不要手工拼 mcp_bridge.call_tool。',
         'mcp_bridge 主要用于 list_servers、health_check、list_tool_specs、search_tools、list_resources、read_resource、list_prompts/get_prompt、注册/关闭 server 等管理和修复动作。',
         '如果 capability_context 给出了 mcp__server__tool 形式的 direct spec，可以直接把 tool_call.tool 写成该 id；Runtime 会保留原始 args 并路由到对应 MCP server/tool。',
-        '研究/网页类工具边界：web_research 是网页研究、攻略、当前资料整理的优先入口；它会在一个结构化 retrieval action 内部并行规划 query、搜索、抓页并返回证据包。web_search 是兜底检索，不是默认第一步；本地文件、PDF/DOCX/PPTX/XLSX/CSV/图片等任务默认走 Codex-style coding path：read 小文件、exec 跑脚本/解析器、apply_patch 改代码。只有当前 tools 里确实暴露了专用 MCP/direct tool 时才直接调用它；缺工具时用 tool_search 找 direct MCP 工具。web_fetch 只读 HTML/纯文本；PDF 或二进制不要继续用 web_fetch；已知 PDF URL/路径用 pdf_extract_text，不知道 PDF 直链但知道论文/报告标题或文章页时优先用 pdf_find_and_extract；PDF/论文题知道标题时把标题放 title，把要找的字段放 extract_query，不要把答案字段当唯一 query；必要时再 download_file。',
+        '公共网页发现和页面导航使用常驻 direct tool web_run；其 search_query、open、click、find、screenshot 与 response_length 字段遵循 Codex web.run 对象模型。专用 PDF、Office、图片和音视频能力仍通过 tool_search 按需发现。',
         'mcp_bridge 管理 action：schema/list_servers/register_server/remove_server/health_check/list_tools/list_tool_specs/search_tools/list_resources/read_resource/list_prompts/get_prompt/shutdown_server。'
     ].join('\n');
 }
@@ -4941,7 +4941,7 @@ function normalizeHandoffSourceRef(candidate = {}) {
 function collectHandoffSourceRefs(stepResult = {}) {
     const parsedMcp = parseDirectMcpToolId(stepResult.tool);
     const tool = normalizeText(parsedMcp?.tool || stepResult.tool).toLowerCase();
-    if (!['web_research', 'web_search', 'web_fetch', 'web_find', 'open_page', 'find_in_page', 'continue_page', 'render_page'].includes(tool)) {
+    if (!['web_run', 'web_research', 'web_search', 'web_fetch', 'web_find', 'open_page', 'find_in_page', 'continue_page', 'render_page'].includes(tool)) {
         return [];
     }
     const details = getToolResultDetails(stepResult);
@@ -5300,6 +5300,7 @@ function renderLatestToolFailureSurface({ stepResults = [], message = '', intent
 }
 
 const NATIVE_TOOL_NAME_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+const CODEX_WEB_RUN_TOOL_NAME = 'web_run';
 function isTerminalProviderErrorMessage(error = '') {
     const text = normalizeText(error).toLowerCase();
     if (!text) {
@@ -5492,7 +5493,10 @@ function hardenKnownNativeToolSchema(toolName = '', schema = {}) {
     return schema;
 }
 
-function withNativeProgressNoteParameter(schema = {}) {
+function withNativeProgressNoteParameter(schema = {}, { enabled = true } = {}) {
+    if (!enabled) {
+        return schema;
+    }
     if (!isNativeObjectSchema(schema)) {
         return schema;
     }
@@ -5546,16 +5550,17 @@ function normalizeNativeToolSpec(spec = {}) {
         additionalProperties: true,
         properties: {}
     };
+    const codexWebRun = name === CODEX_WEB_RUN_TOOL_NAME;
     const repairedParameters = withNativeProgressNoteParameter(hardenKnownNativeToolSchema(name, repairNativeToolJsonSchema(compactToolSchema(parameters, {
-        maxBytes: 6000,
-        maxDepth: 4
-    }))));
+        maxBytes: codexWebRun ? 14000 : 6000,
+        maxDepth: codexWebRun ? 8 : 4
+    }))), { enabled: !codexWebRun });
     return {
         type: 'function',
         name,
         description: truncateMiddleText(
             normalizeText(source.description || spec.description || name),
-            900
+            codexWebRun ? 7000 : 900
         ),
         parameters: repairedParameters,
         ...(source.strict === true || spec.strict === true ? { strict: true } : {})
@@ -6843,7 +6848,6 @@ function buildLlmAgentDirectToolPrompt({
         'In the final answer, preserve the user-requested output shape, unit scaling, rounding, and brevity.',
         'Only call tools that are present in the current tools array. If a needed tool is missing, use tool_search when it is available.',
         'For latest/current/recent information, public web facts, recommendations, guides, prices, schedules, rules, product/software versions, news, or anything likely to change over time, you must browse or use web research first. Do not rely on memory, local code search, local logs, or shell commands as a substitute for public web evidence unless the user explicitly asks about local files/code.',
-        'For broad public web research, guides, current information, or comparison tasks, start with one mcp__ailis_research__web_research call when available. It returns ranked sources with ref_id, fetched excerpts, and open_page actions. If one concrete required fact is still absent, call web_fetch/open_page on the most authoritative returned source URL; do not launch another broad web_research for the same question.',
         'For local file and data tasks, prefer the coding main path: read/write/exec/apply_patch. Use read to inspect small files, write to create helper scripts, exec to run scripts/tests/diagnostics, and apply_patch for source edits. Use tool_search only when the coding path cannot reliably inspect the file type or when a specialized direct MCP/tool is clearly needed.',
         'Attached files are staged inside the current workspace before TaskAgent starts. Always use the staged attached_files path. For PDF, Office, image, audio, archive, or other structured/binary files, use tool_search once for the exact dedicated reader/transcriber/vision capability and call that tool; do not spend the task budget installing ad-hoc parsers when a dedicated tool is available.',
         'For data reasoning tasks, use code as a calculator and verifier: write scripts that parse the source file, compute the needed result, and print a short answer plus compact evidence. Do not write scripts whose main purpose is to dump large files, whole spreadsheets, logs, or documents back into model context.',

@@ -62,7 +62,7 @@ test('AILIS materializes structured MCP follow-up actions for the next model tur
     assert.equal(Object.keys(result).includes('__ailisSuggestedMcpTools'), false);
 });
 
-test('AILIS exposes one native web_search entry and materializes its MCP actions', async () => {
+test('AILIS exposes Codex-style web_run and preserves refs across search and open turns', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-native-web-search-'));
     const gateway = new AILISGateway({
         port: 0,
@@ -70,55 +70,178 @@ test('AILIS exposes one native web_search entry and materializes its MCP actions
         projectRoot: path.resolve('.'),
         auditDir: path.join(workspaceRoot, '.audit')
     });
-    let bridgeRequest = null;
-    gateway.runtime.executeMcpBridge = async (request) => {
-        bridgeRequest = request;
-        return {
-            content: [{ type: 'text', text: 'Search result' }],
-            structuredContent: {
-                suggestedNextCalls: [{
-                    tool: 'open_page',
-                    args: { url: 'https://example.test/source', lineno: 1 }
-                }]
+    const bridgeRequests = [];
+    const mcpBridgeResult = (content, structuredContent) => ({
+        content: [{ type: 'text', text: content }],
+        structuredContent: {
+            status: 'completed',
+            server: 'ailis_research',
+            result: {
+                content: [{ type: 'text', text: content }],
+                structuredContent
             }
-        };
-    };
-    gateway.runtime.mcpManager.listToolSpecs = async () => [{
-        server: 'ailis_research',
-        tool: 'open_page',
-        name: 'open_page',
-        description: 'Open a page.',
-        inputSchema: {
-            type: 'object',
-            required: ['url'],
-            properties: { url: { type: 'string' }, lineno: { type: 'number' } },
-            additionalProperties: false
+        },
+        details: {
+            status: 'completed',
+            server: 'ailis_research',
+            result: {
+                content: [{ type: 'text', text: content }],
+                structuredContent
+            }
         }
-    }];
+    });
+    gateway.runtime.executeMcpBridge = async (request) => {
+        bridgeRequests.push(request);
+        if (request.tool === 'web_fetch') {
+            return mcpBridgeResult('L1: opened source', {
+                    source: {
+                        type: 'source_viewport',
+                        url: request.args.url,
+                        ref_id: request.args.url,
+                        line_start: 1,
+                        line_end: 1,
+                        total_lines: 1,
+                        lines: [{ lineno: 1, text: 'opened source' }]
+                    }
+                });
+        }
+        return mcpBridgeResult(`Search result for ${request.args.query}`, {
+                results: [{
+                    title: request.args.query,
+                    url: `https://example.test/${encodeURIComponent(request.args.query)}`,
+                    snippet: `Evidence for ${request.args.query}`
+                }]
+            });
+    };
 
     try {
         const firstTurnTools = gateway.gatewayToolRuntimeRegistry.modelVisibleSpecs();
-        assert.ok(firstTurnTools.some((tool) => tool.name === 'web_search'));
+        const webRun = firstTurnTools.find((tool) => tool.name === 'web_run');
+        assert.ok(webRun);
+        assert.ok(webRun.parameters.properties.search_query);
+        assert.ok(webRun.parameters.properties.open);
+        assert.ok(webRun.parameters.properties.find);
+        assert.equal(webRun.parameters.properties.progress_note, undefined);
+        assert.equal(firstTurnTools.some((tool) => tool.name === 'web_search'), false);
         assert.equal(firstTurnTools.some((tool) => tool.name === 'mcp__ailis_research__open_page'), false);
 
-        const response = await gateway.callTool({
-            tool: 'web_search',
-            args: { query: 'current public fact', maxResults: 4 },
-            context: { workspace: workspaceRoot }
+        const searchResponse = await gateway.callTool({
+            tool: 'web_run',
+            args: {
+                search_query: [
+                    { q: 'Emily Midkiff Fafnir June 2014' },
+                    { q: 'site:journal.finfar.org Midkiff dragons fluffy' }
+                ],
+                response_length: 'medium'
+            },
+            context: { workspace: workspaceRoot, runId: 'run-1', sessionId: 'session-1', iteration: 0 }
         });
 
-        assert.equal(response.ok, true, JSON.stringify(response));
-        assert.deepEqual(bridgeRequest, {
-            action: 'call_tool',
-            server: 'ailis_research',
-            tool: 'web_search',
-            args: { query: 'current public fact', maxResults: 4 }
+        assert.equal(searchResponse.ok, true, JSON.stringify(searchResponse));
+        assert.equal(bridgeRequests.length, 2);
+        assert.deepEqual(bridgeRequests.map((request) => request.args.query), [
+            'Emily Midkiff Fafnir June 2014',
+            'site:journal.finfar.org Midkiff dragons fluffy'
+        ]);
+        const results = searchResponse.result.structuredContent.search.results;
+        assert.deepEqual(results.map((result) => result.ref_id), ['turn0search0', 'turn0search1']);
+
+        const openResponse = await gateway.callTool({
+            tool: 'web_run',
+            args: { open: [{ ref_id: 'turn0search0' }] },
+            context: { workspace: workspaceRoot, runId: 'run-1', sessionId: 'session-1', iteration: 1 }
         });
-        assert.ok(response.result.__ailisSuggestedMcpTools, JSON.stringify(response));
-        assert.deepEqual(
-            response.result.__ailisSuggestedMcpTools.map((tool) => tool.id),
-            ['mcp__ailis_research__open_page']
-        );
+        assert.equal(openResponse.ok, true, JSON.stringify(openResponse));
+        assert.equal(bridgeRequests.at(-1).tool, 'web_fetch');
+        assert.equal(bridgeRequests.at(-1).args.url, results[0].url);
+        assert.equal(openResponse.result.structuredContent.ref_id, 'turn1view0');
+        assert.equal(openResponse.result.structuredContent.source.ref_id, 'turn1view0');
+    } finally {
+        await gateway.stop();
+        await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
+});
+
+test('EMBER-Harness records stage checks around tool execution', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-ember-harness-observe-'));
+    const gateway = new AILISGateway({
+        port: 0,
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit')
+    });
+    await fs.writeFile(path.join(workspaceRoot, 'note.txt'), 'safe observation\n', 'utf8');
+
+    try {
+        const response = await gateway.callTool({
+            tool: 'read',
+            args: { path: 'note.txt' },
+            context: { workspace: workspaceRoot, runId: 'ember-run-observe', sessionId: 'main' }
+        });
+
+        assert.equal(response.ok, true, response.error);
+        const records = gateway.emberHarness.listRunRecords('ember-run-observe');
+        assert.deepEqual(records.map((record) => record.stage), ['tool_call', 'tool_result']);
+        assert.equal(records.every((record) => record.snapshot?.textHash), true);
+        assert.equal(records.every((record) => record.blocked === false), true);
+
+        const events = gateway.getEventsAfter(0, 20).filter((event) => event.type === 'ember.harness.check');
+        assert.equal(events.length, 2);
+        assert.deepEqual(events.map((event) => event.payload.boundary), [
+            'tool_call_before_execution',
+            'tool_result_enter_context'
+        ]);
+
+        const transcript = await gateway.runtime.readTranscript('ember-run-observe', 50);
+        assert.equal(transcript.ok, true);
+        assert.equal(transcript.items.filter((item) => item.type === 'ember.harness.check').length, 2);
+    } finally {
+        await gateway.stop();
+        await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
+});
+
+test('EMBER-Harness can block a tool result before it enters model context', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-ember-harness-block-'));
+    const gateway = new AILISGateway({
+        port: 0,
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit'),
+        emberHarnessEvaluator: async ({ stage }) => {
+            if (stage === 'tool_result') {
+                return {
+                    decision: 'block',
+                    riskLevel: 'high',
+                    riskTypes: ['bias_payload'],
+                    summary: 'simulated high-risk payload'
+                };
+            }
+            return { decision: 'allow', riskLevel: 'none' };
+        }
+    });
+    await fs.writeFile(path.join(workspaceRoot, 'note.txt'), 'blocked payload should not be echoed\n', 'utf8');
+
+    try {
+        const response = await gateway.callTool({
+            tool: 'read',
+            args: { path: 'note.txt' },
+            context: { workspace: workspaceRoot, runId: 'ember-run-block', sessionId: 'main' }
+        });
+
+        assert.equal(response.ok, false);
+        assert.equal(response.status, 'blocked');
+        assert.equal(response.details.emberHarness.stage, 'tool_result');
+        assert.equal(response.details.emberHarness.decision, 'block');
+        assert.equal(response.details.emberHarness.snapshot.preview, undefined);
+        assert.doesNotMatch(JSON.stringify(response), /blocked payload should not be echoed/);
+
+        const records = gateway.emberHarness.listRunRecords('ember-run-block');
+        assert.equal(records.length, 2);
+        assert.equal(records[0].stage, 'tool_call');
+        assert.equal(records[1].stage, 'tool_result');
+        assert.equal(records[1].blocked, true);
+        assert.equal(records[1].rollbackTo.snapshotId, records[0].snapshot.snapshotId);
     } finally {
         await gateway.stop();
         await fs.rm(workspaceRoot, { recursive: true, force: true });

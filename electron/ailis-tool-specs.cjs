@@ -368,8 +368,11 @@ function createAilisFunctionToolSpec(definition = {}) {
     return {
         type: AILIS_TOOL_KIND.FUNCTION,
         name: definition.id,
-        description: truncateMiddleText(definition.description || definition.label || definition.id, 900),
-        strict: true,
+        description: truncateMiddleText(
+            definition.description || definition.label || definition.id,
+            Math.max(900, Number(definition.modelDescriptionChars || 900))
+        ),
+        strict: definition.strict !== false,
         defer_loading: deferred ? true : undefined,
         parameters: createModelFacingParameters(definition, contract),
         output_schema: outputSchema

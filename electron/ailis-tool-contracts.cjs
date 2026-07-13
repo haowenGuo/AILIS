@@ -926,6 +926,115 @@ const TOOL_CONTRACTS = Object.freeze({
             return [];
         }
     }),
+    web_run: Object.freeze({
+        id: 'web_run',
+        version: CONTRACT_VERSION,
+        mutates: false,
+        risk: 'low',
+        approval: 'never',
+        experience: TOOL_EXPERIENCE.tool_search,
+        returns: defaultReturns(),
+        errors: defaultErrors(['empty_command', 'unsupported_command', 'unknown_ref_id']),
+        schema: makeObjectSchema({
+            properties: {
+                search_query: arraySchema(makeObjectSchema({
+                    required: ['q'],
+                    properties: {
+                        q: stringSchema({ minLength: 1, description: 'Search query.' }),
+                        recency: numberSchema({ minimum: 0, description: 'Whether to filter by recency, as a number of recent days.' }),
+                        domains: arraySchema(stringSchema({ minLength: 1 }), { description: 'Whether to filter by a specific list of domains.' })
+                    },
+                    additionalProperties: false
+                }), { maxItems: 4, description: 'Query the internet search engine for a given list of queries.' }),
+                image_query: arraySchema(makeObjectSchema({
+                    required: ['q'],
+                    properties: {
+                        q: stringSchema({ minLength: 1, description: 'Search query.' }),
+                        recency: numberSchema({ minimum: 0, description: 'Whether to filter by recency, as a number of recent days.' }),
+                        domains: arraySchema(stringSchema({ minLength: 1 }), { description: 'Whether to filter by a specific list of domains.' })
+                    },
+                    additionalProperties: false
+                }), { maxItems: 4, description: 'Query the image search engine for a given list of queries.' }),
+                open: arraySchema(makeObjectSchema({
+                    required: ['ref_id'],
+                    properties: {
+                        ref_id: stringSchema({ minLength: 1, description: 'Reference id or URL to open.' }),
+                        lineno: numberSchema({ minimum: 1, description: 'Line number to position the page at.' })
+                    },
+                    additionalProperties: false
+                }), { description: 'Open pages by reference id or URL.' }),
+                click: arraySchema(makeObjectSchema({
+                    required: ['ref_id', 'id'],
+                    properties: {
+                        ref_id: stringSchema({ minLength: 1, description: 'Reference id containing the numbered link.' }),
+                        id: numberSchema({ minimum: 0, description: 'Numbered link id to open.' })
+                    },
+                    additionalProperties: false
+                }), { description: 'Open links from previously opened pages.' }),
+                find: arraySchema(makeObjectSchema({
+                    required: ['ref_id', 'pattern'],
+                    properties: {
+                        ref_id: stringSchema({ minLength: 1, description: 'Reference id or URL to search within.' }),
+                        pattern: stringSchema({ minLength: 1, description: 'Text pattern to find.' })
+                    },
+                    additionalProperties: false
+                }), { description: 'Find text patterns in pages.' }),
+                screenshot: arraySchema(makeObjectSchema({
+                    required: ['ref_id', 'pageno'],
+                    properties: {
+                        ref_id: stringSchema({ minLength: 1, description: 'Reference id or URL to screenshot.' }),
+                        pageno: numberSchema({ minimum: 0, description: 'Zero-indexed PDF page number.' })
+                    },
+                    additionalProperties: false
+                }), { description: 'Take screenshots of PDF pages.' }),
+                finance: arraySchema(makeObjectSchema({
+                    required: ['ticker', 'type'],
+                    properties: {
+                        ticker: stringSchema({ minLength: 1, description: 'Ticker symbol to look up.' }),
+                        type: stringSchema({ enum: ['equity', 'fund', 'crypto', 'index'], description: 'Asset type to look up.' }),
+                        market: stringSchema({ description: 'ISO 3166-1 alpha-3 country code, OTC, or an empty string for cryptocurrency.' })
+                    },
+                    additionalProperties: false
+                }), { description: 'Look up prices for the given stock symbols.' }),
+                weather: arraySchema(makeObjectSchema({
+                    required: ['location'],
+                    properties: {
+                        location: stringSchema({ minLength: 1, description: 'Location in Country, Area, City format.' }),
+                        start: stringSchema({ description: 'Start date in YYYY-MM-DD format. Defaults to today.' }),
+                        duration: numberSchema({ minimum: 1, description: 'Number of days to return. Defaults to 7.' })
+                    },
+                    additionalProperties: false
+                }), { description: 'Look up weather forecasts.' }),
+                sports: arraySchema(makeObjectSchema({
+                    required: ['fn', 'league'],
+                    properties: {
+                        tool: stringSchema({ enum: ['sports'], description: 'Tool name for sports requests.' }),
+                        fn: stringSchema({ enum: ['schedule', 'standings'], description: 'Sports function to call.' }),
+                        league: stringSchema({ enum: ['nba', 'wnba', 'nfl', 'nhl', 'mlb', 'epl', 'ncaamb', 'ncaawb', 'ipl'], description: 'League to look up.' }),
+                        team: stringSchema({ description: 'Team alias used in broadcasts.' }),
+                        opponent: stringSchema({ description: 'Opponent used with team when narrowing the lookup.' }),
+                        date_from: stringSchema({ description: 'Start date in YYYY-MM-DD format.' }),
+                        date_to: stringSchema({ description: 'End date in YYYY-MM-DD format.' }),
+                        num_games: numberSchema({ minimum: 1, description: 'Number of games to return.' }),
+                        locale: stringSchema({ description: 'Locale for the lookup.' })
+                    },
+                    additionalProperties: false
+                }), { description: 'Look up sports schedules and standings.' }),
+                time: arraySchema(makeObjectSchema({
+                    required: ['utc_offset'],
+                    properties: {
+                        utc_offset: stringSchema({ minLength: 1, description: 'UTC offset formatted like +03:00.' })
+                    },
+                    additionalProperties: false
+                }), { description: 'Get time for the given UTC offsets.' }),
+                response_length: stringSchema({
+                    enum: ['short', 'medium', 'long'],
+                    description: 'Set the length of the response to be returned.'
+                })
+            },
+            additionalProperties: false
+        })
+    }),
     web_search: Object.freeze({
         id: 'web_search',
         version: CONTRACT_VERSION,

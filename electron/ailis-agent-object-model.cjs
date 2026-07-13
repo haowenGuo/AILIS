@@ -142,8 +142,8 @@ const WEB_MODEL_ADJUDICATION_LINE = /^\s*(?:complete|output[_ ]?(?:complete|trun
 
 function isWebToolName(toolName = '') {
     const normalized = normalizeText(toolName).toLowerCase();
-    return /(?:^|__|:|\.)(web_search|web_fetch|web_research|web_extract_links|open_page|find_in_page)$/.test(normalized) ||
-        ['web_search', 'web_fetch', 'web_research', 'web_extract_links', 'open_page', 'find_in_page'].includes(normalized);
+    return /(?:^|__|:|\.)(web_run|web_search|web_fetch|web_research|web_extract_links|open_page|find_in_page)$/.test(normalized) ||
+        ['web_run', 'web_search', 'web_fetch', 'web_research', 'web_extract_links', 'open_page', 'find_in_page'].includes(normalized);
 }
 
 function sanitizeWebToolDetailsForModel(value, depth = 0) {
@@ -397,7 +397,17 @@ function normalizeWebSearchCall(webSearchOutput = {}, callId = '') {
     });
 }
 
-function formatWebSearchCandidates(webSearchOutput = {}) {
+function formatWebRunOpenPage({ refId = '', url = '', lineno = 1 } = {}) {
+    const target = normalizeText(refId || url);
+    if (!target) {
+        return '';
+    }
+    return `Open page: web_run ${safeJsonStringify({
+        open: [{ ref_id: target, lineno: Number(lineno || 1) || 1 }]
+    }, '{}')}`;
+}
+
+function formatWebSearchCandidates(webSearchOutput = {}, toolName = '') {
     const candidates = Array.isArray(webSearchOutput.search?.results)
         ? webSearchOutput.search.results
         : Array.isArray(webSearchOutput.search?.candidates)
@@ -412,7 +422,9 @@ function formatWebSearchCandidates(webSearchOutput = {}) {
         lines.push(`${index + 1}. [${refId}] ${candidate.title || candidate.url || '(untitled)'}`);
         if (candidate.url) {
             lines.push(`   URL: ${candidate.url}`);
-            lines.push(`   Open page: web_fetch ${safeJsonStringify({ url: candidate.url, lineno: 1 }, '{}')}`);
+            lines.push(`   ${toolName === 'web_run'
+                ? formatWebRunOpenPage({ refId, url: candidate.url })
+                : `Open page: web_fetch ${safeJsonStringify({ url: candidate.url, lineno: 1 }, '{}')}`}`);
         }
         if (candidate.snippet) {
             lines.push(`   Snippet: ${candidate.snippet}`);
@@ -421,7 +433,7 @@ function formatWebSearchCandidates(webSearchOutput = {}) {
     return lines.join('\n');
 }
 
-function formatWebSearchSources(webSearchOutput = {}) {
+function formatWebSearchSources(webSearchOutput = {}, toolName = '') {
     const sources = Array.isArray(webSearchOutput.fetch?.sources)
         ? webSearchOutput.fetch.sources
         : [];
@@ -435,10 +447,16 @@ function formatWebSearchSources(webSearchOutput = {}) {
         if (source.url) {
             lines.push(`URL: ${source.url}`);
             const openPage = firstObject(source.open_page, source.openPage);
-            lines.push(`Open page: web_fetch ${safeJsonStringify({
-                url: normalizeText(openPage.url || source.url),
-                lineno: Number(openPage.lineno || 1) || 1
-            }, '{}')}`);
+            lines.push(toolName === 'web_run'
+                ? formatWebRunOpenPage({
+                    refId,
+                    url: normalizeText(openPage.url || source.url),
+                    lineno: Number(openPage.lineno || 1) || 1
+                })
+                : `Open page: web_fetch ${safeJsonStringify({
+                    url: normalizeText(openPage.url || source.url),
+                    lineno: Number(openPage.lineno || 1) || 1
+                }, '{}')}`);
         }
         const meta = [
             source.host ? `host=${source.host}` : '',
@@ -494,8 +512,8 @@ function buildWebSearchFunctionOutput(toolOutput = {}, webSearchOutput = {}) {
             `Tool: ${toolOutput.toolName}`,
             toolOutput.durationMs != null ? `duration_ms=${toolOutput.durationMs}` : ''
         ].filter(Boolean).join('\n')),
-        ContentItem.inputText(formatWebSearchCandidates(webSearchOutput)),
-        ContentItem.inputText(formatWebSearchSources(webSearchOutput)),
+        ContentItem.inputText(formatWebSearchCandidates(webSearchOutput, toolOutput.toolName)),
+        ContentItem.inputText(formatWebSearchSources(webSearchOutput, toolOutput.toolName)),
         ContentItem.inputText(formatWebSearchDiagnostics(webSearchOutput))
     ].filter(Boolean);
     if (!contentItems.length) {
@@ -504,6 +522,31 @@ function buildWebSearchFunctionOutput(toolOutput = {}, webSearchOutput = {}) {
     return FunctionCallOutputPayload.fromContentItems(contentItems, {
         success: toolOutput.ok === true ? true : toolOutput.ok === false ? false : null
     });
+}
+
+function formatSourceViewportLinks(toolOutput = {}, details = {}) {
+    if (normalizeText(toolOutput.toolName) !== 'web_run') {
+        return '';
+    }
+    const links = Array.isArray(details.observedRelevantLinks)
+        ? details.observedRelevantLinks
+        : Array.isArray(details.observed_relevant_links)
+        ? details.observed_relevant_links
+        : [];
+    if (!links.length) {
+        return '';
+    }
+    const lines = ['Links:'];
+    links.slice(0, 8).forEach((link, index) => {
+        const url = normalizeText(link.url);
+        if (!url) {
+            return;
+        }
+        lines.push(`${index + 1}. ${link.text || link.title || url}`);
+        lines.push(`   URL: ${url}`);
+        lines.push(`   ${formatWebRunOpenPage({ url })}`);
+    });
+    return lines.length > 1 ? lines.join('\n') : '';
 }
 
 function sourceViewportFromToolOutput(toolOutput = {}) {
@@ -619,6 +662,7 @@ function buildSourceViewportFunctionOutput(toolOutput = {}, sourceViewport = {})
             toolOutput.durationMs != null ? `duration_ms=${toolOutput.durationMs}` : ''
         ].filter(Boolean).join('\n')),
         ContentItem.inputText(formatSourceViewportMatches(details)),
+        ContentItem.inputText(formatSourceViewportLinks(toolOutput, details)),
         ContentItem.inputText(formatSourceViewportLines(sourceWindow))
     ].filter(Boolean);
     return FunctionCallOutputPayload.fromContentItems(contentItems, {

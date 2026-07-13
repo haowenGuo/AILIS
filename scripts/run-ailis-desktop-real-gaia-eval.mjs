@@ -56,6 +56,8 @@ function parseArgs(argv = process.argv.slice(2)) {
         isolatedWorkspace: false,
         directToolExecutor: true,
         agentRole: 'persona_orchestrator',
+        debugBreakAfterRound: false,
+        debugRounds: 1,
         planOnly: false,
         resume: true,
         costInputPerMillion: Number(process.env.AILIS_EVAL_INPUT_USD_PER_1M || 0),
@@ -87,6 +89,11 @@ function parseArgs(argv = process.argv.slice(2)) {
         else if (token === '--direct-tool-executor') args.directToolExecutor = true;
         else if (token === '--no-direct-tool-executor') args.directToolExecutor = false;
         else if (token === '--agent-role') args.agentRole = normalizeText(next(), args.agentRole);
+        else if (token === '--debug-break-after-round') args.debugBreakAfterRound = true;
+        else if (token === '--debug-rounds') {
+            args.debugBreakAfterRound = true;
+            args.debugRounds = Math.max(1, Math.min(Number(next()) || 1, args.maxAgentSteps));
+        }
         else if (token === '--plan-only') args.planOnly = true;
         else if (token === '--resume') args.resume = true;
         else if (token === '--no-resume') args.resume = false;
@@ -325,6 +332,7 @@ function buildDesktopRealPayload({ args, task, llmSettings }) {
         llmSettings,
         directToolExecutor: args.directToolExecutor,
         nativeDirectTools: args.directToolExecutor,
+        debugBreakAfterRound: args.debugBreakAfterRound,
         context: {
             workspace: args.workspaceRoot,
             agentLoop: 'llm',
@@ -333,6 +341,7 @@ function buildDesktopRealPayload({ args, task, llmSettings }) {
             llmSettings,
             directToolExecutor: args.directToolExecutor,
             nativeDirectTools: args.directToolExecutor,
+            debugBreakAfterRound: args.debugBreakAfterRound,
             agentRole: args.agentRole,
             desktopRealEval: true,
             desktopRealEvalTaskId: task.task_id,
@@ -389,7 +398,25 @@ async function callAgent({ args, gateway, baseUrl, task, llmSettings }) {
     const startedAt = Date.now();
     if (gateway) {
         try {
-            const response = await gateway.runAgent(payload);
+            let response = await gateway.runAgent(payload);
+            for (let round = 1; round < args.debugRounds; round += 1) {
+                const debugSessionId = normalizeText(
+                    response?.debugSessionId ||
+                    response?.summary?.debugSessionId ||
+                    response?.result?.debugSessionId
+                );
+                if (response?.status !== 'debug_paused' || !debugSessionId) {
+                    break;
+                }
+                response = await gateway.runAgent({
+                    ...payload,
+                    debugSessionId,
+                    context: {
+                        ...payload.context,
+                        debugSessionId
+                    }
+                });
+            }
             return {
                 response,
                 durationMs: Date.now() - startedAt,

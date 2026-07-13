@@ -260,10 +260,10 @@ test('AILIS parent Persona prompt stays conversational while TaskAgent keeps exe
         contextMode: 'task_agent',
         toolSummary: 'Direct tools are exposed.'
     });
-    assert.match(taskPrompt.instructions, /mcp__ailis_research__web_research/);
+    assert.doesNotMatch(taskPrompt.instructions, /mcp__ailis_research__web_research/);
+    assert.match(taskPrompt.instructions, /public web facts/);
     assert.match(taskPrompt.instructions, /For local file and data tasks/);
-    assert.match(taskPrompt.instructions, /open_page actions/);
-    assert.match(taskPrompt.instructions, /most authoritative returned source URL/);
+    assert.doesNotMatch(taskPrompt.instructions, /open_page actions|most authoritative returned source URL/);
     assert.match(taskPrompt.instructions, /mechanical transport metadata, not a decision/);
     assert.doesNotMatch(taskPrompt.instructions, /complete=true|reasoning_ready=true/);
     assert.doesNotMatch(taskPrompt.instructions, /Keep ordinary conversation natural/);
