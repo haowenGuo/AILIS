@@ -34,6 +34,7 @@ const { AILISMemoryRuntime } = require('./ailis-memory-store.cjs');
 const { AILISRawMemoryLedger } = require('./ailis-raw-memory-ledger.cjs');
 const { AILISUserProfileCurator } = require('./ailis-user-profile-curator.cjs');
 const { AilisSelfEvolutionRuntime } = require('./ailis-self-evolution-runtime.cjs');
+const { AILISEmberHarness } = require('./ailis-ember-harness.cjs');
 const {
     listToolContracts,
     validateToolContract
@@ -122,7 +123,7 @@ const LOSSLESS_EVENT_TYPES = new Set([
     'mcp.resource.read.begin',
     'mcp.resource.read.end'
 ]);
-const LOSSLESS_EVENT_PREFIXES = ['approval.', 'subagent.', 'mcp.', 'agent.'];
+const LOSSLESS_EVENT_PREFIXES = ['approval.', 'subagent.', 'mcp.', 'agent.', 'ember.'];
 const CODEX_STYLE_DIRECT_LOCAL_TOOL_IDS = new Set([
     'read',
     'write',
@@ -649,6 +650,49 @@ function throwApprovalRequired(message, details = undefined) {
     throw error;
 }
 
+function summarizeEmberHarnessRecord(record = {}) {
+    if (!record || typeof record !== 'object') {
+        return record;
+    }
+    const snapshot = record.snapshot && typeof record.snapshot === 'object'
+        ? {
+            snapshotId: record.snapshot.snapshotId,
+            stage: record.snapshot.stage,
+            boundary: record.snapshot.boundary,
+            textHash: record.snapshot.textHash,
+            textChars: record.snapshot.textChars,
+            approxTokens: record.snapshot.approxTokens
+        }
+        : null;
+    const rollbackTo = record.rollbackTo && typeof record.rollbackTo === 'object'
+        ? {
+            snapshotId: record.rollbackTo.snapshotId,
+            stage: record.rollbackTo.stage,
+            boundary: record.rollbackTo.boundary,
+            textHash: record.rollbackTo.textHash
+        }
+        : null;
+    return {
+        schema: record.schema,
+        checkId: record.checkId,
+        runId: record.runId,
+        sessionId: record.sessionId,
+        stage: record.stage,
+        boundary: record.boundary,
+        mode: record.mode,
+        status: record.status,
+        decision: record.decision,
+        blocked: record.blocked,
+        riskLevel: record.riskLevel,
+        riskTypes: record.riskTypes,
+        summary: record.summary,
+        suggestion: record.suggestion,
+        evaluatorConfigured: record.evaluatorConfigured,
+        snapshot,
+        rollbackTo
+    };
+}
+
 function buildSmokeStatusMap(reportPath) {
     try {
         const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
@@ -773,6 +817,13 @@ class AILISGateway extends EventEmitter {
         this.memoryRuntime = options.memoryRuntime || new AILISMemoryRuntime({
             rootDir: path.join(this.auditDir, 'memory'),
             workspaceRoot: this.workspaceRoot
+        });
+        this.emberHarness = options.emberHarness || new AILISEmberHarness({
+            enabled: options.emberHarnessEnabled,
+            mode: options.emberHarnessMode,
+            evaluator: options.emberHarnessEvaluator,
+            maxRunRecords: options.emberHarnessMaxRunRecords,
+            maxTotalRecords: options.emberHarnessMaxTotalRecords
         });
         this.userProfileCurator = options.userProfileCurator || new AILISUserProfileCurator({
             rootDir: path.join(this.auditDir, 'memory'),
@@ -1121,6 +1172,7 @@ class AILISGateway extends EventEmitter {
             defaultContext: redactObject(this.resolveDefaultContext()),
             runtime: this.runtime.getStatus(),
             memory: this.memoryRuntime?.getStatus?.() || null,
+            emberHarness: this.emberHarness?.getStatus?.() || null,
             rawMemory: this.rawMemoryLedger?.getStatus?.() || null,
             userProfileCuration: this.userProfileCurator?.getStatus?.() || null,
             userProfileCurationScheduler: {
@@ -1397,6 +1449,16 @@ class AILISGateway extends EventEmitter {
             this.sendJson(res, 200, {
                 ok: true,
                 status: this.getStatus()
+            });
+            return;
+        }
+
+        if (url.pathname === '/ember-harness/status' && req.method === 'GET') {
+            const runId = url.searchParams.get('runId') || '';
+            this.sendJson(res, 200, {
+                ok: true,
+                status: this.emberHarness?.getStatus?.() || null,
+                records: runId ? this.emberHarness?.listRunRecords?.(runId, Number(url.searchParams.get('limit') || 50)) || [] : []
             });
             return;
         }
@@ -1818,6 +1880,98 @@ class AILISGateway extends EventEmitter {
         ])];
     }
 
+    shouldRunEmberHarness(context = {}) {
+        return this.emberHarness?.enabled !== false &&
+            context.emberHarness !== false &&
+            context.disableEmberHarness !== true;
+    }
+
+    async runEmberHarnessCheck({
+        stage = 'unknown',
+        boundary = 'unknown',
+        text = '',
+        context = {},
+        metadata = {},
+        runId = '',
+        sessionId = ''
+    } = {}) {
+        const finalRunId = normalizeString(
+            runId || context.runId || context.parentRunId || context.sessionRunId,
+            'global'
+        );
+        const finalSessionId = normalizeString(
+            sessionId || context.sessionId || context.sessionKey || context.parentSessionId,
+            'main'
+        );
+        if (!this.shouldRunEmberHarness(context)) {
+            return {
+                ok: true,
+                status: 'disabled',
+                decision: 'allow',
+                blocked: false,
+                runId: finalRunId,
+                sessionId: finalSessionId,
+                stage,
+                boundary
+            };
+        }
+        const result = await this.emberHarness.check({
+            runId: finalRunId,
+            sessionId: finalSessionId,
+            stage,
+            boundary,
+            text,
+            metadata: redactObject(metadata),
+            evaluator: typeof context.emberHarnessEvaluator === 'function' ? context.emberHarnessEvaluator : null
+        });
+        const eventPayload = {
+            schema: result.schema,
+            checkId: result.checkId,
+            runId: result.runId,
+            sessionId: result.sessionId,
+            stage: result.stage,
+            boundary: result.boundary,
+            mode: result.mode,
+            status: result.status,
+            decision: result.decision,
+            blocked: result.blocked,
+            riskLevel: result.riskLevel,
+            riskTypes: result.riskTypes,
+            summary: result.summary,
+            suggestion: result.suggestion,
+            evaluatorConfigured: result.evaluatorConfigured,
+            snapshot: result.snapshot,
+            rollbackTo: result.rollbackTo
+        };
+        this.emitGatewayEvent('ember.harness.check', eventPayload);
+        await this.appendAudit({
+            type: 'ember.harness.check',
+            runId: result.runId,
+            sessionId: result.sessionId,
+            status: result.status,
+            ok: result.blocked !== true,
+            args: {
+                stage: result.stage,
+                boundary: result.boundary
+            },
+            context: {
+                workspace: context.workspace || context.workspaceDir,
+                planner: context.planner,
+                iteration: context.iteration
+            },
+            result: eventPayload
+        }).catch(() => {});
+        if (result.runId && result.runId !== 'global') {
+            await this.runtime.appendItem(result.runId, {
+                type: 'ember.harness.check',
+                sessionId: result.sessionId,
+                status: result.status,
+                payload: eventPayload
+            }).catch(() => {});
+        }
+        return result;
+    }
+
     async callTool(request = {}) {
         const callId = randomUUID();
         const startedAt = Date.now();
@@ -1912,11 +2066,58 @@ class AILISGateway extends EventEmitter {
                     classification: policyDecision.classification
                 });
             }
+            const preToolGate = await this.runEmberHarnessCheck({
+                stage: policyDecision.classification?.mutates ? 'pre_side_effect' : 'tool_call',
+                boundary: 'tool_call_before_execution',
+                text: {
+                    tool: toolId,
+                    args,
+                    policy: policyDecision.policy,
+                    classification: policyDecision.classification
+                },
+                context,
+                runId: transcriptRunId,
+                sessionId: transcriptSessionId,
+                metadata: {
+                    callId,
+                    tool: toolId,
+                    workspace: workspaceDir,
+                    mutates: policyDecision.classification?.mutates === true,
+                    needsApproval: policyDecision.needsApproval === true
+                }
+            });
+            if (preToolGate.blocked) {
+                throwBlocked('tool call blocked by EMBER-Harness stage gate before execution', {
+                    tool: toolId,
+                    callId,
+                    emberHarness: summarizeEmberHarnessRecord(preToolGate)
+                });
+            }
             const result = await withTimeout(
                 Number(request.timeoutMs || context.timeoutMs || TOOL_CALL_TIMEOUT_MS),
                 () => this.callAgentRuntimeTool({ callId, toolId, args, context, workspaceDir })
             );
             const guardedResult = this.runtime.guardToolResult(result, { toolId, callId });
+            const postToolGate = await this.runEmberHarnessCheck({
+                stage: 'tool_result',
+                boundary: 'tool_result_enter_context',
+                text: guardedResult,
+                context,
+                runId: transcriptRunId,
+                sessionId: transcriptSessionId,
+                metadata: {
+                    callId,
+                    tool: toolId,
+                    workspace: workspaceDir
+                }
+            });
+            if (postToolGate.blocked) {
+                throwBlocked('tool result blocked by EMBER-Harness before entering model context', {
+                    tool: toolId,
+                    callId,
+                    emberHarness: summarizeEmberHarnessRecord(postToolGate)
+                });
+            }
             if (toolId === 'tool_search') {
                 attachRawToolSearchToolsForDirectExposure(guardedResult, result);
             }
@@ -2078,12 +2279,95 @@ class AILISGateway extends EventEmitter {
 
     async runAgent(request = {}) {
         const input = request && typeof request === 'object' ? request : {};
-        return await this.ensureAgentRunner().runMessage({
-            ...input,
-            context: this.mergeDefaultContext(
-                input.context && typeof input.context === 'object' ? input.context : {}
-            )
+        const context = this.mergeDefaultContext(
+            input.context && typeof input.context === 'object' ? input.context : {}
+        );
+        const sessionId = normalizeString(input.sessionId || input.sessionKey || context.sessionId || context.sessionKey, 'main');
+        const runId = normalizeString(input.runId || context.runId);
+        const inputGate = await this.runEmberHarnessCheck({
+            stage: 'user_input',
+            boundary: 'untrusted_input_enter_context',
+            text: {
+                message: input.message || input.prompt || input.task || '',
+                attachments: Array.isArray(input.attachments) ? input.attachments : [],
+                messageHistoryCount: Array.isArray(input.messageHistory) ? input.messageHistory.length : 0
+            },
+            context,
+            runId,
+            sessionId,
+            metadata: {
+                source: 'agent.run',
+                agentLoop: input.agentLoop || context.agentLoop,
+                planner: input.planner || context.planner
+            }
         });
+        if (inputGate.blocked) {
+            return {
+                ok: false,
+                status: 'blocked',
+                mode: 'agent',
+                intent: 'blocked_by_ember_harness',
+                displayText: '本次请求已被 EMBER-Harness 阶段门控阻断，未进入智能体执行链路。',
+                speechText: '本次请求已被安全门控阻断。',
+                emberHarness: summarizeEmberHarnessRecord(inputGate)
+            };
+        }
+        const result = await this.ensureAgentRunner().runMessage({
+            ...input,
+            context
+        });
+        const finalText = normalizeString(
+            result?.displayText ||
+            result?.speechText ||
+            result?.finalAnswer ||
+            result?.answer ||
+            result?.message
+        );
+        if (!finalText) {
+            return {
+                ...result,
+                emberHarness: {
+                    input: summarizeEmberHarnessRecord(inputGate)
+                }
+            };
+        }
+        const finalGate = await this.runEmberHarnessCheck({
+            stage: 'final_output',
+            boundary: 'final_output_before_user',
+            text: finalText,
+            context,
+            runId: result?.runId || runId,
+            sessionId: result?.sessionId || sessionId,
+            metadata: {
+                source: 'agent.run',
+                status: result?.status,
+                ok: result?.ok === true
+            }
+        });
+        if (finalGate.blocked) {
+            return {
+                ok: false,
+                status: 'blocked',
+                mode: result?.mode || 'agent',
+                intent: 'blocked_by_ember_harness',
+                runId: result?.runId,
+                sessionId: result?.sessionId || sessionId,
+                durationMs: result?.durationMs,
+                displayText: '最终回答已被 EMBER-Harness 阶段门控阻断，系统已回退到最近稳定阶段快照。',
+                speechText: '最终回答已被安全门控阻断。',
+                emberHarness: {
+                    input: summarizeEmberHarnessRecord(inputGate),
+                    final: summarizeEmberHarnessRecord(finalGate)
+                }
+            };
+        }
+        return {
+            ...result,
+            emberHarness: {
+                input: summarizeEmberHarnessRecord(inputGate),
+                final: summarizeEmberHarnessRecord(finalGate)
+            }
+        };
     }
 
     async interruptAgentRun(request = {}) {

@@ -83,6 +83,92 @@ function buildBlankPdfWithoutSelectableText() {
     return Buffer.from(body, 'latin1');
 }
 
+test('EMBER-Harness records stage checks around tool execution', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-ember-harness-observe-'));
+    const gateway = new AILISGateway({
+        port: 0,
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit')
+    });
+    await fs.writeFile(path.join(workspaceRoot, 'note.txt'), 'safe observation\n', 'utf8');
+
+    try {
+        const response = await gateway.callTool({
+            tool: 'read',
+            args: { path: 'note.txt' },
+            context: { workspace: workspaceRoot, runId: 'ember-run-observe', sessionId: 'main' }
+        });
+
+        assert.equal(response.ok, true, response.error);
+        const records = gateway.emberHarness.listRunRecords('ember-run-observe');
+        assert.deepEqual(records.map((record) => record.stage), ['tool_call', 'tool_result']);
+        assert.equal(records.every((record) => record.snapshot?.textHash), true);
+        assert.equal(records.every((record) => record.blocked === false), true);
+
+        const events = gateway.getEventsAfter(0, 20).filter((event) => event.type === 'ember.harness.check');
+        assert.equal(events.length, 2);
+        assert.deepEqual(events.map((event) => event.payload.boundary), [
+            'tool_call_before_execution',
+            'tool_result_enter_context'
+        ]);
+
+        const transcript = await gateway.runtime.readTranscript('ember-run-observe', 50);
+        assert.equal(transcript.ok, true);
+        assert.equal(transcript.items.filter((item) => item.type === 'ember.harness.check').length, 2);
+    } finally {
+        await gateway.stop();
+        await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
+});
+
+test('EMBER-Harness can block a tool result before it enters model context', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-ember-harness-block-'));
+    const gateway = new AILISGateway({
+        port: 0,
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit'),
+        emberHarnessEvaluator: async ({ stage }) => {
+            if (stage === 'tool_result') {
+                return {
+                    decision: 'block',
+                    riskLevel: 'high',
+                    riskTypes: ['bias_payload'],
+                    summary: 'simulated high-risk payload'
+                };
+            }
+            return { decision: 'allow', riskLevel: 'none' };
+        }
+    });
+    await fs.writeFile(path.join(workspaceRoot, 'note.txt'), 'blocked payload should not be echoed\n', 'utf8');
+
+    try {
+        const response = await gateway.callTool({
+            tool: 'read',
+            args: { path: 'note.txt' },
+            context: { workspace: workspaceRoot, runId: 'ember-run-block', sessionId: 'main' }
+        });
+
+        assert.equal(response.ok, false);
+        assert.equal(response.status, 'blocked');
+        assert.equal(response.details.emberHarness.stage, 'tool_result');
+        assert.equal(response.details.emberHarness.decision, 'block');
+        assert.equal(response.details.emberHarness.snapshot.preview, undefined);
+        assert.doesNotMatch(JSON.stringify(response), /blocked payload should not be echoed/);
+
+        const records = gateway.emberHarness.listRunRecords('ember-run-block');
+        assert.equal(records.length, 2);
+        assert.equal(records[0].stage, 'tool_call');
+        assert.equal(records[1].stage, 'tool_result');
+        assert.equal(records[1].blocked, true);
+        assert.equal(records[1].rollbackTo.snapshotId, records[0].snapshot.snapshotId);
+    } finally {
+        await gateway.stop();
+        await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
+});
+
 test('AILIS Gateway subagent task reuses parent LLM settings for TaskAgent runs', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-subagent-llm-'));
     const gateway = new AILISGateway({
