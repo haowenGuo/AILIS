@@ -106,6 +106,7 @@ test('AILIS research MCP exposes Codex-aligned PDF/file tools', () => {
     const names = TOOLS.map((tool) => tool.name);
     const searchTool = TOOLS.find((tool) => tool.name === 'web_search');
     const fetchTool = TOOLS.find((tool) => tool.name === 'web_fetch');
+    const pdfFindTool = TOOLS.find((tool) => tool.name === 'pdf_find_and_extract');
     const pythonTool = TOOLS.find((tool) => tool.name === 'run_python_file');
     const youtubeSearchTool = TOOLS.find((tool) => tool.name === 'youtube_video_search');
     const youtubeTranscriptTool = TOOLS.find((tool) => tool.name === 'youtube_transcript');
@@ -146,6 +147,12 @@ test('AILIS research MCP exposes Codex-aligned PDF/file tools', () => {
     assert.equal(fetchTool.inputSchema.properties.viewportChars, undefined);
     assert.equal(fetchTool.inputSchema.properties.extract_query, undefined);
     assert.ok(fetchTool.description.includes('Codex/OAI-style action: open_page'));
+    assert.deepEqual(pdfFindTool.inputSchema.anyOf, [
+        { required: ['url'] },
+        { required: ['title'] },
+        { required: ['query'] }
+    ]);
+    assert.equal(pdfFindTool.inputSchema.additionalProperties, false);
     const findTool = TOOLS.find((tool) => tool.name === 'web_find');
     assert.deepEqual(findTool.inputSchema.required, ['url', 'pattern']);
     assert.equal(findTool.inputSchema.properties.ref_id, undefined);
@@ -1084,7 +1091,7 @@ test('web_search uses SearXNG JSON provider before HTML fallback', async () => {
         assert.equal(result.structuredContent.backend, 'searxng_json');
         assert.equal(result.structuredContent.attempts[0].backend, 'searxng_json');
         assert.equal(result.structuredContent.results[0].url, 'https://www.bilibili.com/video/BV1rXBoBoEv1/');
-        assert.equal(result.structuredContent.suggestedNextCalls[0].tool, 'web_fetch');
+        assert.equal(result.structuredContent.suggestedNextCalls[0].tool, 'open_page');
     });
 });
 
@@ -1265,7 +1272,7 @@ test('web_search aggregates provider chain when the first successful backend is 
         assert.ok(result.structuredContent.searchAggregation.enabled);
         assert.ok(result.structuredContent.searchAggregation.successfulBackends.includes('searxng_json'));
         assert.ok(result.structuredContent.searchAggregation.successfulBackends.includes('firecrawl_search'));
-        assert.equal(result.structuredContent.suggestedNextCalls[0].tool, 'web_fetch');
+        assert.equal(result.structuredContent.suggestedNextCalls[0].tool, 'open_page');
     });
 });
 
@@ -1458,7 +1465,7 @@ test('web_search reranks Chinese game guide results ahead of unrelated popular p
     assert.ok(ranked[0].queryMatchedTerms.includes('小光'));
     assert.ok(ranked[0].queryMatchedTerms.includes('攻略'));
     assert.deepEqual(ranked[0].queryMatchedSites, ['bilibili.com']);
-    assert.equal(calls[0].tool, 'web_fetch');
+    assert.equal(calls[0].tool, 'open_page');
     assert.equal(calls[0].args.url, 'https://www.bilibili.com/video/BV1rXBoBoEv1/');
 });
 
@@ -1582,7 +1589,7 @@ test('web_search site-constrained rerank prefers high-signal NGA guide threads',
     assert.match(ranked[0].url, /bbs\.nga\.cn/);
     assert.deepEqual(ranked[0].queryMatchedSites, ['nga.cn']);
     assert.ok(ranked[0].queryMatchedTerms.includes('叶瞬光'));
-    assert.equal(calls[0].tool, 'web_fetch');
+    assert.equal(calls[0].tool, 'open_page');
     assert.match(calls[0].args.url, /bbs\.nga\.cn/);
 });
 
@@ -1635,6 +1642,17 @@ test('web_search reranks official source documents ahead of mirrors and portal n
     assert.ok(ranked.findIndex((item) => /scribd\.com/.test(item.url)) >= 2);
     assert.ok(ranked.findIndex((item) => /yahoo\.com/.test(item.url)) > 2);
     assert.ok(ranked.findIndex((item) => /stable\/index\.html/.test(item.url)) > 2);
+});
+
+test('search follow-up suggestions resolve HTML PDF wrappers with pdf_find_and_extract', () => {
+    const calls = buildSuggestedCallsFromSearchResults([{
+        title: 'Dragons are Tricksy - PDF',
+        url: 'https://journal.example/article/view/164228',
+        snippet: 'Emily Midkiff Fafnir article PDF'
+    }], { query: 'Emily Midkiff Fafnir Dragons are Tricksy' });
+
+    assert.equal(calls[0].tool, 'pdf_find_and_extract');
+    assert.equal(calls[0].args.url, 'https://journal.example/article/view/164228');
 });
 
 test('research ranking prefers an article detail page over issue and archive collections', () => {
@@ -1709,6 +1727,15 @@ test('web_research builds an evidence bundle from search and fetched pages', asy
         assert.equal(result.structuredContent.webSearchCall.action.type, 'search');
         assert.equal(result.structuredContent.webSearchItem.type, 'web_search');
         assert.equal(result.structuredContent.webSearchOutput.type, 'function_call_output');
+        assert.deepEqual(result.structuredContent.suggestedNextCalls[0], {
+            tool: 'open_page',
+            args: { url: `${baseUrl}/guide`, lineno: 1 },
+            reason: 'Open source: 莱特 - 绝区零WIKI_BWIKI'
+        });
+        assert.deepEqual(
+            result.structuredContent.webSearchOutput.suggestedNextCalls,
+            result.structuredContent.suggestedNextCalls
+        );
         assert.equal(result.structuredContent.answerReadiness, undefined);
         assert.equal(result.structuredContent.fetchedPageCount, 1);
         assert.equal(result.structuredContent.evidencePages.length, 1);
@@ -1729,7 +1756,7 @@ test('web_research builds an evidence bundle from search and fetched pages', asy
         assert.equal(result.structuredContent.search.searchQueries[0].role, 'original');
         assert.ok(result.structuredContent.evidencePages[0].htmlRelations.sections.some((section) => section.heading === '配队建议'));
         assert.match(result.content[0].text, /AILIS web research evidence bundle/);
-        assert.match(result.content[0].text, /Open page: web_fetch/);
+        assert.match(result.content[0].text, /Open page: open_page/);
         assert.ok(result.content[0].text.indexOf('Highest-ranked fetched sources:') >= 0);
         assert.ok(result.content[0].text.indexOf(`${baseUrl}/guide`) < 2000);
         assert.doesNotMatch(result.content[0].text, /Fetch diagnostic:|Pipeline diagnostics:/);
@@ -2703,7 +2730,7 @@ test('web_fetch does not suggest unrelated PDFs when query terms are absent', as
         });
 
         assert.equal(result.isError, undefined, result.content[0].text);
-        assert.equal(result.structuredContent.suggestedNextCalls[0].tool, 'web_fetch');
+        assert.equal(result.structuredContent.suggestedNextCalls[0].tool, 'open_page');
         assert.equal(result.structuredContent.suggestedNextCalls[0].args.url, `${baseUrl}/issue/archive/2`);
         assert.ok(!result.structuredContent.suggestedNextCalls.some((call) => call.tool === 'pdf_extract_text'));
     });
@@ -3247,7 +3274,7 @@ test('web_extract_links preserves duplicate OJS issue titles and archive paginat
         assert.equal(issueLink.text, 'Vol. 1 No. 2/2014 (2014)');
         assert.ok(result.details.links.some((link) => link.url === `${baseUrl}/issue/archive/2` && link.text === 'Next'));
         assert.ok(result.structuredContent.suggestedNextCalls.some((call) => (
-            call.tool === 'web_fetch' && call.args?.url === `${baseUrl}/issue/archive/2`
+            call.tool === 'open_page' && call.args?.url === `${baseUrl}/issue/archive/2`
         )));
         assert.match(result.content[0].text, /Vol\. 1 No\. 2\/2014/);
     });

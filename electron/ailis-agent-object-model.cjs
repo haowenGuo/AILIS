@@ -285,6 +285,27 @@ function firstObject(...values) {
     return values.find((value) => value && typeof value === 'object' && !Array.isArray(value)) || {};
 }
 
+function toolResultDetailViews(toolOutput = {}) {
+    const queue = [firstObject(toolOutput.details)];
+    const views = [];
+    const seen = new Set();
+    while (queue.length && views.length < 16) {
+        const view = queue.shift();
+        if (!view || typeof view !== 'object' || Array.isArray(view) || seen.has(view)) {
+            continue;
+        }
+        seen.add(view);
+        views.push(view);
+        for (const key of ['structuredContent', 'structured_content', 'details', 'result']) {
+            const nested = view[key];
+            if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
+                queue.push(nested);
+            }
+        }
+    }
+    return views;
+}
+
 function normalizeStringList(values = [], limit = TOOL_SEARCH_OUTPUT_PROPERTIES_LIMIT) {
     return (Array.isArray(values) ? values : [])
         .map((entry) => {
@@ -350,14 +371,11 @@ function compactToolSearchResultForHistory(tool = {}) {
 }
 
 function webSearchOutputFromToolOutput(toolOutput = {}) {
-    const details = firstObject(toolOutput.details);
-    const candidates = [
+    const candidates = toolResultDetailViews(toolOutput).flatMap((details) => [
         details.webSearchOutput,
         details.web_search_output,
-        details,
-        details.structuredContent?.webSearchOutput,
-        details.structured_content?.web_search_output
-    ];
+        details
+    ]);
     return candidates.find((candidate) => {
         const value = firstObject(candidate);
         return normalizeText(value.webSearchCall?.type || value.web_search_call?.type) === 'web_search_call' ||
@@ -489,54 +507,56 @@ function buildWebSearchFunctionOutput(toolOutput = {}, webSearchOutput = {}) {
 }
 
 function sourceViewportFromToolOutput(toolOutput = {}) {
-    const details = firstObject(toolOutput.details);
-    const sourceWindow = firstObject(
-        details.sourceWindow,
-        details.source_window,
-        details.sourceViewport,
-        details.source_viewport,
-        details.source
-    );
-    if (normalizeText(sourceWindow.type) !== 'source_viewport') {
-        return null;
+    for (const details of toolResultDetailViews(toolOutput)) {
+        const sourceWindow = firstObject(
+            details.sourceWindow,
+            details.source_window,
+            details.sourceViewport,
+            details.source_viewport,
+            details.source
+        );
+        if (normalizeText(sourceWindow.type) !== 'source_viewport') {
+            continue;
+        }
+        const toolName = normalizeText(toolOutput.toolName);
+        const action = firstObject(sourceWindow.action);
+        const actionType = normalizeText(action.type);
+        const normalizedActionType = actionType === 'find_in_page'
+            ? 'find_in_page'
+            : actionType === 'open_page'
+            ? 'open_page'
+            : /(?:^|__)web_find$/.test(toolName)
+            ? 'find_in_page'
+            : 'open_page';
+        const url = normalizeText(sourceWindow.url || sourceWindow.ref_id || details.url);
+        const lineStart = Number(
+            sourceWindow.lineno ||
+                sourceWindow.lineStart ||
+                sourceWindow.line_start ||
+                details.lineno ||
+                details.lineStart ||
+                details.line_start ||
+                1
+        ) || 1;
+        return {
+            sourceWindow,
+            action: normalizedActionType === 'find_in_page'
+                ? {
+                    type: 'find_in_page',
+                    ...(url ? { url } : {}),
+                    ...(normalizeText(action.pattern || details.pattern)
+                        ? { pattern: normalizeText(action.pattern || details.pattern) }
+                        : {})
+                }
+                : {
+                    type: 'open_page',
+                    ...(url ? { url } : {}),
+                    lineno: lineStart
+                },
+            details
+        };
     }
-    const toolName = normalizeText(toolOutput.toolName);
-    const action = firstObject(sourceWindow.action);
-    const actionType = normalizeText(action.type);
-    const normalizedActionType = actionType === 'find_in_page'
-        ? 'find_in_page'
-        : actionType === 'open_page'
-        ? 'open_page'
-        : /(?:^|__)web_find$/.test(toolName)
-        ? 'find_in_page'
-        : 'open_page';
-    const url = normalizeText(sourceWindow.url || sourceWindow.ref_id || details.url);
-    const lineStart = Number(
-        sourceWindow.lineno ||
-            sourceWindow.lineStart ||
-            sourceWindow.line_start ||
-            details.lineno ||
-            details.lineStart ||
-            details.line_start ||
-            1
-    ) || 1;
-    return {
-        sourceWindow,
-        action: normalizedActionType === 'find_in_page'
-            ? {
-                type: 'find_in_page',
-                ...(url ? { url } : {}),
-                ...(normalizeText(action.pattern || details.pattern)
-                    ? { pattern: normalizeText(action.pattern || details.pattern) }
-                    : {})
-            }
-            : {
-                type: 'open_page',
-                ...(url ? { url } : {}),
-                lineno: lineStart
-            },
-        details
-    };
+    return null;
 }
 
 function normalizeSourceViewportWebSearchCall(sourceViewport = {}, callId = '') {

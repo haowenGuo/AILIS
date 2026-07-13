@@ -386,6 +386,58 @@ test('web_fetch source viewport is projected as open_page web_search_call', () =
     assert.match(text, /L13: Core skill details/);
 });
 
+test('nested MCP source viewport preserves answer-bearing lines instead of generic text previews', () => {
+    const items = toolOutputToModelInputItems({
+        id: 'nested-open-page-1',
+        tool: 'mcp__ailis_research__open_page',
+        args: { url: 'https://example.test/article', lineno: 8 },
+        response: {
+            ok: true,
+            status: 'completed',
+            result: {
+                content: [{
+                    type: 'text',
+                    text: 'TOOL_OUTPUT_MODEL_PREVIEW:\n... [truncated for model budget] ...'
+                }],
+                structuredContent: {
+                    status: 'completed',
+                    server: 'ailis_research',
+                    tool: 'open_page',
+                    result: {
+                        structuredContent: {
+                            sourceWindow: {
+                                type: 'source_viewport',
+                                action: {
+                                    type: 'open_page',
+                                    url: 'https://example.test/article',
+                                    lineno: 8
+                                },
+                                url: 'https://example.test/article',
+                                totalLines: 94,
+                                lineStart: 8,
+                                lineEnd: 21,
+                                hasMoreAfter: true,
+                                lines: [
+                                    { lineno: 17, text: '## Fluffy Dragons' },
+                                    { lineno: 18, text: 'Two authors comment with distaste on the increasingly cuddly, "fluffy" nature of dragons.' }
+                                ]
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    });
+
+    assert.equal(items.length, 3);
+    assert.equal(items[1].type, 'web_search_call');
+    assert.equal(items[1].action.type, 'open_page');
+    const text = FunctionCallOutputPayload.toText(items[2].output);
+    assert.match(text, /L18: Two authors comment with distaste/);
+    assert.match(text, /"fluffy"/);
+    assert.doesNotMatch(text, /TOOL_OUTPUT_MODEL_PREVIEW/);
+});
+
 test('web_find source viewport is projected as find_in_page web_search_call', () => {
     const items = toolOutputToModelInputItems({
         id: 'web-find-1',

@@ -926,6 +926,41 @@ const TOOL_CONTRACTS = Object.freeze({
             return [];
         }
     }),
+    web_search: Object.freeze({
+        id: 'web_search',
+        version: CONTRACT_VERSION,
+        mutates: false,
+        risk: 'low',
+        approval: 'never',
+        experience: TOOL_EXPERIENCE.tool_search,
+        returns: defaultReturns(),
+        errors: defaultErrors(['empty_query']),
+        schema: makeObjectSchema({
+            required: ['query'],
+            properties: {
+                query: stringSchema({
+                    minLength: 1,
+                    description: 'Required public web search query.'
+                }),
+                maxResults: numberSchema({
+                    minimum: 1,
+                    maximum: 12,
+                    description: 'Requested result count.'
+                }),
+                search_context_size: stringSchema({
+                    enum: ['low', 'medium', 'high'],
+                    description: 'Amount of search context to return.'
+                })
+            },
+            additionalProperties: false
+        }),
+        customValidate(args = {}) {
+            if (!normalizeString(args.query)) {
+                return ['web_search requires query'];
+            }
+            return [];
+        }
+    }),
     output_read: Object.freeze({
         id: 'output_read',
         version: CONTRACT_VERSION,

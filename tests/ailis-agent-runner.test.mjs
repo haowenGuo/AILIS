@@ -84,13 +84,17 @@ test('TaskAgent handoff preserves structured web source refs when prose omits UR
                 result: {
                     structuredContent: {
                         result: {
-                            structuredContent: {
-                                source: {
+                    structuredContent: {
+                        webSearchOutput: {
+                            fetch: {
+                                sources: [{
                                     ref_id: 'source_1',
                                     title: 'Official guide',
                                     url: sourceUrl,
                                     lineno: 17
-                                }
+                                }]
+                            }
+                        }
                             }
                         }
                     }
@@ -105,9 +109,86 @@ test('TaskAgent handoff preserves structured web source refs when prose omits UR
         url: sourceUrl,
         lineno: 17
     }]);
-    assert.match(handoff.userVisibleSummary, /Sources used:/);
-    assert.match(handoff.userVisibleSummary, /https:\/\/docs\.example\.test\/guide/);
+    assert.equal(handoff.userVisibleSummary, 'The guide is complete and uses the official documentation.');
     assert.match(handoff.collectedData[0].sourceRefs[0].url, /docs\.example\.test/);
+});
+
+test('TaskAgent handoff keeps raw web_search candidates separate from opened source refs', () => {
+    const handoff = buildTaskRunHandoffPackage({
+        status: 'completed',
+        finalAnswer: 'No supported answer was found.',
+        stepResults: [{
+            id: 'search-1',
+            tool: 'web_search',
+            args: { query: 'specific article' },
+            response: {
+                ok: true,
+                status: 'completed',
+                result: {
+                    structuredContent: {
+                        search: {
+                            results: [{
+                                title: 'Unrelated candidate',
+                                url: 'https://example.test/unrelated'
+                            }]
+                        }
+                    }
+                }
+            }
+        }]
+    });
+
+    assert.deepEqual(handoff.sourceRefs, []);
+    assert.doesNotMatch(handoff.userVisibleSummary, /example\.test\/unrelated/);
+});
+
+test('TaskAgent context keeps the original user goal separate from delegated work', () => {
+    const prompt = buildLlmAgentDirectToolPrompt({
+        message: 'Read every spreadsheet row and report the raw table.',
+        originalUserGoal: 'Calculate total food sales excluding drinks and return USD with two decimals.',
+        contextMode: 'task_agent',
+        taskAgentInheritanceMode: 'checkpoint',
+        taskState: { schema: 'ailis.agent_task_state.v1' },
+        tools: []
+    });
+    const serialized = JSON.stringify(prompt.contextPackage);
+    assert.match(serialized, /Calculate total food sales excluding drinks/);
+    assert.match(serialized, /Read every spreadsheet row and report the raw table/);
+    assert.match(serialized, /original_user_goal/);
+    assert.match(serialized, /delegated_task/);
+});
+
+test('TaskAgent loads structured MCP follow-up action specs on the next turn', () => {
+    const result = {};
+    Object.defineProperty(result, '__ailisSuggestedMcpTools', {
+        value: [{
+            id: 'mcp__ailis_research__open_page',
+            callable: true,
+            spec: {
+                name: 'mcp__ailis_research__open_page',
+                description: 'Open a selected source.',
+                parameters: {
+                    type: 'object',
+                    required: ['url'],
+                    properties: { url: { type: 'string' } },
+                    additionalProperties: false
+                }
+            }
+        }]
+    });
+    const specs = buildAgentDirectToolSpecs({
+        gatewayToolRuntimeRegistry: {
+            modelVisibleSpecs: () => [],
+            definition: () => null
+        }
+    }, {
+        stepResults: [{
+            tool: 'mcp__ailis_research__web_research',
+            response: { ok: true, result }
+        }],
+        requestContext: { agentRole: 'task_agent' }
+    });
+    assert.ok(specs.some((spec) => spec.name === 'mcp__ailis_research__open_page'));
 });
 
 async function jsonFetch(url, options = {}) {
@@ -350,11 +431,53 @@ test('web source viewport prompt digest uses only canonical Codex/OAI names', ()
         }
     }]);
 
-    assert.match(digest.structuredContent, /"source_viewport"/);
-    assert.match(digest.structuredContent, /"type":"open_page"/);
-    assert.match(digest.structuredContent, /"lineno":10/);
-    assert.doesNotMatch(digest.structuredContent, /sourceWindow|sourceViewport|modelVisibleMode|sourceRetrievalComplete/);
-    assert.doesNotMatch(digest.structuredContent, /lineNumber|line_number|web_fetch/);
+    assert.match(digest.text, /Opened page source viewport/);
+    assert.match(digest.text, /lineno=10/);
+    assert.match(digest.text, /L10: answer bearing line/);
+    assert.doesNotMatch(digest.text, /sourceWindow|sourceViewport|modelVisibleMode|sourceRetrievalComplete/);
+    assert.equal(digest.structuredContent, null);
+});
+
+test('TaskAgent finalization digest unwraps nested MCP source viewport evidence', () => {
+    const [digest] = buildToolObservationDigest([{
+        id: 'nested-open-page-digest-1',
+        tool: 'mcp__ailis_research__open_page',
+        args: { url: 'https://example.test/article', lineno: 8 },
+        response: {
+            ok: true,
+            status: 'completed',
+            result: {
+                content: [{ type: 'text', text: 'TOOL_OUTPUT_MODEL_PREVIEW:\n... [truncated for model budget] ...' }],
+                structuredContent: {
+                    status: 'completed',
+                    server: 'ailis_research',
+                    tool: 'open_page',
+                    result: {
+                        structuredContent: {
+                            sourceWindow: {
+                                type: 'source_viewport',
+                                action: { type: 'open_page', url: 'https://example.test/article', lineno: 8 },
+                                url: 'https://example.test/article',
+                                totalLines: 94,
+                                lineStart: 8,
+                                lineEnd: 21,
+                                lines: [
+                                    { lineno: 17, text: '## Fluffy Dragons' },
+                                    { lineno: 18, text: 'Two authors comment with distaste on the increasingly cuddly, "fluffy" nature of dragons.' }
+                                ]
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }]);
+
+    assert.match(digest.text, /L18: Two authors comment with distaste/);
+    assert.match(digest.text, /"fluffy"/);
+    assert.doesNotMatch(digest.text, /TOOL_OUTPUT_MODEL_PREVIEW/);
+    assert.equal(digest.details, null);
+    assert.equal(digest.structuredContent, null);
 });
 
 test('web observations keep source content but remove Harness evidence verdicts from model input', () => {

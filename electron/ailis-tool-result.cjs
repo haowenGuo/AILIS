@@ -46,6 +46,36 @@ function collectModelVisibleText(content = []) {
         .join('\n\n');
 }
 
+function collectStructuredToolActionKeys(value, keys = new Set(), seen = new Set(), depth = 0) {
+    if (!value || typeof value !== 'object' || seen.has(value) || depth > 8) {
+        return keys;
+    }
+    seen.add(value);
+    if (Array.isArray(value)) {
+        value.slice(0, 64).forEach((entry) => collectStructuredToolActionKeys(entry, keys, seen, depth + 1));
+        return keys;
+    }
+    for (const [key, entry] of Object.entries(value)) {
+        if (
+            ['suggestedNextCalls', 'suggested_next_calls'].includes(key) &&
+            Array.isArray(entry) &&
+            entry.some((call) => (
+                call &&
+                typeof call === 'object' &&
+                typeof call.tool === 'string' &&
+                call.tool.trim() &&
+                call.args &&
+                typeof call.args === 'object' &&
+                !Array.isArray(call.args)
+            ))
+        ) {
+            keys.add(key);
+        }
+        collectStructuredToolActionKeys(entry, keys, seen, depth + 1);
+    }
+    return keys;
+}
+
 function countLines(text = '') {
     if (!text) {
         return 0;
@@ -236,12 +266,14 @@ function normalizeAilisToolOutput(result = {}, {
     const preserveControlGuidance = output.isError === true ||
         output.details?.ok === false ||
         !['completed', 'success'].includes(resultStatus);
+    const structuredToolActionKeys = collectStructuredToolActionKeys(previewed.output);
     const compacted = compactToolResultForModel(previewed.output, {
         maxTextChars,
         maxStructuredStringChars,
-        preserveGuidanceKeys: preserveControlGuidance
-            ? ['suggestedNext', 'suggested_next']
-            : []
+        preserveGuidanceKeys: [
+            ...(preserveControlGuidance ? ['suggestedNext', 'suggested_next'] : []),
+            ...structuredToolActionKeys
+        ]
     });
     compacted.modelBudget = {
         ...(compacted.modelBudget || {}),
@@ -257,6 +289,7 @@ function normalizeAilisToolOutput(result = {}, {
 }
 
 module.exports = {
+    collectStructuredToolActionKeys,
     makeAilisToolError,
     makeAilisToolResult,
     normalizeAilisToolOutput

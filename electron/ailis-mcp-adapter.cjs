@@ -183,13 +183,21 @@ function assessMcpToolSchemaStrength(schema = {}) {
     const required = Array.isArray(schema.required)
         ? schema.required.filter((entry) => typeof entry === 'string' && entry)
         : [];
-    if (!required.length) {
+    const alternativeRequired = Array.isArray(schema.anyOf)
+        ? schema.anyOf
+            .map((branch) => Array.isArray(branch?.required)
+                ? branch.required.filter((entry) => typeof entry === 'string' && entry)
+                : [])
+            .filter((fields) => fields.length)
+        : [];
+    if (!required.length && !alternativeRequired.length) {
         return {
             callable: false,
             reason: 'schema_has_no_required_fields'
         };
     }
-    const missingRequired = required.filter((field) => !Object.prototype.hasOwnProperty.call(properties, field));
+    const missingRequired = [...new Set([...required, ...alternativeRequired.flat()])]
+        .filter((field) => !Object.prototype.hasOwnProperty.call(properties, field));
     if (missingRequired.length) {
         return {
             callable: false,

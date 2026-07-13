@@ -923,11 +923,13 @@ function extractDoiCandidate(value = '') {
     return match ? match[0].replace(/[).,;]+$/g, '').toLowerCase() : '';
 }
 
-function isLikelyPdfUrl(value = '') {
+function isLikelyDirectPdfUrl(value = '') {
     const text = normalizeString(value).toLowerCase();
     return Boolean(text) && (
         /\.pdf(?:$|[?#])/i.test(text) ||
         /\/pdf(?:$|[/?#])/i.test(text) ||
+        /\/article\/download\/\d+(?:\/\d+)?(?:\/|$|[?#])/i.test(text) ||
+        /\/article\/view\/\d+\/\d+(?:\/|$|[?#])/i.test(text) ||
         /[?&](?:format|type)=pdf\b/i.test(text) ||
         /download[^?#]*pdf/i.test(text)
     );
@@ -940,7 +942,7 @@ function classifyResearchLink(link = {}) {
     if (doi) {
         return { kind: 'doi', doi };
     }
-    if (isLikelyPdfUrl(url) || /\b(pdf|full text|download pdf|view pdf)\b/i.test(text)) {
+    if (isLikelyDirectPdfUrl(url) || /\b(pdf|full text|download pdf|view pdf)\b/i.test(text)) {
         return { kind: 'pdf', doi: '' };
     }
     if (/arxiv\.org\/abs\//i.test(url)) {
@@ -1029,15 +1031,26 @@ function buildSuggestedCallForLink(candidate = {}, { query = '' } = {}) {
             reason: `Resolve scholarly metadata from DOI link: ${text}`
         };
     }
-    if (candidate.kind === 'pdf' || isLikelyPdfUrl(url)) {
+    if (isLikelyDirectPdfUrl(url)) {
         return {
             tool: 'pdf_extract_text',
             args: { url, maxChars: 12000 },
             reason: `Read the linked PDF directly: ${text}`
         };
     }
+    if (candidate.kind === 'pdf') {
+        return {
+            tool: 'pdf_find_and_extract',
+            args: {
+                url,
+                ...(query ? { extract_query: query } : {}),
+                maxChars: 12000
+            },
+            reason: `Resolve the PDF download behind the linked article page: ${text}`
+        };
+    }
     return {
-        tool: 'web_fetch',
+        tool: 'open_page',
         args: fetchArgs,
         reason: `Read the linked page before broadening search: ${text}`
     };
@@ -2292,7 +2305,7 @@ function buildSuggestedCallsFromSearchResults(results = [], { query = '', limit 
         eligible
             .slice(0, limit)
             .map((item) => ({
-                tool: 'web_fetch',
+                tool: 'open_page',
                 args: query ? { url: item.url, query } : { url: item.url },
                 reason: `Read search result: ${normalizeString(item.title, item.url)}`
             })),
@@ -5984,7 +5997,7 @@ function buildWebResearchCandidates(searchDetails = {}, limit = 3) {
     const query = normalizeString(searchDetails.query);
     const addCandidateToPool = (candidate = {}, source = '') => {
         const url = normalizeUrlCandidate(candidate.url || candidate.args?.url);
-        if (!url || seen.has(url) || !/^https?:\/\//i.test(url) || isLikelyPdfUrl(url)) {
+        if (!url || seen.has(url) || !/^https?:\/\//i.test(url) || isLikelyDirectPdfUrl(url)) {
             return;
         }
         seen.add(url);
@@ -6350,7 +6363,7 @@ function formatWebResearchBundle({ query = '', searchDetails = {}, pages = [], b
             const refId = `source_${index + 1}`;
             lines.push(`- [${refId}] ${page.title || page.url}`);
             lines.push(`  URL: ${page.url}`);
-            lines.push(`  Open page: web_fetch ${JSON.stringify({ url: page.url, lineno: 1 })}`);
+            lines.push(`  Open page: open_page ${JSON.stringify({ url: page.url, lineno: 1 })}`);
         });
     }
     const searchEvidenceText = formatCandidateSearchEvidence(searchDetails.results || [], 8);
@@ -6363,7 +6376,7 @@ function formatWebResearchBundle({ query = '', searchDetails = {}, pages = [], b
             const refId = `source_${index + 1}`;
             lines.push(`- [${refId}] ${page.title || page.url}`);
             lines.push(`  URL: ${page.url}`);
-            lines.push(`  Open page: web_fetch ${JSON.stringify({ url: page.url, lineno: 1 })}`);
+            lines.push(`  Open page: open_page ${JSON.stringify({ url: page.url, lineno: 1 })}`);
             if (page.searchSnippet) {
                 lines.push(`  Search snippet: ${truncateRelationText(page.searchSnippet, 460)}`);
             }
@@ -6487,6 +6500,26 @@ function summarizeWebResearchSearchResult(result = {}, index = 0) {
     });
 }
 
+function buildWebResearchOpenPageActions(sources = [], candidates = [], limit = 3) {
+    const actions = [];
+    const seen = new Set();
+    const append = (entry = {}) => {
+        const url = normalizeString(entry.url);
+        if (!/^https?:\/\//i.test(url) || seen.has(url) || actions.length >= limit) {
+            return;
+        }
+        seen.add(url);
+        actions.push({
+            tool: 'open_page',
+            args: { url, lineno: 1 },
+            reason: `Open source: ${normalizeString(entry.title, url)}`
+        });
+    };
+    (Array.isArray(sources) ? sources : []).forEach(append);
+    (Array.isArray(candidates) ? candidates : []).forEach(append);
+    return actions;
+}
+
 function buildCodexWebSearchOutput({
     query = '',
     queryPlan = [],
@@ -6505,6 +6538,7 @@ function buildCodexWebSearchOutput({
     const candidateResults = Array.isArray(searchDetails.results)
         ? searchDetails.results.slice(0, 12).map(summarizeWebResearchSearchResult)
         : [];
+    const suggestedNextCalls = buildWebResearchOpenPageActions(sources, candidateResults);
     const fetchedCount = sources.filter((source) => source.status === 'completed').length;
     const failedCount = sources.filter((source) => source.status && source.status !== 'completed').length;
     const queries = (Array.isArray(queryPlan) ? queryPlan : []).map((item) => pruneEmptyDeep({
@@ -6542,6 +6576,7 @@ function buildCodexWebSearchOutput({
             outputKind: 'web_search_bundle'
         },
         action: webSearchAction,
+        suggestedNextCalls,
         execution: {
             mode: executionMode,
             durationMs: Date.now() - startedAt,
@@ -6762,6 +6797,7 @@ async function webResearch(args = {}) {
             webSearchItem: webSearchOutput.webSearchItem,
             functionCallOutput: webSearchOutput.functionCallOutput,
             webSearchOutput,
+            suggestedNextCalls: webSearchOutput.suggestedNextCalls || [],
             search: publicSearchDetails,
             evidencePages: [],
             pipelineSteps,
@@ -6906,6 +6942,7 @@ async function webResearch(args = {}) {
         webSearchItem: webSearchOutput.webSearchItem,
         functionCallOutput: webSearchOutput.functionCallOutput,
         webSearchOutput,
+        suggestedNextCalls: webSearchOutput.suggestedNextCalls || [],
         executionMode,
         parallelism,
         search: publicSearchDetails,
@@ -11176,6 +11213,10 @@ const TOOLS = [
         description: 'Extract readable text from a public PDF URL or local PDF path. Use this instead of web_fetch for application/pdf or .pdf sources.',
         inputSchema: {
             type: 'object',
+            anyOf: [
+                { required: ['url'] },
+                { required: ['path'] }
+            ],
             properties: {
                 url: { type: 'string' },
                 uri: { type: 'string' },
@@ -11186,7 +11227,8 @@ const TOOLS = [
                 maxChars: { type: 'number' },
                 maxPages: { type: 'number' },
                 timeoutMs: { type: 'number' }
-            }
+            },
+            additionalProperties: false
         }
     },
     {
@@ -11225,6 +11267,11 @@ const TOOLS = [
         description: 'Find a PDF from a known HTML page URL, exact document title, or search query, then extract readable text from the best PDF candidate. Use this after paper_metadata_lookup when you need the paper body rather than just metadata. Standard flow: { "title": "exact paper/report title", "extract_query": "answer terms" } or { "url": "known article page", "extract_query": "answer terms" }. It discovers PDF/download links, tries likely OJS article download URLs, and returns extraction attempts for recovery.',
         inputSchema: {
             type: 'object',
+            anyOf: [
+                { required: ['url'] },
+                { required: ['title'] },
+                { required: ['query'] }
+            ],
             properties: {
                 title: { type: 'string', description: 'Exact paper/report/document title. When known, use this as the primary discovery field.' },
                 query: { type: 'string', description: 'General search query or answer/evidence terms. If title is also provided, title is used for discovery and query is treated as supporting evidence text.' },
@@ -11241,7 +11288,8 @@ const TOOLS = [
                 maxCandidates: { type: 'number', description: 'Maximum candidate PDF URLs to try, clamped to 1-24.' },
                 maxLinks: { type: 'number', description: 'Maximum page links to inspect, clamped to 1-300.' },
                 timeoutMs: { type: 'number', description: 'Overall extraction timeout per candidate in milliseconds.' }
-            }
+            },
+            additionalProperties: false
         }
     },
     {

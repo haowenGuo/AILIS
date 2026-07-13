@@ -50,8 +50,12 @@ const {
 const {
     normalizeToolOutput,
     sanitizeWebToolTextForModel,
+    toolOutputToResponseItems,
     toolOutputToRuntimeEvent
 } = require('./ailis-agent-object-model.cjs');
+const {
+    responseItemOutputToText
+} = require('./ailis-response-model.cjs');
 const {
     RUNTIME_LAYER,
     normalizeRuntimeEvent
@@ -1485,8 +1489,8 @@ function normalizeEvidenceBoolean(value, fallback = false) {
 
 function isWebEvidenceToolName(tool = '') {
     const normalized = normalizeText(tool).toLowerCase();
-    return /(?:^|__|:|\.)(web_search|web_fetch|web_research|web_extract_links)$/.test(normalized) ||
-        ['web_search', 'web_fetch', 'web_research', 'web_extract_links'].includes(normalized);
+    return /(?:^|__|:|\.)(web_search|web_fetch|web_research|web_extract_links|open_page|find_in_page|continue_page|render_page)$/.test(normalized) ||
+        ['web_search', 'web_fetch', 'web_research', 'web_extract_links', 'open_page', 'find_in_page', 'continue_page', 'render_page'].includes(normalized);
 }
 
 function buildEvidenceAuditCandidateFromStep(stepResult = {}) {
@@ -4937,25 +4941,36 @@ function normalizeHandoffSourceRef(candidate = {}) {
 function collectHandoffSourceRefs(stepResult = {}) {
     const parsedMcp = parseDirectMcpToolId(stepResult.tool);
     const tool = normalizeText(parsedMcp?.tool || stepResult.tool).toLowerCase();
-    if (!['web_research', 'web_search', 'web_fetch', 'web_find'].includes(tool)) {
+    if (!['web_research', 'web_search', 'web_fetch', 'web_find', 'open_page', 'find_in_page', 'continue_page', 'render_page'].includes(tool)) {
         return [];
     }
     const details = getToolResultDetails(stepResult);
-    const search = details.search && typeof details.search === 'object' ? details.search : {};
     const fetch = details.fetch && typeof details.fetch === 'object' ? details.fetch : {};
-    const candidates = [
+    const webSearchOutput = details.webSearchOutput && typeof details.webSearchOutput === 'object'
+        ? details.webSearchOutput
+        : {};
+    const webFetch = webSearchOutput.fetch && typeof webSearchOutput.fetch === 'object'
+        ? webSearchOutput.fetch
+        : {};
+    const webEvidence = webSearchOutput.evidence && typeof webSearchOutput.evidence === 'object'
+        ? webSearchOutput.evidence
+        : {};
+    const openedSourceCandidates = tool === 'web_search' ? [] : [
         details.source,
         details.source_window,
         details.sourceWindow,
         details.source_viewport,
         details.sourceViewport,
-        details.webSearchOutput?.source_viewport,
+        details.webSearchOutput?.source_viewport
+    ];
+    const candidates = [
+        ...openedSourceCandidates,
         ...(Array.isArray(fetch.sources) ? fetch.sources : []),
+        ...(Array.isArray(webFetch.sources) ? webFetch.sources : []),
+        ...(Array.isArray(webEvidence.sources) ? webEvidence.sources : []),
         ...(Array.isArray(details.sources) ? details.sources : []),
-        ...(Array.isArray(search.details?.results) ? search.details.results : []),
-        ...(Array.isArray(search.results) ? search.results : []),
-        ...(Array.isArray(details.results) ? details.results : []),
-        stepResult.args?.url ? {
+        ...(Array.isArray(details.evidencePages) ? details.evidencePages : []),
+        tool !== 'web_search' && stepResult.args?.url ? {
             url: stepResult.args.url,
             lineno: stepResult.args.lineno,
             ref_id: stepResult.args.ref_id
@@ -5068,18 +5083,7 @@ function buildTaskRunHandoffDisplayText(handoff = {}) {
         if (looksLikeLeakedAgentProtocol(completedText)) {
             return 'TaskAgent 返回了未执行的内部调用协议，运行时已阻止展示；现有证据和检查点已经保留。';
         }
-        const missingSources = (Array.isArray(handoff.sourceRefs) ? handoff.sourceRefs : [])
-            .filter((source) => source?.url && !completedText.includes(source.url))
-            .slice(0, 8);
-        if (!missingSources.length) {
-            return completedText;
-        }
-        return [
-            completedText,
-            '',
-            'Sources used:',
-            ...missingSources.map((source) => `- ${source.title || source.url}: ${source.url}${source.lineno ? ` (line ${source.lineno})` : ''}`)
-        ].join('\n');
+        return completedText;
     }
     if (handoff.status === 'max_loop') {
         lines.push(`TaskAgent 触发了执行轮次保险丝（${stats.maxSteps || stats.stepsUsed || 0}），我先停住并整理现场，避免继续空转。`);
@@ -5599,6 +5603,14 @@ function extractSearchToolsFromStepResult(stepResult = {}) {
     return Array.isArray(directTools) ? directTools : [];
 }
 
+function extractLoadableToolsFromStepResult(stepResult = {}) {
+    const result = stepResult.response?.result || {};
+    return [
+        ...extractSearchToolsFromStepResult(stepResult),
+        ...(Array.isArray(result.__ailisSuggestedMcpTools) ? result.__ailisSuggestedMcpTools : [])
+    ];
+}
+
 function resolveCanonicalRuntimeToolSpec(gateway, entry = {}) {
     const toolId = directToolEntryId(entry);
     if (!toolId) {
@@ -5836,7 +5848,7 @@ function buildDynamicDirectToolSpecsFromObservations(stepResults = [], gateway =
     const seen = new Set();
     const disabledTools = collectTemporarilyDisabledDirectTools(stepResults);
     for (const stepResult of stepResults.slice(-32)) {
-        for (const entry of extractSearchToolsFromStepResult(stepResult)) {
+        for (const entry of extractLoadableToolsFromStepResult(stepResult)) {
             if (disabledTools.has(directToolEntryId(entry))) {
                 continue;
             }
@@ -6482,6 +6494,34 @@ function buildGenericToolObservationPromptText(resultText = '', response = {}) {
     };
 }
 
+function buildCanonicalWebObservationPromptText(stepResult = {}) {
+    const toolOutput = normalizeToolOutput(stepResult, 0);
+    const items = toolOutputToResponseItems(toolOutput, {
+        toolOutputChars: TOOL_OBSERVATION_TEXT_CHARS * 3
+    });
+    if (!items.some((item) => item?.type === 'web_search_call')) {
+        return null;
+    }
+    const sourceText = items
+        .filter((item) => item?.type === 'function_call_output')
+        .map((item) => responseItemOutputToText(item))
+        .filter(Boolean)
+        .join('\n');
+    if (!sourceText) {
+        return null;
+    }
+    const text = summarizeForModel(sourceText, TOOL_OBSERVATION_TEXT_CHARS * 3);
+    return {
+        text,
+        lossless: text === sourceText,
+        compression: text === sourceText ? null : {
+            reason: 'canonical_web_observation_exceeded_prompt_budget',
+            originalTextChars: sourceText.length,
+            promptTextChars: text.length
+        }
+    };
+}
+
 function buildToolObservationDigest(stepResults = []) {
     return stepResults.slice(-4).map((stepResult) => {
         const response = stepResult.response || {};
@@ -6492,9 +6532,12 @@ function buildToolObservationDigest(stepResults = []) {
         const modelVisibleResultText = webTool
             ? sanitizeWebToolTextForModel(resultText)
             : resultText;
-        const promptText = stepResult.tool === 'artifact_tools'
+        const canonicalWebPromptText = webTool
+            ? buildCanonicalWebObservationPromptText(stepResult)
+            : null;
+        const promptText = canonicalWebPromptText || (stepResult.tool === 'artifact_tools'
             ? buildArtifactToolObservationPromptText(modelVisibleResultText)
-            : buildGenericToolObservationPromptText(modelVisibleResultText, response);
+            : buildGenericToolObservationPromptText(modelVisibleResultText, response));
         const detailsForPrompt = webTool && result.details
             ? sanitizeWebStructuredContentForPrompt(result.details)
             : result.details;
@@ -6517,10 +6560,10 @@ function buildToolObservationDigest(stepResults = []) {
             note: evidenceRefs.length
                 ? 'Full observation is retained in transcript/evidence artifact; use evidenceRefs for final_answer.'
                 : '',
-            details: detailsForPrompt
+            details: canonicalWebPromptText ? null : detailsForPrompt
                 ? summarizeForModel(JSON.stringify(detailsForPrompt), 500)
                 : null,
-            structuredContent: structuredContentForPrompt
+            structuredContent: canonicalWebPromptText ? null : structuredContentForPrompt
                 ? summarizeForModel(JSON.stringify(structuredContentForPrompt), 500)
                 : null
         };
@@ -6681,6 +6724,7 @@ function buildExactAnswerContractPromptObject({ exactAnswerMode = false, evidenc
 
 function buildLlmAgentDirectToolPrompt({
     message,
+    originalUserGoal = '',
     messageHistory = [],
     events = [],
     stepResults = [],
@@ -6707,6 +6751,9 @@ function buildLlmAgentDirectToolPrompt({
 }) {
     const activePromptProfile = promptProfile || resolveAgentPromptProfile();
     const taskAgentMode = normalizeText(contextMode).toLowerCase() === 'task_agent';
+    const effectiveOriginalGoal = taskAgentMode
+        ? normalizeText(originalUserGoal, message)
+        : normalizeText(message);
     const inheritanceMode = normalizeText(taskAgentInheritanceMode, 'clean').toLowerCase();
     const modelMessageHistory = taskAgentMode && inheritanceMode === 'clean' ? [] : messageHistory;
     const capabilityCatalog = null;
@@ -6731,6 +6778,7 @@ function buildLlmAgentDirectToolPrompt({
         responseProtocolInstruction,
         'Use native tool calls when work requires files, artifacts, search, shell/code, APIs, or verification. Otherwise answer with an assistant message.',
         `The runtime allows at most ${Math.max(1, maxSteps - 1)} work-tool rounds for this TaskAgent, followed by one tool-free finalization within the ${maxSteps}-round total budget. Use parallel tool calls for independent evidence and return the best supported result within this budget.`,
+        'task_state.original_user_goal is the user outcome this thread must satisfy. task_state.delegated_task is the parent-authored focus for this Agent; it may narrow the work, but it must not replace, relax, or erase the original user goal.',
         'Tool call outputs from previous turns appear as function_call_output/tool_search_output items paired with their call_id. Use recent, relevant outputs as observations, but do not keep rereading stale exploration results once you have enough information to code, verify, or answer.',
         'Answer directly once the available evidence supports a reasonable answer. Use another tool only when you can name the specific missing field or uncertainty that blocks the answer. Do not repeat an identical tool call unless the new arguments materially change the observation.',
         'In the final answer, preserve the user-requested output shape, unit scaling, rounding, and brevity.',
@@ -6772,13 +6820,18 @@ function buildLlmAgentDirectToolPrompt({
             externalToolExposure: null,
             toolOutputChars
     });
+    const taskContextState = taskAgentMode ? {
+        ...(taskState && typeof taskState === 'object' ? taskState : {}),
+        original_user_goal: effectiveOriginalGoal,
+        delegated_task: normalizeText(message)
+    } : taskState;
     const contextPackageOptions = {
         instructions,
         staticPrefix: instructions,
         contextMode: taskAgentMode ? 'task_agent' : 'persona',
-        goal: message,
+        goal: effectiveOriginalGoal,
         runtimeEnvironment,
-        taskState,
+        taskState: taskContextState,
         constraints,
         currentPlan,
         unresolvedFields,
@@ -8963,6 +9016,12 @@ class AILISAgentRunner {
             });
             const commonPromptArgs = {
                 message,
+                originalUserGoal: normalizeText(
+                    requestContext.parentUserGoal ||
+                    requestContext.parent_user_goal ||
+                    requestContext.originalUserGoal ||
+                    requestContext.original_user_goal
+                ),
                 messageHistory: request.messageHistory,
                 events,
                 stepResults,
@@ -9679,6 +9738,11 @@ class AILISAgentRunner {
                                       forked_context_checkpoint: build_forked_context_checkpoint(
                                           modelInputContextManager,
                                           candidateStep.args?.fork_turns
+                                      ),
+                                      parentUserGoal: normalizeText(
+                                          requestContext.parentUserGoal ||
+                                          requestContext.parent_user_goal,
+                                          message
                                       )
                                   }
                                 : {})
@@ -10031,6 +10095,11 @@ class AILISAgentRunner {
                               forked_context_checkpoint: build_forked_context_checkpoint(
                                   modelInputContextManager,
                                   step.args?.fork_turns
+                              ),
+                              parentUserGoal: normalizeText(
+                                  requestContext.parentUserGoal ||
+                                  requestContext.parent_user_goal,
+                                  message
                               )
                           }
                         : {})

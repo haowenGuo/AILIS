@@ -65,7 +65,9 @@ function buildToolContext(requestContext = {}, fallbackWorkspace = '', sessionId
         'visionPermissionPolicy',
         'visionPolicy',
         'attachments',
-        'fileAttachments'
+        'fileAttachments',
+        'parentUserGoal',
+        'parent_user_goal'
     ]) {
         if (requestContext[key] !== undefined) {
             context[key] = requestContext[key];

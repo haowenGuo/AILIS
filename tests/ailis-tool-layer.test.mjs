@@ -242,6 +242,30 @@ test('AILIS MCP adapter parses direct MCP ids and creates stable specs', () => {
     assert.deepEqual(describeImageSpec.input_schema.required, ['path']);
     assert.equal(describeImageSpec.input_schema.properties.path.minLength, 1);
 
+    const pdfExtractSpec = createAilisDirectMcpToolSpec({
+        server: 'ailis_research',
+        tool: 'pdf_extract_text',
+        inputSchema: {
+            type: 'object',
+            anyOf: [
+                { required: ['url'] },
+                { required: ['path'] }
+            ],
+            properties: {
+                url: { type: 'string' },
+                path: { type: 'string' },
+                maxPages: { type: 'number' }
+            },
+            additionalProperties: false
+        }
+    });
+    assert.equal(pdfExtractSpec.callable, true);
+    assert.equal(pdfExtractSpec.modelFacing, true);
+    assert.deepEqual(pdfExtractSpec.input_schema.anyOf, [
+        { required: ['url'] },
+        { required: ['path'] }
+    ]);
+
     const weakSpec = createAilisDirectMcpToolSpec({
         server: 'ailis_research',
         tool: 'optional_lookup',
@@ -888,7 +912,7 @@ test('AILIS tool_search returns strict direct MCP specs and native preflight blo
     assert.ok(exactResearchNames.includes('mcp__ailis_research__web_fetch'));
 
     const nextSpecs = buildAgentDirectToolSpecs(gateway, {
-        requestContext: { nativeDirectTools: true },
+        requestContext: { nativeDirectTools: true, directToolLimit: 24 },
         stepResults: [{
             tool: 'tool_search',
             response: {
@@ -922,7 +946,7 @@ test('AILIS tool_search returns strict direct MCP specs and native preflight blo
     assert.match(invalidDescribeImage.errors.join('\n'), /path is required|empty arguments/);
 
     const nextSpecsAfterVisionFailure = buildAgentDirectToolSpecs(gateway, {
-        requestContext: { nativeDirectTools: true },
+        requestContext: { nativeDirectTools: true, directToolLimit: 24 },
         stepResults: [{
             tool: 'tool_search',
             response: {

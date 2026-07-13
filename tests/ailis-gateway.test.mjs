@@ -7,8 +7,123 @@ import test from 'node:test';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { AILISGateway } = require('../electron/ailis-gateway.cjs');
+const {
+    AILISGateway,
+    attachSuggestedMcpToolsForDirectExposure,
+    collectSuggestedMcpToolNames
+} = require('../electron/ailis-gateway.cjs');
 const ExcelJS = require('exceljs');
+
+test('AILIS materializes structured MCP follow-up actions for the next model turn', async () => {
+    const result = {
+        structuredContent: {
+            sources: [{
+                open_page: {
+                    tool: 'open_page',
+                    args: { url: 'https://example.test/source', lineno: 1 }
+                }
+            }],
+            suggestedNextCalls: [{
+                tool: 'find_in_page',
+                args: { url: 'https://example.test/source', pattern: 'needle' }
+            }]
+        }
+    };
+    assert.deepEqual(collectSuggestedMcpToolNames(result).sort(), ['find_in_page', 'open_page']);
+
+    const attached = await attachSuggestedMcpToolsForDirectExposure(
+        result,
+        'mcp__ailis_research__web_research',
+        {
+            listToolSpecs: async () => [
+                {
+                    server: 'ailis_research',
+                    tool: 'open_page',
+                    name: 'open_page',
+                    description: 'Open a page.',
+                    inputSchema: { type: 'object', required: ['url'], properties: { url: { type: 'string' } }, additionalProperties: false }
+                },
+                {
+                    server: 'ailis_research',
+                    tool: 'find_in_page',
+                    name: 'find_in_page',
+                    description: 'Find in a page.',
+                    inputSchema: { type: 'object', required: ['url', 'pattern'], properties: { url: { type: 'string' }, pattern: { type: 'string' } }, additionalProperties: false }
+                }
+            ]
+        }
+    );
+
+    assert.equal(attached.length, 2);
+    assert.deepEqual(
+        result.__ailisSuggestedMcpTools.map((tool) => tool.id).sort(),
+        ['mcp__ailis_research__find_in_page', 'mcp__ailis_research__open_page']
+    );
+    assert.equal(Object.keys(result).includes('__ailisSuggestedMcpTools'), false);
+});
+
+test('AILIS exposes one native web_search entry and materializes its MCP actions', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-native-web-search-'));
+    const gateway = new AILISGateway({
+        port: 0,
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit')
+    });
+    let bridgeRequest = null;
+    gateway.runtime.executeMcpBridge = async (request) => {
+        bridgeRequest = request;
+        return {
+            content: [{ type: 'text', text: 'Search result' }],
+            structuredContent: {
+                suggestedNextCalls: [{
+                    tool: 'open_page',
+                    args: { url: 'https://example.test/source', lineno: 1 }
+                }]
+            }
+        };
+    };
+    gateway.runtime.mcpManager.listToolSpecs = async () => [{
+        server: 'ailis_research',
+        tool: 'open_page',
+        name: 'open_page',
+        description: 'Open a page.',
+        inputSchema: {
+            type: 'object',
+            required: ['url'],
+            properties: { url: { type: 'string' }, lineno: { type: 'number' } },
+            additionalProperties: false
+        }
+    }];
+
+    try {
+        const firstTurnTools = gateway.gatewayToolRuntimeRegistry.modelVisibleSpecs();
+        assert.ok(firstTurnTools.some((tool) => tool.name === 'web_search'));
+        assert.equal(firstTurnTools.some((tool) => tool.name === 'mcp__ailis_research__open_page'), false);
+
+        const response = await gateway.callTool({
+            tool: 'web_search',
+            args: { query: 'current public fact', maxResults: 4 },
+            context: { workspace: workspaceRoot }
+        });
+
+        assert.equal(response.ok, true, JSON.stringify(response));
+        assert.deepEqual(bridgeRequest, {
+            action: 'call_tool',
+            server: 'ailis_research',
+            tool: 'web_search',
+            args: { query: 'current public fact', maxResults: 4 }
+        });
+        assert.ok(response.result.__ailisSuggestedMcpTools, JSON.stringify(response));
+        assert.deepEqual(
+            response.result.__ailisSuggestedMcpTools.map((tool) => tool.id),
+            ['mcp__ailis_research__open_page']
+        );
+    } finally {
+        await gateway.stop();
+        await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
+});
 
 async function jsonFetch(url, options = {}) {
     const response = await fetch(url, {

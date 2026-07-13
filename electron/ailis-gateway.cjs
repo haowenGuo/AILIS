@@ -42,6 +42,7 @@ const {
 } = require('./ailis-tool-contracts.cjs');
 const EMAIL_TOOL_ID = 'email';
 const TASK_RESULTS_TOOL_ID = 'task_results';
+const WEB_SEARCH_TOOL_ID = 'web_search';
 const { FILE_MANAGER_TOOL_ID, executeFileManagerTool } = require('./ailis-file-manager-tool.cjs');
 const { COMPUTER_TOOL_ID, AILISComputerTool } = require('./ailis-computer-tool.cjs');
 const { CODE_TOOL_ID, executeCodeTool } = require('./ailis-code-tool.cjs');
@@ -61,7 +62,8 @@ const {
     rankToolSearchResults
 } = require('./ailis-tool-routing.cjs');
 const {
-    createAilisDirectMcpToolSpec
+    createAilisDirectMcpToolSpec,
+    parseAilisDirectMcpToolId
 } = require('./ailis-mcp-adapter.cjs');
 const PROJECT_ROOT = path.resolve(__dirname, '..');
 const DEFAULT_PORT = Number(process.env.AILIS_GATEWAY_PORT || 19777);
@@ -126,12 +128,85 @@ const CODEX_STYLE_DIRECT_LOCAL_TOOL_IDS = new Set([
     'read',
     'write',
     'exec',
-    'apply_patch'
+    'apply_patch',
+    WEB_SEARCH_TOOL_ID
 ]);
 // Extended tools stay out of the first-turn tool surface, but remain discoverable
 // through tool_search. The Registry is the source of truth for their full specs.
 const EXTENDED_LOCAL_TOOL_EXPOSURE = TOOL_EXPOSURE.DEFERRED;
+
+function collectSuggestedMcpToolNames(value, maxDepth = 8) {
+    const names = new Set();
+    const seen = new Set();
+    const visit = (entry, depth = 0) => {
+        if (!entry || depth > maxDepth || typeof entry !== 'object' || seen.has(entry)) {
+            return;
+        }
+        seen.add(entry);
+        if (Array.isArray(entry)) {
+            entry.slice(0, 64).forEach((item) => visit(item, depth + 1));
+            return;
+        }
+        const tool = normalizeString(entry.tool || entry.tool_name || entry.toolName);
+        const args = entry.args || entry.arguments;
+        if (tool && args && typeof args === 'object' && !Array.isArray(args)) {
+            names.add(tool);
+        }
+        Object.values(entry).forEach((item) => visit(item, depth + 1));
+    };
+    visit(value);
+    return [...names];
+}
+
+async function attachSuggestedMcpToolsForDirectExposure(result, sourceToolId, mcpManager, timeoutMs = 8000) {
+    if (!result || typeof result !== 'object' || !mcpManager) {
+        return [];
+    }
+    const source = parseAilisDirectMcpToolId(sourceToolId);
+    if (!source?.server) {
+        return [];
+    }
+    const suggestedNames = collectSuggestedMcpToolNames(result);
+    if (!suggestedNames.length) {
+        return [];
+    }
+    const wanted = new Set(suggestedNames.map((name) => normalizeString(name).toLowerCase()));
+    const specs = await mcpManager.listToolSpecs(source.server, timeoutMs).catch(() => []);
+    const directTools = specs
+        .filter((spec) => wanted.has(normalizeString(spec.tool || spec.name).toLowerCase()))
+        .map((spec) => createAilisDirectMcpToolSpec({
+            id: spec.id,
+            server: spec.server || source.server,
+            tool: spec.tool || spec.name,
+            name: spec.name,
+            title: spec.title,
+            description: spec.description || spec.title || '',
+            inputSchema: spec.inputSchema || spec.input_schema || spec.parameters || {},
+            schemaProperties: spec.schemaProperties || spec.schema_properties,
+            callPattern: spec.callPattern || spec.call_pattern
+        }))
+        .filter((spec) => spec.callable !== false && spec.modelFacing !== false);
+    if (directTools.length) {
+        Object.defineProperty(result, '__ailisSuggestedMcpTools', {
+            value: directTools,
+            enumerable: false,
+            configurable: true
+        });
+    }
+    return directTools;
+}
+
 const AILIS_LOCAL_TOOL_DEFINITIONS = Object.freeze([
+    Object.freeze({
+        id: WEB_SEARCH_TOOL_ID,
+        label: 'web_search',
+        description: 'Search the public web and return ranked sources plus open_page actions. Use for current or web-based facts; the model decides whether the returned evidence is sufficient.',
+        sectionId: 'web',
+        route: 'ailis-research-mcp',
+        materialized: true,
+        status: 'available',
+        needsApprovalActions: Object.freeze([])
+    }),
     Object.freeze({
         id: TASK_RESULTS_TOOL_ID,
         label: 'task_results',
@@ -2051,6 +2126,15 @@ class AILISGateway extends EventEmitter {
             const guardedResult = this.runtime.guardToolResult(result, { toolId, callId });
             if (toolId === 'tool_search') {
                 attachRawToolSearchToolsForDirectExposure(guardedResult, result);
+            } else if (parseAilisDirectMcpToolId(toolId) || toolId === WEB_SEARCH_TOOL_ID) {
+                await attachSuggestedMcpToolsForDirectExposure(
+                    guardedResult,
+                    toolId === WEB_SEARCH_TOOL_ID
+                        ? 'mcp__ailis_research__web_search'
+                        : toolId,
+                    this.runtime?.mcpManager,
+                    Number(request.timeoutMs || context.timeoutMs || 8000)
+                );
             }
             const status = classifyToolResult(guardedResult);
             const response = {
@@ -2439,6 +2523,18 @@ class AILISGateway extends EventEmitter {
 
     async executeGatewayLocalTool(toolId, args, context = {}) {
         const workspaceDir = context.workspaceDir || this.resolveWorkspace(context.workspace, context);
+        if (toolId === WEB_SEARCH_TOOL_ID) {
+            return await this.runtime.executeMcpBridge({
+                action: 'call_tool',
+                server: 'ailis_research',
+                tool: 'web_search',
+                args: {
+                    query: args.query,
+                    ...(args.maxResults !== undefined ? { maxResults: args.maxResults } : {}),
+                    ...(args.search_context_size ? { search_context_size: args.search_context_size } : {})
+                }
+            }, context);
+        }
         if (toolId === TASK_RESULTS_TOOL_ID) {
             const action = normalizeString(args.action, 'search').toLowerCase();
             const limit = Math.max(1, Math.min(Number(args.limit) || 3, 8));
@@ -3566,5 +3662,7 @@ class AILISGateway extends EventEmitter {
 
 module.exports = {
     DEFAULT_PORT,
-    AILISGateway
+    AILISGateway,
+    attachSuggestedMcpToolsForDirectExposure,
+    collectSuggestedMcpToolNames
 };

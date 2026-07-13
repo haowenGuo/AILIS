@@ -744,6 +744,7 @@ test('AILIS Codex-style Agent tree delivers completion through the session mailb
             name: 'input.xlsx',
             path: path.join(workspaceRoot, '.ailis-runtime', 'attachments', 'input.xlsx')
         }],
+        parentUserGoal: 'calculate the complete workbook total',
         forked_context_checkpoint: {
             history_version: 2,
             items: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'original request' }] }]
@@ -766,6 +767,7 @@ test('AILIS Codex-style Agent tree delivers completion through the session mailb
     assert.equal(childContexts[0].taskAgentInheritanceMode, 'checkpoint');
     assert.deepEqual(childContexts[0].initialContextManagerCheckpoint, context.forked_context_checkpoint);
     assert.deepEqual(childContexts[0].attachments, context.attachments);
+    assert.equal(childContexts[0].parentUserGoal, context.parentUserGoal);
     await runtime.shutdown();
 });
 

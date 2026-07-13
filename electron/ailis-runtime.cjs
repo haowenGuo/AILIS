@@ -20,6 +20,7 @@ const {
     compactJsonForModel,
     compactToolResultForModel
 } = require('./ailis-runtime-budget.cjs');
+const { collectStructuredToolActionKeys } = require('./ailis-tool-result.cjs');
 const {
     RolloutItem
 } = require('./ailis-prompt-model.cjs');
@@ -1223,16 +1224,18 @@ class AILISRuntime {
         if (modelVisibleTruncation) {
             guarded.details.modelVisibleContent = modelVisibleTruncation;
         }
+        const structuredToolActionKeys = collectStructuredToolActionKeys(guarded);
         return compactToolResultForModel(guarded, {
             maxTextChars,
             maxStructuredStringChars: 1200,
-            preserveGuidanceKeys: (
-                guarded.isError === true ||
-                guarded.details?.ok === false ||
-                !['completed', 'success'].includes(normalizeString(guarded.details?.status).toLowerCase())
-            )
-                ? ['suggestedNext', 'suggested_next']
-                : []
+            preserveGuidanceKeys: [
+                ...((
+                    guarded.isError === true ||
+                    guarded.details?.ok === false ||
+                    !['completed', 'success'].includes(normalizeString(guarded.details?.status).toLowerCase())
+                ) ? ['suggestedNext', 'suggested_next'] : []),
+                ...structuredToolActionKeys
+            ]
         });
     }
 
@@ -1855,6 +1858,12 @@ class AILISRuntime {
                 : Array.isArray(context.attachments)
                     ? cloneJson(context.attachments)
                     : [],
+            parentUserGoal: normalizeString(
+                context.parentUserGoal ||
+                context.parent_user_goal ||
+                args.parentUserGoal ||
+                args.parent_user_goal
+            ),
             parentAgentDepth,
             agentDepth: parentAgentDepth + 1,
             maxAgentSteps

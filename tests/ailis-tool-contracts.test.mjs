@@ -16,6 +16,7 @@ test('AILIS tool contracts expose versioned schemas and validate common failures
     assert.ok(contracts.length >= 10);
     assert.ok(contracts.some((contract) => contract.id === 'mcp_bridge' && contract.version >= 1));
     assert.ok(contracts.some((contract) => contract.id === 'tool_search' && contract.version >= 1));
+    assert.ok(contracts.some((contract) => contract.id === 'web_search' && contract.version >= 1));
     assert.ok(contracts.some((contract) => contract.id === 'tool_doctor' && contract.version >= 1));
     assert.ok(contracts.some((contract) => contract.id === 'capability_manager' && contract.version >= 1));
     assert.ok(contracts.some((contract) => contract.id === 'self_debugger' && contract.version >= 1));
@@ -141,6 +142,13 @@ test('AILIS tool contracts expose versioned schemas and validate common failures
     });
     assert.equal(validToolSearch.ok, true);
 
+    const validWebSearch = validateToolContract('web_search', {
+        query: 'official release date',
+        maxResults: 5,
+        search_context_size: 'medium'
+    });
+    assert.equal(validWebSearch.ok, true);
+
     const validGitHubPages = validateToolContract('github_pages', {
         action: 'diagnose_publish',
         targetPath: 'about-ailis.html',
@@ -183,6 +191,10 @@ test('AILIS tool contracts expose versioned schemas and validate common failures
     const badToolSearch = validateToolContract('tool_search', {});
     assert.equal(badToolSearch.ok, false);
     assert.ok(badToolSearch.errors.some((error) => error.includes('requires query')));
+
+    const badWebSearch = validateToolContract('web_search', {});
+    assert.equal(badWebSearch.ok, false);
+    assert.ok(badWebSearch.errors.some((error) => error.includes('requires query')));
 
     const badMcpPrompt = validateToolContract('mcp_bridge', {
         action: 'get_prompt',
