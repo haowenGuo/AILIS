@@ -943,7 +943,7 @@ test('Persona defers an early final until its live TaskAgent result reaches the 
     }
 });
 
-test('Persona cannot replace a completed TaskAgent with a renamed supplement Agent', async () => {
+test('Persona routes a renamed supplement spawn into the completed TaskAgent followup', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-persona-single-owner-'));
     const llmServer = await createScriptedChatCompletionsServer(({ decisionCount }) => {
         if (decisionCount === 1) {
@@ -1004,11 +1004,13 @@ test('Persona cannot replace a completed TaskAgent with a renamed supplement Age
         });
 
         assert.equal(result.body.displayText, 'integrated original TaskAgent result');
-        assert.equal(childRuns, 1);
+        assert.equal(childRuns, 2);
         assert.equal(gateway.runtime.agent_control.state.list({ sessionId: 'persona-single-owner-test' }).length, 1);
         const duplicate = result.body.steps.find((step) => step.args?.task_name === 'guide_supplement');
-        assert.equal(duplicate.response.status, 'agent_task_already_delegated');
-        assert.equal(duplicate.response.result.structuredContent.target, '/root/guide');
+        assert.equal(duplicate.response.status, 'followup_queued');
+        assert.equal(duplicate.response.result.structuredContent.status, 'followup_queued');
+        assert.equal(duplicate.response.result.structuredContent.task_name, '/root/guide');
+        assert.equal(duplicate.response.result.structuredContent.continued, true);
     } finally {
         await gateway.stop();
         await llmServer.close();

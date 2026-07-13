@@ -34,6 +34,9 @@ const {
     managedSearxngAllowedForSearch,
     managedSearxngPortCandidates,
     normalizeSearchBackends,
+    openPage,
+    findInPage,
+    continuePage,
     paperMetadataLookup,
     parseGitHubRepoRef,
     pdfFindAndExtract,
@@ -112,6 +115,10 @@ test('AILIS research MCP exposes Codex-aligned PDF/file tools', () => {
     assert.ok(names.includes('github_repo_read'));
     assert.ok(names.includes('web_fetch'));
     assert.ok(names.includes('web_find'));
+    assert.ok(names.includes('open_page'));
+    assert.ok(names.includes('find_in_page'));
+    assert.ok(names.includes('continue_page'));
+    assert.ok(names.includes('render_page'));
     assert.ok(names.includes('pdf_extract_text'));
     assert.ok(names.includes('paper_metadata_lookup'));
     assert.ok(names.includes('pdf_find_and_extract'));
@@ -146,6 +153,10 @@ test('AILIS research MCP exposes Codex-aligned PDF/file tools', () => {
     assert.ok(findTool.inputSchema.properties.pattern);
     assert.ok(findTool.inputSchema.properties.contextLines);
     assert.ok(findTool.description.includes('Codex/OAI-style action: find_in_page'));
+    assert.deepEqual(TOOLS.find((tool) => tool.name === 'open_page').inputSchema.required, ['url']);
+    assert.deepEqual(TOOLS.find((tool) => tool.name === 'find_in_page').inputSchema.required, ['url', 'pattern']);
+    assert.deepEqual(TOOLS.find((tool) => tool.name === 'continue_page').inputSchema.required, ['url', 'lineno']);
+    assert.deepEqual(TOOLS.find((tool) => tool.name === 'render_page').inputSchema.required, ['url']);
     assert.ok(pythonTool.inputSchema.properties.code);
     assert.ok(pythonTool.inputSchema.properties.inline_code);
     assert.ok(pythonTool.inputSchema.properties.inlineCode);
@@ -2956,6 +2967,29 @@ test('web_find opens a Codex-style source viewport around a pattern', async () =
         assert.equal(result.structuredContent.match_count, 2);
         assert.deepEqual(result.structuredContent.matches.map((match) => match.lineNumber), [6, 7]);
         assert.deepEqual(result.structuredContent.matches.map((match) => match.lineno), [6, 7]);
+    });
+});
+
+test('open_page, find_in_page, and continue_page share one source viewport chain', async () => {
+    const lines = Array.from({ length: 40 }, (_, index) => `line ${index + 1}`);
+    lines[24] = 'Actual Enrollment 90';
+    await withServer((request, response) => {
+        response.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' });
+        response.end(lines.join('\n'));
+    }, async (baseUrl) => {
+        const url = `${baseUrl}/study`;
+        const opened = await openPage({ url, lineno: 1, maxLines: 5, provider: 'builtin' });
+        assert.equal(opened.isError, undefined, opened.content[0].text);
+        assert.equal(opened.structuredContent.sourceWindow.action.tool, 'open_page');
+        assert.equal(opened.structuredContent.source.has_more_after, true);
+        assert.equal(opened.structuredContent.suggestedNextCalls[0].tool, 'continue_page');
+
+        const continued = await continuePage({ url, lineno: 23, maxLines: 5, provider: 'builtin' });
+        assert.match(continued.content[0].text, /Actual Enrollment 90/);
+
+        const found = await findInPage({ url, pattern: 'Actual Enrollment', provider: 'builtin' });
+        assert.equal(found.structuredContent.matchCount, 1);
+        assert.match(found.content[0].text, /Actual Enrollment 90/);
     });
 });
 

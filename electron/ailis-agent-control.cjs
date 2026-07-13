@@ -181,17 +181,24 @@ class InterAgentCommunication {
 }
 
 class SubagentNotification {
-    constructor(agent_reference = '', status = AgentStatus.NotFound) {
+    constructor(agent_reference = '', status = AgentStatus.NotFound, task_result = null) {
         this.agent_reference = String(agent_reference instanceof AgentPath
             ? agent_reference
             : new AgentPath(agent_reference || '/root'));
         this.status = normalize_agent_status(status);
+        this.task_result = task_result && typeof task_result === 'object'
+            ? clone_json(task_result)
+            : null;
     }
 
     render() {
         return [
             '<subagent_notification>',
-            JSON.stringify({ agent_path: this.agent_reference, status: this.status }),
+            JSON.stringify({
+                agent_path: this.agent_reference,
+                status: this.status,
+                ...(this.task_result ? { task_result: this.task_result } : {})
+            }),
             '</subagent_notification>'
         ].join('\n');
     }
@@ -430,24 +437,30 @@ class AgentControl {
         const canonical_path = String(child_path);
         const existing = this.state.find(canonical_path, context);
         if (existing) {
+            await this.followup_task({
+                target: existing.agent_path,
+                message
+            }, context);
             return {
-                ok: false,
-                status: 'agent_path_conflict',
-                error: `agent ${canonical_path} already exists; use followup_task`,
-                target: canonical_path,
-                isError: true
+                task_name: existing.agent_path,
+                nickname: existing.nickname,
+                status: 'followup_queued',
+                continued: true
             };
         }
         const delegated = this.delegated_child_for_parent_run(context);
         if (delegated) {
-            return {
-                ok: false,
-                status: 'agent_task_already_delegated',
-                error: `this parent run already delegated its user task to ${delegated.agent_path}; use followup_task for additional work or answer from its completed result`,
+            const result_available = is_final(delegated.agent_status);
+            await this.followup_task({
                 target: delegated.agent_path,
-                agent_status: clone_json(delegated.agent_status),
-                result_available: is_final(delegated.agent_status),
-                isError: true
+                message
+            }, context);
+            return {
+                task_name: delegated.agent_path,
+                nickname: delegated.nickname,
+                status: 'followup_queued',
+                continued: true,
+                result_available
             };
         }
         const live = this.live_children({ ...context, agent_path: String(parent_path) });
@@ -685,7 +698,29 @@ class AgentControl {
             return null;
         }
         const child_path = new AgentPath(agent.agent_path);
-        const notification = new SubagentNotification(child_path, status).render();
+        const handoff = agent.result?.taskRunHandoff ||
+            agent.result?.task_run_handoff ||
+            null;
+        const task_result = {
+            status: normalize_string(handoff?.status || agent.status, 'completed'),
+            final_answer: normalize_string(
+                handoff?.finalAnswer ||
+                agent.result?.finalAnswer ||
+                agent.result?.displayText
+            ),
+            partial_answer: normalize_string(handoff?.partialAnswer),
+            source_refs: Array.isArray(handoff?.sourceRefs)
+                ? clone_json(handoff.sourceRefs)
+                : [],
+            trace_ref: normalize_string(handoff?.traceRef || agent.thread_id),
+            evidence_boundary: {
+                mode: 'source_only',
+                may_rephrase: true,
+                may_add_facts: false,
+                insufficient_action: 'followup_task'
+            }
+        };
+        const notification = new SubagentNotification(child_path, status, task_result).render();
         return await this.send_inter_agent_communication({ sessionId: agent.parent_session_id }, new InterAgentCommunication({
             author: child_path,
             recipient: child_path.parent(),

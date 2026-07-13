@@ -628,6 +628,92 @@ function normalizeFileAttachments(attachments = []) {
     return files;
 }
 
+function isPathInsideRoot(candidatePath = '', rootPath = '') {
+    const candidate = path.resolve(candidatePath);
+    const root = path.resolve(rootPath);
+    const relative = path.relative(root, candidate);
+    return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+function sanitizeAttachmentPathSegment(value = '', fallback = 'attachment') {
+    const normalized = normalizeText(value, fallback)
+        .replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_')
+        .replace(/\s+/g, '_')
+        .replace(/^\.+|\.+$/g, '')
+        .slice(0, 96);
+    return normalized || fallback;
+}
+
+function sanitizeAttachmentFilename(value = '', fallback = 'attachment') {
+    const rawName = normalizeText(value, fallback);
+    const rawExtension = path.extname(rawName);
+    const extension = rawExtension && rawExtension.length <= 16
+        ? rawExtension.replace(/[^.a-zA-Z0-9_-]/g, '_').slice(0, 16)
+        : '';
+    const rawStem = extension ? rawName.slice(0, -rawExtension.length) : rawName;
+    const maxStemLength = Math.max(16, 96 - extension.length);
+    const stem = sanitizeAttachmentPathSegment(rawStem, fallback).slice(0, maxStemLength);
+    return `${stem}${extension}`;
+}
+
+async function stageFileAttachmentsForWorkspace(attachments = [], workspaceRoot = '', sessionId = 'main') {
+    const normalized = normalizeFileAttachments(attachments);
+    if (!normalized.length) {
+        return [];
+    }
+    const resolvedWorkspace = path.resolve(workspaceRoot || process.cwd());
+    const stageRoot = path.join(
+        resolvedWorkspace,
+        '.ailis-runtime',
+        'attachments',
+        sanitizeAttachmentPathSegment(sessionId, 'main')
+    );
+    const staged = [];
+    for (let index = 0; index < normalized.length; index += 1) {
+        const attachment = normalized[index];
+        const sourcePath = path.resolve(attachment.path);
+        if (isPathInsideRoot(sourcePath, resolvedWorkspace)) {
+            staged.push({
+                ...attachment,
+                path: sourcePath,
+                staged: false,
+                stageStatus: 'already_in_workspace'
+            });
+            continue;
+        }
+        try {
+            const stat = await fs.promises.stat(sourcePath);
+            if (!stat.isFile()) {
+                throw new Error('attachment source is not a regular file');
+            }
+            await fs.promises.mkdir(stageRoot, { recursive: true });
+            const destinationPath = path.join(
+                stageRoot,
+                `${String(index + 1).padStart(2, '0')}-${sanitizeAttachmentFilename(attachment.name, `attachment-${index + 1}`)}`
+            );
+            await fs.promises.copyFile(sourcePath, destinationPath);
+            staged.push({
+                ...attachment,
+                path: destinationPath,
+                originalPath: sourcePath,
+                size: stat.size,
+                sizeText: attachment.sizeText || formatBytes(stat.size),
+                staged: true,
+                stageStatus: 'copied_to_workspace'
+            });
+        } catch (error) {
+            staged.push({
+                ...attachment,
+                path: sourcePath,
+                staged: false,
+                stageStatus: 'staging_failed',
+                stageError: error?.message || String(error)
+            });
+        }
+    }
+    return staged;
+}
+
 function getLatestUserFileAttachments(request = {}) {
     const history = Array.isArray(request.messageHistory) ? request.messageHistory : [];
     for (let index = history.length - 1; index >= 0; index -= 1) {
@@ -6634,6 +6720,7 @@ function buildLlmAgentDirectToolPrompt({
         'task_results is a read-only library of completed public work. Its output is candidate context, and you decide whether it is relevant and sufficient.',
         'spawn_agent creates a persistent TaskAgent with a canonical task_name and returns immediately. Pass the user\'s actual task, relevant corrections, and already-known evidence without expanding the requested scope or inventing stricter acceptance criteria.',
         'A completed subagent_notification contains the TaskAgent final answer in status.completed. Integrate that result into the user-facing answer as soon as it supports the original request; wait_agent itself only synchronizes the mailbox and does not contain the child answer.',
+        'A completed subagent_notification also carries task_result with the authoritative TaskAgent answer, source_refs, and evidence_boundary. You may rewrite tone and presentation, but you must not add a name, number, quote, claim, or conclusion that is absent from task_result.final_answer, task_result.partial_answer, or its cited sources. If the result is insufficient, continue the same Agent with followup_task or state the remaining uncertainty.',
         'If the completed result still lacks one concrete required field, call followup_task with that notification\'s agent_path. This continues the same TaskAgent context and evidence. Never create a new task_name merely to supplement the same user request.',
         'Use list_agents when you need to recover a canonical task_name. Use close_agent only when the persistent TaskAgent is no longer needed.',
         'Never mention TaskAgent, subagent, worker, handoff, capsule, or internal orchestration to the user.',
@@ -6651,6 +6738,7 @@ function buildLlmAgentDirectToolPrompt({
         'For latest/current/recent information, public web facts, recommendations, guides, prices, schedules, rules, product/software versions, news, or anything likely to change over time, you must browse or use web research first. Do not rely on memory, local code search, local logs, or shell commands as a substitute for public web evidence unless the user explicitly asks about local files/code.',
         'For broad public web research, guides, current information, or comparison tasks, start with one mcp__ailis_research__web_research call when available. It returns ranked sources with ref_id, fetched excerpts, and open_page actions. If one concrete required fact is still absent, call web_fetch/open_page on the most authoritative returned source URL; do not launch another broad web_research for the same question.',
         'For local file and data tasks, prefer the coding main path: read/write/exec/apply_patch. Use read to inspect small files, write to create helper scripts, exec to run scripts/tests/diagnostics, and apply_patch for source edits. Use tool_search only when the coding path cannot reliably inspect the file type or when a specialized direct MCP/tool is clearly needed.',
+        'Attached files are staged inside the current workspace before TaskAgent starts. Always use the staged attached_files path. For PDF, Office, image, audio, archive, or other structured/binary files, use tool_search once for the exact dedicated reader/transcriber/vision capability and call that tool; do not spend the task budget installing ad-hoc parsers when a dedicated tool is available.',
         'For data reasoning tasks, use code as a calculator and verifier: write scripts that parse the source file, compute the needed result, and print a short answer plus compact evidence. Do not write scripts whose main purpose is to dump large files, whole spreadsheets, logs, or documents back into model context.',
         'For long-running work, you may attach progress_note to a tool call or include a short public progress sentence only at meaningful milestones: plan changed, key evidence found, strategy changed after failure, blocker/recovery identified, or evidence is sufficient and you are preparing the final answer. Leave progress_note empty for routine tool calls. Do not expose raw JSON, hidden reasoning, internal IDs, stack traces, token counts, or generic "I am thinking" text.',
         'When collaboration tools are exposed, spawn_agent creates an independent Agent thread, followup_task continues it, and wait_agent waits for its mailbox notification. Do not create duplicate threads for the same unresolved work.',
@@ -8378,7 +8466,27 @@ class AILISAgentRunner {
     }) {
         const settings = settingsOverride || resolveAgentLlmSettings(request, requestContext);
         const runLineage = buildRunLineagePayload(requestContext, runId, sessionId);
-        const fileAttachments = getLatestUserFileAttachments(request);
+        const rawFileAttachments = getLatestUserFileAttachments(request);
+        const fileAttachments = await stageFileAttachmentsForWorkspace(
+            rawFileAttachments,
+            requestContext.workspace || this.workspaceRoot,
+            sessionId
+        );
+        if (fileAttachments.length) {
+            requestContext = {
+                ...requestContext,
+                attachments: fileAttachments,
+                fileAttachments
+            };
+            this.gateway.emitGatewayEvent?.('agent.attachments.staged', {
+                runId,
+                sessionId,
+                attachmentCount: fileAttachments.length,
+                stagedCount: fileAttachments.filter((attachment) => attachment.staged === true).length,
+                failedCount: fileAttachments.filter((attachment) => attachment.stageStatus === 'staging_failed').length,
+                paths: fileAttachments.map((attachment) => attachment.path)
+            });
+        }
         const missingSettings = isAgentLlmSettingsMissing(settings);
         if (missingSettings) {
             const displayText = '我还没有拿到可用的大模型配置，所以现在不能由 Agent Loop 判断并执行这句话。请先在控制面板里配置 API Base、模型和 Key。';
@@ -11088,5 +11196,6 @@ module.exports = {
     validateExactAnswerSubmission,
     isAgentDecisionDeepThinkingMode,
     isDeepThinkingAgentDecisionModel,
-    resolveAgentDecisionTimeoutMs
+    resolveAgentDecisionTimeoutMs,
+    stageFileAttachmentsForWorkspace
 };

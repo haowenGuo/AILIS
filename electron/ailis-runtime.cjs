@@ -1845,6 +1845,16 @@ class AILISRuntime {
             recentMessages: inheritanceMode === 'recent' && Array.isArray(args.recentMessages)
                 ? args.recentMessages.slice(-Math.max(1, Math.min(Number(args.recentTurns || 4), 12)))
                 : [],
+            attachments: Array.isArray(context.attachments)
+                ? cloneJson(context.attachments)
+                : Array.isArray(context.fileAttachments)
+                    ? cloneJson(context.fileAttachments)
+                    : [],
+            fileAttachments: Array.isArray(context.fileAttachments)
+                ? cloneJson(context.fileAttachments)
+                : Array.isArray(context.attachments)
+                    ? cloneJson(context.attachments)
+                    : [],
             parentAgentDepth,
             agentDepth: parentAgentDepth + 1,
             maxAgentSteps

@@ -20,9 +20,49 @@ const {
         buildToolObservationDigest,
     isAgentLlmSettingsMissing,
     looksLikeLeakedAgentProtocol,
+    stageFileAttachmentsForWorkspace,
     splitNativeProgressNoteArgs,
     stripControlTags
 } = require('../electron/ailis-agent-runner.cjs');
+
+test('AILIS stages external attachments inside the active workspace', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-attachment-workspace-'));
+    const sourceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-attachment-source-'));
+    const sourcePath = path.join(sourceRoot, 'inventory.xlsx');
+    await fs.writeFile(sourcePath, 'spreadsheet-bytes');
+
+    const staged = await stageFileAttachmentsForWorkspace([{
+        type: 'file',
+        name: 'inventory.xlsx',
+        path: sourcePath
+    }], workspaceRoot, 'session:with:unsafe/chars');
+
+    assert.equal(staged.length, 1);
+    assert.equal(staged[0].staged, true);
+    assert.equal(staged[0].stageStatus, 'copied_to_workspace');
+    assert.equal(path.relative(workspaceRoot, staged[0].path).startsWith('..'), false);
+    assert.equal(await fs.readFile(staged[0].path, 'utf8'), 'spreadsheet-bytes');
+    assert.equal(staged[0].originalPath, sourcePath);
+});
+
+test('AILIS preserves file extensions when staging long attachment names', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-long-attachment-workspace-'));
+    const sourceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-long-attachment-source-'));
+    const longName = `${'gaia-attachment-'.repeat(12)}dataset.xlsx`;
+    const sourcePath = path.join(sourceRoot, longName);
+    await fs.writeFile(sourcePath, 'spreadsheet-bytes');
+
+    const [staged] = await stageFileAttachmentsForWorkspace([{
+        type: 'file',
+        name: longName,
+        path: sourcePath
+    }], workspaceRoot, 'gaia-long-name');
+
+    assert.equal(staged.staged, true);
+    assert.equal(path.extname(staged.path), '.xlsx');
+    assert.ok(path.basename(staged.path).length <= 99);
+    assert.equal(await fs.readFile(staged.path, 'utf8'), 'spreadsheet-bytes');
+});
 
 test('TaskAgent handoff preserves structured web source refs when prose omits URLs', () => {
     const sourceUrl = 'https://docs.example.test/guide';

@@ -154,7 +154,7 @@ const AILIS_RUNTIME_TOOL_DEFINITIONS = Object.freeze([
     Object.freeze({
         id: 'spawn_agent',
         label: 'spawn_agent',
-        description: 'Spawns one persistent agent to own the current user task. The spawned agent receives a canonical task name, inherits sanitized parent turns according to fork_turns, and sends its final answer back through the parent mailbox. Returns task_name and nickname; it does not wait for completion. After this parent run has delegated once, integrate the completed result directly or use followup_task with the returned task_name for a concrete continuation; do not spawn a second agent merely to supplement the same user task.',
+        description: 'Spawns one persistent agent to own the current user task. The spawned agent receives a canonical task name, inherits sanitized parent turns according to fork_turns, and sends its final answer back through the parent mailbox. Returns task_name and nickname; it does not wait for completion. Continue the same subtask only with followup_task and the returned task_name. A duplicate spawn request is normalized into a followup of the existing agent instead of creating another agent.',
         sectionId: 'runtime',
         route: 'ailis-runtime',
         materialized: true,

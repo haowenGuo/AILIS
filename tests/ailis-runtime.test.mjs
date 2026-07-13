@@ -739,6 +739,11 @@ test('AILIS Codex-style Agent tree delivers completion through the session mailb
         runId: 'parent-run',
         sessionId: 'session-a',
         agent_path: '/root',
+        attachments: [{
+            type: 'file',
+            name: 'input.xlsx',
+            path: path.join(workspaceRoot, '.ailis-runtime', 'attachments', 'input.xlsx')
+        }],
         forked_context_checkpoint: {
             history_version: 2,
             items: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'original request' }] }]
@@ -760,6 +765,7 @@ test('AILIS Codex-style Agent tree delivers completion through the session mailb
     assert.equal(childContexts.length, 1);
     assert.equal(childContexts[0].taskAgentInheritanceMode, 'checkpoint');
     assert.deepEqual(childContexts[0].initialContextManagerCheckpoint, context.forked_context_checkpoint);
+    assert.deepEqual(childContexts[0].attachments, context.attachments);
     await runtime.shutdown();
 });
 
@@ -832,7 +838,7 @@ test('AILIS Agent tree resumes a completed thread from its checkpoint', async ()
     await runtime.shutdown();
 });
 
-test('Persona parent run keeps one persistent TaskAgent owner after completion', async () => {
+test('Persona parent run converts duplicate spawn into followup on the persistent TaskAgent', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-persona-agent-owner-'));
     const tasks = [];
     const runtime = new AILISRuntime({
@@ -864,13 +870,33 @@ test('Persona parent run keeps one persistent TaskAgent owner after completion',
         fork_turns: 'none'
     }, context);
 
-    assert.equal(duplicate.isError, true);
-    assert.equal(duplicate.structuredContent.status, 'agent_task_already_delegated');
-    assert.equal(duplicate.structuredContent.target, '/root/guide');
+    assert.equal(duplicate.isError, false);
+    assert.equal(duplicate.structuredContent.status, 'followup_queued');
+    assert.equal(duplicate.structuredContent.task_name, '/root/guide');
+    assert.equal(duplicate.structuredContent.continued, true);
     assert.equal(duplicate.structuredContent.result_available, true);
+    await runtime.executeTool('wait_agent', { timeout_ms: 1000 }, context);
     assert.equal(runtime.agent_control.state.list(context).length, 1);
-    assert.deepEqual(tasks, ['research the guide']);
+    assert.deepEqual(tasks, ['research the guide', 'search for missing guide details']);
     await runtime.shutdown();
+});
+
+test('Subagent notification carries a source-only Persona evidence boundary', () => {
+    const rendered = new SubagentNotification(
+        '/root/research',
+        AgentStatus.Completed('supported answer'),
+        {
+            final_answer: 'supported answer',
+            source_refs: [{ url: 'https://example.test/source' }],
+            evidence_boundary: {
+                mode: 'source_only',
+                may_add_facts: false
+            }
+        }
+    ).render();
+    assert.match(rendered, /"final_answer":"supported answer"/);
+    assert.match(rendered, /"mode":"source_only"/);
+    assert.match(rendered, /"may_add_facts":false/);
 });
 
 test('AILIS Agent trees are session scoped and enforce one live direct child', async () => {

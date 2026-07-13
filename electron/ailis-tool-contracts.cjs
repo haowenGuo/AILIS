@@ -1028,7 +1028,7 @@ const TOOL_CONTRACTS = Object.freeze({
         approval: 'never',
         experience: TOOL_EXPERIENCE.collaboration,
         returns: spawnAgentReturns(),
-        errors: defaultErrors(['agent_path_conflict', 'agent_task_already_delegated', 'agent_thread_limit_reached', 'invalid_task_name']),
+        errors: defaultErrors(['agent_thread_limit_reached', 'invalid_task_name']),
         schema: makeObjectSchema({
             required: ['task_name', 'message'],
             properties: {

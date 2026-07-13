@@ -5870,6 +5870,36 @@ async function webFind(args = {}) {
     });
 }
 
+async function openPage(args = {}) {
+    return await webFetch(args);
+}
+
+async function findInPage(args = {}) {
+    return await webFind(args);
+}
+
+async function continuePage(args = {}) {
+    const url = normalizeString(args.url || args.ref_id || args.refId || args.uri);
+    const lineno = Number(args.lineno || args.lineStart || args.line_start || 0);
+    if (!url || !Number.isFinite(lineno) || lineno < 1) {
+        return errorResult('continue_page requires url and a positive lineno');
+    }
+    return await webFetch({
+        ...args,
+        url,
+        lineno
+    });
+}
+
+async function renderPage(args = {}) {
+    return await webFetch({
+        ...args,
+        provider: 'crawl4ai',
+        fetchProvider: 'crawl4ai',
+        fetch_provider: 'crawl4ai'
+    });
+}
+
 function extractTextFromToolResult(result = {}, maxChars = 3000) {
     const text = normalizeString(result.content?.[0]?.text);
     return text.length > maxChars ? `${text.slice(0, Math.max(0, maxChars - 3)).trim()}...` : text;
@@ -6439,6 +6469,11 @@ function summarizeWebResearchSearchResult(result = {}, index = 0) {
         host: extractHostname(result.url),
         open_page: {
             type: 'open_page',
+            tool: 'open_page',
+            args: {
+                url: normalizeString(result.url),
+                lineno: 1
+            },
             url: normalizeString(result.url),
             lineno: 1
         },
@@ -9375,6 +9410,11 @@ function buildSourceLineWindow(text = '', {
         type: 'source_viewport',
         action: {
             type: 'open_page',
+            tool: 'open_page',
+            args: {
+                url,
+                lineno: startLine
+            },
             url,
             lineno: startLine
         },
@@ -9413,7 +9453,7 @@ function buildSourceWindowFollowups(sourceWindow = {}, query = '') {
     const maxLines = Math.max(1, Number(sourceWindow.lineEnd || 0) - Number(sourceWindow.lineStart || 0) + 1) || 120;
     if (sourceWindow.hasMoreBefore) {
         calls.push({
-            tool: 'web_fetch',
+            tool: 'continue_page',
             args: {
                 url,
                 lineno: Math.max(1, Number(sourceWindow.lineStart || 1) - maxLines),
@@ -9424,7 +9464,7 @@ function buildSourceWindowFollowups(sourceWindow = {}, query = '') {
     }
     if (sourceWindow.hasMoreAfter) {
         calls.push({
-            tool: 'web_fetch',
+            tool: 'continue_page',
             args: {
                 url,
                 lineno: Number(sourceWindow.lineEnd || 0) + 1,
@@ -9436,10 +9476,10 @@ function buildSourceWindowFollowups(sourceWindow = {}, query = '') {
     const normalizedQuery = normalizeString(query);
     if (normalizedQuery) {
         calls.push({
-            tool: 'web_fetch',
+            tool: 'find_in_page',
             args: {
                 url,
-                query: normalizedQuery,
+                pattern: normalizedQuery,
                 maxLines
             },
             reason: 'Re-open the same source around a specific missing phrase rather than refetching the whole page.'
@@ -11052,6 +11092,54 @@ const TOOLS = [
         }
     },
     {
+        name: 'open_page',
+        description: 'Open a selected public web source by URL and return a line-numbered source_viewport. This is the direct search → open action. Use lineno to open a specific region or query to focus around one missing field.',
+        inputSchema: {
+            type: 'object',
+            required: ['url'],
+            properties: {
+                url: { type: 'string', minLength: 1 },
+                lineno: { type: 'number', minimum: 1 },
+                query: { type: 'string' },
+                maxLines: { type: 'number', minimum: 1, maximum: 300 },
+                timeoutMs: { type: 'number' }
+            },
+            additionalProperties: false
+        }
+    },
+    {
+        name: 'continue_page',
+        description: 'Continue reading the same public source at a specific 1-based line number. Use this when a source_viewport has_more_before or has_more_after; do not repeat web_search.',
+        inputSchema: {
+            type: 'object',
+            required: ['url', 'lineno'],
+            properties: {
+                url: { type: 'string', minLength: 1 },
+                lineno: { type: 'number', minimum: 1 },
+                maxLines: { type: 'number', minimum: 1, maximum: 300 },
+                query: { type: 'string' },
+                timeoutMs: { type: 'number' }
+            },
+            additionalProperties: false
+        }
+    },
+    {
+        name: 'render_page',
+        description: 'Render a JavaScript-dependent public page with the bundled local Crawl4AI worker, then return the same source_viewport object model. Use after a static open returns a JS shell, thin placeholder, or omits data visibly present after rendering.',
+        inputSchema: {
+            type: 'object',
+            required: ['url'],
+            properties: {
+                url: { type: 'string', minLength: 1 },
+                lineno: { type: 'number', minimum: 1 },
+                query: { type: 'string' },
+                maxLines: { type: 'number', minimum: 1, maximum: 300 },
+                timeoutMs: { type: 'number' }
+            },
+            additionalProperties: false
+        }
+    },
+    {
         name: 'web_find',
         description: 'Find an exact phrase inside a known public HTTP(S) HTML/text URL. Codex/OAI-style action: find_in_page. Standard call: { "url": "https://...", "pattern": "exact phrase" }. Returns a line-numbered source_viewport around matches. This is not a broad web search.',
         inputSchema: {
@@ -11063,6 +11151,22 @@ const TOOLS = [
                 contextLines: { type: 'number', description: 'Approximate context lines around the match. Defaults to 3.' },
                 maxLines: { type: 'number', description: 'Maximum source lines in the returned viewport, clamped to 3-120.' },
                 timeoutMs: { type: 'number', description: 'Request timeout in milliseconds.' }
+            },
+            additionalProperties: false
+        }
+    },
+    {
+        name: 'find_in_page',
+        description: 'Find an exact phrase or keyword inside a known public URL and return a line-numbered source_viewport around all visible matches. This is the direct open → find action, not a broad search.',
+        inputSchema: {
+            type: 'object',
+            required: ['url', 'pattern'],
+            properties: {
+                url: { type: 'string', minLength: 1 },
+                pattern: { type: 'string', minLength: 1 },
+                contextLines: { type: 'number', minimum: 0 },
+                maxLines: { type: 'number', minimum: 3, maximum: 120 },
+                timeoutMs: { type: 'number' }
             },
             additionalProperties: false
         }
@@ -11331,6 +11435,10 @@ async function handleToolCall(request) {
     if (name === 'github_repo_read') return await githubRepoRead(args);
     if (name === 'web_fetch') return await webFetch(args);
     if (name === 'web_find') return await webFind(args);
+    if (name === 'open_page') return await openPage(args);
+    if (name === 'find_in_page') return await findInPage(args);
+    if (name === 'continue_page') return await continuePage(args);
+    if (name === 'render_page') return await renderPage(args);
     if (name === 'pdf_extract_text') return await pdfExtractText(args);
     if (name === 'paper_metadata_lookup') return await paperMetadataLookup(args);
     if (name === 'pdf_find_and_extract') return await pdfFindAndExtract(args);
@@ -11449,6 +11557,10 @@ module.exports = {
     webExtractLinks,
     webFetch,
     webFind,
+    openPage,
+    findInPage,
+    continuePage,
+    renderPage,
     webResearch,
     webSearch,
     youtubeTranscript,

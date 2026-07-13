@@ -2257,6 +2257,11 @@ class AILISGateway extends EventEmitter {
         const recentMessages = inheritanceMode === 'recent'
             ? (Array.isArray(args.recentMessages) ? args.recentMessages : context.recentMessages || [])
             : [];
+        const attachments = Array.isArray(context.attachments)
+            ? context.attachments
+            : Array.isArray(context.fileAttachments)
+                ? context.fileAttachments
+                : [];
         const requestedMaxAgentSteps = Number(args.maxAgentSteps || context.maxAgentSteps || TASK_AGENT_MAX_MODEL_ROUNDS);
         const taskAgentMaxSteps = Math.max(
             1,
@@ -2283,6 +2288,8 @@ class AILISGateway extends EventEmitter {
             cleanContext: inheritanceMode === 'clean',
             taskAgentInheritanceMode: inheritanceMode,
             initialContextManagerCheckpoint: inheritedCheckpoint,
+            attachments,
+            fileAttachments: attachments,
             maxAgentSteps: taskAgentMaxSteps
         });
         await onEvent?.({
@@ -2299,6 +2306,7 @@ class AILISGateway extends EventEmitter {
             runId: agent?.childRunId,
             message: task,
             messageHistory: recentMessages,
+            attachments,
             sessionId: agent?.childSessionId || context.sessionId || context.sessionKey,
             agentLoop: 'llm',
             planner: 'llm',
