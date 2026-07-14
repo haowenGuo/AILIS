@@ -1161,15 +1161,11 @@ const TOOL_CONTRACTS = Object.freeze({
         returns: STANDARD_TOOL_RETURN_SCHEMA,
         errors: defaultErrors(['task_agent_unavailable', 'task_agent_failed']),
         schema: makeObjectSchema({
-            required: ['message'],
+            required: [],
             properties: {
-                message: stringSchema({
-                    minLength: 1,
-                    description: 'The exact current user request. Do not expand, rewrite, or add acceptance criteria.'
-                }),
                 continuation: stringSchema({
                     enum: ['auto', 'continue', 'new'],
-                    description: 'Semantic lifecycle hint. auto continues only unfinished work; continue resumes the latest checkpoint; new starts clean.'
+                    description: 'Lifecycle hint only. The Harness transfers the immutable current user request automatically. auto continues only unfinished work; continue resumes the latest checkpoint; new starts clean.'
                 })
             },
             additionalProperties: false

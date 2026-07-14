@@ -4,7 +4,7 @@ const { randomUUID } = require('crypto');
 
 const TASK_HARNESS_STATE_VERSION = 1;
 const TASK_RESULT_SCHEMA = 'ailis.task_result.v1';
-const TASK_AGENT_MAX_MODEL_ROUNDS = 4;
+const TASK_AGENT_MAX_MODEL_ROUNDS = 7;
 const CONTINUATION_MODES = new Set(['auto', 'continue', 'new']);
 const FINAL_STATUSES = new Set(['completed', 'success', 'succeeded']);
 
@@ -230,9 +230,9 @@ class AILISSystemTaskAgentHarness {
     }
 
     async handoff(args = {}, context = {}) {
-        const message = normalizeString(args.message);
+        const message = normalizeString(context.currentUserMessage);
         if (!message) {
-            throw new Error('handoff_task.message is required');
+            throw new Error('handoff_task requires the immutable current user message from the Agent Harness');
         }
         if (!this.executeTaskAgent) {
             throw new Error('System TaskAgent executor is not available');

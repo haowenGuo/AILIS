@@ -81,7 +81,7 @@ const DEFAULT_HTTP_REQUEST_TIMEOUT_MS = Math.max(0, Number(process.env.AILIS_GAT
 const DEFAULT_PROFILE_CURATION_START_DELAY_MS = Number(process.env.AILIS_PROFILE_CURATION_START_DELAY_MS || 60 * 1000);
 const DEFAULT_PROFILE_CURATION_CHECK_INTERVAL_MS = Number(process.env.AILIS_PROFILE_CURATION_CHECK_INTERVAL_MS || 6 * 60 * 60 * 1000);
 const DEFAULT_PROFILE_CURATION_DEBOUNCE_MS = Number(process.env.AILIS_PROFILE_CURATION_DEBOUNCE_MS || 2 * 60 * 1000);
-const TASK_AGENT_MAX_MODEL_ROUNDS = 4;
+const TASK_AGENT_MAX_MODEL_ROUNDS = 7;
 
 const GATEWAY_BACKED_TOOL_IDS = new Set(['sessions_list', 'gateway', 'cron', 'nodes']);
 const SESSION_BOUND_TOOL_IDS = new Set([
@@ -231,7 +231,7 @@ const AILIS_LOCAL_TOOL_DEFINITIONS = Object.freeze([
     Object.freeze({
         id: HANDOFF_TASK_TOOL_ID,
         label: 'handoff_task',
-        description: 'Hand the exact current user request to the system TaskAgent and wait for one compact TaskResult packet. The Harness owns task identity, continuation, checkpointing, execution, and result transport.',
+        description: 'Transfer the immutable current user request to the system TaskAgent and wait for one compact TaskResult packet. No task text is accepted from the model; the Harness owns task identity, continuation, checkpointing, execution, and result transport.',
         sectionId: 'persona-runtime',
         route: 'ailis-system-task-agent',
         materialized: true,
@@ -2802,6 +2802,15 @@ class AILISGateway extends EventEmitter {
         }
         const cloned = cloneJson(response) || {};
         const details = bridgeStructuredContent(cloned);
+        const contentType = normalizeString(details.contentType || details.content_type).toLowerCase();
+        if (mode === 'open' && contentType.includes('application/pdf')) {
+            const pdfResponse = await this.executeWebRunPdf(resolved.url, context, {
+                parentRefId: normalizeString(operation.ref_id)
+            });
+            if (pdfResponse.isError !== true) {
+                return pdfResponse;
+            }
+        }
         const viewRef = this.registerWebRunRef(context, 'view', resolved.url, {
             parent_ref_id: normalizeString(operation.ref_id),
             mode

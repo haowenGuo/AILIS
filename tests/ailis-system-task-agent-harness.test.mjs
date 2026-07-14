@@ -53,7 +53,8 @@ test('system TaskAgent handoff preserves the exact request and returns a compact
         }
     });
     const message = '请核对原始资料，只回答其中的类名。';
-    const packet = await harness.handoff({ message }, {
+    const packet = await harness.handoff({}, {
+        currentUserMessage: message,
         sessionId: 'persona-session',
         runId: 'persona-run',
         llmSettings: { model: 'mock-model' }
@@ -64,7 +65,7 @@ test('system TaskAgent handoff preserves the exact request and returns a compact
     assert.equal(calls[0].agent.originalTask, message);
     assert.equal(calls[0].context.originalUserGoal, message);
     assert.equal(calls[0].args.inheritanceMode, 'clean');
-    assert.equal(calls[0].args.maxAgentSteps, 4);
+    assert.equal(calls[0].args.maxAgentSteps, 7);
     assert.equal(packet.schema, TASK_RESULT_SCHEMA);
     assert.equal(packet.final_answer, 'Verified answer');
     assert.deepEqual(packet.evidence_refs, ['evidence-1']);
@@ -90,11 +91,16 @@ test('explicit continuation resumes the latest TaskAgent checkpoint without repl
         }
     });
 
-    await harness.handoff({ message: '分析这个仓库的长期任务架构。' }, { sessionId: 'session-a' });
+    await harness.handoff({}, {
+        currentUserMessage: '分析这个仓库的长期任务架构。',
+        sessionId: 'session-a'
+    });
     const packet = await harness.handoff({
-        message: '继续补充失败恢复部分。',
         continuation: 'continue'
-    }, { sessionId: 'session-a' });
+    }, {
+        currentUserMessage: '继续补充失败恢复部分。',
+        sessionId: 'session-a'
+    });
 
     assert.equal(calls.length, 2);
     assert.equal(calls[1].args.inheritanceMode, 'checkpoint');
@@ -129,12 +135,17 @@ test('concurrent follow-up input joins the running system TaskAgent instead of s
         }
     });
 
-    const first = harness.handoff({ message: '分析这个项目。' }, { sessionId: 'session-queue' });
+    const first = harness.handoff({}, {
+        currentUserMessage: '分析这个项目。',
+        sessionId: 'session-queue'
+    });
     await new Promise((resolve) => setImmediate(resolve));
     const second = harness.handoff({
-        message: '补充检查测试覆盖率。',
         continuation: 'continue'
-    }, { sessionId: 'session-queue' });
+    }, {
+        currentUserMessage: '补充检查测试覆盖率。',
+        sessionId: 'session-queue'
+    });
     await new Promise((resolve) => setImmediate(resolve));
     releaseExecution();
     const [firstPacket, secondPacket] = await Promise.all([first, second]);
@@ -152,8 +163,8 @@ test('Persona and TaskAgent receive disjoint orchestration tool surfaces', () =>
             description: 'System TaskAgent handoff.',
             parameters: {
                 type: 'object',
-                required: ['message'],
-                properties: { message: { type: 'string' } },
+                required: [],
+                properties: { continuation: { type: 'string' } },
                 additionalProperties: false
             }
         },

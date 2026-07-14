@@ -101,6 +101,12 @@ test('AILIS exposes Codex-style web_run and preserves refs across search and ope
             });
         }
         if (request.tool === 'web_fetch' || request.tool === 'render_page') {
+            if (request.args.url.endsWith('.pdf')) {
+                return mcpBridgeResult('PDF content requires extraction.', {
+                    contentType: 'application/pdf',
+                    url: request.args.url
+                });
+            }
             const isPdfView = request.args.url.endsWith('/pdf-view');
             return mcpBridgeResult('L1: opened source', {
                     contentType: 'text/html',
@@ -220,6 +226,19 @@ test('AILIS exposes Codex-style web_run and preserves refs across search and ope
         assert.equal(bridgeRequests.at(-1).args.url, 'https://example.test/article.pdf');
         assert.equal(clickResponse.result.structuredContent.ref_id, 'turn3view1');
         assert.match(clickResponse.result.structuredContent.sourceWindow.lines[0].text, /fluffy/);
+
+        const directPdfResponse = await gateway.callTool({
+            tool: 'web_run',
+            args: { open: [{ ref_id: 'https://example.test/direct.pdf' }] },
+            context: { workspace: workspaceRoot, runId: 'run-1', sessionId: 'session-1', iteration: 4 }
+        });
+        assert.equal(directPdfResponse.ok, true, JSON.stringify(directPdfResponse));
+        assert.deepEqual(bridgeRequests.slice(-2).map((request) => request.tool), [
+            'render_page',
+            'pdf_extract_text'
+        ]);
+        assert.equal(bridgeRequests.at(-1).args.url, 'https://example.test/direct.pdf');
+        assert.match(directPdfResponse.result.structuredContent.sourceWindow.lines[0].text, /fluffy/);
     } finally {
         await gateway.stop();
         await fs.rm(workspaceRoot, { recursive: true, force: true });
@@ -358,8 +377,8 @@ test('AILIS Gateway TaskAgent thread reuses parent LLM settings', async () => {
     assert.deepEqual(calls[0].messageHistory, []);
     assert.equal(calls[0].context.cleanContext, true);
     assert.equal(calls[0].context.contextMode, 'task_agent');
-    assert.equal(calls[0].maxAgentSteps, 4);
-    assert.equal(calls[0].context.maxAgentSteps, 4);
+    assert.equal(calls[0].maxAgentSteps, 7);
+    assert.equal(calls[0].context.maxAgentSteps, 7);
     assert.deepEqual(calls[0].llmSettings, llmSettings);
     assert.deepEqual(calls[0].context.llmSettings, llmSettings);
 });

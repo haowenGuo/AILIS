@@ -596,7 +596,7 @@ test('Persona prompt stays in AILIS persona and exposes only system TaskAgent ha
         assert.match(llmServer.calls[0].system, /关系表达协议/);
         assert.match(llmServer.calls[0].system, /authoritative host clock/);
         assert.match(llmServer.calls[0].system, /call handoff_task exactly once/);
-        assert.match(llmServer.calls[0].system, /Do not expand the scope/);
+        assert.match(llmServer.calls[0].system, /Harness transfers the immutable current user request/);
         assert.match(llmServer.calls[0].system, /TaskResult packet is the factual boundary/);
         const toolNames = (llmServer.calls[0].payload.tools || []).map((tool) => tool.function?.name || tool.name);
         assert.deepEqual(toolNames, ['handoff_task']);
@@ -630,7 +630,6 @@ test('Persona hands one exact request to the system TaskAgent and renders its co
                 tool_call: {
                     tool: 'handoff_task',
                     args: {
-                        message: '核对官方资料并只给出类名。',
                         continuation: 'auto'
                     }
                 }
@@ -2385,8 +2384,8 @@ test('Agentic Executor max-step fallback does not expose raw tool logs to the us
     }
 });
 
-test('TaskAgent clamps caller-requested execution to three work rounds plus one finalization round', async () => {
-    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-task-agent-four-rounds-'));
+test('TaskAgent clamps caller-requested execution to six work rounds plus one finalization round', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-task-agent-seven-rounds-'));
     await fs.writeFile(path.join(workspaceRoot, 'note.txt'), 'evidence\n', 'utf8');
     const llmServer = await createScriptedChatCompletionsServer(() => ({
         mode: 'task',
@@ -2418,7 +2417,7 @@ test('TaskAgent clamps caller-requested execution to three work rounds plus one 
                 provider: 'openai-compatible',
                 baseUrl: llmServer.url,
                 apiKey: 'test-key',
-                model: 'mock-four-round-task-agent',
+                model: 'mock-seven-round-task-agent',
                 timeoutMs: 10000
             },
             context: {
@@ -2430,18 +2429,18 @@ test('TaskAgent clamps caller-requested execution to three work rounds plus one 
         });
 
         assert.equal(result.body.status, 'max_steps_reached');
-        assert.equal(result.body.steps.length, 3);
-        assert.equal(llmServer.calls.length, 4);
-        assert.match(llmServer.calls[0].system, /at most 3 work-tool rounds/);
-        assert.match(llmServer.calls[0].system, /4-round total budget/);
-        assert.equal(llmServer.calls[3].payload.tool_choice, 'none');
-        assert.deepEqual(llmServer.calls[3].payload.tools || [], []);
-        const finalizationMessages = JSON.stringify(llmServer.calls[3].payload.messages);
+        assert.equal(result.body.steps.length, 6);
+        assert.equal(llmServer.calls.length, 7);
+        assert.match(llmServer.calls[0].system, /at most 6 work-tool rounds/);
+        assert.match(llmServer.calls[0].system, /7-round total budget/);
+        assert.equal(llmServer.calls[6].payload.tool_choice, 'none');
+        assert.deepEqual(llmServer.calls[6].payload.tools || [], []);
+        const finalizationMessages = JSON.stringify(llmServer.calls[6].payload.messages);
         assert.match(finalizationMessages, /TaskAgent finalization package/);
         assert.match(finalizationMessages, /读取 note\.txt 并整理结果/);
         assert.match(finalizationMessages, /evidence/);
-        assert.doesNotMatch(llmServer.calls[3].system, /Native direct tools exposed/);
-        assert.doesNotMatch(llmServer.calls[3].system, /Emit function calls/);
+        assert.doesNotMatch(llmServer.calls[6].system, /Native direct tools exposed/);
+        assert.doesNotMatch(llmServer.calls[6].system, /Emit function calls/);
     } finally {
         await gateway.stop();
         await llmServer.close();

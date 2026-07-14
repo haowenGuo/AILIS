@@ -249,7 +249,7 @@ test('AILIS parent Persona prompt stays conversational while TaskAgent keeps exe
     assert.match(personaPrompt.instructions, /Keep ordinary conversation natural/);
     assert.match(personaPrompt.instructions, /authoritative host clock/);
     assert.match(personaPrompt.instructions, /call handoff_task exactly once/);
-    assert.match(personaPrompt.instructions, /Do not expand the scope/);
+    assert.match(personaPrompt.instructions, /Harness transfers the immutable current user request/);
     assert.match(personaPrompt.instructions, /TaskResult packet is the factual boundary/);
     assert.match(personaPrompt.instructions, /You do not create, wait for, resume, list, or close agents/);
     assert.doesNotMatch(personaPrompt.instructions, /spawn_agent creates|subagent_notification|task_name/);
@@ -654,9 +654,8 @@ test('AILIS persona exposes only system handoff while TaskAgent keeps execution 
         parameters: {
             type: 'object',
             additionalProperties: false,
-            required: ['message'],
+            required: [],
             properties: {
-                message: { type: 'string' },
                 continuation: { type: 'string', enum: ['auto', 'continue', 'new'] }
             }
         }
@@ -712,7 +711,7 @@ test('AILIS persona exposes only system handoff while TaskAgent keeps execution 
         }
     });
     assert.deepEqual(personaSpecs.map((spec) => spec.name), ['handoff_task']);
-    assert.deepEqual(personaSpecs[0].parameters.required, ['message']);
+    assert.deepEqual(personaSpecs[0].parameters.required, []);
     assert.equal(personaSpecs[0].parameters.additionalProperties, false);
     assert.equal(personaSpecs.some((spec) => spec.name === 'subagents'), false);
 

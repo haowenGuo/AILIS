@@ -96,7 +96,7 @@ const ARTIFACT_OBSERVATION_ROW_WINDOW_TEXT_CHARS = 8000;
 const MAX_MCP_TOOL_DESCRIPTION_CHARS = 900;
 const DEFAULT_AGENT_LOOP_STEPS = 30;
 const MAX_AGENT_LOOP_STEPS = 30;
-const TASK_AGENT_MAX_MODEL_ROUNDS = 4;
+const TASK_AGENT_MAX_MODEL_ROUNDS = 7;
 const TASK_AGENT_FINALIZATION_CONTEXT_CHARS = 18000;
 const PERSONA_SUBAGENT_FINALIZATION_CONTEXT_CHARS = 24000;
 const DEFAULT_PENDING_PLAN_TTL_MS = 30 * 60 * 1000;
@@ -3368,7 +3368,7 @@ function buildAgentCapabilityCatalog({ compact = false, role = 'task_agent' } = 
                 {
                     id: 'handoff_task',
                     label: 'System TaskAgent handoff',
-                    summary: 'Pass the exact user request to the persistent system TaskAgent and receive one compact result packet.'
+                    summary: 'Transfer the immutable current user request to the persistent system TaskAgent and receive one compact result packet.'
                 }
             ]
         };
@@ -6841,7 +6841,7 @@ function buildLlmAgentDirectToolPrompt({
         'You are the only user-facing AILIS persona. Keep ordinary conversation natural and answer it directly; do not let task-execution instructions or internal terminology enter your personality, relationship memory, or visible reply.',
         'The runtime_environment object is the authoritative host clock. Use its current_date, current_time, timezone, and utc_offset instead of assuming the training-data date.',
         'For facts that may have changed, use fresh evidence already present in the conversation or verify them through TaskAgent. Do not present pretrained knowledge as current fact when freshness matters.',
-        'When the user asks for concrete task execution that cannot be answered safely from the visible conversation, call handoff_task exactly once with message equal to the user\'s actual current request. Do not expand the scope, invent stricter acceptance criteria, create a task name, or write a hidden subtask plan into message.',
+        'When the user asks for concrete task execution that cannot be answered safely from the visible conversation, call handoff_task exactly once. The Harness transfers the immutable current user request; do not restate, rewrite, expand, or plan the task in tool arguments.',
         'handoff_task blocks while the system Harness runs or resumes the single TaskAgent. You do not create, wait for, resume, list, or close agents. After the tool returns, render its TaskResult packet instead of calling another orchestration tool.',
         'Use continuation=continue only when the user explicitly continues, corrects, or supplements the previous task; use continuation=new for an explicit unrelated task; otherwise use auto and let lifecycle state decide.',
         'The TaskResult packet is the factual boundary. You may rewrite tone and presentation, but you must not add a name, number, quote, link, claim, or conclusion absent from final_answer, partial_answer, source_refs, or the visible conversation. If status is incomplete, explain the concrete unresolved field naturally instead of silently starting another execution.',
@@ -9136,7 +9136,7 @@ class AILISAgentRunner {
                 unresolvedFields,
                 safetyFinalizationReason,
                 toolSummary: isPersonaOrchestratorRole(agentRuntimeRole)
-                    ? 'Persona tool surface: handoff_task sends the exact current request to the system TaskAgent and returns one compact TaskResult packet. The Harness owns lifecycle and internal orchestration remains invisible to the user.'
+                    ? 'Persona tool surface: handoff_task transfers the immutable current user request to the system TaskAgent and returns one compact TaskResult packet. The Harness owns lifecycle and internal orchestration remains invisible to the user.'
                     : directToolSpecs.length
                         ? `Native direct tools exposed: ${directToolSpecs.map((tool) => tool.name).slice(0, 16).join(', ')}${directToolSpecs.length > 16 ? ', ...' : ''}.`
                         : 'No native tools are exposed in this turn; answer directly if possible.'
@@ -9837,7 +9837,8 @@ class AILISAgentRunner {
                             this.workspaceRoot,
                             sessionId
                         ),
-                        agent_path: normalizeText(requestContext.agent_path || requestContext.agentPath, '/root')
+                        agent_path: normalizeText(requestContext.agent_path || requestContext.agentPath, '/root'),
+                        currentUserMessage: message
                     };
                     const parallelStepResults = await Promise.all(parallelCandidateSteps.map((candidateStep) => this.executeAgentToolStep({
                         runId,
@@ -10201,6 +10202,7 @@ class AILISAgentRunner {
                         sessionId
                     ),
                     agent_path: normalizeText(requestContext.agent_path || requestContext.agentPath, '/root'),
+                    currentUserMessage: message,
                     ...(canonicalDirectToolId(step.tool) === 'spawn_agent'
                         ? {
                               forked_context_checkpoint: build_forked_context_checkpoint(
