@@ -243,16 +243,16 @@ test('AILIS Agent Runner strips persona_output blocks from visible text', () => 
 test('AILIS parent Persona prompt stays conversational while TaskAgent keeps execution guidance', () => {
     const personaPrompt = buildLlmAgentDirectToolPrompt({
         message: '老婆，你的说话语气怎么有点冷漠',
-        toolSummary: 'Persona orchestrator tools exposed: spawn_agent, followup_task, wait_agent.'
+        toolSummary: 'Persona tool surface: handoff_task.'
     });
     assert.match(personaPrompt.instructions, /当前有效交互偏好/);
     assert.match(personaPrompt.instructions, /Keep ordinary conversation natural/);
     assert.match(personaPrompt.instructions, /authoritative host clock/);
-    assert.match(personaPrompt.instructions, /spawn_agent creates a persistent TaskAgent/);
-    assert.match(personaPrompt.instructions, /without expanding the requested scope/);
-    assert.match(personaPrompt.instructions, /completed subagent_notification contains the TaskAgent final answer/);
-    assert.match(personaPrompt.instructions, /Never create a new task_name merely to supplement/);
-    assert.match(personaPrompt.instructions, /status\.completed/);
+    assert.match(personaPrompt.instructions, /call handoff_task exactly once/);
+    assert.match(personaPrompt.instructions, /Do not expand the scope/);
+    assert.match(personaPrompt.instructions, /TaskResult packet is the factual boundary/);
+    assert.match(personaPrompt.instructions, /You do not create, wait for, resume, list, or close agents/);
+    assert.doesNotMatch(personaPrompt.instructions, /spawn_agent creates|subagent_notification|task_name/);
     assert.doesNotMatch(personaPrompt.instructions, /mcp__ailis_research__web_research|For local file and data tasks|When exec output is truncated/);
 
     const taskPrompt = buildLlmAgentDirectToolPrompt({
@@ -647,18 +647,17 @@ test('AILIS Agent Runner passes parent LLM settings only to collaboration tool c
     assert.equal(calls[0].context.llmSettings, undefined);
 });
 
-test('AILIS persona exposes Codex-named collaboration tools while TaskAgent keeps Codex core by default', () => {
-    const taskResultsSpec = {
-        name: 'task_results',
-        description: 'Read prior public task results.',
+test('AILIS persona exposes only system handoff while TaskAgent keeps execution tools', () => {
+    const handoffSpec = {
+        name: 'handoff_task',
+        description: 'Hand the current request to the system TaskAgent.',
         parameters: {
             type: 'object',
             additionalProperties: false,
-            required: ['action'],
+            required: ['message'],
             properties: {
-                action: { type: 'string', enum: ['search', 'get'] },
-                query: { type: 'string' },
-                id: { type: 'string' }
+                message: { type: 'string' },
+                continuation: { type: 'string', enum: ['auto', 'continue', 'new'] }
             }
         }
     };
@@ -686,6 +685,8 @@ test('AILIS persona exposes Codex-named collaboration tools while TaskAgent keep
     const gateway = {
         gatewayToolRuntimeRegistry: {
             modelVisibleSpecs: () => [
+                handoffSpec,
+                collaborationSpecs.spawn_agent,
                 {
                     name: 'read',
                     description: 'Read a file.',
@@ -698,8 +699,8 @@ test('AILIS persona exposes Codex-named collaboration tools while TaskAgent keep
                 }
             ],
             definition: (toolId) => {
+                if (toolId === 'handoff_task') return { spec: handoffSpec };
                 if (collaborationSpecs[toolId]) return { spec: collaborationSpecs[toolId] };
-                if (toolId === 'task_results') return { spec: taskResultsSpec };
                 return null;
             }
         }
@@ -710,19 +711,9 @@ test('AILIS persona exposes Codex-named collaboration tools while TaskAgent keep
             agentRole: 'persona_orchestrator'
         }
     });
-    assert.deepEqual(personaSpecs.map((spec) => spec.name), [
-        'task_results',
-        'spawn_agent',
-        'followup_task',
-        'wait_agent',
-        'list_agents',
-        'close_agent'
-    ]);
-    const spawnSpec = personaSpecs.find((spec) => spec.name === 'spawn_agent');
-    const followupSpec = personaSpecs.find((spec) => spec.name === 'followup_task');
-    assert.deepEqual(spawnSpec.parameters.required, ['task_name', 'message']);
-    assert.equal(spawnSpec.parameters.additionalProperties, false);
-    assert.equal(followupSpec.output_schema, undefined);
+    assert.deepEqual(personaSpecs.map((spec) => spec.name), ['handoff_task']);
+    assert.deepEqual(personaSpecs[0].parameters.required, ['message']);
+    assert.equal(personaSpecs[0].parameters.additionalProperties, false);
     assert.equal(personaSpecs.some((spec) => spec.name === 'subagents'), false);
 
     const taskSpecs = buildAgentDirectToolSpecs(gateway, {
@@ -732,6 +723,8 @@ test('AILIS persona exposes Codex-named collaboration tools while TaskAgent keep
     });
     assert.ok(taskSpecs.some((spec) => spec.name === 'read'));
     assert.ok(taskSpecs.some((spec) => spec.name === 'exec'));
+    assert.equal(taskSpecs.some((spec) => spec.name === 'handoff_task'), false);
+    assert.equal(taskSpecs.some((spec) => spec.name === 'spawn_agent'), false);
     assert.equal(taskSpecs.some((spec) => spec.name === 'subagents'), false);
 
 });

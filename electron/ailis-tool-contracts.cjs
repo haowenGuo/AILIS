@@ -503,6 +503,14 @@ const TOOL_EXPERIENCE = Object.freeze({
         progressStyle: 'background',
         userFacingVerb: '分派子任务'
     }),
+    task_handoff: makeExperienceMetadata({
+        embodiedAction: 'work_on_task',
+        permissionStyle: 'inherits_parent_policy',
+        progressStyle: 'focused',
+        successStyle: 'summarize_result',
+        failureStyle: 'plain_explain',
+        userFacingVerb: '处理任务'
+    }),
     task_results: makeExperienceMetadata({
         embodiedAction: 'recall_task_result',
         permissionStyle: 'silent_read',
@@ -1141,6 +1149,30 @@ const TOOL_CONTRACTS = Object.freeze({
                 contextLines: numberSchema({ minimum: 0, maximum: 5 })
             },
             additionalProperties: true
+        })
+    }),
+    handoff_task: Object.freeze({
+        id: 'handoff_task',
+        version: CONTRACT_VERSION,
+        mutates: false,
+        risk: 'low',
+        approval: 'never',
+        experience: TOOL_EXPERIENCE.task_handoff,
+        returns: STANDARD_TOOL_RETURN_SCHEMA,
+        errors: defaultErrors(['task_agent_unavailable', 'task_agent_failed']),
+        schema: makeObjectSchema({
+            required: ['message'],
+            properties: {
+                message: stringSchema({
+                    minLength: 1,
+                    description: 'The exact current user request. Do not expand, rewrite, or add acceptance criteria.'
+                }),
+                continuation: stringSchema({
+                    enum: ['auto', 'continue', 'new'],
+                    description: 'Semantic lifecycle hint. auto continues only unfinished work; continue resumes the latest checkpoint; new starts clean.'
+                })
+            },
+            additionalProperties: false
         })
     }),
     task_results: Object.freeze({

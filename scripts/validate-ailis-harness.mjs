@@ -12,7 +12,7 @@ const {
     createEvidenceArtifact,
     validateEvidenceArtifact
 } = require('../electron/ailis-evidence-artifacts.cjs');
-const { buildTurnItemsPromptObject } = require('../electron/ailis-turn-items.cjs');
+const { buildObservationLedgerPromptObject } = require('../electron/ailis-turn-items.cjs');
 
 const REQUIRED_TOOLS = [
     'read',
@@ -89,7 +89,7 @@ const sampleArtifact = createEvidenceArtifact({
 });
 assert.equal(validateEvidenceArtifact(sampleArtifact).ok, true, 'typed evidence artifact validation failed');
 
-const turnItems = buildTurnItemsPromptObject({
+const turnItems = buildObservationLedgerPromptObject({
     stepResults: [
         {
             id: 'validate-missing-parser',
@@ -104,7 +104,8 @@ const turnItems = buildTurnItemsPromptObject({
         }
     ]
 });
-assert.equal(turnItems.model, 'codex_like_turn_items');
+assert.equal(turnItems.model, 'ailis_observation_ledger');
+assert.equal(turnItems.schema, 'ailis.observation_ledger.v1');
 assert.ok(turnItems.items.some((item) => item.type === 'tool_result' && item.status === 'failed'), 'turn items missing failed tool observation');
 
 console.log(JSON.stringify({

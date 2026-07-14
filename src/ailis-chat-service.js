@@ -720,10 +720,12 @@ export class AILISDesktopChatService {
                 attachments: summarizeChatAttachmentsForGateway(latestUserEntry?.attachments),
                 agentLoop: 'llm',
                 directToolExecutor: true,
+                maxAgentSteps: 4,
                 context: {
                     workspace: status.workspaceRoot,
                     agentLoop: 'llm',
                     directToolExecutor: true,
+                    maxAgentSteps: 4,
                     agentRole: 'persona_orchestrator'
                 }
             });

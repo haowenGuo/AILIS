@@ -160,7 +160,7 @@ const AILIS_RUNTIME_TOOL_DEFINITIONS = Object.freeze([
         materialized: true,
         status: 'available',
         needsApproval: false,
-        exposure: AILIS_TOOL_EXPOSURE.DIRECT
+        exposure: AILIS_TOOL_EXPOSURE.HIDDEN
     }),
     Object.freeze({
         id: 'followup_task',
@@ -171,7 +171,7 @@ const AILIS_RUNTIME_TOOL_DEFINITIONS = Object.freeze([
         materialized: true,
         status: 'available',
         needsApproval: false,
-        exposure: AILIS_TOOL_EXPOSURE.DIRECT
+        exposure: AILIS_TOOL_EXPOSURE.HIDDEN
     }),
     Object.freeze({
         id: 'wait_agent',
@@ -182,7 +182,7 @@ const AILIS_RUNTIME_TOOL_DEFINITIONS = Object.freeze([
         materialized: true,
         status: 'available',
         needsApproval: false,
-        exposure: AILIS_TOOL_EXPOSURE.DIRECT
+        exposure: AILIS_TOOL_EXPOSURE.HIDDEN
     }),
     Object.freeze({
         id: 'list_agents',
@@ -193,7 +193,7 @@ const AILIS_RUNTIME_TOOL_DEFINITIONS = Object.freeze([
         materialized: true,
         status: 'available',
         needsApproval: false,
-        exposure: AILIS_TOOL_EXPOSURE.DIRECT
+        exposure: AILIS_TOOL_EXPOSURE.HIDDEN
     }),
     Object.freeze({
         id: 'close_agent',
@@ -204,7 +204,7 @@ const AILIS_RUNTIME_TOOL_DEFINITIONS = Object.freeze([
         materialized: true,
         status: 'available',
         needsApproval: false,
-        exposure: AILIS_TOOL_EXPOSURE.DIRECT
+        exposure: AILIS_TOOL_EXPOSURE.HIDDEN
     }),
     Object.freeze({
         id: 'mcp_bridge',

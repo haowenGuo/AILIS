@@ -35,6 +35,7 @@ const { AILISRawMemoryLedger } = require('./ailis-raw-memory-ledger.cjs');
 const { AILISUserProfileCurator } = require('./ailis-user-profile-curator.cjs');
 const { AILISPreferenceState } = require('./ailis-preference-state.cjs');
 const { AILISTaskResultCapsuleStore } = require('./ailis-task-result-capsules.cjs');
+const { AILISSystemTaskAgentHarness } = require('./ailis-task-agent-harness.cjs');
 const { AilisSelfEvolutionRuntime } = require('./ailis-self-evolution-runtime.cjs');
 const {
     listToolContracts,
@@ -42,6 +43,7 @@ const {
 } = require('./ailis-tool-contracts.cjs');
 const EMAIL_TOOL_ID = 'email';
 const TASK_RESULTS_TOOL_ID = 'task_results';
+const HANDOFF_TASK_TOOL_ID = 'handoff_task';
 const WEB_RUN_TOOL_ID = 'web_run';
 const WEB_SEARCH_TOOL_ID = 'web_search';
 const { FILE_MANAGER_TOOL_ID, executeFileManagerTool } = require('./ailis-file-manager-tool.cjs');
@@ -129,7 +131,8 @@ const CODEX_STYLE_DIRECT_LOCAL_TOOL_IDS = new Set([
     'write',
     'exec',
     'apply_patch',
-    WEB_RUN_TOOL_ID
+    WEB_RUN_TOOL_ID,
+    HANDOFF_TASK_TOOL_ID
 ]);
 // Extended tools stay out of the first-turn tool surface, but remain discoverable
 // through tool_search. The Registry is the source of truth for their full specs.
@@ -221,6 +224,16 @@ const AILIS_LOCAL_TOOL_DEFINITIONS = Object.freeze([
         description: 'Legacy single-query public web search kept for compatibility. New model turns use web_run.',
         sectionId: 'web',
         route: 'ailis-research-mcp',
+        materialized: true,
+        status: 'available',
+        needsApprovalActions: Object.freeze([])
+    }),
+    Object.freeze({
+        id: HANDOFF_TASK_TOOL_ID,
+        label: 'handoff_task',
+        description: 'Hand the exact current user request to the system TaskAgent and wait for one compact TaskResult packet. The Harness owns task identity, continuation, checkpointing, execution, and result transport.',
+        sectionId: 'persona-runtime',
+        route: 'ailis-system-task-agent',
         materialized: true,
         status: 'available',
         needsApprovalActions: Object.freeze([])
@@ -967,6 +980,13 @@ class AILISGateway extends EventEmitter {
         this.taskResultCapsules = options.taskResultCapsules || new AILISTaskResultCapsuleStore({
             rootDir: path.join(this.auditDir, 'task-results')
         });
+        this.taskAgentHarness = options.taskAgentHarness || new AILISSystemTaskAgentHarness({
+            rootDir: path.join(this.auditDir, 'task-agent-harness'),
+            taskResultCapsules: this.taskResultCapsules,
+            maxAgentSteps: TASK_AGENT_MAX_MODEL_ROUNDS,
+            executeTaskAgent: (payload) => this.executeTaskAgent(payload),
+            emitEvent: (type, payload) => this.emitGatewayEvent(type, payload)
+        });
         this.taskResultBackfill = { ok: true, imported: 0, capsuleCount: this.taskResultCapsules?.getStatus?.().capsuleCount || 0 };
         try {
             const memoryEvents = this.memoryRuntime?.searchMemory?.('', { limit: 500 })?.events || [];
@@ -1362,6 +1382,7 @@ class AILISGateway extends EventEmitter {
             rawMemory: this.rawMemoryLedger?.getStatus?.() || null,
             interactionPreferences: this.preferenceState?.getStatus?.() || null,
             taskResultCapsules: this.taskResultCapsules?.getStatus?.() || null,
+            taskAgentHarness: this.taskAgentHarness?.getStatus?.() || null,
             taskResultBackfill: this.taskResultBackfill,
             userProfileCuration: this.userProfileCurator?.getStatus?.() || null,
             userProfileCurationScheduler: {
@@ -2995,6 +3016,19 @@ class AILISGateway extends EventEmitter {
 
     async executeGatewayLocalTool(toolId, args, context = {}) {
         const workspaceDir = context.workspaceDir || this.resolveWorkspace(context.workspace, context);
+        if (toolId === HANDOFF_TASK_TOOL_ID) {
+            const taskResult = await this.taskAgentHarness.handoff(args, {
+                ...context,
+                workspace: context.workspace || workspaceDir,
+                workspaceDir
+            });
+            return {
+                content: [{ type: 'text', text: JSON.stringify(taskResult, null, 2) }],
+                isError: false,
+                details: taskResult,
+                structuredContent: taskResult
+            };
+        }
         if (toolId === WEB_RUN_TOOL_ID) {
             return await this.executeWebRun(args, context);
         }

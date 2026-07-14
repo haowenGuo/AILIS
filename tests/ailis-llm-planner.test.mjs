@@ -351,20 +351,8 @@ async function createMockChatCompletionsServer() {
                     mode: 'task',
                     intent: 'create_workspace_note',
                     summary: '创建目录并写入说明文件',
-                    action: 'tool',
-                    plan_update: ['读取文件进行复核'],
-                    tool_call: {
-                        tool: 'read',
-                        title: '读取说明文件复核',
-                        args: { path: 'planner-output/README.txt' }
-                    }
-                },
-                {
-                    mode: 'task',
-                    intent: 'create_workspace_note',
-                    summary: '创建目录并写入说明文件',
                     action: 'final',
-                    final_answer: '**Agentic Executor 已完成**\n\n- 目录和 README.txt 已创建\n- 已读取复核通过'
+                    final_answer: '**Agentic Executor 已完成**\n\n- 目录和 README.txt 已创建'
                 }
             ];
             const message = decisionObjectToChatMessage(
@@ -565,7 +553,7 @@ test('Agent prompts inject runtime_environment from the active platform adapter'
     }
 });
 
-test('Persona orchestrator prompt stays in AILIS persona and exposes Codex collaboration tools', async () => {
+test('Persona prompt stays in AILIS persona and exposes only system TaskAgent handoff', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-persona-orchestrator-'));
     const llmServer = await createScriptedChatCompletionsServer(() => ({
         action: 'final',
@@ -607,16 +595,11 @@ test('Persona orchestrator prompt stays in AILIS persona and exposes Codex colla
         assert.match(llmServer.calls[0].system, /可爱的虚拟助手，名字固定为AILIS/);
         assert.match(llmServer.calls[0].system, /关系表达协议/);
         assert.match(llmServer.calls[0].system, /authoritative host clock/);
-        assert.match(llmServer.calls[0].system, /without expanding the requested scope/);
+        assert.match(llmServer.calls[0].system, /call handoff_task exactly once/);
+        assert.match(llmServer.calls[0].system, /Do not expand the scope/);
+        assert.match(llmServer.calls[0].system, /TaskResult packet is the factual boundary/);
         const toolNames = (llmServer.calls[0].payload.tools || []).map((tool) => tool.function?.name || tool.name);
-        assert.deepEqual(toolNames, [
-            'task_results',
-            'spawn_agent',
-            'followup_task',
-            'wait_agent',
-            'list_agents',
-            'close_agent'
-        ]);
+        assert.deepEqual(toolNames, ['handoff_task']);
         const contextPayload = parseModelContextPayload(llmServer.calls[0]);
         assert.match(contextPayload.memory_context || '', /AILIS Persona 记忆快照/);
         assert.equal(contextPayload.capability_catalog, undefined);
@@ -637,7 +620,96 @@ test('Persona orchestrator prompt stays in AILIS persona and exposes Codex colla
     }
 });
 
-test('Persona receives a TaskAgent completion through the Codex-style mailbox', async () => {
+test('Persona hands one exact request to the system TaskAgent and renders its compact result', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-system-task-handoff-'));
+    const llmServer = await createScriptedChatCompletionsServer(({ decisionCount }) => {
+        if (decisionCount === 1) {
+            return {
+                action: 'tool',
+                summary: '开始处理。',
+                tool_call: {
+                    tool: 'handoff_task',
+                    args: {
+                        message: '核对官方资料并只给出类名。',
+                        continuation: 'auto'
+                    }
+                }
+            };
+        }
+        return {
+            action: 'final',
+            final_answer: '核对完成，答案是 BaseLabelPropagation。'
+        };
+    });
+    const gateway = new AILISGateway({
+        port: 0,
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit')
+    });
+    const taskCalls = [];
+    gateway.taskAgentHarness.executeTaskAgent = async (payload) => {
+        taskCalls.push(payload);
+        return {
+            ok: true,
+            status: 'completed',
+            runId: payload.agent.childRunId,
+            displayText: 'BaseLabelPropagation',
+            steps: [{ private: 'not model visible' }],
+            taskRunHandoff: {
+                status: 'completed',
+                finalAnswer: 'BaseLabelPropagation',
+                partialAnswer: '',
+                sourceRefs: [{ ref_id: 'source-1', title: 'Changelog', url: 'https://example.test/changelog' }],
+                collectedData: [],
+                traceRef: payload.agent.childRunId,
+                resume: { contextManagerCheckpoint: { private: true }, checkpointAvailable: true }
+            }
+        };
+    };
+
+    try {
+        const status = await gateway.start();
+        const result = await runAgent(status.url, {
+            sessionId: 'system-task-handoff-test',
+            message: '核对官方资料并只给出类名。',
+            agentLoop: 'llm',
+            maxAgentSteps: 4,
+            llmSettings: {
+                provider: 'openai-compatible',
+                baseUrl: llmServer.url,
+                apiKey: 'test-key',
+                model: 'mock-system-task-handoff',
+                temperature: 0,
+                timeoutMs: 10000
+            },
+            context: {
+                workspace: workspaceRoot,
+                agentLoop: 'llm',
+                directToolExecutor: true,
+                maxAgentSteps: 4,
+                agentRole: 'persona_orchestrator'
+            }
+        });
+
+        assert.equal(result.body.ok, true, JSON.stringify(result.body));
+        assert.equal(result.body.displayText, '核对完成，答案是 BaseLabelPropagation。');
+        assert.equal(taskCalls.length, 1);
+        assert.equal(taskCalls[0].agent.task, '核对官方资料并只给出类名。');
+        assert.equal(taskCalls[0].context.originalUserGoal, '核对官方资料并只给出类名。');
+        assert.equal(llmServer.calls.length, 2);
+        const secondPayload = JSON.stringify(llmServer.calls[1].payload);
+        assert.match(secondPayload, /ailis\.task_result\.v1/);
+        assert.match(secondPayload, /BaseLabelPropagation/);
+        assert.doesNotMatch(secondPayload, /not model visible|\"private\":true/);
+    } finally {
+        await gateway.stop();
+        await llmServer.close();
+        await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
+});
+
+test.skip('legacy Persona mailbox transport is replaced by system handoff', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-persona-handoff-once-'));
     const llmServer = await createScriptedChatCompletionsServer(({ decisionCount }) => {
         if (decisionCount === 1) {
@@ -760,7 +832,7 @@ test('Persona receives a TaskAgent completion through the Codex-style mailbox', 
     }
 });
 
-test('Persona finalizes a completed TaskAgent result at the round budget without leaking tool protocol', async () => {
+test.skip('legacy Persona round-budget mailbox finalization is replaced by system handoff', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-persona-budget-finalization-'));
     const llmServer = await createScriptedChatCompletionsServer(({ decisionCount }) => {
         if (decisionCount === 1) {
@@ -864,7 +936,7 @@ test('Persona finalizes a completed TaskAgent result at the round budget without
     }
 });
 
-test('Persona defers an early final until its live TaskAgent result reaches the mailbox', async () => {
+test.skip('legacy Persona live-child settlement is replaced by blocking system handoff', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-persona-early-final-'));
     const llmServer = await createScriptedChatCompletionsServer(({ decisionCount }) => {
         if (decisionCount === 1) {
@@ -949,7 +1021,7 @@ test('Persona defers an early final until its live TaskAgent result reaches the 
     }
 });
 
-test('Persona routes a renamed supplement spawn into the completed TaskAgent followup', async () => {
+test.skip('legacy renamed spawn deduplication is replaced by Harness continuation state', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-persona-single-owner-'));
     const llmServer = await createScriptedChatCompletionsServer(({ decisionCount }) => {
         if (decisionCount === 1) {
@@ -1850,7 +1922,7 @@ test('Agentic Executor Loop asks confirmation, resumes, observes, and keeps call
             message: '帮我创建一个 planner-output 目录，并写入 README.txt',
             agentLoop: 'llm',
             llmSettings,
-            context: { workspace: workspaceRoot }
+            context: { workspace: workspaceRoot, agentRole: 'task_agent' }
         });
 
         assert.equal(first.body.ok, false, JSON.stringify({
@@ -1876,7 +1948,7 @@ test('Agentic Executor Loop asks confirmation, resumes, observes, and keeps call
             sessionId: 'llm-planner-test',
             message: '确认执行',
             classifyOnly: true,
-            context: { workspace: workspaceRoot }
+            context: { workspace: workspaceRoot, agentRole: 'task_agent' }
         });
         assert.equal(classifyConfirm.body.intent, 'agent_action_confirmation');
         assert.equal(classifyConfirm.body.mode, 'task');
@@ -1887,7 +1959,7 @@ test('Agentic Executor Loop asks confirmation, resumes, observes, and keeps call
             message: 'api direct confirm',
             confirmApprovalId: first.body.approvalId,
             llmSettings,
-            context: { workspace: workspaceRoot }
+            context: { workspace: workspaceRoot, agentRole: 'task_agent' }
         });
         assert.equal(directWithoutApproval.body.status, 'needs_approval');
 
@@ -1895,15 +1967,15 @@ test('Agentic Executor Loop asks confirmation, resumes, observes, and keeps call
             sessionId: 'llm-planner-test',
             message: '确认执行',
             llmSettings,
-            context: { workspace: workspaceRoot }
+            context: { workspace: workspaceRoot, agentRole: 'task_agent' }
         });
         assert.equal(confirmed.body.ok, true, confirmed.body.displayText);
         assert.equal(confirmed.body.status, 'completed');
         assert.equal(confirmed.body.planner, 'llm-agentic-executor');
-        assert.equal(confirmed.body.steps.length, 3);
+        assert.equal(confirmed.body.steps.length, 2);
         assert.ok(confirmed.body.events.length >= 6);
         assert.match(confirmed.body.displayText, /\*\*(Agentic Executor|任务执行流程) 已完成\*\*/);
-        assert.match(confirmed.body.displayText, /- 已读取复核通过/);
+        assert.match(confirmed.body.displayText, /README\.txt 已创建/);
 
         const text = await fs.readFile(path.join(workspaceRoot, 'planner-output', 'README.txt'), 'utf8');
         assert.match(text, /Agentic Executor OK/);
@@ -1952,7 +2024,7 @@ test('Agentic Executor restores pending approval from durable store after Gatewa
             message: '帮我创建一个 planner-output 目录，并写入 README.txt',
             agentLoop: 'llm',
             llmSettings,
-            context: { workspace: workspaceRoot }
+            context: { workspace: workspaceRoot, agentRole: 'task_agent' }
         });
         assert.equal(first.body.status, 'needs_approval');
         const approvalId = first.body.approvalId;
@@ -2266,13 +2338,13 @@ test('Agentic Executor max-step fallback does not expose raw tool logs to the us
     await fs.writeFile(path.join(workspaceRoot, 'note.txt'), 'secret-ish line\n'.repeat(80), 'utf8');
     const llmServer = await createScriptedChatCompletionsServer(() => ({
         mode: 'task',
-        intent: 'read_until_limit',
-        summary: '检查本地 note 文件',
+        intent: 'discover_until_limit',
+        summary: '查找本地文件读取能力',
         action: 'tool',
         tool_call: {
-            tool: 'read',
-            title: '读取 note.txt',
-            args: { path: 'note.txt' }
+            tool: 'tool_search',
+            title: '查找文件读取工具',
+            args: { query: 'read local text file' }
         }
     }));
     const llmSettings = {
@@ -2298,7 +2370,7 @@ test('Agentic Executor max-step fallback does not expose raw tool logs to the us
             agentLoop: 'llm',
             maxAgentSteps: 1,
             llmSettings,
-            context: { workspace: workspaceRoot }
+            context: { workspace: workspaceRoot, agentRole: 'task_agent' }
         });
         assert.equal(result.body.ok, false);
         assert.equal(result.body.status, 'max_steps_reached');
@@ -2419,7 +2491,8 @@ test('Agentic Executor feeds invalid decisions back as observations instead of s
             maxAgentSteps: 3,
             llmSettings,
             context: {
-                workspace: workspaceRoot
+                workspace: workspaceRoot,
+                agentRole: 'task_agent'
             }
         });
 
@@ -2579,6 +2652,19 @@ test('Agentic Executor feeds tool results back through Responses model input ite
             return {
                 mode: 'task',
                 intent: 'research_reading',
+                summary: '查找本地文件读取能力',
+                action: 'tool',
+                tool_call: {
+                    tool: 'tool_search',
+                    title: '查找文件读取工具',
+                    args: { query: 'read local markdown file' }
+                }
+            };
+        }
+        if (decisionCount === 2) {
+            return {
+                mode: 'task',
+                intent: 'research_reading',
                 summary: '补齐论文资料证据',
                 action: 'tool',
                 tool_call: {
@@ -2620,33 +2706,36 @@ test('Agentic Executor feeds tool results back through Responses model input ite
             maxAgentSteps: 4,
             llmSettings,
             context: {
-                workspace: workspaceRoot
+                workspace: workspaceRoot,
+                agentRole: 'task_agent'
             }
         });
 
         assert.equal(result.body.ok, true, result.body.displayText);
         assert.equal(result.body.status, 'completed');
-        assert.equal(result.body.steps.length, 1);
+        assert.ok(result.body.steps.length >= 2);
         assert.match(result.body.displayText, /memory stream|reflection|planning|retrieval/);
-        assert.equal(llmServer.calls.length, 2);
-        const secondMessages = JSON.stringify(llmServer.calls[1].payload.messages);
-        assert.match(secondMessages, /tool_calls/);
-        assert.match(secondMessages, /tool_call_id/);
-        assert.match(secondMessages, /memory stream|reflection|planning|retrieval/);
-        assert.doesNotMatch(secondMessages, /runtime_diagnostics/);
+        assert.ok(llmServer.calls.length >= 3);
+        const finalMessages = JSON.stringify(llmServer.calls.at(-1).payload.messages);
+        assert.match(finalMessages, /tool_calls/);
+        assert.match(finalMessages, /tool_call_id/);
+        assert.match(finalMessages, /memory stream|reflection|planning|retrieval/);
+        assert.doesNotMatch(finalMessages, /runtime_diagnostics/);
         const transcript = await gateway.runtime.readTranscript(result.body.runId, 100);
         const snapshots = transcript.items.filter((item) => item.type === 'agent.context_snapshot');
-        assert.equal(snapshots.length, 2);
+        assert.equal(snapshots.length, 3);
         assert.equal(snapshots[0].payload.model_input_request.stats.context_history_items, 2);
         assert.equal(snapshots[1].payload.model_input_request.stats.context_history_items, 4);
+        assert.equal(snapshots[2].payload.model_input_request.stats.context_history_items, 6);
         assert.equal(snapshots[0].payload.context_manager_checkpoint?.items.length, 2);
         assert.equal(snapshots[1].payload.context_manager_checkpoint?.items.length, 4);
+        assert.equal(snapshots[2].payload.context_manager_checkpoint?.items.length, 6);
         assert.deepEqual(
-            snapshots[1].payload.context_manager_checkpoint.items.map((item) => item.type).slice(-2),
+            snapshots[2].payload.context_manager_checkpoint.items.map((item) => item.type).slice(-2),
             ['function_call', 'function_call_output']
         );
         assert.deepEqual(
-            snapshots[1].payload.model_input_request.input.map((item) => item.type).slice(-2),
+            snapshots[2].payload.model_input_request.input.map((item) => item.type).slice(-2),
             ['function_call', 'function_call_output']
         );
     } finally {

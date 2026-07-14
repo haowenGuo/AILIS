@@ -80,6 +80,7 @@ const {
 } = require('./ailis-evidence-artifacts.cjs');
 
 const DEFAULT_RUN_TIMEOUT_MS = 90000;
+const DEFAULT_TASK_HANDOFF_TIMEOUT_MS = 15 * 60 * 1000;
 const MAX_RESULT_PREVIEW_CHARS = 2600;
 const STRUCTURED_TOOL_RESULT_PREVIEW_CHARS = 12000;
 const MAX_PROMPT_PROGRESS_CHARS = 700;
@@ -3361,18 +3362,13 @@ function buildDeferredCapabilityIndexEntry(entry = {}, lane = 'tools') {
 function buildAgentCapabilityCatalog({ compact = false, role = 'task_agent' } = {}) {
     if (isPersonaOrchestratorRole(role)) {
         return {
-            model: 'persona_orchestrator_capability_index',
-            note: 'Main AILIS keeps persona, relationship memory, and user-facing conversation. Reuse prior public results through task_results; use the Codex collaboration tools only when concrete execution is still required.',
+            model: 'persona_capability_index',
+            note: 'AILIS owns persona, relationship memory, and user-facing conversation. Concrete task execution is handed to the system TaskAgent through one blocking handoff; the Harness owns its lifecycle and context.',
             tools: [
                 {
-                    id: 'task_results',
-                    label: 'Prior public task results',
-                    summary: 'Search or read reusable public results without rerunning work.'
-                },
-                {
-                    id: 'spawn_agent',
-                    label: 'Spawn Agent',
-                    summary: 'Spawn a persistent child Agent thread; completion arrives through the parent mailbox.'
+                    id: 'handoff_task',
+                    label: 'System TaskAgent handoff',
+                    summary: 'Pass the exact user request to the persistent system TaskAgent and receive one compact result packet.'
                 }
             ]
         };
@@ -3383,9 +3379,6 @@ function buildAgentCapabilityCatalog({ compact = false, role = 'task_agent' } = 
             note: 'Compact local-model capability index. Use tool_search or load_context to discover detailed skills/tools/MCP contracts only when the current user goal truly needs them.',
             core_tools: [
                 'tool_search',
-                'spawn_agent',
-                'followup_task',
-                'wait_agent',
                 'read',
                 'write',
                 'exec',
@@ -4558,6 +4551,7 @@ function agentStepNeedsConfirmation(step) {
         'web_search',
         'web_research',
         'tool_search',
+        'handoff_task',
         'output_read',
         'output_tail',
         'output_search',
@@ -5700,19 +5694,24 @@ function canonicalDirectToolId(value = '') {
     return parsedMcp?.id || normalized;
 }
 
-const CODEX_COLLABORATION_TOOL_IDS = Object.freeze([
+const PERSONA_HANDOFF_TOOL_ID = 'handoff_task';
+const LEGACY_COLLABORATION_TOOL_IDS = Object.freeze([
     'spawn_agent',
     'followup_task',
     'wait_agent',
     'list_agents',
     'close_agent'
 ]);
+const TASK_TRANSPORT_TOOL_IDS = Object.freeze([
+    PERSONA_HANDOFF_TOOL_ID,
+    ...LEGACY_COLLABORATION_TOOL_IDS
+]);
 
 function isCollaborationTool(stepOrTool = '') {
     const toolId = canonicalDirectToolId(
         typeof stepOrTool === 'string' ? stepOrTool : stepOrTool?.tool
     );
-    return CODEX_COLLABORATION_TOOL_IDS.includes(toolId);
+    return TASK_TRANSPORT_TOOL_IDS.includes(toolId);
 }
 
 function buildPersonaTaskAgentHandoffDisplayText({
@@ -5913,19 +5912,13 @@ function buildFinalAnswerNativeToolSpec() {
     });
 }
 
-function buildPersonaCollaborationSpecs(gateway) {
-    return CODEX_COLLABORATION_TOOL_IDS
-        .map((toolId) => gateway?.gatewayToolRuntimeRegistry?.definition?.(toolId)?.spec)
-        .filter(Boolean);
-}
-
 function buildAgentDirectToolSpecs(gateway, { stepResults = [], requestContext = {}, exactAnswerMode = false } = {}) {
     if (requestContext.directToolExecutor === false || requestContext.nativeDirectTools === false) {
         return [];
     }
-    const taskResultsSpec = gateway?.gatewayToolRuntimeRegistry?.definition?.('task_results')?.spec;
     if (isPersonaOrchestratorRole(resolveAgentRuntimeRole({}, requestContext))) {
-        return [taskResultsSpec, ...buildPersonaCollaborationSpecs(gateway)].filter(Boolean);
+        const handoffSpec = gateway?.gatewayToolRuntimeRegistry?.definition?.(PERSONA_HANDOFF_TOOL_ID)?.spec;
+        return handoffSpec ? [handoffSpec] : [];
     }
     const specs = [];
     const seen = new Set();
@@ -5933,7 +5926,12 @@ function buildAgentDirectToolSpecs(gateway, { stepResults = [], requestContext =
     const modelVisibleSpecs = gateway?.gatewayToolRuntimeRegistry?.modelVisibleSpecs?.() || [];
     const suppressedCoreTools = collectTemporarilySuppressedCoreDirectTools(stepResults, requestContext);
     for (const spec of modelVisibleSpecs) {
-        if (suppressedCoreTools.has(canonicalDirectToolId(spec.name || spec.function?.name))) {
+        const toolId = canonicalDirectToolId(spec.name || spec.function?.name);
+        if (
+            toolId === PERSONA_HANDOFF_TOOL_ID ||
+            LEGACY_COLLABORATION_TOOL_IDS.includes(toolId) ||
+            suppressedCoreTools.has(toolId)
+        ) {
             continue;
         }
         pushUniqueNativeToolSpec(specs, seen, spec);
@@ -6840,15 +6838,13 @@ function buildLlmAgentDirectToolPrompt({
     const responseProtocolInstruction = 'Use assistant messages for user-visible text and native function calls for tools. Never print a custom JSON decision object, tool-call markup, DSML, or other internal protocol as user-visible text.';
     const personaRuntimeInstructions = [
         responseProtocolInstruction,
-        'You are the user-facing AILIS persona. Keep ordinary conversation natural and answer it directly; do not let task-runner instructions or internal terminology make the tone mechanical.',
+        'You are the only user-facing AILIS persona. Keep ordinary conversation natural and answer it directly; do not let task-execution instructions or internal terminology enter your personality, relationship memory, or visible reply.',
         'The runtime_environment object is the authoritative host clock. Use its current_date, current_time, timezone, and utc_offset instead of assuming the training-data date.',
         'For facts that may have changed, use fresh evidence already present in the conversation or verify them through TaskAgent. Do not present pretrained knowledge as current fact when freshness matters.',
-        'task_results is a read-only library of completed public work. Its output is candidate context, and you decide whether it is relevant and sufficient.',
-        'spawn_agent creates a persistent TaskAgent with a canonical task_name and returns immediately. Pass the user\'s actual task, relevant corrections, and already-known evidence without expanding the requested scope or inventing stricter acceptance criteria.',
-        'A completed subagent_notification contains the TaskAgent final answer in status.completed. Integrate that result into the user-facing answer as soon as it supports the original request; wait_agent itself only synchronizes the mailbox and does not contain the child answer.',
-        'A completed subagent_notification also carries task_result with the authoritative TaskAgent answer, source_refs, and evidence_boundary. You may rewrite tone and presentation, but you must not add a name, number, quote, claim, or conclusion that is absent from task_result.final_answer, task_result.partial_answer, or its cited sources. If the result is insufficient, continue the same Agent with followup_task or state the remaining uncertainty.',
-        'If the completed result still lacks one concrete required field, call followup_task with that notification\'s agent_path. This continues the same TaskAgent context and evidence. Never create a new task_name merely to supplement the same user request.',
-        'Use list_agents when you need to recover a canonical task_name. Use close_agent only when the persistent TaskAgent is no longer needed.',
+        'When the user asks for concrete task execution that cannot be answered safely from the visible conversation, call handoff_task exactly once with message equal to the user\'s actual current request. Do not expand the scope, invent stricter acceptance criteria, create a task name, or write a hidden subtask plan into message.',
+        'handoff_task blocks while the system Harness runs or resumes the single TaskAgent. You do not create, wait for, resume, list, or close agents. After the tool returns, render its TaskResult packet instead of calling another orchestration tool.',
+        'Use continuation=continue only when the user explicitly continues, corrects, or supplements the previous task; use continuation=new for an explicit unrelated task; otherwise use auto and let lifecycle state decide.',
+        'The TaskResult packet is the factual boundary. You may rewrite tone and presentation, but you must not add a name, number, quote, link, claim, or conclusion absent from final_answer, partial_answer, source_refs, or the visible conversation. If status is incomplete, explain the concrete unresolved field naturally instead of silently starting another execution.',
         'Never mention TaskAgent, subagent, worker, handoff, capsule, or internal orchestration to the user.',
         'Only call tools present in the current tools array. Do not mention tool schemas, runtime state, prompt rules, or orchestration details in an ordinary conversational reply.'
     ];
@@ -6867,7 +6863,6 @@ function buildLlmAgentDirectToolPrompt({
         'Attached files are staged inside the current workspace before TaskAgent starts. Always use the staged attached_files path. For PDF, Office, image, audio, archive, or other structured/binary files, use tool_search once for the exact dedicated reader/transcriber/vision capability and call that tool; do not spend the task budget installing ad-hoc parsers when a dedicated tool is available.',
         'For data reasoning tasks, use code as a calculator and verifier: write scripts that parse the source file, compute the needed result, and print a short answer plus compact evidence. Do not write scripts whose main purpose is to dump large files, whole spreadsheets, logs, or documents back into model context.',
         'For long-running work, you may attach progress_note to a tool call or include a short public progress sentence only at meaningful milestones: plan changed, key evidence found, strategy changed after failure, blocker/recovery identified, or evidence is sufficient and you are preparing the final answer. Leave progress_note empty for routine tool calls. Do not expose raw JSON, hidden reasoning, internal IDs, stack traces, token counts, or generic "I am thinking" text.',
-        'When collaboration tools are exposed, spawn_agent creates an independent Agent thread, followup_task continues it, and wait_agent waits for its mailbox notification. Do not create duplicate threads for the same unresolved work.',
         'Tool outputs provide observations and mechanical transport metadata, not a decision about whether the user task is complete. Judge sufficiency from the original task and the source content yourself. A Source viewport line range, has-more marker, or <truncated omitted_approx_tokens="..."/> marker describes visible context only; it does not require another call when the visible evidence already supports the answer.',
         'When exec output is truncated, use the visible outputId with output_read/output_tail/output_search to inspect a needed slice. Do not rerun the same command solely to recover truncated text.',
         'Runtime environment and attached file metadata are provided as ordinary user message context items. Use them for path, shell, date, time, and freshness decisions.'
@@ -8426,12 +8421,20 @@ class AILISAgentRunner {
         const agentWaitTimeoutMs = canonicalDirectToolId(step.tool) === 'wait_agent'
             ? Number(step.args?.timeout_ms)
             : 0;
-        const effectiveRequest = agentWaitTimeoutMs > 0
+        const taskHandoffTimeoutMs = canonicalDirectToolId(step.tool) === PERSONA_HANDOFF_TOOL_ID
+            ? Number(
+                  request?.taskHandoffTimeoutMs ||
+                  request?.context?.taskHandoffTimeoutMs ||
+                  DEFAULT_TASK_HANDOFF_TIMEOUT_MS
+              )
+            : 0;
+        const transportTimeoutMs = Math.max(agentWaitTimeoutMs, taskHandoffTimeoutMs);
+        const effectiveRequest = transportTimeoutMs > 0
             ? {
                 ...request,
                 timeoutMs: Math.max(
                     Number(request?.timeoutMs || request?.context?.timeoutMs || DEFAULT_RUN_TIMEOUT_MS),
-                    agentWaitTimeoutMs + 5000
+                    transportTimeoutMs + 5000
                 )
             }
             : request;
@@ -8876,6 +8879,7 @@ class AILISAgentRunner {
         let safetyFinalizationAttempted = false;
         const completedSubagentNotifications = [];
         const initialContextWindow = resolveModelContextWindowTokens(settings, requestContext);
+        const legacyAgentMailboxEnabled = requestContext.enableLegacyAgentMailbox === true;
         const maxLoopDurationMs = firstPositiveNumber([
             request.agentLoopMaxDurationMs,
             requestContext.agentLoopMaxDurationMs,
@@ -8946,7 +8950,7 @@ class AILISAgentRunner {
             if (interruptedBeforeRound) {
                 return interruptedBeforeRound;
             }
-            if (isPersonaOrchestratorRole(agentRuntimeRole) && iteration >= finalizationIteration) {
+            if (legacyAgentMailboxEnabled && isPersonaOrchestratorRole(agentRuntimeRole) && iteration >= finalizationIteration) {
                 const settlement = await this.gateway.runtime?.agent_control?.await_live_children?.({
                     sessionId,
                     agent_path: normalizeText(requestContext.agent_path || requestContext.agentPath, '/root')
@@ -8960,10 +8964,9 @@ class AILISAgentRunner {
                     });
                 }
             }
-            const mailboxItems = this.gateway.runtime?.drain_mailbox_input_items?.({
-                runId,
-                sessionId
-            }) || [];
+            const mailboxItems = legacyAgentMailboxEnabled
+                ? this.gateway.runtime?.drain_mailbox_input_items?.({ runId, sessionId }) || []
+                : [];
             completedSubagentNotifications.push(
                 ...collectCompletedSubagentNotifications(mailboxItems)
             );
@@ -9133,7 +9136,7 @@ class AILISAgentRunner {
                 unresolvedFields,
                 safetyFinalizationReason,
                 toolSummary: isPersonaOrchestratorRole(agentRuntimeRole)
-                    ? 'Persona tool surface: task_results reads completed public results; spawn_agent creates a persistent TaskAgent; wait_agent synchronizes with its mailbox; followup_task continues the same task_name. Internal orchestration must remain invisible to the user.'
+                    ? 'Persona tool surface: handoff_task sends the exact current request to the system TaskAgent and returns one compact TaskResult packet. The Harness owns lifecycle and internal orchestration remains invisible to the user.'
                     : directToolSpecs.length
                         ? `Native direct tools exposed: ${directToolSpecs.map((tool) => tool.name).slice(0, 16).join(', ')}${directToolSpecs.length > 16 ? ', ...' : ''}.`
                         : 'No native tools are exposed in this turn; answer directly if possible.'
@@ -9578,7 +9581,7 @@ class AILISAgentRunner {
             }
 
             if (decision.action === 'final') {
-                if (isPersonaOrchestratorRole(agentRuntimeRole) && iteration < finalizationIteration) {
+                if (legacyAgentMailboxEnabled && isPersonaOrchestratorRole(agentRuntimeRole) && iteration < finalizationIteration) {
                     const settlement = await this.gateway.runtime?.agent_control?.await_live_children?.({
                         sessionId,
                         agent_path: normalizeText(requestContext.agent_path || requestContext.agentPath, '/root')
