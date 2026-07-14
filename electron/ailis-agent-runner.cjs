@@ -5917,6 +5917,12 @@ function buildAgentDirectToolSpecs(gateway, { stepResults = [], requestContext =
         return [];
     }
     if (isPersonaOrchestratorRole(resolveAgentRuntimeRole({}, requestContext))) {
+        const handoffAlreadyAttempted = stepResults.some((stepResult) =>
+            canonicalDirectToolId(stepResult?.tool) === PERSONA_HANDOFF_TOOL_ID
+        );
+        if (handoffAlreadyAttempted) {
+            return [];
+        }
         const handoffSpec = gateway?.gatewayToolRuntimeRegistry?.definition?.(PERSONA_HANDOFF_TOOL_ID)?.spec;
         return handoffSpec ? [handoffSpec] : [];
     }

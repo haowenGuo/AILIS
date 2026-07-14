@@ -76,6 +76,34 @@ test('system TaskAgent handoff preserves the exact request and returns a compact
     assert.equal(JSON.stringify(packet).includes('private'), false);
 });
 
+test('repeated handoff in the same parent run reuses the first TaskAgent result', async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-task-harness-idempotent-'));
+    const calls = [];
+    const harness = new AILISSystemTaskAgentHarness({
+        rootDir,
+        executeTaskAgent: async (payload) => {
+            calls.push(payload);
+            return completedResult({
+                runId: payload.agent.childRunId,
+                answer: 'Single result',
+                checkpoint: { version: 1 }
+            });
+        }
+    });
+    const context = {
+        currentUserMessage: '同一回合只移交一次。',
+        sessionId: 'session-idempotent',
+        runId: 'parent-run-idempotent'
+    };
+
+    const first = await harness.handoff({}, context);
+    const second = await harness.handoff({}, context);
+
+    assert.equal(calls.length, 1);
+    assert.deepEqual(second, first);
+    assert.equal(harness.getStatus().parentRunHandoffCount, 1);
+});
+
 test('explicit continuation resumes the latest TaskAgent checkpoint without replacing the original goal', async () => {
     const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-task-harness-resume-'));
     const calls = [];
@@ -194,5 +222,10 @@ test('Persona and TaskAgent receive disjoint orchestration tool surfaces', () =>
     });
 
     assert.deepEqual(persona.map((spec) => spec.name), ['handoff_task']);
+    const personaAfterHandoff = buildAgentDirectToolSpecs(gateway, {
+        stepResults: [{ tool: 'handoff_task', response: { ok: true, status: 'completed' } }],
+        requestContext: { agentRole: 'persona_orchestrator' }
+    });
+    assert.deepEqual(personaAfterHandoff, []);
     assert.deepEqual(taskAgent.map((spec) => spec.name), ['read']);
 });

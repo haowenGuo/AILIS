@@ -5,6 +5,7 @@ const { randomUUID } = require('crypto');
 const TASK_HARNESS_STATE_VERSION = 1;
 const TASK_RESULT_SCHEMA = 'ailis.task_result.v1';
 const TASK_AGENT_MAX_MODEL_ROUNDS = 7;
+const MAX_PARENT_RUN_HANDOFFS = 256;
 const CONTINUATION_MODES = new Set(['auto', 'continue', 'new']);
 const FINAL_STATUSES = new Set(['completed', 'success', 'succeeded']);
 
@@ -184,6 +185,7 @@ class AILISSystemTaskAgentHarness {
             )
         };
         this.inFlight = new Map();
+        this.parentRunHandoffs = new Map();
     }
 
     persist() {
@@ -238,6 +240,18 @@ class AILISSystemTaskAgentHarness {
             throw new Error('System TaskAgent executor is not available');
         }
         const sessionId = normalizeString(context.sessionId || context.sessionKey, 'main');
+        const parentRunId = normalizeString(context.runId || context.parentRunId);
+        const parentRunKey = parentRunId ? `${sessionId}:${parentRunId}` : '';
+        const existingHandoff = parentRunKey ? this.parentRunHandoffs.get(parentRunKey) : null;
+        if (existingHandoff?.promise) {
+            this.emitEvent('task_agent.handoff.reused', {
+                sessionId,
+                taskId: existingHandoff.taskId,
+                runId: existingHandoff.runId,
+                parentRunId
+            });
+            return await existingHandoff.promise;
+        }
         const requestedContinuation = normalizeString(args.continuation, 'auto').toLowerCase();
         const continuation = CONTINUATION_MODES.has(requestedContinuation) ? requestedContinuation : 'auto';
         const running = this.inFlight.get(sessionId);
@@ -373,6 +387,16 @@ class AILISSystemTaskAgentHarness {
         })();
         inFlight.promise = runPromise;
         this.inFlight.set(sessionId, inFlight);
+        if (parentRunKey) {
+            this.parentRunHandoffs.set(parentRunKey, {
+                promise: runPromise,
+                taskId: task.taskId,
+                runId: task.latestRunId
+            });
+            while (this.parentRunHandoffs.size > MAX_PARENT_RUN_HANDOFFS) {
+                this.parentRunHandoffs.delete(this.parentRunHandoffs.keys().next().value);
+            }
+        }
         try {
             return await runPromise;
         } finally {
@@ -389,6 +413,7 @@ class AILISSystemTaskAgentHarness {
             statePath: this.statePath,
             sessionCount: Object.keys(this.state.sessions).length,
             inFlightCount: this.inFlight.size,
+            parentRunHandoffCount: this.parentRunHandoffs.size,
             updatedAt: this.state.updatedAt
         };
     }
