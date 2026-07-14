@@ -63,10 +63,30 @@ class AILISAgentClient(AgentClient):
             },
             timeout=self.timeout_seconds,
         )
+        payload: Optional[Dict[str, Any]] = None
+        try:
+            payload = response.json()
+        except ValueError:
+            payload = None
+        if response.status_code >= 400:
+            metrics = payload.get("metrics") if isinstance(payload, dict) else None
+            self.call_stats.append(
+                {
+                    "turn": self.turn,
+                    "duration_ms": round((time.time() - started_at) * 1000),
+                    "history_items": len(normalized),
+                    "history_sha256": history_digest,
+                    "bridge": metrics
+                    or {
+                        "ok": False,
+                        "status": f"http_{response.status_code}",
+                        "usage": {},
+                    },
+                }
+            )
         if response.status_code in (413, 422):
             raise AgentContextLimitException(response.text)
         response.raise_for_status()
-        payload: Optional[Dict[str, Any]] = response.json()
         if not isinstance(payload, dict) or not isinstance(payload.get("content"), str):
             raise RuntimeError(f"Invalid AILIS bridge response: {payload!r}")
         self.call_stats.append(

@@ -4,6 +4,11 @@ import path from 'node:path';
 import process from 'node:process';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import {
+    AGENTBENCH_STAGE_POLICY,
+    evaluateStageGate
+} from '../evals/agentbench_official/stage-policy.mjs';
+import { parseAgentBenchStageArgs } from '../evals/agentbench_official/stage-options.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const JOB_ID = 'ailis-agentbench-v02-full-20260714';
@@ -38,6 +43,15 @@ const TASKS = [
     { task: 'kg-dev', environment: 'KG', worker: 'host', provision: 'kg' },
     { task: 'kg-std', environment: 'KG', worker: 'host', provision: 'kg' }
 ];
+
+const STAGE_OPTIONS = parseAgentBenchStageArgs(process.argv.slice(2), TASKS.map(({ task }) => task));
+const SELECTED_DEFINITION = TASKS.find((definition) => definition.task === STAGE_OPTIONS.task);
+const SELECTED_TASKS = [SELECTED_DEFINITION];
+const STAGE_RUN_ID = `${JOB_ID}-${STAGE_OPTIONS.stage}`;
+const STAGE_REPORT = path.join(
+    JOB_DIR,
+    `stage-report-${STAGE_OPTIONS.stage}-${STAGE_OPTIONS.task}.md`
+);
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const now = () => new Date().toISOString();
@@ -342,17 +356,26 @@ async function ensureWorker(definition) {
 }
 
 function progressFile(task) {
-    return path.join(RESULTS_DIR, `${JOB_ID}.${task}.progress.jsonl`);
+    return path.join(RESULTS_DIR, `${STAGE_RUN_ID}.${task}.progress.jsonl`);
 }
 
 function summaryFile(task) {
-    return path.join(RESULTS_DIR, `${JOB_ID}.${task}.summary.json`);
+    return path.join(RESULTS_DIR, `${STAGE_RUN_ID}.${task}.summary.json`);
 }
 
 function readRecords(task) {
     const file = progressFile(task);
     if (!fs.existsSync(file)) return [];
-    return fs.readFileSync(file, 'utf8').split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+    const latest = new Map();
+    for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/).filter(Boolean)) {
+        const record = JSON.parse(line);
+        latest.set(JSON.stringify(record.index), record);
+    }
+    return [...latest.values()];
+}
+
+function summaryAccepted(summary) {
+    return evaluateStageGate(summary, STAGE_OPTIONS.stage).passed;
 }
 
 function usageFor(records) {
@@ -401,11 +424,21 @@ async function waitForExistingRunner(task) {
 
 async function runTask(definition) {
     const existingSummary = readJson(summaryFile(definition.task));
-    if (existingSummary?.completed_records === existingSummary?.selected && existingSummary?.official_score) return existingSummary;
+    if (summaryAccepted(existingSummary)) return existingSummary;
     await waitForExistingRunner(definition.task);
     let summary = readJson(summaryFile(definition.task));
-    if (summary?.completed_records === summary?.selected && summary?.official_score) return summary;
+    if (summaryAccepted(summary)) return summary;
     const hostIp = await wslHostIp();
+    const targetSamples = await taskTarget(definition.task);
+    const stagePolicy = AGENTBENCH_STAGE_POLICY[STAGE_OPTIONS.stage];
+    const runtimeBudget = {
+        calls: stagePolicy.maxCalls
+            || Math.ceil(Number(stagePolicy.maxAverageCalls || 0) * targetSamples),
+        tokens: stagePolicy.maxTokens
+            || Math.ceil(Number(stagePolicy.maxAverageTokens || 0) * targetSamples),
+        durationMs: stagePolicy.maxDurationMs
+            || Math.ceil(Number(stagePolicy.maxAverageDurationMs || 0) * targetSamples)
+    };
     const arguments_ = [
         '-d', DISTRO,
         '--cd', WSL_BENCHMARK_ROOT,
@@ -415,10 +448,22 @@ async function runTask(definition) {
         '--controller', CONTROLLER_URL,
         '--bridge', `http://${hostIp}:5128/inference`,
         '--output-dir', `${WSL_ROOT}/longrun/jobs/${JOB_ID}/results`,
-        '--run-id', JOB_ID,
+        '--run-id', STAGE_RUN_ID,
         '--timeout-seconds', '180',
         '--retry-errors'
     ];
+    if (STAGE_OPTIONS.limit > 0) {
+        arguments_.push('--limit', String(STAGE_OPTIONS.limit));
+    }
+    for (const [flag, value] of [
+        ['--max-calls', runtimeBudget.calls],
+        ['--max-tokens', runtimeBudget.tokens],
+        ['--max-duration-ms', runtimeBudget.durationMs]
+    ]) {
+        if (Number(value) > 0) {
+            arguments_.push(flag, String(value));
+        }
+    }
     for (let attempt = 1; attempt <= 3; attempt += 1) {
         appendEvent('EVALUATION_STARTED', `Running ${definition.task}, attempt ${attempt}.`);
         const child = startLogged(WSL, arguments_, `${definition.task}.runner`);
@@ -431,7 +476,7 @@ async function runTask(definition) {
                 currentAction: `Running official ${definition.task}`,
                 activeAgentRuns: 1,
                 environmentCompletedSamples: records.length,
-                environmentTargetSamples: await taskTarget(definition.task),
+                environmentTargetSamples: targetSamples,
                 usage,
                 latestArtifactPath: progressFile(definition.task),
                 latestEvidence: `${definition.task}: ${records.length} durable samples, ${usage.total_tokens} tokens`,
@@ -441,7 +486,7 @@ async function runTask(definition) {
         }
         await sleep(3000);
         summary = readJson(summaryFile(definition.task));
-        if (summary?.completed_records === summary?.selected && summary?.official_score) {
+        if (summaryAccepted(summary)) {
             appendEvent('EVALUATION_FINISHED', `Completed official ${definition.task}.`, {
                 artifactPaths: [summaryFile(definition.task)]
             });
@@ -457,7 +502,7 @@ async function runTask(definition) {
 
 function buildReport(summaries) {
     const lines = [
-        '# AILIS Official AgentBench v0.2 Full Evaluation',
+        `# AILIS Official AgentBench v0.2 ${STAGE_OPTIONS.stage} Stage`,
         '',
         `Generated: ${now()}`,
         '',
@@ -477,11 +522,11 @@ function buildReport(summaries) {
         duration += Number(summary.duration_ms || 0);
         lines.push(`| ${summary.task} | ${summary.selected} | ${summary.error_records} | ${summary.usage?.calls || 0} | ${summary.usage?.total_tokens || 0} | ${(Number(summary.duration_ms || 0) / 1000).toFixed(1)} |`);
     }
-    lines.push('', `Completed samples: ${samples}/1360`, `Errors: ${errors}`, `Model calls: ${calls}`, `Total tokens: ${tokens}`, `Cumulative sample time: ${(duration / 1000).toFixed(1)} seconds`, '');
+    lines.push('', `Completed stage samples: ${samples}`, `Errors: ${errors}`, `Model calls: ${calls}`, `Total tokens: ${tokens}`, `Cumulative sample time: ${(duration / 1000).toFixed(1)} seconds`, '');
     for (const summary of summaries) {
         lines.push(`## ${summary.task}`, '', '```json', JSON.stringify(summary.official_score, null, 2), '```', '');
     }
-    fs.writeFileSync(path.join(JOB_DIR, 'report.md'), `${lines.join('\n')}\n`, 'utf8');
+    fs.writeFileSync(STAGE_REPORT, `${lines.join('\n')}\n`, 'utf8');
 }
 
 async function main() {
@@ -497,7 +542,7 @@ async function main() {
     await ensureBridge();
     const summaries = [];
     try {
-        for (const definition of TASKS) {
+        for (const definition of SELECTED_TASKS) {
             if (fs.existsSync(path.join(JOB_DIR, 'stop.flag'))) break;
             updateProjection({
                 status: 'provisioning',
@@ -512,20 +557,20 @@ async function main() {
             summaries.push(summary);
             await stopOwnedWorker();
         }
-        if (summaries.length === TASKS.length) {
+        if (summaries.length === SELECTED_TASKS.length) {
             buildReport(summaries);
             updateProjection({
-                status: 'completed',
+                status: 'stage_completed',
                 completedSamples: summaries.reduce((sum, item) => sum + Number(item.selected || 0), 0),
                 activeAgentRuns: 0,
-                currentAction: 'Official AgentBench v0.2 full evaluation completed',
-                latestArtifactPath: path.join(JOB_DIR, 'report.md'),
-                latestEvidence: 'All official environment summaries are present',
-                nextAction: 'Review and publish the final report',
+                currentAction: `Official AgentBench ${STAGE_OPTIONS.stage} stage completed`,
+                latestArtifactPath: STAGE_REPORT,
+                latestEvidence: `${STAGE_OPTIONS.task} passed the ${STAGE_OPTIONS.stage} stage`,
+                nextAction: 'Review the stage gate before approving a larger run',
                 risk: 'none'
             });
-            appendEvent('JOB_COMPLETED', 'Completed all official AgentBench v0.2 environments.', {
-                artifactPaths: [path.join(JOB_DIR, 'report.md')]
+            appendEvent('STAGE_COMPLETED', `Completed ${STAGE_OPTIONS.stage} for ${STAGE_OPTIONS.task}.`, {
+                artifactPaths: [STAGE_REPORT]
             });
         }
     } catch (error) {

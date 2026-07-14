@@ -111,6 +111,31 @@ function appendJsonLine(file, value) {
     fs.appendFileSync(file, `${JSON.stringify(value)}\n`, 'utf8');
 }
 
+export function assertSuccessfulAgentResult(result) {
+    if (result?.ok === true) return result;
+    const status = normalizeText(result?.status, 'agent_failed');
+    const error = new Error(`AILIS agent inference failed (${status})`);
+    error.statusCode = /network|timeout|unavailable|rate_limit|overload|terminated/i.test(status) ? 503 : 502;
+    error.code = status;
+    throw error;
+}
+
+export function buildFailedInferencePayload(error, usage = {}, durationMs = 0) {
+    return {
+        error: error?.message || String(error),
+        metrics: {
+            ok: false,
+            status: normalizeText(error?.code, 'bridge_error'),
+            duration_ms: Math.max(0, Number(durationMs) || 0),
+            usage: {
+                prompt_tokens: Number(usage?.prompt_tokens || 0),
+                completion_tokens: Number(usage?.completion_tokens || 0),
+                total_tokens: Number(usage?.total_tokens || 0)
+            }
+        }
+    };
+}
+
 export function buildAgentBenchRunRequest(payload, llmSettings) {
     const history = normalizeHistory(payload?.history);
     if (!history.length) throw Object.assign(new Error('history is required'), { statusCode: 400 });
@@ -240,10 +265,12 @@ async function main() {
             return;
         }
         const startedAt = Date.now();
+        let runRequest = null;
         try {
             const payload = await readJsonRequest(request);
-            const runRequest = buildAgentBenchRunRequest(payload, llmSettings);
+            runRequest = buildAgentBenchRunRequest(payload, llmSettings);
             const result = await gateway.runAgent(runRequest);
+            assertSuccessfulAgentResult(result);
             const content = normalizeText(result?.displayText || result?.speechText || result?.message);
             if (!content) throw new Error(`AILIS returned no action (${result?.status || 'unknown'})`);
             writeJson(response, 200, {
@@ -255,9 +282,18 @@ async function main() {
                     usage: usageByRun.get(runRequest.runId) || summarizeUsage(result)
                 }
             });
-            usageByRun.delete(runRequest.runId);
         } catch (error) {
-            writeJson(response, error?.statusCode || 500, { error: error?.message || String(error) });
+            writeJson(
+                response,
+                error?.statusCode || 500,
+                buildFailedInferencePayload(
+                    error,
+                    runRequest ? usageByRun.get(runRequest.runId) : {},
+                    Date.now() - startedAt
+                )
+            );
+        } finally {
+            if (runRequest) usageByRun.delete(runRequest.runId);
         }
     });
     await new Promise((resolve) => server.listen(args.port, args.host, resolve));

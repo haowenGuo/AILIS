@@ -26,6 +26,11 @@ from src.client.task import TaskClient
 from src.typings import TaskOutput
 
 from evals.agentbench_official import AILISAgentClient
+from evals.agentbench_official.records import (
+    budget_violations,
+    is_infrastructure_error,
+    record_quality,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -40,6 +45,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--timeout-seconds", type=int, default=180)
     parser.add_argument("--wait-worker-seconds", type=int, default=600)
     parser.add_argument("--retry-errors", action="store_true")
+    parser.add_argument("--max-calls", type=int, default=0)
+    parser.add_argument("--max-tokens", type=int, default=0)
+    parser.add_argument("--max-duration-ms", type=int, default=0)
+    parser.add_argument("--max-consecutive-infrastructure-errors", type=int, default=3)
     return parser.parse_args()
 
 
@@ -103,9 +112,22 @@ def main() -> None:
         selected = selected[: args.limit]
 
     records = load_records(progress_path)
+
+    def enforce_budget() -> None:
+        violations = budget_violations(
+            list(records.values()),
+            max_calls=args.max_calls,
+            max_tokens=args.max_tokens,
+            max_duration_ms=args.max_duration_ms,
+        )
+        if violations:
+            raise RuntimeError(f"AgentBench stage budget exceeded: {','.join(violations)}")
+
+    enforce_budget()
+    consecutive_infrastructure_errors = 0
     for position, index in enumerate(selected, start=1):
         prior = records.get(json_key(index))
-        if prior and not (args.retry_errors and prior.get("error")):
+        if prior and not (args.retry_errors and is_infrastructure_error(prior)):
             print(f"[{position}/{len(selected)}] {index}: resume-skip", flush=True)
             continue
         agent = AILISAgentClient(
@@ -133,6 +155,16 @@ def main() -> None:
             f"error={result.error or 'none'} turns={len(agent.call_stats)}",
             flush=True,
         )
+        if is_infrastructure_error(record):
+            consecutive_infrastructure_errors += 1
+        else:
+            consecutive_infrastructure_errors = 0
+        if consecutive_infrastructure_errors >= max(1, args.max_consecutive_infrastructure_errors):
+            raise RuntimeError(
+                "AgentBench runner circuit breaker opened after "
+                f"{consecutive_infrastructure_errors} consecutive infrastructure errors"
+            )
+        enforce_budget()
 
     ordered_records = [records[json_key(index)] for index in selected if json_key(index) in records]
     task_outputs: List[TaskOutput] = [
@@ -140,8 +172,15 @@ def main() -> None:
         for record in ordered_records
         if record.get("task_output") is not None
     ]
+    quality = record_quality(ordered_records)
     official_score = None
-    if len(task_outputs) == len(selected) and task_outputs:
+    valid = (
+        len(ordered_records) == len(selected)
+        and quality["infrastructure_errors"] == 0
+        and bool(task_outputs)
+        and len(task_outputs) == len(selected)
+    )
+    if valid:
         wait_for_worker(client, args.wait_worker_seconds)
         official_score = client.calculate_overall(task_outputs)
     summary = {
@@ -151,7 +190,9 @@ def main() -> None:
         "official_controller": args.controller,
         "selected": len(selected),
         "completed_records": len(ordered_records),
-        "error_records": sum(1 for item in ordered_records if item.get("error")),
+        "error_records": quality["infrastructure_errors"],
+        "valid": valid and official_score is not None,
+        "quality": quality,
         "duration_ms": sum(int(item.get("duration_ms") or 0) for item in ordered_records),
         "usage": sum_usage(ordered_records),
         "official_score": official_score,

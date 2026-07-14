@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { buildAgentBenchRunRequest } from '../scripts/serve-ailis-agentbench.mjs';
+import {
+    assertSuccessfulAgentResult,
+    buildFailedInferencePayload,
+    buildAgentBenchRunRequest
+} from '../scripts/serve-ailis-agentbench.mjs';
 
 const llmSettings = {
     provider: 'openai-compatible',
@@ -57,4 +61,31 @@ test('official AgentBench bridge normalizes environment agent roles', () => {
     }, llmSettings);
     assert.match(request.message, /AGENT:\nprevious action/);
     assert.match(request.message, /USER:\nobservation/);
+});
+
+test('official AgentBench bridge rejects transient model failures as infrastructure errors', () => {
+    assert.throws(
+        () => assertSuccessfulAgentResult({ ok: false, status: 'transient_network_error' }),
+        (error) => error.statusCode === 503 && error.code === 'transient_network_error'
+    );
+});
+
+test('official AgentBench bridge accepts successful model results', () => {
+    const result = { ok: true, status: 'completed', displayText: 'Action: Answer' };
+    assert.equal(assertSuccessfulAgentResult(result), result);
+});
+
+test('official AgentBench bridge preserves failed-call usage for budget accounting', () => {
+    const error = Object.assign(new Error('provider unavailable'), {
+        code: 'transient_network_error'
+    });
+    assert.deepEqual(buildFailedInferencePayload(error, {
+        prompt_tokens: 120,
+        completion_tokens: 5,
+        total_tokens: 125
+    }, 900), {
+        error: 'provider unavailable',
+        metrics: { ok: false, status: 'transient_network_error', duration_ms: 900,
+            usage: { prompt_tokens: 120, completion_tokens: 5, total_tokens: 125 } }
+    });
 });
