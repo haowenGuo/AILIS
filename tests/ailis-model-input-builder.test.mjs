@@ -384,9 +384,11 @@ test('web_run open preserves discovered document links for the next open call', 
             status: 'completed',
             result: {
                 structuredContent: {
-                    observedRelevantLinks: [{ kind: 'pdf', text: 'PDF', url: pdfUrl }],
+                    ref_id: 'turn1view0',
+                    observedRelevantLinks: [{ id: 1, kind: 'pdf', text: 'PDF', url: pdfUrl }],
                     sourceWindow: {
                         type: 'source_viewport',
+                        ref_id: 'turn1view0',
                         action: { type: 'open_page', url: 'https://example.test/article', lineno: 1 },
                         url: 'https://example.test/article',
                         totalLines: 2,
@@ -401,8 +403,8 @@ test('web_run open preserves discovered document links for the next open call', 
 
     const text = FunctionCallOutputPayload.toText(items[2].output);
     assert.match(text, /Links:/);
-    assert.match(text, /1\. PDF/);
-    assert.match(text, /Open page: web_run \{"open":\[\{"ref_id":"https:\/\/example\.test\/article\.pdf","lineno":1\}\]\}/);
+    assert.match(text, /1\. \[1\] PDF/);
+    assert.match(text, /Click link: web_run \{"click":\[\{"ref_id":"turn1view0","id":1\}\]\}/);
     assert.doesNotMatch(text, /Open page: web_fetch/);
 });
 

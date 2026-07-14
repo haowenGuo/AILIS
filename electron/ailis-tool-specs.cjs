@@ -341,11 +341,14 @@ function applyModelFacingSchemaOverrides(toolId = '', schema = {}) {
 }
 
 function createModelFacingParameters(definition = {}, contract = null) {
-    const schema = compactToolSchema(cloneJson(contract?.schema || {
+    const sourceSchema = cloneJson(contract?.schema || {
         type: 'object',
         additionalProperties: true,
         properties: {}
-    }));
+    });
+    const schema = definition.parseToolInputSchemaWithoutCompaction === true
+        ? sourceSchema
+        : compactToolSchema(sourceSchema);
     if (definition.id === 'mcp_bridge') {
         const action = schema?.properties?.action;
         if (Array.isArray(action?.enum)) {

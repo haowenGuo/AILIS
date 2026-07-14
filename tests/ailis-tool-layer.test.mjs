@@ -450,23 +450,31 @@ test('AILIS Gateway exposes a small Responses-compatible core surface by default
         'exec',
         'followup_task',
         'list_agents',
-        'read',
         'request_permissions',
         'spawn_agent',
         'tool_search',
         'update_plan',
         'wait_agent',
+        'web_run',
         'write'
     ].sort());
-    for (const expected of ['tool_search', 'update_plan', 'read', 'write', 'exec', 'apply_patch', 'request_permissions', 'spawn_agent', 'followup_task', 'wait_agent', 'list_agents', 'close_agent']) {
+    for (const expected of ['web_run', 'tool_search', 'update_plan', 'write', 'exec', 'apply_patch', 'request_permissions', 'spawn_agent', 'followup_task', 'wait_agent', 'list_agents', 'close_agent']) {
         assert.ok(directNames.includes(expected), `${expected} should be a core direct tool`);
     }
-    for (const deferred of ['artifact_tools', 'artifact_query', 'github_pages', 'mcp_bridge', 'computer']) {
+    for (const deferred of ['read', 'artifact_tools', 'artifact_query', 'github_pages', 'mcp_bridge', 'computer']) {
         assert.equal(directNames.includes(deferred), false, `${deferred} should be loaded through tool_search`);
     }
-    assert.ok(directSpecs.every((tool) => tool.strict === true), 'core direct tools should use strict schemas');
+    assert.ok(
+        directSpecs.filter((tool) => tool.name !== 'web_run').every((tool) => tool.strict === true),
+        'local core direct tools should use strict schemas'
+    );
+    assert.notEqual(directSpecs.find((tool) => tool.name === 'web_run').strict, true);
     assert.deepEqual(directSpecs.find((tool) => tool.name === 'tool_search').parameters.required, ['query']);
     assert.deepEqual(directSpecs.find((tool) => tool.name === 'exec').parameters.required, ['command']);
+    const deferredRead = gateway.gatewayToolRuntimeRegistry.definition('read');
+    assert.equal(deferredRead.exposure, 'deferred');
+    assert.match(deferredRead.description, /local filesystem/i);
+    assert.match(deferredRead.spec.parameters.properties.path.description, /not accepted|HTTP/i);
     assert.equal(directNames.includes('artifact_compute'), false, 'artifact_compute should stay hidden from model-facing tool surfaces');
 
     const initialSpecs = buildAgentDirectToolSpecs(gateway, {
@@ -1069,6 +1077,33 @@ test('AILIS runtime budget preserves primary tool text beyond structured string 
     assert.equal(compacted.content[0].originalTextChars, text.length);
     assert.equal(compacted.content[0].truncated, false);
     assert.equal(compacted.details.stdout.length < text.length, true);
+});
+
+test('AILIS runtime budget preserves every line in a bounded source viewport', () => {
+    const lines = Array.from({ length: 60 }, (_, index) => ({
+        lineno: 330 + index,
+        text: index === 22
+            ? 'Cuba (1)'
+            : index === 47
+                ? 'Panama (1)'
+                : `country row ${index + 1}`
+    }));
+    const compacted = compactToolResultForModel({
+        content: [{ type: 'text', text: 'Find results' }],
+        structuredContent: {
+            sourceWindow: {
+                type: 'source_viewport',
+                lineStart: 330,
+                lineEnd: 389,
+                lines
+            }
+        }
+    });
+
+    assert.equal(compacted.structuredContent.sourceWindow.lines.length, 60);
+    assert.equal(compacted.structuredContent.sourceWindow.lines[22].text, 'Cuba (1)');
+    assert.equal(compacted.structuredContent.sourceWindow.lines[47].text, 'Panama (1)');
+    assert.equal(compacted.structuredContent.sourceWindow.lines.some((line) => 'omitted_items' in line), false);
 });
 
 test('AILIS tool routing prefers strict MCP readers on the Codex-style default surface', () => {

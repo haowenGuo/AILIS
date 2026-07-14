@@ -536,15 +536,22 @@ function formatSourceViewportLinks(toolOutput = {}, details = {}) {
     if (!links.length) {
         return '';
     }
+    const sourceRef = normalizeText(details.ref_id || details.sourceWindow?.ref_id || details.source?.ref_id);
+    if (!sourceRef) {
+        return '';
+    }
     const lines = ['Links:'];
     links.slice(0, 8).forEach((link, index) => {
         const url = normalizeText(link.url);
         if (!url) {
             return;
         }
-        lines.push(`${index + 1}. ${link.text || link.title || url}`);
+        const id = Number(link.id) || index + 1;
+        lines.push(`${index + 1}. [${id}] ${link.text || link.title || url}`);
         lines.push(`   URL: ${url}`);
-        lines.push(`   ${formatWebRunOpenPage({ url })}`);
+        lines.push(`   Click link: web_run ${safeJsonStringify({
+            click: [{ ref_id: sourceRef, id }]
+        }, '{}')}`);
     });
     return lines.length > 1 ? lines.join('\n') : '';
 }

@@ -39,7 +39,7 @@ const OPENCLAW_CORE_TOOL_DEFINITIONS = Object.freeze([
     Object.freeze({
         id: 'read',
         label: 'read',
-        description: 'Read file contents',
+        description: 'Read a local filesystem file. The path must be a local path, not an HTTP(S) URL.',
         sectionId: 'fs',
         profiles: Object.freeze(['coding']),
         includeInOpenClawGroup: false

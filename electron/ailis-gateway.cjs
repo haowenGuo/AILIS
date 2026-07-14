@@ -36,7 +36,6 @@ const { AILISUserProfileCurator } = require('./ailis-user-profile-curator.cjs');
 const { AILISPreferenceState } = require('./ailis-preference-state.cjs');
 const { AILISTaskResultCapsuleStore } = require('./ailis-task-result-capsules.cjs');
 const { AilisSelfEvolutionRuntime } = require('./ailis-self-evolution-runtime.cjs');
-const { AILISEmberHarness } = require('./ailis-ember-harness.cjs');
 const {
     listToolContracts,
     validateToolContract
@@ -125,9 +124,8 @@ const LOSSLESS_EVENT_TYPES = new Set([
     'mcp.resource.read.begin',
     'mcp.resource.read.end'
 ]);
-const LOSSLESS_EVENT_PREFIXES = ['approval.', 'subagent.', 'mcp.', 'agent.', 'ember.'];
+const LOSSLESS_EVENT_PREFIXES = ['approval.', 'subagent.', 'mcp.', 'agent.'];
 const CODEX_STYLE_DIRECT_LOCAL_TOOL_IDS = new Set([
-    'read',
     'write',
     'exec',
     'apply_patch',
@@ -137,28 +135,10 @@ const CODEX_STYLE_DIRECT_LOCAL_TOOL_IDS = new Set([
 // through tool_search. The Registry is the source of truth for their full specs.
 const EXTENDED_LOCAL_TOOL_EXPOSURE = TOOL_EXPOSURE.DEFERRED;
 
-const WEB_RUN_DESCRIPTION = [
-    'Tool for accessing the internet.',
-    '',
-    'Examples of different commands available in this tool:',
-    '* search_query: {"search_query":[{"q":"What is the capital of France?"},{"q":"What is the capital of Belgium?"}]}. Searches the internet for one or more queries, optionally with a domain or recency filter.',
-    '* image_query: {"image_query":[{"q":"waterfalls"}]}.',
-    '* open: {"open":[{"ref_id":"turn0search0"},{"ref_id":"https://www.openai.com","lineno":120}]}.',
-    '* click: {"click":[{"ref_id":"turn0fetch3","id":17}]}.',
-    '* find: {"find":[{"ref_id":"turn0fetch3","pattern":"Annie Case"}]}.',
-    '* screenshot: {"screenshot":[{"ref_id":"turn1view0","pageno":0}]}.',
-    '* finance: {"finance":[{"ticker":"AMD","type":"equity","market":"USA"}]}.',
-    '* weather: {"weather":[{"location":"San Francisco, CA"}]}.',
-    '* sports: {"sports":[{"fn":"standings","league":"nfl"}]}.',
-    '* time: {"time":[{"utc_offset":"+03:00"}]}.',
-    '',
-    'Usage hints:',
-    '* Use multiple commands and queries in one call to get more results faster.',
-    '* Use response_length to control the amount returned; omit it for the default.',
-    '* Only write required parameters; do not write empty lists or nulls where they can be omitted.',
-    '* search_query must have length at most 4 in each call. If it has more than 3 entries, response_length must be medium or long.',
-    '* Results include internal reference ids such as turn0search0. Pass those ids back to open, click, or find; do not expose them as user citations.'
-].join('\n');
+const WEB_RUN_DESCRIPTION = fs.readFileSync(
+    path.join(__dirname, 'ailis-web-run-description.md'),
+    'utf8'
+).replace(/\r\n/g, '\n').trim();
 
 function collectSuggestedMcpToolNames(value, maxDepth = 8) {
     const names = new Set();
@@ -226,7 +206,8 @@ const AILIS_LOCAL_TOOL_DEFINITIONS = Object.freeze([
         id: WEB_RUN_TOOL_ID,
         label: 'web.run',
         description: WEB_RUN_DESCRIPTION,
-        modelDescriptionChars: 7000,
+        modelDescriptionChars: 9000,
+        parseToolInputSchemaWithoutCompaction: true,
         strict: false,
         sectionId: 'web',
         route: 'ailis-research-mcp',
@@ -852,49 +833,6 @@ function throwApprovalRequired(message, details = undefined) {
     throw error;
 }
 
-function summarizeEmberHarnessRecord(record = {}) {
-    if (!record || typeof record !== 'object') {
-        return record;
-    }
-    const snapshot = record.snapshot && typeof record.snapshot === 'object'
-        ? {
-            snapshotId: record.snapshot.snapshotId,
-            stage: record.snapshot.stage,
-            boundary: record.snapshot.boundary,
-            textHash: record.snapshot.textHash,
-            textChars: record.snapshot.textChars,
-            approxTokens: record.snapshot.approxTokens
-        }
-        : null;
-    const rollbackTo = record.rollbackTo && typeof record.rollbackTo === 'object'
-        ? {
-            snapshotId: record.rollbackTo.snapshotId,
-            stage: record.rollbackTo.stage,
-            boundary: record.rollbackTo.boundary,
-            textHash: record.rollbackTo.textHash
-        }
-        : null;
-    return {
-        schema: record.schema,
-        checkId: record.checkId,
-        runId: record.runId,
-        sessionId: record.sessionId,
-        stage: record.stage,
-        boundary: record.boundary,
-        mode: record.mode,
-        status: record.status,
-        decision: record.decision,
-        blocked: record.blocked,
-        riskLevel: record.riskLevel,
-        riskTypes: record.riskTypes,
-        summary: record.summary,
-        suggestion: record.suggestion,
-        evaluatorConfigured: record.evaluatorConfigured,
-        snapshot,
-        rollbackTo
-    };
-}
-
 function buildSmokeStatusMap(reportPath) {
     try {
         const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
@@ -1029,13 +967,6 @@ class AILISGateway extends EventEmitter {
         this.taskResultCapsules = options.taskResultCapsules || new AILISTaskResultCapsuleStore({
             rootDir: path.join(this.auditDir, 'task-results')
         });
-        this.emberHarness = options.emberHarness || new AILISEmberHarness({
-            enabled: options.emberHarnessEnabled,
-            mode: options.emberHarnessMode,
-            evaluator: options.emberHarnessEvaluator,
-            maxRunRecords: options.emberHarnessMaxRunRecords,
-            maxTotalRecords: options.emberHarnessMaxTotalRecords
-        });
         this.taskResultBackfill = { ok: true, imported: 0, capsuleCount: this.taskResultCapsules?.getStatus?.().capsuleCount || 0 };
         try {
             const memoryEvents = this.memoryRuntime?.searchMemory?.('', { limit: 500 })?.events || [];
@@ -1088,7 +1019,9 @@ class AILISGateway extends EventEmitter {
                     materialized: true,
                     status: 'available',
                     needsApprovalActions: id === 'exec' ? Object.freeze(['exec']) : id === 'apply_patch' ? Object.freeze(['apply_patch']) : Object.freeze([]),
-                    exposure: TOOL_EXPOSURE.DIRECT
+                    exposure: CODEX_STYLE_DIRECT_LOCAL_TOOL_IDS.has(id)
+                        ? TOOL_EXPOSURE.DIRECT
+                        : EXTENDED_LOCAL_TOOL_EXPOSURE
                 };
             })
         ];
@@ -1430,7 +1363,6 @@ class AILISGateway extends EventEmitter {
             interactionPreferences: this.preferenceState?.getStatus?.() || null,
             taskResultCapsules: this.taskResultCapsules?.getStatus?.() || null,
             taskResultBackfill: this.taskResultBackfill,
-            emberHarness: this.emberHarness?.getStatus?.() || null,
             userProfileCuration: this.userProfileCurator?.getStatus?.() || null,
             userProfileCurationScheduler: {
                 enabled: this.profileCurationEnabled,
@@ -1734,16 +1666,6 @@ class AILISGateway extends EventEmitter {
             this.sendJson(res, 200, {
                 ok: true,
                 status: this.getStatus()
-            });
-            return;
-        }
-
-        if (url.pathname === '/ember-harness/status' && req.method === 'GET') {
-            const runId = url.searchParams.get('runId') || '';
-            this.sendJson(res, 200, {
-                ok: true,
-                status: this.emberHarness?.getStatus?.() || null,
-                records: runId ? this.emberHarness?.listRunRecords?.(runId, Number(url.searchParams.get('limit') || 50)) || [] : []
             });
             return;
         }
@@ -2165,98 +2087,6 @@ class AILISGateway extends EventEmitter {
         ])];
     }
 
-    shouldRunEmberHarness(context = {}) {
-        return this.emberHarness?.enabled !== false &&
-            context.emberHarness !== false &&
-            context.disableEmberHarness !== true;
-    }
-
-    async runEmberHarnessCheck({
-        stage = 'unknown',
-        boundary = 'unknown',
-        text = '',
-        context = {},
-        metadata = {},
-        runId = '',
-        sessionId = ''
-    } = {}) {
-        const finalRunId = normalizeString(
-            runId || context.runId || context.parentRunId || context.sessionRunId,
-            'global'
-        );
-        const finalSessionId = normalizeString(
-            sessionId || context.sessionId || context.sessionKey || context.parentSessionId,
-            'main'
-        );
-        if (!this.shouldRunEmberHarness(context)) {
-            return {
-                ok: true,
-                status: 'disabled',
-                decision: 'allow',
-                blocked: false,
-                runId: finalRunId,
-                sessionId: finalSessionId,
-                stage,
-                boundary
-            };
-        }
-        const result = await this.emberHarness.check({
-            runId: finalRunId,
-            sessionId: finalSessionId,
-            stage,
-            boundary,
-            text,
-            metadata: redactObject(metadata),
-            evaluator: typeof context.emberHarnessEvaluator === 'function' ? context.emberHarnessEvaluator : null
-        });
-        const eventPayload = {
-            schema: result.schema,
-            checkId: result.checkId,
-            runId: result.runId,
-            sessionId: result.sessionId,
-            stage: result.stage,
-            boundary: result.boundary,
-            mode: result.mode,
-            status: result.status,
-            decision: result.decision,
-            blocked: result.blocked,
-            riskLevel: result.riskLevel,
-            riskTypes: result.riskTypes,
-            summary: result.summary,
-            suggestion: result.suggestion,
-            evaluatorConfigured: result.evaluatorConfigured,
-            snapshot: result.snapshot,
-            rollbackTo: result.rollbackTo
-        };
-        this.emitGatewayEvent('ember.harness.check', eventPayload);
-        await this.appendAudit({
-            type: 'ember.harness.check',
-            runId: result.runId,
-            sessionId: result.sessionId,
-            status: result.status,
-            ok: result.blocked !== true,
-            args: {
-                stage: result.stage,
-                boundary: result.boundary
-            },
-            context: {
-                workspace: context.workspace || context.workspaceDir,
-                planner: context.planner,
-                iteration: context.iteration
-            },
-            result: eventPayload
-        }).catch(() => {});
-        if (result.runId && result.runId !== 'global') {
-            await this.runtime.appendItem(result.runId, {
-                type: 'ember.harness.check',
-                sessionId: result.sessionId,
-                status: result.status,
-                payload: eventPayload
-            }).catch(() => {});
-        }
-        return result;
-    }
-
     async callTool(request = {}) {
         const callId = randomUUID();
         const startedAt = Date.now();
@@ -2351,58 +2181,11 @@ class AILISGateway extends EventEmitter {
                     classification: policyDecision.classification
                 });
             }
-            const preToolGate = await this.runEmberHarnessCheck({
-                stage: policyDecision.classification?.mutates ? 'pre_side_effect' : 'tool_call',
-                boundary: 'tool_call_before_execution',
-                text: {
-                    tool: toolId,
-                    args,
-                    policy: policyDecision.policy,
-                    classification: policyDecision.classification
-                },
-                context,
-                runId: transcriptRunId,
-                sessionId: transcriptSessionId,
-                metadata: {
-                    callId,
-                    tool: toolId,
-                    workspace: workspaceDir,
-                    mutates: policyDecision.classification?.mutates === true,
-                    needsApproval: policyDecision.needsApproval === true
-                }
-            });
-            if (preToolGate.blocked) {
-                throwBlocked('tool call blocked by EMBER-Harness stage gate before execution', {
-                    tool: toolId,
-                    callId,
-                    emberHarness: summarizeEmberHarnessRecord(preToolGate)
-                });
-            }
             const result = await withTimeout(
                 Number(request.timeoutMs || context.timeoutMs || TOOL_CALL_TIMEOUT_MS),
                 () => this.callAgentRuntimeTool({ callId, toolId, args, context, workspaceDir })
             );
             const guardedResult = this.runtime.guardToolResult(result, { toolId, callId });
-            const postToolGate = await this.runEmberHarnessCheck({
-                stage: 'tool_result',
-                boundary: 'tool_result_enter_context',
-                text: guardedResult,
-                context,
-                runId: transcriptRunId,
-                sessionId: transcriptSessionId,
-                metadata: {
-                    callId,
-                    tool: toolId,
-                    workspace: workspaceDir
-                }
-            });
-            if (postToolGate.blocked) {
-                throwBlocked('tool result blocked by EMBER-Harness before entering model context', {
-                    tool: toolId,
-                    callId,
-                    emberHarness: summarizeEmberHarnessRecord(postToolGate)
-                });
-            }
             if (toolId === 'tool_search') {
                 attachRawToolSearchToolsForDirectExposure(guardedResult, result);
             } else if (parseAilisDirectMcpToolId(toolId) || toolId === WEB_SEARCH_TOOL_ID) {
@@ -2573,95 +2356,12 @@ class AILISGateway extends EventEmitter {
 
     async runAgent(request = {}) {
         const input = request && typeof request === 'object' ? request : {};
-        const context = this.mergeDefaultContext(
-            input.context && typeof input.context === 'object' ? input.context : {}
-        );
-        const sessionId = normalizeString(input.sessionId || input.sessionKey || context.sessionId || context.sessionKey, 'main');
-        const runId = normalizeString(input.runId || context.runId);
-        const inputGate = await this.runEmberHarnessCheck({
-            stage: 'user_input',
-            boundary: 'untrusted_input_enter_context',
-            text: {
-                message: input.message || input.prompt || input.task || '',
-                attachments: Array.isArray(input.attachments) ? input.attachments : [],
-                messageHistoryCount: Array.isArray(input.messageHistory) ? input.messageHistory.length : 0
-            },
-            context,
-            runId,
-            sessionId,
-            metadata: {
-                source: 'agent.run',
-                agentLoop: input.agentLoop || context.agentLoop,
-                planner: input.planner || context.planner
-            }
-        });
-        if (inputGate.blocked) {
-            return {
-                ok: false,
-                status: 'blocked',
-                mode: 'agent',
-                intent: 'blocked_by_ember_harness',
-                displayText: '本次请求已被 EMBER-Harness 阶段门控阻断，未进入智能体执行链路。',
-                speechText: '本次请求已被安全门控阻断。',
-                emberHarness: summarizeEmberHarnessRecord(inputGate)
-            };
-        }
-        const result = await this.ensureAgentRunner().runMessage({
+        return await this.ensureAgentRunner().runMessage({
             ...input,
-            context
+            context: this.mergeDefaultContext(
+                input.context && typeof input.context === 'object' ? input.context : {}
+            )
         });
-        const finalText = normalizeString(
-            result?.displayText ||
-            result?.speechText ||
-            result?.finalAnswer ||
-            result?.answer ||
-            result?.message
-        );
-        if (!finalText) {
-            return {
-                ...result,
-                emberHarness: {
-                    input: summarizeEmberHarnessRecord(inputGate)
-                }
-            };
-        }
-        const finalGate = await this.runEmberHarnessCheck({
-            stage: 'final_output',
-            boundary: 'final_output_before_user',
-            text: finalText,
-            context,
-            runId: result?.runId || runId,
-            sessionId: result?.sessionId || sessionId,
-            metadata: {
-                source: 'agent.run',
-                status: result?.status,
-                ok: result?.ok === true
-            }
-        });
-        if (finalGate.blocked) {
-            return {
-                ok: false,
-                status: 'blocked',
-                mode: result?.mode || 'agent',
-                intent: 'blocked_by_ember_harness',
-                runId: result?.runId,
-                sessionId: result?.sessionId || sessionId,
-                durationMs: result?.durationMs,
-                displayText: '最终回答已被 EMBER-Harness 阶段门控阻断，系统已回退到最近稳定阶段快照。',
-                speechText: '最终回答已被安全门控阻断。',
-                emberHarness: {
-                    input: summarizeEmberHarnessRecord(inputGate),
-                    final: summarizeEmberHarnessRecord(finalGate)
-                }
-            };
-        }
-        return {
-            ...result,
-            emberHarness: {
-                input: summarizeEmberHarnessRecord(inputGate),
-                final: summarizeEmberHarnessRecord(finalGate)
-            }
-        };
     }
 
     async interruptAgentRun(request = {}) {
@@ -3048,31 +2748,87 @@ class AILISGateway extends EventEmitter {
                 structuredContent: { status: 'unknown_ref_id', ref_id: normalizeString(operation.ref_id) }
             };
         }
-        const tool = mode === 'find' ? 'web_find' : 'web_fetch';
+        const resolvedFetchBackend = normalizeString(
+            resolved.fetchBackend || resolved.fetch_backend
+        ).toLowerCase();
+        let tool = mode === 'find'
+            ? 'web_find'
+            : resolvedFetchBackend.startsWith('crawl4ai')
+            ? 'render_page'
+            : resolvedFetchBackend
+            ? 'web_fetch'
+            : 'render_page';
         const bridgeArgs = mode === 'find'
             ? { url: resolved.url, pattern: operation.pattern }
             : { url: resolved.url, ...(operation.lineno !== undefined ? { lineno: operation.lineno } : {}) };
-        const response = await this.runtime.executeMcpBridge({
+        let response = await this.runtime.executeMcpBridge({
             action: 'call_tool',
             server: 'ailis_research',
             tool,
             args: bridgeArgs
         }, context);
+        const renderedFailed = tool === 'render_page' && (
+            response?.isError === true || response?.details?.result?.isError === true
+        );
+        if (renderedFailed) {
+            tool = 'web_fetch';
+            response = await this.runtime.executeMcpBridge({
+                action: 'call_tool',
+                server: 'ailis_research',
+                tool,
+                args: bridgeArgs
+            }, context);
+        }
         const cloned = cloneJson(response) || {};
         const details = bridgeStructuredContent(cloned);
         const viewRef = this.registerWebRunRef(context, 'view', resolved.url, {
             parent_ref_id: normalizeString(operation.ref_id),
             mode
         });
-        const source = firstObject(
+        const sourceViews = [
             details.source,
             details.source_viewport,
             details.sourceViewport,
             details.source_window,
             details.sourceWindow
-        );
-        if (Object.keys(source).length) {
-            source.ref_id = viewRef;
+        ].filter((value) => value && typeof value === 'object' && !Array.isArray(value));
+        for (const sourceView of sourceViews) {
+            sourceView.ref_id = viewRef;
+        }
+        const observedLinks = Array.isArray(details.observedRelevantLinks)
+            ? details.observedRelevantLinks
+            : Array.isArray(details.observed_relevant_links)
+            ? details.observed_relevant_links
+            : [];
+        const numberedLinks = observedLinks
+            .map((link, index) => ({
+                ...link,
+                id: index + 1,
+                url: normalizeString(link?.url)
+            }))
+            .filter((link) => link.url);
+        if (numberedLinks.length) {
+            const state = this.getWebRunSession(context);
+            const view = state.refs.get(viewRef);
+            if (view) {
+                view.links = cloneJson(numberedLinks);
+            }
+            const openedRef = state.refs.get(normalizeString(operation.ref_id));
+            if (openedRef) {
+                openedRef.links = cloneJson(numberedLinks);
+            }
+            details.observedRelevantLinks = numberedLinks;
+            details.observed_relevant_links = numberedLinks;
+        }
+        const state = this.getWebRunSession(context);
+        const fetchBackend = normalizeString(details.fetchBackend || details.fetch_backend);
+        const view = state.refs.get(viewRef);
+        if (view) {
+            view.fetchBackend = fetchBackend;
+        }
+        const openedRef = state.refs.get(normalizeString(operation.ref_id));
+        if (openedRef) {
+            openedRef.fetchBackend = fetchBackend;
         }
         details.ref_id = viewRef;
         details.url = resolved.url;
@@ -3084,6 +2840,136 @@ class AILISGateway extends EventEmitter {
         };
     }
 
+    async executeWebRunClick(operation = {}, context = {}) {
+        const resolved = this.resolveWebRunRef(context, operation.ref_id);
+        const linkId = Number(operation.id);
+        const link = Array.isArray(resolved?.links)
+            ? resolved.links.find((candidate) => Number(candidate.id) === linkId)
+            : null;
+        if (!link?.url) {
+            return {
+                content: [{
+                    type: 'text',
+                    text: `Unknown link id ${normalizeString(operation.id)} for web reference ${normalizeString(operation.ref_id)}.`
+                }],
+                isError: true,
+                structuredContent: {
+                    status: 'unknown_link_id',
+                    ref_id: normalizeString(operation.ref_id),
+                    id: linkId
+                }
+            };
+        }
+        const navigation = await this.executeWebRunNavigation({ ref_id: link.url }, context, 'open');
+        if (normalizeString(link.kind).toLowerCase() !== 'pdf') {
+            return navigation;
+        }
+        const navigationDetails = firstObject(navigation.structuredContent, navigation.details);
+        const contentType = normalizeString(
+            navigationDetails.contentType || navigationDetails.content_type
+        ).toLowerCase();
+        if (contentType.includes('application/pdf')) {
+            return navigation;
+        }
+        const observedLinks = Array.isArray(navigationDetails.observedRelevantLinks)
+            ? navigationDetails.observedRelevantLinks
+            : Array.isArray(navigationDetails.observed_relevant_links)
+            ? navigationDetails.observed_relevant_links
+            : [];
+        const pdfCandidate = observedLinks.find((candidate) => (
+            normalizeString(candidate?.kind).toLowerCase() === 'pdf' &&
+            normalizeString(candidate?.url) &&
+            normalizeString(candidate.url) !== normalizeString(link.url)
+        ));
+        if (!pdfCandidate?.url) {
+            return navigation;
+        }
+        const pdfResponse = await this.executeWebRunPdf(pdfCandidate.url, context, {
+            parentRefId: navigationDetails.ref_id || operation.ref_id
+        });
+        return pdfResponse.isError === true ? navigation : pdfResponse;
+    }
+
+    async executeWebRunPdf(url = '', context = {}, { parentRefId = '' } = {}) {
+        const response = await this.runtime.executeMcpBridge({
+            action: 'call_tool',
+            server: 'ailis_research',
+            tool: 'pdf_extract_text',
+            args: {
+                url: normalizeString(url),
+                maxChars: 24000,
+                maxPages: 24
+            }
+        }, context);
+        const cloned = cloneJson(response) || {};
+        const details = bridgeStructuredContent(cloned);
+        const text = bridgeTextContent(cloned);
+        const isError = cloned.isError === true || cloned.details?.result?.isError === true || !normalizeString(text);
+        if (isError) {
+            return {
+                content: [{ type: 'text', text }],
+                isError: true,
+                details,
+                structuredContent: details
+            };
+        }
+        const viewRef = this.registerWebRunRef(context, 'view', url, {
+            parent_ref_id: normalizeString(parentRefId),
+            mode: 'open'
+        });
+        const sourceLines = String(text)
+            .split(/\r?\n/)
+            .map((line, index) => ({
+                lineNumber: index + 1,
+                line_number: index + 1,
+                lineno: index + 1,
+                text: line,
+                rendered: `L${index + 1}: ${line}`
+            }));
+        const lineEnd = Math.max(1, sourceLines.length);
+        const sourceWindow = {
+            type: 'source_viewport',
+            action: {
+                type: 'open_page',
+                url: normalizeString(url),
+                lineno: 1
+            },
+            url: normalizeString(url),
+            ref_id: viewRef,
+            contentType: normalizeString(details.contentType || details.content_type, 'application/pdf'),
+            content_type: normalizeString(details.contentType || details.content_type, 'application/pdf'),
+            totalLines: lineEnd,
+            total_lines: lineEnd,
+            lineno: 1,
+            lineStart: 1,
+            line_start: 1,
+            lineEnd,
+            line_end: lineEnd,
+            hasMoreBefore: false,
+            has_more_before: false,
+            hasMoreAfter: false,
+            has_more_after: false,
+            lines: sourceLines
+        };
+        const structuredContent = {
+            ...details,
+            status: 'completed',
+            url: normalizeString(url),
+            ref_id: viewRef,
+            source: sourceWindow,
+            source_window: sourceWindow,
+            sourceWindow,
+            sourceViewport: sourceWindow,
+            source_viewport: sourceWindow
+        };
+        return {
+            content: [{ type: 'text', text }],
+            isError: false,
+            details: structuredContent,
+            structuredContent
+        };
+    }
+
     async executeWebRun(args = {}, context = {}) {
         if (Array.isArray(args.search_query) && args.search_query.length) {
             return await this.executeWebRunSearch(args, context);
@@ -3091,15 +2977,18 @@ class AILISGateway extends EventEmitter {
         if (Array.isArray(args.open) && args.open.length) {
             return await this.executeWebRunNavigation(args.open[0], context, 'open');
         }
+        if (Array.isArray(args.click) && args.click.length) {
+            return await this.executeWebRunClick(args.click[0], context);
+        }
         if (Array.isArray(args.find) && args.find.length) {
             return await this.executeWebRunNavigation(args.find[0], context, 'find');
         }
         return {
-            content: [{ type: 'text', text: 'This web_run backend currently executes search_query, open, and find commands.' }],
+            content: [{ type: 'text', text: 'This web_run backend currently executes search_query, open, click, and find commands.' }],
             isError: true,
             structuredContent: {
                 status: 'unsupported_command',
-                supported_commands: ['search_query', 'open', 'find']
+                supported_commands: ['search_query', 'open', 'click', 'find']
             }
         };
     }

@@ -78,6 +78,13 @@ function numberSchema(options = {}) {
     };
 }
 
+function integerSchema(options = {}) {
+    return {
+        type: 'integer',
+        ...options
+    };
+}
+
 function booleanSchema(options = {}) {
     return {
         type: 'boolean',
@@ -651,7 +658,10 @@ const TOOL_CONTRACTS = Object.freeze({
         schema: makeObjectSchema({
             required: ['path'],
             properties: {
-                path: stringSchema({ minLength: 1 }),
+                path: stringSchema({
+                    minLength: 1,
+                    description: 'Local filesystem path to read. HTTP(S) URLs are not accepted; use web_run open/find for web pages.'
+                }),
                 encoding: stringSchema(),
                 maxBytes: numberSchema({ minimum: 1, maximum: 5 * 1024 * 1024 })
             },
@@ -940,68 +950,68 @@ const TOOL_CONTRACTS = Object.freeze({
                 search_query: arraySchema(makeObjectSchema({
                     required: ['q'],
                     properties: {
-                        q: stringSchema({ minLength: 1, description: 'Search query.' }),
-                        recency: numberSchema({ minimum: 0, description: 'Whether to filter by recency, as a number of recent days.' }),
-                        domains: arraySchema(stringSchema({ minLength: 1 }), { description: 'Whether to filter by a specific list of domains.' })
+                        q: stringSchema({ description: 'Search query.' }),
+                        recency: integerSchema({ minimum: 0, description: 'Whether to filter by recency, as a number of recent days.' }),
+                        domains: arraySchema(stringSchema(), { description: 'Whether to filter by a specific list of domains.' })
                     },
                     additionalProperties: false
-                }), { maxItems: 4, description: 'Query the internet search engine for a given list of queries.' }),
+                }), { description: 'Query the internet search engine for a given list of queries.' }),
                 image_query: arraySchema(makeObjectSchema({
                     required: ['q'],
                     properties: {
-                        q: stringSchema({ minLength: 1, description: 'Search query.' }),
-                        recency: numberSchema({ minimum: 0, description: 'Whether to filter by recency, as a number of recent days.' }),
-                        domains: arraySchema(stringSchema({ minLength: 1 }), { description: 'Whether to filter by a specific list of domains.' })
+                        q: stringSchema({ description: 'Search query.' }),
+                        recency: integerSchema({ minimum: 0, description: 'Whether to filter by recency, as a number of recent days.' }),
+                        domains: arraySchema(stringSchema(), { description: 'Whether to filter by a specific list of domains.' })
                     },
                     additionalProperties: false
-                }), { maxItems: 4, description: 'Query the image search engine for a given list of queries.' }),
+                }), { description: 'Query the image search engine for a given list of queries.' }),
                 open: arraySchema(makeObjectSchema({
                     required: ['ref_id'],
                     properties: {
-                        ref_id: stringSchema({ minLength: 1, description: 'Reference id or URL to open.' }),
-                        lineno: numberSchema({ minimum: 1, description: 'Line number to position the page at.' })
+                        ref_id: stringSchema({ description: 'Reference id or URL to open.' }),
+                        lineno: integerSchema({ minimum: 0, description: 'Line number to position the page at.' })
                     },
                     additionalProperties: false
                 }), { description: 'Open pages by reference id or URL.' }),
                 click: arraySchema(makeObjectSchema({
                     required: ['ref_id', 'id'],
                     properties: {
-                        ref_id: stringSchema({ minLength: 1, description: 'Reference id containing the numbered link.' }),
-                        id: numberSchema({ minimum: 0, description: 'Numbered link id to open.' })
+                        ref_id: stringSchema({ description: 'Reference id containing the numbered link.' }),
+                        id: integerSchema({ minimum: 0, description: 'Numbered link id to open.' })
                     },
                     additionalProperties: false
                 }), { description: 'Open links from previously opened pages.' }),
                 find: arraySchema(makeObjectSchema({
                     required: ['ref_id', 'pattern'],
                     properties: {
-                        ref_id: stringSchema({ minLength: 1, description: 'Reference id or URL to search within.' }),
-                        pattern: stringSchema({ minLength: 1, description: 'Text pattern to find.' })
+                        ref_id: stringSchema({ description: 'Reference id or URL to search within.' }),
+                        pattern: stringSchema({ description: 'Text pattern to find.' })
                     },
                     additionalProperties: false
                 }), { description: 'Find text patterns in pages.' }),
                 screenshot: arraySchema(makeObjectSchema({
                     required: ['ref_id', 'pageno'],
                     properties: {
-                        ref_id: stringSchema({ minLength: 1, description: 'Reference id or URL to screenshot.' }),
-                        pageno: numberSchema({ minimum: 0, description: 'Zero-indexed PDF page number.' })
+                        ref_id: stringSchema({ description: 'Reference id or URL to screenshot.' }),
+                        pageno: integerSchema({ minimum: 0, description: 'Zero-indexed PDF page number.' })
                     },
                     additionalProperties: false
                 }), { description: 'Take screenshots of PDF pages.' }),
                 finance: arraySchema(makeObjectSchema({
                     required: ['ticker', 'type'],
                     properties: {
-                        ticker: stringSchema({ minLength: 1, description: 'Ticker symbol to look up.' }),
+                        ticker: stringSchema({ description: 'Ticker symbol to look up.' }),
                         type: stringSchema({ enum: ['equity', 'fund', 'crypto', 'index'], description: 'Asset type to look up.' }),
-                        market: stringSchema({ description: 'ISO 3166-1 alpha-3 country code, OTC, or an empty string for cryptocurrency.' })
+                        market: stringSchema({ description: 'ISO 3166-1 alpha-3 country code, "OTC", or "" for cryptocurrency.' })
                     },
                     additionalProperties: false
                 }), { description: 'Look up prices for the given stock symbols.' }),
                 weather: arraySchema(makeObjectSchema({
                     required: ['location'],
                     properties: {
-                        location: stringSchema({ minLength: 1, description: 'Location in Country, Area, City format.' }),
+                        location: stringSchema({ description: 'Location in "Country, Area, City" format.' }),
                         start: stringSchema({ description: 'Start date in YYYY-MM-DD format. Defaults to today.' }),
-                        duration: numberSchema({ minimum: 1, description: 'Number of days to return. Defaults to 7.' })
+                        duration: integerSchema({ minimum: 0, description: 'Number of days to return. Defaults to 7.' })
                     },
                     additionalProperties: false
                 }), { description: 'Look up weather forecasts.' }),
@@ -1011,11 +1021,11 @@ const TOOL_CONTRACTS = Object.freeze({
                         tool: stringSchema({ enum: ['sports'], description: 'Tool name for sports requests.' }),
                         fn: stringSchema({ enum: ['schedule', 'standings'], description: 'Sports function to call.' }),
                         league: stringSchema({ enum: ['nba', 'wnba', 'nfl', 'nhl', 'mlb', 'epl', 'ncaamb', 'ncaawb', 'ipl'], description: 'League to look up.' }),
-                        team: stringSchema({ description: 'Team alias used in broadcasts.' }),
-                        opponent: stringSchema({ description: 'Opponent used with team when narrowing the lookup.' }),
+                        team: stringSchema({ description: 'Team to look up, using the common 3 or 4 letter alias used in broadcasts.' }),
+                        opponent: stringSchema({ description: 'Opponent to use with `team` when narrowing the lookup.' }),
                         date_from: stringSchema({ description: 'Start date in YYYY-MM-DD format.' }),
                         date_to: stringSchema({ description: 'End date in YYYY-MM-DD format.' }),
-                        num_games: numberSchema({ minimum: 1, description: 'Number of games to return.' }),
+                        num_games: integerSchema({ minimum: 0, description: 'Number of games to return.' }),
                         locale: stringSchema({ description: 'Locale for the lookup.' })
                     },
                     additionalProperties: false
@@ -1023,7 +1033,7 @@ const TOOL_CONTRACTS = Object.freeze({
                 time: arraySchema(makeObjectSchema({
                     required: ['utc_offset'],
                     properties: {
-                        utc_offset: stringSchema({ minLength: 1, description: 'UTC offset formatted like +03:00.' })
+                        utc_offset: stringSchema({ description: 'UTC offset formatted like +03:00.' })
                     },
                     additionalProperties: false
                 }), { description: 'Get time for the given UTC offsets.' }),
