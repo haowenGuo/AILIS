@@ -1,0 +1,17 @@
+import: /mnt/f/AILIS_self_evolution_runtime/build-cache/benchmarks/agentbench-v0.2/configs/tasks/task_assembly.yaml
+
+ltp-dev:
+  parameters:
+    eval_yaml: /mnt/f/AILIS_self_evolution_runtime/evals/agentbench_official/configs/ltp-evaluator.yaml
+
+ltp-std:
+  parameters:
+    eval_yaml: /mnt/f/AILIS_self_evolution_runtime/evals/agentbench_official/configs/ltp-evaluator.yaml
+
+kg-dev:
+  parameters:
+    sparql_url: http://127.0.0.1:3093/sparql
+
+kg-std:
+  parameters:
+    sparql_url: http://127.0.0.1:3093/sparql
