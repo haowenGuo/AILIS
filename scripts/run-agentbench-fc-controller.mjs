@@ -233,7 +233,7 @@ async function main() {
     const definition = manifest.tasks[options.task];
     const composeServices = ['controller', 'redis', definition.composeService];
     if (options.task === 'kg-std') composeServices.push('freebase');
-    const composeArgs = ['compose', '-f', 'extra/docker-compose.yml', 'up', '-d', '--build', ...composeServices];
+    const composeArgs = ['docker', 'compose', '-f', 'extra/docker-compose.yml', 'up', '-d', '--build', ...composeServices];
     console.log(`[AgentBench FC] provisioning ${options.task} at ${manifest.revision}`);
     await ensureEnvironmentPrerequisites(options.task);
     await runWslChecked(composeArgs, 'AgentBench FC Docker Compose', {
