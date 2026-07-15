@@ -178,7 +178,7 @@ async function ensureEnvironmentPrerequisites(task) {
         for (const variant of ['default', 'packages', 'ubuntu']) {
             if (await hasDockerImage(`local-os/${variant}`)) continue;
             await runWslChecked([
-                'docker', 'build',
+                'env', 'DOCKER_BUILDKIT=1', 'docker', 'build',
                 '-t', `local-os/${variant}`,
                 '-f', `data/os_interaction/res/dockerfiles/${variant}`,
                 'data/os_interaction/res/dockerfiles'
@@ -292,7 +292,8 @@ async function provisionPlainDockerTask(task, manifest) {
         const freebaseImage = `ailis-agentbench-fc-freebase:${manifest.revision.slice(0, 12)}`;
         if (!await hasDockerImage(freebaseImage)) {
             await runWslChecked([
-                'docker', 'build', '-t', freebaseImage, '-f', 'extra/freebase.Dockerfile', '.'
+                'env', 'DOCKER_BUILDKIT=1', 'docker', 'build',
+                '-t', freebaseImage, '-f', 'extra/freebase.Dockerfile', '.'
             ], 'AgentBench FC Freebase image', {
                 onStdout: (chunk) => process.stdout.write(chunk),
                 onStderr: (chunk) => process.stderr.write(chunk)
@@ -312,7 +313,7 @@ async function provisionPlainDockerTask(task, manifest) {
     const workerImage = `ailis-agentbench-fc-${task}:${manifest.revision.slice(0, 12)}`;
     if (!await hasDockerImage(workerImage)) {
         await runWslChecked([
-            'docker', 'build', '-t', workerImage,
+            'env', 'DOCKER_BUILDKIT=1', 'docker', 'build', '-t', workerImage,
             '-f', WORKER_DOCKERFILES[task], '.'
         ], `AgentBench FC worker image ${task}`, {
             onStdout: (chunk) => process.stdout.write(chunk),
