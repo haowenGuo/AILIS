@@ -18,8 +18,23 @@ class AgentBenchFcRecordTests(unittest.TestCase):
         self.assertTrue(is_infrastructure_error(records[1]))
         quality = record_quality(records)
         self.assertEqual(quality["infrastructure_errors"], 1)
+        self.assertEqual(quality["benchmark_task_errors"], 0)
         self.assertEqual(quality["valid_environment_records"], 1)
         self.assertEqual(quality["success_rate"], 1)
+
+    def test_official_pre_turn_task_failures_remain_scored_and_auditable(self):
+        records = [{
+            "index": 36,
+            "status": "environment_terminal",
+            "reward": 0,
+            "error": {"kind": "benchmark_task_error"},
+            "agent_calls": [],
+        }]
+        quality = record_quality(records)
+        self.assertEqual(quality["infrastructure_errors"], 0)
+        self.assertEqual(quality["benchmark_task_errors"], 1)
+        self.assertEqual(quality["valid_environment_records"], 1)
+        self.assertEqual(quality["completed_environment_records"], 0)
 
     def test_call_and_token_budgets_use_durable_call_metrics(self):
         records = [{

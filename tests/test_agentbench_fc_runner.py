@@ -100,6 +100,29 @@ class AgentBenchFcRunnerTests(unittest.TestCase):
         self.assertEqual(record["status"], "infrastructure_error")
         self.assertEqual(record["error"]["kind"], "environment_unavailable")
 
+    def test_runner_preserves_official_pre_turn_task_failure_as_zero_reward(self):
+        args = argparse.Namespace(
+            task="os-std",
+            controller="http://controller/api",
+            bridge="http://bridge/v1",
+            timeout_seconds=30,
+            max_environment_turns=20,
+            temperature=0.8,
+        )
+        with patch.object(run_fc, "request_json", return_value=(
+            {
+                "messages": [],
+                "tools": [{"type": "function", "function": {"name": "bash_action"}}],
+            },
+            {"session_id": "session-1"},
+        )):
+            record = run_fc.run_sample(args, 36)
+
+        self.assertEqual(record["status"], "environment_terminal")
+        self.assertEqual(record["reward"], 0)
+        self.assertEqual(record["error"]["kind"], "benchmark_task_error")
+        self.assertFalse(run_fc.is_infrastructure_error(record))
+
 
 if __name__ == "__main__":
     unittest.main()

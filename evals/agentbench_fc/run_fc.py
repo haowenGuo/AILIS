@@ -234,12 +234,29 @@ def run_sample(args: argparse.Namespace, index: Any) -> Dict[str, Any]:
             raise HttpFailure("controller_transport", 502, "Controller omitted session_id", initial)
         messages.extend(strip_none_fields(initial.get("messages") or []))
         tools = list(initial.get("tools") or [])
-        if not messages or not tools:
+        if not tools:
             raise HttpFailure(
                 "environment_unavailable",
                 502,
-                "AgentBench FC did not provide both messages and tools",
+                "AgentBench FC did not provide function tools",
                 initial,
+            )
+        if not messages:
+            return _record(
+                args,
+                index,
+                started_at,
+                "environment_terminal",
+                0.0,
+                {
+                    "kind": "benchmark_task_error",
+                    "status": 200,
+                    "message": "Official task terminated before the first agent turn",
+                },
+                messages,
+                tools,
+                agent_calls,
+                session_id,
             )
 
         for turn in range(1, args.max_environment_turns + 1):

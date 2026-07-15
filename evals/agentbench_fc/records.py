@@ -33,12 +33,18 @@ def deduplicate_records(records: Iterable[Dict[str, Any]]) -> Dict[str, Dict[str
 def record_quality(records: List[Dict[str, Any]]) -> Dict[str, Any]:
     infrastructure_errors = sum(1 for record in records if is_infrastructure_error(record))
     valid = [record for record in records if not is_infrastructure_error(record)]
+    benchmark_task_errors = sum(
+        1
+        for record in valid
+        if str((record.get("error") or {}).get("kind") or "") == "benchmark_task_error"
+    )
     completed = sum(1 for record in valid if record.get("status") == "completed")
     successes = sum(1 for record in valid if float(record.get("reward") or 0) > 0)
     total = len(records)
     return {
         "durable_records": total,
         "infrastructure_errors": infrastructure_errors,
+        "benchmark_task_errors": benchmark_task_errors,
         "valid_environment_records": len(valid),
         "completed_environment_records": completed,
         "successful_environment_records": successes,
