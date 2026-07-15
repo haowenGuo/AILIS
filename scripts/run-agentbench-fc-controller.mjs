@@ -164,6 +164,29 @@ async function runWslChecked(args, label, options = {}) {
     return result;
 }
 
+export function buildWslKeepaliveArgs(distro) {
+    return ['-d', distro, '--', 'sleep', 'infinity'];
+}
+
+async function startWslKeepalive() {
+    const distro = await resolveWslDistro();
+    const child = spawn(WSL, buildWslKeepaliveArgs(distro), {
+        cwd: ROOT,
+        env: process.env,
+        windowsHide: true,
+        stdio: 'ignore'
+    });
+    let spawnError = '';
+    child.once('error', (error) => {
+        spawnError = error?.message || String(error);
+    });
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    if (spawnError || child.exitCode !== null) {
+        throw new Error(`Unable to keep WSL alive for AgentBench FC: ${spawnError || child.exitCode}`);
+    }
+    return child;
+}
+
 async function hasDockerImage(image) {
     const result = await runWsl(['docker', 'image', 'inspect', image]);
     return result.code === 0;
@@ -441,12 +464,14 @@ async function main() {
     }));
 
     const definition = manifest.tasks[options.task];
-    console.log(`[AgentBench FC] provisioning ${options.task} at ${manifest.revision}`);
-    await ensureEnvironmentPrerequisites(options.task);
-    const environment = await provisionTaskEnvironment(options.task, definition, manifest);
-
+    let keepalive = null;
+    let environment = null;
     let bridge = null;
     try {
+        keepalive = await startWslKeepalive();
+        console.log(`[AgentBench FC] provisioning ${options.task} at ${manifest.revision}`);
+        await ensureEnvironmentPrerequisites(options.task);
+        environment = await provisionTaskEnvironment(options.task, definition, manifest);
         const query = new URLSearchParams({ name: options.task });
         await waitForJson(
             `http://127.0.0.1:${manifest.controllerPort}/api/get_indices?${query}`,
@@ -508,7 +533,10 @@ async function main() {
         if (!gate.passed) process.exitCode = 2;
     } finally {
         if (bridge && !bridge.killed) bridge.kill();
-        await stopTaskEnvironment(environment, definition, options.task).catch(() => {});
+        if (environment) {
+            await stopTaskEnvironment(environment, definition, options.task).catch(() => {});
+        }
+        if (keepalive && !keepalive.killed) keepalive.kill();
     }
 }
 

@@ -5,6 +5,7 @@ import { parseAgentBenchFcStageArgs } from '../evals/agentbench_fc/stage-options
 import { evaluateAgentBenchFcStageGate } from '../evals/agentbench_fc/stage-policy.mjs';
 import {
     buildPlainDockerWorkerRunArgs,
+    buildWslKeepaliveArgs,
     parseWslDistributionList
 } from '../scripts/run-agentbench-fc-controller.mjs';
 
@@ -69,6 +70,12 @@ test('FC controller discovers the installed WSL distribution from UTF-16-like ou
         parseWslDistributionList(`${[...'Ubuntu-22.04'].join('\0')}\0\r\0\n\0`),
         ['Ubuntu-22.04']
     );
+});
+
+test('FC controller keeps the selected WSL distribution alive for the full run', () => {
+    assert.deepEqual(buildWslKeepaliveArgs('Ubuntu-22.04'), [
+        '-d', 'Ubuntu-22.04', '--', 'sleep', 'infinity'
+    ]);
 });
 
 test('plain Docker fallback preserves the official DB worker contract', () => {
