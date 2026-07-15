@@ -1,0 +1,44 @@
+{
+  "schema": "ailis.agentbench.fc.manifest.v1",
+  "repository": "https://github.com/THUDM/AgentBench.git",
+  "revision": "d1e4a10db08c87075c78972e48ecc182be03e2d5",
+  "cacheDirectory": "agentbench-fc",
+  "controllerPort": 5020,
+  "maxEnvironmentTurns": 20,
+  "files": {
+    "README.md": "dad0c5d94cf9ca1789f394edb22046810c707733526bd3f50765bfe39f5e10ac",
+    "extra/docker-compose.yml": "df2a6f3693c0344eceb3ae2215aa98cccd60af3a77defd577d591bd660bfb8f3",
+    "configs/tasks/dbbench.yaml": "2c61bbe2530b4f4e7ae41231e3cb4fa4e9582ec09d03488977098dbba1297423",
+    "configs/tasks/os.yaml": "b4574c88f26f71217247a8239c4f3f0603c6a5635f366d3b339c8434d96724f5",
+    "configs/tasks/alfworld.yaml": "58d5a23e1db2ea76734dc7a95ef3325952991eafc9abf49b5ebd75c262c0edfc",
+    "configs/tasks/webshop.yaml": "53027763cdd76f632b960693867f8855ced46ca9d3aae0980bbb5cf12be0bfda",
+    "configs/tasks/kg.yaml": "e67cf0a3549d6694a7ce2c3dd8f0455cb0ec60e72bb995a145754521473b5660"
+  },
+  "tasks": {
+    "dbbench-std": {
+      "environment": "DB",
+      "composeService": "dbbench-std",
+      "requiredPaths": ["data/dbbench/standard.jsonl"]
+    },
+    "os-std": {
+      "environment": "OS",
+      "composeService": "os_interaction-std",
+      "requiredPaths": ["data/os_interaction/data", "data/os_interaction/res/dockerfiles"]
+    },
+    "kg-std": {
+      "environment": "KG",
+      "composeService": "knowledgegraph-std",
+      "requiredPaths": ["data/knowledgegraph/std.json", "extra/virtuoso_db/virtuoso.db"]
+    },
+    "alfworld-std": {
+      "environment": "ALFWorld",
+      "composeService": "alfworld-std",
+      "requiredPaths": ["data/alfworld", "src/server/tasks/alfworld"]
+    },
+    "webshop-std": {
+      "environment": "WebShop",
+      "composeService": "webshop-std",
+      "requiredPaths": ["src/server/tasks/webshop"]
+    }
+  }
+}

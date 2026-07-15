@@ -287,7 +287,7 @@ async function collectTerminalBench() {
 }
 
 async function collectAgentBenchDb() {
-    const sourcePath = path.join(BENCHMARK_ROOT, 'agentbench-main', 'data', 'dbbench', 'dev.jsonl');
+    const sourcePath = path.join(BENCHMARK_ROOT, 'agentbench-fc', 'data', 'dbbench', 'dev.jsonl');
     const text = await fs.readFile(sourcePath, 'utf8');
     const tasks = text.split(/\r?\n/)
         .filter(Boolean)
@@ -320,7 +320,7 @@ async function collectAgentBenchDb() {
 }
 
 async function collectAgentBenchOs() {
-    const sourcePath = path.join(BENCHMARK_ROOT, 'agentbench-main', 'data', 'os_interaction', 'data', 'dev.json');
+    const sourcePath = path.join(BENCHMARK_ROOT, 'agentbench-fc', 'data', 'os_interaction', 'data', 'dev.json');
     const rows = await readJson(sourcePath, []);
     const tasks = rows.slice(0, REQUESTED_COUNTS.agentBenchOs).map((row, index) => ({
         benchmark: 'agentbench-os',

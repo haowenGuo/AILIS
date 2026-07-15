@@ -1,0 +1,284 @@
+import fs from 'node:fs';
+import fsp from 'node:fs/promises';
+import path from 'node:path';
+import process from 'node:process';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+
+import {
+    assertAgentBenchFcIntegrity,
+    readAgentBenchFcManifest,
+    verifyAgentBenchFcCheckout
+} from '../evals/agentbench_fc/benchmark-integrity.mjs';
+import { parseAgentBenchFcStageArgs } from '../evals/agentbench_fc/stage-options.mjs';
+import {
+    AGENTBENCH_FC_STAGE_POLICY,
+    evaluateAgentBenchFcStageGate
+} from '../evals/agentbench_fc/stage-policy.mjs';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const ROOT = path.resolve(__dirname, '..');
+const CACHE_ROOT = path.join(ROOT, 'build-cache', 'benchmarks');
+const BENCHMARK_ROOT = path.join(CACHE_ROOT, 'agentbench-fc');
+const LOCAL_SEED_ROOT = path.join(CACHE_ROOT, 'agentbench-main');
+const WSL = process.env.WINDIR
+    ? path.join(process.env.WINDIR, 'System32', 'wsl.exe')
+    : 'wsl.exe';
+const WSL_DISTRO = process.env.AILIS_AGENTBENCH_WSL_DISTRO || 'Ubuntu';
+const BRIDGE_PORT = 5128;
+
+function runProcess(command, args, options = {}) {
+    return new Promise((resolve) => {
+        const child = spawn(command, args, {
+            cwd: options.cwd || ROOT,
+            env: { ...process.env, ...(options.env || {}) },
+            windowsHide: true,
+            stdio: options.stdio || ['ignore', 'pipe', 'pipe']
+        });
+        let stdout = '';
+        let stderr = '';
+        child.stdout?.on('data', (chunk) => {
+            stdout = `${stdout}${chunk}`.slice(-100_000);
+            options.onStdout?.(chunk);
+        });
+        child.stderr?.on('data', (chunk) => {
+            stderr = `${stderr}${chunk}`.slice(-100_000);
+            options.onStderr?.(chunk);
+        });
+        child.once('error', (error) => resolve({ code: -1, stdout, stderr, error: error.message }));
+        child.once('close', (code) => resolve({ code, stdout, stderr }));
+    });
+}
+
+async function pathExists(target) {
+    try {
+        await fsp.access(target);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+function toWslPath(target) {
+    const resolved = path.resolve(target);
+    const match = resolved.match(/^([A-Za-z]):\\(.*)$/);
+    if (!match) return resolved.replaceAll('\\', '/');
+    return `/mnt/${match[1].toLowerCase()}/${match[2].replaceAll('\\', '/')}`;
+}
+
+async function runGit(args, cwd = ROOT) {
+    const result = await runProcess('git', args, { cwd });
+    if (result.code !== 0) {
+        throw new Error(`git ${args.join(' ')} failed: ${result.stderr || result.stdout || result.error}`);
+    }
+    return result.stdout.trim();
+}
+
+async function checkoutRevision(repoRoot, manifest) {
+    const local = await runProcess('git', ['cat-file', '-e', `${manifest.revision}^{commit}`], { cwd: repoRoot });
+    if (local.code !== 0) {
+        await runGit(['fetch', '--depth', '1', 'origin', manifest.revision], repoRoot);
+    }
+    await runGit(['checkout', '--detach', manifest.revision], repoRoot);
+}
+
+async function ensureAgentBenchFcCheckout(manifest) {
+    if (!await pathExists(path.join(BENCHMARK_ROOT, '.git'))) {
+        await fsp.mkdir(CACHE_ROOT, { recursive: true });
+        if (await pathExists(path.join(LOCAL_SEED_ROOT, '.git'))) {
+            await runGit(['clone', '--local', '--no-hardlinks', '--no-checkout', LOCAL_SEED_ROOT, BENCHMARK_ROOT]);
+            await runGit(['remote', 'set-url', 'origin', manifest.repository], BENCHMARK_ROOT);
+        } else {
+            await runGit(['clone', '--filter=blob:none', '--no-checkout', manifest.repository, BENCHMARK_ROOT]);
+        }
+        await checkoutRevision(BENCHMARK_ROOT, manifest);
+    }
+    let integrity = await verifyAgentBenchFcCheckout({ root: BENCHMARK_ROOT, manifest });
+    if (!integrity.ok && integrity.failures.every((failure) => failure.kind === 'revision_mismatch')) {
+        await checkoutRevision(BENCHMARK_ROOT, manifest);
+        integrity = await verifyAgentBenchFcCheckout({ root: BENCHMARK_ROOT, manifest });
+    }
+    return assertAgentBenchFcIntegrity(integrity);
+}
+
+function runWsl(args, options = {}) {
+    return runProcess(WSL, [
+        '-d', WSL_DISTRO,
+        '--cd', toWslPath(BENCHMARK_ROOT),
+        '--', ...args
+    ], options);
+}
+
+async function runWslChecked(args, label, options = {}) {
+    const result = await runWsl(args, options);
+    if (result.code !== 0) {
+        throw new Error(`${label} failed: ${result.stderr || result.stdout || result.error}`);
+    }
+    return result;
+}
+
+async function ensureEnvironmentPrerequisites(task) {
+    if (task === 'dbbench-std') {
+        await runWslChecked(['docker', 'pull', 'mysql:8'], 'DBBench mysql:8 image');
+    }
+    if (task === 'os-std') {
+        for (const variant of ['default', 'packages', 'ubuntu']) {
+            await runWslChecked([
+                'docker', 'build',
+                '-t', `local-os/${variant}`,
+                '-f', `data/os_interaction/res/dockerfiles/${variant}`,
+                'data/os_interaction/res/dockerfiles'
+            ], `OS image local-os/${variant}`, {
+                onStdout: (chunk) => process.stdout.write(chunk),
+                onStderr: (chunk) => process.stderr.write(chunk)
+            });
+        }
+    }
+}
+
+async function waitForJson(url, timeoutMs, predicate = (value) => Boolean(value)) {
+    const deadline = Date.now() + timeoutMs;
+    let lastError = '';
+    while (Date.now() < deadline) {
+        try {
+            const response = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+            const data = await response.json();
+            if (response.ok && predicate(data)) return data;
+            lastError = `${response.status}: ${JSON.stringify(data)}`;
+        } catch (error) {
+            lastError = error?.message || String(error);
+        }
+        await new Promise((resolve) => setTimeout(resolve, 3_000));
+    }
+    throw new Error(`Timed out waiting for ${url}: ${lastError}`);
+}
+
+function startBridge(outputDir) {
+    const stdout = fs.openSync(path.join(outputDir, 'bridge.stdout.log'), 'a');
+    const stderr = fs.openSync(path.join(outputDir, 'bridge.stderr.log'), 'a');
+    return spawn(process.execPath, [
+        path.join(ROOT, 'scripts', 'serve-ailis-agentbench-fc.mjs'),
+        '--port', String(BRIDGE_PORT),
+        '--audit-dir', path.join(outputDir, 'bridge-audit')
+    ], {
+        cwd: ROOT,
+        env: process.env,
+        windowsHide: true,
+        stdio: ['ignore', stdout, stderr]
+    });
+}
+
+function dateStamp() {
+    const now = new Date();
+    return [now.getFullYear(), now.getMonth() + 1, now.getDate()]
+        .map((value, index) => index === 0 ? String(value) : String(value).padStart(2, '0'))
+        .join('');
+}
+
+function pythonCommand() {
+    return process.env.AILIS_AGENTBENCH_PYTHON || 'python';
+}
+
+function numericArg(args, name, value) {
+    if (Number.isFinite(value) && value > 0) args.push(name, String(Math.floor(value)));
+}
+
+async function main() {
+    const manifest = await readAgentBenchFcManifest();
+    const taskNames = Object.keys(manifest.tasks || {});
+    const options = parseAgentBenchFcStageArgs(process.argv.slice(2), taskNames);
+    const runId = options.runId || `agentbench-fc-${dateStamp()}-${options.stage}`;
+    const outputDir = path.join(ROOT, 'eval-results', 'agentbench-fc', runId);
+    await fsp.mkdir(outputDir, { recursive: true });
+    await ensureAgentBenchFcCheckout(manifest);
+    assertAgentBenchFcIntegrity(await verifyAgentBenchFcCheckout({
+        root: BENCHMARK_ROOT,
+        manifest,
+        task: options.task
+    }));
+
+    const definition = manifest.tasks[options.task];
+    const composeServices = ['controller', 'redis', definition.composeService];
+    if (options.task === 'kg-std') composeServices.push('freebase');
+    const composeArgs = ['compose', '-f', 'extra/docker-compose.yml', 'up', '-d', '--build', ...composeServices];
+    console.log(`[AgentBench FC] provisioning ${options.task} at ${manifest.revision}`);
+    await ensureEnvironmentPrerequisites(options.task);
+    await runWslChecked(composeArgs, 'AgentBench FC Docker Compose', {
+        onStdout: (chunk) => process.stdout.write(chunk),
+        onStderr: (chunk) => process.stderr.write(chunk)
+    });
+
+    let bridge = null;
+    try {
+        const query = new URLSearchParams({ name: options.task });
+        await waitForJson(
+            `http://127.0.0.1:${manifest.controllerPort}/api/get_indices?${query}`,
+            15 * 60_000,
+            (value) => Array.isArray(value)
+        );
+        bridge = startBridge(outputDir);
+        await waitForJson(
+            `http://127.0.0.1:${BRIDGE_PORT}/health`,
+            60_000,
+            (value) => value?.ok === true && value?.protocol === 'openai_function_calling'
+        );
+
+        const policy = AGENTBENCH_FC_STAGE_POLICY[options.stage];
+        const runnerArgs = [
+            '-m', 'evals.agentbench_fc.run_fc',
+            '--task', options.task,
+            '--controller', `http://127.0.0.1:${manifest.controllerPort}/api`,
+            '--bridge', `http://127.0.0.1:${BRIDGE_PORT}/v1`,
+            '--output-dir', outputDir,
+            '--run-id', runId,
+            '--offset', String(options.offset),
+            '--limit', String(options.limit),
+            '--max-environment-turns', String(manifest.maxEnvironmentTurns),
+            '--retry-errors'
+        ];
+        numericArg(runnerArgs, '--max-calls', policy.maxCalls);
+        numericArg(runnerArgs, '--max-tokens', policy.maxTokens);
+        numericArg(runnerArgs, '--max-duration-ms', policy.maxDurationMs);
+        const runner = await runProcess(pythonCommand(), runnerArgs, {
+            cwd: ROOT,
+            onStdout: (chunk) => process.stdout.write(chunk),
+            onStderr: (chunk) => process.stderr.write(chunk)
+        });
+        if (runner.code !== 0) {
+            throw new Error(`AgentBench FC runner failed: ${runner.stderr || runner.stdout || runner.error}`);
+        }
+        const summaryPath = path.join(outputDir, `${runId}.${options.task}.summary.json`);
+        const summary = JSON.parse(await fsp.readFile(summaryPath, 'utf8'));
+        const gate = evaluateAgentBenchFcStageGate(summary, options.stage);
+        const report = {
+            schema: 'ailis.agentbench.fc.stage-report.v1',
+            benchmark: {
+                repository: manifest.repository,
+                revision: manifest.revision,
+                task: options.task,
+                stage: options.stage
+            },
+            integrity: await verifyAgentBenchFcCheckout({ root: BENCHMARK_ROOT, manifest, task: options.task }),
+            gate,
+            summary
+        };
+        await fsp.writeFile(
+            path.join(outputDir, `${runId}.${options.task}.stage-report.json`),
+            `${JSON.stringify(report, null, 2)}\n`,
+            'utf8'
+        );
+        console.log(JSON.stringify(report, null, 2));
+        if (!gate.passed) process.exitCode = 2;
+    } finally {
+        if (bridge && !bridge.killed) bridge.kill();
+        await runWsl([
+            'docker', 'compose', '-f', 'extra/docker-compose.yml',
+            'stop', definition.composeService
+        ]).catch(() => {});
+    }
+}
+
+main().catch((error) => {
+    console.error(error?.stack || error);
+    process.exitCode = 1;
+});

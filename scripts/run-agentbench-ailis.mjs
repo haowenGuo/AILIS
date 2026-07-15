@@ -11,7 +11,7 @@ const { AILISGateway } = require('../electron/ailis-gateway.cjs');
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(__dirname, '..');
-const DEFAULT_AGENTBENCH_ROOT = path.join(PROJECT_ROOT, 'build-cache', 'benchmarks', 'agentbench-main');
+const DEFAULT_AGENTBENCH_ROOT = path.join(PROJECT_ROOT, 'build-cache', 'benchmarks', 'agentbench-fc');
 const DEFAULT_OUTPUT_DIR = path.join(PROJECT_ROOT, 'eval-results', 'engineering', 'agentbench-ailis');
 const OFFICIAL_DBBENCH_DEV_RELATIVE_PATH = path.join('data', 'dbbench', 'dev.jsonl');
 

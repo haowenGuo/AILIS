@@ -1,4 +1,4 @@
-export const AGENTBENCH_STAGE_POLICY = Object.freeze({
+export const AGENTBENCH_FC_STAGE_POLICY = Object.freeze({
     smoke: Object.freeze({
         maxSamples: 3,
         minCompletionRate: 2 / 3,
@@ -9,28 +9,21 @@ export const AGENTBENCH_STAGE_POLICY = Object.freeze({
     pilot: Object.freeze({
         maxSamples: 10,
         minCompletionRate: 0.8,
-        maxCalls: 250,
-        maxTokens: 600_000,
+        maxCalls: 200,
+        maxTokens: 500_000,
         maxDurationMs: 60 * 60_000
     }),
-    dev: Object.freeze({
+    full: Object.freeze({
         maxSamples: Infinity,
         minCompletionRate: 0,
         maxAverageCalls: 20,
-        maxAverageTokens: 60_000,
-        maxAverageDurationMs: 30 * 60_000
-    }),
-    test: Object.freeze({
-        maxSamples: Infinity,
-        minCompletionRate: 0,
-        maxAverageCalls: 20,
-        maxAverageTokens: 60_000,
-        maxAverageDurationMs: 30 * 60_000
+        maxAverageTokens: 50_000,
+        maxAverageDurationMs: 20 * 60_000
     })
 });
 
-export function evaluateStageGate(summary, stage) {
-    const policy = AGENTBENCH_STAGE_POLICY[stage];
+export function evaluateAgentBenchFcStageGate(summary, stage) {
+    const policy = AGENTBENCH_FC_STAGE_POLICY[stage];
     if (!policy) return { passed: false, reasons: [`unknown_stage:${stage}`] };
     const reasons = [];
     const selected = Number(summary?.selected || 0);
@@ -38,6 +31,8 @@ export function evaluateStageGate(summary, stage) {
     const tokens = Number(summary?.usage?.total_tokens || 0);
     const durationMs = Number(summary?.duration_ms || 0);
     const completionRate = Number(summary?.quality?.completion_rate || 0);
+    if (summary?.schema !== 'ailis.agentbench.fc.environment.v1') reasons.push('wrong_summary_schema');
+    if (summary?.protocol?.style !== 'openai_function_calling') reasons.push('wrong_protocol');
     if (summary?.valid !== true) reasons.push('summary_not_valid');
     if (Number(summary?.error_records || 0) !== 0) reasons.push('infrastructure_errors_present');
     if (summary?.official_score == null) reasons.push('official_score_missing');

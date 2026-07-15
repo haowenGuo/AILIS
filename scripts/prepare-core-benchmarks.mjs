@@ -14,9 +14,9 @@ const OUTPUT_PATH = path.join(OUTPUT_DIR, 'core-benchmark-sources.json');
 const REPOS = [
     {
         id: 'agentbench',
-        name: 'agentbench-main',
+        name: 'agentbench-fc',
         url: 'https://github.com/THUDM/AgentBench.git',
-        branch: 'main'
+        revision: 'd1e4a10db08c87075c78972e48ecc182be03e2d5'
     },
     {
         id: 'locomo',
@@ -128,6 +128,21 @@ async function gitShortHead(repoPath) {
     return result.code === 0 ? normalizeText(result.stdout) : '';
 }
 
+async function gitHead(repoPath) {
+    const result = await runProcess('git', ['-C', repoPath, 'rev-parse', 'HEAD']);
+    return result.code === 0 ? normalizeText(result.stdout) : '';
+}
+
+async function checkoutPinnedRevision(repoPath, repo) {
+    const fetch = await runProcess('git', [
+        '-C', repoPath, 'fetch', '--depth', '1', 'origin', repo.revision
+    ], { captureLimit: 12000 });
+    if (fetch.code !== 0) return fetch;
+    return runProcess('git', [
+        '-C', repoPath, 'checkout', '--detach', repo.revision
+    ], { captureLimit: 12000 });
+}
+
 async function hasHfAuth() {
     if (process.env.HF_TOKEN || process.env.HUGGINGFACE_HUB_TOKEN) {
         return true;
@@ -140,15 +155,28 @@ async function ensureRepo(repo, args) {
     const repoPath = path.join(BENCHMARK_ROOT, repo.name);
     const gitDir = path.join(repoPath, '.git');
     if (await pathExists(gitDir)) {
-        if (args.refresh && !args.inventoryOnly) {
-            await runProcess('git', ['-C', repoPath, 'fetch', '--depth', '1', 'origin', repo.branch], { captureLimit: 12000 });
-            await runProcess('git', ['-C', repoPath, 'checkout', `origin/${repo.branch}`], { captureLimit: 12000 });
+        const currentRevision = await gitHead(repoPath);
+        if (!args.inventoryOnly && repo.revision && (args.refresh || currentRevision !== repo.revision)) {
+            const checkout = await checkoutPinnedRevision(repoPath, repo);
+            if (checkout.code !== 0) {
+                return {
+                    id: repo.id,
+                    status: 'checkout_failed',
+                    path: repoPath,
+                    source: repo.url,
+                    expectedRevision: repo.revision,
+                    error: normalizeText(checkout.stderr || checkout.stdout || checkout.error)
+                };
+            }
         }
+        const resolvedRevision = await gitHead(repoPath);
         return {
             id: repo.id,
-            status: 'available',
+            status: repo.revision && resolvedRevision !== repo.revision ? 'revision_mismatch' : 'available',
             path: repoPath,
             commit: await gitShortHead(repoPath),
+            expectedRevision: repo.revision || null,
+            revisionMatches: !repo.revision || resolvedRevision === repo.revision,
             source: repo.url
         };
     }
@@ -163,9 +191,8 @@ async function ensureRepo(repo, args) {
     await fs.mkdir(BENCHMARK_ROOT, { recursive: true });
     const result = await runProcess('git', [
         'clone',
-        '--depth',
-        '1',
         '--filter=blob:none',
+        '--no-checkout',
         repo.url,
         repoPath
     ], { captureLimit: 16000 });
@@ -178,11 +205,26 @@ async function ensureRepo(repo, args) {
             error: normalizeText(result.stderr || result.stdout || result.error, 'git clone failed')
         };
     }
+    if (repo.revision) {
+        const checkout = await checkoutPinnedRevision(repoPath, repo);
+        if (checkout.code !== 0) {
+            return {
+                id: repo.id,
+                status: 'checkout_failed',
+                path: repoPath,
+                source: repo.url,
+                expectedRevision: repo.revision,
+                error: normalizeText(checkout.stderr || checkout.stdout || checkout.error)
+            };
+        }
+    }
     return {
         id: repo.id,
         status: 'available',
         path: repoPath,
         commit: await gitShortHead(repoPath),
+        expectedRevision: repo.revision || null,
+        revisionMatches: true,
         source: repo.url
     };
 }
@@ -199,10 +241,8 @@ async function inventoryAgentBench(base) {
         environments,
         taskConfigCount: await countFiles(configRoot, (filePath) => /\.ya?ml$/i.test(filePath)),
         dataFileCount: await countFiles(dataRoot),
-        ailisRunnerCompatibility: taskYamlCount > 0 ? 'direct' : 'needs_official_agentbench_adapter',
-        note: taskYamlCount > 0
-            ? 'AILIS legacy AgentBench runner can list task.yaml files directly.'
-            : 'Official AgentBench data is present, but AILIS legacy runner expects tasks/*/*/task.yaml. Add an official AgentBench adapter before scoring.'
+        ailisRunnerCompatibility: 'official_fc_controller',
+        note: 'Pinned AgentBench FC checkout. Run through the official five-environment controller and OpenAI function-calling bridge.'
     };
 }
 
