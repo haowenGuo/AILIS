@@ -26,6 +26,9 @@ const WSL = process.env.WINDIR
     ? path.join(process.env.WINDIR, 'System32', 'wsl.exe')
     : 'wsl.exe';
 const BRIDGE_PORT = 5128;
+const PINNED_RUNTIME_FILES = Object.freeze([
+    'extra/worker-entrypoint.sh'
+]);
 let resolvedWslDistro = '';
 
 function runProcess(command, args, options = {}) {
@@ -83,6 +86,23 @@ async function checkoutRevision(repoRoot, manifest) {
     await runGit(['checkout', '--detach', manifest.revision], repoRoot);
 }
 
+async function materializePinnedRuntimeFiles(repoRoot, manifest) {
+    for (const relativePath of PINNED_RUNTIME_FILES) {
+        const source = await runProcess(
+            'git',
+            ['show', `${manifest.revision}:${relativePath}`],
+            { cwd: repoRoot }
+        );
+        if (source.code !== 0) {
+            throw new Error(
+                `Unable to materialize ${relativePath} from ${manifest.revision}: `
+                + `${source.stderr || source.stdout || source.error}`
+            );
+        }
+        await fsp.writeFile(path.join(repoRoot, relativePath), source.stdout, 'utf8');
+    }
+}
+
 async function ensureAgentBenchFcCheckout(manifest) {
     if (!await pathExists(path.join(BENCHMARK_ROOT, '.git'))) {
         await fsp.mkdir(CACHE_ROOT, { recursive: true });
@@ -92,8 +112,12 @@ async function ensureAgentBenchFcCheckout(manifest) {
         } else {
             await runGit(['clone', '--filter=blob:none', '--no-checkout', manifest.repository, BENCHMARK_ROOT]);
         }
+        await runGit(['config', 'core.autocrlf', 'false'], BENCHMARK_ROOT);
         await checkoutRevision(BENCHMARK_ROOT, manifest);
     }
+    await runGit(['config', 'core.autocrlf', 'false'], BENCHMARK_ROOT);
+    // Runtime scripts must match the pinned Git blobs; CRLF breaks Linux shebang resolution.
+    await materializePinnedRuntimeFiles(BENCHMARK_ROOT, manifest);
     let integrity = await verifyAgentBenchFcCheckout({ root: BENCHMARK_ROOT, manifest });
     if (!integrity.ok && integrity.failures.every((failure) => failure.kind === 'revision_mismatch')) {
         await checkoutRevision(BENCHMARK_ROOT, manifest);
