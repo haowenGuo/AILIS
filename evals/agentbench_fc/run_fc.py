@@ -160,6 +160,7 @@ def call_bridge(
         "messages": messages,
         "tools": tools,
         "tool_choice": "auto",
+        "parallel_tool_calls": False,
         "temperature": temperature,
         "max_completion_tokens": 1024,
         "stream": False,

@@ -6,6 +6,38 @@ from evals.agentbench_fc import run_fc
 
 
 class AgentBenchFcRunnerTests(unittest.TestCase):
+    def test_bridge_disables_parallel_tool_calls_for_single_action_environments(self):
+        captured = {}
+
+        def request_json(method, url, payload=None, headers=None, timeout_seconds=0, failure_kind="controller_transport"):
+            captured["payload"] = payload
+            return {
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "tool_calls": [{
+                            "id": "call-1",
+                            "type": "function",
+                            "function": {"name": "bash_action", "arguments": '{"script":"pwd"}'},
+                        }],
+                    },
+                }],
+                "usage": {"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6},
+            }, {}
+
+        with patch.object(run_fc, "request_json", side_effect=request_json):
+            message, metric = run_fc.call_bridge(
+                "http://bridge/v1",
+                [{"role": "user", "content": "Inspect the OS"}],
+                [{"type": "function", "function": {"name": "bash_action"}}],
+                0.8,
+                30,
+            )
+
+        self.assertIs(captured["payload"]["parallel_tool_calls"], False)
+        self.assertEqual(message["tool_calls"][0]["function"]["name"], "bash_action")
+        self.assertEqual(metric["tool_call_count"], 1)
+
     def test_runner_preserves_native_fc_protocol_across_turns(self):
         args = argparse.Namespace(
             task="dbbench-std",
