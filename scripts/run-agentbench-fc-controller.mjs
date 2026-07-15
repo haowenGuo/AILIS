@@ -139,12 +139,23 @@ async function runWslChecked(args, label, options = {}) {
     return result;
 }
 
+async function hasDockerImage(image) {
+    const result = await runWsl(['docker', 'image', 'inspect', image]);
+    return result.code === 0;
+}
+
+async function ensureDockerImage(image) {
+    if (await hasDockerImage(image)) return;
+    await runWslChecked(['docker', 'pull', image], `Docker image ${image}`);
+}
+
 async function ensureEnvironmentPrerequisites(task) {
     if (task === 'dbbench-std') {
-        await runWslChecked(['docker', 'pull', 'mysql:8'], 'DBBench mysql:8 image');
+        await ensureDockerImage('mysql:8');
     }
     if (task === 'os-std') {
         for (const variant of ['default', 'packages', 'ubuntu']) {
+            if (await hasDockerImage(`local-os/${variant}`)) continue;
             await runWslChecked([
                 'docker', 'build',
                 '-t', `local-os/${variant}`,
