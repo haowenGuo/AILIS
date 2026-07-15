@@ -17,26 +17,31 @@
   "tasks": {
     "dbbench-std": {
       "environment": "DB",
+      "expectedSamples": 300,
       "composeService": "dbbench-std",
       "requiredPaths": ["data/dbbench/standard.jsonl"]
     },
     "os-std": {
       "environment": "OS",
+      "expectedSamples": 144,
       "composeService": "os_interaction-std",
       "requiredPaths": ["data/os_interaction/data", "data/os_interaction/res/dockerfiles"]
     },
     "kg-std": {
       "environment": "KG",
+      "expectedSamples": 150,
       "composeService": "knowledgegraph-std",
       "requiredPaths": ["data/knowledgegraph/std.json", "extra/virtuoso_db/virtuoso.db"]
     },
     "alfworld-std": {
       "environment": "ALFWorld",
+      "expectedSamples": 109,
       "composeService": "alfworld-std",
       "requiredPaths": ["data/alfworld", "src/server/tasks/alfworld"]
     },
     "webshop-std": {
       "environment": "WebShop",
+      "expectedSamples": 200,
       "composeService": "webshop-std",
       "requiredPaths": ["src/server/tasks/webshop"]
     }
