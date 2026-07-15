@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import { parseAgentBenchFcStageArgs } from '../evals/agentbench_fc/stage-options.mjs';
 import { evaluateAgentBenchFcStageGate } from '../evals/agentbench_fc/stage-policy.mjs';
+import { parseWslDistributionList } from '../scripts/run-agentbench-fc-controller.mjs';
 
 const tasks = ['dbbench-std', 'os-std', 'kg-std', 'alfworld-std', 'webshop-std'];
 
@@ -58,4 +59,11 @@ test('FC gate rejects old schemas and infrastructure failures', () => {
     assert.ok(result.reasons.includes('wrong_summary_schema'));
     assert.ok(result.reasons.includes('summary_not_valid'));
     assert.ok(result.reasons.includes('infrastructure_errors_present'));
+});
+
+test('FC controller discovers the installed WSL distribution from UTF-16-like output', () => {
+    assert.deepEqual(
+        parseWslDistributionList(`${[...'Ubuntu-22.04'].join('\0')}\0\r\0\n\0`),
+        ['Ubuntu-22.04']
+    );
 });

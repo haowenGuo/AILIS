@@ -24,8 +24,8 @@ const LOCAL_SEED_ROOT = path.join(CACHE_ROOT, 'agentbench-main');
 const WSL = process.env.WINDIR
     ? path.join(process.env.WINDIR, 'System32', 'wsl.exe')
     : 'wsl.exe';
-const WSL_DISTRO = process.env.AILIS_AGENTBENCH_WSL_DISTRO || 'Ubuntu';
 const BRIDGE_PORT = 5128;
+let resolvedWslDistro = '';
 
 function runProcess(command, args, options = {}) {
     return new Promise((resolve) => {
@@ -101,9 +101,31 @@ async function ensureAgentBenchFcCheckout(manifest) {
     return assertAgentBenchFcIntegrity(integrity);
 }
 
-function runWsl(args, options = {}) {
+export function parseWslDistributionList(output = '') {
+    return String(output)
+        .replaceAll('\0', '')
+        .split(/\r?\n/)
+        .map((value) => value.trim())
+        .filter(Boolean);
+}
+
+async function resolveWslDistro() {
+    if (process.env.AILIS_AGENTBENCH_WSL_DISTRO) return process.env.AILIS_AGENTBENCH_WSL_DISTRO;
+    if (resolvedWslDistro) return resolvedWslDistro;
+    const result = await runProcess(WSL, ['--list', '--quiet']);
+    if (result.code !== 0) {
+        throw new Error(`Unable to list WSL distributions: ${result.stderr || result.error}`);
+    }
+    const distributions = parseWslDistributionList(result.stdout);
+    resolvedWslDistro = distributions.find((value) => /^ubuntu(?:-|$)/i.test(value)) || distributions[0] || '';
+    if (!resolvedWslDistro) throw new Error('No WSL distribution is installed');
+    return resolvedWslDistro;
+}
+
+async function runWsl(args, options = {}) {
+    const distro = await resolveWslDistro();
     return runProcess(WSL, [
-        '-d', WSL_DISTRO,
+        '-d', distro,
         '--cd', toWslPath(BENCHMARK_ROOT),
         '--', ...args
     ], options);
@@ -278,7 +300,9 @@ async function main() {
     }
 }
 
-main().catch((error) => {
-    console.error(error?.stack || error);
-    process.exitCode = 1;
-});
+if (path.resolve(process.argv[1] || '') === fileURLToPath(import.meta.url)) {
+    main().catch((error) => {
+        console.error(error?.stack || error);
+        process.exitCode = 1;
+    });
+}
