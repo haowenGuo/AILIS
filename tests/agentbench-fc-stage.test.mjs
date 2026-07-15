@@ -4,6 +4,7 @@ import test from 'node:test';
 import { parseAgentBenchFcStageArgs } from '../evals/agentbench_fc/stage-options.mjs';
 import { evaluateAgentBenchFcStageGate } from '../evals/agentbench_fc/stage-policy.mjs';
 import {
+    agentBenchFcRuntimeImageSpec,
     buildPlainDockerWorkerRunArgs,
     buildWslKeepaliveArgs,
     parseWslRouteSourceAddress,
@@ -97,4 +98,16 @@ test('plain Docker fallback preserves the official DB worker contract', () => {
     assert.deepEqual(args.slice(-3), [
         '--controller', 'http://172.17.0.1:5020/api', 'dbbench-std'
     ]);
+});
+
+test('FC derives compatibility images without changing official worker sources', () => {
+    const revision = 'd1e4a10db08c87075c78972e48ecc182be03e2d5';
+    const db = agentBenchFcRuntimeImageSpec('dbbench-std', 'db-worker:test', revision);
+    assert.match(db.image, /mysql-ready$/);
+    assert.equal(db.label, 'AgentBench FC DBBench MySQL readiness image');
+
+    const os = agentBenchFcRuntimeImageSpec('os-std', 'os-worker:test', revision);
+    assert.match(os.image, /aiodocker-0\.24\.0$/);
+    assert.equal(os.label, 'AgentBench FC OS aiodocker compatibility image');
+    assert.equal(agentBenchFcRuntimeImageSpec('kg-std', 'kg-worker:test', revision), null);
 });

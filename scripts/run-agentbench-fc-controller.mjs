@@ -33,6 +33,13 @@ const DBBENCH_READINESS_DOCKERFILE = path.join(
     'docker',
     'dbbench-mysql-readiness.Dockerfile'
 );
+const OS_AIODOCKER_COMPAT_DOCKERFILE = path.join(
+    ROOT,
+    'evals',
+    'agentbench_fc',
+    'docker',
+    'os-aiodocker-compat.Dockerfile'
+);
 const PINNED_RUNTIME_FILES = Object.freeze([
     'extra/worker-entrypoint.sh'
 ]);
@@ -263,17 +270,36 @@ async function ensureEnvironmentPrerequisites(task) {
     }
 }
 
+export function agentBenchFcRuntimeImageSpec(task, workerImage, revision) {
+    if (task === 'dbbench-std') {
+        return {
+            image: `ailis-agentbench-fc-${task}:${revision.slice(0, 12)}-mysql-ready`,
+            dockerfile: DBBENCH_READINESS_DOCKERFILE,
+            label: 'AgentBench FC DBBench MySQL readiness image'
+        };
+    }
+    if (task === 'os-std') {
+        return {
+            image: `ailis-agentbench-fc-${task}:${revision.slice(0, 12)}-aiodocker-0.24.0`,
+            dockerfile: OS_AIODOCKER_COMPAT_DOCKERFILE,
+            label: 'AgentBench FC OS aiodocker compatibility image'
+        };
+    }
+    return null;
+}
+
 async function ensureWorkerRuntimeImage(task, workerImage, manifest) {
-    if (task !== 'dbbench-std') return workerImage;
-    const runtimeImage = `ailis-agentbench-fc-${task}:${manifest.revision.slice(0, 12)}-mysql-ready`;
+    const spec = agentBenchFcRuntimeImageSpec(task, workerImage, manifest.revision);
+    if (!spec) return workerImage;
+    const runtimeImage = spec.image;
     if (await hasDockerImage(runtimeImage)) return runtimeImage;
     await runWslChecked([
         'env', 'DOCKER_BUILDKIT=1', 'docker', 'build',
         '--build-arg', `BASE_IMAGE=${workerImage}`,
         '-t', runtimeImage,
-        '-f', toWslPath(DBBENCH_READINESS_DOCKERFILE),
-        toWslPath(path.dirname(DBBENCH_READINESS_DOCKERFILE))
-    ], 'AgentBench FC DBBench MySQL readiness image', {
+        '-f', toWslPath(spec.dockerfile),
+        toWslPath(path.dirname(spec.dockerfile))
+    ], spec.label, {
         onStdout: (chunk) => process.stdout.write(chunk),
         onStderr: (chunk) => process.stderr.write(chunk)
     });
