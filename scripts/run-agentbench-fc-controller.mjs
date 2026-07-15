@@ -26,6 +26,13 @@ const WSL = process.env.WINDIR
     ? path.join(process.env.WINDIR, 'System32', 'wsl.exe')
     : 'wsl.exe';
 const BRIDGE_PORT = 5128;
+const DBBENCH_READINESS_DOCKERFILE = path.join(
+    ROOT,
+    'evals',
+    'agentbench_fc',
+    'docker',
+    'dbbench-mysql-readiness.Dockerfile'
+);
 const PINNED_RUNTIME_FILES = Object.freeze([
     'extra/worker-entrypoint.sh'
 ]);
@@ -256,6 +263,23 @@ async function ensureEnvironmentPrerequisites(task) {
     }
 }
 
+async function ensureWorkerRuntimeImage(task, workerImage, manifest) {
+    if (task !== 'dbbench-std') return workerImage;
+    const runtimeImage = `ailis-agentbench-fc-${task}:${manifest.revision.slice(0, 12)}-mysql-ready`;
+    if (await hasDockerImage(runtimeImage)) return runtimeImage;
+    await runWslChecked([
+        'env', 'DOCKER_BUILDKIT=1', 'docker', 'build',
+        '--build-arg', `BASE_IMAGE=${workerImage}`,
+        '-t', runtimeImage,
+        '-f', toWslPath(DBBENCH_READINESS_DOCKERFILE),
+        toWslPath(path.dirname(DBBENCH_READINESS_DOCKERFILE))
+    ], 'AgentBench FC DBBench MySQL readiness image', {
+        onStdout: (chunk) => process.stdout.write(chunk),
+        onStderr: (chunk) => process.stderr.write(chunk)
+    });
+    return runtimeImage;
+}
+
 const WORKER_DOCKERFILES = Object.freeze({
     'dbbench-std': 'src/server/tasks/dbbench/Dockerfile',
     'os-std': 'src/server/tasks/os_interaction/Dockerfile',
@@ -386,9 +410,10 @@ async function provisionPlainDockerTask(task, manifest) {
             onStderr: (chunk) => process.stderr.write(chunk)
         });
     }
+    const runtimeImage = await ensureWorkerRuntimeImage(task, workerImage, manifest);
     await removeOwnedContainer(ownedWorkerContainer(task));
     await runWslChecked(
-        buildPlainDockerWorkerRunArgs(task, workerImage),
+        buildPlainDockerWorkerRunArgs(task, runtimeImage),
         `AgentBench FC worker ${task}`
     );
     return { mode: 'plain_docker', workerContainer: ownedWorkerContainer(task) };
