@@ -29,7 +29,9 @@ Freebase `virtuoso.db`; the integrity gate fails closed when it is absent.
 If the WSL Docker CLI has no Compose plugin, the controller uses an equivalent
 plain-Docker orchestration with the same official Dockerfiles, network settings,
 mounts, and worker arguments. `AILIS_DOCKER_MIRROR` may name a registry mirror for
-images that are not already present locally.
+images that are not already present locally. Pulls are bounded by
+`AILIS_DOCKER_PULL_TIMEOUT_SECONDS` (300 seconds by default), and an existing host
+Redis on port 6379 is reused.
 
 The bridge reads the desktop model configuration. CI or isolated runs may override
 it with `AILIS_AGENTBENCH_PROVIDER`, `AILIS_AGENTBENCH_BASE_URL`,

@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
+import net from 'node:net';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
@@ -146,17 +147,27 @@ async function hasDockerImage(image) {
 
 async function ensureDockerImage(image) {
     if (await hasDockerImage(image)) return;
+    const pullTimeoutSeconds = Math.max(
+        30,
+        Number(process.env.AILIS_DOCKER_PULL_TIMEOUT_SECONDS) || 300
+    );
+    const pull = (target) => runWsl([
+        'timeout', String(pullTimeoutSeconds), 'docker', 'pull', target
+    ]);
     const mirror = String(process.env.AILIS_DOCKER_MIRROR || '').replace(/\/+$/, '');
     if (mirror) {
         const repository = image.includes('/') ? image : `library/${image}`;
         const mirroredImage = `${mirror}/${repository}`;
-        const mirrored = await runWsl(['docker', 'pull', mirroredImage]);
+        const mirrored = await pull(mirroredImage);
         if (mirrored.code === 0) {
             await runWslChecked(['docker', 'tag', mirroredImage, image], `Docker image tag ${image}`);
             return;
         }
     }
-    await runWslChecked(['docker', 'pull', image], `Docker image ${image}`);
+    const primary = await pull(image);
+    if (primary.code !== 0) {
+        throw new Error(`Docker image ${image} failed: ${primary.stderr || primary.stdout || primary.error}`);
+    }
 }
 
 async function ensureEnvironmentPrerequisites(task) {
@@ -231,6 +242,26 @@ async function ensurePlainRuntimeContainer(name, image, extraArgs = []) {
     await runWslChecked([
         'docker', 'run', '-d', '--name', name, '--network', 'host', image, ...extraArgs
     ], `Docker container ${name}`);
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    const ready = await runWsl(['docker', 'inspect', '-f', '{{.State.Running}}', name]);
+    if (ready.code !== 0 || ready.stdout.replaceAll('\0', '').trim() !== 'true') {
+        const logs = await runWsl(['docker', 'logs', '--tail', '80', name]);
+        throw new Error(`Docker container ${name} exited during startup: ${logs.stderr || logs.stdout}`);
+    }
+}
+
+function isTcpPortOpen(host, port, timeoutMs = 1_000) {
+    return new Promise((resolve) => {
+        const socket = net.createConnection({ host, port });
+        const finish = (value) => {
+            socket.destroy();
+            resolve(value);
+        };
+        socket.setTimeout(timeoutMs);
+        socket.once('connect', () => finish(true));
+        socket.once('timeout', () => finish(false));
+        socket.once('error', () => finish(false));
+    });
 }
 
 async function ensurePlainDockerNetwork() {
@@ -245,12 +276,16 @@ async function ensurePlainDockerNetwork() {
 
 async function provisionPlainDockerTask(task, manifest) {
     await ensurePlainDockerNetwork();
-    await ensurePlainRuntimeContainer(
-        'ailis-agentbench-fc-controller',
-        'jingbh/agentrl-controller:latest',
-        ['controller']
-    );
-    await ensurePlainRuntimeContainer('ailis-agentbench-fc-redis', 'redis:7');
+    if (!await isTcpPortOpen('127.0.0.1', 5020)) {
+        await ensurePlainRuntimeContainer(
+            'ailis-agentbench-fc-controller',
+            'jingbh/agentrl-controller:latest',
+            ['controller']
+        );
+    }
+    if (!await isTcpPortOpen('127.0.0.1', 6379)) {
+        await ensurePlainRuntimeContainer('ailis-agentbench-fc-redis', 'redis:7');
+    }
     for (const baseImage of WORKER_BASE_IMAGES[task] || []) await ensureDockerImage(baseImage);
 
     if (task === 'kg-std') {
