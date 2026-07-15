@@ -30,6 +30,7 @@ const PINNED_RUNTIME_FILES = Object.freeze([
     'extra/worker-entrypoint.sh'
 ]);
 let resolvedWslDistro = '';
+let resolvedWslHostAddress = '';
 
 function runProcess(command, args, options = {}) {
     return new Promise((resolve) => {
@@ -162,6 +163,24 @@ async function runWslChecked(args, label, options = {}) {
         throw new Error(`${label} failed: ${result.stderr || result.stdout || result.error}`);
     }
     return result;
+}
+
+export function parseWslRouteSourceAddress(output = '') {
+    const tokens = String(output).replaceAll('\0', '').trim().split(/\s+/);
+    const sourceIndex = tokens.indexOf('src');
+    const address = sourceIndex >= 0 ? tokens[sourceIndex + 1] : '';
+    return /^\d{1,3}(?:\.\d{1,3}){3}$/.test(address) ? address : '';
+}
+
+async function resolveWslHostAddress() {
+    if (process.env.AILIS_AGENTBENCH_WSL_HOST) return process.env.AILIS_AGENTBENCH_WSL_HOST;
+    if (resolvedWslHostAddress) return resolvedWslHostAddress;
+    const route = await runWsl(['ip', '-4', 'route', 'get', '1.1.1.1']);
+    resolvedWslHostAddress = parseWslRouteSourceAddress(route.stdout);
+    if (route.code !== 0 || !resolvedWslHostAddress) {
+        throw new Error(`Unable to resolve the WSL host address: ${route.stderr || route.stdout || route.error}`);
+    }
+    return resolvedWslHostAddress;
 }
 
 export function buildWslKeepaliveArgs(distro) {
@@ -469,12 +488,14 @@ async function main() {
     let bridge = null;
     try {
         keepalive = await startWslKeepalive();
+        const controllerHost = await resolveWslHostAddress();
+        const controllerUrl = `http://${controllerHost}:${manifest.controllerPort}/api`;
         console.log(`[AgentBench FC] provisioning ${options.task} at ${manifest.revision}`);
         await ensureEnvironmentPrerequisites(options.task);
         environment = await provisionTaskEnvironment(options.task, definition, manifest);
         const query = new URLSearchParams({ name: options.task });
         await waitForJson(
-            `http://127.0.0.1:${manifest.controllerPort}/api/get_indices?${query}`,
+            `${controllerUrl}/get_indices?${query}`,
             15 * 60_000,
             (value) => Array.isArray(value)
         );
@@ -489,7 +510,7 @@ async function main() {
         const runnerArgs = [
             '-m', 'evals.agentbench_fc.run_fc',
             '--task', options.task,
-            '--controller', `http://127.0.0.1:${manifest.controllerPort}/api`,
+            '--controller', controllerUrl,
             '--bridge', `http://127.0.0.1:${BRIDGE_PORT}/v1`,
             '--output-dir', outputDir,
             '--run-id', runId,
@@ -503,6 +524,14 @@ async function main() {
         numericArg(runnerArgs, '--max-duration-ms', policy.maxDurationMs);
         const runner = await runProcess(pythonCommand(), runnerArgs, {
             cwd: ROOT,
+            env: {
+                NO_PROXY: [process.env.NO_PROXY, controllerHost, '127.0.0.1', 'localhost']
+                    .filter(Boolean)
+                    .join(','),
+                no_proxy: [process.env.no_proxy, controllerHost, '127.0.0.1', 'localhost']
+                    .filter(Boolean)
+                    .join(',')
+            },
             onStdout: (chunk) => process.stdout.write(chunk),
             onStderr: (chunk) => process.stderr.write(chunk)
         });

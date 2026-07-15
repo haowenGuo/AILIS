@@ -6,6 +6,7 @@ import { evaluateAgentBenchFcStageGate } from '../evals/agentbench_fc/stage-poli
 import {
     buildPlainDockerWorkerRunArgs,
     buildWslKeepaliveArgs,
+    parseWslRouteSourceAddress,
     parseWslDistributionList
 } from '../scripts/run-agentbench-fc-controller.mjs';
 
@@ -76,6 +77,14 @@ test('FC controller keeps the selected WSL distribution alive for the full run',
     assert.deepEqual(buildWslKeepaliveArgs('Ubuntu-22.04'), [
         '-d', 'Ubuntu-22.04', '--', 'sleep', 'infinity'
     ]);
+});
+
+test('FC controller resolves the Windows-reachable address from the WSL default route', () => {
+    assert.equal(
+        parseWslRouteSourceAddress('1.1.1.1 via 172.28.112.1 dev eth0 src 172.28.123.114 uid 0\n'),
+        '172.28.123.114'
+    );
+    assert.equal(parseWslRouteSourceAddress('unreachable 1.1.1.1'), '');
 });
 
 test('plain Docker fallback preserves the official DB worker contract', () => {
