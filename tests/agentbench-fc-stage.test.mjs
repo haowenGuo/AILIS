@@ -3,7 +3,10 @@ import test from 'node:test';
 
 import { parseAgentBenchFcStageArgs } from '../evals/agentbench_fc/stage-options.mjs';
 import { evaluateAgentBenchFcStageGate } from '../evals/agentbench_fc/stage-policy.mjs';
-import { parseWslDistributionList } from '../scripts/run-agentbench-fc-controller.mjs';
+import {
+    buildPlainDockerWorkerRunArgs,
+    parseWslDistributionList
+} from '../scripts/run-agentbench-fc-controller.mjs';
 
 const tasks = ['dbbench-std', 'os-std', 'kg-std', 'alfworld-std', 'webshop-std'];
 
@@ -66,4 +69,16 @@ test('FC controller discovers the installed WSL distribution from UTF-16-like ou
         parseWslDistributionList(`${[...'Ubuntu-22.04'].join('\0')}\0\r\0\n\0`),
         ['Ubuntu-22.04']
     );
+});
+
+test('plain Docker fallback preserves the official DB worker contract', () => {
+    const args = buildPlainDockerWorkerRunArgs('dbbench-std', 'worker:test');
+    assert.deepEqual(args.slice(0, 7), [
+        'docker', 'run', '-d', '--name', 'ailis-agentbench-fc-dbbench-std', '--network', 'agentbench-fc_default'
+    ]);
+    assert.ok(args.includes('/var/run/docker.sock:/var/run/docker.sock'));
+    assert.ok(args.includes('DBBENCH_STD_PARAMETERS_ENV_OPTIONS_NETWORK_NAME=agentbench-fc_default'));
+    assert.deepEqual(args.slice(-3), [
+        '--controller', 'http://172.17.0.1:5020/api', 'dbbench-std'
+    ]);
 });

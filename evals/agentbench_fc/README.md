@@ -26,6 +26,11 @@ Smoke runs exactly 3 samples, Pilot runs exactly 10, and Full requires explicit
 approval. Run only one task per invocation. KG additionally requires the official
 Freebase `virtuoso.db`; the integrity gate fails closed when it is absent.
 
+If the WSL Docker CLI has no Compose plugin, the controller uses an equivalent
+plain-Docker orchestration with the same official Dockerfiles, network settings,
+mounts, and worker arguments. `AILIS_DOCKER_MIRROR` may name a registry mirror for
+images that are not already present locally.
+
 The bridge reads the desktop model configuration. CI or isolated runs may override
 it with `AILIS_AGENTBENCH_PROVIDER`, `AILIS_AGENTBENCH_BASE_URL`,
 `AILIS_AGENTBENCH_MODEL`, and `AILIS_AGENTBENCH_API_KEY`.

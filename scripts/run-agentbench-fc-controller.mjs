@@ -146,6 +146,16 @@ async function hasDockerImage(image) {
 
 async function ensureDockerImage(image) {
     if (await hasDockerImage(image)) return;
+    const mirror = String(process.env.AILIS_DOCKER_MIRROR || '').replace(/\/+$/, '');
+    if (mirror) {
+        const repository = image.includes('/') ? image : `library/${image}`;
+        const mirroredImage = `${mirror}/${repository}`;
+        const mirrored = await runWsl(['docker', 'pull', mirroredImage]);
+        if (mirrored.code === 0) {
+            await runWslChecked(['docker', 'tag', mirroredImage, image], `Docker image tag ${image}`);
+            return;
+        }
+    }
     await runWslChecked(['docker', 'pull', image], `Docker image ${image}`);
 }
 
@@ -167,6 +177,146 @@ async function ensureEnvironmentPrerequisites(task) {
             });
         }
     }
+}
+
+const WORKER_DOCKERFILES = Object.freeze({
+    'dbbench-std': 'src/server/tasks/dbbench/Dockerfile',
+    'os-std': 'src/server/tasks/os_interaction/Dockerfile',
+    'kg-std': 'src/server/tasks/knowledgegraph/Dockerfile',
+    'alfworld-std': 'src/server/tasks/alfworld/Dockerfile',
+    'webshop-std': 'src/server/tasks/webshop/Dockerfile'
+});
+
+const WORKER_BASE_IMAGES = Object.freeze({
+    'dbbench-std': ['python:3.10'],
+    'os-std': ['python:3.10'],
+    'kg-std': ['python:3.10'],
+    'alfworld-std': ['alpine:3.22.0', 'python:3.9-bookworm'],
+    'webshop-std': ['python:slim', 'python:3.9-bullseye']
+});
+
+function ownedWorkerContainer(task) {
+    return `ailis-agentbench-fc-${task}`;
+}
+
+export function buildPlainDockerWorkerRunArgs(task, image) {
+    const args = [
+        'docker', 'run', '-d',
+        '--name', ownedWorkerContainer(task),
+        '--network', 'agentbench-fc_default'
+    ];
+    if (task === 'dbbench-std' || task === 'os-std') {
+        args.push('-v', '/var/run/docker.sock:/var/run/docker.sock');
+    }
+    if (task === 'dbbench-std') {
+        args.push('-e', 'DBBENCH_STD_PARAMETERS_ENV_OPTIONS_NETWORK_NAME=agentbench-fc_default');
+    } else if (task === 'os-std') {
+        args.push('-e', 'OS_STD_PARAMETERS_ENV_OPTIONS_NETWORK_NAME=agentbench-fc_default');
+    } else if (task === 'kg-std') {
+        args.push('-e', 'KG_STD_PARAMETERS_ENV_OPTIONS_URLS_KG=http://freebase:3001/sparql');
+    }
+    args.push(image, '--controller', 'http://172.17.0.1:5020/api', task);
+    return args;
+}
+
+async function removeOwnedContainer(name) {
+    await runWsl(['docker', 'rm', '-f', name]);
+}
+
+async function ensurePlainRuntimeContainer(name, image, extraArgs = []) {
+    const running = await runWsl(['docker', 'inspect', '-f', '{{.State.Running}}', name]);
+    if (running.code === 0 && running.stdout.replaceAll('\0', '').trim() === 'true') return;
+    if (running.code === 0) await removeOwnedContainer(name);
+    await ensureDockerImage(image);
+    await runWslChecked([
+        'docker', 'run', '-d', '--name', name, '--network', 'host', image, ...extraArgs
+    ], `Docker container ${name}`);
+}
+
+async function ensurePlainDockerNetwork() {
+    const found = await runWsl(['docker', 'network', 'inspect', 'agentbench-fc_default']);
+    if (found.code !== 0) {
+        await runWslChecked(
+            ['docker', 'network', 'create', 'agentbench-fc_default'],
+            'AgentBench FC Docker network'
+        );
+    }
+}
+
+async function provisionPlainDockerTask(task, manifest) {
+    await ensurePlainDockerNetwork();
+    await ensurePlainRuntimeContainer(
+        'ailis-agentbench-fc-controller',
+        'jingbh/agentrl-controller:latest',
+        ['controller']
+    );
+    await ensurePlainRuntimeContainer('ailis-agentbench-fc-redis', 'redis:7');
+    for (const baseImage of WORKER_BASE_IMAGES[task] || []) await ensureDockerImage(baseImage);
+
+    if (task === 'kg-std') {
+        const freebaseImage = `ailis-agentbench-fc-freebase:${manifest.revision.slice(0, 12)}`;
+        if (!await hasDockerImage(freebaseImage)) {
+            await runWslChecked([
+                'docker', 'build', '-t', freebaseImage, '-f', 'extra/freebase.Dockerfile', '.'
+            ], 'AgentBench FC Freebase image', {
+                onStdout: (chunk) => process.stdout.write(chunk),
+                onStderr: (chunk) => process.stderr.write(chunk)
+            });
+        }
+        await removeOwnedContainer('ailis-agentbench-fc-freebase');
+        await runWslChecked([
+            'docker', 'run', '-d',
+            '--name', 'ailis-agentbench-fc-freebase',
+            '--network', 'agentbench-fc_default',
+            '--network-alias', 'freebase',
+            '-v', `${toWslPath(path.join(BENCHMARK_ROOT, 'extra', 'virtuoso_db', 'virtuoso.db'))}:/database/virtuoso.db`,
+            freebaseImage
+        ], 'AgentBench FC Freebase container');
+    }
+
+    const workerImage = `ailis-agentbench-fc-${task}:${manifest.revision.slice(0, 12)}`;
+    if (!await hasDockerImage(workerImage)) {
+        await runWslChecked([
+            'docker', 'build', '-t', workerImage,
+            '-f', WORKER_DOCKERFILES[task], '.'
+        ], `AgentBench FC worker image ${task}`, {
+            onStdout: (chunk) => process.stdout.write(chunk),
+            onStderr: (chunk) => process.stderr.write(chunk)
+        });
+    }
+    await removeOwnedContainer(ownedWorkerContainer(task));
+    await runWslChecked(
+        buildPlainDockerWorkerRunArgs(task, workerImage),
+        `AgentBench FC worker ${task}`
+    );
+    return { mode: 'plain_docker', workerContainer: ownedWorkerContainer(task) };
+}
+
+async function provisionTaskEnvironment(task, definition, manifest) {
+    const compose = await runWsl(['docker', 'compose', 'version']);
+    if (compose.code !== 0) return provisionPlainDockerTask(task, manifest);
+    const services = ['controller', 'redis', definition.composeService];
+    if (task === 'kg-std') services.push('freebase');
+    await runWslChecked([
+        'docker', 'compose', '-f', 'extra/docker-compose.yml',
+        'up', '-d', '--build', ...services
+    ], 'AgentBench FC Docker Compose', {
+        onStdout: (chunk) => process.stdout.write(chunk),
+        onStderr: (chunk) => process.stderr.write(chunk)
+    });
+    return { mode: 'docker_compose', workerContainer: definition.composeService };
+}
+
+async function stopTaskEnvironment(environment, definition, task) {
+    if (environment?.mode === 'plain_docker') {
+        await removeOwnedContainer(environment.workerContainer);
+        if (task === 'kg-std') await removeOwnedContainer('ailis-agentbench-fc-freebase');
+        return;
+    }
+    await runWsl([
+        'docker', 'compose', '-f', 'extra/docker-compose.yml',
+        'stop', definition.composeService
+    ]);
 }
 
 async function waitForJson(url, timeoutMs, predicate = (value) => Boolean(value)) {
@@ -231,15 +381,9 @@ async function main() {
     }));
 
     const definition = manifest.tasks[options.task];
-    const composeServices = ['controller', 'redis', definition.composeService];
-    if (options.task === 'kg-std') composeServices.push('freebase');
-    const composeArgs = ['docker', 'compose', '-f', 'extra/docker-compose.yml', 'up', '-d', '--build', ...composeServices];
     console.log(`[AgentBench FC] provisioning ${options.task} at ${manifest.revision}`);
     await ensureEnvironmentPrerequisites(options.task);
-    await runWslChecked(composeArgs, 'AgentBench FC Docker Compose', {
-        onStdout: (chunk) => process.stdout.write(chunk),
-        onStderr: (chunk) => process.stderr.write(chunk)
-    });
+    const environment = await provisionTaskEnvironment(options.task, definition, manifest);
 
     let bridge = null;
     try {
@@ -304,10 +448,7 @@ async function main() {
         if (!gate.passed) process.exitCode = 2;
     } finally {
         if (bridge && !bridge.killed) bridge.kill();
-        await runWsl([
-            'docker', 'compose', '-f', 'extra/docker-compose.yml',
-            'stop', definition.composeService
-        ]).catch(() => {});
+        await stopTaskEnvironment(environment, definition, options.task).catch(() => {});
     }
 }
 
