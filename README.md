@@ -207,7 +207,6 @@ pnpm ailis:validate-gateway
 - [Codex Multi-Agent Data-Flow Migration](docs/ailis-codex-multi-agent-dataflow-migration.md)
 - [Memory Architecture V2](docs/ailis-memory-architecture-v2.md)
 - [Humanlike Eval](docs/ailis-humanlike-eval.md)
-- [AgentBench FC Stage Report](docs/ailis-agentbench-fc-stage-report-20260716.md)
 - [Tool Ecosystem Driver Guide](docs/tool-ecosystem-driver-guide.md)
 
 ## Project Status

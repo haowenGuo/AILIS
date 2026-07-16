@@ -69,7 +69,6 @@ This directory contains the design record, operating guides, evaluation plans, a
 - [Eval-First Roadmap](ailis-eval-first-roadmap.md)
 - [Benchmark Coverage And Optimization Plan](ailis-benchmark-coverage-and-optimization-plan.md)
 - [Demo And Benchmark Scorecard](ailis-demo-benchmark-scorecard.md)
-- [AgentBench FC Stage Report](ailis-agentbench-fc-stage-report-20260716.md)
 - [Desktop-Real GAIA Evaluation](ailis-desktop-real-gaia-eval.md)
 - [OSWorld PC Evaluation](ailis-osworld-pc-eval.md)
 - [Humanlike Experience Evaluation](ailis-humanlike-eval.md)

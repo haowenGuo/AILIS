@@ -13,8 +13,6 @@ const HF_DATASET_ROOT = path.join(PROJECT_ROOT, 'build-cache', 'hf-datasets');
 const REQUESTED_COUNTS = Object.freeze({
     gaia: 10,
     terminalBench: 10,
-    agentBenchDb: 10,
-    agentBenchOs: 10,
     locomoSamples: 2,
     locomoQaPerSample: 20
 });
@@ -286,67 +284,6 @@ async function collectTerminalBench() {
     };
 }
 
-async function collectAgentBenchDb() {
-    const sourcePath = path.join(BENCHMARK_ROOT, 'agentbench-fc', 'data', 'dbbench', 'dev.jsonl');
-    const text = await fs.readFile(sourcePath, 'utf8');
-    const tasks = text.split(/\r?\n/)
-        .filter(Boolean)
-        .slice(0, REQUESTED_COUNTS.agentBenchDb)
-        .map((line, index) => {
-            const row = JSON.parse(line);
-            return {
-                benchmark: 'agentbench-db',
-                smokeId: `agentbench-db-${String(index + 1).padStart(2, '0')}`,
-                taskId: `dbbench-dev-${index + 1}`,
-                sourcePath,
-                description: normalizeText(row.description),
-                label: row.label,
-                create: row.create,
-                table: row.table,
-                estimatedBudget: {
-                    maxAgentSteps: 6,
-                    maxInputTokens: 60000,
-                    maxOutputTokens: 5000
-                }
-            };
-        });
-    return {
-        status: tasks.length === REQUESTED_COUNTS.agentBenchDb ? 'ready' : 'partial',
-        requested: REQUESTED_COUNTS.agentBenchDb,
-        available: tasks.length,
-        sourcePath,
-        tasks
-    };
-}
-
-async function collectAgentBenchOs() {
-    const sourcePath = path.join(BENCHMARK_ROOT, 'agentbench-fc', 'data', 'os_interaction', 'data', 'dev.json');
-    const rows = await readJson(sourcePath, []);
-    const tasks = rows.slice(0, REQUESTED_COUNTS.agentBenchOs).map((row, index) => ({
-        benchmark: 'agentbench-os',
-        smokeId: `agentbench-os-${String(index + 1).padStart(2, '0')}`,
-        taskId: `os-interaction-dev-${index + 1}`,
-        sourcePath,
-        description: normalizeText(row.description),
-        create: row.create,
-        start: row.start,
-        evaluation: row.evaluation,
-        labels: row.labels || [],
-        estimatedBudget: {
-            maxAgentSteps: 8,
-            maxInputTokens: 80000,
-            maxOutputTokens: 8000
-        }
-    }));
-    return {
-        status: tasks.length === REQUESTED_COUNTS.agentBenchOs ? 'ready' : 'partial',
-        requested: REQUESTED_COUNTS.agentBenchOs,
-        available: tasks.length,
-        sourcePath,
-        tasks
-    };
-}
-
 async function collectLoCoMo() {
     const sourcePath = path.join(BENCHMARK_ROOT, 'locomo', 'data', 'locomo10.json');
     const rows = await readJson(sourcePath, []);
@@ -400,8 +337,6 @@ function summarizeCosts(collections) {
         roughUpperBounds: {
             gaia10: { inputTokens: 800000, outputTokens: 80000 },
             terminalBench10: { inputTokens: 800000, outputTokens: 80000 },
-            agentBenchDb10: { inputTokens: 600000, outputTokens: 50000 },
-            agentBenchOs10: { inputTokens: 800000, outputTokens: 80000 },
             locomo40Qa: { inputTokens: 800000, outputTokens: 80000 }
         }
     };
@@ -417,8 +352,6 @@ function summarizeCosts(collections) {
     lowCostPlan.availableTaskCounts = {
         gaia: collections.gaia.tasks.length,
         terminalBench: collections.terminalBench.tasks.length,
-        agentBenchDb: collections.agentBenchDb.tasks.length,
-        agentBenchOs: collections.agentBenchOs.tasks.length,
         locomoQa: collections.locomo.availableQa
     };
     return lowCostPlan;
@@ -428,16 +361,12 @@ async function main() {
     const collections = {
         gaia: await collectGaia(),
         terminalBench: await collectTerminalBench(),
-        agentBenchDb: await collectAgentBenchDb(),
-        agentBenchOs: await collectAgentBenchOs(),
         locomo: await collectLoCoMo()
     };
 
     await fs.mkdir(OUTPUT_DIR, { recursive: true });
     await writeJson(path.join(OUTPUT_DIR, 'gaia-10.json'), collections.gaia);
     await writeJson(path.join(OUTPUT_DIR, 'terminal-bench-10.json'), collections.terminalBench);
-    await writeJson(path.join(OUTPUT_DIR, 'agentbench-db-10.json'), collections.agentBenchDb);
-    await writeJson(path.join(OUTPUT_DIR, 'agentbench-os-10.json'), collections.agentBenchOs);
     await writeJson(path.join(OUTPUT_DIR, 'locomo-2x20qa.json'), collections.locomo);
 
     const manifest = {
@@ -448,16 +377,12 @@ async function main() {
         files: {
             gaia: path.join(OUTPUT_DIR, 'gaia-10.json'),
             terminalBench: path.join(OUTPUT_DIR, 'terminal-bench-10.json'),
-            agentBenchDb: path.join(OUTPUT_DIR, 'agentbench-db-10.json'),
-            agentBenchOs: path.join(OUTPUT_DIR, 'agentbench-os-10.json'),
             locomo: path.join(OUTPUT_DIR, 'locomo-2x20qa.json')
         },
         statuses: Object.fromEntries(Object.entries(collections).map(([key, value]) => [key, value.status])),
         counts: {
             gaia: collections.gaia.tasks.length,
             terminalBench: collections.terminalBench.tasks.length,
-            agentBenchDb: collections.agentBenchDb.tasks.length,
-            agentBenchOs: collections.agentBenchOs.tasks.length,
             locomoSamples: collections.locomo.availableSamples,
             locomoQa: collections.locomo.availableQa
         },
