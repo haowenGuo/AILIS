@@ -4,7 +4,7 @@
   <p>
     <img alt="Version" src="https://img.shields.io/badge/version-1.1.0-2563eb?style=for-the-badge">
     <img alt="Runtime" src="https://img.shields.io/badge/runtime-Electron-0f172a?style=for-the-badge">
-    <img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-059669?style=for-the-badge">
+    <img alt="License" src="https://img.shields.io/badge/license-MIT-059669?style=for-the-badge">
   </p>
   <p>
     <a href="README.md">English</a> ·
@@ -170,4 +170,4 @@ AILIS는 활발히 개발 중입니다. 데스크톱 runtime, Agent Harness, 도
 
 ## 라이선스
 
-AILIS source code는 [Apache License 2.0](LICENSE)로 공개됩니다. 일부 bundled asset, third-party model, motion, voice resource는 별도 라이선스를 가질 수 있으므로 재배포 전에 각 asset 설명을 확인하세요.
+AILIS source code는 [MIT License](LICENSE)로 공개됩니다. 일부 bundled asset, third-party model, motion, voice resource는 별도 라이선스를 가질 수 있으므로 재배포 전에 각 asset 설명을 확인하세요.

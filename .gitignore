@@ -20,11 +20,12 @@ backend/**/__pycache__/
 input/
 output/
 tmp/
+/.tmp/
 build-cache/
 vendor/ragflow-lite/python-deps/
 vendor/ragflow-lite/nltk-data/
 logs/
-models/
+/models/
 state/
 .codex-run/
 longrun/
@@ -79,6 +80,36 @@ map_puzzle.xlsx
 map_solver.py
 map_solver2.py
 vendor/**/__pycache__/
+
+# One-off task artifacts created during local agent/evaluation runs
+/bfs1.py
+/check_all.py
+/check_commute.py
+/discog.txt
+/explore_map.py
+/explore_map2.py
+/extract_script.py
+/fa2016.html
+/fetch_changelog.py
+/fetch_vid.py
+/fish_paper.pdf
+/get_bird_transcript.py
+/get_transcript.py
+/gigafac.html
+/grid2.py
+/grid3.py
+/mercedes_discog*.py
+/ms_discog.json
+/ms_full.json
+/parse_discography.py
+/ping_pong*.py
+/read_excel_map.py
+/read_grid.py
+/read_map.py
+/run_script.py
+/run_transcript.py
+/simulate*.py
+/solve_puzzle.py
 
 # Legacy / generated assets not needed in the published repo
 /main.js

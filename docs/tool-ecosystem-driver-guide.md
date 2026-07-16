@@ -929,5 +929,5 @@ src/gateway/chat-send.ts
 
 配套文档：
 
-- [claw-integration-basis-research.md](F:/AILIS/docs/claw-integration-basis-research.md)
-- [openclaw-from-zero.md](F:/AILIS/docs/openclaw-from-zero.md)
+- [claw-integration-basis-research.md](claw-integration-basis-research.md)
+- [openclaw-from-zero.md](openclaw-from-zero.md)

@@ -4,7 +4,7 @@
   <p>
     <img alt="Version" src="https://img.shields.io/badge/version-1.1.0-2563eb?style=for-the-badge">
     <img alt="Runtime" src="https://img.shields.io/badge/runtime-Electron-0f172a?style=for-the-badge">
-    <img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-059669?style=for-the-badge">
+    <img alt="License" src="https://img.shields.io/badge/license-MIT-059669?style=for-the-badge">
   </p>
   <p>
     <a href="README.md">English</a> ·
@@ -42,6 +42,7 @@ AILIS Assistant 是一个桌面优先的具身 AI 助手项目。它把 3D VRM �
 - 记忆块、项目上下文、关系状态和轻量反思机制。
 - 文件、代码、电脑操作、邮件、MCP 技能、Web/Search 和本地运行时工具层。
 - 对文件、应用、账号或外部服务有影响的动作使用显式审批模型。
+- 在 Agent 执行链路中接入 EMBER-Harness 阶段门控，对不可信输入、工具调用、工具返回和最终输出进行检查。
 - 人类化体验评测、工具契约测试、Gateway 检查和 Agent 执行烟测。
 
 ## 架构概览
@@ -60,6 +61,7 @@ Agent Harness
   - 规划器
   - 工具路由
   - 审批门禁
+  - EMBER-Harness 阶段门控
   - 证据日志
   - 恢复循环
         |
@@ -77,6 +79,17 @@ Agent Harness
   - 评测
   - 烟测
 ```
+
+## EMBER-Harness 阶段门控
+
+AILIS 中接入了 EMBER-Harness，用于在智能体执行链路中做阶段级安全控制。它不是只在最后回答处做一次检查，而是在风险内容可能进入或传播的关键边界进行检查：
+
+- 用户输入进入 Agent 上下文之前。
+- 工具调用执行之前，尤其是可能产生副作用的操作。
+- 工具返回结果重新进入模型上下文之前。
+- 最终回答展示给用户之前。
+
+每次检查都会形成可审计记录，包括阶段名称、边界位置、快照哈希、估算词元数、检查决策和可回退的稳定快照。运行模式可通过 `AILIS_EMBER_HARNESS_MODE=observe|enforce` 配置，也可以通过 `AILIS_EMBER_HARNESS=0` 关闭；运行状态可通过 `/ember-harness/status` 查看。风险评估器采用可插拔方式接入，因此可以根据部署需要连接偏见、安全或策略评估器，同时保持同一套阶段边界。
 
 ## 仓库结构
 
@@ -157,7 +170,10 @@ pnpm ailis:validate-gateway
 
 ## 核心文档
 
+- [完整文档导航](docs/README.md)
 - [具身 Agent 架构](docs/ailis-embodied-agent-architecture.md)
+- [System TaskAgent 架构](docs/ailis-system-taskagent-architecture.md)
+- [Codex 多 Agent 数据流迁移](docs/ailis-codex-multi-agent-dataflow-migration.md)
 - [记忆架构 V2](docs/ailis-memory-architecture-v2.md)
 - [人类化体验评测](docs/ailis-humanlike-eval.md)
 - [Benchmark 总览与 Scorecard](docs/ailis-demo-benchmark-scorecard.md)
@@ -181,4 +197,4 @@ AILIS 面向个人桌面使用，所以隐私和控制是架构的一部分：
 
 ## 开源许可
 
-AILIS 源代码采用 [Apache License 2.0](LICENSE) 开源。部分随包资源、第三方模型、动作和语音资源可能有独立许可；重新分发前请确认对应资源说明。
+AILIS 源代码采用 [MIT License](LICENSE) 开源。部分随包资源、第三方模型、动作和语音资源可能有独立许可；重新分发前请确认对应资源说明。

@@ -4,7 +4,7 @@
   <p>
     <img alt="Version" src="https://img.shields.io/badge/version-1.1.0-2563eb?style=for-the-badge">
     <img alt="Runtime" src="https://img.shields.io/badge/runtime-Electron-0f172a?style=for-the-badge">
-    <img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-059669?style=for-the-badge">
+    <img alt="License" src="https://img.shields.io/badge/license-MIT-059669?style=for-the-badge">
   </p>
   <p>
     <a href="README.md">English</a> ·
@@ -170,4 +170,4 @@ AILIS est en développement actif. Le runtime desktop, l'Agent Harness, la couch
 
 ## Licence
 
-Le code source d'AILIS est publié sous [Apache License 2.0](LICENSE). Certains assets, modèles, motions ou ressources vocales inclus ou tiers peuvent avoir leurs propres licences; vérifiez les notes associées avant redistribution.
+Le code source d'AILIS est publié sous [MIT License](LICENSE). Certains assets, modèles, motions ou ressources vocales inclus ou tiers peuvent avoir leurs propres licences; vérifiez les notes associées avant redistribution.

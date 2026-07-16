@@ -60,6 +60,7 @@ AILIS brings three layers together:
 - Memory blocks, project context, relationship state, and lightweight reflection.
 - Tool layer for file operations, code work, computer actions, email, MCP skills, web/search support, and local runtime utilities.
 - Approval-aware execution model for actions that can affect files, apps, accounts, or external services.
+- EMBER-Harness stage gates for checking untrusted inputs, tool calls, tool results, and final outputs during agent execution.
 - Humanlike experience evals, tool-contract tests, gateway checks, and agent execution smoke tests.
 
 ## Why It Is Different
@@ -91,6 +92,7 @@ Agent Harness
   - planner
   - tool router
   - approval gate
+  - EMBER-Harness stage gates
   - evidence log
   - recovery loop
         |
@@ -108,6 +110,17 @@ Validation
   - evals
   - smoke checks
 ```
+
+## EMBER-Harness Stage Gates
+
+AILIS includes an EMBER-Harness integration for stage-level safety control inside the agent execution chain. Instead of only checking the final answer, the harness can inspect several boundaries where risk may enter or spread:
+
+- User input before it enters the agent context.
+- Tool calls before execution, especially actions with side effects.
+- Tool results before they are added back into the model context.
+- Final output before it is shown to the user.
+
+The harness records auditable check events with snapshot hashes, approximate token counts, stage names, decisions, and rollback targets. It supports observe and enforce modes through `AILIS_EMBER_HARNESS_MODE=observe|enforce`, can be disabled with `AILIS_EMBER_HARNESS=0`, and exposes runtime status at `/ember-harness/status`. Risk evaluation is pluggable, so deployments can connect their own bias, safety, or policy evaluator while keeping the same execution boundaries.
 
 ## Repository Layout
 
@@ -188,9 +201,13 @@ pnpm ailis:validate-gateway
 
 ## Core Documents
 
+- [Documentation Index](docs/README.md)
 - [Embodied Agent Architecture](docs/ailis-embodied-agent-architecture.md)
+- [System TaskAgent Architecture](docs/ailis-system-taskagent-architecture.md)
+- [Codex Multi-Agent Data-Flow Migration](docs/ailis-codex-multi-agent-dataflow-migration.md)
 - [Memory Architecture V2](docs/ailis-memory-architecture-v2.md)
 - [Humanlike Eval](docs/ailis-humanlike-eval.md)
+- [AgentBench FC Stage Report](docs/ailis-agentbench-fc-stage-report-20260716.md)
 - [Tool Ecosystem Driver Guide](docs/tool-ecosystem-driver-guide.md)
 
 ## Project Status

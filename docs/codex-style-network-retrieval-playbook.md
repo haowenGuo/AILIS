@@ -49,10 +49,10 @@ Important boundary: do not turn the global `tool_search` implementation into a p
 
 Repository mapping:
 
-- [ailis-tool-routing.cjs](F:/AILIS/electron/ailis-tool-routing.cjs)
-- [ailis-mcp-session.cjs](F:/AILIS/electron/ailis-mcp-session.cjs)
-- [ailis-gateway.cjs](F:/AILIS/electron/ailis-gateway.cjs)
-- [ailis-tool-runtime.cjs](F:/AILIS/electron/ailis-tool-runtime.cjs)
+- [ailis-tool-routing.cjs](../electron/ailis-tool-routing.cjs)
+- [ailis-mcp-session.cjs](../electron/ailis-mcp-session.cjs)
+- [ailis-gateway.cjs](../electron/ailis-gateway.cjs)
+- [ailis-tool-runtime.cjs](../electron/ailis-tool-runtime.cjs)
 
 ### 2. Structured retrieval before HTML scraping
 
@@ -77,8 +77,8 @@ Why this order:
 
 Repository mapping:
 
-- [mcp-ailis-research-server.cjs](F:/AILIS/scripts/mcp-ailis-research-server.cjs)
-- [run-gaia-level1-lite.mjs](F:/AILIS/scripts/run-gaia-level1-lite.mjs)
+- [mcp-ailis-research-server.cjs](../scripts/mcp-ailis-research-server.cjs)
+- [run-gaia-level1-lite.mjs](../scripts/run-gaia-level1-lite.mjs)
 
 ### 3. Site policy awareness
 
@@ -131,7 +131,7 @@ That matters for:
 
 Repository mapping:
 
-- [run-gaia-level1-lite.mjs](F:/AILIS/scripts/run-gaia-level1-lite.mjs)
+- [run-gaia-level1-lite.mjs](../scripts/run-gaia-level1-lite.mjs)
 
 ### 6. Validate on traces, not just unit tests
 
