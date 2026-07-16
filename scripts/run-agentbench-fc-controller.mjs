@@ -346,6 +346,38 @@ export function buildPlainDockerWorkerRunArgs(task, image) {
     return args;
 }
 
+export function buildFreebaseReadinessProbeArgs(mode = 'plain_docker') {
+    const probe = [
+        'import urllib.parse, urllib.request',
+        'query = urllib.parse.urlencode({"query": "ASK { ?s ?p ?o }"})',
+        'response = urllib.request.urlopen("http://127.0.0.1:3001/sparql?" + query, timeout=10)',
+        'print(response.status)',
+        'assert response.status == 200'
+    ].join('; ');
+    if (mode === 'docker_compose') {
+        return [
+            'docker', 'compose', '-f', 'extra/docker-compose.yml',
+            'exec', '-T', 'freebase', 'python', '-c', probe
+        ];
+    }
+    return [
+        'docker', 'exec', 'ailis-agentbench-fc-freebase',
+        'python', '-c', probe
+    ];
+}
+
+async function waitForFreebaseSparql(environment, timeoutMs = 15 * 60_000) {
+    const deadline = Date.now() + timeoutMs;
+    let latestFailure = '';
+    while (Date.now() < deadline) {
+        const probe = await runWsl(buildFreebaseReadinessProbeArgs(environment?.mode));
+        if (probe.code === 0 && probe.stdout.replaceAll('\0', '').trim().endsWith('200')) return;
+        latestFailure = probe.stderr || probe.stdout || probe.error || `exit code ${probe.code}`;
+        await new Promise((resolve) => setTimeout(resolve, 5_000));
+    }
+    throw new Error(`AgentBench FC Freebase readiness timed out: ${latestFailure}`);
+}
+
 async function removeOwnedContainer(name) {
     await runWsl(['docker', 'rm', '-f', name]);
 }
@@ -544,6 +576,11 @@ async function main() {
         console.log(`[AgentBench FC] provisioning ${options.task} at ${manifest.revision}`);
         await ensureEnvironmentPrerequisites(options.task);
         environment = await provisionTaskEnvironment(options.task, definition, manifest);
+        if (options.task === 'kg-std') {
+            console.log('[AgentBench FC] waiting for Freebase SPARQL readiness');
+            await waitForFreebaseSparql(environment);
+            console.log('[AgentBench FC] Freebase SPARQL is ready');
+        }
         const query = new URLSearchParams({ name: options.task });
         await waitForJson(
             `${controllerUrl}/get_indices?${query}`,

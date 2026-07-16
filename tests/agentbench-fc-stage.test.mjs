@@ -5,6 +5,7 @@ import { parseAgentBenchFcStageArgs } from '../evals/agentbench_fc/stage-options
 import { evaluateAgentBenchFcStageGate } from '../evals/agentbench_fc/stage-policy.mjs';
 import {
     agentBenchFcRuntimeImageSpec,
+    buildFreebaseReadinessProbeArgs,
     buildPlainDockerWorkerRunArgs,
     buildWslKeepaliveArgs,
     parseWslRouteSourceAddress,
@@ -98,6 +99,21 @@ test('plain Docker fallback preserves the official DB worker contract', () => {
     assert.deepEqual(args.slice(-3), [
         '--controller', 'http://172.17.0.1:5020/api', 'dbbench-std'
     ]);
+});
+
+test('FC waits for a real Freebase SPARQL response before running KG samples', () => {
+    const plain = buildFreebaseReadinessProbeArgs('plain_docker');
+    assert.deepEqual(plain.slice(0, 4), [
+        'docker', 'exec', 'ailis-agentbench-fc-freebase', 'python'
+    ]);
+    assert.match(plain.at(-1), /ASK \{ \?s \?p \?o \}/);
+
+    const compose = buildFreebaseReadinessProbeArgs('docker_compose');
+    assert.deepEqual(compose.slice(0, 8), [
+        'docker', 'compose', '-f', 'extra/docker-compose.yml',
+        'exec', '-T', 'freebase', 'python'
+    ]);
+    assert.match(compose.at(-1), /127\.0\.0\.1:3001\/sparql/);
 });
 
 test('FC derives compatibility images without changing official worker sources', () => {
