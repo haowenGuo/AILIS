@@ -75,14 +75,6 @@
       "gaps": ["OSWorld repo", "Python dependency setup", "deterministic smoke run"]
     },
     {
-      "id": "agentbench-ailis",
-      "category": "agent_task_suite",
-      "script": "pnpm bench:agentbench:ailis:list",
-      "status": "data_missing_or_unprepared",
-      "measures": ["workspace_task_success", "process_score", "robustness_score"],
-      "gaps": ["AgentBench task root", "prepare script", "fixed smoke subset"]
-    },
-    {
       "id": "gaia",
       "category": "general_assistant_agent",
       "script": "pnpm bench:gaia:official:l1",
@@ -120,13 +112,6 @@
       "category": "desktop_gui_agent",
       "source": "https://github.com/xlang-ai/OSWorld",
       "recommendedUse": "Desktop GUI readiness and deterministic smoke."
-    },
-    {
-      "id": "agentbench",
-      "priority": "P0",
-      "category": "agent_task_suite",
-      "source": "https://github.com/THUDM/AgentBench",
-      "recommendedUse": "Workspace/data-analysis/memory subsets."
     },
     {
       "id": "webarena",

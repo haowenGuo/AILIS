@@ -149,8 +149,7 @@ Priority order:
 1. GAIA Level 1 / Level 1 Lite
 2. SWE-bench Lite selftest and then real small subset
 3. OSWorld readiness and then `test_small`
-4. AgentBench local tasks
-5. TerminalBench or WebArena later if they match the product direction
+4. TerminalBench or WebArena later if they match the product direction
 
 Current best public-facing GAIA note from the existing scorecard:
 

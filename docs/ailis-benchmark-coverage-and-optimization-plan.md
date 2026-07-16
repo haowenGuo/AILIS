@@ -19,7 +19,6 @@ AILIS 不能继续靠主观试用和单点修补来判断能力。后续优化�
 | 人设/好感度/记忆风格 | `eval:ailis-humanlike:validate` | 1000 条 scenarios 结构验证通过 | 缺真实 LLM judge、长期 Raw Memory Ledger 抽取质量评分、用户偏好漂移检测 |
 | 工具执行/权限/Transcript | `ailis:benchmark-execution` | 通过：代码修复、PTY 会话、安全阻断、transcript | 缺真实模型闭环任务、Windows/macOS/Linux 跨平台命令稳定性矩阵 |
 | OSWorld/桌面 GUI | `bench:osworld:readiness` | officialRunReady=false | 缺 OSWorld repo 和 Python 依赖；还没形成桌面 GUI score |
-| AgentBench FC | `bench:agentbench:fc:*` | 官方五环境全量已完成 DB 300/300、OS 144/144；DB 69.67%，OS 45.83%；KG Freebase 环境准备中 | 完成 KG/ALFWorld/WebShop 后生成官方五环境 AVG；当前不得用 DB+OS 均值冒充总分 |
 | GAIA | `bench:gaia:official:*` | 已有脚本和历史报告 | 需要恢复 official/lite 固定小集，做日常 no-visual 与 visual 分层 |
 | SWE-bench Lite | `bench:swebench-lite:*` | 有本地 sample JSONL | 缺稳定 wheelhouse、隔离执行环境、持续跑小样本 |
 | 速度/成本 | `scripts/run-ailis-speed-bench.mjs` | 本轮 120s timeout；partial report 显示第 1 个任务 `max_steps_reached`，LLM wait 102s / tool 8.1s / max prompt 12.9k tokens | 需要拆成 smoke/standard/longrun 三档；当前默认任务太重，不适合作为日常回归门 |
@@ -54,7 +53,6 @@ AILIS 不能继续靠主观试用和单点修补来判断能力。后续优化�
 | GAIA | 通用助理、搜索、文件、多步推理 | 保留 L1/L2 lite 小集 + official validation 分层；用于验证工具链真实任务能力 | accuracy、steps、tool failures、time、token | [GAIA dataset](https://huggingface.co/datasets/gaia-benchmark/GAIA) |
 | SWE-bench Lite | 真实代码修复 | 先跑 3-10 个固定样本，不追 leaderboard，关注 patch/test loop 是否可靠 | resolved rate、test pass、time、tool count | [SWE-bench](https://www.swebench.com/), [GitHub](https://github.com/SWE-bench/SWE-bench) |
 | OSWorld | 桌面 GUI 操作 | 用 readiness + deterministic smoke；官方环境准备好后跑小集 | task success、GUI step count、recovery failures | [OSWorld GitHub](https://github.com/xlang-ai/OSWorld) |
-| AgentBench | 多环境 Agent 任务 | 修复 task root 准备流程，先接 workspace/data-analysis/memory 子集 | task score、layer0 output、layer1 process、layer2 robustness | [AgentBench GitHub](https://github.com/THUDM/AgentBench) |
 | WebArena / BrowserGym | 浏览器真实网页任务 | Browser/search/web_fetch 能力成熟后接入；先用小型网页任务 | success rate、navigation/tool steps、browser latency | [WebArena GitHub](https://github.com/web-arena-x/webarena), [BrowserGym GitHub](https://github.com/ServiceNow/BrowserGym) |
 | AppWorld | API 工具调用和状态变更 | 对 AILIS tool schema、tool_result 消费、最终状态验证很有价值 | task success、API call correctness、state diff | [AppWorld GitHub](https://github.com/StonyBrookNLP/appworld) |
 | BFCL | 函数调用 / tool calling | 用来评估云端模型、本地模型、AILIS tool schema 是否能稳定选工具和填参数 | AST/exec accuracy、parallel/multi-turn score | [Berkeley Function Calling Leaderboard](https://gorilla.cs.berkeley.edu/leaderboard.html) |
@@ -157,8 +155,7 @@ AILIS 是桌面产品，必须有非 LLM bench：
 1. 修 `run-ailis-speed-bench.mjs`：加 `--mode smoke|standard|longrun`、`--task-limit`、`--timeout-ms`、partial summary。
 2. 给所有 bench 输出统一 summary JSON。
 3. 把 OSWorld readiness blocker 变成可操作的安装提示，但不要自动大修用户系统。
-4. 完成 AgentBench FC 的 Freebase/Virtuoso 环境准备，从同一 run ID 断点恢复 KG，再顺序完成 ALFWorld/WebShop。
-5. 建立 `pnpm bench:ailis:smoke`：只跑快、稳、无外部 API 或低成本 API 的门禁。
+4. 建立 `pnpm bench:ailis:smoke`：只跑快、稳、无外部 API 或低成本 API 的门禁。
 
 ### P1：围绕当前痛点扩展数据
 

@@ -18,7 +18,6 @@ AILIS PC 版展示时不要只说“一个桌宠”，也不要只说“一个 A
 | OSWorld | 真实桌面环境中的 open-ended computer tasks，覆盖 Web、桌面应用、OS 文件 I/O 和跨应用流程。官方 benchmark 有 369 个任务，使用可复现环境和执行式评估脚本。 | Task success rate / per-task execution score |
 | GAIA | 面向通用 AI Assistant 的复杂问题解决 benchmark，适合展示搜索、文件、推理、工具组合能力。 | Exact short-answer matching / leaderboard submission |
 | SWE-bench Lite | 真实 GitHub issue 修复，适合展示代码能力。 | Resolved rate：测试补丁通过即视为解决 |
-| AgentBench | 多环境 LLM-as-Agent benchmark，包含 OS、DB、KG、WebShop、Mind2Web 等环境。 | Success rate by environment |
 | CharacterEval / InCharacter | 角色扮演和人格一致性评估参考。CharacterEval 使用多维角色评估；InCharacter 用心理量表和访谈式评估看 persona fidelity。 | Rubric / reward model / judge / personality consistency |
 | MT-Bench / Chatbot Arena style judging | 主观对话质量常用强 Judge 或成对比较。适合 AILIS 的拟人化体验评估，但必须控制 Judge 偏差。 | LLM-as-judge / pairwise preference |
 
@@ -29,7 +28,6 @@ Reference links:
 - GAIA: https://huggingface.co/gaia-benchmark
 - GAIA dataset: https://huggingface.co/datasets/gaia-benchmark/GAIA
 - SWE-bench: https://github.com/princeton-nlp/SWE-bench
-- AgentBench: https://github.com/THUDM/AgentBench
 - CharacterEval: https://github.com/morecry/CharacterEval
 - InCharacter: https://incharacter.github.io/
 - MT-Bench / Chatbot Arena paper: https://arxiv.org/abs/2306.05685
@@ -37,28 +35,6 @@ Reference links:
 ## Current Local Scores
 
 These are the scores currently available in this repo. They should be presented with their exact scope, not as inflated official leaderboard scores.
-
-### AgentBench FC Official Full Run (In Progress)
-
-AILIS is running the current function-calling edition of AgentBench across the five official environments. The run uses official environment messages, tools, termination and reward without Persona rendering.
-
-![AgentBench FC stage progress](assets/benchmarks/agentbench-fc-stage-progress.svg)
-
-| Environment | Records | Successes | Official Score | Status |
-| --- | ---: | ---: | ---: | --- |
-| DB | 300 / 300 | 209 | **69.67%** | Complete |
-| OS | 144 / 144 | 66 | **45.83%** | Complete |
-| KG | 0 / 150 | 0 | N/A | Freebase environment preparation |
-| ALFWorld | 0 / 109 | 0 | N/A | Pending |
-| WebShop | 0 / 200 | 0 | N/A | Pending |
-
-Current coverage is `444 / 903` records (`49.17%`), with 2,499 model calls and 4,500,841 total tokens. The observed-record success rate is `275 / 444 = 61.94%`; it is not the official five-environment AVG.
-
-Against the official leaderboard snapshot updated 2025-11-18, AILIS would rank `6 / 26` on DB and `7 / 26` on OS if inserted. Its DB+OS equal-weight slice is `57.75%`, provisionally `5 / 26`, but the official overall score and rank remain unavailable until KG, ALFWorld and WebShop finish.
-
-![AgentBench FC DB and OS slice ranking](assets/benchmarks/agentbench-fc-db-os-slice-ranking.svg)
-
-See the [full staged AgentBench FC report](ailis-agentbench-fc-stage-report-20260716.md) for protocol, leaderboard methodology, cost, failure analysis and claim boundaries.
 
 ## Public Score Priority
 
@@ -131,7 +107,6 @@ Interpretation:
 | SWE-bench Execution Selftest | Local tiny SWE-style harness selftest | 1 / 1 verified | Yes, as harness readiness, not public SWE-bench score |
 | OSWorld PC Readiness | Local environment and tool-surface readiness | officialRunReady true; 15 / 15 required actions present | Yes, as OSWorld readiness |
 | OSWorld Small Historical Run | 4 OSWorld tasks | 2 / 4 success, average score 0.50 | Yes, but label as small historical run |
-| AgentBench Local Task Inventory | 40 local tasks available | list command works | Not as score yet |
 | GAIA Level 1 Lite Public | 20 public-lite questions, submitted to public scorer | 60% = 12 / 20 correct; 19 / 20 completed locally | Yes, main general-tool score |
 | GAIA Level 1 Lite Smoke | 3 public lite questions, no leaderboard submission | 2 / 3 produced local final answers; official score null because not submitted | No, keep as debug smoke |
 
@@ -265,22 +240,6 @@ Target display:
 - Exact-answer accuracy.
 - Tool usage examples: web search, file reading, spreadsheet/audio/image evidence.
 - Always report base model and temperature.
-
-### E. AgentBench Local Subset
-
-Start with three task families:
-
-```powershell
-pnpm bench:agentbench:ailis:smoke
-node scripts/run-agentbench-ailis.mjs --suite file-creation --limit 3 --keep-workspace
-node scripts/run-agentbench-ailis.mjs --suite memory --limit 3 --keep-workspace
-```
-
-Target display:
-
-- Success rate by suite.
-- Step count and time per task.
-- Common failure classes.
 
 ## How To Reduce Base Model Influence
 
@@ -423,7 +382,7 @@ Goal: end with credibility.
 
 Show:
 
-- Short term: GAIA L1 Lite, AgentBench local subset, OSWorld test_small.
+- Short term: GAIA L1 Lite and OSWorld test_small.
 - Medium term: full OSWorld route and SWE-bench Lite subset.
 - Long term: same-model ablation scorecard for every release.
 

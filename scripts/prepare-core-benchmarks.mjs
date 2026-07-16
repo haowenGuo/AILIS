@@ -13,12 +13,6 @@ const OUTPUT_PATH = path.join(OUTPUT_DIR, 'core-benchmark-sources.json');
 
 const REPOS = [
     {
-        id: 'agentbench',
-        name: 'agentbench-fc',
-        url: 'https://github.com/THUDM/AgentBench.git',
-        revision: 'd1e4a10db08c87075c78972e48ecc182be03e2d5'
-    },
-    {
         id: 'locomo',
         name: 'locomo',
         url: 'https://github.com/snap-research/locomo.git',
@@ -229,23 +223,6 @@ async function ensureRepo(repo, args) {
     };
 }
 
-async function inventoryAgentBench(base) {
-    const repoPath = base.path;
-    const dataRoot = path.join(repoPath, 'data');
-    const configRoot = path.join(repoPath, 'configs', 'tasks');
-    const taskYamlCount = await countFiles(path.join(repoPath, 'tasks'), (filePath) => /task\.ya?ml$/i.test(filePath));
-    const environments = await listSubdirectories(dataRoot);
-    return {
-        ...base,
-        dataRoot,
-        environments,
-        taskConfigCount: await countFiles(configRoot, (filePath) => /\.ya?ml$/i.test(filePath)),
-        dataFileCount: await countFiles(dataRoot),
-        ailisRunnerCompatibility: 'official_fc_controller',
-        note: 'Pinned AgentBench FC checkout. Run through the official five-environment controller and OpenAI function-calling bridge.'
-    };
-}
-
 async function inventoryLoCoMo(base) {
     const repoPath = base.path;
     const locomoPath = path.join(repoPath, 'data', 'locomo10.json');
@@ -352,7 +329,6 @@ async function main() {
         outputPath: OUTPUT_PATH,
         benchmarks: [
             await ensureGaia(args),
-            await inventoryAgentBench(byId.agentbench),
             await inventoryLoCoMo(byId.locomo),
             await inventoryTerminalBench(byId['terminal-bench'])
         ]
