@@ -160,6 +160,8 @@ pnpm ailis:validate-gateway
 - [具身 Agent 架构](docs/ailis-embodied-agent-architecture.md)
 - [记忆架构 V2](docs/ailis-memory-architecture-v2.md)
 - [人类化体验评测](docs/ailis-humanlike-eval.md)
+- [Benchmark 总览与 Scorecard](docs/ailis-demo-benchmark-scorecard.md)
+- [AgentBench FC 阶段性评测报告](docs/ailis-agentbench-fc-stage-report-20260716.md)
 - [工具生态驱动指南](docs/tool-ecosystem-driver-guide.md)
 
 ## 项目状态

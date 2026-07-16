@@ -3,6 +3,11 @@
 This integration replaces the legacy AgentBench v0.2 evaluator with the current
 function-calling benchmark from THUDM AgentBench.
 
+The latest staged full-run report is available at
+[`docs/ailis-agentbench-fc-stage-report-20260716.md`](../../docs/ailis-agentbench-fc-stage-report-20260716.md).
+The report keeps completed-environment ranks separate from the unavailable
+five-environment overall score.
+
 ## Contract
 
 - The benchmark checkout is pinned by `benchmark-manifest.json` and verified by

@@ -1,6 +1,6 @@
 # AILIS Demo and Benchmark Scorecard
 
-Generated: 2026-06-07
+Generated: 2026-07-16
 
 ## Positioning
 
@@ -37,6 +37,28 @@ Reference links:
 ## Current Local Scores
 
 These are the scores currently available in this repo. They should be presented with their exact scope, not as inflated official leaderboard scores.
+
+### AgentBench FC Official Full Run (In Progress)
+
+AILIS is running the current function-calling edition of AgentBench across the five official environments. The run uses official environment messages, tools, termination and reward without Persona rendering.
+
+![AgentBench FC stage progress](assets/benchmarks/agentbench-fc-stage-progress.svg)
+
+| Environment | Records | Successes | Official Score | Status |
+| --- | ---: | ---: | ---: | --- |
+| DB | 300 / 300 | 209 | **69.67%** | Complete |
+| OS | 144 / 144 | 66 | **45.83%** | Complete |
+| KG | 0 / 150 | 0 | N/A | Freebase environment preparation |
+| ALFWorld | 0 / 109 | 0 | N/A | Pending |
+| WebShop | 0 / 200 | 0 | N/A | Pending |
+
+Current coverage is `444 / 903` records (`49.17%`), with 2,499 model calls and 4,500,841 total tokens. The observed-record success rate is `275 / 444 = 61.94%`; it is not the official five-environment AVG.
+
+Against the official leaderboard snapshot updated 2025-11-18, AILIS would rank `6 / 26` on DB and `7 / 26` on OS if inserted. Its DB+OS equal-weight slice is `57.75%`, provisionally `5 / 26`, but the official overall score and rank remain unavailable until KG, ALFWorld and WebShop finish.
+
+![AgentBench FC DB and OS slice ranking](assets/benchmarks/agentbench-fc-db-os-slice-ranking.svg)
+
+See the [full staged AgentBench FC report](ailis-agentbench-fc-stage-report-20260716.md) for protocol, leaderboard methodology, cost, failure analysis and claim boundaries.
 
 ## Public Score Priority
 

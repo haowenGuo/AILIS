@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="720" viewBox="0 0 1200 720">
+<style>text { font-family: 'Trebuchet MS', 'Microsoft YaHei', sans-serif; } .mono { font-family: Consolas, monospace; }</style>
+<rect x="0" y="0" width="1200" height="720" fill="#F6F2E8" rx="0" />
+<text x="70" y="76" font-size="42" fill="#172033" font-weight="700">Environment-level leaderboard position</text>
+<text x="70" y="114" font-size="19" fill="#6B7280">AILIS inserted into the official leaderboard snapshot for each completed environment</text>
+<rect x="70" y="150" width="500" height="500" fill="#FFFDF7" rx="18" />
+<text x="98" y="198" font-size="28" fill="#172033" font-weight="700">DB · #6 / 26</text>
+<text x="98" y="232" font-size="22" fill="#E66A2C" font-weight="700">AILIS 69.67%</text>
+<text x="98" y="287" font-size="15" fill="#172033" font-weight="400">1. AgentRL + Qwen2.5-14B</text>
+<rect x="335" y="270" width="180" height="20" fill="#D7D2C7" rx="7" />
+<rect x="335" y="270" width="172.8191489361702" height="20" fill="#147D73" rx="7" />
+<text x="540" y="286" font-size="15" fill="#147D73" text-anchor="end" font-weight="700">72.2</text>
+<text x="98" y="331" font-size="15" fill="#172033" font-weight="400">2. Sonnet 4.5</text>
+<rect x="335" y="314" width="180" height="20" fill="#D7D2C7" rx="7" />
+<rect x="335" y="314" width="170.4255319148936" height="20" fill="#147D73" rx="7" />
+<text x="540" y="330" font-size="15" fill="#147D73" text-anchor="end" font-weight="700">71.2</text>
+<text x="98" y="375" font-size="15" fill="#172033" font-weight="400">3. AgentRL + Qwen2.5-32B</text>
+<rect x="335" y="358" width="180" height="20" fill="#D7D2C7" rx="7" />
+<rect x="335" y="358" width="168.51063829787236" height="20" fill="#147D73" rx="7" />
+<text x="540" y="374" font-size="15" fill="#147D73" text-anchor="end" font-weight="700">70.4</text>
+<text x="98" y="419" font-size="15" fill="#172033" font-weight="400">4. Sonnet 4.5 Thinking</text>
+<rect x="335" y="402" width="180" height="20" fill="#D7D2C7" rx="7" />
+<rect x="335" y="402" width="168.27127659574467" height="20" fill="#147D73" rx="7" />
+<text x="540" y="418" font-size="15" fill="#147D73" text-anchor="end" font-weight="700">70.3</text>
+<text x="98" y="463" font-size="15" fill="#172033" font-weight="400">5. Sonnet 4</text>
+<rect x="335" y="446" width="180" height="20" fill="#D7D2C7" rx="7" />
+<rect x="335" y="446" width="167.79255319148933" height="20" fill="#147D73" rx="7" />
+<text x="540" y="462" font-size="15" fill="#147D73" text-anchor="end" font-weight="700">70.1</text>
+<text x="98" y="507" font-size="15" fill="#172033" font-weight="700">6. AILIS + DeepSeek V4 Flash</text>
+<rect x="335" y="490" width="180" height="20" fill="#D7D2C7" rx="7" />
+<rect x="335" y="490" width="166.75531914893617" height="20" fill="#E66A2C" rx="7" />
+<text x="540" y="506" font-size="15" fill="#E66A2C" text-anchor="end" font-weight="700">69.7</text>
+<text x="98" y="551" font-size="15" fill="#172033" font-weight="400">7. Claude Sonnet 3.7 (02-19)</text>
+<rect x="335" y="534" width="180" height="20" fill="#D7D2C7" rx="7" />
+<rect x="335" y="534" width="163.9627659574468" height="20" fill="#147D73" rx="7" />
+<text x="540" y="550" font-size="15" fill="#147D73" text-anchor="end" font-weight="700">68.5</text>
+<text x="98" y="595" font-size="15" fill="#172033" font-weight="400">8. Sonnet 4 Thinking</text>
+<rect x="335" y="578" width="180" height="20" fill="#D7D2C7" rx="7" />
+<rect x="335" y="578" width="163.72340425531917" height="20" fill="#147D73" rx="7" />
+<text x="540" y="594" font-size="15" fill="#147D73" text-anchor="end" font-weight="700">68.4</text>
+<rect x="630" y="150" width="500" height="500" fill="#FFFDF7" rx="18" />
+<text x="658" y="198" font-size="28" fill="#172033" font-weight="700">OS · #7 / 26</text>
+<text x="658" y="232" font-size="22" fill="#E66A2C" font-weight="700">AILIS 45.83%</text>
+<text x="658" y="287" font-size="15" fill="#172033" font-weight="400">1. DeepSeek-R1</text>
+<rect x="895" y="270" width="180" height="20" fill="#D7D2C7" rx="7" />
+<rect x="895" y="270" width="170.45936395759716" height="20" fill="#147D73" rx="7" />
+<text x="1100" y="286" font-size="15" fill="#147D73" text-anchor="end" font-weight="700">53.6</text>
+<text x="658" y="331" font-size="15" fill="#172033" font-weight="400">2. Sonnet 3.7 Thinking</text>
+<rect x="895" y="314" width="180" height="20" fill="#D7D2C7" rx="7" />
+<rect x="895" y="314" width="168.86925795053003" height="20" fill="#147D73" rx="7" />
+<text x="1100" y="330" font-size="15" fill="#147D73" text-anchor="end" font-weight="700">53.1</text>
+<text x="658" y="375" font-size="15" fill="#172033" font-weight="400">3. DeepSeek-V3</text>
+<rect x="895" y="358" width="180" height="20" fill="#D7D2C7" rx="7" />
+<rect x="895" y="358" width="168.5512367491166" height="20" fill="#147D73" rx="7" />
+<text x="1100" y="374" font-size="15" fill="#147D73" text-anchor="end" font-weight="700">53.0</text>
+<text x="658" y="419" font-size="15" fill="#172033" font-weight="400">4. AgentRL + Qwen2.5-32B</text>
+<rect x="895" y="402" width="180" height="20" fill="#D7D2C7" rx="7" />
+<rect x="895" y="402" width="164.41696113074204" height="20" fill="#147D73" rx="7" />
+<text x="1100" y="418" font-size="15" fill="#147D73" text-anchor="end" font-weight="700">51.7</text>
+<text x="658" y="463" font-size="15" fill="#172033" font-weight="400">5. Sonnet 4 Thinking</text>
+<rect x="895" y="446" width="180" height="20" fill="#D7D2C7" rx="7" />
+<rect x="895" y="446" width="162.19081272084804" height="20" fill="#147D73" rx="7" />
+<text x="1100" y="462" font-size="15" fill="#147D73" text-anchor="end" font-weight="700">51.0</text>
+<text x="658" y="507" font-size="15" fill="#172033" font-weight="400">6. Qwen2.5-72B-Instruct</text>
+<rect x="895" y="490" width="180" height="20" fill="#D7D2C7" rx="7" />
+<rect x="895" y="490" width="157.42049469964664" height="20" fill="#147D73" rx="7" />
+<text x="1100" y="506" font-size="15" fill="#147D73" text-anchor="end" font-weight="700">49.5</text>
+<text x="658" y="551" font-size="15" fill="#172033" font-weight="700">7. AILIS + DeepSeek V4 Flash</text>
+<rect x="895" y="534" width="180" height="20" fill="#D7D2C7" rx="7" />
+<rect x="895" y="534" width="145.75971731448763" height="20" fill="#E66A2C" rx="7" />
+<text x="1100" y="550" font-size="15" fill="#E66A2C" text-anchor="end" font-weight="700">45.8</text>
+<text x="658" y="595" font-size="15" fill="#172033" font-weight="400">8. Sonnet 4</text>
+<rect x="895" y="578" width="180" height="20" fill="#D7D2C7" rx="7" />
+<rect x="895" y="578" width="144.06360424028267" height="20" fill="#147D73" rx="7" />
+<text x="1100" y="594" font-size="15" fill="#147D73" text-anchor="end" font-weight="700">45.3</text>
+<text x="70" y="690" font-size="16" fill="#6B7280">Per-environment positions are valid comparisons; the overall AgentBench FC rank remains unavailable until KG, ALFWorld and WebShop finish.</text>
+</svg>
