@@ -95,7 +95,8 @@ function messageText(item = {}) {
 
 function isRuntimeContextMessage(item = {}) {
     const text = messageText(item);
-    return item?.role === 'user' && /"type"\s*:\s*"context"/.test(text);
+    return (item?.role === 'developer' && /<memory_context>/i.test(text)) ||
+        (item?.role === 'user' && /"type"\s*:\s*"context"/.test(text));
 }
 
 function uniqueMessages(items = []) {
@@ -489,7 +490,7 @@ class ContextManager {
         const packageBefore = this.buildContextPackage(options);
         const contextMode = String(options.contextMode || 'task_agent').trim().toLowerCase();
         const personaMode = contextMode === 'persona';
-        const contextMessages = this.items.filter(isRuntimeContextMessage).slice(0, 1);
+        const contextMessages = this.items.filter(isRuntimeContextMessage).slice(-4);
         const userMessages = uniqueMessages(this.items.filter((item) =>
             item?.type === 'message' && item?.role === 'user' && !isRuntimeContextMessage(item)
         ));

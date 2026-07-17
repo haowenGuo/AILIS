@@ -1,6 +1,5 @@
 'use strict';
 
-const { summarizeForModel } = require('./ailis-runtime-budget.cjs');
 const { ContextManager } = require('./ailis-context-manager.cjs');
 const {
     FunctionCallOutputPayload,
@@ -98,17 +97,39 @@ function conversationToResponseItems(messageHistory = [], options = {}) {
         .filter(Boolean);
 }
 
+function memoryContextToText(memoryContext = '') {
+    if (!memoryContext) {
+        return '';
+    }
+    if (typeof memoryContext.asDeveloperInstruction === 'function') {
+        return normalizeText(memoryContext.asDeveloperInstruction());
+    }
+    return normalizeText(memoryContext);
+}
+
+function buildMemoryDeveloperMessage(memoryContext = '') {
+    const text = memoryContextToText(memoryContext);
+    if (!text) {
+        return null;
+    }
+    const wrapped = /<memory_context>/i.test(text)
+        ? text
+        : [
+              '<memory_context>',
+              'This is local background memory. The current user message is authoritative if there is any conflict.',
+              text,
+              '</memory_context>'
+          ].join('\n');
+    return responseMessage('developer', wrapped);
+}
+
 function buildContextMessage({
-    memoryContext = '',
     fileAttachments = [],
     runtimeEnvironment = null,
     capabilityCatalog = null,
     externalToolExposure = null
 } = {}) {
     const context = {};
-    if (memoryContext) {
-        context.memory_context = summarizeForModel(memoryContext, 4000);
-    }
     if (Array.isArray(fileAttachments) && fileAttachments.length) {
         context.attached_files = fileAttachments;
     }
@@ -139,7 +160,9 @@ function buildModelInput({
     runtimeEnvironment = null,
     capabilityCatalog = null,
     externalToolExposure = null,
-    toolOutputChars = 24000
+    toolOutputChars = 24000,
+    ephemeralDeveloperMessage = '',
+    suppressCurrentUserMessage = false
 } = {}) {
     const history = buildModelInputContextManager({
         message,
@@ -150,7 +173,9 @@ function buildModelInput({
         runtimeEnvironment,
         capabilityCatalog,
         externalToolExposure,
-        toolOutputChars
+        toolOutputChars,
+        ephemeralDeveloperMessage,
+        suppressCurrentUserMessage
     });
     return history.forPrompt();
 }
@@ -164,13 +189,18 @@ function buildModelInputContextManager({
     runtimeEnvironment = null,
     capabilityCatalog = null,
     externalToolExposure = null,
-    toolOutputChars = 24000
+    toolOutputChars = 24000,
+    ephemeralDeveloperMessage = '',
+    suppressCurrentUserMessage = false
 } = {}) {
     const history = new ContextManager({ toolOutputChars });
     const priorMessageHistory = dropTrailingDuplicateUserMessage(messageHistory, message);
+    const memoryMessage = buildMemoryDeveloperMessage(memoryContext);
+    if (memoryMessage) {
+        history.recordItems([memoryMessage]);
+    }
     history.recordItems(conversationToResponseItems(priorMessageHistory));
     const contextMessage = buildContextMessage({
-        memoryContext,
         fileAttachments,
         runtimeEnvironment,
         capabilityCatalog,
@@ -179,9 +209,15 @@ function buildModelInputContextManager({
     if (contextMessage) {
         history.recordItems([contextMessage]);
     }
-    const userMessage = responseMessage('user', message);
-    if (userMessage) {
-        history.recordItems([userMessage]);
+    if (suppressCurrentUserMessage !== true) {
+        const userMessage = responseMessage('user', message);
+        if (userMessage) {
+            history.recordItems([userMessage]);
+        }
+    }
+    const developerMessage = responseMessage('developer', ephemeralDeveloperMessage);
+    if (developerMessage) {
+        history.recordItems([developerMessage]);
     }
     for (const [index, toolOutput] of (Array.isArray(toolOutputs) ? toolOutputs : []).entries()) {
         history.recordItems(toolOutputToModelInputItems(toolOutput, index, { toolOutputChars }));
@@ -213,7 +249,10 @@ function responseItemsToChatMessages({ instructions = '', input = [] } = {}) {
                 ? item.content.map((part) => part?.text || part?.content || '').filter(Boolean).join('\n')
                 : normalizeText(item.content);
             if (content) {
-                messages.push({ role: item.role === 'assistant' ? 'assistant' : 'user', content });
+                const role = ['system', 'developer', 'user', 'assistant'].includes(item.role)
+                    ? item.role
+                    : 'user';
+                messages.push({ role, content });
             }
             continue;
         }
@@ -273,6 +312,7 @@ function responseItemsToChatMessages({ instructions = '', input = [] } = {}) {
 }
 
 module.exports = {
+    buildMemoryDeveloperMessage,
     buildModelInput,
     buildModelInputContextManager,
     functionCall,

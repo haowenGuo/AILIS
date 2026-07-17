@@ -279,6 +279,28 @@ test('AILIS preference curation advances past TaskAgent traces without sending t
         payload: { payload: { toolOutput: 'large private execution trace that must not become persona memory' } }
     });
     ledger.appendEntry({
+        id: 'raw-task-final-turn',
+        iso: '2026-07-03T09:00:30.000Z',
+        type: 'chat.llm_turn',
+        source: 'task-agent',
+        sessionId: 'main:task-agent:task-1',
+        payload: {
+            agentRole: 'task_agent',
+            requestPayload: { memoryUserMessage: 'internal delegated task text' },
+            result: { content: 'internal task result' }
+        }
+    });
+    ledger.appendEntry({
+        id: 'legacy-child-agent-turn',
+        iso: '2026-07-03T09:00:45.000Z',
+        type: 'chat.llm_turn',
+        source: 'agent_runtime',
+        sessionId: 'main:agent:legacy-child',
+        payload: {
+            requestPayload: { memoryUserMessage: 'Legacy child-agent delegated prompt must not become user memory.' }
+        }
+    });
+    ledger.appendEntry({
         id: 'raw-user-visible',
         iso: '2026-07-03T09:01:00.000Z',
         type: 'chat.llm_turn',
@@ -301,10 +323,233 @@ test('AILIS preference curation advances past TaskAgent traces without sending t
     });
 
     const result = await curator.runDailyCuration({ nowIso: '2026-07-03T10:00:00.000Z' });
-    assert.equal(result.run.processedEntryCount, 2);
+    assert.equal(result.run.processedEntryCount, 4);
     assert.deepEqual(curatorInput.evidence.map((entry) => entry.id), ['raw-user-visible']);
     assert.equal(curatorInput.evidence[0].text, '回答时不要把内部执行日志说出来。');
     assert.doesNotMatch(JSON.stringify(curatorInput), /large private execution trace/);
+    assert.doesNotMatch(JSON.stringify(curatorInput), /internal delegated task text/);
+    assert.doesNotMatch(JSON.stringify(curatorInput), /Legacy child-agent delegated prompt/);
+});
+
+test('AILIS curator rebuilds the Raw Ledger in staging and atomically promotes user and relationship capsules', async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-profile-rebuild-'));
+    const memoryRoot = path.join(rootDir, 'memory');
+    const ledger = new AILISRawMemoryLedger({
+        rootDir: path.join(rootDir, 'raw-memory'),
+        workspaceRoot: rootDir
+    });
+    for (const index of [1, 2, 3]) {
+        ledger.appendEntry({
+            id: `raw-rebuild-${index}`,
+            iso: `2026-07-04T09:00:0${index}.000Z`,
+            type: 'chat.llm_turn',
+            source: 'chat',
+            sessionId: 'main',
+            payload: {
+                requestPayload: { memoryUserMessage: `长期偏好证据 ${index}` },
+                result: { content: '收到。' }
+            }
+        });
+    }
+    await fs.mkdir(memoryRoot, { recursive: true });
+    await fs.writeFile(path.join(memoryRoot, 'user-profile.json'), JSON.stringify({
+        version: 1,
+        items: [{ id: 'old-profile', claim: 'old production profile' }]
+    }));
+
+    const curator = new AILISUserProfileCurator({
+        rootDir: memoryRoot,
+        workspaceRoot: rootDir,
+        rawMemoryLedger: ledger,
+        llmClient: async (request) => {
+            const evidenceId = parseCuratorInput(request).evidence[0].id;
+            return {
+                content: JSON.stringify({
+                    ...emptyExtraction('rebuild batch'),
+                    profileUpdates: [{
+                        category: 'work_style',
+                        claim: '用户重视可恢复的长期系统。',
+                        confidence: 0.92,
+                        stability: 'stable',
+                        evidenceIds: [evidenceId]
+                    }],
+                    relationshipUpdates: [{
+                        claim: '发生复杂改动时要清楚说明恢复边界。',
+                        confidence: 0.9,
+                        stability: 'stable',
+                        evidenceIds: [evidenceId]
+                    }]
+                })
+            };
+        }
+    });
+
+    const rebuilt = await curator.rebuildFromRawMemory({
+        maxPasses: 5,
+        maxBatches: 1,
+        rawLimit: 1,
+        evidenceLimit: 1
+    });
+    assert.equal(rebuilt.ok, true);
+    assert.equal(rebuilt.status, 'rebuild_completed');
+    assert.equal(rebuilt.rebuild.processedEntryCount, 3);
+    assert.equal(rebuilt.userProfile.items.length, 1);
+    assert.equal(rebuilt.relationshipProfile.items.length, 1);
+
+    const promoted = JSON.parse(await fs.readFile(path.join(memoryRoot, 'user-profile.json'), 'utf8'));
+    assert.match(promoted.items[0].claim, /可恢复/);
+    const backup = JSON.parse(await fs.readFile(
+        path.join(rebuilt.rebuild.backupRoot, 'user-profile.json'),
+        'utf8'
+    ));
+    assert.equal(backup.items[0].id, 'old-profile');
+    const state = await curator.getState();
+    assert.equal(state.rebuild.status, 'completed');
+
+    const restarted = await curator.rebuildFromRawMemory({
+        restart: true,
+        maxPasses: 5,
+        maxBatches: 1,
+        rawLimit: 1,
+        evidenceLimit: 1
+    });
+    assert.equal(restarted.status, 'rebuild_completed');
+    assert.equal(restarted.rebuild.processedEntryCount, 3);
+    assert.equal(restarted.rebuild.passCount, 3);
+});
+
+test('AILIS curator recomputes completed rebuild counters from staged run records', async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-profile-rebuild-stats-'));
+    const memoryRoot = path.join(rootDir, 'memory');
+    const ledger = new AILISRawMemoryLedger({
+        rootDir: path.join(rootDir, 'raw-memory'),
+        workspaceRoot: rootDir
+    });
+    for (const index of [1, 2, 3]) {
+        ledger.appendEntry({
+            id: `raw-stats-${index}`,
+            iso: `2026-07-04T10:00:0${index}.000Z`,
+            type: 'chat.llm_turn',
+            source: 'chat',
+            sessionId: 'main',
+            payload: { requestPayload: { memoryUserMessage: `统计证据 ${index}` } }
+        });
+    }
+    const llmClient = async (request) => {
+        const evidenceId = parseCuratorInput(request).evidence[0].id;
+        return {
+            content: JSON.stringify({
+                ...emptyExtraction('stats batch'),
+                profileUpdates: [{
+                    category: 'work_style',
+                    claim: '用户希望重建统计可审计。',
+                    confidence: 0.9,
+                    stability: 'stable',
+                    evidenceIds: [evidenceId]
+                }],
+                relationshipUpdates: [{
+                    claim: '状态恢复必须报告真实进度。',
+                    confidence: 0.9,
+                    stability: 'stable',
+                    evidenceIds: [evidenceId]
+                }]
+            })
+        };
+    };
+    const curator = new AILISUserProfileCurator({
+        rootDir: memoryRoot,
+        workspaceRoot: rootDir,
+        rawMemoryLedger: ledger,
+        llmClient
+    });
+    const rebuilt = await curator.rebuildFromRawMemory({
+        maxPasses: 5,
+        maxBatches: 1,
+        rawLimit: 1,
+        evidenceLimit: 1
+    });
+    const staleManifest = {
+        ...rebuilt.rebuild,
+        status: 'promoting',
+        passCount: 99,
+        processedEntryCount: 999,
+        evidenceCount: 999,
+        profileUpdateCount: 999,
+        relationshipUpdateCount: 999
+    };
+    const stagingCurator = new AILISUserProfileCurator({
+        rootDir: rebuilt.rebuild.stagingRoot,
+        workspaceRoot: rootDir,
+        rawMemoryLedger: ledger,
+        llmClient
+    });
+
+    const repaired = await curator.promoteStagedRebuild(staleManifest, stagingCurator);
+
+    assert.equal(repaired.rebuild.passCount, 3);
+    assert.equal(repaired.rebuild.processedEntryCount, 3);
+    assert.equal(repaired.rebuild.evidenceCount, 3);
+    assert.equal(repaired.rebuild.profileUpdateCount, 3);
+    assert.equal(repaired.rebuild.relationshipUpdateCount, 3);
+});
+
+test('AILIS curator keeps production capsules untouched when rebuild pauses and resumes the same staging run', async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-profile-rebuild-resume-'));
+    const memoryRoot = path.join(rootDir, 'memory');
+    const ledger = new AILISRawMemoryLedger({
+        rootDir: path.join(rootDir, 'raw-memory'),
+        workspaceRoot: rootDir
+    });
+    ledger.appendEntry({
+        id: 'raw-resumable',
+        iso: '2026-07-05T09:00:00.000Z',
+        type: 'chat.llm_turn',
+        source: 'chat',
+        sessionId: 'main',
+        payload: { requestPayload: { memoryUserMessage: '请长期记住：失败时保留旧状态。' } }
+    });
+    await fs.mkdir(memoryRoot, { recursive: true });
+    await fs.writeFile(path.join(memoryRoot, 'user-profile.json'), JSON.stringify({
+        version: 1,
+        items: [{ id: 'production-profile', claim: 'must survive failed rebuild' }]
+    }));
+
+    const curator = new AILISUserProfileCurator({
+        rootDir: memoryRoot,
+        workspaceRoot: rootDir,
+        rawMemoryLedger: ledger,
+        llmClient: async () => ({ ok: false, error: 'temporary extractor outage' })
+    });
+    const paused = await curator.rebuildFromRawMemory({ maxPasses: 1 });
+    assert.equal(paused.ok, false);
+    assert.equal(paused.status, 'rebuild_paused');
+    const stillProduction = JSON.parse(await fs.readFile(path.join(memoryRoot, 'user-profile.json'), 'utf8'));
+    assert.equal(stillProduction.items[0].id, 'production-profile');
+
+    curator.llmClient = async () => ({
+        content: JSON.stringify({
+            ...emptyExtraction('recovered'),
+            profileUpdates: [{
+                category: 'engineering_principles',
+                claim: '失败时保留旧状态，恢复后再替换。',
+                confidence: 0.95,
+                stability: 'stable',
+                evidenceIds: ['raw-resumable']
+            }],
+            relationshipUpdates: [{
+                claim: '恢复动作必须可解释、可回退。',
+                confidence: 0.9,
+                stability: 'stable',
+                evidenceIds: ['raw-resumable']
+            }]
+        })
+    });
+    const resumed = await curator.rebuildFromRawMemory({ maxPasses: 2 });
+    assert.equal(resumed.ok, true);
+    assert.equal(resumed.status, 'rebuild_completed');
+    assert.equal(resumed.rebuild.id, paused.rebuild.id);
+    const replaced = JSON.parse(await fs.readFile(path.join(memoryRoot, 'user-profile.json'), 'utf8'));
+    assert.match(replaced.items[0].claim, /保留旧状态/);
 });
 
 test('AILIS user profile curator processes raw memory in resumable chronological batches', async () => {
@@ -397,6 +642,40 @@ test('AILIS user profile curator processes raw memory in resumable chronological
     assert.equal(calls.length, 3);
 });
 
+test('AILIS curator composite cursor does not skip Raw Ledger entries that share one timestamp', async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-profile-curator-same-iso-'));
+    const ledger = new AILISRawMemoryLedger({
+        rootDir: path.join(rootDir, 'raw-memory'),
+        workspaceRoot: rootDir
+    });
+    for (const id of ['same-iso-a', 'same-iso-b']) {
+        ledger.appendEntry({
+            id,
+            iso: '2026-07-06T10:00:00.000Z',
+            type: 'chat.llm_turn',
+            source: 'chat',
+            sessionId: 'main',
+            payload: { requestPayload: { memoryUserMessage: `evidence ${id}` } }
+        });
+    }
+    const seen = [];
+    const curator = new AILISUserProfileCurator({
+        rootDir: path.join(rootDir, 'memory'),
+        workspaceRoot: rootDir,
+        rawMemoryLedger: ledger,
+        llmClient: async (request) => {
+            seen.push(parseCuratorInput(request).evidence[0].id);
+            return { content: JSON.stringify(emptyExtraction()) };
+        }
+    });
+
+    const first = await curator.runDailyCuration({ rawLimit: 1, evidenceLimit: 1, maxBatches: 1, force: true });
+    const second = await curator.runDailyCuration({ rawLimit: 1, evidenceLimit: 1, maxBatches: 1, force: true });
+    assert.equal(first.status, 'partial_completed');
+    assert.equal(second.status, 'completed');
+    assert.deepEqual(seen, ['same-iso-a', 'same-iso-b']);
+});
+
 test('AILIS user profile curator does not advance cursor when the first LLM batch fails', async () => {
     const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-profile-curator-fail-'));
     const ledger = new AILISRawMemoryLedger({
@@ -441,4 +720,152 @@ test('AILIS user profile curator does not advance cursor when the first LLM batc
     assert.equal(loaded.state.cursor.lastProcessedEntryId, '');
     assert.equal(loaded.state.runCount, 0);
     assert.equal(loaded.state.lastRunDate, '');
+});
+
+test('AILIS user profile curator accepts structured provider output and the last balanced JSON object', async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-curator-provider-json-'));
+    const ledger = new AILISRawMemoryLedger({
+        rootDir: path.join(rootDir, 'raw-memory'),
+        workspaceRoot: rootDir
+    });
+    ledger.appendEntry({
+        id: 'provider-json-evidence',
+        iso: '2026-07-17T00:00:00.000Z',
+        type: 'chat.llm_turn',
+        source: 'desktop_chat',
+        sessionId: 'persona-session',
+        payload: {
+            requestPayload: {
+                memoryUserMessage: '请记住，我更喜欢简洁而有依据的回答。'
+            }
+        }
+    });
+    let callCount = 0;
+    const curator = new AILISUserProfileCurator({
+        rootDir: path.join(rootDir, 'memory'),
+        rawMemoryLedger: ledger,
+        llmClient: async () => {
+            callCount += 1;
+            if (callCount === 1) {
+                return { ok: false, code: 'empty_response', error: 'empty response' };
+            }
+            return {
+                ok: true,
+                output: [
+                    { type: 'output_text', text: 'Example only: {"ignored":true}.\nFinal: {"daySummary":"明确表达回答偏好","profileUpdates":[{"category":"communication_style","claim":"偏好简洁而有依据的回答","operation":"add_or_merge","confidence":0.95,"stability":"candidate","evidenceIds":["provider-json-evidence"],"reason":"用户明确要求记住"}],"relationshipUpdates":[],"preferenceEvents":[],"affinityUpdate":{"trustDelta":0,"familiarityDelta":0,"warmthDelta":0,"frictionDelta":0,"repairState":"stable","reason":"无关系变化","evidenceIds":[]},"rejectedSignals":[]}' }
+                ]
+            };
+        }
+    });
+
+    const result = await curator.runDailyCuration({ force: true, maxBatches: 1 });
+    assert.equal(result.ok, true);
+    assert.equal(callCount, 2);
+    assert.equal(result.userProfile.items.length, 1);
+    assert.match(result.userProfile.items[0].claim, /简洁而有依据/);
+});
+
+test('AILIS curator uses one production lock across rebuild and scheduled curation instances', async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-curator-single-writer-'));
+    const memoryRoot = path.join(rootDir, 'memory');
+    const ledger = new AILISRawMemoryLedger({
+        rootDir: path.join(rootDir, 'raw-memory'),
+        workspaceRoot: rootDir
+    });
+    ledger.appendEntry({
+        id: 'single-writer-evidence',
+        iso: '2026-07-17T01:00:00.000Z',
+        type: 'chat.llm_turn',
+        source: 'desktop_chat',
+        sessionId: 'persona-session',
+        payload: {
+            requestPayload: {
+                memoryUserMessage: '请记住：长期任务必须保留可恢复状态。'
+            }
+        }
+    });
+
+    let releaseLlm;
+    let markLlmStarted;
+    const llmStarted = new Promise((resolve) => {
+        markLlmStarted = resolve;
+    });
+    const blockingLlmClient = async (request) => {
+        const input = parseCuratorInput(request);
+        markLlmStarted();
+        await new Promise((resolve) => {
+            releaseLlm = resolve;
+        });
+        return {
+            content: JSON.stringify({
+                ...emptyExtraction('single writer rebuild'),
+                profileUpdates: [{
+                    category: 'engineering_principles',
+                    claim: '长期任务必须保留可恢复状态。',
+                    operation: 'add_or_merge',
+                    confidence: 0.95,
+                    stability: 'stable',
+                    evidenceIds: [input.evidence[0].id],
+                    reason: '用户明确要求记住。'
+                }]
+            })
+        };
+    };
+
+    const manualCurator = new AILISUserProfileCurator({
+        rootDir: memoryRoot,
+        workspaceRoot: rootDir,
+        rawMemoryLedger: ledger,
+        llmClient: blockingLlmClient
+    });
+    const scheduledCurator = new AILISUserProfileCurator({
+        rootDir: memoryRoot,
+        workspaceRoot: rootDir,
+        rawMemoryLedger: ledger,
+        llmClient: async () => ({ content: JSON.stringify(emptyExtraction()) })
+    });
+
+    const rebuildPromise = manualCurator.rebuildFromRawMemory({ restart: true, maxPasses: 1 });
+    await llmStarted;
+
+    const scheduledResult = await scheduledCurator.runDailyCuration({ force: true });
+    assert.equal(scheduledResult.ok, false);
+    assert.equal(scheduledResult.status, 'profile_curation_already_running');
+    assert.equal(scheduledResult.activeOperation.operation, 'profile_rebuild');
+
+    releaseLlm();
+    const rebuildResult = await rebuildPromise;
+    assert.equal(rebuildResult.ok, true);
+    assert.equal(rebuildResult.status, 'rebuild_completed');
+    await assert.rejects(fs.access(path.join(memoryRoot, 'profile-curation.lock.json')));
+});
+
+test('AILIS curator restores capsule JSON files with a UTF-8 BOM', async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-curator-bom-'));
+    const memoryRoot = path.join(rootDir, 'memory');
+    await fs.mkdir(memoryRoot, { recursive: true });
+    const writeBomJson = (name, value) => fs.writeFile(
+        path.join(memoryRoot, name),
+        `\uFEFF${JSON.stringify(value)}`,
+        'utf8'
+    );
+    await Promise.all([
+        writeBomJson('user-profile.json', {
+            version: 1,
+            items: [{ id: 'profile-bom', claim: 'BOM profile survives restart.' }]
+        }),
+        writeBomJson('relationship-profile.json', {
+            version: 1,
+            items: [{ id: 'relationship-bom', claim: 'BOM relationship survives restart.' }]
+        }),
+        writeBomJson('affinity-state.json', { version: 1, trust: 0.7 }),
+        writeBomJson('profile-curation-state.json', { version: 1, runCount: 2 })
+    ]);
+
+    const curator = new AILISUserProfileCurator({ rootDir: memoryRoot });
+    const loaded = await curator.loadState();
+    assert.equal(loaded.userProfile.items[0].claim, 'BOM profile survives restart.');
+    assert.equal(loaded.relationshipProfile.items[0].claim, 'BOM relationship survives restart.');
+    assert.equal(loaded.affinityState.trust, 0.7);
+    assert.equal(loaded.state.runCount, 2);
 });

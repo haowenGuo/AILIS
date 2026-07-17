@@ -1835,11 +1835,23 @@ async function searchXlsxArtifact(input = {}) {
         diagnostics: index.diagnostics,
         maxCandidates: input.maxCandidates || input.max_candidates || 20
     });
+    const matchMode = fillRgb
+        ? 'exact_style'
+        : (exact ? 'exact_text' : 'lexical_substring');
+    observation.matchMode = matchMode;
+    observation.semanticLevel = 'structure';
+    observation.complete = true;
+    observation.truncated = false;
+    if ((query || errorQuery) && ranked.length === 0) {
+        observation.negativeResultScope = 'No deterministic workbook match was found for the requested text/style/error predicate. This does not establish broader semantic absence.';
+    }
     return {
         schema: 'ailis.xlsx.search.v1',
         adapterId: 'xlsx',
         format: 'xlsx',
         sourcePath: index.sourcePath,
+        matchMode,
+        semanticLevel: 'structure',
         index: {
             cacheHit: index.cacheHit,
             summary: index.summary,
@@ -2482,6 +2494,7 @@ function buildQueryObservation(query = {}) {
 async function queryXlsxArtifact(input = {}) {
     const index = await indexXlsxArtifact(input);
     const selected = resolveXlsxQueryTable(index, input);
+    const requestedAction = String(input.action || input.operation || 'query').toLowerCase();
     if (!selected) {
         const rangeData = buildXlsxRangeRows(index, input);
         const rangeQuery = rangeData.passed === true ? {
@@ -2524,6 +2537,10 @@ async function queryXlsxArtifact(input = {}) {
             groups: []
         };
         rangeQuery.observation = buildQueryObservation(rangeQuery);
+        rangeQuery.action = requestedAction;
+        rangeQuery.observation.action = requestedAction;
+        rangeQuery.observation.semanticLevel = 'structure';
+        rangeQuery.observation.complete = rangeQuery.passed === true && rangeQuery.truncated !== true;
         return rangeQuery;
     }
     const tableData = buildXlsxTableRows(index, selected.sheet, selected.table);
@@ -2613,6 +2630,34 @@ async function queryXlsxArtifact(input = {}) {
         diagnostics: tableData.diagnostics
     };
     query.observation = buildQueryObservation(query);
+    const computationRequested = requestedAction === 'aggregate' ||
+        Boolean(input.aggregate || input.aggregation || input.groupBy || input.group_by || input.sortBy || input.sort_by);
+    query.action = requestedAction;
+    query.observation.action = requestedAction;
+    query.observation.semanticLevel = computationRequested ? 'computation' : 'structure';
+    query.observation.complete = query.passed === true;
+    query.observation.truncated = resultRows.length < filteredRows.length;
+    if (computationRequested) {
+        query.observation.computation = {
+            schema: 'ailis.computation.v1',
+            deterministic: true,
+            operation: aggregateResult?.op || requestedAction,
+            column: aggregateResult?.column || '',
+            value: aggregateResult?.value,
+            rowCount: aggregateResult?.rowCount ?? filteredRows.length,
+            numericCount: aggregateResult?.numericCount,
+            filter,
+            groupBy: groupBy || '',
+            sortBy: sortBy || '',
+            source: {
+                format: 'xlsx',
+                path: index.sourcePath,
+                sheet: selected.sheet.name,
+                range: tableData.range,
+                table: selected.table.name || ''
+            }
+        };
+    }
     return query;
 }
 

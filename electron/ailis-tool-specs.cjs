@@ -66,7 +66,7 @@ const AILIS_RUNTIME_TOOL_DEFINITIONS = Object.freeze([
     Object.freeze({
         id: 'tool_search',
         label: 'tool_search',
-        description: 'Tool discovery. Searches over deferred tool metadata with BM25 and exposes matching tools for the next Agent step.',
+        description: 'Tool discovery. Searches deferred tool metadata and exposes matching tools for the next Agent step. Use it as soon as the visible direct tools are a poor semantic fit or would require manually reconstructing structured facts, cross-record ordering, entity resolution, document parsing, transcripts, APIs, or artifact data.',
         sectionId: 'runtime',
         route: 'ailis-runtime',
         materialized: true,
@@ -77,7 +77,7 @@ const AILIS_RUNTIME_TOOL_DEFINITIONS = Object.freeze([
     Object.freeze({
         id: 'artifact_query',
         label: 'artifact_query',
-        description: 'Query managed AILIS context artifacts by details.artifactId/contextArtifact.id without dumping large payload files into the model context. Do not pass evidence_refs artifact-* ids here. Use spreadsheet grid/range/search, text_range/text_search/text_tail, or document_search/document_page/document_section instead of raw read on artifact payloads.',
+        description: 'Query managed AILIS context artifacts using an owner=context_artifact_store artifactHandle or ctx-* context artifactId without dumping payload files into model context. Do not pass artifact_tools art_* ids or evidence_refs artifact-* ids here.',
         sectionId: 'context-artifacts',
         route: 'ailis-runtime',
         materialized: true,
@@ -88,7 +88,7 @@ const AILIS_RUNTIME_TOOL_DEFINITIONS = Object.freeze([
     Object.freeze({
         id: 'artifact_tools',
         label: 'artifact_tools',
-        description: 'Canonical AILIS Artifact Tools runtime for local file artifacts and attachments: open/index/search/query/materialize/aggregate/inspect/render/trace/recalculate/edit/export/roundtrip across XLSX/XLSM/CSV/TSV/PDF/DOCX/PPTX/image adapters. Use materialize to write complex structured evidence such as matrixRows into .ailis-state/workbench/<runId>/inputs for script-based reasoning. Use for artifact-style tasks involving files, Office documents, spreadsheets, cell colors, formulas, merges, tables, PDFs, pages, images, rendering, or compact evidence.',
+        description: 'Canonical AILIS Artifact Tools runtime for local files and attachments. After open_session, continue with the returned owner=artifact_tools artifactHandle (or its sessionId); never send its art_* artifactId to artifact_query. Supports index/search/query/materialize/aggregate/inspect/render/trace/recalculate/edit/export/roundtrip across Office, PDF, table, and image adapters.',
         sectionId: 'context-artifacts',
         route: 'ailis-runtime',
         materialized: true,

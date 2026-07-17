@@ -3,6 +3,9 @@ const {
     makeHeadTailPreview,
     compactToolResultForModel
 } = require('./ailis-runtime-budget.cjs');
+const {
+    attachObservationContract
+} = require('./ailis-observation-contract.cjs');
 
 const DEFAULT_MODEL_VISIBLE_TEXT_CHARS = 6000;
 const DEFAULT_STRUCTURED_STRING_CHARS = 1200;
@@ -257,6 +260,7 @@ function normalizeAilisToolOutput(result = {}, {
         status: 'normalized',
         tool: toolId
     };
+    attachObservationContract(output, { toolId });
     const previewed = applyModelVisiblePreview(output, { toolId, maxTextChars });
     output.details.modelBudget = previewed.budget;
     if (previewed.budget.outputRef) {

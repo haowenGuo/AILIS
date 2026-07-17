@@ -126,8 +126,6 @@ const WEB_MODEL_ADJUDICATION_KEYS = new Set([
     'content_quality',
     'recoveryHint',
     'recovery_hint',
-    'suggestedNextCalls',
-    'suggested_next_calls',
     'outputPolicy',
     'output_policy',
     'retrievalNote',
@@ -433,6 +431,41 @@ function formatWebSearchCandidates(webSearchOutput = {}, toolName = '') {
     return lines.join('\n');
 }
 
+function formatWebSearchStatus(webSearchOutput = {}) {
+    const status = normalizeText(webSearchOutput.search?.status || webSearchOutput.status).toLowerCase();
+    if (status === 'empty') {
+        return 'Search status: empty. No candidate pages were returned.';
+    }
+    return '';
+}
+
+function formatWebSuggestedNextCalls(webSearchOutput = {}) {
+    const candidates = Array.isArray(webSearchOutput.search?.suggestedNextCalls)
+        ? webSearchOutput.search.suggestedNextCalls
+        : Array.isArray(webSearchOutput.suggestedNextCalls)
+        ? webSearchOutput.suggestedNextCalls
+        : [];
+    const calls = candidates.filter((call) => (
+        call &&
+        typeof call === 'object' &&
+        normalizeText(call.tool) &&
+        call.args &&
+        typeof call.args === 'object' &&
+        !Array.isArray(call.args)
+    )).slice(0, 4);
+    if (!calls.length) {
+        return '';
+    }
+    const lines = ['Suggested next calls (tool-provided options; the model decides whether to use them):'];
+    calls.forEach((call) => {
+        lines.push(`${normalizeText(call.tool)} ${safeJsonStringify(call.args, '{}')}`);
+        if (normalizeText(call.reason)) {
+            lines.push(`Reason: ${normalizeText(call.reason)}`);
+        }
+    });
+    return lines.join('\n');
+}
+
 function formatWebSearchSources(webSearchOutput = {}, toolName = '') {
     const sources = Array.isArray(webSearchOutput.fetch?.sources)
         ? webSearchOutput.fetch.sources
@@ -512,7 +545,9 @@ function buildWebSearchFunctionOutput(toolOutput = {}, webSearchOutput = {}) {
             `Tool: ${toolOutput.toolName}`,
             toolOutput.durationMs != null ? `duration_ms=${toolOutput.durationMs}` : ''
         ].filter(Boolean).join('\n')),
+        ContentItem.inputText(formatWebSearchStatus(webSearchOutput)),
         ContentItem.inputText(formatWebSearchCandidates(webSearchOutput, toolOutput.toolName)),
+        ContentItem.inputText(formatWebSuggestedNextCalls(webSearchOutput)),
         ContentItem.inputText(formatWebSearchSources(webSearchOutput, toolOutput.toolName)),
         ContentItem.inputText(formatWebSearchDiagnostics(webSearchOutput))
     ].filter(Boolean);

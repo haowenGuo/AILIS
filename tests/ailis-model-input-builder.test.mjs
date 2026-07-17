@@ -373,6 +373,51 @@ test('web_run search results preserve stable refs for the next open call', () =>
     assert.doesNotMatch(text, /Open page: web_fetch/);
 });
 
+test('web_run empty search preserves status and executable recovery affordance', () => {
+    const items = toolOutputToModelInputItems({
+        id: 'web-run-search-empty-1',
+        tool: 'web_run',
+        args: {
+            search_query: [{ q: 'Mercedes Sosa discography', domains: ['en.wikipedia.org'] }],
+            response_length: 'medium'
+        },
+        response: {
+            ok: true,
+            status: 'completed',
+            result: {
+                structuredContent: {
+                    webSearchOutput: {
+                        type: 'function_call_output',
+                        webSearchCall: {
+                            type: 'web_search_call',
+                            status: 'completed',
+                            action: { type: 'search', query: 'Mercedes Sosa discography' }
+                        },
+                        search: {
+                            status: 'empty',
+                            results: [],
+                            suggestedNextCalls: [{
+                                tool: 'web_run',
+                                args: {
+                                    search_query: [{ q: 'Mercedes Sosa discography' }],
+                                    response_length: 'medium'
+                                },
+                                reason: 'Retry without optional domain filters.'
+                            }]
+                        }
+                    }
+                }
+            }
+        }
+    });
+
+    const text = FunctionCallOutputPayload.toText(items[2].output);
+    assert.match(text, /Search status: empty/);
+    assert.match(text, /Suggested next calls \(tool-provided options/);
+    assert.match(text, /web_run \{"search_query":\[\{"q":"Mercedes Sosa discography"\}\],"response_length":"medium"\}/);
+    assert.doesNotMatch(text, /"domains"/);
+});
+
 test('web_run open preserves discovered document links for the next open call', () => {
     const pdfUrl = 'https://example.test/article.pdf';
     const items = toolOutputToModelInputItems({
@@ -631,8 +676,29 @@ test('buildModelInput drops trailing duplicate current user message from history
         texts.filter((text) => text === 'Solve this GAIA task with a Python verifier.').length,
         1
     );
-    assert.match(texts.at(-2), /Project memory/);
+    assert.equal(input[0].role, 'developer');
+    assert.match(texts[0], /Project memory/);
     assert.equal(texts.at(-1), 'Solve this GAIA task with a Python verifier.');
+});
+
+test('buildModelInput appends an ephemeral developer event without inventing a user turn', () => {
+    const input = buildModelInput({
+        message: '旧的用户消息',
+        messageHistory: [
+            { role: 'user', content: '旧的用户消息' },
+            { role: 'assistant', content: '上一条 AILIS 回复' }
+        ],
+        suppressCurrentUserMessage: true,
+        ephemeralDeveloperMessage: 'Companion mode heartbeat. This is not a user message.'
+    });
+    const messages = input.filter((item) => item.type === 'message');
+
+    assert.deepEqual(messages.map((item) => item.role), ['user', 'assistant', 'developer']);
+    assert.equal(
+        messages.filter((item) => item.role === 'user' && item.content[0].text === '旧的用户消息').length,
+        1
+    );
+    assert.match(messages.at(-1).content[0].text, /not a user message/);
 });
 
 test('responseItemsToChatMessages preserves native tool call/output pairing for chat providers', () => {

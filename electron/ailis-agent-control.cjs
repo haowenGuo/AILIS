@@ -703,6 +703,14 @@ class AgentControl {
             null;
         const task_result = {
             status: normalize_string(handoff?.status || agent.status, 'completed'),
+            exact_answer: normalize_string(
+                handoff?.exactAnswer ||
+                handoff?.exact_answer ||
+                agent.result?.exactAnswerSubmission?.answer ||
+                agent.result?.exact_answer_submission?.answer ||
+                agent.result?.exactAnswer ||
+                agent.result?.exact_answer
+            ),
             final_answer: normalize_string(
                 handoff?.finalAnswer ||
                 agent.result?.finalAnswer ||

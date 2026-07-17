@@ -194,7 +194,25 @@ test('AILIS artifact tools runtime carries evaluation cases as first-class archi
     assert.ok(csvCases.evaluationCases.every((entry) => entry.format === 'csv'));
 });
 
-test('AILIS artifact_tools remains callable but is hidden from the Codex-style default search surface', async () => {
+test('AILIS artifact_tools inspect exposes bounded document text in the model view', async () => {
+    const runtime = createDefaultArtifactToolsRuntime();
+    const fixturePath = path.join(repoRoot, 'evals', 'artifact-tools', 'fixtures', 'docx', 'report-with-tables.docx');
+    const inspected = await runtime.execute({
+        action: 'inspect',
+        path: fixturePath,
+        format: 'docx'
+    });
+
+    assert.equal(inspected.ok, true);
+    assert.equal(inspected.modelView.observation.action, 'inspect');
+    assert.equal(inspected.modelView.observation.format, 'docx');
+    assert.equal(inspected.modelView.observation.text, inspected.inspection.text.trim());
+    assert.ok(inspected.modelView.observation.text.length > 0);
+    assert.equal(inspected.modelView.observation.textTruncated, false);
+    assert.equal(inspected.modelView.observation.structure.tableCount, inspected.inspection.structure.tableCount);
+});
+
+test('AILIS artifact_tools stays off the first-turn surface but is discoverable through tool_search', async () => {
     const noop = async () => ({ content: [{ type: 'text', text: 'noop' }], details: { status: 'completed' } });
     const registry = createAILISToolRuntimeRegistry({
         updatePlan: noop,
@@ -217,7 +235,7 @@ test('AILIS artifact_tools remains callable but is hidden from the Codex-style d
         limit: 8
     });
     assert.equal(search.isError, false);
-    assert.equal(search.details.tools.some((tool) => tool.id === 'artifact_tools'), false);
+    assert.equal(search.details.tools.some((tool) => tool.id === 'artifact_tools'), true);
 
     const planned = await registry.dispatch('artifact_tools', {
         action: 'plan_import',
@@ -272,10 +290,17 @@ test('AILIS artifact_tools range query uses usedRange for no-table map workbooks
     });
     assert.equal(opened.isError, false);
     const sessionId = opened.structuredContent.session.id;
+    const artifactHandle = opened.structuredContent.session.handle;
+    assert.equal(artifactHandle.schema, 'ailis.artifact_handle.v1');
+    assert.equal(artifactHandle.owner, 'artifact_tools');
+    assert.equal(artifactHandle.tool, 'artifact_tools');
+    assert.equal(artifactHandle.sessionId, sessionId);
+    assert.equal(artifactHandle.artifactId, opened.structuredContent.session.artifact.id);
+    assert.deepEqual(opened.structuredContent.modelView.artifactHandle, artifactHandle);
 
     const defaultRange = await registry.dispatch('artifact_tools', {
         action: 'query',
-        sessionId,
+        artifactHandle,
         include: ['values', 'styles']
     });
     assert.equal(defaultRange.isError, false);
@@ -717,6 +742,11 @@ test('AILIS artifact_tools executes XLSX declaration edits and export roundtrip'
     assert.equal(Number(maxRevenue.structuredContent.query.aggregateResult.value), 45);
     assert.equal(maxRevenue.structuredContent.query.aggregateResult.row.values.Item, 'Beta');
     assert.equal(maxRevenue.structuredContent.query.aggregateResult.row.hidden, true);
+    assert.equal(maxRevenue.structuredContent.query.observation.semanticLevel, 'computation');
+    assert.equal(maxRevenue.structuredContent.query.observation.computation.deterministic, true);
+    assert.equal(maxRevenue.structuredContent.query.observation.computation.operation, 'max');
+    assert.equal(Number(maxRevenue.structuredContent.query.observation.computation.value), 45);
+    assert.equal(maxRevenue.structuredContent.query.observation.computation.source.table, 'SalesTable');
 
     const revenueByItem = await registry.dispatch('artifact_tools', {
         action: 'aggregate',
@@ -731,6 +761,8 @@ test('AILIS artifact_tools executes XLSX declaration edits and export roundtrip'
     assert.ok(revenueByItem.structuredContent.query.groups.some((group) =>
         group.key === 'Beta' && Number(group.aggregate.value) === 45
     ));
+    assert.equal(revenueByItem.structuredContent.query.observation.semanticLevel, 'computation');
+    assert.equal(revenueByItem.structuredContent.query.observation.computation.groupBy, 'Item');
 
     const firstRender = await registry.dispatch('artifact_tools', {
         action: 'render',

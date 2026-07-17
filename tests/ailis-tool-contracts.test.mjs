@@ -196,6 +196,40 @@ test('AILIS tool contracts expose versioned schemas and validate common failures
     assert.equal(badWebSearch.ok, false);
     assert.ok(badWebSearch.errors.some((error) => error.includes('requires query')));
 
+    const validWebRun = validateToolContract('web_run', {
+        search_query: [{ q: 'Codex app-server tool lifecycle' }],
+        response_length: 'medium'
+    });
+    assert.equal(validWebRun.ok, true);
+    assert.equal(contracts.find((contract) => contract.id === 'web_run').schema.minProperties, 1);
+    const webRunContract = contracts.find((contract) => contract.id === 'web_run');
+    assert.equal(webRunContract.schema.properties.search_query.items.properties.q.maxLength, 512);
+    assert.equal(webRunContract.schema.properties.search_query.items.properties.domains.maxItems, 8);
+    const emptyWebRun = validateToolContract('web_run', {});
+    assert.equal(emptyWebRun.ok, false);
+    assert.ok(emptyWebRun.errors.some((error) => error.includes('exactly one non-empty operation')));
+    const mixedWebRun = validateToolContract('web_run', {
+        search_query: [{ q: 'query' }],
+        open: [{ ref_id: 'turn0search0' }]
+    });
+    assert.equal(mixedWebRun.ok, false);
+    const unsupportedWebRun = validateToolContract('web_run', {
+        image_query: [{ q: 'unsupported' }]
+    });
+    assert.equal(unsupportedWebRun.ok, false);
+
+    const wrongArtifactOwner = validateToolContract('artifact_query', {
+        action: 'summary',
+        artifactHandle: {
+            owner: 'artifact_tools',
+            tool: 'artifact_tools',
+            sessionId: 'arts-demo',
+            artifactId: 'art_demo'
+        }
+    });
+    assert.equal(wrongArtifactOwner.ok, false);
+    assert.ok(wrongArtifactOwner.errors.some((error) => error.includes('owned by artifact_tools')));
+
     const badMcpPrompt = validateToolContract('mcp_bridge', {
         action: 'get_prompt',
         server: 'fixture'

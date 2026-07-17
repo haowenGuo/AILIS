@@ -46,6 +46,70 @@ Dry plan without spending model tokens:
 node scripts/run-ailis-desktop-real-gaia-eval.mjs --limit 5 --plan-only
 ```
 
+## Codex Subscription Model Backend
+
+The desktop-real runner can use the local Codex login as an evaluation-only
+model backend. AILIS remains the harness: it owns context assembly, memory,
+tool visibility, tool execution, observations, retries, evidence, finalization,
+and interruption. Codex performs one stateless model inference per call.
+
+Prerequisite:
+
+```powershell
+codex login status
+```
+
+The status must report that Codex is logged in with ChatGPT. No OpenAI API key
+is read by this path.
+
+Plan one task without spending model tokens:
+
+```powershell
+node scripts/run-ailis-desktop-real-gaia-eval.mjs `
+  --codex-model-bridge `
+  --codex-model gpt-5.5 `
+  --codex-reasoning-effort medium `
+  --limit 1 `
+  --plan-only
+```
+
+Run a resumable L1 evaluation:
+
+```powershell
+node scripts/run-ailis-desktop-real-gaia-eval.mjs `
+  --codex-model-bridge `
+  --codex-model gpt-5.5 `
+  --codex-reasoning-effort medium `
+  --max-agent-steps 20 `
+  --llm-timeout-ms 180000 `
+  --request-timeout-ms 900000 `
+  --run-id codex-model-bridge-gaia-l1 `
+  --resume
+```
+
+Bridge isolation contract:
+
+- Each inference starts a fresh ephemeral Codex app-server thread.
+- `baseInstructions` and `developerInstructions` are replaced by a short
+  model-backend contract.
+- The temporary Codex home contains only a short-lived copy of `auth.json`.
+  It does not contain global `AGENTS.md`, project instructions, MCP config,
+  plugins, memories, or thread databases, and it is deleted after process exit.
+- Shell, browser, computer-use, app, plugin, image, goal, multi-agent, workspace
+  dependency, web-search, and MCP surfaces are disabled or empty.
+- The bridge uses the official ChatGPT Codex backend with OAuth and forces HTTPS
+  because WebSocket transport is unreliable on some networks.
+- Tool decisions are constrained to the tool names currently exposed by AILIS.
+  Codex returns structured tool-call intent; AILIS executes the tool and owns the
+  next inference context.
+- Any Codex-side tool item, server callback, loaded instruction source, invalid
+  schema output, auth failure, or transport failure is recorded as a provider
+  failure instead of being silently accepted.
+
+This is a Codex CLI/app-server evaluation adapter, not a general OpenAI API and
+not a production serving interface. Its latency and concurrency are bounded by
+the local Codex process and the ChatGPT plan.
+
 ## Runtime Contract
 
 The runner intentionally mirrors the desktop chat path:

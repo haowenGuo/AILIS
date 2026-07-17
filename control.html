@@ -2256,6 +2256,19 @@
                             <input id="computer-control-enabled" type="checkbox">
                         </label>
 
+                        <label class="field">
+                            <div class="field-meta">
+                                <span class="field-label">本地安全判定</span>
+                            </div>
+                            <select id="ember-harness-mode">
+                                <option value="off">关闭</option>
+                                <option value="observe">仅观察，不拦截</option>
+                                <option value="enforce">启用拦截</option>
+                            </select>
+                            <div class="field-help">使用本地敏感词扫描检查关键执行边界，不调用大模型、不联网下载，适合低延迟运行。</div>
+                            <div class="field-help" id="ember-harness-status">当前已关闭。</div>
+                        </label>
+
                         <div class="field">
                             <div class="field-meta">
                                 <span class="field-label">Agent 分析台</span>
@@ -2268,27 +2281,26 @@
                 <section class="panel-section section-proactive-companion" id="section-proactive-companion">
                     <div class="section-head">
                         <div class="section-title">主动陪伴</div>
-                        <div class="section-copy">选择 AILIS 的主动性边界。用户只需要选模式，具体判断频率、冷却和打扰控制由系统自动处理。</div>
+                        <div class="section-copy">选择 AILIS 的对话节奏：按问按答、持续陪伴，或在长任务中按需反馈。</div>
                     </div>
                     <div class="section-body">
                         <label class="field">
                             <div class="field-meta">
-                                <span class="field-label">主动模式</span>
+                                <span class="field-label">对话模式</span>
                             </div>
                             <select id="auto-chat-mode">
-                                <option value="off">默认模式：问一句答一句</option>
-                                <option value="companion">陪伴模式：空闲时偶尔自然开口</option>
-                                <option value="cowork">共事模式：长任务反馈优先，平时更克制</option>
-                                <option value="autonomous">自主任务模式：需要目标、预算和停止条件后才启用</option>
+                                <option value="off">普通对话模式：问一句答一句</option>
+                                <option value="companion">主动陪伴模式：每 20 秒基于上下文主动说话</option>
+                                <option value="cowork">工作模式：较长周期判断是否需要反馈</option>
                             </select>
-                            <div class="field-help">陪伴和共事模式都会先让模型判断“现在说一句是否有价值”；没有明确价值就保持安静。</div>
+                            <div class="field-help">主动陪伴模式不再先判断是否开口，而是直接生成承接当前对话和记忆的陪伴内容；工作模式才由模型判断是否值得反馈。</div>
                         </label>
 
                         <div class="field-help">
-                            默认模式最稳；陪伴模式适合日常聊天；共事模式适合长任务中持续给你反馈；自主任务模式当前只保存意图，不会擅自连续执行工具。
+                            普通对话适合按需交流；主动陪伴适合持续聊天；工作模式适合长任务期间的低频进度和阻塞反馈。
                         </div>
 
-                        <div class="field-help">机会判断主要看最近对话；完整记忆只用于调整语气和分寸，判断过程不会写入记忆。</div>
+                        <div class="field-help">主动内容会读取最近对话与长期记忆，并避开用户正在输入、AILIS 正在回复或语音仍在播放的时刻。</div>
                     </div>
                 </section>
                     </div>

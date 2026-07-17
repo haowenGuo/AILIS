@@ -1,7 +1,6 @@
 const { createHash, randomUUID } = require('crypto');
 
 const DEFAULT_MAX_PREVIEW_CHARS = 480;
-const DEFAULT_MAX_TEXT_CHARS = 12000;
 const DEFAULT_MAX_RUN_RECORDS = 128;
 const DEFAULT_MAX_TOTAL_RECORDS = 2048;
 
@@ -44,12 +43,8 @@ function textFromValue(value) {
     return safeJsonStringify(value);
 }
 
-function truncateText(value, maxChars = DEFAULT_MAX_TEXT_CHARS) {
-    const text = textFromValue(value).replace(/\s+/g, ' ').trim();
-    if (text.length <= maxChars) {
-        return text;
-    }
-    return `${text.slice(0, Math.max(0, maxChars - 24))}... [truncated]`;
+function compactText(value) {
+    return textFromValue(value).replace(/\s+/g, ' ').trim();
 }
 
 function sha256(text = '') {
@@ -134,31 +129,65 @@ function normalizeEvaluatorResult(value = {}) {
         riskTypes: normalizeRiskTypes(source.riskTypes || source.risk_type || source.types),
         summary: normalizeString(source.summary || source.reason || source.message),
         suggestion: normalizeString(source.suggestion || source.rewriteSuggestion || source.rewrite_suggestion),
-        rawStatus: normalizeString(source.status || source.decision || source.action)
+        rawStatus: normalizeString(source.status || source.decision || source.action),
+        details: source.details && typeof source.details === 'object' && !Array.isArray(source.details)
+            ? source.details
+            : {}
     };
 }
 
 class AILISEmberHarness {
     constructor(options = {}) {
-        const envEnabled = normalizeString(process.env.AILIS_EMBER_HARNESS, '1').toLowerCase();
+        const envEnabled = normalizeString(process.env.AILIS_EMBER_HARNESS, '0').toLowerCase();
         this.enabled = options.enabled !== undefined
             ? options.enabled !== false
             : !['0', 'false', 'off', 'disabled'].includes(envEnabled);
         this.mode = normalizeMode(options.mode || process.env.AILIS_EMBER_HARNESS_MODE || 'enforce');
         this.evaluator = typeof options.evaluator === 'function' ? options.evaluator : null;
+        this.evaluatorStatus = typeof options.evaluatorStatus === 'function'
+            ? options.evaluatorStatus
+            : null;
         this.maxRunRecords = Math.max(16, Number(options.maxRunRecords || DEFAULT_MAX_RUN_RECORDS));
         this.maxTotalRecords = Math.max(128, Number(options.maxTotalRecords || DEFAULT_MAX_TOTAL_RECORDS));
-        this.maxTextChars = Math.max(1000, Number(options.maxTextChars || DEFAULT_MAX_TEXT_CHARS));
         this.recordsByRun = new Map();
         this.stableSnapshotByRun = new Map();
         this.totalRecords = 0;
     }
 
+    configure(options = {}) {
+        if ('enabled' in options) {
+            this.enabled = options.enabled !== false;
+        }
+        if ('mode' in options) {
+            this.mode = normalizeMode(options.mode);
+        }
+        if ('evaluator' in options) {
+            this.evaluator = typeof options.evaluator === 'function' ? options.evaluator : null;
+        }
+        if ('evaluatorStatus' in options) {
+            this.evaluatorStatus = typeof options.evaluatorStatus === 'function'
+                ? options.evaluatorStatus
+                : null;
+        }
+        return this.getStatus();
+    }
+
     getStatus() {
+        let evaluatorRuntime = null;
+        try {
+            evaluatorRuntime = this.evaluatorStatus?.() || null;
+        } catch (error) {
+            evaluatorRuntime = {
+                status: 'error',
+                ready: false,
+                lastError: error?.message || String(error)
+            };
+        }
         return {
             enabled: this.enabled,
             mode: this.mode,
             evaluatorConfigured: Boolean(this.evaluator),
+            evaluatorRuntime,
             runCount: this.recordsByRun.size,
             totalRecords: this.totalRecords,
             maxRunRecords: this.maxRunRecords,
@@ -205,8 +234,8 @@ class AILISEmberHarness {
         text = '',
         metadata = {}
     } = {}) {
-        const boundedText = truncateText(text, this.maxTextChars);
-        const textHash = sha256(boundedText);
+        const fullText = compactText(text);
+        const textHash = sha256(fullText);
         const snapshotId = `ember-snap-${textHash.slice(0, 12)}-${randomUUID().slice(0, 8)}`;
         return {
             snapshotId,
@@ -215,9 +244,9 @@ class AILISEmberHarness {
             stage: normalizeStage(stage),
             boundary: normalizeStage(boundary),
             textHash,
-            textChars: boundedText.length,
-            approxTokens: approxTokenCount(boundedText),
-            preview: safePreview(boundedText),
+            textChars: fullText.length,
+            approxTokens: approxTokenCount(fullText),
+            preview: safePreview(fullText),
             metadata: metadata && typeof metadata === 'object' ? metadata : {},
             createdAt: Date.now()
         };
@@ -267,7 +296,8 @@ class AILISEmberHarness {
             riskTypes: [],
             summary: '',
             suggestion: '',
-            rawStatus: ''
+            rawStatus: '',
+            details: {}
         };
         let evaluatorError = '';
         if (activeEvaluator) {
@@ -278,7 +308,7 @@ class AILISEmberHarness {
                     sessionId: normalizedSessionId,
                     stage: normalizedStage,
                     boundary: normalizedBoundary,
-                    text: truncateText(text, this.maxTextChars),
+                    text: textFromValue(text),
                     snapshot,
                     metadata
                 }));
@@ -290,7 +320,8 @@ class AILISEmberHarness {
                     riskTypes: ['evaluator_error'],
                     summary: evaluatorError,
                     suggestion: 'retry_or_manual_review',
-                    rawStatus: 'evaluator_error'
+                    rawStatus: 'evaluator_error',
+                    details: {}
                 };
             }
         }
@@ -321,6 +352,7 @@ class AILISEmberHarness {
             riskTypes: normalized.riskTypes,
             summary: normalized.summary,
             suggestion: normalized.suggestion,
+            evaluatorDetails: normalized.details,
             evaluatorConfigured: Boolean(activeEvaluator),
             evaluatorError,
             snapshot,

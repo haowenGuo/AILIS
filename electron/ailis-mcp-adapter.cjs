@@ -104,6 +104,13 @@ function closeObjectSchemas(schema = {}) {
 
 function applyAilisKnownRequiredSchema({ tool = '', inputSchema = {} } = {}) {
     const normalizedTool = normalizeString(tool).toLowerCase();
+    const localPathTools = new Set([
+        'describe_image',
+        'read_document',
+        'read_presentation',
+        'read_spreadsheet',
+        'transcribe_audio'
+    ]);
     if (normalizedTool === 'web_search') {
         ensureStringField(inputSchema, 'query');
         ensureRequired(inputSchema, ['query']);
@@ -112,10 +119,13 @@ function applyAilisKnownRequiredSchema({ tool = '', inputSchema = {} } = {}) {
         ensureStringField(inputSchema, 'url');
         ensureRequired(inputSchema, ['url']);
         appendDescription(inputSchema.properties.url, 'Required HTTP(S) URL. Do not call web_fetch with empty arguments.');
-    } else if (normalizedTool === 'describe_image') {
+    } else if (localPathTools.has(normalizedTool)) {
         ensureStringField(inputSchema, 'path');
         ensureRequired(inputSchema, ['path']);
-        appendDescription(inputSchema.properties.path, 'Required local image path. Do not call describe_image with empty arguments.');
+        appendDescription(
+            inputSchema.properties.path,
+            `Required local file path. Do not call ${normalizedTool} with empty arguments.`
+        );
     }
     return inputSchema;
 }
@@ -248,7 +258,16 @@ function normalizeAilisMcpToolArgs({ tool = '', args = {} } = {}) {
     const toolArgs = args && typeof args === 'object' && !Array.isArray(args)
         ? { ...args }
         : {};
-    if (normalizedTool === 'describe_image' && !normalizeString(toolArgs.path)) {
+    if (
+        [
+            'describe_image',
+            'read_document',
+            'read_presentation',
+            'read_spreadsheet',
+            'transcribe_audio'
+        ].includes(normalizedTool) &&
+        !normalizeString(toolArgs.path)
+    ) {
         const pathAlias = pickFirstString(toolArgs, ['image_path', 'imagePath', 'file_path', 'filePath', 'file']);
         if (pathAlias) {
             toolArgs.path = pathAlias;

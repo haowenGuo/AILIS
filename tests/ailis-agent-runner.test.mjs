@@ -15,6 +15,8 @@ const {
     AILISAgentRunner,
         buildAgentDirectToolSpecs,
         buildLlmAgentDirectToolPrompt,
+    buildResearchProgressState,
+        buildStagedAttachmentFilename,
         buildTaskRunHandoffPackage,
         build_forked_context_checkpoint,
         buildToolObservationDigest,
@@ -24,6 +26,63 @@ const {
     splitNativeProgressNoteArgs,
     stripControlTags
 } = require('../electron/ailis-agent-runner.cjs');
+
+test('TaskAgent research progress preserves mechanical web state without deciding the answer', () => {
+    const progress = buildResearchProgressState([{
+        id: 'web-1',
+        tool: 'web_run',
+        args: {
+            search_query: [{ q: 'original author 2019 topic' }]
+        },
+        response: {
+            ok: true,
+            status: 'partial',
+            result: {
+                details: {
+                    observationContract: {
+                        status: 'partial',
+                        transport_ok: true,
+                        content_ok: true,
+                        capability_ready: true,
+                        semantic_level: 'metadata',
+                        complete: false,
+                        truncated: false,
+                        next_actions: [{ tool: 'web_run', args: { open: [{ ref_id: 'turn0search0' }] } }]
+                    }
+                }
+            }
+        }
+    }, {
+        id: 'web-2',
+        tool: 'mcp__ailis_research__web_fetch',
+        args: { url: 'https://blocked.example.test/paper' },
+        response: {
+            ok: false,
+            status: 'blocked',
+            result: {
+                details: {
+                    observationContract: {
+                        status: 'blocked',
+                        transport_ok: true,
+                        content_ok: false,
+                        capability_ready: true,
+                        semantic_level: 'text',
+                        complete: false,
+                        truncated: false,
+                        error_code: 'access_denied'
+                    }
+                }
+            }
+        }
+    }]);
+
+    assert.equal(progress.schema, 'ailis.research_progress.v1');
+    assert.equal(progress.attempts.length, 2);
+    assert.deepEqual(progress.attempts[0].queries, ['original author 2019 topic']);
+    assert.deepEqual(progress.blockedHosts, ['blocked.example.test']);
+    assert.equal(progress.attempts[1].errorCode, 'access_denied');
+    assert.doesNotMatch(JSON.stringify(progress), /finalAnswer|candidateAnswer|author\s*:/i);
+});
 
 test('AILIS stages external attachments inside the active workspace', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-attachment-workspace-'));
@@ -62,6 +121,23 @@ test('AILIS preserves file extensions when staging long attachment names', async
     assert.equal(path.extname(staged.path), '.xlsx');
     assert.ok(path.basename(staged.path).length <= 99);
     assert.equal(await fs.readFile(staged.path, 'utf8'), 'spreadsheet-bytes');
+});
+
+test('AILIS staging uses a stable attachment identity instead of recursively growing filenames', async () => {
+    const first = buildStagedAttachmentFilename({
+        id: 'gaia-file-99c9cc74',
+        name: `${'99c9cc74-'.repeat(18)}recipe.mp3`,
+        path: 'F:\\source\\recipe.mp3'
+    }, 0);
+    const second = buildStagedAttachmentFilename({
+        id: 'gaia-file-99c9cc74',
+        name: first,
+        path: `F:\\workspace\\${first}`
+    }, 0);
+
+    assert.equal(first, second);
+    assert.equal(path.extname(first), '.mp3');
+    assert.ok(first.length <= 68);
 });
 
 test('TaskAgent handoff preserves structured web source refs when prose omits URLs', () => {
@@ -263,10 +339,37 @@ test('AILIS parent Persona prompt stays conversational while TaskAgent keeps exe
     assert.doesNotMatch(taskPrompt.instructions, /mcp__ailis_research__web_research/);
     assert.match(taskPrompt.instructions, /public web facts/);
     assert.match(taskPrompt.instructions, /For local file and data tasks/);
+    assert.match(taskPrompt.instructions, /join across records, global ordering or de-duplication/);
+    assert.match(taskPrompt.instructions, /tool_search for a dedicated metadata, document, API, or data capability/);
+    assert.match(taskPrompt.instructions, /do not spend the remaining work budget paging through a site/);
     assert.doesNotMatch(taskPrompt.instructions, /open_page actions|most authoritative returned source URL/);
     assert.match(taskPrompt.instructions, /mechanical transport metadata, not a decision/);
+    assert.match(taskPrompt.instructions, /candidate-set boundary/);
+    assert.match(taskPrompt.instructions, /remaining relevant lines or sections/);
     assert.doesNotMatch(taskPrompt.instructions, /complete=true|reasoning_ready=true/);
     assert.doesNotMatch(taskPrompt.instructions, /Keep ordinary conversation natural/);
+});
+
+test('AILIS Persona heartbeat reuses ordinary history and ends with an ephemeral developer item', () => {
+    const prompt = buildLlmAgentDirectToolPrompt({
+        message: '我们继续聊刚才的话题。',
+        messageHistory: [
+            { role: 'user', content: '我们继续聊刚才的话题。' },
+            { role: 'assistant', content: '好，我在这里陪你。' }
+        ],
+        suppressCurrentUserMessage: true,
+        ephemeralDeveloperMessage: 'Companion mode heartbeat. This is not a user message.',
+        contextMode: 'persona',
+        tools: []
+    });
+    const messages = prompt.input.filter((item) => item.type === 'message');
+
+    assert.deepEqual(messages.map((item) => item.role), ['user', 'assistant', 'developer']);
+    assert.equal(
+        messages.filter((item) => item.role === 'user').length,
+        1
+    );
+    assert.match(messages.at(-1).content[0].text, /not a user message/);
 });
 
 test('AILIS Persona receives active preferences and active task state while TaskAgent stays isolated', async () => {
@@ -334,11 +437,14 @@ test('AILIS Persona receives active preferences and active task state while Task
         contextMode: 'task_agent'
     });
 
-    assert.match(personaContext, /tone\.response: 自然简洁/);
-    assert.match(personaContext, /当前活动任务状态/);
-    assert.match(personaContext, /继续完成洛茜攻略并核对配队/);
-    assert.doesNotMatch(personaContext, /洛茜的核心队伍结论/);
-    assert.doesNotMatch(taskContext, /当前活动任务状态|tone\.response: 自然简洁/);
+    const personaContextText = personaContext.asDeveloperInstruction();
+    const taskContextText = taskContext.asDeveloperInstruction();
+    assert.match(personaContextText, /tone\.response: 自然简洁/);
+    assert.match(personaContextText, /当前活动任务状态/);
+    assert.match(personaContextText, /继续完成洛茜攻略并核对配队/);
+    assert.doesNotMatch(personaContextText, /洛茜的核心队伍结论/);
+    assert.doesNotMatch(taskContextText, /当前活动任务状态|tone\.response: 自然简洁/);
+    assert.doesNotMatch(taskContextText, /## Persona|## Relationship/);
 });
 
 test('AILIS direct tool specs allow model-authored progress notes without passing them to tools', () => {
@@ -655,9 +761,7 @@ test('AILIS persona exposes only system handoff while TaskAgent keeps execution 
             type: 'object',
             additionalProperties: false,
             required: [],
-            properties: {
-                continuation: { type: 'string', enum: ['auto', 'continue', 'new'] }
-            }
+            properties: {}
         }
     };
     const collaborationSpecs = Object.fromEntries([

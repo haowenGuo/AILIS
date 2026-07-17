@@ -260,6 +260,7 @@ function buildValidateObservation(result = {}) {
 function buildOpenSessionObservation(result = {}) {
     const session = result.session || {};
     const artifact = session.artifact || {};
+    const artifactHandle = session.handle || buildArtifactToolsHandle({ session, plan: result.plan });
     return {
         schema: 'ailis.artifact_tools.compact_observation.v1',
         action: 'open_session',
@@ -270,7 +271,113 @@ function buildOpenSessionObservation(result = {}) {
         format: normalizeString(artifact.format || result.plan?.format),
         kind: normalizeString(artifact.kind || result.plan?.kind),
         status: normalizeString(session.status, 'completed'),
+        artifactHandle,
         diagnostics: compactDiagnostics(session.diagnostics || result.plan?.diagnostics || [])
+    };
+}
+
+function buildInspectionTextWindow(value = '', maxChars = 4200) {
+    const text = String(value || '').trim();
+    if (text.length <= maxChars) {
+        return {
+            text,
+            textChars: text.length,
+            textTruncated: false
+        };
+    }
+    const marker = '\n\n[inspection text omitted; use artifact_tools search/query with the returned artifactHandle]\n\n';
+    const tailChars = Math.min(900, Math.floor(maxChars / 4));
+    const headChars = Math.max(1, maxChars - marker.length - tailChars);
+    return {
+        text: `${text.slice(0, headChars)}${marker}${text.slice(-tailChars)}`,
+        textChars: text.length,
+        textTruncated: true
+    };
+}
+
+function buildInspectObservation(result = {}) {
+    const inspection = result.inspection || {};
+    const structure = inspection.structure || {};
+    const textWindow = buildInspectionTextWindow(inspection.text);
+    const format = normalizeString(inspection.format || result.plan?.format);
+    const imageOnly = ['png', 'jpg', 'jpeg', 'webp', 'tif', 'tiff'].includes(format);
+    const complete = textWindow.textTruncated !== true;
+    return {
+        schema: 'ailis.artifact_tools.compact_observation.v1',
+        action: 'inspect',
+        adapterId: normalizeString(result.adapterId || inspection.adapterId),
+        format,
+        sourcePath: normalizeString(inspection.sourcePath || result.plan?.sourcePath),
+        semanticLevel: imageOnly ? 'metadata' : (structure.tableCount || structure.slideCount || structure.pageCount ? 'structure' : 'text'),
+        complete,
+        truncated: textWindow.textTruncated === true,
+        coverage: {
+            kind: imageOnly ? 'image_metadata' : 'artifact_inspection',
+            complete,
+            truncated: textWindow.textTruncated === true,
+            pageCount: Number(structure.pageCount || 0) || 0,
+            slideCount: Number(structure.slideCount || 0) || 0,
+            tableCount: Number(structure.tableCount || 0) || 0
+        },
+        ...(imageOnly ? {
+            limitation: 'Image inspection exposes metadata and deterministic pixel checks only; it does not provide semantic visual understanding or OCR.'
+        } : {}),
+        text: textWindow.text,
+        textChars: textWindow.textChars,
+        textTruncated: textWindow.textTruncated,
+        structure: {
+            pageCount: Number(structure.pageCount || 0) || 0,
+            paragraphCount: Number(structure.paragraphCount || 0) || 0,
+            tableCount: Number(structure.tableCount || 0) || 0,
+            slideCount: Number(structure.slideCount || 0) || 0,
+            imageCount: Number(structure.imageCount || structure.mediaCount || 0) || 0,
+            commentCount: Number(structure.commentCount || 0) || 0
+        },
+        diagnostics: compactDiagnostics(inspection.diagnostics || result.diagnostics || [])
+    };
+}
+
+function buildArtifactToolsHandle({ session = {}, plan = {} } = {}) {
+    const safeSession = session && typeof session === 'object' ? session : {};
+    const safePlan = plan && typeof plan === 'object' ? plan : {};
+    const sessionId = normalizeString(safeSession.id);
+    const artifactId = normalizeString(safeSession.artifact?.id);
+    if (!sessionId || !artifactId) {
+        return null;
+    }
+    return {
+        schema: 'ailis.artifact_handle.v1',
+        owner: 'artifact_tools',
+        runtimeId: ARTIFACT_TOOLS_RUNTIME_ID,
+        tool: 'artifact_tools',
+        sessionId,
+        artifactId,
+        allowedActions: compactRouteAdvice(safePlan.route || safeSession.artifact?.metadata?.route || {}).actions
+    };
+}
+
+function resolveArtifactToolsHandleArgs(input = {}) {
+    const handle = input.artifactHandle || input.artifact_handle || input.handle;
+    if (!handle || typeof handle !== 'object' || Array.isArray(handle)) {
+        return { ok: true, args: input };
+    }
+    const owner = normalizeString(handle.owner || handle.tool || handle.runtimeId || handle.runtime_id);
+    if (owner && !['artifact_tools', ARTIFACT_TOOLS_RUNTIME_ID].includes(owner)) {
+        return {
+            ok: false,
+            result: createErrorResult('artifact_owner_mismatch', `Artifact handle belongs to ${owner}, not artifact_tools.`, {
+                handle,
+                requiredTool: 'artifact_tools'
+            })
+        };
+    }
+    return {
+        ok: true,
+        args: {
+            ...input,
+            sessionId: input.sessionId || input.session_id || handle.sessionId || handle.session_id,
+            artifactId: input.artifactId || input.artifact_id || handle.artifactId || handle.artifact_id
+        }
     };
 }
 
@@ -280,6 +387,9 @@ function resolveProtocolObservation(result = {}) {
     }
     if (result.inspection?.observation) {
         return result.inspection.observation;
+    }
+    if (normalizeString(result.action) === 'inspect' && result.inspection) {
+        return buildInspectObservation(result);
     }
     if (result.search?.observation) {
         return result.search.observation;
@@ -302,6 +412,10 @@ function resolveProtocolObservation(result = {}) {
 function buildModelView(result = {}) {
     const action = normalizeString(result.action || result.session?.operations?.[0]?.action);
     const observation = resolveProtocolObservation(result);
+    const artifactHandle = result.session?.handle || observation?.artifactHandle || buildArtifactToolsHandle({
+        session: result.session,
+        plan: result.plan
+    });
     return {
         schema: 'ailis.artifact_tools.tool_api_result.v1',
         ok: result.ok === true,
@@ -313,14 +427,17 @@ function buildModelView(result = {}) {
             tool: 'artifact_tools',
             contract: 'stable compact Tool API result',
             fullResultLocation: 'structuredContent/details',
-            observationLocation: 'observation'
+            observationLocation: 'observation',
+            handleLocation: 'artifactHandle'
         },
+        artifactHandle,
         artifact: {
             sessionId: normalizeString(result.session?.id),
             artifactId: normalizeString(result.session?.artifact?.id),
             sourcePath: normalizeString(result.plan?.sourcePath || result.session?.artifact?.sourcePath || observation?.sourcePath),
             format: normalizeString(result.plan?.format || result.session?.artifact?.format || observation?.format),
-            kind: normalizeString(result.plan?.kind || result.session?.artifact?.kind)
+            kind: normalizeString(result.plan?.kind || result.session?.artifact?.kind),
+            handle: artifactHandle
         },
         plan: result.plan ? compactPlanForProtocol(result.plan) : undefined,
         observation,
@@ -713,6 +830,7 @@ class AILISArtifactToolsRuntime {
             createdAt: artifact.createdAt,
             updatedAt: artifact.updatedAt
         };
+        session.handle = buildArtifactToolsHandle({ session, plan });
         this.sessions.set(session.id, session);
         return createOkResult({ session: cloneJson(session), plan });
     }
@@ -1163,6 +1281,11 @@ class AILISArtifactToolsRuntime {
     }
 
     execute(args = {}) {
+        const resolvedHandle = resolveArtifactToolsHandleArgs(args);
+        if (!resolvedHandle.ok) {
+            return resolvedHandle.result;
+        }
+        args = resolvedHandle.args;
         const action = normalizeAction(args.action || args.operation || args.intent, 'schema');
         if (action === 'schema' || action === 'help') {
             return createOkResult({ action: 'schema', schema: this.buildSchema() });

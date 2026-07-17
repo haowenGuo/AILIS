@@ -1,6 +1,6 @@
 const fs = require('fs');
 const path = require('path');
-const { randomUUID } = require('crypto');
+const { createHash, randomUUID } = require('crypto');
 const {
     callDesktopLlmProvider
 } = require('./desktop-llm-provider.cjs');
@@ -74,6 +74,9 @@ const {
 const {
     Prompt
 } = require('./ailis-prompt-model.cjs');
+const {
+    AILISContextCompiler
+} = require('./ailis-context-compiler.cjs');
 const {
     createEvidenceArtifact,
     getEvidenceArtifactsPromptObject
@@ -661,6 +664,27 @@ function sanitizeAttachmentFilename(value = '', fallback = 'attachment') {
     return `${stem}${extension}`;
 }
 
+function buildStagedAttachmentFilename(attachment = {}, index = 0) {
+    const displayName = sanitizeAttachmentFilename(
+        attachment.name,
+        `attachment-${index + 1}`
+    );
+    const extension = path.extname(displayName);
+    const stableIdentity = normalizeText(
+        attachment.id,
+        `${attachment.source || 'local-file'}:${attachment.originalPath || attachment.path || displayName}`
+    );
+    const identityLabel = sanitizeAttachmentPathSegment(
+        stableIdentity,
+        path.basename(displayName, extension)
+    ).slice(0, 48);
+    const identityHash = createHash('sha256')
+        .update(stableIdentity)
+        .digest('hex')
+        .slice(0, 12);
+    return `${String(index + 1).padStart(2, '0')}-${identityLabel}-${identityHash}${extension}`;
+}
+
 async function stageFileAttachmentsForWorkspace(attachments = [], workspaceRoot = '', sessionId = 'main') {
     const normalized = normalizeFileAttachments(attachments);
     if (!normalized.length) {
@@ -694,12 +718,17 @@ async function stageFileAttachmentsForWorkspace(attachments = [], workspaceRoot 
             await fs.promises.mkdir(stageRoot, { recursive: true });
             const destinationPath = path.join(
                 stageRoot,
-                `${String(index + 1).padStart(2, '0')}-${sanitizeAttachmentFilename(attachment.name, `attachment-${index + 1}`)}`
+                buildStagedAttachmentFilename(attachment, index)
             );
             await fs.promises.copyFile(sourcePath, destinationPath);
+            const stagedPath = await fs.promises.realpath(destinationPath);
+            const stagedStat = await fs.promises.stat(stagedPath);
+            if (!stagedStat.isFile() || stagedStat.size !== stat.size) {
+                throw new Error('staged attachment verification failed');
+            }
             staged.push({
                 ...attachment,
-                path: destinationPath,
+                path: stagedPath,
                 originalPath: sourcePath,
                 size: stat.size,
                 sizeText: attachment.sizeText || formatBytes(stat.size),
@@ -1135,6 +1164,10 @@ function isExactAnswerExecutionMode(request = {}, requestContext = {}) {
     return Boolean(
         request.answerOnly === true ||
             requestContext.answerOnly === true ||
+            request.exactAnswerMode === true ||
+            requestContext.exactAnswerMode === true ||
+            request.exact_answer_mode === true ||
+            requestContext.exact_answer_mode === true ||
             request.exactAnswer === true ||
             requestContext.exactAnswer === true ||
             profile.kind === 'exact_answer_eval' ||
@@ -1268,6 +1301,16 @@ function inferAgentEvidenceId(stepResult = {}) {
     const args = stepResult.args && typeof stepResult.args === 'object' ? stepResult.args : {};
     const action = normalizeText(args.action || args.command || args.operation || stepResult.action).toLowerCase();
     const haystack = `${tool}\n${action}\n${stepResult.title || ''}\n${extractToolResultText(stepResult.response?.result) || stepResult.response?.error || ''}`.toLowerCase();
+    const details = getToolResultDetails(stepResult);
+    const observationContract = details.observationContract || details.observation_contract || {};
+    if (
+        observationContract.semantic_level === 'computation' ||
+        action === 'aggregate' ||
+        details.computation ||
+        details.query?.observation?.computation
+    ) {
+        return 'computation_result';
+    }
     if (tool === VISION_TOOL_ID || /vision|screenshot|image|ocr|frame/.test(haystack)) {
         return /observation|describe|caption|ocr/.test(haystack) ? 'vision_observation' : 'snapshot';
     }
@@ -1442,8 +1485,12 @@ function collectAgentUnresolvedFields(stepResults = [], latestDecision = null) {
     };
     for (const stepResult of (Array.isArray(stepResults) ? stepResults : []).slice(-8)) {
         const details = getToolResultDetails(stepResult);
+        const observationContract = details.observationContract || details.observation_contract || {};
         if (stepResult.response?.ok === false) {
             push(stepResult.response.error || details.error);
+        }
+        if (['partial', 'blocked', 'failed'].includes(normalizeText(observationContract.status).toLowerCase())) {
+            push(observationContract.error || observationContract.error_code);
         }
     }
     push(latestDecision?.missingFields || latestDecision?.missing_fields);
@@ -1451,17 +1498,107 @@ function collectAgentUnresolvedFields(stepResults = [], latestDecision = null) {
     return values.slice(-24);
 }
 
+function collectResearchAttemptQueries(args = {}) {
+    const queries = [];
+    const push = (value) => {
+        const text = normalizeText(value);
+        if (text && !queries.includes(text)) {
+            queries.push(text);
+        }
+    };
+    push(args.query || args.q || args.search || args.text);
+    for (const entry of Array.isArray(args.search_query) ? args.search_query : []) {
+        push(entry?.q || entry?.query);
+    }
+    return queries.slice(0, 8);
+}
+
+function collectResearchAttemptTargets(args = {}) {
+    const targets = [];
+    const push = (value) => {
+        const text = normalizeText(value);
+        if (text && !targets.includes(text)) {
+            targets.push(text);
+        }
+    };
+    push(args.url || args.uri || args.ref_id || args.refId);
+    for (const key of ['open', 'find', 'click']) {
+        for (const entry of Array.isArray(args[key]) ? args[key] : []) {
+            push(entry?.url || entry?.ref_id || entry?.refId);
+        }
+    }
+    return targets.slice(0, 12);
+}
+
+function buildResearchProgressState(stepResults = [], requestContext = {}) {
+    const attempts = (Array.isArray(stepResults) ? stepResults : [])
+        .filter((stepResult) => isWebEvidenceToolName(stepResult?.tool))
+        .slice(-12)
+        .map((stepResult) => {
+            const details = getToolResultDetails(stepResult);
+            const contract = details.observationContract || details.observation_contract || {};
+            return {
+                stepId: stepResult.id || null,
+                tool: normalizeText(stepResult.tool),
+                queries: collectResearchAttemptQueries(stepResult.args || {}),
+                targets: collectResearchAttemptTargets(stepResult.args || {}),
+                status: normalizeText(contract.status || stepResult.response?.status, 'unknown'),
+                transportOk: contract.transport_ok,
+                contentOk: contract.content_ok,
+                capabilityReady: contract.capability_ready,
+                semanticLevel: contract.semantic_level,
+                complete: contract.complete,
+                truncated: contract.truncated,
+                errorCode: normalizeText(contract.error_code),
+                evidenceRefs: getStepEvidenceRefs(stepResult),
+                nextActions: Array.isArray(contract.next_actions)
+                    ? contract.next_actions.slice(0, 4)
+                    : []
+            };
+        });
+    if (!attempts.length) {
+        return null;
+    }
+    const blockedHosts = [];
+    for (const attempt of attempts) {
+        if (!['blocked', 'failed'].includes(attempt.status)) {
+            continue;
+        }
+        for (const target of attempt.targets) {
+            try {
+                const host = new URL(target).hostname.toLowerCase();
+                if (host && !blockedHosts.includes(host)) {
+                    blockedHosts.push(host);
+                }
+            } catch {
+                // Source refs such as turn0search0 are not hosts.
+            }
+        }
+    }
+    const evidenceRefs = [...new Set(attempts.flatMap((entry) => entry.evidenceRefs))];
+    return {
+        schema: 'ailis.research_progress.v1',
+        attempts,
+        blockedHosts: blockedHosts.slice(0, 12),
+        evidenceRefs: evidenceRefs.slice(-24),
+        noProgressReason: detectAgentNoProgress(stepResults, requestContext),
+        instruction: 'This is mechanical observation history, not a semantic conclusion. Preserve the original task entities, roles, dates, ordering, and source constraints in your reasoning; avoid repeating blocked or identical observations, and choose the next source or tool yourself.'
+    };
+}
+
 function buildAgentTaskState({
     runId = '',
     stepResults = [],
     latestDecision = null,
     currentPlan = null,
-    constraints = []
+    constraints = [],
+    requestContext = {}
 } = {}) {
     const successfulSteps = (Array.isArray(stepResults) ? stepResults : [])
         .filter((stepResult) => stepResult?.response?.ok === true);
     const failedSteps = (Array.isArray(stepResults) ? stepResults : [])
         .filter((stepResult) => stepResult?.response?.ok === false);
+    const research = buildResearchProgressState(stepResults, requestContext);
     return {
         schema: 'ailis.agent_task_state.v1',
         runId,
@@ -1474,7 +1611,8 @@ function buildAgentTaskState({
             failedToolCalls: failedSteps.length,
             latestAction: normalizeText(latestDecision?.action || latestDecision?.status),
             latestSummary: summarizeForModel(latestDecision?.summary || '', 500)
-        }
+        },
+        ...(research ? { research } : {})
     };
 }
 
@@ -1693,7 +1831,15 @@ function buildEvidenceSufficiencyPromptObject(stepResults = [], { exactAnswerMod
     const latestFailed = [...(Array.isArray(stepResults) ? stepResults : [])].reverse()
         .find((stepResult) => stepResult?.response && stepResult.response.ok !== true) || null;
     const repeatedCoveredReads = readyEvidence.filter((entry) => entry.coveredByEvidence?.evidenceId).slice(-6);
-    const hasComputeEvidence = readyEvidence.some((entry) => entry.tool === 'artifact_compute');
+    const hasComputeEvidence = (Array.isArray(stepResults) ? stepResults : []).some((entry) => (
+        entry.tool === 'artifact_compute' ||
+        (Array.isArray(entry.evidenceArtifacts) && entry.evidenceArtifacts.some((artifact) => artifact.type === 'ComputationEvidence')) ||
+        normalizeText(
+            getToolResultDetails(entry).observationContract?.semantic_level ||
+            getToolResultDetails(entry).observation_contract?.semantic_level
+        ) === 'computation' ||
+        Boolean(getToolResultDetails(entry).query?.observation?.computation)
+    ));
     const auditRequired = false;
     const status = readyEvidence.length
         ? 'model_judges_evidence'
@@ -1710,6 +1856,7 @@ function buildEvidenceSufficiencyPromptObject(stepResults = [], { exactAnswerMod
         latest_ready_evidence: latestReady,
         repeated_covered_reads: repeatedCoveredReads,
         has_compute_evidence: hasComputeEvidence,
+        computation_guidance: 'For numerical aggregation, ordering, filtering, counting, or unit conversion, prefer deterministic computation evidence when available. This is advisory: missing computation evidence must never suppress a best-effort final answer.',
         latest_failure_after_ready_evidence: latestFailed && readyEvidence.length
             ? {
                 stepId: latestFailed.id || null,
@@ -3024,7 +3171,9 @@ function resolveAgentLlmSettings(request = {}, requestContext = {}) {
 
 function isLocalAgentLlmProvider(provider = '') {
     const normalizedProvider = normalizeText(provider).toLowerCase();
-    return normalizedProvider === 'vllm' || normalizedProvider === 'ollama';
+    return normalizedProvider === 'vllm' ||
+        normalizedProvider === 'ollama' ||
+        normalizedProvider === 'codex-model-bridge';
 }
 
 function isConstrainedLocalAgentProvider(provider = '') {
@@ -3575,7 +3724,7 @@ function buildToolContextText(toolId, { emailProfiles = {} } = {}) {
     if (toolId === 'artifact_query') {
         return appendToolContractText('artifact_query', [
             'TOOL artifact_query schema：',
-            'AILIS Context Artifact 查询工具。只接受工具结果 details.artifactId/contextArtifact.id 返回的 queryable context artifactId；evidence_artifacts 里的 artifact-* 证据引用不能传给 artifact_query。',
+            'AILIS Context Artifact 查询工具。只接受 owner=context_artifact_store/tool=artifact_query 的 artifactHandle，或 ctx-* queryable context artifactId；artifact_tools 的 art_* id 和 evidence_artifacts 的 artifact-* 引用都不能传入。',
             '复杂文件解析、长日志、大文本和大工具输出会保存成 context artifactId；不要 raw read 这些 payload 文件。',
             '表格动作：summary 查看概要；grid 查看紧凑网格；range 按 A1:D20 读取局部；search 按文本/颜色/地址搜索。',
             '大文本动作：text_schema 查看行数/字符数；text_range 按行号或 offset 读片段；text_search 搜索匹配行和上下文；text_tail 查看尾部。',
@@ -3589,7 +3738,7 @@ function buildToolContextText(toolId, { emailProfiles = {} } = {}) {
             'TOOL artifact_tools schema：',
             'AILIS Artifact Tools 是本地文件/附件 artifact 的统一运行时入口。文件类任务优先调用它，让 adapter 暴露结构、索引、检索、渲染和 compact evidence；XLSX/CSV/表格也走这一统一入口。',
             '支持按 adapter 对 XLSX/XLSM/CSV/TSV/PDF/DOCX/PPTX/图片等执行 schema、list_adapters、plan_import、open_session、index/build_index、search/artifact_search、query/aggregate、inspect、render、trace、recalculate、edit、rollback、export、roundtrip、run_checks。',
-            '调用参数事实：action 指定动作；path 或 sessionId 指定文件会话；sheet/range/include 等字段按动作需要填写。',
+            '调用参数事实：open_session 使用 path；后续动作传回结果中的 owner=artifact_tools artifactHandle，或兼容使用同一 sessionId；不要把其 artifactId 交给 artifact_query。sheet/range/include 等字段按动作需要填写。',
             '若 observation 标记 truncatedForModelText 或 omittedCompactRowCount，表示模型可见文本被压缩，不等同于底层读取失败。'
         ].join('\n'));
     }
@@ -3619,6 +3768,7 @@ function buildToolContextText(toolId, { emailProfiles = {} } = {}) {
             '# Tool discovery',
             'Searches over deferred tool metadata with BM25 and exposes matching tools for the next model call.',
             'Some tools may not have been provided upfront; use tool_search to search for required tools.',
+            'Use it promptly when the visible direct tools would force manual reconstruction of structured facts, cross-record ordering, entity resolution, document parsing, transcripts, APIs, or artifact data.',
             'For MCP tool discovery, use tool_search instead of list_mcp_resources or list_mcp_resource_templates.'
         ].join('\n'));
     }
@@ -3949,6 +4099,33 @@ function buildInvalidToolStepResult(step, validation, iteration) {
 function getWebToolRepeatTarget(step = {}) {
     const parsedMcp = parseDirectMcpToolId(step.tool);
     const baseName = normalizeText(parsedMcp?.tool || step.tool).toLowerCase();
+    if (baseName === 'web_run') {
+        const searchQueries = collectResearchAttemptQueries(step.args || {});
+        if (searchQueries.length) {
+            const filters = {
+                queries: searchQueries.map((entry) => entry.toLowerCase()),
+                responseLength: normalizeText(step.args?.response_length).toLowerCase()
+            };
+            return {
+                kind: 'web_search',
+                key: JSON.stringify(filters),
+                label: 'search_query'
+            };
+        }
+        const targets = collectResearchAttemptTargets(step.args || {});
+        if (targets.length) {
+            const operation = ['open', 'find', 'click'].find((key) => Array.isArray(step.args?.[key])) || 'open';
+            return {
+                kind: `web_${operation}`,
+                key: JSON.stringify({
+                    targets: targets.map((entry) => entry.replace(/#.*$/g, '').replace(/\/+$/g, '').toLowerCase()),
+                    lineno: Number(step.args?.open?.[0]?.lineno || 0) || 0,
+                    pattern: normalizeText(step.args?.find?.[0]?.pattern).toLowerCase()
+                }),
+                label: operation
+            };
+        }
+    }
     if (baseName === 'web_fetch') {
         const rawUrl = normalizeText(step.args?.url || step.args?.uri);
         const hashIndex = rawUrl.indexOf('#');
@@ -5124,6 +5301,7 @@ function buildTaskRunHandoffPackage({
     stepResults = [],
     events = [],
     latestDecision = null,
+    exactAnswer = '',
     finalAnswer = '',
     partialAnswer = '',
     contextManagerCheckpoint = null
@@ -5177,6 +5355,7 @@ function buildTaskRunHandoffPackage({
         runId,
         sessionId,
         task: normalizeText(message),
+        exactAnswer: normalizeText(exactAnswer),
         finalAnswer: normalizeText(finalAnswer),
         partialAnswer: normalizeText(partialAnswer),
         sourceRefs,
@@ -5778,6 +5957,40 @@ function buildPersonaTaskAgentHandoffDisplayText({
     );
 }
 
+function parseTaskResultPacketFromHandoffStep(stepResult = {}) {
+    const candidates = [
+        stepResult.response?.result?.structuredContent,
+        stepResult.response?.result?.details?.structuredContent,
+        stepResult.response?.result?.details,
+        stepResult.response?.result
+    ];
+    for (const candidate of candidates) {
+        if (candidate?.schema === 'ailis.task_result.v1') {
+            return candidate;
+        }
+    }
+    const text = extractToolResultText(stepResult.response?.result);
+    if (!text) {
+        return null;
+    }
+    const attempts = [text.trim()];
+    const firstBrace = text.indexOf('{');
+    if (firstBrace >= 0) {
+        attempts.push(text.slice(firstBrace).trim());
+    }
+    for (const attempt of attempts) {
+        try {
+            const parsed = JSON.parse(attempt);
+            if (parsed?.schema === 'ailis.task_result.v1') {
+                return parsed;
+            }
+        } catch {
+            // Keep trying the next extraction shape.
+        }
+    }
+    return null;
+}
+
 function directToolEntryId(entry = {}) {
     return canonicalDirectToolId(
         entry.spec?.name ||
@@ -5866,14 +6079,12 @@ function buildFinalAnswerNativeToolSpec() {
     return normalizeNativeToolSpec({
         name: FINAL_ANSWER_TOOL_NAME,
         description: [
-            'Submit the exact benchmark/task answer separately from user-visible persona text.',
-            'Use only when you are ready to submit an actual answer; if you need more information, call another tool instead.',
-            'Cite the evidence_artifacts refs you actually used so the runtime can audit the submission.',
-            'For relation or constraint questions, perform role alignment before submitting.',
+            'Submit the exact benchmark/task answer separately from visible persona text, only when ready; otherwise call another tool.',
+            'For first, earliest, latest, only, all, or count questions, verify the relevant candidate set and list or section boundary; one partial viewport or source category is insufficient unless it establishes the requested boundary.',
+            'For relation or constraint questions, verify role alignment and answer the requested entity, not an intermediate entity.',
             'For self-contained logic, math, grammar, translation, or rules questions, QuestionEvidence/source_question can support reasoning from the problem statement itself.',
-            'For relation or constraint questions with tables, assignments, people, items, profiles, or lists, verify role alignment before submitting: answer the entity role asked by the question, not merely the unmatched intermediate entity.',
-            'For quantitative questions, finish the unit conversion and rounding requested by the question before submitting; if the question asks for "how many thousand/million/billion X", submit the scaled count, not the raw X value.',
-            'Do not use this tool for plans, repair requests, or "I need to inspect/read/search first" messages.'
+            'For quantitative questions, finish requested unit conversion, scaling, and rounding before submitting.',
+            'Cite the evidence_artifacts refs actually used. Do not use this tool for plans, repair requests, or messages saying more inspection is needed.'
         ].join(' '),
         parameters: {
             type: 'object',
@@ -5900,7 +6111,7 @@ function buildFinalAnswerNativeToolSpec() {
                 },
                 reason: {
                     type: 'string',
-                    description: 'Brief private evidence note for audit. For relation/constraint tasks, include the target role, intermediate missing entity, and relation table direction check. Do not put this in answer.'
+                    description: 'Brief private evidence note for audit. For relation/constraint tasks, include the target role, intermediate missing entity, and relation table direction check. For first/earliest/latest/only/all/count tasks, note how the relevant candidate-set boundary was verified. Do not put this in answer.'
                 },
                 persona_text: {
                     type: 'string',
@@ -6372,8 +6583,6 @@ function sanitizeWebStructuredContentForPrompt(value, depth = 0, context = {}) {
         'page_type',
         'pageStatus',
         'page_status',
-        'suggestedNextCalls',
-        'suggested_next_calls',
         'reasoningReady',
         'reasoning_ready',
         'modelJudgesEvidence',
@@ -6562,6 +6771,28 @@ function buildToolObservationDigest(stepResults = []) {
         const structuredContentForPrompt = webTool && result.structuredContent
             ? sanitizeWebStructuredContentForPrompt(result.structuredContent)
             : result.structuredContent;
+        const rawObservationContract =
+            result.details?.observationContract ||
+            result.details?.observation_contract ||
+            result.structuredContent?.observationContract ||
+            result.structuredContent?.observation_contract ||
+            null;
+        const observationContract = rawObservationContract
+            ? {
+                  status: rawObservationContract.status,
+                  transport_ok: rawObservationContract.transport_ok,
+                  content_ok: rawObservationContract.content_ok,
+                  capability_ready: rawObservationContract.capability_ready,
+                  semantic_level: rawObservationContract.semantic_level,
+                  complete: rawObservationContract.complete,
+                  truncated: rawObservationContract.truncated,
+                  match_mode: rawObservationContract.match_mode,
+                  coverage: rawObservationContract.coverage,
+                  error_code: rawObservationContract.error_code,
+                  error: rawObservationContract.error,
+                  next_actions: rawObservationContract.next_actions
+              }
+            : null;
         return {
             id: stepResult.id || null,
             tool: stepResult.tool || null,
@@ -6574,6 +6805,7 @@ function buildToolObservationDigest(stepResults = []) {
             textChars: resultText.length,
             promptTextChars: promptText.text.length,
             compression: promptText.compression,
+            observationContract,
             evidenceRefs,
             note: evidenceRefs.length
                 ? 'Full observation is retained in transcript/evidence artifact; use evidenceRefs for final_answer.'
@@ -6628,6 +6860,7 @@ function parseCompletedSubagentNotificationInputItem(item = {}) {
         const taskResult = rawTaskResult
             ? {
                   status: normalizeText(rawTaskResult.status, 'completed'),
+                  exactAnswer: normalizeText(rawTaskResult.exact_answer || rawTaskResult.exactAnswer),
                   finalAnswer: normalizeText(rawTaskResult.final_answer || rawTaskResult.finalAnswer),
                   partialAnswer: normalizeText(rawTaskResult.partial_answer || rawTaskResult.partialAnswer),
                   sourceRefs: Array.isArray(rawTaskResult.source_refs)
@@ -6724,6 +6957,7 @@ function latestAuthoritativeSubagentTaskResult(notifications = []) {
         return {
             agentPath: notification.agentPath,
             status: normalizeText(taskResult.status, 'completed'),
+            exactAnswer: normalizeText(taskResult.exactAnswer),
             finalAnswer,
             sourceRefs: Array.isArray(taskResult.sourceRefs) ? taskResult.sourceRefs : [],
             traceRef: normalizeText(taskResult.traceRef),
@@ -6801,7 +7035,7 @@ function buildExactAnswerContractPromptObject({ exactAnswerMode = false, evidenc
             'question asks for scaled units such as thousand/million/billion but answer is the raw rounded base-unit value'
         ],
         available_evidence_refs: evidenceArtifacts.map((artifact) => artifact.id).filter(Boolean),
-        instruction: `When solved, call ${FINAL_ANSWER_TOOL_NAME} instead of writing a visible prose final. Evidence artifact ids are audit references for the observations you used; they do not decide sufficiency for you, but ${FINAL_ANSWER_TOOL_NAME} submissions must cite available refs. Use your own judgment about whether evidence is sufficient; if it is not, continue tools or return blocked. For quantitative questions, finish unit conversion, rate conversion, scaling, and rounding before final; if the question asks how many thousand/million/billion X, answer with the scaled count, not the raw unit value. For finite stochastic/probability/odds questions, use exact state transitions, dynamic programming, or exhaustive enumeration when needed; Monte Carlo may be a sanity check. Keep the answer field consistent with the final numeric conclusion written in reason.`
+        instruction: `When solved, call ${FINAL_ANSWER_TOOL_NAME} instead of writing a visible prose final. Evidence artifact ids are audit references for the observations you used; they do not decide sufficiency for you, but ${FINAL_ANSWER_TOOL_NAME} submissions must cite available refs. Use your own judgment about whether evidence is sufficient; if it is not, continue tools or return blocked. For first/earliest/latest/only/all/count questions, verify that the evidence covers the relevant candidate set and its list or section boundaries before submitting; a partial viewport or one source category is insufficient unless it establishes the requested boundary. For quantitative questions, finish unit conversion, rate conversion, scaling, and rounding before final; if the question asks how many thousand/million/billion X, answer with the scaled count, not the raw unit value. For finite stochastic/probability/odds questions, use exact state transitions, dynamic programming, or exhaustive enumeration when needed; Monte Carlo may be a sanity check. Keep the answer field consistent with the final numeric conclusion written in reason.`
     };
 }
 
@@ -6830,7 +7064,9 @@ function buildLlmAgentDirectToolPrompt({
     evidenceManifest = [],
     currentPlan = null,
     unresolvedFields = [],
-    safetyFinalizationReason = ''
+    safetyFinalizationReason = '',
+    ephemeralDeveloperMessage = '',
+    suppressCurrentUserMessage = false
 }) {
     const activePromptProfile = promptProfile || resolveAgentPromptProfile();
     const taskAgentMode = normalizeText(contextMode).toLowerCase() === 'task_agent';
@@ -6849,7 +7085,6 @@ function buildLlmAgentDirectToolPrompt({
         'For facts that may have changed, use fresh evidence already present in the conversation or verify them through TaskAgent. Do not present pretrained knowledge as current fact when freshness matters.',
         'When the user asks for concrete task execution that cannot be answered safely from the visible conversation, call handoff_task exactly once. The Harness transfers the immutable current user request; do not restate, rewrite, expand, or plan the task in tool arguments.',
         'handoff_task blocks while the system Harness runs or resumes the single TaskAgent. You do not create, wait for, resume, list, or close agents. After the tool returns, render its TaskResult packet instead of calling another orchestration tool.',
-        'Use continuation=continue only when the user explicitly continues, corrects, or supplements the previous task; use continuation=new for an explicit unrelated task; otherwise use auto and let lifecycle state decide.',
         'The TaskResult packet is the factual boundary. You may rewrite tone and presentation, but you must not add a name, number, quote, link, claim, or conclusion absent from final_answer, partial_answer, source_refs, or the visible conversation. If status is incomplete, explain the concrete unresolved field naturally instead of silently starting another execution.',
         'Never mention TaskAgent, subagent, worker, handoff, capsule, or internal orchestration to the user.',
         'Only call tools present in the current tools array. Do not mention tool schemas, runtime state, prompt rules, or orchestration details in an ordinary conversational reply.'
@@ -6859,17 +7094,18 @@ function buildLlmAgentDirectToolPrompt({
         responseProtocolInstruction,
         'Use native tool calls when work requires files, artifacts, search, shell/code, APIs, or verification. Otherwise answer with an assistant message.',
         `The runtime allows at most ${Math.max(1, maxSteps - 1)} work-tool rounds for this TaskAgent, followed by one tool-free finalization within the ${maxSteps}-round total budget. Use parallel tool calls for independent evidence and return the best supported result within this budget.`,
-        'task_state.original_user_goal is the user outcome this thread must satisfy. task_state.delegated_task is the parent-authored focus for this Agent; it may narrow the work, but it must not replace, relax, or erase the original user goal.',
+        'task_state.current_request / task_state.delegated_task is the current user request for this turn. task_state.original_user_goal is durable thread context for continuity, not a reason to ignore the current request; when the user continues, corrects, or redirects the task, preserve useful prior artifacts/checkpoints while making the current request the active objective.',
         'Tool call outputs from previous turns appear as function_call_output/tool_search_output items paired with their call_id. Use recent, relevant outputs as observations, but do not keep rereading stale exploration results once you have enough information to code, verify, or answer.',
         'Answer directly once the available evidence supports a reasonable answer. Use another tool only when you can name the specific missing field or uncertainty that blocks the answer. Do not repeat an identical tool call unless the new arguments materially change the observation.',
         'In the final answer, preserve the user-requested output shape, unit scaling, rounding, and brevity.',
         'Only call tools that are present in the current tools array. If a needed tool is missing, use tool_search when it is available.',
+        'When web discovery identifies the relevant entity but the answer still depends on structured identity, a join across records, global ordering or de-duplication, chronology, or a complete candidate-set boundary, use tool_search for a dedicated metadata, document, API, or data capability. Once that dependency is apparent, do not spend the remaining work budget paging through a site or rewriting web queries to reconstruct the structure manually.',
         'For latest/current/recent information, public web facts, recommendations, guides, prices, schedules, rules, product/software versions, news, or anything likely to change over time, you must browse or use web research first. Do not rely on memory, local code search, local logs, or shell commands as a substitute for public web evidence unless the user explicitly asks about local files/code.',
         'For local file and data tasks, prefer the coding main path: read/write/exec/apply_patch. Use read to inspect small files, write to create helper scripts, exec to run scripts/tests/diagnostics, and apply_patch for source edits. Use tool_search only when the coding path cannot reliably inspect the file type or when a specialized direct MCP/tool is clearly needed.',
         'Attached files are staged inside the current workspace before TaskAgent starts. Always use the staged attached_files path. For PDF, Office, image, audio, archive, or other structured/binary files, use tool_search once for the exact dedicated reader/transcriber/vision capability and call that tool; do not spend the task budget installing ad-hoc parsers when a dedicated tool is available.',
         'For data reasoning tasks, use code as a calculator and verifier: write scripts that parse the source file, compute the needed result, and print a short answer plus compact evidence. Do not write scripts whose main purpose is to dump large files, whole spreadsheets, logs, or documents back into model context.',
         'For long-running work, you may attach progress_note to a tool call or include a short public progress sentence only at meaningful milestones: plan changed, key evidence found, strategy changed after failure, blocker/recovery identified, or evidence is sufficient and you are preparing the final answer. Leave progress_note empty for routine tool calls. Do not expose raw JSON, hidden reasoning, internal IDs, stack traces, token counts, or generic "I am thinking" text.',
-        'Tool outputs provide observations and mechanical transport metadata, not a decision about whether the user task is complete. Judge sufficiency from the original task and the source content yourself. A Source viewport line range, has-more marker, or <truncated omitted_approx_tokens="..."/> marker describes visible context only; it does not require another call when the visible evidence already supports the answer.',
+        'Tool outputs provide observations and mechanical transport metadata, not a decision about whether the user task is complete. Judge sufficiency from the original task and the source content yourself. A Source viewport line range, has-more marker, or <truncated omitted_approx_tokens="..."/> marker describes visible context only; it does not require another call when the visible evidence already supports the answer. For first/earliest/latest/only/all/count questions, a visible subset supports the answer only when it establishes the relevant candidate-set boundary; otherwise inspect the remaining relevant lines or sections, or use a structured tool.',
         'When exec output is truncated, use the visible outputId with output_read/output_tail/output_search to inspect a needed slice. Do not rerun the same command solely to recover truncated text.',
         'Runtime environment and attached file metadata are provided as ordinary user message context items. Use them for path, shell, date, time, and freshness decisions.'
     ];
@@ -6897,11 +7133,14 @@ function buildLlmAgentDirectToolPrompt({
             runtimeEnvironment,
             capabilityCatalog,
             externalToolExposure: null,
-            toolOutputChars
+            toolOutputChars,
+            ephemeralDeveloperMessage,
+            suppressCurrentUserMessage
     });
     const taskContextState = taskAgentMode ? {
         ...(taskState && typeof taskState === 'object' ? taskState : {}),
         original_user_goal: effectiveOriginalGoal,
+        current_request: normalizeText(message),
         delegated_task: normalizeText(message)
     } : taskState;
     const contextPackageOptions = {
@@ -7669,6 +7908,9 @@ class AILISAgentRunner {
         this.memoryRuntime = options.memoryRuntime || this.gateway.memoryRuntime || null;
         this.preferenceState = options.preferenceState || this.gateway.preferenceState || null;
         this.taskResultCapsules = options.taskResultCapsules || this.gateway.taskResultCapsules || null;
+        this.contextCompiler = options.contextCompiler || new AILISContextCompiler({
+            memoryRuntime: this.memoryRuntime
+        });
         this.pendingStorePath = path.resolve(
             options.pendingStorePath ||
                 path.join(this.gateway.auditDir || path.join(this.workspaceRoot, '.audit'), 'pending-agent-state.json')
@@ -7930,23 +8172,6 @@ class AILISAgentRunner {
                 request?.context?.evalMemoryContext
         );
         const personaMode = normalizeText(contextMode, 'persona').toLowerCase() === 'persona';
-        let runtimeMemoryContext = '';
-        try {
-            if (this.memoryRuntime?.compileContext) {
-                runtimeMemoryContext = this.memoryRuntime.compileContext({
-                    sessionId,
-                    message,
-                    messageHistory: request?.messageHistory || [],
-                    contextMode,
-                    maxChars: personaMode ? 1400 : MAX_PROMPT_MEMORY_CHARS
-                });
-            }
-        } catch (error) {
-            this.gateway.emitGatewayEvent?.('agent.memory.context_error', {
-                sessionId,
-                error: error?.message || String(error)
-            });
-        }
         let preferenceContext = '';
         let activeTaskContext = '';
         if (personaMode) {
@@ -7973,21 +8198,36 @@ class AILISAgentRunner {
                 });
             }
         }
-        return [
-            preferenceContext,
-            activeTaskContext,
-            runtimeMemoryContext,
-            explicitMemoryContext
-                ? [
-                      '【本轮显式记忆/关系上下文】',
-                      explicitMemoryContext
-                  ].join('\n')
-                : ''
-        ].filter(Boolean).join('\n\n');
+        try {
+            return this.contextCompiler.compile({
+                sessionId,
+                currentUserMessage: message,
+                sessionRecentTurns: request?.messageHistory || [],
+                activeTaskState: activeTaskContext,
+                interactionPreferences: preferenceContext,
+                explicitMemoryContext,
+                agentMode: personaMode ? 'persona' : 'task_agent',
+                sectionBudgets: request?.memorySectionBudgets || request?.context?.memorySectionBudgets || {},
+                maxChars: Number(
+                    request?.memoryContextMaxChars ||
+                    request?.context?.memoryContextMaxChars ||
+                    (personaMode ? MAX_PROMPT_MEMORY_CHARS : 12000)
+                )
+            });
+        } catch (error) {
+            this.gateway.emitGatewayEvent?.('agent.memory.context_error', {
+                sessionId,
+                error: error?.message || String(error)
+            });
+            return explicitMemoryContext;
+        }
     }
 
     recordMemoryTurn({ request = {}, result = {}, message = '', sessionId = 'main', source = 'agent' } = {}) {
         if (request.classifyOnly === true || !this.memoryRuntime?.recordTurn) {
+            return;
+        }
+        if (isTaskAgentRole(resolveAgentRuntimeRole(request, request?.context || {}))) {
             return;
         }
         try {
@@ -8527,7 +8767,7 @@ class AILISAgentRunner {
             });
         }
         const failedVerification = verificationResults.find((step) => !step.response?.ok);
-        const review = !failedStep && !failedVerification && settings.baseUrl && settings.model && settings.apiKey
+        const review = !failedStep && !failedVerification && !isAgentLlmSettingsMissing(settings)
             ? await callLlmReviewer(settings, {
                   message: pendingPlan.message,
                   plan: pendingPlan,
@@ -9077,7 +9317,8 @@ class AILISAgentRunner {
                 stepResults,
                 latestDecision,
                 currentPlan,
-                constraints
+                constraints,
+                requestContext
             });
             const evidenceManifest = buildAgentEvidenceArtifactsPromptObject(stepResults, {
                 message,
@@ -9141,6 +9382,13 @@ class AILISAgentRunner {
                 currentPlan,
                 unresolvedFields,
                 safetyFinalizationReason,
+                ephemeralDeveloperMessage: normalizeText(
+                    request.ephemeralDeveloperMessage ||
+                    requestContext.ephemeralDeveloperMessage
+                ),
+                suppressCurrentUserMessage:
+                    request.suppressCurrentUserMessage === true ||
+                    requestContext.suppressCurrentUserMessage === true,
                 toolSummary: isPersonaOrchestratorRole(agentRuntimeRole)
                     ? 'Persona tool surface: handoff_task transfers the immutable current user request to the system TaskAgent and returns one compact TaskResult packet. The Harness owns lifecycle and internal orchestration remains invisible to the user.'
                     : directToolSpecs.length
@@ -9661,6 +9909,7 @@ class AILISAgentRunner {
                     stepResults,
                     events,
                     latestDecision: decision,
+                    exactAnswer: authoritativeTaskResult?.exactAnswer || exactAnswerSubmission?.answer || '',
                     finalAnswer: authoritativeTaskResult?.finalAnswer || exactAnswerSubmission?.answer || decision.finalAnswer || '',
                     partialAnswer: decision.summary || '',
                     contextManagerCheckpoint: contextManagerCheckpoint('completed', iteration)
@@ -9668,6 +9917,7 @@ class AILISAgentRunner {
                 const taskRunHandoff = authoritativeTaskResult
                     ? {
                           ...baseTaskRunHandoff,
+                          exactAnswer: authoritativeTaskResult.exactAnswer || baseTaskRunHandoff.exactAnswer,
                           finalAnswer: visibleText,
                           sourceRefs: authoritativeTaskResult.sourceRefs,
                           traceRef: authoritativeTaskResult.traceRef || baseTaskRunHandoff.traceRef,
@@ -9686,6 +9936,7 @@ class AILISAgentRunner {
                     executionRequired: stepResults.length > 0,
                     durationMs: Date.now() - startedAt,
                     message,
+                    exactAnswer: authoritativeTaskResult?.exactAnswer || exactAnswerSubmission?.answer || '',
                     finalAnswer: authoritativeTaskResult?.finalAnswer || exactAnswerSubmission?.answer || decision.finalAnswer || '',
                     exactAnswerSubmission,
                     exactAnswerAudit: exactAnswerMode ? exactAnswerValidation : null,
@@ -10251,6 +10502,80 @@ class AILISAgentRunner {
                 }
             });
 
+            if (
+                isPersonaOrchestratorRole(resolveAgentRuntimeRole({}, requestContext)) &&
+                canonicalDirectToolId(step.tool) === PERSONA_HANDOFF_TOOL_ID
+            ) {
+                const packet = parseTaskResultPacketFromHandoffStep(stepResult);
+                const packetStatus = normalizeText(packet?.status || stepResult.response?.status || 'completed');
+                const packetExactAnswer = normalizeText(packet?.exact_answer || packet?.exactAnswer);
+                const displayText = normalizeText(
+                    packet?.final_answer ||
+                        packet?.partial_answer ||
+                        buildPersonaTaskAgentHandoffDisplayText({
+                            ok: stepResult.response?.ok === true,
+                            status: packetStatus,
+                            childResult: {
+                                finalAnswer: packet?.final_answer,
+                                answer: packet?.final_answer,
+                                summary: packet?.partial_answer
+                            },
+                            payload: packet || {},
+                            toolText: extractToolResultText(stepResult.response?.result)
+                        }),
+                    '任务执行器已经返回结果，但没有可直接展示的文本。'
+                );
+                const handoffOk = stepResult.response?.ok === true && !['failed', 'error', 'timeout', 'max_loop', 'interrupted'].includes(packetStatus);
+                return await finishRuntimeRun(attachPersonaSurface({
+                    ok: handoffOk,
+                    runId,
+                    sessionId,
+                    status: packetStatus,
+                    mode: 'conversation',
+                    planner: 'llm-agentic-executor',
+                    intent: 'persona_task_handoff_result',
+                    executionRequired: true,
+                    durationMs: Date.now() - startedAt,
+                    message,
+                    displayText,
+                    exactAnswer: packetExactAnswer,
+                    exactAnswerSubmission: packetExactAnswer ? {
+                        answer: packetExactAnswer,
+                        evidenceRefs: Array.isArray(packet?.evidence_refs) ? packet.evidence_refs : []
+                    } : null,
+                    finalAnswer: packet?.final_answer || displayText,
+                    speechText: displayText.replace(/\n/g, ' '),
+                    plan: [],
+                    steps: stepResults,
+                    events,
+                    taskResult: packet || null,
+                    taskRunHandoff: packet ? {
+                        status: packet.status,
+                        exactAnswer: packetExactAnswer,
+                        finalAnswer: packet.final_answer,
+                        partialAnswer: packet.partial_answer,
+                        sourceRefs: packet.source_refs || [],
+                        collectedData: [],
+                        traceRef: packet.trace_ref,
+                        resume: { checkpointAvailable: packet.checkpoint_available === true }
+                    } : null
+                }, renderPersonaSurfaceGateway({
+                    text: displayText,
+                    task_state: handoffOk ? 'completed' : 'blocked',
+                    approval_state: 'none',
+                    evidence_state: Array.isArray(packet?.evidence_refs) && packet.evidence_refs.length ? 'present' : 'unknown',
+                    error_code: packetStatus,
+                    ok: handoffOk,
+                    text_is_persona_safe: true,
+                    source: 'persona_task_handoff_result',
+                    emotion_hint: handoffOk ? 'happy' : 'concerned',
+                    bubble_text: handoffOk ? '我把任务结果整理好了。' : '我把任务现场保留下来了。'
+                })), {
+                    source: 'persona_task_handoff_result',
+                    nextAction: handoffOk ? '' : '从 TaskAgent 的检查点继续执行'
+                });
+            }
+
             const interruptedAfterTool = await maybeFinishInterruptedRun(`after_tool_${iteration}`);
             if (interruptedAfterTool) {
                 return interruptedAfterTool;
@@ -10432,7 +10757,7 @@ class AILISAgentRunner {
 
         const settings = resolveAgentLlmSettings(request, requestContext);
         const effectiveSettings =
-            settings.baseUrl && settings.model && settings.apiKey
+            !isAgentLlmSettingsMissing(settings)
                 ? settings
                 : pendingApproval.settings;
         const step = pendingApproval.nextStep;
@@ -11357,6 +11682,7 @@ module.exports = {
     attachAgentEvidenceArtifacts,
     buildAgentDirectToolSpecs,
     buildAgentEvidenceArtifactsPromptObject,
+    buildAgentTaskState,
     buildEvidenceSufficiencyPromptObject,
     buildFinalAnswerNativeToolSpec,
     buildSourceQuestionEvidenceArtifact,
@@ -11371,6 +11697,8 @@ module.exports = {
     buildAgentDecisionLowLatencyPayload,
     buildLlmAgentDirectToolPrompt,
     buildTaskRunHandoffPackage,
+    buildResearchProgressState,
+    buildStagedAttachmentFilename,
     build_forked_context_checkpoint,
     keep_forked_rollout_item,
     resolveAgentPromptProfile,

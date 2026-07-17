@@ -2200,6 +2200,12 @@ class AILISToolAcquisitionGateway {
                 exposure.name ||
                 exposure.toolId
         );
+        const whenToUse = normalizeArray(contract.whenToUse).map((entry) => normalizeString(entry)).filter(Boolean).slice(0, 2);
+        const whenNotToUse = normalizeArray(contract.whenNotToUse).map((entry) => normalizeString(entry)).filter(Boolean).slice(0, 3);
+        const usageBoundary = [
+            whenToUse.length ? `When to use: ${whenToUse.join(' ')}` : '',
+            whenNotToUse.length ? `Avoid: ${whenNotToUse.join(' ')}` : ''
+        ].filter(Boolean).join('\n');
         const callable = exposure.callable === true;
         return {
             id: callable ? virtualToolId : exposure.id,
@@ -2219,7 +2225,11 @@ class AILISToolAcquisitionGateway {
                 ? {
                     type: 'function',
                     name: virtualToolId,
-                    description: `${description}\n\nUse this direct external tool after tool_search surfaces it. The Gateway routes it to the verified external adapter; do not wrap it in capability_manager.execute_exposed_external_tool.`,
+                    description: [
+                        description,
+                        usageBoundary,
+                        'Use this direct external tool after tool_search surfaces it. The Gateway routes it to the verified external adapter; do not wrap it in capability_manager.execute_exposed_external_tool.'
+                    ].filter(Boolean).join('\n\n'),
                     strict: false,
                     parameters,
                     output_schema: modelFacing.output_schema || contract.outputSchema || {}

@@ -108,27 +108,53 @@ async function runBoundedParallel(items = [], concurrency = 1, worker = async ()
 function readDesktopLlmSettings() {
     const appData = process.env.APPDATA || path.join(process.env.USERPROFILE || '', 'AppData', 'Roaming');
     const statePath = path.join(appData, 'ailis', 'desktop-state.json');
-    if (!fsSync.existsSync(statePath)) {
-        return null;
+    let state = {};
+    if (fsSync.existsSync(statePath)) {
+        try {
+            state = JSON.parse(fsSync.readFileSync(statePath, 'utf8'));
+        } catch {
+            state = {};
+        }
     }
-    const state = JSON.parse(fsSync.readFileSync(statePath, 'utf8'));
     const preferences = state.preferences || {};
     const apiKey = normalizeString(
+        process.env.AILIS_TOOL_LLM_API_KEY ||
         preferences.llmApiKey ||
         process.env.DOUBAO_API_KEY ||
         process.env.ARK_API_KEY ||
         process.env.VOLCENGINE_API_KEY ||
         process.env.OPENAI_COMPATIBLE_API_KEY
     );
+    const provider = normalizeString(
+        process.env.AILIS_TOOL_LLM_PROVIDER ||
+        process.env.AILIS_AGENT_LLM_PROVIDER ||
+        preferences.llmProvider,
+        'openai-compatible'
+    );
     const settings = {
-        provider: normalizeString(preferences.llmProvider, 'openai-compatible'),
-        baseUrl: normalizeString(preferences.llmBaseUrl, 'https://ark.cn-beijing.volces.com/api/v3'),
-        model: normalizeString(preferences.llmModel, 'doubao-seed-2-0-mini-260215'),
+        provider,
+        baseUrl: normalizeString(
+            process.env.AILIS_TOOL_LLM_BASE_URL ||
+            process.env.AILIS_AGENT_LLM_BASE_URL ||
+            preferences.llmBaseUrl,
+            'https://ark.cn-beijing.volces.com/api/v3'
+        ),
+        model: normalizeString(
+            process.env.AILIS_TOOL_LLM_MODEL ||
+            process.env.AILIS_AGENT_LLM_MODEL ||
+            preferences.llmModel,
+            'doubao-seed-2-0-mini-260215'
+        ),
         apiKey,
+        reasoningEffort: normalizeString(
+            process.env.AILIS_TOOL_LLM_REASONING_EFFORT ||
+            process.env.AILIS_CODEX_REASONING_EFFORT
+        ),
         temperature: 0,
         timeoutMs: 120000
     };
-    return settings.baseUrl && settings.model && settings.apiKey ? settings : null;
+    const keylessProvider = ['codex-model-bridge', 'ollama', 'vllm'].includes(provider.toLowerCase());
+    return settings.baseUrl && settings.model && (keylessProvider || settings.apiKey) ? settings : null;
 }
 
 function imageMimeType(filePath) {
@@ -4260,10 +4286,65 @@ function buildSearxngSearchUrl(query, maxResults, args = {}) {
     url.searchParams.set('language', normalizeString(args.language || args.lang || 'auto', 'auto'));
     url.searchParams.set('safesearch', String(clampNumber(args.safeSearch || args.safe_search, 0, 0, 2)));
     url.searchParams.set('pageno', '1');
+    const recency = Number(args.recency);
+    const timeRange = Number.isFinite(recency) && recency > 0
+        ? recency <= 1
+            ? 'day'
+            : recency <= 7
+            ? 'week'
+            : recency <= 31
+            ? 'month'
+            : recency <= 366
+            ? 'year'
+            : ''
+        : '';
+    if (timeRange) {
+        url.searchParams.set('time_range', timeRange);
+    }
     if (maxResults) {
         url.searchParams.set('results_on_new_tab', '0');
     }
     return url.toString();
+}
+
+function normalizeSearchDomains(value) {
+    const values = Array.isArray(value) ? value : value ? [value] : [];
+    return [...new Set(values.map((entry) => {
+        const raw = normalizeString(entry).toLowerCase().replace(/^\*\./, '');
+        if (!raw) {
+            return '';
+        }
+        try {
+            return new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`).hostname
+                .replace(/^www\./, '')
+                .replace(/^\*\./, '');
+        } catch {
+            return raw.split('/')[0].replace(/^www\./, '').replace(/^\*\./, '');
+        }
+    }).filter(Boolean))].slice(0, 8);
+}
+
+function searchResultMatchesDomains(result = {}, domains = []) {
+    if (!domains.length) {
+        return true;
+    }
+    try {
+        const hostname = new URL(normalizeString(result.url || result.link)).hostname
+            .toLowerCase()
+            .replace(/^www\./, '');
+        return domains.some((domain) => hostname === domain || hostname.endsWith(`.${domain}`));
+    } catch {
+        return false;
+    }
+}
+
+function filterSearchResultsByDomains(results = [], domains = []) {
+    const normalizedDomains = normalizeSearchDomains(domains);
+    if (!normalizedDomains.length) {
+        return Array.isArray(results) ? results : [];
+    }
+    return (Array.isArray(results) ? results : [])
+        .filter((result) => searchResultMatchesDomains(result, normalizedDomains));
 }
 
 function extractSearxngJsonResults(payload = {}, maxResults = 8) {
@@ -4837,6 +4918,7 @@ async function webSearch(args = {}) {
     ].filter(Boolean).join(' ');
     const backendQuery = normalizeString(args.backendQuery || args.backend_query) || buildEffectiveSearchQuery(queryWithExactKeywords);
     const maxResults = clampNumber(args.maxResults || args.limit, 8, 1, 12);
+    const domains = normalizeSearchDomains(args.domains);
     const searchContextSize = normalizeSearchContextSize(args.search_context_size || args.searchContextSize);
     const timeoutMs = clampNumber(args.timeoutMs || args.timeout_ms, 8000, 3000, 30000);
     const attempts = [];
@@ -4863,7 +4945,10 @@ async function webSearch(args = {}) {
             .map((attempt, backendIndex) => ({ attempt, backendIndex }))
             .filter(({ attempt }) => attempt.ok);
         for (const { attempt, backendIndex } of successfulAttempts) {
-            const enrichedResults = enrichSearchResultsWithSource(attempt.results, attempt, backendIndex);
+            const enrichedResults = filterSearchResultsByDomains(
+                enrichSearchResultsWithSource(attempt.results, attempt, backendIndex),
+                domains
+            );
             collectedResults = mergeSearchResultsForRerank(
                 [...collectedResults, ...enrichedResults],
                 maxResults * 3
@@ -4919,7 +5004,14 @@ async function webSearch(args = {}) {
         if (!attempt.ok) {
             continue;
         }
-        const enrichedResults = enrichSearchResultsWithSource(attempt.results, attempt, backendIndex);
+        lastSuccessfulAttempt = attempt;
+        const enrichedResults = filterSearchResultsByDomains(
+            enrichSearchResultsWithSource(attempt.results, attempt, backendIndex),
+            domains
+        );
+        if (domains.length && !enrichedResults.length) {
+            continue;
+        }
         collectedResults = aggregateAcrossBackends
             ? mergeSearchResultsForRerank([...collectedResults, ...enrichedResults], maxResults * 3)
             : enrichedResults;
@@ -4937,7 +5029,6 @@ async function webSearch(args = {}) {
             searchContextSize
         });
         lastSuccessObservation = observation;
-        lastSuccessfulAttempt = attempt;
         if (!shouldContinueSearchAggregation({
             args: effectiveArgs,
             backends,
@@ -4949,7 +5040,7 @@ async function webSearch(args = {}) {
             return observation.response;
         }
     }
-    if (lastSuccessObservation && lastSuccessfulAttempt) {
+    if (lastSuccessfulAttempt) {
         return buildWebSearchSuccessObservation({
             query,
             backendQuery,
@@ -7967,6 +8058,12 @@ function rankOpenAlexAuthorMatches(results = [], targetAuthor = '') {
         .sort((a, b) => b.score - a.score || b.worksCount - a.worksCount || a.name.localeCompare(b.name));
 }
 
+function isExactAuthorNameMatch(candidateName = '', targetAuthor = '') {
+    const candidate = authorNameTokens(candidateName).join(' ');
+    const target = authorNameTokens(targetAuthor).join(' ');
+    return Boolean(candidate && target && candidate === target);
+}
+
 function buildOpenAlexAuthorsSearchUrl(baseUrl, author, maxResults, { apiKey = '' } = {}) {
     const parsedBase = normalizeString(baseUrl, 'https://api.openalex.org/authors');
     return appendUrlQueryParams(
@@ -8479,6 +8576,30 @@ async function paperMetadataLookup(args = {}) {
         attempts.push({ source: 'openalex_authors', url: authorSearchUrl, ok: authorSearch.ok, status: authorSearch.status, error: authorSearch.error || '' });
         if (authorSearch.ok) {
             const rankedAuthors = rankOpenAlexAuthorMatches(authorSearch.json?.results, author).slice(0, 3);
+            const exactAuthors = rankedAuthors.filter((candidate) => isExactAuthorNameMatch(candidate.name, author));
+            const authorHistoryRequested = beforeYear && !query && !year && !topic && !venue;
+            if (authorHistoryRequested && exactAuthors.length === 1) {
+                const resolved = await paperMetadataLookup({
+                    ...args,
+                    author: exactAuthors[0].name,
+                    authorId: exactAuthors[0].id
+                });
+                if (!resolved.isError) {
+                    const resolvedPayload = resolved.structuredContent || resolved.details || {};
+                    const responsePayload = {
+                        ...resolvedPayload,
+                        requestedAuthor: author,
+                        resolvedAuthor: exactAuthors[0],
+                        attempts: [...attempts, ...(Array.isArray(resolvedPayload.attempts) ? resolvedPayload.attempts : [])]
+                    };
+                    return {
+                        ...resolved,
+                        content: [{ type: 'text', text: buildPaperMetadataText(responsePayload) }],
+                        structuredContent: responsePayload,
+                        details: responsePayload
+                    };
+                }
+            }
             const authorWorkQuery = normalizeString(buildTopicalPaperQuery({ query, author, year, topic, venue }));
             for (const authorMatch of rankedAuthors) {
                 const authorScopedUrl = buildOpenAlexWorksSearchUrl(
@@ -8546,6 +8667,28 @@ async function paperMetadataLookup(args = {}) {
     if (crossrefSearch.ok) {
         for (const item of Array.isArray(crossrefSearch.json?.message?.items) ? crossrefSearch.json.message.items : []) {
             pushPaperMetadataCandidate(results, seen, mapCrossrefItemToPaperMetadata(item), scoringContext);
+        }
+    }
+
+    if (titleOnlyLookup && results.length === 0) {
+        const broadSearchText = normalizeString(searchText.replace(/[?*]+/g, ' '));
+        const openAlexFallbackUrl = buildOpenAlexWorksSearchUrl(openAlexBaseUrl, broadSearchText, maxResults, {
+            exact: false,
+            apiKey: openAlexApiKey,
+            filter: year ? buildOpenAlexWorksFilter({ year }) : ''
+        });
+        const openAlexFallback = await fetchJsonUrl(openAlexFallbackUrl, Math.min(timeoutMs, 20000));
+        attempts.push({
+            source: 'openalex_title_fallback',
+            url: openAlexFallbackUrl,
+            ok: openAlexFallback.ok,
+            status: openAlexFallback.status,
+            error: openAlexFallback.error || ''
+        });
+        if (openAlexFallback.ok) {
+            for (const work of Array.isArray(openAlexFallback.json?.results) ? openAlexFallback.json.results : []) {
+                pushPaperMetadataCandidate(results, seen, mapOpenAlexWorkToPaperMetadata(work), scoringContext);
+            }
         }
     }
 
@@ -9396,6 +9539,7 @@ function parseWikipediaPagePayload(payload = {}) {
             text: renderedHtml
         };
     }
+
     const wikitext = normalizeString(payload?.parse?.wikitext?.['*']);
     if (wikitext) {
         return {
@@ -9875,7 +10019,7 @@ function formatSourceLineWindow(sourceWindow = {}) {
         `Line range: L${Number(sourceWindow.line_start || sourceWindow.lineStart || 1)}-L${Number(sourceWindow.line_end || sourceWindow.lineEnd || sourceWindow.line_start || sourceWindow.lineStart || 1)}`,
         `Has more before: ${(sourceWindow.has_more_before ?? sourceWindow.hasMoreBefore) ? 'true' : 'false'}`,
         `Has more after: ${(sourceWindow.has_more_after ?? sourceWindow.hasMoreAfter) ? 'true' : 'false'}`,
-        'Note: this is a focused source viewport, not a failed or incomplete fetch. If it contains enough answer-bearing evidence, answer. If a specific field is missing, fetch another line window or query-focused window.',
+        'Note: this is a focused source viewport, not a failed or incomplete fetch. If it contains enough answer-bearing evidence, answer. If a specific field is missing, fetch another line window or query-focused window. For first/earliest/latest/only/all/count questions, a partial viewport is sufficient only when it establishes the relevant candidate-set boundary; otherwise inspect the remaining relevant lines or sections.',
         '',
         renderedLines
     ].filter((line) => line !== '').join('\n');
@@ -10833,6 +10977,8 @@ print(json.dumps({
             fullDocumentRead: true
         },
         observationContract: {
+            status: 'completed',
+            semantic_level: 'structure',
             complete: true,
             truncated: false,
             reasoning_ready: true,
@@ -10933,12 +11079,72 @@ print(json.dumps(payload, ensure_ascii=False))
         return errorResult('read_presentation failed', { path: filePath, stderr: result.stderr.slice(0, 3000) });
     }
     const text = normalizeString(result.stdout);
-    return textResult(text, { status: 'completed', path: filePath });
+    let presentation;
+    try {
+        presentation = JSON.parse(text);
+    } catch (error) {
+        return errorResult(`read_presentation returned invalid JSON: ${error.message}`, {
+            path: filePath,
+            stdout: text.slice(0, 2000)
+        });
+    }
+    const totalSlides = Number(presentation.total_slides || 0);
+    const returnedSlides = Number(presentation.returned_slides || 0);
+    const complete = returnedSlides >= totalSlides;
+    const details = {
+        status: complete ? 'completed' : 'partial',
+        ok: true,
+        path: filePath,
+        totalSlides,
+        returnedSlides,
+        complete,
+        truncated: !complete,
+        coverage: {
+            totalSlides,
+            returnedSlides,
+            matchingSlides: Array.isArray(presentation.matching_slides)
+                ? presentation.matching_slides.length
+                : 0
+        },
+        observationContract: {
+            status: complete ? 'completed' : 'partial',
+            semantic_level: 'structure',
+            complete,
+            truncated: !complete,
+            coverage: {
+                totalSlides,
+                returnedSlides
+            }
+        }
+    };
+    return {
+        content: [{ type: 'text', text }],
+        structuredContent: {
+            ok: true,
+            ...details,
+            presentation,
+            ...presentation
+        },
+        details
+    };
 }
 
 async function transcribeAudio(args = {}) {
     const filePath = path.resolve(normalizeString(args.path || args.file || args.filePath || args.file_path));
     const model = normalizeString(args.model, 'base');
+    const stat = filePath ? await fs.stat(filePath).catch(() => null) : null;
+    if (!stat || !stat.isFile()) {
+        return actionableErrorResult('transcribe_audio requires an existing local audio path', {
+            status: 'not_found',
+            path: filePath,
+            failureReason: 'local_audio_path_not_found',
+            message: 'The supplied staged audio path does not exist. Use the exact current attached_files path.',
+            nextActions: [
+                'Use the exact current attached_files path and retry once.',
+                'Do not change Whisper model size to recover a missing input file.'
+            ]
+        });
+    }
     const code = `
 import json, os, sys, whisper
 try:
@@ -10982,7 +11188,43 @@ print(json.dumps({"text": result.get("text", ""), "language": result.get("langua
     if (result.exitCode !== 0) {
         return errorResult('transcribe_audio failed', { path: filePath, stderr: result.stderr.slice(0, 2000) });
     }
-    return textResult(result.stdout.trim(), { status: 'completed', path: filePath, model });
+    const text = normalizeString(result.stdout);
+    let transcript;
+    try {
+        transcript = JSON.parse(text);
+    } catch (error) {
+        return errorResult(`transcribe_audio returned invalid JSON: ${error.message}`, {
+            path: filePath,
+            stdout: text.slice(0, 2000)
+        });
+    }
+    return {
+        content: [{ type: 'text', text }],
+        structuredContent: {
+            ok: true,
+            status: 'completed',
+            path: filePath,
+            model,
+            transcript,
+            ...transcript
+        },
+        details: {
+            status: 'completed',
+            ok: true,
+            path: filePath,
+            model,
+            language: normalizeString(transcript.language),
+            textChars: normalizeString(transcript.text).length,
+            complete: true,
+            truncated: false,
+            observationContract: {
+                status: 'completed',
+                semantic_level: 'text',
+                complete: true,
+                truncated: false
+            }
+        }
+    };
 }
 
 async function describeImage(args = {}) {
@@ -10997,10 +11239,14 @@ async function describeImage(args = {}) {
     }
     const question = normalizeString(args.question || args.prompt, 'Describe the image and answer any visible question.');
     const maxChars = clampNumber(args.maxChars || args.max_chars, 4000, 500, 12000);
+    const timeoutMs = clampNumber(args.timeoutMs || args.timeout_ms, settings.timeoutMs || 180000, 30000, 600000);
+    const detail = ['low', 'high', 'original'].includes(normalizeString(args.detail).toLowerCase())
+        ? normalizeString(args.detail).toLowerCase()
+        : 'original';
     const imageBytes = await fs.readFile(filePath);
     const payload = {
         temperature: 0,
-        timeoutMs: args.timeoutMs || 180000,
+        timeoutMs,
         messages: [
             {
                 role: 'user',
@@ -11009,18 +11255,27 @@ async function describeImage(args = {}) {
                     {
                         type: 'image_url',
                         image_url: {
-                            url: `data:${imageMimeType(filePath)};base64,${imageBytes.toString('base64')}`
-                        }
+                            url: `data:${imageMimeType(filePath)};base64,${imageBytes.toString('base64')}`,
+                            detail
+                        },
+                        detail
                     }
                 ]
             }
         ]
     };
-    let response = await callDesktopLlmProvider(settings, payload);
+    let response = await callDesktopLlmProvider({
+        ...settings,
+        timeoutMs
+    }, payload);
     if (!response.ok && response.code === 'timeout') {
-        response = await callDesktopLlmProvider(settings, {
+        const retryTimeoutMs = Math.max(timeoutMs, 240000);
+        response = await callDesktopLlmProvider({
+            ...settings,
+            timeoutMs: retryTimeoutMs
+        }, {
             ...payload,
-            timeoutMs: Math.max(Number(args.timeoutMs) || 180000, 240000)
+            timeoutMs: retryTimeoutMs
         });
     }
     if (!response.ok) {
@@ -11034,22 +11289,21 @@ async function describeImage(args = {}) {
                 ? 'configured_llm_provider_does_not_accept_image_url_parts'
                 : 'vision_model_call_failed',
             message: unsupportedImageInput
-                ? '当前配置的大模型接口不支持 image_url 视觉输入；不要重复调用 describe_image。请改用窗口标题、页面文本、OCR/截图读取工具，或先用 web_search 检索公开比赛信息。'
+                ? '当前配置的大模型接口不支持 image_url 视觉输入；不要重复调用 describe_image。请改用 OCR、文档渲染或其他已配置的视觉工具。'
                 : '视觉模型调用失败；不要机械重复同一个截图分析调用，改用其他证据来源。',
             nextActions: unsupportedImageInput
                 ? [
-                    'Call tool_search with a public web discovery query such as "Kaggle AI defense competition latest strategy web_search".',
-                    'If screen evidence is still needed, inspect window titles or use OCR/page-text tools instead of describe_image.',
+                    'Call tool_search for a configured local-image vision or OCR capability.',
+                    'If visual evidence is still needed, use OCR, document rendering, or another vision-capable provider.',
                     'Only retry describe_image after switching to a vision-capable provider/model.'
                 ]
                 : [
-                    'Try another evidence source before retrying describe_image.',
-                    'Use web_search for public competition/strategy information when the screen cannot be analyzed.'
+                    'Try another available vision or OCR source before retrying describe_image.'
                 ],
             suggestedNextCalls: [
                 {
                     tool: 'tool_search',
-                    args: { query: 'Kaggle AI defense competition latest strategy web_search', limit: 8 }
+                    args: { query: 'local image semantic vision OCR describe image', limit: 8 }
                 }
             ]
         });
@@ -11057,7 +11311,15 @@ async function describeImage(args = {}) {
     return textResult(response.content.slice(0, maxChars), {
         status: 'completed',
         path: filePath,
-        model: response.model
+        model: response.model,
+        complete: true,
+        truncated: response.content.length > maxChars,
+        observationContract: {
+            status: response.content.length > maxChars ? 'partial' : 'completed',
+            semantic_level: 'semantic',
+            complete: response.content.length <= maxChars,
+            truncated: response.content.length > maxChars
+        }
     });
 }
 
@@ -11353,9 +11615,11 @@ const TOOLS = [
             type: 'object',
             required: ['query'],
             properties: {
-                query: { type: 'string', minLength: 1, description: 'Required public web search query. Do not call web_search with empty arguments.' },
+                query: { type: 'string', minLength: 1, maxLength: 512, description: 'Required public web search query. Do not call web_search with empty arguments.' },
                 maxResults: { type: 'number', description: 'Requested result count, clamped to 1-12. Use 3-8 for normal tasks.' },
-                search_context_size: { type: 'string', enum: ['low', 'medium', 'high'], description: 'Amount of search context to return. Defaults to medium.' }
+                search_context_size: { type: 'string', enum: ['low', 'medium', 'high'], description: 'Amount of search context to return. Defaults to medium.' },
+                recency: { type: 'integer', minimum: 1, maximum: 3650, description: 'Optional recent-days hint. Omit unless recent results are explicitly required.' },
+                domains: { type: 'array', maxItems: 8, items: { type: 'string', minLength: 1 }, description: 'Optional domain allowlist. Matching includes subdomains.' }
             },
             additionalProperties: false
         }
@@ -11573,6 +11837,26 @@ const TOOLS = [
         description: 'Look up scholarly paper metadata from structured APIs before broad web search. Use it for exact paper/report titles or DOI questions, and also for fuzzy bibliographic discovery when you only have author name, year, topic, or journal/source clues. Returns authors, year, venue, DOI, and candidate landing/PDF URLs without scraping publisher pages. It also supports a second hop with authorId to list an author’s earlier works in chronological order.',
         inputSchema: {
             type: 'object',
+            anyOf: [
+                { required: ['title'] },
+                { required: ['query'] },
+                { required: ['q'] },
+                { required: ['search'] },
+                { required: ['doi'] },
+                { required: ['author'] },
+                { required: ['authorName'] },
+                { required: ['author_name'] },
+                { required: ['authorId'] },
+                { required: ['year'] },
+                { required: ['publicationYear'] },
+                { required: ['publication_year'] },
+                { required: ['topic'] },
+                { required: ['subject'] },
+                { required: ['keywords'] },
+                { required: ['venue'] },
+                { required: ['journal'] },
+                { required: ['source'] }
+            ],
             properties: {
                 title: { type: 'string', description: 'Exact paper/report title when known. Preferred for title-based lookup.' },
                 query: { type: 'string', description: 'General scholarly lookup query. Use title when the title is exact; use query plus author/year/topic for fuzzy bibliographic discovery.' },
@@ -11596,7 +11880,8 @@ const TOOLS = [
                 maxResults: { type: 'number', description: 'Maximum metadata candidates to return, clamped to 1-12.' },
                 timeoutMs: { type: 'number', description: 'Overall lookup timeout in milliseconds, clamped to 5000-180000.' },
                 openAlexAuthorsBaseUrl: { type: 'string', description: 'Optional override for tests/self-hosted OpenAlex author search endpoint.' }
-            }
+            },
+            additionalProperties: false
         }
     },
     {
@@ -11753,6 +12038,7 @@ const TOOLS = [
                 imagePath: { type: 'string' },
                 image_path: { type: 'string' },
                 question: { type: 'string' },
+                detail: { type: 'string', enum: ['low', 'high', 'original'] },
                 maxChars: { type: 'number' },
                 timeoutMs: { type: 'number' }
             },
@@ -11918,6 +12204,7 @@ module.exports = {
     extractYouTubeVideoId,
     extractWikipediaPageTitle,
     extractYahooResults,
+    filterSearchResultsByDomains,
     inferPaperMetadataArgsFromScholarlyQuery,
     fetchText,
     githubRepoRead,
@@ -11928,6 +12215,7 @@ module.exports = {
     managedSearxngManifestCandidates,
     managedSearxngPortCandidates,
     mergeSearchResultsForRerank,
+    normalizeSearchDomains,
     normalizeSearchBackends,
     parseGitHubRepoRef,
     parseWikipediaPagePayload,
@@ -11936,11 +12224,14 @@ module.exports = {
     pdfExtractText,
     rankLinksForResearch,
     rankSearchResultsForFollowup,
+    readDesktopLlmSettings,
     readDocument,
     readPresentation,
+    readSpreadsheet,
     runPythonFile,
     SEARCH_BACKENDS,
     stripWikiText,
+    transcribeAudio,
     webExtractLinks,
     webFetch,
     webFind,

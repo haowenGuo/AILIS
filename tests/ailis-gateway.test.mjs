@@ -14,6 +14,33 @@ const {
 } = require('../electron/ailis-gateway.cjs');
 const ExcelJS = require('exceljs');
 
+test('AILIS Gateway uses the low-latency sensitive-word evaluator by default', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-safety-fast-path-'));
+    const gateway = new AILISGateway({
+        port: 0,
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit'),
+        emberHarnessEnabled: true,
+        emberHarnessMode: 'enforce'
+    });
+
+    const status = await gateway.prepareLocalSafetyEvaluator('test');
+    assert.equal(status.evaluatorRuntime.engine, 'aho_corasick_lexicon');
+    assert.equal(status.evaluatorRuntime.estimatedDownloadBytes, 0);
+    assert.equal(status.evaluatorRuntime.ready, true);
+
+    const result = await gateway.emberHarness.check({
+        runId: 'safety-fast-path',
+        stage: 'input',
+        boundary: 'before_model_input',
+        text: '我 要 杀 了 你'
+    });
+    assert.equal(result.blocked, true);
+    assert.equal(result.evaluatorDetails.engine, 'aho_corasick_lexicon');
+    await gateway.localSafetyEvaluator.dispose();
+});
+
 test('AILIS materializes structured MCP follow-up actions for the next model turn', async () => {
     const result = {
         structuredContent: {
@@ -100,6 +127,27 @@ test('AILIS exposes Codex-style web_run and preserves refs across search and ope
                 pages: 1
             });
         }
+        if (request.tool === 'web_find') {
+            return mcpBridgeResult(`Find results for pattern: ${request.args.pattern}`, {
+                status: 'completed',
+                url: request.args.url,
+                pattern: request.args.pattern,
+                source: {
+                    type: 'source_viewport',
+                    url: request.args.url,
+                    ref_id: request.args.url,
+                    line_start: 40,
+                    line_end: 43,
+                    total_lines: 80,
+                    lines: [
+                        { lineno: 40, text: '## Studio albums' },
+                        { lineno: 41, text: '2005' },
+                        { lineno: 42, text: 'Corazon Libre' },
+                        { lineno: 43, text: '2009' }
+                    ]
+                }
+            });
+        }
         if (request.tool === 'web_fetch' || request.tool === 'render_page') {
             if (request.args.url.endsWith('.pdf')) {
                 return mcpBridgeResult('PDF content requires extraction.', {
@@ -108,6 +156,7 @@ test('AILIS exposes Codex-style web_run and preserves refs across search and ope
                 });
             }
             const isPdfView = request.args.url.endsWith('/pdf-view');
+            const isSectionView = request.args.url.endsWith('/section-view');
             return mcpBridgeResult('L1: opened source', {
                     contentType: 'text/html',
                     fetchBackend: 'crawl4ai_local',
@@ -124,10 +173,31 @@ test('AILIS exposes Codex-style web_run and preserves refs across search and ope
                         ref_id: request.args.url,
                         line_start: 1,
                         line_end: 1,
-                        total_lines: 1,
-                        lines: [{ lineno: 1, text: 'opened source' }]
+                        total_lines: isSectionView ? 3 : 1,
+                        lines: isSectionView ? [
+                            { lineno: 1, text: '## Contents' },
+                            { lineno: 2, text: '[Studio albums](https://example.test/section-view#Studio_albums)' },
+                            { lineno: 3, text: '[Live albums](https://example.test/section-view#Live_albums)' }
+                        ] : [{ lineno: 1, text: 'opened source' }]
                     }
                 });
+        }
+        if (request.args.query.startsWith('no results fixture')) {
+            return mcpBridgeResult('No results.', { results: [] });
+        }
+        if (request.args.query === 'bridge validation failure fixture') {
+            return {
+                content: [{ type: 'text', text: 'MCP tool arguments failed inputSchema validation.' }],
+                isError: true,
+                details: {
+                    status: 'error',
+                    error: 'MCP tool arguments failed inputSchema validation.',
+                    details: {
+                        status: 'invalid_mcp_tool_args',
+                        errors: ['unexpected property: domains']
+                    }
+                }
+            };
         }
         return mcpBridgeResult(`Search result for ${request.args.query}`, {
                 results: [{
@@ -147,8 +217,9 @@ test('AILIS exposes Codex-style web_run and preserves refs across search and ope
         )).replace(/\r\n/g, '\n').trim();
         assert.ok(webRun);
         assert.equal(webRun.description, webRunDescription);
-        assert.match(webRun.description, /## Decision boundary/);
-        assert.match(webRun.description, /## Word limits/);
+        assert.match(webRun.description, /exactly one supported operation/i);
+        assert.doesNotMatch(webRun.description, /empty query/i);
+        assert.doesNotMatch(webRun.description, /image_query|finance|weather|sports/i);
         assert.doesNotMatch(webRun.description, /truncated for model budget/);
         assert.ok(webRun.parameters.properties.search_query);
         assert.equal(
@@ -159,11 +230,14 @@ test('AILIS exposes Codex-style web_run and preserves refs across search and ope
             webRun.parameters.properties.search_query.items.properties.q.description,
             'Search query.'
         );
-        assert.equal(webRun.parameters.properties.search_query.maxItems, undefined);
-        assert.equal(webRun.parameters.properties.search_query.items.properties.q.minLength, undefined);
+        assert.equal(webRun.parameters.properties.search_query.maxItems, 4);
+        assert.equal(webRun.parameters.properties.search_query.items.properties.q.minLength, 1);
+        assert.equal(webRun.parameters.properties.search_query.items.properties.q.maxLength, 512);
+        assert.equal(webRun.parameters.properties.search_query.items.properties.recency.minimum, 1);
+        assert.match(webRun.parameters.properties.search_query.items.properties.recency.description, /explicitly asks for recent/i);
         assert.ok(webRun.parameters.properties.open);
         assert.ok(webRun.parameters.properties.find);
-        assert.equal(webRun.parameters.properties.find.description, 'Find text patterns in pages.');
+        assert.equal(webRun.parameters.properties.find.description, 'Find one text pattern in one page.');
         assert.equal(
             webRun.parameters.properties.find.items.properties.pattern.description,
             'Text pattern to find.'
@@ -171,8 +245,89 @@ test('AILIS exposes Codex-style web_run and preserves refs across search and ope
         assert.equal(webRun.parameters.properties.open.items.properties.lineno.type, 'integer');
         assert.equal(webRun.parameters.properties.response_length.description, 'Set the length of the response to be returned.');
         assert.equal(webRun.parameters.properties.progress_note, undefined);
+        assert.equal(webRun.parameters.properties.image_query, undefined);
+        assert.equal(webRun.parameters.properties.screenshot, undefined);
         assert.equal(firstTurnTools.some((tool) => tool.name === 'web_search'), false);
         assert.equal(firstTurnTools.some((tool) => tool.name === 'mcp__ailis_research__open_page'), false);
+
+        const emptyResponse = await gateway.callTool({
+            tool: 'web_run',
+            args: {},
+            context: { workspace: workspaceRoot, runId: 'run-empty', sessionId: 'session-1', iteration: 0 }
+        });
+        assert.equal(emptyResponse.ok, false);
+        assert.equal(emptyResponse.status, 'invalid_tool_args');
+
+        const mixedResponse = await gateway.callTool({
+            tool: 'web_run',
+            args: {
+                search_query: [{ q: 'one operation only' }],
+                open: [{ ref_id: 'https://example.test' }]
+            },
+            context: { workspace: workspaceRoot, runId: 'run-mixed', sessionId: 'session-1', iteration: 0 }
+        });
+        assert.equal(mixedResponse.ok, false);
+        assert.equal(mixedResponse.status, 'invalid_tool_args');
+
+        const noResultsResponse = await gateway.callTool({
+            tool: 'web_run',
+            args: {
+                search_query: [{
+                    q: 'no results fixture',
+                    recency: 30,
+                    domains: ['example.test']
+                }],
+                response_length: 'medium'
+            },
+            context: { workspace: workspaceRoot, runId: 'run-zero', sessionId: 'session-zero', iteration: 0 }
+        });
+        assert.equal(noResultsResponse.ok, true, JSON.stringify(noResultsResponse));
+        assert.equal(noResultsResponse.result.structuredContent.search.status, 'empty');
+        assert.match(noResultsResponse.result.content[0].text, /omit optional recency\/domain filters/i);
+        assert.deepEqual(noResultsResponse.result.structuredContent.search.suggestedNextCalls, [{
+            tool: 'web_run',
+            args: {
+                search_query: [{ q: 'no results fixture' }],
+                response_length: 'medium'
+            },
+            reason: 'Retry the same model-authored queries without optional recency or domain transport filters.'
+        }]);
+        const bloatedNoResultsResponse = await gateway.callTool({
+            tool: 'web_run',
+            args: {
+                search_query: [{
+                    q: `no results fixture ${Array.from({ length: 8 }, () => 'BASE 633 2020 unknown language country flag').join(' ')}`,
+                    domains: ['base-search.net']
+                }]
+            },
+            context: { workspace: workspaceRoot, runId: 'run-zero-bloated', sessionId: 'session-zero-bloated', iteration: 0 }
+        });
+        assert.equal(bloatedNoResultsResponse.ok, true, JSON.stringify(bloatedNoResultsResponse));
+        assert.equal(bloatedNoResultsResponse.result.structuredContent.search.suggestedNextCalls, undefined);
+        assert.equal(
+            bloatedNoResultsResponse.result.structuredContent.search.queryGuidance.repeat_previous_query,
+            false
+        );
+        assert.equal(
+            bloatedNoResultsResponse.result.structuredContent.search.queryGuidance.strategy,
+            'fresh_concise_query'
+        );
+        assert.match(bloatedNoResultsResponse.result.content[0].text, /do not concatenate or repeat/i);
+        const broadNoResultsResponse = await gateway.callTool({
+            tool: 'web_run',
+            args: { search_query: [{ q: 'no results fixture' }] },
+            context: { workspace: workspaceRoot, runId: 'run-zero-broad', sessionId: 'session-zero-broad', iteration: 0 }
+        });
+        assert.equal(broadNoResultsResponse.result.structuredContent.search.suggestedNextCalls, undefined);
+        const failedSearchResponse = await gateway.callTool({
+            tool: 'web_run',
+            args: { search_query: [{ q: 'bridge validation failure fixture', domains: ['example.test'] }] },
+            context: { workspace: workspaceRoot, runId: 'run-search-failed', sessionId: 'session-search-failed', iteration: 0 }
+        });
+        assert.equal(failedSearchResponse.ok, false, JSON.stringify(failedSearchResponse));
+        assert.match(JSON.stringify(failedSearchResponse), /invalid_mcp_tool_args/);
+        assert.match(JSON.stringify(failedSearchResponse), /unexpected property: domains/);
+        bridgeRequests.length = 0;
 
         const searchResponse = await gateway.callTool({
             tool: 'web_run',
@@ -194,6 +349,10 @@ test('AILIS exposes Codex-style web_run and preserves refs across search and ope
         ]);
         const results = searchResponse.result.structuredContent.search.results;
         assert.deepEqual(results.map((result) => result.ref_id), ['turn0search0', 'turn0search1']);
+        assert.equal(searchResponse.result.structuredContent.search.suggestedNextCalls[0].tool, 'web_run');
+        assert.deepEqual(searchResponse.result.structuredContent.search.suggestedNextCalls[0].args, {
+            open: [{ ref_id: 'turn0search0' }]
+        });
 
         const openResponse = await gateway.callTool({
             tool: 'web_run',
@@ -239,6 +398,24 @@ test('AILIS exposes Codex-style web_run and preserves refs across search and ope
         ]);
         assert.equal(bridgeRequests.at(-1).args.url, 'https://example.test/direct.pdf');
         assert.match(directPdfResponse.result.structuredContent.sourceWindow.lines[0].text, /fluffy/);
+
+        const sectionOpenResponse = await gateway.callTool({
+            tool: 'web_run',
+            args: { open: [{ ref_id: 'https://example.test/section-view' }] },
+            context: { workspace: workspaceRoot, runId: 'run-section', sessionId: 'session-section', iteration: 0 }
+        });
+        assert.equal(sectionOpenResponse.ok, true, JSON.stringify(sectionOpenResponse));
+        assert.equal(sectionOpenResponse.result.structuredContent.observedRelevantLinks[0].kind, 'section');
+        assert.equal(sectionOpenResponse.result.structuredContent.observedRelevantLinks[0].text, 'Studio albums');
+        const sectionClickResponse = await gateway.callTool({
+            tool: 'web_run',
+            args: { click: [{ ref_id: sectionOpenResponse.result.structuredContent.ref_id, id: 1 }] },
+            context: { workspace: workspaceRoot, runId: 'run-section', sessionId: 'session-section', iteration: 1 }
+        });
+        assert.equal(sectionClickResponse.ok, true, JSON.stringify(sectionClickResponse));
+        assert.equal(bridgeRequests.at(-1).tool, 'web_find');
+        assert.equal(bridgeRequests.at(-1).args.pattern, 'Studio albums');
+        assert.match(sectionClickResponse.result.content[0].text, /Find results for pattern: Studio albums/);
     } finally {
         await gateway.stop();
         await fs.rm(workspaceRoot, { recursive: true, force: true });
@@ -324,7 +501,13 @@ test('EMBER-Harness records stage checks around tool execution', async () => {
         port: 0,
         workspaceRoot,
         projectRoot: path.resolve('.'),
-        auditDir: path.join(workspaceRoot, '.audit')
+        auditDir: path.join(workspaceRoot, '.audit'),
+        emberHarnessEnabled: true,
+        emberHarnessMode: 'observe',
+        emberHarnessEvaluator: async () => ({
+            decision: 'allow',
+            riskLevel: 'none'
+        })
     });
     await fs.writeFile(path.join(workspaceRoot, 'note.txt'), 'safe observation\n', 'utf8');
 
@@ -364,6 +547,8 @@ test('EMBER-Harness can block a tool result before it enters model context', asy
         workspaceRoot,
         projectRoot: path.resolve('.'),
         auditDir: path.join(workspaceRoot, '.audit'),
+        emberHarnessEnabled: true,
+        emberHarnessMode: 'enforce',
         emberHarnessEvaluator: async ({ stage }) => {
             if (stage === 'tool_result') {
                 return {
@@ -893,6 +1078,10 @@ test('AILIS Gateway tool_search ranks strict MCP readers before broad web_search
         assert.equal(Object.hasOwn(result.details, 'discovery'), false);
         assert.equal(Object.hasOwn(result.details, 'searched_content'), false);
         assert.equal(result.details.tools[0].id, 'mcp__ailis_research__read_presentation');
+        assert.equal(result.details.tools[0].callable, true);
+        assert.equal(result.details.tools[0].availability, 'available');
+        assert.equal(result.details.recommended_tool.id, result.details.tools[0].id);
+        assert.equal(result.details.recommended_tool.callable, true);
         assert.doesNotMatch(result.details.routing_advice, /artifact_tools/);
 
         const docxResult = await gateway.executeGatewayToolSearch({
@@ -903,6 +1092,7 @@ test('AILIS Gateway tool_search ranks strict MCP readers before broad web_search
 
         assert.equal(docxResult.details.tools.length, 1);
         assert.equal(docxResult.details.tools[0].id, 'mcp__ailis_research__read_document');
+        assert.equal(docxResult.details.recommended_tool.id, docxResult.details.tools[0].id);
         assert.notEqual(docxResult.details.tools[0].id, 'artifact_verifier');
         assert.doesNotMatch(docxResult.details.routing_advice, /artifact_tools/);
 

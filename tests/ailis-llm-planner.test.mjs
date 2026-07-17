@@ -598,10 +598,19 @@ test('Persona prompt stays in AILIS persona and exposes only system TaskAgent ha
         assert.match(llmServer.calls[0].system, /call handoff_task exactly once/);
         assert.match(llmServer.calls[0].system, /Harness transfers the immutable current user request/);
         assert.match(llmServer.calls[0].system, /TaskResult packet is the factual boundary/);
+        assert.doesNotMatch(llmServer.calls[0].system, /continuation=/);
         const toolNames = (llmServer.calls[0].payload.tools || []).map((tool) => tool.function?.name || tool.name);
         assert.deepEqual(toolNames, ['handoff_task']);
+        const handoffTool = llmServer.calls[0].payload.tools[0]?.function || llmServer.calls[0].payload.tools[0];
+        assert.deepEqual(handoffTool?.parameters?.properties, {});
         const contextPayload = parseModelContextPayload(llmServer.calls[0]);
-        assert.match(contextPayload.memory_context || '', /AILIS Persona 记忆快照/);
+        const memoryMessage = llmServer.calls[0].payload.messages.find((message) =>
+            (message.role === 'developer' || message.role === 'system') &&
+            /<memory_context>/.test(String(message.content || ''))
+        );
+        assert.match(memoryMessage?.content || '', /<memory_context>/);
+        assert.match(memoryMessage?.content || '', /## Persona/);
+        assert.equal(contextPayload.memory_context, undefined);
         assert.equal(contextPayload.capability_catalog, undefined);
         assert.equal(contextPayload.external_tool_exposure, undefined);
         const rawTurns = gateway.rawMemoryLedger.replay({
@@ -629,16 +638,11 @@ test('Persona hands one exact request to the system TaskAgent and renders its co
                 summary: '开始处理。',
                 tool_call: {
                     tool: 'handoff_task',
-                    args: {
-                        continuation: 'auto'
-                    }
+                    args: {}
                 }
             };
         }
-        return {
-            action: 'final',
-            final_answer: '核对完成，答案是 BaseLabelPropagation。'
-        };
+        throw new Error('Persona should not receive the TaskAgent result as a second model turn');
     });
     const gateway = new AILISGateway({
         port: 0,
@@ -692,15 +696,14 @@ test('Persona hands one exact request to the system TaskAgent and renders its co
         });
 
         assert.equal(result.body.ok, true, JSON.stringify(result.body));
-        assert.equal(result.body.displayText, '核对完成，答案是 BaseLabelPropagation。');
+        assert.equal(result.body.displayText, 'BaseLabelPropagation');
+        assert.equal(result.body.finalAnswer, 'BaseLabelPropagation');
+        assert.equal(result.body.intent, 'persona_task_handoff_result');
+        assert.equal(result.body.taskResult?.schema, 'ailis.task_result.v1');
         assert.equal(taskCalls.length, 1);
         assert.equal(taskCalls[0].agent.task, '核对官方资料并只给出类名。');
         assert.equal(taskCalls[0].context.originalUserGoal, '核对官方资料并只给出类名。');
-        assert.equal(llmServer.calls.length, 2);
-        const secondPayload = JSON.stringify(llmServer.calls[1].payload);
-        assert.match(secondPayload, /ailis\.task_result\.v1/);
-        assert.match(secondPayload, /BaseLabelPropagation/);
-        assert.doesNotMatch(secondPayload, /not model visible|\"private\":true/);
+        assert.equal(llmServer.calls.length, 1);
     } finally {
         await gateway.stop();
         await llmServer.close();
@@ -2723,12 +2726,13 @@ test('Agentic Executor feeds tool results back through Responses model input ite
         const transcript = await gateway.runtime.readTranscript(result.body.runId, 100);
         const snapshots = transcript.items.filter((item) => item.type === 'agent.context_snapshot');
         assert.equal(snapshots.length, 3);
-        assert.equal(snapshots[0].payload.model_input_request.stats.context_history_items, 2);
-        assert.equal(snapshots[1].payload.model_input_request.stats.context_history_items, 4);
-        assert.equal(snapshots[2].payload.model_input_request.stats.context_history_items, 6);
-        assert.equal(snapshots[0].payload.context_manager_checkpoint?.items.length, 2);
-        assert.equal(snapshots[1].payload.context_manager_checkpoint?.items.length, 4);
-        assert.equal(snapshots[2].payload.context_manager_checkpoint?.items.length, 6);
+        assert.equal(snapshots[0].payload.model_input_request.stats.context_history_items, 3);
+        assert.equal(snapshots[1].payload.model_input_request.stats.context_history_items, 5);
+        assert.equal(snapshots[2].payload.model_input_request.stats.context_history_items, 7);
+        assert.equal(snapshots[0].payload.context_manager_checkpoint?.items.length, 3);
+        assert.equal(snapshots[1].payload.context_manager_checkpoint?.items.length, 5);
+        assert.equal(snapshots[2].payload.context_manager_checkpoint?.items.length, 7);
+        assert.equal(snapshots[0].payload.context_manager_checkpoint.items[0].role, 'developer');
         assert.deepEqual(
             snapshots[2].payload.context_manager_checkpoint.items.map((item) => item.type).slice(-2),
             ['function_call', 'function_call_output']

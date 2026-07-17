@@ -953,105 +953,62 @@ const TOOL_CONTRACTS = Object.freeze({
         experience: TOOL_EXPERIENCE.tool_search,
         returns: defaultReturns(),
         errors: defaultErrors(['empty_command', 'unsupported_command', 'unknown_ref_id']),
-        schema: makeObjectSchema({
+        schema: {
+            ...makeObjectSchema({
             properties: {
                 search_query: arraySchema(makeObjectSchema({
                     required: ['q'],
                     properties: {
-                        q: stringSchema({ description: 'Search query.' }),
-                        recency: integerSchema({ minimum: 0, description: 'Whether to filter by recency, as a number of recent days.' }),
-                        domains: arraySchema(stringSchema(), { description: 'Whether to filter by a specific list of domains.' })
+                        q: stringSchema({ minLength: 1, maxLength: 512, description: 'Search query.' }),
+                        recency: integerSchema({ minimum: 1, maximum: 3650, description: 'Optional recent-days filter. Omit unless the user explicitly asks for recent results.' }),
+                        domains: arraySchema(stringSchema({ minLength: 1 }), { maxItems: 8, description: 'Optional domain allowlist. Omit for broad discovery unless a domain restriction is specifically needed.' })
                     },
                     additionalProperties: false
-                }), { description: 'Query the internet search engine for a given list of queries.' }),
-                image_query: arraySchema(makeObjectSchema({
-                    required: ['q'],
-                    properties: {
-                        q: stringSchema({ description: 'Search query.' }),
-                        recency: integerSchema({ minimum: 0, description: 'Whether to filter by recency, as a number of recent days.' }),
-                        domains: arraySchema(stringSchema(), { description: 'Whether to filter by a specific list of domains.' })
-                    },
-                    additionalProperties: false
-                }), { description: 'Query the image search engine for a given list of queries.' }),
+                }), { minItems: 1, maxItems: 4, description: 'Query the internet search engine for a given list of queries.' }),
                 open: arraySchema(makeObjectSchema({
                     required: ['ref_id'],
                     properties: {
-                        ref_id: stringSchema({ description: 'Reference id or URL to open.' }),
+                        ref_id: stringSchema({ minLength: 1, description: 'Reference id or URL to open.' }),
                         lineno: integerSchema({ minimum: 0, description: 'Line number to position the page at.' })
                     },
                     additionalProperties: false
-                }), { description: 'Open pages by reference id or URL.' }),
+                }), { minItems: 1, maxItems: 1, description: 'Open one page by reference id or URL.' }),
                 click: arraySchema(makeObjectSchema({
                     required: ['ref_id', 'id'],
                     properties: {
-                        ref_id: stringSchema({ description: 'Reference id containing the numbered link.' }),
+                        ref_id: stringSchema({ minLength: 1, description: 'Reference id containing the numbered link.' }),
                         id: integerSchema({ minimum: 0, description: 'Numbered link id to open.' })
                     },
                     additionalProperties: false
-                }), { description: 'Open links from previously opened pages.' }),
+                }), { minItems: 1, maxItems: 1, description: 'Open one link from a previously opened page.' }),
                 find: arraySchema(makeObjectSchema({
                     required: ['ref_id', 'pattern'],
                     properties: {
-                        ref_id: stringSchema({ description: 'Reference id or URL to search within.' }),
-                        pattern: stringSchema({ description: 'Text pattern to find.' })
+                        ref_id: stringSchema({ minLength: 1, description: 'Reference id or URL to search within.' }),
+                        pattern: stringSchema({ minLength: 1, description: 'Text pattern to find.' })
                     },
                     additionalProperties: false
-                }), { description: 'Find text patterns in pages.' }),
-                screenshot: arraySchema(makeObjectSchema({
-                    required: ['ref_id', 'pageno'],
-                    properties: {
-                        ref_id: stringSchema({ description: 'Reference id or URL to screenshot.' }),
-                        pageno: integerSchema({ minimum: 0, description: 'Zero-indexed PDF page number.' })
-                    },
-                    additionalProperties: false
-                }), { description: 'Take screenshots of PDF pages.' }),
-                finance: arraySchema(makeObjectSchema({
-                    required: ['ticker', 'type'],
-                    properties: {
-                        ticker: stringSchema({ description: 'Ticker symbol to look up.' }),
-                        type: stringSchema({ enum: ['equity', 'fund', 'crypto', 'index'], description: 'Asset type to look up.' }),
-                        market: stringSchema({ description: 'ISO 3166-1 alpha-3 country code, "OTC", or "" for cryptocurrency.' })
-                    },
-                    additionalProperties: false
-                }), { description: 'Look up prices for the given stock symbols.' }),
-                weather: arraySchema(makeObjectSchema({
-                    required: ['location'],
-                    properties: {
-                        location: stringSchema({ description: 'Location in "Country, Area, City" format.' }),
-                        start: stringSchema({ description: 'Start date in YYYY-MM-DD format. Defaults to today.' }),
-                        duration: integerSchema({ minimum: 0, description: 'Number of days to return. Defaults to 7.' })
-                    },
-                    additionalProperties: false
-                }), { description: 'Look up weather forecasts.' }),
-                sports: arraySchema(makeObjectSchema({
-                    required: ['fn', 'league'],
-                    properties: {
-                        tool: stringSchema({ enum: ['sports'], description: 'Tool name for sports requests.' }),
-                        fn: stringSchema({ enum: ['schedule', 'standings'], description: 'Sports function to call.' }),
-                        league: stringSchema({ enum: ['nba', 'wnba', 'nfl', 'nhl', 'mlb', 'epl', 'ncaamb', 'ncaawb', 'ipl'], description: 'League to look up.' }),
-                        team: stringSchema({ description: 'Team to look up, using the common 3 or 4 letter alias used in broadcasts.' }),
-                        opponent: stringSchema({ description: 'Opponent to use with `team` when narrowing the lookup.' }),
-                        date_from: stringSchema({ description: 'Start date in YYYY-MM-DD format.' }),
-                        date_to: stringSchema({ description: 'End date in YYYY-MM-DD format.' }),
-                        num_games: integerSchema({ minimum: 0, description: 'Number of games to return.' }),
-                        locale: stringSchema({ description: 'Locale for the lookup.' })
-                    },
-                    additionalProperties: false
-                }), { description: 'Look up sports schedules and standings.' }),
-                time: arraySchema(makeObjectSchema({
-                    required: ['utc_offset'],
-                    properties: {
-                        utc_offset: stringSchema({ description: 'UTC offset formatted like +03:00.' })
-                    },
-                    additionalProperties: false
-                }), { description: 'Get time for the given UTC offsets.' }),
+                }), { minItems: 1, maxItems: 1, description: 'Find one text pattern in one page.' }),
                 response_length: stringSchema({
                     enum: ['short', 'medium', 'long'],
                     description: 'Set the length of the response to be returned.'
                 })
             },
             additionalProperties: false
-        })
+            }),
+            minProperties: 1
+        },
+        customValidate(args = {}) {
+            const operationKeys = ['search_query', 'open', 'click', 'find'];
+            const present = operationKeys.filter((key) => Array.isArray(args[key]) && args[key].length > 0);
+            if (present.length !== 1) {
+                return ['web_run requires exactly one non-empty operation: search_query, open, click, or find'];
+            }
+            if (present[0] === 'search_query' && !args.search_query.some((entry) => normalizeString(entry?.q))) {
+                return ['web_run search_query requires at least one non-empty q'];
+            }
+            return [];
+        }
     }),
     web_search: Object.freeze({
         id: 'web_search',
@@ -1067,6 +1024,7 @@ const TOOL_CONTRACTS = Object.freeze({
             properties: {
                 query: stringSchema({
                     minLength: 1,
+                    maxLength: 512,
                     description: 'Required public web search query.'
                 }),
                 maxResults: numberSchema({
@@ -1077,6 +1035,15 @@ const TOOL_CONTRACTS = Object.freeze({
                 search_context_size: stringSchema({
                     enum: ['low', 'medium', 'high'],
                     description: 'Amount of search context to return.'
+                }),
+                recency: integerSchema({
+                    minimum: 1,
+                    maximum: 3650,
+                    description: 'Optional recent-days hint.'
+                }),
+                domains: arraySchema(stringSchema({ minLength: 1 }), {
+                    maxItems: 8,
+                    description: 'Optional domain allowlist. Matching includes subdomains.'
                 })
             },
             additionalProperties: false
@@ -1162,12 +1129,7 @@ const TOOL_CONTRACTS = Object.freeze({
         errors: defaultErrors(['task_agent_unavailable', 'task_agent_failed']),
         schema: makeObjectSchema({
             required: [],
-            properties: {
-                continuation: stringSchema({
-                    enum: ['auto', 'continue', 'new'],
-                    description: 'Lifecycle hint only. The Harness transfers the immutable current user request automatically. auto continues only unfinished work; continue resumes the latest checkpoint; new starts clean.'
-                })
-            },
+            properties: {},
             additionalProperties: false
         })
     }),
@@ -1961,6 +1923,9 @@ const TOOL_CONTRACTS = Object.freeze({
             'page',
             'section'
         ], {
+            artifactHandle: objectSchema({ additionalProperties: true }),
+            artifact_handle: objectSchema({ additionalProperties: true }),
+            handle: objectSchema({ additionalProperties: true }),
             artifactId: stringSchema(),
             artifact_id: stringSchema(),
             id: stringSchema(),
@@ -2005,7 +1970,27 @@ const TOOL_CONTRACTS = Object.freeze({
             max_cols: numberSchema({ minimum: 1, maximum: 200 }),
             maxChars: numberSchema({ minimum: 1000, maximum: 30000 }),
             max_chars: numberSchema({ minimum: 1000, maximum: 30000 })
-        })
+        }),
+        customValidate(args = {}) {
+            const handle = args.artifactHandle || args.artifact_handle || args.handle;
+            const owner = handle && typeof handle === 'object'
+                ? normalizeString(handle.owner || handle.tool)
+                : '';
+            if (owner && !['context_artifact_store', 'artifact_query'].includes(owner)) {
+                return [`artifact_query cannot consume an artifact handle owned by ${owner}`];
+            }
+            const artifactId = normalizeString(
+                args.artifactId || args.artifact_id || args.id || handle?.artifactId || handle?.artifact_id
+            );
+            const action = normalizeString(args.action || args.operation || args.intent, 'summary');
+            if (!['schema', 'list'].includes(action) && !artifactId) {
+                return ['artifact_query requires a context artifact handle or artifactId'];
+            }
+            if (/^art_/i.test(artifactId)) {
+                return ['artifact_query cannot consume an artifact_tools artifactId; continue with artifact_tools'];
+            }
+            return [];
+        }
     }),
     artifact_tools: Object.freeze({
         id: 'artifact_tools',
@@ -2056,6 +2041,9 @@ const TOOL_CONTRACTS = Object.freeze({
             'list_eval_cases',
             'list_evaluation_cases'
         ], {
+            artifactHandle: objectSchema({ additionalProperties: true }),
+            artifact_handle: objectSchema({ additionalProperties: true }),
+            handle: objectSchema({ additionalProperties: true }),
             path: stringSchema({ minLength: 1 }),
             file: stringSchema({ minLength: 1 }),
             filePath: stringSchema({ minLength: 1 }),
@@ -2150,7 +2138,17 @@ const TOOL_CONTRACTS = Object.freeze({
             output_path: stringSchema(),
             operationId: stringSchema(),
             operation_id: stringSchema()
-        })
+        }),
+        customValidate(args = {}) {
+            const handle = args.artifactHandle || args.artifact_handle || args.handle;
+            const owner = handle && typeof handle === 'object'
+                ? normalizeString(handle.owner || handle.tool || handle.runtimeId || handle.runtime_id)
+                : '';
+            if (owner && !['artifact_tools', 'ailis_artifact_tools'].includes(owner)) {
+                return [`artifact_tools cannot consume an artifact handle owned by ${owner}`];
+            }
+            return [];
+        }
     }),
     artifact_import: Object.freeze({
         id: 'artifact_import',

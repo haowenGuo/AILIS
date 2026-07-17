@@ -11,6 +11,9 @@ const {
     toolOutputToThreadItem
 } = require('./ailis-agent-object-model.cjs');
 const {
+    attachObservationContract
+} = require('./ailis-observation-contract.cjs');
+const {
     runtimeEventMetadata
 } = require('./ailis-agent-runtime-protocol.cjs');
 
@@ -38,6 +41,7 @@ const { AILISTaskResultCapsuleStore } = require('./ailis-task-result-capsules.cj
 const { AILISSystemTaskAgentHarness } = require('./ailis-task-agent-harness.cjs');
 const { AilisSelfEvolutionRuntime } = require('./ailis-self-evolution-runtime.cjs');
 const { AILISEmberHarness } = require('./ailis-ember-harness.cjs');
+const { AILISSensitiveWordClassifier } = require('./ailis-sensitive-word-classifier.cjs');
 const {
     listToolContracts,
     validateToolContract
@@ -212,6 +216,8 @@ const AILIS_LOCAL_TOOL_DEFINITIONS = Object.freeze([
         description: WEB_RUN_DESCRIPTION,
         modelDescriptionChars: 9000,
         parseToolInputSchemaWithoutCompaction: true,
+        // The four mutually exclusive operation fields are runtime-validated.
+        // Provider strict mode cannot represent this optional-field union portably.
         strict: false,
         sectionId: 'web',
         route: 'ailis-research-mcp',
@@ -232,7 +238,7 @@ const AILIS_LOCAL_TOOL_DEFINITIONS = Object.freeze([
     Object.freeze({
         id: HANDOFF_TASK_TOOL_ID,
         label: 'handoff_task',
-        description: 'Transfer the immutable current user request to the system TaskAgent and wait for one compact TaskResult packet. No task text is accepted from the model; the Harness owns task identity, continuation, checkpointing, execution, and result transport.',
+        description: 'Transfer the immutable current user request to the session\'s persistent system TaskAgent and wait for one compact TaskResult packet. No task text or lifecycle command is accepted from the model; the Harness owns thread identity, checkpointing, execution, and result transport.',
         sectionId: 'persona-runtime',
         route: 'ailis-system-task-agent',
         materialized: true,
@@ -461,6 +467,63 @@ function bridgeTextContent(result = {}) {
     return content.map((item) => normalizeString(item?.text)).filter(Boolean).join('\n');
 }
 
+function sourceViewportSectionLinks(sourceViews = [], pageUrl = '') {
+    let page;
+    try {
+        page = new URL(pageUrl);
+        page.hash = '';
+    } catch {
+        return [];
+    }
+    const links = [];
+    const seen = new Set();
+    const pattern = /\[([^\]\n]{1,200})\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g;
+    for (const sourceView of sourceViews) {
+        const lines = Array.isArray(sourceView?.lines) ? sourceView.lines : [];
+        for (const line of lines) {
+            const text = normalizeString(line?.text || line?.rendered);
+            pattern.lastIndex = 0;
+            let match;
+            while ((match = pattern.exec(text))) {
+                const label = normalizeString(match[1]).replace(/\s+/g, ' ');
+                if (!label || /^(?:jump to content|\(?top\)?)$/i.test(label)) {
+                    continue;
+                }
+                let target;
+                try {
+                    target = new URL(match[2], pageUrl);
+                } catch {
+                    continue;
+                }
+                if (!target.hash) {
+                    continue;
+                }
+                const targetDocument = new URL(target.toString());
+                targetDocument.hash = '';
+                if (targetDocument.toString() !== page.toString() || seen.has(target.toString())) {
+                    continue;
+                }
+                seen.add(target.toString());
+                let fragment = target.hash.slice(1);
+                try {
+                    fragment = decodeURIComponent(fragment);
+                } catch {
+                    // Keep the raw fragment when percent-decoding is invalid.
+                }
+                links.push({
+                    kind: 'section',
+                    text: label,
+                    url: target.toString(),
+                    pattern: normalizeString(fragment.replace(/_/g, ' '), label),
+                    navigationMode: 'find',
+                    navigation_mode: 'find'
+                });
+            }
+        }
+    }
+    return links.slice(0, 12);
+}
+
 function isFullControlContext(context = {}) {
     const rawProfile = typeof context.permissionProfile === 'string'
         ? context.permissionProfile
@@ -551,6 +614,30 @@ function extractToolResultText(result) {
 }
 
 function classifyToolResult(result) {
+    const sourceStatus = normalizeString(result?.details?.status).toLowerCase();
+    const genericStatuses = new Set([
+        '',
+        'completed',
+        'success',
+        'ok',
+        'partial',
+        'degraded',
+        'blocked',
+        'failed',
+        'error'
+    ]);
+    const observationContract =
+        result?.details?.observationContract ||
+        result?.details?.observation_contract ||
+        result?.structuredContent?.observationContract ||
+        result?.structuredContent?.observation_contract ||
+        {};
+    if (sourceStatus && !genericStatuses.has(sourceStatus)) {
+        return sourceStatus;
+    }
+    if (typeof observationContract.status === 'string') {
+        return observationContract.status;
+    }
     if (typeof result?.details?.status === 'string') {
         return result.details.status;
     }
@@ -604,6 +691,20 @@ function compactToolSearchEntryForModel(entry = {}) {
     const spec = entry.spec && typeof entry.spec === 'object' ? entry.spec : {};
     const schema = entry.input_schema || entry.inputSchema || entry.parameters || spec.parameters || {};
     const id = normalizeString(entry.id || entry.name || spec.name);
+    const searchError = normalizeString(entry.type).endsWith('_search_error');
+    const callable = Boolean(id) &&
+        !searchError &&
+        entry.callable !== false &&
+        spec.callable !== false;
+    const availability = normalizeString(
+        entry.availability ||
+        entry.health ||
+        entry.status ||
+        spec.availability ||
+        spec.health ||
+        spec.status,
+        callable ? 'available' : 'unavailable'
+    );
     return {
         id,
         name: id === VISION_TOOL_ID
@@ -615,6 +716,8 @@ function compactToolSearchEntryForModel(entry = {}) {
         ),
         input_schema: compactToolSearchSchemaForModel(schema),
         strict: entry.strict === true || spec.strict === true || schema.additionalProperties === false,
+        callable,
+        availability,
         spec_ref: `tool_registry:${id}`
     };
 }
@@ -655,6 +758,9 @@ function makeExternalVirtualToolResult(result = {}, { toolId = '' } = {}) {
 
 function classifyError(error) {
     const message = error instanceof Error ? error.message : String(error);
+    if (error instanceof GatewayHttpError && normalizeString(error.code)) {
+        return normalizeString(error.code);
+    }
     if (error?.code === 'AILIS_GATEWAY_APPROVAL_REQUIRED') {
         return 'needs_approval';
     }
@@ -1042,10 +1148,29 @@ class AILISGateway extends EventEmitter {
                 error: error?.message || String(error)
             };
         }
+        const configuredEmberEvaluator = typeof options.emberHarnessEvaluator === 'function'
+            ? options.emberHarnessEvaluator
+            : null;
+        this.localSafetyEvaluator = options.localSafetyEvaluator || options.localSafetyClassifier || (
+            !options.emberHarness && !configuredEmberEvaluator
+                ? new AILISSensitiveWordClassifier({
+                    customLexiconPath: options.emberHarnessLexiconPath ||
+                        path.join(this.auditDir, 'safety', 'sensitive-words.json')
+                })
+                : null
+        );
+        const activeEmberEvaluator = configuredEmberEvaluator || (
+            this.localSafetyEvaluator
+                ? (payload) => this.localSafetyEvaluator.evaluate(payload)
+                : null
+        );
         this.emberHarness = options.emberHarness || new AILISEmberHarness({
             enabled: options.emberHarnessEnabled,
             mode: options.emberHarnessMode,
-            evaluator: options.emberHarnessEvaluator,
+            evaluator: activeEmberEvaluator,
+            evaluatorStatus: this.localSafetyEvaluator
+                ? () => this.localSafetyEvaluator.getStatus()
+                : null,
             maxRunRecords: options.emberHarnessMaxRunRecords,
             maxTotalRecords: options.emberHarnessMaxTotalRecords
         });
@@ -1068,6 +1193,49 @@ class AILISGateway extends EventEmitter {
         this.runtime.setSelfEvolutionRuntime?.(this.selfEvolutionRuntime);
         this.gatewayToolRuntimeRegistry = this.createGatewayToolRuntimeRegistry();
         this.agentRunner = null;
+    }
+
+    configureEmberHarness(options = {}) {
+        const enabled = options.enabled !== undefined
+            ? options.enabled !== false
+            : this.emberHarness?.enabled !== false;
+        const harnessPatch = { enabled };
+        if ('mode' in options) {
+            harnessPatch.mode = options.mode;
+        }
+        const status = this.emberHarness?.configure?.(harnessPatch) || null;
+        if (this.localSafetyEvaluator) {
+            if (enabled) {
+                void this.prepareLocalSafetyEvaluator('configuration_changed');
+            } else {
+                void this.localSafetyEvaluator.dispose().catch(() => {});
+            }
+        }
+        this.emitGatewayEvent('ember.harness.configured', {
+            enabled,
+            mode: status?.mode || options.mode || 'observe',
+            status
+        });
+        return this.emberHarness?.getStatus?.() || status;
+    }
+
+    async prepareLocalSafetyEvaluator(reason = 'manual') {
+        if (!this.localSafetyEvaluator || this.emberHarness?.enabled === false) {
+            return this.emberHarness?.getStatus?.() || null;
+        }
+        this.emitGatewayEvent('ember.harness.evaluator', {
+            reason,
+            status: this.localSafetyEvaluator.getStatus()
+        });
+        try {
+            await this.localSafetyEvaluator.prepare();
+        } catch {}
+        const status = this.emberHarness?.getStatus?.() || null;
+        this.emitGatewayEvent('ember.harness.evaluator', {
+            reason,
+            status: status?.evaluatorRuntime || null
+        });
+        return status;
     }
 
     createGatewayToolRuntimeRegistry() {
@@ -1108,7 +1276,7 @@ class AILISGateway extends EventEmitter {
                     definition: {
                         ...definition,
                         route: 'ailis-gateway',
-                        description: 'Tool discovery. Searches over deferred tool metadata with BM25 and exposes matching tools for the next Agent step.',
+                        description: 'Tool discovery. Searches deferred tool metadata and exposes matching tools for the next Agent step. Use it as soon as the visible direct tools are a poor semantic fit or would require manually reconstructing structured facts, cross-record ordering, entity resolution, document parsing, transcripts, APIs, or artifact data.',
                         exposure: TOOL_EXPOSURE.DIRECT
                     },
                     handle: async (args) => this.executeGatewayToolSearch(args)
@@ -1184,30 +1352,34 @@ class AILISGateway extends EventEmitter {
         }
         const tools = rankToolSearchResults([...external, ...local, ...mcp], query, limit);
         const publicTools = tools.map(compactToolSearchEntryForModel);
-        const routingAdvice = buildToolRoutingAdvice(query, tools);
+        const recommendedTool = publicTools.find((entry) => entry.callable) || null;
+        const routingAdvice = recommendedTool ? buildToolRoutingAdvice(query, tools) : '';
+        const discovery = {
+            status: 'completed',
+            query,
+            routing_advice: routingAdvice,
+            recommended_tool: recommendedTool
+                ? {
+                      id: recommendedTool.id,
+                      name: recommendedTool.name,
+                      callable: true,
+                      availability: recommendedTool.availability
+                  }
+                : null,
+            tools: publicTools
+        };
         const result = {
             content: [
                 {
                     type: 'text',
-                    text: JSON.stringify({
-                        status: 'completed',
-                        query,
-                        routing_advice: routingAdvice,
-                        tools: publicTools
-                    }, null, 2)
+                    text: JSON.stringify(discovery, null, 2)
                 }
             ],
             details: {
-                status: 'completed',
-                query,
-                routing_advice: routingAdvice,
-                tools: publicTools
+                ...discovery
             },
             structuredContent: {
-                status: 'completed',
-                query,
-                routing_advice: routingAdvice,
-                tools: publicTools
+                ...discovery
             }
         };
         Object.defineProperty(result, '__ailisRawToolSearchTools', {
@@ -1265,6 +1437,9 @@ class AILISGateway extends EventEmitter {
 
         this.emitGatewayEvent('gateway.started', this.getStatus({ includeAgentRunner: false }));
         this.startProfileCurationScheduler();
+        if (this.emberHarness?.enabled !== false) {
+            void this.prepareLocalSafetyEvaluator('gateway_started');
+        }
         return this.getStatus({ includeAgentRunner: false });
     }
 
@@ -1288,6 +1463,9 @@ class AILISGateway extends EventEmitter {
 
         if (this.runtime) {
             await this.runtime.shutdown().catch(() => {});
+        }
+        if (this.localSafetyEvaluator) {
+            await this.localSafetyEvaluator.dispose().catch(() => {});
         }
 
         if (!this.server) {
@@ -1356,17 +1534,39 @@ class AILISGateway extends EventEmitter {
         }
         this.profileCurationRunning = true;
         try {
-            const result = await this.curateUserProfile({ trigger, ...options });
+            const [profileState, rawStatus] = await Promise.all([
+                this.getUserProfileCurationState(),
+                Promise.resolve(this.getRawMemoryStatus())
+            ]);
+            const rebuild = profileState?.rebuild || null;
+            const activeRebuild = ['running', 'paused', 'partial_completed', 'failed', 'promoting'].includes(rebuild?.status);
+            const capsuleCount = Number(profileState?.userProfile?.items?.length || 0) +
+                Number(profileState?.relationshipProfile?.items?.length || 0);
+            const shouldRebuild = Number(rawStatus?.entryCount) > 0 && (
+                activeRebuild || (!rebuild && capsuleCount === 0)
+            );
+            const result = shouldRebuild
+                ? await this.rebuildUserProfile({
+                      trigger,
+                      maxPasses: 1,
+                      maxBatches: 4,
+                      ...options
+                  })
+                : await this.curateUserProfile({ trigger, ...options });
             this.emitGatewayEvent('memory.profile_curation.scheduled', {
                 trigger,
                 ok: result?.ok === true,
                 status: result?.status || '',
-                processedEntryCount: result?.run?.processedEntryCount || 0,
-                profileUpdateCount: result?.run?.profileUpdateCount || 0,
-                relationshipUpdateCount: result?.run?.relationshipUpdateCount || 0,
+                rebuildId: result?.rebuild?.id || '',
+                processedEntryCount: result?.run?.processedEntryCount || result?.rebuild?.processedEntryCount || 0,
+                profileUpdateCount: result?.run?.profileUpdateCount || result?.rebuild?.profileUpdateCount || 0,
+                relationshipUpdateCount: result?.run?.relationshipUpdateCount || result?.rebuild?.relationshipUpdateCount || 0,
                 preferenceEventCount: result?.run?.preferenceEventCount || 0,
                 affinityChanged: result?.run?.affinityChanged === true
             });
+            if (result?.status === 'rebuild_partial') {
+                this.scheduleProfileCurationSoon('profile_rebuild_resume');
+            }
             return result;
         } catch (error) {
             this.emitGatewayEvent('memory.profile_curation.error', {
@@ -1507,6 +1707,13 @@ class AILISGateway extends EventEmitter {
 
     async curateUserProfile(options = {}) {
         return await this.userProfileCurator?.runDailyCuration?.(options || {}) || {
+            ok: false,
+            status: 'user_profile_curator_not_configured'
+        };
+    }
+
+    async rebuildUserProfile(options = {}) {
+        return await this.userProfileCurator?.rebuildFromRawMemory?.(options || {}) || {
             ok: false,
             status: 'user_profile_curator_not_configured'
         };
@@ -1852,6 +2059,12 @@ class AILISGateway extends EventEmitter {
                 rawLimit: body.rawLimit || Number(url.searchParams.get('rawLimit') || 5000),
                 evidenceLimit: body.evidenceLimit || Number(url.searchParams.get('evidenceLimit') || 120)
             }));
+            return;
+        }
+
+        if (url.pathname === '/memory/profile/rebuild' && req.method === 'POST') {
+            const body = await this.readJsonBody(req);
+            this.sendJson(res, 200, await this.rebuildUserProfile(body || {}));
             return;
         }
 
@@ -2229,6 +2442,7 @@ class AILISGateway extends EventEmitter {
             riskTypes: result.riskTypes,
             summary: result.summary,
             suggestion: result.suggestion,
+            evaluatorDetails: result.evaluatorDetails,
             evaluatorConfigured: result.evaluatorConfigured,
             snapshot: result.snapshot,
             rollbackTo: result.rollbackTo
@@ -2388,6 +2602,7 @@ class AILISGateway extends EventEmitter {
                 () => this.callAgentRuntimeTool({ callId, toolId, args, context, workspaceDir })
             );
             const guardedResult = this.runtime.guardToolResult(result, { toolId, callId });
+            attachObservationContract(guardedResult, { toolId });
             const postToolGate = await this.runEmberHarnessCheck({
                 stage: 'tool_result',
                 boundary: 'tool_result_enter_context',
@@ -2421,8 +2636,9 @@ class AILISGateway extends EventEmitter {
                 );
             }
             const status = classifyToolResult(guardedResult);
+            const semanticFailure = ['blocked', 'failed'].includes(status);
             const response = {
-                ok: status === 'completed',
+                ok: !semanticFailure && guardedResult?.isError !== true,
                 callId,
                 tool: toolId,
                 status,
@@ -2959,6 +3175,30 @@ class AILISGateway extends EventEmitter {
                 ...(query.domains.length ? { domains: query.domains } : {})
             }
         }, context)));
+        const failures = responses.flatMap((response, queryIndex) => {
+            const details = bridgeStructuredContent(response);
+            const nestedDetails = firstObject(details.details, response?.details?.details);
+            const failed = response?.isError === true
+                || response?.details?.result?.isError === true
+                || details.isError === true
+                || details.status === 'error'
+                || nestedDetails.status === 'invalid_mcp_tool_args';
+            if (!failed) {
+                return [];
+            }
+            return [{
+                query_index: queryIndex,
+                query: queries[queryIndex].q,
+                status: normalizeString(nestedDetails.status || details.status, 'search_failed'),
+                error: normalizeString(
+                    nestedDetails.error
+                    || details.error
+                    || bridgeTextContent(response),
+                    'The underlying search tool failed.'
+                ),
+                ...(Array.isArray(nestedDetails.errors) ? { errors: cloneJson(nestedDetails.errors) } : {})
+            }];
+        });
         const queryResults = responses.map((response, queryIndex) => {
             const details = bridgeStructuredContent(response);
             const results = Array.isArray(details.results)
@@ -3006,6 +3246,68 @@ class AILISGateway extends EventEmitter {
             ? { type: 'search', query: queryValues[0] }
             : { type: 'search', queries: queryValues };
         const webSearchCall = { type: 'web_search_call', status: 'completed', action };
+        if (failures.length === responses.length) {
+            const failedCall = { ...webSearchCall, status: 'failed' };
+            const failedSearch = {
+                status: 'search_failed',
+                queries: queryValues,
+                results: [],
+                candidates: [],
+                failures
+            };
+            const structuredContent = {
+                type: 'function_call_output',
+                status: 'failed',
+                webSearchCall: failedCall,
+                web_search_call: failedCall,
+                search: failedSearch
+            };
+            return {
+                content: [{
+                    type: 'text',
+                    text: [
+                        'Web search failed before producing results.',
+                        ...failures.map((failure) => `${failure.query}: ${failure.status}: ${failure.error}`)
+                    ].join('\n')
+                }],
+                isError: true,
+                details: structuredContent,
+                structuredContent
+            };
+        }
+        const searchStatus = merged.length ? 'completed' : 'empty';
+        const filteredQueries = queries.filter((query) => query.recency !== undefined || query.domains.length > 0);
+        const queryNeedsReformulation = queries.some((query) => {
+            const terms = query.q.toLowerCase().match(/[\p{L}\p{N}][\p{L}\p{N}._:-]*/gu) || [];
+            const uniqueTerms = new Set(terms);
+            return query.q.length > 240 ||
+                terms.length > 24 ||
+                (terms.length >= 12 && uniqueTerms.size / terms.length < 0.65);
+        });
+        const queryGuidance = !merged.length
+            ? {
+                  action: 'reformulate',
+                  strategy: queryNeedsReformulation ? 'fresh_concise_query' : 'broaden_or_simplify',
+                  repeat_previous_query: false,
+                  target_term_count: { min: 3, max: 8 }
+              }
+            : null;
+        const suggestedNextCalls = merged.length
+            ? merged.slice(0, 3).map((result) => ({
+                  tool: 'web_run',
+                  args: { open: [{ ref_id: result.ref_id }] },
+                  reason: 'Open a relevant candidate to inspect source evidence.'
+              }))
+            : filteredQueries.length && !queryNeedsReformulation
+            ? [{
+                  tool: 'web_run',
+                  args: {
+                      search_query: queries.map((query) => ({ q: query.q })),
+                      ...(args.response_length ? { response_length: args.response_length } : {})
+                  },
+                  reason: 'Retry the same model-authored queries without optional recency or domain transport filters.'
+              }]
+            : [];
         const webSearchOutput = {
             type: 'function_call_output',
             webSearchCall,
@@ -3013,14 +3315,21 @@ class AILISGateway extends EventEmitter {
             functionCallOutput: { type: 'function_call_output', status: 'completed', output_kind: 'web_search_results' },
             function_call_output: { type: 'function_call_output', status: 'completed', output_kind: 'web_search_results' },
             search: {
-                status: 'completed',
+                status: searchStatus,
                 queries: queryValues,
                 results: merged,
-                candidates: merged
+                candidates: merged,
+                ...(failures.length ? { failures } : {}),
+                ...(queryGuidance ? { queryGuidance } : {}),
+                ...(suggestedNextCalls.length ? { suggestedNextCalls } : {})
             }
         };
         const text = [
-            'Search results:',
+            merged.length
+                ? 'Search results (open a relevant reference to inspect source evidence):'
+                : queryNeedsReformulation
+                ? 'No search results. Write one fresh concise query with 3-8 discriminative terms; do not concatenate or repeat prior queries.'
+                : 'No search results. Broaden the query and omit optional recency/domain filters before retrying.',
             ...merged.flatMap((result, index) => [
                 `${index + 1}. [${result.ref_id}] ${result.title}`,
                 `   URL: ${result.url}`,
@@ -3114,7 +3423,18 @@ class AILISGateway extends EventEmitter {
             : Array.isArray(details.observed_relevant_links)
             ? details.observed_relevant_links
             : [];
-        const numberedLinks = observedLinks
+        const sectionLinks = sourceViewportSectionLinks(sourceViews, resolved.url);
+        const mergedLinks = [];
+        const seenLinkUrls = new Set();
+        for (const link of [...sectionLinks, ...observedLinks]) {
+            const url = normalizeString(link?.url);
+            if (!url || seenLinkUrls.has(url)) {
+                continue;
+            }
+            seenLinkUrls.add(url);
+            mergedLinks.push(link);
+        }
+        const numberedLinks = mergedLinks
             .map((link, index) => ({
                 ...link,
                 id: index + 1,
@@ -3173,6 +3493,14 @@ class AILISGateway extends EventEmitter {
                     id: linkId
                 }
             };
+        }
+        const navigationMode = normalizeString(link.navigationMode || link.navigation_mode).toLowerCase();
+        const sectionPattern = normalizeString(link.pattern || link.text || link.title);
+        if (navigationMode === 'find' && sectionPattern) {
+            return await this.executeWebRunNavigation({
+                ref_id: operation.ref_id,
+                pattern: sectionPattern
+            }, context, 'find');
         }
         const navigation = await this.executeWebRunNavigation({ ref_id: link.url }, context, 'open');
         if (normalizeString(link.kind).toLowerCase() !== 'pdf') {

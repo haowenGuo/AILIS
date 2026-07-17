@@ -2035,17 +2035,6 @@ function buildCommandDiagnostics({ command = '', args = [], platformAdapter = nu
         platform: platformAdapter?.getStatus ? platformAdapter.getStatus() : null,
         warnings: []
     };
-    if (
-        diagnostics.shellString &&
-        diagnostics.containsNewline &&
-        typeof platformAdapter?.isWindows === 'function' &&
-        platformAdapter.isWindows()
-    ) {
-        diagnostics.warnings.push({
-            code: 'windows_cmd_multiline_shell_string',
-            message: 'Windows cmd shell strings with embedded newlines are fragile. Prefer command+args, or write complex Python/PowerShell/Node logic to a script file and run that file.'
-        });
-    }
     return diagnostics;
 }
 

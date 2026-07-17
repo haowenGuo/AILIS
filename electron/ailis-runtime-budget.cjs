@@ -370,6 +370,18 @@ function collapseDeepSchemaObjects(value, depth = 0, maxDepth = DEFAULT_SCHEMA_D
         return value;
     }
     if (depth >= maxDepth && isComplexSchemaObject(value)) {
+        const hasProperties = value.properties && typeof value.properties === 'object';
+        const hasSchemaUnion = (
+            Array.isArray(value.oneOf) ||
+            Array.isArray(value.anyOf) ||
+            Array.isArray(value.allOf)
+        );
+        if (!hasProperties && hasSchemaUnion) {
+            for (const entry of Object.values(value)) {
+                collapseDeepSchemaObjects(entry, depth + 1, maxDepth);
+            }
+            return value;
+        }
         const type = value.type || 'object';
         const required = Array.isArray(value.required) ? value.required.slice(0, 12) : undefined;
         for (const key of Object.keys(value)) {

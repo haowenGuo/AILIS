@@ -6,7 +6,6 @@ const TASK_HARNESS_STATE_VERSION = 1;
 const TASK_RESULT_SCHEMA = 'ailis.task_result.v1';
 const TASK_AGENT_MAX_MODEL_ROUNDS = 7;
 const MAX_PARENT_RUN_HANDOFFS = 256;
-const CONTINUATION_MODES = new Set(['auto', 'continue', 'new']);
 const FINAL_STATUSES = new Set(['completed', 'success', 'succeeded']);
 
 function normalizeString(value, fallback = '') {
@@ -130,9 +129,18 @@ function normalizeStoredTask(raw = {}) {
 function buildTaskResultPacket(result = {}, task = {}) {
     const handoff = result.taskRunHandoff || result.task_run_handoff || result.handoff || {};
     const collectedData = Array.isArray(handoff.collectedData) ? handoff.collectedData : [];
-    const finalAnswer = normalizeString(
-        handoff.finalAnswer || result.finalAnswer || result.answer || result.displayText
+    const exactAnswer = normalizeString(
+        handoff.exactAnswer ||
+        handoff.exact_answer ||
+        result.exactAnswerSubmission?.answer ||
+        result.exact_answer_submission?.answer ||
+        result.exactAnswer ||
+        result.exact_answer
     );
+    const finalAnswer = normalizeString(
+        handoff.finalAnswer || result.finalAnswer || result.answer || exactAnswer || result.displayText
+    );
+    const displayText = normalizeString(result.displayText || result.display_text || finalAnswer);
     const partialAnswer = normalizeString(handoff.partialAnswer);
     const status = normalizeString(handoff.status || result.status, result.ok === false ? 'failed' : 'completed').toLowerCase();
     const unresolvedFields = FINAL_STATUSES.has(status)
@@ -147,7 +155,9 @@ function buildTaskResultPacket(result = {}, task = {}) {
         status,
         original_goal: task.originalGoal,
         current_request: task.latestRequest,
+        exact_answer: exactAnswer,
         final_answer: finalAnswer,
+        display_text: displayText,
         partial_answer: partialAnswer,
         source_refs: normalizeSourceRefs(handoff.sourceRefs),
         evidence_refs: refsFromCollectedData(collectedData, 'evidenceRefs'),
@@ -198,15 +208,8 @@ class AILISSystemTaskAgentHarness {
         return this.state.sessions[normalizeString(sessionId, 'main')] || null;
     }
 
-    selectPriorTask(sessionId, continuation) {
-        const prior = this.getTask(sessionId);
-        if (!prior || continuation === 'new') {
-            return null;
-        }
-        if (continuation === 'continue') {
-            return prior;
-        }
-        return FINAL_STATUSES.has(prior.status) ? null : prior;
+    selectPriorTask(sessionId) {
+        return this.getTask(sessionId);
     }
 
     createTask({ sessionId, message, prior = null }) {
@@ -231,7 +234,7 @@ class AILISSystemTaskAgentHarness {
         };
     }
 
-    async handoff(args = {}, context = {}) {
+    async handoff(_args = {}, context = {}) {
         const message = normalizeString(context.currentUserMessage);
         if (!message) {
             throw new Error('handoff_task requires the immutable current user message from the Agent Harness');
@@ -252,8 +255,6 @@ class AILISSystemTaskAgentHarness {
             });
             return await existingHandoff.promise;
         }
-        const requestedContinuation = normalizeString(args.continuation, 'auto').toLowerCase();
-        const continuation = CONTINUATION_MODES.has(requestedContinuation) ? requestedContinuation : 'auto';
         const running = this.inFlight.get(sessionId);
         if (running) {
             running.task.latestRequest = message;
@@ -273,7 +274,7 @@ class AILISSystemTaskAgentHarness {
             return await running.promise;
         }
 
-        const prior = this.selectPriorTask(sessionId, continuation);
+        const prior = this.selectPriorTask(sessionId);
         const task = this.createTask({ sessionId, message, prior });
         this.state.sessions[sessionId] = task;
         this.persist();
@@ -281,7 +282,7 @@ class AILISSystemTaskAgentHarness {
             sessionId,
             taskId: task.taskId,
             runId: task.latestRunId,
-            continuation: prior ? 'continued' : 'new'
+            threadState: prior ? 'resumed' : 'created'
         });
 
         const inFlight = {
@@ -330,6 +331,8 @@ class AILISSystemTaskAgentHarness {
                     parentSessionId: sessionId,
                     originalUserGoal: task.originalGoal,
                     original_user_goal: task.originalGoal,
+                    currentTaskRequest: task.latestRequest,
+                    current_task_request: task.latestRequest,
                     taskAgentInheritanceMode: inheritanceMode,
                     initialContextManagerCheckpoint: prior?.checkpoint || null,
                     maxAgentSteps: this.maxAgentSteps

@@ -319,8 +319,11 @@ function applyRenderQualitySettings(preferences = {}) {
 
 function normalizeAutoChatMode(value, enabled = false) {
     const mode = String(value || '').trim().toLowerCase();
-    if (['off', 'companion', 'cowork', 'autonomous'].includes(mode)) {
+    if (['off', 'companion', 'cowork'].includes(mode)) {
         return mode;
+    }
+    if (mode === 'autonomous') {
+        return 'off';
     }
     return normalizeDesktopBoolean(enabled, false) ? 'companion' : DEFAULT_AUTO_CHAT_MODE;
 }
@@ -330,8 +333,8 @@ function getAutoChatModeSettings(mode) {
         case 'companion':
             return {
                 enabled: true,
-                minIntervalMs: 15 * 60 * 1000,
-                maxIntervalMs: 45 * 60 * 1000
+                minIntervalMs: 20 * 1000,
+                maxIntervalMs: 20 * 1000
             };
         case 'cowork':
             return {
@@ -339,7 +342,6 @@ function getAutoChatModeSettings(mode) {
                 minIntervalMs: 30 * 60 * 1000,
                 maxIntervalMs: 60 * 60 * 1000
             };
-        case 'autonomous':
         case 'off':
         default:
             return {

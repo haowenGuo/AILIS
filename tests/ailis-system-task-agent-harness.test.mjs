@@ -11,6 +11,7 @@ const {
     TASK_RESULT_SCHEMA
 } = require('../electron/ailis-task-agent-harness.cjs');
 const { buildAgentDirectToolSpecs } = require('../electron/ailis-agent-runner.cjs');
+const { getToolContract, validateToolContract } = require('../electron/ailis-tool-contracts.cjs');
 
 function completedResult({ runId, answer, checkpoint, sourceUrl = '' }) {
     return {
@@ -36,6 +37,14 @@ function completedResult({ runId, answer, checkpoint, sourceUrl = '' }) {
         }
     };
 }
+
+test('Persona handoff contract exposes no TaskAgent lifecycle controls', () => {
+    const contract = getToolContract('handoff_task');
+
+    assert.deepEqual(contract.schema.properties, {});
+    assert.equal(validateToolContract('handoff_task', {}).ok, true);
+    assert.equal(validateToolContract('handoff_task', { continuation: 'new' }).ok, false);
+});
 
 test('system TaskAgent handoff preserves the exact request and returns a compact result packet', async () => {
     const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-task-harness-'));
@@ -76,6 +85,36 @@ test('system TaskAgent handoff preserves the exact request and returns a compact
     assert.equal(JSON.stringify(packet).includes('private'), false);
 });
 
+test('system TaskAgent result packet keeps exact answer separate from user-facing prose', async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-task-harness-exact-answer-'));
+    const harness = new AILISSystemTaskAgentHarness({
+        rootDir,
+        executeTaskAgent: async (payload) => ({
+            ok: true,
+            status: 'completed',
+            runId: payload.agent.childRunId,
+            displayText: '根据证据，最终计数是 42。',
+            exactAnswerSubmission: { answer: '42' },
+            taskRunHandoff: {
+                status: 'completed',
+                finalAnswer: '根据证据，最终计数是 42。',
+                sourceRefs: [],
+                collectedData: [],
+                traceRef: payload.agent.childRunId
+            }
+        })
+    });
+
+    const packet = await harness.handoff({}, {
+        currentUserMessage: '只返回最终计数。',
+        sessionId: 'persona-exact-answer'
+    });
+
+    assert.equal(packet.exact_answer, '42');
+    assert.equal(packet.final_answer, '根据证据，最终计数是 42。');
+    assert.equal(packet.display_text, '根据证据，最终计数是 42。');
+});
+
 test('repeated handoff in the same parent run reuses the first TaskAgent result', async () => {
     const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-task-harness-idempotent-'));
     const calls = [];
@@ -104,7 +143,7 @@ test('repeated handoff in the same parent run reuses the first TaskAgent result'
     assert.equal(harness.getStatus().parentRunHandoffCount, 1);
 });
 
-test('explicit continuation resumes the latest TaskAgent checkpoint without replacing the original goal', async () => {
+test('a later handoff resumes the persistent TaskAgent checkpoint without replacing the original goal', async () => {
     const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-task-harness-resume-'));
     const calls = [];
     const harness = new AILISSystemTaskAgentHarness({
@@ -123,9 +162,7 @@ test('explicit continuation resumes the latest TaskAgent checkpoint without repl
         currentUserMessage: '分析这个仓库的长期任务架构。',
         sessionId: 'session-a'
     });
-    const packet = await harness.handoff({
-        continuation: 'continue'
-    }, {
+    const packet = await harness.handoff({}, {
         currentUserMessage: '继续补充失败恢复部分。',
         sessionId: 'session-a'
     });
@@ -137,6 +174,43 @@ test('explicit continuation resumes the latest TaskAgent checkpoint without repl
     assert.equal(calls[1].agent.task, '继续补充失败恢复部分。');
     assert.equal(packet.original_goal, '分析这个仓库的长期任务架构。');
     assert.equal(packet.current_request, '继续补充失败恢复部分。');
+});
+
+test('the session TaskAgent remains long-lived across later requests', async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-task-harness-long-lived-'));
+    const calls = [];
+    const harness = new AILISSystemTaskAgentHarness({
+        rootDir,
+        executeTaskAgent: async (payload) => {
+            calls.push(payload);
+            return completedResult({
+                runId: payload.agent.childRunId,
+                answer: calls.length === 1
+                    ? 'Script was written but still needs execution.'
+                    : 'Continued from the existing Excel task.',
+                checkpoint: { version: calls.length, marker: 'excel-map-task' }
+            });
+        }
+    });
+
+    await harness.handoff({}, {
+        currentUserMessage: '读取这个 Excel 地图并求第 11 步颜色。',
+        sessionId: 'session-long-lived'
+    });
+    const packet = await harness.handoff({}, {
+        currentUserMessage: '你自己找',
+        sessionId: 'session-long-lived'
+    });
+
+    assert.equal(calls.length, 2);
+    assert.equal(calls[1].args.inheritanceMode, 'checkpoint');
+    assert.deepEqual(calls[1].args.contextManagerCheckpoint, { version: 1, marker: 'excel-map-task' });
+    assert.equal(calls[1].context.originalUserGoal, '读取这个 Excel 地图并求第 11 步颜色。');
+    assert.equal(calls[1].context.currentTaskRequest, '你自己找');
+    assert.equal(calls[1].agent.originalTask, '读取这个 Excel 地图并求第 11 步颜色。');
+    assert.equal(calls[1].agent.task, '你自己找');
+    assert.equal(packet.original_goal, '读取这个 Excel 地图并求第 11 步颜色。');
+    assert.equal(packet.current_request, '你自己找');
 });
 
 test('concurrent follow-up input joins the running system TaskAgent instead of spawning another one', async () => {
@@ -168,9 +242,7 @@ test('concurrent follow-up input joins the running system TaskAgent instead of s
         sessionId: 'session-queue'
     });
     await new Promise((resolve) => setImmediate(resolve));
-    const second = harness.handoff({
-        continuation: 'continue'
-    }, {
+    const second = harness.handoff({}, {
         currentUserMessage: '补充检查测试覆盖率。',
         sessionId: 'session-queue'
     });
@@ -192,7 +264,7 @@ test('Persona and TaskAgent receive disjoint orchestration tool surfaces', () =>
             parameters: {
                 type: 'object',
                 required: [],
-                properties: { continuation: { type: 'string' } },
+                properties: {},
                 additionalProperties: false
             }
         },

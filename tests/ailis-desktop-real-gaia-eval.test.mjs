@@ -2,10 +2,44 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+    configureResearchMcpLlmEnvironment,
     isIncompleteStatus,
     scoreVisibleAnswer,
     summarizeEvents
 } from '../scripts/run-ailis-desktop-real-gaia-eval.mjs';
+
+test('desktop-real eval forwards its active LLM provider to research MCP subprocesses', () => {
+    const names = [
+        'AILIS_TOOL_LLM_PROVIDER',
+        'AILIS_TOOL_LLM_BASE_URL',
+        'AILIS_TOOL_LLM_MODEL',
+        'AILIS_TOOL_LLM_API_KEY',
+        'AILIS_TOOL_LLM_REASONING_EFFORT'
+    ];
+    const previous = Object.fromEntries(names.map((name) => [name, process.env[name]]));
+    try {
+        configureResearchMcpLlmEnvironment({
+            provider: 'codex-model-bridge',
+            baseUrl: 'codex://chatgpt-oauth',
+            model: 'gpt-5.5',
+            apiKey: '',
+            reasoningEffort: 'medium'
+        });
+        assert.equal(process.env.AILIS_TOOL_LLM_PROVIDER, 'codex-model-bridge');
+        assert.equal(process.env.AILIS_TOOL_LLM_BASE_URL, 'codex://chatgpt-oauth');
+        assert.equal(process.env.AILIS_TOOL_LLM_MODEL, 'gpt-5.5');
+        assert.equal(process.env.AILIS_TOOL_LLM_API_KEY, undefined);
+        assert.equal(process.env.AILIS_TOOL_LLM_REASONING_EFFORT, 'medium');
+    } finally {
+        for (const name of names) {
+            if (previous[name] === undefined) {
+                delete process.env[name];
+            } else {
+                process.env[name] = previous[name];
+            }
+        }
+    }
+});
 
 test('desktop-real visible scorer accepts contextual best-item answer', () => {
     const response = {
@@ -23,6 +57,54 @@ test('desktop-real visible scorer accepts contextual best-item answer', () => {
     assert.equal(score.ok, true);
     assert.equal(score.status, 'visible_answer_match');
     assert.equal(score.answer, '3');
+});
+
+test('desktop-real visible scorer prefers the TaskAgent exact answer over explanatory prose', () => {
+    const score = scoreVisibleAnswer({
+        response: {
+            ok: true,
+            status: 'completed',
+            displayText: 'I found several plausible values, including 41 and 43.',
+            taskResult: {
+                exact_answer: '42',
+                final_answer: 'The verified count is 42.'
+            }
+        },
+        gold: '42'
+    });
+
+    assert.equal(score.ok, true);
+    assert.equal(score.source, 'task_result_exact_answer');
+    assert.equal(score.answer, '42');
+});
+
+test('desktop-real visible scorer ignores case and ordinary title punctuation differences', () => {
+    const score = scoreVisibleAnswer({
+        response: {
+            ok: true,
+            status: 'completed',
+            finalAnswer: 'Mapping human-oriented information to software agents for online systems usage',
+            displayText: 'Mapping human-oriented information to software agents for online systems usage'
+        },
+        gold: 'Mapping Human Oriented Information to Software Agents for Online Systems Usage'
+    });
+
+    assert.equal(score.ok, true);
+    assert.equal(score.status, 'visible_answer_match');
+    assert.equal(score.answer, 'Mapping human-oriented information to software agents for online systems usage');
+});
+
+test('desktop-real visible scorer still rejects materially different titles', () => {
+    const score = scoreVisibleAnswer({
+        response: {
+            ok: true,
+            status: 'completed',
+            finalAnswer: "A New Software Agent 'Learning' Algorithm"
+        },
+        gold: 'Mapping Human Oriented Information to Software Agents for Online Systems Usage'
+    });
+
+    assert.equal(score.ok, false);
 });
 
 test('desktop-real event summary does not double count token usage mirrors', () => {
@@ -90,6 +172,24 @@ test('desktop-real visible scorer accepts scaled thousand-unit equivalent only w
     const withQuestion = scoreVisibleAnswer({ response, gold: '17', question });
     assert.equal(withQuestion.ok, true);
     assert.equal(withQuestion.answer, '17000');
+});
+
+test('desktop-real visible scorer extracts an English rounded scaled-unit result from a real answer shape', () => {
+    const response = {
+        ok: true,
+        status: 'completed',
+        finalAnswer: 'Using source values, the calculation is approximately 17053 hours. Rounded to the nearest 1000 hours: 17000',
+        displayText: [
+            'Using source values, the calculation is approximately 17053 hours.',
+            'Rounded to the nearest 1000 hours: **17000**'
+        ].join('\n')
+    };
+    const question = 'How many thousand hours would it take? Round your result to the nearest 1000 hours.';
+
+    const score = scoreVisibleAnswer({ response, gold: '17', question });
+    assert.equal(score.ok, true);
+    assert.equal(score.source, 'visible_scaled_result');
+    assert.equal(score.answer, '17000');
 });
 
 test('desktop-real visible scorer extracts inline final result after rendering', () => {

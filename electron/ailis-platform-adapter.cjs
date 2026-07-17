@@ -254,6 +254,17 @@ class AILISPlatformAdapter {
         return normalizeString(this.env.AILIS_IOS_XCRUN || this.env.XCRUN, 'xcrun');
     }
 
+    windowsPowerShellExecutable(env = this.env) {
+        const configured = normalizeString(env.AILIS_WINDOWS_SHELL || env.AILIS_POWERSHELL);
+        if (configured) {
+            return configured;
+        }
+        const windowsRoot = normalizeString(env.SystemRoot || env.SYSTEMROOT || env.WINDIR);
+        return windowsRoot
+            ? path.win32.join(windowsRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+            : 'powershell.exe';
+    }
+
     pathKey(filePath) {
         const resolved = path.resolve(String(filePath || ''));
         return this.isHostWindows() ? resolved.toLowerCase() : resolved;
@@ -317,10 +328,15 @@ class AILISPlatformAdapter {
         if (this.isWindows()) {
             return this.env.ComSpec || 'cmd.exe';
         }
+        const configuredPosixShell = normalizeString(this.env.AILIS_POSIX_SHELL);
+        const environmentShell = normalizeString(this.env.SHELL);
+        const usableEnvironmentShell = /(^|[\\/])(powershell|pwsh|cmd)(\.exe)?$/i.test(environmentShell)
+            ? ''
+            : environmentShell;
         if (this.isMacOS()) {
-            return this.env.SHELL || 'zsh';
+            return configuredPosixShell || usableEnvironmentShell || 'zsh';
         }
-        return this.env.SHELL || 'bash';
+        return configuredPosixShell || usableEnvironmentShell || 'bash';
     }
 
     shellArgs(command = '') {
@@ -346,6 +362,56 @@ class AILISPlatformAdapter {
                 ...this.env,
                 ...(env && typeof env === 'object' ? env : {})
             }
+        };
+    }
+
+    scriptShellSpawnSpec(script = '', { cwd, env } = {}) {
+        const text = String(script || '');
+        const spawnEnv = {
+            ...this.env,
+            ...(env && typeof env === 'object' ? env : {})
+        };
+        if (this.isWindows()) {
+            const executable = this.windowsPowerShellExecutable(spawnEnv);
+            const shellName = path.basename(executable).toLowerCase();
+            const isCmd = shellName === 'cmd' || shellName === 'cmd.exe';
+            const utf8Script = isCmd
+                ? text
+                : [
+                      '[Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)',
+                      '[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)',
+                      '$OutputEncoding = [Console]::OutputEncoding',
+                      text
+                  ].join('; ');
+            return {
+                supported: true,
+                command: executable,
+                args: isCmd
+                    ? ['/d', '/s', '/c', text]
+                    : ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', utf8Script],
+                options: {
+                    cwd,
+                    shell: false,
+                    windowsHide: this.isHostWindows(),
+                    env: spawnEnv
+                },
+                targetCommand: text,
+                backend: isCmd ? 'cmd-argv' : 'powershell-argv'
+            };
+        }
+        const executable = this.defaultShellExecutable();
+        return {
+            supported: true,
+            command: executable,
+            args: ['-lc', text],
+            options: {
+                cwd,
+                shell: false,
+                windowsHide: this.isHostWindows(),
+                env: spawnEnv
+            },
+            targetCommand: text,
+            backend: `${path.basename(executable)}-argv`
         };
     }
 
@@ -402,14 +468,7 @@ class AILISPlatformAdapter {
                 backend: 'direct-spawn'
             };
         }
-        return {
-            supported: true,
-            command: text,
-            args: [],
-            options: this.shellSpawnOptions({ cwd, env }),
-            targetCommand: text,
-            backend: this.defaultShellExecutable()
-        };
+        return this.scriptShellSpawnSpec(text, { cwd, env });
     }
 
     ptySpawnOptions({ command = '', executable = '', args = [], cwd, env, term = 'xterm-256color', cols = 100, rows = 30, useConpty, useConptyDll } = {}) {
@@ -495,7 +554,7 @@ class AILISPlatformAdapter {
         }
         return {
             supported: true,
-            command: 'powershell.exe',
+            command: this.windowsPowerShellExecutable(),
             args: ['-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass', '-Command', script],
             windowsHide: true
         };

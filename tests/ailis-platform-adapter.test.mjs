@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -11,6 +12,22 @@ const {
     createAILISPlatformAdapter
 } = require('../electron/ailis-platform-adapter.cjs');
 const { AILISGateway } = require('../electron/ailis-gateway.cjs');
+
+function runSpawnSpec(spec) {
+    return new Promise((resolve, reject) => {
+        const child = spawn(spec.command, spec.args, spec.options);
+        const stdout = [];
+        const stderr = [];
+        child.stdout.on('data', (chunk) => stdout.push(chunk));
+        child.stderr.on('data', (chunk) => stderr.push(chunk));
+        child.on('error', reject);
+        child.on('close', (code) => resolve({
+            code,
+            stdout: Buffer.concat(stdout).toString('utf8'),
+            stderr: Buffer.concat(stderr).toString('utf8')
+        }));
+    });
+}
 
 test('AILIS platform adapter normalizes OS-specific path and shell behavior', () => {
     const windows = new AILISPlatformAdapter({
@@ -25,6 +42,19 @@ test('AILIS platform adapter normalizes OS-specific path and shell behavior', ()
     assert.equal(windows.isPathInside('C:\\Work', 'C:\\WORK\\note.txt'), true);
     assert.equal(windows.pathKey('C:\\Work\\Note.txt'), path.resolve('C:\\Work\\Note.txt').toLowerCase());
     assert.deepEqual(windows.shellArgs('echo hi'), ['/d', '/s', '/c', 'echo hi']);
+    const multilinePowerShell = [
+        "$value = @'",
+        '你好',
+        "'@",
+        '$value'
+    ].join('\n');
+    const windowsSpawn = windows.commandSpawnSpec(multilinePowerShell, { cwd: 'C:\\Work' });
+    assert.equal(windowsSpawn.command, 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe');
+    assert.equal(windowsSpawn.options.shell, false);
+    assert.equal(windowsSpawn.backend, 'powershell-argv');
+    assert.equal(windowsSpawn.args.at(-1).includes(multilinePowerShell), true);
+    assert.match(windowsSpawn.args.at(-1), /OutputEncoding/);
+    assert.equal(windows.powershellCommand('Write-Output ok').command, windowsSpawn.command);
     assert.equal(windows.aclSetCommand('C:\\Work\\note.txt', ['/grant', 'User:(R)']).supported, true);
     assert.equal(windows.getStatus().capabilities.aclSet, true);
     assert.equal(windows.protectedRoots().some((root) => windows.isPathInside(root, 'C:\\Users\\Lenovo\\Documents')), false);
@@ -35,7 +65,32 @@ test('AILIS platform adapter normalizes OS-specific path and shell behavior', ()
     assert.equal(linux.isPathInside('/tmp/work', '/tmp/work/note.txt'), true);
     assert.equal(linux.isPathInside('/tmp/work', '/tmp/work-other/note.txt'), false);
     assert.deepEqual(linux.shellArgs('echo hi'), ['-lc', 'echo hi']);
+    const linuxSpawn = linux.commandSpawnSpec('printf "one\\ntwo\\n"');
+    assert.equal(linuxSpawn.command, 'bash');
+    assert.deepEqual(linuxSpawn.args, ['-lc', 'printf "one\\ntwo\\n"']);
+    assert.equal(linuxSpawn.options.shell, false);
     assert.equal(linux.aclSetCommand('/tmp/work/note.txt', []).supported, false);
+});
+
+test('AILIS Windows shell executes multiline Unicode as one PowerShell argv', {
+    skip: process.platform !== 'win32'
+}, async () => {
+    const windows = new AILISPlatformAdapter({
+        platform: 'win32',
+        env: process.env
+    });
+    const script = [
+        "$value = @'",
+        '第一行',
+        '第二行',
+        "'@",
+        '[Console]::Write($value)'
+    ].join('\n');
+    const result = await runSpawnSpec(windows.commandSpawnSpec(script));
+
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(result.stdout, /第一行/);
+    assert.match(result.stdout, /第二行/);
 });
 
 test('AILIS platform adapter exposes macOS and Linux desktop skeleton capabilities', () => {

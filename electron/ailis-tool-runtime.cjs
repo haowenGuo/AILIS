@@ -368,6 +368,7 @@ class AILISToolRuntimeRegistry {
                 server: directMcp.server,
                 tool: directMcp.tool,
                 args: toolArgs,
+                ...(Number(toolArgs.timeoutMs) > 0 ? { timeoutMs: Number(toolArgs.timeoutMs) } : {}),
                 ...(meta !== undefined ? { meta } : {})
             },
             context
@@ -430,6 +431,20 @@ async function executeToolSearch(registry, args = {}) {
             }
         ]));
         const id = normalizeString(entry.id || entry.name || spec.name);
+        const searchError = normalizeString(entry.type).endsWith('_search_error');
+        const callable = Boolean(id) &&
+            !searchError &&
+            entry.callable !== false &&
+            spec.callable !== false;
+        const availability = normalizeString(
+            entry.availability ||
+            entry.health ||
+            entry.status ||
+            spec.availability ||
+            spec.health ||
+            spec.status,
+            callable ? 'available' : 'unavailable'
+        );
         return {
             id,
             name: normalizeString(entry.name || spec.name || id),
@@ -441,23 +456,32 @@ async function executeToolSearch(registry, args = {}) {
                 additionalProperties: schema.additionalProperties === true
             },
             strict: entry.strict === true || spec.strict === true || schema.additionalProperties === false,
+            callable,
+            availability,
             spec_ref: `tool_registry:${id}`
         };
     });
-    const routingAdvice = buildToolRoutingAdvice(query, tools);
+    const recommendedTool = publicTools.find((entry) => entry.callable) || null;
+    const routingAdvice = recommendedTool ? buildToolRoutingAdvice(query, tools) : '';
+    const discovery = {
+        status: 'completed',
+        query,
+        routing_advice: routingAdvice,
+        recommended_tool: recommendedTool
+            ? {
+                  id: recommendedTool.id,
+                  name: recommendedTool.name,
+                  callable: true,
+                  availability: recommendedTool.availability
+              }
+            : null,
+        tools: publicTools
+    };
     const result = makeTextResult({
         status: 'completed',
-        text: JSON.stringify({
-            status: 'completed',
-            query,
-            routing_advice: routingAdvice,
-            tools: publicTools
-        }, null, 2),
+        text: JSON.stringify(discovery, null, 2),
         details: {
-            status: 'completed',
-            query,
-            routing_advice: routingAdvice,
-            tools: publicTools
+            ...discovery
         }
     });
     Object.defineProperty(result, '__ailisRawToolSearchTools', {

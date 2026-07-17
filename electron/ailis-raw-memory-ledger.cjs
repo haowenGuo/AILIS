@@ -285,6 +285,7 @@ class AILISRawMemoryLedger {
         const includePayload = options.includePayload !== false;
         const tail = options.tail !== false;
         const sinceExclusive = options.sinceExclusive === true;
+        const afterId = normalizeString(options.afterId || options.afterEntryId);
         const limit = Math.min(
             Math.max(Number(options.limit) || DEFAULT_REPLAY_LIMIT, 1),
             MAX_REPLAY_LIMIT
@@ -312,7 +313,7 @@ class AILISRawMemoryLedger {
                 if (source && entry.source !== source) {
                     continue;
                 }
-                if (since && (sinceExclusive
+                if (since && (sinceExclusive && !afterId
                     ? String(entry.iso || '') <= since
                     : String(entry.iso || '') < since)) {
                     continue;
@@ -332,12 +333,23 @@ class AILISRawMemoryLedger {
             }
         }
         entries.sort(compareIso);
-        const selectedEntries = tail ? entries.slice(-limit) : entries.slice(0, limit);
+        let cursorFilteredEntries = entries;
+        if (since && afterId) {
+            const cursorIndex = entries.findIndex((entry) =>
+                String(entry.iso || '') === since && String(entry.id || '') === afterId
+            );
+            cursorFilteredEntries = cursorIndex >= 0
+                ? entries.slice(cursorIndex + 1)
+                : entries.filter((entry) => String(entry.iso || '') > since);
+        }
+        const selectedEntries = tail
+            ? cursorFilteredEntries.slice(-limit)
+            : cursorFilteredEntries.slice(0, limit);
         return {
             ok: true,
             status: 'ok',
             rootDir: this.rootDir,
-            count: entries.length,
+            count: cursorFilteredEntries.length,
             limit,
             tail,
             entries: selectedEntries

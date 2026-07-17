@@ -9,6 +9,8 @@ const DEFAULT_ENTRY_MAX_CHARS = 2200;
 const DEFAULT_MIN_CONFIDENCE = 0.62;
 const DEFAULT_MAX_BATCHES_PER_RUN = 4;
 const MAX_BATCHES_PER_RUN = 50;
+const OPERATION_LOCK_STALE_MS = 10 * 60 * 1000;
+const OPERATION_LOCK_HEARTBEAT_MS = 30 * 1000;
 const PROFILE_CATEGORIES = new Set([
     'communication_style',
     'work_style',
@@ -25,6 +27,19 @@ const PREFERENCE_SCOPES = new Set(['turn', 'session', 'day', 'until_changed', 'p
 
 function nowIso() {
     return new Date().toISOString();
+}
+
+function isProcessAlive(pid) {
+    const numericPid = Number(pid);
+    if (!Number.isInteger(numericPid) || numericPid <= 0) {
+        return false;
+    }
+    try {
+        process.kill(numericPid, 0);
+        return true;
+    } catch (error) {
+        return error?.code === 'EPERM';
+    }
 }
 
 function normalizeString(value, fallback = '') {
@@ -76,6 +91,12 @@ function truncateText(value, maxChars = DEFAULT_ENTRY_MAX_CHARS) {
 }
 
 function parseJsonFromText(text = '') {
+    if (isPlainObject(text)) {
+        return text;
+    }
+    if (Array.isArray(text)) {
+        return text.find(isPlainObject) || null;
+    }
     const raw = normalizeString(text);
     if (!raw) {
         return null;
@@ -96,12 +117,89 @@ function parseJsonFromText(text = '') {
             return JSON.parse(raw.slice(first, last + 1));
         } catch {}
     }
+    const candidates = [];
+    let start = -1;
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let index = 0; index < raw.length; index += 1) {
+        const char = raw[index];
+        if (inString) {
+            if (escaped) {
+                escaped = false;
+            } else if (char === '\\') {
+                escaped = true;
+            } else if (char === '"') {
+                inString = false;
+            }
+            continue;
+        }
+        if (char === '"') {
+            inString = true;
+            continue;
+        }
+        if (char === '{') {
+            if (depth === 0) {
+                start = index;
+            }
+            depth += 1;
+            continue;
+        }
+        if (char === '}' && depth > 0) {
+            depth -= 1;
+            if (depth === 0 && start >= 0) {
+                candidates.push(raw.slice(start, index + 1));
+                start = -1;
+            }
+        }
+    }
+    for (let index = candidates.length - 1; index >= 0; index -= 1) {
+        try {
+            const parsed = JSON.parse(candidates[index]);
+            if (isPlainObject(parsed)) {
+                return parsed;
+            }
+        } catch {}
+    }
     return null;
+}
+
+function collectLlmJsonCandidates(result = {}) {
+    const candidates = [];
+    const visit = (value) => {
+        if (value === null || value === undefined) {
+            return;
+        }
+        if (typeof value === 'string' || isPlainObject(value)) {
+            candidates.push(value);
+            return;
+        }
+        if (Array.isArray(value)) {
+            for (const item of value) {
+                if (typeof item === 'string') {
+                    candidates.push(item);
+                } else if (item && typeof item === 'object') {
+                    visit(item.text);
+                    visit(item.content);
+                    visit(item.output_text);
+                }
+            }
+        }
+    };
+    visit(result?.content);
+    visit(result?.text);
+    visit(result?.output);
+    visit(result?.output_text);
+    visit(result?.structuredContent);
+    visit(result?.message?.content);
+    visit(result?.choices?.[0]?.message?.content);
+    return candidates;
 }
 
 async function readJsonFile(filePath, fallback) {
     try {
-        return JSON.parse(await fsp.readFile(filePath, 'utf8')) ?? fallback;
+        const raw = (await fsp.readFile(filePath, 'utf8')).replace(/^\uFEFF/, '');
+        return JSON.parse(raw) ?? fallback;
     } catch {
         return fallback;
     }
@@ -117,6 +215,40 @@ async function writeJsonFileAtomic(filePath, value) {
 async function appendJsonl(filePath, value) {
     await fsp.mkdir(path.dirname(filePath), { recursive: true });
     await fsp.appendFile(filePath, `${JSON.stringify(value)}\n`, 'utf8');
+}
+
+async function readJsonl(filePath) {
+    try {
+        const text = await fsp.readFile(filePath, 'utf8');
+        return text.split(/\r?\n/)
+            .filter(Boolean)
+            .map((line) => {
+                try {
+                    return JSON.parse(line);
+                } catch {
+                    return null;
+                }
+            })
+            .filter(Boolean);
+    } catch {
+        return [];
+    }
+}
+
+async function summarizeStagedCurationRuns(filePath) {
+    const runs = await readJsonl(filePath);
+    const uniqueRuns = Array.from(new Map(
+        runs
+            .filter((run) => run && run.status !== 'rebuild_completed')
+            .map((run, index) => [normalizeString(run.id, `run-${index}`), run])
+    ).values());
+    return {
+        passCount: uniqueRuns.length,
+        processedEntryCount: uniqueRuns.reduce((sum, run) => sum + (Number(run.processedEntryCount) || 0), 0),
+        evidenceCount: uniqueRuns.reduce((sum, run) => sum + (Number(run.evidenceCount) || 0), 0),
+        profileUpdateCount: uniqueRuns.reduce((sum, run) => sum + (Number(run.profileUpdateCount) || 0), 0),
+        relationshipUpdateCount: uniqueRuns.reduce((sum, run) => sum + (Number(run.relationshipUpdateCount) || 0), 0)
+    };
 }
 
 function createDefaultUserProfile() {
@@ -149,6 +281,7 @@ function createDefaultAffinityState() {
         familiarity: 0.5,
         warmth: 0.5,
         friction: 0.2,
+        score: 50,
         repairState: 'stable',
         relationshipStage: 'familiarizing',
         evidenceIds: [],
@@ -190,7 +323,7 @@ function normalizeAffinity(raw) {
     if (!raw || typeof raw !== 'object') {
         return fallback;
     }
-    return {
+    const normalized = {
         ...fallback,
         ...raw,
         version: USER_PROFILE_CURATOR_VERSION,
@@ -201,6 +334,19 @@ function normalizeAffinity(raw) {
         evidenceIds: normalizeArray(raw.evidenceIds).map(String).filter(Boolean).slice(-200),
         history: normalizeArray(raw.history).filter(isPlainObject).slice(-200)
     };
+    normalized.score = Number.isFinite(Number(raw.score))
+        ? Math.round(clampNumber(raw.score, 0, 100, fallback.score))
+        : deriveAffinityScore(normalized);
+    return normalized;
+}
+
+function deriveAffinityScore(affinity = {}) {
+    const trust = clampNumber(affinity.trust, 0, 1, 0.5);
+    const familiarity = clampNumber(affinity.familiarity, 0, 1, 0.5);
+    const warmth = clampNumber(affinity.warmth, 0, 1, 0.5);
+    const friction = clampNumber(affinity.friction, 0, 1, 0.2);
+    const weighted = trust * 0.36 + familiarity * 0.3 + warmth * 0.24 - friction * 0.18;
+    return Math.round(clampNumber((weighted / 0.9) * 100, 0, 100, 50));
 }
 
 function deriveRelationshipStage(affinity = {}) {
@@ -234,7 +380,18 @@ function normalizeRepairState(value = '') {
 
 function extractUserEntryText(entry = {}) {
     const payload = entry.payload || {};
-    if (entry.type === 'chat.llm_turn') {
+    const sessionId = normalizeString(entry.sessionId);
+    const source = normalizeString(entry.source).toLowerCase();
+    const isTaskAgentEntry = /(^|:)(task-agent|agent|subagent)(:|$)/i.test(sessionId) ||
+        source.includes('task-agent') ||
+        source.includes('task_agent') ||
+        ['task_agent', 'taskagent', 'subagent'].includes(normalizeString(
+            entry.meta?.agentRole ||
+            payload.agentRole ||
+            payload.context?.agentRole ||
+            payload.requestPayload?.context?.agentRole
+        ).toLowerCase());
+    if (entry.type === 'chat.llm_turn' && !isTaskAgentEntry) {
         const userMessage = payload.requestPayload?.memoryUserMessage;
         return typeof userMessage === 'string' ? userMessage : '';
     }
@@ -271,10 +428,20 @@ function buildPromptPayload({
         instruction: 'Extract only evidence-grounded user profile, relationship profile, interaction-preference events, and affinity updates from this Raw Memory Ledger evidence batch.',
         rules: [
             'Return valid JSON only.',
+            'sessionId values identify local conversations or client sessions, not different people. Treat the evidence as belonging to the same local user unless the user text explicitly establishes otherwise.',
             'Every profile or relationship update must include evidenceIds from evidence[].id.',
             'Reject one-off emotions, temporary task details, secrets, API keys, and unsupported guesses.',
             'Do not infer private demographics or sensitive attributes.',
-            'Prefer stable preferences and repeated patterns; mark weak signals as candidate.',
+            'A single explicit durable instruction, preference, working principle, relationship boundary, or project direction is sufficient for a candidate profile update; do not reject it only because it appears once.',
+            'A preference expressed during a task is not automatically temporary: repeated instructions about autonomy, answer style, verification, initiative, or avoiding repeated work may be stable work or communication preferences when supported by multiple evidence items.',
+            'Repeated forms of address or recurring relationship framing across several evidence items may support a privacy-preserving relationship pattern. Summarize the pattern without retaining sexual details.',
+            'Relationship claims must stay at the level of relationship framing, forms of address, trust, boundaries, and collaboration style. Never retain sexual acts, anatomy, explicit duties, or scene details in a profile claim.',
+            'If private or explicit evidence repeatedly contains the same forms of address or relationship framing, ignore the scene content but still preserve the supported high-level pattern. Privacy filtering removes details, not the relationship signal itself.',
+            'Do not mention a durable pattern only in daySummary. If the evidence supports a reusable preference or principle, emit a profileUpdates or relationshipUpdates item; otherwise list the relevant evidence in rejectedSignals with a concrete reason.',
+            'Repeated corrections about how AILIS should inspect evidence, explain decisions, plan work, modify code, verify results, use tools, or report progress are candidates for work_style, engineering_principles, decision_preferences, communication_style, or negative_preferences.',
+            'Use project_memory only for durable facts, decisions, constraints, or state of a named ongoing project. Repeated requests about a topic or content format belong in work_style or decision_preferences, not project_memory.',
+            'Use stability=candidate for a first explicit durable signal. Use stability=stable when the user explicitly frames it as an ongoing rule or when multiple evidence items support the same pattern.',
+            'Use temporary_task only for details that are specific to the current task and have no likely value in future conversations.',
             'Affinity deltas must be small and justified by evidence.',
             'This input is a batch, not the whole ledger. Do not make global absence claims from one batch.',
             'Internal tool traces are weak evidence unless they quote an explicit user-facing preference or relationship signal.',
@@ -302,7 +469,8 @@ function buildSystemPrompt() {
     return [
         'You are AILIS Memory Curator.',
         'Your job is to learn from Raw Memory Ledger evidence batches and propose structured, auditable memory patches.',
-        'You must be conservative, evidence-bound, and JSON-only.',
+        'The ledger can span many local session IDs for one person and can include noisy task requests. Session IDs are not user identities.',
+        'You must be evidence-bound and JSON-only. Preserve explicit durable user intent as candidate memory while rejecting unsupported inference.',
         'Do not write a general summary. Output only the requested JSON object.'
     ].join('\n');
 }
@@ -594,6 +762,7 @@ function applyAffinityUpdate(affinity, update, runIso) {
     affinity.familiarity = clampNumber(affinity.familiarity + update.familiarityDelta, 0, 1, 0.5);
     affinity.warmth = clampNumber(affinity.warmth + update.warmthDelta, 0, 1, 0.5);
     affinity.friction = clampNumber(affinity.friction + update.frictionDelta, 0, 1, 0.2);
+    affinity.score = deriveAffinityScore(affinity);
     affinity.repairState = update.repairState;
     affinity.relationshipStage = deriveRelationshipStage(affinity);
     affinity.updatedAt = runIso;
@@ -638,7 +807,113 @@ class AILISUserProfileCurator {
         this.affinityPath = path.join(this.rootDir, 'affinity-state.json');
         this.statePath = path.join(this.rootDir, 'profile-curation-state.json');
         this.runsPath = path.join(this.rootDir, 'profile-curation-runs.jsonl');
+        this.rebuildManifestPath = path.join(this.rootDir, 'profile-rebuild-state.json');
+        this.operationLockPath = path.join(this.rootDir, 'profile-curation.lock.json');
+        this.activeOperation = null;
         this.lastError = '';
+    }
+
+    async acquireOperationLock(operation) {
+        await fsp.mkdir(this.rootDir, { recursive: true });
+        const token = randomUUID();
+        const writeLock = async () => {
+            const handle = await fsp.open(this.operationLockPath, 'wx');
+            try {
+                await handle.writeFile(`${JSON.stringify({
+                    version: USER_PROFILE_CURATOR_VERSION,
+                    token,
+                    operation,
+                    pid: process.pid,
+                    startedAt: nowIso(),
+                    updatedAt: nowIso()
+                }, null, 2)}\n`, 'utf8');
+            } finally {
+                await handle.close();
+            }
+        };
+        try {
+            await writeLock();
+        } catch (error) {
+            if (error?.code !== 'EEXIST') {
+                throw error;
+            }
+            const existing = await readJsonFile(this.operationLockPath, null);
+            const updatedAtMs = Date.parse(existing?.updatedAt || existing?.startedAt || '');
+            const staleByTime = !Number.isFinite(updatedAtMs) || Date.now() - updatedAtMs > OPERATION_LOCK_STALE_MS;
+            const stale = staleByTime || !isProcessAlive(existing?.pid);
+            if (!stale) {
+                return {
+                    ok: false,
+                    status: 'profile_curation_already_running',
+                    activeOperation: existing || null
+                };
+            }
+            await fsp.rm(this.operationLockPath, { force: true });
+            try {
+                await writeLock();
+            } catch (retryError) {
+                if (retryError?.code !== 'EEXIST') {
+                    throw retryError;
+                }
+                return {
+                    ok: false,
+                    status: 'profile_curation_already_running',
+                    activeOperation: await readJsonFile(this.operationLockPath, null)
+                };
+            }
+        }
+        const heartbeat = setInterval(async () => {
+            try {
+                const current = await readJsonFile(this.operationLockPath, null);
+                if (current?.token !== token) {
+                    return;
+                }
+                await writeJsonFileAtomic(this.operationLockPath, {
+                    ...current,
+                    updatedAt: nowIso()
+                });
+            } catch (error) {
+                this.lastError = normalizeString(error?.message, String(error));
+            }
+        }, OPERATION_LOCK_HEARTBEAT_MS);
+        heartbeat.unref?.();
+        return { ok: true, token, operation, heartbeat };
+    }
+
+    async releaseOperationLock(lock) {
+        if (!lock?.ok) {
+            return;
+        }
+        clearInterval(lock.heartbeat);
+        const current = await readJsonFile(this.operationLockPath, null);
+        if (current?.token === lock.token) {
+            await fsp.rm(this.operationLockPath, { force: true });
+        }
+    }
+
+    async runExclusiveOperation(operation, callback) {
+        if (this.activeOperation) {
+            return {
+                ok: false,
+                status: 'profile_curation_already_running',
+                activeOperation: { ...this.activeOperation }
+            };
+        }
+        const lock = await this.acquireOperationLock(operation);
+        if (!lock.ok) {
+            return lock;
+        }
+        this.activeOperation = {
+            operation,
+            token: lock.token,
+            startedAt: nowIso()
+        };
+        try {
+            return await callback();
+        } finally {
+            this.activeOperation = null;
+            await this.releaseOperationLock(lock);
+        }
     }
 
     async loadState() {
@@ -664,7 +939,10 @@ class AILISUserProfileCurator {
     }
 
     async getState() {
-        const loaded = await this.loadState();
+        const [loaded, rebuild] = await Promise.all([
+            this.loadState(),
+            readJsonFile(this.rebuildManifestPath, null)
+        ]);
         return {
             ok: true,
             status: 'ok',
@@ -672,7 +950,8 @@ class AILISUserProfileCurator {
             state: loaded.state,
             userProfile: loaded.userProfile,
             relationshipProfile: loaded.relationshipProfile,
-            affinityState: loaded.affinityState
+            affinityState: loaded.affinityState,
+            rebuild
         };
     }
 
@@ -685,6 +964,9 @@ class AILISUserProfileCurator {
             relationshipPath: this.relationshipPath,
             affinityPath: this.affinityPath,
             statePath: this.statePath,
+            rebuildManifestPath: this.rebuildManifestPath,
+            operationLockPath: this.operationLockPath,
+            activeOperation: this.activeOperation ? { ...this.activeOperation } : null,
             hasRawMemoryLedger: Boolean(this.rawMemoryLedger),
             hasPreferenceState: Boolean(this.preferenceState),
             hasLlmClient: Boolean(this.llmClient),
@@ -739,37 +1021,54 @@ class AILISUserProfileCurator {
                 error: 'profile curator needs an LLM client'
             };
         }
-        const result = await this.llmClient({
-            messages: [
-                { role: 'system', content: buildSystemPrompt() },
-                { role: 'user', content: buildUserPrompt(promptPayload) }
-            ],
-            jsonMode: true,
-            expectJson: true,
-            outputFormat: 'json',
-            temperature: 0.1,
-            max_tokens: Number(options.maxTokens) || 3000,
-            timeoutMs: Number(options.timeoutMs) || 120000
-        });
-        if (result?.ok === false) {
-            return {
-                ok: false,
-                status: 'llm_failed',
-                error: result.error || result.message || 'profile curator LLM call failed',
-                result
-            };
-        }
-        const parsed = parseJsonFromText(result?.content || result?.text || result?.output || '');
-        if (!parsed) {
-            return {
+        const maxAttempts = Math.max(1, Math.min(Number(options.maxLlmAttempts) || 2, 3));
+        let lastFailure = null;
+        for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+            const result = await this.llmClient({
+                messages: [
+                    { role: 'system', content: buildSystemPrompt() },
+                    { role: 'user', content: buildUserPrompt(promptPayload) }
+                ],
+                jsonMode: true,
+                expectJson: true,
+                outputFormat: 'json',
+                temperature: 0.1,
+                max_tokens: Number(options.maxTokens) || 8000,
+                timeoutMs: Number(options.timeoutMs) || 120000
+            });
+            if (result?.ok === false) {
+                lastFailure = {
+                    ok: false,
+                    status: 'llm_failed',
+                    error: result.error || result.message || 'profile curator LLM call failed',
+                    attempt,
+                    result
+                };
+                if (attempt < maxAttempts && result.code === 'empty_response') {
+                    continue;
+                }
+                return lastFailure;
+            }
+            const jsonCandidates = collectLlmJsonCandidates(result);
+            const parsed = jsonCandidates.map(parseJsonFromText).find(isPlainObject) || null;
+            if (parsed) {
+                return { ok: true, parsed, result, attempt };
+            }
+            const previewSource = jsonCandidates.find((candidate) => typeof candidate === 'string') || '';
+            lastFailure = {
                 ok: false,
                 status: 'invalid_llm_json',
                 error: 'profile curator expected JSON output',
-                contentPreview: truncateText(result?.content || '', 1000),
+                contentPreview: truncateText(previewSource, 1000),
+                resultKeys: Object.keys(result || {}).sort(),
+                attempt,
                 result
             };
+            if (attempt >= maxAttempts) {
+                return lastFailure;
+            }
         }
-        return { ok: true, parsed, result };
+        return lastFailure;
     }
 
     normalizeExtraction(parsed, evidence, options = {}) {
@@ -805,6 +1104,10 @@ class AILISUserProfileCurator {
     }
 
     async runDailyCuration(options = {}) {
+        return this.runExclusiveOperation('daily_curation', () => this.runDailyCurationUnlocked(options));
+    }
+
+    async runDailyCurationUnlocked(options = {}) {
         const runIso = normalizeString(options.nowIso, nowIso());
         const runDate = todayKey(runIso);
         const force = options.force === true;
@@ -827,13 +1130,13 @@ class AILISUserProfileCurator {
         const replay = this.rawMemoryLedger.replay({
             since: state.cursor.lastProcessedIso || '',
             sinceExclusive: true,
+            afterId: state.cursor.lastProcessedEntryId || '',
             includePayload: true,
             limit: Number(options.rawLimit) || 5000,
             tail: false
         });
         const replayEntryCount = Math.max(Number(replay.count) || 0, 0);
         const entries = normalizeArray(replay.entries)
-            .filter((entry) => !state.cursor.lastProcessedIso || String(entry.iso || '') > state.cursor.lastProcessedIso)
             .sort((left, right) => String(left.iso || '').localeCompare(String(right.iso || '')));
         const totalSourceEntryCount = Math.max(replayEntryCount, entries.length);
         if (!entries.length) {
@@ -1086,6 +1389,201 @@ class AILISUserProfileCurator {
             relationshipProfile,
             affinityState
         };
+    }
+
+    async promoteStagedRebuild(manifest, stagingCurator) {
+        const staged = await stagingCurator.loadState();
+        const stagedStats = await summarizeStagedCurationRuns(stagingCurator.runsPath);
+        manifest.passCount = stagedStats.passCount;
+        manifest.processedEntryCount = stagedStats.processedEntryCount;
+        manifest.evidenceCount = stagedStats.evidenceCount;
+        manifest.profileUpdateCount = stagedStats.profileUpdateCount;
+        manifest.relationshipUpdateCount = stagedStats.relationshipUpdateCount;
+        const profileItemCount = staged.userProfile.items.length;
+        const relationshipItemCount = staged.relationshipProfile.items.length;
+        const rawEntryCount = Number(this.rawMemoryLedger?.getStatus?.().entryCount) || 0;
+        if (rawEntryCount > 0 && profileItemCount + relationshipItemCount === 0) {
+            manifest.status = 'blocked_empty_output';
+            manifest.lastError = 'Rebuild scanned Raw Memory Ledger but produced no user or relationship capsules.';
+            manifest.updatedAt = nowIso();
+            await writeJsonFileAtomic(this.rebuildManifestPath, manifest);
+            return {
+                ok: false,
+                status: manifest.status,
+                error: manifest.lastError,
+                rebuild: manifest
+            };
+        }
+
+        const backupRoot = manifest.backupRoot || path.join(this.rootDir, 'profile-rebuild-backups', manifest.id);
+        await fsp.mkdir(backupRoot, { recursive: true });
+        if (manifest.status !== 'promoting') {
+            for (const sourcePath of [this.profilePath, this.relationshipPath, this.affinityPath, this.statePath]) {
+                try {
+                    await fsp.copyFile(sourcePath, path.join(backupRoot, path.basename(sourcePath)));
+                } catch (error) {
+                    if (error?.code !== 'ENOENT') {
+                        throw error;
+                    }
+                }
+            }
+        }
+        manifest.status = 'promoting';
+        manifest.backupRoot = backupRoot;
+        manifest.updatedAt = nowIso();
+        await writeJsonFileAtomic(this.rebuildManifestPath, manifest);
+
+        await writeJsonFileAtomic(this.profilePath, staged.userProfile);
+        await writeJsonFileAtomic(this.relationshipPath, staged.relationshipProfile);
+        await writeJsonFileAtomic(this.affinityPath, staged.affinityState);
+        await writeJsonFileAtomic(this.statePath, staged.state);
+
+        manifest.status = 'completed';
+        manifest.completedAt = nowIso();
+        manifest.updatedAt = manifest.completedAt;
+        manifest.profileItemCount = profileItemCount;
+        manifest.relationshipItemCount = relationshipItemCount;
+        manifest.lastError = '';
+        await writeJsonFileAtomic(this.rebuildManifestPath, manifest);
+        await appendJsonl(this.runsPath, {
+            id: randomUUID(),
+            iso: manifest.completedAt,
+            runDate: todayKey(manifest.completedAt),
+            status: 'rebuild_completed',
+            rebuildId: manifest.id,
+            processedEntryCount: manifest.processedEntryCount,
+            evidenceCount: manifest.evidenceCount,
+            profileUpdateCount: manifest.profileUpdateCount,
+            relationshipUpdateCount: manifest.relationshipUpdateCount,
+            profileItemCount,
+            relationshipItemCount
+        });
+        this.emitGatewayEvent('memory.profile_rebuild.completed', {
+            rebuildId: manifest.id,
+            profileItemCount,
+            relationshipItemCount,
+            processedEntryCount: manifest.processedEntryCount
+        });
+        return {
+            ok: true,
+            status: 'rebuild_completed',
+            rebuild: manifest,
+            userProfile: staged.userProfile,
+            relationshipProfile: staged.relationshipProfile,
+            affinityState: staged.affinityState
+        };
+    }
+
+    async rebuildFromRawMemory(options = {}) {
+        return this.runExclusiveOperation('profile_rebuild', () => this.rebuildFromRawMemoryUnlocked(options));
+    }
+
+    async rebuildFromRawMemoryUnlocked(options = {}) {
+        if (!this.rawMemoryLedger?.replay) {
+            return { ok: false, status: 'raw_memory_ledger_not_configured' };
+        }
+        if (!this.llmClient) {
+            return { ok: false, status: 'llm_client_not_configured' };
+        }
+        const existingManifest = await readJsonFile(this.rebuildManifestPath, null);
+        if (options.restart !== true && existingManifest?.status === 'promoting' && existingManifest.stagingRoot) {
+            const interruptedStagingCurator = new AILISUserProfileCurator({
+                workspaceRoot: this.workspaceRoot,
+                rootDir: path.resolve(existingManifest.stagingRoot),
+                rawMemoryLedger: this.rawMemoryLedger,
+                preferenceState: null,
+                llmClient: this.llmClient,
+                emitGatewayEvent: (type, payload) => this.emitGatewayEvent(type, {
+                    ...payload,
+                    rebuildId: existingManifest.id
+                })
+            });
+            return this.promoteStagedRebuild(existingManifest, interruptedStagingCurator);
+        }
+        const canResume = options.restart !== true &&
+            existingManifest?.stagingRoot &&
+            ['running', 'paused', 'partial_completed', 'failed'].includes(existingManifest.status);
+        const rebuildId = canResume ? existingManifest.id : `profile-rebuild-${randomUUID()}`;
+        const stagingRoot = canResume
+            ? path.resolve(existingManifest.stagingRoot)
+            : path.join(this.rootDir, 'profile-rebuilds', rebuildId);
+        const startedAt = canResume ? existingManifest.startedAt : nowIso();
+        const manifest = {
+            version: USER_PROFILE_CURATOR_VERSION,
+            id: rebuildId,
+            status: 'running',
+            stagingRoot,
+            startedAt,
+            updatedAt: nowIso(),
+            passCount: canResume ? Number(existingManifest?.passCount) || 0 : 0,
+            processedEntryCount: canResume ? Number(existingManifest?.processedEntryCount) || 0 : 0,
+            evidenceCount: canResume ? Number(existingManifest?.evidenceCount) || 0 : 0,
+            profileUpdateCount: canResume ? Number(existingManifest?.profileUpdateCount) || 0 : 0,
+            relationshipUpdateCount: canResume ? Number(existingManifest?.relationshipUpdateCount) || 0 : 0,
+            lastError: ''
+        };
+        await writeJsonFileAtomic(this.rebuildManifestPath, manifest);
+
+        const stagingCurator = new AILISUserProfileCurator({
+            workspaceRoot: this.workspaceRoot,
+            rootDir: stagingRoot,
+            rawMemoryLedger: this.rawMemoryLedger,
+            preferenceState: null,
+            llmClient: this.llmClient,
+            emitGatewayEvent: (type, payload) => this.emitGatewayEvent(type, {
+                ...payload,
+                rebuildId
+            })
+        });
+        const maxPasses = Math.max(1, Math.min(Number(options.maxPasses) || 1, 20));
+        let latestResult = null;
+        for (let pass = 0; pass < maxPasses; pass += 1) {
+            try {
+                latestResult = await stagingCurator.runDailyCuration({
+                    ...options,
+                    force: true,
+                    nowIso: nowIso()
+                });
+            } catch (error) {
+                latestResult = {
+                    ok: false,
+                    status: 'rebuild_pass_failed',
+                    error: error?.message || String(error)
+                };
+            }
+            manifest.passCount += 1;
+            manifest.processedEntryCount += Number(latestResult?.run?.processedEntryCount) || 0;
+            manifest.evidenceCount += Number(latestResult?.run?.evidenceCount) || 0;
+            manifest.profileUpdateCount += Number(latestResult?.run?.profileUpdateCount) || 0;
+            manifest.relationshipUpdateCount += Number(latestResult?.run?.relationshipUpdateCount) || 0;
+            manifest.updatedAt = nowIso();
+            manifest.status = latestResult?.ok === false
+                ? 'paused'
+                : normalizeString(latestResult?.status, 'partial_completed');
+            manifest.lastError = latestResult?.ok === false
+                ? normalizeString(latestResult?.error || latestResult?.status)
+                : '';
+            await writeJsonFileAtomic(this.rebuildManifestPath, manifest);
+            if (latestResult?.ok === false || ['completed', 'no_new_raw_memory'].includes(latestResult?.status)) {
+                break;
+            }
+        }
+
+        if (!latestResult || latestResult.ok === false) {
+            return {
+                ok: false,
+                status: 'rebuild_paused',
+                error: manifest.lastError,
+                rebuild: manifest
+            };
+        }
+        if (!['completed', 'no_new_raw_memory'].includes(latestResult.status)) {
+            manifest.status = 'partial_completed';
+            await writeJsonFileAtomic(this.rebuildManifestPath, manifest);
+            return { ok: true, status: 'rebuild_partial', rebuild: manifest };
+        }
+
+        return this.promoteStagedRebuild(manifest, stagingCurator);
     }
 }
 

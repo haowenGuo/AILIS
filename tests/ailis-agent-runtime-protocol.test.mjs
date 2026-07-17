@@ -184,6 +184,11 @@ test('ToolContext keeps approval and sandbox policy in one reusable object', () 
         approved: true,
         allowOutsideWorkspace: true,
         permissionProfile: 'full-access',
+        answerOnly: true,
+        exactAnswerMode: true,
+        executionProfile: { kind: 'exact_answer_eval' },
+        evaluationTaskId: 'gaia-task-1',
+        evaluationName: 'gaia_desktop_real',
         timeoutMs: 1234
     }, 'F:/fallback', 'session_1');
 
@@ -197,6 +202,11 @@ test('ToolContext keeps approval and sandbox policy in one reusable object', () 
     assert.equal(context.approved, true);
     assert.equal(context.allowOutsideWorkspace, true);
     assert.equal(context.permissionProfile, 'full-access');
+    assert.equal(context.answerOnly, true);
+    assert.equal(context.exactAnswerMode, true);
+    assert.deepEqual(context.executionProfile, { kind: 'exact_answer_eval' });
+    assert.equal(context.evaluationTaskId, 'gaia-task-1');
+    assert.equal(context.evaluationName, 'gaia_desktop_real');
     assert.equal(context.timeoutMs, 1234);
 });
 

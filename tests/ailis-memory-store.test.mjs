@@ -50,9 +50,12 @@ test('AILIS memory runtime persists events and redacted secret index without leg
         sessionId: 'memory-test',
         message: '继续做记忆系统'
     });
-    assert.match(context, /AILIS Persona 记忆快照/);
-    assert.match(context, /暂无已抽取的稳定画像/);
-    assert.doesNotMatch(context, /doubao-api-key/);
+    assert.match(context, /<memory_context>/);
+    assert.match(context, /## Persona/);
+    assert.match(context, /## User/);
+    assert.match(context, /## Relevant Memories/);
+    assert.match(context, /不喜欢过度工具化 UI/);
+    assert.match(context, /doubao-api-key/);
     assert.equal(context.includes('test-secret-00000000-0000-4000-8000-000000000000'), false);
 
     const taskContext = memory.compileContext({
@@ -61,6 +64,8 @@ test('AILIS memory runtime persists events and redacted secret index without leg
         contextMode: 'task_agent'
     });
     assert.match(taskContext, /doubao-api-key/);
+    assert.doesNotMatch(taskContext, /## Persona/);
+    assert.doesNotMatch(taskContext, /## Relationship/);
 
     const reloaded = new AILISMemoryRuntime({
         rootDir: path.join(rootDir, 'memory'),
@@ -70,7 +75,49 @@ test('AILIS memory runtime persists events and redacted secret index without leg
     assert.ok((await fs.readFile(path.join(rootDir, 'memory', 'events.jsonl'), 'utf8')).includes('memory-test'));
 });
 
-test('AILIS memory prompt no longer uses legacy affinity score when curated relation state is absent', async () => {
+test('AILIS memory v2 backs up and resets legacy auto-learned core blocks without deleting events or secrets', async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-memory-v2-migration-'));
+    const memoryRoot = path.join(rootDir, 'memory');
+    await fs.mkdir(memoryRoot, { recursive: true });
+    await fs.writeFile(path.join(memoryRoot, 'memory-state.json'), JSON.stringify({
+        version: 1,
+        createdAt: '2026-07-01T00:00:00.000Z',
+        updatedAt: '2026-07-08T00:00:00.000Z',
+        blocks: {
+            persona: { key: 'persona', label: 'Persona', kind: 'core', value: '- preserved persona' },
+            user: { key: 'user', label: 'User', kind: 'core', value: '- legacy learned chat fragment' },
+            relationship: { key: 'relationship', label: 'Relationship', kind: 'core', value: '- legacy relationship transcript' },
+            project: { key: 'project', label: 'Project', kind: 'project', value: '- legacy non-project conversation' }
+        },
+        events: [{ id: 'legacy-event', ts: '2026-07-08T00:00:00.000Z', sessionId: 'main', userText: 'keep event' }],
+        reflections: [],
+        affinity: { score: 65, events: [] },
+        secrets: [{
+            id: 'secret-1',
+            name: 'saved-secret',
+            kind: 'generic',
+            protection: 'local-file-base64',
+            valueBase64: Buffer.from('secret-value').toString('base64')
+        }],
+        stats: { turnCount: 1 }
+    }, null, 2));
+
+    const memory = new AILISMemoryRuntime({ rootDir: memoryRoot, workspaceRoot: rootDir });
+    const snapshot = memory.getSnapshot({ includeEvents: true });
+    const blocks = Object.fromEntries(snapshot.blocks.map((block) => [block.key, block.value]));
+
+    assert.equal(memory.getStatus().version, 'v2');
+    assert.match(blocks.persona, /preserved persona/);
+    assert.doesNotMatch(blocks.user, /legacy learned chat fragment/);
+    assert.doesNotMatch(blocks.relationship, /legacy relationship transcript/);
+    assert.doesNotMatch(blocks.project, /legacy non-project conversation/);
+    assert.equal(snapshot.recentEvents[0].id, 'legacy-event');
+    assert.equal(memory.getSecret('saved-secret').secret.value, 'secret-value');
+    const backups = await fs.readdir(path.join(memoryRoot, 'backups'));
+    assert.ok(backups.some((name) => /^memory-state\.v1\./.test(name)));
+});
+
+test('AILIS affinity reset updates the curated relationship state used by model context', async () => {
     const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-affinity-'));
     const memory = new AILISMemoryRuntime({
         rootDir: path.join(rootDir, 'memory'),
@@ -79,11 +126,12 @@ test('AILIS memory prompt no longer uses legacy affinity score when curated rela
 
     memory.resetAffinity(80);
     const context = memory.compileContext({ sessionId: 'affinity-test', message: '陪我聊会儿' });
-    assert.match(context, /关系状态（Raw Memory Ledger 抽取）/);
-    assert.match(context, /暂无 Raw Memory Ledger 抽取出的关系状态/);
-    assert.equal(context.includes('80/100'), false);
-    assert.equal(context.includes('允许明显亲密、主动、轻微撒娇'), false);
+    assert.match(context, /## Relationship/);
+    assert.match(context, /综合好感度：80\/100/);
+    assert.match(context, /关系阶段：close/);
     assert.match(context, /不影响安全、隐私、事实准确性、工具审批/);
+    assert.equal(memory.getStatus().affinityScore, 80);
+    assert.equal(memory.getStatus().affinitySource, 'curated_capsule');
 });
 
 test('AILIS memory does not promote explicit self-evolution text through legacy regex rules', async () => {
@@ -111,7 +159,7 @@ test('AILIS memory does not promote explicit self-evolution text through legacy 
     assert.ok(snapshot.recentEvents.some((event) => event.id === recorded.event.id));
 });
 
-test('AILIS Persona memory excludes raw old turns and clears memory while preserving secrets', async () => {
+test('AILIS Persona memory retrieves bounded relevant turns and clears memory while preserving secrets', async () => {
     const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-memory-clear-'));
     const memory = new AILISMemoryRuntime({
         rootDir: path.join(rootDir, 'memory'),
@@ -145,9 +193,9 @@ test('AILIS Persona memory excludes raw old turns and clears memory while preser
         sessionId: 'large-context-test',
         message: 'memoryanchor'
     });
-    assert.equal(searchCalled, false);
-    assert.ok(context.length < 5000);
-    assert.doesNotMatch(context, /memoryanchor|相关近期记忆/);
+    assert.equal(searchCalled, true);
+    assert.ok(context.length < 20000);
+    assert.match(context, /memoryanchor|## Relevant Memories/);
 
     const cleared = memory.clearMemory();
     assert.equal(cleared.ok, true);
@@ -156,9 +204,14 @@ test('AILIS Persona memory excludes raw old turns and clears memory while preser
     assert.equal((await fs.readFile(path.join(rootDir, 'memory', 'events.jsonl'), 'utf8')), '');
     assert.equal(memory.searchMemory('memoryanchor').events.length, 0);
     assert.ok(memory.listSecrets().secrets.some((secret) => secret.name === 'local-test-token'));
+    const clearedUserProfile = JSON.parse(await fs.readFile(path.join(rootDir, 'memory', 'user-profile.json'), 'utf8'));
+    const clearedRelationshipProfile = JSON.parse(await fs.readFile(path.join(rootDir, 'memory', 'relationship-profile.json'), 'utf8'));
+    assert.equal(clearedUserProfile.items.length, 0);
+    assert.equal(clearedRelationshipProfile.items.length, 0);
+    assert.equal(memory.getStatus().affinityScore, 50);
 });
 
-test('AILIS Persona context never auto-retrieves raw conversation history', async () => {
+test('AILIS Persona retrieval uses recent visible turns while keeping the current message once', async () => {
     const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-memory-query-dedupe-'));
     const memory = new AILISMemoryRuntime({
         rootDir: path.join(rootDir, 'memory'),
@@ -181,10 +234,56 @@ test('AILIS Persona context never auto-retrieves raw conversation history', asyn
         ]
     });
 
-    assert.equal(observedQuery, '');
+    assert.match(observedQuery, /user: 你好/);
+    assert.match(observedQuery, /assistant: 你好，我在。/);
+    assert.equal(observedQuery.split('Solve this long GAIA task with a verifier.').length - 1, 1);
 });
 
-test('AILIS memory prompt uses curated raw-ledger profile instead of legacy user relationship affinity blocks', async () => {
+test('AILIS restores recent same-session memory after runtime restart', async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-memory-restart-'));
+    const memoryRoot = path.join(rootDir, 'memory');
+    const sessionId = 'restart-session';
+    const firstRuntime = new AILISMemoryRuntime({
+        rootDir: memoryRoot,
+        workspaceRoot: rootDir
+    });
+
+    firstRuntime.recordTurn({
+        sessionId,
+        userMessage: '记住我们刚才决定先把 Persona Memory Runtime 的读取链路补完整。',
+        assistantMessage: '好的，下一轮继续检查 Context Compiler。',
+        source: 'test'
+    });
+    firstRuntime.recordTurn({
+        sessionId: 'another-session',
+        userMessage: '这是另一个会话的内容，不应该进入当前会话最近记录。',
+        assistantMessage: '另一个会话。',
+        source: 'test'
+    });
+
+    const restartedRuntime = new AILISMemoryRuntime({
+        rootDir: memoryRoot,
+        workspaceRoot: rootDir
+    });
+    const context = restartedRuntime.compileContext({
+        sessionId,
+        message: '继续',
+        maxChars: 12000
+    });
+    const snapshot = restartedRuntime.getSnapshot({
+        includeEvents: true,
+        sessionId,
+        eventLimit: 10
+    });
+
+    assert.match(context, /Persona Memory Runtime 的读取链路/);
+    assert.match(context, /下一轮继续检查 Context Compiler/);
+    assert.doesNotMatch(context, /这是另一个会话的内容/);
+    assert.equal(snapshot.recentEvents.length, 1);
+    assert.equal(snapshot.recentEvents[0].sessionId, sessionId);
+});
+
+test('AILIS memory prompt merges editable core blocks with curated raw-ledger capsules', async () => {
     const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-curated-prompt-'));
     const memoryRoot = path.join(rootDir, 'memory');
     const memory = new AILISMemoryRuntime({
@@ -192,8 +291,8 @@ test('AILIS memory prompt uses curated raw-ledger profile instead of legacy user
         workspaceRoot: rootDir
     });
 
-    memory.updateBlock('user', 'OLD USER BLOCK SHOULD NOT BE IN PROMPT');
-    memory.updateBlock('relationship', 'OLD RELATIONSHIP BLOCK SHOULD NOT BE IN PROMPT');
+    memory.updateBlock('user', 'MANUAL USER CORE BLOCK');
+    memory.updateBlock('relationship', 'MANUAL RELATIONSHIP CORE BLOCK');
     memory.updateBlock('affinity', 'OLD AFFINITY BLOCK SHOULD NOT BE IN PROMPT');
 
     await fs.writeFile(path.join(memoryRoot, 'user-profile.json'), JSON.stringify({
@@ -207,6 +306,15 @@ test('AILIS memory prompt uses curated raw-ledger profile instead of legacy user
                 stability: 'stable',
                 status: 'active',
                 evidenceIds: ['raw-direct-style']
+            },
+            {
+                id: 'profile-project-runtime',
+                category: 'project_memory',
+                claim: '当前项目采用结构化 ContextCompiler。',
+                confidence: 0.93,
+                stability: 'stable',
+                status: 'active',
+                evidenceIds: ['raw-project-runtime']
             }
         ]
     }, null, 2));
@@ -249,13 +357,110 @@ test('AILIS memory prompt uses curated raw-ledger profile instead of legacy user
         sessionId: 'curated-prompt-test',
         message: '继续'
     });
-    assert.match(context, /用户画像（Raw Memory Ledger 抽取）/);
+    assert.match(context, /## User/);
+    assert.match(context, /MANUAL USER CORE BLOCK/);
     assert.match(context, /用户希望 AILIS 回答直接、具体，并基于证据/);
-    assert.match(context, /关系画像（Raw Memory Ledger 抽取）/);
+    assert.match(context, /## Relationship/);
+    assert.match(context, /MANUAL RELATIONSHIP CORE BLOCK/);
     assert.match(context, /先解释边界和风险/);
     assert.match(context, /trust=0\.52/);
     assert.match(context, /repairState|修复状态：recovering/);
-    assert.equal(context.includes('OLD USER BLOCK SHOULD NOT BE IN PROMPT'), false);
-    assert.equal(context.includes('OLD RELATIONSHIP BLOCK SHOULD NOT BE IN PROMPT'), false);
     assert.equal(context.includes('OLD AFFINITY BLOCK SHOULD NOT BE IN PROMPT'), false);
+    const sources = memory.getContextSources({ message: '继续' });
+    assert.match(sources.projectText, /结构化 ContextCompiler/);
+    assert.doesNotMatch(sources.userText, /结构化 ContextCompiler/);
+    const snapshot = memory.getSnapshot({ includeEvents: false });
+    assert.match(snapshot.blocks.find((block) => block.key === 'user').value, /用户希望 AILIS 回答直接/);
+    assert.match(snapshot.blocks.find((block) => block.key === 'relationship').value, /先解释边界和风险/);
+    assert.equal(snapshot.status.affinitySource, 'curated_capsule');
+});
+
+test('AILIS keeps relationship_tone in Persona relationship context and out of TaskAgent user context', async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-memory-task-isolation-'));
+    const memoryRoot = path.join(rootDir, 'memory');
+    const memory = new AILISMemoryRuntime({ rootDir: memoryRoot, workspaceRoot: rootDir });
+    await fs.writeFile(path.join(memoryRoot, 'user-profile.json'), JSON.stringify({
+        version: 1,
+        items: [
+            {
+                id: 'profile-work-style',
+                category: 'work_style',
+                claim: '用户希望复杂改动先核对真实执行链路。',
+                confidence: 0.95,
+                stability: 'stable',
+                status: 'active',
+                evidenceIds: ['raw-work']
+            },
+            {
+                id: 'profile-relationship-tone',
+                category: 'relationship_tone',
+                claim: '用户采用伴侣式称呼。',
+                confidence: 0.9,
+                stability: 'stable',
+                status: 'active',
+                evidenceIds: ['raw-relationship']
+            }
+        ]
+    }, null, 2));
+    await fs.writeFile(path.join(memoryRoot, 'relationship-profile.json'), JSON.stringify({
+        version: 1,
+        items: [{
+            id: 'relationship-one',
+            claim: '用户采用伴侣式称呼。',
+            confidence: 0.9,
+            stability: 'stable',
+            status: 'active',
+            evidenceIds: ['raw-relationship']
+        }]
+    }, null, 2));
+    await fs.writeFile(path.join(memoryRoot, 'profile-curation-state.json'), JSON.stringify({
+        version: 1,
+        cursor: { lastProcessedIso: '2026-07-17T00:00:00.000Z', lastProcessedEntryId: 'raw-relationship' }
+    }, null, 2));
+
+    const personaSources = memory.getContextSources({ message: '继续', contextMode: 'persona' });
+    const taskSources = memory.getContextSources({ message: '继续', contextMode: 'task_agent' });
+
+    assert.match(personaSources.userText, /真实执行链路/);
+    assert.doesNotMatch(personaSources.userText, /伴侣式称呼/);
+    assert.match(personaSources.relationshipText, /伴侣式称呼/);
+    assert.match(taskSources.userText, /真实执行链路/);
+    assert.doesNotMatch(taskSources.userText, /伴侣式称呼/);
+    assert.equal(taskSources.relationshipText, '');
+});
+
+test('AILIS memory context reads curated capsule JSON files with a UTF-8 BOM', async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-memory-curated-bom-'));
+    const memoryRoot = path.join(rootDir, 'memory');
+    const memory = new AILISMemoryRuntime({ rootDir: memoryRoot, workspaceRoot: rootDir });
+    const writeBomJson = (name, value) => fs.writeFile(
+        path.join(memoryRoot, name),
+        `\uFEFF${JSON.stringify(value)}`,
+        'utf8'
+    );
+    await Promise.all([
+        writeBomJson('profile-curation-state.json', {
+            version: 1,
+            cursor: { lastProcessedIso: '2026-07-17T02:00:00.000Z' }
+        }),
+        writeBomJson('user-profile.json', {
+            version: 1,
+            items: [{
+                id: 'profile-bom',
+                category: 'work_style',
+                claim: 'BOM capsule content must remain model-visible.',
+                confidence: 0.9,
+                stability: 'stable'
+            }]
+        }),
+        writeBomJson('relationship-profile.json', { version: 1, items: [] }),
+        writeBomJson('affinity-state.json', { version: 1, trust: 0.5 })
+    ]);
+
+    const context = memory.compileContext({
+        sessionId: 'bom-test',
+        message: 'check restored memory',
+        contextMode: 'persona'
+    });
+    assert.match(context, /BOM capsule content must remain model-visible/);
 });

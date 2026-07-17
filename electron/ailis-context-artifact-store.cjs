@@ -14,6 +14,19 @@ const DEFAULT_GRID_COLS = 40;
 const CONTEXT_ARTIFACT_TOOL_ID = 'artifact_query';
 const CONTEXT_ARTIFACT_COMPUTE_TOOL_ID = 'artifact_compute';
 
+function buildContextArtifactHandle(record = {}) {
+    const artifactId = normalizeString(record.id || record.artifactId || record.artifact_id);
+    if (!artifactId) {
+        return null;
+    }
+    return {
+        schema: 'ailis.artifact_handle.v1',
+        owner: 'context_artifact_store',
+        tool: CONTEXT_ARTIFACT_TOOL_ID,
+        artifactId
+    };
+}
+
 function normalizeString(value, fallback = '') {
     if (typeof value !== 'string') {
         return fallback;
@@ -1657,6 +1670,7 @@ class AILISContextArtifactStore {
                 ...runtimeEnvelope.queryHints
             ])
         };
+        record.handle = buildContextArtifactHandle(record);
         const prior = await this.readIndex();
         const next = [record, ...prior.filter((entry) => entry.id !== record.id && path.resolve(entry.payloadPath || '') !== path.resolve(payloadPath))];
         await this.writeIndex(next);
@@ -1823,7 +1837,8 @@ class AILISContextArtifactStore {
                 createdAt: entry.createdAt,
                 summary: entry.summary,
                 payloadBytes: entry.payloadBytes,
-                queryHints: entry.queryHints
+                queryHints: entry.queryHints,
+                artifactHandle: entry.handle || buildContextArtifactHandle(entry)
             }));
             return createTextResult(JSON.stringify({
                 status: 'completed',
@@ -1837,9 +1852,31 @@ class AILISContextArtifactStore {
             }, { artifacts });
         }
 
-        const artifactId = normalizeString(args.artifactId || args.artifact_id || args.id);
+        const handle = args.artifactHandle || args.artifact_handle || args.handle;
+        const handleOwner = handle && typeof handle === 'object'
+            ? normalizeString(handle.owner || handle.tool)
+            : '';
+        if (handleOwner && !['context_artifact_store', CONTEXT_ARTIFACT_TOOL_ID].includes(handleOwner)) {
+            return createErrorResult('artifact_owner_mismatch', `Artifact handle belongs to ${handleOwner}, not artifact_query.`, {
+                action,
+                artifactHandle: handle,
+                requiredTool: handle.tool || 'artifact_tools',
+                recoveryHint: 'Use the tool named by artifactHandle.tool with the same handle.'
+            });
+        }
+        const artifactId = normalizeString(
+            args.artifactId || args.artifact_id || args.id || handle?.artifactId || handle?.artifact_id
+        );
         if (!artifactId) {
             return createErrorResult('missing_artifact_id', 'artifact_query requires artifactId/id for this action.', { action });
+        }
+        if (/^art_/i.test(artifactId)) {
+            return createErrorResult('artifact_owner_mismatch', `${artifactId} is an artifact_tools id, not a managed context artifact id.`, {
+                action,
+                artifactId,
+                requiredTool: 'artifact_tools',
+                recoveryHint: 'Continue with artifact_tools and the sessionId returned by open_session.'
+            });
         }
         const record = await this.getRecord(artifactId);
         if (!record) {

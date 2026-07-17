@@ -60,6 +60,9 @@ function parseArgs(argv = process.argv.slice(2)) {
         debugRounds: 1,
         planOnly: false,
         resume: true,
+        codexModelBridge: parseBoolEnv(process.env.AILIS_EVAL_CODEX_MODEL_BRIDGE),
+        codexModel: normalizeText(process.env.AILIS_CODEX_MODEL, 'gpt-5.5'),
+        codexReasoningEffort: normalizeText(process.env.AILIS_CODEX_REASONING_EFFORT, 'medium'),
         costInputPerMillion: Number(process.env.AILIS_EVAL_INPUT_USD_PER_1M || 0),
         costOutputPerMillion: Number(process.env.AILIS_EVAL_OUTPUT_USD_PER_1M || 0)
     };
@@ -97,6 +100,9 @@ function parseArgs(argv = process.argv.slice(2)) {
         else if (token === '--plan-only') args.planOnly = true;
         else if (token === '--resume') args.resume = true;
         else if (token === '--no-resume') args.resume = false;
+        else if (token === '--codex-model-bridge') args.codexModelBridge = true;
+        else if (token === '--codex-model') args.codexModel = normalizeText(next(), args.codexModel);
+        else if (token === '--codex-reasoning-effort') args.codexReasoningEffort = normalizeText(next(), args.codexReasoningEffort);
         else if (token === '--cost-input-per-1m') args.costInputPerMillion = Number(next()) || 0;
         else if (token === '--cost-output-per-1m') args.costOutputPerMillion = Number(next()) || 0;
     }
@@ -167,6 +173,23 @@ function loadDesktopStateSettings(args) {
         } catch {}
     }
     const mcpConfigPath = mcpCandidates.find((candidate) => fsSync.existsSync(candidate)) || '';
+    if (args.codexModelBridge) {
+        process.env.AILIS_CODEX_REASONING_EFFORT = args.codexReasoningEffort;
+        return {
+            statePath,
+            mcpConfigPath,
+            llmSettings: {
+                provider: 'codex-model-bridge',
+                baseUrl: 'codex://chatgpt-oauth',
+                model: args.codexModel,
+                apiKey: '',
+                authMode: 'chatgpt_oauth',
+                reasoningEffort: args.codexReasoningEffort,
+                temperature: args.temperature,
+                timeoutMs: args.llmTimeoutMs
+            }
+        };
+    }
     const provider = normalizeText(
         preferences.llmProvider ||
             process.env.AILIS_AGENT_LLM_PROVIDER ||
@@ -213,6 +236,8 @@ function redactLlmSettings(settings = {}) {
         provider: settings.provider || '',
         baseUrl: settings.baseUrl || '',
         model: settings.model || '',
+        authMode: settings.authMode || (settings.apiKey ? 'api_key' : ''),
+        reasoningEffort: settings.reasoningEffort || '',
         temperature: settings.temperature,
         timeoutMs: settings.timeoutMs,
         apiKey: settings.apiKey ? `__REDACTED_${String(settings.apiKey).length}__` : ''
@@ -327,6 +352,9 @@ function buildDesktopRealPayload({ args, task, llmSettings }) {
         attachments,
         agentLoop: 'llm',
         planner: 'llm',
+        answerOnly: true,
+        exactAnswerMode: true,
+        executionProfile: { kind: 'exact_answer_eval', answerOnly: true },
         maxAgentSteps: args.maxAgentSteps,
         maxSteps: args.maxAgentSteps,
         llmSettings,
@@ -337,6 +365,11 @@ function buildDesktopRealPayload({ args, task, llmSettings }) {
             workspace: args.workspaceRoot,
             agentLoop: 'llm',
             planner: 'llm',
+            answerOnly: true,
+            exactAnswerMode: true,
+            executionProfile: { kind: 'exact_answer_eval', answerOnly: true },
+            evaluationTaskId: task.task_id,
+            evaluationName: 'gaia_desktop_real',
             maxAgentSteps: args.maxAgentSteps,
             llmSettings,
             directToolExecutor: args.directToolExecutor,
@@ -482,6 +515,16 @@ function normalizeAnswerForScore(value = '') {
         .toLowerCase();
 }
 
+function normalizeLexicalAnswerForScore(value = '') {
+    return normalizeAnswerForScore(value)
+        .normalize('NFKD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/&/g, ' and ')
+        .replace(/[\p{P}\p{S}_]+/gu, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
 function parseNumber(value = '') {
     const normalized = normalizeAnswerForScore(value).replace(/,/g, '');
     if (!/^[+-]?(?:\d+\.?\d*|\.\d+)$/.test(normalized)) {
@@ -521,6 +564,16 @@ function answersEquivalent(candidate = '', gold = '') {
     const rightList = splitListAnswer(right);
     if (leftList.length >= 2 && rightList.length >= 2 && leftList.length === rightList.length) {
         return leftList.every((item, index) => item === rightList[index]);
+    }
+    const lexicalLeft = normalizeLexicalAnswerForScore(left);
+    const lexicalRight = normalizeLexicalAnswerForScore(right);
+    if (
+        lexicalLeft &&
+        lexicalRight &&
+        lexicalRight.replace(/\s+/g, '').length >= 4 &&
+        lexicalLeft === lexicalRight
+    ) {
+        return true;
     }
     return false;
 }
@@ -683,6 +736,31 @@ function extractQuestionAwareAnswerCandidatesFromVisibleText(text = '', question
     return candidates;
 }
 
+function extractScaledUnitAnswerCandidatesFromVisibleText(text = '', question = '') {
+    if (!getQuestionNumericScale(question)) {
+        return [];
+    }
+    const candidates = [];
+    const patterns = [
+        /(?:rounded|rounding|nearest)[^:\n\r]{0,120}[:=]\s*(?:\*\*)?\s*([+-]?\d[\d,]*(?:\.\d+)?)/i,
+        /(?:rounded|rounding)\D{0,80}\bto\s*(?:\*\*)?\s*([+-]?\d[\d,]*(?:\.\d+)?)(?:\s+[A-Za-z][A-Za-z\s-]{0,40})?\s*$/i,
+        /(?:四舍五入|取整|约为)[^：:\n\r]{0,80}[：:]\s*(?:\*\*)?\s*([+-]?\d[\d,]*(?:\.\d+)?)/i
+    ];
+    for (const line of String(text || '').split(/\r?\n/)) {
+        const cleaned = cleanCandidateLine(line);
+        if (!cleaned) {
+            continue;
+        }
+        for (const pattern of patterns) {
+            const match = cleaned.match(pattern);
+            if (match) {
+                pushAnswerCandidate(candidates, 'visible_scaled_result', match[1], 80);
+            }
+        }
+    }
+    return candidates;
+}
+
 function looksLikeStructuredAnswerShape(value = '') {
     const text = cleanCandidateLine(value);
     if (!text) {
@@ -700,6 +778,9 @@ function looksLikeStructuredAnswerShape(value = '') {
 function extractStructuredAnswerCandidates(response = {}) {
     const direct = [
         ['exact_answer_submission', response.exactAnswerSubmission?.answer || response.exact_answer_submission?.answer],
+        ['exact_answer', response.exactAnswer || response.exact_answer],
+        ['task_result_exact_answer', response.taskResult?.exact_answer || response.task_result?.exact_answer],
+        ['handoff_exact_answer', response.taskRunHandoff?.exactAnswer || response.task_run_handoff?.exact_answer],
         ['final_answer', response.final_answer],
         ['finalAnswer', response.finalAnswer],
         ['answer', response.answer]
@@ -715,7 +796,8 @@ function scoreVisibleAnswer({ response = {}, gold = '', question = '' } = {}) {
     const candidates = [
         ...extractStructuredAnswerCandidates(response),
         ...extractQuestionAwareAnswerCandidatesFromVisibleText(displayText, question),
-        ...extractAnswerCandidatesFromVisibleText(displayText)
+        ...extractAnswerCandidatesFromVisibleText(displayText),
+        ...extractScaledUnitAnswerCandidatesFromVisibleText(displayText, question)
     ];
     for (const candidate of candidates) {
         if (answersEquivalentForQuestion(candidate.answer, gold, question)) {
@@ -1124,12 +1206,31 @@ async function startGateway(args, runtimeSettings) {
         projectRoot: PROJECT_ROOT,
         auditDir: args.auditDir
     };
+    configureResearchMcpLlmEnvironment(runtimeSettings.llmSettings);
     if (runtimeSettings.mcpConfigPath) {
         options.mcpConfigPath = runtimeSettings.mcpConfigPath;
     }
     const gateway = new AILISGateway(options);
     const status = await gateway.start();
     return { gateway, baseUrl: status.url };
+}
+
+function configureResearchMcpLlmEnvironment(llmSettings = {}) {
+    const assignments = {
+        AILIS_TOOL_LLM_PROVIDER: llmSettings.provider,
+        AILIS_TOOL_LLM_BASE_URL: llmSettings.baseUrl,
+        AILIS_TOOL_LLM_MODEL: llmSettings.model,
+        AILIS_TOOL_LLM_API_KEY: llmSettings.apiKey,
+        AILIS_TOOL_LLM_REASONING_EFFORT: llmSettings.reasoningEffort
+    };
+    for (const [name, value] of Object.entries(assignments)) {
+        const normalized = normalizeText(value);
+        if (normalized) {
+            process.env[name] = normalized;
+        } else {
+            delete process.env[name];
+        }
+    }
 }
 
 async function withTimeout(promise, timeoutMs, timeoutValue) {
@@ -1156,7 +1257,12 @@ async function main() {
 
     const tasks = await loadTasks(args);
     const runtimeSettings = loadDesktopStateSettings(args);
-    if (!runtimeSettings.llmSettings.baseUrl || !runtimeSettings.llmSettings.model || !runtimeSettings.llmSettings.apiKey) {
+    const providerNeedsApiKey = !['codex-model-bridge', 'vllm', 'ollama'].includes(
+        normalizeText(runtimeSettings.llmSettings.provider).toLowerCase()
+    );
+    if (!runtimeSettings.llmSettings.baseUrl ||
+        !runtimeSettings.llmSettings.model ||
+        (providerNeedsApiKey && !runtimeSettings.llmSettings.apiKey)) {
         throw new Error('Missing desktop LLM settings. Configure AILIS desktop-state.json or AILIS_AGENT_LLM_* env vars.');
     }
     const plan = {
@@ -1173,6 +1279,7 @@ async function main() {
             agentRole: args.agentRole,
             startGateway: args.startGateway,
             workspaceMode: args.workspaceMode,
+            codexModelBridge: args.codexModelBridge,
             subagentSettleTimeoutMs: args.subagentSettleTimeoutMs
         },
         workspaceRoot: args.workspaceRoot,
@@ -1314,6 +1421,7 @@ async function main() {
 export {
     answersEquivalent,
     answersEquivalentForQuestion,
+    configureResearchMcpLlmEnvironment,
     isIncompleteStatus,
     normalizeAnswerForScore,
     scoreVisibleAnswer,

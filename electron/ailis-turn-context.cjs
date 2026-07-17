@@ -67,7 +67,14 @@ function buildToolContext(requestContext = {}, fallbackWorkspace = '', sessionId
         'attachments',
         'fileAttachments',
         'parentUserGoal',
-        'parent_user_goal'
+        'parent_user_goal',
+        'answerOnly',
+        'exactAnswer',
+        'exactAnswerMode',
+        'exact_answer_mode',
+        'executionProfile',
+        'evaluationTaskId',
+        'evaluationName'
     ]) {
         if (requestContext[key] !== undefined) {
             context[key] = requestContext[key];

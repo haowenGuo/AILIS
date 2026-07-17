@@ -120,7 +120,7 @@ AILIS includes an EMBER-Harness integration for stage-level safety control insid
 - Tool results before they are added back into the model context.
 - Final output before it is shown to the user.
 
-The harness records auditable check events with snapshot hashes, approximate token counts, stage names, decisions, and rollback targets. It supports observe and enforce modes through `AILIS_EMBER_HARNESS_MODE=observe|enforce`, can be disabled with `AILIS_EMBER_HARNESS=0`, and exposes runtime status at `/ember-harness/status`. Risk evaluation is pluggable, so deployments can connect their own bias, safety, or policy evaluator while keeping the same execution boundaries.
+The harness records auditable check events with snapshot hashes, approximate token counts, stage names, decisions, and rollback targets. The control panel exposes Off, Observe, and Enforce modes; Off neither loads nor downloads a safety model. The default evaluator runs a quantized multilingual DistilBERT ONNX classifier locally without a generative LLM. Its first enable downloads about 136 MB into the persistent AILIS state directory. This lightweight profile targets overt toxicity and hate risk, not subtle implicit-bias or stereotype reasoning. Deployments can override it through `AILIS_EMBER_HARNESS`, `AILIS_EMBER_HARNESS_MODE`, `AILIS_EMBER_SAFETY_MODEL`, and threshold environment variables. Runtime status remains available at `/ember-harness/status`.
 
 ## Repository Layout
 

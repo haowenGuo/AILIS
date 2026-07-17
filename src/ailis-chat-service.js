@@ -74,9 +74,8 @@ function getLatestUserEntry(messageHistory = []) {
 }
 
 function compactConversationTurns(messageHistory = [], limit = 10) {
-    return messageHistory
+    const turns = messageHistory
         .filter((message) => ['user', 'assistant'].includes(message?.role))
-        .slice(-limit)
         .map((message) => ({
             role: normalizeText(message.role),
             text: normalizeText(message.content || message.text).slice(0, 900),
@@ -84,6 +83,36 @@ function compactConversationTurns(messageHistory = [], limit = 10) {
             createdAt: normalizeText(message.createdAt)
         }))
         .filter((message) => message.text);
+    if (turns.length <= limit) {
+        return turns;
+    }
+
+    const selected = new Set();
+    for (let index = turns.length - 1; index >= 0 && selected.size < limit; index -= 1) {
+        selected.add(index);
+    }
+    const anchors = [
+        turns.findLastIndex((message) => message.role === 'user'),
+        turns.findLastIndex((message) =>
+            message.role === 'assistant' && message.source !== 'proactive_companion'
+        )
+    ];
+    const anchorSet = new Set(anchors.filter((index) => index >= 0));
+    for (const anchorIndex of anchors) {
+        if (anchorIndex < 0 || selected.has(anchorIndex)) {
+            continue;
+        }
+        const earliestReplaceable = [...selected]
+            .sort((left, right) => left - right)
+            .find((index) => !anchorSet.has(index));
+        if (earliestReplaceable !== undefined) {
+            selected.delete(earliestReplaceable);
+        }
+        selected.add(anchorIndex);
+    }
+    return [...selected]
+        .sort((left, right) => left - right)
+        .map((index) => turns[index]);
 }
 
 function extractJsonObjectFromText(value) {
@@ -108,26 +137,60 @@ function extractJsonObjectFromText(value) {
     return null;
 }
 
-function buildProactiveOpportunitySystemPrompt() {
+export function buildProactiveOpportunitySystemPrompt() {
     return [
-        '你是 AILIS 的主动陪伴机会判断器，不是任务执行 Agent。',
-        '你只判断此刻是否值得让 AILIS 主动开口，并给出一句用户可见的自然陪伴文本。',
+        '你是 AILIS 工作模式的反馈机会判断器，不是任务执行 Agent。',
+        '你只判断此刻是否值得让 AILIS 主动汇报、提醒或恢复共同任务；不要撰写最终用户可见回复，回复会由独立的 AILIS Persona 生成。',
+        '工作模式按较长周期检查，优先关注刚完成、暂停、遇到阻塞或值得恢复的共同任务；普通闲聊场景保持克制。',
         '优先根据 recentContext 判断：刚刚聊了什么、是否有自然延续、是否有未完成情绪或问题、任务是否刚结束。',
+        'recentContext 中 source=proactive_companion 的内容是 AILIS 之前的主动消息。若用户没有回应，不要仅因时间经过而重复同类搭话。',
+        'interactionState.appVisible 只是当前界面可见性信息，不是必须沉默的规则。',
         '长期记忆和用户画像只用于语气、分寸和称呼，不用于凭空开启新话题。',
         '不要调用工具，不要联网，不要读文件，不要执行任务；如果需要行动，只能温柔询问用户是否要继续。',
         '不要暴露内部记忆、好感度数值、系统状态、JSON、token、runId、工具名或隐藏推理。',
         '如果没有明确价值，shouldSpeak 必须为 false。',
-        '只返回 JSON：{"shouldSpeak":boolean,"intent":"soft_checkin|topic_followup|task_resume_offer|celebrate|comfort|quiet_presence","text":"一句自然的话","emotion":"relaxed|happy|soft|comforting|curious","cooldownSec":number,"reasonType":"recent_context_followup|task_state|not_enough_reason|cooldown"}'
+        '只返回 JSON：{"shouldSpeak":boolean,"intent":"soft_checkin|topic_followup|task_resume_offer|celebrate|comfort|quiet_presence","emotion":"relaxed|happy|soft|comforting|curious","cooldownSec":number,"reasonType":"recent_context_followup|task_state|not_enough_reason|cooldown"}'
+    ].join('\n');
+}
+
+export function buildProactiveCompanionHeartbeatDeveloperMessage(messageHistory = []) {
+    const turns = messageHistory.filter((message) => ['user', 'assistant'].includes(message?.role));
+    const latestUserIndex = turns.findLastIndex((message) => message.role === 'user');
+    const latestAssistantIndex = turns.findLastIndex((message) => message.role === 'assistant');
+    const assistantTurnsSinceUser = latestUserIndex < 0
+        ? turns.filter((message) => message.role === 'assistant').length
+        : turns.slice(latestUserIndex + 1).filter((message) => message.role === 'assistant').length;
+    const userSpokeAfterAssistant = latestUserIndex > latestAssistantIndex;
+    return [
+        'Companion mode heartbeat. This is a runtime event, not a user message.',
+        'Use the same AILIS persona, memory, and conversation context as an ordinary chat turn.',
+        userSpokeAfterAssistant
+            ? 'The latest visible turn is a real user message.'
+            : `The user has not sent a new message since the latest assistant response. There are ${assistantTurnsSinceUser} assistant response(s) since the latest real user message.`,
+        'Take the initiative and continue the conversation naturally.',
+        'Do not pretend the user replied, restart the old request, or merely rephrase the latest assistant response.',
+        'Return only the natural user-visible reply.'
+    ].join('\n');
+}
+
+function buildProactiveWorkReplySystemPrompt(decision = {}) {
+    return [
+        '你是 AILIS，正在对共同工作的进展进行一次主动反馈。',
+        '最近的 user/assistant 消息是真实对话历史；保持其中已经形成的人格、称呼、语气和关系分寸。',
+        '这是工作模式机会判断器批准的反馈，不是用户刚刚发送了新消息。',
+        `本次反馈意图：${normalizeText(decision.intent || 'task_resume_offer')}；触发原因：${normalizeText(decision.reasonType || 'task_state')}。`,
+        '围绕当前任务状态、进展、阻塞或下一步自然表达，不要虚构没有发生的工作。',
+        '不要提到机会判断器、工作模式、JSON、记忆注入或任何内部机制。',
+        '只输出要展示给用户的自然回复，不要输出 JSON、标签、解释或候选答案。'
     ].join('\n');
 }
 
 function normalizeProactiveDecision(rawDecision = {}) {
     const shouldSpeak = rawDecision.shouldSpeak === true;
-    const text = normalizeMarkdownSource(rawDecision.text || '');
     const intent = normalizeText(rawDecision.intent || 'quiet_presence') || 'quiet_presence';
     const emotion = normalizeText(rawDecision.emotion || 'relaxed') || 'relaxed';
     const cooldownSec = Math.round(Math.min(Math.max(Number(rawDecision.cooldownSec) || 900, 180), 24 * 60 * 60));
-    if (!shouldSpeak || !text || text.length > 260) {
+    if (!shouldSpeak) {
         return {
             shouldSpeak: false,
             intent,
@@ -139,22 +202,21 @@ function normalizeProactiveDecision(rawDecision = {}) {
     return {
         shouldSpeak: true,
         intent,
-        text,
         emotion,
         cooldownSec,
         reasonType: normalizeText(rawDecision.reasonType || 'recent_context_followup')
     };
 }
 
-function proactiveEmotionToSurface(decision = {}) {
+function proactiveEmotionToSurface(decision = {}, text = '') {
     const emotion = normalizeText(decision.emotion || 'relaxed');
     const expression = /happy|celebrate/.test(emotion) ? 'happy' :
         /comfort|soft/.test(emotion) ? 'relaxed' : 'relaxed';
     const taskState = /comfort/.test(emotion) ? 'comforting' : 'idle';
     return {
-        text: decision.text,
-        speechText: decision.text,
-        bubbleText: decision.text,
+        text,
+        speechText: text,
+        bubbleText: text,
         action: null,
         expression,
         emotion,
@@ -659,7 +721,14 @@ export class AILISDesktopChatService {
         proactiveContext = null
     }) {
         if (isAutoChat) {
-            const opportunity = await this.evaluateProactiveOpportunity({
+            const proactiveMode = normalizeText(proactiveContext?.proactivity?.mode).toLowerCase();
+            const opportunity = proactiveMode === 'companion'
+                ? await this.createProactiveCompanionTurn({
+                    sessionId,
+                    messageHistory,
+                    context: proactiveContext || {}
+                })
+                : await this.evaluateProactiveOpportunity({
                 sessionId,
                 messageHistory,
                 context: proactiveContext || {}
@@ -744,6 +813,51 @@ export class AILISDesktopChatService {
         return attachServerTtsIfRequested(payload, replyMode);
     }
 
+    async createProactiveCompanionTurn({
+        sessionId = 'main',
+        messageHistory = [],
+        context = {}
+    } = {}) {
+        if (!this.gateway?.isSupported || !this.gateway?.runAgent) {
+            return {
+                shouldSpeak: false,
+                reasonType: 'gateway_unavailable'
+            };
+        }
+        const turn = {
+            shouldSpeak: true,
+            cooldownSec: 20,
+            reasonType: 'companion_cycle'
+        };
+        const reply = await this.generateProactiveCompanionReply({
+            sessionId,
+            messageHistory,
+            context,
+            mode: 'companion'
+        });
+        if (!reply.ok) {
+            return {
+                ...turn,
+                shouldSpeak: false,
+                reasonType: reply.reasonType,
+                error: reply.error || ''
+            };
+        }
+        return {
+            ...turn,
+            context,
+            payload: toAssistantPayload(reply.text, {
+                speechText: reply.text,
+                bubbleText: reply.text,
+                proactiveCompanion: {
+                    mode: 'companion',
+                    reasonType: turn.reasonType,
+                    replyModel: reply.model || ''
+                }
+            })
+        };
+    }
+
     async evaluateProactiveOpportunity({
         sessionId = 'main',
         messageHistory = [],
@@ -756,12 +870,6 @@ export class AILISDesktopChatService {
             };
         }
         const recentTurns = compactConversationTurns(messageHistory, 10);
-        if (!recentTurns.length) {
-            return {
-                shouldSpeak: false,
-                reasonType: 'no_recent_context'
-            };
-        }
         const latestUser = [...recentTurns].reverse().find((message) => message.role === 'user');
         const decisionContext = {
             ...context,
@@ -807,22 +915,141 @@ export class AILISDesktopChatService {
         if (!decision.shouldSpeak) {
             return decision;
         }
-        const surface = proactiveEmotionToSurface(decision);
+        const reply = await this.generateProactiveCompanionReply({
+            sessionId,
+            messageHistory,
+            context: decisionContext,
+            decision,
+            mode: 'cowork'
+        });
+        if (!reply.ok) {
+            return {
+                ...decision,
+                shouldSpeak: false,
+                reasonType: reply.reasonType,
+                error: reply.error || ''
+            };
+        }
+        const surface = proactiveEmotionToSurface(decision, reply.text);
         return {
             ...decision,
             context: decisionContext,
-            payload: toAssistantPayload(decision.text, {
+            payload: toAssistantPayload(reply.text, {
                 expression: surface.expression,
                 action: surface.action,
-                speechText: decision.text,
-                bubbleText: decision.text,
+                speechText: reply.text,
+                bubbleText: reply.text,
                 surface,
                 proactiveCompanion: {
                     intent: decision.intent,
                     reasonType: decision.reasonType,
-                    model: result.model || ''
+                    decisionModel: result.model || '',
+                    replyModel: reply.model || ''
                 }
             })
+        };
+    }
+
+    async generateProactiveCompanionReply({
+        sessionId = 'main',
+        messageHistory = [],
+        context = {},
+        mode = 'companion',
+        decision = {}
+    } = {}) {
+        const latestUser = [...messageHistory].reverse().find((message) => message?.role === 'user');
+        const isWorkMode = mode === 'cowork';
+        if (!isWorkMode) {
+            try {
+                const status = await this.ensureReady();
+                const latestUserText = normalizeText(latestUser?.content || latestUser?.text) || '日常陪伴';
+                const result = await this.gateway.runAgent({
+                    sessionId,
+                    message: latestUserText,
+                    messageHistory: sanitizeMessageHistoryForGateway(messageHistory),
+                    agentLoop: 'llm',
+                    directToolExecutor: true,
+                    maxAgentSteps: 1,
+                    suppressCurrentUserMessage: true,
+                    ephemeralDeveloperMessage: buildProactiveCompanionHeartbeatDeveloperMessage(messageHistory),
+                    context: {
+                        workspace: status.workspaceRoot,
+                        agentLoop: 'llm',
+                        directToolExecutor: true,
+                        maxAgentSteps: 1,
+                        agentRole: 'persona_orchestrator',
+                        suppressCurrentUserMessage: true,
+                        ephemeralDeveloperMessage: buildProactiveCompanionHeartbeatDeveloperMessage(messageHistory)
+                    }
+                });
+                const payload = toAILISPayload(result);
+                const text = normalizeMarkdownSource(payload.display_text || '');
+                if (!text) {
+                    return {
+                        ok: false,
+                        reasonType: 'empty_reply'
+                    };
+                }
+                return {
+                    ok: true,
+                    text,
+                    model: result?.model || result?.llm?.model || ''
+                };
+            } catch (error) {
+                return {
+                    ok: false,
+                    reasonType: error?.code || 'reply_generation_failed',
+                    error: error?.message || String(error)
+                };
+            }
+        }
+        const conversationMessages = messageHistory
+            .filter((message) => ['user', 'assistant'].includes(message?.role))
+            .map((message) => ({
+                role: message.role,
+                content: normalizeMarkdownSource(message.content || message.text || '')
+            }))
+            .filter((message) => message.content);
+        const result = await window.ailisDesktop.llm.chat({
+            includeAilisMemory: true,
+            recordMemory: false,
+            memorySource: 'proactive_work_reply',
+            memoryUserMessage: normalizeText(latestUser?.content || latestUser?.text) ||
+                '工作模式主动反馈',
+            messageHistory,
+            sessionId,
+            messages: [
+                {
+                    role: 'system',
+                    content: buildProactiveWorkReplySystemPrompt(decision)
+                },
+                ...conversationMessages
+            ],
+            jsonMode: false,
+            expectJson: false,
+            outputFormat: 'text',
+            temperature: 0.82,
+            maxTokens: 700,
+            timeoutMs: PROACTIVE_LLM_TIMEOUT_MS
+        });
+        if (!result?.ok) {
+            return {
+                ok: false,
+                reasonType: result?.code || 'reply_generation_failed',
+                error: result?.error || ''
+            };
+        }
+        const text = normalizeMarkdownSource(result.content || '');
+        if (!text) {
+            return {
+                ok: false,
+                reasonType: 'empty_reply'
+            };
+        }
+        return {
+            ok: true,
+            text,
+            model: result.model || ''
         };
     }
 

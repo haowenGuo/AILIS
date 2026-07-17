@@ -4,6 +4,7 @@ const DEFAULT_IDLE_CHECK_MAX_MS = 45 * 60 * 1000;
 const DEFAULT_AFTER_TURN_MIN_MS = 90 * 1000;
 const DEFAULT_AFTER_TURN_MAX_MS = 180 * 1000;
 const DEFAULT_BUSY_RECHECK_MS = 30 * 1000;
+const COMPANION_SPEAK_INTERVAL_MS = 20 * 1000;
 const DEFAULT_MAX_SPEAKS_PER_DAY = 5;
 const DEFAULT_MAX_CHECKS_PER_DAY = 30;
 
@@ -32,8 +33,15 @@ function normalizeText(value) {
 function compactMessage(message = {}) {
     return {
         role: normalizeText(message.role),
-        text: normalizeText(message.content || message.text).slice(0, 900)
+        text: normalizeText(message.content || message.text).slice(0, 900),
+        source: normalizeText(message.source),
+        createdAt: normalizeText(message.createdAt)
     };
+}
+
+function normalizeMode(value) {
+    const mode = normalizeText(value).toLowerCase();
+    return ['off', 'companion', 'cowork'].includes(mode) ? mode : 'off';
 }
 
 function readState() {
@@ -55,15 +63,21 @@ export class ProactiveCompanionManager {
     constructor({
         getConfig,
         getChatState,
+        requestCompanionTurn,
         requestOpportunity,
         onSpeak,
-        logger = console
+        logger = console,
+        setTimeoutFn = (callback, delayMs) => setTimeout(callback, delayMs),
+        clearTimeoutFn = (timerId) => clearTimeout(timerId)
     } = {}) {
         this.getConfig = getConfig;
         this.getChatState = getChatState;
+        this.requestCompanionTurn = requestCompanionTurn;
         this.requestOpportunity = requestOpportunity;
         this.onSpeak = onSpeak;
         this.logger = logger;
+        this.setTimeoutFn = setTimeoutFn;
+        this.clearTimeoutFn = clearTimeoutFn;
         this.timer = null;
         this.running = false;
         this.state = {
@@ -100,13 +114,17 @@ export class ProactiveCompanionManager {
         return Boolean(this.getConfig?.().AUTO_CHAT_ENABLED);
     }
 
-    start(reason = 'start') {
-        this.schedule(reason);
+    getMode() {
+        return normalizeMode(this.getConfig?.().AUTO_CHAT_MODE);
+    }
+
+    start(reason = 'start', delayMs = undefined) {
+        this.schedule(reason, delayMs);
     }
 
     stop() {
         if (this.timer) {
-            clearTimeout(this.timer);
+            this.clearTimeoutFn(this.timer);
             this.timer = null;
         }
     }
@@ -129,7 +147,7 @@ export class ProactiveCompanionManager {
         const config = this.getConfig?.() || {};
         const minimum = clampNumber(
             config.AUTO_CHAT_MIN_INTERVAL,
-            15 * 1000,
+            COMPANION_SPEAK_INTERVAL_MS,
             60 * 60 * 1000,
             DEFAULT_IDLE_CHECK_MIN_MS
         );
@@ -146,6 +164,7 @@ export class ProactiveCompanionManager {
     }
 
     buildDecisionContext(now = Date.now()) {
+        const config = this.getConfig?.() || {};
         const chat = this.getChatState?.() || {};
         const messages = Array.isArray(chat.messageHistory) ? chat.messageHistory : [];
         const lastVisibleTurns = messages
@@ -157,13 +176,16 @@ export class ProactiveCompanionManager {
         const latestAssistant = [...lastVisibleTurns].reverse().find((message) => message.role === 'assistant');
         return {
             nowIso: new Date(now).toISOString(),
+            proactivity: {
+                mode: normalizeMode(config.AUTO_CHAT_MODE)
+            },
             recentContext: {
                 lastVisibleTurns,
                 latestUserText: latestUser?.text || '',
                 latestAssistantText: latestAssistant?.text || ''
             },
             interactionState: {
-                appFocused: !document.hidden,
+                appVisible: typeof document === 'undefined' ? true : !document.hidden,
                 userTyping: Boolean(chat.userTyping),
                 inputDisabled: Boolean(chat.inputDisabled),
                 assistantBusy: Boolean(chat.isBusy),
@@ -182,25 +204,27 @@ export class ProactiveCompanionManager {
 
     hardGate(context = {}) {
         const state = context.interactionState || {};
+        const isCompanionMode = context.proactivity?.mode === 'companion';
         if (!this.isEnabled()) {
             return { ok: false, reason: 'disabled', delayMs: null };
         }
-        if (!state.appFocused) {
-            return { ok: false, reason: 'window_hidden', delayMs: this.getIntervalConfig().minimum };
-        }
         if (state.inputDisabled || state.userTyping || state.assistantBusy || state.voicePlaying) {
-            return { ok: false, reason: 'busy', delayMs: DEFAULT_BUSY_RECHECK_MS };
+            return {
+                ok: false,
+                reason: 'busy',
+                delayMs: isCompanionMode ? COMPANION_SPEAK_INTERVAL_MS : DEFAULT_BUSY_RECHECK_MS
+            };
         }
-        if (Number(state.lastUserMessageAgeMs || 0) > 0 && state.lastUserMessageAgeMs < DEFAULT_AFTER_TURN_MIN_MS) {
+        if (!isCompanionMode && Number(state.lastUserMessageAgeMs || 0) > 0 && state.lastUserMessageAgeMs < DEFAULT_AFTER_TURN_MIN_MS) {
             return { ok: false, reason: 'after_user_turn_cooldown', delayMs: DEFAULT_AFTER_TURN_MIN_MS };
         }
-        if (Number(state.lastAssistantMessageAgeMs || 0) > 0 && state.lastAssistantMessageAgeMs < DEFAULT_AFTER_TURN_MIN_MS) {
+        if (!isCompanionMode && Number(state.lastAssistantMessageAgeMs || 0) > 0 && state.lastAssistantMessageAgeMs < DEFAULT_AFTER_TURN_MIN_MS) {
             return { ok: false, reason: 'after_assistant_turn_cooldown', delayMs: DEFAULT_AFTER_TURN_MIN_MS };
         }
-        if (Number(this.state.checksToday || 0) >= DEFAULT_MAX_CHECKS_PER_DAY) {
+        if (!isCompanionMode && Number(this.state.checksToday || 0) >= DEFAULT_MAX_CHECKS_PER_DAY) {
             return { ok: false, reason: 'daily_check_budget_exhausted', delayMs: this.msUntilTomorrow() };
         }
-        if (Number(this.state.speaksToday || 0) >= DEFAULT_MAX_SPEAKS_PER_DAY) {
+        if (!isCompanionMode && Number(this.state.speaksToday || 0) >= DEFAULT_MAX_SPEAKS_PER_DAY) {
             return { ok: false, reason: 'daily_speak_budget_exhausted', delayMs: this.msUntilTomorrow() };
         }
         return { ok: true, reason: 'eligible' };
@@ -214,6 +238,9 @@ export class ProactiveCompanionManager {
     }
 
     getNextDelay(reason = 'idle', decision = null) {
+        if (this.getMode() === 'companion') {
+            return COMPANION_SPEAK_INTERVAL_MS;
+        }
         const { minimum, maximum } = this.getIntervalConfig();
         if (decision?.cooldownSec) {
             return clampNumber(Number(decision.cooldownSec) * 1000, minimum, 24 * 60 * 60 * 1000, minimum);
@@ -227,22 +254,27 @@ export class ProactiveCompanionManager {
         return randomBetween(minimum, maximum);
     }
 
-    schedule(reason = 'idle', delayMs = null) {
+    schedule(reason = 'idle', delayMs = undefined) {
         this.stop();
         if (!this.isEnabled()) {
             this.logger?.log?.('⏸️ 主动陪伴已关闭');
             return;
         }
-        const nextDelay = Number.isFinite(Number(delayMs))
+        const hasExplicitDelay = delayMs !== null && delayMs !== undefined && Number.isFinite(Number(delayMs));
+        const nextDelay = hasExplicitDelay
             ? Math.max(1000, Number(delayMs))
-            : this.getNextDelay(reason, this.state.lastDecision);
-        this.timer = setTimeout(() => this.tick(reason), nextDelay);
-        this.logger?.log?.(`⏱️ 下一次主动陪伴判断将在 ${(nextDelay / 1000).toFixed(1)} 秒后`);
+            : this.getNextDelay(reason);
+        this.timer = this.setTimeoutFn(() => this.tick(reason), nextDelay);
+        this.logger?.log?.('proactive_companion.scheduled', JSON.stringify({
+            mode: normalizeMode(this.getConfig?.().AUTO_CHAT_MODE),
+            reason,
+            delayMs: Math.round(nextDelay)
+        }));
     }
 
     async tick(reason = 'timer') {
         if (this.running) {
-            this.schedule('busy', DEFAULT_BUSY_RECHECK_MS);
+            this.schedule('busy', this.getNextDelay('busy'));
             return;
         }
         this.running = true;
@@ -253,6 +285,11 @@ export class ProactiveCompanionManager {
             if (!gate.ok) {
                 this.state.lastDecision = { shouldSpeak: false, reason: gate.reason, at: Date.now() };
                 this.persist();
+                this.logger?.log?.('proactive_companion.gated', JSON.stringify({
+                    mode: context.proactivity?.mode || 'off',
+                    reason: gate.reason,
+                    delayMs: gate.delayMs
+                }));
                 if (gate.delayMs !== null) {
                     this.schedule(gate.reason, gate.delayMs);
                 }
@@ -260,7 +297,10 @@ export class ProactiveCompanionManager {
             }
             this.state.checksToday = Number(this.state.checksToday || 0) + 1;
             this.persist();
-            const decision = await this.requestOpportunity?.({ context, reason });
+            const requestTurn = context.proactivity?.mode === 'companion'
+                ? this.requestCompanionTurn
+                : this.requestOpportunity;
+            const decision = await requestTurn?.({ context, reason });
             const normalizedDecision = decision && typeof decision === 'object' ? decision : { shouldSpeak: false };
             this.state.lastDecision = {
                 shouldSpeak: normalizedDecision.shouldSpeak === true,
@@ -270,8 +310,35 @@ export class ProactiveCompanionManager {
                 at: Date.now()
             };
             this.persist();
+            this.logger?.log?.('proactive_companion.decision', JSON.stringify({
+                mode: context.proactivity?.mode || 'off',
+                shouldSpeak: normalizedDecision.shouldSpeak === true,
+                intent: normalizeText(normalizedDecision.intent),
+                reason: normalizeText(normalizedDecision.reason || normalizedDecision.reasonType),
+                cooldownSec: Number(normalizedDecision.cooldownSec) || 0
+            }));
             if (normalizedDecision.shouldSpeak === true && normalizedDecision.payload) {
-                await this.onSpeak?.(normalizedDecision);
+                const delivery = await this.onSpeak?.(normalizedDecision);
+                if (delivery === false || delivery?.ok === false) {
+                    const deliveryReason = normalizeText(delivery?.reason) || 'delivery_failed';
+                    this.state.lastDecision = {
+                        ...this.state.lastDecision,
+                        shouldSpeak: false,
+                        reason: deliveryReason,
+                        at: Date.now()
+                    };
+                    this.persist();
+                    this.logger?.warn?.('proactive_companion.delivery_failed', JSON.stringify({
+                        mode: context.proactivity?.mode || 'off',
+                        reason: deliveryReason,
+                        error: normalizeText(delivery?.error)
+                    }));
+                    this.schedule(
+                        deliveryReason === 'busy' ? 'busy' : 'error',
+                        deliveryReason === 'busy' ? this.getNextDelay('busy') : this.getIntervalConfig().minimum
+                    );
+                    return;
+                }
                 this.noteAssistantTurn({ proactive: true });
                 this.schedule('spoke', this.getNextDelay('spoke', normalizedDecision));
                 return;

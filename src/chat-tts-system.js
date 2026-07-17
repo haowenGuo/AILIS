@@ -96,11 +96,12 @@ export class ChatTTSSystem {
         this.speechProvider = speechProvider;
         this.chunkedTtsEnabled = chunkedTtsEnabled !== false;
 
-        this.messageHistory = [];
         this.messageListEl = document.getElementById('message-list');
         this.inputEl = document.getElementById('message-input');
         this.sendBtnEl = document.getElementById('send-btn');
         this.sessionId = this.getOrCreateSessionId();
+        this.messageHistory = [];
+        this.historyRestored = false;
 
         this.isBusy = false;
         this.autoChatTimer = null;
@@ -114,9 +115,15 @@ export class ChatTTSSystem {
         this.activeChunkedSpeechSession = null;
         this.activeTurn = null;
         this.cancelledTurnIds = new Set();
+        this.lastAutoChatMode = String(CONFIG.AUTO_CHAT_MODE || 'off');
         this.proactiveCompanion = new ProactiveCompanionManager({
             getConfig: () => CONFIG,
             getChatState: () => this.getProactiveChatState(),
+            requestCompanionTurn: (payload) => this.chatService?.createProactiveCompanionTurn?.({
+                sessionId: this.sessionId,
+                messageHistory: this.createMessageHistorySnapshot(),
+                ...payload
+            }),
             requestOpportunity: (payload) => this.chatService?.evaluateProactiveOpportunity?.({
                 sessionId: this.sessionId,
                 messageHistory: this.createMessageHistorySnapshot(),
@@ -124,6 +131,7 @@ export class ChatTTSSystem {
             }),
             onSpeak: (decision) => this.triggerAutoChat(decision)
         });
+        this.historyReady = this.restorePersistedConversation();
 
         this.inputEl.disabled = true;
         this.sendBtnEl.disabled = true;
@@ -151,13 +159,16 @@ export class ChatTTSSystem {
             }
         });
 
-        window.addEventListener('modelLoaded', () => {
+        window.addEventListener('modelLoaded', async () => {
+            await this.historyReady;
             const welcomeMessage = this.chatService?.getWelcomeMessage?.() ||
                 'AILIS到啦！现在可以聊天啦~';
-            this.addSystemMessage(t(welcomeMessage));
+            if (!this.messageHistory.length) {
+                this.addSystemMessage(t(welcomeMessage));
+            }
             this.inputEl.disabled = false;
             this.sendBtnEl.disabled = false;
-            this.startAutoChatTimer();
+            this.startAutoChatTimer('startup');
             this.emitChatUiEvent({ type: 'state', isBusy: this.isBusy });
         });
     }
@@ -175,12 +186,14 @@ export class ChatTTSSystem {
         window.addEventListener('keydown', unlockAudio, { once: true });
     }
 
-    startAutoChatTimer() {
-        if (this.chatService?.supportsAutoChat === false || typeof this.chatService?.evaluateProactiveOpportunity !== 'function') {
+    startAutoChatTimer(reason = 'idle', delayMs = undefined) {
+        const supportsCompanion = typeof this.chatService?.createProactiveCompanionTurn === 'function';
+        const supportsWorkFeedback = typeof this.chatService?.evaluateProactiveOpportunity === 'function';
+        if (this.chatService?.supportsAutoChat === false || (!supportsCompanion && !supportsWorkFeedback)) {
             console.log('⏸️ 当前聊天后端不支持主动搭话');
             return;
         }
-        this.proactiveCompanion.start('schedule');
+        this.proactiveCompanion.start(reason, delayMs);
     }
 
     getProactiveChatState() {
@@ -194,6 +207,10 @@ export class ChatTTSSystem {
     }
 
     applyRuntimePreferences(preferences = {}) {
+        const nextAutoChatMode = String(CONFIG.AUTO_CHAT_MODE || 'off');
+        const autoChatModeChanged = nextAutoChatMode !== this.lastAutoChatMode;
+        this.lastAutoChatMode = nextAutoChatMode;
+
         if ('chunkedTtsEnabled' in preferences) {
             this.chunkedTtsEnabled = preferences.chunkedTtsEnabled !== false;
             if (!this.chunkedTtsEnabled) {
@@ -210,7 +227,14 @@ export class ChatTTSSystem {
             return;
         }
 
-        this.startAutoChatTimer();
+        if (autoChatModeChanged) {
+            this.startAutoChatTimer(
+                'mode_changed',
+                CONFIG.AUTO_CHAT_ENABLED ? CONFIG.AUTO_CHAT_MIN_INTERVAL : undefined
+            );
+        } else if (CONFIG.AUTO_CHAT_ENABLED && !this.proactiveCompanion.timer) {
+            this.startAutoChatTimer('preferences_updated');
+        }
     }
 
     createMessageId(role = 'message') {
@@ -246,6 +270,56 @@ export class ChatTTSSystem {
                 ? message.attachments.map((attachment) => ({ ...attachment }))
                 : message.attachments
         }));
+    }
+
+    async restorePersistedConversation() {
+        try {
+            const result = await window.ailisDesktop?.chatHistory?.load?.({
+                sessionId: this.sessionId
+            });
+            const messages = Array.isArray(result?.messages) ? result.messages : [];
+            this.messageHistory = messages
+                .filter((message) => message?.role === 'user' || message?.role === 'assistant')
+                .map((message) => ({
+                    role: message.role,
+                    content: String(message.content || ''),
+                    attachments: normalizeChatAttachments(message.attachments),
+                    source: String(message.source || ''),
+                    createdAt: String(message.createdAt || '')
+                }))
+                .filter((message) => message.content);
+            for (const message of this.messageHistory) {
+                if (message.role === 'user') {
+                    this.addUserMessage(message.content, message.attachments);
+                    continue;
+                }
+                const element = this.createAIMessage();
+                this.updateMessageContent(element, message.content);
+            }
+            this.historyRestored = true;
+            this.emitChatUiEvent({
+                type: 'snapshot',
+                messages: this.getTranscriptSnapshot(),
+                isBusy: this.isBusy
+            });
+            return { ok: true, messageCount: this.messageHistory.length };
+        } catch (error) {
+            this.historyRestored = true;
+            console.warn('恢复桌面对话历史失败：', error);
+            return { ok: false, error: error?.message || String(error) };
+        }
+    }
+
+    async persistConversation() {
+        try {
+            return await window.ailisDesktop?.chatHistory?.save?.({
+                sessionId: this.sessionId,
+                messages: this.createMessageHistorySnapshot()
+            });
+        } catch (error) {
+            console.warn('保存桌面对话历史失败：', error);
+            return { ok: false, error: error?.message || String(error) };
+        }
     }
 
     markTurnCancelled(turn) {
@@ -529,6 +603,7 @@ export class ChatTTSSystem {
         }
         this.messageHistory = [];
         this.messageListEl.innerHTML = '';
+        void window.ailisDesktop?.chatHistory?.clear?.({ sessionId: this.sessionId });
         this.addSystemMessage('当前会话已清空。');
         this.emitChatUiEvent({
             type: 'snapshot',
@@ -553,18 +628,18 @@ export class ChatTTSSystem {
 
     setChatService(nextChatService) {
         this.chatService = nextChatService;
-        this.startAutoChatTimer();
+        this.startAutoChatTimer('service_changed');
     }
 
     async triggerAutoChat(opportunity = null) {
+        await this.historyReady;
         if (this.chatService?.supportsAutoChat === false) {
             return;
         }
 
         if (this.isBusy) {
             console.log('🤫 当前正忙，跳过本次主动对话');
-            this.startAutoChatTimer();
-            return;
+            return { ok: false, reason: 'busy' };
         }
 
         console.log('✨ AILIS 尝试主动发起对话...');
@@ -611,25 +686,28 @@ export class ChatTTSSystem {
                 source: 'proactive_companion',
                 createdAt: new Date().toISOString()
             });
+            await this.persistConversation();
+            return { ok: true };
         } catch (error) {
             await chunkedSpeechSession?.cancel?.('auto-chat-error');
             this.removeMessageElement(aiMessageDiv);
             if (!this.isTurnCancelled(turn)) {
                 console.error('主动对话请求失败：', error);
             }
+            return { ok: false, reason: 'delivery_failed', error: error?.message || String(error) };
         } finally {
             this.releaseChunkedSpeechSessionWhenDone(chunkedSpeechSession);
             if (this.activeTurn?.id === turn.id) {
                 this.interruptRequested = false;
                 this.interruptInFlight = false;
                 this.setBusy(false);
-                this.startAutoChatTimer();
             }
             this.releaseTurn(turn);
         }
     }
 
     async sendMessage(contentOverride = null, options = {}) {
+        await this.historyReady;
         if (this.isBusy) {
             return;
         }
@@ -644,7 +722,7 @@ export class ChatTTSSystem {
 
         this.stopLingeringSpeech('new-chat-turn');
         this.setBusy(true);
-        this.startAutoChatTimer();
+        this.proactiveCompanion.stop();
 
         if (!hasOverride) {
             this.inputEl.value = '';
@@ -656,6 +734,7 @@ export class ChatTTSSystem {
             attachments,
             createdAt: new Date().toISOString()
         });
+        await this.persistConversation();
         this.proactiveCompanion.noteUserTurn();
 
         const loadingEl = this.addLoadingMessage();
@@ -702,6 +781,7 @@ export class ChatTTSSystem {
                 content: payload.display_text,
                 createdAt: new Date().toISOString()
             });
+            await this.persistConversation();
             this.proactiveCompanion.noteAssistantTurn();
         } catch (error) {
             await chunkedSpeechSession?.cancel?.('chat-turn-error');
@@ -718,7 +798,8 @@ export class ChatTTSSystem {
                 this.interruptRequested = false;
                 this.interruptInFlight = false;
                 this.setBusy(false);
-                this.startAutoChatTimer();
+                const latestMessage = this.messageHistory.at(-1);
+                this.startAutoChatTimer(latestMessage?.role === 'assistant' ? 'assistant_turn' : 'chat_finished');
             }
             this.releaseTurn(turn);
         }

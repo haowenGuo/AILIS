@@ -30,6 +30,8 @@ const {
 
 test('Agent execution flow detects exact-answer evaluation mode', () => {
     assert.equal(isExactAnswerExecutionMode({}, { answerOnly: true }), true);
+    assert.equal(isExactAnswerExecutionMode({}, { exactAnswerMode: true }), true);
+    assert.equal(isExactAnswerExecutionMode({ exact_answer_mode: true }, {}), true);
     assert.equal(isExactAnswerExecutionMode({}, { executionProfile: { kind: 'exact_answer_eval' } }), true);
     assert.equal(isExactAnswerExecutionMode({}, { evaluationTaskId: 'gaia-task' }), true);
     assert.equal(isExactAnswerExecutionMode({}, {}), false);
@@ -344,8 +346,11 @@ test('final_answer contract reminds relation tasks to verify answer role alignme
     const spec = buildFinalAnswerNativeToolSpec();
     assert.match(spec.description, /role alignment/);
     assert.match(spec.description, /QuestionEvidence\/source_question/);
+    assert.match(spec.description, /candidate set/);
+    assert.match(spec.description, /partial viewport/);
     assert.match(spec.parameters.properties.reason.description, /target role/);
     assert.match(spec.parameters.properties.reason.description, /relation table direction/);
+    assert.match(spec.parameters.properties.reason.description, /candidate-set boundary/);
 });
 
 test('final_answer native tool contract keeps answer required but does not hard-gate audit metadata', () => {
@@ -768,6 +773,114 @@ test('Agent model-facing observation digest stays compact and artifact-backed', 
     assert.ok(JSON.stringify(digest[0].details).length < 1800);
     assert.deepEqual(digest[0].evidenceRefs, stepResult.evidenceArtifacts.map((artifact) => artifact.id));
     assert.equal(stepResult.evidenceArtifacts[0].type, 'ResearchSourceEvidence');
+});
+
+test('Agent registers deterministic table aggregation as ComputationEvidence without making it a finalization gate', () => {
+    const stepResult = attachAgentEvidenceArtifacts({
+        id: 'step-aggregate',
+        title: 'Aggregate workbook revenue',
+        tool: 'artifact_tools',
+        args: {
+            action: 'aggregate',
+            path: 'sales.xlsx',
+            table: 'SalesTable',
+            aggregate: { op: 'sum', column: 'Revenue' }
+        },
+        response: {
+            ok: true,
+            status: 'completed',
+            result: {
+                content: [{ type: 'text', text: '{"aggregateResult":{"value":91}}' }],
+                structuredContent: {
+                    query: {
+                        filter: null,
+                        groupBy: '',
+                        aggregateResult: {
+                            op: 'sum',
+                            column: 'Revenue',
+                            value: 91,
+                            rowCount: 3,
+                            numericCount: 3
+                        },
+                        observation: {
+                            semanticLevel: 'computation',
+                            complete: true,
+                            truncated: false,
+                            computation: {
+                                deterministic: true,
+                                operation: 'sum',
+                                column: 'Revenue',
+                                value: 91,
+                                rowCount: 3,
+                                numericCount: 3,
+                                source: {
+                                    path: 'sales.xlsx',
+                                    table: 'SalesTable',
+                                    sheet: 'Data',
+                                    range: 'A1:D4'
+                                }
+                            }
+                        }
+                    }
+                },
+                details: {
+                    status: 'completed',
+                    complete: true,
+                    truncated: false,
+                    observationContract: {
+                        status: 'completed',
+                        semantic_level: 'computation',
+                        complete: true,
+                        truncated: false
+                    }
+                }
+            }
+        }
+    });
+
+    assert.equal(stepResult.evidenceArtifacts.length, 1);
+    assert.equal(stepResult.evidenceArtifacts[0].type, 'ComputationEvidence');
+    assert.equal(stepResult.evidenceArtifacts[0].payload.deterministic, true);
+    assert.equal(stepResult.evidenceArtifacts[0].payload.operation, 'sum');
+    assert.equal(stepResult.evidenceArtifacts[0].payload.result, 91);
+    assert.equal(stepResult.evidenceArtifacts[0].payload.source.table, 'SalesTable');
+
+    const sufficiency = buildEvidenceSufficiencyPromptObject([stepResult], { exactAnswerMode: true });
+    assert.equal(sufficiency.has_compute_evidence, true);
+    assert.match(sufficiency.computation_guidance, /advisory/i);
+    assert.match(sufficiency.computation_guidance, /must never suppress/i);
+});
+
+test('Research source evidence does not infer local paths from URL markup or prose', () => {
+    const stepResult = attachAgentEvidenceArtifacts({
+        id: 'step-web-source',
+        title: 'Open research source',
+        tool: 'web_run',
+        args: {
+            open: [{ ref_id: 'turn0search1' }]
+        },
+        iteration: 1,
+        response: {
+            ok: true,
+            status: 'completed',
+            result: {
+                content: [{
+                    type: 'text',
+                    text: [
+                        '<truncated omitted_approx_tokens="521" />',
+                        'URL: https://journal.finfar.org/articles/dragons-are-tricksy/',
+                        'Retry without optional recency/domain filters.'
+                    ].join('\n')
+                }]
+            }
+        }
+    });
+
+    const artifact = stepResult.evidenceArtifacts[0];
+    assert.equal(artifact.type, 'ResearchSourceEvidence');
+    assert.equal(artifact.payload.sourceKind, 'url');
+    assert.equal(artifact.payload.url, 'https://journal.finfar.org/articles/dragons-are-tricksy/');
+    assert.equal(artifact.payload.path, '');
 });
 
 test('Agent tool observations keep small artifact query compactRows lossless', () => {

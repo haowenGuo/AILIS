@@ -12,6 +12,11 @@ const GEMINI_PROVIDER = 'gemini';
 const VLLM_PROVIDER = 'vllm';
 const OLLAMA_PROVIDER = 'ollama';
 const {
+    CODEX_MODEL_BRIDGE_PROVIDER,
+    DEFAULT_CODEX_MODEL,
+    callCodexModelBridge
+} = require('./codex-model-bridge.cjs');
+const {
     responseItemsToChatMessages
 } = require('./ailis-model-input-builder.cjs');
 const {
@@ -40,6 +45,7 @@ const PROVIDER_OPTIONS = Object.freeze([
     OPENAI_RESPONSES_PROVIDER,
     ANTHROPIC_PROVIDER,
     GEMINI_PROVIDER,
+    CODEX_MODEL_BRIDGE_PROVIDER,
     VLLM_PROVIDER,
     OLLAMA_PROVIDER
 ]);
@@ -55,6 +61,7 @@ const DEFAULT_PROVIDER_BASE_URLS = Object.freeze({
     [OPENAI_RESPONSES_PROVIDER]: 'https://api.openai.com/v1',
     [ANTHROPIC_PROVIDER]: 'https://api.anthropic.com',
     [GEMINI_PROVIDER]: 'https://generativelanguage.googleapis.com/v1beta',
+    [CODEX_MODEL_BRIDGE_PROVIDER]: 'codex://chatgpt-oauth',
     [VLLM_PROVIDER]: 'http://127.0.0.1:8000/v1',
     [OLLAMA_PROVIDER]: 'http://127.0.0.1:11434'
 });
@@ -70,6 +77,7 @@ const DEFAULT_PROVIDER_MODELS = Object.freeze({
     [OPENAI_RESPONSES_PROVIDER]: 'gpt-4.1-mini',
     [ANTHROPIC_PROVIDER]: 'claude-3-5-haiku-latest',
     [GEMINI_PROVIDER]: 'gemini-2.0-flash',
+    [CODEX_MODEL_BRIDGE_PROVIDER]: DEFAULT_CODEX_MODEL,
     [VLLM_PROVIDER]: 'Qwen/Qwen2.5-7B-Instruct',
     [OLLAMA_PROVIDER]: 'qwen2.5:1.5b'
 });
@@ -168,6 +176,20 @@ const PROVIDER_CAPABILITY_TABLE = Object.freeze({
         longContext: true,
         lowLatency: 'model-dependent',
         notes: 'Gemini 原生支持 function calling 和 responseMimeType=application/json。'
+    }),
+    [CODEX_MODEL_BRIDGE_PROVIDER]: Object.freeze({
+        provider: CODEX_MODEL_BRIDGE_PROVIDER,
+        label: 'Codex subscription model bridge',
+        transport: 'codex-app-server-ephemeral',
+        chat: true,
+        nativeToolCalling: true,
+        nativeToolCallingDefault: true,
+        jsonMode: true,
+        jsonSchema: true,
+        vision: true,
+        longContext: true,
+        lowLatency: false,
+        notes: '评测专用：每次 AILIS 推理启动独立 Codex exec，使用 ChatGPT OAuth；Codex 自带工具、MCP、插件、网络和任务记忆均禁用。'
     }),
     [VLLM_PROVIDER]: Object.freeze({
         provider: VLLM_PROVIDER,
@@ -955,7 +977,9 @@ function validateProviderInput(settings, messages) {
 
 function providerRequiresApiKey(provider = DEFAULT_PROVIDER) {
     const normalizedProvider = normalizeProvider(provider);
-    return normalizedProvider !== VLLM_PROVIDER && normalizedProvider !== OLLAMA_PROVIDER;
+    return normalizedProvider !== VLLM_PROVIDER &&
+        normalizedProvider !== OLLAMA_PROVIDER &&
+        normalizedProvider !== CODEX_MODEL_BRIDGE_PROVIDER;
 }
 
 function buildJsonHeaders({ apiKey = '', bearer = true, extra = {} } = {}) {
@@ -1593,6 +1617,23 @@ async function callDesktopLlmProvider(settings = {}, payload = {}) {
           })
         : null;
     const messages = normalizeMessages(responseInputMessages || payload.messages);
+    if (resolvedSettings.provider === CODEX_MODEL_BRIDGE_PROVIDER) {
+        const result = await callCodexModelBridge(
+            {
+                ...resolvedSettings,
+                codexEntrypoint: settings.codexEntrypoint,
+                reasoningEffort: settings.reasoningEffort
+            },
+            {
+                ...payload,
+                signal: payload.abortSignal || payload.signal || null
+            },
+            messages
+        );
+        return result.ok
+            ? { ...result, capabilities: getProviderCapabilities(resolvedSettings) }
+            : result;
+    }
     if (resolvedSettings.provider === OLLAMA_PROVIDER) {
         return callOllama(resolvedSettings, payload, messages);
     }
@@ -1765,6 +1806,7 @@ async function checkDesktopLlmProvider(settings = {}, options = {}) {
 
 module.exports = {
     ANTHROPIC_PROVIDER,
+    CODEX_MODEL_BRIDGE_PROVIDER,
     DEFAULT_PROVIDER,
     DEFAULT_PROVIDER_BASE_URLS,
     DEFAULT_PROVIDER_MODELS,

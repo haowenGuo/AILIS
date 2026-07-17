@@ -778,6 +778,8 @@ async function searchFileArtifact(input = {}) {
         adapterId: inspection.adapterId,
         format: inspection.format,
         sourcePath: inspection.sourcePath,
+        matchMode: fillRgb ? 'exact_style' : 'lexical_substring',
+        semanticLevel: 'text',
         kind,
         query,
         fillRgb: fillRgb ? normalizeHex(fillRgb) : '',
@@ -789,6 +791,13 @@ async function searchFileArtifact(input = {}) {
             action: 'search',
             format: inspection.format,
             sourcePath: inspection.sourcePath,
+            matchMode: fillRgb ? 'exact_style' : 'lexical_substring',
+            semanticLevel: 'text',
+            complete: true,
+            truncated: false,
+            negativeResultScope: query && matches.length === 0
+                ? 'No lexical substring matched. This is not evidence that a semantic category is absent.'
+                : '',
             query,
             candidates: matches.map((candidate) => ({
                 ref: candidate.ref,

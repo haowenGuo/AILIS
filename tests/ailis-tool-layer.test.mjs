@@ -62,8 +62,8 @@ test('AILIS tool specs keep Responses-compatible shape without leaking old layer
     assert.ok(AILIS_RUNTIME_TOOL_DEFINITIONS.some((tool) => tool.id === 'output_read'));
     assert.ok(AILIS_RUNTIME_TOOL_DEFINITIONS.some((tool) => tool.id === 'output_tail'));
     assert.ok(AILIS_RUNTIME_TOOL_DEFINITIONS.some((tool) => tool.id === 'output_search'));
-    assert.equal(AILIS_RUNTIME_TOOL_DEFINITIONS.find((tool) => tool.id === 'artifact_query').exposure, AILIS_TOOL_EXPOSURE.HIDDEN);
-    assert.equal(AILIS_RUNTIME_TOOL_DEFINITIONS.find((tool) => tool.id === 'artifact_tools').exposure, AILIS_TOOL_EXPOSURE.HIDDEN);
+    assert.equal(AILIS_RUNTIME_TOOL_DEFINITIONS.find((tool) => tool.id === 'artifact_query').exposure, AILIS_TOOL_EXPOSURE.DEFERRED);
+    assert.equal(AILIS_RUNTIME_TOOL_DEFINITIONS.find((tool) => tool.id === 'artifact_tools').exposure, AILIS_TOOL_EXPOSURE.DEFERRED);
     assert.equal(AILIS_RUNTIME_TOOL_DEFINITIONS.find((tool) => tool.id === 'output_read').exposure, AILIS_TOOL_EXPOSURE.DEFERRED);
     assert.equal(AILIS_RUNTIME_TOOL_DEFINITIONS.find((tool) => tool.id === 'output_tail').exposure, AILIS_TOOL_EXPOSURE.DEFERRED);
     assert.equal(AILIS_RUNTIME_TOOL_DEFINITIONS.find((tool) => tool.id === 'output_search').exposure, AILIS_TOOL_EXPOSURE.DEFERRED);
@@ -72,6 +72,7 @@ test('AILIS tool specs keep Responses-compatible shape without leaking old layer
     assert.equal(toolSearch.route, 'ailis-runtime');
     assert.equal(toolSearch.exposure, AILIS_TOOL_EXPOSURE.DIRECT);
     assert.match(toolSearch.description, /deferred .*tool metadata/i);
+    assert.match(toolSearch.description, /cross-record ordering/);
 
     const artifactCompute = AILIS_RUNTIME_TOOL_DEFINITIONS.find((tool) => tool.id === 'artifact_compute');
     assert.equal(artifactCompute.route, 'ailis-runtime');
@@ -91,8 +92,8 @@ test('AILIS tool specs keep Responses-compatible shape without leaking old layer
 
     const mcpBridge = AILIS_RUNTIME_TOOL_DEFINITIONS.find((tool) => tool.id === 'mcp_bridge');
     const mcpBridgeSpec = createAilisFunctionToolSpec(mcpBridge);
-    assert.equal(mcpBridge.exposure, AILIS_TOOL_EXPOSURE.HIDDEN);
-    assert.equal(mcpBridgeSpec.defer_loading, undefined);
+    assert.equal(mcpBridge.exposure, AILIS_TOOL_EXPOSURE.DEFERRED);
+    assert.equal(mcpBridgeSpec.defer_loading, true);
     assert.ok(mcpBridgeSpec.parameters.properties.action.enum.includes('health_check'));
     assert.ok(mcpBridgeSpec.parameters.properties.action.enum.includes('search_tools'));
     assert.equal(mcpBridgeSpec.parameters.properties.action.enum.includes('call_tool'), false);
@@ -242,6 +243,24 @@ test('AILIS MCP adapter parses direct MCP ids and creates stable specs', () => {
     assert.deepEqual(describeImageSpec.input_schema.required, ['path']);
     assert.equal(describeImageSpec.input_schema.properties.path.minLength, 1);
 
+    for (const tool of ['read_document', 'read_presentation', 'read_spreadsheet', 'transcribe_audio']) {
+        const localReaderSpec = createAilisDirectMcpToolSpec({
+            server: 'ailis_research',
+            tool,
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    path: { type: 'string' },
+                    file: { type: 'string' },
+                    timeoutMs: { type: 'number' }
+                }
+            }
+        });
+        assert.equal(localReaderSpec.callable, true, `${tool} should be callable`);
+        assert.deepEqual(localReaderSpec.input_schema.required, ['path']);
+        assert.equal(localReaderSpec.input_schema.additionalProperties, false);
+    }
+
     const pdfExtractSpec = createAilisDirectMcpToolSpec({
         server: 'ailis_research',
         tool: 'pdf_extract_text',
@@ -303,6 +322,11 @@ test('AILIS MCP adapter parses direct MCP ids and creates stable specs', () => {
     }, { tool: 'describe_image' });
     assert.equal(normalizedImageCall.toolArgs.path, 'C:\\tmp\\screen-2.png');
     assert.deepEqual(normalizedImageCall.meta, { reason: 'vision retry' });
+
+    const spreadsheetAliasCall = normalizeAilisMcpCallArgs({
+        filePath: 'C:\\tmp\\sales.xlsx'
+    }, { tool: 'read_spreadsheet' });
+    assert.equal(spreadsheetAliasCall.toolArgs.path, 'C:\\tmp\\sales.xlsx');
 });
 
 function mcpTool(name, description = '') {
@@ -446,19 +470,15 @@ test('AILIS Gateway exposes a small Responses-compatible core surface by default
     const directNames = directSpecs.map((tool) => tool.name);
     assert.deepEqual(directNames.sort(), [
         'apply_patch',
-        'close_agent',
         'exec',
-        'followup_task',
-        'list_agents',
+        'handoff_task',
         'request_permissions',
-        'spawn_agent',
         'tool_search',
         'update_plan',
-        'wait_agent',
         'web_run',
         'write'
     ].sort());
-    for (const expected of ['web_run', 'tool_search', 'update_plan', 'write', 'exec', 'apply_patch', 'request_permissions', 'spawn_agent', 'followup_task', 'wait_agent', 'list_agents', 'close_agent']) {
+    for (const expected of ['web_run', 'tool_search', 'update_plan', 'write', 'exec', 'apply_patch', 'request_permissions', 'handoff_task']) {
         assert.ok(directNames.includes(expected), `${expected} should be a core direct tool`);
     }
     for (const deferred of ['read', 'artifact_tools', 'artifact_query', 'github_pages', 'mcp_bridge', 'computer']) {

@@ -2,14 +2,17 @@ const fs = require('fs');
 const path = require('path');
 const { randomUUID } = require('crypto');
 
-const MEMORY_STORE_VERSION = 1;
+const MEMORY_STORE_VERSION = 2;
 const DEFAULT_AFFINITY_SCORE = 50;
 const MAX_BLOCK_CHARS = 2200;
 const MAX_CONTEXT_CHARS = 20000;
 const MAX_STATE_EVENTS = 500;
 const MAX_AFFINITY_EVENTS = 200;
-const DEFAULT_RELEVANT_EVENT_LIMIT = 24;
+const DEFAULT_RELEVANT_EVENT_LIMIT = 8;
+const DEFAULT_RECENT_SESSION_EVENT_LIMIT = 6;
+const MAX_PROMPT_EVENT_TEXT_CHARS = 260;
 const SECRET_PROTECTION = 'local-file-base64';
+const LEGACY_AUTO_LEARNED_BLOCK_KEYS = new Set(['user', 'relationship', 'project']);
 const MEMORY_CONTROL_TAG_PATTERN = /(?:\[\s*|【\s*)(?:action|expression|emotion|gestureIntent|socialTone|taskState|speechEnergy|gazeTarget|durationHint)\s*[:=：＝][^\]】\r\n]*(?:\]|】)/gi;
 const MEMORY_PROTOCOL_MARKER_PATTERN = /(?:<\s*(?:(?:\|{2}|｜{2})\s*DSML\s*(?:\|{2}|｜{2}))?\s*(?:tool_calls?|invoke|parameter)\b|(?:\|{2}|｜{2})\s*DSML\s*(?:\|{2}|｜{2}))/i;
 const DEFAULT_AILIS_PERSONA_TEXT = [
@@ -91,9 +94,28 @@ function sanitizePromptMemoryText(value) {
     return normalizeText(redactSecretLikeText(text));
 }
 
+function sanitizePromptMemoryBlockText(value) {
+    let text = String(value || '')
+        .replace(/<\s*(persona_output|persona_surface)\b[^>]*>[\s\S]*?<\s*\/\s*\1\s*>/gi, '')
+        .replace(MEMORY_CONTROL_TAG_PATTERN, '');
+    const protocolIndex = text.search(MEMORY_PROTOCOL_MARKER_PATTERN);
+    if (protocolIndex >= 0) {
+        text = text.slice(0, protocolIndex);
+    }
+    return text
+        .replace(/([A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,})/g, '[secret-like-token]')
+        .replace(/\b(sk|ak|pk|rk|key|token)[-_]?[A-Za-z0-9]{18,}\b/gi, '[secret-like-token]')
+        .replace(/\b[A-Fa-f0-9]{8}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{12}\b/g, '[secret-like-uuid]')
+        .replace(/\r\n/g, '\n')
+        .split('\n')
+        .map((line) => line.replace(/[ \t]+/g, ' ').trim())
+        .filter(Boolean)
+        .join('\n');
+}
+
 function formatPromptMemoryEvent(event = {}) {
-    const userText = sanitizePromptMemoryText(event.userText);
-    const assistantText = sanitizePromptMemoryText(event.assistantText);
+    const userText = truncateText(sanitizePromptMemoryText(event.userText), MAX_PROMPT_EVENT_TEXT_CHARS);
+    const assistantText = truncateText(sanitizePromptMemoryText(event.assistantText), MAX_PROMPT_EVENT_TEXT_CHARS);
     if (!userText && !assistantText) {
         return '';
     }
@@ -102,6 +124,33 @@ function formatPromptMemoryEvent(event = {}) {
         assistantText ? `AILIS：${assistantText}` : ''
     ].filter(Boolean).join('\n  ');
     return `- [${normalizeText(event.ts)}] ${dialogue}`;
+}
+
+function isTaskAgentMemoryEvent(event = {}) {
+    const sessionId = normalizeText(event.sessionId).toLowerCase();
+    const source = normalizeText(event.source).toLowerCase();
+    return sessionId.includes(':task-agent:') ||
+        source.includes('task-agent') ||
+        source.includes('task_agent') ||
+        normalizeText(event.agentRole || event.meta?.agentRole).toLowerCase() === 'task_agent';
+}
+
+function buildMemoryRetrievalQuery(message = '', messageHistory = []) {
+    const currentMessage = sanitizePromptMemoryText(message);
+    const recent = (Array.isArray(messageHistory) ? messageHistory : [])
+        .slice(-6)
+        .map((entry) => ({
+            role: entry?.role === 'assistant' ? 'assistant' : 'user',
+            text: sanitizePromptMemoryText(entry?.content || entry?.text || entry?.message || '')
+        }))
+        .filter((entry) => entry.text);
+    if (currentMessage && recent.at(-1)?.role === 'user' && recent.at(-1)?.text === currentMessage) {
+        recent.pop();
+    }
+    return [
+        ...recent.map((entry) => `${entry.role}: ${entry.text}`),
+        currentMessage ? `user: ${currentMessage}` : ''
+    ].filter(Boolean).join('\n');
 }
 
 function ensureDirSync(dirPath) {
@@ -113,7 +162,8 @@ function readJsonFileSync(filePath, fallback) {
         if (!fs.existsSync(filePath)) {
             return fallback;
         }
-        return JSON.parse(fs.readFileSync(filePath, 'utf8') || 'null') ?? fallback;
+        const raw = fs.readFileSync(filePath, 'utf8').replace(/^\uFEFF/, '');
+        return JSON.parse(raw || 'null') ?? fallback;
     } catch {
         return fallback;
     }
@@ -255,10 +305,14 @@ function normalizeBlock(key, block, fallbackBlock) {
 function normalizeState(rawState, workspaceRoot = '') {
     const fallback = createDefaultState(workspaceRoot);
     const source = rawState && typeof rawState === 'object' ? rawState : {};
+    const resetLegacyAutoLearnedBlocks = Number(source.version || 0) < MEMORY_STORE_VERSION;
     const defaultBlocks = getDefaultBlocks(workspaceRoot);
     const blocks = {};
     for (const key of Object.keys(defaultBlocks)) {
-        blocks[key] = normalizeBlock(key, source.blocks?.[key], defaultBlocks[key]);
+        const sourceBlock = resetLegacyAutoLearnedBlocks && LEGACY_AUTO_LEARNED_BLOCK_KEYS.has(key)
+            ? null
+            : source.blocks?.[key];
+        blocks[key] = normalizeBlock(key, sourceBlock, defaultBlocks[key]);
     }
     for (const [key, block] of Object.entries(source.blocks || {})) {
         if (!blocks[key]) {
@@ -388,6 +442,42 @@ function buildAffinityBlock(affinity) {
     ].join('\n');
 }
 
+function deriveCuratedAffinityScore(affinity = null) {
+    if (!affinity || typeof affinity !== 'object') {
+        return null;
+    }
+    const explicitScore = Number(affinity.score);
+    if (Number.isFinite(explicitScore)) {
+        return Math.round(clampNumber(explicitScore, 0, 100, DEFAULT_AFFINITY_SCORE));
+    }
+    const trust = clampNumber(affinity.trust, 0, 1, 0.5);
+    const familiarity = clampNumber(affinity.familiarity, 0, 1, 0.5);
+    const warmth = clampNumber(affinity.warmth, 0, 1, 0.5);
+    const friction = clampNumber(affinity.friction, 0, 1, 0.2);
+    const weighted = trust * 0.36 + familiarity * 0.3 + warmth * 0.24 - friction * 0.18;
+    return Math.round(clampNumber((weighted / 0.9) * 100, 0, 100, DEFAULT_AFFINITY_SCORE));
+}
+
+function createCuratedAffinityStateFromScore(score, existing = null) {
+    const nextScore = Math.round(clampNumber(score, 0, 100, DEFAULT_AFFINITY_SCORE));
+    const normalized = nextScore / 100;
+    const updatedAt = nowIso();
+    return {
+        version: 1,
+        createdAt: normalizeText(existing?.createdAt, updatedAt),
+        updatedAt,
+        score: nextScore,
+        trust: normalized,
+        familiarity: normalized,
+        warmth: normalized,
+        friction: 0,
+        repairState: 'stable',
+        relationshipStage: buildAffinityStage(nextScore),
+        evidenceIds: [],
+        history: []
+    };
+}
+
 function evidencePreview(ids = []) {
     const normalized = Array.isArray(ids) ? ids.map((id) => normalizeText(String(id))).filter(Boolean) : [];
     if (!normalized.length) {
@@ -436,6 +526,7 @@ function formatCuratedAffinityState(affinity = null) {
     const familiarity = clampNumber(affinity.familiarity, 0, 1, 0.5);
     const warmth = clampNumber(affinity.warmth, 0, 1, 0.5);
     const friction = clampNumber(affinity.friction, 0, 1, 0.2);
+    const score = deriveCuratedAffinityScore(affinity);
     const stage = normalizeText(affinity.relationshipStage, 'familiarizing');
     const repairState = normalizeText(affinity.repairState, 'stable');
     const evidence = evidencePreview(affinity.evidenceIds);
@@ -445,12 +536,13 @@ function formatCuratedAffinityState(affinity = null) {
             ? '可以更自然、更熟悉、更有陪伴感，但仍保持事实和执行边界。'
             : '保持温和、清晰、可靠，可以自然承接用户偏好的亲昵称呼和轻微撒娇，不要反复把关系推回普通助手。';
     return [
+        Number.isFinite(score) ? `- 综合好感度：${score}/100。` : '',
         `- 关系阶段：${stage}；修复状态：${repairState}。`,
         `- 维度：trust=${trust.toFixed(2)}, familiarity=${familiarity.toFixed(2)}, warmth=${warmth.toFixed(2)}, friction=${friction.toFixed(2)}。`,
         `- 语气影响：${toneHint}`,
         evidence ? `- ${evidence}` : '- 暂无可追溯证据 id。',
         '- 关系状态是内部表达调节数据，不影响安全、隐私、事实准确性、工具审批和基础帮助质量。'
-    ].join('\n');
+    ].filter(Boolean).join('\n');
 }
 
 function loadCuratedPromptMemory(rootDir) {
@@ -463,19 +555,44 @@ function loadCuratedPromptMemory(rootDir) {
         curatorState?.lastRun?.iso ? `最近抽取：${curatorState.lastRun.iso}。` : '',
         curatorState?.cursor?.lastProcessedIso ? `已处理到：${curatorState.cursor.lastProcessedIso}。` : ''
     ].filter(Boolean).join(' ');
+    const activeProfileItems = (Array.isArray(userProfile?.items) ? userProfile.items : [])
+        .filter((item) => item && item.status !== 'inactive' && normalizeText(item.claim));
+    const activeProjectItems = activeProfileItems.filter((item) => normalizeText(item.category) === 'project_memory');
+    const activeRelationshipToneItems = activeProfileItems.filter((item) => normalizeText(item.category) === 'relationship_tone');
+    const activeUserProfileItems = activeProfileItems.filter((item) => {
+        const category = normalizeText(item.category);
+        return category !== 'project_memory' && category !== 'relationship_tone';
+    });
+    const activeRelationshipItems = (Array.isArray(relationshipProfile?.items) ? relationshipProfile.items : [])
+        .filter((item) => item && item.status !== 'inactive' && normalizeText(item.claim));
+    const selectedRelationshipItems = activeRelationshipItems.length
+        ? activeRelationshipItems
+        : activeRelationshipToneItems;
     return {
+        hasCuratedState: Boolean(curatorState),
+        hasAffinityState: Boolean(affinityState),
+        userProfileItemCount: activeUserProfileItems.length,
+        projectProfileItemCount: activeProjectItems.length,
+        relationshipItemCount: selectedRelationshipItems.length,
         userProfileText: [
             sourceLine,
-            formatCuratedProfileItems(userProfile?.items || [], { includeCategory: true, maxItems: 28 })
+            formatCuratedProfileItems(activeUserProfileItems, { includeCategory: true, maxItems: 28 })
         ].filter(Boolean).join('\n'),
         relationshipText: [
             sourceLine,
-            formatCuratedProfileItems(relationshipProfile?.items || [], { includeCategory: false, maxItems: 16 })
+            formatCuratedProfileItems(selectedRelationshipItems, { includeCategory: false, maxItems: 16 })
+        ].filter(Boolean).join('\n'),
+        projectProfileText: [
+            sourceLine,
+            formatCuratedProfileItems(activeProjectItems, { includeCategory: true, maxItems: 24 })
         ].filter(Boolean).join('\n'),
         affinityText: [
             sourceLine,
             formatCuratedAffinityState(affinityState)
-        ].filter(Boolean).join('\n')
+        ].filter(Boolean).join('\n'),
+        affinityState,
+        affinityScore: deriveCuratedAffinityScore(affinityState),
+        affinityStage: normalizeText(affinityState?.relationshipStage)
     };
 }
 
@@ -515,7 +632,9 @@ class AILISMemoryRuntime {
             ensureDirSync(this.capsulesDir);
             ensureDirSync(this.dailyDir);
             ensureDirSync(this.reflectionsDir);
-            this.state = normalizeState(readJsonFileSync(this.statePath, null), this.workspaceRoot);
+            const rawState = readJsonFileSync(this.statePath, null);
+            this.backupLegacyStateBeforeMigration(rawState);
+            this.state = normalizeState(rawState, this.workspaceRoot);
             this.loaded = true;
             this.lastError = '';
             this.persist('initialize');
@@ -525,6 +644,21 @@ class AILISMemoryRuntime {
             this.state = normalizeState(null, this.workspaceRoot);
         }
         return this.getStatus();
+    }
+
+    backupLegacyStateBeforeMigration(rawState) {
+        if (!rawState || Number(rawState.version || 0) >= MEMORY_STORE_VERSION || !fs.existsSync(this.statePath)) {
+            return '';
+        }
+        const backupDir = path.join(this.rootDir, 'backups');
+        ensureDirSync(backupDir);
+        const sourceVersion = Math.max(0, Number(rawState.version) || 0);
+        const stamp = String(rawState.updatedAt || nowIso()).replace(/[^0-9A-Za-z]+/g, '-');
+        const backupPath = path.join(backupDir, `memory-state.v${sourceVersion}.${stamp}.json`);
+        if (!fs.existsSync(backupPath)) {
+            fs.copyFileSync(this.statePath, backupPath);
+        }
+        return backupPath;
     }
 
     persist(reason = 'update') {
@@ -565,6 +699,10 @@ class AILISMemoryRuntime {
     getStatus() {
         const eventCount = Array.isArray(this.state?.events) ? this.state.events.length : 0;
         const blockCount = this.state?.blocks ? Object.keys(this.state.blocks).length : 0;
+        const curated = loadCuratedPromptMemory(this.rootDir);
+        const affinityScore = Number.isFinite(curated.affinityScore)
+            ? curated.affinityScore
+            : Math.round(this.state?.affinity?.score ?? DEFAULT_AFFINITY_SCORE);
         return {
             enabled: true,
             version: `v${MEMORY_STORE_VERSION}`,
@@ -574,8 +712,9 @@ class AILISMemoryRuntime {
             eventsPath: this.eventsPath,
             blockCount,
             eventCount,
-            affinityScore: Math.round(this.state?.affinity?.score ?? DEFAULT_AFFINITY_SCORE),
-            affinityStage: buildAffinityStage(this.state?.affinity?.score ?? DEFAULT_AFFINITY_SCORE),
+            affinityScore,
+            affinityStage: curated.affinityStage || buildAffinityStage(affinityScore),
+            affinitySource: curated.hasAffinityState ? 'curated_capsule' : 'memory_state',
             secretCount: Array.isArray(this.state?.secrets) ? this.state.secrets.length : 0,
             lastError: this.lastError
         };
@@ -600,14 +739,41 @@ class AILISMemoryRuntime {
         ].join('\n');
     }
 
-    getSnapshot({ includeEvents = true } = {}) {
+    getSnapshot({ includeEvents = true, sessionId = '', eventLimit = 30 } = {}) {
+        const curated = loadCuratedPromptMemory(this.rootDir);
         const blocks = Object.values(this.state?.blocks || {}).map((block) => ({ ...block }));
+        const blockByKey = Object.fromEntries(blocks.map((block) => [block.key, block]));
+        const mergeBlockValue = (key, additions = []) => {
+            const block = blockByKey[key];
+            if (!block) {
+                return;
+            }
+            block.value = [
+                sanitizePromptMemoryBlockText(block.value || ''),
+                ...additions.filter(Boolean)
+            ].filter(Boolean).join('\n\n');
+        };
+        mergeBlockValue('user', curated.userProfileItemCount ? [curated.userProfileText] : []);
+        mergeBlockValue('relationship', [
+            curated.relationshipItemCount ? curated.relationshipText : '',
+            curated.hasAffinityState ? curated.affinityText : ''
+        ]);
+        mergeBlockValue('project', curated.projectProfileItemCount ? [curated.projectProfileText] : []);
+        if (blockByKey.affinity && curated.hasAffinityState) {
+            blockByKey.affinity.value = curated.affinityText;
+        }
+        const normalizedSessionId = normalizeText(sessionId);
+        const recentEvents = (this.state?.events || [])
+            .filter((event) => !normalizedSessionId || normalizeText(event.sessionId) === normalizedSessionId)
+            .slice(-Math.max(1, Math.min(Number(eventLimit) || 30, MAX_STATE_EVENTS)));
         return {
             ok: true,
             status: this.getStatus(),
-            affinity: { ...(this.state?.affinity || {}) },
+            affinity: curated.hasAffinityState
+                ? { ...(curated.affinityState || {}), score: curated.affinityScore }
+                : { ...(this.state?.affinity || {}) },
             blocks,
-            recentEvents: includeEvents ? (this.state?.events || []).slice(-30) : [],
+            recentEvents: includeEvents ? recentEvents : [],
             reflections: (this.state?.reflections || []).slice(-20),
             secrets: this.listSecrets().secrets
         };
@@ -617,6 +783,65 @@ class AILISMemoryRuntime {
         return this.getSnapshot(options);
     }
 
+    getContextSources({
+        sessionId = 'main',
+        message = '',
+        messageHistory = [],
+        contextMode = 'persona'
+    } = {}) {
+        const state = this.state || normalizeState(null, this.workspaceRoot);
+        const blocks = state.blocks || {};
+        const curated = loadCuratedPromptMemory(this.rootDir);
+        const retrievalQuery = buildMemoryRetrievalQuery(message, messageHistory);
+        const relevantEvents = this.searchMemory(retrievalQuery, {
+            limit: DEFAULT_RELEVANT_EVENT_LIMIT
+        }).events.filter((event) => !isTaskAgentMemoryEvent(event));
+        const taskAgentMode = normalizeText(contextMode, 'persona').toLowerCase() === 'task_agent';
+        const relevantLines = relevantEvents.map(formatPromptMemoryEvent).filter(Boolean);
+        return {
+            contextMode: taskAgentMode ? 'task_agent' : 'persona',
+            personaText: taskAgentMode ? '' : sanitizePromptMemoryBlockText(blocks.persona?.value || ''),
+            userText: [
+                sanitizePromptMemoryBlockText(blocks.user?.value || ''),
+                curated.userProfileItemCount ? curated.userProfileText : ''
+            ].filter(Boolean).join('\n\n'),
+            relationshipText: taskAgentMode
+                ? ''
+                : [
+                    sanitizePromptMemoryBlockText(blocks.relationship?.value || ''),
+                    curated.relationshipItemCount ? curated.relationshipText : ''
+                ].filter(Boolean).join('\n\n'),
+            affinityText: taskAgentMode ? '' : curated.affinityText,
+            projectText: [
+                sanitizePromptMemoryBlockText(blocks.project?.value || ''),
+                curated.projectProfileItemCount ? curated.projectProfileText : ''
+            ].filter(Boolean).join('\n\n'),
+            secretIndexText: sanitizePromptMemoryBlockText(
+                blocks.secrets_index?.value || this.buildSecretsIndexText()
+            ),
+            relevantMemoriesText: relevantLines.join('\n'),
+            personaRefs: blocks.persona ? ['memory:block:persona'] : [],
+            userRefs: [
+                ...(blocks.user ? ['memory:block:user'] : []),
+                ...(curated.userProfileItemCount ? ['memory:capsule:user-profile'] : [])
+            ],
+            relationshipRefs: taskAgentMode ? [] : [
+                ...(blocks.relationship ? ['memory:block:relationship'] : []),
+                ...(curated.relationshipItemCount ? ['memory:capsule:relationship-profile'] : []),
+                ...(curated.hasAffinityState ? ['memory:capsule:affinity-state'] : [])
+            ],
+            projectRefs: [
+                ...(blocks.project ? ['memory:block:project'] : []),
+                ...(curated.projectProfileItemCount ? ['memory:capsule:user-profile#project_memory'] : [])
+            ],
+            secretRefs: blocks.secrets_index ? ['memory:block:secrets_index'] : [],
+            relevantMemoryRefs: relevantEvents.map((event) => event.id).filter(Boolean),
+            retrievalQueryChars: retrievalQuery.length,
+            relevantMemoryCount: relevantLines.length,
+            sessionId
+        };
+    }
+
     compileContext({
         sessionId = 'main',
         message = '',
@@ -624,41 +849,23 @@ class AILISMemoryRuntime {
         maxChars = MAX_CONTEXT_CHARS,
         contextMode = 'persona'
     } = {}) {
-        const state = this.state || normalizeState(null, this.workspaceRoot);
-        const blocks = state.blocks || {};
-        const curatedPromptMemory = loadCuratedPromptMemory(this.rootDir);
-        const normalizedContextMode = normalizeText(contextMode, 'persona').toLowerCase();
-        if (normalizedContextMode === 'task_agent') {
-            const taskSections = [
-                '【AILIS 任务执行上下文】',
-                '使用原则：这里只提供 TaskAgent 执行任务需要的最小上下文；执行结果会作为工具观察返回同一个外层 AILIS 对话。',
-                '',
-                `会话：${sessionId}`,
-                '',
-                '## 用户工作偏好/画像',
-                curatedPromptMemory.userProfileText,
-                '',
-                `## ${blocks.secrets_index?.label || '隐私与密钥索引'}`,
-                blocks.secrets_index?.value || this.buildSecretsIndexText()
-            ];
-            return truncateStructuredText(taskSections.filter((entry) => entry !== undefined && entry !== null).join('\n'), maxChars);
-        }
-        const sections = [
-            '【AILIS Persona 记忆快照】',
-            '这是由记忆模型归纳的当前画像快照。当前可见对话和活动任务由独立上下文提供；原始旧对话不会自动注入。若与用户当前明确表达冲突，以当前表达为准。',
-            '',
-            `会话：${sessionId}`,
-            '',
-            '## 关系状态（Raw Memory Ledger 抽取）',
-            curatedPromptMemory.affinityText,
-            '',
-            '## 用户画像（Raw Memory Ledger 抽取）',
-            curatedPromptMemory.userProfileText,
-            '',
-            '## 关系画像（Raw Memory Ledger 抽取）',
-            curatedPromptMemory.relationshipText
-        ];
-        return truncateStructuredText(sections.filter((entry) => entry !== undefined && entry !== null).join('\n'), maxChars);
+        const { AILISContextCompiler } = require('./ailis-context-compiler.cjs');
+        return new AILISContextCompiler({ memoryRuntime: this }).compile({
+            sessionId,
+            currentUserMessage: message,
+            sessionRecentTurns: messageHistory,
+            agentMode: normalizeText(contextMode, 'persona').toLowerCase(),
+            maxChars
+        }).asDeveloperInstruction();
+    }
+
+    getRecentSessionEvents(sessionId = 'main', { limit = DEFAULT_RECENT_SESSION_EVENT_LIMIT } = {}) {
+        const normalizedSessionId = normalizeText(sessionId, 'main');
+        const boundedLimit = Math.max(1, Math.min(Number(limit) || DEFAULT_RECENT_SESSION_EVENT_LIMIT, 30));
+        return (this.state?.events || [])
+            .filter((event) => normalizeText(event.sessionId, 'main') === normalizedSessionId)
+            .slice(-boundedLimit)
+            .map((event) => ({ ...event }));
     }
 
     searchMemory(query, { limit = 10 } = {}) {
@@ -813,8 +1020,18 @@ class AILISMemoryRuntime {
             updatedAt: nowIso(),
             events: []
         };
+        const affinityPath = path.join(this.rootDir, 'affinity-state.json');
+        const existingCuratedAffinity = readJsonFileSync(affinityPath, null);
+        const curatedAffinity = createCuratedAffinityStateFromScore(nextScore, existingCuratedAffinity);
+        atomicWriteJsonSync(affinityPath, curatedAffinity);
         this.persist('reset_affinity');
-        return { ok: true, affinity: { ...this.state.affinity } };
+        return {
+            ok: true,
+            affinity: {
+                ...curatedAffinity,
+                legacyScore: nextScore
+            }
+        };
     }
 
     clearMemory({ preserveSecrets = true } = {}) {
@@ -827,6 +1044,23 @@ class AILISMemoryRuntime {
         atomicWriteFileSync(this.eventsPath, '');
         this.state = createDefaultState(this.workspaceRoot);
         this.state.secrets = secrets;
+        const clearedAt = nowIso();
+        atomicWriteJsonSync(path.join(this.rootDir, 'user-profile.json'), {
+            version: 1,
+            createdAt: clearedAt,
+            updatedAt: clearedAt,
+            items: []
+        });
+        atomicWriteJsonSync(path.join(this.rootDir, 'relationship-profile.json'), {
+            version: 1,
+            createdAt: clearedAt,
+            updatedAt: clearedAt,
+            items: []
+        });
+        atomicWriteJsonSync(
+            path.join(this.rootDir, 'affinity-state.json'),
+            createCuratedAffinityStateFromScore(DEFAULT_AFFINITY_SCORE)
+        );
         this.persist('clear_memory');
         return {
             ok: true,

@@ -131,6 +131,8 @@ const DEFAULT_ELEVENLABS_VOICE_PROFILES = Object.freeze({
     })
 });
 const DEFAULT_COMPUTER_CONTROL_ENABLED = true;
+const EMBER_HARNESS_MODE_OPTIONS = ['off', 'observe', 'enforce'];
+const DEFAULT_EMBER_HARNESS_MODE = 'off';
 const DEFAULT_CAMERA_DISTANCE = 1.1;
 const DEFAULT_CAMERA_HEIGHT = 1.3;
 const DEFAULT_CAMERA_TARGET_Y = 1;
@@ -652,6 +654,13 @@ function normalizeComputerControlEnabled(value) {
     return normalizeBoolean(value, DEFAULT_COMPUTER_CONTROL_ENABLED);
 }
 
+function normalizeEmberHarnessMode(value) {
+    const normalizedValue = String(value || '').trim().toLowerCase();
+    return EMBER_HARNESS_MODE_OPTIONS.includes(normalizedValue)
+        ? normalizedValue
+        : DEFAULT_EMBER_HARNESS_MODE;
+}
+
 function normalizeChunkedTtsEnabled(value) {
     return normalizeBoolean(value, DEFAULT_CHUNKED_TTS_ENABLED);
 }
@@ -809,8 +818,11 @@ function normalizeAutoChatEnabled(value) {
 
 function normalizeAutoChatMode(value, enabled = DEFAULT_AUTO_CHAT_ENABLED) {
     const mode = String(value || '').trim().toLowerCase();
-    if (['off', 'companion', 'cowork', 'autonomous'].includes(mode)) {
+    if (['off', 'companion', 'cowork'].includes(mode)) {
         return mode;
+    }
+    if (mode === 'autonomous') {
+        return 'off';
     }
     return normalizeAutoChatEnabled(enabled) ? 'companion' : DEFAULT_AUTO_CHAT_MODE;
 }
@@ -820,7 +832,7 @@ function isAutoChatModeEnabled(mode) {
 }
 
 function normalizeAutoChatMinIntervalSec(value) {
-    return Math.round(clampNumber(value, 15, 1800, DEFAULT_AUTO_CHAT_MIN_INTERVAL_SEC, 0));
+    return Math.round(clampNumber(value, 10, 1800, DEFAULT_AUTO_CHAT_MIN_INTERVAL_SEC, 0));
 }
 
 function normalizeAutoChatMaxIntervalSec(value, minimum = DEFAULT_AUTO_CHAT_MIN_INTERVAL_SEC) {
@@ -996,6 +1008,7 @@ function getDefaultState() {
             elevenLabsUseSpeakerBoost: DEFAULT_ELEVENLABS_USE_SPEAKER_BOOST,
             elevenLabsVoiceProfiles: normalizeElevenLabsVoiceProfiles(),
             computerControlEnabled: DEFAULT_COMPUTER_CONTROL_ENABLED,
+            emberHarnessMode: DEFAULT_EMBER_HARNESS_MODE,
             cameraDistance: DEFAULT_CAMERA_DISTANCE,
             cameraHeight: DEFAULT_CAMERA_HEIGHT,
             cameraTargetY: DEFAULT_CAMERA_TARGET_Y,
@@ -1211,6 +1224,9 @@ function normalizeState(inputState) {
     );
     normalizedState.preferences.llmRequestTimeoutMs = normalizeLlmRequestTimeoutMs(
         normalizedState.preferences.llmRequestTimeoutMs
+    );
+    normalizedState.preferences.emberHarnessMode = normalizeEmberHarnessMode(
+        normalizedState.preferences.emberHarnessMode
     );
     normalizedState.preferences.elevenLabsApiBase = normalizeElevenLabsApiBase(
         normalizedState.preferences.elevenLabsApiBase
@@ -1535,6 +1551,7 @@ module.exports = {
     DEFAULT_AILIS_STATE_DIR,
     DEFAULT_AGENT_RUNTIME_GATEWAY_URL,
     DEFAULT_COMPUTER_CONTROL_ENABLED,
+    DEFAULT_EMBER_HARNESS_MODE,
     DEFAULT_OPENCLAW_GATEWAY_URL,
     DEFAULT_PET_SCALE,
     DEFAULT_PET_MOUSE_HIT_TEST_ENABLED,
@@ -1545,6 +1562,7 @@ module.exports = {
     DEFAULT_PET_MOUSE_HIT_TEST_OFFSET_Y_RATIO,
     DEFAULT_PET_MOUSE_HIT_TEST_DEBUG,
     EMAIL_PROVIDER_OPTIONS,
+    EMBER_HARNESS_MODE_OPTIONS,
     ELEVENLABS_LANGUAGE_CODES,
     LLM_PROVIDER_OPTIONS,
     PET_SCALE_OPTIONS,
@@ -1585,6 +1603,7 @@ module.exports = {
     normalizeRenderOutlineEnabled,
     normalizeRenderAntialiasEnabled,
     normalizeComputerControlEnabled,
+    normalizeEmberHarnessMode,
     normalizeDesktopNativeTTSPitch,
     normalizeDesktopNativeTTSRate,
     normalizeDesktopNativeTTSVolume,

@@ -101,7 +101,14 @@ contextBridge.exposeInMainWorld('ailisDesktop', {
     },
     memoryProfile: {
         state: () => ipcRenderer.invoke('ailis:memory-profile-state'),
-        curate: (payload) => ipcRenderer.invoke('ailis:memory-profile-curate', payload || {})
+        curate: (payload) => ipcRenderer.invoke('ailis:memory-profile-curate', payload || {}),
+        rebuild: (payload) => ipcRenderer.invoke('ailis:memory-profile-rebuild', payload || {})
+    },
+    chatHistory: {
+        load: (payload) => ipcRenderer.invoke('ailis:chat-history-load', payload || {}),
+        save: (payload) => ipcRenderer.invoke('ailis:chat-history-save', payload || {}),
+        clear: (payload) => ipcRenderer.invoke('ailis:chat-history-clear', payload || {}),
+        status: () => ipcRenderer.invoke('ailis:chat-history-status')
     },
     vision: {
         capture: (payload) => ipcRenderer.invoke('ailis:vision-capture', payload || {}),

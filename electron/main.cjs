@@ -31,6 +31,7 @@ const {
     AILISAgentRuntimeSupervisor
 } = require('./openclaw-runtime.cjs');
 const { AILISGateway } = require('./ailis-gateway.cjs');
+const { AILISChatHistoryStore } = require('./ailis-chat-history-store.cjs');
 const { createAILISDesktopPlatformAdapter } = require('./ailis-desktop-platform-adapter.cjs');
 const {
     getOpenClawToolSurface: getAgentToolSurface,
@@ -73,6 +74,7 @@ const {
     DEFAULT_CAMERA_HEIGHT,
     DEFAULT_CAMERA_TARGET_Y,
     DEFAULT_COMPUTER_CONTROL_ENABLED,
+    DEFAULT_EMBER_HARNESS_MODE,
     DEFAULT_RENDER_PROFILE_ID,
     DEFAULT_RENDER_LIGHT_YAW_DEG,
     DEFAULT_RENDER_KEY_LIGHT_SCALE,
@@ -113,6 +115,7 @@ const {
     DEFAULT_AGENT_RUNTIME_GATEWAY_URL,
     DEFAULT_PET_SCALE,
     EMAIL_PROVIDER_OPTIONS,
+    EMBER_HARNESS_MODE_OPTIONS,
     ELEVENLABS_LANGUAGE_CODES,
     LLM_PROVIDER_OPTIONS,
     PET_SCALE_OPTIONS,
@@ -142,6 +145,7 @@ const {
     normalizeConversationMode,
     normalizeUiLanguage,
     normalizeComputerControlEnabled,
+    normalizeEmberHarnessMode,
     normalizeRenderProfileId,
     normalizeRenderLightYawDeg,
     normalizeRenderKeyLightScale,
@@ -345,6 +349,7 @@ let assistantGateway = null;
 let agentRuntimeSupervisor = null;
 let ailisGateway = null;
 let ailisGatewayStartPromise = null;
+let ailisChatHistoryStore = null;
 let runtimeComponentsInstallRun = null;
 let lastRuntimeComponentsInstallRun = null;
 let petDialogueCollapsedBounds = null;
@@ -857,6 +862,14 @@ function resolveAILISStateDir(value = '') {
 
 function getPersistedAILISStateDir() {
     return resolveAILISStateDir(desktopState?.preferences?.ailisStateDir);
+}
+
+function ensureAILISChatHistoryStore() {
+    const rootDir = path.join(getPersistedAILISStateDir(), 'chat-history');
+    if (!ailisChatHistoryStore || ailisChatHistoryStore.rootDir !== path.resolve(rootDir)) {
+        ailisChatHistoryStore = new AILISChatHistoryStore({ rootDir });
+    }
+    return ailisChatHistoryStore;
 }
 
 function getDefaultVoiceRuntimeRoot() {
@@ -2764,7 +2777,7 @@ function attachAilisMemoryToLlmPayload(payload = {}) {
     }
 
     const memoryMessage = {
-        role: 'system',
+        role: 'developer',
         content: [
             '以下是 AILIS 的本地长期记忆上下文，只作为辅助参考。',
             '若与用户当前明确指令冲突，以当前指令为准；不要主动暴露内部好感度数值。',
@@ -2968,11 +2981,21 @@ function ensureAILISGateway() {
         return ailisGateway;
     }
 
+    const emberHarnessMode = normalizeEmberHarnessMode(
+        desktopState?.preferences?.emberHarnessMode || DEFAULT_EMBER_HARNESS_MODE
+    );
     ailisGateway = new AILISGateway({
         app,
         projectRoot: getProjectRoot(),
         workspaceRoot: getGatewayWorkspaceRoot(),
         auditDir: getPersistedAILISStateDir(),
+        emberHarnessEnabled: emberHarnessMode !== 'off',
+        emberHarnessMode: emberHarnessMode === 'enforce' ? 'enforce' : 'observe',
+        emberHarnessLexiconPath: path.join(
+            getPersistedAILISStateDir(),
+            'safety',
+            'sensitive-words.json'
+        ),
         getDefaultContext: () => getAILISDefaultContext(),
         getEmailProfiles: () => getPersistedEmailProfiles(),
         profileCurationLlm: (payload) => callDesktopLlmProvider(getResolvedLlmSettings(), payload || {}),
@@ -3159,6 +3182,9 @@ function getRendererPreferences() {
         ...getRendererOllamaTargetPreferences(),
         ...getRendererElevenLabsPreferences(),
         computerControlEnabled: getPersistedComputerControlEnabled(),
+        emberHarnessMode: normalizeEmberHarnessMode(
+            desktopState?.preferences?.emberHarnessMode || DEFAULT_EMBER_HARNESS_MODE
+        ),
         emailProfiles: getRendererEmailProfiles(),
         cameraDistance: normalizeCameraDistance(
             desktopState?.preferences?.cameraDistance || DEFAULT_CAMERA_DISTANCE
@@ -3293,6 +3319,7 @@ function getControlPanelState() {
                 ])
             ),
             renderProfileOptions: RENDER_PROFILE_OPTIONS,
+            emberHarnessModeOptions: EMBER_HARNESS_MODE_OPTIONS,
             emailProviderOptions: EMAIL_PROVIDER_OPTIONS
         },
         environment: {
@@ -3648,6 +3675,7 @@ function applyPreferencesPatch(partialPreferences = {}) {
         elevenLabsUseSpeakerBoost: currentElevenLabsSettings.useSpeakerBoost,
         elevenLabsVoiceProfiles: currentElevenLabsSettings.voiceProfiles,
         computerControlEnabled: rendererPreferences.computerControlEnabled,
+        emberHarnessMode: rendererPreferences.emberHarnessMode,
         emailProfiles: getPersistedEmailProfiles(),
         cameraDistance: rendererPreferences.cameraDistance,
         cameraHeight: rendererPreferences.cameraHeight,
@@ -3910,6 +3938,11 @@ function applyPreferencesPatch(partialPreferences = {}) {
             partialPreferences.computerControlEnabled
         );
     }
+    if ('emberHarnessMode' in partialPreferences) {
+        nextPreferences.emberHarnessMode = normalizeEmberHarnessMode(
+            partialPreferences.emberHarnessMode
+        );
+    }
     if (partialPreferences.emailProfiles && typeof partialPreferences.emailProfiles === 'object') {
         const currentProfiles = getPersistedEmailProfiles();
         const incomingProfiles = partialPreferences.emailProfiles;
@@ -4165,6 +4198,13 @@ function applyPreferencesPatch(partialPreferences = {}) {
     persistDesktopState({ allowBlankCredentials });
     broadcastPreferencesUpdated();
 
+    if ('emberHarnessMode' in partialPreferences && ailisGateway && !ailisStateDirChanged) {
+        ailisGateway.configureEmberHarness({
+            enabled: nextPreferences.emberHarnessMode !== 'off',
+            mode: nextPreferences.emberHarnessMode === 'enforce' ? 'enforce' : 'observe'
+        });
+    }
+
     if (voiceRuntimeRootChanged) {
         voiceRuntimeBootstrap = null;
         closeCosyVoice3TTS();
@@ -4187,6 +4227,10 @@ function applyPreferencesPatch(partialPreferences = {}) {
         }).catch((error) => {
             console.warn('[agent-runtime] 运行链路切换失败：', error.message || error);
         });
+    }
+
+    if (ailisStateDirChanged) {
+        ailisChatHistoryStore = null;
     }
 
     if (ailisStateDirChanged && ailisGateway) {
@@ -5214,6 +5258,24 @@ function registerIpc() {
     );
     ipcMain.handle('ailis:memory-profile-curate', async (_event, payload = {}) =>
         ensureAILISGateway().curateUserProfile(payload || {})
+    );
+    ipcMain.handle('ailis:memory-profile-rebuild', async (_event, payload = {}) =>
+        ensureAILISGateway().rebuildUserProfile(payload || {})
+    );
+    ipcMain.handle('ailis:chat-history-load', async (_event, payload = {}) =>
+        ensureAILISChatHistoryStore().getSession(payload.sessionId || payload.sessionKey || 'main')
+    );
+    ipcMain.handle('ailis:chat-history-save', async (_event, payload = {}) =>
+        ensureAILISChatHistoryStore().saveSession(
+            payload.sessionId || payload.sessionKey || 'main',
+            payload.messages || []
+        )
+    );
+    ipcMain.handle('ailis:chat-history-clear', async (_event, payload = {}) =>
+        ensureAILISChatHistoryStore().clearSession(payload.sessionId || payload.sessionKey || 'main')
+    );
+    ipcMain.handle('ailis:chat-history-status', async () =>
+        ensureAILISChatHistoryStore().getStatus()
     );
     ipcMain.on('ailis:vision-region-selected', (event, payload = {}) => {
         completeVisionRegionSelection(event, payload.selection || payload);

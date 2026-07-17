@@ -28,12 +28,15 @@ const {
     extractYouTubeVideoId,
     extractWikipediaPageTitle,
     extractYahooResults,
+    filterSearchResultsByDomains,
     githubRepoRead,
+    handleToolCall,
     inferPaperMetadataArgsFromScholarlyQuery,
     loadManagedSearxngManifest,
     managedSearxngAllowedForSearch,
     managedSearxngPortCandidates,
     mergeSearchResultsForRerank,
+    normalizeSearchDomains,
     normalizeSearchBackends,
     openPage,
     findInPage,
@@ -45,6 +48,7 @@ const {
     rankLinksForResearch,
     rankSearchResultsForFollowup,
     readDocument,
+    readPresentation,
     runPythonFile,
     stripWikiText,
     webExtractLinks,
@@ -130,7 +134,10 @@ test('AILIS research MCP exposes Codex-aligned PDF/file tools', () => {
     assert.ok(names.includes('read_presentation'));
     assert.ok(names.includes('youtube_video_search'));
     assert.ok(names.includes('youtube_transcript'));
-    assert.deepEqual(Object.keys(searchTool.inputSchema.properties), ['query', 'maxResults', 'search_context_size']);
+    assert.deepEqual(Object.keys(searchTool.inputSchema.properties), ['query', 'maxResults', 'search_context_size', 'recency', 'domains']);
+    assert.equal(searchTool.inputSchema.properties.query.maxLength, 512);
+    assert.equal(searchTool.inputSchema.properties.recency.minimum, 1);
+    assert.equal(searchTool.inputSchema.properties.domains.maxItems, 8);
     assert.equal(searchTool.inputSchema.properties.backend, undefined);
     assert.equal(searchTool.inputSchema.properties.backends, undefined);
     assert.equal(searchTool.inputSchema.properties.provider, undefined);
@@ -280,6 +287,7 @@ test('read_document extracts Word paragraphs and tables as structured JSON', asy
         assert.equal(result.structuredContent.truncated, false);
         assert.equal(result.structuredContent.reasoningReady, true);
         assert.equal(result.structuredContent.observationContract.reasoning_ready, true);
+        assert.equal(result.structuredContent.observationContract.semantic_level, 'structure');
     } finally {
         fs.rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -533,6 +541,169 @@ test('paper_metadata_lookup can list earlier works for an OpenAlex author id', a
         assert.equal(payload.results[1].title, 'A new software agent ?learning? algorithm');
         assert.equal(result.structuredContent.answerCandidate.earliestWorkTitle, 'Mapping human-oriented information to software agents for online systems usage');
         assert.ok(result.content[0].text.indexOf('"answerCandidate"') < result.content[0].text.indexOf('"bestMatch"'));
+    });
+});
+
+test('transcribe_audio rejects a missing staged path before loading Whisper', async () => {
+    const result = await handleToolCall({
+        params: {
+            name: 'transcribe_audio',
+            arguments: {
+                path: path.join(os.tmpdir(), `missing-audio-${Date.now()}.mp3`),
+                model: 'small',
+                timeoutMs: 180000
+            }
+        }
+    });
+
+    assert.equal(result.isError, true);
+    assert.equal(result.details.status, 'not_found');
+    assert.equal(result.details.failureReason, 'local_audio_path_not_found');
+    assert.match(result.content[0].text, /exact current attached_files path/i);
+});
+
+test('read_presentation reports full and truncated slide coverage structurally', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ailis-pptx-'));
+    try {
+        const pptxPath = path.join(tmpDir, 'sample.pptx');
+        const code = [
+            'from pptx import Presentation',
+            'import sys',
+            'prs = Presentation()',
+            'for title in ["First slide evidence", "Second slide evidence"]:',
+            '    slide = prs.slides.add_slide(prs.slide_layouts[5])',
+            '    slide.shapes.title.text = title',
+            'prs.save(sys.argv[1])'
+        ].join('\n');
+        const created = spawnSync('python', ['-c', code, pptxPath], { encoding: 'utf8' });
+        assert.equal(created.status, 0, created.stderr || created.stdout);
+
+        const complete = await readPresentation({ path: pptxPath });
+        assert.equal(complete.isError, undefined, complete.content[0].text);
+        assert.equal(complete.structuredContent.total_slides, 2);
+        assert.equal(complete.structuredContent.returned_slides, 2);
+        assert.equal(complete.details.complete, true);
+        assert.equal(complete.details.truncated, false);
+        assert.equal(complete.details.observationContract.semantic_level, 'structure');
+
+        const partial = await readPresentation({ path: pptxPath, maxSlides: 1 });
+        assert.equal(partial.details.status, 'partial');
+        assert.equal(partial.details.complete, false);
+        assert.equal(partial.details.truncated, true);
+        assert.deepEqual(partial.details.coverage, {
+            totalSlides: 2,
+            returnedSlides: 1,
+            matchingSlides: 0
+        });
+    } finally {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+});
+
+test('paper_metadata_lookup resolves an exact author name into chronological earlier works', async () => {
+    await withServer((request, response) => {
+        const url = new URL(request.url || '/', 'http://127.0.0.1');
+        response.setHeader('content-type', 'application/json');
+        if (url.pathname === '/openalex/authors') {
+            assert.equal(url.searchParams.get('search'), 'Pietro Murano');
+            response.end(JSON.stringify({
+                results: [{
+                    id: 'https://openalex.org/A5047423326',
+                    display_name: 'Pietro Murano',
+                    works_count: 42,
+                    cited_by_count: 120
+                }]
+            }));
+            return;
+        }
+        if (url.pathname === '/openalex/works') {
+            assert.equal(url.searchParams.get('filter'), 'author.id:https://openalex.org/A5047423326');
+            assert.equal(url.searchParams.get('sort'), 'publication_date:asc');
+            response.end(JSON.stringify({
+                results: [
+                    {
+                        id: 'https://openalex.org/W1',
+                        display_name: 'Mapping human-oriented information to software agents for online systems usage',
+                        publication_year: 2001,
+                        publication_date: '2001-01-01',
+                        authorships: [{ author: { display_name: 'Pietro Murano', id: 'https://openalex.org/A5047423326' } }]
+                    },
+                    {
+                        id: 'https://openalex.org/W2',
+                        display_name: 'Later paper',
+                        publication_year: 2016,
+                        authorships: [{ author: { display_name: 'Pietro Murano', id: 'https://openalex.org/A5047423326' } }]
+                    }
+                ]
+            }));
+            return;
+        }
+        response.writeHead(404);
+        response.end(JSON.stringify({ message: `not found: ${url.pathname}` }));
+    }, async (baseUrl) => {
+        const result = await paperMetadataLookup({
+            author: 'Pietro Murano',
+            beforeYear: 2015,
+            openAlexBaseUrl: `${baseUrl}/openalex/works`,
+            openAlexAuthorsBaseUrl: `${baseUrl}/openalex/authors`
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.equal(result.structuredContent.authorId, 'https://openalex.org/A5047423326');
+        assert.equal(result.structuredContent.resolvedAuthor.name, 'Pietro Murano');
+        assert.equal(result.structuredContent.bestMatch.title, 'Mapping human-oriented information to software agents for online systems usage');
+        assert.equal(result.structuredContent.results.length, 1);
+    });
+});
+
+test('paper_metadata_lookup retries broad OpenAlex title search after exact lookup returns no candidates', async () => {
+    let exactCalls = 0;
+    let broadCalls = 0;
+    let broadQuery = '';
+    await withServer((request, response) => {
+        const url = new URL(request.url || '/', 'http://127.0.0.1');
+        response.setHeader('content-type', 'application/json');
+        if (url.pathname === '/openalex/works') {
+            if (url.searchParams.get('search.exact')) {
+                exactCalls += 1;
+                response.end(JSON.stringify({ results: [] }));
+                return;
+            }
+            broadCalls += 1;
+            broadQuery = url.searchParams.get('search') || '';
+            response.end(JSON.stringify({
+                results: [{
+                    id: 'https://openalex.org/W123',
+                    display_name: 'Pie Menus or Linear Menus, Which Is Better?',
+                    publication_year: 2015,
+                    authorships: [
+                        { author: { display_name: 'Pietro Murano', id: 'https://openalex.org/A5047423326' } },
+                        { author: { display_name: 'Iram N. Khan', id: 'https://openalex.org/A5016585278' } }
+                    ]
+                }]
+            }));
+            return;
+        }
+        if (url.pathname === '/crossref/works') {
+            response.end(JSON.stringify({ message: { items: [] } }));
+            return;
+        }
+        response.writeHead(404);
+        response.end(JSON.stringify({ message: `not found: ${url.pathname}` }));
+    }, async (baseUrl) => {
+        const result = await paperMetadataLookup({
+            title: 'Pie Menus or Linear Menus, Which Is Better?',
+            year: 2015,
+            openAlexBaseUrl: `${baseUrl}/openalex/works`,
+            crossrefBaseUrl: `${baseUrl}/crossref/works`
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.equal(exactCalls, 1);
+        assert.equal(broadCalls, 1);
+        assert.equal(broadQuery, 'Pie Menus or Linear Menus, Which Is Better');
+        assert.equal(result.structuredContent.bestMatch.title, 'Pie Menus or Linear Menus, Which Is Better?');
+        assert.ok(result.structuredContent.attempts.some((attempt) => attempt.source === 'openalex_title_fallback'));
     });
 });
 
@@ -933,6 +1104,19 @@ test('web_search auto chain uses no-Docker Python search while skipping unconfig
     }
 });
 
+test('web_search domain filters normalize hosts and include subdomains only', () => {
+    assert.deepEqual(
+        normalizeSearchDomains(['https://www.wikipedia.org/wiki/Test', '*.Example.COM', 'wikipedia.org']),
+        ['wikipedia.org', 'example.com']
+    );
+    const results = filterSearchResultsByDomains([
+        { title: 'Wikipedia', url: 'https://en.wikipedia.org/wiki/Test' },
+        { title: 'Lookalike', url: 'https://wikipedia.org.example.test/fake' },
+        { title: 'Other', url: 'https://example.test/other' }
+    ], ['wikipedia.org']);
+    assert.deepEqual(results.map((result) => result.title), ['Wikipedia']);
+});
+
 test('web_search can aggregate structured Wikipedia search results without task-specific rules', async () => {
     await withServer((request, response) => {
         const url = new URL(request.url || '/', 'http://127.0.0.1');
@@ -955,6 +1139,7 @@ test('web_search can aggregate structured Wikipedia search results without task-
     }, async (baseUrl) => {
         const result = await webSearch({
             query: '1928 Summer Olympics number of athletes by country',
+            domains: ['wikipedia.org'],
             backends: ['wikipedia_search'],
             wikipediaSearchUrl: `${baseUrl}/w/api.php`,
             maxResults: 5
@@ -1001,8 +1186,10 @@ test('managed SearXNG manifest is resolved without requiring a user URL', () => 
 });
 
 test('web_search auto-start path reuses an AILIS-managed local SearXNG service', async () => {
+    const observedSearchRequests = [];
     await withServer((request, response) => {
         const url = new URL(request.url || '/', 'http://127.0.0.1');
+        observedSearchRequests.push(url);
         assert.equal(url.pathname, '/search');
         assert.equal(url.searchParams.get('format'), 'json');
         response.writeHead(200, { 'content-type': 'application/json' });
@@ -1036,14 +1223,19 @@ test('web_search auto-start path reuses an AILIS-managed local SearXNG service',
                 managedSearxngManifest: manifestPath,
                 managedSearxngPort: Number(new URL(baseUrl).port),
                 maxResults: 3,
+                recency: 7,
                 timeoutMs: 3000,
                 overallTimeoutMs: 9000
             });
             assert.equal(result.isError, undefined, result.content[0].text);
             assert.equal(result.structuredContent.backend, 'aggregated');
             assert.equal(result.structuredContent.managedSearxng.source, 'existing');
-            assert.equal(result.structuredContent.results[0].url, 'https://example.test/managed-searxng');
+            assert.ok(result.structuredContent.results.some((entry) => entry.url === 'https://example.test/managed-searxng'));
             assert.ok(result.structuredContent.searchAggregation.successfulBackends.includes('searxng_json'));
+            assert.ok(observedSearchRequests.some((url) => (
+                /managed searxng automatic local service/i.test(url.searchParams.get('q') || '')
+                && url.searchParams.get('time_range') === 'week'
+            )));
         } finally {
             fs.rmSync(tempDir, { recursive: true, force: true });
         }
@@ -3034,6 +3226,8 @@ test('web_fetch returns Codex-style source viewport with line navigation', async
         assert.match(result.content[0].text, /Source viewport:/);
         assert.match(result.content[0].text, /Total lines: 70/);
         assert.match(result.content[0].text, /L31: ### Studio albums/);
+        assert.match(result.content[0].text, /candidate-set boundary/);
+        assert.match(result.content[0].text, /remaining relevant lines or sections/);
         const deprecatedPreviewMarker = new RegExp(['output', 'Complete=false'].join(''));
         assert.doesNotMatch(result.content[0].text, deprecatedPreviewMarker);
         assert.equal(result.structuredContent.modelVisibleMode, 'source_viewport');

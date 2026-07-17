@@ -35,6 +35,8 @@ const elements = {
     minimizeBtn: document.getElementById('minimize-btn'),
     computerControlEnabled: document.getElementById('computer-control-enabled'),
     conversationMode: document.getElementById('conversation-mode'),
+    emberHarnessMode: document.getElementById('ember-harness-mode'),
+    emberHarnessStatus: document.getElementById('ember-harness-status'),
     characterActiveSummary: document.getElementById('character-active-summary'),
     characterActiveType: document.getElementById('character-active-type'),
     characterInstallFolderBtn: document.getElementById('character-install-folder-btn'),
@@ -248,18 +250,13 @@ const AUTO_CHAT_MODE_SETTINGS = Object.freeze({
     },
     companion: {
         enabled: true,
-        minIntervalSec: 15 * 60,
-        maxIntervalSec: 45 * 60
+        minIntervalSec: 20,
+        maxIntervalSec: 20
     },
     cowork: {
         enabled: true,
         minIntervalSec: 30 * 60,
         maxIntervalSec: 60 * 60
-    },
-    autonomous: {
-        enabled: false,
-        minIntervalSec: 15 * 60,
-        maxIntervalSec: 45 * 60
     }
 });
 
@@ -267,6 +264,9 @@ function normalizeAutoChatMode(value, legacyEnabled = false) {
     const mode = String(value || '').trim().toLowerCase();
     if (Object.prototype.hasOwnProperty.call(AUTO_CHAT_MODE_SETTINGS, mode)) {
         return mode;
+    }
+    if (mode === 'autonomous') {
+        return 'off';
     }
     return legacyEnabled ? 'companion' : 'off';
 }
@@ -1737,6 +1737,11 @@ function normalizePreferences(preferences = {}) {
         elevenLabsApiKeyConfigured: Boolean(preferences.elevenLabsApiKeyConfigured),
         elevenLabsApiKeySource: String(preferences.elevenLabsApiKeySource || 'none'),
         computerControlEnabled: preferences.computerControlEnabled !== false,
+        emberHarnessMode: ['off', 'observe', 'enforce'].includes(
+            String(preferences.emberHarnessMode || '').trim().toLowerCase()
+        )
+            ? String(preferences.emberHarnessMode).trim().toLowerCase()
+            : 'off',
         autoChatMode,
         autoChatEnabled: autoChatModeSettings.enabled,
         autoChatMinIntervalSec: autoChatModeSettings.minIntervalSec,
@@ -2109,6 +2114,9 @@ function readFormPreferences({ includeSecret = false } = {}) {
             ? 'none'
             : String(currentPreferences?.elevenLabsApiKeySource || 'none'),
         computerControlEnabled: elements.computerControlEnabled.checked,
+        emberHarnessMode: elements.emberHarnessMode?.value ||
+            currentPreferences?.emberHarnessMode ||
+            'off',
         autoChatMode: elements.autoChatMode?.value || currentPreferences?.autoChatMode || 'off',
         emailProfiles: readEmailFormProfiles({ includeSecret }),
         cameraDistance: Number(elements.cameraDistance.value),
@@ -5356,6 +5364,10 @@ function fillForm(preferences) {
         draftElevenLabsActiveLanguageCode
     );
     elements.computerControlEnabled.checked = normalized.computerControlEnabled;
+    if (elements.emberHarnessMode) {
+        elements.emberHarnessMode.value = normalized.emberHarnessMode;
+    }
+    renderEmberHarnessStatus(null, normalized.emberHarnessMode);
     if (elements.autoChatMode) {
         elements.autoChatMode.value = normalized.autoChatMode;
     }
@@ -5441,6 +5453,8 @@ function renderAgentRuntimeStatus(status = {}) {
         humanGateway.agentToolSurfaceValidation ||
         humanGateway.openClawToolSurfaceValidation ||
         {};
+    const emberHarness = humanGateway.emberHarness || null;
+    renderEmberHarnessStatus(emberHarness);
 
     if (humanGateway.running) {
         elements.agentRuntimeStatusText.textContent = `AILIS Gateway 已运行（${humanGateway.url || `:${humanGateway.port || ''}`}）`;
@@ -5459,6 +5473,9 @@ function renderAgentRuntimeStatus(status = {}) {
             : '',
         typeof agentRunner.completedRunCount === 'number' ? `runs: ${agentRunner.completedRunCount}` : '',
         memoryStatus.enabled ? `memory: ${memoryStatus.affinityScore ?? 50}/100` : '',
+        emberHarness?.enabled
+            ? `safety: ${emberHarness.mode === 'enforce' ? '拦截' : '观察'} / ${emberHarness.evaluatorRuntime?.status || '等待'}`
+            : 'safety: 关闭',
         humanGateway.workspaceRoot ? `workspace: ${humanGateway.workspaceRoot}` : '',
         agentRunner.pendingStorePath ? `state: ${agentRunner.pendingStorePath}` : '',
         typeof agentToolValidation.ok === 'boolean'
@@ -5473,6 +5490,37 @@ function renderAgentRuntimeStatus(status = {}) {
     ].filter(Boolean);
 
     elements.agentRuntimeDetailText.textContent = statusBits.join(' | ');
+}
+
+function renderEmberHarnessStatus(runtime = null, preferredMode = '') {
+    if (!elements.emberHarnessStatus) {
+        return;
+    }
+    const mode = ['off', 'observe', 'enforce'].includes(preferredMode)
+        ? preferredMode
+        : currentPreferences?.emberHarnessMode || 'off';
+    if (mode === 'off' || runtime?.enabled === false) {
+        elements.emberHarnessStatus.textContent = '已关闭；不会运行本地敏感词检查。';
+        return;
+    }
+
+    const evaluator = runtime?.evaluatorRuntime || {};
+    if (evaluator.status === 'ready' && evaluator.ready) {
+        elements.emberHarnessStatus.textContent =
+            `${mode === 'enforce' ? '拦截模式' : '观察模式'}已就绪：本地敏感词扫描，共 ${evaluator.patternCount || 0} 条模式。`;
+        return;
+    }
+    if (evaluator.status === 'loading') {
+        elements.emberHarnessStatus.textContent = '正在加载本地敏感词表，不需要联网下载。';
+        return;
+    }
+    if (evaluator.status === 'error') {
+        elements.emberHarnessStatus.textContent =
+            `本地敏感词表加载失败，当前保护未生效：${evaluator.lastError || '未知错误'}`;
+        return;
+    }
+    elements.emberHarnessStatus.textContent =
+        `${mode === 'enforce' ? '拦截模式' : '观察模式'}将在保存后加载本地敏感词表。`;
 }
 
 async function refreshAgentRuntimeStatus() {
@@ -6909,6 +6957,7 @@ function endDialoguePreviewDrag(event) {
     elements.elevenLabsStyle,
     elements.chunkedTtsEnabled,
     elements.computerControlEnabled,
+    elements.emberHarnessMode,
     elements.autoChatMode,
     elements.conversationMode,
     elements.emailQqAccount,
@@ -6950,6 +6999,10 @@ function endDialoguePreviewDrag(event) {
         updateRangeLabels();
         syncSaveButton();
     });
+});
+
+elements.emberHarnessMode?.addEventListener('change', () => {
+    renderEmberHarnessStatus(null, elements.emberHarnessMode.value);
 });
 
 elements.avatarBubblePreview?.addEventListener('pointerdown', beginDialogueBubbleDrag);
@@ -7432,7 +7485,7 @@ window.ailisDesktop?.onPreferencesUpdated?.(({ preferences = {} } = {}) => {
 });
 
 window.ailisDesktop?.gateway?.onEvent?.((event = {}) => {
-    if (/^(gateway|agent|tool)\./.test(event.type || '')) {
+    if (/^(gateway|agent|tool|ember)\./.test(event.type || '')) {
         scheduleAgentRuntimeStatusRefresh();
     }
     if (/^agent\.memory\./.test(event.type || '')) {
