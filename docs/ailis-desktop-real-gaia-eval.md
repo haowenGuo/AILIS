@@ -159,6 +159,64 @@ Headline metrics:
   `--cost-output-per-1m` are provided.
 - tool call count and tool error count in each task row.
 
+## Optimization Shadow Mode
+
+Experimental optimization diagnostics are disabled by default. Shadow Mode can
+measure context repetition, duplicate artifacts, suspicious tool arguments,
+multi-field evidence coverage, and repeated research attempts without changing
+model input, tool arguments, tool choice, or answer admission.
+
+Enable all Shadow observers for a diagnostic run:
+
+```powershell
+$env:AILIS_OPTIMIZATION_SHADOW = '1'
+```
+
+Or enable only one observer:
+
+```powershell
+$env:AILIS_CONTEXT_DELTA_SHADOW = '1'
+$env:AILIS_ARTIFACT_DEDUP_SHADOW = '1'
+$env:AILIS_TOOL_ARG_LINT_SHADOW = '1'
+$env:AILIS_EVIDENCE_MATRIX_SHADOW = '1'
+$env:AILIS_NO_PROGRESS_ADVISORY_SHADOW = '1'
+```
+
+Shadow data is written as `agent.optimization_shadow` transcript items and
+Gateway events. It is not included in the next model request. These flags do
+not activate context compression, argument rewriting, routing, early stopping,
+or answer blocking.
+
+## Regression Admission Gate
+
+Do not enable an active optimization from a smoke result. Freeze one commit,
+run the same complete task set independently at least twice for the baseline
+and candidate, and compare the result JSONL files:
+
+```powershell
+pnpm bench:gaia:compare -- `
+  --baseline baseline-run-1.jsonl `
+  --baseline baseline-run-2.jsonl `
+  --candidate candidate-run-1.jsonl `
+  --candidate candidate-run-2.jsonl `
+  --expected-tasks 53 `
+  --output eval-results/engineering/gaia-regression-gate.md
+```
+
+The default gate rejects the candidate when:
+
+- either cohort has fewer than two independent runs;
+- any run has a missing, extra, or replaced task;
+- aggregate visible success decreases;
+- timeout rate increases;
+- P95 duration increases by more than 15%;
+- mean model tokens increase by more than 10%;
+- a task that is correct in every baseline run is wrong in every candidate run.
+
+Thresholds can be made stricter from the CLI. Loosening them requires an
+explicit recorded decision; it must not happen implicitly inside the runner.
+The comparison process exits non-zero when a candidate is rejected.
+
 ## Scoring Policy
 
 The desktop-real runner does not require a separate `final_answer` field.

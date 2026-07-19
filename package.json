@@ -67,6 +67,7 @@
     "bench:gaia:official:download:l2": "node scripts/run-gaia-official.mjs --split validation --levels 2 --download-only",
     "bench:gaia:desktop-real:l1": "node scripts/run-ailis-desktop-real-gaia-eval.mjs",
     "bench:gaia:desktop-real:smoke": "node scripts/run-ailis-desktop-real-gaia-eval.mjs --limit 3",
+    "bench:gaia:compare": "node scripts/compare-ailis-gaia-runs.mjs",
     "bench:osworld:quickstart:wsl": "node scripts/run-wsl-repo-script.mjs scripts/run-osworld-wsl-quickstart.sh",
     "bench:osworld:ailis:test-small:wsl": "node scripts/run-wsl-repo-script.mjs scripts/run-osworld-ailis-test-small-wsl.sh",
     "eval:ailis-humanlike": "node scripts/run-ailis-humanlike-eval.mjs",

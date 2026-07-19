@@ -84,6 +84,10 @@ const {
     createEvidenceArtifact,
     getEvidenceArtifactsPromptObject
 } = require('./ailis-evidence-artifacts.cjs');
+const {
+    buildOptimizationShadowTelemetry,
+    resolveOptimizationShadowFlags
+} = require('./ailis-optimization-shadow.cjs');
 
 const DEFAULT_RUN_TIMEOUT_MS = 90000;
 const DEFAULT_TASK_HANDOFF_TIMEOUT_MS = 15 * 60 * 1000;
@@ -11005,6 +11009,10 @@ class AILISAgentRunner {
                 : null;
         const initialPlan = request.initialPlan || requestContext.initialPlan || null;
         const exactAnswerMode = isExactAnswerExecutionMode(request, requestContext);
+        const optimizationShadowFlags = resolveOptimizationShadowFlags(
+            request,
+            requestContext
+        );
         let emailProfiles = {};
         try {
             emailProfiles = this.gateway.getEmailProfiles?.() || requestContext.emailProfiles || {};
@@ -11396,6 +11404,31 @@ class AILISAgentRunner {
                 executorMode: 'responses_model_input',
                 directToolCount: directToolSpecs.length
             });
+            const optimizationShadowTelemetry = buildOptimizationShadowTelemetry({
+                flags: optimizationShadowFlags,
+                iteration,
+                message,
+                promptBudget,
+                modelInputRequest: {
+                    instructions: directModelInputPrompt.instructions,
+                    input: directModelInputPrompt.input,
+                    tools: directModelInputPrompt.tools || directToolSpecs
+                },
+                stepResults,
+                taskState
+            });
+            if (optimizationShadowTelemetry) {
+                this.gateway.emitGatewayEvent?.('agent.optimization_shadow', {
+                    runId,
+                    sessionId,
+                    ...optimizationShadowTelemetry
+                });
+                await appendRuntimeItem({
+                    type: 'agent.optimization_shadow',
+                    status: 'observed',
+                    payload: optimizationShadowTelemetry
+                });
+            }
             await appendRuntimeItem({
                 type: 'agent.context_snapshot',
                 status: 'captured',
