@@ -45,6 +45,47 @@ AILIS Assistant 是一个桌面优先的具身 AI 助手项目。它把 3D VRM �
 - 在 Agent 执行链路中接入 EMBER-Harness 阶段门控，对不可信输入、工具调用、工具返回和最终输出进行检查。
 - 人类化体验评测、工具契约测试、Gateway 检查和 Agent 执行烟测。
 
+## GAIA 评测
+
+<p align="center">
+  <img alt="AILIS GAIA Level 1 validation 历史诊断结果：81.13%、90.57%，均值 85.85%" src="docs/assets/benchmarks/gaia-l1-validation-20260719.svg">
+</p>
+
+AILIS 在同一个固定代码提交上，对 GAIA 2023 Level 1 的 53 道公开 validation 题进行了两次完整运行。Codex ChatGPT OAuth bridge 只提供 `gpt-5.5` 大模型，Agent Harness、上下文管理、工具执行和答案出口均由 AILIS 负责。
+
+| 指标 | 结果 |
+| --- | ---: |
+| 第一次运行 | 43 / 53，**81.13%** |
+| 第二次运行 | 48 / 53，**90.57%** |
+| 两次均值 | 45.5 / 53，**85.85%** |
+| 稳定通过 | 40 / 53 题两次都正确 |
+| 结果一致率 | 42 / 53，**79.25%** |
+
+这些数字目前只保留为历史诊断结果，不再作为严谨的可复现主成绩。事后审计发现，隔离 workspace 并没有禁用同一轮不同题目之间的持久语义记忆检索，因此存在题间污染风险，不能再称为“独立运行”。评测入口现已显式设置 `memoryPolicy: disabled`；必须在新协议下重新全量运行，才能发布替代主成绩。
+
+这属于公开 validation split 上的本地 `desktop-real` 可见答案评测，不是提交到私有 93 题 Level 1 test 排行榜的官方成绩。两轮都使用提交 `4f8f435`、独立 run ID 和隔离 workspace，并禁止 resume、逐题重试、失败题替换和成绩合并，但当时没有严格隔离逐题记忆。详细口径见 [GAIA 评测方法](docs/ailis-desktop-real-gaia-eval.md) 与 [Benchmark Scorecard](docs/ailis-demo-benchmark-scorecard.md)。
+
+## Apple ToolSandbox 评测
+
+<p align="center">
+  <img alt="AILIS Apple ToolSandbox 离线评测：728/728 个非 RapidAPI 场景完成认证，冻结 holdout 均值 71.51%，定向修复均值 81.49%，稳定性样本均值 88.31%" src="docs/assets/benchmarks/apple-toolsandbox-offline-20260719.svg">
+</p>
+
+AILIS 通过正式生产 Agent 链路和官方 on-policy user simulator，完成了全部 **728 个非 RapidAPI** Apple ToolSandbox 场景的官方离线评分。其余 304 个依赖 RapidAPI 的场景不调用、不产生费用，也不进入任何指标。
+
+ToolSandbox 为每个场景返回 `0` 到 `1` 的连续相似度分数，反映任务里程碑完成度和 minefield 规避情况。因此，它更适合被理解为“任务质量分”，而不是简单的二元成功率。这里同时公开多个口径，避免用一个数字掩盖差异：
+
+| 证据口径 | 结果 | 正确解释 |
+| --- | ---: | --- |
+| 认证覆盖率 | **728 / 728，100%** | 表示评测完整性，不等于任务准确率 |
+| 冻结 v3 主 holdout | **71.51%** 均值，239 / 239 有效，0 errors | 当前冻结源码的主要泛化估计 |
+| Holdout 非零率 / 满分率 | **81.17% / 38.08%** | 239 个场景中 194 个非零、91 个满分 |
+| 定向修复 | **81.49%** 均值，155 / 155 有效，0 零分 | 已分析失败队列的诊断结果，不是无偏全局分数 |
+| 稳定性样本 | **75.01% -> 88.31%**，配对 **+13.29 个百分点** | 64 个原正分场景的独立无重大回退证据 |
+| 稳定性结果 | 29 提升 / 22 持平 / 13 回退 | 含 2 个严重回退；全部预注册门禁通过 |
+
+对外最应采用的任务质量主分数是冻结 holdout 均值 **71.51%**。由于 v3 和稳定性 primary batch 都是 0 errors，`valid-only` 与 `errors-as-zero` 完全相同。定向修复与稳定性均值回答的是不同问题，不能与 holdout 分数求平均，也不能宣称为随机因果提升。V1、V2、raw 中间结果、跨漂移和 quarantine 结果均不进入主结论。
+
 ## 架构概览
 
 ```text
