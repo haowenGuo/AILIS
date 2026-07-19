@@ -368,7 +368,6 @@ class AILISToolRuntimeRegistry {
                 server: directMcp.server,
                 tool: directMcp.tool,
                 args: toolArgs,
-                ...(Number(toolArgs.timeoutMs) > 0 ? { timeoutMs: Number(toolArgs.timeoutMs) } : {}),
                 ...(meta !== undefined ? { meta } : {})
             },
             context

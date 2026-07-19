@@ -1,5 +1,7 @@
 'use strict';
 
+const fs = require('fs');
+const path = require('path');
 const { ContextManager } = require('./ailis-context-manager.cjs');
 const {
     FunctionCallOutputPayload,
@@ -22,6 +24,61 @@ function textContent(text = '') {
 function outputTextContent(text = '') {
     const normalized = normalizeText(text);
     return normalized ? [{ type: 'output_text', text: normalized }] : [];
+}
+
+function modelInputImageUrl(value = '') {
+    const source = normalizeText(value);
+    if (!source || /^(?:data:|https?:\/\/)/i.test(source)) {
+        return source;
+    }
+    let filePath = source;
+    if (source.startsWith('file://')) {
+        try {
+            filePath = decodeURIComponent(new URL(source).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
+        } catch {
+            return source;
+        }
+    }
+    const resolved = path.resolve(filePath);
+    const stat = (() => {
+        try {
+            return fs.statSync(resolved);
+        } catch {
+            return null;
+        }
+    })();
+    if (!stat?.isFile() || stat.size > 20 * 1024 * 1024) {
+        return source;
+    }
+    const extension = path.extname(resolved).toLowerCase();
+    const mimeType = extension === '.jpg' || extension === '.jpeg'
+        ? 'image/jpeg'
+        : extension === '.webp'
+        ? 'image/webp'
+        : extension === '.gif'
+        ? 'image/gif'
+        : 'image/png';
+    return `data:${mimeType};base64,${fs.readFileSync(resolved).toString('base64')}`;
+}
+
+function responseItemOutputImages(item = {}) {
+    if (item?.type !== 'function_call_output' && item?.type !== 'custom_tool_call_output') {
+        return [];
+    }
+    const output = FunctionCallOutputPayload.normalize(item.output);
+    if (output.body?.kind !== 'content_items') {
+        return [];
+    }
+    return output.body.value
+        .filter((part) => part?.type === 'input_image')
+        .map((part) => ({
+            type: 'image_url',
+            image_url: {
+                url: modelInputImageUrl(part.image_url || part.url)
+            },
+            detail: normalizeText(part.detail) || 'original'
+        }))
+        .filter((part) => part.image_url.url);
 }
 
 function responseMessage(role, text, options = {}) {
@@ -125,6 +182,7 @@ function buildMemoryDeveloperMessage(memoryContext = '') {
 
 function buildContextMessage({
     fileAttachments = [],
+    modelImageAttachments = [],
     runtimeEnvironment = null,
     capabilityCatalog = null,
     externalToolExposure = null
@@ -145,10 +203,27 @@ function buildContextMessage({
     if (!Object.keys(context).length) {
         return null;
     }
-    return responseMessage('user', safeJsonStringify({
+    const content = textContent(safeJsonStringify({
         type: 'context',
         ...context
     }, '{}'));
+    for (const attachment of Array.isArray(modelImageAttachments) ? modelImageAttachments : []) {
+        const imageUrl = normalizeText(
+            attachment?.image_url ||
+            attachment?.imageUrl ||
+            attachment?.url ||
+            attachment?.path
+        );
+        if (!imageUrl) {
+            continue;
+        }
+        content.push({
+            type: 'input_image',
+            image_url: imageUrl,
+            detail: normalizeText(attachment?.detail) || 'original'
+        });
+    }
+    return ResponseItem.message({ role: 'user', content });
 }
 
 function buildModelInput({
@@ -157,6 +232,8 @@ function buildModelInput({
     toolOutputs = [],
     memoryContext = '',
     fileAttachments = [],
+    modelImageAttachments = [],
+    inputModalities = [],
     runtimeEnvironment = null,
     capabilityCatalog = null,
     externalToolExposure = null,
@@ -170,6 +247,7 @@ function buildModelInput({
         toolOutputs,
         memoryContext,
         fileAttachments,
+        modelImageAttachments,
         runtimeEnvironment,
         capabilityCatalog,
         externalToolExposure,
@@ -177,7 +255,7 @@ function buildModelInput({
         ephemeralDeveloperMessage,
         suppressCurrentUserMessage
     });
-    return history.forPrompt();
+    return history.forPrompt({ inputModalities });
 }
 
 function buildModelInputContextManager({
@@ -186,6 +264,7 @@ function buildModelInputContextManager({
     toolOutputs = [],
     memoryContext = '',
     fileAttachments = [],
+    modelImageAttachments = [],
     runtimeEnvironment = null,
     capabilityCatalog = null,
     externalToolExposure = null,
@@ -202,6 +281,7 @@ function buildModelInputContextManager({
     history.recordItems(conversationToResponseItems(priorMessageHistory));
     const contextMessage = buildContextMessage({
         fileAttachments,
+        modelImageAttachments,
         runtimeEnvironment,
         capabilityCatalog,
         externalToolExposure
@@ -234,6 +314,46 @@ function recordToolOutputToContextManager(contextManager, toolOutput = {}, index
     return items;
 }
 
+function recordModelImageAttachmentsToContextManager(contextManager, modelImageAttachments = []) {
+    if (!contextManager || typeof contextManager.recordItems !== 'function') {
+        return 0;
+    }
+    const requested = (Array.isArray(modelImageAttachments) ? modelImageAttachments : [])
+        .map((attachment) => ({
+            image_url: normalizeText(
+                attachment?.image_url ||
+                attachment?.imageUrl ||
+                attachment?.url ||
+                attachment?.path
+            ),
+            detail: normalizeText(attachment?.detail) || 'original'
+        }))
+        .filter((attachment) => attachment.image_url);
+    if (!requested.length) {
+        return 0;
+    }
+    const existing = new Set(
+        (contextManager.rawItems?.() || [])
+            .flatMap((item) => Array.isArray(item?.content) ? item.content : [])
+            .filter((part) => part?.type === 'input_image')
+            .map((part) => normalizeText(part.image_url))
+            .filter(Boolean)
+    );
+    const fresh = requested.filter((attachment) => !existing.has(attachment.image_url));
+    if (!fresh.length) {
+        return 0;
+    }
+    contextManager.recordItems([ResponseItem.message({
+        role: 'user',
+        content: fresh.map((attachment) => ({
+            type: 'input_image',
+            image_url: attachment.image_url,
+            detail: attachment.detail
+        }))
+    })]);
+    return fresh.length;
+}
+
 function restoreModelInputContextManagerFromCheckpoint(checkpoint = null, options = {}) {
     return ContextManager.fromCheckpoint(checkpoint, options);
 }
@@ -245,8 +365,25 @@ function responseItemsToChatMessages({ instructions = '', input = [] } = {}) {
     }
     for (const item of Array.isArray(input) ? input : []) {
         if (item?.type === 'message') {
+            const contentParts = (Array.isArray(item.content) ? item.content : [])
+                .map((part) => {
+                    if (part?.type === 'input_image') {
+                        const imageUrl = normalizeText(part.image_url || part.url);
+                        return imageUrl ? {
+                            type: 'image_url',
+                            image_url: { url: imageUrl },
+                            detail: normalizeText(part.detail) || 'original'
+                        } : null;
+                    }
+                    const text = normalizeText(part?.text || part?.content);
+                    return text ? { type: 'text', text } : null;
+                })
+                .filter(Boolean);
+            const hasImage = contentParts.some((part) => part.type === 'image_url');
             const content = Array.isArray(item.content)
-                ? item.content.map((part) => part?.text || part?.content || '').filter(Boolean).join('\n')
+                ? hasImage
+                    ? contentParts
+                    : contentParts.map((part) => part.text).filter(Boolean).join('\n')
                 : normalizeText(item.content);
             if (content) {
                 const role = ['system', 'developer', 'user', 'assistant'].includes(item.role)
@@ -294,6 +431,19 @@ function responseItemsToChatMessages({ instructions = '', input = [] } = {}) {
                 tool_call_id: item.call_id,
                 content: responseItemOutputToText(item)
             });
+            const outputImages = responseItemOutputImages(item);
+            if (outputImages.length) {
+                messages.push({
+                    role: 'user',
+                    content: [
+                        {
+                            type: 'text',
+                            text: 'Visual artifact returned by the immediately preceding tool call. Inspect this image as tool evidence for the current request; it is not a new user request.'
+                        },
+                        ...outputImages
+                    ]
+                });
+            }
             continue;
         }
         if (item?.type === 'tool_search_output') {
@@ -317,8 +467,10 @@ module.exports = {
     buildModelInputContextManager,
     functionCall,
     functionCallOutput,
+    recordModelImageAttachmentsToContextManager,
     recordToolOutputToContextManager,
     restoreModelInputContextManagerFromCheckpoint,
+    responseItemOutputImages,
     responseItemsToChatMessages,
     responseMessage,
     toolOutputToModelInputItems,

@@ -15,6 +15,14 @@ const {
 } = require('../electron/ailis-agent-runner.cjs');
 const { buildObservationLedgerPromptObject } = require('../electron/ailis-turn-items.cjs');
 const { ContextManager } = require('../electron/ailis-context-manager.cjs');
+const {
+    normalizeTimeoutMs
+} = require('../electron/desktop-llm-provider.cjs');
+
+test('desktop LLM provider preserves configured agent decision timeouts up to ten minutes', () => {
+    assert.equal(normalizeTimeoutMs(360000), 360000);
+    assert.equal(normalizeTimeoutMs(15 * 60 * 1000), 10 * 60 * 1000);
+});
 
 async function jsonFetch(url, options = {}) {
     const response = await fetch(url, {
@@ -478,7 +486,7 @@ test('Agent prompts inject runtime_environment from the active platform adapter'
             env: { ComSpec: 'C:\\Windows\\System32\\cmd.exe' },
             expectedFamily: 'windows',
             expectedPathStyle: 'windows',
-            expectedShellDialect: 'cmd'
+            expectedShellDialect: 'powershell'
         },
         {
             platform: 'linux',
@@ -550,6 +558,76 @@ test('Agent prompts inject runtime_environment from the active platform adapter'
             await llmServer.close();
             await fs.rm(workspaceRoot, { recursive: true, force: true });
         }
+    }
+});
+
+test('Desktop real eval can pin only the runtime clock while preserving platform metadata', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-runtime-clock-'));
+    const llmServer = await createScriptedChatCompletionsServer(() => ({
+        mode: 'task',
+        intent: 'runtime_clock_probe',
+        summary: 'probe runtime clock',
+        action: 'final',
+        final_answer: 'runtime clock observed'
+    }));
+    const gateway = new AILISGateway({
+        port: 0,
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit'),
+        platformAdapter: new AILISPlatformAdapter({
+            platform: 'win32',
+            hostPlatform: 'win32',
+            env: { ComSpec: 'C:\\Windows\\System32\\cmd.exe' }
+        })
+    });
+
+    try {
+        const status = await gateway.start();
+        const result = await runAgent(status.url, {
+            sessionId: 'runtime-clock-override',
+            message: 'Confirm the benchmark clock.',
+            agentLoop: 'llm',
+            directToolExecutor: false,
+            llmSettings: {
+                provider: 'openai-compatible',
+                baseUrl: llmServer.url,
+                apiKey: 'test-key',
+                model: 'mock-runtime-clock',
+                temperature: 0,
+                timeoutMs: 10000
+            },
+            context: {
+                workspace: workspaceRoot,
+                directToolExecutor: false,
+                nativeDirectTools: false,
+                desktopRealEval: true,
+                runtimeEnvironmentOverride: {
+                    source: 'toolsandbox_benchmark_clock',
+                    current_date: '2026-07-17',
+                    current_time: '06:06:27',
+                    current_datetime: '2026-07-17T06:06:27+08:00',
+                    utc_offset: '+08:00'
+                }
+            }
+        });
+
+        assert.equal(result.body.ok, true, JSON.stringify(result.body));
+        const runtimeEnvironment = parseModelContextPayload(
+            llmServer.calls[0]
+        ).runtime_environment;
+        assert.equal(runtimeEnvironment.source, 'toolsandbox_benchmark_clock');
+        assert.equal(runtimeEnvironment.current_date, '2026-07-17');
+        assert.equal(runtimeEnvironment.current_time, '06:06:27');
+        assert.equal(runtimeEnvironment.current_datetime, '2026-07-17T06:06:27+08:00');
+        assert.equal(runtimeEnvironment.utc_offset, '+08:00');
+        assert.equal(runtimeEnvironment.family, 'windows');
+        assert.equal(runtimeEnvironment.path_style, 'windows');
+        assert.equal(runtimeEnvironment.shell_dialect, 'powershell');
+    } finally {
+        await gateway.stop();
+        await llmServer.close();
+        await fs.rm(workspaceRoot, { recursive: true, force: true });
     }
 });
 
@@ -690,8 +768,22 @@ test('Persona hands one exact request to the system TaskAgent and renders its co
                 workspace: workspaceRoot,
                 agentLoop: 'llm',
                 directToolExecutor: true,
+                nativeDirectTools: true,
+                directToolLimit: 35,
                 maxAgentSteps: 4,
-                agentRole: 'persona_orchestrator'
+                agentRole: 'persona_orchestrator',
+                requireTaskExecution: true,
+                requireExecutionEvidence: true,
+                desktopRealEval: true,
+                benchmarkName: 'Apple ToolSandbox',
+                benchmarkScenario: 'toolsandbox-scenario-1',
+                runtimeEnvironmentOverride: {
+                    source: 'toolsandbox_benchmark_clock',
+                    current_date: '2026-07-17',
+                    current_time: '06:06:27',
+                    current_datetime: '2026-07-17T06:06:27+08:00',
+                    utc_offset: '+08:00'
+                }
             }
         });
 
@@ -703,7 +795,22 @@ test('Persona hands one exact request to the system TaskAgent and renders its co
         assert.equal(taskCalls.length, 1);
         assert.equal(taskCalls[0].agent.task, '核对官方资料并只给出类名。');
         assert.equal(taskCalls[0].context.originalUserGoal, '核对官方资料并只给出类名。');
+        assert.equal(taskCalls[0].context.desktopRealEval, true);
+        assert.equal(taskCalls[0].context.benchmarkName, 'Apple ToolSandbox');
+        assert.equal(taskCalls[0].context.benchmarkScenario, 'toolsandbox-scenario-1');
+        assert.equal(taskCalls[0].context.directToolLimit, 35);
+        assert.equal(taskCalls[0].context.requireExecutionEvidence, true);
+        assert.deepEqual(taskCalls[0].context.runtimeEnvironmentOverride, {
+            source: 'toolsandbox_benchmark_clock',
+            current_date: '2026-07-17',
+            current_time: '06:06:27',
+            current_datetime: '2026-07-17T06:06:27+08:00',
+            utc_offset: '+08:00'
+        });
         assert.equal(llmServer.calls.length, 1);
+        assert.notEqual(llmServer.calls[0].payload.tool_choice, 'auto');
+        assert.match(JSON.stringify(llmServer.calls[0].payload.tool_choice), /handoff_task/);
+        assert.match(llmServer.calls[0].system, /explicit task-execution contract/i);
     } finally {
         await gateway.stop();
         await llmServer.close();
@@ -2387,7 +2494,7 @@ test('Agentic Executor max-step fallback does not expose raw tool logs to the us
     }
 });
 
-test('TaskAgent clamps caller-requested execution to six work rounds plus one finalization round', async () => {
+test('TaskAgent clamps caller-requested execution to eight work rounds plus one finalization round', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-task-agent-seven-rounds-'));
     await fs.writeFile(path.join(workspaceRoot, 'note.txt'), 'evidence\n', 'utf8');
     const llmServer = await createScriptedChatCompletionsServer(() => ({
@@ -2432,18 +2539,20 @@ test('TaskAgent clamps caller-requested execution to six work rounds plus one fi
         });
 
         assert.equal(result.body.status, 'max_steps_reached');
-        assert.equal(result.body.steps.length, 6);
-        assert.equal(llmServer.calls.length, 7);
-        assert.match(llmServer.calls[0].system, /at most 6 work-tool rounds/);
-        assert.match(llmServer.calls[0].system, /7-round total budget/);
-        assert.equal(llmServer.calls[6].payload.tool_choice, 'none');
-        assert.deepEqual(llmServer.calls[6].payload.tools || [], []);
-        const finalizationMessages = JSON.stringify(llmServer.calls[6].payload.messages);
+        assert.equal(result.body.steps.length, 8);
+        assert.equal(llmServer.calls.length, 9);
+        assert.match(llmServer.calls[0].system, /at most 8 work-tool rounds/);
+        assert.match(llmServer.calls[0].system, /9-round total budget/);
+        assert.match(llmServer.calls[0].system, /tool_search acquires a capability/);
+        assert.match(llmServer.calls[0].system, /web_run archive operation/);
+        assert.equal(llmServer.calls[8].payload.tool_choice, 'none');
+        assert.deepEqual(llmServer.calls[8].payload.tools || [], []);
+        const finalizationMessages = JSON.stringify(llmServer.calls[8].payload.messages);
         assert.match(finalizationMessages, /TaskAgent finalization package/);
         assert.match(finalizationMessages, /读取 note\.txt 并整理结果/);
         assert.match(finalizationMessages, /evidence/);
-        assert.doesNotMatch(llmServer.calls[6].system, /Native direct tools exposed/);
-        assert.doesNotMatch(llmServer.calls[6].system, /Emit function calls/);
+        assert.doesNotMatch(llmServer.calls[8].system, /Native direct tools exposed/);
+        assert.doesNotMatch(llmServer.calls[8].system, /Emit function calls/);
     } finally {
         await gateway.stop();
         await llmServer.close();
@@ -2510,6 +2619,80 @@ test('Agentic Executor feeds invalid decisions back as observations instead of s
     } finally {
         await gateway.stop();
         await llmServer.close();
+    }
+});
+
+test('Agentic Executor safety-finalizes after two identical invalid native tool calls', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-invalid-native-tool-fuse-'));
+    const llmServer = await createScriptedChatCompletionsServer(({ decisionCount }) => {
+        if (decisionCount <= 2) {
+            return {
+                action: 'tool',
+                summary: '尝试写入文件。',
+                tool_call: {
+                    tool: 'write',
+                    args: {}
+                }
+            };
+        }
+        return {
+            action: 'final',
+            final_answer: '无法在缺少必填参数时安全执行写入。'
+        };
+    });
+    const gateway = new AILISGateway({
+        port: 0,
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit')
+    });
+
+    try {
+        const status = await gateway.start();
+        const result = await runAgent(status.url, {
+            sessionId: 'invalid-native-tool-fuse-test',
+            message: '创建一个文本文件。',
+            agentLoop: 'llm',
+            maxAgentSteps: 8,
+            llmSettings: {
+                provider: 'openai-compatible',
+                baseUrl: llmServer.url,
+                apiKey: 'test-key',
+                model: 'mock-invalid-native-tool-fuse',
+                temperature: 0,
+                timeoutMs: 10000
+            },
+            context: {
+                workspace: workspaceRoot,
+                directToolExecutor: true,
+                nativeDirectTools: true,
+                agentRole: 'task_agent',
+                approved: true,
+                confirmationPolicy: 'auto'
+            }
+        });
+
+        assert.equal(result.body.ok, true, JSON.stringify(result.body));
+        assert.equal(llmServer.calls.length, 3);
+        assert.equal(llmServer.calls[2].payload.tool_choice, 'none');
+        assert.deepEqual(llmServer.calls[2].payload.tools || [], []);
+        assert.equal(
+            result.body.events.filter((event) =>
+                event.type === 'runtime_note' &&
+                event.status === 'invalid_decision_observation'
+            ).length,
+            2
+        );
+        assert.ok(result.body.events.some((event) =>
+            event.type === 'runtime_note' &&
+            event.status === 'safety_finalization' &&
+            event.reason === 'repeated_invalid_native_tool_call'
+        ));
+        assert.match(JSON.stringify(llmServer.calls[1].payload.messages), /required|path|content/i);
+    } finally {
+        await gateway.stop();
+        await llmServer.close();
+        await fs.rm(workspaceRoot, { recursive: true, force: true });
     }
 });
 
@@ -2818,6 +3001,61 @@ test('Agentic Executor allows zero-observation final answers without evidence wa
     } finally {
         await gateway.stop();
         await llmServer.close();
+    }
+});
+
+test('Agentic Executor marks evidence-required zero-tool finals incomplete', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-required-execution-evidence-'));
+    const llmServer = await createScriptedChatCompletionsServer(() => ({
+        mode: 'task',
+        intent: 'create_reminder',
+        summary: '提醒已经创建',
+        action: 'final',
+        final_answer: 'The reminder was created.'
+    }));
+    const gateway = new AILISGateway({
+        port: 0,
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit')
+    });
+
+    try {
+        const status = await gateway.start();
+        const result = await runAgent(status.url, {
+            sessionId: 'required-execution-evidence-test',
+            message: 'Remind me tomorrow at 5 PM.',
+            agentLoop: 'llm',
+            maxAgentSteps: 2,
+            llmSettings: {
+                provider: 'openai-compatible',
+                baseUrl: llmServer.url,
+                apiKey: 'test-key',
+                model: 'mock-required-execution-evidence',
+                temperature: 0,
+                timeoutMs: 10000
+            },
+            context: {
+                workspace: workspaceRoot,
+                agentRole: 'task_agent',
+                requireExecutionEvidence: true
+            }
+        });
+
+        assert.equal(result.body.ok, false);
+        assert.equal(result.body.status, 'incomplete');
+        assert.equal(result.body.executionRequired, true);
+        assert.equal(result.body.steps.length, 0);
+        assert.equal(result.body.taskRunHandoff.status, 'incomplete');
+        assert.deepEqual(
+            result.body.taskRunHandoff.unresolvedFields,
+            ['No successful task-execution tool call was recorded.']
+        );
+        assert.match(llmServer.calls[0].system, /explicit execution-evidence contract/i);
+    } finally {
+        await gateway.stop();
+        await llmServer.close();
+        await fs.rm(workspaceRoot, { recursive: true, force: true });
     }
 });
 

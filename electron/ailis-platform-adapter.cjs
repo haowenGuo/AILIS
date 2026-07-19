@@ -1025,7 +1025,10 @@ ${body}
             },
             capabilityMatrix,
             defaults: {
-                shell: this.defaultShellExecutable()
+                shell: this.defaultShellExecutable(),
+                commandShell: this.isWindows()
+                    ? this.windowsPowerShellExecutable()
+                    : this.defaultShellExecutable()
             }
         };
     }

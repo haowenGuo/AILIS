@@ -254,7 +254,7 @@ function normalizeTimeoutMs(value, fallbackValue = 25000) {
     if (!Number.isFinite(numericValue)) {
         return fallbackValue;
     }
-    return Math.round(Math.min(Math.max(numericValue, 5000), 300000));
+    return Math.round(Math.min(Math.max(numericValue, 5000), 10 * 60 * 1000));
 }
 
 function classifyFetchFailure(error) {

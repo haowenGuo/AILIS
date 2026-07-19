@@ -156,8 +156,7 @@ async function initialize(command) {
     });
     const benchmarkToolNames = (command.tools || []).map((spec) => normalizeText(spec?.name)).filter(Boolean);
     for (const spec of command.tools || []) registerTool(spec);
-    // AILIS intentionally caps the default TaskAgent surface to the first direct tools.
-    // Put this scenario's official tools first without changing the production router.
+    // Preserve the official allowlist order before any production-only runtime tools.
     const registeredTools = gateway.gatewayToolRuntimeRegistry.tools;
     gateway.gatewayToolRuntimeRegistry.tools = new Map([
         ...benchmarkToolNames
@@ -189,6 +188,10 @@ async function runAgent(command) {
         throw new Error('Missing AILIS desktop LLM settings.');
     }
     const maxAgentSteps = Math.max(1, Math.min(Number(bridgeConfig.maxAgentSteps || 7), 20));
+    const officialDirectToolLimit = Math.max(
+        1,
+        Math.min(Array.isArray(bridgeConfig.tools) ? bridgeConfig.tools.length : 1, 40)
+    );
     const startedAt = Date.now();
     const response = await gateway.runAgent({
         sessionId: bridgeConfig.sessionId,
@@ -210,12 +213,16 @@ async function runAgent(command) {
             llmSettings,
             directToolExecutor: true,
             nativeDirectTools: true,
+            directToolLimit: officialDirectToolLimit,
             agentRole: 'persona_orchestrator',
+            requireTaskExecution: true,
+            requireExecutionEvidence: true,
             desktopRealEval: true,
             desktopRealEvalTaskId: bridgeConfig.scenarioName,
             desktopRealEvalTaskText: bridgeConfig.originalTask,
             benchmarkName: 'Apple ToolSandbox',
             benchmarkScenario: bridgeConfig.scenarioName,
+            runtimeEnvironmentOverride: bridgeConfig.runtimeEnvironmentOverride,
             approved: true,
             autoConfirm: true,
             approvalPolicy: 'auto',

@@ -41,6 +41,29 @@ test('AILIS Gateway uses the low-latency sensitive-word evaluator by default', a
     await gateway.localSafetyEvaluator.dispose();
 });
 
+test('AILIS Gateway exposes actionable web_run contract errors to the model', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-web-run-contract-'));
+    const gateway = new AILISGateway({
+        port: 0,
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit')
+    });
+
+    const result = await gateway.callTool({
+        tool: 'web_run',
+        args: {
+            search_query: [{ q: 'historical catalog' }],
+            archive: [{ url: 'https://example.test/search?', mode: 'search' }]
+        }
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.status, 'invalid_tool_args');
+    assert.match(result.error, /received search_query, archive/);
+    assert.match(result.error, /separate follow-up calls/);
+});
+
 test('AILIS materializes structured MCP follow-up actions for the next model turn', async () => {
     const result = {
         structuredContent: {
@@ -124,7 +147,24 @@ test('AILIS exposes Codex-style web_run and preserves refs across search and ope
                 status: 'completed',
                 url: request.args.url,
                 contentType: 'application/pdf',
-                pages: 1
+                pages: 1,
+                extractedText: [
+                    'The quoted word is "fluffy".',
+                    'The fish transport bag has a volume of 0.1777 m3.',
+                    'End of extracted source.'
+                ].join('\n')
+            });
+        }
+        if (request.tool === 'webpage_screenshot') {
+            return mcpBridgeResult(`Captured screenshot at ${request.args.path}`, {
+                status: 'completed',
+                url: request.args.url,
+                path: request.args.path,
+                contentType: 'image/png',
+                modelImage: {
+                    image_url: request.args.path,
+                    detail: request.args.detail
+                }
             });
         }
         if (request.tool === 'web_find') {
@@ -148,6 +188,18 @@ test('AILIS exposes Codex-style web_run and preserves refs across search and ope
                 }
             });
         }
+        if (request.tool === 'web_archive_lookup') {
+            return mcpBridgeResult('Archived source viewport: Country: gt', {
+                status: 'completed',
+                kind: request.args.mode === 'open' ? 'web_archive_snapshot' : 'web_archive_captures',
+                originalUrl: request.args.url,
+                captures: request.args.mode === 'open' ? [] : [{
+                    provider: 'internet_archive',
+                    timestamp: '20241212025015',
+                    originalUrl: request.args.url
+                }]
+            });
+        }
         if (request.tool === 'web_fetch' || request.tool === 'render_page') {
             if (request.args.url.endsWith('.pdf')) {
                 return mcpBridgeResult('PDF content requires extraction.', {
@@ -157,6 +209,8 @@ test('AILIS exposes Codex-style web_run and preserves refs across search and ope
             }
             const isPdfView = request.args.url.endsWith('/pdf-view');
             const isSectionView = request.args.url.endsWith('/section-view');
+            const isPagedView = request.args.url.endsWith('/paged-view');
+            const isParentIndexView = request.args.url.endsWith('/rules');
             return mcpBridgeResult('L1: opened source', {
                     contentType: 'text/html',
                     fetchBackend: 'crawl4ai_local',
@@ -167,14 +221,35 @@ test('AILIS exposes Codex-style web_run and preserves refs across search and ope
                             ? 'https://example.test/article.pdf'
                             : 'https://example.test/pdf-view'
                     }],
+                    ...(isPdfView ? {
+                        suggestedNextCalls: [{
+                            tool: 'pdf_extract_text',
+                            args: {
+                                url: 'https://example.test/article.pdf',
+                                maxChars: 12000
+                            }
+                        }]
+                    } : {}),
                     source: {
                         type: 'source_viewport',
                         url: request.args.url,
                         ref_id: request.args.url,
-                        line_start: 1,
-                        line_end: 1,
-                        total_lines: isSectionView ? 3 : 1,
-                        lines: isSectionView ? [
+                        line_start: isPagedView ? 58 : 1,
+                        line_end: isPagedView ? 105 : isParentIndexView ? 7 : 1,
+                        total_lines: isPagedView ? 175 : isParentIndexView ? 7 : isSectionView ? 3 : 1,
+                        has_more_after: isPagedView,
+                        lines: isPagedView ? [
+                            { lineno: 58, text: '1. ARTICLE I. GENERAL' },
+                            { lineno: 105, text: '2. ARTICLE II. OTHER' }
+                        ] : isParentIndexView ? [
+                            { lineno: 1, text: '1. ARTICLE I. GENERAL' },
+                            { lineno: 2, text: '2. ARTICLE VI. WITNESSES' },
+                            { lineno: 3, text: 'Rule 601. Competency to Testify in General' },
+                            { lineno: 4, text: 'Rule 611. Mode and Order of Examining Witnesses' },
+                            { lineno: 5, text: '3. ARTICLE VII. OPINIONS AND EXPERT TESTIMONY' },
+                            { lineno: 6, text: 'Rule 701. Opinion Testimony by Lay Witnesses' },
+                            { lineno: 7, text: 'Rule 702. Testimony by Expert Witnesses' }
+                        ] : isSectionView ? [
                             { lineno: 1, text: '## Contents' },
                             { lineno: 2, text: '[Studio albums](https://example.test/section-view#Studio_albums)' },
                             { lineno: 3, text: '[Live albums](https://example.test/section-view#Live_albums)' }
@@ -199,6 +274,91 @@ test('AILIS exposes Codex-style web_run and preserves refs across search and ope
                 }
             };
         }
+        if (request.args.query === 'hanging search fixture') {
+            return await new Promise(() => {});
+        }
+        if (request.args.query === 'github file fixture') {
+            return mcpBridgeResult('GitHub file result.', {
+                results: [{
+                    title: 'Repository changelog',
+                    url: 'https://github.com/example/project/blob/v1.2/docs/changelog.rst',
+                    snippet: 'Official changelog source.'
+                }],
+                suggestedNextCalls: [{
+                    tool: 'github_repo_read',
+                    args: {
+                        repo: 'example/project',
+                        mode: 'file',
+                        path: 'docs/changelog.rst',
+                        ref: 'v1.2'
+                    },
+                    reason: 'Read the linked GitHub file through the repository API.'
+                }]
+            });
+        }
+        if (request.args.query === 'evaluation leak fixture') {
+            return mcpBridgeResult('Evaluation leak fixture results.', {
+                results: [
+                    {
+                        title: 'A benchmark paper',
+                        url: 'https://example.test/benchmark.pdf',
+                        snippet: 'Question: What was the actual enrollment count of the clinical trial on H. pylori in acne vulgaris patients from Jan-May 2018 as listed on the NIH website? Ground truth: 90'
+                    },
+                    {
+                        title: 'GAIA Task instruction.md',
+                        url: 'https://github.com/example/harbor-datasets/blob/main/datasets/gaia/task-id/instruction.md',
+                        snippet: 'GAIA Task: What was the actual enrollment count of the clinical trial on H. pylori in acne vulgaris patients from Jan-May 2018 as listed on the NIH website? Output requirements: write only the final answer.'
+                    },
+                    {
+                        title: 'Study Details | NCT03411733',
+                        url: 'https://clinicaltrials.gov/study/NCT03411733',
+                        snippet: 'Official ClinicalTrials.gov study record.'
+                    }
+                ]
+            });
+        }
+        if (request.args.query === 'nested selector comparison fixture') {
+            return mcpBridgeResult('Nested selector comparison results.', {
+                results: [
+                    {
+                        title: 'ARTICLE VI',
+                        url: 'https://example.test/article-vi',
+                        snippet: 'Rule 611. | Rule 611. Examining Witnesses Rule 612. A Witness Rule 615. Excluding Witnesses'
+                    },
+                    {
+                        title: 'ARTICLE VII',
+                        url: 'https://example.test/article-vii',
+                        snippet: 'Rule 701. Lay Witnesses Rule 702. Expert Witnesses Rule 706. Court Expert Witnesses'
+                    },
+                    {
+                        title: 'ARTICLE VI mirror',
+                        url: 'https://mirror.example.test/article-vi',
+                        snippet: 'Rule 601. Competency to Testify'
+                    }
+                ]
+            });
+        }
+        if (request.args.query === 'nested selector partial fixture') {
+            return mcpBridgeResult('Partial nested selector results.', {
+                results: [
+                    {
+                        title: 'ARTICLE VI',
+                        url: 'https://example.test/rules/article-vi',
+                        snippet: 'ARTICLE VI. WITNESSES Rule 601. A Witness'
+                    },
+                    {
+                        title: 'Rules index',
+                        url: 'https://example.test/rules',
+                        snippet: 'All rule articles and their titles.'
+                    },
+                    {
+                        title: 'Site home',
+                        url: 'https://example.test',
+                        snippet: 'General information.'
+                    }
+                ]
+            });
+        }
         return mcpBridgeResult(`Search result for ${request.args.query}`, {
                 results: [{
                     title: request.args.query,
@@ -207,6 +367,40 @@ test('AILIS exposes Codex-style web_run and preserves refs across search and ope
                 }]
             });
     };
+    gateway.runtime.mcpManager.listToolSpecs = async () => [
+        {
+            server: 'ailis_research',
+            tool: 'pdf_extract_text',
+            name: 'pdf_extract_text',
+            description: 'Extract text from a known PDF URL.',
+            inputSchema: {
+                type: 'object',
+                required: ['url'],
+                properties: {
+                    url: { type: 'string' },
+                    maxChars: { type: 'integer' }
+                },
+                additionalProperties: false
+            }
+        },
+        {
+            server: 'ailis_research',
+            tool: 'github_repo_read',
+            name: 'github_repo_read',
+            description: 'Read a public GitHub repository file.',
+            inputSchema: {
+                type: 'object',
+                required: ['repo', 'mode', 'path'],
+                properties: {
+                    repo: { type: 'string' },
+                    mode: { type: 'string' },
+                    path: { type: 'string' },
+                    ref: { type: 'string' }
+                },
+                additionalProperties: false
+            }
+        }
+    ];
 
     try {
         const firstTurnTools = gateway.gatewayToolRuntimeRegistry.modelVisibleSpecs();
@@ -228,15 +422,18 @@ test('AILIS exposes Codex-style web_run and preserves refs across search and ope
         );
         assert.equal(
             webRun.parameters.properties.search_query.items.properties.q.description,
-            'Search query.'
+            'One concise discovery query. Keep only verified discriminative entities and constraints; never concatenate previous queries or inject an unverified intermediate answer/entity inferred from memory.'
         );
         assert.equal(webRun.parameters.properties.search_query.maxItems, 4);
         assert.equal(webRun.parameters.properties.search_query.items.properties.q.minLength, 1);
-        assert.equal(webRun.parameters.properties.search_query.items.properties.q.maxLength, 512);
+        assert.equal(webRun.parameters.properties.search_query.items.properties.q.maxLength, 240);
         assert.equal(webRun.parameters.properties.search_query.items.properties.recency.minimum, 1);
         assert.match(webRun.parameters.properties.search_query.items.properties.recency.description, /explicitly asks for recent/i);
         assert.ok(webRun.parameters.properties.open);
         assert.ok(webRun.parameters.properties.find);
+        assert.ok(webRun.parameters.properties.screenshot);
+        assert.ok(webRun.parameters.properties.archive);
+        assert.equal(webRun.parameters.properties.archive.items.properties.scanLimit.maximum, 10000);
         assert.equal(webRun.parameters.properties.find.description, 'Find one text pattern in one page.');
         assert.equal(
             webRun.parameters.properties.find.items.properties.pattern.description,
@@ -246,7 +443,10 @@ test('AILIS exposes Codex-style web_run and preserves refs across search and ope
         assert.equal(webRun.parameters.properties.response_length.description, 'Set the length of the response to be returned.');
         assert.equal(webRun.parameters.properties.progress_note, undefined);
         assert.equal(webRun.parameters.properties.image_query, undefined);
-        assert.equal(webRun.parameters.properties.screenshot, undefined);
+        assert.equal(
+            webRun.parameters.properties.screenshot.description,
+            'Capture one browser-rendered screenshot and return it to the main model as visual tool evidence.'
+        );
         assert.equal(firstTurnTools.some((tool) => tool.name === 'web_search'), false);
         assert.equal(firstTurnTools.some((tool) => tool.name === 'mcp__ailis_research__open_page'), false);
 
@@ -268,6 +468,230 @@ test('AILIS exposes Codex-style web_run and preserves refs across search and ope
         });
         assert.equal(mixedResponse.ok, false);
         assert.equal(mixedResponse.status, 'invalid_tool_args');
+
+        const archiveResponse = await gateway.callTool({
+            tool: 'web_run',
+            args: {
+                archive: [{
+                    url: 'https://offline.example/Search/Results?',
+                    mode: 'captures',
+                    matchType: 'prefix',
+                    contains: 'subject 2020'
+                }]
+            },
+            context: { workspace: workspaceRoot, runId: 'run-archive', sessionId: 'session-archive', iteration: 0 }
+        });
+        assert.equal(archiveResponse.ok, true, JSON.stringify(archiveResponse));
+        assert.equal(bridgeRequests.at(-1).tool, 'web_archive_lookup');
+        assert.equal(bridgeRequests.at(-1).args.matchType, 'prefix');
+        assert.match(archiveResponse.result.content[0].text, /Country: gt/);
+
+        const anchoredSelectorResponse = await gateway.callTool({
+            tool: 'web_run',
+            args: {
+                search_query: [{
+                    q: 'Cornell LII Rule 601 last amendment deleted word'
+                }]
+            },
+            context: {
+                workspace: workspaceRoot,
+                runId: 'run-anchored-selector',
+                sessionId: 'session-anchored-selector',
+                iteration: 0,
+                exactAnswerMode: true,
+                currentUserMessage: 'Under the rules index, what was deleted from the first rule in the article with the most exact title matches?'
+            }
+        });
+        assert.equal(anchoredSelectorResponse.ok, true, JSON.stringify(anchoredSelectorResponse));
+        assert.equal(
+            anchoredSelectorResponse.result.structuredContent.search.queryAssumptionAudit.status,
+            'unverified_intermediate_anchor_advisory'
+        );
+        assert.deepEqual(
+            anchoredSelectorResponse.result.structuredContent.search.queryAssumptionAudit.queryGuidance.remove_unverified_anchors,
+            ['Rule 601']
+        );
+        assert.match(anchoredSelectorResponse.result.content[0].text, /search still ran/i);
+
+        const selectorComparisonResponse = await gateway.callTool({
+            tool: 'web_run',
+            args: {
+                search_query: [{ q: 'nested selector comparison fixture' }],
+                response_length: 'medium'
+            },
+            context: {
+                workspace: workspaceRoot,
+                runId: 'run-selector-comparison',
+                sessionId: 'session-selector-comparison',
+                iteration: 1,
+                exactAnswerMode: true,
+                currentUserMessage: 'Which article has "witnesses" in the most titles?'
+            }
+        });
+        assert.equal(selectorComparisonResponse.ok, true, JSON.stringify(selectorComparisonResponse));
+        const selectionAudit = selectorComparisonResponse.result.structuredContent.search.selectionAudit;
+        assert.equal(selectionAudit.status, 'incomplete_candidate_set');
+        assert.equal(selectionAudit.quoted_term, 'witnesses');
+        assert.equal(selectionAudit.result_ranking_is_selection_evidence, false);
+        assert.equal(selectionAudit.candidate_set_coverage_sufficient, false);
+        assert.equal(
+            selectorComparisonResponse.result.structuredContent.search.queryGuidance.strategy,
+            'compare_visible_parents_and_expand_candidate_boundary'
+        );
+        assert.deepEqual(
+            selectionAudit.candidates.map((candidate) => [
+                candidate.ref_id,
+                candidate.visible_snippet_occurrences
+            ]),
+            [
+                ['turn1search1', 3],
+                ['turn1search0', 2]
+            ]
+        );
+        assert.match(selectorComparisonResponse.result.content[0].text, /search ranking does not answer/i);
+        assert.match(selectorComparisonResponse.result.content[0].text, /not final per-group title counts/i);
+        assert.deepEqual(
+            selectorComparisonResponse.result.structuredContent.search.suggestedNextCalls[0].args,
+            { open: [{ ref_id: 'turn1search1' }] }
+        );
+
+        const partialSelectorResponse = await gateway.callTool({
+            tool: 'web_run',
+            args: {
+                search_query: [{ q: 'nested selector partial fixture' }],
+                response_length: 'medium'
+            },
+            context: {
+                workspace: workspaceRoot,
+                runId: 'run-selector-partial',
+                sessionId: 'session-selector-partial',
+                iteration: 2,
+                exactAnswerMode: true,
+                currentUserMessage: 'Which article has "witnesses" in the most titles?'
+            }
+        });
+        assert.equal(partialSelectorResponse.ok, true, JSON.stringify(partialSelectorResponse));
+        const partialAudit = partialSelectorResponse.result.structuredContent.search.selectionAudit;
+        assert.equal(partialAudit.status, 'incomplete_candidate_set');
+        assert.equal(partialAudit.candidate_set_coverage_sufficient, false);
+        assert.deepEqual(partialAudit.parent_index_candidates, ['turn2search1']);
+        assert.equal(
+            partialSelectorResponse.result.structuredContent.search.queryGuidance.strategy,
+            'nearest_url_ancestor_first'
+        );
+        assert.deepEqual(
+            partialSelectorResponse.result.structuredContent.search.suggestedNextCalls[0].args,
+            { open: [{ ref_id: 'turn2search1' }] }
+        );
+        assert.match(partialSelectorResponse.result.content[0].text, /open the nearest parent index/i);
+
+        const prematureChildResponse = await gateway.callTool({
+            tool: 'web_run',
+            args: {
+                open: [{ ref_id: 'turn2search0', lineno: 1 }]
+            },
+            context: {
+                workspace: workspaceRoot,
+                runId: 'run-selector-partial',
+                sessionId: 'session-selector-partial',
+                iteration: 3,
+                exactAnswerMode: true,
+                currentUserMessage: 'Which article has "witnesses" in the most titles?'
+            }
+        });
+        assert.equal(prematureChildResponse.ok, true, JSON.stringify(prematureChildResponse));
+        assert.equal(
+            prematureChildResponse.result.structuredContent.selectionDependencyAdvisory.required_parent_index_ref,
+            'turn2search1'
+        );
+        assert.match(prematureChildResponse.result.content[0].text, /opened anyway/i);
+
+        const completedParentIndexResponse = await gateway.callTool({
+            tool: 'web_run',
+            args: {
+                open: [{ ref_id: 'turn2search1', lineno: 1 }]
+            },
+            context: {
+                workspace: workspaceRoot,
+                runId: 'run-selector-partial',
+                sessionId: 'session-selector-partial',
+                iteration: 4,
+                exactAnswerMode: true,
+                currentUserMessage: 'Which article has "witnesses" in the most titles?'
+            }
+        });
+        assert.equal(completedParentIndexResponse.ok, true, JSON.stringify(completedParentIndexResponse));
+        assert.equal(
+            completedParentIndexResponse.result.structuredContent.selectionProtocol.boundary_complete,
+            true
+        );
+        assert.deepEqual(
+            completedParentIndexResponse.result.structuredContent.selectionProtocol.exact_title_match_counts
+                .map((group) => [group.group, group.count]),
+            [
+                ['ARTICLE VII', 2],
+                ['ARTICLE VI', 1],
+                ['ARTICLE I', 0]
+            ]
+        );
+        assert.equal(
+            completedParentIndexResponse.result.structuredContent.selectionProtocol.winning_group,
+            'ARTICLE VII'
+        );
+        assert.match(
+            completedParentIndexResponse.result.content[0].text,
+            /Unique winning group: ARTICLE VII/
+        );
+
+        const allowedChildResponse = await gateway.callTool({
+            tool: 'web_run',
+            args: {
+                open: [{ ref_id: 'turn2search0', lineno: 1 }]
+            },
+            context: {
+                workspace: workspaceRoot,
+                runId: 'run-selector-partial',
+                sessionId: 'session-selector-partial',
+                iteration: 5,
+                exactAnswerMode: true,
+                currentUserMessage: 'Which article has "witnesses" in the most titles?'
+            }
+        });
+        assert.equal(allowedChildResponse.ok, true, JSON.stringify(allowedChildResponse));
+
+        const pagedSelectorResponse = await gateway.callTool({
+            tool: 'web_run',
+            args: {
+                open: [{ ref_id: 'https://example.test/paged-view', lineno: 58 }]
+            },
+            context: {
+                workspace: workspaceRoot,
+                runId: 'run-selector-paged',
+                sessionId: 'session-selector-paged',
+                iteration: 3,
+                exactAnswerMode: true,
+                currentUserMessage: 'Which article has "witnesses" in the most titles?'
+            }
+        });
+        assert.equal(pagedSelectorResponse.ok, true, JSON.stringify(pagedSelectorResponse));
+        assert.deepEqual(
+            pagedSelectorResponse.result.structuredContent.suggestedNextCalls[0],
+            {
+                tool: 'web_run',
+                args: {
+                    open: [{
+                        ref_id: 'turn3view0',
+                        lineno: 106
+                    }]
+                },
+                reason: 'Continue the same parent index at the next unread line before selecting a child; the current viewport does not establish the candidate-set boundary.'
+            }
+        );
+        assert.match(pagedSelectorResponse.result.content[0].text, /Next recommended call/);
+        assert.match(
+            pagedSelectorResponse.result.content[0].text,
+            /web_run \{"open":\[\{"ref_id":"turn3view0","lineno":106\}\]\}/
+        );
 
         const noResultsResponse = await gateway.callTool({
             tool: 'web_run',
@@ -296,7 +720,7 @@ test('AILIS exposes Codex-style web_run and preserves refs across search and ope
             tool: 'web_run',
             args: {
                 search_query: [{
-                    q: `no results fixture ${Array.from({ length: 8 }, () => 'BASE 633 2020 unknown language country flag').join(' ')}`,
+                    q: `no results fixture ${Array.from({ length: 4 }, () => 'BASE 633 2020 unknown language country flag').join(' ')}`,
                     domains: ['base-search.net']
                 }]
             },
@@ -319,6 +743,42 @@ test('AILIS exposes Codex-style web_run and preserves refs across search and ope
             context: { workspace: workspaceRoot, runId: 'run-zero-broad', sessionId: 'session-zero-broad', iteration: 0 }
         });
         assert.equal(broadNoResultsResponse.result.structuredContent.search.suggestedNextCalls, undefined);
+        const historicalNoResultsResponse = await gateway.callTool({
+            tool: 'web_run',
+            args: {
+                search_query: [{
+                    q: 'no results fixture site:base-search.net/Search/Results 2020 DDC'
+                }]
+            },
+            context: {
+                workspace: workspaceRoot,
+                runId: 'run-zero-historical',
+                sessionId: 'session-zero-historical',
+                iteration: 0,
+                currentUserMessage: 'As of 2022, which country was listed in the public BASE database catalog record?'
+            }
+        });
+        assert.equal(historicalNoResultsResponse.ok, true, JSON.stringify(historicalNoResultsResponse));
+        assert.equal(
+            historicalNoResultsResponse.result.structuredContent.search.queryGuidance.strategy,
+            'historical_archive'
+        );
+        assert.deepEqual(
+            historicalNoResultsResponse.result.structuredContent.search.suggestedNextCalls[0].args,
+            {
+                archive: [{
+                    url: 'https://base-search.net/Search/Results',
+                    mode: 'search',
+                    matchType: 'prefix',
+                    query: 'As of 2022, which country was listed in the public BASE database catalog record?'
+                }]
+            }
+        );
+        assert.match(historicalNoResultsResponse.result.content[0].text, /Next recommended call/);
+        assert.match(
+            historicalNoResultsResponse.result.content[0].text,
+            /web_run \{"archive":\[\{"url":"https:\/\/base-search\.net\/Search\/Results"/
+        );
         const failedSearchResponse = await gateway.callTool({
             tool: 'web_run',
             args: { search_query: [{ q: 'bridge validation failure fixture', domains: ['example.test'] }] },
@@ -353,18 +813,96 @@ test('AILIS exposes Codex-style web_run and preserves refs across search and ope
         assert.deepEqual(searchResponse.result.structuredContent.search.suggestedNextCalls[0].args, {
             open: [{ ref_id: 'turn0search0' }]
         });
+        const partialStartedAt = Date.now();
+        const partialSearchResponse = await gateway.executeWebRunSearch({
+            search_query: [
+                { q: 'fast partial result fixture' },
+                { q: 'hanging search fixture' }
+            ]
+        }, {
+            workspace: workspaceRoot,
+            runId: 'run-partial',
+            sessionId: 'session-partial',
+            iteration: 0,
+            webRunSearchTimeoutMs: 40
+        });
+        assert.ok(Date.now() - partialStartedAt < 1000);
+        assert.equal(partialSearchResponse.isError, false, JSON.stringify(partialSearchResponse));
+        assert.equal(partialSearchResponse.structuredContent.search.status, 'completed');
+        assert.equal(partialSearchResponse.structuredContent.search.results.length, 1);
+        assert.equal(partialSearchResponse.structuredContent.search.results[0].title, 'fast partial result fixture');
+        assert.equal(partialSearchResponse.structuredContent.search.failures.length, 1);
+        assert.equal(partialSearchResponse.structuredContent.search.failures[0].status, 'search_timeout');
+        const githubSearchResponse = await gateway.callTool({
+            tool: 'web_run',
+            args: { search_query: [{ q: 'github file fixture' }] },
+            context: { workspace: workspaceRoot, runId: 'run-github', sessionId: 'session-github', iteration: 0 }
+        });
+        assert.equal(githubSearchResponse.ok, true, JSON.stringify(githubSearchResponse));
+        assert.equal(
+            githubSearchResponse.result.structuredContent.search.suggestedNextCalls[0].tool,
+            'github_repo_read'
+        );
+        assert.equal(
+            githubSearchResponse.result.__ailisSuggestedMcpTools[0].id,
+            'mcp__ailis_research__github_repo_read'
+        );
+
+        const evaluationSearchResponse = await gateway.callTool({
+            tool: 'web_run',
+            args: { search_query: [{ q: 'evaluation leak fixture' }] },
+            context: {
+                workspace: workspaceRoot,
+                runId: 'run-evaluation-leak',
+                sessionId: 'session-evaluation-leak',
+                iteration: 1,
+                evaluationName: 'fixture_eval',
+                currentUserMessage: 'What was the actual enrollment count of the clinical trial on H. pylori in acne vulgaris patients from Jan-May 2018 as listed on the NIH website?'
+            }
+        });
+        const evaluationSearch = evaluationSearchResponse.result.structuredContent.search;
+        assert.equal(evaluationSearch.results.length, 1);
+        assert.equal(evaluationSearch.results[0].url, 'https://clinicaltrials.gov/study/NCT03411733');
+        assert.equal(evaluationSearch.evaluationLeakAudit.excluded_count, 2);
+        assert.equal(evaluationSearch.suggestedNextCalls[0].tool, 'tool_search');
+        assert.equal(
+            evaluationSearch.suggestedNextCalls[0].args.query,
+            'What was the actual enrollment count of the clinical trial on H. pylori in acne vulgaris patients from Jan-May 2018 as listed on the NIH website?'
+        );
+        assert.match(
+            evaluationSearchResponse.result.content[0].text,
+            /labeled benchmark answers are not source evidence/i
+        );
 
         const openResponse = await gateway.callTool({
             tool: 'web_run',
             args: { open: [{ ref_id: 'turn0search0' }] },
-            context: { workspace: workspaceRoot, runId: 'run-1', sessionId: 'session-1', iteration: 1 }
+            context: {
+                workspace: workspaceRoot,
+                runId: 'run-1',
+                sessionId: 'session-1',
+                iteration: 1,
+                currentUserMessage: 'Which row has the lowest total count?'
+            }
         });
         assert.equal(openResponse.ok, true, JSON.stringify(openResponse));
         assert.equal(bridgeRequests.at(-1).tool, 'render_page');
         assert.equal(bridgeRequests.at(-1).args.url, results[0].url);
+        assert.equal(bridgeRequests.at(-1).args.query, 'Which row has the lowest total count?');
         assert.equal(openResponse.result.structuredContent.ref_id, 'turn1view0');
         assert.equal(openResponse.result.structuredContent.source.ref_id, 'turn1view0');
         assert.deepEqual(openResponse.result.structuredContent.observedRelevantLinks.map((link) => link.id), [1]);
+
+        const pdfLandingResponse = await gateway.callTool({
+            tool: 'web_run',
+            args: { open: [{ ref_id: 'https://example.test/pdf-view' }] },
+            context: { workspace: workspaceRoot, runId: 'run-pdf-landing', sessionId: 'session-pdf-landing', iteration: 1 }
+        });
+        assert.ok(Array.isArray(pdfLandingResponse.result.__ailisSuggestedMcpTools));
+        assert.equal(
+            pdfLandingResponse.result.__ailisSuggestedMcpTools[0].id,
+            'mcp__ailis_research__pdf_extract_text'
+        );
 
         const continueResponse = await gateway.callTool({
             tool: 'web_run',
@@ -389,7 +927,13 @@ test('AILIS exposes Codex-style web_run and preserves refs across search and ope
         const directPdfResponse = await gateway.callTool({
             tool: 'web_run',
             args: { open: [{ ref_id: 'https://example.test/direct.pdf' }] },
-            context: { workspace: workspaceRoot, runId: 'run-1', sessionId: 'session-1', iteration: 4 }
+            context: {
+                workspace: workspaceRoot,
+                runId: 'run-1',
+                sessionId: 'session-1',
+                iteration: 4,
+                currentUserMessage: 'What is the volume in m3 of the fish transport bag?'
+            }
         });
         assert.equal(directPdfResponse.ok, true, JSON.stringify(directPdfResponse));
         assert.deepEqual(bridgeRequests.slice(-2).map((request) => request.tool), [
@@ -397,7 +941,58 @@ test('AILIS exposes Codex-style web_run and preserves refs across search and ope
             'pdf_extract_text'
         ]);
         assert.equal(bridgeRequests.at(-1).args.url, 'https://example.test/direct.pdf');
+        assert.equal(
+            bridgeRequests.at(-1).args.query,
+            'What is the volume in m3 of the fish transport bag?'
+        );
         assert.match(directPdfResponse.result.structuredContent.sourceWindow.lines[0].text, /fluffy/);
+        assert.equal(directPdfResponse.result.structuredContent.extractedText, undefined);
+
+        const bridgeRequestCountBeforeCachedFind = bridgeRequests.length;
+        const cachedPdfFindResponse = await gateway.callTool({
+            tool: 'web_run',
+            args: {
+                find: [{
+                    ref_id: directPdfResponse.result.structuredContent.ref_id,
+                    pattern: '0.1777'
+                }]
+            },
+            context: {
+                workspace: workspaceRoot,
+                runId: 'run-1',
+                sessionId: 'session-1',
+                iteration: 5
+            }
+        });
+        assert.equal(cachedPdfFindResponse.ok, true, JSON.stringify(cachedPdfFindResponse));
+        assert.equal(bridgeRequests.length, bridgeRequestCountBeforeCachedFind);
+        assert.equal(cachedPdfFindResponse.result.structuredContent.cached, true);
+        assert.match(cachedPdfFindResponse.result.content[0].text, /0\.1777 m3/);
+
+        const screenshotResponse = await gateway.callTool({
+            tool: 'web_run',
+            args: {
+                screenshot: [{
+                    ref_id: 'https://example.test/layout',
+                    detail: 'original'
+                }]
+            },
+            context: {
+                workspace: workspaceRoot,
+                runId: 'run-screenshot',
+                sessionId: 'session-screenshot',
+                iteration: 0,
+                currentUserMessage: 'Which stanza contains indented lines?'
+            }
+        });
+        assert.equal(screenshotResponse.ok, true, JSON.stringify(screenshotResponse));
+        assert.equal(bridgeRequests.at(-1).tool, 'webpage_screenshot');
+        assert.equal(bridgeRequests.at(-1).args.url, 'https://example.test/layout');
+        assert.match(bridgeRequests.at(-1).args.path, /\.ailis-web-screenshots[\\/].+\.png$/);
+        assert.equal(
+            screenshotResponse.result.structuredContent.modelImage.image_url,
+            bridgeRequests.at(-1).args.path
+        );
 
         const sectionOpenResponse = await gateway.callTool({
             tool: 'web_run',
@@ -772,6 +1367,23 @@ test('AILIS Gateway exposes health, tools, guarded tool calls, and audit', async
         assert.equal(execWithArgs.body.ok, true, execWithArgs.body.error);
         assert.match(execWithArgs.body.result.details.stdout, /GATEWAY_EXEC_ARGS_OK/);
 
+        if (process.platform === 'win32') {
+            const recoveredPowerShellWrapper = await jsonFetch(`${baseUrl}/tools/call`, {
+                method: 'POST',
+                body: JSON.stringify({
+                    tool: 'exec',
+                    args: {
+                        command: "Write-Output 'GATEWAY_EXEC_WRAPPER_RECOVERED'",
+                        args: ['powershell', '-NoProfile', '-Command'],
+                        timeout: 8
+                    },
+                    context: { workspace: workspaceRoot, approved: true }
+                })
+            });
+            assert.equal(recoveredPowerShellWrapper.body.ok, true, recoveredPowerShellWrapper.body.error);
+            assert.match(recoveredPowerShellWrapper.body.result.details.stdout, /GATEWAY_EXEC_WRAPPER_RECOVERED/);
+        }
+
         const longExec = await jsonFetch(`${baseUrl}/tools/call`, {
             method: 'POST',
             body: JSON.stringify({
@@ -1060,13 +1672,18 @@ test('AILIS Gateway tool_search ranks strict MCP readers before broad web_search
     });
 
     try {
-        gateway.runtime.mcpManager.searchToolSpecs = async () => [
-            mcpTool('web_search', 'Fallback broad public web search.'),
-            mcpTool('read_presentation', 'Read PowerPoint PPTX slides.'),
-            mcpTool('read_document', 'Read Word DOCX documents with paragraphs and tables.'),
-            mcpTool('read_spreadsheet', 'Read XLSX spreadsheets values.'),
-            mcpTool('youtube_transcript', 'Read YouTube video transcripts.')
-        ];
+        let latestMcpRetrievalLimit = 0;
+        gateway.runtime.mcpManager.searchToolSpecs = async ({ limit = 0 } = {}) => {
+            latestMcpRetrievalLimit = limit;
+            return [
+                mcpTool('web_search', 'Fallback broad public web search.'),
+                mcpTool('read_presentation', 'Read PowerPoint PPTX slides.'),
+                mcpTool('read_document', 'Read Word DOCX documents with paragraphs and tables.'),
+                mcpTool('read_spreadsheet', 'Read XLSX spreadsheets values.'),
+                mcpTool('youtube_transcript', 'Read YouTube video transcripts.'),
+                mcpTool('web_archive_lookup', 'Recover historical database, catalog, academic-index, and search-engine result records when a live site, API, or OAI endpoint is unavailable. Use for archived records filtered by classification codes such as DDC, year, language, document type, country, or flags.')
+            ];
+        };
 
         const result = await gateway.executeGatewayToolSearch({
             query: 'attached pptx PowerPoint slides evidence web search',
@@ -1105,6 +1722,15 @@ test('AILIS Gateway tool_search ranks strict MCP readers before broad web_search
         assert.equal(xlsxResult.details.tools[0].id, 'mcp__ailis_research__read_spreadsheet');
         assert.equal(xlsxResult.details.tools.some((tool) => tool.id === 'read_xlsx_workbook'), false);
         assert.doesNotMatch(xlsxResult.details.routing_advice, /artifact_tools/);
+
+        const archiveResult = await gateway.executeGatewayToolSearch({
+            query: 'Academic Search Engine API OAI search records DDC 633 year 2020 language unknown country flag',
+            includeExternal: false,
+            limit: 5
+        });
+
+        assert.equal(archiveResult.details.tools[0].id, 'mcp__ailis_research__web_archive_lookup');
+        assert.ok(latestMcpRetrievalLimit > 5);
 
         const artifactQueryResult = await gateway.executeGatewayToolSearch({
             query: 'artifact_query artifactId fullJsonPath payload range grid search',

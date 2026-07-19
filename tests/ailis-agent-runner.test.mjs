@@ -8,24 +8,472 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { AILISGateway } = require('../electron/ailis-gateway.cjs');
 const {
+    recordToolOutputToContextManager
+} = require('../electron/ailis-model-input-builder.cjs');
+const {
     normalizeToolOutput,
     toolOutputToResponseItems
 } = require('../electron/ailis-agent-object-model.cjs');
 const {
     AILISAgentRunner,
+        assessAgentCompletionEvidence,
         buildAgentDirectToolSpecs,
+        buildDirectModelImageAttachments,
+        buildInvalidDecisionProgressRecord,
         buildLlmAgentDirectToolPrompt,
     buildResearchProgressState,
         buildStagedAttachmentFilename,
         buildTaskRunHandoffPackage,
         build_forked_context_checkpoint,
         buildToolObservationDigest,
+        detectInvalidDecisionNoProgress,
     isAgentLlmSettingsMissing,
     looksLikeLeakedAgentProtocol,
+    resolveAgentDirectToolChoice,
     stageFileAttachmentsForWorkspace,
     splitNativeProgressNoteArgs,
-    stripControlTags
+    stripControlTags,
+    validateNativeDirectToolCall
 } = require('../electron/ailis-agent-runner.cjs');
+
+test('direct model image attachments are scoped to Codex bridge image inputs', () => {
+    const imagePath = path.join('C:', 'tmp', 'board.png');
+    const audioPath = path.join('C:', 'tmp', 'speech.mp3');
+
+    assert.deepEqual(buildDirectModelImageAttachments([
+        { path: imagePath, name: 'board.png' }
+    ], {
+        provider: 'codex-model-bridge'
+    }), [{
+        image_url: imagePath,
+        detail: 'original'
+    }]);
+
+    assert.deepEqual(buildDirectModelImageAttachments([
+        { path: audioPath, name: 'speech.mp3' }
+    ], {
+        provider: 'codex-model-bridge'
+    }), []);
+
+    assert.deepEqual(buildDirectModelImageAttachments([
+        { path: imagePath, name: 'board.png' }
+    ], {
+        provider: 'openai'
+    }), []);
+});
+
+test('TaskAgent treats perceived optimal-action claims as requiring a domain verifier', () => {
+    const prompt = buildLlmAgentDirectToolPrompt({
+        message: 'Choose the guaranteed winning move from the attached image.',
+        contextMode: 'task_agent',
+        modelImageAttachments: [{
+            image_url: path.join('C:', 'tmp', 'board.png'),
+            detail: 'original'
+        }],
+        tools: []
+    });
+
+    assert.match(prompt.instructions, /perception alone is not verification/i);
+    assert.match(prompt.instructions, /domain rules engine, solver, simulator, or validator/i);
+    assert.ok(prompt.messages.some((message) =>
+        Array.isArray(message.content) &&
+        message.content.some((part) => part.type === 'image_url')
+    ));
+});
+
+test('TaskAgent preserves multiplicity and order for extracted lists', () => {
+    const prompt = buildLlmAgentDirectToolPrompt({
+        message: 'Extract every value from the image in source order.',
+        contextMode: 'task_agent',
+        tools: []
+    });
+
+    assert.match(prompt.instructions, /preserve every source occurrence/i);
+    assert.match(prompt.instructions, /repeated items are evidence, not duplicates to remove/i);
+});
+
+test('TaskAgent verifies aggregate-selector winners against entity-level historical labels', () => {
+    const prompt = buildLlmAgentDirectToolPrompt({
+        message: 'Which two historical birthplace cities are farthest apart?',
+        contextMode: 'task_agent',
+        tools: []
+    });
+
+    assert.match(prompt.instructions, /establish the complete candidate set/i);
+    assert.match(prompt.instructions, /complete table of entity labels without the selector metric does not establish the winner/i);
+    assert.match(prompt.instructions, /obtain comparable coordinates for the boundary contenders/i);
+    assert.match(prompt.instructions, /verify each selected terminal record against an entity-level source/i);
+    assert.match(prompt.instructions, /preserve the entity-level source-period label/i);
+});
+
+test('TaskAgent keeps tool-returned image artifacts enabled on the next model turn', () => {
+    const imagePath = path.join(os.tmpdir(), `ailis-rendered-page-${Date.now()}.png`);
+    return fs.writeFile(
+        imagePath,
+        Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=', 'base64')
+    ).then(() => {
+        const initial = buildLlmAgentDirectToolPrompt({
+            message: 'Inspect the rendered page layout.',
+            contextMode: 'task_agent',
+            tools: []
+        });
+        recordToolOutputToContextManager(initial.contextManager, {
+            id: 'web-screenshot-context-1',
+            tool: 'web_run',
+            args: { screenshot: [{ ref_id: 'turn0view0' }] },
+            response: {
+                ok: true,
+                status: 'completed',
+                result: {
+                    content: [{ type: 'text', text: `Captured screenshot at ${imagePath}` }],
+                    structuredContent: {
+                        modelImage: {
+                            image_url: imagePath,
+                            detail: 'original'
+                        }
+                    }
+                }
+            }
+        });
+
+        const next = buildLlmAgentDirectToolPrompt({
+            message: 'Inspect the rendered page layout.',
+            contextMode: 'task_agent',
+            contextManager: initial.contextManager,
+            tools: []
+        });
+        const screenshotOutput = next.input.find((item) =>
+            item?.type === 'function_call_output' &&
+            item?.output?.body?.kind === 'content_items'
+        );
+        assert.ok(screenshotOutput);
+        assert.ok(screenshotOutput.output.body.value.some((part) => part.type === 'input_image'));
+        assert.ok(next.messages.some((message) =>
+            message.role === 'user' &&
+            Array.isArray(message.content) &&
+            message.content.some((part) =>
+                part.type === 'image_url' &&
+                /^data:image\/png;base64,/.test(part.image_url?.url || '')
+            )
+        ));
+    }).finally(() => fs.rm(imagePath, { force: true }));
+});
+
+test('explicit task execution forces Persona handoff without changing ordinary conversation', () => {
+    const handoffSpec = {
+        name: 'handoff_task',
+        description: 'System TaskAgent handoff.',
+        parameters: {
+            type: 'object',
+            required: [],
+            properties: {},
+            additionalProperties: false
+        }
+    };
+    const requiredChoice = resolveAgentDirectToolChoice({
+        agentRuntimeRole: 'persona_orchestrator',
+        requestContext: { requireTaskExecution: true },
+        directToolSpecs: [handoffSpec]
+    });
+    const ordinaryChoice = resolveAgentDirectToolChoice({
+        agentRuntimeRole: 'persona_orchestrator',
+        requestContext: {},
+        directToolSpecs: [handoffSpec]
+    });
+    const finalChoice = resolveAgentDirectToolChoice({
+        agentRuntimeRole: 'persona_orchestrator',
+        requestContext: { requireTaskExecution: true },
+        directToolSpecs: [handoffSpec],
+        safetyFinalizationReason: 'time_budget'
+    });
+
+    assert.deepEqual(requiredChoice, { name: 'handoff_task', required: true });
+    assert.equal(ordinaryChoice, 'auto');
+    assert.equal(finalChoice, 'none');
+
+    const prompt = buildLlmAgentDirectToolPrompt({
+        message: 'How many days until the holiday?',
+        requireTaskExecution: true,
+        tools: [handoffSpec]
+    });
+    assert.match(prompt.instructions, /explicit task-execution contract/i);
+    assert.match(prompt.instructions, /do not answer the task directly/i);
+});
+
+test('TaskAgent schema recovery guidance and invalid-decision fuse reject identical retries', () => {
+    const invalidDecision = {
+        ok: false,
+        status: 'invalid_native_tool_args',
+        error: 'year is required',
+        nativeToolCall: {
+            name: 'datetime_info_to_timestamp',
+            arguments: {}
+        },
+        raw: {
+            errors: ['year is required', 'month is required'],
+            schema: {
+                type: 'object',
+                required: ['year', 'month'],
+                properties: {
+                    year: { type: 'integer' },
+                    month: { type: 'integer' }
+                }
+            }
+        }
+    };
+    const first = buildInvalidDecisionProgressRecord(invalidDecision, 0);
+    const second = buildInvalidDecisionProgressRecord(invalidDecision, 1);
+    const corrected = buildInvalidDecisionProgressRecord({
+        ...invalidDecision,
+        nativeToolCall: {
+            name: 'datetime_info_to_timestamp',
+            arguments: { year: 2026, month: 7 }
+        }
+    }, 2);
+
+    assert.equal(
+        detectInvalidDecisionNoProgress([first, second]),
+        'repeated_invalid_native_tool_call'
+    );
+    assert.equal(detectInvalidDecisionNoProgress([second, corrected]), '');
+    assert.equal(detectInvalidDecisionNoProgress([
+        buildInvalidDecisionProgressRecord({
+            status: 'model_input_custom_json_decision',
+            raw: { content: '{"plan_update":[]}' }
+        }, 0),
+        buildInvalidDecisionProgressRecord({
+            status: 'model_input_custom_json_decision',
+            raw: { content: '{"plan_update":[]}' }
+        }, 1)
+    ]), '');
+
+    const prompt = buildLlmAgentDirectToolPrompt({
+        message: 'Convert tomorrow at 5 PM, then create the reminder.',
+        contextMode: 'task_agent',
+        requireExecutionEvidence: true,
+        tools: [
+            {
+                name: 'datetime_info_to_timestamp',
+                parameters: invalidDecision.raw.schema
+            },
+            {
+                name: 'utilities_2',
+                description: 'Get current POSIX timestamp',
+                parameters: {
+                    type: 'object',
+                    properties: {},
+                    additionalProperties: false
+                }
+            }
+        ]
+    });
+    assert.match(prompt.instructions, /Never repeat the same rejected tool name and arguments/i);
+    assert.match(prompt.instructions, /Build tool arguments only from explicit evidence/i);
+    assert.match(prompt.instructions, /leave optional fields omitted/i);
+    assert.match(prompt.instructions, /runtime clock, plausible default, or inferred context is not evidence/i);
+    assert.match(prompt.instructions, /preserve the exact literal text on the first lookup/i);
+    assert.match(prompt.instructions, /explicit execution-evidence contract/i);
+    assert.match(prompt.instructions, /ground it with runtime_environment and the exposed temporal tools/i);
+    assert.match(prompt.instructions, /identify it from its name or description even when names are opaque/i);
+    assert.match(prompt.instructions, /call it first/i);
+});
+
+test('TaskAgent preserves missing current-time prerequisites for stateful temporal tools', () => {
+    const prompt = buildLlmAgentDirectToolPrompt({
+        message: 'Push my upcoming reminder to tomorrow at 5 PM.',
+        contextMode: 'task_agent',
+        tools: [
+            {
+                name: 'shift_timestamp',
+                description: 'Shift a POSIX timestamp by a requested delta.',
+                parameters: {
+                    type: 'object',
+                    properties: {
+                        timestamp: { type: 'number' }
+                    },
+                    required: ['timestamp']
+                }
+            },
+            {
+                name: 'search_reminder',
+                description: 'Search reminders by optional timestamp bounds.',
+                parameters: {
+                    type: 'object',
+                    properties: {
+                        reminder_timestamp_lowerbound: { type: 'number' }
+                    }
+                }
+            }
+        ]
+    });
+
+    assert.match(prompt.instructions, /no current-time observation capability is available/i);
+    assert.match(prompt.instructions, /do not derive absolute values from runtime_environment/i);
+    assert.match(prompt.instructions, /Ask for an absolute time anchor or return the missing prerequisite/i);
+});
+
+test('native tool validation preserves type-scrambled scalar leaves', () => {
+    const tools = [{
+        name: 'search_contacts',
+        parameters: {
+            type: 'object',
+            properties: {
+                name: {
+                    description: 'Name of contact person'
+                }
+            },
+            required: ['name']
+        }
+    }];
+
+    assert.equal(validateNativeDirectToolCall({
+        name: 'search_contacts',
+        arguments: { name: 'Homer S' }
+    }, tools).ok, true);
+    assert.match(
+        validateNativeDirectToolCall({
+            name: 'search_contacts',
+            arguments: {}
+        }, tools).errors.join(' '),
+        /name is required/i
+    );
+});
+
+test('native tool validation enforces literal entity and relative-time evidence provenance', () => {
+    const holidayTools = [{
+        name: 'search_holiday',
+        parameters: {
+            type: 'object',
+            properties: {
+                holiday_name: { type: 'string' },
+                year: { type: ['integer', 'null'] }
+            },
+            required: ['holiday_name']
+        }
+    }];
+    const provenance = {
+        enforceEvidenceProvenance: true,
+        userText: 'What is the timestamp for Thanksgiving?'
+    };
+
+    assert.equal(validateNativeDirectToolCall({
+        name: 'search_holiday',
+        arguments: { holiday_name: 'Thanksgiving' }
+    }, holidayTools, provenance).ok, true);
+    assert.match(validateNativeDirectToolCall({
+        name: 'search_holiday',
+        arguments: { holiday_name: 'Thanksgiving Day' }
+    }, holidayTools, provenance).errors.join(' '), /preserve the user's exact literal value/i);
+    assert.equal(validateNativeDirectToolCall({
+        name: 'search_holiday',
+        arguments: { holiday_name: 'Thanksgiving Day' }
+    }, holidayTools, {
+        ...provenance,
+        userText: 'What is the timestamp for Thanksgiving Day?'
+    }).ok, true);
+
+    const reminderTools = [{
+        name: 'utilities_2',
+        description: 'Get current POSIX timestamp.',
+        parameters: {
+            type: 'object',
+            properties: {}
+        }
+    }, {
+        name: 'search_reminder',
+        description: 'Search reminders by optional timestamp bounds.',
+        parameters: {
+            type: 'object',
+            properties: {
+                creation_timestamp_lowerbound: { type: 'number' },
+                creation_timestamp_upperbound: { type: 'number' }
+            }
+        }
+    }];
+    const reminderCall = {
+        name: 'search_reminder',
+        arguments: {
+            creation_timestamp_lowerbound: 1784131200,
+            creation_timestamp_upperbound: 1784217600
+        }
+    };
+    const relativeContext = {
+        enforceEvidenceProvenance: true,
+        originalUserGoal: 'What reminder did I create yesterday?',
+        userText: 'Use the device date to figure it out.'
+    };
+
+    assert.match(
+        validateNativeDirectToolCall(reminderCall, reminderTools, relativeContext).errors.join(' '),
+        /requires a successful current-time observation first/i
+    );
+    assert.equal(validateNativeDirectToolCall(reminderCall, reminderTools, {
+        ...relativeContext,
+        stepResults: [{
+            tool: 'utilities_2',
+            response: { ok: true, result: { content: '1784245587' } }
+        }]
+    }).ok, true);
+    assert.equal(validateNativeDirectToolCall(reminderCall, reminderTools.slice(1), {
+        ...relativeContext,
+        userText: 'Use 2026-07-16 as yesterday.'
+    }).ok, true);
+    assert.match(
+        validateNativeDirectToolCall(reminderCall, reminderTools.slice(1), relativeContext).errors.join(' '),
+        /no current-time observation capability or explicit absolute time anchor/i
+    );
+});
+
+test('execution-evidence completion gate prevents false completed results', () => {
+    assert.deepEqual(
+        assessAgentCompletionEvidence({
+            agentRuntimeRole: 'task_agent',
+            requireExecutionEvidence: true,
+            stepResults: []
+        }),
+        {
+            ok: false,
+            status: 'incomplete',
+            reason: 'execution_evidence_missing',
+            unresolvedFields: ['No successful task-execution tool call was recorded.']
+        }
+    );
+
+    const discoveryOnly = assessAgentCompletionEvidence({
+        agentRuntimeRole: 'task_agent',
+        requireExecutionEvidence: true,
+        stepResults: [{
+            tool: 'tool_search',
+            response: { ok: true, status: 'completed' }
+        }]
+    });
+    assert.equal(discoveryOnly.status, 'incomplete');
+
+    const executed = assessAgentCompletionEvidence({
+        agentRuntimeRole: 'task_agent',
+        requireExecutionEvidence: true,
+        stepResults: [{
+            tool: 'search_messages',
+            response: { ok: true, status: 'completed' }
+        }]
+    });
+    assert.equal(executed.status, 'completed');
+    assert.equal(executed.ok, true);
+
+    const latestFailed = assessAgentCompletionEvidence({
+        agentRuntimeRole: 'task_agent',
+        requireExecutionEvidence: true,
+        stepResults: [{
+            tool: 'datetime_info_to_timestamp',
+            response: { ok: true, status: 'completed' }
+        }, {
+            tool: 'add_reminder',
+            response: { ok: false, status: 'invalid_args', error: 'content is required' }
+        }]
+    });
+    assert.equal(latestFailed.status, 'incomplete');
+    assert.deepEqual(latestFailed.unresolvedFields, ['content is required']);
+});
 
 test('TaskAgent research progress preserves mechanical web state without deciding the answer', () => {
     const progress = buildResearchProgressState([{
@@ -328,6 +776,7 @@ test('AILIS parent Persona prompt stays conversational while TaskAgent keeps exe
     assert.match(personaPrompt.instructions, /Harness transfers the immutable current user request/);
     assert.match(personaPrompt.instructions, /TaskResult packet is the factual boundary/);
     assert.match(personaPrompt.instructions, /You do not create, wait for, resume, list, or close agents/);
+    assert.doesNotMatch(personaPrompt.instructions, /arithmetic, multi-step logic, optimization/);
     assert.doesNotMatch(personaPrompt.instructions, /spawn_agent creates|subagent_notification|task_name/);
     assert.doesNotMatch(personaPrompt.instructions, /mcp__ailis_research__web_research|For local file and data tasks|When exec output is truncated/);
 
@@ -347,7 +796,29 @@ test('AILIS parent Persona prompt stays conversational while TaskAgent keeps exe
     assert.match(taskPrompt.instructions, /candidate-set boundary/);
     assert.match(taskPrompt.instructions, /remaining relevant lines or sections/);
     assert.doesNotMatch(taskPrompt.instructions, /complete=true|reasoning_ready=true/);
+    assert.match(taskPrompt.instructions, /bounded numerical optimization, minimax, game-strategy/);
+    assert.match(taskPrompt.instructions, /exhaustively enumerate the finite integer state space/);
+    assert.match(taskPrompt.instructions, /literal reading makes an explicitly stated rule redundant or vacuous/);
+    assert.match(taskPrompt.instructions, /resolve the intended non-vacuous reading/);
+    assert.match(taskPrompt.instructions, /direct authoritative page, document, or API response/);
+    assert.match(taskPrompt.instructions, /preserve the name, place, organization, category/);
+    assert.match(taskPrompt.instructions, /compact operand ledger/);
+    assert.match(taskPrompt.instructions, /do not invent a terminal probability/);
+    assert.match(taskPrompt.instructions, /layout-sensitive or source-form questions/);
+    assert.match(taskPrompt.instructions, /do not convert a stacked fraction into a slash expression/);
+    assert.match(taskPrompt.instructions, /exact whole token or phrase/);
+    assert.match(taskPrompt.instructions, /Do not merge singular\/plural forms/);
+    assert.match(taskPrompt.instructions, /do not put an unverified intermediate entity/);
+    assert.match(taskPrompt.instructions, /retrieve the parent candidate index/);
     assert.doesNotMatch(taskPrompt.instructions, /Keep ordinary conversation natural/);
+
+    const exactPersonaPrompt = buildLlmAgentDirectToolPrompt({
+        message: 'What is the minimum guaranteed value?',
+        exactAnswerMode: true,
+        toolSummary: 'Persona tool surface: handoff_task.'
+    });
+    assert.match(exactPersonaPrompt.instructions, /arithmetic, multi-step logic, optimization/);
+    assert.match(exactPersonaPrompt.instructions, /call handoff_task instead of answering them from intuition/);
 });
 
 test('AILIS Persona heartbeat reuses ordinary history and ends with an ephemeral developer item', () => {
@@ -370,6 +841,32 @@ test('AILIS Persona heartbeat reuses ordinary history and ends with an ephemeral
         1
     );
     assert.match(messages.at(-1).content[0].text, /not a user message/);
+});
+
+test('AILIS refreshes ephemeral developer guidance on every reused context turn', () => {
+    const first = buildLlmAgentDirectToolPrompt({
+        message: 'Continue the task.',
+        ephemeralDeveloperMessage: 'First-turn temporary guidance.',
+        contextMode: 'task_agent',
+        tools: []
+    });
+    const second = buildLlmAgentDirectToolPrompt({
+        message: 'Continue the task.',
+        contextManager: first.contextManager,
+        ephemeralDeveloperMessage: 'Second-turn recovery guidance.',
+        contextMode: 'task_agent',
+        tools: []
+    });
+    const developerTexts = second.input
+        .filter((item) => item.type === 'message' && item.role === 'developer')
+        .flatMap((item) => item.content || [])
+        .map((part) => part.text || '');
+
+    assert.ok(developerTexts.some((text) => /Second-turn recovery guidance/.test(text)));
+    assert.ok(!developerTexts.some((text) => /First-turn temporary guidance/.test(text)));
+    assert.ok(!(second.contextManager.rawItems?.() || []).some((item) =>
+        JSON.stringify(item).includes('Second-turn recovery guidance')
+    ));
 });
 
 test('AILIS Persona receives active preferences and active task state while TaskAgent stays isolated', async () => {
@@ -480,6 +977,29 @@ test('AILIS direct tool specs allow model-authored progress notes without passin
 
     assert.deepEqual(split.args, { path: 'note.txt' });
     assert.match(split.progressNote, /确认这份文件/);
+});
+
+test('AILIS direct tool specs honor an explicit one-tool allowlist', () => {
+    const specs = buildAgentDirectToolSpecs({
+        gatewayToolRuntimeRegistry: {
+            modelVisibleSpecs: () => ['first', 'second', 'third'].map((name) => ({
+                name,
+                description: `${name} tool`,
+                parameters: {
+                    type: 'object',
+                    properties: {},
+                    additionalProperties: false
+                }
+            }))
+        }
+    }, {
+        requestContext: {
+            agentRole: 'task_agent',
+            directToolLimit: 1
+        }
+    });
+
+    assert.deepEqual(specs.map((spec) => spec.name), ['first']);
 });
 
 test('AILIS Agent Runner rejects visible tool protocols', () => {

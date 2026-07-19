@@ -181,6 +181,43 @@ const CORE_TOOL_BUNDLES = Object.freeze([
 
 const BUILTIN_PUBLIC_OPENAPI_OPERATIONS = Object.freeze([
     Object.freeze({
+        operationId: 'clinicalTrialsSearchStudies',
+        method: 'get',
+        path: '/api/v2/studies?format=json&pageSize=10&fields=NCTId,BriefTitle,OfficialTitle,OverallStatus,EnrollmentCount,EnrollmentType,StartDate,PrimaryCompletionDate,CompletionDate,StudyFirstPostDate,LastUpdateSubmitDate,LastUpdatePostDate&query.term={query}',
+        baseUrl: 'https://clinicaltrials.gov',
+        sourceName: 'clinicaltrials',
+        summary: 'Search ClinicalTrials.gov by condition, intervention, title, sponsor, or other study terms and return compact structured study fields.',
+        parameters: Object.freeze([
+            Object.freeze({
+                name: 'query',
+                in: 'path',
+                required: true,
+                schema: Object.freeze({ type: 'string' }),
+                description: 'Clinical study search terms, for example H. pylori acne vulgaris.'
+            })
+        ]),
+        whenToUse: Object.freeze([
+            'Use when a ClinicalTrials.gov or NIH study question is known by topic or dates but the NCT id is not known.',
+            'Use before broad web search when the requested answer is a structured study field such as enrollment, status, phase, or dates.'
+        ]),
+        whenNotToUse: Object.freeze([
+            'Do not use for general medical advice or studies outside ClinicalTrials.gov.'
+        ]),
+        preconditions: Object.freeze(['Provide concise terms that identify the study; an NCT id is not required.']),
+        examples: Object.freeze([Object.freeze({ query: 'H. pylori acne vulgaris' })]),
+        badExamples: Object.freeze([Object.freeze({ query: 'medicine' })]),
+        alternatives: Object.freeze([
+            'After identifying an NCT id, use external__clinicaltrials__get_study for the complete current record.'
+        ]),
+        errors: Object.freeze({
+            not_found: Object.freeze({
+                recoverable: true,
+                nextActions: Object.freeze(['Retry with the condition, intervention, sponsor, or a shorter exact title phrase.'])
+            })
+        }),
+        permissions: Object.freeze(['clinicaltrials.read'])
+    }),
+    Object.freeze({
         operationId: 'clinicalTrialsGetStudy',
         method: 'get',
         path: '/api/v2/studies/{nctId}',

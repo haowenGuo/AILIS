@@ -186,6 +186,20 @@ test('ToolContext keeps approval and sandbox policy in one reusable object', () 
         permissionProfile: 'full-access',
         answerOnly: true,
         exactAnswerMode: true,
+        directToolExecutor: true,
+        nativeDirectTools: true,
+        directToolLimit: 35,
+        requireTaskExecution: true,
+        requireExecutionEvidence: true,
+        desktopRealEval: true,
+        desktopRealEvalTaskId: 'toolsandbox-scenario-1',
+        desktopRealEvalTaskText: 'Run the official scenario.',
+        benchmarkName: 'Apple ToolSandbox',
+        benchmarkScenario: 'toolsandbox-scenario-1',
+        runtimeEnvironmentOverride: {
+            source: 'toolsandbox_benchmark_clock',
+            current_date: '2026-07-17'
+        },
         executionProfile: { kind: 'exact_answer_eval' },
         evaluationTaskId: 'gaia-task-1',
         evaluationName: 'gaia_desktop_real',
@@ -204,6 +218,20 @@ test('ToolContext keeps approval and sandbox policy in one reusable object', () 
     assert.equal(context.permissionProfile, 'full-access');
     assert.equal(context.answerOnly, true);
     assert.equal(context.exactAnswerMode, true);
+    assert.equal(context.directToolExecutor, true);
+    assert.equal(context.nativeDirectTools, true);
+    assert.equal(context.directToolLimit, 35);
+    assert.equal(context.requireTaskExecution, true);
+    assert.equal(context.requireExecutionEvidence, true);
+    assert.equal(context.desktopRealEval, true);
+    assert.equal(context.desktopRealEvalTaskId, 'toolsandbox-scenario-1');
+    assert.equal(context.desktopRealEvalTaskText, 'Run the official scenario.');
+    assert.equal(context.benchmarkName, 'Apple ToolSandbox');
+    assert.equal(context.benchmarkScenario, 'toolsandbox-scenario-1');
+    assert.deepEqual(context.runtimeEnvironmentOverride, {
+        source: 'toolsandbox_benchmark_clock',
+        current_date: '2026-07-17'
+    });
     assert.deepEqual(context.executionProfile, { kind: 'exact_answer_eval' });
     assert.equal(context.evaluationTaskId, 'gaia-task-1');
     assert.equal(context.evaluationName, 'gaia_desktop_real');

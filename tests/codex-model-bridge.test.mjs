@@ -10,11 +10,14 @@ const {
     buildCodexBridgeDecisionSchema,
     buildCodexBridgePrompt,
     buildCodexBridgeTurnInput,
+    buildProcessTreeTerminationPlan,
     normalizeBridgeToolCalls,
     normalizeCodexUsage,
     parseCodexAppServerNotifications,
     parseCodexJsonlEvents,
-    resolveCodexEntrypoint
+    resolveCodexBridgeMaxAttempts,
+    resolveCodexEntrypoint,
+    shouldRetryCodexBridgeFailure
 } = require('../electron/codex-model-bridge.cjs');
 const {
     getDefaultProviderBaseUrl,
@@ -48,6 +51,44 @@ const visibleTools = [
         }
     }
 ];
+
+describe('Codex model bridge process lifecycle', () => {
+    it('terminates the full Windows process tree for ephemeral app-server inference', () => {
+        assert.deepEqual(buildProcessTreeTerminationPlan(4242, 'win32'), {
+            command: 'taskkill.exe',
+            args: ['/pid', '4242', '/t', '/f']
+        });
+    });
+
+    it('uses a detached process-group signal on POSIX and rejects invalid pids', () => {
+        assert.deepEqual(buildProcessTreeTerminationPlan(4242, 'linux'), {
+            signalPid: -4242,
+            signal: 'SIGTERM'
+        });
+        assert.equal(buildProcessTreeTerminationPlan(0, 'win32'), null);
+    });
+
+    it('retries only transient model-only transport failures and caps attempts', () => {
+        assert.equal(shouldRetryCodexBridgeFailure({ code: 'timeout' }), true);
+        assert.equal(shouldRetryCodexBridgeFailure({
+            code: 'codex_process_failed',
+            error: 'Codex exited with code 1.'
+        }), true);
+        assert.equal(shouldRetryCodexBridgeFailure({
+            code: 'codex_usage_limited',
+            error: 'Usage limit reached.'
+        }), false);
+        assert.equal(shouldRetryCodexBridgeFailure({
+            code: 'codex_process_failed',
+            error: 'Authentication required.'
+        }), false);
+        assert.equal(shouldRetryCodexBridgeFailure({ code: 'cancelled' }), false);
+        assert.equal(shouldRetryCodexBridgeFailure({ code: 'invalid_codex_bridge_output' }), false);
+        assert.equal(resolveCodexBridgeMaxAttempts({}), 2);
+        assert.equal(resolveCodexBridgeMaxAttempts({ codexBridgeMaxAttempts: 9 }), 2);
+        assert.equal(resolveCodexBridgeMaxAttempts({ codexBridgeMaxAttempts: 1 }), 1);
+    });
+});
 
 describe('Codex model bridge', () => {
     it('constrains required decisions to the AILIS-visible tool schema', () => {
@@ -157,6 +198,38 @@ describe('Codex model bridge', () => {
         assert.equal(argumentsSchema.properties.mode.anyOf[0].type, 'string');
     });
 
+    it('preserves type-scrambled fields as model-selected JSON scalars', () => {
+        const schema = buildCodexBridgeDecisionSchema([{
+            name: 'search_holiday',
+            parameters: {
+                type: 'object',
+                properties: {
+                    holiday_name: {
+                        description: 'Name of the holiday'
+                    },
+                    year: {
+                        description: 'Optional year to search'
+                    }
+                },
+                required: ['holiday_name']
+            }
+        }]);
+        const argumentsSchema = schema.properties.tool_calls.items.properties.arguments;
+
+        assert.deepEqual(
+            argumentsSchema.properties.holiday_name.anyOf.map((branch) => branch.type),
+            ['string', 'number', 'boolean']
+        );
+        assert.deepEqual(
+            argumentsSchema.properties.year.anyOf.map((branch) => branch.type),
+            ['string', 'number', 'boolean', 'null']
+        );
+        assert.match(
+            argumentsSchema.properties.year.anyOf.at(-1).description,
+            /runtime context and plausible defaults are not evidence/i
+        );
+    });
+
     it('serializes AILIS-owned messages, tool history, and tool contracts into one inference', () => {
         const prompt = buildCodexBridgePrompt([
             { role: 'system', content: 'AILIS system prompt' },
@@ -175,6 +248,8 @@ describe('Codex model bridge', () => {
         assert.match(prompt, /evidence/);
         assert.match(prompt, /read_document/);
         assert.match(prompt, /Never emit an empty object/);
+        assert.match(prompt, /Do not fill optional fields from runtime dates/i);
+        assert.match(prompt, /copy the exact literal text into the first lookup/i);
     });
 
     it('sends image bytes through native app-server image input instead of embedding base64 in the prompt', async () => {

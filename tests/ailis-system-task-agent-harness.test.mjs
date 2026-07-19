@@ -51,6 +51,7 @@ test('system TaskAgent handoff preserves the exact request and returns a compact
     const calls = [];
     const harness = new AILISSystemTaskAgentHarness({
         rootDir,
+        maxAgentSteps: 7,
         executeTaskAgent: async (payload) => {
             calls.push(payload);
             return completedResult({
@@ -66,6 +67,14 @@ test('system TaskAgent handoff preserves the exact request and returns a compact
         currentUserMessage: message,
         sessionId: 'persona-session',
         runId: 'persona-run',
+        desktopRealEval: true,
+        benchmarkName: 'Apple ToolSandbox',
+        benchmarkScenario: 'toolsandbox-scenario-1',
+        runtimeEnvironmentOverride: {
+            source: 'toolsandbox_benchmark_clock',
+            current_date: '2026-07-17'
+        },
+        directToolLimit: 35,
         llmSettings: { model: 'mock-model' }
     });
 
@@ -73,6 +82,14 @@ test('system TaskAgent handoff preserves the exact request and returns a compact
     assert.equal(calls[0].agent.task, message);
     assert.equal(calls[0].agent.originalTask, message);
     assert.equal(calls[0].context.originalUserGoal, message);
+    assert.equal(calls[0].context.desktopRealEval, true);
+    assert.equal(calls[0].context.benchmarkName, 'Apple ToolSandbox');
+    assert.equal(calls[0].context.benchmarkScenario, 'toolsandbox-scenario-1');
+    assert.deepEqual(calls[0].context.runtimeEnvironmentOverride, {
+        source: 'toolsandbox_benchmark_clock',
+        current_date: '2026-07-17'
+    });
+    assert.equal(calls[0].context.directToolLimit, 35);
     assert.equal(calls[0].args.inheritanceMode, 'clean');
     assert.equal(calls[0].args.maxAgentSteps, 7);
     assert.equal(packet.schema, TASK_RESULT_SCHEMA);
@@ -174,6 +191,123 @@ test('a later handoff resumes the persistent TaskAgent checkpoint without replac
     assert.equal(calls[1].agent.task, '继续补充失败恢复部分。');
     assert.equal(packet.original_goal, '分析这个仓库的长期任务架构。');
     assert.equal(packet.current_request, '继续补充失败恢复部分。');
+});
+
+test('incomplete TaskAgent results preserve unresolved fields across checkpoint resume', async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-task-harness-incomplete-'));
+    const calls = [];
+    const harness = new AILISSystemTaskAgentHarness({
+        rootDir,
+        executeTaskAgent: async (payload) => {
+            calls.push(payload);
+            if (calls.length === 1) {
+                return {
+                    ok: false,
+                    status: 'incomplete',
+                    runId: payload.agent.childRunId,
+                    displayText: 'The reminder was not created.',
+                    taskRunHandoff: {
+                        status: 'incomplete',
+                        reason: 'execution_evidence_missing',
+                        finalAnswer: 'The reminder was not created.',
+                        unresolvedFields: [
+                            'No successful task-execution tool call was recorded.',
+                            'datetime_info_to_timestamp requires year and month.'
+                        ],
+                        collectedData: [],
+                        traceRef: payload.agent.childRunId,
+                        resume: {
+                            contextManagerCheckpoint: { version: 1, marker: 'invalid-datetime-call' }
+                        }
+                    }
+                };
+            }
+            return completedResult({
+                runId: payload.agent.childRunId,
+                answer: 'The reminder was created.',
+                checkpoint: { version: 2 }
+            });
+        }
+    });
+
+    const first = await harness.handoff({}, {
+        currentUserMessage: 'Remind me tomorrow at 5 PM.',
+        sessionId: 'session-incomplete'
+    });
+    await harness.handoff({}, {
+        currentUserMessage: 'Try again using the missing fields.',
+        sessionId: 'session-incomplete'
+    });
+
+    assert.equal(first.status, 'incomplete');
+    assert.deepEqual(first.unresolved_fields, [
+        'No successful task-execution tool call was recorded.',
+        'datetime_info_to_timestamp requires year and month.',
+        'execution_evidence_missing'
+    ]);
+    assert.deepEqual(calls[1].args.contextManagerCheckpoint, {
+        version: 1,
+        marker: 'invalid-datetime-call'
+    });
+    assert.deepEqual(calls[1].context.priorUnresolvedFields, first.unresolved_fields);
+});
+
+test('incomplete TaskAgent handoffs merge unresolved prerequisites until completion', async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-task-harness-monotonic-unresolved-'));
+    const calls = [];
+    const harness = new AILISSystemTaskAgentHarness({
+        rootDir,
+        executeTaskAgent: async (payload) => {
+            calls.push(payload);
+            if (calls.length < 3) {
+                const unresolvedField = calls.length === 1
+                    ? 'missing_current_time_observation'
+                    : 'latest_stateful_tool_call_rejected';
+                return {
+                    ok: false,
+                    status: 'incomplete',
+                    runId: payload.agent.childRunId,
+                    displayText: 'An execution prerequisite is still missing.',
+                    taskRunHandoff: {
+                        status: 'incomplete',
+                        finalAnswer: 'An execution prerequisite is still missing.',
+                        unresolvedFields: [unresolvedField],
+                        collectedData: [],
+                        traceRef: payload.agent.childRunId,
+                        resume: {
+                            contextManagerCheckpoint: { version: calls.length }
+                        }
+                    }
+                };
+            }
+            return completedResult({
+                runId: payload.agent.childRunId,
+                answer: 'Completed with verified evidence.',
+                checkpoint: { version: 3 }
+            });
+        }
+    });
+
+    await harness.handoff({}, {
+        currentUserMessage: 'Find the reminder from yesterday.',
+        sessionId: 'session-monotonic-unresolved'
+    });
+    const second = await harness.handoff({}, {
+        currentUserMessage: 'Use the available tools.',
+        sessionId: 'session-monotonic-unresolved'
+    });
+    const third = await harness.handoff({}, {
+        currentUserMessage: 'Use this verified absolute timestamp.',
+        sessionId: 'session-monotonic-unresolved'
+    });
+
+    assert.deepEqual(second.unresolved_fields, [
+        'missing_current_time_observation',
+        'latest_stateful_tool_call_rejected'
+    ]);
+    assert.deepEqual(calls[2].context.priorUnresolvedFields, second.unresolved_fields);
+    assert.equal(third.status, 'completed');
+    assert.deepEqual(harness.getTask('session-monotonic-unresolved').unresolvedFields, []);
 });
 
 test('the session TaskAgent remains long-lived across later requests', async () => {

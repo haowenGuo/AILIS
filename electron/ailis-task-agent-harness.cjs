@@ -4,7 +4,7 @@ const { randomUUID } = require('crypto');
 
 const TASK_HARNESS_STATE_VERSION = 1;
 const TASK_RESULT_SCHEMA = 'ailis.task_result.v1';
-const TASK_AGENT_MAX_MODEL_ROUNDS = 7;
+const TASK_AGENT_MAX_MODEL_ROUNDS = 9;
 const MAX_PARENT_RUN_HANDOFFS = 256;
 const FINAL_STATUSES = new Set(['completed', 'success', 'succeeded']);
 
@@ -146,7 +146,13 @@ function buildTaskResultPacket(result = {}, task = {}) {
     const unresolvedFields = FINAL_STATUSES.has(status)
         ? []
         : uniqueStrings([
+              ...(Array.isArray(task.unresolvedFields) ? task.unresolvedFields : []),
+              ...(Array.isArray(handoff.unresolvedFields) ? handoff.unresolvedFields : []),
+              ...(Array.isArray(handoff.unresolved_fields) ? handoff.unresolved_fields : []),
+              ...(Array.isArray(result.unresolvedFields) ? result.unresolvedFields : []),
+              ...(Array.isArray(result.unresolved_fields) ? result.unresolved_fields : []),
               handoff.failureAnalysis?.bottleneck,
+              handoff.reason,
               handoff.nextStep?.recommendation
           ], 24);
     return {
@@ -333,6 +339,8 @@ class AILISSystemTaskAgentHarness {
                     original_user_goal: task.originalGoal,
                     currentTaskRequest: task.latestRequest,
                     current_task_request: task.latestRequest,
+                    priorUnresolvedFields: prior?.unresolvedFields || [],
+                    prior_unresolved_fields: prior?.unresolvedFields || [],
                     taskAgentInheritanceMode: inheritanceMode,
                     initialContextManagerCheckpoint: prior?.checkpoint || null,
                     maxAgentSteps: this.maxAgentSteps

@@ -6,6 +6,7 @@ const path = require('node:path');
 const os = require('node:os');
 const readline = require('node:readline');
 const { callDesktopLlmProvider } = require('../electron/desktop-llm-provider.cjs');
+const { analyzeChessPosition } = require('./ailis-stockfish-engine.cjs');
 
 const SERVER_INFO = { name: 'ailis_research', version: '0.1.0' };
 const PROTOCOL_VERSION = '2025-06-18';
@@ -617,17 +618,410 @@ function extractHtmlDefinitionRelations(html = '', limit = 24) {
     return { keyValues, triples };
 }
 
-function extractTableCells(rowHtml = '') {
-    const cells = [];
-    const pattern = /<t[hd]\b[^>]*>([\s\S]*?)<\/t[hd]>/gi;
-    let match;
-    while ((match = pattern.exec(rowHtml)) && cells.length < 16) {
-        cells.push(truncateRelationText(stripHtml(match[1]), 240));
-    }
-    return cells;
+function parseTableSpan(attributes = '', name = 'colspan') {
+    const match = String(attributes || '').match(new RegExp(`\\b${name}\\s*=\\s*(?:"(\\d+)"|'(\\d+)'|(\\d+))`, 'i'));
+    const parsed = Number(match?.[1] || match?.[2] || match?.[3] || 1);
+    return Number.isFinite(parsed) ? Math.max(1, Math.min(96, parsed)) : 1;
 }
 
-function extractHtmlTableRelations(html = '', limit = 6) {
+function extractHtmlTableMatrix(tableHtml = '', { maxRows = 200, maxColumns = 96 } = {}) {
+    const rowMatches = Array.from(String(tableHtml || '').matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/gi));
+    const carry = [];
+    const rows = [];
+    const headerMasks = [];
+    for (const rowMatch of rowMatches.slice(0, maxRows)) {
+        const row = Array(maxColumns);
+        const headerMask = Array(maxColumns).fill(false);
+        for (let index = 0; index < carry.length && index < maxColumns; index += 1) {
+            const span = carry[index];
+            if (!span || span.remaining < 1) {
+                continue;
+            }
+            row[index] = span.value;
+            headerMask[index] = span.header === true;
+            span.remaining -= 1;
+        }
+        const cellPattern = /<t([hd])\b([^>]*)>([\s\S]*?)<\/t\1>/gi;
+        let cellMatch;
+        let cursor = 0;
+        while ((cellMatch = cellPattern.exec(rowMatch[1]))) {
+            while (cursor < maxColumns && row[cursor] !== undefined) {
+                cursor += 1;
+            }
+            if (cursor >= maxColumns) {
+                break;
+            }
+            const attributes = cellMatch[2] || '';
+            const value = truncateRelationText(stripHtml(cellMatch[3]), 240);
+            const colspan = parseTableSpan(attributes, 'colspan');
+            const rowspan = parseTableSpan(attributes, 'rowspan');
+            let placed = 0;
+            while (placed < colspan && cursor < maxColumns) {
+                while (cursor < maxColumns && row[cursor] !== undefined) {
+                    cursor += 1;
+                }
+                if (cursor >= maxColumns) {
+                    break;
+                }
+                row[cursor] = value;
+                headerMask[cursor] = cellMatch[1].toLowerCase() === 'h';
+                if (rowspan > 1) {
+                    carry[cursor] = {
+                        value,
+                        header: headerMask[cursor],
+                        remaining: rowspan - 1
+                    };
+                }
+                cursor += 1;
+                placed += 1;
+            }
+        }
+        let width = row.length;
+        while (width > 0 && row[width - 1] === undefined) {
+            width -= 1;
+        }
+        const cells = row.slice(0, width).map((value) => normalizeString(value));
+        if (cells.some(Boolean)) {
+            rows.push(cells);
+            headerMasks.push(headerMask.slice(0, width));
+        }
+    }
+    return {
+        rows,
+        headerMasks,
+        sourceRowCount: rowMatches.length,
+        rowsComplete: rowMatches.length <= maxRows
+    };
+}
+
+function tableRowLooksNumeric(row = []) {
+    const values = row.slice(1).map((value) => normalizeString(value)).filter(Boolean);
+    if (!values.length) {
+        return false;
+    }
+    const numeric = values.filter((value) =>
+        /^(?:[-–—]|n\/a|[<>~≈]?\s*[+-]?(?:\d[\d,.\s]*|\.\d+)(?:\s*%|\s*[A-Za-z]+)?)$/i.test(value)
+    ).length;
+    return numeric >= 1 && numeric / values.length >= 0.2;
+}
+
+function inferTableHeaderRowCount(rows = [], headerMasks = []) {
+    if (!rows.length) {
+        return 0;
+    }
+    const firstNumericRow = rows.slice(0, 8).findIndex((row) => tableRowLooksNumeric(row));
+    if (firstNumericRow > 0) {
+        return firstNumericRow;
+    }
+    let headerRows = 0;
+    for (let index = 0; index < Math.min(rows.length, 4); index += 1) {
+        if ((headerMasks[index] || []).some(Boolean)) {
+            headerRows += 1;
+        } else {
+            break;
+        }
+    }
+    return headerRows;
+}
+
+function mergeTableHeaderRows(headerRows = [], width = 0) {
+    const merged = [];
+    const normalizedRows = headerRows.map((row) => {
+        const sourceValues = row.map((value) => normalizeString(value));
+        let values;
+        if (sourceValues.length >= 2 && sourceValues.length < width) {
+            const identity = sourceValues[0];
+            const parentGroups = sourceValues.slice(1);
+            const childSlots = width - 1;
+            const baseSpan = Math.floor(childSlots / parentGroups.length);
+            let remainder = childSlots - (baseSpan * parentGroups.length);
+            values = [identity];
+            for (let index = 0; index < parentGroups.length; index += 1) {
+                const groupsRemaining = parentGroups.length - index;
+                const span = baseSpan + (remainder >= groupsRemaining ? 1 : 0);
+                remainder -= Math.max(0, span - baseSpan);
+                for (let offset = 0; offset < Math.max(1, span); offset += 1) {
+                    values.push(parentGroups[index]);
+                }
+            }
+            values = values.slice(0, width);
+        } else {
+            values = Array.from({ length: width }, (_, index) => sourceValues[index] || '');
+        }
+        const nonEmpty = values.filter(Boolean).length;
+        if (nonEmpty < 2 || nonEmpty >= width * 0.8) {
+            return values;
+        }
+        let parent = '';
+        return values.map((value, index) => {
+            if (value) {
+                parent = value;
+                return value;
+            }
+            return index === 0 ? '' : parent;
+        });
+    });
+    for (let column = 0; column < width; column += 1) {
+        const parts = [];
+        for (const row of normalizedRows) {
+            const value = normalizeString(row[column]);
+            if (value && !parts.some((part) => part.toLowerCase() === value.toLowerCase())) {
+                parts.push(value);
+            }
+        }
+        merged.push(parts.join(' / ') || `column_${column + 1}`);
+    }
+    return merged;
+}
+
+function tableQueryTokens(query = '') {
+    return Array.from(new Set(
+        normalizeString(query)
+            .toLowerCase()
+            .split(/[^\p{L}\p{N}]+/u)
+            .filter((token) => token.length >= 3)
+    ));
+}
+
+function tableSemanticColumnScore(header = '', query = '') {
+    const normalizedHeader = normalizeString(header).toLowerCase();
+    const normalizedQuery = normalizeString(query).toLowerCase();
+    const concepts = [
+        { header: /\bbirth|birthplace|born\b/, query: /\bbirth|birthplace|born\b/, score: 70 },
+        { header: /\bdeath|died|deceased\b/, query: /\bdeath|died|deceased\b/, score: 70 },
+        { header: /\benrollment|enrolled|recruitment\b/, query: /\benrollment|enrolled|recruitment\b/, score: 65 },
+        { header: /\bauthor|writer|creator\b/, query: /\bauthor|writer|wrote|written|creator\b/, score: 55 },
+        { header: /\bdate|year|time\b/, query: /\bdate|year|when|time\b/, score: 35 },
+        { header: /place|\blocation|city|country|state\b/, query: /\bplace|location|where|city|cities|country|state\b/, score: 25 }
+    ];
+    return concepts.reduce((score, concept) => (
+        concept.header.test(normalizedHeader) && concept.query.test(normalizedQuery)
+            ? score + concept.score
+            : score
+    ), 0);
+}
+
+function tableMetricColumnScore(header = '', index = 0, width = 1, query = '') {
+    const normalizedHeader = normalizeString(header).toLowerCase();
+    const normalizedQuery = normalizeString(query).toLowerCase();
+    const extremaOrCount = /\b(?:least|most|fewest|highest|lowest|minimum|maximum|min|max|number|count|total|how many)\b/i.test(normalizedQuery);
+    let score = tableSemanticColumnScore(normalizedHeader, normalizedQuery);
+    for (const token of tableQueryTokens(query)) {
+        if (normalizedHeader.includes(token)) {
+            score += token.length >= 6 ? 18 : 10;
+        }
+    }
+    if (extremaOrCount) {
+        if (/\btotal\b/i.test(normalizedHeader)) {
+            score += 90;
+        }
+        if (/(?:^| \/ )all$/i.test(normalizedHeader)) {
+            score += 80;
+        }
+        if (/\b(?:count|number|participants?|athletes?)\b/i.test(normalizedHeader)) {
+            score += 55;
+        }
+    }
+    if (/\b(?:women|female)\b/i.test(normalizedQuery) && /\b(?:w|women|female)\b/i.test(normalizedHeader)) {
+        score += 45;
+    }
+    if (/\b(?:men|male)\b/i.test(normalizedQuery) && /\b(?:m|men|male)\b/i.test(normalizedHeader)) {
+        score += 45;
+    }
+    return score + (index / Math.max(1, width));
+}
+
+function buildQueryAwareTableProjection({
+    caption = '',
+    headers = [],
+    rows = [],
+    rowCount = rows.length,
+    rowsComplete = true
+} = {}, query = '') {
+    const width = Math.max(headers.length, ...rows.map((row) => row.length), 0);
+    if (width < 2 || rows.length < 2) {
+        return null;
+    }
+    const normalizedHeaders = Array.from(
+        { length: width },
+        (_, index) => normalizeString(headers[index]) || `column_${index + 1}`
+    );
+    const identityTerms = /\b(?:country|nation|team|name|code|entity|participant|athlete|title|item)\b/i;
+    const identityIndex = normalizedHeaders.findIndex((header, index) =>
+        index < Math.min(3, width) && identityTerms.test(header)
+    );
+    const entityColumn = identityIndex >= 0 ? identityIndex : 0;
+    const rankedMetrics = normalizedHeaders
+        .map((header, index) => ({
+            index,
+            score: index === entityColumn ? Number.NEGATIVE_INFINITY : tableMetricColumnScore(header, index, width, query)
+        }))
+        .filter((entry) => entry.index !== entityColumn)
+        .sort((left, right) => right.score - left.score);
+    const bestMetric = rankedMetrics[0];
+    if (!bestMetric) {
+        return null;
+    }
+    const extremaOrCount = /\b(?:least|most|fewest|highest|lowest|minimum|maximum|min|max|number|count|total|how many)\b/i.test(normalizeString(query));
+    const queryRelevant = bestMetric.score >= 10 || (
+        extremaOrCount &&
+        /\b(?:total|all|count|number|participants?|athletes?)\b/i.test(normalizedHeaders[bestMetric.index])
+    );
+    const selectedIndexes = [entityColumn, bestMetric.index];
+    const entityRows = rows.filter((row) => normalizeString(row[entityColumn]));
+    const projectedRows = entityRows.slice(0, 120).map((row) =>
+        selectedIndexes.map((index) => normalizeString(row[index]))
+    );
+    const inferredEntityHeader = /^column_\d+$/i.test(normalizedHeaders[entityColumn])
+        ? /\bcountr(?:y|ies)\b/i.test(normalizeString(query))
+            ? 'country'
+            : /\bnation\b/i.test(normalizeString(query))
+            ? 'nation'
+            : /\bteam\b/i.test(normalizeString(query))
+            ? 'team'
+            : normalizedHeaders[entityColumn]
+        : normalizedHeaders[entityColumn];
+    return pruneEmptyDeep({
+        caption: caption || undefined,
+        columns: [inferredEntityHeader, normalizedHeaders[bestMetric.index]],
+        selectedColumnIndexes: selectedIndexes,
+        rowCount: entityRows.length,
+        rowsComplete: rowsComplete && projectedRows.length === entityRows.length,
+        queryRelevant,
+        rows: projectedRows
+    });
+}
+
+function buildTableRelation({
+    caption = '',
+    rows = [],
+    headerMasks = [],
+    sourceRowCount = rows.length,
+    rowsComplete = true
+} = {}, query = '') {
+    if (!rows.length) {
+        return null;
+    }
+    const headerRowCount = inferTableHeaderRowCount(rows, headerMasks);
+    const headerRows = rows.slice(0, headerRowCount);
+    const dataRows = rows.slice(headerRowCount);
+    const width = Math.max(...rows.map((row) => row.length), 0);
+    const headers = headerRows.length ? mergeTableHeaderRows(headerRows, width) : [];
+    const rowCount = Math.max(0, sourceRowCount - headerRowCount);
+    const projection = buildQueryAwareTableProjection({
+        caption,
+        headers,
+        rows: dataRows,
+        rowCount,
+        rowsComplete
+    }, query);
+    return pruneEmptyDeep({
+        caption: caption || undefined,
+        headers: headers.length ? headers : undefined,
+        headerRowCount: headerRowCount || undefined,
+        rowCount,
+        rowsComplete,
+        sampleRows: dataRows.slice(0, 8),
+        projection: projection || undefined,
+        dataRows
+    });
+}
+
+function splitMarkdownTableLine(line = '') {
+    const source = String(line || '').trim().replace(/^\|/, '').replace(/\|$/, '');
+    const cells = [];
+    let current = '';
+    let escaped = false;
+    for (const character of source) {
+        if (escaped) {
+            current += character;
+            escaped = false;
+        } else if (character === '\\') {
+            escaped = true;
+        } else if (character === '|') {
+            cells.push(normalizeString(current));
+            current = '';
+        } else {
+            current += character;
+        }
+    }
+    cells.push(normalizeString(current));
+    return cells.map((cell) => truncateRelationText(stripHtml(cell), 240));
+}
+
+function markdownTableDelimiter(line = '') {
+    const cells = splitMarkdownTableLine(line);
+    return cells.length >= 2 && cells.every((cell) => /^:?-{3,}:?$/.test(cell.replace(/\s+/g, '')));
+}
+
+function extractMarkdownTableRelations(markdown = '', query = '', limit = 6) {
+    const lines = String(markdown || '').split(/\r?\n/);
+    const tables = [];
+    for (let index = 1; index < lines.length && tables.length < limit; index += 1) {
+        if (!markdownTableDelimiter(lines[index]) || !lines[index - 1].includes('|')) {
+            continue;
+        }
+        const rows = [splitMarkdownTableLine(lines[index - 1])];
+        let cursor = index + 1;
+        while (cursor < lines.length && lines[cursor].includes('|') && rows.length < 200) {
+            rows.push(splitMarkdownTableLine(lines[cursor]));
+            cursor += 1;
+        }
+        const table = buildTableRelation({
+            rows,
+            headerMasks: [rows[0].map(() => true), ...rows.slice(1).map((row) => row.map(() => false))],
+            sourceRowCount: rows.length,
+            rowsComplete: cursor >= lines.length || !lines[cursor].includes('|')
+        }, query);
+        if (table) {
+            const { dataRows: _dataRows, ...publicTable } = table;
+            tables.push(publicTable);
+        }
+        index = Math.max(index, cursor - 1);
+    }
+    return { tables };
+}
+
+function formatTableProjections(tables = [], maxChars = 3600) {
+    const candidates = (Array.isArray(tables) ? tables : [])
+        .map((table) => table?.projection)
+        .filter((projection) => projection?.queryRelevant === true)
+        .sort((left, right) => Number(right.rowsComplete) - Number(left.rowsComplete));
+    if (!candidates.length) {
+        return '';
+    }
+    const lines = [
+        'Structured table projection (query-selected columns; source rows keep their original order):',
+        'candidate_set_complete=true when rows_complete=true; raw page pagination does not make this table projection partial.'
+    ];
+    for (const projection of candidates.slice(0, 2)) {
+        if (projection.caption) {
+            lines.push(`table=${projection.caption}`);
+        }
+        lines.push(`columns=${projection.columns.join(' | ')}`);
+        const rowMetadataIndex = lines.length;
+        lines.push('');
+        let displayedRows = 0;
+        for (const row of projection.rows || []) {
+            const rendered = row.join(' | ');
+            if (displayedRows > 0 && lines.join('\n').length + rendered.length + 1 > maxChars - 80) {
+                break;
+            }
+            lines.push(rendered);
+            displayedRows += 1;
+        }
+        const fullyDisplayed = projection.rowsComplete === true &&
+            displayedRows === projection.rowCount &&
+            displayedRows === (projection.rows || []).length;
+        lines[rowMetadataIndex] = `rows=${projection.rowCount}; rows_complete=${fullyDisplayed}`;
+        if (lines.join('\n').length >= maxChars) {
+            break;
+        }
+    }
+    return lines.join('\n').slice(0, maxChars);
+}
+
+function extractHtmlTableRelations(html = '', query = '', limit = 6) {
     const tables = [];
     const keyValues = [];
     const triples = [];
@@ -638,21 +1032,15 @@ function extractHtmlTableRelations(html = '', limit = 6) {
         const tableHtml = tableMatch[1];
         const captionMatch = tableHtml.match(/<caption\b[^>]*>([\s\S]*?)<\/caption>/i);
         const caption = captionMatch ? truncateRelationText(stripHtml(captionMatch[1]), 180) : '';
-        const rowMatches = Array.from(tableHtml.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/gi)).slice(0, 24);
-        const rows = rowMatches.map((row) => extractTableCells(row[1])).filter((cells) => cells.some(Boolean));
-        if (!rows.length) {
+        const matrix = extractHtmlTableMatrix(tableHtml);
+        const table = buildTableRelation({ caption, ...matrix }, query);
+        if (!table) {
             continue;
         }
-        const firstRowHasHeaders = /<th\b/i.test(rowMatches[0]?.[1] || '');
-        const headers = firstRowHasHeaders ? rows[0] : [];
-        const dataRows = firstRowHasHeaders ? rows.slice(1) : rows;
-        const table = pruneEmptyDeep({
-            caption: caption || undefined,
-            headers: headers.length ? headers : undefined,
-            rowCount: dataRows.length,
-            sampleRows: dataRows.slice(0, 8)
-        });
-        tables.push(table);
+        const headers = table.headers || [];
+        const dataRows = table.dataRows || [];
+        const { dataRows: _dataRows, ...publicTable } = table;
+        tables.push(publicTable);
         for (const cells of dataRows.slice(0, 12)) {
             if (headers.length >= 2 && cells.length >= 2) {
                 const rowSubject = cells[0] || caption || 'table row';
@@ -790,7 +1178,7 @@ function extractHtmlRelationGraph(html = '', { url = '', query = '', links = [] 
         queryMatchedTerms: candidate.queryMatchedTerms?.length ? candidate.queryMatchedTerms.slice(0, 8) : undefined
     }));
     const jsonLd = extractJsonLdRelations(html, url);
-    const tableRelations = extractHtmlTableRelations(html);
+    const tableRelations = extractHtmlTableRelations(html, query);
     const definitionRelations = extractHtmlDefinitionRelations(html);
     const keyValues = [...definitionRelations.keyValues, ...tableRelations.keyValues].slice(0, 30);
     const relationTriples = [
@@ -1050,6 +1438,25 @@ function buildSuggestedCallForLink(candidate = {}, { query = '' } = {}) {
     const url = normalizeString(candidate.url);
     const text = normalizeString(candidate.text, 'linked resource');
     const fetchArgs = query ? { url, query } : { url };
+    const github = parseGitHubRepoRef({ url });
+    if (github.owner && github.repo) {
+        const mode = github.path
+            ? (/\/tree\//i.test(url) ? 'tree' : 'file')
+            : 'readme';
+        return {
+            tool: 'github_repo_read',
+            args: pruneEmptyDeep({
+                repo: `${github.owner}/${github.repo}`,
+                mode,
+                path: github.path || undefined,
+                ref: github.ref || undefined,
+                maxChars: mode === 'file' ? 30000 : undefined
+            }),
+            reason: github.path
+                ? `Read the linked GitHub ${mode === 'tree' ? 'directory' : 'file'} through the repository API: ${text}`
+                : `Read the linked GitHub repository through the repository API: ${text}`
+        };
+    }
     if (normalizeString(candidate.doi)) {
         return {
             tool: 'paper_metadata_lookup',
@@ -2004,9 +2411,66 @@ function isGenericSearchQueryTerm(term = '', entityTerms = []) {
     );
 }
 
+function buildConciseQuotedTargetSearchQuery(query = '') {
+    const original = normalizeString(query);
+    if (!original || /[\p{Script=Han}]/u.test(original)) {
+        return '';
+    }
+    const quotedTargets = Array.from(
+        original.matchAll(/"([^"]{12,})"|“([^”]{12,})”/g)
+    )
+        .map((match) => ({
+            full: match[0],
+            value: normalizeString(match[1] || match[2]),
+            termCount: (normalizeSearchText(match[1] || match[2]).match(/[a-z0-9]{2,}/g) || []).length
+        }))
+        .filter((item) => item.value && item.termCount >= 4)
+        .sort((left, right) =>
+            right.termCount - left.termCount ||
+            right.value.length - left.value.length
+        );
+    const target = quotedTargets[0];
+    if (!target) {
+        return '';
+    }
+    const allTerms = extractSearchQueryTerms(original);
+    const shouldContract = (
+        original.length > 150 ||
+        allTerms.length > 12 ||
+        quotedTargets.length > 2
+    );
+    if (!shouldContract) {
+        return '';
+    }
+    let contextText = original;
+    for (const quoted of quotedTargets) {
+        contextText = contextText.replace(quoted.full, ' ');
+    }
+    const contextTerms = extractSearchQueryTerms(contextText).slice(0, 3);
+    const contextTermSet = new Set(contextTerms);
+    const weakTitleTerms = new Set([
+        'can', 'could', 'may', 'might', 'must', 'shall', 'should', 'will', 'would'
+    ]);
+    const targetTerms = extractSearchQueryTerms(target.value)
+        .filter((term) => !weakTitleTerms.has(term) && !contextTermSet.has(term))
+        .slice(0, 5);
+    const sites = extractSearchSiteConstraints(original)
+        .slice(0, 2)
+        .map((site) => `site:${site}`);
+    return [
+        ...contextTerms,
+        ...targetTerms,
+        ...sites
+    ].join(' ').slice(0, 240).trim();
+}
+
 function buildEffectiveSearchQuery(query = '') {
     const normalized = normalizeString(query);
     if (normalized && !/[\p{Script=Han}]/u.test(normalized)) {
+        const conciseQuotedTargetQuery = buildConciseQuotedTargetSearchQuery(normalized);
+        if (conciseQuotedTargetQuery) {
+            return conciseQuotedTargetQuery;
+        }
         const exactAnswerQuery = buildExactAnswerFocusedSearchQuery(normalized);
         if (exactAnswerQuery) {
             return exactAnswerQuery;
@@ -2331,11 +2795,10 @@ function buildSuggestedCallsFromSearchResults(results = [], { query = '', limit 
     return dedupeSuggestedNextCalls(
         eligible
             .slice(0, limit)
-            .map((item) => ({
-                tool: 'open_page',
-                args: query ? { url: item.url, query } : { url: item.url },
-                reason: `Read search result: ${normalizeString(item.title, item.url)}`
-            })),
+            .map((item) => buildSuggestedCallForLink({
+                ...item,
+                text: normalizeString(item.text || item.title, item.url)
+            }, { query })),
         limit
     );
 }
@@ -3203,10 +3666,24 @@ function buildHttpAccessFailureDetails(url, fetched = {}) {
     });
     if (fetched.status === 403) {
         details.evidenceGap = 'Remote site blocked automated access (HTTP 403).';
-        details.recoveryHint = 'This is a server-side access policy, not a local network failure. Prefer metadata, extracted links from an accessible page, or another source instead of retrying this URL.';
+        details.recoveryHint = 'This is a server-side access policy, not a local network failure. Prefer metadata, extracted links from an accessible page, another source, or a historical web snapshot instead of retrying this URL.';
+        details.suggestedNextCalls = [{
+            tool: 'tool_search',
+            args: {
+                query: 'historical web archive snapshot unavailable blocked URL',
+                limit: 5
+            }
+        }];
     } else if (fetched.status === 429) {
         details.evidenceGap = 'Remote site rate-limited automated requests (HTTP 429).';
-        details.recoveryHint = 'This is a remote rate limit, not a local connectivity failure. Back off or use another API/source instead of hammering the same endpoint.';
+        details.recoveryHint = 'This is a remote rate limit, not a local connectivity failure. Back off, use another API/source, or inspect a historical snapshot when past content is sufficient instead of hammering the same endpoint.';
+        details.suggestedNextCalls = [{
+            tool: 'tool_search',
+            args: {
+                query: 'historical web archive snapshot rate limited URL',
+                limit: 5
+            }
+        }];
     } else if (/ssl|unexpected_eof|eof occurred/i.test(`${fetched.error || ''}\n${fetched.stderr || ''}\n${fetched.fallbackError || ''}`)) {
         details.failureReason = 'https_ssl_fetch_failed';
         details.evidenceGap = 'The HTTP fetch backend hit a TLS/SSL transport failure before page content was retrieved.';
@@ -3512,7 +3989,10 @@ function extractGenericAnchorResults(html = '', maxResults = 8) {
         } catch {
             continue;
         }
-        if (['bing.com', 'duckduckgo.com', 'google.com', 'microsoft.com'].includes(host) && !/learn\.microsoft\.com/i.test(url)) {
+        const searchEngineNavigationHost =
+            /(^|\.)(bing|duckduckgo|google|yahoo)\.com$/i.test(host) ||
+            (/(^|\.)microsoft\.com$/i.test(host) && !/^learn\.microsoft\.com$/i.test(host));
+        if (searchEngineNavigationHost) {
             continue;
         }
         if (/privacy|terms|settings|help|account|login|images|videos|maps/i.test(`${title} ${url}`)) {
@@ -5642,6 +6122,10 @@ async function fetchWithLocalCrawl4aiWorker(url, config = {}, args = {}, timeout
     if (delayMs) {
         processArgs.push('--delay-ms', String(delayMs));
     }
+    const screenshotPath = normalizeString(args.screenshotPath || args.screenshot_path);
+    if (screenshotPath) {
+        processArgs.push('--screenshot-path', screenshotPath);
+    }
     const result = await runProcess(command, processArgs, {
         timeoutMs: effectiveTimeoutMs + 1000,
         env: config.playwrightBrowsersPath
@@ -5707,6 +6191,8 @@ async function fetchWithLocalCrawl4aiWorker(url, config = {}, args = {}, timeout
         probe: config.probe === true,
         links: Array.isArray(payload.links) ? payload.links : extractLinksFromMarkdown(markdown, url, 80),
         metadata: payload.metadata,
+        screenshotPath: normalizeString(payload.screenshotPath),
+        screenshotBytes: Number(payload.screenshotBytes || 0),
         crawl4aiWorker: workerPath
     };
 }
@@ -5812,6 +6298,26 @@ function shouldRetryRenderedFetchAfterStaticResult({ details = {}, args = {}, cr
     return explicitlyRendered || configured || previousFullAttempt || defaultProbeTimedOut;
 }
 
+function expandStructuredSourceText(text = '', contentType = '') {
+    const source = String(text || '').trim();
+    if (!source || source.length > 2_000_000) {
+        return source;
+    }
+    const fenced = source.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+    const candidate = (fenced?.[1] || source).trim();
+    const looksStructured = /json/i.test(normalizeString(contentType)) ||
+        ((candidate.startsWith('{') && candidate.endsWith('}')) ||
+        (candidate.startsWith('[') && candidate.endsWith(']')));
+    if (!looksStructured) {
+        return source;
+    }
+    try {
+        return JSON.stringify(JSON.parse(candidate), null, 2);
+    } catch {
+        return source;
+    }
+}
+
 function buildWebFetchResult({ url, args = {}, maxChars = MAX_FETCH_CHARS, fetched = {}, crawl4aiAttempt = null, renderedFallbackAttempt = null, renderedFallbackUsed = false, renderedFallbackTrigger = '' } = {}) {
     const contentType = fetched.contentType || '';
     const body = fetched.text;
@@ -5820,7 +6326,7 @@ function buildWebFetchResult({ url, args = {}, maxChars = MAX_FETCH_CHARS, fetch
         : fetched.kind === 'crawl4ai_markdown' ? body.trim()
         : /html/i.test(contentType) ? stripHtml(body) : body.trim();
     const encodingRepair = repairUtf8MojibakeText(rawText);
-    const text = encodingRepair.text;
+    const text = expandStructuredSourceText(encodingRepair.text, contentType);
     const linkQuery = normalizeString(args.query || args.contains || args.extract_query || args.extractQuery || '');
     const findPattern = normalizeString(args.findPattern || args.find_pattern);
     const sourceText = findPattern ? compactFindPageText(text) : text;
@@ -5879,11 +6385,32 @@ function buildWebFetchResult({ url, args = {}, maxChars = MAX_FETCH_CHARS, fetch
         ? extractHtmlRelationGraph(body, { url, query: linkQuery, links: extractedLinks })
         : null;
     const htmlRelationSummary = formatHtmlRelationGraph(htmlRelations);
+    const markdownTableRelations = fetched.kind === 'crawl4ai_markdown' || /markdown/i.test(contentType)
+        ? extractMarkdownTableRelations(text, linkQuery)
+        : null;
+    const structuredTables = [
+        ...(Array.isArray(htmlRelations?.tables) ? htmlRelations.tables : []),
+        ...(Array.isArray(markdownTableRelations?.tables) ? markdownTableRelations.tables : [])
+    ];
+    const tableProjectionSummary = formatTableProjections(structuredTables);
+    const structuredTableCoversTask = Boolean(linkQuery) && structuredTables.some((table) =>
+        table?.projection?.queryRelevant === true &&
+        table?.projection?.rowsComplete === true &&
+        Number(table?.projection?.rowCount || 0) >= 2 &&
+        Array.isArray(table?.projection?.columns) &&
+        table.projection.columns.length >= 2
+    );
     const wikiFacts = fetched.kind === 'wikipedia_wikitext'
         ? extractWikiKeyValueFacts(text, linkQuery)
         : [];
     const wikiFactSummary = formatWikiKeyValueFacts(wikiFacts);
     const wikiFactReasoningReady = wikiFactsAreReasoningReady(wikiFacts, linkQuery);
+    const recordFieldProjections = extractRecordFieldProjections(text);
+    const recordFieldProjectionSummary = formatRecordFieldProjections(recordFieldProjections);
+    const repeatedLabeledFields = extractRepeatedLabeledFields(text);
+    const repeatedLabeledFieldSummary = formatRepeatedLabeledFields(repeatedLabeledFields);
+    const facetedSearchFilters = extractFacetedSearchFilters(text);
+    const facetedSearchFilterSummary = formatFacetedSearchFilters(facetedSearchFilters);
     const barrier = classifyAccessBarrierText(text);
     const sourceHasMore = sourceWindow.hasMoreBefore || sourceWindow.hasMoreAfter;
     const quality = classifyWebFetchEvidenceQuality({
@@ -5896,9 +6423,11 @@ function buildWebFetchResult({ url, args = {}, maxChars = MAX_FETCH_CHARS, fetch
         truncated: false,
         encodingRepair
     });
-    const evidenceGap = wikiFactReasoningReady ? '' : (quality.evidenceGap || '');
+    const evidenceGap = wikiFactReasoningReady || structuredTableCoversTask ? '' : (quality.evidenceGap || '');
     const recoveryHint = wikiFactReasoningReady
         ? 'Use the Wiki key-value facts above as structured evidence; only fetch more if another required field is missing.'
+        : structuredTableCoversTask
+        ? 'Use the complete structured table projection above for comparison; only fetch more if another required field is missing.'
         : (quality.recoveryHint || '');
     const sourceWindowFollowups = buildSourceWindowFollowups(sourceWindow, linkQuery);
     const sourceWindowPlainText = (Array.isArray(sourceWindow.lines) ? sourceWindow.lines : [])
@@ -5909,7 +6438,14 @@ function buildWebFetchResult({ url, args = {}, maxChars = MAX_FETCH_CHARS, fetch
         quality.evidenceQuality === 'sufficient_evidence' &&
         quality.isEvidence === true &&
         sourceWindowCoversTask
-    ) || wikiFactReasoningReady;
+    ) || wikiFactReasoningReady || structuredTableCoversTask;
+    const effectiveEvidenceQuality = structuredTableCoversTask
+        ? 'sufficient_evidence'
+        : quality.evidenceQuality;
+    const effectivePageType = structuredTableCoversTask
+        ? 'structured_data_page'
+        : quality.pageType;
+    const effectiveIsEvidence = quality.isEvidence === true || structuredTableCoversTask;
     const effectiveSuggestedNextCalls = reasoningReady
         ? []
         : dedupeSuggestedNextCalls([...suggestedNextCalls, ...sourceWindowFollowups], 5);
@@ -5949,7 +6485,16 @@ function buildWebFetchResult({ url, args = {}, maxChars = MAX_FETCH_CHARS, fetch
             lineno: source.line_start || source.lineno || 1
         }
     });
-    return textResult([guidance, compactHtmlRelationSummary, wikiFactSummary, sourceWindowText].filter(Boolean).join('\n\n'), {
+    return textResult([
+        tableProjectionSummary,
+        repeatedLabeledFieldSummary,
+        recordFieldProjectionSummary,
+        facetedSearchFilterSummary,
+        guidance,
+        compactHtmlRelationSummary,
+        wikiFactSummary,
+        sourceWindowText
+    ].filter(Boolean).join('\n\n'), {
         ok: true,
         status: 'completed',
         url,
@@ -5958,6 +6503,8 @@ function buildWebFetchResult({ url, args = {}, maxChars = MAX_FETCH_CHARS, fetch
         content_type: contentType,
         fetchBackend: fetched.backend,
         fetch_backend: fetched.backend,
+        proxyUsed: fetched.proxyUsed === true || undefined,
+        proxy_used: fetched.proxyUsed === true || undefined,
         fallbackFrom: fetched.fallbackFrom,
         fallback_from: fetched.fallbackFrom,
         primaryErrorCode: fetched.primaryErrorCode,
@@ -5996,23 +6543,25 @@ function buildWebFetchResult({ url, args = {}, maxChars = MAX_FETCH_CHARS, fetch
         sourceViewport: source,
         sourceWindowCoversTask,
         source_window_covers_query: sourceWindowCoversTask,
+        structuredTableCoversTask,
+        structured_table_covers_task: structuredTableCoversTask,
         reasoningReady,
         reasoning_ready: reasoningReady,
-        isEvidence: quality.isEvidence,
-        is_evidence: quality.isEvidence,
-        evidenceQuality: quality.evidenceQuality,
-        evidence_quality: quality.evidenceQuality,
-        pageType: quality.pageType,
-        page_type: quality.pageType,
-        contentQuality: quality.evidenceQuality,
-        content_quality: quality.evidenceQuality,
+        isEvidence: effectiveIsEvidence,
+        is_evidence: effectiveIsEvidence,
+        evidenceQuality: effectiveEvidenceQuality,
+        evidence_quality: effectiveEvidenceQuality,
+        pageType: effectivePageType,
+        page_type: effectivePageType,
+        contentQuality: effectiveEvidenceQuality,
+        content_quality: effectiveEvidenceQuality,
         observationContract: {
             complete: reasoningReady,
             truncated: false,
             reasoning_ready: reasoningReady,
-            is_evidence: quality.isEvidence,
-            evidence_quality: quality.evidenceQuality,
-            page_type: quality.pageType,
+            is_evidence: effectiveIsEvidence,
+            evidence_quality: effectiveEvidenceQuality,
+            page_type: effectivePageType,
             source_window: true,
             source_viewport: source,
             source_retrieval_complete: true,
@@ -6021,6 +6570,7 @@ function buildWebFetchResult({ url, args = {}, maxChars = MAX_FETCH_CHARS, fetch
             total_lines: sourceWindow.totalLines,
             has_more_source_lines: sourceHasMore,
             source_window_covers_task: sourceWindowCoversTask,
+            structured_table_covers_task: structuredTableCoversTask,
             evidence_judged_by_model: true
         },
         observedLinkCount: extractedLinks.length,
@@ -6034,6 +6584,22 @@ function buildWebFetchResult({ url, args = {}, maxChars = MAX_FETCH_CHARS, fetch
         html_relations: htmlRelations || undefined,
         htmlRelationSummary: htmlRelationSummary || undefined,
         html_relation_summary: htmlRelationSummary || undefined,
+        structuredTables: structuredTables.length ? structuredTables : undefined,
+        structured_tables: structuredTables.length ? structuredTables : undefined,
+        tableProjectionSummary: tableProjectionSummary || undefined,
+        recordFieldProjections: recordFieldProjections.length ? recordFieldProjections : undefined,
+        record_field_projections: recordFieldProjections.length ? recordFieldProjections : undefined,
+        recordFieldProjectionSummary: recordFieldProjectionSummary || undefined,
+        record_field_projection_summary: recordFieldProjectionSummary || undefined,
+        repeatedLabeledFields: repeatedLabeledFields.length ? repeatedLabeledFields : undefined,
+        repeated_labeled_fields: repeatedLabeledFields.length ? repeatedLabeledFields : undefined,
+        repeatedLabeledFieldSummary: repeatedLabeledFieldSummary || undefined,
+        repeated_labeled_field_summary: repeatedLabeledFieldSummary || undefined,
+        facetedSearchFilters: facetedSearchFilters.length ? facetedSearchFilters : undefined,
+        faceted_search_filters: facetedSearchFilters.length ? facetedSearchFilters : undefined,
+        facetedSearchFilterSummary: facetedSearchFilterSummary || undefined,
+        faceted_search_filter_summary: facetedSearchFilterSummary || undefined,
+        table_projection_summary: tableProjectionSummary || undefined,
         wikiFacts: wikiFacts.length ? wikiFacts : undefined,
         wiki_facts: wikiFacts.length ? wikiFacts : undefined,
         wikiFactSummary: wikiFactSummary || undefined,
@@ -6113,6 +6679,859 @@ async function webFetch(args = {}) {
         });
     }
     return primaryResult;
+}
+
+const WEB_ARCHIVE_PROVIDERS = Object.freeze({
+    internet_archive: Object.freeze({
+        id: 'internet_archive',
+        aliases: Object.freeze(['internet_archive', 'internet archive', 'ia', 'wayback', 'wayback_machine']),
+        cdxBaseUrl: 'https://web.archive.org/cdx/search/cdx',
+        replayBaseUrl: 'https://web.archive.org/web'
+    }),
+    arquivo: Object.freeze({
+        id: 'arquivo',
+        aliases: Object.freeze(['arquivo', 'arquivo.pt', 'arquivo_pt']),
+        cdxBaseUrl: 'https://arquivo.pt/wayback/cdx',
+        replayBaseUrl: 'https://arquivo.pt/wayback'
+    })
+});
+
+function normalizeWebArchiveProvider(value = '') {
+    const normalized = normalizeString(value).toLowerCase();
+    if (!normalized || normalized === 'auto' || normalized === 'all') {
+        return '';
+    }
+    return Object.values(WEB_ARCHIVE_PROVIDERS)
+        .find((provider) => provider.aliases.includes(normalized))
+        ?.id || '';
+}
+
+function normalizeWebArchiveProviders(args = {}) {
+    const raw = Array.isArray(args.providers)
+        ? args.providers
+        : String(args.provider || '')
+            .split(',')
+            .map((item) => item.trim())
+            .filter(Boolean);
+    if (!raw.length) {
+        return ['internet_archive', 'arquivo'];
+    }
+    const providers = dedupeSearchStrings(raw.map(normalizeWebArchiveProvider)).filter(Boolean);
+    return providers.length ? providers : ['internet_archive', 'arquivo'];
+}
+
+function webArchiveSearchTerms(value = '') {
+    let decoded = String(value || '');
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+            decoded = decodeURIComponent(decoded.replace(/\+/g, ' '));
+        } catch {
+            break;
+        }
+    }
+    return dedupeSearchStrings(
+        (decoded.toLowerCase().match(/[\p{L}\p{N}]{2,}/gu) || [])
+            .filter((term) => !['http', 'https', 'www'].includes(term))
+    );
+}
+
+function webArchiveAnchorTerms(terms = []) {
+    const normalized = dedupeSearchStrings(Array.isArray(terms) ? terms : webArchiveSearchTerms(terms));
+    if (!normalized.length) {
+        return [];
+    }
+    const numericTerms = normalized.filter((term) => /\d/.test(term));
+    return dedupeSearchStrings([
+        normalized[0],
+        ...numericTerms
+    ]).slice(0, 6);
+}
+
+const WEB_ARCHIVE_URL_FIELD_TERMS = new Set([
+    'access', 'article', 'author', 'classification', 'content', 'country', 'date',
+    'document', 'field', 'filter', 'flag', 'format', 'lang', 'language', 'page',
+    'provider', 'query', 'record', 'region', 'resource', 'search', 'sort', 'source',
+    'subject', 'topic', 'type', 'typenorm', 'year'
+]);
+
+function webArchiveAnchorTermSets(terms = []) {
+    const normalized = dedupeSearchStrings(Array.isArray(terms) ? terms : webArchiveSearchTerms(terms));
+    const primary = webArchiveAnchorTerms(normalized);
+    if (!primary.length) {
+        return [];
+    }
+    const firstTerm = normalized[0];
+    const numericTerms = normalized.filter((term) => /\d/.test(term));
+    const literalValueTerms = normalized
+        .slice(1)
+        .filter((term) => !/\d/.test(term) && !WEB_ARCHIVE_URL_FIELD_TERMS.has(term))
+        .slice(0, 2);
+    const candidates = [
+        literalValueTerms.length
+            ? [firstTerm, numericTerms[0], numericTerms[numericTerms.length - 1], ...literalValueTerms]
+            : [],
+        primary,
+        numericTerms.length >= 2
+            ? [firstTerm, numericTerms[0], numericTerms[numericTerms.length - 1]]
+            : [],
+        numericTerms.length
+            ? [firstTerm, numericTerms[0]]
+            : [firstTerm]
+    ];
+    const seen = new Set();
+    return candidates
+        .map((candidate) => dedupeSearchStrings(candidate).slice(0, 6))
+        .filter((candidate) => {
+            if (!candidate.length) {
+                return false;
+            }
+            const key = candidate.join('\u0000');
+            if (seen.has(key)) {
+                return false;
+            }
+            seen.add(key);
+            return true;
+        });
+}
+
+function webArchiveUrlRankingText(value = '') {
+    const rawUrl = normalizeString(value);
+    try {
+        const parsed = new URL(rawUrl);
+        const parts = [
+            parsed.hostname,
+            parsed.pathname,
+            parsed.hash
+        ];
+        for (const [key, parameterValue] of parsed.searchParams.entries()) {
+            const normalizedValue = normalizeString(parameterValue);
+            if (!normalizedValue) {
+                continue;
+            }
+            parts.push(key);
+            parts.push(normalizedValue);
+        }
+        return webArchiveSearchTerms(parts.join(' ')).join(' ');
+    } catch {
+        return webArchiveSearchTerms(rawUrl).join(' ');
+    }
+}
+
+function normalizeArchiveIndexTarget(url, matchType = 'exact') {
+    const normalizedUrl = normalizeString(url);
+    return normalizeString(matchType).toLowerCase() === 'prefix'
+        ? normalizedUrl.replace(/\*$/, '')
+        : normalizedUrl;
+}
+
+function escapeWebArchiveRegexTerm(value = '') {
+    return String(value || '').replace(/[\\^$.*+?()[\]{}|]/g, '\\$&');
+}
+
+function buildWebArchiveCdxUrl(providerId, args = {}, page = {}) {
+    const provider = WEB_ARCHIVE_PROVIDERS[providerId];
+    const override = providerId === 'internet_archive'
+        ? normalizeString(args.cdxBaseUrl || args.cdx_base_url || args.internetArchiveCdxUrl)
+        : normalizeString(args.arquivoCdxUrl || args.arquivo_cdx_url);
+    const endpoint = new URL(override || provider.cdxBaseUrl);
+    endpoint.searchParams.set('url', normalizeArchiveIndexTarget(
+        args.url,
+        args.matchType || args.match_type
+    ));
+    const matchType = normalizeString(args.matchType || args.match_type).toLowerCase();
+    if (matchType === 'prefix') {
+        endpoint.searchParams.set('matchType', 'prefix');
+    }
+    endpoint.searchParams.set('output', 'json');
+    endpoint.searchParams.set('limit', String(clampNumber(
+        page.limit || args.scanLimit || args.scan_limit,
+        matchType === 'prefix' ? 500 : 120,
+        1,
+        500
+    )));
+    const fromYear = clampNumber(args.fromYear || args.from_year, 0, 0, 9999);
+    const toYear = clampNumber(args.toYear || args.to_year, 0, 0, 9999);
+    if (fromYear) endpoint.searchParams.set('from', String(fromYear));
+    if (toYear) endpoint.searchParams.set('to', String(toYear));
+    if (providerId === 'internet_archive') {
+        endpoint.searchParams.set('fl', 'timestamp,original,statuscode,mimetype,digest,length');
+        endpoint.searchParams.append('filter', 'statuscode:200');
+        for (const term of Array.isArray(page.urlFilterTerms) ? page.urlFilterTerms : []) {
+            const escapedTerm = escapeWebArchiveRegexTerm(term);
+            if (escapedTerm) {
+                endpoint.searchParams.append('filter', `original:(?i).*${escapedTerm}.*`);
+            }
+        }
+        if (normalizeString(args.matchType || args.match_type).toLowerCase() === 'prefix') {
+            endpoint.searchParams.set('collapse', 'urlkey');
+        }
+        if (page.showResumeKey === true) {
+            endpoint.searchParams.set('showResumeKey', 'true');
+        }
+        const resumeKey = normalizeString(page.resumeKey);
+        if (resumeKey) {
+            endpoint.searchParams.set('resumeKey', resumeKey);
+        }
+    }
+    return endpoint.toString();
+}
+
+function parseInternetArchiveCdxPage(text = '') {
+    let payload;
+    try {
+        payload = JSON.parse(text);
+    } catch {
+        return { rows: [], resumeKey: '' };
+    }
+    if (!Array.isArray(payload) || !Array.isArray(payload[0])) {
+        return { rows: [], resumeKey: '' };
+    }
+    const header = payload[0].map((field) => normalizeString(String(field)));
+    const rows = payload.slice(1)
+        .filter((row) => Array.isArray(row) && row.length >= header.length)
+        .map((row) => Object.fromEntries(header.map((field, index) => [field, row[index]])));
+    const resumeKey = payload.slice(1)
+        .findLast((row) => Array.isArray(row) && row.length === 1 && normalizeString(String(row[0] || '')))
+        ?.[0];
+    return {
+        rows,
+        resumeKey: normalizeString(String(resumeKey || ''))
+    };
+}
+
+function parseArquivoCdx(text = '') {
+    return String(text || '')
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .map((line) => {
+            try {
+                return JSON.parse(line);
+            } catch {
+                return null;
+            }
+        })
+        .filter(Boolean);
+}
+
+function buildWebArchiveReplayUrl(providerId, timestamp, originalUrl, args = {}) {
+    const provider = WEB_ARCHIVE_PROVIDERS[providerId];
+    const override = providerId === 'internet_archive'
+        ? normalizeString(args.replayBaseUrl || args.replay_base_url || args.internetArchiveReplayUrl)
+        : normalizeString(args.arquivoReplayUrl || args.arquivo_replay_url);
+    const baseUrl = (override || provider.replayBaseUrl).replace(/\/+$/, '');
+    const captureTimestamp = normalizeString(String(timestamp || '')).replace(/\D/g, '');
+    if (providerId === 'internet_archive') {
+        return `${baseUrl}/${captureTimestamp}id_/${originalUrl}`;
+    }
+    return `${baseUrl}/${captureTimestamp}/${originalUrl}`;
+}
+
+function normalizeWebArchiveCapture(providerId, row = {}, args = {}) {
+    const timestamp = normalizeString(String(row.timestamp || ''));
+    const originalUrl = normalizeString(String(row.original || row.url || ''));
+    if (!/^\d{8,14}$/.test(timestamp) || !/^https?:\/\//i.test(originalUrl)) {
+        return null;
+    }
+    const capturedAt = timestamp.length >= 14
+        ? `${timestamp.slice(0, 4)}-${timestamp.slice(4, 6)}-${timestamp.slice(6, 8)}T${timestamp.slice(8, 10)}:${timestamp.slice(10, 12)}:${timestamp.slice(12, 14)}Z`
+        : `${timestamp.slice(0, 4)}-${timestamp.slice(4, 6)}-${timestamp.slice(6, 8)}`;
+    return pruneEmptyDeep({
+        provider: providerId,
+        timestamp,
+        capturedAt,
+        originalUrl,
+        replayUrl: buildWebArchiveReplayUrl(providerId, timestamp, originalUrl, args),
+        statusCode: Number(row.statuscode || row.status) || undefined,
+        mimeType: normalizeString(String(row.mimetype || row.mime || '')),
+        digest: normalizeString(String(row.digest || '')),
+        contentLength: Number(row.length) || undefined
+    });
+}
+
+function rankWebArchiveCaptures(captures = [], contains = '', options = {}) {
+    const terms = webArchiveSearchTerms(contains);
+    const preferEarliest = options.preferEarliest === true;
+    const ranked = captures.map((capture, index) => {
+        const haystack = webArchiveUrlRankingText(capture.originalUrl);
+        const matchedTerms = terms.filter((term) => haystack.includes(term));
+        return {
+            ...capture,
+            matchedTerms,
+            matchCount: matchedTerms.length,
+            matchCoverage: terms.length ? Number((matchedTerms.length / terms.length).toFixed(3)) : 1,
+            _index: index
+        };
+    });
+    ranked.sort((left, right) => preferEarliest
+        ? right.matchCount - left.matchCount ||
+            left.timestamp.localeCompare(right.timestamp) ||
+            left._index - right._index
+        : right.matchCount - left.matchCount ||
+            right.timestamp.localeCompare(left.timestamp) ||
+            left._index - right._index
+    );
+    const exactMatches = terms.length
+        ? ranked.filter((capture) => capture.matchCount === terms.length)
+        : ranked;
+    const termMatches = ranked.filter((capture) => capture.matchCount > 0);
+    const candidates = preferEarliest
+        ? termMatches
+        : exactMatches.length
+            ? exactMatches
+            : termMatches;
+    return {
+        terms,
+        exactMatch: Boolean(exactMatches.length),
+        captures: (candidates.length ? candidates : ranked).map(({ _index, ...capture }) => capture)
+    };
+}
+
+function selectWebArchiveCaptures(captures = [], terms = [], limit = 10) {
+    const rankedCaptures = Array.isArray(captures) ? captures : [];
+    const selected = rankedCaptures.slice(0, limit);
+    const coreTerms = webArchiveAnchorTerms(terms);
+    if (!coreTerms.length || limit < 2) {
+        return { selected, coreTerms, recoveryCaptures: [] };
+    }
+    const recoveryCaptures = rankedCaptures
+        .filter((capture) =>
+            coreTerms.every((term) => (capture.matchedTerms || []).includes(term))
+        )
+        .sort((left, right) =>
+            Number(left.matchCount || 0) - Number(right.matchCount || 0) ||
+            left.timestamp.localeCompare(right.timestamp)
+        )
+        .slice(0, 2);
+    let insertIndex = Math.min(3, Math.max(1, limit - 1));
+    for (const recovery of recoveryCaptures) {
+        const existingIndex = selected.findIndex((capture) =>
+            capture.provider === recovery.provider &&
+            capture.timestamp === recovery.timestamp &&
+            capture.originalUrl === recovery.originalUrl
+        );
+        if (existingIndex >= 0) {
+            continue;
+        }
+        selected.splice(Math.min(insertIndex, selected.length), 0, recovery);
+        insertIndex += 1;
+    }
+    return {
+        selected: selected.slice(0, limit),
+        coreTerms,
+        recoveryCaptures
+    };
+}
+
+function annotateArchiveDateBoundsRelaxed(result = {}, fromYear = 0, toYear = 0) {
+    const details = pruneEmptyDeep({
+        ...(result.structuredContent || result.details || {}),
+        captureDateBoundsRelaxed: true,
+        capture_date_bounds_relaxed: true,
+        originalCaptureDateBounds: {
+            fromYear: fromYear || undefined,
+            toYear: toYear || undefined
+        },
+        original_capture_date_bounds: {
+            from_year: fromYear || undefined,
+            to_year: toYear || undefined
+        },
+        captureDateRecoveryReason: 'The requested archive crawl-year bounds duplicated URL/content ranking years or returned no captures, so discovery retried without crawl-date bounds.',
+        capture_date_recovery_reason: 'The requested archive crawl-year bounds duplicated URL/content ranking years or returned no captures, so discovery retried without crawl-date bounds.'
+    });
+    return {
+        ...result,
+        content: Array.isArray(result.content) && result.content.length
+            ? [{
+                ...result.content[0],
+                text: `archive_capture_date_bounds_relaxed=true original_from=${fromYear || '(none)'} original_to=${toYear || '(none)'}\n${result.content[0].text}`
+            }, ...result.content.slice(1)]
+            : result.content,
+        structuredContent: details,
+        details
+    };
+}
+
+async function webArchiveLookup(args = {}) {
+    const url = normalizeString(args.url || args.uri || args.originalUrl || args.original_url);
+    if (!/^https?:\/\//i.test(url)) {
+        return errorResult('web_archive_lookup requires an original http(s) url');
+    }
+    const requestedProvider = normalizeWebArchiveProvider(args.provider);
+    const timestamp = normalizeString(String(args.timestamp || args.captureTimestamp || args.capture_timestamp || ''))
+        .replace(/\D/g, '');
+    const mode = normalizeString(args.mode, timestamp ? 'open' : 'captures').toLowerCase();
+    const timeoutMs = clampNumber(args.timeoutMs || args.timeout_ms, 120000, 3000, 300000);
+    if (mode === 'open') {
+        if (!requestedProvider) {
+            return errorResult('web_archive_lookup mode=open requires provider');
+        }
+        if (!/^\d{8,14}$/.test(timestamp)) {
+            return errorResult('web_archive_lookup mode=open requires an 8-14 digit timestamp');
+        }
+        const replayUrl = buildWebArchiveReplayUrl(requestedProvider, timestamp, url, args);
+        const fetched = await fetchText(replayUrl, timeoutMs);
+        if (!fetched.ok) {
+            return errorResult(fetched.error || 'archived snapshot fetch failed', {
+                ...buildHttpAccessFailureDetails(replayUrl, fetched),
+                provider: requestedProvider,
+                timestamp,
+                originalUrl: url,
+                replayUrl
+            });
+        }
+        const maxChars = clampNumber(args.maxChars || args.max_chars, MAX_FETCH_CHARS, 1000, 80000);
+        const result = buildWebFetchResult({
+            url: replayUrl,
+            args: {
+                ...args,
+                url: replayUrl,
+                query: args.query || args.contains
+            },
+            maxChars,
+            fetched,
+            crawl4aiAttempt: null
+        });
+        const details = pruneEmptyDeep({
+            ...(result.structuredContent || result.details || {}),
+            kind: 'web_archive_snapshot',
+            archiveProvider: requestedProvider,
+            archive_provider: requestedProvider,
+            captureTimestamp: timestamp,
+            capture_timestamp: timestamp,
+            originalUrl: url,
+            original_url: url,
+            replayUrl,
+            replay_url: replayUrl
+        });
+        return {
+            ...result,
+            structuredContent: details,
+            details
+        };
+    }
+    if (mode !== 'captures' && mode !== 'search') {
+        return errorResult('web_archive_lookup mode must be captures, search, or open');
+    }
+
+    const providers = normalizeWebArchiveProviders(args);
+    const matchType = normalizeString(args.matchType || args.match_type, 'exact').toLowerCase();
+    const rankingTerms = webArchiveSearchTerms(args.contains || args.query);
+    const requestedFromYear = clampNumber(args.fromYear || args.from_year, 0, 0, 9999);
+    const requestedToYear = clampNumber(args.toYear || args.to_year, 0, 0, 9999);
+    const duplicatedContentYearBounds = [requestedFromYear, requestedToYear]
+        .filter(Boolean)
+        .some((year) => rankingTerms.includes(String(year)));
+    if (
+        duplicatedContentYearBounds &&
+        args._captureDateBoundsRelaxed !== true
+    ) {
+        const relaxed = await webArchiveLookup({
+            ...args,
+            fromYear: 0,
+            from_year: 0,
+            toYear: 0,
+            to_year: 0,
+            _captureDateBoundsRelaxed: true
+        });
+        return annotateArchiveDateBoundsRelaxed(relaxed, requestedFromYear, requestedToYear);
+    }
+    const defaultScanLimit = matchType === 'prefix'
+        ? (rankingTerms.length ? 2500 : 500)
+        : 120;
+    const scanLimit = clampNumber(args.scanLimit || args.scan_limit, defaultScanLimit, 1, 10000);
+    const maxResults = clampNumber(args.maxResults || args.max_results || args.limit, 12, 1, 50);
+    const archiveIndexTimeoutMs = clampNumber(
+        args.indexTimeoutMs || args.index_timeout_ms,
+        Math.max(timeoutMs, 90000),
+        5000,
+        180000
+    );
+    const attempts = await runBoundedParallel(providers, providers.length, async (providerId) => {
+        if (providerId !== 'internet_archive') {
+            const cdxUrl = buildWebArchiveCdxUrl(providerId, args, {
+                limit: Math.min(scanLimit, 500)
+            });
+            const fetched = await fetchArchiveIndexText(cdxUrl, archiveIndexTimeoutMs);
+            if (!fetched.ok) {
+                return {
+                    ok: false,
+                    provider: providerId,
+                    cdxUrl,
+                    cdxUrls: [cdxUrl],
+                    pageCount: 1,
+                    statusCode: fetched.status || 0,
+                    errorCode: fetched.errorCode,
+                    error: fetched.error
+                };
+            }
+            return {
+                ok: true,
+                provider: providerId,
+                cdxUrl,
+                cdxUrls: [cdxUrl],
+                pageCount: 1,
+                stopReason: 'provider_single_page',
+                captures: parseArquivoCdx(fetched.text)
+                    .map((row) => normalizeWebArchiveCapture(providerId, row, args))
+                    .filter(Boolean)
+            };
+        }
+
+        const captures = [];
+        const cdxUrls = [];
+        let resumeKey = '';
+        let statusCode = 0;
+        let errorCode = '';
+        let error = '';
+        let stopReason = 'scan_limit_reached';
+        let serverUrlProbeComplete = false;
+        let matchedAnchorSetCount = 0;
+
+        if (matchType === 'prefix' && rankingTerms.length) {
+            const anchorTermSets = webArchiveAnchorTermSets(rankingTerms);
+            for (let anchorIndex = 0; anchorIndex < anchorTermSets.length; anchorIndex += 1) {
+                const anchorTerms = anchorTermSets[anchorIndex];
+                const isPreferredAnchorSet = anchorIndex === 0;
+                const isLastAnchorSet = anchorIndex === anchorTermSets.length - 1;
+                const probeTimeoutMs = isPreferredAnchorSet || matchedAnchorSetCount > 0
+                    ? archiveIndexTimeoutMs
+                    : Math.min(archiveIndexTimeoutMs, 20000);
+                const filteredCdxUrl = buildWebArchiveCdxUrl(providerId, args, {
+                    limit: Math.min(scanLimit, 500),
+                    urlFilterTerms: anchorTerms
+                });
+                cdxUrls.push(filteredCdxUrl);
+                let filteredFetch = await fetchArchiveIndexText(filteredCdxUrl, probeTimeoutMs);
+                if (
+                    !filteredFetch.ok &&
+                    isLastAnchorSet &&
+                    !isPreferredAnchorSet &&
+                    ['timeout', 'curl_fetch_failed', 'fetch_process_failed', 'node_fetch_failed'].includes(
+                        normalizeString(filteredFetch.errorCode)
+                    )
+                ) {
+                    await new Promise((resolve) => setTimeout(resolve, 750));
+                    cdxUrls.push(filteredCdxUrl);
+                    filteredFetch = await fetchArchiveIndexText(filteredCdxUrl, archiveIndexTimeoutMs);
+                }
+                statusCode = filteredFetch.status || statusCode;
+                if (!filteredFetch.ok) {
+                    errorCode = filteredFetch.errorCode;
+                    error = filteredFetch.error;
+                    if (isLastAnchorSet) {
+                        stopReason = 'server_url_probe_failure_falling_back_to_prefix_scan';
+                        break;
+                    }
+                    stopReason = 'server_url_anchor_probe_failed_backing_off';
+                    continue;
+                }
+                const filteredPage = parseInternetArchiveCdxPage(filteredFetch.text);
+                const filteredCaptures = filteredPage.rows
+                    .map((row) => normalizeWebArchiveCapture(providerId, row, args))
+                    .filter(Boolean);
+                if (filteredCaptures.length) {
+                    errorCode = '';
+                    error = '';
+                    captures.push(...filteredCaptures);
+                    matchedAnchorSetCount += 1;
+                    const filteredRanking = rankWebArchiveCaptures(
+                        filteredCaptures,
+                        args.contains || args.query
+                    );
+                    stopReason = anchorIndex > 0
+                        ? 'server_url_anchor_backoff_matched'
+                        : anchorTerms.length === rankingTerms.length
+                        ? 'server_url_terms_matched'
+                        : 'server_url_anchor_terms_matched';
+                    const shouldProbeBroaderCore = (
+                        matchedAnchorSetCount === 1 &&
+                        anchorIndex < anchorTermSets.length - 1
+                    );
+                    if (shouldProbeBroaderCore) {
+                        stopReason = 'server_url_selective_terms_matched_probing_broader_core';
+                        continue;
+                    }
+                    serverUrlProbeComplete = filteredRanking.exactMatch || matchedAnchorSetCount >= 2;
+                    if (serverUrlProbeComplete) {
+                        break;
+                    }
+                }
+            }
+            if (!serverUrlProbeComplete) {
+                stopReason = stopReason === 'server_url_probe_failure_falling_back_to_prefix_scan'
+                    ? stopReason
+                    : 'server_url_anchor_terms_empty_falling_back_to_prefix_scan';
+            }
+        }
+
+        const maxPages = Math.ceil(scanLimit / 500);
+        for (let pageIndex = 0; !serverUrlProbeComplete && pageIndex < maxPages; pageIndex += 1) {
+            const requestedBeforePage = pageIndex * 500;
+            const pageLimit = Math.min(500, scanLimit - requestedBeforePage);
+            if (pageLimit <= 0) break;
+            const cdxUrl = buildWebArchiveCdxUrl(providerId, args, {
+                limit: pageLimit,
+                showResumeKey: requestedBeforePage + pageLimit < scanLimit,
+                resumeKey
+            });
+            cdxUrls.push(cdxUrl);
+            const fetched = await fetchArchiveIndexText(cdxUrl, archiveIndexTimeoutMs);
+            statusCode = fetched.status || statusCode;
+            if (!fetched.ok) {
+                errorCode = fetched.errorCode;
+                error = fetched.error;
+                stopReason = captures.length ? 'partial_fetch_failure' : 'fetch_failure';
+                break;
+            }
+            errorCode = '';
+            error = '';
+            const page = parseInternetArchiveCdxPage(fetched.text);
+            const pageCaptures = page.rows
+                .map((row) => normalizeWebArchiveCapture(providerId, row, args))
+                .filter(Boolean);
+            captures.push(...pageCaptures);
+            if (rankingTerms.length && rankWebArchiveCaptures(pageCaptures, args.contains || args.query).exactMatch) {
+                stopReason = 'all_url_terms_matched';
+                break;
+            }
+            if (!page.resumeKey || page.resumeKey === resumeKey) {
+                stopReason = 'no_resume_key';
+                break;
+            }
+            resumeKey = page.resumeKey;
+        }
+        return {
+            ok: captures.length > 0,
+            provider: providerId,
+            cdxUrl: cdxUrls[0] || '',
+            cdxUrls,
+            pageCount: cdxUrls.length,
+            stopReason,
+            statusCode,
+            errorCode,
+            error,
+            captures
+        };
+    });
+    const captures = Array.from(new Map(
+        attempts
+            .flatMap((attempt) => Array.isArray(attempt.captures) ? attempt.captures : [])
+            .map((capture) => [`${capture.provider}:${capture.timestamp}:${capture.originalUrl}`, capture])
+    ).values());
+    if (!captures.length) {
+        if ((requestedFromYear || requestedToYear) && args._captureDateBoundsRelaxed !== true) {
+            const relaxed = await webArchiveLookup({
+                ...args,
+                fromYear: 0,
+                from_year: 0,
+                toYear: 0,
+                to_year: 0,
+                _captureDateBoundsRelaxed: true
+            });
+            return annotateArchiveDateBoundsRelaxed(relaxed, requestedFromYear, requestedToYear);
+        }
+        if (
+            matchType === 'prefix' &&
+            args._archiveEmptyRetry !== true
+        ) {
+            await new Promise((resolve) => setTimeout(resolve, 750));
+            return await webArchiveLookup({
+                ...args,
+                _archiveEmptyRetry: true
+            });
+        }
+        return errorResult('No archived captures were found for this URL pattern', {
+            status: 'not_found',
+            originalUrl: url,
+            matchType: normalizeString(args.matchType || args.match_type, 'exact'),
+            attempts,
+            evidenceGap: 'The configured public web archives returned no matching captures.',
+            recoveryHint: 'Try matchType=prefix on a stable path, widen fromYear/toYear, or remove contains terms before returning to broad web search.'
+        });
+    }
+    const ranked = rankWebArchiveCaptures(captures, args.contains || args.query, {
+        preferEarliest: matchType === 'prefix'
+    });
+    const captureSelection = selectWebArchiveCaptures(ranked.captures, ranked.terms, maxResults);
+    const selected = captureSelection.selected;
+    const suggestedNextCalls = selected.slice(0, 5).map((capture) => ({
+        tool: 'web_archive_lookup',
+        args: pruneEmptyDeep({
+            mode: 'open',
+            provider: capture.provider,
+            url: capture.originalUrl,
+            timestamp: capture.timestamp,
+            query: normalizeString(args.query || args.contains)
+        })
+    }));
+    const details = pruneEmptyDeep({
+        status: 'completed',
+        kind: 'web_archive_captures',
+        originalUrl: url,
+        original_url: url,
+        matchType,
+        providers,
+        searchTerms: ranked.terms,
+        exactTermMatch: ranked.exactMatch,
+        rankingPolicy: matchType === 'prefix'
+            ? 'earliest_term_matching_capture'
+            : 'term_match_then_latest_capture',
+        candidateSelectionPolicy: 'top_url_matches_with_broad_core_recovery',
+        candidate_selection_policy: 'top_url_matches_with_broad_core_recovery',
+        coreSearchTerms: captureSelection.coreTerms,
+        core_search_terms: captureSelection.coreTerms,
+        recoveryCaptureCount: captureSelection.recoveryCaptures.length,
+        recovery_capture_count: captureSelection.recoveryCaptures.length,
+        scanLimit,
+        scannedCaptureCount: captures.length,
+        captureCount: selected.length,
+        captures: selected,
+        attempts: attempts.map((attempt) => ({
+            ok: attempt.ok,
+            provider: attempt.provider,
+            cdxUrl: attempt.cdxUrl,
+            cdxUrls: attempt.cdxUrls,
+            pageCount: attempt.pageCount,
+            stopReason: attempt.stopReason,
+            statusCode: attempt.statusCode,
+            errorCode: attempt.errorCode,
+            error: attempt.error,
+            captureCount: Array.isArray(attempt.captures) ? attempt.captures.length : 0
+        })),
+        suggestedNextCalls,
+        suggested_next_calls: suggestedNextCalls,
+        reasoningReady: false,
+        reasoning_ready: false,
+        sourceRetrievalComplete: true,
+        source_retrieval_complete: true
+    });
+    const autoOpenSnapshot = mode === 'search' || Boolean(normalizeString(args.query));
+    if (autoOpenSnapshot) {
+        const openAttempts = [];
+        const bestMatchCount = Number(selected[0]?.matchCount || 0);
+        for (const capture of selected.slice(0, 10)) {
+            const minimumCandidateMatchCount = Math.max(
+                rankingTerms.length >= 3 ? 2 : 1,
+                bestMatchCount - 2
+            );
+            const coversCoreSearchTerms = captureSelection.coreTerms.length > 0 &&
+                captureSelection.coreTerms.every((term) =>
+                    (capture.matchedTerms || []).includes(term)
+                );
+            if (
+                bestMatchCount &&
+                Number(capture.matchCount || 0) < minimumCandidateMatchCount &&
+                !coversCoreSearchTerms
+            ) {
+                openAttempts.push({
+                    provider: capture.provider,
+                    timestamp: capture.timestamp,
+                    originalUrl: capture.originalUrl,
+                    ok: false,
+                    error: 'archive_candidate_below_relevance_threshold'
+                });
+                continue;
+            }
+            const opened = await webArchiveLookup({
+                ...args,
+                mode: 'open',
+                provider: capture.provider,
+                url: capture.originalUrl,
+                timestamp: capture.timestamp,
+                query: normalizeString(args.query || args.contains),
+                fromYear: 0,
+                from_year: 0,
+                toYear: 0,
+                to_year: 0
+            });
+            openAttempts.push({
+                provider: capture.provider,
+                timestamp: capture.timestamp,
+                originalUrl: capture.originalUrl,
+                ok: opened.isError !== true,
+                error: opened.isError === true
+                    ? normalizeString(opened.structuredContent?.error || opened.content?.[0]?.text)
+                    : ''
+            });
+            if (opened.isError === true) {
+                continue;
+            }
+            const snapshotDetails = opened.structuredContent || opened.details || {};
+            const snapshotText = normalizeString(opened.content?.[0]?.text);
+            const snapshotBlocked = /making sure you(?:'|’)re not a bot|anubis|enable javascript to get past this challenge|proof[- ]of[- ]work scheme/i.test(snapshotText) ||
+                /anti_bot|access_barrier|captcha|js_challenge/i.test(normalizeString(
+                    snapshotDetails.evidenceQuality ||
+                    snapshotDetails.evidence_quality ||
+                    snapshotDetails.pageStatus ||
+                    snapshotDetails.page_status
+                ));
+            const snapshotHasNoResults = /\bno (?:documents|records|results|matches) found\b|\b0 (?:documents|records|results|matches)\b/i.test(snapshotText);
+            if (snapshotBlocked || snapshotHasNoResults) {
+                openAttempts[openAttempts.length - 1] = {
+                    ...openAttempts[openAttempts.length - 1],
+                    ok: false,
+                    error: snapshotBlocked
+                        ? 'archived_snapshot_access_barrier'
+                        : 'archived_snapshot_no_results'
+                };
+                continue;
+            }
+            const queryConstraintFidelity = assessArchivedSnapshotQueryFidelity(
+                capture.originalUrl,
+                snapshotDetails
+            );
+            if (queryConstraintFidelity.rejected === true) {
+                openAttempts[openAttempts.length - 1] = {
+                    ...openAttempts[openAttempts.length - 1],
+                    ok: false,
+                    error: 'archived_snapshot_query_constraints_not_reflected',
+                    queryConstraintFidelity,
+                    query_constraint_fidelity: queryConstraintFidelity
+                };
+                continue;
+            }
+            const combinedDetails = pruneEmptyDeep({
+                ...snapshotDetails,
+                kind: 'web_archive_search_result',
+                archiveSearchMode: mode,
+                archive_search_mode: mode,
+                selectedCapture: capture,
+                selected_capture: capture,
+                captureSearch: details,
+                capture_search: details,
+                openAttempts,
+                open_attempts: openAttempts,
+                queryConstraintFidelity,
+                query_constraint_fidelity: queryConstraintFidelity
+            });
+            const discoveryLine = `archive_snapshot_selected provider=${capture.provider} captured_at=${capture.capturedAt} original_url=${capture.originalUrl}`;
+            return {
+                ...opened,
+                content: [{
+                    type: 'text',
+                    text: [discoveryLine, opened.content?.[0]?.text].filter(Boolean).join('\n\n')
+                }],
+                structuredContent: combinedDetails,
+                details: combinedDetails
+            };
+        }
+        details.openAttempts = openAttempts;
+        details.open_attempts = openAttempts;
+    }
+    const lines = [
+        selected[0]
+            ? `best_next_call=web_archive_lookup ${JSON.stringify(suggestedNextCalls[0].args)}`
+            : '',
+        `archive_capture_count=${selected.length} scanned=${captures.length}`,
+        `original_url=${url}`,
+        ...selected.map((capture, index) =>
+            `${index + 1}. provider=${capture.provider} captured_at=${capture.capturedAt} matched_terms=${capture.matchedTerms.join(',') || '(none)'}\n` +
+            `   original_url=${capture.originalUrl}\n` +
+            `   replay_url=${capture.replayUrl}`
+        )
+    ].filter(Boolean);
+    return textResult(lines.join('\n'), details);
 }
 
 async function webFind(args = {}) {
@@ -6246,6 +7665,75 @@ async function renderPage(args = {}) {
         provider: 'crawl4ai',
         fetchProvider: 'crawl4ai',
         fetch_provider: 'crawl4ai'
+    });
+}
+
+async function webpageScreenshot(args = {}) {
+    const url = normalizeString(args.url || args.uri);
+    if (!/^https?:\/\//i.test(url)) {
+        return errorResult('webpage_screenshot requires an http(s) url', { url });
+    }
+    const timeoutMs = clampNumber(args.timeoutMs || args.timeout_ms, 120000, 30000, 300000);
+    const outputPath = path.resolve(
+        normalizeString(args.path || args.outputPath || args.output_path) ||
+        path.join(os.tmpdir(), `ailis-webpage-${Date.now()}-${Math.random().toString(16).slice(2)}.png`)
+    );
+    const config = crawl4aiFetchConfig({
+        ...args,
+        provider: 'crawl4ai',
+        fetchProvider: 'crawl4ai',
+        fetch_provider: 'crawl4ai'
+    });
+    if (!config || config.mode !== 'local_worker') {
+        return actionableErrorResult('webpage_screenshot requires the local Crawl4AI worker.', {
+            status: 'screenshot_backend_unavailable',
+            url,
+            failureReason: 'local_crawl4ai_worker_unavailable',
+            nextActions: [
+                'Configure the bundled local Crawl4AI worker and Playwright Chromium runtime.',
+                'Use another screenshot-capable browser or scraping connector if one is installed.'
+            ]
+        });
+    }
+    const fetched = await fetchWithLocalCrawl4aiWorker(
+        url,
+        { ...config, probe: false },
+        {
+            ...args,
+            screenshotPath: outputPath
+        },
+        timeoutMs
+    );
+    const stat = fetched.ok
+        ? await fs.stat(fetched.screenshotPath || outputPath).catch(() => null)
+        : null;
+    if (!fetched.ok || !stat?.isFile()) {
+        return actionableErrorResult('webpage_screenshot failed.', {
+            status: fetched.errorCode || 'screenshot_failed',
+            url,
+            failureReason: fetched.error || 'The screenshot file was not produced.',
+            backend: fetched.backend,
+            nextActions: [
+                'Use a different screenshot-capable browser connector or inspect source HTML/CSS when visual layout cannot be captured.'
+            ]
+        });
+    }
+    const screenshotPath = path.resolve(fetched.screenshotPath || outputPath);
+    return textResult([
+        `Captured a browser-rendered screenshot of ${url}`,
+        `Path: ${screenshotPath}`,
+        'The screenshot is attached to the next model turn as visual input. Inspect the pixels before answering layout, indentation, color, position, chart, or canvas questions.'
+    ].join('\n'), {
+        status: 'completed',
+        url,
+        path: screenshotPath,
+        bytes: stat.size,
+        contentType: 'image/png',
+        backend: fetched.backend,
+        modelImage: {
+            image_url: screenshotPath,
+            detail: normalizeString(args.detail, 'original')
+        }
     });
 }
 
@@ -7383,6 +8871,12 @@ print(json.dumps({
 async function pdfExtractText(args = {}) {
     const sourceUrl = normalizeString(args.url || args.uri);
     const sourcePath = normalizeString(args.path || args.file || args.filePath || args.file_path);
+    const evidenceQuery = normalizeString(
+        args.query ||
+        args.q ||
+        args.extractQuery ||
+        args.extract_query
+    );
     if (!sourceUrl && !sourcePath) {
         return errorResult('pdf_extract_text requires url or path');
     }
@@ -7492,15 +8986,62 @@ print(json.dumps({
         return errorResult(`pdf_extract_text invalid payload: ${error.message}`, { url: sourceUrl, path: sourcePath, stderr: result.stderr });
     }
     if (!payload.ok) {
+        const httpStatus = Number(payload.status) || 0;
+        const returnedHtmlInsteadOfPdf = /not a pdf file/i.test(normalizeString(payload.error)) &&
+            /html/i.test(normalizeString(payload.content_type));
+        const pdfAccessBarrier = Boolean(
+            sourceUrl &&
+            (
+                returnedHtmlInsteadOfPdf ||
+                [401, 403, 429].includes(httpStatus)
+            )
+        );
+        const fallbackQuery = normalizeString(evidenceQuery || sourceUrl).slice(0, 240);
+        const suggestedNextCalls = pdfAccessBarrier
+            ? [401, 403, 429].includes(httpStatus)
+                ? [{
+                      tool: 'web_search',
+                      args: { query: fallbackQuery },
+                      reason: 'Find the authoritative HTML article, repository copy, or another accessible copy; the PDF endpoint is access-blocked.'
+                  }]
+                : [{
+                      tool: 'web_fetch',
+                      args: {
+                          url: sourceUrl,
+                          ...(evidenceQuery ? { query: evidenceQuery } : {})
+                      },
+                      reason: 'Inspect the HTML response for a landing page, access barrier, or alternate source link.'
+                  }]
+            : [];
         return errorResult(payload.error || 'pdf_extract_text failed', {
             status: payload.status || 'error',
             errorCode: payload.status || 'pdf_extract_failed',
             url: sourceUrl,
             path: sourcePath,
+            ...(pdfAccessBarrier ? {
+                evidenceGap: [401, 403, 429].includes(httpStatus)
+                    ? `The requested PDF endpoint returned HTTP ${httpStatus}; this is an access or rate-limit barrier, not evidence that the document is absent.`
+                    : 'The requested PDF URL returned an HTML page instead of PDF bytes.',
+                recoveryHint: 'Do not keep retrying this URL as a PDF. Inspect an authoritative HTML article or another accessible copy of the same document, and keep the source identity and answer constraints unchanged.',
+                suggestedNextCalls
+            } : {}),
             ...payload
         });
     }
-    return textResult(payload.text, {
+    const extractedText = String(payload.text || '');
+    const evidenceSnippets = evidenceQuery
+        ? buildEvidenceSnippets(extractedText, evidenceQuery, { maxSnippets: 5 })
+        : '';
+    const modelText = [
+        evidenceSnippets
+            ? `Query-focused evidence from the extracted PDF:\n${evidenceSnippets}`
+            : '',
+        evidenceSnippets
+            ? 'Extracted PDF text (full returned range):'
+            : '',
+        extractedText
+    ].filter(Boolean).join('\n\n');
+    return textResult(modelText, {
         status: 'completed',
         source: sourceUrl || sourcePath,
         url: sourceUrl,
@@ -7511,7 +9052,10 @@ print(json.dumps({
         pages: payload.pages,
         maxPages: payload.max_pages,
         originalChars: payload.original_chars,
-        returnedChars: String(payload.text || '').length
+        returnedChars: extractedText.length,
+        evidenceQuery,
+        evidenceSnippets,
+        extractedText
     });
 }
 
@@ -7925,6 +9469,455 @@ async function fetchJsonUrlWithPowerShell(url, timeoutMs = 30000) {
     } catch (error) {
         return { ok: false, error: `invalid JSON: ${error.message}`, status: 0, text: text.slice(0, 1000) };
     }
+}
+
+const WIKIDATA_PROPERTY_ALIASES = Object.freeze({
+    coordinates: 'P625',
+    coordinate: 'P625',
+    latitude_longitude: 'P625',
+    place_of_birth: 'P19',
+    birthplace: 'P19',
+    place_of_death: 'P20',
+    deathplace: 'P20',
+    country: 'P17',
+    located_in: 'P131',
+    administrative_entity: 'P131',
+    location: 'P276',
+    official_name: 'P1448',
+    date_of_birth: 'P569',
+    date_of_death: 'P570',
+    inception: 'P571',
+    occupation: 'P106',
+    author: 'P50',
+    instance_of: 'P31'
+});
+
+const WIKIDATA_PROPERTY_NAMES = Object.freeze({
+    P625: 'coordinates',
+    P19: 'place_of_birth',
+    P20: 'place_of_death',
+    P17: 'country',
+    P131: 'located_in',
+    P276: 'location',
+    P1448: 'official_name',
+    P569: 'date_of_birth',
+    P570: 'date_of_death',
+    P571: 'inception',
+    P106: 'occupation',
+    P50: 'author',
+    P31: 'instance_of'
+});
+
+const DEFAULT_WIKIDATA_PROPERTIES = Object.freeze([
+    'coordinates',
+    'place_of_birth',
+    'country',
+    'located_in',
+    'official_name',
+    'instance_of'
+]);
+
+function normalizeWikidataPropertySelection(values = []) {
+    const requested = Array.isArray(values)
+        ? values
+        : normalizeString(values)
+            ? String(values).split(',')
+            : [];
+    const normalized = requested
+        .map((value) => normalizeString(value).toLowerCase().replace(/[\s-]+/g, '_'))
+        .filter(Boolean);
+    const source = normalized.length ? normalized : DEFAULT_WIKIDATA_PROPERTIES;
+    const seen = new Set();
+    return source.flatMap((value) => {
+        const propertyId = /^p\d+$/i.test(value)
+            ? value.toUpperCase()
+            : WIKIDATA_PROPERTY_ALIASES[value];
+        if (!propertyId || seen.has(propertyId)) return [];
+        seen.add(propertyId);
+        return [{
+            id: propertyId,
+            name: WIKIDATA_PROPERTY_NAMES[propertyId] || value
+        }];
+    }).slice(0, 16);
+}
+
+function wikidataApiUrl(baseUrl, params = {}) {
+    const url = new URL(normalizeString(baseUrl, 'https://www.wikidata.org/w/api.php'));
+    for (const [key, value] of Object.entries({
+        format: 'json',
+        formatversion: '2',
+        maxlag: '5',
+        ...params
+    })) {
+        if (value !== undefined && value !== null && value !== '') {
+            url.searchParams.set(key, String(value));
+        }
+    }
+    return url.toString();
+}
+
+function buildWikidataSearchVariants(query = '') {
+    const original = normalizeString(query);
+    if (!original) return [];
+    const strippedDisambiguator = normalizeString(
+        original
+            .replace(
+                /\s+(?:\d+(?:st|nd|rd|th)\s+)?(?:(?:u\.?\s*s\.?|united\s+states)\s+)?president\b.*$/i,
+                ''
+            )
+            .replace(/\s+(?:city|town|village|municipality)\b.*$/i, '')
+    );
+    const words = original
+        .replace(/[()[\]{},;:]+/g, ' ')
+        .split(/\s+/)
+        .map((value) => normalizeString(value))
+        .filter(Boolean);
+    const variants = [
+        original,
+        ...(strippedDisambiguator && strippedDisambiguator !== original
+            ? [strippedDisambiguator]
+            : [])
+    ];
+    for (let length = Math.min(words.length - 1, 4); length >= 1; length -= 1) {
+        variants.push(words.slice(0, length).join(' '));
+    }
+    return [...new Set(variants)].slice(0, 5);
+}
+
+async function fetchWikidataJson(url, timeoutMs) {
+    let first = await fetchJsonUrl(url, timeoutMs);
+    if (!first.ok && first.status === 0) {
+        const fallback = await fetchJsonUrlWithPowerShell(url, timeoutMs);
+        if (fallback.ok) return fallback;
+        first = {
+            ...first,
+            fallbackError: fallback.error || ''
+        };
+    }
+    if (first.ok || first.status !== 429) return first;
+    const retrySeconds = clampNumber(first.retryAfter, 1, 1, 30);
+    await new Promise((resolve) => setTimeout(resolve, retrySeconds * 1000));
+    const retry = await fetchJsonUrl(url, timeoutMs);
+    if (!retry.ok && retry.status === 0) {
+        const fallback = await fetchJsonUrlWithPowerShell(url, timeoutMs);
+        if (fallback.ok) return fallback;
+    }
+    return retry;
+}
+
+function wikidataEntityId(value = {}) {
+    const direct = normalizeString(value.id);
+    if (/^Q\d+$/i.test(direct)) return direct.toUpperCase();
+    const numeric = Number(value['numeric-id']);
+    return Number.isInteger(numeric) && numeric > 0 ? `Q${numeric}` : '';
+}
+
+function wikidataClaimValue(statement = {}) {
+    if (statement?.rank === 'deprecated') return null;
+    const dataValue = statement?.mainsnak?.datavalue;
+    if (!dataValue || statement?.mainsnak?.snaktype !== 'value') return null;
+    const value = dataValue.value;
+    if (dataValue.type === 'wikibase-entityid') {
+        const entityId = wikidataEntityId(value || {});
+        return entityId ? { type: 'entity', entity_id: entityId } : null;
+    }
+    if (dataValue.type === 'globecoordinate' && value && typeof value === 'object') {
+        const latitude = Number(value.latitude);
+        const longitude = Number(value.longitude);
+        if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
+        return {
+            type: 'coordinates',
+            latitude,
+            longitude,
+            precision: Number.isFinite(Number(value.precision)) ? Number(value.precision) : null,
+            globe: normalizeString(value.globe)
+        };
+    }
+    if (dataValue.type === 'time' && value && typeof value === 'object') {
+        return {
+            type: 'time',
+            time: normalizeString(value.time),
+            precision: Number.isFinite(Number(value.precision)) ? Number(value.precision) : null,
+            calendar_model: normalizeString(value.calendarmodel)
+        };
+    }
+    if (dataValue.type === 'quantity' && value && typeof value === 'object') {
+        return {
+            type: 'quantity',
+            amount: normalizeString(value.amount),
+            unit: normalizeString(value.unit),
+            lower_bound: normalizeString(value.lowerBound),
+            upper_bound: normalizeString(value.upperBound)
+        };
+    }
+    if (dataValue.type === 'monolingualtext' && value && typeof value === 'object') {
+        return {
+            type: 'text',
+            text: normalizeString(value.text),
+            language: normalizeString(value.language)
+        };
+    }
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+        return { type: dataValue.type || typeof value, value };
+    }
+    return value && typeof value === 'object'
+        ? { type: dataValue.type || 'object', value }
+        : null;
+}
+
+function preferredWikidataClaims(claims = []) {
+    const list = Array.isArray(claims) ? claims.filter((claim) => claim?.rank !== 'deprecated') : [];
+    const preferred = list.filter((claim) => claim?.rank === 'preferred');
+    return (preferred.length ? preferred : list).slice(0, 8);
+}
+
+function wikidataLanguageValue(values = {}, language = 'en') {
+    return normalizeString(
+        values?.[language]?.value ||
+        values?.en?.value ||
+        Object.values(values || {}).find((value) => normalizeString(value?.value))?.value
+    );
+}
+
+async function wikidataEntityLookup(args = {}) {
+    const queryValues = [
+        normalizeString(args.query || args.q || args.search),
+        ...(Array.isArray(args.queries) ? args.queries.map((value) => normalizeString(value)) : [])
+    ].filter(Boolean);
+    const entityIds = (Array.isArray(args.entityIds)
+        ? args.entityIds
+        : Array.isArray(args.entity_ids)
+            ? args.entity_ids
+            : []
+    ).map((value) => normalizeString(value).toUpperCase()).filter((value) => /^Q\d+$/.test(value));
+    const uniqueQueries = [...new Set(queryValues)].slice(0, 20);
+    const uniqueEntityIds = [...new Set(entityIds)].slice(0, 50);
+    if (!uniqueQueries.length && !uniqueEntityIds.length) {
+        return errorResult('wikidata_entity_lookup requires query, queries, or entityIds');
+    }
+
+    const language = normalizeString(args.language, 'en').toLowerCase().replace(/[^a-z-]/g, '').slice(0, 16) || 'en';
+    const maxResultsPerQuery = clampNumber(
+        args.maxResultsPerQuery ?? args.max_results_per_query ?? args.maxResults,
+        3,
+        1,
+        5
+    );
+    const timeoutMs = clampNumber(args.timeoutMs, 60000, 5000, 180000);
+    const apiUrl = normalizeString(args.wikidataApiUrl || args.apiUrl, 'https://www.wikidata.org/w/api.php');
+    const properties = normalizeWikidataPropertySelection(args.properties || args.fields || []);
+    const attempts = [];
+
+    const searches = await runBoundedParallel(uniqueQueries, 1, async (query) => {
+        let response = { ok: true, status: 200, json: { search: [] } };
+        let effectiveQuery = query;
+        for (const searchQuery of buildWikidataSearchVariants(query)) {
+            const url = wikidataApiUrl(apiUrl, {
+                action: 'wbsearchentities',
+                search: searchQuery,
+                language,
+                uselang: language,
+                type: 'item',
+                limit: maxResultsPerQuery
+            });
+            response = await fetchWikidataJson(url, Math.min(timeoutMs, 30000));
+            attempts.push({
+                action: 'wbsearchentities',
+                query,
+                search_query: searchQuery,
+                ok: response.ok,
+                status: response.status || 0,
+                error: response.error || ''
+            });
+            effectiveQuery = searchQuery;
+            if (Array.isArray(response.json?.search) && response.json.search.length) break;
+            if (!response.ok && response.status === 429) break;
+        }
+        return {
+            query,
+            effectiveQuery,
+            response,
+            matches: Array.isArray(response.json?.search)
+                ? response.json.search.slice(0, maxResultsPerQuery)
+                : []
+        };
+    });
+
+    const searchedIds = searches.flatMap((result) => result.matches.map((match) => normalizeString(match.id)));
+    const allEntityIds = [...new Set([...uniqueEntityIds, ...searchedIds])]
+        .filter((value) => /^Q\d+$/i.test(value))
+        .slice(0, 50);
+    if (!allEntityIds.length) {
+        return actionableErrorResult('wikidata_entity_lookup found no entity candidates', {
+            status: searches.some((result) => result.response?.status === 429) ? 'rate_limited' : 'not_found',
+            attempts,
+            nextActions: [
+                'Retry with an unambiguous entity name plus country, date, occupation, or identifier.',
+                'Use web_run search only to discover a Wikidata Q-id, then call this tool with entityIds.'
+            ]
+        });
+    }
+
+    const entitiesUrl = wikidataApiUrl(apiUrl, {
+        action: 'wbgetentities',
+        ids: allEntityIds.join('|'),
+        props: 'labels|descriptions|claims|sitelinks/urls',
+        languages: `${language}|en`,
+        languagefallback: '1',
+        sitefilter: `${language}wiki|enwiki`
+    });
+    const entityResponse = await fetchWikidataJson(entitiesUrl, timeoutMs);
+    attempts.push({
+        action: 'wbgetentities',
+        ids: allEntityIds,
+        ok: entityResponse.ok,
+        status: entityResponse.status || 0,
+        error: entityResponse.error || ''
+    });
+    if (!entityResponse.ok) {
+        return actionableErrorResult('wikidata_entity_lookup could not read entity metadata', {
+            status: entityResponse.status === 429 ? 'rate_limited' : 'source_unavailable',
+            attempts,
+            retryAfter: entityResponse.retryAfter || '',
+            nextActions: [
+                'Retry after the returned Retry-After interval when rate limited.',
+                'Use the entity Wikidata page or linked Wikipedia page as a public-web fallback.'
+            ]
+        });
+    }
+
+    const entityPayload = entityResponse.json?.entities || {};
+    const entities = Array.isArray(entityPayload)
+        ? Object.fromEntries(entityPayload.map((entity) => [entity.id, entity]))
+        : entityPayload;
+    const projectedById = new Map();
+    const linkedIds = new Set();
+    for (const entityId of allEntityIds) {
+        const entity = entities?.[entityId] || {};
+        const projectedProperties = {};
+        for (const property of properties) {
+            const values = preferredWikidataClaims(entity.claims?.[property.id])
+                .map((claim) => wikidataClaimValue(claim))
+                .filter(Boolean);
+            for (const value of values) {
+                if (value.type === 'entity' && value.entity_id) linkedIds.add(value.entity_id);
+            }
+            if (values.length) projectedProperties[property.name] = values;
+        }
+        const preferredSitelink = entity.sitelinks?.[`${language}wiki`] || entity.sitelinks?.enwiki || {};
+        projectedById.set(entityId, {
+            id: entityId,
+            label: wikidataLanguageValue(entity.labels, language),
+            description: wikidataLanguageValue(entity.descriptions, language),
+            wikidata_url: `https://www.wikidata.org/wiki/${entityId}`,
+            wikipedia_url: normalizeString(preferredSitelink.url),
+            properties: projectedProperties
+        });
+    }
+
+    const linkedLabels = new Map();
+    const linkedIdList = [...linkedIds].filter((entityId) => !projectedById.has(entityId)).slice(0, 50);
+    if (linkedIdList.length) {
+        const linkedUrl = wikidataApiUrl(apiUrl, {
+            action: 'wbgetentities',
+            ids: linkedIdList.join('|'),
+            props: 'labels|descriptions|sitelinks/urls',
+            languages: `${language}|en`,
+            languagefallback: '1',
+            sitefilter: `${language}wiki|enwiki`
+        });
+        const linkedResponse = await fetchWikidataJson(linkedUrl, timeoutMs);
+        attempts.push({
+            action: 'wbgetentities_labels',
+            ids: linkedIdList,
+            ok: linkedResponse.ok,
+            status: linkedResponse.status || 0,
+            error: linkedResponse.error || ''
+        });
+        if (linkedResponse.ok) {
+            const linkedPayload = linkedResponse.json?.entities || {};
+            const linkedEntities = Array.isArray(linkedPayload)
+                ? Object.fromEntries(linkedPayload.map((entity) => [entity.id, entity]))
+                : linkedPayload;
+            for (const entityId of linkedIdList) {
+                const linked = linkedEntities?.[entityId] || {};
+                const sitelink = linked.sitelinks?.[`${language}wiki`] || linked.sitelinks?.enwiki || {};
+                linkedLabels.set(entityId, {
+                    id: entityId,
+                    label: wikidataLanguageValue(linked.labels, language),
+                    description: wikidataLanguageValue(linked.descriptions, language),
+                    wikidata_url: `https://www.wikidata.org/wiki/${entityId}`,
+                    wikipedia_url: normalizeString(sitelink.url)
+                });
+            }
+        }
+    }
+
+    for (const projected of projectedById.values()) {
+        for (const values of Object.values(projected.properties)) {
+            for (const value of values) {
+                if (value.type !== 'entity' || !value.entity_id) continue;
+                const resolved = projectedById.get(value.entity_id) || linkedLabels.get(value.entity_id);
+                if (resolved) Object.assign(value, resolved);
+            }
+        }
+    }
+
+    const results = searches.map((searchResult) => ({
+        query: searchResult.query,
+        effective_query: searchResult.effectiveQuery,
+        matches: searchResult.matches
+            .map((match) => projectedById.get(normalizeString(match.id)))
+            .filter(Boolean)
+    }));
+    if (uniqueEntityIds.length) {
+        results.push({
+            query: '',
+            entity_ids: uniqueEntityIds,
+            matches: uniqueEntityIds.map((entityId) => projectedById.get(entityId)).filter(Boolean)
+        });
+    }
+
+    const propertyRows = [];
+    for (const result of results) {
+        for (const [matchRank, match] of result.matches.entries()) {
+            for (const [property, values] of Object.entries(match.properties || {})) {
+                for (const value of Array.isArray(values) ? values : []) {
+                    propertyRows.push({
+                        source_query: normalizeString(result.query),
+                        source_entity_id: normalizeString(match.id),
+                        source_entity: normalizeString(match.label),
+                        match_rank: matchRank,
+                        property,
+                        value_type: normalizeString(value.type),
+                        value_entity_id: normalizeString(value.entity_id || value.id),
+                        value_label: normalizeString(value.label),
+                        value_description: normalizeString(value.description),
+                        latitude: Number.isFinite(Number(value.latitude)) ? Number(value.latitude) : null,
+                        longitude: Number.isFinite(Number(value.longitude)) ? Number(value.longitude) : null,
+                        amount: normalizeString(value.amount),
+                        text: normalizeString(value.text || value.value)
+                    });
+                }
+            }
+        }
+    }
+    const details = {
+        status: 'completed',
+        source: 'Wikidata Action API',
+        attribution: 'Data from Wikidata',
+        language,
+        requested_properties: properties,
+        candidate_set_complete: false,
+        property_rows: propertyRows.slice(0, 200),
+        results,
+        attempts
+    };
+    return textResult(JSON.stringify(details, null, 2), {
+        ...details,
+        evidenceQuality: 'structured_knowledge_graph',
+        reasoningReady: results.some((result) => result.matches.length > 0)
+    });
 }
 
 function readScholarlyApiConfig() {
@@ -9732,6 +11725,469 @@ function sourceLines(text = '') {
     return String(text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
 }
 
+function extractRepeatedLabeledFields(text = '', { maxFields = 16, maxValues = 20 } = {}) {
+    const fields = new Map();
+    const lines = sourceLines(text);
+    for (let index = 0; index < lines.length; index += 1) {
+        const line = compactWhitespace(lines[index]);
+        const match = line.match(/^([\p{L}][\p{L}\p{N} _./(),&%+-]{1,80}):(?:\s*(.*))?$/u);
+        if (!match) {
+            continue;
+        }
+        const label = compactWhitespace(match[1]);
+        if (
+            !label ||
+            label.split(/\s+/).length > 10 ||
+            /^(?:https?|mailto|javascript)$/i.test(label)
+        ) {
+            continue;
+        }
+        let value = compactWhitespace(match[2]);
+        let valueLine = index + 1;
+        if (!value) {
+            for (let lookahead = index + 1; lookahead < Math.min(lines.length, index + 3); lookahead += 1) {
+                const candidate = compactWhitespace(lines[lookahead]);
+                if (!candidate) {
+                    continue;
+                }
+                if (/^[\p{L}][\p{L}\p{N} _./(),&%+-]{1,80}:$/u.test(candidate)) {
+                    break;
+                }
+                value = candidate;
+                valueLine = lookahead + 1;
+                break;
+            }
+        }
+        if (!value || value.length > 320 || /^https?:\/\//i.test(value)) {
+            continue;
+        }
+        const fieldKey = label.toLowerCase();
+        const field = fields.get(fieldKey) || {
+            label,
+            occurrenceCount: 0,
+            values: new Map()
+        };
+        field.occurrenceCount += 1;
+        const valueKey = value.toLowerCase();
+        const existing = field.values.get(valueKey) || {
+            value,
+            count: 0,
+            lineNumbers: []
+        };
+        existing.count += 1;
+        if (existing.lineNumbers.length < 6) {
+            existing.lineNumbers.push(valueLine);
+        }
+        field.values.set(valueKey, existing);
+        fields.set(fieldKey, field);
+    }
+    return Array.from(fields.values())
+        .filter((field) => field.occurrenceCount >= 2)
+        .sort((left, right) =>
+            right.occurrenceCount - left.occurrenceCount ||
+            left.label.localeCompare(right.label)
+        )
+        .slice(0, maxFields)
+        .map((field) => ({
+            label: field.label,
+            occurrenceCount: field.occurrenceCount,
+            uniqueValueCount: field.values.size,
+            values: Array.from(field.values.values())
+                .sort((left, right) => left.lineNumbers[0] - right.lineNumbers[0])
+                .slice(0, maxValues)
+        }));
+}
+
+function formatRepeatedLabeledFields(fields = [], maxChars = 2400) {
+    if (!Array.isArray(fields) || !fields.length) {
+        return '';
+    }
+    const lines = ['Repeated labeled fields across the full source (independent of the visible viewport):'];
+    for (const field of fields) {
+        const values = field.values.map((entry) => {
+            const locations = entry.lineNumbers.map((line) => `L${line}`).join(',');
+            return `${entry.value} x${entry.count}${locations ? ` (${locations})` : ''}`;
+        });
+        const rendered = `- ${field.label} [${field.occurrenceCount} occurrences, ${field.uniqueValueCount} unique]: ${values.join('; ')}`;
+        if (lines.join('\n').length + rendered.length + 1 > maxChars) {
+            break;
+        }
+        lines.push(rendered);
+    }
+    return lines.length > 1 ? lines.join('\n') : '';
+}
+
+const RECORD_PROJECTION_FIELD_PATTERN = /^(?:year|publisher(?:,\s*year)?|publisher|document type|resource type|content provider|country|language|source)$/i;
+
+function extractRecordFieldProjections(text = '', { maxRecords = 20, maxFields = 8 } = {}) {
+    const lines = sourceLines(text);
+    const recordStarts = [];
+    for (let index = 0; index < lines.length; index += 1) {
+        const line = compactWhitespace(lines[index]);
+        const match = line.match(/^Record\s+(\d+)\)\s*(?:\d+\.\s*)?(.+)$/i);
+        if (match) {
+            recordStarts.push({
+                index,
+                lineNumber: index + 1,
+                recordNumber: Number(match[1]) || recordStarts.length + 1,
+                title: compactWhitespace(match[2])
+            });
+        }
+    }
+    const records = [];
+    for (let recordIndex = 0; recordIndex < recordStarts.length && records.length < maxRecords; recordIndex += 1) {
+        const start = recordStarts[recordIndex];
+        const end = recordStarts[recordIndex + 1]?.index ?? lines.length;
+        const fields = [];
+        const seenLabels = new Set();
+        for (let index = start.index + 1; index < end && fields.length < maxFields; index += 1) {
+            const line = compactWhitespace(lines[index]);
+            const match = line.match(/^([\p{L}][\p{L}\p{N} _./(),&%+-]{1,80})\s*:\s*(.*)$/u);
+            if (!match) {
+                continue;
+            }
+            const label = compactWhitespace(match[1]);
+            if (!RECORD_PROJECTION_FIELD_PATTERN.test(label) || seenLabels.has(label.toLowerCase())) {
+                continue;
+            }
+            let value = compactWhitespace(match[2]);
+            let valueLineNumber = index + 1;
+            if (!value) {
+                for (let lookahead = index + 1; lookahead < Math.min(end, index + 4); lookahead += 1) {
+                    const candidate = compactWhitespace(lines[lookahead]);
+                    if (!candidate || /^\[\s*claim\s*\]$/i.test(candidate)) {
+                        continue;
+                    }
+                    if (/^[\p{L}][\p{L}\p{N} _./(),&%+-]{1,80}\s*:/u.test(candidate)) {
+                        break;
+                    }
+                    value = candidate;
+                    valueLineNumber = lookahead + 1;
+                    break;
+                }
+            }
+            if (!value || value.length > 500) {
+                continue;
+            }
+            seenLabels.add(label.toLowerCase());
+            fields.push({
+                label,
+                value,
+                lineNumber: valueLineNumber
+            });
+        }
+        if (fields.length) {
+            records.push({
+                recordNumber: start.recordNumber,
+                title: start.title,
+                lineNumber: start.lineNumber,
+                fields
+            });
+        }
+    }
+    return records;
+}
+
+function formatRecordFieldProjections(records = [], maxChars = 3200) {
+    if (!Array.isArray(records) || !records.length) {
+        return '';
+    }
+    const lines = ['Record-level field projection across the full source (each row keeps its fields correlated):'];
+    for (const record of records) {
+        const fieldText = record.fields
+            .map((field) => `${field.label}=${field.value} (L${field.lineNumber})`)
+            .join(' | ');
+        const rendered = `- Record ${record.recordNumber} (L${record.lineNumber}): ${record.title}\n  ${fieldText}`;
+        if (lines.join('\n').length + rendered.length + 1 > maxChars) {
+            break;
+        }
+        lines.push(rendered);
+    }
+    return lines.length > 1 ? lines.join('\n') : '';
+}
+
+const WEB_ARCHIVE_QUERY_CONSTRAINTS = [
+    {
+        id: 'year',
+        parameterPattern: /\byear\b|year.?from|year.?to|datefrom|dateto|dcyear|publication.?date|\bissued\b/i,
+        fieldPattern: /\byear\b|\bdate\b|\bissued\b/i,
+        numeric: true
+    },
+    {
+        id: 'language',
+        parameterPattern: /\blang(?:uage)?\b|dclang|\bling\b/i,
+        fieldPattern: /\blang(?:uage)?\b/i
+    },
+    {
+        id: 'document_type',
+        parameterPattern: /^\s*type\b|\bdoctype\b|document.?type|resource.?type|dctype|typenorm|publication.?type|\bcontent\b/i,
+        fieldPattern: /document.?type|resource.?type|publication.?type|^\s*type\s*$/i
+    },
+    {
+        id: 'country_region',
+        parameterPattern: /\bcountry\b|\bregion\b/i,
+        fieldPattern: /\bcountry\b|\bregion\b/i
+    }
+];
+
+const WEB_ARCHIVE_GENERIC_CONSTRAINT_VALUES = new Set([
+    'all', 'any', 'both', 'either', 'everything', 'none', 'null', 'true', 'false'
+]);
+
+function normalizeWebArchiveConstraintValue(value = '') {
+    return normalizeString(value)
+        .normalize('NFKD')
+        .replace(/\p{M}/gu, '')
+        .toLowerCase()
+        .replace(/[_+]+/g, ' ')
+        .replace(/[^\p{L}\p{N}]+/gu, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function webArchiveConstraintValues(parameterKey = '', parameterValue = '', constraint = {}) {
+    const normalizedValue = normalizeString(parameterValue);
+    if (!normalizedValue) {
+        return [];
+    }
+    if (constraint.numeric === true) {
+        return dedupeSearchStrings(normalizedValue.match(/\b(?:18|19|20)\d{2}\b/g) || []);
+    }
+    const keyMatches = constraint.parameterPattern.test(normalizeString(parameterKey));
+    const valueParts = normalizedValue
+        .split(/[|,;]/)
+        .flatMap((part) => {
+            const segments = part.split(/[:=]/).map((segment) => normalizeWebArchiveConstraintValue(segment));
+            return keyMatches ? [segments.at(-1)] : segments.slice(1);
+        })
+        .map((value) => normalizeWebArchiveConstraintValue(value))
+        .filter((value) =>
+            value &&
+            !WEB_ARCHIVE_GENERIC_CONSTRAINT_VALUES.has(value) &&
+            !/^\d+$/.test(value)
+        );
+    return dedupeSearchStrings(valueParts);
+}
+
+function extractWebArchiveQueryConstraints(url = '') {
+    let parsed;
+    try {
+        parsed = new URL(normalizeString(url));
+    } catch {
+        return [];
+    }
+    const grouped = new Map();
+    for (const [parameterKey, parameterValue] of parsed.searchParams.entries()) {
+        const descriptor = `${parameterKey} ${parameterValue}`;
+        for (const constraint of WEB_ARCHIVE_QUERY_CONSTRAINTS) {
+            const compactKey = normalizeString(parameterKey).replace(/\[\]$/, '').toLowerCase();
+            const directYearRange = constraint.id === 'year' &&
+                /^(?:from|to)$/.test(compactKey) &&
+                /\b(?:18|19|20)\d{2}\b/.test(normalizeString(parameterValue));
+            const directDocumentType = constraint.id === 'document_type' &&
+                compactKey === 'type' &&
+                !WEB_ARCHIVE_GENERIC_CONSTRAINT_VALUES.has(
+                    normalizeWebArchiveConstraintValue(parameterValue)
+                );
+            if (
+                !directYearRange &&
+                !directDocumentType &&
+                !constraint.parameterPattern.test(descriptor)
+            ) {
+                continue;
+            }
+            const values = webArchiveConstraintValues(parameterKey, parameterValue, constraint);
+            if (!values.length) {
+                continue;
+            }
+            const current = grouped.get(constraint.id) || {
+                id: constraint.id,
+                expectedValues: [],
+                parameters: []
+            };
+            current.expectedValues = dedupeSearchStrings([...current.expectedValues, ...values]);
+            current.parameters.push(`${parameterKey}=${parameterValue}`);
+            grouped.set(constraint.id, current);
+        }
+    }
+    return Array.from(grouped.values());
+}
+
+function webArchiveConstraintValueMatches(constraintId = '', expected = '', observed = '') {
+    const expectedValue = normalizeWebArchiveConstraintValue(expected);
+    const observedValue = normalizeWebArchiveConstraintValue(observed);
+    if (!expectedValue || !observedValue) {
+        return false;
+    }
+    if (constraintId === 'year') {
+        return new RegExp(`\\b${escapeWebArchiveRegexTerm(expectedValue)}\\b`).test(observedValue);
+    }
+    if (expectedValue.length <= 3) {
+        return observedValue.split(/\s+/).includes(expectedValue);
+    }
+    return observedValue.includes(expectedValue) || expectedValue.includes(observedValue);
+}
+
+function assessArchivedSnapshotQueryFidelity(originalUrl = '', snapshotDetails = {}) {
+    const constraints = extractWebArchiveQueryConstraints(originalUrl);
+    const repeatedFields = Array.isArray(snapshotDetails.repeatedLabeledFields)
+        ? snapshotDetails.repeatedLabeledFields
+        : Array.isArray(snapshotDetails.repeated_labeled_fields)
+        ? snapshotDetails.repeated_labeled_fields
+        : [];
+    const assessments = [];
+    for (const constraint of constraints) {
+        const definition = WEB_ARCHIVE_QUERY_CONSTRAINTS.find((entry) => entry.id === constraint.id);
+        const matchingFields = repeatedFields.filter((field) =>
+            definition?.fieldPattern.test(normalizeString(field?.label))
+        );
+        if (!matchingFields.length) {
+            continue;
+        }
+        const observedValues = dedupeSearchStrings(matchingFields.flatMap((field) =>
+            (Array.isArray(field?.values) ? field.values : [])
+                .map((entry) => normalizeString(entry?.value))
+                .filter(Boolean)
+        ));
+        if (!observedValues.length) {
+            continue;
+        }
+        const reflected = constraint.expectedValues.some((expected) =>
+            observedValues.some((observed) =>
+                webArchiveConstraintValueMatches(constraint.id, expected, observed)
+            )
+        );
+        const observedOccurrenceCount = matchingFields.reduce(
+            (total, field) => total + Math.max(0, Number(field?.occurrenceCount) || 0),
+            0
+        );
+        assessments.push(pruneEmptyDeep({
+            id: constraint.id,
+            reflected,
+            expectedValues: constraint.expectedValues,
+            parameters: constraint.parameters,
+            recordFieldLabels: matchingFields.map((field) => normalizeString(field.label)),
+            observedOccurrenceCount,
+            observedValues: observedValues.slice(0, 16)
+        }));
+    }
+    const mismatchedConstraints = assessments
+        .filter((assessment) => assessment.reflected !== true)
+        .map((assessment) => assessment.id);
+    const stronglyContradictedConstraints = assessments
+        .filter((assessment) =>
+            assessment.reflected !== true &&
+            Number(assessment.observedOccurrenceCount || 0) >= 2
+        )
+        .map((assessment) => assessment.id);
+    const rejected = (
+        assessments.length >= 2 &&
+        mismatchedConstraints.length >= 2
+    ) || stronglyContradictedConstraints.length >= 1;
+    return pruneEmptyDeep({
+        status: rejected
+            ? 'rejected'
+            : assessments.length
+            ? 'accepted'
+            : 'not_assessable',
+        rejected,
+        assessedConstraintCount: assessments.length,
+        mismatchCount: mismatchedConstraints.length,
+        requiredMismatchCount: 2,
+        mismatchedConstraints,
+        stronglyContradictedConstraints,
+        strongContradictionMinimumOccurrences: 2,
+        assessments
+    });
+}
+
+function extractFacetedSearchFilters(text = '', { maxFacets = 16, maxValues = 30 } = {}) {
+    const lines = sourceLines(text);
+    const facets = [];
+    let current = null;
+    for (let index = 0; index < lines.length; index += 1) {
+        const line = compactWhitespace(lines[index]);
+        const heading = line.match(/^Search the list from the filter (.+?) with ([\d,]+) entr(?:y|ies)\b/i);
+        if (heading) {
+            current = {
+                label: compactWhitespace(heading[1]),
+                declaredValueCount: Number(heading[2].replace(/,/g, '')) || undefined,
+                lineNumber: index + 1,
+                values: [],
+                seen: new Set()
+            };
+            facets.push(current);
+            if (facets.length >= maxFacets) {
+                break;
+            }
+            continue;
+        }
+        if (!current) {
+            continue;
+        }
+        if (/^Go$/i.test(line)) {
+            current = null;
+            continue;
+        }
+        const valueMatch = line.match(/^\(([\d,]+)\)\s+(.+?)(?:\s+\(Number of documents:\s*[\d,]+\))?$/i);
+        if (!valueMatch || current.values.length >= maxValues) {
+            continue;
+        }
+        const value = compactWhitespace(valueMatch[2]);
+        const key = value.toLowerCase();
+        if (!value || current.seen.has(key)) {
+            continue;
+        }
+        current.seen.add(key);
+        current.values.push({
+            value,
+            count: Number(valueMatch[1].replace(/,/g, '')) || 0,
+            lineNumber: index + 1
+        });
+    }
+    return facets
+        .filter((facet) => facet.label && facet.values.length)
+        .map(({ seen, ...facet }) => facet);
+}
+
+function facetedSearchDisplayScore(facet = {}) {
+    const label = normalizeString(facet.label).toLowerCase();
+    if (/\bcountry\b|\bregion\b/.test(label)) return 100;
+    if (/\blanguage\b|\blang\b/.test(label)) return 95;
+    if (/\bdocument type\b|\bresource type\b|\btype\b/.test(label)) return 90;
+    if (/\bcontent provider\b|\brepository\b|\bsource\b/.test(label)) return 85;
+    if (/\byear\b|\bdate\b/.test(label)) return 80;
+    if (/\bclassification\b|\bsubject\b|\bdewey\b|\bddc\b/.test(label)) return 70;
+    if (/\bauthor\b|\bcreator\b/.test(label)) return 40;
+    return 20;
+}
+
+function formatFacetedSearchFilters(facets = [], maxChars = 3600) {
+    if (!Array.isArray(facets) || !facets.length) {
+        return '';
+    }
+    const lines = ['Faceted search filters across the full source (values preserve source line numbers):'];
+    const rankedFacets = facets
+        .map((facet, index) => ({ facet, index, score: facetedSearchDisplayScore(facet) }))
+        .sort((left, right) => right.score - left.score || left.index - right.index)
+        .map((entry) => entry.facet);
+    for (const facet of rankedFacets) {
+        const visibleValues = facet.values.length > 12
+            ? [...facet.values.slice(0, 8), ...facet.values.slice(-4)]
+            : facet.values;
+        const values = visibleValues.map((entry) =>
+            `${entry.value} x${entry.count} (L${entry.lineNumber})`
+        );
+        const omitted = Math.max(0, facet.values.length - visibleValues.length);
+        const rendered = `- ${facet.label}: ${values.join('; ')}${omitted ? `; ... +${omitted} more values` : ''}`;
+        if (lines.join('\n').length + rendered.length + 1 > maxChars) {
+            break;
+        }
+        lines.push(rendered);
+    }
+    return lines.length > 1 ? lines.join('\n') : '';
+}
+
 function findSourceLineMatches(text = '', pattern = '', { maxMatches = 50 } = {}) {
     const normalizedPattern = normalizeString(pattern).toLowerCase();
     if (!normalizedPattern) {
@@ -10522,6 +12978,174 @@ async function writeMcpArtifact(kind = 'artifact', baseName = 'artifact', text =
     return artifactPath;
 }
 
+let cachedWindowsUserProxy;
+
+function normalizeProxyUrl(value = '') {
+    const proxy = normalizeString(value);
+    if (!proxy) {
+        return '';
+    }
+    return /^[a-z][a-z0-9+.-]*:\/\//i.test(proxy) ? proxy : `http://${proxy}`;
+}
+
+function windowsUserProxySettings() {
+    if (process.platform !== 'win32') {
+        return {};
+    }
+    if (cachedWindowsUserProxy !== undefined) {
+        return cachedWindowsUserProxy;
+    }
+    cachedWindowsUserProxy = {};
+    try {
+        const result = spawnSync('reg.exe', [
+            'query',
+            'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings'
+        ], {
+            encoding: 'utf8',
+            windowsHide: true,
+            timeout: 3000
+        });
+        const output = `${result.stdout || ''}\n${result.stderr || ''}`;
+        const enabled = /ProxyEnable\s+REG_DWORD\s+0x1\b/i.test(output);
+        const server = output.match(/ProxyServer\s+REG_SZ\s+([^\r\n]+)/i)?.[1]?.trim() || '';
+        if (!enabled || !server) {
+            return cachedWindowsUserProxy;
+        }
+        if (!server.includes('=')) {
+            cachedWindowsUserProxy = { http: normalizeProxyUrl(server), https: normalizeProxyUrl(server) };
+            return cachedWindowsUserProxy;
+        }
+        for (const segment of server.split(';')) {
+            const separator = segment.indexOf('=');
+            if (separator <= 0) {
+                continue;
+            }
+            const protocol = segment.slice(0, separator).trim().toLowerCase();
+            const proxy = normalizeProxyUrl(segment.slice(separator + 1));
+            if (proxy && ['http', 'https'].includes(protocol)) {
+                cachedWindowsUserProxy[protocol] = proxy;
+            }
+        }
+    } catch {}
+    return cachedWindowsUserProxy;
+}
+
+function urlBypassesProxy(url = '') {
+    let parsed;
+    try {
+        parsed = new URL(url);
+    } catch {
+        return false;
+    }
+    const hostname = parsed.hostname.toLowerCase();
+    if (
+        hostname === 'localhost' ||
+        hostname === '::1' ||
+        /^127\./.test(hostname) ||
+        /^169\.254\./.test(hostname)
+    ) {
+        return true;
+    }
+    const noProxy = normalizeString(process.env.NO_PROXY || process.env.no_proxy);
+    if (!noProxy) {
+        return false;
+    }
+    return noProxy.split(',').map((entry) => entry.trim().toLowerCase()).filter(Boolean).some((entry) => {
+        const normalized = entry.replace(/^\*\./, '.').split(':')[0];
+        return normalized === '*' ||
+            hostname === normalized.replace(/^\./, '') ||
+            (normalized.startsWith('.') && hostname.endsWith(normalized));
+    });
+}
+
+function configuredHttpProxy(url = '') {
+    if (urlBypassesProxy(url)) {
+        return '';
+    }
+    let protocol = 'https';
+    try {
+        protocol = new URL(url).protocol.replace(':', '').toLowerCase();
+    } catch {}
+    const explicit = normalizeProxyUrl(
+        process.env.AILIS_WEB_PROXY ||
+        process.env.AILIS_HTTP_PROXY ||
+        (protocol === 'https'
+            ? process.env.HTTPS_PROXY || process.env.https_proxy
+            : process.env.HTTP_PROXY || process.env.http_proxy)
+    );
+    if (explicit) {
+        return explicit;
+    }
+    const windowsProxy = windowsUserProxySettings();
+    return windowsProxy[protocol] || windowsProxy.https || windowsProxy.http || '';
+}
+
+async function fetchTextWithCurl(url, timeoutMs = 60000) {
+    const proxyUrl = configuredHttpProxy(url);
+    const marker = '__AILIS_CURL_META__';
+    const args = [
+        '-sS',
+        '-L',
+        '--max-time',
+        String(Math.max(5, Math.ceil(timeoutMs / 1000))),
+        '--connect-timeout',
+        String(Math.max(3, Math.min(20, Math.ceil(timeoutMs / 3000)))),
+        '-A',
+        'AILISResearchMCP/0.1 (+local assistant research tool)',
+        '-H',
+        'Accept: text/html,application/json,application/xml;q=0.9,text/plain;q=0.8,*/*;q=0.5'
+    ];
+    if (proxyUrl) {
+        args.push('--proxy', proxyUrl);
+    }
+    args.push(
+        '-w',
+        `\n${marker}%{http_code}\t%{content_type}\t%{size_download}`,
+        url
+    );
+    const result = await runProcess(process.platform === 'win32' ? 'curl.exe' : 'curl', args, {
+        timeoutMs: timeoutMs + 5000
+    });
+    const markerIndex = result.stdout.lastIndexOf(`\n${marker}`);
+    const body = markerIndex >= 0 ? result.stdout.slice(0, markerIndex) : result.stdout;
+    const metadata = markerIndex >= 0
+        ? result.stdout.slice(markerIndex + marker.length + 1).split('\t')
+        : [];
+    const status = Number(metadata[0] || 0);
+    const contentType = normalizeString(metadata[1]);
+    const ok = result.exitCode === 0 && status >= 200 && status < 400;
+    return {
+        ok,
+        status,
+        errorCode: ok
+            ? ''
+            : result.timedOut
+                ? 'timeout'
+                : result.exitCode === -1
+                    ? 'curl_unavailable'
+                    : status
+                        ? `http_${status}`
+                        : 'curl_fetch_failed',
+        error: ok
+            ? ''
+            : normalizeString(result.stderr, result.timedOut ? 'curl request timed out' : `curl exit ${result.exitCode}`),
+        contentType,
+        contentLength: Number(metadata[2] || Buffer.byteLength(body)),
+        text: body,
+        timedOut: result.timedOut,
+        proxyUsed: Boolean(proxyUrl),
+        backend: 'curl'
+    };
+}
+
+async function fetchArchiveIndexText(url, timeoutMs = 60000) {
+    const curlResult = await fetchTextWithCurl(url, timeoutMs);
+    if (curlResult.ok || curlResult.status || curlResult.errorCode !== 'curl_unavailable') {
+        return curlResult;
+    }
+    return fetchText(url, timeoutMs);
+}
+
 async function fetchTextWithPythonRequests(url, timeoutMs = 60000, options = {}) {
     if (process.env.AILIS_RESEARCH_TEST_FORCE_PYTHON_FETCH_FAIL === '1') {
         return {
@@ -10532,15 +13156,18 @@ async function fetchTextWithPythonRequests(url, timeoutMs = 60000, options = {})
             backend: 'python_requests'
         };
     }
+    const proxyUrl = options.useSystemProxy === false ? '' : configuredHttpProxy(url);
     const code = `
 import json, requests, sys
 url = sys.argv[1]
 timeout = float(sys.argv[2])
 verify_tls = sys.argv[3].lower() != "false"
+proxy_url = sys.argv[4] if len(sys.argv) > 4 else ""
+proxies = {"http": proxy_url, "https": proxy_url} if proxy_url else None
 if not verify_tls:
     import urllib3
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-r = requests.get(url, timeout=timeout, verify=verify_tls, headers={"User-Agent": "AILISResearchMCP/0.1 (+local assistant research tool)"})
+r = requests.get(url, timeout=timeout, verify=verify_tls, proxies=proxies, headers={"User-Agent": "AILISResearchMCP/0.1 (+local assistant research tool)"})
 content = r.content or b""
 content_type = r.headers.get("content-type", "")
 prefix = content[:16]
@@ -10556,6 +13183,7 @@ print(json.dumps({
   "is_binary": is_binary,
   "prefix_hex": prefix.hex(),
   "tls_verify": verify_tls,
+  "proxy_used": bool(proxy_url),
   "text": text,
 }, ensure_ascii=False))
 `.trim();
@@ -10565,7 +13193,8 @@ print(json.dumps({
         code,
         url,
         String(Math.max(5, Math.ceil(timeoutMs / 1000))),
-        verifyTls ? 'true' : 'false'
+        verifyTls ? 'true' : 'false',
+        proxyUrl
     ], { timeoutMs });
     if (result.exitCode !== 0) {
         return {
@@ -10605,6 +13234,7 @@ print(json.dumps({
         stderr: result.stderr,
         error: status ? `HTTP ${status}` : '',
         tlsVerificationDisabled: payload.tls_verify === false,
+        proxyUsed: payload.proxy_used === true,
         backend: 'python_requests'
     };
 }
@@ -11323,6 +13953,621 @@ async function describeImage(args = {}) {
     });
 }
 
+function normalizeInvidiousInstanceUrl(value = '') {
+    const raw = normalizeString(value).replace(/\/+$/, '');
+    if (!raw) return '';
+    try {
+        const parsed = new URL(/^[a-z]+:\/\//i.test(raw) ? raw : `https://${raw}`);
+        return parsed.protocol === 'https:' ? parsed.origin : '';
+    } catch {
+        return '';
+    }
+}
+
+function configuredInvidiousInstances() {
+    const configured = normalizeString(process.env.AILIS_INVIDIOUS_INSTANCES)
+        .split(/[,\s]+/)
+        .map(normalizeInvidiousInstanceUrl)
+        .filter(Boolean);
+    return [...new Set([
+        ...configured,
+        'https://invidious.f5.si',
+        'https://inv.zoomerville.com'
+    ])];
+}
+
+function buildInvidiousVideoProxyUrl(instance = '', videoId = '', itag = 18) {
+    const base = normalizeInvidiousInstanceUrl(instance);
+    const id = extractYouTubeVideoId(videoId);
+    if (!base || !id) return '';
+    const params = new URLSearchParams({
+        id,
+        itag: String(clampNumber(itag, 18, 1, 999)),
+        local: 'true'
+    });
+    return `${base}/latest_version?${params.toString()}`;
+}
+
+async function downloadVideoForFrameExtraction({
+    sourceUrl = '',
+    videoId = '',
+    targetPath = '',
+    timeoutMs = 180000,
+    maxBytes = 268435456
+} = {}) {
+    const boundedTimeoutMs = clampNumber(timeoutMs, 180000, 30000, 600000);
+    const boundedMaxBytes = clampNumber(maxBytes, 268435456, 1048576, 1073741824);
+    const instances = configuredInvidiousInstances();
+    const code = `
+import json, os, requests, sys
+
+source_url = sys.argv[1]
+video_id = sys.argv[2]
+target_path = sys.argv[3]
+timeout_seconds = float(sys.argv[4])
+max_bytes = int(sys.argv[5])
+configured_instances = json.loads(sys.argv[6])
+registry_url = "https://api.invidious.io/instances.json?sort_by=health"
+session = requests.Session()
+
+def clean_instance(value):
+    value = str(value or "").strip().rstrip("/")
+    return value if value.startswith("https://") else ""
+
+def registry_instances():
+    try:
+        response = session.get(registry_url, timeout=(6, 15))
+        response.raise_for_status()
+        rows = response.json()
+    except Exception:
+        return []
+    output = []
+    for _host, metadata in rows:
+        if not isinstance(metadata, dict) or metadata.get("type") != "https":
+            continue
+        monitor = metadata.get("monitor") or {}
+        if monitor and monitor.get("down") is True:
+            continue
+        uri = clean_instance(metadata.get("uri"))
+        if uri:
+            output.append(uri)
+    return output
+
+def candidates():
+    if source_url and not video_id:
+        return [("direct_url", source_url)]
+    instances = []
+    for item in configured_instances + registry_instances():
+        item = clean_instance(item)
+        if item and item not in instances:
+            instances.append(item)
+    return [
+        (
+            "invidious_companion",
+            f"{base}/latest_version?id={video_id}&itag=18&local=true",
+        )
+        for base in instances[:12]
+    ]
+
+errors = []
+part_path = target_path + ".part"
+for backend, url in candidates():
+    source_host = requests.utils.urlparse(url).netloc
+    try:
+        response = session.get(
+            url,
+            timeout=(10, max(30, timeout_seconds)),
+            allow_redirects=True,
+            stream=True,
+        )
+        content_type = (response.headers.get("content-type") or "").lower()
+        content_length = int(response.headers.get("content-length") or 0)
+        if response.status_code not in (200, 206):
+            errors.append(f"{backend}:{source_host}:http_{response.status_code}")
+            response.close()
+            continue
+        if content_length and content_length > max_bytes:
+            errors.append(f"{backend}:{source_host}:content_too_large")
+            response.close()
+            continue
+        if "video/" not in content_type and "application/octet-stream" not in content_type:
+            errors.append(f"{backend}:{source_host}:unexpected_content_type:{content_type[:80]}")
+            response.close()
+            continue
+        written = 0
+        with open(part_path, "wb") as output:
+            for chunk in response.iter_content(chunk_size=1024 * 256):
+                if not chunk:
+                    continue
+                written += len(chunk)
+                if written > max_bytes:
+                    raise RuntimeError("content_too_large")
+                output.write(chunk)
+        response.close()
+        if written < 1024:
+            raise RuntimeError("video_payload_too_small")
+        os.replace(part_path, target_path)
+        print(json.dumps({
+            "ok": True,
+            "backend": backend,
+            "bytes": written,
+            "contentType": content_type,
+            "sourceHost": source_host,
+        }))
+        raise SystemExit(0)
+    except Exception as exc:
+        errors.append(f"{backend}:{source_host}:{type(exc).__name__}:{str(exc)[:160]}")
+        try:
+            os.remove(part_path)
+        except OSError:
+            pass
+
+print(json.dumps({"ok": False, "errors": errors[-12:]}))
+raise SystemExit(2)
+`.trim();
+    const result = await runProcess('python', [
+        '-c',
+        code,
+        sourceUrl,
+        videoId,
+        targetPath,
+        String(Math.max(30, Math.ceil(boundedTimeoutMs / 1000))),
+        String(boundedMaxBytes),
+        JSON.stringify(instances)
+    ], {
+        cwd: path.dirname(targetPath),
+        timeoutMs: boundedTimeoutMs
+    });
+    let payload = {};
+    try {
+        payload = JSON.parse(normalizeString(result.stdout, '{}').split(/\r?\n/).filter(Boolean).at(-1) || '{}');
+    } catch {}
+    return {
+        ...payload,
+        ok: result.exitCode === 0 && payload.ok === true,
+        exitCode: result.exitCode,
+        timedOut: result.timedOut === true,
+        stderr: normalizeString(result.stderr).slice(0, 2000)
+    };
+}
+
+async function sampleVideoFrames(videoPath = '', outputDir = '', sampleCount = 36, timeoutMs = 180000) {
+    const code = `
+import glob, json, math, os, re, subprocess, sys
+from PIL import Image, ImageDraw, ImageFont, ImageOps
+import imageio_ffmpeg
+
+video_path = sys.argv[1]
+output_dir = sys.argv[2]
+sample_count = int(sys.argv[3])
+os.makedirs(output_dir, exist_ok=True)
+ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+probe = subprocess.run(
+    [ffmpeg, "-hide_banner", "-i", video_path],
+    capture_output=True,
+    text=True,
+    errors="replace",
+)
+probe_text = (probe.stderr or "") + "\\n" + (probe.stdout or "")
+match = re.search(r"Duration:\\s*(\\d+):(\\d+):(\\d+(?:\\.\\d+)?)", probe_text)
+if not match:
+    print(json.dumps({"ok": False, "error": "duration_unavailable", "probe": probe_text[-1200:]}))
+    raise SystemExit(2)
+duration = int(match.group(1)) * 3600 + int(match.group(2)) * 60 + float(match.group(3))
+fps = sample_count / max(duration, 0.1)
+frame_pattern = os.path.join(output_dir, "frame-%03d.jpg")
+filter_graph = (
+    f"fps={fps:.9f},"
+    "scale=480:270:force_original_aspect_ratio=decrease,"
+    "pad=480:270:(ow-iw)/2:(oh-ih)/2:black"
+)
+extract = subprocess.run(
+    [
+        ffmpeg, "-hide_banner", "-loglevel", "error", "-i", video_path,
+        "-vf", filter_graph, "-frames:v", str(sample_count),
+        "-q:v", "3", frame_pattern,
+    ],
+    capture_output=True,
+    text=True,
+    errors="replace",
+)
+frames = sorted(glob.glob(os.path.join(output_dir, "frame-*.jpg")))
+if extract.returncode != 0 or not frames:
+    print(json.dumps({
+        "ok": False,
+        "error": "ffmpeg_frame_extraction_failed",
+        "stderr": (extract.stderr or "")[-1600:],
+    }))
+    raise SystemExit(3)
+
+columns = 5
+cell_width, cell_height = 320, 204
+rows = math.ceil(len(frames) / columns)
+sheet = Image.new("RGB", (columns * cell_width, rows * cell_height), "black")
+draw = ImageDraw.Draw(sheet)
+font = ImageFont.load_default()
+timestamps = []
+for index, frame_path in enumerate(frames):
+    image = Image.open(frame_path).convert("RGB")
+    image = ImageOps.fit(image, (cell_width, 180))
+    x = (index % columns) * cell_width
+    y = (index // columns) * cell_height
+    sheet.paste(image, (x, y))
+    timestamp = min(duration, (index + 0.5) * duration / max(len(frames), 1))
+    timestamps.append(round(timestamp, 3))
+    label = f"frame {index + 1:02d}  {int(timestamp // 60):02d}:{timestamp % 60:04.1f}"
+    draw.rectangle((x, y + 180, x + cell_width, y + cell_height), fill="black")
+    draw.text((x + 6, y + 186), label, fill="white", font=font)
+
+sheet_path = os.path.join(output_dir, "contact-sheet.jpg")
+sheet.save(sheet_path, quality=91, optimize=True)
+
+detail_columns = 3
+detail_batch_size = 9
+detail_cell_width, detail_image_height, detail_cell_height = 480, 270, 294
+detail_sheet_paths = []
+detail_sheet_ranges = []
+for batch_start in range(0, len(frames), detail_batch_size):
+    batch_paths = frames[batch_start:batch_start + detail_batch_size]
+    batch_rows = math.ceil(len(batch_paths) / detail_columns)
+    detail_sheet = Image.new(
+        "RGB",
+        (detail_columns * detail_cell_width, batch_rows * detail_cell_height),
+        "black",
+    )
+    detail_draw = ImageDraw.Draw(detail_sheet)
+    for batch_index, frame_path in enumerate(batch_paths):
+        absolute_index = batch_start + batch_index
+        image = Image.open(frame_path).convert("RGB")
+        image = ImageOps.fit(image, (detail_cell_width, detail_image_height))
+        x = (batch_index % detail_columns) * detail_cell_width
+        y = (batch_index // detail_columns) * detail_cell_height
+        detail_sheet.paste(image, (x, y))
+        timestamp = timestamps[absolute_index]
+        label = f"frame {absolute_index + 1:02d}  {int(timestamp // 60):02d}:{timestamp % 60:04.1f}"
+        detail_draw.rectangle(
+            (x, y + detail_image_height, x + detail_cell_width, y + detail_cell_height),
+            fill="black",
+        )
+        detail_draw.text((x + 6, y + detail_image_height + 6), label, fill="white", font=font)
+    detail_path = os.path.join(
+        output_dir,
+        f"contact-sheet-detail-{len(detail_sheet_paths) + 1:02d}.jpg",
+    )
+    detail_sheet.save(detail_path, quality=93, optimize=True)
+    detail_sheet_paths.append(detail_path)
+    detail_sheet_ranges.append({
+        "path": detail_path,
+        "startFrame": batch_start + 1,
+        "endFrame": batch_start + len(batch_paths),
+        "startSeconds": timestamps[batch_start],
+        "endSeconds": timestamps[batch_start + len(batch_paths) - 1],
+    })
+
+print(json.dumps({
+    "ok": True,
+    "durationSeconds": round(duration, 3),
+    "sampleCount": len(frames),
+    "framePaths": frames,
+    "timestampsSeconds": timestamps,
+    "contactSheetPath": sheet_path,
+    "detailSheetPaths": detail_sheet_paths,
+    "detailSheetRanges": detail_sheet_ranges,
+    "ffmpegPath": ffmpeg,
+}))
+`.trim();
+    const result = await runProcess('python', [
+        '-c',
+        code,
+        videoPath,
+        outputDir,
+        String(clampNumber(sampleCount, 36, 6, 40))
+    ], {
+        cwd: outputDir,
+        timeoutMs: clampNumber(timeoutMs, 180000, 30000, 600000)
+    });
+    let payload = {};
+    try {
+        payload = JSON.parse(normalizeString(result.stdout, '{}').split(/\r?\n/).filter(Boolean).at(-1) || '{}');
+    } catch {}
+    return {
+        ...payload,
+        ok: result.exitCode === 0 && payload.ok === true,
+        exitCode: result.exitCode,
+        timedOut: result.timedOut === true,
+        stderr: normalizeString(result.stderr).slice(0, 2000)
+    };
+}
+
+function needsDetailedVideoFrameReview(question = '') {
+    const text = normalizeString(question).toLowerCase();
+    const sameFrameCue = /\b(?:simultaneous(?:ly)?|at (?:the )?same time|at once|same frame|single frame|on[- ]screen|on camera|co[- ]occur)\b/.test(text) ||
+        /(?:同时|同屏|同一画面|同一个画面|同一帧|镜头中|画面中)/.test(text);
+    const enumerationCue = /\b(?:highest|lowest|maximum|minimum|max|most|least|fewest|how many|number of|count)\b/.test(text) ||
+        /(?:最高|最低|最多|最少|多少|数量|计数)/.test(text);
+    return sameFrameCue && enumerationCue;
+}
+
+async function synthesizeVideoFrameAnalyses({
+    question = '',
+    analyses = [],
+    timeoutMs = 240000
+} = {}) {
+    const usable = (Array.isArray(analyses) ? analyses : [])
+        .filter((entry) => normalizeString(entry?.analysis))
+        .map((entry) => [
+            `Batch ${entry.batch}: frames ${entry.startFrame}-${entry.endFrame}`,
+            normalizeString(entry.analysis)
+        ].join('\n'));
+    if (!usable.length) return '';
+    const settings = readDesktopLlmSettings();
+    if (!settings) return usable.join('\n\n');
+    const response = await callDesktopLlmProvider({
+        ...settings,
+        timeoutMs
+    }, {
+        temperature: 0,
+        timeoutMs,
+        messages: [
+            {
+                role: 'system',
+                content: [
+                    'Aggregate visual evidence reports from non-overlapping chronological frame batches of one video.',
+                    'Use only facts explicitly visible in the reports.',
+                    'For simultaneous or same-frame maxima, never combine entities from different frames or batches.',
+                    'If a report supports a larger count with a same-frame entity breakdown, preserve that supported maximum even when other batches have lower counts.',
+                    'State the strongest answer first, followed by the supporting frame and timestamp.'
+                ].join(' ')
+            },
+            {
+                role: 'user',
+                content: [
+                    `Question: ${normalizeString(question)}`,
+                    '',
+                    ...usable
+                ].join('\n')
+            }
+        ]
+    });
+    return response.ok ? normalizeString(response.content) : usable.join('\n\n');
+}
+
+async function videoExtractFrames(args = {}) {
+    const rawPath = normalizeString(args.path || args.file || args.filePath || args.file_path);
+    const rawUrl = normalizeString(args.url || args.videoUrl || args.video_url);
+    const explicitVideoId = normalizeString(args.video_id || args.videoId || args.id);
+    const videoId = extractYouTubeVideoId(explicitVideoId || rawUrl);
+    const localPath = rawPath ? path.resolve(rawPath) : '';
+    const localStat = localPath ? await fs.stat(localPath).catch(() => null) : null;
+    const isDirectUrl = /^https?:\/\//i.test(rawUrl) && !videoId;
+    if ((!localStat || !localStat.isFile()) && !videoId && !isDirectUrl) {
+        return actionableErrorResult('video_extract_frames requires a local video path or an http(s)/YouTube URL', {
+            status: 'invalid_args',
+            failureReason: 'video_source_missing',
+            suggestedNextCalls: [{
+                tool: 'youtube_video_search',
+                args: { query: normalizeString(args.query || args.title) }
+            }]
+        });
+    }
+
+    const timeoutMs = clampNumber(args.timeoutMs || args.timeout_ms, 240000, 30000, 600000);
+    const sampleCount = clampNumber(args.sampleCount || args.sample_count || args.frames, 36, 6, 40);
+    const shouldAnalyze = args.analyze !== false && args.visual_analysis !== false;
+    const artifactBase = normalizeString(process.env.AILIS_MCP_ARTIFACT_DIR) ||
+        path.join(process.cwd(), '.ailis-state', 'mcp-artifacts');
+    const sourceName = videoId || path.basename(localPath || new URL(rawUrl).pathname) || 'video';
+    const safeName = sourceName.replace(/[^a-zA-Z0-9._-]+/g, '-').slice(0, 64) || 'video';
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const outputDir = path.join(artifactBase, 'video-frames', `${safeName}-${stamp}`);
+    await fs.mkdir(outputDir, { recursive: true });
+
+    let videoPath = localPath;
+    let sourceBackend = 'local_file';
+    let download = null;
+    if (!videoPath) {
+        videoPath = path.join(outputDir, `${safeName}.mp4`);
+        download = await downloadVideoForFrameExtraction({
+            sourceUrl: isDirectUrl ? rawUrl : '',
+            videoId,
+            targetPath: videoPath,
+            timeoutMs,
+            maxBytes: args.maxBytes || args.max_bytes
+        });
+        if (!download.ok) {
+            return actionableErrorResult('video_extract_frames could not retrieve readable video bytes', {
+                status: download.timedOut ? 'timeout' : 'video_download_failed',
+                failureReason: videoId ? 'youtube_video_backends_unavailable' : 'video_download_failed',
+                videoId,
+                sourceUrl: rawUrl,
+                backendErrors: download.errors || [],
+                stderr: download.stderr,
+                nextActions: [
+                    'Retry later or configure AILIS_INVIDIOUS_INSTANCES with a healthy HTTPS Invidious instance.',
+                    'If the user permits it, use youtube_transcript with browser cookies for an authenticated fallback.'
+                ]
+            });
+        }
+        sourceBackend = download.backend || 'download';
+    }
+
+    const sampled = await sampleVideoFrames(videoPath, outputDir, sampleCount, timeoutMs);
+    if (!sampled.ok) {
+        return actionableErrorResult('video_extract_frames could not sample the downloaded video', {
+            status: sampled.timedOut ? 'timeout' : 'frame_extraction_failed',
+            failureReason: sampled.error || 'ffmpeg_frame_extraction_failed',
+            path: videoPath,
+            stderr: sampled.stderr,
+            probe: sampled.probe
+        });
+    }
+
+    const question = normalizeString(
+        args.question || args.prompt,
+        'Describe the visible events and identify important entities in the sampled video frames.'
+    );
+    const detailedReview = shouldAnalyze && needsDetailedVideoFrameReview(question);
+    let analysisResult = null;
+    let batchAnalyses = [];
+    if (detailedReview && Array.isArray(sampled.detailSheetRanges) && sampled.detailSheetRanges.length) {
+        const batchResults = await Promise.all(sampled.detailSheetRanges.map(async (batch, index) => {
+            const analysisPrompt = [
+                'This is one high-resolution chronological batch from a uniformly sampled video.',
+                `It contains frames ${batch.startFrame}-${batch.endFrame}; each tile has a frame number and timestamp.`,
+                `Question: ${question}`,
+                'Inspect every tile at full resolution.',
+                'For simultaneous or on-screen-at-once questions, count only entities visible inside the same tile.',
+                'Include small, distant, or background entities when visibly distinct. Do not count age, sex, or life stage as a separate species/type.',
+                'State the strongest same-frame answer first, then list the visible entity/species breakdown and exact supporting frame number(s).'
+            ].join('\n');
+            const result = await describeImage({
+                path: batch.path,
+                question: analysisPrompt,
+                detail: 'original',
+                maxChars: args.maxChars || args.max_chars || 6000,
+                timeoutMs
+            });
+            return {
+                batch: index + 1,
+                ...batch,
+                analysis: result && !result.isError
+                    ? normalizeString(result.content?.[0]?.text)
+                    : '',
+                error: result?.isError === true
+                    ? normalizeString(result.content?.[0]?.text || result.details?.error)
+                    : ''
+            };
+        }));
+        batchAnalyses = batchResults.filter((entry) => entry.analysis || entry.error);
+    } else if (shouldAnalyze) {
+        const analysisPrompt = [
+            'This is a chronological contact sheet sampled uniformly from one video.',
+            'Each tile is one frame and has a timestamp label.',
+            `Question: ${question}`,
+            'Inspect every tile. When the question asks what is simultaneous or on screen at once, count only entities visible within the same tile; never merge entities seen at different timestamps.',
+            'State the strongest answer first, then cite the relevant frame number(s) and timestamp(s). Distinguish exact species/types only when visually supportable.'
+        ].join('\n');
+        analysisResult = await describeImage({
+            path: sampled.contactSheetPath,
+            question: analysisPrompt,
+            detail: 'original',
+            maxChars: args.maxChars || args.max_chars || 6000,
+            timeoutMs
+        });
+    }
+    const visualAnalysis = detailedReview
+        ? await synthesizeVideoFrameAnalyses({
+              question,
+              analyses: batchAnalyses,
+              timeoutMs
+          })
+        : analysisResult && !analysisResult.isError
+        ? normalizeString(analysisResult.content?.[0]?.text)
+        : '';
+    const suggestedNextCalls = visualAnalysis
+        ? []
+        : [{
+            tool: 'describe_image',
+            args: {
+                path: sampled.contactSheetPath,
+                question
+            }
+        }];
+    const text = [
+        '# VIDEO_FRAME_EVIDENCE_COMPLETE',
+        '',
+        visualAnalysis ? `visual_analysis:\n${visualAnalysis}` : 'visual_analysis: not_run_or_unavailable',
+        '',
+        `source_backend: ${sourceBackend}`,
+        `video_id: ${videoId}`,
+        `duration_seconds: ${sampled.durationSeconds}`,
+        `sample_count: ${sampled.sampleCount}`,
+        `analysis_mode: ${detailedReview ? 'multi_sheet_detailed' : 'overview'}`,
+        `contact_sheet_path: ${sampled.contactSheetPath}`,
+        ...(detailedReview
+            ? (sampled.detailSheetPaths || []).map((sheetPath, index) =>
+                  `detail_sheet_${index + 1}_path: ${sheetPath}`
+              )
+            : []),
+        `timestamps_seconds: ${(sampled.timestampsSeconds || []).join(', ')}`,
+        suggestedNextCalls.length
+            ? `suggested_next_calls:\n1. describe_image ${JSON.stringify(suggestedNextCalls[0].args)}`
+            : ''
+    ].filter(Boolean).join('\n');
+    const details = {
+        status: 'completed',
+        complete: true,
+        truncated: false,
+        reasoningReady: Boolean(visualAnalysis),
+        evidenceQuality: visualAnalysis ? 'visual_frame_evidence' : 'sampled_frames',
+        sourceBackend,
+        sourceUrl: rawUrl,
+        videoId,
+        videoPath,
+        download,
+        durationSeconds: sampled.durationSeconds,
+        sampleCount: sampled.sampleCount,
+        framePaths: sampled.framePaths,
+        frameTimestampsSeconds: sampled.timestampsSeconds,
+        contactSheetPath: sampled.contactSheetPath,
+        detailSheetPaths: sampled.detailSheetPaths || [],
+        detailSheetRanges: sampled.detailSheetRanges || [],
+        analysisMode: detailedReview ? 'multi_sheet_detailed' : 'overview',
+        batchAnalyses,
+        visualAnalysis,
+        suggestedNextCalls,
+        observationContract: {
+            status: 'completed',
+            semantic_level: visualAnalysis ? 'semantic' : 'visual_frames',
+            complete: true,
+            truncated: false,
+            reasoning_ready: Boolean(visualAnalysis),
+            is_evidence: true,
+            evidence_quality: visualAnalysis ? 'visual_frame_evidence' : 'sampled_frames'
+        }
+    };
+    return {
+        content: [{ type: 'text', text }],
+        structuredContent: { ok: true, ...details },
+        details
+    };
+}
+
+async function chessPositionAnalyze(args = {}) {
+    const result = await analyzeChessPosition(args);
+    if (!result.ok) {
+        return actionableErrorResult('chess_position_analyze could not complete local engine analysis.', {
+            status: result.status,
+            failureReason: result.error,
+            message: result.stderr,
+            fen: result.fen,
+            receivedFen: result.receivedFen,
+            nextActions: [
+                'Verify that the submitted FEN matches the source board, including every piece and the side to move.',
+                'Configure AILIS_STOCKFISH_ENGINE_PATH only when the bundled Stockfish backend is unavailable.'
+            ]
+        });
+    }
+    const topVariation = result.variations.find((variation) => variation.rank === 1) ||
+        result.variations[0] ||
+        null;
+    const text = [
+        `best_move_san=${result.bestMove.san}`,
+        `best_move_uci=${result.bestMove.uci}`,
+        `side_to_move=${result.sideToMove}`,
+        `fen=${result.fen}`,
+        topVariation
+            ? `engine_score=${topVariation.score.type} ${topVariation.score.value} (${topVariation.score.perspective})`
+            : '',
+        topVariation?.movesSan?.length
+            ? `principal_variation=${topVariation.movesSan.join(' ')}`
+            : '',
+        'board_echo:',
+        result.boardEcho
+    ].filter(Boolean).join('\n');
+    return textResult(text, result);
+}
+
 async function youtubeVideoSearch(args = {}) {
     const videoId = normalizeString(args.video_id || args.videoId || args.id);
     const explicitUrl = normalizeString(args.url || args.videoUrl || args.video_url) || buildYouTubeWatchUrl(videoId);
@@ -11615,7 +14860,12 @@ const TOOLS = [
             type: 'object',
             required: ['query'],
             properties: {
-                query: { type: 'string', minLength: 1, maxLength: 512, description: 'Required public web search query. Do not call web_search with empty arguments.' },
+                query: {
+                    type: 'string',
+                    minLength: 1,
+                    maxLength: 240,
+                    description: 'Required concise public web search query. Keep only discriminative entities and constraints; never concatenate previous queries.'
+                },
                 maxResults: { type: 'number', description: 'Requested result count, clamped to 1-12. Use 3-8 for normal tasks.' },
                 search_context_size: { type: 'string', enum: ['low', 'medium', 'high'], description: 'Amount of search context to return. Defaults to medium.' },
                 recency: { type: 'integer', minimum: 1, maximum: 3650, description: 'Optional recent-days hint. Omit unless recent results are explicitly required.' },
@@ -11730,6 +14980,35 @@ const TOOLS = [
         }
     },
     {
+        name: 'web_archive_lookup',
+        description: 'Recover historical database, catalog, academic-index, and search-engine result records when a live site, API, or OAI endpoint is offline, blocked, rate-limited, DNS-changed, removed, or no longer preserves the requested past state. Use it for as-of-year record questions and archived query pages filtered by identifiers, classification/subject codes such as DDC, year, language, document type, country/region, flags, or other URL values. This is a general Internet Archive + Arquivo.pt connector, not broad web search. Prefer mode=search for one-call dynamic URL discovery plus snapshot reading; use matchType=prefix and concise contains terms such as identifiers, filter values, or years. Use mode=captures only when you need to inspect candidates, and mode=open for a known provider/URL/timestamp. Read repeated_labeled_fields before paging a long catalog result because it projects labels and values from the full source.',
+        inputSchema: {
+            type: 'object',
+            required: ['url'],
+            properties: {
+                url: { type: 'string', minLength: 1, description: 'Original public HTTP(S) URL or stable URL prefix. For dynamic result pages, end the URL at the path or query prefix and use matchType=prefix.' },
+                mode: { type: 'string', enum: ['captures', 'search', 'open'], description: 'search discovers candidates and opens the first readable snapshot in one call; captures lists candidates; open reads one known timestamp. Defaults to open when timestamp is present, otherwise captures.' },
+                provider: { type: 'string', enum: ['internet_archive', 'arquivo'], description: 'Required for mode=open. Optional single-provider restriction for capture search.' },
+                providers: { type: 'array', maxItems: 2, items: { type: 'string', enum: ['internet_archive', 'arquivo'] }, description: 'Optional archive backends for capture search. Defaults to both.' },
+                timestamp: { type: 'string', pattern: '^[0-9]{8,14}$', description: 'Capture timestamp returned by mode=captures. Required for mode=open.' },
+                matchType: { type: 'string', enum: ['exact', 'prefix'], description: 'exact lists captures of one URL; prefix enumerates archived subpaths or dynamic query URLs. Defaults to exact.' },
+                contains: { type: 'string', description: 'Optional terms used to rank archived original URLs, for example a year, identifier, filter name, or query value. Prefix discovery prefers the earliest URL matching every term so later replay-generated query URLs do not hide the original evidence; terms are not sent as a new web search.' },
+                query: { type: 'string', description: 'Optional evidence phrase. In captures mode it ranks URLs and triggers opening the first readable snapshot; in search mode it focuses the one-call snapshot; in open mode it focuses the returned source viewport.' },
+                fromYear: { type: 'integer', minimum: 1996, maximum: 9999, description: 'Optional archive capture-year lower bound. This is the crawl date, not necessarily the publication year.' },
+                toYear: { type: 'integer', minimum: 1996, maximum: 9999, description: 'Optional archive capture-year upper bound.' },
+                maxResults: { type: 'integer', minimum: 1, maximum: 50, description: 'Maximum ranked capture URLs returned. Defaults to 12.' },
+                scanLimit: { type: 'integer', minimum: 1, maximum: 10000, description: 'Maximum CDX rows scanned before local ranking. Prefix discovery first probes the full terms, then a compact identifier/numeric anchor set; prefix listing defaults to 500 and exact lookup to 120.' },
+                maxChars: { type: 'integer', minimum: 1000, maximum: 80000, description: 'Maximum readable characters for mode=open.' },
+                timeoutMs: { type: 'integer', minimum: 3000, maximum: 300000, description: 'Per-backend archive request timeout, not the total tool-call deadline. Search mode may issue several requests; omit unless an individual backend probe needs a custom limit.' },
+                cdxBaseUrl: { type: 'string', description: 'Optional Internet Archive-compatible CDX endpoint override for self-hosted mirrors/tests.' },
+                replayBaseUrl: { type: 'string', description: 'Optional Internet Archive-compatible replay base URL override for self-hosted mirrors/tests.' },
+                arquivoCdxUrl: { type: 'string', description: 'Optional Arquivo.pt-compatible CDX endpoint override.' },
+                arquivoReplayUrl: { type: 'string', description: 'Optional Arquivo.pt-compatible replay base URL override.' }
+            },
+            additionalProperties: false
+        }
+    },
+    {
         name: 'open_page',
         description: 'Open a selected public web source by URL and return a line-numbered source_viewport. This is the direct search → open action. Use lineno to open a specific region or query to focus around one missing field.',
         inputSchema: {
@@ -11778,6 +15057,26 @@ const TOOLS = [
         }
     },
     {
+        name: 'webpage_screenshot',
+        description: 'Capture a browser-rendered PNG screenshot of a known public HTTP(S) page with the bundled local Crawl4AI/Playwright browser. Use when the answer depends on visual layout, indentation, columns, line breaks, color, position, charts, canvas, or other pixel evidence that Markdown/text extraction cannot preserve. The PNG is returned to the main Agent model as visual input; this tool does not call another reasoning model.',
+        inputSchema: {
+            type: 'object',
+            required: ['url'],
+            properties: {
+                url: { type: 'string', minLength: 1 },
+                path: { type: 'string', description: 'Optional local PNG output path. The runtime supplies a workspace path for web_run screenshot calls.' },
+                query: { type: 'string', description: 'Optional original visual question retained as screenshot context.' },
+                detail: { type: 'string', enum: ['low', 'high', 'original'] },
+                waitFor: { type: 'string' },
+                wait_for: { type: 'string' },
+                delayMs: { type: 'integer', minimum: 0, maximum: 30000 },
+                delay_ms: { type: 'integer', minimum: 0, maximum: 30000 },
+                timeoutMs: { type: 'integer', minimum: 30000, maximum: 300000 }
+            },
+            additionalProperties: false
+        }
+    },
+    {
         name: 'web_find',
         description: 'Find an exact phrase inside a known public HTTP(S) HTML/text URL. Codex/OAI-style action: find_in_page. Standard call: { "url": "https://...", "pattern": "exact phrase" }. Returns a line-numbered source_viewport around matches. This is not a broad web search.',
         inputSchema: {
@@ -11811,7 +15110,7 @@ const TOOLS = [
     },
     {
         name: 'pdf_extract_text',
-        description: 'Extract readable text from a public PDF URL or local PDF path. Use this instead of web_fetch for application/pdf or .pdf sources.',
+        description: 'Extract readable text from a public PDF URL or local PDF path. Use this instead of web_fetch for application/pdf or .pdf sources. Pass query/extract_query with answer-bearing clues so relevant evidence from the middle of a long PDF is placed before the full returned text.',
         inputSchema: {
             type: 'object',
             anyOf: [
@@ -11825,6 +15124,10 @@ const TOOLS = [
                 file: { type: 'string' },
                 filePath: { type: 'string' },
                 file_path: { type: 'string' },
+                query: { type: 'string' },
+                q: { type: 'string' },
+                extractQuery: { type: 'string' },
+                extract_query: { type: 'string' },
                 maxChars: { type: 'number' },
                 maxPages: { type: 'number' },
                 timeoutMs: { type: 'number' }
@@ -11880,6 +15183,38 @@ const TOOLS = [
                 maxResults: { type: 'number', description: 'Maximum metadata candidates to return, clamped to 1-12.' },
                 timeoutMs: { type: 'number', description: 'Overall lookup timeout in milliseconds, clamped to 5000-180000.' },
                 openAlexAuthorsBaseUrl: { type: 'string', description: 'Optional override for tests/self-hosted OpenAlex author search endpoint.' }
+            },
+            additionalProperties: false
+        }
+    },
+    {
+        name: 'wikidata_entity_lookup',
+        description: 'Search Wikidata entities and return structured, source-linked facts for small entity sets. Use it for geocoding/place coordinates (latitude and longitude), identity resolution, country or administrative location, official names, dates, authorship, and entity relations such as a person’s place of birth. It accepts several queries in one call, automatically relaxes over-specific natural-language suffixes when exact entity search is empty, resolves linked Q-ids to readable labels, and is suitable for comparing boundary candidates before verifying their source-period labels. This is read-only structured knowledge-graph lookup, not broad web search or a large SPARQL query.',
+        inputSchema: {
+            type: 'object',
+            anyOf: [
+                { required: ['query'] },
+                { required: ['queries'] },
+                { required: ['entityIds'] }
+            ],
+            properties: {
+                query: { type: 'string', minLength: 1, description: 'One entity search phrase. Add country, occupation, year, or another disambiguator when needed.' },
+                q: { type: 'string', description: 'Compatibility alias for query.' },
+                queries: { type: 'array', minItems: 1, maxItems: 20, items: { type: 'string', minLength: 1 }, description: 'Batch of independent entity search phrases.' },
+                entityIds: { type: 'array', minItems: 1, maxItems: 50, items: { type: 'string', pattern: '^Q[0-9]+$' }, description: 'Known Wikidata Q-ids. Use after search when exact identity is established.' },
+                entity_ids: { type: 'array', maxItems: 50, items: { type: 'string', pattern: '^Q[0-9]+$' }, description: 'Compatibility alias for entityIds.' },
+                properties: {
+                    type: 'array',
+                    maxItems: 16,
+                    items: { type: 'string', minLength: 1 },
+                    description: 'Facts to project, such as coordinates, place_of_birth, place_of_death, country, located_in, location, official_name, date_of_birth, date_of_death, inception, occupation, author, instance_of, or an explicit P-id.'
+                },
+                fields: { type: 'array', maxItems: 16, items: { type: 'string', minLength: 1 }, description: 'Compatibility alias for properties.' },
+                language: { type: 'string', description: 'Preferred label language code. Defaults to en with English fallback.' },
+                maxResultsPerQuery: { type: 'number', minimum: 1, maximum: 5, description: 'Candidate entities per query. Defaults to 3.' },
+                max_results_per_query: { type: 'number', minimum: 1, maximum: 5, description: 'Compatibility alias for maxResultsPerQuery.' },
+                timeoutMs: { type: 'number', minimum: 5000, maximum: 180000 },
+                wikidataApiUrl: { type: 'string', description: 'Optional Wikidata-compatible Action API endpoint override for mirrors or tests.' }
             },
             additionalProperties: false
         }
@@ -12046,6 +15381,67 @@ const TOOLS = [
         }
     },
     {
+        name: 'video_extract_frames',
+        description: 'Retrieve and uniformly sample a local or remote video into timestamped frames and a contact sheet, then optionally analyze that sheet with the configured vision model. Use this for visual video questions, especially simultaneous/on-screen counts that transcripts cannot answer. For YouTube anti-bot failures it uses healthy Invidious companion proxies without browser cookies, then local ffmpeg frame extraction. It never treats title, transcript, or thumbnails as proof of same-frame co-occurrence.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                path: { type: 'string', description: 'Existing local video path.' },
+                file: { type: 'string', description: 'Compatibility alias for path.' },
+                filePath: { type: 'string', description: 'Compatibility alias for path.' },
+                file_path: { type: 'string', description: 'Compatibility alias for path.' },
+                url: { type: 'string', description: 'Direct video URL or YouTube watch URL.' },
+                videoUrl: { type: 'string', description: 'Compatibility alias for url.' },
+                video_url: { type: 'string', description: 'Compatibility alias for url.' },
+                video_id: { type: 'string', description: 'YouTube video id.' },
+                videoId: { type: 'string', description: 'Compatibility alias for video_id.' },
+                id: { type: 'string', description: 'Compatibility alias for video_id.' },
+                question: { type: 'string', description: 'Visual question to answer from the sampled frames.' },
+                prompt: { type: 'string', description: 'Compatibility alias for question.' },
+                sampleCount: { type: 'number', minimum: 6, maximum: 40, description: 'Uniformly sampled frame count. Default 36.' },
+                sample_count: { type: 'number', minimum: 6, maximum: 40, description: 'Compatibility alias for sampleCount.' },
+                frames: { type: 'number', minimum: 6, maximum: 40, description: 'Compatibility alias for sampleCount.' },
+                analyze: { type: 'boolean', description: 'Run vision analysis on the contact sheet. Default true.' },
+                visual_analysis: { type: 'boolean', description: 'Compatibility alias for analyze.' },
+                maxBytes: { type: 'number', minimum: 1048576, maximum: 1073741824 },
+                max_bytes: { type: 'number', minimum: 1048576, maximum: 1073741824 },
+                maxChars: { type: 'number', minimum: 500, maximum: 12000 },
+                max_chars: { type: 'number', minimum: 500, maximum: 12000 },
+                timeoutMs: { type: 'number', minimum: 30000, maximum: 600000 },
+                timeout_ms: { type: 'number', minimum: 30000, maximum: 600000 }
+            },
+            additionalProperties: false,
+            anyOf: [
+                { required: ['path'] },
+                { required: ['url'] },
+                { required: ['video_id'] },
+                { required: ['videoId'] }
+            ]
+        }
+    },
+    {
+        name: 'chess_position_analyze',
+        description: 'Analyze a standard chess position from a caller-supplied FEN with the bundled local Stockfish engine. Use after transcribing and checking a board image when the task asks for the best, winning, optimal, forced, or guaranteed move. This tool does not inspect images. It validates the FEN, echoes the board and side to move, and returns the best move in both SAN and UCI plus ranked principal variations.',
+        inputSchema: {
+            type: 'object',
+            required: ['fen'],
+            properties: {
+                fen: { type: 'string', minLength: 1, description: 'Complete standard-chess FEN with 4 or 6 fields. Verify every piece and the side-to-move field against the source before calling.' },
+                position: { type: 'string', description: 'Compatibility alias for fen.' },
+                depth: { type: 'number', minimum: 8, maximum: 24, description: 'Stockfish search depth. Default 18.' },
+                analysisTimeMs: { type: 'number', minimum: 1000, maximum: 60000, description: 'Soft analysis budget. At this point the tool asks Stockfish to stop and returns the strongest completed result instead of discarding it. Default 12000.' },
+                maxTimeMs: { type: 'number', minimum: 1000, maximum: 60000, description: 'Compatibility alias for analysisTimeMs.' },
+                max_time_ms: { type: 'number', minimum: 1000, maximum: 60000, description: 'Compatibility alias for analysisTimeMs.' },
+                multiPv: { type: 'number', minimum: 1, maximum: 5, description: 'Number of ranked candidate lines. Default 3.' },
+                multi_pv: { type: 'number', minimum: 1, maximum: 5, description: 'Compatibility alias for multiPv.' },
+                timeoutMs: { type: 'number', minimum: 5000, maximum: 120000 },
+                enginePath: { type: 'string', description: 'Optional local Stockfish JS engine path for diagnostics.' },
+                engine_path: { type: 'string', description: 'Compatibility alias for enginePath.' }
+            },
+            additionalProperties: false
+        }
+    },
+    {
         name: 'youtube_video_search',
         description: 'Search or resolve YouTube videos with yt-dlp using title, channel, or URL. This tool is for YouTube/youtu.be sources, not generic video platforms. If yt-dlp is blocked for a known URL, this tool recovers metadata through YouTube oEmbed and returns metadata_only plus exact-title follow-up search suggestions; do not treat metadata_only as transcript/frame evidence.',
         inputSchema: {
@@ -12105,13 +15501,16 @@ async function handleToolCall(request) {
     if (name === 'web_research') return await webResearch(args);
     if (name === 'github_repo_read') return await githubRepoRead(args);
     if (name === 'web_fetch') return await webFetch(args);
+    if (name === 'web_archive_lookup') return await webArchiveLookup(args);
     if (name === 'web_find') return await webFind(args);
     if (name === 'open_page') return await openPage(args);
     if (name === 'find_in_page') return await findInPage(args);
     if (name === 'continue_page') return await continuePage(args);
     if (name === 'render_page') return await renderPage(args);
+    if (name === 'webpage_screenshot') return await webpageScreenshot(args);
     if (name === 'pdf_extract_text') return await pdfExtractText(args);
     if (name === 'paper_metadata_lookup') return await paperMetadataLookup(args);
+    if (name === 'wikidata_entity_lookup') return await wikidataEntityLookup(args);
     if (name === 'pdf_find_and_extract') return await pdfFindAndExtract(args);
     if (name === 'download_file') return await downloadFile(args);
     if (name === 'web_extract_links') return await webExtractLinks(args);
@@ -12121,6 +15520,8 @@ async function handleToolCall(request) {
     if (name === 'read_presentation') return await readPresentation(args);
     if (name === 'transcribe_audio') return await transcribeAudio(args);
     if (name === 'describe_image') return await describeImage(args);
+    if (name === 'video_extract_frames') return await videoExtractFrames(args);
+    if (name === 'chess_position_analyze') return await chessPositionAnalyze(args);
     if (name === 'youtube_video_search') return await youtubeVideoSearch(args);
     if (name === 'youtube_transcript') return await youtubeTranscript(args);
     return errorResult(`Unknown tool: ${name}`);
@@ -12185,12 +15586,15 @@ module.exports = {
     TOOLS,
     assessSearchConfidence,
     buildEffectiveSearchQuery,
+    buildEvidenceSnippets,
     buildWebResearchCandidates,
     buildWebResearchQueryPlan,
     buildSearchClarificationChoices,
     buildSuggestedCallsFromSearchResults,
     buildYouTubeEvidenceSearchQuery,
     buildYouTubeOEmbedUrl,
+    buildInvidiousVideoProxyUrl,
+    chessPositionAnalyze,
     classifyYtDlpFailure,
     crawl4aiFetchConfig,
     crawl4aiWorkerPath,
@@ -12204,9 +15608,12 @@ module.exports = {
     extractYouTubeVideoId,
     extractWikipediaPageTitle,
     extractYahooResults,
+    expandStructuredSourceText,
     filterSearchResultsByDomains,
     inferPaperMetadataArgsFromScholarlyQuery,
+    fetchArchiveIndexText,
     fetchText,
+    fetchTextWithCurl,
     githubRepoRead,
     handleRequest,
     handleToolCall,
@@ -12215,6 +15622,7 @@ module.exports = {
     managedSearxngManifestCandidates,
     managedSearxngPortCandidates,
     mergeSearchResultsForRerank,
+    needsDetailedVideoFrameReview,
     normalizeSearchDomains,
     normalizeSearchBackends,
     parseGitHubRepoRef,
@@ -12232,15 +15640,19 @@ module.exports = {
     SEARCH_BACKENDS,
     stripWikiText,
     transcribeAudio,
+    videoExtractFrames,
     webExtractLinks,
+    webArchiveLookup,
     webFetch,
     webFind,
     openPage,
     findInPage,
     continuePage,
     renderPage,
+    webpageScreenshot,
     webResearch,
     webSearch,
+    wikidataEntityLookup,
     youtubeTranscript,
     youtubeVideoSearch
 };

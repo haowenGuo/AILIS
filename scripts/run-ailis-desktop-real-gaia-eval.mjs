@@ -546,6 +546,58 @@ function splitListAnswer(value = '') {
         .sort();
 }
 
+function splitListAnswerInOrder(value = '') {
+    const normalized = normalizeAnswerForScore(value);
+    if (!normalized || !/[;,，、]/.test(normalized)) {
+        return [];
+    }
+    return normalized
+        .split(/[;,，、]/)
+        .map((item) => item.trim())
+        .filter(Boolean);
+}
+
+function visibleContainsListParts(value = '', parts = [], { ordered = false } = {}) {
+    const visible = normalizeAnswerForScore(value);
+    const required = Array.isArray(parts) ? parts.filter(Boolean) : [];
+    if (!visible || required.length < 2) {
+        return false;
+    }
+    if (ordered) {
+        let cursor = 0;
+        for (const part of required) {
+            const index = visible.indexOf(part, cursor);
+            if (index < 0) {
+                return false;
+            }
+            cursor = index + part.length;
+        }
+        return true;
+    }
+    const requiredCounts = new Map();
+    for (const part of required) {
+        requiredCounts.set(part, (requiredCounts.get(part) || 0) + 1);
+    }
+    for (const [part, count] of requiredCounts) {
+        let found = 0;
+        let cursor = 0;
+        while (found < count) {
+            const index = visible.indexOf(part, cursor);
+            if (index < 0) {
+                return false;
+            }
+            found += 1;
+            cursor = index + part.length;
+        }
+    }
+    return true;
+}
+
+function questionRequiresListOrder(question = '') {
+    const text = normalizeText(question).toLowerCase();
+    return /\border(?:ed|ing)?\b|\bin the order\b|\bsequence\b|\balphabeti[sz]|\bchronological\b|按.*顺序|依次|字母顺序/.test(text);
+}
+
 function answersEquivalent(candidate = '', gold = '') {
     const left = normalizeAnswerForScore(candidate);
     const right = normalizeAnswerForScore(gold);
@@ -617,6 +669,20 @@ function getQuestionNumericScale(question = '') {
 function answersEquivalentForQuestion(candidate = '', gold = '', question = '') {
     if (answersEquivalent(candidate, gold)) {
         return true;
+    }
+    const questionText = normalizeText(question).toLowerCase();
+    if (
+        /\b(?:where|city|cities|place|location)\b|城市|地点|哪里|何处/.test(questionText) &&
+        !/\d/.test(`${candidate}${gold}`)
+    ) {
+        const normalizePlaceAlias = (value = '') => normalizeLexicalAnswerForScore(value)
+            .replace(/^st\s+/, 'saint ')
+            .replace(/\bst\s+(?=[a-z])/g, 'saint ');
+        const candidatePlace = normalizePlaceAlias(candidate);
+        const goldPlace = normalizePlaceAlias(gold);
+        if (candidatePlace && candidatePlace === goldPlace) {
+            return true;
+        }
     }
     const goldNumber = parseNumber(gold);
     const candidateNumber = parseVisibleNumber(candidate);
@@ -822,8 +888,10 @@ function scoreVisibleAnswer({ response = {}, gold = '', question = '' } = {}) {
             candidates
         };
     }
-    const goldParts = splitListAnswer(gold);
-    if (goldParts.length >= 2 && goldParts.every((part) => normalizedVisible.includes(part))) {
+    const goldParts = splitListAnswerInOrder(gold);
+    if (visibleContainsListParts(displayText, goldParts, {
+        ordered: questionRequiresListOrder(question)
+    })) {
         return {
             ok: true,
             status: 'visible_contains_all_list_parts',
@@ -1425,6 +1493,7 @@ export {
     isIncompleteStatus,
     normalizeAnswerForScore,
     scoreVisibleAnswer,
+    splitListAnswerInOrder,
     summarizeEvents
 };
 

@@ -32,7 +32,7 @@ const {
 const DEFAULT_MAX_RESULT_TEXT_CHARS = 6000;
 const DEFAULT_MAX_TRANSCRIPT_ITEMS = 500;
 const DEFAULT_SUBAGENT_RUN_TIMEOUT_MS = 15 * 60 * 1000;
-const TASK_AGENT_MAX_MODEL_ROUNDS = 7;
+const TASK_AGENT_MAX_MODEL_ROUNDS = 9;
 
 const FILE_MUTATING_TOOLS = new Set(['write', 'edit', 'apply_patch']);
 const FILE_READONLY_TOOLS = new Set(['read', 'web_fetch']);

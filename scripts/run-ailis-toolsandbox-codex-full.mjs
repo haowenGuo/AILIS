@@ -48,10 +48,24 @@ function isPidAlive(pid) {
 const jobId = argValue('--job-id', defaultJobId);
 const runId = argValue('--run-id', jobId);
 const model = argValue('--model', process.env.AILIS_CODEX_MODEL || 'gpt-5.5');
+const retryErrorsOnly = argv.includes('--retry-errors-only');
+const retryFailuresOnly = argv.includes('--retry-failures-only');
+const retryBatchId = argValue('--retry-batch-id');
+const primaryHoldout = argv.includes('--primary-holdout');
 const reasoningEffort = argValue(
     '--reasoning-effort',
     process.env.AILIS_CODEX_REASONING_EFFORT || 'low'
 );
+if (primaryHoldout && (retryErrorsOnly || retryFailuresOnly)) {
+    throw new Error('--primary-holdout cannot be combined with retry-only modes.');
+}
+const selectionMode = retryFailuresOnly
+    ? 'retry_failures_only'
+    : retryErrorsOnly
+        ? 'retry_errors_only'
+        : primaryHoldout
+            ? 'holdout_primary'
+            : 'registry';
 const jobRoot = path.join(projectRoot, 'longrun', 'jobs', jobId);
 const resultsRoot = path.join(jobRoot, 'results');
 const runnerRoot = path.join(resultsRoot, runId);
@@ -71,10 +85,7 @@ const pythonExe = argValue(
 
 fs.mkdirSync(logsRoot, { recursive: true });
 const previousState = readJson(statePath, {});
-if (
-    (isPidAlive(Number(previousState.controllerPid)) || isPidAlive(Number(previousState.childPid))) &&
-    previousState.status === 'running'
-) {
+if (isPidAlive(Number(previousState.controllerPid)) || isPidAlive(Number(previousState.childPid))) {
     throw new Error(
         `ToolSandbox controller is already running (controller=${previousState.controllerPid}, child=${previousState.childPid}).`
     );
@@ -85,8 +96,9 @@ const stderr = fs.openSync(stderrPath, 'a');
 const runnerArgs = [
     path.join(projectRoot, 'scripts', 'toolsandbox', 'run_ailis_toolsandbox.py'),
     '--all',
+    '--exclude-rapid-api',
     '--resume',
-    '--retry-errors',
+    ...(primaryHoldout ? [] : ['--retry-errors']),
     '--provider',
     'codex-model-bridge',
     '--codex-model',
@@ -102,6 +114,13 @@ const runnerArgs = [
     '--output-dir',
     resultsRoot
 ];
+if (retryErrorsOnly) runnerArgs.push('--retry-errors-only');
+if (retryFailuresOnly) {
+    if (!retryBatchId) {
+        throw new Error('--retry-failures-only requires --retry-batch-id.');
+    }
+    runnerArgs.push('--retry-failures-only', '--retry-batch-id', retryBatchId);
+}
 const child = spawn(pythonExe, runnerArgs, {
     cwd: projectRoot,
     env: { ...process.env },
@@ -119,12 +138,15 @@ appendEvent(eventPath, {
     runId,
     provider: 'codex-model-bridge',
     model,
-    reasoningEffort
+    reasoningEffort,
+    selectionMode,
+    retryBatchId: retryBatchId || null
 });
 
 function mirrorState(extra = {}) {
     const runnerState = readJson(runnerStatePath, {});
     const summary = readJson(runnerSummaryPath, {});
+    const retryBatch = runnerState.retryBatch || summary.retryBatch || null;
     const state = {
         jobId,
         runId,
@@ -146,6 +168,15 @@ function mirrorState(extra = {}) {
         ),
         currentScenario: runnerState.currentScenario || null,
         totalTokens: Number(summary.usage?.totalTokens || 0),
+        selectionMode: primaryHoldout
+            ? 'holdout_primary'
+            : runnerState.selectionMode || summary.selectionMode || selectionMode,
+        retryBatch,
+        retryTarget: Number(retryBatch?.target || 0),
+        retryProcessed: Number(retryBatch?.processed || 0),
+        retryScored: Number(retryBatch?.scored || 0),
+        retryImproved: Number(retryBatch?.improved || 0),
+        retryErrors: Number(retryBatch?.errors || 0),
         ...extra
     };
     writeJson(statePath, state);
@@ -155,7 +186,11 @@ function mirrorState(extra = {}) {
         perfect: Number(summary.perfect || 0),
         nextAction:
             state.status === 'running'
-                ? 'Continue the single Codex ToolSandbox worker from the official scenario registry.'
+                ? retryFailuresOnly
+                    ? 'Continue the single Codex ToolSandbox failure-remediation batch.'
+                    : primaryHoldout
+                        ? 'Continue one primary attempt for every previously unseen offline scenario.'
+                    : 'Continue the single Codex ToolSandbox worker from the official scenario registry.'
                 : state.status === 'provider_blocked'
                 ? 'Resume with the same run-id after Codex OAuth usage becomes available.'
                 : state.blockedEnvironment
@@ -197,7 +232,14 @@ child.on('error', (error) => {
 child.on('close', (code, signal) => {
     clearInterval(interval);
     const runnerState = readJson(runnerStatePath, {});
-    const status = runnerState.status || (code === 0 ? 'completed' : 'worker_exited');
+    const runnerStatus = runnerState.status || '';
+    const status = fs.existsSync(stopPath)
+        ? 'paused'
+        : code === 0
+            ? runnerStatus || 'completed'
+            : runnerStatus && runnerStatus !== 'running'
+                ? runnerStatus
+                : 'worker_exited';
     mirrorState({
         status,
         exitCode: code,

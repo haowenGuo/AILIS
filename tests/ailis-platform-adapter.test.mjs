@@ -54,6 +54,7 @@ test('AILIS platform adapter normalizes OS-specific path and shell behavior', ()
     assert.equal(windowsSpawn.backend, 'powershell-argv');
     assert.equal(windowsSpawn.args.at(-1).includes(multilinePowerShell), true);
     assert.match(windowsSpawn.args.at(-1), /OutputEncoding/);
+    assert.match(windows.getStatus().defaults.commandShell, /powershell\.exe$/i);
     assert.equal(windows.powershellCommand('Write-Output ok').command, windowsSpawn.command);
     assert.equal(windows.aclSetCommand('C:\\Work\\note.txt', ['/grant', 'User:(R)']).supported, true);
     assert.equal(windows.getStatus().capabilities.aclSet, true);

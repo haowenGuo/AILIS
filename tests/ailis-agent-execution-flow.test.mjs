@@ -15,15 +15,30 @@ const {
     buildToolObservationDigest,
     buildLosslessToolObservationDigest,
     buildAgentDecisionLowLatencyPayload,
+    buildExactAnswerRecoveryToolAffordanceNote,
+    canStartExactAnswerAuditRecovery,
     isExactAnswerExecutionMode,
     isAgentDecisionDeepThinkingMode,
     isDeepThinkingAgentDecisionModel,
     looksLikeSelfContainedExactAnswerQuestion,
     normalizeExactAnswerSubmission,
+    resolveExactAnswerAuditFinalizationIteration,
+    resolveAgentDirectToolChoice,
     resolveAgentDecisionSettings,
     resolveAgentDecisionTimeoutMs,
     resolveParallelToolCalls,
+    prioritizeExactAnswerRecoveryToolSpecs,
     sanitizeAgentToolCall,
+    selectExactAnswerAuditRecoveryGap,
+    detectNestedSelectorSelectionGap,
+    detectSelectorMetricEvidenceGap,
+    detectSelectorTerminalRelationEvidenceGap,
+    detectSelectorTerminalRelationAnswerMismatch,
+    detectVisualEnumerationEvidenceGap,
+    detectAnswerSpecificityEvidenceGap,
+    detectCompleteTitleEvidenceGap,
+    detectStructuredRelationRecoveryCallGap,
+    detectRecommendedRecoveryActionGap,
     validateExactAnswerSubmission,
     validateNativeDirectToolCall
 } = require('../electron/ailis-agent-runner.cjs');
@@ -64,6 +79,18 @@ test('Agent direct tool specs inject native final_answer for exact-answer mode b
         exactAnswerMode: false
     });
     assert.equal(ordinarySpecs.some((spec) => spec.name === 'final_answer'), false);
+
+    const recoverySpecs = buildAgentDirectToolSpecs(gateway, {
+        requestContext: {},
+        exactAnswerMode: true,
+        suppressFinalAnswer: true
+    });
+    assert.equal(recoverySpecs.some((spec) => spec.name === 'final_answer'), false);
+    assert.ok(recoverySpecs.some((spec) => spec.name === 'tool_search'));
+    assert.equal(resolveAgentDirectToolChoice({
+        directToolSpecs: recoverySpecs,
+        requireToolAction: true
+    }), 'required');
 });
 
 test('Agent direct tool specs expose registered tools consistently for artifact tasks', () => {
@@ -883,6 +910,37 @@ test('Research source evidence does not infer local paths from URL markup or pro
     assert.equal(artifact.payload.path, '');
 });
 
+test('Research source evidence does not infer a Windows path from escaped output text', () => {
+    const stepResult = attachAgentEvidenceArtifacts({
+        id: 'step-chess-analysis',
+        title: 'mcp__ailis_research__chess_position_analyze',
+        tool: 'mcp__ailis_research__chess_position_analyze',
+        args: {
+            fen: '3r2k1/pp3pp1/4b2p/7Q/3n4/PqBBR2P/5PP1/6K1 b - - 0 1'
+        },
+        iteration: 1,
+        response: {
+            ok: true,
+            status: 'completed',
+            result: {
+                content: [{
+                    type: 'text',
+                    text: [
+                        'Status: completed',
+                        'Output:\\nbest_move_san=Rd5',
+                        'board_echo:\\n   +------------------------+'
+                    ].join('\n')
+                }]
+            }
+        }
+    });
+
+    const artifact = stepResult.evidenceArtifacts[0];
+    assert.equal(artifact.type, 'ResearchSourceEvidence');
+    assert.equal(artifact.payload.sourceKind, 'observation');
+    assert.equal(artifact.payload.path, '');
+});
+
 test('Agent tool observations keep small artifact query compactRows lossless', () => {
     const rows = Array.from({ length: 20 }, (_, index) => ({
         rowNumber: index + 1,
@@ -1084,6 +1142,669 @@ test('Agent exact-answer audit flags unknown evidence refs when evidence exists'
     assert.deepEqual(degraded.errors, []);
     assert.ok(degraded.warnings.includes('evidence_refs_unknown'));
     assert.deepEqual(degraded.unknownRefs, ['artifact-missing']);
+});
+
+test('Agent exact-answer audit requests comparable metrics for geographic selectors without blocking submission', () => {
+    const message = 'Which two birthplace cities are farthest apart from the westernmost to the easternmost?';
+    const unsupported = detectSelectorMetricEvidenceGap({
+        message,
+        submission: {
+            answer: 'Honolulu, Quincy',
+            reason: 'The complete birthplace table contains both cities, so they are the extrema.'
+        }
+    });
+    assert.equal(unsupported.error, 'selector_metric_evidence_missing');
+    assert.match(unsupported.instruction, /best available answer instead of returning an empty answer/i);
+    assert.match(unsupported.instruction, /tool_search first and then call the discovered evidence tool/i);
+
+    const audited = validateExactAnswerSubmission({
+        message,
+        decision: {
+            exactAnswerSubmission: {
+                answer: 'Braintree, Honolulu',
+                confidence: 'high',
+                reason: 'Honolulu has longitude -157.857 and Braintree has longitude -71.005; John Adams place_of_birth resolves to Braintree.'
+            }
+        },
+        stepResults: []
+    });
+    assert.equal(audited.ok, true);
+    assert.equal(audited.selectorMetricGap, null);
+    assert.equal(audited.selectorTerminalRelationGap, null);
+    assert.ok(!audited.warnings.includes('selector_metric_evidence_missing'));
+});
+
+test('Agent exact-answer audit accepts shallow structured coordinate rows as comparable selector metrics', () => {
+    const audited = validateExactAnswerSubmission({
+        message: 'Which birthplace cities are westernmost and easternmost?',
+        decision: {
+            exactAnswerSubmission: {
+                answer: 'Braintree, Honolulu',
+                reason: 'The source-entity birthplace relations resolve the terminal cities.'
+            }
+        },
+        stepResults: [{
+            tool: 'mcp__ailis_research__wikidata_entity_lookup',
+            args: { queries: ['Honolulu', 'Braintree'], properties: ['coordinates'] },
+            response: {
+                ok: true,
+                result: {
+                    structuredContent: {
+                        property_rows: [{
+                            source_query: 'Honolulu',
+                            match_rank: 0,
+                            property: 'coordinates',
+                            latitude: 21.3047,
+                            longitude: -157.8572
+                        }, {
+                            source_query: 'Braintree',
+                            match_rank: 0,
+                            property: 'coordinates',
+                            latitude: 42.206,
+                            longitude: -71.005
+                        }]
+                    }
+                }
+            }
+        }]
+    });
+    assert.equal(audited.selectorMetricGap, null);
+    assert.ok(!audited.warnings.includes('selector_metric_evidence_missing'));
+});
+
+test('Agent exact-answer audit does not count one coordinate pair as two selector candidates', () => {
+    const gap = detectSelectorMetricEvidenceGap({
+        message: 'Which birthplace cities are westernmost and easternmost?',
+        submission: {
+            answer: 'Braintree, Honolulu',
+            reason: 'The source table contains both labels.'
+        },
+        stepResults: [{
+            tool: 'mcp__ailis_research__wikidata_entity_lookup',
+            response: {
+                ok: true,
+                result: {
+                    structuredContent: {
+                        property_rows: [{
+                            source_query: 'Honolulu',
+                            match_rank: 0,
+                            property: 'coordinates',
+                            latitude: 21.3047,
+                            longitude: -157.8572
+                        }]
+                    }
+                }
+            }
+        }]
+    });
+    assert.equal(gap.error, 'selector_metric_evidence_missing');
+    assert.equal(gap.comparableValues.length, 1);
+});
+
+test('Agent exact-answer audit separates geographic metrics from terminal relation verification', () => {
+    const message = 'Of the cities where presidents were born, which are westernmost and easternmost?';
+    const coordinateOnly = detectSelectorTerminalRelationEvidenceGap({
+        message,
+        submission: {
+            answer: 'Honolulu, Quincy',
+            reason: 'Honolulu is at longitude -157.857 and Quincy is at longitude -71.'
+        },
+        stepResults: [{
+            tool: 'mcp__ailis_research__wikidata_entity_lookup',
+            args: { properties: ['coordinates'] },
+            response: { ok: true }
+        }]
+    });
+    assert.equal(coordinateOnly.error, 'selector_terminal_relation_evidence_missing');
+    assert.equal(coordinateOnly.relationProperty, 'place_of_birth');
+    assert.match(coordinateOnly.instruction, /best available answer instead of returning an empty answer/i);
+
+    const relationVerified = detectSelectorTerminalRelationEvidenceGap({
+        message,
+        submission: {
+            answer: 'Braintree, Honolulu',
+            reason: 'Coordinates establish the extrema.'
+        },
+        stepResults: [{
+            tool: 'mcp__ailis_research__wikidata_entity_lookup',
+            args: { properties: ['coordinates', 'place_of_birth'] },
+            response: {
+                ok: true,
+                result: {
+                    structuredContent: {
+                        results: [{
+                            matches: [{
+                                properties: {
+                                    place_of_birth: [{ label: 'Braintree' }]
+                                }
+                            }]
+                        }]
+                    }
+                }
+            }
+        }]
+    });
+    assert.equal(relationVerified, null);
+});
+
+test('Agent exact-answer relation audit reads shallow property rows after deep MCP results are compacted', () => {
+    const gap = detectSelectorTerminalRelationEvidenceGap({
+        message: 'Of the cities where presidents were born, which are westernmost and easternmost?',
+        submission: {
+            answer: 'Honolulu, Quincy',
+            reason: 'Honolulu has longitude -157.857 and Quincy has longitude -71.002.'
+        },
+        stepResults: [{
+            tool: 'mcp__ailis_research__wikidata_entity_lookup',
+            args: { properties: ['place_of_birth'] },
+            response: {
+                ok: true,
+                result: {
+                    structuredContent: {
+                        property_rows: [
+                            {
+                                source_query: 'Barack Obama',
+                                source_entity: 'Barack Obama',
+                                match_rank: 0,
+                                property: 'place_of_birth',
+                                value_label: 'Kapiolani Medical Center for Women and Children',
+                                value_description: 'hospital in Honolulu, Hawaii'
+                            },
+                            {
+                                source_query: 'John Adams',
+                                source_entity: 'John Adams',
+                                match_rank: 0,
+                                property: 'place_of_birth',
+                                value_label: 'Braintree',
+                                value_description: 'city in Massachusetts'
+                            }
+                        ],
+                        results: [{
+                            query: 'John Adams',
+                            matches: '[deep result compacted]'
+                        }]
+                    }
+                }
+            }
+        }]
+    });
+    assert.equal(gap.error, 'selector_terminal_relation_answer_mismatch');
+    assert.deepEqual(gap.unmatchedLabels, ['Quincy']);
+    assert.ok(gap.relationCandidates.includes('Braintree'));
+});
+
+test('Agent exact-answer relation audit flags a submitted modern label contradicted by its own historical-label rationale', () => {
+    const gap = detectSelectorTerminalRelationEvidenceGap({
+        message: 'Which two presidential birthplace cities are westernmost and easternmost?',
+        submission: {
+            answer: 'Honolulu, Quincy',
+            reason: 'Honolulu is westernmost; Quincy, Massachusetts (the Adams birthplace, formerly Braintree) is easternmost.'
+        },
+        stepResults: []
+    });
+    assert.equal(gap.error, 'selector_terminal_period_label_conflict');
+    assert.equal(gap.periodLabelConflict, 'Quincy');
+    assert.match(gap.instruction, /rationale itself/i);
+    assert.match(gap.instruction, /self-contradiction/i);
+
+    const reverseGap = detectSelectorTerminalRelationEvidenceGap({
+        message: 'Which two presidential birthplace cities are westernmost and easternmost?',
+        submission: {
+            answer: 'Honolulu, Quincy',
+            reason: 'The presidents were born in the north precinct of Braintree, now Quincy, Massachusetts.'
+        },
+        stepResults: []
+    });
+    assert.equal(reverseGap.periodLabelConflict, 'Quincy');
+    assert.equal(reverseGap.error, 'selector_terminal_period_label_conflict');
+    assert.match(reverseGap.instruction, /tool_search first/i);
+});
+
+test('Agent exact-answer relation recovery diagnoses structured lookups that omit the relation field', () => {
+    const recoveryGap = {
+        error: 'selector_terminal_relation_evidence_missing',
+        relationProperty: 'place_of_birth'
+    };
+    const omitted = detectStructuredRelationRecoveryCallGap({
+        recoveryGap,
+        toolCalls: [{
+            tool: 'mcp__ailis_research__wikidata_entity_lookup',
+            args: {
+                queries: ['Quincy Massachusetts'],
+                properties: ['coordinates']
+            }
+        }]
+    });
+    assert.equal(omitted.error, 'structured_relation_property_omitted');
+    assert.match(omitted.instruction, /source entities, not the candidate answer locations/i);
+
+    assert.equal(detectStructuredRelationRecoveryCallGap({
+        recoveryGap,
+        toolCalls: [{
+            tool: 'mcp__ailis_research__wikidata_entity_lookup',
+            args: {
+                queries: ['John Adams', 'Barack Obama'],
+                properties: ['place_of_birth']
+            }
+        }]
+    }), null);
+});
+
+test('Agent exact-answer audit reserves bounded recovery and final submission rounds', () => {
+    assert.equal(resolveExactAnswerAuditFinalizationIteration({
+        currentFinalizationIteration: 8,
+        baseFinalizationIteration: 8,
+        auditIteration: 3,
+        recoveryToolCalls: 2
+    }), 8);
+    assert.equal(resolveExactAnswerAuditFinalizationIteration({
+        currentFinalizationIteration: 8,
+        baseFinalizationIteration: 8,
+        auditIteration: 7,
+        recoveryToolCalls: 2
+    }), 11);
+    assert.equal(resolveExactAnswerAuditFinalizationIteration({
+        currentFinalizationIteration: 11,
+        baseFinalizationIteration: 8,
+        auditIteration: 10,
+        recoveryToolCalls: 2
+    }), 14);
+    assert.equal(resolveExactAnswerAuditFinalizationIteration({
+        currentFinalizationIteration: 14,
+        baseFinalizationIteration: 8,
+        auditIteration: 14,
+        recoveryToolCalls: 2
+    }), 15);
+    assert.equal(resolveExactAnswerAuditFinalizationIteration({
+        currentFinalizationIteration: 14,
+        baseFinalizationIteration: 8,
+        auditIteration: 14,
+        recoveryToolCalls: 0
+    }), 15);
+    assert.equal(resolveExactAnswerAuditFinalizationIteration({
+        currentFinalizationIteration: 14,
+        baseFinalizationIteration: 8,
+        auditIteration: 14,
+        recoveryToolCalls: 0,
+        finalSubmissionReserve: 0
+    }), 14);
+});
+
+test('Agent exact-answer audit advances to the next unattempted recovery gap', () => {
+    const validation = {
+        selectorMetricGap: { error: 'selector_metric_evidence_missing' },
+        selectorTerminalRelationGap: { error: 'selector_terminal_relation_evidence_missing' }
+    };
+    assert.equal(
+        selectExactAnswerAuditRecoveryGap(validation, new Set()).error,
+        'selector_terminal_relation_evidence_missing'
+    );
+    assert.equal(
+        selectExactAnswerAuditRecoveryGap(
+            validation,
+            new Set(['selector_terminal_relation_evidence_missing'])
+        ).error,
+        'selector_metric_evidence_missing'
+    );
+    assert.equal(
+        selectExactAnswerAuditRecoveryGap(
+            validation,
+            new Set([
+                'selector_metric_evidence_missing',
+                'selector_terminal_relation_evidence_missing'
+            ])
+        ),
+        null
+    );
+});
+
+test('Agent exact-answer audit asks for one visual enumeration cross-check without suppressing the answer', () => {
+    const gap = detectVisualEnumerationEvidenceGap({
+        message: 'Using the provided image, list all fractions that use / as the fraction line in order.',
+        submission: {
+            answer: '6/8=3/4,4/60=1/15'
+        },
+        stepResults: [],
+        fileAttachments: [{
+            type: 'file',
+            path: 'C:\\tmp\\fractions.png',
+            name: 'fractions.png'
+        }]
+    });
+    assert.equal(gap.error, 'visual_enumeration_not_cross_checked');
+    assert.match(gap.instruction, /return the best available answer/i);
+    assert.match(gap.instruction, /top-left to bottom-right/i);
+});
+
+test('Agent exact-answer audit preserves a source-supported compound species name', () => {
+    const gap = detectAnswerSpecificityEvidenceGap({
+        message: 'What species of bird is featured?',
+        submission: { answer: 'penguin' },
+        stepResults: [{
+            tool: 'web_run',
+            response: {
+                ok: true,
+                result: {
+                    content: [{
+                        type: 'text',
+                        text: 'The segment starts with rockhopper penguins scaling a steep cliff.'
+                    }]
+                }
+            }
+        }]
+    });
+    assert.equal(gap.error, 'answer_entity_specificity_missing');
+    assert.deepEqual(gap.sourceCandidates, ['rockhopper penguin']);
+});
+
+test('Agent exact-answer audit verifies complete book titles against a full-title authority', () => {
+    const gap = detectCompleteTitleEvidenceGap({
+        message: 'What was the complete title of the book?',
+        submission: { answer: 'Five Hundred Things to Eat Before It’s Too Late' },
+        stepResults: [{
+            tool: 'web_run',
+            response: {
+                ok: true,
+                result: {
+                    content: [{ type: 'text', text: 'A restaurant blog uses the short title.' }]
+                }
+            }
+        }]
+    });
+    assert.equal(gap.error, 'complete_title_not_verified');
+    assert.match(gap.instruction, /subtitle/i);
+});
+
+test('Agent exact-answer audit recovers when a nested selector parent index is still incomplete', () => {
+    const gap = detectNestedSelectorSelectionGap({
+        message: 'Which article has "witnesses" in the most titles, and what changed in its first rule?',
+        submission: {
+            answer: 'proceedings',
+            reason: 'I followed Rule 601.'
+        },
+        stepResults: [{
+            tool: 'web_run',
+            response: {
+                ok: true,
+                result: {
+                    structuredContent: {
+                        selectionProtocol: {
+                            parent_kind: 'article',
+                            quoted_term: 'witnesses',
+                            boundary_complete: false,
+                            exact_title_match_counts: [
+                                {
+                                    group: 'ARTICLE VII',
+                                    count: 3,
+                                    matched_children: [
+                                        { id: 'Rule 701' },
+                                        { id: 'Rule 702' },
+                                        { id: 'Rule 706' }
+                                    ]
+                                },
+                                {
+                                    group: 'ARTICLE VI',
+                                    count: 2,
+                                    matched_children: [
+                                        { id: 'Rule 611' },
+                                        { id: 'Rule 615' }
+                                    ]
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        }]
+    });
+    assert.equal(gap.error, 'nested_selector_candidate_boundary_incomplete');
+    assert.match(gap.instruction, /parent-index or continuation/i);
+    assert.match(gap.instruction, /ARTICLE VII=3/);
+});
+
+test('Agent exact-answer audit recovers before the parent index has been opened', () => {
+    const gap = detectNestedSelectorSelectionGap({
+        message: 'Which article has "witnesses" in the most titles, and what changed in its first rule?',
+        submission: {
+            answer: 'civil',
+            reason: 'I opened Rule 601 directly.'
+        },
+        stepResults: [{
+            tool: 'web_run',
+            response: {
+                ok: true,
+                result: {
+                    structuredContent: {
+                        search: {
+                            selectionAudit: {
+                                parent_kind: 'article',
+                                quoted_term: 'witnesses',
+                                candidate_set_coverage_sufficient: false,
+                                candidates: [{
+                                    ref_id: 'turn0search0',
+                                    structured_anchor: 'ARTICLE VI',
+                                    visible_snippet_occurrences: 2
+                                }],
+                                parent_index_candidates: ['turn0search2']
+                            },
+                            suggestedNextCalls: [{
+                                tool: 'web_run',
+                                args: {
+                                    open: [{ ref_id: 'turn0search2' }]
+                                },
+                                reason: 'Open the nearest parent index before selecting a child.'
+                            }]
+                        }
+                    }
+                }
+            }
+        }]
+    });
+    assert.equal(gap.error, 'nested_selector_candidate_boundary_incomplete');
+    assert.match(gap.instruction, /parent-index/i);
+    assert.match(gap.instruction, /turn0search2/);
+    assert.deepEqual(gap.recommendedActions[0].args, {
+        open: [{ ref_id: 'turn0search2' }]
+    });
+});
+
+test('Agent exact-answer audit preserves recovery budget when discovery skips a recommended navigation action', () => {
+    const recoveryGap = {
+        error: 'nested_selector_candidate_boundary_incomplete',
+        recommendedActions: [{
+            tool: 'web_run',
+            args: {
+                open: [{ ref_id: 'turn0search2' }]
+            },
+            reason: 'Open the nearest parent index before selecting a child.'
+        }]
+    };
+    const skipped = detectRecommendedRecoveryActionGap({
+        recoveryGap,
+        toolCalls: [{
+            tool: 'tool_search',
+            args: { query: 'another connector' }
+        }]
+    });
+    assert.equal(skipped.error, 'recommended_recovery_navigation_skipped');
+    assert.match(skipped.instruction, /turn0search2/);
+    assert.equal(detectRecommendedRecoveryActionGap({
+        recoveryGap,
+        toolCalls: [{
+            tool: 'web_run',
+            args: {
+                open: [{ ref_id: 'turn0search2' }]
+            }
+        }]
+    }), null);
+});
+
+test('Agent exact-answer audit catches a selected child that conflicts with the completed winning group', () => {
+    const gap = detectNestedSelectorSelectionGap({
+        message: 'Which article has "witnesses" in the most titles, and what changed in its first rule?',
+        submission: {
+            answer: 'proceedings',
+            reason: 'The first rule is Rule 601 in Article VI.'
+        },
+        stepResults: [{
+            tool: 'web_run',
+            response: {
+                ok: true,
+                result: {
+                    structuredContent: {
+                        selection_protocol: {
+                            parent_kind: 'article',
+                            quoted_term: 'witnesses',
+                            boundary_complete: true,
+                            winning_group: 'ARTICLE VII',
+                            exact_title_match_counts: [
+                                {
+                                    group: 'ARTICLE VII',
+                                    count: 3,
+                                    matched_children: [
+                                        { id: 'Rule 701' },
+                                        { id: 'Rule 702' },
+                                        { id: 'Rule 706' }
+                                    ]
+                                },
+                                {
+                                    group: 'ARTICLE VI',
+                                    count: 2,
+                                    matched_children: [
+                                        { id: 'Rule 611' },
+                                        { id: 'Rule 615' }
+                                    ]
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        }]
+    });
+    assert.equal(gap.error, 'nested_selector_selected_group_mismatch');
+    assert.equal(gap.winningGroup, 'ARTICLE VII');
+    assert.ok(gap.conflictingAnchors.includes('Rule 601'));
+    assert.ok(gap.conflictingAnchors.includes('Article VI'));
+});
+
+test('Agent exact-answer relation audit catches submitted cities that disagree with primary person relations', () => {
+    const gap = detectSelectorTerminalRelationAnswerMismatch({
+        submission: { answer: 'Honolulu, Quincy' },
+        relationProperty: 'place_of_birth',
+        stepResults: [{
+            tool: 'mcp__research__wikidata_entity_lookup',
+            args: { properties: ['place_of_birth'] },
+            response: {
+                ok: true,
+                result: {
+                    structuredContent: {
+                        results: [{
+                            query: 'Barack Obama',
+                            matches: [{
+                                label: 'Barack Obama',
+                                properties: {
+                                    place_of_birth: [{
+                                        label: 'Kapiolani Medical Center for Women and Children',
+                                        description: 'hospital in Honolulu, Hawaii'
+                                    }]
+                                }
+                            }]
+                        }, {
+                            query: 'John Adams',
+                            matches: [{
+                                label: 'John Adams',
+                                properties: {
+                                    place_of_birth: [{
+                                        label: 'Braintree',
+                                        description: 'city in Massachusetts'
+                                    }]
+                                }
+                            }]
+                        }]
+                    }
+                }
+            }
+        }]
+    });
+    assert.equal(gap.error, 'selector_terminal_relation_answer_mismatch');
+    assert.deepEqual(gap.unmatchedLabels, ['Quincy']);
+    assert.ok(gap.relationCandidates.includes('Braintree'));
+});
+
+test('Agent exact-answer audit can extend only the ordinary tool-round boundary', () => {
+    assert.equal(canStartExactAnswerAuditRecovery({
+        iteration: 8,
+        finalizationIteration: 8,
+        safetyFinalizationReason: 'maximum_tool_rounds'
+    }), true);
+    assert.equal(canStartExactAnswerAuditRecovery({
+        iteration: 8,
+        finalizationIteration: 8,
+        safetyFinalizationReason: 'time_budget'
+    }), false);
+    assert.equal(canStartExactAnswerAuditRecovery({
+        iteration: 9,
+        finalizationIteration: 8
+    }), false);
+});
+
+test('Agent exact-answer recovery promotes schema-matched relation tools without forcing a route', () => {
+    const specs = [{
+        name: 'web_run',
+        description: 'Broad web search.',
+        parameters: { type: 'object', properties: {} }
+    }, {
+        name: 'mcp__research__wikidata_entity_lookup',
+        description: 'Structured entity facts and relations.',
+        parameters: {
+            type: 'object',
+            properties: {
+                queries: { type: 'array', items: { type: 'string' } },
+                properties: {
+                    type: 'array',
+                    description: 'Supports place_of_birth and coordinates.',
+                    items: { type: 'string' }
+                }
+            }
+        }
+    }];
+    const gap = {
+        error: 'selector_terminal_relation_evidence_missing',
+        relationProperty: 'place_of_birth'
+    };
+    const prioritized = prioritizeExactAnswerRecoveryToolSpecs(specs, gap);
+    assert.equal(prioritized[0].name, 'mcp__research__wikidata_entity_lookup');
+    assert.equal(prioritized[1].name, 'web_run');
+    const note = buildExactAnswerRecoveryToolAffordanceNote(prioritized, gap);
+    assert.match(note, /wikidata_entity_lookup/);
+    assert.match(note, /properties:\["place_of_birth"\]/);
+    assert.match(note, /broad web search is a fallback/i);
+
+    const discoveryNote = buildExactAnswerRecoveryToolAffordanceNote([
+        specs[0],
+        {
+            name: 'tool_search',
+            description: 'Discover deferred tools.',
+            parameters: { type: 'object', properties: { query: { type: 'string' } } }
+        }
+    ], gap);
+    assert.match(discoveryNote, /not visible yet/i);
+    assert.match(discoveryNote, /use tool_search now/i);
+    assert.match(discoveryNote, /then call the discovered tool/i);
+});
+
+test('Agent exact-answer audit accepts a plain final response as the answer candidate', () => {
+    const validation = validateExactAnswerSubmission({
+        decision: {
+            finalAnswer: 'Braintree, Honolulu',
+            publicReasoning: 'Plain final response after tool use.'
+        },
+        message: 'Give the city names only.'
+    });
+    assert.equal(validation.submission.answer, 'Braintree, Honolulu');
+    assert.equal(validation.submission.reason, 'Plain final response after tool use.');
+    assert.ok(!validation.warnings.includes('answer_missing'));
 });
 
 test('Agent exact-answer mode exposes source_question evidence for self-contained reasoning tasks', () => {

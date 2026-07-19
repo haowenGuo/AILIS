@@ -148,6 +148,13 @@ test('AILIS tool contracts expose versioned schemas and validate common failures
         search_context_size: 'medium'
     });
     assert.equal(validWebSearch.ok, true);
+    const validWebScreenshot = validateToolContract('web_run', {
+        screenshot: [{
+            ref_id: 'turn0view0',
+            detail: 'original'
+        }]
+    });
+    assert.equal(validWebScreenshot.ok, true);
 
     const validGitHubPages = validateToolContract('github_pages', {
         action: 'diagnose_publish',
@@ -203,7 +210,7 @@ test('AILIS tool contracts expose versioned schemas and validate common failures
     assert.equal(validWebRun.ok, true);
     assert.equal(contracts.find((contract) => contract.id === 'web_run').schema.minProperties, 1);
     const webRunContract = contracts.find((contract) => contract.id === 'web_run');
-    assert.equal(webRunContract.schema.properties.search_query.items.properties.q.maxLength, 512);
+    assert.equal(webRunContract.schema.properties.search_query.items.properties.q.maxLength, 240);
     assert.equal(webRunContract.schema.properties.search_query.items.properties.domains.maxItems, 8);
     const emptyWebRun = validateToolContract('web_run', {});
     assert.equal(emptyWebRun.ok, false);

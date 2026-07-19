@@ -439,12 +439,90 @@ function formatWebSearchStatus(webSearchOutput = {}) {
     return '';
 }
 
-function formatWebSuggestedNextCalls(webSearchOutput = {}) {
-    const candidates = Array.isArray(webSearchOutput.search?.suggestedNextCalls)
-        ? webSearchOutput.search.suggestedNextCalls
-        : Array.isArray(webSearchOutput.suggestedNextCalls)
-        ? webSearchOutput.suggestedNextCalls
-        : [];
+function formatWebSearchSelectionAudit(webSearchOutput = {}) {
+    const audit = firstObject(
+        webSearchOutput.search?.selectionAudit,
+        webSearchOutput.search?.selection_audit,
+        webSearchOutput.selectionAudit,
+        webSearchOutput.selection_audit
+    );
+    if (!normalizeText(audit.status)) {
+        return '';
+    }
+    const lines = [
+        'Selection protocol:',
+        `status=${normalizeText(audit.status)}`,
+        audit.selector ? `requested_selector=${audit.selector}` : '',
+        audit.parent_kind ? `parent_candidate_type=${audit.parent_kind}` : '',
+        audit.quoted_term ? `quoted_term="${audit.quoted_term}"` : '',
+        audit.lexical_match ? `lexical_match=${audit.lexical_match}` : '',
+        'Search ranking is not candidate-selection evidence.'
+    ].filter(Boolean);
+    const candidates = Array.isArray(audit.candidates) ? audit.candidates : [];
+    if (candidates.length) {
+        lines.push('Visible diagnostic child-title counts:');
+        candidates.slice(0, 8).forEach((candidate) => {
+            const refId = normalizeText(candidate.ref_id || candidate.refId || candidate.id);
+            const count = Number(candidate.visible_snippet_occurrences);
+            lines.push(`- [${refId}] ${Number.isFinite(count) ? count : 0} exact matching title unit(s)`);
+        });
+    }
+    if (audit.candidate_set_coverage_sufficient === false) {
+        lines.push('Candidate-set coverage is insufficient; do not select a child yet.');
+        const parentRefs = normalizeStringList(
+            audit.parent_index_candidates || audit.parentIndexCandidates
+        );
+        if (parentRefs.length) {
+            lines.push(`Open the nearest parent index first: [${parentRefs[0]}].`);
+        } else {
+            lines.push('Run a fresh concise parent-index query before selecting a child.');
+        }
+    } else {
+        lines.push('Verify unique matching titles on the leading parent candidates before selecting a child.');
+    }
+    if (normalizeText(audit.caveat)) {
+        lines.push(`Caveat: ${normalizeText(audit.caveat)}`);
+    }
+    return lines.join('\n');
+}
+
+function suggestedCallToolName(tool = '', sourceToolName = '') {
+    const normalizedTool = normalizeText(tool);
+    const nativeTools = new Set([
+        'web_run',
+        'tool_search',
+        'read',
+        'write',
+        'exec',
+        'apply_patch',
+        'update_plan',
+        'request_permissions',
+        'final_answer'
+    ]);
+    if (!normalizedTool || normalizedTool.includes('__') || nativeTools.has(normalizedTool)) {
+        return normalizedTool;
+    }
+    const normalizedSource = normalizeText(sourceToolName);
+    if (normalizedSource === 'web_run') {
+        return normalizedTool === 'web_run'
+            ? normalizedTool
+            : `mcp__ailis_research__${normalizedTool}`;
+    }
+    const mcpSource = normalizedSource.match(/^mcp__(.+?)__.+$/);
+    return mcpSource
+        ? `mcp__${mcpSource[1]}__${normalizedTool}`
+        : normalizedTool;
+}
+
+function formatWebSuggestedNextCalls(webSearchOutput = {}, sourceToolName = '') {
+    const candidates = [
+        webSearchOutput.search?.suggestedNextCalls,
+        webSearchOutput.search?.suggested_next_calls,
+        webSearchOutput.suggestedNextCalls,
+        webSearchOutput.suggested_next_calls,
+        webSearchOutput.observationContract?.next_actions,
+        webSearchOutput.observation_contract?.next_actions
+    ].find(Array.isArray) || [];
     const calls = candidates.filter((call) => (
         call &&
         typeof call === 'object' &&
@@ -458,7 +536,7 @@ function formatWebSuggestedNextCalls(webSearchOutput = {}) {
     }
     const lines = ['Suggested next calls (tool-provided options; the model decides whether to use them):'];
     calls.forEach((call) => {
-        lines.push(`${normalizeText(call.tool)} ${safeJsonStringify(call.args, '{}')}`);
+        lines.push(`${suggestedCallToolName(call.tool, sourceToolName)} ${safeJsonStringify(call.args, '{}')}`);
         if (normalizeText(call.reason)) {
             lines.push(`Reason: ${normalizeText(call.reason)}`);
         }
@@ -546,8 +624,9 @@ function buildWebSearchFunctionOutput(toolOutput = {}, webSearchOutput = {}) {
             toolOutput.durationMs != null ? `duration_ms=${toolOutput.durationMs}` : ''
         ].filter(Boolean).join('\n')),
         ContentItem.inputText(formatWebSearchStatus(webSearchOutput)),
+        ContentItem.inputText(formatWebSearchSelectionAudit(webSearchOutput)),
         ContentItem.inputText(formatWebSearchCandidates(webSearchOutput, toolOutput.toolName)),
-        ContentItem.inputText(formatWebSuggestedNextCalls(webSearchOutput)),
+        ContentItem.inputText(formatWebSuggestedNextCalls(webSearchOutput, toolOutput.toolName)),
         ContentItem.inputText(formatWebSearchSources(webSearchOutput, toolOutput.toolName)),
         ContentItem.inputText(formatWebSearchDiagnostics(webSearchOutput))
     ].filter(Boolean);
@@ -674,6 +753,76 @@ function formatSourceViewportLines(sourceWindow = {}) {
     ].filter((line, index) => index === 7 || normalizeText(line)).join('\n');
 }
 
+function formatExpandedLongSourceLines(sourceWindow = {}) {
+    const lines = Array.isArray(sourceWindow.lines) ? sourceWindow.lines : [];
+    const expanded = lines
+        .map((line) => ({
+            lineno: Number(line.lineno || line.lineNumber || line.line_number || 0),
+            text: normalizeText(line.text)
+        }))
+        .filter((line) => line.text.length >= 500)
+        .slice(0, 4);
+    if (!expanded.length) {
+        return '';
+    }
+    return [
+        'Expanded long source lines (kept intact so relationship context is not split by viewport compaction):',
+        ...expanded.map((line) => `L${line.lineno || '?'}: ${line.text}`)
+    ].join('\n');
+}
+
+function compactTableCell(value = '') {
+    return normalizeText(value)
+        .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+        .replace(/\s+/g, ' ')
+        .slice(0, 240);
+}
+
+function formatStructuredTableProjections(details = {}) {
+    const tables = Array.isArray(details.structuredTables)
+        ? details.structuredTables
+        : Array.isArray(details.structured_tables)
+        ? details.structured_tables
+        : [];
+    const projections = tables
+        .map((table) => table?.projection)
+        .filter((projection) => projection?.queryRelevant === true || projection?.query_relevant === true)
+        .slice(0, 2);
+    if (!projections.length) {
+        return '';
+    }
+    const lines = [
+        'Structured table projection (query-selected columns; source row order preserved):'
+    ];
+    let visibleChars = lines[0].length;
+    for (const projection of projections) {
+        const columns = Array.isArray(projection.columns)
+            ? projection.columns.map(compactTableCell)
+            : [];
+        const metadata = [
+            `columns=${columns.join(' | ')}`,
+            `rows=${Number(projection.rowCount || projection.row_count || 0)}`,
+            `rows_complete=${(projection.rowsComplete ?? projection.rows_complete) === true ? 'true' : 'false'}`
+        ].join('; ');
+        lines.push(metadata);
+        visibleChars += metadata.length + 1;
+        const projectionRows = Array.isArray(projection.rows) ? projection.rows : [];
+        for (const row of projectionRows.filter(Array.isArray)) {
+            const rendered = row.map(compactTableCell).join(' | ');
+            if (visibleChars + rendered.length + 1 > 5200) {
+                lines.push('[additional structured rows retained in the tool artifact]');
+                return lines.join('\n');
+            }
+            lines.push(rendered);
+            visibleChars += rendered.length + 1;
+        }
+        if (projectionRows.some((row) => !Array.isArray(row))) {
+            lines.push('[additional structured rows retained in the tool artifact]');
+        }
+    }
+    return lines.join('\n');
+}
+
 function formatSourceViewportMatches(details = {}) {
     const matches = Array.isArray(details.matches) ? details.matches : [];
     if (!matches.length) {
@@ -686,6 +835,30 @@ function formatSourceViewportMatches(details = {}) {
         const lineno = Number(match.lineno || match.lineNumber || match.line_number || 0) || '?';
         lines.push(`L${lineno}: ${match.text || ''}`);
     });
+    return lines.join('\n');
+}
+
+function formatSourceSelectionProtocol(details = {}) {
+    const protocol = firstObject(details.selectionProtocol, details.selection_protocol);
+    if (!normalizeText(protocol.status)) {
+        return '';
+    }
+    const lines = [
+        'Selection dependency:',
+        `status=${normalizeText(protocol.status)}`,
+        protocol.parent_kind ? `parent_candidate_type=${protocol.parent_kind}` : '',
+        protocol.quoted_term ? `quoted_term="${protocol.quoted_term}"` : '',
+        `candidate_boundary_complete=${protocol.boundary_complete === true ? 'true' : 'false'}`
+    ].filter(Boolean);
+    const ranges = Array.isArray(protocol.covered_ranges) ? protocol.covered_ranges : [];
+    if (ranges.length) {
+        lines.push(`covered_ranges=${ranges.map((range) => `L${range[0]}-L${range[1]}`).join(', ')}`);
+    }
+    if (protocol.boundary_complete !== true) {
+        lines.push('Continue the parent index; do not select or open a child yet.');
+    } else {
+        lines.push('The parent-index boundary is covered. Apply the requested comparison before opening the selected child.');
+    }
     return lines.join('\n');
 }
 
@@ -704,7 +877,11 @@ function buildSourceViewportFunctionOutput(toolOutput = {}, sourceViewport = {})
             toolOutput.durationMs != null ? `duration_ms=${toolOutput.durationMs}` : ''
         ].filter(Boolean).join('\n')),
         ContentItem.inputText(formatSourceViewportMatches(details)),
+        ContentItem.inputText(formatSourceSelectionProtocol(details)),
+        ContentItem.inputText(formatWebSuggestedNextCalls(details, toolOutput.toolName)),
         ContentItem.inputText(formatSourceViewportLinks(toolOutput, details)),
+        ContentItem.inputText(formatStructuredTableProjections(details)),
+        ContentItem.inputText(formatExpandedLongSourceLines(sourceWindow)),
         ContentItem.inputText(formatSourceViewportLines(sourceWindow))
     ].filter(Boolean);
     return FunctionCallOutputPayload.fromContentItems(contentItems, {
@@ -779,6 +956,26 @@ function toolOutputToResponseItems(toolOutput = {}, options = {}) {
         'Output:',
         summarizeForModel(toolOutput.outputText || '', options.toolOutputChars || DEFAULT_TOOL_OUTPUT_CHARS)
     ].filter(Boolean).join('\n');
+    const modelImage = toolOutput.details?.modelImage || toolOutput.details?.model_image || null;
+    const modelImageUrl = normalizeText(
+        modelImage?.image_url ||
+        modelImage?.imageUrl ||
+        modelImage?.url ||
+        modelImage?.path
+    );
+    const outputPayload = modelImageUrl
+        ? FunctionCallOutputPayload.fromContentItems([
+              ContentItem.inputText(output),
+              ContentItem.inputImage({
+                  image_url: modelImageUrl,
+                  detail: normalizeText(modelImage?.detail) || 'original'
+              })
+          ], {
+              success: toolOutput.ok === true ? true : toolOutput.ok === false ? false : null
+          })
+        : FunctionCallOutputPayload.normalize(output, {
+              success: toolOutput.ok === true ? true : toolOutput.ok === false ? false : null
+          });
     return [
         ResponseItem.functionCall({
             name: toolName,
@@ -788,9 +985,7 @@ function toolOutputToResponseItems(toolOutput = {}, options = {}) {
         }),
         ResponseItem.functionCallOutput({
             call_id: callId,
-            output: FunctionCallOutputPayload.normalize(output, {
-                success: toolOutput.ok === true ? true : toolOutput.ok === false ? false : null
-            })
+            output: outputPayload
         })
     ];
 }

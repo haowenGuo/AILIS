@@ -107,6 +107,65 @@ test('desktop-real visible scorer still rejects materially different titles', ()
     assert.equal(score.ok, false);
 });
 
+test('desktop-real visible scorer treats Saint and St. as the same city name', () => {
+    const score = scoreVisibleAnswer({
+        response: {
+            ok: true,
+            status: 'completed',
+            finalAnswer: 'St. Petersburg',
+            displayText: 'St. Petersburg'
+        },
+        gold: 'Saint Petersburg',
+        question: 'Where were the specimens deposited? Just give me the city name.'
+    });
+
+    assert.equal(score.ok, true);
+    assert.equal(score.status, 'visible_answer_match');
+});
+
+test('desktop-real visible scorer preserves duplicate multiplicity in ordered lists', () => {
+    const gold = '3/4,30/5,30/5,1/3';
+    const question = 'Return every fraction in the order in which it appears.';
+
+    const missingDuplicate = scoreVisibleAnswer({
+        response: {
+            ok: true,
+            status: 'completed',
+            finalAnswer: '3/4,30/5,1/3',
+            displayText: '3/4,30/5,1/3'
+        },
+        gold,
+        question
+    });
+    assert.equal(missingDuplicate.ok, false);
+
+    const complete = scoreVisibleAnswer({
+        response: {
+            ok: true,
+            status: 'completed',
+            finalAnswer: '3/4,30/5,30/5,1/3',
+            displayText: '3/4,30/5,30/5,1/3'
+        },
+        gold,
+        question
+    });
+    assert.equal(complete.ok, true);
+});
+
+test('desktop-real visible scorer rejects reordered parts for order-sensitive lists', () => {
+    const score = scoreVisibleAnswer({
+        response: {
+            ok: true,
+            status: 'completed',
+            displayText: 'Observed values: 1/3,30/5,3/4.'
+        },
+        gold: '3/4,30/5,1/3',
+        question: 'Return every fraction in the order in which it appears.'
+    });
+
+    assert.equal(score.ok, false);
+});
+
 test('desktop-real event summary does not double count token usage mirrors', () => {
     const events = [
         {

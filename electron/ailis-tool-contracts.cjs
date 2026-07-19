@@ -746,10 +746,10 @@ const TOOL_CONTRACTS = Object.freeze({
             properties: {
                 command: stringSchema({
                     minLength: 1,
-                    description: 'Command line to run in the current runtime_environment shell. Use for existing scripts, tests, builds, diagnostics, and short one-shot commands.'
+                    description: 'Command line to run in runtime_environment.command_shell. Use for existing scripts, tests, builds, diagnostics, and short one-shot commands. On Windows, shell strings run as PowerShell: never use POSIX heredocs such as <<EOF; write a temporary script and execute it, or use a short -c command.'
                 }),
                 args: arraySchema(stringSchema(), {
-                    description: 'Optional argv list for direct-spawn style execution when supported; prefer args for complex paths or parameters to reduce shell quoting issues.'
+                    description: 'Optional argv list appended to command for direct-spawn execution. Use only when command itself is an executable name/path. Do not put powershell, pwsh, cmd, bash, or their -Command/-c wrapper flags here when command already contains the script; omit args and let runtime_environment.command_shell execute the script.'
                 }),
                 workdir: stringSchema({
                     description: 'Working directory for the command. Use a workspace path when reading or creating follow-up artifacts.'
@@ -959,7 +959,11 @@ const TOOL_CONTRACTS = Object.freeze({
                 search_query: arraySchema(makeObjectSchema({
                     required: ['q'],
                     properties: {
-                        q: stringSchema({ minLength: 1, maxLength: 512, description: 'Search query.' }),
+                        q: stringSchema({
+                            minLength: 1,
+                            maxLength: 240,
+                            description: 'One concise discovery query. Keep only verified discriminative entities and constraints; never concatenate previous queries or inject an unverified intermediate answer/entity inferred from memory.'
+                        }),
                         recency: integerSchema({ minimum: 1, maximum: 3650, description: 'Optional recent-days filter. Omit unless the user explicitly asks for recent results.' }),
                         domains: arraySchema(stringSchema({ minLength: 1 }), { maxItems: 8, description: 'Optional domain allowlist. Omit for broad discovery unless a domain restriction is specifically needed.' })
                     },
@@ -989,6 +993,37 @@ const TOOL_CONTRACTS = Object.freeze({
                     },
                     additionalProperties: false
                 }), { minItems: 1, maxItems: 1, description: 'Find one text pattern in one page.' }),
+                screenshot: arraySchema(makeObjectSchema({
+                    required: ['ref_id'],
+                    properties: {
+                        ref_id: stringSchema({ minLength: 1, description: 'Reference id or public HTTP(S) URL to capture as rendered pixels.' }),
+                        detail: stringSchema({ enum: ['low', 'high', 'original'], description: 'Image detail supplied to the main model. Defaults to original.' }),
+                        waitFor: stringSchema({ description: 'Optional browser wait condition before capture.' }),
+                        delayMs: integerSchema({ minimum: 0, maximum: 30000, description: 'Optional delay before capture.' })
+                    },
+                    additionalProperties: false
+                }), { minItems: 1, maxItems: 1, description: 'Capture one browser-rendered screenshot and return it to the main model as visual tool evidence.' }),
+                archive: arraySchema(makeObjectSchema({
+                    required: ['url'],
+                    properties: {
+                        url: stringSchema({ minLength: 1, description: 'Original public HTTP(S) URL or stable URL prefix.' }),
+                        mode: stringSchema({ enum: ['captures', 'search', 'open'], description: 'search discovers and opens a readable snapshot in one call; captures lists candidates; open reads a known timestamp.' }),
+                        provider: stringSchema({ enum: ['internet_archive', 'arquivo'], description: 'Archive provider. Required for mode=open.' }),
+                        providers: arraySchema(stringSchema({ enum: ['internet_archive', 'arquivo'] }), { maxItems: 2, description: 'Optional archive backends for capture discovery.' }),
+                        timestamp: stringSchema({ pattern: '^[0-9]{8,14}$', description: 'Capture timestamp returned by mode=captures. Required for mode=open.' }),
+                        matchType: stringSchema({ enum: ['exact', 'prefix'], description: 'Use prefix to discover archived dynamic/query URLs.' }),
+                        contains: stringSchema({ description: 'Terms used to rank archived original URLs, such as an identifier, filter name, year, or classification.' }),
+                        query: stringSchema({ description: 'Evidence phrase; in search/captures it also opens the first readable snapshot, and in open mode it focuses the source viewport.' }),
+                        fromYear: integerSchema({ minimum: 1996, maximum: 9999, description: 'Optional archive crawl-year lower bound, not publication/content year.' }),
+                        toYear: integerSchema({ minimum: 1996, maximum: 9999, description: 'Optional archive crawl-year upper bound, not publication/content year.' }),
+                        maxResults: integerSchema({ minimum: 1, maximum: 50, description: 'Maximum ranked capture URLs returned.' }),
+                        scanLimit: integerSchema({ minimum: 1, maximum: 10000, description: 'Maximum CDX rows scanned before ranking.' }),
+                        lineno: integerSchema({ minimum: 1, description: 'Optional source line number for mode=open.' }),
+                        maxLines: integerSchema({ minimum: 1, maximum: 300, description: 'Optional source viewport line limit for mode=open.' }),
+                        timeoutMs: integerSchema({ minimum: 3000, maximum: 300000, description: 'Per-backend archive request timeout, not the total tool-call deadline. Search mode may issue several requests; omit unless an individual backend probe needs a custom limit.' })
+                    },
+                    additionalProperties: false
+                }), { minItems: 1, maxItems: 1, description: 'Discover or open a historical public-web snapshot.' }),
                 response_length: stringSchema({
                     enum: ['short', 'medium', 'long'],
                     description: 'Set the length of the response to be returned.'
@@ -999,10 +1034,11 @@ const TOOL_CONTRACTS = Object.freeze({
             minProperties: 1
         },
         customValidate(args = {}) {
-            const operationKeys = ['search_query', 'open', 'click', 'find'];
+            const operationKeys = ['search_query', 'open', 'click', 'find', 'screenshot', 'archive'];
             const present = operationKeys.filter((key) => Array.isArray(args[key]) && args[key].length > 0);
             if (present.length !== 1) {
-                return ['web_run requires exactly one non-empty operation: search_query, open, click, or find'];
+                const received = present.length ? present.join(', ') : 'none';
+                return [`web_run received ${received}; send exactly one non-empty operation per call: search_query, open, click, find, screenshot, or archive. Preserve the other operation arguments for separate follow-up calls.`];
             }
             if (present[0] === 'search_query' && !args.search_query.some((entry) => normalizeString(entry?.q))) {
                 return ['web_run search_query requires at least one non-empty q'];
@@ -1024,8 +1060,8 @@ const TOOL_CONTRACTS = Object.freeze({
             properties: {
                 query: stringSchema({
                     minLength: 1,
-                    maxLength: 512,
-                    description: 'Required public web search query.'
+                    maxLength: 240,
+                    description: 'Required concise public web search query. Keep only discriminative entities and constraints; never concatenate previous queries.'
                 }),
                 maxResults: numberSchema({
                     minimum: 1,
@@ -1302,7 +1338,7 @@ const TOOL_CONTRACTS = Object.freeze({
             config: objectSchema(),
             servers: objectSchema(),
             persist: booleanSchema(),
-            timeoutMs: numberSchema({ minimum: 1000, maximum: 180000 })
+            timeoutMs: numberSchema({ minimum: 1000, maximum: 15 * 60 * 1000 })
         }),
         customValidate(args = {}) {
             const action = normalizeAction(args.action || args.operation || args.intent, 'list_servers');

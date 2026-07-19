@@ -43,8 +43,11 @@ const {
     buildModelInputContextManager,
     functionCall,
     functionCallOutput,
+    recordModelImageAttachmentsToContextManager,
     recordToolOutputToContextManager,
+    responseItemOutputImages,
     restoreModelInputContextManagerFromCheckpoint,
+    responseMessage,
     responseItemsToChatMessages
 } = require('./ailis-model-input-builder.cjs');
 const {
@@ -99,7 +102,7 @@ const ARTIFACT_OBSERVATION_ROW_WINDOW_TEXT_CHARS = 8000;
 const MAX_MCP_TOOL_DESCRIPTION_CHARS = 900;
 const DEFAULT_AGENT_LOOP_STEPS = 30;
 const MAX_AGENT_LOOP_STEPS = 30;
-const TASK_AGENT_MAX_MODEL_ROUNDS = 7;
+const TASK_AGENT_MAX_MODEL_ROUNDS = 9;
 const TASK_AGENT_FINALIZATION_CONTEXT_CHARS = 18000;
 const PERSONA_SUBAGENT_FINALIZATION_CONTEXT_CHARS = 24000;
 const DEFAULT_PENDING_PLAN_TTL_MS = 30 * 60 * 1000;
@@ -775,6 +778,25 @@ function getAttachedFilesPromptObject(fileAttachments = []) {
         modifiedAt: attachment.modifiedAt,
         note: 'metadata_only; use computer tool action=read/stat/read_binary/tree to inspect content'
     }));
+}
+
+const DIRECT_MODEL_IMAGE_EXTENSIONS = new Set([
+    '.png', '.jpg', '.jpeg', '.webp', '.gif'
+]);
+
+function buildDirectModelImageAttachments(fileAttachments = [], settings = {}) {
+    if (normalizeText(settings.provider).toLowerCase() !== 'codex-model-bridge') {
+        return [];
+    }
+    return normalizeFileAttachments(fileAttachments)
+        .filter((attachment) => DIRECT_MODEL_IMAGE_EXTENSIONS.has(
+            normalizeText(attachment.extension, path.extname(attachment.path)).toLowerCase()
+        ))
+        .slice(0, 8)
+        .map((attachment) => ({
+            image_url: attachment.path,
+            detail: 'original'
+        }));
 }
 
 function normalizePublicReasoningText(value, fallback = '') {
@@ -1495,6 +1517,9 @@ function collectAgentUnresolvedFields(stepResults = [], latestDecision = null) {
     }
     push(latestDecision?.missingFields || latestDecision?.missing_fields);
     push(latestDecision?.blockedReason);
+    if (latestDecision?.ok === false) {
+        push(latestDecision?.error);
+    }
     return values.slice(-24);
 }
 
@@ -2901,6 +2926,7 @@ function buildToolContext(requestContext = {}, fallbackWorkspace, sessionId) {
 function inferRuntimeShellDialect(platformStatus = {}) {
     const family = normalizeText(platformStatus.family || platformStatus.id || platformStatus.platform).toLowerCase();
     const shell = normalizeText(
+        platformStatus.defaults?.commandShell ||
         platformStatus.defaults?.shell ||
         platformStatus.capabilityMatrix?.shell?.backend ||
         platformStatus.defaultShell
@@ -2965,7 +2991,7 @@ function buildRuntimeCommandGuidance(environment = {}) {
     return 'Inspect runtime_environment and tool schema before generating OS-specific commands. Do not assume Linux.';
 }
 
-function buildRuntimeEnvironmentPromptObject(platformAdapter = null) {
+function buildRuntimeEnvironmentPromptObject(platformAdapter = null, clockOverride = null) {
     const platformStatus = platformAdapter?.getStatus?.() || {};
     const family = normalizeText(platformStatus.family || platformStatus.id || platformStatus.platform, 'unknown');
     const now = new Date();
@@ -3020,6 +3046,12 @@ function buildRuntimeEnvironmentPromptObject(platformAdapter = null) {
             platformStatus.capabilityMatrix?.shell?.backend ||
             ''
         ),
+        command_shell: normalizeText(
+            platformStatus.defaults?.commandShell ||
+            platformStatus.defaults?.shell ||
+            platformStatus.capabilityMatrix?.shell?.backend ||
+            ''
+        ),
         shell_dialect: inferRuntimeShellDialect(platformStatus),
         path_style: inferRuntimePathStyle(platformStatus),
         capabilities: {
@@ -3031,9 +3063,20 @@ function buildRuntimeEnvironmentPromptObject(platformAdapter = null) {
             gui_input: platformStatus.capabilities?.guiInput || ''
         }
     };
-    return {
+    const override = clockOverride && typeof clockOverride === 'object'
+        ? Object.fromEntries(
+              ['source', 'current_date', 'current_time', 'current_datetime', 'timezone', 'utc_offset']
+                  .map((key) => [key, normalizeText(clockOverride[key])])
+                  .filter(([, value]) => value)
+          )
+        : {};
+    const effectiveEnvironment = {
         ...environment,
-        command_guidance: buildRuntimeCommandGuidance(environment)
+        ...override
+    };
+    return {
+        ...effectiveEnvironment,
+        command_guidance: buildRuntimeCommandGuidance(effectiveEnvironment)
     };
 }
 
@@ -3135,6 +3178,127 @@ function isPersonaOrchestratorRole(role = '') {
 
 function isTaskAgentRole(role = '') {
     return normalizeText(role).toLowerCase() === 'task_agent';
+}
+
+function isTaskExecutionRequired(request = {}, requestContext = {}) {
+    const executionProfile = requestContext.executionProfile || request.executionProfile || {};
+    return (
+        request.requireTaskExecution === true ||
+        request.require_task_execution === true ||
+        requestContext.requireTaskExecution === true ||
+        requestContext.require_task_execution === true ||
+        executionProfile.requireTaskExecution === true ||
+        executionProfile.require_task_execution === true
+    );
+}
+
+function isExecutionEvidenceRequired(request = {}, requestContext = {}) {
+    const executionProfile = requestContext.executionProfile || request.executionProfile || {};
+    return (
+        request.requireExecutionEvidence === true ||
+        request.require_execution_evidence === true ||
+        requestContext.requireExecutionEvidence === true ||
+        requestContext.require_execution_evidence === true ||
+        executionProfile.requireExecutionEvidence === true ||
+        executionProfile.require_execution_evidence === true
+    );
+}
+
+function resolveAgentDirectToolChoice({
+    agentRuntimeRole = '',
+    request = {},
+    requestContext = {},
+    directToolSpecs = [],
+    stepResults = [],
+    safetyFinalizationReason = '',
+    requireToolAction = false
+} = {}) {
+    if (safetyFinalizationReason) {
+        return 'none';
+    }
+    const handoffAvailable = (Array.isArray(directToolSpecs) ? directToolSpecs : [])
+        .some((spec) => canonicalDirectToolId(spec?.name || spec?.function?.name) === PERSONA_HANDOFF_TOOL_ID);
+    const alreadyHandedOff = (Array.isArray(stepResults) ? stepResults : [])
+        .some((stepResult) => canonicalDirectToolId(stepResult?.tool) === PERSONA_HANDOFF_TOOL_ID);
+    if (
+        isPersonaOrchestratorRole(agentRuntimeRole) &&
+        isTaskExecutionRequired(request, requestContext) &&
+        handoffAvailable &&
+        !alreadyHandedOff
+    ) {
+        return { name: PERSONA_HANDOFF_TOOL_ID, required: true };
+    }
+    if (
+        requireToolAction &&
+        (Array.isArray(directToolSpecs) ? directToolSpecs : [])
+            .some((spec) => canonicalDirectToolId(spec?.name || spec?.function?.name) !== FINAL_ANSWER_TOOL_NAME)
+    ) {
+        return 'required';
+    }
+    return 'auto';
+}
+
+function exactAnswerRecoveryToolMatchScore(spec = {}, recoveryGap = null) {
+    if (!recoveryGap?.error) return 0;
+    const toolId = canonicalDirectToolId(spec?.name || spec?.function?.name);
+    if (!toolId || toolId === FINAL_ANSWER_TOOL_NAME || toolId === 'tool_search') return 0;
+    const searchable = JSON.stringify(spec).toLowerCase().replace(/[\s-]+/g, '_');
+    const relationProperty = normalizeText(recoveryGap.relationProperty)
+        .toLowerCase()
+        .replace(/[\s-]+/g, '_');
+    if (relationProperty) {
+        let score = 0;
+        if (searchable.includes(relationProperty)) score += 6;
+        if (/(?:wikidata|knowledge_graph|entity_lookup|entity.*lookup)/i.test(toolId)) score += 3;
+        if (/(?:relation|linked.*entity|structured.*fact)/i.test(searchable)) score += 1;
+        return score;
+    }
+    if (recoveryGap.error === 'selector_metric_evidence_missing') {
+        let score = 0;
+        if (/(?:coordinates|longitude|latitude|distance|geocod)/i.test(searchable)) score += 5;
+        if (/(?:wikidata|knowledge_graph|entity_lookup|compute|python)/i.test(toolId)) score += 2;
+        return score;
+    }
+    return 0;
+}
+
+function prioritizeExactAnswerRecoveryToolSpecs(specs = [], recoveryGap = null) {
+    return normalizeArrayValue(specs)
+        .map((spec, index) => ({
+            spec,
+            index,
+            score: exactAnswerRecoveryToolMatchScore(spec, recoveryGap)
+        }))
+        .sort((left, right) => right.score - left.score || left.index - right.index)
+        .map((entry) => entry.spec);
+}
+
+function buildExactAnswerRecoveryToolAffordanceNote(specs = [], recoveryGap = null) {
+    const normalizedSpecs = normalizeArrayValue(specs);
+    const matches = normalizedSpecs
+        .map((spec) => ({
+            name: canonicalDirectToolId(spec?.name || spec?.function?.name),
+            score: exactAnswerRecoveryToolMatchScore(spec, recoveryGap)
+        }))
+        .filter((entry) => entry.name && entry.score > 0)
+        .sort((left, right) => right.score - left.score)
+        .slice(0, 3);
+    const relationProperty = normalizeText(recoveryGap?.relationProperty);
+    if (!matches.length) {
+        const toolSearchVisible = normalizedSpecs.some((spec) =>
+            canonicalDirectToolId(spec?.name || spec?.function?.name) === 'tool_search'
+        );
+        if (!toolSearchVisible) return '';
+        return relationProperty
+            ? `The structured ${relationProperty} capability is not visible yet. Use tool_search now for a structured entity relation tool that exposes ${relationProperty}, then call the discovered tool with the source entities as the next recovery action. Do not spend both recovery actions on broad web search.`
+            : 'The matching structured capability is not visible yet. Use tool_search now for the active evidence gap, then call the discovered tool as the next recovery action.';
+    }
+    return [
+        `Recovery capability already visible: ${matches.map((entry) => entry.name).join(', ')}.`,
+        relationProperty
+            ? `These contracts semantically match the required ${relationProperty} relation. Prefer a direct structured call with the source entities and properties:["${relationProperty}"]; broad web search is a fallback if the structured backend fails.`
+            : 'These contracts semantically match the active evidence gap. Prefer the most direct structured or deterministic call before another broad search.'
+    ].join(' ');
 }
 
 function resolveAgentContextMode(request = {}, requestContext = {}) {
@@ -3769,6 +3933,7 @@ function buildToolContextText(toolId, { emailProfiles = {} } = {}) {
             'Searches over deferred tool metadata with BM25 and exposes matching tools for the next model call.',
             'Some tools may not have been provided upfront; use tool_search to search for required tools.',
             'Use it promptly when the visible direct tools would force manual reconstruction of structured facts, cross-record ordering, entity resolution, document parsing, transcripts, APIs, or artifact data.',
+            'When the user names an authoritative database, registry, service, or file type and asks for structured fields, call tool_search before broad web_run discovery. If a connector first needs an identifier, use web_run only to discover that identifier, then return to the connector.',
             'For MCP tool discovery, use tool_search instead of list_mcp_resources or list_mcp_resource_templates.'
         ].join('\n'));
     }
@@ -4293,6 +4458,65 @@ function detectAgentNoProgress(stepResults = [], requestContext = {}) {
     const allFailed = recent.every((stepResult) => stepResult?.response?.ok !== true);
     if (allFailed && evidenceRefs.size === 0) {
         return 'consecutive_failures_without_evidence';
+    }
+    return '';
+}
+
+function stableDecisionValue(value) {
+    if (Array.isArray(value)) {
+        return value.map(stableDecisionValue);
+    }
+    if (!value || typeof value !== 'object') {
+        return value;
+    }
+    return Object.fromEntries(
+        Object.keys(value)
+            .sort()
+            .map((key) => [key, stableDecisionValue(value[key])])
+    );
+}
+
+function buildInvalidDecisionProgressRecord(decision = {}, iteration = 0) {
+    const rawToolCall = decision.nativeToolCall || decision.raw?.toolCall || {};
+    const tool = canonicalDirectToolId(rawToolCall.name || rawToolCall.tool);
+    const args = rawToolCall.arguments && typeof rawToolCall.arguments === 'object'
+        ? rawToolCall.arguments
+        : {};
+    const errors = Array.isArray(decision.raw?.errors)
+        ? decision.raw.errors.map((error) => normalizeText(error)).filter(Boolean)
+        : [];
+    return {
+        iteration,
+        status: normalizeText(decision.status, 'invalid_agent_decision'),
+        tool,
+        args: stableDecisionValue(args),
+        errors,
+        fingerprint: JSON.stringify({
+            status: normalizeText(decision.status, 'invalid_agent_decision'),
+            tool,
+            args: stableDecisionValue(args)
+        })
+    };
+}
+
+function detectInvalidDecisionNoProgress(history = [], requestContext = {}) {
+    if (
+        requestContext.disableNoProgressFuse === true ||
+        requestContext.disableInvalidDecisionFuse === true
+    ) {
+        return '';
+    }
+    const recent = (Array.isArray(history) ? history : []).slice(-3);
+    if (
+        recent.length >= 2 &&
+        recent.at(-1).status === 'invalid_native_tool_args' &&
+        Boolean(recent.at(-1).tool) &&
+        recent.at(-1).fingerprint === recent.at(-2).fingerprint
+    ) {
+        return 'repeated_invalid_native_tool_call';
+    }
+    if (recent.length === 3 && recent.every((record) => record.status === 'invalid_native_tool_args')) {
+        return 'consecutive_invalid_native_tool_calls';
     }
     return '';
 }
@@ -5222,6 +5446,8 @@ function buildTaskRunFailureAnalysis({ status = '', reason = '', stepResults = [
         humanReason = '任务执行超过等待时间，运行时已保留当前进度。';
     } else if (statusText === 'interrupted') {
         humanReason = '任务被用户或运行时中断，已经保留中断前的上下文和工具结果。';
+    } else if (statusText === 'incomplete') {
+        humanReason = '任务尚未获得足以确认完成的执行证据。';
     } else if (statusText === 'failed' || statusText === 'error') {
         humanReason = latestFailedSummary?.summary || '任务执行过程中出现失败。';
     }
@@ -5290,6 +5516,56 @@ function buildTaskRunHandoffDisplayText(handoff = {}) {
     return lines.filter(Boolean).join('\n');
 }
 
+function assessAgentCompletionEvidence({
+    agentRuntimeRole = '',
+    requireExecutionEvidence = false,
+    stepResults = []
+} = {}) {
+    if (!isTaskAgentRole(agentRuntimeRole) || requireExecutionEvidence !== true) {
+        return {
+            ok: true,
+            status: 'completed',
+            reason: 'final_answer',
+            unresolvedFields: []
+        };
+    }
+    const workSteps = (Array.isArray(stepResults) ? stepResults : []).filter((stepResult) => {
+        const toolId = canonicalDirectToolId(stepResult?.tool);
+        return Boolean(toolId) &&
+            !isCollaborationTool(toolId) &&
+            !['tool_search', 'update_plan'].includes(toolId);
+    });
+    const successfulWorkSteps = workSteps.filter((stepResult) => stepResult?.response?.ok === true);
+    if (!successfulWorkSteps.length) {
+        return {
+            ok: false,
+            status: 'incomplete',
+            reason: 'execution_evidence_missing',
+            unresolvedFields: ['No successful task-execution tool call was recorded.']
+        };
+    }
+    const latestWorkStep = workSteps.at(-1);
+    if (latestWorkStep?.response?.ok !== true) {
+        const error = normalizeText(
+            latestWorkStep?.response?.error ||
+            latestWorkStep?.response?.status,
+            'The latest task-execution tool call failed.'
+        );
+        return {
+            ok: false,
+            status: 'incomplete',
+            reason: 'latest_execution_step_failed',
+            unresolvedFields: [error]
+        };
+    }
+    return {
+        ok: true,
+        status: 'completed',
+        reason: 'verified_execution_evidence',
+        unresolvedFields: []
+    };
+}
+
 function buildTaskRunHandoffPackage({
     status = 'failed',
     reason = '',
@@ -5304,6 +5580,7 @@ function buildTaskRunHandoffPackage({
     exactAnswer = '',
     finalAnswer = '',
     partialAnswer = '',
+    unresolvedFields = [],
     contextManagerCheckpoint = null
 } = {}) {
     const normalizedStatus = normalizeText(status, 'failed').toLowerCase();
@@ -5358,6 +5635,11 @@ function buildTaskRunHandoffPackage({
         exactAnswer: normalizeText(exactAnswer),
         finalAnswer: normalizeText(finalAnswer),
         partialAnswer: normalizeText(partialAnswer),
+        unresolvedFields: [...new Set(
+            (Array.isArray(unresolvedFields) ? unresolvedFields : [unresolvedFields])
+                .map((value) => normalizeText(value))
+                .filter(Boolean)
+        )].slice(0, 24),
         sourceRefs,
         failureAnalysis,
         executionTrace: {
@@ -5400,6 +5682,7 @@ function buildInvalidDecisionObservationEvent(decision = {}, iteration = 0, maxS
     const previousOutput = typeof decision.raw === 'string'
         ? decision.raw
         : JSON.stringify(decision.raw || {}, null, 2);
+    const rawToolCall = decision.nativeToolCall || decision.raw?.toolCall || {};
     return {
         type: 'runtime_note',
         status: 'invalid_decision_observation',
@@ -5407,11 +5690,44 @@ function buildInvalidDecisionObservationEvent(decision = {}, iteration = 0, maxS
         maxSteps,
         protocol_error: decision.status || 'invalid_agent_decision',
         error: decision.error || '',
+        tool: normalizeText(rawToolCall.name || rawToolCall.tool),
+        arguments: rawToolCall.arguments && typeof rawToolCall.arguments === 'object'
+            ? rawToolCall.arguments
+            : {},
+        schema_required: Array.isArray(decision.raw?.schema?.required)
+            ? decision.raw.schema.required
+            : [],
         repairAttempted: decision.repairAttempted === true,
         repairStatus: decision.repairStatus || '',
         repairError: decision.repairError || '',
         previous_output: summarizeForModel(previousOutput, 1800)
     };
+}
+
+function buildRejectedToolCallGuidance(decision = {}) {
+    const schema = decision.raw?.schema && typeof decision.raw.schema === 'object'
+        ? decision.raw.schema
+        : {};
+    const required = Array.isArray(schema.required)
+        ? schema.required.map((value) => normalizeText(value)).filter(Boolean)
+        : [];
+    const properties = schema.properties && typeof schema.properties === 'object'
+        ? schema.properties
+        : {};
+    const propertyTypes = Object.entries(properties)
+        .slice(0, 24)
+        .map(([name, property]) => {
+            const type = Array.isArray(property?.type)
+                ? property.type.join('|')
+                : normalizeText(property?.type, property?.anyOf ? 'union' : 'unspecified');
+            return `${name}:${type}`;
+        });
+    return [
+        `Tool call rejected by the visible schema: ${normalizeText(decision.error, decision.status)}.`,
+        required.length ? `Required fields: ${required.join(', ')}.` : '',
+        propertyTypes.length ? `Visible field types: ${propertyTypes.join(', ')}.` : '',
+        'Do not retry the identical tool name and arguments. Inspect this rejection, fill every required field with the visible type, or choose a prerequisite/alternate tool that can produce the missing values.'
+    ].filter(Boolean).join(' ');
 }
 
 function recordInvalidDecisionToContextManager(contextManager, decision = {}, options = {}) {
@@ -5439,7 +5755,7 @@ function recordInvalidDecisionToContextManager(contextManager, decision = {}, op
         }),
         functionCallOutput({
             call_id: callId,
-            output: `Tool call rejected by the visible schema: ${normalizeText(decision.error, decision.status)}. Correct the arguments before retrying.`,
+            output: buildRejectedToolCallGuidance(decision),
             success: false
         })
     ], options);
@@ -5600,17 +5916,26 @@ function ensureNativeStringField(schema = {}, field = '') {
     }
 }
 
-function repairNativeToolJsonSchema(schema = {}) {
+function repairNativeToolJsonSchema(schema = {}, { root = true } = {}) {
     const input = parseJsonSchemaFragment(schema);
     if (!input || typeof input !== 'object' || Array.isArray(input)) {
-        return {
-            type: 'object',
-            additionalProperties: false,
-            properties: {}
-        };
+        return root
+            ? {
+                  type: 'object',
+                  additionalProperties: false,
+                  properties: {}
+              }
+            : {};
     }
     const out = { ...input };
-    out.type = normalizeText(out.type, 'object');
+    const explicitType = normalizeText(out.type);
+    if (explicitType) {
+        out.type = explicitType;
+    } else if (root || (out.properties && typeof out.properties === 'object')) {
+        out.type = 'object';
+    } else {
+        delete out.type;
+    }
     if (isNativeObjectSchema(out)) {
         out.required = Array.isArray(parseJsonSchemaFragment(out.required))
             ? parseJsonSchemaFragment(out.required).filter((entry) => typeof entry === 'string' && entry)
@@ -5618,7 +5943,10 @@ function repairNativeToolJsonSchema(schema = {}) {
         const properties = parseJsonSchemaFragment(out.properties);
         out.properties = properties && typeof properties === 'object' && !Array.isArray(properties)
             ? Object.fromEntries(
-                  Object.entries(properties).map(([key, value]) => [key, repairNativeToolJsonSchema(value)])
+                  Object.entries(properties).map(([key, value]) => [
+                      key,
+                      repairNativeToolJsonSchema(value, { root: false })
+                  ])
               )
             : {};
     } else {
@@ -5626,10 +5954,10 @@ function repairNativeToolJsonSchema(schema = {}) {
         delete out.properties;
     }
     if (out.items) {
-        out.items = repairNativeToolJsonSchema(out.items);
+        out.items = repairNativeToolJsonSchema(out.items, { root: false });
     }
     if (isNativeObjectSchema(out) && out.additionalProperties && typeof out.additionalProperties === 'object') {
-        out.additionalProperties = repairNativeToolJsonSchema(out.additionalProperties);
+        out.additionalProperties = repairNativeToolJsonSchema(out.additionalProperties, { root: false });
     } else if (isNativeObjectSchema(out) && typeof out.additionalProperties !== 'boolean') {
         out.additionalProperties = Object.keys(out.properties || {}).length ? false : true;
     } else if (!isNativeObjectSchema(out)) {
@@ -6080,8 +6408,10 @@ function buildFinalAnswerNativeToolSpec() {
         name: FINAL_ANSWER_TOOL_NAME,
         description: [
             'Submit the exact benchmark/task answer separately from visible persona text, only when ready; otherwise call another tool.',
-            'For first, earliest, latest, only, all, or count questions, verify the relevant candidate set and list or section boundary; one partial viewport or source category is insufficient unless it establishes the requested boundary.',
             'For relation or constraint questions, verify role alignment and answer the requested entity, not an intermediate entity.',
+            'For first, earliest, latest, only, all, count, most, or least questions, verify the candidate set and boundary; a partial viewport is insufficient unless it proves that boundary.',
+            'For extrema, ranking, or distance questions, the evidence must contain the comparison metric or a deterministic computation of it; a complete list of labels without comparable metric values does not establish the winner.',
+            'For quoted-term selection, preserve the exact lexical form and record per-group match counts before selecting the next entity.',
             'For self-contained logic, math, grammar, translation, or rules questions, QuestionEvidence/source_question can support reasoning from the problem statement itself.',
             'For quantitative questions, finish requested unit conversion, scaling, and rounding before submitting.',
             'Cite the evidence_artifacts refs actually used. Do not use this tool for plans, repair requests, or messages saying more inspection is needed.'
@@ -6111,7 +6441,7 @@ function buildFinalAnswerNativeToolSpec() {
                 },
                 reason: {
                     type: 'string',
-                    description: 'Brief private evidence note for audit. For relation/constraint tasks, include the target role, intermediate missing entity, and relation table direction check. For first/earliest/latest/only/all/count tasks, note how the relevant candidate-set boundary was verified. Do not put this in answer.'
+                    description: 'Brief private evidence note for audit. For relation/constraint tasks, include the target role, intermediate missing entity, and relation table direction check. For first/earliest/latest/only/all/count/most/least tasks, note how the relevant candidate-set boundary was verified. For extrema/ranking/distance tasks, include the comparable metric values or deterministic computation used to select the winner. For quoted-term selection, include the exact lexical match and per-group counts. Do not put this in answer.'
                 },
                 persona_text: {
                     type: 'string',
@@ -6123,7 +6453,16 @@ function buildFinalAnswerNativeToolSpec() {
     });
 }
 
-function buildAgentDirectToolSpecs(gateway, { stepResults = [], requestContext = {}, exactAnswerMode = false } = {}) {
+function buildAgentDirectToolSpecs(
+    gateway,
+    {
+        stepResults = [],
+        requestContext = {},
+        exactAnswerMode = false,
+        suppressFinalAnswer = false,
+        recoveryGap = null
+    } = {}
+) {
     if (requestContext.directToolExecutor === false || requestContext.nativeDirectTools === false) {
         return [];
     }
@@ -6139,7 +6478,7 @@ function buildAgentDirectToolSpecs(gateway, { stepResults = [], requestContext =
     }
     const specs = [];
     const seen = new Set();
-    const exposeFinalAnswer = exactAnswerMode;
+    const exposeFinalAnswer = exactAnswerMode && !suppressFinalAnswer;
     const modelVisibleSpecs = gateway?.gatewayToolRuntimeRegistry?.modelVisibleSpecs?.() || [];
     const suppressedCoreTools = collectTemporarilySuppressedCoreDirectTools(stepResults, requestContext);
     for (const spec of modelVisibleSpecs) {
@@ -6167,7 +6506,13 @@ function buildAgentDirectToolSpecs(gateway, { stepResults = [], requestContext =
             .filter((spec) => canonicalDirectToolId(spec.name || spec.function?.name) !== FINAL_ANSWER_TOOL_NAME)
             .concat(finalAnswerSpec);
     }
-    const limit = Math.max(4, Math.min(Number(requestContext.directToolLimit || 16), 40));
+    if (recoveryGap) {
+        orderedSpecs = prioritizeExactAnswerRecoveryToolSpecs(orderedSpecs, recoveryGap);
+    }
+    const requestedLimit = Number(requestContext.directToolLimit);
+    const limit = Number.isFinite(requestedLimit) && requestedLimit > 0
+        ? Math.max(1, Math.min(Math.floor(requestedLimit), 40))
+        : 16;
     const toolRouter = buildToolRouterFromModelVisibleSpecs(orderedSpecs, {
         limit,
         finalToolName: finalAnswerSpec ? FINAL_ANSWER_TOOL_NAME : '',
@@ -6359,8 +6704,797 @@ function detectIncompleteProcessSimulation({ message = '', stepResults = [] } = 
     return null;
 }
 
-function validateExactAnswerSubmission({ decision = {}, stepResults = [], message = '' } = {}) {
+function collectStructuredSelectorMetricEvidence(stepResults = [], message = '') {
+    const question = normalizeText(message);
+    const axis = /(?:westernmost|easternmost|longitude|最西|最东|经度)/i.test(question)
+        ? 'longitude'
+        : /(?:northernmost|southernmost|latitude|最北|最南|纬度)/i.test(question)
+            ? 'latitude'
+            : 'coordinates';
+    const metricsBySource = new Map();
+    const visit = (value, depth = 0) => {
+        if (depth > 14 || value === null || value === undefined) return;
+        if (Array.isArray(value)) {
+            for (const entry of value) visit(entry, depth + 1);
+            return;
+        }
+        if (typeof value !== 'object') return;
+        for (const row of normalizeArrayValue(value.property_rows || value.propertyRows)) {
+            const property = normalizeText(row?.property)
+                .toLowerCase()
+                .replace(/[\s-]+/g, '_');
+            const matchRank = Number(row?.match_rank ?? row?.matchRank ?? 0);
+            if (
+                !['coordinates', 'coordinate', 'longitude', 'latitude', 'distance'].includes(property) ||
+                (Number.isFinite(matchRank) && matchRank > 0)
+            ) {
+                continue;
+            }
+            const source = normalizeText(
+                row?.source_query ||
+                row?.sourceQuery ||
+                row?.source_entity ||
+                row?.sourceEntity ||
+                row?.source_entity_id ||
+                row?.sourceEntityId
+            );
+            if (!source) continue;
+            const latitude = Number(row?.latitude);
+            const longitude = Number(row?.longitude);
+            const scalar = Number(
+                row?.amount ??
+                row?.value ??
+                row?.numeric_value ??
+                row?.numericValue
+            );
+            let metric = '';
+            if (axis === 'longitude' && Number.isFinite(longitude)) {
+                metric = `longitude=${longitude}`;
+            } else if (axis === 'latitude' && Number.isFinite(latitude)) {
+                metric = `latitude=${latitude}`;
+            } else if (axis === 'coordinates' && Number.isFinite(latitude) && Number.isFinite(longitude)) {
+                metric = `coordinates=${latitude},${longitude}`;
+            } else if (Number.isFinite(scalar)) {
+                metric = `${property}=${scalar}`;
+            }
+            if (metric) {
+                metricsBySource.set(source.toLowerCase(), `${source}:${metric}`);
+            }
+        }
+        for (const nested of Object.values(value)) {
+            visit(nested, depth + 1);
+        }
+    };
+    for (const stepResult of Array.isArray(stepResults) ? stepResults : []) {
+        if (stepResult?.response?.ok !== true) continue;
+        visit(stepResult.response.result);
+    }
+    return [...metricsBySource.values()];
+}
+
+function detectSelectorMetricEvidenceGap({ message = '', submission = {}, stepResults = [] } = {}) {
+    const question = normalizeText(message);
+    const geographicSelector = /(?:farthest|closest|westernmost|easternmost|northernmost|southernmost|longitude|latitude|distance|最远|最近|最西|最东|最北|最南|经度|纬度|距离)/i.test(question);
+    if (!geographicSelector) return null;
+    const reason = normalizeText(submission.reason);
+    const numericValues = reason.match(/[+-]?(?:\d+\.\d+|\d{1,3})(?:\s*°|\s*(?:degrees?|deg|km|mi|miles?|kilometers?))?/gi) || [];
+    const comparableValues = [...new Set([
+        ...numericValues
+            .map((value) => normalizeText(value).toLowerCase())
+            .filter((value) => /[+-]?\d/.test(value)),
+        ...collectStructuredSelectorMetricEvidence(stepResults, question)
+    ])];
+    if (comparableValues.length >= 2) return null;
+    return {
+        error: 'selector_metric_evidence_missing',
+        comparableValues,
+        instruction: 'The proposed geographic extrema/distance answer does not cite at least two comparable metric values. A complete list of entity labels is not a longitude, latitude, or distance comparison. Use the short recovery phase to retrieve comparable coordinates/metric values or run a deterministic computation, then verify each selected terminal entity and its source-period label. If the needed structured capability is not visible, use tool_search first and then call the discovered evidence tool. After the recovery phase, submit the best available answer instead of returning an empty answer.'
+    };
+}
+
+function collectPrimaryStructuredRelationEvidence(stepResults = [], relationProperty = '') {
+    const normalizedProperty = normalizeText(relationProperty)
+        .toLowerCase()
+        .replace(/[\s-]+/g, '_');
+    if (!normalizedProperty) return [];
+    const collected = [];
+    const seen = new Set();
+    const visit = (value, depth = 0) => {
+        if (depth > 14 || value === null || value === undefined) return;
+        if (Array.isArray(value)) {
+            for (const entry of value) visit(entry, depth + 1);
+            return;
+        }
+        if (typeof value !== 'object') return;
+        for (const row of normalizeArrayValue(value.property_rows || value.propertyRows)) {
+            const property = normalizeText(row?.property)
+                .toLowerCase()
+                .replace(/[\s-]+/g, '_');
+            const matchRank = Number(row?.match_rank ?? row?.matchRank ?? 0);
+            if (property !== normalizedProperty || (Number.isFinite(matchRank) && matchRank > 0)) {
+                continue;
+            }
+            const label = normalizeText(
+                row?.value_label ||
+                row?.valueLabel ||
+                row?.value_entity_id ||
+                row?.valueEntityId
+            );
+            const description = normalizeText(row?.value_description || row?.valueDescription);
+            if (!label && !description) continue;
+            const sourceQuery = normalizeText(row?.source_query || row?.sourceQuery);
+            const sourceEntity = normalizeText(row?.source_entity || row?.sourceEntity);
+            const key = `${sourceQuery.toLowerCase()}|${label.toLowerCase()}|${description.toLowerCase()}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            collected.push({
+                sourceQuery,
+                sourceEntity,
+                label,
+                description
+            });
+        }
+        if (Array.isArray(value.results)) {
+            for (const result of value.results) {
+                const matches = Array.isArray(result?.matches) ? result.matches : [];
+                const primaryMatch = matches.find((match) => {
+                    const properties = match?.properties;
+                    return properties &&
+                        typeof properties === 'object' &&
+                        Array.isArray(properties[normalizedProperty]) &&
+                        properties[normalizedProperty].length > 0;
+                });
+                const relationValues = primaryMatch?.properties?.[normalizedProperty];
+                for (const relationValue of Array.isArray(relationValues) ? relationValues : []) {
+                    const label = normalizeText(relationValue?.label || relationValue?.name);
+                    const description = normalizeText(relationValue?.description);
+                    if (!label && !description) continue;
+                    const key = `${normalizeText(result?.query).toLowerCase()}|${label.toLowerCase()}|${description.toLowerCase()}`;
+                    if (seen.has(key)) continue;
+                    seen.add(key);
+                    collected.push({
+                        sourceQuery: normalizeText(result?.query),
+                        sourceEntity: normalizeText(primaryMatch?.label),
+                        label,
+                        description
+                    });
+                }
+            }
+        }
+        for (const child of Object.values(value)) {
+            visit(child, depth + 1);
+        }
+    };
+    for (const stepResult of Array.isArray(stepResults) ? stepResults : []) {
+        if (stepResult?.response?.ok !== true) continue;
+        const args = stepResult?.args && typeof stepResult.args === 'object'
+            ? stepResult.args
+            : stepResult?.request?.args && typeof stepResult.request.args === 'object'
+                ? stepResult.request.args
+                : {};
+        const requestedProperties = normalizeArrayValue(args.properties || args.fields)
+            .map((value) => normalizeText(value).toLowerCase().replace(/[\s-]+/g, '_'));
+        if (!requestedProperties.includes(normalizedProperty)) continue;
+        visit(
+            stepResult?.response?.result ||
+                stepResult?.response?.details ||
+                stepResult?.result ||
+                stepResult?.details
+        );
+    }
+    return collected;
+}
+
+function detectSelectorTerminalRelationAnswerMismatch({
+    submission = {},
+    relationProperty = '',
+    stepResults = []
+} = {}) {
+    const submittedLabels = normalizeText(submission.answer)
+        .split(/\s*[,;|]\s*/)
+        .map((value) => normalizeText(value))
+        .filter((value) => value.length >= 2);
+    if (!submittedLabels.length) return null;
+    const relationEvidence = collectPrimaryStructuredRelationEvidence(
+        stepResults,
+        relationProperty
+    );
+    const coveredSourceQueries = new Set(relationEvidence
+        .map((entry) => entry.sourceQuery || entry.sourceEntity)
+        .filter(Boolean));
+    if (
+        !relationEvidence.length ||
+        coveredSourceQueries.size < submittedLabels.length
+    ) {
+        return null;
+    }
+    const unmatchedLabels = submittedLabels.filter((submittedLabel) => {
+        const normalizedSubmitted = submittedLabel
+            .normalize('NFKD')
+            .replace(/\p{M}/gu, '')
+            .toLowerCase();
+        return !relationEvidence.some((entry) => {
+            const relationText = `${entry.label} ${entry.description}`
+                .normalize('NFKD')
+                .replace(/\p{M}/gu, '')
+                .toLowerCase();
+            return relationText.includes(normalizedSubmitted);
+        });
+    });
+    if (!unmatchedLabels.length || unmatchedLabels.length === submittedLabels.length) {
+        return null;
+    }
+    const relationCandidates = [...new Set(relationEvidence
+        .map((entry) => entry.label)
+        .filter(Boolean))];
+    return {
+        error: 'selector_terminal_relation_answer_mismatch',
+        relationProperty,
+        unmatchedLabels,
+        relationCandidates,
+        instruction: [
+            `The submitted terminal label(s) ${unmatchedLabels.join(', ')} do not match the primary structured ${relationProperty} values already retrieved for the source entities.`,
+            `Reconcile the answer against the source-entity relation values before submitting; visible relation candidates include ${relationCandidates.join(', ')}.`,
+            'Preserve the source-period place label instead of substituting a nearby modern municipality or a related person’s city.',
+            'This is a soft consistency check: submit the best available answer after reconciling the existing evidence, even if no further retrieval is possible.'
+        ].join(' ')
+    };
+}
+
+function detectSelectorTerminalRelationEvidenceGap({
+    message = '',
+    submission = {},
+    stepResults = []
+} = {}) {
+    const question = normalizeText(message);
+    const geographicSelector = /(?:farthest|closest|westernmost|easternmost|northernmost|southernmost|longitude|latitude|distance|最远|最近|最西|最东|最北|最南|经度|纬度|距离)/i.test(question);
+    if (!geographicSelector) return null;
+    const relationProperty = /(?:\bplace\s+of\s+birth\b|\bbirthplace\b|\bwere?\s+born\b|\bborn\b|出生地|出生于)/i.test(question)
+        ? 'place_of_birth'
+        : /(?:\bplace\s+of\s+death\b|\bdeathplace\b|\bdied\b|死亡地|逝世于)/i.test(question)
+            ? 'place_of_death'
+            : '';
+    if (!relationProperty) return null;
+
+    const reason = normalizeText(submission.reason);
+    const submittedLabels = normalizeText(submission.answer)
+        .split(/\s*[,;|]\s*/)
+        .map((value) => normalizeText(value))
+        .filter((value) => value.length >= 2);
+    const periodTransitionPattern = /\b(?:formerly|previously|historically|renamed\s+from|at\s+the\s+time|later\s+became|now\s+known\s+as)\b/gi;
+    const periodLabelConflict = [...reason.matchAll(periodTransitionPattern)]
+        .map((transition) => submittedLabels
+            .map((label) => ({
+                label,
+                index: reason.toLowerCase().lastIndexOf(label.toLowerCase(), transition.index)
+            }))
+            .filter((candidate) =>
+                candidate.index >= 0 &&
+                transition.index - (candidate.index + candidate.label.length) <= 120
+            )
+            .sort((left, right) => right.index - left.index)[0] || null)
+        .find(Boolean)?.label ||
+        submittedLabels.find((label) => {
+            const escapedLabel = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            return new RegExp(
+                `\\b(?:now|currently)(?:\\s+known\\s+as)?\\s+${escapedLabel}\\b`,
+                'i'
+            ).test(reason);
+        }) ||
+        '';
+    const relationNamedInReason = new RegExp(`\\b${relationProperty}\\b`, 'i').test(reason);
+    const relationEvidence = collectPrimaryStructuredRelationEvidence(
+        stepResults,
+        relationProperty
+    );
+    const relationProjectedByTool = relationEvidence.length > 0 ||
+        (Array.isArray(stepResults) ? stepResults : []).some((stepResult) => {
+        if (stepResult?.response?.ok !== true) return false;
+        const args = stepResult?.args && typeof stepResult.args === 'object'
+            ? stepResult.args
+            : stepResult?.request?.args && typeof stepResult.request.args === 'object'
+                ? stepResult.request.args
+                : {};
+        const requestedRelation = normalizeArrayValue(args.properties || args.fields)
+            .map((value) => normalizeText(value).toLowerCase().replace(/[\s-]+/g, '_'))
+            .includes(relationProperty);
+        if (!requestedRelation) return false;
+        return nestedObjectHasNonEmptyProperty(
+            stepResult?.response?.result ||
+                stepResult?.response?.details ||
+                stepResult?.result ||
+                stepResult?.details,
+            relationProperty
+        );
+        });
+    if (!periodLabelConflict && relationProjectedByTool) {
+        const relationAnswerMismatch = detectSelectorTerminalRelationAnswerMismatch({
+            submission,
+            relationProperty,
+            stepResults
+        });
+        if (relationAnswerMismatch) return relationAnswerMismatch;
+    }
+    if (!periodLabelConflict && (relationNamedInReason || relationProjectedByTool)) return null;
+
+    return {
+        error: periodLabelConflict
+            ? 'selector_terminal_period_label_conflict'
+            : 'selector_terminal_relation_evidence_missing',
+        relationProperty,
+        periodLabelConflict: periodLabelConflict || null,
+        instruction: [
+            'The geographic metric comparison is not enough because the candidate locations are reached through an entity relation.',
+            `Verify the source entities and the terminal relation ${relationProperty}, including the period-appropriate terminal label, rather than treating a modern site or municipality label as the historical relation value.`,
+            periodLabelConflict
+                ? `The submitted rationale itself says that answer label "${periodLabelConflict}" has a former, previous, or historical label. That conflicts with submitting the modern label without resolving which name applied when the relation occurred. Resolve this self-contradiction explicitly before answering.`
+                : '',
+            `When using an entity lookup, query the source people/entities rather than the answer cities and request the relation explicitly, for example {"queries":["<source entity A>","<source entity B>"],"properties":["${relationProperty}"]}.`,
+            `If no visible tool contract exposes ${relationProperty}, use tool_search first for a structured entity relation capability, then call the discovered tool in the next recovery action instead of spending both actions on broad web search.`,
+            'Alternatively cite a direct source row that establishes source entity -> terminal place.',
+            'After the short recovery phase, submit the best available answer instead of returning an empty answer.'
+        ].filter(Boolean).join(' ')
+    };
+}
+
+function detectVisualEnumerationEvidenceGap({
+    message = '',
+    submission = {},
+    stepResults = [],
+    fileAttachments = []
+} = {}) {
+    const question = normalizeText(message);
+    const hasImageAttachment = normalizeFileAttachments(fileAttachments)
+        .some((attachment) => /\.(?:png|jpe?g|webp|gif|bmp|tiff?)$/i.test(attachment.path || attachment.name || ''));
+    const exhaustiveVisualTask =
+        hasImageAttachment &&
+        /(?:\ball\b|\bevery\b|\border\b|\bsequence\b|全部|所有|每个|顺序)/i.test(question) &&
+        /(?:provided image|attached image|using the image|fraction line|slash|glyph|indentation|column|layout|position|color|图片|图像|分数线|斜杠|缩进|列|布局|位置|颜色)/i.test(question);
+    if (!exhaustiveVisualTask || !normalizeText(submission.answer)) return null;
+    const hasSuccessfulVisualCrossCheck = (Array.isArray(stepResults) ? stepResults : [])
+        .some((stepResult) =>
+            stepResult?.response?.ok === true &&
+            /(?:describe_image|vision|ocr|screenshot|image)/i.test(normalizeText(stepResult.tool))
+        );
+    if (hasSuccessfulVisualCrossCheck) return null;
+    return {
+        error: 'visual_enumeration_not_cross_checked',
+        instruction: [
+            'The answer claims an exhaustive ordered transcription from an attached image, but it was submitted on the first visual pass without a separate occurrence/count cross-check.',
+            'Re-inspect the whole image from top-left to bottom-right, distinguish literal source glyphs from visually stacked forms, preserve duplicates, append only the requested solved sample outputs, and verify the final item count and order.',
+            'Do not turn source expressions into equations unless the requested output explicitly asks for equations.',
+            'This is one model-side verification pass, not an evidence gate; return the best available answer even if the visual uncertainty remains.'
+        ].join(' ')
+    };
+}
+
+function detectAnswerSpecificityEvidenceGap({ message = '', submission = {}, stepResults = [] } = {}) {
+    const question = normalizeText(message);
+    const answer = normalizeText(submission.answer);
+    if (!/\bspecies\b|物种|种类/i.test(question) || !/^[\p{L}-]+$/u.test(answer)) {
+        return null;
+    }
+    const answerPattern = answer.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const phrasePattern = new RegExp(`\\b([A-Za-z][A-Za-z-]{2,})\\s+${answerPattern}s?\\b`, 'gi');
+    const genericModifiers = new Set([
+        'a', 'an', 'the', 'this', 'that', 'featured', 'tenacious', 'hilarious',
+        'funny', 'majestic', 'mighty', 'tiny', 'young', 'adult', 'baby', 'wild'
+    ]);
+    const candidates = new Set();
+    for (const stepResult of Array.isArray(stepResults) ? stepResults : []) {
+        const text = successfulStepText(stepResult);
+        let match;
+        while ((match = phrasePattern.exec(text)) !== null) {
+            const modifier = normalizeText(match[1]);
+            if (modifier && !genericModifiers.has(modifier.toLowerCase())) {
+                candidates.add(`${modifier} ${answer}`);
+            }
+        }
+    }
+    if (!candidates.size) return null;
+    return {
+        error: 'answer_entity_specificity_missing',
+        sourceCandidates: [...candidates].slice(0, 8),
+        instruction: [
+            `The question asks for a species-level name, but the submitted one-word answer "${answer}" is broader than compound species phrases already visible in the retrieved evidence.`,
+            `Compare the candidate against these source phrases and submit the most specific supported entity name: ${[...candidates].slice(0, 8).join(', ')}.`,
+            'Do not broaden a source-supported compound entity to its generic head noun.'
+        ].join(' ')
+    };
+}
+
+function detectCompleteTitleEvidenceGap({ message = '', submission = {}, stepResults = [] } = {}) {
+    const question = normalizeText(message);
+    const answer = normalizeText(submission.answer);
+    if (
+        !/(?:\bcomplete\s+title\b|\bfull\s+title\b|\btitle\s+in\s+full\b|完整标题|全名)/i.test(question) ||
+        !answer ||
+        /[:：]\s*\S/.test(answer)
+    ) {
+        return null;
+    }
+    const hasTitleAuthorityEvidence = (Array.isArray(stepResults) ? stepResults : []).some((stepResult) => {
+        if (stepResult?.response?.ok !== true) return false;
+        const searchable = `${normalizeText(stepResult.tool)} ${successfulStepText(stepResult)}`;
+        return /(?:catalog|bibliograph|isbn|title page|google books|open library|worldcat|book metadata)/i.test(searchable) &&
+            searchable.toLowerCase().includes(answer.toLowerCase());
+    });
+    if (hasTitleAuthorityEvidence) return null;
+    return {
+        error: 'complete_title_not_verified',
+        instruction: [
+            `The request asks for the complete title, while the submitted title "${answer}" has not been checked against a catalog, title page, ISBN record, or another full-title authority.`,
+            'Use the short recovery phase to verify whether a subtitle or post-colon phrase was omitted, then preserve the complete official title while applying the user’s requested number formatting.',
+            'After the recovery phase, submit the best available title rather than returning an empty answer.'
+        ].join(' ')
+    };
+}
+
+function collectNestedSelectorProtocols(stepResults = []) {
+    const protocols = [];
+    const seen = new Set();
+    const visit = (value, depth = 0) => {
+        if (depth > 14 || value === null || value === undefined) return;
+        if (Array.isArray(value)) {
+            for (const entry of value) visit(entry, depth + 1);
+            return;
+        }
+        if (typeof value !== 'object') return;
+        const candidates = [
+            value.selectionProtocol,
+            value.selection_protocol,
+            value.selectionAudit,
+            value.selection_audit,
+            (
+                Object.prototype.hasOwnProperty.call(value, 'boundary_complete') &&
+                Object.prototype.hasOwnProperty.call(value, 'exact_title_match_counts')
+            ) ? value : null,
+            (
+                Object.prototype.hasOwnProperty.call(value, 'candidate_set_coverage_sufficient') &&
+                Object.prototype.hasOwnProperty.call(value, 'quoted_term')
+            ) ? value : null
+        ].filter((entry) => entry && typeof entry === 'object' && !Array.isArray(entry));
+        for (const candidate of candidates) {
+            const parentKind = normalizeText(candidate.parent_kind || candidate.parentKind);
+            const quotedTerm = normalizeText(candidate.quoted_term || candidate.quotedTerm);
+            let counts = normalizeArrayValue(
+                candidate.exact_title_match_counts ||
+                candidate.exactTitleMatchCounts ||
+                candidate.group_title_counts ||
+                candidate.groupTitleCounts
+            );
+            if (!counts.length) {
+                counts = normalizeArrayValue(candidate.candidates).map((entry) => ({
+                    group: normalizeText(
+                        entry?.structured_anchor ||
+                        entry?.title ||
+                        entry?.ref_id
+                    ),
+                    count: Math.max(
+                        0,
+                        Number(
+                            entry?.visible_snippet_occurrences ||
+                            entry?.visibleSnippetOccurrences
+                        ) || 0
+                    ),
+                    matched_children: []
+                })).filter((entry) => entry.group);
+            }
+            if (!parentKind || !quotedTerm || !counts.length) continue;
+            const normalized = {
+                parentKind,
+                quotedTerm,
+                boundaryComplete: candidate.boundary_complete === true ||
+                    candidate.boundaryComplete === true ||
+                    candidate.candidate_set_coverage_sufficient === true,
+                winningGroup: normalizeText(candidate.winning_group || candidate.winningGroup),
+                counts: counts.map((group) => ({
+                    group: normalizeText(group?.group || group?.label),
+                    count: Math.max(0, Number(group?.count) || 0),
+                    matchedChildren: normalizeArrayValue(
+                        group?.matched_children || group?.matchedChildren
+                    ).map((child) => normalizeText(child?.id || child?.label)).filter(Boolean)
+                })).filter((group) => group.group)
+            };
+            const key = JSON.stringify(normalized);
+            if (!seen.has(key)) {
+                seen.add(key);
+                protocols.push(normalized);
+            }
+        }
+        for (const child of Object.values(value)) visit(child, depth + 1);
+    };
+    for (const stepResult of Array.isArray(stepResults) ? stepResults : []) {
+        if (stepResult?.response?.ok !== true) continue;
+        visit(
+            stepResult?.response?.result ||
+            stepResult?.response?.details ||
+            stepResult?.result ||
+            stepResult?.details
+        );
+    }
+    return protocols;
+}
+
+function collectNestedSelectorRecoveryActions(stepResults = []) {
+    const actions = [];
+    const seen = new Set();
+    const push = (value) => {
+        if (!value || typeof value !== 'object' || Array.isArray(value)) return;
+        const tool = normalizeText(value.tool || value.name);
+        const args = value.args && typeof value.args === 'object' && !Array.isArray(value.args)
+            ? value.args
+            : value.arguments && typeof value.arguments === 'object' && !Array.isArray(value.arguments)
+                ? value.arguments
+                : null;
+        const reason = normalizeText(value.reason);
+        if (
+            !tool ||
+            !args ||
+            !/(?:parent[\s-]*index|candidate[\s-]*set boundary|before selecting a child|same parent index)/i.test(reason)
+        ) {
+            return;
+        }
+        const normalized = { tool, args, reason };
+        const key = JSON.stringify(normalized);
+        if (!seen.has(key)) {
+            seen.add(key);
+            actions.push(normalized);
+        }
+    };
+    const visit = (value, depth = 0) => {
+        if (depth > 14 || value === null || value === undefined) return;
+        if (Array.isArray(value)) {
+            for (const entry of value) visit(entry, depth + 1);
+            return;
+        }
+        if (typeof value !== 'object') return;
+        for (const key of [
+            'next_actions',
+            'nextActions',
+            'suggestedNextCalls',
+            'suggested_next_calls'
+        ]) {
+            for (const action of normalizeArrayValue(value[key])) push(action);
+        }
+        for (const child of Object.values(value)) visit(child, depth + 1);
+    };
+    for (const stepResult of Array.isArray(stepResults) ? stepResults : []) {
+        if (stepResult?.response?.ok !== true) continue;
+        visit(
+            stepResult?.response?.result ||
+            stepResult?.response?.details ||
+            stepResult?.result ||
+            stepResult?.details
+        );
+    }
+    return actions.slice(0, 4);
+}
+
+function renderRecoveryAction(action = {}) {
+    const tool = normalizeText(action.tool);
+    if (!tool) return '';
+    try {
+        return `${tool} ${JSON.stringify(action.args || {})}`;
+    } catch {
+        return tool;
+    }
+}
+
+function detectRecommendedRecoveryActionGap({
+    recoveryGap = null,
+    toolCalls = []
+} = {}) {
+    const recommendedActions = normalizeArrayValue(recoveryGap?.recommendedActions)
+        .filter((action) => action && typeof action === 'object');
+    if (!recommendedActions.length) return null;
+    const calls = normalizeArrayValue(toolCalls).filter(Boolean);
+    if (!calls.length) return null;
+    const selectedDiscoveryCalls = calls.filter((call) => {
+        const tool = canonicalDirectToolId(call?.tool || call?.name);
+        const args = call?.args && typeof call.args === 'object'
+            ? call.args
+            : call?.arguments && typeof call.arguments === 'object'
+                ? call.arguments
+                : {};
+        return tool === 'tool_search' ||
+            (tool === 'web_run' && normalizeArrayValue(args.search_query).length > 0);
+    });
+    if (!selectedDiscoveryCalls.length) return null;
+    const rendered = recommendedActions
+        .map((action) => renderRecoveryAction(action))
+        .filter(Boolean)
+        .slice(0, 3);
+    return {
+        error: 'recommended_recovery_navigation_skipped',
+        tools: selectedDiscoveryCalls
+            .map((call) => canonicalDirectToolId(call?.tool || call?.name))
+            .filter(Boolean),
+        recommendedActions,
+        instruction: [
+            'A prior tool result already exposed an executable parent-index or continuation action, so another discovery call does not close the audited candidate boundary.',
+            `Use one of the existing structured actions next: ${rendered.join(' OR ')}.`
+        ].join(' ')
+    };
+}
+
+function detectNestedSelectorSelectionGap({
+    message = '',
+    submission = {},
+    stepResults = []
+} = {}) {
+    const question = normalizeText(message);
+    if (
+        !/\b(?:most|least|fewest|highest|lowest)\b/i.test(question) ||
+        !/\b(?:titles?|labels?|records?|entries|names?)\b/i.test(question)
+    ) {
+        return null;
+    }
+    const protocols = collectNestedSelectorProtocols(stepResults);
+    if (!protocols.length) return null;
+    const latest = protocols.at(-1);
+    const countsText = latest.counts
+        .map((group) => `${group.group}=${group.count}`)
+        .join(', ');
+    if (!latest.boundaryComplete) {
+        const recommendedActions = collectNestedSelectorRecoveryActions(stepResults);
+        const recommendedActionText = recommendedActions
+            .map((action) => renderRecoveryAction(action))
+            .filter(Boolean)
+            .slice(0, 3);
+        return {
+            error: 'nested_selector_candidate_boundary_incomplete',
+            parentKind: latest.parentKind,
+            quotedTerm: latest.quotedTerm,
+            counts: latest.counts,
+            recommendedActions,
+            instruction: [
+                `The parent-index evidence has only provisional exact "${latest.quotedTerm}" child-title counts (${countsText}); its candidate boundary is not complete.`,
+                recommendedActionText.length
+                    ? `Execute one of these already available structured actions before tool_search or another broad search: ${recommendedActionText.join(' OR ')}.`
+                    : 'Use the tool-provided next recommended parent-index or continuation call before opening or searching a remembered child.',
+                'After the boundary is complete, select the unique winning parent from the displayed per-group counts, then inspect that parent’s requested child.',
+                'This is a soft consistency check: after the short recovery phase, submit the best available answer even if the remaining source is unavailable.'
+            ].join(' ')
+        };
+    }
+    if (!latest.winningGroup) return null;
+    const rationale = `${normalizeText(submission.reason)} ${normalizeText(submission.answer)}`;
+    const anchors = rationale.match(
+        /\b(?:rule|article|chapter|section|part|item|table|figure|episode|volume|book)\s+(?:\d+(?:\.\d+)*[a-z]?|[ivxlcdm]+)\b/gi
+    ) || [];
+    const winning = latest.counts.find((group) =>
+        group.group.toLowerCase() === latest.winningGroup.toLowerCase()
+    );
+    const winningAnchors = new Set([
+        latest.winningGroup,
+        ...(winning?.matchedChildren || [])
+    ].map((value) => normalizeText(value).toLowerCase()).filter(Boolean));
+    const conflictingAnchors = anchors
+        .map((anchor) => normalizeText(anchor))
+        .filter((anchor) => anchor && !winningAnchors.has(anchor.toLowerCase()));
+    if (!conflictingAnchors.length) return null;
+    return {
+        error: 'nested_selector_selected_group_mismatch',
+        parentKind: latest.parentKind,
+        quotedTerm: latest.quotedTerm,
+        winningGroup: latest.winningGroup,
+        counts: latest.counts,
+        conflictingAnchors: [...new Set(conflictingAnchors)],
+        instruction: [
+            `The completed parent-index evidence identifies ${latest.winningGroup} as the unique winner for exact "${latest.quotedTerm}" child-title counts (${countsText}).`,
+            `The proposed rationale instead follows ${[...new Set(conflictingAnchors)].join(', ')}.`,
+            `Reconcile the child lookup with ${latest.winningGroup} and its visible matching child identifiers before submitting.`,
+            'This is a soft consistency check: return the best available answer after the short recovery phase.'
+        ].join(' ')
+    };
+}
+
+function nestedObjectHasNonEmptyProperty(value, propertyName, depth = 0) {
+    if (depth > 12 || value === null || value === undefined) return false;
+    if (Array.isArray(value)) {
+        return value.some((entry) => nestedObjectHasNonEmptyProperty(entry, propertyName, depth + 1));
+    }
+    if (typeof value !== 'object') return false;
+    if (Object.prototype.hasOwnProperty.call(value, propertyName)) {
+        const propertyValue = value[propertyName];
+        if (Array.isArray(propertyValue) && propertyValue.length > 0) return true;
+        if (propertyValue && typeof propertyValue === 'object' && Object.keys(propertyValue).length > 0) return true;
+        if (typeof propertyValue === 'string' && normalizeText(propertyValue)) return true;
+        if (typeof propertyValue === 'number' || typeof propertyValue === 'boolean') return true;
+    }
+    return Object.values(value)
+        .some((entry) => nestedObjectHasNonEmptyProperty(entry, propertyName, depth + 1));
+}
+
+function detectStructuredRelationRecoveryCallGap({ recoveryGap = null, toolCalls = [] } = {}) {
+    if (
+        recoveryGap?.error !== 'selector_terminal_relation_evidence_missing' ||
+        !normalizeText(recoveryGap.relationProperty)
+    ) {
+        return null;
+    }
+    const relationProperty = normalizeText(recoveryGap.relationProperty).toLowerCase();
+    const structuredEntityCalls = normalizeArrayValue(toolCalls).filter((call) => {
+        const tool = canonicalDirectToolId(call?.tool || call?.name);
+        return /(?:wikidata|knowledge_graph|entity).*lookup|entity_lookup/i.test(tool);
+    });
+    if (!structuredEntityCalls.length) return null;
+    const missingRelationCalls = structuredEntityCalls.filter((call) => {
+        const args = call?.args && typeof call.args === 'object'
+            ? call.args
+            : call?.arguments && typeof call.arguments === 'object'
+                ? call.arguments
+                : {};
+        return !normalizeArrayValue(args.properties || args.fields)
+            .map((value) => normalizeText(value).toLowerCase().replace(/[\s-]+/g, '_'))
+            .includes(relationProperty);
+    });
+    if (!missingRelationCalls.length) return null;
+    return {
+        error: 'structured_relation_property_omitted',
+        relationProperty,
+        tools: missingRelationCalls
+            .map((call) => canonicalDirectToolId(call?.tool || call?.name))
+            .filter(Boolean),
+        instruction: `The structured entity lookup omitted the required ${relationProperty} field. Query the source entities, not the candidate answer locations, and include properties:["${relationProperty}"].`
+    };
+}
+
+function resolveExactAnswerAuditFinalizationIteration({
+    currentFinalizationIteration = 0,
+    baseFinalizationIteration = 0,
+    auditIteration = 0,
+    recoveryToolCalls = 2,
+    maxExtraRounds = 6,
+    finalSubmissionReserve = 1
+} = {}) {
+    const current = Math.max(0, Number(currentFinalizationIteration) || 0);
+    const base = Math.max(0, Number(baseFinalizationIteration) || 0);
+    const trigger = Math.max(0, Number(auditIteration) || 0);
+    const recoveryCalls = Math.max(0, Math.floor(Number(recoveryToolCalls) || 0));
+    const extraCap = Math.max(0, Math.floor(Number(maxExtraRounds) || 0));
+    const submissionReserve = Math.max(0, Math.floor(Number(finalSubmissionReserve) || 0));
+    const needed = trigger + recoveryCalls + 2;
+    return Math.min(base + extraCap + submissionReserve, Math.max(current, needed));
+}
+
+function selectExactAnswerAuditRecoveryGap(validation = {}, attemptedWarnings = new Set()) {
+    const attempted = attemptedWarnings instanceof Set
+        ? attemptedWarnings
+        : new Set(normalizeArrayValue(attemptedWarnings).map((value) => normalizeText(value)).filter(Boolean));
+    return [
+        validation?.nestedSelectorGap,
+        validation?.selectorTerminalRelationGap,
+        validation?.selectorMetricGap,
+        validation?.visualEnumerationGap,
+        validation?.answerSpecificityGap,
+        validation?.completeTitleGap
+    ].find((gap) => gap?.error && !attempted.has(gap.error)) || null;
+}
+
+function canStartExactAnswerAuditRecovery({
+    iteration = 0,
+    finalizationIteration = 0,
+    safetyFinalizationReason = ''
+} = {}) {
+    if (Number(iteration) > Number(finalizationIteration)) return false;
+    const reason = normalizeText(safetyFinalizationReason);
+    return !reason || reason === 'maximum_tool_rounds';
+}
+
+function validateExactAnswerSubmission({
+    decision = {},
+    stepResults = [],
+    message = '',
+    fileAttachments = []
+} = {}) {
     const submission = normalizeExactAnswerSubmission(decision.exactAnswerSubmission || {});
+    if (!submission.answer && normalizeText(decision.finalAnswer)) {
+        submission.answer = stripControlTags(decision.finalAnswer);
+        submission.reason = submission.reason || normalizeText(decision.publicReasoning);
+        submission.personaText = submission.personaText || submission.answer;
+    }
     const availableRefs = getAvailableEvidenceRefSet(stepResults, {
         message,
         exactAnswerMode: true
@@ -6392,6 +7526,51 @@ function validateExactAnswerSubmission({ decision = {}, stepResults = [], messag
     if (incompleteSimulation) {
         warnings.push(incompleteSimulation.error);
     }
+    const selectorMetricGap = detectSelectorMetricEvidenceGap({ message, submission, stepResults });
+    if (selectorMetricGap) {
+        warnings.push(selectorMetricGap.error);
+    }
+    const nestedSelectorGap = detectNestedSelectorSelectionGap({
+        message,
+        submission,
+        stepResults
+    });
+    if (nestedSelectorGap) {
+        warnings.push(nestedSelectorGap.error);
+    }
+    const selectorTerminalRelationGap = detectSelectorTerminalRelationEvidenceGap({
+        message,
+        submission,
+        stepResults
+    });
+    if (selectorTerminalRelationGap) {
+        warnings.push(selectorTerminalRelationGap.error);
+    }
+    const visualEnumerationGap = detectVisualEnumerationEvidenceGap({
+        message,
+        submission,
+        stepResults,
+        fileAttachments
+    });
+    if (visualEnumerationGap) {
+        warnings.push(visualEnumerationGap.error);
+    }
+    const answerSpecificityGap = detectAnswerSpecificityEvidenceGap({
+        message,
+        submission,
+        stepResults
+    });
+    if (answerSpecificityGap) {
+        warnings.push(answerSpecificityGap.error);
+    }
+    const completeTitleGap = detectCompleteTitleEvidenceGap({
+        message,
+        submission,
+        stepResults
+    });
+    if (completeTitleGap) {
+        warnings.push(completeTitleGap.error);
+    }
     return {
         ok: true,
         submission,
@@ -6401,7 +7580,13 @@ function validateExactAnswerSubmission({ decision = {}, stepResults = [], messag
         availableEvidenceRefs: [...availableRefs],
         scaledUnitMismatch,
         reasonConflict,
-        incompleteSimulation
+        incompleteSimulation,
+        nestedSelectorGap,
+        selectorMetricGap,
+        selectorTerminalRelationGap,
+        visualEnumerationGap,
+        answerSpecificityGap,
+        completeTitleGap
     };
 }
 
@@ -7035,7 +8220,7 @@ function buildExactAnswerContractPromptObject({ exactAnswerMode = false, evidenc
             'question asks for scaled units such as thousand/million/billion but answer is the raw rounded base-unit value'
         ],
         available_evidence_refs: evidenceArtifacts.map((artifact) => artifact.id).filter(Boolean),
-        instruction: `When solved, call ${FINAL_ANSWER_TOOL_NAME} instead of writing a visible prose final. Evidence artifact ids are audit references for the observations you used; they do not decide sufficiency for you, but ${FINAL_ANSWER_TOOL_NAME} submissions must cite available refs. Use your own judgment about whether evidence is sufficient; if it is not, continue tools or return blocked. For first/earliest/latest/only/all/count questions, verify that the evidence covers the relevant candidate set and its list or section boundaries before submitting; a partial viewport or one source category is insufficient unless it establishes the requested boundary. For quantitative questions, finish unit conversion, rate conversion, scaling, and rounding before final; if the question asks how many thousand/million/billion X, answer with the scaled count, not the raw unit value. For finite stochastic/probability/odds questions, use exact state transitions, dynamic programming, or exhaustive enumeration when needed; Monte Carlo may be a sanity check. Keep the answer field consistent with the final numeric conclusion written in reason.`
+        instruction: `When solved, call ${FINAL_ANSWER_TOOL_NAME} instead of writing a visible prose final. Evidence artifact ids are audit references for the observations you used; they do not decide sufficiency for you, but ${FINAL_ANSWER_TOOL_NAME} submissions must cite available refs. Use your own judgment about whether evidence is sufficient; if it is not, continue tools or return blocked. For first/earliest/latest/only/all/count/most/least questions, verify that the evidence covers the relevant candidate set and its list or section boundaries before submitting; a partial viewport or one source category is insufficient unless it establishes the requested boundary. If selection depends on a quoted term, preserve its exact lexical form and record the per-group counts rather than matching stems or inflectional variants. For quantitative questions, finish unit conversion, rate conversion, scaling, and rounding before final; if the question asks how many thousand/million/billion X, answer with the scaled count, not the raw unit value. For finite stochastic/probability/odds questions, use exact state transitions, dynamic programming, or exhaustive enumeration when needed; Monte Carlo may be a sanity check. Keep the answer field consistent with the final numeric conclusion written in reason.`
     };
 }
 
@@ -7050,6 +8235,7 @@ function buildLlmAgentDirectToolPrompt({
     maxSteps = DEFAULT_AGENT_LOOP_STEPS,
     memoryContext = '',
     fileAttachments = [],
+    modelImageAttachments = [],
     externalToolExposure = null,
     exactAnswerMode = false,
     runtimeEnvironment = null,
@@ -7064,18 +8250,38 @@ function buildLlmAgentDirectToolPrompt({
     evidenceManifest = [],
     currentPlan = null,
     unresolvedFields = [],
+    requireTaskExecution = false,
+    requireExecutionEvidence = false,
     safetyFinalizationReason = '',
     ephemeralDeveloperMessage = '',
     suppressCurrentUserMessage = false
 }) {
     const activePromptProfile = promptProfile || resolveAgentPromptProfile();
     const taskAgentMode = normalizeText(contextMode).toLowerCase() === 'task_agent';
+    const activeModelImageAttachments = taskAgentMode
+        ? (Array.isArray(modelImageAttachments) ? modelImageAttachments : [])
+        : [];
     const effectiveOriginalGoal = taskAgentMode
         ? normalizeText(originalUserGoal, message)
         : normalizeText(message);
     const inheritanceMode = normalizeText(taskAgentInheritanceMode, 'clean').toLowerCase();
     const modelMessageHistory = taskAgentMode && inheritanceMode === 'clean' ? [] : messageHistory;
     const capabilityCatalog = null;
+    const availableTools = Array.isArray(tools) ? tools : [];
+    const toolSemanticText = (tool) => [
+        normalizeText(tool?.name || tool?.function?.name),
+        normalizeText(tool?.description || tool?.function?.description)
+    ].filter(Boolean).join(' ');
+    const hasTemporalTool = availableTools.some((tool) =>
+        /\b(?:time|date|datetime|timestamp|posix)\b/i.test(
+            toolSemanticText(tool).replaceAll('_', ' ')
+        )
+    );
+    const hasCurrentTimestampTool = availableTools.some((tool) => {
+        const semanticText = toolSemanticText(tool).replaceAll('_', ' ');
+        return /\bcurrent\b.{0,40}\b(?:time|date|datetime|timestamp|posix)\b/i.test(semanticText) ||
+            /\b(?:time|date|datetime|timestamp|posix)\b.{0,40}\bcurrent\b/i.test(semanticText);
+    });
     const toolOutputChars = activePromptProfile.compact ? 12000 : 24000;
     const responseProtocolInstruction = 'Use assistant messages for user-visible text and native function calls for tools. Never print a custom JSON decision object, tool-call markup, DSML, or other internal protocol as user-visible text.';
     const personaRuntimeInstructions = [
@@ -7084,6 +8290,12 @@ function buildLlmAgentDirectToolPrompt({
         'The runtime_environment object is the authoritative host clock. Use its current_date, current_time, timezone, and utc_offset instead of assuming the training-data date.',
         'For facts that may have changed, use fresh evidence already present in the conversation or verify them through TaskAgent. Do not present pretrained knowledge as current fact when freshness matters.',
         'When the user asks for concrete task execution that cannot be answered safely from the visible conversation, call handoff_task exactly once. The Harness transfers the immutable current user request; do not restate, rewrite, expand, or plan the task in tool arguments.',
+        requireTaskExecution
+            ? 'This turn has an explicit task-execution contract. Call handoff_task exactly once before producing any answer; do not answer the task directly from model memory or arithmetic.'
+            : '',
+        exactAnswerMode
+            ? 'In exact-answer mode, arithmetic, multi-step logic, optimization, best/maximum/minimum/guaranteed claims, source lookup, and cross-record identity are concrete verification tasks: call handoff_task instead of answering them from intuition. Answer directly only when the requested value is explicitly established in the visible conversation and needs no new calculation or verification.'
+            : '',
         'handoff_task blocks while the system Harness runs or resumes the single TaskAgent. You do not create, wait for, resume, list, or close agents. After the tool returns, render its TaskResult packet instead of calling another orchestration tool.',
         'The TaskResult packet is the factual boundary. You may rewrite tone and presentation, but you must not add a name, number, quote, link, claim, or conclusion absent from final_answer, partial_answer, source_refs, or the visible conversation. If status is incomplete, explain the concrete unresolved field naturally instead of silently starting another execution.',
         'Never mention TaskAgent, subagent, worker, handoff, capsule, or internal orchestration to the user.',
@@ -7097,13 +8309,39 @@ function buildLlmAgentDirectToolPrompt({
         'task_state.current_request / task_state.delegated_task is the current user request for this turn. task_state.original_user_goal is durable thread context for continuity, not a reason to ignore the current request; when the user continues, corrects, or redirects the task, preserve useful prior artifacts/checkpoints while making the current request the active objective.',
         'Tool call outputs from previous turns appear as function_call_output/tool_search_output items paired with their call_id. Use recent, relevant outputs as observations, but do not keep rereading stale exploration results once you have enough information to code, verify, or answer.',
         'Answer directly once the available evidence supports a reasonable answer. Use another tool only when you can name the specific missing field or uncertainty that blocks the answer. Do not repeat an identical tool call unless the new arguments materially change the observation.',
+        'A rejected native tool call is an authoritative schema observation. Never repeat the same rejected tool name and arguments. Read the required fields and visible types from the rejection, then either submit materially corrected complete arguments or call a prerequisite/alternate tool that can produce the missing values.',
+        'Build tool arguments only from explicit evidence. Supply required fields and optional fields stated by the user or returned by a prior tool; otherwise leave optional fields omitted. An optional value is evidence-backed only when the user supplied that field or a prior tool returned it for this call. A runtime clock, plausible default, or inferred context is not evidence for an omitted optional field. Do not invent optional years, locations, identifiers, contacts, filters, or defaults. For user-supplied names, titles, labels, or identifiers, preserve the exact literal text on the first lookup; do not expand, canonicalize, or append words unless a prior tool result or an enum in the visible contract authorizes that value.',
+        requireExecutionEvidence
+            ? 'This run has an explicit execution-evidence contract. Do not claim completion until at least one task-execution tool succeeds and the latest task-execution step is successful. If that evidence is unavailable, state the concrete blocker; the runtime will preserve the task as incomplete rather than completed.'
+            : '',
+        hasTemporalTool && hasCurrentTimestampTool
+            ? 'When the request depends on current or relative date/time, ground it with runtime_environment and the exposed temporal tools. A current-time observation capability is exposed; identify it from its name or description even when names are opaque, call it first, then convert or compare dates with tool results. Runtime-environment text or model arithmetic alone does not replace that prerequisite tool observation.'
+            : hasTemporalTool
+                ? 'Temporal conversion or filtering tools are exposed, but no current-time observation capability is available. For a stateful tool call whose timestamp or filter depends on now, today, yesterday, tomorrow, or upcoming, do not derive absolute values from runtime_environment, model arithmetic, plausible defaults, or unrelated records. Ask for an absolute time anchor or return the missing prerequisite instead of searching or mutating state with assumed bounds.'
+                : '',
         'In the final answer, preserve the user-requested output shape, unit scaling, rounding, and brevity.',
         'Only call tools that are present in the current tools array. If a needed tool is missing, use tool_search when it is available.',
+        'tool_search acquires a capability; its metadata is not answer evidence. Call it early enough to reserve a later work round for invoking the selected tool, and never spend the final available work-tool round on discovery alone.',
         'When web discovery identifies the relevant entity but the answer still depends on structured identity, a join across records, global ordering or de-duplication, chronology, or a complete candidate-set boundary, use tool_search for a dedicated metadata, document, API, or data capability. Once that dependency is apparent, do not spend the remaining work budget paging through a site or rewriting web queries to reconstruct the structure manually.',
+        'For nested selector questions, do not put an unverified intermediate entity inferred from memory into the first search query. Preserve the dependency order: retrieve the parent candidate index, apply the user-specified exact match/count/order criterion, select the winning parent, then inspect its requested child and terminal fact. A plausible intermediate entity is not evidence for the selection step.',
         'For latest/current/recent information, public web facts, recommendations, guides, prices, schedules, rules, product/software versions, news, or anything likely to change over time, you must browse or use web research first. Do not rely on memory, local code search, local logs, or shell commands as a substitute for public web evidence unless the user explicitly asks about local files/code.',
+        'For a past/as-of state of a named public website, database, catalog, API, OAI endpoint, or result page, one empty, blocked, rate-limited, or unavailable live lookup is enough to switch strategy. Use the web_run archive operation on a known URL or stable prefix; do not spend later rounds rewriting broad searches or treating benchmark/task-prompt mirrors as source evidence.',
+        'Once a direct authoritative page, document, or API response visibly contains an answer-bearing candidate that satisfies the task constraints, stop broad discovery. If the requested relationship or role is still uncertain, inspect the candidate in its local source context; do not replace it with a less authoritative search result merely because another wording looks plausible.',
+        'For historical-source questions, preserve the name, place, organization, category, and other labels used by the source at the requested time. Do not silently modernize a historical label to a current administrative or corporate name unless the user explicitly asks for the modern equivalent.',
+        'For aggregate extrema, ranking, distance, earliest/latest, or other selector tasks, keep three checks separate: establish the complete candidate set, obtain comparable values for the requested metric and compute the selector, then verify each selected terminal record against an entity-level source. A complete table of entity labels without the selector metric does not establish the winner. For geographic direction or distance, obtain comparable coordinates for the boundary contenders instead of inferring fine ordering from region names or memory. Aggregate indexes may normalize historical places or labels, so preserve the entity-level source-period label instead of silently substituting a current municipality.',
         'For local file and data tasks, prefer the coding main path: read/write/exec/apply_patch. Use read to inspect small files, write to create helper scripts, exec to run scripts/tests/diagnostics, and apply_patch for source edits. Use tool_search only when the coding path cannot reliably inspect the file type or when a specialized direct MCP/tool is clearly needed.',
-        'Attached files are staged inside the current workspace before TaskAgent starts. Always use the staged attached_files path. For PDF, Office, image, audio, archive, or other structured/binary files, use tool_search once for the exact dedicated reader/transcriber/vision capability and call that tool; do not spend the task budget installing ad-hoc parsers when a dedicated tool is available.',
+        activeModelImageAttachments.length
+            ? 'Attached image content is included directly in this model input together with its staged path. Inspect the supplied image before deciding whether any additional vision tool is needed. For PDF, Office, audio, archive, or other structured/binary files, use tool_search once for the exact dedicated reader/transcriber capability.'
+            : 'Attached files are staged inside the current workspace before TaskAgent starts. Always use the staged attached_files path. For PDF, Office, image, audio, archive, or other structured/binary files, use tool_search once for the exact dedicated reader/transcriber/vision capability and call that tool; do not spend the task budget installing ad-hoc parsers when a dedicated tool is available.',
+        'When a task asks for a best, optimal, forced, guaranteed, or formally correct action from an image or other perceived state, perception alone is not verification. Transcribe and cross-check the structured state, then use tool_search for an available domain rules engine, solver, simulator, or validator before claiming optimality. Do not replace a deterministic verifier with heuristic model judgment when such a verifier is available.',
         'For data reasoning tasks, use code as a calculator and verifier: write scripts that parse the source file, compute the needed result, and print a short answer plus compact evidence. Do not write scripts whose main purpose is to dump large files, whole spreadsheets, logs, or documents back into model context.',
+        'For bounded numerical optimization, minimax, game-strategy, or guaranteed-value questions stated in text, use exec to exhaustively enumerate the finite integer state space or run an equivalent deterministic solver before answering. Verify both the claimed strategy/value and the adversarial bound; do not rely on a plausible witness alone.',
+        'For a derived numeric answer, make a compact operand ledger before finalizing: bind each number to its exact source label, date, group, unit, and requested role, then run the arithmetic with exec when more than one operation is involved. Never substitute a nearby statistic that has the right topic but the wrong year, population, or field.',
+        'Before coding a word problem, sanity-check its quantifiers and constraints. If a literal reading makes an explicitly stated rule redundant or vacuous, or two plausible readings change the result, compute the material alternatives and resolve the intended non-vacuous reading from the wording and task design instead of silently committing to one interpretation.',
+        'For finite staged processes, use only transitions explicitly defined by the rules. If the rules stop defining a transition at a boundary or partial stage, do not invent a terminal probability, shortened random device, or replacement transition; enumerate the material interpretations and flag any extreme result that exists only because of an added boundary rule.',
+        'For ordered extraction or transcription lists, preserve every source occurrence, including repeated values. Verify the final item count and order against the source before answering; repeated items are evidence, not duplicates to remove.',
+        'For layout-sensitive or source-form questions about indentation, columns, line breaks, fraction bars, slash glyphs, colors, or positions, inspect rendered visual evidence from the image or document. Text search and normalized extraction cannot establish those properties. Preserve the original visual form while selecting occurrences; do not convert a stacked fraction into a slash expression before deciding whether the source literally contains a slash.',
+        'When a question puts a word or phrase in quotation marks and asks which group has the most matching titles, labels, or records, compare the quoted lexical form as an exact whole token or phrase unless the question explicitly asks for variants. Do not merge singular/plural forms, stems, or merely related words; record the per-group match counts before following the winning group.',
         'For long-running work, you may attach progress_note to a tool call or include a short public progress sentence only at meaningful milestones: plan changed, key evidence found, strategy changed after failure, blocker/recovery identified, or evidence is sufficient and you are preparing the final answer. Leave progress_note empty for routine tool calls. Do not expose raw JSON, hidden reasoning, internal IDs, stack traces, token counts, or generic "I am thinking" text.',
         'Tool outputs provide observations and mechanical transport metadata, not a decision about whether the user task is complete. Judge sufficiency from the original task and the source content yourself. A Source viewport line range, has-more marker, or <truncated omitted_approx_tokens="..."/> marker describes visible context only; it does not require another call when the visible evidence already supports the answer. For first/earliest/latest/only/all/count questions, a visible subset supports the answer only when it establishes the relevant candidate-set boundary; otherwise inspect the remaining relevant lines or sections, or use a structured tool.',
         'When exec output is truncated, use the visible outputId with output_read/output_tail/output_search to inspect a needed slice. Do not rerun the same command solely to recover truncated text.',
@@ -7130,19 +8368,30 @@ function buildLlmAgentDirectToolPrompt({
             toolOutputs: stepResults,
             memoryContext,
             fileAttachments: getAttachedFilesPromptObject(fileAttachments),
+            modelImageAttachments: activeModelImageAttachments,
             runtimeEnvironment,
             capabilityCatalog,
             externalToolExposure: null,
             toolOutputChars,
-            ephemeralDeveloperMessage,
+            ephemeralDeveloperMessage: '',
             suppressCurrentUserMessage
     });
+    recordModelImageAttachmentsToContextManager(
+        activeContextManager,
+        activeModelImageAttachments
+    );
     const taskContextState = taskAgentMode ? {
         ...(taskState && typeof taskState === 'object' ? taskState : {}),
         original_user_goal: effectiveOriginalGoal,
         current_request: normalizeText(message),
         delegated_task: normalizeText(message)
     } : taskState;
+    const contextHasImageInput = activeModelImageAttachments.length > 0 ||
+        (activeContextManager.rawItems?.() || []).some((item) => (
+            item?.type === 'message' &&
+            Array.isArray(item.content) &&
+            item.content.some((part) => part?.type === 'input_image')
+        ) || responseItemOutputImages(item).length > 0);
     const contextPackageOptions = {
         instructions,
         staticPrefix: instructions,
@@ -7154,6 +8403,7 @@ function buildLlmAgentDirectToolPrompt({
         currentPlan,
         unresolvedFields,
         pinnedEvidenceManifest: evidenceManifest,
+        inputModalities: contextHasImageInput ? ['text', 'input_image'] : ['text'],
         toolSummary,
         toolSchemas: tools,
         budgetConfig: contextBudgetConfig
@@ -7164,7 +8414,11 @@ function buildLlmAgentDirectToolPrompt({
         semanticCompaction = activeContextManager.semanticCompact(contextPackageOptions);
         contextPackage = semanticCompaction.packageAfter;
     }
-    const input = contextPackage.recentResponseItems;
+    const ephemeralDeveloperItem = responseMessage('developer', ephemeralDeveloperMessage);
+    const input = [
+        ...contextPackage.recentResponseItems,
+        ...(ephemeralDeveloperItem ? [ephemeralDeveloperItem] : [])
+    ];
     const prompt = Prompt.create({
         input,
         tools,
@@ -7306,7 +8560,176 @@ function findNativeToolSpec(toolName = '', tools = []) {
     return tools.find((tool) => normalizeText(tool?.name || tool?.function?.name) === normalizedName) || null;
 }
 
-function validateNativeDirectToolCall(toolCall = {}, tools = []) {
+function nativeToolSemanticText(spec = {}) {
+    const schema = spec?.parameters || spec?.function?.parameters || {};
+    const properties = schema?.properties && typeof schema.properties === 'object'
+        ? schema.properties
+        : {};
+    return [
+        normalizeText(spec?.name || spec?.function?.name),
+        normalizeText(spec?.description || spec?.function?.description),
+        ...Object.entries(properties).flatMap(([name, property]) => [
+            name,
+            normalizeText(property?.description)
+        ])
+    ].filter(Boolean).join(' ').replaceAll('_', ' ');
+}
+
+function isCurrentTimeObservationToolSpec(spec = {}) {
+    const semanticText = nativeToolSemanticText(spec);
+    return /\bcurrent\b.{0,40}\b(?:time|date|datetime|timestamp|posix)\b/i.test(semanticText) ||
+        /\b(?:time|date|datetime|timestamp|posix)\b.{0,40}\bcurrent\b/i.test(semanticText);
+}
+
+function isStatefulTemporalToolSpec(spec = {}) {
+    const semanticText = nativeToolSemanticText(spec);
+    const schema = spec?.parameters || spec?.function?.parameters || {};
+    const properties = schema?.properties && typeof schema.properties === 'object'
+        ? Object.keys(schema.properties).join(' ').replaceAll('_', ' ')
+        : '';
+    return /\b(?:time|date|datetime|timestamp|posix)\b/i.test(`${semanticText} ${properties}`) &&
+        /\b(?:search|find|query|list|remind|reminder|calendar|event|message|schedule|add|create|modify|update|delete)\b/i.test(semanticText) &&
+        !isCurrentTimeObservationToolSpec(spec);
+}
+
+function containsRelativeTimeReference(value = '') {
+    const text = normalizeText(value);
+    return /\b(?:now|today|tonight|yesterday|tomorrow|upcoming|next\s+(?:day|week|month|year|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|this\s+(?:week|month|year|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|in\s+\d+\s+(?:minute|hour|day|week|month|year)s?)\b/i.test(text) ||
+        /(?:现在|今天|今晚|昨天|明天|后天|下周|下个月|明年|本周|这个月|下个星期|过\d+(?:分钟|小时|天|周|个月|年))/.test(text);
+}
+
+function containsAbsoluteTimeAnchor(value = '') {
+    const text = normalizeText(value);
+    return /\b\d{4}[-/.]\d{1,2}[-/.]\d{1,2}\b/.test(text) ||
+        /\b\d{1,2}[-/.]\d{1,2}[-/.]\d{4}\b/.test(text) ||
+        /\b1\d{9}(?:\.\d+)?\b/.test(text);
+}
+
+function successfulStepText(stepResult = {}) {
+    if (stepResult?.response?.ok !== true) {
+        return '';
+    }
+    try {
+        return JSON.stringify({
+            tool: stepResult.tool,
+            args: stepResult.args,
+            response: stepResult.response
+        });
+    } catch {
+        return '';
+    }
+}
+
+function priorToolSupportsTemporalArguments(args = {}, stepResults = [], tools = []) {
+    const successfulSteps = (Array.isArray(stepResults) ? stepResults : [])
+        .filter((stepResult) => stepResult?.response?.ok === true);
+    if (successfulSteps.some((stepResult) =>
+        isCurrentTimeObservationToolSpec(findNativeToolSpec(stepResult?.tool, tools) || {})
+    )) {
+        return true;
+    }
+    const temporalValues = Object.entries(args)
+        .filter(([name, value]) =>
+            /\b(?:time|date|datetime|timestamp|posix)\b/i.test(name.replaceAll('_', ' ')) &&
+            ['string', 'number'].includes(typeof value)
+        )
+        .map(([, value]) => String(value));
+    return temporalValues.length > 0 && temporalValues.every((value) =>
+        successfulSteps.some((stepResult) => successfulStepText(stepResult).includes(value))
+    );
+}
+
+function normalizeLiteralTokens(value = '') {
+    return normalizeText(value)
+        .toLowerCase()
+        .match(/[\p{L}\p{N}]+/gu) || [];
+}
+
+function containsTokenSequence(haystack = [], needle = []) {
+    if (!needle.length || needle.length > haystack.length) {
+        return false;
+    }
+    for (let index = 0; index <= haystack.length - needle.length; index += 1) {
+        if (needle.every((token, offset) => haystack[index + offset] === token)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function priorToolReturnedLiteral(value = '', stepResults = []) {
+    const expected = normalizeText(value).toLowerCase();
+    if (!expected) {
+        return false;
+    }
+    return (Array.isArray(stepResults) ? stepResults : [])
+        .some((stepResult) => successfulStepText(stepResult).toLowerCase().includes(expected));
+}
+
+function validateEntityLiteralProvenance(args = {}, schema = {}, options = {}) {
+    const userText = [
+        options.originalUserGoal,
+        options.userText
+    ].map((value) => normalizeText(value)).filter(Boolean).join('\n');
+    const userTokens = normalizeLiteralTokens(userText);
+    if (!userTokens.length) {
+        return [];
+    }
+    const properties = schema?.properties && typeof schema.properties === 'object'
+        ? schema.properties
+        : {};
+    const errors = [];
+    for (const [name, value] of Object.entries(args)) {
+        if (
+            typeof value !== 'string' ||
+            !/(?:^|_)(?:name|title|label|identifier)(?:$|_)/i.test(name)
+        ) {
+            continue;
+        }
+        const argumentTokens = normalizeLiteralTokens(value);
+        if (
+            argumentTokens.length < 2 ||
+            containsTokenSequence(userTokens, argumentTokens) ||
+            priorToolReturnedLiteral(value, options.stepResults) ||
+            (Array.isArray(properties[name]?.enum) && properties[name].enum.includes(value))
+        ) {
+            continue;
+        }
+        const strictSubsequences = [
+            argumentTokens.slice(0, -1),
+            argumentTokens.slice(1)
+        ].filter((tokens) => tokens.join('').length >= 4);
+        if (strictSubsequences.some((tokens) => containsTokenSequence(userTokens, tokens))) {
+            errors.push(
+                `${name} expands or canonicalizes an explicit user entity without evidence; preserve the user's exact literal value or use a prior tool result`
+            );
+        }
+    }
+    return errors;
+}
+
+function validateRelativeTemporalPrerequisite(args = {}, spec = {}, tools = [], options = {}) {
+    const requestText = [
+        options.originalUserGoal,
+        options.userText
+    ].map((value) => normalizeText(value)).filter(Boolean).join('\n');
+    if (
+        !containsRelativeTimeReference(requestText) ||
+        containsAbsoluteTimeAnchor(requestText) ||
+        !isStatefulTemporalToolSpec(spec) ||
+        priorToolSupportsTemporalArguments(args, options.stepResults, tools)
+    ) {
+        return [];
+    }
+    const currentTimeAvailable = tools.some((tool) => isCurrentTimeObservationToolSpec(tool));
+    return [
+        currentTimeAvailable
+            ? 'relative-time stateful tool call requires a successful current-time observation first'
+            : 'relative-time stateful tool call is blocked because no current-time observation capability or explicit absolute time anchor is available'
+    ];
+}
+
+function validateNativeDirectToolCall(toolCall = {}, tools = [], options = {}) {
     const name = normalizeText(toolCall.name || toolCall.tool);
     const args = toolCall.arguments && typeof toolCall.arguments === 'object' && !Array.isArray(toolCall.arguments)
         ? toolCall.arguments
@@ -7328,6 +8751,10 @@ function validateNativeDirectToolCall(toolCall = {}, tools = []) {
     const required = Array.isArray(repairedSchema.required) ? repairedSchema.required : [];
     if (required.length && Object.keys(args).length === 0) {
         errors.push(`native tool call ${name} cannot use empty arguments; required: ${required.join(', ')}`);
+    }
+    if (spec && options.enforceEvidenceProvenance === true) {
+        errors.push(...validateEntityLiteralProvenance(args, repairedSchema, options));
+        errors.push(...validateRelativeTemporalPrerequisite(args, spec, tools, options));
     }
     return {
         ok: errors.length === 0,
@@ -7359,11 +8786,19 @@ function looksLikeMetaDecisionJson(json = {}) {
 async function callLlmAgentDirectToolDecision(settings, payload, {
     hasToolHistory = false,
     forceFinalResponse = false,
-    allowFinalizationRetry = true
+    allowFinalizationRetry = true,
+    nativeToolValidationContext = null
 } = {}) {
+    const rawToolChoice = payload.toolChoice ?? payload.tool_choice;
     const requestedToolChoice = forceFinalResponse
         ? 'none'
-        : normalizeText(payload.toolChoice || payload.tool_choice, 'auto');
+        : (
+            rawToolChoice &&
+            typeof rawToolChoice === 'object' &&
+            !Array.isArray(rawToolChoice)
+                ? { ...rawToolChoice }
+                : normalizeText(rawToolChoice, 'auto')
+        );
     const finalizationContext = forceFinalResponse
         ? normalizeText(payload.finalizationContext)
         : '';
@@ -7547,7 +8982,11 @@ async function callLlmAgentDirectToolDecision(settings, payload, {
             ...(providerMetadata ? { providerMetadata } : {})
         };
         if (routedToolCall.toolName === FINAL_ANSWER_TOOL_NAME) {
-            const nativeValidation = validateNativeDirectToolCall(routedNativeToolCall, payload.tools);
+            const nativeValidation = validateNativeDirectToolCall(
+                routedNativeToolCall,
+                payload.tools,
+                nativeToolValidationContext || {}
+            );
             if (!nativeValidation.ok) {
                 return {
                     ok: false,
@@ -7604,7 +9043,11 @@ async function callLlmAgentDirectToolDecision(settings, payload, {
                 usage: response.usage
             };
         }
-        const nativeValidation = validateNativeDirectToolCall(routedNativeToolCall, payload.tools);
+        const nativeValidation = validateNativeDirectToolCall(
+            routedNativeToolCall,
+            payload.tools,
+            nativeToolValidationContext || {}
+        );
         if (!nativeValidation.ok) {
             return {
                 ok: false,
@@ -7617,6 +9060,7 @@ async function callLlmAgentDirectToolDecision(settings, payload, {
                     schema: nativeValidation.schema,
                     content: response.content || ''
                 },
+                nativeToolCall: routedNativeToolCall,
                 usage: response.usage
             };
         }
@@ -7679,7 +9123,11 @@ async function callLlmAgentDirectToolDecision(settings, payload, {
                 arguments: nextRoutedToolCall.args,
                 ...(providerMetadata ? { providerMetadata } : {})
             };
-            const nextNativeValidation = validateNativeDirectToolCall(nextRoutedNativeToolCall, payload.tools);
+            const nextNativeValidation = validateNativeDirectToolCall(
+                nextRoutedNativeToolCall,
+                payload.tools,
+                nativeToolValidationContext || {}
+            );
             if (!nextNativeValidation.ok) {
                 return {
                     ok: false,
@@ -9089,12 +10537,15 @@ class AILISAgentRunner {
             requestContext.debugBreakAfterRound === true ||
             requestContext.agentLabStepMode === true;
         const agentRuntimeRole = resolveAgentRuntimeRole(request, requestContext);
+        const requireTaskExecution = isTaskExecutionRequired(request, requestContext);
+        const requireExecutionEvidence = isExecutionEvidenceRequired(request, requestContext);
         const requestedMaxSteps = Number(request.maxAgentSteps || requestContext.maxAgentSteps || DEFAULT_AGENT_LOOP_STEPS);
         const boundedMaxSteps = Math.max(1, Math.min(Number.isFinite(requestedMaxSteps) ? requestedMaxSteps : DEFAULT_AGENT_LOOP_STEPS, MAX_AGENT_LOOP_STEPS));
-        const maxSteps = isTaskAgentRole(agentRuntimeRole)
+        let maxSteps = isTaskAgentRole(agentRuntimeRole)
             ? Math.max(2, Math.min(boundedMaxSteps, TASK_AGENT_MAX_MODEL_ROUNDS))
             : boundedMaxSteps;
-        const finalizationIteration = Math.max(0, maxSteps - 1);
+        const baseFinalizationIteration = Math.max(0, maxSteps - 1);
+        let finalizationIteration = baseFinalizationIteration;
         const events = initialEvents.slice();
         const stepResults = initialStepResults.slice();
         let modelInputContextManager = restoreModelInputContextManagerFromCheckpoint(initialContextManagerCheckpoint);
@@ -9123,7 +10574,15 @@ class AILISAgentRunner {
         let latestDecision = null;
         let cumulativeInputTokens = 0;
         let safetyFinalizationAttempted = false;
+        let exactAnswerAuditRepairInstruction = '';
+        const exactAnswerAuditRepairWarningsAttempted = new Set();
+        let exactAnswerAuditRecoveryToolCallsRemaining = 0;
+        let exactAnswerAuditActiveRecoveryGap = null;
+        let exactAnswerAuditRecoveryProtocolNote = '';
+        let exactAnswerAuditRecoveryOffTargetRetryUsed = false;
+        let latestExactAnswerCandidate = null;
         const completedSubagentNotifications = [];
+        const invalidDecisionHistory = [];
         const initialContextWindow = resolveModelContextWindowTokens(settings, requestContext);
         const legacyAgentMailboxEnabled = requestContext.enableLegacyAgentMailbox === true;
         const maxLoopDurationMs = firstPositiveNumber([
@@ -9234,7 +10693,9 @@ class AILISAgentRunner {
                     }
                 });
             }
-            const noProgressReason = detectAgentNoProgress(stepResults, requestContext);
+            const noProgressReason =
+                detectInvalidDecisionNoProgress(invalidDecisionHistory, requestContext) ||
+                detectAgentNoProgress(stepResults, requestContext);
             const safetyFinalizationReason = iteration >= finalizationIteration
                 ? 'maximum_tool_rounds'
                 : Date.now() - startedAt >= maxLoopDurationMs
@@ -9268,6 +10729,9 @@ class AILISAgentRunner {
                 }
             }
             const decisionSettings = resolveAgentDecisionSettings(settings, requestContext);
+            const modelImageAttachments = isTaskAgentRole(agentRuntimeRole)
+                ? buildDirectModelImageAttachments(fileAttachments, decisionSettings)
+                : [];
             const taskCompactPrompt = looksLikeArtifactAnswerQuestion({
                 message,
                 fileAttachments
@@ -9304,14 +10768,38 @@ class AILISAgentRunner {
                     agentRole: agentRuntimeRole,
                     taskCompactPrompt
                 },
-                exactAnswerMode
+                exactAnswerMode,
+                suppressFinalAnswer: exactAnswerAuditRecoveryToolCallsRemaining > 0,
+                recoveryGap: exactAnswerAuditRecoveryToolCallsRemaining > 0
+                    ? exactAnswerAuditActiveRecoveryGap
+                    : null
             });
-            const runtimeEnvironment = buildRuntimeEnvironmentPromptObject(this.gateway?.platformAdapter);
+            const exactAnswerRecoveryToolAffordanceNote =
+                exactAnswerAuditRecoveryToolCallsRemaining > 0
+                    ? buildExactAnswerRecoveryToolAffordanceNote(
+                          directToolSpecs,
+                          exactAnswerAuditActiveRecoveryGap
+                      )
+                    : '';
+            const runtimeEnvironment = buildRuntimeEnvironmentPromptObject(
+                this.gateway?.platformAdapter,
+                requestContext.desktopRealEval === true
+                    ? requestContext.runtimeEnvironmentOverride
+                    : null
+            );
             const currentPlan = this.gateway.runtime?.planState?.get?.(runId) || initialPlan || null;
             const constraints = Array.isArray(requestContext.taskConstraints || request.constraints)
                 ? (requestContext.taskConstraints || request.constraints)
                 : [];
-            const unresolvedFields = collectAgentUnresolvedFields(stepResults, latestDecision);
+            const unresolvedFields = [...new Set([
+                ...(Array.isArray(requestContext.priorUnresolvedFields)
+                    ? requestContext.priorUnresolvedFields
+                    : []),
+                ...(Array.isArray(requestContext.prior_unresolved_fields)
+                    ? requestContext.prior_unresolved_fields
+                    : []),
+                ...collectAgentUnresolvedFields(stepResults, latestDecision)
+            ].map((value) => normalizeText(value)).filter(Boolean))].slice(-24);
             const taskState = buildAgentTaskState({
                 runId,
                 stepResults,
@@ -9365,6 +10853,7 @@ class AILISAgentRunner {
                 initialPlan,
                 memoryContext,
                 fileAttachments,
+                modelImageAttachments,
                 externalToolExposure,
                 exactAnswerMode,
                 runtimeEnvironment,
@@ -9381,11 +10870,25 @@ class AILISAgentRunner {
                 evidenceManifest,
                 currentPlan,
                 unresolvedFields,
+                requireTaskExecution,
+                requireExecutionEvidence,
                 safetyFinalizationReason,
-                ephemeralDeveloperMessage: normalizeText(
-                    request.ephemeralDeveloperMessage ||
-                    requestContext.ephemeralDeveloperMessage
-                ),
+                ephemeralDeveloperMessage: [
+                    normalizeText(
+                        request.ephemeralDeveloperMessage ||
+                        requestContext.ephemeralDeveloperMessage
+                    ),
+                    exactAnswerAuditRepairInstruction
+                        ? [
+                              exactAnswerAuditRepairInstruction,
+                              exactAnswerAuditRecoveryProtocolNote,
+                              exactAnswerRecoveryToolAffordanceNote,
+                              exactAnswerAuditRecoveryToolCallsRemaining > 0
+                                  ? `Recovery action required now; choose the most useful available tool. ${exactAnswerAuditRecoveryToolCallsRemaining} evidence action(s) remain before final_answer is restored.`
+                                  : 'The recovery actions are complete. Submit the best available answer now, even if the evidence is still imperfect.'
+                          ].join(' ')
+                        : ''
+                ].filter(Boolean).join('\n\n'),
                 suppressCurrentUserMessage:
                     request.suppressCurrentUserMessage === true ||
                     requestContext.suppressCurrentUserMessage === true,
@@ -9398,7 +10901,15 @@ class AILISAgentRunner {
             const parallelToolCalls = safetyFinalizationReason
                 ? false
                 : resolveParallelToolCalls(decisionSettings, requestContext);
-            const directToolChoice = safetyFinalizationReason ? 'none' : 'auto';
+            const directToolChoice = resolveAgentDirectToolChoice({
+                agentRuntimeRole,
+                request,
+                requestContext,
+                directToolSpecs,
+                stepResults,
+                safetyFinalizationReason,
+                requireToolAction: exactAnswerAuditRecoveryToolCallsRemaining > 0
+            });
             const directModelInputPrompt = buildLlmAgentDirectToolPrompt({
                 ...commonPromptArgs,
                 parallelToolCalls
@@ -9540,7 +11051,18 @@ class AILISAgentRunner {
             let decision = await callLlmAgentDirectToolDecision(decisionSettings, decisionPayload, {
                 hasToolHistory: stepResults.length > 0 || events.some((event) => event?.type === 'tool_result'),
                 forceFinalResponse: Boolean(safetyFinalizationReason),
-                allowFinalizationRetry: !isTaskAgentRole(agentRuntimeRole)
+                allowFinalizationRetry: !isTaskAgentRole(agentRuntimeRole),
+                nativeToolValidationContext: {
+                    enforceEvidenceProvenance: isTaskAgentRole(agentRuntimeRole),
+                    userText: message,
+                    originalUserGoal: normalizeText(
+                        requestContext.parentUserGoal ||
+                        requestContext.parent_user_goal ||
+                        requestContext.originalUserGoal ||
+                        requestContext.original_user_goal
+                    ),
+                    stepResults
+                }
             });
             latestDecision = decision;
             const llmCallDurationMs = Date.now() - llmCallStartedAt;
@@ -9644,6 +11166,86 @@ class AILISAgentRunner {
             }
             if (!decision.ok && isTerminalAgentDecisionFailure(decision)) {
                 const terminalFailure = describeTerminalAgentDecisionFailure(decision);
+                if (exactAnswerMode && latestExactAnswerCandidate?.submission?.answer) {
+                    const candidate = latestExactAnswerCandidate;
+                    const displayText = candidate.submission.personaText || candidate.submission.answer;
+                    const taskRunHandoff = buildTaskRunHandoffPackage({
+                        status: 'completed_with_warnings',
+                        reason: 'recovery_failed_using_prior_answer_candidate',
+                        runId,
+                        sessionId,
+                        message,
+                        startedAt,
+                        maxSteps,
+                        stepResults,
+                        events,
+                        latestDecision: candidate.decision,
+                        exactAnswer: candidate.submission.answer,
+                        finalAnswer: candidate.submission.answer,
+                        partialAnswer: '',
+                        contextManagerCheckpoint: contextManagerCheckpoint(
+                            'recovery_failed_using_prior_answer_candidate',
+                            iteration
+                        )
+                    });
+                    events.push({
+                        type: 'exact_answer_candidate_fallback',
+                        status: 'completed_with_warnings',
+                        iteration,
+                        candidateIteration: candidate.iteration,
+                        recoveryFailure: terminalFailure.status
+                    });
+                    await appendRuntimeItem({
+                        type: 'agent.exact_answer_audit',
+                        status: 'candidate_fallback',
+                        payload: {
+                            iteration,
+                            candidateIteration: candidate.iteration,
+                            answer: candidate.submission.answer,
+                            recoveryFailure: terminalFailure.status,
+                            recoveryError: decision.error || ''
+                        }
+                    });
+                    return await finishRuntimeRun({
+                        ok: true,
+                        runId,
+                        sessionId,
+                        status: 'completed_with_warnings',
+                        mode: candidate.decision.mode || 'task',
+                        planner: 'llm-agentic-executor',
+                        intent: 'exact_answer_candidate_fallback',
+                        executionRequired: stepResults.length > 0,
+                        durationMs: Date.now() - startedAt,
+                        message,
+                        exactAnswer: candidate.submission.answer,
+                        finalAnswer: candidate.submission.answer,
+                        exactAnswerSubmission: candidate.submission,
+                        exactAnswerAudit: candidate.validation,
+                        recoveryFailure: {
+                            status: terminalFailure.status,
+                            error: decision.error || '',
+                            source: terminalFailure.source
+                        },
+                        displayText,
+                        speechText: displayText.replace(/\n/g, ' '),
+                        plan: [],
+                        steps: stepResults,
+                        events,
+                        taskRunHandoff,
+                        personaOutput: {
+                            text: displayText,
+                            speechText: displayText.replace(/\n/g, ' '),
+                            bubbleText: '',
+                            expression: 'focused',
+                            emotion: 'focused',
+                            socialTone: 'calm',
+                            taskState: 'speaking'
+                        }
+                    }, {
+                        source: 'agent_exact_answer_candidate_fallback',
+                        nextAction: terminalFailure.nextAction
+                    });
+                }
                 const taskRunHandoff = buildTaskRunHandoffPackage({
                     status: terminalFailure.status || 'failed',
                     reason: decision.error || terminalFailure.status,
@@ -9731,6 +11333,12 @@ class AILISAgentRunner {
                 });
             }
             if (!decision.ok) {
+                invalidDecisionHistory.push(
+                    buildInvalidDecisionProgressRecord(decision, iteration)
+                );
+                if (invalidDecisionHistory.length > 8) {
+                    invalidDecisionHistory.splice(0, invalidDecisionHistory.length - 8);
+                }
                 recordInvalidDecisionToContextManager(
                     modelInputContextManager,
                     decision,
@@ -9763,6 +11371,7 @@ class AILISAgentRunner {
                 }
                 continue;
             }
+            invalidDecisionHistory.length = 0;
 
             if (decision.planUpdates?.length && decision.action !== 'final') {
                 const planResponse = await this.gateway.callTool({
@@ -9879,8 +11488,21 @@ class AILISAgentRunner {
                     }
                 }
                 const exactAnswerValidation = exactAnswerMode
-                    ? validateExactAnswerSubmission({ decision, stepResults, message })
+                    ? validateExactAnswerSubmission({
+                          decision,
+                          stepResults,
+                          message,
+                          fileAttachments
+                      })
                     : { ok: true, submission: null };
+                if (exactAnswerMode && exactAnswerValidation?.submission?.answer) {
+                    latestExactAnswerCandidate = {
+                        iteration,
+                        decision,
+                        submission: exactAnswerValidation.submission,
+                        validation: exactAnswerValidation
+                    };
+                }
                 if (exactAnswerMode && exactAnswerValidation?.warnings?.length) {
                     await appendRuntimeItem({
                         type: 'agent.exact_answer_audit',
@@ -9891,16 +11513,83 @@ class AILISAgentRunner {
                         }
                     });
                 }
+                const exactAnswerAuditRecoveryGap = selectExactAnswerAuditRecoveryGap(
+                    exactAnswerValidation,
+                    exactAnswerAuditRepairWarningsAttempted
+                );
+                if (
+                    exactAnswerMode &&
+                    isTaskAgentRole(agentRuntimeRole) &&
+                    exactAnswerAuditRecoveryGap &&
+                    canStartExactAnswerAuditRecovery({
+                        iteration,
+                        finalizationIteration,
+                        safetyFinalizationReason
+                    })
+                ) {
+                    exactAnswerAuditRepairWarningsAttempted.add(exactAnswerAuditRecoveryGap.error);
+                    exactAnswerAuditRecoveryToolCallsRemaining =
+                        [
+                            'selector_terminal_period_label_conflict',
+                            'selector_terminal_relation_answer_mismatch',
+                            'visual_enumeration_not_cross_checked',
+                            'answer_entity_specificity_missing'
+                        ].includes(exactAnswerAuditRecoveryGap.error)
+                            ? 0
+                            : exactAnswerAuditRecoveryGap.error ===
+                                  'nested_selector_candidate_boundary_incomplete'
+                                ? 3
+                                : 2;
+                    exactAnswerAuditActiveRecoveryGap = exactAnswerAuditRecoveryGap;
+                    exactAnswerAuditRecoveryProtocolNote = '';
+                    exactAnswerAuditRecoveryOffTargetRetryUsed = false;
+                    finalizationIteration = resolveExactAnswerAuditFinalizationIteration({
+                        currentFinalizationIteration: finalizationIteration,
+                        baseFinalizationIteration,
+                        auditIteration: iteration,
+                        recoveryToolCalls: exactAnswerAuditRecoveryToolCallsRemaining
+                    });
+                    safetyFinalizationAttempted = false;
+                    maxSteps = finalizationIteration + 1;
+                    exactAnswerAuditRepairInstruction = [
+                        'Exact-answer soft audit: do not repeat the same unsupported final submission.',
+                        exactAnswerAuditRecoveryGap.instruction,
+                        `This is a short advisory recovery phase, not an answer-suppression gate: final_answer is restored after at most ${exactAnswerAuditRecoveryToolCallsRemaining} tool actions and the best available answer is always returned.`
+                    ].join(' ');
+                    events.push({
+                        type: 'exact_answer_audit_repair',
+                        status: 'requested',
+                        iteration,
+                        warning: exactAnswerAuditRecoveryGap.error,
+                        finalizationIteration
+                    });
+                    await appendRuntimeItem({
+                        type: 'agent.exact_answer_audit',
+                        status: 'repair_requested',
+                        payload: {
+                            iteration,
+                            warning: exactAnswerAuditRecoveryGap.error,
+                            finalizationIteration,
+                            instruction: exactAnswerAuditRepairInstruction
+                        }
+                    });
+                    continue;
+                }
                 const exactAnswerSubmission = exactAnswerValidation.submission || null;
                 const authoritativeTaskResult = isPersonaOrchestratorRole(agentRuntimeRole)
                     ? latestAuthoritativeSubagentTaskResult(completedSubagentNotifications)
                     : null;
+                const completionAssessment = assessAgentCompletionEvidence({
+                    agentRuntimeRole,
+                    requireExecutionEvidence,
+                    stepResults
+                });
                 const modelDisplayText = stripControlTags(decision.finalAnswer || decision.summary || '任务完成。');
                 const displayText = stripControlTags(authoritativeTaskResult?.finalAnswer || modelDisplayText);
                 const visibleText = displayText;
                 const baseTaskRunHandoff = buildTaskRunHandoffPackage({
-                    status: 'completed',
-                    reason: 'final_answer',
+                    status: completionAssessment.status,
+                    reason: completionAssessment.reason,
                     runId,
                     sessionId,
                     message,
@@ -9912,7 +11601,10 @@ class AILISAgentRunner {
                     exactAnswer: authoritativeTaskResult?.exactAnswer || exactAnswerSubmission?.answer || '',
                     finalAnswer: authoritativeTaskResult?.finalAnswer || exactAnswerSubmission?.answer || decision.finalAnswer || '',
                     partialAnswer: decision.summary || '',
-                    contextManagerCheckpoint: contextManagerCheckpoint('completed', iteration)
+                    unresolvedFields: completionAssessment.ok
+                        ? []
+                        : [...unresolvedFields, ...completionAssessment.unresolvedFields],
+                    contextManagerCheckpoint: contextManagerCheckpoint(completionAssessment.status, iteration)
                 });
                 const taskRunHandoff = authoritativeTaskResult
                     ? {
@@ -9926,14 +11618,14 @@ class AILISAgentRunner {
                       }
                     : baseTaskRunHandoff;
                 const result = {
-                    ok: true,
+                    ok: completionAssessment.ok,
                     runId,
                     sessionId,
-                    status: 'completed',
+                    status: completionAssessment.status,
                     mode: decision.mode,
                     planner: 'llm-agentic-executor',
                     intent: decision.intent,
-                    executionRequired: stepResults.length > 0,
+                    executionRequired: requireTaskExecution || requireExecutionEvidence || stepResults.length > 0,
                     durationMs: Date.now() - startedAt,
                     message,
                     exactAnswer: authoritativeTaskResult?.exactAnswer || exactAnswerSubmission?.answer || '',
@@ -10033,6 +11725,66 @@ class AILISAgentRunner {
             const parallelCandidateSteps = Array.isArray(decision.toolCalls)
                 ? decision.toolCalls.filter(Boolean)
                 : [];
+            if (exactAnswerAuditRecoveryToolCallsRemaining > 0 && decision.action === 'tool') {
+                const recoveryCalls = parallelCandidateSteps.length
+                    ? parallelCandidateSteps
+                    : [decision.toolCall];
+                const recoveryTools = recoveryCalls
+                    .map((candidate) => normalizeText(candidate?.tool))
+                    .filter(Boolean);
+                const structuredRelationCallGap = detectStructuredRelationRecoveryCallGap({
+                    recoveryGap: exactAnswerAuditActiveRecoveryGap,
+                    toolCalls: recoveryCalls
+                });
+                const recommendedRecoveryActionGap = detectRecommendedRecoveryActionGap({
+                    recoveryGap: exactAnswerAuditActiveRecoveryGap,
+                    toolCalls: recoveryCalls
+                });
+                const recoveryCallGap = structuredRelationCallGap || recommendedRecoveryActionGap;
+                const preserveRecoveryAttempt =
+                    recoveryCallGap &&
+                    !exactAnswerAuditRecoveryOffTargetRetryUsed;
+                if (preserveRecoveryAttempt) {
+                    exactAnswerAuditRecoveryOffTargetRetryUsed = true;
+                    exactAnswerAuditRecoveryProtocolNote = `Recovery correction: ${recoveryCallGap.instruction}`;
+                    finalizationIteration = resolveExactAnswerAuditFinalizationIteration({
+                        currentFinalizationIteration: finalizationIteration,
+                        baseFinalizationIteration,
+                        auditIteration: iteration,
+                        recoveryToolCalls: exactAnswerAuditRecoveryToolCallsRemaining
+                    });
+                    maxSteps = finalizationIteration + 1;
+                } else {
+                    exactAnswerAuditRecoveryToolCallsRemaining = Math.max(
+                        0,
+                        exactAnswerAuditRecoveryToolCallsRemaining - 1
+                    );
+                    if (!recoveryCallGap) {
+                        exactAnswerAuditRecoveryProtocolNote = '';
+                    }
+                }
+                events.push({
+                    type: 'exact_answer_audit_recovery_tool',
+                    status: preserveRecoveryAttempt ? 'off_target_selected' : 'selected',
+                    iteration,
+                    tools: recoveryTools,
+                    remaining: exactAnswerAuditRecoveryToolCallsRemaining,
+                    gap: recoveryCallGap
+                });
+                await appendRuntimeItem({
+                    type: 'agent.exact_answer_audit',
+                    status: preserveRecoveryAttempt
+                        ? 'recovery_tool_off_target'
+                        : 'recovery_tool_selected',
+                    payload: {
+                        iteration,
+                        tools: recoveryTools,
+                        remaining: exactAnswerAuditRecoveryToolCallsRemaining,
+                        gap: recoveryCallGap,
+                        finalizationIteration
+                    }
+                });
+            }
             if (parallelCandidateSteps.length > 1 && parallelToolCalls) {
                 const visibleToolRouter = buildToolRouterFromModelVisibleSpecs(
                     directModelInputPrompt.tools || directToolSpecs
@@ -10507,7 +12259,9 @@ class AILISAgentRunner {
                 canonicalDirectToolId(step.tool) === PERSONA_HANDOFF_TOOL_ID
             ) {
                 const packet = parseTaskResultPacketFromHandoffStep(stepResult);
-                const packetStatus = normalizeText(packet?.status || stepResult.response?.status || 'completed');
+                const packetStatus = normalizeText(
+                    packet?.status || stepResult.response?.status || 'completed'
+                ).toLowerCase();
                 const packetExactAnswer = normalizeText(packet?.exact_answer || packet?.exactAnswer);
                 const displayText = normalizeText(
                     packet?.final_answer ||
@@ -10525,7 +12279,8 @@ class AILISAgentRunner {
                         }),
                     '任务执行器已经返回结果，但没有可直接展示的文本。'
                 );
-                const handoffOk = stepResult.response?.ok === true && !['failed', 'error', 'timeout', 'max_loop', 'interrupted'].includes(packetStatus);
+                const handoffOk = stepResult.response?.ok === true &&
+                    ['completed', 'success', 'succeeded'].includes(packetStatus);
                 return await finishRuntimeRun(attachPersonaSurface({
                     ok: handoffOk,
                     runId,
@@ -10617,6 +12372,8 @@ class AILISAgentRunner {
             }
         }
 
+        const fallbackExactAnswerSubmission = latestExactAnswerCandidate?.submission || null;
+        const fallbackExactAnswer = normalizeText(fallbackExactAnswerSubmission?.answer);
         const taskRunHandoff = buildTaskRunHandoffPackage({
             status: 'max_loop',
             reason: 'max_steps_reached',
@@ -10628,6 +12385,9 @@ class AILISAgentRunner {
             stepResults,
             events,
             latestDecision,
+            exactAnswer: fallbackExactAnswer,
+            finalAnswer: fallbackExactAnswer,
+            partialAnswer: fallbackExactAnswer,
             contextManagerCheckpoint: contextManagerCheckpoint('max_steps_reached', stepResults.length)
         });
         const displayText = taskRunHandoff.userVisibleSummary;
@@ -10666,6 +12426,9 @@ class AILISAgentRunner {
             executionRequired: stepResults.length > 0,
             durationMs: Date.now() - startedAt,
             message,
+            exactAnswer: fallbackExactAnswer,
+            finalAnswer: fallbackExactAnswer,
+            exactAnswerSubmission: fallbackExactAnswerSubmission,
             displayText,
             speechText: displayText.replace(/\n/g, ' '),
             plan: [],
@@ -11698,6 +13461,13 @@ module.exports = {
     buildLlmAgentDirectToolPrompt,
     buildTaskRunHandoffPackage,
     buildResearchProgressState,
+    buildDirectModelImageAttachments,
+    assessAgentCompletionEvidence,
+    buildInvalidDecisionProgressRecord,
+    detectInvalidDecisionNoProgress,
+    resolveAgentDirectToolChoice,
+    prioritizeExactAnswerRecoveryToolSpecs,
+    buildExactAnswerRecoveryToolAffordanceNote,
     buildStagedAttachmentFilename,
     build_forked_context_checkpoint,
     keep_forked_rollout_item,
@@ -11710,6 +13480,18 @@ module.exports = {
     validateAgentToolLoopGuard,
     validateNativeDirectToolCall,
     validateExactAnswerSubmission,
+    detectNestedSelectorSelectionGap,
+    detectSelectorMetricEvidenceGap,
+    detectSelectorTerminalRelationEvidenceGap,
+    detectSelectorTerminalRelationAnswerMismatch,
+    detectVisualEnumerationEvidenceGap,
+    detectAnswerSpecificityEvidenceGap,
+    detectCompleteTitleEvidenceGap,
+    detectStructuredRelationRecoveryCallGap,
+    detectRecommendedRecoveryActionGap,
+    resolveExactAnswerAuditFinalizationIteration,
+    canStartExactAnswerAuditRecovery,
+    selectExactAnswerAuditRecoveryGap,
     isAgentDecisionDeepThinkingMode,
     isDeepThinkingAgentDecisionModel,
     resolveAgentDecisionTimeoutMs,

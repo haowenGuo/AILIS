@@ -122,8 +122,9 @@ The runner intentionally mirrors the desktop chat path:
 - `messageHistory` is empty by default for benchmark tasks, so the current
   question is not duplicated into both `message` and synthetic history
 - file attachments are passed through the same attachment shape used by chat
-- no `exact_answer_eval` execution profile is injected
-- no `answerOnly: true` context flag is injected
+- the current evaluation runner injects the `exact_answer_eval` execution profile
+- the current evaluation runner enables `answerOnly` and `exactAnswerMode`
+- tool approvals are automatic and every task starts with empty message history
 
 This means the score answers a different question from the strict GAIA runner:
 

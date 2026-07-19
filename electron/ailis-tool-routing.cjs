@@ -205,6 +205,20 @@ const ROUTING_PROFILES = Object.freeze([
         advice: 'Use transcribe_audio for local audio evidence before web_search.'
     }),
     Object.freeze({
+        id: 'video_visual_evidence',
+        patterns: [
+            /\b(video|youtube|youtu\.be|youtube\.com)\b.*\b(frame|visual|visible|on[- ]?screen|simultaneous|at once|species|count)\b/i,
+            /\b(frame|visual|visible|on[- ]?screen|simultaneous|at once)\b.*\b(video|youtube|youtu\.be|youtube\.com)\b/i,
+            /(视频|YouTube|youtube).*(画面|帧|视觉|同时|同一时刻|出现|物种|数量)/i
+        ],
+        tools: ['video_extract_frames', 'youtube_transcript'],
+        primaryTools: ['video_extract_frames'],
+        bonus: 96,
+        primaryBonus: 48,
+        webPenalty: 72,
+        advice: 'Use video_extract_frames for facts that must be seen in video frames, especially same-frame or simultaneous counts. Use youtube_transcript for spoken facts. Do not infer co-occurrence by combining metadata, transcript, or separate thumbnails.'
+    }),
+    Object.freeze({
         id: 'image',
         patterns: [
             /\b(png|jpg|jpeg|webp|image|photo|picture|screenshot|vision|visual)\b/i,
@@ -324,7 +338,7 @@ function toolSpecificityScore(toolName = '') {
     if (toolName === 'artifact_query') {
         return 14;
     }
-    if (/^youtube_/.test(toolName)) {
+    if (/^youtube_/.test(toolName) || toolName === 'video_extract_frames') {
         return 1;
     }
     if (/^(read_|pdf_|transcribe_|describe_|github_|run_python)/.test(toolName)) {
@@ -364,6 +378,12 @@ function scoreToolForQuery(entry = {}, query = '') {
     let score = baseTextScore(query, text);
     const explicitlyRequested = queryExplicitlyRequestsTool(query, toolName);
     const relatedFamily = requestedToolFamily(query);
+    const outputStoreContext = explicitlyRequested ||
+        /\b(outputid|output_id|previewtruncated|exec output|stdout|stderr|full output|stored output|output store|tail output|search output)\b/i.test(query);
+
+    if (/^output_(read|tail|search)$/.test(toolName) && !outputStoreContext) {
+        return 0;
+    }
 
     if (explicitlyRequested) {
         score += 80;
@@ -373,6 +393,20 @@ function scoreToolForQuery(entry = {}, query = '') {
 
     if (/^youtube_/.test(toolName) && !queryExplicitlyMentionsYoutube(query)) {
         return 0;
+    }
+    if (
+        toolName === 'video_extract_frames' &&
+        !/\b(video|youtube|youtu\.be|youtube\.com|mp4|mov|mkv|webm|frame|visual)\b/i.test(query) &&
+        !/(视频|画面|帧|视觉)/i.test(query)
+    ) {
+        return 0;
+    }
+    if (
+        toolName === 'video_extract_frames' &&
+        queryContainsYoutubeUrl(query) &&
+        /\b(frame|visual|visible|on[- ]?screen|simultaneous|at once|species|count)\b/i.test(query)
+    ) {
+        score += 92;
     }
     if (toolName === 'youtube_transcript' && queryContainsYoutubeUrl(query)) {
         score += 90;
@@ -393,7 +427,7 @@ function scoreToolForQuery(entry = {}, query = '') {
     }
     if (
         /^output_(read|tail|search)$/.test(toolName) &&
-        /\b(outputid|output_id|previewtruncated|exec output|stdout|stderr|full output|stored output|output store|tail output|search output)\b/i.test(query)
+        outputStoreContext
     ) {
         score += 36;
     }
@@ -415,7 +449,7 @@ function scoreToolForQuery(entry = {}, query = '') {
     if (toolName === 'output_tail' && /\b(tail|last|ending|recent|final lines|bottom)\b/i.test(query)) {
         score += 16;
     }
-    if (toolName === 'output_search' && /\b(search|find|needle|query|match|grep)\b/i.test(query)) {
+    if (toolName === 'output_search' && outputStoreContext && /\b(search|find|needle|query|match|grep)\b/i.test(query)) {
         score += 16;
     }
     if (entry.type === 'mcp_tool' || /^mcp__/.test(normalizeForSearch(entry.id))) {

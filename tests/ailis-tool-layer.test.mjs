@@ -43,6 +43,9 @@ const {
     AILISMcpManager
 } = require('../electron/ailis-mcp-session.cjs');
 const {
+    AILISToolRuntimeRegistry
+} = require('../electron/ailis-tool-runtime.cjs');
+const {
     webFetch
 } = require('../scripts/mcp-ailis-research-server.cjs');
 
@@ -329,6 +332,33 @@ test('AILIS MCP adapter parses direct MCP ids and creates stable specs', () => {
     assert.equal(spreadsheetAliasCall.toolArgs.path, 'C:\\tmp\\sales.xlsx');
 });
 
+test('direct MCP tool request timeouts do not shorten the MCP transport deadline', async () => {
+    let bridgeCall = null;
+    const registry = new AILISToolRuntimeRegistry({
+        runtime: {
+            executeMcpBridge: async (args, context) => {
+                bridgeCall = { args, context };
+                return {
+                    content: [{ type: 'text', text: 'completed' }],
+                    details: { status: 'completed' }
+                };
+            }
+        }
+    });
+
+    await registry.dispatch('mcp__ailis_research__web_archive_lookup', {
+        url: 'https://example.test/search?',
+        mode: 'search',
+        timeoutMs: 30000
+    }, {
+        timeoutMs: 900000
+    });
+
+    assert.equal(bridgeCall.args.timeoutMs, undefined);
+    assert.equal(bridgeCall.args.args.timeoutMs, 30000);
+    assert.equal(bridgeCall.context.timeoutMs, 900000);
+});
+
 function mcpTool(name, description = '') {
     return {
         id: `mcp__ailis_research__${name}`,
@@ -349,7 +379,8 @@ test('AILIS tool routing prefers artifact-specific MCP tools over broad web_sear
         mcpTool('read_document', 'Read Word DOCX documents with paragraphs and tables.'),
         mcpTool('read_presentation', 'Read PowerPoint PPTX slides.'),
         mcpTool('youtube_video_search', 'Search YouTube videos by title or channel with yt-dlp.'),
-        mcpTool('youtube_transcript', 'Read YouTube video transcripts.')
+        mcpTool('youtube_transcript', 'Read YouTube video transcripts.'),
+        mcpTool('video_extract_frames', 'Sample timestamped video frames and analyze visual co-occurrence.')
     ];
 
     assert.equal(
@@ -371,6 +402,10 @@ test('AILIS tool routing prefers artifact-specific MCP tools over broad web_sear
     assert.equal(
         rankToolSearchResults(candidates, 'https://www.youtube.com/watch?v=L1vXCYZAYYM transcript evidence', 2)[0].tool,
         'youtube_transcript'
+    );
+    assert.equal(
+        rankToolSearchResults(candidates, 'https://www.youtube.com/watch?v=L1vXCYZAYYM maximum species visible on screen at once frame evidence', 2)[0].tool,
+        'video_extract_frames'
     );
     assert.match(buildToolRoutingAdvice('attached docx Word document table', candidates), /Codex-style/);
     assert.match(buildToolRoutingAdvice('attached docx Word document table', candidates), /strict direct MCP/);
@@ -419,6 +454,13 @@ test('AILIS tool routing can rank output store tools when an experimental surfac
     assert.equal(ranked[0].id, 'output_read');
     assert.ok(ranked.some((tool) => tool.id === 'output_tail'));
     assert.ok(ranked.some((tool) => tool.id === 'output_search'));
+
+    const unrelated = rankToolSearchResults(
+        outputTools,
+        'public research API metadata search by language and year',
+        3
+    );
+    assert.equal(unrelated.length, 0);
 });
 
 test('AILIS MCP manager search uses tool routing before returning specs', async () => {
@@ -428,7 +470,8 @@ test('AILIS MCP manager search uses tool routing before returning specs', async 
         mcpTool('web_fetch', 'Fetch a known HTML page URL.'),
         mcpTool('read_document', 'Read Word DOCX documents with paragraphs and tables.'),
         mcpTool('youtube_video_search', 'Search YouTube videos by title or channel with yt-dlp.'),
-        mcpTool('youtube_transcript', 'Read YouTube video transcripts.')
+        mcpTool('youtube_transcript', 'Read YouTube video transcripts.'),
+        mcpTool('video_extract_frames', 'Sample timestamped video frames and analyze visual co-occurrence.')
     ];
 
     const documentSpecs = await manager.searchToolSpecs({
@@ -448,6 +491,12 @@ test('AILIS MCP manager search uses tool routing before returning specs', async 
         limit: 1
     });
     assert.equal(knownUrlSpecs[0].tool, 'youtube_transcript');
+
+    const visualVideoSpecs = await manager.searchToolSpecs({
+        query: 'https://www.youtube.com/watch?v=L1vXCYZAYYM maximum species visible on screen at once frame evidence',
+        limit: 1
+    });
+    assert.equal(visualVideoSpecs[0].tool, 'video_extract_frames');
 
     const publicWebSpecs = await manager.searchToolSpecs({
         query: 'Kaggle AI攻防比赛 2026 最新 competition 攻略',
@@ -682,6 +731,7 @@ test('AILIS keeps raw tool_search specs hidden from model JSON but available for
         assert.ok(Array.isArray(gatewaySearch.result.__ailisRawToolSearchTools));
         assert.equal(Object.keys(gatewaySearch.result).includes('__ailisRawToolSearchTools'), false);
     } finally {
+        await gateway.stop();
         await fs.rm(workspaceRoot, { recursive: true, force: true });
     }
 });

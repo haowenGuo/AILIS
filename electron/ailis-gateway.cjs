@@ -86,7 +86,7 @@ const DEFAULT_HTTP_REQUEST_TIMEOUT_MS = Math.max(0, Number(process.env.AILIS_GAT
 const DEFAULT_PROFILE_CURATION_START_DELAY_MS = Number(process.env.AILIS_PROFILE_CURATION_START_DELAY_MS || 60 * 1000);
 const DEFAULT_PROFILE_CURATION_CHECK_INTERVAL_MS = Number(process.env.AILIS_PROFILE_CURATION_CHECK_INTERVAL_MS || 6 * 60 * 60 * 1000);
 const DEFAULT_PROFILE_CURATION_DEBOUNCE_MS = Number(process.env.AILIS_PROFILE_CURATION_DEBOUNCE_MS || 2 * 60 * 1000);
-const TASK_AGENT_MAX_MODEL_ROUNDS = 7;
+const TASK_AGENT_MAX_MODEL_ROUNDS = 9;
 
 const GATEWAY_BACKED_TOOL_IDS = new Set(['sessions_list', 'gateway', 'cron', 'nodes']);
 const SESSION_BOUND_TOOL_IDS = new Set([
@@ -216,7 +216,7 @@ const AILIS_LOCAL_TOOL_DEFINITIONS = Object.freeze([
         description: WEB_RUN_DESCRIPTION,
         modelDescriptionChars: 9000,
         parseToolInputSchemaWithoutCompaction: true,
-        // The four mutually exclusive operation fields are runtime-validated.
+        // The mutually exclusive operation fields are runtime-validated.
         // Provider strict mode cannot represent this optional-field union portably.
         strict: false,
         sectionId: 'web',
@@ -399,6 +399,16 @@ function normalizeString(value, fallback = '') {
     return trimmed || fallback;
 }
 
+function formatGatewayToolError(error) {
+    const message = normalizeString(error?.message || String(error), 'tool call failed');
+    const validationErrors = Array.isArray(error?.details?.errors)
+        ? error.details.errors.map((entry) => normalizeString(entry)).filter(Boolean)
+        : [];
+    return validationErrors.length
+        ? `${message}: ${validationErrors.join('; ')}`
+        : message;
+}
+
 function parseEventCursor(value, fallback = 0) {
     const text = Array.isArray(value) ? value[0] : value;
     const raw = normalizeString(String(text || ''), '');
@@ -424,6 +434,348 @@ function formatSseEvent(event) {
 
 function isPathInside(rootPath, targetPath) {
     return createAILISPlatformAdapter().isPathInside(rootPath, targetPath);
+}
+
+function normalizedSearchTokens(value = '') {
+    return [...new Set(
+        normalizeString(value)
+            .toLowerCase()
+            .match(/[\p{L}\p{N}]{2,}/gu) || []
+    )];
+}
+
+function looksLikeHistoricalWebStateQuestion(value = '') {
+    const text = normalizeString(value);
+    const hasPastAnchor =
+        /\b(?:as[- ]of|historical(?:ly)?|past state|at (?:the )?(?:time|end|start)|before|during)\b/i.test(text) ||
+        /\b(?:in|on|from)\s+(?:19|20)\d{2}\b/i.test(text) ||
+        /\b(?:19|20)\d{2}\s+(?:version|listing|record|result|state|catalog)\b/i.test(text);
+    const namesWebState =
+        /\b(?:website|webpage|site|database|catalog|registry|index|api|oai|search results?|listed|listing|record)\b/i.test(text);
+    return hasPastAnchor && namesWebState;
+}
+
+function historicalArchiveUrlFromQueries(queries = []) {
+    for (const query of Array.isArray(queries) ? queries : []) {
+        const text = normalizeString(query?.q);
+        const directUrl = text.match(/https?:\/\/[^\s"'<>]+/i)?.[0]
+            ?.replace(/[),.;:!?]+$/, '');
+        if (directUrl) {
+            return directUrl;
+        }
+        const siteMatch = text.match(/\bsite:([a-z0-9.-]+)(\/[^\s"'<>]*)?/i);
+        if (siteMatch?.[1]) {
+            const pathPart = normalizeString(siteMatch[2]).replace(/[),.;:!?]+$/, '');
+            return `https://${siteMatch[1]}${pathPart || ''}`;
+        }
+        const domain = (Array.isArray(query?.domains) ? query.domains : [])
+            .map((entry) => normalizeString(entry))
+            .find(Boolean);
+        if (domain) {
+            return /^https?:\/\//i.test(domain) ? domain : `https://${domain}`;
+        }
+    }
+    return '';
+}
+
+function isEvaluationAnswerLeak(sourceQuestion = '', result = {}) {
+    const questionTokens = normalizedSearchTokens(sourceQuestion);
+    if (questionTokens.length < 5) {
+        return false;
+    }
+    const text = [
+        result?.title,
+        result?.snippet,
+        result?.content
+    ].map((value) => normalizeString(value)).filter(Boolean).join(' ');
+    if (!/\b(?:ground truth|reference answer|expected answer|gold answer|correct answer)\s*[:=-]/i.test(text)) {
+        return false;
+    }
+    const resultTokens = new Set(normalizedSearchTokens(text));
+    const matched = questionTokens.filter((token) => resultTokens.has(token)).length;
+    return matched / questionTokens.length >= 0.65;
+}
+
+function isEvaluationTaskMirror(sourceQuestion = '', result = {}) {
+    const questionTokens = normalizedSearchTokens(sourceQuestion);
+    if (questionTokens.length < 5) {
+        return false;
+    }
+    const url = normalizeString(result?.url).toLowerCase();
+    const text = [
+        result?.title,
+        result?.snippet,
+        result?.content
+    ].map((value) => normalizeString(value)).filter(Boolean).join(' ');
+    const resultTokens = new Set(normalizedSearchTokens(text));
+    const matched = questionTokens.filter((token) => resultTokens.has(token)).length;
+    const repeatsQuestion = matched / questionTokens.length >= 0.72;
+    const looksLikeEvaluationCorpus =
+        /(?:^|[./_-])(?:gaia|benchmark|benchmarks|magentic_dataset|agent.?rx|harbor-datasets)(?:[./_-]|$)/i.test(url) ||
+        /\b(?:gaia task|benchmark task|evaluation task|output requirements|write only the final answer)\b/i.test(text);
+    return repeatsQuestion && looksLikeEvaluationCorpus;
+}
+
+function extractStructuredQueryAnchors(value = '') {
+    const text = normalizeString(value);
+    const matches = text.match(/\b(?:rule|article|chapter|section|part|item|table|figure|episode|volume|book)\s+(?:\d+(?:\.\d+)*[a-z]?|[ivxlcdm]+)\b/gi) || [];
+    return [...new Set(matches.map((entry) => entry.replace(/\s+/g, ' ').trim()))];
+}
+
+function looksLikeNestedSelectorTask(value = '') {
+    const text = normalizeString(value).toLowerCase();
+    const hasSelector = /\b(?:first|last|most|least|earliest|latest|highest|lowest|alphabetic(?:al|ally)?|fewest)\b/.test(text);
+    const hasHierarchy = /\b(?:under|within|among|section|article|chapter|rule|group|category|titles?|records?|entries)\b/.test(text);
+    return hasSelector && hasHierarchy;
+}
+
+function extractQuotedSelectorTerms(value = '') {
+    const text = normalizeString(value);
+    const terms = [];
+    const seen = new Set();
+    const pattern = /"([^"\r\n]{1,80})"|“([^”\r\n]{1,80})”/g;
+    let match;
+    while ((match = pattern.exec(text)) !== null) {
+        const term = normalizeString(match[1] || match[2]);
+        const key = term.toLowerCase();
+        if (!term || seen.has(key)) {
+            continue;
+        }
+        seen.add(key);
+        terms.push(term);
+    }
+    return terms;
+}
+
+function countExactLexicalOccurrences(value = '', term = '') {
+    const text = normalizeString(value);
+    const normalizedTerm = normalizeString(term);
+    if (!text || !normalizedTerm) {
+        return 0;
+    }
+    const escaped = normalizedTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const pattern = new RegExp(
+        `(?:^|[^\\p{L}\\p{N}_])${escaped}(?=$|[^\\p{L}\\p{N}_])`,
+        'giu'
+    );
+    return [...text.matchAll(pattern)].length;
+}
+
+function structuredAnchorKind(value = '') {
+    const anchor = extractStructuredQueryAnchors(value)[0] || '';
+    return normalizeString(anchor.split(/\s+/)[0]).toLowerCase();
+}
+
+function countExactLexicalChildTitleUnits(value = '', term = '', parentAnchor = '') {
+    const text = normalizeString(value);
+    const normalizedParent = normalizeString(parentAnchor).toLowerCase();
+    const pattern = /\b(?:rule|article|chapter|section|part|item|table|figure|episode|volume|book)\s+(?:\d+(?:\.\d+)*[a-z]?|[ivxlcdm]+)\b/gi;
+    const matches = [...text.matchAll(pattern)];
+    if (!matches.length) {
+        return countExactLexicalOccurrences(text, term);
+    }
+    const matchesByAnchor = new Map();
+    for (let index = 0; index < matches.length; index += 1) {
+        const anchor = normalizeString(matches[index][0]).toLowerCase();
+        if (!anchor || anchor === normalizedParent) {
+            continue;
+        }
+        const start = matches[index].index || 0;
+        const end = matches[index + 1]?.index ?? text.length;
+        const matched = countExactLexicalOccurrences(text.slice(start, end), term) > 0;
+        matchesByAnchor.set(anchor, matchesByAnchor.get(anchor) === true || matched);
+    }
+    return [...matchesByAnchor.values()].filter(Boolean).length;
+}
+
+function updateSelectionProtocolTitleCounts(selectionProtocol = null, sourceViews = []) {
+    if (
+        !selectionProtocol ||
+        !normalizeString(selectionProtocol.parentKind) ||
+        !normalizeString(selectionProtocol.quotedTerm)
+    ) {
+        return [];
+    }
+    const parentKind = normalizeString(selectionProtocol.parentKind).toLowerCase();
+    const quotedTerm = normalizeString(selectionProtocol.quotedTerm);
+    const groups = selectionProtocol.groupTitleMatches &&
+        typeof selectionProtocol.groupTitleMatches === 'object'
+        ? selectionProtocol.groupTitleMatches
+        : {};
+    let currentGroup = normalizeString(selectionProtocol.currentGroup);
+    const lines = (Array.isArray(sourceViews) ? sourceViews : [])
+        .flatMap((sourceView) => Array.isArray(sourceView?.lines) ? sourceView.lines : [])
+        .map((line) => ({
+            lineno: Number(line?.lineno || line?.lineNumber || line?.line_number) || 0,
+            text: normalizeString(line?.text || line?.rendered)
+        }))
+        .filter((line) => line.text)
+        .sort((left, right) => left.lineno - right.lineno);
+    for (const line of lines) {
+        const anchors = extractStructuredQueryAnchors(line.text);
+        const parentAnchor = anchors.find((anchor) => structuredAnchorKind(anchor) === parentKind);
+        if (parentAnchor) {
+            currentGroup = normalizeString(parentAnchor);
+            const groupKey = currentGroup.toLowerCase();
+            groups[groupKey] ||= {
+                label: currentGroup,
+                matchedChildren: []
+            };
+        }
+        if (!currentGroup || countExactLexicalOccurrences(line.text, quotedTerm) === 0) {
+            continue;
+        }
+        const childAnchors = anchors.filter((anchor) => structuredAnchorKind(anchor) !== parentKind);
+        for (const childAnchor of childAnchors) {
+            const groupKey = currentGroup.toLowerCase();
+            groups[groupKey] ||= {
+                label: currentGroup,
+                matchedChildren: []
+            };
+            const childKey = normalizeString(childAnchor).toLowerCase();
+            if (
+                childKey &&
+                !groups[groupKey].matchedChildren.some((child) => child.key === childKey)
+            ) {
+                groups[groupKey].matchedChildren.push({
+                    key: childKey,
+                    label: normalizeString(childAnchor),
+                    title: line.text
+                });
+            }
+        }
+    }
+    selectionProtocol.currentGroup = currentGroup;
+    selectionProtocol.groupTitleMatches = groups;
+    const counts = Object.values(groups)
+        .map((group) => ({
+            group: normalizeString(group.label),
+            count: Array.isArray(group.matchedChildren) ? group.matchedChildren.length : 0,
+            matched_children: (Array.isArray(group.matchedChildren) ? group.matchedChildren : [])
+                .map((child) => ({
+                    id: normalizeString(child.label),
+                    title: normalizeString(child.title)
+                }))
+        }))
+        .filter((group) => group.group)
+        .sort((left, right) => right.count - left.count || left.group.localeCompare(right.group));
+    selectionProtocol.groupTitleCounts = counts;
+    return counts;
+}
+
+function selectorParentKind(value = '') {
+    const text = normalizeString(value).toLowerCase();
+    const match = text.match(/\b(article|chapter|section|part|item|table|figure|episode|volume|book|group|category)\s+(?:that|which|with|having|has|had|whose)\b/);
+    return normalizeString(match?.[1]).toLowerCase();
+}
+
+function buildSearchSelectionAudit(sourceQuestion = '', results = []) {
+    const question = normalizeString(sourceQuestion);
+    const lower = question.toLowerCase();
+    if (
+        !/\b(?:most|least|fewest|highest|lowest)\b/.test(lower) ||
+        !/\b(?:titles?|labels?|records?|entries|names?)\b/.test(lower)
+    ) {
+        return null;
+    }
+    const quotedTerm = extractQuotedSelectorTerms(question)[0];
+    if (!quotedTerm) {
+        return null;
+    }
+    const parentKind = selectorParentKind(question);
+    const allEntries = (Array.isArray(results) ? results : [])
+        .map((result) => {
+            const title = normalizeString(result?.title);
+            const parentAnchor = extractStructuredQueryAnchors(title)[0] || '';
+            return {
+            ref_id: normalizeString(result?.ref_id || result?.id),
+            title,
+            url: normalizeString(result?.url),
+            structured_anchor: parentAnchor,
+            structured_kind: structuredAnchorKind(title),
+            visible_snippet_occurrences: countExactLexicalChildTitleUnits(
+                result?.snippet,
+                quotedTerm,
+                parentAnchor
+            ),
+            search_rank: Number(result?.rank) || null
+            };
+        })
+        .filter((entry) => entry.ref_id);
+    const rawCounts = allEntries
+        .filter((entry) => !parentKind || entry.structured_kind === parentKind)
+        .sort((left, right) =>
+            right.visible_snippet_occurrences - left.visible_snippet_occurrences ||
+            (left.search_rank || Number.MAX_SAFE_INTEGER) - (right.search_rank || Number.MAX_SAFE_INTEGER)
+        );
+    const countsByIdentity = new Map();
+    for (const entry of rawCounts) {
+        const identity = normalizeString(entry.structured_anchor).toLowerCase() ||
+            normalizeString(entry.url).toLowerCase() ||
+            normalizeString(entry.title).toLowerCase();
+        const existing = countsByIdentity.get(identity);
+        if (
+            !existing ||
+            entry.visible_snippet_occurrences > existing.visible_snippet_occurrences ||
+            (
+                entry.visible_snippet_occurrences === existing.visible_snippet_occurrences &&
+                (entry.search_rank || Number.MAX_SAFE_INTEGER) <
+                    (existing.search_rank || Number.MAX_SAFE_INTEGER)
+            )
+        ) {
+            countsByIdentity.set(identity, entry);
+        }
+    }
+    const counts = [...countsByIdentity.values()].sort((left, right) =>
+        right.visible_snippet_occurrences - left.visible_snippet_occurrences ||
+        (left.search_rank || Number.MAX_SAFE_INTEGER) - (right.search_rank || Number.MAX_SAFE_INTEGER)
+    );
+    if (!counts.length) {
+        return null;
+    }
+    const parentIndexCandidates = counts
+        .flatMap((parentCandidate) => allEntries.filter((candidate) => {
+            if (!candidate.url || !parentCandidate.url || candidate.url === parentCandidate.url) {
+                return false;
+            }
+            try {
+                const parent = new URL(candidate.url);
+                const child = new URL(parentCandidate.url);
+                const parentPath = parent.pathname.replace(/\/+$/, '');
+                const childPath = child.pathname.replace(/\/+$/, '');
+                return parent.origin === child.origin &&
+                    parentPath &&
+                    childPath.startsWith(`${parentPath}/`);
+            } catch {
+                return false;
+            }
+        }))
+        .filter((candidate, index, entries) =>
+            entries.findIndex((entry) => entry.ref_id === candidate.ref_id) === index
+        )
+        .sort((left, right) => {
+            try {
+                return new URL(right.url).pathname.length - new URL(left.url).pathname.length;
+            } catch {
+                return 0;
+            }
+        });
+    const candidateSetComplete = false;
+    return {
+        status: candidateSetComplete ? 'incomplete_counts' : 'incomplete_candidate_set',
+        selector: lower.match(/\b(most|least|fewest|highest|lowest)\b/)?.[1] || '',
+        parent_kind: parentKind,
+        quoted_term: quotedTerm,
+        lexical_match: 'exact_whole_token_or_phrase',
+        scope: 'deduplicated_structured_child_title_units_visible_in_search_result_snippets',
+        result_ranking_is_selection_evidence: false,
+        counts_are_final_group_counts: false,
+        competing_matching_candidates_visible: counts.length,
+        candidate_set_coverage_sufficient: candidateSetComplete,
+        parent_index_candidates: parentIndexCandidates.map((entry) => entry.ref_id),
+        caveat: 'Search snippets may be partial. Repeated structured child identifiers and the parent page title are excluded, but visible counts still require verification against each parent page and the candidate-set boundary.',
+        candidates: counts
+    };
 }
 
 function cloneJson(value) {
@@ -1276,7 +1628,7 @@ class AILISGateway extends EventEmitter {
                     definition: {
                         ...definition,
                         route: 'ailis-gateway',
-                        description: 'Tool discovery. Searches deferred tool metadata and exposes matching tools for the next Agent step. Use it as soon as the visible direct tools are a poor semantic fit or would require manually reconstructing structured facts, cross-record ordering, entity resolution, document parsing, transcripts, APIs, or artifact data.',
+                        description: 'Tool discovery. Searches deferred tool metadata and exposes matching tools for the next Agent step. Use it as soon as the visible direct tools are a poor semantic fit or would require manually reconstructing structured facts, cross-record ordering, entity resolution, document parsing, transcripts, APIs, or artifact data. When a user names an authoritative database, registry, service, or file type and asks for structured fields, call tool_search before broad web_run discovery; use web_run only to discover a connector prerequisite, then return to the connector.',
                         exposure: TOOL_EXPOSURE.DIRECT
                     },
                     handle: async (args) => this.executeGatewayToolSearch(args)
@@ -1297,8 +1649,9 @@ class AILISGateway extends EventEmitter {
     async executeGatewayToolSearch(args = {}) {
         const query = normalizeString(args.query || args.q);
         const limit = Math.max(1, Math.min(Number(args.limit || 12), 50));
+        const retrievalLimit = Math.max(limit, Math.min(50, Math.max(12, limit * 4)));
         const includeDirect = args.includeDirect === true;
-        const local = this.gatewayToolRuntimeRegistry.search(query, limit)
+        const local = this.gatewayToolRuntimeRegistry.search(query, retrievalLimit)
             .filter((entry) => shouldIncludeDirectToolInSearch(entry, query, includeDirect))
             .map((entry) => ({
                 id: entry.id,
@@ -1311,7 +1664,7 @@ class AILISGateway extends EventEmitter {
             try {
                 mcp = (await this.runtime.mcpManager.searchToolSpecs({
                     query,
-                    limit,
+                    limit: retrievalLimit,
                     timeoutMs: args.timeoutMs
                 }))
                     .map((spec) => createAilisDirectMcpToolSpec({
@@ -1338,7 +1691,7 @@ class AILISGateway extends EventEmitter {
             try {
                 const searched = await this.runtime.capabilityManager.searchExternalToolEntries({
                     query,
-                    limit,
+                    limit: retrievalLimit,
                     includeExposed: args.includeExposed !== false,
                     includeContracts: args.includeContracts !== false
                 });
@@ -2625,11 +2978,17 @@ class AILISGateway extends EventEmitter {
             }
             if (toolId === 'tool_search') {
                 attachRawToolSearchToolsForDirectExposure(guardedResult, result);
-            } else if (parseAilisDirectMcpToolId(toolId) || toolId === WEB_SEARCH_TOOL_ID) {
+            } else if (
+                parseAilisDirectMcpToolId(toolId) ||
+                toolId === WEB_SEARCH_TOOL_ID ||
+                toolId === WEB_RUN_TOOL_ID
+            ) {
                 await attachSuggestedMcpToolsForDirectExposure(
                     guardedResult,
                     toolId === WEB_SEARCH_TOOL_ID
                         ? 'mcp__ailis_research__web_search'
+                        : toolId === WEB_RUN_TOOL_ID
+                        ? 'mcp__ailis_research__web_fetch'
                         : toolId,
                     this.runtime?.mcpManager,
                     Number(request.timeoutMs || context.timeoutMs || 8000)
@@ -2702,13 +3061,14 @@ class AILISGateway extends EventEmitter {
             return response;
         } catch (error) {
             const status = classifyError(error);
+            const errorMessage = formatGatewayToolError(error);
             const response = {
                 ok: false,
                 callId,
                 tool: toolId,
                 status,
                 durationMs: Date.now() - startedAt,
-                error: error.message || String(error),
+                error: errorMessage,
                 ...(error.details ? { details: error.details } : {})
             };
             await this.appendAudit({
@@ -3113,7 +3473,8 @@ class AILISGateway extends EventEmitter {
         if (!state) {
             state = {
                 refs: new Map(),
-                countersByTurn: new Map()
+                countersByTurn: new Map(),
+                selectionProtocol: null
             };
             this.webRunSessions.set(key, state);
             while (this.webRunSessions.size > 64) {
@@ -3147,6 +3508,109 @@ class AILISGateway extends EventEmitter {
         return this.getWebRunSession(context).refs.get(normalized) || null;
     }
 
+    executeWebRunCachedFind(resolved = {}, operation = {}, context = {}) {
+        const extractedText = String(resolved.extractedText || resolved.extracted_text || '');
+        const pattern = normalizeString(operation.pattern);
+        if (!extractedText || !pattern) {
+            return null;
+        }
+        const allLines = extractedText.split(/\r?\n/);
+        const normalizedPattern = pattern.toLowerCase();
+        const matchIndexes = [];
+        for (let index = 0; index < allLines.length; index += 1) {
+            if (allLines[index].toLowerCase().includes(normalizedPattern)) {
+                matchIndexes.push(index);
+            }
+        }
+        const selectedIndexes = new Set();
+        for (const matchIndex of matchIndexes.slice(0, 8)) {
+            for (
+                let index = Math.max(0, matchIndex - 3);
+                index <= Math.min(allLines.length - 1, matchIndex + 3);
+                index += 1
+            ) {
+                selectedIndexes.add(index);
+            }
+        }
+        const viewRef = this.registerWebRunRef(context, 'view', resolved.url, {
+            parent_ref_id: normalizeString(operation.ref_id),
+            mode: 'find',
+            extractedText,
+            contentType: normalizeString(
+                resolved.contentType || resolved.content_type,
+                'application/pdf'
+            )
+        });
+        const sourceLines = [...selectedIndexes]
+            .sort((left, right) => left - right)
+            .map((index) => ({
+                lineNumber: index + 1,
+                line_number: index + 1,
+                lineno: index + 1,
+                text: allLines[index],
+                rendered: `L${index + 1}: ${allLines[index]}`
+            }));
+        const lineStart = sourceLines[0]?.lineno || 1;
+        const lineEnd = sourceLines.at(-1)?.lineno || lineStart;
+        const sourceWindow = {
+            type: 'source_viewport',
+            action: {
+                type: 'find_in_page',
+                url: normalizeString(resolved.url),
+                pattern
+            },
+            url: normalizeString(resolved.url),
+            ref_id: viewRef,
+            contentType: normalizeString(
+                resolved.contentType || resolved.content_type,
+                'application/pdf'
+            ),
+            content_type: normalizeString(
+                resolved.contentType || resolved.content_type,
+                'application/pdf'
+            ),
+            totalLines: allLines.length,
+            total_lines: allLines.length,
+            lineno: lineStart,
+            lineStart,
+            line_start: lineStart,
+            lineEnd,
+            line_end: lineEnd,
+            hasMoreBefore: lineStart > 1,
+            has_more_before: lineStart > 1,
+            hasMoreAfter: lineEnd < allLines.length,
+            has_more_after: lineEnd < allLines.length,
+            lines: sourceLines
+        };
+        const text = matchIndexes.length
+            ? [
+                  `Find results in cached extracted source for pattern: ${pattern}`,
+                  `Matches: ${matchIndexes.length}`,
+                  ...sourceLines.map((line) => line.rendered)
+              ].join('\n')
+            : `No matches in cached extracted source for pattern: ${pattern}`;
+        const structuredContent = {
+            status: 'completed',
+            cached: true,
+            url: normalizeString(resolved.url),
+            ref_id: viewRef,
+            pattern,
+            matchCount: matchIndexes.length,
+            match_count: matchIndexes.length,
+            source: sourceWindow,
+            source_window: sourceWindow,
+            sourceWindow,
+            sourceViewport: sourceWindow,
+            source_viewport: sourceWindow
+        };
+        return {
+            content: [{ type: 'text', text }],
+            isError: false,
+            details: structuredContent,
+            structuredContent
+        };
+    }
+
     async executeWebRunSearch(args = {}, context = {}) {
         const queries = (Array.isArray(args.search_query) ? args.search_query : [])
             .slice(0, 4)
@@ -3163,18 +3627,78 @@ class AILISGateway extends EventEmitter {
                 structuredContent: { status: 'invalid_tool_args', error: 'empty search_query' }
             };
         }
-        const maxResults = args.response_length === 'short' ? 4 : args.response_length === 'long' ? 12 : 8;
-        const responses = await Promise.all(queries.map((query) => this.runtime.executeMcpBridge({
-            action: 'call_tool',
-            server: 'ailis_research',
-            tool: 'web_search',
-            args: {
-                query: query.q,
-                maxResults,
-                ...(query.recency !== undefined ? { recency: query.recency } : {}),
-                ...(query.domains.length ? { domains: query.domains } : {})
+        const sourceQuestion = normalizeString(
+            context.currentUserMessage ||
+            context.currentTaskRequest ||
+            context.current_task_request
+        );
+        let queryAssumptionAudit = null;
+        if (
+            context.exactAnswerMode === true &&
+            Math.max(0, Number(context.iteration) || 0) === 0 &&
+            looksLikeNestedSelectorTask(sourceQuestion)
+        ) {
+            const normalizedSource = sourceQuestion.toLowerCase();
+            const unverifiedAnchors = [...new Set(queries.flatMap((query) =>
+                extractStructuredQueryAnchors(query.q)
+                    .filter((anchor) => !normalizedSource.includes(anchor.toLowerCase()))
+            ))];
+            if (unverifiedAnchors.length) {
+                queryAssumptionAudit = {
+                    status: 'unverified_intermediate_anchor_advisory',
+                    anchors: unverifiedAnchors,
+                    queryGuidance: {
+                        action: 'verify',
+                        strategy: 'parent_index_first',
+                        remove_unverified_anchors: unverifiedAnchors,
+                        next_evidence: 'Retrieve the parent candidate index and apply the user-specified selector before naming a child identifier.'
+                    }
+                };
             }
-        }, context)));
+        }
+        const maxResults = args.response_length === 'short' ? 4 : args.response_length === 'long' ? 12 : 8;
+        const perQueryTimeoutMs = Math.max(
+            25,
+            Math.min(Number(context.webRunSearchTimeoutMs) || 45000, 120000)
+        );
+        const responses = await Promise.all(queries.map(async (query) => {
+            try {
+                return await withTimeout(perQueryTimeoutMs, () => this.runtime.executeMcpBridge({
+                    action: 'call_tool',
+                    server: 'ailis_research',
+                    tool: 'web_search',
+                    timeoutMs: perQueryTimeoutMs,
+                    args: {
+                        query: query.q,
+                        maxResults,
+                        ...(query.recency !== undefined ? { recency: query.recency } : {}),
+                        ...(query.domains.length ? { domains: query.domains } : {})
+                    }
+                }, context));
+            } catch (error) {
+                const timedOut = error?.code === 'AILIS_GATEWAY_TIMEOUT';
+                const status = timedOut ? 'search_timeout' : 'search_failed';
+                const message = timedOut
+                    ? `Search query exceeded its ${perQueryTimeoutMs}ms budget.`
+                    : normalizeString(error?.message || String(error), 'The underlying search tool failed.');
+                return {
+                    content: [{ type: 'text', text: message }],
+                    isError: true,
+                    details: {
+                        status,
+                        error: message,
+                        retryable: true,
+                        timeoutMs: perQueryTimeoutMs
+                    },
+                    structuredContent: {
+                        status,
+                        error: message,
+                        retryable: true,
+                        timeoutMs: perQueryTimeoutMs
+                    }
+                };
+            }
+        }));
         const failures = responses.flatMap((response, queryIndex) => {
             const details = bridgeStructuredContent(response);
             const nestedDetails = firstObject(details.details, response?.details?.details);
@@ -3199,6 +3723,12 @@ class AILISGateway extends EventEmitter {
                 ...(Array.isArray(nestedDetails.errors) ? { errors: cloneJson(nestedDetails.errors) } : {})
             }];
         });
+        const excludedEvaluationLeakResults = [];
+        const evaluationMode = Boolean(
+            normalizeString(context.evaluationName || context.evaluation_name) ||
+            context.benchmarkEvaluation === true ||
+            context.benchmark_evaluation === true
+        );
         const queryResults = responses.map((response, queryIndex) => {
             const details = bridgeStructuredContent(response);
             const results = Array.isArray(details.results)
@@ -3208,8 +3738,51 @@ class AILISGateway extends EventEmitter {
                 : Array.isArray(details.search?.results)
                 ? details.search.results
                 : [];
-            return results.map((result) => ({ ...result, query_index: queryIndex }));
+            return results.flatMap((result) => {
+                if (
+                    evaluationMode &&
+                    (
+                        isEvaluationAnswerLeak(sourceQuestion, result) ||
+                        isEvaluationTaskMirror(sourceQuestion, result)
+                    )
+                ) {
+                    excludedEvaluationLeakResults.push({
+                        query_index: queryIndex,
+                        title: normalizeString(result?.title),
+                        url: normalizeString(result?.url),
+                        reason: isEvaluationAnswerLeak(sourceQuestion, result)
+                            ? 'Search result repeats the evaluation question and exposes a labeled answer.'
+                            : 'Search result is an evaluation-corpus mirror that repeats the task prompt without source evidence.'
+                    });
+                    return [];
+                }
+                return [{ ...result, query_index: queryIndex }];
+            });
         });
+        const specializedNextCalls = [];
+        const seenSpecializedCalls = new Set();
+        for (const response of responses) {
+            const details = bridgeStructuredContent(response);
+            for (const call of Array.isArray(details.suggestedNextCalls) ? details.suggestedNextCalls : []) {
+                const tool = normalizeString(call?.tool);
+                const callArgs = call?.args && typeof call.args === 'object' && !Array.isArray(call.args)
+                    ? cloneJson(call.args)
+                    : null;
+                if (!tool || !callArgs || ['open_page', 'web_fetch', 'web_run', 'web_search'].includes(tool)) {
+                    continue;
+                }
+                const key = `${tool}:${JSON.stringify(callArgs)}`;
+                if (seenSpecializedCalls.has(key)) {
+                    continue;
+                }
+                seenSpecializedCalls.add(key);
+                specializedNextCalls.push({
+                    tool,
+                    args: callArgs,
+                    reason: normalizeString(call.reason, 'Use the source-specific reader suggested by the search backend.')
+                });
+            }
+        }
         const merged = [];
         const seenUrls = new Set();
         const longest = Math.max(0, ...queryResults.map((results) => results.length));
@@ -3242,6 +3815,36 @@ class AILISGateway extends EventEmitter {
             }
         }
         const queryValues = queries.map((query) => query.q);
+        let deferredToolSearchSuggestion = null;
+        if (sourceQuestion && this.runtime?.capabilityManager?.searchExternalToolEntries) {
+            try {
+                const searched = await this.runtime.capabilityManager.searchExternalToolEntries({
+                    query: sourceQuestion,
+                    limit: 3,
+                    includeExposed: true,
+                    includeContracts: false
+                });
+                const matches = (Array.isArray(searched?.tools) ? searched.tools : [])
+                    .filter((entry) => entry?.callable === true)
+                    .sort((left, right) => Number(right.search_score || 0) - Number(left.search_score || 0));
+                const top = matches[0];
+                const runnerUp = matches[1];
+                const topScore = Number(top?.search_score || 0);
+                const runnerUpScore = Number(runnerUp?.search_score || 0);
+                if (top && topScore >= 3 && (!runnerUp || topScore - runnerUpScore >= 2)) {
+                    deferredToolSearchSuggestion = {
+                        tool: 'tool_search',
+                        args: {
+                            query: sourceQuestion,
+                            limit: 5
+                        },
+                        reason: `A callable deferred structured/API tool is a strong semantic match (${normalizeString(top.id || top.name || top.toolId)}). Discover its schema before doing more broad web search.`
+                    };
+                }
+            } catch {
+                deferredToolSearchSuggestion = null;
+            }
+        }
         const action = queryValues.length === 1
             ? { type: 'search', query: queryValues[0] }
             : { type: 'search', queries: queryValues };
@@ -3280,24 +3883,126 @@ class AILISGateway extends EventEmitter {
         const queryNeedsReformulation = queries.some((query) => {
             const terms = query.q.toLowerCase().match(/[\p{L}\p{N}][\p{L}\p{N}._:-]*/gu) || [];
             const uniqueTerms = new Set(terms);
-            return query.q.length > 240 ||
+            return query.q.length > 180 ||
                 terms.length > 24 ||
                 (terms.length >= 12 && uniqueTerms.size / terms.length < 0.65);
         });
-        const queryGuidance = !merged.length
+        const selectionAudit = merged.length
+            ? buildSearchSelectionAudit(sourceQuestion, merged)
+            : null;
+        const historicalArchiveUrl = !merged.length && looksLikeHistoricalWebStateQuestion(sourceQuestion)
+            ? historicalArchiveUrlFromQueries(queries)
+            : '';
+        const historicalArchiveSuggestion = historicalArchiveUrl
+            ? {
+                  tool: 'web_run',
+                  args: {
+                      archive: [{
+                          url: historicalArchiveUrl,
+                          mode: 'search',
+                          matchType: 'prefix',
+                          ...(sourceQuestion ? { query: sourceQuestion } : {})
+                      }]
+                  },
+                  reason: 'The task asks for a past public-web state and the live search returned no candidates. Inspect an archived snapshot of the known URL or stable prefix instead of repeatedly rewriting broad search queries.'
+              }
+            : null;
+        const queryGuidance = historicalArchiveSuggestion
+            ? {
+                  action: 'switch_source',
+                  strategy: 'historical_archive',
+                  repeat_previous_query: false,
+                  archive_url: historicalArchiveUrl
+              }
+            : !merged.length
             ? {
                   action: 'reformulate',
                   strategy: queryNeedsReformulation ? 'fresh_concise_query' : 'broaden_or_simplify',
                   repeat_previous_query: false,
                   target_term_count: { min: 3, max: 8 }
               }
+            : selectionAudit?.candidate_set_coverage_sufficient === false
+            ? {
+                  action: selectionAudit.parent_index_candidates.length
+                      ? 'inspect_parent_index'
+                      : selectionAudit.candidates.length >= 2
+                      ? 'inspect_competing_parents'
+                      : 'reformulate',
+                  strategy: selectionAudit.parent_index_candidates.length
+                      ? 'nearest_url_ancestor_first'
+                      : selectionAudit.candidates.length >= 2
+                      ? 'compare_visible_parents_and_expand_candidate_boundary'
+                      : 'fresh_concise_parent_index_query',
+                  repeat_previous_query: false,
+                  target_term_count: { min: 3, max: 8 },
+                  parent_index_refs: selectionAudit.parent_index_candidates
+              }
             : null;
+        if (
+            selectionAudit?.candidate_set_coverage_sufficient === false &&
+            selectionAudit.parent_index_candidates.length
+        ) {
+            const state = this.getWebRunSession(context);
+            const parentIndexRef = selectionAudit.parent_index_candidates[0];
+            const parentIndex = state.refs.get(parentIndexRef);
+            if (parentIndex?.url && state.selectionProtocol?.boundaryComplete !== true) {
+                state.selectionProtocol = {
+                    status: 'parent_index_required',
+                    parentKind: selectionAudit.parent_kind,
+                    quotedTerm: selectionAudit.quoted_term,
+                    selector: selectionAudit.selector,
+                    parentIndexRef,
+                    parentIndexUrl: parentIndex.url,
+                    relevantStart: 0,
+                    totalLines: 0,
+                    ranges: [],
+                    currentGroup: '',
+                    groupTitleMatches: {},
+                    groupTitleCounts: [],
+                    boundaryComplete: false
+                };
+            }
+        }
+        const prioritizedOpenResults = selectionAudit?.candidate_set_coverage_sufficient === false &&
+            selectionAudit.parent_index_candidates.length
+            ? [
+                  ...selectionAudit.parent_index_candidates
+                      .map((refId) => merged.find((result) => result.ref_id === refId))
+                      .filter(Boolean),
+                  ...selectionAudit.candidates
+                      .map((candidate) => merged.find((result) => result.ref_id === candidate.ref_id))
+                      .filter((result) =>
+                          result &&
+                          !selectionAudit.parent_index_candidates.includes(result.ref_id)
+                      )
+              ]
+            : selectionAudit
+            ? selectionAudit.candidates
+                .map((candidate) => merged.find((result) => result.ref_id === candidate.ref_id))
+                .filter(Boolean)
+            : merged;
         const suggestedNextCalls = merged.length
-            ? merged.slice(0, 3).map((result) => ({
-                  tool: 'web_run',
-                  args: { open: [{ ref_id: result.ref_id }] },
-                  reason: 'Open a relevant candidate to inspect source evidence.'
-              }))
+            ? [
+                  ...(deferredToolSearchSuggestion ? [deferredToolSearchSuggestion] : []),
+                  ...specializedNextCalls,
+                  ...prioritizedOpenResults.map((result) => {
+                      const lexicalCandidate = selectionAudit?.candidates
+                          ?.find((candidate) => candidate.ref_id === result.ref_id);
+                      return {
+                      tool: 'web_run',
+                      args: { open: [{ ref_id: result.ref_id }] },
+                      reason: selectionAudit?.parent_index_candidates.includes(result.ref_id)
+                          ? `Open the nearest parent index before selecting a child. Only ${selectionAudit.competing_matching_candidates_visible} matching parent candidate(s) are visible, so the current search result set cannot establish "${selectionAudit.selector}".`
+                          : selectionAudit
+                          ? `Inspect this parent candidate and count unique child titles. Its visible snippet contains ${lexicalCandidate?.visible_snippet_occurrences || 0} exact occurrence(s) of "${selectionAudit.quoted_term}", but snippet counts are not final selection evidence.`
+                          : 'Open a relevant candidate to inspect source evidence.'
+                      };
+                  })
+              ].slice(0, 3)
+            : historicalArchiveSuggestion
+            ? [historicalArchiveSuggestion]
+            : deferredToolSearchSuggestion
+            ? [deferredToolSearchSuggestion]
             : filteredQueries.length && !queryNeedsReformulation
             ? [{
                   tool: 'web_run',
@@ -3319,14 +4024,64 @@ class AILISGateway extends EventEmitter {
                 queries: queryValues,
                 results: merged,
                 candidates: merged,
+                ...(excludedEvaluationLeakResults.length ? {
+                    evaluationLeakAudit: {
+                        status: 'excluded_labeled_answer_leaks',
+                        excluded_count: excludedEvaluationLeakResults.length,
+                        excluded_results: excludedEvaluationLeakResults
+                    }
+                } : {}),
                 ...(failures.length ? { failures } : {}),
                 ...(queryGuidance ? { queryGuidance } : {}),
+                ...(queryAssumptionAudit ? { queryAssumptionAudit } : {}),
+                ...(selectionAudit ? { selectionAudit } : {}),
                 ...(suggestedNextCalls.length ? { suggestedNextCalls } : {})
             }
         };
+        const selectionAuditText = selectionAudit
+            ? [
+                  `Selection audit (incomplete): search ranking does not answer "${selectionAudit.selector}".`,
+                  `Exact whole-token/phrase "${selectionAudit.quoted_term}" occurrences visible in result snippets:`,
+                  ...selectionAudit.candidates
+                      .filter((candidate) => candidate.visible_snippet_occurrences > 0)
+                      .map((candidate) =>
+                          `- [${candidate.ref_id}] ${candidate.visible_snippet_occurrences} occurrence(s)`
+                      ),
+                  ...(selectionAudit.parent_index_candidates.length
+                      ? [
+                            `Only ${selectionAudit.competing_matching_candidates_visible} matching parent candidate(s) are visible. Open the nearest parent index [${selectionAudit.parent_index_candidates[0]}] before selecting a child.`
+                        ]
+                      : selectionAudit.candidates.length >= 2
+                      ? [
+                            `${selectionAudit.competing_matching_candidates_visible} parent candidate(s) are visible, but search results do not establish the full candidate-set boundary. Inspect the competing parents and continue boundary discovery before selecting a child.`
+                        ]
+                      : [
+                            `Only ${selectionAudit.competing_matching_candidates_visible} matching parent candidate(s) are visible. Write a fresh concise parent-index query before selecting a child.`
+                        ]),
+                  'These are diagnostic snippet counts, not final per-group title counts. Inspect the leading candidates and verify unique matching titles plus the candidate-set boundary before selecting a child.'
+              ]
+            : [];
         const text = [
+            ...(queryAssumptionAudit
+                ? [
+                      `Query assumption audit (advisory): ${queryAssumptionAudit.anchors.join(', ')} are possible intermediate identifiers not stated by the user.`,
+                      'The search still ran. Treat those identifiers as hypotheses and verify the parent selection before relying on them.'
+                  ]
+                : []),
+            ...selectionAuditText,
+            ...((queryAssumptionAudit || selectionAudit || historicalArchiveSuggestion) && suggestedNextCalls[0]
+                ? [
+                      'Next recommended call (advisory; the model may choose another evidence action):',
+                      `${suggestedNextCalls[0].tool} ${JSON.stringify(suggestedNextCalls[0].args)}`
+                  ]
+                : []),
+            ...(excludedEvaluationLeakResults.length
+                ? [`Excluded ${excludedEvaluationLeakResults.length} evaluation-answer leak candidate(s); labeled benchmark answers are not source evidence.`]
+                : []),
             merged.length
                 ? 'Search results (open a relevant reference to inspect source evidence):'
+                : historicalArchiveSuggestion
+                ? `No live search results for this past-state question. Run the visible archive call for ${historicalArchiveUrl} instead of repeating broad web search.`
                 : queryNeedsReformulation
                 ? 'No search results. Write one fresh concise query with 3-8 discriminative terms; do not concatenate or repeat prior queries.'
                 : 'No search results. Broaden the query and omit optional recency/domain filters before retrying.',
@@ -3362,6 +4117,37 @@ class AILISGateway extends EventEmitter {
                 structuredContent: { status: 'unknown_ref_id', ref_id: normalizeString(operation.ref_id) }
             };
         }
+        const state = this.getWebRunSession(context);
+        const selectionProtocol = state.selectionProtocol;
+        const sourceQuestion = normalizeString(
+            context.currentUserMessage ||
+            context.currentTaskRequest ||
+            context.current_task_request
+        );
+        if (mode === 'find') {
+            const cachedFind = this.executeWebRunCachedFind(resolved, operation, context);
+            if (cachedFind) {
+                return cachedFind;
+            }
+        }
+        const comparableUrl = (value = '') => normalizeString(value)
+            .replace(/#.*$/, '')
+            .replace(/\/+$/, '')
+            .toLowerCase();
+        const selectionDependencyAdvisory = (
+            mode === 'open' &&
+            context.exactAnswerMode === true &&
+            selectionProtocol &&
+            selectionProtocol.boundaryComplete !== true &&
+            comparableUrl(resolved.url) !== comparableUrl(selectionProtocol.parentIndexUrl)
+        ) ? {
+            status: 'selection_dependency_unresolved_advisory',
+            parent_kind: selectionProtocol.parentKind,
+            selector: selectionProtocol.selector,
+            quoted_term: selectionProtocol.quotedTerm,
+            boundary_complete: false,
+            required_parent_index_ref: selectionProtocol.parentIndexRef
+        } : null;
         const resolvedFetchBackend = normalizeString(
             resolved.fetchBackend || resolved.fetch_backend
         ).toLowerCase();
@@ -3374,7 +4160,11 @@ class AILISGateway extends EventEmitter {
             : 'render_page';
         const bridgeArgs = mode === 'find'
             ? { url: resolved.url, pattern: operation.pattern }
-            : { url: resolved.url, ...(operation.lineno !== undefined ? { lineno: operation.lineno } : {}) };
+            : {
+                url: resolved.url,
+                ...(operation.lineno !== undefined ? { lineno: operation.lineno } : {}),
+                ...(sourceQuestion ? { query: sourceQuestion } : {})
+            };
         let response = await this.runtime.executeMcpBridge({
             action: 'call_tool',
             server: 'ailis_research',
@@ -3454,7 +4244,6 @@ class AILISGateway extends EventEmitter {
             details.observedRelevantLinks = numberedLinks;
             details.observed_relevant_links = numberedLinks;
         }
-        const state = this.getWebRunSession(context);
         const fetchBackend = normalizeString(details.fetchBackend || details.fetch_backend);
         const view = state.refs.get(viewRef);
         if (view) {
@@ -3466,8 +4255,177 @@ class AILISGateway extends EventEmitter {
         }
         details.ref_id = viewRef;
         details.url = resolved.url;
+        if (selectionDependencyAdvisory) {
+            details.selectionDependencyAdvisory = selectionDependencyAdvisory;
+            details.selection_dependency_advisory = selectionDependencyAdvisory;
+        }
+        const primarySourceView = sourceViews[0] || {};
+        const hasMoreAfter = primarySourceView.hasMoreAfter === true ||
+            primarySourceView.has_more_after === true;
+        const lineEnd = Number(
+            primarySourceView.lineEnd ||
+            primarySourceView.line_end ||
+            primarySourceView.endLine ||
+            primarySourceView.end_line
+        ) || 0;
+        const parentKind = selectorParentKind(sourceQuestion);
+        const parentAnchorsInViewport = new Set(
+            sourceViews.flatMap((sourceView) =>
+                (Array.isArray(sourceView?.lines) ? sourceView.lines : [])
+                    .flatMap((line) => extractStructuredQueryAnchors(line?.text || line?.rendered))
+            )
+                .filter((anchor) => structuredAnchorKind(anchor) === parentKind)
+                .map((anchor) => anchor.toLowerCase())
+        );
+        const selectionGroupCounts = updateSelectionProtocolTitleCounts(
+            selectionProtocol,
+            sourceViews
+        );
+        if (
+            selectionProtocol &&
+            comparableUrl(resolved.url) === comparableUrl(selectionProtocol.parentIndexUrl)
+        ) {
+            const lineStart = Number(
+                primarySourceView.lineStart ||
+                primarySourceView.line_start ||
+                primarySourceView.lineno
+            ) || 1;
+            const totalLines = Number(
+                primarySourceView.totalLines ||
+                primarySourceView.total_lines
+            ) || lineEnd;
+            const parentAnchorLines = sourceViews.flatMap((sourceView) =>
+                (Array.isArray(sourceView?.lines) ? sourceView.lines : [])
+                    .filter((line) =>
+                        extractStructuredQueryAnchors(line?.text || line?.rendered)
+                            .some((anchor) => structuredAnchorKind(anchor) === selectionProtocol.parentKind)
+                    )
+                    .map((line) => Number(line?.lineno || line?.lineNumber || line?.line_number) || 0)
+                    .filter(Boolean)
+            );
+            if (parentAnchorLines.length) {
+                const firstParentLine = Math.min(...parentAnchorLines);
+                selectionProtocol.relevantStart = selectionProtocol.relevantStart > 0
+                    ? Math.min(selectionProtocol.relevantStart, firstParentLine)
+                    : firstParentLine;
+            }
+            selectionProtocol.totalLines = Math.max(selectionProtocol.totalLines || 0, totalLines);
+            selectionProtocol.ranges.push([lineStart, lineEnd]);
+            selectionProtocol.ranges.sort((left, right) => left[0] - right[0]);
+            const mergedRanges = [];
+            for (const range of selectionProtocol.ranges) {
+                const previous = mergedRanges[mergedRanges.length - 1];
+                if (!previous || range[0] > previous[1] + 1) {
+                    mergedRanges.push([...range]);
+                } else {
+                    previous[1] = Math.max(previous[1], range[1]);
+                }
+            }
+            selectionProtocol.ranges = mergedRanges;
+            selectionProtocol.boundaryComplete = selectionProtocol.relevantStart > 0 &&
+                mergedRanges.some((range) =>
+                    range[0] <= selectionProtocol.relevantStart &&
+                    range[1] >= selectionProtocol.totalLines
+                );
+            selectionProtocol.status = selectionProtocol.boundaryComplete
+                ? 'parent_index_complete'
+                : 'parent_index_incomplete';
+            details.selectionProtocol = {
+                status: selectionProtocol.status,
+                parent_kind: selectionProtocol.parentKind,
+                selector: selectionProtocol.selector,
+                quoted_term: selectionProtocol.quotedTerm,
+                boundary_complete: selectionProtocol.boundaryComplete,
+                relevant_line_start: selectionProtocol.relevantStart || null,
+                total_lines: selectionProtocol.totalLines,
+                covered_ranges: cloneJson(selectionProtocol.ranges),
+                exact_title_match_counts: cloneJson(selectionGroupCounts),
+                winning_group: selectionProtocol.boundaryComplete &&
+                    selectionGroupCounts.length &&
+                    (
+                        selectionGroupCounts.length === 1 ||
+                        selectionGroupCounts[0].count > selectionGroupCounts[1].count
+                    )
+                    ? selectionGroupCounts[0].group
+                    : null
+            };
+            details.selection_protocol = details.selectionProtocol;
+        }
+        if (
+            mode === 'open' &&
+            context.exactAnswerMode === true &&
+            looksLikeNestedSelectorTask(sourceQuestion) &&
+            parentKind &&
+            parentAnchorsInViewport.size >= 2 &&
+            hasMoreAfter &&
+            lineEnd > 0
+        ) {
+            const nextCall = {
+                tool: 'web_run',
+                args: {
+                    open: [{
+                        ref_id: viewRef,
+                        lineno: lineEnd + 1
+                    }]
+                },
+                reason: 'Continue the same parent index at the next unread line before selecting a child; the current viewport does not establish the candidate-set boundary.'
+            };
+            const existingCalls = Array.isArray(details.suggestedNextCalls)
+                ? details.suggestedNextCalls
+                : Array.isArray(details.suggested_next_calls)
+                ? details.suggested_next_calls
+                : [];
+            const suggestedNextCalls = [
+                nextCall,
+                ...existingCalls.filter((call) =>
+                    JSON.stringify(call?.args || {}) !== JSON.stringify(nextCall.args)
+                )
+            ];
+            details.suggestedNextCalls = suggestedNextCalls;
+            details.suggested_next_calls = suggestedNextCalls;
+        }
+        const navigationSuggestedCalls = Array.isArray(details.suggestedNextCalls)
+            ? details.suggestedNextCalls
+            : Array.isArray(details.suggested_next_calls)
+            ? details.suggested_next_calls
+            : [];
+        const selectionCountText = selectionGroupCounts.length
+            ? [
+                  `Exact "${normalizeString(selectionProtocol?.quotedTerm)}" child-title counts observed in the parent index (${selectionProtocol?.boundaryComplete === true ? 'candidate boundary complete' : 'provisional; more lines remain'}):`,
+                  ...selectionGroupCounts.map((group) =>
+                      `- ${group.group}: ${group.count}${group.matched_children.length ? ` (${group.matched_children.map((child) => child.id).join(', ')})` : ''}`
+                  ),
+                  ...(selectionProtocol?.boundaryComplete === true &&
+                  selectionGroupCounts.length &&
+                  (
+                      selectionGroupCounts.length === 1 ||
+                      selectionGroupCounts[0].count > selectionGroupCounts[1].count
+                  )
+                      ? [`Unique winning group: ${selectionGroupCounts[0].group}.`]
+                      : [])
+              ].join('\n')
+            : '';
+        const navigationNextCallText = navigationSuggestedCalls[0]
+            ? [
+                  'Next recommended call (advisory; the model may choose another evidence action):',
+                  `${navigationSuggestedCalls[0].tool} ${JSON.stringify(navigationSuggestedCalls[0].args)}`
+              ].join('\n')
+            : '';
         return {
-            content: [{ type: 'text', text: bridgeTextContent(cloned) }],
+            content: [{
+                type: 'text',
+                text: [
+                    selectionDependencyAdvisory
+                        ? [
+                              `Selection dependency audit (advisory): parent comparison at ${selectionDependencyAdvisory.required_parent_index_ref} is not complete.`,
+                              'The requested child page was opened anyway. Use its evidence as a hypothesis and finish the parent comparison before making a global selector claim.'
+                          ].join('\n')
+                        : '',
+                    selectionCountText,
+                    navigationNextCallText,
+                    bridgeTextContent(cloned)
+                ].filter(Boolean).join('\n\n')
+            }],
             isError: cloned.isError === true || cloned.details?.result?.isError === true,
             details,
             structuredContent: details
@@ -3532,7 +4490,66 @@ class AILISGateway extends EventEmitter {
         return pdfResponse.isError === true ? navigation : pdfResponse;
     }
 
+    async executeWebRunScreenshot(operation = {}, context = {}) {
+        const resolved = this.resolveWebRunRef(context, operation.ref_id);
+        if (!resolved?.url) {
+            return {
+                content: [{ type: 'text', text: `Unknown web reference id: ${normalizeString(operation.ref_id)}` }],
+                isError: true,
+                structuredContent: {
+                    status: 'unknown_ref_id',
+                    ref_id: normalizeString(operation.ref_id)
+                }
+            };
+        }
+        const workspaceDir = this.resolveWorkspace(
+            context.workspaceDir || context.workspace || this.workspaceRoot,
+            context
+        );
+        const screenshotDir = path.join(workspaceDir, '.ailis-web-screenshots');
+        await fsp.mkdir(screenshotDir, { recursive: true });
+        const screenshotPath = path.join(screenshotDir, `${randomUUID()}.png`);
+        const sourceQuestion = normalizeString(
+            context.currentUserMessage ||
+            context.currentTaskRequest ||
+            context.current_task_request
+        );
+        const response = await this.runtime.executeMcpBridge({
+            action: 'call_tool',
+            server: 'ailis_research',
+            tool: 'webpage_screenshot',
+            args: {
+                url: resolved.url,
+                path: screenshotPath,
+                detail: normalizeString(operation.detail, 'original'),
+                ...(operation.waitFor ? { waitFor: operation.waitFor } : {}),
+                ...(operation.delayMs !== undefined ? { delayMs: operation.delayMs } : {}),
+                ...(sourceQuestion ? { query: sourceQuestion } : {})
+            }
+        }, context);
+        const cloned = cloneJson(response) || {};
+        const details = bridgeStructuredContent(cloned);
+        const viewRef = this.registerWebRunRef(context, 'view', resolved.url, {
+            parent_ref_id: normalizeString(operation.ref_id),
+            mode: 'screenshot',
+            screenshotPath: normalizeString(details.path || screenshotPath)
+        });
+        details.ref_id = viewRef;
+        details.url = resolved.url;
+        return {
+            content: [{ type: 'text', text: bridgeTextContent(cloned) }],
+            isError: cloned.isError === true || cloned.details?.result?.isError === true,
+            details,
+            structuredContent: details
+        };
+    }
+
     async executeWebRunPdf(url = '', context = {}, { parentRefId = '' } = {}) {
+        const sourceQuestion = normalizeString(
+            context.currentUserMessage ||
+            context.currentTaskRequest ||
+            context.current_task_request
+        );
         const response = await this.runtime.executeMcpBridge({
             action: 'call_tool',
             server: 'ailis_research',
@@ -3540,7 +4557,8 @@ class AILISGateway extends EventEmitter {
             args: {
                 url: normalizeString(url),
                 maxChars: 24000,
-                maxPages: 24
+                maxPages: 24,
+                ...(sourceQuestion ? { query: sourceQuestion } : {})
             }
         }, context);
         const cloned = cloneJson(response) || {};
@@ -3555,11 +4573,23 @@ class AILISGateway extends EventEmitter {
                 structuredContent: details
             };
         }
+        const extractedText = String(
+            details.extractedText ||
+            details.extracted_text ||
+            text
+        );
+        delete details.extractedText;
+        delete details.extracted_text;
         const viewRef = this.registerWebRunRef(context, 'view', url, {
             parent_ref_id: normalizeString(parentRefId),
-            mode: 'open'
+            mode: 'open',
+            extractedText,
+            contentType: normalizeString(
+                details.contentType || details.content_type,
+                'application/pdf'
+            )
         });
-        const sourceLines = String(text)
+        const sourceLines = extractedText
             .split(/\r?\n/)
             .map((line, index) => ({
                 lineNumber: index + 1,
@@ -3625,12 +4655,23 @@ class AILISGateway extends EventEmitter {
         if (Array.isArray(args.find) && args.find.length) {
             return await this.executeWebRunNavigation(args.find[0], context, 'find');
         }
+        if (Array.isArray(args.screenshot) && args.screenshot.length) {
+            return await this.executeWebRunScreenshot(args.screenshot[0], context);
+        }
+        if (Array.isArray(args.archive) && args.archive.length) {
+            return await this.runtime.executeMcpBridge({
+                action: 'call_tool',
+                server: 'ailis_research',
+                tool: 'web_archive_lookup',
+                args: cloneJson(args.archive[0])
+            }, context);
+        }
         return {
-            content: [{ type: 'text', text: 'This web_run backend currently executes search_query, open, click, and find commands.' }],
+            content: [{ type: 'text', text: 'This web_run backend currently executes search_query, open, click, find, screenshot, and archive commands.' }],
             isError: true,
             structuredContent: {
                 status: 'unsupported_command',
-                supported_commands: ['search_query', 'open', 'click', 'find']
+                supported_commands: ['search_query', 'open', 'click', 'find', 'screenshot', 'archive']
             }
         };
     }
@@ -4050,6 +5091,24 @@ class AILISGateway extends EventEmitter {
 
     prepareToolArgs({ toolId, args, context, workspaceDir }) {
         const finalArgs = { ...args };
+        if (
+            /(?:^|__)pdf_extract_text$/i.test(toolId) &&
+            !normalizeString(
+                finalArgs.query ||
+                finalArgs.q ||
+                finalArgs.extractQuery ||
+                finalArgs.extract_query
+            )
+        ) {
+            const sourceQuestion = normalizeString(
+                context.currentUserMessage ||
+                context.currentTaskRequest ||
+                context.current_task_request
+            );
+            if (sourceQuestion) {
+                finalArgs.query = sourceQuestion;
+            }
+        }
         if (FILE_TOOL_IDS.has(toolId)) {
             this.assertToolPathInsideWorkspace(finalArgs.path, workspaceDir, 'path', context);
         }
@@ -4062,6 +5121,20 @@ class AILISGateway extends EventEmitter {
                     tool: toolId,
                     approval: 'required'
                 });
+            }
+            const commandArgs = Array.isArray(finalArgs.args)
+                ? finalArgs.args
+                : Array.isArray(finalArgs.arguments)
+                ? finalArgs.arguments
+                : [];
+            const wrapperExecutable = normalizeString(commandArgs[0]).toLowerCase();
+            const wrapsExistingCommand = this.platformAdapter?.isWindows?.() === true
+                && /^(?:powershell|powershell\.exe|pwsh|pwsh\.exe)$/.test(wrapperExecutable)
+                && commandArgs.some((entry) => /^-(?:command|c)$/i.test(normalizeString(entry)))
+                && normalizeString(finalArgs.command || finalArgs.cmd);
+            if (wrapsExistingCommand) {
+                finalArgs.args = [];
+                delete finalArgs.arguments;
             }
             if (finalArgs.timeoutMs === undefined && finalArgs.timeout !== undefined) {
                 const timeout = Number(finalArgs.timeout);

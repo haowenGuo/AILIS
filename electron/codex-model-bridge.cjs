@@ -225,17 +225,26 @@ const CODEX_OUTPUT_SCHEMA_SCALAR_KEYS = Object.freeze([
 ]);
 
 function nullableCodexOutputSchema(schema = {}) {
-    return schema?.type === 'null'
-        ? schema
-        : {
-              anyOf: [
-                  schema,
-                  {
-                      type: 'null',
-                      description: 'Use null to omit this optional field. Prefer null unless the current task specifically needs this option.'
-                  }
-              ]
-          };
+    if (schema?.type === 'null') {
+        return schema;
+    }
+    const nullBranch = {
+        type: 'null',
+        description: 'Use null to omit this optional field. Prefer null unless the user supplied this exact field or a prior tool returned it for this call; runtime context and plausible defaults are not evidence.'
+    };
+    if (Array.isArray(schema?.anyOf)) {
+        const {
+            anyOf,
+            ...shared
+        } = schema;
+        return {
+            ...shared,
+            anyOf: [...anyOf, nullBranch]
+        };
+    }
+    return {
+        anyOf: [schema, nullBranch]
+    };
 }
 
 function inferCodexOutputSchemaType(schema = {}, fallbackType = 'string') {
@@ -373,6 +382,7 @@ function compileCodexOutputObjectSchema(schema = {}) {
 
 function compileCodexOutputSchema(schema = {}, options = {}) {
     const fallbackType = normalizeText(options.fallbackType, 'string');
+    const allowUnknownScalar = options.allowUnknownScalar !== false;
     if (!schema || typeof schema !== 'object' || Array.isArray(schema)) {
         return fallbackCodexOutputSchema(fallbackType);
     }
@@ -399,8 +409,32 @@ function compileCodexOutputSchema(schema = {}, options = {}) {
             }
         }
         compiled.type = 'array';
-        compiled.items = compileCodexOutputSchema(schema.items, { fallbackType: 'string' });
+        compiled.items = compileCodexOutputSchema(schema.items, {
+            fallbackType: 'string',
+            allowUnknownScalar: false
+        });
         return compiled;
+    }
+    const hasExplicitScalarSignal = Boolean(
+        normalizeText(schema.type) ||
+        schema.const !== undefined ||
+        (Array.isArray(schema.enum) && schema.enum.some((entry) => entry !== null && entry !== undefined)) ||
+        schema.format ||
+        schema.pattern ||
+        schema.minLength !== undefined ||
+        schema.maxLength !== undefined ||
+        schema.minimum !== undefined ||
+        schema.maximum !== undefined
+    );
+    if (!hasExplicitScalarSignal && allowUnknownScalar) {
+        return {
+            ...(description ? { description } : {}),
+            anyOf: [
+                { type: 'string' },
+                { type: 'number' },
+                { type: 'boolean' }
+            ]
+        };
     }
     const compiled = Object.fromEntries(CODEX_OUTPUT_SCHEMA_SCALAR_KEYS
         .filter((key) => schema[key] !== undefined)
@@ -530,6 +564,8 @@ function buildCodexBridgePrompt(messages = [], tools = [], payload = {}) {
         'Choose the next assistant response only. The final response must satisfy the provided JSON Schema.',
         'When selecting a tool, emit it in tool_calls, put its input object in arguments, and leave execution to AILIS.',
         'The arguments object must satisfy the selected tool contract. Never emit an empty object unless that tool schema explicitly permits it.',
+        'For optional argument fields, use null unless the user supplied that exact field or a prior tool returned it for this call. Do not fill optional fields from runtime dates, plausible defaults, or inferred context.',
+        'For user-supplied names, titles, labels, and identifiers, copy the exact literal text into the first lookup. Do not expand, canonicalize, or append words unless a prior tool result or a visible enum authorizes the changed value.',
         'When no tool is needed, return finish_reason="stop" and put the assistant response in content.',
         '',
         `AILIS bridge protocol version: ${CODEX_BRIDGE_PROTOCOL_VERSION}`,
@@ -767,6 +803,67 @@ function buildCodexAppServerArgs(launch) {
     ];
 }
 
+function buildProcessTreeTerminationPlan(pid, platform = process.platform) {
+    const normalizedPid = Math.trunc(Number(pid));
+    if (!Number.isFinite(normalizedPid) || normalizedPid <= 0) {
+        return null;
+    }
+    if (platform === 'win32') {
+        return {
+            command: 'taskkill.exe',
+            args: ['/pid', String(normalizedPid), '/t', '/f']
+        };
+    }
+    return {
+        signalPid: -normalizedPid,
+        signal: 'SIGTERM'
+    };
+}
+
+function terminateChildProcessTree(child, {
+    platform = process.platform,
+    spawnImpl = spawn
+} = {}) {
+    if (!child) {
+        return false;
+    }
+    const fallback = () => {
+        try {
+            child.kill();
+        } catch {}
+    };
+    const plan = buildProcessTreeTerminationPlan(child.pid, platform);
+    if (!plan) {
+        fallback();
+        return false;
+    }
+    if (platform !== 'win32') {
+        try {
+            process.kill(plan.signalPid, plan.signal);
+            return true;
+        } catch {
+            fallback();
+            return false;
+        }
+    }
+    try {
+        const killer = spawnImpl(plan.command, plan.args, {
+            windowsHide: true,
+            stdio: 'ignore'
+        });
+        killer.once?.('error', fallback);
+        killer.once?.('close', (exitCode) => {
+            if (exitCode !== 0 && child.exitCode === null) {
+                fallback();
+            }
+        });
+        return true;
+    } catch {
+        fallback();
+        return false;
+    }
+}
+
 function runCodexAppServerInference(command, args, {
     cwd,
     codexHome,
@@ -785,6 +882,7 @@ function runCodexAppServerInference(command, args, {
                 cwd,
                 env: { ...process.env, CODEX_HOME: codexHome },
                 windowsHide: true,
+                detached: process.platform !== 'win32',
                 stdio: ['pipe', 'pipe', 'pipe']
             });
         } catch (error) {
@@ -812,9 +910,7 @@ function runCodexAppServerInference(command, args, {
         const serverRequests = [];
 
         const stop = () => {
-            try {
-                child.kill();
-            } catch {}
+            terminateChildProcessTree(child);
         };
         let timeout = null;
         const finish = (result) => {
@@ -826,6 +922,13 @@ function runCodexAppServerInference(command, args, {
             if (typeof signal?.removeEventListener === 'function') {
                 signal.removeEventListener('abort', onAbort);
             }
+            const pendingError = new Error(
+                result?.error || 'Codex app-server request finished before the pending RPC completed.'
+            );
+            for (const pending of pendingRequests.values()) {
+                pending.reject(pendingError);
+            }
+            pendingRequests.clear();
             stop();
             const value = {
                 ...result,
@@ -1073,7 +1176,7 @@ function normalizeBridgeToolCalls(toolCalls = [], options = {}) {
     }).filter((call) => call.name);
 }
 
-async function callCodexModelBridge(settings = {}, payload = {}, messages = []) {
+async function callCodexModelBridgeOnce(settings = {}, payload = {}, messages = []) {
     const launch = resolveCodexEntrypoint(settings);
     if (!launch.ok) {
         return launch;
@@ -1194,6 +1297,70 @@ async function callCodexModelBridge(settings = {}, payload = {}, messages = []) 
     }
 }
 
+function shouldRetryCodexBridgeFailure(result = {}) {
+    const code = normalizeText(result?.code).toLowerCase();
+    if (code === 'timeout') {
+        return true;
+    }
+    if (code !== 'codex_process_failed' && code !== 'codex_app_server_exited') {
+        return false;
+    }
+    const diagnostic = [
+        result?.error,
+        result?.details?.stderrTail,
+        result?.stderr
+    ].map((value) => normalizeText(value).toLowerCase()).filter(Boolean).join('\n');
+    return !/(?:not logged in|login required|authentication|unauthorized|rate.?limit|usage.?limit|quota|credits?)/i.test(diagnostic);
+}
+
+function resolveCodexBridgeMaxAttempts(settings = {}) {
+    const configured = Number(
+        settings.codexBridgeMaxAttempts ??
+        process.env.AILIS_CODEX_MODEL_BRIDGE_MAX_ATTEMPTS ??
+        2
+    );
+    return Math.max(1, Math.min(2, Number.isFinite(configured) ? Math.trunc(configured) : 2));
+}
+
+async function callCodexModelBridge(settings = {}, payload = {}, messages = []) {
+    const maxAttempts = resolveCodexBridgeMaxAttempts(settings);
+    const failureCodes = [];
+    let result = null;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        result = await callCodexModelBridgeOnce(settings, payload, messages);
+        if (result?.ok) {
+            return {
+                ...result,
+                providerMessage: {
+                    ...(result.providerMessage || {}),
+                    bridgeAttempts: attempt,
+                    retryCount: attempt - 1,
+                    ...(failureCodes.length ? { retriedFailureCodes: failureCodes } : {})
+                }
+            };
+        }
+        if (
+            attempt >= maxAttempts ||
+            payload?.signal?.aborted ||
+            payload?.abortSignal?.aborted ||
+            !shouldRetryCodexBridgeFailure(result)
+        ) {
+            break;
+        }
+        failureCodes.push(normalizeText(result?.code, 'unknown'));
+    }
+    return {
+        ...(result || {
+            ok: false,
+            code: 'codex_bridge_failed',
+            error: 'Codex model bridge failed without a result.'
+        }),
+        bridgeAttempts: Math.max(1, failureCodes.length + 1),
+        retryCount: failureCodes.length,
+        ...(failureCodes.length ? { retriedFailureCodes: failureCodes } : {})
+    };
+}
+
 module.exports = {
     CODEX_BRIDGE_PROTOCOL_VERSION,
     CODEX_MODEL_BRIDGE_PROVIDER,
@@ -1202,11 +1369,14 @@ module.exports = {
     buildCodexBridgeDecisionSchema,
     buildCodexBridgePrompt,
     buildCodexBridgeTurnInput,
+    buildProcessTreeTerminationPlan,
     callCodexModelBridge,
     collectCodexBridgeImageInputs,
     normalizeBridgeToolCalls,
     normalizeCodexUsage,
     parseCodexAppServerNotifications,
     parseCodexJsonlEvents,
-    resolveCodexEntrypoint
+    resolveCodexBridgeMaxAttempts,
+    resolveCodexEntrypoint,
+    shouldRetryCodexBridgeFailure
 };

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import datetime as datetime_module
 import json
 import os
 import subprocess
@@ -54,10 +55,33 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--project-root", default=r"F:\AILIS_self_evolution_runtime")
     parser.add_argument("--output-dir", default=r"F:\AILIS_self_evolution_runtime\eval-results\toolsandbox-smoke")
     parser.add_argument("--run-id", default=f"ailis-toolsandbox-{time.strftime('%Y%m%d-%H%M%S')}")
+    parser.add_argument(
+        "--benchmark-clock",
+        help="ISO-8601 clock anchor used consistently by scenarios, tools, and AILIS.",
+    )
     parser.add_argument("--scenario", action="append", dest="scenarios")
     parser.add_argument("--all", action="store_true", help="Run all official named scenarios.")
+    parser.add_argument(
+        "--exclude-rapid-api",
+        action="store_true",
+        help="Exclude scenarios requiring RapidAPI before progress and completion accounting.",
+    )
     parser.add_argument("--resume", action="store_true", help="Skip scenarios already completed in progress.jsonl.")
     parser.add_argument("--retry-errors", action="store_true", help="Retry prior error or blocked records when resuming.")
+    parser.add_argument(
+        "--retry-errors-only",
+        action="store_true",
+        help="Retry only scenarios whose latest progress record is an error.",
+    )
+    parser.add_argument(
+        "--retry-failures-only",
+        action="store_true",
+        help="Retry only scenarios whose latest record is an error or has official similarity <= 0.",
+    )
+    parser.add_argument(
+        "--retry-batch-id",
+        help="Stable retry batch identifier used to preserve the original failure cohort across resumes.",
+    )
     parser.add_argument("--max-scenarios", type=int)
     parser.add_argument("--max-agent-steps", type=int, default=7)
     parser.add_argument("--provider", choices=["desktop", "codex-model-bridge"], default="codex-model-bridge")
@@ -77,6 +101,236 @@ def append_jsonl(path: Path, value: dict[str, Any]) -> None:
 
 def write_json(path: Path, value: dict[str, Any]) -> None:
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def load_or_create_benchmark_clock(
+    clock_path: Path, requested_anchor: Optional[str] = None
+) -> dict[str, str]:
+    if clock_path.exists():
+        value = json.loads(clock_path.read_text(encoding="utf-8"))
+        anchor = datetime_module.datetime.fromisoformat(value["anchorLocalIso"])
+        if anchor.tzinfo is None:
+            raise ValueError("Persisted ToolSandbox benchmark clock must include a UTC offset.")
+        return value
+
+    anchor = (
+        datetime_module.datetime.fromisoformat(requested_anchor)
+        if requested_anchor
+        else datetime_module.datetime.now().astimezone()
+    )
+    if anchor.tzinfo is None:
+        raise ValueError("ToolSandbox benchmark clock must include a UTC offset.")
+    value = {
+        "model": "ailis_toolsandbox_clock.v1",
+        "anchorLocalIso": anchor.isoformat(timespec="seconds"),
+        "source": "explicit" if requested_anchor else "run_start",
+    }
+    write_json(clock_path, value)
+    return value
+
+
+class _FrozenDatetimeModule:
+    def __init__(self, anchor: datetime_module.datetime) -> None:
+        real_datetime = datetime_module.datetime
+
+        class FrozenDateTime(real_datetime):
+            @classmethod
+            def now(cls, tz=None):
+                value = real_datetime.fromtimestamp(anchor.timestamp(), tz)
+                return cls(
+                    value.year,
+                    value.month,
+                    value.day,
+                    value.hour,
+                    value.minute,
+                    value.second,
+                    value.microsecond,
+                    value.tzinfo,
+                    fold=value.fold,
+                )
+
+            @classmethod
+            def today(cls):
+                return cls.now()
+
+        self.datetime = FrozenDateTime
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(datetime_module, name)
+
+
+def install_benchmark_clock(
+    anchor: datetime_module.datetime,
+) -> list[tuple[Any, Any]]:
+    frozen_module = _FrozenDatetimeModule(anchor)
+    patched: list[tuple[Any, Any]] = []
+    for module_name, module in list(sys.modules.items()):
+        if not module_name.startswith("tool_sandbox.") or module is None:
+            continue
+        if getattr(module, "datetime", None) is datetime_module:
+            patched.append((module, datetime_module))
+            setattr(module, "datetime", frozen_module)
+    return patched
+
+
+def restore_benchmark_clock(patched: list[tuple[Any, Any]]) -> None:
+    for module, original in patched:
+        setattr(module, "datetime", original)
+
+
+def benchmark_runtime_environment_override(clock: dict[str, str]) -> dict[str, str]:
+    anchor = datetime_module.datetime.fromisoformat(clock["anchorLocalIso"])
+    offset = anchor.strftime("%z")
+    utc_offset = f"{offset[:3]}:{offset[3:]}" if offset else ""
+    return {
+        "source": "toolsandbox_benchmark_clock",
+        "current_date": anchor.strftime("%Y-%m-%d"),
+        "current_time": anchor.strftime("%H:%M:%S"),
+        "current_datetime": anchor.isoformat(timespec="seconds"),
+        "utc_offset": utc_offset,
+    }
+
+
+def retry_error_scenario_names(
+    selected: list[str], latest: dict[str, dict[str, Any]]
+) -> set[str]:
+    return {
+        name for name in selected if latest.get(name, {}).get("status") == "error"
+    }
+
+
+def retry_failure_scenario_names(
+    selected: list[str], latest: dict[str, dict[str, Any]]
+) -> set[str]:
+    failures: set[str] = set()
+    for name in selected:
+        record = latest.get(name, {})
+        similarity = record.get("similarity")
+        if record.get("status") == "error":
+            failures.add(name)
+        elif isinstance(similarity, (int, float)) and float(similarity) <= 0:
+            failures.add(name)
+    return failures
+
+
+def load_or_create_retry_failure_manifest(
+    *,
+    output_root: Path,
+    batch_id: str,
+    selected: list[str],
+    latest: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    normalized_batch_id = batch_id.strip()
+    if not normalized_batch_id or any(
+        character not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
+        for character in normalized_batch_id
+    ):
+        raise ValueError("retry batch id must contain only letters, digits, dot, underscore, or hyphen")
+    batch_root = output_root / "retry-batches"
+    batch_root.mkdir(parents=True, exist_ok=True)
+    manifest_path = batch_root / f"{normalized_batch_id}.manifest.json"
+    if manifest_path.exists():
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["manifestPath"] = str(manifest_path)
+        return manifest
+
+    failure_names = retry_failure_scenario_names(selected, latest)
+    scenario_names = [name for name in selected if name in failure_names]
+    baseline = {
+        name: {
+            "status": latest.get(name, {}).get("status"),
+            "similarity": latest.get(name, {}).get("similarity"),
+            "attempt": int(latest.get(name, {}).get("attempt") or 0),
+        }
+        for name in scenario_names
+    }
+    manifest = {
+        "schema": "ailis.toolsandbox.retry_batch.v1",
+        "batchId": normalized_batch_id,
+        "createdAt": datetime_module.datetime.now().astimezone().isoformat(timespec="seconds"),
+        "selection": "latest status=error or official similarity<=0",
+        "target": len(scenario_names),
+        "scenarios": scenario_names,
+        "baseline": baseline,
+    }
+    write_json(manifest_path, manifest)
+    manifest["manifestPath"] = str(manifest_path)
+    return manifest
+
+
+def retry_batch_metrics(
+    manifest: Optional[dict[str, Any]],
+    latest: dict[str, dict[str, Any]],
+) -> Optional[dict[str, Any]]:
+    if not manifest:
+        return None
+    scenario_names = [str(name) for name in manifest.get("scenarios") or []]
+    baseline = manifest.get("baseline") or {}
+    processed: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
+    for name in scenario_names:
+        baseline_record = baseline.get(name) or {}
+        current_record = latest.get(name) or {}
+        if int(current_record.get("attempt") or 0) > int(baseline_record.get("attempt") or 0):
+            processed.append((name, baseline_record, current_record))
+
+    scored = [
+        item for item in processed
+        if isinstance(item[2].get("similarity"), (int, float))
+    ]
+    paired = [
+        item for item in scored
+        if isinstance(item[1].get("similarity"), (int, float))
+    ]
+
+    def call_count(metrics: dict[str, Any]) -> int:
+        if isinstance(metrics.get("llmCalls"), (int, float)):
+            return int(metrics["llmCalls"])
+        calls = metrics.get("calls")
+        if isinstance(calls, list):
+            return len(calls)
+        if isinstance(calls, (int, float)):
+            return int(calls)
+        return 0
+
+    return {
+        "batchId": manifest.get("batchId"),
+        "manifestPath": manifest.get("manifestPath"),
+        "target": len(scenario_names),
+        "processed": len(processed),
+        "scored": len(scored),
+        "errors": sum(item[2].get("status") == "error" for item in processed),
+        "improved": sum(
+            isinstance(item[1].get("similarity"), (int, float))
+            and float(item[2].get("similarity")) > float(item[1].get("similarity"))
+            for item in scored
+        ),
+        "recoveredErrors": sum(
+            item[1].get("status") == "error" for item in scored
+        ),
+        "stillZero": sum(float(item[2]["similarity"]) <= 0 for item in scored),
+        "averageSimilarity": (
+            sum(float(item[2]["similarity"]) for item in scored) / len(scored)
+            if scored else 0
+        ),
+        "pairedAverageDelta": (
+            sum(
+                float(item[2]["similarity"]) - float(item[1]["similarity"])
+                for item in paired
+            ) / len(paired)
+            if paired else 0
+        ),
+        "totalCalls": sum(
+            call_count(item[2].get("ailisMetrics") or {})
+            + call_count(item[2].get("userSimulatorMetrics") or {})
+            for item in processed
+        ),
+        "totalTokens": sum(
+            int((item[2].get("ailisMetrics") or {}).get("totalTokens") or 0)
+            + int((item[2].get("userSimulatorMetrics") or {}).get("totalTokens") or 0)
+            for item in processed
+        ),
+        "durationMs": sum(int(item[2].get("durationMs") or 0) for item in processed),
+    }
 
 
 def usage_summary(usage: Optional[dict[str, Any]]) -> dict[str, int]:
@@ -244,9 +498,6 @@ class CodexToolSandboxUser(BaseRole):
                 ]
             )
             return
-        context = __import__(
-            "tool_sandbox.common.execution_context", fromlist=["get_current_context"]
-        ).get_current_context()
         response_messages: list[Message] = []
         for index, call in enumerate(tool_calls, start=1):
             name = str(call.get("name") or "")
@@ -254,7 +505,8 @@ class CodexToolSandboxUser(BaseRole):
                 raise RuntimeError(f"Codex user simulator selected unavailable tool: {name}")
             args = call.get("arguments") if isinstance(call.get("arguments"), dict) else {}
             tool_call_id = str(call.get("id") or f"user_call_{uuid.uuid4().hex}_{index}")
-            execution_name = context.get_execution_facing_tool_name(name)
+            # User-facing tools are intentionally not scrambled by ToolSandbox.
+            execution_name = name
             code = (
                 f"{tool_call_id}_parameters = {args!r}\n"
                 f"{tool_call_id}_response = {execution_name}(**{tool_call_id}_parameters)\n"
@@ -298,6 +550,7 @@ class AILISToolSandboxAgent(BaseRole):
         codex_model: str,
         codex_reasoning_effort: str,
         llm_timeout_ms: int,
+        runtime_environment_override: dict[str, str],
     ) -> None:
         self.project_root = project_root
         self.output_dir = output_dir
@@ -309,6 +562,7 @@ class AILISToolSandboxAgent(BaseRole):
         self.codex_model = codex_model
         self.codex_reasoning_effort = codex_reasoning_effort
         self.llm_timeout_ms = llm_timeout_ms
+        self.runtime_environment_override = runtime_environment_override
         self.process: Optional[subprocess.Popen[str]] = None
         self.stderr_handle = None
         self.turn = 0
@@ -370,6 +624,7 @@ class AILISToolSandboxAgent(BaseRole):
                 "codexModel": self.codex_model,
                 "codexReasoningEffort": self.codex_reasoning_effort,
                 "llmTimeoutMs": self.llm_timeout_ms,
+                "runtimeEnvironmentOverride": self.runtime_environment_override,
                 "tools": self._agent_tool_specs(),
             }
         )
@@ -574,6 +829,14 @@ def requires_rapid_api(
     return bool(RAPID_API_TOOLS.intersection(base.starting_context.tool_allow_list or []))
 
 
+def exclude_rapid_api_scenarios(
+    selected: list[str], scenarios: dict[str, Any]
+) -> list[str]:
+    return [
+        name for name in selected if not requires_rapid_api(name, scenarios)
+    ]
+
+
 def load_latest_progress(path: Path) -> dict[str, dict[str, Any]]:
     latest: dict[str, dict[str, Any]] = {}
     if not path.exists():
@@ -647,6 +910,7 @@ def build_summary(
         "provider": args.provider,
         "model": args.codex_model if args.provider == "codex-model-bridge" else "desktop-configured",
         "reasoningEffort": args.codex_reasoning_effort if args.provider == "codex-model-bridge" else None,
+        "benchmarkClock": getattr(args, "benchmark_clock_record", None),
         "userSimulator": (
             "official on-policy role/messages/tools driven by codex-model-bridge"
             if args.provider == "codex-model-bridge"
@@ -668,14 +932,35 @@ def build_summary(
 
 def main() -> int:
     args = parse_args()
+    if args.retry_errors_only:
+        args.resume = True
+        args.retry_errors = True
+    if args.retry_failures_only:
+        if not args.retry_batch_id:
+            raise ValueError("--retry-failures-only requires --retry-batch-id")
+        args.resume = True
+        args.retry_errors = True
     project_root = Path(args.project_root).resolve()
     output_root = Path(args.output_dir).resolve() / args.run_id
     output_root.mkdir(parents=True, exist_ok=True)
     progress_path = output_root / "progress.jsonl"
     state_path = output_root / "state.json"
     summary_path = output_root / "summary.json"
+    benchmark_clock = load_or_create_benchmark_clock(
+        output_root / "benchmark-clock.json", args.benchmark_clock
+    )
+    benchmark_clock_anchor = datetime_module.datetime.fromisoformat(
+        benchmark_clock["anchorLocalIso"]
+    )
+    install_benchmark_clock(benchmark_clock_anchor)
+    runtime_environment_override = benchmark_runtime_environment_override(
+        benchmark_clock
+    )
+    args.benchmark_clock_record = benchmark_clock
     scenarios = named_scenarios(preferred_tool_backend=ToolBackend.DEFAULT)
     selected = list(scenarios) if args.all else (args.scenarios or DEFAULT_SMOKE_SCENARIOS)
+    if args.exclude_rapid_api:
+        selected = exclude_rapid_api_scenarios(selected, scenarios)
     if args.max_scenarios is not None:
         selected = selected[: max(0, args.max_scenarios)]
     missing = [name for name in selected if name not in scenarios]
@@ -683,6 +968,23 @@ def main() -> int:
         raise KeyError(f"Unknown ToolSandbox scenarios: {missing}")
 
     latest = load_latest_progress(progress_path) if args.resume else {}
+    retry_error_names = retry_error_scenario_names(selected, latest)
+    retry_manifest = (
+        load_or_create_retry_failure_manifest(
+            output_root=output_root,
+            batch_id=args.retry_batch_id,
+            selected=selected,
+            latest=latest,
+        )
+        if args.retry_failures_only else None
+    )
+    retry_names = set(retry_manifest.get("scenarios") or []) if retry_manifest else set()
+    official_indexes = {name: index for index, name in enumerate(selected, start=1)}
+    run_selected = (
+        [name for name in selected if name in retry_names]
+        if retry_manifest else selected
+    )
+    initial_retry_metrics = retry_batch_metrics(retry_manifest, latest)
     write_json(
         state_path,
         {
@@ -690,18 +992,33 @@ def main() -> int:
             "status": "running",
             "provider": args.provider,
             "model": args.codex_model if args.provider == "codex-model-bridge" else "desktop-configured",
+            "benchmarkClock": benchmark_clock,
             "selected": len(selected),
             "completed": sum(
                 isinstance(latest.get(name, {}).get("similarity"), (int, float)) for name in selected
             ),
+            "selectionMode": "retry_failures_only" if retry_manifest else "registry",
+            "retryBatch": initial_retry_metrics,
             "currentScenario": None,
             "updatedAt": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         },
     )
-    for index, scenario_name in enumerate(selected, start=1):
+    for scenario_name in run_selected:
+        index = official_indexes[scenario_name]
+        if args.retry_errors_only and scenario_name not in retry_error_names:
+            continue
         prior = latest.get(scenario_name)
+        if retry_manifest:
+            baseline_attempt = int(
+                (retry_manifest.get("baseline", {}).get(scenario_name) or {}).get("attempt") or 0
+            )
+            if int((prior or {}).get("attempt") or 0) > baseline_attempt:
+                continue
         if args.resume and prior:
-            if isinstance(prior.get("similarity"), (int, float)):
+            if (
+                isinstance(prior.get("similarity"), (int, float))
+                and not retry_manifest
+            ):
                 continue
             if prior.get("status") == "error" and not args.retry_errors:
                 continue
@@ -738,6 +1055,7 @@ def main() -> int:
             codex_model=args.codex_model,
             codex_reasoning_effort=args.codex_reasoning_effort,
             llm_timeout_ms=args.llm_timeout_ms,
+            runtime_environment_override=runtime_environment_override,
         )
         user: BaseRole
         if args.provider == "codex-model-bridge":
@@ -757,11 +1075,14 @@ def main() -> int:
                 "status": "running",
                 "provider": args.provider,
                 "model": args.codex_model if args.provider == "codex-model-bridge" else "desktop-configured",
+                "benchmarkClock": benchmark_clock,
                 "selected": len(selected),
                 "completed": sum(
                     isinstance(latest.get(name, {}).get("similarity"), (int, float))
                     for name in selected
                 ),
+                "selectionMode": "retry_failures_only" if retry_manifest else "registry",
+                "retryBatch": retry_batch_metrics(retry_manifest, latest),
                 "currentIndex": index,
                 "currentScenario": scenario_name,
                 "updatedAt": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
@@ -829,9 +1150,17 @@ def main() -> int:
             break
 
     summary = build_summary(args=args, selected=selected, latest=latest)
+    summary["selectionMode"] = "retry_failures_only" if retry_manifest else "registry"
+    summary["retryBatch"] = retry_batch_metrics(retry_manifest, latest)
     write_json(summary_path, summary)
+    retry_batch_completed = bool(
+        summary.get("retryBatch")
+        and summary["retryBatch"]["processed"] >= summary["retryBatch"]["target"]
+    )
     final_status = (
-        "completed"
+        "retry_batch_completed"
+        if retry_manifest and retry_batch_completed
+        else "completed"
         if summary["completed"] == len(selected)
         else "provider_blocked"
         if summary["fatalProviderErrors"]
@@ -844,16 +1173,21 @@ def main() -> int:
             "status": final_status,
             "provider": args.provider,
             "model": args.codex_model if args.provider == "codex-model-bridge" else "desktop-configured",
+            "benchmarkClock": benchmark_clock,
             "selected": len(selected),
             "completed": summary["completed"],
             "errors": summary["errors"],
             "blockedEnvironment": summary["blockedEnvironment"],
             "fatalProviderErrors": summary["fatalProviderErrors"],
+            "selectionMode": summary["selectionMode"],
+            "retryBatch": summary["retryBatch"],
             "currentScenario": None,
             "updatedAt": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         },
     )
     print(json.dumps(summary, ensure_ascii=False), flush=True)
+    if retry_manifest and retry_batch_completed:
+        return 0
     if summary["completed"] == len(selected):
         return 0
     if summary["fatalProviderErrors"]:

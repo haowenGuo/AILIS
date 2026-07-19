@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
 import {
     buildModelInput,
@@ -43,6 +46,59 @@ test('toolOutputToModelInputItems emits Responses function call and output pair'
     assert.equal(items[1].call_id, 'inspect-1');
     assert.match(FunctionCallOutputPayload.toText(items[1].output), /F478A7/);
     assert.equal(items[1].output.body.kind, 'text');
+});
+
+test('tool-returned visual artifacts become image input for the next main-model turn', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ailis-tool-image-'));
+    const imagePath = path.join(tempDir, 'page.png');
+    fs.writeFileSync(
+        imagePath,
+        Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=', 'base64')
+    );
+    try {
+        const items = toolOutputToModelInputItems({
+            id: 'web-screenshot-1',
+            tool: 'web_run',
+            args: { screenshot: [{ ref_id: 'turn0view0' }] },
+            response: {
+                ok: true,
+                status: 'completed',
+                result: {
+                    content: [{ type: 'text', text: `Captured screenshot at ${imagePath}` }],
+                    structuredContent: {
+                        status: 'completed',
+                        modelImage: {
+                            image_url: imagePath,
+                            detail: 'original'
+                        }
+                    }
+                }
+            }
+        });
+
+        assert.equal(items[1].output.body.kind, 'content_items');
+        assert.equal(
+            items[1].output.body.value.find((part) => part.type === 'input_image').image_url,
+            imagePath
+        );
+        const messages = responseItemsToChatMessages({ input: items });
+        const visualMessage = messages.find((message) =>
+            message.role === 'user' &&
+            Array.isArray(message.content) &&
+            message.content.some((part) => part.type === 'image_url')
+        );
+        assert.ok(visualMessage);
+        assert.match(
+            visualMessage.content.find((part) => part.type === 'image_url').image_url.url,
+            /^data:image\/png;base64,/
+        );
+        assert.match(
+            visualMessage.content.find((part) => part.type === 'text').text,
+            /not a new user request/i
+        );
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
 });
 
 test('toolOutputToModelInputItems exposes exec output store handles to the model', () => {
@@ -355,6 +411,20 @@ test('web_run search results preserve stable refs for the next open call', () =>
                             action: { type: 'search', query: 'Emily Midkiff Fafnir' }
                         },
                         search: {
+                            selectionAudit: {
+                                status: 'incomplete_candidate_set',
+                                selector: 'most',
+                                parent_kind: 'article',
+                                quoted_term: 'witnesses',
+                                lexical_match: 'exact_whole_token_or_phrase',
+                                candidate_set_coverage_sufficient: false,
+                                parent_index_candidates: ['turn0search0'],
+                                candidates: [{
+                                    ref_id: 'turn0search1',
+                                    visible_snippet_occurrences: 2
+                                }],
+                                caveat: 'Search snippets are partial.'
+                            },
                             results: [{
                                 ref_id: 'turn0search1',
                                 title: 'Dragons are Tricksy',
@@ -369,6 +439,9 @@ test('web_run search results preserve stable refs for the next open call', () =>
     });
 
     const text = FunctionCallOutputPayload.toText(items[2].output);
+    assert.match(text, /Selection protocol:/);
+    assert.match(text, /Candidate-set coverage is insufficient/);
+    assert.match(text, /Open the nearest parent index first: \[turn0search0\]/);
     assert.match(text, /Open page: web_run \{"open":\[\{"ref_id":"turn0search1","lineno":1\}\]\}/);
     assert.doesNotMatch(text, /Open page: web_fetch/);
 });
@@ -416,6 +489,54 @@ test('web_run empty search preserves status and executable recovery affordance',
     assert.match(text, /Suggested next calls \(tool-provided options/);
     assert.match(text, /web_run \{"search_query":\[\{"q":"Mercedes Sosa discography"\}\],"response_length":"medium"\}/);
     assert.doesNotMatch(text, /"domains"/);
+});
+
+test('web_run deferred-tool suggestion preserves native tool_search namespace', () => {
+    const items = toolOutputToModelInputItems({
+        id: 'web-run-tool-search-suggestion-1',
+        tool: 'web_run',
+        args: {
+            search_query: [{ q: 'clinical trial enrollment' }],
+            response_length: 'medium'
+        },
+        response: {
+            ok: true,
+            status: 'completed',
+            result: {
+                structuredContent: {
+                    webSearchOutput: {
+                        type: 'function_call_output',
+                        webSearchCall: {
+                            type: 'web_search_call',
+                            status: 'completed',
+                            action: { type: 'search', query: 'clinical trial enrollment' }
+                        },
+                        search: {
+                            status: 'completed',
+                            results: [{
+                                ref_id: 'turn0search0',
+                                title: 'ClinicalTrials.gov',
+                                url: 'https://clinicaltrials.gov/study/NCT00000001',
+                                snippet: 'Official study record.'
+                            }],
+                            suggestedNextCalls: [{
+                                tool: 'tool_search',
+                                args: {
+                                    query: 'ClinicalTrials.gov structured enrollment',
+                                    limit: 5
+                                },
+                                reason: 'Discover the authoritative structured connector.'
+                            }]
+                        }
+                    }
+                }
+            }
+        }
+    });
+
+    const text = FunctionCallOutputPayload.toText(items[2].output);
+    assert.match(text, /tool_search \{"query":"ClinicalTrials\.gov structured enrollment","limit":5\}/);
+    assert.doesNotMatch(text, /mcp__ailis_research__tool_search/);
 });
 
 test('web_run open preserves discovered document links for the next open call', () => {
@@ -500,6 +621,107 @@ test('web_fetch source viewport is projected as open_page web_search_call', () =
     assert.match(text, /Opened page source viewport/);
     assert.match(text, /Line range: L12-L14/);
     assert.match(text, /L13: Core skill details/);
+});
+
+test('source viewport projection preserves query-relevant tables and intact long relationship lines', () => {
+    const longRelationship = `A historical account states that a horse doctor named Louvrier treated livestock. ${'Context remains attached. '.repeat(24)}`;
+    const items = toolOutputToModelInputItems({
+        id: 'web-fetch-structured-evidence-1',
+        tool: 'mcp__ailis_research__web_fetch',
+        args: { url: 'https://example.test/source' },
+        response: {
+            ok: true,
+            status: 'completed',
+            result: {
+                structuredContent: {
+                    structuredTables: [{
+                        projection: {
+                            columns: ['President', 'Birthplace'],
+                            rowCount: 2,
+                            rowsComplete: true,
+                            queryRelevant: true,
+                            rows: [
+                                ['[First Person](https://example.test/first)', '[First City](https://example.test/city-1)'],
+                                ['[Second Person](https://example.test/second)', '[Second City](https://example.test/city-2)'],
+                                { omitted_items: 1 }
+                            ]
+                        }
+                    }],
+                    sourceWindow: {
+                        type: 'source_viewport',
+                        action: { type: 'open_page', url: 'https://example.test/source', lineno: 20 },
+                        url: 'https://example.test/source',
+                        totalLines: 40,
+                        lineStart: 20,
+                        lineEnd: 21,
+                        lines: [
+                            { lineno: 20, text: longRelationship },
+                            { lineno: 21, text: 'A short answer option.' }
+                        ]
+                    }
+                }
+            }
+        }
+    });
+
+    const text = FunctionCallOutputPayload.toText(items[2].output);
+    assert.match(text, /Structured table projection/);
+    assert.match(text, /columns=President \| Birthplace; rows=2; rows_complete=true/);
+    assert.match(text, /First Person \| First City/);
+    assert.match(text, /additional structured rows retained in the tool artifact/);
+    assert.match(text, /Expanded long source lines/);
+    assert.match(text, /horse doctor named Louvrier/);
+    assert.match(text, /Context remains attached\.(?: Context remains attached\.){20}/);
+});
+
+test('web_run source viewport preserves executable deferred-tool follow-up calls', () => {
+    const pdfUrl = 'https://example.test/article.pdf';
+    const items = toolOutputToModelInputItems({
+        id: 'web-run-pdf-affordance-1',
+        tool: 'web_run',
+        args: { open: [{ ref_id: 'turn0search0', lineno: 1 }] },
+        response: {
+            ok: true,
+            status: 'partial',
+            result: {
+                structuredContent: {
+                    status: 'partial',
+                    selectionProtocol: {
+                        status: 'parent_index_incomplete',
+                        parent_kind: 'article',
+                        quoted_term: 'witnesses',
+                        boundary_complete: false,
+                        covered_ranges: [[58, 105]]
+                    },
+                    suggestedNextCalls: [{
+                        tool: 'pdf_extract_text',
+                        args: { url: pdfUrl, maxChars: 12000 },
+                        reason: 'Read the discovered PDF body.'
+                    }],
+                    sourceWindow: {
+                        type: 'source_viewport',
+                        action: { type: 'open_page', url: 'https://example.test/article', lineno: 1 },
+                        url: 'https://example.test/article',
+                        totalLines: 1,
+                        lineStart: 1,
+                        lineEnd: 1,
+                        lines: [{ lineno: 1, text: `[Download PDF](${pdfUrl})` }]
+                    }
+                }
+            }
+        }
+    });
+
+    const text = FunctionCallOutputPayload.toText(items[2].output);
+    assert.match(text, /Selection dependency:/);
+    assert.match(text, /candidate_boundary_complete=false/);
+    assert.match(text, /Continue the parent index; do not select or open a child yet/);
+    assert.match(text, /Suggested next calls \(tool-provided options/);
+    assert.match(
+        text,
+        /mcp__ailis_research__pdf_extract_text \{"url":"https:\/\/example\.test\/article\.pdf","maxChars":12000\}/
+    );
+    assert.match(text, /Reason: Read the discovered PDF body/);
 });
 
 test('nested MCP source viewport preserves answer-bearing lines instead of generic text previews', () => {
@@ -656,6 +878,32 @@ test('buildModelInput keeps user message and prior tool observations in one orde
     assert.equal(input[0].role, 'user');
     assert.equal(input[1].type, 'function_call');
     assert.equal(input[2].type, 'function_call_output');
+});
+
+test('buildModelInput preserves direct image attachments for vision-capable model input', () => {
+    const imagePath = 'C:\\workspace\\attached-board.png';
+    const input = buildModelInput({
+        message: 'Analyze the attached board.',
+        fileAttachments: [{ path: imagePath, name: 'attached-board.png' }],
+        modelImageAttachments: [{ image_url: imagePath, detail: 'original' }],
+        inputModalities: ['text', 'input_image']
+    });
+    const contextMessage = input.find((item) =>
+        item.type === 'message' &&
+        item.role === 'user' &&
+        item.content?.some((part) => part.type === 'input_image')
+    );
+
+    assert.ok(contextMessage);
+    assert.equal(contextMessage.content.find((part) => part.type === 'input_image').image_url, imagePath);
+
+    const messages = responseItemsToChatMessages({ input });
+    const multimodal = messages.find((message) =>
+        Array.isArray(message.content) &&
+        message.content.some((part) => part.type === 'image_url')
+    );
+    assert.equal(multimodal.content.find((part) => part.type === 'image_url').image_url.url, imagePath);
+    assert.equal(multimodal.content.find((part) => part.type === 'image_url').detail, 'original');
 });
 
 test('buildModelInput drops trailing duplicate current user message from history', () => {

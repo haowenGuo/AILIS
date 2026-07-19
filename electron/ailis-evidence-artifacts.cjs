@@ -154,9 +154,9 @@ function inferPath(args = {}, text = '') {
     const sanitized = String(text || '')
         .replace(/https?:\/\/[^\s"'<>\)\]]+/gi, ' ')
         .replace(/<[^>]*>/g, ' ');
-    const windowsPath = sanitized.match(/[A-Za-z]:\\[^\r\n"'<>|]+/);
+    const windowsPath = sanitized.match(/(?:^|[\s("'=])([A-Za-z]:\\[^\r\n"'<>|]+)/m);
     if (windowsPath) {
-        return normalizeText(windowsPath[0]);
+        return normalizeText(windowsPath[1]);
     }
     const relativePath = sanitized.match(/(?:^|[\s(])((?:\.{1,2}[\\/]|[\\/](?![\\/]))[A-Za-z0-9._-]+(?:[\\/][^\s"'<>|]+)*)/m);
     if (relativePath) {
