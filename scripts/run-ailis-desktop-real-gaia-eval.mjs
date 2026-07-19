@@ -354,6 +354,7 @@ function buildDesktopRealPayload({ args, task, llmSettings }) {
         planner: 'llm',
         answerOnly: true,
         exactAnswerMode: true,
+        memoryPolicy: 'disabled',
         executionProfile: { kind: 'exact_answer_eval', answerOnly: true },
         maxAgentSteps: args.maxAgentSteps,
         maxSteps: args.maxAgentSteps,
@@ -367,6 +368,7 @@ function buildDesktopRealPayload({ args, task, llmSettings }) {
             planner: 'llm',
             answerOnly: true,
             exactAnswerMode: true,
+            memoryPolicy: 'disabled',
             executionProfile: { kind: 'exact_answer_eval', answerOnly: true },
             evaluationTaskId: task.task_id,
             evaluationName: 'gaia_desktop_real',
@@ -1272,7 +1274,8 @@ async function startGateway(args, runtimeSettings) {
         port: 0,
         workspaceRoot: args.workspaceRoot,
         projectRoot: PROJECT_ROOT,
-        auditDir: args.auditDir
+        auditDir: args.auditDir,
+        profileCurationEnabled: false
     };
     configureResearchMcpLlmEnvironment(runtimeSettings.llmSettings);
     if (runtimeSettings.mcpConfigPath) {
@@ -1489,6 +1492,7 @@ async function main() {
 export {
     answersEquivalent,
     answersEquivalentForQuestion,
+    buildDesktopRealPayload,
     configureResearchMcpLlmEnvironment,
     isIncompleteStatus,
     normalizeAnswerForScore,

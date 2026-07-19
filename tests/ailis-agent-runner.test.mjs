@@ -30,6 +30,7 @@ const {
     isAgentLlmSettingsMissing,
     looksLikeLeakedAgentProtocol,
     resolveAgentDirectToolChoice,
+    resolveMemoryPolicy,
     stageFileAttachmentsForWorkspace,
     splitNativeProgressNoteArgs,
     stripControlTags,
@@ -532,6 +533,69 @@ test('TaskAgent research progress preserves mechanical web state without decidin
     assert.doesNotMatch(JSON.stringify(progress), /finalAnswer|candidateAnswer|author\s*:/i);
 });
 
+test('TaskAgent research progress exposes archive affordance after repeated historical searches', () => {
+    const searchStep = (id, query) => ({
+        id,
+        tool: 'web_run',
+        args: {
+            search_query: [{ q: query }]
+        },
+        response: {
+            ok: true,
+            status: 'completed',
+            result: {
+                details: {
+                    observationContract: {
+                        status: 'completed',
+                        transport_ok: true,
+                        content_ok: true,
+                        capability_ready: true,
+                        semantic_level: 'metadata',
+                        complete: true
+                    }
+                }
+            }
+        }
+    });
+    const requestContext = {
+        currentUserMessage: 'As of 2020, which country appeared in the public library database result page?'
+    };
+    const progress = buildResearchProgressState([
+        searchStep('search-1', 'library database country 2020'),
+        searchStep('search-2', 'public catalog result country')
+    ], requestContext);
+
+    assert.equal(progress.attempts[0].operation, 'search');
+    assert.equal(
+        progress.strategyAlerts[0].code,
+        'historical_archive_not_tried_after_repeated_search'
+    );
+    assert.match(progress.instruction, /web_run\.archive/i);
+    assert.match(progress.instruction, /not a hard route/i);
+
+    const withArchive = buildResearchProgressState([
+        searchStep('search-1', 'library database country 2020'),
+        searchStep('search-2', 'public catalog result country'),
+        {
+            id: 'archive-1',
+            tool: 'web_run',
+            args: {
+                archive: [{
+                    url: 'https://example.test/catalog?',
+                    mode: 'search',
+                    contains: '2020 country'
+                }]
+            },
+            response: {
+                ok: true,
+                status: 'completed'
+            }
+        }
+    ], requestContext);
+    assert.equal(withArchive.attempts[2].operation, 'archive');
+    assert.deepEqual(withArchive.strategyAlerts, []);
+});
+
 test('AILIS stages external attachments inside the active workspace', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-attachment-workspace-'));
     const sourceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-attachment-source-'));
@@ -798,8 +862,9 @@ test('AILIS parent Persona prompt stays conversational while TaskAgent keeps exe
     assert.doesNotMatch(taskPrompt.instructions, /complete=true|reasoning_ready=true/);
     assert.match(taskPrompt.instructions, /bounded numerical optimization, minimax, game-strategy/);
     assert.match(taskPrompt.instructions, /exhaustively enumerate the finite integer state space/);
-    assert.match(taskPrompt.instructions, /literal reading makes an explicitly stated rule redundant or vacuous/);
-    assert.match(taskPrompt.instructions, /resolve the intended non-vacuous reading/);
+    assert.match(taskPrompt.instructions, /literal reading makes an explicitly stated restriction redundant or vacuous/);
+    assert.match(taskPrompt.instructions, /prefer the smallest non-vacuous quantifier repair/);
+    assert.match(taskPrompt.instructions, /verify every predicate on the same record row/);
     assert.match(taskPrompt.instructions, /direct authoritative page, document, or API response/);
     assert.match(taskPrompt.instructions, /preserve the name, place, organization, category/);
     assert.match(taskPrompt.instructions, /compact operand ledger/);
@@ -942,6 +1007,55 @@ test('AILIS Persona receives active preferences and active task state while Task
     assert.doesNotMatch(personaContextText, /洛茜的核心队伍结论/);
     assert.doesNotMatch(taskContextText, /当前活动任务状态|tone\.response: 自然简洁/);
     assert.doesNotMatch(taskContextText, /## Persona|## Relationship/);
+});
+
+test('AILIS memory policy can isolate evaluation turns from persistent memory', async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-memory-policy-'));
+    let compileCalls = 0;
+    let recordCalls = 0;
+    const runner = new AILISAgentRunner({
+        gateway: {
+            workspaceRoot: rootDir,
+            auditDir: path.join(rootDir, 'audit'),
+            emitGatewayEvent() {}
+        },
+        memoryRuntime: {
+            recordTurn() {
+                recordCalls += 1;
+                return { ok: true };
+            }
+        },
+        contextCompiler: {
+            compile() {
+                compileCalls += 1;
+                return 'compiled-memory';
+            }
+        }
+    });
+
+    assert.equal(resolveMemoryPolicy({ memoryPolicy: 'read-only' }), 'read_only');
+    assert.equal(resolveMemoryPolicy({ context: { memory_policy: 'disabled' } }), 'disabled');
+    assert.equal(resolveMemoryPolicy({ memoryPolicy: 'unknown' }), 'read_write');
+    assert.equal(runner.compileMemoryContext({
+        sessionId: 'eval-task',
+        message: 'independent benchmark task',
+        request: { memoryPolicy: 'disabled' }
+    }), '');
+    assert.equal(compileCalls, 0);
+
+    runner.recordMemoryTurn({
+        request: { memoryPolicy: 'disabled' },
+        result: { finalAnswer: 'answer' },
+        message: 'question',
+        sessionId: 'eval-task'
+    });
+    runner.recordMemoryTurn({
+        request: { memoryPolicy: 'read_only' },
+        result: { finalAnswer: 'answer' },
+        message: 'question',
+        sessionId: 'eval-task'
+    });
+    assert.equal(recordCalls, 0);
 });
 
 test('AILIS direct tool specs allow model-authored progress notes without passing them to tools', () => {

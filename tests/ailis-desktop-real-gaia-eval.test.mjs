@@ -2,11 +2,37 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+    buildDesktopRealPayload,
     configureResearchMcpLlmEnvironment,
     isIncompleteStatus,
     scoreVisibleAnswer,
     summarizeEvents
 } from '../scripts/run-ailis-desktop-real-gaia-eval.mjs';
+
+test('desktop-real GAIA payload disables persistent memory for independent tasks', () => {
+    const payload = buildDesktopRealPayload({
+        args: {
+            runId: 'isolated-run',
+            workspaceRoot: 'F:/workspace',
+            maxAgentSteps: 12,
+            directToolExecutor: true,
+            debugBreakAfterRound: 0,
+            agentRole: 'task_agent',
+            workspaceMode: 'isolated'
+        },
+        task: {
+            task_id: 'task-1',
+            question: 'Independent benchmark question.'
+        },
+        llmSettings: {
+            provider: 'codex-model-bridge',
+            model: 'gpt-5.5'
+        }
+    });
+
+    assert.equal(payload.memoryPolicy, 'disabled');
+    assert.equal(payload.context.memoryPolicy, 'disabled');
+});
 
 test('desktop-real eval forwards its active LLM provider to research MCP subprocesses', () => {
     const names = [

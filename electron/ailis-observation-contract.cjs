@@ -118,6 +118,43 @@ function objectLayers(value, { maxDepth = 7, maxEntries = 160 } = {}) {
     return layers;
 }
 
+function authoritativeObservationLayers(output = {}, parsedText = null) {
+    const roots = [
+        output,
+        output.details,
+        output.structuredContent,
+        parsedText
+    ];
+    const layers = [];
+    const seen = new Set();
+    const append = (value) => {
+        if (!value || typeof value !== 'object' || Array.isArray(value) || seen.has(value)) {
+            return;
+        }
+        seen.add(value);
+        layers.push(value);
+    };
+    for (const root of roots) {
+        append(root);
+        append(root?.result);
+        append(root?.details);
+        append(root?.structuredContent);
+        append(root?.structured_content);
+        append(root?.result?.details);
+        append(root?.result?.structuredContent);
+        append(root?.result?.structured_content);
+    }
+    return layers;
+}
+
+function observationLayerSignalsSuccess(value = {}) {
+    const status = normalizeStatus(value.status);
+    return value.ok === true ||
+        value.isError === false ||
+        value.is_error === false ||
+        ['completed', 'ok', 'success', 'succeeded'].includes(status);
+}
+
 function failureFromHttpStatus(value) {
     const httpStatus = Number(
         value?.httpStatus ??
@@ -269,24 +306,32 @@ function buildObservationContract(output = {}, { toolId = '' } = {}) {
         structuredContent: output.structuredContent,
         parsedText
     });
-    const details = layers.reduce((merged, entry) => ({ ...merged, ...entry }), {});
+    const authoritativeLayers = authoritativeObservationLayers(output, parsedText);
+    const details = authoritativeLayers.reduce((merged, entry) => ({ ...merged, ...entry }), {});
     const existing = firstObject(
         output.details?.observationContract,
         output.details?.observation_contract,
         output.structuredContent?.observationContract,
         output.structuredContent?.observation_contract
     ) || {};
-    const layerFailures = layers.map(failureFromObject).filter(Boolean);
     const genericFailureCodes = new Set(['', 'error', 'failed', 'tool_error']);
-    let failure = layerFailures.find((entry) => !genericFailureCodes.has(entry.errorCode)) ||
-        layerFailures[0] ||
-        failureFromWholeJson(parsedText);
-    if (!failure && output.isError === true) {
-        failure = {
+    const selectFailure = (candidates = []) => (
+        candidates.find((entry) => !genericFailureCodes.has(entry.errorCode)) ||
+        candidates[0] ||
+        null
+    );
+    const authoritativeFailures = authoritativeLayers.map(failureFromObject).filter(Boolean);
+    const nestedFailures = layers.map(failureFromObject).filter(Boolean);
+    const authoritativeSuccess = authoritativeLayers.some(observationLayerSignalsSuccess);
+    let failure = selectFailure(authoritativeFailures) || failureFromWholeJson(parsedText);
+    if (output.isError === true && (!failure || genericFailureCodes.has(failure.errorCode))) {
+        failure = selectFailure(nestedFailures) || failure || {
             status: 'failed',
             errorCode: normalizeStatus(output.details?.status) || 'tool_error',
             error: normalizeString(output.details?.error)
         };
+    } else if (!failure && !authoritativeSuccess) {
+        failure = selectFailure(nestedFailures);
     }
 
     const evidenceQuality = normalizeStatus(

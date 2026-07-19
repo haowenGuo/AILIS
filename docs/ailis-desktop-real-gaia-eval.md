@@ -117,8 +117,14 @@ The runner intentionally mirrors the desktop chat path:
 - `directToolExecutor: true`
 - `nativeDirectTools: true`
 - `agentRole: persona_orchestrator`
+- `memoryPolicy: disabled` for both the root request and delegated TaskAgent
 - `workspaceRoot` defaults to the project root, matching the development
   desktop Gateway workspace
+
+The GAIA runner disables both semantic-memory reads and memory writes. Separate
+session IDs and workspaces are not sufficient isolation by themselves because a
+shared persistent memory index can otherwise expose earlier benchmark tasks to
+later tasks in the same run.
 - `messageHistory` is empty by default for benchmark tasks, so the current
   question is not duplicated into both `message` and synthetic history
 - file attachments are passed through the same attachment shape used by chat
@@ -185,6 +191,37 @@ Use desktop-real when the question is:
 
 Both metrics matter. They should be reported separately.
 
+## Level 2 Preparation
+
+GAIA is gated on Hugging Face. Accept the dataset terms and authenticate once:
+
+```powershell
+hf auth login
+```
+
+Prepare the public Level 2 validation metadata and attachments:
+
+```powershell
+node scripts/run-gaia-official.mjs `
+  --split validation `
+  --levels 2 `
+  --run-id gaia-l2-desktop-source `
+  --download-only
+```
+
+The command emits `*.desktop-source.jsonl` and
+`*.desktop-source.summary.json`. Run a low-cost desktop-real smoke first:
+
+```powershell
+node scripts/run-ailis-desktop-real-gaia-eval.mjs `
+  --source-jsonl eval-results/engineering/gaia-official/gaia-l2-desktop-source.desktop-source.jsonl `
+  --source-summary eval-results/engineering/gaia-official/gaia-l2-desktop-source.desktop-source.summary.json `
+  --codex-model-bridge `
+  --isolated-workspace `
+  --limit 3 `
+  --no-resume
+```
+
 ## Common Commands
 
 Run three tasks:
@@ -230,3 +267,6 @@ node scripts/run-ailis-desktop-real-gaia-eval.mjs --gateway-url http://127.0.0.1
 - Do not submit desktop-real visible-answer scores as official GAIA leaderboard
   results.
 - Keep API keys out of reports; the runner redacts LLM settings.
+- Verify `turnContext.memory.hasContext` is false and
+  `turnContext.toolContext.memoryPolicy` is `disabled` in a smoke transcript
+  before starting a full score run.

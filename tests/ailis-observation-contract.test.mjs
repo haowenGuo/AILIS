@@ -66,3 +66,55 @@ test('ObservationContract attachment preserves original model-visible content', 
     assert.equal(output.structuredContent.observationContract.status, 'completed');
     assert.equal(compactObservationContract(output.details.observationContract).reasoning_ready, undefined);
 });
+
+test('ObservationContract keeps a successful aggregate completed when one nested candidate failed', () => {
+    const contract = buildObservationContract({
+        isError: false,
+        details: {
+            status: 'completed',
+            result: {
+                isError: false,
+                structuredContent: {
+                    ok: true,
+                    status: 'completed',
+                    captures: [
+                        { ok: false, status: 'failed', error: 'One archived candidate timed out.' },
+                        { ok: true, status: 'completed', url: 'https://example.test/capture' }
+                    ],
+                    best_next_call: {
+                        tool: 'web_archive_lookup',
+                        args: { action: 'open' }
+                    }
+                }
+            }
+        }
+    }, { toolId: 'web_archive_lookup' });
+
+    assert.equal(contract.status, 'completed');
+    assert.equal(contract.transport_ok, true);
+    assert.equal(contract.content_ok, true);
+    assert.equal(contract.error_code, undefined);
+});
+
+test('ObservationContract still honors an authoritative nested result failure', () => {
+    const contract = buildObservationContract({
+        isError: false,
+        details: {
+            status: 'completed',
+            result: {
+                isError: true,
+                details: {
+                    status: 'failed',
+                    code: 'provider_unavailable',
+                    error: 'Archive provider is unavailable.'
+                }
+            }
+        }
+    }, { toolId: 'web_archive_lookup' });
+
+    assert.equal(contract.status, 'failed');
+    assert.equal(contract.transport_ok, true);
+    assert.equal(contract.content_ok, false);
+    assert.equal(contract.capability_ready, false);
+    assert.equal(contract.error_code, 'provider_unavailable');
+});

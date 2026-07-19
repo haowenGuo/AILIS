@@ -37,7 +37,10 @@ const {
     detectVisualEnumerationEvidenceGap,
     detectAnswerSpecificityEvidenceGap,
     detectCompleteTitleEvidenceGap,
+    detectRecordSelectorConjunctionEvidenceGap,
+    detectStructuredAttachmentSemanticEvidenceGap,
     detectStructuredRelationRecoveryCallGap,
+    detectVacuousDistributionConstraintGap,
     detectRecommendedRecoveryActionGap,
     validateExactAnswerSubmission,
     validateNativeDirectToolCall
@@ -2130,4 +2133,169 @@ test('Agent exact-answer audit flags ad hoc terminal probabilities in stochastic
     assert.deepEqual(audited.errors, []);
     assert.ok(audited.warnings.includes('ad_hoc_terminal_transition_evidence'));
     assert.match(audited.incompleteSimulation.instruction, /terminal\/partial-state probabilities/i);
+});
+
+test('Agent exact-answer audit treats a guaranteed single-container threshold as vacuous', () => {
+    const message = [
+        'The host has thirty shiny prop coins and hides them in three different prize boxes.',
+        'The only rule restricting placement is that one box must contain at least two coins.',
+        'What is the minimum guaranteed value in this bounded optimization problem?'
+    ].join(' ');
+    const gap = detectVacuousDistributionConstraintGap({ message });
+
+    assert.equal(gap.error, 'word_problem_quantifier_constraint_vacuous');
+    assert.equal(gap.total, 30);
+    assert.equal(gap.containerCount, 3);
+    assert.equal(gap.threshold, 2);
+    assert.equal(gap.guaranteedMaximumLowerBound, 10);
+    assert.equal(gap.describedAsRestrictingRule, true);
+    assert.match(gap.instruction, /prefer the smallest quantifier repair/i);
+
+    const audited = validateExactAnswerSubmission({
+        decision: {
+            exactAnswerSubmission: normalizeExactAnswerSubmission({
+                answer: '12',
+                confidence: 'medium',
+                reason: 'bounded enumeration'
+            })
+        },
+        message
+    });
+    assert.ok(audited.warnings.includes('word_problem_quantifier_constraint_vacuous'));
+    assert.equal(
+        selectExactAnswerAuditRecoveryGap(audited)?.error,
+        'word_problem_quantifier_constraint_vacuous'
+    );
+
+    assert.equal(detectVacuousDistributionConstraintGap({
+        message: 'Ten balls are distributed among twenty boxes. One box must contain at least two balls. What is the minimum?'
+    }), null);
+});
+
+test('Agent exact-answer audit rejects semantic zero from raw Office string search alone', () => {
+    const fileAttachments = [{
+        type: 'file',
+        path: 'F:/workspace/slides.pptx',
+        name: 'slides.pptx',
+        extension: '.pptx'
+    }];
+    const gap = detectStructuredAttachmentSemanticEvidenceGap({
+        message: 'How many slides mention crustaceans in the attached presentation?',
+        submission: { answer: '0' },
+        fileAttachments,
+        stepResults: [{
+            tool: 'exec',
+            args: { command: 'search raw OOXML for the word crustaceans' },
+            response: { ok: true, status: 'completed' }
+        }]
+    });
+
+    assert.equal(gap.error, 'structured_attachment_semantic_zero_unverified');
+    assert.deepEqual(gap.recommendedTools, ['read_presentation']);
+
+    const audited = validateExactAnswerSubmission({
+        decision: {
+            exactAnswerSubmission: normalizeExactAnswerSubmission({
+                answer: '0',
+                confidence: 'medium',
+                reason: 'raw XML had zero exact word matches'
+            })
+        },
+        message: 'How many slides mention crustaceans in the attached presentation?',
+        fileAttachments,
+        stepResults: [{
+            tool: 'exec',
+            response: { ok: true, status: 'completed' }
+        }]
+    });
+    assert.ok(audited.warnings.includes('structured_attachment_semantic_zero_unverified'));
+    assert.equal(
+        selectExactAnswerAuditRecoveryGap(audited)?.error,
+        'structured_attachment_semantic_zero_unverified'
+    );
+
+    assert.equal(detectStructuredAttachmentSemanticEvidenceGap({
+        message: 'How many slides mention crustaceans in the attached presentation?',
+        submission: { answer: '0' },
+        fileAttachments,
+        stepResults: [{
+            tool: 'read_presentation',
+            response: { ok: true, status: 'completed' }
+        }]
+    }), null);
+});
+
+test('Agent exact-answer audit requires multi-field selectors to close on one record row', () => {
+    const message = 'From what country was the unknown language article with a flag unique from the others?';
+    const incompleteStep = {
+        tool: 'web_archive_lookup',
+        response: {
+            ok: true,
+            status: 'completed',
+            result: {
+                structuredContent: {
+                    recordFieldProjections: [{
+                        recordNumber: 1,
+                        title: 'Candidate article',
+                        fields: [
+                            { label: 'Document Type', value: 'Article' },
+                            { label: 'Country', value: 'de' }
+                        ]
+                    }]
+                }
+            }
+        }
+    };
+    const gap = detectRecordSelectorConjunctionEvidenceGap({
+        message,
+        submission: { answer: 'Germany' },
+        stepResults: [incompleteStep]
+    });
+
+    assert.equal(gap.error, 'record_selector_fields_not_correlated');
+    assert.deepEqual(gap.requiredFields, ['language', 'document_type', 'country']);
+    assert.deepEqual(gap.missingFields, ['language']);
+    assert.match(gap.instruction, /do not prove a conjunction on one record/i);
+    assert.match(gap.instruction, /not a hard route/i);
+
+    const audited = validateExactAnswerSubmission({
+        decision: {
+            exactAnswerSubmission: normalizeExactAnswerSubmission({
+                answer: 'Germany',
+                confidence: 'medium',
+                reason: 'Germany is the most frequent country facet.'
+            })
+        },
+        message,
+        stepResults: [incompleteStep]
+    });
+    assert.ok(audited.warnings.includes('record_selector_fields_not_correlated'));
+    assert.equal(
+        selectExactAnswerAuditRecoveryGap(audited)?.error,
+        'record_selector_fields_not_correlated'
+    );
+
+    assert.equal(detectRecordSelectorConjunctionEvidenceGap({
+        message,
+        submission: { answer: 'Guatemala' },
+        stepResults: [{
+            ...incompleteStep,
+            response: {
+                ...incompleteStep.response,
+                result: {
+                    structuredContent: {
+                        recordFieldProjections: [{
+                            recordNumber: 1,
+                            title: 'Matching article',
+                            fields: [
+                                { label: 'Language', value: 'Unknown' },
+                                { label: 'Document Type', value: 'Article' },
+                                { label: 'Country', value: 'gt' }
+                            ]
+                        }]
+                    }
+                }
+            }
+        }]
+    }), null);
 });

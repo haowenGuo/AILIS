@@ -776,7 +776,28 @@ function getAttachedFilesPromptObject(fileAttachments = []) {
         size: attachment.size,
         sizeText: attachment.sizeText,
         modifiedAt: attachment.modifiedAt,
-        note: 'metadata_only; use computer tool action=read/stat/read_binary/tree to inspect content'
+        note: (() => {
+            const extension = normalizeText(
+                attachment.extension,
+                path.extname(attachment.path || attachment.name)
+            ).toLowerCase();
+            if (['.ppt', '.pptx'].includes(extension)) {
+                return 'metadata_only; use tool_search for a dedicated presentation reader, then call it for slide text and semantic categories; raw OOXML exact-string search cannot prove semantic absence';
+            }
+            if (['.doc', '.docx'].includes(extension)) {
+                return 'metadata_only; use tool_search for a dedicated document reader, then call it for paragraphs, tables, and semantic content; raw OOXML exact-string search cannot prove semantic absence';
+            }
+            if (['.xls', '.xlsx', '.ods'].includes(extension)) {
+                return 'metadata_only; use tool_search for a dedicated spreadsheet reader, then call it for sheets, cells, formulas, and structured ranges';
+            }
+            if (extension === '.pdf') {
+                return 'metadata_only; use tool_search for a dedicated PDF extractor or renderer, then call it on this path';
+            }
+            if (DIRECT_MODEL_IMAGE_EXTENSIONS.has(extension)) {
+                return 'image content may be included directly for supported model providers; otherwise use tool_search for a vision capability';
+            }
+            return 'metadata_only; use an available read tool for text or tool_search for a dedicated parser when the format is structured or binary';
+        })()
     }));
 }
 
@@ -1535,6 +1556,9 @@ function collectResearchAttemptQueries(args = {}) {
     for (const entry of Array.isArray(args.search_query) ? args.search_query : []) {
         push(entry?.q || entry?.query);
     }
+    for (const entry of Array.isArray(args.archive) ? args.archive : []) {
+        push(entry?.query || entry?.contains);
+    }
     return queries.slice(0, 8);
 }
 
@@ -1552,7 +1576,51 @@ function collectResearchAttemptTargets(args = {}) {
             push(entry?.url || entry?.ref_id || entry?.refId);
         }
     }
+    for (const entry of Array.isArray(args.archive) ? args.archive : []) {
+        push(entry?.url);
+    }
     return targets.slice(0, 12);
+}
+
+function classifyResearchAttemptOperation(tool = '', args = {}) {
+    const toolId = canonicalDirectToolId(tool).toLowerCase();
+    if (/archive/.test(toolId) || Array.isArray(args.archive)) return 'archive';
+    if (Array.isArray(args.search_query) || /web_search/.test(toolId)) return 'search';
+    if (Array.isArray(args.open) || /open_page|web_fetch/.test(toolId)) return 'open';
+    if (Array.isArray(args.find) || /find_in_page/.test(toolId)) return 'find';
+    if (Array.isArray(args.click)) return 'click';
+    return 'other';
+}
+
+function detectResearchStrategyAlerts(attempts = [], requestContext = {}) {
+    const taskText = normalizeText(
+        requestContext.currentUserMessage ||
+            requestContext.desktopRealEvalTaskText ||
+            requestContext.parentUserGoal ||
+            requestContext.parent_user_goal
+    );
+    const historicalPublicSourceTask =
+        /(?:\bas\s+of\b|\bin\s+(?:19|20)\d{2}\b|\bhistorical\b|\barchived?\b|截至|当时|历史)/i.test(taskText) &&
+        /(?:website|webpage|database|catalog|library|search engine|result page|archive|网站|网页|数据库|目录|检索)/i.test(taskText);
+    if (!historicalPublicSourceTask) {
+        return [];
+    }
+    const searchAttempts = attempts.filter((attempt) => attempt.operation === 'search');
+    const archiveAttempts = attempts.filter((attempt) => attempt.operation === 'archive');
+    if (searchAttempts.length < 2 || archiveAttempts.length > 0) {
+        return [];
+    }
+    return [{
+        code: 'historical_archive_not_tried_after_repeated_search',
+        searchAttempts: searchAttempts.length,
+        recommendedCapability: 'web_run.archive',
+        instruction: [
+            `${searchAttempts.length} web discovery searches have not established the requested historical/as-of source state, and no archive operation has been attempted.`,
+            'The archive capability is already visible inside web_run; this is not a request for another tool_search.',
+            'Use web_run.archive with a known authoritative URL or stable URL prefix, mode:"search", and concise identifier/filter terms, then inspect the opened snapshot.',
+            'Choose the arguments yourself from observed source URLs. This is a no-progress affordance, not a hard route or answer decision.'
+        ].join(' ')
+    }];
 }
 
 function buildResearchProgressState(stepResults = [], requestContext = {}) {
@@ -1565,6 +1633,7 @@ function buildResearchProgressState(stepResults = [], requestContext = {}) {
             return {
                 stepId: stepResult.id || null,
                 tool: normalizeText(stepResult.tool),
+                operation: classifyResearchAttemptOperation(stepResult.tool, stepResult.args || {}),
                 queries: collectResearchAttemptQueries(stepResult.args || {}),
                 targets: collectResearchAttemptTargets(stepResult.args || {}),
                 status: normalizeText(contract.status || stepResult.response?.status, 'unknown'),
@@ -1601,13 +1670,18 @@ function buildResearchProgressState(stepResults = [], requestContext = {}) {
         }
     }
     const evidenceRefs = [...new Set(attempts.flatMap((entry) => entry.evidenceRefs))];
+    const strategyAlerts = detectResearchStrategyAlerts(attempts, requestContext);
     return {
         schema: 'ailis.research_progress.v1',
         attempts,
         blockedHosts: blockedHosts.slice(0, 12),
         evidenceRefs: evidenceRefs.slice(-24),
         noProgressReason: detectAgentNoProgress(stepResults, requestContext),
-        instruction: 'This is mechanical observation history, not a semantic conclusion. Preserve the original task entities, roles, dates, ordering, and source constraints in your reasoning; avoid repeating blocked or identical observations, and choose the next source or tool yourself.'
+        strategyAlerts,
+        instruction: [
+            'This is mechanical observation history, not a semantic conclusion. Preserve the original task entities, roles, dates, ordering, and source constraints in your reasoning; avoid repeating blocked or identical observations, and choose the next source or tool yourself.',
+            ...strategyAlerts.map((alert) => alert.instruction)
+        ].join(' ')
     };
 }
 
@@ -1653,8 +1727,8 @@ function normalizeEvidenceBoolean(value, fallback = false) {
 
 function isWebEvidenceToolName(tool = '') {
     const normalized = normalizeText(tool).toLowerCase();
-    return /(?:^|__|:|\.)(web_run|web_search|web_fetch|web_research|web_extract_links|open_page|find_in_page|continue_page|render_page)$/.test(normalized) ||
-        ['web_run', 'web_search', 'web_fetch', 'web_research', 'web_extract_links', 'open_page', 'find_in_page', 'continue_page', 'render_page'].includes(normalized);
+    return /(?:^|__|:|\.)(web_run|web_search|web_fetch|web_research|web_archive_lookup|web_extract_links|open_page|find_in_page|continue_page|render_page)$/.test(normalized) ||
+        ['web_run', 'web_search', 'web_fetch', 'web_research', 'web_archive_lookup', 'web_extract_links', 'open_page', 'find_in_page', 'continue_page', 'render_page'].includes(normalized);
 }
 
 function buildEvidenceAuditCandidateFromStep(stepResult = {}) {
@@ -3180,6 +3254,19 @@ function isTaskAgentRole(role = '') {
     return normalizeText(role).toLowerCase() === 'task_agent';
 }
 
+function resolveMemoryPolicy(request = {}, requestContext = request?.context || {}) {
+    const policy = normalizeText(
+        request?.memoryPolicy ||
+            request?.memory_policy ||
+            requestContext?.memoryPolicy ||
+            requestContext?.memory_policy,
+        'read_write'
+    ).toLowerCase().replace(/[\s-]+/g, '_');
+    return ['disabled', 'read_only', 'read_write'].includes(policy)
+        ? policy
+        : 'read_write';
+}
+
 function isTaskExecutionRequired(request = {}, requestContext = {}) {
     const executionProfile = requestContext.executionProfile || request.executionProfile || {};
     return (
@@ -3257,6 +3344,39 @@ function exactAnswerRecoveryToolMatchScore(spec = {}, recoveryGap = null) {
         let score = 0;
         if (/(?:coordinates|longitude|latitude|distance|geocod)/i.test(searchable)) score += 5;
         if (/(?:wikidata|knowledge_graph|entity_lookup|compute|python)/i.test(toolId)) score += 2;
+        return score;
+    }
+    if (recoveryGap.error === 'structured_attachment_semantic_zero_unverified') {
+        const recommendedTools = normalizeArrayValue(recoveryGap.recommendedTools)
+            .map((value) => normalizeText(value).toLowerCase());
+        let score = recommendedTools.includes(toolId.toLowerCase()) ? 8 : 0;
+        if (/(?:read_presentation|read_document|read_spreadsheet)/i.test(toolId)) score += 5;
+        if (/(?:presentation|document|spreadsheet|office|slides|paragraphs|tables)/i.test(searchable)) {
+            score += 2;
+        }
+        return score;
+    }
+    if (recoveryGap.error === 'record_selector_fields_not_correlated') {
+        let score = 0;
+        if (/(?:web_archive_lookup|web_run|open_page|find_in_page|continue_page|web_fetch)/i.test(toolId)) {
+            score += 5;
+        }
+        if (/(?:archive|record|field|filter|facet|structured|find|page|source)/i.test(searchable)) {
+            score += 2;
+        }
+        return score;
+    }
+    if (
+        [
+            'word_problem_quantifier_constraint_vacuous',
+            'incomplete_process_simulation_evidence',
+            'monte_carlo_only_random_process_evidence',
+            'ad_hoc_terminal_transition_evidence'
+        ].includes(recoveryGap.error)
+    ) {
+        let score = 0;
+        if (/(?:exec|python|compute|solver|simulation)/i.test(toolId)) score += 5;
+        if (/(?:enumerat|deterministic|optimization|dynamic_program|state_transition)/i.test(searchable)) score += 2;
         return score;
     }
     return 0;
@@ -6704,6 +6824,105 @@ function detectIncompleteProcessSimulation({ message = '', stepResults = [] } = 
     return null;
 }
 
+const SMALL_CARDINALS = Object.freeze({
+    one: 1,
+    two: 2,
+    three: 3,
+    four: 4,
+    five: 5,
+    six: 6,
+    seven: 7,
+    eight: 8,
+    nine: 9,
+    ten: 10,
+    eleven: 11,
+    twelve: 12,
+    thirteen: 13,
+    fourteen: 14,
+    fifteen: 15,
+    sixteen: 16,
+    seventeen: 17,
+    eighteen: 18,
+    nineteen: 19,
+    twenty: 20,
+    thirty: 30,
+    forty: 40,
+    fifty: 50,
+    sixty: 60,
+    seventy: 70,
+    eighty: 80,
+    ninety: 90,
+    hundred: 100
+});
+
+function parseSmallCardinal(value = '') {
+    const token = normalizeText(value).toLowerCase();
+    if (/^\d+$/.test(token)) {
+        return Number(token);
+    }
+    return SMALL_CARDINALS[token] || null;
+}
+
+function detectVacuousDistributionConstraintGap({ message = '' } = {}) {
+    const question = normalizeText(message);
+    if (
+        !/(?:minimum|least|guarantee|minimi[sz]e|smallest|最少|最低|保证)/i.test(question) ||
+        !/(?:box|boxes|bin|bins|container|containers|盒|箱|容器)/i.test(question)
+    ) {
+        return null;
+    }
+    const cardinal = '(?:\\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred)';
+    const optionalDescriptors = '(?:\\s+[A-Za-z][A-Za-z-]*){0,3}';
+    const totalMatch = question.match(new RegExp(
+        `\\b(${cardinal})${optionalDescriptors}\\s+(?:coins?|objects?|items?|balls?|tokens?|counters?|pieces?)\\b`,
+        'i'
+    ));
+    const containerMatch = question.match(new RegExp(
+        `\\b(${cardinal})${optionalDescriptors}\\s+(?:boxes|bins|containers)\\b`,
+        'i'
+    ));
+    const thresholdMatch = question.match(new RegExp(
+        `\\b(?:one|a)\\s+(?:of\\s+the\\s+)?(?:box|boxes|bin|bins|container|containers)?\\s*(?:must\\s+|has\\s+to\\s+|is\\s+required\\s+to\\s+)?(?:contain|hold|have)\\s+at\\s+least\\s+(${cardinal})\\b`,
+        'i'
+    ));
+    const total = parseSmallCardinal(totalMatch?.[1]);
+    const containerCount = parseSmallCardinal(containerMatch?.[1]);
+    const threshold = parseSmallCardinal(thresholdMatch?.[1]);
+    if (
+        !Number.isInteger(total) ||
+        !Number.isInteger(containerCount) ||
+        !Number.isInteger(threshold) ||
+        total <= 0 ||
+        containerCount <= 0 ||
+        threshold <= 0
+    ) {
+        return null;
+    }
+    const guaranteedMaximumLowerBound = Math.ceil(total / containerCount);
+    if (guaranteedMaximumLowerBound < threshold) {
+        return null;
+    }
+    const describedAsRestrictingRule =
+        /(?:only\s+rule\s+restrict|rule\s+restrict|constraint|restriction|限制|约束)/i.test(question);
+    return {
+        error: 'word_problem_quantifier_constraint_vacuous',
+        total,
+        containerCount,
+        threshold,
+        guaranteedMaximumLowerBound,
+        describedAsRestrictingRule,
+        instruction: [
+            `The literal constraint that one container has at least ${threshold} items is automatically true: distributing ${total} items among ${containerCount} containers guarantees some container has at least ${guaranteedMaximumLowerBound}.`,
+            'Do not silently use that redundant condition as though it restricted every container.',
+            'Use a deterministic enumeration or proof to compare the literal reading with the plausible non-vacuous reading, state which reading the wording and task design support, then submit the best answer.',
+            describedAsRestrictingRule
+                ? 'The problem explicitly presents this clause as restricting the adversary, so a reading that leaves the feasible set unchanged is internally inconsistent with the stated role of the clause. Unless the text affirmatively says the redundancy is intentional, prefer the smallest quantifier repair that makes the advertised restriction non-vacuous after verifying both values.'
+                : '',
+            'This is a soft ambiguity check; it must not suppress the final answer after the short recovery phase.'
+        ].filter(Boolean).join(' ')
+    };
+}
+
 function collectStructuredSelectorMetricEvidence(stepResults = [], message = '') {
     const question = normalizeText(message);
     const axis = /(?:westernmost|easternmost|longitude|最西|最东|经度)/i.test(question)
@@ -7064,6 +7283,199 @@ function detectVisualEnumerationEvidenceGap({
             'Re-inspect the whole image from top-left to bottom-right, distinguish literal source glyphs from visually stacked forms, preserve duplicates, append only the requested solved sample outputs, and verify the final item count and order.',
             'Do not turn source expressions into equations unless the requested output explicitly asks for equations.',
             'This is one model-side verification pass, not an evidence gate; return the best available answer even if the visual uncertainty remains.'
+        ].join(' ')
+    };
+}
+
+function detectStructuredAttachmentSemanticEvidenceGap({
+    message = '',
+    submission = {},
+    stepResults = [],
+    fileAttachments = []
+} = {}) {
+    const question = normalizeText(message);
+    const answer = normalizeText(submission.answer).toLowerCase();
+    if (
+        !/^(?:0|zero|none|no|没有|无)$/i.test(answer) ||
+        !/(?:how many|count|number of|mention|include|contain|show|discuss|about|related to|多少|几个|提到|包含|展示|讨论|关于)/i.test(question)
+    ) {
+        return null;
+    }
+    const structuredAttachments = normalizeFileAttachments(fileAttachments)
+        .map((attachment) => ({
+            ...attachment,
+            extension: normalizeText(
+                attachment.extension,
+                path.extname(attachment.path || attachment.name)
+            ).toLowerCase()
+        }))
+        .filter((attachment) => ['.ppt', '.pptx', '.doc', '.docx'].includes(attachment.extension));
+    if (!structuredAttachments.length) {
+        return null;
+    }
+    const recommendedTools = structuredAttachments.some((attachment) =>
+        ['.ppt', '.pptx'].includes(attachment.extension)
+    )
+        ? ['read_presentation']
+        : ['read_document'];
+    const hasSuccessfulSemanticRead = normalizeArrayValue(stepResults).some((stepResult) => {
+        if (stepResult?.response?.ok !== true) return false;
+        const toolId = canonicalDirectToolId(stepResult?.tool);
+        return recommendedTools.includes(toolId) ||
+            /(?:read_presentation|read_document)/i.test(toolId);
+    });
+    if (hasSuccessfulSemanticRead) {
+        return null;
+    }
+    return {
+        error: 'structured_attachment_semantic_zero_unverified',
+        attachmentTypes: [...new Set(structuredAttachments.map((attachment) => attachment.extension))],
+        recommendedTools,
+        instruction: [
+            'The submitted zero/none answer concerns semantic content in an attached Office file, but no dedicated structured reader succeeded.',
+            `Use tool_search for ${recommendedTools.join(' or ')}, then call the reader on the staged attachment and inspect its complete slide/paragraph/table structure.`,
+            'A raw ZIP/OOXML exact-string search is lexical evidence only: category members can be present even when the category word is absent, so zero exact matches cannot establish zero semantic mentions.',
+            'After the short recovery phase, return the best available answer even if the reader remains unavailable.'
+        ].join(' ')
+    };
+}
+
+function normalizeRecordProjectionFieldLabel(value = '') {
+    const label = normalizeText(value).toLowerCase().replace(/[\s_-]+/g, ' ');
+    if (/^language$/.test(label)) return 'language';
+    if (/^(?:document|resource) type$/.test(label)) return 'document_type';
+    if (/^country$/.test(label)) return 'country';
+    if (/^content provider$/.test(label)) return 'content_provider';
+    if (/^publisher(?:, year)?$/.test(label)) return 'publisher';
+    if (/^source$/.test(label)) return 'source';
+    return label.replace(/\s+/g, '_');
+}
+
+function inferRecordSelectorRequirements(message = '') {
+    const question = normalizeText(message);
+    const requirements = [];
+    if (/\blanguage\b|语言/i.test(question)) {
+        requirements.push({
+            field: 'language',
+            valuePattern: /\bunknown\b|未知/i.test(question) ? /^(?:unknown|undetermined|unspecified|n\/a)$/i : null
+        });
+    }
+    if (/\b(?:document|resource)\s+type\b|\barticle\b|\bthesis\b|\breport\b|文献类型|文章|论文|报告/i.test(question)) {
+        let valuePattern = null;
+        if (/\barticle\b/i.test(question)) {
+            valuePattern = /^(?:\[?article\]?|journal article)(?:\s*;\s*.*)?$/i;
+        }
+        else if (/\bthesis\b/i.test(question)) valuePattern = /\bthesis\b/i;
+        else if (/\breport\b/i.test(question)) valuePattern = /\breport\b/i;
+        requirements.push({ field: 'document_type', valuePattern });
+    }
+    if (/\bcountry\b|\bflag\b|国家|国旗/i.test(question)) {
+        requirements.push({ field: 'country', valuePattern: null });
+    }
+    if (/\bcontent provider\b|内容提供者/i.test(question)) {
+        requirements.push({ field: 'content_provider', valuePattern: null });
+    }
+    if (/\bpublisher\b|出版者|出版社/i.test(question)) {
+        requirements.push({ field: 'publisher', valuePattern: null });
+    }
+    if (/\bsource\b|来源/i.test(question)) {
+        requirements.push({ field: 'source', valuePattern: null });
+    }
+    return requirements.filter((requirement, index, all) =>
+        all.findIndex((candidate) => candidate.field === requirement.field) === index
+    );
+}
+
+function collectRecordFieldProjections(stepResults = []) {
+    const projections = [];
+    const seenObjects = new WeakSet();
+    const seenRows = new Set();
+    const visit = (value, depth = 0) => {
+        if (!value || typeof value !== 'object' || depth > 16 || projections.length >= 240) return;
+        if (seenObjects.has(value)) return;
+        seenObjects.add(value);
+        if (Array.isArray(value)) {
+            for (const entry of value) visit(entry, depth + 1);
+            return;
+        }
+        for (const [key, nested] of Object.entries(value)) {
+            if (
+                (key === 'recordFieldProjections' || key === 'record_field_projections') &&
+                Array.isArray(nested)
+            ) {
+                for (const row of nested) {
+                    if (!row || typeof row !== 'object' || !Array.isArray(row.fields)) continue;
+                    const normalizedFields = row.fields
+                        .map((field) => ({
+                            label: normalizeRecordProjectionFieldLabel(field?.label || field?.name),
+                            value: normalizeText(field?.value)
+                        }))
+                        .filter((field) => field.label && field.value);
+                    if (!normalizedFields.length) continue;
+                    const normalizedRow = {
+                        recordNumber: row.recordNumber ?? row.record_number ?? null,
+                        title: normalizeText(row.title),
+                        fields: normalizedFields
+                    };
+                    const rowKey = JSON.stringify(normalizedRow);
+                    if (!seenRows.has(rowKey)) {
+                        seenRows.add(rowKey);
+                        projections.push(normalizedRow);
+                    }
+                }
+                continue;
+            }
+            visit(nested, depth + 1);
+        }
+    };
+    for (const stepResult of normalizeArrayValue(stepResults)) {
+        if (stepResult?.response?.ok !== true && stepResult?.ok !== true) continue;
+        visit(stepResult?.response?.result || stepResult?.result || stepResult);
+    }
+    return projections;
+}
+
+function detectRecordSelectorConjunctionEvidenceGap({
+    message = '',
+    submission = {},
+    stepResults = []
+} = {}) {
+    if (!normalizeText(submission.answer)) return null;
+    const requirements = inferRecordSelectorRequirements(message);
+    if (requirements.length < 2) return null;
+    const projections = collectRecordFieldProjections(stepResults);
+    if (!projections.length) return null;
+    const satisfiesRequirement = (row, requirement) => {
+        const fields = row.fields.filter((field) => field.label === requirement.field);
+        if (!fields.length) return false;
+        return !requirement.valuePattern ||
+            fields.some((field) => requirement.valuePattern.test(field.value));
+    };
+    const matchingRows = projections.filter((row) =>
+        requirements.every((requirement) => satisfiesRequirement(row, requirement))
+    );
+    if (matchingRows.length) return null;
+    const fieldsPresent = new Set(projections.flatMap((row) => row.fields.map((field) => field.label)));
+    const missingFields = requirements
+        .filter((requirement) => !fieldsPresent.has(requirement.field))
+        .map((requirement) => requirement.field);
+    const uncorrelatedFields = requirements
+        .filter((requirement) => fieldsPresent.has(requirement.field))
+        .map((requirement) => requirement.field);
+    return {
+        error: 'record_selector_fields_not_correlated',
+        requiredFields: requirements.map((requirement) => requirement.field),
+        missingFields,
+        uncorrelatedFields,
+        projectedRecordCount: projections.length,
+        instruction: [
+            `The submitted answer selects a record using ${requirements.map((requirement) => requirement.field).join(' + ')}, but no structured record row establishes all of those predicates together.`,
+            missingFields.length
+                ? `The current record projections do not expose these required fields: ${missingFields.join(', ')}.`
+                : 'The required fields appear only on different or value-mismatched rows.',
+            'Repeated-field summaries, independent facets, and majority counts do not prove a conjunction on one record.',
+            'Use the existing source filters/facet links, a focused archive/open/find call, or another structured record view to obtain a row-correlated candidate with every requested field before selecting its answer field.',
+            'Choose the next tool and arguments from the observed source; this is a soft evidence audit, not a hard route. After the short recovery phase, return the best available answer even if the source remains incomplete.'
         ].join(' ')
     };
 }
@@ -7464,6 +7876,10 @@ function selectExactAnswerAuditRecoveryGap(validation = {}, attemptedWarnings = 
         ? attemptedWarnings
         : new Set(normalizeArrayValue(attemptedWarnings).map((value) => normalizeText(value)).filter(Boolean));
     return [
+        validation?.incompleteSimulation,
+        validation?.quantifierConstraintGap,
+        validation?.structuredAttachmentSemanticGap,
+        validation?.recordSelectorConjunctionGap,
         validation?.nestedSelectorGap,
         validation?.selectorTerminalRelationGap,
         validation?.selectorMetricGap,
@@ -7526,6 +7942,10 @@ function validateExactAnswerSubmission({
     if (incompleteSimulation) {
         warnings.push(incompleteSimulation.error);
     }
+    const quantifierConstraintGap = detectVacuousDistributionConstraintGap({ message });
+    if (quantifierConstraintGap) {
+        warnings.push(quantifierConstraintGap.error);
+    }
     const selectorMetricGap = detectSelectorMetricEvidenceGap({ message, submission, stepResults });
     if (selectorMetricGap) {
         warnings.push(selectorMetricGap.error);
@@ -7555,6 +7975,23 @@ function validateExactAnswerSubmission({
     if (visualEnumerationGap) {
         warnings.push(visualEnumerationGap.error);
     }
+    const structuredAttachmentSemanticGap = detectStructuredAttachmentSemanticEvidenceGap({
+        message,
+        submission,
+        stepResults,
+        fileAttachments
+    });
+    if (structuredAttachmentSemanticGap) {
+        warnings.push(structuredAttachmentSemanticGap.error);
+    }
+    const recordSelectorConjunctionGap = detectRecordSelectorConjunctionEvidenceGap({
+        message,
+        submission,
+        stepResults
+    });
+    if (recordSelectorConjunctionGap) {
+        warnings.push(recordSelectorConjunctionGap.error);
+    }
     const answerSpecificityGap = detectAnswerSpecificityEvidenceGap({
         message,
         submission,
@@ -7581,10 +8018,13 @@ function validateExactAnswerSubmission({
         scaledUnitMismatch,
         reasonConflict,
         incompleteSimulation,
+        quantifierConstraintGap,
         nestedSelectorGap,
         selectorMetricGap,
         selectorTerminalRelationGap,
         visualEnumerationGap,
+        structuredAttachmentSemanticGap,
+        recordSelectorConjunctionGap,
         answerSpecificityGap,
         completeTitleGap
     };
@@ -8328,8 +8768,9 @@ function buildLlmAgentDirectToolPrompt({
         'For a past/as-of state of a named public website, database, catalog, API, OAI endpoint, or result page, one empty, blocked, rate-limited, or unavailable live lookup is enough to switch strategy. Use the web_run archive operation on a known URL or stable prefix; do not spend later rounds rewriting broad searches or treating benchmark/task-prompt mirrors as source evidence.',
         'Once a direct authoritative page, document, or API response visibly contains an answer-bearing candidate that satisfies the task constraints, stop broad discovery. If the requested relationship or role is still uncertain, inspect the candidate in its local source context; do not replace it with a less authoritative search result merely because another wording looks plausible.',
         'For historical-source questions, preserve the name, place, organization, category, and other labels used by the source at the requested time. Do not silently modernize a historical label to a current administrative or corporate name unless the user explicitly asks for the modern equivalent.',
-        'For aggregate extrema, ranking, distance, earliest/latest, or other selector tasks, keep three checks separate: establish the complete candidate set, obtain comparable values for the requested metric and compute the selector, then verify each selected terminal record against an entity-level source. A complete table of entity labels without the selector metric does not establish the winner. For geographic direction or distance, obtain comparable coordinates for the boundary contenders instead of inferring fine ordering from region names or memory. Aggregate indexes may normalize historical places or labels, so preserve the entity-level source-period label instead of silently substituting a current municipality.',
+        'For aggregate extrema, ranking, distance, earliest/latest, or other selector tasks, keep three checks separate: establish the complete candidate set, obtain comparable values for the requested metric and compute the selector, then verify each selected terminal record against an entity-level source. A complete table of entity labels without the selector metric does not establish the winner. For a record selected by multiple predicates, verify every predicate on the same record row; separate facets, repeated-field summaries, and majority counts do not establish their conjunction. For geographic direction or distance, obtain comparable coordinates for the boundary contenders instead of inferring fine ordering from region names or memory. Aggregate indexes may normalize historical places or labels, so preserve the entity-level source-period label instead of silently substituting a current municipality.',
         'For local file and data tasks, prefer the coding main path: read/write/exec/apply_patch. Use read to inspect small files, write to create helper scripts, exec to run scripts/tests/diagnostics, and apply_patch for source edits. Use tool_search only when the coding path cannot reliably inspect the file type or when a specialized direct MCP/tool is clearly needed.',
+        'For semantic questions about PowerPoint or Word content, a dedicated presentation/document reader is the primary evidence path. Raw ZIP/OOXML inspection may support exact lexical checks, but an absent category word does not prove that no slides or paragraphs contain members of that category; never convert zero raw string matches directly into a zero semantic count.',
         activeModelImageAttachments.length
             ? 'Attached image content is included directly in this model input together with its staged path. Inspect the supplied image before deciding whether any additional vision tool is needed. For PDF, Office, audio, archive, or other structured/binary files, use tool_search once for the exact dedicated reader/transcriber capability.'
             : 'Attached files are staged inside the current workspace before TaskAgent starts. Always use the staged attached_files path. For PDF, Office, image, audio, archive, or other structured/binary files, use tool_search once for the exact dedicated reader/transcriber/vision capability and call that tool; do not spend the task budget installing ad-hoc parsers when a dedicated tool is available.',
@@ -8337,7 +8778,7 @@ function buildLlmAgentDirectToolPrompt({
         'For data reasoning tasks, use code as a calculator and verifier: write scripts that parse the source file, compute the needed result, and print a short answer plus compact evidence. Do not write scripts whose main purpose is to dump large files, whole spreadsheets, logs, or documents back into model context.',
         'For bounded numerical optimization, minimax, game-strategy, or guaranteed-value questions stated in text, use exec to exhaustively enumerate the finite integer state space or run an equivalent deterministic solver before answering. Verify both the claimed strategy/value and the adversarial bound; do not rely on a plausible witness alone.',
         'For a derived numeric answer, make a compact operand ledger before finalizing: bind each number to its exact source label, date, group, unit, and requested role, then run the arithmetic with exec when more than one operation is involved. Never substitute a nearby statistic that has the right topic but the wrong year, population, or field.',
-        'Before coding a word problem, sanity-check its quantifiers and constraints. If a literal reading makes an explicitly stated rule redundant or vacuous, or two plausible readings change the result, compute the material alternatives and resolve the intended non-vacuous reading from the wording and task design instead of silently committing to one interpretation.',
+        'Before coding a word problem, sanity-check its quantifiers and constraints. If a literal reading makes an explicitly stated restriction redundant or vacuous, or two plausible readings change the result, compute the material alternatives. When the problem says a clause restricts the adversary but the literal quantifier leaves the feasible set unchanged, prefer the smallest non-vacuous quantifier repair unless the text affirmatively says the redundancy is intentional; do not silently commit before comparing both values.',
         'For finite staged processes, use only transitions explicitly defined by the rules. If the rules stop defining a transition at a boundary or partial stage, do not invent a terminal probability, shortened random device, or replacement transition; enumerate the material interpretations and flag any extreme result that exists only because of an added boundary rule.',
         'For ordered extraction or transcription lists, preserve every source occurrence, including repeated values. Verify the final item count and order against the source before answering; repeated items are evidence, not duplicates to remove.',
         'For layout-sensitive or source-form questions about indentation, columns, line breaks, fraction bars, slash glyphs, colors, or positions, inspect rendered visual evidence from the image or document. Text search and normalized extraction cannot establish those properties. Preserve the original visual form while selecting occurrences; do not convert a stacked fraction into a slash expression before deciding whether the source literally contains a slash.',
@@ -9611,6 +10052,9 @@ class AILISAgentRunner {
     }
 
     compileMemoryContext({ sessionId, message, request, contextMode = 'persona' } = {}) {
+        if (resolveMemoryPolicy(request, request?.context || {}) === 'disabled') {
+            return '';
+        }
         const explicitMemoryContext = normalizeExplicitMemoryContext(
             request?.memoryContext ||
                 request?.memory_context ||
@@ -9673,6 +10117,9 @@ class AILISAgentRunner {
 
     recordMemoryTurn({ request = {}, result = {}, message = '', sessionId = 'main', source = 'agent' } = {}) {
         if (request.classifyOnly === true || !this.memoryRuntime?.recordTurn) {
+            return;
+        }
+        if (resolveMemoryPolicy(request, request?.context || {}) !== 'read_write') {
             return;
         }
         if (isTaskAgentRole(resolveAgentRuntimeRole(request, request?.context || {}))) {
@@ -10806,7 +11253,10 @@ class AILISAgentRunner {
                 latestDecision,
                 currentPlan,
                 constraints,
-                requestContext
+                requestContext: {
+                    ...requestContext,
+                    currentUserMessage: message
+                }
             });
             const evidenceManifest = buildAgentEvidenceArtifactsPromptObject(stepResults, {
                 message,
@@ -13466,6 +13916,7 @@ module.exports = {
     buildInvalidDecisionProgressRecord,
     detectInvalidDecisionNoProgress,
     resolveAgentDirectToolChoice,
+    resolveMemoryPolicy,
     prioritizeExactAnswerRecoveryToolSpecs,
     buildExactAnswerRecoveryToolAffordanceNote,
     buildStagedAttachmentFilename,
@@ -13487,6 +13938,9 @@ module.exports = {
     detectVisualEnumerationEvidenceGap,
     detectAnswerSpecificityEvidenceGap,
     detectCompleteTitleEvidenceGap,
+    detectStructuredAttachmentSemanticEvidenceGap,
+    detectRecordSelectorConjunctionEvidenceGap,
+    detectVacuousDistributionConstraintGap,
     detectStructuredRelationRecoveryCallGap,
     detectRecommendedRecoveryActionGap,
     resolveExactAnswerAuditFinalizationIteration,

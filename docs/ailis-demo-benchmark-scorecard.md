@@ -1,6 +1,6 @@
 # AILIS Demo and Benchmark Scorecard
 
-Generated: 2026-07-16
+Generated: 2026-07-20
 
 ## Positioning
 
@@ -46,7 +46,7 @@ For external demos, use public/recognized benchmarks as the main scoreboard. Kee
 | --- | --- | --- | --- | --- |
 | Desktop computer operation | OSWorld | Academic benchmark for real computer environments with web, desktop apps, OS file I/O, and cross-app workflows. | Very high. AILIS is a PC desktop assistant. | Readiness ready; small historical run 2/4 |
 | Code agent | SWE-bench Lite / Verified / Pro | Industry-standard coding-agent benchmark based on real GitHub issues. Verified is widely used but increasingly contaminated; Pro is safer for future claims. | High. AILIS has code tools, patching, tests, terminal. | Harness selftest only |
-| General assistant with tools | GAIA | Commonly used assistant benchmark for search, files, reasoning, and exact answers. | High. Best current fit for AILIS's generic tool-use ability. | Level 1 Lite public: 60% on 20 submitted questions |
+| General assistant with tools | GAIA | Commonly used assistant benchmark for search, files, reasoning, and exact answers. | High. Best current fit for AILIS's generic tool-use ability. | Historical Level 1 diagnostic: 81.13% and 90.57%; replacement strict-memory-isolated run pending |
 | Tool + user interaction | τ-bench / τ²-bench | Evaluates agents in realistic multi-turn user + API tool environments with policies. | High for future email/customer-service style workflows. | Not integrated |
 | Web agent | WebArena | Realistic, self-hosted web environments with functional-outcome scoring. | Medium. AILIS has web/MCP, but PC desktop is higher priority. | Not integrated |
 | Terminal agent | Terminal-Bench / TerminalWorld | Evaluates real terminal tasks with verifiers, useful for CLI/code/file workflows. | High for command-line execution layer. | Not integrated |
@@ -107,7 +107,8 @@ Interpretation:
 | SWE-bench Execution Selftest | Local tiny SWE-style harness selftest | 1 / 1 verified | Yes, as harness readiness, not public SWE-bench score |
 | OSWorld PC Readiness | Local environment and tool-surface readiness | officialRunReady true; 15 / 15 required actions present | Yes, as OSWorld readiness |
 | OSWorld Small Historical Run | 4 OSWorld tasks | 2 / 4 success, average score 0.50 | Yes, but label as small historical run |
-| GAIA Level 1 Lite Public | 20 public-lite questions, submitted to public scorer | 60% = 12 / 20 correct; 19 / 20 completed locally | Yes, main general-tool score |
+| GAIA Level 1 Validation | All 53 public validation questions, two fixed-commit historical runs | Run 1: 43 / 53 (81.13%); Run 2: 48 / 53 (90.57%); mean: 85.85% | Diagnostic only; task-level semantic-memory isolation was missing |
+| GAIA Level 1 Lite Public | 20 public-lite questions, submitted to public scorer | 60% = 12 / 20 correct; 19 / 20 completed locally | Historical comparison only |
 | GAIA Level 1 Lite Smoke | 3 public lite questions, no leaderboard submission | 2 / 3 produced local final answers; official score null because not submitted | No, keep as debug smoke |
 
 OSWorld small historical breakdown:
@@ -181,7 +182,52 @@ Target display:
 - Small run: success rate and per-domain failures.
 - Do not claim official OSWorld score until the full official or verified route is run.
 
-### D. GAIA Level 1 Lite
+### D. GAIA Level 1
+
+Historical fixed-commit full validation diagnostic:
+
+<p align="center">
+  <img alt="AILIS GAIA Level 1 validation results" src="assets/benchmarks/gaia-l1-validation-20260719.svg">
+</p>
+
+| Run | Commit | Correct | Accuracy | Runtime status |
+| --- | --- | ---: | ---: | --- |
+| 1 | `4f8f435` | 43 / 53 | 81.13% | 52 completed, 1 timeout |
+| 2 | `4f8f435` | 48 / 53 | 90.57% | 53 completed |
+| Mean | `4f8f435` | 45.5 / 53 | 85.85% | arithmetic mean |
+
+Stability across the two runs:
+
+| Per-task outcome | Tasks | Share |
+| --- | ---: | ---: |
+| Correct in both runs | 40 / 53 | 75.47% |
+| Correct in one run | 11 / 53 | 20.75% |
+| Incorrect in both runs | 2 / 53 | 3.77% |
+| Same pass/fail outcome | 42 / 53 | 79.25% |
+
+Protocol:
+
+- GAIA 2023 Level 1 public validation split, 53 tasks.
+- Dataset SHA-256: `469f4c4b5fa532ac07e3d922bcbe709e663c9f9fc83edccf440cc3d44277f236`.
+- Codex ChatGPT OAuth bridge with `gpt-5.5`, medium reasoning and temperature `0.2`.
+- AILIS owns the harness, context, tools and answer pipeline; Codex is the model backend only.
+- Separate run IDs and isolated workspaces.
+- No resume, task retry, failed-task replacement or merged score.
+- Repository deterministic desktop-real visible-answer scorer, not the official GAIA private scorer.
+- Post-run audit: persistent semantic-memory retrieval was not disabled between tasks inside each run. The numbers below therefore cannot be treated as independent-run reproducibility evidence.
+
+The official GAIA leaderboard currently accepts the 301-question private test split, including 93 Level 1 questions. Its documentation says that the paper reports averages over different runs when possible, but the leaderboard displays the best run. For the historical AILIS diagnostic:
+
+- Best observed historical run: **90.57%**.
+- Historical two-run arithmetic mean: **85.85%**.
+- Neither value is an official leaderboard submission because this run uses the public validation split and the local desktop-real scorer.
+- Neither value is the current reproducibility score because strict task-level memory isolation was absent.
+
+Official references:
+
+- [GAIA leaderboard policy](https://huggingface.co/spaces/gaia-benchmark/leaderboard/blob/main/content.py)
+- [GAIA leaderboard split sizes and scoring code](https://huggingface.co/spaces/gaia-benchmark/leaderboard/blob/main/app.py)
+- [AILIS desktop-real GAIA evaluation methodology](ailis-desktop-real-gaia-eval.md)
 
 Best historical public-lite score:
 
@@ -203,7 +249,7 @@ Earlier submitted runs:
 | `full-20-r2-tools-finalizer` | 45% | 9 / 20 | 15 / 20 |
 | `full-20-r5-agent-repair-tools` | 60% | 12 / 20 | 19 / 20 |
 
-This is the cleanest public-facing score for generic tool ability right now. It is still a Level 1 Lite public subset, not a full official GAIA leaderboard claim.
+This remains useful historical evidence of the earlier public-lite submission path. The fixed-commit 53-task validation runs above are also historical diagnostics because task-level semantic-memory isolation was missing; neither result should be described as the current reproducibility score or an official private-test leaderboard score.
 
 Current smoke run:
 

@@ -203,6 +203,7 @@ test('ToolContext keeps approval and sandbox policy in one reusable object', () 
         executionProfile: { kind: 'exact_answer_eval' },
         evaluationTaskId: 'gaia-task-1',
         evaluationName: 'gaia_desktop_real',
+        memoryPolicy: 'disabled',
         timeoutMs: 1234
     }, 'F:/fallback', 'session_1');
 
@@ -235,6 +236,7 @@ test('ToolContext keeps approval and sandbox policy in one reusable object', () 
     assert.deepEqual(context.executionProfile, { kind: 'exact_answer_eval' });
     assert.equal(context.evaluationTaskId, 'gaia-task-1');
     assert.equal(context.evaluationName, 'gaia_desktop_real');
+    assert.equal(context.memoryPolicy, 'disabled');
     assert.equal(context.timeoutMs, 1234);
 });
 

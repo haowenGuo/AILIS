@@ -85,7 +85,9 @@ function buildToolContext(requestContext = {}, fallbackWorkspace = '', sessionId
         'runtimeEnvironmentOverride',
         'executionProfile',
         'evaluationTaskId',
-        'evaluationName'
+        'evaluationName',
+        'memoryPolicy',
+        'memory_policy'
     ]) {
         if (requestContext[key] !== undefined) {
             context[key] = requestContext[key];
