@@ -42,9 +42,9 @@ class Settings(BaseSettings):
 
     # ================= 大模型配置 (核心) =================
     # 支持 OpenAI 兼容接口 (如 DeepSeek, 通义千问, 火山引擎等)
-    LLM_API_BASE: str = "https://ark.cn-beijing.volces.com/api/v3"
+    LLM_API_BASE: str = "https://api.deepseek.com"
     LLM_API_KEY: str = ""
-    LLM_MODEL_NAME: str = "doubao-seed-2-1-turbo-260628"
+    LLM_MODEL_NAME: str = "deepseek-chat"
 
     # ================= AI Safety 配置 =================
     # 默认复用主对话模型；如需单独切换内容安全审核模型，可单独覆盖下面三个字段
