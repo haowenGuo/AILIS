@@ -1,4 +1,4 @@
-const DEFAULT_BACKEND_BASE_URL = 'https://airi-backend.onrender.com';
+const DEFAULT_BACKEND_BASE_URL = 'https://101.133.239.56';
 const PET_CHAT_EVENT_NAME = 'ailis-chat-ui-event';
 const AILIS_AVATAR_URL = new URL('../Resources/Emotes/ailis-small/wave.png', window.location.href).href;
 

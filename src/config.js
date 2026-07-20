@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { getLoadableMotionFiles } from './character/motion-intake-catalog.js';
 import { DEFAULT_RENDER_PROFILE_ID, normalizeRenderProfileId } from './character/render-profiles.js';
 
-const DEFAULT_BACKEND_BASE_URL = 'https://airi-backend.onrender.com';
+const DEFAULT_BACKEND_BASE_URL = 'https://101.133.239.56';
 const DEFAULT_DESKTOP_BACKEND_BASE_URL = '';
 const DEFAULT_BACKEND_MODE = 'ailis';
 const DEFAULT_SPEECH_MODE = 'off';
