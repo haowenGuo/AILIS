@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="AILIS surprised sticker">
+  <defs>
+    <linearGradient id="bg" x1="20" y1="12" x2="110" y2="118" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#f0fbff"/>
+      <stop offset="1" stop-color="#fff7e9"/>
+    </linearGradient>
+  </defs>
+  <circle cx="64" cy="64" r="54" fill="url(#bg)"/>
+  <path d="M29 43c13-19 43-22 70 3" fill="none" stroke="#7ec2ea" stroke-width="8" stroke-linecap="round"/>
+  <circle cx="45" cy="63" r="8" fill="#24445b"/>
+  <circle cx="84" cy="63" r="8" fill="#24445b"/>
+  <ellipse cx="65" cy="88" rx="10" ry="13" fill="#24445b"/>
+  <circle cx="37" cy="80" r="7" fill="#ffb8d1" opacity=".55"/>
+  <circle cx="94" cy="80" r="7" fill="#ffb8d1" opacity=".55"/>
+  <path d="M20 40l13-14M103 28l12-13M101 48l18-3" stroke="#ffd15c" stroke-width="6" stroke-linecap="round"/>
+</svg>

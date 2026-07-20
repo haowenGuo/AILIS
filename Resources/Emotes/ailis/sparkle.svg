@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="AILIS sparkle sticker">
+  <defs>
+    <linearGradient id="bg" x1="12" y1="18" x2="118" y2="112" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#effbff"/>
+      <stop offset=".58" stop-color="#fff8df"/>
+      <stop offset="1" stop-color="#fff0f7"/>
+    </linearGradient>
+  </defs>
+  <circle cx="64" cy="64" r="54" fill="url(#bg)"/>
+  <path d="M32 43c12-18 38-23 58 1" fill="none" stroke="#7ec2ea" stroke-width="8" stroke-linecap="round"/>
+  <circle cx="46" cy="63" r="5" fill="#24445b"/>
+  <circle cx="82" cy="63" r="5" fill="#24445b"/>
+  <path d="M51 82c8 8 18 8 26 0" fill="none" stroke="#24445b" stroke-width="5" stroke-linecap="round"/>
+  <path d="M26 20l6 13 14 4-13 6-5 14-6-13-14-4 13-6zM100 22l5 10 11 3-10 5-4 11-5-10-11-3 10-5zM100 80l4 8 9 3-8 4-3 9-4-8-9-3 8-4z" fill="#ffd55f"/>
+  <circle cx="35" cy="75" r="6" fill="#ffbdd4" opacity=".65"/>
+  <circle cx="93" cy="75" r="6" fill="#ffbdd4" opacity=".65"/>
+</svg>

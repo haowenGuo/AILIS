@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="AILIS love sticker">
+  <defs>
+    <linearGradient id="bg" x1="16" y1="16" x2="112" y2="116" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#fff2f8"/>
+      <stop offset="1" stop-color="#e8f7ff"/>
+    </linearGradient>
+  </defs>
+  <circle cx="64" cy="64" r="54" fill="url(#bg)"/>
+  <path d="M31 41c11-16 35-22 61 1" fill="none" stroke="#83c3e8" stroke-width="8" stroke-linecap="round"/>
+  <path d="M41 58c-7-8-19-2-16 8 2 8 14 16 20 20 6-4 18-12 20-20 3-10-9-16-16-8l-4 4zM84 58c-7-8-19-2-16 8 2 8 14 16 20 20 6-4 18-12 20-20 3-10-9-16-16-8l-4 4z" fill="#ff78aa"/>
+  <path d="M51 94c8 5 18 5 26 0" fill="none" stroke="#24445b" stroke-width="5" stroke-linecap="round"/>
+  <path d="M20 24c7 1 11 4 13 11 2-7 6-10 13-11-7-2-11-5-13-12-2 7-6 10-13 12z" fill="#ffd45f"/>
+</svg>

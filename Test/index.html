@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#edf6f8">
+    <meta
+        name="description"
+        content="AILIS 在线陪伴体验，包含最新 3D 角色、流式对话、动作与表情联动。"
+    >
+    <link rel="icon" type="image/png" href="../favicon.png">
+    <title>AILIS 在线体验</title>
+  <script type="module" crossorigin src="../assets/test-CQmIVL0-.js"></script>
+  <link rel="modulepreload" crossorigin href="../assets/modulepreload-polyfill-DfS4ul37.js">
+  <link rel="stylesheet" crossorigin href="../assets/test-QOLewBOt.css">
+</head>
+<body>
+    <div class="app-shell">
+        <header class="topbar">
+            <a class="brand" href="../" aria-label="返回 AILIS 主页">
+                <img
+                    class="brand-avatar"
+                    src="../assets/wave-nZidcOP8.png"
+                    alt=""
+                    width="38"
+                    height="38"
+                >
+                <span class="brand-copy">
+                    <strong>AILIS</strong>
+                    <small>在线陪伴</small>
+                </span>
+            </a>
+
+            <div class="topbar-actions">
+                <span class="version-badge">v1.2.0</span>
+                <a class="icon-link" href="../" aria-label="返回主页" title="返回主页">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="m3 10 9-7 9 7"></path>
+                        <path d="M5 9v11h14V9"></path>
+                        <path d="M9 20v-6h6v6"></path>
+                    </svg>
+                </a>
+                <a
+                    class="icon-link"
+                    href="https://github.com/haowenGuo/AILIS"
+                    aria-label="查看 GitHub"
+                    title="查看 GitHub"
+                    target="_blank"
+                    rel="noreferrer"
+                >
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3.3-.4 6.8-1.6 6.8-7A5.4 5.4 0 0 0 19.4 4 5 5 0 0 0 19.3.5S18.2.1 15 1.8a13.4 13.4 0 0 0-7 0C4.8.1 3.7.5 3.7.5A5 5 0 0 0 3.6 4a5.4 5.4 0 0 0-1.4 3.7c0 5.4 3.5 6.6 6.8 7A4.8 4.8 0 0 0 8 18v4"></path>
+                        <path d="M8 19c-3 .9-3-1.5-4-2"></path>
+                    </svg>
+                </a>
+                <a
+                    class="download-link"
+                    href="https://github.com/haowenGuo/AILIS/releases/latest"
+                    target="_blank"
+                    rel="noreferrer"
+                >
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M12 3v12"></path>
+                        <path d="m7 10 5 5 5-5"></path>
+                        <path d="M5 21h14"></path>
+                    </svg>
+                    <span>桌面版</span>
+                </a>
+            </div>
+        </header>
+
+        <main class="experience">
+            <section class="character-pane" aria-label="AILIS 3D 角色">
+                <div class="stage-topline">
+                    <div class="character-identity">
+                        <span class="character-name">AILIS</span>
+                        <span class="character-role">你的桌面搭档</span>
+                    </div>
+                    <div id="model-status" class="status-chip" data-state="loading" aria-live="polite">
+                        <span class="status-dot"></span>
+                        <span id="model-status-text">载入角色</span>
+                    </div>
+                </div>
+
+                <iframe
+                    id="pet-frame"
+                    class="pet-frame"
+                    title="AILIS 3D 角色"
+                    allow="autoplay"
+                    loading="eager"
+                ></iframe>
+
+                <div class="stage-footer">
+                    <span>陪伴模式</span>
+                </div>
+            </section>
+
+            <section class="conversation-pane" aria-label="与 AILIS 对话">
+                <header class="conversation-header">
+                    <div>
+                        <p class="eyebrow">LIVE COMPANION</p>
+                        <h1>和 AILIS 说说话</h1>
+                    </div>
+                    <div id="backend-status" class="service-status" data-state="checking" aria-live="polite">
+                        <span class="status-dot"></span>
+                        <span id="backend-status-text">连接服务</span>
+                    </div>
+                </header>
+
+                <div id="message-list" class="message-list" aria-live="polite" aria-busy="false">
+                    <div class="empty-state" data-local-message="true">
+                        <img
+                            src="../assets/wave-nZidcOP8.png"
+                            alt=""
+                            width="54"
+                            height="54"
+                        >
+                        <strong>AILIS 正在赶来</strong>
+                        <span>角色与在线服务就绪后，就可以开始聊天。</span>
+                    </div>
+                </div>
+
+                <div class="composer-shell">
+                    <div class="quick-actions" aria-label="快捷消息">
+                        <button type="button" data-prompt="你好呀，今天也请多关照">打个招呼</button>
+                        <button type="button" data-prompt="陪我聊聊今天发生的事情">聊聊今天</button>
+                        <button type="button" data-prompt="我有点累，陪我放松一下">陪我放松</button>
+                        <button type="button" data-prompt="开心地转一圈给我看看">看看动作</button>
+                    </div>
+
+                    <form id="composer" class="composer">
+                        <label class="sr-only" for="chat-input">发送给 AILIS</label>
+                        <textarea
+                            id="chat-input"
+                            rows="1"
+                            maxlength="1200"
+                            placeholder="想和 AILIS 说什么？"
+                        ></textarea>
+                        <button
+                            id="send-button"
+                            class="send-button"
+                            type="submit"
+                            aria-label="发送消息"
+                            title="发送消息"
+                            disabled
+                        >
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                                <path d="m22 2-7 20-4-9-9-4Z"></path>
+                                <path d="M22 2 11 13"></path>
+                            </svg>
+                        </button>
+                    </form>
+
+                    <div class="experience-boundary">
+                        <span id="composer-status">正在准备在线体验</span>
+                        <a href="https://github.com/haowenGuo/AILIS/releases/latest" target="_blank" rel="noreferrer">
+                            文件、网页和电脑操作请使用桌面版
+                        </a>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+</body>
+</html>
