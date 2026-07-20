@@ -180,6 +180,12 @@ window.addEventListener('DOMContentLoaded', async () => {
 
     installPetInteractions(petShellEl);
 
+    window.vrmSystem = vrmSystem;
+    window.audioPlayer = audioPlayer;
+    window.chatService = chatService;
+    window.chatSystem = chatSystem;
+    window.speechProvider = speechProvider;
+
     vrmSystem.init('canvas-container');
 
     if (vrmSystem.scene) {
@@ -199,12 +205,6 @@ window.addEventListener('DOMContentLoaded', async () => {
         messages: chatSystem.getTranscriptSnapshot(),
         isBusy: chatSystem.isBusy
     });
-
-    window.vrmSystem = vrmSystem;
-    window.audioPlayer = audioPlayer;
-    window.chatService = chatService;
-    window.chatSystem = chatSystem;
-    window.speechProvider = speechProvider;
 
     window.addEventListener('beforeunload', () => {
         removePetCursorPointListener?.();
