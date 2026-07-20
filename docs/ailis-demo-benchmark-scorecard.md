@@ -46,7 +46,7 @@ For external demos, use public/recognized benchmarks as the main scoreboard. Kee
 | --- | --- | --- | --- | --- |
 | Desktop computer operation | OSWorld | Academic benchmark for real computer environments with web, desktop apps, OS file I/O, and cross-app workflows. | Very high. AILIS is a PC desktop assistant. | Readiness ready; small historical run 2/4 |
 | Code agent | SWE-bench Lite / Verified / Pro | Industry-standard coding-agent benchmark based on real GitHub issues. Verified is widely used but increasingly contaminated; Pro is safer for future claims. | High. AILIS has code tools, patching, tests, terminal. | Harness selftest only |
-| General assistant with tools | GAIA | Commonly used assistant benchmark for search, files, reasoning, and exact answers. | High. Best current fit for AILIS's generic tool-use ability. | Historical Level 1 diagnostic: 81.13% and 90.57%; replacement strict-memory-isolated run pending |
+| General assistant with tools | GAIA | Commonly used assistant benchmark for search, files, reasoning, and exact answers. | High. Best current fit for AILIS's generic tool-use ability. | Strict-memory-isolated Run 1: 41/53 (77.36%); Run 2 pending. Historical diagnostic mean: 85.85% |
 | Tool + user interaction | τ-bench / τ²-bench | Evaluates agents in realistic multi-turn user + API tool environments with policies. | High for future email/customer-service style workflows. | Not integrated |
 | Web agent | WebArena | Realistic, self-hosted web environments with functional-outcome scoring. | Medium. AILIS has web/MCP, but PC desktop is higher priority. | Not integrated |
 | Terminal agent | Terminal-Bench / TerminalWorld | Evaluates real terminal tasks with verifiers, useful for CLI/code/file workflows. | High for command-line execution layer. | Not integrated |
@@ -107,7 +107,8 @@ Interpretation:
 | SWE-bench Execution Selftest | Local tiny SWE-style harness selftest | 1 / 1 verified | Yes, as harness readiness, not public SWE-bench score |
 | OSWorld PC Readiness | Local environment and tool-surface readiness | officialRunReady true; 15 / 15 required actions present | Yes, as OSWorld readiness |
 | OSWorld Small Historical Run | 4 OSWorld tasks | 2 / 4 success, average score 0.50 | Yes, but label as small historical run |
-| GAIA Level 1 Validation | All 53 public validation questions, two fixed-commit historical runs | Run 1: 43 / 53 (81.13%); Run 2: 48 / 53 (90.57%); mean: 85.85% | Diagnostic only; task-level semantic-memory isolation was missing |
+| GAIA Level 1 Strict Rerun | All 53 public validation questions, fixed commit and benchmark memory disabled | Run 1: 41 / 53 (77.36%); Run 2 pending | Provisional single-run result; not yet a reproducibility mean |
+| GAIA Level 1 Historical Validation | All 53 public validation questions, two fixed-commit historical runs | Run 1: 43 / 53 (81.13%); Run 2: 48 / 53 (90.57%); mean: 85.85% | Diagnostic only; task-level semantic-memory isolation was missing |
 | GAIA Level 1 Lite Public | 20 public-lite questions, submitted to public scorer | 60% = 12 / 20 correct; 19 / 20 completed locally | Historical comparison only |
 | GAIA Level 1 Lite Smoke | 3 public lite questions, no leaderboard submission | 2 / 3 produced local final answers; official score null because not submitted | No, keep as debug smoke |
 
@@ -183,6 +184,35 @@ Target display:
 - Do not claim official OSWorld score until the full official or verified route is run.
 
 ### D. GAIA Level 1
+
+Current strict-memory-isolated rerun:
+
+| Run | Commit | Correct | Accuracy | Protocol status |
+| --- | --- | ---: | ---: | --- |
+| Strict Run 1 | `6afc0ae` | 41 / 53 | **77.36%** | Complete |
+| Strict Run 2 | `6afc0ae` | pending | pending | Required before publishing a final mean and per-task stability |
+
+Strict Run 1 operational metrics:
+
+| Metric | Result |
+| --- | ---: |
+| Visible correct | 41 / 53 |
+| Answer mismatches | 9 |
+| Timeouts | 1 |
+| Runtime errors | 2 |
+| Mean / P50 duration | 248.3 s / 160.9 s |
+| P90 / P95 duration | 556.4 s / 854.4 s |
+| Total / mean model tokens | 7,947,896 / 149,960 |
+
+Strict protocol:
+
+- GAIA 2023 Level 1 public validation split, the same fixed set of 53 tasks.
+- `memoryPolicy: disabled` on both the root request and delegated TaskAgent.
+- Codex ChatGPT OAuth bridge with `gpt-5.5`, medium reasoning, 20 maximum agent steps, 360-second LLM timeout, and 600-second request timeout.
+- AILIS owns context assembly, tool execution, observations, orchestration, evidence, and the visible answer pipeline.
+- Isolated workspace, fixed commit, no failed-task retry, no task replacement, and no score merging.
+- An unexpected Windows reboot interrupted Strict Run 1 after 46 completed result rows. Recovery reused the same run ID, skipped those 46 task IDs, and executed only the seven unfinished tasks.
+- The 77.36% first-run score is provisional. It must not be averaged with the historical runs below.
 
 Historical fixed-commit full validation diagnostic:
 

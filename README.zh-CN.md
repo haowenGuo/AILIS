@@ -7,6 +7,11 @@
     <img alt="License" src="https://img.shields.io/badge/license-MIT-059669?style=for-the-badge">
   </p>
   <p>
+    <img alt="ToolSandbox 冻结 holdout 均值 71.51%" src="https://img.shields.io/badge/ToolSandbox_holdout-71.51%25-2563eb?style=for-the-badge">
+    <img alt="GAIA Level 1 严格协议第一轮 77.36%" src="https://img.shields.io/badge/GAIA_L1_strict_run_1-77.36%25-059669?style=for-the-badge">
+    <img alt="内部长期陪伴评测 78.46 分" src="https://img.shields.io/badge/Humanlike_longitudinal-78.46%2F100-059669?style=for-the-badge">
+  </p>
+  <p>
     <a href="README.md">English</a> ·
     <a href="README.zh-CN.md">简体中文</a> ·
     <a href="README.ja.md">日本語</a> ·
@@ -17,6 +22,29 @@
 </div>
 
 ---
+
+## 评测结果总览
+
+AILIS 不只是角色演示，而是一套持续接受端到端评测的 Agent 系统。当前证据覆盖有状态工具调用、通用助理任务、长期陪伴表现和桌面操作；每个分数都同时公开样本规模与可宣称边界。
+
+| 评测方向 | 结果 | 规模 | 证据定位 |
+| --- | ---: | ---: | --- |
+| **Apple ToolSandbox** | 冻结 holdout 均值 **71.51%** | 239 / 239 官方评分，0 errors | 当前主要公开任务质量分数 |
+| **GAIA Level 1 严格复现** | 第一轮 **41 / 53，77.36%** | 规定两轮中的第一轮 | 严格逐题记忆隔离的暂定结果；第二轮待完成 |
+| **GAIA Level 1 历史结果** | 两轮均值 **85.85%**；最佳单轮 **90.57%** | 53 道公开 validation 题 x 2 | 历史本地诊断；当时缺少逐题记忆隔离 |
+| **长期陪伴评测** | 加权均值 **78.46 / 100** | 30 天场景中的 171 个 Judge checkpoint | 内部产品质量评测 |
+| **OSWorld 小样本** | **2 / 4，50%** | 4 个历史桌面任务 | 早期外部信号，样本不足以做广泛结论 |
+| **人类化数据集校验** | **1000 / 1000** 有效 | 9 类任务、251 个负向探针 | 表示评测覆盖度，不表示模型能力 |
+
+> **当前主分数：**Apple ToolSandbox 冻结 holdout 均值 **71.51%**。GAIA 严格协议已经完成第一轮，成绩为 **77.36%**，运行中禁用 benchmark memory，并且没有替换失败题；在第二轮 53 题完整结束前，它仍是暂定结果。历史 85.85% 均值继续公开用于透明对照，但不作为当前可复现主张。
+
+[完整 Benchmark Scorecard](docs/ailis-demo-benchmark-scorecard.md) ·
+[GAIA 评测方法](docs/ailis-desktop-real-gaia-eval.md) ·
+[ToolSandbox 协议与门禁](docs/ailis-toolsandbox-v4-optimization-plan.md)
+
+<p align="center">
+  <img alt="AILIS 评测快照：ToolSandbox 71.51%，GAIA 严格第一轮 77.36%，长期陪伴 78.46 分，OSWorld 小样本 2/4" src="docs/assets/benchmarks/ailis-evaluation-snapshot-20260720.svg">
+</p>
 
 ## AILIS 是什么
 
@@ -45,7 +73,9 @@ AILIS Assistant 是一个桌面优先的具身 AI 助手项目。它把 3D VRM �
 - 在 Agent 执行链路中接入 EMBER-Harness 阶段门控，对不可信输入、工具调用、工具返回和最终输出进行检查。
 - 人类化体验评测、工具契约测试、Gateway 检查和 Agent 执行烟测。
 
-## GAIA 评测
+## GAIA：通用 Agent 能力
+
+当前严格逐题记忆隔离协议冻结在提交 `6afc0ae`。第一轮完整成绩为 **41 / 53（77.36%）**；规定的第二轮尚未计入最终均值和稳定率。第一轮在完成 46 行后遇到 Windows 非正常重启，恢复过程沿用同一个 run ID，跳过全部已完成题目，只执行剩余 7 题；没有重试、替换或重新计分任何失败题。
 
 <p align="center">
   <img alt="AILIS GAIA Level 1 validation 历史诊断结果：81.13%、90.57%，均值 85.85%" src="docs/assets/benchmarks/gaia-l1-validation-20260719.svg">
@@ -65,7 +95,7 @@ AILIS 在同一个固定代码提交上，对 GAIA 2023 Level 1 的 53 道公开
 
 这属于公开 validation split 上的本地 `desktop-real` 可见答案评测，不是提交到私有 93 题 Level 1 test 排行榜的官方成绩。两轮都使用提交 `4f8f435`、独立 run ID 和隔离 workspace，并禁止 resume、逐题重试、失败题替换和成绩合并，但当时没有严格隔离逐题记忆。详细口径见 [GAIA 评测方法](docs/ailis-desktop-real-gaia-eval.md) 与 [Benchmark Scorecard](docs/ailis-demo-benchmark-scorecard.md)。
 
-## Apple ToolSandbox 评测
+## ToolSandbox：有状态工具执行
 
 <p align="center">
   <img alt="AILIS Apple ToolSandbox 离线评测：728/728 个非 RapidAPI 场景完成认证，冻结 holdout 均值 71.51%，定向修复均值 81.49%，稳定性样本均值 88.31%" src="docs/assets/benchmarks/apple-toolsandbox-offline-20260719.svg">
@@ -85,6 +115,26 @@ ToolSandbox 为每个场景返回 `0` 到 `1` 的连续相似度分数，反映�
 | 稳定性结果 | 29 提升 / 22 持平 / 13 回退 | 含 2 个严重回退；全部预注册门禁通过 |
 
 对外最应采用的任务质量主分数是冻结 holdout 均值 **71.51%**。由于 v3 和稳定性 primary batch 都是 0 errors，`valid-only` 与 `errors-as-zero` 完全相同。定向修复与稳定性均值回答的是不同问题，不能与 holdout 分数求平均，也不能宣称为随机因果提升。V1、V2、raw 中间结果、跨漂移和 quarantine 结果均不进入主结论。
+
+## 复现与审计
+
+仓库会分别保存 benchmark 计划、逐题结果、进度流、审计事件、完整 transcript 和可读报告。GAIA 回归准入要求 baseline 和 candidate 各自至少完成两次相同任务集的全量运行：
+
+```bash
+pnpm bench:gaia:desktop-real:smoke
+pnpm bench:gaia:desktop-real:l1
+pnpm bench:gaia:compare -- \
+  --baseline baseline-run-1.jsonl \
+  --baseline baseline-run-2.jsonl \
+  --candidate candidate-run-1.jsonl \
+  --candidate candidate-run-2.jsonl \
+  --expected-tasks 53 \
+  --output eval-results/engineering/gaia-regression-gate.md
+pnpm eval:ailis-humanlike:longitudinal-agent:validate
+pnpm bench:osworld:readiness
+```
+
+默认 GAIA 门禁会拒绝任务缺失或替换、可见成功率下降、超时增加、P95 延迟增加超过 15%、平均 token 增加超过 10%，以及稳定正确题变为稳定错误。针对 benchmark 答案编写专用硬路由不属于可接受优化。
 
 ## 架构概览
 

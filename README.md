@@ -8,6 +8,11 @@
     <img alt="License" src="https://img.shields.io/badge/license-MIT-059669?style=for-the-badge">
   </p>
   <p>
+    <img alt="ToolSandbox frozen holdout mean 71.51 percent" src="https://img.shields.io/badge/ToolSandbox_holdout-71.51%25-2563eb?style=for-the-badge">
+    <img alt="GAIA Level 1 strict first run 77.36 percent" src="https://img.shields.io/badge/GAIA_L1_strict_run_1-77.36%25-059669?style=for-the-badge">
+    <img alt="Internal longitudinal companion evaluation 78.46 out of 100" src="https://img.shields.io/badge/Humanlike_longitudinal-78.46%2F100-059669?style=for-the-badge">
+  </p>
+  <p>
     <a href="README.md">English</a> ·
     <a href="README.zh-CN.md">简体中文</a> ·
     <a href="README.ja.md">日本語</a> ·
@@ -24,6 +29,29 @@
 </div>
 
 ---
+
+## Evaluation Snapshot
+
+AILIS is developed as an evaluated agent system, not only as a character demo. The current evidence spans stateful tool use, general assistant tasks, long-term companion behavior, and desktop operation. Each number below includes its scale and claim boundary.
+
+| Evaluation track | Result | Scale | Evidence status |
+| --- | ---: | ---: | --- |
+| **Apple ToolSandbox** | **71.51%** frozen holdout mean | 239 / 239 officially scored, 0 errors | Primary public task-quality result |
+| **GAIA Level 1 strict rerun** | Run 1: **41 / 53, 77.36%** | First of two required full runs | Provisional strict-memory-isolated result; Run 2 is pending |
+| **GAIA Level 1 historical** | **85.85%** two-run mean; best run **90.57%** | 53 public validation tasks x 2 | Historical local diagnostic; task-memory isolation was missing |
+| **Longitudinal companion eval** | **78.46 / 100** weighted mean | 171 judged checkpoints from 30-day scenarios | Internal product evaluation |
+| **OSWorld small run** | **2 / 4**, 50% | 4 historical desktop tasks | Early external-benchmark signal; sample is too small for a broad claim |
+| **Humanlike dataset validation** | **1000 / 1000** valid | 9 categories, 251 negative probes | Evaluation coverage, not model quality |
+
+> **Primary headline:** the frozen Apple ToolSandbox holdout mean is **71.51%**. The current strict GAIA protocol has completed its first full run at **77.36%**, with benchmark memory disabled and no failed-task replacement. It remains provisional until the second independent 53-task run finishes. The higher 85.85% historical mean stays visible for transparency, but is not the current reproducibility claim.
+
+[Full benchmark scorecard](docs/ailis-demo-benchmark-scorecard.md) ·
+[GAIA methodology](docs/ailis-desktop-real-gaia-eval.md) ·
+[ToolSandbox protocol and gates](docs/ailis-toolsandbox-v4-optimization-plan.md)
+
+<p align="center">
+  <img alt="AILIS evaluation snapshot: ToolSandbox 71.51 percent, GAIA strict Run 1 77.36 percent, longitudinal companion score 78.46, and OSWorld small run 2 of 4" src="docs/assets/benchmarks/ailis-evaluation-snapshot-20260720.svg">
+</p>
 
 <p align="center">
   <img alt="How people use AILIS as a desktop AI companion" src="docs/assets/ailis-zhihu/ailis-user-flow-image2.png">
@@ -72,7 +100,9 @@ AILIS is not only an expressive avatar and not only an automation console. The i
 - It keeps provider, memory, model, voice, and local runtime choices under the user's control.
 - It is open source under MIT, so the character surface and the agent harness can evolve together.
 
-## GAIA Evaluation
+## GAIA: General Agent Capability
+
+The current strict-memory-isolated protocol is frozen at commit `6afc0ae`. Its first complete run scored **41 / 53 (77.36%)**; the required second run has not yet been incorporated into a final mean or stability score. An unexpected Windows reboot interrupted the first run after 46 completed rows. Recovery reused the same run ID, skipped every completed task, and executed only the seven unfinished tasks; no failed task was retried, replaced, or re-scored.
 
 <p align="center">
   <img alt="Historical AILIS GAIA Level 1 validation diagnostics: 81.13 percent and 90.57 percent across two runs, with an 85.85 percent mean" src="docs/assets/benchmarks/gaia-l1-validation-20260719.svg">
@@ -92,7 +122,7 @@ These are retained as historical diagnostics, not the current reproducibility cl
 
 This is a local `desktop-real` visible-answer evaluation on the public validation split, not an official submission to the private 93-task Level 1 test leaderboard. Both historical runs used commit `4f8f435`, separate run IDs and isolated workspaces, with no resume, per-task retry, failed-task replacement, or score merging, but without strict per-task memory isolation. See the [evaluation methodology](docs/ailis-desktop-real-gaia-eval.md) and [benchmark scorecard](docs/ailis-demo-benchmark-scorecard.md).
 
-## Apple ToolSandbox Evaluation
+## ToolSandbox: Stateful Tool Use
 
 <p align="center">
   <img alt="AILIS Apple ToolSandbox offline evaluation: 728 of 728 certified non-RapidAPI scenarios, 71.51 percent frozen holdout mean, 81.49 percent targeted recovery mean, and 88.31 percent stability sample mean" src="docs/assets/benchmarks/apple-toolsandbox-offline-20260719.svg">
@@ -112,6 +142,26 @@ ToolSandbox returns a continuous scenario similarity score from `0` to `1`, refl
 | Stability outcomes | 29 improved / 22 unchanged / 13 regressed | Includes 2 severe regressions; all preregistered gates passed |
 
 The primary public quality number is the frozen holdout mean, **71.51%**. `valid-only` and `errors-as-zero` are identical because the v3 and stability primary batches had zero errors. The targeted-recovery and stability means answer different questions and must not be averaged with the holdout score or presented as a randomized causal gain. V1, V2, raw intermediate, cross-drift, and quarantined results are excluded from the primary claim.
+
+## Reproduce And Audit
+
+The repository keeps benchmark planning, task-level results, progress streams, audit events, transcripts, and readable reports separate. GAIA regression admission requires two complete baseline runs and two complete candidate runs over an identical task set:
+
+```bash
+pnpm bench:gaia:desktop-real:smoke
+pnpm bench:gaia:desktop-real:l1
+pnpm bench:gaia:compare -- \
+  --baseline baseline-run-1.jsonl \
+  --baseline baseline-run-2.jsonl \
+  --candidate candidate-run-1.jsonl \
+  --candidate candidate-run-2.jsonl \
+  --expected-tasks 53 \
+  --output eval-results/engineering/gaia-regression-gate.md
+pnpm eval:ailis-humanlike:longitudinal-agent:validate
+pnpm bench:osworld:readiness
+```
+
+The default GAIA comparison gate rejects missing or replaced tasks, lower visible success, more timeouts, P95 latency increases above 15%, mean-token increases above 10%, and stable per-task regressions. Benchmark-specific answer routing is not an accepted optimization strategy.
 
 ## Architecture
 
