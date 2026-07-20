@@ -150,6 +150,37 @@ export class ChatTTSSystem {
         return sessionId;
     }
 
+    getBrowserHistoryStorageKey() {
+        return `ailis_chat_history:${this.sessionId}`;
+    }
+
+    loadBrowserHistory() {
+        try {
+            const rawValue = window.localStorage?.getItem(this.getBrowserHistoryStorageKey());
+            const parsed = rawValue ? JSON.parse(rawValue) : [];
+            return Array.isArray(parsed) ? parsed : [];
+        } catch (error) {
+            console.warn('恢复浏览器对话历史失败：', error);
+            return [];
+        }
+    }
+
+    saveBrowserHistory() {
+        try {
+            const messages = this.createMessageHistorySnapshot()
+                .filter((message) => message?.role === 'user' || message?.role === 'assistant')
+                .slice(-40);
+            window.localStorage?.setItem(
+                this.getBrowserHistoryStorageKey(),
+                JSON.stringify(messages)
+            );
+            return { ok: true, messageCount: messages.length };
+        } catch (error) {
+            console.warn('保存浏览器对话历史失败：', error);
+            return { ok: false, error: error?.message || String(error) };
+        }
+    }
+
     bindEvents() {
         this.sendBtnEl.addEventListener('click', () => this.sendMessage());
         this.inputEl.addEventListener('keydown', (event) => {
@@ -274,10 +305,13 @@ export class ChatTTSSystem {
 
     async restorePersistedConversation() {
         try {
-            const result = await window.ailisDesktop?.chatHistory?.load?.({
-                sessionId: this.sessionId
-            });
-            const messages = Array.isArray(result?.messages) ? result.messages : [];
+            const desktopHistoryAvailable = typeof window.ailisDesktop?.chatHistory?.load === 'function';
+            const result = desktopHistoryAvailable
+                ? await window.ailisDesktop.chatHistory.load({ sessionId: this.sessionId })
+                : null;
+            const messages = desktopHistoryAvailable
+                ? (Array.isArray(result?.messages) ? result.messages : [])
+                : this.loadBrowserHistory();
             this.messageHistory = messages
                 .filter((message) => message?.role === 'user' || message?.role === 'assistant')
                 .map((message) => ({
@@ -312,10 +346,13 @@ export class ChatTTSSystem {
 
     async persistConversation() {
         try {
-            return await window.ailisDesktop?.chatHistory?.save?.({
-                sessionId: this.sessionId,
-                messages: this.createMessageHistorySnapshot()
-            });
+            if (typeof window.ailisDesktop?.chatHistory?.save === 'function') {
+                return await window.ailisDesktop.chatHistory.save({
+                    sessionId: this.sessionId,
+                    messages: this.createMessageHistorySnapshot()
+                });
+            }
+            return this.saveBrowserHistory();
         } catch (error) {
             console.warn('保存桌面对话历史失败：', error);
             return { ok: false, error: error?.message || String(error) };
@@ -603,7 +640,11 @@ export class ChatTTSSystem {
         }
         this.messageHistory = [];
         this.messageListEl.innerHTML = '';
-        void window.ailisDesktop?.chatHistory?.clear?.({ sessionId: this.sessionId });
+        if (typeof window.ailisDesktop?.chatHistory?.clear === 'function') {
+            void window.ailisDesktop.chatHistory.clear({ sessionId: this.sessionId });
+        } else {
+            window.localStorage?.removeItem(this.getBrowserHistoryStorageKey());
+        }
         this.addSystemMessage('当前会话已清空。');
         this.emitChatUiEvent({
             type: 'snapshot',

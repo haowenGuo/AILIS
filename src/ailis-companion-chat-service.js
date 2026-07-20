@@ -410,6 +410,7 @@ async function readTextStream(response, onChunk) {
     const decoder = new TextDecoder('utf-8');
     let buffer = '';
     let fullText = '';
+    let eventType = '';
 
     while (true) {
         const { done, value } = await reader.read();
@@ -423,7 +424,15 @@ async function readTextStream(response, onChunk) {
 
         for (const part of parts) {
             const line = part.replace(/\r$/, '');
-            if (!line || line.startsWith(':') || line.startsWith('event:')) {
+            if (!line) {
+                eventType = '';
+                continue;
+            }
+            if (line.startsWith(':')) {
+                continue;
+            }
+            if (line.startsWith('event:')) {
+                eventType = line.slice(6).trim().toLowerCase();
                 continue;
             }
 
@@ -436,6 +445,9 @@ async function readTextStream(response, onChunk) {
             }
 
             if (chunkText) {
+                if (eventType === 'error') {
+                    throw new Error(chunkText.replace(/^\[ERROR\]\s*/i, '') || '在线模型暂时不可用');
+                }
                 fullText += chunkText;
                 onChunk?.({
                     deltaText: chunkText,
@@ -449,6 +461,10 @@ async function readTextStream(response, onChunk) {
     const restLine = buffer.replace(/\r$/, '');
     if (restLine) {
         let chunkText = restLine;
+        if (restLine.startsWith('event:')) {
+            eventType = restLine.slice(6).trim().toLowerCase();
+            chunkText = '';
+        }
         if (restLine.startsWith('data:')) {
             chunkText = restLine.slice(5);
             if (chunkText.startsWith(' ')) {
@@ -456,6 +472,9 @@ async function readTextStream(response, onChunk) {
             }
         }
         if (chunkText) {
+            if (eventType === 'error') {
+                throw new Error(chunkText.replace(/^\[ERROR\]\s*/i, '') || '在线模型暂时不可用');
+            }
             fullText += chunkText;
             onChunk?.({
                 deltaText: chunkText,

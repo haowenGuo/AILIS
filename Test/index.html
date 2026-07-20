@@ -3,678 +3,163 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AILIS 体验</title>
-    <meta name="description" content="AILIS 在线体验页，打开即可与 3D 虚拟助手互动。">
-    <style>
-        * {
-            box-sizing: border-box;
-        }
-
-        :root {
-            color-scheme: light;
-            --bg: #f6fbff;
-            --surface: rgba(255, 255, 255, 0.92);
-            --surface-strong: #ffffff;
-            --line: rgba(42, 97, 124, 0.16);
-            --text: #18384c;
-            --muted: #5e7888;
-            --accent: #2e99bd;
-            --accent-strong: #1d789a;
-            --warm: #d76693;
-            --gold: #d1a22a;
-            --shadow: 0 16px 50px rgba(27, 75, 102, 0.14);
-            --radius: 8px;
-            --font: "Microsoft YaHei", -apple-system, BlinkMacSystemFont, "PingFang SC", "Noto Sans SC", sans-serif;
-        }
-
-        html,
-        body {
-            width: 100%;
-            min-height: 100%;
-            margin: 0;
-        }
-
-        body {
-            font-family: var(--font);
-            color: var(--text);
-            background:
-                linear-gradient(180deg, #f7fcff 0%, #edf7fb 48%, #fff7fb 100%);
-            overflow-x: hidden;
-        }
-
-        a {
-            color: inherit;
-            text-decoration: none;
-        }
-
-        button,
-        textarea {
-            font: inherit;
-        }
-
-        .app-shell {
-            min-height: 100vh;
-            display: grid;
-            grid-template-rows: auto 1fr;
-        }
-
-        .topbar {
-            position: sticky;
-            top: 0;
-            z-index: 20;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 18px;
-            height: 64px;
-            padding: 0 24px;
-            background: rgba(246, 251, 255, 0.86);
-            border-bottom: 1px solid var(--line);
-            backdrop-filter: blur(16px);
-        }
-
-        .brand {
-            display: flex;
-            align-items: baseline;
-            gap: 10px;
-            min-width: 0;
-            font-weight: 800;
-            letter-spacing: 0;
-        }
-
-        .brand span {
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-            font-size: 20px;
-        }
-
-        .brand small {
-            color: var(--muted);
-            font-size: 12px;
-            font-weight: 600;
-            white-space: nowrap;
-        }
-
-        .nav-actions {
-            display: flex;
-            align-items: center;
-            justify-content: flex-end;
-            gap: 10px;
-            flex-wrap: wrap;
-        }
-
-        .nav-link,
-        .nav-button,
-        .quick-button,
-        .send-button {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            min-height: 38px;
-            border-radius: var(--radius);
-            border: 1px solid var(--line);
-            cursor: pointer;
-            font-weight: 700;
-            letter-spacing: 0;
-            transition: transform 0.18s ease, border-color 0.18s ease, background 0.18s ease;
-        }
-
-        .nav-link,
-        .nav-button {
-            padding: 8px 12px;
-            color: var(--muted);
-            background: rgba(255, 255, 255, 0.54);
-        }
-
-        .nav-button {
-            color: #ffffff;
-            border-color: transparent;
-            background: var(--accent);
-        }
-
-        .nav-link:hover,
-        .nav-button:hover,
-        .quick-button:hover,
-        .send-button:hover:enabled {
-            transform: translateY(-1px);
-            border-color: rgba(46, 153, 189, 0.34);
-        }
-
-        .experience {
-            min-height: calc(100vh - 64px);
-            display: grid;
-            grid-template-columns: minmax(0, 1fr) minmax(340px, 420px);
-            gap: 18px;
-            padding: 18px;
-        }
-
-        .avatar-stage {
-            position: relative;
-            min-height: 620px;
-            border: 1px solid var(--line);
-            border-radius: var(--radius);
-            overflow: hidden;
-            background:
-                linear-gradient(180deg, rgba(255, 255, 255, 0.62), rgba(229, 244, 251, 0.78)),
-                linear-gradient(135deg, rgba(46, 153, 189, 0.16), rgba(215, 102, 147, 0.12));
-        }
-
-        .avatar-stage::before {
-            content: "";
-            position: absolute;
-            inset: 0;
-            pointer-events: none;
-            background:
-                linear-gradient(rgba(46, 153, 189, 0.06) 1px, transparent 1px),
-                linear-gradient(90deg, rgba(46, 153, 189, 0.06) 1px, transparent 1px);
-            background-size: 42px 42px;
-            mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.7), rgba(0, 0, 0, 0.08));
-        }
-
-        .stage-header {
-            position: absolute;
-            z-index: 2;
-            left: 18px;
-            top: 18px;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            padding: 8px 10px;
-            border-radius: var(--radius);
-            border: 1px solid var(--line);
-            color: var(--muted);
-            background: rgba(255, 255, 255, 0.76);
-            backdrop-filter: blur(14px);
-            box-shadow: 0 10px 28px rgba(27, 75, 102, 0.1);
-        }
-
-        .status-dot {
-            width: 9px;
-            height: 9px;
-            flex: 0 0 auto;
-            border-radius: 999px;
-            background: var(--gold);
-            box-shadow: 0 0 0 4px rgba(209, 162, 42, 0.14);
-        }
-
-        .status-dot.ready {
-            background: #34a853;
-            box-shadow: 0 0 0 4px rgba(52, 168, 83, 0.14);
-        }
-
-        .pet-frame {
-            position: absolute;
-            inset: 0;
-            width: 100%;
-            height: 100%;
-            border: 0;
-            background: transparent;
-        }
-
-        .chat-panel {
-            min-height: 620px;
-            display: grid;
-            grid-template-rows: auto 1fr auto;
-            border: 1px solid var(--line);
-            border-radius: var(--radius);
-            overflow: hidden;
-            background: var(--surface);
-            box-shadow: var(--shadow);
-        }
-
-        .panel-header {
-            padding: 18px;
-            border-bottom: 1px solid var(--line);
-            background: var(--surface-strong);
-        }
-
-        .panel-title {
-            margin: 0;
-            font-size: 20px;
-            line-height: 1.25;
-            letter-spacing: 0;
-        }
-
-        .panel-subtitle {
-            margin: 8px 0 0;
-            color: var(--muted);
-            font-size: 13px;
-            line-height: 1.6;
-        }
-
-        .message-list {
-            min-height: 0;
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-            overflow: auto;
-            padding: 16px;
-            background: rgba(245, 251, 255, 0.62);
-        }
-
-        .message {
-            max-width: 92%;
-            padding: 10px 12px;
-            border-radius: var(--radius);
-            font-size: 14px;
-            line-height: 1.65;
-            white-space: pre-wrap;
-            word-break: break-word;
-        }
-
-        .message-user {
-            align-self: flex-end;
-            color: #ffffff;
-            background: var(--accent);
-        }
-
-        .message-assistant {
-            align-self: flex-start;
-            color: var(--text);
-            border: 1px solid var(--line);
-            background: #ffffff;
-        }
-
-        .message-system,
-        .message-loading {
-            align-self: center;
-            max-width: 100%;
-            color: var(--muted);
-            background: rgba(255, 255, 255, 0.72);
-            border: 1px solid rgba(42, 97, 124, 0.1);
-            font-size: 12px;
-        }
-
-        .composer {
-            display: grid;
-            gap: 12px;
-            padding: 14px;
-            border-top: 1px solid var(--line);
-            background: var(--surface-strong);
-        }
-
-        .quick-actions {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 8px;
-        }
-
-        .quick-button {
-            min-height: 32px;
-            padding: 6px 10px;
-            color: var(--muted);
-            background: rgba(46, 153, 189, 0.08);
-        }
-
-        .input-row {
-            display: grid;
-            grid-template-columns: 1fr auto;
-            gap: 10px;
-            align-items: end;
-        }
-
-        .chat-input {
-            width: 100%;
-            min-height: 72px;
-            max-height: 160px;
-            resize: vertical;
-            border: 1px solid var(--line);
-            border-radius: var(--radius);
-            padding: 11px 12px;
-            color: var(--text);
-            background: #f8fcff;
-            outline: none;
-            line-height: 1.55;
-        }
-
-        .chat-input:focus {
-            border-color: rgba(46, 153, 189, 0.62);
-            background: #ffffff;
-        }
-
-        .send-button {
-            min-width: 74px;
-            min-height: 72px;
-            padding: 10px 14px;
-            color: #ffffff;
-            border-color: transparent;
-            background: var(--warm);
-        }
-
-        .send-button:disabled {
-            cursor: not-allowed;
-            opacity: 0.56;
-            transform: none;
-        }
-
-        @media (max-width: 980px) {
-            .experience {
-                grid-template-columns: 1fr;
-            }
-
-            .avatar-stage,
-            .chat-panel {
-                min-height: 520px;
-            }
-        }
-
-        @media (max-width: 720px) {
-            .topbar {
-                height: auto;
-                min-height: 64px;
-                align-items: flex-start;
-                flex-direction: column;
-                padding: 12px 14px;
-            }
-
-            .nav-actions {
-                width: 100%;
-                justify-content: flex-start;
-            }
-
-            .experience {
-                min-height: auto;
-                padding: 12px;
-                gap: 12px;
-            }
-
-            .avatar-stage {
-                min-height: 440px;
-            }
-
-            .chat-panel {
-                min-height: 520px;
-            }
-
-            .input-row {
-                grid-template-columns: 1fr;
-            }
-
-            .send-button {
-                min-height: 44px;
-            }
-        }
-    </style>
+    <meta name="theme-color" content="#edf6f8">
+    <meta
+        name="description"
+        content="AILIS 在线陪伴体验，包含最新 3D 角色、流式对话、动作与表情联动。"
+    >
+    <link rel="icon" type="image/png" href="../favicon.png">
+    <link rel="stylesheet" href="./styles.css">
+    <title>AILIS 在线体验</title>
 </head>
 <body>
     <div class="app-shell">
         <header class="topbar">
-            <a class="brand" href="./" aria-label="AILIS 体验首页">
-                <span>AILIS</span>
-                <small>在线体验</small>
+            <a class="brand" href="../" aria-label="返回 AILIS 主页">
+                <img
+                    class="brand-avatar"
+                    src="../Resources/Emotes/ailis-small/wave.png"
+                    alt=""
+                    width="38"
+                    height="38"
+                >
+                <span class="brand-copy">
+                    <strong>AILIS</strong>
+                    <small>在线陪伴</small>
+                </span>
             </a>
-            <nav class="nav-actions" aria-label="主要入口">
-                <a class="nav-link" href="../about-ailis.html">主页介绍</a>
-                <a class="nav-link" href="../about-ailis.html#membership">会员中心</a>
-                <a class="nav-button" href="../about-ailis.html#membership">登录 / 开通</a>
-            </nav>
+
+            <div class="topbar-actions">
+                <span class="version-badge">v1.2.0</span>
+                <a class="icon-link" href="../" aria-label="返回主页" title="返回主页">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="m3 10 9-7 9 7"></path>
+                        <path d="M5 9v11h14V9"></path>
+                        <path d="M9 20v-6h6v6"></path>
+                    </svg>
+                </a>
+                <a
+                    class="icon-link"
+                    href="https://github.com/haowenGuo/AILIS"
+                    aria-label="查看 GitHub"
+                    title="查看 GitHub"
+                    target="_blank"
+                    rel="noreferrer"
+                >
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3.3-.4 6.8-1.6 6.8-7A5.4 5.4 0 0 0 19.4 4 5 5 0 0 0 19.3.5S18.2.1 15 1.8a13.4 13.4 0 0 0-7 0C4.8.1 3.7.5 3.7.5A5 5 0 0 0 3.6 4a5.4 5.4 0 0 0-1.4 3.7c0 5.4 3.5 6.6 6.8 7A4.8 4.8 0 0 0 8 18v4"></path>
+                        <path d="M8 19c-3 .9-3-1.5-4-2"></path>
+                    </svg>
+                </a>
+                <a
+                    class="download-link"
+                    href="https://github.com/haowenGuo/AILIS/releases/latest"
+                    target="_blank"
+                    rel="noreferrer"
+                >
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M12 3v12"></path>
+                        <path d="m7 10 5 5 5-5"></path>
+                        <path d="M5 21h14"></path>
+                    </svg>
+                    <span>桌面版</span>
+                </a>
+            </div>
         </header>
 
         <main class="experience">
-            <section class="avatar-stage" aria-label="AILIS 3D 体验">
-                <div class="stage-header" aria-live="polite">
-                    <span id="stage-dot" class="status-dot"></span>
-                    <span id="stage-status">加载 3D 体验中</span>
+            <section class="character-pane" aria-label="AILIS 3D 角色">
+                <div class="stage-topline">
+                    <div class="character-identity">
+                        <span class="character-name">AILIS</span>
+                        <span class="character-role">你的桌面搭档</span>
+                    </div>
+                    <div id="model-status" class="status-chip" data-state="loading" aria-live="polite">
+                        <span class="status-dot"></span>
+                        <span id="model-status-text">载入角色</span>
+                    </div>
                 </div>
+
                 <iframe
                     id="pet-frame"
                     class="pet-frame"
-                    title="AILIS 3D 桌宠"
+                    title="AILIS 3D 角色"
                     allow="autoplay"
-                    src="../pet.html?demo=1&amp;speechMode=local"
+                    loading="eager"
                 ></iframe>
+
+                <div class="stage-footer">
+                    <span>陪伴模式</span>
+                </div>
             </section>
 
-            <section class="chat-panel" aria-label="AILIS 聊天体验">
-                <header class="panel-header">
-                    <h1 class="panel-title">AILIS 体验</h1>
-                    <p id="panel-subtitle" class="panel-subtitle">公开网页演示模式，账号和会员入口在主页介绍页。</p>
+            <section class="conversation-pane" aria-label="与 AILIS 对话">
+                <header class="conversation-header">
+                    <div>
+                        <p class="eyebrow">LIVE COMPANION</p>
+                        <h1>和 AILIS 说说话</h1>
+                    </div>
+                    <div id="backend-status" class="service-status" data-state="checking" aria-live="polite">
+                        <span class="status-dot"></span>
+                        <span id="backend-status-text">连接服务</span>
+                    </div>
                 </header>
 
-                <div id="message-list" class="message-list" aria-live="polite">
-                    <div class="message message-system" data-local-message="true">正在准备体验环境。</div>
+                <div id="message-list" class="message-list" aria-live="polite" aria-busy="false">
+                    <div class="empty-state" data-local-message="true">
+                        <img
+                            src="../Resources/Emotes/ailis-small/wave.png"
+                            alt=""
+                            width="54"
+                            height="54"
+                        >
+                        <strong>AILIS 正在赶来</strong>
+                        <span>角色与在线服务就绪后，就可以开始聊天。</span>
+                    </div>
                 </div>
 
-                <form id="composer" class="composer">
-                    <div class="quick-actions" aria-label="快速体验">
-                        <button class="quick-button" type="button" data-prompt="你好，介绍一下你自己">你好</button>
-                        <button class="quick-button" type="button" data-prompt="跳舞">跳舞</button>
-                        <button class="quick-button" type="button" data-prompt="惊讶一下">惊讶</button>
-                        <button class="quick-button" type="button" data-prompt="陪我放松一下">放松</button>
+                <div class="composer-shell">
+                    <div class="quick-actions" aria-label="快捷消息">
+                        <button type="button" data-prompt="你好呀，今天也请多关照">打个招呼</button>
+                        <button type="button" data-prompt="陪我聊聊今天发生的事情">聊聊今天</button>
+                        <button type="button" data-prompt="我有点累，陪我放松一下">陪我放松</button>
+                        <button type="button" data-prompt="开心地转一圈给我看看">看看动作</button>
                     </div>
-                    <div class="input-row">
-                        <textarea id="chat-input" class="chat-input" placeholder="和 AILIS 说点什么"></textarea>
-                        <button id="send-button" class="send-button" type="submit" disabled>发送</button>
+
+                    <form id="composer" class="composer">
+                        <label class="sr-only" for="chat-input">发送给 AILIS</label>
+                        <textarea
+                            id="chat-input"
+                            rows="1"
+                            maxlength="1200"
+                            placeholder="想和 AILIS 说什么？"
+                        ></textarea>
+                        <button
+                            id="send-button"
+                            class="send-button"
+                            type="submit"
+                            aria-label="发送消息"
+                            title="发送消息"
+                            disabled
+                        >
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                                <path d="m22 2-7 20-4-9-9-4Z"></path>
+                                <path d="M22 2 11 13"></path>
+                            </svg>
+                        </button>
+                    </form>
+
+                    <div class="experience-boundary">
+                        <span id="composer-status">正在准备在线体验</span>
+                        <a href="https://github.com/haowenGuo/AILIS/releases/latest" target="_blank" rel="noreferrer">
+                            文件、网页和电脑操作请使用桌面版
+                        </a>
                     </div>
-                </form>
+                </div>
             </section>
         </main>
     </div>
 
-    <script>
-        (() => {
-            const petFrame = document.getElementById('pet-frame');
-            const stageDot = document.getElementById('stage-dot');
-            const stageStatus = document.getElementById('stage-status');
-            const panelSubtitle = document.getElementById('panel-subtitle');
-            const messageList = document.getElementById('message-list');
-            const composer = document.getElementById('composer');
-            const chatInput = document.getElementById('chat-input');
-            const sendButton = document.getElementById('send-button');
-            const quickButtons = Array.from(document.querySelectorAll('[data-prompt]'));
-
-            const state = {
-                attachedWindow: null,
-                isReady: false,
-                isBusy: false
-            };
-
-            function setStatus(text, ready = state.isReady) {
-                stageStatus.textContent = text;
-                stageDot.classList.toggle('ready', Boolean(ready));
-            }
-
-            function getPetWindow() {
-                try {
-                    return petFrame.contentWindow;
-                } catch (error) {
-                    return null;
-                }
-            }
-
-            function getMessageClassName(role) {
-                if (role === 'user') {
-                    return 'message message-user';
-                }
-                if (role === 'assistant') {
-                    return 'message message-assistant';
-                }
-                if (role === 'loading') {
-                    return 'message message-loading';
-                }
-                return 'message message-system';
-            }
-
-            function scrollMessages() {
-                messageList.scrollTop = messageList.scrollHeight;
-            }
-
-            function clearLocalMessage() {
-                const localMessage = messageList.querySelector('[data-local-message="true"]');
-                localMessage?.remove();
-            }
-
-            function upsertMessage(message) {
-                if (!message || !message.id) {
-                    return;
-                }
-
-                clearLocalMessage();
-                let element = messageList.querySelector(`[data-message-id="${CSS.escape(message.id)}"]`);
-                if (!element) {
-                    element = document.createElement('div');
-                    element.dataset.messageId = message.id;
-                    messageList.appendChild(element);
-                }
-
-                element.className = getMessageClassName(message.role);
-                element.textContent = message.content || '';
-                scrollMessages();
-            }
-
-            function removeMessage(id) {
-                if (!id) {
-                    return;
-                }
-                messageList.querySelector(`[data-message-id="${CSS.escape(id)}"]`)?.remove();
-                scrollMessages();
-            }
-
-            function renderSnapshot(messages) {
-                messageList.innerHTML = '';
-                if (!messages?.length) {
-                    const element = document.createElement('div');
-                    element.className = 'message message-system';
-                    element.dataset.localMessage = 'true';
-                    element.textContent = '体验环境已就绪。';
-                    messageList.appendChild(element);
-                    return;
-                }
-                messages.forEach(upsertMessage);
-            }
-
-            function updateComposer() {
-                const canSend = state.isReady && !state.isBusy && chatInput.value.trim().length > 0;
-                sendButton.disabled = !canSend;
-                quickButtons.forEach((button) => {
-                    button.disabled = !state.isReady || state.isBusy;
-                });
-            }
-
-            function handlePetEvent(payload = {}) {
-                if (payload.type === 'snapshot') {
-                    renderSnapshot(payload.messages || []);
-                    if (typeof payload.isBusy === 'boolean') {
-                        state.isBusy = payload.isBusy;
-                    }
-                    updateComposer();
-                    return;
-                }
-
-                if (payload.type === 'message-added' || payload.type === 'message-updated') {
-                    upsertMessage(payload.message);
-                    return;
-                }
-
-                if (payload.type === 'message-removed') {
-                    removeMessage(payload.id);
-                    return;
-                }
-
-                if (payload.type === 'state' && typeof payload.isBusy === 'boolean') {
-                    state.isBusy = payload.isBusy;
-                    panelSubtitle.textContent = state.isBusy
-                        ? 'AILIS 正在回应。'
-                        : '公开网页演示模式，账号和会员入口在主页介绍页。';
-                    updateComposer();
-                }
-            }
-
-            function syncSnapshot() {
-                const petWindow = getPetWindow();
-                const chatSystem = petWindow?.chatSystem;
-                if (!chatSystem?.getTranscriptSnapshot) {
-                    return;
-                }
-
-                renderSnapshot(chatSystem.getTranscriptSnapshot());
-                state.isBusy = Boolean(chatSystem.isBusy);
-                state.isReady = Boolean(petWindow.vrmSystem?.isModelLoaded || state.isReady);
-                if (state.isReady) {
-                    setStatus('3D 体验已就绪', true);
-                }
-                updateComposer();
-            }
-
-            function attachPetWindow() {
-                const petWindow = getPetWindow();
-                if (!petWindow || state.attachedWindow === petWindow) {
-                    return;
-                }
-
-                state.attachedWindow = petWindow;
-                state.isReady = false;
-                setStatus('加载 3D 体验中', false);
-                updateComposer();
-
-                petWindow.addEventListener('ailis-chat-ui-event', (event) => {
-                    handlePetEvent(event.detail || {});
-                });
-                petWindow.addEventListener('modelLoaded', () => {
-                    state.isReady = true;
-                    setStatus('3D 体验已就绪', true);
-                    syncSnapshot();
-                    updateComposer();
-                });
-                petWindow.addEventListener('modelLoadError', () => {
-                    state.isReady = false;
-                    setStatus('模型资源加载失败', false);
-                    panelSubtitle.textContent = '模型资源暂时没有加载成功，请稍后刷新。';
-                    updateComposer();
-                });
-
-                window.setTimeout(syncSnapshot, 250);
-                window.setTimeout(syncSnapshot, 900);
-                window.setTimeout(syncSnapshot, 1800);
-            }
-
-            async function sendPrompt(content) {
-                const text = String(content || '').trim();
-                const petWindow = getPetWindow();
-                if (!text || state.isBusy || !petWindow?.chatSystem?.sendExternalMessage) {
-                    updateComposer();
-                    return;
-                }
-
-                chatInput.value = '';
-                updateComposer();
-
-                try {
-                    await petWindow.chatSystem.sendExternalMessage(text);
-                    syncSnapshot();
-                } catch (error) {
-                    const element = document.createElement('div');
-                    element.className = 'message message-system';
-                    element.textContent = `体验请求失败：${error.message || '请稍后再试'}`;
-                    messageList.appendChild(element);
-                    scrollMessages();
-                } finally {
-                    updateComposer();
-                }
-            }
-
-            petFrame.addEventListener('load', attachPetWindow);
-            chatInput.addEventListener('input', updateComposer);
-            chatInput.addEventListener('keydown', (event) => {
-                if (event.key === 'Enter' && !event.shiftKey) {
-                    event.preventDefault();
-                    composer.requestSubmit();
-                }
-            });
-            composer.addEventListener('submit', (event) => {
-                event.preventDefault();
-                void sendPrompt(chatInput.value);
-            });
-            quickButtons.forEach((button) => {
-                button.addEventListener('click', () => {
-                    void sendPrompt(button.dataset.prompt || '');
-                });
-            });
-
-            attachPetWindow();
-            updateComposer();
-        })();
-    </script>
+    <script type="module" src="./app.js"></script>
 </body>
 </html>

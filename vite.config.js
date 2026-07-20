@@ -35,6 +35,7 @@ export default defineConfig({
                 index: resolve(workspaceRoot, 'index.html'),
                 pet: resolve(workspaceRoot, 'pet.html'),
                 chat: resolve(workspaceRoot, 'chat.html'),
+                test: resolve(workspaceRoot, 'Test/index.html'),
                 visionRegion: resolve(workspaceRoot, 'vision-region.html')
             }
         }

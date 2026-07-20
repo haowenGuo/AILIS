@@ -66,7 +66,7 @@ async def chat_endpoint(
                 yield f"data:{chunk}\n\n"
         except Exception as e:
             print(f"[LLM Stream Error] 调用失败: {e}")
-            yield f"event:error\ndata:[ERROR] 对话失败：{str(e)}\n\n"
+            yield "event:error\ndata:[ERROR] 在线模型暂时不可用，请稍后再试。\n\n"
 
     async def save_ai_message_task():
         if full_ai_reply and not full_ai_reply.startswith("[ERROR]"):
