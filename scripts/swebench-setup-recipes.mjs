@@ -32,6 +32,7 @@ const RECIPE_LIST = [
             'cython==0.29.22',
             'astropy-helpers==2.0.2',
             'extension-helpers',
+            'Jinja2',
             'pyerfa',
             'PyYAML',
             'packaging',

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+    buildGitHubArchiveCurlArgs,
     gitForWindowsUnzipCandidates,
     isTransientWslFailure,
     repairUtf8Mojibake,
@@ -64,6 +65,28 @@ test('SWE-bench runner only prefers an uncached GitHub archive when explicitly e
         row: { repo: 'django/django' },
         args: { archiveFallback: true, archiveFirst: true }
     }), false);
+});
+
+test('SWE-bench archive download retries curl 18 failures without unsafe range requests', () => {
+    const args = buildGitHubArchiveCurlArgs({
+        archivePath: 'F:\\cache\\commit.zip',
+        url: 'https://codeload.github.com/astropy/astropy/zip/commit',
+        archiveTimeoutMs: 900_000
+    });
+    assert.deepEqual(args.slice(0, 9), [
+        '-L',
+        '--fail',
+        '--retry',
+        '2',
+        '--retry-all-errors',
+        '--retry-delay',
+        '3',
+        '--connect-timeout',
+        '20'
+    ]);
+    assert.equal(args.includes('--continue-at'), false);
+    assert.equal(args.at(-3), '-o');
+    assert.equal(args.at(-2), 'F:\\cache\\commit.zip');
 });
 
 test('SWE-bench runner resolves Git for Windows unzip beside custom Git roots', () => {

@@ -24,6 +24,7 @@ test('SWE-bench setup recipes expose repo-specific wheelhouse packages', () => {
     const packages = getSweBenchWheelhousePackages({ repos: ['astropy/astropy'] });
     assert.ok(packages.includes('setuptools<60'));
     assert.ok(packages.includes('astropy-helpers==2.0.2'));
+    assert.ok(packages.includes('Jinja2'));
     assert.ok(packages.includes('pytest-astropy'));
     assert.ok(packages.includes('exceptiongroup'));
     assert.ok(!packages.includes('django'));

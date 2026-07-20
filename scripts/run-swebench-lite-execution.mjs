@@ -438,6 +438,29 @@ async function hasZipEndOfCentralDirectory(filePath) {
     }
 }
 
+export function buildGitHubArchiveCurlArgs({
+    archivePath,
+    url,
+    archiveTimeoutMs
+}) {
+    return [
+        '-L',
+        '--fail',
+        '--retry',
+        '2',
+        '--retry-all-errors',
+        '--retry-delay',
+        '3',
+        '--connect-timeout',
+        '20',
+        '--max-time',
+        String(Math.ceil(archiveTimeoutMs / 1000)),
+        '-o',
+        archivePath,
+        url
+    ];
+}
+
 async function downloadGitHubArchive({ row, args, timeoutMs }) {
     const archive = githubArchiveInfo(row);
     if (!archive) {
@@ -470,21 +493,11 @@ async function downloadGitHubArchive({ row, args, timeoutMs }) {
         existingSize = 0;
     }
     const archiveTimeoutMs = Math.max(args.archiveTimeoutMs || DEFAULT_ARCHIVE_TIMEOUT_MS, timeoutMs, 180000);
-    const curlArgs = [
-        '-L',
-        '--fail',
-        '--retry',
-        '2',
-        '--retry-delay',
-        '3',
-        '--connect-timeout',
-        '20',
-        '--max-time',
-        String(Math.ceil(archiveTimeoutMs / 1000)),
-        '-o',
+    const curlArgs = buildGitHubArchiveCurlArgs({
         archivePath,
-        archive.url
-    ];
+        url: archive.url,
+        archiveTimeoutMs
+    });
     const result = await runHostCommand('curl.exe', curlArgs, {
         cwd: projectRoot,
         timeoutMs: archiveTimeoutMs + 10000
