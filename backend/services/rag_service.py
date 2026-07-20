@@ -1,7 +1,6 @@
 import os
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_openai import OpenAIEmbeddings
-from langchain_chroma import Chroma
+from typing import Any
+
 from backend.core.config import get_settings
 
 settings = get_settings()
@@ -9,6 +8,16 @@ settings = get_settings()
 
 class RAGService:
     def __init__(self):
+        self.vector_store: Any | None = None
+
+        # RAG is optional. Keep Chroma and its native SQLite requirements out of
+        # the process entirely when the feature is disabled.
+        if not settings.ENABLE_RAG:
+            return
+
+        from langchain_chroma import Chroma
+        from langchain_openai import OpenAIEmbeddings
+
         # 确保数据目录存在
         os.makedirs(settings.CHROMA_PERSIST_DIR, exist_ok=True)
 
@@ -32,7 +41,7 @@ class RAGService:
         :param user_query: 用户问题
         :return: 拼接好的上下文字符串
         """
-        if not settings.ENABLE_RAG:
+        if not settings.ENABLE_RAG or self.vector_store is None:
             return ""
 
         try:
@@ -48,6 +57,11 @@ class RAGService:
         [预留接口] 添加文档到知识库
         实现思路：切分文本 -> 向量化 -> 存入 Chroma
         """
+        if self.vector_store is None:
+            raise RuntimeError("RAG is disabled; set ENABLE_RAG=True before adding documents.")
+
+        from langchain.text_splitter import RecursiveCharacterTextSplitter
+
         text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
         splits = text_splitter.split_text(text)
 
