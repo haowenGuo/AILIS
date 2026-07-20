@@ -12725,36 +12725,83 @@ function extractLinksFromHtml(html = '', baseUrl = '', maxLinks = 80) {
     return links;
 }
 
+function resolveSubprocessCwd(preferredCwd = '', fallbackCwd = process.cwd()) {
+    const fallback = path.resolve(normalizeString(fallbackCwd, process.cwd()));
+    const preferred = path.resolve(normalizeString(preferredCwd, fallback));
+    if (process.platform === 'win32' && preferred.length >= 240) {
+        return fallback;
+    }
+    try {
+        if (!fsSync.statSync(preferred).isDirectory()) {
+            return fallback;
+        }
+    } catch {
+        return fallback;
+    }
+    return preferred;
+}
+
 function runProcess(command, args, options = {}) {
     const timeoutMs = clampNumber(options.timeoutMs, 120000, 1000, 600000);
     return new Promise((resolve) => {
-        const child = spawn(command, args, {
-            cwd: options.cwd || process.cwd(),
-            windowsHide: true,
-            shell: false,
-            env: {
-                ...process.env,
-                ...(options.env || {})
-            }
-        });
         let stdout = '';
         let stderr = '';
-        const timer = setTimeout(() => {
+        let settled = false;
+        let child = null;
+        let timer = null;
+        const finish = (result) => {
+            if (settled) {
+                return;
+            }
+            settled = true;
+            if (timer) {
+                clearTimeout(timer);
+            }
+            resolve(result);
+        };
+        try {
+            child = spawn(command, args, {
+                cwd: resolveSubprocessCwd(options.cwd),
+                windowsHide: true,
+                shell: false,
+                stdio: ['ignore', 'pipe', 'pipe'],
+                env: {
+                    ...process.env,
+                    ...(options.env || {})
+                }
+            });
+        } catch (error) {
+            finish({
+                exitCode: -1,
+                stdout,
+                stderr: error?.message || String(error),
+                timedOut: false
+            });
+            return;
+        }
+        timer = setTimeout(() => {
             child.kill('SIGKILL');
         }, timeoutMs);
-        child.stdout.on('data', (chunk) => {
+        child.stdout?.on('data', (chunk) => {
             stdout += chunk.toString();
         });
-        child.stderr.on('data', (chunk) => {
+        child.stderr?.on('data', (chunk) => {
             stderr += chunk.toString();
         });
+        const handleStdioError = (error) => {
+            stderr += `${stderr ? '\n' : ''}${error?.message || String(error)}`;
+            try {
+                child.kill('SIGKILL');
+            } catch {}
+            finish({ exitCode: -1, stdout, stderr, timedOut: false });
+        };
+        child.stdout?.on('error', handleStdioError);
+        child.stderr?.on('error', handleStdioError);
         child.on('close', (exitCode) => {
-            clearTimeout(timer);
-            resolve({ exitCode, stdout, stderr, timedOut: exitCode === null });
+            finish({ exitCode, stdout, stderr, timedOut: exitCode === null });
         });
         child.on('error', (error) => {
-            clearTimeout(timer);
-            resolve({ exitCode: -1, stdout, stderr: stderr || error.message, timedOut: false });
+            finish({ exitCode: -1, stdout, stderr: stderr || error.message, timedOut: false });
         });
     });
 }
@@ -15636,6 +15683,7 @@ module.exports = {
     readDocument,
     readPresentation,
     readSpreadsheet,
+    resolveSubprocessCwd,
     runPythonFile,
     SEARCH_BACKENDS,
     stripWikiText,

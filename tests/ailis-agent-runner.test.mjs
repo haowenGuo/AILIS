@@ -612,6 +612,10 @@ test('AILIS stages external attachments inside the active workspace', async () =
     assert.equal(staged[0].staged, true);
     assert.equal(staged[0].stageStatus, 'copied_to_workspace');
     assert.equal(path.relative(workspaceRoot, staged[0].path).startsWith('..'), false);
+    assert.match(
+        path.relative(workspaceRoot, staged[0].path),
+        /^\.ailis-runtime[\\/]attachments[\\/]session_with_unsafe_chars[\\/]/
+    );
     assert.equal(await fs.readFile(staged[0].path, 'utf8'), 'spreadsheet-bytes');
     assert.equal(staged[0].originalPath, sourcePath);
 });
@@ -633,6 +637,36 @@ test('AILIS preserves file extensions when staging long attachment names', async
     assert.equal(path.extname(staged.path), '.xlsx');
     assert.ok(path.basename(staged.path).length <= 99);
     assert.equal(await fs.readFile(staged.path, 'utf8'), 'spreadsheet-bytes');
+});
+
+test('AILIS keeps staged attachment paths below the Windows subprocess safety limit', async () => {
+    const workspaceBase = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-stage-path-'));
+    const workspaceRoot = path.join(
+        workspaceBase,
+        'isolated-benchmark-workspace-with-a-deliberately-long-run-identifier',
+        'nested-workspace'
+    );
+    const sourceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-stage-source-'));
+    const sourcePath = path.join(sourceRoot, 'recording.mp3');
+    await fs.mkdir(workspaceRoot, { recursive: true });
+    await fs.writeFile(sourcePath, 'audio-bytes');
+
+    const [staged] = await stageFileAttachmentsForWorkspace([{
+        id: 'gaia-file-long-path',
+        type: 'file',
+        name: `${'gaia-recording-'.repeat(10)}recording.mp3`,
+        path: sourcePath
+    }], workspaceRoot, `${'desktop-real-gaia-long-session-'.repeat(6)}`);
+
+    assert.equal(staged.staged, true);
+    assert.equal(path.relative(workspaceRoot, staged.path).startsWith('..'), false);
+    if (process.platform === 'win32') {
+        assert.match(path.relative(workspaceRoot, staged.path), /^\.ailis-runtime[\\/]a[\\/][a-f0-9]{12}[\\/]/);
+        assert.ok(staged.path.length < 240, `staged path length was ${staged.path.length}`);
+    } else {
+        assert.match(path.relative(workspaceRoot, staged.path), /^\.ailis-runtime[\\/]attachments[\\/]/);
+    }
+    assert.equal(await fs.readFile(staged.path, 'utf8'), 'audio-bytes');
 });
 
 test('AILIS staging uses a stable attachment identity instead of recursively growing filenames', async () => {

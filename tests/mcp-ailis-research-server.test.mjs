@@ -55,6 +55,7 @@ const {
     rankSearchResultsForFollowup,
     readDocument,
     readPresentation,
+    resolveSubprocessCwd,
     runPythonFile,
     stripWikiText,
     webArchiveLookup,
@@ -1182,6 +1183,13 @@ test('transcribe_audio rejects a missing staged path before loading Whisper', as
     assert.equal(result.details.status, 'not_found');
     assert.equal(result.details.failureReason, 'local_audio_path_not_found');
     assert.match(result.content[0].text, /exact current attached_files path/i);
+});
+
+test('subprocess cwd falls back before an invalid or overlong path can crash the MCP server', () => {
+    const fallback = path.resolve(os.tmpdir());
+    const preferred = path.join(fallback, 'x'.repeat(245));
+
+    assert.equal(resolveSubprocessCwd(preferred, fallback), fallback);
 });
 
 test('read_presentation reports full and truncated slide coverage structurally', async () => {

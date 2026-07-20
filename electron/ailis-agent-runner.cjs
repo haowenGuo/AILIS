@@ -688,13 +688,37 @@ function buildStagedAttachmentFilename(attachment = {}, index = 0) {
     return `${String(index + 1).padStart(2, '0')}-${identityLabel}-${identityHash}${extension}`;
 }
 
+function buildCompactStagedAttachmentFilename(attachment = {}, index = 0) {
+    const displayName = sanitizeAttachmentFilename(
+        attachment.name,
+        `attachment-${index + 1}`
+    );
+    const extension = path.extname(displayName);
+    const stableIdentity = normalizeText(
+        attachment.id,
+        `${attachment.source || 'local-file'}:${attachment.originalPath || attachment.path || displayName}`
+    );
+    const identityHash = createHash('sha256')
+        .update(stableIdentity)
+        .digest('hex')
+        .slice(0, 12);
+    return `${String(index + 1).padStart(2, '0')}-${identityHash}${extension}`;
+}
+
+function buildStagedAttachmentSessionSegment(sessionId = 'main') {
+    return createHash('sha256')
+        .update(normalizeText(sessionId, 'main'))
+        .digest('hex')
+        .slice(0, 12);
+}
+
 async function stageFileAttachmentsForWorkspace(attachments = [], workspaceRoot = '', sessionId = 'main') {
     const normalized = normalizeFileAttachments(attachments);
     if (!normalized.length) {
         return [];
     }
     const resolvedWorkspace = path.resolve(workspaceRoot || process.cwd());
-    const stageRoot = path.join(
+    const defaultStageRoot = path.join(
         resolvedWorkspace,
         '.ailis-runtime',
         'attachments',
@@ -718,11 +742,21 @@ async function stageFileAttachmentsForWorkspace(attachments = [], workspaceRoot 
             if (!stat.isFile()) {
                 throw new Error('attachment source is not a regular file');
             }
+            const readableFilename = buildStagedAttachmentFilename(attachment, index);
+            const defaultDestinationPath = path.join(defaultStageRoot, readableFilename);
+            const stageRoot = process.platform === 'win32' && defaultDestinationPath.length >= 240
+                ? path.join(
+                    resolvedWorkspace,
+                    '.ailis-runtime',
+                    'a',
+                    buildStagedAttachmentSessionSegment(sessionId)
+                )
+                : defaultStageRoot;
             await fs.promises.mkdir(stageRoot, { recursive: true });
-            const destinationPath = path.join(
-                stageRoot,
-                buildStagedAttachmentFilename(attachment, index)
-            );
+            const readableDestinationPath = path.join(stageRoot, readableFilename);
+            const destinationPath = process.platform === 'win32' && readableDestinationPath.length >= 240
+                ? path.join(stageRoot, buildCompactStagedAttachmentFilename(attachment, index))
+                : readableDestinationPath;
             await fs.promises.copyFile(sourcePath, destinationPath);
             const stagedPath = await fs.promises.realpath(destinationPath);
             const stagedStat = await fs.promises.stat(stagedPath);
