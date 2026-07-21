@@ -1553,6 +1553,21 @@ const EXPLICIT_ANSWER_CANDIDATE_KEYS = new Map([
     ['answercandidate', { kind: 'singular', finalizable: false }],
     ['answercandidates', { kind: 'ranked', finalizable: false }]
 ]);
+const ANSWER_CANDIDATE_SOURCE_PRIORITY = {
+    model_submission: 100,
+    task_handoff_candidate: 90,
+    tool_explicit_candidate: 50
+};
+
+function compareAnswerCandidatesForRetention(left = {}, right = {}) {
+    return Number(right.selected) - Number(left.selected) ||
+        Number(right.finalizable) - Number(left.finalizable) ||
+        (ANSWER_CANDIDATE_SOURCE_PRIORITY[right.source] || 0) -
+            (ANSWER_CANDIDATE_SOURCE_PRIORITY[left.source] || 0) ||
+        Number(right.confidence || 0) - Number(left.confidence || 0) ||
+        Number(right.score || 0) - Number(left.score || 0) ||
+        Number(right.iteration || 0) - Number(left.iteration || 0);
+}
 
 function normalizeAnswerCandidateEvidenceRefs(value = []) {
     const refs = [];
@@ -1635,9 +1650,11 @@ function mergeAnswerCandidateLedger(current = [], incoming = [], limit = 32) {
             merged.set(key, normalized);
         }
     }
-    return [...merged.values()]
-        .sort((left, right) => Number(left.iteration) - Number(right.iteration))
-        .slice(-Math.max(1, Number(limit) || 32));
+    const boundedLimit = Math.max(1, Number(limit) || 32);
+    const retained = [...merged.values()]
+        .sort(compareAnswerCandidatesForRetention)
+        .slice(0, boundedLimit);
+    return retained.sort((left, right) => Number(left.iteration) - Number(right.iteration));
 }
 
 function collectExplicitAnswerCandidatesFromStepResult(stepResult = {}) {
@@ -1707,23 +1724,9 @@ function collectExplicitAnswerCandidatesFromStepResult(stepResult = {}) {
 }
 
 function selectBestAnswerCandidate(candidates = [], { requireFinalizable = false } = {}) {
-    const sourcePriority = {
-        model_submission: 100,
-        task_handoff_candidate: 90,
-        tool_explicit_candidate: 50
-    };
     return mergeAnswerCandidateLedger([], candidates)
         .filter((candidate) => !requireFinalizable || candidate.finalizable === true)
-        .sort((left, right) => {
-            const priorityDelta =
-                Number(right.selected) - Number(left.selected) ||
-                Number(right.finalizable) - Number(left.finalizable) ||
-                (sourcePriority[right.source] || 0) - (sourcePriority[left.source] || 0) ||
-                Number(right.confidence || 0) - Number(left.confidence || 0) ||
-                Number(right.score || 0) - Number(left.score || 0) ||
-                Number(right.iteration || 0) - Number(left.iteration || 0);
-            return priorityDelta;
-        })[0] || null;
+        .sort(compareAnswerCandidatesForRetention)[0] || null;
 }
 
 function hasCompleteToolObservationForFinalization(stepResults = []) {

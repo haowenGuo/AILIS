@@ -306,7 +306,7 @@ test('Answer candidate ledger preserves only explicit structured tool candidates
                     text: JSON.stringify({ answerCandidates: [{ answer: 'text-only-decoy' }] })
                 }],
                 structuredContent: {
-                    answerCandidates: [{ answer: 'Guatemala', score: 61 }],
+                    answerCandidates: [{ answer: 'alternate candidate', score: 61 }],
                     bestAnswerCandidate: {
                         answer: '4',
                         finalizable: true,
@@ -320,7 +320,7 @@ test('Answer candidate ledger preserves only explicit structured tool candidates
     };
 
     const candidates = collectExplicitAnswerCandidatesFromStepResult(stepResult);
-    assert.deepEqual(candidates.map((candidate) => candidate.answer).sort(), ['4', 'Guatemala']);
+    assert.deepEqual(candidates.map((candidate) => candidate.answer).sort(), ['4', 'alternate candidate']);
     assert.equal(candidates.some((candidate) => candidate.answer === 'text-only-decoy'), false);
     assert.equal(candidates.some((candidate) => candidate.answer === 'must-not-be-collected'), false);
     const best = selectBestAnswerCandidate(candidates, { requireFinalizable: true });
@@ -358,6 +358,27 @@ test('Answer candidate ledger keeps model decisions authoritative over tool rank
     }]);
 
     assert.equal(selectBestAnswerCandidate(ledger).answer, 'model candidate');
+});
+
+test('Answer candidate ledger retains an early final answer when later tentative candidates exceed its limit', () => {
+    const ledger = mergeAnswerCandidateLedger([], [{
+        answer: 'preserved final answer',
+        source: 'model_submission',
+        kind: 'model_final',
+        selected: true,
+        finalizable: true,
+        iteration: 1
+    }, ...Array.from({ length: 40 }, (_, index) => ({
+        answer: `tentative candidate ${index + 1}`,
+        source: 'tool_explicit_candidate',
+        sourceTool: 'example_tool',
+        kind: 'ranked',
+        iteration: index + 2
+    }))]);
+
+    assert.equal(ledger.length, 32);
+    assert.equal(ledger.some((candidate) => candidate.answer === 'preserved final answer'), true);
+    assert.equal(selectBestAnswerCandidate(ledger, { requireFinalizable: true }).answer, 'preserved final answer');
 });
 
 test('Completed-with-warnings handoff returns a preserved answer instead of failure prose', () => {
