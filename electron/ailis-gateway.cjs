@@ -4277,14 +4277,12 @@ class AILISGateway extends EventEmitter {
                 .filter((anchor) => structuredAnchorKind(anchor) === parentKind)
                 .map((anchor) => anchor.toLowerCase())
         );
-        const selectionGroupCounts = updateSelectionProtocolTitleCounts(
-            selectionProtocol,
-            sourceViews
-        );
-        if (
-            selectionProtocol &&
-            comparableUrl(resolved.url) === comparableUrl(selectionProtocol.parentIndexUrl)
-        ) {
+        const isSelectionParentIndex = selectionProtocol &&
+            comparableUrl(resolved.url) === comparableUrl(selectionProtocol.parentIndexUrl);
+        const selectionGroupCounts = isSelectionParentIndex
+            ? updateSelectionProtocolTitleCounts(selectionProtocol, sourceViews)
+            : cloneJson(selectionProtocol?.groupTitleCounts || []);
+        if (isSelectionParentIndex) {
             const lineStart = Number(
                 primarySourceView.lineStart ||
                 primarySourceView.line_start ||

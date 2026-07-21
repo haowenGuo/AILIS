@@ -36,6 +36,7 @@ const {
     githubRepoRead,
     handleToolCall,
     inferPaperMetadataArgsFromScholarlyQuery,
+    isHeadlessBrowserAccessBarrier,
     loadManagedSearxngManifest,
     managedSearxngAllowedForSearch,
     managedSearxngPortCandidates,
@@ -55,6 +56,7 @@ const {
     rankSearchResultsForFollowup,
     readDocument,
     readPresentation,
+    resolveHeadlessBrowserExecutable,
     resolveSubprocessCwd,
     runPythonFile,
     stripWikiText,
@@ -412,10 +414,45 @@ test('chess_position_analyze validates a transcribed FEN with local Stockfish an
     assert.equal(result.structuredContent.sideToMove, 'black');
     assert.equal(result.structuredContent.bestMove.san, 'Rd5');
     assert.equal(result.structuredContent.bestMove.uci, 'd8d5');
+    assert.deepEqual(result.structuredContent.bestAnswerCandidate, {
+        answer: 'Rd5',
+        source: 'stockfish_engine_best_move',
+        selected: true,
+        finalizable: true,
+        confidence: 0.99
+    });
+    assert.deepEqual(result.structuredContent.answerCandidates, [
+        result.structuredContent.bestAnswerCandidate
+    ]);
     assert.ok(result.structuredContent.analysis.reachedDepth >= 8);
     assert.equal(result.structuredContent.analysis.requestedAnalysisTimeMs, 3000);
     assert.match(result.content[0].text, /best_move_san=Rd5/);
     assert.match(result.content[0].text, /board_echo:/);
+});
+
+test('resolveHeadlessBrowserExecutable accepts an available explicit browser backend', async () => {
+    const temporaryDirectory = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ailis-browser-resolver-'));
+    const executablePath = path.join(temporaryDirectory, process.platform === 'win32' ? 'browser.exe' : 'browser');
+    try {
+        await fs.promises.writeFile(executablePath, 'fixture');
+        assert.equal(
+            resolveHeadlessBrowserExecutable({ browserExecutable: executablePath }),
+            executablePath
+        );
+    } finally {
+        await fs.promises.rm(temporaryDirectory, { recursive: true, force: true });
+    }
+});
+
+test('headless screenshot fallback recognizes anti-bot pages as access barriers', () => {
+    assert.equal(
+        isHeadlessBrowserAccessBarrier('<script src="/cdn-cgi/challenge-platform/x"></script><input name="cf-turnstile-response">'),
+        true
+    );
+    assert.equal(
+        isHeadlessBrowserAccessBarrier('<main><article>Source evidence rendered successfully.</article></main>'),
+        false
+    );
 });
 
 test('run_python_file supports inline Python code for one-off benchmark calculations', async () => {
@@ -855,7 +892,49 @@ test('web_archive_lookup ranks dynamic archived URLs and opens a selected source
     });
 });
 
-test('web_archive_lookup relaxes mistaken crawl-year bounds, backs off optional URL anchors, and opens evidence in search mode', async () => {
+test('web_archive_lookup prefers answer-bearing result URLs over earlier advanced-search forms', async () => {
+    await withServer((request, response) => {
+        if (request.url.startsWith('/cdx')) {
+            response.writeHead(200, { 'content-type': 'application/json' });
+            response.end(JSON.stringify([
+                ['timestamp', 'original', 'statuscode', 'mimetype', 'digest', 'length'],
+                ['20230102030405', 'https://offline.example/Search/Advanced/topic-alpha-unknown-language-article', '200', 'text/html', 'FORM', '1200'],
+                ['20241212025015', 'https://offline.example/Search/Results/topic-alpha-unknown-language-article', '200', 'text/html', 'RESULTS', '4200']
+            ]));
+            return;
+        }
+        if (request.url.startsWith('/web/20230102030405id_/')) {
+            response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+            response.end('<html><head><title>Advanced Search</title></head><body><form><label>Query</label><input></form></body></html>');
+            return;
+        }
+        if (request.url.startsWith('/web/20241212025015id_/')) {
+            response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+            response.end('<html><head><title>Results</title></head><body><p>Country: de</p><p>Country: gt</p></body></html>');
+            return;
+        }
+        response.writeHead(404);
+        response.end('not found');
+    }, async (baseUrl) => {
+        const result = await webArchiveLookup({
+            url: 'https://offline.example/Search/',
+            mode: 'search',
+            matchType: 'prefix',
+            contains: 'topic alpha unknown language article',
+            query: 'country',
+            providers: ['internet_archive'],
+            cdxBaseUrl: `${baseUrl}/cdx`,
+            replayBaseUrl: `${baseUrl}/web`,
+            scanLimit: 500
+        });
+
+        assert.notEqual(result.isError, true, result.content[0].text);
+        assert.match(result.structuredContent.selectedCapture.originalUrl, /\/Search\/Results\//);
+        assert.match(result.content[0].text, /Country: gt/);
+    });
+});
+
+test('web_archive_lookup tries requested capture-year bounds before relaxing, backs off optional URL anchors, and opens evidence', async () => {
     let boundedRequests = 0;
     let anchorRequests = 0;
     let firstUnboundedOriginalFilters = [];
@@ -953,7 +1032,7 @@ test('web_archive_lookup relaxes mistaken crawl-year bounds, backs off optional 
         assert.match(result.content[0].text, /Universidad de San Carlos de Guatemala/);
         assert.equal(result.structuredContent.facetedSearchFilters[1].label, 'Language');
         assert.equal(result.structuredContent.facetedSearchFilters[1].values[0].value, 'Unknown');
-        assert.equal(boundedRequests, 0);
+        assert.ok(boundedRequests >= 1);
         assert.ok(anchorRequests >= 1);
         assert.ok(firstUnboundedOriginalFilters.some((value) => /unknown/i.test(value)));
         assert.equal(firstUnboundedOriginalFilters.some((value) => /121/i.test(value)), false);

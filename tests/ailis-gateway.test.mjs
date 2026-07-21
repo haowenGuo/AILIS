@@ -211,6 +211,7 @@ test('AILIS exposes Codex-style web_run and preserves refs across search and ope
             const isSectionView = request.args.url.endsWith('/section-view');
             const isPagedView = request.args.url.endsWith('/paged-view');
             const isParentIndexView = request.args.url.endsWith('/rules');
+            const isRuleChildView = request.args.url.endsWith('/rules/article-vi');
             return mcpBridgeResult('L1: opened source', {
                     contentType: 'text/html',
                     fetchBackend: 'crawl4ai_local',
@@ -235,8 +236,8 @@ test('AILIS exposes Codex-style web_run and preserves refs across search and ope
                         url: request.args.url,
                         ref_id: request.args.url,
                         line_start: isPagedView ? 58 : 1,
-                        line_end: isPagedView ? 105 : isParentIndexView ? 7 : 1,
-                        total_lines: isPagedView ? 175 : isParentIndexView ? 7 : isSectionView ? 3 : 1,
+                        line_end: isPagedView ? 105 : isParentIndexView ? 7 : isRuleChildView ? 4 : 1,
+                        total_lines: isPagedView ? 175 : isParentIndexView ? 7 : isRuleChildView ? 4 : isSectionView ? 3 : 1,
                         has_more_after: isPagedView,
                         lines: isPagedView ? [
                             { lineno: 58, text: '1. ARTICLE I. GENERAL' },
@@ -249,6 +250,11 @@ test('AILIS exposes Codex-style web_run and preserves refs across search and ope
                             { lineno: 5, text: '3. ARTICLE VII. OPINIONS AND EXPERT TESTIMONY' },
                             { lineno: 6, text: 'Rule 701. Opinion Testimony by Lay Witnesses' },
                             { lineno: 7, text: 'Rule 702. Testimony by Expert Witnesses' }
+                        ] : isRuleChildView ? [
+                            { lineno: 1, text: 'Rule 603. Oath or Affirmation to Testify Truthfully' },
+                            { lineno: 2, text: 'Rule 609. Impeachment by Evidence of a Criminal Conviction of Witnesses' },
+                            { lineno: 3, text: 'Rule 610. Religious Beliefs or Opinions of Witnesses' },
+                            { lineno: 4, text: 'Rule 615. Excluding Witnesses' }
                         ] : isSectionView ? [
                             { lineno: 1, text: '## Contents' },
                             { lineno: 2, text: '[Studio albums](https://example.test/section-view#Studio_albums)' },
@@ -658,6 +664,35 @@ test('AILIS exposes Codex-style web_run and preserves refs across search and ope
             }
         });
         assert.equal(allowedChildResponse.ok, true, JSON.stringify(allowedChildResponse));
+
+        const parentIndexAfterChildResponse = await gateway.callTool({
+            tool: 'web_run',
+            args: {
+                open: [{ ref_id: 'turn2search1', lineno: 1 }]
+            },
+            context: {
+                workspace: workspaceRoot,
+                runId: 'run-selector-partial',
+                sessionId: 'session-selector-partial',
+                iteration: 6,
+                exactAnswerMode: true,
+                currentUserMessage: 'Which article has "witnesses" in the most titles?'
+            }
+        });
+        assert.equal(parentIndexAfterChildResponse.ok, true, JSON.stringify(parentIndexAfterChildResponse));
+        assert.deepEqual(
+            parentIndexAfterChildResponse.result.structuredContent.selectionProtocol.exact_title_match_counts
+                .map((group) => [group.group, group.count]),
+            [
+                ['ARTICLE VII', 2],
+                ['ARTICLE VI', 1],
+                ['ARTICLE I', 0]
+            ]
+        );
+        assert.equal(
+            parentIndexAfterChildResponse.result.structuredContent.selectionProtocol.winning_group,
+            'ARTICLE VII'
+        );
 
         const pagedSelectorResponse = await gateway.callTool({
             tool: 'web_run',

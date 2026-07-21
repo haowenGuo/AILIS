@@ -6952,22 +6952,32 @@ function normalizeWebArchiveCapture(providerId, row = {}, args = {}) {
 function rankWebArchiveCaptures(captures = [], contains = '', options = {}) {
     const terms = webArchiveSearchTerms(contains);
     const preferEarliest = options.preferEarliest === true;
+    const preferAnswerBearing = options.preferAnswerBearing === true;
     const ranked = captures.map((capture, index) => {
         const haystack = webArchiveUrlRankingText(capture.originalUrl);
         const matchedTerms = terms.filter((term) => haystack.includes(term));
+        const url = normalizeString(capture.originalUrl);
+        const answerBearingPriority = /\/(?:results?|records?|items?|details?|documents?)(?:[/?#]|$)/i.test(url)
+            ? 2
+            : /\/(?:advanced|autocomplete|account|login)(?:[/?#]|$)/i.test(url)
+                ? -2
+                : 0;
         return {
             ...capture,
             matchedTerms,
             matchCount: matchedTerms.length,
             matchCoverage: terms.length ? Number((matchedTerms.length / terms.length).toFixed(3)) : 1,
+            answerBearingPriority,
             _index: index
         };
     });
     ranked.sort((left, right) => preferEarliest
         ? right.matchCount - left.matchCount ||
+            (preferAnswerBearing ? right.answerBearingPriority - left.answerBearingPriority : 0) ||
             left.timestamp.localeCompare(right.timestamp) ||
             left._index - right._index
         : right.matchCount - left.matchCount ||
+            (preferAnswerBearing ? right.answerBearingPriority - left.answerBearingPriority : 0) ||
             right.timestamp.localeCompare(left.timestamp) ||
             left._index - right._index
     );
@@ -7122,20 +7132,6 @@ async function webArchiveLookup(args = {}) {
     const duplicatedContentYearBounds = [requestedFromYear, requestedToYear]
         .filter(Boolean)
         .some((year) => rankingTerms.includes(String(year)));
-    if (
-        duplicatedContentYearBounds &&
-        args._captureDateBoundsRelaxed !== true
-    ) {
-        const relaxed = await webArchiveLookup({
-            ...args,
-            fromYear: 0,
-            from_year: 0,
-            toYear: 0,
-            to_year: 0,
-            _captureDateBoundsRelaxed: true
-        });
-        return annotateArchiveDateBoundsRelaxed(relaxed, requestedFromYear, requestedToYear);
-    }
     const defaultScanLimit = matchType === 'prefix'
         ? (rankingTerms.length ? 2500 : 500)
         : 120;
@@ -7252,7 +7248,10 @@ async function webArchiveLookup(args = {}) {
                         stopReason = 'server_url_selective_terms_matched_probing_broader_core';
                         continue;
                     }
-                    serverUrlProbeComplete = filteredRanking.exactMatch || matchedAnchorSetCount >= 2;
+                    const strongestFilteredCapture = filteredRanking.captures[0];
+                    const minimumMeaningfulAnchorMatches = Math.min(2, rankingTerms.length);
+                    serverUrlProbeComplete = filteredRanking.exactMatch ||
+                        Number(strongestFilteredCapture?.matchCount || 0) >= minimumMeaningfulAnchorMatches;
                     if (serverUrlProbeComplete) {
                         break;
                     }
@@ -7351,8 +7350,28 @@ async function webArchiveLookup(args = {}) {
         });
     }
     const ranked = rankWebArchiveCaptures(captures, args.contains || args.query, {
-        preferEarliest: matchType === 'prefix'
+        preferEarliest: matchType === 'prefix',
+        preferAnswerBearing: mode === 'search' || Boolean(normalizeString(args.query))
     });
+    if (
+        duplicatedContentYearBounds &&
+        matchType === 'prefix' &&
+        args._captureDateBoundsRelaxed !== true
+    ) {
+        const strongestCapture = ranked.captures[0];
+        const minimumMeaningfulMatches = Math.min(2, rankingTerms.length);
+        if (Number(strongestCapture?.matchCount || 0) < minimumMeaningfulMatches) {
+            const relaxed = await webArchiveLookup({
+                ...args,
+                fromYear: 0,
+                from_year: 0,
+                toYear: 0,
+                to_year: 0,
+                _captureDateBoundsRelaxed: true
+            });
+            return annotateArchiveDateBoundsRelaxed(relaxed, requestedFromYear, requestedToYear);
+        }
+    }
     const captureSelection = selectWebArchiveCaptures(ranked.captures, ranked.terms, maxResults);
     const selected = captureSelection.selected;
     const suggestedNextCalls = selected.slice(0, 5).map((capture) => ({
@@ -7474,6 +7493,21 @@ async function webArchiveLookup(args = {}) {
                     error: snapshotBlocked
                         ? 'archived_snapshot_access_barrier'
                         : 'archived_snapshot_no_results'
+                };
+                continue;
+            }
+            const repeatedFieldCount = (Array.isArray(snapshotDetails.repeatedLabeledFields)
+                ? snapshotDetails.repeatedLabeledFields
+                : [])
+                .reduce((sum, field) => sum + Number(field?.occurrenceCount || 0), 0);
+            const snapshotIsNavigationOnly = repeatedFieldCount === 0 &&
+                snapshotDetails.reasoningReady !== true &&
+                /\/(?:advanced|autocomplete|account|login)(?:[/?#]|$)/i.test(capture.originalUrl);
+            if (snapshotIsNavigationOnly) {
+                openAttempts[openAttempts.length - 1] = {
+                    ...openAttempts[openAttempts.length - 1],
+                    ok: false,
+                    error: 'archived_snapshot_not_answer_bearing'
                 };
                 continue;
             }
@@ -7668,6 +7702,96 @@ async function renderPage(args = {}) {
     });
 }
 
+function headlessBrowserExecutableCandidates(args = {}) {
+    const explicit = normalizeString(
+        args.browserExecutable ||
+        args.browser_executable ||
+        process.env.AILIS_HEADLESS_BROWSER_PATH
+    );
+    const candidates = [explicit];
+    if (process.platform === 'win32') {
+        candidates.push(
+            path.join(process.env.PROGRAMFILES || 'C:\\Program Files', 'Google', 'Chrome', 'Application', 'chrome.exe'),
+            path.join(process.env['PROGRAMFILES(X86)'] || 'C:\\Program Files (x86)', 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
+            path.join(process.env.PROGRAMFILES || 'C:\\Program Files', 'Microsoft', 'Edge', 'Application', 'msedge.exe')
+        );
+    } else if (process.platform === 'darwin') {
+        candidates.push(
+            '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+            '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge'
+        );
+    } else {
+        candidates.push('/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/usr/bin/chromium', '/usr/bin/chromium-browser', '/usr/bin/microsoft-edge');
+    }
+    return dedupeSearchStrings(candidates.filter(Boolean));
+}
+
+function resolveHeadlessBrowserExecutable(args = {}) {
+    return headlessBrowserExecutableCandidates(args)
+        .find((candidate) => fsSync.existsSync(candidate) && fsSync.statSync(candidate).isFile()) || '';
+}
+
+function isHeadlessBrowserAccessBarrier(html = '') {
+    return /challenge-platform|cf-chl-|cf-turnstile-response|captcha|making sure you(?:'|’)re not a bot|enable javascript and cookies to continue|正在进行安全验证|安全服务防护恶意自动程序/i.test(
+        normalizeString(html)
+    );
+}
+
+async function captureWithHeadlessBrowser(url, outputPath, args = {}, timeoutMs = 120000) {
+    const executable = resolveHeadlessBrowserExecutable(args);
+    if (!executable) {
+        return {
+            ok: false,
+            errorCode: 'headless_browser_unavailable',
+            error: 'No supported Chrome, Chromium, or Edge executable was found.'
+        };
+    }
+    await fs.mkdir(path.dirname(outputPath), { recursive: true });
+    const profileDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-headless-browser-'));
+    const width = clampNumber(args.width, 1440, 320, 3840);
+    const height = clampNumber(args.height, 10000, 480, 16000);
+    const virtualTimeBudgetMs = clampNumber(args.delayMs || args.delay_ms, 5000, 500, 30000);
+    try {
+        const processResult = await runProcess(executable, [
+            '--headless=new',
+            '--disable-gpu',
+            '--hide-scrollbars',
+            '--ignore-certificate-errors',
+            '--no-first-run',
+            '--no-default-browser-check',
+            '--disable-background-networking',
+            '--dump-dom',
+            `--user-data-dir=${profileDir}`,
+            `--window-size=${width},${height}`,
+            `--virtual-time-budget=${virtualTimeBudgetMs}`,
+            `--screenshot=${outputPath}`,
+            url
+        ], { timeoutMs });
+        const stat = processResult.exitCode === 0
+            ? await fs.stat(outputPath).catch(() => null)
+            : null;
+        if (stat?.isFile() && isHeadlessBrowserAccessBarrier(processResult.stdout)) {
+            await fs.unlink(outputPath).catch(() => {});
+            return {
+                ok: false,
+                errorCode: 'headless_browser_access_barrier',
+                error: 'The browser rendered an anti-bot or verification page instead of the requested source.',
+                backend: path.basename(executable).toLowerCase()
+            };
+        }
+        return stat?.isFile()
+            ? { ok: true, screenshotPath: outputPath, backend: path.basename(executable).toLowerCase(), stat }
+            : {
+                ok: false,
+                errorCode: processResult.timedOut ? 'headless_browser_timeout' : 'headless_browser_failed',
+                error: normalizeString(processResult.stderr || processResult.stdout, 'The headless browser did not produce a screenshot.'),
+                backend: path.basename(executable).toLowerCase()
+            };
+    } finally {
+        await fs.rm(profileDir, { recursive: true, force: true }).catch(() => {});
+    }
+}
+
 async function webpageScreenshot(args = {}) {
     const url = normalizeString(args.url || args.uri);
     if (!/^https?:\/\//i.test(url)) {
@@ -7684,38 +7808,38 @@ async function webpageScreenshot(args = {}) {
         fetchProvider: 'crawl4ai',
         fetch_provider: 'crawl4ai'
     });
-    if (!config || config.mode !== 'local_worker') {
-        return actionableErrorResult('webpage_screenshot requires the local Crawl4AI worker.', {
-            status: 'screenshot_backend_unavailable',
+    const crawl4aiResult = config?.mode === 'local_worker'
+        ? await fetchWithLocalCrawl4aiWorker(
             url,
-            failureReason: 'local_crawl4ai_worker_unavailable',
-            nextActions: [
-                'Configure the bundled local Crawl4AI worker and Playwright Chromium runtime.',
-                'Use another screenshot-capable browser or scraping connector if one is installed.'
-            ]
-        });
-    }
-    const fetched = await fetchWithLocalCrawl4aiWorker(
-        url,
-        { ...config, probe: false },
-        {
-            ...args,
-            screenshotPath: outputPath
-        },
-        timeoutMs
-    );
-    const stat = fetched.ok
+            { ...config, probe: false },
+            { ...args, screenshotPath: outputPath },
+            timeoutMs
+        )
+        : {
+            ok: false,
+            errorCode: 'local_crawl4ai_worker_unavailable',
+            error: 'The local Crawl4AI worker is not configured.'
+        };
+    const fetched = crawl4aiResult.ok
+        ? crawl4aiResult
+        : await captureWithHeadlessBrowser(url, outputPath, args, timeoutMs);
+    const stat = fetched.stat || (fetched.ok
         ? await fs.stat(fetched.screenshotPath || outputPath).catch(() => null)
-        : null;
+        : null);
     if (!fetched.ok || !stat?.isFile()) {
         return actionableErrorResult('webpage_screenshot failed.', {
             status: fetched.errorCode || 'screenshot_failed',
             url,
             failureReason: fetched.error || 'The screenshot file was not produced.',
             backend: fetched.backend,
-            nextActions: [
-                'Use a different screenshot-capable browser connector or inspect source HTML/CSS when visual layout cannot be captured.'
-            ]
+            crawl4aiFailure: crawl4aiResult.ok ? undefined : crawl4aiResult.error,
+            nextActions: fetched.errorCode === 'headless_browser_access_barrier'
+                ? [
+                    'Open another already discovered source for the same content and call webpage_screenshot on that source before returning to broad search.'
+                ]
+                : [
+                    'Use a different screenshot-capable browser connector or inspect source HTML/CSS when visual layout cannot be captured.'
+                ]
         });
     }
     const screenshotPath = path.resolve(fetched.screenshotPath || outputPath);
@@ -14612,7 +14736,18 @@ async function chessPositionAnalyze(args = {}) {
         'board_echo:',
         result.boardEcho
     ].filter(Boolean).join('\n');
-    return textResult(text, result);
+    const bestAnswerCandidate = {
+        answer: result.bestMove.san,
+        source: 'stockfish_engine_best_move',
+        selected: true,
+        finalizable: true,
+        confidence: 0.99
+    };
+    return textResult(text, {
+        ...result,
+        answerCandidates: [bestAnswerCandidate],
+        bestAnswerCandidate
+    });
 }
 
 async function youtubeVideoSearch(args = {}) {
@@ -15105,7 +15240,7 @@ const TOOLS = [
     },
     {
         name: 'webpage_screenshot',
-        description: 'Capture a browser-rendered PNG screenshot of a known public HTTP(S) page with the bundled local Crawl4AI/Playwright browser. Use when the answer depends on visual layout, indentation, columns, line breaks, color, position, charts, canvas, or other pixel evidence that Markdown/text extraction cannot preserve. The PNG is returned to the main Agent model as visual input; this tool does not call another reasoning model.',
+        description: 'Capture a browser-rendered PNG screenshot of a known public HTTP(S) page with the bundled local Crawl4AI/Playwright browser or an installed Chrome/Edge fallback. Use when the answer depends on visual layout, indentation, columns, line breaks, color, position, charts, canvas, or other pixel evidence that Markdown/text extraction cannot preserve. The PNG is returned to the main Agent model as visual input; this tool does not call another reasoning model.',
         inputSchema: {
             type: 'object',
             required: ['url'],
@@ -15642,9 +15777,12 @@ module.exports = {
     buildYouTubeOEmbedUrl,
     buildInvidiousVideoProxyUrl,
     chessPositionAnalyze,
+    captureWithHeadlessBrowser,
     classifyYtDlpFailure,
     crawl4aiFetchConfig,
     crawl4aiWorkerPath,
+    isHeadlessBrowserAccessBarrier,
+    resolveHeadlessBrowserExecutable,
     downloadFile,
     extractBingResults,
     extractArxivCandidatesFromAtom,
