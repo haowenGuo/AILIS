@@ -1,6 +1,9 @@
-const DEFAULT_BACKEND_BASE_URL = ['http:', 'https:'].includes(window.location.protocol)
-    ? window.location.origin
-    : 'https://101.133.239.56';
+const CLOUD_BACKEND_BASE_URL = 'https://101.133.239.56';
+const DEFAULT_BACKEND_BASE_URL = window.location.hostname.toLowerCase() === 'haowenguo.github.io'
+    ? CLOUD_BACKEND_BASE_URL
+    : ['http:', 'https:'].includes(window.location.protocol)
+        ? window.location.origin
+        : CLOUD_BACKEND_BASE_URL;
 const PET_CHAT_EVENT_NAME = 'ailis-chat-ui-event';
 const AILIS_AVATAR_URL = new URL('../Resources/Emotes/ailis-small/wave.png', window.location.href).href;
 
