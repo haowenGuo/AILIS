@@ -24,6 +24,7 @@ const {
     crawl4aiFetchConfig,
     extractArxivCandidatesFromAtom,
     extractBingResults,
+    extractBreakDelimitedLayoutEvidence,
     extractDuckDuckGoHtmlResults,
     extractGenericAnchorResults,
     extractGitHubRepositoryResults,
@@ -57,6 +58,7 @@ const {
     readDocument,
     readPresentation,
     resolveHeadlessBrowserExecutable,
+    resolveHeadlessScreenshotViewport,
     resolveSubprocessCwd,
     runPythonFile,
     stripWikiText,
@@ -452,6 +454,50 @@ test('headless screenshot fallback recognizes anti-bot pages as access barriers'
     assert.equal(
         isHeadlessBrowserAccessBarrier('<main><article>Source evidence rendered successfully.</article></main>'),
         false
+    );
+});
+
+test('headless screenshot defaults to a readable primary viewport and keeps full-page opt-in', () => {
+    assert.deepEqual(resolveHeadlessScreenshotViewport({}), {
+        width: 1440,
+        height: 1800,
+        fullPage: false
+    });
+    assert.deepEqual(resolveHeadlessScreenshotViewport({ fullPage: true }), {
+        width: 1440,
+        height: 10000,
+        fullPage: true
+    });
+    assert.deepEqual(resolveHeadlessScreenshotViewport({ width: 1200, height: 2400 }), {
+        width: 1200,
+        height: 2400,
+        fullPage: false
+    });
+});
+
+test('HTML layout evidence maps repeated leading whitespace to blank-line-delimited blocks', () => {
+    const evidence = extractBreakDelimitedLayoutEvidence(`
+        <div class="verse">
+            Opening line<br><br>
+First line of block two<br>
+    shifted line one<br>
+    shifted line two<br>
+Last line of block two<br><br>
+Final block line<br>
+        </div>
+    `);
+    assert.equal(evidence.status, 'differentiated_indentation_detected');
+    assert.equal(evidence.blockCount, 3);
+    assert.deepEqual(evidence.indentedBlocks, [{
+        blockIndex: 2,
+        indentedLineCount: 2,
+        leadingColumns: 4,
+        examples: ['shifted line one', 'shifted line two']
+    }]);
+
+    assert.equal(
+        extractBreakDelimitedLayoutEvidence('<div>one<br>two<br>three<br>four<br>five</div>').status,
+        'differentiated_indentation_not_detected'
     );
 });
 
@@ -4216,7 +4262,14 @@ test('web_find opens a Codex-style source viewport around a pattern', async () =
 test('open_page, find_in_page, and continue_page share one source viewport chain', async () => {
     const lines = Array.from({ length: 40 }, (_, index) => `line ${index + 1}`);
     lines[24] = 'Actual Enrollment 90';
+    let requestCount = 0;
     await withServer((request, response) => {
+        requestCount += 1;
+        if (requestCount > 1) {
+            response.writeHead(503, { 'content-type': 'text/plain; charset=utf-8' });
+            response.end('transient source failure after the first successful snapshot');
+            return;
+        }
         response.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' });
         response.end(lines.join('\n'));
     }, async (baseUrl) => {
@@ -4229,10 +4282,13 @@ test('open_page, find_in_page, and continue_page share one source viewport chain
 
         const continued = await continuePage({ url, lineno: 23, maxLines: 5, provider: 'builtin' });
         assert.match(continued.content[0].text, /Actual Enrollment 90/);
+        assert.equal(continued.structuredContent.snapshotCacheUsed, true);
 
         const found = await findInPage({ url, pattern: 'Actual Enrollment', provider: 'builtin' });
         assert.equal(found.structuredContent.matchCount, 1);
         assert.match(found.content[0].text, /Actual Enrollment 90/);
+        assert.equal(found.structuredContent.snapshotCacheUsed, true);
+        assert.equal(requestCount, 1);
     });
 });
 
@@ -4507,6 +4563,27 @@ test('web_extract_links ranks research links ahead of navigation noise and sugge
         assert.equal(result.structuredContent.suggestedNextCalls[1].tool, 'pdf_extract_text');
         assert.ok(rankLinksForResearch(result.details.links, `${baseUrl}/article`)[0].score >= rankLinksForResearch(result.details.links, `${baseUrl}/article`)[1].score);
     });
+});
+
+test('rankLinksForResearch reserves bounded link slots for child pages over root and self navigation', () => {
+    const sourceUrl = 'https://docs.example.test/collections';
+    const childLinks = [
+        { text: 'Alpha Procedure', url: 'https://docs.example.test/collections/alpha' },
+        { text: 'Beta Procedure', url: 'https://docs.example.test/collections/beta' },
+        { text: 'Gamma Procedure', url: 'https://docs.example.test/collections/gamma' },
+        { text: 'Delta Procedure', url: 'https://docs.example.test/collections/delta' },
+        { text: 'Epsilon Procedure', url: 'https://docs.example.test/collections/epsilon' }
+    ];
+    const ranked = rankLinksForResearch([
+        { text: 'Example Documentation', url: 'https://docs.example.test/' },
+        { text: 'Collections', url: sourceUrl },
+        ...childLinks
+    ], sourceUrl, 'Which is the fifth procedure alphabetically?');
+
+    assert.deepEqual(
+        new Set(ranked.slice(0, 5).map((candidate) => candidate.url)),
+        new Set(childLinks.map((candidate) => candidate.url))
+    );
 });
 
 test('web_extract_links preserves duplicate OJS issue titles and archive pagination', async () => {

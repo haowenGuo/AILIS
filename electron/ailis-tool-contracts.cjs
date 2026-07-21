@@ -999,10 +999,13 @@ const TOOL_CONTRACTS = Object.freeze({
                         ref_id: stringSchema({ minLength: 1, description: 'Reference id or public HTTP(S) URL to capture as rendered pixels.' }),
                         detail: stringSchema({ enum: ['low', 'high', 'original'], description: 'Image detail supplied to the main model. Defaults to original.' }),
                         waitFor: stringSchema({ description: 'Optional browser wait condition before capture.' }),
-                        delayMs: integerSchema({ minimum: 0, maximum: 30000, description: 'Optional delay before capture.' })
+                        delayMs: integerSchema({ minimum: 0, maximum: 30000, description: 'Optional delay before capture.' }),
+                        fullPage: booleanSchema({ description: 'Capture a tall full-page overview. Defaults to false so layout details remain legible in the primary viewport.' }),
+                        width: integerSchema({ minimum: 320, maximum: 3840, description: 'Optional browser viewport width.' }),
+                        height: integerSchema({ minimum: 480, maximum: 16000, description: 'Optional browser viewport height. Defaults to 1800, or 10000 when fullPage is true.' })
                     },
                     additionalProperties: false
-                }), { minItems: 1, maxItems: 1, description: 'Capture one browser-rendered screenshot and return it to the main model as visual tool evidence.' }),
+                }), { minItems: 1, maxItems: 1, description: 'Capture one browser-rendered screenshot and return it to the main model as visual tool evidence. The default primary viewport preserves readable detail; request fullPage only when lower-page context is required.' }),
                 archive: arraySchema(makeObjectSchema({
                     required: ['url'],
                     properties: {

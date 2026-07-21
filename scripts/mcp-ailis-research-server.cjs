@@ -11,6 +11,8 @@ const { analyzeChessPosition } = require('./ailis-stockfish-engine.cjs');
 const SERVER_INFO = { name: 'ailis_research', version: '0.1.0' };
 const PROTOCOL_VERSION = '2025-06-18';
 const MAX_FETCH_CHARS = 24000;
+const WEB_FETCH_SNAPSHOT_CACHE_LIMIT = 24;
+const webFetchSnapshotCache = new Map();
 
 function normalizeString(value, fallback = '') {
     if (typeof value !== 'string') {
@@ -34,6 +36,56 @@ function optionIsTrue(value) {
 
 function optionIsFalse(value) {
     return value === false || /^(?:false|0|no|off)$/i.test(normalizeString(value));
+}
+
+function webFetchSnapshotCacheKey(url = '') {
+    try {
+        const parsed = new URL(normalizeString(url));
+        parsed.hash = '';
+        return parsed.toString();
+    } catch {
+        return normalizeString(url);
+    }
+}
+
+function rememberWebFetchSnapshot(url = '', fetched = {}) {
+    const key = webFetchSnapshotCacheKey(url);
+    const text = typeof fetched?.text === 'string' ? fetched.text : '';
+    if (!key || !text || text.length > 2_000_000) {
+        return;
+    }
+    webFetchSnapshotCache.delete(key);
+    webFetchSnapshotCache.set(key, {
+        fetched: { ...fetched, text },
+        cachedAt: Date.now()
+    });
+    while (webFetchSnapshotCache.size > WEB_FETCH_SNAPSHOT_CACHE_LIMIT) {
+        webFetchSnapshotCache.delete(webFetchSnapshotCache.keys().next().value);
+    }
+}
+
+function reuseWebFetchSnapshot(url = '', args = {}) {
+    if (optionIsTrue(args.refresh || args.forceRefresh || args.force_refresh)) {
+        return null;
+    }
+    const requestedLine = Number(args.lineno || args.lineStart || args.line_start || 0);
+    const isContinuation = Number.isFinite(requestedLine) && requestedLine > 1;
+    const isFind = Boolean(normalizeString(args.findPattern || args.find_pattern));
+    if (!isContinuation && !isFind && !optionIsTrue(args.reuseSnapshot || args.reuse_snapshot)) {
+        return null;
+    }
+    const key = webFetchSnapshotCacheKey(url);
+    const cached = webFetchSnapshotCache.get(key);
+    if (!cached?.fetched?.text) {
+        return null;
+    }
+    webFetchSnapshotCache.delete(key);
+    webFetchSnapshotCache.set(key, cached);
+    return {
+        ...cached.fetched,
+        snapshotCacheUsed: true,
+        snapshotCachedAt: cached.cachedAt
+    };
 }
 
 async function runBoundedParallel(items = [], concurrency = 1, worker = async () => null, options = {}) {
@@ -1373,7 +1425,15 @@ function classifyResearchLink(link = {}) {
 
 function isLowSignalNavigationLink(link = {}) {
     const haystack = `${normalizeString(link.text || link.title)} ${normalizeString(link.url || link.uri)}`.toLowerCase();
-    return /\b(home|about|contact|privacy|terms|login|log in|sign in|register|subscribe|cookie|cookies|menu|share|facebook|twitter|linkedin|instagram|mastodon|rss|comment|comments|reply|print|tag|category|author profile|profile)\b/.test(haystack);
+    if (/\b(home|about|contact|privacy|terms|login|log in|sign in|register|subscribe|cookie|cookies|menu|share|facebook|twitter|linkedin|instagram|mastodon|rss|comment|comments|reply|print|tag|category|author profile|profile)\b/.test(haystack)) {
+        return true;
+    }
+    try {
+        const parsed = new URL(normalizeString(link.url || link.uri));
+        return parsed.pathname === '/' && !parsed.search && !parsed.hash;
+    } catch {
+        return false;
+    }
 }
 
 function isArchivePaginationLink({ url = '', text = '', pageUrl = '' } = {}) {
@@ -1406,8 +1466,21 @@ function scoreResearchLink(link = {}, index = 0, pageUrl = '') {
     if (/\b(pdf|paper|study|article|journal|research|doi|arxiv|abstract)\b/i.test(`${text} ${url}`)) score += 12;
     if (isLowSignalNavigationLink({ url, text })) score -= 80;
     try {
-        const linkHost = new URL(url).hostname.replace(/^www\./i, '');
-        const pageHost = pageUrl ? new URL(pageUrl).hostname.replace(/^www\./i, '') : '';
+        const linkedUrl = new URL(url);
+        const sourceUrl = pageUrl ? new URL(pageUrl) : null;
+        const linkHost = linkedUrl.hostname.replace(/^www\./i, '');
+        const pageHost = sourceUrl?.hostname.replace(/^www\./i, '') || '';
+        const linkedPath = linkedUrl.pathname.replace(/\/+$/, '') || '/';
+        const sourcePath = sourceUrl?.pathname.replace(/\/+$/, '') || '/';
+        if (
+            sourceUrl &&
+            linkedUrl.origin === sourceUrl.origin &&
+            linkedPath === sourcePath &&
+            linkedUrl.search === sourceUrl.search &&
+            !linkedUrl.hash
+        ) {
+            score -= 120;
+        }
         if (pageHost && linkHost && linkHost !== pageHost) {
             score += 8;
         }
@@ -6503,6 +6576,10 @@ function buildWebFetchResult({ url, args = {}, maxChars = MAX_FETCH_CHARS, fetch
         content_type: contentType,
         fetchBackend: fetched.backend,
         fetch_backend: fetched.backend,
+        snapshotCacheUsed: fetched.snapshotCacheUsed === true || undefined,
+        snapshot_cache_used: fetched.snapshotCacheUsed === true || undefined,
+        snapshotCachedAt: fetched.snapshotCachedAt || undefined,
+        snapshot_cached_at: fetched.snapshotCachedAt || undefined,
         proxyUsed: fetched.proxyUsed === true || undefined,
         proxy_used: fetched.proxyUsed === true || undefined,
         fallbackFrom: fetched.fallbackFrom,
@@ -6632,6 +6709,15 @@ async function webFetch(args = {}) {
     }
     const maxChars = clampNumber(args.maxChars || args.max_chars, MAX_FETCH_CHARS, 1000, 80000);
     const timeoutMs = clampNumber(args.timeoutMs || args.timeout_ms, 90000, 1000, 300000);
+    const cachedSnapshot = reuseWebFetchSnapshot(url, args);
+    if (cachedSnapshot) {
+        return buildWebFetchResult({
+            url,
+            args,
+            maxChars,
+            fetched: cachedSnapshot
+        });
+    }
     const crawl4aiAttempt = await maybeFetchWithCrawl4ai(url, args, timeoutMs);
     const wikipediaPage = crawl4aiAttempt?.ok ? null : await maybeFetchWikipediaPage(url, timeoutMs);
     const fetched = crawl4aiAttempt?.ok ? crawl4aiAttempt : wikipediaPage || await fetchText(url, timeoutMs);
@@ -6653,6 +6739,7 @@ async function webFetch(args = {}) {
     if (shouldRetryRenderedFetchAfterStaticResult({ details: primaryDetails, args, crawl4aiAttempt, fetched })) {
         const renderedFallbackAttempt = await maybeFetchWithCrawl4ai(url, buildRenderedFallbackArgs(args), timeoutMs);
         if (renderedFallbackAttempt?.ok) {
+            rememberWebFetchSnapshot(url, renderedFallbackAttempt);
             return buildWebFetchResult({
                 url,
                 args,
@@ -6668,6 +6755,7 @@ async function webFetch(args = {}) {
                 renderedFallbackTrigger: primaryDetails.evidenceQuality
             });
         }
+        rememberWebFetchSnapshot(url, fetched);
         return buildWebFetchResult({
             url,
             args,
@@ -6678,6 +6766,7 @@ async function webFetch(args = {}) {
             renderedFallbackTrigger: primaryDetails.evidenceQuality
         });
     }
+    rememberWebFetchSnapshot(url, fetched);
     return primaryResult;
 }
 
@@ -7737,6 +7826,124 @@ function isHeadlessBrowserAccessBarrier(html = '') {
     );
 }
 
+function looksLikeTextLayoutQuestion(value = '') {
+    return /\b(?:indent(?:ed|ation)?|stanza|line\s*breaks?|leading\s+spaces?|text\s+alignment|spacing)\b|缩进|诗节|段落|行距|对齐/i.test(
+        normalizeString(value)
+    );
+}
+
+function extractBreakDelimitedLayoutEvidence(html = '') {
+    const source = String(html || '')
+        .replace(/<script[\s\S]*?<\/script>/gi, '')
+        .replace(/<style[\s\S]*?<\/style>/gi, '')
+        .replace(/<!--[\s\S]*?-->/g, '');
+    const candidates = [];
+    const containerPattern = /<(div|p|pre|blockquote|td|article)\b[^>]*>([\s\S]*?)<\/\1>/gi;
+    let containerMatch;
+    while ((containerMatch = containerPattern.exec(source)) !== null) {
+        const body = containerMatch[2] || '';
+        const breakCount = (body.match(/<br\s*\/?>/gi) || []).length;
+        if (breakCount < 4) {
+            continue;
+        }
+        const layoutText = decodeHtml(body
+            .replace(/\r?\n/g, '')
+            .replace(/<br\s*\/?>/gi, '\n')
+            .replace(/<[^>]+>/g, ''));
+        const lines = [];
+        let block = 0;
+        let nextLineStartsBlock = true;
+        for (const rawLine of layoutText.split('\n')) {
+            const text = rawLine.trim();
+            if (!text) {
+                nextLineStartsBlock = true;
+                continue;
+            }
+            if (nextLineStartsBlock) {
+                block += 1;
+                nextLineStartsBlock = false;
+            }
+            const prefix = rawLine.match(/^[ \t]*/)?.[0] || '';
+            const leadingColumns = [...prefix]
+                .reduce((sum, character) => sum + (character === '\t' ? 4 : 1), 0);
+            lines.push({ block, text: compactWhitespace(text), leadingColumns });
+        }
+        if (lines.length < 4) {
+            continue;
+        }
+        const baseline = Math.min(...lines.map((line) => line.leadingColumns));
+        const indentedByBlock = new Map();
+        for (const line of lines) {
+            if (line.leadingColumns < baseline + 2) {
+                continue;
+            }
+            const blockLines = indentedByBlock.get(line.block) || [];
+            blockLines.push(line);
+            indentedByBlock.set(line.block, blockLines);
+        }
+        const indentedBlocks = [...indentedByBlock.entries()]
+            .filter(([, blockLines]) => blockLines.length >= 2)
+            .map(([blockIndex, blockLines]) => ({
+                blockIndex,
+                indentedLineCount: blockLines.length,
+                leadingColumns: Math.min(...blockLines.map((line) => line.leadingColumns)) - baseline,
+                examples: blockLines.slice(0, 4).map((line) => line.text)
+            }))
+            .sort((left, right) =>
+                right.indentedLineCount - left.indentedLineCount ||
+                left.blockIndex - right.blockIndex
+            );
+        candidates.push({
+            breakCount,
+            lineCount: lines.length,
+            blockCount: Math.max(...lines.map((line) => line.block)),
+            indentedBlocks
+        });
+    }
+    const best = candidates
+        .filter((candidate) => candidate.indentedBlocks.length)
+        .sort((left, right) => {
+            const leftIndented = left.indentedBlocks.reduce((sum, block) => sum + block.indentedLineCount, 0);
+            const rightIndented = right.indentedBlocks.reduce((sum, block) => sum + block.indentedLineCount, 0);
+            return rightIndented - leftIndented || right.lineCount - left.lineCount;
+        })[0];
+    if (!best) {
+        return {
+            status: 'differentiated_indentation_not_detected',
+            blockBoundary: 'blank-line-delimited_text_blocks',
+            indentedBlocks: []
+        };
+    }
+    return {
+        status: 'differentiated_indentation_detected',
+        blockBoundary: 'blank-line-delimited_text_blocks',
+        blockCount: best.blockCount,
+        lineCount: best.lineCount,
+        indentedBlocks: best.indentedBlocks
+    };
+}
+
+function formatLayoutEvidence(layoutEvidence = null) {
+    if (layoutEvidence?.status !== 'differentiated_indentation_detected') {
+        return [];
+    }
+    return [
+        'Static HTML layout evidence (blank-line-delimited text blocks):',
+        ...layoutEvidence.indentedBlocks.map((block) =>
+            `- Block ${block.blockIndex}: ${block.indentedLineCount} line(s) use at least +${block.leadingColumns} leading columns (${block.examples.join(' | ')})`
+        )
+    ];
+}
+
+function resolveHeadlessScreenshotViewport(args = {}) {
+    const fullPage = optionIsTrue(args.fullPage ?? args.full_page);
+    return {
+        width: clampNumber(args.width, 1440, 320, 3840),
+        height: clampNumber(args.height, fullPage ? 10000 : 1800, 480, 16000),
+        fullPage
+    };
+}
+
 async function captureWithHeadlessBrowser(url, outputPath, args = {}, timeoutMs = 120000) {
     const executable = resolveHeadlessBrowserExecutable(args);
     if (!executable) {
@@ -7748,8 +7955,8 @@ async function captureWithHeadlessBrowser(url, outputPath, args = {}, timeoutMs 
     }
     await fs.mkdir(path.dirname(outputPath), { recursive: true });
     const profileDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-headless-browser-'));
-    const width = clampNumber(args.width, 1440, 320, 3840);
-    const height = clampNumber(args.height, 10000, 480, 16000);
+    const viewport = resolveHeadlessScreenshotViewport(args);
+    const { width, height } = viewport;
     const virtualTimeBudgetMs = clampNumber(args.delayMs || args.delay_ms, 5000, 500, 30000);
     try {
         const processResult = await runProcess(executable, [
@@ -7780,7 +7987,13 @@ async function captureWithHeadlessBrowser(url, outputPath, args = {}, timeoutMs 
             };
         }
         return stat?.isFile()
-            ? { ok: true, screenshotPath: outputPath, backend: path.basename(executable).toLowerCase(), stat }
+            ? {
+                ok: true,
+                screenshotPath: outputPath,
+                backend: path.basename(executable).toLowerCase(),
+                stat,
+                viewport
+            }
             : {
                 ok: false,
                 errorCode: processResult.timedOut ? 'headless_browser_timeout' : 'headless_browser_failed',
@@ -7823,9 +8036,31 @@ async function webpageScreenshot(args = {}) {
     const fetched = crawl4aiResult.ok
         ? crawl4aiResult
         : await captureWithHeadlessBrowser(url, outputPath, args, timeoutMs);
+    let layoutEvidence = null;
+    if (looksLikeTextLayoutQuestion(args.query)) {
+        const sourceFetch = await fetchText(url, Math.min(timeoutMs, 30000));
+        if (sourceFetch.ok && /html/i.test(normalizeString(sourceFetch.contentType))) {
+            layoutEvidence = extractBreakDelimitedLayoutEvidence(sourceFetch.text);
+        }
+    }
     const stat = fetched.stat || (fetched.ok
         ? await fs.stat(fetched.screenshotPath || outputPath).catch(() => null)
         : null);
+    if ((!fetched.ok || !stat?.isFile()) && layoutEvidence?.status === 'differentiated_indentation_detected') {
+        return textResult([
+            'The browser screenshot was unavailable, but the public source HTML preserves differentiated indentation.',
+            ...formatLayoutEvidence(layoutEvidence),
+            'Use these block numbers only for text groups separated by blank lines. The evidence does not claim that ordinary browser source-code formatting is visual indentation.'
+        ].join('\n'), {
+            status: 'partial_layout_evidence',
+            url,
+            screenshotStatus: fetched.errorCode || 'screenshot_failed',
+            screenshotFailureReason: fetched.error || 'The screenshot file was not produced.',
+            backend: fetched.backend,
+            layoutEvidence,
+            reasoningReady: true
+        });
+    }
     if (!fetched.ok || !stat?.isFile()) {
         return actionableErrorResult('webpage_screenshot failed.', {
             status: fetched.errorCode || 'screenshot_failed',
@@ -7843,9 +8078,21 @@ async function webpageScreenshot(args = {}) {
         });
     }
     const screenshotPath = path.resolve(fetched.screenshotPath || outputPath);
+    const viewport = fetched.viewport || resolveHeadlessScreenshotViewport(args);
+    const captureMode = viewport.fullPage ? 'full page overview' : 'primary viewport';
+    const layoutAuditText = layoutEvidence?.status === 'differentiated_indentation_detected'
+        ? formatLayoutEvidence(layoutEvidence)
+        : layoutEvidence
+        ? [
+            'Static HTML indentation audit: no repeated differentiated leading-whitespace run was preserved in the source line text.',
+            'For questions about original indentation, treat this rendered copy as potentially reformatted and compare another source before finalizing.'
+        ]
+        : [];
     return textResult([
         `Captured a browser-rendered screenshot of ${url}`,
         `Path: ${screenshotPath}`,
+        `Capture mode: ${captureMode} (${viewport.width}x${viewport.height}).`,
+        ...layoutAuditText,
         'The screenshot is attached to the next model turn as visual input. Inspect the pixels before answering layout, indentation, color, position, chart, or canvas questions.'
     ].join('\n'), {
         status: 'completed',
@@ -7854,6 +8101,9 @@ async function webpageScreenshot(args = {}) {
         bytes: stat.size,
         contentType: 'image/png',
         backend: fetched.backend,
+        captureMode: viewport.fullPage ? 'full_page' : 'primary_viewport',
+        viewport,
+        ...(layoutEvidence ? { layoutEvidence } : {}),
         modelImage: {
             image_url: screenshotPath,
             detail: normalizeString(args.detail, 'original')
@@ -15240,7 +15490,7 @@ const TOOLS = [
     },
     {
         name: 'webpage_screenshot',
-        description: 'Capture a browser-rendered PNG screenshot of a known public HTTP(S) page with the bundled local Crawl4AI/Playwright browser or an installed Chrome/Edge fallback. Use when the answer depends on visual layout, indentation, columns, line breaks, color, position, charts, canvas, or other pixel evidence that Markdown/text extraction cannot preserve. The PNG is returned to the main Agent model as visual input; this tool does not call another reasoning model.',
+        description: 'Capture a browser-rendered PNG screenshot of a known public HTTP(S) page with the bundled local Crawl4AI/Playwright browser or an installed Chrome/Edge fallback. Use when the answer depends on visual layout, indentation, columns, line breaks, color, position, charts, canvas, or other pixel evidence that Markdown/text extraction cannot preserve. The default 1440x1800 primary viewport keeps text and spacing legible; request fullPage only when lower-page or whole-page context is necessary. The PNG is returned to the main Agent model as visual input; this tool does not call another reasoning model.',
         inputSchema: {
             type: 'object',
             required: ['url'],
@@ -15253,6 +15503,10 @@ const TOOLS = [
                 wait_for: { type: 'string' },
                 delayMs: { type: 'integer', minimum: 0, maximum: 30000 },
                 delay_ms: { type: 'integer', minimum: 0, maximum: 30000 },
+                fullPage: { type: 'boolean', description: 'Capture a tall full-page overview instead of the default readable primary viewport.' },
+                full_page: { type: 'boolean', description: 'Snake-case alias for fullPage.' },
+                width: { type: 'integer', minimum: 320, maximum: 3840 },
+                height: { type: 'integer', minimum: 480, maximum: 16000 },
                 timeoutMs: { type: 'integer', minimum: 30000, maximum: 300000 }
             },
             additionalProperties: false
@@ -15782,6 +16036,8 @@ module.exports = {
     crawl4aiFetchConfig,
     crawl4aiWorkerPath,
     isHeadlessBrowserAccessBarrier,
+    extractBreakDelimitedLayoutEvidence,
+    resolveHeadlessScreenshotViewport,
     resolveHeadlessBrowserExecutable,
     downloadFile,
     extractBingResults,
