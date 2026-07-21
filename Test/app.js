@@ -26,8 +26,12 @@ const state = {
     backendState: 'checking',
     modelReady: false,
     chatReady: false,
-    busy: false
+    busy: false,
+    followLatestMessage: true,
+    scrollFrame: 0
 };
+
+const MESSAGE_BOTTOM_THRESHOLD = 72;
 
 function normalizeBackendBaseUrl(value) {
     try {
@@ -124,8 +128,31 @@ function createMessageRow(message) {
     return row;
 }
 
-function scrollMessages() {
-    elements.messageList.scrollTop = elements.messageList.scrollHeight;
+function isMessageListNearBottom() {
+    const remaining = elements.messageList.scrollHeight
+        - elements.messageList.clientHeight
+        - elements.messageList.scrollTop;
+    return remaining <= MESSAGE_BOTTOM_THRESHOLD;
+}
+
+function scrollMessages({ force = false } = {}) {
+    if (!force && !state.followLatestMessage) {
+        return;
+    }
+
+    state.followLatestMessage = true;
+    if (state.scrollFrame) {
+        window.cancelAnimationFrame(state.scrollFrame);
+    }
+    state.scrollFrame = window.requestAnimationFrame(() => {
+        state.scrollFrame = 0;
+        elements.messageList.scrollTop = elements.messageList.scrollHeight;
+        window.requestAnimationFrame(() => {
+            if (state.followLatestMessage) {
+                elements.messageList.scrollTop = elements.messageList.scrollHeight;
+            }
+        });
+    });
 }
 
 function upsertMessage(message) {
@@ -133,6 +160,7 @@ function upsertMessage(message) {
         return;
     }
 
+    const shouldFollow = state.followLatestMessage || isMessageListNearBottom();
     clearLocalMessage();
     const escapedId = CSS.escape(String(message.id));
     let row = elements.messageList.querySelector(`[data-message-id="${escapedId}"]`);
@@ -152,7 +180,7 @@ function upsertMessage(message) {
 
     const bubble = row.querySelector('.message');
     bubble.textContent = message.content || (nextRole === 'loading' ? 'AILIS 正在想' : '');
-    scrollMessages();
+    scrollMessages({ force: shouldFollow });
 }
 
 function removeMessage(id) {
@@ -298,8 +326,10 @@ async function sendPrompt(content) {
     }
 
     elements.chatInput.value = '';
+    state.followLatestMessage = true;
     resizeInput();
     updateComposer();
+    scrollMessages({ force: true });
 
     try {
         await petWindow.chatSystem.sendExternalMessage(text);
@@ -325,6 +355,9 @@ function configurePetFrame() {
 }
 
 elements.petFrame.addEventListener('load', attachPetWindow);
+elements.messageList.addEventListener('scroll', () => {
+    state.followLatestMessage = isMessageListNearBottom();
+}, { passive: true });
 elements.chatInput.addEventListener('input', () => {
     resizeInput();
     updateComposer();

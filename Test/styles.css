@@ -627,7 +627,11 @@ svg {
 
 @media (max-width: 760px) {
     .app-shell {
-        display: block;
+        height: 100dvh;
+        min-height: 0;
+        display: grid;
+        grid-template-rows: 56px minmax(0, 1fr);
+        overflow: hidden;
     }
 
     .topbar {
@@ -654,10 +658,11 @@ svg {
     }
 
     .experience {
-        min-height: calc(100dvh - 56px);
+        min-height: 0;
+        height: 100%;
         display: grid;
         grid-template-columns: 1fr;
-        grid-template-rows: minmax(300px, 42dvh) minmax(500px, 58dvh);
+        grid-template-rows: minmax(240px, 38fr) minmax(0, 62fr);
         gap: 8px;
         padding: 8px;
     }
