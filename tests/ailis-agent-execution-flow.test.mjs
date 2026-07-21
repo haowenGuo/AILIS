@@ -14,7 +14,13 @@ const {
     buildToolResultEvent,
     buildToolObservationDigest,
     buildLosslessToolObservationDigest,
+    buildTaskRunHandoffPackage,
     buildAgentDecisionLowLatencyPayload,
+    collectExplicitAnswerCandidatesFromStepResult,
+    mergeAnswerCandidateLedger,
+    selectBestAnswerCandidate,
+    hasCompleteToolObservationForFinalization,
+    resolvePostToolFinalizationDecisionTimeoutMs,
     buildExactAnswerRecoveryToolAffordanceNote,
     canStartExactAnswerAuditRecovery,
     isExactAnswerExecutionMode,
@@ -283,6 +289,144 @@ test('Agent decision timeout gives artifact and exact-answer tasks a 300s budget
     }), 300000);
     assert.equal(resolveAgentDecisionTimeoutMs({}, {
         stepResults: [{ tool: 'artifact_tools', response: { ok: true } }]
+    }), 300000);
+});
+
+test('Answer candidate ledger preserves only explicit structured tool candidates', () => {
+    const stepResult = {
+        id: 'presentation-result',
+        iteration: 3,
+        tool: 'mcp__ailis_research__read_presentation',
+        response: {
+            ok: true,
+            status: 'completed',
+            result: {
+                content: [{
+                    type: 'text',
+                    text: JSON.stringify({ answerCandidates: [{ answer: 'text-only-decoy' }] })
+                }],
+                structuredContent: {
+                    answerCandidates: [{ answer: 'Guatemala', score: 61 }],
+                    bestAnswerCandidate: {
+                        answer: '4',
+                        finalizable: true,
+                        confidence: 0.94,
+                        evidenceRefs: ['artifact-presentation']
+                    },
+                    unrelated: { answer: 'must-not-be-collected' }
+                }
+            }
+        }
+    };
+
+    const candidates = collectExplicitAnswerCandidatesFromStepResult(stepResult);
+    assert.deepEqual(candidates.map((candidate) => candidate.answer).sort(), ['4', 'Guatemala']);
+    assert.equal(candidates.some((candidate) => candidate.answer === 'text-only-decoy'), false);
+    assert.equal(candidates.some((candidate) => candidate.answer === 'must-not-be-collected'), false);
+    const best = selectBestAnswerCandidate(candidates, { requireFinalizable: true });
+    assert.equal(best.answer, '4');
+    assert.equal(best.selected, true);
+    assert.equal(best.finalizable, true);
+    assert.deepEqual(best.evidenceRefs, ['artifact-presentation']);
+
+    const tentative = collectExplicitAnswerCandidatesFromStepResult({
+        ...stepResult,
+        response: {
+            ...stepResult.response,
+            result: { structuredContent: { bestAnswerCandidate: { answer: 'tentative' } } }
+        }
+    });
+    assert.equal(selectBestAnswerCandidate(tentative)?.answer, 'tentative');
+    assert.equal(selectBestAnswerCandidate(tentative, { requireFinalizable: true }), null);
+});
+
+test('Answer candidate ledger keeps model decisions authoritative over tool rankings', () => {
+    const ledger = mergeAnswerCandidateLedger([], [{
+        answer: 'tool candidate',
+        source: 'tool_explicit_candidate',
+        kind: 'best',
+        selected: true,
+        finalizable: true,
+        iteration: 4
+    }, {
+        answer: 'model candidate',
+        source: 'model_submission',
+        kind: 'model_final',
+        selected: true,
+        finalizable: true,
+        iteration: 2
+    }]);
+
+    assert.equal(selectBestAnswerCandidate(ledger).answer, 'model candidate');
+});
+
+test('Completed-with-warnings handoff returns a preserved answer instead of failure prose', () => {
+    const candidate = {
+        answer: '4',
+        source: 'model_submission',
+        kind: 'model_final',
+        selected: true,
+        finalizable: true,
+        evidenceRefs: ['artifact-presentation']
+    };
+    const handoff = buildTaskRunHandoffPackage({
+        status: 'completed_with_warnings',
+        reason: 'provider_timeout_after_candidate',
+        finalAnswer: '4',
+        answerCandidates: [candidate],
+        bestAnswerCandidate: candidate
+    });
+
+    assert.equal(handoff.ok, true);
+    assert.equal(handoff.userVisibleSummary, '4');
+    assert.equal(handoff.bestAnswerCandidate.answer, '4');
+});
+
+test('Complete untruncated tool observations reserve a bounded exact-answer finalization window', () => {
+    const stepResults = [{
+        id: 'read-presentation',
+        tool: 'mcp__ailis_research__read_presentation',
+        response: {
+            ok: true,
+            status: 'completed',
+            result: {
+                structuredContent: {
+                    observationContract: {
+                        complete: true,
+                        truncated: false,
+                        coverage: { totalSlides: 8, returnedSlides: 8 }
+                    }
+                }
+            }
+        }
+    }];
+
+    assert.equal(hasCompleteToolObservationForFinalization(stepResults), true);
+    assert.equal(resolvePostToolFinalizationDecisionTimeoutMs(300000, {
+        exactAnswerMode: true,
+        stepResults,
+        requestContext: {}
+    }), 120000);
+    assert.equal(resolvePostToolFinalizationDecisionTimeoutMs(300000, {
+        exactAnswerMode: true,
+        stepResults,
+        requestContext: { postToolFinalizationTimeoutMs: 45000 }
+    }), 45000);
+    assert.equal(resolvePostToolFinalizationDecisionTimeoutMs(300000, {
+        exactAnswerMode: false,
+        stepResults,
+        requestContext: {}
+    }), 300000);
+    assert.equal(resolvePostToolFinalizationDecisionTimeoutMs(300000, {
+        exactAnswerMode: true,
+        stepResults: [{
+            ...stepResults[0],
+            response: {
+                ...stepResults[0].response,
+                result: { structuredContent: { observationContract: { complete: false } } }
+            }
+        }],
+        requestContext: {}
     }), 300000);
 });
 

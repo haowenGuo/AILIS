@@ -5,7 +5,7 @@ const { randomUUID } = require('crypto');
 const CAPSULE_STORE_VERSION = 2;
 const MAX_CAPSULES = 500;
 const MAX_ACTIVE_TASKS = 50;
-const REUSABLE_STATUSES = new Set(['completed', 'success', 'succeeded']);
+const REUSABLE_STATUSES = new Set(['completed', 'completed_with_warnings', 'success', 'succeeded']);
 const GENERIC_QUERY_TOKENS = new Set([
     '一下', '一个', '这个', '那个', '帮我', '看看', '请问', '怎么', '什么', '如何',
     '攻略', '结果', '内容', '任务', '问题', '资料', '信息', '分析', '介绍'
@@ -385,7 +385,7 @@ class AILISTaskResultCapsuleStore {
                 !taskId ||
                 existingTaskIds.has(taskId) ||
                 !intent.includes('subagents') ||
-                !['completed', 'success', 'succeeded'].includes(status) ||
+                !REUSABLE_STATUSES.has(status) ||
                 !userText ||
                 !assistantText
             ) {

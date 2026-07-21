@@ -1548,6 +1548,228 @@ function getToolResultDetails(stepResult = {}) {
     return [...candidates, ...nestedCandidates].reduce((merged, entry) => ({ ...merged, ...entry }), {});
 }
 
+const EXPLICIT_ANSWER_CANDIDATE_KEYS = new Map([
+    ['bestanswercandidate', { kind: 'best', finalizable: false }],
+    ['answercandidate', { kind: 'singular', finalizable: false }],
+    ['answercandidates', { kind: 'ranked', finalizable: false }]
+]);
+
+function normalizeAnswerCandidateEvidenceRefs(value = []) {
+    const refs = [];
+    for (const item of normalizeArrayValue(value)) {
+        const ref = normalizeText(
+            typeof item === 'string' ? item : item?.id || item?.ref || item?.ref_id || item?.evidenceId
+        );
+        if (ref && !refs.includes(ref)) {
+            refs.push(ref);
+        }
+    }
+    return refs.slice(0, 16);
+}
+
+function normalizePreservedAnswerCandidate(value, metadata = {}) {
+    const objectValue = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+    const scalarValue = ['string', 'number', 'boolean'].includes(typeof value) ? value : '';
+    const answer = stripControlTags(normalizeText(
+        scalarValue ||
+            objectValue.answer ||
+            objectValue.value ||
+            objectValue.exactAnswer ||
+            objectValue.exact_answer ||
+            objectValue.finalAnswer ||
+            objectValue.final_answer ||
+            objectValue.candidate
+    ));
+    if (!answer) {
+        return null;
+    }
+    const confidence = Number(objectValue.confidence ?? metadata.confidence);
+    const score = Number(objectValue.score ?? objectValue.rankScore ?? metadata.score);
+    const selected = metadata.selected === true ||
+        objectValue.selected === true ||
+        objectValue.isBest === true ||
+        objectValue.is_best === true ||
+        objectValue.status === 'selected';
+    const finalizable = metadata.finalizable === true ||
+        objectValue.finalizable === true ||
+        objectValue.readyForFinal === true ||
+        objectValue.ready_for_final === true;
+    return {
+        answer,
+        personaText: stripControlTags(normalizeText(
+            objectValue.personaText || objectValue.persona_text || metadata.personaText || answer
+        )),
+        reason: normalizeText(objectValue.reason || objectValue.rationale || metadata.reason),
+        evidenceRefs: normalizeAnswerCandidateEvidenceRefs(
+            objectValue.evidenceRefs || objectValue.evidence_refs || metadata.evidenceRefs
+        ),
+        source: normalizeText(metadata.source || objectValue.source, 'tool_explicit_candidate'),
+        sourceTool: normalizeText(metadata.sourceTool || objectValue.sourceTool || objectValue.source_tool),
+        sourceStepId: normalizeText(metadata.sourceStepId || objectValue.sourceStepId || objectValue.source_step_id),
+        sourcePath: normalizeText(metadata.sourcePath),
+        kind: normalizeText(metadata.kind || objectValue.kind, 'singular'),
+        iteration: Number.isFinite(Number(metadata.iteration)) ? Number(metadata.iteration) : 0,
+        selected,
+        finalizable,
+        ...(Number.isFinite(confidence) ? { confidence } : {}),
+        ...(Number.isFinite(score) ? { score } : {})
+    };
+}
+
+function mergeAnswerCandidateLedger(current = [], incoming = [], limit = 32) {
+    const merged = new Map();
+    for (const candidate of [...normalizeArrayValue(current), ...normalizeArrayValue(incoming)]) {
+        const normalized = normalizePreservedAnswerCandidate(candidate, candidate);
+        if (!normalized) continue;
+        const key = [
+            normalized.answer.toLowerCase(),
+            normalized.source,
+            normalized.sourceTool,
+            normalized.kind
+        ].join('\u0000');
+        const existing = merged.get(key);
+        if (!existing || (
+            Number(normalized.finalizable) + Number(normalized.selected) >
+            Number(existing.finalizable) + Number(existing.selected)
+        )) {
+            merged.set(key, normalized);
+        }
+    }
+    return [...merged.values()]
+        .sort((left, right) => Number(left.iteration) - Number(right.iteration))
+        .slice(-Math.max(1, Number(limit) || 32));
+}
+
+function collectExplicitAnswerCandidatesFromStepResult(stepResult = {}) {
+    const response = stepResult.response || {};
+    const candidates = [];
+    const visited = new Set();
+    let visitedNodes = 0;
+    const baseMetadata = {
+        source: 'tool_explicit_candidate',
+        sourceTool: canonicalDirectToolId(stepResult.tool),
+        sourceStepId: stepResult.id,
+        iteration: Number(stepResult.iteration) || 0
+    };
+    const pushCandidate = (value, metadata = {}) => {
+        const normalized = normalizePreservedAnswerCandidate(value, {
+            ...baseMetadata,
+            ...metadata,
+            finalizable: response.ok === true && metadata.finalizable === true
+        });
+        if (normalized) candidates.push(normalized);
+    };
+    const visit = (value, depth = 0, path = '') => {
+        if (!value || typeof value !== 'object' || depth > 8 || visitedNodes >= 2000) return;
+        if (visited.has(value)) return;
+        visited.add(value);
+        visitedNodes += 1;
+        if (Array.isArray(value)) {
+            value.slice(0, 200).forEach((item, index) => visit(item, depth + 1, `${path}[${index}]`));
+            return;
+        }
+        for (const [key, nested] of Object.entries(value)) {
+            const normalizedKey = key.toLowerCase().replace(/[^a-z]/g, '');
+            const candidateContract = EXPLICIT_ANSWER_CANDIDATE_KEYS.get(normalizedKey);
+            if (candidateContract) {
+                const values = candidateContract.kind === 'ranked' ? normalizeArrayValue(nested) : [nested];
+                values.slice(0, 12).forEach((candidate, index) => pushCandidate(candidate, {
+                    kind: candidateContract.kind,
+                    finalizable: candidateContract.finalizable,
+                    selected: candidateContract.kind === 'best',
+                    sourcePath: `${path}.${key}${candidateContract.kind === 'ranked' ? `[${index}]` : ''}`
+                }));
+            }
+            if (normalizedKey === 'taskrunhandoff' || normalizedKey === 'taskresult') {
+                const handoff = nested && typeof nested === 'object' && !Array.isArray(nested) ? nested : {};
+                const status = normalizeText(handoff.status).toLowerCase();
+                const answer = handoff.exactAnswer || handoff.exact_answer || handoff.finalAnswer || handoff.final_answer;
+                if (answer) {
+                    pushCandidate({
+                        answer,
+                        evidenceRefs: handoff.evidenceRefs || handoff.evidence_refs || handoff.sourceRefs || handoff.source_refs
+                    }, {
+                        source: 'task_handoff_candidate',
+                        kind: 'handoff',
+                        selected: status.startsWith('completed') || ['success', 'succeeded'].includes(status),
+                        finalizable: status.startsWith('completed') || ['success', 'succeeded'].includes(status),
+                        sourcePath: `${path}.${key}`
+                    });
+                }
+            }
+            if (nested && typeof nested === 'object') {
+                visit(nested, depth + 1, `${path}.${key}`);
+            }
+        }
+    };
+    visit(response, 0, 'response');
+    return mergeAnswerCandidateLedger([], candidates);
+}
+
+function selectBestAnswerCandidate(candidates = [], { requireFinalizable = false } = {}) {
+    const sourcePriority = {
+        model_submission: 100,
+        task_handoff_candidate: 90,
+        tool_explicit_candidate: 50
+    };
+    return mergeAnswerCandidateLedger([], candidates)
+        .filter((candidate) => !requireFinalizable || candidate.finalizable === true)
+        .sort((left, right) => {
+            const priorityDelta =
+                Number(right.selected) - Number(left.selected) ||
+                Number(right.finalizable) - Number(left.finalizable) ||
+                (sourcePriority[right.source] || 0) - (sourcePriority[left.source] || 0) ||
+                Number(right.confidence || 0) - Number(left.confidence || 0) ||
+                Number(right.score || 0) - Number(left.score || 0) ||
+                Number(right.iteration || 0) - Number(left.iteration || 0);
+            return priorityDelta;
+        })[0] || null;
+}
+
+function hasCompleteToolObservationForFinalization(stepResults = []) {
+    const workSteps = normalizeArrayValue(stepResults).filter((stepResult) => {
+        const toolId = canonicalDirectToolId(stepResult?.tool);
+        return toolId && !isCollaborationTool(toolId) && !['tool_search', 'update_plan'].includes(toolId);
+    });
+    const latest = workSteps.at(-1);
+    if (!latest || latest.response?.ok !== true) return false;
+    if (collectExplicitAnswerCandidatesFromStepResult(latest).length) return true;
+    const details = getToolResultDetails(latest);
+    const contracts = [
+        details.observationContract,
+        details.observation_contract,
+        details
+    ].filter((value) => value && typeof value === 'object');
+    return contracts.some((contract) =>
+        contract.complete === true &&
+        contract.truncated !== true &&
+        contract.outputTruncatedForModel !== true &&
+        contract.output_truncated_for_model !== true
+    );
+}
+
+function resolvePostToolFinalizationDecisionTimeoutMs(baseTimeoutMs, {
+    exactAnswerMode = false,
+    stepResults = [],
+    requestContext = {}
+} = {}) {
+    const base = Math.max(1, Number(baseTimeoutMs) || DEFAULT_AGENT_DECISION_TIMEOUT_MS);
+    if (
+        exactAnswerMode !== true ||
+        requestContext.disablePostToolFinalizationDeadline === true ||
+        !hasCompleteToolObservationForFinalization(stepResults)
+    ) {
+        return base;
+    }
+    const configured = Number(
+        requestContext.postToolFinalizationTimeoutMs ||
+        requestContext.post_tool_finalization_timeout_ms ||
+        120000
+    );
+    const cap = Math.min(300000, Math.max(15000, Number.isFinite(configured) ? configured : 120000));
+    return Math.min(base, cap);
+}
+
 function collectAgentUnresolvedFields(stepResults = [], latestDecision = null) {
     const values = [];
     const push = (value) => {
@@ -5626,7 +5848,7 @@ function buildTaskRunHandoffDisplayText(handoff = {}) {
     const failure = handoff.failureAnalysis || {};
     const evidence = Array.isArray(handoff.collectedData) ? handoff.collectedData : [];
     const lines = [];
-    if (handoff.status === 'completed') {
+    if (handoff.ok === true || normalizeText(handoff.status).toLowerCase().startsWith('completed')) {
         const completedText = normalizeText(
             handoff.finalAnswer || handoff.partialAnswer || handoff.userVisibleSummary,
             '任务已经完成。'
@@ -5734,6 +5956,8 @@ function buildTaskRunHandoffPackage({
     exactAnswer = '',
     finalAnswer = '',
     partialAnswer = '',
+    answerCandidates = [],
+    bestAnswerCandidate = null,
     unresolvedFields = [],
     contextManagerCheckpoint = null
 } = {}) {
@@ -5745,6 +5969,12 @@ function buildTaskRunHandoffPackage({
     const sourceRefs = mergeHandoffSourceRefs(summarizedSteps);
     const successfulSteps = summarizedSteps.filter((step) => step.ok);
     const failedSteps = summarizedSteps.filter((step) => !step.ok);
+    const preservedAnswerCandidates = mergeAnswerCandidateLedger([], [
+        ...safeStepResults.flatMap((stepResult) => collectExplicitAnswerCandidatesFromStepResult(stepResult)),
+        ...normalizeArrayValue(answerCandidates),
+        ...(bestAnswerCandidate ? [bestAnswerCandidate] : [])
+    ]);
+    const preservedBestAnswerCandidate = selectBestAnswerCandidate(preservedAnswerCandidates);
     const collectedData = successfulSteps
         .filter((step) => step.summary || step.evidenceRefs.length || step.outputId || step.artifactId)
         .slice(-8)
@@ -5782,13 +6012,15 @@ function buildTaskRunHandoffPackage({
         status: handoffStatus,
         originalStatus: normalizedStatus,
         reason: normalizeText(reason || normalizedStatus),
-        ok: handoffStatus === 'completed',
+        ok: handoffStatus.startsWith('completed') || ['success', 'succeeded'].includes(handoffStatus),
         runId,
         sessionId,
         task: normalizeText(message),
         exactAnswer: normalizeText(exactAnswer),
         finalAnswer: normalizeText(finalAnswer),
         partialAnswer: normalizeText(partialAnswer),
+        answerCandidates: preservedAnswerCandidates,
+        bestAnswerCandidate: preservedBestAnswerCandidate,
         unresolvedFields: [...new Set(
             (Array.isArray(unresolvedFields) ? unresolvedFields : [unresolvedFields])
                 .map((value) => normalizeText(value))
@@ -8648,8 +8880,10 @@ function buildTaskAgentFinalizationContext({
     constraints = [],
     runtimeEnvironment = null,
     stepResults = [],
+    answerCandidates = [],
     exactAnswerMode = false
 } = {}) {
+    const preservedAnswerCandidates = mergeAnswerCandidateLedger([], answerCandidates);
     return summarizeForModel([
         'TaskAgent finalization package.',
         'Answer the original user request using only the completed tool observations below.',
@@ -8661,6 +8895,9 @@ function buildTaskAgentFinalizationContext({
         `ORIGINAL_USER_REQUEST:\n${normalizeText(message)}`,
         constraints.length ? `CONSTRAINTS:\n${JSON.stringify(constraints, null, 2)}` : '',
         runtimeEnvironment ? `RUNTIME_ENVIRONMENT:\n${JSON.stringify(runtimeEnvironment, null, 2)}` : '',
+        preservedAnswerCandidates.length
+            ? `PRESERVED_ANSWER_CANDIDATES:\n${JSON.stringify(preservedAnswerCandidates, null, 2)}`
+            : '',
         `TOOL_OBSERVATIONS:\n${JSON.stringify(buildToolObservationDigest(stepResults), null, 2)}`
     ].filter(Boolean).join('\n\n'), TASK_AGENT_FINALIZATION_CONTEXT_CHARS);
 }
@@ -10894,6 +11131,10 @@ class AILISAgentRunner {
             if (!interruptState.interrupted) {
                 return null;
             }
+            const bestAnswerCandidate = selectBestAnswerCandidate(answerCandidateLedger);
+            const finalizableAnswerCandidate = selectBestAnswerCandidate(answerCandidateLedger, {
+                requireFinalizable: true
+            });
             const taskRunHandoff = buildTaskRunHandoffPackage({
                 status: 'interrupted',
                 reason: interruptState.reason || 'user_interrupt',
@@ -10905,6 +11146,9 @@ class AILISAgentRunner {
                 stepResults,
                 events,
                 latestDecision,
+                partialAnswer: exactAnswerMode ? normalizeText(finalizableAnswerCandidate?.answer) : '',
+                answerCandidates: answerCandidateLedger,
+                bestAnswerCandidate,
                 contextManagerCheckpoint: contextManagerCheckpoint('interrupted', stepResults.length)
             });
             const displayText = taskRunHandoff.userVisibleSummary;
@@ -11062,6 +11306,18 @@ class AILISAgentRunner {
         let exactAnswerAuditRecoveryProtocolNote = '';
         let exactAnswerAuditRecoveryOffTargetRetryUsed = false;
         let latestExactAnswerCandidate = null;
+        let answerCandidateLedger = mergeAnswerCandidateLedger(
+            [],
+            [
+                ...normalizeArrayValue(
+                    requestContext.priorAnswerCandidates || requestContext.prior_answer_candidates
+                ),
+                ...normalizeArrayValue(
+                    requestContext.priorBestAnswerCandidate || requestContext.prior_best_answer_candidate
+                ),
+                ...stepResults.flatMap((stepResult) => collectExplicitAnswerCandidatesFromStepResult(stepResult))
+            ]
+        );
         const completedSubagentNotifications = [];
         const invalidDecisionHistory = [];
         const initialContextWindow = resolveModelContextWindowTokens(settings, requestContext);
@@ -11217,7 +11473,7 @@ class AILISAgentRunner {
                 message,
                 fileAttachments
             });
-            const decisionTimeoutMs = resolveAgentDecisionTimeoutMs(decisionSettings, {
+            const baseDecisionTimeoutMs = resolveAgentDecisionTimeoutMs(decisionSettings, {
                 events,
                 stepResults,
                 requestContext: {
@@ -11226,6 +11482,11 @@ class AILISAgentRunner {
                     exactAnswerMode,
                     taskCompactPrompt
                 }
+            });
+            const decisionTimeoutMs = resolvePostToolFinalizationDecisionTimeoutMs(baseDecisionTimeoutMs, {
+                exactAnswerMode,
+                stepResults,
+                requestContext
             });
             const promptProfile = resolveAgentPromptProfile(decisionSettings, {
                 ...requestContext,
@@ -11488,13 +11749,14 @@ class AILISAgentRunner {
                               exactAnswerMode
                           })
                         : (isTaskAgentRole(agentRuntimeRole)
-                            ? buildTaskAgentFinalizationContext({
-                                  message,
-                                  constraints,
-                                  runtimeEnvironment,
-                                  stepResults,
-                                  exactAnswerMode
-                              })
+                             ? buildTaskAgentFinalizationContext({
+                                   message,
+                                   constraints,
+                                   runtimeEnvironment,
+                                   stepResults,
+                                   answerCandidates: answerCandidateLedger,
+                                   exactAnswerMode
+                               })
                             : ''))
                     : '',
                 finalizationInstruction: safetyFinalizationReason
@@ -11648,10 +11910,179 @@ class AILISAgentRunner {
             if (decision.budgetExhausted === true) {
                 break;
             }
+            if (
+                !decision.ok &&
+                isTerminalAgentDecisionFailure(decision) &&
+                exactAnswerMode &&
+                isTaskAgentRole(agentRuntimeRole) &&
+                !selectBestAnswerCandidate(answerCandidateLedger, { requireFinalizable: true })
+            ) {
+                const successfulWorkSteps = stepResults.filter((stepResult) => {
+                    const toolId = canonicalDirectToolId(stepResult?.tool);
+                    return toolId &&
+                        !isCollaborationTool(toolId) &&
+                        !['tool_search', 'update_plan'].includes(toolId) &&
+                        stepResult?.response?.ok === true;
+                });
+                const remainingLoopMs = Math.max(0, maxLoopDurationMs - (Date.now() - startedAt));
+                const configuredRecoveryTimeoutMs = Number(
+                    requestContext.exactAnswerFinalizationRecoveryTimeoutMs ||
+                    requestContext.exact_answer_finalization_recovery_timeout_ms ||
+                    30000
+                );
+                const recoveryTimeoutMs = Math.min(
+                    Math.max(5000, remainingLoopMs - 5000),
+                    Math.min(90000, Math.max(5000, Number.isFinite(configuredRecoveryTimeoutMs)
+                        ? configuredRecoveryTimeoutMs
+                        : 30000))
+                );
+                if (successfulWorkSteps.length && remainingLoopMs >= 10000 && abortSignal?.aborted !== true) {
+                    const failedDecision = decision;
+                    const recoveryStartedAt = Date.now();
+                    const recoveryCallId = `${runId}:exact_answer_finalization_recovery:${iteration}`;
+                    const recoveryContext = buildTaskAgentFinalizationContext({
+                        message,
+                        constraints,
+                        runtimeEnvironment,
+                        stepResults,
+                        answerCandidates: answerCandidateLedger,
+                        exactAnswerMode: true
+                    });
+                    const recoveryPayload = buildAgentDecisionLowLatencyPayload({
+                        timeoutMs: recoveryTimeoutMs,
+                        messages: [],
+                        abortSignal,
+                        instructions: buildTaskAgentFinalizationInstruction({ exactAnswerMode: true }),
+                        input: null,
+                        tools: [],
+                        toolChoice: 'none',
+                        jsonMode: false,
+                        finalizationContext: recoveryContext,
+                        finalizationInstruction: buildTaskAgentFinalizationInstruction({ exactAnswerMode: true }),
+                        finalizationTools: [],
+                        parallel_tool_calls: false
+                    }, {
+                        settings: decisionSettings,
+                        requestContext: {
+                            ...requestContext,
+                            agentDecisionMaxTokens: Math.min(
+                                1024,
+                                Math.max(256, Number(requestContext.agentDecisionMaxTokens) || 512)
+                            )
+                        }
+                    });
+                    events.push({
+                        type: 'runtime_note',
+                        status: 'exact_answer_finalization_recovery',
+                        iteration,
+                        reason: normalizeText(failedDecision.status, 'provider_error'),
+                        timeoutMs: recoveryTimeoutMs,
+                        successfulToolCount: successfulWorkSteps.length,
+                        answerCandidateCount: answerCandidateLedger.length
+                    });
+                    this.gateway.emitGatewayEvent?.('agent.llm_call.started', {
+                        runId,
+                        sessionId,
+                        iteration,
+                        callId: recoveryCallId,
+                        phase: 'exact_answer_finalization_recovery',
+                        provider: decisionSettings.provider || '',
+                        model: decisionSettings.model || '',
+                        timeoutMs: recoveryTimeoutMs
+                    });
+                    await appendRuntimeItem({
+                        type: 'agent.finalization_recovery',
+                        status: 'started',
+                        payload: {
+                            iteration,
+                            callId: recoveryCallId,
+                            recoveryFrom: failedDecision.status,
+                            timeoutMs: recoveryTimeoutMs,
+                            successfulToolCount: successfulWorkSteps.length,
+                            answerCandidates: answerCandidateLedger
+                        }
+                    });
+                    const recoveryDecision = await callLlmAgentDirectToolDecision(
+                        decisionSettings,
+                        recoveryPayload,
+                        {
+                            hasToolHistory: true,
+                            forceFinalResponse: true,
+                            allowFinalizationRetry: false,
+                            nativeToolValidationContext: {
+                                enforceEvidenceProvenance: false,
+                                userText: message,
+                                stepResults
+                            }
+                        }
+                    );
+                    const recoveryDurationMs = Date.now() - recoveryStartedAt;
+                    const recoverySucceeded = Boolean(recoveryDecision.ok === true &&
+                        recoveryDecision.action === 'final' &&
+                        normalizeText(recoveryDecision.finalAnswer));
+                    this.gateway.emitGatewayEvent?.('agent.llm_call.completed', {
+                        runId,
+                        sessionId,
+                        iteration,
+                        callId: recoveryCallId,
+                        phase: 'exact_answer_finalization_recovery',
+                        durationMs: recoveryDurationMs,
+                        ok: recoverySucceeded,
+                        status: recoverySucceeded ? 'final' : (recoveryDecision.status || recoveryDecision.action || 'failed'),
+                        provider: recoveryDecision.provider || decisionSettings.provider || '',
+                        model: recoveryDecision.model || decisionSettings.model || '',
+                        usage: summarizeLlmUsage(recoveryDecision.usage)
+                    });
+                    await appendRuntimeItem({
+                        type: 'agent.finalization_recovery',
+                        status: recoverySucceeded ? 'completed' : (recoveryDecision.status || 'failed'),
+                        payload: {
+                            iteration,
+                            callId: recoveryCallId,
+                            durationMs: recoveryDurationMs,
+                            ok: recoverySucceeded,
+                            action: recoveryDecision.action || '',
+                            error: recoveryDecision.error || '',
+                            recoveryFrom: failedDecision.status
+                        }
+                    });
+                    if (recoverySucceeded) {
+                        decision = {
+                            ...recoveryDecision,
+                            usage: mergeLlmUsage(failedDecision.usage, recoveryDecision.usage),
+                            recoveredFromDecisionFailure: {
+                                status: failedDecision.status,
+                                error: failedDecision.error || ''
+                            }
+                        };
+                        latestDecision = decision;
+                    }
+                }
+            }
             if (!decision.ok && isTerminalAgentDecisionFailure(decision)) {
                 const terminalFailure = describeTerminalAgentDecisionFailure(decision);
-                if (exactAnswerMode && latestExactAnswerCandidate?.submission?.answer) {
-                    const candidate = latestExactAnswerCandidate;
+                const preservedFinalizableCandidate = selectBestAnswerCandidate(answerCandidateLedger, {
+                    requireFinalizable: true
+                });
+                if (
+                    exactAnswerMode &&
+                    (latestExactAnswerCandidate?.submission?.answer || preservedFinalizableCandidate?.answer)
+                ) {
+                    const candidate = latestExactAnswerCandidate || {
+                        iteration: preservedFinalizableCandidate.iteration,
+                        decision: latestDecision || {},
+                        submission: {
+                            answer: preservedFinalizableCandidate.answer,
+                            personaText: preservedFinalizableCandidate.personaText,
+                            reason: preservedFinalizableCandidate.reason,
+                            evidenceRefs: preservedFinalizableCandidate.evidenceRefs
+                        },
+                        validation: {
+                            ok: true,
+                            warnings: ['preserved_explicit_answer_candidate'],
+                            source: preservedFinalizableCandidate.source
+                        }
+                    };
                     const displayText = candidate.submission.personaText || candidate.submission.answer;
                     const taskRunHandoff = buildTaskRunHandoffPackage({
                         status: 'completed_with_warnings',
@@ -11667,6 +12098,8 @@ class AILISAgentRunner {
                         exactAnswer: candidate.submission.answer,
                         finalAnswer: candidate.submission.answer,
                         partialAnswer: '',
+                        answerCandidates: answerCandidateLedger,
+                        bestAnswerCandidate: preservedFinalizableCandidate,
                         contextManagerCheckpoint: contextManagerCheckpoint(
                             'recovery_failed_using_prior_answer_candidate',
                             iteration
@@ -11741,6 +12174,8 @@ class AILISAgentRunner {
                     stepResults,
                     events,
                     latestDecision: decision,
+                    answerCandidates: answerCandidateLedger,
+                    bestAnswerCandidate: selectBestAnswerCandidate(answerCandidateLedger),
                     contextManagerCheckpoint: contextManagerCheckpoint('terminal_decision_failure', iteration)
                 });
                 const displayText = terminalFailure.displayText;
@@ -11986,6 +12421,16 @@ class AILISAgentRunner {
                         submission: exactAnswerValidation.submission,
                         validation: exactAnswerValidation
                     };
+                    answerCandidateLedger = mergeAnswerCandidateLedger(answerCandidateLedger, [{
+                        ...exactAnswerValidation.submission,
+                        source: 'model_submission',
+                        sourceTool: FINAL_ANSWER_TOOL_NAME,
+                        sourceStepId: `decision_${iteration}`,
+                        kind: 'model_final',
+                        iteration,
+                        selected: true,
+                        finalizable: true
+                    }]);
                 }
                 if (exactAnswerMode && exactAnswerValidation?.warnings?.length) {
                     await appendRuntimeItem({
@@ -12085,6 +12530,8 @@ class AILISAgentRunner {
                     exactAnswer: authoritativeTaskResult?.exactAnswer || exactAnswerSubmission?.answer || '',
                     finalAnswer: authoritativeTaskResult?.finalAnswer || exactAnswerSubmission?.answer || decision.finalAnswer || '',
                     partialAnswer: decision.summary || '',
+                    answerCandidates: answerCandidateLedger,
+                    bestAnswerCandidate: selectBestAnswerCandidate(answerCandidateLedger),
                     unresolvedFields: completionAssessment.ok
                         ? []
                         : [...unresolvedFields, ...completionAssessment.unresolvedFields],
@@ -12175,6 +12622,8 @@ class AILISAgentRunner {
                     events,
                     latestDecision: decision,
                     partialAnswer: decision.summary || '',
+                    answerCandidates: answerCandidateLedger,
+                    bestAnswerCandidate: selectBestAnswerCandidate(answerCandidateLedger),
                     contextManagerCheckpoint: contextManagerCheckpoint('blocked', iteration)
                 });
                 return await finishRuntimeRun(attachPersonaSurface({
@@ -12357,6 +12806,11 @@ class AILISAgentRunner {
                     })));
                     for (const stepResult of parallelStepResults) {
                         stepResults.push(stepResult);
+                        const explicitAnswerCandidates = collectExplicitAnswerCandidatesFromStepResult(stepResult);
+                        answerCandidateLedger = mergeAnswerCandidateLedger(
+                            answerCandidateLedger,
+                            explicitAnswerCandidates
+                        );
                         recordToolOutputToContextManager(
                             modelInputContextManager,
                             stepResult,
@@ -12381,6 +12835,7 @@ class AILISAgentRunner {
                                 evidenceRefs: getStepEvidenceRefs(stepResult),
                                 evidenceArtifacts: getEvidenceArtifactsPromptObject(stepResult.evidenceArtifacts || []),
                                 preview: toolResultEvent.preview,
+                                answerCandidates: explicitAnswerCandidates,
                                 parallelBatch: true
                             }
                         });
@@ -12714,6 +13169,11 @@ class AILISAgentRunner {
                 iteration
             });
             stepResults.push(stepResult);
+            const explicitAnswerCandidates = collectExplicitAnswerCandidatesFromStepResult(stepResult);
+            answerCandidateLedger = mergeAnswerCandidateLedger(
+                answerCandidateLedger,
+                explicitAnswerCandidates
+            );
             recordToolOutputToContextManager(
                 modelInputContextManager,
                 stepResult,
@@ -12734,7 +13194,8 @@ class AILISAgentRunner {
                     status: stepResult.response?.status || 'unknown',
                     evidenceRefs: getStepEvidenceRefs(stepResult),
                     evidenceArtifacts: getEvidenceArtifactsPromptObject(stepResult.evidenceArtifacts || []),
-                    preview: toolResultEvent.preview
+                    preview: toolResultEvent.preview,
+                    answerCandidates: explicitAnswerCandidates
                 }
             });
 
@@ -12764,7 +13225,7 @@ class AILISAgentRunner {
                     '任务执行器已经返回结果，但没有可直接展示的文本。'
                 );
                 const handoffOk = stepResult.response?.ok === true &&
-                    ['completed', 'success', 'succeeded'].includes(packetStatus);
+                    (packetStatus.startsWith('completed') || ['success', 'succeeded'].includes(packetStatus));
                 return await finishRuntimeRun(attachPersonaSurface({
                     ok: handoffOk,
                     runId,
@@ -12793,6 +13254,8 @@ class AILISAgentRunner {
                         exactAnswer: packetExactAnswer,
                         finalAnswer: packet.final_answer,
                         partialAnswer: packet.partial_answer,
+                        answerCandidates: packet.answer_candidates || [],
+                        bestAnswerCandidate: packet.best_answer_candidate || null,
                         sourceRefs: packet.source_refs || [],
                         collectedData: [],
                         traceRef: packet.trace_ref,
@@ -12856,10 +13319,20 @@ class AILISAgentRunner {
             }
         }
 
-        const fallbackExactAnswerSubmission = latestExactAnswerCandidate?.submission || null;
+        const fallbackBestAnswerCandidate = selectBestAnswerCandidate(answerCandidateLedger, {
+            requireFinalizable: true
+        });
+        const fallbackExactAnswerSubmission = latestExactAnswerCandidate?.submission ||
+            (fallbackBestAnswerCandidate ? {
+                answer: fallbackBestAnswerCandidate.answer,
+                personaText: fallbackBestAnswerCandidate.personaText,
+                reason: fallbackBestAnswerCandidate.reason,
+                evidenceRefs: fallbackBestAnswerCandidate.evidenceRefs
+            } : null);
         const fallbackExactAnswer = normalizeText(fallbackExactAnswerSubmission?.answer);
+        const fallbackStatus = fallbackExactAnswer ? 'completed_with_warnings' : 'max_loop';
         const taskRunHandoff = buildTaskRunHandoffPackage({
-            status: 'max_loop',
+            status: fallbackStatus,
             reason: 'max_steps_reached',
             runId,
             sessionId,
@@ -12872,9 +13345,13 @@ class AILISAgentRunner {
             exactAnswer: fallbackExactAnswer,
             finalAnswer: fallbackExactAnswer,
             partialAnswer: fallbackExactAnswer,
+            answerCandidates: answerCandidateLedger,
+            bestAnswerCandidate: fallbackBestAnswerCandidate,
             contextManagerCheckpoint: contextManagerCheckpoint('max_steps_reached', stepResults.length)
         });
-        const displayText = taskRunHandoff.userVisibleSummary;
+        const displayText = fallbackExactAnswerSubmission?.personaText ||
+            fallbackExactAnswer ||
+            taskRunHandoff.userVisibleSummary;
         const fallbackSurface = renderMaxStepsSurface({
             maxSteps,
             stepCount: stepResults.length,
@@ -12882,10 +13359,10 @@ class AILISAgentRunner {
             mode: latestDecision?.mode || 'task'
         });
         const surface = renderPersonaSurfaceGateway({
-            task_state: 'blocked',
+            task_state: fallbackExactAnswer ? 'completed' : 'blocked',
             approval_state: 'none',
             evidence_state: stepResults.length > 0 ? 'present' : 'missing',
-            error_code: 'max_steps_reached',
+            error_code: fallbackExactAnswer ? '' : 'max_steps_reached',
             relationship_stage: 'trusted',
             emotion_hint: 'neutral',
             next_action: taskRunHandoff.nextStep?.recommendation || fallbackSurface.nextAction || '',
@@ -12900,10 +13377,10 @@ class AILISAgentRunner {
             }
         });
         return await finishRuntimeRun(attachPersonaSurface({
-            ok: false,
+            ok: Boolean(fallbackExactAnswer),
             runId,
             sessionId,
-            status: 'max_steps_reached',
+            status: fallbackExactAnswer ? 'completed_with_warnings' : 'max_steps_reached',
             mode: 'task',
             planner: 'llm-agentic-executor',
             intent: latestDecision?.intent || 'llm_agent_max_steps',
@@ -13944,6 +14421,11 @@ module.exports = {
     buildAgentDecisionLowLatencyPayload,
     buildLlmAgentDirectToolPrompt,
     buildTaskRunHandoffPackage,
+    collectExplicitAnswerCandidatesFromStepResult,
+    mergeAnswerCandidateLedger,
+    selectBestAnswerCandidate,
+    hasCompleteToolObservationForFinalization,
+    resolvePostToolFinalizationDecisionTimeoutMs,
     buildResearchProgressState,
     buildDirectModelImageAttachments,
     assessAgentCompletionEvidence,

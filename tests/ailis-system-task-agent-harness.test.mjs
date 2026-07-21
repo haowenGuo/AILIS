@@ -132,6 +132,65 @@ test('system TaskAgent result packet keeps exact answer separate from user-facin
     assert.equal(packet.display_text, '根据证据，最终计数是 42。');
 });
 
+test('system TaskAgent persists answer candidates across warning-complete handoffs', async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-task-harness-candidates-'));
+    const calls = [];
+    const candidate = {
+        answer: '4',
+        personaText: '4',
+        evidenceRefs: ['artifact-presentation'],
+        source: 'model_submission',
+        kind: 'model_final',
+        selected: true,
+        finalizable: true
+    };
+    const harness = new AILISSystemTaskAgentHarness({
+        rootDir,
+        executeTaskAgent: async (payload) => {
+            calls.push(payload);
+            if (calls.length === 1) {
+                return {
+                    ok: true,
+                    status: 'completed_with_warnings',
+                    runId: payload.agent.childRunId,
+                    displayText: '4',
+                    taskRunHandoff: {
+                        status: 'completed_with_warnings',
+                        exactAnswer: '4',
+                        finalAnswer: '4',
+                        answerCandidates: [candidate],
+                        bestAnswerCandidate: candidate,
+                        resume: { contextManagerCheckpoint: { version: 1 } }
+                    }
+                };
+            }
+            return completedResult({
+                runId: payload.agent.childRunId,
+                answer: '4',
+                checkpoint: { version: 2 }
+            });
+        }
+    });
+
+    const first = await harness.handoff({}, {
+        currentUserMessage: '统计幻灯片数量。',
+        sessionId: 'candidate-session',
+        runId: 'candidate-parent-1'
+    });
+    assert.equal(first.status, 'completed_with_warnings');
+    assert.equal(first.best_answer_candidate.answer, '4');
+    assert.equal(first.best_answer_candidate.finalizable, true);
+    assert.deepEqual(first.answer_candidates.map((item) => item.answer), ['4']);
+
+    await harness.handoff({}, {
+        currentUserMessage: '继续核对。',
+        sessionId: 'candidate-session',
+        runId: 'candidate-parent-2'
+    });
+    assert.equal(calls[1].context.priorBestAnswerCandidate.answer, '4');
+    assert.deepEqual(calls[1].context.priorAnswerCandidates.map((item) => item.answer), ['4']);
+});
+
 test('repeated handoff in the same parent run reuses the first TaskAgent result', async () => {
     const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-task-harness-idempotent-'));
     const calls = [];
