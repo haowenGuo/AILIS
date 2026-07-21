@@ -1,0 +1,2928 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" type="image/png" href="./favicon.png">
+    <title>AILIS Control Panel</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: "Microsoft YaHei", -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+        }
+
+        [hidden] {
+            display: none !important;
+        }
+
+        :root {
+            color-scheme: light;
+            --bg: #f3f5f7;
+            --panel: rgba(255, 255, 255, 0.96);
+            --border: rgba(29, 49, 62, 0.12);
+            --text-main: #20313d;
+            --text-muted: #5b6b74;
+            --accent: #17856b;
+            --accent-soft: rgba(23, 133, 107, 0.12);
+            --accent-warm: #d96c46;
+            --accent-warm-soft: rgba(217, 108, 70, 0.12);
+            --shadow: 0 18px 40px rgba(23, 37, 49, 0.08);
+        }
+
+        html,
+        body {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background:
+                radial-gradient(circle at top right, rgba(217, 108, 70, 0.08), transparent 26%),
+                radial-gradient(circle at bottom left, rgba(23, 133, 107, 0.1), transparent 30%),
+                var(--bg);
+            color: var(--text-main);
+        }
+
+        body {
+            display: flex;
+            flex-direction: column;
+        }
+
+        button,
+        input,
+        select {
+            font: inherit;
+        }
+
+        #shell {
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+            flex: 1;
+        }
+
+        #header {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 16px;
+            padding: 22px 26px 18px;
+            border-bottom: 1px solid rgba(29, 49, 62, 0.08);
+            background: rgba(255, 255, 255, 0.82);
+            backdrop-filter: blur(10px);
+            -webkit-app-region: drag;
+        }
+
+        #header-main {
+            min-width: 0;
+        }
+
+        #eyebrow {
+            color: var(--accent);
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+
+        #title {
+            margin-top: 6px;
+            font-size: 28px;
+            font-weight: 700;
+            line-height: 1.1;
+        }
+
+        #subtitle {
+            margin-top: 10px;
+            max-width: 760px;
+            color: var(--text-muted);
+            font-size: 14px;
+            line-height: 1.7;
+        }
+
+        #header-actions {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            -webkit-app-region: no-drag;
+        }
+
+        .window-controls {
+            display: inline-flex;
+            align-items: center;
+            gap: 2px;
+            margin-left: 2px;
+            border: 1px solid rgba(29, 49, 62, 0.08);
+            border-radius: 10px;
+            overflow: hidden;
+            background: rgba(255, 255, 255, 0.9);
+            -webkit-app-region: no-drag;
+        }
+
+        .window-control-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 38px;
+            height: 34px;
+            border: 0;
+            border-radius: 0;
+            background: transparent;
+            color: var(--text-main);
+            cursor: pointer;
+            pointer-events: auto;
+            transition: background-color 0.16s ease, color 0.16s ease;
+            -webkit-app-region: no-drag;
+        }
+
+        .window-control-btn svg {
+            width: 15px;
+            height: 15px;
+            fill: none;
+            stroke: currentColor;
+            stroke-width: 2;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+        }
+
+        .window-control-btn:hover {
+            background: rgba(29, 49, 62, 0.07);
+        }
+
+        .window-control-btn.is-close:hover {
+            background: #e5484d;
+            color: #ffffff;
+        }
+
+        .pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            min-height: 36px;
+            padding: 0 12px;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.95);
+            border: 1px solid rgba(29, 49, 62, 0.08);
+            color: var(--text-muted);
+            font-size: 13px;
+        }
+
+        .pill strong {
+            color: var(--text-main);
+            font-weight: 600;
+        }
+
+        .ghost-btn,
+        .primary-btn,
+        .danger-btn,
+        .icon-btn {
+            border: 1px solid transparent;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background-color 0.18s ease, border-color 0.18s ease, transform 0.18s ease;
+        }
+
+        .icon-btn {
+            width: 38px;
+            height: 38px;
+            background: rgba(255, 255, 255, 0.94);
+            border-color: rgba(29, 49, 62, 0.08);
+            color: var(--text-main);
+            font-size: 18px;
+        }
+
+        .icon-btn:hover,
+        .ghost-btn:hover,
+        .primary-btn:hover,
+        .danger-btn:hover {
+            transform: translateY(-1px);
+        }
+
+        .ghost-btn {
+            min-height: 40px;
+            padding: 0 14px;
+            background: rgba(255, 255, 255, 0.92);
+            border-color: rgba(29, 49, 62, 0.1);
+            color: var(--text-main);
+        }
+
+        .primary-btn {
+            min-height: 42px;
+            padding: 0 16px;
+            background: var(--accent);
+            color: #ffffff;
+        }
+
+        .primary-btn:disabled {
+            opacity: 0.55;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .danger-btn {
+            min-height: 40px;
+            padding: 0 14px;
+            background: var(--accent-warm-soft);
+            border-color: rgba(217, 108, 70, 0.18);
+            color: #8b472f;
+        }
+
+        #content {
+            flex: 1;
+            min-height: 0;
+            overflow: auto;
+            padding: 20px 26px 120px;
+        }
+
+        .section-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 18px;
+            align-items: start;
+        }
+
+        .panel-section {
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            box-shadow: var(--shadow);
+            overflow: hidden;
+        }
+
+        .section-head {
+            padding: 16px 18px 12px;
+            border-bottom: 1px solid rgba(29, 49, 62, 0.08);
+        }
+
+        .section-title {
+            font-size: 18px;
+            font-weight: 700;
+        }
+
+        .section-copy {
+            margin-top: 6px;
+            color: var(--text-muted);
+            font-size: 13px;
+            line-height: 1.6;
+        }
+
+        .section-body {
+            padding: 16px 18px 18px;
+            display: grid;
+            gap: 14px;
+        }
+
+        .field {
+            display: grid;
+            gap: 8px;
+        }
+
+        .field.inline {
+            grid-template-columns: minmax(0, 1fr) auto;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .field-meta {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+        }
+
+        .field-actions {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+        }
+
+        .field-label {
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        .field-help {
+            color: var(--text-muted);
+            font-size: 12px;
+            line-height: 1.5;
+        }
+
+        .field-value {
+            color: var(--accent);
+            font-size: 12px;
+            font-weight: 700;
+        }
+
+        .advanced-section {
+            border: 1px solid rgba(29, 49, 62, 0.1);
+            border-radius: 8px;
+            background: rgba(248, 250, 252, 0.72);
+            overflow: hidden;
+        }
+
+        .advanced-section summary {
+            min-height: 40px;
+            padding: 11px 12px;
+            color: var(--text-main);
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 700;
+            list-style-position: inside;
+        }
+
+        .advanced-section > .section-body {
+            padding: 12px;
+            border-top: 1px solid rgba(29, 49, 62, 0.08);
+        }
+
+        .advanced-note {
+            color: var(--text-muted);
+            font-size: 12px;
+            line-height: 1.55;
+        }
+
+        .memory-list {
+            display: grid;
+            gap: 8px;
+        }
+
+        .memory-block {
+            border: 1px solid rgba(29, 49, 62, 0.1);
+            border-radius: 8px;
+            padding: 10px 12px;
+            background: rgba(248, 251, 250, 0.9);
+        }
+
+        .memory-block-title {
+            font-size: 13px;
+            font-weight: 700;
+        }
+
+        .memory-block-text {
+            margin-top: 6px;
+            color: var(--text-muted);
+            font-size: 12px;
+            line-height: 1.55;
+            white-space: pre-wrap;
+        }
+
+        .asset-pack-list {
+            display: grid;
+            gap: 10px;
+        }
+
+        .asset-pack-card {
+            display: grid;
+            gap: 9px;
+            padding: 12px;
+            border: 1px solid rgba(29, 49, 62, 0.1);
+            border-radius: 8px;
+            background: rgba(248, 251, 250, 0.92);
+        }
+
+        .asset-pack-card.is-active {
+            border-color: rgba(23, 133, 107, 0.34);
+            background: rgba(23, 133, 107, 0.08);
+        }
+
+        .asset-pack-title {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            font-size: 14px;
+            font-weight: 700;
+        }
+
+        .asset-pack-meta {
+            color: var(--text-muted);
+            font-size: 12px;
+            line-height: 1.5;
+        }
+
+        .asset-pack-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        input[type="text"],
+        input[type="password"],
+        input[type="number"],
+        select {
+            width: 100%;
+            min-height: 40px;
+            border: 1px solid rgba(29, 49, 62, 0.14);
+            border-radius: 8px;
+            padding: 0 12px;
+            background: #ffffff;
+            color: var(--text-main);
+        }
+
+        input[type="range"] {
+            width: 100%;
+            accent-color: var(--accent);
+        }
+
+        input[type="checkbox"] {
+            width: 18px;
+            height: 18px;
+            accent-color: var(--accent);
+        }
+
+        .split-2 {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 12px;
+        }
+
+        .dialogue-layout-editor {
+            display: grid;
+            gap: 12px;
+        }
+
+        .dialogue-preview-stage {
+            position: relative;
+            height: 280px;
+            border: 1px solid rgba(29, 49, 62, 0.1);
+            border-radius: 8px;
+            background:
+                linear-gradient(90deg, rgba(29, 49, 62, 0.05) 1px, transparent 1px),
+                linear-gradient(180deg, rgba(29, 49, 62, 0.05) 1px, transparent 1px),
+                #f8fbfa;
+            background-size: 24px 24px;
+            overflow: hidden;
+        }
+
+        .dialogue-window-preview {
+            position: absolute;
+            left: 50%;
+            top: 50%;
+            width: 280px;
+            height: 210px;
+            transform: translate(-50%, -50%);
+            transform-origin: center center;
+            border: 2px dashed rgba(23, 133, 107, 0.46);
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.58);
+        }
+
+        .dialogue-avatar-preview {
+            position: absolute;
+            left: 50%;
+            bottom: 0;
+            width: 120px;
+            height: 170px;
+            transform: translateX(-50%);
+            border: 1px solid rgba(29, 49, 62, 0.1);
+            border-bottom: 0;
+            border-radius: 70px 70px 8px 8px;
+            background:
+                radial-gradient(circle at 50% 24%, rgba(217, 108, 70, 0.18), transparent 20%),
+                linear-gradient(180deg, rgba(23, 133, 107, 0.18), rgba(23, 133, 107, 0.08));
+            pointer-events: none;
+        }
+
+        .dialogue-bubble-preview {
+            position: absolute;
+            left: 8px;
+            top: 8px;
+            width: 158px;
+            min-height: 58px;
+            padding: 9px 11px;
+            border: 2px solid rgba(86, 143, 184, 0.52);
+            border-radius: 8px;
+            background:
+                linear-gradient(90deg, rgba(123, 184, 223, 0.28), transparent 30px),
+                rgba(255, 255, 255, 0.96);
+            box-shadow:
+                0 10px 24px rgba(55, 112, 151, 0.14),
+                inset 4px 0 0 rgba(123, 184, 223, 0.34);
+            color: #263847;
+            font-size: 12px;
+            line-height: 1.45;
+            cursor: grab;
+            user-select: none;
+            touch-action: none;
+            transform-origin: 0 0;
+        }
+
+        .dialogue-bubble-preview:active {
+            cursor: grabbing;
+        }
+
+        .dialogue-resize-handle {
+            position: absolute;
+            right: -7px;
+            bottom: -7px;
+            width: 16px;
+            height: 16px;
+            border: 2px solid #ffffff;
+            border-radius: 50%;
+            background: var(--accent);
+            box-shadow: 0 2px 8px rgba(23, 37, 49, 0.2);
+            cursor: nwse-resize;
+            touch-action: none;
+        }
+
+        #footer-bar {
+            position: fixed;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+            padding: 16px 26px;
+            border-top: 1px solid rgba(29, 49, 62, 0.08);
+            background: rgba(255, 255, 255, 0.92);
+            backdrop-filter: blur(12px);
+        }
+
+        #status-text {
+            color: var(--text-muted);
+            font-size: 13px;
+        }
+
+        #footer-actions {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        @media (max-width: 980px) {
+            .section-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        /* Codex-like control surface */
+        :root {
+            --bg: #eef2f7;
+            --panel: #ffffff;
+            --panel-soft: #f8fafc;
+            --border: #cfd8e3;
+            --text-main: #18212f;
+            --text-muted: #657386;
+            --accent: #2563eb;
+            --accent-soft: #eff6ff;
+            --accent-warm: #b42318;
+            --accent-warm-soft: #fff1f0;
+            --shadow: 0 12px 28px rgba(15, 23, 42, 0.08);
+        }
+
+        html,
+        body {
+            background:
+                linear-gradient(180deg, #f7f9fc 0%, #eef2f7 100%);
+            color: var(--text-main);
+        }
+
+        #header {
+            align-items: center;
+            padding: 14px 22px;
+            background: #f8fafc;
+            border-bottom: 1px solid var(--border);
+            backdrop-filter: none;
+        }
+
+        #eyebrow {
+            color: var(--text-muted);
+            font-size: 11px;
+            letter-spacing: 0.04em;
+        }
+
+        #title {
+            margin-top: 4px;
+            font-size: 21px;
+            line-height: 1.15;
+        }
+
+        #subtitle {
+            margin-top: 6px;
+            max-width: 820px;
+            font-size: 13px;
+            line-height: 1.5;
+        }
+
+        .pill {
+            min-height: 32px;
+            border-radius: 8px;
+            background: #ffffff;
+            border-color: var(--border);
+            font-size: 12px;
+            box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+        }
+
+        .language-switch {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            min-height: 32px;
+            padding: 3px 6px 3px 10px;
+            border: 1px solid var(--border);
+            border-radius: 999px;
+            background: #ffffff;
+            color: var(--text-muted);
+            font-size: 12px;
+            box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+            white-space: nowrap;
+        }
+
+        .language-switch select {
+            width: auto;
+            min-width: 112px;
+            min-height: 26px;
+            padding: 2px 26px 2px 9px;
+            border-radius: 999px;
+            font-size: 12px;
+            background-color: #ffffff;
+        }
+
+        #content {
+            padding: 18px 22px 96px;
+        }
+
+        .section-grid {
+            gap: 14px;
+        }
+
+        .panel-section {
+            border-color: var(--border);
+            background: #ffffff;
+            box-shadow: var(--shadow);
+        }
+
+        .section-head {
+            padding: 14px 16px 11px;
+            background: var(--panel-soft);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .section-title {
+            font-size: 15px;
+            line-height: 1.3;
+        }
+
+        .section-copy {
+            margin-top: 5px;
+            font-size: 12px;
+            line-height: 1.45;
+        }
+
+        .section-body {
+            padding: 14px 16px 16px;
+            gap: 12px;
+        }
+
+        .field {
+            gap: 7px;
+        }
+
+        .field-label {
+            font-size: 13px;
+        }
+
+        .field-help {
+            font-size: 12px;
+        }
+
+        .field-value {
+            color: var(--accent);
+            font-size: 12px;
+        }
+
+        input[type="text"],
+        input[type="password"],
+        input[type="number"],
+        select {
+            min-height: 38px;
+            border-color: var(--border);
+            background: #ffffff;
+            color: var(--text-main);
+        }
+
+        input[type="text"]:focus,
+        input[type="password"]:focus,
+        input[type="number"]:focus,
+        select:focus {
+            outline: none;
+            border-color: #93b4ff;
+            box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+        }
+
+        input[type="range"] {
+            accent-color: var(--accent);
+        }
+
+        input[type="checkbox"] {
+            accent-color: var(--accent);
+        }
+
+        .ghost-btn,
+        .primary-btn,
+        .danger-btn,
+        .icon-btn {
+            border-radius: 7px;
+            transform: none;
+        }
+
+        .icon-btn {
+            width: 34px;
+            height: 34px;
+            background: #ffffff;
+            border-color: var(--border);
+            color: var(--text-main);
+        }
+
+        .ghost-btn {
+            min-height: 34px;
+            background: #ffffff;
+            border-color: var(--border);
+            color: var(--text-main);
+            font-size: 12px;
+        }
+
+        .primary-btn {
+            min-height: 38px;
+            background: var(--accent);
+            border-color: #1d4ed8;
+        }
+
+        .danger-btn {
+            min-height: 38px;
+            background: var(--accent-warm-soft);
+            border-color: #f0b8b4;
+            color: var(--accent-warm);
+        }
+
+        .icon-btn:hover,
+        .ghost-btn:hover,
+        .primary-btn:hover,
+        .danger-btn:hover {
+            transform: none;
+        }
+
+        .ghost-btn:hover,
+        .icon-btn:hover {
+            background: #f8fafc;
+        }
+
+        .primary-btn:hover:enabled {
+            background: #1d4ed8;
+        }
+
+        .split-2 {
+            gap: 10px;
+        }
+
+        .memory-block {
+            border-color: var(--border);
+            background: var(--panel-soft);
+        }
+
+        .dialogue-preview-stage {
+            border-color: var(--border);
+            background:
+                linear-gradient(90deg, rgba(24, 33, 47, 0.04) 1px, transparent 1px),
+                linear-gradient(180deg, rgba(24, 33, 47, 0.04) 1px, transparent 1px),
+                #f8fafc;
+        }
+
+        .dialogue-window-preview {
+            border-color: rgba(37, 99, 235, 0.38);
+        }
+
+        .dialogue-bubble-preview {
+            border-color: rgba(37, 99, 235, 0.36);
+            background: #ffffff;
+            box-shadow: 0 12px 28px rgba(15, 23, 42, 0.12);
+        }
+
+        .dialogue-resize-handle {
+            background: var(--accent);
+        }
+
+        #footer-bar {
+            padding: 12px 22px;
+            background: rgba(248, 250, 252, 0.96);
+            border-top: 1px solid var(--border);
+            backdrop-filter: blur(10px);
+        }
+
+        #status-text {
+            font-size: 12px;
+        }
+
+        /* AILIS open-source control room refresh */
+        :root {
+            --bg: #f4efe6;
+            --panel: rgba(255, 252, 246, 0.94);
+            --panel-soft: #fbf4e8;
+            --panel-quiet: rgba(255, 255, 255, 0.72);
+            --border: rgba(58, 47, 35, 0.12);
+            --border-strong: rgba(58, 47, 35, 0.2);
+            --text-main: #27231e;
+            --text-muted: #70685e;
+            --accent: #0e806a;
+            --accent-deep: #085f50;
+            --accent-soft: rgba(14, 128, 106, 0.12);
+            --accent-warm: #b55731;
+            --accent-warm-soft: rgba(181, 87, 49, 0.12);
+            --gold: #b9903f;
+            --shadow: 0 18px 50px rgba(62, 49, 34, 0.11);
+            --shadow-soft: 0 10px 28px rgba(62, 49, 34, 0.08);
+            --radius-lg: 22px;
+            --radius-md: 16px;
+            --font-ui: "LXGW WenKai Screen", "HarmonyOS Sans SC", "Microsoft YaHei", "PingFang SC", sans-serif;
+        }
+
+        * {
+            font-family: var(--font-ui);
+        }
+
+        html,
+        body {
+            background:
+                radial-gradient(circle at 8% 5%, rgba(185, 144, 63, 0.18), transparent 28%),
+                radial-gradient(circle at 94% 4%, rgba(14, 128, 106, 0.16), transparent 26%),
+                linear-gradient(135deg, #fffaf0 0%, #f4efe6 46%, #edf4ef 100%);
+        }
+
+        body::before {
+            content: "";
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+            background-image:
+                linear-gradient(rgba(58, 47, 35, 0.035) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(58, 47, 35, 0.028) 1px, transparent 1px);
+            background-size: 34px 34px;
+            mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.72), transparent 80%);
+        }
+
+        #header {
+            padding: 18px 28px 16px;
+            background: rgba(255, 250, 240, 0.88);
+            border-bottom: 1px solid var(--border);
+            box-shadow: 0 10px 30px rgba(62, 49, 34, 0.06);
+        }
+
+        #eyebrow {
+            color: var(--accent);
+            font-size: 12px;
+            letter-spacing: 0.12em;
+        }
+
+        #title {
+            margin-top: 5px;
+            font-size: 27px;
+            letter-spacing: -0.02em;
+        }
+
+        #subtitle {
+            max-width: 900px;
+            color: #655c51;
+            font-size: 13px;
+        }
+
+        .pill,
+        .icon-btn {
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.78);
+            border-color: var(--border);
+            box-shadow: var(--shadow-soft);
+        }
+
+        #content {
+            padding: 18px 32px 132px 28px;
+            scrollbar-gutter: stable;
+        }
+
+        #control-nav {
+            position: sticky;
+            top: 0;
+            z-index: 10;
+            display: flex;
+            gap: 8px;
+            padding: 8px;
+            margin-bottom: 14px;
+            border: 1px solid var(--border);
+            border-radius: 999px;
+            background: rgba(255, 252, 246, 0.82);
+            box-shadow: var(--shadow-soft);
+            backdrop-filter: blur(16px);
+        }
+
+        #control-nav button {
+            flex: 1;
+            min-height: 34px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0 12px;
+            border: 0;
+            border-radius: 999px;
+            background: transparent;
+            color: var(--text-muted);
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 800;
+            transition: background-color 0.18s ease, box-shadow 0.18s ease, color 0.18s ease;
+        }
+
+        #control-nav button:hover {
+            background: var(--accent-soft);
+            color: var(--accent-deep);
+        }
+
+        #control-nav button.is-active {
+            background: linear-gradient(135deg, rgba(14, 128, 106, 0.16), rgba(204, 143, 54, 0.16));
+            box-shadow: inset 0 0 0 1px rgba(14, 128, 106, 0.18);
+            color: var(--accent-deep);
+        }
+
+        #control-pages {
+            min-height: 0;
+        }
+
+        .control-page {
+            display: none;
+            animation: page-fade-in 0.18s ease both;
+        }
+
+        .control-page.is-active {
+            display: block;
+        }
+
+        @keyframes page-fade-in {
+            from {
+                opacity: 0;
+                transform: translateY(6px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .page-intro {
+            margin-bottom: 16px;
+            padding: 18px 20px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            background:
+                linear-gradient(135deg, rgba(255, 255, 255, 0.84), rgba(237, 246, 241, 0.72)),
+                var(--panel);
+            box-shadow: var(--shadow-soft);
+        }
+
+        .page-eyebrow {
+            color: var(--gold);
+            font-size: 11px;
+            font-weight: 900;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+        }
+
+        .page-title {
+            margin-top: 8px;
+            font-size: 20px;
+            font-weight: 900;
+            letter-spacing: -0.02em;
+        }
+
+        .page-copy {
+            margin-top: 8px;
+            max-width: 820px;
+            color: var(--text-muted);
+            font-size: 13px;
+            line-height: 1.7;
+        }
+
+        #control-overview {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 14px;
+        }
+
+        .overview-card {
+            min-height: 128px;
+            padding: 18px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            background:
+                linear-gradient(145deg, rgba(255, 255, 255, 0.9), rgba(255, 246, 232, 0.74)),
+                var(--panel);
+            box-shadow: var(--shadow-soft);
+            color: inherit;
+            cursor: pointer;
+            text-align: left;
+            transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+        }
+
+        .overview-card:hover {
+            transform: translateY(-2px);
+            border-color: rgba(14, 128, 106, 0.28);
+            box-shadow: var(--shadow);
+        }
+
+        .overview-kicker {
+            color: var(--gold);
+            font-size: 11px;
+            font-weight: 900;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+        }
+
+        .overview-title {
+            margin-top: 9px;
+            font-size: 18px;
+            font-weight: 900;
+        }
+
+        .overview-copy {
+            margin-top: 7px;
+            color: var(--text-muted);
+            font-size: 12px;
+            line-height: 1.55;
+        }
+
+        .section-grid {
+            display: grid;
+            grid-template-columns: repeat(12, minmax(0, 1fr));
+            gap: 16px;
+        }
+
+        .section-grid > .panel-section {
+            grid-column: span 4;
+        }
+
+        .control-page[data-control-page="appearance"] .section-display,
+        .control-page[data-control-page="appearance"] .section-character {
+            grid-column: span 6;
+        }
+
+        .control-page[data-control-page="appearance"] .section-dialogue,
+        .control-page[data-control-page="agent"] .section-permissions,
+        .control-page[data-control-page="model"] .section-model,
+        .control-page[data-control-page="voice"] .section-speech,
+        .control-page[data-control-page="advanced"] .section-runtime {
+            grid-column: span 12 !important;
+        }
+
+        .control-page[data-control-page="model"] .section-email {
+            grid-column: span 12;
+        }
+
+        .section-display { order: 10; }
+        .section-character { order: 20; }
+        .section-permissions { order: 30; }
+        .section-model {
+            order: 40;
+            grid-column: span 8 !important;
+        }
+        .section-speech { order: 50; }
+        .section-email { order: 60; }
+        .section-dialogue { order: 70; }
+        .section-runtime { order: 80; }
+
+        .panel-section {
+            border-radius: var(--radius-lg);
+            background: var(--panel);
+            border-color: var(--border);
+            box-shadow: var(--shadow-soft);
+        }
+
+        .section-head {
+            padding: 17px 18px 13px;
+            background:
+                linear-gradient(120deg, rgba(255, 248, 236, 0.96), rgba(237, 246, 241, 0.82));
+            border-bottom-color: var(--border);
+        }
+
+        .section-title {
+            font-size: 16px;
+            font-weight: 900;
+            letter-spacing: -0.01em;
+        }
+
+        .section-copy {
+            color: var(--text-muted);
+        }
+
+        .section-body {
+            padding: 16px 18px 18px;
+        }
+
+        .field {
+            gap: 8px;
+        }
+
+        .field.inline,
+        .toggle-row,
+        .field:has(> .field-meta + .field-help:not(:empty)):not(:has(input)):not(:has(select)) {
+            padding: 12px;
+            border: 1px solid rgba(58, 47, 35, 0.08);
+            border-radius: var(--radius-md);
+            background: rgba(255, 255, 255, 0.52);
+        }
+
+        .field-meta {
+            align-items: flex-start;
+        }
+
+        .field-label {
+            font-size: 13px;
+            font-weight: 900;
+        }
+
+        .field-help {
+            color: var(--text-muted);
+        }
+
+        .field-value {
+            color: var(--accent-deep);
+        }
+
+        input[type="text"],
+        input[type="password"],
+        input[type="number"],
+        input[type="search"],
+        select {
+            min-height: 42px;
+            border-radius: 13px;
+            border-color: rgba(58, 47, 35, 0.16);
+            background: rgba(255, 255, 255, 0.84);
+        }
+
+        input[type="text"]:focus,
+        input[type="password"]:focus,
+        input[type="number"]:focus,
+        input[type="search"]:focus,
+        select:focus {
+            border-color: rgba(14, 128, 106, 0.48);
+            box-shadow: 0 0 0 4px rgba(14, 128, 106, 0.12);
+        }
+
+        .ghost-btn,
+        .primary-btn,
+        .danger-btn {
+            border-radius: 999px;
+            font-weight: 900;
+        }
+
+        .primary-btn {
+            background: linear-gradient(135deg, var(--accent), var(--accent-deep));
+            border-color: transparent;
+            box-shadow: 0 10px 20px rgba(14, 128, 106, 0.18);
+        }
+
+        .primary-btn:hover:enabled {
+            background: linear-gradient(135deg, #11947a, #076453);
+        }
+
+        .ghost-btn {
+            background: rgba(255, 255, 255, 0.72);
+        }
+
+        .danger-btn {
+            background: rgba(181, 87, 49, 0.09);
+        }
+
+        .advanced-section {
+            border-radius: var(--radius-md);
+            border-color: rgba(58, 47, 35, 0.1);
+            background: rgba(255, 255, 255, 0.42);
+        }
+
+        .advanced-section summary {
+            display: flex;
+            align-items: center;
+            min-height: 44px;
+            padding: 12px 14px;
+            color: #4e473f;
+            font-weight: 900;
+        }
+
+        .advanced-panel {
+            box-shadow: none;
+            background: transparent;
+            border-color: transparent;
+        }
+
+        .advanced-panel .advanced-section {
+            background: rgba(255, 252, 246, 0.62);
+            border-style: dashed;
+        }
+
+        .model-console {
+            display: grid;
+            gap: 18px;
+        }
+
+        .model-status-board {
+            display: grid;
+            grid-template-columns: minmax(0, 1.05fr) minmax(0, 1.35fr);
+            gap: 14px;
+            padding: 16px;
+            border: 1px solid rgba(14, 128, 106, 0.16);
+            border-radius: 22px;
+            background:
+                radial-gradient(circle at top left, rgba(14, 128, 106, 0.18), transparent 38%),
+                linear-gradient(135deg, rgba(255, 252, 246, 0.9), rgba(244, 250, 247, 0.78));
+        }
+
+        .model-status-main {
+            display: grid;
+            align-content: center;
+            gap: 8px;
+            min-height: 142px;
+        }
+
+        .model-status-kicker,
+        .runtime-kicker {
+            color: #0d6f5e;
+            font-size: 11px;
+            font-weight: 950;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+        }
+
+        .model-status-title {
+            color: #26221d;
+            font-size: clamp(22px, 3vw, 32px);
+            font-weight: 950;
+            letter-spacing: -0.04em;
+            line-height: 1.05;
+        }
+
+        .model-status-copy {
+            max-width: 560px;
+            color: #665d53;
+            font-size: 13px;
+            font-weight: 700;
+            line-height: 1.65;
+        }
+
+        .model-status-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 10px;
+        }
+
+        .model-status-cell {
+            min-height: 76px;
+            padding: 12px;
+            border: 1px solid rgba(58, 47, 35, 0.08);
+            border-radius: 16px;
+            background: rgba(255, 255, 255, 0.62);
+        }
+
+        .model-status-label {
+            margin-bottom: 5px;
+            color: #81776b;
+            font-size: 11px;
+            font-weight: 900;
+        }
+
+        .model-status-value {
+            color: #332d26;
+            font-size: 13px;
+            font-weight: 900;
+            line-height: 1.45;
+            overflow-wrap: anywhere;
+        }
+
+        .model-next-step {
+            grid-column: 1 / -1;
+            border-color: rgba(185, 144, 63, 0.2);
+            background: rgba(255, 248, 230, 0.72);
+        }
+
+        .model-choice-grid {
+            display: grid;
+            grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+            gap: 12px;
+        }
+
+        .model-field-card {
+            padding: 14px;
+            border: 1px solid rgba(58, 47, 35, 0.08);
+            border-radius: 18px;
+            background: rgba(255, 255, 255, 0.62);
+        }
+
+        .runtime-shell {
+            display: grid;
+            gap: 14px;
+        }
+
+        .runtime-header {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: 12px;
+            align-items: center;
+        }
+
+        .runtime-title {
+            color: #2f2a25;
+            font-size: 18px;
+            font-weight: 950;
+            letter-spacing: -0.02em;
+        }
+
+        .runtime-copy {
+            margin-top: 4px;
+            color: #70675d;
+            font-size: 12px;
+            font-weight: 700;
+            line-height: 1.55;
+        }
+
+        .runtime-stepper {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .runtime-step {
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
+            padding: 7px 10px;
+            border-radius: 999px;
+            background: rgba(14, 128, 106, 0.1);
+            color: #145e51;
+            font-size: 12px;
+            font-weight: 950;
+            white-space: nowrap;
+        }
+
+        .runtime-step strong {
+            display: inline-grid;
+            place-items: center;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: rgba(14, 128, 106, 0.16);
+        }
+
+        .local-llm-runtime-panel {
+            border-color: rgba(14, 128, 106, 0.16) !important;
+            background:
+                linear-gradient(135deg, rgba(14, 128, 106, 0.08), rgba(185, 144, 63, 0.08)),
+                rgba(255, 255, 255, 0.56) !important;
+        }
+
+        .local-voice-runtime-panel {
+            padding: 16px;
+            border: 1px solid rgba(14, 128, 106, 0.16);
+            border-radius: var(--radius-md);
+            background: rgba(255, 255, 255, 0.68);
+        }
+
+        .runtime-path-row {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: 10px;
+            align-items: end;
+        }
+
+        .runtime-path-row .field {
+            margin: 0;
+        }
+
+        .runtime-log {
+            white-space: pre-wrap;
+            max-height: 180px;
+            overflow: auto;
+            padding: 12px;
+            border: 1px solid rgba(58, 47, 35, 0.08);
+            border-radius: 14px;
+            background: rgba(42, 36, 30, 0.92);
+            color: #f6efe4;
+            font-family: "Cascadia Mono", "Consolas", monospace;
+            font-size: 11px;
+            line-height: 1.55;
+        }
+
+        .local-llm-provider-panel {
+            display: grid;
+            gap: 14px;
+            padding: 12px;
+            border: 1px solid rgba(58, 47, 35, 0.08);
+            border-radius: var(--radius-md);
+            background: rgba(255, 255, 255, 0.56);
+        }
+
+        .ollama-target-summary {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: 12px;
+            align-items: center;
+            padding: 14px;
+            border: 1px solid rgba(14, 128, 106, 0.16);
+            border-radius: 18px;
+            background:
+                linear-gradient(135deg, rgba(14, 128, 106, 0.1), rgba(37, 99, 235, 0.07)),
+                rgba(255, 255, 255, 0.82);
+        }
+
+        .ollama-target-model {
+            margin-top: 3px;
+            color: #122f2a;
+            font-size: 19px;
+            font-weight: 950;
+            letter-spacing: -0.02em;
+            overflow-wrap: anywhere;
+        }
+
+        .ollama-mode-selector {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 10px;
+        }
+
+        .ollama-mode-btn {
+            display: grid;
+            gap: 5px;
+            min-height: 86px;
+            padding: 13px;
+            border: 1px solid rgba(58, 47, 35, 0.1);
+            border-radius: 18px;
+            background: rgba(255, 255, 255, 0.72);
+            color: #40382f;
+            text-align: left;
+            cursor: pointer;
+        }
+
+        .ollama-mode-btn strong {
+            font-size: 14px;
+            font-weight: 950;
+        }
+
+        .ollama-mode-btn span {
+            color: #70675d;
+            font-size: 12px;
+            font-weight: 700;
+            line-height: 1.4;
+        }
+
+        .ollama-mode-btn.is-active {
+            border-color: rgba(14, 128, 106, 0.36);
+            background:
+                linear-gradient(135deg, rgba(14, 128, 106, 0.16), rgba(37, 99, 235, 0.08)),
+                #ffffff;
+            box-shadow: 0 12px 24px rgba(14, 128, 106, 0.12);
+        }
+
+        .ollama-mode-btn.is-active span {
+            color: #145e51;
+        }
+
+        .ollama-mode-section {
+            padding: 14px;
+            border: 1px solid rgba(58, 47, 35, 0.08);
+            border-radius: 18px;
+            background: rgba(255, 255, 255, 0.72);
+        }
+
+        .asset-pack-card,
+        .memory-block {
+            border-radius: var(--radius-md);
+            background: rgba(255, 255, 255, 0.6);
+        }
+
+        .asset-pack-card.is-active {
+            border-color: rgba(14, 128, 106, 0.34);
+            background: rgba(14, 128, 106, 0.09);
+        }
+
+        .runtime-diagnostics {
+            display: grid;
+            gap: 12px;
+            color: #40382f;
+        }
+
+        .runtime-outcome {
+            display: grid;
+            gap: 7px;
+            padding: 14px;
+            border: 1px solid rgba(58, 47, 35, 0.1);
+            border-radius: 16px;
+            background: rgba(255, 255, 255, 0.64);
+        }
+
+        .runtime-outcome.is-ready {
+            border-color: rgba(14, 128, 106, 0.22);
+            background: rgba(14, 128, 106, 0.09);
+        }
+
+        .runtime-outcome.is-running {
+            border-color: rgba(185, 144, 63, 0.22);
+            background: rgba(255, 248, 230, 0.72);
+        }
+
+        .runtime-outcome.is-blocked,
+        .runtime-outcome.is-failed {
+            border-color: rgba(181, 87, 49, 0.22);
+            background: rgba(181, 87, 49, 0.08);
+        }
+
+        .runtime-outcome-title {
+            color: #2f2a25;
+            font-size: 17px;
+            font-weight: 950;
+            letter-spacing: -0.02em;
+        }
+
+        .runtime-outcome-copy {
+            color: #6b6257;
+            font-size: 12px;
+            font-weight: 750;
+            line-height: 1.6;
+        }
+
+        .runtime-component-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+            gap: 8px;
+        }
+
+        .runtime-component {
+            display: grid;
+            gap: 7px;
+            padding: 10px 11px;
+            border: 1px solid rgba(58, 47, 35, 0.1);
+            border-radius: 14px;
+            background: rgba(255, 255, 255, 0.58);
+        }
+
+        .runtime-component.is-ready {
+            border-color: rgba(14, 128, 106, 0.22);
+            background: rgba(14, 128, 106, 0.08);
+        }
+
+        .runtime-component.is-running {
+            border-color: rgba(185, 144, 63, 0.24);
+            background: rgba(255, 248, 230, 0.76);
+        }
+
+        .runtime-component.is-blocked,
+        .runtime-component.is-failed {
+            border-color: rgba(181, 87, 49, 0.22);
+            background: rgba(181, 87, 49, 0.08);
+        }
+
+        .runtime-component-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+        }
+
+        .runtime-component-title {
+            color: #2f2a25;
+            font-size: 12px;
+            font-weight: 950;
+        }
+
+        .runtime-component-badge {
+            padding: 4px 7px;
+            border-radius: 999px;
+            background: rgba(58, 47, 35, 0.08);
+            color: #5f554a;
+            font-size: 10px;
+            font-weight: 950;
+            white-space: nowrap;
+        }
+
+        .runtime-component-copy {
+            color: #70675d;
+            font-size: 11px;
+            font-weight: 700;
+            line-height: 1.5;
+        }
+
+        .runtime-asset-list {
+            display: grid;
+            gap: 10px;
+        }
+
+        .runtime-asset-card {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: 12px;
+            padding: 13px;
+            border: 1px solid rgba(58, 47, 35, 0.1);
+            border-radius: 16px;
+            background: rgba(255, 255, 255, 0.66);
+        }
+
+        .runtime-asset-card.is-low {
+            border-color: rgba(14, 128, 106, 0.18);
+        }
+
+        .runtime-asset-card.is-medium {
+            border-color: rgba(185, 144, 63, 0.26);
+            background: rgba(255, 248, 230, 0.54);
+        }
+
+        .runtime-asset-card.is-high {
+            border-color: rgba(181, 87, 49, 0.24);
+            background: rgba(181, 87, 49, 0.07);
+        }
+
+        .runtime-asset-main {
+            min-width: 0;
+        }
+
+        .runtime-asset-title {
+            color: #2f2a25;
+            font-size: 14px;
+            font-weight: 950;
+        }
+
+        .runtime-asset-meta,
+        .runtime-asset-path {
+            margin-top: 5px;
+            color: #70675d;
+            font-size: 11px;
+            font-weight: 750;
+            line-height: 1.45;
+        }
+
+        .runtime-asset-path {
+            overflow-wrap: anywhere;
+            font-family: "Cascadia Mono", "Consolas", monospace;
+        }
+
+        .runtime-asset-actions {
+            display: flex;
+            flex-wrap: wrap;
+            align-content: start;
+            justify-content: end;
+            gap: 8px;
+        }
+
+        .runtime-asset-empty {
+            padding: 14px;
+            border: 1px dashed rgba(58, 47, 35, 0.16);
+            border-radius: 16px;
+            color: #70675d;
+            font-size: 12px;
+            font-weight: 750;
+            line-height: 1.6;
+        }
+
+        .runtime-section {
+            display: grid;
+            gap: 8px;
+        }
+
+        .runtime-section-title {
+            color: #756b5f;
+            font-size: 11px;
+            font-weight: 950;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+
+        .runtime-list {
+            display: grid;
+            gap: 7px;
+            margin: 0;
+            padding: 0;
+            list-style: none;
+        }
+
+        .runtime-list li {
+            padding: 9px 10px;
+            border: 1px solid rgba(58, 47, 35, 0.08);
+            border-radius: 12px;
+            background: rgba(255, 252, 246, 0.72);
+            color: #4c443b;
+            font-size: 12px;
+            font-weight: 760;
+            line-height: 1.55;
+        }
+
+        .runtime-list.is-action li {
+            border-color: rgba(14, 128, 106, 0.14);
+            background: rgba(14, 128, 106, 0.07);
+        }
+
+        .runtime-detail-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 8px;
+        }
+
+        .runtime-detail {
+            padding: 9px 10px;
+            border: 1px solid rgba(58, 47, 35, 0.08);
+            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.56);
+            overflow-wrap: anywhere;
+        }
+
+        .runtime-detail-label {
+            margin-bottom: 3px;
+            color: #81776b;
+            font-size: 10px;
+            font-weight: 950;
+        }
+
+        .runtime-detail-value {
+            color: #332d26;
+            font-size: 12px;
+            font-weight: 850;
+            line-height: 1.45;
+        }
+
+        .dialogue-preview-stage {
+            border-radius: var(--radius-md);
+        }
+
+        #footer-bar {
+            left: 18px;
+            right: 30px;
+            bottom: 14px;
+            padding: 12px 14px 12px 18px;
+            border: 1px solid var(--border);
+            border-radius: 999px;
+            background: rgba(255, 252, 246, 0.9);
+            box-shadow: var(--shadow);
+        }
+
+        #status-text {
+            color: #5f584f;
+            font-weight: 700;
+        }
+
+        @media (max-width: 1180px) {
+            #control-overview {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+
+            .model-status-board,
+            .model-choice-grid,
+            .ollama-mode-selector,
+            .runtime-path-row,
+            .runtime-header {
+                grid-template-columns: 1fr;
+            }
+
+            .ollama-target-summary {
+                grid-template-columns: 1fr;
+            }
+
+            .section-grid > .panel-section {
+                grid-column: span 6;
+            }
+
+            .section-model {
+                grid-column: span 12 !important;
+            }
+        }
+
+        @media (max-width: 760px) {
+            .model-status-grid {
+                grid-template-columns: 1fr;
+            }
+
+            #header {
+                align-items: flex-start;
+                flex-direction: column;
+            }
+
+            #header-actions {
+                width: 100%;
+                justify-content: space-between;
+            }
+
+            #content {
+                padding: 14px 14px 132px;
+            }
+
+            #control-nav {
+                border-radius: var(--radius-md);
+                flex-wrap: wrap;
+            }
+
+            #control-nav button {
+                flex: 1 1 42%;
+            }
+
+            #control-overview,
+            .section-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .section-grid > .panel-section,
+            .section-model {
+                grid-column: 1 / -1 !important;
+            }
+
+            .split-2 {
+                grid-template-columns: 1fr;
+            }
+
+            #footer-bar {
+                left: 10px;
+                right: 10px;
+                border-radius: var(--radius-md);
+            }
+        }
+
+    </style>
+  <script type="module" crossorigin src="./assets/control-D0KWU1qx.js"></script>
+  <link rel="modulepreload" crossorigin href="./assets/modulepreload-polyfill-DfS4ul37.js">
+  <link rel="modulepreload" crossorigin href="./assets/i18n-D7yMXoS4.js">
+</head>
+<body>
+    <div id="shell">
+        <header id="header">
+            <div id="header-main">
+                <div id="eyebrow">AILIS Desktop</div>
+                <div id="title">控制面板</div>
+                <div id="subtitle">普通设置只保留日常会用到的选择；复杂参数收在高级设置里。保存后会立即同步到角色窗口和聊天窗。</div>
+            </div>
+            <div id="header-actions">
+                <label class="language-switch" for="ui-language">
+                    <span>语言</span>
+                    <select id="ui-language" aria-label="界面语言"></select>
+                </label>
+                <div class="pill"><strong id="app-version">v1.0.0</strong><span>桌面版</span></div>
+                <div class="window-controls" role="group" aria-label="窗口控制">
+                    <button id="minimize-btn" class="window-control-btn" type="button" aria-label="最小化控制面板" title="最小化">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 18h12"></path></svg>
+                    </button>
+                    <button id="maximize-btn" class="window-control-btn" type="button" aria-label="最大化或还原控制面板" title="最大化 / 还原">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.8"></rect></svg>
+                    </button>
+                    <button id="close-btn" class="window-control-btn is-close" type="button" aria-label="关闭控制面板" title="关闭">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg>
+                    </button>
+                </div>
+            </div>
+        </header>
+
+        <main id="content">
+            <nav id="control-nav" role="tablist" aria-label="控制面板页面">
+                <button id="tab-overview" class="is-active" type="button" role="tab" aria-selected="true" aria-controls="page-overview" data-control-page-target="overview">总览</button>
+                <button id="tab-appearance" type="button" role="tab" aria-selected="false" aria-controls="page-appearance" data-control-page-target="appearance">角色外观</button>
+                <button id="tab-agent" type="button" role="tab" aria-selected="false" aria-controls="page-agent" data-control-page-target="agent">任务能力</button>
+                <button id="tab-model" type="button" role="tab" aria-selected="false" aria-controls="page-model" data-control-page-target="model">模型账号</button>
+                <button id="tab-voice" type="button" role="tab" aria-selected="false" aria-controls="page-voice" data-control-page-target="voice">语音</button>
+                <button id="tab-advanced" type="button" role="tab" aria-selected="false" aria-controls="page-advanced" data-control-page-target="advanced">诊断</button>
+            </nav>
+
+            <div id="control-pages">
+                <section class="control-page is-active" id="page-overview" data-control-page="overview" role="tabpanel" aria-labelledby="tab-overview">
+                    <div class="page-intro">
+                        <div class="page-eyebrow">Control Room</div>
+                        <div class="page-title">选择一个工作区</div>
+                        <div class="page-copy">控制面板现在按页面拆开，顶部导航负责切换工作区；常用入口放在这里，避免所有模块挤在同一个长页面里。</div>
+                    </div>
+                    <section id="control-overview" aria-label="控制面板概览">
+                        <button class="overview-card" type="button" data-control-page-target="appearance">
+                            <div class="overview-kicker">Character</div>
+                            <div class="overview-title">角色体验</div>
+                            <div class="overview-copy">调整桌宠尺寸、渲染风格和本地人物包，日常只看这里就够。</div>
+                        </button>
+                        <button class="overview-card" type="button" data-control-page-target="model">
+                            <div class="overview-kicker">Brain</div>
+                            <div class="overview-title">模型账号</div>
+                            <div class="overview-copy">云端 Key、本地 Ollama、邮箱账号和连接测试收在同一个工作区。</div>
+                        </button>
+                        <button class="overview-card" type="button" data-control-page-target="voice">
+                            <div class="overview-kicker">Voice</div>
+                            <div class="overview-title">声音通道</div>
+                            <div class="overview-copy">先选语音路线和麦克风，高级音色参数默认安静收纳。</div>
+                        </button>
+                        <button class="overview-card" type="button" data-control-page-target="agent">
+                            <div class="overview-kicker">Agent</div>
+                            <div class="overview-title">任务调试</div>
+                            <div class="overview-copy">权限开关和 Agent Lab 单独成区，避免混进普通偏好设置。</div>
+                        </button>
+                    </section>
+                </section>
+
+                <section class="control-page" id="page-appearance" data-control-page="appearance" role="tabpanel" aria-labelledby="tab-appearance">
+                    <div class="page-intro">
+                        <div class="page-eyebrow">Character</div>
+                        <div class="page-title">角色外观</div>
+                        <div class="page-copy">桌宠大小、渲染风格、人物包和对话框校准集中在这里。高级参数默认折叠，避免日常配置被细节淹没。</div>
+                    </div>
+                    <div class="section-grid">
+                <section class="panel-section section-display" id="section-appearance">
+                    <div class="section-head">
+                        <div class="section-title">桌宠显示</div>
+                        <div class="section-copy">只保留角色大小、渲染风格和任务栏显示，细节调参放在高级设置里。</div>
+                    </div>
+                    <div class="section-body">
+                        <label class="field">
+                            <div class="field-meta">
+                                <span class="field-label">桌宠缩放</span>
+                            </div>
+                            <select id="pet-scale"></select>
+                        </label>
+
+                        <label class="field">
+                            <div class="field-meta">
+                                <span class="field-label">渲染风格</span>
+                            </div>
+                            <select id="render-profile"></select>
+                            <div class="field-help">多套角色专用 MToon/灯光方案，保存后会立即同步到桌宠窗口。</div>
+                        </label>
+
+                        <details class="advanced-section">
+                            <summary>高级外观参数</summary>
+                            <div class="section-body">
+                                <div class="split-2">
+                                    <label class="field">
+                                        <div class="field-meta">
+                                            <span class="field-label">主光方向</span>
+                                            <span class="field-value" id="render-light-yaw-value"></span>
+                                        </div>
+                                        <input id="render-light-yaw" type="range" min="-75" max="75" step="1">
+                                    </label>
+
+                                    <label class="field">
+                                        <div class="field-meta">
+                                            <span class="field-label">主光强度</span>
+                                            <span class="field-value" id="render-key-light-value"></span>
+                                        </div>
+                                        <input id="render-key-light" type="range" min="0.65" max="1.45" step="0.01">
+                                    </label>
+                                </div>
+
+                                <div class="split-2">
+                                    <label class="field">
+                                        <div class="field-meta">
+                                            <span class="field-label">环境填充</span>
+                                            <span class="field-value" id="render-ambient-fill-value"></span>
+                                        </div>
+                                        <input id="render-ambient-fill" type="range" min="0.55" max="1.35" step="0.01">
+                                    </label>
+
+                                    <label class="field">
+                                        <div class="field-meta">
+                                            <span class="field-label">描边粗细</span>
+                                            <span class="field-value" id="render-outline-scale-value"></span>
+                                        </div>
+                                        <input id="render-outline-scale" type="range" min="0.25" max="1.2" step="0.01">
+                                    </label>
+                                </div>
+
+                                <label class="field inline">
+                                    <div>
+                                        <div class="field-label">投影阴影</div>
+                                        <div class="field-help">使用 Shadow Map 在人物脚下生成透明投影。</div>
+                                    </div>
+                                    <input id="render-shadow-enabled" type="checkbox">
+                                </label>
+
+                                <div class="split-2">
+                                    <label class="field">
+                                        <div class="field-meta">
+                                            <span class="field-label">渲染分辨率</span>
+                                            <span class="field-value" id="render-resolution-scale-value"></span>
+                                        </div>
+                                        <input id="render-resolution-scale" type="range" min="0.5" max="3" step="0.25">
+                                    </label>
+
+                                    <label class="field">
+                                        <div class="field-meta">
+                                            <span class="field-label">帧率上限</span>
+                                            <span class="field-value" id="render-fps-limit-value"></span>
+                                        </div>
+                                        <input id="render-fps-limit" type="range" min="1" max="4" step="1">
+                                    </label>
+                                </div>
+
+                                <label class="field">
+                                    <div class="field-meta">
+                                        <span class="field-label">阴影清晰度</span>
+                                        <span class="field-value" id="render-shadow-quality-value"></span>
+                                    </div>
+                                    <input id="render-shadow-quality" type="range" min="1" max="3" step="1">
+                                </label>
+
+                                <div class="split-2">
+                                    <label class="field inline">
+                                        <div>
+                                            <div class="field-label">角色描边</div>
+                                            <div class="field-help">关闭后减少描边额外绘制。</div>
+                                        </div>
+                                        <input id="render-outline-enabled" type="checkbox">
+                                    </label>
+
+                                    <label class="field inline">
+                                        <div>
+                                            <div class="field-label">抗锯齿</div>
+                                            <div class="field-help">关闭后下次启动画布时生效。</div>
+                                        </div>
+                                        <input id="render-antialias-enabled" type="checkbox">
+                                    </label>
+                                </div>
+
+                                <label class="field">
+                                    <div class="field-meta">
+                                        <span class="field-label">镜头距离</span>
+                                        <span class="field-value" id="camera-distance-value"></span>
+                                    </div>
+                                    <input id="camera-distance" type="range" min="0.75" max="1.8" step="0.01">
+                                    <div class="field-help">数值越小越贴近人物。</div>
+                                </label>
+
+                                <label class="field">
+                                    <div class="field-meta">
+                                        <span class="field-label">镜头高度</span>
+                                        <span class="field-value" id="camera-height-value"></span>
+                                    </div>
+                                    <input id="camera-height" type="range" min="0.7" max="1.8" step="0.01">
+                                </label>
+
+                                <label class="field">
+                                    <div class="field-meta">
+                                        <span class="field-label">注视高度</span>
+                                        <span class="field-value" id="camera-target-y-value"></span>
+                                    </div>
+                                    <input id="camera-target-y" type="range" min="0.5" max="1.5" step="0.01">
+                                </label>
+                            </div>
+                        </details>
+
+                        <label class="field inline">
+                            <div>
+                                <div class="field-label">任务栏显示</div>
+                                <div class="field-help">关闭后桌宠只留在桌面和托盘里。</div>
+                            </div>
+                            <input id="pet-show-taskbar" type="checkbox">
+                        </label>
+
+                        <details class="advanced-section">
+                            <summary>鼠标热区调试</summary>
+                            <div class="section-body">
+                                <label class="field inline">
+                                    <div>
+                                        <div class="field-label">实时鼠标热区</div>
+                                        <div class="field-help">透明窗口会点击穿透，人物热区会根据 VRM 当前动作和位置实时跟随。</div>
+                                    </div>
+                                    <input id="pet-mouse-hit-test-enabled" type="checkbox">
+                                </label>
+
+                                <label class="field">
+                                    <div class="field-meta">
+                                        <span class="field-label">热区形状</span>
+                                    </div>
+                                    <select id="pet-mouse-hit-test-shape">
+                                        <option value="ellipse">椭圆</option>
+                                        <option value="rectangle">矩形</option>
+                                    </select>
+                                </label>
+
+                                <div class="split-2">
+                                    <label class="field">
+                                        <div class="field-meta">
+                                            <span class="field-label">宽度补偿</span>
+                                            <span class="field-value" id="pet-mouse-hit-test-width-value"></span>
+                                        </div>
+                                        <input id="pet-mouse-hit-test-width" type="range" min="0.2" max="1" step="0.01">
+                                    </label>
+
+                                    <label class="field">
+                                        <div class="field-meta">
+                                            <span class="field-label">高度补偿</span>
+                                            <span class="field-value" id="pet-mouse-hit-test-height-value"></span>
+                                        </div>
+                                        <input id="pet-mouse-hit-test-height" type="range" min="0.25" max="1" step="0.01">
+                                    </label>
+                                </div>
+
+                                <div class="split-2">
+                                    <label class="field">
+                                        <div class="field-meta">
+                                            <span class="field-label">左右偏移</span>
+                                            <span class="field-value" id="pet-mouse-hit-test-offset-x-value"></span>
+                                        </div>
+                                        <input id="pet-mouse-hit-test-offset-x" type="range" min="-0.5" max="0.5" step="0.01">
+                                    </label>
+
+                                    <label class="field">
+                                        <div class="field-meta">
+                                            <span class="field-label">上下偏移</span>
+                                            <span class="field-value" id="pet-mouse-hit-test-offset-y-value"></span>
+                                        </div>
+                                        <input id="pet-mouse-hit-test-offset-y" type="range" min="-0.5" max="0.5" step="0.01">
+                                    </label>
+                                </div>
+
+                                <label class="field inline">
+                                    <div>
+                                        <div class="field-label">显示热区轮廓</div>
+                                        <div class="field-help">调试用，绿色轮廓显示当前人物鼠标命中范围。</div>
+                                    </div>
+                                    <input id="pet-mouse-hit-test-debug" type="checkbox">
+                                </label>
+                            </div>
+                        </details>
+                    </div>
+                </section>
+
+                <section class="panel-section section-character" id="section-character">
+                    <div class="section-head">
+                        <div class="section-title">我的人物</div>
+                        <div class="section-copy">本地安装人物包和皮肤包，面向 MIT 开源社区扩展；完全本地使用，适合社区自愿分享。</div>
+                    </div>
+                    <div class="section-body">
+                        <div class="field">
+                            <div class="field-meta">
+                                <span class="field-label">当前启用</span>
+                                <span class="field-value" id="character-active-type">默认</span>
+                            </div>
+                            <div class="field-help" id="character-active-summary">正在读取人物资产状态...</div>
+                        </div>
+
+                        <div class="field-actions">
+                            <button id="character-install-folder-btn" class="ghost-btn" type="button">安装本地包</button>
+                            <button id="character-install-sample-btn" class="ghost-btn" type="button">安装测试包</button>
+                            <button id="character-reset-active-btn" class="danger-btn" type="button">恢复默认人物</button>
+                        </div>
+
+                        <div class="field">
+                            <div class="field-meta">
+                                <span class="field-label">已安装人物包 / 皮肤包</span>
+                            </div>
+                            <div id="character-pack-list" class="asset-pack-list">
+                                <div class="field-help">还没有安装本地人物包。</div>
+                            </div>
+                            <div class="field-help" id="character-pack-root">安装目录读取中...</div>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="panel-section advanced-panel section-dialogue" id="section-dialogue">
+                    <details class="advanced-section">
+                        <summary>高级设置：人物对话框</summary>
+                        <div class="section-body">
+                        <p class="advanced-note">默认会自动校准说话框位置；只有需要手动修正透明窗口和气泡尺寸时再展开这里。</p>
+                        <div class="dialogue-layout-editor">
+                            <div class="dialogue-preview-stage" id="avatar-bubble-editor">
+                                <div class="dialogue-window-preview" id="avatar-bubble-window-preview">
+                                    <div class="dialogue-avatar-preview" id="avatar-bubble-avatar-preview"></div>
+                                    <div class="dialogue-bubble-preview" id="avatar-bubble-preview">嗯嗯，我在这里。</div>
+                                    <div class="dialogue-resize-handle" id="avatar-bubble-window-resize"></div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="split-2">
+                            <label class="field">
+                                <div class="field-meta">
+                                    <span class="field-label">气泡左右</span>
+                                    <span class="field-value" id="avatar-bubble-left-value"></span>
+                                </div>
+                                <input id="avatar-bubble-left" type="range" min="0" max="640" step="1">
+                            </label>
+
+                            <label class="field">
+                                <div class="field-meta">
+                                    <span class="field-label">气泡上下</span>
+                                    <span class="field-value" id="avatar-bubble-top-value"></span>
+                                </div>
+                                <input id="avatar-bubble-top" type="range" min="0" max="480" step="1">
+                            </label>
+                        </div>
+
+                        <label class="field">
+                            <div class="field-meta">
+                                <span class="field-label">气泡比例</span>
+                                <span class="field-value" id="avatar-bubble-scale-value"></span>
+                            </div>
+                            <input id="avatar-bubble-scale" type="range" min="0.75" max="1.35" step="0.01">
+                        </label>
+
+                        <label class="field">
+                            <div class="field-meta">
+                                <span class="field-label">窗口宽度</span>
+                                <span class="field-value" id="avatar-bubble-extra-width-value"></span>
+                            </div>
+                            <input id="avatar-bubble-extra-width" type="range" min="0" max="520" step="1">
+                        </label>
+
+                        <label class="field">
+                            <div class="field-meta">
+                                <span class="field-label">窗口高度</span>
+                                <span class="field-value" id="avatar-bubble-extra-top-value"></span>
+                            </div>
+                            <input id="avatar-bubble-extra-top" type="range" min="0" max="360" step="1">
+                        </label>
+                        </div>
+                    </details>
+                </section>
+                    </div>
+                </section>
+
+                <section class="control-page" id="page-agent" data-control-page="agent" role="tabpanel" aria-labelledby="tab-agent">
+                    <div class="page-intro">
+                        <div class="page-eyebrow">Agent</div>
+                        <div class="page-title">任务能力</div>
+                        <div class="page-copy">这里放和任务执行有关的用户决策：对话模式、执行权限、Agent Lab。内部工具细节不塞进普通设置页。</div>
+                    </div>
+                    <div class="section-grid">
+                <section class="panel-section section-permissions" id="section-agent">
+                    <div class="section-head">
+                        <div class="section-title">任务权限</div>
+                        <div class="section-copy">只保留用户需要决定的安全开关，内部实现细节不在控制面板展示。</div>
+                    </div>
+                    <div class="section-body">
+                        <label class="field">
+                            <div class="field-meta">
+                                <span class="field-label">对话模式</span>
+                            </div>
+                            <select id="conversation-mode"></select>
+                            <div class="field-help">日常对话模式只加载角色设定和本地记忆，不向模型暴露工具、MCP 和任务执行上下文，用来测试低延迟聊天。</div>
+                        </label>
+
+                        <label class="field inline">
+                            <div>
+                                <div class="field-label">完全控制能力</div>
+                                <div class="field-help">开启后 AILIS 可以按你的指令执行命令、读写文件和调用本地工具；关闭后高风险动作会重新要求确认。</div>
+                            </div>
+                            <input id="computer-control-enabled" type="checkbox">
+                        </label>
+
+                        <label class="field">
+                            <div class="field-meta">
+                                <span class="field-label">本地安全判定</span>
+                            </div>
+                            <select id="ember-harness-mode">
+                                <option value="off">关闭</option>
+                                <option value="observe">仅观察，不拦截</option>
+                                <option value="enforce">启用拦截</option>
+                            </select>
+                            <div class="field-help">使用本地敏感词扫描检查关键执行边界，不调用大模型、不联网下载，适合低延迟运行。</div>
+                            <div class="field-help" id="ember-harness-status">当前已关闭。</div>
+                        </label>
+
+                        <div class="field">
+                            <div class="field-meta">
+                                <span class="field-label">Agent 分析台</span>
+                                <button id="open-agent-lab-btn" class="primary-btn" type="button">打开独立分析台</button>
+                            </div>
+                            <div class="field-help">在独立窗口中运行、逐轮调试和分析 Agent Loop，不占用控制面板空间。</div>
+                        </div>
+                    </div>
+                </section>
+                <section class="panel-section section-proactive-companion" id="section-proactive-companion">
+                    <div class="section-head">
+                        <div class="section-title">主动陪伴</div>
+                        <div class="section-copy">选择 AILIS 的对话节奏：按问按答、持续陪伴，或在长任务中按需反馈。</div>
+                    </div>
+                    <div class="section-body">
+                        <label class="field">
+                            <div class="field-meta">
+                                <span class="field-label">对话模式</span>
+                            </div>
+                            <select id="auto-chat-mode">
+                                <option value="off">普通对话模式：问一句答一句</option>
+                                <option value="companion">主动陪伴模式：每 20 秒基于上下文主动说话</option>
+                                <option value="cowork">工作模式：较长周期判断是否需要反馈</option>
+                            </select>
+                            <div class="field-help">主动陪伴模式不再先判断是否开口，而是直接生成承接当前对话和记忆的陪伴内容；工作模式才由模型判断是否值得反馈。</div>
+                        </label>
+
+                        <div class="field-help">
+                            普通对话适合按需交流；主动陪伴适合持续聊天；工作模式适合长任务期间的低频进度和阻塞反馈。
+                        </div>
+
+                        <div class="field-help">主动内容会读取最近对话与长期记忆，并避开用户正在输入、AILIS 正在回复或语音仍在播放的时刻。</div>
+                    </div>
+                </section>
+                    </div>
+                </section>
+
+                <section class="control-page" id="page-model" data-control-page="model" role="tabpanel" aria-labelledby="tab-model">
+                    <div class="page-intro">
+                        <div class="page-eyebrow">Brain & Accounts</div>
+                        <div class="page-title">模型账号</div>
+                        <div class="page-copy">模型服务、本地 Ollama 部署入口、API Key 和邮箱账号集中在这里；需要联网或诊断的动作只在用户点击时触发。</div>
+                    </div>
+                    <div class="section-grid">
+                <section class="panel-section section-model" id="section-model">
+                    <div class="section-head">
+                        <div class="section-title">模型 API</div>
+                        <div class="section-copy">云端模型填写 Key；Ollama 本地模型通常只需要服务地址和模型名。</div>
+                    </div>
+                    <div class="section-body model-console">
+                        <section class="model-status-board" aria-label="当前模型状态">
+                            <div class="model-status-main">
+                                <div class="model-status-kicker">Current Brain</div>
+                                <div class="model-status-title" id="model-active-summary">正在读取模型状态...</div>
+                                <div class="model-status-copy" id="model-active-subtitle">这里会显示 AILIS 当前准备使用的模型，以及是否还需要保存、部署或测试。</div>
+                            </div>
+                            <div class="model-status-grid">
+                                <div class="model-status-cell">
+                                    <div class="model-status-label">服务商</div>
+                                    <div class="model-status-value" id="model-active-provider">-</div>
+                                </div>
+                                <div class="model-status-cell">
+                                    <div class="model-status-label">模型 ID</div>
+                                    <div class="model-status-value" id="model-active-model">-</div>
+                                </div>
+                                <div class="model-status-cell">
+                                    <div class="model-status-label">连接地址</div>
+                                    <div class="model-status-value" id="model-active-base">-</div>
+                                </div>
+                                <div class="model-status-cell">
+                                    <div class="model-status-label">Key / 运行时</div>
+                                    <div class="model-status-value" id="model-active-key">-</div>
+                                </div>
+                                <div class="model-status-cell">
+                                    <div class="model-status-label">服务状态</div>
+                                    <div class="model-status-value" id="model-active-runtime">-</div>
+                                </div>
+                                <div class="model-status-cell model-next-step">
+                                    <div class="model-status-label">下一步</div>
+                                    <div class="model-status-value" id="model-active-next-step">选择服务商后，AILIS 会提示你下一步该做什么。</div>
+                                </div>
+                            </div>
+                        </section>
+
+                        <div class="model-choice-grid">
+                        <label class="field model-field-card">
+                            <div class="field-meta">
+                                <span class="field-label">服务商</span>
+                            </div>
+                            <select id="llm-preset"></select>
+                            <div class="field-help" id="llm-preset-help">选择服务商后填写对应配置；本地 Ollama 通常不需要 API Key。</div>
+                            <div class="field-help" id="llm-setup-help">本地模型：选择 Ollama 后，AILIS 会引导自动诊断、部署并启用。</div>
+                        </label>
+
+                        <label class="field model-field-card" id="llm-model-card">
+                            <div class="field-meta">
+                                <span class="field-label" id="llm-model-label">模型</span>
+                            </div>
+                            <select id="llm-model-preset"></select>
+                            <div class="field-help" id="llm-model-help">日常对话优先选低延迟模型；复杂任务再选更强的 Pro/Max/Sonnet 类模型。</div>
+                        </label>
+                        </div>
+
+                        <div class="field local-llm-runtime-panel" id="local-llm-runtime-panel" hidden>
+                            <div class="runtime-shell">
+                            <div class="runtime-header">
+                                <div>
+                                    <div class="runtime-kicker">Local Runtime</div>
+                                    <div class="runtime-title" id="local-llm-runtime-title">本地模型运行时</div>
+                                    <div class="runtime-copy" id="local-llm-runtime-copy">选择一种模型来源后，AILIS 会按该来源检查、部署并启用。</div>
+                                </div>
+                                <div class="runtime-stepper" aria-label="本地模型部署步骤">
+                                    <span class="runtime-step"><strong>1</strong>选择模型</span>
+                                    <span class="runtime-step"><strong>2</strong>自动部署服务</span>
+                                    <span class="runtime-step"><strong>3</strong>自动启用</span>
+                                </div>
+                            </div>
+
+                            <div class="local-llm-provider-panel" id="ollama-runtime-panel" hidden>
+                                <div class="ollama-target-summary">
+                                    <div>
+                                        <div class="runtime-kicker">当前目标模型</div>
+                                        <div class="ollama-target-model" id="ollama-target-model">qwen2.5:1.5b</div>
+                                        <div class="runtime-copy" id="ollama-target-copy">先选择模型来源，再执行对应的本地操作。</div>
+                                    </div>
+                                    <button id="ollama-runtime-check-btn" class="ghost-btn" type="button">诊断环境</button>
+                                </div>
+
+                                <div class="ollama-mode-selector" role="tablist" aria-label="Ollama 部署方式">
+                                    <button class="ollama-mode-btn" type="button" data-ollama-mode="installed">
+                                        <strong>已安装模型</strong>
+                                        <span>使用 ollama list 里已有的模型名</span>
+                                    </button>
+                                    <button class="ollama-mode-btn" type="button" data-ollama-mode="local">
+                                        <strong>导入本地文件</strong>
+                                        <span>选择 GGUF 文件或 HF 模型目录</span>
+                                    </button>
+                                    <button class="ollama-mode-btn" type="button" data-ollama-mode="online">
+                                        <strong>在线下载模型</strong>
+                                        <span>从 Ollama 官方库搜索并 pull</span>
+                                    </button>
+                                </div>
+
+                                <div class="field ollama-mode-section" id="ollama-installed-model-section">
+                                    <div class="field-meta">
+                                        <span class="field-label">已安装模型名</span>
+                                        <span class="field-actions">
+                                            <button id="ollama-installed-model-refresh-btn" class="ghost-btn" type="button">检查本机模型</button>
+                                            <button id="ollama-installed-model-use-btn" class="ghost-btn" type="button">使用此模型名</button>
+                                        </span>
+                                    </div>
+                                    <select id="ollama-installed-model-list"></select>
+                                    <input id="ollama-installed-model-id" type="text" placeholder="例如 qwen3.5:4b、llama3.2:1b，必须已经出现在 ollama list 里">
+                                    <div class="field-help" id="ollama-installed-model-status">适合已经能在 ollama list 里看到的模型；这个模式只检查和启用本机模型，不会联网下载。</div>
+                                </div>
+
+                                <div class="field ollama-mode-section" id="ollama-local-model-section">
+                                    <div class="field-meta">
+                                        <span class="field-label">本地模型文件或目录</span>
+                                        <span class="field-actions">
+                                            <button id="ollama-local-model-browse-btn" class="ghost-btn" type="button">选择本地模型</button>
+                                            <button id="ollama-local-model-use-btn" class="ghost-btn" type="button">使用此模型</button>
+                                            <button id="ollama-local-model-clear-btn" class="ghost-btn" type="button">清除</button>
+                                        </span>
+                                    </div>
+                                    <input id="ollama-local-model-path" type="text" placeholder="选择 .gguf 文件，或 HF / ModelScope Safetensors 模型目录">
+                                    <div class="field-help" id="ollama-local-model-status">AILIS 会检查路径、权重文件、模型仓库空间和 Ollama 版本；本地导入不会下载模型权重。</div>
+                                </div>
+                                <div class="field ollama-mode-section" id="ollama-online-model-section">
+                                    <div class="field-meta">
+                                        <span class="field-label">在线查找 Ollama 模型</span>
+                                        <span class="field-actions">
+                                            <button id="ollama-model-search-btn" class="ghost-btn" type="button">搜索模型</button>
+                                            <button id="ollama-model-use-btn" class="ghost-btn" type="button">使用选中模型</button>
+                                        </span>
+                                    </div>
+                                    <input id="ollama-model-query" type="text" placeholder="例如 Qwen3、Llama、DeepSeek、Coder">
+                                    <select id="ollama-model-catalog"></select>
+                                    <div class="field-help" id="ollama-model-catalog-status">本机没有合适模型时使用这里；选中后会联网下载到 Ollama 模型仓库。</div>
+                                </div>
+                                <div class="field ollama-mode-section" id="ollama-used-model-section">
+                                    <div class="field-meta">
+                                        <span class="field-label">最近使用模型</span>
+                                        <span class="field-actions">
+                                            <button id="ollama-used-model-use-btn" class="ghost-btn" type="button">使用选中模型</button>
+                                        </span>
+                                    </div>
+                                    <select id="ollama-used-model-list"></select>
+                                    <div class="field-help" id="ollama-used-model-status">AILIS 会记住成功启用或保存过的 Ollama 模型，重启后也能快速切回。</div>
+                                </div>
+                                <div class="field">
+                                    <div class="field-meta">
+                                        <span class="field-label">Ollama 本地服务</span>
+                                        <span class="field-actions">
+                                            <button id="ollama-runtime-deploy-btn" class="primary-btn" type="button">启用模型</button>
+                                            <button id="ollama-runtime-cancel-btn" class="ghost-btn" type="button" disabled>取消</button>
+                                        </span>
+                                    </div>
+                                    <div class="field-help" id="ollama-runtime-status">AILIS 会按当前模型来源执行：已安装模型只连接和启用；本地文件只导入；在线模型才下载。</div>
+                                    <pre class="field-help" id="ollama-runtime-log" style="white-space: pre-wrap; max-height: 140px; overflow: auto;"></pre>
+                                </div>
+                            </div>
+
+                            </div>
+                        </div>
+
+                        <label class="field">
+                            <div class="field-meta">
+                                <span class="field-label">API Key</span>
+                                <button id="clear-llm-key-btn" class="ghost-btn" type="button">移除当前 Key</button>
+                            </div>
+                            <select id="llm-api-key-select"></select>
+                            <input id="llm-api-key-label" type="text" autocomplete="off" placeholder="Key 名称，可选：例如 DeepSeek 主 Key、OpenAI 备用 Key">
+                            <input id="llm-api-key" type="password" autocomplete="off" placeholder="粘贴新 Key 后保存；留空则使用上方选中的已保存 Key">
+                            <div class="field-help" id="llm-key-state">Key 状态读取中...</div>
+                        </label>
+
+                        <div class="field">
+                            <div class="field-meta">
+                                <span class="field-label">连接测试</span>
+                                <button id="llm-health-check-btn" class="ghost-btn" type="button">测试连接</button>
+                            </div>
+                            <div class="field-help" id="llm-health-state">尚未测试当前模型。</div>
+                        </div>
+
+                        <details class="advanced-section">
+                            <summary>高级：手动覆盖 Provider / API Base / 模型 ID</summary>
+                            <div class="section-body">
+                        <label class="field">
+                            <div class="field-meta">
+                                <span class="field-label">高级 Provider</span>
+                            </div>
+                            <select id="llm-provider"></select>
+                        </label>
+
+                        <label class="field">
+                            <div class="field-meta">
+                                <span class="field-label">高级 API Base</span>
+                            </div>
+                            <input id="llm-base-url" type="text" placeholder="https://ark.cn-beijing.volces.com/api/v3">
+                        </label>
+
+                        <label class="field">
+                            <div class="field-meta">
+                                <span class="field-label">高级模型 ID</span>
+                            </div>
+                            <input id="llm-model" type="text" placeholder="doubao-seed-2-0-mini-260215">
+                        </label>
+
+                        <div class="split-2">
+                            <label class="field">
+                                <div class="field-meta">
+                                    <span class="field-label">温度</span>
+                                    <span class="field-value" id="llm-temperature-value"></span>
+                                </div>
+                                <input id="llm-temperature" type="range" min="0" max="2" step="0.01">
+                            </label>
+                            <label class="field">
+                                <div class="field-meta">
+                                    <span class="field-label">超时（ms）</span>
+                                </div>
+                                <input id="llm-timeout" type="number" min="5000" max="120000" step="1000">
+                            </label>
+                        </div>
+
+                        <div class="field">
+                            <div class="field-meta">
+                                <span class="field-label">能力详情</span>
+                            </div>
+                            <div class="field-help" id="llm-capability-state">能力表读取中...</div>
+                        </div>
+                            </div>
+                        </details>
+                    </div>
+                </section>
+
+                <section class="panel-section section-email" id="section-email">
+                    <div class="section-head">
+                        <div class="section-title">邮箱账号</div>
+                        <div class="section-copy">邮件工具会优先使用这里保存的本机账号配置。QQ 使用邮箱授权码，Gmail/Outlook 可用应用密码或 OAuth2 token。</div>
+                    </div>
+                    <div class="section-body">
+                        <div class="split-2">
+                            <label class="field">
+                                <div class="field-meta">
+                                    <span class="field-label">QQ 邮箱</span>
+                                </div>
+                                <input id="email-qq-account" type="text" autocomplete="off" placeholder="name@qq.com">
+                            </label>
+                            <label class="field">
+                                <div class="field-meta">
+                                    <span class="field-label">授权码</span>
+                                    <button id="clear-email-qq-secret-btn" class="ghost-btn" type="button">清除</button>
+                                </div>
+                                <input id="email-qq-secret" type="password" autocomplete="off" placeholder="留空表示保留已保存授权码">
+                                <div class="field-help" id="email-qq-state">未配置</div>
+                            </label>
+                        </div>
+
+                        <div class="split-2">
+                            <label class="field">
+                                <div class="field-meta">
+                                    <span class="field-label">Gmail</span>
+                                </div>
+                                <input id="email-gmail-account" type="text" autocomplete="off" placeholder="name@gmail.com">
+                            </label>
+                            <label class="field">
+                                <div class="field-meta">
+                                    <span class="field-label">App Password / Token</span>
+                                    <button id="clear-email-gmail-secret-btn" class="ghost-btn" type="button">清除</button>
+                                </div>
+                                <input id="email-gmail-secret" type="password" autocomplete="off" placeholder="留空表示保留已保存密钥">
+                                <div class="field-help" id="email-gmail-state">未配置</div>
+                            </label>
+                        </div>
+
+                        <div class="split-2">
+                            <label class="field">
+                                <div class="field-meta">
+                                    <span class="field-label">Outlook</span>
+                                </div>
+                                <input id="email-outlook-account" type="text" autocomplete="off" placeholder="name@outlook.com">
+                            </label>
+                            <label class="field">
+                                <div class="field-meta">
+                                    <span class="field-label">App Password / Token</span>
+                                    <button id="clear-email-outlook-secret-btn" class="ghost-btn" type="button">清除</button>
+                                </div>
+                                <input id="email-outlook-secret" type="password" autocomplete="off" placeholder="留空表示保留已保存密钥">
+                                <div class="field-help" id="email-outlook-state">未配置</div>
+                            </label>
+                        </div>
+                    </div>
+                </section>
+                    </div>
+                </section>
+
+                <section class="control-page" id="page-voice" data-control-page="voice" role="tabpanel" aria-labelledby="tab-voice">
+                    <div class="page-intro">
+                        <div class="page-eyebrow">Voice</div>
+                        <div class="page-title">语音与麦克风</div>
+                        <div class="page-copy">语音输出、ElevenLabs、CosyVoice、本地 ASR 和麦克风设置集中在这里；诊断和修复仍然保持用户主动触发。</div>
+                    </div>
+                    <div class="section-grid">
+                <section class="panel-section section-speech" id="section-voice">
+                    <div class="section-head">
+                        <div class="section-title">语音与麦克风</div>
+                        <div class="section-copy">普通用户只需要选择语音路线、麦克风和 ASR 模式；音频细节放在高级设置里。</div>
+                    </div>
+                    <div class="section-body">
+                        <label class="field">
+                            <div class="field-meta">
+                                <span class="field-label">语音输出模式</span>
+                            </div>
+                            <select id="speech-mode"></select>
+                        </label>
+
+                        <label class="toggle-row">
+                            <input id="chunked-tts-enabled" type="checkbox">
+                            <span>分段语音（边生成边播放）</span>
+                        </label>
+
+                        <details class="advanced-section">
+                            <summary>高级 ElevenLabs 参数</summary>
+                            <div class="section-body">
+                        <label class="field">
+                            <div class="field-meta">
+                                <span class="field-label">ElevenLabs API Base</span>
+                            </div>
+                            <input id="elevenlabs-api-base" type="text" autocomplete="off" placeholder="https://api.elevenlabs.io">
+                        </label>
+
+                        <label class="field">
+                            <div class="field-meta">
+                                <span class="field-label">ElevenLabs Voice ID</span>
+                            </div>
+                            <input id="elevenlabs-voice-id" type="text" autocomplete="off" placeholder="输入 Voice ID">
+                        </label>
+
+                        <label class="field">
+                            <div class="field-meta">
+                                <span class="field-label">ElevenLabs API Key</span>
+                                <button id="clear-elevenlabs-key-btn" class="ghost-btn" type="button">清除 Key</button>
+                            </div>
+                            <input id="elevenlabs-api-key" type="password" autocomplete="off" placeholder="留空表示保留已保存 Key">
+                            <div class="field-help" id="elevenlabs-key-state">Key 状态读取中...</div>
+                        </label>
+
+                        <div class="split-2">
+                            <label class="field">
+                                <div class="field-meta">
+                                    <span class="field-label">语言风格档</span>
+                                </div>
+                                <select id="elevenlabs-language-code">
+                                    <option value="zh">中文温柔二次元</option>
+                                    <option value="en">English gentle anime</option>
+                                    <option value="ja">日本語やさしいアニメ</option>
+                                    <option value="ko">한국어 gentle anime</option>
+                                </select>
+                                <div class="field-help">切换语言会套用对应的高质量 ElevenLabs 参数。</div>
+                            </label>
+                            <label class="field">
+                                <div class="field-meta">
+                                    <span class="field-label">ElevenLabs 模型</span>
+                                </div>
+                                <input id="elevenlabs-model-id" type="text" autocomplete="off" placeholder="eleven_multilingual_v2">
+                            </label>
+                        </div>
+
+                        <div class="split-2">
+                            <label class="field">
+                                <div class="field-meta">
+                                    <span class="field-label">音频格式</span>
+                                </div>
+                                <input id="elevenlabs-output-format" type="text" autocomplete="off" placeholder="mp3_44100_128">
+                            </label>
+                            <label class="field">
+                                <div class="field-meta">
+                                    <span class="field-label">ElevenLabs 超时（ms）</span>
+                                </div>
+                                <input id="elevenlabs-timeout" type="number" min="5000" max="120000" step="1000">
+                            </label>
+                        </div>
+
+                        <label class="field">
+                            <div class="field-meta">
+                                <span class="field-label">低延迟优化</span>
+                                <span class="field-value" id="elevenlabs-optimize-latency-value"></span>
+                            </div>
+                            <input id="elevenlabs-optimize-latency" type="range" min="0" max="4" step="1">
+                            <div class="field-help">0 更稳更自然，3-4 更快但更容易牺牲音质。</div>
+                        </label>
+
+                        <label class="toggle-row">
+                            <input id="elevenlabs-speaker-boost" type="checkbox">
+                            <span>Speaker Boost</span>
+                        </label>
+
+                        <label class="field">
+                            <div class="field-meta">
+                                <span class="field-label">语速</span>
+                                <span class="field-value" id="elevenlabs-speed-value"></span>
+                            </div>
+                            <input id="elevenlabs-speed" type="range" min="0.7" max="1.2" step="0.01">
+                        </label>
+
+                        <div class="split-2">
+                            <label class="field">
+                                <div class="field-meta">
+                                    <span class="field-label">稳定度</span>
+                                    <span class="field-value" id="elevenlabs-stability-value"></span>
+                                </div>
+                                <input id="elevenlabs-stability" type="range" min="0" max="1" step="0.01">
+                            </label>
+                            <label class="field">
+                                <div class="field-meta">
+                                    <span class="field-label">相似度增强</span>
+                                    <span class="field-value" id="elevenlabs-similarity-value"></span>
+                                </div>
+                                <input id="elevenlabs-similarity" type="range" min="0" max="1" step="0.01">
+                            </label>
+                        </div>
+
+                        <label class="field">
+                            <div class="field-meta">
+                                <span class="field-label">风格强度</span>
+                                <span class="field-value" id="elevenlabs-style-value"></span>
+                            </div>
+                            <input id="elevenlabs-style" type="range" min="0" max="1" step="0.01">
+                        </label>
+                            </div>
+                        </details>
+
+                        <label class="field">
+                            <div class="field-meta">
+                                <span class="field-label">默认麦克风</span>
+                                <button id="refresh-mics-btn" class="ghost-btn" type="button">刷新设备</button>
+                            </div>
+                            <select id="preferred-mic"></select>
+                            <div class="field-help" id="mic-help">会优先使用这里指定的输入设备。</div>
+                        </label>
+
+                        <label class="field">
+                            <div class="field-meta">
+                                <span class="field-label">语音识别模式</span>
+                            </div>
+                            <select id="recognition-mode"></select>
+                            <div class="field-help">快速 ASR 会更早收尾并优先低延迟；自动 ASR 会持续监听，并先做人声/噪音门禁。</div>
+                        </label>
+
+                        <div class="field local-voice-runtime-panel">
+                            <div class="runtime-header">
+                                <div>
+                                    <div class="runtime-title">CosyVoice3 本地语音</div>
+                                    <div class="runtime-copy">选择安装位置后，AILIS 会自动检查、安装并复用本地语音运行时。</div>
+                                </div>
+                                <div class="field-actions">
+                                    <button id="voice-runtime-diagnose-btn" class="ghost-btn" type="button">检查</button>
+                                    <button id="voice-runtime-bootstrap-btn" class="primary-btn" type="button">安装并启用</button>
+                                </div>
+                            </div>
+                            <div class="runtime-path-row">
+                                <label class="field">
+                                    <div class="field-meta">
+                                        <span class="field-label">安装位置</span>
+                                    </div>
+                                    <input id="voice-runtime-root" type="text" placeholder="默认使用 AILIS 根目录 models/voice-runtime">
+                                </label>
+                                <button id="voice-runtime-browse-btn" class="ghost-btn" type="button">选择目录</button>
+                            </div>
+                            <div class="field-help" id="voice-runtime-path-help">源码、模型、Python 和 ASR 缓存都会放在这里；保存后重启会继续使用。</div>
+                            <div id="voice-runtime-status" class="runtime-diagnostics">尚未检查本地语音。</div>
+                            <div class="field-help" id="voice-runtime-plan"></div>
+                            <pre class="runtime-log" id="voice-runtime-log" hidden></pre>
+                        </div>
+
+                        <div class="field local-voice-runtime-panel" id="runtime-components-panel">
+                            <div class="runtime-header">
+                                <div>
+                                    <div class="runtime-title">安装包可选运行时</div>
+                                    <div class="runtime-copy">安装器里选择的 Python、CosyVoice3、ASR、Web/Search 会在这里继续安装、导入或验证。</div>
+                                </div>
+                                <div class="field-actions">
+                                    <button id="runtime-components-refresh-btn" class="ghost-btn" type="button">检查</button>
+                                    <button id="runtime-components-install-btn" class="primary-btn" type="button">安装已选组件</button>
+                                </div>
+                            </div>
+                            <div id="runtime-components-status" class="runtime-diagnostics">运行时组件状态读取中...</div>
+                            <div class="field-help" id="runtime-components-plan"></div>
+                            <pre class="runtime-log" id="runtime-components-log" hidden></pre>
+                        </div>
+
+                        <details class="advanced-section">
+                            <summary>高级本地语音参数</summary>
+                            <div class="section-body">
+                        <label class="field">
+                            <div class="field-meta">
+                                <span class="field-label">本地语音速度</span>
+                                <span class="field-value" id="tts-rate-value"></span>
+                            </div>
+                            <input id="tts-rate" type="range" min="0.6" max="1.4" step="0.01">
+                        </label>
+
+                        <label class="field">
+                            <div class="field-meta">
+                                <span class="field-label">本地语音音高</span>
+                                <span class="field-value" id="tts-pitch-value"></span>
+                            </div>
+                            <input id="tts-pitch" type="range" min="0.6" max="1.6" step="0.01">
+                        </label>
+
+                        <label class="field">
+                            <div class="field-meta">
+                                <span class="field-label">本地语音音量</span>
+                                <span class="field-value" id="tts-volume-value"></span>
+                            </div>
+                            <input id="tts-volume" type="range" min="0" max="1" step="0.01">
+                        </label>
+                            </div>
+                        </details>
+                    </div>
+                </section>
+                    </div>
+                </section>
+
+                <section class="control-page" id="page-advanced" data-control-page="advanced" role="tabpanel" aria-labelledby="tab-advanced">
+                    <div class="page-intro">
+                        <div class="page-eyebrow">Diagnostics</div>
+                        <div class="page-title">诊断与状态</div>
+                        <div class="page-copy">运行状态、工具状态、记忆目录和低频维护入口放在这里，避免它们拖慢或干扰首屏常用设置。</div>
+                    </div>
+                    <div class="section-grid">
+                <section class="panel-section advanced-panel section-runtime" id="section-advanced">
+                    <details class="advanced-section">
+                        <summary>高级设置：运行状态与记忆目录</summary>
+                        <div class="section-body">
+                            <label class="field">
+                                <div class="field-meta">
+                                    <span class="field-label">AILIS 状态目录</span>
+                                    <span class="field-actions">
+                                        <button id="choose-ailis-state-dir-btn" class="ghost-btn" type="button">选择目录</button>
+                                        <button id="reset-ailis-state-dir-btn" class="ghost-btn" type="button">使用默认</button>
+                                    </span>
+                                </div>
+                                <input id="ailis-state-dir" type="text" autocomplete="off" placeholder="留空使用软件根目录下的 .ailis-state">
+                                <div class="field-help" id="ailis-state-dir-help">默认目录读取中...</div>
+                            </label>
+
+                            <div class="field">
+                                <div class="field-meta">
+                                    <span class="field-label">运行状态</span>
+                                </div>
+                                <div class="field-help" id="agent-runtime-status-text">状态读取中...</div>
+                                <div class="field-help" id="agent-runtime-detail-text"></div>
+                            </div>
+
+                            <div class="field">
+                                <div class="field-meta">
+                                    <span class="field-label">工具状态</span>
+                                </div>
+                                <div class="field-help" id="package-state-text">运行环境读取中...</div>
+                                <div class="field-help" id="user-data-path"></div>
+                            </div>
+
+                            <div class="field">
+                                <div class="field-meta">
+                                    <span class="field-label">Memory 路径</span>
+                                    <span class="field-actions">
+                                        <button id="refresh-memory-btn" class="ghost-btn" type="button">刷新记忆</button>
+                                        <button id="reset-affinity-btn" class="ghost-btn" type="button">重置好感度</button>
+                                        <button id="clear-memory-btn" class="danger-btn" type="button">清空记忆</button>
+                                    </span>
+                                </div>
+                                <div class="field-help" id="memory-status-text">记忆状态读取中...</div>
+                                <div class="field-help" id="memory-path-text"></div>
+                                <div class="memory-list" id="memory-block-list"></div>
+                            </div>
+
+                            <div class="field local-voice-runtime-panel">
+                                <div class="runtime-header">
+                                    <div>
+                                        <div class="runtime-title">运行时资产管理</div>
+                                        <div class="runtime-copy">统一扫描、迁移和清理 models、.ailis-runtime、build-cache 中的可重建资产；不会自动删除任何文件。</div>
+                                    </div>
+                                    <div class="field-actions">
+                                        <button id="runtime-assets-scan-btn" class="ghost-btn" type="button">扫描资产</button>
+                                    </div>
+                                </div>
+                                <div id="runtime-assets-summary" class="runtime-diagnostics">
+                                    点击“扫描资产”后查看本地运行时体积和可清理项。
+                                </div>
+                                <div class="field-help" id="runtime-assets-status"></div>
+                                <div id="runtime-assets-list" class="runtime-asset-list"></div>
+                            </div>
+                        </div>
+                    </details>
+                </section>
+                    </div>
+                </section>
+
+            </div>
+        </main>
+
+        <footer id="footer-bar">
+            <div id="status-text">正在读取当前配置...</div>
+            <div id="footer-actions">
+                <button id="reset-btn" class="danger-btn" type="button">恢复默认</button>
+                <button id="save-btn" class="primary-btn" type="button" disabled>保存设置</button>
+            </div>
+        </footer>
+    </div>
+
+</body>
+</html>
