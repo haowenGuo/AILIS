@@ -685,8 +685,9 @@ function getAvatarCue(result = {}) {
 }
 
 export class AILISDesktopChatService {
-    constructor() {
-        this.gateway = window.ailisDesktop?.gateway || null;
+    constructor({ gateway = window.ailisDesktop?.gateway || null, runtimeKind = 'desktop' } = {}) {
+        this.gateway = gateway;
+        this.runtimeKind = runtimeKind === 'hosted' ? 'hosted' : 'desktop';
         this.supportsAutoChat = true;
         this.prefersThinkingState = true;
         this.activeRunId = '';
@@ -752,7 +753,11 @@ export class AILISDesktopChatService {
 
         const splitAttachments = splitChatAttachments(latestUserEntry?.attachments);
         const visionAttachments = splitAttachments.vision;
-        if (visionAttachments.length && !splitAttachments.files.length) {
+        if (
+            this.runtimeKind === 'desktop' &&
+            visionAttachments.length &&
+            !splitAttachments.files.length
+        ) {
             const payload = await fetchVisionAssistantTurn(latestUserEntry, {
                 sessionId,
                 messageHistory
@@ -792,6 +797,7 @@ export class AILISDesktopChatService {
                 maxAgentSteps: 4,
                 context: {
                     workspace: status.workspaceRoot,
+                    runtimeKind: this.runtimeKind,
                     agentLoop: 'llm',
                     directToolExecutor: true,
                     maxAgentSteps: 4,

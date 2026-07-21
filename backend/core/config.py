@@ -46,6 +46,14 @@ class Settings(BaseSettings):
     LLM_API_KEY: str = ""
     LLM_MODEL_NAME: str = "deepseek-chat"
 
+    # ================= Hosted AILIS Agent Runtime =================
+    AILIS_HOSTED_RUNTIME_ENABLED: bool = True
+    AILIS_HOSTED_RUNTIME_URL: str = "http://127.0.0.1:18777"
+    AILIS_HOSTED_RUNTIME_INTERNAL_TOKEN: str = ""
+    AILIS_HOSTED_RUNTIME_TIMEOUT_SECONDS: int = 360
+    AILIS_WEB_SESSION_SECRET: str = ""
+    AILIS_WEB_SESSION_TTL_DAYS: int = 180
+
     # ================= AI Safety 配置 =================
     # 默认复用主对话模型；如需单独切换内容安全审核模型，可单独覆盖下面三个字段
     SAFETY_API_BASE: str = ""

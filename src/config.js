@@ -3,10 +3,19 @@ import { getLoadableMotionFiles } from './character/motion-intake-catalog.js';
 import { DEFAULT_RENDER_PROFILE_ID, normalizeRenderProfileId } from './character/render-profiles.js';
 
 const CLOUD_BACKEND_BASE_URL = 'https://101.133.239.56';
-const DEFAULT_BACKEND_BASE_URL = window.location.hostname.toLowerCase() === 'haowenguo.github.io'
+const RUNTIME_HOSTNAME = typeof window !== 'undefined'
+    ? window.location.hostname.toLowerCase()
+    : '';
+const RUNTIME_PROTOCOL = typeof window !== 'undefined'
+    ? window.location.protocol
+    : '';
+const RUNTIME_ORIGIN = typeof window !== 'undefined'
+    ? window.location.origin
+    : '';
+const DEFAULT_BACKEND_BASE_URL = RUNTIME_HOSTNAME === 'haowenguo.github.io'
     ? CLOUD_BACKEND_BASE_URL
-    : ['http:', 'https:'].includes(window.location.protocol)
-        ? window.location.origin
+    : ['http:', 'https:'].includes(RUNTIME_PROTOCOL)
+        ? RUNTIME_ORIGIN
         : CLOUD_BACKEND_BASE_URL;
 const DEFAULT_DESKTOP_BACKEND_BASE_URL = '';
 const DEFAULT_BACKEND_MODE = 'ailis';
@@ -136,6 +145,7 @@ function getRuntimeSettings() {
             backendBaseUrl: DEFAULT_BACKEND_BASE_URL,
             backendMode: DEFAULT_BACKEND_MODE,
             demoModeEnabled: false,
+            hostedAgentEnabled: false,
             isGitHubPages: false,
             speechMode: DEFAULT_SPEECH_MODE,
             desktopPreferences: {}
@@ -166,7 +176,7 @@ function getRuntimeSettings() {
         DEFAULT_SPEECH_MODE
     ).trim().toLowerCase();
     const isGitHubPages = window.location.hostname.endsWith('github.io');
-    const demoModeEnabled = forceDemo || (isGitHubPages && !queryBackend && !storedBackend);
+    const demoModeEnabled = forceDemo;
 
     const fallbackBackendBaseUrl = isDesktopRuntime
         ? DEFAULT_DESKTOP_BACKEND_BASE_URL
@@ -184,6 +194,7 @@ function getRuntimeSettings() {
             desktopPreferences.backendMode || DEFAULT_BACKEND_MODE
         ),
         demoModeEnabled,
+        hostedAgentEnabled: !isDesktopRuntime && !demoModeEnabled,
         isGitHubPages,
         speechMode: normalizeSpeechMode(
             querySpeechMode || desktopPreferences.speechMode || storedSpeechMode,
@@ -427,6 +438,7 @@ export const CONFIG = {
     BACKEND_BASE_URL: runtimeSettings.backendBaseUrl,
     BACKEND_MODE: runtimeSettings.backendMode,
     DEMO_MODE_ENABLED: runtimeSettings.demoModeEnabled,
+    HOSTED_AGENT_ENABLED: runtimeSettings.hostedAgentEnabled,
     IS_GITHUB_PAGES: runtimeSettings.isGitHubPages,
     BACKEND_STREAM_API_URL: `${runtimeSettings.backendBaseUrl}/api/chat`,
     BACKEND_TTS_API_URL: `${runtimeSettings.backendBaseUrl}/api/chat/tts`,
