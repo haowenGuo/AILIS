@@ -6,6 +6,8 @@ const DEFAULT_BACKEND_BASE_URL = window.location.hostname.toLowerCase() === 'hao
         : CLOUD_BACKEND_BASE_URL;
 const PET_CHAT_EVENT_NAME = 'ailis-chat-ui-event';
 const AILIS_AVATAR_URL = new URL('../Resources/Emotes/ailis-small/wave.png', window.location.href).href;
+const SCENE_STORAGE_KEY = 'ailis.web.scene.v1';
+const SCENE_IDS = new Set(['sakura', 'school', 'seaside']);
 
 const elements = {
     petFrame: document.getElementById('pet-frame'),
@@ -14,11 +16,13 @@ const elements = {
     backendStatus: document.getElementById('backend-status'),
     backendStatusText: document.getElementById('backend-status-text'),
     composerStatus: document.getElementById('composer-status'),
+    characterPane: document.querySelector('.character-pane'),
     messageList: document.getElementById('message-list'),
     composer: document.getElementById('composer'),
     chatInput: document.getElementById('chat-input'),
     sendButton: document.getElementById('send-button'),
-    quickButtons: Array.from(document.querySelectorAll('[data-prompt]'))
+    quickButtons: Array.from(document.querySelectorAll('[data-prompt]')),
+    sceneButtons: Array.from(document.querySelectorAll('[data-scene-option]'))
 };
 
 const state = {
@@ -51,6 +55,29 @@ function getBackendBaseUrl() {
 }
 
 const backendBaseUrl = getBackendBaseUrl();
+
+function setScene(sceneId, { persist = true } = {}) {
+    const nextScene = SCENE_IDS.has(sceneId) ? sceneId : 'sakura';
+    elements.characterPane.dataset.scene = nextScene;
+    elements.sceneButtons.forEach((button) => {
+        button.setAttribute('aria-pressed', String(button.dataset.sceneOption === nextScene));
+    });
+    if (persist) {
+        try {
+            window.localStorage?.setItem(SCENE_STORAGE_KEY, nextScene);
+        } catch {
+            // Scene selection remains available for the current page session.
+        }
+    }
+}
+
+function restoreScene() {
+    try {
+        setScene(window.localStorage?.getItem(SCENE_STORAGE_KEY), { persist: false });
+    } catch {
+        setScene('sakura', { persist: false });
+    }
+}
 
 function setModelStatus(text, status = 'loading') {
     elements.modelStatus.dataset.state = status;
@@ -377,7 +404,13 @@ elements.quickButtons.forEach((button) => {
         void sendPrompt(button.dataset.prompt);
     });
 });
+elements.sceneButtons.forEach((button) => {
+    button.addEventListener('click', () => {
+        setScene(button.dataset.sceneOption);
+    });
+});
 
+restoreScene();
 configurePetFrame();
 void checkBackend();
 resizeInput();

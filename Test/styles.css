@@ -27,8 +27,10 @@ html,
 body {
     width: 100%;
     max-width: 100%;
-    min-height: 100%;
+    height: 100%;
+    min-height: 0;
     margin: 0;
+    overflow: hidden;
     overflow-x: hidden;
 }
 
@@ -80,9 +82,11 @@ svg {
 .app-shell {
     width: 100%;
     max-width: 100%;
-    min-height: 100dvh;
+    height: 100dvh;
+    min-height: 0;
     display: grid;
     grid-template-rows: 64px minmax(0, 1fr);
+    overflow: hidden;
 }
 
 .topbar {
@@ -198,11 +202,13 @@ svg {
     width: 100%;
     min-width: 0;
     max-width: 100%;
+    height: 100%;
     min-height: 0;
     display: grid;
     grid-template-columns: minmax(0, 1.5fr) minmax(350px, 0.72fr);
     gap: 12px;
     padding: 12px;
+    overflow: hidden;
 }
 
 .character-pane,
@@ -217,20 +223,20 @@ svg {
 }
 
 .character-pane {
+    --scene-image: url("./scenes/sakura.webp");
     background-color: var(--stage);
-    background-image:
-        linear-gradient(rgba(67, 116, 130, 0.055) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(67, 116, 130, 0.055) 1px, transparent 1px);
-    background-size: 44px 44px;
+    background-image: var(--scene-image);
+    background-position: center;
+    background-size: cover;
+    transition: background-image 180ms ease;
 }
 
-.character-pane::after {
-    content: "";
-    position: absolute;
-    inset: auto 0 0;
-    height: 32%;
-    pointer-events: none;
-    background: linear-gradient(to top, rgba(211, 229, 234, 0.78), transparent);
+.character-pane[data-scene="school"] {
+    --scene-image: url("./scenes/school.webp");
+}
+
+.character-pane[data-scene="seaside"] {
+    --scene-image: url("./scenes/seaside.webp");
 }
 
 .stage-topline,
@@ -322,7 +328,51 @@ svg {
     font-weight: 700;
 }
 
+.scene-picker {
+    position: absolute;
+    z-index: 4;
+    right: 12px;
+    bottom: 12px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px;
+    border: 1px solid rgba(194, 211, 217, 0.9);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.82);
+    backdrop-filter: blur(14px);
+}
+
+.scene-option {
+    width: 46px;
+    height: 30px;
+    padding: 0;
+    overflow: hidden;
+    border: 2px solid transparent;
+    border-radius: 6px;
+    background: var(--surface-soft);
+    cursor: pointer;
+}
+
+.scene-option img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.scene-option:hover,
+.scene-option[aria-pressed="true"] {
+    border-color: var(--rose);
+}
+
+.scene-option:focus-visible {
+    outline: 3px solid rgba(22, 127, 131, 0.24);
+    outline-offset: 2px;
+}
+
 .conversation-pane {
+    height: 100%;
     display: grid;
     grid-template-rows: auto minmax(0, 1fr) auto;
     background: var(--surface);
@@ -676,6 +726,16 @@ svg {
     .stage-footer {
         bottom: 9px;
         left: 10px;
+    }
+
+    .scene-picker {
+        right: 9px;
+        bottom: 9px;
+    }
+
+    .scene-option {
+        width: 40px;
+        height: 27px;
     }
 
     .character-role {

@@ -68,7 +68,7 @@
         </header>
 
         <main class="experience">
-            <section class="character-pane" aria-label="AILIS 3D 角色">
+            <section class="character-pane" data-scene="sakura" aria-label="AILIS 3D 角色">
                 <div class="stage-topline">
                     <div class="character-identity">
                         <span class="character-name">AILIS</span>
@@ -90,6 +90,39 @@
 
                 <div class="stage-footer">
                     <span>陪伴模式</span>
+                </div>
+
+                <div class="scene-picker" role="group" aria-label="切换背景场景">
+                    <button
+                        class="scene-option"
+                        type="button"
+                        data-scene-option="sakura"
+                        aria-label="樱花河畔"
+                        title="樱花河畔"
+                        aria-pressed="true"
+                    >
+                        <img src="./scenes/sakura-thumb.webp" alt="">
+                    </button>
+                    <button
+                        class="scene-option"
+                        type="button"
+                        data-scene-option="school"
+                        aria-label="清晨上学路"
+                        title="清晨上学路"
+                        aria-pressed="false"
+                    >
+                        <img src="./scenes/school-thumb.webp" alt="">
+                    </button>
+                    <button
+                        class="scene-option"
+                        type="button"
+                        data-scene-option="seaside"
+                        aria-label="海边放学路"
+                        title="海边放学路"
+                        aria-pressed="false"
+                    >
+                        <img src="./scenes/seaside-thumb.webp" alt="">
+                    </button>
                 </div>
             </section>
 
