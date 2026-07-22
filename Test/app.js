@@ -492,6 +492,7 @@ async function sendPrompt(content) {
     scrollMessages({ force: true });
 
     try {
+        await petWindow.audioPlayer?.unlock?.();
         await petWindow.chatSystem.sendExternalMessage(text);
         syncPetSnapshot();
     } catch (error) {
@@ -509,7 +510,7 @@ async function sendPrompt(content) {
 function configurePetFrame() {
     const petUrl = new URL('../pet.html', window.location.href);
     petUrl.searchParams.set('backend', backendBaseUrl);
-    petUrl.searchParams.set('speechMode', 'off');
+    petUrl.searchParams.set('speechMode', 'server');
     petUrl.searchParams.set('web', '1');
     petUrl.searchParams.set('camera', 'close');
     petUrl.searchParams.set('renderProfile', state.renderProfileId);

@@ -1,44 +1,51 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 import { ChatTTSSystem } from '../src/chat-tts-system.js';
 
-function createStreamingFallbackHarness({ speechDisabled = true } = {}) {
+function createStreamingHarness() {
     const calls = [];
     const system = Object.create(ChatTTSSystem.prototype);
-    system.speechProvider = { isSpeechDisabled: speechDisabled };
-    system.activeChunkedSpeechSession = null;
-    system.activeStreamingFallbackSpeech = null;
-    system.getAvatarSpeechText = () => '正在流式回复';
     system.vrmSystem = {
         startFallbackSpeech() {
             calls.push('mouth-start');
-        },
-        stopSpeaking() {
-            calls.push('mouth-stop');
         }
     };
-    system.startAvatarSpeech = () => calls.push('avatar-start');
-    system.endAvatarSpeech = () => calls.push('avatar-stop');
+    system.executeAvatarCue = () => calls.push('cue');
+    system.updateMessageContent = () => calls.push('text');
+    system.scrollToBottom = () => calls.push('scroll');
     return { system, calls };
 }
 
-test('text-only streaming starts fallback lip sync once and stops it at reply completion', () => {
-    const { system, calls } = createStreamingFallbackHarness();
-    const message = { dataset: { messageId: 'assistant-1' } };
-
-    assert.equal(system.startStreamingFallbackSpeech({}, '第一段', message), true);
-    assert.equal(system.startStreamingFallbackSpeech({}, '第二段', message), false);
-    assert.deepEqual(calls, ['mouth-start', 'avatar-start']);
-
-    assert.equal(system.stopStreamingFallbackSpeech(message), true);
-    assert.equal(system.stopStreamingFallbackSpeech(message), false);
-    assert.deepEqual(calls, ['mouth-start', 'avatar-start', 'mouth-stop', 'avatar-stop']);
+test('streaming text does not move the mouth before real audio playback starts', () => {
+    const { system, calls } = createStreamingHarness();
+    system.renderStreamingAssistantReply({ display_text: '正在流式回复' }, {});
+    assert.deepEqual(calls, ['cue', 'text', 'scroll']);
 });
 
-test('streaming fallback lip sync stays disabled when a real speech provider is active', () => {
-    const { system, calls } = createStreamingFallbackHarness({ speechDisabled: false });
+test('failed TTS text fallback can explicitly keep the mouth closed', async () => {
+    const { system, calls } = createStreamingHarness();
+    system.vrmSystem.stopSpeaking = () => calls.push('mouth-stop');
+    system.startAvatarSpeech = () => calls.push('avatar-start');
+    system.endAvatarSpeech = () => calls.push('avatar-stop');
+    globalThis.window = { setTimeout: (callback) => callback() };
+    try {
+        await system.playFallbackSpeech('失败降级', {}, {}, {
+            revealText: false,
+            animateMouth: false
+        });
+    } finally {
+        delete globalThis.window;
+    }
+    assert.deepEqual(calls, ['mouth-stop', 'cue', 'text', 'scroll']);
+});
 
-    assert.equal(system.startStreamingFallbackSpeech({}, '语音回复', {}), false);
-    assert.deepEqual(calls, []);
+test('web experience enables server TTS and unlocks audio from the send gesture', async () => {
+    const source = await readFile(new URL('../Test/app.js', import.meta.url), 'utf8');
+    assert.match(source, /petUrl\.searchParams\.set\('speechMode', 'server'\)/);
+    assert.match(
+        source,
+        /await petWindow\.audioPlayer\?\.unlock\?\.\(\);\s+await petWindow\.chatSystem\.sendExternalMessage\(text\)/
+    );
 });
