@@ -238,6 +238,120 @@ test('createSpeechProvider exposes only approved high-quality modes', () => {
     assert.equal(cosyProvider.getPrimaryModeLabel(), 'off');
 });
 
+test('web server TTS falls back to Chrome speech synthesis with native playback timing', async () => {
+    const previousWindow = globalThis.window;
+    const previousFetch = globalThis.fetch;
+    const calls = [];
+    let spokenUtterance = null;
+
+    class FakeSpeechSynthesisUtterance {
+        constructor(text) {
+            this.text = text;
+        }
+    }
+
+    const voices = [
+        { name: 'Microsoft Yunxi Online', lang: 'zh-CN', localService: false },
+        { name: 'Microsoft Xiaoxiao Online (Natural)', lang: 'zh-CN', localService: false },
+        { name: 'Microsoft David', lang: 'en-US', localService: true }
+    ];
+    const synth = {
+        speaking: false,
+        pending: false,
+        getVoices: () => voices,
+        cancel() {
+            calls.push('native-cancel');
+        },
+        speak(utterance) {
+            spokenUtterance = utterance;
+            calls.push('native-speak');
+            queueMicrotask(() => {
+                this.speaking = true;
+                utterance.onstart?.();
+                utterance.onboundary?.({ charIndex: 2, charLength: 2 });
+                this.speaking = false;
+                utterance.onend?.();
+            });
+        }
+    };
+
+    globalThis.window = {
+        speechSynthesis: synth,
+        SpeechSynthesisUtterance: FakeSpeechSynthesisUtterance,
+        setTimeout,
+        clearTimeout
+    };
+    globalThis.fetch = async () => {
+        calls.push('server-tts');
+        throw new Error('server unavailable');
+    };
+
+    try {
+        const provider = createSpeechProvider({ speechMode: 'server' });
+        assert.deepEqual(
+            provider.ttsCandidates.map((candidate) => candidate.id),
+            ['server-tts', 'browser-speech-synthesis']
+        );
+
+        const result = await provider.playSpeech({
+            payload: {
+                speech_text: '你好，Chrome 原生语音。'
+            },
+            displayText: '**你好**，Chrome 原生语音。',
+            alignment: null,
+            audioPlayer: {
+                async playSpeech() {
+                    throw new Error('audio player should not handle browser-native TTS');
+                }
+            },
+            vrmSystem: {
+                startFallbackSpeech() {
+                    calls.push('mouth-start');
+                },
+                stopSpeaking() {
+                    calls.push('mouth-stop');
+                }
+            },
+            updateMessageContent(text) {
+                calls.push(`text:${text}`);
+            },
+            scrollToBottom() {},
+            onAvatarPlaybackStart() {
+                calls.push('avatar-start');
+            }
+        });
+
+        assert.deepEqual(result, {
+            played: true,
+            provider: 'browser-speech-synthesis'
+        });
+        assert.equal(spokenUtterance.text, '你好，Chrome 原生语音。');
+        assert.equal(spokenUtterance.voice, voices[1]);
+        assert.equal(spokenUtterance.lang, 'zh-CN');
+        assert.equal(spokenUtterance.rate, 0.96);
+        assert.equal(spokenUtterance.pitch, 1.12);
+        assert.ok(calls.indexOf('server-tts') < calls.indexOf('native-speak'));
+        assert.ok(calls.indexOf('native-speak') < calls.indexOf('mouth-start'));
+        assert.ok(calls.indexOf('mouth-start') < calls.indexOf('mouth-stop'));
+        assert.ok(calls.includes('avatar-start'));
+        assert.equal(provider.lastTTSErrors[0]?.provider, 'server-tts');
+
+        provider.dispose();
+        assert.equal(calls.at(-1), 'native-cancel');
+    } finally {
+        if (previousWindow === undefined) {
+            delete globalThis.window;
+        } else {
+            globalThis.window = previousWindow;
+        }
+        if (previousFetch === undefined) {
+            delete globalThis.fetch;
+        } else {
+            globalThis.fetch = previousFetch;
+        }
+    }
+});
+
 test('SpeechProvider chunk synthesis falls back across candidate chain', async () => {
     const played = [];
     const provider = new SpeechProvider({

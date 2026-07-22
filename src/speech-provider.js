@@ -6,6 +6,156 @@ function isDesktopRuntime() {
     return typeof window !== 'undefined' && window.ailisDesktop?.platform === 'electron';
 }
 
+const ZH_FEMALE_VOICE_HINTS = [
+    'xiaoxiao',
+    'xiaoyi',
+    'xiaomo',
+    'xiaoxuan',
+    'xiaorui',
+    'xiaoshuang',
+    'xiaoyan',
+    'xiaoyou',
+    'xiaoqiu',
+    'xiaorou',
+    'huihui',
+    'yaoyao',
+    '晓晓',
+    '晓伊',
+    '晓墨',
+    '晓颜',
+    '晓悠',
+    '晓秋',
+    '晓柔',
+    '女'
+];
+
+const ZH_MALE_VOICE_HINTS = [
+    'yunxi',
+    'yunyang',
+    'yunjian',
+    '云希',
+    '云扬',
+    '云健',
+    '男'
+];
+
+const EN_FEMALE_VOICE_HINTS = [
+    'aria',
+    'jenny',
+    'sara',
+    'emma',
+    'female',
+    'woman',
+    'girl'
+];
+
+const EN_MALE_VOICE_HINTS = [
+    'guy',
+    'davis',
+    'tony',
+    'male',
+    'man',
+    'boy'
+];
+
+function normalizeVoiceName(value) {
+    return String(value || '').trim().toLowerCase();
+}
+
+function hasAnyHint(text, hints) {
+    return hints.some((hint) => text.includes(hint));
+}
+
+async function loadNativeVoices(timeoutMs = 1200) {
+    if (typeof window === 'undefined' || !window.speechSynthesis) {
+        return [];
+    }
+
+    const synth = window.speechSynthesis;
+    const existingVoices = synth.getVoices?.() || [];
+    if (existingVoices.length) {
+        return existingVoices;
+    }
+
+    return new Promise((resolve) => {
+        let resolved = false;
+        const finish = () => {
+            if (resolved) {
+                return;
+            }
+            resolved = true;
+            window.clearTimeout(timeoutId);
+            synth.removeEventListener?.('voiceschanged', handleVoicesChanged);
+            resolve(synth.getVoices?.() || []);
+        };
+        const handleVoicesChanged = () => finish();
+        const timeoutId = window.setTimeout(finish, timeoutMs);
+
+        synth.addEventListener?.('voiceschanged', handleVoicesChanged, { once: true });
+    });
+}
+
+function scoreNativeVoice(voice, text) {
+    const normalizedLang = normalizeVoiceName(voice?.lang);
+    const normalizedName = normalizeVoiceName(voice?.name);
+    const hasChinese = /[\u3400-\u9fff]/.test(text);
+
+    if (hasChinese) {
+        if (!/^zh\b/i.test(normalizedLang)) {
+            return Number.NEGATIVE_INFINITY;
+        }
+
+        let score = 40;
+        if (normalizedLang.includes('cn') || normalizedLang.includes('hans')) {
+            score += 12;
+        }
+        if (hasAnyHint(normalizedName, ZH_FEMALE_VOICE_HINTS)) {
+            score += 70;
+        }
+        if (hasAnyHint(normalizedName, ZH_MALE_VOICE_HINTS)) {
+            score -= 40;
+        }
+        if (normalizedName.includes('natural')) {
+            score += 18;
+        }
+        if (voice?.localService === false) {
+            score += 10;
+        }
+        return score;
+    }
+
+    let score = /^en\b/i.test(normalizedLang) ? 30 : 0;
+    if (hasAnyHint(normalizedName, EN_FEMALE_VOICE_HINTS)) {
+        score += 40;
+    }
+    if (hasAnyHint(normalizedName, EN_MALE_VOICE_HINTS)) {
+        score -= 20;
+    }
+    if (normalizedName.includes('natural')) {
+        score += 12;
+    }
+    return score;
+}
+
+async function pickNativeVoice(text) {
+    const voices = await loadNativeVoices();
+    const rankedVoices = voices
+        .map((voice) => ({ voice, score: scoreNativeVoice(voice, text) }))
+        .filter(({ score }) => Number.isFinite(score))
+        .sort((left, right) => right.score - left.score);
+
+    return rankedVoices[0]?.voice || null;
+}
+
+function getNativeSpeechSettings(text) {
+    const hasChinese = /[\u3400-\u9fff]/.test(text);
+    return {
+        rate: hasChinese ? CONFIG.DESKTOP_NATIVE_TTS_RATE : 1,
+        pitch: hasChinese ? CONFIG.DESKTOP_NATIVE_TTS_PITCH : 1,
+        volume: CONFIG.DESKTOP_NATIVE_TTS_VOLUME
+    };
+}
+
 function normalizeSpeechMode(mode) {
     const requestedMode = String(mode || '').trim().toLowerCase();
 
@@ -75,22 +225,40 @@ async function synthesizeBackendSpeech(text) {
         throw new Error('TTS 输入文本不能为空');
     }
 
-    const response = await fetch(CONFIG.BACKEND_TTS_SYNTHESIZE_API_URL, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-            text: cleanText
-        })
-    });
+    const timeoutMs = Math.max(0, Number(CONFIG.WEB_SERVER_TTS_TIMEOUT_MS) || 0);
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timeoutId = controller && timeoutMs > 0
+        ? setTimeout(() => controller.abort(), timeoutMs)
+        : null;
 
-    if (!response.ok) {
-        const errorText = await readSynthesisError(response);
-        throw new Error(errorText || `TTS 合成请求失败，状态码：${response.status}`);
+    try {
+        const response = await fetch(CONFIG.BACKEND_TTS_SYNTHESIZE_API_URL, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                text: cleanText
+            }),
+            signal: controller?.signal
+        });
+
+        if (!response.ok) {
+            const errorText = await readSynthesisError(response);
+            throw new Error(errorText || `TTS 合成请求失败，状态码：${response.status}`);
+        }
+
+        return response.json();
+    } catch (error) {
+        if (controller?.signal.aborted) {
+            throw new Error(`服务端 TTS 请求超时（${timeoutMs}ms）`);
+        }
+        throw error;
+    } finally {
+        if (timeoutId !== null) {
+            clearTimeout(timeoutId);
+        }
     }
-
-    return response.json();
 }
 
 function normalizeSynthesisResult(result, { defaultMimeType = 'audio/wav' } = {}) {
@@ -294,6 +462,130 @@ class CosyVoice3TTSCandidate {
     }
 }
 
+class NativeSpeechSynthesisCandidate {
+    constructor() {
+        this.id = 'browser-speech-synthesis';
+        this.replyMode = 'stream_text';
+    }
+
+    get supportsTTS() {
+        return (
+            typeof window !== 'undefined' &&
+            !isDesktopRuntime() &&
+            CONFIG.WEB_NATIVE_TTS_FALLBACK_ENABLED &&
+            Boolean(window.speechSynthesis) &&
+            typeof window.SpeechSynthesisUtterance === 'function'
+        );
+    }
+
+    async speak({
+        payload,
+        displayText,
+        vrmSystem,
+        updateMessageContent,
+        scrollToBottom,
+        onAvatarPlaybackStart
+    }) {
+        const speechText = deriveTtsSpeechText(payload, displayText);
+        if (!this.supportsTTS || !speechText) {
+            return false;
+        }
+
+        const synth = window.speechSynthesis;
+        const utterance = new window.SpeechSynthesisUtterance(speechText);
+        const preferredVoice = await pickNativeVoice(speechText);
+        const speechSettings = getNativeSpeechSettings(speechText);
+
+        if (preferredVoice) {
+            utterance.voice = preferredVoice;
+            utterance.lang = preferredVoice.lang;
+        } else if (/[\u3400-\u9fff]/.test(speechText)) {
+            utterance.lang = 'zh-CN';
+        }
+        utterance.rate = speechSettings.rate;
+        utterance.pitch = speechSettings.pitch;
+        utterance.volume = speechSettings.volume;
+
+        synth.cancel();
+
+        await new Promise((resolve, reject) => {
+            let settled = false;
+            let started = false;
+            let startTimeoutId = null;
+
+            const finish = (callback) => {
+                if (settled) {
+                    return;
+                }
+                settled = true;
+                if (startTimeoutId !== null) {
+                    window.clearTimeout(startTimeoutId);
+                }
+                callback();
+            };
+
+            utterance.onstart = () => {
+                if (settled) {
+                    return;
+                }
+                started = true;
+                if (startTimeoutId !== null) {
+                    window.clearTimeout(startTimeoutId);
+                }
+                vrmSystem?.startFallbackSpeech?.();
+                onAvatarPlaybackStart?.();
+                updateMessageContent?.(displayText);
+                scrollToBottom?.();
+            };
+
+            utterance.onboundary = (event) => {
+                if (!started || typeof event.charIndex !== 'number' || event.charIndex < 0) {
+                    return;
+                }
+                const spokenEnd = event.charIndex + Math.max(1, Number(event.charLength) || 1);
+                const progress = Math.min(1, spokenEnd / Math.max(1, speechText.length));
+                const visibleLength = Math.max(1, Math.ceil(displayText.length * progress));
+                updateMessageContent?.(displayText.slice(0, visibleLength));
+                scrollToBottom?.();
+            };
+
+            utterance.onend = () => {
+                vrmSystem?.stopSpeaking?.();
+                updateMessageContent?.(displayText);
+                scrollToBottom?.();
+                finish(resolve);
+            };
+
+            utterance.onerror = (event) => {
+                vrmSystem?.stopSpeaking?.();
+                finish(() => reject(new Error(event?.error || '浏览器原生语音播放失败')));
+            };
+
+            try {
+                startTimeoutId = window.setTimeout(() => {
+                    if (started) {
+                        return;
+                    }
+                    synth.cancel();
+                    vrmSystem?.stopSpeaking?.();
+                    finish(() => reject(new Error('浏览器原生语音没有成功启动')));
+                }, 2500);
+                synth.speak(utterance);
+            } catch (error) {
+                finish(() => reject(error));
+            }
+        });
+
+        return true;
+    }
+
+    dispose() {
+        if (typeof window !== 'undefined') {
+            window.speechSynthesis?.cancel?.();
+        }
+    }
+}
+
 export class SpeechProvider {
     constructor({ ttsCandidates = [], mode = 'server' } = {}) {
         this.ttsCandidates = ttsCandidates.filter(Boolean);
@@ -444,6 +736,9 @@ export function createSpeechProvider({
 
     if (enableTTS && resolvedMode === 'server') {
         ttsCandidates.push(new ServerTTSCandidate());
+        if (CONFIG.WEB_NATIVE_TTS_FALLBACK_ENABLED && !isDesktopRuntime()) {
+            ttsCandidates.push(new NativeSpeechSynthesisCandidate());
+        }
     }
 
     return new SpeechProvider({
