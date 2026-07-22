@@ -1,8 +1,5 @@
 import { CONFIG } from './config.js';
 
-const TWO_PI = Math.PI * 2;
-
-
 function base64ToBlobUrl(base64Audio, mimeType) {
     const binaryString = window.atob(base64Audio);
     const bytes = new Uint8Array(binaryString.length);
@@ -39,6 +36,27 @@ function lerp(start, end, amount) {
 }
 
 
+export function mapAudioEnvelopeToMouthValue(envelope) {
+    const safeEnvelope = clamp(Number(envelope) || 0, 0, 1);
+    if (safeEnvelope <= CONFIG.AUDIO_LIP_SYNC_SILENCE_THRESHOLD) {
+        return 0;
+    }
+
+    const gatedEnergy = clamp(
+        (safeEnvelope - CONFIG.AUDIO_LIP_SYNC_SILENCE_THRESHOLD) /
+            (1 - CONFIG.AUDIO_LIP_SYNC_SILENCE_THRESHOLD),
+        0,
+        1
+    );
+    const shapedEnergy = Math.pow(gatedEnergy, CONFIG.AUDIO_LIP_SYNC_RESPONSE_CURVE);
+    return clamp(
+        shapedEnergy * CONFIG.AUDIO_LIP_SYNC_BOOST,
+        0,
+        CONFIG.MAX_MOUTH_OPEN
+    );
+}
+
+
 export class TTSAudioPlayer {
     constructor(vrmSystem) {
         this.vrmSystem = vrmSystem;
@@ -54,8 +72,6 @@ export class TTSAudioPlayer {
         this.currentObjectUrl = null;
         this.syncRafId = 0;
         this.lipSyncEnvelope = 0;
-        this.lipSyncPulsePhase = 0;
-        this.lastLipSyncAudioTime = 0;
         this.activePlaybackStop = null;
     }
 
@@ -212,8 +228,6 @@ export class TTSAudioPlayer {
 
     resetLipSyncState() {
         this.lipSyncEnvelope = 0;
-        this.lipSyncPulsePhase = 0;
-        this.lastLipSyncAudioTime = 0;
     }
 
     async ensureAudioGraph() {
@@ -261,33 +275,7 @@ export class TTSAudioPlayer {
             : CONFIG.AUDIO_LIP_SYNC_RELEASE;
         this.lipSyncEnvelope = lerp(this.lipSyncEnvelope, rawEnergy, envelopeRate);
 
-        const audioTime = this.audioElement.currentTime || 0;
-        let deltaTime = this.lastLipSyncAudioTime > 0
-            ? audioTime - this.lastLipSyncAudioTime
-            : 1 / 60;
-        if (!Number.isFinite(deltaTime) || deltaTime <= 0 || deltaTime > 0.12) {
-            deltaTime = 1 / 60;
-        }
-        this.lastLipSyncAudioTime = audioTime;
-
-        const cadence = lerp(
-            CONFIG.AUDIO_LIP_SYNC_MIN_CADENCE,
-            CONFIG.AUDIO_LIP_SYNC_MAX_CADENCE,
-            this.lipSyncEnvelope
-        );
-        this.lipSyncPulsePhase = (this.lipSyncPulsePhase + deltaTime * cadence) % 1;
-
-        const pulse = Math.pow(
-            0.5 - 0.5 * Math.cos(this.lipSyncPulsePhase * TWO_PI),
-            CONFIG.AUDIO_LIP_SYNC_PULSE_SHAPE
-        );
-        const mouthValue = this.lipSyncEnvelope <= CONFIG.AUDIO_LIP_SYNC_SILENCE_THRESHOLD
-            ? 0
-            : this.lipSyncEnvelope *
-                (CONFIG.AUDIO_LIP_SYNC_SUSTAIN + (1 - CONFIG.AUDIO_LIP_SYNC_SUSTAIN) * pulse) *
-                CONFIG.AUDIO_LIP_SYNC_BOOST;
-
-        this.vrmSystem.setLipSyncValue(clamp(mouthValue, 0, CONFIG.MAX_MOUTH_OPEN));
+        this.vrmSystem.setLipSyncValue(mapAudioEnvelopeToMouthValue(this.lipSyncEnvelope));
     }
 
     findVisibleCharCount(alignment, currentTime, lastVisibleCharCount) {

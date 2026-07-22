@@ -1224,10 +1224,13 @@ export class VRMModelSystem {
             }
         }
 
+        const lipSyncSmoothing = this.useExternalLipSync
+            ? CONFIG.AUDIO_LIP_SYNC_MODEL_SMOOTHING
+            : CONFIG.LIP_SYNC_SMOOTHING;
         this.smoothedLipSyncValue = THREE.MathUtils.lerp(
             this.smoothedLipSyncValue,
             targetLipSyncValue,
-            CONFIG.LIP_SYNC_SMOOTHING
+            lipSyncSmoothing
         );
 
         this.applyLipSyncValue(this.smoothedLipSyncValue);

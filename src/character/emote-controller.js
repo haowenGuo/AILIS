@@ -323,7 +323,8 @@ export class CharacterEmoteController {
         for (const name of knownNames) {
             const current = this.expressionValues[name] || 0;
             const target = this.getTargetValue(name);
-            const next = current + (target - current) * expressionAlpha;
+            const channelAlpha = name === 'aa' ? lipAlpha : expressionAlpha;
+            const next = current + (target - current) * channelAlpha;
             this.expressionValues[name] = next;
             this.setManagerValue(name, next);
         }
