@@ -139,7 +139,7 @@ export const RENDER_PROFILES = Object.freeze([
         description: '基于 VRM/MToon 的高填充光日常风格：整体更亮、更软，适合长时间陪伴。',
         lighting: {
             ambient: { color: '#fffdf8', intensity: 2.55 },
-            key: { color: '#fff6e8', intensity: 0.92, position: [4.5, 5.6, 5.4] },
+            key: { color: '#fff6e8', intensity: 0.92, position: [3.4, 8.8, 4.2] },
             fill: { color: '#e5f1ff', intensity: 0.54, position: [-4.6, 3.6, 4.5] },
             rim: { color: '#e8f5ff', intensity: 0.18, position: [-3.4, 4.0, -4.4] },
             sceneMood: {

@@ -198,7 +198,15 @@ function createResourceUrl(relativePath = '') {
     if (typeof window !== 'undefined' && typeof window.ailisDesktop?.resourceUrl === 'function') {
         return window.ailisDesktop.resourceUrl(normalizedPath);
     }
-    return normalizedPath;
+    try {
+        const configuredRoot = typeof document !== 'undefined'
+            ? document.querySelector('meta[name="ailis-resource-root"]')?.content
+            : '';
+        const resourceRoot = configuredRoot || './';
+        return new URL(`${resourceRoot}${normalizedPath}`, document.baseURI).href;
+    } catch {
+        return normalizedPath;
+    }
 }
 
 function getInlineStickerAsset(sticker = {}) {

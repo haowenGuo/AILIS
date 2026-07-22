@@ -508,6 +508,9 @@ export class VRMModelSystem {
         const ambientOffset = numberOr(sceneMood.ambientOffset, 0);
         const keyOffset = numberOr(sceneMood.keyOffset, 0);
         const keyPosition = rotateLightPosition(profile?.lighting?.key?.position || [], look.lightYawDeg);
+        const sceneKeyX = numberOr(light.keyX, BASE_PROFILE_LIGHT.keyX);
+        const sceneKeyY = numberOr(light.keyY, BASE_PROFILE_LIGHT.keyY);
+        const sceneKeyZ = numberOr(light.keyZ, BASE_PROFILE_LIGHT.keyZ);
 
         return {
             state: stateName,
@@ -525,9 +528,12 @@ export class VRMModelSystem {
                 3,
                 BASE_PROFILE_LIGHT.keyIntensity
             ),
-            keyX: numberOr(light.keyX, keyPosition?.[0] ?? BASE_PROFILE_LIGHT.keyX),
-            keyY: numberOr(light.keyY, keyPosition?.[1] ?? BASE_PROFILE_LIGHT.keyY),
-            keyZ: numberOr(light.keyZ, keyPosition?.[2] ?? BASE_PROFILE_LIGHT.keyZ)
+            keyX: numberOr(keyPosition?.[0], BASE_PROFILE_LIGHT.keyX) +
+                (sceneKeyX - BASE_PROFILE_LIGHT.keyX),
+            keyY: numberOr(keyPosition?.[1], BASE_PROFILE_LIGHT.keyY) +
+                (sceneKeyY - BASE_PROFILE_LIGHT.keyY),
+            keyZ: numberOr(keyPosition?.[2], BASE_PROFILE_LIGHT.keyZ) +
+                (sceneKeyZ - BASE_PROFILE_LIGHT.keyZ)
         };
     }
 
@@ -1164,14 +1170,19 @@ export class VRMModelSystem {
         requestAnimationFrame(this.animate);
         const fpsLimit = clampNumber(CONFIG.RENDER_FPS_LIMIT, 24, 60, 60);
         const frameIntervalMs = 1000 / fpsLimit;
+        const currentTimestamp = timestamp || performance.now();
         if (
             this.lastRenderTimestamp > 0 &&
-            timestamp > 0 &&
-            timestamp - this.lastRenderTimestamp < frameIntervalMs
+            currentTimestamp - this.lastRenderTimestamp < frameIntervalMs
         ) {
             return;
         }
-        this.lastRenderTimestamp = timestamp || performance.now();
+        if (this.lastRenderTimestamp > 0) {
+            const elapsedMs = currentTimestamp - this.lastRenderTimestamp;
+            this.lastRenderTimestamp = currentTimestamp - (elapsedMs % frameIntervalMs);
+        } else {
+            this.lastRenderTimestamp = currentTimestamp;
+        }
         const deltaTime = Math.min(this.clock.getDelta(), 0.1);
 
         this.characterRuntime?.beginFrame?.();

@@ -633,7 +633,7 @@ function toAssistantPayload(text, extra = {}) {
         expression: parsed.expression || extra.expression || null,
         surface: extra.surface || null,
         fallbackMode: true,
-        streamMode: false,
+        streamMode: extra.streamMode === true,
         demoMode: false
     };
 }
@@ -766,12 +766,20 @@ export class AILISDesktopChatService {
         }
 
         const status = await this.ensureReady();
+        let streamedAnswerText = '';
+        let activeAnswerStreamId = '';
+        let answerStreamVisible = false;
+        let answerStreamCommitted = false;
         let bridgedRunId = '';
         let bridgedSessionId = '';
         const unsubscribeProgress = createGatewayProgressBridge({
             gateway: this.gateway,
             sessionId,
-            onProgress,
+            onProgress: (payload) => {
+                if (!answerStreamVisible) {
+                    onProgress?.(payload);
+                }
+            },
             onRunStarted: ({ runId, sessionId: startedSessionId }) => {
                 bridgedRunId = runId;
                 bridgedSessionId = startedSessionId || sessionId;
@@ -787,23 +795,92 @@ export class AILISDesktopChatService {
         });
         let result;
         try {
-            result = await this.gateway.runAgent({
-                sessionId,
-                message,
-                messageHistory: sanitizeMessageHistoryForGateway(messageHistory),
-                attachments: summarizeChatAttachmentsForGateway(latestUserEntry?.attachments),
-                agentLoop: 'llm',
-                directToolExecutor: true,
-                maxAgentSteps: 4,
-                context: {
-                    workspace: status.workspaceRoot,
-                    runtimeKind: this.runtimeKind,
+            result = await this.gateway.runAgent(
+                {
+                    sessionId,
+                    message,
+                    messageHistory: sanitizeMessageHistoryForGateway(messageHistory),
+                    attachments: summarizeChatAttachmentsForGateway(latestUserEntry?.attachments),
                     agentLoop: 'llm',
                     directToolExecutor: true,
                     maxAgentSteps: 4,
-                    agentRole: 'persona_orchestrator'
+                    context: {
+                        workspace: status.workspaceRoot,
+                        runtimeKind: this.runtimeKind,
+                        agentLoop: 'llm',
+                        directToolExecutor: true,
+                        maxAgentSteps: 4,
+                        agentRole: 'persona_orchestrator'
+                    }
+                },
+                {
+                    onTextDelta: (delta, streamPayload = {}) => {
+                        if (typeof delta !== 'string' || !delta) {
+                            return;
+                        }
+                        const streamId = normalizeText(
+                            streamPayload.metadata?.streamId || streamPayload.streamId
+                        ) || 'hosted-answer-stream';
+                        if (activeAnswerStreamId !== streamId) {
+                            activeAnswerStreamId = streamId;
+                            streamedAnswerText = '';
+                            answerStreamCommitted = false;
+                        }
+                        answerStreamVisible = true;
+                        streamedAnswerText += delta;
+                        onProgress?.(toAssistantPayload(streamedAnswerText, {
+                            speechText: streamedAnswerText,
+                            bubbleText: streamedAnswerText,
+                            streamMode: true,
+                            stream_delta_text: delta,
+                            stream_delta_speech_text: '',
+                            answerStream: true
+                        }));
+                    },
+                    onTextStreamEvent: (eventType, streamPayload = {}) => {
+                        const streamId = normalizeText(streamPayload.streamId) ||
+                            activeAnswerStreamId ||
+                            'hosted-answer-stream';
+                        if (eventType === 'response.output_text.started') {
+                            if (activeAnswerStreamId !== streamId) {
+                                activeAnswerStreamId = streamId;
+                                streamedAnswerText = '';
+                                answerStreamVisible = false;
+                                answerStreamCommitted = false;
+                            }
+                            return;
+                        }
+                        if (streamId !== activeAnswerStreamId) {
+                            return;
+                        }
+                        if (eventType === 'response.output_text.committed') {
+                            answerStreamCommitted = Boolean(streamedAnswerText);
+                            answerStreamVisible = answerStreamCommitted;
+                            return;
+                        }
+                        if (eventType === 'response.output_text.discarded') {
+                            const hadVisibleText = answerStreamVisible && Boolean(streamedAnswerText);
+                            streamedAnswerText = '';
+                            answerStreamVisible = false;
+                            answerStreamCommitted = false;
+                            if (hadVisibleText) {
+                                onProgress?.({
+                                    raw_text: '',
+                                    display_text: '',
+                                    display_format: 'markdown',
+                                    contentFormat: 'markdown',
+                                    speech_text: '',
+                                    bubble_text: '',
+                                    streamMode: true,
+                                    streamReset: true,
+                                    fallbackMode: true,
+                                    demoMode: false
+                                });
+                            }
+                        }
+                    }
                 }
-            });
+            );
         } finally {
             unsubscribeProgress();
             if (bridgedRunId && this.activeRunId === bridgedRunId) {
@@ -814,7 +891,10 @@ export class AILISDesktopChatService {
             }
         }
 
-        const payload = toAILISPayload(result);
+        const payload = {
+            ...toAILISPayload(result),
+            streamMode: answerStreamCommitted
+        };
 
         return attachServerTtsIfRequested(payload, replyMode);
     }

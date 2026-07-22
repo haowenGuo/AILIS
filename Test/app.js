@@ -1,3 +1,5 @@
+import { setMarkdownContent, setPlainTextContent } from '../src/markdown-renderer.js';
+
 const CLOUD_BACKEND_BASE_URL = 'https://101.133.239.56';
 const DEFAULT_BACKEND_BASE_URL = window.location.hostname.toLowerCase() === 'haowenguo.github.io'
     ? CLOUD_BACKEND_BASE_URL
@@ -7,9 +9,12 @@ const DEFAULT_BACKEND_BASE_URL = window.location.hostname.toLowerCase() === 'hao
 const PET_CHAT_EVENT_NAME = 'ailis-chat-ui-event';
 const AILIS_AVATAR_URL = new URL('../Resources/Emotes/ailis-small/wave.png', window.location.href).href;
 const SCENE_STORAGE_KEY = 'ailis.web.scene.v1';
+const RENDER_PROFILE_STORAGE_KEY = 'ailis.web.render-profile.v1';
+const DEFAULT_RENDER_PROFILE_ID = 'ailis_bright_companion_mtoon';
 const SCENE_IDS = new Set(['sakura', 'school', 'seaside']);
 
 const elements = {
+    experience: document.querySelector('.experience'),
     petFrame: document.getElementById('pet-frame'),
     modelStatus: document.getElementById('model-status'),
     modelStatusText: document.getElementById('model-status-text'),
@@ -17,12 +22,20 @@ const elements = {
     backendStatusText: document.getElementById('backend-status-text'),
     composerStatus: document.getElementById('composer-status'),
     characterPane: document.querySelector('.character-pane'),
+    stageVisual: document.getElementById('stage-visual'),
+    dialogueSpeaker: document.getElementById('dialogue-speaker'),
+    dialogueContent: document.getElementById('dialogue-content'),
     messageList: document.getElementById('message-list'),
+    historyDrawer: document.getElementById('history-drawer'),
+    historyToggle: document.getElementById('history-toggle'),
+    historyClose: document.getElementById('history-close'),
+    historyBackdrop: document.getElementById('history-backdrop'),
     composer: document.getElementById('composer'),
     chatInput: document.getElementById('chat-input'),
     sendButton: document.getElementById('send-button'),
     quickButtons: Array.from(document.querySelectorAll('[data-prompt]')),
-    sceneButtons: Array.from(document.querySelectorAll('[data-scene-option]'))
+    sceneButtons: Array.from(document.querySelectorAll('[data-scene-option]')),
+    renderButtons: Array.from(document.querySelectorAll('[data-render-profile]'))
 };
 
 const state = {
@@ -31,8 +44,12 @@ const state = {
     modelReady: false,
     chatReady: false,
     busy: false,
+    historyOpen: false,
+    renderProfileId: DEFAULT_RENDER_PROFILE_ID,
     followLatestMessage: true,
-    scrollFrame: 0
+    scrollFrame: 0,
+    messagesById: new Map(),
+    messageOrder: []
 };
 
 const MESSAGE_BOTTOM_THRESHOLD = 72;
@@ -59,6 +76,7 @@ const backendBaseUrl = getBackendBaseUrl();
 function setScene(sceneId, { persist = true } = {}) {
     const nextScene = SCENE_IDS.has(sceneId) ? sceneId : 'sakura';
     elements.characterPane.dataset.scene = nextScene;
+    elements.stageVisual.dataset.scene = nextScene;
     elements.sceneButtons.forEach((button) => {
         button.setAttribute('aria-pressed', String(button.dataset.sceneOption === nextScene));
     });
@@ -76,6 +94,44 @@ function restoreScene() {
         setScene(window.localStorage?.getItem(SCENE_STORAGE_KEY), { persist: false });
     } catch {
         setScene('sakura', { persist: false });
+    }
+}
+
+function normalizeRenderProfileId(profileId) {
+    const normalized = String(profileId || '').trim();
+    return elements.renderButtons.some((button) => button.dataset.renderProfile === normalized)
+        ? normalized
+        : DEFAULT_RENDER_PROFILE_ID;
+}
+
+function applyRenderProfileToPet() {
+    const petWindow = getPetWindow();
+    return Boolean(petWindow?.setAilisRenderProfile?.(state.renderProfileId));
+}
+
+function setRenderProfile(profileId, { persist = true } = {}) {
+    state.renderProfileId = normalizeRenderProfileId(profileId);
+    elements.renderButtons.forEach((button) => {
+        button.setAttribute(
+            'aria-pressed',
+            String(button.dataset.renderProfile === state.renderProfileId)
+        );
+    });
+    if (persist) {
+        try {
+            window.localStorage?.setItem(RENDER_PROFILE_STORAGE_KEY, state.renderProfileId);
+        } catch {
+            // The selected render profile remains active for this page session.
+        }
+    }
+    applyRenderProfileToPet();
+}
+
+function restoreRenderProfile() {
+    try {
+        setRenderProfile(window.localStorage?.getItem(RENDER_PROFILE_STORAGE_KEY), { persist: false });
+    } catch {
+        setRenderProfile(DEFAULT_RENDER_PROFILE_ID, { persist: false });
     }
 }
 
@@ -99,6 +155,7 @@ function updateComposer() {
         button.disabled = !ready;
     });
     elements.messageList.setAttribute('aria-busy', String(state.busy));
+    elements.dialogueContent.setAttribute('aria-busy', String(state.busy));
 
     if (state.busy) {
         elements.composerStatus.textContent = 'AILIS 正在回应';
@@ -110,6 +167,22 @@ function updateComposer() {
         elements.composerStatus.textContent = '在线服务已连接';
     } else {
         elements.composerStatus.textContent = '正在连接在线服务';
+    }
+}
+
+function setHistoryOpen(open) {
+    state.historyOpen = Boolean(open);
+    elements.experience.dataset.historyOpen = String(state.historyOpen);
+    elements.historyDrawer.setAttribute('aria-hidden', String(!state.historyOpen));
+    elements.historyDrawer.inert = !state.historyOpen;
+    elements.historyBackdrop.disabled = !state.historyOpen;
+    elements.historyToggle.setAttribute('aria-expanded', String(state.historyOpen));
+    elements.historyToggle.setAttribute(
+        'aria-label',
+        state.historyOpen ? '收起对话记录' : '展开对话记录'
+    );
+    if (state.historyOpen) {
+        scrollMessages({ force: true });
     }
 }
 
@@ -151,8 +224,52 @@ function createMessageRow(message) {
 
     const bubble = document.createElement('div');
     bubble.className = 'message';
+    if (role === 'assistant') {
+        bubble.dataset.enableAilisEmotes = 'true';
+    }
     row.appendChild(bubble);
     return row;
+}
+
+function renderMessageContent(target, message) {
+    const role = message?.role || 'system';
+    const content = message?.content || (role === 'loading' ? 'AILIS 正在想' : '');
+    if (role === 'assistant') {
+        target.dataset.enableAilisEmotes = 'true';
+        setMarkdownContent(target, content);
+        return;
+    }
+    delete target.dataset.enableAilisEmotes;
+    setPlainTextContent(target, content);
+}
+
+function getLatestMessage() {
+    for (let index = state.messageOrder.length - 1; index >= 0; index -= 1) {
+        const message = state.messagesById.get(state.messageOrder[index]);
+        if (message) {
+            return message;
+        }
+    }
+    return null;
+}
+
+function renderCurrentDialogue(message = getLatestMessage()) {
+    if (!message) {
+        elements.dialogueSpeaker.textContent = 'AILIS';
+        elements.dialogueContent.dataset.enableAilisEmotes = 'true';
+        setPlainTextContent(elements.dialogueContent, '想聊什么都可以，我在这里。');
+        return;
+    }
+
+    const speakerByRole = {
+        assistant: 'AILIS',
+        loading: 'AILIS',
+        user: '你',
+        system: 'AILIS'
+    };
+    elements.dialogueSpeaker.textContent = speakerByRole[message.role] || 'AILIS';
+    renderMessageContent(elements.dialogueContent, message);
+    elements.dialogueContent.scrollTop = elements.dialogueContent.scrollHeight;
 }
 
 function isMessageListNearBottom() {
@@ -187,16 +304,24 @@ function upsertMessage(message) {
         return;
     }
 
+    const normalizedMessage = {
+        ...message,
+        id: String(message.id)
+    };
     const shouldFollow = state.followLatestMessage || isMessageListNearBottom();
+    if (!state.messagesById.has(normalizedMessage.id)) {
+        state.messageOrder.push(normalizedMessage.id);
+    }
+    state.messagesById.set(normalizedMessage.id, normalizedMessage);
     clearLocalMessage();
-    const escapedId = CSS.escape(String(message.id));
+    const escapedId = CSS.escape(normalizedMessage.id);
     let row = elements.messageList.querySelector(`[data-message-id="${escapedId}"]`);
     const nextRole = ['user', 'assistant', 'system', 'loading'].includes(message.role)
         ? message.role
         : 'system';
 
     if (!row || row.dataset.role !== nextRole) {
-        const replacement = createMessageRow({ ...message, role: nextRole });
+        const replacement = createMessageRow({ ...normalizedMessage, role: nextRole });
         if (row) {
             row.replaceWith(replacement);
         } else {
@@ -206,7 +331,8 @@ function upsertMessage(message) {
     }
 
     const bubble = row.querySelector('.message');
-    bubble.textContent = message.content || (nextRole === 'loading' ? 'AILIS 正在想' : '');
+    renderMessageContent(bubble, { ...normalizedMessage, role: nextRole });
+    renderCurrentDialogue({ ...normalizedMessage, role: nextRole });
     scrollMessages({ force: shouldFollow });
 }
 
@@ -216,11 +342,16 @@ function removeMessage(id) {
     }
     const escapedId = CSS.escape(String(id));
     elements.messageList.querySelector(`[data-message-id="${escapedId}"]`)?.remove();
+    state.messagesById.delete(String(id));
+    state.messageOrder = state.messageOrder.filter((messageId) => messageId !== String(id));
+    renderCurrentDialogue();
     scrollMessages();
 }
 
 function renderSnapshot(messages) {
     elements.messageList.innerHTML = '';
+    state.messagesById.clear();
+    state.messageOrder = [];
     const visibleMessages = Array.isArray(messages) ? messages : [];
     if (!visibleMessages.length) {
         const empty = document.createElement('div');
@@ -232,6 +363,7 @@ function renderSnapshot(messages) {
             <span>从一句简单的问候开始吧。</span>
         `;
         elements.messageList.appendChild(empty);
+        renderCurrentDialogue();
         return;
     }
     visibleMessages.forEach(upsertMessage);
@@ -302,6 +434,7 @@ function attachPetWindow() {
         state.modelReady = true;
         state.chatReady = true;
         setModelStatus('角色已就绪', 'ready');
+        applyRenderProfileToPet();
         syncPetSnapshot();
         updateComposer();
     });
@@ -378,6 +511,8 @@ function configurePetFrame() {
     petUrl.searchParams.set('backend', backendBaseUrl);
     petUrl.searchParams.set('speechMode', 'off');
     petUrl.searchParams.set('web', '1');
+    petUrl.searchParams.set('camera', 'close');
+    petUrl.searchParams.set('renderProfile', state.renderProfileId);
     elements.petFrame.src = petUrl.href;
 }
 
@@ -409,8 +544,31 @@ elements.sceneButtons.forEach((button) => {
         setScene(button.dataset.sceneOption);
     });
 });
+elements.renderButtons.forEach((button) => {
+    button.addEventListener('click', () => {
+        setRenderProfile(button.dataset.renderProfile);
+    });
+});
+elements.historyToggle.addEventListener('click', () => {
+    setHistoryOpen(!state.historyOpen);
+});
+elements.historyClose.addEventListener('click', () => {
+    setHistoryOpen(false);
+    elements.historyToggle.focus();
+});
+elements.historyBackdrop.addEventListener('click', () => {
+    setHistoryOpen(false);
+});
+document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && state.historyOpen) {
+        setHistoryOpen(false);
+        elements.historyToggle.focus();
+    }
+});
 
 restoreScene();
+restoreRenderProfile();
+setHistoryOpen(false);
 configurePetFrame();
 void checkBackend();
 resizeInput();

@@ -11,6 +11,31 @@ import { setUiLanguage } from './i18n.js';
 const PET_RENDER_AVATAR_REFERENCE_HEIGHT = 560;
 const PET_RENDER_WINDOW_FRAME_HEIGHT = 960;
 const PET_WINDOW_CAMERA_DISTANCE_RATIO = PET_RENDER_WINDOW_FRAME_HEIGHT / PET_RENDER_AVATAR_REFERENCE_HEIGHT;
+const WEB_RENDER_PROFILE_ID = 'ailis_bright_companion_mtoon';
+const WEB_RENDER_SHADOW_PREFERENCES = Object.freeze({
+    renderShadowStrength: 0.16,
+    renderShadowRange: 1.25
+});
+const WEB_DESKTOP_RENDER_QUALITY_PREFERENCES = Object.freeze({
+    renderResolutionScale: 1.25,
+    renderShadowQuality: 2,
+    renderFpsLimit: 60
+});
+const WEB_MOBILE_RENDER_QUALITY_PREFERENCES = Object.freeze({
+    renderResolutionScale: 1,
+    renderShadowQuality: 1,
+    renderFpsLimit: 60
+});
+const WEB_CLOSE_CAMERA_PREFERENCES = Object.freeze({
+    cameraDistance: 1.34,
+    cameraHeight: 1.28,
+    cameraTargetY: 1.04
+});
+const WEB_MOBILE_CAMERA_PREFERENCES = Object.freeze({
+    cameraDistance: 1.48,
+    cameraHeight: 1.3,
+    cameraTargetY: 1.06
+});
 
 function applyPetWindowFrameCameraCompensation() {
     const compensatedDistance = CONFIG.CAMERA_POSITION.z * PET_WINDOW_CAMERA_DISTANCE_RATIO;
@@ -96,9 +121,31 @@ window.addEventListener('DOMContentLoaded', async () => {
     const petShellEl = document.getElementById('pet-shell');
     const canvasContainerEl = document.getElementById('canvas-container');
     const initialPreferences = window.ailisDesktop?.preferences || {};
-    applyDesktopPreferencesToConfig(initialPreferences);
+    const runtimeUrl = new URL(window.location.href);
+    const isEmbeddedWebExperience = runtimeUrl.searchParams.get('web') === '1';
+    const useWebCloseCamera = isEmbeddedWebExperience && runtimeUrl.searchParams.get('camera') === 'close';
+    const isWebMobileViewport = window.matchMedia('(max-width: 760px)').matches;
+    const webCameraPreferences = isWebMobileViewport
+        ? WEB_MOBILE_CAMERA_PREFERENCES
+        : WEB_CLOSE_CAMERA_PREFERENCES;
+    const webRenderQualityPreferences = isWebMobileViewport
+        ? WEB_MOBILE_RENDER_QUALITY_PREFERENCES
+        : WEB_DESKTOP_RENDER_QUALITY_PREFERENCES;
+    const withWebRenderPreferences = (preferences = {}) => isEmbeddedWebExperience
+        ? {
+            ...preferences,
+            ...(useWebCloseCamera ? webCameraPreferences : {}),
+            ...WEB_RENDER_SHADOW_PREFERENCES,
+            ...webRenderQualityPreferences,
+            renderProfileId: WEB_RENDER_PROFILE_ID
+        }
+        : preferences;
+    const effectivePreferences = withWebRenderPreferences(initialPreferences);
+    applyDesktopPreferencesToConfig(effectivePreferences);
     setUiLanguage(initialPreferences.uiLanguage || 'zh-CN');
-    applyPetWindowFrameCameraCompensation();
+    if (!isEmbeddedWebExperience) {
+        applyPetWindowFrameCameraCompensation();
+    }
     const vrmSystem = new VRMModelSystem();
     installAvatarDialogueBubble({
         rootElement: petShellEl,
@@ -116,12 +163,14 @@ window.addEventListener('DOMContentLoaded', async () => {
         speechProvider,
         chunkedTtsEnabled: initialPreferences.chunkedTtsEnabled
     });
-    const mouseHitTest = installPetMouseHitTest({
-        rootElement: petShellEl,
-        canvasElement: canvasContainerEl,
-        avatarBoundsProvider: () => vrmSystem.getAvatarHitTestBounds?.(),
-        preferences: initialPreferences
-    });
+    const mouseHitTest = isEmbeddedWebExperience
+        ? null
+        : installPetMouseHitTest({
+            rootElement: petShellEl,
+            canvasElement: canvasContainerEl,
+            avatarBoundsProvider: () => vrmSystem.getAvatarHitTestBounds?.(),
+            preferences: initialPreferences
+        });
     const removePetCursorPointListener = window.ailisDesktop?.onPetCursorPoint?.((payload = {}) => {
         mouseHitTest?.handleCursorPoint?.(payload);
     });
@@ -156,13 +205,15 @@ window.addEventListener('DOMContentLoaded', async () => {
 
     window.ailisDesktop?.onPreferencesUpdated?.(({ preferences = {} } = {}) => {
         const previousModelPath = CONFIG.MODEL_PATH;
-        applyDesktopPreferencesToConfig(preferences);
+        applyDesktopPreferencesToConfig(withWebRenderPreferences(preferences));
         setUiLanguage(preferences.uiLanguage || 'zh-CN');
         if (CONFIG.MODEL_PATH !== previousModelPath) {
             window.location.reload();
             return;
         }
-        applyPetWindowFrameCameraCompensation();
+        if (!isEmbeddedWebExperience) {
+            applyPetWindowFrameCameraCompensation();
+        }
         speechProvider?.dispose?.();
         speechProvider = buildSpeechProvider(preferences.speechMode);
         chatSystem.setSpeechProvider(speechProvider);
@@ -178,13 +229,21 @@ window.addEventListener('DOMContentLoaded', async () => {
         window.speechProvider = speechProvider;
     });
 
-    installPetInteractions(petShellEl);
+    if (!isEmbeddedWebExperience) {
+        installPetInteractions(petShellEl);
+    }
 
     window.vrmSystem = vrmSystem;
     window.audioPlayer = audioPlayer;
     window.chatService = chatService;
     window.chatSystem = chatSystem;
     window.speechProvider = speechProvider;
+    window.setAilisRenderProfile = (profileId) => {
+        CONFIG.RENDER_PROFILE_ID = isEmbeddedWebExperience
+            ? WEB_RENDER_PROFILE_ID
+            : String(profileId || '').trim() || CONFIG.RENDER_PROFILE_ID;
+        return vrmSystem.applyRenderProfile(CONFIG.RENDER_PROFILE_ID);
+    };
 
     vrmSystem.init('canvas-container');
 

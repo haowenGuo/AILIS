@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 
 import httpx
 from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi.responses import StreamingResponse
 
 from backend.core.config import get_settings
 from backend.services.hosted_agent_service import (
@@ -105,6 +106,15 @@ async def hosted_agent_run(
         "runtime": "web",
     }
     try:
+        if "text/event-stream" in (request.headers.get("accept") or "").lower():
+            return StreamingResponse(
+                runtime_client.stream_agent(session.tenant_id, forwarded),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache, no-transform",
+                    "X-Accel-Buffering": "no",
+                },
+            )
         return await runtime_client.run_agent(session.tenant_id, forwarded)
     except Exception as error:
         raise _runtime_error(error) from error

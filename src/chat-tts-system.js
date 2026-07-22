@@ -113,6 +113,7 @@ export class ChatTTSSystem {
         this.interruptRequested = false;
         this.interruptInFlight = false;
         this.activeChunkedSpeechSession = null;
+        this.activeStreamingFallbackSpeech = null;
         this.activeTurn = null;
         this.cancelledTurnIds = new Set();
         this.lastAutoChatMode = String(CONFIG.AUTO_CHAT_MODE || 'off');
@@ -541,6 +542,7 @@ export class ChatTTSSystem {
     }
 
     stopLingeringSpeech(reason = 'new-turn') {
+        this.stopStreamingFallbackSpeech();
         const session = this.activeChunkedSpeechSession;
         if (session) {
             Promise.resolve(session.cancel?.(reason)).catch((error) => {
@@ -556,6 +558,34 @@ export class ChatTTSSystem {
         } catch (error) {
             console.warn('停止浏览器原生语音失败：', error);
         }
+    }
+
+    startStreamingFallbackSpeech(payload, displayText, aiMessageDiv) {
+        if (
+            !this.speechProvider?.isSpeechDisabled ||
+            this.activeChunkedSpeechSession ||
+            this.activeStreamingFallbackSpeech ||
+            !this.getAvatarSpeechText(payload, displayText)
+        ) {
+            return false;
+        }
+
+        this.activeStreamingFallbackSpeech = { aiMessageDiv };
+        this.vrmSystem.startFallbackSpeech();
+        this.startAvatarSpeech(payload, displayText, aiMessageDiv);
+        return true;
+    }
+
+    stopStreamingFallbackSpeech(aiMessageDiv = null) {
+        const activeSpeech = this.activeStreamingFallbackSpeech;
+        if (!activeSpeech) {
+            return false;
+        }
+
+        this.activeStreamingFallbackSpeech = null;
+        this.vrmSystem.stopSpeaking();
+        this.endAvatarSpeech(activeSpeech.aiMessageDiv || aiMessageDiv);
+        return true;
     }
 
     startAvatarPlayback(payload, displayText, aiMessageDiv) {
@@ -731,6 +761,7 @@ export class ChatTTSSystem {
             return { ok: true };
         } catch (error) {
             await chunkedSpeechSession?.cancel?.('auto-chat-error');
+            this.stopStreamingFallbackSpeech(aiMessageDiv);
             this.removeMessageElement(aiMessageDiv);
             if (!this.isTurnCancelled(turn)) {
                 console.error('主动对话请求失败：', error);
@@ -828,7 +859,9 @@ export class ChatTTSSystem {
             await chunkedSpeechSession?.cancel?.('chat-turn-error');
             this.removeMessageElement(loadingEl);
             this.removeMessageElement(aiMessageDiv);
-            this.vrmSystem.stopSpeaking();
+            if (!this.stopStreamingFallbackSpeech(aiMessageDiv)) {
+                this.vrmSystem.stopSpeaking();
+            }
             if (!this.isTurnCancelled(turn)) {
                 this.addSystemMessage(`请求失败：${error.message}`);
                 console.error('后端请求失败：', error);
@@ -868,7 +901,9 @@ export class ChatTTSSystem {
         if (this.activeTurn?.id === interruptedTurn?.id) {
             this.activeTurn = null;
         }
-        this.vrmSystem.stopSpeaking();
+        if (!this.stopStreamingFallbackSpeech(interruptedTurn?.aiMessageDiv)) {
+            this.vrmSystem.stopSpeaking();
+        }
         try {
             Promise.resolve(this.activeChunkedSpeechSession?.cancel?.('chat_user_interrupt')).catch((error) => {
                 console.warn('分段语音中断失败：', error);
@@ -981,6 +1016,7 @@ export class ChatTTSSystem {
 
         this.executeAvatarCue(payload, aiMessageDiv);
         this.updateMessageContent(aiMessageDiv, displayText);
+        this.startStreamingFallbackSpeech(payload, displayText, aiMessageDiv);
         this.scrollToBottom();
     }
 
@@ -1016,6 +1052,9 @@ export class ChatTTSSystem {
             speech_text: speechText
         };
         if (this.speechProvider?.isSpeechDisabled) {
+            if (this.stopStreamingFallbackSpeech(aiMessageDiv)) {
+                return;
+            }
             await this.playFallbackSpeech(displayText, aiMessageDiv, speechPayload, {
                 revealText: !payload.streamMode
             });

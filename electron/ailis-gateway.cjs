@@ -3157,6 +3157,12 @@ class AILISGateway extends EventEmitter {
         const context = this.mergeDefaultContext(
             input.context && typeof input.context === 'object' ? input.context : {}
         );
+        const requestedTextDelta = typeof input.onTextDelta === 'function'
+            ? input.onTextDelta
+            : null;
+        const streamBeforeFinalGate = Boolean(
+            requestedTextDelta && !this.shouldRunEmberHarness(context)
+        );
         const sessionId = normalizeString(input.sessionId || input.sessionKey || context.sessionId || context.sessionKey, 'main');
         const runId = normalizeString(input.runId || context.runId);
         const inputGate = await this.runEmberHarnessCheck({
@@ -3189,6 +3195,7 @@ class AILISGateway extends EventEmitter {
         }
         const result = await this.ensureAgentRunner().runMessage({
             ...input,
+            onTextDelta: streamBeforeFinalGate ? requestedTextDelta : undefined,
             context
         });
         const finalText = normalizeString(
@@ -3235,6 +3242,13 @@ class AILISGateway extends EventEmitter {
                     final: summarizeEmberHarnessRecord(finalGate)
                 }
             };
+        }
+        if (requestedTextDelta && !streamBeforeFinalGate) {
+            await requestedTextDelta(finalText, {
+                runId: result?.runId || runId,
+                sessionId: result?.sessionId || sessionId,
+                bufferedBy: 'ember_final_output_gate'
+            });
         }
         return {
             ...result,

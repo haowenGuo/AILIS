@@ -804,6 +804,23 @@ function extractContentTextFromOpenAiMessage(message = {}) {
     return '';
 }
 
+function extractContentDeltaTextFromOpenAiMessage(message = {}) {
+    const content = message?.content;
+    if (typeof content === 'string') {
+        return content;
+    }
+    if (Array.isArray(content)) {
+        return content
+            .map((part) => typeof part?.text === 'string'
+                ? part.text
+                : typeof part?.content === 'string'
+                    ? part.content
+                    : '')
+            .join('');
+    }
+    return '';
+}
+
 function extractOpenAiCompatibleProviderMessage(message = {}) {
     const reasoningContent = normalizeString(message?.reasoning_content || message?.reasoningContent);
     if (!reasoningContent) {
@@ -953,6 +970,131 @@ async function fetchJsonWithTimeout(url, requestOptions, timeoutMs, externalSign
     }
 }
 
+async function fetchSseWithTimeout(
+    url,
+    requestOptions,
+    timeoutMs,
+    externalSignal = null,
+    onData = null
+) {
+    const controller = new AbortController();
+    let abortedByExternalSignal = false;
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    const onExternalAbort = () => {
+        abortedByExternalSignal = true;
+        controller.abort();
+    };
+    if (externalSignal?.aborted) {
+        onExternalAbort();
+    } else if (typeof externalSignal?.addEventListener === 'function') {
+        externalSignal.addEventListener('abort', onExternalAbort, { once: true });
+    }
+
+    try {
+        const response = await fetch(url, {
+            ...requestOptions,
+            signal: controller.signal
+        });
+        if (!response.ok) {
+            const errorText = await readErrorBody(response);
+            return {
+                ok: false,
+                status: response.status,
+                error: errorText || `模型接口请求失败，状态码：${response.status}`
+            };
+        }
+        if (!response.body) {
+            return {
+                ok: false,
+                code: 'stream_unavailable',
+                error: '模型接口没有返回可读取的流。'
+            };
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder('utf-8');
+        let buffer = '';
+        let dataLines = [];
+        const flushEvent = async () => {
+            if (!dataLines.length) {
+                return false;
+            }
+            const data = dataLines.join('\n');
+            dataLines = [];
+            if (data === '[DONE]') {
+                return true;
+            }
+            if (typeof onData === 'function') {
+                await onData(data);
+            }
+            return false;
+        };
+        const consumeLine = async (line) => {
+            if (!line) {
+                return await flushEvent();
+            }
+            if (line.startsWith('data:')) {
+                dataLines.push(line.slice(5).replace(/^ /, ''));
+            }
+            return false;
+        };
+
+        let finished = false;
+        while (!finished) {
+            const { done, value } = await reader.read();
+            if (done) {
+                break;
+            }
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split(/\r?\n/);
+            buffer = lines.pop() || '';
+            for (const line of lines) {
+                if (await consumeLine(line)) {
+                    finished = true;
+                    break;
+                }
+            }
+        }
+        buffer += decoder.decode();
+        if (!finished && buffer) {
+            await consumeLine(buffer);
+        }
+        if (!finished) {
+            await flushEvent();
+        }
+        return { ok: true };
+    } catch (error) {
+        const aborted = error?.name === 'AbortError';
+        const failure = aborted ? null : classifyFetchFailure(error);
+        return {
+            ok: false,
+            code: aborted ? (abortedByExternalSignal ? 'aborted' : 'timeout') : failure.code,
+            error: aborted
+                ? abortedByExternalSignal
+                    ? '模型请求已被用户中断。'
+                    : `模型请求超时（${timeoutMs}ms）`
+                : failure.error,
+            details: failure?.details
+        };
+    } finally {
+        clearTimeout(timeoutId);
+        if (typeof externalSignal?.removeEventListener === 'function') {
+            externalSignal.removeEventListener('abort', onExternalAbort);
+        }
+    }
+}
+
+async function emitTextDelta(callback, delta, metadata = {}) {
+    if (typeof callback !== 'function' || typeof delta !== 'string' || !delta) {
+        return;
+    }
+    try {
+        await callback(delta, metadata);
+    } catch {
+        // UI transport failures must not abort the provider response itself.
+    }
+}
+
 function validateProviderInput(settings, messages) {
     if (!settings.model || !settings.baseUrl || (providerRequiresApiKey(settings.provider) && !settings.apiKey)) {
         return {
@@ -1021,11 +1163,12 @@ async function callOpenAiCompatible(settings, payload, messages) {
     const tools = mapToolsForChatCompletions(payload.tools);
     const toolChoice = resolveToolChoice(payload);
     const responseFormat = resolveChatResponseFormat(payload);
+    const streamText = typeof payload.onTextDelta === 'function';
     const body = {
         model: settings.model,
         messages: messages.map((message) => mapChatMessageForOpenAiCompatible(message, settings)),
         temperature: normalizeTemperature(payload.temperature ?? settings.temperature),
-        stream: false
+        stream: streamText
     };
     applyOpenAiCompatibleRequestControls(body, payload, { provider: settings.provider });
 
@@ -1042,6 +1185,104 @@ async function callOpenAiCompatible(settings, payload, messages) {
         };
     } else if (toolChoice?.mode) {
         body.tool_choice = toolChoice.mode;
+    }
+
+    if (streamText) {
+        body.stream_options = { include_usage: true };
+        let content = '';
+        let reasoningContent = '';
+        let usage = null;
+        let finishReason = '';
+        const toolCallParts = new Map();
+        const result = await fetchSseWithTimeout(
+            buildChatCompletionsUrl(settings.baseUrl),
+            {
+                method: 'POST',
+                headers: buildJsonHeaders({ apiKey: settings.apiKey }),
+                body: JSON.stringify(body)
+            },
+            normalizeTimeoutMs(payload.timeoutMs ?? settings.timeoutMs),
+            payload.abortSignal || payload.signal || null,
+            async (rawData) => {
+                const chunk = safeJsonParse(rawData);
+                if (!chunk) {
+                    return;
+                }
+                usage = chunk.usage || usage;
+                const choice = chunk.choices?.[0] || {};
+                const delta = choice.delta || {};
+                finishReason = choice.finish_reason || finishReason;
+                const textDelta = extractContentDeltaTextFromOpenAiMessage(delta);
+                if (textDelta) {
+                    content += textDelta;
+                    await emitTextDelta(payload.onTextDelta, textDelta, {
+                        provider: settings.provider,
+                        model: settings.model,
+                        transport: 'chat-completions'
+                    });
+                }
+                const reasoningDelta = normalizeString(
+                    delta.reasoning_content || delta.reasoningContent
+                );
+                if (reasoningDelta) {
+                    reasoningContent += reasoningDelta;
+                }
+                for (const callPart of Array.isArray(delta.tool_calls) ? delta.tool_calls : []) {
+                    const index = Number.isFinite(Number(callPart.index)) ? Number(callPart.index) : 0;
+                    const current = toolCallParts.get(index) || {
+                        id: '',
+                        name: '',
+                        arguments: ''
+                    };
+                    if (callPart.id) {
+                        current.id = callPart.id;
+                    }
+                    if (callPart.function?.name) {
+                        current.name += callPart.function.name;
+                    }
+                    if (callPart.function?.arguments) {
+                        current.arguments += callPart.function.arguments;
+                    }
+                    toolCallParts.set(index, current);
+                }
+            }
+        );
+
+        if (!result.ok) {
+            return {
+                ok: false,
+                code: result.code || 'provider_error',
+                status: result.status,
+                error: result.error
+            };
+        }
+
+        const toolCalls = [...toolCallParts.entries()]
+            .sort(([left], [right]) => left - right)
+            .map(([, call]) => normalizeToolCall({
+                id: call.id,
+                name: call.name,
+                arguments: call.arguments,
+                provider: settings.provider
+            }))
+            .filter(Boolean);
+        const providerMessage = extractOpenAiCompatibleProviderMessage({
+            reasoning_content: reasoningContent
+        });
+        if (!content && !toolCalls.length) {
+            return {
+                ok: false,
+                code: 'empty_response',
+                error: '模型接口返回为空。'
+            };
+        }
+        return buildProviderResult(
+            settings,
+            { usage, finish_reason: finishReason },
+            content,
+            toolCalls,
+            { providerMessage }
+        );
     }
 
     const result = await fetchJsonWithTimeout(

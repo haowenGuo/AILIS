@@ -242,12 +242,19 @@ class AILISHostedRuntimeManager {
         };
     }
 
-    async runAgent(tenantId, payload = {}) {
+    async runAgent(tenantId, payload = {}, options = {}) {
         const record = await this.getRuntime(tenantId);
         record.activeRuns += 1;
         record.lastUsedAt = Date.now();
         try {
-            return await record.gateway.runAgent(sanitizeAgentRequest(payload, record));
+            const request = sanitizeAgentRequest(payload, record);
+            if (typeof options.onTextDelta === 'function') {
+                request.onTextDelta = options.onTextDelta;
+            }
+            if (typeof options.onTextStreamEvent === 'function') {
+                request.onTextStreamEvent = options.onTextStreamEvent;
+            }
+            return await record.gateway.runAgent(request);
         } finally {
             record.activeRuns = Math.max(0, record.activeRuns - 1);
             record.lastUsedAt = Date.now();

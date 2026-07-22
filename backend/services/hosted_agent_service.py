@@ -5,6 +5,7 @@ import json
 import time
 import uuid
 from dataclasses import dataclass
+from collections.abc import AsyncIterator
 from typing import Any
 from urllib.parse import urlencode
 
@@ -114,6 +115,13 @@ class HostedAgentRuntimeClient:
             headers["x-ailis-internal-token"] = self.internal_token
         return headers
 
+    def _stream_headers(self) -> dict[str, str]:
+        return {
+            **self._headers(),
+            "accept": "text/event-stream",
+            "content-type": "application/json",
+        }
+
     async def _request(
         self,
         method: str,
@@ -158,6 +166,23 @@ class HostedAgentRuntimeClient:
             "/agent/run",
             payload={"tenantId": tenant_id, "payload": payload},
         )
+
+    async def stream_agent(
+        self,
+        tenant_id: str,
+        payload: dict[str, Any],
+    ) -> AsyncIterator[bytes]:
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with client.stream(
+                "POST",
+                f"{self.base_url}/agent/run",
+                headers=self._stream_headers(),
+                json={"tenantId": tenant_id, "payload": payload},
+            ) as response:
+                response.raise_for_status()
+                async for chunk in response.aiter_bytes():
+                    if chunk:
+                        yield chunk
 
     async def interrupt(self, tenant_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         return await self._request(

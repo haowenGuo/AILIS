@@ -30,6 +30,15 @@ class FakeGateway extends EventEmitter {
             type: 'agent.run.started',
             payload: { runId: `run-${this.requests.length}`, sessionId: request.sessionId }
         });
+        await request.onTextStreamEvent?.({
+            type: 'response.output_text.started',
+            streamId: `stream-${this.requests.length}`
+        });
+        await request.onTextDelta?.('done', { provider: 'fake' });
+        await request.onTextStreamEvent?.({
+            type: 'response.output_text.committed',
+            streamId: `stream-${this.requests.length}`
+        });
         return {
             ok: true,
             status: 'completed',
@@ -126,6 +135,102 @@ test('hosted runtime replaces browser-supplied paths, credentials, and approvals
     assert.equal(request.approved, undefined);
     assert.equal(request.agentRole, 'persona_orchestrator');
     assert.equal(request.context.agentRole, 'persona_orchestrator');
+});
+
+test('hosted runtime forwards provider text deltas outside the serialized request', async () => {
+    const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-hosted-stream-'));
+    const manager = new AILISHostedRuntimeManager({
+        dataRoot,
+        llmSettings: {
+            provider: 'openai-compatible',
+            baseUrl: 'https://example.test',
+            apiKey: 'test-key',
+            model: 'test-model'
+        },
+        gatewayFactory: (options) => new FakeGateway(options)
+    });
+    const deltas = [];
+    const streamEvents = [];
+
+    try {
+        const result = await manager.runAgent(
+            'web:stream',
+            { sessionId: 'main', message: 'hello' },
+            {
+                onTextDelta: (delta, metadata) => deltas.push({ delta, metadata }),
+                onTextStreamEvent: (event) => streamEvents.push(event.type)
+            }
+        );
+        assert.equal(result.ok, true);
+        assert.deepEqual(deltas, [{ delta: 'done', metadata: { provider: 'fake' } }]);
+        assert.deepEqual(streamEvents, [
+            'response.output_text.started',
+            'response.output_text.committed'
+        ]);
+    } finally {
+        await manager.close();
+    }
+});
+
+test('real hosted Persona commits streamed assistant text for a direct final response', async () => {
+    const modelRequests = [];
+    const modelServer = http.createServer(async (req, res) => {
+        const chunks = [];
+        for await (const chunk of req) chunks.push(chunk);
+        const request = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+        modelRequests.push(request);
+        res.writeHead(200, {
+            'content-type': 'text/event-stream; charset=utf-8',
+            'cache-control': 'no-cache'
+        });
+        res.write('data: {"choices":[{"delta":{"role":"assistant","content":"你好"}}]}\n\n');
+        res.write('data: {"choices":[{"delta":{"content":"，我在这里。"},"finish_reason":"stop"}]}\n\n');
+        res.write('data: {"choices":[],"usage":{"prompt_tokens":20,"completion_tokens":6,"total_tokens":26}}\n\n');
+        res.end('data: [DONE]\n\n');
+    });
+    await new Promise((resolve) => modelServer.listen(0, '127.0.0.1', resolve));
+    const address = modelServer.address();
+    const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-hosted-real-stream-'));
+    const manager = new AILISHostedRuntimeManager({
+        dataRoot,
+        llmSettings: {
+            provider: 'deepseek',
+            baseUrl: `http://127.0.0.1:${address.port}/v1`,
+            apiKey: 'test-key',
+            model: 'deepseek-chat',
+            timeoutMs: 10000
+        }
+    });
+    const deltas = [];
+    const streamEvents = [];
+
+    try {
+        const result = await manager.runAgent(
+            'web:real-stream',
+            {
+                sessionId: 'main',
+                message: '你好',
+                messageHistory: [{ role: 'user', content: '你好' }],
+                maxAgentSteps: 2
+            },
+            {
+                onTextDelta: (delta) => deltas.push(delta),
+                onTextStreamEvent: (event) => streamEvents.push(event.type)
+            }
+        );
+
+        assert.equal(result.ok, true);
+        assert.equal(result.displayText, '你好，我在这里。');
+        assert.deepEqual(deltas, ['你好', '，我在这里。']);
+        assert.deepEqual(streamEvents, [
+            'response.output_text.started',
+            'response.output_text.committed'
+        ]);
+        assert.equal(modelRequests[0].stream, true);
+    } finally {
+        await manager.close();
+        await new Promise((resolve) => modelServer.close(resolve));
+    }
 });
 
 test('hosted runtime executes the real Persona Agent and restores memory after restart', async () => {

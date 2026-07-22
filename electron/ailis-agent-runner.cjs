@@ -8734,6 +8734,7 @@ function buildLlmAgentDirectToolPrompt({
         'The runtime_environment object is the authoritative host clock. Use its current_date, current_time, timezone, and utc_offset instead of assuming the training-data date.',
         'For facts that may have changed, use fresh evidence already present in the conversation or verify them through TaskAgent. Do not present pretrained knowledge as current fact when freshness matters.',
         'When the user asks for concrete task execution that cannot be answered safely from the visible conversation, call handoff_task exactly once. The Harness transfers the immutable current user request; do not restate, rewrite, expand, or plan the task in tool arguments.',
+        'When calling handoff_task, emit only the native function call in that model response. Do not include assistant text alongside the tool call; public task progress is delivered separately by the Harness event channel.',
         requireTaskExecution
             ? 'This turn has an explicit task-execution contract. Call handoff_task exactly once before producing any answer; do not answer the task directly from model memory or arithmetic.'
             : '',
@@ -11468,10 +11469,21 @@ class AILISAgentRunner {
             if (interruptedBeforeLlm) {
                 return interruptedBeforeLlm;
             }
+            const llmCallId = `${runId}:agent_decision:${iteration}`;
             const decisionPayload = buildAgentDecisionLowLatencyPayload({
                 timeoutMs: decisionTimeoutMs,
                 messages: decisionMessages,
                 abortSignal,
+                onTextDelta: typeof request.onTextDelta === 'function'
+                    ? (delta, metadata = {}) => request.onTextDelta(delta, {
+                          ...metadata,
+                          runId,
+                          sessionId,
+                          iteration,
+                          streamId: llmCallId,
+                          phase: 'agent_decision'
+                      })
+                    : undefined,
                 instructions: directModelInputPrompt.instructions,
                 input: directModelInputPrompt.input,
                 tools: directModelInputPrompt.tools || directToolSpecs,
@@ -11508,8 +11520,17 @@ class AILISAgentRunner {
                 settings: decisionSettings,
                 requestContext
             });
-            const llmCallId = `${runId}:agent_decision:${iteration}`;
             const llmCallStartedAt = Date.now();
+            try {
+                await request.onTextStreamEvent?.({
+                    type: 'response.output_text.started',
+                    runId,
+                    sessionId,
+                    iteration,
+                    streamId: llmCallId,
+                    phase: 'agent_decision'
+                });
+            } catch {}
             this.gateway.emitGatewayEvent?.('agent.llm_call.started', {
                 runId,
                 sessionId,
@@ -11547,6 +11568,27 @@ class AILISAgentRunner {
                     stepResults
                 }
             });
+            const commitsVisibleAssistantText = Boolean(
+                decision.ok === true &&
+                decision.action === 'final' &&
+                decision.decisionSource === 'native_direct_final' &&
+                decision.repaired !== true &&
+                decision.repairAttempted !== true
+            );
+            try {
+                await request.onTextStreamEvent?.({
+                    type: commitsVisibleAssistantText
+                        ? 'response.output_text.committed'
+                        : 'response.output_text.discarded',
+                    runId,
+                    sessionId,
+                    iteration,
+                    streamId: llmCallId,
+                    phase: 'agent_decision',
+                    action: decision.action || '',
+                    decisionSource: decision.decisionSource || ''
+                });
+            } catch {}
             latestDecision = decision;
             const llmCallDurationMs = Date.now() - llmCallStartedAt;
             const usageSummary = summarizeLlmUsage(decision.usage);

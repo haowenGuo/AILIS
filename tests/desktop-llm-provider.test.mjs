@@ -47,6 +47,18 @@ describe('desktop LLM provider', () => {
                 body: parsedBody
             };
 
+            if (request.url === '/v1/chat/completions' && parsedBody.stream === true) {
+                response.writeHead(200, {
+                    'content-type': 'text/event-stream; charset=utf-8',
+                    'cache-control': 'no-cache'
+                });
+                response.write('data: {"choices":[{"delta":{"role":"assistant","content":"你好"}}]}\n\n');
+                response.write('data: {"choices":[{"delta":{"content":" 呀"},"finish_reason":"stop"}]}\n\n');
+                response.write('data: {"choices":[],"usage":{"prompt_tokens":5,"completion_tokens":2,"total_tokens":7}}\n\n');
+                response.end('data: [DONE]\n\n');
+                return;
+            }
+
             response.writeHead(200, {
                 'content-type': 'application/json'
             });
@@ -236,6 +248,30 @@ describe('desktop LLM provider', () => {
             { role: 'user', content: '你好' }
         ]);
         assert.equal(JSON.stringify(result).includes('test-secret-key'), false);
+    });
+
+    it('streams OpenAI-compatible text deltas without changing the final result', async () => {
+        const deltas = [];
+        const result = await callDesktopLlmProvider({
+            provider: 'deepseek',
+            baseUrl: `${serverUrl}/v1`,
+            apiKey: 'deepseek-secret',
+            model: 'deepseek-chat',
+            timeoutMs: 5000
+        }, {
+            messages: [
+                { role: 'system', content: 'persona' },
+                { role: 'user', content: '你好' }
+            ],
+            onTextDelta: (delta) => deltas.push(delta)
+        });
+
+        assert.equal(result.ok, true);
+        assert.equal(result.content, '你好 呀');
+        assert.deepEqual(deltas, ['你好', ' 呀']);
+        assert.equal(result.usage.total_tokens, 7);
+        assert.equal(receivedRequest.body.stream, true);
+        assert.deepEqual(receivedRequest.body.stream_options, { include_usage: true });
     });
 
     it('round-trips DeepSeek reasoning_content for native tool-call history', async () => {

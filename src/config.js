@@ -308,8 +308,18 @@ function applyRenderLookSettings(preferences = {}) {
             preferences.renderShadowEnabled,
             CONFIG.RENDER_LOOK?.shadowEnabled ?? DEFAULT_RENDER_SHADOW_ENABLED
         ),
-        shadowStrength: DEFAULT_RENDER_SHADOW_STRENGTH,
-        shadowRange: DEFAULT_RENDER_SHADOW_RANGE
+        shadowStrength: normalizeNumber(
+            preferences.renderShadowStrength,
+            0,
+            0.65,
+            CONFIG.RENDER_LOOK?.shadowStrength ?? DEFAULT_RENDER_SHADOW_STRENGTH
+        ),
+        shadowRange: normalizeNumber(
+            preferences.renderShadowRange,
+            0.65,
+            1.8,
+            CONFIG.RENDER_LOOK?.shadowRange ?? DEFAULT_RENDER_SHADOW_RANGE
+        )
     };
 }
 
