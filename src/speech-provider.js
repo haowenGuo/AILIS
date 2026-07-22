@@ -137,8 +137,19 @@ function scoreNativeVoice(voice, text) {
     return score;
 }
 
-async function pickNativeVoice(text) {
+function getNativeVoiceId(voice) {
+    return String(voice?.voiceURI || voice?.name || '').trim();
+}
+
+async function pickNativeVoice(text, preferredVoiceId = '') {
     const voices = await loadNativeVoices();
+    const normalizedPreferredVoiceId = String(preferredVoiceId || '').trim();
+    if (normalizedPreferredVoiceId) {
+        const exactMatch = voices.find((voice) => getNativeVoiceId(voice) === normalizedPreferredVoiceId);
+        if (exactMatch) {
+            return exactMatch;
+        }
+    }
     const rankedVoices = voices
         .map((voice) => ({ voice, score: scoreNativeVoice(voice, text) }))
         .filter(({ score }) => Number.isFinite(score))
@@ -159,7 +170,7 @@ function getNativeSpeechSettings(text) {
 function normalizeSpeechMode(mode) {
     const requestedMode = String(mode || '').trim().toLowerCase();
 
-    if (['off', 'server', 'cosyvoice3'].includes(requestedMode)) {
+    if (['off', 'server', 'cosyvoice3', 'native'].includes(requestedMode)) {
         return requestedMode;
     }
     if (['elevenlabs', 'eleven-labs', 'eleven_labs', 'server_tts', 'cloud'].includes(requestedMode)) {
@@ -167,6 +178,9 @@ function normalizeSpeechMode(mode) {
     }
     if (['cosyvoice', 'cosy-voice', 'cosy_voice'].includes(requestedMode)) {
         return 'cosyvoice3';
+    }
+    if (['browser', 'browser-native', 'chrome', 'web-speech'].includes(requestedMode)) {
+        return 'native';
     }
 
     return 'off';
@@ -183,6 +197,10 @@ function resolveSpeechMode(modeOverride = null) {
 
     if (requestedMode === 'server') {
         return 'server';
+    }
+
+    if (requestedMode === 'native') {
+        return desktopRuntime ? 'off' : 'native';
     }
 
     if (requestedMode === 'off') {
@@ -463,9 +481,10 @@ class CosyVoice3TTSCandidate {
 }
 
 class NativeSpeechSynthesisCandidate {
-    constructor() {
+    constructor({ preferredVoiceId = '' } = {}) {
         this.id = 'browser-speech-synthesis';
         this.replyMode = 'stream_text';
+        this.preferredVoiceId = String(preferredVoiceId || '').trim();
     }
 
     get supportsTTS() {
@@ -493,7 +512,7 @@ class NativeSpeechSynthesisCandidate {
 
         const synth = window.speechSynthesis;
         const utterance = new window.SpeechSynthesisUtterance(speechText);
-        const preferredVoice = await pickNativeVoice(speechText);
+        const preferredVoice = await pickNativeVoice(speechText, this.preferredVoiceId);
         const speechSettings = getNativeSpeechSettings(speechText);
 
         if (preferredVoice) {
@@ -725,7 +744,8 @@ export class SpeechProvider {
 
 export function createSpeechProvider({
     enableTTS = true,
-    speechMode = null
+    speechMode = null,
+    nativeVoiceId = ''
 } = {}) {
     const resolvedMode = resolveSpeechMode(speechMode);
 
@@ -737,8 +757,16 @@ export function createSpeechProvider({
     if (enableTTS && resolvedMode === 'server') {
         ttsCandidates.push(new ServerTTSCandidate());
         if (CONFIG.WEB_NATIVE_TTS_FALLBACK_ENABLED && !isDesktopRuntime()) {
-            ttsCandidates.push(new NativeSpeechSynthesisCandidate());
+            ttsCandidates.push(new NativeSpeechSynthesisCandidate({
+                preferredVoiceId: nativeVoiceId
+            }));
         }
+    }
+
+    if (enableTTS && resolvedMode === 'native') {
+        ttsCandidates.push(new NativeSpeechSynthesisCandidate({
+            preferredVoiceId: nativeVoiceId
+        }));
     }
 
     return new SpeechProvider({

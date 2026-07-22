@@ -43,7 +43,11 @@ test('failed TTS text fallback can explicitly keep the mouth closed', async () =
 
 test('web experience enables server TTS and unlocks audio from the send gesture', async () => {
     const source = await readFile(new URL('../Test/app.js', import.meta.url), 'utf8');
-    assert.match(source, /petUrl\.searchParams\.set\('speechMode', 'server'\)/);
+    const html = await readFile(new URL('../Test/index.html', import.meta.url), 'utf8');
+    assert.match(html, /id="tts-voice-select"/);
+    assert.match(source, /speechSynthesis\?\.getVoices/);
+    assert.match(source, /speechMode: useCloudVoice \? 'server' : 'native'/);
+    assert.match(source, /petUrl\.searchParams\.set\('ttsVoice', state\.ttsVoiceId\)/);
     assert.match(source, /__AILIS_BUILD_REVISION__/);
     assert.match(source, /petUrl\.searchParams\.set\('assetVersion', assetVersion\)/);
     assert.match(

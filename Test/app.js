@@ -10,6 +10,8 @@ const PET_CHAT_EVENT_NAME = 'ailis-chat-ui-event';
 const AILIS_AVATAR_URL = new URL('../Resources/Emotes/ailis-small/wave.png', window.location.href).href;
 const SCENE_STORAGE_KEY = 'ailis.web.scene.v1';
 const RENDER_PROFILE_STORAGE_KEY = 'ailis.web.render-profile.v1';
+const TTS_VOICE_STORAGE_KEY = 'ailis.web.tts-voice.v1';
+const CLOUD_TTS_VOICE_ID = 'cloud';
 const DEFAULT_RENDER_PROFILE_ID = 'ailis_bright_companion_mtoon';
 const SCENE_IDS = new Set(['sakura', 'school', 'seaside']);
 
@@ -33,6 +35,7 @@ const elements = {
     composer: document.getElementById('composer'),
     chatInput: document.getElementById('chat-input'),
     sendButton: document.getElementById('send-button'),
+    voiceSelect: document.getElementById('tts-voice-select'),
     quickButtons: Array.from(document.querySelectorAll('[data-prompt]')),
     sceneButtons: Array.from(document.querySelectorAll('[data-scene-option]')),
     renderButtons: Array.from(document.querySelectorAll('[data-render-profile]'))
@@ -46,6 +49,7 @@ const state = {
     busy: false,
     historyOpen: false,
     renderProfileId: DEFAULT_RENDER_PROFILE_ID,
+    ttsVoiceId: CLOUD_TTS_VOICE_ID,
     followLatestMessage: true,
     scrollFrame: 0,
     messagesById: new Map(),
@@ -72,6 +76,114 @@ function getBackendBaseUrl() {
 }
 
 const backendBaseUrl = getBackendBaseUrl();
+
+function getBrowserVoiceId(voice) {
+    return String(voice?.voiceURI || voice?.name || '').trim();
+}
+
+function getBrowserVoices() {
+    try {
+        return window.speechSynthesis?.getVoices?.() || [];
+    } catch {
+        return [];
+    }
+}
+
+function formatBrowserVoiceLabel(voice) {
+    const serviceLabel = voice.localService ? '本地' : '在线';
+    return `${voice.name} · ${voice.lang || '未知语言'} · ${serviceLabel}`;
+}
+
+function renderVoiceOptions() {
+    const voices = getBrowserVoices()
+        .filter((voice) => getBrowserVoiceId(voice))
+        .sort((left, right) => {
+            const leftChinese = /^zh\b/i.test(left.lang || '') ? 0 : 1;
+            const rightChinese = /^zh\b/i.test(right.lang || '') ? 0 : 1;
+            return leftChinese - rightChinese ||
+                String(left.lang || '').localeCompare(String(right.lang || '')) ||
+                String(left.name || '').localeCompare(String(right.name || ''));
+        });
+
+    elements.voiceSelect.replaceChildren();
+    const cloudOption = document.createElement('option');
+    cloudOption.value = CLOUD_TTS_VOICE_ID;
+    cloudOption.textContent = 'AILIS 云端语音';
+    elements.voiceSelect.appendChild(cloudOption);
+
+    if (voices.length) {
+        const browserGroup = document.createElement('optgroup');
+        browserGroup.label = `Chrome 浏览器语音（${voices.length}）`;
+        voices.forEach((voice) => {
+            const option = document.createElement('option');
+            option.value = getBrowserVoiceId(voice);
+            option.textContent = formatBrowserVoiceLabel(voice);
+            browserGroup.appendChild(option);
+        });
+        elements.voiceSelect.appendChild(browserGroup);
+    } else {
+        const loadingOption = document.createElement('option');
+        loadingOption.value = '__loading__';
+        loadingOption.textContent = window.speechSynthesis
+            ? '正在读取 Chrome 语音…'
+            : '当前浏览器不支持原生语音';
+        loadingOption.disabled = true;
+        elements.voiceSelect.appendChild(loadingOption);
+    }
+
+    const selectedVoiceExists = state.ttsVoiceId === CLOUD_TTS_VOICE_ID ||
+        voices.some((voice) => getBrowserVoiceId(voice) === state.ttsVoiceId);
+    if (!selectedVoiceExists && state.ttsVoiceId !== CLOUD_TTS_VOICE_ID) {
+        const pendingOption = document.createElement('option');
+        pendingOption.value = state.ttsVoiceId;
+        pendingOption.textContent = '上次选择的 Chrome 语音（载入中）';
+        elements.voiceSelect.appendChild(pendingOption);
+    }
+    elements.voiceSelect.value = state.ttsVoiceId;
+    elements.voiceSelect.title = elements.voiceSelect.selectedOptions[0]?.textContent || '选择语音';
+}
+
+function applyTtsVoiceToPet() {
+    const petWindow = getPetWindow();
+    if (typeof petWindow?.setAilisSpeechVoice !== 'function') {
+        return false;
+    }
+    const useCloudVoice = state.ttsVoiceId === CLOUD_TTS_VOICE_ID;
+    petWindow.setAilisSpeechVoice({
+        speechMode: useCloudVoice ? 'server' : 'native',
+        nativeVoiceId: useCloudVoice ? '' : state.ttsVoiceId
+    });
+    return true;
+}
+
+function setTtsVoice(voiceId, { persist = true, apply = true } = {}) {
+    const normalizedVoiceId = String(voiceId || '').trim();
+    state.ttsVoiceId = normalizedVoiceId && normalizedVoiceId !== '__loading__'
+        ? normalizedVoiceId
+        : CLOUD_TTS_VOICE_ID;
+    if (persist) {
+        try {
+            window.localStorage?.setItem(TTS_VOICE_STORAGE_KEY, state.ttsVoiceId);
+        } catch {
+            // The selected voice remains active for this page session.
+        }
+    }
+    renderVoiceOptions();
+    if (apply) {
+        applyTtsVoiceToPet();
+    }
+}
+
+function restoreTtsVoice() {
+    try {
+        setTtsVoice(window.localStorage?.getItem(TTS_VOICE_STORAGE_KEY), {
+            persist: false,
+            apply: false
+        });
+    } catch {
+        setTtsVoice(CLOUD_TTS_VOICE_ID, { persist: false, apply: false });
+    }
+}
 
 function setScene(sceneId, { persist = true } = {}) {
     const nextScene = SCENE_IDS.has(sceneId) ? sceneId : 'sakura';
@@ -154,6 +266,7 @@ function updateComposer() {
     elements.quickButtons.forEach((button) => {
         button.disabled = !ready;
     });
+    elements.voiceSelect.disabled = state.busy;
     elements.messageList.setAttribute('aria-busy', String(state.busy));
     elements.dialogueContent.setAttribute('aria-busy', String(state.busy));
 
@@ -489,6 +602,7 @@ async function sendPrompt(content) {
     state.followLatestMessage = true;
     resizeInput();
     updateComposer();
+    applyTtsVoiceToPet();
     scrollMessages({ force: true });
 
     try {
@@ -513,7 +627,11 @@ function configurePetFrame() {
         ? __AILIS_BUILD_REVISION__
         : new URL(import.meta.url).pathname.split('/').pop() || 'web';
     petUrl.searchParams.set('backend', backendBaseUrl);
-    petUrl.searchParams.set('speechMode', 'server');
+    const useCloudVoice = state.ttsVoiceId === CLOUD_TTS_VOICE_ID;
+    petUrl.searchParams.set('speechMode', useCloudVoice ? 'server' : 'native');
+    if (!useCloudVoice) {
+        petUrl.searchParams.set('ttsVoice', state.ttsVoiceId);
+    }
     petUrl.searchParams.set('web', '1');
     petUrl.searchParams.set('camera', 'close');
     petUrl.searchParams.set('renderProfile', state.renderProfileId);
@@ -554,6 +672,10 @@ elements.renderButtons.forEach((button) => {
         setRenderProfile(button.dataset.renderProfile);
     });
 });
+elements.voiceSelect.addEventListener('change', () => {
+    setTtsVoice(elements.voiceSelect.value);
+});
+window.speechSynthesis?.addEventListener?.('voiceschanged', renderVoiceOptions);
 elements.historyToggle.addEventListener('click', () => {
     setHistoryOpen(!state.historyOpen);
 });
@@ -573,6 +695,7 @@ document.addEventListener('keydown', (event) => {
 
 restoreScene();
 restoreRenderProfile();
+restoreTtsVoice();
 setHistoryOpen(false);
 configurePetFrame();
 void checkBackend();

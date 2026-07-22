@@ -251,9 +251,9 @@ test('web server TTS falls back to Chrome speech synthesis with native playback 
     }
 
     const voices = [
-        { name: 'Microsoft Yunxi Online', lang: 'zh-CN', localService: false },
-        { name: 'Microsoft Xiaoxiao Online (Natural)', lang: 'zh-CN', localService: false },
-        { name: 'Microsoft David', lang: 'en-US', localService: true }
+        { voiceURI: 'yunxi', name: 'Microsoft Yunxi Online', lang: 'zh-CN', localService: false },
+        { voiceURI: 'xiaoxiao', name: 'Microsoft Xiaoxiao Online (Natural)', lang: 'zh-CN', localService: false },
+        { voiceURI: 'david', name: 'Microsoft David', lang: 'en-US', localService: true }
     ];
     const synth = {
         speaking: false,
@@ -348,6 +348,85 @@ test('web server TTS falls back to Chrome speech synthesis with native playback 
             delete globalThis.fetch;
         } else {
             globalThis.fetch = previousFetch;
+        }
+    }
+});
+
+test('native web speech mode uses the exact Chrome voice selected by voiceURI', async () => {
+    const previousWindow = globalThis.window;
+    let spokenUtterance = null;
+
+    class FakeSpeechSynthesisUtterance {
+        constructor(text) {
+            this.text = text;
+        }
+    }
+
+    const selectedVoice = {
+        voiceURI: 'chrome-yunxi',
+        name: 'Microsoft Yunxi Online',
+        lang: 'zh-CN',
+        localService: false
+    };
+    const autoVoice = {
+        voiceURI: 'chrome-xiaoxiao',
+        name: 'Microsoft Xiaoxiao Online (Natural)',
+        lang: 'zh-CN',
+        localService: false
+    };
+    const synth = {
+        getVoices: () => [autoVoice, selectedVoice],
+        cancel() {},
+        speak(utterance) {
+            spokenUtterance = utterance;
+            queueMicrotask(() => {
+                utterance.onstart?.();
+                utterance.onend?.();
+            });
+        }
+    };
+
+    globalThis.window = {
+        speechSynthesis: synth,
+        SpeechSynthesisUtterance: FakeSpeechSynthesisUtterance,
+        setTimeout,
+        clearTimeout
+    };
+
+    try {
+        const provider = createSpeechProvider({
+            speechMode: 'native',
+            nativeVoiceId: selectedVoice.voiceURI
+        });
+        assert.equal(provider.mode, 'native');
+        assert.deepEqual(
+            provider.ttsCandidates.map((candidate) => candidate.id),
+            ['browser-speech-synthesis']
+        );
+
+        const result = await provider.playSpeech({
+            payload: { speech_text: '这是指定的浏览器语音。' },
+            displayText: '这是指定的浏览器语音。',
+            vrmSystem: {
+                startFallbackSpeech() {},
+                stopSpeaking() {}
+            },
+            updateMessageContent() {},
+            scrollToBottom() {},
+            onAvatarPlaybackStart() {}
+        });
+
+        assert.deepEqual(result, {
+            played: true,
+            provider: 'browser-speech-synthesis'
+        });
+        assert.equal(spokenUtterance.voice, selectedVoice);
+        assert.equal(spokenUtterance.lang, 'zh-CN');
+    } finally {
+        if (previousWindow === undefined) {
+            delete globalThis.window;
+        } else {
+            globalThis.window = previousWindow;
         }
     }
 });

@@ -122,6 +122,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     const canvasContainerEl = document.getElementById('canvas-container');
     const initialPreferences = window.ailisDesktop?.preferences || {};
     const runtimeUrl = new URL(window.location.href);
+    let activeNativeVoiceId = runtimeUrl.searchParams.get('ttsVoice')?.trim() || '';
     const isEmbeddedWebExperience = runtimeUrl.searchParams.get('web') === '1';
     const useWebCloseCamera = isEmbeddedWebExperience && runtimeUrl.searchParams.get('camera') === 'close';
     const isWebMobileViewport = window.matchMedia('(max-width: 760px)').matches;
@@ -154,9 +155,10 @@ window.addEventListener('DOMContentLoaded', async () => {
     });
     const audioPlayer = new TTSAudioPlayer(vrmSystem);
     let chatService = createChatService(initialPreferences);
-    const buildSpeechProvider = (speechMode = null) => createSpeechProvider({
+    const buildSpeechProvider = (speechMode = null, nativeVoiceId = activeNativeVoiceId) => createSpeechProvider({
         enableTTS: true,
-        speechMode
+        speechMode,
+        nativeVoiceId
     });
     let speechProvider = buildSpeechProvider(initialPreferences.speechMode);
     const chatSystem = new ChatTTSSystem(vrmSystem, audioPlayer, chatService, {
@@ -243,6 +245,17 @@ window.addEventListener('DOMContentLoaded', async () => {
             ? WEB_RENDER_PROFILE_ID
             : String(profileId || '').trim() || CONFIG.RENDER_PROFILE_ID;
         return vrmSystem.applyRenderProfile(CONFIG.RENDER_PROFILE_ID);
+    };
+    window.setAilisSpeechVoice = ({ speechMode = 'server', nativeVoiceId = '' } = {}) => {
+        activeNativeVoiceId = String(nativeVoiceId || '').trim();
+        speechProvider?.dispose?.();
+        speechProvider = buildSpeechProvider(speechMode, activeNativeVoiceId);
+        chatSystem.setSpeechProvider(speechProvider);
+        window.speechProvider = speechProvider;
+        return {
+            mode: speechProvider.mode,
+            provider: speechProvider.getPrimaryModeLabel()
+        };
     };
 
     vrmSystem.init('canvas-container');
