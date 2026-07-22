@@ -509,11 +509,13 @@ async function sendPrompt(content) {
 
 function configurePetFrame() {
     const petUrl = new URL('../pet.html', window.location.href);
+    const assetVersion = new URL(import.meta.url).pathname.split('/').pop() || 'web';
     petUrl.searchParams.set('backend', backendBaseUrl);
     petUrl.searchParams.set('speechMode', 'server');
     petUrl.searchParams.set('web', '1');
     petUrl.searchParams.set('camera', 'close');
     petUrl.searchParams.set('renderProfile', state.renderProfileId);
+    petUrl.searchParams.set('assetVersion', assetVersion);
     elements.petFrame.src = petUrl.href;
 }
 
