@@ -92,6 +92,12 @@ function sha256(buffer) {
     return createHash('sha256').update(buffer).digest('hex');
 }
 
+function contentSha256(buffer, text) {
+    return text
+        ? sha256(Buffer.from(normalizeText(buffer), 'utf8'))
+        : sha256(buffer);
+}
+
 function isTextFile(filePath) {
     const fileName = filePath.split('/').at(-1) || '';
     return textFileNames.has(fileName) || textExtensions.has(extname(fileName).toLowerCase());
@@ -718,7 +724,8 @@ async function main() {
             path: filePath,
             snapshotCommit,
             bytes: buffer.byteLength,
-            sha256: sha256(buffer),
+            sha256: contentSha256(buffer, text),
+            hashMode: text ? 'utf8-lf' : 'binary',
             text,
             lines: lines.length,
             kind: classifyFile(filePath, text),
@@ -742,7 +749,7 @@ async function main() {
             schema: 'ailis.human_in_loop.manifest.v1',
             generatedAt: new Date().toISOString(),
             snapshotCommit,
-            repositoryRoot,
+            repositoryRoot: '.',
             fileCount: entries.length,
             textFileCount: entries.filter((entry) => entry.text).length,
             binaryFileCount: entries.filter((entry) => !entry.text).length,

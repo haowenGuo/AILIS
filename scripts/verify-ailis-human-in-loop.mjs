@@ -43,6 +43,14 @@ function sha256(buffer) {
     return createHash('sha256').update(buffer).digest('hex');
 }
 
+function contentSha256(buffer, text) {
+    if (!text) {
+        return sha256(buffer);
+    }
+    const normalized = buffer.toString('utf8').replace(/\r\n?/g, '\n');
+    return sha256(Buffer.from(normalized, 'utf8'));
+}
+
 async function main() {
     const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
     const trackedFiles = listTrackedSourceFiles();
@@ -70,7 +78,12 @@ async function main() {
             readFile(originalPath),
             readFile(snapshotPath)
         ]);
-        if (sha256(original) !== entry.sha256 || sha256(snapshot) !== entry.sha256) {
+        const expectedHashMode = entry.text ? 'utf8-lf' : 'binary';
+        if (entry.hashMode !== expectedHashMode) {
+            throw new Error(`Unexpected hash mode for ${entry.path}: ${entry.hashMode}`);
+        }
+        if (contentSha256(original, entry.text) !== entry.sha256 ||
+            contentSha256(snapshot, entry.text) !== entry.sha256) {
             throw new Error(`Hash mismatch: ${entry.path}`);
         }
         if (entry.text) {
