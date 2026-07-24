@@ -129,7 +129,9 @@
     "test:ailis-file-manager": "node --test tests/ailis-file-manager-tool.test.mjs",
     "test:ailis-computer": "node --test tests/ailis-computer-tool.test.mjs",
     "test:ailis-computer-advanced": "node --test tests/ailis-computer-advanced-tool.test.mjs",
-    "test:ailis-code": "node --test tests/ailis-code-tool.test.mjs"
+    "test:ailis-code": "node --test tests/ailis-code-tool.test.mjs",
+    "ailis:human-loop:build": "node scripts/build-ailis-human-in-loop.mjs",
+    "ailis:human-loop:verify": "node scripts/verify-ailis-human-in-loop.mjs"
   },
   "keywords": [],
   "author": "",
