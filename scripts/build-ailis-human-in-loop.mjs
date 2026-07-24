@@ -11,7 +11,7 @@ import { createHash } from 'node:crypto';
 import { dirname, extname, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const repositoryRoot = resolve(fileURLToPath(new URL('..', import.meta.url)), '..');
+const repositoryRoot = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const learningRoot = resolve(repositoryRoot, 'AILIS_HUMAN_IN_LOOP');
 const snapshotRoot = resolve(learningRoot, 'source');
 const generatedRoot = resolve(learningRoot, 'generated');
