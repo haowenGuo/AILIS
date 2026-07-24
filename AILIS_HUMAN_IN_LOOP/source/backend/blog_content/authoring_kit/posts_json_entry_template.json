@@ -1,0 +1,19 @@
+{
+  "slug": "your-post-slug",
+  "published_at": "2026-04-17",
+  "reading_time": "4 min",
+  "featured": false,
+  "tags": ["ai", "notes"],
+  "translations": {
+    "zh": {
+      "title": "中文标题",
+      "summary": "中文摘要，建议 1 到 2 句。",
+      "body_file": "posts/zh/your-post-slug.md"
+    },
+    "en": {
+      "title": "English Title",
+      "summary": "English summary in one or two sentences.",
+      "body_file": "posts/en/your-post-slug.md"
+    }
+  }
+}

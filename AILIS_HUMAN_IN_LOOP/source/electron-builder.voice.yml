@@ -1,0 +1,46 @@
+appId: com.ailis.desktop
+productName: AILIS
+artifactName: ${productName}-${version}-offline-voice-${arch}.${ext}
+icon: build/icon.png
+afterPack: scripts/fix-windows-exe-icon.cjs
+directories:
+  output: D:/AILIS/Build/AILIS-voice
+files:
+  - dist/**/*
+  - electron/**/*
+  - scripts/mcp-ailis-research-server.cjs
+  - scripts/ailis-crawl4ai-worker.py
+  - scripts/ailis-python-search-worker.py
+  - package.json
+extraResources:
+  - from: models/voice-runtime
+    to: models/voice-runtime
+    filter:
+      - "**/*"
+      - "!pip-cache/**"
+      - "!downloads/**"
+      - "!uv-cache/**"
+      - "!asr-cache/**"
+      - "!**/__pycache__/**"
+      - "!**/*.pyc"
+      - "!**/*.pyo"
+      - "!**/.git/**"
+      - "!**/.cache/**"
+      - "!voice-venv.backup*/**"
+extraMetadata:
+  main: electron/main.cjs
+asar: true
+asarUnpack:
+  - electron/**/*.cjs
+  - electron/**/*.py
+  - scripts/**/*.cjs
+  - scripts/**/*.py
+npmRebuild: false
+win:
+  icon: build/icon.ico
+  executableName: AILIS
+  signAndEditExecutable: false
+  target:
+    - target: zip
+      arch:
+        - x64

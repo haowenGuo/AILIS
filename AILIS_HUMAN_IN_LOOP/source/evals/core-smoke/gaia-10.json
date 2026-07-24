@@ -1,0 +1,133 @@
+{
+  "status": "ready_from_local_history",
+  "requested": 10,
+  "available": 10,
+  "sourcePath": "F:\\AILIS_self_evolution_runtime\\build-cache\\hf-datasets\\gaia-benchmark-GAIA",
+  "fallbackSources": [
+    "F:\\AILIS_self_evolution_runtime\\eval-results\\engineering\\gaia-level1-lite-public",
+    "F:\\AIGril\\eval-results\\engineering\\gaia-level1-lite-public"
+  ],
+  "note": "Official GAIA parquet is not cached, but local GAIA-lite history has enough real task records for low-cost smoke.",
+  "tasks": [
+    {
+      "benchmark": "gaia",
+      "smokeId": "gaia-history-01",
+      "source": "local_history_fallback",
+      "taskId": "8e867cd7-cff9-4e6c-867a-ff5ddc2550be",
+      "question": "How many studio albums were published by Mercedes Sosa between 2000 and 2009 (included)? You can use the latest 2022 version of english wikipedia.",
+      "fileName": "",
+      "historicalStatus": "completed",
+      "historicalSteps": 8,
+      "historicalDurationMs": 120403,
+      "sourcePath": "F:\\AIGril\\eval-results\\engineering\\gaia-level1-lite-public\\full-20-r6-current-pc.jsonl"
+    },
+    {
+      "benchmark": "gaia",
+      "smokeId": "gaia-history-02",
+      "source": "local_history_fallback",
+      "taskId": "a1e91b78-d3d8-4675-bb8d-62741b4b68a6",
+      "question": "In the video https://www.youtube.com/watch?v=L1vXCYZAYYM, what is the highest number of bird species to be on camera simultaneously?",
+      "fileName": "",
+      "historicalStatus": "error",
+      "historicalSteps": 5,
+      "historicalDurationMs": 105581,
+      "sourcePath": "F:\\AIGril\\eval-results\\engineering\\gaia-level1-lite-public\\full-20-r6-current-pc.jsonl"
+    },
+    {
+      "benchmark": "gaia",
+      "smokeId": "gaia-history-03",
+      "source": "local_history_fallback",
+      "taskId": "2d83110e-a098-4ebb-9987-066c06fa42d0",
+      "question": ".rewsna eht sa \"tfel\" drow eht fo etisoppo eht etirw ,ecnetnes siht dnatsrednu uoy fI",
+      "fileName": "",
+      "historicalStatus": "completed",
+      "historicalSteps": 0,
+      "historicalDurationMs": 7206,
+      "sourcePath": "F:\\AIGril\\eval-results\\engineering\\gaia-level1-lite-public\\full-20-r6-current-pc.jsonl"
+    },
+    {
+      "benchmark": "gaia",
+      "smokeId": "gaia-history-04",
+      "source": "local_history_fallback",
+      "taskId": "cca530fc-4052-43b2-b130-b30968d8aa44",
+      "question": "Review the chess position provided in the image. It is black's turn. Provide the correct next move for black which guarantees a win. Please provide your response in algebraic notation.",
+      "fileName": "cca530fc-4052-43b2-b130-b30968d8aa44.png",
+      "historicalStatus": "completed",
+      "historicalSteps": 2,
+      "historicalDurationMs": 157646,
+      "sourcePath": "F:\\AIGril\\eval-results\\engineering\\gaia-level1-lite-public\\full-20-r6-current-pc.jsonl"
+    },
+    {
+      "benchmark": "gaia",
+      "smokeId": "gaia-history-05",
+      "source": "local_history_fallback",
+      "taskId": "4fc2f1ae-8625-45b5-ab34-ad4433bc21f8",
+      "question": "Who nominated the only Featured Article on English Wikipedia about a dinosaur that was promoted in November 2016?",
+      "fileName": "",
+      "historicalStatus": "plan_only_or_unknown_action",
+      "historicalSteps": 5,
+      "historicalDurationMs": 166513,
+      "sourcePath": "F:\\AIGril\\eval-results\\engineering\\gaia-level1-lite-public\\full-20-r6-current-pc.jsonl"
+    },
+    {
+      "benchmark": "gaia",
+      "smokeId": "gaia-history-06",
+      "source": "local_history_fallback",
+      "taskId": "6f37996b-2ac7-44b0-8e68-6d28256631b4",
+      "question": "Given this table defining * on the set S = {a, b, c, d, e}\n\n|*|a|b|c|d|e|\n|---|---|---|---|---|---|\n|a|a|b|c|b|d|\n|b|b|c|a|e|c|\n|c|c|a|b|b|a|\n|d|b|e|b|e|d|\n|e|d|b|a|d|c|\n\nprovide the subset of S involved in any possible counter-examples that prove * is not commutative. Provide your answer as a comma separated list of the elements in the set in alphabetical order.",
+      "fileName": "",
+      "historicalStatus": "completed",
+      "historicalSteps": 0,
+      "historicalDurationMs": 21223,
+      "sourcePath": "F:\\AIGril\\eval-results\\engineering\\gaia-level1-lite-public\\full-20-r6-current-pc.jsonl"
+    },
+    {
+      "benchmark": "gaia",
+      "smokeId": "gaia-history-07",
+      "source": "local_history_fallback",
+      "taskId": "9d191bce-651d-4746-be2d-7ef8ecadb9c2",
+      "question": "Examine the video at https://www.youtube.com/watch?v=1htKBjuUWec.\n\nWhat does Teal'c say in response to the question \"Isn't that hot?\"",
+      "fileName": "",
+      "historicalStatus": "completed",
+      "historicalSteps": 5,
+      "historicalDurationMs": 135801,
+      "sourcePath": "F:\\AIGril\\eval-results\\engineering\\gaia-level1-lite-public\\full-20-r6-current-pc.jsonl"
+    },
+    {
+      "benchmark": "gaia",
+      "smokeId": "gaia-history-08",
+      "source": "local_history_fallback",
+      "taskId": "cabe07ed-9eca-40ea-8ead-410ef5e83f91",
+      "question": "What is the surname of the equine veterinarian mentioned in 1.E Exercises from the chemistry materials licensed by Marisa Alviar-Agnew & Henry Agnew under the CK-12 license in LibreText's Introductory Chemistry materials as compiled 08/21/2023?",
+      "fileName": "",
+      "historicalStatus": "runner_error",
+      "historicalSteps": 0,
+      "historicalDurationMs": 300022,
+      "sourcePath": "F:\\AIGril\\eval-results\\engineering\\gaia-level1-lite-public\\full-20-r6-current-pc.jsonl"
+    },
+    {
+      "benchmark": "gaia",
+      "smokeId": "gaia-history-09",
+      "source": "local_history_fallback",
+      "taskId": "3cef3a44-215e-4aed-8e3b-b1e3f08063b7",
+      "question": "I'm making a grocery list for my mom, but she's a professor of botany and she's a real stickler when it comes to categorizing things. I need to add different foods to different categories on the grocery list, but if I make a mistake, she won't buy anything inserted in the wrong category. Here's the list I have so far:\n\nmilk, eggs, flour, whole bean coffee, Oreos, sweet potatoes, fresh basil, plums, green beans, rice, corn, bell pepper, whole allspice, acorns, broccoli, celery, zucchini, lettuce, peanuts\n\nI need to make headings for the fruits and vegetables. Could you please create a list of just the vegetables from my list? If you could do that, then I can figure out how to categorize the rest of the list into the appropriate categories. But remember that my mom is a real stickler, so make sure that no botanical fruits end up on the vegetable list, or she won't get them when she's at the store. Please alphabetize the list of vegetables, and place each item in a comma separated list.",
+      "fileName": "",
+      "historicalStatus": "completed",
+      "historicalSteps": 0,
+      "historicalDurationMs": 18262,
+      "sourcePath": "F:\\AIGril\\eval-results\\engineering\\gaia-level1-lite-public\\full-20-r5-agent-repair-tools.jsonl"
+    },
+    {
+      "benchmark": "gaia",
+      "smokeId": "gaia-history-10",
+      "source": "local_history_fallback",
+      "taskId": "99c9cc74-fdc8-46c6-8f8d-3ce2d3bfeea3",
+      "question": "Hi, I'm making a pie but I could use some help with my shopping list. I have everything I need for the crust, but I'm not sure about the filling. I got the recipe from my friend Aditi, but she left it as a voice memo and the speaker on my phone is buzzing so I can't quite make out what she's saying. Could you please listen to the recipe and list all of the ingredients that my friend described? I only want the ingredients for the filling, as I have everything I need to make my favorite pie crust. I've attached the recipe as Strawberry pie.mp3.\n\nIn your response, please only list the ingredients, not any measurements. So if the recipe calls for \"a pinch of salt\" or \"two cups of ripe strawberries\" the ingredients on the list would be \"salt\" and \"ripe strawberries\".\n\nPlease format your response as a comma separated list of ingredients. Also, please alphabetize the ingredients.",
+      "fileName": "99c9cc74-fdc8-46c6-8f8d-3ce2d3bfeea3.mp3",
+      "historicalStatus": "completed",
+      "historicalSteps": 1,
+      "historicalDurationMs": 47446,
+      "sourcePath": "F:\\AIGril\\eval-results\\engineering\\gaia-level1-lite-public\\full-20-r5-agent-repair-tools.jsonl"
+    }
+  ]
+}

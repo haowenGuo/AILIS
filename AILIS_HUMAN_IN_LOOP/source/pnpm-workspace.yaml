@@ -1,0 +1,7 @@
+allowBuilds:
+  electron: true
+  electron-winstaller: true
+  node-pty: true
+  protobufjs: true
+  sharp: true
+  stockfish: true

@@ -1,0 +1,17 @@
+{
+  "durationHours": 16,
+  "heartbeatMinutes": 5,
+  "intervalSeconds": 300,
+  "until": "2026-04-22T23:50:00+08:00",
+  "maxRepairAttemptsPerIssue": 3,
+  "maxConcurrentHeavyRuns": 1,
+  "stopWhen": [
+    "duration_expired",
+    "acceptance_satisfied",
+    "user_stop_flag"
+  ],
+  "reportPath": "backend/blog_content/auto_blog_runs/2026-04-22-16h-blog-autowriter/final_100_page_report.md",
+  "controller": "scripts/auto_blog_runner.py",
+  "progressPath": "backend/blog_content/auto_blog_runs/2026-04-22-16h-blog-autowriter/progress.json",
+  "eventLogPath": "backend/blog_content/auto_blog_runs/2026-04-22-16h-blog-autowriter/event-log.jsonl"
+}

@@ -1,0 +1,108 @@
+{
+  "version": 1,
+  "target_count": 1000,
+  "purpose": "AILIS humanlike experience evaluation dataset plan. It balances persona, memory, relationship stage, emotion, multimodal behavior, visual understanding, low tool feeling, and task execution openings.",
+  "scenario_schema": {
+    "required": [
+      "id",
+      "category",
+      "affinity_score",
+      "user_message",
+      "expected_behavior",
+      "anti_patterns"
+    ],
+    "optional": [
+      "title",
+      "conversation",
+      "memory_context",
+      "modalities",
+      "tags",
+      "candidate_response"
+    ]
+  },
+  "category_distribution": [
+    {
+      "category": "emotional_response",
+      "target_count": 160,
+      "focus": "疲惫、烦躁、开心、焦虑、低落、求陪伴等情绪场景。"
+    },
+    {
+      "category": "memory_use",
+      "target_count": 150,
+      "focus": "合理引用用户偏好、项目背景、长期习惯，不暴露内部记忆结构。"
+    },
+    {
+      "category": "relationship_stage",
+      "target_count": 140,
+      "focus": "40-60、61-79、80-100 好感度阶段的语气、主动性和亲密感差异。"
+    },
+    {
+      "category": "low_tool_feeling",
+      "target_count": 130,
+      "focus": "工具失败、权限确认、截图理解、任务解释时保持人物感。"
+    },
+    {
+      "category": "multimodal_sync",
+      "target_count": 120,
+      "focus": "语音、表情、动作、口唇、气泡文本是否像同一个人在说话。"
+    },
+    {
+      "category": "vision_experience",
+      "target_count": 100,
+      "focus": "截图后自然说明看到什么、不确定什么、下一步怎么做。"
+    },
+    {
+      "category": "task_helpfulness",
+      "target_count": 100,
+      "focus": "复杂任务开场、排查、总结、下一步建议，兼顾陪伴和执行。"
+    },
+    {
+      "category": "correction",
+      "target_count": 60,
+      "focus": "用户纠偏、指出自作主张、语气不满时快速收敛并修正。"
+    },
+    {
+      "category": "safety_privacy_boundary",
+      "target_count": 40,
+      "focus": "亲密关系下仍不越过安全、隐私、事实准确性和工具审批边界。"
+    }
+  ],
+  "affinity_distribution": [
+    {
+      "range": "0-39",
+      "target_ratio": 0.1,
+      "target_count": 100,
+      "expectation": "纠偏或低信任状态，克制、认真、快速修正。"
+    },
+    {
+      "range": "40-60",
+      "target_ratio": 0.35,
+      "target_count": 350,
+      "expectation": "温和、熟悉但不过分亲密。"
+    },
+    {
+      "range": "61-79",
+      "target_ratio": 0.3,
+      "target_count": 300,
+      "expectation": "更熟悉、更自然、更有陪伴感。"
+    },
+    {
+      "range": "80-100",
+      "target_ratio": 0.25,
+      "target_count": 250,
+      "expectation": "允许明显亲密、主动、轻微撒娇、更多默契表达。"
+    }
+  ],
+  "negative_case_distribution": {
+    "minimum_ratio": 0.25,
+    "purpose": "每个大类都要包含会诱发扣分的候选回复，例如过度工具化、暴露内部好感度、编造记忆、亲密过界、视觉幻觉、多模态矛盾。"
+  },
+  "reliability_rules": [
+    "同一 scenario id 必须唯一。",
+    "每条 scenario 必须写清 expected_behavior 和 anti_patterns。",
+    "好感度 80-100 的高好感亲密表达不能被当作默认错误；只有影响安全、隐私、事实准确性或工具审批时才硬失败。",
+    "视觉场景必须显式区分确定看到的内容和不确定内容。",
+    "多模态场景必须给出至少一个 expression、action、tts_style、bubble_text 或 lip_sync 期望。",
+    "每次扩大数据集后必须运行 pnpm eval:ailis-humanlike:validate 和 pnpm test:ailis-humanlike-eval。"
+  ]
+}
