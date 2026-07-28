@@ -47,6 +47,7 @@
       "tasks": 165,
       "correct": 109,
       "accuracy": 0.6606060606060606,
+      "scoreType": "permissive_visible_scorer",
       "levels": {
         "L1": {
           "correct": 49,
@@ -63,6 +64,27 @@
       },
       "responseOk": 162,
       "totalTokens": 33067217
+    },
+    "p1FullPublicValidationSubmissionAudit": {
+      "tasks": 165,
+      "correct": 105,
+      "accuracy": 0.6363636363636364,
+      "scoreType": "actual_submission_manual_audit",
+      "confirmedPermissiveFalsePositiveIndices": [0, 6, 21, 144],
+      "levels": {
+        "L1": {
+          "correct": 46,
+          "total": 53
+        },
+        "L2": {
+          "correct": 50,
+          "total": 86
+        },
+        "L3": {
+          "correct": 9,
+          "total": 26
+        }
+      }
     }
   },
   "rules": {

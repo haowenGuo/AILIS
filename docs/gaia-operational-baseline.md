@@ -37,6 +37,14 @@ The broader evidence available at promotion time is:
 - P1 level scores: L1 49/53, L2 50/86, L3 10/26;
 - P1 response integrity: 162/165 response OK.
 
+The public validation runner used a permissive visible-answer scorer. A
+post-run submission audit found four clear P1 false positives where the
+actual answer had a wrong unit or extra list/set members. The preserved
+visible score is 109/165; the strict audited score is 105/165, with audited
+level scores L1 46/53, L2 50/86, and L3 9/26. This does not reverse the
+explicit operational promotion, but all future gates must report both
+figures and score the actual submitted answer.
+
 P0 remains the historical narrow-fix success reference. The frozen baseline
 `6afc0ae6a4b51992fcf20092fb5b8e109dab98e5` also remains immutable.
 
@@ -65,4 +73,10 @@ The current full comparison campaign is:
 
 ```text
 F:\AILIS_self_evolution_runtime\eval-results\engineering\gaia-desktop-real\p1-vs-codex-validation165-20260728
+```
+
+The execution-chain study is:
+
+```text
+docs/gaia-p1-vs-codex-l23-execution-study.md
 ```

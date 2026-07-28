@@ -1,0 +1,95 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-07-29",
+  "status": "complete",
+  "sourceLocks": {
+    "p1Code": "7ba2cf77628f793ad70abb5bd9577d5d41c1ba0b",
+    "p1BaselinePointer": "260846e3e10f316433891ebc1f609329e3ab141c",
+    "p0HistoricalReference": "8ebc1e577a21e9badf081ae9b05fb3eb0607cb88",
+    "frozenBaseline": "6afc0ae6a4b51992fcf20092fb5b8e109dab98e5",
+    "codexSource": "da4c8ca57d40b074bdc1b5b1218851100150c56b"
+  },
+  "scores": {
+    "p1": {
+      "visible": {
+        "overall": [109, 165],
+        "L1": [49, 53],
+        "L2": [50, 86],
+        "L3": [10, 26]
+      },
+      "audited": {
+        "overall": [105, 165],
+        "L1": [46, 53],
+        "L2": [50, 86],
+        "L3": [9, 26],
+        "falsePositiveIndices": [0, 6, 21, 144]
+      },
+      "responseOk": [162, 165]
+    },
+    "codex": {
+      "visible": {
+        "overall": [133, 165],
+        "L1": [47, 53],
+        "L2": [65, 86],
+        "L3": [21, 26]
+      },
+      "audited": {
+        "overall": [130, 165],
+        "L1": [46, 53],
+        "L2": [64, 86],
+        "L3": [20, 26],
+        "falsePositiveIndices": [6, 105, 144]
+      },
+      "responseOk": [157, 165]
+    }
+  },
+  "auditedL23Paired": {
+    "tasks": 112,
+    "bothCorrect": 55,
+    "p1Only": 4,
+    "codexOnly": 29,
+    "bothWrong": 24
+  },
+  "cost": {
+    "p1": {
+      "totalTokens": 33067217,
+      "meanTokens": 200407.38,
+      "meanDurationMs": 337844.16,
+      "p95DurationMs": 825972,
+      "completedToolCalls": 918,
+      "cachedToPromptRatio": 0.3238660127
+    },
+    "codex": {
+      "totalTokens": 11737948,
+      "meanTokens": 71139.08,
+      "meanDurationMs": 198706.54,
+      "p95DurationMs": 597358,
+      "completedToolCalls": 1135,
+      "cachedToPromptRatio": 0.6075767654
+    }
+  },
+  "p1RequestShape": {
+    "finalPromptCollapseRows": 49,
+    "auditedWrongRows": 60,
+    "auditedWrongWithFinalPromptCollapse": 40,
+    "L3Rows": 26,
+    "L3FinalPromptCollapseRows": 16
+  },
+  "verdict": {
+    "activeOperationalBaseline": "P1",
+    "historicalP1L1GateIsRewritten": false,
+    "primaryL23Gap": "canonical context and durable resource continuity, not response availability",
+    "nextParent": "7ba2cf77628f793ad70abb5bd9577d5d41c1ba0b",
+    "doNotStackFailedCandidates": true,
+    "doNotAddBehaviorControl": true,
+    "doNotAddDomainOrSiteRouting": true
+  },
+  "nextPhases": [
+    "shadow effective-request journal with replay digest equality",
+    "single canonical ContextProjector and canonical-history finalization",
+    "generic contentItems plus artifactRefs plus outputRefs data plane",
+    "stable prompt prefix and truthful generic command environment",
+    "failure-side then stable-control bilateral proof",
+    "fixed-commit two-run complete paired gate"
+  ]
+}
