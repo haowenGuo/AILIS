@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 1,
+  "status": "active_operational_baseline",
+  "promotedAt": "2026-07-29",
+  "codeBaseline": {
+    "name": "P1",
+    "commit": "7ba2cf77628f793ad70abb5bd9577d5d41c1ba0b",
+    "branch": "codex/gaia-p1-operational-baseline",
+    "parent": "8ebc1e577a21e9badf081ae9b05fb3eb0607cb88"
+  },
+  "preservedReferences": {
+    "p0": "8ebc1e577a21e9badf081ae9b05fb3eb0607cb88",
+    "frozenBaseline": "6afc0ae6a4b51992fcf20092fb5b8e109dab98e5"
+  },
+  "decision": {
+    "authority": "explicit_user_engineering_decision",
+    "reason": "P1 outperformed P0 on the shared cross-level 20-task sample and is the selected base for subsequent broad GAIA and long-horizon work.",
+    "historicalL1GateIsRewritten": false,
+    "futureCandidatesMustStartFrom": "7ba2cf77628f793ad70abb5bd9577d5d41c1ba0b"
+  },
+  "evidence": {
+    "historicalL1Paired": {
+      "p0": {
+        "scores": [47, 50],
+        "tasksPerRun": 53,
+        "meanAccuracy": 0.9150943396226415,
+        "verdict": "historically_accepted"
+      },
+      "p1": {
+        "scores": [48, 48],
+        "tasksPerRun": 53,
+        "meanAccuracy": 0.9056603773584906,
+        "verdict": "historical_gate_fail_vs_p0"
+      }
+    },
+    "sharedCrossLevelSample": {
+      "tasks": 20,
+      "composition": {
+        "L1": 8,
+        "L2": 8,
+        "L3": 4
+      },
+      "p0Correct": 12,
+      "p1Correct": 14
+    },
+    "p1FullPublicValidation": {
+      "tasks": 165,
+      "correct": 109,
+      "accuracy": 0.6606060606060606,
+      "levels": {
+        "L1": {
+          "correct": 49,
+          "total": 53
+        },
+        "L2": {
+          "correct": 50,
+          "total": 86
+        },
+        "L3": {
+          "correct": 10,
+          "total": 26
+        }
+      },
+      "responseOk": 162,
+      "totalTokens": 33067217
+    }
+  },
+  "rules": {
+    "doNotRewriteHistoricalScores": true,
+    "doNotReuseInvalidOrPartialRuns": true,
+    "noTaskSpecificRouting": true,
+    "optimizeContextDataAndToolsNotModelBehaviorControl": true,
+    "pairedRegressionRequiredBeforePromotingASuccessor": true
+  }
+}
