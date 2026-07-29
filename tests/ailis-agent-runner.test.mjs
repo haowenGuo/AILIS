@@ -18,9 +18,11 @@ const {
     AILISAgentRunner,
         assessAgentCompletionEvidence,
         buildAgentDirectToolSpecs,
+        buildAgentPromptCacheKey,
         buildDirectModelImageAttachments,
         buildInvalidDecisionProgressRecord,
         buildLlmAgentDirectToolPrompt,
+    buildToolExecutionGroups,
     buildResearchProgressState,
         buildStagedAttachmentFilename,
         buildTaskRunHandoffPackage,
@@ -36,6 +38,107 @@ const {
     stripControlTags,
     validateNativeDirectToolCall
 } = require('../electron/ailis-agent-runner.cjs');
+
+test('native tool scheduler preserves every call while mixing parallel-safe and serial groups', () => {
+    const calls = [
+        { id: 'search-1', tool: 'web_run' },
+        { id: 'search-2', tool: 'web_run' },
+        { id: 'write-1', tool: 'write_file' },
+        { id: 'read-1', tool: 'read_file' },
+        { id: 'read-2', tool: 'read_file' }
+    ];
+    const groups = buildToolExecutionGroups(calls, {
+        parallelToolCalls: true,
+        supportsParallel: (call) => call.tool !== 'write_file'
+    });
+
+    assert.deepEqual(groups.map((group) => ({
+        mode: group.mode,
+        ids: group.calls.map((call) => call.id)
+    })), [
+        { mode: 'parallel', ids: ['search-1', 'search-2'] },
+        { mode: 'serial', ids: ['write-1'] },
+        { mode: 'parallel', ids: ['read-1', 'read-2'] }
+    ]);
+    assert.deepEqual(
+        groups.flatMap((group) => group.calls.map((call) => call.id)),
+        calls.map((call) => call.id)
+    );
+});
+
+test('native tool scheduler serializes the whole batch without dropping tail calls when parallelism is disabled', () => {
+    const calls = [
+        { id: 'call-1', tool: 'web_run' },
+        { id: 'call-2', tool: 'run_command' },
+        { id: 'call-3', tool: 'web_run' }
+    ];
+    const groups = buildToolExecutionGroups(calls, {
+        parallelToolCalls: false,
+        supportsParallel: () => true
+    });
+
+    assert.deepEqual(groups.map((group) => group.mode), ['serial', 'serial', 'serial']);
+    assert.deepEqual(
+        groups.flatMap((group) => group.calls.map((call) => call.id)),
+        ['call-1', 'call-2', 'call-3']
+    );
+});
+
+test('native tool approval checkpoint persists every call and its execution groups', () => {
+    const runner = new AILISAgentRunner({
+        gateway: {
+            workspaceRoot: process.cwd(),
+            emitGatewayEvent() {}
+        }
+    });
+    const steps = [
+        { id: 'search-1', title: 'Search one', tool: 'web_run', args: { search_query: [{ q: 'one' }] } },
+        { id: 'search-2', title: 'Search two', tool: 'web_run', args: { search_query: [{ q: 'two' }] } },
+        { id: 'write-1', title: 'Write result', tool: 'write_file', args: { path: 'result.txt' } }
+    ];
+    const executionGroups = buildToolExecutionGroups(steps, {
+        parallelToolCalls: true,
+        supportsParallel: (call) => call.tool === 'web_run'
+    });
+    const pending = runner.buildPendingAgentApproval({
+        message: 'Run all calls',
+        sessionId: 'session-1',
+        settings: { model: 'gpt-5.5' },
+        decision: {
+            intent: 'tool_batch',
+            summary: 'Run all calls',
+            riskLevel: 'medium',
+            raw: {}
+        },
+        step: steps[0],
+        steps,
+        executionGroups,
+        events: [],
+        stepResults: [],
+        iteration: 2,
+        maxSteps: 20
+    });
+
+    assert.deepEqual(pending.pendingSteps.map((step) => step.id), [
+        'search-1',
+        'search-2',
+        'write-1'
+    ]);
+    assert.deepEqual(pending.pendingExecutionGroups, [
+        { mode: 'parallel', stepIds: ['search-1', 'search-2'] },
+        { mode: 'serial', stepIds: ['write-1'] }
+    ]);
+});
+
+test('agent prompt cache key stays stable within a run and separates different runs', () => {
+    const first = buildAgentPromptCacheKey('run-1', 'session-1');
+    const repeated = buildAgentPromptCacheKey('run-1', 'session-1');
+    const otherRun = buildAgentPromptCacheKey('run-2', 'session-1');
+
+    assert.equal(first, repeated);
+    assert.notEqual(first, otherRun);
+    assert.match(first, /^ailis-run-[a-f0-9]{48}$/);
+});
 
 test('direct model image attachments are scoped to Codex bridge image inputs', () => {
     const imagePath = path.join('C:', 'tmp', 'board.png');

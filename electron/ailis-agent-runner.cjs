@@ -1147,6 +1147,42 @@ function resolveParallelToolCalls(settings = {}, requestContext = {}) {
     );
 }
 
+function buildToolExecutionGroups(toolCalls = [], {
+    parallelToolCalls = false,
+    supportsParallel = () => false
+} = {}) {
+    const groups = [];
+    let parallelGroup = [];
+    const flushParallel = () => {
+        if (!parallelGroup.length) {
+            return;
+        }
+        groups.push({
+            mode: parallelGroup.length > 1 ? 'parallel' : 'serial',
+            calls: parallelGroup
+        });
+        parallelGroup = [];
+    };
+    for (const call of Array.isArray(toolCalls) ? toolCalls.filter(Boolean) : []) {
+        if (parallelToolCalls && supportsParallel(call)) {
+            parallelGroup.push(call);
+            continue;
+        }
+        flushParallel();
+        groups.push({
+            mode: 'serial',
+            calls: [call]
+        });
+    }
+    flushParallel();
+    return groups;
+}
+
+function buildAgentPromptCacheKey(runId = '', sessionId = '') {
+    const identity = `${normalizeText(sessionId, 'main')}\0${normalizeText(runId, 'run')}`;
+    return `ailis-run-${createHash('sha256').update(identity).digest('hex').slice(0, 48)}`;
+}
+
 function looksLikeParallelToolCallsUnsupported(response = {}) {
     const text = [
         response.error,
@@ -9499,6 +9535,14 @@ function looksLikeMetaDecisionJson(json = {}) {
     );
 }
 
+function providerResponseItemsFromResponse(response = {}) {
+    return (Array.isArray(response?.providerMessage?.responseItems)
+        ? response.providerMessage.responseItems
+        : [])
+        .filter((item) => ['reasoning', 'message', 'function_call'].includes(item?.type))
+        .map((item) => JSON.parse(JSON.stringify(item)));
+}
+
 async function callLlmAgentDirectToolDecision(settings, payload, {
     hasToolHistory = false,
     forceFinalResponse = false,
@@ -9666,6 +9710,7 @@ async function callLlmAgentDirectToolDecision(settings, payload, {
             repairStatus: 'completed'
         };
     }
+    const providerResponseItems = providerResponseItemsFromResponse(response);
     const directToolCalls = (response.toolCalls || []).filter((call) => call?.name);
     const directToolCall = directToolCalls[0];
     if (directToolCall) {
@@ -9755,6 +9800,7 @@ async function callLlmAgentDirectToolDecision(settings, payload, {
                 nativeToolCall: routedNativeToolCall,
                 transportFallback: false,
                 ...repairMetadata,
+                providerResponseItems,
                 model: response.model,
                 usage: response.usage
             };
@@ -9911,6 +9957,7 @@ async function callLlmAgentDirectToolDecision(settings, payload, {
             nativeToolCall: routedNativeToolCall,
             transportFallback: false,
             ...repairMetadata,
+            providerResponseItems,
             model: response.model,
             usage: response.usage
         };
@@ -9961,6 +10008,7 @@ async function callLlmAgentDirectToolDecision(settings, payload, {
         nativeToolCall: null,
         transportFallback: false,
         ...repairMetadata,
+        providerResponseItems,
         model: response.model,
         usage: response.usage
     };
@@ -10705,7 +10753,30 @@ class AILISAgentRunner {
         return this.pendingAgentDebugSessions.delete(normalizeText(debugSessionId));
     }
 
-    buildPendingAgentApproval({ message, sessionId, settings, decision, step, events, stepResults, contextManagerCheckpoint = null, iteration, maxSteps }) {
+    buildPendingAgentApproval({
+        message,
+        sessionId,
+        settings,
+        decision,
+        step,
+        steps = [],
+        executionGroups = [],
+        events,
+        stepResults,
+        contextManagerCheckpoint = null,
+        iteration,
+        maxSteps
+    }) {
+        const pendingSteps = (Array.isArray(steps) && steps.length ? steps : [step]).filter(Boolean);
+        const nextStep = pendingSteps[0] || step;
+        const pendingExecutionGroups = Array.isArray(executionGroups)
+            ? executionGroups.map((group) => ({
+                  mode: group?.mode === 'parallel' ? 'parallel' : 'serial',
+                  stepIds: (Array.isArray(group?.calls) ? group.calls : [])
+                      .map((candidate) => normalizeText(candidate?.id))
+                      .filter(Boolean)
+              })).filter((group) => group.stepIds.length)
+            : [];
         return {
             approvalId: randomUUID(),
             sessionId,
@@ -10718,7 +10789,9 @@ class AILISAgentRunner {
             riskLevel: decision.riskLevel,
             model: settings.model,
             settings,
-            nextStep: step,
+            nextStep,
+            pendingSteps,
+            pendingExecutionGroups,
             events: Array.isArray(events) ? events.slice() : [],
             stepResults: Array.isArray(stepResults) ? stepResults.slice() : [],
             contextManagerCheckpoint: contextManagerCheckpoint || null,
@@ -10730,6 +10803,11 @@ class AILISAgentRunner {
 
     buildNeedsAgentApprovalResult({ runId, sessionId, message, startedAt, pendingApproval, dryRun }) {
         const step = pendingApproval.nextStep;
+        const pendingSteps = (
+            Array.isArray(pendingApproval.pendingSteps) && pendingApproval.pendingSteps.length
+                ? pendingApproval.pendingSteps
+                : [step]
+        ).filter(Boolean);
         const action = normalizeText(step.args?.action || step.args?.command || step.args?.path || step.tool);
         if (isVisionAgentStep(step)) {
             const targetLabel = getVisionStepTargetLabel(step);
@@ -10757,14 +10835,12 @@ class AILISAgentRunner {
                 executionRequired: true,
                 durationMs: Date.now() - startedAt,
                 message,
-                plan: [
-                    {
-                        id: step.id,
-                        title: step.title,
-                        tool: step.tool,
-                        args: step.args
-                    }
-                ],
+                plan: pendingSteps.map((candidate) => ({
+                    id: candidate.id,
+                    title: candidate.title,
+                    tool: candidate.tool,
+                    args: candidate.args
+                })),
                 steps: pendingApproval.stepResults || [],
                 events: pendingApproval.events || []
             }, surface);
@@ -10790,14 +10866,12 @@ class AILISAgentRunner {
             executionRequired: true,
             durationMs: Date.now() - startedAt,
             message,
-            plan: [
-                {
-                    id: step.id,
-                    title: step.title,
-                    tool: step.tool,
-                    args: step.args
-                }
-            ],
+            plan: pendingSteps.map((candidate) => ({
+                id: candidate.id,
+                title: candidate.title,
+                tool: candidate.tool,
+                args: candidate.args
+            })),
             steps: pendingApproval.stepResults || [],
             events: pendingApproval.events || []
         }, surface);
@@ -11679,6 +11753,7 @@ class AILISAgentRunner {
                 });
             }
             const decisionMessages = directModelInputPrompt.messages;
+            const promptCacheKey = buildAgentPromptCacheKey(runId, sessionId);
             const promptBudget = buildPromptBudgetReport({
                 instructions: directModelInputPrompt.instructions,
                 input: directModelInputPrompt.input,
@@ -11713,6 +11788,7 @@ class AILISAgentRunner {
                         tools: directModelInputPrompt.tools || directToolSpecs,
                         tool_choice: directToolChoice,
                         parallel_tool_calls: parallelToolCalls,
+                        prompt_cache_key: promptCacheKey,
                         prompt: directModelInputPrompt.prompt,
                         stats: directModelInputPrompt.stats
                     },
@@ -11742,6 +11818,7 @@ class AILISAgentRunner {
                 input: directModelInputPrompt.input,
                 tools: directModelInputPrompt.tools || directToolSpecs,
                 toolChoice: directToolChoice,
+                prompt_cache_key: promptCacheKey,
                 jsonMode: false,
                 finalizationContext: safetyFinalizationReason
                     ? (isPersonaOrchestratorRole(agentRuntimeRole) && completedSubagentNotifications.length
@@ -11815,6 +11892,14 @@ class AILISAgentRunner {
                 }
             });
             latestDecision = decision;
+            if (
+                decision.ok &&
+                Array.isArray(decision.providerResponseItems) &&
+                decision.providerResponseItems.length &&
+                modelInputContextManager?.recordItems
+            ) {
+                modelInputContextManager.recordItems(decision.providerResponseItems);
+            }
             const llmCallDurationMs = Date.now() - llmCallStartedAt;
             const usageSummary = summarizeLlmUsage(decision.usage);
             if (usageSummary?.promptTokens) {
@@ -12722,37 +12807,142 @@ class AILISAgentRunner {
                     }
                 });
             }
-            if (parallelCandidateSteps.length > 1 && parallelToolCalls) {
+            if (parallelCandidateSteps.length > 1) {
                 const visibleToolRouter = buildToolRouterFromModelVisibleSpecs(
                     directModelInputPrompt.tools || directToolSpecs
                 );
                 const plannedToolContext = buildToolContext(requestContext, this.workspaceRoot, sessionId);
-                const canExecuteParallelBatch = !dryRun && parallelCandidateSteps.every((candidateStep) => {
-                    if (!visibleToolRouter.toolSupportsParallel(candidateStep)) {
-                        return false;
-                    }
-                    if (buildDeferredToolContractRequest(candidateStep, events)) {
-                        return false;
-                    }
-                    if (!validateAgentToolStep(candidateStep).ok) {
-                        return false;
-                    }
-                    if (!validateAgentToolLoopGuard(candidateStep, stepResults, requestContext).ok) {
-                        return false;
-                    }
-                    const policyDecision = this.gateway.runtime?.evaluateToolCall?.({
+                const executionGroups = buildToolExecutionGroups(parallelCandidateSteps, {
+                    parallelToolCalls,
+                    supportsParallel: (candidateStep) => visibleToolRouter.toolSupportsParallel(candidateStep)
+                });
+                const batchPolicyDecisions = parallelCandidateSteps.map((candidateStep) =>
+                    this.gateway.runtime?.evaluateToolCall?.({
                         toolId: candidateStep.tool,
                         args: candidateStep.args,
                         context: plannedToolContext
-                    });
-                    const visionAutoApproved = isVisionAgentStep(candidateStep) && isVisionAutoApprovedContext(requestContext);
+                    }) || null
+                );
+                const batchPreflight = parallelCandidateSteps.map((candidateStep, index) => {
+                    const policyDecision = batchPolicyDecisions[index];
+                    const deferredContract = buildDeferredToolContractRequest(candidateStep, []);
+                    const validation = validateAgentToolStep(candidateStep);
+                    const loopGuard = validation.ok
+                        ? validateAgentToolLoopGuard(candidateStep, stepResults, requestContext)
+                        : null;
+                    const visionAutoApproved =
+                        isVisionAgentStep(candidateStep) &&
+                        isVisionAutoApprovedContext(requestContext);
                     const needsVisionConsent = isVisionAgentStep(candidateStep) && !visionAutoApproved;
-                    return !needsVisionConsent &&
-                        !policyDecision?.denied &&
-                        !policyDecision?.needsApproval &&
-                        !agentStepNeedsConfirmation(candidateStep);
+                    const needsApproval = dryRun ||
+                        needsVisionConsent ||
+                        (!approved && (
+                            policyDecision?.needsApproval ||
+                            agentStepNeedsConfirmation(candidateStep)
+                        ));
+                    let disposition = 'ready';
+                    let reason = '';
+                    if (deferredContract) {
+                        disposition = 'deferred_contract';
+                        reason = `Load the ${deferredContract.toolId} contract before execution.`;
+                    } else if (!validation.ok) {
+                        disposition = 'invalid';
+                        reason = validation.error || validation.status || 'invalid_tool_args';
+                    } else if (!loopGuard?.ok) {
+                        disposition = 'loop_guard';
+                        reason = loopGuard?.error || loopGuard?.status || 'tool_loop_guard';
+                    } else if (policyDecision?.denied) {
+                        disposition = 'denied';
+                        reason = policyDecision.reason || 'policy_denied';
+                    } else if (needsApproval) {
+                        disposition = 'needs_approval';
+                        reason = needsVisionConsent ? 'vision_consent_required' : 'approval_required';
+                    }
+                    return {
+                        index,
+                        id: candidateStep.id,
+                        title: candidateStep.title,
+                        tool: candidateStep.tool,
+                        args: candidateStep.args,
+                        disposition,
+                        reason
+                    };
                 });
-                if (canExecuteParallelBatch) {
+                const batchNeedsApproval = batchPreflight.some(
+                    (entry) => entry.disposition === 'needs_approval'
+                );
+                events.push({
+                    type: 'native_tool_batch',
+                    status: 'received',
+                    iteration,
+                    calls: batchPreflight
+                });
+                await appendRuntimeItem({
+                    type: 'agent.native_tool_batch',
+                    status: 'received',
+                    payload: {
+                        iteration,
+                        count: batchPreflight.length,
+                        calls: batchPreflight,
+                        groups: executionGroups.map((group) => ({
+                            mode: group.mode,
+                            callIds: group.calls.map((candidateStep) => candidateStep.id),
+                            tools: group.calls.map((candidateStep) => candidateStep.tool)
+                        }))
+                    }
+                });
+                const batchCanBePersistedForApproval =
+                    batchNeedsApproval &&
+                    batchPreflight.every((entry) =>
+                        entry.disposition === 'ready' ||
+                        entry.disposition === 'needs_approval'
+                    );
+                if (batchCanBePersistedForApproval) {
+                    const pendingApproval = this.storePendingAgentApproval(
+                        this.buildPendingAgentApproval({
+                            message,
+                            sessionId,
+                            settings,
+                            decision,
+                            step: parallelCandidateSteps[0],
+                            steps: parallelCandidateSteps,
+                            executionGroups,
+                            events,
+                            stepResults,
+                            contextManagerCheckpoint: contextManagerCheckpoint(
+                                'pending_native_tool_batch_approval',
+                                iteration
+                            ),
+                            iteration,
+                            maxSteps
+                        })
+                    );
+                    await appendRuntimeItem({
+                        type: 'agent.native_tool_batch',
+                        status: dryRun ? 'planned' : 'pending_approval',
+                        payload: {
+                            iteration,
+                            count: parallelCandidateSteps.length,
+                            tools: parallelCandidateSteps.map((candidateStep) => candidateStep.tool),
+                            groups: executionGroups.map((group) => ({
+                                mode: group.mode,
+                                tools: group.calls.map((candidateStep) => candidateStep.tool)
+                            }))
+                        }
+                    });
+                    return await finishRuntimeRun(this.buildNeedsAgentApprovalResult({
+                        runId,
+                        sessionId,
+                        message,
+                        startedAt,
+                        pendingApproval,
+                        dryRun
+                    }));
+                }
+                const canExecuteNativeBatch =
+                    !dryRun &&
+                    batchPreflight.every((entry) => entry.disposition === 'ready');
+                if (canExecuteNativeBatch) {
                     const interruptedBeforeTools = await maybeFinishInterruptedRun(`before_parallel_tools_${iteration}`);
                     if (interruptedBeforeTools) {
                         return interruptedBeforeTools;
@@ -12763,7 +12953,11 @@ class AILISAgentRunner {
                         payload: {
                             iteration,
                             count: parallelCandidateSteps.length,
-                            tools: parallelCandidateSteps.map((candidateStep) => candidateStep.tool)
+                            tools: parallelCandidateSteps.map((candidateStep) => candidateStep.tool),
+                            groups: executionGroups.map((group) => ({
+                                mode: group.mode,
+                                tools: group.calls.map((candidateStep) => candidateStep.tool)
+                            }))
                         }
                     });
                     for (const candidateStep of parallelCandidateSteps) {
@@ -12786,7 +12980,7 @@ class AILISAgentRunner {
                         agent_path: normalizeText(requestContext.agent_path || requestContext.agentPath, '/root'),
                         currentUserMessage: message
                     };
-                    const parallelStepResults = await Promise.all(parallelCandidateSteps.map((candidateStep) => this.executeAgentToolStep({
+                    const executeBatchStep = (candidateStep) => this.executeAgentToolStep({
                         runId,
                         step: candidateStep,
                         toolContext: {
@@ -12807,7 +13001,14 @@ class AILISAgentRunner {
                         },
                         request,
                         iteration
-                    })));
+                    });
+                    const parallelStepResults = [];
+                    for (const group of executionGroups) {
+                        const groupResults = group.mode === 'parallel'
+                            ? await Promise.all(group.calls.map(executeBatchStep))
+                            : [await executeBatchStep(group.calls[0])];
+                        parallelStepResults.push(...groupResults);
+                    }
                     for (const stepResult of parallelStepResults) {
                         stepResults.push(stepResult);
                         const explicitAnswerCandidates = collectExplicitAnswerCandidatesFromStepResult(stepResult);
@@ -12868,6 +13069,15 @@ class AILISAgentRunner {
                     }
                     continue;
                 }
+                await appendRuntimeItem({
+                    type: 'agent.native_tool_batch',
+                    status: 'preflight_fallback',
+                    payload: {
+                        iteration,
+                        count: batchPreflight.length,
+                        calls: batchPreflight
+                    }
+                });
             }
 
             let step = decision.toolCall;
@@ -13488,52 +13698,105 @@ class AILISAgentRunner {
             !isAgentLlmSettingsMissing(settings)
                 ? settings
                 : pendingApproval.settings;
-        const step = pendingApproval.nextStep;
+        const pendingSteps = (
+            Array.isArray(pendingApproval.pendingSteps) && pendingApproval.pendingSteps.length
+                ? pendingApproval.pendingSteps
+                : [pendingApproval.nextStep]
+        ).filter(Boolean);
+        const step = pendingSteps[0];
         this.deletePendingAgentApproval(pendingApproval.approvalId, 'pending_agent_approval_confirmed');
 
         const events = Array.isArray(pendingApproval.events) ? pendingApproval.events.slice() : [];
         const stepResults = Array.isArray(pendingApproval.stepResults) ? pendingApproval.stepResults.slice() : [];
-        events.push({
-            type: 'tool_call',
-            id: step.id,
-            title: step.title,
-            tool: step.tool,
-            args: step.args,
-            iteration: pendingApproval.iteration,
-            approved: true
-        });
-        const stepResult = await this.executeAgentToolStep({
-            runId,
-            step,
-            toolContext: buildToolContext({
-                ...requestContext,
+        for (const candidateStep of pendingSteps) {
+            events.push({
+                type: 'tool_call',
+                id: candidateStep.id,
+                title: candidateStep.title,
+                tool: candidateStep.tool,
+                args: candidateStep.args,
+                iteration: pendingApproval.iteration,
                 approved: true,
-                ...(isVisionAgentStep(step) ? { visionApproved: true } : {})
-            }, this.workspaceRoot, sessionId),
+                nativeBatch: pendingSteps.length > 1
+            });
+        }
+        const pendingStepById = new Map(
+            pendingSteps.map((candidateStep) => [normalizeText(candidateStep.id), candidateStep])
+        );
+        const restoredExecutionGroups = (
+            Array.isArray(pendingApproval.pendingExecutionGroups)
+                ? pendingApproval.pendingExecutionGroups
+                : []
+        ).map((group) => ({
+            mode: group?.mode === 'parallel' ? 'parallel' : 'serial',
+            calls: (Array.isArray(group?.stepIds) ? group.stepIds : [])
+                .map((stepId) => pendingStepById.get(normalizeText(stepId)))
+                .filter(Boolean)
+        })).filter((group) => group.calls.length);
+        const executionGroups = restoredExecutionGroups.length
+            ? restoredExecutionGroups
+            : pendingSteps.map((candidateStep) => ({
+                  mode: 'serial',
+                  calls: [candidateStep]
+              }));
+        const approvedToolContext = buildToolContext({
+            ...requestContext,
+            approved: true
+        }, this.workspaceRoot, sessionId);
+        const executeApprovedStep = (candidateStep) => this.executeAgentToolStep({
+            runId,
+            step: candidateStep,
+            toolContext: {
+                ...approvedToolContext,
+                ...(isVisionAgentStep(candidateStep) ? { visionApproved: true } : {})
+            },
             request,
             iteration: pendingApproval.iteration
         });
-        stepResults.push(stepResult);
+        const approvedStepResults = [];
+        for (const group of executionGroups) {
+            const groupResults = group.mode === 'parallel' && group.calls.length > 1
+                ? await Promise.all(group.calls.map(executeApprovedStep))
+                : [await executeApprovedStep(group.calls[0])];
+            approvedStepResults.push(...groupResults);
+        }
+        stepResults.push(...approvedStepResults);
         const resumedContextManager = restoreModelInputContextManagerFromCheckpoint(pendingApproval.contextManagerCheckpoint);
         let resumedContextManagerCheckpoint = null;
         if (resumedContextManager) {
-            recordToolOutputToContextManager(
-                resumedContextManager,
-                stepResult,
-                stepResults.length - 1,
-                { toolOutputChars: resumedContextManager.toolOutputChars }
-            );
+            const firstNewStepIndex = stepResults.length - approvedStepResults.length;
+            for (let index = 0; index < approvedStepResults.length; index += 1) {
+                recordToolOutputToContextManager(
+                    resumedContextManager,
+                    approvedStepResults[index],
+                    firstNewStepIndex + index,
+                    { toolOutputChars: resumedContextManager.toolOutputChars }
+                );
+            }
             resumedContextManagerCheckpoint = resumedContextManager.toCheckpoint();
         }
-        events.push(buildToolResultEvent(stepResult));
+        for (const approvedStepResult of approvedStepResults) {
+            events.push({
+                ...buildToolResultEvent(approvedStepResult),
+                nativeBatch: pendingSteps.length > 1
+            });
+        }
 
-        if (!stepResult.response?.ok && stepResult.response?.status === 'needs_approval') {
+        const stillNeedsApproval = approvedStepResults.find(
+            (candidateResult) =>
+                !candidateResult.response?.ok &&
+                candidateResult.response?.status === 'needs_approval'
+        );
+        if (stillNeedsApproval) {
+            const stillBlockedStep =
+                pendingSteps.find((candidateStep) => candidateStep.id === stillNeedsApproval.id) ||
+                step;
             const surface = renderToolFailureSurface({
-                step,
-                response: stepResult.response,
+                step: stillBlockedStep,
+                response: stillNeedsApproval.response,
                 userMessage: pendingApproval.message,
                 intent: pendingApproval.intent || 'agent_action_confirmation',
-                fallbackText: `${step.title || step.tool} 仍然需要更高权限或额外确认。`
+                fallbackText: `${stillBlockedStep.title || stillBlockedStep.tool} 仍然需要更高权限或额外确认。`
             });
             const displayText = surface.text;
             return await finishRuntimeRun(attachPersonaSurface({
@@ -13551,14 +13814,12 @@ class AILISAgentRunner {
                 message: pendingApproval.message,
                 displayText,
                 speechText: displayText,
-                plan: [
-                    {
-                        id: step.id,
-                        title: step.title,
-                        tool: step.tool,
-                        args: step.args
-                    }
-                ],
+                plan: pendingSteps.map((candidateStep) => ({
+                    id: candidateStep.id,
+                    title: candidateStep.title,
+                    tool: candidateStep.tool,
+                    args: candidateStep.args
+                })),
                 steps: stepResults,
                 events
             }, surface));
@@ -14423,6 +14684,8 @@ module.exports = {
     normalizeExactAnswerSubmission,
     isAgentLlmSettingsMissing,
     buildAgentDecisionLowLatencyPayload,
+    buildToolExecutionGroups,
+    buildAgentPromptCacheKey,
     buildLlmAgentDirectToolPrompt,
     buildTaskRunHandoffPackage,
     collectExplicitAnswerCandidatesFromStepResult,

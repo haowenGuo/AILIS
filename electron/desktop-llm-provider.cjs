@@ -180,16 +180,16 @@ const PROVIDER_CAPABILITY_TABLE = Object.freeze({
     [CODEX_MODEL_BRIDGE_PROVIDER]: Object.freeze({
         provider: CODEX_MODEL_BRIDGE_PROVIDER,
         label: 'Codex subscription model bridge',
-        transport: 'codex-app-server-ephemeral',
+        transport: 'codex-responses-native',
         chat: true,
         nativeToolCalling: true,
         nativeToolCallingDefault: true,
-        jsonMode: true,
-        jsonSchema: true,
+        jsonMode: false,
+        jsonSchema: false,
         vision: true,
         longContext: true,
         lowLatency: false,
-        notes: '评测专用：每次 AILIS 推理启动独立 Codex exec，使用 ChatGPT OAuth；Codex 自带工具、MCP、插件、网络和任务记忆均禁用。'
+        notes: '评测专用：使用 ChatGPT OAuth 调用原生 Responses function tools；AILIS 保留上下文、工具执行、重试、证据和终局所有权。'
     }),
     [VLLM_PROVIDER]: Object.freeze({
         provider: VLLM_PROVIDER,

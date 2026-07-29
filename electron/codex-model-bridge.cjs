@@ -1,8 +1,15 @@
 const fs = require('node:fs');
 const fsPromises = require('node:fs/promises');
+const http = require('node:http');
+const https = require('node:https');
 const os = require('node:os');
 const path = require('node:path');
-const { spawn } = require('node:child_process');
+const tls = require('node:tls');
+const { spawn, spawnSync } = require('node:child_process');
+const { createHash, randomUUID } = require('node:crypto');
+const {
+    responseItemsToWireItems
+} = require('./ailis-response-model.cjs');
 
 const CODEX_MODEL_BRIDGE_PROVIDER = 'codex-model-bridge';
 const DEFAULT_CODEX_MODEL = 'gpt-5.5';
@@ -10,6 +17,8 @@ const DEFAULT_CODEX_REASONING_EFFORT = 'medium';
 const CODEX_BRIDGE_PROTOCOL_VERSION = 2;
 const CODEX_HTTP_MODEL_PROVIDER = 'ailis-chatgpt-http';
 const CODEX_CHATGPT_BACKEND_URL = 'https://chatgpt.com/backend-api/codex';
+const CODEX_RESPONSES_PATH = '/backend-api/codex/responses';
+const CODEX_RESPONSES_MAX_BYTES = 64 * 1024 * 1024;
 const CODEX_APP_SERVER_BASE_INSTRUCTIONS = [
     'You are a stateless language-model backend for the AILIS agent harness.',
     'Perform exactly one inference over the input supplied by AILIS.',
@@ -52,7 +61,8 @@ function normalizeToolSpec(tool = {}) {
     return {
         name,
         description: normalizeText(source?.description || tool?.description),
-        parameters
+        parameters,
+        strict: source?.strict === true || tool?.strict === true
     };
 }
 
@@ -194,6 +204,348 @@ function resolveToolChoice(payload = {}) {
         mode: normalizeText(choice.mode || choice.type, name ? 'required' : 'auto').toLowerCase(),
         name
     };
+}
+
+function codexNativeToolSpecs(tools = []) {
+    return normalizeToolSpecs(tools).map((tool) => ({
+        type: 'function',
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.strict
+            ? compileCodexOutputSchema(tool.parameters, { fallbackType: 'object' })
+            : tool.parameters,
+        ...(tool.strict ? { strict: true } : {})
+    }));
+}
+
+function codexNativeToolChoice(payload = {}) {
+    const choice = resolveToolChoice(payload);
+    if (choice.name) {
+        return {
+            type: 'function',
+            name: choice.name
+        };
+    }
+    return ['auto', 'none', 'required'].includes(choice.mode) ? choice.mode : 'auto';
+}
+
+function messageContentToResponsesParts(content) {
+    if (typeof content === 'string') {
+        const text = normalizeText(content);
+        return text ? [{ type: 'input_text', text }] : [];
+    }
+    return (Array.isArray(content) ? content : []).map((part) => {
+        const imageSource = codexBridgeImageSource(part);
+        if (imageSource) {
+            return {
+                type: 'input_image',
+                image_url: imageSource,
+                detail: normalizeCodexImageDetail(part.detail || part.image_url?.detail)
+            };
+        }
+        const text = normalizeText(part?.text || part?.content);
+        return text ? { type: 'input_text', text } : null;
+    }).filter(Boolean);
+}
+
+function chatMessagesToResponsesInput(messages = []) {
+    const instructions = [];
+    const input = [];
+    for (const message of Array.isArray(messages) ? messages : []) {
+        const role = normalizeText(message?.role, 'user').toLowerCase();
+        if (role === 'system' || role === 'developer') {
+            const text = typeof message?.content === 'string'
+                ? normalizeText(message.content)
+                : messageContentToResponsesParts(message?.content)
+                    .map((part) => part.type === 'input_text' ? part.text : '')
+                    .filter(Boolean)
+                    .join('\n');
+            if (text) {
+                instructions.push(text);
+            }
+            continue;
+        }
+        const toolCalls = Array.isArray(message?.toolCalls || message?.tool_calls)
+            ? message.toolCalls || message.tool_calls
+            : [];
+        for (const toolCall of toolCalls) {
+            const source = toolCall?.function && typeof toolCall.function === 'object'
+                ? toolCall.function
+                : toolCall;
+            const name = normalizeText(source?.name);
+            const callId = normalizeText(toolCall?.id || toolCall?.call_id);
+            if (!name || !callId) {
+                continue;
+            }
+            const rawArguments = source?.arguments ?? source?.arguments_json ?? {};
+            input.push({
+                type: 'function_call',
+                call_id: callId,
+                name,
+                arguments: typeof rawArguments === 'string'
+                    ? rawArguments
+                    : JSON.stringify(rawArguments || {})
+            });
+        }
+        if (role === 'tool') {
+            const callId = normalizeText(message?.toolCallId || message?.tool_call_id);
+            if (callId) {
+                input.push({
+                    type: 'function_call_output',
+                    call_id: callId,
+                    output: typeof message?.content === 'string'
+                        ? message.content
+                        : JSON.stringify(message?.content ?? '')
+                });
+            }
+            continue;
+        }
+        const content = messageContentToResponsesParts(message?.content);
+        if (content.length) {
+            input.push({
+                type: 'message',
+                role: role === 'assistant' ? 'assistant' : 'user',
+                content: content.map((part) => (
+                    role === 'assistant' && part.type === 'input_text'
+                        ? { type: 'output_text', text: part.text }
+                        : part
+                ))
+            });
+        }
+    }
+    return {
+        instructions: instructions.join('\n\n'),
+        input
+    };
+}
+
+function codexResponsesInputItems(items = [], nativeTools = []) {
+    const nativeToolByName = new Map(
+        (Array.isArray(nativeTools) ? nativeTools : [])
+            .filter((tool) => tool?.type === 'function' && normalizeText(tool.name))
+            .map((tool) => [tool.name, tool])
+    );
+    return responseItemsToWireItems(items).map((item) => {
+        if (!item || typeof item !== 'object') {
+            return item;
+        }
+        const sanitized = { ...item };
+        if (normalizeText(sanitized.id)) {
+            delete sanitized.id;
+        }
+        if (sanitized.type === 'tool_search_output' && Array.isArray(sanitized.tools)) {
+            sanitized.tools = sanitized.tools
+                .map((tool) => nativeToolByName.get(normalizeText(tool?.name || tool?.tool || tool?.id)))
+                .filter(Boolean)
+                .map((tool) => ({ ...tool }));
+        }
+        if (sanitized.type === 'web_search_call' && sanitized.action) {
+            const actionType = normalizeText(sanitized.action.type);
+            if (actionType === 'search') {
+                sanitized.action = {
+                    type: 'search',
+                    query: normalizeText(sanitized.action.query)
+                };
+            } else if (actionType === 'open_page') {
+                sanitized.action = {
+                    type: 'open_page',
+                    url: normalizeText(sanitized.action.url)
+                };
+            } else if (actionType === 'find_in_page') {
+                sanitized.action = {
+                    type: 'find_in_page',
+                    url: normalizeText(sanitized.action.url),
+                    pattern: normalizeText(sanitized.action.pattern)
+                };
+            }
+        }
+        return sanitized;
+    });
+}
+
+function stableCodexPromptCacheKey(instructions = '', tools = []) {
+    const digest = createHash('sha256')
+        .update(String(instructions || ''))
+        .update('\0')
+        .update(JSON.stringify(codexNativeToolSpecs(tools)))
+        .digest('hex');
+    return `ailis-${digest.slice(0, 48)}`;
+}
+
+function buildCodexResponsesRequest(settings = {}, payload = {}, messages = []) {
+    const tools = codexNativeToolSpecs(payload.tools);
+    const directInput = Array.isArray(payload.input)
+        ? codexResponsesInputItems(payload.input, tools)
+        : null;
+    const converted = directInput
+        ? {
+              instructions: normalizeText(payload.instructions),
+              input: directInput
+          }
+        : chatMessagesToResponsesInput(messages);
+    const reasoningEffort = normalizeText(
+        payload.reasoning_effort ||
+            payload.reasoningEffort ||
+            payload.reasoning?.effort ||
+            settings.reasoningEffort ||
+            process.env.AILIS_CODEX_REASONING_EFFORT,
+        DEFAULT_CODEX_REASONING_EFFORT
+    ).toLowerCase();
+    const request = {
+        model: normalizeText(settings.model, DEFAULT_CODEX_MODEL),
+        instructions: converted.instructions,
+        input: converted.input,
+        tools,
+        tool_choice: codexNativeToolChoice(payload),
+        parallel_tool_calls: payload.parallel_tool_calls !== false,
+        reasoning: {
+            effort: reasoningEffort,
+            summary: normalizeText(payload.reasoning?.summary, 'auto')
+        },
+        store: false,
+        stream: true,
+        include: ['reasoning.encrypted_content'],
+        prompt_cache_key: normalizeText(
+            payload.prompt_cache_key || payload.promptCacheKey,
+            stableCodexPromptCacheKey(converted.instructions, payload.tools)
+        )
+    };
+    const maxOutputTokens = Number(
+        payload.max_output_tokens ??
+            payload.maxOutputTokens ??
+            payload.max_tokens ??
+            payload.maxTokens
+    );
+    if (Number.isFinite(maxOutputTokens) && maxOutputTokens > 0) {
+        request.max_output_tokens = Math.max(1, Math.min(128000, Math.trunc(maxOutputTokens)));
+    }
+    return request;
+}
+
+function imageMimeTypeForPath(filePath = '') {
+    const extension = path.extname(String(filePath || '')).toLowerCase();
+    if (extension === '.jpg' || extension === '.jpeg') return 'image/jpeg';
+    if (extension === '.webp') return 'image/webp';
+    if (extension === '.gif') return 'image/gif';
+    return 'image/png';
+}
+
+async function materializeCodexResponsesImage(source = '') {
+    const normalized = normalizeText(source);
+    if (!normalized || /^https?:\/\//i.test(normalized) || normalized.startsWith('data:')) {
+        return normalized;
+    }
+    let filePath = normalized;
+    if (filePath.startsWith('file://')) {
+        filePath = decodeURIComponent(new URL(filePath).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
+    }
+    filePath = path.resolve(filePath);
+    const stat = await fsPromises.stat(filePath).catch(() => null);
+    if (!stat?.isFile()) {
+        throw new Error(`Codex bridge local image is missing: ${filePath}`);
+    }
+    if (stat.size > MAX_CODEX_BRIDGE_IMAGE_BYTES) {
+        throw new Error(`Codex bridge local image exceeds the per-image limit: ${filePath}`);
+    }
+    const bytes = await fsPromises.readFile(filePath);
+    return `data:${imageMimeTypeForPath(filePath)};base64,${bytes.toString('base64')}`;
+}
+
+async function materializeCodexResponsesImages(request = {}) {
+    const nextRequest = JSON.parse(JSON.stringify(request));
+    let imageCount = 0;
+    let totalBytes = 0;
+    const visitContentItems = async (items = []) => {
+        for (const item of Array.isArray(items) ? items : []) {
+            if (!item || typeof item !== 'object') {
+                continue;
+            }
+            const source = normalizeText(item.image_url || item.imageUrl || item.url);
+            if (item.type === 'input_image' && source) {
+                imageCount += 1;
+                if (imageCount > MAX_CODEX_BRIDGE_IMAGES) {
+                    throw new Error(`Codex bridge image inputs exceed the ${MAX_CODEX_BRIDGE_IMAGES}-image limit.`);
+                }
+                const materialized = await materializeCodexResponsesImage(source);
+                if (materialized.startsWith('data:')) {
+                    const base64 = materialized.split(',', 2)[1] || '';
+                    totalBytes += Math.ceil(base64.length * 0.75);
+                    if (totalBytes > MAX_CODEX_BRIDGE_TOTAL_IMAGE_BYTES) {
+                        throw new Error('Codex bridge image inputs exceed the total image limit.');
+                    }
+                }
+                item.image_url = materialized;
+                delete item.imageUrl;
+                delete item.url;
+            }
+        }
+    };
+    for (const item of Array.isArray(nextRequest.input) ? nextRequest.input : []) {
+        await visitContentItems(item?.content);
+        if (
+            (item?.type === 'function_call_output' || item?.type === 'custom_tool_call_output') &&
+            Array.isArray(item.output)
+        ) {
+            await visitContentItems(item.output);
+        }
+    }
+    return nextRequest;
+}
+
+function parseCodexResponsesSse(raw = '') {
+    const events = [];
+    const outputItems = [];
+    let completedResponse = null;
+    let failure = null;
+    for (const line of String(raw || '').split(/\r?\n/)) {
+        if (!line.startsWith('data:')) {
+            continue;
+        }
+        const data = line.slice(5).trim();
+        if (!data || data === '[DONE]') {
+            continue;
+        }
+        let event;
+        try {
+            event = JSON.parse(data);
+        } catch {
+            continue;
+        }
+        events.push(event);
+        if (event.type === 'response.output_item.done' && event.item) {
+            outputItems.push(event.item);
+        } else if (event.type === 'response.completed') {
+            completedResponse = event.response || null;
+        } else if (event.type === 'response.failed' || event.type === 'error') {
+            failure = event.response?.error || event.error || event;
+        }
+    }
+    if (!outputItems.length && Array.isArray(completedResponse?.output)) {
+        outputItems.push(...completedResponse.output);
+    }
+    return {
+        events,
+        outputItems,
+        usage: completedResponse?.usage || null,
+        responseId: normalizeText(completedResponse?.id),
+        failure
+    };
+}
+
+function codexResponsesOutputText(items = []) {
+    return (Array.isArray(items) ? items : [])
+        .filter((item) => item?.type === 'message' && item?.role === 'assistant')
+        .flatMap((item) => Array.isArray(item.content) ? item.content : [])
+        .map((part) => normalizeText(part?.text || part?.content))
+        .filter(Boolean)
+        .join('\n')
+        .trim();
+}
+
+function codexResponsesCanonicalItems(items = []) {
+    return (Array.isArray(items) ? items : [])
+        .filter((item) => ['reasoning', 'message', 'function_call'].includes(item?.type))
+        .map((item) => JSON.parse(JSON.stringify(item)));
 }
 
 function toolInputAllowsEmptyObject(schema = {}) {
@@ -682,6 +1034,330 @@ function normalizeCodexUsage(usage = null) {
             reasoning_tokens: reasoningTokens
         }
     };
+}
+
+function normalizeProxyUrl(value = '') {
+    const normalized = normalizeText(value);
+    if (!normalized) {
+        return '';
+    }
+    const withProtocol = /^[a-z][a-z0-9+.-]*:\/\//i.test(normalized)
+        ? normalized
+        : `http://${normalized}`;
+    try {
+        const proxy = new URL(withProtocol);
+        return ['http:', 'https:'].includes(proxy.protocol) ? proxy.toString() : '';
+    } catch {
+        return '';
+    }
+}
+
+function parseWindowsProxyServer(value = '') {
+    const normalized = normalizeText(value);
+    if (!normalized) {
+        return '';
+    }
+    if (!normalized.includes('=')) {
+        return normalizeProxyUrl(normalized);
+    }
+    const entries = Object.fromEntries(
+        normalized.split(';')
+            .map((entry) => entry.split('=', 2))
+            .filter(([name, target]) => normalizeText(name) && normalizeText(target))
+            .map(([name, target]) => [normalizeText(name).toLowerCase(), normalizeText(target)])
+    );
+    return normalizeProxyUrl(entries.https || entries.http || '');
+}
+
+function resolveWindowsSystemProxy(spawnSyncImpl = spawnSync) {
+    if (process.platform !== 'win32') {
+        return '';
+    }
+    try {
+        const result = spawnSyncImpl(
+            'reg.exe',
+            ['query', 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings'],
+            {
+                encoding: 'utf8',
+                windowsHide: true,
+                timeout: 5000
+            }
+        );
+        const output = String(result?.stdout || '');
+        const enabledMatch = output.match(/^\s*ProxyEnable\s+REG_DWORD\s+0x([0-9a-f]+)\s*$/im);
+        if (!enabledMatch || Number.parseInt(enabledMatch[1], 16) !== 1) {
+            return '';
+        }
+        const serverMatch = output.match(/^\s*ProxyServer\s+REG_SZ\s+(.+?)\s*$/im);
+        return parseWindowsProxyServer(serverMatch?.[1] || '');
+    } catch {
+        return '';
+    }
+}
+
+function resolveCodexProxyUrl(settings = {}) {
+    const explicit = normalizeProxyUrl(
+        settings.proxyUrl ||
+            settings.proxyURL ||
+            settings.httpsProxy ||
+            settings.proxy ||
+            process.env.HTTPS_PROXY ||
+            process.env.https_proxy ||
+            process.env.ALL_PROXY ||
+            process.env.all_proxy ||
+            process.env.HTTP_PROXY ||
+            process.env.http_proxy
+    );
+    return explicit || resolveWindowsSystemProxy();
+}
+
+function proxyAuthorizationHeader(proxyUrl) {
+    if (!proxyUrl?.username) {
+        return '';
+    }
+    const credentials = `${decodeURIComponent(proxyUrl.username)}:${decodeURIComponent(proxyUrl.password || '')}`;
+    return `Basic ${Buffer.from(credentials).toString('base64')}`;
+}
+
+function connectCodexProxy(proxyUrl, targetHost, targetPort, timeoutMs) {
+    return new Promise((resolve, reject) => {
+        const proxy = new URL(proxyUrl);
+        const requestModule = proxy.protocol === 'https:' ? https : http;
+        const headers = {
+            Host: `${targetHost}:${targetPort}`
+        };
+        const proxyAuthorization = proxyAuthorizationHeader(proxy);
+        if (proxyAuthorization) {
+            headers['Proxy-Authorization'] = proxyAuthorization;
+        }
+        const request = requestModule.request({
+            host: proxy.hostname,
+            port: Number(proxy.port) || (proxy.protocol === 'https:' ? 443 : 80),
+            method: 'CONNECT',
+            path: `${targetHost}:${targetPort}`,
+            headers,
+            rejectUnauthorized: true
+        });
+        request.setTimeout(timeoutMs, () => {
+            request.destroy(new Error(`Codex proxy CONNECT timed out after ${timeoutMs}ms.`));
+        });
+        request.once('connect', (response, socket, head) => {
+            if (response.statusCode !== 200) {
+                socket.destroy();
+                reject(new Error(`Codex proxy CONNECT failed with status ${response.statusCode}.`));
+                return;
+            }
+            if (head?.length) {
+                socket.unshift(head);
+            }
+            const secureSocket = tls.connect({
+                socket,
+                servername: targetHost
+            });
+            secureSocket.once('secureConnect', () => resolve(secureSocket));
+            secureSocket.once('error', reject);
+        });
+        request.once('error', reject);
+        request.end();
+    });
+}
+
+async function createCodexResponsesAgent(settings = {}, timeoutMs = 120000) {
+    const proxyUrl = resolveCodexProxyUrl(settings);
+    if (!proxyUrl) {
+        return {
+            agent: new https.Agent({ keepAlive: false }),
+            proxy: ''
+        };
+    }
+    const endpoint = new URL(CODEX_CHATGPT_BACKEND_URL);
+    const socket = await connectCodexProxy(proxyUrl, endpoint.hostname, 443, timeoutMs);
+    const agent = new https.Agent({ keepAlive: false });
+    agent.createConnection = () => socket;
+    return {
+        agent,
+        proxy: proxyUrl
+    };
+}
+
+async function resolveCodexAuthSnapshot(settings = {}) {
+    const codexHome = normalizeText(
+        settings.codexHome ||
+            process.env.CODEX_HOME ||
+            (process.env.USERPROFILE ? path.join(process.env.USERPROFILE, '.codex') : '')
+    );
+    const authPath = codexHome ? path.join(codexHome, 'auth.json') : '';
+    if (!authPath) {
+        return {
+            ok: false,
+            code: 'codex_auth_required',
+            error: 'Codex ChatGPT OAuth credentials were not found.'
+        };
+    }
+    let auth;
+    try {
+        auth = JSON.parse(await fsPromises.readFile(authPath, 'utf8'));
+    } catch {
+        return {
+            ok: false,
+            code: 'codex_auth_required',
+            error: 'Codex ChatGPT OAuth credentials were not found in CODEX_HOME/auth.json.'
+        };
+    }
+    const accessToken = normalizeText(auth?.tokens?.access_token);
+    const accountId = normalizeText(auth?.tokens?.account_id);
+    if (!accessToken || !accountId) {
+        return {
+            ok: false,
+            code: 'codex_auth_required',
+            error: 'Codex ChatGPT OAuth credentials are incomplete.'
+        };
+    }
+    return {
+        ok: true,
+        accessToken,
+        accountId,
+        codexHome,
+        authPath
+    };
+}
+
+function runCodexResponsesInference(settings = {}, auth = {}, requestBody = {}, {
+    timeoutMs = 120000,
+    signal = null
+} = {}) {
+    return new Promise(async (resolve) => {
+        let agentInfo;
+        try {
+            agentInfo = await createCodexResponsesAgent(settings, timeoutMs);
+        } catch (error) {
+            resolve({
+                ok: false,
+                code: 'codex_network_error',
+                error: error?.message || String(error)
+            });
+            return;
+        }
+        const body = JSON.stringify(requestBody);
+        const endpoint = new URL(CODEX_CHATGPT_BACKEND_URL);
+        let settled = false;
+        let clientRequest = null;
+        const finish = (result) => {
+            if (settled) {
+                return;
+            }
+            settled = true;
+            if (typeof signal?.removeEventListener === 'function') {
+                signal.removeEventListener('abort', onAbort);
+            }
+            agentInfo.agent.destroy();
+            resolve({
+                ...result,
+                proxyUsed: Boolean(agentInfo.proxy)
+            });
+        };
+        const onAbort = () => {
+            clientRequest?.destroy(new Error('Codex model request was aborted.'));
+            finish({
+                ok: false,
+                code: 'aborted',
+                error: 'Codex model request was aborted.'
+            });
+        };
+        if (signal?.aborted) {
+            onAbort();
+            return;
+        }
+        if (typeof signal?.addEventListener === 'function') {
+            signal.addEventListener('abort', onAbort, { once: true });
+        }
+        clientRequest = https.request({
+            host: endpoint.hostname,
+            port: 443,
+            path: CODEX_RESPONSES_PATH,
+            method: 'POST',
+            agent: agentInfo.agent,
+            headers: {
+                Authorization: `Bearer ${auth.accessToken}`,
+                'ChatGPT-Account-Id': auth.accountId,
+                'Content-Type': 'application/json',
+                Accept: 'text/event-stream',
+                'User-Agent': 'codex_cli_rs/ailis-model-bridge',
+                'x-client-request-id': randomUUID(),
+                'Content-Length': Buffer.byteLength(body)
+            }
+        }, (response) => {
+            let raw = '';
+            response.setEncoding('utf8');
+            response.on('data', (chunk) => {
+                raw += chunk;
+                if (Buffer.byteLength(raw) > CODEX_RESPONSES_MAX_BYTES) {
+                    clientRequest.destroy(new Error('Codex Responses stream exceeded the bridge size limit.'));
+                }
+            });
+            response.on('end', () => {
+                const status = Number(response.statusCode) || 0;
+                if (status < 200 || status >= 300) {
+                    let message = '';
+                    try {
+                        const parsed = JSON.parse(raw);
+                        message = normalizeText(parsed?.error?.message || parsed?.message);
+                    } catch {}
+                    const authFailure = status === 401 || status === 403;
+                    const usageFailure = status === 429;
+                    finish({
+                        ok: false,
+                        code: authFailure
+                            ? 'codex_auth_required'
+                            : usageFailure
+                                ? 'codex_usage_limited'
+                                : status >= 500
+                                    ? 'codex_server_error'
+                                    : 'codex_responses_error',
+                        status,
+                        error: message || `Codex Responses request failed with status ${status}.`
+                    });
+                    return;
+                }
+                const parsed = parseCodexResponsesSse(raw);
+                if (parsed.failure) {
+                    finish({
+                        ok: false,
+                        code: 'codex_responses_failed',
+                        error: normalizeText(
+                            parsed.failure?.message,
+                            'Codex Responses stream reported a failed response.'
+                        ),
+                        details: parsed.failure
+                    });
+                    return;
+                }
+                finish({
+                    ok: true,
+                    ...parsed
+                });
+            });
+        });
+        clientRequest.setTimeout(timeoutMs, () => {
+            clientRequest.destroy(new Error(`Codex model request timed out after ${timeoutMs}ms.`));
+        });
+        clientRequest.once('error', (error) => {
+            if (settled) {
+                return;
+            }
+            const aborted = signal?.aborted || /aborted/i.test(error?.message || '');
+            finish({
+                ok: false,
+                code: aborted
+                    ? 'aborted'
+                    : /timed out|timeout/i.test(error?.message || '')
+                        ? 'timeout'
+                        : 'codex_network_error',
+                error: error?.message || String(error)
+            });
+        });
+        clientRequest.end(body);
+    });
 }
 
 function resolveCodexEntrypoint(settings = {}) {
@@ -1176,7 +1852,7 @@ function normalizeBridgeToolCalls(toolCalls = [], options = {}) {
     }).filter((call) => call.name);
 }
 
-async function callCodexModelBridgeOnce(settings = {}, payload = {}, messages = []) {
+async function callCodexAppServerBridgeOnce(settings = {}, payload = {}, messages = []) {
     const launch = resolveCodexEntrypoint(settings);
     if (!launch.ok) {
         return launch;
@@ -1297,9 +1973,79 @@ async function callCodexModelBridgeOnce(settings = {}, payload = {}, messages = 
     }
 }
 
+async function callCodexModelBridgeOnce(settings = {}, payload = {}, messages = []) {
+    if (!Array.isArray(payload.input) && (!Array.isArray(messages) || !messages.length)) {
+        return { ok: false, code: 'empty_messages', error: 'AILIS model input is empty.' };
+    }
+    const auth = await resolveCodexAuthSnapshot(settings);
+    if (!auth.ok) {
+        return auth;
+    }
+    const timeoutMs = Math.max(5000, Number(payload.timeoutMs ?? settings.timeoutMs) || 120000);
+    let requestBody;
+    try {
+        requestBody = await materializeCodexResponsesImages(
+            buildCodexResponsesRequest(settings, payload, messages)
+        );
+    } catch (error) {
+        return {
+            ok: false,
+            code: 'invalid_codex_bridge_input',
+            error: error?.message || String(error)
+        };
+    }
+    const processResult = await runCodexResponsesInference(settings, auth, requestBody, {
+        timeoutMs,
+        signal: payload.abortSignal || payload.signal || null
+    });
+    if (!processResult.ok) {
+        return processResult;
+    }
+    const outputItems = codexResponsesCanonicalItems(processResult.outputItems);
+    const toolCalls = normalizeBridgeToolCalls(
+        outputItems.filter((item) => item.type === 'function_call').map((item) => ({
+            id: item.call_id || item.id,
+            name: item.name,
+            arguments: item.arguments
+        }))
+    );
+    const content = codexResponsesOutputText(outputItems);
+    if (!content && !toolCalls.length) {
+        return {
+            ok: false,
+            code: 'empty_response',
+            error: 'Codex Responses returned no assistant message or function call.'
+        };
+    }
+    return {
+        ok: true,
+        provider: CODEX_MODEL_BRIDGE_PROVIDER,
+        model: requestBody.model,
+        content,
+        toolCalls,
+        nativeToolCalls: toolCalls.length > 0,
+        usage: normalizeCodexUsage(processResult.usage),
+        providerMessage: {
+            bridge: 'codex_responses_native',
+            protocolVersion: CODEX_BRIDGE_PROTOCOL_VERSION,
+            authMode: 'chatgpt_oauth',
+            transport: 'responses_sse',
+            responseId: processResult.responseId,
+            responseItems: outputItems,
+            codexToolsUsed: false,
+            ailisToolsNative: true,
+            parallelToolCalls: requestBody.parallel_tool_calls === true,
+            reasoningEffort: requestBody.reasoning?.effort || '',
+            promptCacheKey: requestBody.prompt_cache_key,
+            proxyUsed: processResult.proxyUsed === true,
+            finishReason: toolCalls.length ? 'tool_calls' : 'stop'
+        }
+    };
+}
+
 function shouldRetryCodexBridgeFailure(result = {}) {
     const code = normalizeText(result?.code).toLowerCase();
-    if (code === 'timeout') {
+    if (['timeout', 'codex_network_error', 'codex_server_error'].includes(code)) {
         return true;
     }
     if (code !== 'codex_process_failed' && code !== 'codex_app_server_exited') {
@@ -1369,14 +2115,24 @@ module.exports = {
     buildCodexBridgeDecisionSchema,
     buildCodexBridgePrompt,
     buildCodexBridgeTurnInput,
+    buildCodexResponsesRequest,
     buildProcessTreeTerminationPlan,
     callCodexModelBridge,
+    callCodexAppServerBridgeOnce,
+    codexNativeToolSpecs,
+    codexResponsesInputItems,
+    codexResponsesCanonicalItems,
+    codexResponsesOutputText,
     collectCodexBridgeImageInputs,
+    materializeCodexResponsesImages,
     normalizeBridgeToolCalls,
     normalizeCodexUsage,
     parseCodexAppServerNotifications,
     parseCodexJsonlEvents,
+    parseCodexResponsesSse,
+    parseWindowsProxyServer,
     resolveCodexBridgeMaxAttempts,
     resolveCodexEntrypoint,
+    resolveCodexProxyUrl,
     shouldRetryCodexBridgeFailure
 };

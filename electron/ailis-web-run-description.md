@@ -1,8 +1,8 @@
-Public web discovery and page navigation. Execute exactly one supported operation per call.
+Public web discovery and page navigation. Submit one supported operation type per call. Within `search_query`, independent query variants may be submitted together when none depends on another query's result; a single query remains valid.
 
 Supported operations:
 
-* `search_query`: discover candidate pages with one to four non-empty queries. Example: `{"search_query":[{"q":"OpenAI Codex app-server outputSchema"}],"response_length":"medium"}`
+* `search_query`: discover candidate pages with one to four non-empty queries. Example: `{"search_query":[{"q":"OpenAI Codex app-server outputSchema"},{"q":"Codex Responses parallel_tool_calls"}],"response_length":"medium"}`
 * `open`: open one search reference or HTTP(S) URL. Example: `{"open":[{"ref_id":"turn0search0"}]}`
 * `click`: open one numbered link from a previously opened reference. Example: `{"click":[{"ref_id":"turn0view0","id":3}]}`
 * `find`: find one non-empty pattern in a previously opened reference. Example: `{"find":[{"ref_id":"turn0view0","pattern":"Methods"}]}`
