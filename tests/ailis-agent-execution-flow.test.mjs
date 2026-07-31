@@ -21,6 +21,7 @@ const {
     mergeAnswerCandidateLedger,
     selectBestAnswerCandidate,
     hasCompleteToolObservationForFinalization,
+    hasBlockingExactAnswerAuditErrors,
     resolvePostToolFinalizationDecisionTimeoutMs,
     buildExactAnswerRecoveryToolAffordanceNote,
     canStartExactAnswerAuditRecovery,
@@ -1680,6 +1681,23 @@ test('Agent exact-answer audit advances to the next unattempted recovery gap', (
         ),
         null
     );
+});
+
+test('Agent exact-answer audit warnings remain observable without blocking a valid final answer', () => {
+    assert.equal(hasBlockingExactAnswerAuditErrors({
+        ok: true,
+        errors: [],
+        warnings: ['selector_metric_evidence_missing'],
+        selectorMetricGap: { error: 'selector_metric_evidence_missing' }
+    }), false);
+    assert.equal(hasBlockingExactAnswerAuditErrors({
+        ok: false,
+        errors: []
+    }), true);
+    assert.equal(hasBlockingExactAnswerAuditErrors({
+        ok: true,
+        errors: ['schema_invalid']
+    }), true);
 });
 
 test('Agent exact-answer audit asks for one visual enumeration cross-check without suppressing the answer', () => {

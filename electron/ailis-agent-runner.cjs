@@ -8194,6 +8194,11 @@ function selectExactAnswerAuditRecoveryGap(validation = {}, attemptedWarnings = 
     ].find((gap) => gap?.error && !attempted.has(gap.error)) || null;
 }
 
+function hasBlockingExactAnswerAuditErrors(validation = {}) {
+    return validation?.ok === false || normalizeArrayValue(validation?.errors)
+        .some((error) => Boolean(normalizeText(error)));
+}
+
 function canStartExactAnswerAuditRecovery({
     iteration = 0,
     finalizationIteration = 0,
@@ -12574,10 +12579,12 @@ class AILISAgentRunner {
                         }
                     });
                 }
-                const exactAnswerAuditRecoveryGap = selectExactAnswerAuditRecoveryGap(
-                    exactAnswerValidation,
-                    exactAnswerAuditRepairWarningsAttempted
-                );
+                const exactAnswerAuditRecoveryGap = hasBlockingExactAnswerAuditErrors(exactAnswerValidation)
+                    ? selectExactAnswerAuditRecoveryGap(
+                          exactAnswerValidation,
+                          exactAnswerAuditRepairWarningsAttempted
+                      )
+                    : null;
                 if (
                     exactAnswerMode &&
                     isTaskAgentRole(agentRuntimeRole) &&
@@ -14758,6 +14765,7 @@ module.exports = {
     validateAgentToolLoopGuard,
     validateNativeDirectToolCall,
     validateExactAnswerSubmission,
+    hasBlockingExactAnswerAuditErrors,
     detectNestedSelectorSelectionGap,
     detectSelectorMetricEvidenceGap,
     detectSelectorTerminalRelationEvidenceGap,
