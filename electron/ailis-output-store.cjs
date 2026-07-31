@@ -7,6 +7,8 @@ const { randomUUID } = require('crypto');
 const DEFAULT_PREVIEW_CHARS = 6000;
 const DEFAULT_READ_BYTES = 6000;
 const MAX_READ_BYTES = 512 * 1024;
+const MAX_STRUCTURED_JSON_BYTES = 2 * 1024 * 1024;
+const DEFAULT_STRUCTURED_PREVIEW_CHARS = 4800;
 
 function normalizeString(value, fallback = '') {
     if (typeof value !== 'string') {
@@ -62,6 +64,180 @@ function buildTextPreview(text = '', maxChars = DEFAULT_PREVIEW_CHARS) {
     };
 }
 
+function isPlainObject(value) {
+    return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+}
+
+function unwrapScalarEnvelope(value) {
+    if (!isPlainObject(value) || !Object.prototype.hasOwnProperty.call(value, 'value')) {
+        return value;
+    }
+    const allowedKeys = new Set(['value', 'type', 'datatype', 'lang', 'xml:lang']);
+    if (!Object.keys(value).every((key) => allowedKeys.has(key))) {
+        return value;
+    }
+    const scalar = value.value;
+    return scalar === null || ['string', 'number', 'boolean'].includes(typeof scalar)
+        ? scalar
+        : value;
+}
+
+function collectRecordArrays(value, pathName = '$', depth = 0, candidates = []) {
+    if (depth > 6 || value === null || typeof value !== 'object') {
+        return candidates;
+    }
+    if (Array.isArray(value)) {
+        const records = value.filter(isPlainObject);
+        if (records.length) {
+            candidates.push({
+                path: pathName,
+                rows: records,
+                sourceLength: value.length
+            });
+        }
+        value.slice(0, 12).forEach((entry, index) => {
+            collectRecordArrays(entry, `${pathName}[${index}]`, depth + 1, candidates);
+        });
+        return candidates;
+    }
+    Object.entries(value).slice(0, 80).forEach(([key, entry]) => {
+        collectRecordArrays(entry, `${pathName}.${key}`, depth + 1, candidates);
+    });
+    return candidates;
+}
+
+function flattenRecord(value, prefix = '', output = {}, depth = 0) {
+    const unwrapped = unwrapScalarEnvelope(value);
+    if (unwrapped === null || ['string', 'number', 'boolean'].includes(typeof unwrapped)) {
+        if (prefix) {
+            output[prefix] = unwrapped;
+        }
+        return output;
+    }
+    if (depth > 4 || typeof unwrapped !== 'object') {
+        return output;
+    }
+    if (Array.isArray(unwrapped)) {
+        const scalars = unwrapped
+            .map(unwrapScalarEnvelope)
+            .filter((entry) => entry === null || ['string', 'number', 'boolean'].includes(typeof entry));
+        if (prefix && scalars.length === unwrapped.length && scalars.length <= 12) {
+            output[prefix] = scalars.join(', ');
+        }
+        return output;
+    }
+    Object.entries(unwrapped).slice(0, 40).forEach(([key, entry]) => {
+        flattenRecord(entry, prefix ? `${prefix}.${key}` : key, output, depth + 1);
+    });
+    return output;
+}
+
+function formatStructuredScalar(value) {
+    return String(value ?? '')
+        .replace(/\r?\n/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 240);
+}
+
+function buildStructuredJsonPreview(text = '', {
+    maxChars = DEFAULT_STRUCTURED_PREVIEW_CHARS,
+    maxRows = 64,
+    maxColumns = 12
+} = {}) {
+    const source = String(text || '').replace(/^\uFEFF/, '').trim();
+    if (!source || Buffer.byteLength(source, 'utf8') > MAX_STRUCTURED_JSON_BYTES) {
+        return null;
+    }
+    let parsed;
+    try {
+        parsed = JSON.parse(source);
+    } catch {
+        return null;
+    }
+    const candidate = collectRecordArrays(parsed)
+        .sort((left, right) => (
+            right.rows.length - left.rows.length ||
+            right.sourceLength - left.sourceLength ||
+            left.path.length - right.path.length
+        ))[0];
+    if (!candidate) {
+        return null;
+    }
+    const flattened = candidate.rows.slice(0, Math.max(1, maxRows)).map((row) => flattenRecord(row));
+    const columnStats = new Map();
+    flattened.forEach((row, rowIndex) => {
+        Object.keys(row).forEach((key) => {
+            const current = columnStats.get(key) || { count: 0, firstRow: rowIndex, order: columnStats.size };
+            current.count += 1;
+            columnStats.set(key, current);
+        });
+    });
+    const allColumns = [...columnStats.keys()];
+    const labeledColumns = new Set(
+        allColumns
+            .filter((key) => /label$/i.test(key))
+            .map((key) => key.replace(/label$/i, ''))
+    );
+    const uriRatio = (key) => {
+        const values = flattened
+            .filter((row) => Object.prototype.hasOwnProperty.call(row, key))
+            .map((row) => String(row[key] ?? ''));
+        return values.length
+            ? values.filter((value) => /^(?:https?:\/\/|urn:)/i.test(value)).length / values.length
+            : 0;
+    };
+    const columns = [...columnStats.entries()]
+        .filter(([key]) => !labeledColumns.has(key))
+        .sort((left, right) => (
+            (/label$|name$|title$/i.test(left[0]) ? 0 : uriRatio(left[0]) >= 0.75 ? 2 : 1) -
+                (/label$|name$|title$/i.test(right[0]) ? 0 : uriRatio(right[0]) >= 0.75 ? 2 : 1) ||
+            right[1].count - left[1].count ||
+            left[1].firstRow - right[1].firstRow ||
+            left[1].order - right[1].order
+        ))
+        .slice(0, Math.max(1, maxColumns))
+        .map(([key]) => key);
+    if (!columns.length) {
+        return null;
+    }
+    const budget = Math.max(512, Number(maxChars) || DEFAULT_STRUCTURED_PREVIEW_CHARS);
+    const lines = [
+        `StructuredJsonRecords: path=${candidate.path} rows=${candidate.rows.length}`,
+        `columns: ${columns.join(' | ')}`
+    ];
+    let projectedRows = 0;
+    for (let index = 0; index < flattened.length; index += 1) {
+        const values = columns.map((column) => (
+            Object.prototype.hasOwnProperty.call(flattened[index], column)
+                ? formatStructuredScalar(flattened[index][column])
+                : ''
+        ));
+        if (!values.some(Boolean)) {
+            continue;
+        }
+        const line = `[${index + 1}] ${values.join(' | ')}`;
+        if ([...lines, line].join('\n').length > budget) {
+            break;
+        }
+        lines.push(line);
+        projectedRows += 1;
+    }
+    if (!projectedRows) {
+        return null;
+    }
+    if (projectedRows < candidate.rows.length) {
+        lines.push(`... ${candidate.rows.length - projectedRows} additional record(s) remain in the stored output.`);
+    }
+    return {
+        text: lines.join('\n'),
+        path: candidate.path,
+        rowCount: candidate.rows.length,
+        projectedRows,
+        columns
+    };
+}
+
 async function pathExists(target) {
     try {
         await fsp.access(target);
@@ -93,6 +269,7 @@ class ExecOutputCapture {
         this.metaPath = this.logPath.replace(/\.log$/i, '.json');
         this.queue = Promise.resolve();
         this.finalized = false;
+        this.structuredPreview = null;
         this.stats = {
             outputId,
             path: this.logPath,
@@ -187,6 +364,13 @@ class ExecOutputCapture {
             startedAt: this.stats.startedAt,
             updatedAt: this.stats.updatedAt,
             ...preview,
+            ...(this.structuredPreview ? {
+                structuredPreview: this.structuredPreview.text,
+                structuredPreviewPath: this.structuredPreview.path,
+                structuredRowCount: this.structuredPreview.rowCount,
+                structuredProjectedRows: this.structuredPreview.projectedRows,
+                structuredColumns: this.structuredPreview.columns
+            } : {}),
             read: {
                 tool: 'output_read',
                 args: { outputId: this.outputId }
@@ -220,6 +404,13 @@ class ExecOutputCapture {
         this.stats.status = normalizeString(extra.status, this.stats.status === 'running' ? 'completed' : this.stats.status);
         this.stats.updatedAt = new Date().toISOString();
         await this.queue;
+        if (this.stats.stdoutBytes > this.previewChars && this.stats.stdoutBytes <= MAX_STRUCTURED_JSON_BYTES) {
+            try {
+                this.structuredPreview = buildStructuredJsonPreview(await fsp.readFile(this.stdoutPath, 'utf8'));
+            } catch {
+                this.structuredPreview = null;
+            }
+        }
         await this.writeMetadata(extra);
         return this.summary();
     }
@@ -437,6 +628,7 @@ class AILISOutputStore {
 module.exports = {
     DEFAULT_PREVIEW_CHARS,
     AILISOutputStore,
+    buildStructuredJsonPreview,
     buildTextPreview,
     safeSegment
 };

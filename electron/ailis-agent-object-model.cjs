@@ -753,6 +753,29 @@ function formatSourceViewportLines(sourceWindow = {}) {
     ].filter((line, index) => index === 7 || normalizeText(line)).join('\n');
 }
 
+function formatSourceViewportOverflowPreviews(sourceWindow = {}) {
+    const previews = Array.isArray(sourceWindow.overflowPreviews)
+        ? sourceWindow.overflowPreviews
+        : Array.isArray(sourceWindow.overflow_previews)
+        ? sourceWindow.overflow_previews
+        : [];
+    const rendered = previews
+        .slice(0, 5)
+        .map((line) => {
+            const lineno = Number(line?.lineno || line?.lineNumber || line?.line_number || 0) || '?';
+            const text = normalizeText(line?.rendered) || `L${lineno}: ${normalizeText(line?.text)}`;
+            return summarizeForModel(text, 720);
+        })
+        .filter(Boolean);
+    if (!rendered.length) {
+        return '';
+    }
+    return [
+        'Longest source rows preserved from the explicitly requested range:',
+        ...rendered
+    ].join('\n');
+}
+
 function formatExpandedLongSourceLines(sourceWindow = {}) {
     const lines = Array.isArray(sourceWindow.lines) ? sourceWindow.lines : [];
     const expanded = lines
@@ -877,12 +900,13 @@ function buildSourceViewportFunctionOutput(toolOutput = {}, sourceViewport = {})
             toolOutput.durationMs != null ? `duration_ms=${toolOutput.durationMs}` : ''
         ].filter(Boolean).join('\n')),
         ContentItem.inputText(formatSourceViewportMatches(details)),
+        ContentItem.inputText(formatStructuredTableProjections(details)),
+        ContentItem.inputText(formatSourceViewportOverflowPreviews(sourceWindow)),
+        ContentItem.inputText(formatExpandedLongSourceLines(sourceWindow)),
+        ContentItem.inputText(formatSourceViewportLines(sourceWindow)),
         ContentItem.inputText(formatSourceSelectionProtocol(details)),
         ContentItem.inputText(formatWebSuggestedNextCalls(details, toolOutput.toolName)),
-        ContentItem.inputText(formatSourceViewportLinks(toolOutput, details)),
-        ContentItem.inputText(formatStructuredTableProjections(details)),
-        ContentItem.inputText(formatExpandedLongSourceLines(sourceWindow)),
-        ContentItem.inputText(formatSourceViewportLines(sourceWindow))
+        ContentItem.inputText(formatSourceViewportLinks(toolOutput, details))
     ].filter(Boolean);
     return FunctionCallOutputPayload.fromContentItems(contentItems, {
         success: toolOutput.ok === true ? true : toolOutput.ok === false ? false : null

@@ -8627,9 +8627,13 @@ function buildArtifactToolObservationPromptText(resultText = '') {
     };
 }
 
-function buildGenericToolObservationPromptText(resultText = '', response = {}) {
+function buildGenericToolObservationPromptText(resultText = '', response = {}, options = {}) {
     const sourceText = resultText || response.error || summarize(response, TOOL_OBSERVATION_TEXT_CHARS);
-    const text = summarizeForModel(sourceText, TOOL_OBSERVATION_TEXT_CHARS);
+    const maxChars = Math.max(
+        TOOL_OBSERVATION_TEXT_CHARS,
+        Math.max(0, Number(options.maxChars) || 0)
+    );
+    const text = summarizeForModel(sourceText, maxChars);
     const lossless = text === sourceText;
     return {
         text,
@@ -8642,7 +8646,7 @@ function buildGenericToolObservationPromptText(resultText = '', response = {}) {
     };
 }
 
-function buildCanonicalWebObservationPromptText(stepResult = {}) {
+function buildCanonicalWebObservationPromptText(stepResult = {}, options = {}) {
     const toolOutput = normalizeToolOutput(stepResult, 0);
     const items = toolOutputToResponseItems(toolOutput, {
         toolOutputChars: TOOL_OBSERVATION_TEXT_CHARS * 3
@@ -8662,9 +8666,11 @@ function buildCanonicalWebObservationPromptText(stepResult = {}) {
         item?.type === 'web_search_call' &&
         ['open_page', 'find_in_page'].includes(normalizeText(item?.action?.type))
     );
-    const maxChars = hasBoundedSourceViewport
+    const defaultMaxChars = hasBoundedSourceViewport
         ? ARTIFACT_OBSERVATION_ROW_WINDOW_TEXT_CHARS
         : TOOL_OBSERVATION_TEXT_CHARS * 3;
+    const requestedMaxChars = Math.max(0, Number(options.maxChars) || 0);
+    const maxChars = Math.max(defaultMaxChars, requestedMaxChars);
     const text = sourceText.length <= maxChars
         ? sourceText
         : summarizeForModel(sourceText, maxChars);
@@ -8679,8 +8685,12 @@ function buildCanonicalWebObservationPromptText(stepResult = {}) {
     };
 }
 
-function buildToolObservationDigest(stepResults = []) {
-    return stepResults.slice(-4).map((stepResult) => {
+function buildToolObservationDigest(stepResults = [], options = {}) {
+    const maxItems = Math.max(1, Number(options.maxItems) || 4);
+    const maxTextChars = Math.max(0, Number(options.maxTextChars) || 0);
+    const maxArgsChars = Math.max(0, Number(options.maxArgsChars) || 0);
+    const compact = options.compact === true;
+    return stepResults.slice(-maxItems).map((stepResult) => {
         const response = stepResult.response || {};
         const result = response.result || {};
         const evidenceRefs = getStepEvidenceRefs(stepResult);
@@ -8690,11 +8700,30 @@ function buildToolObservationDigest(stepResults = []) {
             ? sanitizeWebToolTextForModel(resultText)
             : resultText;
         const canonicalWebPromptText = webTool
-            ? buildCanonicalWebObservationPromptText(stepResult)
+            ? buildCanonicalWebObservationPromptText(stepResult, {
+                  maxChars: maxTextChars
+              })
             : null;
         const promptText = canonicalWebPromptText || (stepResult.tool === 'artifact_tools'
             ? buildArtifactToolObservationPromptText(modelVisibleResultText)
-            : buildGenericToolObservationPromptText(modelVisibleResultText, response));
+            : buildGenericToolObservationPromptText(modelVisibleResultText, response, {
+                  maxChars: maxTextChars
+              }));
+        const boundedPromptText = maxTextChars && promptText.text.length > maxTextChars
+            ? {
+                  text: summarizeForModel(promptText.text, maxTextChars),
+                  lossless: false,
+                  compression: {
+                      reason: 'finalization_observation_budget',
+                      originalTextChars: promptText.text.length,
+                      promptTextChars: maxTextChars
+                  }
+              }
+            : promptText;
+        const sanitizedArgs = sanitizeToolArgsForPrompt(stepResult.args || null);
+        const argsForPrompt = maxArgsChars
+            ? summarizeForModel(JSON.stringify(sanitizedArgs), maxArgsChars)
+            : sanitizedArgs;
         const detailsForPrompt = webTool && result.details
             ? sanitizeWebStructuredContentForPrompt(result.details)
             : result.details;
@@ -8723,30 +8752,38 @@ function buildToolObservationDigest(stepResults = []) {
                   next_actions: rawObservationContract.next_actions
               }
             : null;
-        return {
+        const observation = {
             id: stepResult.id || null,
             tool: stepResult.tool || null,
             title: stepResult.title || null,
-            args: sanitizeToolArgsForPrompt(stepResult.args || null),
+            args: argsForPrompt,
             ok: response.ok === true,
             status: response.status || 'unknown',
-            text: promptText.text,
-            lossless: promptText.lossless,
+            text: boundedPromptText.text,
+            lossless: boundedPromptText.lossless,
             textChars: resultText.length,
-            promptTextChars: promptText.text.length,
-            compression: promptText.compression,
+            promptTextChars: boundedPromptText.text.length,
+            compression: boundedPromptText.compression,
             observationContract,
             evidenceRefs,
             note: evidenceRefs.length
                 ? 'Full observation is retained in transcript/evidence artifact; use evidenceRefs for final_answer.'
                 : '',
-            details: canonicalWebPromptText ? null : detailsForPrompt
+            details: compact || canonicalWebPromptText ? null : detailsForPrompt
                 ? summarizeForModel(JSON.stringify(detailsForPrompt), 500)
                 : null,
-            structuredContent: canonicalWebPromptText ? null : structuredContentForPrompt
+            structuredContent: compact || canonicalWebPromptText ? null : structuredContentForPrompt
                 ? summarizeForModel(JSON.stringify(structuredContentForPrompt), 500)
                 : null
         };
+        if (!compact) {
+            return observation;
+        }
+        return Object.fromEntries(Object.entries(observation).filter(([, value]) =>
+            value !== null &&
+            value !== '' &&
+            (!Array.isArray(value) || value.length > 0)
+        ));
     });
 }
 
@@ -8923,6 +8960,12 @@ function buildTaskAgentFinalizationContext({
     exactAnswerMode = false
 } = {}) {
     const preservedAnswerCandidates = mergeAnswerCandidateLedger([], answerCandidates);
+    const finalizationDigest = buildToolObservationDigest(stepResults, {
+        maxItems: 4,
+        maxTextChars: 3500,
+        maxArgsChars: 400,
+        compact: true
+    });
     return summarizeForModel([
         'TaskAgent finalization package.',
         'Answer the original user request using only the completed tool observations below.',
@@ -8937,7 +8980,7 @@ function buildTaskAgentFinalizationContext({
         preservedAnswerCandidates.length
             ? `PRESERVED_ANSWER_CANDIDATES:\n${JSON.stringify(preservedAnswerCandidates, null, 2)}`
             : '',
-        `TOOL_OBSERVATIONS:\n${JSON.stringify(buildToolObservationDigest(stepResults), null, 2)}`
+        `TOOL_OBSERVATIONS:\n${JSON.stringify(finalizationDigest, null, 2)}`
     ].filter(Boolean).join('\n\n'), TASK_AGENT_FINALIZATION_CONTEXT_CHARS);
 }
 
@@ -14707,6 +14750,7 @@ module.exports = {
     keep_forked_rollout_item,
     resolveAgentPromptProfile,
     resolveAgentDecisionSettings,
+    buildTaskAgentFinalizationContext,
     resolveParallelToolCalls,
     splitNativeProgressNoteArgs,
     stripControlTags,

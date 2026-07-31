@@ -1356,6 +1356,104 @@ test('bounded web source viewport keeps answer-bearing middle lines in the final
     assert.equal(digest.compression, null);
 });
 
+test('canonical source viewport preserves bounded overflow rows in model input', () => {
+    const toolOutput = normalizeToolOutput({
+        id: 'overflow-source-viewport-1',
+        tool: 'web_run',
+        args: { open: [{ ref_id: 'turn0view0', lineno: 120 }] },
+        response: {
+            ok: true,
+            status: 'completed',
+            result: {
+                content: [{
+                    type: 'text',
+                    text: 'The raw tool text also contains L233: TARGET_OVERFLOW_EVIDENCE.'
+                }],
+                structuredContent: {
+                    sourceWindow: {
+                        type: 'source_viewport',
+                        action: { type: 'open_page', url: 'https://example.test/article', lineno: 120 },
+                        url: 'https://example.test/article',
+                        totalLines: 317,
+                        lineStart: 120,
+                        lineEnd: 193,
+                        hasMoreBefore: true,
+                        hasMoreAfter: true,
+                        overflowPreviews: [{
+                            lineno: 233,
+                            text: 'The requested relationship is TARGET_OVERFLOW_EVIDENCE.',
+                            originalChars: 1471
+                        }],
+                        lines: [
+                            { lineno: 120, text: 'contiguous source row' },
+                            { lineno: 193, text: 'last contiguous source row' }
+                        ]
+                    }
+                }
+            }
+        }
+    });
+    const serializedItems = JSON.stringify(toolOutputToResponseItems(toolOutput));
+
+    assert.match(serializedItems, /Longest source rows preserved from the explicitly requested range/);
+    assert.match(serializedItems, /L233: The requested relationship is TARGET_OVERFLOW_EVIDENCE/);
+});
+
+test('finalization budget keeps source evidence ahead of web navigation metadata', () => {
+    const navigationFiller = 'navigation metadata '.repeat(90);
+    const lines = Array.from({ length: 45 }, (_, index) => ({
+        lineno: 229 + index,
+        text: index === 4
+            ? `The source identifies the requested relation as TARGET_RELATION_VALUE. ${'supporting context '.repeat(45)}`
+            : `source row ${index + 1} ${'source content '.repeat(18)}`
+    }));
+    const [digest] = buildToolObservationDigest([{
+        id: 'source-before-navigation-1',
+        tool: 'web_run',
+        args: { open: [{ ref_id: 'turn0view0', lineno: 229 }], response_length: 'long' },
+        response: {
+            ok: true,
+            status: 'completed',
+            result: {
+                content: [{ type: 'text', text: 'Source viewport model preview' }],
+                structuredContent: {
+                    sourceWindow: {
+                        type: 'source_viewport',
+                        action: { type: 'open_page', url: 'https://example.test/article', lineno: 229 },
+                        url: 'https://example.test/article',
+                        ref_id: 'turn0view0',
+                        totalLines: 317,
+                        lineStart: 229,
+                        lineEnd: 273,
+                        hasMoreBefore: true,
+                        hasMoreAfter: true,
+                        lines
+                    },
+                    suggestedNextCalls: Array.from({ length: 4 }, (_, index) => ({
+                        tool: 'open_page',
+                        args: { url: `https://example.test/navigation-${index + 1}`, query: navigationFiller },
+                        reason: navigationFiller
+                    })),
+                    observedRelevantLinks: Array.from({ length: 8 }, (_, index) => ({
+                        id: index + 1,
+                        title: `Navigation ${index + 1} ${navigationFiller}`,
+                        url: `https://example.test/navigation-${index + 1}`
+                    }))
+                }
+            }
+        }
+    }], {
+        maxItems: 4,
+        maxTextChars: 3500,
+        maxArgsChars: 400,
+        compact: true
+    });
+
+    assert.equal(digest.promptTextChars, 3500);
+    assert.equal(digest.compression.reason, 'finalization_observation_budget');
+    assert.match(digest.text, /L233: The source identifies the requested relation as TARGET_RELATION_VALUE/);
+});
+
 test('TaskAgent finalization digest unwraps nested MCP source viewport evidence', () => {
     const [digest] = buildToolObservationDigest([{
         id: 'nested-open-page-digest-1',

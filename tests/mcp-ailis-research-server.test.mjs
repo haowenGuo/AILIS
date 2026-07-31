@@ -33,10 +33,12 @@ const {
     extractWikipediaPageTitle,
     extractYahooResults,
     expandStructuredSourceText,
+    extractWikidataEntitySearchTerms,
     filterSearchResultsByDomains,
     githubRepoRead,
     handleToolCall,
     inferPaperMetadataArgsFromScholarlyQuery,
+    isLikelyWikidataEntitySearch,
     isHeadlessBrowserAccessBarrier,
     loadManagedSearxngManifest,
     managedSearxngAllowedForSearch,
@@ -61,6 +63,7 @@ const {
     resolveHeadlessScreenshotViewport,
     resolveSubprocessCwd,
     runPythonFile,
+    runWikidataSearchBackend,
     stripWikiText,
     webArchiveLookup,
     webExtractLinks,
@@ -1871,9 +1874,15 @@ test('web_search auto chain uses no-Docker Python search while skipping unconfig
         const generalBackends = normalizeSearchBackends({}, 'Playwright locator waitFor official docs').map((backend) => backend.id);
         assert.equal(generalBackends[0], 'python_search');
         assert.ok(generalBackends.includes('wikipedia_search'));
+        assert.ok(!generalBackends.includes('wikidata_search'));
         assert.ok(!generalBackends.includes('searxng_json'));
         assert.ok(!generalBackends.includes('firecrawl_search'));
         assert.ok(generalBackends.includes('bing_html'));
+
+        const identifierBackends = normalizeSearchBackends({}, 'Tropicos Helotiales order Tropicos ID').map((backend) => backend.id);
+        assert.ok(identifierBackends.includes('wikidata_search'));
+        assert.equal(isLikelyWikidataEntitySearch('Tropicos Helotiales order Tropicos ID'), true);
+        assert.equal(isLikelyWikidataEntitySearch('Playwright locator waitFor official docs'), false);
 
         const configuredBackends = normalizeSearchBackends({
             searxngUrl: 'http://127.0.0.1:18080',
@@ -1951,6 +1960,99 @@ test('web_search can aggregate structured Wikipedia search results without task-
         assert.equal(result.structuredContent.attempts[0].backend, 'wikipedia_search');
         assert.equal(result.structuredContent.results[0].url, 'https://en.wikipedia.org/wiki/1928_Summer_Olympics');
         assert.match(result.content[0].text, /1928 Summer Olympics/);
+    });
+});
+
+test('Wikidata search backend adds bounded entity candidates without resolving task answers', async () => {
+    const observedTerms = [];
+    await withServer((request, response) => {
+        const url = new URL(request.url || '/', 'http://127.0.0.1');
+        assert.equal(url.pathname, '/w/api.php');
+        assert.equal(url.searchParams.get('action'), 'wbsearchentities');
+        const term = url.searchParams.get('search') || '';
+        observedTerms.push(term);
+        const rows = term === 'Helotiales'
+            ? [{
+                id: 'Q134490',
+                label: 'Helotiales',
+                description: 'order of fungi'
+            }]
+            : term === 'Tropicos'
+                ? [{
+                    id: 'Q2578548',
+                    label: 'Tropicos',
+                    description: 'online botanical database'
+                }]
+                : [];
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({
+            search: rows
+        }));
+    }, async (baseUrl) => {
+        assert.deepEqual(
+            extractWikidataEntitySearchTerms('Tropicos Helotiales order Tropicos ID'),
+            ['Tropicos', 'Helotiales']
+        );
+        const result = await runWikidataSearchBackend({
+            query: 'Tropicos Helotiales order Tropicos ID',
+            maxResults: 5,
+            timeoutMs: 3000,
+            args: {
+                wikidataSearchUrl: `${baseUrl}/w/api.php`
+            }
+        });
+
+        assert.equal(result.ok, true, result.error);
+        assert.deepEqual(observedTerms.sort(), ['Helotiales', 'Tropicos'].sort());
+        assert.ok(result.results.some((entry) => entry.url === 'https://www.wikidata.org/wiki/Q134490'));
+        assert.ok(result.results.some((entry) => entry.title === 'Helotiales - Wikidata'));
+        assert.equal(result.results.some((entry) => /100370510|check digit/i.test(entry.snippet)), false);
+    });
+});
+
+test('web_search retries MediaWiki maxlag and keeps structured identifier evidence in a short result set', async () => {
+    let requests = 0;
+    await withServer((request, response) => {
+        const url = new URL(request.url || '/', 'http://127.0.0.1');
+        assert.equal(url.pathname, '/w/api.php');
+        assert.equal(url.searchParams.get('action'), 'wbsearchentities');
+        assert.equal(url.searchParams.get('search'), 'Helotiales');
+        assert.equal(url.searchParams.get('maxlag'), '10');
+        requests += 1;
+        response.writeHead(200, { 'content-type': 'application/json' });
+        if (requests === 1) {
+            response.end(JSON.stringify({
+                error: {
+                    code: 'maxlag',
+                    info: 'Waiting for a lagged replica.',
+                    lag: 0.01,
+                    type: 'wikibase-queryservice'
+                }
+            }));
+            return;
+        }
+        response.end(JSON.stringify({
+            search: [{
+                id: 'Q134490',
+                label: 'Helotiales',
+                description: 'order of fungi'
+            }]
+        }));
+    }, async (baseUrl) => {
+        const result = await webSearch({
+            query: 'Helotiales catalog ID',
+            backends: ['wikidata_search'],
+            wikidataSearchUrl: `${baseUrl}/w/api.php`,
+            maxResults: 4,
+            timeoutMs: 3000
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.equal(requests, 2);
+        assert.equal(result.structuredContent.attempts[0].ok, true);
+        assert.equal(result.structuredContent.attempts[0].attempts[0].retryCount, 1);
+        assert.equal(result.structuredContent.attempts[0].attempts[0].initialErrorCode, 'wikidata_maxlag');
+        assert.equal(result.structuredContent.results[0].url, 'https://www.wikidata.org/wiki/Q134490');
     });
 });
 
@@ -3786,6 +3888,36 @@ test('web_fetch keeps linked DOI and PDF follow-up actions structured without mo
     });
 });
 
+test('web_fetch preserves standard scholarly PDF resources when their short labels do not match the query', async () => {
+    await withServer((request, response) => {
+        response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        response.end([
+            '<html><head>',
+            '<title>Container measurements in marine transport</title>',
+            '<meta name="citation_pdf_url" content="/article/download/733/684">',
+            '<link rel="alternate" type="application/pdf" href="/article/download/733/684?mirror=1">',
+            '</head><body>',
+            '<p>The study reports measurements for an irregular marine specimen and its transport container.</p>',
+            '<a class="obj_galley_link pdf" href="/article/view/733/684">PDF</a>',
+            '</body></html>'
+        ].join(''));
+    }, async (baseUrl) => {
+        const result = await webFetch({
+            url: `${baseUrl}/article/view/733`,
+            query: 'calculated bag volume irregular marine specimen'
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        const pdfCalls = result.structuredContent.suggestedNextCalls.filter((call) => call.tool === 'pdf_extract_text');
+        assert.ok(pdfCalls.some((call) => call.args.url === `${baseUrl}/article/download/733/684`));
+        assert.ok(pdfCalls.some((call) => call.args.url === `${baseUrl}/article/download/733/684?mirror=1`));
+        assert.ok(result.structuredContent.observedRelevantLinks.some((link) => (
+            link.kind === 'pdf' && link.url === `${baseUrl}/article/download/733/684`
+        )));
+        assert.match(result.content[0].text, /Candidate links observed by the fetcher/);
+    });
+});
+
 test('web_fetch extracts HTML relationship map for model reasoning', async () => {
     await withServer((request, response) => {
         response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
@@ -4289,6 +4421,90 @@ test('open_page, find_in_page, and continue_page share one source viewport chain
         assert.match(found.content[0].text, /Actual Enrollment 90/);
         assert.equal(found.structuredContent.snapshotCacheUsed, true);
         assert.equal(requestCount, 1);
+    });
+});
+
+test('open_page preserves HTML block boundaries and non-breaking indentation in source rows', async () => {
+    await withServer((_request, response) => {
+        response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        response.end([
+            '<article>',
+            '<div>Opening line<br></div>',
+            '<div><br></div>',
+            '<div>Second block starts<br></div>',
+            '<div>&nbsp;&nbsp;&nbsp;&nbsp;indented evidence<br></div>',
+            '<div>Second block ends<br></div>',
+            '</article>'
+        ].join('\n        '));
+    }, async (baseUrl) => {
+        const result = await openPage({
+            url: `${baseUrl}/structured-text`,
+            lineno: 1,
+            maxLines: 20,
+            provider: 'builtin'
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        const lines = result.structuredContent.sourceWindow.lines.map((line) => line.text);
+        const openingIndex = lines.indexOf('Opening line');
+        const secondBlockIndex = lines.indexOf('Second block starts');
+        const indentedIndex = lines.indexOf('\u00a0\u00a0\u00a0\u00a0indented evidence');
+        assert.ok(openingIndex >= 0);
+        assert.equal(secondBlockIndex - openingIndex, 2);
+        assert.equal(lines.slice(openingIndex + 1, secondBlockIndex).some((line) => line === ''), true);
+        assert.equal(indentedIndex, secondBlockIndex + 1);
+        assert.match(result.content[0].text, /L\d+: \u00a0\u00a0\u00a0\u00a0indented evidence/);
+    });
+});
+
+test('continue_page keeps maxLines independent from its bounded source character window', async () => {
+    const lines = Array.from({ length: 140 }, (_, index) =>
+        `line ${index + 1} ${'background material '.repeat(5)}`
+    );
+    lines[43] = `A horse doctor named Louvrier treated the livestock. ${'relationship detail '.repeat(45)}`;
+    await withServer((request, response) => {
+        response.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' });
+        response.end(lines.join('\n'));
+    }, async (baseUrl) => {
+        const result = await continuePage({
+            url: `${baseUrl}/exercise`,
+            lineno: 20,
+            maxLines: 80,
+            query: 'equine veterinarian',
+            provider: 'builtin'
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.equal(result.structuredContent.sourceWindow.lineStart, 20);
+        assert.match(result.content[0].text, /L44: A horse doctor named Louvrier/);
+        assert.ok(result.structuredContent.sourceWindow.lineEnd < 99);
+        assert.equal(result.structuredContent.source.has_more_after, true);
+    });
+});
+
+test('continue_page preserves long records from the requested range beyond its contiguous character window', async () => {
+    const lines = Array.from({ length: 180 }, (_, index) =>
+        `line ${index + 1} ${'brief context '.repeat(5)}`
+    );
+    lines[119] = `A dated archive record names Dr. Ada Nwosu as the responsible reviewer. ${'supporting detail '.repeat(90)}`;
+    await withServer((request, response) => {
+        response.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' });
+        response.end(lines.join('\n'));
+    }, async (baseUrl) => {
+        const result = await continuePage({
+            url: `${baseUrl}/records`,
+            lineno: 20,
+            maxLines: 140,
+            provider: 'builtin'
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.ok(result.structuredContent.sourceWindow.lineEnd < 120);
+        assert.match(result.content[0].text, /Longest source rows from the explicitly requested range/);
+        assert.match(result.content[0].text, /L120: A dated archive record names Dr\. Ada Nwosu/);
+        assert.ok(result.structuredContent.source.overflow_previews.some((line) => (
+            line.lineno === 120 && /Ada Nwosu/.test(line.text)
+        )));
     });
 });
 

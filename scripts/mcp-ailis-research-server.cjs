@@ -330,17 +330,26 @@ function decodeHtml(value = '') {
 }
 
 function stripHtml(html = '') {
-    return decodeHtml(String(html)
+    const emptyBlockSentinel = '\uE000AILIS_EMPTY_BLOCK\uE001';
+    const protectedHtml = String(html)
+        .replace(/&nbsp;|&#160;|&#xa0;/gi, '\u00a0');
+    const stripped = decodeHtml(protectedHtml
         .replace(/<script[\s\S]*?<\/script>/gi, ' ')
         .replace(/<style[\s\S]*?<\/style>/gi, ' ')
         .replace(/<!--[\s\S]*?-->/g, ' ')
+        .replace(/<(p|div|li|tr|h[1-6]|section|article)\b[^>]*>\s*(?:<br\s*\/?>\s*)*<\/\1>/gi, `\n${emptyBlockSentinel}\n`)
+        .replace(/(?:<br\s*\/?>\s*){2,}/gi, `\n${emptyBlockSentinel}\n`)
+        .replace(/<br\s*\/?>\s*<\/(p|div|li|tr|h[1-6]|section|article)>/gi, '</$1>')
         .replace(/<\/(p|div|li|tr|h[1-6]|section|article)>/gi, '\n')
         .replace(/<br\s*\/?>/gi, '\n')
         .replace(/<[^>]+>/g, ' ')
-        .replace(/\s+\n/g, '\n')
-        .replace(/\n\s+/g, '\n')
+        .replace(/[ \t]+\n/g, '\n')
+        .replace(/\n[ \t]+/g, '\n')
         .replace(/[ \t]{2,}/g, ' ')
-        .replace(/\n{3,}/g, '\n\n'))
+        .replace(/\n{2,}/g, '\n'));
+    return stripped
+        .replace(new RegExp(`\\n?${emptyBlockSentinel}\\n?`, 'g'), '\n\n')
+        .replace(/\n{3,}/g, '\n\n')
         .trim();
 }
 
@@ -1491,7 +1500,8 @@ function scoreResearchLink(link = {}, index = 0, pageUrl = '') {
         kind,
         doi,
         url,
-        text
+        text,
+        explicitResource: link.explicitResource === true
     };
 }
 
@@ -3433,6 +3443,7 @@ function filterRankedLinksForQuerySuggestions(rankedLinks = [], query = '') {
     }
     return (Array.isArray(rankedLinks) ? rankedLinks : []).filter((candidate) => (
         candidate.kind === 'pagination' ||
+        candidate.explicitResource === true ||
         isRelevantSearchCandidate(candidate) ||
         (Array.isArray(candidate.queryMatchedTerms) && candidate.queryMatchedTerms.some((term) => /^(?:18|19|20)\d{2}$/.test(term)))
     ));
@@ -5018,6 +5029,164 @@ async function runWikipediaSearchBackend({ query, maxResults, timeoutMs, args = 
     };
 }
 
+const WIKIDATA_ENTITY_SEARCH_STOPWORDS = new Set([
+    'article',
+    'calculate',
+    'compare',
+    'compute',
+    'country',
+    'determine',
+    'find',
+    'identify',
+    'list',
+    'lookup',
+    'order',
+    'search',
+    'show',
+    'under',
+    'what',
+    'when',
+    'where',
+    'which',
+    'who'
+]);
+
+function extractWikidataEntitySearchTerms(query = '') {
+    const sanitized = normalizeString(query)
+        .replace(/\bsite:[^\s]+/gi, ' ')
+        .replace(/\bhttps?:\/\/\S+/gi, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    if (!sanitized) {
+        return [];
+    }
+
+    const quoted = Array.from(sanitized.matchAll(/["“”]([^"“”]{3,80})["“”]/g))
+        .map((match) => normalizeString(match[1]));
+    const capitalizedGroups = sanitized.match(
+        /[A-Z][\p{L}\p{M}\p{N}'’.-]{2,}(?:\s+(?:(?:of|the|de|da|van|von)\s+)?[A-Z][\p{L}\p{M}\p{N}'’.-]{2,}){0,3}/gu
+    ) || [];
+    const capitalizedTokens = sanitized.match(/[A-Z][\p{L}\p{M}\p{N}'’.-]{2,}/gu) || [];
+    const seen = new Set();
+    const terms = [];
+    for (const value of [...quoted, ...capitalizedTokens, ...capitalizedGroups]) {
+        const term = normalizeString(value).replace(/[.,;:!?()[\]{}]+$/g, '');
+        const key = term.toLowerCase();
+        if (
+            term.length < 3 ||
+            term.length > 80 ||
+            WIKIDATA_ENTITY_SEARCH_STOPWORDS.has(key) ||
+            ['api', 'ddc', 'id', 'isbn', 'url'].includes(key) ||
+            seen.has(key)
+        ) {
+            continue;
+        }
+        seen.add(key);
+        terms.push(term);
+        if (terms.length >= 2) {
+            break;
+        }
+    }
+    return terms;
+}
+
+function isLikelyWikidataEntitySearch(query = '') {
+    return /\b(?:wikidata|id|identifier|catalog(?:ue)?(?:\s+(?:id|number))?|record\s+(?:id|number)|authority\s+id|database\s+id)\b/i
+        .test(normalizeString(query));
+}
+
+async function runWikidataSearchBackend({ query, maxResults, timeoutMs, args = {} } = {}) {
+    const startedAt = Date.now();
+    const language = normalizeString(args.language || args.lang, 'en')
+        .toLowerCase()
+        .replace(/[^a-z-]/g, '')
+        .slice(0, 16) || 'en';
+    const apiUrl = normalizeString(
+        args.wikidataSearchUrl ||
+        args.wikidata_search_url ||
+        args.wikidataApiUrl ||
+        args.wikidata_api_url,
+        'https://www.wikidata.org/w/api.php'
+    );
+    const terms = extractWikidataEntitySearchTerms(query);
+    if (!terms.length) {
+        return {
+            ok: false,
+            backend: 'wikidata_search',
+            url: apiUrl,
+            durationMs: Date.now() - startedAt,
+            status: 0,
+            errorCode: 'no_entity_search_terms',
+            error: 'No bounded entity-like terms were found in the search query.',
+            retryable: false,
+            attempts: [],
+            results: []
+        };
+    }
+
+    const perTerm = 1;
+    const attemptTimeoutMs = Math.max(1000, Math.min(timeoutMs, 5000));
+    const attempts = await Promise.all(terms.map(async (term) => {
+        const url = wikidataApiUrl(apiUrl, {
+            action: 'wbsearchentities',
+            search: term,
+            language,
+            uselang: language,
+            type: 'item',
+            limit: perTerm
+        });
+        const response = await fetchWikidataJson(url, attemptTimeoutMs);
+        return {
+            term,
+            url,
+            ok: response.ok,
+            status: response.status || 0,
+            errorCode: response.errorCode || '',
+            error: response.error || '',
+            retryCount: response.retryCount || 0,
+            initialErrorCode: response.initialErrorCode || '',
+            matches: Array.isArray(response.json?.search)
+                ? response.json.search.slice(0, perTerm)
+                : []
+        };
+    }));
+    const results = dedupeSearchResults(attempts.flatMap((attempt) =>
+        attempt.matches.map((match) => {
+            const id = normalizeString(match.id).toUpperCase();
+            const label = normalizeString(match.label || match.display?.label?.value || id);
+            const description = normalizeString(
+                match.description ||
+                match.display?.description?.value
+            );
+            return {
+                title: label ? `${label} - Wikidata` : `${id} - Wikidata`,
+                url: /^Q\d+$/.test(id) ? `https://www.wikidata.org/wiki/${id}` : '',
+                snippet: [
+                    description,
+                    id ? `Wikidata entity ${id}` : ''
+                ].filter(Boolean).join('. '),
+                sourceEngines: ['wikidata_api']
+            };
+        })
+    ), maxResults);
+    const successfulAttempts = attempts.filter((attempt) => attempt.ok);
+    return {
+        ok: results.length > 0,
+        backend: 'wikidata_search',
+        url: apiUrl,
+        durationMs: Date.now() - startedAt,
+        status: successfulAttempts[0]?.status || attempts[0]?.status || 0,
+        errorCode: results.length ? '' : 'no_results_parsed',
+        error: results.length ? '' : 'Wikidata entity search returned no result rows.',
+        retryable: results.length === 0,
+        attempts: attempts.map(({ matches, ...attempt }) => ({
+            ...attempt,
+            resultCount: matches.length
+        })),
+        results
+    };
+}
+
 function extractFirecrawlSearchResults(payload = {}, maxResults = 8) {
     const rows = Array.isArray(payload.data)
         ? payload.data
@@ -5254,6 +5423,10 @@ const SEARCH_BACKENDS = Object.freeze({
         id: 'wikipedia_search',
         run: runWikipediaSearchBackend
     }),
+    wikidata_search: Object.freeze({
+        id: 'wikidata_search',
+        run: runWikidataSearchBackend
+    }),
     duckduckgo_lite: Object.freeze({
         id: 'duckduckgo_lite',
         buildUrl: (query) => `https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}`,
@@ -5322,7 +5495,11 @@ function configuredJsonSearchBackendIds(args = {}, query = '') {
     if (hasConfiguredFirecrawlUrl(args)) {
         chain.push('firecrawl_search');
     }
-    chain.push('python_search', 'wikipedia_search', ...HTML_SEARCH_BACKEND_IDS);
+    chain.push('python_search', 'wikipedia_search');
+    if (isLikelyWikidataEntitySearch(query)) {
+        chain.push('wikidata_search');
+    }
+    chain.push(...HTML_SEARCH_BACKEND_IDS);
     return isLikelyGitHubSearch(query) ? ['github_repositories', ...chain] : chain;
 }
 
@@ -5345,6 +5522,9 @@ function expandSearchProviderToken(token = '', query = '', { includeFallback = t
     }
     if (normalized === 'wikipedia' || normalized === 'wikipedia_search') {
         return ['wikipedia_search'];
+    }
+    if (normalized === 'wikidata' || normalized === 'wikidata_search') {
+        return ['wikidata_search'];
     }
     if (normalized === 'external' || normalized === 'agent_web') {
         return configuredJsonSearchBackendIds(args, query);
@@ -6413,9 +6593,13 @@ function buildWebFetchResult({ url, args = {}, maxChars = MAX_FETCH_CHARS, fetch
     const firstFindLineEnd = firstFindOffset >= 0 ? sourceText.indexOf('\n', firstFindOffset) : -1;
     const firstFindFocusOffset = firstFindLineEnd >= 0 ? firstFindLineEnd + 1 : firstFindOffset;
     const requestedMaxLines = Number(args.maxLines || args.max_lines || 0);
-    const defaultViewportChars = Number.isFinite(requestedMaxLines) && requestedMaxLines > 0
+    const requestedLine = Number(args.lineno || args.lineNo || args.line_no || args.lineStart || args.line_start || 0);
+    const wideViewportChars = Number.isFinite(requestedMaxLines) && requestedMaxLines > 0
         ? Math.min(maxChars, Math.max(4800, Math.round(requestedMaxLines * 100)))
         : Math.min(maxChars, 4800);
+    const defaultViewportChars = Number.isFinite(requestedLine) && requestedLine > 1
+        ? Math.min(wideViewportChars, 5200)
+        : wideViewportChars;
     const maxViewportChars = Math.max(1000, Math.min(maxChars, MAX_FETCH_CHARS));
     const viewportChars = clampNumber(
         args.viewportChars || args.viewport_chars || defaultViewportChars,
@@ -6440,7 +6624,7 @@ function buildWebFetchResult({ url, args = {}, maxChars = MAX_FETCH_CHARS, fetch
         contentType,
         query: linkQuery,
         maxChars: viewportChars,
-        lineStart: args.lineno || args.lineNo || args.line_no || args.lineStart || args.line_start,
+        lineStart: requestedLine,
         lineEnd: args.lineEnd || args.line_end,
         maxLines: args.maxLines || args.max_lines,
         focus: sourceFocus
@@ -6544,6 +6728,12 @@ function buildWebFetchResult({ url, args = {}, maxChars = MAX_FETCH_CHARS, fetch
         has_more_after: sourceWindow.has_more_after ?? sourceWindow.hasMoreAfter,
         content_type: sourceWindow.content_type || sourceWindow.contentType,
         selection_reason: sourceWindow.selection_reason || sourceWindow.selectionReason,
+        overflow_previews: (Array.isArray(sourceWindow.overflowPreviews) ? sourceWindow.overflowPreviews : []).map((line) => pruneEmptyDeep({
+            lineno: line.lineno || line.lineNumber,
+            line_number: line.line_number || line.lineNumber,
+            text: line.text,
+            original_chars: line.originalChars
+        })),
         lines: (Array.isArray(sourceWindow.lines) ? sourceWindow.lines : []).map((line) => pruneEmptyDeep({
             lineno: line.lineno || line.lineNumber,
             line_number: line.line_number || line.lineNumber,
@@ -9920,7 +10110,7 @@ function wikidataApiUrl(baseUrl, params = {}) {
     for (const [key, value] of Object.entries({
         format: 'json',
         formatversion: '2',
-        maxlag: '5',
+        maxlag: '10',
         ...params
     })) {
         if (value !== undefined && value !== null && value !== '') {
@@ -9958,25 +10148,63 @@ function buildWikidataSearchVariants(query = '') {
     return [...new Set(variants)].slice(0, 5);
 }
 
+function normalizeWikidataJsonResponse(response = {}) {
+    const apiError = response?.json?.error;
+    if (!response.ok || !apiError || typeof apiError !== 'object') {
+        return response;
+    }
+    const code = normalizeString(apiError.code, 'api_error').toLowerCase().replace(/[^a-z0-9_-]+/g, '_');
+    return {
+        ...response,
+        ok: false,
+        errorCode: `wikidata_${code}`,
+        error: normalizeString(apiError.info || apiError.message, `Wikidata API error: ${code}`),
+        apiError: pruneEmptyDeep({
+            code,
+            lag: Number.isFinite(Number(apiError.lag)) ? Number(apiError.lag) : undefined,
+            type: normalizeString(apiError.type)
+        })
+    };
+}
+
+function wikidataRetryDelayMs(response = {}) {
+    const retryAfterSeconds = Number(response.retryAfter);
+    if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0) {
+        return Math.min(5000, Math.max(100, Math.ceil(retryAfterSeconds * 1000)));
+    }
+    const lagSeconds = Number(response.apiError?.lag);
+    if (Number.isFinite(lagSeconds) && lagSeconds > 0) {
+        return Math.min(5000, Math.max(100, Math.ceil(lagSeconds * 1000)));
+    }
+    return 1000;
+}
+
 async function fetchWikidataJson(url, timeoutMs) {
-    let first = await fetchJsonUrl(url, timeoutMs);
+    let first = normalizeWikidataJsonResponse(await fetchJsonUrl(url, timeoutMs));
     if (!first.ok && first.status === 0) {
-        const fallback = await fetchJsonUrlWithPowerShell(url, timeoutMs);
+        const fallback = normalizeWikidataJsonResponse(await fetchJsonUrlWithPowerShell(url, timeoutMs));
         if (fallback.ok) return fallback;
         first = {
             ...first,
             fallbackError: fallback.error || ''
         };
     }
-    if (first.ok || first.status !== 429) return first;
-    const retrySeconds = clampNumber(first.retryAfter, 1, 1, 30);
-    await new Promise((resolve) => setTimeout(resolve, retrySeconds * 1000));
-    const retry = await fetchJsonUrl(url, timeoutMs);
+    const retryable = first.status === 429 || first.errorCode === 'wikidata_maxlag';
+    if (first.ok || !retryable) return first;
+    await new Promise((resolve) => setTimeout(resolve, wikidataRetryDelayMs(first)));
+    let retry = normalizeWikidataJsonResponse(await fetchJsonUrl(url, timeoutMs));
     if (!retry.ok && retry.status === 0) {
-        const fallback = await fetchJsonUrlWithPowerShell(url, timeoutMs);
-        if (fallback.ok) return fallback;
+        const fallback = normalizeWikidataJsonResponse(await fetchJsonUrlWithPowerShell(url, timeoutMs));
+        if (fallback.ok) {
+            retry = fallback;
+        }
     }
-    return retry;
+    return {
+        ...retry,
+        retryCount: 1,
+        initialErrorCode: first.errorCode || (first.status === 429 ? 'http_429' : ''),
+        initialError: first.error || ''
+    };
 }
 
 function wikidataEntityId(value = {}) {
@@ -12749,6 +12977,25 @@ function buildSourceLineWindow(text = '', {
         });
     }
     const lineEndActual = selected.length ? selected[selected.length - 1].lineNumber : startLine;
+    const overflowPreviews = lineEndActual < targetEndLine
+        ? lines
+            .slice(lineEndActual, targetEndLine)
+            .map((textLine, offset) => ({
+                lineNumber: lineEndActual + offset + 1,
+                text: normalizeString(textLine),
+                originalChars: String(textLine || '').length
+            }))
+            .filter((line) => line.text)
+            .sort((a, b) => b.originalChars - a.originalChars || a.lineNumber - b.lineNumber)
+            .slice(0, 5)
+            .map((line) => ({
+                ...line,
+                text: truncateRelationText(line.text, 640),
+                rendered: `L${line.lineNumber}: ${truncateRelationText(line.text, 640)}`,
+                lineno: line.lineNumber,
+                line_number: line.lineNumber
+            }))
+        : [];
     const selectionReason = requestedLine
         ? 'requested_line_window'
         : normalizeString(query)
@@ -12784,6 +13031,8 @@ function buildSourceLineWindow(text = '', {
         selectionReason,
         selection_reason: selectionReason,
         focus: focus || undefined,
+        overflowPreviews,
+        overflow_previews: overflowPreviews,
         lines: selected.map((line) => ({
             ...line,
             lineno: line.lineNumber,
@@ -12841,6 +13090,10 @@ function formatSourceLineWindow(sourceWindow = {}) {
         .map((line) => normalizeString(line.rendered))
         .filter(Boolean)
         .join('\n');
+    const overflowPreviewLines = (Array.isArray(sourceWindow.overflowPreviews) ? sourceWindow.overflowPreviews : [])
+        .map((line) => normalizeString(line.rendered))
+        .filter(Boolean)
+        .join('\n');
     return [
         'Source viewport:',
         `Content type: ${normalizeString(sourceWindow.content_type || sourceWindow.contentType, 'text/plain')}`,
@@ -12850,6 +13103,8 @@ function formatSourceLineWindow(sourceWindow = {}) {
         `Has more before: ${(sourceWindow.has_more_before ?? sourceWindow.hasMoreBefore) ? 'true' : 'false'}`,
         `Has more after: ${(sourceWindow.has_more_after ?? sourceWindow.hasMoreAfter) ? 'true' : 'false'}`,
         'Note: this is a focused source viewport, not a failed or incomplete fetch. If it contains enough answer-bearing evidence, answer. If a specific field is missing, fetch another line window or query-focused window. For first/earliest/latest/only/all/count questions, a partial viewport is sufficient only when it establishes the relevant candidate-set boundary; otherwise inspect the remaining relevant lines or sections.',
+        overflowPreviewLines ? 'Longest source rows from the explicitly requested range that fell beyond the contiguous character window:' : '',
+        overflowPreviewLines,
         '',
         renderedLines
     ].filter((line) => line !== '').join('\n');
@@ -13047,6 +13302,38 @@ function formatAnswerCandidates(candidates = []) {
 function extractLinksFromHtml(html = '', baseUrl = '', maxLinks = 80) {
     const links = [];
     const seen = new Map();
+    const addLink = (rawHref = '', rawText = '', options = {}) => {
+        if (links.length >= maxLinks) {
+            return;
+        }
+        let href = decodeHtml(rawHref).trim();
+        if (!href || href.startsWith('#') || /^javascript:/i.test(href)) {
+            return;
+        }
+        try {
+            href = new URL(href, baseUrl).href;
+        } catch {
+            return;
+        }
+        const text = normalizeString(rawText).slice(0, 240);
+        if (seen.has(href)) {
+            const existing = seen.get(href);
+            if (existing && !normalizeString(existing.text) && text) {
+                existing.text = text;
+            }
+            if (existing && options.explicitResource === true) {
+                existing.explicitResource = true;
+            }
+            return;
+        }
+        const link = {
+            url: href,
+            text,
+            ...(options.explicitResource === true ? { explicitResource: true } : {})
+        };
+        seen.set(href, link);
+        links.push(link);
+    };
     const textById = new Map();
     const idPattern = /<([a-z0-9]+)\b[^>]*\bid=["']([^"']+)["'][^>]*>([\s\S]*?)<\/\1>/gi;
     let idMatch;
@@ -13057,18 +13344,24 @@ function extractLinksFromHtml(html = '', baseUrl = '', maxLinks = 80) {
             textById.set(id, text);
         }
     }
+
+    const metadataTagPattern = /<(?:meta|link)\b[^>]*>/gi;
+    let metadataMatch;
+    while ((metadataMatch = metadataTagPattern.exec(html)) && links.length < maxLinks) {
+        const tag = metadataMatch[0];
+        const name = normalizeString(extractHtmlAttribute(tag, 'name') || extractHtmlAttribute(tag, 'property')).toLowerCase();
+        const type = normalizeString(extractHtmlAttribute(tag, 'type')).toLowerCase();
+        const rel = normalizeString(extractHtmlAttribute(tag, 'rel')).toLowerCase();
+        if (name === 'citation_pdf_url') {
+            addLink(extractHtmlAttribute(tag, 'content'), 'PDF metadata', { explicitResource: true });
+        } else if (type === 'application/pdf' && /(?:^|\s)alternate(?:\s|$)/i.test(rel)) {
+            addLink(extractHtmlAttribute(tag, 'href'), 'PDF alternate', { explicitResource: true });
+        }
+    }
+
     const pattern = /<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
     let match;
     while ((match = pattern.exec(html)) && links.length < maxLinks) {
-        let href = decodeHtml(match[1]).trim();
-        if (!href || href.startsWith('#') || /^javascript:/i.test(href)) {
-            continue;
-        }
-        try {
-            href = new URL(href, baseUrl).href;
-        } catch {
-            continue;
-        }
         let text = stripHtml(match[2]).slice(0, 240);
         const ariaLabelledBy = match[0].match(/\baria-labelledby=["']([^"']+)["']/i);
         if (ariaLabelledBy && /^(?:pdf|download|full text|view pdf)?$/i.test(normalizeString(text))) {
@@ -13082,19 +13375,7 @@ function extractLinksFromHtml(html = '', baseUrl = '', maxLinks = 80) {
                 text = normalizeString(`${labelText} ${text}`.trim()).slice(0, 240);
             }
         }
-        if (seen.has(href)) {
-            const existing = seen.get(href);
-            if (existing && !normalizeString(existing.text) && normalizeString(text)) {
-                existing.text = text;
-            }
-            continue;
-        }
-        const link = {
-            url: href,
-            text
-        };
-        seen.set(href, link);
-        links.push(link);
+        addLink(match[1], text);
     }
     return links;
 }
@@ -16050,8 +16331,10 @@ module.exports = {
     extractWikipediaPageTitle,
     extractYahooResults,
     expandStructuredSourceText,
+    extractWikidataEntitySearchTerms,
     filterSearchResultsByDomains,
     inferPaperMetadataArgsFromScholarlyQuery,
+    isLikelyWikidataEntitySearch,
     fetchArchiveIndexText,
     fetchText,
     fetchTextWithCurl,
@@ -16079,6 +16362,7 @@ module.exports = {
     readSpreadsheet,
     resolveSubprocessCwd,
     runPythonFile,
+    runWikidataSearchBackend,
     SEARCH_BACKENDS,
     stripWikiText,
     transcribeAudio,

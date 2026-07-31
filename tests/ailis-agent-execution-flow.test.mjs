@@ -16,6 +16,7 @@ const {
     buildLosslessToolObservationDigest,
     buildTaskRunHandoffPackage,
     buildAgentDecisionLowLatencyPayload,
+    buildTaskAgentFinalizationContext,
     collectExplicitAnswerCandidatesFromStepResult,
     mergeAnswerCandidateLedger,
     selectBestAnswerCandidate,
@@ -1265,6 +1266,61 @@ test('Agent model-facing observation digest summarizes large tool args', () => {
     assert.match(digest[0].args.content.sha1, /^[a-f0-9]{12}$/);
     assert.ok(JSON.stringify(digest).length < 1800);
     assert.doesNotMatch(JSON.stringify(digest), /solver"\)\nprint\("solver"\)\nprint\("solver/);
+});
+
+test('TaskAgent finalization keeps recent observations high fidelity instead of flattening all work rounds', () => {
+    const stepResults = Array.from({ length: 8 }, (_, index) => ({
+        id: `step-${index + 1}`,
+        title: `Evidence step ${index + 1}`,
+        tool: index === 5
+            ? 'mcp__ailis_research__open_page'
+            : index === 7
+                ? 'mcp__ailis_research__open_page'
+                : 'web_fetch',
+        args: {
+            query: `evidence query ${index + 1}`,
+            context: `argument filler ${index + 1} `.repeat(80)
+        },
+        response: {
+            ok: true,
+            status: 'completed',
+            result: {
+                content: [{
+                    type: 'text',
+                    text: index === 1
+                        ? `stale_early_guess=2821\n${'early evidence filler '.repeat(200)}`
+                        : index === 5
+                            ? `${'authoritative source prefix '.repeat(20)}bounded_count=2732 cutoff=2023-06-30\n${'authoritative source suffix '.repeat(70)}`
+                        : index === 7
+                            ? `${'late verification '.repeat(40)}source_complete=true\n${'late suffix '.repeat(30)}`
+                            : `intermediate evidence ${index + 1}\n${'observation filler '.repeat(220)}`
+                }]
+            }
+        }
+    }));
+
+    const defaultDigest = buildToolObservationDigest(stepResults);
+    assert.deepEqual(defaultDigest.map((item) => item.id), [
+        'step-5',
+        'step-6',
+        'step-7',
+        'step-8'
+    ]);
+
+    const context = buildTaskAgentFinalizationContext({
+        message: 'How many edits were made through June 2023?',
+        stepResults,
+        exactAnswerMode: true
+    });
+
+    assert.doesNotMatch(context, /"id": "step-[1-4]"/);
+    for (let index = 5; index <= 8; index += 1) {
+        assert.match(context, new RegExp(`"id": "step-${index}"`));
+    }
+    assert.match(context, /bounded_count=2732 cutoff=2023-06-30/);
+    assert.doesNotMatch(context, /stale_early_guess=2821/);
+    assert.match(context, /source_complete=true/);
+    assert.ok(context.length <= 18000);
 });
 
 test('Agent exact-answer audit flags unknown evidence refs when evidence exists', () => {
