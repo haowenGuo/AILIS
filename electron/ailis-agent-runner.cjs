@@ -51,6 +51,7 @@ const {
     responseItemsToChatMessages
 } = require('./ailis-model-input-builder.cjs');
 const {
+    collectSourceViewportLinks,
     normalizeToolOutput,
     sanitizeWebToolTextForModel,
     toolOutputToResponseItems,
@@ -8377,6 +8378,7 @@ function canonicalSourceViewportForPrompt(value = {}, context = {}) {
     const lineEnd = Number(source.line_end || source.lineEnd || lineStart) || lineStart;
     const totalLines = Number(source.total_lines || source.totalLines || 0) || undefined;
     const pattern = normalizeText(source.pattern || action.pattern || context.pattern);
+    const links = collectSourceViewportLinks(source);
     return cleanPromptObject({
         type: 'source_viewport',
         action: cleanPromptObject({
@@ -8394,6 +8396,7 @@ function canonicalSourceViewportForPrompt(value = {}, context = {}) {
         has_more_after: source.has_more_after ?? source.hasMoreAfter,
         content_type: source.content_type || source.contentType,
         selection_reason: source.selection_reason || source.selectionReason,
+        links: links.length ? links : undefined,
         lines: (Array.isArray(source.lines) ? source.lines : []).map((line) => cleanPromptObject({
             lineno: Number(line.lineno || line.line_number || line.lineNumber || 0) || undefined,
             text: line.text
@@ -8418,6 +8421,7 @@ function canonicalSourceViewportResultForPrompt(value = {}, context = {}) {
     if (!sourceViewport) {
         return null;
     }
+    const links = collectSourceViewportLinks(value);
     const matches = (Array.isArray(value.matches) ? value.matches : []).map((match) => cleanPromptObject({
         lineno: Number(match.lineno || match.line_number || match.lineNumber || 0) || undefined,
         text: match.text
@@ -8425,7 +8429,10 @@ function canonicalSourceViewportResultForPrompt(value = {}, context = {}) {
     return cleanPromptObject({
         type: sourceViewport.action?.type === 'find_in_page' ? 'find_in_page' : 'open_page',
         action: sourceViewport.action,
-        source_viewport: sourceViewport,
+        source_viewport: cleanPromptObject({
+            ...sourceViewport,
+            links: links.length ? links : sourceViewport.links
+        }),
         match_count: matches.length ? matches.length : undefined,
         matches: matches.length ? matches : undefined
     });

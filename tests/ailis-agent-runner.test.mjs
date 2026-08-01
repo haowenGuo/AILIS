@@ -1399,6 +1399,54 @@ test('canonical source viewport preserves bounded overflow rows in model input',
     assert.match(serializedItems, /L233: The requested relationship is TARGET_OVERFLOW_EVIDENCE/);
 });
 
+test('canonical source viewport preserves bounded structured section links in model input', () => {
+    const execution = {
+        id: 'source-viewport-links-1',
+        tool: 'web_run',
+        args: { open: [{ ref_id: 'https://example.test/journal', lineno: 234 }] },
+        response: {
+            ok: true,
+            status: 'completed',
+            result: {
+                content: [{ type: 'text', text: 'L235: View All Issues\nL237: Example Journal' }],
+                structuredContent: {
+                    ref_id: 'turn6view0',
+                    sourceWindow: {
+                        type: 'source_viewport',
+                        url: 'https://example.test/journal',
+                        ref_id: 'turn6view0',
+                        totalLines: 238,
+                        lineStart: 234,
+                        lineEnd: 238,
+                        lines: [
+                            { lineno: 235, text: 'View All Issues' },
+                            { lineno: 237, text: 'Example Journal' }
+                        ]
+                    },
+                    htmlRelations: {
+                        sections: [{
+                            heading: 'Example Journal',
+                            links: [
+                                { text: 'Current', url: 'https://example.test/journal/issue/current' },
+                                { text: 'Archives', url: 'https://example.test/journal/issue/archive' }
+                            ]
+                        }]
+                    }
+                }
+            }
+        }
+    };
+    const toolOutput = normalizeToolOutput(execution);
+    const serializedItems = JSON.stringify(toolOutputToResponseItems(toolOutput));
+    const [digest] = buildToolObservationDigest([execution]);
+    const serializedDigest = JSON.stringify(digest);
+
+    assert.match(serializedItems, /Archives/);
+    assert.match(serializedItems, /https:\/\/example\.test\/journal\/issue\/archive/);
+    assert.match(serializedDigest, /Archives/);
+    assert.match(serializedDigest, /https:\/\/example\.test\/journal\/issue\/archive/);
+});
+
 test('finalization budget keeps source evidence ahead of web navigation metadata', () => {
     const navigationFiller = 'navigation metadata '.repeat(90);
     const lines = Array.from({ length: 45 }, (_, index) => ({
