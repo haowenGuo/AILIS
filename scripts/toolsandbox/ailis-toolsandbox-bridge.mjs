@@ -30,7 +30,7 @@ function loadDesktopLlmSettings() {
         return {
             provider: 'codex-model-bridge',
             baseUrl: 'codex://chatgpt-oauth',
-            model: normalizeText(bridgeConfig.codexModel, 'gpt-5.5'),
+            model: normalizeText(bridgeConfig.codexModel, 'gpt-5.6-luna'),
             apiKey: '',
             authMode: 'chatgpt_oauth',
             reasoningEffort,

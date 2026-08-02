@@ -613,7 +613,7 @@ describe('Codex model bridge', () => {
         });
 
         assert.equal(getDefaultProviderBaseUrl('codex-model-bridge'), 'codex://chatgpt-oauth');
-        assert.equal(getDefaultProviderModel('codex-model-bridge'), 'gpt-5.5');
+        assert.equal(getDefaultProviderModel('codex-model-bridge'), 'gpt-5.6-luna');
         assert.equal(capabilities.transport, 'codex-responses-native');
         assert.equal(capabilities.nativeToolCalling, true);
         assert.equal(capabilities.vision, true);

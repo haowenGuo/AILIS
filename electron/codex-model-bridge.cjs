@@ -12,7 +12,7 @@ const {
 } = require('./ailis-response-model.cjs');
 
 const CODEX_MODEL_BRIDGE_PROVIDER = 'codex-model-bridge';
-const DEFAULT_CODEX_MODEL = 'gpt-5.5';
+const DEFAULT_CODEX_MODEL = 'gpt-5.6-luna';
 const DEFAULT_CODEX_REASONING_EFFORT = 'medium';
 const CODEX_BRIDGE_PROTOCOL_VERSION = 2;
 const CODEX_HTTP_MODEL_PROVIDER = 'ailis-chatgpt-http';

@@ -86,7 +86,7 @@ try {
     const result = await callDesktopLlmProvider({
         provider: 'codex-model-bridge',
         baseUrl: 'codex://chatgpt-oauth',
-        model: process.env.AILIS_CODEX_MODEL || 'gpt-5.5',
+        model: process.env.AILIS_CODEX_MODEL || 'gpt-5.6-luna',
         reasoningEffort: process.env.AILIS_CODEX_REASONING_EFFORT || 'low',
         timeoutMs: 180000
     }, {

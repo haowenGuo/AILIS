@@ -46,7 +46,6 @@ function parseArgs(argv = process.argv.slice(2)) {
         taskIds: [],
         offset: 0,
         limit: 0,
-        maxAgentSteps: 20,
         requestTimeoutMs: 300000,
         llmTimeoutMs: 120000,
         temperature: 0.2,
@@ -60,8 +59,10 @@ function parseArgs(argv = process.argv.slice(2)) {
         debugRounds: 1,
         planOnly: false,
         resume: true,
-        codexModelBridge: parseBoolEnv(process.env.AILIS_EVAL_CODEX_MODEL_BRIDGE),
-        codexModel: normalizeText(process.env.AILIS_CODEX_MODEL, 'gpt-5.5'),
+        codexModelBridge: process.env.AILIS_EVAL_CODEX_MODEL_BRIDGE === undefined
+            ? true
+            : parseBoolEnv(process.env.AILIS_EVAL_CODEX_MODEL_BRIDGE),
+        codexModel: normalizeText(process.env.AILIS_CODEX_MODEL, 'gpt-5.6-luna'),
         codexReasoningEffort: normalizeText(process.env.AILIS_CODEX_REASONING_EFFORT, 'medium'),
         costInputPerMillion: Number(process.env.AILIS_EVAL_INPUT_USD_PER_1M || 0),
         costOutputPerMillion: Number(process.env.AILIS_EVAL_OUTPUT_USD_PER_1M || 0)
@@ -77,7 +78,7 @@ function parseArgs(argv = process.argv.slice(2)) {
         else if (token === '--task-ids') args.taskIds = next().split(/[,+\s]+/).map((item) => normalizeText(item)).filter(Boolean);
         else if (token === '--offset') args.offset = Math.max(0, Number(next()) || 0);
         else if (token === '--limit') args.limit = Math.max(0, Number(next()) || 0);
-        else if (token === '--max-agent-steps') args.maxAgentSteps = Math.max(1, Math.min(Number(next()) || args.maxAgentSteps, 80));
+        else if (token === '--max-agent-steps') next();
         else if (token === '--request-timeout-ms') args.requestTimeoutMs = Math.max(30000, Number(next()) || args.requestTimeoutMs);
         else if (token === '--llm-timeout-ms') args.llmTimeoutMs = Math.max(30000, Number(next()) || args.llmTimeoutMs);
         else if (token === '--temperature') args.temperature = Math.min(Math.max(Number(next()) || args.temperature, 0), 2);
@@ -95,12 +96,13 @@ function parseArgs(argv = process.argv.slice(2)) {
         else if (token === '--debug-break-after-round') args.debugBreakAfterRound = true;
         else if (token === '--debug-rounds') {
             args.debugBreakAfterRound = true;
-            args.debugRounds = Math.max(1, Math.min(Number(next()) || 1, args.maxAgentSteps));
+            args.debugRounds = Math.max(1, Math.min(Number(next()) || 1, 80));
         }
         else if (token === '--plan-only') args.planOnly = true;
         else if (token === '--resume') args.resume = true;
         else if (token === '--no-resume') args.resume = false;
         else if (token === '--codex-model-bridge') args.codexModelBridge = true;
+        else if (token === '--no-codex-model-bridge') args.codexModelBridge = false;
         else if (token === '--codex-model') args.codexModel = normalizeText(next(), args.codexModel);
         else if (token === '--codex-reasoning-effort') args.codexReasoningEffort = normalizeText(next(), args.codexReasoningEffort);
         else if (token === '--cost-input-per-1m') args.costInputPerMillion = Number(next()) || 0;
@@ -356,8 +358,6 @@ function buildDesktopRealPayload({ args, task, llmSettings }) {
         exactAnswerMode: true,
         memoryPolicy: 'disabled',
         executionProfile: { kind: 'exact_answer_eval', answerOnly: true },
-        maxAgentSteps: args.maxAgentSteps,
-        maxSteps: args.maxAgentSteps,
         llmSettings,
         directToolExecutor: args.directToolExecutor,
         nativeDirectTools: args.directToolExecutor,
@@ -372,7 +372,6 @@ function buildDesktopRealPayload({ args, task, llmSettings }) {
             executionProfile: { kind: 'exact_answer_eval', answerOnly: true },
             evaluationTaskId: task.task_id,
             evaluationName: 'gaia_desktop_real',
-            maxAgentSteps: args.maxAgentSteps,
             llmSettings,
             directToolExecutor: args.directToolExecutor,
             nativeDirectTools: args.directToolExecutor,
@@ -1496,6 +1495,7 @@ export {
     configureResearchMcpLlmEnvironment,
     isIncompleteStatus,
     normalizeAnswerForScore,
+    parseArgs,
     scoreVisibleAnswer,
     splitListAnswerInOrder,
     summarizeEvents

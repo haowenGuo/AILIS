@@ -16,21 +16,16 @@ const {
     buildLosslessToolObservationDigest,
     buildTaskRunHandoffPackage,
     buildAgentDecisionLowLatencyPayload,
-    buildTaskAgentFinalizationContext,
     collectExplicitAnswerCandidatesFromStepResult,
     mergeAnswerCandidateLedger,
     selectBestAnswerCandidate,
-    hasCompleteToolObservationForFinalization,
     hasBlockingExactAnswerAuditErrors,
-    resolvePostToolFinalizationDecisionTimeoutMs,
     buildExactAnswerRecoveryToolAffordanceNote,
-    canStartExactAnswerAuditRecovery,
     isExactAnswerExecutionMode,
     isAgentDecisionDeepThinkingMode,
     isDeepThinkingAgentDecisionModel,
     looksLikeSelfContainedExactAnswerQuestion,
     normalizeExactAnswerSubmission,
-    resolveExactAnswerAuditFinalizationIteration,
     resolveAgentDirectToolChoice,
     resolveAgentDecisionSettings,
     resolveAgentDecisionTimeoutMs,
@@ -403,54 +398,6 @@ test('Completed-with-warnings handoff returns a preserved answer instead of fail
     assert.equal(handoff.ok, true);
     assert.equal(handoff.userVisibleSummary, '4');
     assert.equal(handoff.bestAnswerCandidate.answer, '4');
-});
-
-test('Complete untruncated tool observations reserve a bounded exact-answer finalization window', () => {
-    const stepResults = [{
-        id: 'read-presentation',
-        tool: 'mcp__ailis_research__read_presentation',
-        response: {
-            ok: true,
-            status: 'completed',
-            result: {
-                structuredContent: {
-                    observationContract: {
-                        complete: true,
-                        truncated: false,
-                        coverage: { totalSlides: 8, returnedSlides: 8 }
-                    }
-                }
-            }
-        }
-    }];
-
-    assert.equal(hasCompleteToolObservationForFinalization(stepResults), true);
-    assert.equal(resolvePostToolFinalizationDecisionTimeoutMs(300000, {
-        exactAnswerMode: true,
-        stepResults,
-        requestContext: {}
-    }), 120000);
-    assert.equal(resolvePostToolFinalizationDecisionTimeoutMs(300000, {
-        exactAnswerMode: true,
-        stepResults,
-        requestContext: { postToolFinalizationTimeoutMs: 45000 }
-    }), 45000);
-    assert.equal(resolvePostToolFinalizationDecisionTimeoutMs(300000, {
-        exactAnswerMode: false,
-        stepResults,
-        requestContext: {}
-    }), 300000);
-    assert.equal(resolvePostToolFinalizationDecisionTimeoutMs(300000, {
-        exactAnswerMode: true,
-        stepResults: [{
-            ...stepResults[0],
-            response: {
-                ...stepResults[0].response,
-                result: { structuredContent: { observationContract: { complete: false } } }
-            }
-        }],
-        requestContext: {}
-    }), 300000);
 });
 
 test('Agent decision model routing avoids deep-thinking models unless explicit or unavoidable', () => {
@@ -1269,61 +1216,6 @@ test('Agent model-facing observation digest summarizes large tool args', () => {
     assert.doesNotMatch(JSON.stringify(digest), /solver"\)\nprint\("solver"\)\nprint\("solver/);
 });
 
-test('TaskAgent finalization keeps recent observations high fidelity instead of flattening all work rounds', () => {
-    const stepResults = Array.from({ length: 8 }, (_, index) => ({
-        id: `step-${index + 1}`,
-        title: `Evidence step ${index + 1}`,
-        tool: index === 5
-            ? 'mcp__ailis_research__open_page'
-            : index === 7
-                ? 'mcp__ailis_research__open_page'
-                : 'web_fetch',
-        args: {
-            query: `evidence query ${index + 1}`,
-            context: `argument filler ${index + 1} `.repeat(80)
-        },
-        response: {
-            ok: true,
-            status: 'completed',
-            result: {
-                content: [{
-                    type: 'text',
-                    text: index === 1
-                        ? `stale_early_guess=2821\n${'early evidence filler '.repeat(200)}`
-                        : index === 5
-                            ? `${'authoritative source prefix '.repeat(20)}bounded_count=2732 cutoff=2023-06-30\n${'authoritative source suffix '.repeat(70)}`
-                        : index === 7
-                            ? `${'late verification '.repeat(40)}source_complete=true\n${'late suffix '.repeat(30)}`
-                            : `intermediate evidence ${index + 1}\n${'observation filler '.repeat(220)}`
-                }]
-            }
-        }
-    }));
-
-    const defaultDigest = buildToolObservationDigest(stepResults);
-    assert.deepEqual(defaultDigest.map((item) => item.id), [
-        'step-5',
-        'step-6',
-        'step-7',
-        'step-8'
-    ]);
-
-    const context = buildTaskAgentFinalizationContext({
-        message: 'How many edits were made through June 2023?',
-        stepResults,
-        exactAnswerMode: true
-    });
-
-    assert.doesNotMatch(context, /"id": "step-[1-4]"/);
-    for (let index = 5; index <= 8; index += 1) {
-        assert.match(context, new RegExp(`"id": "step-${index}"`));
-    }
-    assert.match(context, /bounded_count=2732 cutoff=2023-06-30/);
-    assert.doesNotMatch(context, /stale_early_guess=2821/);
-    assert.match(context, /source_complete=true/);
-    assert.ok(context.length <= 18000);
-});
-
 test('Agent exact-answer audit flags unknown evidence refs when evidence exists', () => {
     const stepResult = attachAgentEvidenceArtifacts({
         id: 'step-2',
@@ -1613,46 +1505,6 @@ test('Agent exact-answer relation recovery diagnoses structured lookups that omi
             }
         }]
     }), null);
-});
-
-test('Agent exact-answer audit reserves bounded recovery and final submission rounds', () => {
-    assert.equal(resolveExactAnswerAuditFinalizationIteration({
-        currentFinalizationIteration: 8,
-        baseFinalizationIteration: 8,
-        auditIteration: 3,
-        recoveryToolCalls: 2
-    }), 8);
-    assert.equal(resolveExactAnswerAuditFinalizationIteration({
-        currentFinalizationIteration: 8,
-        baseFinalizationIteration: 8,
-        auditIteration: 7,
-        recoveryToolCalls: 2
-    }), 11);
-    assert.equal(resolveExactAnswerAuditFinalizationIteration({
-        currentFinalizationIteration: 11,
-        baseFinalizationIteration: 8,
-        auditIteration: 10,
-        recoveryToolCalls: 2
-    }), 14);
-    assert.equal(resolveExactAnswerAuditFinalizationIteration({
-        currentFinalizationIteration: 14,
-        baseFinalizationIteration: 8,
-        auditIteration: 14,
-        recoveryToolCalls: 2
-    }), 15);
-    assert.equal(resolveExactAnswerAuditFinalizationIteration({
-        currentFinalizationIteration: 14,
-        baseFinalizationIteration: 8,
-        auditIteration: 14,
-        recoveryToolCalls: 0
-    }), 15);
-    assert.equal(resolveExactAnswerAuditFinalizationIteration({
-        currentFinalizationIteration: 14,
-        baseFinalizationIteration: 8,
-        auditIteration: 14,
-        recoveryToolCalls: 0,
-        finalSubmissionReserve: 0
-    }), 14);
 });
 
 test('Agent exact-answer audit advances to the next unattempted recovery gap', () => {
@@ -1972,23 +1824,6 @@ test('Agent exact-answer relation audit catches submitted cities that disagree w
     assert.equal(gap.error, 'selector_terminal_relation_answer_mismatch');
     assert.deepEqual(gap.unmatchedLabels, ['Quincy']);
     assert.ok(gap.relationCandidates.includes('Braintree'));
-});
-
-test('Agent exact-answer audit can extend only the ordinary tool-round boundary', () => {
-    assert.equal(canStartExactAnswerAuditRecovery({
-        iteration: 8,
-        finalizationIteration: 8,
-        safetyFinalizationReason: 'maximum_tool_rounds'
-    }), true);
-    assert.equal(canStartExactAnswerAuditRecovery({
-        iteration: 8,
-        finalizationIteration: 8,
-        safetyFinalizationReason: 'time_budget'
-    }), false);
-    assert.equal(canStartExactAnswerAuditRecovery({
-        iteration: 9,
-        finalizationIteration: 8
-    }), false);
 });
 
 test('Agent exact-answer recovery promotes schema-matched relation tools without forcing a route', () => {

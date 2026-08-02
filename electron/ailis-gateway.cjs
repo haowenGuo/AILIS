@@ -86,7 +86,6 @@ const DEFAULT_HTTP_REQUEST_TIMEOUT_MS = Math.max(0, Number(process.env.AILIS_GAT
 const DEFAULT_PROFILE_CURATION_START_DELAY_MS = Number(process.env.AILIS_PROFILE_CURATION_START_DELAY_MS || 60 * 1000);
 const DEFAULT_PROFILE_CURATION_CHECK_INTERVAL_MS = Number(process.env.AILIS_PROFILE_CURATION_CHECK_INTERVAL_MS || 6 * 60 * 60 * 1000);
 const DEFAULT_PROFILE_CURATION_DEBOUNCE_MS = Number(process.env.AILIS_PROFILE_CURATION_DEBOUNCE_MS || 2 * 60 * 1000);
-const TASK_AGENT_MAX_MODEL_ROUNDS = 9;
 
 const GATEWAY_BACKED_TOOL_IDS = new Set(['sessions_list', 'gateway', 'cron', 'nodes']);
 const SESSION_BOUND_TOOL_IDS = new Set([
@@ -1536,7 +1535,6 @@ class AILISGateway extends EventEmitter {
         this.taskAgentHarness = options.taskAgentHarness || new AILISSystemTaskAgentHarness({
             rootDir: path.join(this.auditDir, 'task-agent-harness'),
             taskResultCapsules: this.taskResultCapsules,
-            maxAgentSteps: TASK_AGENT_MAX_MODEL_ROUNDS,
             executeTaskAgent: (payload) => this.executeTaskAgent(payload),
             emitEvent: (type, payload) => this.emitGatewayEvent(type, payload)
         });
@@ -3340,14 +3338,6 @@ class AILISGateway extends EventEmitter {
             : Array.isArray(context.fileAttachments)
                 ? context.fileAttachments
                 : [];
-        const requestedMaxAgentSteps = Number(args.maxAgentSteps || context.maxAgentSteps || TASK_AGENT_MAX_MODEL_ROUNDS);
-        const taskAgentMaxSteps = Math.max(
-            1,
-            Math.min(
-                Number.isFinite(requestedMaxAgentSteps) ? requestedMaxAgentSteps : TASK_AGENT_MAX_MODEL_ROUNDS,
-                TASK_AGENT_MAX_MODEL_ROUNDS
-            )
-        );
         const childContext = this.mergeDefaultContext({
             ...context,
             ...(parentLlmSettings ? { llmSettings: parentLlmSettings } : {}),
@@ -3367,8 +3357,7 @@ class AILISGateway extends EventEmitter {
             taskAgentInheritanceMode: inheritanceMode,
             initialContextManagerCheckpoint: inheritedCheckpoint,
             attachments,
-            fileAttachments: attachments,
-            maxAgentSteps: taskAgentMaxSteps
+            fileAttachments: attachments
         });
         await onEvent?.({
             type: 'subagent.runner.started',
@@ -3393,7 +3382,6 @@ class AILISGateway extends EventEmitter {
             taskAgentInheritanceMode: inheritanceMode,
             initialContextManagerCheckpoint: inheritedCheckpoint,
             initialStepResults: Array.isArray(args.initialStepResults) ? args.initialStepResults : [],
-            maxAgentSteps: taskAgentMaxSteps,
             context: childContext
         });
         const unregisterInputHandler = typeof registerInputHandler === 'function'

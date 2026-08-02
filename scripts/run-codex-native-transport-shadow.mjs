@@ -183,7 +183,7 @@ await fs.mkdir(outputDir, { recursive: true });
 const results = await readJsonLines(path.join(sourceRoot, 'p1', 'results.jsonl'));
 const resultByTask = new Map(results.map((row) => [row.task_id, row]));
 const settings = {
-    model: String(args.model || 'gpt-5.5'),
+    model: String(args.model || 'gpt-5.6-luna'),
     reasoningEffort: String(args.effort || 'medium'),
     timeoutMs: Number(args.timeout || 120000),
     codexBridgeMaxAttempts: 1

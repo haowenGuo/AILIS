@@ -1612,8 +1612,8 @@ test('Agentic Executor can execute real native direct tool calls before JSON pla
             false
         );
         assert.equal(llmServer.calls[0].payload.tool_choice, 'auto');
-        assert.equal(llmServer.calls[1].payload.tool_choice, 'none');
-        assert.deepEqual(llmServer.calls[1].payload.tools || [], []);
+        assert.equal(llmServer.calls[1].payload.tool_choice, 'auto');
+        assert.ok((llmServer.calls[1].payload.tools || []).length > 0);
         assert.match(llmServer.calls[0].payload.messages[0].content, /Responses-Compatible Tool Runtime/);
         assert.equal(result.body.steps[0].tool, 'write');
     } finally {
@@ -2442,72 +2442,33 @@ test('Agentic Executor skips vision confirmation when full computer control is e
     }
 });
 
-test('Agentic Executor max-step fallback does not expose raw tool logs to the user', async () => {
-    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-max-step-'));
-    await fs.writeFile(path.join(workspaceRoot, 'note.txt'), 'secret-ish line\n'.repeat(80), 'utf8');
-    const llmServer = await createScriptedChatCompletionsServer(() => ({
-        mode: 'task',
-        intent: 'discover_until_limit',
-        summary: '查找本地文件读取能力',
-        action: 'tool',
-        tool_call: {
-            tool: 'tool_search',
-            title: '查找文件读取工具',
-            args: { query: 'read local text file' }
-        }
-    }));
-    const llmSettings = {
-        provider: 'openai-compatible',
-        baseUrl: llmServer.url,
-        apiKey: 'test-key',
-        model: 'mock-max-step-agent',
-        temperature: 0.1,
-        timeoutMs: 10000
-    };
-    const gateway = new AILISGateway({
-        port: 0,
-        workspaceRoot,
-        projectRoot: path.resolve('.'),
-        auditDir: path.join(workspaceRoot, '.audit')
-    });
-
-    try {
-        const status = await gateway.start();
-        const result = await runAgent(status.url, {
-            sessionId: 'max-step-test',
-            message: '检查 note.txt',
-            agentLoop: 'llm',
-            maxAgentSteps: 1,
-            llmSettings,
-            context: { workspace: workspaceRoot, agentRole: 'task_agent' }
-        });
-        assert.equal(result.body.ok, false);
-        assert.equal(result.body.status, 'max_steps_reached');
-        assert.match(result.body.displayText, /先停住|还没有形成足够稳的结论/);
-        assert.doesNotMatch(result.body.displayText, /```|secret-ish line|Agentic Executor|我已经做过这些步骤|读取 note\.txt：完成/);
-        assert.equal(result.body.surface.source, 'agent_max_steps_handoff');
-        assert.equal(result.body.surface.bubbleText, '我整理好执行现场了。');
-        assert.equal(result.body.steps.length, 1);
-    } finally {
-        await gateway.stop();
-        await llmServer.close();
-    }
-});
-
-test('TaskAgent clamps caller-requested execution to eight work rounds plus one finalization round', async () => {
-    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-task-agent-seven-rounds-'));
+test('TaskAgent ignores the legacy round cap, compacts canonical history, and ends on the model final', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-task-agent-natural-termination-'));
     await fs.writeFile(path.join(workspaceRoot, 'note.txt'), 'evidence\n', 'utf8');
-    const llmServer = await createScriptedChatCompletionsServer(() => ({
-        mode: 'task',
-        intent: 'bounded_task',
-        summary: '继续读取证据',
-        action: 'tool',
-        tool_call: {
-            tool: 'exec',
-            title: '读取证据',
-            args: { command: 'powershell -NoProfile -Command "Get-Content -LiteralPath note.txt"' }
+    const llmServer = await createScriptedChatCompletionsServer(({ decisionCount }) => {
+        if (decisionCount <= 10) {
+            return {
+                mode: 'task',
+                intent: 'long_task',
+                summary: `收集第 ${decisionCount} 份证据`,
+                action: 'tool',
+                tool_call: {
+                    tool: 'exec',
+                    title: `读取证据 ${decisionCount}`,
+                    args: {
+                        command: `powershell -NoProfile -Command "$value = 'evidence-${decisionCount} '; Write-Output ($value * 800)"`
+                    }
+                }
+            };
         }
-    }));
+        return {
+            mode: 'task',
+            intent: 'long_task',
+            summary: '证据已经充分',
+            action: 'final',
+            final_answer: 'Natural completion after ten tool rounds.'
+        };
+    });
     const gateway = new AILISGateway({
         port: 0,
         workspaceRoot,
@@ -2518,44 +2479,45 @@ test('TaskAgent clamps caller-requested execution to eight work rounds plus one 
     try {
         const status = await gateway.start();
         const result = await runAgent(status.url, {
-            sessionId: 'task-agent-three-rounds-test',
+            sessionId: 'task-agent-natural-termination-test',
             message: '读取 note.txt 并整理结果',
             agentLoop: 'llm',
             agentRole: 'task_agent',
-            maxAgentSteps: 30,
+            maxAgentSteps: 1,
             llmSettings: {
                 provider: 'openai-compatible',
                 baseUrl: llmServer.url,
                 apiKey: 'test-key',
-                model: 'mock-seven-round-task-agent',
+                model: 'mock-natural-termination-task-agent',
                 timeoutMs: 10000
             },
             context: {
                 workspace: workspaceRoot,
                 agentRole: 'task_agent',
                 approved: true,
-                confirmationPolicy: 'auto'
+                confirmationPolicy: 'auto',
+                contextWindowTokens: 9000,
+                reservedOutputTokens: 1000
             }
         });
 
-        assert.equal(result.body.status, 'max_steps_reached');
-        assert.equal(result.body.steps.length, 8);
-        assert.equal(llmServer.calls.length, 9);
-        assert.match(llmServer.calls[0].system, /at most 8 work-tool rounds/);
-        assert.match(llmServer.calls[0].system, /9-round total budget/);
+        assert.equal(result.body.status, 'completed');
+        assert.match(result.body.displayText, /Natural completion/);
+        assert.equal(result.body.steps.length, 10);
+        assert.equal(llmServer.calls.length, 11);
+        assert.doesNotMatch(llmServer.calls[0].system, /work-tool rounds|round total budget|finalization/i);
         assert.match(llmServer.calls[0].system, /tool_search acquires a capability/);
         assert.match(llmServer.calls[0].system, /web_run archive operation/);
-        assert.equal(llmServer.calls[8].payload.tool_choice, 'none');
-        assert.deepEqual(llmServer.calls[8].payload.tools || [], []);
-        const finalizationMessages = JSON.stringify(llmServer.calls[8].payload.messages);
-        assert.match(finalizationMessages, /TaskAgent finalization package/);
-        assert.match(finalizationMessages, /读取 note\.txt 并整理结果/);
-        assert.match(finalizationMessages, /evidence/);
-        assert.doesNotMatch(llmServer.calls[8].system, /Native direct tools exposed/);
-        assert.doesNotMatch(llmServer.calls[8].system, /Emit function calls/);
+        assert.notEqual(llmServer.calls.at(-1).payload.tool_choice, 'none');
+        assert.ok((llmServer.calls.at(-1).payload.tools || []).length > 0);
+        assert.doesNotMatch(JSON.stringify(llmServer.calls.at(-1).payload.messages), /finalization package/i);
+        assert.equal(result.body.events.some((event) => event.status === 'safety_finalization'), false);
+        const transcript = await gateway.runtime.readTranscript(result.body.runId, 500);
+        assert.ok(transcript.items.some((item) => item.type === 'agent.context_compaction'));
     } finally {
         await gateway.stop();
         await llmServer.close();
+        await fs.rm(workspaceRoot, { recursive: true, force: true });
     }
 });
 
@@ -2622,7 +2584,7 @@ test('Agentic Executor feeds invalid decisions back as observations instead of s
     }
 });
 
-test('Agentic Executor safety-finalizes after two identical invalid native tool calls', async () => {
+test('Agentic Executor keeps native tools available after invalid calls until the model ends', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-invalid-native-tool-fuse-'));
     const llmServer = await createScriptedChatCompletionsServer(({ decisionCount }) => {
         if (decisionCount <= 2) {
@@ -2674,8 +2636,8 @@ test('Agentic Executor safety-finalizes after two identical invalid native tool 
 
         assert.equal(result.body.ok, true, JSON.stringify(result.body));
         assert.equal(llmServer.calls.length, 3);
-        assert.equal(llmServer.calls[2].payload.tool_choice, 'none');
-        assert.deepEqual(llmServer.calls[2].payload.tools || [], []);
+        assert.notEqual(llmServer.calls[2].payload.tool_choice, 'none');
+        assert.ok((llmServer.calls[2].payload.tools || []).length > 0);
         assert.equal(
             result.body.events.filter((event) =>
                 event.type === 'runtime_note' &&
@@ -2683,11 +2645,7 @@ test('Agentic Executor safety-finalizes after two identical invalid native tool 
             ).length,
             2
         );
-        assert.ok(result.body.events.some((event) =>
-            event.type === 'runtime_note' &&
-            event.status === 'safety_finalization' &&
-            event.reason === 'repeated_invalid_native_tool_call'
-        ));
+        assert.equal(result.body.events.some((event) => event.status === 'safety_finalization'), false);
         assert.match(JSON.stringify(llmServer.calls[1].payload.messages), /required|path|content/i);
     } finally {
         await gateway.stop();

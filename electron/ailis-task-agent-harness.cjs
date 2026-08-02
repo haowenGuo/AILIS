@@ -4,7 +4,6 @@ const { randomUUID } = require('crypto');
 
 const TASK_HARNESS_STATE_VERSION = 1;
 const TASK_RESULT_SCHEMA = 'ailis.task_result.v1';
-const TASK_AGENT_MAX_MODEL_ROUNDS = 9;
 const MAX_PARENT_RUN_HANDOFFS = 256;
 const FINAL_STATUSES = new Set(['completed', 'completed_with_warnings', 'success', 'succeeded']);
 
@@ -237,10 +236,6 @@ class AILISSystemTaskAgentHarness {
             : null;
         this.emitEvent = typeof options.emitEvent === 'function' ? options.emitEvent : () => {};
         this.taskResultCapsules = options.taskResultCapsules || null;
-        this.maxAgentSteps = Math.max(2, Math.min(
-            Number(options.maxAgentSteps) || TASK_AGENT_MAX_MODEL_ROUNDS,
-            TASK_AGENT_MAX_MODEL_ROUNDS
-        ));
         const loaded = readJson(this.statePath, {});
         this.state = {
             version: TASK_HARNESS_STATE_VERSION,
@@ -378,7 +373,6 @@ class AILISSystemTaskAgentHarness {
                     task: message,
                     inheritanceMode,
                     contextManagerCheckpoint: prior?.checkpoint || null,
-                    maxAgentSteps: this.maxAgentSteps,
                     llmSettings: context.llmSettings || context.llm || null
                 },
                 context: {
@@ -398,7 +392,6 @@ class AILISSystemTaskAgentHarness {
                     prior_best_answer_candidate: prior?.bestAnswerCandidate || null,
                     taskAgentInheritanceMode: inheritanceMode,
                     initialContextManagerCheckpoint: prior?.checkpoint || null,
-                    maxAgentSteps: this.maxAgentSteps
                 },
                 signal: context.signal,
                 registerInputHandler,

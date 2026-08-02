@@ -284,16 +284,8 @@ test('explicit task execution forces Persona handoff without changing ordinary c
         requestContext: {},
         directToolSpecs: [handoffSpec]
     });
-    const finalChoice = resolveAgentDirectToolChoice({
-        agentRuntimeRole: 'persona_orchestrator',
-        requestContext: { requireTaskExecution: true },
-        directToolSpecs: [handoffSpec],
-        safetyFinalizationReason: 'time_budget'
-    });
-
     assert.deepEqual(requiredChoice, { name: 'handoff_task', required: true });
     assert.equal(ordinaryChoice, 'auto');
-    assert.equal(finalChoice, 'none');
 
     const prompt = buildLlmAgentDirectToolPrompt({
         message: 'How many days until the holiday?',
@@ -991,7 +983,7 @@ test('AILIS parent Persona prompt stays conversational while TaskAgent keeps exe
     assert.match(taskPrompt.instructions, /For local file and data tasks/);
     assert.match(taskPrompt.instructions, /join across records, global ordering or de-duplication/);
     assert.match(taskPrompt.instructions, /tool_search for a dedicated metadata, document, API, or data capability/);
-    assert.match(taskPrompt.instructions, /do not spend the remaining work budget paging through a site/);
+    assert.match(taskPrompt.instructions, /do not keep paging through a site/);
     assert.doesNotMatch(taskPrompt.instructions, /open_page actions|most authoritative returned source URL/);
     assert.match(taskPrompt.instructions, /mechanical transport metadata, not a decision/);
     assert.match(taskPrompt.instructions, /candidate-set boundary/);
@@ -1447,7 +1439,7 @@ test('canonical source viewport preserves bounded structured section links in mo
     assert.match(serializedDigest, /https:\/\/example\.test\/journal\/issue\/archive/);
 });
 
-test('finalization budget keeps source evidence ahead of web navigation metadata', () => {
+test('tool observation budget keeps source evidence ahead of web navigation metadata', () => {
     const navigationFiller = 'navigation metadata '.repeat(90);
     const lines = Array.from({ length: 45 }, (_, index) => ({
         lineno: 229 + index,
@@ -1498,7 +1490,7 @@ test('finalization budget keeps source evidence ahead of web navigation metadata
     });
 
     assert.equal(digest.promptTextChars, 3500);
-    assert.equal(digest.compression.reason, 'finalization_observation_budget');
+    assert.equal(digest.compression.reason, 'tool_observation_prompt_budget');
     assert.match(digest.text, /L233: The source identifies the requested relation as TARGET_RELATION_VALUE/);
 });
 

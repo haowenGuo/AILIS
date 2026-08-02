@@ -114,6 +114,9 @@ function buildAilisTurnContext({
 } = {}) {
     const normalizedSessionId = normalizeText(sessionId, requestContext.sessionId || 'main');
     const toolContext = buildToolContext(requestContext, workspaceRoot, normalizedSessionId);
+    const sanitizedRequestContext = cloneJson(requestContext || {});
+    delete sanitizedRequestContext.maxAgentSteps;
+    delete sanitizedRequestContext.maxSteps;
     return {
         schema: 'ailis.turn_context.v1',
         runId: normalizeText(runId, requestContext.runId || ''),
@@ -126,9 +129,10 @@ function buildAilisTurnContext({
         timeoutMs: toolContext.timeoutMs,
         request: {
             dryRun: request.dryRun === true,
-            maxAgentSteps: Number(request.maxAgentSteps || requestContext.maxAgentSteps || 0) || null
+            terminationPolicy: 'model_directed',
+            contextPolicy: 'canonical_history_compaction'
         },
-        requestContext: cloneJson(requestContext || {}),
+        requestContext: sanitizedRequestContext,
         permissions: {
             approved: toolContext.approved === true,
             executeExternal: toolContext.executeExternal === true,

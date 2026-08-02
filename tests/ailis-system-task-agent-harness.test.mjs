@@ -51,7 +51,6 @@ test('system TaskAgent handoff preserves the exact request and returns a compact
     const calls = [];
     const harness = new AILISSystemTaskAgentHarness({
         rootDir,
-        maxAgentSteps: 7,
         executeTaskAgent: async (payload) => {
             calls.push(payload);
             return completedResult({
@@ -91,7 +90,8 @@ test('system TaskAgent handoff preserves the exact request and returns a compact
     });
     assert.equal(calls[0].context.directToolLimit, 35);
     assert.equal(calls[0].args.inheritanceMode, 'clean');
-    assert.equal(calls[0].args.maxAgentSteps, 7);
+    assert.equal(Object.hasOwn(calls[0].args, 'maxAgentSteps'), false);
+    assert.equal(Object.hasOwn(calls[0].context, 'maxAgentSteps'), false);
     assert.equal(packet.schema, TASK_RESULT_SCHEMA);
     assert.equal(packet.final_answer, 'Verified answer');
     assert.deepEqual(packet.evidence_refs, ['evidence-1']);
