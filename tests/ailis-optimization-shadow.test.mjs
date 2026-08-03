@@ -233,7 +233,6 @@ test('optimization shadow stays transcript-only in the real Gateway model path',
         workspaceRoot,
         projectRoot: path.resolve('.'),
         auditDir: path.join(workspaceRoot, '.audit'),
-        profileCurationEnabled: false
     });
     const llmSettings = {
         provider: 'openai-compatible',

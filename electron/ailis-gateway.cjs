@@ -34,9 +34,6 @@ const {
 const { createAILISPlatformAdapter } = require('./ailis-platform-adapter.cjs');
 const { AILISAgentRunner } = require('./ailis-agent-runner.cjs');
 const { AILISMemoryRuntime } = require('./ailis-memory-store.cjs');
-const { AILISRawMemoryLedger } = require('./ailis-raw-memory-ledger.cjs');
-const { AILISUserProfileCurator } = require('./ailis-user-profile-curator.cjs');
-const { AILISPreferenceState } = require('./ailis-preference-state.cjs');
 const { AILISTaskResultCapsuleStore } = require('./ailis-task-result-capsules.cjs');
 const { AILISSystemTaskAgentHarness } = require('./ailis-task-agent-harness.cjs');
 const { AilisSelfEvolutionRuntime } = require('./ailis-self-evolution-runtime.cjs');
@@ -83,9 +80,9 @@ const DEFAULT_EVENT_REPLAY_LIMIT = 2000;
 const MAX_EVENT_REPLAY_LIMIT = 10000;
 const MAX_SSE_WRITABLE_BYTES = 1024 * 1024;
 const DEFAULT_HTTP_REQUEST_TIMEOUT_MS = Math.max(0, Number(process.env.AILIS_GATEWAY_HTTP_REQUEST_TIMEOUT_MS || 0) || 0);
-const DEFAULT_PROFILE_CURATION_START_DELAY_MS = Number(process.env.AILIS_PROFILE_CURATION_START_DELAY_MS || 60 * 1000);
-const DEFAULT_PROFILE_CURATION_CHECK_INTERVAL_MS = Number(process.env.AILIS_PROFILE_CURATION_CHECK_INTERVAL_MS || 6 * 60 * 60 * 1000);
-const DEFAULT_PROFILE_CURATION_DEBOUNCE_MS = Number(process.env.AILIS_PROFILE_CURATION_DEBOUNCE_MS || 2 * 60 * 1000);
+const DEFAULT_MEMORY_CURATION_DEBOUNCE_MS = Number(
+    process.env.AILIS_MEMORY_CURATION_DEBOUNCE_MS || 2 * 60 * 1000
+);
 const TASK_AGENT_MAX_MODEL_ROUNDS = 9;
 
 const GATEWAY_BACKED_TOOL_IDS = new Set(['sessions_list', 'gateway', 'cron', 'nodes']);
@@ -1421,16 +1418,11 @@ class AILISGateway extends EventEmitter {
         this.auditLogPath = path.join(this.auditDir, 'audit.jsonl');
         this.smokeReportPath = path.join(this.projectRoot, 'tmp', 'openclaw-tool-smoke', 'last-report.json');
         this.platformAdapter = createAILISPlatformAdapter(options.platformAdapter || options.platform || {});
-        this.rawMemoryLedger = options.rawMemoryLedger || new AILISRawMemoryLedger({
-            rootDir: path.join(this.auditDir, 'raw-memory'),
-            workspaceRoot: this.workspaceRoot
-        });
         this.runtime = new AILISRuntime({
             auditDir: this.auditDir,
             workspaceRoot: this.workspaceRoot,
             projectRoot: this.projectRoot,
             platformAdapter: this.platformAdapter,
-            rawMemoryLedger: this.rawMemoryLedger,
             emitGatewayEvent: (type, payload) => this.emitGatewayEvent(type, payload),
             mcpServers: options.mcpServers,
             mcpConfigPath: options.mcpConfigPath || path.join(this.auditDir, 'mcp-servers.json'),
@@ -1453,14 +1445,12 @@ class AILISGateway extends EventEmitter {
         this.toolSets = new Map();
         this.webRunSessions = new Map();
         this.toolRuntimeSupervisor = null;
-        this.profileCurationEnabled = options.profileCurationEnabled !== false;
-        this.profileCurationStartDelayMs = Math.max(1000, Number(options.profileCurationStartDelayMs) || DEFAULT_PROFILE_CURATION_START_DELAY_MS);
-        this.profileCurationCheckIntervalMs = Math.max(60 * 1000, Number(options.profileCurationCheckIntervalMs) || DEFAULT_PROFILE_CURATION_CHECK_INTERVAL_MS);
-        this.profileCurationStartTimer = null;
-        this.profileCurationIntervalTimer = null;
-        this.profileCurationDebounceTimer = null;
-        this.profileCurationDebounceMs = Math.max(5000, Number(options.profileCurationDebounceMs) || DEFAULT_PROFILE_CURATION_DEBOUNCE_MS);
-        this.profileCurationRunning = false;
+        this.memoryCurationDebounceMs = Math.max(
+            5000,
+            Number(options.memoryCurationDebounceMs) || DEFAULT_MEMORY_CURATION_DEBOUNCE_MS
+        );
+        this.memoryCurationTimer = null;
+        this.memoryCurationRunning = false;
         this.computerTool = new AILISComputerTool({
             workspaceRoot: this.workspaceRoot,
             platformAdapter: this.platformAdapter
@@ -1472,11 +1462,13 @@ class AILISGateway extends EventEmitter {
             ? options.getDefaultContext
             : () => options.defaultContext || {};
         this.visionServices = options.visionServices || {};
+        const memoryLlmClient = typeof options.memoryQueryPlannerLlm === 'function'
+            ? options.memoryQueryPlannerLlm
+            : null;
         this.memoryRuntime = options.memoryRuntime || new AILISMemoryRuntime({
             rootDir: path.join(this.auditDir, 'memory'),
             workspaceRoot: this.workspaceRoot,
-            memoryStrategy: options.memoryStrategy,
-            memoryQueryPlanner: options.memoryQueryPlannerLlm || options.profileCurationLlm,
+            memoryQueryPlanner: memoryLlmClient,
             memoryEmbedder: options.memoryEmbedder,
             memoryReranker: options.memoryReranker,
             enableLocalEmbeddings: options.enableLocalMemoryEmbeddings,
@@ -1485,9 +1477,6 @@ class AILISGateway extends EventEmitter {
             allowRemoteModels: options.allowRemoteMemoryModels,
             memoryModelRemoteHost: options.memoryModelRemoteHost,
             memoryModelCacheDir: options.memoryModelCacheDir
-        });
-        this.preferenceState = options.preferenceState || new AILISPreferenceState({
-            rootDir: path.join(this.auditDir, 'memory')
         });
         this.taskResultCapsules = options.taskResultCapsules || new AILISTaskResultCapsuleStore({
             rootDir: path.join(this.auditDir, 'task-results')
@@ -1535,14 +1524,6 @@ class AILISGateway extends EventEmitter {
                 : null,
             maxRunRecords: options.emberHarnessMaxRunRecords,
             maxTotalRecords: options.emberHarnessMaxTotalRecords
-        });
-        this.userProfileCurator = options.userProfileCurator || new AILISUserProfileCurator({
-            rootDir: path.join(this.auditDir, 'memory'),
-            workspaceRoot: this.workspaceRoot,
-            rawMemoryLedger: this.rawMemoryLedger,
-            preferenceState: this.preferenceState,
-            llmClient: typeof options.profileCurationLlm === 'function' ? options.profileCurationLlm : null,
-            emitGatewayEvent: (type, payload) => this.emitGatewayEvent(type, payload)
         });
         this.selfEvolutionRuntime = options.selfEvolutionRuntime || new AilisSelfEvolutionRuntime({
             auditDir: this.auditDir,
@@ -1799,7 +1780,7 @@ class AILISGateway extends EventEmitter {
         });
 
         this.emitGatewayEvent('gateway.started', this.getStatus({ includeAgentRunner: false }));
-        this.startProfileCurationScheduler();
+        this.scheduleMemoryCurationSoon('gateway_startup');
         if (this.emberHarness?.enabled !== false) {
             void this.prepareLocalSafetyEvaluator('gateway_started');
         }
@@ -1807,7 +1788,10 @@ class AILISGateway extends EventEmitter {
     }
 
     async stop() {
-        this.stopProfileCurationScheduler();
+        if (this.memoryCurationTimer) {
+            clearTimeout(this.memoryCurationTimer);
+            this.memoryCurationTimer = null;
+        }
         for (const client of this.sseClients) {
             try {
                 client.res?.end?.();
@@ -1840,119 +1824,6 @@ class AILISGateway extends EventEmitter {
         await new Promise((resolve) => server.close(resolve));
         this.emitGatewayEvent('gateway.stopped', {});
         return this.getStatus({ includeAgentRunner: false });
-    }
-
-    startProfileCurationScheduler() {
-        if (!this.profileCurationEnabled || !this.userProfileCurator) {
-            return;
-        }
-        this.stopProfileCurationScheduler();
-        this.profileCurationStartTimer = setTimeout(() => {
-            void this.runScheduledProfileCuration('startup');
-        }, this.profileCurationStartDelayMs);
-        this.profileCurationStartTimer.unref?.();
-        this.profileCurationIntervalTimer = setInterval(() => {
-            void this.runScheduledProfileCuration('interval');
-        }, this.profileCurationCheckIntervalMs);
-        this.profileCurationIntervalTimer.unref?.();
-    }
-
-    stopProfileCurationScheduler() {
-        if (this.profileCurationStartTimer) {
-            clearTimeout(this.profileCurationStartTimer);
-            this.profileCurationStartTimer = null;
-        }
-        if (this.profileCurationIntervalTimer) {
-            clearInterval(this.profileCurationIntervalTimer);
-            this.profileCurationIntervalTimer = null;
-        }
-        if (this.profileCurationDebounceTimer) {
-            clearTimeout(this.profileCurationDebounceTimer);
-            this.profileCurationDebounceTimer = null;
-        }
-    }
-
-    scheduleProfileCurationSoon(trigger = 'conversation_idle') {
-        if (!this.profileCurationEnabled || !this.userProfileCurator) {
-            return false;
-        }
-        if (this.profileCurationDebounceTimer) {
-            clearTimeout(this.profileCurationDebounceTimer);
-        }
-        this.profileCurationDebounceTimer = setTimeout(() => {
-            this.profileCurationDebounceTimer = null;
-            void this.runScheduledProfileCuration(trigger, { force: true });
-        }, this.profileCurationDebounceMs);
-        this.profileCurationDebounceTimer.unref?.();
-        return true;
-    }
-
-    async runScheduledProfileCuration(trigger = 'scheduled', options = {}) {
-        if (this.profileCurationRunning) {
-            this.scheduleProfileCurationSoon(trigger);
-            return { ok: false, status: 'profile_curation_already_running' };
-        }
-        if (!this.profileCurationEnabled || !this.userProfileCurator) {
-            return { ok: false, status: 'profile_curation_not_started' };
-        }
-        this.profileCurationRunning = true;
-        try {
-            const [profileState, rawStatus] = await Promise.all([
-                this.getUserProfileCurationState(),
-                Promise.resolve(this.getRawMemoryStatus())
-            ]);
-            const rebuild = profileState?.rebuild || null;
-            const activeRebuild = ['running', 'paused', 'partial_completed', 'failed', 'promoting'].includes(rebuild?.status);
-            const capsuleCount = Number(profileState?.userProfile?.items?.length || 0) +
-                Number(profileState?.relationshipProfile?.items?.length || 0);
-            const shouldRebuild = Number(rawStatus?.entryCount) > 0 && (
-                activeRebuild || (!rebuild && capsuleCount === 0)
-            );
-            const result = shouldRebuild
-                ? await this.rebuildUserProfile({
-                      trigger,
-                      maxPasses: 1,
-                      maxBatches: 4,
-                      ...options
-                  })
-                : await this.curateUserProfile({ trigger, ...options });
-            const requiresCognition =
-                this.memoryRuntime?.getStatus?.()?.memoryStrategyStatus?.profile?.requiresCognition === true;
-            const cognitionCuration = requiresCognition
-                ? await this.curateMemoryCognition({
-                    trigger,
-                    maxBatches: options.maxBatches || 4,
-                    ...options
-                })
-                : null;
-            this.emitGatewayEvent('memory.profile_curation.scheduled', {
-                trigger,
-                ok: result?.ok === true,
-                status: result?.status || '',
-                rebuildId: result?.rebuild?.id || '',
-                processedEntryCount: result?.run?.processedEntryCount || result?.rebuild?.processedEntryCount || 0,
-                profileUpdateCount: result?.run?.profileUpdateCount || result?.rebuild?.profileUpdateCount || 0,
-                relationshipUpdateCount: result?.run?.relationshipUpdateCount || result?.rebuild?.relationshipUpdateCount || 0,
-                preferenceEventCount: result?.run?.preferenceEventCount || 0,
-                affinityChanged: result?.run?.affinityChanged === true,
-                cognitionStatus: cognitionCuration?.status || '',
-                cognitionRecordCount: Number(cognitionCuration?.recordCount || 0)
-            });
-            if (result?.status === 'rebuild_partial') {
-                this.scheduleProfileCurationSoon('profile_rebuild_resume');
-            }
-            return cognitionCuration
-                ? { ...result, cognitionCuration }
-                : result;
-        } catch (error) {
-            this.emitGatewayEvent('memory.profile_curation.error', {
-                trigger,
-                error: error?.message || String(error)
-            });
-            return { ok: false, status: 'profile_curation_error', error: error?.message || String(error) };
-        } finally {
-            this.profileCurationRunning = false;
-        }
     }
 
     getAddress() {
@@ -2007,19 +1878,13 @@ class AILISGateway extends EventEmitter {
             runtime: this.runtime.getStatus(),
             memory: this.memoryRuntime?.getStatus?.() || null,
             emberHarness: this.emberHarness?.getStatus?.() || null,
-            rawMemory: this.rawMemoryLedger?.getStatus?.() || null,
-            interactionPreferences: this.preferenceState?.getStatus?.() || null,
             taskResultCapsules: this.taskResultCapsules?.getStatus?.() || null,
             taskAgentHarness: this.taskAgentHarness?.getStatus?.() || null,
             taskResultBackfill: this.taskResultBackfill,
-            userProfileCuration: this.userProfileCurator?.getStatus?.() || null,
-            userProfileCurationScheduler: {
-                enabled: this.profileCurationEnabled,
-                running: this.profileCurationRunning,
-                startDelayMs: this.profileCurationStartDelayMs,
-                checkIntervalMs: this.profileCurationCheckIntervalMs,
-                debounceMs: this.profileCurationDebounceMs,
-                scheduled: Boolean(this.profileCurationStartTimer || this.profileCurationIntervalTimer || this.profileCurationDebounceTimer)
+            memoryCuration: {
+                running: this.memoryCurationRunning,
+                debounceMs: this.memoryCurationDebounceMs,
+                scheduled: Boolean(this.memoryCurationTimer)
             },
             selfEvolution: this.selfEvolutionRuntime?.getStatus?.() || null,
             toolRuntimeGateway: this.toolRuntimeSupervisor?.getStatus?.() || null,
@@ -2044,7 +1909,6 @@ class AILISGateway extends EventEmitter {
                 gateway: this,
                 workspaceRoot: this.workspaceRoot,
                 memoryRuntime: this.memoryRuntime,
-                preferenceState: this.preferenceState,
                 taskResultCapsules: this.taskResultCapsules
             });
         }
@@ -2058,88 +1922,71 @@ class AILISGateway extends EventEmitter {
         };
     }
 
-    getRawMemoryStatus() {
-        return this.rawMemoryLedger?.getStatus?.() || {
-            ok: false,
-            status: 'raw_memory_not_configured'
-        };
-    }
-
-    replayRawMemory(options = {}) {
-        return this.rawMemoryLedger?.replay?.(options || {}) || {
-            ok: false,
-            status: 'raw_memory_not_configured',
-            entries: []
-        };
-    }
-
-    listRawMemorySessions(limit = 100) {
-        return this.rawMemoryLedger?.listSessions?.(limit) || {
-            ok: false,
-            status: 'raw_memory_not_configured',
-            sessions: []
-        };
-    }
-
-    async curateUserProfile(options = {}) {
-        return await this.userProfileCurator?.runDailyCuration?.(options || {}) || {
-            ok: false,
-            status: 'user_profile_curator_not_configured'
-        };
-    }
-
-    async rebuildUserProfile(options = {}) {
-        return await this.userProfileCurator?.rebuildFromRawMemory?.(options || {}) || {
-            ok: false,
-            status: 'user_profile_curator_not_configured'
-        };
-    }
-
-    async getUserProfileCurationState() {
-        return await this.userProfileCurator?.getState?.() || {
-            ok: false,
-            status: 'user_profile_curator_not_configured'
-        };
-    }
-
-    async curateMemoryCognition(options = {}) {
-        return await this.memoryRuntime?.curateStrategyMemory?.(options || {}) || {
-            ok: false,
-            status: 'memory_cognition_not_configured'
-        };
-    }
-
-    getMemoryCognitionStatus() {
-        return this.memoryRuntime?.getStatus?.()?.memoryStrategyStatus?.eventActionLedger || {
-            ok: false,
-            status: 'memory_cognition_not_configured'
-        };
-    }
-
-    searchMemory(query, options = {}) {
-        return this.memoryRuntime?.searchMemory?.(query, options) || {
+    async searchMemoryAsync(query, options = {}) {
+        if (typeof this.memoryRuntime?.searchMemoryAsync === 'function') {
+            return await this.memoryRuntime.searchMemoryAsync(query, options);
+        }
+        return {
             ok: false,
             status: 'memory_not_configured',
             events: []
         };
     }
 
-    async searchMemoryAsync(query, options = {}) {
-        if (typeof this.memoryRuntime?.searchMemoryAsync === 'function') {
-            return await this.memoryRuntime.searchMemoryAsync(query, options);
-        }
-        return this.searchMemory(query, options);
-    }
-
-    setMemoryStrategy(strategy) {
-        return this.memoryRuntime?.setMemoryStrategy?.(strategy) || {
+    getMemoryLedgerStatus() {
+        return this.memoryRuntime?.getStatus?.()?.memoryStrategyStatus?.eventActionLedger || {
             ok: false,
-            status: 'memory_not_configured'
+            status: 'memory_ledger_not_configured'
         };
     }
 
-    getMemoryStrategyCatalog() {
-        return this.memoryRuntime?.getMemoryStrategyCatalog?.() || [];
+    async curateMemoryLedger(options = {}) {
+        return await this.memoryRuntime?.curateMemoryLedger?.(options || {}) || {
+            ok: false,
+            status: 'memory_ledger_not_configured'
+        };
+    }
+
+    scheduleMemoryCurationSoon(trigger = 'conversation_idle') {
+        const memoryStatus = this.memoryRuntime?.getStatus?.()?.memoryStrategyStatus;
+        if (
+            memoryStatus?.profile?.requiresLedgerCuration !== true ||
+            memoryStatus?.eventActionLedger?.enabled !== true
+        ) {
+            return false;
+        }
+        if (this.memoryCurationTimer) {
+            clearTimeout(this.memoryCurationTimer);
+        }
+        this.memoryCurationTimer = setTimeout(async () => {
+            this.memoryCurationTimer = null;
+            if (this.memoryCurationRunning) {
+                this.scheduleMemoryCurationSoon('memory_curation_resume');
+                return;
+            }
+            this.memoryCurationRunning = true;
+            try {
+                const result = await this.curateMemoryLedger({
+                    trigger,
+                    maxBatches: 4
+                });
+                this.emitGatewayEvent('memory.ledger.curated', {
+                    trigger,
+                    ok: result?.ok === true,
+                    status: result?.status || '',
+                    recordCount: Number(result?.recordCount || result?.run?.recordCount || 0)
+                });
+            } catch (error) {
+                this.emitGatewayEvent('memory.ledger.error', {
+                    trigger,
+                    error: error?.message || String(error)
+                });
+            } finally {
+                this.memoryCurationRunning = false;
+            }
+        }, this.memoryCurationDebounceMs);
+        this.memoryCurationTimer.unref?.();
+        return true;
     }
 
     updateMemoryBlock(key, value) {
@@ -2430,77 +2277,24 @@ class AILISGateway extends EventEmitter {
             return;
         }
 
-        if (url.pathname === '/raw-memory/status' && req.method === 'GET') {
-            this.sendJson(res, 200, this.getRawMemoryStatus());
-            return;
-        }
-
-        if (url.pathname === '/raw-memory/sessions' && req.method === 'GET') {
-            this.sendJson(res, 200, this.listRawMemorySessions(Number(url.searchParams.get('limit') || 100)));
-            return;
-        }
-
-        if (url.pathname === '/raw-memory/replay' && req.method === 'GET') {
-            this.sendJson(res, 200, this.replayRawMemory({
-                sessionId: url.searchParams.get('sessionId') || '',
-                runId: url.searchParams.get('runId') || '',
-                type: url.searchParams.get('type') || '',
-                source: url.searchParams.get('source') || '',
-                since: url.searchParams.get('since') || '',
-                until: url.searchParams.get('until') || '',
-                includePayload: url.searchParams.get('includePayload') !== 'false',
-                limit: Number(url.searchParams.get('limit') || 200)
-            }));
-            return;
-        }
-
-        if (url.pathname === '/memory/profile/state' && req.method === 'GET') {
-            this.sendJson(res, 200, await this.getUserProfileCurationState());
-            return;
-        }
-
-        if (url.pathname === '/memory/strategies' && req.method === 'GET') {
-            const memoryStatus = this.memoryRuntime?.getStatus?.() || {};
-            this.sendJson(res, 200, {
-                ok: true,
-                active: memoryStatus.memoryStrategy || '',
-                strategies: this.getMemoryStrategyCatalog(),
-                status: memoryStatus.memoryStrategyStatus || null
-            });
-            return;
-        }
-
-        if (url.pathname === '/memory/strategy' && req.method === 'POST') {
+        if (url.pathname === '/memory/search' && req.method === 'POST') {
             const body = await this.readJsonBody(req);
-            this.sendJson(res, 200, this.setMemoryStrategy(body?.strategy || body?.id || ''));
+            this.sendJson(
+                res,
+                200,
+                await this.searchMemoryAsync(body?.query || body?.text || '', body || {})
+            );
             return;
         }
 
-        if (url.pathname === '/memory/cognition/status' && req.method === 'GET') {
-            this.sendJson(res, 200, this.getMemoryCognitionStatus());
+        if (url.pathname === '/memory/ledger/status' && req.method === 'GET') {
+            this.sendJson(res, 200, this.getMemoryLedgerStatus());
             return;
         }
 
-        if (url.pathname === '/memory/cognition/curate' && req.method === 'POST') {
+        if (url.pathname === '/memory/ledger/curate' && req.method === 'POST') {
             const body = await this.readJsonBody(req);
-            this.sendJson(res, 200, await this.curateMemoryCognition(body || {}));
-            return;
-        }
-
-        if (url.pathname === '/memory/profile/curate' && (req.method === 'GET' || req.method === 'POST')) {
-            const body = req.method === 'POST' ? await this.readJsonBody(req) : {};
-            this.sendJson(res, 200, await this.curateUserProfile({
-                ...(body || {}),
-                force: body.force === true || url.searchParams.get('force') === 'true',
-                rawLimit: body.rawLimit || Number(url.searchParams.get('rawLimit') || 5000),
-                evidenceLimit: body.evidenceLimit || Number(url.searchParams.get('evidenceLimit') || 120)
-            }));
-            return;
-        }
-
-        if (url.pathname === '/memory/profile/rebuild' && req.method === 'POST') {
-            const body = await this.readJsonBody(req);
-            this.sendJson(res, 200, await this.rebuildUserProfile(body || {}));
+            this.sendJson(res, 200, await this.curateMemoryLedger(body || {}));
             return;
         }
 

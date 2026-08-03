@@ -1274,8 +1274,7 @@ async function startGateway(args, runtimeSettings) {
         port: 0,
         workspaceRoot: args.workspaceRoot,
         projectRoot: PROJECT_ROOT,
-        auditDir: args.auditDir,
-        profileCurationEnabled: false
+        auditDir: args.auditDir
     };
     configureResearchMcpLlmEnvironment(runtimeSettings.llmSettings);
     if (runtimeSettings.mcpConfigPath) {

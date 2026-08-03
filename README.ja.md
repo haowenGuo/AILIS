@@ -151,7 +151,7 @@ pnpm ailis:validate-gateway
 ## 主要ドキュメント
 
 - [Embodied Agent Architecture](docs/ailis-embodied-agent-architecture.md)
-- [Memory Architecture V2](docs/ailis-memory-architecture-v2.md)
+- [Memory Architecture V3](docs/ailis-memory-v3-hybrid-ledger.md)
 - [Humanlike Eval](docs/ailis-humanlike-eval.md)
 - [Tool Ecosystem Driver Guide](docs/tool-ecosystem-driver-guide.md)
 

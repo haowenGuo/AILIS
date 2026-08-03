@@ -41,8 +41,6 @@ The ledger is not part of TaskAgent working memory.
   truth.
 - `event-action-ledger.v3.json`: derived, versioned sidecar.
 - `event-action-ledger-runs.v3.jsonl`: curation audit trail.
-- `memory-cognition.json`: the earlier experimental cognition representation;
-  not overwritten by Memory v3.
 
 Deleting the v3 sidecar does not delete raw memory. The ledger can be rebuilt
 by replaying native events through the curator.
@@ -133,7 +131,6 @@ to audit dates, numbers, names, mappings, and action counts.
 - A derived record is removed when it has no remaining source.
 - Clearing AILIS memory clears the v3 sidecar together with the raw memory
   operation.
-- Switching strategies does not migrate or rewrite raw events.
 
 ## LongMemEval acceptance gate
 

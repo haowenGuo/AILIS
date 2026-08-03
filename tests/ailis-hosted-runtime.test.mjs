@@ -226,7 +226,7 @@ test('real hosted Persona commits streamed assistant text for a direct final res
             'response.output_text.started',
             'response.output_text.committed'
         ]);
-        assert.equal(modelRequests[0].stream, true);
+        assert.equal(modelRequests.some((request) => request.stream === true), true);
     } finally {
         await manager.close();
         await new Promise((resolve) => modelServer.close(resolve));

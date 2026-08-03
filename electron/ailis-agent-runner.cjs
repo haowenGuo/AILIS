@@ -9800,7 +9800,6 @@ class AILISAgentRunner {
         this.pendingAgentApprovals = new Map();
         this.pendingAgentDebugSessions = new Map();
         this.memoryRuntime = options.memoryRuntime || this.gateway.memoryRuntime || null;
-        this.preferenceState = options.preferenceState || this.gateway.preferenceState || null;
         this.taskResultCapsules = options.taskResultCapsules || this.gateway.taskResultCapsules || null;
         this.contextCompiler = options.contextCompiler || new AILISContextCompiler({
             memoryRuntime: this.memoryRuntime
@@ -9833,7 +9832,6 @@ class AILISAgentRunner {
             restoredPendingAgentApprovalCount: this.restoredPendingAgentApprovalCount,
             completedRunCount: this.completedRunCount,
             memory: this.memoryRuntime?.getStatus?.() || null,
-            interactionPreferences: this.preferenceState?.getStatus?.() || null,
             taskResultCapsules: this.taskResultCapsules?.getStatus?.() || null,
             capabilities: [
                 'emotional_chat',
@@ -10075,21 +10073,8 @@ class AILISAgentRunner {
                 request?.context?.evalMemoryContext
         );
         const personaMode = normalizeText(contextMode, 'persona').toLowerCase() === 'persona';
-        let preferenceContext = '';
         let activeTaskContext = '';
         if (personaMode) {
-            try {
-                preferenceContext = this.preferenceState?.buildPromptContext?.({
-                    sessionId,
-                    turnId: normalizeText(request?.runId || request?.context?.runId),
-                    now: new Date()
-                }) || '';
-            } catch (error) {
-                this.gateway.emitGatewayEvent?.('agent.preference.context_error', {
-                    sessionId,
-                    error: error?.message || String(error)
-                });
-            }
             try {
                 activeTaskContext = this.taskResultCapsules?.buildActiveTaskContext?.(sessionId, {
                     maxChars: 2200
@@ -10111,7 +10096,6 @@ class AILISAgentRunner {
                 currentUserMessage: message,
                 sessionRecentTurns: request?.messageHistory || [],
                 activeTaskState: activeTaskContext,
-                interactionPreferences: preferenceContext,
                 explicitMemoryContext,
                 memorySources,
                 agentMode: personaMode ? 'persona' : 'task_agent',
@@ -10202,22 +10186,7 @@ class AILISAgentRunner {
                 attachments
             });
             if (recorded?.ok) {
-                this.gateway.rawMemoryLedger?.recordChatTurn?.({
-                    sessionId,
-                    source,
-                    requestPayload: {
-                        memoryUserMessage: message
-                    },
-                    enrichedPayload: {},
-                    result: {
-                        ok: result.ok !== false,
-                        status: result.status || '',
-                        intent: result.intent || '',
-                        content: result.displayText || result.finalAnswer || result.error || ''
-                    },
-                    durationMs: Number(result.durationMs) || null
-                });
-                this.gateway.scheduleProfileCurationSoon?.('agent_turn_recorded');
+                this.gateway.scheduleMemoryCurationSoon?.('agent_turn_recorded');
                 this.gateway.emitGatewayEvent?.('agent.memory.recorded', {
                     sessionId,
                     eventId: recorded.event?.id,

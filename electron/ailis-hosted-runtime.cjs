@@ -184,8 +184,7 @@ class AILISHostedRuntimeManager {
             workspaceRoot,
             auditDir: stateRoot,
             emberHarnessEnabled: process.env.AILIS_HOSTED_EMBER_ENABLED === 'true',
-            profileCurationEnabled: true,
-            profileCurationLlm: (payload) => callDesktopLlmProvider(record.llmSettings, payload || {}),
+            memoryQueryPlannerLlm: (payload) => callDesktopLlmProvider(record.llmSettings, payload || {}),
             getDefaultContext: () => ({
                 hostedRuntime: true,
                 workspace: workspaceRoot,

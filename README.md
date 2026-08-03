@@ -428,13 +428,19 @@ Full gateway validation is heavier and runs a larger set of runtime, contract, t
 pnpm ailis:validate-gateway
 ```
 
+## Memory Architecture
+
+AILIS ships one memory implementation: **Memory v3**. New turns are normalized into the local event store, curated into the Event/Action Ledger, and retrieved through sparse, dense E5, entity, temporal, and Ledger channels before reciprocal-rank fusion compiles the prompt context. Query planning and Ledger curation can use the configured desktop LLM; retrieval remains available through the deterministic local channels if that planning call fails.
+
+The local Gateway exposes `POST /memory/search`, `GET /memory/ledger/status`, and `POST /memory/ledger/curate`. Legacy raw-memory, profile-curator, v1/v2 strategy switching, and parallel preference-state runtimes are not part of the active code path.
+
 ## Core Documents
 
 - [Documentation Index](docs/README.md)
 - [Embodied Agent Architecture](docs/ailis-embodied-agent-architecture.md)
 - [System TaskAgent Architecture](docs/ailis-system-taskagent-architecture.md)
 - [Codex Multi-Agent Data-Flow Migration](docs/ailis-codex-multi-agent-dataflow-migration.md)
-- [Memory Architecture V2](docs/ailis-memory-architecture-v2.md)
+- [Memory v3 Hybrid RRF + Event/Action Ledger](docs/ailis-memory-v3-hybrid-ledger.md)
 - [Humanlike Eval](docs/ailis-humanlike-eval.md)
 - [Tool Ecosystem Driver Guide](docs/tool-ecosystem-driver-guide.md)
 

@@ -934,23 +934,13 @@ test('AILIS refreshes ephemeral developer guidance on every reused context turn'
     ));
 });
 
-test('AILIS Persona receives active preferences and active task state while TaskAgent stays isolated', async () => {
+test('AILIS Persona receives active task state while TaskAgent stays isolated', async () => {
     const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-persona-context-'));
     const gateway = new AILISGateway({
         projectRoot: rootDir,
         workspaceRoot: rootDir,
-        auditDir: path.join(rootDir, 'audit'),
-        profileCurationEnabled: false
+        auditDir: path.join(rootDir, 'audit')
     });
-    gateway.preferenceState.append({
-        slot: 'tone.response',
-        operation: 'set',
-        value: '自然简洁',
-        scope: 'persistent',
-        confidence: 0.98,
-        observedAt: '2026-07-09T10:00:00.000Z',
-        evidence: { messageId: 'pref-1', quote: '以后说得自然简洁' }
-    }, { userMessage: '以后说得自然简洁' });
     gateway.taskResultCapsules.save({
         taskId: 'old-roxy-guide',
         sessionId: 'main',
@@ -1001,11 +991,10 @@ test('AILIS Persona receives active preferences and active task state while Task
 
     const personaContextText = personaContext.asDeveloperInstruction();
     const taskContextText = taskContext.asDeveloperInstruction();
-    assert.match(personaContextText, /tone\.response: 自然简洁/);
     assert.match(personaContextText, /当前活动任务状态/);
     assert.match(personaContextText, /继续完成洛茜攻略并核对配队/);
     assert.doesNotMatch(personaContextText, /洛茜的核心队伍结论/);
-    assert.doesNotMatch(taskContextText, /当前活动任务状态|tone\.response: 自然简洁/);
+    assert.doesNotMatch(taskContextText, /当前活动任务状态/);
     assert.doesNotMatch(taskContextText, /## Persona|## Relationship/);
 });
 

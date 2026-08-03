@@ -691,14 +691,11 @@ test('Persona prompt stays in AILIS persona and exposes only system TaskAgent ha
         assert.equal(contextPayload.memory_context, undefined);
         assert.equal(contextPayload.capability_catalog, undefined);
         assert.equal(contextPayload.external_tool_exposure, undefined);
-        const rawTurns = gateway.rawMemoryLedger.replay({
-            type: 'chat.llm_turn',
-            sessionId: 'persona-orchestrator-test',
-            includePayload: true,
-            limit: 20
+        const memorySnapshot = gateway.memoryRuntime.getSnapshot({
+            sessionId: 'persona-orchestrator-test'
         });
-        assert.ok(rawTurns.entries.some((entry) =>
-            entry.payload?.requestPayload?.memoryUserMessage === '你好呀'
+        assert.ok(memorySnapshot.recentEvents.some((entry) =>
+            entry.userText === '你好呀'
         ));
     } finally {
         await gateway.stop();
