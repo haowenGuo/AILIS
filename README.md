@@ -65,6 +65,12 @@ This is a complete internal AILIS evaluation, not an official leaderboard submis
 | Final result | **380 / 500, 76.00%** |
 | Isolation | TaskAgent 0; short-term messages 0; dense fallback 0 |
 | Provenance | Missing Ledger 0; missing/empty/task sources 0; dangling supersession 0 |
+| Ledger corpus | 500 / 500 question states; 63,124 records; 124,351 processed events |
+| Audit verdict | Corrected schema-aware verdict accepted; original verifier artifacts retained |
+
+### Audit correction
+
+The controller's original terminal state recorded `verifier_failed` because its supersession check treated the scalar string field `supersededBy` as an iterable list and expanded each identifier into characters. Across 39 newly generated question states, 48 valid scalar references therefore became 1,296 false "dangling" entries. A schema-aware audit resolved all 48 references against their question-local Ledger: the actual dangling-supersession count is **0**. The corrected verdict is accepted, while the original report and state files remain preserved for traceability. This correction changes the acceptance status, not the **380 / 500** Judge score.
 
 ### Accuracy by question type
 
@@ -100,6 +106,8 @@ Micro Session R@8 is **83.54%** and Micro Turn R@8 is **73.80%**. Temporal and m
 **91 / 120 errors (75.8%)** occur when turn-level evidence is partial or absent. The remaining 27 failures with perfect Turn R@8 are primarily Reader reasoning, temporal interpretation, answer formulation, or Judge-boundary cases. These are diagnostic correlations, not a controlled causal decomposition.
 
 Compared with the earlier internally reported AILIS result of **46.2%**, Memory v3 is **29.8 percentage points higher** and reduces relative error by about **55.4%**. The earlier artifact was not revalidated under the same Reader/Judge contract, so this remains an internal historical comparison rather than a same-protocol leaderboard claim.
+
+The earlier fixed 279-question checkpoint scored **77.78%**; the full 500-question run is **1.78 percentage points lower** at 76.00%. That checkpoint is reported only as a within-run stage comparison and is not a separate leaderboard result.
 
 ## Architecture
 
