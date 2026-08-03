@@ -65,6 +65,9 @@ const TOOL_CALL_TIMEOUT_MS = 45000;
 const DEFAULT_EVENT_REPLAY_LIMIT = 2000;
 const MAX_EVENT_REPLAY_LIMIT = 10000;
 const MAX_SSE_WRITABLE_BYTES = 1024 * 1024;
+const DEFAULT_MEMORY_CURATION_DEBOUNCE_MS = Number(
+    process.env.AILIS_MEMORY_CURATION_DEBOUNCE_MS || 2 * 60 * 1000
+);
 
 const GATEWAY_BACKED_TOOL_IDS = new Set(['sessions_list', 'gateway', 'cron', 'nodes']);
 const SESSION_BOUND_TOOL_IDS = new Set([
@@ -709,10 +712,34 @@ class AILISGateway extends EventEmitter {
             ? options.getDefaultContext
             : () => options.defaultContext || {};
         this.visionServices = options.visionServices || {};
+        const memoryLlmClient = typeof options.memoryQueryPlannerLlm === 'function'
+            ? options.memoryQueryPlannerLlm
+            : typeof options.profileCurationLlm === 'function'
+                ? options.profileCurationLlm
+                : null;
+        const memoryStrategy =
+            options.memoryStrategy ||
+            process.env.AILIS_MEMORY_STRATEGY ||
+            (memoryLlmClient ? 'hybrid_rrf_ledger_v3' : 'bm25_phrase_v1');
         this.memoryRuntime = options.memoryRuntime || new AILISMemoryRuntime({
             rootDir: path.join(this.auditDir, 'memory'),
-            workspaceRoot: this.workspaceRoot
+            workspaceRoot: this.workspaceRoot,
+            memoryStrategy,
+            memoryQueryPlanner: memoryLlmClient,
+            memoryEmbedder: options.memoryEmbedder,
+            enableLocalEmbeddings: options.enableLocalMemoryEmbeddings,
+            embeddingModel: options.memoryEmbeddingModel,
+            memoryEmbeddingRevision: options.memoryEmbeddingRevision,
+            allowRemoteModels: options.allowRemoteMemoryModels,
+            memoryModelRemoteHost: options.memoryModelRemoteHost,
+            memoryModelCacheDir: options.memoryModelCacheDir
         });
+        this.memoryCurationDebounceMs = Math.max(
+            5000,
+            Number(options.memoryCurationDebounceMs) || DEFAULT_MEMORY_CURATION_DEBOUNCE_MS
+        );
+        this.memoryCurationTimer = null;
+        this.memoryCurationRunning = false;
         this.selfEvolutionRuntime = options.selfEvolutionRuntime || new AilisSelfEvolutionRuntime({
             auditDir: this.auditDir,
             workspaceRoot: this.workspaceRoot,
@@ -907,10 +934,15 @@ class AILISGateway extends EventEmitter {
         });
 
         this.emitGatewayEvent('gateway.started', this.getStatus());
+        this.scheduleMemoryCurationSoon('gateway_startup');
         return this.getStatus();
     }
 
     async stop() {
+        if (this.memoryCurationTimer) {
+            clearTimeout(this.memoryCurationTimer);
+            this.memoryCurationTimer = null;
+        }
         for (const client of this.sseClients) {
             try {
                 client.res?.end?.();
@@ -929,6 +961,10 @@ class AILISGateway extends EventEmitter {
 
         if (this.runtime) {
             await this.runtime.shutdown().catch(() => {});
+        }
+
+        if (this.memoryRuntime) {
+            await Promise.resolve(this.memoryRuntime.shutdown?.()).catch(() => {});
         }
 
         if (!this.server) {
@@ -1024,6 +1060,80 @@ class AILISGateway extends EventEmitter {
             status: 'memory_not_configured',
             events: []
         };
+    }
+
+    async searchMemoryAsync(query, options = {}) {
+        if (typeof this.memoryRuntime?.searchMemoryAsync === 'function') {
+            return await this.memoryRuntime.searchMemoryAsync(query, options);
+        }
+        return this.searchMemory(query, options);
+    }
+
+    setMemoryStrategy(strategy) {
+        return this.memoryRuntime?.setMemoryStrategy?.(strategy) || {
+            ok: false,
+            status: 'memory_not_configured'
+        };
+    }
+
+    getMemoryStrategyCatalog() {
+        return this.memoryRuntime?.getMemoryStrategyCatalog?.() || [];
+    }
+
+    getMemoryCognitionStatus() {
+        return this.memoryRuntime?.getStatus?.()?.memoryStrategyStatus?.eventActionLedger || {
+            ok: false,
+            status: 'memory_cognition_not_configured'
+        };
+    }
+
+    async curateMemoryCognition(options = {}) {
+        return await this.memoryRuntime?.curateStrategyMemory?.(options || {}) || {
+            ok: false,
+            status: 'memory_cognition_not_configured'
+        };
+    }
+
+    scheduleMemoryCurationSoon(trigger = 'conversation_idle') {
+        const memoryStatus = this.memoryRuntime?.getStatus?.()?.memoryStrategyStatus;
+        if (
+            memoryStatus?.profile?.requiresCognition !== true ||
+            memoryStatus?.eventActionLedger?.enabled !== true
+        ) {
+            return false;
+        }
+        if (this.memoryCurationTimer) {
+            clearTimeout(this.memoryCurationTimer);
+        }
+        this.memoryCurationTimer = setTimeout(async () => {
+            this.memoryCurationTimer = null;
+            if (this.memoryCurationRunning) {
+                this.scheduleMemoryCurationSoon('memory_curation_resume');
+                return;
+            }
+            this.memoryCurationRunning = true;
+            try {
+                const result = await this.curateMemoryCognition({
+                    trigger,
+                    maxBatches: 4
+                });
+                this.emitGatewayEvent('memory.cognition.curated', {
+                    trigger,
+                    ok: result?.ok === true,
+                    status: result?.status || '',
+                    recordCount: Number(result?.recordCount || result?.run?.recordCount || 0)
+                });
+            } catch (error) {
+                this.emitGatewayEvent('memory.cognition.error', {
+                    trigger,
+                    error: error?.message || String(error)
+                });
+            } finally {
+                this.memoryCurationRunning = false;
+            }
+        }, this.memoryCurationDebounceMs);
+        this.memoryCurationTimer.unref?.();
+        return true;
     }
 
     updateMemoryBlock(key, value) {
@@ -1274,6 +1384,48 @@ class AILISGateway extends EventEmitter {
                     { transcriptLimit: Number(url.searchParams.get('limit') || 2000) }
                 )
             );
+            return;
+        }
+
+        if (url.pathname === '/memory/strategy' && req.method === 'GET') {
+            const memoryStatus = this.memoryRuntime?.getStatus?.() || {};
+            this.sendJson(res, 200, {
+                ok: true,
+                active: memoryStatus.memoryStrategy || '',
+                strategies: this.getMemoryStrategyCatalog(),
+                status: memoryStatus.memoryStrategyStatus || null
+            });
+            return;
+        }
+
+        if (url.pathname === '/memory/strategy' && req.method === 'POST') {
+            const body = await this.readJsonBody(req);
+            this.sendJson(
+                res,
+                200,
+                this.setMemoryStrategy(body?.strategy || body?.id || '')
+            );
+            return;
+        }
+
+        if (url.pathname === '/memory/search' && req.method === 'POST') {
+            const body = await this.readJsonBody(req);
+            this.sendJson(
+                res,
+                200,
+                await this.searchMemoryAsync(body?.query || body?.text || '', body || {})
+            );
+            return;
+        }
+
+        if (url.pathname === '/memory/cognition/status' && req.method === 'GET') {
+            this.sendJson(res, 200, this.getMemoryCognitionStatus());
+            return;
+        }
+
+        if (url.pathname === '/memory/cognition/curate' && req.method === 'POST') {
+            const body = await this.readJsonBody(req);
+            this.sendJson(res, 200, await this.curateMemoryCognition(body || {}));
             return;
         }
 

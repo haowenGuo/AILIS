@@ -83,6 +83,55 @@ function buildBlankPdfWithoutSelectableText() {
     return Buffer.from(body, 'latin1');
 }
 
+test('AILIS self-evolution Gateway activates Memory v3 and exposes strategy controls', async (t) => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-gateway-memory-v3-'));
+    const gateway = new AILISGateway({
+        projectRoot: path.resolve('.'),
+        workspaceRoot: rootDir,
+        auditDir: path.join(rootDir, 'audit'),
+        port: 0,
+        enableLocalMemoryEmbeddings: false,
+        memoryCurationDebounceMs: 5000,
+        profileCurationLlm: async () => ({
+            ok: true,
+            content: JSON.stringify({
+                searchQueries: [],
+                records: [],
+                rejectedEvidenceEventIds: []
+            })
+        })
+    });
+    t.after(async () => {
+        await gateway.stop();
+        await fs.rm(rootDir, { recursive: true, force: true });
+    });
+
+    const status = await gateway.start();
+    const baseUrl = status.url;
+    const initial = await jsonFetch(`${baseUrl}/memory/strategy`);
+    assert.equal(initial.response.status, 200);
+    assert.equal(initial.body.active, 'hybrid_rrf_ledger_v3');
+    assert.ok(initial.body.strategies.some((entry) => entry.id === 'hybrid_rrf_ledger_v3'));
+
+    const baseline = await jsonFetch(`${baseUrl}/memory/strategy`, {
+        method: 'POST',
+        body: JSON.stringify({ strategy: 'bm25_phrase_v1' })
+    });
+    assert.equal(baseline.body.ok, true);
+    assert.equal(baseline.body.strategy, 'bm25_phrase_v1');
+
+    const restored = await jsonFetch(`${baseUrl}/memory/strategy`, {
+        method: 'POST',
+        body: JSON.stringify({ strategy: 'hybrid_rrf_ledger_v3' })
+    });
+    assert.equal(restored.body.ok, true);
+    assert.equal(restored.body.strategy, 'hybrid_rrf_ledger_v3');
+
+    const cognition = await jsonFetch(`${baseUrl}/memory/cognition/status`);
+    assert.equal(cognition.response.status, 200);
+    assert.equal(cognition.body.enabled, true);
+});
+
 test('AILIS Gateway exposes health, tools, guarded tool calls, and audit', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-gateway-test-'));
     const gateway = new AILISGateway({

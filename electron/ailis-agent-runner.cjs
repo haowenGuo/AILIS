@@ -6047,7 +6047,7 @@ class AILISAgentRunner {
         return attachPersonaSurface(result, surface);
     }
 
-    compileMemoryContext({ sessionId, message, request } = {}) {
+    async compileMemoryContext({ sessionId, message, request } = {}) {
         const explicitMemoryContext = normalizeExplicitMemoryContext(
             request?.memoryContext ||
                 request?.memory_context ||
@@ -6058,7 +6058,18 @@ class AILISAgentRunner {
         );
         let runtimeMemoryContext = '';
         try {
-            if (this.memoryRuntime?.compileContext) {
+            if (this.memoryRuntime?.compileContextAsync) {
+                runtimeMemoryContext = await this.memoryRuntime.compileContextAsync({
+                    sessionId,
+                    message,
+                    messageHistory: request?.messageHistory || [],
+                    contextMode: 'persona',
+                    questionTime: normalizeText(
+                        request?.runtimeEnvironmentOverride?.current_datetime ||
+                        request?.context?.runtimeEnvironmentOverride?.current_datetime
+                    )
+                });
+            } else if (this.memoryRuntime?.compileContext) {
                 runtimeMemoryContext = this.memoryRuntime.compileContext({
                     sessionId,
                     message,
@@ -6104,6 +6115,7 @@ class AILISAgentRunner {
                 attachments
             });
             if (recorded?.ok) {
+                this.gateway.scheduleMemoryCurationSoon?.('agent_turn_recorded');
                 this.gateway.emitGatewayEvent?.('agent.memory.recorded', {
                     sessionId,
                     eventId: recorded.event?.id,
@@ -6927,7 +6939,7 @@ class AILISAgentRunner {
         } catch {
             emailProfiles = requestContext.emailProfiles || {};
         }
-        const memoryContext = this.compileMemoryContext({
+        const memoryContext = await this.compileMemoryContext({
             sessionId,
             message,
             request

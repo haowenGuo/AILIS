@@ -8,6 +8,7 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { AILISGateway } = require('../electron/ailis-gateway.cjs');
 const {
+    AILISAgentRunner,
     buildAgentDirectToolSpecs,
     splitNativeProgressNoteArgs,
     stripControlTags
@@ -90,6 +91,42 @@ test('AILIS direct tool specs allow model-authored progress notes without passin
 
     assert.deepEqual(split.args, { path: 'note.txt' });
     assert.match(split.progressNote, /确认这份文件/);
+});
+
+test('AILIS Agent Runner awaits the asynchronous Memory v3 context path', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-agent-memory-v3-'));
+    let asyncCall = null;
+    const runner = new AILISAgentRunner({
+        workspaceRoot,
+        gateway: {
+            workspaceRoot,
+            auditDir: path.join(workspaceRoot, '.audit'),
+            emitGatewayEvent() {}
+        },
+        memoryRuntime: {
+            getStatus: () => ({ memoryStrategy: 'hybrid_rrf_ledger_v3' }),
+            compileContextAsync: async (payload) => {
+                asyncCall = payload;
+                return 'MEMORY_V3_ASYNC_CONTEXT';
+            }
+        }
+    });
+
+    const context = await runner.compileMemoryContext({
+        sessionId: 'memory-v3-session',
+        message: 'What is still pending?',
+        request: {
+            messageHistory: [{ role: 'user', content: 'Earlier context' }],
+            runtimeEnvironmentOverride: {
+                current_datetime: '2026-08-03T12:00:00.000Z'
+            }
+        }
+    });
+
+    assert.equal(context, 'MEMORY_V3_ASYNC_CONTEXT');
+    assert.equal(asyncCall.sessionId, 'memory-v3-session');
+    assert.equal(asyncCall.questionTime, '2026-08-03T12:00:00.000Z');
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
 });
 
 test('AILIS Agent Runner plans chat and executes file tasks through the Gateway', async () => {

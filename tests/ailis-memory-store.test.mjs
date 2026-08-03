@@ -608,3 +608,55 @@ test('AILIS memory context reads curated capsule JSON files with a UTF-8 BOM', a
     });
     assert.match(context, /BOM capsule content must remain model-visible/);
 });
+
+test('AILIS Memory v3 compiles asynchronously while synchronous callers receive a sparse fallback', async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-memory-v3-runtime-'));
+    const memory = new AILISMemoryRuntime({
+        rootDir: path.join(rootDir, 'memory'),
+        workspaceRoot: rootDir,
+        memoryStrategy: 'hybrid_rrf_ledger_v3',
+        memoryQueryPlanner: async () => ({
+            ok: true,
+            content: JSON.stringify({
+                searchQueries: ['navy blazer dry cleaning pickup'],
+                targetEntities: ['navy blazer'],
+                targetActionTypes: ['pickup'],
+                targetStates: ['pending'],
+                targetRecordKinds: ['action'],
+                needsCoverage: true,
+                needsLatestState: true
+            })
+        }),
+        memoryEmbedder: async (texts) => texts.map((text) => [
+            /blazer|dry cleaning|pickup/i.test(text) ? 1 : 0,
+            /unrelated/i.test(text) ? 1 : 0
+        ])
+    });
+    memory.recordTurn({
+        sessionId: 'closet-memory',
+        userMessage: 'I still need to pick up my navy blazer from dry cleaning.',
+        assistantMessage: 'I will remember the pending blazer pickup.',
+        source: 'test',
+        occurredAt: '2026-08-02T10:00:00.000Z'
+    });
+
+    const asyncContext = await memory.compileContextAsync({
+        sessionId: 'main',
+        message: 'What clothing pickup is still pending?',
+        questionTime: '2026-08-03T00:00:00.000Z'
+    });
+    assert.match(asyncContext, /navy blazer/i);
+    assert.equal(memory.getStatus().memoryStrategy, 'hybrid_rrf_ledger_v3');
+    assert.equal(
+        memory.getStatus().memoryStrategyStatus.embedding.runtime,
+        'injected'
+    );
+
+    const syncResult = memory.searchMemory('navy blazer', { limit: 4 });
+    assert.equal(syncResult.strategy, 'bm25_phrase_v1');
+    assert.equal(syncResult.requestedStrategy, 'hybrid_rrf_ledger_v3');
+    assert.equal(syncResult.diagnostics.mode, 'sync_sparse_fallback');
+    assert.match(memory.compileContext({ message: 'navy blazer' }), /navy blazer/i);
+
+    await fs.rm(rootDir, { recursive: true, force: true });
+});

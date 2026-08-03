@@ -1710,7 +1710,7 @@ function extractLatestUserTextFromLlmPayload(payload = {}) {
     return '';
 }
 
-function attachAilisMemoryToLlmPayload(payload = {}) {
+async function attachAilisMemoryToLlmPayload(payload = {}) {
     if (payload.includeAilisMemory !== true) {
         return payload;
     }
@@ -1721,11 +1721,16 @@ function attachAilisMemoryToLlmPayload(payload = {}) {
 
     let memoryContext = '';
     try {
-        memoryContext = ensureAILISGateway().memoryRuntime?.compileContext?.({
+        const memoryRuntime = ensureAILISGateway().memoryRuntime;
+        const contextPayload = {
             sessionId: payload.sessionId || payload.sessionKey || 'main',
             message: payload.memoryUserMessage || extractLatestUserTextFromLlmPayload(payload),
-            messageHistory: payload.messageHistory || []
-        }) || '';
+            messageHistory: payload.messageHistory || [],
+            contextMode: 'persona'
+        };
+        memoryContext = typeof memoryRuntime?.compileContextAsync === 'function'
+            ? await memoryRuntime.compileContextAsync(contextPayload)
+            : memoryRuntime?.compileContext?.(contextPayload) || '';
     } catch (error) {
         console.warn('[ailis-memory] 直连 LLM 注入记忆失败：', error.message || error);
     }
@@ -1757,11 +1762,12 @@ function attachAilisMemoryToLlmPayload(payload = {}) {
 }
 
 async function callDesktopLlm(payload = {}) {
-    const enrichedPayload = attachAilisMemoryToLlmPayload(payload);
+    const enrichedPayload = await attachAilisMemoryToLlmPayload(payload);
     const result = await callDesktopLlmProvider(getResolvedLlmSettings(), enrichedPayload);
     if (payload.includeAilisMemory === true) {
         try {
-            ensureAILISGateway().memoryRuntime?.recordTurn?.({
+            const gateway = ensureAILISGateway();
+            gateway.memoryRuntime?.recordTurn?.({
                 sessionId: payload.sessionId || payload.sessionKey || 'main',
                 userMessage: payload.memoryUserMessage || extractLatestUserTextFromLlmPayload(payload),
                 assistantMessage: result?.content || result?.error || '',
@@ -1770,6 +1776,7 @@ async function callDesktopLlm(payload = {}) {
                 messageHistory: payload.messageHistory || [],
                 attachments: payload.memoryAttachments || []
             });
+            gateway.scheduleMemoryCurationSoon?.('direct_llm_turn_recorded');
         } catch (error) {
             console.warn('[ailis-memory] 直连 LLM 写入记忆失败：', error.message || error);
         }
@@ -1878,6 +1885,8 @@ function ensureAILISGateway() {
         auditDir: getPersistedAILISStateDir(),
         getDefaultContext: () => getAILISDefaultContext(),
         getEmailProfiles: () => getPersistedEmailProfiles(),
+        profileCurationLlm: (payload) =>
+            callDesktopLlmProvider(getResolvedLlmSettings(), payload || {}),
         visionServices: {
             permissionPolicy: 'manual',
             getLlmSettings: () => getResolvedLlmSettings(),

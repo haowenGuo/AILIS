@@ -22,7 +22,7 @@ The older AILIS project focused mainly on a web/desktop-pet companion experience
 - Vision tools for chat-window, full-screen, and region screenshots as model context
 - Speech routes focused on safe defaults, ElevenLabs cloud output, and a bundled CosyVoice3 local runtime path
 - Local ASR direction with automatic voice activity detection
-- Memory blocks, project memory, relationship state, and lightweight reflection
+- Memory v3 with provenance-preserving Event/Action Ledger, multilingual E5, temporal/entity retrieval, and raw evidence anchors
 - Humanlike experience evals for persona, tone, memory use, emotion response, and low tool-feel
 - Codex-style tool discovery with deferred MCP/Web/research tools, stricter schemas, and evidence-aware stopping
 - Local-first retrieval upgrades with Crawl4AI-style rendered fetch fallback and bundled runtime preparation
@@ -46,6 +46,61 @@ Current release candidate: `v1.0.5`.
 
 This release line focuses on making AILIS feel shippable as a desktop assistant: AILIS naming cleanup, safer default voice behavior, memory controls, local-model setup guidance, stronger Web/Search evidence handling, Crawl4AI-backed fetch preparation, and GAIA-derived tool-loop hardening.
 
+## AILIS Memory v3: LongMemEval-S Full Evaluation
+
+AILIS Memory v3 completed all **500 LongMemEval-S questions** on 2026-08-02. Generation and judging both finished with zero failed questions. The accepted result is **380 / 500 (76.00%)**.
+
+This is a complete internal AILIS evaluation, not an official leaderboard submission. It preserves the verbatim LongMemEval QA prompt and binary aggregation, but uses `gpt-5.6-luna` as both Reader and Judge. Results from different datasets, Readers, Judges, or retrieval budgets are not treated as directly comparable.
+
+| Evaluation contract | Frozen value |
+| --- | --- |
+| Dataset | `longmemeval_s_cleaned.json`, 500 questions |
+| Candidate / Reader | `gpt-5.6-luna`, reasoning effort `medium` |
+| Memory strategy | `hybrid_rrf_ledger_v3`, 4,800-token memory budget |
+| Dense retriever | `Xenova/multilingual-e5-small` |
+| Dense revision | `761b726dd34fb83930e26aab4e9ac3899aa1fa78` |
+| Dense execution | Batch 1, one native thread per worker, fallback disabled |
+| Generation | 3 workers; **500 / 500**, 0 failed |
+| Judge | Verbatim official QA prompt; 3 Luna workers |
+| Final result | **380 / 500, 76.00%** |
+| Isolation | TaskAgent 0; short-term messages 0; dense fallback 0 |
+| Provenance | Missing Ledger 0; missing/empty/task sources 0; dangling supersession 0 |
+
+### Accuracy by question type
+
+```mermaid
+xychart-beta
+    title "AILIS Memory v3 accuracy by LongMemEval-S question type"
+    x-axis ["User", "Assistant", "Knowledge", "Preference", "Multi", "Temporal"]
+    y-axis "Accuracy (%)" 0 --> 100
+    bar [97.14, 91.07, 88.46, 80.00, 72.18, 54.14]
+```
+
+| Question type | Correct | Accuracy | Errors | Session R@8 | Turn R@8 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Single-session user | 68 / 70 | **97.14%** | 2 | 98.57% | 84.29% |
+| Single-session assistant | 51 / 56 | **91.07%** | 5 | 100.00% | 98.21% |
+| Knowledge update | 69 / 78 | **88.46%** | 9 | 96.79% | 85.47% |
+| Single-session preference | 24 / 30 | **80.00%** | 6 | 93.33% | 76.67% |
+| Multi-session | 96 / 133 | **72.18%** | 37 | 88.25% | 71.17% |
+| Temporal reasoning | 72 / 133 | **54.14%** | 61 | 67.84% | 58.32% |
+| **Overall / macro retrieval** | **380 / 500** | **76.00%** | **120** | **87.22%** | **75.18%** |
+
+Micro Session R@8 is **83.54%** and Micro Turn R@8 is **73.80%**. Temporal and multi-session questions account for **98 / 120 errors (81.67%)**.
+
+### Retrieval coverage and final accuracy
+
+| Turn-evidence bucket | Correct | Accuracy | Incorrect |
+| --- | ---: | ---: | ---: |
+| Perfect Turn R@8 = 1 | 299 / 326 | **91.72%** | 27 |
+| Partial 0 < Turn R@8 < 1 | 47 / 97 | **48.45%** | 50 |
+| Zero Turn R@8 = 0 | 15 / 56 | **26.79%** | 41 |
+| Turn metric not scored | 19 / 21 | **90.48%** | 2 |
+
+**91 / 120 errors (75.8%)** occur when turn-level evidence is partial or absent. The remaining 27 failures with perfect Turn R@8 are primarily Reader reasoning, temporal interpretation, answer formulation, or Judge-boundary cases. These are diagnostic correlations, not a controlled causal decomposition.
+
+Compared with the earlier internally reported AILIS result of **46.2%**, Memory v3 is **29.8 percentage points higher** and reduces relative error by about **55.4%**. The earlier artifact was not revalidated under the same Reader/Judge contract, so this remains an internal historical comparison rather than a same-protocol leaderboard claim.
+
 ## Architecture
 
 ```text
@@ -63,6 +118,7 @@ Core design documents:
 
 - [Embodied Agent Architecture](docs/ailis-embodied-agent-architecture.md)
 - [Memory Architecture V2](docs/ailis-memory-architecture-v2.md)
+- [Memory v3 Hybrid RRF + Event/Action Ledger](docs/ailis-memory-v3-hybrid-ledger.md)
 - [Humanlike Eval](docs/ailis-humanlike-eval.md)
 - [OpenClaw From Zero](docs/openclaw-from-zero.md)
 - [Tool Ecosystem Driver Guide](docs/tool-ecosystem-driver-guide.md)
@@ -106,6 +162,15 @@ python -m uvicorn backend.main:app --reload
 ## Configuration
 
 Most desktop settings are managed through the Electron control panel and local desktop state. The project supports OpenAI-compatible providers, including custom base URLs, model names, request timeouts, and local/private credentials.
+
+When a configured desktop LLM is available, the self-evolution Gateway activates Memory v3 by default. It can also be selected explicitly:
+
+```powershell
+$env:AILIS_MEMORY_STRATEGY = 'hybrid_rrf_ledger_v3'
+$env:AILIS_MEMORY_EMBEDDING_BATCH_SIZE = '2'
+```
+
+The local Gateway exposes `GET/POST /memory/strategy`, `POST /memory/search`, `GET /memory/cognition/status`, and `POST /memory/cognition/curate`. Strategy selection persists in the local `memory-strategy.json` file.
 
 Useful environment examples live in:
 

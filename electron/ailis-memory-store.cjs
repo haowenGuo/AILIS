@@ -1157,6 +1157,33 @@ class AILISMemoryRuntime {
         }).asDeveloperInstruction();
     }
 
+    async compileContextAsync({
+        sessionId = 'main',
+        message = '',
+        messageHistory = [],
+        maxChars = MAX_CONTEXT_CHARS,
+        contextMode = 'persona',
+        questionTime = ''
+    } = {}) {
+        const { AILISContextCompiler } = require('./ailis-context-compiler.cjs');
+        const memorySources = await this.getContextSourcesAsync({
+            sessionId,
+            message,
+            messageHistory,
+            contextMode,
+            questionTime
+        });
+        return new AILISContextCompiler({ memoryRuntime: this }).compile({
+            sessionId,
+            currentUserMessage: message,
+            sessionRecentTurns: messageHistory,
+            agentMode: normalizeText(contextMode, 'persona').toLowerCase(),
+            memorySources,
+            sectionBudgets: memorySources?.recommendedSectionBudgets || {},
+            maxChars: Number(memorySources?.recommendedMaxChars) || maxChars
+        }).asDeveloperInstruction();
+    }
+
     getRecentSessionEvents(sessionId = 'main', { limit = DEFAULT_RECENT_SESSION_EVENT_LIMIT } = {}) {
         const normalizedSessionId = normalizeText(sessionId, 'main');
         const boundedLimit = Math.max(1, Math.min(Number(limit) || DEFAULT_RECENT_SESSION_EVENT_LIMIT, 30));
@@ -1169,13 +1196,33 @@ class AILISMemoryRuntime {
     searchMemory(query, { limit = 10, strategy = this.memoryStrategy, questionTime = '' } = {}) {
         const resolvedStrategy = resolveMemoryStrategy(strategy, this.memoryStrategy);
         if (resolvedStrategy !== 'bm25_phrase_v1') {
-            return this.strategyEngine.searchSync({
-                query,
-                events: this.state?.events || [],
-                limit,
-                strategy: resolvedStrategy,
-                questionTime
-            });
+            try {
+                return this.strategyEngine.searchSync({
+                    query,
+                    events: this.state?.events || [],
+                    limit,
+                    strategy: resolvedStrategy,
+                    questionTime
+                });
+            } catch (error) {
+                if (error?.code !== 'async_full_memory_required') {
+                    throw error;
+                }
+                const fallback = this.searchMemory(query, {
+                    limit,
+                    strategy: 'bm25_phrase_v1',
+                    questionTime
+                });
+                return {
+                    ...fallback,
+                    requestedStrategy: resolvedStrategy,
+                    diagnostics: {
+                        ...(fallback.diagnostics || {}),
+                        mode: 'sync_sparse_fallback',
+                        requestedStrategy: resolvedStrategy
+                    }
+                };
+            }
         }
         const normalizedQuery = normalizeText(query);
         const sourceEvents = Array.isArray(this.state?.events) ? this.state.events : [];
