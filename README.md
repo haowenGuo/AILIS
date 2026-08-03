@@ -85,22 +85,27 @@ task. AILIS retained ownership of context, tools, permissions, compaction,
 retries and final result transport; the Codex subscription bridge supplied only
 the model backend.
 
-| Metric | Result |
-| --- | ---: |
-| Overall | **102 / 165, 61.82%** |
-| Level 1 | 38 / 53, 71.70% |
-| Level 2 | 50 / 86, 58.14% |
-| Level 3 | **14 / 26, 53.85%** |
-| Answer-bearing outcomes | **165 / 165, 100%** |
-| Gross tokens | 31.37M, 190.1K per task |
-| Mean / P95 latency | 210.4s / 575.0s |
+| Metric | AILIS P1 | **AILIS A6** | Native Codex |
+| --- | ---: | ---: | ---: |
+| Overall | 54 / 165, 32.73% | **102 / 165, 61.82%** | **106 / 165, 64.24%** |
+| Level 1 | 24 / 53 | **38 / 53** | 42 / 53 |
+| Level 2 | 28 / 86 | **50 / 86** | 56 / 86 |
+| Level 3 | 2 / 26 | **14 / 26** | 8 / 26 |
+| Answer-bearing outcomes | 165 / 165 | **165 / 165** | 161 / 165 |
+| Gross tokens | 41.23M | **31.37M** | 69.06M |
+| Effective tokens | 28.55M | **31.37M** | 8.18M |
+| Mean / P95 latency | 277.0s / 509.6s | **210.4s / 575.0s** | 255.9s / 584.7s |
+| Logical tool calls | 1,138 | **1,814** | 1,959 |
 
 A6 removes P1's fixed round boundary and synthetic final-answer request. The
 model now terminates naturally from canonical history, while semantic
 compaction controls context growth. Under the same Luna model and task manifest,
 A6 improves over P1 from 54 to 102 correct, uses 23.9% fewer tokens, and lowers
-mean latency by 24.0%. Native Codex-Luna scores 106/165 overall; A6 is four
-answers behind overall but solves 14 L3 tasks versus Codex's 8.
+mean latency by 24.0%. Native Codex-Luna scores 106/165 overall; A6 is only four
+answers and 2.42 percentage points behind, returns four more answers, and solves
+14 L3 tasks versus Codex's 8. This Codex control is shown to locate A6 against a
+widely used general-agent runtime, not to claim an official GAIA leaderboard
+submission.
 
 This is a local deterministic visible-answer evaluation on the public
 validation split, not an official private-test leaderboard submission. Each
