@@ -57,7 +57,48 @@ AILIS is developed as an evaluated agent system, not only as a character demo. T
 
 ## LongMemEval-S: Memory v3 Full Evaluation
 
-AILIS Memory v3 completed a full **500-question LongMemEval-S** run on 2026-08-02. Generation and judging both completed without a failed question. The final QA result is **380 / 500 (76.00%)**. This is a complete internal benchmark result, not an official leaderboard submission: AILIS preserves the verbatim LongMemEval QA prompt and binary aggregation, but uses `gpt-5.6-luna` as both Reader and Judge rather than the reference GPT-4o Judge shown by the [official LongMemEval evaluator](https://github.com/xiaowu0162/LongMemEval).
+AILIS Memory v3 completed a full **500-question LongMemEval-S** run on 2026-08-02. Generation and judging both completed without a failed question. The final QA result is **380 / 500 (76.00%)**.
+
+Memory v3 is the single active long-term conversation-memory path in current AILIS. It is not merely a vector-search layer: it preserves immutable raw turns, derives a provenance-checked Event/Action Ledger, searches exact, semantic, temporal, and entity views independently, and fuses the ranked evidence before compiling the Reader context. The benchmark therefore measures the complete path from stored conversation to final answer, not the embedding model in isolation.
+
+This is a complete **internal** benchmark result, not an official leaderboard submission. AILIS preserves the verbatim LongMemEval QA Judge prompt and binary aggregation, but uses `gpt-5.6-luna` as both Reader and Judge rather than the reference GPT-4o Judge shown by the [official LongMemEval evaluator](https://github.com/xiaowu0162/LongMemEval).
+
+### What Memory v3 is and what the benchmark evaluates
+
+```mermaid
+flowchart LR
+    A["Persona conversation turns"] --> B["Immutable raw events"]
+    B --> C["BM25 exact-match index"]
+    B --> D["Multilingual E5 semantic index"]
+    B --> E["Provenance-checked Ledger curator"]
+    E --> F["Event / Action Ledger v3"]
+    F --> G["Temporal and entity channels"]
+    C --> H["Reciprocal Rank Fusion"]
+    D --> H
+    G --> H
+    H --> I["Cited Ledger records + raw turns"]
+    I --> J["4,800-token context compiler"]
+    J --> K["Luna Reader answer"]
+```
+
+The raw conversation remains the source of truth. Ledger records are rebuildable derived data with source event/session references, lifecycle state, timestamps, entity identity, and supersession links. TaskAgent content is excluded before curation and retrieval; the accepted evaluation recorded **zero TaskAgent steps**, **zero short-term messages**, and **zero dense-fallback rows**. The [Memory v3 architecture note](docs/ailis-memory-v3-hybrid-ledger.md) documents the storage, retrieval, provenance, lifecycle, and destructive-operation contracts in detail.
+
+The full evaluation exercises that entire architecture:
+
+```mermaid
+flowchart LR
+    A["LongMemEval-S<br/>500 questions"] --> B["Memory v3 retrieval"]
+    B --> C["Compiled evidence context"]
+    C --> D["Luna Reader<br/>3 workers"]
+    D --> E["500 hypotheses<br/>0 generation failures"]
+    E --> F["Verbatim official QA Judge prompt"]
+    F --> G["Luna Judge<br/>3 workers"]
+    G --> H["380 correct"]
+    G --> I["120 incorrect"]
+    H --> J["76.00% question accuracy"]
+```
+
+This separation matters: retrieval metrics tell us whether the supporting sessions and turns reached the context, while QA accuracy tells us whether the Reader converted that evidence into an answer the Judge accepted.
 
 ### Evaluation contract and result
 
@@ -75,6 +116,23 @@ AILIS Memory v3 completed a full **500-question LongMemEval-S** run on 2026-08-0
 | Isolation invariants | TaskAgent steps 0; short-term messages 0; dense fallback rows 0 |
 | Provenance gate | Missing Ledger 0; empty/missing/task sources 0/0/0; actual dangling supersession 0 |
 | Ledger scale | 63,124 records from 124,351 processed events |
+
+### How to interpret 76.00%
+
+At the most concrete level, AILIS answered **19 of every 25 questions correctly** under this frozen protocol. The score is question-level end-to-end accuracy; it does **not** mean that “76% of memories are correct” or that retrieval alone is 76% accurate.
+
+| Scorecard | Result | What it says |
+| --- | ---: | --- |
+| End-to-end QA | **380 / 500 (76.00%)** | Final answers accepted by the binary Judge |
+| Macro Session R@8 | **87.22%** | Mean coverage of the gold evidence sessions |
+| Macro Turn R@8 | **75.18%** | Mean coverage of the exact gold evidence turns |
+| Strongest question type | **97.14%** | Single-session user facts are near saturation |
+| Weakest question type | **54.14%** | Temporal reasoning remains the main weakness |
+| Concentrated error share | **98 / 120 (81.67%)** | Temporal and multi-session questions dominate the remaining errors |
+
+`R@8` means recall among the first eight retrieved evidence units. Session R@8 asks whether the relevant conversation sessions were found; Turn R@8 applies the stricter test of whether the exact supporting turns were found.
+
+The practical profile is stronger than the single number suggests for ordinary personal-memory queries: user facts scored 97.14%, assistant facts 91.07%, knowledge updates 88.46%, and preferences 80.00%. The remaining gap is concentrated in chronology and evidence that must be assembled across sessions, so 76.00% should be read as **good general recall with a clearly localized long-horizon reasoning weakness**, not uniform 76% performance on every kind of memory request.
 
 ### Stage-to-full comparison
 
@@ -143,6 +201,14 @@ Correct answers had much stronger evidence recall than incorrect answers:
 
 ```mermaid
 xychart-beta
+    title "Evidence recall for correct versus incorrect answers"
+    x-axis ["Correct Session", "Correct Turn", "Incorrect Session", "Incorrect Turn"]
+    y-axis "Recall@8 (%)" 0 --> 100
+    bar [95.25, 85.04, 61.78, 43.96]
+```
+
+```mermaid
+xychart-beta
     title "QA accuracy by turn-evidence recall bucket"
     x-axis ["Perfect R@8", "Partial R@8", "Zero R@8", "Not scored"]
     y-axis "QA accuracy (%)" 0 --> 100
@@ -158,11 +224,31 @@ xychart-beta
 
 **91 / 120 errors (75.8%)** occur when turn-level evidence is partial or absent, making retrieval coverage the primary bottleneck. Another **27 / 120 errors (22.5%)** remain despite perfect turn recall; these form the Reader/reasoning, temporal interpretation, answer formulation, and Judge-boundary bucket. These relationships are diagnostic correlations, not a controlled causal decomposition.
 
+```mermaid
+pie showData
+    title "Evidence condition among the 120 incorrect answers"
+    "Partial or zero Turn R@8" : 91
+    "Perfect Turn R@8" : 27
+    "Turn metric not scored" : 2
+```
+
+The two charts give a useful division of labor for future work. Retrieval and context packing can directly target the 91 evidence-incomplete errors. The 27 evidence-complete errors instead require Reader-side chronology, conflict resolution, answer formulation, or a closer audit of the binary Judge boundary.
+
 The 30 abstention questions scored **27 / 30 (90.00%)**, compared with **353 / 470 (75.11%)** on non-abstention questions. Abstention behavior is not the principal source of error.
 
 ### Historical AILIS comparison
 
 Against the earlier internally reported AILIS result of **46.2%**, Memory v3 improves by **29.8 percentage points**, a **64.5% relative accuracy increase**. Error rate falls from 53.8% to 24.0%, a **55.4% relative error reduction**. The old 46.2% artifact was not independently revalidated during this final audit, so this remains a historical internal comparison unless dataset, Reader, and Judge equivalence are established.
+
+```mermaid
+xychart-beta
+    title "AILIS internal accuracy history (protocols differ)"
+    x-axis ["Earlier AILIS", "Memory v3"]
+    y-axis "Accuracy (%)" 0 --> 100
+    bar [46.2, 76.0]
+```
+
+The chart visualizes product progress only. It is **not** a same-protocol leaderboard comparison: the evaluated subset, memory implementation, Reader, and Judge must all match before two systems can be ranked directly. For the same reason, public Mem0 or Zep figures are not placed on this chart.
 
 ### Audit correction and evidence paths
 
