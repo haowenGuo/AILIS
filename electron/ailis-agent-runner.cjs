@@ -10056,7 +10056,13 @@ class AILISAgentRunner {
         return attachPersonaSurface(result, surface);
     }
 
-    compileMemoryContext({ sessionId, message, request, contextMode = 'persona' } = {}) {
+    compileMemoryContext({
+        sessionId,
+        message,
+        request,
+        contextMode = 'persona',
+        memorySources = null
+    } = {}) {
         if (resolveMemoryPolicy(request, request?.context || {}) === 'disabled') {
             return '';
         }
@@ -10096,6 +10102,10 @@ class AILISAgentRunner {
             }
         }
         try {
+            const requestedSectionBudgets =
+                request?.memorySectionBudgets ||
+                request?.context?.memorySectionBudgets ||
+                {};
             return this.contextCompiler.compile({
                 sessionId,
                 currentUserMessage: message,
@@ -10103,11 +10113,16 @@ class AILISAgentRunner {
                 activeTaskState: activeTaskContext,
                 interactionPreferences: preferenceContext,
                 explicitMemoryContext,
+                memorySources,
                 agentMode: personaMode ? 'persona' : 'task_agent',
-                sectionBudgets: request?.memorySectionBudgets || request?.context?.memorySectionBudgets || {},
+                sectionBudgets: {
+                    ...(memorySources?.recommendedSectionBudgets || {}),
+                    ...requestedSectionBudgets
+                },
                 maxChars: Number(
                     request?.memoryContextMaxChars ||
                     request?.context?.memoryContextMaxChars ||
+                    memorySources?.recommendedMaxChars ||
                     (personaMode ? MAX_PROMPT_MEMORY_CHARS : 12000)
                 )
             });
@@ -10117,6 +10132,45 @@ class AILISAgentRunner {
                 error: error?.message || String(error)
             });
             return explicitMemoryContext;
+        }
+    }
+
+    async compileMemoryContextAsync({
+        sessionId,
+        message,
+        request,
+        contextMode = 'persona'
+    } = {}) {
+        if (
+            resolveMemoryPolicy(request, request?.context || {}) === 'disabled' ||
+            typeof this.memoryRuntime?.getContextSourcesAsync !== 'function'
+        ) {
+            return this.compileMemoryContext({ sessionId, message, request, contextMode });
+        }
+        try {
+            const memorySources = await this.memoryRuntime.getContextSourcesAsync({
+                sessionId,
+                message,
+                messageHistory: request?.messageHistory || [],
+                contextMode,
+                questionTime: normalizeText(
+                    request?.runtimeEnvironmentOverride?.current_datetime ||
+                    request?.context?.runtimeEnvironmentOverride?.current_datetime
+                )
+            });
+            return this.compileMemoryContext({
+                sessionId,
+                message,
+                request,
+                contextMode,
+                memorySources
+            });
+        } catch (error) {
+            this.gateway.emitGatewayEvent?.('agent.memory.async_context_error', {
+                sessionId,
+                error: error?.message || String(error)
+            });
+            return this.compileMemoryContext({ sessionId, message, request, contextMode });
         }
     }
 
@@ -11021,7 +11075,7 @@ class AILISAgentRunner {
             emailProfiles = requestContext.emailProfiles || {};
         }
         const agentContextMode = resolveAgentContextMode(request, requestContext);
-        const memoryContext = this.compileMemoryContext({
+        const memoryContext = await this.compileMemoryContextAsync({
             sessionId,
             message,
             request,
