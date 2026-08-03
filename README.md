@@ -160,32 +160,6 @@ xychart-beta
 
 The 30 abstention questions scored **27 / 30 (90.00%)**, compared with **353 / 470 (75.11%)** on non-abstention questions. Abstention behavior is not the principal source of error.
 
-### Directional public comparison
-
-The following chart is intentionally **not a leaderboard claim**. Zep and Mem0 disclose results on 500-question LongMemEval evaluations, but Reader model, Judge model, dataset snapshot, retrieval depth, context packing, and vendor harness differ from this AILIS run.
-
-```mermaid
-xychart-beta
-    title "Reported LongMemEval accuracy under different protocols"
-    x-axis ["AILIS v3", "Zep", "Mem0"]
-    y-axis "Accuracy (%)" 0 --> 100
-    bar [76.00, 90.20, 94.40]
-```
-
-| Question type | AILIS v3 | Zep disclosed | Gap to Zep | Mem0 disclosed | Gap to Mem0 |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| Single-session user | 97.14% | 94.3% | **+2.84 pp** | 98.6% | -1.46 pp |
-| Single-session assistant | 91.07% | 96.4% | -5.33 pp | 98.2% | -7.13 pp |
-| Knowledge update | 88.46% | 93.6% | -5.14 pp | 93.6% | -5.14 pp |
-| Single-session preference | 80.00% | 90.0% | -10.00 pp | 96.7% | -16.70 pp |
-| Multi-session | 72.18% | 83.5% | -11.32 pp | 88.0% | -15.82 pp |
-| Temporal reasoning | 54.14% | 90.2% | **-36.06 pp** | 97.0% | **-42.86 pp** |
-| **Overall** | **76.00%** | **90.2%** | **-14.20 pp** | **94.4%** | **-18.40 pp** |
-
-Zep reports **451 / 500 (90.2%)**, a median context of 4,408 tokens, and category results on its [official research page](https://www.getzep.com/research/). Mem0 reports **94.4%**, 6,787 mean tokens, and its category breakdown on the [official Mem0 research page](https://mem0.ai/research/). Mem0 further states that 94.4% uses `top_200`, while `top_50` reaches 94.8%, in its [temporal-reasoning report](https://mem0.ai/blog/introducing-temporal-reasoning-in-mem0). AILIS reports a 4,800-token context budget and R@8 diagnostics; those retrieval contracts are not equivalent.
-
-The directional gaps are 71 answers to Zep and 92 answers to Mem0. Most of the category-level distance comes from temporal reasoning, followed by multi-session synthesis and preference updates. Conversely, AILIS single-session user recall is already competitive with the disclosed figures.
-
 ### Historical AILIS comparison
 
 Against the earlier internally reported AILIS result of **46.2%**, Memory v3 improves by **29.8 percentage points**, a **64.5% relative accuracy increase**. Error rate falls from 53.8% to 24.0%, a **55.4% relative error reduction**. The old 46.2% artifact was not independently revalidated during this final audit, so this remains a historical internal comparison unless dataset, Reader, and Judge equivalence are established.
