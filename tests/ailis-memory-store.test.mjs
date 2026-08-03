@@ -6,7 +6,32 @@ import path from 'node:path';
 import test from 'node:test';
 
 const require = createRequire(import.meta.url);
+const fsSync = require('node:fs');
 const { AILISMemoryRuntime } = require('../electron/ailis-memory-store.cjs');
+
+test('AILIS memory runtime retries transient Windows atomic rename failures', async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-memory-rename-retry-'));
+    const originalRenameSync = fsSync.renameSync;
+    let injectedFailures = 2;
+    fsSync.renameSync = (...args) => {
+        if (injectedFailures > 0) {
+            injectedFailures -= 1;
+            throw Object.assign(new Error('injected Windows file lock'), { code: 'EPERM' });
+        }
+        return originalRenameSync(...args);
+    };
+    try {
+        const memory = new AILISMemoryRuntime({
+            rootDir: path.join(rootDir, 'memory'),
+            workspaceRoot: path.join(rootDir, 'workspace')
+        });
+        assert.equal(memory.getStatus().loaded, true);
+        assert.equal(injectedFailures, 0);
+    } finally {
+        fsSync.renameSync = originalRenameSync;
+        await fs.rm(rootDir, { recursive: true, force: true });
+    }
+});
 
 test('AILIS memory runtime persists events and redacted secret index without legacy rule extraction', async () => {
     const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-memory-'));
@@ -237,6 +262,125 @@ test('AILIS Persona retrieval uses recent visible turns while keeping the curren
     assert.match(observedQuery, /user: 你好/);
     assert.match(observedQuery, /assistant: 你好，我在。/);
     assert.equal(observedQuery.split('Solve this long GAIA task with a verifier.').length - 1, 1);
+});
+
+test('AILIS memory hybrid retrieval favors rare evidence and diversifies sessions', async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-memory-hybrid-retrieval-'));
+    const memory = new AILISMemoryRuntime({
+        rootDir: path.join(rootDir, 'memory'),
+        workspaceRoot: rootDir
+    });
+    for (let index = 0; index < 8; index += 1) {
+        memory.recordTurn({
+            sessionId: 'repeated-noise-session',
+            userMessage: `I had an ordinary appointment discussion number ${index}.`,
+            assistantMessage: 'We discussed a general calendar and ordinary plans.',
+            source: 'test',
+            occurredAt: `2026-07-${String(index + 1).padStart(2, '0')}T00:00:00.000Z`
+        });
+    }
+    memory.recordTurn({
+        sessionId: 'doctor-evidence-one',
+        userMessage: 'My March cardiologist appointment was on Monday.',
+        assistantMessage: 'That was the first cardiologist visit in March.',
+        source: 'test',
+        occurredAt: '2026-06-01T00:00:00.000Z'
+    });
+    memory.recordTurn({
+        sessionId: 'doctor-evidence-two',
+        userMessage: 'I returned to the cardiologist for another March appointment.',
+        assistantMessage: 'That makes a second specialist visit.',
+        source: 'test',
+        occurredAt: '2026-06-02T00:00:00.000Z'
+    });
+
+    const result = memory.searchMemory(
+        'Please answer based on past conversations: how many cardiologist appointments were in March?',
+        { limit: 4 }
+    );
+    assert.equal(result.strategy, 'bm25_phrase_v1');
+    assert.deepEqual(
+        result.events.slice(0, 2).map((event) => event.sessionId).sort(),
+        ['doctor-evidence-one', 'doctor-evidence-two']
+    );
+    assert.ok(
+        result.events.filter((event) => event.sessionId === 'repeated-noise-session').length <= 2
+    );
+});
+
+test('AILIS memory prompt centers long event snippets around the matched evidence', async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-memory-snippet-'));
+    const memory = new AILISMemoryRuntime({
+        rootDir: path.join(rootDir, 'memory'),
+        workspaceRoot: rootDir
+    });
+    memory.recordTurn({
+        sessionId: 'long-shift-table',
+        userMessage: 'Please remember the complete weekly shift rotation.',
+        assistantMessage: `${'irrelevant shift filler '.repeat(45)} Admon Sunday 8 am - 4 pm Day Shift`,
+        source: 'test'
+    });
+
+    const context = memory.compileContext({
+        sessionId: 'new-session',
+        message: 'What was the Sunday shift for Admon?'
+    });
+    assert.match(context, /Admon Sunday 8 am - 4 pm Day Shift/);
+});
+
+test('AILIS query-aware profile packing promotes a relevant late profile item', async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-memory-profile-retrieval-'));
+    const memoryRoot = path.join(rootDir, 'memory');
+    const memory = new AILISMemoryRuntime({ rootDir: memoryRoot, workspaceRoot: rootDir });
+    const unrelatedItems = Array.from({ length: 30 }, (_, index) => ({
+        id: `unrelated-${index}`,
+        category: 'decision_preferences',
+        claim: `The user has a stable unrelated preference about generic topic ${index} and detailed choices.`,
+        confidence: 0.99 - index * 0.001,
+        stability: 'stable',
+        status: 'active',
+        evidenceIds: [`raw-unrelated-${index}`]
+    }));
+    await fs.writeFile(path.join(memoryRoot, 'user-profile.json'), JSON.stringify({
+        version: 1,
+        items: [
+            ...unrelatedItems,
+            {
+                id: 'video-editing-target',
+                category: 'aesthetic_style',
+                claim: 'For video editing resources, the user prefers advanced Adobe Premiere Pro tutorials.',
+                confidence: 0.71,
+                stability: 'candidate',
+                status: 'active',
+                evidenceIds: ['raw-video-target']
+            }
+        ]
+    }, null, 2));
+
+    const context = memory.compileContext({
+        sessionId: 'profile-retrieval',
+        message: 'Recommend video editing resources for me.'
+    });
+    assert.match(context, /advanced Adobe Premiere Pro tutorials/);
+    assert.doesNotMatch(context, /raw-video-target/);
+});
+
+test('AILIS explicitly empty core blocks remain empty after restart', async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-memory-empty-block-'));
+    const memoryRoot = path.join(rootDir, 'memory');
+    const memory = new AILISMemoryRuntime({ rootDir: memoryRoot, workspaceRoot: rootDir });
+    for (const key of ['user', 'relationship', 'project']) {
+        assert.equal(memory.updateBlock(key, '').ok, true);
+    }
+
+    const restarted = new AILISMemoryRuntime({ rootDir: memoryRoot, workspaceRoot: rootDir });
+    const blocks = Object.fromEntries(
+        restarted.getSnapshot({ includeEvents: false }).blocks.map((block) => [block.key, block.value])
+    );
+    assert.equal(blocks.user, '');
+    assert.equal(blocks.relationship, '');
+    assert.equal(blocks.project, '');
+    assert.ok(blocks.persona);
 });
 
 test('AILIS restores recent same-session memory after runtime restart', async () => {

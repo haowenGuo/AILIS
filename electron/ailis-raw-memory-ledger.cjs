@@ -235,12 +235,17 @@ class AILISRawMemoryLedger {
         requestPayload = {},
         enrichedPayload = {},
         result = {},
-        durationMs = null
+        durationMs = null,
+        iso = '',
+        runId = '',
+        meta = {}
     } = {}) {
         return this.appendEntry({
+            iso,
             type: 'chat.llm_turn',
             source,
             sessionId,
+            runId,
             category: 'conversation',
             payload: {
                 requestPayload,
@@ -248,6 +253,7 @@ class AILISRawMemoryLedger {
                 result
             },
             meta: {
+                ...(meta && typeof meta === 'object' && !Array.isArray(meta) ? meta : {}),
                 durationMs
             }
         });

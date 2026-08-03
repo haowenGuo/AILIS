@@ -1,6 +1,14 @@
 const fs = require('fs');
 const path = require('path');
 const { randomUUID } = require('crypto');
+const {
+    AILISMemoryStrategyEngine,
+    MEMORY_COGNITION_FILE,
+    MEMORY_STRATEGIES,
+    defaultCognitionState,
+    resolveMemoryStrategy,
+    strategyCatalog
+} = require('./ailis-memory-strategies.cjs');
 
 const MEMORY_STORE_VERSION = 2;
 const DEFAULT_AFFINITY_SCORE = 50;
@@ -11,8 +19,24 @@ const MAX_AFFINITY_EVENTS = 200;
 const DEFAULT_RELEVANT_EVENT_LIMIT = 8;
 const DEFAULT_RECENT_SESSION_EVENT_LIMIT = 6;
 const MAX_PROMPT_EVENT_TEXT_CHARS = 260;
+const MEMORY_SEARCH_BM25_K1 = 1.2;
+const MEMORY_SEARCH_BM25_B = 0.72;
+const MEMORY_SEARCH_MAX_EVENTS_PER_SESSION = 2;
 const SECRET_PROTECTION = 'local-file-base64';
 const LEGACY_AUTO_LEARNED_BLOCK_KEYS = new Set(['user', 'relationship', 'project']);
+const MEMORY_SEARCH_STOP_WORDS = new Set([
+    'a', 'about', 'after', 'again', 'all', 'also', 'am', 'an', 'and', 'answer', 'any',
+    'are', 'as', 'at', 'based', 'be', 'because', 'been', 'before', 'being', 'between',
+    'both', 'but', 'by', 'can', 'conversation', 'conversations', 'could', 'current',
+    'date', 'did', 'do', 'does', 'doing', 'during', 'each', 'for', 'from', 'had', 'has',
+    'have', 'having', 'he', 'her', 'here', 'hers', 'him', 'his', 'how', 'i', 'if', 'in',
+    'into', 'is', 'it', 'its', 'just', 'me', 'memory', 'more', 'most', 'my', 'of', 'on',
+    'once', 'or', 'other', 'our', 'ours', 'past', 'please', 'question', 'remember',
+    'same', 'she', 'should', 'so', 'some', 'than', 'that', 'the', 'their', 'theirs',
+    'them', 'then', 'there', 'these', 'they', 'this', 'those', 'through', 'to', 'too',
+    'until', 'up', 'us', 'user', 'very', 'was', 'we', 'were', 'what', 'when', 'where',
+    'which', 'while', 'who', 'why', 'will', 'with', 'would', 'you', 'your', 'yours'
+]);
 const MEMORY_CONTROL_TAG_PATTERN = /(?:\[\s*|【\s*)(?:action|expression|emotion|gestureIntent|socialTone|taskState|speechEnergy|gazeTarget|durationHint)\s*[:=：＝][^\]】\r\n]*(?:\]|】)/gi;
 const MEMORY_PROTOCOL_MARKER_PATTERN = /(?:<\s*(?:(?:\|{2}|｜{2})\s*DSML\s*(?:\|{2}|｜{2}))?\s*(?:tool_calls?|invoke|parameter)\b|(?:\|{2}|｜{2})\s*DSML\s*(?:\|{2}|｜{2}))/i;
 const DEFAULT_AILIS_PERSONA_TEXT = [
@@ -26,6 +50,15 @@ const DEFAULT_AILIS_PERSONA_TEXT = [
 
 function nowIso() {
     return new Date().toISOString();
+}
+
+function normalizeOccurredAt(value) {
+    const candidate = normalizeText(value);
+    if (!candidate) {
+        return nowIso();
+    }
+    const parsed = Date.parse(candidate);
+    return Number.isFinite(parsed) ? new Date(parsed).toISOString() : nowIso();
 }
 
 function normalizeText(value, fallback = '') {
@@ -113,9 +146,136 @@ function sanitizePromptMemoryBlockText(value) {
         .join('\n');
 }
 
-function formatPromptMemoryEvent(event = {}) {
-    const userText = truncateText(sanitizePromptMemoryText(event.userText), MAX_PROMPT_EVENT_TEXT_CHARS);
-    const assistantText = truncateText(sanitizePromptMemoryText(event.assistantText), MAX_PROMPT_EVENT_TEXT_CHARS);
+function stemMemoryToken(value = '') {
+    const token = normalizeText(value).toLowerCase();
+    if (token.length <= 3 || /^\d+$/.test(token)) {
+        return token;
+    }
+    if (token.length > 5 && token.endsWith('ies')) {
+        return /[bcdfghjklmnpqrstvwxyz]ies$/.test(token)
+            ? `${token.slice(0, -3)}y`
+            : token.slice(0, -1);
+    }
+    if (token.length > 6 && token.endsWith('ing')) {
+        const stemmed = token.slice(0, -3);
+        return /([a-z])\1$/.test(stemmed) ? stemmed.slice(0, -1) : stemmed;
+    }
+    if (token.length > 5 && token.endsWith('ed')) {
+        const stemmed = token.slice(0, -2);
+        return /([a-z])\1$/.test(stemmed) ? stemmed.slice(0, -1) : stemmed;
+    }
+    if (token.length > 5 && token.endsWith('es')) {
+        return /(?:s|x|z|ch|sh)es$/.test(token)
+            ? token.slice(0, -2)
+            : token.slice(0, -1);
+    }
+    if (token.length > 4 && token.endsWith('s')) {
+        return token.slice(0, -1);
+    }
+    return token;
+}
+
+function memorySearchTokens(text, { includeStopWords = false } = {}) {
+    const normalized = normalizeText(text).toLowerCase();
+    const tokens = [];
+    for (const rawToken of normalized.match(/[a-z0-9]+/g) || []) {
+        const token = stemMemoryToken(rawToken);
+        if (
+            token.length >= 2 &&
+            (includeStopWords || !MEMORY_SEARCH_STOP_WORDS.has(token))
+        ) {
+            tokens.push(token);
+        }
+    }
+    const chineseOnly = normalized.replace(/[^\u4e00-\u9fff]/g, '');
+    for (let index = 0; index < chineseOnly.length - 1; index += 1) {
+        tokens.push(chineseOnly.slice(index, index + 2));
+    }
+    return tokens;
+}
+
+function memoryTokenFrequency(tokens = [], weight = 1, target = new Map()) {
+    for (const token of tokens) {
+        target.set(token, (target.get(token) || 0) + weight);
+    }
+    return target;
+}
+
+function memorySearchPhrases(query = '') {
+    const tokens = memorySearchTokens(query);
+    const phrases = [];
+    for (const size of [3, 2]) {
+        for (let index = 0; index <= tokens.length - size; index += 1) {
+            const phrase = tokens.slice(index, index + size).join(' ');
+            if (!phrases.includes(phrase)) {
+                phrases.push(phrase);
+            }
+        }
+    }
+    return phrases.slice(0, 24);
+}
+
+function scoreTextAgainstQuery(text, query) {
+    const queryTokens = new Set(memorySearchTokens(query));
+    if (!queryTokens.size) {
+        return 0;
+    }
+    const textTokens = new Set(memorySearchTokens(text));
+    let score = 0;
+    for (const token of queryTokens) {
+        if (textTokens.has(token)) {
+            score += token.length >= 5 ? 2 : 1;
+        }
+    }
+    return score;
+}
+
+function truncatePromptMemoryAroundMatch(value, query, maxChars = MAX_PROMPT_EVENT_TEXT_CHARS) {
+    const text = sanitizePromptMemoryText(value);
+    if (!text || text.length <= maxChars) {
+        return text;
+    }
+    const lowered = text.toLowerCase();
+    const queryTokens = [...new Set(memorySearchTokens(query))]
+        .filter((token) => token.length >= 3)
+        .sort((left, right) => right.length - left.length);
+    let matchIndex = -1;
+    let matchLength = 0;
+    for (const token of queryTokens) {
+        const index = lowered.indexOf(token.toLowerCase());
+        if (index >= 0) {
+            matchIndex = index;
+            matchLength = token.length;
+            break;
+        }
+    }
+    if (matchIndex < 0) {
+        return truncateText(text, maxChars);
+    }
+    const leadingMarker = matchIndex > 0 ? '…' : '';
+    const trailingMarker = matchIndex + maxChars < text.length ? '…' : '';
+    const available = Math.max(1, maxChars - leadingMarker.length - trailingMarker.length);
+    const desiredBefore = Math.floor((available - matchLength) * 0.38);
+    const start = Math.max(0, Math.min(
+        matchIndex - desiredBefore,
+        text.length - available
+    ));
+    return `${start > 0 ? '…' : ''}${text.slice(start, start + available)}${
+        start + available < text.length ? '…' : ''
+    }`.slice(0, maxChars);
+}
+
+function formatPromptMemoryEvent(event = {}, query = '') {
+    const userText = truncatePromptMemoryAroundMatch(
+        event.userText,
+        query,
+        MAX_PROMPT_EVENT_TEXT_CHARS
+    );
+    const assistantText = truncatePromptMemoryAroundMatch(
+        event.assistantText,
+        query,
+        MAX_PROMPT_EVENT_TEXT_CHARS
+    );
     if (!userText && !assistantText) {
         return '';
     }
@@ -173,7 +333,19 @@ function atomicWriteFileSync(filePath, content) {
     ensureDirSync(path.dirname(filePath));
     const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
     fs.writeFileSync(tempPath, content, 'utf8');
-    fs.renameSync(tempPath, filePath);
+    const retryableCodes = new Set(['EBUSY', 'EACCES', 'EPERM']);
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+        try {
+            fs.renameSync(tempPath, filePath);
+            return;
+        } catch (error) {
+            if (!retryableCodes.has(error?.code) || attempt >= 5) {
+                throw error;
+            }
+            const delayMs = 20 * (2 ** attempt);
+            Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delayMs);
+        }
+    }
 }
 
 function atomicWriteJsonSync(filePath, value) {
@@ -293,11 +465,15 @@ function createDefaultState(workspaceRoot = '') {
 function normalizeBlock(key, block, fallbackBlock) {
     const source = block && typeof block === 'object' ? block : {};
     const fallback = fallbackBlock && typeof fallbackBlock === 'object' ? fallbackBlock : {};
+    const hasSourceValue = Object.prototype.hasOwnProperty.call(source, 'value');
     return {
         key,
         label: normalizeText(source.label, fallback.label || key),
         kind: normalizeText(source.kind, fallback.kind || 'core'),
-        value: normalizeBlockText(source.value || fallback.value || '', MAX_BLOCK_CHARS),
+        value: normalizeBlockText(
+            hasSourceValue ? source.value : fallback.value || '',
+            MAX_BLOCK_CHARS
+        ),
         updatedAt: normalizeText(source.updatedAt, fallback.updatedAt || nowIso())
     };
 }
@@ -358,45 +534,6 @@ function normalizeState(rawState, workspaceRoot = '') {
             reflectionCount: Number(source.stats?.reflectionCount || 0)
         }
     };
-}
-
-function keywordSet(text) {
-    const normalized = normalizeText(text).toLowerCase();
-    const tokens = new Set();
-    for (const token of normalized.match(/[a-z0-9_./:-]{2,}/g) || []) {
-        tokens.add(token);
-    }
-    const knownChinese = [
-        '记忆', '好感度', '语气', '拟人', '视觉', '截图', '语音', '口唇', '表情', '动作',
-        '架构', '设计', '代码', '工程', '稳定', '延迟', '模型', '工具', '权限', '确认',
-        'codex', 'claude', 'letta', 'memgpt', 'generative', 'openclaw', 'ailis',
-        'cosyvoice', 'kokoro', 'elevenlabs', 'mcp', 'subagent', 'agent', 'asr'
-    ];
-    for (const keyword of knownChinese) {
-        if (normalized.includes(keyword.toLowerCase())) {
-            tokens.add(keyword.toLowerCase());
-        }
-    }
-    const chineseOnly = normalized.replace(/[^\u4e00-\u9fff]/g, '');
-    for (let index = 0; index < chineseOnly.length - 1; index += 1) {
-        tokens.add(chineseOnly.slice(index, index + 2));
-    }
-    return tokens;
-}
-
-function scoreTextAgainstQuery(text, query) {
-    const queryTokens = keywordSet(query);
-    if (!queryTokens.size) {
-        return 0;
-    }
-    const textTokens = keywordSet(text);
-    let score = 0;
-    for (const token of queryTokens) {
-        if (textTokens.has(token)) {
-            score += token.length >= 4 ? 2 : 1;
-        }
-    }
-    return score;
 }
 
 function buildEventSummary(userText, assistantText) {
@@ -491,15 +628,43 @@ function confidenceLabel(value) {
     return confidence ? confidence.toFixed(2) : 'unknown';
 }
 
-function formatCuratedProfileItems(items = [], { includeCategory = true, maxItems = 24 } = {}) {
+function rankCuratedProfileItems(items = [], query = '', maxItems = 24) {
     const activeItems = (Array.isArray(items) ? items : [])
         .filter((item) => item && item.status !== 'inactive' && normalizeText(item.claim))
         .sort((left, right) =>
             (right.stability === 'stable' ? 1 : 0) - (left.stability === 'stable' ? 1 : 0) ||
             (Number(right.confidence) || 0) - (Number(left.confidence) || 0) ||
             String(right.updatedAt || right.lastSeen || '').localeCompare(String(left.updatedAt || left.lastSeen || ''))
+        );
+    const boundedLimit = Math.max(1, Number(maxItems) || 24);
+    const scored = activeItems.map((item, stableRank) => ({
+        item,
+        stableRank,
+        relevance: scoreTextAgainstQuery(
+            `${normalizeText(item.category)} ${normalizeText(item.claim)}`,
+            query
         )
-        .slice(0, maxItems);
+    }));
+    const relevant = scored
+        .filter((entry) => entry.relevance > 0)
+        .sort((left, right) =>
+            right.relevance - left.relevance ||
+            left.stableRank - right.stableRank
+        );
+    const selectedItems = new Set(relevant.map((entry) => entry.item));
+    return [
+        ...relevant,
+        ...scored.filter((entry) => !selectedItems.has(entry.item))
+    ].slice(0, boundedLimit).map((entry) => entry.item);
+}
+
+function formatCuratedProfileItems(items = [], {
+    includeCategory = true,
+    includeEvidence = true,
+    maxItems = 24,
+    query = ''
+} = {}) {
+    const activeItems = rankCuratedProfileItems(items, query, maxItems);
     if (!activeItems.length) {
         return '- 暂无已抽取的稳定画像。不要根据旧规则块脑补用户偏好；只根据当前请求和明确证据行动。';
     }
@@ -510,7 +675,7 @@ function formatCuratedProfileItems(items = [], { includeCategory = true, maxItem
         }
         parts.push(normalizeText(item.stability, 'candidate'));
         parts.push(`confidence=${confidenceLabel(item.confidence)}`);
-        const evidence = evidencePreview(item.evidenceIds);
+        const evidence = includeEvidence ? evidencePreview(item.evidenceIds) : '';
         return `- [${parts.join(' | ')}] ${normalizeText(item.claim)}${evidence ? `（${evidence}）` : ''}`;
     }).join('\n');
 }
@@ -545,7 +710,10 @@ function formatCuratedAffinityState(affinity = null) {
     ].filter(Boolean).join('\n');
 }
 
-function loadCuratedPromptMemory(rootDir) {
+function loadCuratedPromptMemory(rootDir, {
+    query = '',
+    includeEvidence = true
+} = {}) {
     const userProfile = readJsonFileSync(path.join(rootDir, 'user-profile.json'), null);
     const relationshipProfile = readJsonFileSync(path.join(rootDir, 'relationship-profile.json'), null);
     const affinityState = readJsonFileSync(path.join(rootDir, 'affinity-state.json'), null);
@@ -576,15 +744,30 @@ function loadCuratedPromptMemory(rootDir) {
         relationshipItemCount: selectedRelationshipItems.length,
         userProfileText: [
             sourceLine,
-            formatCuratedProfileItems(activeUserProfileItems, { includeCategory: true, maxItems: 28 })
+            formatCuratedProfileItems(activeUserProfileItems, {
+                includeCategory: true,
+                includeEvidence,
+                maxItems: query ? 18 : 28,
+                query
+            })
         ].filter(Boolean).join('\n'),
         relationshipText: [
             sourceLine,
-            formatCuratedProfileItems(selectedRelationshipItems, { includeCategory: false, maxItems: 16 })
+            formatCuratedProfileItems(selectedRelationshipItems, {
+                includeCategory: false,
+                includeEvidence,
+                maxItems: query ? 10 : 16,
+                query
+            })
         ].filter(Boolean).join('\n'),
         projectProfileText: [
             sourceLine,
-            formatCuratedProfileItems(activeProjectItems, { includeCategory: true, maxItems: 24 })
+            formatCuratedProfileItems(activeProjectItems, {
+                includeCategory: true,
+                includeEvidence,
+                maxItems: query ? 14 : 24,
+                query
+            })
         ].filter(Boolean).join('\n'),
         affinityText: [
             sourceLine,
@@ -620,6 +803,54 @@ class AILISMemoryRuntime {
         this.capsulesDir = path.join(this.rootDir, 'capsules');
         this.dailyDir = path.join(this.rootDir, 'daily');
         this.reflectionsDir = path.join(this.rootDir, 'reflections');
+        this.strategyConfigPath = path.join(this.rootDir, 'memory-strategy.json');
+        const storedStrategy = readJsonFileSync(this.strategyConfigPath, null)?.strategy;
+        this.memoryStrategy = resolveMemoryStrategy(
+            options.memoryStrategy ||
+            options.strategy ||
+            process.env.AILIS_MEMORY_STRATEGY ||
+            storedStrategy ||
+            'bm25_phrase_v1'
+        );
+        this.strategyEngine = options.strategyEngine || new AILISMemoryStrategyEngine({
+            rootDir: this.rootDir,
+            strategy: this.memoryStrategy,
+            queryPlanner: options.memoryQueryPlanner || options.queryPlanner,
+            embedder: options.memoryEmbedder || options.embedder,
+            reranker: options.memoryReranker || options.reranker,
+            enableLocalEmbeddings: options.enableLocalEmbeddings !== false,
+            embeddingModel: options.embeddingModel,
+            embeddingRevision:
+                options.memoryEmbeddingRevision ||
+                options.embeddingRevision,
+            rerankerModel: options.memoryRerankerModel || options.rerankerModel,
+            rerankerRevision:
+                options.memoryRerankerRevision ||
+                options.rerankerRevision,
+            allowRemoteModels: options.allowRemoteModels,
+            modelRemoteHost:
+                options.memoryModelRemoteHost ||
+                options.modelRemoteHost,
+            modelCacheDir:
+                options.memoryModelCacheDir ||
+                options.modelCacheDir,
+            chronosMaxAgentSteps: options.chronosMaxAgentSteps,
+            observationalMessageTokens: options.observationalMessageTokens,
+            observationalObservationTokens: options.observationalObservationTokens,
+            observationalMaxTokensPerBatch: options.observationalMaxTokensPerBatch,
+            observationalPreviousObserverTokens:
+                options.observationalPreviousObserverTokens,
+            observationalRawTailTokens: options.observationalRawTailTokens,
+            hindsightBaseUrl: options.hindsightBaseUrl,
+            hindsightAutoStart: options.hindsightAutoStart,
+            hindsightPort: options.hindsightPort,
+            hindsightHost: options.hindsightHost,
+            hindsightProfile: options.hindsightProfile,
+            hindsightBankId: options.hindsightBankId,
+            hindsightEmbedPackagePath: options.hindsightEmbedPackagePath,
+            hindsightClient: options.hindsightClient,
+            hindsightServer: options.hindsightServer
+        });
         this.state = null;
         this.loaded = false;
         this.lastError = '';
@@ -716,6 +947,9 @@ class AILISMemoryRuntime {
             affinityStage: curated.affinityStage || buildAffinityStage(affinityScore),
             affinitySource: curated.hasAffinityState ? 'curated_capsule' : 'memory_state',
             secretCount: Array.isArray(this.state?.secrets) ? this.state.secrets.length : 0,
+            memoryStrategy: this.memoryStrategy,
+            memoryStrategyConfigPath: this.strategyConfigPath,
+            memoryStrategyStatus: this.strategyEngine?.getStatus?.() || null,
             lastError: this.lastError
         };
     }
@@ -790,14 +1024,67 @@ class AILISMemoryRuntime {
         contextMode = 'persona'
     } = {}) {
         const state = this.state || normalizeState(null, this.workspaceRoot);
-        const blocks = state.blocks || {};
-        const curated = loadCuratedPromptMemory(this.rootDir);
         const retrievalQuery = buildMemoryRetrievalQuery(message, messageHistory);
-        const relevantEvents = this.searchMemory(retrievalQuery, {
+        const searchResult = this.searchMemory(retrievalQuery, {
             limit: DEFAULT_RELEVANT_EVENT_LIMIT
-        }).events.filter((event) => !isTaskAgentMemoryEvent(event));
+        });
+        return this.buildContextSources({
+            state,
+            sessionId,
+            contextMode,
+            retrievalQuery,
+            searchResult
+        });
+    }
+
+    async getContextSourcesAsync({
+        sessionId = 'main',
+        message = '',
+        messageHistory = [],
+        contextMode = 'persona',
+        questionTime = ''
+    } = {}) {
+        const state = this.state || normalizeState(null, this.workspaceRoot);
+        const retrievalQuery = buildMemoryRetrievalQuery(message, messageHistory);
+        const searchResult = await this.searchMemoryAsync(retrievalQuery, {
+            limit: DEFAULT_RELEVANT_EVENT_LIMIT,
+            questionTime
+        });
+        return this.buildContextSources({
+            state,
+            sessionId,
+            contextMode,
+            retrievalQuery,
+            searchResult
+        });
+    }
+
+    buildContextSources({
+        state,
+        sessionId = 'main',
+        contextMode = 'persona',
+        retrievalQuery = '',
+        searchResult = null
+    } = {}) {
+        const blocks = state?.blocks || {};
+        const curated = loadCuratedPromptMemory(this.rootDir, {
+            query: retrievalQuery,
+            includeEvidence: false
+        });
+        const relevantEvents = (searchResult?.events || [])
+            .filter((event) => !isTaskAgentMemoryEvent(event));
+        const strategyProfile = searchResult?.profile || {};
+        const recommendedRelevantMemoryTokens = Math.max(
+            0,
+            Number(strategyProfile.contextBudgetTokens) || 0
+        );
         const taskAgentMode = normalizeText(contextMode, 'persona').toLowerCase() === 'task_agent';
-        const relevantLines = relevantEvents.map(formatPromptMemoryEvent).filter(Boolean);
+        const strategyContextText = sanitizePromptMemoryBlockText(searchResult?.contextText || '');
+        const relevantLines = strategyContextText
+            ? [strategyContextText]
+            : relevantEvents
+                .map((event) => formatPromptMemoryEvent(event, retrievalQuery))
+                .filter(Boolean);
         return {
             contextMode: taskAgentMode ? 'task_agent' : 'persona',
             personaText: taskAgentMode ? '' : sanitizePromptMemoryBlockText(blocks.persona?.value || ''),
@@ -838,6 +1125,17 @@ class AILISMemoryRuntime {
             relevantMemoryRefs: relevantEvents.map((event) => event.id).filter(Boolean),
             retrievalQueryChars: retrievalQuery.length,
             relevantMemoryCount: relevantLines.length,
+            memoryStrategy: searchResult?.strategy || this.memoryStrategy,
+            memoryStrategyDiagnostics: searchResult?.diagnostics || null,
+            recommendedSectionBudgets: recommendedRelevantMemoryTokens
+                ? { relevant_memories: recommendedRelevantMemoryTokens }
+                : null,
+            recommendedMaxChars: recommendedRelevantMemoryTokens
+                ? Math.max(
+                    MAX_CONTEXT_CHARS,
+                    recommendedRelevantMemoryTokens * 4 + 32_000
+                )
+                : 0,
             sessionId
         };
     }
@@ -868,32 +1166,191 @@ class AILISMemoryRuntime {
             .map((event) => ({ ...event }));
     }
 
-    searchMemory(query, { limit = 10 } = {}) {
+    searchMemory(query, { limit = 10, strategy = this.memoryStrategy, questionTime = '' } = {}) {
+        const resolvedStrategy = resolveMemoryStrategy(strategy, this.memoryStrategy);
+        if (resolvedStrategy !== 'bm25_phrase_v1') {
+            return this.strategyEngine.searchSync({
+                query,
+                events: this.state?.events || [],
+                limit,
+                strategy: resolvedStrategy,
+                questionTime
+            });
+        }
         const normalizedQuery = normalizeText(query);
-        const events = (this.state?.events || [])
-            .map((event, index) => {
-                const text = [
-                    event.summary,
-                    event.userText,
-                    event.assistantText,
-                    Array.isArray(event.tags) ? event.tags.join(' ') : ''
-                ].join('\n');
-                const recency = index / Math.max(1, (this.state.events || []).length);
-                const relevance = scoreTextAgainstQuery(text, normalizedQuery);
-                const score = relevance +
-                    Number(event.importance || 0) * 0.35 +
-                    recency;
-                return { event, score, relevance };
+        const sourceEvents = Array.isArray(this.state?.events) ? this.state.events : [];
+        const boundedLimit = Math.max(1, Number(limit) || 10);
+        const queryTokens = [...new Set(memorySearchTokens(normalizedQuery))];
+        const queryPhrases = memorySearchPhrases(normalizedQuery);
+        const documents = sourceEvents.map((event, index) => {
+            const userTokens = memorySearchTokens(event.userText);
+            const assistantTokens = memorySearchTokens(event.assistantText);
+            const tagTokens = memorySearchTokens(
+                Array.isArray(event.tags) ? event.tags.join(' ') : ''
+            );
+            const frequencies = new Map();
+            memoryTokenFrequency(userTokens, 1.15, frequencies);
+            memoryTokenFrequency(assistantTokens, 1, frequencies);
+            memoryTokenFrequency(tagTokens, 1.4, frequencies);
+            const orderedTokens = [...userTokens, ...assistantTokens, ...tagTokens];
+            return {
+                event,
+                index,
+                frequencies,
+                tokenSet: new Set(orderedTokens),
+                orderedTokenText: ` ${orderedTokens.join(' ')} `,
+                length: Math.max(1, userTokens.length + assistantTokens.length + tagTokens.length)
+            };
+        });
+        const documentFrequency = new Map();
+        for (const document of documents) {
+            for (const token of document.tokenSet) {
+                documentFrequency.set(token, (documentFrequency.get(token) || 0) + 1);
+            }
+        }
+        const averageLength = documents.length
+            ? documents.reduce((sum, document) => sum + document.length, 0) / documents.length
+            : 1;
+        const corpusSize = Math.max(1, documents.length);
+        const scored = documents
+            .map((document) => {
+                let relevance = 0;
+                for (const token of queryTokens) {
+                    const frequency = Number(document.frequencies.get(token)) || 0;
+                    if (!frequency) {
+                        continue;
+                    }
+                    const containingDocuments = Number(documentFrequency.get(token)) || 0;
+                    const inverseDocumentFrequency = Math.log(
+                        1 + (corpusSize - containingDocuments + 0.5) /
+                            (containingDocuments + 0.5)
+                    );
+                    const lengthNormalization = MEMORY_SEARCH_BM25_K1 * (
+                        1 - MEMORY_SEARCH_BM25_B +
+                        MEMORY_SEARCH_BM25_B * document.length / Math.max(1, averageLength)
+                    );
+                    relevance += inverseDocumentFrequency *
+                        (frequency * (MEMORY_SEARCH_BM25_K1 + 1)) /
+                        (frequency + lengthNormalization);
+                    if (/^\d+$/.test(token)) {
+                        relevance += inverseDocumentFrequency * 0.45;
+                    }
+                }
+                for (const phrase of queryPhrases) {
+                    if (document.orderedTokenText.includes(` ${phrase} `)) {
+                        relevance += phrase.split(' ').length * 0.28;
+                    }
+                }
+                const recency = document.index / Math.max(1, sourceEvents.length - 1);
+                const importance = Math.max(0, Number(document.event.importance) || 0);
+                return {
+                    event: document.event,
+                    index: document.index,
+                    relevance,
+                    score: relevance + recency * 0.08 + importance * 0.02
+                };
             })
-            .filter((entry) => !normalizedQuery || entry.relevance > 0)
-            .sort((left, right) => right.score - left.score)
-            .slice(0, Math.max(1, Number(limit) || 10))
-            .map((entry) => entry.event);
+            .filter((entry) => !normalizedQuery || !queryTokens.length || entry.relevance > 0)
+            .sort((left, right) =>
+                right.score - left.score ||
+                right.index - left.index
+            );
+        const selected = [];
+        const deferred = [];
+        const sessionCounts = new Map();
+        for (const entry of scored) {
+            const sessionId = normalizeText(entry.event?.sessionId, `event:${entry.index}`);
+            const sessionCount = sessionCounts.get(sessionId) || 0;
+            if (sessionCount >= MEMORY_SEARCH_MAX_EVENTS_PER_SESSION) {
+                deferred.push(entry);
+                continue;
+            }
+            selected.push(entry);
+            sessionCounts.set(sessionId, sessionCount + 1);
+            if (selected.length >= boundedLimit) {
+                break;
+            }
+        }
+        if (selected.length < boundedLimit) {
+            const selectedIds = new Set(selected.map((entry) => entry.event?.id));
+            for (const entry of deferred) {
+                if (selectedIds.has(entry.event?.id)) {
+                    continue;
+                }
+                selected.push(entry);
+                if (selected.length >= boundedLimit) {
+                    break;
+                }
+            }
+        }
+        const events = selected.map((entry) => entry.event);
         return {
             ok: true,
             query: normalizedQuery,
-            events
+            events,
+            strategy: 'bm25_phrase_v1'
         };
+    }
+
+    async searchMemoryAsync(query, {
+        limit = 10,
+        strategy = this.memoryStrategy,
+        questionTime = '',
+        maxContextChars = 0
+    } = {}) {
+        const resolvedStrategy = resolveMemoryStrategy(strategy, this.memoryStrategy);
+        if (resolvedStrategy === 'bm25_phrase_v1') {
+            return this.searchMemory(query, {
+                limit,
+                strategy: resolvedStrategy,
+                questionTime
+            });
+        }
+        return this.strategyEngine.search({
+            query,
+            events: this.state?.events || [],
+            limit,
+            strategy: resolvedStrategy,
+            questionTime,
+            maxContextChars: Math.max(
+                0,
+                Number(maxContextChars) ||
+                Number(MEMORY_STRATEGIES[resolvedStrategy]?.contextBudgetTokens) * 4 ||
+                12_000
+            )
+        });
+    }
+
+    async curateStrategyMemory({ maxBatches = 12, ...options } = {}) {
+        const result = await this.strategyEngine?.curateStrategy?.({
+            events: this.state?.events || [],
+            maxBatches,
+            ...options
+        });
+        return result;
+    }
+
+    async shutdown() {
+        await this.strategyEngine?.shutdown?.();
+    }
+
+    setMemoryStrategy(strategy) {
+        this.memoryStrategy = resolveMemoryStrategy(strategy, this.memoryStrategy);
+        this.strategyEngine.setStrategy(this.memoryStrategy);
+        atomicWriteJsonSync(this.strategyConfigPath, {
+            version: 1,
+            strategy: this.memoryStrategy,
+            updatedAt: nowIso()
+        });
+        return {
+            ok: true,
+            strategy: this.memoryStrategy,
+            status: this.strategyEngine.getStatus()
+        };
+    }
+
+    getMemoryStrategyCatalog() {
+        return strategyCatalog();
     }
 
     recordTurn({
@@ -903,7 +1360,8 @@ class AILISMemoryRuntime {
         source = 'agent',
         result = null,
         messageHistory = [],
-        attachments = []
+        attachments = [],
+        occurredAt = ''
     } = {}) {
         const userText = redactSecretLikeText(userMessage);
         const assistantText = redactSecretLikeText(assistantMessage || result?.displayText || result?.finalAnswer || '');
@@ -911,7 +1369,7 @@ class AILISMemoryRuntime {
             return { ok: false, status: 'empty_turn' };
         }
 
-        const ts = nowIso();
+        const ts = normalizeOccurredAt(occurredAt);
         const event = {
             id: randomUUID(),
             ts,
@@ -1008,6 +1466,7 @@ class AILISMemoryRuntime {
         if (before === this.state.events.length) {
             return { ok: false, status: 'not_found' };
         }
+        this.strategyEngine?.forgetSourceEvent?.(normalizedId);
         this.persist('forget_event');
         return { ok: true, status: 'deleted' };
     }
@@ -1061,6 +1520,11 @@ class AILISMemoryRuntime {
             path.join(this.rootDir, 'affinity-state.json'),
             createCuratedAffinityStateFromScore(DEFAULT_AFFINITY_SCORE)
         );
+        atomicWriteJsonSync(
+            path.join(this.rootDir, MEMORY_COGNITION_FILE),
+            defaultCognitionState()
+        );
+        this.strategyEngine?.clearDerivedMemory?.();
         this.persist('clear_memory');
         return {
             ok: true,
