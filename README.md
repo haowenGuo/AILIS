@@ -117,7 +117,6 @@ scripts/    Validation, smoke tests, eval runners, generation tools, and build h
 Core design documents:
 
 - [Embodied Agent Architecture](docs/ailis-embodied-agent-architecture.md)
-- [Memory Architecture V2](docs/ailis-memory-architecture-v2.md)
 - [Memory v3 Hybrid RRF + Event/Action Ledger](docs/ailis-memory-v3-hybrid-ledger.md)
 - [Humanlike Eval](docs/ailis-humanlike-eval.md)
 - [OpenClaw From Zero](docs/openclaw-from-zero.md)
@@ -163,14 +162,13 @@ python -m uvicorn backend.main:app --reload
 
 Most desktop settings are managed through the Electron control panel and local desktop state. The project supports OpenAI-compatible providers, including custom base URLs, model names, request timeouts, and local/private credentials.
 
-When a configured desktop LLM is available, the self-evolution Gateway activates Memory v3 by default. It can also be selected explicitly:
+AILIS has one memory implementation: Memory v3. The desktop LLM performs query planning and Event/Action Ledger curation; retrieval still remains available through the local sparse, dense, temporal, and entity channels if a planning call fails.
 
 ```powershell
-$env:AILIS_MEMORY_STRATEGY = 'hybrid_rrf_ledger_v3'
 $env:AILIS_MEMORY_EMBEDDING_BATCH_SIZE = '2'
 ```
 
-The local Gateway exposes `GET/POST /memory/strategy`, `POST /memory/search`, `GET /memory/cognition/status`, and `POST /memory/cognition/curate`. Strategy selection persists in the local `memory-strategy.json` file.
+The local Gateway exposes `POST /memory/search`, `GET /memory/ledger/status`, and `POST /memory/ledger/curate`. There is no runtime strategy switch or legacy memory configuration.
 
 Useful environment examples live in:
 

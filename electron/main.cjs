@@ -1728,9 +1728,7 @@ async function attachAilisMemoryToLlmPayload(payload = {}) {
             messageHistory: payload.messageHistory || [],
             contextMode: 'persona'
         };
-        memoryContext = typeof memoryRuntime?.compileContextAsync === 'function'
-            ? await memoryRuntime.compileContextAsync(contextPayload)
-            : memoryRuntime?.compileContext?.(contextPayload) || '';
+        memoryContext = await memoryRuntime?.compileContextAsync?.(contextPayload) || '';
     } catch (error) {
         console.warn('[ailis-memory] 直连 LLM 注入记忆失败：', error.message || error);
     }
@@ -3575,7 +3573,7 @@ function registerIpc() {
         ensureAILISGateway().getMemorySnapshot(payload || {})
     );
     ipcMain.handle('ailis:memory-search', async (_event, payload = {}) =>
-        ensureAILISGateway().searchMemory(payload.query || payload.text || '', payload || {})
+        ensureAILISGateway().searchMemoryAsync(payload.query || payload.text || '', payload || {})
     );
     ipcMain.handle('ailis:memory-update-block', async (_event, payload = {}) =>
         ensureAILISGateway().updateMemoryBlock(payload.key || '', payload.value || payload.content || '')

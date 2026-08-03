@@ -6069,12 +6069,6 @@ class AILISAgentRunner {
                         request?.context?.runtimeEnvironmentOverride?.current_datetime
                     )
                 });
-            } else if (this.memoryRuntime?.compileContext) {
-                runtimeMemoryContext = this.memoryRuntime.compileContext({
-                    sessionId,
-                    message,
-                    messageHistory: request?.messageHistory || []
-                });
             }
         } catch (error) {
             this.gateway.emitGatewayEvent?.('agent.memory.context_error', {

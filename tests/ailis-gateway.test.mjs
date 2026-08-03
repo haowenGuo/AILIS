@@ -83,7 +83,7 @@ function buildBlankPdfWithoutSelectableText() {
     return Buffer.from(body, 'latin1');
 }
 
-test('AILIS self-evolution Gateway activates Memory v3 and exposes strategy controls', async (t) => {
+test('AILIS Gateway uses Memory v3 as its only memory runtime', async (t) => {
     const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-gateway-memory-v3-'));
     const gateway = new AILISGateway({
         projectRoot: path.resolve('.'),
@@ -108,28 +108,14 @@ test('AILIS self-evolution Gateway activates Memory v3 and exposes strategy cont
 
     const status = await gateway.start();
     const baseUrl = status.url;
-    const initial = await jsonFetch(`${baseUrl}/memory/strategy`);
-    assert.equal(initial.response.status, 200);
-    assert.equal(initial.body.active, 'hybrid_rrf_ledger_v3');
-    assert.ok(initial.body.strategies.some((entry) => entry.id === 'hybrid_rrf_ledger_v3'));
+    assert.equal(gateway.memoryRuntime.getStatus().memoryStrategy, 'hybrid_rrf_ledger_v3');
 
-    const baseline = await jsonFetch(`${baseUrl}/memory/strategy`, {
-        method: 'POST',
-        body: JSON.stringify({ strategy: 'bm25_phrase_v1' })
-    });
-    assert.equal(baseline.body.ok, true);
-    assert.equal(baseline.body.strategy, 'bm25_phrase_v1');
+    const removedStrategyRoute = await jsonFetch(`${baseUrl}/memory/strategy`);
+    assert.equal(removedStrategyRoute.response.status, 404);
 
-    const restored = await jsonFetch(`${baseUrl}/memory/strategy`, {
-        method: 'POST',
-        body: JSON.stringify({ strategy: 'hybrid_rrf_ledger_v3' })
-    });
-    assert.equal(restored.body.ok, true);
-    assert.equal(restored.body.strategy, 'hybrid_rrf_ledger_v3');
-
-    const cognition = await jsonFetch(`${baseUrl}/memory/cognition/status`);
-    assert.equal(cognition.response.status, 200);
-    assert.equal(cognition.body.enabled, true);
+    const ledger = await jsonFetch(`${baseUrl}/memory/ledger/status`);
+    assert.equal(ledger.response.status, 200);
+    assert.equal(ledger.body.enabled, true);
 });
 
 test('AILIS Gateway exposes health, tools, guarded tool calls, and audit', async () => {

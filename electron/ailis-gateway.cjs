@@ -717,14 +717,9 @@ class AILISGateway extends EventEmitter {
             : typeof options.profileCurationLlm === 'function'
                 ? options.profileCurationLlm
                 : null;
-        const memoryStrategy =
-            options.memoryStrategy ||
-            process.env.AILIS_MEMORY_STRATEGY ||
-            (memoryLlmClient ? 'hybrid_rrf_ledger_v3' : 'bm25_phrase_v1');
         this.memoryRuntime = options.memoryRuntime || new AILISMemoryRuntime({
             rootDir: path.join(this.auditDir, 'memory'),
             workspaceRoot: this.workspaceRoot,
-            memoryStrategy,
             memoryQueryPlanner: memoryLlmClient,
             memoryEmbedder: options.memoryEmbedder,
             enableLocalEmbeddings: options.enableLocalMemoryEmbeddings,
@@ -1054,50 +1049,35 @@ class AILISGateway extends EventEmitter {
         };
     }
 
-    searchMemory(query, options = {}) {
-        return this.memoryRuntime?.searchMemory?.(query, options) || {
+    async searchMemoryAsync(query, options = {}) {
+        if (typeof this.memoryRuntime?.searchMemoryAsync === 'function') {
+            return await this.memoryRuntime.searchMemoryAsync(query, options);
+        }
+        return {
             ok: false,
             status: 'memory_not_configured',
             events: []
         };
     }
 
-    async searchMemoryAsync(query, options = {}) {
-        if (typeof this.memoryRuntime?.searchMemoryAsync === 'function') {
-            return await this.memoryRuntime.searchMemoryAsync(query, options);
-        }
-        return this.searchMemory(query, options);
-    }
-
-    setMemoryStrategy(strategy) {
-        return this.memoryRuntime?.setMemoryStrategy?.(strategy) || {
-            ok: false,
-            status: 'memory_not_configured'
-        };
-    }
-
-    getMemoryStrategyCatalog() {
-        return this.memoryRuntime?.getMemoryStrategyCatalog?.() || [];
-    }
-
-    getMemoryCognitionStatus() {
+    getMemoryLedgerStatus() {
         return this.memoryRuntime?.getStatus?.()?.memoryStrategyStatus?.eventActionLedger || {
             ok: false,
-            status: 'memory_cognition_not_configured'
+            status: 'memory_ledger_not_configured'
         };
     }
 
-    async curateMemoryCognition(options = {}) {
-        return await this.memoryRuntime?.curateStrategyMemory?.(options || {}) || {
+    async curateMemoryLedger(options = {}) {
+        return await this.memoryRuntime?.curateMemoryLedger?.(options || {}) || {
             ok: false,
-            status: 'memory_cognition_not_configured'
+            status: 'memory_ledger_not_configured'
         };
     }
 
     scheduleMemoryCurationSoon(trigger = 'conversation_idle') {
         const memoryStatus = this.memoryRuntime?.getStatus?.()?.memoryStrategyStatus;
         if (
-            memoryStatus?.profile?.requiresCognition !== true ||
+            memoryStatus?.profile?.requiresLedgerCuration !== true ||
             memoryStatus?.eventActionLedger?.enabled !== true
         ) {
             return false;
@@ -1113,18 +1093,18 @@ class AILISGateway extends EventEmitter {
             }
             this.memoryCurationRunning = true;
             try {
-                const result = await this.curateMemoryCognition({
+                const result = await this.curateMemoryLedger({
                     trigger,
                     maxBatches: 4
                 });
-                this.emitGatewayEvent('memory.cognition.curated', {
+                this.emitGatewayEvent('memory.ledger.curated', {
                     trigger,
                     ok: result?.ok === true,
                     status: result?.status || '',
                     recordCount: Number(result?.recordCount || result?.run?.recordCount || 0)
                 });
             } catch (error) {
-                this.emitGatewayEvent('memory.cognition.error', {
+                this.emitGatewayEvent('memory.ledger.error', {
                     trigger,
                     error: error?.message || String(error)
                 });
@@ -1387,27 +1367,6 @@ class AILISGateway extends EventEmitter {
             return;
         }
 
-        if (url.pathname === '/memory/strategy' && req.method === 'GET') {
-            const memoryStatus = this.memoryRuntime?.getStatus?.() || {};
-            this.sendJson(res, 200, {
-                ok: true,
-                active: memoryStatus.memoryStrategy || '',
-                strategies: this.getMemoryStrategyCatalog(),
-                status: memoryStatus.memoryStrategyStatus || null
-            });
-            return;
-        }
-
-        if (url.pathname === '/memory/strategy' && req.method === 'POST') {
-            const body = await this.readJsonBody(req);
-            this.sendJson(
-                res,
-                200,
-                this.setMemoryStrategy(body?.strategy || body?.id || '')
-            );
-            return;
-        }
-
         if (url.pathname === '/memory/search' && req.method === 'POST') {
             const body = await this.readJsonBody(req);
             this.sendJson(
@@ -1418,14 +1377,14 @@ class AILISGateway extends EventEmitter {
             return;
         }
 
-        if (url.pathname === '/memory/cognition/status' && req.method === 'GET') {
-            this.sendJson(res, 200, this.getMemoryCognitionStatus());
+        if (url.pathname === '/memory/ledger/status' && req.method === 'GET') {
+            this.sendJson(res, 200, this.getMemoryLedgerStatus());
             return;
         }
 
-        if (url.pathname === '/memory/cognition/curate' && req.method === 'POST') {
+        if (url.pathname === '/memory/ledger/curate' && req.method === 'POST') {
             const body = await this.readJsonBody(req);
-            this.sendJson(res, 200, await this.curateMemoryCognition(body || {}));
+            this.sendJson(res, 200, await this.curateMemoryLedger(body || {}));
             return;
         }
 
