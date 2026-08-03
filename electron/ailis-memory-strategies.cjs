@@ -301,6 +301,157 @@ function reciprocalRankFusion(channels = [], {
     );
 }
 
+function uniqueNormalizedStrings(values = [], limit = 32) {
+    const seen = new Set();
+    const result = [];
+    for (const value of normalizeArray(values)) {
+        const normalized = normalizeText(value);
+        const key = normalized.toLowerCase();
+        if (!normalized || seen.has(key)) {
+            continue;
+        }
+        seen.add(key);
+        result.push(normalized);
+        if (result.length >= limit) {
+            break;
+        }
+    }
+    return result;
+}
+
+function coverageIdentityKeys(document = {}) {
+    const keys = [];
+    const semanticKey = normalizeText(document.semanticKey);
+    if (semanticKey) {
+        keys.push(`semantic:${semanticKey.toLowerCase()}`);
+    }
+    const rawSessionId = normalizeText(document.rawEvent?.sessionId);
+    if (rawSessionId) {
+        keys.push(`session:${rawSessionId}`);
+    }
+    for (const source of normalizeArray(document.sourceRefs)) {
+        const sessionId = normalizeText(source?.sessionId);
+        if (sessionId) {
+            keys.push(`session:${sessionId}`);
+        }
+    }
+    return [...new Set(keys)];
+}
+
+function selectCoverageEntries(ranked = [], coverageChannels = [], {
+    limit = 10
+} = {}) {
+    const boundedLimit = Math.max(1, Number(limit) || 10);
+    const rankedById = new Map(
+        ranked.map((entry) => [normalizeText(entry.document?.id), entry])
+    );
+    const selected = [];
+    const selectedIds = new Set();
+    const selectedCoverageKeys = new Set();
+    for (const channel of coverageChannels) {
+        const candidates = normalizeArray(channel?.entries)
+            .filter((entry) => Number(entry?.score) > 0)
+            .map((entry) => rankedById.get(normalizeText(entry.document?.id)))
+            .filter(Boolean)
+            .filter((entry) => !selectedIds.has(normalizeText(entry.document?.id)));
+        const diverse = candidates.find((entry) => {
+            const keys = coverageIdentityKeys(entry.document);
+            return keys.length && keys.some((key) => !selectedCoverageKeys.has(key));
+        });
+        const candidate = diverse || candidates[0];
+        if (!candidate) {
+            continue;
+        }
+        const documentId = normalizeText(candidate.document?.id);
+        selectedIds.add(documentId);
+        for (const key of coverageIdentityKeys(candidate.document)) {
+            selectedCoverageKeys.add(key);
+        }
+        selected.push({
+            ...candidate,
+            coverage: {
+                selected: true,
+                query: normalizeText(channel?.query),
+                channel: normalizeText(channel?.name, 'coverage')
+            }
+        });
+        if (selected.length >= boundedLimit) {
+            return selected;
+        }
+    }
+    for (const entry of ranked) {
+        const documentId = normalizeText(entry.document?.id);
+        if (!documentId || selectedIds.has(documentId)) {
+            continue;
+        }
+        selected.push(entry);
+        selectedIds.add(documentId);
+        if (selected.length >= boundedLimit) {
+            break;
+        }
+    }
+    return selected;
+}
+
+function selectDiverseRawEntries(entries = [], {
+    minimum = 8,
+    maximum = 16,
+    perSessionLimit = 2
+} = {}) {
+    const boundedMinimum = Math.max(1, Number(minimum) || 8);
+    const boundedMaximum = Math.max(
+        boundedMinimum,
+        Number(maximum) || boundedMinimum
+    );
+    const boundedPerSessionLimit = Math.max(1, Number(perSessionLimit) || 2);
+    const unique = [];
+    const seenDocumentIds = new Set();
+    for (const entry of entries) {
+        const documentId = normalizeText(entry.document?.id);
+        if (!documentId || seenDocumentIds.has(documentId)) {
+            continue;
+        }
+        seenDocumentIds.add(documentId);
+        unique.push(entry);
+    }
+    const selected = [];
+    const selectedIds = new Set();
+    const sessionCounts = new Map();
+    for (const entry of unique) {
+        const sessionId = normalizeText(entry.document?.rawEvent?.sessionId);
+        const count = sessionCounts.get(sessionId) || 0;
+        if (sessionId && count >= boundedPerSessionLimit) {
+            continue;
+        }
+        selected.push(entry);
+        selectedIds.add(normalizeText(entry.document?.id));
+        if (sessionId) {
+            sessionCounts.set(sessionId, count + 1);
+        }
+        if (selected.length >= boundedMaximum) {
+            return selected;
+        }
+    }
+    if (selected.length >= boundedMinimum) {
+        return selected;
+    }
+    for (const entry of unique) {
+        const documentId = normalizeText(entry.document?.id);
+        if (selectedIds.has(documentId)) {
+            continue;
+        }
+        selected.push(entry);
+        selectedIds.add(documentId);
+        if (
+            selected.length >= boundedMinimum ||
+            selected.length >= boundedMaximum
+        ) {
+            break;
+        }
+    }
+    return selected;
+}
+
 function parseJsonCandidate(value) {
     if (value && typeof value === 'object' && !Array.isArray(value)) {
         return value;
@@ -354,6 +505,10 @@ function normalizeQueryPlan(raw, originalQuery) {
     }
     const start = safeIso(plan.timeRange?.start || plan.timeStart);
     const end = safeIso(plan.timeRange?.end || plan.timeEnd);
+    const requestedTimeRangeMode = normalizeText(
+        plan.timeRangeMode,
+        plan.hardTimeRange === true ? 'hard' : 'soft'
+    ).toLowerCase();
     return {
         searchQueries: searchQueries.slice(0, 6),
         targetEntities: normalizeArray(plan.targetEntities)
@@ -381,6 +536,9 @@ function normalizeQueryPlan(raw, originalQuery) {
             .filter(Boolean)
             .slice(0, 8),
         timeRange: start || end ? { start, end } : null,
+        timeRangeMode: start || end
+            ? (requestedTimeRangeMode === 'hard' ? 'hard' : 'soft')
+            : 'none',
         needsCoverage: plan.needsCoverage === true,
         needsLatestState: plan.needsLatestState === true,
         reasoningHint: normalizeText(plan.reasoningHint)
@@ -480,6 +638,7 @@ function ledgerDocuments(records = []) {
                 semanticKey: normalizeText(record.canonicalKey),
                 text,
                 aliases: [
+                    normalizeText(record.canonicalKey),
                     entity,
                     actionType,
                     status,
@@ -1116,6 +1275,7 @@ class AILISMemoryStrategyEngine {
             semanticKeys: ['stable attribute or event slot'],
             includeLanes: ['event|world|experience|observation|opinion|preference'],
             timeRange: { start: 'ISO datetime or empty', end: 'ISO datetime or empty' },
+            timeRangeMode: 'soft|hard',
             needsCoverage: false,
             needsLatestState: false,
             reasoningHint: 'brief retrieval guidance'
@@ -1132,7 +1292,9 @@ class AILISMemoryStrategyEngine {
                             'When the question targets lifecycle actions or states, fill targetActionTypes, targetStates, and targetRecordKinds so the structured ledger can scope candidates.',
                             'Return valid JSON matching the requested schema.',
                             'Resolve time expressions only when the reference time makes the range supportable.',
-                            'Use multiple search queries when evidence may be distributed across conversations.'
+                            'Use timeRangeMode=soft unless the question makes a strict exclusion range unambiguous; hard mode may remove otherwise relevant evidence.',
+                            'Use multiple search queries when evidence may be distributed across conversations.',
+                            'When needsCoverage=true, emit one self-contained search query for each distinct evidence facet that should receive retrieval coverage.'
                         ].join('\n')
                     },
                     {
@@ -1200,9 +1362,10 @@ class AILISMemoryStrategyEngine {
         questionTime = ''
     } = {}) {
         const lanes = new Set(plan.includeLanes || []);
+        const hardTimeRange = plan.timeRangeMode === 'hard';
         const filtered = documents.filter((document) =>
             (!lanes.size || lanes.has(document.lane) || document.kind === 'turn') &&
-            inTimeRange(document, plan.timeRange) &&
+            (!hardTimeRange || inTimeRange(document, plan.timeRange)) &&
             activeAtQuestion(document, questionTime, {
                 latestStateOnly: plan.needsLatestState === true
             })
@@ -1231,8 +1394,9 @@ class AILISMemoryStrategyEngine {
         const targetActionTypes = new Set(plan.targetActionTypes || []);
         const targetStates = new Set(plan.targetStates || []);
         const targetRecordKinds = new Set(plan.targetRecordKinds || []);
+        const hardTimeRange = plan.timeRangeMode === 'hard';
         const eligible = documents.filter((document) =>
-            inTimeRange(document, plan.timeRange) &&
+            (!hardTimeRange || inTimeRange(document, plan.timeRange)) &&
             activeAtQuestion(document, questionTime, {
                 latestStateOnly: plan.needsLatestState === true
             }) &&
@@ -1274,15 +1438,37 @@ class AILISMemoryStrategyEngine {
         const dense = await this.denseRank(eligible, plan.searchQueries);
         const temporal = temporalRank(eligible, plan, questionTime);
         const entity = entityRank(eligible, plan);
-        const fused = reciprocalRankFusion(
+        const ranked = reciprocalRankFusion(
             [sparse, dense, temporal, entity],
             {
                 weights: [1, 1, 0.9, 1.05],
                 names: ['bm25', 'multilingual_e5', 'temporal', 'entity']
             }
-        ).slice(0, Math.max(1, Number(limit) || 10));
+        );
+        const coverageQueries = uniqueNormalizedStrings([
+            ...normalizeArray(plan.searchQueries),
+            ...normalizeArray(plan.semanticKeys),
+            ...normalizeArray(plan.targetEntities)
+        ], 12);
+        const coverageChannels = plan.needsCoverage === true
+            ? coverageQueries.map((coverageQuery, index) => ({
+                name: `coverage${index + 1}`,
+                query: coverageQuery,
+                entries: bm25Rank(eligible, coverageQuery)
+            }))
+            : [];
+        const fused = plan.needsCoverage === true
+            ? selectCoverageEntries(ranked, coverageChannels, { limit })
+            : ranked.slice(0, Math.max(1, Number(limit) || 10));
         return {
             fused,
+            coverage: {
+                requested: plan.needsCoverage === true,
+                queryCount: coverageChannels.length,
+                selectedSeedCount: fused.filter(
+                    (entry) => entry.coverage?.selected === true
+                ).length
+            },
             channels: {
                 bm25: sparse,
                 multilingual_e5: dense,
@@ -1330,12 +1516,16 @@ class AILISMemoryStrategyEngine {
             .filter((entry) => entry.document.kind === 'ledger_record')
             .slice(0, Math.max(4, Math.min(boundedLimit, 12)));
         const ledgerMetadataByEventId = new Map();
+        const coverageLedgerEventIds = new Set();
         for (const entry of selectedLedgerEntries) {
             const metadata = retrievalMetadata(entry);
             for (const source of normalizeArray(entry.document.sourceRefs)) {
                 const eventId = normalizeText(source?.eventId);
                 if (!eventId) {
                     continue;
+                }
+                if (entry.coverage?.selected === true) {
+                    coverageLedgerEventIds.add(eventId);
                 }
                 ledgerMetadataByEventId.set(
                     eventId,
@@ -1348,20 +1538,34 @@ class AILISMemoryStrategyEngine {
         }
         const combinedRawEntries = combined.fused
             .filter((entry) => entry.document.kind === 'turn');
+        const coverageRawEntries = combinedRawEntries.filter(
+            (entry) => entry.coverage?.selected === true
+        );
+        const remainingCombinedRawEntries = combinedRawEntries.filter(
+            (entry) => entry.coverage?.selected !== true
+        );
+        const rawCandidates = plan.needsCoverage === true
+            ? [
+                ...coverageRawEntries,
+                ...rawAnchors,
+                ...remainingCombinedRawEntries
+            ]
+            : [...rawAnchors, ...combinedRawEntries];
         const selectedRawById = new Map();
-        for (const entry of [...rawAnchors, ...combinedRawEntries]) {
-            if (!selectedRawById.has(entry.document.id)) {
-                selectedRawById.set(entry.document.id, {
-                    ...entry,
-                    document: {
-                        ...entry.document,
-                        retrieval: retrievalMetadata(entry)
-                    }
-                });
-            }
-            if (selectedRawById.size >= Math.max(boundedLimit * 2, 16)) {
-                break;
-            }
+        for (const entry of selectDiverseRawEntries(rawCandidates, {
+            minimum: boundedLimit,
+            maximum: Math.max(boundedLimit * 2, 16),
+            perSessionLimit: plan.needsCoverage === true
+                ? 2
+                : Math.max(boundedLimit * 2, 16)
+        })) {
+            selectedRawById.set(entry.document.id, {
+                ...entry,
+                document: {
+                    ...entry.document,
+                    retrieval: retrievalMetadata(entry)
+                }
+            });
         }
         const sourceEventsForLedger = resolveSourceEvents(
             selectedLedgerEntries.map((entry) => entry.document),
@@ -1376,18 +1580,35 @@ class AILISMemoryStrategyEngine {
         );
         for (const event of sourceEventsForLedger) {
             const sourceDocument = rawByEventId.get(normalizeText(event.id));
-            if (
-                sourceDocument &&
-                !selectedRawById.has(sourceDocument.id)
-            ) {
+            if (!sourceDocument) {
+                continue;
+            }
+            const existing = selectedRawById.get(sourceDocument.id);
+            const coverage = coverageLedgerEventIds.has(normalizeText(event.id))
+                ? {
+                    selected: true,
+                    query: 'ledger_source',
+                    channel: 'ledger_coverage'
+                }
+                : existing?.coverage;
+            if (existing) {
+                selectedRawById.set(sourceDocument.id, {
+                    ...existing,
+                    coverage
+                });
+            } else {
                 selectedRawById.set(sourceDocument.id, {
                     document: sourceDocument,
                     score: 0,
-                    components: {}
+                    components: {},
+                    coverage
                 });
             }
         }
-        const selectedRawEntries = [...selectedRawById.values()];
+        const selectedRawEntries = [...selectedRawById.values()].sort((left, right) =>
+            Number(right.coverage?.selected === true) -
+            Number(left.coverage?.selected === true)
+        );
         const annotatedLedgerDocuments = selectedLedgerEntries.map((entry) => ({
             ...entry.document,
             retrieval: retrievalMetadata(entry)
@@ -1396,14 +1617,16 @@ class AILISMemoryStrategyEngine {
             ...annotatedLedgerDocuments,
             ...selectedRawEntries.map((entry) => entry.document)
         ];
-        const rawAnchorEvents = resolveSourceEvents(
-            rawAnchors.map((entry) => entry.document),
+        const selectedRawEvents = resolveSourceEvents(
+            selectedRawEntries.map((entry) => entry.document),
             events,
-            boundedLimit
+            plan.needsCoverage === true
+                ? Math.max(selectedRawEntries.length, boundedLimit)
+                : boundedLimit
         );
         const unionEvents = [];
         const seenEventIds = new Set();
-        for (const event of [...rawAnchorEvents, ...sourceEventsForLedger]) {
+        for (const event of selectedRawEvents) {
             if (!event || seenEventIds.has(event.id)) {
                 continue;
             }
@@ -1437,6 +1660,16 @@ class AILISMemoryStrategyEngine {
             selectedLedgerRecordCount: annotatedLedgerDocuments.length,
             selectedRawTurnCount: selectedRawEntries.length,
             selectedEventCount: unionEvents.length,
+            timeRangeMode: plan.timeRangeMode,
+            coverage: {
+                requested: plan.needsCoverage === true,
+                combinedQueryCount: combined.coverage?.queryCount || 0,
+                combinedSeedCount: combined.coverage?.selectedSeedCount || 0,
+                ledgerSeedCount: ledgerOnly.coverage?.selectedSeedCount || 0,
+                selectedRawSeedCount: selectedRawEntries.filter(
+                    (entry) => entry.coverage?.selected === true
+                ).length
+            },
             channels: Object.fromEntries(
                 Object.entries(combined.channels).map(([name, entries]) => [
                     name,
@@ -1477,5 +1710,6 @@ module.exports = {
     bm25Rank,
     cosineSimilarity,
     ledgerDocuments,
-    reciprocalRankFusion
+    reciprocalRankFusion,
+    selectCoverageEntries
 };

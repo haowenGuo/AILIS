@@ -8,6 +8,10 @@ import test from 'node:test';
 const require = createRequire(import.meta.url);
 const fsSync = require('node:fs');
 const { AILISMemoryRuntime } = require('../electron/ailis-memory-store.cjs');
+const {
+    AILISMemoryStrategyEngine,
+    selectCoverageEntries
+} = require('../electron/ailis-memory-strategies.cjs');
 
 function createTestEmbedding(text) {
     const vector = new Array(64).fill(0);
@@ -320,6 +324,239 @@ test('AILIS Memory v3 retrieval favors rare evidence across sessions', async () 
     assert.ok(
         result.events.filter((event) => event.sessionId === 'repeated-noise-session').length <= 2
     );
+});
+
+test('AILIS Memory v3 coverage selection reserves distinct evidence facets', () => {
+    const ranked = [
+        {
+            document: { id: 'noise', rawEvent: { sessionId: 'noise-session' } },
+            score: 4,
+            rank: 1
+        },
+        {
+            document: { id: 'alpha', rawEvent: { sessionId: 'alpha-session' } },
+            score: 3,
+            rank: 2
+        },
+        {
+            document: { id: 'alpha-duplicate', rawEvent: { sessionId: 'alpha-session' } },
+            score: 2,
+            rank: 3
+        },
+        {
+            document: { id: 'beta', rawEvent: { sessionId: 'beta-session' } },
+            score: 1,
+            rank: 4
+        }
+    ];
+    const selected = selectCoverageEntries(ranked, [
+        {
+            name: 'coverage1',
+            query: 'alpha evidence',
+            entries: [
+                { document: ranked[1].document, score: 5 },
+                { document: ranked[2].document, score: 4 }
+            ]
+        },
+        {
+            name: 'coverage2',
+            query: 'beta evidence',
+            entries: [{ document: ranked[3].document, score: 5 }]
+        }
+    ], { limit: 2 });
+
+    assert.deepEqual(
+        selected.map((entry) => entry.document.id),
+        ['alpha', 'beta']
+    );
+    assert.ok(selected.every((entry) => entry.coverage?.selected === true));
+});
+
+test('AILIS Memory v3 uses soft planned time ranges without losing expanded-query evidence', async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-memory-soft-time-'));
+    let timeRangeMode;
+    const memory = createMemory({
+        rootDir: path.join(rootDir, 'memory'),
+        workspaceRoot: rootDir,
+        memoryQueryPlanner: async () => ({
+            ok: true,
+            content: JSON.stringify({
+                searchQueries: ['cobalt violin recital'],
+                timeRange: {
+                    start: '2026-07-01T00:00:00.000Z',
+                    end: '2026-07-31T23:59:59.000Z'
+                },
+                timeRangeMode
+            })
+        })
+    });
+    memory.recordTurn({
+        sessionId: 'outside-planned-range',
+        userMessage: 'The cobalt violin recital was the event I meant.',
+        assistantMessage: 'I will keep that recital as evidence.',
+        source: 'test',
+        occurredAt: '2026-06-10T00:00:00.000Z'
+    });
+    memory.recordTurn({
+        sessionId: 'inside-planned-range',
+        userMessage: 'Recall the opaque event discussion later.',
+        assistantMessage: 'This is unrelated calendar noise.',
+        source: 'test',
+        occurredAt: '2026-07-10T00:00:00.000Z'
+    });
+
+    const soft = await memory.searchMemoryAsync('Recall the opaque event.', {
+        limit: 1,
+        questionTime: '2026-08-01T00:00:00.000Z'
+    });
+    assert.equal(soft.plan.timeRangeMode, 'soft');
+    assert.match(soft.contextText, /cobalt violin recital/i);
+
+    timeRangeMode = 'hard';
+    const hard = await memory.searchMemoryAsync('Recall the opaque event.', {
+        limit: 1,
+        questionTime: '2026-08-01T00:00:00.000Z'
+    });
+    assert.equal(hard.plan.timeRangeMode, 'hard');
+    assert.doesNotMatch(hard.contextText, /cobalt violin recital/i);
+
+    await fs.rm(rootDir, { recursive: true, force: true });
+});
+
+test('AILIS Memory v3 promotes coverage-selected Ledger provenance into raw evidence', async () => {
+    const events = [
+        {
+            id: 'cardiology-event',
+            sessionId: 'cardiology-session',
+            ts: '2026-03-12T10:00:00.000Z',
+            userText: 'My cardiologist visit was in March.',
+            assistantText: 'That visit is recorded.'
+        },
+        {
+            id: 'dermatology-event',
+            sessionId: 'dermatology-session',
+            ts: '2026-04-18T10:00:00.000Z',
+            userText: 'My dermatologist visit was in April.',
+            assistantText: 'That visit is recorded.'
+        },
+        {
+            id: 'dentist-event',
+            sessionId: 'dentist-session',
+            ts: '2026-05-21T10:00:00.000Z',
+            userText: 'My dentist visit was in May.',
+            assistantText: 'That visit is recorded.'
+        }
+    ];
+    const records = events.map((event, index) => ({
+        id: `visit-record-${index + 1}`,
+        kind: 'event',
+        canonicalKey: `${event.sessionId}:visit`,
+        entity: event.sessionId.replace('-session', ''),
+        actionType: 'visit',
+        status: 'completed',
+        summary: event.userText,
+        occurredAt: event.ts,
+        sourceEventIds: [event.id],
+        sourceSessionIds: [event.sessionId],
+        sourceRefs: [{
+            eventId: event.id,
+            sessionId: event.sessionId,
+            occurredAt: event.ts
+        }]
+    }));
+    const engine = new AILISMemoryStrategyEngine({
+        rootDir: os.tmpdir(),
+        embedder: async (texts) => texts.map(createTestEmbedding),
+        eventActionLedger: {
+            loadStateSync: () => ({ records }),
+            getStatus: () => ({ recordCount: records.length })
+        },
+        queryPlanner: async () => ({
+            ok: true,
+            content: JSON.stringify({
+                searchQueries: [
+                    'cardiologist March visit',
+                    'dermatologist April visit',
+                    'dentist May visit'
+                ],
+                semanticKeys: records.map((record) => record.canonicalKey),
+                needsCoverage: true
+            })
+        })
+    });
+
+    const result = await engine.search({
+        query: 'How many different medical visits did I have?',
+        events,
+        limit: 3
+    });
+    assert.deepEqual(
+        new Set(result.events.slice(0, 3).map((event) => event.id)),
+        new Set(events.map((event) => event.id))
+    );
+    assert.ok(result.diagnostics.coverage.ledgerSeedCount >= 3);
+    assert.match(result.contextText, /visit-record-1/);
+    assert.match(result.contextText, /cardiology-event/);
+});
+
+test('AILIS Memory v3 returns coverage-selected raw evidence in retrieval order', async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-memory-coverage-plan-'));
+    const memory = createMemory({
+        rootDir: path.join(rootDir, 'memory'),
+        workspaceRoot: rootDir,
+        memoryQueryPlanner: async () => ({
+            ok: true,
+            content: JSON.stringify({
+                searchQueries: [
+                    'cardiologist March visit',
+                    'dermatologist April visit',
+                    'dentist May visit'
+                ],
+                semanticKeys: [
+                    'cardiologist_visit',
+                    'dermatologist_visit',
+                    'dentist_visit'
+                ],
+                needsCoverage: true
+            })
+        })
+    });
+    const visits = [
+        ['cardiologist-session', 'My cardiologist visit was in March.'],
+        ['dermatologist-session', 'My dermatologist visit was in April.'],
+        ['dentist-session', 'My dentist visit was in May.']
+    ];
+    for (const [sessionId, userMessage] of visits) {
+        memory.recordTurn({
+            sessionId,
+            userMessage,
+            assistantMessage: 'That visit is recorded.',
+            source: 'test'
+        });
+    }
+    for (let index = 0; index < 6; index += 1) {
+        memory.recordTurn({
+            sessionId: 'repeated-medical-noise',
+            userMessage: `General medical visit discussion ${index}.`,
+            assistantMessage: 'No named doctor appears in this note.',
+            source: 'test'
+        });
+    }
+
+    const result = await memory.searchMemoryAsync(
+        'How many different medical visits did I have?',
+        { limit: 4 }
+    );
+    const firstSessions = new Set(
+        result.events.slice(0, 4).map((event) => event.sessionId)
+    );
+    for (const [sessionId] of visits) {
+        assert.ok(firstSessions.has(sessionId), `${sessionId} should receive coverage`);
+    }
+    assert.equal(result.diagnostics.coverage.requested, true);
+    assert.ok(result.diagnostics.coverage.selectedRawSeedCount >= 3);
+
+    await fs.rm(rootDir, { recursive: true, force: true });
 });
 
 test('AILIS memory prompt centers long event snippets around the matched evidence', async () => {
