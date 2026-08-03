@@ -48,22 +48,36 @@ AILIS Assistant 是一个桌面优先的具身 AI 助手项目。它把 3D VRM �
 ## GAIA 评测
 
 <p align="center">
-  <img alt="AILIS GAIA Level 1 validation 历史诊断结果：81.13%、90.57%，均值 85.85%" src="docs/assets/benchmarks/gaia-l1-validation-20260719.svg">
+  <img alt="AILIS A6 GAIA 公开 validation 基线：165 题答对 102 题，正确率 61.82%，165 题全部给出答案" src="docs/assets/benchmarks/gaia-a6-luna-validation165-20260803.svg">
 </p>
 
-AILIS 在同一个固定代码提交上，对 GAIA 2023 Level 1 的 53 道公开 validation 题进行了两次完整运行。Codex ChatGPT OAuth bridge 只提供 `gpt-5.5` 大模型，Agent Harness、上下文管理、工具执行和答案出口均由 AILIS 负责。
+**TaskAgent A6 是目前 AILIS 的通用 Agent 基线。** 固定实现提交 `085e17d`
+使用 `gpt-5.6-luna`，在 GAIA 2023 公开 validation 的全部 165 题上取得
+**102/165（61.82%）**，并且 165 题全部给出了可评分答案。Codex 订阅桥只
+提供模型调用；上下文、工具、权限、压缩、重试和最终结果传输仍由 AILIS 负责。
 
 | 指标 | 结果 |
 | --- | ---: |
-| 第一次运行 | 43 / 53，**81.13%** |
-| 第二次运行 | 48 / 53，**90.57%** |
-| 两次均值 | 45.5 / 53，**85.85%** |
-| 稳定通过 | 40 / 53 题两次都正确 |
-| 结果一致率 | 42 / 53，**79.25%** |
+| 总分 | **102 / 165，61.82%** |
+| Level 1 | 38 / 53，71.70% |
+| Level 2 | 50 / 86，58.14% |
+| Level 3 | **14 / 26，53.85%** |
+| 有答案结果 | **165 / 165，100%** |
+| Gross tokens | 31.37M，平均每题 190.1K |
+| 平均 / P95 延迟 | 210.4s / 575.0s |
 
-这些数字目前只保留为历史诊断结果，不再作为严谨的可复现主成绩。事后审计发现，隔离 workspace 并没有禁用同一轮不同题目之间的持久语义记忆检索，因此存在题间污染风险，不能再称为“独立运行”。评测入口现已显式设置 `memoryPolicy: disabled`；必须在新协议下重新全量运行，才能发布替代主成绩。
+A6 移除了 P1 的固定轮次边界和合成终局 prompt，让模型从 canonical history
+中自然结束任务，并用语义压缩控制上下文增长。在相同 Luna 模型和相同 165 题
+任务集上，A6 相比 P1 从 54 题提升到 102 题，token 降低 23.9%，平均延迟
+降低 24.0%。同模型的原生 Codex 为 106/165；A6 总分少 4 题，但 L3 为
+14/26，高于 Codex 的 8/26。
 
-这属于公开 validation split 上的本地 `desktop-real` 可见答案评测，不是提交到私有 93 题 Level 1 test 排行榜的官方成绩。两轮都使用提交 `4f8f435`、独立 run ID 和隔离 workspace，并禁止 resume、逐题重试、失败题替换和成绩合并，但当时没有严格隔离逐题记忆。详细口径见 [GAIA 评测方法](docs/ailis-desktop-real-gaia-eval.md) 与 [Benchmark Scorecard](docs/ailis-demo-benchmark-scorecard.md)。
+这是公开 validation split 上的本地确定性可见答案评测，不是私有 test 排行榜
+官方成绩。每个计分结果都必须是完整、有答案、非零 token、空 stderr，并且
+没有认证或网络错误；基础设施失败会从完整任务重新开始，绝不拼接部分答案。
+详见 [A6 基线报告](docs/ailis-gaia-a6-taskagent-baseline.md)、
+[评测方法](docs/ailis-desktop-real-gaia-eval.md)和
+[机器可读聚合指标](evals/engineering/gaia-a6-luna-validation165-summary.json)。
 
 ## Apple ToolSandbox 评测
 

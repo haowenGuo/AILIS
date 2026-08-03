@@ -1,0 +1,69 @@
+{
+  "schema": "ailis.gaia.taskagent_baseline.v1",
+  "publishedAt": "2026-08-03",
+  "baseline": {
+    "name": "A6 natural termination",
+    "implementationCommit": "085e17d2f4a8ce0e841ee1543ad0df10e2387415",
+    "branch": "codex/a6-natural-termination",
+    "model": "gpt-5.6-luna",
+    "protocol": "model-directed natural termination with canonical-history compaction and no forced final prompt or fixed model-round cap"
+  },
+  "benchmark": {
+    "name": "GAIA 2023",
+    "split": "public validation",
+    "scorer": "AILIS deterministic desktop-real visible-answer scorer",
+    "officialLeaderboardSubmission": false,
+    "tasks": 165,
+    "manifestSha256": "0acd28eb614a756dfd6160c23c627641d8abae06bfe60ccd192c67adf8878538"
+  },
+  "result": {
+    "correct": 102,
+    "accuracyPct": 61.82,
+    "answerBearing": 165,
+    "responseOk": 165,
+    "levels": {
+      "L1": { "correct": 38, "tasks": 53, "accuracyPct": 71.7 },
+      "L2": { "correct": 50, "tasks": 86, "accuracyPct": 58.14 },
+      "L3": { "correct": 14, "tasks": 26, "accuracyPct": 53.85 }
+    }
+  },
+  "resources": {
+    "grossTokens": 31370114,
+    "effectiveTokens": 31370114,
+    "cachedTokensReported": 0,
+    "averageTokens": 190122,
+    "averageLatencyMs": 210426,
+    "p95LatencyMs": 574971,
+    "llmCalls": 1881,
+    "logicalToolCalls": 1814
+  },
+  "acceptance": {
+    "acceptedUniqueTasks": 165,
+    "controllerAttempts": 216,
+    "acceptedOnFirstAttempt": 140,
+    "acceptedAfterExcludedInfrastructureAttempt": 25,
+    "rule": "complete artifacts, completed response, submitted answer, nonzero tokens, empty stderr, and no authentication or network error in the accepted attempt",
+    "partialAnswerMerging": false,
+    "passAtN": false
+  },
+  "controls": {
+    "p1Luna": {
+      "correct": 54,
+      "accuracyPct": 32.73,
+      "answerBearing": 165,
+      "grossTokens": 41233910,
+      "effectiveTokens": 28549622,
+      "averageLatencyMs": 276972
+    },
+    "nativeCodexLuna": {
+      "correct": 106,
+      "accuracyPct": 64.24,
+      "answerBearing": 161,
+      "terminalTimeouts": 4,
+      "grossTokens": 69061879,
+      "cachedInputTokens": 60877568,
+      "effectiveTokens": 8184311,
+      "averageLatencyMs": 255891
+    }
+  }
+}

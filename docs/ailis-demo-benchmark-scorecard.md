@@ -1,6 +1,6 @@
 # AILIS Demo and Benchmark Scorecard
 
-Generated: 2026-07-20
+Generated: 2026-08-03
 
 ## Positioning
 
@@ -46,7 +46,7 @@ For external demos, use public/recognized benchmarks as the main scoreboard. Kee
 | --- | --- | --- | --- | --- |
 | Desktop computer operation | OSWorld | Academic benchmark for real computer environments with web, desktop apps, OS file I/O, and cross-app workflows. | Very high. AILIS is a PC desktop assistant. | Readiness ready; small historical run 2/4 |
 | Code agent | SWE-bench Lite / Verified / Pro | Industry-standard coding-agent benchmark based on real GitHub issues. Verified is widely used but increasingly contaminated; Pro is safer for future claims. | High. AILIS has code tools, patching, tests, terminal. | Harness selftest only |
-| General assistant with tools | GAIA | Commonly used assistant benchmark for search, files, reasoning, and exact answers. | High. Best current fit for AILIS's generic tool-use ability. | Historical Level 1 diagnostic: 81.13% and 90.57%; replacement strict-memory-isolated run pending |
+| General assistant with tools | GAIA | Commonly used assistant benchmark for search, files, reasoning, and exact answers. | High. Best current fit for AILIS's generic tool-use ability. | TaskAgent A6 baseline: 102/165 (61.82%) on full public validation; 165/165 answer coverage |
 | Tool + user interaction | τ-bench / τ²-bench | Evaluates agents in realistic multi-turn user + API tool environments with policies. | High for future email/customer-service style workflows. | Not integrated |
 | Web agent | WebArena | Realistic, self-hosted web environments with functional-outcome scoring. | Medium. AILIS has web/MCP, but PC desktop is higher priority. | Not integrated |
 | Terminal agent | Terminal-Bench / TerminalWorld | Evaluates real terminal tasks with verifiers, useful for CLI/code/file workflows. | High for command-line execution layer. | Not integrated |
@@ -107,7 +107,7 @@ Interpretation:
 | SWE-bench Execution Selftest | Local tiny SWE-style harness selftest | 1 / 1 verified | Yes, as harness readiness, not public SWE-bench score |
 | OSWorld PC Readiness | Local environment and tool-surface readiness | officialRunReady true; 15 / 15 required actions present | Yes, as OSWorld readiness |
 | OSWorld Small Historical Run | 4 OSWorld tasks | 2 / 4 success, average score 0.50 | Yes, but label as small historical run |
-| GAIA Level 1 Validation | All 53 public validation questions, two fixed-commit historical runs | Run 1: 43 / 53 (81.13%); Run 2: 48 / 53 (90.57%); mean: 85.85% | Diagnostic only; task-level semantic-memory isolation was missing |
+| GAIA Full Validation | All 165 public validation questions, fixed A6 implementation and Luna model | 102 / 165 (61.82%); L1 38/53, L2 50/86, L3 14/26; 165/165 answers | Yes, as the current local general-agent baseline; not an official private-test score |
 | GAIA Level 1 Lite Public | 20 public-lite questions, submitted to public scorer | 60% = 12 / 20 correct; 19 / 20 completed locally | Historical comparison only |
 | GAIA Level 1 Lite Smoke | 3 public lite questions, no leaderboard submission | 2 / 3 produced local final answers; official score null because not submitted | No, keep as debug smoke |
 
@@ -182,52 +182,51 @@ Target display:
 - Small run: success rate and per-domain failures.
 - Do not claim official OSWorld score until the full official or verified route is run.
 
-### D. GAIA Level 1
+### D. GAIA Full Validation
 
-Historical fixed-commit full validation diagnostic:
+Current TaskAgent A6 baseline:
 
 <p align="center">
-  <img alt="AILIS GAIA Level 1 validation results" src="assets/benchmarks/gaia-l1-validation-20260719.svg">
+  <img alt="AILIS A6 GAIA full public validation results" src="assets/benchmarks/gaia-a6-luna-validation165-20260803.svg">
 </p>
 
-| Run | Commit | Correct | Accuracy | Runtime status |
-| --- | --- | ---: | ---: | --- |
-| 1 | `4f8f435` | 43 / 53 | 81.13% | 52 completed, 1 timeout |
-| 2 | `4f8f435` | 48 / 53 | 90.57% | 53 completed |
-| Mean | `4f8f435` | 45.5 / 53 | 85.85% | arithmetic mean |
+| System | Model | Correct | L1 | L2 | L3 | Answers |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| AILIS P1 | Luna | 54 / 165 (32.73%) | 24 / 53 | 28 / 86 | 2 / 26 | 165 / 165 |
+| **AILIS A6** | **Luna** | **102 / 165 (61.82%)** | **38 / 53** | **50 / 86** | **14 / 26** | **165 / 165** |
+| Native Codex | Luna | 106 / 165 (64.24%) | 42 / 53 | 56 / 86 | 8 / 26 | 161 / 165 |
 
-Stability across the two runs:
-
-| Per-task outcome | Tasks | Share |
-| --- | ---: | ---: |
-| Correct in both runs | 40 / 53 | 75.47% |
-| Correct in one run | 11 / 53 | 20.75% |
-| Incorrect in both runs | 2 / 53 | 3.77% |
-| Same pass/fail outcome | 42 / 53 | 79.25% |
+| Resource metric | AILIS P1 | AILIS A6 | Native Codex |
+| --- | ---: | ---: | ---: |
+| Gross tokens | 41.23M | **31.37M** | 69.06M |
+| Effective tokens | 28.55M | **31.37M** | 8.18M |
+| Mean latency | 277.0s | **210.4s** | 255.9s |
+| P95 latency | 509.6s | **575.0s** | 584.7s |
+| Logical tool calls | 1,138 | **1,814** | 1,959 |
 
 Protocol:
 
-- GAIA 2023 Level 1 public validation split, 53 tasks.
-- Dataset SHA-256: `469f4c4b5fa532ac07e3d922bcbe709e663c9f9fc83edccf440cc3d44277f236`.
-- Codex ChatGPT OAuth bridge with `gpt-5.5`, medium reasoning and temperature `0.2`.
-- AILIS owns the harness, context, tools and answer pipeline; Codex is the model backend only.
-- Separate run IDs and isolated workspaces.
-- No resume, task retry, failed-task replacement or merged score.
+- GAIA 2023 public validation split, all 165 tasks: L1 53, L2 86, L3 26.
+- Manifest SHA-256: `0acd28eb614a756dfd6160c23c627641d8abae06bfe60ccd192c67adf8878538`.
+- Fixed A6 implementation commit: `085e17d2f4a8ce0e841ee1543ad0df10e2387415`.
+- Codex subscription bridge with `gpt-5.6-luna`; AILIS owns the harness, context, tools and answer pipeline.
+- Task-level memory disabled, isolated sessions and workspaces.
+- One complete accepted outcome per task; infrastructure failures restart the full task and partial answers are never merged.
+- Every accepted row has a submitted answer, nonzero tokens, empty stderr, and no authentication or network error.
 - Repository deterministic desktop-real visible-answer scorer, not the official GAIA private scorer.
-- Post-run audit: persistent semantic-memory retrieval was not disabled between tasks inside each run. The numbers below therefore cannot be treated as independent-run reproducibility evidence.
 
-The official GAIA leaderboard currently accepts the 301-question private test split, including 93 Level 1 questions. Its documentation says that the paper reports averages over different runs when possible, but the leaderboard displays the best run. For the historical AILIS diagnostic:
-
-- Best observed historical run: **90.57%**.
-- Historical two-run arithmetic mean: **85.85%**.
-- Neither value is an official leaderboard submission because this run uses the public validation split and the local desktop-real scorer.
-- Neither value is the current reproducibility score because strict task-level memory isolation was absent.
+A6 replaces P1's fixed model-round boundary and synthetic final request with
+model-directed natural termination over canonical history. Relative to P1 under
+the same Luna model, A6 gains 48 answers, reduces gross tokens by 23.9%, and
+reduces mean latency by 24.0%. Native Codex remains four answers ahead overall,
+while A6 solves six more L3 tasks and returns four more answers.
 
 Official references:
 
 - [GAIA leaderboard policy](https://huggingface.co/spaces/gaia-benchmark/leaderboard/blob/main/content.py)
 - [GAIA leaderboard split sizes and scoring code](https://huggingface.co/spaces/gaia-benchmark/leaderboard/blob/main/app.py)
 - [AILIS desktop-real GAIA evaluation methodology](ailis-desktop-real-gaia-eval.md)
+- [AILIS TaskAgent A6 baseline report](ailis-gaia-a6-taskagent-baseline.md)
 
 Best historical public-lite score:
 
@@ -266,7 +265,9 @@ report = eval-results/engineering/gaia-level1-lite-public/2026-06-07T03-58-57-08
 Level 2 / Level 3 note:
 
 ```text
-GAIA L2/L3 are not part of the current public scorecard because this machine/account does not have the required Hugging Face gated dataset access for those files.
+The A6 scorecard now covers L1, L2 and L3 from the complete public validation
+manifest. Private-test answers remain unavailable and are not inferred from the
+local score.
 ```
 
 Run after model/key is stable:

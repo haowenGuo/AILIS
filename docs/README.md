@@ -10,6 +10,7 @@ This directory contains the design record, operating guides, evaluation plans, a
 - [Memory Architecture V2](ailis-memory-architecture-v2.md) - current memory lanes and lifecycle.
 - [Tool Ecosystem Driver Guide](tool-ecosystem-driver-guide.md) - tool, MCP, skill, and adapter entry points.
 - [Demo and Benchmark Scorecard](ailis-demo-benchmark-scorecard.md) - current evidence and benchmark status.
+- [TaskAgent A6 GAIA Baseline](ailis-gaia-a6-taskagent-baseline.md) - current 165-task general-agent baseline, resources, controls, and promotion contract.
 
 ## Agent Runtime And Harness
 

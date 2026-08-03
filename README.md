@@ -75,22 +75,41 @@ AILIS is not only an expressive avatar and not only an automation console. The i
 ## GAIA Evaluation
 
 <p align="center">
-  <img alt="Historical AILIS GAIA Level 1 validation diagnostics: 81.13 percent and 90.57 percent across two runs, with an 85.85 percent mean" src="docs/assets/benchmarks/gaia-l1-validation-20260719.svg">
+  <img alt="AILIS A6 GAIA public validation baseline: 102 of 165 correct, 61.82 percent accuracy, and 165 of 165 answer-bearing outcomes" src="docs/assets/benchmarks/gaia-a6-luna-validation165-20260803.svg">
 </p>
 
-AILIS completed two fixed-commit runs of the 53-task GAIA 2023 Level 1 public validation set. Codex's ChatGPT OAuth bridge supplied the `gpt-5.5` model, while AILIS retained ownership of the agent harness, context management, tool execution, and answer pipeline.
+**TaskAgent A6 is the current AILIS general-agent baseline.** On all 165 tasks
+in the GAIA 2023 public validation split, fixed implementation commit `085e17d`
+with `gpt-5.6-luna` scored **102/165 (61.82%)** and returned an answer for every
+task. AILIS retained ownership of context, tools, permissions, compaction,
+retries and final result transport; the Codex subscription bridge supplied only
+the model backend.
 
 | Metric | Result |
 | --- | ---: |
-| Run 1 | 43 / 53, **81.13%** |
-| Run 2 | 48 / 53, **90.57%** |
-| Two-run mean | 45.5 / 53, **85.85%** |
-| Stable pass | 40 / 53 tasks passed both runs |
-| Outcome agreement | 42 / 53, **79.25%** |
+| Overall | **102 / 165, 61.82%** |
+| Level 1 | 38 / 53, 71.70% |
+| Level 2 | 50 / 86, 58.14% |
+| Level 3 | **14 / 26, 53.85%** |
+| Answer-bearing outcomes | **165 / 165, 100%** |
+| Gross tokens | 31.37M, 190.1K per task |
+| Mean / P95 latency | 210.4s / 575.0s |
 
-These are retained as historical diagnostics, not the current reproducibility claim. A post-run audit found that workspace isolation did not disable persistent semantic-memory retrieval between tasks inside each run. That task-to-task contamination risk invalidates calling the runs independent, even though run IDs, workspaces, retries, and score files were isolated. The evaluation runner now sets `memoryPolicy: disabled`; a new full rerun is required before publishing a replacement primary score.
+A6 removes P1's fixed round boundary and synthetic final-answer request. The
+model now terminates naturally from canonical history, while semantic
+compaction controls context growth. Under the same Luna model and task manifest,
+A6 improves over P1 from 54 to 102 correct, uses 23.9% fewer tokens, and lowers
+mean latency by 24.0%. Native Codex-Luna scores 106/165 overall; A6 is four
+answers behind overall but solves 14 L3 tasks versus Codex's 8.
 
-This is a local `desktop-real` visible-answer evaluation on the public validation split, not an official submission to the private 93-task Level 1 test leaderboard. Both historical runs used commit `4f8f435`, separate run IDs and isolated workspaces, with no resume, per-task retry, failed-task replacement, or score merging, but without strict per-task memory isolation. See the [evaluation methodology](docs/ailis-desktop-real-gaia-eval.md) and [benchmark scorecard](docs/ailis-demo-benchmark-scorecard.md).
+This is a local deterministic visible-answer evaluation on the public
+validation split, not an official private-test leaderboard submission. Each
+accepted row required a complete answer-bearing, nonzero-token run with empty
+stderr and no authentication or network error; infrastructure failures were
+restarted as complete tasks and never merged. See the
+[A6 baseline report](docs/ailis-gaia-a6-taskagent-baseline.md),
+[evaluation methodology](docs/ailis-desktop-real-gaia-eval.md), and
+[machine-readable aggregate](evals/engineering/gaia-a6-luna-validation165-summary.json).
 
 ## Apple ToolSandbox Evaluation
 

@@ -1,82 +1,81 @@
 # Codex Memory Checkpoint
 
-Date/time: 2026-07-29
-Workspace: `F:\AILIS_self_evolution_runtime-gaia-p1-baseline`
-Branch: `codex/p1-native-tool-transport`
-Base commit: `32de3f56e4380650e9ed107b4eadc353235f4562`
+Updated: 2026-08-03
 
-## Objective
+## Current Baseline
 
-- Replace P1's JSON-emulated Codex tool calls with native Responses function calls.
-- Keep AILIS as the sole owner of tool execution, context, retry, evidence, approval, and finalization.
-- Preserve canonical ResponseItems and native roles.
-- Send real `parallel_tool_calls=true`.
-- Execute parallel-safe calls concurrently, unsafe calls serially, and persist every emitted call.
-- Keep finalization, audit, answer selection, and task routing unchanged.
+- AILIS TaskAgent baseline: A6 natural termination.
+- Implementation commit: `085e17d2f4a8ce0e841ee1543ad0df10e2387415`.
+- Branch: `codex/a6-natural-termination`.
+- Worktree: `F:\AILIS_self_evolution_runtime-gaia-a6-natural-termination`.
+- Parent score-recovery commit: `b6f6dc0a9a41062dbde02337ae989aa591018acc`.
+- Previous operational baseline: P1 `7ba2cf77628f793ad70abb5bd9577d5d41c1ba0b`.
+- Frozen historical baseline: `6afc0ae6a4b51992fcf20092fb5b8e109dab98e5`.
 
-## Implemented
+## A6 Behavior
 
-- `electron/codex-model-bridge.cjs`
-  - Production bridge now calls the native ChatGPT Codex Responses endpoint.
-  - Sends canonical input, native function tools, tool choice, reasoning controls, encrypted reasoning inclusion, stable prompt cache key, and `parallel_tool_calls`.
-  - Parses all SSE response items and all function calls.
-  - Uses the current OAuth snapshot and Windows HTTPS proxy without writing secrets.
-  - Strips stateless ResponseItem IDs at the wire boundary, matching locked Codex source behavior.
-  - Compiles optional strict arguments as required nullable fields and removes returned null leaves before AILIS validation.
-  - Hydrates compact `tool_search_output.tools` history with current native tool specs.
-  - Projects AILIS web viewport extensions onto standard Responses web action fields.
-  - Legacy app-server/decision-schema code remains callable only by the isolated shadow A/B script; production no longer uses it.
-- `electron/desktop-llm-provider.cjs`
-  - Codex provider advertises `codex-responses-native`; JSON mode/schema are disabled.
-- `electron/ailis-agent-runner.cjs`
-  - Records provider reasoning/message/function-call ResponseItems before AILIS-owned outputs.
-  - Builds deterministic execution groups: contiguous safe calls run concurrently, unsafe calls run one at a time.
-  - Persists the complete multi-call roster and every preflight disposition before execution.
-  - Keeps all pending calls and execution groups across approval pause/resume.
-  - Uses a stable per-run prompt cache key.
-- `electron/ailis-model-input-builder.cjs`
-  - Avoids duplicating a native function call when recording its AILIS-owned output.
-- `electron/ailis-web-run-description.md`
-  - Only states that independent `search_query` variants may share a call; a single query remains valid.
-- Added deterministic shadow/reconciliation scripts and focused tests.
+- Native Responses function calls transport model tool intent.
+- AILIS owns context, tool execution, permissions, persistence, retries,
+  interruption and final result transport.
+- Canonical response items remain the source of truth.
+- There is no fixed TaskAgent model-round cap.
+- There is no synthetic tool-free final request or reconstructed final prompt.
+- The model ends the task by returning a normal assistant response.
+- Semantic compaction controls context growth in the same canonical history.
+- Bounded evidence and source-navigation references survive context projection.
+- There is no task-ID, expected-answer or site-specific routing.
 
-## Verification
+## GAIA Validation Result
 
-- Syntax checks passed for all changed runtime and script files.
-- Integration suite passed: `214/214`, covering:
-  - native bridge request/SSE parsing
-  - provider adapters
-  - canonical ResponseItems
-  - ContextManager/ToolRouter
-  - Agent runner scheduling
-  - approval checkpoint no-tail-loss
-- Live diagnostic two-tool probe returned two standard function calls in one native response with `parallel_tool_calls=true`.
-- No AILIS tools were executed by Codex during the probe or shadow replay.
+Dataset: GAIA 2023 public validation, 165 tasks, `gpt-5.6-luna`.
 
-## Transport-Only Shadow A/B
+- Overall: 102/165, 61.82%.
+- L1: 38/53, 71.70%.
+- L2: 50/86, 58.14%.
+- L3: 14/26, 53.85%.
+- Answer-bearing outcomes: 165/165.
+- Gross/effective tokens: 31.37M/31.37M.
+- Mean/P95 latency: 210.4s/575.0s.
+- Model calls: 1,881.
+- Logical tool calls: 1,814.
 
-Source transcripts:
-`F:\AILIS_self_evolution_runtime\eval-results\engineering\gaia-desktop-real\p1-vs-codex-validation165-20260728`
+Fair Luna controls:
 
-Reconciled reports:
-- `F:\AILIS_self_evolution_runtime\eval-results\engineering\gaia-desktop-real\candidate-p1-native-transport-shadow-working-20260729\shadow-reconciled.md`
-- `F:\AILIS_self_evolution_runtime\eval-results\engineering\gaia-desktop-real\candidate-p1-native-transport-shadow-working-20260729\shadow-reconciled.json`
+- P1-Luna: 54/165, 32.73%, 165 answers, 41.23M gross tokens.
+- Native Codex-Luna: 106/165, 64.24%, 161 answers, four clean capability
+  timeouts, 69.06M gross and 8.18M effective tokens.
 
-Results:
-- Diagnostic only; `excludedFromScore=true`; no tools executed.
-- Final native compatibility: `4/4`.
-- Three directly paired successful rows:
-  - legacy input tokens: `123,415`
-  - native input tokens: `49,490` (`-59.90%`)
-  - legacy latency: `109,420 ms`
-  - native latency: `53,016 ms` (`-51.55%`)
-- A fourth legacy row timed out at 120 seconds; native returned in `17,115 ms`.
-- Observed native cached tokens: `0`. The stable cache key is transported, but cache hits are not proven.
-- This replay validates transport compatibility and cost only, not task correctness.
+A6 is +48 correct and +29.09 percentage points over P1-Luna. Codex-Luna is
+four answers ahead overall, while A6 is +6 on L3 and has complete answer
+coverage.
 
-## Boundary
+## Evaluation Boundary
 
-- No full GAIA gate has been started.
-- Do not claim score improvement from shadow replay.
-- Do not merge into the accepted baseline before a fixed-commit focused correctness control and then the agreed paired regression gate.
-- Do not mix finalization, audit, answer selection, routing, or prompt-policy changes into this candidate.
+- This is a local deterministic score on the public validation split, not an
+  official private-test leaderboard submission.
+- Accepted rows require complete artifacts, a submitted answer, nonzero tokens,
+  empty stderr and no network/authentication error.
+- Infrastructure failures restart the complete task. Partial answers are not
+  merged and excluded attempts do not enter the score.
+- 216 attempts produced 165 accepted unique outcomes; 140 were accepted on the
+  first attempt and 25 after excluded infrastructure attempts.
+- Historical gpt-5.5 rows are not causal comparisons with A6-Luna.
+
+## Durable Reports
+
+- `docs/ailis-gaia-a6-taskagent-baseline.md`
+- `evals/engineering/gaia-a6-luna-validation165-summary.json`
+- `docs/assets/benchmarks/gaia-a6-luna-validation165-20260803.svg`
+
+External aggregate source retained outside Git:
+
+`F:\AILIS_self_evolution_runtime\eval-results\engineering\gaia-desktop-real\gaia-a6-all-schemes-codex-luna-comparison-20260803`
+
+## Next Optimization Contract
+
+Start future TaskAgent work from A6. Focus on stable prefix caching, L1/L2
+source selection and exact-answer extraction, and timeout-safe checkpoint/replay.
+Do not reintroduce a forced final prompt or fixed model-round cap without a
+complete paired regression. Preserve all 14 A6 L3 successes as mandatory
+controls. A focused fix is not promotable until the complete paired score,
+answer coverage, token use and latency pass against A6.

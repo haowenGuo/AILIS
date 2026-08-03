@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="720" viewBox="0 0 1200 720" role="img" aria-labelledby="title desc">
+  <title id="title">AILIS A6 GAIA validation baseline</title>
+  <desc id="desc">On all 165 GAIA public validation tasks with Luna, AILIS A6 scored 61.82 percent, P1 scored 32.73 percent, and native Codex scored 64.24 percent. A6 answered all 165 tasks and scored 14 of 26 Level 3 tasks.</desc>
+  <rect width="1200" height="720" fill="#f8fafc"/>
+  <rect x="28" y="24" width="1144" height="672" rx="8" fill="#ffffff" stroke="#cbd5e1"/>
+
+  <text x="64" y="70" fill="#0f172a" font-family="Arial, sans-serif" font-size="28" font-weight="700">TaskAgent A6: GAIA Validation Baseline</text>
+  <text x="64" y="100" fill="#475569" font-family="Arial, sans-serif" font-size="16">Same Luna model, all 165 public validation tasks, one accepted outcome per task</text>
+  <rect x="966" y="48" width="166" height="34" rx="6" fill="#ecfeff" stroke="#0891b2"/>
+  <text x="1049" y="70" text-anchor="middle" fill="#155e75" font-family="Arial, sans-serif" font-size="13" font-weight="700">CURRENT BASELINE</text>
+
+  <text x="64" y="151" fill="#0f172a" font-family="Arial, sans-serif" font-size="18" font-weight="700">Overall accuracy</text>
+  <text x="64" y="179" fill="#64748b" font-family="Arial, sans-serif" font-size="13">Correct answers / 165</text>
+
+  <text x="64" y="222" fill="#334155" font-family="Arial, sans-serif" font-size="14" font-weight="700">AILIS P1</text>
+  <rect x="176" y="203" width="480" height="28" rx="5" fill="#e2e8f0"/>
+  <rect x="176" y="203" width="157" height="28" rx="5" fill="#94a3b8"/>
+  <text x="674" y="223" fill="#475569" font-family="Arial, sans-serif" font-size="15" font-weight="700">32.73%  (54)</text>
+
+  <text x="64" y="272" fill="#0f172a" font-family="Arial, sans-serif" font-size="14" font-weight="700">AILIS A6</text>
+  <rect x="176" y="253" width="480" height="28" rx="5" fill="#e2e8f0"/>
+  <rect x="176" y="253" width="297" height="28" rx="5" fill="#0891b2"/>
+  <text x="674" y="273" fill="#0e7490" font-family="Arial, sans-serif" font-size="15" font-weight="700">61.82%  (102)</text>
+
+  <text x="64" y="322" fill="#334155" font-family="Arial, sans-serif" font-size="14" font-weight="700">Native Codex</text>
+  <rect x="176" y="303" width="480" height="28" rx="5" fill="#e2e8f0"/>
+  <rect x="176" y="303" width="308" height="28" rx="5" fill="#2563eb"/>
+  <text x="674" y="323" fill="#1d4ed8" font-family="Arial, sans-serif" font-size="15" font-weight="700">64.24%  (106)</text>
+
+  <line x1="756" y1="132" x2="756" y2="444" stroke="#e2e8f0"/>
+  <text x="800" y="151" fill="#0f172a" font-family="Arial, sans-serif" font-size="18" font-weight="700">Accuracy by level</text>
+  <rect x="800" y="173" width="14" height="14" rx="3" fill="#0891b2"/>
+  <text x="823" y="185" fill="#475569" font-family="Arial, sans-serif" font-size="13">AILIS A6</text>
+  <rect x="922" y="173" width="14" height="14" rx="3" fill="#2563eb"/>
+  <text x="945" y="185" fill="#475569" font-family="Arial, sans-serif" font-size="13">Native Codex</text>
+
+  <text x="800" y="227" fill="#334155" font-family="Arial, sans-serif" font-size="14" font-weight="700">L1</text>
+  <rect x="844" y="208" width="218" height="15" rx="4" fill="#cffafe"/>
+  <rect x="844" y="208" width="156" height="15" rx="4" fill="#0891b2"/>
+  <rect x="844" y="231" width="218" height="15" rx="4" fill="#dbeafe"/>
+  <rect x="844" y="231" width="173" height="15" rx="4" fill="#2563eb"/>
+  <text x="1080" y="221" fill="#0e7490" font-family="Arial, sans-serif" font-size="12">38/53</text>
+  <text x="1080" y="244" fill="#1d4ed8" font-family="Arial, sans-serif" font-size="12">42/53</text>
+
+  <text x="800" y="294" fill="#334155" font-family="Arial, sans-serif" font-size="14" font-weight="700">L2</text>
+  <rect x="844" y="275" width="218" height="15" rx="4" fill="#cffafe"/>
+  <rect x="844" y="275" width="127" height="15" rx="4" fill="#0891b2"/>
+  <rect x="844" y="298" width="218" height="15" rx="4" fill="#dbeafe"/>
+  <rect x="844" y="298" width="142" height="15" rx="4" fill="#2563eb"/>
+  <text x="1080" y="288" fill="#0e7490" font-family="Arial, sans-serif" font-size="12">50/86</text>
+  <text x="1080" y="311" fill="#1d4ed8" font-family="Arial, sans-serif" font-size="12">56/86</text>
+
+  <text x="800" y="361" fill="#334155" font-family="Arial, sans-serif" font-size="14" font-weight="700">L3</text>
+  <rect x="844" y="342" width="218" height="15" rx="4" fill="#cffafe"/>
+  <rect x="844" y="342" width="117" height="15" rx="4" fill="#0891b2"/>
+  <rect x="844" y="365" width="218" height="15" rx="4" fill="#dbeafe"/>
+  <rect x="844" y="365" width="67" height="15" rx="4" fill="#2563eb"/>
+  <text x="1080" y="355" fill="#0e7490" font-family="Arial, sans-serif" font-size="12">14/26</text>
+  <text x="1080" y="378" fill="#1d4ed8" font-family="Arial, sans-serif" font-size="12">8/26</text>
+
+  <rect x="64" y="476" width="250" height="126" rx="8" fill="#ecfeff" stroke="#a5f3fc"/>
+  <text x="84" y="508" fill="#155e75" font-family="Arial, sans-serif" font-size="14" font-weight="700">ANSWER COVERAGE</text>
+  <text x="84" y="552" fill="#0f172a" font-family="Arial, sans-serif" font-size="30" font-weight="700">165 / 165</text>
+  <text x="84" y="580" fill="#475569" font-family="Arial, sans-serif" font-size="13">100% answer-bearing outcomes</text>
+
+  <rect x="334" y="476" width="250" height="126" rx="8" fill="#eff6ff" stroke="#bfdbfe"/>
+  <text x="354" y="508" fill="#1d4ed8" font-family="Arial, sans-serif" font-size="14" font-weight="700">MEAN LATENCY</text>
+  <text x="354" y="552" fill="#0f172a" font-family="Arial, sans-serif" font-size="30" font-weight="700">210.4s</text>
+  <text x="354" y="580" fill="#475569" font-family="Arial, sans-serif" font-size="13">P95 575.0s</text>
+
+  <rect x="604" y="476" width="250" height="126" rx="8" fill="#f0fdf4" stroke="#bbf7d0"/>
+  <text x="624" y="508" fill="#047857" font-family="Arial, sans-serif" font-size="14" font-weight="700">GROSS TOKENS</text>
+  <text x="624" y="552" fill="#0f172a" font-family="Arial, sans-serif" font-size="30" font-weight="700">31.37M</text>
+  <text x="624" y="580" fill="#475569" font-family="Arial, sans-serif" font-size="13">190.1K average per task</text>
+
+  <rect x="874" y="476" width="258" height="126" rx="8" fill="#fff7ed" stroke="#fed7aa"/>
+  <text x="894" y="508" fill="#c2410c" font-family="Arial, sans-serif" font-size="14" font-weight="700">TOOL ACTIVITY</text>
+  <text x="894" y="552" fill="#0f172a" font-family="Arial, sans-serif" font-size="30" font-weight="700">1,814</text>
+  <text x="894" y="580" fill="#475569" font-family="Arial, sans-serif" font-size="13">1,881 model calls</text>
+
+  <text x="64" y="640" fill="#334155" font-family="Arial, sans-serif" font-size="14" font-weight="700">A6 versus P1:</text>
+  <text x="178" y="640" fill="#475569" font-family="Arial, sans-serif" font-size="14">+48 correct, +29.09 pp accuracy, -23.9% tokens, -24.0% mean latency</text>
+  <text x="64" y="672" fill="#64748b" font-family="Arial, sans-serif" font-size="12">Public GAIA validation, local deterministic scorer, not an official private-test leaderboard submission | A6 implementation 085e17d | 2026-08-03</text>
+</svg>
