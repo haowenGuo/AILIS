@@ -66,6 +66,19 @@ records:
 - rank and score within each channel;
 - source event/session/time references.
 
+Query-planned time ranges are soft ranking constraints by default. They boost
+temporally compatible evidence without deleting the unrestricted BM25/E5
+fallback. The planner may request hard time filtering only when the exclusion
+range is unambiguous.
+
+When the model query plan requests `needsCoverage`, each self-contained search
+query, semantic key, and target entity receives an opportunity to seed the
+candidate set before the remaining RRF-ranked slots are filled. Coverage mode
+also limits repeated raw turns from one session before backfilling, so one
+highly similar session cannot consume the evidence budget needed by other
+facets. These are deterministic context-allocation rules over model-selected
+facets; they do not infer task semantics from keywords.
+
 The existing two-channel raw-turn Hybrid RRF result is retained as a raw
 evidence anchor. This prevents the structured layer from hiding evidence that
 the previous best retriever already found.

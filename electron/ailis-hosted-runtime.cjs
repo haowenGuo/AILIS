@@ -198,7 +198,7 @@ class AILISHostedRuntimeManager {
         const onEvent = (event) => this.recordEvent(key, event);
         gateway.on?.('event', onEvent);
         record.unsubscribe = () => gateway.off?.('event', onEvent);
-        gateway.startProfileCurationScheduler?.();
+        gateway.scheduleMemoryCurationSoon?.('hosted_runtime_startup');
         return record;
     }
 

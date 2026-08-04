@@ -22,7 +22,10 @@ class FakeGateway extends EventEmitter {
         this.stopped = false;
     }
 
-    startProfileCurationScheduler() {}
+    scheduleMemoryCurationSoon(trigger) {
+        this.memoryCurationTrigger = trigger;
+        return true;
+    }
 
     async runAgent(request) {
         this.requests.push(request);
@@ -87,6 +90,8 @@ test('hosted runtime isolates memory and workspace roots per signed tenant', asy
     assert.match(gateways[0].options.auditDir, new RegExp(tenantKey('web:alice')));
     assert.match(gateways[1].options.auditDir, new RegExp(tenantKey('web:bob')));
     assert.equal(gateways[0].requests[0].llmSettings.apiKey, 'test-key');
+    assert.equal(gateways[0].memoryCurationTrigger, 'hosted_runtime_startup');
+    assert.equal(gateways[1].memoryCurationTrigger, 'hosted_runtime_startup');
 
     const aliceEvents = manager.getEvents('web:alice');
     const bobEvents = manager.getEvents('web:bob');
@@ -96,6 +101,77 @@ test('hosted runtime isolates memory and workspace roots per signed tenant', asy
 
     await manager.close();
     assert.ok(gateways.every((gateway) => gateway.stopped));
+});
+
+test('hosted runtime upgrades pre-v3 tenant memory without losing raw events or secrets', async () => {
+    const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-hosted-v3-migration-'));
+    const tenantId = 'web:legacy-memory';
+    const memoryRoot = path.join(
+        dataRoot,
+        'tenants',
+        tenantKey(tenantId),
+        'state',
+        'memory'
+    );
+    await fs.mkdir(memoryRoot, { recursive: true });
+    await fs.writeFile(path.join(memoryRoot, 'memory-state.json'), JSON.stringify({
+        version: 1,
+        createdAt: '2026-07-01T00:00:00.000Z',
+        updatedAt: '2026-07-08T00:00:00.000Z',
+        blocks: {
+            persona: { key: 'persona', value: '- legacy persona fragment' },
+            user: { key: 'user', value: '- legacy derived user fragment' }
+        },
+        events: [{
+            id: 'legacy-hosted-event',
+            ts: '2026-07-08T00:00:00.000Z',
+            sessionId: 'main',
+            userText: '请记住我喜欢海边',
+            assistantText: '我会记住。'
+        }],
+        secrets: [{
+            id: 'legacy-hosted-secret',
+            name: 'saved-secret',
+            kind: 'generic',
+            protection: 'local-file-base64',
+            valueBase64: Buffer.from('secret-value').toString('base64')
+        }],
+        stats: { turnCount: 1 }
+    }, null, 2));
+
+    const manager = new AILISHostedRuntimeManager({
+        dataRoot,
+        llmSettings: {
+            provider: 'openai-compatible',
+            baseUrl: 'https://example.test/v1',
+            apiKey: 'test-key',
+            model: 'test-model'
+        }
+    });
+
+    try {
+        const record = await manager.getRuntime(tenantId);
+        const snapshot = record.gateway.getMemorySnapshot({ includeEvents: true });
+        const blocks = Object.fromEntries(snapshot.blocks.map((block) => [block.key, block.value]));
+        const status = record.gateway.getStatus({ includeAgentRunner: false });
+
+        assert.equal(status.memory.version, 'v3');
+        assert.equal(status.memoryCuration.scheduled, true);
+        assert.equal(snapshot.recentEvents[0].id, 'legacy-hosted-event');
+        assert.equal(record.gateway.memoryRuntime.getSecret('saved-secret').secret.value, 'secret-value');
+        assert.doesNotMatch(blocks.persona, /legacy persona fragment/);
+        assert.doesNotMatch(blocks.user, /legacy derived user fragment/);
+
+        const persisted = JSON.parse(await fs.readFile(
+            path.join(memoryRoot, 'memory-state.json'),
+            'utf8'
+        ));
+        assert.equal(persisted.version, 3);
+        assert.equal(persisted.events[0].id, 'legacy-hosted-event');
+        assert.equal(persisted.secrets[0].name, 'saved-secret');
+    } finally {
+        await manager.close();
+    }
 });
 
 test('hosted runtime replaces browser-supplied paths, credentials, and approvals', () => {
