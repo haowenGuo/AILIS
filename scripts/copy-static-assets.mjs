@@ -1,6 +1,7 @@
-import { cpSync, existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { gzipSync } from 'node:zlib';
 
 import {
     getLoadableMotionFiles,
@@ -14,7 +15,7 @@ const distRoot = resolve(projectRoot, 'dist');
 
 // 只复制前端实际会访问到的 VRM 与 VRMA 资源，避免把无关的大文件一起打进 Pages 产物。
 const resourcesRoot = resolve(projectRoot, 'Resources');
-const safeVrmFiles = new Set(['ailis.vrm']);
+const safeVrmFiles = new Set(['ailis.vrm', 'ailis.web.vrm']);
 const assetsToCopy = [
     {
         source: resolve(projectRoot, 'Resources', 'Emotes'),
@@ -85,4 +86,14 @@ for (const asset of assetsToCopy) {
     } catch (error) {
         console.warn(`[build] skipped asset copy due to ${error.code || error.name}: ${asset.target}`);
     }
+}
+
+for (const asset of assetsToCopy) {
+    if (!existsSync(asset.target) || !statSync(asset.target).isFile() || !/\.vrma?$/i.test(asset.target)) {
+        continue;
+    }
+    const gzipTarget = `${asset.target}.gz`;
+    const compressed = gzipSync(readFileSync(asset.target), { level: 9 });
+    writeFileSync(gzipTarget, compressed);
+    console.log(`[build] precompressed: ${asset.target} -> ${gzipTarget}`);
 }

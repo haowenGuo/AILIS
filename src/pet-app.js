@@ -124,6 +124,17 @@ window.addEventListener('DOMContentLoaded', async () => {
     const runtimeUrl = new URL(window.location.href);
     let activeNativeVoiceId = runtimeUrl.searchParams.get('ttsVoice')?.trim() || '';
     const isEmbeddedWebExperience = runtimeUrl.searchParams.get('web') === '1';
+    const webAssetVersion = runtimeUrl.searchParams.get('assetVersion')?.trim() || 'web';
+    if (isEmbeddedWebExperience) {
+        const webModelUrl = new URL('./Resources/AILIS.web.vrm', runtimeUrl);
+        webModelUrl.searchParams.set('v', webAssetVersion);
+        CONFIG.MODEL_PATH = webModelUrl.href;
+        CONFIG.ANIMATION_FILES = CONFIG.ANIMATION_FILES.map((fileInfo) => {
+            const animationUrl = new URL(fileInfo.path, runtimeUrl);
+            animationUrl.searchParams.set('v', webAssetVersion);
+            return { ...fileInfo, path: animationUrl.href };
+        });
+    }
     const useWebCloseCamera = isEmbeddedWebExperience && runtimeUrl.searchParams.get('camera') === 'close';
     const isWebMobileViewport = window.matchMedia('(max-width: 760px)').matches;
     const webCameraPreferences = isWebMobileViewport
@@ -147,7 +158,9 @@ window.addEventListener('DOMContentLoaded', async () => {
     if (!isEmbeddedWebExperience) {
         applyPetWindowFrameCameraCompensation();
     }
-    const vrmSystem = new VRMModelSystem();
+    const vrmSystem = new VRMModelSystem({
+        animationLoadingMode: isEmbeddedWebExperience ? 'on-demand' : 'eager'
+    });
     installAvatarDialogueBubble({
         rootElement: petShellEl,
         variant: 'pet',

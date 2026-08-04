@@ -44,6 +44,16 @@ const AVATAR_HIT_TEST_BONES = Object.freeze([
     'rightToes'
 ]);
 const AVATAR_HIT_TEST_CACHE_MS = 75;
+const WEB_STAGED_INITIAL_POSE = Object.freeze({
+    leftShoulder: [0.009, -0.0416, -0.0888, 0.9951],
+    leftUpperArm: [0.0026, 0.1231, -0.6333, 0.7641],
+    leftLowerArm: [0, -0.1855, 0, 0.9826],
+    leftHand: [-0.1177, 0.0705, 0.0167, -0.9904],
+    rightShoulder: [0.0049, 0.0157, 0.0765, 0.9969],
+    rightUpperArm: [0.0987, -0.0304, 0.5427, 0.8336],
+    rightLowerArm: [0, 0.2352, 0, 0.9719],
+    rightHand: [0.1529, 0.0097, 0.0053, 0.9882]
+});
 
 const BASE_PROFILE_LIGHT = Object.freeze({
     ambientIntensity: 2.2,
@@ -149,7 +159,7 @@ function withLightLook(config = {}, { intensityScale = 1, yawDeg = 0 } = {}) {
 }
 
 export class VRMModelSystem {
-    constructor() {
+    constructor({ animationLoadingMode = 'eager' } = {}) {
         this.scene = null;
         this.camera = null;
         this.renderer = null;
@@ -168,6 +178,13 @@ export class VRMModelSystem {
         this.mixer = null;
         this.actionMap = {};
         this.currentAction = null;
+        this.animationLoadingMode = animationLoadingMode === 'on-demand' ? 'on-demand' : 'eager';
+        this.animationLoader = null;
+        this.animationFileMap = new Map(CONFIG.ANIMATION_FILES.map((fileInfo) => [fileInfo.name, fileInfo]));
+        this.animationLoadPromises = new Map();
+        this.animationPrefetchScheduled = false;
+        this.allAnimationsLoadPromise = null;
+        this.motionRequestSequence = 0;
         this.motionController = new ChatVRMAmicaMotionController({
             idleActions: CONFIG.IDLE_ACTION_LIST,
             danceActions: CONFIG.DANCE_ACTION_LIST,
@@ -919,13 +936,27 @@ export class VRMModelSystem {
             });
 
             this.initExpressionSystem();
+            this.initializeAnimationRuntime();
+            if (this.animationLoadingMode === 'on-demand') {
+                this.applyStagedInitialPose();
+            }
             this.isModelLoaded = true;
-            await this.loadAllAnimations();
-
-            console.log('✅ VRM模型和动作全部加载完成！');
+            console.log('✅ VRM模型解析完成，人物与聊天已就绪');
             console.log('🌓 VRM 阴影投射 Mesh 数量:', shadowCasterCount);
-            console.log('📦 当前已加载的动作列表:', Object.keys(this.actionMap));
-            window.dispatchEvent(new CustomEvent('modelLoaded'));
+            window.dispatchEvent(new CustomEvent('modelLoaded', {
+                detail: {
+                    phase: 'model',
+                    animationLoadingMode: this.animationLoadingMode
+                }
+            }));
+
+            if (this.animationLoadingMode === 'on-demand') {
+                this.scheduleAnimationPrefetch();
+            } else {
+                void this.loadAllAnimations().catch((error) => {
+                    console.error('❌ 后台加载动作失败:', error);
+                });
+            }
         } catch (error) {
             console.error('❌ 模型加载失败：', error);
             window.dispatchEvent(new CustomEvent('modelLoadError', { detail: error }));
@@ -939,20 +970,108 @@ export class VRMModelSystem {
         this.resetExpression();
     }
 
-    async loadAllAnimations() {
-        console.log('⏳ 开始加载VRMA动作文件...');
+    applyStagedInitialPose() {
+        if (!this.vrm?.humanoid) {
+            return;
+        }
+        for (const [boneName, quaternion] of Object.entries(WEB_STAGED_INITIAL_POSE)) {
+            this.vrm.humanoid.getNormalizedBoneNode(boneName)?.quaternion.fromArray(quaternion).normalize();
+        }
+        this.vrm.scene.updateMatrixWorld(true);
+    }
+
+    initializeAnimationRuntime() {
+        if (!this.vrm || this.mixer) {
+            return;
+        }
+
         this.mixer = new THREE.AnimationMixer(this.vrm.scene);
         this.motionController.bind({
             mixer: this.mixer,
             actionMap: this.actionMap
         });
+        this.animationLoader = new GLTFLoader();
+        this.animationLoader.register((parser) => new VRMAnimationLoaderPlugin(parser));
+        this.setupActionFinishListener();
+    }
 
-        const animLoader = new GLTFLoader();
-        animLoader.register((parser) => new VRMAnimationLoaderPlugin(parser));
+    scheduleAnimationPrefetch() {
+        if (this.animationPrefetchScheduled || typeof document === 'undefined') {
+            return;
+        }
+        this.animationPrefetchScheduled = true;
+
+        const prefetch = () => {
+            for (const fileInfo of CONFIG.ANIMATION_FILES) {
+                const link = document.createElement('link');
+                link.rel = 'prefetch';
+                link.as = 'fetch';
+                link.href = fileInfo.path;
+                link.crossOrigin = 'anonymous';
+                link.dataset.ailisAnimation = fileInfo.name;
+                document.head.appendChild(link);
+            }
+        };
+
+        if (typeof window.requestIdleCallback === 'function') {
+            window.requestIdleCallback(prefetch, { timeout: 2000 });
+        } else {
+            window.setTimeout(prefetch, 250);
+        }
+    }
+
+    resolveAnimationFileInfo(actionName) {
+        const normalizedName = String(actionName || '').trim();
+        if (normalizedName === 'idle') {
+            const preferredName = CONFIG.IDLE_ACTION_LIST.find((name) => this.animationFileMap.has(name));
+            return this.animationFileMap.get(preferredName) || null;
+        }
+        if (normalizedName === 'dance') {
+            const preferredName = CONFIG.DANCE_ACTION_LIST.find((name) => this.animationFileMap.has(name));
+            return this.animationFileMap.get(preferredName) || null;
+        }
+        return this.animationFileMap.get(normalizedName) || null;
+    }
+
+    async ensureAnimationLoaded(actionName) {
+        const fileInfo = this.resolveAnimationFileInfo(actionName);
+        if (!fileInfo) {
+            return null;
+        }
+        if (this.actionMap[fileInfo.name]) {
+            return this.actionMap[fileInfo.name];
+        }
+        if (this.animationLoadPromises.has(fileInfo.name)) {
+            return this.animationLoadPromises.get(fileInfo.name);
+        }
+
+        this.initializeAnimationRuntime();
+        const loadPromise = this.loadSingleAnimation(this.animationLoader, fileInfo)
+            .then(() => this.actionMap[fileInfo.name] || null)
+            .catch((error) => {
+                this.animationLoadPromises.delete(fileInfo.name);
+                throw error;
+            });
+        this.animationLoadPromises.set(fileInfo.name, loadPromise);
+        return loadPromise;
+    }
+
+    async loadAllAnimations() {
+        if (this.allAnimationsLoadPromise) {
+            return this.allAnimationsLoadPromise;
+        }
+
+        this.allAnimationsLoadPromise = this.loadAllAnimationsInternal();
+        return this.allAnimationsLoadPromise;
+    }
+
+    async loadAllAnimationsInternal() {
+        console.log('⏳ 开始加载VRMA动作文件...');
+        this.initializeAnimationRuntime();
 
         for (const fileInfo of CONFIG.ANIMATION_FILES) {
             try {
-                await this.loadSingleAnimation(animLoader, fileInfo);
+                await this.ensureAnimationLoaded(fileInfo.name);
             } catch (error) {
                 console.error(`❌ 加载动作失败: ${fileInfo.name}`, error);
             }
@@ -962,6 +1081,10 @@ export class VRMModelSystem {
         this.motionController.prepareAllActions();
         this.playResolvedAction('idle');
         console.log('🎬 默认动作：IDLE 循环模式启动');
+        console.log('📦 当前已加载的动作列表:', Object.keys(this.actionMap));
+        window.dispatchEvent(new CustomEvent('animationsLoaded', {
+            detail: { actionNames: Object.keys(this.actionMap) }
+        }));
     }
 
     loadSingleAnimation(loader, fileInfo) {
@@ -1047,7 +1170,32 @@ export class VRMModelSystem {
             return false;
         }
 
-        const played = this.motionController?.play(actionName, options) ?? false;
+        const fileInfo = this.resolveAnimationFileInfo(actionName);
+        const requestedName = ['idle', 'dance'].includes(actionName)
+            ? actionName
+            : fileInfo?.name || actionName;
+        const hasRequestedAction = Boolean(fileInfo && this.actionMap[fileInfo.name]);
+        if (fileInfo && !hasRequestedAction) {
+            const requestSequence = ++this.motionRequestSequence;
+            void this.ensureAnimationLoaded(fileInfo.name)
+                .then((action) => {
+                    if (!action || requestSequence !== this.motionRequestSequence) {
+                        return;
+                    }
+                    const played = this.motionController?.play(requestedName, options) ?? false;
+                    this.currentAction = this.motionController?.currentAction || this.currentAction;
+                    if (!played) {
+                        console.warn(`⚠️ 按需动作未能播放: ${requestedName}`);
+                    }
+                })
+                .catch((error) => {
+                    console.error(`❌ 按需加载动作失败: ${requestedName}`, error);
+                });
+            return false;
+        }
+
+        ++this.motionRequestSequence;
+        const played = this.motionController?.play(requestedName, options) ?? false;
         this.currentAction = this.motionController?.currentAction || this.currentAction;
         return played;
     }

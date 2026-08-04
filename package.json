@@ -6,7 +6,7 @@
   "main": "electron/main.cjs",
   "scripts": {
     "dev": "vite --configLoader native --host 0.0.0.0 --port 5173",
-    "build": "vite build --configLoader native --base ./ && node scripts/copy-static-assets.mjs",
+    "build": "pnpm assets:web-vrm && vite build --configLoader native --base ./ && node scripts/copy-static-assets.mjs",
     "llm:vllm:serve": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-vllm-local.ps1",
     "llm:vllm:serve:hf": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-vllm-local.ps1 -Source hf -Model Qwen/Qwen2.5-7B-Instruct",
     "llm:vllm:serve:modelscope": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-vllm-local.ps1 -Source modelscope -Model Qwen/Qwen2.5-7B-Instruct",
@@ -99,6 +99,8 @@
     "desktop:package:linux": "pnpm build && pnpm exec electron-builder --config electron-builder.yml --linux AppImage deb tar.gz",
     "desktop:package:all": "pnpm build && pnpm exec electron-builder --config electron-builder.yml --win nsis portable --linux AppImage deb tar.gz",
     "android:doctor": "node scripts/check-android-readiness.mjs",
+    "assets:web-vrm": "node scripts/build-ailis-web-vrm.mjs",
+    "test:ailis-web-vrm": "node --test tests/ailis-web-vrm.test.mjs",
     "test:openclaw-tools": "node --test tests/openclaw-tool-surface.test.mjs",
     "test:desktop-llm": "node --test tests/desktop-llm-provider.test.mjs",
     "test:ailis-persona-renderer": "node --test tests/ailis-persona-renderer.test.mjs",

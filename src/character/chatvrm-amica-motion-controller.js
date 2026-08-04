@@ -248,6 +248,13 @@ export class ChatVRMAmicaMotionController {
             return;
         }
         this.logger?.log?.(`🔄 one-shot 动作(${finishedName})结束，回到 idle`);
-        this.playIdle({ fadeDuration: Math.max(this.crossFadeDuration, 0.5) });
+        const returnedToIdle = this.playIdle({ fadeDuration: Math.max(this.crossFadeDuration, 0.5) });
+        if (!returnedToIdle) {
+            finishedAction.stop?.();
+            this.currentAction = null;
+            this.currentActionName = '';
+            this.oneShotAction = null;
+            this.oneShotActionName = '';
+        }
     }
 }

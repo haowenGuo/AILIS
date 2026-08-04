@@ -14,6 +14,21 @@ const TTS_VOICE_STORAGE_KEY = 'ailis.web.tts-voice.v1';
 const CLOUD_TTS_VOICE_ID = 'cloud';
 const DEFAULT_RENDER_PROFILE_ID = 'ailis_bright_companion_mtoon';
 const SCENE_IDS = new Set(['sakura', 'school', 'seaside']);
+const WEB_ASSET_VERSION = typeof __AILIS_BUILD_REVISION__ === 'string'
+    ? __AILIS_BUILD_REVISION__
+    : new URL(import.meta.url).pathname.split('/').pop() || 'web';
+
+function preloadWebModel() {
+    const modelUrl = new URL('../Resources/AILIS.web.vrm', window.location.href);
+    modelUrl.searchParams.set('v', WEB_ASSET_VERSION);
+    const link = document.createElement('link');
+    link.rel = 'preload';
+    link.as = 'fetch';
+    link.type = 'application/octet-stream';
+    link.crossOrigin = 'anonymous';
+    link.href = modelUrl.href;
+    document.head.appendChild(link);
+}
 
 const elements = {
     experience: document.querySelector('.experience'),
@@ -623,9 +638,6 @@ async function sendPrompt(content) {
 
 function configurePetFrame() {
     const petUrl = new URL('../pet.html', window.location.href);
-    const assetVersion = typeof __AILIS_BUILD_REVISION__ === 'string'
-        ? __AILIS_BUILD_REVISION__
-        : new URL(import.meta.url).pathname.split('/').pop() || 'web';
     petUrl.searchParams.set('backend', backendBaseUrl);
     const useCloudVoice = state.ttsVoiceId === CLOUD_TTS_VOICE_ID;
     petUrl.searchParams.set('speechMode', useCloudVoice ? 'server' : 'native');
@@ -635,7 +647,7 @@ function configurePetFrame() {
     petUrl.searchParams.set('web', '1');
     petUrl.searchParams.set('camera', 'close');
     petUrl.searchParams.set('renderProfile', state.renderProfileId);
-    petUrl.searchParams.set('assetVersion', assetVersion);
+    petUrl.searchParams.set('assetVersion', WEB_ASSET_VERSION);
     elements.petFrame.src = petUrl.href;
 }
 
@@ -697,6 +709,7 @@ restoreScene();
 restoreRenderProfile();
 restoreTtsVoice();
 setHistoryOpen(false);
+preloadWebModel();
 configurePetFrame();
 void checkBackend();
 resizeInput();
