@@ -7,7 +7,7 @@ This directory contains the design record, operating guides, evaluation plans, a
 - [Embodied Agent Architecture](ailis-embodied-agent-architecture.md) - product and runtime overview.
 - [System TaskAgent Architecture](ailis-system-taskagent-architecture.md) - Persona/TaskAgent responsibilities and handoff contract.
 - [Codex Multi-Agent Data-Flow Migration](ailis-codex-multi-agent-dataflow-migration.md) - current agent object and result flow.
-- [Memory Architecture V3](ailis-memory-v3-hybrid-ledger.md) - current hybrid retrieval and Event/Action Ledger lifecycle.
+- [Memory Architecture V2](ailis-memory-architecture-v2.md) - current memory lanes and lifecycle.
 - [Tool Ecosystem Driver Guide](tool-ecosystem-driver-guide.md) - tool, MCP, skill, and adapter entry points.
 - [Demo and Benchmark Scorecard](ailis-demo-benchmark-scorecard.md) - current evidence and benchmark status.
 
@@ -54,7 +54,8 @@ This directory contains the design record, operating guides, evaluation plans, a
 
 ## Memory, Persona, And Experience
 
-- [Memory Architecture V3](ailis-memory-v3-hybrid-ledger.md)
+- [Memory Architecture V1](ailis-memory-architecture-v1.md)
+- [Memory Architecture V2](ailis-memory-architecture-v2.md)
 - [User System Launch Plan](ailis-user-system-launch.md)
 - [Embodied Agent Architecture](ailis-embodied-agent-architecture.md)
 - [Realtime Voice And AIRI Research](realtime-voice-airi-research.md)

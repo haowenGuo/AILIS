@@ -92,9 +92,17 @@ contextBridge.exposeInMainWorld('ailisDesktop', {
         clear: (payload) => ipcRenderer.invoke('ailis:memory-clear', payload || {}),
         forget: (payload) => ipcRenderer.invoke('ailis:memory-forget', payload || {}),
         saveSecret: (payload) => ipcRenderer.invoke('ailis:memory-save-secret', payload || {}),
-        deleteSecret: (payload) => ipcRenderer.invoke('ailis:memory-delete-secret', payload || {}),
-        ledgerStatus: () => ipcRenderer.invoke('ailis:memory-ledger-status'),
-        curateLedger: (payload) => ipcRenderer.invoke('ailis:memory-ledger-curate', payload || {})
+        deleteSecret: (payload) => ipcRenderer.invoke('ailis:memory-delete-secret', payload || {})
+    },
+    rawMemory: {
+        status: () => ipcRenderer.invoke('ailis:raw-memory-status'),
+        replay: (payload) => ipcRenderer.invoke('ailis:raw-memory-replay', payload || {}),
+        sessions: (payload) => ipcRenderer.invoke('ailis:raw-memory-sessions', payload || {})
+    },
+    memoryProfile: {
+        state: () => ipcRenderer.invoke('ailis:memory-profile-state'),
+        curate: (payload) => ipcRenderer.invoke('ailis:memory-profile-curate', payload || {}),
+        rebuild: (payload) => ipcRenderer.invoke('ailis:memory-profile-rebuild', payload || {})
     },
     chatHistory: {
         load: (payload) => ipcRenderer.invoke('ailis:chat-history-load', payload || {}),

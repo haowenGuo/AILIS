@@ -265,7 +265,7 @@ pnpm ailis:validate-gateway
 - [具身 Agent 架构](docs/ailis-embodied-agent-architecture.md)
 - [System TaskAgent 架构](docs/ailis-system-taskagent-architecture.md)
 - [Codex 多 Agent 数据流迁移](docs/ailis-codex-multi-agent-dataflow-migration.md)
-- [记忆架构 V3](docs/ailis-memory-v3-hybrid-ledger.md)
+- [记忆架构 V2](docs/ailis-memory-architecture-v2.md)
 - [人类化体验评测](docs/ailis-humanlike-eval.md)
 - [Benchmark 总览与 Scorecard](docs/ailis-demo-benchmark-scorecard.md)
 - [工具生态驱动指南](docs/tool-ecosystem-driver-guide.md)

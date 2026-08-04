@@ -1090,41 +1090,6 @@ function buildBlankPdfWithoutSelectableText() {
     return Buffer.from(body, 'latin1');
 }
 
-test('AILIS Gateway uses Memory v3 as its only memory runtime', async (t) => {
-    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-gateway-memory-v3-'));
-    const gateway = new AILISGateway({
-        projectRoot: path.resolve('.'),
-        workspaceRoot: rootDir,
-        auditDir: path.join(rootDir, 'audit'),
-        port: 0,
-        enableLocalMemoryEmbeddings: false,
-        memoryCurationDebounceMs: 5000,
-        memoryQueryPlannerLlm: async () => ({
-            ok: true,
-            content: JSON.stringify({
-                searchQueries: [],
-                records: [],
-                rejectedEvidenceEventIds: []
-            })
-        })
-    });
-    t.after(async () => {
-        await gateway.stop();
-        await fs.rm(rootDir, { recursive: true, force: true });
-    });
-
-    const status = await gateway.start();
-    const baseUrl = status.url;
-    assert.equal(gateway.memoryRuntime.getStatus().memoryStrategy, 'hybrid_rrf_ledger_v3');
-
-    const removedStrategyRoute = await jsonFetch(`${baseUrl}/memory/strategy`);
-    assert.equal(removedStrategyRoute.response.status, 404);
-
-    const ledger = await jsonFetch(`${baseUrl}/memory/ledger/status`);
-    assert.equal(ledger.response.status, 200);
-    assert.equal(ledger.body.enabled, true);
-});
-
 test('EMBER-Harness records stage checks around tool execution', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-ember-harness-observe-'));
     const gateway = new AILISGateway({

@@ -6,62 +6,12 @@ import path from 'node:path';
 import test from 'node:test';
 
 const require = createRequire(import.meta.url);
-const fsSync = require('node:fs');
 const { AILISMemoryRuntime } = require('../electron/ailis-memory-store.cjs');
-const {
-    AILISMemoryStrategyEngine,
-    selectCoverageEntries
-} = require('../electron/ailis-memory-strategies.cjs');
 
-function createTestEmbedding(text) {
-    const vector = new Array(64).fill(0);
-    for (const token of String(text || '').toLowerCase().match(/[a-z0-9]+|[\u3400-\u9fff]/g) || []) {
-        let hash = 2166136261;
-        for (const character of token) {
-            hash ^= character.codePointAt(0);
-            hash = Math.imul(hash, 16777619);
-        }
-        vector[(hash >>> 0) % vector.length] += 1;
-    }
-    const norm = Math.sqrt(vector.reduce((sum, value) => sum + value * value, 0)) || 1;
-    return vector.map((value) => value / norm);
-}
-
-function createMemory(options = {}) {
-    return new AILISMemoryRuntime({
-        memoryEmbedder: async (texts) => texts.map(createTestEmbedding),
-        ...options
-    });
-}
-
-test('AILIS memory runtime retries transient Windows atomic rename failures', async () => {
-    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-memory-rename-retry-'));
-    const originalRenameSync = fsSync.renameSync;
-    let injectedFailures = 2;
-    fsSync.renameSync = (...args) => {
-        if (injectedFailures > 0) {
-            injectedFailures -= 1;
-            throw Object.assign(new Error('injected Windows file lock'), { code: 'EPERM' });
-        }
-        return originalRenameSync(...args);
-    };
-    try {
-    const memory = createMemory({
-            rootDir: path.join(rootDir, 'memory'),
-            workspaceRoot: path.join(rootDir, 'workspace')
-        });
-        assert.equal(memory.getStatus().loaded, true);
-        assert.equal(injectedFailures, 0);
-    } finally {
-        fsSync.renameSync = originalRenameSync;
-        await fs.rm(rootDir, { recursive: true, force: true });
-    }
-});
-
-test('AILIS Memory v3 persists events and a redacted secret index without heuristic auto-learning', async () => {
+test('AILIS memory runtime persists events and redacted secret index without legacy rule extraction', async () => {
     const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-memory-'));
     const workspaceRoot = path.join(rootDir, 'workspace');
-    const memory = createMemory({
+    const memory = new AILISMemoryRuntime({
         rootDir: path.join(rootDir, 'memory'),
         workspaceRoot
     });
@@ -96,7 +46,7 @@ test('AILIS Memory v3 persists events and a redacted secret index without heuris
     assert.ok(snapshot.secrets.some((entry) => entry.name === 'doubao-api-key' && entry.configured));
     assert.equal(memory.getStatus().affinityScore, 50);
 
-    const context = await memory.compileContextAsync({
+    const context = memory.compileContext({
         sessionId: 'memory-test',
         message: '继续做记忆系统'
     });
@@ -108,7 +58,7 @@ test('AILIS Memory v3 persists events and a redacted secret index without heuris
     assert.match(context, /doubao-api-key/);
     assert.equal(context.includes('test-secret-00000000-0000-4000-8000-000000000000'), false);
 
-    const taskContext = await memory.compileContextAsync({
+    const taskContext = memory.compileContext({
         sessionId: 'memory-test',
         message: '继续做记忆系统',
         contextMode: 'task_agent'
@@ -117,7 +67,7 @@ test('AILIS Memory v3 persists events and a redacted secret index without heuris
     assert.doesNotMatch(taskContext, /## Persona/);
     assert.doesNotMatch(taskContext, /## Relationship/);
 
-    const reloaded = createMemory({
+    const reloaded = new AILISMemoryRuntime({
         rootDir: path.join(rootDir, 'memory'),
         workspaceRoot
     });
@@ -125,7 +75,7 @@ test('AILIS Memory v3 persists events and a redacted secret index without heuris
     assert.ok((await fs.readFile(path.join(rootDir, 'memory', 'events.jsonl'), 'utf8')).includes('memory-test'));
 });
 
-test('AILIS Memory v3 imports only raw events and secrets from a pre-v3 state', async () => {
+test('AILIS memory v2 backs up and resets legacy auto-learned core blocks without deleting events or secrets', async () => {
     const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-memory-v2-migration-'));
     const memoryRoot = path.join(rootDir, 'memory');
     await fs.mkdir(memoryRoot, { recursive: true });
@@ -140,6 +90,7 @@ test('AILIS Memory v3 imports only raw events and secrets from a pre-v3 state', 
             project: { key: 'project', label: 'Project', kind: 'project', value: '- legacy non-project conversation' }
         },
         events: [{ id: 'legacy-event', ts: '2026-07-08T00:00:00.000Z', sessionId: 'main', userText: 'keep event' }],
+        reflections: [],
         affinity: { score: 65, events: [] },
         secrets: [{
             id: 'secret-1',
@@ -151,39 +102,83 @@ test('AILIS Memory v3 imports only raw events and secrets from a pre-v3 state', 
         stats: { turnCount: 1 }
     }, null, 2));
 
-    const memory = createMemory({ rootDir: memoryRoot, workspaceRoot: rootDir });
+    const memory = new AILISMemoryRuntime({ rootDir: memoryRoot, workspaceRoot: rootDir });
     const snapshot = memory.getSnapshot({ includeEvents: true });
     const blocks = Object.fromEntries(snapshot.blocks.map((block) => [block.key, block.value]));
 
-    assert.equal(memory.getStatus().version, 'v3');
-    assert.doesNotMatch(blocks.persona, /preserved persona/);
+    assert.equal(memory.getStatus().version, 'v2');
+    assert.match(blocks.persona, /preserved persona/);
     assert.doesNotMatch(blocks.user, /legacy learned chat fragment/);
     assert.doesNotMatch(blocks.relationship, /legacy relationship transcript/);
     assert.doesNotMatch(blocks.project, /legacy non-project conversation/);
     assert.equal(snapshot.recentEvents[0].id, 'legacy-event');
     assert.equal(memory.getSecret('saved-secret').secret.value, 'secret-value');
-    await assert.rejects(fs.access(path.join(memoryRoot, 'backups')));
+    const backups = await fs.readdir(path.join(memoryRoot, 'backups'));
+    assert.ok(backups.some((name) => /^memory-state\.v1\./.test(name)));
 });
 
-test('AILIS affinity reset updates the v3 relationship block used by model context', async () => {
+test('AILIS memory v2 safely downgrades a v3 state without deleting newer turns or secrets', async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-memory-v3-downgrade-'));
+    const memoryRoot = path.join(rootDir, 'memory');
+    await fs.mkdir(memoryRoot, { recursive: true });
+    await fs.writeFile(path.join(memoryRoot, 'memory-state.json'), JSON.stringify({
+        version: 3,
+        createdAt: '2026-08-04T00:00:00.000Z',
+        updatedAt: '2026-08-04T01:00:00.000Z',
+        blocks: {
+            persona: { key: 'persona', label: 'Persona', kind: 'core', value: '- current persona' },
+            user: { key: 'user', label: 'User', kind: 'core', value: '- current user preference' }
+        },
+        events: [{
+            id: 'post-v3-deploy-event',
+            ts: '2026-08-04T00:30:00.000Z',
+            sessionId: 'main',
+            userText: 'keep the newest turn'
+        }],
+        affinity: { score: 72, events: [] },
+        secrets: [{
+            id: 'post-v3-secret',
+            name: 'saved-after-v3',
+            kind: 'generic',
+            protection: 'local-file-base64',
+            valueBase64: Buffer.from('secret-value').toString('base64')
+        }],
+        stats: { turnCount: 1 }
+    }, null, 2));
+
+    const memory = new AILISMemoryRuntime({ rootDir: memoryRoot, workspaceRoot: rootDir });
+    const snapshot = memory.getSnapshot({ includeEvents: true });
+    const blocks = Object.fromEntries(snapshot.blocks.map((block) => [block.key, block.value]));
+
+    assert.equal(memory.getStatus().version, 'v2');
+    assert.match(blocks.persona, /current persona/);
+    assert.match(blocks.user, /current user preference/);
+    assert.equal(snapshot.recentEvents[0].id, 'post-v3-deploy-event');
+    assert.equal(memory.getSecret('saved-after-v3').secret.value, 'secret-value');
+    const backups = await fs.readdir(path.join(memoryRoot, 'backups'));
+    assert.ok(backups.some((name) => /^memory-state\.v3\./.test(name)));
+});
+
+test('AILIS affinity reset updates the curated relationship state used by model context', async () => {
     const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-affinity-'));
-    const memory = createMemory({
+    const memory = new AILISMemoryRuntime({
         rootDir: path.join(rootDir, 'memory'),
         workspaceRoot: rootDir
     });
 
     memory.resetAffinity(80);
-    const context = await memory.compileContextAsync({ sessionId: 'affinity-test', message: '陪我聊会儿' });
+    const context = memory.compileContext({ sessionId: 'affinity-test', message: '陪我聊会儿' });
     assert.match(context, /## Relationship/);
-    assert.match(context, /当前好感度：80\/100（close）/);
+    assert.match(context, /综合好感度：80\/100/);
+    assert.match(context, /关系阶段：close/);
     assert.match(context, /不影响安全、隐私、事实准确性、工具审批/);
     assert.equal(memory.getStatus().affinityScore, 80);
-    assert.equal(memory.getStatus().affinitySource, 'memory_state');
+    assert.equal(memory.getStatus().affinitySource, 'curated_capsule');
 });
 
-test('AILIS Memory v3 does not auto-promote explicit self-evolution text', async () => {
+test('AILIS memory does not promote explicit self-evolution text through legacy regex rules', async () => {
     const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-self-evolution-memory-'));
-    const memory = createMemory({
+    const memory = new AILISMemoryRuntime({
         rootDir: path.join(rootDir, 'memory'),
         workspaceRoot: rootDir
     });
@@ -208,7 +203,7 @@ test('AILIS Memory v3 does not auto-promote explicit self-evolution text', async
 
 test('AILIS Persona memory retrieves bounded relevant turns and clears memory while preserving secrets', async () => {
     const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-memory-clear-'));
-    const memory = createMemory({
+    const memory = new AILISMemoryRuntime({
         rootDir: path.join(rootDir, 'memory'),
         workspaceRoot: rootDir
     });
@@ -230,18 +225,18 @@ test('AILIS Persona memory retrieves bounded relevant turns and clears memory wh
     }
 
     let searchCalled = false;
-    const searchMemory = memory.searchMemoryAsync.bind(memory);
-    memory.searchMemoryAsync = (query, options = {}) => {
+    const searchMemory = memory.searchMemory.bind(memory);
+    memory.searchMemory = (query, options = {}) => {
         searchCalled = true;
         return searchMemory(query, options);
     };
 
-    const context = await memory.compileContextAsync({
+    const context = memory.compileContext({
         sessionId: 'large-context-test',
         message: 'memoryanchor'
     });
     assert.equal(searchCalled, true);
-    assert.ok(context.length < 60000);
+    assert.ok(context.length < 20000);
     assert.match(context, /memoryanchor|## Relevant Memories/);
 
     const cleared = memory.clearMemory();
@@ -249,25 +244,29 @@ test('AILIS Persona memory retrieves bounded relevant turns and clears memory wh
     assert.equal(memory.getStatus().eventCount, 0);
     assert.equal(memory.getStatus().secretCount, 1);
     assert.equal((await fs.readFile(path.join(rootDir, 'memory', 'events.jsonl'), 'utf8')), '');
-    assert.equal((await memory.searchMemoryAsync('memoryanchor')).events.length, 0);
+    assert.equal(memory.searchMemory('memoryanchor').events.length, 0);
     assert.ok(memory.listSecrets().secrets.some((secret) => secret.name === 'local-test-token'));
+    const clearedUserProfile = JSON.parse(await fs.readFile(path.join(rootDir, 'memory', 'user-profile.json'), 'utf8'));
+    const clearedRelationshipProfile = JSON.parse(await fs.readFile(path.join(rootDir, 'memory', 'relationship-profile.json'), 'utf8'));
+    assert.equal(clearedUserProfile.items.length, 0);
+    assert.equal(clearedRelationshipProfile.items.length, 0);
     assert.equal(memory.getStatus().affinityScore, 50);
 });
 
 test('AILIS Persona retrieval uses recent visible turns while keeping the current message once', async () => {
     const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-memory-query-dedupe-'));
-    const memory = createMemory({
+    const memory = new AILISMemoryRuntime({
         rootDir: path.join(rootDir, 'memory'),
         workspaceRoot: rootDir
     });
     let observedQuery = '';
-    const searchMemory = memory.searchMemoryAsync.bind(memory);
-    memory.searchMemoryAsync = (query, options = {}) => {
+    const searchMemory = memory.searchMemory.bind(memory);
+    memory.searchMemory = (query, options = {}) => {
         observedQuery = query;
         return searchMemory(query, options);
     };
 
-    await memory.compileContextAsync({
+    memory.compileContext({
         sessionId: 'query-dedupe-test',
         message: 'Solve this long GAIA task with a verifier.',
         messageHistory: [
@@ -282,326 +281,11 @@ test('AILIS Persona retrieval uses recent visible turns while keeping the curren
     assert.equal(observedQuery.split('Solve this long GAIA task with a verifier.').length - 1, 1);
 });
 
-test('AILIS Memory v3 retrieval favors rare evidence across sessions', async () => {
-    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-memory-hybrid-retrieval-'));
-    const memory = createMemory({
-        rootDir: path.join(rootDir, 'memory'),
-        workspaceRoot: rootDir
-    });
-    for (let index = 0; index < 8; index += 1) {
-        memory.recordTurn({
-            sessionId: 'repeated-noise-session',
-            userMessage: `I had an ordinary appointment discussion number ${index}.`,
-            assistantMessage: 'We discussed a general calendar and ordinary plans.',
-            source: 'test',
-            occurredAt: `2026-07-${String(index + 1).padStart(2, '0')}T00:00:00.000Z`
-        });
-    }
-    memory.recordTurn({
-        sessionId: 'doctor-evidence-one',
-        userMessage: 'My March cardiologist appointment was on Monday.',
-        assistantMessage: 'That was the first cardiologist visit in March.',
-        source: 'test',
-        occurredAt: '2026-06-01T00:00:00.000Z'
-    });
-    memory.recordTurn({
-        sessionId: 'doctor-evidence-two',
-        userMessage: 'I returned to the cardiologist for another March appointment.',
-        assistantMessage: 'That makes a second specialist visit.',
-        source: 'test',
-        occurredAt: '2026-06-02T00:00:00.000Z'
-    });
-
-    const result = await memory.searchMemoryAsync(
-        'Please answer based on past conversations: how many cardiologist appointments were in March?',
-        { limit: 4 }
-    );
-    assert.equal(result.strategy, 'hybrid_rrf_ledger_v3');
-    assert.deepEqual(
-        result.events.slice(0, 2).map((event) => event.sessionId).sort(),
-        ['doctor-evidence-one', 'doctor-evidence-two']
-    );
-    assert.ok(
-        result.events.filter((event) => event.sessionId === 'repeated-noise-session').length <= 2
-    );
-});
-
-test('AILIS Memory v3 coverage selection reserves distinct evidence facets', () => {
-    const ranked = [
-        {
-            document: { id: 'noise', rawEvent: { sessionId: 'noise-session' } },
-            score: 4,
-            rank: 1
-        },
-        {
-            document: { id: 'alpha', rawEvent: { sessionId: 'alpha-session' } },
-            score: 3,
-            rank: 2
-        },
-        {
-            document: { id: 'alpha-duplicate', rawEvent: { sessionId: 'alpha-session' } },
-            score: 2,
-            rank: 3
-        },
-        {
-            document: { id: 'beta', rawEvent: { sessionId: 'beta-session' } },
-            score: 1,
-            rank: 4
-        }
-    ];
-    const selected = selectCoverageEntries(ranked, [
-        {
-            name: 'coverage1',
-            query: 'alpha evidence',
-            entries: [
-                { document: ranked[1].document, score: 5 },
-                { document: ranked[2].document, score: 4 }
-            ]
-        },
-        {
-            name: 'coverage2',
-            query: 'beta evidence',
-            entries: [{ document: ranked[3].document, score: 5 }]
-        }
-    ], { limit: 2 });
-
-    assert.deepEqual(
-        selected.map((entry) => entry.document.id),
-        ['alpha', 'beta']
-    );
-    assert.ok(selected.every((entry) => entry.coverage?.selected === true));
-});
-
-test('AILIS Memory v3 uses soft planned time ranges without losing expanded-query evidence', async () => {
-    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-memory-soft-time-'));
-    let timeRangeMode;
-    const memory = createMemory({
-        rootDir: path.join(rootDir, 'memory'),
-        workspaceRoot: rootDir,
-        memoryQueryPlanner: async () => ({
-            ok: true,
-            content: JSON.stringify({
-                searchQueries: ['cobalt violin recital'],
-                timeRange: {
-                    start: '2026-07-01T00:00:00.000Z',
-                    end: '2026-07-31T23:59:59.000Z'
-                },
-                timeRangeMode
-            })
-        })
-    });
-    memory.recordTurn({
-        sessionId: 'outside-planned-range',
-        userMessage: 'The cobalt violin recital was the event I meant.',
-        assistantMessage: 'I will keep that recital as evidence.',
-        source: 'test',
-        occurredAt: '2026-06-10T00:00:00.000Z'
-    });
-    memory.recordTurn({
-        sessionId: 'inside-planned-range',
-        userMessage: 'Recall the opaque event discussion later.',
-        assistantMessage: 'This is unrelated calendar noise.',
-        source: 'test',
-        occurredAt: '2026-07-10T00:00:00.000Z'
-    });
-
-    const soft = await memory.searchMemoryAsync('Recall the opaque event.', {
-        limit: 1,
-        questionTime: '2026-08-01T00:00:00.000Z'
-    });
-    assert.equal(soft.plan.timeRangeMode, 'soft');
-    assert.match(soft.contextText, /cobalt violin recital/i);
-
-    timeRangeMode = 'hard';
-    const hard = await memory.searchMemoryAsync('Recall the opaque event.', {
-        limit: 1,
-        questionTime: '2026-08-01T00:00:00.000Z'
-    });
-    assert.equal(hard.plan.timeRangeMode, 'hard');
-    assert.doesNotMatch(hard.contextText, /cobalt violin recital/i);
-
-    await fs.rm(rootDir, { recursive: true, force: true });
-});
-
-test('AILIS Memory v3 promotes coverage-selected Ledger provenance into raw evidence', async () => {
-    const events = [
-        {
-            id: 'cardiology-event',
-            sessionId: 'cardiology-session',
-            ts: '2026-03-12T10:00:00.000Z',
-            userText: 'My cardiologist visit was in March.',
-            assistantText: 'That visit is recorded.'
-        },
-        {
-            id: 'dermatology-event',
-            sessionId: 'dermatology-session',
-            ts: '2026-04-18T10:00:00.000Z',
-            userText: 'My dermatologist visit was in April.',
-            assistantText: 'That visit is recorded.'
-        },
-        {
-            id: 'dentist-event',
-            sessionId: 'dentist-session',
-            ts: '2026-05-21T10:00:00.000Z',
-            userText: 'My dentist visit was in May.',
-            assistantText: 'That visit is recorded.'
-        }
-    ];
-    const records = events.map((event, index) => ({
-        id: `visit-record-${index + 1}`,
-        kind: 'event',
-        canonicalKey: `${event.sessionId}:visit`,
-        entity: event.sessionId.replace('-session', ''),
-        actionType: 'visit',
-        status: 'completed',
-        summary: event.userText,
-        occurredAt: event.ts,
-        sourceEventIds: [event.id],
-        sourceSessionIds: [event.sessionId],
-        sourceRefs: [{
-            eventId: event.id,
-            sessionId: event.sessionId,
-            occurredAt: event.ts
-        }]
-    }));
-    const engine = new AILISMemoryStrategyEngine({
-        rootDir: os.tmpdir(),
-        embedder: async (texts) => texts.map(createTestEmbedding),
-        eventActionLedger: {
-            loadStateSync: () => ({ records }),
-            getStatus: () => ({ recordCount: records.length })
-        },
-        queryPlanner: async () => ({
-            ok: true,
-            content: JSON.stringify({
-                searchQueries: [
-                    'cardiologist March visit',
-                    'dermatologist April visit',
-                    'dentist May visit'
-                ],
-                semanticKeys: records.map((record) => record.canonicalKey),
-                needsCoverage: true
-            })
-        })
-    });
-
-    const result = await engine.search({
-        query: 'How many different medical visits did I have?',
-        events,
-        limit: 3
-    });
-    assert.deepEqual(
-        new Set(result.events.slice(0, 3).map((event) => event.id)),
-        new Set(events.map((event) => event.id))
-    );
-    assert.ok(result.diagnostics.coverage.ledgerSeedCount >= 3);
-    assert.match(result.contextText, /visit-record-1/);
-    assert.match(result.contextText, /cardiology-event/);
-});
-
-test('AILIS Memory v3 returns coverage-selected raw evidence in retrieval order', async () => {
-    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-memory-coverage-plan-'));
-    const memory = createMemory({
-        rootDir: path.join(rootDir, 'memory'),
-        workspaceRoot: rootDir,
-        memoryQueryPlanner: async () => ({
-            ok: true,
-            content: JSON.stringify({
-                searchQueries: [
-                    'cardiologist March visit',
-                    'dermatologist April visit',
-                    'dentist May visit'
-                ],
-                semanticKeys: [
-                    'cardiologist_visit',
-                    'dermatologist_visit',
-                    'dentist_visit'
-                ],
-                needsCoverage: true
-            })
-        })
-    });
-    const visits = [
-        ['cardiologist-session', 'My cardiologist visit was in March.'],
-        ['dermatologist-session', 'My dermatologist visit was in April.'],
-        ['dentist-session', 'My dentist visit was in May.']
-    ];
-    for (const [sessionId, userMessage] of visits) {
-        memory.recordTurn({
-            sessionId,
-            userMessage,
-            assistantMessage: 'That visit is recorded.',
-            source: 'test'
-        });
-    }
-    for (let index = 0; index < 6; index += 1) {
-        memory.recordTurn({
-            sessionId: 'repeated-medical-noise',
-            userMessage: `General medical visit discussion ${index}.`,
-            assistantMessage: 'No named doctor appears in this note.',
-            source: 'test'
-        });
-    }
-
-    const result = await memory.searchMemoryAsync(
-        'How many different medical visits did I have?',
-        { limit: 4 }
-    );
-    const firstSessions = new Set(
-        result.events.slice(0, 4).map((event) => event.sessionId)
-    );
-    for (const [sessionId] of visits) {
-        assert.ok(firstSessions.has(sessionId), `${sessionId} should receive coverage`);
-    }
-    assert.equal(result.diagnostics.coverage.requested, true);
-    assert.ok(result.diagnostics.coverage.selectedRawSeedCount >= 3);
-
-    await fs.rm(rootDir, { recursive: true, force: true });
-});
-
-test('AILIS memory prompt centers long event snippets around the matched evidence', async () => {
-    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-memory-snippet-'));
-    const memory = createMemory({
-        rootDir: path.join(rootDir, 'memory'),
-        workspaceRoot: rootDir
-    });
-    memory.recordTurn({
-        sessionId: 'long-shift-table',
-        userMessage: 'Please remember the complete weekly shift rotation.',
-        assistantMessage: `${'irrelevant shift filler '.repeat(45)} Admon Sunday 8 am - 4 pm Day Shift`,
-        source: 'test'
-    });
-
-    const context = await memory.compileContextAsync({
-        sessionId: 'new-session',
-        message: 'What was the Sunday shift for Admon?'
-    });
-    assert.match(context, /Admon Sunday 8 am - 4 pm Day Shift/);
-});
-
-test('AILIS explicitly empty core blocks remain empty after restart', async () => {
-    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-memory-empty-block-'));
-    const memoryRoot = path.join(rootDir, 'memory');
-    const memory = createMemory({ rootDir: memoryRoot, workspaceRoot: rootDir });
-    for (const key of ['user', 'relationship', 'project']) {
-        assert.equal(memory.updateBlock(key, '').ok, true);
-    }
-
-    const restarted = createMemory({ rootDir: memoryRoot, workspaceRoot: rootDir });
-    const blocks = Object.fromEntries(
-        restarted.getSnapshot({ includeEvents: false }).blocks.map((block) => [block.key, block.value])
-    );
-    assert.equal(blocks.user, '');
-    assert.equal(blocks.relationship, '');
-    assert.equal(blocks.project, '');
-    assert.ok(blocks.persona);
-});
-
-test('AILIS restores global Memory v3 evidence after restart while snapshots stay session-scoped', async () => {
+test('AILIS restores recent same-session memory after runtime restart', async () => {
     const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-memory-restart-'));
     const memoryRoot = path.join(rootDir, 'memory');
     const sessionId = 'restart-session';
-    const firstRuntime = createMemory({
+    const firstRuntime = new AILISMemoryRuntime({
         rootDir: memoryRoot,
         workspaceRoot: rootDir
     });
@@ -619,11 +303,11 @@ test('AILIS restores global Memory v3 evidence after restart while snapshots sta
         source: 'test'
     });
 
-    const restartedRuntime = createMemory({
+    const restartedRuntime = new AILISMemoryRuntime({
         rootDir: memoryRoot,
         workspaceRoot: rootDir
     });
-    const context = await restartedRuntime.compileContextAsync({
+    const context = restartedRuntime.compileContext({
         sessionId,
         message: '继续',
         maxChars: 12000
@@ -636,57 +320,189 @@ test('AILIS restores global Memory v3 evidence after restart while snapshots sta
 
     assert.match(context, /Persona Memory Runtime 的读取链路/);
     assert.match(context, /下一轮继续检查 Context Compiler/);
-    assert.match(context, /这是另一个会话的内容/);
+    assert.doesNotMatch(context, /这是另一个会话的内容/);
     assert.equal(snapshot.recentEvents.length, 1);
     assert.equal(snapshot.recentEvents[0].sessionId, sessionId);
 });
 
-test('AILIS Memory v3 uses one asynchronous retrieval path', async () => {
-    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-memory-v3-runtime-'));
-    const memory = createMemory({
-        rootDir: path.join(rootDir, 'memory'),
-        workspaceRoot: rootDir,
-        memoryStrategy: 'hybrid_rrf_ledger_v3',
-        memoryQueryPlanner: async () => ({
-            ok: true,
-            content: JSON.stringify({
-                searchQueries: ['navy blazer dry cleaning pickup'],
-                targetEntities: ['navy blazer'],
-                targetActionTypes: ['pickup'],
-                targetStates: ['pending'],
-                targetRecordKinds: ['action'],
-                needsCoverage: true,
-                needsLatestState: true
-            })
-        }),
-        memoryEmbedder: async (texts) => texts.map((text) => [
-            /blazer|dry cleaning|pickup/i.test(text) ? 1 : 0,
-            /unrelated/i.test(text) ? 1 : 0
-        ])
-    });
-    memory.recordTurn({
-        sessionId: 'closet-memory',
-        userMessage: 'I still need to pick up my navy blazer from dry cleaning.',
-        assistantMessage: 'I will remember the pending blazer pickup.',
-        source: 'test',
-        occurredAt: '2026-08-02T10:00:00.000Z'
+test('AILIS memory prompt merges editable core blocks with curated raw-ledger capsules', async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-curated-prompt-'));
+    const memoryRoot = path.join(rootDir, 'memory');
+    const memory = new AILISMemoryRuntime({
+        rootDir: memoryRoot,
+        workspaceRoot: rootDir
     });
 
-    const asyncContext = await memory.compileContextAsync({
-        sessionId: 'main',
-        message: 'What clothing pickup is still pending?',
-        questionTime: '2026-08-03T00:00:00.000Z'
+    memory.updateBlock('user', 'MANUAL USER CORE BLOCK');
+    memory.updateBlock('relationship', 'MANUAL RELATIONSHIP CORE BLOCK');
+    memory.updateBlock('affinity', 'OLD AFFINITY BLOCK SHOULD NOT BE IN PROMPT');
+
+    await fs.writeFile(path.join(memoryRoot, 'user-profile.json'), JSON.stringify({
+        version: 1,
+        items: [
+            {
+                id: 'profile-direct',
+                category: 'communication_style',
+                claim: '用户希望 AILIS 回答直接、具体，并基于证据。',
+                confidence: 0.94,
+                stability: 'stable',
+                status: 'active',
+                evidenceIds: ['raw-direct-style']
+            },
+            {
+                id: 'profile-project-runtime',
+                category: 'project_memory',
+                claim: '当前项目采用结构化 ContextCompiler。',
+                confidence: 0.93,
+                stability: 'stable',
+                status: 'active',
+                evidenceIds: ['raw-project-runtime']
+            }
+        ]
+    }, null, 2));
+    await fs.writeFile(path.join(memoryRoot, 'relationship-profile.json'), JSON.stringify({
+        version: 1,
+        items: [
+            {
+                id: 'relationship-risk-first',
+                claim: '当用户担心乱改代码时，AILIS 应先解释边界和风险。',
+                confidence: 0.88,
+                stability: 'stable',
+                status: 'active',
+                evidenceIds: ['raw-repair-signal']
+            }
+        ]
+    }, null, 2));
+    await fs.writeFile(path.join(memoryRoot, 'affinity-state.json'), JSON.stringify({
+        version: 1,
+        trust: 0.52,
+        familiarity: 0.64,
+        warmth: 0.58,
+        friction: 0.31,
+        repairState: 'recovering',
+        relationshipStage: 'trusted',
+        evidenceIds: ['raw-repair-signal']
+    }, null, 2));
+    await fs.writeFile(path.join(memoryRoot, 'profile-curation-state.json'), JSON.stringify({
+        version: 1,
+        lastRunDate: '2026-06-30',
+        cursor: {
+            lastProcessedIso: '2026-06-29T12:00:00.000Z',
+            lastProcessedEntryId: 'raw-repair-signal'
+        },
+        lastRun: {
+            iso: '2026-06-30T02:00:00.000Z'
+        }
+    }, null, 2));
+
+    const context = memory.compileContext({
+        sessionId: 'curated-prompt-test',
+        message: '继续'
     });
-    assert.match(asyncContext, /navy blazer/i);
-    assert.equal(memory.getStatus().memoryStrategy, 'hybrid_rrf_ledger_v3');
-    assert.equal(
-        memory.getStatus().memoryStrategyStatus.embedding.runtime,
-        'injected'
+    assert.match(context, /## User/);
+    assert.match(context, /MANUAL USER CORE BLOCK/);
+    assert.match(context, /用户希望 AILIS 回答直接、具体，并基于证据/);
+    assert.match(context, /## Relationship/);
+    assert.match(context, /MANUAL RELATIONSHIP CORE BLOCK/);
+    assert.match(context, /先解释边界和风险/);
+    assert.match(context, /trust=0\.52/);
+    assert.match(context, /repairState|修复状态：recovering/);
+    assert.equal(context.includes('OLD AFFINITY BLOCK SHOULD NOT BE IN PROMPT'), false);
+    const sources = memory.getContextSources({ message: '继续' });
+    assert.match(sources.projectText, /结构化 ContextCompiler/);
+    assert.doesNotMatch(sources.userText, /结构化 ContextCompiler/);
+    const snapshot = memory.getSnapshot({ includeEvents: false });
+    assert.match(snapshot.blocks.find((block) => block.key === 'user').value, /用户希望 AILIS 回答直接/);
+    assert.match(snapshot.blocks.find((block) => block.key === 'relationship').value, /先解释边界和风险/);
+    assert.equal(snapshot.status.affinitySource, 'curated_capsule');
+});
+
+test('AILIS keeps relationship_tone in Persona relationship context and out of TaskAgent user context', async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-memory-task-isolation-'));
+    const memoryRoot = path.join(rootDir, 'memory');
+    const memory = new AILISMemoryRuntime({ rootDir: memoryRoot, workspaceRoot: rootDir });
+    await fs.writeFile(path.join(memoryRoot, 'user-profile.json'), JSON.stringify({
+        version: 1,
+        items: [
+            {
+                id: 'profile-work-style',
+                category: 'work_style',
+                claim: '用户希望复杂改动先核对真实执行链路。',
+                confidence: 0.95,
+                stability: 'stable',
+                status: 'active',
+                evidenceIds: ['raw-work']
+            },
+            {
+                id: 'profile-relationship-tone',
+                category: 'relationship_tone',
+                claim: '用户采用伴侣式称呼。',
+                confidence: 0.9,
+                stability: 'stable',
+                status: 'active',
+                evidenceIds: ['raw-relationship']
+            }
+        ]
+    }, null, 2));
+    await fs.writeFile(path.join(memoryRoot, 'relationship-profile.json'), JSON.stringify({
+        version: 1,
+        items: [{
+            id: 'relationship-one',
+            claim: '用户采用伴侣式称呼。',
+            confidence: 0.9,
+            stability: 'stable',
+            status: 'active',
+            evidenceIds: ['raw-relationship']
+        }]
+    }, null, 2));
+    await fs.writeFile(path.join(memoryRoot, 'profile-curation-state.json'), JSON.stringify({
+        version: 1,
+        cursor: { lastProcessedIso: '2026-07-17T00:00:00.000Z', lastProcessedEntryId: 'raw-relationship' }
+    }, null, 2));
+
+    const personaSources = memory.getContextSources({ message: '继续', contextMode: 'persona' });
+    const taskSources = memory.getContextSources({ message: '继续', contextMode: 'task_agent' });
+
+    assert.match(personaSources.userText, /真实执行链路/);
+    assert.doesNotMatch(personaSources.userText, /伴侣式称呼/);
+    assert.match(personaSources.relationshipText, /伴侣式称呼/);
+    assert.match(taskSources.userText, /真实执行链路/);
+    assert.doesNotMatch(taskSources.userText, /伴侣式称呼/);
+    assert.equal(taskSources.relationshipText, '');
+});
+
+test('AILIS memory context reads curated capsule JSON files with a UTF-8 BOM', async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-memory-curated-bom-'));
+    const memoryRoot = path.join(rootDir, 'memory');
+    const memory = new AILISMemoryRuntime({ rootDir: memoryRoot, workspaceRoot: rootDir });
+    const writeBomJson = (name, value) => fs.writeFile(
+        path.join(memoryRoot, name),
+        `\uFEFF${JSON.stringify(value)}`,
+        'utf8'
     );
+    await Promise.all([
+        writeBomJson('profile-curation-state.json', {
+            version: 1,
+            cursor: { lastProcessedIso: '2026-07-17T02:00:00.000Z' }
+        }),
+        writeBomJson('user-profile.json', {
+            version: 1,
+            items: [{
+                id: 'profile-bom',
+                category: 'work_style',
+                claim: 'BOM capsule content must remain model-visible.',
+                confidence: 0.9,
+                stability: 'stable'
+            }]
+        }),
+        writeBomJson('relationship-profile.json', { version: 1, items: [] }),
+        writeBomJson('affinity-state.json', { version: 1, trust: 0.5 })
+    ]);
 
-    const searchResult = await memory.searchMemoryAsync('navy blazer', { limit: 4 });
-    assert.equal(searchResult.strategy, 'hybrid_rrf_ledger_v3');
-    assert.match(await memory.compileContextAsync({ message: 'navy blazer' }), /navy blazer/i);
-
-    await fs.rm(rootDir, { recursive: true, force: true });
+    const context = memory.compileContext({
+        sessionId: 'bom-test',
+        message: 'check restored memory',
+        contextMode: 'persona'
+    });
+    assert.match(context, /BOM capsule content must remain model-visible/);
 });

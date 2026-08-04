@@ -2752,7 +2752,7 @@ function extractLatestUserTextFromLlmPayload(payload = {}) {
     return '';
 }
 
-async function attachAilisMemoryToLlmPayload(payload = {}) {
+function attachAilisMemoryToLlmPayload(payload = {}) {
     if (payload.includeAilisMemory !== true) {
         return payload;
     }
@@ -2763,14 +2763,11 @@ async function attachAilisMemoryToLlmPayload(payload = {}) {
 
     let memoryContext = '';
     try {
-        const memoryRuntime = ensureAILISGateway().memoryRuntime;
-        const contextPayload = {
+        memoryContext = ensureAILISGateway().memoryRuntime?.compileContext?.({
             sessionId: payload.sessionId || payload.sessionKey || 'main',
             message: payload.memoryUserMessage || extractLatestUserTextFromLlmPayload(payload),
-            messageHistory: payload.messageHistory || [],
-            contextMode: 'persona'
-        };
-        memoryContext = await memoryRuntime?.compileContextAsync?.(contextPayload) || '';
+            messageHistory: payload.messageHistory || []
+        }) || '';
     } catch (error) {
         console.warn('[ailis-memory] 直连 LLM 注入记忆失败：', error.message || error);
     }
@@ -2807,13 +2804,27 @@ async function callDesktopLlm(payload = {}) {
     if (busy) {
         return busy;
     }
+    const startedAt = Date.now();
     const shouldRecordMemory = payload.recordMemory !== false;
-    const enrichedPayload = await attachAilisMemoryToLlmPayload(payload);
+    const enrichedPayload = attachAilisMemoryToLlmPayload(payload);
     const result = await callDesktopLlmProvider(settings, enrichedPayload);
+    if (shouldRecordMemory) {
+        try {
+            ensureAILISGateway().rawMemoryLedger?.recordChatTurn?.({
+                sessionId: payload.sessionId || payload.sessionKey || 'main',
+                source: payload.memorySource || 'direct_llm',
+                requestPayload: payload,
+                enrichedPayload,
+                result,
+                durationMs: Date.now() - startedAt
+            });
+        } catch (error) {
+            console.warn('[ailis-raw-memory] 写入原始对话账本失败：', error.message || error);
+        }
+    }
     if (payload.includeAilisMemory === true && shouldRecordMemory && payload.recordLongTermMemory !== false) {
         try {
-            const gateway = ensureAILISGateway();
-            const recorded = gateway.memoryRuntime?.recordTurn?.({
+            ensureAILISGateway().memoryRuntime?.recordTurn?.({
                 sessionId: payload.sessionId || payload.sessionKey || 'main',
                 userMessage: payload.memoryUserMessage || extractLatestUserTextFromLlmPayload(payload),
                 assistantMessage: result?.content || result?.error || '',
@@ -2822,9 +2833,6 @@ async function callDesktopLlm(payload = {}) {
                 messageHistory: payload.messageHistory || [],
                 attachments: payload.memoryAttachments || []
             });
-            if (recorded?.ok) {
-                gateway.scheduleMemoryCurationSoon?.('direct_llm_turn_recorded');
-            }
         } catch (error) {
             console.warn('[ailis-memory] 直连 LLM 写入记忆失败：', error.message || error);
         }
@@ -2990,7 +2998,7 @@ function ensureAILISGateway() {
         ),
         getDefaultContext: () => getAILISDefaultContext(),
         getEmailProfiles: () => getPersistedEmailProfiles(),
-        memoryQueryPlannerLlm: (payload) => callDesktopLlmProvider(getResolvedLlmSettings(), payload || {}),
+        profileCurationLlm: (payload) => callDesktopLlmProvider(getResolvedLlmSettings(), payload || {}),
         visionServices: {
             permissionPolicy: 'manual',
             getLlmSettings: () => getResolvedLlmSettings(),
@@ -5216,7 +5224,7 @@ function registerIpc() {
         ensureAILISGateway().getMemorySnapshot(payload || {})
     );
     ipcMain.handle('ailis:memory-search', async (_event, payload = {}) =>
-        ensureAILISGateway().searchMemoryAsync(payload.query || payload.text || '', payload || {})
+        ensureAILISGateway().searchMemory(payload.query || payload.text || '', payload || {})
     );
     ipcMain.handle('ailis:memory-update-block', async (_event, payload = {}) =>
         ensureAILISGateway().updateMemoryBlock(payload.key || '', payload.value || payload.content || '')
@@ -5236,11 +5244,23 @@ function registerIpc() {
     ipcMain.handle('ailis:memory-delete-secret', async (_event, payload = {}) =>
         ensureAILISGateway().deleteMemorySecret(payload.name || payload.id || '')
     );
-    ipcMain.handle('ailis:memory-ledger-status', async () =>
-        ensureAILISGateway().getMemoryLedgerStatus()
+    ipcMain.handle('ailis:raw-memory-status', async () =>
+        ensureAILISGateway().getRawMemoryStatus()
     );
-    ipcMain.handle('ailis:memory-ledger-curate', async (_event, payload = {}) =>
-        ensureAILISGateway().curateMemoryLedger(payload || {})
+    ipcMain.handle('ailis:raw-memory-replay', async (_event, payload = {}) =>
+        ensureAILISGateway().replayRawMemory(payload || {})
+    );
+    ipcMain.handle('ailis:raw-memory-sessions', async (_event, payload = {}) =>
+        ensureAILISGateway().listRawMemorySessions(Number(payload.limit) || 100)
+    );
+    ipcMain.handle('ailis:memory-profile-state', async () =>
+        ensureAILISGateway().getUserProfileCurationState()
+    );
+    ipcMain.handle('ailis:memory-profile-curate', async (_event, payload = {}) =>
+        ensureAILISGateway().curateUserProfile(payload || {})
+    );
+    ipcMain.handle('ailis:memory-profile-rebuild', async (_event, payload = {}) =>
+        ensureAILISGateway().rebuildUserProfile(payload || {})
     );
     ipcMain.handle('ailis:chat-history-load', async (_event, payload = {}) =>
         ensureAILISChatHistoryStore().getSession(payload.sessionId || payload.sessionKey || 'main')

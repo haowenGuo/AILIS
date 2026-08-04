@@ -9800,6 +9800,7 @@ class AILISAgentRunner {
         this.pendingAgentApprovals = new Map();
         this.pendingAgentDebugSessions = new Map();
         this.memoryRuntime = options.memoryRuntime || this.gateway.memoryRuntime || null;
+        this.preferenceState = options.preferenceState || this.gateway.preferenceState || null;
         this.taskResultCapsules = options.taskResultCapsules || this.gateway.taskResultCapsules || null;
         this.contextCompiler = options.contextCompiler || new AILISContextCompiler({
             memoryRuntime: this.memoryRuntime
@@ -9832,6 +9833,7 @@ class AILISAgentRunner {
             restoredPendingAgentApprovalCount: this.restoredPendingAgentApprovalCount,
             completedRunCount: this.completedRunCount,
             memory: this.memoryRuntime?.getStatus?.() || null,
+            interactionPreferences: this.preferenceState?.getStatus?.() || null,
             taskResultCapsules: this.taskResultCapsules?.getStatus?.() || null,
             capabilities: [
                 'emotional_chat',
@@ -10054,13 +10056,7 @@ class AILISAgentRunner {
         return attachPersonaSurface(result, surface);
     }
 
-    compileMemoryContext({
-        sessionId,
-        message,
-        request,
-        contextMode = 'persona',
-        memorySources = null
-    } = {}) {
+    compileMemoryContext({ sessionId, message, request, contextMode = 'persona' } = {}) {
         if (resolveMemoryPolicy(request, request?.context || {}) === 'disabled') {
             return '';
         }
@@ -10073,8 +10069,21 @@ class AILISAgentRunner {
                 request?.context?.evalMemoryContext
         );
         const personaMode = normalizeText(contextMode, 'persona').toLowerCase() === 'persona';
+        let preferenceContext = '';
         let activeTaskContext = '';
         if (personaMode) {
+            try {
+                preferenceContext = this.preferenceState?.buildPromptContext?.({
+                    sessionId,
+                    turnId: normalizeText(request?.runId || request?.context?.runId),
+                    now: new Date()
+                }) || '';
+            } catch (error) {
+                this.gateway.emitGatewayEvent?.('agent.preference.context_error', {
+                    sessionId,
+                    error: error?.message || String(error)
+                });
+            }
             try {
                 activeTaskContext = this.taskResultCapsules?.buildActiveTaskContext?.(sessionId, {
                     maxChars: 2200
@@ -10087,26 +10096,18 @@ class AILISAgentRunner {
             }
         }
         try {
-            const requestedSectionBudgets =
-                request?.memorySectionBudgets ||
-                request?.context?.memorySectionBudgets ||
-                {};
             return this.contextCompiler.compile({
                 sessionId,
                 currentUserMessage: message,
                 sessionRecentTurns: request?.messageHistory || [],
                 activeTaskState: activeTaskContext,
+                interactionPreferences: preferenceContext,
                 explicitMemoryContext,
-                memorySources,
                 agentMode: personaMode ? 'persona' : 'task_agent',
-                sectionBudgets: {
-                    ...(memorySources?.recommendedSectionBudgets || {}),
-                    ...requestedSectionBudgets
-                },
+                sectionBudgets: request?.memorySectionBudgets || request?.context?.memorySectionBudgets || {},
                 maxChars: Number(
                     request?.memoryContextMaxChars ||
                     request?.context?.memoryContextMaxChars ||
-                    memorySources?.recommendedMaxChars ||
                     (personaMode ? MAX_PROMPT_MEMORY_CHARS : 12000)
                 )
             });
@@ -10116,45 +10117,6 @@ class AILISAgentRunner {
                 error: error?.message || String(error)
             });
             return explicitMemoryContext;
-        }
-    }
-
-    async compileMemoryContextAsync({
-        sessionId,
-        message,
-        request,
-        contextMode = 'persona'
-    } = {}) {
-        if (
-            resolveMemoryPolicy(request, request?.context || {}) === 'disabled' ||
-            typeof this.memoryRuntime?.getContextSourcesAsync !== 'function'
-        ) {
-            return this.compileMemoryContext({ sessionId, message, request, contextMode });
-        }
-        try {
-            const memorySources = await this.memoryRuntime.getContextSourcesAsync({
-                sessionId,
-                message,
-                messageHistory: request?.messageHistory || [],
-                contextMode,
-                questionTime: normalizeText(
-                    request?.runtimeEnvironmentOverride?.current_datetime ||
-                    request?.context?.runtimeEnvironmentOverride?.current_datetime
-                )
-            });
-            return this.compileMemoryContext({
-                sessionId,
-                message,
-                request,
-                contextMode,
-                memorySources
-            });
-        } catch (error) {
-            this.gateway.emitGatewayEvent?.('agent.memory.async_context_error', {
-                sessionId,
-                error: error?.message || String(error)
-            });
-            return this.compileMemoryContext({ sessionId, message, request, contextMode });
         }
     }
 
@@ -10186,7 +10148,22 @@ class AILISAgentRunner {
                 attachments
             });
             if (recorded?.ok) {
-                this.gateway.scheduleMemoryCurationSoon?.('agent_turn_recorded');
+                this.gateway.rawMemoryLedger?.recordChatTurn?.({
+                    sessionId,
+                    source,
+                    requestPayload: {
+                        memoryUserMessage: message
+                    },
+                    enrichedPayload: {},
+                    result: {
+                        ok: result.ok !== false,
+                        status: result.status || '',
+                        intent: result.intent || '',
+                        content: result.displayText || result.finalAnswer || result.error || ''
+                    },
+                    durationMs: Number(result.durationMs) || null
+                });
+                this.gateway.scheduleProfileCurationSoon?.('agent_turn_recorded');
                 this.gateway.emitGatewayEvent?.('agent.memory.recorded', {
                     sessionId,
                     eventId: recorded.event?.id,
@@ -11044,7 +11021,7 @@ class AILISAgentRunner {
             emailProfiles = requestContext.emailProfiles || {};
         }
         const agentContextMode = resolveAgentContextMode(request, requestContext);
-        const memoryContext = await this.compileMemoryContextAsync({
+        const memoryContext = this.compileMemoryContext({
             sessionId,
             message,
             request,

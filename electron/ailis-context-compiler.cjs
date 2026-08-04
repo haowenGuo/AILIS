@@ -22,7 +22,7 @@ function normalizeText(value = '') {
 
 function normalizeBudget(value, fallback) {
     const numeric = Number(value);
-    return Math.max(50, Math.min(Number.isFinite(numeric) ? numeric : fallback, 100000));
+    return Math.max(50, Math.min(Number.isFinite(numeric) ? numeric : fallback, 8000));
 }
 
 function truncateByCompleteLines(value = '', maxChars = 4000) {
@@ -116,13 +116,12 @@ class AILISContextCompiler {
         activeTaskState = '',
         interactionPreferences = '',
         explicitMemoryContext = '',
-        memorySources = null,
         agentMode = 'persona',
         sectionBudgets = {},
         maxChars = 0
     } = {}) {
         const contextMode = agentMode === 'task_agent' ? 'task_agent' : 'persona';
-        const sources = memorySources || this.memoryRuntime?.getContextSources?.({
+        const sources = this.memoryRuntime?.getContextSources?.({
             sessionId,
             message: currentUserMessage,
             messageHistory: sessionRecentTurns,
@@ -197,8 +196,6 @@ class AILISContextCompiler {
                 sessionId: String(sessionId || 'main'),
                 retrievalQueryChars: Number(sources.retrievalQueryChars) || 0,
                 relevantMemoryCount: Number(sources.relevantMemoryCount) || 0,
-                memoryStrategy: String(sources.memoryStrategy || ''),
-                memoryStrategyDiagnostics: sources.memoryStrategyDiagnostics || null,
                 sectionCount: sections.length,
                 scaledForMaxChars: scale < 1,
                 maxChars: Number(maxChars) || 0

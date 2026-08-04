@@ -184,7 +184,8 @@ class AILISHostedRuntimeManager {
             workspaceRoot,
             auditDir: stateRoot,
             emberHarnessEnabled: process.env.AILIS_HOSTED_EMBER_ENABLED === 'true',
-            memoryQueryPlannerLlm: (payload) => callDesktopLlmProvider(record.llmSettings, payload || {}),
+            profileCurationEnabled: true,
+            profileCurationLlm: (payload) => callDesktopLlmProvider(record.llmSettings, payload || {}),
             getDefaultContext: () => ({
                 hostedRuntime: true,
                 workspace: workspaceRoot,
@@ -198,7 +199,7 @@ class AILISHostedRuntimeManager {
         const onEvent = (event) => this.recordEvent(key, event);
         gateway.on?.('event', onEvent);
         record.unsubscribe = () => gateway.off?.('event', onEvent);
-        gateway.scheduleMemoryCurationSoon?.('hosted_runtime_startup');
+        gateway.startProfileCurationScheduler?.();
         return record;
     }
 
