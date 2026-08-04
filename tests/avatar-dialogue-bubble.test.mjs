@@ -31,6 +31,15 @@ class FakeClassList {
     contains(name) {
         return this.values().has(name);
     }
+
+    toggle(name, force) {
+        const values = this.values();
+        const enabled = force === undefined ? !values.has(name) : Boolean(force);
+        if (enabled) values.add(name);
+        else values.delete(name);
+        this.sync(values);
+        return enabled;
+    }
 }
 
 class FakeStyle {
@@ -169,7 +178,7 @@ function installFakeDom({ onExpand = () => {} } = {}) {
     return { root };
 }
 
-test('pet dialogue bubble stays inside fixed overlay without expanding the Electron pet window', async () => {
+test('pet dialogue bubble reserves and releases Electron overlay space', async () => {
     const expandCalls = [];
     const { root } = installFakeDom({
         onExpand: (payload) => expandCalls.push(payload)
@@ -199,7 +208,7 @@ test('pet dialogue bubble stays inside fixed overlay without expanding the Elect
     await Promise.resolve();
 
     cleanup();
-    assert.deepEqual(expandCalls, []);
+    assert.deepEqual(expandCalls.map((call) => call.expanded), [true, false]);
 });
 
 test('pet dialogue bubble anchors above the avatar bounds when available', async () => {
@@ -232,5 +241,41 @@ test('pet dialogue bubble anchors above the avatar bounds when available', async
     const bubble = root.children[0];
     cleanup();
     assert.equal(bubble.style.left, '60px');
-    assert.equal(bubble.style.top, '126px');
+    assert.equal(bubble.style.top, '120px');
+    assert.equal(bubble.style.values.get('--avatar-dialogue-bubble-tail-x'), '120px');
+    assert.equal(bubble.children[0].textContent, 'AILIS');
+});
+
+test('pet dialogue bubble keeps its head-top anchor when vertical space is tight', async () => {
+    const { root } = installFakeDom();
+    const cleanup = installAvatarDialogueBubble({
+        rootElement: root,
+        variant: 'pet',
+        avatarBoundsProvider: () => ({
+            left: 140,
+            top: 60,
+            right: 220,
+            bottom: 420,
+            width: 80,
+            height: 360,
+            centerX: 180,
+            centerY: 240
+        })
+    });
+
+    window.dispatchEvent(new CustomEvent(AVATAR_SPEECH_EVENT_NAME, {
+        detail: {
+            phase: 'start',
+            id: 'message-tight-space',
+            text: '这是一段需要保持在人物头顶上方的较长对话。'
+        }
+    }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const bubble = root.children[0];
+    cleanup();
+    assert.equal(bubble.style.left, '60px');
+    assert.equal(bubble.style.top, '8px');
+    assert.equal(bubble.style.values.get('--avatar-dialogue-bubble-tail-x'), '120px');
 });

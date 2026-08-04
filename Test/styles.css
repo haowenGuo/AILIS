@@ -17,7 +17,7 @@
     --gold: #ad8127;
     --dialogue-ink: #f8fcfd;
     --dialogue-muted: #c9d9dc;
-    --dialogue-bg: rgba(18, 34, 39, 0.32);
+    --dialogue-bg: rgba(15, 31, 37, 0.84);
     --dialogue-height: 276px;
     --drawer-width: min(410px, calc(100vw - 24px));
     --font: "Microsoft YaHei", -apple-system, BlinkMacSystemFont, "PingFang SC", "Noto Sans SC", sans-serif;
@@ -451,14 +451,19 @@ svg {
     grid-template-rows: 35px minmax(0, 1fr) auto auto;
     padding: 0 18px 14px;
     overflow: hidden;
-    border: 1px solid rgba(213, 232, 235, 0.5);
+    border: 1px solid rgba(222, 239, 242, 0.72);
     border-left: 4px solid var(--rose);
     border-radius: 8px;
     color: var(--dialogue-ink);
-    background: var(--dialogue-bg);
-    box-shadow: 0 18px 38px rgba(13, 28, 32, 0.3);
-    backdrop-filter: saturate(0.9);
-    text-shadow: 0 1px 3px rgba(8, 20, 24, 0.78);
+    background:
+        linear-gradient(135deg, rgba(35, 64, 70, 0.32), transparent 45%),
+        var(--dialogue-bg);
+    box-shadow:
+        0 20px 44px rgba(8, 22, 27, 0.38),
+        inset 0 1px 0 rgba(255, 255, 255, 0.08);
+    backdrop-filter: blur(18px) saturate(1.08);
+    -webkit-backdrop-filter: blur(18px) saturate(1.08);
+    text-shadow: 0 1px 2px rgba(5, 16, 20, 0.7);
 }
 
 .dialogue-heading {
@@ -526,7 +531,7 @@ svg {
     border: 1px solid rgba(211, 230, 233, 0.3);
     border-radius: 999px;
     color: var(--dialogue-muted);
-    background: rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.14);
     cursor: pointer;
     font-size: 11px;
     font-weight: 700;
@@ -552,7 +557,7 @@ svg {
     padding: 5px;
     border: 1px solid rgba(211, 230, 233, 0.34);
     border-radius: 8px;
-    background: rgba(255, 255, 255, 0.1);
+    background: rgba(255, 255, 255, 0.16);
 }
 
 .composer:focus-within {
@@ -963,14 +968,18 @@ svg {
         left: 10px;
         right: 10px;
         bottom: auto;
-        flex-direction: column;
-        align-items: stretch;
-        gap: 5px;
+        flex-direction: row;
+        align-items: center;
+        gap: 6px;
     }
 
-    .scene-picker,
+    .scene-picker {
+        flex: 0 0 auto;
+        align-self: center;
+    }
+
     .render-picker {
-        align-self: flex-end;
+        display: none;
     }
 
     .scene-option {
@@ -986,9 +995,15 @@ svg {
     }
 
     .voice-picker {
-        width: 100%;
-        max-width: 100%;
+        flex: 1 1 auto;
+        width: auto;
+        max-width: none;
+        min-width: 0;
         box-sizing: border-box;
+    }
+
+    .voice-picker span {
+        display: none;
     }
 
     .voice-picker select {

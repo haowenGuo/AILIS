@@ -10,7 +10,7 @@ const DEFAULT_PET_BUBBLE_SCALE = 1;
 const DEFAULT_PET_BUBBLE_EXTRA_WIDTH = 220;
 const DEFAULT_PET_BUBBLE_EXTRA_TOP = 190;
 const PET_DIALOGUE_WINDOW_EXPANSION_ENABLED = true;
-const PET_BUBBLE_AVATAR_GAP = 12;
+const PET_BUBBLE_AVATAR_GAP = 18;
 const PET_BUBBLE_LONG_TEXT_CHARS = 84;
 const PET_BUBBLE_LONG_TEXT_LINES = 3;
 const PET_BUBBLE_DYNAMIC_TOP_PADDING = 22;
@@ -74,6 +74,7 @@ function installBubbleStyle() {
     style.textContent = `
         .avatar-dialogue-bubble {
             --avatar-dialogue-bubble-scale: 1;
+            --avatar-dialogue-bubble-tail-x: 50%;
             position: absolute;
             left: 32%;
             top: 34px;
@@ -81,19 +82,19 @@ function installBubbleStyle() {
             width: max-content;
             min-width: min(220px, calc(100% - 40px));
             max-width: min(460px, calc(100% - 40px));
-            padding: 13px 16px;
-            border: 2px solid rgba(86, 143, 184, 0.52);
-            border-radius: 8px;
+            padding: 12px 16px 14px;
+            border: 1px solid rgba(112, 157, 163, 0.5);
+            border-radius: 18px;
             background:
-                linear-gradient(90deg, rgba(123, 184, 223, 0.28), transparent 34px),
-                linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(246, 252, 255, 0.94)),
-                radial-gradient(circle at 18px 14px, rgba(255, 255, 255, 0.9), transparent 36px);
+                radial-gradient(circle at 18px 12px, rgba(255, 255, 255, 0.98), transparent 68px),
+                linear-gradient(145deg, rgba(255, 255, 255, 0.98), rgba(238, 249, 248, 0.96));
             box-shadow:
-                0 14px 34px rgba(55, 112, 151, 0.16),
-                0 3px 0 rgba(123, 184, 223, 0.22),
-                inset 4px 0 0 rgba(123, 184, 223, 0.34);
-            color: #263847;
+                0 18px 44px rgba(24, 64, 70, 0.2),
+                0 4px 12px rgba(35, 81, 87, 0.12),
+                inset 0 1px 0 rgba(255, 255, 255, 0.94);
+            color: #17353d;
             font-size: 15px;
+            font-weight: 600;
             line-height: 1.56;
             letter-spacing: 0;
             pointer-events: none;
@@ -102,9 +103,44 @@ function installBubbleStyle() {
             touch-action: none;
             opacity: 0;
             transform: translateY(-8px) scale(var(--avatar-dialogue-bubble-scale)) scale(0.98);
-            transform-origin: 28px 100%;
+            transform-origin: var(--avatar-dialogue-bubble-tail-x) 100%;
             transition: opacity 180ms ease, transform 180ms ease;
-            filter: drop-shadow(0 8px 18px rgba(82, 137, 174, 0.14));
+            filter: drop-shadow(0 8px 18px rgba(48, 101, 107, 0.12));
+        }
+
+        .avatar-dialogue-bubble::after {
+            content: "";
+            position: absolute;
+            left: var(--avatar-dialogue-bubble-tail-x);
+            bottom: -8px;
+            width: 15px;
+            height: 15px;
+            border-right: 1px solid rgba(112, 157, 163, 0.5);
+            border-bottom: 1px solid rgba(112, 157, 163, 0.5);
+            background: rgba(238, 249, 248, 0.98);
+            transform: translateX(-50%) rotate(45deg);
+            border-radius: 0 0 3px 0;
+        }
+
+        .avatar-dialogue-bubble__label {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            margin-bottom: 5px;
+            color: #34757a;
+            font-size: 11px;
+            font-weight: 900;
+            letter-spacing: 0.08em;
+            line-height: 1.2;
+        }
+
+        .avatar-dialogue-bubble__label::before {
+            content: "";
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: #ca5b7c;
+            box-shadow: 0 0 0 3px rgba(202, 91, 124, 0.13);
         }
 
         .avatar-dialogue-bubble--visible {
@@ -120,37 +156,38 @@ function installBubbleStyle() {
         }
 
         .avatar-dialogue-bubble__text {
-            display: -webkit-box;
-            -webkit-line-clamp: 7;
-            -webkit-box-orient: vertical;
-            max-height: 10.9em;
-            overflow: hidden;
+            display: block;
+            max-height: 9.4em;
+            overflow-x: hidden;
+            overflow-y: auto;
+            padding-right: 3px;
             white-space: pre-wrap;
             word-break: break-word;
+            overscroll-behavior: contain;
+            scrollbar-color: rgba(52, 117, 122, 0.32) transparent;
+            scrollbar-width: thin;
         }
 
         .avatar-dialogue-bubble--pet {
             left: 8px;
             top: 0;
-            min-width: min(188px, calc(100% - 24px));
-            max-width: min(260px, calc(100% - 24px));
-            padding: 10px 12px;
+            min-width: min(220px, calc(100% - 32px));
+            max-width: min(360px, calc(100% - 32px));
+            padding: 11px 14px 13px;
             font-size: 13px;
-            line-height: 1.48;
+            line-height: 1.56;
             box-shadow:
-                0 10px 24px rgba(55, 112, 151, 0.18),
-                0 3px 0 rgba(123, 184, 223, 0.22),
-                inset 4px 0 0 rgba(123, 184, 223, 0.34);
+                0 16px 38px rgba(24, 64, 70, 0.2),
+                0 4px 12px rgba(35, 81, 87, 0.12),
+                inset 0 1px 0 rgba(255, 255, 255, 0.94);
         }
 
         .avatar-dialogue-bubble--pet .avatar-dialogue-bubble__text {
-            -webkit-line-clamp: 4;
-            max-height: 5.92em;
+            max-height: 6.24em;
         }
 
         .avatar-dialogue-bubble--pet.avatar-dialogue-bubble--long .avatar-dialogue-bubble__text {
-            -webkit-line-clamp: ${PET_BUBBLE_LONG_TEXT_LINES};
-            max-height: 4.44em;
+            max-height: 4.68em;
         }
 
         @media (max-width: 768px) {
@@ -159,6 +196,10 @@ function installBubbleStyle() {
                 top: 28px;
                 max-width: calc(100% - 28px);
                 font-size: 14px;
+            }
+
+            .avatar-dialogue-bubble--pet {
+                max-width: min(320px, calc(100% - 24px));
             }
         }
     `;
@@ -268,6 +309,12 @@ export function installAvatarDialogueBubble({
     bubbleEl.setAttribute('role', 'status');
     bubbleEl.setAttribute('aria-live', 'polite');
 
+    const labelEl = document.createElement('div');
+    labelEl.className = 'avatar-dialogue-bubble__label';
+    labelEl.textContent = 'AILIS';
+    labelEl.setAttribute('aria-hidden', 'true');
+    bubbleEl.appendChild(labelEl);
+
     const textEl = document.createElement('div');
     textEl.className = 'avatar-dialogue-bubble__text';
     bubbleEl.appendChild(textEl);
@@ -327,6 +374,14 @@ export function installAvatarDialogueBubble({
         const safePosition = clampBubblePosition(rootElement, bubbleEl, position);
         bubbleEl.style.left = `${safePosition.left}px`;
         bubbleEl.style.top = `${safePosition.top}px`;
+        if (Number.isFinite(Number(position.anchorX))) {
+            const bubbleWidth = getMeasuredBubbleRect()?.width || 0;
+            const tailX = Math.min(
+                Math.max(Number(position.anchorX) - safePosition.left, 28),
+                Math.max(28, bubbleWidth - 28)
+            );
+            bubbleEl.style.setProperty('--avatar-dialogue-bubble-tail-x', `${Math.round(tailX)}px`);
+        }
 
         if (persist) {
             persistPosition(safePosition);
@@ -378,34 +433,9 @@ export function installAvatarDialogueBubble({
 
         const abovePosition = {
             left: avatarBounds.centerX - rootRect.left - bubbleRect.width / 2,
-            top: avatarBounds.top - rootRect.top - bubbleRect.height - PET_BUBBLE_AVATAR_GAP
+            top: avatarBounds.top - rootRect.top - bubbleRect.height - PET_BUBBLE_AVATAR_GAP,
+            anchorX: avatarBounds.centerX - rootRect.left
         };
-        if (abovePosition.top >= BUBBLE_EDGE_PADDING) {
-            return abovePosition;
-        }
-
-        const avatarLeft = avatarBounds.left - rootRect.left;
-        const avatarRight = avatarBounds.right - rootRect.left;
-        const rightSpace = rootRect.width - avatarRight - PET_BUBBLE_AVATAR_GAP;
-        const leftSpace = avatarLeft - PET_BUBBLE_AVATAR_GAP;
-        const sideTop = Math.min(
-            Math.max(avatarBounds.top - rootRect.top + avatarBounds.height * 0.08, BUBBLE_EDGE_PADDING),
-            Math.max(BUBBLE_EDGE_PADDING, rootRect.height - bubbleRect.height - BUBBLE_EDGE_PADDING)
-        );
-
-        if (rightSpace >= bubbleRect.width + BUBBLE_EDGE_PADDING) {
-            return {
-                left: avatarRight + PET_BUBBLE_AVATAR_GAP,
-                top: sideTop
-            };
-        }
-        if (leftSpace >= bubbleRect.width + BUBBLE_EDGE_PADDING) {
-            return {
-                left: avatarLeft - bubbleRect.width - PET_BUBBLE_AVATAR_GAP,
-                top: sideTop
-            };
-        }
-
         return abovePosition;
     };
 
@@ -651,6 +681,12 @@ export function installAvatarDialogueBubble({
         }
     };
 
+    const handleViewportChange = () => {
+        if (bubbleEl.classList.contains('avatar-dialogue-bubble--visible')) {
+            applyPreferredPositionAfterLayout();
+        }
+    };
+
     const handlePreferencesUpdated = ({ preferences = {} } = {}) => {
         if (!usesDesktopBubbleSettings()) {
             return;
@@ -672,6 +708,7 @@ export function installAvatarDialogueBubble({
     const removePreferencesListener = window.ailisDesktop?.onPreferencesUpdated?.(handlePreferencesUpdated);
 
     window.addEventListener(AVATAR_SPEECH_EVENT_NAME, handleSpeechEvent);
+    window.addEventListener('resize', handleViewportChange);
     bubbleEl.addEventListener('pointerdown', beginDrag);
     bubbleEl.addEventListener('pointermove', moveDrag);
     bubbleEl.addEventListener('pointerup', endDrag);
@@ -683,6 +720,7 @@ export function installAvatarDialogueBubble({
         void setPetDialogueShellExpanded(false);
         removePreferencesListener?.();
         window.removeEventListener(AVATAR_SPEECH_EVENT_NAME, handleSpeechEvent);
+        window.removeEventListener('resize', handleViewportChange);
         bubbleEl.removeEventListener('pointerdown', beginDrag);
         bubbleEl.removeEventListener('pointermove', moveDrag);
         bubbleEl.removeEventListener('pointerup', endDrag);
