@@ -562,7 +562,6 @@ function attachPetWindow() {
         state.modelReady = true;
         state.chatReady = true;
         setModelStatus('角色已就绪', 'ready');
-        applyRenderProfileToPet();
         syncPetSnapshot();
         updateComposer();
     });
