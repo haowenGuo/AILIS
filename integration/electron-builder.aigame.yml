@@ -1,0 +1,53 @@
+appId: com.ailis.aigame
+productName: AIGAME
+artifactName: ${productName}-${version}-${arch}.${ext}
+icon: build/icon.png
+afterPack: scripts/fix-windows-exe-icon.cjs
+directories:
+  output: F:/AILIS/Build/AIGAME
+files:
+  - dist/**/*
+  - electron/**/*
+  - scripts/mcp-ailis-research-server.cjs
+  - scripts/ailis-crawl4ai-worker.py
+  - scripts/ailis-python-search-worker.py
+  - installer/ailis-runtime-components.json
+  - package.json
+extraResources:
+  - from: unity-character-demo/Build/Windows
+    to: character-renderers/unity
+    filter:
+      - AILISCharacterDemo.exe
+      - AILISCharacterDemo_Data/**/*
+      - MonoBleedingEdge/**/*
+      - UnityCrashHandler64.exe
+      - UnityPlayer.dll
+extraMetadata:
+  main: electron/main.cjs
+  ailisProductVariant: aigame
+asar: true
+asarUnpack:
+  - dist/**/*
+  - electron/**/*.cjs
+  - electron/**/*.py
+  - scripts/**/*.cjs
+  - scripts/**/*.py
+npmRebuild: false
+win:
+  icon: build/icon.ico
+  executableName: AIGAME
+  signAndEditExecutable: false
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: portable
+      arch:
+        - x64
+nsis:
+  artifactName: ${productName}-Setup-${version}-win-${arch}.${ext}
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  include: installer/ailis-runtime-components.nsh
+portable:
+  artifactName: ${productName}-Portable-${version}-win-${arch}.${ext}

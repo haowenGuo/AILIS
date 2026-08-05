@@ -1,0 +1,40 @@
+# Unity-generated state
+unity-character-demo/[Ll]ibrary/
+unity-character-demo/Library.failed-package-resolution/
+unity-character-demo/[Tt]emp/
+unity-character-demo/Temp.*/
+unity-character-demo/[Oo]bj/
+unity-character-demo/[Ll]ogs/
+unity-character-demo/[Uu]ser[Ss]ettings/
+unity-character-demo/.vs/
+
+# Standalone builds are reproducible and too large for source control.
+/Build/
+unity-character-demo/Build/
+
+# Local diagnostics and snapshots that may contain machine-specific paths.
+*.log
+*.tmp
+integration-snapshot/ailis-working-tree.patch
+
+# Licensed character packages stay in the local archive only.
+unity-character-demo/Assets/RadDollV3/
+unity-character-demo/Assets/RadDollV3.meta
+unity-character-demo/Assets/AILIS/GeneratedPackages/
+unity-character-demo/Assets/AILIS/GeneratedPackages.meta
+unity-character-demo/Assets/StreamingAssets/Characters/raddoll-v3.02/
+unity-character-demo/Assets/StreamingAssets/Characters/raddoll-v3.02.meta
+unity-character-demo/Assets/StreamingAssets/Characters/unity-chan-1.4.0/
+unity-character-demo/Assets/StreamingAssets/Characters/unity-chan-1.4.0.meta
+
+# Rebuilt from source motion libraries by the Unity editor.
+unity-character-demo/Assets/Resources/AILIS/Animation/VRMA/
+unity-character-demo/Assets/Resources/AILIS/Animation/VRMA.meta
+
+# Never publish imported package archives or local credentials.
+*.unitypackage
+.env
+.env.*
+*.pfx
+*.p12
+*.key
