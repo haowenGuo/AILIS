@@ -1,6 +1,12 @@
 const fs = require('fs');
 const path = require('path');
 const { randomUUID } = require('crypto');
+const {
+    MEMORY_RETRIEVAL_STRATEGY_ID,
+    SESSION_REPEAT_PENALTY,
+    rankMemoryEvents,
+    selectRelevantMemoryExcerpt
+} = require('./ailis-memory-lexical-retriever.cjs');
 
 const MEMORY_STORE_VERSION = 2;
 const DEFAULT_AFFINITY_SCORE = 50;
@@ -113,9 +119,17 @@ function sanitizePromptMemoryBlockText(value) {
         .join('\n');
 }
 
-function formatPromptMemoryEvent(event = {}) {
-    const userText = truncateText(sanitizePromptMemoryText(event.userText), MAX_PROMPT_EVENT_TEXT_CHARS);
-    const assistantText = truncateText(sanitizePromptMemoryText(event.assistantText), MAX_PROMPT_EVENT_TEXT_CHARS);
+function formatPromptMemoryEvent(event = {}, query = '') {
+    const userText = selectRelevantMemoryExcerpt(
+        sanitizePromptMemoryText(event.userText),
+        query,
+        MAX_PROMPT_EVENT_TEXT_CHARS
+    );
+    const assistantText = selectRelevantMemoryExcerpt(
+        sanitizePromptMemoryText(event.assistantText),
+        query,
+        MAX_PROMPT_EVENT_TEXT_CHARS
+    );
     if (!userText && !assistantText) {
         return '';
     }
@@ -360,45 +374,6 @@ function normalizeState(rawState, workspaceRoot = '') {
     };
 }
 
-function keywordSet(text) {
-    const normalized = normalizeText(text).toLowerCase();
-    const tokens = new Set();
-    for (const token of normalized.match(/[a-z0-9_./:-]{2,}/g) || []) {
-        tokens.add(token);
-    }
-    const knownChinese = [
-        '记忆', '好感度', '语气', '拟人', '视觉', '截图', '语音', '口唇', '表情', '动作',
-        '架构', '设计', '代码', '工程', '稳定', '延迟', '模型', '工具', '权限', '确认',
-        'codex', 'claude', 'letta', 'memgpt', 'generative', 'openclaw', 'ailis',
-        'cosyvoice', 'kokoro', 'elevenlabs', 'mcp', 'subagent', 'agent', 'asr'
-    ];
-    for (const keyword of knownChinese) {
-        if (normalized.includes(keyword.toLowerCase())) {
-            tokens.add(keyword.toLowerCase());
-        }
-    }
-    const chineseOnly = normalized.replace(/[^\u4e00-\u9fff]/g, '');
-    for (let index = 0; index < chineseOnly.length - 1; index += 1) {
-        tokens.add(chineseOnly.slice(index, index + 2));
-    }
-    return tokens;
-}
-
-function scoreTextAgainstQuery(text, query) {
-    const queryTokens = keywordSet(query);
-    if (!queryTokens.size) {
-        return 0;
-    }
-    const textTokens = keywordSet(text);
-    let score = 0;
-    for (const token of queryTokens) {
-        if (textTokens.has(token)) {
-            score += token.length >= 4 ? 2 : 1;
-        }
-    }
-    return score;
-}
-
 function buildEventSummary(userText, assistantText) {
     const user = truncateText(redactSecretLikeText(userText), 360);
     const assistant = truncateText(redactSecretLikeText(assistantText), 360);
@@ -620,6 +595,7 @@ class AILISMemoryRuntime {
         this.capsulesDir = path.join(this.rootDir, 'capsules');
         this.dailyDir = path.join(this.rootDir, 'daily');
         this.reflectionsDir = path.join(this.rootDir, 'reflections');
+        this.memoryStrategy = MEMORY_RETRIEVAL_STRATEGY_ID;
         this.state = null;
         this.loaded = false;
         this.lastError = '';
@@ -714,6 +690,13 @@ class AILISMemoryRuntime {
             rootDir: this.rootDir,
             statePath: this.statePath,
             eventsPath: this.eventsPath,
+            memoryStrategy: this.memoryStrategy,
+            memoryStrategyDiagnostics: {
+                indexBackend: 'in_memory_bm25_mmr_v2',
+                sessionRepeatPenalty: SESSION_REPEAT_PENALTY,
+                denseEnabled: false,
+                queryPlannerEnabled: false
+            },
             blockCount,
             eventCount,
             affinityScore,
@@ -797,11 +780,14 @@ class AILISMemoryRuntime {
         const blocks = state.blocks || {};
         const curated = loadCuratedPromptMemory(this.rootDir);
         const retrievalQuery = buildMemoryRetrievalQuery(message, messageHistory);
-        const relevantEvents = this.searchMemory(retrievalQuery, {
+        const searchResult = this.searchMemory(retrievalQuery, {
             limit: DEFAULT_RELEVANT_EVENT_LIMIT
-        }).events.filter((event) => !isTaskAgentMemoryEvent(event));
+        });
+        const relevantEvents = searchResult.events.filter((event) => !isTaskAgentMemoryEvent(event));
         const taskAgentMode = normalizeText(contextMode, 'persona').toLowerCase() === 'task_agent';
-        const relevantLines = relevantEvents.map(formatPromptMemoryEvent).filter(Boolean);
+        const relevantLines = relevantEvents
+            .map((event) => formatPromptMemoryEvent(event, retrievalQuery))
+            .filter(Boolean);
         return {
             contextMode: taskAgentMode ? 'task_agent' : 'persona',
             personaText: taskAgentMode ? '' : sanitizePromptMemoryBlockText(blocks.persona?.value || ''),
@@ -840,6 +826,8 @@ class AILISMemoryRuntime {
             ],
             secretRefs: blocks.secrets_index ? ['memory:block:secrets_index'] : [],
             relevantMemoryRefs: relevantEvents.map((event) => event.id).filter(Boolean),
+            memoryStrategy: searchResult.strategy,
+            memoryStrategyDiagnostics: searchResult.diagnostics,
             retrievalQueryChars: retrievalQuery.length,
             relevantMemoryCount: relevantLines.length,
             sessionId
@@ -873,31 +861,7 @@ class AILISMemoryRuntime {
     }
 
     searchMemory(query, { limit = 10 } = {}) {
-        const normalizedQuery = normalizeText(query);
-        const events = (this.state?.events || [])
-            .map((event, index) => {
-                const text = [
-                    event.summary,
-                    event.userText,
-                    event.assistantText,
-                    Array.isArray(event.tags) ? event.tags.join(' ') : ''
-                ].join('\n');
-                const recency = index / Math.max(1, (this.state.events || []).length);
-                const relevance = scoreTextAgainstQuery(text, normalizedQuery);
-                const score = relevance +
-                    Number(event.importance || 0) * 0.35 +
-                    recency;
-                return { event, score, relevance };
-            })
-            .filter((entry) => !normalizedQuery || entry.relevance > 0)
-            .sort((left, right) => right.score - left.score)
-            .slice(0, Math.max(1, Number(limit) || 10))
-            .map((entry) => entry.event);
-        return {
-            ok: true,
-            query: normalizedQuery,
-            events
-        };
+        return rankMemoryEvents(this.state?.events || [], query, { limit });
     }
 
     recordTurn({
@@ -1151,6 +1115,7 @@ class AILISMemoryRuntime {
 
 module.exports = {
     AILISMemoryRuntime,
+    MEMORY_RETRIEVAL_STRATEGY_ID,
     MEMORY_STORE_VERSION,
     buildAffinityStage,
     redactSecretLikeText

@@ -85,7 +85,9 @@ AILIS brings three layers together:
 - Voice output through desktop TTS workers and cloud provider paths.
 - Optional local speech recognition worker for desktop voice input.
 - Permission-aware visual context through screenshot, window, and region capture flows.
-- Memory blocks, project context, relationship state, and lightweight reflection.
+- Memory blocks, project context, relationship state, and lightweight reflection, with the
+  evaluated [`BM25 phrase v2 + MMR 0.2`](docs/ailis-memory-bm25-mmr-baseline.md) local retrieval
+  baseline (no dense model or retrieval-time query planner on the default path).
 - Tool layer for file operations, code work, computer actions, email, MCP skills, web/search support, and local runtime utilities.
 - Approval-aware execution model for actions that can affect files, apps, accounts, or external services.
 - EMBER-Harness stage gates for checking untrusted inputs, tool calls, tool results, and final outputs during agent execution.
