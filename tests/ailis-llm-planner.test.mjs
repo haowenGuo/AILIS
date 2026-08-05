@@ -112,6 +112,17 @@ function parseModelContextPayload(call) {
             // Ignore non-JSON user goal messages.
         }
     }
+    for (const message of messages) {
+        const match = String(message.content || '').match(
+            /<task_agent_session_state>\s*([\s\S]*?)\s*<\/task_agent_session_state>/i
+        );
+        if (!match) continue;
+        try {
+            return JSON.parse(match[1]);
+        } catch {
+            // Ignore malformed state envelopes in this test helper.
+        }
+    }
     return {};
 }
 
@@ -479,6 +490,48 @@ async function createDelayedChatCompletionsServer(delayMs = 5000) {
     };
 }
 
+async function createSteerAwareChatCompletionsServer(firstResponseDelayMs = 250) {
+    const calls = [];
+    const server = http.createServer((req, res) => {
+        let raw = '';
+        req.on('data', (chunk) => {
+            raw += chunk;
+        });
+        req.on('end', () => {
+            const payload = raw ? JSON.parse(raw) : {};
+            calls.push({ url: req.url, payload });
+            const callNumber = calls.length;
+            const respond = () => {
+                const message = decisionObjectToChatMessage({
+                    mode: 'task',
+                    intent: 'turn_steer_probe',
+                    action: 'final',
+                    final_answer: callNumber === 1
+                        ? '旧请求的答案'
+                        : '已按补充要求完成'
+                }, `steer-aware-${callNumber}`);
+                res.writeHead(200, { 'content-type': 'application/json' });
+                res.end(JSON.stringify({
+                    choices: [{ message }],
+                    usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 }
+                }));
+            };
+            if (callNumber === 1) {
+                setTimeout(respond, firstResponseDelayMs);
+            } else {
+                respond();
+            }
+        });
+    });
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    return {
+        url: `http://127.0.0.1:${address.port}/v1`,
+        calls,
+        close: () => new Promise((resolve) => server.close(resolve))
+    };
+}
+
 test('Agent prompts inject runtime_environment from the active platform adapter', async () => {
     const cases = [
         {
@@ -794,7 +847,10 @@ test('Persona hands one exact request to the system TaskAgent and renders its co
         assert.equal(result.body.taskResult?.schema, 'ailis.task_result.v1');
         assert.equal(taskCalls.length, 1);
         assert.equal(taskCalls[0].agent.task, '核对官方资料并只给出类名。');
-        assert.equal(taskCalls[0].context.originalUserGoal, '核对官方资料并只给出类名。');
+        assert.equal(taskCalls[0].context.originalUserGoal, undefined);
+        assert.equal(taskCalls[0].context.currentTaskRequest, '核对官方资料并只给出类名。');
+        assert.ok(taskCalls[0].context.taskAgentThreadId);
+        assert.ok(taskCalls[0].context.taskAgentTurnId);
         assert.equal(taskCalls[0].context.desktopRealEval, true);
         assert.equal(taskCalls[0].context.benchmarkName, 'Apple ToolSandbox');
         assert.equal(taskCalls[0].context.benchmarkScenario, 'toolsandbox-scenario-1');
@@ -1266,6 +1322,143 @@ test('AILIS Agent run can be interrupted while preserving transcript data', asyn
     } finally {
         await gateway.stop().catch(() => {});
         await llmServer.close().catch(() => {});
+    }
+});
+
+test('active Turn steer is appended before a TaskAgent final can commit', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-turn-steer-test-'));
+    const llmServer = await createSteerAwareChatCompletionsServer(300);
+    const gateway = new AILISGateway({
+        port: 0,
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit')
+    });
+    const runId = 'active-turn-steer-run';
+    const sessionId = 'active-turn-steer-session';
+
+    try {
+        const status = await gateway.start();
+        const runPromise = runAgent(status.url, {
+            runId,
+            sessionId,
+            message: '先回答旧请求',
+            agentLoop: 'llm',
+            llmSettings: {
+                provider: 'openai-compatible',
+                baseUrl: llmServer.url,
+                apiKey: 'test-key',
+                model: 'mock-turn-steer',
+                timeoutMs: 10000
+            },
+            context: {
+                sessionId,
+                agentRole: 'task_agent',
+                taskAgentThreadId: 'thread-steer-test',
+                taskAgentTurnId: 'turn-steer-test',
+                currentTaskRequest: '先回答旧请求'
+            }
+        });
+        const reachedFirstDecision = await waitFor(() => llmServer.calls.length === 1, {
+            timeoutMs: 2000
+        });
+        assert.equal(reachedFirstDecision, true);
+        assert.equal(gateway.ensureAgentRunner().enqueueRunInput({
+            runId,
+            sessionId,
+            message: '补充要求：按新条件回答'
+        }), true);
+
+        const result = await runPromise;
+        assert.equal(result.body.status, 'completed');
+        assert.equal(result.body.message, '补充要求：按新条件回答');
+        assert.equal(result.body.displayText, '已按补充要求完成');
+        assert.equal(llmServer.calls.length, 2);
+        const secondInput = JSON.stringify(llmServer.calls[1].payload.messages);
+        assert.match(secondInput, /先回答旧请求/);
+        assert.match(secondInput, /补充要求：按新条件回答/);
+        assert.match(secondInput, /task_agent_session_state/);
+    } finally {
+        await gateway.stop().catch(() => {});
+        await llmServer.close().catch(() => {});
+        await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
+});
+
+test('model-authored task_goal persists through the real Gateway into the next Session Turn', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-task-goal-integration-'));
+    const llmServer = await createScriptedChatCompletionsServer(({ decisionCount }) => {
+        if (decisionCount === 1) {
+            return {
+                mode: 'task',
+                intent: 'long_horizon_goal',
+                action: 'tool',
+                tool_call: {
+                    tool: 'task_goal',
+                    title: '建立跨 Turn 目标',
+                    args: {
+                        action: 'set',
+                        objective: '完成木偶攻略'
+                    }
+                }
+            };
+        }
+        return {
+            mode: 'task',
+            intent: 'long_horizon_goal',
+            action: 'final',
+            final_answer: decisionCount === 2 ? '目标已建立' : '继续完成木偶攻略'
+        };
+    });
+    const gateway = new AILISGateway({
+        port: 0,
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit')
+    });
+    const llmSettings = {
+        provider: 'openai-compatible',
+        baseUrl: llmServer.url,
+        apiKey: 'test-key',
+        model: 'mock-task-goal',
+        timeoutMs: 10000
+    };
+
+    try {
+        await gateway.start();
+        const first = await gateway.taskAgentHarness.handoff({}, {
+            currentUserMessage: '建立一个长期木偶攻略目标',
+            sessionId: 'task-goal-integration-session',
+            runId: 'task-goal-parent-1',
+            llmSettings
+        });
+        const second = await gateway.taskAgentHarness.handoff({}, {
+            currentUserMessage: '继续',
+            sessionId: 'task-goal-integration-session',
+            runId: 'task-goal-parent-2',
+            llmSettings
+        });
+
+        assert.equal(first.original_goal, '完成木偶攻略');
+        assert.equal(second.original_goal, '完成木偶攻略');
+        assert.equal(first.thread_id, second.thread_id);
+        assert.notEqual(first.turn_id, second.turn_id);
+        assert.equal(llmServer.calls.length, 3);
+        const firstToolNames = (llmServer.calls[0].payload.tools || [])
+            .map((tool) => tool.function?.name || tool.name);
+        assert.ok(firstToolNames.includes('task_goal'));
+        assert.equal(
+            parseModelContextPayload(llmServer.calls[1]).task_state.active_goal.objective,
+            '完成木偶攻略'
+        );
+        assert.equal(
+            parseModelContextPayload(llmServer.calls[2]).task_state.active_goal.objective,
+            '完成木偶攻略'
+        );
+    } finally {
+        await gateway.stop().catch(() => {});
+        await llmServer.close().catch(() => {});
+        await fs.rm(workspaceRoot, { recursive: true, force: true });
     }
 });
 
@@ -2005,7 +2198,7 @@ test('Agentic Executor consumes native provider tool-call decisions and keeps ru
     }
 });
 
-test('Agentic Executor Loop asks confirmation, resumes, observes, and keeps calling tools until final', async () => {
+test('TaskAgent unrestricted mode executes mutating tools without approval or confirmation', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-llm-planner-'));
     const llmServer = await createMockChatCompletionsServer();
     const llmSettings = {
@@ -2031,64 +2224,32 @@ test('Agentic Executor Loop asks confirmation, resumes, observes, and keeps call
             message: '帮我创建一个 planner-output 目录，并写入 README.txt',
             agentLoop: 'llm',
             llmSettings,
-            context: { workspace: workspaceRoot, agentRole: 'task_agent' }
+            context: {
+                workspace: workspaceRoot,
+                agentRole: 'task_agent',
+                taskAgentPermissionMode: 'unrestricted'
+            }
         });
 
-        assert.equal(first.body.ok, false, JSON.stringify({
+        assert.equal(first.body.ok, true, JSON.stringify({
             status: first.body.status,
             steps: first.body.steps,
             calls: llmServer.calls.map((call) => (call.payload.tools || []).map((tool) => tool.function?.name || tool.name))
         }));
-        assert.equal(first.body.status, 'needs_approval');
+        assert.equal(first.body.status, 'completed');
         assert.equal(first.body.planner, 'llm-agentic-executor');
-        assert.equal(first.body.confirmationRequired, true);
-        assert.equal(first.body.approvalType, 'agent_tool_call');
-        assert.ok(first.body.approvalId);
-        assert.doesNotMatch(first.body.displayText, /Agentic Executor Loop|确认编号/);
-        assert.equal(first.body.plan.length, 1);
-        assert.equal(first.body.plan[0].tool, 'exec');
-        assert.match(first.body.plan[0].args.command, /New-Item.*planner-output/);
-        await assert.rejects(
-            () => fs.readFile(path.join(workspaceRoot, 'planner-output', 'README.txt'), 'utf8'),
-            /ENOENT/
-        );
-
-        const classifyConfirm = await runAgent(baseUrl, {
-            sessionId: 'llm-planner-test',
-            message: '确认执行',
-            classifyOnly: true,
-            context: { workspace: workspaceRoot, agentRole: 'task_agent' }
-        });
-        assert.equal(classifyConfirm.body.intent, 'agent_action_confirmation');
-        assert.equal(classifyConfirm.body.mode, 'task');
-        assert.equal(classifyConfirm.body.approvalId, first.body.approvalId);
-
-        const directWithoutApproval = await runAgent(baseUrl, {
-            sessionId: 'llm-planner-test',
-            message: 'api direct confirm',
-            confirmApprovalId: first.body.approvalId,
-            llmSettings,
-            context: { workspace: workspaceRoot, agentRole: 'task_agent' }
-        });
-        assert.equal(directWithoutApproval.body.status, 'needs_approval');
-
-        const confirmed = await runAgent(baseUrl, {
-            sessionId: 'llm-planner-test',
-            message: '确认执行',
-            llmSettings,
-            context: { workspace: workspaceRoot, agentRole: 'task_agent' }
-        });
-        assert.equal(confirmed.body.ok, true, confirmed.body.displayText);
-        assert.equal(confirmed.body.status, 'completed');
-        assert.equal(confirmed.body.planner, 'llm-agentic-executor');
-        assert.equal(confirmed.body.steps.length, 2);
-        assert.ok(confirmed.body.events.length >= 6);
-        assert.match(confirmed.body.displayText, /\*\*(Agentic Executor|任务执行流程) 已完成\*\*/);
-        assert.match(confirmed.body.displayText, /README\.txt 已创建/);
+        assert.equal(first.body.confirmationRequired, undefined);
+        assert.equal(first.body.approvalId, undefined);
+        assert.equal(first.body.steps.length, 2);
+        assert.ok(first.body.events.length >= 6);
+        assert.match(first.body.displayText, /\*\*(Agentic Executor|任务执行流程) 已完成\*\*/);
+        assert.match(first.body.displayText, /README\.txt 已创建/);
 
         const text = await fs.readFile(path.join(workspaceRoot, 'planner-output', 'README.txt'), 'utf8');
         assert.match(text, /Agentic Executor OK/);
         assert.equal(llmServer.calls.filter((call) => /Responses-Compatible Tool Runtime/.test(call.system)).length, 3);
+        assert.match(llmServer.calls[0].system, /unrestricted direct tool execution/);
+        assert.doesNotMatch(llmServer.calls[0].system, /escalated to the user for approval/);
         assert.match(llmServer.calls[0].system, /You are a coding agent running in AILIS/);
         assert.match(llmServer.calls[0].system, /same outer AILIS conversation/);
         assert.match(llmServer.calls[0].system, /OpenAI Responses object model/);

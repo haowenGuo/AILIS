@@ -450,6 +450,16 @@ test('execution-evidence completion gate prevents false completed results', () =
     });
     assert.equal(discoveryOnly.status, 'incomplete');
 
+    const goalStateOnly = assessAgentCompletionEvidence({
+        agentRuntimeRole: 'task_agent',
+        requireExecutionEvidence: true,
+        stepResults: [{
+            tool: 'task_goal',
+            response: { ok: true, status: 'completed' }
+        }]
+    });
+    assert.equal(goalStateOnly.status, 'incomplete');
+
     const executed = assessAgentCompletionEvidence({
         agentRuntimeRole: 'task_agent',
         requireExecutionEvidence: true,
@@ -730,20 +740,43 @@ test('TaskAgent handoff keeps raw web_search candidates separate from opened sou
     assert.doesNotMatch(handoff.userVisibleSummary, /example\.test\/unrelated/);
 });
 
-test('TaskAgent context keeps the original user goal separate from delegated work', () => {
+test('TaskAgent context makes the current Turn authoritative and exposes only an explicit active Goal', () => {
     const prompt = buildLlmAgentDirectToolPrompt({
         message: 'Read every spreadsheet row and report the raw table.',
         originalUserGoal: 'Calculate total food sales excluding drinks and return USD with two decimals.',
         contextMode: 'task_agent',
         taskAgentInheritanceMode: 'checkpoint',
-        taskState: { schema: 'ailis.agent_task_state.v1' },
+        taskState: {
+            schema: 'ailis.agent_task_state.v1',
+            thread_id: 'thread-release-audit',
+            turn_id: 'turn-release-audit',
+            active_goal: {
+                goal_id: 'goal-release-audit',
+                objective: 'Finish the release audit.'
+            }
+        },
         tools: []
     });
     const serialized = JSON.stringify(prompt.contextPackage);
-    assert.match(serialized, /Calculate total food sales excluding drinks/);
+    assert.doesNotMatch(serialized, /Calculate total food sales excluding drinks/);
+    assert.match(serialized, /Finish the release audit/);
     assert.match(serialized, /Read every spreadsheet row and report the raw table/);
-    assert.match(serialized, /original_user_goal/);
+    assert.doesNotMatch(serialized, /original_user_goal/);
     assert.match(serialized, /delegated_task/);
+
+    const standaloneA6 = buildLlmAgentDirectToolPrompt({
+        message: 'Read every spreadsheet row and report the raw table.',
+        originalUserGoal: 'Calculate total food sales excluding drinks and return USD with two decimals.',
+        contextMode: 'task_agent',
+        taskAgentInheritanceMode: 'clean',
+        taskState: { schema: 'ailis.agent_task_state.v1' },
+        tools: []
+    });
+    const standaloneSerialized = JSON.stringify(standaloneA6.contextPackage);
+    assert.match(standaloneSerialized, /Calculate total food sales excluding drinks/);
+    assert.match(standaloneSerialized, /original_user_goal/);
+    assert.match(standaloneA6.instructions, /durable thread context for continuity/);
+    assert.doesNotMatch(standaloneA6.instructions, /Use task_goal/);
 });
 
 test('TaskAgent loads structured MCP follow-up action specs on the next turn', () => {
@@ -838,6 +871,7 @@ test('AILIS parent Persona prompt stays conversational while TaskAgent keeps exe
     assert.match(personaPrompt.instructions, /authoritative host clock/);
     assert.match(personaPrompt.instructions, /call handoff_task exactly once/);
     assert.match(personaPrompt.instructions, /Harness transfers the immutable current user request/);
+    assert.match(personaPrompt.instructions, /continues, corrects, or redirects previously executed work/);
     assert.match(personaPrompt.instructions, /TaskResult packet is the factual boundary/);
     assert.match(personaPrompt.instructions, /You do not create, wait for, resume, list, or close agents/);
     assert.doesNotMatch(personaPrompt.instructions, /arithmetic, multi-step logic, optimization/);

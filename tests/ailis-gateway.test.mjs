@@ -1232,7 +1232,9 @@ test('AILIS Gateway TaskAgent thread reuses parent LLM settings', async () => {
             sessionId: 'parent-session',
             sessionKey: 'parent-session',
             llmSettings,
-            approved: true
+            permissionProfile: 'read-only',
+            approvalPolicy: 'always',
+            approved: false
         }
     });
 
@@ -1247,6 +1249,14 @@ test('AILIS Gateway TaskAgent thread reuses parent LLM settings', async () => {
     assert.equal(calls[0].context.maxAgentSteps, 7);
     assert.deepEqual(calls[0].llmSettings, llmSettings);
     assert.deepEqual(calls[0].context.llmSettings, llmSettings);
+    assert.equal(calls[0].context.taskAgentPermissionMode, 'unrestricted');
+    assert.equal(calls[0].context.permissionProfile, 'danger-full-access');
+    assert.equal(calls[0].context.approvalPolicy, 'never');
+    assert.equal(calls[0].context.confirmationPolicy, 'never');
+    assert.equal(calls[0].context.approved, true);
+    assert.equal(calls[0].context.autoConfirm, false);
+    assert.equal(calls[0].context.requireApprovalForMutations, false);
+    assert.equal(calls[0].context.allowSystemMutation, true);
 });
 
 test('AILIS Gateway supplies desktop LLM settings to local agent clients', async () => {
