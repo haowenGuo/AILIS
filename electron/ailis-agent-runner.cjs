@@ -1952,17 +1952,6 @@ function buildAgentTaskState({
     return {
         schema: 'ailis.agent_task_state.v1',
         runId,
-        ...(normalizeText(requestContext.taskAgentThreadId || requestContext.task_agent_thread_id)
-            ? {
-                  thread_id: normalizeText(
-                      requestContext.taskAgentThreadId || requestContext.task_agent_thread_id
-                  ),
-                  turn_id: normalizeText(
-                      requestContext.taskAgentTurnId || requestContext.task_agent_turn_id
-                  ),
-                  active_goal: requestContext.taskAgentActiveGoal || requestContext.task_agent_active_goal || null
-              }
-            : {}),
         currentPlan: currentPlan || null,
         constraints: Array.isArray(constraints) ? constraints.slice(-24) : [],
         unresolvedFields: collectAgentUnresolvedFields(stepResults, latestDecision),
@@ -4981,7 +4970,7 @@ function stepNeedsConfirmation(step) {
 }
 
 function isConfirmationMessage(message) {
-    return /^(确认|确认执行|批准|同意|允许|可以|可以看|看吧|你看吧|看一下|可以执行|开始执行|执行吧|approve|approved|confirm|yes|y|ok)$/i.test(compactText(message));
+    return /^(确认|确认执行|批准|同意|允许|可以|可以看|看吧|你看吧|看一下|可以执行|开始执行|执行吧|继续|approve|approved|confirm|yes|y|ok)$/i.test(compactText(message));
 }
 
 function isCancelMessage(message) {
@@ -8946,9 +8935,7 @@ function buildLlmAgentDirectToolPrompt({
         'The model-visible protocol follows the OpenAI Responses object model used by modern coding agents. The request has instructions, input, tools, tool_choice, parallel_tool_calls, and reasoning controls. The input is an ordered list of ResponseItem objects such as message, function_call, function_call_output, tool_search_call, and tool_search_output.',
         responseProtocolInstruction,
         'Use native tool calls when work requires files, artifacts, search, shell/code, APIs, or verification. Otherwise answer with an assistant message.',
-        'The persistent TaskAgent Thread contains many Turns. task_state.current_request / task_state.delegated_task is authoritative for this Turn. task_state.active_goal is an optional durable long-horizon objective; when it is null, no Goal exists. task_state.original_user_goal is a compatibility field for the current objective, never the identity of the Thread.',
-        'The model is the semantic decision-maker for Goal lifecycle. Use task_goal only when the user explicitly establishes, replaces, completes, blocks, resumes, or clears a durable objective. Ordinary requests and related follow-ups are Turns and must not create or replace a Goal. For a mutation while a Goal exists, pass its exact goalId as expected_goal_id. If the intent to replace a Goal is ambiguous, ask the user instead of changing it.',
-        'A checkpoint is a history recovery base, not a Goal and not task authority. Treat older requests, tool outputs, and unresolved fields as historical context unless the current request or active_goal makes them relevant.',
+        'task_state.current_request / task_state.delegated_task is the current user request for this turn. task_state.original_user_goal is durable thread context for continuity, not a reason to ignore the current request; when the user continues, corrects, or redirects the task, preserve useful prior artifacts/checkpoints while making the current request the active objective.',
         'Tool call outputs from previous turns appear as function_call_output/tool_search_output items paired with their call_id. Use recent, relevant outputs as observations, but do not keep rereading stale exploration results once you have enough information to code, verify, or answer.',
         'Answer directly once the available evidence supports a reasonable answer. Use another tool only when you can name the specific missing field or uncertainty that blocks the answer. Do not repeat an identical tool call unless the new arguments materially change the observation.',
         'A rejected native tool call is an authoritative schema observation. Never repeat the same rejected tool name and arguments. Read the required fields and visible types from the rejection, then either submit materially corrected complete arguments or call a prerequisite/alternate tool that can produce the missing values.',
@@ -10576,7 +10563,6 @@ class AILISAgentRunner {
     buildPendingAgentApproval({
         message,
         sessionId,
-        requestContext = {},
         settings,
         decision,
         step,
@@ -10601,15 +10587,6 @@ class AILISAgentRunner {
         return {
             approvalId: randomUUID(),
             sessionId,
-            threadId: normalizeText(
-                requestContext.taskAgentThreadId || requestContext.task_agent_thread_id,
-                sessionId
-            ),
-            turnId: normalizeText(
-                requestContext.taskAgentTurnId || requestContext.task_agent_turn_id,
-                requestContext.runId
-            ),
-            itemId: normalizeText(nextStep?.id),
             message,
             createdAt: Date.now(),
             expiresAt: Date.now() + DEFAULT_PENDING_PLAN_TTL_MS,
@@ -12403,7 +12380,6 @@ class AILISAgentRunner {
                         this.buildPendingAgentApproval({
                             message,
                             sessionId,
-                            requestContext,
                             settings,
                             decision,
                             step: parallelCandidateSteps[0],
@@ -12820,7 +12796,6 @@ class AILISAgentRunner {
                     this.buildPendingAgentApproval({
                         message,
                         sessionId,
-                        requestContext,
                         settings,
                         decision,
                         step,
@@ -12943,7 +12918,6 @@ class AILISAgentRunner {
                 );
                 const handoffOk = stepResult.response?.ok === true &&
                     (packetStatus.startsWith('completed') || ['success', 'succeeded'].includes(packetStatus));
-                const handoffNeedsApproval = packetStatus === 'needs_approval' && Boolean(packet?.approval_id);
                 return await finishRuntimeRun(attachPersonaSurface({
                     ok: handoffOk,
                     runId,
@@ -12953,9 +12927,6 @@ class AILISAgentRunner {
                     planner: 'llm-agentic-executor',
                     intent: 'persona_task_handoff_result',
                     executionRequired: true,
-                    confirmationRequired: handoffNeedsApproval,
-                    approvalType: handoffNeedsApproval ? 'agent_tool_call' : '',
-                    approvalId: handoffNeedsApproval ? packet.approval_id : '',
                     durationMs: Date.now() - startedAt,
                     message,
                     displayText,
@@ -12980,31 +12951,22 @@ class AILISAgentRunner {
                         sourceRefs: packet.source_refs || [],
                         collectedData: [],
                         traceRef: packet.trace_ref,
-                        approvalId: packet.approval_id || '',
                         resume: { checkpointAvailable: packet.checkpoint_available === true }
                     } : null
                 }, renderPersonaSurfaceGateway({
                     text: displayText,
-                    task_state: handoffOk ? 'completed' : handoffNeedsApproval ? 'needs_approval' : 'blocked',
-                    approval_state: handoffNeedsApproval ? 'required' : 'none',
+                    task_state: handoffOk ? 'completed' : 'blocked',
+                    approval_state: 'none',
                     evidence_state: Array.isArray(packet?.evidence_refs) && packet.evidence_refs.length ? 'present' : 'unknown',
                     error_code: packetStatus,
                     ok: handoffOk,
                     text_is_persona_safe: true,
                     source: 'persona_task_handoff_result',
                     emotion_hint: handoffOk ? 'happy' : 'concerned',
-                    bubble_text: handoffOk
-                        ? '我把任务结果整理好了。'
-                        : handoffNeedsApproval
-                            ? '这一步需要你确认。'
-                            : '我把任务现场保留下来了。'
+                    bubble_text: handoffOk ? '我把任务结果整理好了。' : '我把任务现场保留下来了。'
                 })), {
                     source: 'persona_task_handoff_result',
-                    nextAction: handoffOk
-                        ? ''
-                        : handoffNeedsApproval
-                            ? '确认当前工具动作'
-                            : '从 TaskAgent 的检查点继续执行'
+                    nextAction: handoffOk ? '' : '从 TaskAgent 的检查点继续执行'
                 });
             }
 
@@ -13018,7 +12980,6 @@ class AILISAgentRunner {
                     this.buildPendingAgentApproval({
                         message,
                         sessionId,
-                        requestContext,
                         settings,
                         decision,
                         step,
@@ -13296,17 +13257,12 @@ class AILISAgentRunner {
         );
         const confirmedByMessage = isConfirmationMessage(message);
         const cancelPendingByMessage = isCancelMessage(message);
-        const explicitPendingAgentApproval = explicitApprovalId
-            ? this.pendingAgentApprovals.get(explicitApprovalId)
-            : null;
-        const implicitSessionApproval = !explicitApprovalId && (confirmedByMessage || cancelPendingByMessage)
-            ? this.findPendingAgentApprovalForSession(sessionId)
-            : null;
-        const pendingAgentApproval = explicitPendingAgentApproval?.sessionId === sessionId
-            ? explicitPendingAgentApproval
-            : implicitSessionApproval?.threadId === sessionId
-                ? implicitSessionApproval
-                : null;
+        const pendingAgentApproval =
+            explicitApprovalId
+                ? this.pendingAgentApprovals.get(explicitApprovalId)
+                : confirmedByMessage || cancelPendingByMessage
+                    ? this.findPendingAgentApprovalForSession(sessionId)
+                    : null;
         const pendingPlan =
             explicitPlanId
                 ? this.pendingPlans.get(explicitPlanId)

@@ -1172,44 +1172,6 @@ const TOOL_CONTRACTS = Object.freeze({
             additionalProperties: false
         })
     }),
-    task_goal: Object.freeze({
-        id: 'task_goal',
-        version: CONTRACT_VERSION,
-        mutates: true,
-        risk: 'low',
-        approval: 'never',
-        experience: TOOL_EXPERIENCE.task_handoff,
-        returns: STANDARD_TOOL_RETURN_SCHEMA,
-        errors: defaultErrors([
-            'thread_not_found',
-            'stale_turn',
-            'goal_conflict',
-            'goal_already_active',
-            'goal_not_found',
-            'invalid_goal'
-        ]),
-        schema: makeObjectSchema({
-            required: ['action'],
-            properties: {
-                action: stringSchema({
-                    enum: ['get', 'create', 'replace', 'complete', 'block', 'resume', 'clear']
-                }),
-                objective: stringSchema({ minLength: 1 }),
-                expected_goal_id: stringSchema({ minLength: 1 }),
-                reason: stringSchema()
-            },
-            additionalProperties: false
-        }),
-        customValidate(args = {}) {
-            if (
-                ['create', 'replace'].includes(args.action) &&
-                !(typeof args.objective === 'string' && args.objective.trim())
-            ) {
-                return ['objective is required for create and replace'];
-            }
-            return [];
-        }
-    }),
     task_results: Object.freeze({
         id: 'task_results',
         version: CONTRACT_VERSION,

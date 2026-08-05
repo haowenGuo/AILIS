@@ -49,7 +49,6 @@ const {
 const EMAIL_TOOL_ID = 'email';
 const TASK_RESULTS_TOOL_ID = 'task_results';
 const HANDOFF_TASK_TOOL_ID = 'handoff_task';
-const TASK_GOAL_TOOL_ID = 'task_goal';
 const WEB_RUN_TOOL_ID = 'web_run';
 const WEB_SEARCH_TOOL_ID = 'web_search';
 const { FILE_MANAGER_TOOL_ID, executeFileManagerTool } = require('./ailis-file-manager-tool.cjs');
@@ -137,8 +136,7 @@ const CODEX_STYLE_DIRECT_LOCAL_TOOL_IDS = new Set([
     'exec',
     'apply_patch',
     WEB_RUN_TOOL_ID,
-    HANDOFF_TASK_TOOL_ID,
-    TASK_GOAL_TOOL_ID
+    HANDOFF_TASK_TOOL_ID
 ]);
 // Extended tools stay out of the first-turn tool surface, but remain discoverable
 // through tool_search. The Registry is the source of truth for their full specs.
@@ -241,16 +239,6 @@ const AILIS_LOCAL_TOOL_DEFINITIONS = Object.freeze([
         label: 'handoff_task',
         description: 'Transfer the immutable current user request to the session\'s persistent system TaskAgent and wait for one compact TaskResult packet. No task text or lifecycle command is accepted from the model; the Harness owns thread identity, checkpointing, execution, and result transport.',
         sectionId: 'persona-runtime',
-        route: 'ailis-system-task-agent',
-        materialized: true,
-        status: 'available',
-        needsApprovalActions: Object.freeze([])
-    }),
-    Object.freeze({
-        id: TASK_GOAL_TOOL_ID,
-        label: 'task_goal',
-        description: 'Manage the optional long-horizon Goal for the current persistent TaskAgent Thread. The model is the semantic decision-maker: use this only when the user explicitly establishes, replaces, completes, blocks, resumes, or clears a durable objective. Ordinary requests and follow-ups are Turns and must not create or replace a Goal. Mutations are bound to the active Turn and use expected_goal_id to prevent stale writes.',
-        sectionId: 'task-agent-runtime',
         route: 'ailis-system-task-agent',
         materialized: true,
         status: 'available',
@@ -4869,15 +4857,6 @@ class AILISGateway extends EventEmitter {
 
     async executeGatewayLocalTool(toolId, args, context = {}) {
         const workspaceDir = context.workspaceDir || this.resolveWorkspace(context.workspace, context);
-        if (toolId === TASK_GOAL_TOOL_ID) {
-            const goalResult = this.taskAgentHarness.applyGoalAction(args, context);
-            return {
-                content: [{ type: 'text', text: JSON.stringify(goalResult, null, 2) }],
-                isError: goalResult.ok === false,
-                details: goalResult,
-                structuredContent: goalResult
-            };
-        }
         if (toolId === HANDOFF_TASK_TOOL_ID) {
             const taskResult = await this.taskAgentHarness.handoff(args, {
                 ...context,

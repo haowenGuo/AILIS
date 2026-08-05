@@ -208,11 +208,6 @@ test('ToolContext keeps approval and sandbox policy in one reusable object', () 
         evaluationTaskId: 'gaia-task-1',
         evaluationName: 'gaia_desktop_real',
         memoryPolicy: 'disabled',
-        parentSessionId: 'persona_session_1',
-        taskAgentThreadId: 'thread_long_horizon',
-        taskAgentTurnId: 'turn_active',
-        taskAgentActiveGoal: { goalId: 'goal_1', objective: 'ship the release', status: 'active' },
-        confirmApprovalId: 'approval_turn_item_1',
         timeoutMs: 1234
     }, 'F:/fallback', 'session_1');
 
@@ -246,11 +241,6 @@ test('ToolContext keeps approval and sandbox policy in one reusable object', () 
     assert.equal(context.evaluationTaskId, 'gaia-task-1');
     assert.equal(context.evaluationName, 'gaia_desktop_real');
     assert.equal(context.memoryPolicy, 'disabled');
-    assert.equal(context.parentSessionId, 'persona_session_1');
-    assert.equal(context.taskAgentThreadId, 'thread_long_horizon');
-    assert.equal(context.taskAgentTurnId, 'turn_active');
-    assert.equal(context.taskAgentActiveGoal.goalId, 'goal_1');
-    assert.equal(context.confirmApprovalId, 'approval_turn_item_1');
     assert.equal(context.timeoutMs, 1234);
 });
 
