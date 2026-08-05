@@ -1,0 +1,1678 @@
+{
+  "schema": "ailis.character-package.v2",
+  "id": "ailis-default",
+  "displayName": "AILIS 白毛女仆",
+  "adapter": "vrm",
+  "model": "../../AILIS.vrm",
+  "scale": 1,
+  "positionX": 0,
+  "positionY": 0,
+  "positionZ": 0,
+  "art": {
+    "id": "ailis-soft-toon",
+    "cameraFieldOfView": 34,
+    "cameraHeight": 1.28,
+    "cameraDistance": 2,
+    "cameraLookAtHeight": 1.15,
+    "framingMode": "full-body",
+    "framingPadding": 1.1,
+    "framingVerticalBias": 0.01,
+    "ambientIntensity": 0.76,
+    "keyLightIntensity": 0.9,
+    "fillLightIntensity": 0.38,
+    "rimLightIntensity": 0.5
+  },
+  "rig": {
+    "enabled": true,
+    "footGroundingWeight": 0.42,
+    "handIkWeight": 0,
+    "gazeWeight": 0.16,
+    "groundOffset": 0,
+    "gazeDistance": 2.4,
+    "headAngleLimit": 26
+  },
+  "vrmExpressionProfile": {
+    "schema": "ailis.vrm-expression-profile.v1",
+    "standard": "VRM-1.0",
+    "bindings": [
+      {
+        "id": "neutral",
+        "preset": "neutral",
+        "driver": "vrm-expression",
+        "weight": 0.72,
+        "transitionSeconds": 0.16,
+        "priority": 0
+      },
+      {
+        "id": "happy",
+        "preset": "happy",
+        "driver": "vrm-expression",
+        "weight": 1,
+        "transitionSeconds": 0.16,
+        "priority": 2
+      },
+      {
+        "id": "angry",
+        "preset": "angry",
+        "driver": "vrm-expression",
+        "weight": 1,
+        "transitionSeconds": 0.16,
+        "priority": 2
+      },
+      {
+        "id": "sad",
+        "preset": "sad",
+        "driver": "vrm-expression",
+        "weight": 1,
+        "transitionSeconds": 0.16,
+        "priority": 2
+      },
+      {
+        "id": "relaxed",
+        "preset": "relaxed",
+        "driver": "vrm-expression",
+        "weight": 1,
+        "transitionSeconds": 0.16,
+        "priority": 2
+      },
+      {
+        "id": "surprised",
+        "preset": "surprised",
+        "driver": "vrm-expression",
+        "weight": 1,
+        "transitionSeconds": 0.16,
+        "priority": 2
+      }
+    ]
+  },
+  "motions": [
+    {
+      "id": "idle",
+      "displayName": "AILIS 原生待机",
+      "sourceId": "local-vrma-motionpack-named",
+      "license": "local-runtime-asset",
+      "file": "../../Motions/Idle.vrma",
+      "performanceLayer": "base",
+      "loop": true,
+      "fallbackDurationSeconds": 6,
+      "transitionSeconds": 0.2,
+      "priority": 5,
+      "compatibility": "approved",
+      "gestureIntents": [
+        "idle",
+        "attentive"
+      ],
+      "taskStates": [
+        "idle",
+        "listening"
+      ],
+      "emotions": [],
+      "styleTags": [
+        "ailis",
+        "idle",
+        "baseline"
+      ],
+      "acceptanceGrade": "A",
+      "acceptanceNote": ""
+    },
+    {
+      "id": "idle-soft",
+      "displayName": "AILIS 柔和待机",
+      "sourceId": "local-vrma-motionpack-named",
+      "license": "local-runtime-asset",
+      "file": "../../Motions/Idle1.vrma",
+      "performanceLayer": "base",
+      "loop": true,
+      "fallbackDurationSeconds": 6,
+      "transitionSeconds": 0.2,
+      "priority": 3,
+      "compatibility": "approved",
+      "gestureIntents": [
+        "idle"
+      ],
+      "taskStates": [
+        "idle"
+      ],
+      "emotions": [
+        "relaxed"
+      ],
+      "styleTags": [
+        "ailis",
+        "idle",
+        "soft"
+      ],
+      "acceptanceGrade": "A",
+      "acceptanceNote": ""
+    },
+    {
+      "id": "idle-alt",
+      "displayName": "AILIS 备用待机",
+      "sourceId": "local-vrma-motionpack-named",
+      "license": "local-runtime-asset",
+      "file": "../../Motions/Idle2.vrma",
+      "performanceLayer": "base",
+      "loop": true,
+      "fallbackDurationSeconds": 6,
+      "transitionSeconds": 0.2,
+      "priority": 2,
+      "compatibility": "approved",
+      "gestureIntents": [
+        "idle"
+      ],
+      "taskStates": [
+        "idle"
+      ],
+      "emotions": [],
+      "styleTags": [
+        "ailis",
+        "idle",
+        "alternate"
+      ],
+      "acceptanceGrade": "A",
+      "acceptanceNote": ""
+    },
+    {
+      "id": "native-thinking",
+      "displayName": "AILIS 原生思考",
+      "sourceId": "local-vrma-motionpack-named",
+      "license": "local-runtime-asset",
+      "file": "../../Motions/Thinking.vrma",
+      "performanceLayer": "base",
+      "loop": true,
+      "fallbackDurationSeconds": 4,
+      "transitionSeconds": 0.18,
+      "priority": 0,
+      "compatibility": "approved",
+      "fallbackMotionId": "idle",
+      "collisionZones": [
+        "hands",
+        "face",
+        "hair"
+      ],
+      "gestureIntents": [
+        "thinking",
+        "planning"
+      ],
+      "taskStates": [
+        "thinking"
+      ],
+      "emotions": [
+        "thinking"
+      ],
+      "styleTags": [
+        "candidate",
+        "thinking"
+      ],
+      "acceptanceGrade": "A",
+      "acceptanceNote": ""
+    },
+    {
+      "id": "native-look-around",
+      "displayName": "AILIS 四处观察",
+      "sourceId": "local-vrma-motionpack-named",
+      "license": "local-runtime-asset",
+      "file": "../../Motions/LookAround.vrma",
+      "performanceLayer": "base",
+      "loop": true,
+      "fallbackDurationSeconds": 4,
+      "transitionSeconds": 0.18,
+      "priority": 0,
+      "compatibility": "approved",
+      "fallbackMotionId": "idle",
+      "collisionZones": [
+        "hair",
+        "shoulders"
+      ],
+      "gestureIntents": [
+        "observe",
+        "curious"
+      ],
+      "taskStates": [],
+      "emotions": [
+        "curious"
+      ],
+      "styleTags": [
+        "candidate",
+        "observe"
+      ],
+      "acceptanceGrade": "A",
+      "acceptanceNote": ""
+    },
+    {
+      "id": "native-goodbye",
+      "displayName": "AILIS 告别",
+      "sourceId": "local-vrma-motionpack-named",
+      "license": "local-runtime-asset",
+      "file": "../../Motions/Goodbye.vrma",
+      "performanceLayer": "gesture",
+      "loop": false,
+      "fallbackDurationSeconds": 3,
+      "transitionSeconds": 0.16,
+      "priority": 0,
+      "compatibility": "approved",
+      "fallbackMotionId": "idle",
+      "collisionZones": [
+        "arms",
+        "sleeves",
+        "hair"
+      ],
+      "gestureIntents": [
+        "farewell",
+        "greeting"
+      ],
+      "taskStates": [],
+      "emotions": [
+        "happy"
+      ],
+      "styleTags": [
+        "candidate",
+        "social"
+      ],
+      "acceptanceGrade": "A",
+      "acceptanceNote": ""
+    },
+    {
+      "id": "native-clapping",
+      "displayName": "AILIS 鼓掌",
+      "sourceId": "local-vrma-motionpack-named",
+      "license": "local-runtime-asset",
+      "file": "../../Motions/Clapping.vrma",
+      "performanceLayer": "gesture",
+      "loop": false,
+      "fallbackDurationSeconds": 3,
+      "transitionSeconds": 0.16,
+      "priority": 0,
+      "compatibility": "approved",
+      "fallbackMotionId": "idle",
+      "collisionZones": [
+        "hands",
+        "sleeves",
+        "chest"
+      ],
+      "gestureIntents": [
+        "celebrate",
+        "success",
+        "applaud"
+      ],
+      "taskStates": [
+        "happy_success"
+      ],
+      "emotions": [
+        "happy"
+      ],
+      "styleTags": [
+        "candidate",
+        "celebrate"
+      ],
+      "acceptanceGrade": "A",
+      "acceptanceNote": ""
+    },
+    {
+      "id": "native-jump",
+      "displayName": "AILIS 跳跃",
+      "sourceId": "local-vrma-motionpack-named",
+      "license": "local-runtime-asset",
+      "file": "../../Motions/Jump.vrma",
+      "performanceLayer": "action",
+      "loop": false,
+      "fallbackDurationSeconds": 2,
+      "transitionSeconds": 0.12,
+      "priority": 0,
+      "compatibility": "approved",
+      "fallbackMotionId": "idle",
+      "collisionZones": [
+        "hair",
+        "skirt",
+        "screen-bounds"
+      ],
+      "gestureIntents": [
+        "jump",
+        "celebrate"
+      ],
+      "taskStates": [],
+      "emotions": [
+        "surprised"
+      ],
+      "styleTags": [
+        "candidate",
+        "energetic"
+      ],
+      "acceptanceGrade": "A",
+      "acceptanceNote": ""
+    },
+    {
+      "id": "native-blush",
+      "displayName": "AILIS 害羞动作",
+      "sourceId": "local-vrma-motionpack-named",
+      "license": "local-runtime-asset",
+      "file": "../../Motions/Blush.vrma",
+      "performanceLayer": "gesture",
+      "loop": false,
+      "fallbackDurationSeconds": 3,
+      "transitionSeconds": 0.16,
+      "priority": 0,
+      "compatibility": "approved",
+      "fallbackMotionId": "idle",
+      "collisionZones": [
+        "hands",
+        "face",
+        "hair"
+      ],
+      "gestureIntents": [
+        "shy",
+        "affectionate"
+      ],
+      "taskStates": [],
+      "emotions": [
+        "shy"
+      ],
+      "styleTags": [
+        "candidate",
+        "cute"
+      ],
+      "acceptanceGrade": "A",
+      "acceptanceNote": ""
+    },
+    {
+      "id": "native-angry",
+      "displayName": "AILIS 生气动作",
+      "sourceId": "local-vrma-motionpack-named",
+      "license": "local-runtime-asset",
+      "file": "../../Motions/Angry.vrma",
+      "performanceLayer": "gesture",
+      "loop": false,
+      "fallbackDurationSeconds": 3,
+      "transitionSeconds": 0.16,
+      "priority": 0,
+      "compatibility": "approved",
+      "fallbackMotionId": "idle",
+      "collisionZones": [
+        "arms",
+        "sleeves"
+      ],
+      "gestureIntents": [
+        "angry",
+        "disagree"
+      ],
+      "taskStates": [],
+      "emotions": [
+        "angry"
+      ],
+      "styleTags": [
+        "candidate",
+        "emotion"
+      ],
+      "acceptanceGrade": "A",
+      "acceptanceNote": ""
+    },
+    {
+      "id": "native-sad",
+      "displayName": "AILIS 失落动作",
+      "sourceId": "local-vrma-motionpack-named",
+      "license": "local-runtime-asset",
+      "file": "../../Motions/Sad.vrma",
+      "performanceLayer": "gesture",
+      "loop": false,
+      "fallbackDurationSeconds": 3,
+      "transitionSeconds": 0.16,
+      "priority": 0,
+      "compatibility": "approved",
+      "fallbackMotionId": "idle",
+      "collisionZones": [
+        "hands",
+        "face",
+        "hair"
+      ],
+      "gestureIntents": [
+        "sad",
+        "apologize",
+        "comfort"
+      ],
+      "taskStates": [
+        "comforting"
+      ],
+      "emotions": [
+        "sad"
+      ],
+      "styleTags": [
+        "candidate",
+        "emotion"
+      ],
+      "acceptanceGrade": "A",
+      "acceptanceNote": ""
+    },
+    {
+      "id": "native-sleepy",
+      "displayName": "AILIS 困倦动作",
+      "sourceId": "local-vrma-motionpack-named",
+      "license": "local-runtime-asset",
+      "file": "../../Motions/Sleepy.vrma",
+      "performanceLayer": "base",
+      "loop": true,
+      "fallbackDurationSeconds": 4,
+      "transitionSeconds": 0.18,
+      "priority": 0,
+      "compatibility": "approved",
+      "fallbackMotionId": "idle",
+      "collisionZones": [
+        "hands",
+        "face",
+        "hair"
+      ],
+      "gestureIntents": [
+        "sleepy",
+        "tired"
+      ],
+      "taskStates": [],
+      "emotions": [
+        "tired"
+      ],
+      "styleTags": [
+        "candidate",
+        "soft"
+      ],
+      "acceptanceGrade": "A",
+      "acceptanceNote": ""
+    },
+    {
+      "id": "native-surprised",
+      "displayName": "AILIS 惊讶动作",
+      "sourceId": "local-vrma-motionpack-named",
+      "license": "local-runtime-asset",
+      "file": "../../Motions/Surprised.vrma",
+      "performanceLayer": "gesture",
+      "loop": false,
+      "fallbackDurationSeconds": 2,
+      "transitionSeconds": 0.12,
+      "priority": 0,
+      "compatibility": "approved",
+      "fallbackMotionId": "idle",
+      "collisionZones": [
+        "arms",
+        "hair",
+        "skirt"
+      ],
+      "gestureIntents": [
+        "surprised"
+      ],
+      "taskStates": [],
+      "emotions": [
+        "surprised"
+      ],
+      "styleTags": [
+        "candidate",
+        "emotion"
+      ],
+      "acceptanceGrade": "A",
+      "acceptanceNote": ""
+    },
+    {
+      "id": "sachi-idle",
+      "displayName": "Sachi 日系待机",
+      "sourceId": "sachi-vrma-1",
+      "license": "CC0-1.0",
+      "file": "../../Motions/Sachi/AnimeIdle.vrma",
+      "performanceLayer": "base",
+      "loop": true,
+      "fallbackDurationSeconds": 15,
+      "transitionSeconds": 0.18,
+      "priority": 0,
+      "compatibility": "approved",
+      "fallbackMotionId": "idle",
+      "collisionZones": [
+        "hair",
+        "skirt"
+      ],
+      "gestureIntents": [
+        "idle",
+        "attentive"
+      ],
+      "taskStates": [
+        "idle",
+        "listening"
+      ],
+      "emotions": [],
+      "styleTags": [
+        "candidate",
+        "anime",
+        "feminine"
+      ],
+      "acceptanceGrade": "A",
+      "acceptanceNote": ""
+    },
+    {
+      "id": "sachi-wave",
+      "displayName": "Sachi 日系挥手",
+      "sourceId": "sachi-vrma-1",
+      "license": "CC0-1.0",
+      "file": "../../Motions/Sachi/AnimeWave.vrma",
+      "performanceLayer": "gesture",
+      "loop": false,
+      "fallbackDurationSeconds": 11,
+      "transitionSeconds": 0.16,
+      "priority": 0,
+      "compatibility": "approved",
+      "fallbackMotionId": "idle",
+      "collisionZones": [
+        "arms",
+        "sleeves",
+        "hair"
+      ],
+      "gestureIntents": [
+        "greeting",
+        "welcome",
+        "farewell"
+      ],
+      "taskStates": [],
+      "emotions": [
+        "happy"
+      ],
+      "styleTags": [
+        "candidate",
+        "anime",
+        "feminine"
+      ],
+      "acceptanceGrade": "A",
+      "acceptanceNote": ""
+    },
+    {
+      "id": "sachi-thinking",
+      "displayName": "Sachi 日系思考",
+      "sourceId": "sachi-vrma-1",
+      "license": "CC0-1.0",
+      "file": "../../Motions/Sachi/AnimeListening.vrma",
+      "performanceLayer": "base",
+      "loop": true,
+      "fallbackDurationSeconds": 22,
+      "transitionSeconds": 0.18,
+      "priority": 0,
+      "compatibility": "approved",
+      "fallbackMotionId": "idle",
+      "collisionZones": [
+        "hands",
+        "hair"
+      ],
+      "gestureIntents": [
+        "thinking",
+        "planning"
+      ],
+      "taskStates": [
+        "thinking"
+      ],
+      "emotions": [
+        "relaxed"
+      ],
+      "styleTags": [
+        "candidate",
+        "anime",
+        "feminine"
+      ],
+      "acceptanceGrade": "A",
+      "acceptanceNote": ""
+    },
+    {
+      "id": "sachi-listening",
+      "displayName": "Sachi 日系倾听",
+      "sourceId": "sachi-vrma-1",
+      "license": "CC0-1.0",
+      "file": "../../Motions/Sachi/AnimeListening.vrma",
+      "performanceLayer": "base",
+      "loop": true,
+      "fallbackDurationSeconds": 22,
+      "transitionSeconds": 0.18,
+      "priority": 0,
+      "compatibility": "approved",
+      "fallbackMotionId": "idle",
+      "collisionZones": [
+        "hands",
+        "hair"
+      ],
+      "gestureIntents": [
+        "listening",
+        "working"
+      ],
+      "taskStates": [
+        "listening",
+        "working"
+      ],
+      "emotions": [
+        "relaxed"
+      ],
+      "styleTags": [
+        "candidate",
+        "anime",
+        "feminine"
+      ],
+      "acceptanceGrade": "A",
+      "acceptanceNote": ""
+    },
+    {
+      "id": "sachi-happy",
+      "displayName": "Sachi 开心回应",
+      "sourceId": "sachi-vrma-1",
+      "license": "CC0-1.0",
+      "file": "../../Motions/Sachi/AnimeHappy.vrma",
+      "performanceLayer": "action",
+      "loop": false,
+      "fallbackDurationSeconds": 13,
+      "transitionSeconds": 0.16,
+      "priority": 0,
+      "compatibility": "approved",
+      "fallbackMotionId": "idle",
+      "collisionZones": [
+        "arms",
+        "hair",
+        "skirt"
+      ],
+      "gestureIntents": [
+        "celebrate",
+        "success",
+        "playful"
+      ],
+      "taskStates": [
+        "happy_success"
+      ],
+      "emotions": [
+        "happy"
+      ],
+      "styleTags": [
+        "candidate",
+        "anime",
+        "feminine"
+      ],
+      "acceptanceGrade": "A",
+      "acceptanceNote": ""
+    },
+    {
+      "id": "sachi-gentle",
+      "displayName": "Sachi 温柔回应",
+      "sourceId": "sachi-vrma-1",
+      "license": "CC0-1.0",
+      "file": "../../Motions/Sachi/AnimeGentle.vrma",
+      "performanceLayer": "gesture",
+      "loop": false,
+      "fallbackDurationSeconds": 15,
+      "transitionSeconds": 0.16,
+      "priority": 0,
+      "compatibility": "approved",
+      "fallbackMotionId": "idle",
+      "collisionZones": [
+        "arms",
+        "hair"
+      ],
+      "gestureIntents": [
+        "shy",
+        "affectionate",
+        "thank"
+      ],
+      "taskStates": [],
+      "emotions": [
+        "shy"
+      ],
+      "styleTags": [
+        "candidate",
+        "anime",
+        "feminine"
+      ],
+      "acceptanceGrade": "A",
+      "acceptanceNote": ""
+    },
+    {
+      "id": "sachi-confident",
+      "displayName": "Sachi 俏皮自信",
+      "sourceId": "sachi-vrma-1",
+      "license": "CC0-1.0",
+      "file": "../../Motions/Sachi/AnimeConfident.vrma",
+      "performanceLayer": "gesture",
+      "loop": false,
+      "fallbackDurationSeconds": 19,
+      "transitionSeconds": 0.16,
+      "priority": 0,
+      "compatibility": "approved",
+      "fallbackMotionId": "idle",
+      "collisionZones": [
+        "arms",
+        "hair",
+        "hips"
+      ],
+      "gestureIntents": [
+        "pose",
+        "approval",
+        "agree"
+      ],
+      "taskStates": [],
+      "emotions": [
+        "happy"
+      ],
+      "styleTags": [
+        "candidate",
+        "anime",
+        "feminine"
+      ],
+      "acceptanceGrade": "A",
+      "acceptanceNote": ""
+    },
+    {
+      "id": "cc0-idle",
+      "displayName": "CC0 通用待机",
+      "sourceId": "quaternius-ual1",
+      "license": "CC0-1.0",
+      "bakedClipResource": "AILIS/FreeMotions/cc0-idle",
+      "performanceLayer": "base",
+      "loop": true,
+      "fallbackDurationSeconds": 2.5,
+      "transitionSeconds": 0.2,
+      "priority": 0,
+      "compatibility": "approved",
+      "fallbackMotionId": "idle",
+      "collisionZones": [],
+      "gestureIntents": [
+        "idle"
+      ],
+      "taskStates": [
+        "idle"
+      ],
+      "emotions": [],
+      "styleTags": [
+        "candidate",
+        "foundation"
+      ],
+      "acceptanceGrade": "A",
+      "acceptanceNote": ""
+    },
+    {
+      "id": "cc0-talking",
+      "displayName": "CC0 通用说话",
+      "sourceId": "quaternius-ual1",
+      "license": "CC0-1.0",
+      "bakedClipResource": "AILIS/FreeMotions/cc0-talking",
+      "performanceLayer": "base",
+      "loop": true,
+      "fallbackDurationSeconds": 2.94,
+      "transitionSeconds": 0.2,
+      "priority": 0,
+      "compatibility": "approved",
+      "fallbackMotionId": "idle",
+      "collisionZones": [
+        "hands",
+        "sleeves",
+        "chest"
+      ],
+      "gestureIntents": [
+        "speaking",
+        "explain",
+        "reporting"
+      ],
+      "taskStates": [
+        "speaking"
+      ],
+      "emotions": [],
+      "styleTags": [
+        "candidate",
+        "foundation"
+      ],
+      "acceptanceGrade": "A",
+      "acceptanceNote": ""
+    },
+    {
+      "id": "cc0-interact",
+      "displayName": "CC0 通用交互",
+      "sourceId": "quaternius-ual1",
+      "license": "CC0-1.0",
+      "bakedClipResource": "AILIS/FreeMotions/cc0-interact",
+      "performanceLayer": "gesture",
+      "loop": false,
+      "fallbackDurationSeconds": 2,
+      "transitionSeconds": 0.16,
+      "priority": 0,
+      "compatibility": "approved",
+      "fallbackMotionId": "idle",
+      "collisionZones": [
+        "hands",
+        "sleeves",
+        "torso"
+      ],
+      "gestureIntents": [
+        "working",
+        "offer",
+        "present"
+      ],
+      "taskStates": [],
+      "emotions": [],
+      "styleTags": [
+        "candidate",
+        "interaction"
+      ],
+      "acceptanceGrade": "A",
+      "acceptanceNote": ""
+    },
+    {
+      "id": "cc0-dance",
+      "displayName": "CC0 通用舞蹈",
+      "sourceId": "quaternius-ual1",
+      "license": "CC0-1.0",
+      "bakedClipResource": "AILIS/FreeMotions/cc0-dance",
+      "performanceLayer": "action",
+      "loop": true,
+      "fallbackDurationSeconds": 1,
+      "transitionSeconds": 0.16,
+      "priority": 0,
+      "compatibility": "rejected",
+      "fallbackMotionId": "idle",
+      "collisionZones": [
+        "arms",
+        "hair",
+        "skirt"
+      ],
+      "gestureIntents": [
+        "dance",
+        "celebrate"
+      ],
+      "taskStates": [],
+      "emotions": [
+        "happy"
+      ],
+      "styleTags": [
+        "candidate",
+        "performance"
+      ],
+      "acceptanceGrade": "C",
+      "acceptanceNote": "Three-phase review shows severe arm deformation/extension."
+    },
+    {
+      "id": "cc0-formal-walk",
+      "displayName": "CC0 正式步行",
+      "sourceId": "quaternius-ual1",
+      "license": "CC0-1.0",
+      "bakedClipResource": "AILIS/FreeMotions/cc0-formal-walk",
+      "performanceLayer": "base",
+      "loop": true,
+      "fallbackDurationSeconds": 1.34,
+      "transitionSeconds": 0.18,
+      "priority": 0,
+      "compatibility": "rejected",
+      "fallbackMotionId": "idle",
+      "collisionZones": [
+        "hair",
+        "skirt",
+        "screen-bounds"
+      ],
+      "gestureIntents": [
+        "present",
+        "observe"
+      ],
+      "taskStates": [],
+      "emotions": [],
+      "styleTags": [
+        "candidate",
+        "locomotion"
+      ],
+      "acceptanceGrade": "C",
+      "acceptanceNote": "Three-phase review shows severe arm deformation and the motion does not read as a safe walk."
+    },
+    {
+      "id": "cc0-pickup-table",
+      "displayName": "CC0 桌面取物",
+      "sourceId": "quaternius-ual1",
+      "license": "CC0-1.0",
+      "bakedClipResource": "AILIS/FreeMotions/cc0-pickup-table",
+      "performanceLayer": "gesture",
+      "loop": false,
+      "fallbackDurationSeconds": 0.84,
+      "transitionSeconds": 0.14,
+      "priority": 0,
+      "compatibility": "review",
+      "fallbackMotionId": "idle",
+      "collisionZones": [
+        "hands",
+        "sleeves",
+        "torso"
+      ],
+      "gestureIntents": [
+        "offer",
+        "present"
+      ],
+      "taskStates": [],
+      "emotions": [],
+      "styleTags": [
+        "candidate",
+        "interaction",
+        "prop"
+      ],
+      "acceptanceGrade": "B",
+      "acceptanceNote": "Prop-dependent reach; keep manual until a table/prop track is bound."
+    },
+    {
+      "id": "ual2-idle-fold-arms",
+      "displayName": "UAL2 抱臂待机",
+      "sourceId": "quaternius-ual2-review",
+      "license": "CC0-1.0",
+      "bakedClipResource": "AILIS/FreeMotions/ual2-idle-fold-arms",
+      "performanceLayer": "base",
+      "loop": true,
+      "fallbackDurationSeconds": 2.5,
+      "transitionSeconds": 0.2,
+      "priority": 0,
+      "compatibility": "approved",
+      "fallbackMotionId": "idle",
+      "collisionZones": [
+        "arms",
+        "sleeves",
+        "chest",
+        "hair"
+      ],
+      "gestureIntents": [
+        "idle",
+        "waiting_approval"
+      ],
+      "taskStates": [],
+      "emotions": [],
+      "styleTags": [
+        "candidate",
+        "idle",
+        "reserved"
+      ],
+      "acceptanceGrade": "A",
+      "acceptanceNote": ""
+    },
+    {
+      "id": "ual2-idle-neutral",
+      "displayName": "UAL2 自然待机",
+      "sourceId": "quaternius-ual2-review",
+      "license": "CC0-1.0",
+      "bakedClipResource": "AILIS/FreeMotions/ual2-idle-neutral",
+      "performanceLayer": "base",
+      "loop": true,
+      "fallbackDurationSeconds": 2.5,
+      "transitionSeconds": 0.2,
+      "priority": 0,
+      "compatibility": "approved",
+      "fallbackMotionId": "idle",
+      "collisionZones": [
+        "hands",
+        "sleeves",
+        "hair",
+        "skirt"
+      ],
+      "gestureIntents": [
+        "idle",
+        "attentive"
+      ],
+      "taskStates": [],
+      "emotions": [],
+      "styleTags": [
+        "candidate",
+        "idle",
+        "neutral"
+      ],
+      "acceptanceGrade": "A",
+      "acceptanceNote": ""
+    },
+    {
+      "id": "ual2-talking-phone",
+      "displayName": "UAL2 通话说话",
+      "sourceId": "quaternius-ual2-review",
+      "license": "CC0-1.0",
+      "bakedClipResource": "AILIS/FreeMotions/ual2-talking-phone",
+      "performanceLayer": "base",
+      "loop": true,
+      "fallbackDurationSeconds": 2.94,
+      "transitionSeconds": 0.18,
+      "priority": 0,
+      "compatibility": "review",
+      "fallbackMotionId": "idle",
+      "collisionZones": [
+        "hands",
+        "arms",
+        "sleeves",
+        "face",
+        "hair"
+      ],
+      "gestureIntents": [
+        "speaking",
+        "explain"
+      ],
+      "taskStates": [],
+      "emotions": [],
+      "styleTags": [
+        "candidate",
+        "talking",
+        "prop"
+      ],
+      "acceptanceGrade": "B",
+      "acceptanceNote": "Phone prop is absent, so the performance reads ambiguously."
+    },
+    {
+      "id": "ual2-yes",
+      "displayName": "UAL2 确认动作",
+      "sourceId": "quaternius-ual2-review",
+      "license": "CC0-1.0",
+      "bakedClipResource": "AILIS/FreeMotions/ual2-yes",
+      "performanceLayer": "gesture",
+      "loop": false,
+      "fallbackDurationSeconds": 2.5,
+      "transitionSeconds": 0.16,
+      "priority": 0,
+      "compatibility": "approved",
+      "fallbackMotionId": "idle",
+      "collisionZones": [
+        "head",
+        "hair",
+        "arms"
+      ],
+      "gestureIntents": [
+        "acknowledge",
+        "agree",
+        "approval"
+      ],
+      "taskStates": [],
+      "emotions": [],
+      "styleTags": [
+        "candidate",
+        "acknowledge"
+      ],
+      "acceptanceGrade": "A",
+      "acceptanceNote": ""
+    },
+    {
+      "id": "ual2-consume",
+      "displayName": "UAL2 饮用动作",
+      "sourceId": "quaternius-ual2-review",
+      "license": "CC0-1.0",
+      "bakedClipResource": "AILIS/FreeMotions/ual2-consume",
+      "performanceLayer": "gesture",
+      "loop": false,
+      "fallbackDurationSeconds": 1.34,
+      "transitionSeconds": 0.16,
+      "priority": 0,
+      "compatibility": "review",
+      "fallbackMotionId": "idle",
+      "collisionZones": [
+        "hands",
+        "arms",
+        "sleeves",
+        "face",
+        "hair",
+        "chest"
+      ],
+      "gestureIntents": [
+        "consume",
+        "daily"
+      ],
+      "taskStates": [],
+      "emotions": [],
+      "styleTags": [
+        "candidate",
+        "prop",
+        "daily"
+      ],
+      "acceptanceGrade": "B",
+      "acceptanceNote": "Consume prop is absent and hand-to-face clearance needs character-specific polish."
+    },
+    {
+      "id": "vroid-show-full-body",
+      "displayName": "VRoid 全身展示",
+      "sourceId": "vroid-official-7-vrma",
+      "license": "VRoid Project free license",
+      "file": "../../Motions/VRMA_01.vrma",
+      "performanceLayer": "gesture",
+      "loop": false,
+      "fallbackDurationSeconds": 5,
+      "transitionSeconds": 0.16,
+      "priority": 0,
+      "compatibility": "approved",
+      "fallbackMotionId": "idle",
+      "collisionZones": [
+        "arms",
+        "hair",
+        "skirt"
+      ],
+      "gestureIntents": [
+        "present",
+        "pose"
+      ],
+      "taskStates": [],
+      "emotions": [],
+      "styleTags": [
+        "candidate",
+        "showcase"
+      ],
+      "acceptanceGrade": "A",
+      "acceptanceNote": ""
+    },
+    {
+      "id": "vroid-greeting",
+      "displayName": "VRoid 问候",
+      "sourceId": "vroid-official-7-vrma",
+      "license": "VRoid Project free license",
+      "file": "../../Motions/VRMA_02.vrma",
+      "performanceLayer": "gesture",
+      "loop": false,
+      "fallbackDurationSeconds": 4,
+      "transitionSeconds": 0.16,
+      "priority": 0,
+      "compatibility": "approved",
+      "fallbackMotionId": "idle",
+      "collisionZones": [
+        "arms",
+        "sleeves",
+        "hair"
+      ],
+      "gestureIntents": [
+        "greeting",
+        "welcome"
+      ],
+      "taskStates": [],
+      "emotions": [
+        "happy"
+      ],
+      "styleTags": [
+        "candidate",
+        "social"
+      ],
+      "acceptanceGrade": "A",
+      "acceptanceNote": ""
+    },
+    {
+      "id": "vroid-peace",
+      "displayName": "VRoid 剪刀手",
+      "sourceId": "vroid-official-7-vrma",
+      "license": "VRoid Project free license",
+      "file": "../../Motions/VRMA_03.vrma",
+      "performanceLayer": "gesture",
+      "loop": false,
+      "fallbackDurationSeconds": 5,
+      "transitionSeconds": 0.16,
+      "priority": 0,
+      "compatibility": "approved",
+      "fallbackMotionId": "idle",
+      "collisionZones": [
+        "hands",
+        "face",
+        "hair"
+      ],
+      "gestureIntents": [
+        "pose",
+        "playful"
+      ],
+      "taskStates": [],
+      "emotions": [
+        "happy"
+      ],
+      "styleTags": [
+        "candidate",
+        "cute"
+      ],
+      "acceptanceGrade": "A",
+      "acceptanceNote": ""
+    },
+    {
+      "id": "vroid-shoot",
+      "displayName": "VRoid 射击姿势",
+      "sourceId": "vroid-official-7-vrma",
+      "license": "VRoid Project free license",
+      "file": "../../Motions/VRMA_04.vrma",
+      "performanceLayer": "action",
+      "loop": false,
+      "fallbackDurationSeconds": 4,
+      "transitionSeconds": 0.14,
+      "priority": 0,
+      "compatibility": "approved",
+      "fallbackMotionId": "idle",
+      "collisionZones": [
+        "arms",
+        "sleeves",
+        "chest"
+      ],
+      "gestureIntents": [
+        "pose",
+        "point"
+      ],
+      "taskStates": [],
+      "emotions": [],
+      "styleTags": [
+        "candidate",
+        "comic"
+      ],
+      "acceptanceGrade": "A",
+      "acceptanceNote": ""
+    },
+    {
+      "id": "vroid-spin",
+      "displayName": "VRoid 旋转展示",
+      "sourceId": "vroid-official-7-vrma",
+      "license": "VRoid Project free license",
+      "file": "../../Motions/VRMA_05.vrma",
+      "performanceLayer": "action",
+      "loop": false,
+      "fallbackDurationSeconds": 4,
+      "transitionSeconds": 0.14,
+      "priority": 0,
+      "compatibility": "review",
+      "fallbackMotionId": "idle",
+      "collisionZones": [
+        "hair",
+        "skirt",
+        "screen-bounds"
+      ],
+      "gestureIntents": [
+        "spin",
+        "showcase"
+      ],
+      "taskStates": [],
+      "emotions": [
+        "happy"
+      ],
+      "styleTags": [
+        "candidate",
+        "showcase"
+      ],
+      "acceptanceGrade": "B",
+      "acceptanceNote": "Full-body rotation changes facing and should only run from an explicit performance request."
+    },
+    {
+      "id": "vroid-model-pose",
+      "displayName": "VRoid 模特姿势",
+      "sourceId": "vroid-official-7-vrma",
+      "license": "VRoid Project free license",
+      "file": "../../Motions/VRMA_06.vrma",
+      "performanceLayer": "gesture",
+      "loop": false,
+      "fallbackDurationSeconds": 4,
+      "transitionSeconds": 0.16,
+      "priority": 0,
+      "compatibility": "approved",
+      "fallbackMotionId": "idle",
+      "collisionZones": [
+        "arms",
+        "hair",
+        "hips"
+      ],
+      "gestureIntents": [
+        "pose",
+        "showcase"
+      ],
+      "taskStates": [],
+      "emotions": [],
+      "styleTags": [
+        "candidate",
+        "showcase"
+      ],
+      "acceptanceGrade": "A",
+      "acceptanceNote": ""
+    },
+    {
+      "id": "vroid-squat",
+      "displayName": "VRoid 蹲姿",
+      "sourceId": "vroid-official-7-vrma",
+      "license": "VRoid Project free license",
+      "file": "../../Motions/VRMA_07.vrma",
+      "performanceLayer": "action",
+      "loop": false,
+      "fallbackDurationSeconds": 4,
+      "transitionSeconds": 0.14,
+      "priority": 0,
+      "compatibility": "review",
+      "fallbackMotionId": "idle",
+      "collisionZones": [
+        "hair",
+        "skirt",
+        "legs"
+      ],
+      "gestureIntents": [
+        "squat",
+        "pose"
+      ],
+      "taskStates": [],
+      "emotions": [],
+      "styleTags": [
+        "candidate",
+        "high-clipping-risk"
+      ],
+      "acceptanceGrade": "B",
+      "acceptanceNote": "Low pose has skirt and ground-contact risk."
+    },
+    {
+      "id": "legacy-dance-17",
+      "displayName": "旧动作 舞蹈 17",
+      "sourceId": "local-vrma-motionpack-named",
+      "license": "local-runtime-asset",
+      "file": "../../Motions/VRMA_17.vrma",
+      "performanceLayer": "action",
+      "loop": false,
+      "fallbackDurationSeconds": 8,
+      "transitionSeconds": 0.14,
+      "priority": 0,
+      "compatibility": "review",
+      "fallbackMotionId": "idle",
+      "collisionZones": [
+        "arms",
+        "hair",
+        "skirt",
+        "screen-bounds"
+      ],
+      "gestureIntents": [
+        "dance"
+      ],
+      "taskStates": [],
+      "emotions": [
+        "happy"
+      ],
+      "styleTags": [
+        "candidate",
+        "dance",
+        "high-clipping-risk"
+      ],
+      "acceptanceGrade": "B",
+      "acceptanceNote": "High-amplitude dance is mechanically valid but needs dedicated camera and cloth review."
+    },
+    {
+      "id": "legacy-dance-25",
+      "displayName": "旧动作 舞蹈 25",
+      "sourceId": "local-vrma-motionpack-named",
+      "license": "local-runtime-asset",
+      "file": "../../Motions/VRMA_25.vrma",
+      "performanceLayer": "action",
+      "loop": false,
+      "fallbackDurationSeconds": 8,
+      "transitionSeconds": 0.14,
+      "priority": 0,
+      "compatibility": "review",
+      "fallbackMotionId": "idle",
+      "collisionZones": [
+        "arms",
+        "hair",
+        "skirt",
+        "screen-bounds"
+      ],
+      "gestureIntents": [
+        "dance"
+      ],
+      "taskStates": [],
+      "emotions": [
+        "happy"
+      ],
+      "styleTags": [
+        "candidate",
+        "dance",
+        "high-clipping-risk"
+      ],
+      "acceptanceGrade": "B",
+      "acceptanceNote": "Large yaw rotation and framing changes are unsuitable for automatic desktop playback."
+    },
+    {
+      "id": "fumi-motion-pose",
+      "displayName": "fumi 动作姿势",
+      "sourceId": "fumi2kick-vrma-motion-pack",
+      "license": "CC0-1.0",
+      "file": "../../Motions/Fumi/001_motion_pose.vrma",
+      "performanceLayer": "gesture",
+      "loop": false,
+      "fallbackDurationSeconds": 4,
+      "transitionSeconds": 0.16,
+      "priority": 0,
+      "compatibility": "approved",
+      "fallbackMotionId": "idle",
+      "collisionZones": [
+        "arms",
+        "hair",
+        "skirt"
+      ],
+      "gestureIntents": [
+        "pose"
+      ],
+      "taskStates": [],
+      "emotions": [],
+      "styleTags": [
+        "candidate",
+        "pose"
+      ],
+      "acceptanceGrade": "A",
+      "acceptanceNote": ""
+    },
+    {
+      "id": "fumi-dogeza",
+      "displayName": "fumi 跪拜动作",
+      "sourceId": "fumi2kick-vrma-motion-pack",
+      "license": "CC0-1.0",
+      "file": "../../Motions/Fumi/002_dogeza.vrma",
+      "performanceLayer": "action",
+      "loop": false,
+      "fallbackDurationSeconds": 5,
+      "transitionSeconds": 0.14,
+      "priority": 0,
+      "compatibility": "review",
+      "fallbackMotionId": "idle",
+      "collisionZones": [
+        "hair",
+        "skirt",
+        "legs",
+        "ground"
+      ],
+      "gestureIntents": [
+        "apologize"
+      ],
+      "taskStates": [],
+      "emotions": [
+        "sad"
+      ],
+      "styleTags": [
+        "candidate",
+        "gag",
+        "high-clipping-risk"
+      ],
+      "acceptanceGrade": "B",
+      "acceptanceNote": "Ground pose is valid but has hair, skirt, knee, and floor-contact risk."
+    },
+    {
+      "id": "fumi-humidai",
+      "displayName": "fumi 踩踏动作",
+      "sourceId": "fumi2kick-vrma-motion-pack",
+      "license": "CC0-1.0",
+      "file": "../../Motions/Fumi/003_humidai.vrma",
+      "performanceLayer": "action",
+      "loop": false,
+      "fallbackDurationSeconds": 4,
+      "transitionSeconds": 0.14,
+      "priority": 0,
+      "compatibility": "review",
+      "fallbackMotionId": "idle",
+      "collisionZones": [
+        "hair",
+        "skirt",
+        "legs",
+        "ground"
+      ],
+      "gestureIntents": [
+        "pose"
+      ],
+      "taskStates": [],
+      "emotions": [
+        "angry"
+      ],
+      "styleTags": [
+        "candidate",
+        "gag",
+        "high-clipping-risk"
+      ],
+      "acceptanceGrade": "B",
+      "acceptanceNote": "High leg lift exposes skirt and leg clipping risk."
+    },
+    {
+      "id": "fumi-hello",
+      "displayName": "fumi 问候",
+      "sourceId": "fumi2kick-vrma-motion-pack",
+      "license": "CC0-1.0",
+      "file": "../../Motions/Fumi/004_hello_1.vrma",
+      "performanceLayer": "gesture",
+      "loop": false,
+      "fallbackDurationSeconds": 4,
+      "transitionSeconds": 0.16,
+      "priority": 0,
+      "compatibility": "approved",
+      "fallbackMotionId": "idle",
+      "collisionZones": [
+        "arms",
+        "sleeves",
+        "hair"
+      ],
+      "gestureIntents": [
+        "greeting",
+        "welcome"
+      ],
+      "taskStates": [],
+      "emotions": [
+        "happy"
+      ],
+      "styleTags": [
+        "candidate",
+        "social"
+      ],
+      "acceptanceGrade": "A",
+      "acceptanceNote": ""
+    },
+    {
+      "id": "fumi-smartphone",
+      "displayName": "fumi 手机动作",
+      "sourceId": "fumi2kick-vrma-motion-pack",
+      "license": "CC0-1.0",
+      "file": "../../Motions/Fumi/005_smartphone.vrma",
+      "performanceLayer": "gesture",
+      "loop": false,
+      "fallbackDurationSeconds": 5,
+      "transitionSeconds": 0.16,
+      "priority": 0,
+      "compatibility": "review",
+      "fallbackMotionId": "idle",
+      "collisionZones": [
+        "hands",
+        "arms",
+        "face",
+        "hair"
+      ],
+      "gestureIntents": [
+        "speaking",
+        "daily"
+      ],
+      "taskStates": [],
+      "emotions": [],
+      "styleTags": [
+        "candidate",
+        "prop"
+      ],
+      "acceptanceGrade": "B",
+      "acceptanceNote": "Smartphone prop is absent."
+    },
+    {
+      "id": "fumi-drink-water",
+      "displayName": "fumi 喝水动作",
+      "sourceId": "fumi2kick-vrma-motion-pack",
+      "license": "CC0-1.0",
+      "file": "../../Motions/Fumi/006_drinkwater.vrma",
+      "performanceLayer": "gesture",
+      "loop": false,
+      "fallbackDurationSeconds": 5,
+      "transitionSeconds": 0.16,
+      "priority": 0,
+      "compatibility": "review",
+      "fallbackMotionId": "idle",
+      "collisionZones": [
+        "hands",
+        "arms",
+        "face",
+        "hair",
+        "chest"
+      ],
+      "gestureIntents": [
+        "consume",
+        "daily"
+      ],
+      "taskStates": [],
+      "emotions": [],
+      "styleTags": [
+        "candidate",
+        "prop"
+      ],
+      "acceptanceGrade": "B",
+      "acceptanceNote": "Drink prop is absent and hand-to-mouth alignment is character-specific."
+    },
+    {
+      "id": "fumi-cheer",
+      "displayName": "fumi 加油动作",
+      "sourceId": "fumi2kick-vrma-motion-pack",
+      "license": "CC0-1.0",
+      "file": "../../Motions/Fumi/007_gekirei.vrma",
+      "performanceLayer": "gesture",
+      "loop": false,
+      "fallbackDurationSeconds": 5,
+      "transitionSeconds": 0.16,
+      "priority": 0,
+      "compatibility": "approved",
+      "fallbackMotionId": "idle",
+      "collisionZones": [
+        "arms",
+        "sleeves",
+        "hair"
+      ],
+      "gestureIntents": [
+        "cheer",
+        "encourage",
+        "celebrate"
+      ],
+      "taskStates": [],
+      "emotions": [
+        "happy"
+      ],
+      "styleTags": [
+        "candidate",
+        "energetic"
+      ],
+      "acceptanceGrade": "A",
+      "acceptanceNote": ""
+    },
+    {
+      "id": "fumi-gatan",
+      "displayName": "fumi 猛然起身",
+      "sourceId": "fumi2kick-vrma-motion-pack",
+      "license": "CC0-1.0",
+      "file": "../../Motions/Fumi/008_gatan.vrma",
+      "performanceLayer": "action",
+      "loop": false,
+      "fallbackDurationSeconds": 4,
+      "transitionSeconds": 0.14,
+      "priority": 0,
+      "compatibility": "review",
+      "fallbackMotionId": "idle",
+      "collisionZones": [
+        "hair",
+        "skirt",
+        "legs",
+        "screen-bounds"
+      ],
+      "gestureIntents": [
+        "surprised"
+      ],
+      "taskStates": [],
+      "emotions": [
+        "surprised"
+      ],
+      "styleTags": [
+        "candidate",
+        "gag",
+        "high-clipping-risk"
+      ],
+      "acceptanceGrade": "B",
+      "acceptanceNote": "Abrupt crouch/stand motion changes visible framing substantially."
+    }
+  ],
+  "acceptance": {
+    "schema": "ailis.character-acceptance-review.v1",
+    "reviewedAt": "2026-08-05",
+    "evidenceReport": "../Logs/character-acceptance/ailis-default/acceptance-report.json",
+    "gradeCounts": {
+      "A": 34,
+      "B": 12,
+      "C": 2
+    }
+  }
+}

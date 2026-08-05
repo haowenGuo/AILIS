@@ -1,0 +1,314 @@
+{
+    "schema": "ailis.runtime-motion-catalog.v1",
+    "motions": [
+        {
+            "id": "cc0-idle",
+            "displayName": "CC0 Idle",
+            "resourcePath": "AILIS/FreeMotions/cc0-idle",
+            "sourceAssetPath": "Assets/ThirdParty/Quaternius/UniversalAnimationLibrary/UAL1_Standard.fbx",
+            "sourceClipName": "Armature|Idle_Loop",
+            "sourceUrl": "https://quaternius.com/packs/universalanimationlibrary.html",
+            "license": "CC0-1.0",
+            "styleTags": [
+                "neutral",
+                "idle",
+                "full-body"
+            ],
+            "loop": true,
+            "lengthSeconds": 2.500000238418579
+        },
+        {
+            "id": "cc0-talking",
+            "displayName": "CC0 Talking Idle",
+            "resourcePath": "AILIS/FreeMotions/cc0-talking",
+            "sourceAssetPath": "Assets/ThirdParty/Quaternius/UniversalAnimationLibrary/UAL1_Standard.fbx",
+            "sourceClipName": "Armature|Idle_Talking_Loop",
+            "sourceUrl": "https://quaternius.com/packs/universalanimationlibrary.html",
+            "license": "CC0-1.0",
+            "styleTags": [
+                "talking",
+                "gesture",
+                "full-body"
+            ],
+            "loop": true,
+            "lengthSeconds": 2.933333396911621
+        },
+        {
+            "id": "cc0-interact",
+            "displayName": "CC0 Interact",
+            "resourcePath": "AILIS/FreeMotions/cc0-interact",
+            "sourceAssetPath": "Assets/ThirdParty/Quaternius/UniversalAnimationLibrary/UAL1_Standard.fbx",
+            "sourceClipName": "Armature|Interact",
+            "sourceUrl": "https://quaternius.com/packs/universalanimationlibrary.html",
+            "license": "CC0-1.0",
+            "styleTags": [
+                "interaction",
+                "gesture",
+                "full-body"
+            ],
+            "loop": false,
+            "lengthSeconds": 2.0
+        },
+        {
+            "id": "cc0-dance",
+            "displayName": "CC0 Dance",
+            "resourcePath": "AILIS/FreeMotions/cc0-dance",
+            "sourceAssetPath": "Assets/ThirdParty/Quaternius/UniversalAnimationLibrary/UAL1_Standard.fbx",
+            "sourceClipName": "Armature|Dance_Loop",
+            "sourceUrl": "https://quaternius.com/packs/universalanimationlibrary.html",
+            "license": "CC0-1.0",
+            "styleTags": [
+                "expressive",
+                "dance",
+                "full-body"
+            ],
+            "loop": true,
+            "lengthSeconds": 1.0
+        },
+        {
+            "id": "cc0-formal-walk",
+            "displayName": "CC0 Formal Walk",
+            "resourcePath": "AILIS/FreeMotions/cc0-formal-walk",
+            "sourceAssetPath": "Assets/ThirdParty/Quaternius/UniversalAnimationLibrary/UAL1_Standard.fbx",
+            "sourceClipName": "Armature|Walk_Formal_Loop",
+            "sourceUrl": "https://quaternius.com/packs/universalanimationlibrary.html",
+            "license": "CC0-1.0",
+            "styleTags": [
+                "locomotion",
+                "formal",
+                "full-body"
+            ],
+            "loop": true,
+            "lengthSeconds": 1.3333333730697632
+        },
+        {
+            "id": "cc0-pickup-table",
+            "displayName": "CC0 Pick Up From Table",
+            "resourcePath": "AILIS/FreeMotions/cc0-pickup-table",
+            "sourceAssetPath": "Assets/ThirdParty/Quaternius/UniversalAnimationLibrary/UAL1_Standard.fbx",
+            "sourceClipName": "Armature|PickUp_Table",
+            "sourceUrl": "https://quaternius.com/packs/universalanimationlibrary.html",
+            "license": "CC0-1.0",
+            "styleTags": [
+                "interaction",
+                "reach",
+                "full-body"
+            ],
+            "loop": false,
+            "lengthSeconds": 0.8333333730697632
+        },
+        {
+            "id": "ual2-idle-fold-arms",
+            "displayName": "UAL2 Fold Arms Idle",
+            "resourcePath": "AILIS/FreeMotions/ual2-idle-fold-arms",
+            "sourceAssetPath": "Assets/ThirdParty/Quaternius/UniversalAnimationLibrary2/UAL2_Standard.fbx",
+            "sourceClipName": "Armature|Idle_FoldArms_Loop",
+            "sourceUrl": "https://quaternius.com/packs/universalanimationlibrary2.html",
+            "license": "CC0-1.0",
+            "styleTags": [
+                "candidate",
+                "idle",
+                "reserved",
+                "full-body"
+            ],
+            "loop": true,
+            "lengthSeconds": 2.500000238418579
+        },
+        {
+            "id": "ual2-idle-neutral",
+            "displayName": "UAL2 Neutral Idle",
+            "resourcePath": "AILIS/FreeMotions/ual2-idle-neutral",
+            "sourceAssetPath": "Assets/ThirdParty/Quaternius/UniversalAnimationLibrary2/UAL2_Standard.fbx",
+            "sourceClipName": "Armature|Idle_No_Loop",
+            "sourceUrl": "https://quaternius.com/packs/universalanimationlibrary2.html",
+            "license": "CC0-1.0",
+            "styleTags": [
+                "candidate",
+                "idle",
+                "neutral",
+                "full-body"
+            ],
+            "loop": true,
+            "lengthSeconds": 2.500000238418579
+        },
+        {
+            "id": "ual2-talking-phone",
+            "displayName": "UAL2 Talking On Phone",
+            "resourcePath": "AILIS/FreeMotions/ual2-talking-phone",
+            "sourceAssetPath": "Assets/ThirdParty/Quaternius/UniversalAnimationLibrary2/UAL2_Standard.fbx",
+            "sourceClipName": "Armature|Idle_TalkingPhone_Loop",
+            "sourceUrl": "https://quaternius.com/packs/universalanimationlibrary2.html",
+            "license": "CC0-1.0",
+            "styleTags": [
+                "candidate",
+                "talking",
+                "prop",
+                "full-body"
+            ],
+            "loop": true,
+            "lengthSeconds": 2.933333396911621
+        },
+        {
+            "id": "ual2-yes",
+            "displayName": "UAL2 Yes",
+            "resourcePath": "AILIS/FreeMotions/ual2-yes",
+            "sourceAssetPath": "Assets/ThirdParty/Quaternius/UniversalAnimationLibrary2/UAL2_Standard.fbx",
+            "sourceClipName": "Armature|Yes",
+            "sourceUrl": "https://quaternius.com/packs/universalanimationlibrary2.html",
+            "license": "CC0-1.0",
+            "styleTags": [
+                "candidate",
+                "acknowledge",
+                "gesture",
+                "full-body"
+            ],
+            "loop": false,
+            "lengthSeconds": 2.500000238418579
+        },
+        {
+            "id": "ual2-consume",
+            "displayName": "UAL2 Consume",
+            "resourcePath": "AILIS/FreeMotions/ual2-consume",
+            "sourceAssetPath": "Assets/ThirdParty/Quaternius/UniversalAnimationLibrary2/UAL2_Standard.fbx",
+            "sourceClipName": "Armature|Consume",
+            "sourceUrl": "https://quaternius.com/packs/universalanimationlibrary2.html",
+            "license": "CC0-1.0",
+            "styleTags": [
+                "candidate",
+                "prop",
+                "daily",
+                "full-body"
+            ],
+            "loop": false,
+            "lengthSeconds": 1.3333333730697632
+        },
+        {
+            "id": "sachi-idle",
+            "displayName": "Sachi Anime Idle",
+            "resourcePath": "AILIS/Animation/VRMA/vroid-shino-cc0/idle",
+            "sourceAssetPath": "Assets/Resources/AILIS/Animation/VRMA/vroid-shino-cc0/idle.anim",
+            "sourceClipName": "AnimeIdle.vrma",
+            "sourceUrl": "https://booth.pm/en/items/6412084",
+            "license": "CC0-1.0",
+            "styleTags": [
+                "anime",
+                "feminine",
+                "idle"
+            ],
+            "loop": true,
+            "lengthSeconds": 14.958333015441895
+        },
+        {
+            "id": "sachi-wave",
+            "displayName": "Sachi Anime Wave",
+            "resourcePath": "AILIS/Animation/VRMA/vroid-shino-cc0/greeting",
+            "sourceAssetPath": "Assets/Resources/AILIS/Animation/VRMA/vroid-shino-cc0/greeting.anim",
+            "sourceClipName": "AnimeWave.vrma",
+            "sourceUrl": "https://booth.pm/en/items/6412084",
+            "license": "CC0-1.0",
+            "styleTags": [
+                "anime",
+                "feminine",
+                "greeting"
+            ],
+            "loop": false,
+            "lengthSeconds": 10.791666984558106
+        },
+        {
+            "id": "sachi-thinking",
+            "displayName": "Sachi Anime Thinking",
+            "resourcePath": "AILIS/Animation/VRMA/vroid-shino-cc0/thinking",
+            "sourceAssetPath": "Assets/Resources/AILIS/Animation/VRMA/vroid-shino-cc0/thinking.anim",
+            "sourceClipName": "AnimeListening.vrma",
+            "sourceUrl": "https://booth.pm/en/items/6412084",
+            "license": "CC0-1.0",
+            "styleTags": [
+                "anime",
+                "feminine",
+                "thinking"
+            ],
+            "loop": true,
+            "lengthSeconds": 21.625
+        },
+        {
+            "id": "sachi-listening",
+            "displayName": "Sachi Anime Listening",
+            "resourcePath": "AILIS/Animation/VRMA/vroid-shino-cc0/working",
+            "sourceAssetPath": "Assets/Resources/AILIS/Animation/VRMA/vroid-shino-cc0/working.anim",
+            "sourceClipName": "AnimeListening.vrma",
+            "sourceUrl": "https://booth.pm/en/items/6412084",
+            "license": "CC0-1.0",
+            "styleTags": [
+                "anime",
+                "feminine",
+                "listening"
+            ],
+            "loop": true,
+            "lengthSeconds": 21.625
+        },
+        {
+            "id": "sachi-happy",
+            "displayName": "Sachi Anime Happy",
+            "resourcePath": "AILIS/Animation/VRMA/vroid-shino-cc0/celebrate",
+            "sourceAssetPath": "Assets/Resources/AILIS/Animation/VRMA/vroid-shino-cc0/celebrate.anim",
+            "sourceClipName": "AnimeHappy.vrma",
+            "sourceUrl": "https://booth.pm/en/items/6412084",
+            "license": "CC0-1.0",
+            "styleTags": [
+                "anime",
+                "feminine",
+                "celebrate"
+            ],
+            "loop": false,
+            "lengthSeconds": 12.458333015441895
+        },
+        {
+            "id": "sachi-gentle",
+            "displayName": "Sachi Anime Gentle",
+            "resourcePath": "AILIS/Animation/VRMA/vroid-shino-cc0/shy",
+            "sourceAssetPath": "Assets/Resources/AILIS/Animation/VRMA/vroid-shino-cc0/shy.anim",
+            "sourceClipName": "AnimeGentle.vrma",
+            "sourceUrl": "https://booth.pm/en/items/6412084",
+            "license": "CC0-1.0",
+            "styleTags": [
+                "anime",
+                "feminine",
+                "gentle"
+            ],
+            "loop": false,
+            "lengthSeconds": 14.125
+        },
+        {
+            "id": "sachi-confident",
+            "displayName": "Sachi Anime Confident",
+            "resourcePath": "AILIS/Animation/VRMA/vroid-shino-cc0/pose",
+            "sourceAssetPath": "Assets/Resources/AILIS/Animation/VRMA/vroid-shino-cc0/pose.anim",
+            "sourceClipName": "AnimeConfident.vrma",
+            "sourceUrl": "https://booth.pm/en/items/6412084",
+            "license": "CC0-1.0",
+            "styleTags": [
+                "anime",
+                "feminine",
+                "confident"
+            ],
+            "loop": false,
+            "lengthSeconds": 18.29166603088379
+        },
+        {
+            "id": "sachi-present",
+            "displayName": "Sachi Anime Present",
+            "resourcePath": "AILIS/Animation/VRMA/vroid-shino-cc0/present",
+            "sourceAssetPath": "Assets/Resources/AILIS/Animation/VRMA/vroid-shino-cc0/present.anim",
+            "sourceClipName": "AnimePresent.vrma",
+            "sourceUrl": "https://booth.pm/en/items/6412084",
+            "license": "CC0-1.0",
+            "styleTags": [
+                "anime",
+                "feminine",
+                "presentation"
+            ],
+            "loop": false,
+            "lengthSeconds": 9.541666984558106
+        }
+    ]
+}

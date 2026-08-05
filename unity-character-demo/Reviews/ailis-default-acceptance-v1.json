@@ -1,0 +1,109 @@
+{
+  "schema": "ailis.character-acceptance-review.v1",
+  "packageId": "ailis-default",
+  "reviewedAt": "2026-08-05",
+  "evidenceReport": "../Logs/character-acceptance/ailis-default/acceptance-report.json",
+  "criteria": {
+    "A": "Three-phase render review passed; eligible for automatic scheduling.",
+    "B": "Runtime passed but prop, ground-contact, rotation, framing, or high-amplitude art risk requires manual use.",
+    "C": "Visible deformation or semantic/retarget failure; disabled from scheduling."
+  },
+  "grades": {
+    "A": [
+      "idle",
+      "idle-soft",
+      "idle-alt",
+      "native-thinking",
+      "native-look-around",
+      "native-goodbye",
+      "native-clapping",
+      "native-jump",
+      "native-blush",
+      "native-angry",
+      "native-sad",
+      "native-sleepy",
+      "native-surprised",
+      "sachi-idle",
+      "sachi-wave",
+      "sachi-thinking",
+      "sachi-listening",
+      "sachi-happy",
+      "sachi-gentle",
+      "sachi-confident",
+      "cc0-idle",
+      "cc0-talking",
+      "cc0-interact",
+      "ual2-idle-fold-arms",
+      "ual2-idle-neutral",
+      "ual2-yes",
+      "vroid-show-full-body",
+      "vroid-greeting",
+      "vroid-peace",
+      "vroid-shoot",
+      "vroid-model-pose",
+      "fumi-motion-pose",
+      "fumi-hello",
+      "fumi-cheer"
+    ],
+    "B": [
+      {
+        "id": "cc0-pickup-table",
+        "reason": "Prop-dependent reach; keep manual until a table/prop track is bound."
+      },
+      {
+        "id": "ual2-talking-phone",
+        "reason": "Phone prop is absent, so the performance reads ambiguously."
+      },
+      {
+        "id": "ual2-consume",
+        "reason": "Consume prop is absent and hand-to-face clearance needs character-specific polish."
+      },
+      {
+        "id": "vroid-spin",
+        "reason": "Full-body rotation changes facing and should only run from an explicit performance request."
+      },
+      {
+        "id": "vroid-squat",
+        "reason": "Low pose has skirt and ground-contact risk."
+      },
+      {
+        "id": "legacy-dance-17",
+        "reason": "High-amplitude dance is mechanically valid but needs dedicated camera and cloth review."
+      },
+      {
+        "id": "legacy-dance-25",
+        "reason": "Large yaw rotation and framing changes are unsuitable for automatic desktop playback."
+      },
+      {
+        "id": "fumi-dogeza",
+        "reason": "Ground pose is valid but has hair, skirt, knee, and floor-contact risk."
+      },
+      {
+        "id": "fumi-humidai",
+        "reason": "High leg lift exposes skirt and leg clipping risk."
+      },
+      {
+        "id": "fumi-smartphone",
+        "reason": "Smartphone prop is absent."
+      },
+      {
+        "id": "fumi-drink-water",
+        "reason": "Drink prop is absent and hand-to-mouth alignment is character-specific."
+      },
+      {
+        "id": "fumi-gatan",
+        "reason": "Abrupt crouch/stand motion changes visible framing substantially."
+      }
+    ],
+    "C": [
+      {
+        "id": "cc0-dance",
+        "reason": "Three-phase review shows severe arm deformation/extension."
+      },
+      {
+        "id": "cc0-formal-walk",
+        "reason": "Three-phase review shows severe arm deformation and the motion does not read as a safe walk."
+      }
+    ]
+  }
+}

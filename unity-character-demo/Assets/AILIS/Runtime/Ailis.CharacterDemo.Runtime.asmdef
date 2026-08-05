@@ -1,0 +1,27 @@
+{
+  "name": "Ailis.CharacterDemo.Runtime",
+  "rootNamespace": "Ailis.CharacterDemo",
+  "references": [
+    "ChatdollKit.Core",
+    "Kirurobo.UniWindowController",
+    "UniGLTF",
+    "UniGLTF.Utils",
+    "Unity.Animation.Rigging",
+    "Unity.RenderPipelines.Core.Runtime",
+    "Unity.RenderPipelines.Universal.Runtime",
+    "Unity.Timeline",
+    "UnityEngine.UI",
+    "uLipSync.Runtime",
+    "VRM10",
+    "VRM10.MToon10"
+  ],
+  "includePlatforms": [],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": false,
+  "precompiledReferences": [],
+  "autoReferenced": true,
+  "defineConstraints": [],
+  "versionDefines": [],
+  "noEngineReferences": false
+}

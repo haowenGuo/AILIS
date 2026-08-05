@@ -1,0 +1,23 @@
+{
+  "name": "Ailis.CharacterDemo.Editor",
+  "rootNamespace": "Ailis.CharacterDemo.Editor",
+  "references": [
+    "Ailis.CharacterDemo.Runtime",
+    "UniGLTF",
+    "UniGLTF.Utils",
+    "Unity.RenderPipelines.Core.Runtime",
+    "Unity.RenderPipelines.Universal.Runtime",
+    "VRM10"
+  ],
+  "includePlatforms": [
+    "Editor"
+  ],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": false,
+  "precompiledReferences": [],
+  "autoReferenced": true,
+  "defineConstraints": [],
+  "versionDefines": [],
+  "noEngineReferences": false
+}

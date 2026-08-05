@@ -1,0 +1,706 @@
+{
+  "schema": "ailis.character-import-recipe.v2",
+  "id": "raddoll-v3.02",
+  "displayName": "RadDoll V3",
+  "sourcePrefab": "Assets/RadDollV3/RaddollV3.prefab",
+  "bundleFileName": "raddoll-v3.02-windows",
+  "stripMonoBehaviours": true,
+  "nativePlayableLayers": [
+    {
+      "id": "base",
+      "role": "base",
+      "controllerPath": "Assets/RadDollV3/Animation/Base/RadV3_Base.controller",
+      "weight": 1.0,
+      "additive": false,
+      "enabled": true
+    },
+    {
+      "id": "additive",
+      "role": "additive",
+      "controllerPath": "Assets/RadDollV3/Animation/Additive/RadV3_Additive.controller",
+      "weight": 1.0,
+      "additive": true,
+      "enabled": true
+    },
+    {
+      "id": "gesture",
+      "role": "gesture",
+      "controllerPath": "Assets/RadDollV3/Animation/Gesture/RadV3_Gesture.controller",
+      "weight": 1.0,
+      "additive": false,
+      "enabled": true
+    },
+    {
+      "id": "action",
+      "role": "action",
+      "controllerPath": "Assets/RadDollV3/Animation/Action/RadV3_Action.controller",
+      "weight": 1.0,
+      "additive": false,
+      "enabled": true
+    },
+    {
+      "id": "fx",
+      "role": "face",
+      "controllerPath": "Assets/RadDollV3/Animation/FX/RadV3_Fx.controller",
+      "weight": 1.0,
+      "additive": false,
+      "enabled": true
+    }
+  ],
+  "motionLibraries": [
+    "MotionLibraries/quaternius-ual2-review.json"
+  ],
+  "animatorStates": [
+    {
+      "stateName": "Idle",
+      "clipPath": "Assets/RadDollV3/Animation/Base/Idle_1.anim",
+      "layerIndex": 0,
+      "layerName": "Body",
+      "loop": true,
+      "setAsDefault": true
+    },
+    {
+      "stateName": "IdleRelaxed",
+      "clipPath": "Assets/RadDollV3/Animation/Base/Idle_2.anim",
+      "layerIndex": 0,
+      "layerName": "Body",
+      "loop": true
+    },
+    {
+      "stateName": "Speaking",
+      "clipPath": "Assets/ThirdParty/Quaternius/UniversalAnimationLibrary/UAL1_Standard.fbx",
+      "clipName": "Armature|Idle_Talking_Loop",
+      "layerIndex": 0,
+      "layerName": "Body",
+      "loop": true,
+      "bakeRootRotation": true,
+      "rootRotationOffsetY": 0.0
+    },
+    {
+      "stateName": "Thinking",
+      "clipPath": "Assets/ThirdParty/OpenGameArt/CC0HumanoidEmotes/CrossArms.fbx",
+      "clipName": "Dummy Rig|Dummy Rig|Dummy Rig|Dummy RigAction.001",
+      "layerIndex": 0,
+      "layerName": "Body",
+      "loop": false,
+      "bakeRootRotation": true,
+      "rootRotationOffsetY": 0.0
+    },
+    {
+      "stateName": "Working",
+      "clipPath": "Assets/ThirdParty/Quaternius/UniversalAnimationLibrary/UAL1_Standard.fbx",
+      "clipName": "Armature|Interact",
+      "layerIndex": 0,
+      "layerName": "Body",
+      "loop": false,
+      "bakeRootRotation": true,
+      "rootRotationOffsetY": 0.0
+    },
+    {
+      "stateName": "Greeting",
+      "clipPath": "Assets/ThirdParty/OpenGameArt/CC0HumanoidEmotes/Wave.fbx",
+      "clipName": "Dummy Rig|Dummy RigAction",
+      "layerIndex": 0,
+      "layerName": "Body",
+      "loop": false,
+      "bakeRootRotation": true,
+      "rootRotationOffsetY": 0.0
+    },
+    {
+      "stateName": "Celebrate",
+      "clipPath": "Assets/ThirdParty/Quaternius/UniversalAnimationLibrary/UAL1_Standard.fbx",
+      "clipName": "Armature|Dance_Loop",
+      "layerIndex": 0,
+      "layerName": "Body",
+      "loop": false,
+      "bakeRootRotation": true,
+      "rootRotationOffsetY": 0.0
+    },
+    {
+      "stateName": "Surprised",
+      "clipPath": "Assets/RadDollV3/Animation/Base/Jump.anim",
+      "layerIndex": 0,
+      "layerName": "Body",
+      "loop": false
+    },
+    {
+      "stateName": "Approval",
+      "clipPath": "Assets/ThirdParty/Quaternius/UniversalAnimationLibrary/UAL1_Standard.fbx",
+      "clipName": "Armature|PickUp_Table",
+      "layerIndex": 0,
+      "layerName": "Body",
+      "loop": false,
+      "bakeRootRotation": true,
+      "rootRotationOffsetY": 0.0
+    },
+    {
+      "stateName": "NeutralFace",
+      "clipPath": "Assets/RadDollV3/Animation/FX/Facial/Facial_Default.anim",
+      "layerIndex": 1,
+      "layerName": "Face",
+      "loop": true,
+      "setAsDefault": true
+    },
+    {
+      "stateName": "HappyFace",
+      "clipPath": "Assets/RadDollV3/Animation/FX/Facial/Smile_2_SM2.anim",
+      "layerIndex": 1,
+      "layerName": "Face",
+      "loop": true
+    },
+    {
+      "stateName": "ShyFace",
+      "clipPath": "Assets/RadDollV3/Animation/FX/Facial/Blush_2.anim",
+      "layerIndex": 1,
+      "layerName": "Face",
+      "loop": true
+    },
+    {
+      "stateName": "SadFace",
+      "clipPath": "Assets/RadDollV3/Animation/FX/Facial/Cry_2.anim",
+      "layerIndex": 1,
+      "layerName": "Face",
+      "loop": true
+    },
+    {
+      "stateName": "AngryFace",
+      "clipPath": "Assets/RadDollV3/Animation/FX/Facial/Angry_1.anim",
+      "layerIndex": 1,
+      "layerName": "Face",
+      "loop": true
+    },
+    {
+      "stateName": "SurprisedFace",
+      "clipPath": "Assets/RadDollV3/Animation/FX/Facial/Kyoton.anim",
+      "layerIndex": 1,
+      "layerName": "Face",
+      "loop": true
+    },
+    {
+      "stateName": "ThinkingFace",
+      "clipPath": "Assets/RadDollV3/Animation/FX/Facial/Jitome.anim",
+      "layerIndex": 1,
+      "layerName": "Face",
+      "loop": true
+    },
+    {
+      "stateName": "TiredFace",
+      "clipPath": "Assets/RadDollV3/Animation/FX/Facial/Sleep_ST1.anim",
+      "layerIndex": 1,
+      "layerName": "Face",
+      "loop": true
+    },
+    {
+      "stateName": "HappySoftFace",
+      "clipPath": "Assets/RadDollV3/Animation/FX/Facial/Smile_SM2.anim",
+      "layerIndex": 1,
+      "layerName": "Face",
+      "loop": true
+    },
+    {
+      "stateName": "HappyBrightFace",
+      "clipPath": "Assets/RadDollV3/Animation/FX/Facial/Smile_4.anim",
+      "layerIndex": 1,
+      "layerName": "Face",
+      "loop": true
+    },
+    {
+      "stateName": "LaughFace",
+      "clipPath": "Assets/RadDollV3/Animation/FX/Facial/DrawlLaughter.anim",
+      "layerIndex": 1,
+      "layerName": "Face",
+      "loop": true
+    },
+    {
+      "stateName": "SadSoftFace",
+      "clipPath": "Assets/RadDollV3/Animation/FX/Facial/Cry_1_SM1.anim",
+      "layerIndex": 1,
+      "layerName": "Face",
+      "loop": true
+    },
+    {
+      "stateName": "SorrowFace",
+      "clipPath": "Assets/RadDollV3/Animation/FX/Facial/Sollow_1.anim",
+      "layerIndex": 1,
+      "layerName": "Face",
+      "loop": true
+    },
+    {
+      "stateName": "AngryStrongFace",
+      "clipPath": "Assets/RadDollV3/Animation/FX/Facial/Angry_2.anim",
+      "layerIndex": 1,
+      "layerName": "Face",
+      "loop": true
+    },
+    {
+      "stateName": "ConfidentFace",
+      "clipPath": "Assets/RadDollV3/Animation/FX/Facial/Doya.anim",
+      "layerIndex": 1,
+      "layerName": "Face",
+      "loop": true
+    },
+    {
+      "stateName": "PlayfulFace",
+      "clipPath": "Assets/RadDollV3/Animation/FX/Facial/Niya.anim",
+      "layerIndex": 1,
+      "layerName": "Face",
+      "loop": true
+    }
+  ],
+  "scale": 1.0,
+  "positionX": 0.0,
+  "positionY": 0.0,
+  "positionZ": 0.0,
+  "licenseSourceDirectory": "Assets/StreamingAssets/Characters/raddoll-v3.02/Source/RadDollV3_v3.02",
+  "licenseName": "VN3 License for RadDollV3",
+  "licenseUrl": "https://tonomaoo.booth.pm/",
+  "attribution": "RadDollV3 by MAOO. Local validation asset; redistribution is prohibited.",
+  "importedAssetRoots": [
+    "Assets/RadDollV3"
+  ],
+  "art": {
+    "id": "raddoll-v3-liltoon",
+    "cameraFieldOfView": 34.0,
+    "cameraHeight": 1.28,
+    "cameraDistance": 2.05,
+    "cameraLookAtHeight": 1.16,
+    "framingMode": "full-body",
+    "framingPadding": 1.1,
+    "framingVerticalBias": 0.01,
+    "ambientIntensity": 0.76,
+    "keyLightIntensity": 0.9,
+    "fillLightIntensity": 0.38,
+    "rimLightIntensity": 0.5
+  },
+  "visemes": [
+    {
+      "id": "aa",
+      "blendShapeNames": ["Mouth_Open_A_1", "Mouth_Open_A_2"]
+    },
+    {
+      "id": "ih",
+      "blendShapeNames": ["Mouth_Open_E_1", "Mouth_Short"]
+    },
+    {
+      "id": "ou",
+      "blendShapeNames": ["Mouth_Open_O_1", "Mouth_Mu"]
+    },
+    {
+      "id": "ee",
+      "blendShapeNames": ["Mouth_Open_E_2", "Mouth_Wide"]
+    },
+    {
+      "id": "oh",
+      "blendShapeNames": ["Mouth_Open_O_2", "Mouth_Open_O_3"]
+    }
+  ],
+  "blinkBlendShapeNames": [
+    "Eye_Close_Blink",
+    "Eye_Close_Straight_1"
+  ],
+  "vrmExpressionProfile": {
+    "schema": "ailis.vrm-expression-profile.v1",
+    "standard": "VRM-1.0",
+    "bindings": [
+    {
+      "id": "neutral",
+      "preset": "neutral",
+      "driver": "animator-state",
+      "stateName": "NeutralFace",
+      "layerIndex": 1,
+      "weight": 0.72,
+      "transitionSeconds": 0.16,
+      "priority": 0
+    },
+    {
+      "id": "happy",
+      "preset": "happy",
+      "driver": "animator-state",
+      "stateName": "HappyFace",
+      "layerIndex": 1,
+      "overrideBlink": "blend",
+      "weight": 1.0,
+      "transitionSeconds": 0.16,
+      "priority": 3
+    },
+    {
+      "id": "happy-soft",
+      "preset": "relaxed",
+      "driver": "morph-targets",
+      "stateName": "HappySoftFace",
+      "layerIndex": 1,
+      "morphTargetBindings": [
+        {
+          "path": "Body",
+          "blendShapeName": "Mouth_Smile_1",
+          "weight": 24.0
+        }
+      ],
+      "overrideBlink": "blend",
+      "weight": 0.88,
+      "transitionSeconds": 0.18,
+      "priority": 2
+    },
+    {
+      "id": "happy-bright",
+      "preset": "custom",
+      "customName": "happy-bright",
+      "driver": "animator-state",
+      "stateName": "HappyBrightFace",
+      "layerIndex": 1,
+      "overrideBlink": "blend",
+      "weight": 1.0,
+      "transitionSeconds": 0.14,
+      "priority": 2
+    },
+    {
+      "id": "laugh",
+      "preset": "custom",
+      "customName": "victory",
+      "driver": "animator-state",
+      "stateName": "LaughFace",
+      "layerIndex": 1,
+      "overrideBlink": "blend",
+      "overrideMouth": "blend",
+      "weight": 1.0,
+      "transitionSeconds": 0.12,
+      "priority": 3
+    },
+    {
+      "id": "shy",
+      "preset": "custom",
+      "customName": "shy",
+      "driver": "animator-state",
+      "stateName": "ShyFace",
+      "layerIndex": 1,
+      "overrideBlink": "blend",
+      "weight": 1.0,
+      "transitionSeconds": 0.18,
+      "priority": 3
+    },
+    {
+      "id": "sad",
+      "preset": "sad",
+      "driver": "animator-state",
+      "stateName": "SadFace",
+      "layerIndex": 1,
+      "overrideBlink": "blend",
+      "weight": 0.92,
+      "transitionSeconds": 0.18,
+      "priority": 2
+    },
+    {
+      "id": "sad-soft",
+      "preset": "custom",
+      "customName": "comforting",
+      "driver": "animator-state",
+      "stateName": "SadSoftFace",
+      "layerIndex": 1,
+      "overrideBlink": "blend",
+      "weight": 0.84,
+      "transitionSeconds": 0.2,
+      "priority": 1
+    },
+    {
+      "id": "sorrow",
+      "preset": "custom",
+      "customName": "sorrow",
+      "driver": "animator-state",
+      "stateName": "SorrowFace",
+      "layerIndex": 1,
+      "overrideBlink": "blend",
+      "weight": 0.9,
+      "transitionSeconds": 0.2,
+      "priority": 1
+    },
+    {
+      "id": "angry",
+      "preset": "angry",
+      "driver": "morph-targets",
+      "stateName": "AngryFace",
+      "layerIndex": 1,
+      "morphTargetBindings": [
+        {
+          "path": "Body",
+          "blendShapeName": "Eye_Angry",
+          "weight": 62.0
+        },
+        {
+          "path": "Body",
+          "blendShapeName": "Eye_Small",
+          "weight": 28.0
+        },
+        {
+          "path": "Body",
+          "blendShapeName": "Eyebrow_Angry",
+          "weight": 100.0
+        },
+        {
+          "path": "Body",
+          "blendShapeName": "Eyebrow_Down",
+          "weight": 82.0
+        },
+        {
+          "path": "Body",
+          "blendShapeName": "Mouth_Mu",
+          "weight": 42.0
+        }
+      ],
+      "weight": 0.94,
+      "transitionSeconds": 0.14,
+      "priority": 2
+    },
+    {
+      "id": "angry-strong",
+      "preset": "custom",
+      "customName": "jealous",
+      "driver": "animator-state",
+      "stateName": "AngryStrongFace",
+      "layerIndex": 1,
+      "weight": 1.0,
+      "transitionSeconds": 0.12,
+      "priority": 1
+    },
+    {
+      "id": "surprised",
+      "preset": "surprised",
+      "driver": "morph-targets",
+      "stateName": "SurprisedFace",
+      "layerIndex": 1,
+      "morphTargetBindings": [
+        {
+          "path": "Body",
+          "blendShapeName": "Eye_Suprise",
+          "weight": 82.0
+        },
+        {
+          "path": "Body",
+          "blendShapeName": "Eyebrow_Up",
+          "weight": 46.0
+        },
+        {
+          "path": "Body",
+          "blendShapeName": "Eye_Highlight_Large_1",
+          "weight": 28.0
+        },
+        {
+          "path": "Body",
+          "blendShapeName": "Pupil_Large",
+          "weight": 42.0
+        },
+        {
+          "path": "Body",
+          "blendShapeName": "Mouth_Short",
+          "weight": 68.0
+        }
+      ],
+      "overrideBlink": "block",
+      "weight": 1.0,
+      "transitionSeconds": 0.1,
+      "priority": 3
+    },
+    {
+      "id": "thinking",
+      "preset": "custom",
+      "customName": "thinking",
+      "driver": "animator-state",
+      "stateName": "ThinkingFace",
+      "layerIndex": 1,
+      "weight": 0.82,
+      "transitionSeconds": 0.18,
+      "priority": 2
+    },
+    {
+      "id": "suspicious",
+      "preset": "custom",
+      "customName": "suspicious",
+      "driver": "animator-state",
+      "stateName": "ThinkingFace",
+      "layerIndex": 1,
+      "weight": 0.82,
+      "transitionSeconds": 0.18,
+      "priority": 2
+    },
+    {
+      "id": "tired",
+      "preset": "custom",
+      "customName": "tired",
+      "driver": "animator-state",
+      "stateName": "TiredFace",
+      "layerIndex": 1,
+      "overrideBlink": "block",
+      "weight": 0.8,
+      "transitionSeconds": 0.2,
+      "priority": 2
+    },
+    {
+      "id": "bored",
+      "preset": "custom",
+      "customName": "bored",
+      "driver": "animator-state",
+      "stateName": "TiredFace",
+      "layerIndex": 1,
+      "overrideBlink": "block",
+      "weight": 0.8,
+      "transitionSeconds": 0.2,
+      "priority": 2
+    },
+    {
+      "id": "confident",
+      "preset": "custom",
+      "customName": "focused",
+      "driver": "animator-state",
+      "stateName": "ConfidentFace",
+      "layerIndex": 1,
+      "weight": 0.9,
+      "transitionSeconds": 0.16,
+      "priority": 1
+    },
+    {
+      "id": "playful",
+      "preset": "custom",
+      "customName": "love",
+      "driver": "animator-state",
+      "stateName": "PlayfulFace",
+      "layerIndex": 1,
+      "weight": 0.9,
+      "transitionSeconds": 0.16,
+      "priority": 1
+    }
+    ]
+  },
+  "motions": [
+    {
+      "id": "idle",
+      "stateName": "Idle",
+      "loop": true,
+      "fallbackDurationSeconds": 6.0,
+      "transitionSeconds": 0.24,
+      "priority": 0,
+      "gestureIntents": ["idle"],
+      "emotions": [],
+      "taskStates": ["idle"]
+    },
+    {
+      "id": "idle-relaxed",
+      "stateName": "IdleRelaxed",
+      "loop": true,
+      "fallbackDurationSeconds": 6.0,
+      "transitionSeconds": 0.24,
+      "priority": 0,
+      "gestureIntents": ["attentive", "listening", "acknowledge", "observe"],
+      "emotions": ["relaxed"],
+      "taskStates": ["idle", "listening"]
+    },
+    {
+      "id": "speaking",
+      "stateName": "Speaking",
+      "loop": true,
+      "fallbackDurationSeconds": 6.0,
+      "transitionSeconds": 0.2,
+      "priority": 3,
+      "compatibility": "review",
+      "fallbackMotionId": "idle-relaxed",
+      "collisionZones": ["hands", "sleeves", "chest"],
+      "gestureIntents": ["speaking"],
+      "emotions": ["happy", "relaxed"],
+      "taskStates": ["speaking"]
+    },
+    {
+      "id": "working",
+      "stateName": "Working",
+      "loop": false,
+      "fallbackDurationSeconds": 2.0,
+      "transitionSeconds": 0.16,
+      "priority": 3,
+      "compatibility": "review",
+      "fallbackMotionId": "idle-relaxed",
+      "collisionZones": ["hands", "sleeves", "torso"],
+      "gestureIntents": ["working", "interact"],
+      "emotions": ["focused", "serious"],
+      "taskStates": []
+    },
+    {
+      "id": "thinking",
+      "stateName": "Thinking",
+      "loop": false,
+      "fallbackDurationSeconds": 9.9,
+      "transitionSeconds": 0.2,
+      "priority": 4,
+      "compatibility": "review",
+      "fallbackMotionId": "idle-relaxed",
+      "collisionZones": ["arms", "sleeves", "chest"],
+      "gestureIntents": ["thinking"],
+      "emotions": ["thinking"],
+      "taskStates": []
+    },
+    {
+      "id": "greeting",
+      "stateName": "Greeting",
+      "nativeLayerId": "action",
+      "nativeParameter": "VRCEmote",
+      "nativeParameterType": "int",
+      "nativeParameterValue": 1,
+      "nativeResetValue": 0,
+      "loop": false,
+      "fallbackDurationSeconds": 2.4,
+      "transitionSeconds": 0.16,
+      "priority": 3,
+      "compatibility": "approved",
+      "collisionZones": ["right-sleeve", "hair"],
+      "gestureIntents": ["greeting", "welcome", "farewell"],
+      "emotions": [],
+      "taskStates": []
+    },
+    {
+      "id": "celebrate",
+      "stateName": "Celebrate",
+      "nativeLayerId": "action",
+      "nativeParameter": "VRCEmote",
+      "nativeParameterType": "int",
+      "nativeParameterValue": 4,
+      "nativeResetValue": 0,
+      "loop": false,
+      "fallbackDurationSeconds": 2.8,
+      "transitionSeconds": 0.14,
+      "priority": 4,
+      "compatibility": "approved",
+      "collisionZones": ["arms", "hair", "skirt", "tail"],
+      "gestureIntents": ["celebrate", "success", "completed", "clap"],
+      "emotions": [],
+      "taskStates": []
+    },
+    {
+      "id": "approval",
+      "stateName": "Approval",
+      "nativeLayerId": "gesture",
+      "nativeParameter": "GestureRight",
+      "nativeParameterType": "int",
+      "nativeParameterValue": 7,
+      "nativeResetValue": 0,
+      "loop": false,
+      "fallbackDurationSeconds": 1.0,
+      "transitionSeconds": 0.16,
+      "priority": 3,
+      "compatibility": "approved",
+      "collisionZones": ["hands", "sleeves", "torso"],
+      "gestureIntents": ["approval", "agree", "nod"],
+      "emotions": [],
+      "taskStates": []
+    },
+    {
+      "id": "surprised",
+      "stateName": "Surprised",
+      "loop": false,
+      "fallbackDurationSeconds": 2.2,
+      "transitionSeconds": 0.1,
+      "priority": 3,
+      "compatibility": "review",
+      "fallbackMotionId": "idle-relaxed",
+      "collisionZones": ["skirt", "tail"],
+      "gestureIntents": ["surprised"],
+      "emotions": [],
+      "taskStates": []
+    }
+  ]
+}
