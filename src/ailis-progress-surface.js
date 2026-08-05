@@ -16,15 +16,80 @@ function normalizeText(value) {
 }
 
 function normalizeProgressText(value) {
-    return normalizeText(value)
+    const text = normalizeText(value)
         .replace(/\b(tool_call|raw observation|approvalId|mcp_bridge|artifact_verifier|llm-agentic-executor)\b/gi, '')
         .replace(/[_`]+/g, ' ')
         .replace(/\s+/g, ' ')
         .trim();
+    if (!text || looksLikeInternalPayload(text)) {
+        return '';
+    }
+    return text;
 }
 
 function normalizeToolId(value) {
     return normalizeText(value).toLowerCase();
+}
+
+function looksLikeInternalPayload(text = '') {
+    const value = normalizeText(text);
+    if (!value) {
+        return false;
+    }
+    if ((value.startsWith('{') && value.endsWith('}')) || (value.startsWith('[') && value.endsWith(']'))) {
+        return true;
+    }
+    return /\b(childRunId|subagentId|parentRunId|sessionId|runId|approvalId)\b/i.test(value) &&
+        /["{}:[\],]/.test(value);
+}
+
+function buildSubagentProgressFrame(payload = {}) {
+    const childType = normalizeText(payload.type);
+    const status = normalizeText(payload.status).toLowerCase();
+    const childPayload = payload.payload && typeof payload.payload === 'object' ? payload.payload : {};
+    const modelText = normalizeProgressText(childPayload.text || childPayload.delta || childPayload.summary || payload.text);
+    if ((childType === 'agent.progress.note' || childType === 'agent.reasoning.delta') && modelText) {
+        return {
+            phase: 'subagent_progress_note',
+            text: modelText,
+            bubbleText: modelText,
+            taskState: 'thinking',
+            gestureIntent: 'thinking',
+            source: childPayload.source || payload.source || 'subagent_model_progress_note'
+        };
+    }
+    if (childType === 'subagent.started' || status === 'queued' || status === 'running') {
+        const task = normalizeProgressText(payload.message || childPayload.task);
+        const text = task
+            ? `我已经让任务代理开始处理：${task}`
+            : '我已经让任务代理开始处理，会把关键进展同步给你。';
+        return {
+            phase: 'subagent_started',
+            text,
+            bubbleText: text,
+            taskState: 'working',
+            gestureIntent: 'thinking',
+            source: 'subagent_lifecycle'
+        };
+    }
+    if (childType === 'subagent.completed' && status === 'completed') {
+        return null;
+    }
+    if (childType === 'subagent.completed' || ['failed', 'timeout', 'cancelled', 'interrupted'].includes(status)) {
+        const text = normalizeProgressText(payload.message || childPayload.summary || childPayload.error);
+        if (!text) {
+            return null;
+        }
+        return {
+            phase: status === 'completed' ? 'subagent_completed' : 'subagent_blocked',
+            text,
+            bubbleText: text,
+            taskState: status === 'completed' ? 'working' : 'failed',
+            gestureIntent: 'thinking',
+            source: 'subagent_lifecycle'
+        };
+    }
+    return null;
 }
 
 export function createPersonaProgressFrame(event = {}, options = {}) {
@@ -33,6 +98,10 @@ export function createPersonaProgressFrame(event = {}, options = {}) {
 
     if (type === 'agent.run.started') {
         return null;
+    }
+
+    if (type === 'subagent.event') {
+        return buildSubagentProgressFrame(payload);
     }
 
     if (type === 'agent.reasoning.delta' || type === 'agent.progress.note') {

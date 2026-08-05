@@ -78,6 +78,13 @@ function numberSchema(options = {}) {
     };
 }
 
+function integerSchema(options = {}) {
+    return {
+        type: 'integer',
+        ...options
+    };
+}
+
 function booleanSchema(options = {}) {
     return {
         type: 'boolean',
@@ -333,6 +340,78 @@ function defaultReturns() {
     return cloneJson(STANDARD_TOOL_RETURN_SCHEMA);
 }
 
+function agentStatusSchema() {
+    return {
+        oneOf: [
+            stringSchema({ enum: ['pending_init', 'running', 'interrupted', 'shutdown', 'not_found'] }),
+            makeObjectSchema({
+                required: ['completed'],
+                properties: {
+                    completed: { type: ['string', 'null'] }
+                },
+                additionalProperties: false
+            }),
+            makeObjectSchema({
+                required: ['errored'],
+                properties: {
+                    errored: stringSchema()
+                },
+                additionalProperties: false
+            })
+        ]
+    };
+}
+
+function spawnAgentReturns() {
+    return makeObjectSchema({
+        required: ['task_name', 'nickname'],
+        properties: {
+            task_name: stringSchema(),
+            nickname: { type: ['string', 'null'] }
+        },
+        additionalProperties: false
+    });
+}
+
+function waitAgentReturns() {
+    return makeObjectSchema({
+        required: ['message', 'timed_out'],
+        properties: {
+            message: stringSchema(),
+            timed_out: booleanSchema()
+        },
+        additionalProperties: false
+    });
+}
+
+function listAgentsReturns() {
+    return makeObjectSchema({
+        required: ['agents'],
+        properties: {
+            agents: arraySchema(makeObjectSchema({
+                required: ['agent_name', 'agent_status', 'last_task_message'],
+                properties: {
+                    agent_name: stringSchema(),
+                    agent_status: agentStatusSchema(),
+                    last_task_message: { type: ['string', 'null'] }
+                },
+                additionalProperties: false
+            }))
+        },
+        additionalProperties: false
+    });
+}
+
+function closeAgentReturns() {
+    return makeObjectSchema({
+        required: ['previous_status'],
+        properties: {
+            previous_status: agentStatusSchema()
+        },
+        additionalProperties: false
+    });
+}
+
 function defaultErrors(extra = []) {
     return [...STANDARD_TOOL_ERROR_CODES, ...extra];
 }
@@ -418,11 +497,27 @@ const TOOL_EXPERIENCE = Object.freeze({
         failureStyle: 'plain_explain',
         userFacingVerb: '查看命令输出'
     }),
-    subagents: makeExperienceMetadata({
+    collaboration: makeExperienceMetadata({
         embodiedAction: 'delegate_subtask',
         permissionStyle: 'inherits_parent_policy',
         progressStyle: 'background',
         userFacingVerb: '分派子任务'
+    }),
+    task_handoff: makeExperienceMetadata({
+        embodiedAction: 'work_on_task',
+        permissionStyle: 'inherits_parent_policy',
+        progressStyle: 'focused',
+        successStyle: 'summarize_result',
+        failureStyle: 'plain_explain',
+        userFacingVerb: '处理任务'
+    }),
+    task_results: makeExperienceMetadata({
+        embodiedAction: 'recall_task_result',
+        permissionStyle: 'silent_read',
+        progressStyle: 'quiet',
+        successStyle: 'summarize_result',
+        failureStyle: 'plain_explain',
+        userFacingVerb: '回想之前整理的结果'
     }),
     mcp_bridge: makeExperienceMetadata({
         embodiedAction: 'use_external_tool',
@@ -507,6 +602,22 @@ const TOOL_EXPERIENCE = Object.freeze({
         failureStyle: 'plain_explain',
         userFacingVerb: '查询上下文产物'
     }),
+    artifact_tools: makeExperienceMetadata({
+        embodiedAction: 'operate_artifact_runtime',
+        permissionStyle: 'silent_internal',
+        progressStyle: 'focused',
+        successStyle: 'summarize_result',
+        failureStyle: 'plain_explain',
+        userFacingVerb: '操作工件运行时'
+    }),
+    artifact_import: makeExperienceMetadata({
+        embodiedAction: 'import_artifact',
+        permissionStyle: 'silent_read',
+        progressStyle: 'focused',
+        successStyle: 'summarize_result',
+        failureStyle: 'plain_explain',
+        userFacingVerb: '导入上下文产物'
+    }),
     artifact_compute: makeExperienceMetadata({
         embodiedAction: 'analyze_artifact',
         permissionStyle: 'silent_read',
@@ -555,11 +666,14 @@ const TOOL_CONTRACTS = Object.freeze({
         schema: makeObjectSchema({
             required: ['path'],
             properties: {
-                path: stringSchema({ minLength: 1 }),
+                path: stringSchema({
+                    minLength: 1,
+                    description: 'Local filesystem path to read. HTTP(S) URLs are not accepted; use web_run open/find for web pages.'
+                }),
                 encoding: stringSchema(),
                 maxBytes: numberSchema({ minimum: 1, maximum: 5 * 1024 * 1024 })
             },
-            additionalProperties: true
+            additionalProperties: false
         })
     }),
     write: Object.freeze({
@@ -578,7 +692,7 @@ const TOOL_CONTRACTS = Object.freeze({
                 content: stringSchema(),
                 encoding: stringSchema()
             },
-            additionalProperties: true
+            additionalProperties: false
         })
     }),
     edit: Object.freeze({
@@ -615,7 +729,7 @@ const TOOL_CONTRACTS = Object.freeze({
             properties: {
                 input: stringSchema({ minLength: 1 })
             },
-            additionalProperties: true
+            additionalProperties: false
         })
     }),
     exec: Object.freeze({
@@ -628,17 +742,14 @@ const TOOL_CONTRACTS = Object.freeze({
         returns: defaultReturns(),
         errors: defaultErrors(['exec_blocked', 'exec_failed', 'shell_access_disabled']),
         schema: makeObjectSchema({
+            required: ['command'],
             properties: {
                 command: stringSchema({
                     minLength: 1,
-                    description: 'Command line to run in the current runtime_environment shell. Use for existing scripts, tests, builds, diagnostics, and short one-shot commands.'
-                }),
-                cmd: stringSchema({
-                    minLength: 1,
-                    description: 'Alias for command.'
+                    description: 'Command line to run in runtime_environment.command_shell. Use for existing scripts, tests, builds, diagnostics, and short one-shot commands. On Windows, shell strings run as PowerShell: never use POSIX heredocs such as <<EOF; write a temporary script and execute it, or use a short -c command.'
                 }),
                 args: arraySchema(stringSchema(), {
-                    description: 'Optional argv list for direct-spawn style execution when supported; prefer args for complex paths or parameters to reduce shell quoting issues.'
+                    description: 'Optional argv list appended to command for direct-spawn execution. Use only when command itself is an executable name/path. Do not put powershell, pwsh, cmd, bash, or their -Command/-c wrapper flags here when command already contains the script; omit args and let runtime_environment.command_shell execute the script.'
                 }),
                 workdir: stringSchema({
                     description: 'Working directory for the command. Use a workspace path when reading or creating follow-up artifacts.'
@@ -660,11 +771,11 @@ const TOOL_CONTRACTS = Object.freeze({
                     description: 'Additional environment variables for this command.'
                 })
             },
-            additionalProperties: true
+            additionalProperties: false
         }),
         customValidate(args = {}) {
-            if (!normalizeString(args.command || args.cmd)) {
-                return ['exec requires command or cmd'];
+            if (!normalizeString(args.command)) {
+                return ['exec requires command'];
             }
             return [];
         }
@@ -727,24 +838,80 @@ const TOOL_CONTRACTS = Object.freeze({
         risk: 'low',
         approval: 'never',
         experience: TOOL_EXPERIENCE.update_plan,
-        returns: defaultReturns(),
+        returns: (() => {
+            const schema = defaultReturns();
+            const progressOnlyPayload = makeObjectSchema({
+                required: ['status', 'completion_scope', 'semantic_role', 'produces_evidence', 'task_advanced', 'plan'],
+                properties: {
+                    status: stringSchema({
+                        enum: ['completed'],
+                        description: 'The update_plan tool call completed. This is not task completion.'
+                    }),
+                    completion_scope: stringSchema({
+                        enum: ['progress_recorded_only'],
+                        description: 'Only the user-visible progress checklist was recorded.'
+                    }),
+                    semantic_role: stringSchema({
+                        enum: ['progress_ui_only'],
+                        description: 'This result is only for user-visible progress bookkeeping.'
+                    }),
+                    produces_evidence: booleanSchema({
+                        enum: [false],
+                        description: 'update_plan never produces evidence for the task answer.'
+                    }),
+                    task_advanced: booleanSchema({
+                        enum: [false],
+                        description: 'update_plan does not inspect files, query data, execute commands, or otherwise advance the task.'
+                    }),
+                    execution_effect: stringSchema(),
+                    next_step_guidance: stringSchema(),
+                    explanation: stringSchema(),
+                    plan: arraySchema(makeObjectSchema({
+                        properties: {
+                            id: stringSchema(),
+                            step: stringSchema(),
+                            status: stringSchema({ enum: ['pending', 'in_progress', 'completed'] })
+                        },
+                        additionalProperties: true
+                    }))
+                },
+                additionalProperties: true
+            });
+            schema.properties.structuredContent = progressOnlyPayload;
+            schema.properties.details = progressOnlyPayload;
+            return schema;
+        })(),
         errors: defaultErrors(['invalid_plan']),
-        schema: makeObjectSchema({
-            required: ['plan'],
-            properties: {
-                explanation: stringSchema(),
-                plan: arraySchema(makeObjectSchema({
-                    required: ['step', 'status'],
-                    properties: {
-                        id: stringSchema(),
-                        step: stringSchema({ minLength: 1 }),
-                        status: stringSchema({ enum: ['pending', 'in_progress', 'completed'] })
-                    },
-                    additionalProperties: true
-                }), { minItems: 1 })
-            },
-            additionalProperties: true
-        })
+        schema: {
+            ...makeObjectSchema({
+                required: ['plan'],
+                properties: {
+                    explanation: stringSchema({
+                        description: 'Optional user-visible progress note. This is not evidence and does not mean the task advanced.'
+                    }),
+                    plan: arraySchema(makeObjectSchema({
+                        required: ['step', 'status'],
+                        properties: {
+                            id: stringSchema(),
+                            step: stringSchema({
+                                minLength: 1,
+                                description: 'A user-visible checklist item. Writing it does not execute the step.'
+                            }),
+                            status: stringSchema({
+                                enum: ['pending', 'in_progress', 'completed'],
+                                description: 'Checklist display status only, not proof that the task evidence was obtained.'
+                            })
+                        },
+                        additionalProperties: true
+                    }), {
+                        minItems: 1,
+                        description: 'Progress checklist for the user interface only. Do not call this instead of real tools.'
+                    })
+                },
+                additionalProperties: true
+            }),
+            description: 'Progress UI only. update_plan does not inspect files, retrieve data, execute actions, compute answers, or produce evidence. Use real tools for task progress.'
+        }
     }),
     tool_search: Object.freeze({
         id: 'tool_search',
@@ -756,28 +923,170 @@ const TOOL_CONTRACTS = Object.freeze({
         returns: defaultReturns(),
         errors: defaultErrors(['empty_query']),
         schema: makeObjectSchema({
+            required: ['query'],
             properties: {
                 query: stringSchema({
                     minLength: 1,
                     description: 'Search query for deferred tools.'
                 }),
-                q: stringSchema({
-                    minLength: 1,
-                    description: 'Alias for query.'
-                }),
                 limit: numberSchema({
                     minimum: 1,
                     maximum: 50,
                     description: 'Maximum number of tools to return.'
-                }),
-                includeDeferred: booleanSchema(),
-                includeMcp: booleanSchema()
+                })
             },
-            additionalProperties: true
+            additionalProperties: false
         }),
         customValidate(args = {}) {
-            if (!normalizeString(args.query || args.q)) {
-                return ['tool_search requires query/q'];
+            if (!normalizeString(args.query)) {
+                return ['tool_search requires query'];
+            }
+            return [];
+        }
+    }),
+    web_run: Object.freeze({
+        id: 'web_run',
+        version: CONTRACT_VERSION,
+        mutates: false,
+        risk: 'low',
+        approval: 'never',
+        experience: TOOL_EXPERIENCE.tool_search,
+        returns: defaultReturns(),
+        errors: defaultErrors(['empty_command', 'unsupported_command', 'unknown_ref_id']),
+        schema: {
+            ...makeObjectSchema({
+            properties: {
+                search_query: arraySchema(makeObjectSchema({
+                    required: ['q'],
+                    properties: {
+                        q: stringSchema({
+                            minLength: 1,
+                            maxLength: 240,
+                            description: 'One concise discovery query. Keep only verified discriminative entities and constraints; never concatenate previous queries or inject an unverified intermediate answer/entity inferred from memory.'
+                        }),
+                        recency: integerSchema({ minimum: 1, maximum: 3650, description: 'Optional recent-days filter. Omit unless the user explicitly asks for recent results.' }),
+                        domains: arraySchema(stringSchema({ minLength: 1 }), { maxItems: 8, description: 'Optional domain allowlist. Omit for broad discovery unless a domain restriction is specifically needed.' })
+                    },
+                    additionalProperties: false
+                }), { minItems: 1, maxItems: 4, description: 'Query the internet search engine for a given list of queries.' }),
+                open: arraySchema(makeObjectSchema({
+                    required: ['ref_id'],
+                    properties: {
+                        ref_id: stringSchema({ minLength: 1, description: 'Reference id or URL to open.' }),
+                        lineno: integerSchema({ minimum: 0, description: 'Line number to position the page at.' })
+                    },
+                    additionalProperties: false
+                }), { minItems: 1, maxItems: 1, description: 'Open one page by reference id or URL.' }),
+                click: arraySchema(makeObjectSchema({
+                    required: ['ref_id', 'id'],
+                    properties: {
+                        ref_id: stringSchema({ minLength: 1, description: 'Reference id containing the numbered link.' }),
+                        id: integerSchema({ minimum: 0, description: 'Numbered link id to open.' })
+                    },
+                    additionalProperties: false
+                }), { minItems: 1, maxItems: 1, description: 'Open one link from a previously opened page.' }),
+                find: arraySchema(makeObjectSchema({
+                    required: ['ref_id', 'pattern'],
+                    properties: {
+                        ref_id: stringSchema({ minLength: 1, description: 'Reference id or URL to search within.' }),
+                        pattern: stringSchema({ minLength: 1, description: 'Text pattern to find.' })
+                    },
+                    additionalProperties: false
+                }), { minItems: 1, maxItems: 1, description: 'Find one text pattern in one page.' }),
+                screenshot: arraySchema(makeObjectSchema({
+                    required: ['ref_id'],
+                    properties: {
+                        ref_id: stringSchema({ minLength: 1, description: 'Reference id or public HTTP(S) URL to capture as rendered pixels.' }),
+                        detail: stringSchema({ enum: ['low', 'high', 'original'], description: 'Image detail supplied to the main model. Defaults to original.' }),
+                        waitFor: stringSchema({ description: 'Optional browser wait condition before capture.' }),
+                        delayMs: integerSchema({ minimum: 0, maximum: 30000, description: 'Optional delay before capture.' })
+                    },
+                    additionalProperties: false
+                }), { minItems: 1, maxItems: 1, description: 'Capture one browser-rendered screenshot and return it to the main model as visual tool evidence.' }),
+                archive: arraySchema(makeObjectSchema({
+                    required: ['url'],
+                    properties: {
+                        url: stringSchema({ minLength: 1, description: 'Original public HTTP(S) URL or stable URL prefix.' }),
+                        mode: stringSchema({ enum: ['captures', 'search', 'open'], description: 'search discovers and opens a readable snapshot in one call; captures lists candidates; open reads a known timestamp.' }),
+                        provider: stringSchema({ enum: ['internet_archive', 'arquivo'], description: 'Archive provider. Required for mode=open.' }),
+                        providers: arraySchema(stringSchema({ enum: ['internet_archive', 'arquivo'] }), { maxItems: 2, description: 'Optional archive backends for capture discovery.' }),
+                        timestamp: stringSchema({ pattern: '^[0-9]{8,14}$', description: 'Capture timestamp returned by mode=captures. Required for mode=open.' }),
+                        matchType: stringSchema({ enum: ['exact', 'prefix'], description: 'Use prefix to discover archived dynamic/query URLs.' }),
+                        contains: stringSchema({ description: 'Terms used to rank archived original URLs, such as an identifier, filter name, year, or classification.' }),
+                        query: stringSchema({ description: 'Evidence phrase; in search/captures it also opens the first readable snapshot, and in open mode it focuses the source viewport.' }),
+                        fromYear: integerSchema({ minimum: 1996, maximum: 9999, description: 'Optional archive crawl-year lower bound, not publication/content year.' }),
+                        toYear: integerSchema({ minimum: 1996, maximum: 9999, description: 'Optional archive crawl-year upper bound, not publication/content year.' }),
+                        maxResults: integerSchema({ minimum: 1, maximum: 50, description: 'Maximum ranked capture URLs returned.' }),
+                        scanLimit: integerSchema({ minimum: 1, maximum: 10000, description: 'Maximum CDX rows scanned before ranking.' }),
+                        lineno: integerSchema({ minimum: 1, description: 'Optional source line number for mode=open.' }),
+                        maxLines: integerSchema({ minimum: 1, maximum: 300, description: 'Optional source viewport line limit for mode=open.' }),
+                        timeoutMs: integerSchema({ minimum: 3000, maximum: 300000, description: 'Per-backend archive request timeout, not the total tool-call deadline. Search mode may issue several requests; omit unless an individual backend probe needs a custom limit.' })
+                    },
+                    additionalProperties: false
+                }), { minItems: 1, maxItems: 1, description: 'Discover or open a historical public-web snapshot.' }),
+                response_length: stringSchema({
+                    enum: ['short', 'medium', 'long'],
+                    description: 'Set the length of the response to be returned.'
+                })
+            },
+            additionalProperties: false
+            }),
+            minProperties: 1
+        },
+        customValidate(args = {}) {
+            const operationKeys = ['search_query', 'open', 'click', 'find', 'screenshot', 'archive'];
+            const present = operationKeys.filter((key) => Array.isArray(args[key]) && args[key].length > 0);
+            if (present.length !== 1) {
+                const received = present.length ? present.join(', ') : 'none';
+                return [`web_run received ${received}; send exactly one non-empty operation per call: search_query, open, click, find, screenshot, or archive. Preserve the other operation arguments for separate follow-up calls.`];
+            }
+            if (present[0] === 'search_query' && !args.search_query.some((entry) => normalizeString(entry?.q))) {
+                return ['web_run search_query requires at least one non-empty q'];
+            }
+            return [];
+        }
+    }),
+    web_search: Object.freeze({
+        id: 'web_search',
+        version: CONTRACT_VERSION,
+        mutates: false,
+        risk: 'low',
+        approval: 'never',
+        experience: TOOL_EXPERIENCE.tool_search,
+        returns: defaultReturns(),
+        errors: defaultErrors(['empty_query']),
+        schema: makeObjectSchema({
+            required: ['query'],
+            properties: {
+                query: stringSchema({
+                    minLength: 1,
+                    maxLength: 240,
+                    description: 'Required concise public web search query. Keep only discriminative entities and constraints; never concatenate previous queries.'
+                }),
+                maxResults: numberSchema({
+                    minimum: 1,
+                    maximum: 12,
+                    description: 'Requested result count.'
+                }),
+                search_context_size: stringSchema({
+                    enum: ['low', 'medium', 'high'],
+                    description: 'Amount of search context to return.'
+                }),
+                recency: integerSchema({
+                    minimum: 1,
+                    maximum: 3650,
+                    description: 'Optional recent-days hint.'
+                }),
+                domains: arraySchema(stringSchema({ minLength: 1 }), {
+                    maxItems: 8,
+                    description: 'Optional domain allowlist. Matching includes subdomains.'
+                })
+            },
+            additionalProperties: false
+        }),
+        customValidate(args = {}) {
+            if (!normalizeString(args.query)) {
+                return ['web_search requires query'];
             }
             return [];
         }
@@ -845,28 +1154,151 @@ const TOOL_CONTRACTS = Object.freeze({
             additionalProperties: true
         })
     }),
-    subagents: Object.freeze({
-        id: 'subagents',
+    handoff_task: Object.freeze({
+        id: 'handoff_task',
         version: CONTRACT_VERSION,
-        mutates: true,
-        risk: 'medium',
-        approval: 'policy',
-        experience: TOOL_EXPERIENCE.subagents,
+        mutates: false,
+        risk: 'low',
+        approval: 'never',
+        experience: TOOL_EXPERIENCE.task_handoff,
+        returns: STANDARD_TOOL_RETURN_SCHEMA,
+        errors: defaultErrors(['task_agent_unavailable', 'task_agent_failed']),
+        schema: makeObjectSchema({
+            required: [],
+            properties: {},
+            additionalProperties: false
+        })
+    }),
+    task_results: Object.freeze({
+        id: 'task_results',
+        version: CONTRACT_VERSION,
+        mutates: false,
+        risk: 'low',
+        approval: 'never',
+        experience: TOOL_EXPERIENCE.task_results,
         returns: defaultReturns(),
-        errors: defaultErrors(['subagent_not_found', 'subagent_timeout', 'subagent_cancelled']),
-        schema: actionSchema(
-            ['list', 'spawn', 'create', 'status', 'info', 'wait', 'log', 'send', 'steer', 'close', 'cancel', 'kill'],
-            {
-                subagentId: stringSchema(),
-                id: stringSchema(),
-                task: stringSchema(),
-                message: stringSchema(),
-                prompt: stringSchema(),
-                wait: booleanSchema(),
-                waitTimeoutMs: numberSchema({ minimum: 1000, maximum: 24 * 60 * 60 * 1000 }),
-                maxAgentSteps: numberSchema({ minimum: 1, maximum: 50 })
+        errors: defaultErrors(['not_found']),
+        schema: makeObjectSchema({
+            required: ['action'],
+            properties: {
+                action: stringSchema({ enum: ['search', 'get'] }),
+                query: stringSchema({ minLength: 1 }),
+                id: stringSchema({ minLength: 1 }),
+                sessionId: stringSchema(),
+                limit: numberSchema({ minimum: 1, maximum: 8 })
+            },
+            additionalProperties: false
+        }),
+        customValidate(args = {}) {
+            const action = normalizeAction(args.action, 'search');
+            if (action === 'search' && !normalizeString(args.query)) {
+                return ['task_results.search requires query'];
             }
-        )
+            if (action === 'get' && !normalizeString(args.id)) {
+                return ['task_results.get requires id'];
+            }
+            return [];
+        }
+    }),
+    spawn_agent: Object.freeze({
+        id: 'spawn_agent',
+        version: CONTRACT_VERSION,
+        mutates: false,
+        risk: 'low',
+        approval: 'never',
+        experience: TOOL_EXPERIENCE.collaboration,
+        returns: spawnAgentReturns(),
+        errors: defaultErrors(['agent_thread_limit_reached', 'invalid_task_name']),
+        schema: makeObjectSchema({
+            required: ['task_name', 'message'],
+            properties: {
+                task_name: stringSchema({ minLength: 1, pattern: '^[a-z0-9_]+$' }),
+                message: stringSchema({ minLength: 1 }),
+                agent_type: stringSchema(),
+                fork_turns: stringSchema(),
+                model: stringSchema(),
+                reasoning_effort: stringSchema(),
+                service_tier: stringSchema()
+            },
+            additionalProperties: false
+        }),
+        customValidate(args = {}) {
+            if (!/^[a-z0-9_]+$/.test(normalizeString(args.task_name))) {
+                return ['task_name must use lowercase letters, digits, and underscores'];
+            }
+            const forkTurns = normalizeString(args.fork_turns, 'all').toLowerCase();
+            if (!['none', 'all'].includes(forkTurns) && !/^[1-9]\d*$/.test(forkTurns)) {
+                return ['fork_turns must be none, all, or a positive integer string'];
+            }
+            return [];
+        }
+    }),
+    followup_task: Object.freeze({
+        id: 'followup_task',
+        version: CONTRACT_VERSION,
+        mutates: false,
+        risk: 'low',
+        approval: 'never',
+        experience: TOOL_EXPERIENCE.collaboration,
+        returns: makeObjectSchema({ additionalProperties: false }),
+        errors: defaultErrors(['agent_not_found']),
+        schema: makeObjectSchema({
+            required: ['target', 'message'],
+            properties: {
+                target: stringSchema({ minLength: 1 }),
+                message: stringSchema({ minLength: 1 })
+            },
+            additionalProperties: false
+        })
+    }),
+    wait_agent: Object.freeze({
+        id: 'wait_agent',
+        version: CONTRACT_VERSION,
+        mutates: false,
+        risk: 'low',
+        approval: 'never',
+        experience: TOOL_EXPERIENCE.collaboration,
+        returns: waitAgentReturns(),
+        errors: defaultErrors(['invalid_timeout']),
+        schema: makeObjectSchema({
+            properties: {
+                timeout_ms: numberSchema({ minimum: 1000, maximum: 24 * 60 * 60 * 1000 })
+            },
+            additionalProperties: false
+        })
+    }),
+    list_agents: Object.freeze({
+        id: 'list_agents',
+        version: CONTRACT_VERSION,
+        mutates: false,
+        risk: 'low',
+        approval: 'never',
+        experience: TOOL_EXPERIENCE.collaboration,
+        returns: listAgentsReturns(),
+        errors: defaultErrors(),
+        schema: makeObjectSchema({
+            properties: {
+                path_prefix: stringSchema()
+            },
+            additionalProperties: false
+        })
+    }),
+    close_agent: Object.freeze({
+        id: 'close_agent',
+        version: CONTRACT_VERSION,
+        mutates: false,
+        risk: 'low',
+        approval: 'never',
+        experience: TOOL_EXPERIENCE.collaboration,
+        returns: closeAgentReturns(),
+        errors: defaultErrors(['agent_not_found']),
+        schema: makeObjectSchema({
+            required: ['target'],
+            properties: {
+                target: stringSchema({ minLength: 1 })
+            },
+            additionalProperties: false
+        })
     }),
     mcp_bridge: Object.freeze({
         id: 'mcp_bridge',
@@ -906,7 +1338,7 @@ const TOOL_CONTRACTS = Object.freeze({
             config: objectSchema(),
             servers: objectSchema(),
             persist: booleanSchema(),
-            timeoutMs: numberSchema({ minimum: 1000, maximum: 180000 })
+            timeoutMs: numberSchema({ minimum: 1000, maximum: 15 * 60 * 1000 })
         }),
         customValidate(args = {}) {
             const action = normalizeAction(args.action || args.operation || args.intent, 'list_servers');
@@ -1511,6 +1943,10 @@ const TOOL_CONTRACTS = Object.freeze({
             'grid',
             'range',
             'search',
+            'runtime_schema',
+            'chunk_search',
+            'runtime_search',
+            'hybrid_search',
             'tail',
             'text_schema',
             'text_range',
@@ -1523,6 +1959,9 @@ const TOOL_CONTRACTS = Object.freeze({
             'page',
             'section'
         ], {
+            artifactHandle: objectSchema({ additionalProperties: true }),
+            artifact_handle: objectSchema({ additionalProperties: true }),
+            handle: objectSchema({ additionalProperties: true }),
             artifactId: stringSchema(),
             artifact_id: stringSchema(),
             id: stringSchema(),
@@ -1567,7 +2006,229 @@ const TOOL_CONTRACTS = Object.freeze({
             max_cols: numberSchema({ minimum: 1, maximum: 200 }),
             maxChars: numberSchema({ minimum: 1000, maximum: 30000 }),
             max_chars: numberSchema({ minimum: 1000, maximum: 30000 })
-        })
+        }),
+        customValidate(args = {}) {
+            const handle = args.artifactHandle || args.artifact_handle || args.handle;
+            const owner = handle && typeof handle === 'object'
+                ? normalizeString(handle.owner || handle.tool)
+                : '';
+            if (owner && !['context_artifact_store', 'artifact_query'].includes(owner)) {
+                return [`artifact_query cannot consume an artifact handle owned by ${owner}`];
+            }
+            const artifactId = normalizeString(
+                args.artifactId || args.artifact_id || args.id || handle?.artifactId || handle?.artifact_id
+            );
+            const action = normalizeString(args.action || args.operation || args.intent, 'summary');
+            if (!['schema', 'list'].includes(action) && !artifactId) {
+                return ['artifact_query requires a context artifact handle or artifactId'];
+            }
+            if (/^art_/i.test(artifactId)) {
+                return ['artifact_query cannot consume an artifact_tools artifactId; continue with artifact_tools'];
+            }
+            return [];
+        }
+    }),
+    artifact_tools: Object.freeze({
+        id: 'artifact_tools',
+        version: CONTRACT_VERSION,
+        mutates: true,
+        risk: 'medium',
+        approval: 'never',
+        experience: TOOL_EXPERIENCE.artifact_tools,
+        returns: defaultReturns(),
+        errors: defaultErrors([
+            'no_matching_adapter',
+            'adapter_not_found',
+            'adapter_edit_not_implemented',
+            'adapter_export_not_implemented',
+            'adapter_index_not_implemented',
+            'adapter_search_not_implemented',
+            'adapter_query_not_implemented',
+            'adapter_trace_not_implemented',
+            'adapter_recalculate_not_implemented',
+            'adapter_rollback_not_implemented',
+            'unsupported_action'
+        ]),
+        schema: actionSchema([
+            'schema',
+            'list_adapters',
+            'plan_import',
+            'open_session',
+            'load',
+            'index',
+            'build_index',
+            'search',
+            'artifact_search',
+            'query',
+            'aggregate',
+            'materialize',
+            'workbench_materialize',
+            'inspect',
+            'render',
+            'validate',
+            'edit',
+            'trace',
+            'recalculate',
+            'rollback',
+            'export',
+            'roundtrip',
+            'run_checks',
+            'list_sessions',
+            'list_eval_cases',
+            'list_evaluation_cases'
+        ], {
+            artifactHandle: objectSchema({ additionalProperties: true }),
+            artifact_handle: objectSchema({ additionalProperties: true }),
+            handle: objectSchema({ additionalProperties: true }),
+            path: stringSchema({ minLength: 1 }),
+            file: stringSchema({ minLength: 1 }),
+            filePath: stringSchema({ minLength: 1 }),
+            file_path: stringSchema({ minLength: 1 }),
+            sourcePath: stringSchema({ minLength: 1 }),
+            source_path: stringSchema({ minLength: 1 }),
+            format: stringSchema(),
+            kind: stringSchema(),
+            artifactKind: stringSchema(),
+            artifact_kind: stringSchema(),
+            adapterId: stringSchema(),
+            adapter_id: stringSchema(),
+            adapter: stringSchema(),
+            parserId: stringSchema(),
+            parser_id: stringSchema(),
+            capability: stringSchema(),
+            requiredCapability: stringSchema(),
+            required_capability: stringSchema(),
+            requiredCapabilities: { anyOf: [stringSchema(), arraySchema(stringSchema())] },
+            required_capabilities: { anyOf: [stringSchema(), arraySchema(stringSchema())] },
+            includeOptional: booleanSchema(),
+            include_optional: booleanSchema(),
+            sessionId: stringSchema(),
+            session_id: stringSchema(),
+            artifactId: stringSchema(),
+            artifact_id: stringSchema(),
+            summary: stringSchema(),
+            fromAction: stringSchema(),
+            from_action: stringSchema(),
+            sourceAction: stringSchema(),
+            source_action: stringSchema(),
+            materializeFrom: stringSchema(),
+            materialize_from: stringSchema(),
+            runId: stringSchema(),
+            run_id: stringSchema(),
+            agentRunId: stringSchema(),
+            agent_run_id: stringSchema(),
+            inputId: stringSchema(),
+            input_id: stringSchema(),
+            filename: stringSchema(),
+            fileName: stringSchema(),
+            file_name: stringSchema(),
+            workbenchRoot: stringSchema(),
+            workbench_root: stringSchema(),
+            query: stringSchema(),
+            text: stringSchema(),
+            term: stringSchema(),
+            searchKind: stringSchema(),
+            search_kind: stringSchema(),
+            table: stringSchema(),
+            tableName: stringSchema(),
+            table_name: stringSchema(),
+            filter: objectSchema({ additionalProperties: true }),
+            where: objectSchema({ additionalProperties: true }),
+            groupBy: stringSchema(),
+            group_by: stringSchema(),
+            aggregate: objectSchema({ additionalProperties: true }),
+            aggregation: objectSchema({ additionalProperties: true }),
+            op: stringSchema(),
+            column: stringSchema(),
+            valueColumn: stringSchema(),
+            value_column: stringSchema(),
+            sortBy: stringSchema(),
+            sort_by: stringSchema(),
+            descending: booleanSchema(),
+            order: stringSchema(),
+            top: numberSchema({ minimum: 1 }),
+            limit: numberSchema({ minimum: 1 }),
+            topGroups: numberSchema({ minimum: 1 }),
+            top_groups: numberSchema({ minimum: 1 }),
+            target: stringSchema(),
+            range: stringSchema(),
+            sheet: stringSchema(),
+            sheetName: stringSchema(),
+            sheet_name: stringSchema(),
+            fillRgb: stringSchema(),
+            fill: stringSchema(),
+            color: stringSchema(),
+            error: stringSchema(),
+            errorCode: stringSchema(),
+            error_code: stringSchema(),
+            maxResults: numberSchema({ minimum: 1 }),
+            max_results: numberSchema({ minimum: 1 }),
+            maxRows: numberSchema({ minimum: 1 }),
+            max_rows: numberSchema({ minimum: 1 }),
+            maxCols: numberSchema({ minimum: 1 }),
+            max_cols: numberSchema({ minimum: 1 }),
+            include: { anyOf: [stringSchema(), arraySchema(stringSchema())] },
+            backupPath: stringSchema(),
+            backup_path: stringSchema(),
+            outputPath: stringSchema(),
+            output_path: stringSchema(),
+            operationId: stringSchema(),
+            operation_id: stringSchema()
+        }),
+        customValidate(args = {}) {
+            const handle = args.artifactHandle || args.artifact_handle || args.handle;
+            const owner = handle && typeof handle === 'object'
+                ? normalizeString(handle.owner || handle.tool || handle.runtimeId || handle.runtime_id)
+                : '';
+            if (owner && !['artifact_tools', 'ailis_artifact_tools'].includes(owner)) {
+                return [`artifact_tools cannot consume an artifact handle owned by ${owner}`];
+            }
+            return [];
+        }
+    }),
+    artifact_import: Object.freeze({
+        id: 'artifact_import',
+        version: CONTRACT_VERSION,
+        mutates: false,
+        risk: 'low',
+        approval: 'never',
+        experience: TOOL_EXPERIENCE.artifact_import,
+        returns: defaultReturns(),
+        errors: defaultErrors([
+            'missing_path',
+            'file_not_found',
+            'path_outside_workspace',
+            'unsupported_parser',
+            'worker_not_found',
+            'worker_failed',
+            'artifact_store_unavailable'
+        ]),
+        schema: actionSchema(['schema', 'import', 'table'], {
+            path: stringSchema({ minLength: 1 }),
+            file: stringSchema({ minLength: 1 }),
+            filePath: stringSchema({ minLength: 1 }),
+            file_path: stringSchema({ minLength: 1 }),
+            target: stringSchema({ minLength: 1 }),
+            parserId: stringSchema(),
+            parser_id: stringSchema(),
+            parser: stringSchema(),
+            kind: stringSchema(),
+            language: stringSchema(),
+            lang: stringSchema(),
+            parserConfig: objectSchema({ additionalProperties: true }),
+            parser_config: objectSchema({ additionalProperties: true }),
+            config: objectSchema({ additionalProperties: true }),
+            python: stringSchema(),
+            timeoutMs: numberSchema({ minimum: 1000, maximum: 10 * 60 * 1000 }),
+            timeout_ms: numberSchema({ minimum: 1000, maximum: 10 * 60 * 1000 })
+        }),
+        customValidate(args = {}) {
+            const action = normalizeAction(args.action || args.operation || args.intent, 'import');
+            if (action !== 'schema' && !normalizeString(args.path || args.file || args.filePath || args.file_path || args.target)) {
+                return ['artifact_import requires path/file/filePath/target except for action=schema'];
+            }
+            return [];
+        }
     }),
     artifact_compute: Object.freeze({
         id: 'artifact_compute',
@@ -1886,15 +2547,15 @@ function normalizeArgsForContract(toolId, args = {}) {
         return {};
     }
     const normalized = { ...args };
-    if (['email', 'file_manager', 'computer', 'code', 'artifact_verifier', 'artifact_query', 'artifact_compute', 'read_xlsx_workbook', 'github_pages', 'mcp_bridge', 'tool_doctor', 'capability_manager', 'self_debugger', 'self_evolution', 'subagents', 'vision.capture_context'].includes(toolId)) {
+    if (['email', 'file_manager', 'computer', 'code', 'artifact_verifier', 'artifact_query', 'artifact_tools', 'artifact_import', 'artifact_compute', 'github_pages', 'mcp_bridge', 'tool_doctor', 'capability_manager', 'self_debugger', 'self_evolution', 'task_results', 'vision.capture_context'].includes(toolId)) {
         const fallbackAction = toolId === 'vision.capture_context'
             ? 'capture_context'
             : toolId === 'self_evolution'
                 ? 'analyze'
-                : toolId === 'read_xlsx_workbook'
-                    ? 'inspect'
-                    : toolId === 'artifact_compute'
-                        ? 'profile'
+                : toolId === 'artifact_compute'
+                    ? 'profile'
+                    : toolId === 'artifact_import'
+                        ? 'import'
                         : toolId === 'artifact_query'
                             ? 'summary'
                             : 'schema';
@@ -1954,8 +2615,16 @@ function getToolContract(toolId) {
     return TOOL_CONTRACTS[toolId] || null;
 }
 
+const HIDDEN_MODEL_TOOL_CONTRACT_IDS = new Set([
+    'read_xlsx_workbook'
+]);
+
+function isModelVisibleToolContract(contract = {}) {
+    return !HIDDEN_MODEL_TOOL_CONTRACT_IDS.has(contract.id);
+}
+
 function listToolContracts() {
-    return Object.values(TOOL_CONTRACTS).map((contract) => ({
+    return Object.values(TOOL_CONTRACTS).filter(isModelVisibleToolContract).map((contract) => ({
         id: contract.id,
         version: contract.version,
         mutates: contract.mutates,
@@ -1996,7 +2665,7 @@ function getToolContractPromptText(toolId) {
 function buildToolContractsPrompt(toolIds = []) {
     const ids = Array.isArray(toolIds) && toolIds.length
         ? toolIds
-        : Object.keys(TOOL_CONTRACTS);
+        : Object.keys(TOOL_CONTRACTS).filter((id) => !HIDDEN_MODEL_TOOL_CONTRACT_IDS.has(id));
     return ids
         .map((id) => getToolContractPromptText(id))
         .filter(Boolean)

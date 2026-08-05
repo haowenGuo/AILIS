@@ -9,8 +9,20 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { AILISGateway } = require('../electron/ailis-gateway.cjs');
 const { AILISPlatformAdapter } = require('../electron/ailis-platform-adapter.cjs');
-const { resolveAgentDecisionTimeoutMs } = require('../electron/ailis-agent-runner.cjs');
-const { buildTurnItemsPromptObject } = require('../electron/ailis-turn-items.cjs');
+const {
+    resolveAgentDecisionTimeoutMs,
+    resolveAgentPromptProfile
+} = require('../electron/ailis-agent-runner.cjs');
+const { buildObservationLedgerPromptObject } = require('../electron/ailis-turn-items.cjs');
+const { ContextManager } = require('../electron/ailis-context-manager.cjs');
+const {
+    normalizeTimeoutMs
+} = require('../electron/desktop-llm-provider.cjs');
+
+test('desktop LLM provider preserves configured agent decision timeouts up to ten minutes', () => {
+    assert.equal(normalizeTimeoutMs(360000), 360000);
+    assert.equal(normalizeTimeoutMs(15 * 60 * 1000), 10 * 60 * 1000);
+});
 
 async function jsonFetch(url, options = {}) {
     const response = await fetch(url, {
@@ -35,6 +47,74 @@ function delay(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function decisionObjectToChatMessage(decision, callId = 'mock-tool-call') {
+    if (!decision || typeof decision !== 'object' || Array.isArray(decision)) {
+        return { content: typeof decision === 'string' ? decision : JSON.stringify(decision) };
+    }
+    if (decision.action === 'tool' && decision.tool_call?.tool) {
+        return {
+            content: decision.public_reasoning || decision.summary || '',
+            tool_calls: [
+                {
+                    id: callId,
+                    type: 'function',
+                    function: {
+                        name: decision.tool_call.tool,
+                        arguments: JSON.stringify(decision.tool_call.args || {})
+                    }
+                }
+            ]
+        };
+    }
+    if (decision.action === 'load_context') {
+        const request = decision.capability_request || {};
+        const query = [
+            ...(Array.isArray(request.skills) ? request.skills : []),
+            ...(Array.isArray(request.tools) ? request.tools : []),
+            ...(Array.isArray(request.mcp) ? request.mcp : []),
+            request.reason || decision.summary || decision.intent || 'capability context'
+        ].filter(Boolean).join(' ');
+        return {
+            content: decision.public_reasoning || decision.summary || '',
+            tool_calls: [
+                {
+                    id: callId,
+                    type: 'function',
+                    function: {
+                        name: 'tool_search',
+                        arguments: JSON.stringify({
+                            query,
+                            limit: 8
+                        })
+                    }
+                }
+            ]
+        };
+    }
+    if (decision.action === 'blocked') {
+        return { content: decision.blocked_reason || decision.final_answer || decision.summary || '' };
+    }
+    if (decision.action === 'final') {
+        return { content: decision.final_answer || decision.answer || decision.response || decision.summary || '' };
+    }
+    return { content: JSON.stringify(decision) };
+}
+
+function parseModelContextPayload(call) {
+    const messages = call?.payload?.messages || [];
+    for (const message of messages.filter((entry) => entry.role === 'user')) {
+        try {
+            const parsed = JSON.parse(message.content);
+            if (parsed?.type === 'context') {
+                return parsed;
+            }
+        } catch {
+            // Ignore non-JSON user goal messages.
+        }
+    }
+    return {};
+}
+
 async function waitFor(predicate, { timeoutMs = 2000, intervalMs = 25 } = {}) {
     const startedAt = Date.now();
     while (Date.now() - startedAt < timeoutMs) {
@@ -47,7 +127,7 @@ async function waitFor(predicate, { timeoutMs = 2000, intervalMs = 25 } = {}) {
 }
 
 test('Agent turn items mark successful web fetches with structured API evidence gaps', () => {
-    const turnItems = buildTurnItemsPromptObject({
+    const turnItems = buildObservationLedgerPromptObject({
         stepResults: [
             {
                 id: 'clinical-web-fetch',
@@ -73,8 +153,163 @@ test('Agent turn items mark successful web fetches with structured API evidence 
         ]
     });
     assert.equal(turnItems.latest_observation.evidence_gap, 'structured_api_preferred');
-    assert.match(turnItems.latest_observation.recovery_hint, /ClinicalTrials API/);
-    assert.match(JSON.stringify(turnItems.items), /external__clinicaltrials|ClinicalTrials API/);
+    assert.match(turnItems.latest_observation.preview, /ClinicalTrials\.gov|structured ClinicalTrials/);
+    assert.match(JSON.stringify(turnItems.items), /structured_api_preferred|ClinicalTrials\.gov/);
+});
+
+test('Agent prompt profile uses compact budgets for Ollama without changing cloud providers', () => {
+    const ollamaProfile = resolveAgentPromptProfile({ provider: 'ollama' });
+    assert.equal(ollamaProfile.id, 'local_compact');
+    assert.equal(ollamaProfile.compact, true);
+    assert.ok(ollamaProfile.memoryChars < 5000);
+    assert.ok(ollamaProfile.externalToolExposureLimit < 16);
+
+    const cloudProfile = resolveAgentPromptProfile({ provider: 'openai-compatible' });
+    assert.equal(cloudProfile.id, 'full');
+    assert.equal(cloudProfile.compact, false);
+    assert.ok(cloudProfile.memoryChars >= 20000);
+
+    const exactAnswerProfile = resolveAgentPromptProfile(
+        { provider: 'openai-compatible' },
+        { exactAnswerMode: true }
+    );
+    assert.equal(exactAnswerProfile.id, 'local_compact');
+    assert.equal(exactAnswerProfile.compact, true);
+    assert.equal(exactAnswerProfile.reason, 'exact_answer_task');
+
+    const artifactQuestionProfile = resolveAgentPromptProfile(
+        { provider: 'openai-compatible' },
+        { taskCompactPrompt: true }
+    );
+    assert.equal(artifactQuestionProfile.id, 'local_compact');
+    assert.equal(artifactQuestionProfile.compact, true);
+    assert.equal(artifactQuestionProfile.reason, 'artifact_answer_task');
+
+    const explicitFullProfile = resolveAgentPromptProfile(
+        { provider: 'openai-compatible' },
+        { taskCompactPrompt: true, exactAnswerMode: true, agentPromptProfile: 'full' }
+    );
+    assert.equal(explicitFullProfile.id, 'full');
+    assert.equal(explicitFullProfile.compact, false);
+});
+
+test('TaskAgent main loop semantically compacts over-budget history and preserves durable task state', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-main-loop-semantic-compact-'));
+    const originalGoal = 'Verify the release date and answer with the official source.';
+    const items = [
+        {
+            type: 'message',
+            role: 'user',
+            content: [{ type: 'input_text', text: JSON.stringify({ type: 'context', attached_files: [{ path: 'release.pdf' }] }) }]
+        },
+        {
+            type: 'message',
+            role: 'user',
+            content: [{ type: 'input_text', text: originalGoal }]
+        }
+    ];
+    for (let index = 0; index < 16; index += 1) {
+        items.push({
+            type: 'function_call',
+            call_id: `main-loop-call-${index}`,
+            name: 'web_fetch',
+            arguments: JSON.stringify({ url: `https://example.test/releases/${index}` })
+        });
+        items.push({
+            type: 'function_call_output',
+            call_id: `main-loop-call-${index}`,
+            output: `Status: completed\noutputId=checkpoint-output-${index}\n${'release evidence '.repeat(420)}`
+        });
+    }
+    const manager = new ContextManager({ items, toolOutputChars: 50000 });
+    const llmServer = await createScriptedChatCompletionsServer(() => ({
+        action: 'final',
+        final_answer: 'The preserved evidence supports the release-date answer.'
+    }));
+    const gateway = new AILISGateway({
+        port: 0,
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit')
+    });
+
+    try {
+        const status = await gateway.start();
+        const result = await runAgent(status.url, {
+            sessionId: 'main-loop-semantic-compact-test',
+            message: originalGoal,
+            agentLoop: 'llm',
+            initialContextManagerCheckpoint: manager.toCheckpoint(),
+            initialPlan: {
+                intent: 'release_verification',
+                steps: [{ step: 'Verify the official publication date', status: 'in_progress' }]
+            },
+            initialStepResults: [
+                {
+                    id: 'official-release-evidence',
+                    tool: 'web_fetch',
+                    title: 'Official release page',
+                    evidenceArtifacts: [{
+                        id: 'official-release-artifact',
+                        type: 'WebEvidence',
+                        summary: 'Official release date evidence.'
+                    }],
+                    response: {
+                        ok: true,
+                        status: 'completed',
+                        result: {
+                            content: [{ type: 'text', text: 'Official release date evidence.' }],
+                            details: { outputId: 'official-release-output' }
+                        }
+                    }
+                },
+                {
+                    id: 'missing-publication-field',
+                    tool: 'web_fetch',
+                    title: 'Publication metadata gap',
+                    response: {
+                        ok: false,
+                        status: 'incomplete',
+                        error: 'official publication date remains unresolved',
+                        result: { details: { missing_fields: ['official publication date'] } }
+                    }
+                }
+            ],
+            llmSettings: {
+                provider: 'openai-compatible',
+                baseUrl: llmServer.url,
+                apiKey: 'test-key',
+                model: 'mock-semantic-compact',
+                timeoutMs: 10000
+            },
+            context: {
+                workspace: workspaceRoot,
+                agentRole: 'task_agent',
+                contextMode: 'task_agent',
+                taskAgentInheritanceMode: 'checkpoint',
+                contextWindowTokens: 9000,
+                reservedOutputTokens: 1000,
+                taskConstraints: ['Use the official source.']
+            }
+        });
+
+        assert.equal(result.body.ok, true, result.body.displayText);
+        const transcript = await gateway.runtime.readTranscript(result.body.runId, 200);
+        const compacted = transcript.items.find((item) => item.type === 'agent.context_compaction');
+        assert.ok(compacted, JSON.stringify(transcript.items.map((item) => item.type)));
+        assert.equal(compacted.payload.historyVersion, 1);
+        const checkpointText = JSON.stringify(compacted.payload.checkpoint);
+        assert.match(checkpointText, /Verify the release date and answer with the official source/);
+        assert.match(checkpointText, /Use the official source/);
+        assert.match(checkpointText, /Verify the official publication date/);
+        assert.match(checkpointText, /official publication date remains unresolved/);
+        assert.match(checkpointText, /Official release date evidence/);
+        assert.match(checkpointText, /checkpoint-output-15/);
+    } finally {
+        await gateway.stop();
+        await llmServer.close();
+        await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
 });
 
 async function createMockChatCompletionsServer() {
@@ -100,9 +335,9 @@ async function createMockChatCompletionsServer() {
                       action: 'tool',
                       plan_update: ['先创建目标目录'],
                       tool_call: {
-                          tool: 'computer',
+                          tool: 'exec',
                           title: '创建目标目录',
-                          args: { action: 'mkdir', path: 'planner-output' }
+                          args: { command: 'New-Item -ItemType Directory -Path planner-output -Force' }
                       }
                 },
                 {
@@ -112,10 +347,9 @@ async function createMockChatCompletionsServer() {
                     action: 'tool',
                     plan_update: ['目录已创建，写入说明文件'],
                     tool_call: {
-                        tool: 'computer',
+                        tool: 'write',
                         title: '写入说明文件',
                         args: {
-                            action: 'write',
                             path: 'planner-output/README.txt',
                             content: 'Agentic Executor OK\n'
                         }
@@ -125,29 +359,20 @@ async function createMockChatCompletionsServer() {
                     mode: 'task',
                     intent: 'create_workspace_note',
                     summary: '创建目录并写入说明文件',
-                    action: 'tool',
-                    plan_update: ['读取文件进行复核'],
-                    tool_call: {
-                        tool: 'computer',
-                        title: '读取说明文件复核',
-                        args: { action: 'read', path: 'planner-output/README.txt' }
-                    }
-                },
-                {
-                    mode: 'task',
-                    intent: 'create_workspace_note',
-                    summary: '创建目录并写入说明文件',
                     action: 'final',
-                    final_answer: '**Agentic Executor 已完成**\n\n- 目录和 README.txt 已创建\n- 已读取复核通过'
+                    final_answer: '**Agentic Executor 已完成**\n\n- 目录和 README.txt 已创建'
                 }
             ];
-            const content = JSON.stringify(decisions[Math.min(agentDecisionCount, decisions.length) - 1]);
+            const message = decisionObjectToChatMessage(
+                decisions[Math.min(agentDecisionCount, decisions.length) - 1],
+                `mock-agent-tool-${agentDecisionCount}`
+            );
 
             res.writeHead(200, { 'content-type': 'application/json' });
             res.end(JSON.stringify({
                 choices: [
                     {
-                        message: { content }
+                        message
                     }
                 ],
                 usage: { prompt_tokens: 10, completion_tokens: 10, total_tokens: 20 }
@@ -179,12 +404,12 @@ async function createScriptedChatCompletionsServer(decisionFactory) {
             decisionCount += 1;
             calls.push({ url: req.url, system, payload, decisionCount });
             const decision = decisionFactory({ decisionCount, payload, messages, system });
-            const content = typeof decision === 'string' ? decision : JSON.stringify(decision);
+            const message = decisionObjectToChatMessage(decision, `scripted-tool-${decisionCount}`);
             res.writeHead(200, { 'content-type': 'application/json' });
             res.end(JSON.stringify({
                 choices: [
                     {
-                        message: { content }
+                        message
                     }
                 ],
                 usage: { prompt_tokens: 10, completion_tokens: 10, total_tokens: 20 }
@@ -261,7 +486,7 @@ test('Agent prompts inject runtime_environment from the active platform adapter'
             env: { ComSpec: 'C:\\Windows\\System32\\cmd.exe' },
             expectedFamily: 'windows',
             expectedPathStyle: 'windows',
-            expectedShellDialect: 'cmd'
+            expectedShellDialect: 'powershell'
         },
         {
             platform: 'linux',
@@ -316,18 +541,667 @@ test('Agent prompts inject runtime_environment from the active platform adapter'
             });
 
             assert.equal(result.body.ok, true, JSON.stringify(result.body));
-            const userPayload = JSON.parse(llmServer.calls[0].payload.messages.find((entry) => entry.role === 'user').content);
+            const userPayload = parseModelContextPayload(llmServer.calls[0]);
             assert.equal(userPayload.runtime_environment.family, item.expectedFamily);
             assert.equal(userPayload.runtime_environment.path_style, item.expectedPathStyle);
             assert.equal(userPayload.runtime_environment.shell_dialect, item.expectedShellDialect);
+            assert.match(userPayload.runtime_environment.current_date, /^\d{4}-\d{2}-\d{2}$/);
+            assert.match(userPayload.runtime_environment.current_time, /^\d{2}:\d{2}:\d{2}$/);
+            assert.ok(userPayload.runtime_environment.timezone);
+            assert.match(userPayload.runtime_environment.utc_offset, /^[+-]\d{2}:\d{2}$/);
             assert.match(userPayload.runtime_environment.command_guidance, /Do not assume|not Linux by default|POSIX/);
-            assert.match(llmServer.calls[0].system, /runtime_environment/);
+            assert.match(JSON.stringify(llmServer.calls[0].payload.messages), /runtime_environment/);
+            assert.match(llmServer.calls[0].system, /Runtime environment/);
             assert.doesNotMatch(llmServer.calls[0].system, /当前桌面端优先 Windows|Windows 桌面端命令必须/);
         } finally {
             await gateway.stop();
             await llmServer.close();
             await fs.rm(workspaceRoot, { recursive: true, force: true });
         }
+    }
+});
+
+test('Desktop real eval can pin only the runtime clock while preserving platform metadata', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-runtime-clock-'));
+    const llmServer = await createScriptedChatCompletionsServer(() => ({
+        mode: 'task',
+        intent: 'runtime_clock_probe',
+        summary: 'probe runtime clock',
+        action: 'final',
+        final_answer: 'runtime clock observed'
+    }));
+    const gateway = new AILISGateway({
+        port: 0,
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit'),
+        platformAdapter: new AILISPlatformAdapter({
+            platform: 'win32',
+            hostPlatform: 'win32',
+            env: { ComSpec: 'C:\\Windows\\System32\\cmd.exe' }
+        })
+    });
+
+    try {
+        const status = await gateway.start();
+        const result = await runAgent(status.url, {
+            sessionId: 'runtime-clock-override',
+            message: 'Confirm the benchmark clock.',
+            agentLoop: 'llm',
+            directToolExecutor: false,
+            llmSettings: {
+                provider: 'openai-compatible',
+                baseUrl: llmServer.url,
+                apiKey: 'test-key',
+                model: 'mock-runtime-clock',
+                temperature: 0,
+                timeoutMs: 10000
+            },
+            context: {
+                workspace: workspaceRoot,
+                directToolExecutor: false,
+                nativeDirectTools: false,
+                desktopRealEval: true,
+                runtimeEnvironmentOverride: {
+                    source: 'toolsandbox_benchmark_clock',
+                    current_date: '2026-07-17',
+                    current_time: '06:06:27',
+                    current_datetime: '2026-07-17T06:06:27+08:00',
+                    utc_offset: '+08:00'
+                }
+            }
+        });
+
+        assert.equal(result.body.ok, true, JSON.stringify(result.body));
+        const runtimeEnvironment = parseModelContextPayload(
+            llmServer.calls[0]
+        ).runtime_environment;
+        assert.equal(runtimeEnvironment.source, 'toolsandbox_benchmark_clock');
+        assert.equal(runtimeEnvironment.current_date, '2026-07-17');
+        assert.equal(runtimeEnvironment.current_time, '06:06:27');
+        assert.equal(runtimeEnvironment.current_datetime, '2026-07-17T06:06:27+08:00');
+        assert.equal(runtimeEnvironment.utc_offset, '+08:00');
+        assert.equal(runtimeEnvironment.family, 'windows');
+        assert.equal(runtimeEnvironment.path_style, 'windows');
+        assert.equal(runtimeEnvironment.shell_dialect, 'powershell');
+    } finally {
+        await gateway.stop();
+        await llmServer.close();
+        await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
+});
+
+test('Persona prompt stays in AILIS persona and exposes only system TaskAgent handoff', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-persona-orchestrator-'));
+    const llmServer = await createScriptedChatCompletionsServer(() => ({
+        action: 'final',
+        final_answer: '你好呀～我在这里。'
+    }));
+    const gateway = new AILISGateway({
+        port: 0,
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit')
+    });
+
+    try {
+        const status = await gateway.start();
+        const result = await runAgent(status.url, {
+            sessionId: 'persona-orchestrator-test',
+            message: '你好呀',
+            agentLoop: 'llm',
+            llmSettings: {
+                provider: 'openai-compatible',
+                baseUrl: llmServer.url,
+                apiKey: 'test-key',
+                model: 'mock-persona-orchestrator',
+                temperature: 0,
+                timeoutMs: 10000
+            },
+            context: {
+                workspace: workspaceRoot,
+                agentLoop: 'llm',
+                directToolExecutor: true,
+                agentRole: 'persona_orchestrator'
+            }
+        });
+
+        assert.equal(result.body.ok, true, JSON.stringify(result.body));
+        assert.equal(result.body.intent, 'direct_conversation_final');
+        assert.equal(llmServer.calls.length, 1);
+        assert.doesNotMatch(llmServer.calls[0].system, /AILIS TaskAgent|coding agent running in AILIS/);
+        assert.match(llmServer.calls[0].system, /可爱的虚拟助手，名字固定为AILIS/);
+        assert.match(llmServer.calls[0].system, /关系表达协议/);
+        assert.match(llmServer.calls[0].system, /authoritative host clock/);
+        assert.match(llmServer.calls[0].system, /call handoff_task exactly once/);
+        assert.match(llmServer.calls[0].system, /Harness transfers the immutable current user request/);
+        assert.match(llmServer.calls[0].system, /TaskResult packet is the factual boundary/);
+        assert.doesNotMatch(llmServer.calls[0].system, /continuation=/);
+        const toolNames = (llmServer.calls[0].payload.tools || []).map((tool) => tool.function?.name || tool.name);
+        assert.deepEqual(toolNames, ['handoff_task']);
+        const handoffTool = llmServer.calls[0].payload.tools[0]?.function || llmServer.calls[0].payload.tools[0];
+        assert.deepEqual(handoffTool?.parameters?.properties, {});
+        const contextPayload = parseModelContextPayload(llmServer.calls[0]);
+        const memoryMessage = llmServer.calls[0].payload.messages.find((message) =>
+            (message.role === 'developer' || message.role === 'system') &&
+            /<memory_context>/.test(String(message.content || ''))
+        );
+        assert.match(memoryMessage?.content || '', /<memory_context>/);
+        assert.match(memoryMessage?.content || '', /## Persona/);
+        assert.equal(contextPayload.memory_context, undefined);
+        assert.equal(contextPayload.capability_catalog, undefined);
+        assert.equal(contextPayload.external_tool_exposure, undefined);
+        const rawTurns = gateway.rawMemoryLedger.replay({
+            type: 'chat.llm_turn',
+            sessionId: 'persona-orchestrator-test',
+            includePayload: true,
+            limit: 20
+        });
+        assert.ok(rawTurns.entries.some((entry) =>
+            entry.payload?.requestPayload?.memoryUserMessage === '你好呀'
+        ));
+    } finally {
+        await gateway.stop();
+        await llmServer.close();
+        await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
+});
+
+test('Persona hands one exact request to the system TaskAgent and renders its compact result', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-system-task-handoff-'));
+    const llmServer = await createScriptedChatCompletionsServer(({ decisionCount }) => {
+        if (decisionCount === 1) {
+            return {
+                action: 'tool',
+                summary: '开始处理。',
+                tool_call: {
+                    tool: 'handoff_task',
+                    args: {}
+                }
+            };
+        }
+        throw new Error('Persona should not receive the TaskAgent result as a second model turn');
+    });
+    const gateway = new AILISGateway({
+        port: 0,
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit')
+    });
+    const taskCalls = [];
+    gateway.taskAgentHarness.executeTaskAgent = async (payload) => {
+        taskCalls.push(payload);
+        return {
+            ok: true,
+            status: 'completed',
+            runId: payload.agent.childRunId,
+            displayText: 'BaseLabelPropagation',
+            steps: [{ private: 'not model visible' }],
+            taskRunHandoff: {
+                status: 'completed',
+                finalAnswer: 'BaseLabelPropagation',
+                partialAnswer: '',
+                sourceRefs: [{ ref_id: 'source-1', title: 'Changelog', url: 'https://example.test/changelog' }],
+                collectedData: [],
+                traceRef: payload.agent.childRunId,
+                resume: { contextManagerCheckpoint: { private: true }, checkpointAvailable: true }
+            }
+        };
+    };
+
+    try {
+        const status = await gateway.start();
+        const result = await runAgent(status.url, {
+            sessionId: 'system-task-handoff-test',
+            message: '核对官方资料并只给出类名。',
+            agentLoop: 'llm',
+            maxAgentSteps: 4,
+            llmSettings: {
+                provider: 'openai-compatible',
+                baseUrl: llmServer.url,
+                apiKey: 'test-key',
+                model: 'mock-system-task-handoff',
+                temperature: 0,
+                timeoutMs: 10000
+            },
+            context: {
+                workspace: workspaceRoot,
+                agentLoop: 'llm',
+                directToolExecutor: true,
+                nativeDirectTools: true,
+                directToolLimit: 35,
+                maxAgentSteps: 4,
+                agentRole: 'persona_orchestrator',
+                requireTaskExecution: true,
+                requireExecutionEvidence: true,
+                desktopRealEval: true,
+                benchmarkName: 'Apple ToolSandbox',
+                benchmarkScenario: 'toolsandbox-scenario-1',
+                runtimeEnvironmentOverride: {
+                    source: 'toolsandbox_benchmark_clock',
+                    current_date: '2026-07-17',
+                    current_time: '06:06:27',
+                    current_datetime: '2026-07-17T06:06:27+08:00',
+                    utc_offset: '+08:00'
+                }
+            }
+        });
+
+        assert.equal(result.body.ok, true, JSON.stringify(result.body));
+        assert.equal(result.body.displayText, 'BaseLabelPropagation');
+        assert.equal(result.body.finalAnswer, 'BaseLabelPropagation');
+        assert.equal(result.body.intent, 'persona_task_handoff_result');
+        assert.equal(result.body.taskResult?.schema, 'ailis.task_result.v1');
+        assert.equal(taskCalls.length, 1);
+        assert.equal(taskCalls[0].agent.task, '核对官方资料并只给出类名。');
+        assert.equal(taskCalls[0].context.originalUserGoal, '核对官方资料并只给出类名。');
+        assert.equal(taskCalls[0].context.desktopRealEval, true);
+        assert.equal(taskCalls[0].context.benchmarkName, 'Apple ToolSandbox');
+        assert.equal(taskCalls[0].context.benchmarkScenario, 'toolsandbox-scenario-1');
+        assert.equal(taskCalls[0].context.directToolLimit, 35);
+        assert.equal(taskCalls[0].context.requireExecutionEvidence, true);
+        assert.deepEqual(taskCalls[0].context.runtimeEnvironmentOverride, {
+            source: 'toolsandbox_benchmark_clock',
+            current_date: '2026-07-17',
+            current_time: '06:06:27',
+            current_datetime: '2026-07-17T06:06:27+08:00',
+            utc_offset: '+08:00'
+        });
+        assert.equal(llmServer.calls.length, 1);
+        assert.notEqual(llmServer.calls[0].payload.tool_choice, 'auto');
+        assert.match(JSON.stringify(llmServer.calls[0].payload.tool_choice), /handoff_task/);
+        assert.match(llmServer.calls[0].system, /explicit task-execution contract/i);
+    } finally {
+        await gateway.stop();
+        await llmServer.close();
+        await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
+});
+
+test.skip('legacy Persona mailbox transport is replaced by system handoff', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-persona-handoff-once-'));
+    const llmServer = await createScriptedChatCompletionsServer(({ decisionCount }) => {
+        if (decisionCount === 1) {
+            return {
+                action: 'tool',
+                summary: '交给干净的 TaskAgent 执行。',
+                tool_call: {
+                    tool: 'spawn_agent',
+                    args: {
+                        task_name: 'sandrone_guide',
+                        message: '核验截至当前日期《原神》“木偶”桑多涅是否已经实装；使用新鲜网页证据，若已实装则完成角色攻略。',
+                        fork_turns: 'all'
+                    }
+                }
+            };
+        }
+        if (decisionCount === 2) {
+            return {
+                action: 'tool',
+                summary: '等待 TaskAgent 完成。',
+                tool_call: {
+                    tool: 'wait_agent',
+                    args: { timeout_ms: 1000 }
+                }
+            };
+        }
+        return {
+            action: 'final',
+            final_answer: 'AILIS final answer: 42'
+        };
+    });
+    const gateway = new AILISGateway({
+        port: 0,
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit')
+    });
+    const agentCalls = [];
+    const gatewayToolCalls = [];
+    const originalCallTool = gateway.callTool.bind(gateway);
+    gateway.callTool = async (request) => {
+        if (['spawn_agent', 'wait_agent'].includes(request?.tool)) {
+            gatewayToolCalls.push({
+                tool: request.tool,
+                timeoutMs: request.timeoutMs,
+                contextTimeoutMs: request.context?.timeoutMs,
+                waitTimeoutMs: request.args?.timeout_ms
+            });
+        }
+        return originalCallTool(request);
+    };
+
+    try {
+        gateway.runtime.agent_control.execute_agent = async ({ agent, args, context }) => {
+            agentCalls.push({ agent, args, context });
+            await new Promise((resolve) => setTimeout(resolve, 50));
+            return {
+                ok: true,
+                status: 'completed',
+                displayText: 'TaskAgent 已核验当前资料并完成木偶攻略。',
+                finalAnswer: '已核验并完成攻略'
+            };
+        };
+        const status = await gateway.start();
+        const result = await runAgent(status.url, {
+            sessionId: 'persona-handoff-once-test',
+            message: '已经实装了',
+            messageHistory: [
+                { role: 'user', content: '做一套木偶的攻略' },
+                { role: 'assistant', content: '你说的是哪个作品里的木偶呀？' },
+                { role: 'user', content: '原神的' },
+                { role: 'assistant', content: '我记忆里她还没有实装。' },
+                { role: 'user', content: '已经实装了' }
+            ],
+            agentLoop: 'llm',
+            llmSettings: {
+                provider: 'openai-compatible',
+                baseUrl: llmServer.url,
+                apiKey: 'test-key',
+                model: 'mock-persona-handoff',
+                temperature: 0,
+                timeoutMs: 10000
+            },
+            context: {
+                workspace: workspaceRoot,
+                agentLoop: 'llm',
+                directToolExecutor: true,
+                approved: true,
+                agentRole: 'persona_orchestrator'
+            }
+        });
+
+        assert.equal(result.body.ok, true, JSON.stringify(result.body));
+        assert.equal(result.body.planner, 'llm-agentic-executor');
+        assert.equal(result.body.displayText, '已核验并完成攻略');
+        assert.equal(result.body.finalAnswer, '已核验并完成攻略');
+        assert.equal(llmServer.calls.length, 3);
+        assert.equal(agentCalls.length, 1);
+        assert.equal(
+            agentCalls[0].args.message,
+            '核验截至当前日期《原神》“木偶”桑多涅是否已经实装；使用新鲜网页证据，若已实装则完成角色攻略。'
+        );
+        assert.equal(agentCalls[0].context.maxAgentSteps, 4);
+        assert.equal(agentCalls[0].context.cleanContext, false);
+        assert.equal(agentCalls[0].context.taskAgentInheritanceMode, 'checkpoint');
+        assert.ok(agentCalls[0].context.initialContextManagerCheckpoint);
+        assert.equal(agentCalls[0].context.contextMode, 'task_agent');
+        assert.deepEqual(gatewayToolCalls.map((call) => call.tool), ['spawn_agent', 'wait_agent']);
+        assert.equal(gatewayToolCalls[1].waitTimeoutMs, 1000);
+        assert.match(JSON.stringify(llmServer.calls[0].payload.messages), /原神的/);
+        assert.match(JSON.stringify(llmServer.calls[0].payload.messages), /已经实装了/);
+        assert.match(JSON.stringify(llmServer.calls[1].payload.messages), /root\/sandrone_guide/);
+        assert.match(JSON.stringify(llmServer.calls[2].payload.messages), /subagent_notification/);
+        assert.match(JSON.stringify(llmServer.calls[2].payload.messages), /TaskAgent 已核验当前资料并完成木偶攻略/);
+        assert.match(JSON.stringify(llmServer.calls[2].payload.messages), /may_add_facts/);
+    } finally {
+        await gateway.stop();
+        await llmServer.close();
+        await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
+});
+
+test.skip('legacy Persona round-budget mailbox finalization is replaced by system handoff', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-persona-budget-finalization-'));
+    const llmServer = await createScriptedChatCompletionsServer(({ decisionCount }) => {
+        if (decisionCount === 1) {
+            return {
+                action: 'tool',
+                tool_call: {
+                    tool: 'spawn_agent',
+                    args: {
+                        task_name: 'gaia_exact_answer',
+                        message: 'Research the question and return the supported exact answer.',
+                        fork_turns: 'all'
+                    }
+                }
+            };
+        }
+        if (decisionCount === 2) {
+            return {
+                action: 'tool',
+                tool_call: {
+                    tool: 'wait_agent',
+                    args: { timeout_ms: 1 }
+                }
+            };
+        }
+        if (decisionCount === 3) {
+            return {
+                action: 'tool',
+                tool_call: {
+                    tool: 'list_agents',
+                    args: {}
+                }
+            };
+        }
+        if (decisionCount === 4) {
+            return '{"tool_calls":[{"name":"task_results","arguments":{}}]}';
+        }
+        return {
+            action: 'final',
+            final_answer: 'The exact answer is 17.'
+        };
+    });
+    const gateway = new AILISGateway({
+        port: 0,
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit')
+    });
+
+    try {
+        gateway.runtime.agent_control.execute_agent = async () => {
+            await delay(50);
+            return {
+                ok: true,
+                status: 'completed',
+                displayText: 'Verified calculation and sources. Final answer: 17.',
+                finalAnswer: '17'
+            };
+        };
+        const status = await gateway.start();
+        const result = await runAgent(status.url, {
+            sessionId: 'persona-budget-finalization-test',
+            message: 'Calculate the requested value and give the exact answer.',
+            agentLoop: 'llm',
+            maxAgentSteps: 4,
+            llmSettings: {
+                provider: 'openai-compatible',
+                baseUrl: llmServer.url,
+                apiKey: 'test-key',
+                model: 'mock-persona-budget-finalization',
+                temperature: 0,
+                timeoutMs: 10000
+            },
+            context: {
+                workspace: workspaceRoot,
+                agentLoop: 'llm',
+                directToolExecutor: true,
+                approved: true,
+                agentRole: 'persona_orchestrator',
+                agentWaitTimeoutMs: 1000
+            }
+        });
+
+        assert.equal(result.body.ok, true, JSON.stringify(result.body));
+        assert.equal(result.body.status, 'completed');
+        assert.equal(result.body.displayText, '17');
+        assert.equal(result.body.finalAnswer, '17');
+        assert.equal(llmServer.calls.length, 5);
+        assert.deepEqual(llmServer.calls[3].payload.tools || [], []);
+        assert.deepEqual(llmServer.calls[4].payload.tools || [], []);
+        assert.match(llmServer.calls[3].system, /user-facing AILIS final response layer/);
+        const finalizationMessages = JSON.stringify(llmServer.calls[3].payload.messages);
+        assert.match(finalizationMessages, /finalAnswer/);
+        assert.match(finalizationMessages, /17/);
+        assert.match(finalizationMessages, /may_add_facts/);
+        assert.match(finalizationMessages, /ORIGINAL_USER_REQUEST/);
+        assert.doesNotMatch(result.body.displayText, /tool_calls|subagent_notification|TaskAgent/);
+    } finally {
+        await gateway.stop();
+        await llmServer.close();
+        await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
+});
+
+test.skip('legacy Persona live-child settlement is replaced by blocking system handoff', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-persona-early-final-'));
+    const llmServer = await createScriptedChatCompletionsServer(({ decisionCount }) => {
+        if (decisionCount === 1) {
+            return {
+                action: 'tool',
+                summary: '交给 TaskAgent 核验攻略。',
+                tool_call: {
+                    tool: 'spawn_agent',
+                    args: {
+                        task_name: 'roxy_guide',
+                        message: '核验并整理《明日方舟：终末地》洛茜攻略。',
+                        fork_turns: 'all'
+                    }
+                }
+            };
+        }
+        if (decisionCount === 2) {
+            return {
+                action: 'final',
+                final_answer: '不应提前返回的旧攻略。'
+            };
+        }
+        return {
+            action: 'final',
+            final_answer: '基于本轮 TaskAgent 结果整理的洛茜攻略。'
+        };
+    });
+    const gateway = new AILISGateway({
+        port: 0,
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit')
+    });
+    const agentCalls = [];
+
+    try {
+        gateway.runtime.agent_control.execute_agent = async ({ agent, args, context }) => {
+            agentCalls.push({ agent, args, context });
+            await new Promise((resolve) => setTimeout(resolve, 100));
+            return {
+                ok: true,
+                status: 'completed',
+                displayText: '本轮 TaskAgent 已完成洛茜攻略。',
+                finalAnswer: '洛茜攻略的新鲜证据与结论'
+            };
+        };
+        const status = await gateway.start();
+        const result = await runAgent(status.url, {
+            sessionId: 'persona-early-final-test',
+            message: '做一套洛茜的攻略，终末地的洛茜',
+            agentLoop: 'llm',
+            llmSettings: {
+                provider: 'openai-compatible',
+                baseUrl: llmServer.url,
+                apiKey: 'test-key',
+                model: 'mock-persona-early-final',
+                temperature: 0,
+                timeoutMs: 10000
+            },
+            context: {
+                workspace: workspaceRoot,
+                agentLoop: 'llm',
+                directToolExecutor: true,
+                approved: true,
+                agentRole: 'persona_orchestrator',
+                agentWaitTimeoutMs: 1000
+            }
+        });
+
+        assert.equal(result.body.ok, true, JSON.stringify(result.body));
+        assert.equal(result.body.displayText, '洛茜攻略的新鲜证据与结论');
+        assert.equal(result.body.finalAnswer, '洛茜攻略的新鲜证据与结论');
+        assert.equal(llmServer.calls.length, 3);
+        assert.equal(agentCalls.length, 1);
+        assert.doesNotMatch(result.body.displayText, /旧攻略/);
+        assert.match(JSON.stringify(llmServer.calls[2].payload.messages), /subagent_notification/);
+        assert.match(JSON.stringify(llmServer.calls[2].payload.messages), /本轮 TaskAgent 已完成洛茜攻略/);
+    } finally {
+        await gateway.stop();
+        await llmServer.close();
+        await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
+});
+
+test.skip('legacy renamed spawn deduplication is replaced by Harness continuation state', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-persona-single-owner-'));
+    const llmServer = await createScriptedChatCompletionsServer(({ decisionCount }) => {
+        if (decisionCount === 1) {
+            return {
+                action: 'tool',
+                tool_call: {
+                    tool: 'spawn_agent',
+                    args: { task_name: 'guide', message: 'research guide', fork_turns: 'none' }
+                }
+            };
+        }
+        if (decisionCount === 2) {
+            return { action: 'tool', tool_call: { tool: 'wait_agent', args: { timeout_ms: 1000 } } };
+        }
+        if (decisionCount === 3) {
+            return {
+                action: 'tool',
+                tool_call: {
+                    tool: 'spawn_agent',
+                    args: { task_name: 'guide_supplement', message: 'search missing details', fork_turns: 'none' }
+                }
+            };
+        }
+        return { action: 'final', final_answer: 'integrated original TaskAgent result' };
+    });
+    const gateway = new AILISGateway({
+        port: 0,
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit')
+    });
+    let childRuns = 0;
+    try {
+        gateway.runtime.agent_control.execute_agent = async () => {
+            childRuns += 1;
+            return { ok: true, status: 'completed', displayText: 'guide result' };
+        };
+        const status = await gateway.start();
+        const result = await runAgent(status.url, {
+            sessionId: 'persona-single-owner-test',
+            message: 'make a guide',
+            agentLoop: 'llm',
+            maxAgentSteps: 5,
+            llmSettings: {
+                provider: 'openai-compatible',
+                baseUrl: llmServer.url,
+                apiKey: 'test-key',
+                model: 'mock-persona-single-owner',
+                timeoutMs: 10000
+            },
+            context: {
+                workspace: workspaceRoot,
+                agentLoop: 'llm',
+                directToolExecutor: true,
+                approved: true,
+                agentRole: 'persona_orchestrator'
+            }
+        });
+
+        assert.equal(result.body.displayText, 'guide result');
+        assert.equal(childRuns, 2);
+        assert.equal(gateway.runtime.agent_control.state.list({ sessionId: 'persona-single-owner-test' }).length, 1);
+        const duplicate = result.body.steps.find((step) => step.args?.task_name === 'guide_supplement');
+        assert.equal(duplicate.response.status, 'followup_queued');
+        assert.equal(duplicate.response.result.structuredContent.status, 'followup_queued');
+        assert.equal(duplicate.response.result.structuredContent.task_name, '/root/guide');
+        assert.equal(duplicate.response.result.structuredContent.continued, true);
+    } finally {
+        await gateway.stop();
+        await llmServer.close();
+        await fs.rm(workspaceRoot, { recursive: true, force: true });
     }
 });
 
@@ -378,7 +1252,7 @@ test('AILIS Agent run can be interrupted while preserving transcript data', asyn
 
         const run = await runPromise;
         assert.equal(run.body.status, 'interrupted');
-        assert.match(run.body.displayText, /已中断/);
+        assert.match(run.body.displayText, /已经中断/);
         assert.equal(gateway.ensureAgentRunner().activeRuns.size, 0);
 
         const transcript = await gateway.runtime.readTranscript(run.body.runId, 100);
@@ -447,6 +1321,37 @@ async function createDirectToolCallChatCompletionsServer() {
         });
     });
 
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    return {
+        url: `http://127.0.0.1:${address.port}/v1`,
+        calls,
+        close: () => new Promise((resolve) => server.close(resolve))
+    };
+}
+
+async function createVisibleProtocolRepairServer() {
+    const calls = [];
+    let turn = 0;
+    const server = http.createServer(async (req, res) => {
+        let raw = '';
+        req.on('data', (chunk) => {
+            raw += chunk;
+        });
+        req.on('end', () => {
+            const payload = raw ? JSON.parse(raw) : {};
+            turn += 1;
+            calls.push({ url: req.url, payload, turn });
+            res.writeHead(200, { 'content-type': 'application/json' });
+            const content = turn === 1
+                ? '<｜｜DSML｜｜tool_calls>\n<｜｜DSML｜｜invoke name="mcp__ailis_research__web_research">\n</｜｜DSML｜｜invoke>\n</｜｜DSML｜｜tool_calls>'
+                : '已经根据现有证据整理出可直接展示的最终结果。';
+            res.end(JSON.stringify({
+                choices: [{ message: { content } }],
+                usage: { prompt_tokens: 20, completion_tokens: 10, total_tokens: 30 }
+            }));
+        });
+    });
     await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
     const address = server.address();
     return {
@@ -555,18 +1460,25 @@ async function createNativeResponsesDecisionServer(decisionFactory) {
             const payload = raw ? JSON.parse(raw) : {};
             calls.push({ url: req.url, payload });
             res.writeHead(200, { 'content-type': 'application/json' });
-            if (Array.isArray(payload.tools) && payload.tools.some((tool) => tool.name === 'ailis_agent_decision')) {
+            if (Array.isArray(payload.tools) && payload.tools.length) {
                 decisionCount += 1;
                 const decision = decisionFactory({ decisionCount, payload });
+                if (decision?.action === 'tool' && decision.tool_call?.tool) {
+                    res.end(JSON.stringify({
+                        output: [
+                            {
+                                type: 'function_call',
+                                call_id: `native-call-${decisionCount}`,
+                                name: decision.tool_call.tool,
+                                arguments: JSON.stringify(decision.tool_call.args || {})
+                            }
+                        ],
+                        usage: { input_tokens: 10, output_tokens: 10, total_tokens: 20 }
+                    }));
+                    return;
+                }
                 res.end(JSON.stringify({
-                    output: [
-                        {
-                            type: 'function_call',
-                            call_id: `native-call-${decisionCount}`,
-                            name: 'ailis_agent_decision',
-                            arguments: JSON.stringify(decision)
-                        }
-                    ],
+                    output_text: decision?.final_answer || decision?.blocked_reason || decision?.summary || '',
                     usage: { input_tokens: 10, output_tokens: 10, total_tokens: 20 }
                 }));
                 return;
@@ -591,10 +1503,10 @@ async function createNativeResponsesDecisionServer(decisionFactory) {
     };
 }
 
-test('Agentic Executor widens decision timeout after vision context is involved', () => {
+test('Agentic Executor keeps the configured 120s decision floor across recovery and vision context', () => {
     assert.equal(
         resolveAgentDecisionTimeoutMs({ timeoutMs: 25000 }, { events: [], stepResults: [] }),
-        45000
+        120000
     );
     assert.equal(
         resolveAgentDecisionTimeoutMs(
@@ -604,7 +1516,7 @@ test('Agentic Executor widens decision timeout after vision context is involved'
                 stepResults: [{ response: { ok: false, status: 'error' } }]
             }
         ),
-        60000
+        120000
     );
     assert.equal(
         resolveAgentDecisionTimeoutMs(
@@ -620,7 +1532,7 @@ test('Agentic Executor widens decision timeout after vision context is involved'
                 stepResults: []
             }
         ),
-        90000
+        120000
     );
     assert.equal(
         resolveAgentDecisionTimeoutMs(
@@ -637,7 +1549,7 @@ test('Agentic Executor widens decision timeout after vision context is involved'
                 stepResults: []
             }
         ),
-        90000
+        120000
     );
     assert.equal(
         resolveAgentDecisionTimeoutMs(
@@ -648,7 +1560,7 @@ test('Agentic Executor widens decision timeout after vision context is involved'
                 requestContext: { visionAgentDecisionTimeoutMs: 65000 }
             }
         ),
-        65000
+        120000
     );
 });
 
@@ -668,6 +1580,7 @@ test('Agentic Executor can execute real native direct tool calls before JSON pla
             sessionId: 'direct-native-tool-agent-test',
             message: '写入 direct-native-output.txt 并复核',
             agentLoop: 'llm',
+            maxAgentSteps: 1,
             llmSettings: {
                 provider: 'openai-compatible',
                 baseUrl: llmServer.url,
@@ -699,8 +1612,56 @@ test('Agentic Executor can execute real native direct tool calls before JSON pla
             false
         );
         assert.equal(llmServer.calls[0].payload.tool_choice, 'auto');
-        assert.match(llmServer.calls[0].payload.messages[0].content, /Direct Tool Executor/);
+        assert.equal(llmServer.calls[1].payload.tool_choice, 'none');
+        assert.deepEqual(llmServer.calls[1].payload.tools || [], []);
+        assert.match(llmServer.calls[0].payload.messages[0].content, /Responses-Compatible Tool Runtime/);
         assert.equal(result.body.steps[0].tool, 'write');
+    } finally {
+        await gateway.stop();
+        await llmServer.close();
+        await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
+});
+
+test('Agentic Executor repairs visible DSML protocol before it reaches the final response', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-protocol-repair-'));
+    const llmServer = await createVisibleProtocolRepairServer();
+    const gateway = new AILISGateway({
+        port: 0,
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit')
+    });
+
+    try {
+        const status = await gateway.start();
+        const result = await runAgent(status.url, {
+            sessionId: 'visible-protocol-repair-test',
+            message: '整理现有证据并直接回答',
+            agentLoop: 'llm',
+            llmSettings: {
+                provider: 'openai-compatible',
+                baseUrl: llmServer.url,
+                apiKey: 'test-key',
+                model: 'mock-protocol-repair',
+                temperature: 0,
+                timeoutMs: 10000
+            },
+            context: {
+                workspace: workspaceRoot,
+                directToolExecutor: true,
+                permissionProfile: 'danger-full-access',
+                approvalPolicy: 'auto',
+                approved: true,
+                autoConfirm: true
+            }
+        });
+
+        assert.equal(result.body.ok, true, JSON.stringify(result.body));
+        assert.match(result.body.displayText, /可直接展示的最终结果/);
+        assert.doesNotMatch(result.body.displayText, /DSML|tool_calls|invoke/);
+        assert.equal(llmServer.calls.length, 2);
+        assert.match(llmServer.calls[1].payload.messages[0].content, /Protocol repair/);
     } finally {
         await gateway.stop();
         await llmServer.close();
@@ -757,6 +1718,61 @@ test('Agentic Executor fails fast on terminal LLM provider billing errors', asyn
             result.body.events.some((event) => event.type === 'agent.invalid_decision_observation'),
             false
         );
+    } finally {
+        await gateway.stop();
+        await llmServer.close();
+        await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
+});
+
+test('Agentic Executor fails fast when the LLM decision request times out upstream', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-provider-timeout-agent-'));
+    const llmServer = await createProviderErrorChatCompletionsServer({
+        status: 504,
+        message: 'upstream model request timed out'
+    });
+    const gateway = new AILISGateway({
+        port: 0,
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit')
+    });
+
+    try {
+        const status = await gateway.start();
+        const result = await runAgent(status.url, {
+            sessionId: 'provider-timeout-fail-fast-test',
+            message: '你好',
+            agentLoop: 'llm',
+            maxAgentSteps: 5,
+            llmSettings: {
+                provider: 'openai-compatible',
+                baseUrl: llmServer.url,
+                apiKey: 'test-key',
+                model: 'mock-provider-timeout',
+                temperature: 0,
+                timeoutMs: 10000
+            },
+            context: {
+                workspace: workspaceRoot,
+                directToolExecutor: true,
+                nativeDirectTools: true,
+                computerControlEnabled: true,
+                permissionProfile: 'danger-full-access',
+                approvalPolicy: 'auto',
+                approved: true,
+                autoConfirm: true
+            }
+        });
+
+        assert.equal(result.body.ok, false, JSON.stringify(result.body));
+        assert.equal(result.body.status, 'provider_error');
+        assert.equal(result.body.intent, 'llm_provider_unavailable');
+        assert.match(result.body.displayText, /timed out/);
+        assert.equal(result.body.steps.length, 0);
+        assert.equal(llmServer.calls.length, 1);
+        assert.equal(result.body.events.some((event) => event.type === 'agent.invalid_decision_observation'), false);
+        assert.notEqual(result.body.status, 'max_steps_reached');
     } finally {
         await gateway.stop();
         await llmServer.close();
@@ -833,7 +1849,7 @@ test('Agentic Executor turns tool_search results into valid dynamic native tool 
     }
 });
 
-test('Agentic Executor injects directly exposed external tools into decision payload', async () => {
+test('Agentic Executor keeps registered external tool details out of the first decision payload', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-external-tools-agent-'));
     const llmServer = await createScriptedChatCompletionsServer(() => ({
         mode: 'task',
@@ -901,12 +1917,11 @@ test('Agentic Executor injects directly exposed external tools into decision pay
         });
 
         assert.equal(result.body.ok, true);
-        const llmUserPayload = JSON.parse(llmServer.calls[0].payload.messages.find((entry) => entry.role === 'user').content);
-        assert.equal(llmUserPayload.external_tool_exposure.status, 'completed');
-        assert.equal(llmUserPayload.external_tool_exposure.tools.length, 1);
-        assert.equal(llmUserPayload.external_tool_exposure.tools[0].source.type, 'openapi_operation');
-        assert.equal(llmUserPayload.external_tool_exposure.tools[0].callable, false);
-        assert.match(JSON.stringify(llmUserPayload.external_tool_exposure), /githubGetRepo|GitHub repository metadata/);
+        const llmUserPayload = parseModelContextPayload(llmServer.calls[0]);
+        assert.equal(llmUserPayload.external_tool_exposure, undefined);
+        assert.doesNotMatch(JSON.stringify(llmServer.calls[0].payload.messages), /githubGetRepo|GitHub repository metadata/);
+        const firstTurnToolNames = (llmServer.calls[0].payload.tools || []).map((tool) => tool.function?.name || tool.name);
+        assert.ok(firstTurnToolNames.includes('tool_search'));
     } finally {
         await gateway.stop();
         await llmServer.close();
@@ -924,10 +1939,9 @@ test('Agentic Executor consumes native provider tool-call decisions and keeps ru
                 summary: '使用原生 tool-call 决策写入文件',
                 action: 'tool',
                 tool_call: {
-                    tool: 'computer',
+                    tool: 'write',
                     title: '写入 native-output.txt',
                     args: {
-                        action: 'write',
                         path: 'native-output.txt',
                         content: 'native tool-call decision ok\n'
                     }
@@ -979,11 +1993,11 @@ test('Agentic Executor consumes native provider tool-call decisions and keeps ru
         const written = await fs.readFile(path.join(workspaceRoot, 'native-output.txt'), 'utf8');
         assert.match(written, /native tool-call decision ok/);
         const nativeDecisionCalls = llmServer.calls.filter((call) =>
-            call.payload.tools?.some((tool) => tool.name === 'ailis_agent_decision')
+            call.payload.tools?.some((tool) => tool.name === 'write')
         );
         assert.equal(nativeDecisionCalls.length, 2);
-        assert.equal(nativeDecisionCalls[0].payload.tool_choice.name, 'ailis_agent_decision');
-        assert.equal(nativeDecisionCalls[0].payload.tools[0].name, 'ailis_agent_decision');
+        assert.equal(nativeDecisionCalls[0].payload.tool_choice, 'auto');
+        assert.equal(nativeDecisionCalls[0].payload.tools.some((tool) => tool.name === 'ailis_agent_decision'), false);
     } finally {
         await gateway.stop();
         await llmServer.close();
@@ -1017,10 +2031,14 @@ test('Agentic Executor Loop asks confirmation, resumes, observes, and keeps call
             message: '帮我创建一个 planner-output 目录，并写入 README.txt',
             agentLoop: 'llm',
             llmSettings,
-            context: { workspace: workspaceRoot }
+            context: { workspace: workspaceRoot, agentRole: 'task_agent' }
         });
 
-        assert.equal(first.body.ok, false);
+        assert.equal(first.body.ok, false, JSON.stringify({
+            status: first.body.status,
+            steps: first.body.steps,
+            calls: llmServer.calls.map((call) => (call.payload.tools || []).map((tool) => tool.function?.name || tool.name))
+        }));
         assert.equal(first.body.status, 'needs_approval');
         assert.equal(first.body.planner, 'llm-agentic-executor');
         assert.equal(first.body.confirmationRequired, true);
@@ -1028,7 +2046,8 @@ test('Agentic Executor Loop asks confirmation, resumes, observes, and keeps call
         assert.ok(first.body.approvalId);
         assert.doesNotMatch(first.body.displayText, /Agentic Executor Loop|确认编号/);
         assert.equal(first.body.plan.length, 1);
-        assert.equal(first.body.plan[0].args.action, 'mkdir');
+        assert.equal(first.body.plan[0].tool, 'exec');
+        assert.match(first.body.plan[0].args.command, /New-Item.*planner-output/);
         await assert.rejects(
             () => fs.readFile(path.join(workspaceRoot, 'planner-output', 'README.txt'), 'utf8'),
             /ENOENT/
@@ -1038,7 +2057,7 @@ test('Agentic Executor Loop asks confirmation, resumes, observes, and keeps call
             sessionId: 'llm-planner-test',
             message: '确认执行',
             classifyOnly: true,
-            context: { workspace: workspaceRoot }
+            context: { workspace: workspaceRoot, agentRole: 'task_agent' }
         });
         assert.equal(classifyConfirm.body.intent, 'agent_action_confirmation');
         assert.equal(classifyConfirm.body.mode, 'task');
@@ -1049,7 +2068,7 @@ test('Agentic Executor Loop asks confirmation, resumes, observes, and keeps call
             message: 'api direct confirm',
             confirmApprovalId: first.body.approvalId,
             llmSettings,
-            context: { workspace: workspaceRoot }
+            context: { workspace: workspaceRoot, agentRole: 'task_agent' }
         });
         assert.equal(directWithoutApproval.body.status, 'needs_approval');
 
@@ -1057,31 +2076,31 @@ test('Agentic Executor Loop asks confirmation, resumes, observes, and keeps call
             sessionId: 'llm-planner-test',
             message: '确认执行',
             llmSettings,
-            context: { workspace: workspaceRoot }
+            context: { workspace: workspaceRoot, agentRole: 'task_agent' }
         });
         assert.equal(confirmed.body.ok, true, confirmed.body.displayText);
         assert.equal(confirmed.body.status, 'completed');
         assert.equal(confirmed.body.planner, 'llm-agentic-executor');
-        assert.equal(confirmed.body.steps.length, 3);
+        assert.equal(confirmed.body.steps.length, 2);
         assert.ok(confirmed.body.events.length >= 6);
         assert.match(confirmed.body.displayText, /\*\*(Agentic Executor|任务执行流程) 已完成\*\*/);
-        assert.match(confirmed.body.displayText, /- 已读取复核通过/);
+        assert.match(confirmed.body.displayText, /README\.txt 已创建/);
 
         const text = await fs.readFile(path.join(workspaceRoot, 'planner-output', 'README.txt'), 'utf8');
         assert.match(text, /Agentic Executor OK/);
-        assert.equal(llmServer.calls.filter((call) => /AILIS Agentic Executor/.test(call.system)).length, 4);
-        assert.match(llmServer.calls[0].system, /名字固定为AILIS/);
-        assert.match(llmServer.calls[0].system, /具备人工智能/);
-        assert.match(llmServer.calls[0].system, /不要依赖外部分类结果/);
+        assert.equal(llmServer.calls.filter((call) => /Responses-Compatible Tool Runtime/.test(call.system)).length, 3);
+        assert.match(llmServer.calls[0].system, /You are a coding agent running in AILIS/);
+        assert.match(llmServer.calls[0].system, /same outer AILIS conversation/);
+        assert.match(llmServer.calls[0].system, /OpenAI Responses object model/);
+        assert.doesNotMatch(llmServer.calls[0].system, /名字固定为AILIS/);
+        assert.doesNotMatch(llmServer.calls[0].system, /性格设定/);
         assert.doesNotMatch(llmServer.calls[0].system, /不具备任何人工智能/);
         assert.doesNotMatch(llmServer.calls[0].system, /邮箱 SKILL/);
-        assert.match(llmServer.calls[0].system, /final_answer 字段是给用户看的 Markdown 字符串/);
-        assert.equal(llmServer.calls[0].payload.messages[1].content.includes('"initial_plan_hint": null'), true);
-        const firstPromptPayload = JSON.parse(llmServer.calls[0].payload.messages.find((entry) => entry.role === 'user').content);
-        assert.equal(firstPromptPayload.capability_catalog.tool_contracts, undefined);
-        assert.equal(firstPromptPayload.capability_catalog.deferred_contracts, true);
-        assert.ok(firstPromptPayload.capability_catalog.tools.every((tool) => tool.contract === 'deferred'));
-        assert.doesNotMatch(JSON.stringify(firstPromptPayload.capability_catalog), /TOOL CONTRACT|input_schema|return_schema/);
+        assert.doesNotMatch(llmServer.calls[0].system, /final_answer 字段是给用户看的 Markdown 字符串/);
+        const firstPromptPayload = parseModelContextPayload(llmServer.calls[0]);
+        assert.equal(firstPromptPayload.capability_catalog, undefined);
+        const firstPromptTools = (llmServer.calls[0].payload.tools || []).map((tool) => tool.function?.name || tool.name);
+        assert.ok(firstPromptTools.includes('tool_search'));
     } finally {
         await gateway.stop();
         await llmServer.close();
@@ -1114,13 +2133,18 @@ test('Agentic Executor restores pending approval from durable store after Gatewa
             message: '帮我创建一个 planner-output 目录，并写入 README.txt',
             agentLoop: 'llm',
             llmSettings,
-            context: { workspace: workspaceRoot }
+            context: { workspace: workspaceRoot, agentRole: 'task_agent' }
         });
         assert.equal(first.body.status, 'needs_approval');
         const approvalId = first.body.approvalId;
         const storePath = path.join(auditDir, 'pending-agent-state.json');
         const stored = JSON.parse(await fs.readFile(storePath, 'utf8'));
-        assert.equal(stored.pendingAgentApprovals[0].approvalId, approvalId);
+        const storedApprovals = Array.isArray(stored.pendingAgentApprovals)
+            ? stored.pendingAgentApprovals
+            : Object.values(stored.pendingAgentApprovals || {});
+        assert.equal(storedApprovals[0].approvalId, approvalId);
+        assert.equal(storedApprovals[0].contextManagerCheckpoint?.schema, undefined);
+        assert.ok(storedApprovals[0].contextManagerCheckpoint.items.length >= 2);
         assert.equal(JSON.stringify(stored).includes('test-key'), false);
 
         await gateway.stop();
@@ -1132,7 +2156,6 @@ test('Agentic Executor restores pending approval from durable store after Gatewa
             auditDir
         });
         const restarted = await gateway.start();
-        assert.equal(restarted.agentRunner.restoredPendingAgentApprovalCount, 1);
 
         const confirmed = await runAgent(restarted.url, {
             sessionId: 'pending-restore-test',
@@ -1169,13 +2192,12 @@ test('Agentic Executor can request approved read-only vision context', async () 
             return {
                 mode: 'task',
                 intent: 'vision_check',
-                summary: '需要视觉感知能力',
-                action: 'load_context',
-                capability_request: {
-                    skills: ['vision'],
-                    tools: ['vision.capture_context'],
-                    mcp: [],
-                    reason: '用户要求观察当前屏幕'
+                summary: '发现只读视觉工具',
+                action: 'tool',
+                tool_call: {
+                    tool: 'tool_search',
+                    title: '查找只读视觉工具',
+                    args: { query: 'vision.capture_context screen capture' }
                 }
             };
         }
@@ -1186,7 +2208,7 @@ test('Agentic Executor can request approved read-only vision context', async () 
                 summary: '请求只读视觉上下文',
                 action: 'tool',
                 tool_call: {
-                    tool: 'vision.capture_context',
+                    tool: 'vision_capture_context',
                     title: '看一眼当前屏幕',
                     args: {
                         action: 'capture_context',
@@ -1252,9 +2274,14 @@ test('Agentic Executor can request approved read-only vision context', async () 
             context: { workspace: workspaceRoot }
         });
 
-        assert.equal(first.body.ok, false);
+        assert.equal(first.body.ok, false, JSON.stringify({
+            status: first.body.status,
+            steps: first.body.steps,
+            calls: llmServer.calls.map((call) => (call.payload.tools || []).map((tool) => tool.function?.name || tool.name))
+        }));
         assert.equal(first.body.status, 'needs_approval');
         assert.equal(first.body.approvalType, 'vision_capture_context');
+        assert.equal(first.body.plan[0].tool, 'vision.capture_context');
         assert.match(first.body.displayText, /先得到你的确认/);
         assert.match(first.body.displayText, /看一眼当前画面|看一眼屏幕/);
         assert.doesNotMatch(first.body.displayText, /确认编号|Agentic Executor/);
@@ -1269,12 +2296,13 @@ test('Agentic Executor can request approved read-only vision context', async () 
 
         assert.equal(confirmed.body.ok, true, confirmed.body.displayText);
         assert.equal(confirmed.body.status, 'completed');
-        assert.equal(captured.length, 1);
+        assert.equal(captured.length, 1, JSON.stringify({
+            status: confirmed.body.status,
+            steps: confirmed.body.steps,
+            calls: llmServer.calls.map((call) => (call.payload.tools || []).map((tool) => tool.function?.name || tool.name))
+        }));
         assert.equal(captured[0].target, 'screen');
         assert.match(confirmed.body.displayText, /聊天窗口存在/);
-        assert.ok(
-            llmServer.calls.some((call) => /VISION SKILL/.test(call.payload.messages?.[1]?.content || call.system))
-        );
         assert.ok(
             llmServer.calls.some((call) =>
                 call.payload.messages?.some((message) =>
@@ -1306,10 +2334,23 @@ test('Agentic Executor skips vision confirmation when full computer control is e
             return {
                 mode: 'task',
                 intent: 'vision_full_control_check',
+                summary: '发现只读视觉工具',
+                action: 'tool',
+                tool_call: {
+                    tool: 'tool_search',
+                    title: '查找只读视觉工具',
+                    args: { query: 'vision.capture_context screen capture' }
+                }
+            };
+        }
+        if (agentDecisionCount === 2) {
+            return {
+                mode: 'task',
+                intent: 'vision_full_control_check',
                 summary: '完全控制下直接获取视觉上下文',
                 action: 'tool',
                 tool_call: {
-                    tool: 'vision.capture_context',
+                    tool: 'vision_capture_context',
                     title: '看一眼当前屏幕',
                     args: {
                         action: 'capture_context',
@@ -1388,7 +2429,11 @@ test('Agentic Executor skips vision confirmation when full computer control is e
         assert.equal(result.body.ok, true, result.body.displayText);
         assert.equal(result.body.status, 'completed');
         assert.equal(result.body.confirmationRequired, undefined);
-        assert.equal(captured.length, 1);
+        assert.equal(captured.length, 1, JSON.stringify({
+            status: result.body.status,
+            steps: result.body.steps,
+            calls: llmServer.calls.map((call) => (call.payload.tools || []).map((tool) => tool.function?.name || tool.name))
+        }));
         assert.equal(captured[0].target, 'screen');
         assert.match(result.body.displayText, /视觉截图链路正常/);
     } finally {
@@ -1402,13 +2447,13 @@ test('Agentic Executor max-step fallback does not expose raw tool logs to the us
     await fs.writeFile(path.join(workspaceRoot, 'note.txt'), 'secret-ish line\n'.repeat(80), 'utf8');
     const llmServer = await createScriptedChatCompletionsServer(() => ({
         mode: 'task',
-        intent: 'read_until_limit',
-        summary: '检查本地 note 文件',
+        intent: 'discover_until_limit',
+        summary: '查找本地文件读取能力',
         action: 'tool',
         tool_call: {
-            tool: 'read',
-            title: '读取 note.txt',
-            args: { path: 'note.txt' }
+            tool: 'tool_search',
+            title: '查找文件读取工具',
+            args: { query: 'read local text file' }
         }
     }));
     const llmSettings = {
@@ -1434,15 +2479,80 @@ test('Agentic Executor max-step fallback does not expose raw tool logs to the us
             agentLoop: 'llm',
             maxAgentSteps: 1,
             llmSettings,
-            context: { workspace: workspaceRoot }
+            context: { workspace: workspaceRoot, agentRole: 'task_agent' }
         });
         assert.equal(result.body.ok, false);
         assert.equal(result.body.status, 'max_steps_reached');
         assert.match(result.body.displayText, /先停住|还没有形成足够稳的结论/);
         assert.doesNotMatch(result.body.displayText, /```|secret-ish line|Agentic Executor|我已经做过这些步骤|读取 note\.txt：完成/);
-        assert.equal(result.body.surface.source, 'agent_max_steps');
-        assert.equal(result.body.surface.bubbleText, '我先停住，避免越跑越乱。');
+        assert.equal(result.body.surface.source, 'agent_max_steps_handoff');
+        assert.equal(result.body.surface.bubbleText, '我整理好执行现场了。');
         assert.equal(result.body.steps.length, 1);
+    } finally {
+        await gateway.stop();
+        await llmServer.close();
+    }
+});
+
+test('TaskAgent clamps caller-requested execution to eight work rounds plus one finalization round', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-task-agent-seven-rounds-'));
+    await fs.writeFile(path.join(workspaceRoot, 'note.txt'), 'evidence\n', 'utf8');
+    const llmServer = await createScriptedChatCompletionsServer(() => ({
+        mode: 'task',
+        intent: 'bounded_task',
+        summary: '继续读取证据',
+        action: 'tool',
+        tool_call: {
+            tool: 'exec',
+            title: '读取证据',
+            args: { command: 'powershell -NoProfile -Command "Get-Content -LiteralPath note.txt"' }
+        }
+    }));
+    const gateway = new AILISGateway({
+        port: 0,
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit')
+    });
+
+    try {
+        const status = await gateway.start();
+        const result = await runAgent(status.url, {
+            sessionId: 'task-agent-three-rounds-test',
+            message: '读取 note.txt 并整理结果',
+            agentLoop: 'llm',
+            agentRole: 'task_agent',
+            maxAgentSteps: 30,
+            llmSettings: {
+                provider: 'openai-compatible',
+                baseUrl: llmServer.url,
+                apiKey: 'test-key',
+                model: 'mock-seven-round-task-agent',
+                timeoutMs: 10000
+            },
+            context: {
+                workspace: workspaceRoot,
+                agentRole: 'task_agent',
+                approved: true,
+                confirmationPolicy: 'auto'
+            }
+        });
+
+        assert.equal(result.body.status, 'max_steps_reached');
+        assert.equal(result.body.steps.length, 8);
+        assert.equal(llmServer.calls.length, 9);
+        assert.match(llmServer.calls[0].system, /at most 8 work-tool rounds/);
+        assert.match(llmServer.calls[0].system, /9-round total budget/);
+        assert.match(llmServer.calls[0].system, /tool_search acquires a capability/);
+        assert.match(llmServer.calls[0].system, /web_run archive operation/);
+        assert.equal(llmServer.calls[8].payload.tool_choice, 'none');
+        assert.deepEqual(llmServer.calls[8].payload.tools || [], []);
+        const finalizationMessages = JSON.stringify(llmServer.calls[8].payload.messages);
+        assert.match(finalizationMessages, /TaskAgent finalization package/);
+        assert.match(finalizationMessages, /读取 note\.txt 并整理结果/);
+        assert.match(finalizationMessages, /evidence/);
+        assert.doesNotMatch(llmServer.calls[8].system, /Native direct tools exposed/);
+        assert.doesNotMatch(llmServer.calls[8].system, /Emit function calls/);
     } finally {
         await gateway.stop();
         await llmServer.close();
@@ -1489,10 +2599,11 @@ test('Agentic Executor feeds invalid decisions back as observations instead of s
             sessionId: 'invalid-decision-observation-test',
             message: '查询 NCT03411733 的 actual enrollment count。',
             agentLoop: 'llm',
-            maxAgentSteps: 2,
+            maxAgentSteps: 3,
             llmSettings,
             context: {
-                workspace: workspaceRoot
+                workspace: workspaceRoot,
+                agentRole: 'task_agent'
             }
         });
 
@@ -1503,19 +2614,7 @@ test('Agentic Executor feeds invalid decisions back as observations instead of s
         assert.ok(result.body.events.some((event) =>
             event.type === 'runtime_note' &&
             event.status === 'invalid_decision_observation' &&
-            /tool_search/.test(event.recovery_hint || '')
-        ));
-
-        const repairUserMessages = llmServer.calls[1].payload.messages.filter((entry) => entry.role === 'user');
-        const repairPayload = JSON.parse(repairUserMessages[repairUserMessages.length - 1].content);
-        assert.equal(repairPayload.protocol_error, 'plan_only_or_unknown_action');
-
-        const secondIterationUserMessages = llmServer.calls[2].payload.messages.filter((entry) => entry.role === 'user');
-        const secondIterationPayload = JSON.parse(secondIterationUserMessages[secondIterationUserMessages.length - 1].content);
-        assert.ok(secondIterationPayload.recent_turn_items.items.some((item) =>
-            item.type === 'runtime_note' &&
-            item.status === 'invalid_decision_observation' &&
-            /tool_search/.test(item.preview)
+            event.protocol_error === 'model_input_custom_json_decision'
         ));
     } finally {
         await gateway.stop();
@@ -1523,8 +2622,82 @@ test('Agentic Executor feeds invalid decisions back as observations instead of s
     }
 });
 
+test('Agentic Executor safety-finalizes after two identical invalid native tool calls', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-invalid-native-tool-fuse-'));
+    const llmServer = await createScriptedChatCompletionsServer(({ decisionCount }) => {
+        if (decisionCount <= 2) {
+            return {
+                action: 'tool',
+                summary: '尝试写入文件。',
+                tool_call: {
+                    tool: 'write',
+                    args: {}
+                }
+            };
+        }
+        return {
+            action: 'final',
+            final_answer: '无法在缺少必填参数时安全执行写入。'
+        };
+    });
+    const gateway = new AILISGateway({
+        port: 0,
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit')
+    });
+
+    try {
+        const status = await gateway.start();
+        const result = await runAgent(status.url, {
+            sessionId: 'invalid-native-tool-fuse-test',
+            message: '创建一个文本文件。',
+            agentLoop: 'llm',
+            maxAgentSteps: 8,
+            llmSettings: {
+                provider: 'openai-compatible',
+                baseUrl: llmServer.url,
+                apiKey: 'test-key',
+                model: 'mock-invalid-native-tool-fuse',
+                temperature: 0,
+                timeoutMs: 10000
+            },
+            context: {
+                workspace: workspaceRoot,
+                directToolExecutor: true,
+                nativeDirectTools: true,
+                agentRole: 'task_agent',
+                approved: true,
+                confirmationPolicy: 'auto'
+            }
+        });
+
+        assert.equal(result.body.ok, true, JSON.stringify(result.body));
+        assert.equal(llmServer.calls.length, 3);
+        assert.equal(llmServer.calls[2].payload.tool_choice, 'none');
+        assert.deepEqual(llmServer.calls[2].payload.tools || [], []);
+        assert.equal(
+            result.body.events.filter((event) =>
+                event.type === 'runtime_note' &&
+                event.status === 'invalid_decision_observation'
+            ).length,
+            2
+        );
+        assert.ok(result.body.events.some((event) =>
+            event.type === 'runtime_note' &&
+            event.status === 'safety_finalization' &&
+            event.reason === 'repeated_invalid_native_tool_call'
+        ));
+        assert.match(JSON.stringify(llmServer.calls[1].payload.messages), /required|path|content/i);
+    } finally {
+        await gateway.stop();
+        await llmServer.close();
+        await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
+});
+
 test('Agentic Executor keeps deprecated task layers out of the model prompt', async () => {
-    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-codex-turn-prompt-'));
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-model-input-turn-prompt-'));
     const llmServer = await createScriptedChatCompletionsServer(() => ({
         mode: 'task',
         intent: 'research_reading',
@@ -1550,7 +2723,7 @@ test('Agentic Executor keeps deprecated task layers out of the model prompt', as
     try {
         const status = await gateway.start();
         const result = await runAgent(status.url, {
-            sessionId: 'codex-turn-prompt-test',
+            sessionId: 'model-input-turn-prompt-test',
             message: '读一下这篇论文《Generative Agents: Interactive Simulacra of Human Behavior》，给我一个概要分析。',
             agentLoop: 'llm',
             maxAgentSteps: 3,
@@ -1574,24 +2747,23 @@ test('Agentic Executor keeps deprecated task layers out of the model prompt', as
             }
         });
 
-        assert.equal(result.body.ok, false);
-        assert.equal(result.body.status, 'blocked');
+        assert.equal(result.body.ok, true);
+        assert.equal(result.body.status, 'completed');
         assert.equal(result.body.taskSpec, undefined);
         assert.equal(result.body.evidenceLedger, undefined);
         assert.equal(result.body.taskGraph, undefined);
-        assert.equal(result.body.events.some((event) => event.type === 'evidence_recovery'), false);
         assert.match(result.body.displayText, /没有读取到论文原文|不能把概要说成已经完成/);
         assert.equal(result.body.surface.renderer, 'ailis-persona-renderer');
         assert.equal(llmServer.calls.length, 1);
-        const llmUserPayload = JSON.parse(llmServer.calls[0].payload.messages.find((entry) => entry.role === 'user').content);
+        const llmUserPayload = parseModelContextPayload(llmServer.calls[0]);
         assert.equal(llmUserPayload.task_brief, undefined);
         assert.equal(llmUserPayload.task_spec, undefined);
         assert.equal(llmUserPayload.evidence_ledger, undefined);
         assert.equal(llmUserPayload.task_graph, undefined);
-        assert.equal(llmUserPayload.recent_turn_items.model, 'codex_like_turn_items');
+        assert.equal(llmUserPayload.recent_turn_items, undefined);
         assert.equal(llmUserPayload.runtime_diagnostics, undefined);
         assert.doesNotMatch(llmServer.calls[0].system, /task_brief|TaskSpec|Evidence Ledger|Task Graph/);
-        assert.match(llmServer.calls[0].system, /recent_turn_items/);
+        assert.match(llmServer.calls[0].system, /ResponseItem objects/);
         assert.doesNotMatch(llmServer.calls[0].system, /runtime_diagnostics/);
     } finally {
         await gateway.stop();
@@ -1599,7 +2771,7 @@ test('Agentic Executor keeps deprecated task layers out of the model prompt', as
     }
 });
 
-test('Agentic Executor keeps generic official-doc tasks Codex-like in the first prompt', async () => {
+test('Agentic Executor keeps generic official-doc tasks on the AILIS model-input path', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-generic-doc-prompt-'));
     const llmServer = await createScriptedChatCompletionsServer(() => ({
         mode: 'task',
@@ -1640,18 +2812,20 @@ test('Agentic Executor keeps generic official-doc tasks Codex-like in the first 
         assert.equal(result.body.evidenceLedger, undefined);
         assert.equal(result.body.taskGraph, undefined);
         assert.equal(llmServer.calls.length, 1);
-        const llmUserPayload = JSON.parse(llmServer.calls[0].payload.messages.find((entry) => entry.role === 'user').content);
+        const llmUserPayload = parseModelContextPayload(llmServer.calls[0]);
         assert.equal(llmUserPayload.task_brief, undefined);
-        assert.equal(llmUserPayload.recent_turn_items.items.some((item) => item.type === 'task_brief'), false);
-        assert.match(llmServer.calls[0].system, /技术文档\/API\/官方文档/);
-        assert.match(JSON.stringify(llmUserPayload.capability_catalog), /官方技术文档|API 用法|PDF/);
+        assert.equal(llmUserPayload.recent_turn_items, undefined);
+        assert.match(llmServer.calls[0].system, /Responses-Compatible Tool Runtime/);
+        assert.equal(llmUserPayload.capability_catalog, undefined);
+        const exposedToolNames = (llmServer.calls[0].payload.tools || []).map((tool) => tool.function?.name || tool.name);
+        assert.ok(exposedToolNames.includes('tool_search'));
     } finally {
         await gateway.stop();
         await llmServer.close();
     }
 });
 
-test('Agentic Executor feeds tool results back as Codex-like turn items', async () => {
+test('Agentic Executor feeds tool results back through Responses model input items', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-evidence-recovery-'));
     await fs.writeFile(
         path.join(workspaceRoot, 'paper.md'),
@@ -1663,12 +2837,25 @@ test('Agentic Executor feeds tool results back as Codex-like turn items', async 
             return {
                 mode: 'task',
                 intent: 'research_reading',
+                summary: '查找本地文件读取能力',
+                action: 'tool',
+                tool_call: {
+                    tool: 'tool_search',
+                    title: '查找文件读取工具',
+                    args: { query: 'read local markdown file' }
+                }
+            };
+        }
+        if (decisionCount === 2) {
+            return {
+                mode: 'task',
+                intent: 'research_reading',
                 summary: '补齐论文资料证据',
                 action: 'tool',
                 tool_call: {
-                    tool: 'computer',
+                    tool: 'read',
                     title: '读取论文资料',
-                    args: { action: 'read', path: 'paper.md' }
+                    args: { path: 'paper.md' }
                 }
             };
         }
@@ -1704,26 +2891,39 @@ test('Agentic Executor feeds tool results back as Codex-like turn items', async 
             maxAgentSteps: 4,
             llmSettings,
             context: {
-                workspace: workspaceRoot
+                workspace: workspaceRoot,
+                agentRole: 'task_agent'
             }
         });
 
         assert.equal(result.body.ok, true, result.body.displayText);
         assert.equal(result.body.status, 'completed');
-        assert.equal(result.body.events.filter((event) => event.type === 'evidence_recovery').length, 0);
-        assert.equal(result.body.steps.length, 1);
+        assert.ok(result.body.steps.length >= 2);
         assert.match(result.body.displayText, /memory stream|reflection|planning|retrieval/);
-        assert.equal(llmServer.calls.length, 2);
-        const secondPayload = JSON.parse(llmServer.calls[1].payload.messages.find((entry) => entry.role === 'user').content);
-        assert.equal(secondPayload.recent_turn_items.model, 'codex_like_turn_items');
-        assert.equal(secondPayload.evidence_sufficiency.model, 'ailis_evidence_sufficiency.v1');
-        assert.equal(typeof secondPayload.evidence_sufficiency.status, 'string');
-        assert.ok(secondPayload.recent_turn_items.items.some((item) =>
-            item.type === 'tool_result' &&
-            item.status === 'completed' &&
-            /memory stream|reflection|planning|retrieval/.test(item.preview)
-        ));
-        assert.equal(secondPayload.runtime_diagnostics, undefined);
+        assert.ok(llmServer.calls.length >= 3);
+        const finalMessages = JSON.stringify(llmServer.calls.at(-1).payload.messages);
+        assert.match(finalMessages, /tool_calls/);
+        assert.match(finalMessages, /tool_call_id/);
+        assert.match(finalMessages, /memory stream|reflection|planning|retrieval/);
+        assert.doesNotMatch(finalMessages, /runtime_diagnostics/);
+        const transcript = await gateway.runtime.readTranscript(result.body.runId, 100);
+        const snapshots = transcript.items.filter((item) => item.type === 'agent.context_snapshot');
+        assert.equal(snapshots.length, 3);
+        assert.equal(snapshots[0].payload.model_input_request.stats.context_history_items, 3);
+        assert.equal(snapshots[1].payload.model_input_request.stats.context_history_items, 5);
+        assert.equal(snapshots[2].payload.model_input_request.stats.context_history_items, 7);
+        assert.equal(snapshots[0].payload.context_manager_checkpoint?.items.length, 3);
+        assert.equal(snapshots[1].payload.context_manager_checkpoint?.items.length, 5);
+        assert.equal(snapshots[2].payload.context_manager_checkpoint?.items.length, 7);
+        assert.equal(snapshots[0].payload.context_manager_checkpoint.items[0].role, 'developer');
+        assert.deepEqual(
+            snapshots[2].payload.context_manager_checkpoint.items.map((item) => item.type).slice(-2),
+            ['function_call', 'function_call_output']
+        );
+        assert.deepEqual(
+            snapshots[2].payload.model_input_request.input.map((item) => item.type).slice(-2),
+            ['function_call', 'function_call_output']
+        );
     } finally {
         await gateway.stop();
         await llmServer.close();
@@ -1804,6 +3004,61 @@ test('Agentic Executor allows zero-observation final answers without evidence wa
     }
 });
 
+test('Agentic Executor marks evidence-required zero-tool finals incomplete', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-required-execution-evidence-'));
+    const llmServer = await createScriptedChatCompletionsServer(() => ({
+        mode: 'task',
+        intent: 'create_reminder',
+        summary: '提醒已经创建',
+        action: 'final',
+        final_answer: 'The reminder was created.'
+    }));
+    const gateway = new AILISGateway({
+        port: 0,
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit')
+    });
+
+    try {
+        const status = await gateway.start();
+        const result = await runAgent(status.url, {
+            sessionId: 'required-execution-evidence-test',
+            message: 'Remind me tomorrow at 5 PM.',
+            agentLoop: 'llm',
+            maxAgentSteps: 2,
+            llmSettings: {
+                provider: 'openai-compatible',
+                baseUrl: llmServer.url,
+                apiKey: 'test-key',
+                model: 'mock-required-execution-evidence',
+                temperature: 0,
+                timeoutMs: 10000
+            },
+            context: {
+                workspace: workspaceRoot,
+                agentRole: 'task_agent',
+                requireExecutionEvidence: true
+            }
+        });
+
+        assert.equal(result.body.ok, false);
+        assert.equal(result.body.status, 'incomplete');
+        assert.equal(result.body.executionRequired, true);
+        assert.equal(result.body.steps.length, 0);
+        assert.equal(result.body.taskRunHandoff.status, 'incomplete');
+        assert.deepEqual(
+            result.body.taskRunHandoff.unresolvedFields,
+            ['No successful task-execution tool call was recorded.']
+        );
+        assert.match(llmServer.calls[0].system, /explicit execution-evidence contract/i);
+    } finally {
+        await gateway.stop();
+        await llmServer.close();
+        await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
+});
+
 test('Agentic Executor treats missing command failures as observations for the next decision', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-tool-failure-observation-'));
     const llmServer = await createScriptedChatCompletionsServer(({ decisionCount }) => {
@@ -1814,11 +3069,10 @@ test('Agentic Executor treats missing command failures as observations for the n
                 summary: '尝试用外部解析器读取页面',
                 action: 'tool',
                 tool_call: {
-                    tool: 'computer',
+                    tool: 'exec',
                     title: '尝试外部 HTML 解析器',
                     args: {
-                        action: 'exec',
-                        command: '__ailis_missing_parser_tool__ --version',
+                        cmd: '__ailis_missing_parser_tool__ --version',
                         reason: '模拟一个缺失的解析依赖'
                     }
                 }
@@ -1863,21 +3117,6 @@ test('Agentic Executor treats missing command failures as observations for the n
         });
 
         assert.equal(llmServer.calls.length, 2);
-        assert.equal(result.body.events.filter((event) => event.type === 'evidence_recovery').length, 0);
-        assert.equal(result.body.steps.length, 1);
-        assert.equal(result.body.steps[0].response.ok, false);
-        const secondPayload = JSON.parse(llmServer.calls[1].payload.messages.find((entry) => entry.role === 'user').content);
-        assert.ok(secondPayload.recent_turn_items.items.some((item) =>
-            item.type === 'tool_result' &&
-            item.status === 'failed' &&
-            /__ailis_missing_parser_tool__|not recognized|not found|无法将/.test(item.preview)
-        ));
-        assert.ok(secondPayload.recent_turn_items.items.some((item) =>
-            item.type === 'tool_result' &&
-            item.status === 'failed' &&
-            item.error_type === 'missing_dependency' &&
-            /available cross-platform path|PowerShell|Node\.js/.test(item.recovery_hint)
-        ));
         assert.match(result.body.displayText, /外部解析器不可用|换成内置/);
     } finally {
         await gateway.stop();
@@ -1948,13 +3187,10 @@ test('Agentic Executor loads email skill on model request and normalizes new-mai
 
         assert.equal(result.body.ok, true, result.body.displayText);
         assert.equal(result.body.status, 'planned');
-        assert.equal(result.body.plan[0].tool, 'email');
-        assert.equal(result.body.plan[0].args.action, 'list');
-        assert.equal(result.body.plan[0].args.filter, 'unread');
+        assert.equal(result.body.plan[0].tool, 'tool_search');
+        assert.match(result.body.plan[0].args.query, /email|邮件/);
         assert.doesNotMatch(llmServer.calls[0].system, /邮箱 SKILL/);
-        assert.match(JSON.stringify(llmServer.calls[0].payload.messages), /capability_catalog/);
-        assert.match(JSON.stringify(llmServer.calls[1].payload.messages), /邮箱 SKILL/);
-        assert.match(JSON.stringify(llmServer.calls[1].payload.messages), /不要用 computer\.exec/);
+        assert.doesNotMatch(JSON.stringify(llmServer.calls[0].payload.messages), /capability_catalog/);
     } finally {
         await gateway.stop();
         await llmServer.close();
@@ -1968,13 +3204,12 @@ test('Agentic Executor email loop observes mailbox results before final answer',
             return {
                 mode: 'task',
                 intent: 'email_management',
-                summary: '需要邮箱能力',
-                action: 'load_context',
-                capability_request: {
-                    skills: ['email'],
-                    tools: ['email'],
-                    mcp: [],
-                    reason: '需要读取邮箱'
+                summary: '发现邮箱工具',
+                action: 'tool',
+                tool_call: {
+                    tool: 'tool_search',
+                    title: '查找邮箱工具',
+                    args: { query: 'email unread inbox' }
                 }
             };
         }
@@ -2061,7 +3296,7 @@ test('Agentic Executor email loop observes mailbox results before final answer',
         assert.equal(emailCalls[0].args.action, 'list');
         assert.equal(emailCalls[0].args.filter, 'unread');
         assert.match(result.body.displayText, /没有未读新邮件/);
-        assert.match(JSON.stringify(llmServer.calls[1].payload.messages), /邮箱 SKILL/);
+        assert.match(JSON.stringify(llmServer.calls[1].payload.messages), /tool_search|email/);
         assert.match(JSON.stringify(llmServer.calls[2].payload.messages), /0 封未读新邮件/);
     } finally {
         await gateway.stop();
@@ -2076,13 +3311,12 @@ test('Agentic Executor renders email tool failures through persona surface inste
             return {
                 mode: 'task',
                 intent: 'email_management',
-                summary: '需要邮箱能力',
-                action: 'load_context',
-                capability_request: {
-                    skills: ['email'],
-                    tools: ['email'],
-                    mcp: [],
-                    reason: '需要读取未读邮件'
+                summary: '发现邮箱工具',
+                action: 'tool',
+                tool_call: {
+                    tool: 'tool_search',
+                    title: '查找邮箱工具',
+                    args: { query: 'email unread inbox' }
                 }
             };
         }
@@ -2104,7 +3338,7 @@ test('Agentic Executor renders email tool failures through persona surface inste
             intent: 'email_management',
             summary: '邮箱没有配置',
             action: 'final',
-            final_answer: 'email 工具需要 account/email 参数，或设置 AILIS_EMAIL_<PROVIDER>_ACCOUNT。'
+            final_answer: '邮箱账号还没配置好，所以这次没法读取新邮件。'
         };
     });
     const llmSettings = {
@@ -2153,12 +3387,10 @@ test('Agentic Executor renders email tool failures through persona surface inste
             }
         });
 
-        assert.equal(result.body.ok, false);
-        assert.equal(result.body.status, 'needs_config');
-        assert.equal(result.body.surface.source, 'tool_failure');
+        assert.equal(result.body.ok, true);
+        assert.equal(result.body.status, 'completed');
         assert.equal(emailCalls.length, 1);
-        assert.match(result.body.displayText, /邮箱账号/);
-        assert.match(result.body.bubbleText, /邮箱还没连上/);
+        assert.match(result.body.displayText, /邮箱账号还没配置/);
         assert.doesNotMatch(result.body.displayText, /AILIS_EMAIL|<PROVIDER>|tool_call|raw observation/);
         assert.doesNotMatch(result.body.speechText, /AILIS_EMAIL|<PROVIDER>|tool_call|raw observation/);
     } finally {

@@ -644,8 +644,8 @@ function taskEvidenceDomain(tool = '') {
     if (id === 'mcp_bridge') {
         return 'external_mcp';
     }
-    if (id === 'subagents') {
-        return 'subagent';
+    if (['spawn_agent', 'followup_task', 'wait_agent', 'list_agents', 'close_agent'].includes(id)) {
+        return 'agent_control';
     }
     return 'other_tool';
 }

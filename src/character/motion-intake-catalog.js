@@ -69,6 +69,15 @@ export const MOTION_INTAKE_SOURCES = Object.freeze({
         license: 'CC0 according to BOOTH item description; verify archive terms after download',
         downloadStatus: 'imported',
         notes: 'Imported from F:/新建文件夹/fm_vrma_motion_pack_01.zip. Good free candidate source, but many motions may be gag/comedy oriented and need strict AILIS style review.'
+    },
+    'quaternius-universal-animation-library-2': {
+        id: 'quaternius-universal-animation-library-2',
+        title: 'Quaternius Universal Animation Library 2',
+        itemUrl: 'https://quaternius.com/packs/universalanimationlibrary2.html',
+        downloadableUrl: 'https://quaternius.itch.io/universal-animation-library-2',
+        license: 'CC0-1.0',
+        downloadStatus: 'imported_candidate_library',
+        notes: 'The non-root-motion FBX is retained for clip audit and cross-character retarget QA. No UAL2 clip is enabled in the stable AILIS motion scheduler until visual review.'
     }
 });
 
@@ -156,16 +165,16 @@ const BASE_MOTION_INTAKE_CATALOG = Object.freeze({
     },
     relax: {
         id: 'relax',
-        displayName: 'Relax',
-        localPath: 'Resources/VRMA_MotionPack/vrma/Relax.vrma',
+        displayName: 'Relax (semantic placeholder)',
+        localPath: '',
         source: 'local-vrma-motionpack-named',
-        license: 'unknown-local-file; do not redistribute until source is verified',
+        license: 'no asset file; semantic runtime definition only',
         style: ['relaxed', 'daily'],
         feminineScore: 0.48,
-        clippingRisk: 'medium',
+        clippingRisk: 'unknown',
         approved: false,
-        reviewStatus: 'candidate',
-        notes: 'Candidate for comforting/idle variation after visual review.'
+        reviewStatus: 'blocked_missing_asset',
+        notes: 'The runtime keeps this semantic ID for compatibility, but no Relax.vrma asset exists and it must not be loaded or approved.'
     },
     goodbye: {
         id: 'goodbye',

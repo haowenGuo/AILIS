@@ -85,6 +85,8 @@ function closeObjectSchemas(schema = {}) {
         }
         if (typeof schema.additionalProperties !== 'boolean') {
             schema.additionalProperties = Object.keys(schema.properties).length ? false : true;
+        } else if (schema.additionalProperties === true && Object.keys(schema.properties).length) {
+            schema.additionalProperties = false;
         }
         ensureRequired(schema, []);
         for (const child of Object.values(schema.properties)) {
@@ -102,6 +104,13 @@ function closeObjectSchemas(schema = {}) {
 
 function applyAilisKnownRequiredSchema({ tool = '', inputSchema = {} } = {}) {
     const normalizedTool = normalizeString(tool).toLowerCase();
+    const localPathTools = new Set([
+        'describe_image',
+        'read_document',
+        'read_presentation',
+        'read_spreadsheet',
+        'transcribe_audio'
+    ]);
     if (normalizedTool === 'web_search') {
         ensureStringField(inputSchema, 'query');
         ensureRequired(inputSchema, ['query']);
@@ -110,10 +119,13 @@ function applyAilisKnownRequiredSchema({ tool = '', inputSchema = {} } = {}) {
         ensureStringField(inputSchema, 'url');
         ensureRequired(inputSchema, ['url']);
         appendDescription(inputSchema.properties.url, 'Required HTTP(S) URL. Do not call web_fetch with empty arguments.');
-    } else if (normalizedTool === 'describe_image') {
+    } else if (localPathTools.has(normalizedTool)) {
         ensureStringField(inputSchema, 'path');
         ensureRequired(inputSchema, ['path']);
-        appendDescription(inputSchema.properties.path, 'Required local image path. Do not call describe_image with empty arguments.');
+        appendDescription(
+            inputSchema.properties.path,
+            `Required local file path. Do not call ${normalizedTool} with empty arguments.`
+        );
     }
     return inputSchema;
 }
@@ -155,6 +167,65 @@ function enhanceAilisMcpToolSchema({ tool = '', inputSchema = {} } = {}) {
     })));
 }
 
+function assessMcpToolSchemaStrength(schema = {}) {
+    if (!schema || typeof schema !== 'object' || Array.isArray(schema)) {
+        return {
+            callable: false,
+            reason: 'schema_not_object'
+        };
+    }
+    if (schema.type !== 'object') {
+        return {
+            callable: false,
+            reason: 'schema_not_object_type'
+        };
+    }
+    const properties = schema.properties && typeof schema.properties === 'object' && !Array.isArray(schema.properties)
+        ? schema.properties
+        : {};
+    const propertyNames = Object.keys(properties);
+    if (!propertyNames.length) {
+        return {
+            callable: false,
+            reason: 'schema_has_no_properties'
+        };
+    }
+    const required = Array.isArray(schema.required)
+        ? schema.required.filter((entry) => typeof entry === 'string' && entry)
+        : [];
+    const alternativeRequired = Array.isArray(schema.anyOf)
+        ? schema.anyOf
+            .map((branch) => Array.isArray(branch?.required)
+                ? branch.required.filter((entry) => typeof entry === 'string' && entry)
+                : [])
+            .filter((fields) => fields.length)
+        : [];
+    if (!required.length && !alternativeRequired.length) {
+        return {
+            callable: false,
+            reason: 'schema_has_no_required_fields'
+        };
+    }
+    const missingRequired = [...new Set([...required, ...alternativeRequired.flat()])]
+        .filter((field) => !Object.prototype.hasOwnProperty.call(properties, field));
+    if (missingRequired.length) {
+        return {
+            callable: false,
+            reason: `required_fields_missing_from_properties:${missingRequired.join(',')}`
+        };
+    }
+    if (schema.additionalProperties !== false) {
+        return {
+            callable: false,
+            reason: 'schema_allows_additional_properties'
+        };
+    }
+    return {
+        callable: true,
+        reason: 'strict_schema'
+    };
+}
+
 function buildAilisMcpToolCallArgs({ tool = '', schemaProperties = [], inputSchema = {} } = {}) {
     const normalizedTool = normalizeString(tool).toLowerCase();
     const properties = inputSchema && typeof inputSchema === 'object' ? inputSchema.properties || {} : {};
@@ -187,7 +258,16 @@ function normalizeAilisMcpToolArgs({ tool = '', args = {} } = {}) {
     const toolArgs = args && typeof args === 'object' && !Array.isArray(args)
         ? { ...args }
         : {};
-    if (normalizedTool === 'describe_image' && !normalizeString(toolArgs.path)) {
+    if (
+        [
+            'describe_image',
+            'read_document',
+            'read_presentation',
+            'read_spreadsheet',
+            'transcribe_audio'
+        ].includes(normalizedTool) &&
+        !normalizeString(toolArgs.path)
+    ) {
         const pathAlias = pickFirstString(toolArgs, ['image_path', 'imagePath', 'file_path', 'filePath', 'file']);
         if (pathAlias) {
             toolArgs.path = pathAlias;
@@ -196,7 +276,7 @@ function normalizeAilisMcpToolArgs({ tool = '', args = {} } = {}) {
     return toolArgs;
 }
 
-function sanitizeCodexMcpNamePart(value, fallback = '') {
+function sanitizeAilisMcpNamePart(value, fallback = '') {
     const raw = normalizeString(value, fallback);
     const sanitized = raw
         .replace(/[^A-Za-z0-9_-]+/g, '_')
@@ -205,14 +285,14 @@ function sanitizeCodexMcpNamePart(value, fallback = '') {
     return sanitized || fallback;
 }
 
-function codexMcpNamespaceForServer(server = '') {
-    const normalizedServer = sanitizeCodexMcpNamePart(server, 'server');
+function ailisMcpNamespaceForServer(server = '') {
+    const normalizedServer = sanitizeAilisMcpNamePart(server, 'server');
     return `mcp__${normalizedServer}__`;
 }
 
-function codexMcpToolId({ server = '', tool = '' } = {}) {
-    const namespace = codexMcpNamespaceForServer(server);
-    const normalizedTool = sanitizeCodexMcpNamePart(tool, 'tool');
+function ailisMcpToolId({ server = '', tool = '' } = {}) {
+    const namespace = ailisMcpNamespaceForServer(server);
+    const normalizedTool = sanitizeAilisMcpNamePart(tool, 'tool');
     return `${namespace}${normalizedTool}`;
 }
 
@@ -226,10 +306,10 @@ function parseAilisDirectMcpToolId(value) {
         const server = normalizeString(match[1]);
         const tool = normalizeString(match[2]);
         return {
-            id: codexMcpToolId({ server, tool }),
+            id: ailisMcpToolId({ server, tool }),
             legacyId: `mcp:${server}:${tool}`,
-            namespace: codexMcpNamespaceForServer(server),
-            callableName: sanitizeCodexMcpNamePart(tool, 'tool'),
+            namespace: ailisMcpNamespaceForServer(server),
+            callableName: sanitizeAilisMcpNamePart(tool, 'tool'),
             server,
             tool
         };
@@ -239,10 +319,10 @@ function parseAilisDirectMcpToolId(value) {
         const server = normalizeString(match[1]);
         const tool = normalizeString(match[2]);
         return {
-            id: codexMcpToolId({ server, tool }),
+            id: ailisMcpToolId({ server, tool }),
             legacyId: `mcp:${server}:${tool}`,
-            namespace: codexMcpNamespaceForServer(server),
-            callableName: sanitizeCodexMcpNamePart(tool, 'tool'),
+            namespace: ailisMcpNamespaceForServer(server),
+            callableName: sanitizeAilisMcpNamePart(tool, 'tool'),
             server,
             tool
         };
@@ -252,10 +332,10 @@ function parseAilisDirectMcpToolId(value) {
         const server = normalizeString(match[1]);
         const tool = normalizeString(match[2]);
         return {
-            id: codexMcpToolId({ server, tool }),
+            id: ailisMcpToolId({ server, tool }),
             legacyId: `mcp:${server}:${tool}`,
-            namespace: codexMcpNamespaceForServer(server),
-            callableName: sanitizeCodexMcpNamePart(tool, 'tool'),
+            namespace: ailisMcpNamespaceForServer(server),
+            callableName: sanitizeAilisMcpNamePart(tool, 'tool'),
             server,
             tool
         };
@@ -266,16 +346,17 @@ function parseAilisDirectMcpToolId(value) {
 function createAilisDirectMcpToolSpec({ id, server, tool, name, title, description, inputSchema, schemaProperties, callPattern, descriptionAddendum } = {}) {
     const normalizedServer = normalizeString(server);
     const normalizedTool = normalizeString(tool || name);
-    const normalizedId = normalizeString(id) || codexMcpToolId({ server: normalizedServer, tool: normalizedTool });
+    const normalizedId = normalizeString(id) || ailisMcpToolId({ server: normalizedServer, tool: normalizedTool });
     const parsedId = parseAilisDirectMcpToolId(normalizedId);
-    const modelId = parsedId?.id || codexMcpToolId({ server: normalizedServer, tool: normalizedTool });
+    const modelId = parsedId?.id || ailisMcpToolId({ server: normalizedServer, tool: normalizedTool });
     const legacyId = parsedId?.legacyId || `mcp:${normalizedServer}:${normalizedTool}`;
-    const namespace = parsedId?.namespace || codexMcpNamespaceForServer(normalizedServer);
-    const callableName = parsedId?.callableName || sanitizeCodexMcpNamePart(normalizedTool, 'tool');
+    const namespace = parsedId?.namespace || ailisMcpNamespaceForServer(normalizedServer);
+    const callableName = parsedId?.callableName || sanitizeAilisMcpNamePart(normalizedTool, 'tool');
     const enhancedSchema = enhanceAilisMcpToolSchema({
         tool: normalizedTool,
         inputSchema: inputSchema || {}
     });
+    const schemaAssessment = assessMcpToolSchemaStrength(enhancedSchema);
     const addendum = Array.isArray(descriptionAddendum) && descriptionAddendum.length
         ? [...descriptionAddendum]
         : buildAilisMcpToolDescriptionAddendum({ tool: normalizedTool, inputSchema: enhancedSchema });
@@ -286,7 +367,8 @@ function createAilisDirectMcpToolSpec({ id, server, tool, name, title, descripti
         type: 'function',
         name: modelId,
         description: truncateMiddleText([normalizeString(description), ...addendum].filter(Boolean).join(' '), 1200),
-        parameters: enhancedSchema
+        parameters: enhancedSchema,
+        ...(schemaAssessment.callable ? { strict: true } : {})
     };
     return {
         id: modelId,
@@ -300,6 +382,10 @@ function createAilisDirectMcpToolSpec({ id, server, tool, name, title, descripti
         name: `${namespace}${callableName}`,
         display_name: normalizeString(name || tool) || `${normalizedServer}.${normalizedTool}`,
         description: modelSpec.description,
+        callable: schemaAssessment.callable,
+        modelFacing: schemaAssessment.callable,
+        schema_status: schemaAssessment.callable ? 'strict' : 'weak_schema',
+        weak_schema_reason: schemaAssessment.callable ? '' : schemaAssessment.reason,
         input_schema: enhancedSchema,
         schema_properties: properties,
         spec: modelSpec,
@@ -330,12 +416,13 @@ function normalizeAilisMcpCallArgs(args = {}, options = {}) {
 module.exports = {
     buildAilisMcpToolCallArgs,
     buildAilisMcpToolDescriptionAddendum,
-    codexMcpNamespaceForServer,
-    codexMcpToolId,
+    assessMcpToolSchemaStrength,
+    ailisMcpNamespaceForServer,
+    ailisMcpToolId,
     createAilisDirectMcpToolSpec,
     enhanceAilisMcpToolSchema,
     normalizeAilisMcpCallArgs,
     normalizeAilisMcpToolArgs,
     parseAilisDirectMcpToolId,
-    sanitizeCodexMcpNamePart
+    sanitizeAilisMcpNamePart
 };

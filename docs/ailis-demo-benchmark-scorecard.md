@@ -1,6 +1,6 @@
 # AILIS Demo and Benchmark Scorecard
 
-Generated: 2026-06-07
+Generated: 2026-07-20
 
 ## Positioning
 
@@ -18,7 +18,6 @@ AILIS PC 版展示时不要只说“一个桌宠”，也不要只说“一个 A
 | OSWorld | 真实桌面环境中的 open-ended computer tasks，覆盖 Web、桌面应用、OS 文件 I/O 和跨应用流程。官方 benchmark 有 369 个任务，使用可复现环境和执行式评估脚本。 | Task success rate / per-task execution score |
 | GAIA | 面向通用 AI Assistant 的复杂问题解决 benchmark，适合展示搜索、文件、推理、工具组合能力。 | Exact short-answer matching / leaderboard submission |
 | SWE-bench Lite | 真实 GitHub issue 修复，适合展示代码能力。 | Resolved rate：测试补丁通过即视为解决 |
-| AgentBench | 多环境 LLM-as-Agent benchmark，包含 OS、DB、KG、WebShop、Mind2Web 等环境。 | Success rate by environment |
 | CharacterEval / InCharacter | 角色扮演和人格一致性评估参考。CharacterEval 使用多维角色评估；InCharacter 用心理量表和访谈式评估看 persona fidelity。 | Rubric / reward model / judge / personality consistency |
 | MT-Bench / Chatbot Arena style judging | 主观对话质量常用强 Judge 或成对比较。适合 AILIS 的拟人化体验评估，但必须控制 Judge 偏差。 | LLM-as-judge / pairwise preference |
 
@@ -29,7 +28,6 @@ Reference links:
 - GAIA: https://huggingface.co/gaia-benchmark
 - GAIA dataset: https://huggingface.co/datasets/gaia-benchmark/GAIA
 - SWE-bench: https://github.com/princeton-nlp/SWE-bench
-- AgentBench: https://github.com/THUDM/AgentBench
 - CharacterEval: https://github.com/morecry/CharacterEval
 - InCharacter: https://incharacter.github.io/
 - MT-Bench / Chatbot Arena paper: https://arxiv.org/abs/2306.05685
@@ -48,7 +46,7 @@ For external demos, use public/recognized benchmarks as the main scoreboard. Kee
 | --- | --- | --- | --- | --- |
 | Desktop computer operation | OSWorld | Academic benchmark for real computer environments with web, desktop apps, OS file I/O, and cross-app workflows. | Very high. AILIS is a PC desktop assistant. | Readiness ready; small historical run 2/4 |
 | Code agent | SWE-bench Lite / Verified / Pro | Industry-standard coding-agent benchmark based on real GitHub issues. Verified is widely used but increasingly contaminated; Pro is safer for future claims. | High. AILIS has code tools, patching, tests, terminal. | Harness selftest only |
-| General assistant with tools | GAIA | Commonly used assistant benchmark for search, files, reasoning, and exact answers. | High. Best current fit for AILIS's generic tool-use ability. | Level 1 Lite public: 60% on 20 submitted questions |
+| General assistant with tools | GAIA | Commonly used assistant benchmark for search, files, reasoning, and exact answers. | High. Best current fit for AILIS's generic tool-use ability. | Strict-memory-isolated Run 1: 41/53 (77.36%); Run 2 pending. Historical diagnostic mean: 85.85% |
 | Tool + user interaction | τ-bench / τ²-bench | Evaluates agents in realistic multi-turn user + API tool environments with policies. | High for future email/customer-service style workflows. | Not integrated |
 | Web agent | WebArena | Realistic, self-hosted web environments with functional-outcome scoring. | Medium. AILIS has web/MCP, but PC desktop is higher priority. | Not integrated |
 | Terminal agent | Terminal-Bench / TerminalWorld | Evaluates real terminal tasks with verifiers, useful for CLI/code/file workflows. | High for command-line execution layer. | Not integrated |
@@ -109,8 +107,9 @@ Interpretation:
 | SWE-bench Execution Selftest | Local tiny SWE-style harness selftest | 1 / 1 verified | Yes, as harness readiness, not public SWE-bench score |
 | OSWorld PC Readiness | Local environment and tool-surface readiness | officialRunReady true; 15 / 15 required actions present | Yes, as OSWorld readiness |
 | OSWorld Small Historical Run | 4 OSWorld tasks | 2 / 4 success, average score 0.50 | Yes, but label as small historical run |
-| AgentBench Local Task Inventory | 40 local tasks available | list command works | Not as score yet |
-| GAIA Level 1 Lite Public | 20 public-lite questions, submitted to public scorer | 60% = 12 / 20 correct; 19 / 20 completed locally | Yes, main general-tool score |
+| GAIA Level 1 Strict Rerun | All 53 public validation questions, fixed commit and benchmark memory disabled | Run 1: 41 / 53 (77.36%); Run 2 pending | Provisional single-run result; not yet a reproducibility mean |
+| GAIA Level 1 Historical Validation | All 53 public validation questions, two fixed-commit historical runs | Run 1: 43 / 53 (81.13%); Run 2: 48 / 53 (90.57%); mean: 85.85% | Diagnostic only; task-level semantic-memory isolation was missing |
+| GAIA Level 1 Lite Public | 20 public-lite questions, submitted to public scorer | 60% = 12 / 20 correct; 19 / 20 completed locally | Historical comparison only |
 | GAIA Level 1 Lite Smoke | 3 public lite questions, no leaderboard submission | 2 / 3 produced local final answers; official score null because not submitted | No, keep as debug smoke |
 
 OSWorld small historical breakdown:
@@ -184,7 +183,81 @@ Target display:
 - Small run: success rate and per-domain failures.
 - Do not claim official OSWorld score until the full official or verified route is run.
 
-### D. GAIA Level 1 Lite
+### D. GAIA Level 1
+
+Current strict-memory-isolated rerun:
+
+| Run | Commit | Correct | Accuracy | Protocol status |
+| --- | --- | ---: | ---: | --- |
+| Strict Run 1 | `6afc0ae` | 41 / 53 | **77.36%** | Complete |
+| Strict Run 2 | `6afc0ae` | pending | pending | Required before publishing a final mean and per-task stability |
+
+Strict Run 1 operational metrics:
+
+| Metric | Result |
+| --- | ---: |
+| Visible correct | 41 / 53 |
+| Answer mismatches | 9 |
+| Timeouts | 1 |
+| Runtime errors | 2 |
+| Mean / P50 duration | 248.3 s / 160.9 s |
+| P90 / P95 duration | 556.4 s / 854.4 s |
+| Total / mean model tokens | 7,947,896 / 149,960 |
+
+Strict protocol:
+
+- GAIA 2023 Level 1 public validation split, the same fixed set of 53 tasks.
+- `memoryPolicy: disabled` on both the root request and delegated TaskAgent.
+- Codex ChatGPT OAuth bridge with `gpt-5.5`, medium reasoning, 20 maximum agent steps, 360-second LLM timeout, and 600-second request timeout.
+- AILIS owns context assembly, tool execution, observations, orchestration, evidence, and the visible answer pipeline.
+- Isolated workspace, fixed commit, no failed-task retry, no task replacement, and no score merging.
+- An unexpected Windows reboot interrupted Strict Run 1 after 46 completed result rows. Recovery reused the same run ID, skipped those 46 task IDs, and executed only the seven unfinished tasks.
+- The 77.36% first-run score is provisional. It must not be averaged with the historical runs below.
+
+Historical fixed-commit full validation diagnostic:
+
+<p align="center">
+  <img alt="AILIS GAIA Level 1 validation results" src="assets/benchmarks/gaia-l1-validation-20260719.svg">
+</p>
+
+| Run | Commit | Correct | Accuracy | Runtime status |
+| --- | --- | ---: | ---: | --- |
+| 1 | `4f8f435` | 43 / 53 | 81.13% | 52 completed, 1 timeout |
+| 2 | `4f8f435` | 48 / 53 | 90.57% | 53 completed |
+| Mean | `4f8f435` | 45.5 / 53 | 85.85% | arithmetic mean |
+
+Stability across the two runs:
+
+| Per-task outcome | Tasks | Share |
+| --- | ---: | ---: |
+| Correct in both runs | 40 / 53 | 75.47% |
+| Correct in one run | 11 / 53 | 20.75% |
+| Incorrect in both runs | 2 / 53 | 3.77% |
+| Same pass/fail outcome | 42 / 53 | 79.25% |
+
+Protocol:
+
+- GAIA 2023 Level 1 public validation split, 53 tasks.
+- Dataset SHA-256: `469f4c4b5fa532ac07e3d922bcbe709e663c9f9fc83edccf440cc3d44277f236`.
+- Codex ChatGPT OAuth bridge with `gpt-5.5`, medium reasoning and temperature `0.2`.
+- AILIS owns the harness, context, tools and answer pipeline; Codex is the model backend only.
+- Separate run IDs and isolated workspaces.
+- No resume, task retry, failed-task replacement or merged score.
+- Repository deterministic desktop-real visible-answer scorer, not the official GAIA private scorer.
+- Post-run audit: persistent semantic-memory retrieval was not disabled between tasks inside each run. The numbers below therefore cannot be treated as independent-run reproducibility evidence.
+
+The official GAIA leaderboard currently accepts the 301-question private test split, including 93 Level 1 questions. Its documentation says that the paper reports averages over different runs when possible, but the leaderboard displays the best run. For the historical AILIS diagnostic:
+
+- Best observed historical run: **90.57%**.
+- Historical two-run arithmetic mean: **85.85%**.
+- Neither value is an official leaderboard submission because this run uses the public validation split and the local desktop-real scorer.
+- Neither value is the current reproducibility score because strict task-level memory isolation was absent.
+
+Official references:
+
+- [GAIA leaderboard policy](https://huggingface.co/spaces/gaia-benchmark/leaderboard/blob/main/content.py)
+- [GAIA leaderboard split sizes and scoring code](https://huggingface.co/spaces/gaia-benchmark/leaderboard/blob/main/app.py)
+- [AILIS desktop-real GAIA evaluation methodology](ailis-desktop-real-gaia-eval.md)
 
 Best historical public-lite score:
 
@@ -206,7 +279,7 @@ Earlier submitted runs:
 | `full-20-r2-tools-finalizer` | 45% | 9 / 20 | 15 / 20 |
 | `full-20-r5-agent-repair-tools` | 60% | 12 / 20 | 19 / 20 |
 
-This is the cleanest public-facing score for generic tool ability right now. It is still a Level 1 Lite public subset, not a full official GAIA leaderboard claim.
+This remains useful historical evidence of the earlier public-lite submission path. The fixed-commit 53-task validation runs above are also historical diagnostics because task-level semantic-memory isolation was missing; neither result should be described as the current reproducibility score or an official private-test leaderboard score.
 
 Current smoke run:
 
@@ -243,22 +316,6 @@ Target display:
 - Exact-answer accuracy.
 - Tool usage examples: web search, file reading, spreadsheet/audio/image evidence.
 - Always report base model and temperature.
-
-### E. AgentBench Local Subset
-
-Start with three task families:
-
-```powershell
-pnpm bench:agentbench:ailis:smoke
-node scripts/run-agentbench-ailis.mjs --suite file-creation --limit 3 --keep-workspace
-node scripts/run-agentbench-ailis.mjs --suite memory --limit 3 --keep-workspace
-```
-
-Target display:
-
-- Success rate by suite.
-- Step count and time per task.
-- Common failure classes.
 
 ## How To Reduce Base Model Influence
 
@@ -401,7 +458,7 @@ Goal: end with credibility.
 
 Show:
 
-- Short term: GAIA L1 Lite, AgentBench local subset, OSWorld test_small.
+- Short term: GAIA L1 Lite and OSWorld test_small.
 - Medium term: full OSWorld route and SWE-bench Lite subset.
 - Long term: same-model ablation scorecard for every release.
 

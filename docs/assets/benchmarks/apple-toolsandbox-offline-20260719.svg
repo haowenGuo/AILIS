@@ -1,0 +1,105 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800" role="img" aria-labelledby="title desc">
+  <title id="title">AILIS Apple ToolSandbox offline evaluation</title>
+  <desc id="desc">All 728 non-RapidAPI scenarios received valid official scores. The frozen 239-scenario holdout mean was 71.51 percent, the selected 155-scenario targeted recovery mean was 81.49 percent, and the 64-scenario stability sample mean was 88.31 percent with a paired gain of 13.29 percentage points. The three evidence layers answer different questions and must not be averaged.</desc>
+
+  <rect width="1200" height="800" fill="#f8fafc"/>
+  <rect x="28" y="24" width="1144" height="752" rx="10" fill="#ffffff" stroke="#cbd5e1"/>
+
+  <text x="64" y="70" fill="#0f172a" font-family="Arial, sans-serif" font-size="28" font-weight="700">Apple ToolSandbox Offline Evaluation</text>
+  <text x="64" y="99" fill="#475569" font-family="Arial, sans-serif" font-size="16">Official scoring, frozen source, and separate evidence layers</text>
+  <rect x="846" y="47" width="146" height="36" rx="7" fill="#ecfdf5" stroke="#6ee7b7"/>
+  <text x="919" y="70" text-anchor="middle" fill="#065f46" font-family="Arial, sans-serif" font-size="13" font-weight="700">728 / 728 CERTIFIED</text>
+  <rect x="1004" y="47" width="132" height="36" rx="7" fill="#f1f5f9" stroke="#cbd5e1"/>
+  <text x="1070" y="64" text-anchor="middle" fill="#334155" font-family="Arial, sans-serif" font-size="11" font-weight="700">304 RAPIDAPI</text>
+  <text x="1070" y="77" text-anchor="middle" fill="#64748b" font-family="Arial, sans-serif" font-size="10">EXCLUDED</text>
+
+  <rect x="64" y="126" width="336" height="126" rx="9" fill="#eff6ff" stroke="#93c5fd"/>
+  <rect x="64" y="126" width="8" height="126" rx="4" fill="#2563eb"/>
+  <text x="88" y="155" fill="#1e3a8a" font-family="Arial, sans-serif" font-size="14" font-weight="700">PRIMARY HOLDOUT</text>
+  <text x="88" y="199" fill="#1d4ed8" font-family="Arial, sans-serif" font-size="38" font-weight="700">71.51%</text>
+  <text x="88" y="224" fill="#475569" font-family="Arial, sans-serif" font-size="13">239 / 239 scored | 0 errors</text>
+  <text x="88" y="242" fill="#64748b" font-family="Arial, sans-serif" font-size="12">Frozen unseen-set estimate</text>
+
+  <rect x="432" y="126" width="336" height="126" rx="9" fill="#fffbeb" stroke="#fcd34d"/>
+  <rect x="432" y="126" width="8" height="126" rx="4" fill="#d97706"/>
+  <text x="456" y="155" fill="#92400e" font-family="Arial, sans-serif" font-size="14" font-weight="700">TARGETED RECOVERY</text>
+  <text x="456" y="199" fill="#b45309" font-family="Arial, sans-serif" font-size="38" font-weight="700">81.49%</text>
+  <text x="456" y="224" fill="#475569" font-family="Arial, sans-serif" font-size="13">155 / 155 valid | 0 zero scores</text>
+  <text x="456" y="242" fill="#64748b" font-family="Arial, sans-serif" font-size="12">Selected failure cohort; diagnostic</text>
+
+  <rect x="800" y="126" width="336" height="126" rx="9" fill="#ecfdf5" stroke="#6ee7b7"/>
+  <rect x="800" y="126" width="8" height="126" rx="4" fill="#059669"/>
+  <text x="824" y="155" fill="#065f46" font-family="Arial, sans-serif" font-size="14" font-weight="700">STABILITY SAMPLE</text>
+  <text x="824" y="199" fill="#047857" font-family="Arial, sans-serif" font-size="38" font-weight="700">88.31%</text>
+  <text x="824" y="224" fill="#475569" font-family="Arial, sans-serif" font-size="13">64 / 64 scored | +13.29 pp paired</text>
+  <text x="824" y="242" fill="#64748b" font-family="Arial, sans-serif" font-size="12">No-material-regression evidence</text>
+
+  <rect x="64" y="282" width="520" height="324" rx="9" fill="#ffffff" stroke="#e2e8f0"/>
+  <text x="88" y="316" fill="#0f172a" font-family="Arial, sans-serif" font-size="18" font-weight="700">Primary holdout quality</text>
+  <text x="88" y="339" fill="#64748b" font-family="Arial, sans-serif" font-size="13">Exact frozen holdout, n = 239</text>
+
+  <text x="88" y="385" fill="#334155" font-family="Arial, sans-serif" font-size="13" font-weight="700">Mean score</text>
+  <rect x="210" y="367" width="320" height="24" rx="5" fill="#e2e8f0"/>
+  <rect x="210" y="367" width="229" height="24" rx="5" fill="#2563eb"/>
+  <text x="548" y="384" text-anchor="end" fill="#1d4ed8" font-family="Arial, sans-serif" font-size="14" font-weight="700">71.51%</text>
+
+  <text x="88" y="437" fill="#334155" font-family="Arial, sans-serif" font-size="13" font-weight="700">Non-zero</text>
+  <rect x="210" y="419" width="320" height="24" rx="5" fill="#e2e8f0"/>
+  <rect x="210" y="419" width="260" height="24" rx="5" fill="#059669"/>
+  <text x="548" y="436" text-anchor="end" fill="#047857" font-family="Arial, sans-serif" font-size="14" font-weight="700">81.17%</text>
+  <text x="88" y="454" fill="#64748b" font-family="Arial, sans-serif" font-size="11">194 / 239</text>
+
+  <text x="88" y="497" fill="#334155" font-family="Arial, sans-serif" font-size="13" font-weight="700">Perfect</text>
+  <rect x="210" y="479" width="320" height="24" rx="5" fill="#e2e8f0"/>
+  <rect x="210" y="479" width="122" height="24" rx="5" fill="#0f766e"/>
+  <text x="548" y="496" text-anchor="end" fill="#0f766e" font-family="Arial, sans-serif" font-size="14" font-weight="700">38.08%</text>
+  <text x="88" y="514" fill="#64748b" font-family="Arial, sans-serif" font-size="11">91 / 239</text>
+
+  <text x="88" y="557" fill="#334155" font-family="Arial, sans-serif" font-size="13" font-weight="700">Zero</text>
+  <rect x="210" y="539" width="320" height="24" rx="5" fill="#e2e8f0"/>
+  <rect x="210" y="539" width="60" height="24" rx="5" fill="#dc2626"/>
+  <text x="548" y="556" text-anchor="end" fill="#b91c1c" font-family="Arial, sans-serif" font-size="14" font-weight="700">18.83%</text>
+  <text x="88" y="574" fill="#64748b" font-family="Arial, sans-serif" font-size="11">45 / 239</text>
+  <text x="210" y="589" fill="#94a3b8" font-family="Arial, sans-serif" font-size="10">0</text>
+  <text x="370" y="589" text-anchor="middle" fill="#94a3b8" font-family="Arial, sans-serif" font-size="10">50</text>
+  <text x="530" y="589" text-anchor="end" fill="#94a3b8" font-family="Arial, sans-serif" font-size="10">100%</text>
+
+  <rect x="616" y="282" width="520" height="324" rx="9" fill="#ffffff" stroke="#e2e8f0"/>
+  <text x="640" y="316" fill="#0f172a" font-family="Arial, sans-serif" font-size="18" font-weight="700">Stability and no-regression</text>
+  <text x="640" y="339" fill="#64748b" font-family="Arial, sans-serif" font-size="13">Deterministic stratified sample, n = 64</text>
+
+  <text x="640" y="385" fill="#334155" font-family="Arial, sans-serif" font-size="13" font-weight="700">Baseline</text>
+  <rect x="740" y="367" width="344" height="24" rx="5" fill="#e2e8f0"/>
+  <rect x="740" y="367" width="258" height="24" rx="5" fill="#64748b"/>
+  <text x="1104" y="384" text-anchor="end" fill="#475569" font-family="Arial, sans-serif" font-size="14" font-weight="700">75.01%</text>
+
+  <text x="640" y="431" fill="#334155" font-family="Arial, sans-serif" font-size="13" font-weight="700">Frozen source</text>
+  <rect x="740" y="413" width="344" height="24" rx="5" fill="#e2e8f0"/>
+  <rect x="740" y="413" width="304" height="24" rx="5" fill="#059669"/>
+  <text x="1104" y="430" text-anchor="end" fill="#047857" font-family="Arial, sans-serif" font-size="14" font-weight="700">88.31%</text>
+
+  <rect x="640" y="462" width="464" height="58" rx="8" fill="#ecfdf5" stroke="#a7f3d0"/>
+  <text x="660" y="485" fill="#065f46" font-family="Arial, sans-serif" font-size="15" font-weight="700">Paired delta +13.29 percentage points</text>
+  <text x="660" y="507" fill="#047857" font-family="Arial, sans-serif" font-size="12">95% bootstrap interval: [+4.86, +21.63] pp</text>
+
+  <text x="640" y="548" fill="#334155" font-family="Arial, sans-serif" font-size="13" font-weight="700">Per-scenario outcomes</text>
+  <rect x="640" y="563" width="464" height="22" rx="5" fill="#e2e8f0"/>
+  <path d="M645 563 H850 V585 H645 A5 5 0 0 1 640 580 V568 A5 5 0 0 1 645 563 Z" fill="#059669"/>
+  <rect x="850" y="563" width="160" height="22" fill="#94a3b8"/>
+  <path d="M1010 563 H1099 A5 5 0 0 1 1104 568 V580 A5 5 0 0 1 1099 585 H1010 Z" fill="#dc2626"/>
+  <text x="640" y="600" fill="#047857" font-family="Arial, sans-serif" font-size="11" font-weight="700">29 improved</text>
+  <text x="825" y="600" fill="#475569" font-family="Arial, sans-serif" font-size="11" font-weight="700">22 unchanged</text>
+  <text x="1104" y="600" text-anchor="end" fill="#b91c1c" font-family="Arial, sans-serif" font-size="11" font-weight="700">13 regressed | 2 severe</text>
+
+  <rect x="64" y="636" width="1072" height="104" rx="9" fill="#0f172a"/>
+  <text x="88" y="668" fill="#f8fafc" font-family="Arial, sans-serif" font-size="17" font-weight="700">How to read this score</text>
+  <line x1="405" y1="654" x2="405" y2="720" stroke="#334155"/>
+  <line x1="770" y1="654" x2="770" y2="720" stroke="#334155"/>
+  <text x="88" y="696" fill="#93c5fd" font-family="Arial, sans-serif" font-size="12" font-weight="700">PRIMARY: GENERALIZATION</text>
+  <text x="88" y="716" fill="#cbd5e1" font-family="Arial, sans-serif" font-size="12">71.51% is the frozen holdout estimate.</text>
+  <text x="429" y="696" fill="#fcd34d" font-family="Arial, sans-serif" font-size="12" font-weight="700">TARGETED: DIAGNOSTIC</text>
+  <text x="429" y="716" fill="#cbd5e1" font-family="Arial, sans-serif" font-size="12">81.49% is selection-conditioned recovery.</text>
+  <text x="794" y="696" fill="#6ee7b7" font-family="Arial, sans-serif" font-size="12" font-weight="700">STABILITY: PAIRED EVIDENCE</text>
+  <text x="794" y="716" fill="#cbd5e1" font-family="Arial, sans-serif" font-size="12">88.31% is not another holdout score.</text>
+  <text x="600" y="761" text-anchor="middle" fill="#64748b" font-family="Arial, sans-serif" font-size="11">Do not average evidence layers | valid-only = errors-as-zero because both primary batches had 0 errors | GPT-5.5 low | 2026-07-19</text>
+</svg>

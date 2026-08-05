@@ -200,9 +200,8 @@ function buildBenchmarkMessage(question, filePath) {
         'For finite stochastic/probability/odds/maximize-chance questions, prefer exact state-transition dynamic programming or exhaustive enumeration. Monte Carlo may be used only as a sanity check, not as the final high-confidence evidence. Do not change a fixed random mechanism into a variable one based on remaining items, and do not invent 0.5/even-split probabilities for terminal or partial states not defined by the question.',
         'Available generic MCP server: ailis_research.',
         'Prefer direct MCP tool ids instead of hand-building bridge payloads. Common direct tools: mcp__ailis_research__read_document, mcp__ailis_research__read_spreadsheet, mcp__ailis_research__read_presentation, mcp__ailis_research__paper_metadata_lookup, mcp__ailis_research__pdf_find_and_extract, mcp__ailis_research__pdf_extract_text, mcp__ailis_research__youtube_transcript, mcp__ailis_research__transcribe_audio, mcp__ailis_research__describe_image, mcp__ailis_research__run_python_file, mcp__ailis_research__github_repo_read, mcp__ailis_research__web_fetch, mcp__ailis_research__web_extract_links, mcp__ailis_research__download_file, mcp__ailis_research__web_search.',
-        'Tool routing rule: mcp__ailis_research__web_search is a fallback for broad discovery only. For attached/local artifacts, known URLs, exact paper/report titles, PDFs, YouTube/videos, audio, images, code files, spreadsheets, presentations, Word documents, or GitHub repos, call the specific MCP tool first.',
+        'Tool routing rule: mcp__ailis_research__web_search is a fallback for broad discovery only. For attached/local artifacts, known URLs, exact paper/report titles, PDFs, audio, images, code files, spreadsheets, presentations, Word documents, or GitHub repos, call the specific MCP tool first.',
         'When a tool returns suggestedNextCalls, evidenceGap, or recoveryHint, treat that as the preferred next-step plan. Follow the same-domain recovery path before falling back to another broad web_search.',
-        'For YouTube/video tasks, call mcp__ailis_research__youtube_transcript or mcp__ailis_research__youtube_video_search before broad web_search. If YouTube tools return metadata_only/oEmbed metadata after an anti-bot block, use the exact recovered title/channel plus the question target terms for follow-up search or media fallback; metadata_only is not enough evidence for visual counts, audio details, or on-camera questions.',
         'Treat web_search results as discovery only. After web_search succeeds, move to a concrete URL, DOI, PDF, or extracted link from the returned candidates before answering.',
         'For news/article/webpage discovery, preserve exact date constraints from the question. If the question says June 6, 2023 or another exact day, keep the day in search queries and verify the fetched page date before following its linked paper/resources; do not broaden to only month/year unless exact-date searches fail.',
         'Treat web_fetch excerpts as partial evidence. If it surfaces high-signal links or cited resources, follow those next instead of searching the web again. When fetching archive/listing/search-result/table-of-contents/journal issue pages, include query/contains with the task clues such as author, year, topic, venue, or answer phrase so linked PDFs/articles are ranked by relevance; if the page has no query-term match, do not follow newest unrelated PDFs just because they are listed first.',
@@ -703,8 +702,8 @@ function extractExactAnswerSubmission(response = {}) {
     const candidates = [
         response?.exactAnswerSubmission,
         response?.exact_answer_submission,
-        response?.answerGate?.submission,
-        response?.exactAnswerGate?.submission
+        response?.exactAnswerAudit?.submission,
+        response?.answerAudit?.submission
     ];
     for (const candidate of candidates) {
         if (candidate && typeof candidate === 'object') {
@@ -752,11 +751,79 @@ function buildReasonFinalAnswerGate(response = {}, question = {}) {
     };
 }
 
+const SCALED_UNIT_MULTIPLIERS = {
+    thousand: 1000,
+    million: 1000000,
+    billion: 1000000000
+};
+
+const SIMPLE_NUMBER_PATTERN = '[-+]?\\d{1,3}(?:,\\d{3})*(?:\\.\\d+)?|[-+]?\\d+(?:\\.\\d+)?';
+
+function normalizeSubmittedNumberText(value = '') {
+    const text = normalizeText(value).replace(/,/g, '');
+    const number = Number(text);
+    if (!Number.isFinite(number)) {
+        return text;
+    }
+    return Number.isInteger(number) ? String(number) : String(Number(number.toPrecision(12)));
+}
+
+function requestedScaledUnit(questionText = '') {
+    const text = normalizeText(questionText);
+    for (const [word, multiplier] of Object.entries(SCALED_UNIT_MULTIPLIERS)) {
+        const pattern = new RegExp(
+            `\\b(?:how\\s+many\\s+${word}s?|in\\s+${word}s?|number\\s+of\\s+${word}s?|amount\\s+in\\s+${word}s?)\\b`,
+            'i'
+        );
+        if (pattern.test(text)) {
+            return { word, multiplier };
+        }
+    }
+    return null;
+}
+
+function formatScaledUnitAnswerForQuestion(answerText = '', questionText = '') {
+    const scale = requestedScaledUnit(questionText);
+    if (!scale) {
+        return answerText;
+    }
+    const scaledAnswerPattern = new RegExp(
+        `^\\s*(${SIMPLE_NUMBER_PATTERN})\\s+${scale.word}s?(?:\\s+[A-Za-z][A-Za-z0-9%/^.-]*)*\\.?\\s*$`,
+        'i'
+    );
+    const scaledAnswer = answerText.match(scaledAnswerPattern);
+    if (scaledAnswer) {
+        return normalizeSubmittedNumberText(scaledAnswer[1]);
+    }
+    const rawNumberPattern = new RegExp(
+        `^\\s*(${SIMPLE_NUMBER_PATTERN})(?:\\s+[A-Za-z][A-Za-z0-9%/^.-]*)?\\.?\\s*$`,
+        'i'
+    );
+    const rawNumber = answerText.match(rawNumberPattern);
+    if (!rawNumber) {
+        return answerText;
+    }
+    const numeric = Number(rawNumber[1].replace(/,/g, ''));
+    if (!Number.isFinite(numeric) || Math.abs(numeric) < scale.multiplier) {
+        return answerText;
+    }
+    const scaled = numeric / scale.multiplier;
+    const nearestInteger = Math.round(scaled);
+    if (Math.abs(scaled - nearestInteger) > 1e-9) {
+        return answerText;
+    }
+    return String(nearestInteger);
+}
+
 function formatSubmittedAnswerForQuestion(answer, question = {}) {
     const text = stripControlTags(answer);
     const questionText = normalizeText(typeof question === 'string' ? question : question.question);
     if (!text || !questionText) {
         return text;
+    }
+    const scaled = formatScaledUnitAnswerForQuestion(text, questionText);
+    if (scaled !== text) {
+        return scaled;
     }
     const unitSpecified = /\b(?:in|unit|units|measured in)\s+(?:m\^?3|m\u00b3|cubic meters?|kg|kilograms?|g|grams?|km|kilometers?|m|meters?|cm|centimeters?|mm|millimeters?|%|percent|percentage)\b/i.test(questionText) ||
         /\b(?:m\^?3|m\u00b3|cubic meters?|kg|kilograms?|%|percent|percentage)\b/i.test(questionText);
@@ -1760,6 +1827,7 @@ async function finalizeAnswerFromEvidence({ question, filePath, response, llmSet
                     'For spreadsheet/CSV questions, answer only when the observations include a full-file computation or the complete relevant table.',
                     'For webpage/news questions with an exact date in the question, only use evidence from pages whose observed date/title match that exact target; if the evidence points to a different day or article, return missing evidence.',
                     'If the question already specifies the unit, return the bare value without repeating the unit.',
+                    'If the question asks for a scaled unit such as how many thousand, million, or billion items, return the scaled count, not the raw base-unit amount. Example: 17000 hours means 17 thousand hours, so answer 17.',
                     'For quote/word/phrase questions, prefer answerCandidates and focused evidence snippets over page titles, article titles, metadata, or search result titles.',
                     'For quote/word/phrase questions, do not answer from a title unless the evidence snippet shows that exact value in the requested quoted/body context.',
                     'If the observations do not contain enough evidence, return {"answer":"","confidence":"low","reason":"missing evidence"}.',

@@ -1,0 +1,801 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>艾莉丝 - AILIS 3D 交互空间</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { overflow: hidden; background: #0a0a2e; font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif; }
+  canvas { display: block; }
+
+  /* HUD 顶部 */
+  #hud-top {
+    position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
+    z-index: 10; pointer-events: none;
+    text-align: center;
+  }
+  #hud-top h1 {
+    color: #fff; font-size: 22px; font-weight: 300;
+    text-shadow: 0 0 30px rgba(150,100,255,0.6);
+    letter-spacing: 6px;
+  }
+  #hud-top .sub {
+    color: rgba(255,255,255,0.5); font-size: 13px; margin-top: 4px;
+    letter-spacing: 2px;
+  }
+
+  /* 底部操作栏 */
+  #chat-bar {
+    position: fixed; bottom: 40px; left: 50%; transform: translateX(-50%);
+    z-index: 10;
+    display: flex; gap: 10px; align-items: center;
+    background: rgba(255,255,255,0.06);
+    backdrop-filter: blur(16px);
+    border: 1px solid rgba(255,255,255,0.10);
+    border-radius: 50px;
+    padding: 8px 16px 8px 24px;
+    min-width: 360px;
+    max-width: 600px;
+  }
+  #chat-bar input {
+    flex: 1;
+    background: transparent; border: none; outline: none;
+    color: #fff; font-size: 15px; padding: 8px 0;
+    font-family: inherit;
+  }
+  #chat-bar input::placeholder { color: rgba(255,255,255,0.3); }
+  #chat-bar button {
+    background: linear-gradient(135deg, #8b5cf6, #6366f1);
+    border: none; border-radius: 30px;
+    color: #fff; padding: 8px 20px;
+    font-size: 14px; cursor: pointer;
+    transition: transform 0.2s, box-shadow 0.2s;
+    font-family: inherit;
+  }
+  #chat-bar button:hover {
+    transform: scale(1.05);
+    box-shadow: 0 0 25px rgba(99,102,241,0.5);
+  }
+
+  /* 对话框 */
+  #bubble {
+    position: fixed; top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 10; pointer-events: none;
+    opacity: 0; transition: opacity 0.5s;
+    max-width: 420px;
+    background: rgba(0,0,0,0.55);
+    backdrop-filter: blur(12px);
+    border: 1px solid rgba(255,255,255,0.10);
+    border-radius: 20px;
+    padding: 24px 28px;
+  }
+  #bubble.show { opacity: 1; }
+  #bubble p {
+    color: #e8e0ff; font-size: 16px; line-height: 1.7;
+    text-align: center;
+  }
+  #bubble .emotion {
+    font-size: 32px; display: block; margin-bottom: 8px;
+  }
+
+  /* 音量/提示 */
+  #tip {
+    position: fixed; bottom: 110px; left: 50%; transform: translateX(-50%);
+    z-index: 10; pointer-events: none;
+    color: rgba(255,255,255,0.2); font-size: 13px;
+    letter-spacing: 1px;
+    animation: pulse 3s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 0.2; }
+    50% { opacity: 0.6; }
+  }
+
+  /* 响应式 */
+  @media (max-width: 640px) {
+    #chat-bar { min-width: unset; width: 90%; padding: 6px 12px 6px 18px; }
+    #chat-bar input { font-size: 14px; }
+    #bubble { max-width: 85%; padding: 18px 20px; }
+    #bubble p { font-size: 14px; }
+  }
+</style>
+</head>
+<body>
+
+<div id="hud-top">
+  <h1>✦ 艾莉丝 ✦</h1>
+  <div class="sub">AILIS · 3D 交互空间</div>
+</div>
+
+<div id="bubble">
+  <span class="emotion">✨</span>
+  <p id="bubble-text">你好，我是艾莉丝！<br>点击我或给我发消息吧～</p>
+</div>
+
+<div id="tip">💬 点击艾莉丝或输入文字与她对话</div>
+
+<div id="chat-bar">
+  <input id="chat-input" type="text" placeholder="输入你想对艾莉丝说的话…" maxlength="80">
+  <button id="chat-send">发送 ✦</button>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.163.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.163.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
+
+// ============================================================
+//  场景 / 相机 / 渲染器
+// ============================================================
+const scene = new THREE.Scene();
+
+const camera = new THREE.PerspectiveCamera(40, window.innerWidth / window.innerHeight, 0.1, 100);
+camera.position.set(0, 2.8, 7);
+camera.lookAt(0, 1.2, 0);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.2;
+document.body.prepend(renderer.domElement);
+
+const labelRenderer = new CSS2DRenderer();
+labelRenderer.setSize(window.innerWidth, window.innerHeight);
+labelRenderer.domElement.style.position = 'fixed';
+labelRenderer.domElement.style.top = '0';
+labelRenderer.domElement.style.left = '0';
+labelRenderer.domElement.style.pointerEvents = 'none';
+labelRenderer.domElement.style.zIndex = '5';
+document.body.prepend(labelRenderer.domElement);
+
+// ============================================================
+//  灯光
+// ============================================================
+const ambient = new THREE.AmbientLight(0x222244, 0.6);
+scene.add(ambient);
+
+const mainLight = new THREE.DirectionalLight(0xffeebb, 2.5);
+mainLight.position.set(5, 10, 5);
+mainLight.castShadow = true;
+mainLight.shadow.mapSize.width = 1024;
+mainLight.shadow.mapSize.height = 1024;
+scene.add(mainLight);
+
+const fillLight = new THREE.DirectionalLight(0x8888ff, 1.0);
+fillLight.position.set(-4, 2, -4);
+scene.add(fillLight);
+
+const rimLight = new THREE.DirectionalLight(0xaaccff, 1.2);
+rimLight.position.set(0, -2, -6);
+scene.add(rimLight);
+
+// 紫色氛围光
+const pointLight = new THREE.PointLight(0x8b5cf6, 2, 8);
+pointLight.position.set(0, 2, 0);
+scene.add(pointLight);
+
+// ============================================================
+//  地面（发光圆环平台）
+// ============================================================
+const floorGeo = new THREE.CircleGeometry(2.8, 64);
+const floorMat = new THREE.MeshStandardMaterial({
+  color: 0x1a1a4e,
+  metalness: 0.2,
+  roughness: 0.8,
+  transparent: true,
+  opacity: 0.6,
+  side: THREE.DoubleSide,
+});
+const floor = new THREE.Mesh(floorGeo, floorMat);
+floor.rotation.x = -Math.PI / 2;
+floor.position.y = -0.01;
+floor.receiveShadow = true;
+scene.add(floor);
+
+// 光环
+const ringGeo = new THREE.RingGeometry(2.5, 2.7, 64);
+const ringMat = new THREE.MeshBasicMaterial({
+  color: 0x8b5cf6,
+  transparent: true,
+  opacity: 0.3,
+  side: THREE.DoubleSide,
+  depthWrite: false,
+});
+const ring = new THREE.Mesh(ringGeo, ringMat);
+ring.rotation.x = -Math.PI / 2;
+ring.position.y = 0.001;
+scene.add(ring);
+
+const ring2 = new THREE.RingGeometry(2.0, 2.1, 64);
+const ringMat2 = new THREE.MeshBasicMaterial({
+  color: 0x6366f1,
+  transparent: true,
+  opacity: 0.15,
+  side: THREE.DoubleSide,
+  depthWrite: false,
+});
+const ring2m = new THREE.Mesh(ring2, ringMat2);
+ring2m.rotation.x = -Math.PI / 2;
+ring2m.position.y = 0.001;
+scene.add(ring2m);
+
+// ============================================================
+//  艾莉丝角色构建
+// ============================================================
+const ailis = new THREE.Group();
+
+// --- 身体（连衣长裙） ---
+const bodyGeo = new THREE.CylinderGeometry(0.55, 0.75, 1.2, 16);
+const bodyMat = new THREE.MeshStandardMaterial({
+  color: 0x7c3aed,
+  metalness: 0.1,
+  roughness: 0.4,
+  emissive: 0x3b1a8a,
+  emissiveIntensity: 0.08,
+});
+const body = new THREE.Mesh(bodyGeo, bodyMat);
+body.position.y = 0.6;
+body.castShadow = true;
+ailis.add(body);
+
+// 裙摆花边
+const skirtGeo = new THREE.CylinderGeometry(0.7, 0.85, 0.2, 16);
+const skirtMat = new THREE.MeshStandardMaterial({
+  color: 0x6d28d9,
+  metalness: 0.05,
+  roughness: 0.5,
+});
+const skirt = new THREE.Mesh(skirtGeo, skirtMat);
+skirt.position.y = 0.1;
+ailis.add(skirt);
+
+// --- 头 ---
+const headGeo = new THREE.SphereGeometry(0.40, 24, 24);
+const headMat = new THREE.MeshStandardMaterial({
+  color: 0xffe0c0,
+  roughness: 0.4,
+  metalness: 0.0,
+});
+const head = new THREE.Mesh(headGeo, headMat);
+head.position.y = 1.4;
+head.castShadow = true;
+ailis.add(head);
+
+// --- 头发 ---
+function createHair() {
+  const hairGroup = new THREE.Group();
+
+  // 主发
+  const hairGeo = new THREE.SphereGeometry(0.42, 20, 20, 0, Math.PI * 2, 0, Math.PI * 0.55);
+  const hairMat = new THREE.MeshStandardMaterial({
+    color: 0x8b5cf6,
+    roughness: 0.6,
+    metalness: 0.1,
+    side: THREE.DoubleSide,
+  });
+  const hair = new THREE.Mesh(hairGeo, hairMat);
+  hair.position.y = 1.42;
+  hair.scale.set(1, 0.7, 1.05);
+  hair.rotation.x = 0.05;
+  hairGroup.add(hair);
+
+  // 侧发（左）
+  const sideGeo = new THREE.CylinderGeometry(0.06, 0.10, 0.5, 8);
+  const sideMat = new THREE.MeshStandardMaterial({ color: 0x8b5cf6, roughness: 0.6 });
+  const sideL = new THREE.Mesh(sideGeo, sideMat);
+  sideL.position.set(-0.34, 1.2, 0.1);
+  sideL.rotation.z = 0.2;
+  sideL.rotation.x = -0.1;
+  hairGroup.add(sideL);
+
+  // 侧发（右）
+  const sideR = new THREE.Mesh(sideGeo, sideMat);
+  sideR.position.set(0.34, 1.2, 0.1);
+  sideR.rotation.z = -0.2;
+  sideR.rotation.x = -0.1;
+  hairGroup.add(sideR);
+
+  // 发箍/小皇冠
+  const crownGeo = new THREE.TorusGeometry(0.18, 0.03, 8, 16);
+  const crownMat = new THREE.MeshStandardMaterial({
+    color: 0xfbbf24,
+    metalness: 0.7,
+    roughness: 0.2,
+    emissive: 0xfbbf24,
+    emissiveIntensity: 0.15,
+  });
+  const crown = new THREE.Mesh(crownGeo, crownMat);
+  crown.position.set(0, 1.68, 0.1);
+  crown.rotation.x = Math.PI * 0.15;
+  crown.scale.set(1, 1, 0.6);
+  hairGroup.add(crown);
+
+  // 小星星装饰
+  const starMat = new THREE.MeshStandardMaterial({
+    color: 0xfbbf24,
+    emissive: 0xfbbf24,
+    emissiveIntensity: 0.3,
+  });
+  for (let i = 0; i < 5; i++) {
+    const sGeo = new THREE.SphereGeometry(0.025, 6, 6);
+    const s = new THREE.Mesh(sGeo, starMat);
+    const angle = (i / 5) * Math.PI * 2;
+    s.position.set(Math.cos(angle) * 0.22, 1.70 + Math.sin(angle) * 0.06, Math.sin(angle) * 0.06 + 0.1);
+    hairGroup.add(s);
+  }
+
+  return hairGroup;
+}
+const hairGroup = createHair();
+ailis.add(hairGroup);
+
+// --- 眼睛（大眼可爱风格） ---
+function createEye(side) {
+  const eyeGroup = new THREE.Group();
+
+  // 眼白
+  const whiteGeo = new THREE.SphereGeometry(0.12, 12, 12);
+  const whiteMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.1 });
+  const white = new THREE.Mesh(whiteGeo, whiteMat);
+  white.position.set(0, 0, -0.02);
+  eyeGroup.add(white);
+
+  // 瞳孔
+  const pupilGeo = new THREE.SphereGeometry(0.07, 12, 12);
+  const pupilMat = new THREE.MeshStandardMaterial({ color: 0x8b5cf6, emissive: 0x6d28d9, emissiveIntensity: 0.3 });
+  const pupil = new THREE.Mesh(pupilGeo, pupilMat);
+  pupil.position.set(0, 0.01, 0.04);
+  eyeGroup.add(pupil);
+
+  // 高光
+  const hlGeo = new THREE.SphereGeometry(0.03, 8, 8);
+  const hlMat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xffffff, emissiveIntensity: 0.8 });
+  const hl = new THREE.Mesh(hlGeo, hlMat);
+  hl.position.set(0.03, 0.04, 0.07);
+  eyeGroup.add(hl);
+
+  const posX = side === 'left' ? -0.16 : 0.16;
+  eyeGroup.position.set(posX, 1.48, 0.36);
+  return eyeGroup;
+}
+ailis.add(createEye('left'));
+ailis.add(createEye('right'));
+
+// --- 嘴巴（可动的，默认微笑） ---
+const mouthGroup = new THREE.Group();
+const mouthGeo = new THREE.TorusGeometry(0.05, 0.015, 6, 12, Math.PI);
+const mouthMat = new THREE.MeshStandardMaterial({ color: 0xe05060, roughness: 0.3 });
+const mouth = new THREE.Mesh(mouthGeo, mouthMat);
+mouth.position.set(0, 1.34, 0.40);
+mouth.rotation.x = 0.1;
+mouth.rotation.z = 0.0;
+mouthGroup.add(mouth);
+ailis.add(mouthGroup);
+
+// --- 手臂 ---
+function createArm(side) {
+  const armGeo = new THREE.CylinderGeometry(0.06, 0.07, 0.4, 8);
+  const armMat = new THREE.MeshStandardMaterial({ color: 0xffe0c0, roughness: 0.4 });
+  const arm = new THREE.Mesh(armGeo, armMat);
+  arm.position.set(side === 'left' ? -0.55 : 0.55, 1.1, 0);
+  arm.rotation.z = side === 'left' ? 0.3 : -0.3;
+  arm.rotation.x = -0.5;
+  arm.castShadow = true;
+  return arm;
+}
+ailis.add(createArm('left'));
+ailis.add(createArm('right'));
+
+// --- 魔法翅膀（半透明粒子翅膀） ---
+function createWing(side) {
+  const wg = new THREE.Group();
+  const wingMat = new THREE.MeshBasicMaterial({
+    color: 0x8b5cf6,
+    transparent: true,
+    opacity: 0.15,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+  });
+  const wingGeo = new THREE.Shape();
+  wingGeo.moveTo(0, 0);
+  wingGeo.quadraticCurveTo(side === 'left' ? -0.4 : 0.4, 0.5, 0, 0.8);
+  wingGeo.quadraticCurveTo(side === 'left' ? -0.3 : 0.3, 0.4, 0, 0);
+  const wingMesh = new THREE.Mesh(new THREE.ShapeGeometry(wingGeo), wingMat);
+  wingMesh.position.set(0, 0.8, -0.1);
+  wg.add(wingMesh);
+
+  // 小翅膀
+  const wingMat2 = wingMat.clone();
+  wingMat2.opacity = 0.08;
+  const wingGeo2 = new THREE.Shape();
+  wingGeo2.moveTo(0, 0);
+  wingGeo2.quadraticCurveTo(side === 'left' ? -0.25 : 0.25, 0.3, 0, 0.5);
+  wingGeo2.quadraticCurveTo(side === 'left' ? -0.15 : 0.15, 0.2, 0, 0);
+  const wingMesh2 = new THREE.Mesh(new THREE.ShapeGeometry(wingGeo2), wingMat2);
+  wingMesh2.position.set(side === 'left' ? -0.1 : 0.1, 0.6, -0.05);
+  wg.add(wingMesh2);
+
+  wg.position.set(side === 'left' ? -0.3 : 0.3, 1.3, 0.1);
+  return wg;
+}
+ailis.add(createWing('left'));
+ailis.add(createWing('right'));
+
+scene.add(ailis);
+
+// ============================================================
+//  浮动粒子（魔法光点）
+// ============================================================
+const particleCount = 400;
+const positions = new Float32Array(particleCount * 3);
+const sizes = new Float32Array(particleCount);
+const speeds = new Float32Array(particleCount);
+const phases = new Float32Array(particleCount);
+
+for (let i = 0; i < particleCount; i++) {
+  const radius = 1.8 + Math.random() * 2.5;
+  const theta = Math.random() * Math.PI * 2;
+  const phi = Math.random() * Math.PI;
+  positions[i*3] = Math.sin(phi) * Math.cos(theta) * radius;
+  positions[i*3+1] = Math.cos(phi) * 2.5 + 1.5;
+  positions[i*3+2] = Math.sin(phi) * Math.sin(theta) * radius;
+  sizes[i] = 0.02 + Math.random() * 0.04;
+  speeds[i] = 0.3 + Math.random() * 0.5;
+  phases[i] = Math.random() * Math.PI * 2;
+}
+
+const particleGeo = new THREE.BufferGeometry();
+particleGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+particleGeo.setAttribute('size', new THREE.BufferAttribute(sizes, 1));
+
+const particleMat = new THREE.PointsMaterial({
+  color: 0xa78bfa,
+  size: 0.04,
+  transparent: true,
+  opacity: 0.6,
+  blending: THREE.AdditiveBlending,
+  depthWrite: false,
+  sizeAttenuation: true,
+});
+const particles = new THREE.Points(particleGeo, particleMat);
+scene.add(particles);
+
+// 小星星粒子
+const starParticleCount = 200;
+const starPos = new Float32Array(starParticleCount * 3);
+for (let i = 0; i < starParticleCount; i++) {
+  starPos[i*3] = (Math.random() - 0.5) * 20;
+  starPos[i*3+1] = (Math.random() - 0.5) * 10 + 2;
+  starPos[i*3+2] = (Math.random() - 0.5) * 20 - 5;
+}
+const starGeo = new THREE.BufferGeometry();
+starGeo.setAttribute('position', new THREE.BufferAttribute(starPos, 3));
+const starMat = new THREE.PointsMaterial({
+  color: 0xffffff,
+  size: 0.015,
+  transparent: true,
+  opacity: 0.4,
+  blending: THREE.AdditiveBlending,
+  depthWrite: false,
+  sizeAttenuation: true,
+});
+const stars = new THREE.Points(starGeo, starMat);
+scene.add(stars);
+
+// ============================================================
+//  交互状态
+// ============================================================
+let isTalking = false;
+let currentEmotion = 'happy'; // happy, thinking, surprised, love
+let bobPhase = 0;
+
+const bubble = document.getElementById('bubble');
+const bubbleText = document.getElementById('bubble-text');
+const chatInput = document.getElementById('chat-input');
+const chatSend = document.getElementById('chat-send');
+
+// 对话响应库
+const responses = {
+  greeting: [
+    { emoji: '🌸', text: '欢迎来到艾莉丝的魔法空间！', emotion: 'happy' },
+    { emoji: '✨', text: '你好呀～今天想聊什么呢？', emotion: 'happy' },
+    { emoji: '💜', text: '嗨！我是艾莉丝，你的AI小伙伴～', emotion: 'happy' },
+  ],
+  name: [
+    { emoji: '😊', text: '我叫艾莉丝，是AILIS的化身哦！', emotion: 'happy' },
+    { emoji: '💫', text: '艾莉丝·AILIS，很高兴认识你！', emotion: 'happy' },
+  ],
+  howareyou: [
+    { emoji: '💖', text: '我很好呀！有你在我就很开心～', emotion: 'love' },
+    { emoji: '🌟', text: '能量满满的！要不要一起探索点什么？', emotion: 'happy' },
+  ],
+  love: [
+    { emoji: '💜✨', text: '我也最喜欢你啦！', emotion: 'love' },
+    { emoji: '🥰', text: '哇，听到这话好开心！', emotion: 'love' },
+  ],
+  code: [
+    { emoji: '💻', text: '代码是魔法哦！Three.js 真好玩～', emotion: 'happy' },
+    { emoji: '⚡', text: '让我帮你写点漂亮的代码吧！', emotion: 'thinking' },
+  ],
+  bye: [
+    { emoji: '👋', text: '再见啦！随时来找我玩哦～', emotion: 'happy' },
+    { emoji: '🌙', text: '拜拜～艾莉丝会想你的！', emotion: 'love' },
+  ],
+  default: [
+    { emoji: '🤔', text: '嗯…让我想想怎么回答你～', emotion: 'thinking' },
+    { emoji: '💭', text: '你说得很有意思！多跟我讲讲？', emotion: 'thinking' },
+    { emoji: '😄', text: '好呀好呀！我最喜欢聊天了～', emotion: 'happy' },
+    { emoji: '✨', text: '你知道吗？AILIS的世界里每天都有新发现！', emotion: 'happy' },
+    { emoji: '🎀', text: '我在学好多新东西呢，一起进步吧！', emotion: 'happy' },
+    { emoji: '💜', text: '你的声音听起来真温暖～', emotion: 'love' },
+  ],
+};
+
+function classify(text) {
+  const t = text.toLowerCase();
+  if (/你好|嗨|hello|hi|hey/.test(t)) return 'greeting';
+  if (/名字|你是谁|叫|name/.test(t)) return 'name';
+  if (/好么|好吗|怎么样|how.*you/.test(t) || /最近/.test(t)) return 'howareyou';
+  if (/喜欢|爱|love|可爱|好看/.test(t)) return 'love';
+  if (/代码|编程|code|写|程序|three/.test(t)) return 'code';
+  if (/再见|拜拜|bye|回头|晚安/.test(t)) return 'bye';
+  return 'default';
+}
+
+function getResponse(text) {
+  const cat = classify(text);
+  const pool = responses[cat] || responses.default;
+  return pool[Math.floor(Math.random() * pool.length)];
+}
+
+function setEmotion(emotion) {
+  currentEmotion = emotion;
+  // 改变眼睛颜色/表情
+  const allEyes = ailis.children.filter(c => c.type === 'Group' && c.position.y > 1.4 && c.position.y < 1.5);
+  // 改变嘴巴形状
+  mouthGroup.children.forEach(m => {
+    if (emotion === 'happy' || emotion === 'love') {
+      m.scale.set(1, 1, 1);
+      m.rotation.x = 0.1;
+    } else if (emotion === 'thinking') {
+      m.scale.set(0.7, 0.7, 1);
+      m.position.x = 0.04;
+      m.position.y = 1.36;
+    } else if (emotion === 'surprised') {
+      m.scale.set(1.3, 1.3, 1);
+      m.rotation.x = -0.1;
+    }
+    // reset
+    m.position.x = 0;
+    m.position.y = 1.34;
+  });
+}
+
+function showBubble(emoji, text, emotion) {
+  document.querySelector('#bubble .emotion').textContent = emoji;
+  bubbleText.textContent = text;
+  bubble.classList.add('show');
+  setEmotion(emotion);
+
+  if (emotion === 'love') {
+    // 爱心爆发效果
+    createHeartBurst();
+  }
+
+  clearTimeout(bubble._hideTimer);
+  bubble._hideTimer = setTimeout(() => {
+    bubble.classList.remove('show');
+    setEmotion('happy');
+  }, 5000);
+}
+
+function createHeartBurst() {
+  const heartCount = 30;
+  for (let i = 0; i < heartCount; i++) {
+    const heart = new THREE.Mesh(
+      new THREE.SphereGeometry(0.03, 6, 6),
+      new THREE.MeshBasicMaterial({ color: 0xff6b9d, transparent: true, opacity: 0.8 })
+    );
+    heart.position.set(
+      (Math.random() - 0.5) * 1.5,
+      1.2 + Math.random() * 0.8,
+      (Math.random() - 0.5) * 0.8
+    );
+    scene.add(heart);
+    heart.userData = {
+      vel: new THREE.Vector3(
+        (Math.random() - 0.5) * 0.04,
+        Math.random() * 0.05 + 0.02,
+        (Math.random() - 0.5) * 0.04
+      ),
+      life: 1.0,
+    };
+    heart._heartData = heart.userData;
+    ailis._hearts = ailis._hearts || [];
+    ailis._hearts.push(heart);
+  }
+}
+
+function speak(text) {
+  if (isTalking) return;
+  isTalking = true;
+
+  const resp = getResponse(text);
+  showBubble(resp.emoji, resp.text, resp.emotion);
+
+  // 说话时轻微上下晃动
+  let count = 0;
+  const interval = setInterval(() => {
+    if (count > 8) {
+      clearInterval(interval);
+      isTalking = false;
+      return;
+    }
+    ailis.position.y = 0 + Math.sin(count * 0.6) * 0.03;
+    count++;
+  }, 120);
+}
+
+// ============================================================
+//  点击角色交互
+// ============================================================
+renderer.domElement.addEventListener('click', (e) => {
+  const rect = renderer.domElement.getBoundingClientRect();
+  const x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+  const y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+
+  const raycaster = new THREE.Raycaster();
+  const mouse = new THREE.Vector2(x, y);
+  raycaster.setFromCamera(mouse, camera);
+
+  const hits = raycaster.intersectObjects(ailis.children, true);
+  if (hits.length > 0 && !isTalking) {
+    const greetings = ['你好呀～✨', '嗨！好久不见！🌸', '艾莉丝在这里哦！💜', '找我有什么事呀？😊'];
+    speak(greetings[Math.floor(Math.random() * greetings.length)]);
+  }
+});
+
+// ============================================================
+//  聊天输入
+// ============================================================
+function handleSend() {
+  const text = chatInput.value.trim();
+  if (!text || isTalking) return;
+  chatInput.value = '';
+  speak(text);
+}
+
+chatSend.addEventListener('click', handleSend);
+chatInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') handleSend();
+});
+
+// 聚焦输入框
+chatInput.focus();
+
+// ============================================================
+//  窗口自适应
+// ============================================================
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  labelRenderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+// ============================================================
+//  动画循环
+// ============================================================
+const clock = new THREE.Clock();
+
+function animate() {
+  requestAnimationFrame(animate);
+
+  const t = clock.getElapsedTime();
+
+  // 艾莉丝漂浮和旋转
+  ailis.position.y = 0 + Math.sin(t * 0.8) * 0.08;
+  if (!isTalking) {
+    ailis.rotation.y = Math.sin(t * 0.15) * 0.15;
+  }
+
+  // 手臂摆动
+  ailis.children.forEach(c => {
+    if (c.type === 'Mesh' && c.geometry.type === 'CylinderGeometry' && c.position.y > 0.9 && c.position.y < 1.3) {
+      if (c.position.x < 0) {
+        c.rotation.x = -0.5 + Math.sin(t * 1.2) * 0.1;
+      } else {
+        c.rotation.x = -0.5 - Math.sin(t * 1.2) * 0.1;
+      }
+    }
+  });
+
+  // 翅膀扇动
+  ailis.children.forEach(c => {
+    if (c.position.x === -0.3 && c.position.y === 1.3) {
+      c.rotation.y = Math.sin(t * 1.5) * 0.15;
+    }
+    if (c.position.x === 0.3 && c.position.y === 1.3) {
+      c.rotation.y = -Math.sin(t * 1.5) * 0.15;
+    }
+  });
+
+  // 光环旋转
+  ring.rotation.z = t * 0.3;
+  ring2m.rotation.z = -t * 0.2;
+
+  // 粒子动画
+  const pos = particles.geometry.attributes.position.array;
+  for (let i = 0; i < particleCount; i++) {
+    const i3 = i * 3;
+    const phase = phases[i];
+    const speed = speeds[i];
+    const y0 = Math.cos(phase + t * speed) * 2.0 + 1.5;
+    const radius = 1.8 + Math.sin(phase + t * 0.2) * 1.0;
+    const theta = phase + t * 0.1 * speed;
+    const phi = Math.PI * 0.3 + Math.sin(phase + t * 0.15) * 0.5;
+    pos[i3] = Math.sin(phi) * Math.cos(theta) * radius;
+    pos[i3+1] = y0;
+    pos[i3+2] = Math.sin(phi) * Math.sin(theta) * radius;
+  }
+  particles.geometry.attributes.position.needsUpdate = true;
+
+  // 星星微旋
+  stars.rotation.y = t * 0.01;
+
+  // 爱心粒子更新
+  if (ailis._hearts) {
+    for (let i = ailis._hearts.length - 1; i >= 0; i--) {
+      const h = ailis._hearts[i];
+      if (h._heartData) {
+        h.position.add(h._heartData.vel);
+        h._heartData.life -= 0.01;
+        h.material.opacity = Math.max(0, h._heartData.life);
+        if (h._heartData.life <= 0) {
+          scene.remove(h);
+          ailis._hearts.splice(i, 1);
+        }
+      }
+    }
+  }
+
+  // 点光源跟随艾莉丝
+  pointLight.position.x = ailis.position.x;
+  pointLight.position.z = ailis.position.z;
+
+  renderer.render(scene, camera);
+  labelRenderer.render(scene, camera);
+}
+
+animate();
+
+// 初始问候
+setTimeout(() => {
+  const greetings = [
+    { emoji: '✨', text: '你好，我是艾莉丝！\n点击我或输入文字跟我说话吧～', emotion: 'happy' },
+  ];
+  const g = greetings[0];
+  document.querySelector('#bubble .emotion').textContent = g.emoji;
+  bubbleText.textContent = g.text;
+  bubble.classList.add('show');
+  setTimeout(() => bubble.classList.remove('show'), 6000);
+}, 1000);
+
+console.log('✨ 艾莉丝 AILIS 3D 交互空间已启动！');
+</script>
+</body>
+</html>

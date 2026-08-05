@@ -13,6 +13,7 @@ const {
     callDesktopLlmProvider,
     classifyFetchFailure,
     checkDesktopLlmProvider,
+    getDefaultProviderBaseUrl,
     getProviderCapabilities
 } = require('../electron/desktop-llm-provider.cjs');
 
@@ -169,6 +170,7 @@ describe('desktop LLM provider', () => {
                                         }
                                     }
                                 ],
+                                reasoning_content: 'think-before-tool',
                                 content: ''
                             }
                         }
@@ -236,6 +238,93 @@ describe('desktop LLM provider', () => {
         assert.equal(JSON.stringify(result).includes('test-secret-key'), false);
     });
 
+    it('round-trips DeepSeek reasoning_content for native tool-call history', async () => {
+        const first = await callDesktopLlmProvider({
+            provider: 'deepseek',
+            baseUrl: `${serverUrl}/v1`,
+            apiKey: 'deepseek-secret',
+            model: 'deepseek-v4-flash',
+            timeoutMs: 5000
+        }, {
+            messages: [{ role: 'user', content: 'inspect file' }],
+            tools: [{
+                name: 'inspect_file',
+                description: 'inspect',
+                parameters: { type: 'object', properties: {} }
+            }]
+        });
+
+        assert.equal(first.ok, true);
+        assert.equal(first.providerMessage.reasoning_content, 'think-before-tool');
+        assert.equal(first.toolCalls[0].name, 'inspect_file');
+
+        await callDesktopLlmProvider({
+            provider: 'deepseek',
+            baseUrl: `${serverUrl}/v1`,
+            apiKey: 'deepseek-secret',
+            model: 'deepseek-v4-flash',
+            timeoutMs: 5000
+        }, {
+            messages: [
+                {
+                    role: 'assistant',
+                    content: '',
+                    providerMetadata: first.providerMessage,
+                    toolCalls: [{
+                        id: 'call-chat-1',
+                        type: 'function',
+                        function: {
+                            name: 'inspect_file',
+                            arguments: JSON.stringify({ ok: true })
+                        }
+                    }]
+                },
+                {
+                    role: 'tool',
+                    toolCallId: 'call-chat-1',
+                    content: 'Status: completed\nOutput:\n{}'
+                },
+                { role: 'user', content: 'continue' }
+            ]
+        });
+
+        assert.equal(receivedRequest.body.messages[0].reasoning_content, 'think-before-tool');
+    });
+
+    it('does not send provider reasoning metadata to unrelated OpenAI-compatible endpoints', async () => {
+        await callDesktopLlmProvider({
+            provider: 'openai-compatible',
+            baseUrl: `${serverUrl}/v1`,
+            apiKey: 'test-secret-key',
+            model: 'demo-model',
+            timeoutMs: 5000
+        }, {
+            messages: [
+                {
+                    role: 'assistant',
+                    content: '',
+                    providerMetadata: { reasoning_content: 'do-not-send' },
+                    toolCalls: [{
+                        id: 'call-chat-1',
+                        type: 'function',
+                        function: {
+                            name: 'inspect_file',
+                            arguments: '{}'
+                        }
+                    }]
+                },
+                {
+                    role: 'tool',
+                    toolCallId: 'call-chat-1',
+                    content: 'Status: completed\nOutput:\n{}'
+                },
+                { role: 'user', content: 'continue' }
+            ]
+        });
+
+        assert.equal(Object.prototype.hasOwnProperty.call(receivedRequest.body.messages[0], 'reasoning_content'), false);
+    });
+
     it('accepts a full chat completions URL without duplicating the path', () => {
         assert.equal(
             buildChatCompletionsUrl('https://example.test/v1/chat/completions'),
@@ -273,7 +362,11 @@ describe('desktop LLM provider', () => {
             timeoutMs: 5000
         }, {
             messages: [{ role: 'user', content: '你好' }],
-            temperature: 0.2
+            temperature: 0.2,
+            parallel_tool_calls: false,
+            reasoning_effort: 'low',
+            max_completion_tokens: 128,
+            service_tier: 'default'
         });
 
         assert.equal(result.ok, true);
@@ -283,6 +376,10 @@ describe('desktop LLM provider', () => {
         assert.equal(receivedRequest.authorization, undefined);
         assert.equal(receivedRequest.body.model, 'demo-local-model');
         assert.equal(receivedRequest.body.temperature, 0.2);
+        assert.equal('parallel_tool_calls' in receivedRequest.body, false);
+        assert.equal('reasoning_effort' in receivedRequest.body, false);
+        assert.equal('max_completion_tokens' in receivedRequest.body, false);
+        assert.equal('service_tier' in receivedRequest.body, false);
     });
 
     it('calls an Ollama /api/chat endpoint without requiring an API key', async () => {
@@ -314,11 +411,48 @@ describe('desktop LLM provider', () => {
         assert.equal(receivedRequest.authorization, undefined);
         assert.equal(receivedRequest.body.model, 'llama3.2');
         assert.equal(receivedRequest.body.stream, false);
+        assert.equal(receivedRequest.body.think, false);
         assert.deepEqual(receivedRequest.body.messages, [
             { role: 'system', content: 'persona' },
             { role: 'user', content: '你好' }
         ]);
         assert.equal(receivedRequest.body.options.temperature, 0.3);
+    });
+
+    it('limits Ollama output when maxTokens or max_tokens is provided', async () => {
+        const result = await callDesktopLlmProvider({
+            provider: 'ollama',
+            baseUrl: serverUrl,
+            model: 'qwen3.5:4b',
+            timeoutMs: 5000
+        }, {
+            messages: [
+                { role: 'user', content: 'OK' }
+            ],
+            temperature: 0,
+            maxTokens: 16
+        });
+
+        assert.equal(result.ok, true);
+        assert.equal(receivedRequest.url, '/api/chat');
+        assert.equal(receivedRequest.body.think, false);
+        assert.equal(receivedRequest.body.options.num_predict, 16);
+
+        const snakeCaseResult = await callDesktopLlmProvider({
+            provider: 'ollama',
+            baseUrl: serverUrl,
+            model: 'qwen3.5:4b',
+            timeoutMs: 5000
+        }, {
+            messages: [
+                { role: 'user', content: 'OK' }
+            ],
+            temperature: 0,
+            max_tokens: 24
+        });
+
+        assert.equal(snakeCaseResult.ok, true);
+        assert.equal(receivedRequest.body.options.num_predict, 24);
     });
 
     it('passes image inputs through as OpenAI-compatible content parts', async () => {
@@ -401,6 +535,33 @@ describe('desktop LLM provider', () => {
         assert.deepEqual(receivedRequest.body.thinking, { type: 'disabled' });
         assert.equal(receivedRequest.body.max_tokens, 2048);
         assert.equal(receivedRequest.body.parallel_tool_calls, true);
+    });
+
+    it('passes tool_choice none while preserving tool schemas for finalization', async () => {
+        const result = await callDesktopLlmProvider({
+            provider: 'openai-compatible',
+            baseUrl: `${serverUrl}/v1`,
+            apiKey: 'test-secret-key',
+            model: 'demo-model',
+            timeoutMs: 5000
+        }, {
+            messages: [{ role: 'user', content: 'Finalize from current evidence.' }],
+            tools: [{
+                name: 'web_fetch',
+                description: 'Fetch a page.',
+                parameters: {
+                    type: 'object',
+                    properties: { url: { type: 'string' } },
+                    required: ['url'],
+                    additionalProperties: false
+                }
+            }],
+            toolChoice: 'none'
+        });
+
+        assert.equal(result.ok, true);
+        assert.equal(receivedRequest.body.tool_choice, 'none');
+        assert.equal(receivedRequest.body.tools[0].function.name, 'web_fetch');
     });
 
     it('extracts OpenAI-compatible native tool calls', async () => {
@@ -549,6 +710,27 @@ describe('desktop LLM provider', () => {
         assert.equal(caps.nativeToolCalling, true);
         assert.equal(caps.vision, true);
         assert.equal(caps.lowLatency, true);
+    });
+
+    it('keeps OpenAI-compatible preset providers distinct while using chat completions', () => {
+        const providers = [
+            ['doubao', 'https://ark.cn-beijing.volces.com/api/v3'],
+            ['deepseek', 'https://api.deepseek.com'],
+            ['qwen', 'https://dashscope.aliyuncs.com/compatible-mode/v1'],
+            ['kimi', 'https://api.moonshot.cn/v1'],
+            ['zhipu', 'https://open.bigmodel.cn/api/paas/v4'],
+            ['openrouter', 'https://openrouter.ai/api/v1']
+        ];
+
+        for (const [provider, baseUrl] of providers) {
+            const caps = getProviderCapabilities({
+                provider,
+                model: provider === 'deepseek' ? 'deepseek-v4-flash' : 'qwen-turbo'
+            });
+            assert.equal(caps.provider, provider);
+            assert.equal(caps.transport, 'chat-completions');
+            assert.equal(getDefaultProviderBaseUrl(provider), baseUrl);
+        }
     });
 
     it('reports local provider capabilities as model-dependent without native tool forcing', () => {

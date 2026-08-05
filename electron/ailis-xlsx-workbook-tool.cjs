@@ -444,7 +444,7 @@ function buildPreview(payload, maxChars = DEFAULT_PREVIEW_CHARS) {
         `sheets=${payload.workbook.sheetCount}`,
         `selectedSheets=${payload.workbook.sheets.map((sheet) => sheet.name).join(', ')}`,
         payload.contextArtifact?.id ? `artifactId=${payload.contextArtifact.id}` : '',
-        payload.contextArtifact?.id ? 'queryWith=artifact_query actions summary/grid/range/search' : '',
+        payload.contextArtifact?.id ? 'queryWith=artifact_query actions summary/grid/range/search/runtime_schema/chunk_search' : '',
         'observation_contract=complete:true reasoning_ready:true'
     ].filter(Boolean);
     for (const sheet of payload.workbook.sheets) {
@@ -529,7 +529,8 @@ function publicStructuredContent(payload = {}) {
                   kind: payload.contextArtifact.kind,
                   type: payload.contextArtifact.type,
                   summary: payload.contextArtifact.summary,
-                  queryHints: payload.contextArtifact.queryHints
+                  queryHints: payload.contextArtifact.queryHints,
+                  affordances: ['artifact_query.summary', 'artifact_query.grid', 'artifact_query.range', 'artifact_query.search', 'artifact_query.runtime_schema', 'artifact_query.chunk_search']
               }
             : null,
         workbook: {
@@ -550,7 +551,7 @@ function publicStructuredContent(payload = {}) {
             truncated: payload.completeness?.allSelectedSheetsComplete === false,
             reasoning_ready: true,
             next: payload.contextArtifact?.id
-                ? 'Use artifact_query summary/grid/range/search by artifactId for more evidence; do not raw-read artifact payload files.'
+                ? 'Use artifact_query for localized evidence or RAGFlow-lite chunk_search; do not raw-read artifact payload files.'
                 : 'Use narrower read_xlsx_workbook range if more evidence is needed.'
         }
     };
@@ -574,7 +575,7 @@ async function registerContextArtifact(payload, runtime = {}, context = {}) {
                 allSelectedSheetsComplete: payload.completeness?.allSelectedSheetsComplete !== false
             },
             modelView: publicStructuredContent(payload),
-            queryHints: ['summary', 'grid', 'range', 'search']
+            queryHints: ['summary', 'grid', 'range', 'search', 'runtime_schema', 'chunk_search', 'runtime_search']
         });
         return {
             id: record.id,

@@ -47,6 +47,20 @@ test('AILIS standard tool packs expose mature backend families with lintable con
         assert.ok(compiled.contract.whenToUse.length);
         assert.ok(Object.keys(compiled.contract.errors).length);
     }
+    const openAlex = academic.groups.openapiOperations.find((operation) => operation.toolId === 'openalex_search_works');
+    const compiledOpenAlex = compileAndLintAilisContract(openAlex, {
+        sourceType: 'openapi_operation',
+        minScore: 60,
+        id: openAlex.toolId
+    });
+    assert.deepEqual(compiledOpenAlex.contract.inputSchema.anyOf, [
+        { required: ['search'] },
+        { required: ['filter'] }
+    ]);
+    assert.deepEqual(compiledOpenAlex.contract.inputSchema.required, []);
+    assert.ok(compiledOpenAlex.contract.inputSchema.properties.sort);
+    assert.match(compiledOpenAlex.contract.inputSchema.properties.search.description, /not author identity/i);
+    assert.match(compiledOpenAlex.contract.whenNotToUse.join(' '), /authorHistoryNextCalls/);
 });
 
 test('AILIS standard tool packs are searchable by task shape', () => {
@@ -95,6 +109,14 @@ test('Tool Acquisition Gateway surfaces standard pack candidates and public acad
         entry.virtualToolId === 'external__crossref__search_works' &&
         entry.callable === true
     ));
+    const openAlexEntry = tools.tools.find((entry) => entry.virtualToolId === 'external__openalex__search_works');
+    assert.match(openAlexEntry.spec.description, /authorHistoryNextCalls/);
+    assert.match(openAlexEntry.spec.description, /incomplete subset/);
+    assert.ok(openAlexEntry.spec.parameters.properties.sort);
+    assert.deepEqual(openAlexEntry.spec.parameters.anyOf, [
+        { required: ['search'] },
+        { required: ['filter'] }
+    ]);
 });
 
 test('Capability manager contract accepts standard tool pack actions', () => {

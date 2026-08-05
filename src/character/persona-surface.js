@@ -1,4 +1,11 @@
-export const PERSONA_SURFACE_VERSION = 1;
+import {
+    CHARACTER_ACTION_ALIASES,
+    CHARACTER_ACTION_INTENT_IDS,
+    getCharacterActionFallbackChain,
+    normalizeCharacterActionIntent
+} from './action-catalog.js';
+
+export const PERSONA_SURFACE_VERSION = 2;
 
 export const PERSONA_EMOTIONS = Object.freeze([
     'neutral',
@@ -22,23 +29,7 @@ export const PERSONA_EMOTIONS = Object.freeze([
     'comforting'
 ]);
 
-export const PERSONA_GESTURE_INTENTS = Object.freeze([
-    'none',
-    'greeting',
-    'farewell',
-    'listening',
-    'thinking',
-    'working',
-    'approval',
-    'success',
-    'celebrate',
-    'shy',
-    'comfort',
-    'apologize',
-    'surprised',
-    'angry',
-    'dance'
-]);
+export const PERSONA_GESTURE_INTENTS = CHARACTER_ACTION_INTENT_IDS;
 
 export const PERSONA_TASK_STATES = Object.freeze([
     'idle',
@@ -79,28 +70,6 @@ const EMOTION_ALIASES = Object.freeze({
     success: 'victory',
     love: 'love',
     sleep: 'sleep'
-});
-
-const GESTURE_ALIASES = Object.freeze({
-    wave: 'greeting',
-    hello: 'greeting',
-    greet: 'greeting',
-    goodbye: 'farewell',
-    bye: 'farewell',
-    think: 'thinking',
-    lookaround: 'thinking',
-    look_around: 'thinking',
-    clap: 'success',
-    clapping: 'success',
-    done: 'success',
-    complete: 'success',
-    completed: 'success',
-    dancing: 'dance',
-    blush: 'shy',
-    sorry: 'apologize',
-    apology: 'apologize',
-    approve: 'approval',
-    confirm: 'approval'
 });
 
 const TASK_STATE_ALIASES = Object.freeze({
@@ -309,16 +278,14 @@ export function normalizePersonaSurfaceState(input = {}, fallback = {}) {
         'speaking',
         TASK_STATE_ALIASES
     );
-    const gestureIntent = normalizeEnum(
+    const gestureIntent = normalizeCharacterActionIntent(
         safeInput.gestureIntent ||
             safeInput.gesture_intent ||
             safeInput.gesture ||
             legacyHint.gestureIntent ||
             textGestureIntent ||
             fallbackSurface.gestureIntent,
-        PERSONA_GESTURE_INTENTS,
-        'none',
-        GESTURE_ALIASES
+        'none'
     );
     const intensity = normalizeNumber(
         safeInput.intensity ?? fallbackSurface.intensity ?? legacyHint.intensity,
@@ -343,6 +310,10 @@ export function normalizePersonaSurfaceState(input = {}, fallback = {}) {
         intensity,
         socialTone,
         gestureIntent,
+        gestureFallbacks: getCharacterActionFallbackChain(
+            gestureIntent,
+            { includeSelf: false }
+        ),
         taskState,
         speechEnergy,
         gazeTarget: normalizeGazeTarget(safeInput.gazeTarget || safeInput.gaze_target || fallbackSurface.gazeTarget),
@@ -353,6 +324,8 @@ export function normalizePersonaSurfaceState(input = {}, fallback = {}) {
         legacyExpression: legacyHint.legacyExpression || ''
     };
 }
+
+export { CHARACTER_ACTION_ALIASES };
 
 export function createPersonaSurfaceFromPayload(payload = {}, context = {}) {
     const surface = payload?.personaSurface ||

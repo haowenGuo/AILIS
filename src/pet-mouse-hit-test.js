@@ -16,6 +16,7 @@ const CLOSED_HAND_CURSOR = 'url("data:image/svg+xml,%3Csvg xmlns=%27http://www.w
 
 let cachedInteractiveElements = [];
 let cachedInteractiveElementsAt = 0;
+const decodedMaskCache = new Map();
 
 function clampNumber(value, minimum, maximum, fallbackValue, digits = 2) {
     const numericValue = Number(value);
@@ -134,7 +135,12 @@ function normalizeRect(rect) {
         height,
         centerX: left + width / 2,
         centerY: top + height / 2,
-        source: rect.source || 'dynamic'
+        source: rect.source || 'dynamic',
+        shape: rect.shape || '',
+        maskEncoding: rect.maskEncoding || '',
+        mask: rect.mask || '',
+        maskWidth: Number(rect.maskWidth || 0),
+        maskHeight: Number(rect.maskHeight || 0)
     };
 }
 
@@ -212,6 +218,13 @@ function getDynamicHotZoneRect(canvasElement, settings, avatarBoundsProvider) {
     if (!visibleRect) {
         return null;
     }
+    if (
+        visibleRect.shape === 'mask' &&
+        visibleRect.maskEncoding === 'bitset-base64-v1' &&
+        visibleRect.mask
+    ) {
+        return visibleRect;
+    }
 
     const width = Math.max(24, visibleRect.width * getDynamicWidthScale(settings));
     const height = Math.max(32, visibleRect.height * getDynamicHeightScale(settings));
@@ -238,6 +251,31 @@ function getHotZoneRect(canvasElement, settings, avatarBoundsProvider) {
 function pointInHotZone(point, rect, shape) {
     if (!rect) {
         return false;
+    }
+    if (
+        rect.shape === 'mask' &&
+        rect.maskEncoding === 'bitset-base64-v1' &&
+        rect.mask &&
+        rect.maskWidth > 0 &&
+        rect.maskHeight > 0
+    ) {
+        const x = Math.min(
+            rect.maskWidth - 1,
+            Math.max(0, Math.floor((point.x - rect.left) / rect.width * rect.maskWidth))
+        );
+        const y = Math.min(
+            rect.maskHeight - 1,
+            Math.max(0, Math.floor((point.y - rect.top) / rect.height * rect.maskHeight))
+        );
+        let bytes = decodedMaskCache.get(rect.mask);
+        if (!bytes) {
+            const binary = window.atob(rect.mask);
+            bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+            decodedMaskCache.clear();
+            decodedMaskCache.set(rect.mask, bytes);
+        }
+        const bitIndex = y * rect.maskWidth + x;
+        return Boolean(bytes[bitIndex >> 3] & (1 << (bitIndex & 7)));
     }
     if (shape === 'rectangle') {
         return pointInRect(point, rect);
@@ -423,6 +461,10 @@ export function installPetMouseHitTest({
 
     function handleMouseMove(event) {
         state.mouseInside = true;
+        if (state.pointerDown) {
+            state.lastPoint = getPointFromEvent(event) || state.lastPoint;
+            return;
+        }
         evaluate(event);
     }
 
@@ -497,6 +539,10 @@ export function installPetMouseHitTest({
             evaluate();
         },
         handleCursorPoint,
+        refreshBounds() {
+            clearHotZoneCache();
+            evaluate();
+        },
         dispose() {
             document.removeEventListener('mousemove', handleMouseMove, true);
             document.removeEventListener('pointerdown', handlePointerDown, true);

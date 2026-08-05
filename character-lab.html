@@ -1,0 +1,1035 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" type="image/png" href="./favicon.png">
+    <title>AILIS 角色功能测试台</title>
+    <style>
+        :root {
+            --paper: #f4f0e8;
+            --paper-deep: #e8e1d3;
+            --ink: #242821;
+            --muted: #697067;
+            --sage: #527568;
+            --sage-dark: #315348;
+            --sage-soft: #dce8df;
+            --coral: #c96c56;
+            --line: rgba(48, 66, 57, 0.15);
+            --panel: rgba(255, 253, 248, 0.88);
+            --shadow: 0 22px 55px rgba(52, 64, 56, 0.13);
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        html,
+        body {
+            width: 100%;
+            min-height: 100%;
+            margin: 0;
+            color: var(--ink);
+            background:
+                radial-gradient(circle at 12% 10%, rgba(126, 167, 145, 0.24), transparent 30%),
+                radial-gradient(circle at 88% 88%, rgba(215, 160, 129, 0.18), transparent 31%),
+                var(--paper);
+            font-family: "Source Han Sans SC", "Microsoft YaHei UI", sans-serif;
+        }
+
+        button,
+        textarea,
+        input {
+            font: inherit;
+        }
+
+        button {
+            color: inherit;
+        }
+
+        .titlebar {
+            position: sticky;
+            top: 0;
+            z-index: 20;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            height: 48px;
+            padding-left: 20px;
+            border-bottom: 1px solid var(--line);
+            background: rgba(247, 243, 235, 0.86);
+            backdrop-filter: blur(18px);
+            -webkit-app-region: drag;
+        }
+
+        .titlebar__brand {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 13px;
+            font-weight: 800;
+            letter-spacing: 0.05em;
+        }
+
+        .titlebar__mark {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: var(--coral);
+            box-shadow: 16px 0 0 var(--sage);
+        }
+
+        .window-actions {
+            display: flex;
+            height: 100%;
+            -webkit-app-region: no-drag;
+        }
+
+        .window-action {
+            width: 48px;
+            border: 0;
+            background: transparent;
+            cursor: pointer;
+            font-size: 18px;
+        }
+
+        .window-action:hover {
+            background: rgba(59, 78, 68, 0.08);
+        }
+
+        .window-action.is-close:hover {
+            color: white;
+            background: #b74d45;
+        }
+
+        main {
+            width: min(920px, calc(100% - 36px));
+            margin: 0 auto;
+            padding: 34px 0 44px;
+        }
+
+        .hero {
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 24px;
+            align-items: end;
+            margin-bottom: 24px;
+        }
+
+        .eyebrow {
+            margin-bottom: 8px;
+            color: var(--sage);
+            font-family: Georgia, "Times New Roman", serif;
+            font-size: 13px;
+            font-style: italic;
+            letter-spacing: 0.08em;
+        }
+
+        h1 {
+            margin: 0;
+            font-family: "STSong", "SimSun", serif;
+            font-size: clamp(30px, 5vw, 48px);
+            font-weight: 700;
+            letter-spacing: -0.06em;
+        }
+
+        .hero p {
+            max-width: 640px;
+            margin: 12px 0 0;
+            color: var(--muted);
+            font-size: 13px;
+            line-height: 1.7;
+        }
+
+        .runtime-badge {
+            min-width: 168px;
+            padding: 12px 14px;
+            border: 1px solid var(--line);
+            border-radius: 16px;
+            background: rgba(255, 255, 255, 0.52);
+            box-shadow: 0 8px 24px rgba(52, 64, 56, 0.07);
+        }
+
+        .runtime-badge__label {
+            color: var(--muted);
+            font-size: 11px;
+        }
+
+        .runtime-badge__value {
+            margin-top: 4px;
+            color: var(--sage-dark);
+            font-size: 14px;
+            font-weight: 800;
+        }
+
+        .character-switcher {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: 16px;
+            align-items: end;
+            margin-bottom: 14px;
+            padding: 16px 18px;
+            border: 1px solid var(--line);
+            border-radius: 18px;
+            background: rgba(255, 255, 255, 0.58);
+        }
+
+        .character-switcher__label {
+            display: block;
+            margin-bottom: 7px;
+            font-size: 12px;
+            font-weight: 900;
+        }
+
+        .character-switcher__select {
+            width: 100%;
+            min-height: 44px;
+            padding: 0 14px;
+            border: 1px solid var(--line);
+            border-radius: 13px;
+            outline: none;
+            color: var(--ink);
+            background: rgba(255, 255, 255, 0.9);
+            font: inherit;
+        }
+
+        .character-switcher__select:focus {
+            border-color: var(--sage);
+            box-shadow: 0 0 0 3px rgba(82, 117, 104, 0.12);
+        }
+
+        .character-switcher__meta {
+            min-height: 18px;
+            margin-top: 6px;
+            color: var(--muted);
+            font-size: 11px;
+        }
+
+        .tabs {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 14px;
+            padding: 6px;
+            border: 1px solid var(--line);
+            border-radius: 18px;
+            background: rgba(255, 255, 255, 0.46);
+        }
+
+        .tab {
+            flex: 1;
+            min-height: 44px;
+            border: 0;
+            border-radius: 13px;
+            background: transparent;
+            cursor: pointer;
+            font-weight: 800;
+        }
+
+        .tab[aria-selected="true"] {
+            color: white;
+            background: var(--sage-dark);
+            box-shadow: 0 8px 22px rgba(49, 83, 72, 0.22);
+        }
+
+        .panel {
+            display: none;
+            min-height: 420px;
+            padding: 24px;
+            border: 1px solid var(--line);
+            border-radius: 24px;
+            background: var(--panel);
+            box-shadow: var(--shadow);
+        }
+
+        .panel.is-active {
+            display: block;
+            animation: panel-in 180ms ease-out both;
+        }
+
+        @keyframes panel-in {
+            from {
+                opacity: 0;
+                transform: translateY(5px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .panel-head {
+            display: flex;
+            align-items: start;
+            justify-content: space-between;
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        .panel-title {
+            font-size: 19px;
+            font-weight: 900;
+        }
+
+        .panel-copy {
+            margin-top: 5px;
+            color: var(--muted);
+            font-size: 12px;
+            line-height: 1.55;
+        }
+
+        .panel-actions {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+            gap: 8px;
+        }
+
+        .motion-section + .motion-section {
+            margin-top: 22px;
+            padding-top: 20px;
+            border-top: 1px solid var(--line);
+        }
+
+        .motion-section__head {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 16px;
+            margin-bottom: 12px;
+        }
+
+        .motion-count {
+            display: inline-flex;
+            align-items: center;
+            min-width: 26px;
+            height: 22px;
+            margin-left: 7px;
+            padding: 0 7px;
+            border-radius: 999px;
+            color: var(--sage-dark);
+            background: var(--sage-soft);
+            font-size: 11px;
+            vertical-align: 2px;
+        }
+
+        .test-grid {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 10px;
+        }
+
+        .test-button {
+            min-height: 72px;
+            padding: 12px;
+            border: 1px solid var(--line);
+            border-radius: 16px;
+            background: rgba(255, 255, 255, 0.72);
+            cursor: pointer;
+            text-align: left;
+            transition: transform 150ms ease, border-color 150ms ease, background 150ms ease;
+        }
+
+        .test-button:hover {
+            transform: translateY(-2px);
+            border-color: rgba(49, 83, 72, 0.34);
+            background: white;
+        }
+
+        .test-button.is-active {
+            border-color: var(--sage);
+            background: var(--sage-soft);
+        }
+
+        .test-button.is-review {
+            border-color: rgba(180, 116, 31, 0.35);
+            background: rgba(255, 246, 224, 0.72);
+        }
+
+        .test-button.is-review.is-active {
+            border-color: #b4741f;
+            background: #fff0c8;
+        }
+
+        .test-button.is-rejected {
+            border-color: rgba(210, 86, 72, 0.5);
+            background: rgba(255, 232, 228, 0.78);
+        }
+
+        .test-button.is-rejected.is-active {
+            border-color: #c84739;
+            background: #ffd8d1;
+        }
+
+        .test-button.is-fallback {
+            border-color: rgba(61, 110, 145, 0.28);
+            background: rgba(235, 247, 255, 0.72);
+        }
+
+        .test-button.is-unmapped {
+            border-style: dashed;
+            opacity: 0.72;
+        }
+
+        .test-button[hidden] {
+            display: none;
+        }
+
+        .test-button:disabled,
+        .test-button.is-unavailable {
+            cursor: not-allowed;
+            opacity: 0.5;
+            filter: grayscale(0.45);
+        }
+
+        .test-button:disabled:hover {
+            transform: none;
+            border-color: var(--line);
+            background: rgba(255, 255, 255, 0.72);
+        }
+
+        .test-button strong,
+        .test-button span {
+            display: block;
+        }
+
+        .test-button span {
+            margin-top: 5px;
+            color: var(--muted);
+            font-size: 10px;
+        }
+
+        .motion-empty {
+            display: none;
+            padding: 16px;
+            border: 1px dashed var(--line);
+            border-radius: 16px;
+            color: var(--muted);
+            background: rgba(255, 255, 255, 0.48);
+            font-size: 12px;
+        }
+
+        .motion-empty.is-visible {
+            display: block;
+        }
+
+        .controls-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr auto;
+            gap: 14px;
+            align-items: end;
+            margin-top: 22px;
+            padding-top: 18px;
+            border-top: 1px solid var(--line);
+        }
+
+        .field label,
+        .bubble-field label {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 7px;
+            font-size: 12px;
+            font-weight: 800;
+        }
+
+        input[type="range"] {
+            width: 100%;
+            accent-color: var(--sage);
+        }
+
+        .button {
+            min-height: 42px;
+            padding: 0 18px;
+            border: 1px solid var(--line);
+            border-radius: 13px;
+            background: white;
+            cursor: pointer;
+            font-weight: 800;
+        }
+
+        .button.is-primary {
+            color: white;
+            border-color: var(--sage-dark);
+            background: var(--sage-dark);
+        }
+
+        .button.is-danger {
+            color: #924c42;
+            background: #fff4f0;
+        }
+
+        .button:disabled {
+            cursor: wait;
+            opacity: 0.58;
+        }
+
+        .bubble-layout {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) 220px;
+            gap: 18px;
+        }
+
+        textarea {
+            width: 100%;
+            min-height: 210px;
+            padding: 16px;
+            resize: vertical;
+            border: 1px solid var(--line);
+            border-radius: 17px;
+            outline: none;
+            color: var(--ink);
+            background: rgba(255, 255, 255, 0.78);
+            line-height: 1.7;
+        }
+
+        textarea:focus {
+            border-color: var(--sage);
+            box-shadow: 0 0 0 3px rgba(82, 117, 104, 0.12);
+        }
+
+        .preset-stack,
+        .bubble-actions {
+            display: grid;
+            gap: 9px;
+        }
+
+        .bubble-actions {
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            margin-top: 16px;
+        }
+
+        .check-row {
+            display: flex;
+            align-items: center;
+            gap: 9px;
+            margin-top: 14px;
+            color: var(--muted);
+            font-size: 12px;
+        }
+
+        .status-line {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+            margin-top: 14px;
+            padding: 12px 15px;
+            border-radius: 14px;
+            color: var(--muted);
+            background: rgba(255, 255, 255, 0.48);
+            font-size: 12px;
+        }
+
+        .status-line strong {
+            color: var(--sage-dark);
+        }
+
+        .guide-grid {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 12px;
+        }
+
+        .guide-step {
+            min-height: 156px;
+            padding: 18px;
+            border: 1px solid var(--line);
+            border-radius: 18px;
+            background: rgba(255, 255, 255, 0.68);
+        }
+
+        .guide-step__number {
+            display: grid;
+            width: 30px;
+            height: 30px;
+            margin-bottom: 16px;
+            place-items: center;
+            border-radius: 50%;
+            color: white;
+            background: var(--sage-dark);
+            font-family: Georgia, "Times New Roman", serif;
+            font-weight: 800;
+        }
+
+        .guide-step strong {
+            display: block;
+            margin-bottom: 8px;
+        }
+
+        .guide-step p,
+        .workbench-note {
+            margin: 0;
+            color: var(--muted);
+            font-size: 12px;
+            line-height: 1.7;
+        }
+
+        .guide-boundary {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 18px;
+            margin-top: 18px;
+            padding: 16px 18px;
+            border: 1px solid rgba(82, 117, 104, 0.22);
+            border-radius: 18px;
+            background: var(--sage-soft);
+        }
+
+        .guide-boundary strong {
+            display: block;
+            margin-bottom: 4px;
+            color: var(--sage-dark);
+        }
+
+        .guide-boundary__actions {
+            display: flex;
+            flex: 0 0 auto;
+            gap: 10px;
+        }
+
+        .state-pipeline {
+            display: grid;
+            grid-template-columns: repeat(5, minmax(0, 1fr));
+            gap: 8px;
+            margin-bottom: 18px;
+        }
+
+        .state-pipeline__item {
+            position: relative;
+            padding: 11px 12px;
+            border: 1px solid var(--line);
+            border-radius: 14px;
+            color: var(--muted);
+            background: rgba(255, 255, 255, 0.58);
+            font-size: 11px;
+            text-align: center;
+        }
+
+        .state-pipeline__item::after {
+            position: absolute;
+            top: 50%;
+            right: -8px;
+            width: 8px;
+            height: 1px;
+            content: "";
+            background: var(--line);
+        }
+
+        .state-pipeline__item:last-child::after {
+            display: none;
+        }
+
+        .state-pipeline__item.is-live {
+            color: white;
+            border-color: var(--sage-dark);
+            background: var(--sage-dark);
+        }
+
+        .state-summary {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 10px;
+            margin-bottom: 18px;
+        }
+
+        .state-summary__item {
+            padding: 12px 14px;
+            border: 1px solid var(--line);
+            border-radius: 15px;
+            background: rgba(255, 255, 255, 0.58);
+        }
+
+        .state-summary__label {
+            color: var(--muted);
+            font-size: 10px;
+        }
+
+        .state-summary__value {
+            overflow: hidden;
+            margin-top: 4px;
+            font-size: 13px;
+            font-weight: 900;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .state-layer-grid {
+            display: grid;
+            grid-template-columns: repeat(5, minmax(0, 1fr));
+            gap: 10px;
+        }
+
+        .state-layer {
+            min-height: 152px;
+            padding: 14px;
+            border: 1px solid var(--line);
+            border-radius: 17px;
+            background: rgba(255, 255, 255, 0.62);
+            transition: border-color 150ms ease, background 150ms ease;
+        }
+
+        .state-layer.is-active {
+            border-color: rgba(82, 117, 104, 0.48);
+            background: var(--sage-soft);
+        }
+
+        .state-layer.is-transitioning {
+            border-color: rgba(201, 108, 86, 0.62);
+        }
+
+        .state-layer__head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+        }
+
+        .state-layer__name {
+            font-size: 12px;
+            font-weight: 900;
+        }
+
+        .state-layer__weight {
+            color: var(--muted);
+            font-size: 10px;
+        }
+
+        .state-layer__motion {
+            overflow: hidden;
+            margin-top: 18px;
+            font-size: 13px;
+            font-weight: 900;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .state-layer__meta {
+            min-height: 30px;
+            margin-top: 6px;
+            color: var(--muted);
+            font-size: 10px;
+            line-height: 1.5;
+        }
+
+        .state-progress {
+            overflow: hidden;
+            height: 5px;
+            margin-top: 12px;
+            border-radius: 99px;
+            background: rgba(49, 83, 72, 0.12);
+        }
+
+        .state-progress__bar {
+            width: 0;
+            height: 100%;
+            border-radius: inherit;
+            background: var(--coral);
+            transition: width 80ms linear;
+        }
+
+        .debug-controls {
+            display: grid;
+            grid-template-columns: auto auto minmax(180px, 1fr) minmax(180px, 2fr);
+            gap: 10px;
+            align-items: end;
+            margin-top: 18px;
+            padding-top: 18px;
+            border-top: 1px solid var(--line);
+        }
+
+        .debug-control-field label {
+            display: block;
+            margin-bottom: 7px;
+            font-size: 11px;
+            font-weight: 800;
+        }
+
+        .debug-control-field select {
+            width: 100%;
+        }
+
+        @media (max-width: 760px) {
+            .hero,
+            .bubble-layout,
+            .character-switcher {
+                grid-template-columns: 1fr;
+            }
+
+            .runtime-badge {
+                width: 100%;
+            }
+
+            .guide-boundary {
+                align-items: stretch;
+                flex-direction: column;
+            }
+
+            .guide-boundary__actions {
+                flex-wrap: wrap;
+            }
+
+            .test-grid {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+
+            .controls-row {
+                grid-template-columns: 1fr;
+            }
+
+            .guide-grid,
+            .state-summary,
+            .state-layer-grid,
+            .state-pipeline,
+            .debug-controls {
+                grid-template-columns: 1fr;
+            }
+
+            .state-pipeline__item::after {
+                display: none;
+            }
+        }
+    </style>
+</head>
+<body>
+    <header class="titlebar">
+        <div class="titlebar__brand">
+            <span class="titlebar__mark" aria-hidden="true"></span>
+            <span>AILIS · Character Lab</span>
+        </div>
+        <div class="window-actions">
+            <button class="window-action" id="minimize-btn" type="button" aria-label="最小化">−</button>
+            <button class="window-action" id="maximize-btn" type="button" aria-label="最大化">□</button>
+            <button class="window-action is-close" id="close-btn" type="button" aria-label="关闭">×</button>
+        </div>
+    </header>
+
+    <main>
+        <section class="hero">
+            <div>
+                <div class="eyebrow">Animator · Expression · Motion · Dialogue</div>
+                <h1>AILIS 动画工作台</h1>
+                <p>在 AILIS 里直接调试 Three.js / VRM 人物运行时，检查语义映射、动作、表情和对话气泡。</p>
+            </div>
+            <div class="runtime-badge">
+                <div class="runtime-badge__label">当前人物后端</div>
+                <div class="runtime-badge__value" id="runtime-status">正在读取...</div>
+            </div>
+        </section>
+
+        <section class="character-switcher" aria-label="切换人物">
+            <div>
+                <label class="character-switcher__label" for="character-package-select">当前人物</label>
+                <select class="character-switcher__select" id="character-package-select">
+                    <option value="">正在读取已安装人物...</option>
+                </select>
+                <div class="character-switcher__meta" id="character-package-meta">
+                    切换只会更新人物渲染资源，不影响聊天、语音或 Agent。
+                </div>
+            </div>
+            <button class="button is-primary" id="switch-character-btn" type="button">切换人物</button>
+        </section>
+
+        <nav class="tabs" aria-label="测试模块">
+            <button class="tab" type="button" role="tab" aria-selected="true" data-tab="guide">使用说明</button>
+            <button class="tab" type="button" role="tab" aria-selected="false" data-tab="state">状态机</button>
+            <button class="tab" type="button" role="tab" aria-selected="false" data-tab="expression">表情测试</button>
+            <button class="tab" type="button" role="tab" aria-selected="false" data-tab="motion">动作测试</button>
+            <button class="tab" type="button" role="tab" aria-selected="false" data-tab="bubble">对话气泡</button>
+        </nav>
+
+        <section class="panel is-active" data-panel="guide">
+            <div class="panel-head">
+                <div>
+                    <div class="panel-title">三步开始调试</div>
+                    <div class="panel-copy">人物会继续显示在桌面上；这个窗口只负责发送测试命令和展示运行状态。</div>
+                </div>
+            </div>
+            <div class="guide-grid">
+                <article class="guide-step">
+                    <div class="guide-step__number">1</div>
+                    <strong>选择人物</strong>
+                    <p>在上方选择渲染器提供的已安装人物；切换不会关闭聊天或 Agent。</p>
+                </article>
+                <article class="guide-step">
+                    <div class="guide-step__number">2</div>
+                    <strong>播放动作</strong>
+                    <p>动作测试页可按语义测试自动映射，也可直接播放人物包里的具体动作资源。</p>
+                </article>
+                <article class="guide-step">
+                    <div class="guide-step__number">3</div>
+                    <strong>检查状态机</strong>
+                    <p>状态机页实时显示五个动画层、过渡权重和播放进度，并可暂停或定位动作。</p>
+                </article>
+            </div>
+            <div class="guide-boundary">
+                <div>
+                    <strong>先跑一遍人物完整体验</strong>
+                    <p class="workbench-note">依次检查待机、问候、说话口型、思考、工作、完成动作和气泡。</p>
+                </div>
+                <div class="guide-boundary__actions">
+                    <button class="button is-primary" id="experience-sequence-btn" type="button">整体体验巡检</button>
+                    <button class="button" id="open-state-machine-btn" type="button">查看状态机</button>
+                </div>
+            </div>
+        </section>
+
+        <section class="panel" data-panel="state">
+            <div class="panel-head">
+                <div>
+                    <div class="panel-title">运行时动画状态机</div>
+                    <div class="panel-copy">显示当前人物渲染器真正运行的状态，不读取测试用假数据。</div>
+                </div>
+                <div class="panel-actions">
+                    <button class="button" id="refresh-animation-state-btn" type="button">立即刷新</button>
+                </div>
+            </div>
+            <div class="state-pipeline" aria-label="动画决策链">
+                <div class="state-pipeline__item is-live">Persona Surface</div>
+                <div class="state-pipeline__item">Motion Resolver</div>
+                <div class="state-pipeline__item">Performance Layer</div>
+                <div class="state-pipeline__item">Character Clip</div>
+                <div class="state-pipeline__item">Character Renderer</div>
+            </div>
+            <div class="state-summary">
+                <div class="state-summary__item">
+                    <div class="state-summary__label">适配器</div>
+                    <div class="state-summary__value" id="debug-adapter">等待连接</div>
+                </div>
+                <div class="state-summary__item">
+                    <div class="state-summary__label">任务状态</div>
+                    <div class="state-summary__value" id="debug-task-state">—</div>
+                </div>
+                <div class="state-summary__item">
+                    <div class="state-summary__label">情绪</div>
+                    <div class="state-summary__value" id="debug-emotion">—</div>
+                </div>
+                <div class="state-summary__item">
+                    <div class="state-summary__label">播放状态</div>
+                    <div class="state-summary__value" id="debug-playback">等待连接</div>
+                </div>
+            </div>
+            <div class="state-layer-grid" id="animation-layer-grid"></div>
+            <div class="debug-controls">
+                <button class="button" id="pause-animation-btn" type="button">暂停</button>
+                <button class="button" id="resume-animation-btn" type="button">继续</button>
+                <div class="debug-control-field">
+                    <label for="debug-layer-select">定位动画层</label>
+                    <select class="button" id="debug-layer-select">
+                        <option value="gesture">Gesture</option>
+                        <option value="action">Action</option>
+                        <option value="additive">Additive</option>
+                    </select>
+                </div>
+                <div class="debug-control-field">
+                    <label for="animation-seek">播放位置 <span id="animation-seek-value">0%</span></label>
+                    <input id="animation-seek" type="range" min="0" max="1" value="0" step="0.01">
+                </div>
+            </div>
+            <p class="workbench-note" id="animation-debug-note" style="margin-top: 14px;">
+                正在连接人物运行时……
+            </p>
+        </section>
+
+        <section class="panel" data-panel="expression">
+            <div class="panel-head">
+                <div>
+                    <div class="panel-title">表情映射</div>
+                    <div class="panel-copy">验证情绪语义能否被当前人物正确映射；不会启动动作。</div>
+                </div>
+                <button class="button" id="expression-sequence-btn" type="button">自动巡检</button>
+            </div>
+            <div class="test-grid" id="expression-grid"></div>
+            <div class="controls-row">
+                <div class="field">
+                    <label for="expression-intensity">表情强度 <span id="expression-intensity-value">65%</span></label>
+                    <input id="expression-intensity" type="range" min="0.1" max="1" value="0.65" step="0.05">
+                </div>
+                <div class="field">
+                    <label for="social-tone">社交语气</label>
+                    <input id="social-tone" type="range" min="0" max="2" value="1" step="1">
+                </div>
+                <button class="button is-danger" id="reset-expression-btn" type="button">恢复中性</button>
+            </div>
+        </section>
+
+        <section class="panel" data-panel="motion">
+            <div class="panel-head">
+                <div>
+                    <div class="panel-title">动作测试</div>
+                    <div class="panel-copy">分别验证 AILIS 的语义动作映射，以及当前人物包中真正可播放的动作。</div>
+                </div>
+            </div>
+            <div class="motion-section">
+                <div class="motion-section__head">
+                    <div>
+                        <div class="panel-title">标准动作系统 <span class="motion-count" id="motion-system-count">0</span></div>
+                        <div class="panel-copy">动作语言独立于人物资源；蓝色表示降级支持，虚线表示当前人物暂未映射。</div>
+                    </div>
+                    <div class="panel-actions">
+                        <select class="button" id="motion-category" aria-label="动作分类"></select>
+                        <button class="button" id="motion-sequence-btn" type="button">语义巡检</button>
+                    </div>
+                </div>
+                <div class="test-grid" id="motion-grid"></div>
+                <div class="controls-row">
+                    <div class="field">
+                        <label for="motion-intensity">动作强度 <span id="motion-intensity-value">68%</span></label>
+                        <input id="motion-intensity" type="range" min="0.1" max="1" value="0.68" step="0.05">
+                    </div>
+                    <div class="field">
+                        <label for="motion-duration">动作时长</label>
+                        <input id="motion-duration" type="range" min="0" max="2" value="1" step="1">
+                    </div>
+                    <button class="button is-danger" id="stop-motion-btn" type="button">停止并待机</button>
+                </div>
+            </div>
+            <div class="motion-section">
+                <div class="motion-section__head">
+                    <div>
+                        <div class="panel-title">当前人物包动作 <span class="motion-count" id="motion-catalog-count">0</span></div>
+                        <div class="panel-copy">从人物 manifest 动态读取并按 motionId 精确播放；黄色项目表示仍需检查穿模。</div>
+                    </div>
+                    <button class="button" id="motion-catalog-sequence-btn" type="button">资源巡检</button>
+                </div>
+                <div class="test-grid" id="motion-catalog-grid"></div>
+                <div class="motion-empty" id="motion-catalog-empty">当前后端没有提供可精确播放的人物包动作。</div>
+            </div>
+        </section>
+
+        <section class="panel" data-panel="bubble">
+            <div class="panel-head">
+                <div>
+                    <div class="panel-title">对话气泡</div>
+                    <div class="panel-copy">测试短文本、长文本、换行和人物位置变化时的气泡尺寸与锚点。</div>
+                </div>
+            </div>
+            <div class="bubble-layout">
+                <div class="bubble-field">
+                    <label for="bubble-text">气泡文本 <span id="bubble-count">0 字</span></label>
+                    <textarea id="bubble-text">你好呀，今天也一起把事情做好吧。</textarea>
+                    <label class="check-row">
+                        <input id="bubble-sync-speech" type="checkbox" checked>
+                        同步人物说话状态与无声口型
+                    </label>
+                </div>
+                <div>
+                    <div class="panel-copy" style="margin: 0 0 9px;">快速样例</div>
+                    <div class="preset-stack" id="bubble-presets"></div>
+                </div>
+            </div>
+            <div class="bubble-actions">
+                <button class="button is-primary" id="show-bubble-btn" type="button">显示气泡</button>
+                <button class="button" id="update-bubble-btn" type="button">更新内容</button>
+                <button class="button is-danger" id="hide-bubble-btn" type="button">隐藏气泡</button>
+            </div>
+        </section>
+
+        <div class="status-line">
+            <span id="operation-status">等待测试操作</span>
+            <strong id="current-test">当前：待机</strong>
+        </div>
+    </main>
+
+    <script type="module" src="./src/character-lab-app.js"></script>
+</body>
+</html>

@@ -1,42 +1,91 @@
 const DEFAULT_PROVIDER = 'openai-compatible';
 const OPENAI_COMPATIBLE_PROVIDER = 'openai-compatible';
+const DOUBAO_PROVIDER = 'doubao';
+const DEEPSEEK_PROVIDER = 'deepseek';
+const QWEN_PROVIDER = 'qwen';
+const KIMI_PROVIDER = 'kimi';
+const ZHIPU_PROVIDER = 'zhipu';
+const OPENROUTER_PROVIDER = 'openrouter';
 const OPENAI_RESPONSES_PROVIDER = 'openai-responses';
 const ANTHROPIC_PROVIDER = 'anthropic';
 const GEMINI_PROVIDER = 'gemini';
 const VLLM_PROVIDER = 'vllm';
 const OLLAMA_PROVIDER = 'ollama';
+const {
+    CODEX_MODEL_BRIDGE_PROVIDER,
+    DEFAULT_CODEX_MODEL,
+    callCodexModelBridge
+} = require('./codex-model-bridge.cjs');
+const {
+    responseItemsToChatMessages
+} = require('./ailis-model-input-builder.cjs');
+const {
+    responseItemsToWireItems
+} = require('./ailis-response-model.cjs');
+
+const OPENAI_COMPATIBLE_CHAT_PROVIDERS = Object.freeze([
+    OPENAI_COMPATIBLE_PROVIDER,
+    DOUBAO_PROVIDER,
+    DEEPSEEK_PROVIDER,
+    QWEN_PROVIDER,
+    KIMI_PROVIDER,
+    ZHIPU_PROVIDER,
+    OPENROUTER_PROVIDER,
+    VLLM_PROVIDER
+]);
 
 const PROVIDER_OPTIONS = Object.freeze([
     OPENAI_COMPATIBLE_PROVIDER,
+    DOUBAO_PROVIDER,
+    DEEPSEEK_PROVIDER,
+    QWEN_PROVIDER,
+    KIMI_PROVIDER,
+    ZHIPU_PROVIDER,
+    OPENROUTER_PROVIDER,
     OPENAI_RESPONSES_PROVIDER,
     ANTHROPIC_PROVIDER,
     GEMINI_PROVIDER,
+    CODEX_MODEL_BRIDGE_PROVIDER,
     VLLM_PROVIDER,
     OLLAMA_PROVIDER
 ]);
 
 const DEFAULT_PROVIDER_BASE_URLS = Object.freeze({
     [OPENAI_COMPATIBLE_PROVIDER]: 'https://ark.cn-beijing.volces.com/api/v3',
+    [DOUBAO_PROVIDER]: 'https://ark.cn-beijing.volces.com/api/v3',
+    [DEEPSEEK_PROVIDER]: 'https://api.deepseek.com',
+    [QWEN_PROVIDER]: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    [KIMI_PROVIDER]: 'https://api.moonshot.cn/v1',
+    [ZHIPU_PROVIDER]: 'https://open.bigmodel.cn/api/paas/v4',
+    [OPENROUTER_PROVIDER]: 'https://openrouter.ai/api/v1',
     [OPENAI_RESPONSES_PROVIDER]: 'https://api.openai.com/v1',
     [ANTHROPIC_PROVIDER]: 'https://api.anthropic.com',
     [GEMINI_PROVIDER]: 'https://generativelanguage.googleapis.com/v1beta',
+    [CODEX_MODEL_BRIDGE_PROVIDER]: 'codex://chatgpt-oauth',
     [VLLM_PROVIDER]: 'http://127.0.0.1:8000/v1',
     [OLLAMA_PROVIDER]: 'http://127.0.0.1:11434'
 });
 
 const DEFAULT_PROVIDER_MODELS = Object.freeze({
     [OPENAI_COMPATIBLE_PROVIDER]: 'doubao-seed-2-0-mini-260215',
+    [DOUBAO_PROVIDER]: 'doubao-seed-2-0-mini-260215',
+    [DEEPSEEK_PROVIDER]: 'deepseek-v4-flash',
+    [QWEN_PROVIDER]: 'qwen-turbo',
+    [KIMI_PROVIDER]: 'moonshot-v1-8k',
+    [ZHIPU_PROVIDER]: 'glm-4-flash',
+    [OPENROUTER_PROVIDER]: 'openai/gpt-4.1-mini',
     [OPENAI_RESPONSES_PROVIDER]: 'gpt-4.1-mini',
     [ANTHROPIC_PROVIDER]: 'claude-3-5-haiku-latest',
     [GEMINI_PROVIDER]: 'gemini-2.0-flash',
+    [CODEX_MODEL_BRIDGE_PROVIDER]: DEFAULT_CODEX_MODEL,
     [VLLM_PROVIDER]: 'Qwen/Qwen2.5-7B-Instruct',
-    [OLLAMA_PROVIDER]: 'llama3.2'
+    [OLLAMA_PROVIDER]: 'qwen2.5:1.5b'
 });
 
-const PROVIDER_CAPABILITY_TABLE = Object.freeze({
-    [OPENAI_COMPATIBLE_PROVIDER]: Object.freeze({
-        provider: OPENAI_COMPATIBLE_PROVIDER,
-        label: 'OpenAI-compatible Chat Completions',
+function createOpenAiCompatibleProviderCapabilities(provider, label, notes) {
+    return Object.freeze({
+        provider,
+        label,
         transport: 'chat-completions',
         chat: true,
         nativeToolCalling: true,
@@ -46,8 +95,46 @@ const PROVIDER_CAPABILITY_TABLE = Object.freeze({
         vision: 'model-dependent',
         longContext: 'model-dependent',
         lowLatency: 'model-dependent',
-        notes: '兼容接口差异很大，tool_call/json_schema/vision 需要通过 health check 实测。'
-    }),
+        notes
+    });
+}
+
+const PROVIDER_CAPABILITY_TABLE = Object.freeze({
+    [OPENAI_COMPATIBLE_PROVIDER]: createOpenAiCompatibleProviderCapabilities(
+        OPENAI_COMPATIBLE_PROVIDER,
+        'OpenAI-compatible Chat Completions',
+        '兼容接口差异很大，tool_call/json_schema/vision 需要通过 health check 实测。'
+    ),
+    [DOUBAO_PROVIDER]: createOpenAiCompatibleProviderCapabilities(
+        DOUBAO_PROVIDER,
+        'Doubao / Volcengine Ark OpenAI-compatible',
+        '豆包兼容 Chat Completions，Key 与其他兼容服务商分开保存。'
+    ),
+    [DEEPSEEK_PROVIDER]: createOpenAiCompatibleProviderCapabilities(
+        DEEPSEEK_PROVIDER,
+        'DeepSeek OpenAI-compatible',
+        'DeepSeek 使用 OpenAI-compatible Chat Completions，Key 单独保存到 DeepSeek。'
+    ),
+    [QWEN_PROVIDER]: createOpenAiCompatibleProviderCapabilities(
+        QWEN_PROVIDER,
+        'DashScope OpenAI-compatible',
+        '通义千问兼容 Chat Completions，Key 单独保存到 DashScope。'
+    ),
+    [KIMI_PROVIDER]: createOpenAiCompatibleProviderCapabilities(
+        KIMI_PROVIDER,
+        'Kimi / Moonshot OpenAI-compatible',
+        'Kimi 兼容 Chat Completions，Key 单独保存到 Kimi。'
+    ),
+    [ZHIPU_PROVIDER]: createOpenAiCompatibleProviderCapabilities(
+        ZHIPU_PROVIDER,
+        'Zhipu GLM OpenAI-compatible',
+        '智谱 GLM 兼容 Chat Completions，Key 单独保存到智谱。'
+    ),
+    [OPENROUTER_PROVIDER]: createOpenAiCompatibleProviderCapabilities(
+        OPENROUTER_PROVIDER,
+        'OpenRouter OpenAI-compatible',
+        'OpenRouter 兼容 Chat Completions，Key 单独保存到 OpenRouter。'
+    ),
     [OPENAI_RESPONSES_PROVIDER]: Object.freeze({
         provider: OPENAI_RESPONSES_PROVIDER,
         label: 'OpenAI Responses API',
@@ -89,6 +176,20 @@ const PROVIDER_CAPABILITY_TABLE = Object.freeze({
         longContext: true,
         lowLatency: 'model-dependent',
         notes: 'Gemini 原生支持 function calling 和 responseMimeType=application/json。'
+    }),
+    [CODEX_MODEL_BRIDGE_PROVIDER]: Object.freeze({
+        provider: CODEX_MODEL_BRIDGE_PROVIDER,
+        label: 'Codex subscription model bridge',
+        transport: 'codex-app-server-ephemeral',
+        chat: true,
+        nativeToolCalling: true,
+        nativeToolCallingDefault: true,
+        jsonMode: true,
+        jsonSchema: true,
+        vision: true,
+        longContext: true,
+        lowLatency: false,
+        notes: '评测专用：每次 AILIS 推理启动独立 Codex exec，使用 ChatGPT OAuth；Codex 自带工具、MCP、插件、网络和任务记忆均禁用。'
     }),
     [VLLM_PROVIDER]: Object.freeze({
         provider: VLLM_PROVIDER,
@@ -132,6 +233,10 @@ function normalizeProvider(value) {
     return PROVIDER_OPTIONS.includes(normalized) ? normalized : DEFAULT_PROVIDER;
 }
 
+function isOpenAiCompatibleChatProvider(provider = DEFAULT_PROVIDER) {
+    return OPENAI_COMPATIBLE_CHAT_PROVIDERS.includes(normalizeProvider(provider));
+}
+
 function normalizeBaseUrl(value) {
     return normalizeString(value).replace(/\/+$/, '');
 }
@@ -149,7 +254,7 @@ function normalizeTimeoutMs(value, fallbackValue = 25000) {
     if (!Number.isFinite(numericValue)) {
         return fallbackValue;
     }
-    return Math.round(Math.min(Math.max(numericValue, 5000), 120000));
+    return Math.round(Math.min(Math.max(numericValue, 5000), 10 * 60 * 1000));
 }
 
 function classifyFetchFailure(error) {
@@ -198,12 +303,17 @@ function resolvePayloadReasoningEffort(payload = {}) {
     return normalizeReasoningEffort(payload.reasoning_effort || payload.reasoningEffort);
 }
 
-function applyOpenAiCompatibleRequestControls(body, payload = {}) {
+function shouldUseConservativeOpenAiCompatibleControls(provider = DEFAULT_PROVIDER) {
+    return normalizeProvider(provider) === VLLM_PROVIDER;
+}
+
+function applyOpenAiCompatibleRequestControls(body, payload = {}, { provider = DEFAULT_PROVIDER } = {}) {
+    const conservativeControls = shouldUseConservativeOpenAiCompatibleControls(provider);
     const reasoningEffort = resolvePayloadReasoningEffort(payload);
-    if (reasoningEffort) {
+    if (!conservativeControls && reasoningEffort) {
         body.reasoning_effort = reasoningEffort;
     }
-    if (payload.thinking && typeof payload.thinking === 'object' && !Array.isArray(payload.thinking)) {
+    if (!conservativeControls && payload.thinking && typeof payload.thinking === 'object' && !Array.isArray(payload.thinking)) {
         body.thinking = payload.thinking;
     }
     const maxTokens = normalizePositiveInteger(payload.max_tokens ?? payload.maxTokens, {
@@ -220,14 +330,14 @@ function applyOpenAiCompatibleRequestControls(body, payload = {}) {
             max: 128000
         }
     );
-    if (maxCompletionTokens !== null) {
+    if (!conservativeControls && maxCompletionTokens !== null) {
         body.max_completion_tokens = maxCompletionTokens;
     }
-    if (typeof payload.parallel_tool_calls === 'boolean') {
+    if (!conservativeControls && typeof payload.parallel_tool_calls === 'boolean') {
         body.parallel_tool_calls = payload.parallel_tool_calls;
     }
     const serviceTier = normalizeString(payload.service_tier || payload.serviceTier);
-    if (serviceTier) {
+    if (!conservativeControls && serviceTier) {
         body.service_tier = serviceTier;
     }
 }
@@ -344,10 +454,17 @@ function normalizeMessages(messages) {
                 role,
                 content,
                 toolCallId: normalizeString(message?.tool_call_id || message?.toolCallId),
-                name: normalizeString(message?.name)
+                name: normalizeString(message?.name),
+                providerMetadata: message?.providerMetadata || message?.provider_metadata || null,
+                reasoning_content: normalizeString(message?.reasoning_content || message?.reasoningContent),
+                toolCalls: Array.isArray(message?.tool_calls)
+                    ? message.tool_calls
+                    : Array.isArray(message?.toolCalls)
+                    ? message.toolCalls
+                    : []
             };
         })
-        .filter((message) => hasMessageContent(message.content));
+        .filter((message) => hasMessageContent(message.content) || message.toolCalls.length);
 }
 
 function normalizeMessageContent(content) {
@@ -687,8 +804,53 @@ function extractContentTextFromOpenAiMessage(message = {}) {
     return '';
 }
 
+function extractOpenAiCompatibleProviderMessage(message = {}) {
+    const reasoningContent = normalizeString(message?.reasoning_content || message?.reasoningContent);
+    if (!reasoningContent) {
+        return null;
+    }
+    return {
+        reasoning_content: reasoningContent
+    };
+}
+
+function getChatMessageReasoningContent(message = {}) {
+    return normalizeString(
+        message?.reasoning_content ||
+        message?.reasoningContent ||
+        message?.provider_metadata?.reasoning_content ||
+        message?.providerMetadata?.reasoning_content ||
+        message?.providerMetadata?.reasoningContent
+    );
+}
+
+function shouldRoundTripOpenAiCompatibleReasoningContent(settings = {}) {
+    const normalizedProvider = normalizeProvider(settings.provider);
+    if (normalizedProvider === DEEPSEEK_PROVIDER || normalizedProvider === QWEN_PROVIDER) {
+        return true;
+    }
+    const baseUrl = normalizeString(settings.baseUrl).toLowerCase();
+    return normalizedProvider === OPENAI_COMPATIBLE_PROVIDER && /(deepseek|dashscope|qwen)/i.test(baseUrl);
+}
+
+function mapChatMessageForOpenAiCompatible(message = {}, settings = {}) {
+    const mapped = {
+        role: message.role === 'developer' ? 'system' : message.role,
+        content: message.content,
+        ...(message.toolCallId ? { tool_call_id: message.toolCallId } : {}),
+        ...(message.name ? { name: message.name } : {}),
+        ...(message.toolCalls?.length ? { tool_calls: message.toolCalls } : {})
+    };
+    const reasoningContent = getChatMessageReasoningContent(message);
+    if (reasoningContent && shouldRoundTripOpenAiCompatibleReasoningContent(settings)) {
+        mapped.reasoning_content = reasoningContent;
+    }
+    return mapped;
+}
+
 function getModelCapabilityHeuristics(provider, model) {
     const normalizedProvider = normalizeProvider(provider);
+    const openAiCompatibleChatProvider = isOpenAiCompatibleChatProvider(normalizedProvider);
     const normalizedModel = normalizeString(model).toLowerCase();
     const visionModel =
         /(vision|vl|omni|gpt-4o|gpt-4\.1|gpt-5|o3|o4|claude-3|gemini|qwen.*vl|glm-4v|doubao.*vision|seed.*vision|kimi.*vision|llava|bakllava|moondream)/i
@@ -701,13 +863,11 @@ function getModelCapabilityHeuristics(provider, model) {
             .test(normalizedModel);
 
     return {
-        vision: normalizedProvider === OPENAI_COMPATIBLE_PROVIDER ||
-            normalizedProvider === VLLM_PROVIDER ||
+        vision: openAiCompatibleChatProvider ||
             normalizedProvider === OLLAMA_PROVIDER
             ? visionModel
             : PROVIDER_CAPABILITY_TABLE[normalizedProvider]?.vision === true && visionModel !== false,
-        longContext: normalizedProvider === OPENAI_COMPATIBLE_PROVIDER ||
-            normalizedProvider === VLLM_PROVIDER ||
+        longContext: openAiCompatibleChatProvider ||
             normalizedProvider === OLLAMA_PROVIDER
             ? longContextModel
             : PROVIDER_CAPABILITY_TABLE[normalizedProvider]?.longContext === true,
@@ -817,7 +977,9 @@ function validateProviderInput(settings, messages) {
 
 function providerRequiresApiKey(provider = DEFAULT_PROVIDER) {
     const normalizedProvider = normalizeProvider(provider);
-    return normalizedProvider !== VLLM_PROVIDER && normalizedProvider !== OLLAMA_PROVIDER;
+    return normalizedProvider !== VLLM_PROVIDER &&
+        normalizedProvider !== OLLAMA_PROVIDER &&
+        normalizedProvider !== CODEX_MODEL_BRIDGE_PROVIDER;
 }
 
 function buildJsonHeaders({ apiKey = '', bearer = true, extra = {} } = {}) {
@@ -836,7 +998,7 @@ function buildJsonHeaders({ apiKey = '', bearer = true, extra = {} } = {}) {
     return headers;
 }
 
-function buildProviderResult(settings, data, content, toolCalls = []) {
+function buildProviderResult(settings, data, content, toolCalls = [], options = {}) {
     return {
         ok: true,
         provider: settings.provider,
@@ -845,6 +1007,7 @@ function buildProviderResult(settings, data, content, toolCalls = []) {
         toolCalls,
         nativeToolCalls: toolCalls.length > 0,
         usage: data?.usage || data?.usageMetadata || null,
+        ...(options.providerMessage ? { providerMessage: options.providerMessage } : {}),
         capabilities: getProviderCapabilities(settings)
     };
 }
@@ -860,16 +1023,11 @@ async function callOpenAiCompatible(settings, payload, messages) {
     const responseFormat = resolveChatResponseFormat(payload);
     const body = {
         model: settings.model,
-        messages: messages.map((message) => ({
-            role: message.role === 'developer' ? 'system' : message.role,
-            content: message.content,
-            ...(message.toolCallId ? { tool_call_id: message.toolCallId } : {}),
-            ...(message.name ? { name: message.name } : {})
-        })),
+        messages: messages.map((message) => mapChatMessageForOpenAiCompatible(message, settings)),
         temperature: normalizeTemperature(payload.temperature ?? settings.temperature),
         stream: false
     };
-    applyOpenAiCompatibleRequestControls(body, payload);
+    applyOpenAiCompatibleRequestControls(body, payload, { provider: settings.provider });
 
     if (responseFormat) {
         body.response_format = responseFormat;
@@ -882,8 +1040,8 @@ async function callOpenAiCompatible(settings, payload, messages) {
             type: 'function',
             function: { name: toolChoice.name }
         };
-    } else if (payload.toolChoice === 'auto' || payload.tool_choice === 'auto') {
-        body.tool_choice = 'auto';
+    } else if (toolChoice?.mode) {
+        body.tool_choice = toolChoice.mode;
     }
 
     const result = await fetchJsonWithTimeout(
@@ -910,6 +1068,7 @@ async function callOpenAiCompatible(settings, payload, messages) {
     const content = extractContentTextFromOpenAiMessage(message) ||
         normalizeString(result.data?.choices?.[0]?.text || '');
     const toolCalls = extractChatToolCalls(message, settings.provider);
+    const providerMessage = extractOpenAiCompatibleProviderMessage(message);
 
     if (!content && !toolCalls.length) {
         return {
@@ -919,7 +1078,7 @@ async function callOpenAiCompatible(settings, payload, messages) {
         };
     }
 
-    return buildProviderResult(settings, result.data, content, toolCalls);
+    return buildProviderResult(settings, result.data, content, toolCalls, { providerMessage });
 }
 
 function convertMessagesForOllama(messages = [], payload = {}) {
@@ -949,6 +1108,14 @@ function extractOllamaOutput(data = {}) {
     return normalizeString(data.message?.content || data.response || '');
 }
 
+function normalizeOllamaNumPredict(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric) || numeric <= 0) {
+        return null;
+    }
+    return Math.max(1, Math.min(8192, Math.floor(numeric)));
+}
+
 async function callOllama(settings, payload, messages) {
     const invalid = validateProviderInput(settings, messages);
     if (invalid) {
@@ -959,10 +1126,22 @@ async function callOllama(settings, payload, messages) {
         model: settings.model,
         messages: convertMessagesForOllama(messages, payload),
         stream: false,
+        think: payload.think === true,
         options: {
             temperature: normalizeTemperature(payload.temperature ?? settings.temperature)
         }
     };
+    const numPredict = normalizeOllamaNumPredict(
+        payload.numPredict ??
+            payload.num_predict ??
+            payload.maxTokens ??
+            payload.max_tokens ??
+            payload.maxOutputTokens ??
+            payload.max_output_tokens
+    );
+    if (numPredict) {
+        body.options.num_predict = numPredict;
+    }
     if (shouldRequestJson(payload)) {
         body.format = 'json';
     }
@@ -1070,12 +1249,16 @@ function extractResponsesOutput(data = {}) {
 }
 
 async function callOpenAiResponses(settings, payload, messages) {
-    const invalid = validateProviderInput(settings, messages);
+    const directInput = Array.isArray(payload.input) ? payload.input : null;
+    const directInstructions = normalizeString(payload.instructions);
+    const invalid = validateProviderInput(settings, directInput ? [{ role: 'user', content: 'responses_api_input' }] : messages);
     if (invalid) {
         return invalid;
     }
 
-    const converted = convertMessagesForResponses(messages);
+    const converted = directInput
+        ? { input: responseItemsToWireItems(directInput), instructions: directInstructions }
+        : convertMessagesForResponses(messages);
     const tools = mapToolsForResponses(payload.tools);
     const toolChoice = resolveToolChoice(payload);
     const text = resolveResponsesTextFormat(payload);
@@ -1100,6 +1283,8 @@ async function callOpenAiResponses(settings, payload, messages) {
             type: 'function',
             name: toolChoice.name
         };
+    } else if (toolChoice?.mode) {
+        body.tool_choice = toolChoice.mode;
     }
 
     const result = await fetchJsonWithTimeout(
@@ -1425,7 +1610,30 @@ async function callGemini(settings, payload, messages) {
 
 async function callDesktopLlmProvider(settings = {}, payload = {}) {
     const resolvedSettings = getResolvedSettings(settings);
-    const messages = normalizeMessages(payload.messages);
+    const responseInputMessages = Array.isArray(payload.input)
+        ? responseItemsToChatMessages({
+              instructions: payload.instructions,
+              input: payload.input
+          })
+        : null;
+    const messages = normalizeMessages(responseInputMessages || payload.messages);
+    if (resolvedSettings.provider === CODEX_MODEL_BRIDGE_PROVIDER) {
+        const result = await callCodexModelBridge(
+            {
+                ...resolvedSettings,
+                codexEntrypoint: settings.codexEntrypoint,
+                reasoningEffort: settings.reasoningEffort
+            },
+            {
+                ...payload,
+                signal: payload.abortSignal || payload.signal || null
+            },
+            messages
+        );
+        return result.ok
+            ? { ...result, capabilities: getProviderCapabilities(resolvedSettings) }
+            : result;
+    }
     if (resolvedSettings.provider === OLLAMA_PROVIDER) {
         return callOllama(resolvedSettings, payload, messages);
     }
@@ -1515,6 +1723,7 @@ async function checkDesktopLlmProvider(settings = {}, options = {}) {
     result.checks.basic = await runHealthCheckStep(resolvedSettings, {
         timeoutMs,
         temperature: 0,
+        maxTokens: resolvedSettings.provider === OLLAMA_PROVIDER ? 16 : undefined,
         messages: [
             { role: 'system', content: 'You are a health checker.' },
             { role: 'user', content: 'Reply with exactly OK.' }
@@ -1524,6 +1733,7 @@ async function checkDesktopLlmProvider(settings = {}, options = {}) {
     result.checks.json = await runHealthCheckStep(resolvedSettings, {
         timeoutMs,
         temperature: 0,
+        maxTokens: resolvedSettings.provider === OLLAMA_PROVIDER ? 48 : undefined,
         jsonMode: true,
         messages: buildHealthJsonMessages()
     });
@@ -1596,6 +1806,7 @@ async function checkDesktopLlmProvider(settings = {}, options = {}) {
 
 module.exports = {
     ANTHROPIC_PROVIDER,
+    CODEX_MODEL_BRIDGE_PROVIDER,
     DEFAULT_PROVIDER,
     DEFAULT_PROVIDER_BASE_URLS,
     DEFAULT_PROVIDER_MODELS,

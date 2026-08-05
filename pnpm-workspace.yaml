@@ -4,3 +4,7 @@ allowBuilds:
   node-pty: true
   protobufjs: true
   sharp: true
+  stockfish: true
+minimumReleaseAgeExclude:
+  - '@vectorize-io/hindsight-all@0.8.6'
+  - '@vectorize-io/hindsight-client@0.8.6'

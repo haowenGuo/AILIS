@@ -167,6 +167,10 @@ function normalizeSchema(schema = {}) {
 
 function pickInputSchema(raw = {}, sourceType = '') {
     if (sourceType === 'openapi_operation') {
+        const explicitSchema = firstPresent(raw.inputSchema, raw.input_schema);
+        if (isPlainObject(explicitSchema)) {
+            return normalizeSchema(explicitSchema);
+        }
         return openApiOperationToInputSchema(raw);
     }
     const schema = firstPresent(

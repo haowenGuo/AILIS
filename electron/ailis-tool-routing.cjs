@@ -82,6 +82,21 @@ function canonicalToolName(entry = {}) {
 
 const ROUTING_PROFILES = Object.freeze([
     Object.freeze({
+        id: 'artifact_file_runtime',
+        patterns: [
+            /\b(artifact_tools|artifact runtime|artifact tool|artifact adapter|file artifact|local artifact)\b/i,
+            /\b(attachment|attached file|local file|file path|uploaded file|binary file)\b.*\b(pdf|docx|docm|pptx|ppt|xlsx|xlsm|xls|csv|tsv|png|jpg|jpeg|webp|image|spreadsheet|workbook|document|presentation)\b/i,
+            /\b(pdf|docx|docm|pptx|ppt|xlsx|xlsm|xls|csv|tsv|png|jpg|jpeg|webp)\b/i,
+            /(附件|本地文件|文件路径|产物|工件).*(pdf|docx|pptx|xlsx|xlsm|csv|tsv|图片|图像|表格|文档|演示文稿)/i
+        ],
+        tools: ['read_document', 'read_presentation', 'read_spreadsheet', 'pdf_extract_text', 'pdf_find_and_extract', 'describe_image', 'transcribe_audio'],
+        primaryTools: ['read_document', 'read_presentation', 'read_spreadsheet', 'pdf_extract_text', 'pdf_find_and_extract', 'describe_image'],
+        bonus: 115,
+        primaryBonus: 70,
+        webPenalty: 90,
+        advice: 'Use the Codex-style coding path first for local files: read small text, exec scripts/parsers for structured files, and use strict direct MCP readers only when tool_search exposes them. Do not assume an extended artifact runtime exists on the default surface.'
+    }),
+    Object.freeze({
         id: 'word_document',
         patterns: [
             /\b(docx|docm)\b/i,
@@ -91,9 +106,11 @@ const ROUTING_PROFILES = Object.freeze([
             /(word|docx|docm|文档).*附件/i
         ],
         tools: ['read_document'],
+        primaryTools: ['read_document'],
         bonus: 90,
+        primaryBonus: 48,
         webPenalty: 80,
-        advice: 'Use read_document for local Word/DOCX content before web_search.'
+        advice: 'Use read for small text files and exec for custom extraction. If tool_search exposes read_document with a strict schema, use it for Word/DOCX paragraphs and tables.'
     }),
     Object.freeze({
         id: 'presentation',
@@ -102,9 +119,11 @@ const ROUTING_PROFILES = Object.freeze([
             /(幻灯片|演示文稿|pptx|ppt|powerpoint)/i
         ],
         tools: ['read_presentation'],
+        primaryTools: ['read_presentation'],
         bonus: 90,
+        primaryBonus: 48,
         webPenalty: 80,
-        advice: 'Use read_presentation for local PowerPoint/PPTX content before web_search.'
+        advice: 'Use read/exec when a script can inspect the deck. If tool_search exposes read_presentation with a strict schema, use it for PowerPoint/PPTX slide content.'
     }),
     Object.freeze({
         id: 'spreadsheet',
@@ -113,26 +132,40 @@ const ROUTING_PROFILES = Object.freeze([
             /\b(cell colors?|fill colors?|merged cells?|formula cells?|grid map|spreadsheet map)\b/i,
             /(电子表格|工作簿|表格|列|行|求和|总和|单元格|填充色|颜色|公式|合并单元格)/i
         ],
-        tools: ['read_xlsx_workbook', 'read_spreadsheet'],
-        primaryTools: ['read_xlsx_workbook'],
+        tools: ['read_spreadsheet'],
+        primaryTools: ['read_spreadsheet'],
         bonus: 90,
-        primaryBonus: 30,
+        primaryBonus: 56,
         webPenalty: 80,
-        advice: 'Use read_xlsx_workbook for Excel/XLSX/XLSM attachments, especially when cell colors, formulas, merged cells, or grid layout matter; use read_spreadsheet only for plain table summaries.'
+        advice: 'Use exec with spreadsheet libraries for colors, formulas, merges, renders, and grid/map tasks. Use read_spreadsheet only when a strict MCP schema is exposed and value-level extraction is sufficient.'
     }),
     Object.freeze({
         id: 'context_artifact',
         patterns: [
-            /\b(artifactid|artifact_id|artifact_query|artifact_compute|context artifact|artifact payload|payload file|fulljsonpath|managed artifact|query artifact)\b/i,
-            /\b(read artifact|artifact range|artifact grid|artifact search|spreadsheet range|grid query|artifact compute|data worker|find path|path search)\b/i,
-            /(上下文产物|产物查询|证据产物|大文件载荷|查询证据|产物计算|路径搜索|数据工人)/i
+            /\b(artifactid|artifact_id|artifact_query|context artifact|artifact payload|payload file|fulljsonpath|managed artifact|query artifact)\b/i,
+            /\b(read artifact|artifact range|artifact grid|artifact search|spreadsheet range|grid query)\b/i,
+            /(上下文产物|产物查询|证据产物|大文件载荷|查询证据)/i
         ],
-        tools: ['artifact_query', 'artifact_compute'],
-        primaryTools: ['artifact_query', 'artifact_compute'],
+        tools: ['output_read', 'output_tail', 'output_search'],
+        primaryTools: ['output_search', 'output_read'],
         bonus: 95,
-        primaryBonus: 40,
+        primaryBonus: 58,
         webPenalty: 90,
-        advice: 'Use artifact_query for managed AILIS context artifacts by artifactId; use artifact_compute for deterministic data-worker analysis such as spreadsheet profiling or grid path search. Do not raw-read artifact payload files into the model context.'
+        advice: 'Use output_read/output_tail/output_search for stored execution outputs. For local artifact payloads, prefer read/exec and only use specialized tools that are actually exposed in the current tool set.'
+    }),
+    Object.freeze({
+        id: 'pdf_artifact',
+        patterns: [
+            /\b(local|attached|attachment|file|path|downloaded)\b.*\b(pdf)\b/i,
+            /\b(pdf)\b.*\b(local|attached|attachment|file|path|downloaded|extract|render|page|search)\b/i,
+            /(本地|附件|文件|路径).*(pdf|PDF|论文|报告)/i
+        ],
+        tools: ['pdf_extract_text', 'pdf_find_and_extract'],
+        primaryTools: ['pdf_extract_text', 'pdf_find_and_extract'],
+        bonus: 92,
+        primaryBonus: 50,
+        webPenalty: 75,
+        advice: 'For local PDFs, use exec with PDF tooling when available. If strict MCP tools are exposed, use pdf_extract_text for known PDF paths/URLs and pdf_find_and_extract when discovery is still needed.'
     }),
     Object.freeze({
         id: 'paper_report_pdf_discovery',
@@ -161,19 +194,6 @@ const ROUTING_PROFILES = Object.freeze([
         advice: 'Use web_fetch or web_extract_links for a known page URL before broad web_search. For archive/listing/search/table-of-contents pages, pass query or contains with the task clues so links are ranked by relevance instead of page order.'
     }),
     Object.freeze({
-        id: 'youtube_video',
-        patterns: [
-            /\b(youtube|youtu\.be|video|transcript|caption|subtitle)\b/i,
-            /(视频|字幕|转录|youtube)/i
-        ],
-        tools: ['youtube_video_search', 'youtube_transcript'],
-        primaryTools: ['youtube_video_search', 'youtube_transcript'],
-        bonus: 88,
-        primaryBonus: 10,
-        webPenalty: 80,
-        advice: 'Use youtube_video_search when the video URL is unknown; use youtube_transcript for a known YouTube URL before web_search.'
-    }),
-    Object.freeze({
         id: 'audio',
         patterns: [
             /\b(mp3|wav|m4a|flac|audio|recording|transcribe|speech)\b/i,
@@ -185,15 +205,31 @@ const ROUTING_PROFILES = Object.freeze([
         advice: 'Use transcribe_audio for local audio evidence before web_search.'
     }),
     Object.freeze({
+        id: 'video_visual_evidence',
+        patterns: [
+            /\b(video|youtube|youtu\.be|youtube\.com)\b.*\b(frame|visual|visible|on[- ]?screen|simultaneous|at once|species|count)\b/i,
+            /\b(frame|visual|visible|on[- ]?screen|simultaneous|at once)\b.*\b(video|youtube|youtu\.be|youtube\.com)\b/i,
+            /(视频|YouTube|youtube).*(画面|帧|视觉|同时|同一时刻|出现|物种|数量)/i
+        ],
+        tools: ['video_extract_frames', 'youtube_transcript'],
+        primaryTools: ['video_extract_frames'],
+        bonus: 96,
+        primaryBonus: 48,
+        webPenalty: 72,
+        advice: 'Use video_extract_frames for facts that must be seen in video frames, especially same-frame or simultaneous counts. Use youtube_transcript for spoken facts. Do not infer co-occurrence by combining metadata, transcript, or separate thumbnails.'
+    }),
+    Object.freeze({
         id: 'image',
         patterns: [
             /\b(png|jpg|jpeg|webp|image|photo|picture|screenshot|vision|visual)\b/i,
             /(图片|图像|截图|照片|视觉)/i
         ],
         tools: ['describe_image'],
+        primaryTools: ['describe_image'],
         bonus: 86,
+        primaryBonus: 36,
         webPenalty: 75,
-        advice: 'Use describe_image for local image evidence before web_search.'
+        advice: 'Use normal file inspection for metadata and describe_image only when a strict vision tool is exposed and the user needs semantic visual understanding.'
     }),
     Object.freeze({
         id: 'python_code',
@@ -235,6 +271,15 @@ const ROUTING_PROFILES = Object.freeze([
 function queryExplicitlyRequestsWebSearch(query = '') {
     return /\b(web_search|web search|search the web|internet search|public web|bing|google|duckduckgo)\b/i.test(query) ||
         /(联网搜索|网页搜索|网络搜索|公开网页|搜索一下|检索一下|查一下)/i.test(query);
+}
+
+function queryExplicitlyMentionsYoutube(query = '') {
+    return /\b(youtube|youtu\.be|youtube\.com|yt-dlp)\b/i.test(query) ||
+        /(YouTube|youtube|油管)/i.test(query);
+}
+
+function queryContainsYoutubeUrl(query = '') {
+    return /\bhttps?:\/\/(?:www\.)?(?:youtube\.com|youtu\.be)\S+/i.test(query);
 }
 
 function matchingRoutingProfiles(query = '') {
@@ -287,13 +332,41 @@ function toolSpecificityScore(toolName = '') {
     if (/^output_(read|tail|search)$/.test(toolName)) {
         return 14;
     }
-    if (/^artifact_(query|compute)$/.test(toolName)) {
+    if (toolName === 'artifact_tools') {
+        return 24;
+    }
+    if (toolName === 'artifact_query') {
         return 14;
     }
-    if (/^(read_|pdf_|youtube_|transcribe_|describe_|github_|run_python)/.test(toolName)) {
+    if (/^youtube_/.test(toolName) || toolName === 'video_extract_frames') {
+        return 1;
+    }
+    if (/^(read_|pdf_|transcribe_|describe_|github_|run_python)/.test(toolName)) {
         return 12;
     }
     return 1;
+}
+
+function queryExplicitlyRequestsTool(query = '', toolName = '') {
+    const needle = normalizeForSearch(query);
+    const normalizedTool = normalizeForSearch(toolName);
+    if (!needle || !normalizedTool) {
+        return false;
+    }
+    return needle.includes(normalizedTool) ||
+        needle.includes(`mcp__ailis_research__${normalizedTool}`) ||
+        needle.includes(normalizedTool.replace(/_/g, ' '));
+}
+
+const RELATED_TOOL_FAMILIES = Object.freeze([
+    Object.freeze(['web_research', 'web_search', 'web_fetch']),
+    Object.freeze(['output_read', 'output_tail', 'output_search'])
+]);
+
+function requestedToolFamily(query = '') {
+    return RELATED_TOOL_FAMILIES.find((family) =>
+        family.some((toolName) => queryExplicitlyRequestsTool(query, toolName))
+    ) || null;
 }
 
 function scoreToolForQuery(entry = {}, query = '') {
@@ -303,25 +376,70 @@ function scoreToolForQuery(entry = {}, query = '') {
     const explicitWebSearch = queryExplicitlyRequestsWebSearch(query);
     const profiles = matchingRoutingProfiles(query);
     let score = baseTextScore(query, text);
+    const explicitlyRequested = queryExplicitlyRequestsTool(query, toolName);
+    const relatedFamily = requestedToolFamily(query);
+    const outputStoreContext = explicitlyRequested ||
+        /\b(outputid|output_id|previewtruncated|exec output|stdout|stderr|full output|stored output|output store|tail output|search output)\b/i.test(query);
+
+    if (/^output_(read|tail|search)$/.test(toolName) && !outputStoreContext) {
+        return 0;
+    }
+
+    if (explicitlyRequested) {
+        score += 80;
+    } else if (relatedFamily?.includes(toolName)) {
+        score += 36;
+    }
+
+    if (/^youtube_/.test(toolName) && !queryExplicitlyMentionsYoutube(query)) {
+        return 0;
+    }
+    if (
+        toolName === 'video_extract_frames' &&
+        !/\b(video|youtube|youtu\.be|youtube\.com|mp4|mov|mkv|webm|frame|visual)\b/i.test(query) &&
+        !/(视频|画面|帧|视觉)/i.test(query)
+    ) {
+        return 0;
+    }
+    if (
+        toolName === 'video_extract_frames' &&
+        queryContainsYoutubeUrl(query) &&
+        /\b(frame|visual|visible|on[- ]?screen|simultaneous|at once|species|count)\b/i.test(query)
+    ) {
+        score += 92;
+    }
+    if (toolName === 'youtube_transcript' && queryContainsYoutubeUrl(query)) {
+        score += 90;
+    }
+    if (toolName === 'web_fetch' && queryContainsYoutubeUrl(query) && /\b(transcript|字幕|转写)\b/i.test(query)) {
+        score -= 40;
+    }
+    if (
+        toolName === 'youtube_video_search' &&
+        queryExplicitlyMentionsYoutube(query) &&
+        !queryContainsYoutubeUrl(query)
+    ) {
+        score += 18;
+    }
 
     if (needle && toolName && (needle === toolName || needle.includes(toolName) || text.includes(needle))) {
         score += 18;
     }
     if (
         /^output_(read|tail|search)$/.test(toolName) &&
-        /\b(outputid|output_id|previewtruncated|exec output|stdout|stderr|full output|stored output|output store|tail output|search output)\b/i.test(query)
+        outputStoreContext
     ) {
         score += 36;
     }
     if (
-        toolName === 'artifact_query' &&
-        /\b(artifactid|artifact_id|artifact_query|context artifact|artifact payload|payload file|fulljsonpath|managed artifact|query artifact|artifact range|artifact grid|artifact search)\b/i.test(query)
+        toolName === 'artifact_tools' &&
+        /\b(artifact_tools|artifact runtime|artifact tool|artifact adapter|file artifact|local artifact|attached file|attachment|local file|file path|pdf|docx|docm|pptx|ppt|xlsx|xlsm|xls|csv|tsv|spreadsheet|workbook|worksheet|cell|formula|merge|render|roundtrip|image|png|jpg|jpeg|webp)\b/i.test(query)
     ) {
-        score += 44;
+        score += 62;
     }
     if (
-        toolName === 'artifact_compute' &&
-        /\b(artifactid|artifact_id|artifact_compute|context artifact|managed artifact|artifact compute|data worker|spreadsheet profile|find path|path search|grid path|maze)\b/i.test(query)
+        toolName === 'artifact_query' &&
+        /\b(artifactid|artifact_id|artifact_query|context artifact|artifact payload|payload file|fulljsonpath|managed artifact|query artifact|artifact range|artifact grid|artifact search)\b/i.test(query)
     ) {
         score += 44;
     }
@@ -331,7 +449,7 @@ function scoreToolForQuery(entry = {}, query = '') {
     if (toolName === 'output_tail' && /\b(tail|last|ending|recent|final lines|bottom)\b/i.test(query)) {
         score += 16;
     }
-    if (toolName === 'output_search' && /\b(search|find|needle|query|match|grep)\b/i.test(query)) {
+    if (toolName === 'output_search' && outputStoreContext && /\b(search|find|needle|query|match|grep)\b/i.test(query)) {
         score += 16;
     }
     if (entry.type === 'mcp_tool' || /^mcp__/.test(normalizeForSearch(entry.id))) {
@@ -352,17 +470,10 @@ function scoreToolForQuery(entry = {}, query = '') {
         }
     }
 
-    if (toolName === 'youtube_transcript' && /\bhttps?:\/\/\S*(youtube\.com|youtu\.be)\S*/i.test(query)) {
-        score += 30;
-    }
-    if (toolName === 'youtube_video_search' && !/\bhttps?:\/\/\S*(youtube\.com|youtu\.be)\S*/i.test(query) && /\b(youtube|video|bbc earth|channel|title)\b/i.test(query)) {
-        score += 32;
-    }
-
     if (
         toolName === 'web_search' &&
         !explicitWebSearch &&
-        /\b(attached|attachment|file|local|pdf|document|video|audio|image|spreadsheet|presentation|schema|api)\b/i.test(query) &&
+        /\b(attached|attachment|file|local|pdf|document|audio|image|spreadsheet|presentation|schema|api)\b/i.test(query) &&
         !profiles.some((profile) => profile.id === 'public_web_discovery')
     ) {
         score -= 25;
@@ -380,6 +491,7 @@ function rankToolSearchResults(entries = [], query = '', limit = 8) {
             return {
                 entry,
                 score,
+                toolName,
                 specificity: toolSpecificityScore(toolName),
                 index,
                 id: normalizeForSearch(entry?.id || entry?.name || toolName)

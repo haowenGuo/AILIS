@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
 import inspect
 import json
+import pathlib
 import sys
 import traceback
 from typing import Any
@@ -159,6 +161,8 @@ async def crawl(args: argparse.Namespace) -> dict[str, Any]:
         "page_timeout": args.timeout_ms,
         "wait_for": args.wait_for or None,
         "delay_before_return_html": args.delay_ms / 1000 if args.delay_ms else None,
+        "screenshot": bool(args.screenshot_path),
+        "screenshot_wait_for": 0.5 if args.screenshot_path else None,
     }
     if CacheMode is not None:
         run_candidates["cache_mode"] = getattr(CacheMode, "BYPASS", None)
@@ -205,6 +209,33 @@ async def crawl(args: argparse.Namespace) -> dict[str, Any]:
             "backend": "crawl4ai_local",
             "metadata": object_to_plain(extract_attr_or_key(result, "metadata")),
         }
+    screenshot_path = ""
+    screenshot_bytes = 0
+    if args.screenshot_path:
+        screenshot = extract_attr_or_key(result, "screenshot")
+        if not isinstance(screenshot, str) or not screenshot.strip():
+            return {
+                "ok": False,
+                "status": status,
+                "errorCode": "crawl4ai_no_screenshot",
+                "error": "Crawl4AI completed but returned no screenshot data.",
+                "backend": "crawl4ai_local",
+            }
+        try:
+            screenshot_data = base64.b64decode(screenshot)
+            target = pathlib.Path(args.screenshot_path).resolve()
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(screenshot_data)
+            screenshot_path = str(target)
+            screenshot_bytes = len(screenshot_data)
+        except Exception as error:
+            return {
+                "ok": False,
+                "status": status,
+                "errorCode": "crawl4ai_screenshot_write_failed",
+                "error": compact_error(error),
+                "backend": "crawl4ai_local",
+            }
     return {
         "ok": True,
         "status": status,
@@ -212,6 +243,8 @@ async def crawl(args: argparse.Namespace) -> dict[str, Any]:
         "markdown": markdown,
         "links": normalize_links(extract_attr_or_key(result, "links"), args.max_links),
         "metadata": object_to_plain(extract_attr_or_key(result, "metadata")),
+        "screenshotPath": screenshot_path,
+        "screenshotBytes": screenshot_bytes,
         "backend": "crawl4ai_local",
         "crawler": "crawl4ai.AsyncWebCrawler",
     }
@@ -225,6 +258,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--max-links", type=int, default=80)
     parser.add_argument("--wait-for", default="")
     parser.add_argument("--delay-ms", type=int, default=0)
+    parser.add_argument("--screenshot-path", default="")
     parser.add_argument("--user-agent", default="AILISResearchMCP/0.1 (+local Crawl4AI worker)")
     return parser.parse_args(argv)
 

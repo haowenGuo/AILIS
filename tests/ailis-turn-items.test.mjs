@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-    buildCodexLikeTurnItems,
-    buildTurnItemsPromptObject
+    buildAilisThreadItems,
+    buildObservationLedgerPromptObject
 } from '../electron/ailis-turn-items.cjs';
 
-test('Turn items map tool calls and results into Codex-like chronological items', () => {
-    const promptObject = buildTurnItemsPromptObject({
+test('Observation ledger maps tool calls and results into chronological AILIS thread items', () => {
+    const promptObject = buildObservationLedgerPromptObject({
         events: [
             {
                 type: 'tool_call',
@@ -29,8 +29,9 @@ test('Turn items map tool calls and results into Codex-like chronological items'
         ]
     });
 
-    assert.equal(promptObject.model, 'codex_like_turn_items');
-    assert.match(promptObject.note, /Tool failures are observations/);
+    assert.equal(promptObject.model, 'ailis_observation_ledger');
+    assert.equal(promptObject.schema, 'ailis.observation_ledger.v1');
+    assert.match(promptObject.note, /canonical AILIS tool outputs/);
     assert.equal(promptObject.items[0].type, 'tool_call');
     assert.equal(promptObject.items[0].status, 'started');
     assert.equal(promptObject.items[1].type, 'tool_result');
@@ -38,7 +39,41 @@ test('Turn items map tool calls and results into Codex-like chronological items'
     assert.match(promptObject.items[1].preview, /reflection/);
 });
 
-test('Turn items compact older observations while keeping recent observations detailed', () => {
+test('Observation ledger summarizes large tool call args before they enter the prompt', () => {
+    const script = [
+        'from openpyxl import load_workbook',
+        'wb = load_workbook("task.xlsx")',
+        'print("answer", "F478A7")'
+    ].join('\n') + '\n' + 'print("padding")\n'.repeat(900);
+
+    const promptObject = buildObservationLedgerPromptObject({
+        events: [{
+            type: 'tool_call',
+            id: 'step-write',
+            title: 'Write solver script',
+            tool: 'write',
+            args: {
+                path: 'solve_puzzle.py',
+                content: script,
+                api_token: 'secret-value'
+            },
+            iteration: 4
+        }]
+    });
+
+    const item = promptObject.items[0];
+    assert.equal(item.type, 'tool_call');
+    assert.equal(item.args.path, 'solve_puzzle.py');
+    assert.equal(item.args.api_token, '__REDACTED__');
+    assert.equal(item.args.content.omitted, true);
+    assert.equal(item.args.content.kind, 'large_text_arg');
+    assert.equal(item.args.content.chars, script.length);
+    assert.match(item.args.content.sha1, /^[a-f0-9]{12}$/);
+    assert.ok(JSON.stringify(promptObject).length < 2000);
+    assert.doesNotMatch(JSON.stringify(promptObject), /padding"\)\nprint\("padding"\)\nprint\("padding/);
+});
+
+test('Observation ledger compacts older observations while keeping recent observations detailed', () => {
     const events = Array.from({ length: 18 }, (_, index) => ({
         type: 'tool_result',
         id: `step-${index}`,
@@ -49,7 +84,7 @@ test('Turn items compact older observations while keeping recent observations de
         preview: `observation-${index} ${'x'.repeat(500)}`,
         iteration: index
     }));
-    const promptObject = buildTurnItemsPromptObject({
+    const promptObject = buildObservationLedgerPromptObject({
         events,
         maxItems: 8,
         recentFullItems: 2,
@@ -58,7 +93,7 @@ test('Turn items compact older observations while keeping recent observations de
 
     assert.equal(promptObject.items.length, 8);
     assert.equal(promptObject.retention.omitted_items, 10);
-    assert.equal(promptObject.retention.strategy, 'codex_like_recent_observation_window');
+    assert.equal(promptObject.retention.strategy, 'ailis_recent_observation_window');
     assert.equal(promptObject.items[0].compacted, true);
     assert.ok(promptObject.items[0].preview.length < 160);
     assert.equal(promptObject.items[7].compacted, undefined);
@@ -66,8 +101,8 @@ test('Turn items compact older observations while keeping recent observations de
     assert.match(promptObject.latest_observation.preview, /observation-17/);
 });
 
-test('Turn items keep failed tool observations available for the next model decision', () => {
-    const items = buildCodexLikeTurnItems({
+test('AILIS thread items keep failed tool observations available for the next model decision', () => {
+    const items = buildAilisThreadItems({
         stepResults: [
             {
                 id: 'step-failed',
@@ -91,8 +126,8 @@ test('Turn items keep failed tool observations available for the next model deci
     assert.match(items[0].preview, /pup/);
 });
 
-test('Turn items classify Windows command-not-found failures with recovery hints', () => {
-    const items = buildCodexLikeTurnItems({
+test('AILIS thread items classify Windows command-not-found failures without recovery hints', () => {
+    const items = buildAilisThreadItems({
         stepResults: [
             {
                 id: 'step-python3',
@@ -125,12 +160,12 @@ test('Turn items classify Windows command-not-found failures with recovery hints
     assert.equal(items[0].status, 'failed');
     assert.equal(items[0].error_type, 'missing_dependency');
     assert.match(items[0].preview, /python3/);
-    assert.match(items[0].recovery_hint, /PowerShell|Node\.js|web_fetch/);
-    assert.ok(items[0].alternatives.includes('node'));
+    assert.equal(items[0].recovery_hint, undefined);
+    assert.equal(items[0].alternatives, undefined);
 });
 
-test('Turn items classify web_search discovery output as needing web_fetch evidence', () => {
-    const items = buildCodexLikeTurnItems({
+test('AILIS thread items keep web_search snippets neutral instead of adding evidence-gap follow-up hints', () => {
+    const items = buildAilisThreadItems({
         stepResults: [
             {
                 id: 'step-search',
@@ -145,10 +180,8 @@ test('Turn items classify web_search discovery output as needing web_fetch evide
                         content: [{
                             type: 'text',
                             text: [
-                                'Evidence gap: Search results are discovery only. Open a result before answering.',
-                                'Suggested next calls:',
-                                '1. web_fetch {"url":"https://www.kaggle.com/"}',
-                                'High-signal links:',
+                                'Candidate snippets from search results:',
+                                '1. Kaggle AI strategy guide',
                                 'URL: https://www.kaggle.com/'
                             ].join('\n')
                         }]
@@ -160,12 +193,12 @@ test('Turn items classify web_search discovery output as needing web_fetch evide
 
     assert.equal(items.length, 1);
     assert.equal(items[0].status, 'completed');
-    assert.equal(items[0].evidence_gap, 'search_results_need_fetch');
-    assert.match(items[0].recovery_hint, /mcp__ailis_research__web_fetch/);
-    assert.ok(items[0].alternatives.includes('mcp__ailis_research__web_fetch'));
+    assert.equal(items[0].evidence_gap, null);
+    assert.equal(items[0].recovery_hint, undefined);
+    assert.equal(items[0].alternatives, undefined);
 });
 
-test('Turn items preserve complete structured document table previews for reasoning', () => {
+test('AILIS thread items preserve complete structured document table previews for reasoning', () => {
     const tableRows = Array.from({ length: 90 }, (_, index) => `Person ${index + 1} | Recipient ${index + 1} | ${'profile clue '.repeat(3)}`).join('\n');
     const documentText = [
         '# DOCUMENT_READ_COMPLETE',
@@ -185,7 +218,7 @@ test('Turn items preserve complete structured document table previews for reason
         'Final Sender | Final Recipient'
     ].join('\n');
 
-    const items = buildCodexLikeTurnItems({
+    const items = buildAilisThreadItems({
         stepResults: [{
             id: 'step-doc',
             title: 'Read DOCX',
@@ -220,8 +253,60 @@ test('Turn items preserve complete structured document table previews for reason
     assert.doesNotMatch(items[0].preview, /truncated for model budget/);
 });
 
-test('Turn items classify nested low-confidence web_search as requiring user clarification', () => {
-    const items = buildCodexLikeTurnItems({
+test('Observation ledger preserves artifact_tools preview-only query observations for reasoning', () => {
+    const rows = Array.from({ length: 20 }, (_, index) => ({
+        rowNumber: index + 1,
+        cells: index === 0
+            ? 'START | #0099FF | #0099FF | #0099FF'
+            : (index === 19
+                ? '#0099FF | #92D050 | #F478A7 | END'
+                : `#F478A7 | #0099FF | #92D050 | row-${index + 1}`)
+    }));
+    const artifactPreview = JSON.stringify({
+        schema: 'ailis.artifact_tools.tool_api_result.v1',
+        ok: true,
+        status: 'completed',
+        action: 'query',
+        adapterId: 'xlsx',
+        observation: {
+            schema: 'ailis.artifact_tools.compact_observation.v1',
+            format: 'xlsx',
+            action: 'query',
+            sheetName: 'Sheet1',
+            range: 'Sheet1!A1:D20',
+            rowCount: 20,
+            columnCount: 4,
+            truncated: false,
+            columns: ['A', 'B', 'C', 'D'],
+            compactRows: rows,
+            candidateCount: rows.length,
+            diagnostics: []
+        }
+    }, null, 2);
+    assert.ok(artifactPreview.length > 1000);
+
+    const promptObject = buildObservationLedgerPromptObject({
+        events: [{
+            type: 'tool_result',
+            id: 'step-artifact-query',
+            title: 'artifact_tools',
+            tool: 'artifact_tools',
+            status: 'completed',
+            ok: true,
+            preview: artifactPreview,
+            iteration: 4
+        }]
+    });
+
+    assert.equal(promptObject.items.length, 1);
+    assert.match(promptObject.items[0].preview, /START/);
+    assert.match(promptObject.items[0].preview, /rowNumber": 11/);
+    assert.match(promptObject.items[0].preview, /END/);
+    assert.doesNotMatch(promptObject.items[0].preview, /truncated for model budget/);
+});
+
+test('AILIS thread items classify nested low-confidence web_search as requiring user clarification', () => {
+    const items = buildAilisThreadItems({
         stepResults: [
             {
                 id: 'step-ambiguous-search',
@@ -266,12 +351,13 @@ test('Turn items classify nested low-confidence web_search as requiring user cla
     assert.equal(items.length, 1);
     assert.equal(items[0].status, 'completed');
     assert.equal(items[0].evidence_gap, 'ambiguous_search_requires_clarification');
-    assert.match(items[0].recovery_hint, /具体指哪一个|补充游戏名/);
-    assert.ok(items[0].alternatives.includes('ask_user_clarification'));
+    assert.match(items[0].preview, /具体指哪一个|补充游戏名/);
+    assert.equal(items[0].recovery_hint, undefined);
+    assert.equal(items[0].alternatives, undefined);
 });
 
-test('Turn items classify web_fetch JavaScript shells as unusable evidence', () => {
-    const items = buildCodexLikeTurnItems({
+test('AILIS thread items classify web_fetch JavaScript shells as unusable evidence', () => {
+    const items = buildAilisThreadItems({
         stepResults: [
             {
                 id: 'step-js-shell',
@@ -304,12 +390,13 @@ test('Turn items classify web_fetch JavaScript shells as unusable evidence', () 
 
     assert.equal(items.length, 1);
     assert.equal(items[0].evidence_gap, 'js_shell_no_content');
-    assert.match(items[0].recovery_hint, /Do not refetch/);
-    assert.ok(items[0].alternatives.includes('different web_fetch URL'));
+    assert.match(items[0].preview, /JavaScript loading shell/);
+    assert.equal(items[0].recovery_hint, undefined);
+    assert.equal(items[0].alternatives, undefined);
 });
 
-test('Turn items do not add an evidence gap for sufficient web_fetch evidence', () => {
-    const items = buildCodexLikeTurnItems({
+test('AILIS thread items do not add an evidence gap for sufficient web_fetch evidence', () => {
+    const items = buildAilisThreadItems({
         stepResults: [
             {
                 id: 'step-ready-page',
@@ -345,5 +432,5 @@ test('Turn items do not add an evidence gap for sufficient web_fetch evidence', 
 
     assert.equal(items.length, 1);
     assert.equal(items[0].evidence_gap, null);
-    assert.equal(items[0].recovery_hint, null);
+    assert.equal(items[0].recovery_hint, undefined);
 });

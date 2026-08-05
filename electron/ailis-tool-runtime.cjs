@@ -17,9 +17,12 @@ const {
 } = require('./ailis-mcp-adapter.cjs');
 const {
     buildToolRoutingAdvice,
-    rankToolSearchResults,
-    toolMatchesRoutingProfile
+    rankToolSearchResults
 } = require('./ailis-tool-routing.cjs');
+const {
+    createDefaultArtifactToolsRuntime
+} = require('./ailis-artifact-tools-runtime.cjs');
+const { summarizeForModel } = require('./ailis-runtime-budget.cjs');
 
 const TOOL_EXPOSURE = AILIS_TOOL_EXPOSURE;
 const CORE_RUNTIME_TOOL_DEFINITIONS = AILIS_RUNTIME_TOOL_DEFINITIONS;
@@ -47,8 +50,172 @@ function cloneJson(value) {
 
 const parseDirectMcpToolId = parseAilisDirectMcpToolId;
 
-function makeTextResult({ status = 'completed', text = '', details = {}, isError = false } = {}) {
-    return makeAilisToolResult({ status, text, details, isError });
+function makeTextResult({ status = 'completed', text = '', details = {}, structuredContent = null, isError = false } = {}) {
+    return makeAilisToolResult({ status, text, details, structuredContent, isError });
+}
+
+function makeAgentProtocolResult(value = {}, { silent = false } = {}) {
+    const structuredContent = value && typeof value === 'object' && !Array.isArray(value)
+        ? value
+        : {};
+    const isError = structuredContent.isError === true || structuredContent.ok === false;
+    return makeTextResult({
+        status: isError ? normalizeString(structuredContent.status, 'tool_error') : 'completed',
+        text: silent ? '' : JSON.stringify(structuredContent),
+        details: structuredContent,
+        structuredContent,
+        isError
+    });
+}
+
+function compactModelPath(value = '') {
+    const text = String(value || '');
+    if (!text || text.length <= 140) {
+        return text;
+    }
+    const normalized = text.replace(/\\/g, '/');
+    const slashIndex = normalized.lastIndexOf('/');
+    const baseName = slashIndex >= 0 ? normalized.slice(slashIndex + 1) : normalized;
+    return baseName.length <= 120 ? `.../${baseName}` : `.../${baseName.slice(0, 48)}...${baseName.slice(-48)}`;
+}
+
+function compactArtifactModelTextView(value = {}) {
+    const view = cloneJson(value || {});
+    if (view.artifact) {
+        view.artifact = {
+            ...view.artifact,
+            sourcePath: compactModelPath(view.artifact.sourcePath)
+        };
+    }
+    if (view.observation?.sourcePath) {
+        view.observation.sourcePath = compactModelPath(view.observation.sourcePath);
+    }
+    if (view.plan) {
+        view.plan = {
+            format: view.plan.format || '',
+            kind: view.plan.kind || '',
+            adapterId: view.plan.adapterId || '',
+            adapterStatus: view.plan.adapterStatus || '',
+            route: {
+                currentTool: view.plan.route?.currentTool || 'artifact_tools',
+                actions: Array.isArray(view.plan.route?.actions) ? view.plan.route.actions.slice(0, 12) : [],
+                note: view.plan.route?.note || ''
+            },
+            diagnostics: Array.isArray(view.plan.diagnostics) ? view.plan.diagnostics.slice(0, 8) : []
+        };
+    }
+    if (Array.isArray(view.observation?.compactRows)) {
+        view.observation.compactRows = view.observation.compactRows.map((row) => ({
+            rowNumber: row.rowNumber,
+            cells: Array.isArray(row.cells) ? row.cells.join(' | ') : row.cells
+        }));
+        view.observation.cellSeparator = ' | ';
+    }
+    if (Array.isArray(view.observation?.matrixRows) && view.observation.matrixRows.length) {
+        const matrixRowCount = view.observation.matrixRows.length;
+        const hasFormulas = view.observation.matrixRows.some((row) => Array.isArray(row.formulas) && row.formulas.some(Boolean));
+        const hasErrors = view.observation.matrixRows.some((row) => Array.isArray(row.errors) && row.errors.some(Boolean));
+        delete view.observation.matrixRows;
+        view.observation.matrixRowsAvailable = {
+            status: 'available_in_structuredContent_details_and_artifact_tools_materialize',
+            rowCount: matrixRowCount,
+            hasFormulas,
+            hasErrors,
+            rowSchema: 'rows[].{rowNumber, values[], fills[], formulas?, errors?}; ref = columns[index] + rowNumber'
+        };
+        view.observation.matrixRowsOmittedForModelText = 'raw matrixRows object omitted from visible text to keep the model workspace readable; compactRows remains the complete visible grid when truncated=false.';
+    }
+    return view;
+}
+
+function buildContinuationRange(observation = {}, rows = []) {
+    const sheetName = normalizeString(observation.sheetName);
+    const columns = Array.isArray(observation.columns) ? observation.columns.filter(Boolean) : [];
+    if (!sheetName || columns.length === 0 || rows.length < 2) {
+        return '';
+    }
+    const first = rows[0]?.rowNumber;
+    const last = rows[rows.length - 1]?.rowNumber;
+    if (!first || !last || last < first) {
+        return '';
+    }
+    return `${sheetName}!${columns[0]}${first}:${columns[columns.length - 1]}${last}`;
+}
+
+function compactRowsHeadTail(rows = [], visibleLimit = 12) {
+    if (!Array.isArray(rows) || rows.length <= visibleLimit) {
+        return {
+            rows,
+            omittedCount: 0,
+            omittedRows: [],
+            omittedRange: ''
+        };
+    }
+    const tailCount = Math.min(4, Math.max(1, Math.floor(visibleLimit / 3)));
+    const headCount = Math.max(1, visibleLimit - tailCount);
+    const head = rows.slice(0, headCount);
+    const tail = rows.slice(-tailCount);
+    const omittedRows = rows.slice(headCount, rows.length - tailCount);
+    return {
+        rows: [...head, ...tail],
+        omittedCount: omittedRows.length,
+        omittedRows,
+        omittedRange: omittedRows.length
+            ? `${omittedRows[0]?.rowNumber || ''}:${omittedRows[omittedRows.length - 1]?.rowNumber || ''}`
+            : ''
+    };
+}
+
+function addArtifactOmittedRangeMetadata(view = {}, omittedRows = []) {
+    const observation = view.observation || {};
+    const range = buildContinuationRange(observation, omittedRows);
+    view.observation.omittedRange = range;
+    return view;
+}
+
+function stringifyArtifactModelResult(result = {}) {
+    const fallback = {
+        ok: result?.ok === true,
+        status: result?.status || (result?.ok === false ? 'failed' : 'completed'),
+        action: result?.action || '',
+        diagnostics: result?.diagnostics || []
+    };
+    let view = compactArtifactModelTextView(result?.modelView || result?.observation || fallback);
+    const visibleTextLimit = 5600;
+    let text = JSON.stringify(view, null, 2);
+    if (text.length <= visibleTextLimit) {
+        return text;
+    }
+    if (view.plan || view.protocol) {
+        view = { ...view, protocol: undefined, plan: undefined };
+        if (view.observation?.sourcePath) {
+            delete view.observation.sourcePath;
+        }
+        text = JSON.stringify(view, null, 2);
+        if (text.length <= visibleTextLimit) {
+            return text;
+        }
+        const compactText = JSON.stringify(view);
+        if (compactText.length <= 5900) {
+            return compactText;
+        }
+    }
+    const rows = view.observation?.compactRows;
+    if (text.length > visibleTextLimit && Array.isArray(rows) && rows.length > 12) {
+        const compacted = compactRowsHeadTail(rows, 12);
+        view.observation.compactRows = compacted.rows;
+        view.observation.omittedCompactRowCount = compacted.omittedCount;
+        view.observation.omittedCompactRowRange = compacted.omittedRange;
+        view.observation.visibleRowStrategy = 'head_tail';
+        view.observation.compactRowsTruncatedForModelText = true;
+        view.observation.truncatedForModelText = true;
+        addArtifactOmittedRangeMetadata(view, compacted.omittedRows);
+        text = JSON.stringify(view, null, 2);
+    }
+    if (text.length > visibleTextLimit) {
+        text = JSON.stringify(view);
+    }
+    return text;
 }
 
 function normalizeToolOutput(result = {}, { toolId = '' } = {}) {
@@ -60,10 +227,7 @@ function createToolSpec(definition = {}) {
 }
 
 function shouldIncludeDirectToolInSearch(entry, query, includeDirect) {
-    if (includeDirect || entry.exposure !== TOOL_EXPOSURE.DIRECT) {
-        return true;
-    }
-    return toolMatchesRoutingProfile(entry, query);
+    return includeDirect === true || entry.exposure !== TOOL_EXPOSURE.DIRECT;
 }
 
 class AILISRuntimeTool {
@@ -232,17 +396,19 @@ async function executeToolSearch(registry, args = {}) {
                 query,
                 limit,
                 timeoutMs: args.timeoutMs
-            })).map((spec) => createAilisDirectMcpToolSpec({
-                id: spec.id,
-                server: spec.server,
-                tool: spec.tool || spec.name,
-                name: spec.name,
-                title: spec.title,
-                description: spec.description || spec.title || '',
-                inputSchema: spec.inputSchema || spec.input_schema || spec.parameters || {},
-                schemaProperties: spec.schemaProperties || spec.schema_properties,
-                callPattern: spec.callPattern || spec.call_pattern
-            }));
+            }))
+                .map((spec) => createAilisDirectMcpToolSpec({
+                    id: spec.id,
+                    server: spec.server,
+                    tool: spec.tool || spec.name,
+                    name: spec.name,
+                    title: spec.title,
+                    description: spec.description || spec.title || '',
+                    inputSchema: spec.inputSchema || spec.input_schema || spec.parameters || {},
+                    schemaProperties: spec.schemaProperties || spec.schema_properties,
+                    callPattern: spec.callPattern || spec.call_pattern
+                }))
+                .filter((spec) => spec.callable !== false && spec.modelFacing !== false);
         } catch (error) {
             mcp = [{
                 type: 'mcp_tool_search_error',
@@ -251,27 +417,85 @@ async function executeToolSearch(registry, args = {}) {
         }
     }
     const tools = rankToolSearchResults([...local, ...mcp], query, limit);
-    const routingAdvice = buildToolRoutingAdvice(query, tools);
-    return makeTextResult({
+    const publicTools = tools.map((entry) => {
+        const spec = entry.spec && typeof entry.spec === 'object' ? entry.spec : {};
+        const schema = entry.input_schema || entry.inputSchema || entry.parameters || spec.parameters || {};
+        const properties = schema.properties && typeof schema.properties === 'object' ? schema.properties : {};
+        const compactProperties = Object.fromEntries(Object.entries(properties).slice(0, 16).map(([name, property]) => [
+            name,
+            {
+                ...(property?.type ? { type: property.type } : {}),
+                ...(Array.isArray(property?.enum) ? { enum: property.enum.slice(0, 16) } : {}),
+                ...(property?.description ? { description: summarizeForModel(property.description, 240) } : {})
+            }
+        ]));
+        const id = normalizeString(entry.id || entry.name || spec.name);
+        const searchError = normalizeString(entry.type).endsWith('_search_error');
+        const callable = Boolean(id) &&
+            !searchError &&
+            entry.callable !== false &&
+            spec.callable !== false;
+        const availability = normalizeString(
+            entry.availability ||
+            entry.health ||
+            entry.status ||
+            spec.availability ||
+            spec.health ||
+            spec.status,
+            callable ? 'available' : 'unavailable'
+        );
+        return {
+            id,
+            name: normalizeString(entry.name || spec.name || id),
+            description: summarizeForModel(entry.description || spec.description || entry.summary || entry.title || id, 420),
+            input_schema: {
+                type: 'object',
+                properties: compactProperties,
+                required: (Array.isArray(schema.required) ? schema.required : []).filter((name) => name in compactProperties),
+                additionalProperties: schema.additionalProperties === true
+            },
+            strict: entry.strict === true || spec.strict === true || schema.additionalProperties === false,
+            callable,
+            availability,
+            spec_ref: `tool_registry:${id}`
+        };
+    });
+    const recommendedTool = publicTools.find((entry) => entry.callable) || null;
+    const routingAdvice = recommendedTool ? buildToolRoutingAdvice(query, tools) : '';
+    const discovery = {
         status: 'completed',
-        text: JSON.stringify({
-            status: 'completed',
-            query,
-            routing_advice: routingAdvice,
-            tools
-        }, null, 2),
+        query,
+        routing_advice: routingAdvice,
+        recommended_tool: recommendedTool
+            ? {
+                  id: recommendedTool.id,
+                  name: recommendedTool.name,
+                  callable: true,
+                  availability: recommendedTool.availability
+              }
+            : null,
+        tools: publicTools
+    };
+    const result = makeTextResult({
+        status: 'completed',
+        text: JSON.stringify(discovery, null, 2),
         details: {
-            status: 'completed',
-            query,
-            routing_advice: routingAdvice,
-            tools
+            ...discovery
         }
     });
+    Object.defineProperty(result, '__ailisRawToolSearchTools', {
+        value: tools,
+        enumerable: false,
+        configurable: true
+    });
+    return result;
 }
 
 function createAILISToolRuntimeRegistry(runtime) {
     const registry = new AILISToolRuntimeRegistry({ runtime });
     const definitionById = Object.fromEntries(CORE_RUNTIME_TOOL_DEFINITIONS.map((definition) => [definition.id, definition]));
+    const artifactToolsRuntime = runtime.artifactToolsRuntime || createDefaultArtifactToolsRuntime();
+    runtime.artifactToolsRuntime = artifactToolsRuntime;
     registry.register(new AILISRuntimeTool({
         definition: definitionById.update_plan,
         handle: async (args, context) => runtime.updatePlan({
@@ -284,6 +508,25 @@ function createAILISToolRuntimeRegistry(runtime) {
     registry.register(new AILISRuntimeTool({
         definition: definitionById.tool_search,
         handle: async (args) => executeToolSearch(registry, args)
+    }));
+    registry.register(new AILISRuntimeTool({
+        definition: definitionById.artifact_tools,
+        handle: async (args) => {
+            const result = await artifactToolsRuntime.execute(args);
+            const modelResult = result?.modelView || result?.observation || {
+                ok: result?.ok === true,
+                status: result?.status || (result?.ok === false ? 'failed' : 'completed'),
+                action: result?.action || args.action || '',
+                diagnostics: result?.diagnostics || []
+            };
+            return makeTextResult({
+                status: result.status || (result.ok === false ? 'failed' : 'completed'),
+                text: stringifyArtifactModelResult({ ...result, modelView: modelResult }),
+                details: result,
+                structuredContent: result,
+                isError: result.ok === false
+            });
+        }
     }));
     registry.register(new AILISRuntimeTool({
         definition: definitionById.artifact_query,
@@ -310,8 +553,35 @@ function createAILISToolRuntimeRegistry(runtime) {
         handle: async (args, context) => runtime.requestPermissions(args, context)
     }));
     registry.register(new AILISRuntimeTool({
-        definition: definitionById.subagents,
-        handle: async (args, context) => runtime.executeSubagentRelay(args, context)
+        definition: definitionById.spawn_agent,
+        handle: async (args, context) => makeAgentProtocolResult(
+            await runtime.agent_control.spawn_agent_with_metadata(args, context)
+        )
+    }));
+    registry.register(new AILISRuntimeTool({
+        definition: definitionById.followup_task,
+        handle: async (args, context) => makeAgentProtocolResult(
+            await runtime.agent_control.followup_task(args, context),
+            { silent: true }
+        )
+    }));
+    registry.register(new AILISRuntimeTool({
+        definition: definitionById.wait_agent,
+        handle: async (args, context) => makeAgentProtocolResult(
+            await runtime.agent_control.wait_agent(args, context)
+        )
+    }));
+    registry.register(new AILISRuntimeTool({
+        definition: definitionById.list_agents,
+        handle: async (args, context) => makeAgentProtocolResult(
+            runtime.agent_control.list_agents(args, context)
+        )
+    }));
+    registry.register(new AILISRuntimeTool({
+        definition: definitionById.close_agent,
+        handle: async (args, context) => makeAgentProtocolResult(
+            await runtime.agent_control.close_agent(args, context)
+        )
     }));
     registry.register(new AILISRuntimeTool({
         definition: definitionById.mcp_bridge,

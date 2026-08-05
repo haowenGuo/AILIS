@@ -434,9 +434,7 @@ async function main() {
             { id: 'message', args: { action: 'send', channel: 'telegram', target: '1234', message: 'smoke', dryRun: true } },
             { id: 'tts', args: { text: 'hello smoke' } },
             { id: 'agents_list', args: {} },
-            { id: 'update_plan', args: { plan: [{ step: 'smoke', status: 'completed' }] } },
-            { id: 'sessions_yield', args: { message: 'smoke yield' } },
-            { id: 'subagents', args: { action: 'list' } }
+            { id: 'update_plan', args: { plan: [{ step: 'smoke', status: 'completed' }] } }
         ];
 
         if (report.gateway.ok) {
@@ -475,7 +473,7 @@ async function main() {
             );
         }
 
-        const sessionBound = ['session_status', 'sessions_history', 'sessions_send', 'sessions_spawn'];
+        const sessionBound = ['session_status', 'sessions_history', 'sessions_send'];
         for (const id of sessionBound) {
             report.results.push(
                 buildResult({

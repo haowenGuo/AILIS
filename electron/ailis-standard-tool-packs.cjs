@@ -466,18 +466,36 @@ const STANDARD_TOOL_PACKS = Object.freeze([
                 baseUrl: 'https://api.openalex.org',
                 path: '/works',
                 sourceName: 'openalex',
-                summary: 'Search OpenAlex works by title/topic/author terms and return structured paper metadata.',
+                summary: 'Query OpenAlex works by work text or filters and return structured paper metadata. The search parameter searches work titles, abstracts, and full text; it is not an author-identity or complete author-history lookup.',
+                inputSchema: Object.freeze({
+                    type: 'object',
+                    anyOf: Object.freeze([
+                        Object.freeze({ required: Object.freeze(['search']) }),
+                        Object.freeze({ required: Object.freeze(['filter']) })
+                    ]),
+                    properties: Object.freeze({
+                        search: Object.freeze({ type: 'string', minLength: 1, description: 'Work title, DOI, topic, or phrase to search in work metadata/full text. This is not author identity search. Do not put an author name here when filter already identifies the author; that would hide works that do not mention the name in searchable text.' }),
+                        filter: Object.freeze({ type: 'string', minLength: 1, description: 'OpenAlex filter expression. For complete author history, filter by authorships.author.id and omit search; add a publication-date cutoff when needed.' }),
+                        sort: Object.freeze({ type: 'string', description: 'OpenAlex sort expression, for example publication_date:asc for earliest works.' }),
+                        'per-page': Object.freeze({ type: 'number', minimum: 1, maximum: 50, description: 'Number of works to return.' })
+                    }),
+                    additionalProperties: false
+                }),
                 parameters: Object.freeze([
-                    Object.freeze({ name: 'search', in: 'query', required: true, schema: Object.freeze({ type: 'string' }), description: 'Paper title, DOI, author, or topic search query.' }),
-                    Object.freeze({ name: 'filter', in: 'query', required: false, schema: Object.freeze({ type: 'string' }), description: 'OpenAlex filter expression, for example from_publication_date:2001-01-01.' }),
+                    Object.freeze({ name: 'search', in: 'query', required: false, schema: Object.freeze({ type: 'string' }), description: 'Work title, DOI, topic, or phrase search. This searches work text, not author identity.' }),
+                    Object.freeze({ name: 'filter', in: 'query', required: false, schema: Object.freeze({ type: 'string' }), description: 'OpenAlex filter expression, for example authorships.author.id:A123 or from_publication_date:2001-01-01.' }),
+                    Object.freeze({ name: 'sort', in: 'query', required: false, schema: Object.freeze({ type: 'string' }), description: 'Sort expression, for example publication_date:asc.' }),
                     Object.freeze({ name: 'per-page', in: 'query', required: false, schema: Object.freeze({ type: 'number', minimum: 1, maximum: 50 }), description: 'Number of works to return.' })
                 ]),
-                whenToUse: Object.freeze(['Use for scholarly paper metadata, authors, years, venues, DOI, and title disambiguation.']),
-                whenNotToUse: Object.freeze(['Do not use for full PDF text extraction.', 'Do not scrape Google Scholar when this structured metadata can answer the question.']),
-                preconditions: Object.freeze(['A title, DOI, author name, or topic query is known.']),
-                examples: Object.freeze([Object.freeze({ search: 'Pie Menus or Linear Menus Which Is Better', 'per-page': 5 })]),
-                badExamples: Object.freeze([Object.freeze({ q: 'paper' })]),
-                alternatives: Object.freeze(['Use Crossref for DOI-first lookups.', 'Use pdf_find_and_extract for full text evidence.']),
+                whenToUse: Object.freeze(['Use for direct OpenAlex work metadata queries by title/topic text or explicit filters.', 'For a complete author history, use an author-id filter without search and sort by publication_date:asc.']),
+                whenNotToUse: Object.freeze(['Do not use search=<author name> together with an author-id filter; OpenAlex treats search as work-text search and may return an incomplete subset.', 'When paper_metadata_lookup already returned authorHistoryNextCalls, use those higher-level calls for author identity and chronology.', 'Do not use for full PDF text extraction.', 'Do not scrape Google Scholar when structured metadata can answer the question.']),
+                preconditions: Object.freeze(['A work-text query or OpenAlex filter expression is known.']),
+                examples: Object.freeze([
+                    Object.freeze({ search: 'Pie Menus or Linear Menus Which Is Better', 'per-page': 5 }),
+                    Object.freeze({ filter: 'authorships.author.id:A5047423326,to_publication_date:2014-12-31', sort: 'publication_date:asc', 'per-page': 10 })
+                ]),
+                badExamples: Object.freeze([Object.freeze({ q: 'paper' }), Object.freeze({ search: 'Pietro Murano', filter: 'authorships.author.id:A5047423326' })]),
+                alternatives: Object.freeze(['Use paper_metadata_lookup for author identity resolution and multi-hop publication chronology.', 'Use Crossref for DOI-first lookups.', 'Use pdf_find_and_extract for full text evidence.']),
                 errors: Object.freeze({
                     low_confidence_match: Object.freeze({ recoverable: true, nextActions: Object.freeze(['add author/year/venue terms or use exact title']) }),
                     rate_limited: Object.freeze({ recoverable: true, nextActions: Object.freeze(['retry later or query Crossref']) })

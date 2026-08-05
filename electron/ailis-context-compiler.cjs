@@ -117,6 +117,7 @@ class AILISContextCompiler {
         interactionPreferences = '',
         explicitMemoryContext = '',
         memorySources = null,
+        retrievalRequest = null,
         agentMode = 'persona',
         sectionBudgets = {},
         maxChars = 0
@@ -126,7 +127,8 @@ class AILISContextCompiler {
             sessionId,
             message: currentUserMessage,
             messageHistory: sessionRecentTurns,
-            contextMode
+            contextMode,
+            retrievalRequest
         }) || {};
         const requestedBudgets = Object.fromEntries(
             Object.entries(this.defaultBudgets).map(([key, fallback]) => [
@@ -196,6 +198,8 @@ class AILISContextCompiler {
             diagnostics: {
                 sessionId: String(sessionId || 'main'),
                 retrievalQueryChars: Number(sources.retrievalQueryChars) || 0,
+                retrievalRequestSchema: String(sources.retrievalRequestSchema || ''),
+                retrievalRequestSource: String(sources.retrievalRequestSource || ''),
                 relevantMemoryCount: Number(sources.relevantMemoryCount) || 0,
                 memoryStrategy: String(sources.memoryStrategy || ''),
                 memoryStrategyDiagnostics: sources.memoryStrategyDiagnostics || null,

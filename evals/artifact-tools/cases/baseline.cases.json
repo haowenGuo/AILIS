@@ -1,0 +1,299 @@
+[
+  {
+    "id": "xlsx_map_path_color",
+    "artifactKind": "workbook",
+    "format": "xlsx",
+    "input": "evals/artifact-tools/fixtures/xlsx/map-path-color.xlsx",
+    "goal": "Answer a spreadsheet map path question using exact cell values, fills, and coordinates.",
+    "requiredCapabilities": ["load", "inspect", "render", "validate"],
+    "expectedEvidence": ["cell values", "fill colors", "coordinates"],
+    "expectedAnswer": "F478A7",
+    "expected": {
+      "mapPath": {
+        "startText": "START",
+        "endText": "END",
+        "obstacleColor": "0099FF",
+        "turns": 11,
+        "cellsPerTurn": 2,
+        "landedCell": "E3",
+        "landedColor": "F478A7",
+        "minimumPathLength": 23
+      }
+    },
+    "checks": ["structured equality", "render nonblank"]
+  },
+  {
+    "id": "xlsx_formula_style_inspect",
+    "artifactKind": "workbook",
+    "format": "xlsx",
+    "input": "evals/artifact-tools/fixtures/xlsx/formula-style-model.xlsx",
+    "goal": "Inspect a workbook with tables, formulas, styles, validation, merges, and a known formula error.",
+    "requiredCapabilities": ["load", "inspect", "validate"],
+    "expectedEvidence": ["sheet names", "table names", "merged ranges", "formula cells", "formula errors", "cell styles"],
+    "expected": {
+      "allowedDiagnosticCodes": ["xlsx_formula_error"],
+      "xlsx": {
+        "sheetNames": ["Data", "Summary"],
+        "requiredTables": ["SalesTable"],
+        "requiredMerges": ["Summary!A1:D1"],
+        "minimumFormulaCount": 5,
+        "formulaErrorCount": 1,
+        "cells": [
+          { "ref": "Summary!B3", "formula": "SUM(Data!D2:D4)", "fillRgb": "DCFCE7" },
+          { "ref": "Summary!B4", "formula": "Missing!A1", "fillRgb": "FEE2E2" }
+        ]
+      }
+    },
+    "checks": ["sheet inventory", "table inventory", "formula scan", "style scan", "diagnostics"]
+  },
+  {
+    "id": "xlsx_edit_export_roundtrip",
+    "artifactKind": "workbook",
+    "format": "xlsx",
+    "input": "evals/artifact-tools/fixtures/xlsx/formula-style-model.xlsx",
+    "goal": "Apply declaration-style XLSX edits, export, reopen, and verify the changed values, formulas, and styles.",
+    "requiredCapabilities": ["load", "inspect", "edit", "validate", "export", "roundtrip"],
+    "expectedEvidence": ["operation log", "dirty range", "exported workbook", "reopened cell values", "reopened formulas", "reopened styles"],
+    "expected": {
+      "allowedDiagnosticCodes": ["xlsx_formula_error"],
+      "xlsx": {
+        "sheetNames": ["Data", "Summary"],
+        "minimumFormulaCount": 5,
+        "formulaErrorCount": 1
+      },
+      "editRoundtrip": {
+        "operations": [
+          {
+            "op": "range.setValues",
+            "target": "Summary!A6:B6",
+            "values": [["Edited status", "OK"]]
+          },
+          {
+            "op": "range.setStyles",
+            "target": "Summary!B6",
+            "style": {
+              "fill": "#10B981",
+              "font": { "bold": true, "color": "#FFFFFF" },
+              "alignment": { "horizontal": "center" }
+            }
+          },
+          {
+            "op": "range.setFormulas",
+            "target": "Summary!B7",
+            "formulas": [[{ "formula": "SUM(Data!D2:D4)+9", "result": 100 }]]
+          }
+        ],
+        "verifyTarget": "Summary!A6:B7",
+        "after": {
+          "allowedDiagnosticCodes": ["xlsx_formula_error"],
+          "target": "Summary!A6:B7",
+          "xlsx": {
+            "formulaErrorCount": 1,
+            "cells": [
+              { "ref": "Summary!B6", "value": "OK", "fillRgb": "10B981" },
+              { "ref": "Summary!B7", "formula": "SUM(Data!D2:D4)+9" }
+            ]
+          }
+        }
+      }
+    },
+    "checks": ["declarative edit", "export", "roundtrip reopen", "style equality", "formula equality"]
+  },
+  {
+    "id": "xlsx_render_trace_recalculate",
+    "artifactKind": "workbook",
+    "format": "xlsx",
+    "input": "evals/artifact-tools/fixtures/xlsx/formula-style-model.xlsx",
+    "goal": "Render a real XLSX range to PNG, trace formula dependencies, change an input, recalculate a dependent formula, export, and reopen.",
+    "requiredCapabilities": ["load", "inspect", "render", "trace", "recalculate", "export", "roundtrip"],
+    "expectedEvidence": ["png render", "formula graph", "dependency refs", "updated cached formula result", "reopened workbook"],
+    "expected": {
+      "allowedDiagnosticCodes": ["xlsx_formula_error"],
+      "render": {
+        "target": "Summary!A1:D7",
+        "scale": 2
+      },
+      "xlsx": {
+        "sheetNames": ["Data", "Summary"],
+        "minimumFormulaCount": 5,
+        "formulaErrorCount": 1
+      },
+      "formulaTrace": {
+        "target": "Summary!B3",
+        "maxDepth": 5,
+        "mustReference": ["Data!D2:D4", "Data!D2", "Data!B2"]
+      },
+      "recalculate": {
+        "beforeOperations": [
+          {
+            "op": "range.setValues",
+            "target": "Data!B2",
+            "values": [[10]]
+          }
+        ],
+        "target": "Summary!B3",
+        "after": {
+          "allowedDiagnosticCodes": ["xlsx_formula_error"],
+          "target": "Summary!B3",
+          "xlsx": {
+            "formulaErrorCount": 1,
+            "cells": [
+              { "ref": "Summary!B3", "value": 187, "formula": "SUM(Data!D2:D4)", "fillRgb": "DCFCE7" }
+            ]
+          }
+        }
+      }
+    },
+    "checks": ["png render", "formula trace", "local recalculate", "export reopen"]
+  },
+  {
+    "id": "xlsx_search_index_observation",
+    "artifactKind": "workbook",
+    "format": "xlsx",
+    "input": "evals/artifact-tools/fixtures/xlsx/formula-style-model.xlsx",
+    "goal": "Build an XLSX index and search compact candidate evidence across text, styles, formulas, errors, tables, merges, comments, defined names, hidden structure, package inventory, and table queries.",
+    "requiredCapabilities": ["load", "index", "search", "query", "inspect"],
+    "expectedEvidence": ["candidate cells", "style matches", "formula matches", "error matches", "table inventory", "merge inventory", "comment inventory", "defined names", "hidden rows", "image anchors", "query aggregates"],
+    "expected": {
+      "allowedDiagnosticCodes": ["xlsx_formula_error"],
+      "xlsx": {
+        "sheetNames": ["Data", "Summary"],
+        "requiredTables": ["SalesTable"],
+        "requiredMerges": ["Summary!A1:D1"],
+        "minimumFormulaCount": 5,
+        "formulaErrorCount": 1
+      },
+      "searches": [
+        { "searchKind": "text", "query": "Alpha", "mustReference": ["Data!A2"] },
+        { "searchKind": "style", "fillRgb": "DCFCE7", "mustReference": ["Summary!B3"] },
+        { "searchKind": "formula", "query": "Data!D2:D4", "mustReference": ["Summary!B3"] },
+        { "searchKind": "error", "error": "#REF", "mustReference": ["Summary!B4"] },
+        { "searchKind": "table", "query": "SalesTable", "minimumMatches": 1 },
+        { "searchKind": "merge", "query": "Summary!A1:D1", "mustReference": ["Summary!A1:D1"] },
+        { "searchKind": "comment", "query": "artifact_search", "mustReference": ["Data!A2"] },
+        { "searchKind": "definedName", "query": "TotalRevenue", "minimumMatches": 1 },
+        { "searchKind": "hidden", "query": "Beta", "mustReference": ["Data!A3"] },
+        { "searchKind": "image", "minimumMatches": 1 },
+        { "searchKind": "imageAnchor", "query": "Summary", "minimumMatches": 1 }
+      ],
+      "queries": [
+        {
+          "table": "SalesTable",
+          "aggregate": { "op": "max", "column": "Revenue" },
+          "sortBy": "Revenue",
+          "top": 1,
+          "aggregateValue": 45,
+          "mustReference": ["Data!A3:D3"]
+        },
+        {
+          "table": "SalesTable",
+          "groupBy": "Item",
+          "aggregate": { "op": "sum", "column": "Revenue" },
+          "topGroups": 3,
+          "mustGroups": [{ "key": "Beta", "value": 45 }]
+        }
+      ]
+    },
+    "checks": ["xlsx index cache", "artifact search", "artifact query", "compact observation"]
+  },
+  {
+    "id": "pdf_text_layer_search",
+    "artifactKind": "pdf",
+    "format": "pdf",
+    "input": "evals/artifact-tools/fixtures/pdf/text-layer-report.pdf",
+    "goal": "Search text-layer spans and cite page evidence without OCR.",
+    "requiredCapabilities": ["load", "inspect", "search", "render"],
+    "expectedEvidence": ["page number", "text span", "coordinates"],
+    "expected": {
+      "pageCount": 1,
+      "mustContainText": "deterministic text evidence",
+      "mustHaveTextLayer": true,
+      "minimumTextSpanCount": 3,
+      "searches": [
+        { "searchKind": "text", "query": "deterministic text evidence", "mustReference": ["page:1"] },
+        { "searchKind": "span", "query": "deterministic", "minimumMatches": 1 }
+      ]
+    },
+    "checks": ["text match", "page render nonblank"]
+  },
+  {
+    "id": "docx_render_layout_gate",
+    "artifactKind": "document",
+    "format": "docx",
+    "input": "evals/artifact-tools/fixtures/docx/report-with-tables.docx",
+    "goal": "Render DOCX pages and detect layout failures before delivery.",
+    "requiredCapabilities": ["load", "inspect", "render", "validate"],
+    "expectedEvidence": ["page images", "layout diagnostics"],
+    "expected": {
+      "mustContainText": "END-DOCX-FIXTURE",
+      "minimumParagraphCount": 4,
+      "minimumTableCount": 1,
+      "minimumImageCount": 1,
+      "minimumCommentCount": 1,
+      "searches": [
+        { "searchKind": "paragraph", "query": "END-DOCX-FIXTURE", "minimumMatches": 1 },
+        { "searchKind": "table", "query": "Metric", "minimumMatches": 1 },
+        { "searchKind": "comment", "query": "DOCX-COMMENT-ASSET", "minimumMatches": 1 },
+        { "searchKind": "image", "minimumMatches": 1 }
+      ]
+    },
+    "checks": ["render nonblank", "no fatal diagnostics"]
+  },
+  {
+    "id": "pptx_render_contact_sheet",
+    "artifactKind": "presentation",
+    "format": "pptx",
+    "input": "evals/artifact-tools/fixtures/pptx/template-edit.pptx",
+    "goal": "Render slide previews and verify slide inventory.",
+    "requiredCapabilities": ["load", "inspect", "render", "validate"],
+    "expectedEvidence": ["slide count", "rendered slides"],
+    "expected": {
+      "slideCount": 2,
+      "mustContainText": "Adapter Roundtrip",
+      "minimumImageCount": 1,
+      "minimumTableCount": 1,
+      "searches": [
+        { "searchKind": "slide", "query": "Adapter Roundtrip", "mustReference": ["slide:2"] },
+        { "searchKind": "text", "query": "Slide inventory fixture", "minimumMatches": 1 },
+        { "searchKind": "image", "minimumMatches": 1 },
+        { "searchKind": "table", "minimumMatches": 1 }
+      ]
+    },
+    "checks": ["render nonblank", "slide inventory"]
+  },
+  {
+    "id": "image_metadata_nonblank",
+    "artifactKind": "image",
+    "format": "png",
+    "input": "evals/artifact-tools/fixtures/image/nonblank-swatch.png",
+    "goal": "Inspect image metadata, dominant colors, nonblank visual statistics, and render a thumbnail preview without OCR or vision models.",
+    "requiredCapabilities": ["load", "inspect", "index", "search", "render", "validate"],
+    "expectedEvidence": ["dimensions", "dominant colors", "nonblank visual check"],
+    "expected": {
+      "width": 320,
+      "height": 180,
+      "nonblank": true,
+      "mustContainColor": "10B981",
+      "searches": [
+        { "searchKind": "metadata", "query": "320x180", "mustReference": ["image:metadata"] },
+        { "searchKind": "color", "fillRgb": "10B981", "minimumMatches": 1 },
+        { "searchKind": "visual", "query": "nonBlankRatio", "minimumMatches": 1 }
+      ]
+    },
+    "checks": ["metadata", "dominant color search", "render nonblank"]
+  },
+  {
+    "id": "csv_schema_inference",
+    "artifactKind": "table",
+    "format": "csv",
+    "input": "evals/artifact-tools/fixtures/csv/dirty-data.csv",
+    "goal": "Infer schema, detect malformed rows, and produce table diagnostics.",
+    "requiredCapabilities": ["load", "inspect", "validate"],
+    "expectedEvidence": ["headers", "types", "malformed rows"],
+    "expected": {
+      "headers": ["id", "name", "score", "joined", "active"],
+      "malformedRowNumbers": [5, 6]
+    },
+    "checks": ["schema inference", "diagnostics"]
+  }
+]

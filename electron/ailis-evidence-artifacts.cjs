@@ -20,7 +20,8 @@ const EVIDENCE_ARTIFACT_TYPES = Object.freeze({
     mail_summary: 'MailSummaryEvidence',
     snapshot: 'VisionSnapshotEvidence',
     vision_observation: 'VisionObservationEvidence',
-    source_question: 'QuestionEvidence'
+    source_question: 'QuestionEvidence',
+    computation_result: 'ComputationEvidence'
 });
 
 function normalizeText(value, fallback = '') {
@@ -126,28 +127,43 @@ function looksLikePdfOrBinaryText(text = '') {
 }
 
 function extractUrls(text = '') {
-    return [...String(text || '').matchAll(/https?:\/\/[^\s"')\]]+/gi)]
-        .map((match) => match[0])
+    return [...String(text || '').matchAll(/https?:\/\/[^\s"'<>\)\]]+/gi)]
+        .map((match) => match[0].replace(/[.,;:!?]+$/g, ''))
         .filter(Boolean)
         .slice(0, 8);
 }
 
-function inferPath(args = {}, text = '') {
+function inferExplicitPath(args = {}) {
     const candidates = [
         args.path,
         args.file,
         args.filePath,
-        args.cwd,
-        args.uri,
-        args.resource,
-        args.resourceUri
+        args.cwd
     ];
-    const direct = candidates.map((entry) => normalizeText(entry)).find(Boolean);
+    const direct = candidates
+        .map((entry) => normalizeText(entry))
+        .find((entry) => entry && !/^https?:\/\//i.test(entry));
+    return direct || '';
+}
+
+function inferPath(args = {}, text = '') {
+    const direct = inferExplicitPath(args);
     if (direct) {
         return direct;
     }
-    const match = String(text || '').match(/(?:[A-Za-z]:\\|\.{0,2}\/|[\w.-]+\/)[^\s"']+/);
-    return normalizeText(match?.[0] || '');
+    const sanitized = String(text || '')
+        .replace(/https?:\/\/[^\s"'<>\)\]]+/gi, ' ')
+        .replace(/<[^>]*>/g, ' ');
+    const windowsPath = sanitized.match(/(?:^|[\s("'=])([A-Za-z]:\\[^\r\n"'<>|]+)/m);
+    if (windowsPath) {
+        return normalizeText(windowsPath[1]);
+    }
+    const relativePath = sanitized.match(/(?:^|[\s(])((?:\.{1,2}[\\/]|[\\/](?![\\/]))[A-Za-z0-9._-]+(?:[\\/][^\s"'<>|]+)*)/m);
+    if (relativePath) {
+        return normalizeText(relativePath[1]);
+    }
+    const fileLikePath = sanitized.match(/(?:^|[\s(])([A-Za-z0-9._-]+(?:[\\/][A-Za-z0-9._-]+)+\.[A-Za-z0-9]{1,12})(?=$|[\s),;:])/m);
+    return normalizeText(fileLikePath?.[1] || '');
 }
 
 function inferSourceKind(args = {}, text = '') {
@@ -239,6 +255,7 @@ function payloadForArtifact(type, observation = {}) {
     const details = getObservationDetails(observation);
     const urls = extractUrls(text);
     const path = inferPath(args, text);
+    const explicitPath = inferExplicitPath(args);
     const artifactPayload = artifactEvidencePayload(details);
     const base = {
         contentChars: text.length,
@@ -257,11 +274,12 @@ function payloadForArtifact(type, observation = {}) {
         };
     }
     if (type === 'ResearchSourceEvidence') {
+        const url = urls[0] || normalizeText(args.url || args.href);
         return {
             ...base,
             sourceKind: inferSourceKind(args, text),
-            url: urls[0] || normalizeText(args.url || args.href),
-            path,
+            url,
+            path: url ? explicitPath : path,
             uri: normalizeText(args.uri || args.resource || args.resourceUri),
             title: normalizeText(observation.title)
         };
@@ -270,11 +288,12 @@ function payloadForArtifact(type, observation = {}) {
         const details = getObservationDetails(observation);
         const status = normalizeText(details.status || details.errorCode || details.error_code).toLowerCase();
         const contentType = normalizeText(details.contentType || details.content_type).toLowerCase();
+        const url = urls[0] || normalizeText(args.url || args.href);
         return {
             ...base,
             sourceKind: inferSourceKind(args, text),
-            path,
-            url: urls[0] || normalizeText(args.url || args.href),
+            path: url ? explicitPath : path,
+            url,
             excerptCount: text ? Math.max(1, Math.min(12, Math.ceil(text.length / 700))) : 0,
             contentType,
             unsupportedContentType: status === 'unsupported_content_type',
@@ -362,6 +381,26 @@ function payloadForArtifact(type, observation = {}) {
             path,
             verificationKind: normalizeText(observation.action, 'check'),
             passed: observation.ok === true && !/failed|error|失败|报错/i.test(text)
+        };
+    }
+    if (type === 'ComputationEvidence') {
+        const computation =
+            details.computation ||
+            details.observation?.computation ||
+            details.query?.observation?.computation ||
+            details.modelView?.observation?.computation ||
+            {};
+        return {
+            ...base,
+            deterministic: computation.deterministic !== false,
+            operation: normalizeText(computation.operation || details.action || observation.action),
+            result: computation.value ?? computation.result ?? details.aggregateResult?.value ?? details.query?.aggregateResult?.value,
+            rowCount: Number(computation.rowCount ?? details.aggregateResult?.rowCount ?? details.query?.aggregateResult?.rowCount ?? 0),
+            numericCount: Number(computation.numericCount ?? details.aggregateResult?.numericCount ?? details.query?.aggregateResult?.numericCount ?? 0),
+            filter: cloneJson(computation.filter || details.query?.filter || null),
+            groupBy: normalizeText(computation.groupBy || details.query?.groupBy),
+            sortBy: normalizeText(computation.sortBy),
+            source: cloneJson(computation.source || null)
         };
     }
     if (type === 'MailboxQueryEvidence' || type === 'MailSummaryEvidence') {
@@ -454,6 +493,9 @@ function validateEvidenceArtifact(artifact = {}) {
     if (artifact.type === 'VisionSnapshotEvidence' && !payload.snapshotId && !payload.imagePath && !payload.target) {
         errors.push('VisionSnapshotEvidence requires snapshot id, image path, or target');
     }
+    if (artifact.type === 'ComputationEvidence' && typeof payload.result === 'undefined') {
+        errors.push('ComputationEvidence requires a deterministic result');
+    }
     return {
         ok: errors.length === 0,
         errors
@@ -526,6 +568,12 @@ function getEvidenceArtifactPromptObject(artifact = {}) {
             reasoningReady: artifact.payload?.reasoningReady,
             pinnedEvidenceId: artifact.payload?.pinnedEvidenceId,
             coveredByEvidence: artifact.payload?.coveredByEvidence,
+            deterministic: artifact.payload?.deterministic,
+            computationOperation: artifact.payload?.operation,
+            computationResult: artifact.payload?.result,
+            computationRowCount: artifact.payload?.rowCount,
+            computationNumericCount: artifact.payload?.numericCount,
+            computationSource: artifact.payload?.source,
             contentChars: artifact.payload?.contentChars
         }
     };

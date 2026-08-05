@@ -43,6 +43,9 @@ const {
     AILISMcpManager
 } = require('../electron/ailis-mcp-session.cjs');
 const {
+    AILISToolRuntimeRegistry
+} = require('../electron/ailis-tool-runtime.cjs');
+const {
     webFetch
 } = require('../scripts/mcp-ailis-research-server.cjs');
 
@@ -56,12 +59,14 @@ async function startLocalHttpServer(handler) {
     };
 }
 
-test('AILIS tool specs keep Codex-like shape without Codex naming', () => {
+test('AILIS tool specs keep Responses-compatible shape without leaking old layer names', () => {
     assert.ok(AILIS_RUNTIME_TOOL_DEFINITIONS.some((tool) => tool.id === 'tool_search'));
     assert.ok(AILIS_RUNTIME_TOOL_DEFINITIONS.some((tool) => tool.id === 'artifact_compute'));
     assert.ok(AILIS_RUNTIME_TOOL_DEFINITIONS.some((tool) => tool.id === 'output_read'));
     assert.ok(AILIS_RUNTIME_TOOL_DEFINITIONS.some((tool) => tool.id === 'output_tail'));
     assert.ok(AILIS_RUNTIME_TOOL_DEFINITIONS.some((tool) => tool.id === 'output_search'));
+    assert.equal(AILIS_RUNTIME_TOOL_DEFINITIONS.find((tool) => tool.id === 'artifact_query').exposure, AILIS_TOOL_EXPOSURE.DEFERRED);
+    assert.equal(AILIS_RUNTIME_TOOL_DEFINITIONS.find((tool) => tool.id === 'artifact_tools').exposure, AILIS_TOOL_EXPOSURE.DEFERRED);
     assert.equal(AILIS_RUNTIME_TOOL_DEFINITIONS.find((tool) => tool.id === 'output_read').exposure, AILIS_TOOL_EXPOSURE.DEFERRED);
     assert.equal(AILIS_RUNTIME_TOOL_DEFINITIONS.find((tool) => tool.id === 'output_tail').exposure, AILIS_TOOL_EXPOSURE.DEFERRED);
     assert.equal(AILIS_RUNTIME_TOOL_DEFINITIONS.find((tool) => tool.id === 'output_search').exposure, AILIS_TOOL_EXPOSURE.DEFERRED);
@@ -70,23 +75,27 @@ test('AILIS tool specs keep Codex-like shape without Codex naming', () => {
     assert.equal(toolSearch.route, 'ailis-runtime');
     assert.equal(toolSearch.exposure, AILIS_TOOL_EXPOSURE.DIRECT);
     assert.match(toolSearch.description, /deferred .*tool metadata/i);
+    assert.match(toolSearch.description, /cross-record ordering/);
 
     const artifactCompute = AILIS_RUNTIME_TOOL_DEFINITIONS.find((tool) => tool.id === 'artifact_compute');
     assert.equal(artifactCompute.route, 'ailis-runtime');
-    assert.equal(artifactCompute.exposure, AILIS_TOOL_EXPOSURE.DEFERRED);
+    assert.equal(artifactCompute.exposure, AILIS_TOOL_EXPOSURE.HIDDEN);
 
     const spec = createAilisFunctionToolSpec(toolSearch);
     assert.equal(spec.type, 'function');
     assert.equal(spec.name, 'tool_search');
     assert.match(spec.description, /Tool discovery/i);
+    assert.equal(spec.strict, true);
     assert.equal(spec.parameters.type, 'object');
     assert.deepEqual(spec.parameters.required, ['query']);
     assert.equal(spec.parameters.additionalProperties, false);
+    assert.deepEqual(Object.keys(spec.parameters.properties), ['query', 'limit']);
     assert.ok(spec.output_schema.properties.content);
     assert.equal(Object.prototype.hasOwnProperty.call(spec, 'metadata'), false);
 
     const mcpBridge = AILIS_RUNTIME_TOOL_DEFINITIONS.find((tool) => tool.id === 'mcp_bridge');
     const mcpBridgeSpec = createAilisFunctionToolSpec(mcpBridge);
+    assert.equal(mcpBridge.exposure, AILIS_TOOL_EXPOSURE.DEFERRED);
     assert.equal(mcpBridgeSpec.defer_loading, true);
     assert.ok(mcpBridgeSpec.parameters.properties.action.enum.includes('health_check'));
     assert.ok(mcpBridgeSpec.parameters.properties.action.enum.includes('search_tools'));
@@ -237,6 +246,62 @@ test('AILIS MCP adapter parses direct MCP ids and creates stable specs', () => {
     assert.deepEqual(describeImageSpec.input_schema.required, ['path']);
     assert.equal(describeImageSpec.input_schema.properties.path.minLength, 1);
 
+    for (const tool of ['read_document', 'read_presentation', 'read_spreadsheet', 'transcribe_audio']) {
+        const localReaderSpec = createAilisDirectMcpToolSpec({
+            server: 'ailis_research',
+            tool,
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    path: { type: 'string' },
+                    file: { type: 'string' },
+                    timeoutMs: { type: 'number' }
+                }
+            }
+        });
+        assert.equal(localReaderSpec.callable, true, `${tool} should be callable`);
+        assert.deepEqual(localReaderSpec.input_schema.required, ['path']);
+        assert.equal(localReaderSpec.input_schema.additionalProperties, false);
+    }
+
+    const pdfExtractSpec = createAilisDirectMcpToolSpec({
+        server: 'ailis_research',
+        tool: 'pdf_extract_text',
+        inputSchema: {
+            type: 'object',
+            anyOf: [
+                { required: ['url'] },
+                { required: ['path'] }
+            ],
+            properties: {
+                url: { type: 'string' },
+                path: { type: 'string' },
+                maxPages: { type: 'number' }
+            },
+            additionalProperties: false
+        }
+    });
+    assert.equal(pdfExtractSpec.callable, true);
+    assert.equal(pdfExtractSpec.modelFacing, true);
+    assert.deepEqual(pdfExtractSpec.input_schema.anyOf, [
+        { required: ['url'] },
+        { required: ['path'] }
+    ]);
+
+    const weakSpec = createAilisDirectMcpToolSpec({
+        server: 'ailis_research',
+        tool: 'optional_lookup',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                query: { type: 'string' }
+            }
+        }
+    });
+    assert.equal(weakSpec.callable, false);
+    assert.equal(weakSpec.modelFacing, false);
+    assert.equal(weakSpec.schema_status, 'weak_schema');
+
     const { toolArgs, meta } = normalizeAilisMcpCallArgs({
         text: 'hello',
         _meta: { reason: 'test' }
@@ -260,6 +325,38 @@ test('AILIS MCP adapter parses direct MCP ids and creates stable specs', () => {
     }, { tool: 'describe_image' });
     assert.equal(normalizedImageCall.toolArgs.path, 'C:\\tmp\\screen-2.png');
     assert.deepEqual(normalizedImageCall.meta, { reason: 'vision retry' });
+
+    const spreadsheetAliasCall = normalizeAilisMcpCallArgs({
+        filePath: 'C:\\tmp\\sales.xlsx'
+    }, { tool: 'read_spreadsheet' });
+    assert.equal(spreadsheetAliasCall.toolArgs.path, 'C:\\tmp\\sales.xlsx');
+});
+
+test('direct MCP tool request timeouts do not shorten the MCP transport deadline', async () => {
+    let bridgeCall = null;
+    const registry = new AILISToolRuntimeRegistry({
+        runtime: {
+            executeMcpBridge: async (args, context) => {
+                bridgeCall = { args, context };
+                return {
+                    content: [{ type: 'text', text: 'completed' }],
+                    details: { status: 'completed' }
+                };
+            }
+        }
+    });
+
+    await registry.dispatch('mcp__ailis_research__web_archive_lookup', {
+        url: 'https://example.test/search?',
+        mode: 'search',
+        timeoutMs: 30000
+    }, {
+        timeoutMs: 900000
+    });
+
+    assert.equal(bridgeCall.args.timeoutMs, undefined);
+    assert.equal(bridgeCall.args.args.timeoutMs, 30000);
+    assert.equal(bridgeCall.context.timeoutMs, 900000);
 });
 
 function mcpTool(name, description = '') {
@@ -282,7 +379,8 @@ test('AILIS tool routing prefers artifact-specific MCP tools over broad web_sear
         mcpTool('read_document', 'Read Word DOCX documents with paragraphs and tables.'),
         mcpTool('read_presentation', 'Read PowerPoint PPTX slides.'),
         mcpTool('youtube_video_search', 'Search YouTube videos by title or channel with yt-dlp.'),
-        mcpTool('youtube_transcript', 'Read YouTube video transcripts.')
+        mcpTool('youtube_transcript', 'Read YouTube video transcripts.'),
+        mcpTool('video_extract_frames', 'Sample timestamped video frames and analyze visual co-occurrence.')
     ];
 
     assert.equal(
@@ -305,7 +403,12 @@ test('AILIS tool routing prefers artifact-specific MCP tools over broad web_sear
         rankToolSearchResults(candidates, 'https://www.youtube.com/watch?v=L1vXCYZAYYM transcript evidence', 2)[0].tool,
         'youtube_transcript'
     );
-    assert.match(buildToolRoutingAdvice('attached docx Word document table', candidates), /read_document/);
+    assert.equal(
+        rankToolSearchResults(candidates, 'https://www.youtube.com/watch?v=L1vXCYZAYYM maximum species visible on screen at once frame evidence', 2)[0].tool,
+        'video_extract_frames'
+    );
+    assert.match(buildToolRoutingAdvice('attached docx Word document table', candidates), /Codex-style/);
+    assert.match(buildToolRoutingAdvice('attached docx Word document table', candidates), /strict direct MCP/);
 });
 
 test('AILIS tool routing prefers web_research for public current-information evidence tasks', () => {
@@ -351,6 +454,13 @@ test('AILIS tool routing can rank output store tools when an experimental surfac
     assert.equal(ranked[0].id, 'output_read');
     assert.ok(ranked.some((tool) => tool.id === 'output_tail'));
     assert.ok(ranked.some((tool) => tool.id === 'output_search'));
+
+    const unrelated = rankToolSearchResults(
+        outputTools,
+        'public research API metadata search by language and year',
+        3
+    );
+    assert.equal(unrelated.length, 0);
 });
 
 test('AILIS MCP manager search uses tool routing before returning specs', async () => {
@@ -360,7 +470,8 @@ test('AILIS MCP manager search uses tool routing before returning specs', async 
         mcpTool('web_fetch', 'Fetch a known HTML page URL.'),
         mcpTool('read_document', 'Read Word DOCX documents with paragraphs and tables.'),
         mcpTool('youtube_video_search', 'Search YouTube videos by title or channel with yt-dlp.'),
-        mcpTool('youtube_transcript', 'Read YouTube video transcripts.')
+        mcpTool('youtube_transcript', 'Read YouTube video transcripts.'),
+        mcpTool('video_extract_frames', 'Sample timestamped video frames and analyze visual co-occurrence.')
     ];
 
     const documentSpecs = await manager.searchToolSpecs({
@@ -381,6 +492,12 @@ test('AILIS MCP manager search uses tool routing before returning specs', async 
     });
     assert.equal(knownUrlSpecs[0].tool, 'youtube_transcript');
 
+    const visualVideoSpecs = await manager.searchToolSpecs({
+        query: 'https://www.youtube.com/watch?v=L1vXCYZAYYM maximum species visible on screen at once frame evidence',
+        limit: 1
+    });
+    assert.equal(visualVideoSpecs[0].tool, 'video_extract_frames');
+
     const publicWebSpecs = await manager.searchToolSpecs({
         query: 'Kaggle AI攻防比赛 2026 最新 competition 攻略',
         limit: 2
@@ -389,7 +506,7 @@ test('AILIS MCP manager search uses tool routing before returning specs', async 
     assert.ok(publicWebSpecs.some((tool) => tool.tool === 'web_fetch'));
 });
 
-test('AILIS Gateway exposes a small Codex-style core surface by default', async () => {
+test('AILIS Gateway exposes a small Responses-compatible core surface by default', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-tool-surface-'));
     const gateway = new AILISGateway({
         port: 0,
@@ -398,55 +515,225 @@ test('AILIS Gateway exposes a small Codex-style core surface by default', async 
         auditDir: path.join(workspaceRoot, '.audit')
     });
 
-    const directNames = gateway.gatewayToolRuntimeRegistry.modelVisibleSpecs().map((tool) => tool.name);
-    for (const expected of ['tool_search', 'update_plan', 'computer', 'read', 'write', 'exec', 'apply_patch', 'request_permissions']) {
+    const directSpecs = gateway.gatewayToolRuntimeRegistry.modelVisibleSpecs();
+    const directNames = directSpecs.map((tool) => tool.name);
+    assert.deepEqual(directNames.sort(), [
+        'apply_patch',
+        'exec',
+        'handoff_task',
+        'request_permissions',
+        'tool_search',
+        'update_plan',
+        'web_run',
+        'write'
+    ].sort());
+    for (const expected of ['web_run', 'tool_search', 'update_plan', 'write', 'exec', 'apply_patch', 'request_permissions', 'handoff_task']) {
         assert.ok(directNames.includes(expected), `${expected} should be a core direct tool`);
     }
-    for (const deferred of ['read_xlsx_workbook', 'artifact_query', 'artifact_compute', 'github_pages', 'mcp_bridge', 'subagents']) {
+    for (const deferred of ['read', 'artifact_tools', 'artifact_query', 'github_pages', 'mcp_bridge', 'computer']) {
         assert.equal(directNames.includes(deferred), false, `${deferred} should be loaded through tool_search`);
     }
+    assert.ok(
+        directSpecs.filter((tool) => tool.name !== 'web_run').every((tool) => tool.strict === true),
+        'local core direct tools should use strict schemas'
+    );
+    assert.notEqual(directSpecs.find((tool) => tool.name === 'web_run').strict, true);
+    assert.deepEqual(directSpecs.find((tool) => tool.name === 'tool_search').parameters.required, ['query']);
+    assert.deepEqual(directSpecs.find((tool) => tool.name === 'exec').parameters.required, ['command']);
+    const deferredRead = gateway.gatewayToolRuntimeRegistry.definition('read');
+    assert.equal(deferredRead.exposure, 'deferred');
+    assert.match(deferredRead.description, /local filesystem/i);
+    assert.match(deferredRead.spec.parameters.properties.path.description, /not accepted|HTTP/i);
+    assert.equal(directNames.includes('artifact_compute'), false, 'artifact_compute should stay hidden from model-facing tool surfaces');
 
     const initialSpecs = buildAgentDirectToolSpecs(gateway, {
         requestContext: { nativeDirectTools: true }
     });
     assert.equal(initialSpecs.some((tool) => tool.name === 'tool_search'), true);
+    assert.equal(initialSpecs.some((tool) => tool.name === 'subagents'), false);
     assert.equal(initialSpecs.some((tool) => tool.name === 'read_xlsx_workbook'), false);
 
-    const searchResult = await gateway.executeGatewayToolSearch({
-        query: 'xlsx spreadsheet workbook',
-        includeMcp: false,
-        includeExternal: false,
-        limit: 5
-    });
-    assert.ok(searchResult.structuredContent.tools.some((tool) => tool.id === 'read_xlsx_workbook'));
+    assert.equal(gateway.gatewayToolRuntimeRegistry.has('subagents'), false);
+});
 
-    const nextSpecs = buildAgentDirectToolSpecs(gateway, {
-        requestContext: { nativeDirectTools: true },
-        stepResults: [{
-            tool: 'tool_search',
-            response: {
-                ok: true,
-                result: searchResult
-            }
-        }]
+test('AILIS rebuilds local runtime direct tool specs from registry after compressed tool_search observations', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-compressed-tool-schema-'));
+    const gateway = new AILISGateway({
+        port: 0,
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit')
     });
-    assert.equal(nextSpecs.some((tool) => tool.name === 'read_xlsx_workbook'), true);
-    assert.equal(nextSpecs.some((tool) => tool.name === 'tool_search'), false);
+    try {
+        const compressedArtifactSearchResult = {
+            content: [{ type: 'text', text: 'compressed tool_search observation' }],
+            details: {
+                status: 'completed',
+                query: 'xlsx cell fill color',
+                tools: []
+            },
+            structuredContent: {
+                status: 'completed',
+                query: 'xlsx cell fill color',
+                tools: [{
+                    id: 'artifact_tools',
+                    type: 'gateway_or_runtime_tool',
+                    exposure: 'deferred',
+                    spec: {
+                        type: 'function',
+                        name: 'artifact_tools',
+                        description: 'Compressed model-visible copy of the tool schema.',
+                        parameters: {
+                            type: 'object',
+                            additionalProperties: false,
+                            required: ['action'],
+                            properties: {
+                                action: { type: 'string', enum: ['open_session', 'inspect'] },
+                                path: { type: 'string' },
+                                sheet: { type: 'string' },
+                                fill: { type: 'string' },
+                                __omitted_keys: 77
+                            }
+                        }
+                    }
+                }]
+            }
+        };
 
-    const repeatedSearchSpecs = buildAgentDirectToolSpecs(gateway, {
-        requestContext: {
-            nativeDirectTools: true,
-            allowRepeatedToolSearchDirectTool: true
-        },
-        stepResults: [{
-            tool: 'tool_search',
-            response: {
-                ok: true,
-                result: searchResult
+        const nextSpecs = buildAgentDirectToolSpecs(gateway, {
+            requestContext: { nativeDirectTools: true },
+            stepResults: [{
+                tool: 'tool_search',
+                response: {
+                    ok: true,
+                    result: compressedArtifactSearchResult
+                }
+            }]
+        });
+        const artifactSpec = nextSpecs.find((tool) => tool.name === 'artifact_tools');
+        assert.ok(artifactSpec, 'artifact_tools should be exposed after tool_search');
+        assert.ok(artifactSpec.parameters.properties.include, 'registry schema should restore include');
+        assert.ok(artifactSpec.parameters.properties.sessionId, 'registry schema should restore sessionId');
+        assert.ok(artifactSpec.parameters.properties.range, 'registry schema should restore range');
+        assert.equal(artifactSpec.parameters.properties.__omitted_keys, undefined);
+
+        const valid = validateNativeDirectToolCall({
+            name: 'artifact_tools',
+            arguments: {
+                action: 'inspect',
+                sessionId: 'arts_test',
+                range: 'A1:B2',
+                include: ['style', 'formula']
             }
-        }]
+        }, nextSpecs);
+        assert.equal(valid.ok, true, valid.errors.join('; '));
+    } finally {
+        await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
+});
+
+test('AILIS keeps raw tool_search specs hidden from model JSON but available for dynamic direct tools', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-raw-tool-schema-cache-'));
+    const gateway = new AILISGateway({
+        port: 0,
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit')
     });
-    assert.equal(repeatedSearchSpecs.some((tool) => tool.name === 'tool_search'), true);
+    try {
+        const rawTools = [{
+            id: 'external__mock__lookup',
+            type: 'external_tool',
+            callable: true,
+            spec: {
+                type: 'function',
+                name: 'external__mock__lookup',
+                description: 'Lookup with a larger schema than the compact observation copy.',
+                parameters: {
+                    type: 'object',
+                    additionalProperties: false,
+                    required: ['query', 'include'],
+                    properties: {
+                        query: { type: 'string' },
+                        include: { type: 'array', items: { type: 'string' } },
+                        region: { type: 'string' }
+                    }
+                }
+            }
+        }];
+        const compactedSearchResult = {
+            content: [{ type: 'text', text: 'compressed external tool_search observation' }],
+            structuredContent: {
+                status: 'completed',
+                query: 'external lookup',
+                tools: [{
+                    id: 'external__mock__lookup',
+                    type: 'external_tool',
+                    callable: true,
+                    spec: {
+                        type: 'function',
+                        name: 'external__mock__lookup',
+                        parameters: {
+                            type: 'object',
+                            additionalProperties: false,
+                            properties: {
+                                query: { type: 'string' },
+                                __omitted_keys: 2
+                            }
+                        }
+                    }
+                }]
+            }
+        };
+        Object.defineProperty(compactedSearchResult, '__ailisRawToolSearchTools', {
+            value: rawTools,
+            enumerable: false,
+            configurable: true
+        });
+
+        assert.equal(JSON.stringify(compactedSearchResult).includes('__ailisRawToolSearchTools'), false);
+
+        const nextSpecs = buildAgentDirectToolSpecs(gateway, {
+            requestContext: { nativeDirectTools: true },
+            stepResults: [{
+                tool: 'tool_search',
+                response: {
+                    ok: true,
+                    result: compactedSearchResult
+                }
+            }]
+        });
+        const externalSpec = nextSpecs.find((tool) => tool.name === 'external__mock__lookup');
+        assert.ok(externalSpec, 'external tool should be exposed from hidden raw tool_search specs');
+        assert.ok(externalSpec.parameters.properties.include, 'hidden raw schema should restore include');
+        assert.equal(externalSpec.parameters.properties.__omitted_keys, undefined);
+
+        const valid = validateNativeDirectToolCall({
+            name: 'external__mock__lookup',
+            arguments: {
+                query: 'alpha',
+                include: ['metadata']
+            }
+        }, nextSpecs);
+        assert.equal(valid.ok, true, valid.errors.join('; '));
+
+        const gatewaySearch = await gateway.callTool({
+            tool: 'tool_search',
+            args: {
+                query: 'subagent task',
+                limit: 5
+            },
+            context: {
+                workspace: workspaceRoot,
+                approved: true
+            }
+        });
+        assert.ok(Array.isArray(gatewaySearch.result.__ailisRawToolSearchTools));
+        assert.equal(Object.keys(gatewaySearch.result).includes('__ailisRawToolSearchTools'), false);
+    } finally {
+        await gateway.stop();
+        await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
 });
 
 test('AILIS suppresses repeated update_plan direct-tool loops without hiding other core tools', async () => {
@@ -521,12 +808,53 @@ test('AILIS loop guard blocks repeated web_fetch after reasoning-ready evidence'
 
     const guard = validateAgentToolLoopGuard({
         tool: 'mcp__ailis_research__web_fetch',
-        args: { url: 'https://wiki.biligame.com/zzz/%E8%8E%B1%E7%89%B9#section' }
+        args: { url: 'https://wiki.biligame.com/zzz/%E8%8E%B1%E7%89%B9/' }
     }, [previousFetch]);
 
     assert.equal(guard.ok, false);
     assert.equal(guard.status, 'tool_loop_guard');
     assert.equal(guard.details.reason, 'repeated_ready_evidence');
+});
+
+test('AILIS loop guard allows web_fetch source viewport navigation on the same URL', () => {
+    const previousFetch = {
+        tool: 'mcp__ailis_research__web_fetch',
+        args: { url: 'https://en.wikipedia.org/wiki/Mercedes_Sosa', lineno: 120, maxLines: 80 },
+        response: {
+            ok: true,
+            status: 'completed',
+            result: {
+                details: {
+                    evidenceQuality: 'sufficient_evidence',
+                    isEvidence: true,
+                    complete: true,
+                    truncated: false,
+                    reasoningReady: true,
+                    observationContract: {
+                        evidence_quality: 'sufficient_evidence',
+                        reasoning_ready: true
+                    }
+                }
+            }
+        }
+    };
+
+    const nextLine = validateAgentToolLoopGuard({
+        tool: 'mcp__ailis_research__web_fetch',
+        args: { url: 'https://en.wikipedia.org/wiki/Mercedes_Sosa', lineno: 200, maxLines: 80 }
+    }, [previousFetch]);
+    const nextQuery = validateAgentToolLoopGuard({
+        tool: 'mcp__ailis_research__web_fetch',
+        args: { url: 'https://en.wikipedia.org/wiki/Mercedes_Sosa', query: '2000 studio album' }
+    }, [previousFetch]);
+    const nextHash = validateAgentToolLoopGuard({
+        tool: 'mcp__ailis_research__web_fetch',
+        args: { url: 'https://en.wikipedia.org/wiki/Mercedes_Sosa#Discography' }
+    }, [previousFetch]);
+
+    assert.equal(nextLine.ok, true);
+    assert.equal(nextQuery.ok, true);
+    assert.equal(nextHash.ok, true);
 });
 
 test('AILIS loop guard blocks a third identical web_search query', () => {
@@ -568,6 +896,20 @@ test('AILIS tool_search returns strict direct MCP specs and native preflight blo
     gateway.runtime.mcpManager.searchToolSpecs = async () => [
         createAilisDirectMcpToolSpec({
             server: 'ailis_research',
+            tool: 'web_research',
+            description: 'End-to-end public web research using search and fetch together.',
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    query: { type: 'string' },
+                    maxPages: { type: 'number' }
+                },
+                required: ['query'],
+                additionalProperties: false
+            }
+        }),
+        createAilisDirectMcpToolSpec({
+            server: 'ailis_research',
             tool: 'web_search',
             description: 'Fallback broad public web search.',
             inputSchema: {
@@ -599,6 +941,17 @@ test('AILIS tool_search returns strict direct MCP specs and native preflight blo
                     path: { type: 'string' }
                 }
             }
+        }),
+        createAilisDirectMcpToolSpec({
+            server: 'ailis_research',
+            tool: 'weak_lookup',
+            description: 'Weak schema tool should not be surfaced.',
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    query: { type: 'string' }
+                }
+            }
         })
     ];
 
@@ -610,20 +963,34 @@ test('AILIS tool_search returns strict direct MCP specs and native preflight blo
     const webSearch = searchResult.structuredContent.tools.find((tool) => tool.id === 'mcp__ailis_research__web_search');
     const webFetch = searchResult.structuredContent.tools.find((tool) => tool.id === 'mcp__ailis_research__web_fetch');
     const describeImage = searchResult.structuredContent.tools.find((tool) => tool.id === 'mcp__ailis_research__describe_image');
-    assert.deepEqual(webSearch.spec.parameters.required, ['query']);
-    assert.equal(webSearch.spec.parameters.additionalProperties, false);
-    assert.deepEqual(webFetch.spec.parameters.required, ['url']);
-    assert.deepEqual(describeImage.spec.parameters.required, ['path']);
+    assert.equal(searchResult.structuredContent.tools.some((tool) => tool.id === 'mcp__ailis_research__weak_lookup'), false);
+    assert.deepEqual(webSearch.input_schema.required, ['query']);
+    assert.equal(webSearch.input_schema.additionalProperties, false);
+    assert.deepEqual(webFetch.input_schema.required, ['url']);
+    assert.deepEqual(describeImage.input_schema.required, ['path']);
+    assert.doesNotMatch(JSON.stringify(searchResult), /"spec"\s*:/);
+    const rawWebSearch = searchResult.__ailisRawToolSearchTools
+        .find((tool) => tool.id === 'mcp__ailis_research__web_search');
+    assert.deepEqual(rawWebSearch.spec.parameters.required, ['query']);
 
     const compactedSearchResult = normalizeAilisToolOutput(searchResult, { toolId: 'tool_search' });
     const compactedWebSearch = compactedSearchResult.structuredContent.tools.find((tool) => tool.id === 'mcp__ailis_research__web_search');
-    assert.deepEqual(compactedWebSearch.spec.parameters.required, ['query']);
-    assert.equal(typeof compactedWebSearch.spec.parameters.properties, 'object');
-    assert.equal(Array.isArray(compactedWebSearch.spec.parameters.properties), false);
-    assert.equal(typeof compactedWebSearch.spec.parameters.properties.query, 'object');
+    assert.deepEqual(compactedWebSearch.input_schema.required, ['query']);
+    assert.equal(typeof compactedWebSearch.input_schema.properties, 'object');
+    assert.equal(Array.isArray(compactedWebSearch.input_schema.properties), false);
+    assert.equal(typeof compactedWebSearch.input_schema.properties.query, 'object');
+
+    const exactResearchSearch = await gateway.executeGatewayToolSearch({
+        query: 'mcp__ailis_research__web_research',
+        includeExternal: false
+    });
+    const exactResearchNames = exactResearchSearch.structuredContent.tools.map((tool) => tool.id);
+    assert.ok(exactResearchNames.includes('mcp__ailis_research__web_research'));
+    assert.ok(exactResearchNames.includes('mcp__ailis_research__web_search'));
+    assert.ok(exactResearchNames.includes('mcp__ailis_research__web_fetch'));
 
     const nextSpecs = buildAgentDirectToolSpecs(gateway, {
-        requestContext: { nativeDirectTools: true },
+        requestContext: { nativeDirectTools: true, directToolLimit: 24 },
         stepResults: [{
             tool: 'tool_search',
             response: {
@@ -657,7 +1024,7 @@ test('AILIS tool_search returns strict direct MCP specs and native preflight blo
     assert.match(invalidDescribeImage.errors.join('\n'), /path is required|empty arguments/);
 
     const nextSpecsAfterVisionFailure = buildAgentDirectToolSpecs(gateway, {
-        requestContext: { nativeDirectTools: true },
+        requestContext: { nativeDirectTools: true, directToolLimit: 24 },
         stepResults: [{
             tool: 'tool_search',
             response: {
@@ -688,7 +1055,7 @@ test('AILIS tool_search returns strict direct MCP specs and native preflight blo
     assert.equal(valid.ok, true, valid.errors.join('; '));
 });
 
-test('AILIS web_fetch falls back to Node fetch when python requests transport fails', async () => {
+test('AILIS web_fetch falls back to an available local backend when python requests transport fails', async () => {
     const { server, url } = await startLocalHttpServer((request, response) => {
         response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
         response.end(`<!doctype html>
@@ -709,9 +1076,11 @@ test('AILIS web_fetch falls back to Node fetch when python requests transport fa
             maxChars: 2000
         });
         assert.equal(result.structuredContent.ok, true, result.content?.[0]?.text);
-        assert.equal(result.details.fetchBackend, 'node_fetch');
-        assert.equal(result.details.fallbackFrom, 'python_requests');
-        assert.equal(result.details.primaryErrorCode, 'fetch_process_failed');
+        assert.ok(['crawl4ai_local', 'node_fetch'].includes(result.details.fetchBackend));
+        if (result.details.fetchBackend === 'node_fetch') {
+            assert.equal(result.details.fallbackFrom, 'python_requests');
+            assert.equal(result.details.primaryErrorCode, 'fetch_process_failed');
+        }
         assert.match(result.content[0].text, /Kaggle AI security competition strategy page/);
     } finally {
         if (previous === undefined) {
@@ -780,19 +1149,100 @@ test('AILIS runtime budget preserves primary tool text beyond structured string 
     assert.equal(compacted.details.stdout.length < text.length, true);
 });
 
-test('AILIS tool routing ranks artifact_compute for managed artifact data-worker tasks', () => {
-    const artifactTools = AILIS_RUNTIME_TOOL_DEFINITIONS
-        .filter((tool) => ['artifact_query', 'artifact_compute'].includes(tool.id))
-        .map((tool) => ({
-            id: tool.id,
-            type: 'runtime_tool',
-            exposure: tool.exposure,
-            spec: createAilisFunctionToolSpec(tool)
-        }));
+test('AILIS runtime budget preserves every line in a bounded source viewport', () => {
+    const lines = Array.from({ length: 60 }, (_, index) => ({
+        lineno: 330 + index,
+        text: index === 22
+            ? 'Cuba (1)'
+            : index === 47
+                ? 'Panama (1)'
+                : `country row ${index + 1}`
+    }));
+    const compacted = compactToolResultForModel({
+        content: [{ type: 'text', text: 'Find results' }],
+        structuredContent: {
+            sourceWindow: {
+                type: 'source_viewport',
+                lineStart: 330,
+                lineEnd: 389,
+                lines
+            }
+        }
+    });
 
-    const ranked = rankToolSearchResults(artifactTools, 'artifactId spreadsheet data worker find path grid compute', 2);
-    assert.equal(ranked[0].id, 'artifact_compute');
-    assert.match(buildToolRoutingAdvice('artifact compute path search', artifactTools), /artifact_compute/);
+    assert.equal(compacted.structuredContent.sourceWindow.lines.length, 60);
+    assert.equal(compacted.structuredContent.sourceWindow.lines[22].text, 'Cuba (1)');
+    assert.equal(compacted.structuredContent.sourceWindow.lines[47].text, 'Panama (1)');
+    assert.equal(compacted.structuredContent.sourceWindow.lines.some((line) => 'omitted_items' in line), false);
+});
+
+test('AILIS tool routing prefers strict MCP readers on the Codex-style default surface', () => {
+    const entries = [
+        ...[
+            ['mcp__ailis_research__read_spreadsheet', 'Value-only pandas preview for simple CSV/XLSX tables. Does not preserve Excel fills/colors, styles, formulas, comments, or render layout.'],
+            ['mcp__ailis_research__read_document', 'Read local Word DOCX documents and tables.'],
+            ['mcp__ailis_research__read_presentation', 'Read local PowerPoint PPTX slide decks.'],
+            ['mcp__ailis_research__pdf_extract_text', 'Extract text from local PDF files.'],
+            ['mcp__ailis_research__describe_image', 'Describe a local image photo screenshot.']
+        ].map(([id, description]) => ({
+            id,
+            type: id.startsWith('mcp__') ? 'mcp_tool' : 'gateway_or_runtime_tool',
+            exposure: 'deferred',
+            spec: {
+                type: 'function',
+                name: id,
+                description,
+                parameters: {
+                    type: 'object',
+                    required: ['path'],
+                    additionalProperties: false,
+                    properties: {
+                        path: { type: 'string' }
+                    }
+                }
+            }
+        }))
+    ];
+
+    for (const [query, expected] of [
+        ['read xlsx excel cell color fill', 'mcp__ailis_research__read_spreadsheet'],
+        ['local docx document attachment table', 'mcp__ailis_research__read_document'],
+        ['pptx presentation slide deck file', 'mcp__ailis_research__read_presentation'],
+        ['local pdf file extract page render', 'mcp__ailis_research__pdf_extract_text'],
+        ['attached png image semantic visual description', 'mcp__ailis_research__describe_image']
+    ]) {
+        const ranked = rankToolSearchResults(entries, query, 5);
+        assert.equal(ranked[0].id, expected, `${query} should route through ${expected}`);
+        assert.doesNotMatch(buildToolRoutingAdvice(query, ranked), /artifact_tools/);
+    }
+});
+
+test('AILIS tool routing still allows explicit spreadsheet reader by name', () => {
+    const entries = [
+        {
+            id: 'mcp__ailis_research__read_spreadsheet',
+            type: 'mcp_tool',
+            tool: 'read_spreadsheet',
+            exposure: 'deferred',
+            spec: {
+                type: 'function',
+                name: 'mcp__ailis_research__read_spreadsheet',
+                description: 'Value-only pandas preview for simple CSV/XLSX tables.',
+                parameters: {
+                    type: 'object',
+                    required: ['path'],
+                    additionalProperties: false,
+                    properties: {
+                        path: { type: 'string' },
+                        maxRows: { type: 'number' }
+                    }
+                }
+            }
+        }
+    ];
+
+    const ranked = rankToolSearchResults(entries, 'explicitly use read_spreadsheet for csv numeric_sums', 5);
+    assert.ok(ranked.some((tool) => tool.id === 'mcp__ailis_research__read_spreadsheet'));
 });
 
 test('AILIS direct MCP specs expose compact model-facing schema', () => {

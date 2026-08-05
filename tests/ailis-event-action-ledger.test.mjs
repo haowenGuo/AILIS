@@ -405,7 +405,7 @@ test('forget and clear remove only derived ledger data through MemoryRuntime lif
         ts: '2025-02-15T10:00:00.000Z',
         userText: 'My new 5K PB is 25:50.'
     }));
-    const curated = await memory.curateMemoryLedger({ maxBatches: 2 });
+    const curated = await memory.curateStrategyMemory({ maxBatches: 2 });
     assert.equal(curated.ok, true);
     const savedLedger = JSON.parse(
         await fs.readFile(path.join(rootDir, EVENT_ACTION_LEDGER_FILE), 'utf8')
@@ -430,7 +430,7 @@ test('forget and clear remove only derived ledger data through MemoryRuntime lif
         ts: '2025-02-15T10:00:00.000Z',
         userText: 'My new 5K PB is 25:50.'
     }));
-    await memory.curateMemoryLedger({ maxBatches: 2 });
+    await memory.curateStrategyMemory({ maxBatches: 2 });
     assert.equal(
         memory.getStatus().memoryStrategyStatus.eventActionLedger.recordCount,
         1

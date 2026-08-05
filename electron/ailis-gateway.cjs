@@ -5,7 +5,17 @@ const path = require('path');
 const { EventEmitter } = require('events');
 const { randomUUID } = require('crypto');
 const { pathToFileURL } = require('url');
-const { approxTokenCount } = require('./ailis-runtime-budget.cjs');
+const { approxTokenCount, summarizeForModel } = require('./ailis-runtime-budget.cjs');
+const {
+    normalizeToolOutput,
+    toolOutputToThreadItem
+} = require('./ailis-agent-object-model.cjs');
+const {
+    attachObservationContract
+} = require('./ailis-observation-contract.cjs');
+const {
+    runtimeEventMetadata
+} = require('./ailis-agent-runtime-protocol.cjs');
 
 const {
     OPENCLAW_CORE_TOOL_DEFINITIONS,
@@ -14,7 +24,7 @@ const {
     getOpenClawToolSurfaceSummary,
     validateOpenClawToolSurface
 } = require('./openclaw-tool-surface.cjs');
-const { OpenClawRuntimeSupervisor } = require('./openclaw-runtime.cjs');
+const { AILISAgentRuntimeSupervisor } = require('./openclaw-runtime.cjs');
 const { AILISRuntime } = require('./ailis-runtime.cjs');
 const {
     TOOL_EXPOSURE,
@@ -24,21 +34,30 @@ const {
 const { createAILISPlatformAdapter } = require('./ailis-platform-adapter.cjs');
 const { AILISAgentRunner } = require('./ailis-agent-runner.cjs');
 const { AILISMemoryRuntime } = require('./ailis-memory-store.cjs');
+const { AILISRawMemoryLedger } = require('./ailis-raw-memory-ledger.cjs');
+const { AILISUserProfileCurator } = require('./ailis-user-profile-curator.cjs');
+const { AILISMemoryCognitionCurator } = require('./ailis-memory-cognition-curator.cjs');
+const { AILISPreferenceState } = require('./ailis-preference-state.cjs');
+const { AILISTaskResultCapsuleStore } = require('./ailis-task-result-capsules.cjs');
+const { AILISSystemTaskAgentHarness } = require('./ailis-task-agent-harness.cjs');
 const { AilisSelfEvolutionRuntime } = require('./ailis-self-evolution-runtime.cjs');
+const { AILISEmberHarness } = require('./ailis-ember-harness.cjs');
+const { AILISSensitiveWordClassifier } = require('./ailis-sensitive-word-classifier.cjs');
 const {
     listToolContracts,
     validateToolContract
 } = require('./ailis-tool-contracts.cjs');
 const EMAIL_TOOL_ID = 'email';
+const TASK_RESULTS_TOOL_ID = 'task_results';
+const HANDOFF_TASK_TOOL_ID = 'handoff_task';
+const WEB_RUN_TOOL_ID = 'web_run';
+const WEB_SEARCH_TOOL_ID = 'web_search';
 const { FILE_MANAGER_TOOL_ID, executeFileManagerTool } = require('./ailis-file-manager-tool.cjs');
 const { COMPUTER_TOOL_ID, AILISComputerTool } = require('./ailis-computer-tool.cjs');
 const { CODE_TOOL_ID, executeCodeTool } = require('./ailis-code-tool.cjs');
 const { ARTIFACT_VERIFIER_TOOL_ID, executeArtifactVerifierTool } = require('./ailis-artifact-verifier-tool.cjs');
+const { ARTIFACT_IMPORT_TOOL_ID, executeArtifactImportTool } = require('./ailis-artifact-import-tool.cjs');
 const { GITHUB_PAGES_TOOL_ID, executeGitHubPagesTool } = require('./ailis-github-pages-tool.cjs');
-const {
-    READ_XLSX_WORKBOOK_TOOL_ID,
-    executeReadXlsxWorkbookTool
-} = require('./ailis-xlsx-workbook-tool.cjs');
 const {
     AILIS_VISION_TOOL_DEFINITION,
     VISION_TOOL_ID,
@@ -49,33 +68,32 @@ const {
 } = require('./ailis-tool-acquisition-gateway.cjs');
 const {
     buildToolRoutingAdvice,
-    rankToolSearchResults,
-    toolMatchesRoutingProfile
+    rankToolSearchResults
 } = require('./ailis-tool-routing.cjs');
 const {
-    createAilisDirectMcpToolSpec
+    createAilisDirectMcpToolSpec,
+    parseAilisDirectMcpToolId
 } = require('./ailis-mcp-adapter.cjs');
-
 const PROJECT_ROOT = path.resolve(__dirname, '..');
 const DEFAULT_PORT = Number(process.env.AILIS_GATEWAY_PORT || 19777);
 const DEFAULT_TOOL_GATEWAY_URL =
     process.env.AILIS_TOOL_OPENCLAW_GATEWAY_URL || 'ws://127.0.0.1:18789';
-const MAX_BODY_BYTES = 1024 * 1024;
+const MAX_BODY_BYTES = 16 * 1024 * 1024;
 const TOOL_CALL_TIMEOUT_MS = 45000;
 const DEFAULT_EVENT_REPLAY_LIMIT = 2000;
 const MAX_EVENT_REPLAY_LIMIT = 10000;
 const MAX_SSE_WRITABLE_BYTES = 1024 * 1024;
-const DEFAULT_MEMORY_CURATION_DEBOUNCE_MS = Number(
-    process.env.AILIS_MEMORY_CURATION_DEBOUNCE_MS || 2 * 60 * 1000
-);
+const DEFAULT_HTTP_REQUEST_TIMEOUT_MS = Math.max(0, Number(process.env.AILIS_GATEWAY_HTTP_REQUEST_TIMEOUT_MS || 0) || 0);
+const DEFAULT_PROFILE_CURATION_START_DELAY_MS = Number(process.env.AILIS_PROFILE_CURATION_START_DELAY_MS || 60 * 1000);
+const DEFAULT_PROFILE_CURATION_CHECK_INTERVAL_MS = Number(process.env.AILIS_PROFILE_CURATION_CHECK_INTERVAL_MS || 6 * 60 * 60 * 1000);
+const DEFAULT_PROFILE_CURATION_DEBOUNCE_MS = Number(process.env.AILIS_PROFILE_CURATION_DEBOUNCE_MS || 2 * 60 * 1000);
+const TASK_AGENT_MAX_MODEL_ROUNDS = 9;
 
 const GATEWAY_BACKED_TOOL_IDS = new Set(['sessions_list', 'gateway', 'cron', 'nodes']);
 const SESSION_BOUND_TOOL_IDS = new Set([
     'session_status',
     'sessions_history',
-    'sessions_send',
-    'sessions_spawn',
-    'sessions_yield'
+    'sessions_send'
 ]);
 const EXTERNAL_SIDE_EFFECT_TOOL_IDS = new Set([
     'browser',
@@ -114,15 +132,130 @@ const LOSSLESS_EVENT_TYPES = new Set([
     'mcp.resource.read.begin',
     'mcp.resource.read.end'
 ]);
-const LOSSLESS_EVENT_PREFIXES = ['approval.', 'subagent.', 'mcp.', 'agent.'];
+const LOSSLESS_EVENT_PREFIXES = ['approval.', 'subagent.', 'mcp.', 'agent.', 'ember.'];
 const CODEX_STYLE_DIRECT_LOCAL_TOOL_IDS = new Set([
-    COMPUTER_TOOL_ID,
-    'read',
     'write',
     'exec',
-    'apply_patch'
+    'apply_patch',
+    WEB_RUN_TOOL_ID,
+    HANDOFF_TASK_TOOL_ID
 ]);
+// Extended tools stay out of the first-turn tool surface, but remain discoverable
+// through tool_search. The Registry is the source of truth for their full specs.
+const EXTENDED_LOCAL_TOOL_EXPOSURE = TOOL_EXPOSURE.DEFERRED;
+
+const WEB_RUN_DESCRIPTION = fs.readFileSync(
+    path.join(__dirname, 'ailis-web-run-description.md'),
+    'utf8'
+).replace(/\r\n/g, '\n').trim();
+
+function collectSuggestedMcpToolNames(value, maxDepth = 8) {
+    const names = new Set();
+    const seen = new Set();
+    const visit = (entry, depth = 0) => {
+        if (!entry || depth > maxDepth || typeof entry !== 'object' || seen.has(entry)) {
+            return;
+        }
+        seen.add(entry);
+        if (Array.isArray(entry)) {
+            entry.slice(0, 64).forEach((item) => visit(item, depth + 1));
+            return;
+        }
+        const tool = normalizeString(entry.tool || entry.tool_name || entry.toolName);
+        const args = entry.args || entry.arguments;
+        if (tool && args && typeof args === 'object' && !Array.isArray(args)) {
+            names.add(tool);
+        }
+        Object.values(entry).forEach((item) => visit(item, depth + 1));
+    };
+    visit(value);
+    return [...names];
+}
+
+async function attachSuggestedMcpToolsForDirectExposure(result, sourceToolId, mcpManager, timeoutMs = 8000) {
+    if (!result || typeof result !== 'object' || !mcpManager) {
+        return [];
+    }
+    const source = parseAilisDirectMcpToolId(sourceToolId);
+    if (!source?.server) {
+        return [];
+    }
+    const suggestedNames = collectSuggestedMcpToolNames(result);
+    if (!suggestedNames.length) {
+        return [];
+    }
+    const wanted = new Set(suggestedNames.map((name) => normalizeString(name).toLowerCase()));
+    const specs = await mcpManager.listToolSpecs(source.server, timeoutMs).catch(() => []);
+    const directTools = specs
+        .filter((spec) => wanted.has(normalizeString(spec.tool || spec.name).toLowerCase()))
+        .map((spec) => createAilisDirectMcpToolSpec({
+            id: spec.id,
+            server: spec.server || source.server,
+            tool: spec.tool || spec.name,
+            name: spec.name,
+            title: spec.title,
+            description: spec.description || spec.title || '',
+            inputSchema: spec.inputSchema || spec.input_schema || spec.parameters || {},
+            schemaProperties: spec.schemaProperties || spec.schema_properties,
+            callPattern: spec.callPattern || spec.call_pattern
+        }))
+        .filter((spec) => spec.callable !== false && spec.modelFacing !== false);
+    if (directTools.length) {
+        Object.defineProperty(result, '__ailisSuggestedMcpTools', {
+            value: directTools,
+            enumerable: false,
+            configurable: true
+        });
+    }
+    return directTools;
+}
+
 const AILIS_LOCAL_TOOL_DEFINITIONS = Object.freeze([
+    Object.freeze({
+        id: WEB_RUN_TOOL_ID,
+        label: 'web.run',
+        description: WEB_RUN_DESCRIPTION,
+        modelDescriptionChars: 9000,
+        parseToolInputSchemaWithoutCompaction: true,
+        // The mutually exclusive operation fields are runtime-validated.
+        // Provider strict mode cannot represent this optional-field union portably.
+        strict: false,
+        sectionId: 'web',
+        route: 'ailis-research-mcp',
+        materialized: true,
+        status: 'available',
+        needsApprovalActions: Object.freeze([])
+    }),
+    Object.freeze({
+        id: WEB_SEARCH_TOOL_ID,
+        label: 'web_search',
+        description: 'Legacy single-query public web search kept for compatibility. New model turns use web_run.',
+        sectionId: 'web',
+        route: 'ailis-research-mcp',
+        materialized: true,
+        status: 'available',
+        needsApprovalActions: Object.freeze([])
+    }),
+    Object.freeze({
+        id: HANDOFF_TASK_TOOL_ID,
+        label: 'handoff_task',
+        description: 'Transfer the immutable current user request to the session\'s persistent system TaskAgent and wait for one compact TaskResult packet. No task text or lifecycle command is accepted from the model; the Harness owns thread identity, checkpointing, execution, and result transport.',
+        sectionId: 'persona-runtime',
+        route: 'ailis-system-task-agent',
+        materialized: true,
+        status: 'available',
+        needsApprovalActions: Object.freeze([])
+    }),
+    Object.freeze({
+        id: TASK_RESULTS_TOOL_ID,
+        label: 'task_results',
+        description: 'Read-only access to AILIS public results from earlier completed work. Search relevant results or retrieve one result by id; this never reruns the task.',
+        sectionId: 'persona-context',
+        route: 'ailis-local',
+        materialized: true,
+        status: 'available',
+        needsApprovalActions: Object.freeze([])
+    }),
     Object.freeze({
         id: EMAIL_TOOL_ID,
         label: 'email',
@@ -194,10 +327,10 @@ const AILIS_LOCAL_TOOL_DEFINITIONS = Object.freeze([
         needsApprovalActions: Object.freeze([])
     }),
     Object.freeze({
-        id: READ_XLSX_WORKBOOK_TOOL_ID,
-        label: 'read_xlsx_workbook',
-        description: 'Read local XLSX/XLSM workbooks as structured sheets, cells, formulas, merged ranges, fill colors, and compact grids. Use for Excel attachments before ad hoc Python or raw binary reads.',
-        sectionId: 'spreadsheet-reading',
+        id: ARTIFACT_IMPORT_TOOL_ID,
+        label: 'artifact_import',
+        description: 'Import local files through extracted RAGFlow-lite artifact workers and register queryable AILIS context artifacts.',
+        sectionId: 'context-artifacts',
         route: 'ailis-local',
         materialized: true,
         status: 'available',
@@ -236,10 +369,7 @@ function loadEmailToolModule() {
 }
 
 function shouldIncludeDirectToolInSearch(entry, query, includeDirect) {
-    if (includeDirect || entry.exposure !== TOOL_EXPOSURE.DIRECT) {
-        return true;
-    }
-    return toolMatchesRoutingProfile(entry, query);
+    return includeDirect === true || entry.exposure !== TOOL_EXPOSURE.DIRECT;
 }
 
 function safeListEmailProviderDetails() {
@@ -270,6 +400,16 @@ function normalizeString(value, fallback = '') {
     return trimmed || fallback;
 }
 
+function formatGatewayToolError(error) {
+    const message = normalizeString(error?.message || String(error), 'tool call failed');
+    const validationErrors = Array.isArray(error?.details?.errors)
+        ? error.details.errors.map((entry) => normalizeString(entry)).filter(Boolean)
+        : [];
+    return validationErrors.length
+        ? `${message}: ${validationErrors.join('; ')}`
+        : message;
+}
+
 function parseEventCursor(value, fallback = 0) {
     const text = Array.isArray(value) ? value[0] : value;
     const raw = normalizeString(String(text || ''), '');
@@ -295,6 +435,459 @@ function formatSseEvent(event) {
 
 function isPathInside(rootPath, targetPath) {
     return createAILISPlatformAdapter().isPathInside(rootPath, targetPath);
+}
+
+function normalizedSearchTokens(value = '') {
+    return [...new Set(
+        normalizeString(value)
+            .toLowerCase()
+            .match(/[\p{L}\p{N}]{2,}/gu) || []
+    )];
+}
+
+function looksLikeHistoricalWebStateQuestion(value = '') {
+    const text = normalizeString(value);
+    const hasPastAnchor =
+        /\b(?:as[- ]of|historical(?:ly)?|past state|at (?:the )?(?:time|end|start)|before|during)\b/i.test(text) ||
+        /\b(?:in|on|from)\s+(?:19|20)\d{2}\b/i.test(text) ||
+        /\b(?:19|20)\d{2}\s+(?:version|listing|record|result|state|catalog)\b/i.test(text);
+    const namesWebState =
+        /\b(?:website|webpage|site|database|catalog|registry|index|api|oai|search results?|listed|listing|record)\b/i.test(text);
+    return hasPastAnchor && namesWebState;
+}
+
+function historicalArchiveUrlFromQueries(queries = []) {
+    for (const query of Array.isArray(queries) ? queries : []) {
+        const text = normalizeString(query?.q);
+        const directUrl = text.match(/https?:\/\/[^\s"'<>]+/i)?.[0]
+            ?.replace(/[),.;:!?]+$/, '');
+        if (directUrl) {
+            return directUrl;
+        }
+        const siteMatch = text.match(/\bsite:([a-z0-9.-]+)(\/[^\s"'<>]*)?/i);
+        if (siteMatch?.[1]) {
+            const pathPart = normalizeString(siteMatch[2]).replace(/[),.;:!?]+$/, '');
+            return `https://${siteMatch[1]}${pathPart || ''}`;
+        }
+        const domain = (Array.isArray(query?.domains) ? query.domains : [])
+            .map((entry) => normalizeString(entry))
+            .find(Boolean);
+        if (domain) {
+            return /^https?:\/\//i.test(domain) ? domain : `https://${domain}`;
+        }
+    }
+    return '';
+}
+
+function isEvaluationAnswerLeak(sourceQuestion = '', result = {}) {
+    const questionTokens = normalizedSearchTokens(sourceQuestion);
+    if (questionTokens.length < 5) {
+        return false;
+    }
+    const text = [
+        result?.title,
+        result?.snippet,
+        result?.content
+    ].map((value) => normalizeString(value)).filter(Boolean).join(' ');
+    if (!/\b(?:ground truth|reference answer|expected answer|gold answer|correct answer)\s*[:=-]/i.test(text)) {
+        return false;
+    }
+    const resultTokens = new Set(normalizedSearchTokens(text));
+    const matched = questionTokens.filter((token) => resultTokens.has(token)).length;
+    return matched / questionTokens.length >= 0.65;
+}
+
+function isEvaluationTaskMirror(sourceQuestion = '', result = {}) {
+    const questionTokens = normalizedSearchTokens(sourceQuestion);
+    if (questionTokens.length < 5) {
+        return false;
+    }
+    const url = normalizeString(result?.url).toLowerCase();
+    const text = [
+        result?.title,
+        result?.snippet,
+        result?.content
+    ].map((value) => normalizeString(value)).filter(Boolean).join(' ');
+    const resultTokens = new Set(normalizedSearchTokens(text));
+    const matched = questionTokens.filter((token) => resultTokens.has(token)).length;
+    const repeatsQuestion = matched / questionTokens.length >= 0.72;
+    const looksLikeEvaluationCorpus =
+        /(?:^|[./_-])(?:gaia|benchmark|benchmarks|magentic_dataset|agent.?rx|harbor-datasets)(?:[./_-]|$)/i.test(url) ||
+        /\b(?:gaia task|benchmark task|evaluation task|output requirements|write only the final answer)\b/i.test(text);
+    return repeatsQuestion && looksLikeEvaluationCorpus;
+}
+
+function extractStructuredQueryAnchors(value = '') {
+    const text = normalizeString(value);
+    const matches = text.match(/\b(?:rule|article|chapter|section|part|item|table|figure|episode|volume|book)\s+(?:\d+(?:\.\d+)*[a-z]?|[ivxlcdm]+)\b/gi) || [];
+    return [...new Set(matches.map((entry) => entry.replace(/\s+/g, ' ').trim()))];
+}
+
+function looksLikeNestedSelectorTask(value = '') {
+    const text = normalizeString(value).toLowerCase();
+    const hasSelector = /\b(?:first|last|most|least|earliest|latest|highest|lowest|alphabetic(?:al|ally)?|fewest)\b/.test(text);
+    const hasHierarchy = /\b(?:under|within|among|section|article|chapter|rule|group|category|titles?|records?|entries)\b/.test(text);
+    return hasSelector && hasHierarchy;
+}
+
+function extractQuotedSelectorTerms(value = '') {
+    const text = normalizeString(value);
+    const terms = [];
+    const seen = new Set();
+    const pattern = /"([^"\r\n]{1,80})"|“([^”\r\n]{1,80})”/g;
+    let match;
+    while ((match = pattern.exec(text)) !== null) {
+        const term = normalizeString(match[1] || match[2]);
+        const key = term.toLowerCase();
+        if (!term || seen.has(key)) {
+            continue;
+        }
+        seen.add(key);
+        terms.push(term);
+    }
+    return terms;
+}
+
+function countExactLexicalOccurrences(value = '', term = '') {
+    const text = normalizeString(value);
+    const normalizedTerm = normalizeString(term);
+    if (!text || !normalizedTerm) {
+        return 0;
+    }
+    const escaped = normalizedTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const pattern = new RegExp(
+        `(?:^|[^\\p{L}\\p{N}_])${escaped}(?=$|[^\\p{L}\\p{N}_])`,
+        'giu'
+    );
+    return [...text.matchAll(pattern)].length;
+}
+
+function structuredAnchorKind(value = '') {
+    const anchor = extractStructuredQueryAnchors(value)[0] || '';
+    return normalizeString(anchor.split(/\s+/)[0]).toLowerCase();
+}
+
+function countExactLexicalChildTitleUnits(value = '', term = '', parentAnchor = '') {
+    const text = normalizeString(value);
+    const normalizedParent = normalizeString(parentAnchor).toLowerCase();
+    const pattern = /\b(?:rule|article|chapter|section|part|item|table|figure|episode|volume|book)\s+(?:\d+(?:\.\d+)*[a-z]?|[ivxlcdm]+)\b/gi;
+    const matches = [...text.matchAll(pattern)];
+    if (!matches.length) {
+        return countExactLexicalOccurrences(text, term);
+    }
+    const matchesByAnchor = new Map();
+    for (let index = 0; index < matches.length; index += 1) {
+        const anchor = normalizeString(matches[index][0]).toLowerCase();
+        if (!anchor || anchor === normalizedParent) {
+            continue;
+        }
+        const start = matches[index].index || 0;
+        const end = matches[index + 1]?.index ?? text.length;
+        const matched = countExactLexicalOccurrences(text.slice(start, end), term) > 0;
+        matchesByAnchor.set(anchor, matchesByAnchor.get(anchor) === true || matched);
+    }
+    return [...matchesByAnchor.values()].filter(Boolean).length;
+}
+
+function updateSelectionProtocolTitleCounts(selectionProtocol = null, sourceViews = []) {
+    if (
+        !selectionProtocol ||
+        !normalizeString(selectionProtocol.parentKind) ||
+        !normalizeString(selectionProtocol.quotedTerm)
+    ) {
+        return [];
+    }
+    const parentKind = normalizeString(selectionProtocol.parentKind).toLowerCase();
+    const quotedTerm = normalizeString(selectionProtocol.quotedTerm);
+    const groups = selectionProtocol.groupTitleMatches &&
+        typeof selectionProtocol.groupTitleMatches === 'object'
+        ? selectionProtocol.groupTitleMatches
+        : {};
+    let currentGroup = normalizeString(selectionProtocol.currentGroup);
+    const lines = (Array.isArray(sourceViews) ? sourceViews : [])
+        .flatMap((sourceView) => Array.isArray(sourceView?.lines) ? sourceView.lines : [])
+        .map((line) => ({
+            lineno: Number(line?.lineno || line?.lineNumber || line?.line_number) || 0,
+            text: normalizeString(line?.text || line?.rendered)
+        }))
+        .filter((line) => line.text)
+        .sort((left, right) => left.lineno - right.lineno);
+    for (const line of lines) {
+        const anchors = extractStructuredQueryAnchors(line.text);
+        const parentAnchor = anchors.find((anchor) => structuredAnchorKind(anchor) === parentKind);
+        if (parentAnchor) {
+            currentGroup = normalizeString(parentAnchor);
+            const groupKey = currentGroup.toLowerCase();
+            groups[groupKey] ||= {
+                label: currentGroup,
+                matchedChildren: []
+            };
+        }
+        if (!currentGroup || countExactLexicalOccurrences(line.text, quotedTerm) === 0) {
+            continue;
+        }
+        const childAnchors = anchors.filter((anchor) => structuredAnchorKind(anchor) !== parentKind);
+        for (const childAnchor of childAnchors) {
+            const groupKey = currentGroup.toLowerCase();
+            groups[groupKey] ||= {
+                label: currentGroup,
+                matchedChildren: []
+            };
+            const childKey = normalizeString(childAnchor).toLowerCase();
+            if (
+                childKey &&
+                !groups[groupKey].matchedChildren.some((child) => child.key === childKey)
+            ) {
+                groups[groupKey].matchedChildren.push({
+                    key: childKey,
+                    label: normalizeString(childAnchor),
+                    title: line.text
+                });
+            }
+        }
+    }
+    selectionProtocol.currentGroup = currentGroup;
+    selectionProtocol.groupTitleMatches = groups;
+    const counts = Object.values(groups)
+        .map((group) => ({
+            group: normalizeString(group.label),
+            count: Array.isArray(group.matchedChildren) ? group.matchedChildren.length : 0,
+            matched_children: (Array.isArray(group.matchedChildren) ? group.matchedChildren : [])
+                .map((child) => ({
+                    id: normalizeString(child.label),
+                    title: normalizeString(child.title)
+                }))
+        }))
+        .filter((group) => group.group)
+        .sort((left, right) => right.count - left.count || left.group.localeCompare(right.group));
+    selectionProtocol.groupTitleCounts = counts;
+    return counts;
+}
+
+function selectorParentKind(value = '') {
+    const text = normalizeString(value).toLowerCase();
+    const match = text.match(/\b(article|chapter|section|part|item|table|figure|episode|volume|book|group|category)\s+(?:that|which|with|having|has|had|whose)\b/);
+    return normalizeString(match?.[1]).toLowerCase();
+}
+
+function buildSearchSelectionAudit(sourceQuestion = '', results = []) {
+    const question = normalizeString(sourceQuestion);
+    const lower = question.toLowerCase();
+    if (
+        !/\b(?:most|least|fewest|highest|lowest)\b/.test(lower) ||
+        !/\b(?:titles?|labels?|records?|entries|names?)\b/.test(lower)
+    ) {
+        return null;
+    }
+    const quotedTerm = extractQuotedSelectorTerms(question)[0];
+    if (!quotedTerm) {
+        return null;
+    }
+    const parentKind = selectorParentKind(question);
+    const allEntries = (Array.isArray(results) ? results : [])
+        .map((result) => {
+            const title = normalizeString(result?.title);
+            const parentAnchor = extractStructuredQueryAnchors(title)[0] || '';
+            return {
+            ref_id: normalizeString(result?.ref_id || result?.id),
+            title,
+            url: normalizeString(result?.url),
+            structured_anchor: parentAnchor,
+            structured_kind: structuredAnchorKind(title),
+            visible_snippet_occurrences: countExactLexicalChildTitleUnits(
+                result?.snippet,
+                quotedTerm,
+                parentAnchor
+            ),
+            search_rank: Number(result?.rank) || null
+            };
+        })
+        .filter((entry) => entry.ref_id);
+    const rawCounts = allEntries
+        .filter((entry) => !parentKind || entry.structured_kind === parentKind)
+        .sort((left, right) =>
+            right.visible_snippet_occurrences - left.visible_snippet_occurrences ||
+            (left.search_rank || Number.MAX_SAFE_INTEGER) - (right.search_rank || Number.MAX_SAFE_INTEGER)
+        );
+    const countsByIdentity = new Map();
+    for (const entry of rawCounts) {
+        const identity = normalizeString(entry.structured_anchor).toLowerCase() ||
+            normalizeString(entry.url).toLowerCase() ||
+            normalizeString(entry.title).toLowerCase();
+        const existing = countsByIdentity.get(identity);
+        if (
+            !existing ||
+            entry.visible_snippet_occurrences > existing.visible_snippet_occurrences ||
+            (
+                entry.visible_snippet_occurrences === existing.visible_snippet_occurrences &&
+                (entry.search_rank || Number.MAX_SAFE_INTEGER) <
+                    (existing.search_rank || Number.MAX_SAFE_INTEGER)
+            )
+        ) {
+            countsByIdentity.set(identity, entry);
+        }
+    }
+    const counts = [...countsByIdentity.values()].sort((left, right) =>
+        right.visible_snippet_occurrences - left.visible_snippet_occurrences ||
+        (left.search_rank || Number.MAX_SAFE_INTEGER) - (right.search_rank || Number.MAX_SAFE_INTEGER)
+    );
+    if (!counts.length) {
+        return null;
+    }
+    const parentIndexCandidates = counts
+        .flatMap((parentCandidate) => allEntries.filter((candidate) => {
+            if (!candidate.url || !parentCandidate.url || candidate.url === parentCandidate.url) {
+                return false;
+            }
+            try {
+                const parent = new URL(candidate.url);
+                const child = new URL(parentCandidate.url);
+                const parentPath = parent.pathname.replace(/\/+$/, '');
+                const childPath = child.pathname.replace(/\/+$/, '');
+                return parent.origin === child.origin &&
+                    parentPath &&
+                    childPath.startsWith(`${parentPath}/`);
+            } catch {
+                return false;
+            }
+        }))
+        .filter((candidate, index, entries) =>
+            entries.findIndex((entry) => entry.ref_id === candidate.ref_id) === index
+        )
+        .sort((left, right) => {
+            try {
+                return new URL(right.url).pathname.length - new URL(left.url).pathname.length;
+            } catch {
+                return 0;
+            }
+        });
+    const candidateSetComplete = false;
+    return {
+        status: candidateSetComplete ? 'incomplete_counts' : 'incomplete_candidate_set',
+        selector: lower.match(/\b(most|least|fewest|highest|lowest)\b/)?.[1] || '',
+        parent_kind: parentKind,
+        quoted_term: quotedTerm,
+        lexical_match: 'exact_whole_token_or_phrase',
+        scope: 'deduplicated_structured_child_title_units_visible_in_search_result_snippets',
+        result_ranking_is_selection_evidence: false,
+        counts_are_final_group_counts: false,
+        competing_matching_candidates_visible: counts.length,
+        candidate_set_coverage_sufficient: candidateSetComplete,
+        parent_index_candidates: parentIndexCandidates.map((entry) => entry.ref_id),
+        caveat: 'Search snippets may be partial. Repeated structured child identifiers and the parent page title are excluded, but visible counts still require verification against each parent page and the candidate-set boundary.',
+        candidates: counts
+    };
+}
+
+function cloneJson(value) {
+    try {
+        return JSON.parse(JSON.stringify(value));
+    } catch {
+        return value;
+    }
+}
+
+function firstObject(...values) {
+    return values.find((value) => value && typeof value === 'object' && !Array.isArray(value)) || {};
+}
+
+function bridgeStructuredContent(result = {}) {
+    return firstObject(
+        result.structuredContent?.result?.structuredContent,
+        result.structured_content?.result?.structured_content,
+        result.details?.result?.structuredContent,
+        result.details?.result?.structured_content,
+        result.details?.result?.details,
+        result.result?.structuredContent,
+        result.result?.structured_content,
+        result.result?.details?.result?.structuredContent,
+        result.result?.details?.result?.structured_content,
+        result.structuredContent,
+        result.structured_content,
+        result.result?.details,
+        result.details
+    );
+}
+
+function bridgeTextContent(result = {}) {
+    const content = Array.isArray(result.content)
+        ? result.content
+        : Array.isArray(result.result?.content)
+        ? result.result.content
+        : Array.isArray(result.details?.result?.content)
+        ? result.details.result.content
+        : [];
+    return content.map((item) => normalizeString(item?.text)).filter(Boolean).join('\n');
+}
+
+function sourceViewportSectionLinks(sourceViews = [], pageUrl = '') {
+    let page;
+    try {
+        page = new URL(pageUrl);
+        page.hash = '';
+    } catch {
+        return [];
+    }
+    const links = [];
+    const seen = new Set();
+    const pattern = /\[([^\]\n]{1,200})\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g;
+    for (const sourceView of sourceViews) {
+        const lines = Array.isArray(sourceView?.lines) ? sourceView.lines : [];
+        for (const line of lines) {
+            const text = normalizeString(line?.text || line?.rendered);
+            pattern.lastIndex = 0;
+            let match;
+            while ((match = pattern.exec(text))) {
+                const label = normalizeString(match[1]).replace(/\s+/g, ' ');
+                if (!label || /^(?:jump to content|\(?top\)?)$/i.test(label)) {
+                    continue;
+                }
+                let target;
+                try {
+                    target = new URL(match[2], pageUrl);
+                } catch {
+                    continue;
+                }
+                if (!target.hash) {
+                    continue;
+                }
+                const targetDocument = new URL(target.toString());
+                targetDocument.hash = '';
+                if (targetDocument.toString() !== page.toString() || seen.has(target.toString())) {
+                    continue;
+                }
+                seen.add(target.toString());
+                let fragment = target.hash.slice(1);
+                try {
+                    fragment = decodeURIComponent(fragment);
+                } catch {
+                    // Keep the raw fragment when percent-decoding is invalid.
+                }
+                links.push({
+                    kind: 'section',
+                    text: label,
+                    url: target.toString(),
+                    pattern: normalizeString(fragment.replace(/_/g, ' '), label),
+                    navigationMode: 'find',
+                    navigation_mode: 'find'
+                });
+            }
+        }
+    }
+    return links.slice(0, 12);
+}
+
+function isFullControlContext(context = {}) {
+    const rawProfile = typeof context.permissionProfile === 'string'
+        ? context.permissionProfile
+        : context.permissionProfile?.id || context.permissions || context.policy || context.sandbox;
+    const profile = normalizeString(rawProfile).toLowerCase();
+    return (
+        profile === 'danger-full-access' ||
+        profile === 'full-access' ||
+        context.allowComputerWideAccess === true ||
+        (context.computerControlEnabled === true && context.allowOutsideWorkspace === true)
+    );
 }
 
 function summarize(value, maxChars = 600) {
@@ -374,6 +967,30 @@ function extractToolResultText(result) {
 }
 
 function classifyToolResult(result) {
+    const sourceStatus = normalizeString(result?.details?.status).toLowerCase();
+    const genericStatuses = new Set([
+        '',
+        'completed',
+        'success',
+        'ok',
+        'partial',
+        'degraded',
+        'blocked',
+        'failed',
+        'error'
+    ]);
+    const observationContract =
+        result?.details?.observationContract ||
+        result?.details?.observation_contract ||
+        result?.structuredContent?.observationContract ||
+        result?.structuredContent?.observation_contract ||
+        {};
+    if (sourceStatus && !genericStatuses.has(sourceStatus)) {
+        return sourceStatus;
+    }
+    if (typeof observationContract.status === 'string') {
+        return observationContract.status;
+    }
     if (typeof result?.details?.status === 'string') {
         return result.details.status;
     }
@@ -391,6 +1008,86 @@ function classifyToolResult(result) {
         return 'error';
     }
     return 'completed';
+}
+
+function extractToolSearchToolsForDirectExposure(result = {}) {
+    const tools =
+        result?.__ailisRawToolSearchTools ||
+        result?.structuredContent?.tools ||
+        result?.details?.tools ||
+        [];
+    return Array.isArray(tools) ? tools : [];
+}
+
+function compactToolSearchSchemaForModel(schema = {}) {
+    const source = schema && typeof schema === 'object' && !Array.isArray(schema) ? schema : {};
+    const properties = source.properties && typeof source.properties === 'object' && !Array.isArray(source.properties)
+        ? source.properties
+        : {};
+    const compactProperties = Object.fromEntries(Object.entries(properties).slice(0, 16).map(([name, property]) => {
+        const value = property && typeof property === 'object' && !Array.isArray(property) ? property : {};
+        return [name, {
+            ...(value.type ? { type: value.type } : {}),
+            ...(Array.isArray(value.enum) ? { enum: value.enum.slice(0, 16) } : {}),
+            ...(value.description ? { description: summarizeForModel(value.description, 240) } : {})
+        }];
+    }));
+    return {
+        type: 'object',
+        properties: compactProperties,
+        required: (Array.isArray(source.required) ? source.required : []).filter((name) => name in compactProperties),
+        additionalProperties: source.additionalProperties === true
+    };
+}
+
+function compactToolSearchEntryForModel(entry = {}) {
+    const spec = entry.spec && typeof entry.spec === 'object' ? entry.spec : {};
+    const schema = entry.input_schema || entry.inputSchema || entry.parameters || spec.parameters || {};
+    const id = normalizeString(entry.id || entry.name || spec.name);
+    const searchError = normalizeString(entry.type).endsWith('_search_error');
+    const callable = Boolean(id) &&
+        !searchError &&
+        entry.callable !== false &&
+        spec.callable !== false;
+    const availability = normalizeString(
+        entry.availability ||
+        entry.health ||
+        entry.status ||
+        spec.availability ||
+        spec.health ||
+        spec.status,
+        callable ? 'available' : 'unavailable'
+    );
+    return {
+        id,
+        name: id === VISION_TOOL_ID
+            ? 'vision_capture_context'
+            : normalizeString(entry.name || spec.name || id),
+        description: summarizeForModel(
+            entry.description || spec.description || entry.summary || entry.title || id,
+            420
+        ),
+        input_schema: compactToolSearchSchemaForModel(schema),
+        strict: entry.strict === true || spec.strict === true || schema.additionalProperties === false,
+        callable,
+        availability,
+        spec_ref: `tool_registry:${id}`
+    };
+}
+
+function attachRawToolSearchToolsForDirectExposure(guardedResult, rawResult) {
+    if (!guardedResult || typeof guardedResult !== 'object') {
+        return;
+    }
+    const tools = extractToolSearchToolsForDirectExposure(rawResult);
+    if (!tools.length) {
+        return;
+    }
+    Object.defineProperty(guardedResult, '__ailisRawToolSearchTools', {
+        value: tools,
+        enumerable: false,
+        configurable: true
+    });
 }
 
 function makeExternalVirtualToolResult(result = {}, { toolId = '' } = {}) {
@@ -414,6 +1111,9 @@ function makeExternalVirtualToolResult(result = {}, { toolId = '' } = {}) {
 
 function classifyError(error) {
     const message = error instanceof Error ? error.message : String(error);
+    if (error instanceof GatewayHttpError && normalizeString(error.code)) {
+        return normalizeString(error.code);
+    }
     if (error?.code === 'AILIS_GATEWAY_APPROVAL_REQUIRED') {
         return 'needs_approval';
     }
@@ -606,6 +1306,49 @@ function throwApprovalRequired(message, details = undefined) {
     throw error;
 }
 
+function summarizeEmberHarnessRecord(record = {}) {
+    if (!record || typeof record !== 'object') {
+        return record;
+    }
+    const snapshot = record.snapshot && typeof record.snapshot === 'object'
+        ? {
+            snapshotId: record.snapshot.snapshotId,
+            stage: record.snapshot.stage,
+            boundary: record.snapshot.boundary,
+            textHash: record.snapshot.textHash,
+            textChars: record.snapshot.textChars,
+            approxTokens: record.snapshot.approxTokens
+        }
+        : null;
+    const rollbackTo = record.rollbackTo && typeof record.rollbackTo === 'object'
+        ? {
+            snapshotId: record.rollbackTo.snapshotId,
+            stage: record.rollbackTo.stage,
+            boundary: record.rollbackTo.boundary,
+            textHash: record.rollbackTo.textHash
+        }
+        : null;
+    return {
+        schema: record.schema,
+        checkId: record.checkId,
+        runId: record.runId,
+        sessionId: record.sessionId,
+        stage: record.stage,
+        boundary: record.boundary,
+        mode: record.mode,
+        status: record.status,
+        decision: record.decision,
+        blocked: record.blocked,
+        riskLevel: record.riskLevel,
+        riskTypes: record.riskTypes,
+        summary: record.summary,
+        suggestion: record.suggestion,
+        evaluatorConfigured: record.evaluatorConfigured,
+        snapshot,
+        rollbackTo
+    };
+}
+
 function buildSmokeStatusMap(reportPath) {
     try {
         const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
@@ -679,15 +1422,20 @@ class AILISGateway extends EventEmitter {
         this.auditLogPath = path.join(this.auditDir, 'audit.jsonl');
         this.smokeReportPath = path.join(this.projectRoot, 'tmp', 'openclaw-tool-smoke', 'last-report.json');
         this.platformAdapter = createAILISPlatformAdapter(options.platformAdapter || options.platform || {});
+        this.rawMemoryLedger = options.rawMemoryLedger || new AILISRawMemoryLedger({
+            rootDir: path.join(this.auditDir, 'raw-memory'),
+            workspaceRoot: this.workspaceRoot
+        });
         this.runtime = new AILISRuntime({
             auditDir: this.auditDir,
             workspaceRoot: this.workspaceRoot,
             projectRoot: this.projectRoot,
             platformAdapter: this.platformAdapter,
+            rawMemoryLedger: this.rawMemoryLedger,
             emitGatewayEvent: (type, payload) => this.emitGatewayEvent(type, payload),
             mcpServers: options.mcpServers,
             mcpConfigPath: options.mcpConfigPath || path.join(this.auditDir, 'mcp-servers.json'),
-            subagentExecutor: (payload) => this.executeSubagentTask(payload)
+            agentExecutor: (payload) => this.executeTaskAgent(payload)
         });
         this.server = null;
         this.startedAt = 0;
@@ -698,9 +1446,22 @@ class AILISGateway extends EventEmitter {
             100,
             Math.min(Number(options.eventLogLimit || DEFAULT_EVENT_REPLAY_LIMIT), MAX_EVENT_REPLAY_LIMIT)
         );
+        this.httpRequestTimeoutMs = Math.max(
+            0,
+            Number(options.httpRequestTimeoutMs ?? options.requestTimeoutMs ?? DEFAULT_HTTP_REQUEST_TIMEOUT_MS) || 0
+        );
         this.toolRuntimeModulePromise = null;
         this.toolSets = new Map();
+        this.webRunSessions = new Map();
         this.toolRuntimeSupervisor = null;
+        this.profileCurationEnabled = options.profileCurationEnabled !== false;
+        this.profileCurationStartDelayMs = Math.max(1000, Number(options.profileCurationStartDelayMs) || DEFAULT_PROFILE_CURATION_START_DELAY_MS);
+        this.profileCurationCheckIntervalMs = Math.max(60 * 1000, Number(options.profileCurationCheckIntervalMs) || DEFAULT_PROFILE_CURATION_CHECK_INTERVAL_MS);
+        this.profileCurationStartTimer = null;
+        this.profileCurationIntervalTimer = null;
+        this.profileCurationDebounceTimer = null;
+        this.profileCurationDebounceMs = Math.max(5000, Number(options.profileCurationDebounceMs) || DEFAULT_PROFILE_CURATION_DEBOUNCE_MS);
+        this.profileCurationRunning = false;
         this.computerTool = new AILISComputerTool({
             workspaceRoot: this.workspaceRoot,
             platformAdapter: this.platformAdapter
@@ -711,30 +1472,117 @@ class AILISGateway extends EventEmitter {
         this.getDefaultToolContext = typeof options.getDefaultContext === 'function'
             ? options.getDefaultContext
             : () => options.defaultContext || {};
+        this.getLlmSettings = typeof options.getLlmSettings === 'function'
+            ? options.getLlmSettings
+            : null;
+        this.voiceServices = options.voiceServices && typeof options.voiceServices === 'object'
+            ? options.voiceServices
+            : {};
         this.visionServices = options.visionServices || {};
-        const memoryLlmClient = typeof options.memoryQueryPlannerLlm === 'function'
-            ? options.memoryQueryPlannerLlm
-            : typeof options.profileCurationLlm === 'function'
-                ? options.profileCurationLlm
-                : null;
         this.memoryRuntime = options.memoryRuntime || new AILISMemoryRuntime({
             rootDir: path.join(this.auditDir, 'memory'),
             workspaceRoot: this.workspaceRoot,
-            memoryQueryPlanner: memoryLlmClient,
+            memoryStrategy: options.memoryStrategy,
+            memoryQueryPlanner: options.memoryQueryPlannerLlm || options.profileCurationLlm,
             memoryEmbedder: options.memoryEmbedder,
+            memoryReranker: options.memoryReranker,
             enableLocalEmbeddings: options.enableLocalMemoryEmbeddings,
             embeddingModel: options.memoryEmbeddingModel,
             memoryEmbeddingRevision: options.memoryEmbeddingRevision,
+            memoryRerankerModel: options.memoryRerankerModel,
+            memoryRerankerRevision: options.memoryRerankerRevision,
             allowRemoteModels: options.allowRemoteMemoryModels,
             memoryModelRemoteHost: options.memoryModelRemoteHost,
-            memoryModelCacheDir: options.memoryModelCacheDir
+            memoryModelCacheDir: options.memoryModelCacheDir,
+            chronosMaxAgentSteps: options.chronosMaxAgentSteps,
+            observationalMessageTokens: options.observationalMessageTokens,
+            observationalObservationTokens: options.observationalObservationTokens,
+            observationalMaxTokensPerBatch: options.observationalMaxTokensPerBatch,
+            observationalPreviousObserverTokens:
+                options.observationalPreviousObserverTokens,
+            observationalRawTailTokens: options.observationalRawTailTokens,
+            hindsightBaseUrl: options.hindsightBaseUrl,
+            hindsightAutoStart: options.hindsightAutoStart,
+            hindsightPort: options.hindsightPort,
+            hindsightHost: options.hindsightHost,
+            hindsightProfile: options.hindsightProfile,
+            hindsightBankId: options.hindsightBankId,
+            hindsightEmbedPackagePath: options.hindsightEmbedPackagePath,
+            hindsightClient: options.hindsightClient,
+            hindsightServer: options.hindsightServer
         });
-        this.memoryCurationDebounceMs = Math.max(
-            5000,
-            Number(options.memoryCurationDebounceMs) || DEFAULT_MEMORY_CURATION_DEBOUNCE_MS
+        this.preferenceState = options.preferenceState || new AILISPreferenceState({
+            rootDir: path.join(this.auditDir, 'memory')
+        });
+        this.taskResultCapsules = options.taskResultCapsules || new AILISTaskResultCapsuleStore({
+            rootDir: path.join(this.auditDir, 'task-results')
+        });
+        this.taskAgentHarness = options.taskAgentHarness || new AILISSystemTaskAgentHarness({
+            rootDir: path.join(this.auditDir, 'task-agent-harness'),
+            taskResultCapsules: this.taskResultCapsules,
+            maxAgentSteps: TASK_AGENT_MAX_MODEL_ROUNDS,
+            executeTaskAgent: (payload) => this.executeTaskAgent(payload),
+            emitEvent: (type, payload) => this.emitGatewayEvent(type, payload)
+        });
+        this.taskResultBackfill = { ok: true, imported: 0, capsuleCount: this.taskResultCapsules?.getStatus?.().capsuleCount || 0 };
+        try {
+            const memoryEvents = this.memoryRuntime?.searchMemory?.('', {
+                limit: 500,
+                strategy: 'bm25_phrase_v1'
+            })?.events || [];
+            this.taskResultBackfill = this.taskResultCapsules?.backfillFromMemoryEvents?.(memoryEvents) || this.taskResultBackfill;
+        } catch (error) {
+            this.taskResultBackfill = {
+                ok: false,
+                imported: 0,
+                error: error?.message || String(error)
+            };
+        }
+        const configuredEmberEvaluator = typeof options.emberHarnessEvaluator === 'function'
+            ? options.emberHarnessEvaluator
+            : null;
+        this.localSafetyEvaluator = options.localSafetyEvaluator || options.localSafetyClassifier || (
+            !options.emberHarness && !configuredEmberEvaluator
+                ? new AILISSensitiveWordClassifier({
+                    customLexiconPath: options.emberHarnessLexiconPath ||
+                        path.join(this.auditDir, 'safety', 'sensitive-words.json')
+                })
+                : null
         );
-        this.memoryCurationTimer = null;
-        this.memoryCurationRunning = false;
+        const activeEmberEvaluator = configuredEmberEvaluator || (
+            this.localSafetyEvaluator
+                ? (payload) => this.localSafetyEvaluator.evaluate(payload)
+                : null
+        );
+        this.emberHarness = options.emberHarness || new AILISEmberHarness({
+            enabled: options.emberHarnessEnabled,
+            mode: options.emberHarnessMode,
+            evaluator: activeEmberEvaluator,
+            evaluatorStatus: this.localSafetyEvaluator
+                ? () => this.localSafetyEvaluator.getStatus()
+                : null,
+            maxRunRecords: options.emberHarnessMaxRunRecords,
+            maxTotalRecords: options.emberHarnessMaxTotalRecords
+        });
+        this.userProfileCurator = options.userProfileCurator || new AILISUserProfileCurator({
+            rootDir: path.join(this.auditDir, 'memory'),
+            workspaceRoot: this.workspaceRoot,
+            rawMemoryLedger: this.rawMemoryLedger,
+            preferenceState: this.preferenceState,
+            llmClient: typeof options.profileCurationLlm === 'function' ? options.profileCurationLlm : null,
+            emitGatewayEvent: (type, payload) => this.emitGatewayEvent(type, payload)
+        });
+        this.memoryCognitionCurator = options.memoryCognitionCurator ||
+            new AILISMemoryCognitionCurator({
+                rootDir: path.join(this.auditDir, 'memory'),
+                rawMemoryLedger: this.rawMemoryLedger,
+                llmClient: typeof options.memoryCognitionLlm === 'function'
+                    ? options.memoryCognitionLlm
+                    : typeof options.profileCurationLlm === 'function'
+                        ? options.profileCurationLlm
+                        : null,
+                emitGatewayEvent: (type, payload) => this.emitGatewayEvent(type, payload)
+            });
         this.selfEvolutionRuntime = options.selfEvolutionRuntime || new AilisSelfEvolutionRuntime({
             auditDir: this.auditDir,
             workspaceRoot: this.workspaceRoot,
@@ -748,6 +1596,49 @@ class AILISGateway extends EventEmitter {
         this.agentRunner = null;
     }
 
+    configureEmberHarness(options = {}) {
+        const enabled = options.enabled !== undefined
+            ? options.enabled !== false
+            : this.emberHarness?.enabled !== false;
+        const harnessPatch = { enabled };
+        if ('mode' in options) {
+            harnessPatch.mode = options.mode;
+        }
+        const status = this.emberHarness?.configure?.(harnessPatch) || null;
+        if (this.localSafetyEvaluator) {
+            if (enabled) {
+                void this.prepareLocalSafetyEvaluator('configuration_changed');
+            } else {
+                void this.localSafetyEvaluator.dispose().catch(() => {});
+            }
+        }
+        this.emitGatewayEvent('ember.harness.configured', {
+            enabled,
+            mode: status?.mode || options.mode || 'observe',
+            status
+        });
+        return this.emberHarness?.getStatus?.() || status;
+    }
+
+    async prepareLocalSafetyEvaluator(reason = 'manual') {
+        if (!this.localSafetyEvaluator || this.emberHarness?.enabled === false) {
+            return this.emberHarness?.getStatus?.() || null;
+        }
+        this.emitGatewayEvent('ember.harness.evaluator', {
+            reason,
+            status: this.localSafetyEvaluator.getStatus()
+        });
+        try {
+            await this.localSafetyEvaluator.prepare();
+        } catch {}
+        const status = this.emberHarness?.getStatus?.() || null;
+        this.emitGatewayEvent('ember.harness.evaluator', {
+            reason,
+            status: status?.evaluatorRuntime || null
+        });
+        return status;
+    }
+
     createGatewayToolRuntimeRegistry() {
         const registry = new AILISToolRuntimeRegistry({ runtime: this.runtime });
         const localDefinitions = [
@@ -755,20 +1646,22 @@ class AILISGateway extends EventEmitter {
                 ...definition,
                 exposure: CODEX_STYLE_DIRECT_LOCAL_TOOL_IDS.has(definition.id)
                     ? TOOL_EXPOSURE.DIRECT
-                    : TOOL_EXPOSURE.DEFERRED
+                    : EXTENDED_LOCAL_TOOL_EXPOSURE
             })),
             ...['read', 'write', 'exec', 'apply_patch'].map((id) => {
-                const openClawDefinition = OPENCLAW_CORE_TOOL_DEFINITIONS.find((tool) => tool.id === id) || {};
+                const toolSurfaceDefinition = OPENCLAW_CORE_TOOL_DEFINITIONS.find((tool) => tool.id === id) || {};
                 return {
                     id,
-                    label: openClawDefinition.label || id,
-                    description: openClawDefinition.description || `Local core ${id} tool.`,
-                    sectionId: openClawDefinition.sectionId || 'local-core',
+                    label: toolSurfaceDefinition.label || id,
+                    description: toolSurfaceDefinition.description || `Local core ${id} tool.`,
+                    sectionId: toolSurfaceDefinition.sectionId || 'local-core',
                     route: 'ailis-local-core',
                     materialized: true,
                     status: 'available',
                     needsApprovalActions: id === 'exec' ? Object.freeze(['exec']) : id === 'apply_patch' ? Object.freeze(['apply_patch']) : Object.freeze([]),
-                    exposure: TOOL_EXPOSURE.DIRECT
+                    exposure: CODEX_STYLE_DIRECT_LOCAL_TOOL_IDS.has(id)
+                        ? TOOL_EXPOSURE.DIRECT
+                        : EXTENDED_LOCAL_TOOL_EXPOSURE
                 };
             })
         ];
@@ -784,7 +1677,7 @@ class AILISGateway extends EventEmitter {
                     definition: {
                         ...definition,
                         route: 'ailis-gateway',
-                        description: 'Tool discovery. Searches over deferred tool metadata with BM25 and exposes matching tools for the next Agent step.',
+                        description: 'Tool discovery. Searches deferred tool metadata and exposes matching tools for the next Agent step. Use it as soon as the visible direct tools are a poor semantic fit or would require manually reconstructing structured facts, cross-record ordering, entity resolution, document parsing, transcripts, APIs, or artifact data. When a user names an authoritative database, registry, service, or file type and asks for structured fields, call tool_search before broad web_run discovery; use web_run only to discover a connector prerequisite, then return to the connector.',
                         exposure: TOOL_EXPOSURE.DIRECT
                     },
                     handle: async (args) => this.executeGatewayToolSearch(args)
@@ -805,8 +1698,9 @@ class AILISGateway extends EventEmitter {
     async executeGatewayToolSearch(args = {}) {
         const query = normalizeString(args.query || args.q);
         const limit = Math.max(1, Math.min(Number(args.limit || 12), 50));
+        const retrievalLimit = Math.max(limit, Math.min(50, Math.max(12, limit * 4)));
         const includeDirect = args.includeDirect === true;
-        const local = this.gatewayToolRuntimeRegistry.search(query, limit)
+        const local = this.gatewayToolRuntimeRegistry.search(query, retrievalLimit)
             .filter((entry) => shouldIncludeDirectToolInSearch(entry, query, includeDirect))
             .map((entry) => ({
                 id: entry.id,
@@ -819,19 +1713,21 @@ class AILISGateway extends EventEmitter {
             try {
                 mcp = (await this.runtime.mcpManager.searchToolSpecs({
                     query,
-                    limit,
+                    limit: retrievalLimit,
                     timeoutMs: args.timeoutMs
-                })).map((spec) => createAilisDirectMcpToolSpec({
-                    id: spec.id,
-                    server: spec.server,
-                    tool: spec.tool || spec.name,
-                    name: spec.name,
-                    title: spec.title,
-                    description: spec.description || spec.title || '',
-                    inputSchema: spec.inputSchema || spec.input_schema || spec.parameters || {},
-                    schemaProperties: spec.schemaProperties || spec.schema_properties,
-                    callPattern: spec.callPattern || spec.call_pattern
-                }));
+                }))
+                    .map((spec) => createAilisDirectMcpToolSpec({
+                        id: spec.id,
+                        server: spec.server,
+                        tool: spec.tool || spec.name,
+                        name: spec.name,
+                        title: spec.title,
+                        description: spec.description || spec.title || '',
+                        inputSchema: spec.inputSchema || spec.input_schema || spec.parameters || {},
+                        schemaProperties: spec.schemaProperties || spec.schema_properties,
+                        callPattern: spec.callPattern || spec.call_pattern
+                    }))
+                    .filter((spec) => spec.callable !== false && spec.modelFacing !== false);
             } catch (error) {
                 mcp = [{
                     type: 'mcp_tool_search_error',
@@ -844,7 +1740,7 @@ class AILISGateway extends EventEmitter {
             try {
                 const searched = await this.runtime.capabilityManager.searchExternalToolEntries({
                     query,
-                    limit,
+                    limit: retrievalLimit,
                     includeExposed: args.includeExposed !== false,
                     includeContracts: args.includeContracts !== false
                 });
@@ -857,32 +1753,43 @@ class AILISGateway extends EventEmitter {
             }
         }
         const tools = rankToolSearchResults([...external, ...local, ...mcp], query, limit);
-        const routingAdvice = buildToolRoutingAdvice(query, tools);
-        return {
+        const publicTools = tools.map(compactToolSearchEntryForModel);
+        const recommendedTool = publicTools.find((entry) => entry.callable) || null;
+        const routingAdvice = recommendedTool ? buildToolRoutingAdvice(query, tools) : '';
+        const discovery = {
+            status: 'completed',
+            query,
+            routing_advice: routingAdvice,
+            recommended_tool: recommendedTool
+                ? {
+                      id: recommendedTool.id,
+                      name: recommendedTool.name,
+                      callable: true,
+                      availability: recommendedTool.availability
+                  }
+                : null,
+            tools: publicTools
+        };
+        const result = {
             content: [
                 {
                     type: 'text',
-                    text: JSON.stringify({
-                        status: 'completed',
-                        query,
-                        routing_advice: routingAdvice,
-                        tools
-                    }, null, 2)
+                    text: JSON.stringify(discovery, null, 2)
                 }
             ],
             details: {
-                status: 'completed',
-                query,
-                routing_advice: routingAdvice,
-                tools
+                ...discovery
             },
             structuredContent: {
-                status: 'completed',
-                query,
-                routing_advice: routingAdvice,
-                tools
+                ...discovery
             }
         };
+        Object.defineProperty(result, '__ailisRawToolSearchTools', {
+            value: tools,
+            enumerable: false,
+            configurable: true
+        });
+        return result;
     }
 
     resolveDefaultContext() {
@@ -904,7 +1811,7 @@ class AILISGateway extends EventEmitter {
 
     async start() {
         if (this.server) {
-            return this.getStatus();
+            return this.getStatus({ includeAgentRunner: false });
         }
 
         await fsp.mkdir(this.auditDir, { recursive: true });
@@ -918,6 +1825,8 @@ class AILISGateway extends EventEmitter {
                 });
             });
         });
+        this.server.requestTimeout = this.httpRequestTimeoutMs;
+        this.server.timeout = this.httpRequestTimeoutMs;
 
         await new Promise((resolve, reject) => {
             this.server.once('error', reject);
@@ -928,16 +1837,16 @@ class AILISGateway extends EventEmitter {
             });
         });
 
-        this.emitGatewayEvent('gateway.started', this.getStatus());
-        this.scheduleMemoryCurationSoon('gateway_startup');
-        return this.getStatus();
+        this.emitGatewayEvent('gateway.started', this.getStatus({ includeAgentRunner: false }));
+        this.startProfileCurationScheduler();
+        if (this.emberHarness?.enabled !== false) {
+            void this.prepareLocalSafetyEvaluator('gateway_started');
+        }
+        return this.getStatus({ includeAgentRunner: false });
     }
 
     async stop() {
-        if (this.memoryCurationTimer) {
-            clearTimeout(this.memoryCurationTimer);
-            this.memoryCurationTimer = null;
-        }
+        this.stopProfileCurationScheduler();
         for (const client of this.sseClients) {
             try {
                 client.res?.end?.();
@@ -957,20 +1866,133 @@ class AILISGateway extends EventEmitter {
         if (this.runtime) {
             await this.runtime.shutdown().catch(() => {});
         }
-
+        if (this.localSafetyEvaluator) {
+            await this.localSafetyEvaluator.dispose().catch(() => {});
+        }
         if (this.memoryRuntime) {
-            await Promise.resolve(this.memoryRuntime.shutdown?.()).catch(() => {});
+            await this.memoryRuntime.shutdown?.().catch(() => {});
         }
 
         if (!this.server) {
-            return this.getStatus();
+            return this.getStatus({ includeAgentRunner: false });
         }
 
         const server = this.server;
         this.server = null;
         await new Promise((resolve) => server.close(resolve));
         this.emitGatewayEvent('gateway.stopped', {});
-        return this.getStatus();
+        return this.getStatus({ includeAgentRunner: false });
+    }
+
+    startProfileCurationScheduler() {
+        if (!this.profileCurationEnabled || !this.userProfileCurator) {
+            return;
+        }
+        this.stopProfileCurationScheduler();
+        this.profileCurationStartTimer = setTimeout(() => {
+            void this.runScheduledProfileCuration('startup');
+        }, this.profileCurationStartDelayMs);
+        this.profileCurationStartTimer.unref?.();
+        this.profileCurationIntervalTimer = setInterval(() => {
+            void this.runScheduledProfileCuration('interval');
+        }, this.profileCurationCheckIntervalMs);
+        this.profileCurationIntervalTimer.unref?.();
+    }
+
+    stopProfileCurationScheduler() {
+        if (this.profileCurationStartTimer) {
+            clearTimeout(this.profileCurationStartTimer);
+            this.profileCurationStartTimer = null;
+        }
+        if (this.profileCurationIntervalTimer) {
+            clearInterval(this.profileCurationIntervalTimer);
+            this.profileCurationIntervalTimer = null;
+        }
+        if (this.profileCurationDebounceTimer) {
+            clearTimeout(this.profileCurationDebounceTimer);
+            this.profileCurationDebounceTimer = null;
+        }
+    }
+
+    scheduleProfileCurationSoon(trigger = 'conversation_idle') {
+        if (!this.profileCurationEnabled || !this.userProfileCurator) {
+            return false;
+        }
+        if (this.profileCurationDebounceTimer) {
+            clearTimeout(this.profileCurationDebounceTimer);
+        }
+        this.profileCurationDebounceTimer = setTimeout(() => {
+            this.profileCurationDebounceTimer = null;
+            void this.runScheduledProfileCuration(trigger, { force: true });
+        }, this.profileCurationDebounceMs);
+        this.profileCurationDebounceTimer.unref?.();
+        return true;
+    }
+
+    async runScheduledProfileCuration(trigger = 'scheduled', options = {}) {
+        if (this.profileCurationRunning) {
+            this.scheduleProfileCurationSoon(trigger);
+            return { ok: false, status: 'profile_curation_already_running' };
+        }
+        if (!this.profileCurationEnabled || !this.userProfileCurator) {
+            return { ok: false, status: 'profile_curation_not_started' };
+        }
+        this.profileCurationRunning = true;
+        try {
+            const [profileState, rawStatus] = await Promise.all([
+                this.getUserProfileCurationState(),
+                Promise.resolve(this.getRawMemoryStatus())
+            ]);
+            const rebuild = profileState?.rebuild || null;
+            const activeRebuild = ['running', 'paused', 'partial_completed', 'failed', 'promoting'].includes(rebuild?.status);
+            const capsuleCount = Number(profileState?.userProfile?.items?.length || 0) +
+                Number(profileState?.relationshipProfile?.items?.length || 0);
+            const shouldRebuild = Number(rawStatus?.entryCount) > 0 && (
+                activeRebuild || (!rebuild && capsuleCount === 0)
+            );
+            const result = shouldRebuild
+                ? await this.rebuildUserProfile({
+                      trigger,
+                      maxPasses: 1,
+                      maxBatches: 4,
+                      ...options
+                  })
+                : await this.curateUserProfile({ trigger, ...options });
+            const requiresCognition =
+                this.memoryRuntime?.getStatus?.()?.memoryStrategyStatus?.profile?.requiresCognition === true;
+            const cognitionCuration = requiresCognition
+                ? await this.curateMemoryCognition({
+                    trigger,
+                    maxBatches: options.maxBatches || 4,
+                    ...options
+                })
+                : null;
+            this.emitGatewayEvent('memory.profile_curation.scheduled', {
+                trigger,
+                ok: result?.ok === true,
+                status: result?.status || '',
+                rebuildId: result?.rebuild?.id || '',
+                processedEntryCount: result?.run?.processedEntryCount || result?.rebuild?.processedEntryCount || 0,
+                profileUpdateCount: result?.run?.profileUpdateCount || result?.rebuild?.profileUpdateCount || 0,
+                relationshipUpdateCount: result?.run?.relationshipUpdateCount || result?.rebuild?.relationshipUpdateCount || 0,
+                preferenceEventCount: result?.run?.preferenceEventCount || 0,
+                affinityChanged: result?.run?.affinityChanged === true
+            });
+            if (result?.status === 'rebuild_partial') {
+                this.scheduleProfileCurationSoon('profile_rebuild_resume');
+            }
+            return cognitionCuration
+                ? { ...result, cognitionCuration }
+                : result;
+        } catch (error) {
+            this.emitGatewayEvent('memory.profile_curation.error', {
+                trigger,
+                error: error?.message || String(error)
+            });
+            return { ok: false, status: 'profile_curation_error', error: error?.message || String(error) };
+        } finally {
+            this.profileCurationRunning = false;
+        }
     }
 
     getAddress() {
@@ -989,10 +2011,13 @@ class AILISGateway extends EventEmitter {
         };
     }
 
-    getStatus() {
+    getStatus(options = {}) {
+        const includeAgentRunner = options.includeAgentRunner !== false;
         const address = this.getAddress();
         const gatewayToolDefinitions = this.gatewayToolRuntimeRegistry?.listDefinitions?.() || [];
         const directGatewayTools = this.gatewayToolRuntimeRegistry?.modelVisibleSpecs?.() || [];
+        const agentToolSurface = getOpenClawToolSurfaceSummary();
+        const agentToolSurfaceValidation = validateOpenClawToolSurface().summary;
         return {
             enabled: true,
             running: Boolean(this.server),
@@ -1004,14 +2029,16 @@ class AILISGateway extends EventEmitter {
             platform: this.platformAdapter.getStatus(),
             auditLogPath: this.auditLogPath,
             toolGatewayUrl: this.toolGatewayUrl,
-            openClawToolSurface: getOpenClawToolSurfaceSummary(),
-            openClawToolSurfaceValidation: validateOpenClawToolSurface().summary,
+            agentToolSurface,
+            agentToolSurfaceValidation,
+            openClawToolSurface: agentToolSurface,
+            openClawToolSurfaceValidation: agentToolSurfaceValidation,
             toolContracts: {
                 version: 1,
                 count: listToolContracts().length
             },
             toolRuntime: {
-                model: 'codex_like_gateway_tool_registry',
+                model: 'ailis_gateway_tool_registry.v1',
                 registeredToolCount: gatewayToolDefinitions.length,
                 directToolCount: directGatewayTools.length,
                 deferredToolCount: gatewayToolDefinitions.filter((tool) => tool.exposure === TOOL_EXPOSURE.DEFERRED).length
@@ -1019,9 +2046,30 @@ class AILISGateway extends EventEmitter {
             defaultContext: redactObject(this.resolveDefaultContext()),
             runtime: this.runtime.getStatus(),
             memory: this.memoryRuntime?.getStatus?.() || null,
+            emberHarness: this.emberHarness?.getStatus?.() || null,
+            rawMemory: this.rawMemoryLedger?.getStatus?.() || null,
+            interactionPreferences: this.preferenceState?.getStatus?.() || null,
+            taskResultCapsules: this.taskResultCapsules?.getStatus?.() || null,
+            taskAgentHarness: this.taskAgentHarness?.getStatus?.() || null,
+            taskResultBackfill: this.taskResultBackfill,
+            userProfileCuration: this.userProfileCurator?.getStatus?.() || null,
+            memoryCognitionCuration: this.memoryCognitionCurator?.getStatus?.() || null,
+            userProfileCurationScheduler: {
+                enabled: this.profileCurationEnabled,
+                running: this.profileCurationRunning,
+                startDelayMs: this.profileCurationStartDelayMs,
+                checkIntervalMs: this.profileCurationCheckIntervalMs,
+                debounceMs: this.profileCurationDebounceMs,
+                scheduled: Boolean(this.profileCurationStartTimer || this.profileCurationIntervalTimer || this.profileCurationDebounceTimer)
+            },
             selfEvolution: this.selfEvolutionRuntime?.getStatus?.() || null,
             toolRuntimeGateway: this.toolRuntimeSupervisor?.getStatus?.() || null,
-            agentRunner: this.ensureAgentRunner().getStatus(),
+            agentRunner: includeAgentRunner
+                ? this.ensureAgentRunner().getStatus()
+                : (this.agentRunner?.getStatus?.() || {
+                    enabled: false,
+                    status: 'not_loaded'
+                }),
             events: {
                 seq: this.eventSeq,
                 buffered: this.eventLog.length,
@@ -1036,7 +2084,9 @@ class AILISGateway extends EventEmitter {
             this.agentRunner = new AILISAgentRunner({
                 gateway: this,
                 workspaceRoot: this.workspaceRoot,
-                memoryRuntime: this.memoryRuntime
+                memoryRuntime: this.memoryRuntime,
+                preferenceState: this.preferenceState,
+                taskResultCapsules: this.taskResultCapsules
             });
         }
         return this.agentRunner;
@@ -1049,71 +2099,81 @@ class AILISGateway extends EventEmitter {
         };
     }
 
-    async searchMemoryAsync(query, options = {}) {
-        if (typeof this.memoryRuntime?.searchMemoryAsync === 'function') {
-            return await this.memoryRuntime.searchMemoryAsync(query, options);
+    getRawMemoryStatus() {
+        return this.rawMemoryLedger?.getStatus?.() || {
+            ok: false,
+            status: 'raw_memory_not_configured'
+        };
+    }
+
+    replayRawMemory(options = {}) {
+        return this.rawMemoryLedger?.replay?.(options || {}) || {
+            ok: false,
+            status: 'raw_memory_not_configured',
+            entries: []
+        };
+    }
+
+    listRawMemorySessions(limit = 100) {
+        return this.rawMemoryLedger?.listSessions?.(limit) || {
+            ok: false,
+            status: 'raw_memory_not_configured',
+            sessions: []
+        };
+    }
+
+    async curateUserProfile(options = {}) {
+        return await this.userProfileCurator?.runDailyCuration?.(options || {}) || {
+            ok: false,
+            status: 'user_profile_curator_not_configured'
+        };
+    }
+
+    async rebuildUserProfile(options = {}) {
+        return await this.userProfileCurator?.rebuildFromRawMemory?.(options || {}) || {
+            ok: false,
+            status: 'user_profile_curator_not_configured'
+        };
+    }
+
+    async getUserProfileCurationState() {
+        return await this.userProfileCurator?.getState?.() || {
+            ok: false,
+            status: 'user_profile_curator_not_configured'
+        };
+    }
+
+    async curateMemoryCognition(options = {}) {
+        const strategyStatus = this.memoryRuntime?.getStatus?.()?.memoryStrategyStatus;
+        if (
+            strategyStatus?.profile?.maturity === 'full' &&
+            strategyStatus?.profile?.requiresCognition === true &&
+            typeof this.memoryRuntime?.curateStrategyMemory === 'function'
+        ) {
+            const result = await this.memoryRuntime.curateStrategyMemory(options || {});
+            if (result) {
+                return result;
+            }
         }
-        return {
+        return await this.memoryCognitionCurator?.curate?.(options || {}) || {
+            ok: false,
+            status: 'memory_cognition_curator_not_configured'
+        };
+    }
+
+    getMemoryCognitionStatus() {
+        return this.memoryCognitionCurator?.getStatus?.() || {
+            ok: false,
+            status: 'memory_cognition_curator_not_configured'
+        };
+    }
+
+    searchMemory(query, options = {}) {
+        return this.memoryRuntime?.searchMemory?.(query, options) || {
             ok: false,
             status: 'memory_not_configured',
             events: []
         };
-    }
-
-    getMemoryLedgerStatus() {
-        return this.memoryRuntime?.getStatus?.()?.memoryStrategyStatus?.eventActionLedger || {
-            ok: false,
-            status: 'memory_ledger_not_configured'
-        };
-    }
-
-    async curateMemoryLedger(options = {}) {
-        return await this.memoryRuntime?.curateMemoryLedger?.(options || {}) || {
-            ok: false,
-            status: 'memory_ledger_not_configured'
-        };
-    }
-
-    scheduleMemoryCurationSoon(trigger = 'conversation_idle') {
-        const memoryStatus = this.memoryRuntime?.getStatus?.()?.memoryStrategyStatus;
-        if (
-            memoryStatus?.profile?.requiresLedgerCuration !== true ||
-            memoryStatus?.eventActionLedger?.enabled !== true
-        ) {
-            return false;
-        }
-        if (this.memoryCurationTimer) {
-            clearTimeout(this.memoryCurationTimer);
-        }
-        this.memoryCurationTimer = setTimeout(async () => {
-            this.memoryCurationTimer = null;
-            if (this.memoryCurationRunning) {
-                this.scheduleMemoryCurationSoon('memory_curation_resume');
-                return;
-            }
-            this.memoryCurationRunning = true;
-            try {
-                const result = await this.curateMemoryLedger({
-                    trigger,
-                    maxBatches: 4
-                });
-                this.emitGatewayEvent('memory.ledger.curated', {
-                    trigger,
-                    ok: result?.ok === true,
-                    status: result?.status || '',
-                    recordCount: Number(result?.recordCount || result?.run?.recordCount || 0)
-                });
-            } catch (error) {
-                this.emitGatewayEvent('memory.ledger.error', {
-                    trigger,
-                    error: error?.message || String(error)
-                });
-            } finally {
-                this.memoryCurationRunning = false;
-            }
-        }, this.memoryCurationDebounceMs);
-        this.memoryCurationTimer.unref?.();
-        return true;
     }
 
     updateMemoryBlock(key, value) {
@@ -1182,12 +2242,39 @@ class AILISGateway extends EventEmitter {
     }
 
     emitGatewayEvent(type, payload = {}) {
+        if (type === 'subagent.event' && payload.type === 'subagent.completed') {
+            try {
+                this.taskResultCapsules?.recordExecution?.({
+                    sessionId: payload.parentSessionId,
+                    parentRunId: payload.parentRunId,
+                    action: 'resume',
+                    task: payload.task,
+                    ok: payload.payload?.ok === true,
+                    status: payload.status,
+                    subagent: {
+                        id: payload.subagentId,
+                        childRunId: payload.childRunId,
+                        sessionId: payload.parentSessionId,
+                        task: payload.task,
+                        status: payload.status
+                    },
+                    childResult: payload.payload?.result || {}
+                });
+            } catch (error) {
+                payload = {
+                    ...payload,
+                    taskStateError: error?.message || String(error)
+                };
+            }
+        }
         this.eventSeq += 1;
+        const protocolMetadata = runtimeEventMetadata({ type, payload });
         const event = {
             id: `evt-${this.eventSeq}`,
             seq: this.eventSeq,
             ts: Date.now(),
             type,
+            ...protocolMetadata,
             payload,
             delivery: isLosslessGatewayEvent(type) ? 'lossless' : 'best_effort'
         };
@@ -1305,6 +2392,16 @@ class AILISGateway extends EventEmitter {
             return;
         }
 
+        if (url.pathname === '/ember-harness/status' && req.method === 'GET') {
+            const runId = url.searchParams.get('runId') || '';
+            this.sendJson(res, 200, {
+                ok: true,
+                status: this.emberHarness?.getStatus?.() || null,
+                records: runId ? this.emberHarness?.listRunRecords?.(runId, Number(url.searchParams.get('limit') || 50)) || [] : []
+            });
+            return;
+        }
+
         if ((url.pathname === '/tools' || url.pathname === '/tools/list') && req.method === 'GET') {
             this.sendJson(res, 200, await this.listTools());
             return;
@@ -1367,24 +2464,76 @@ class AILISGateway extends EventEmitter {
             return;
         }
 
-        if (url.pathname === '/memory/search' && req.method === 'POST') {
-            const body = await this.readJsonBody(req);
-            this.sendJson(
-                res,
-                200,
-                await this.searchMemoryAsync(body?.query || body?.text || '', body || {})
-            );
+        if (url.pathname === '/raw-memory/status' && req.method === 'GET') {
+            this.sendJson(res, 200, this.getRawMemoryStatus());
             return;
         }
 
-        if (url.pathname === '/memory/ledger/status' && req.method === 'GET') {
-            this.sendJson(res, 200, this.getMemoryLedgerStatus());
+        if (url.pathname === '/raw-memory/sessions' && req.method === 'GET') {
+            this.sendJson(res, 200, this.listRawMemorySessions(Number(url.searchParams.get('limit') || 100)));
             return;
         }
 
-        if (url.pathname === '/memory/ledger/curate' && req.method === 'POST') {
+        if (url.pathname === '/raw-memory/replay' && req.method === 'GET') {
+            this.sendJson(res, 200, this.replayRawMemory({
+                sessionId: url.searchParams.get('sessionId') || '',
+                runId: url.searchParams.get('runId') || '',
+                type: url.searchParams.get('type') || '',
+                source: url.searchParams.get('source') || '',
+                since: url.searchParams.get('since') || '',
+                until: url.searchParams.get('until') || '',
+                includePayload: url.searchParams.get('includePayload') !== 'false',
+                limit: Number(url.searchParams.get('limit') || 200)
+            }));
+            return;
+        }
+
+        if (url.pathname === '/memory/profile/state' && req.method === 'GET') {
+            this.sendJson(res, 200, await this.getUserProfileCurationState());
+            return;
+        }
+
+        if (url.pathname === '/memory/strategies' && req.method === 'GET') {
+            this.sendJson(res, 200, {
+                ok: true,
+                active: this.memoryRuntime?.getStatus?.()?.memoryStrategy || '',
+                strategies: this.getMemoryStrategyCatalog(),
+                status: this.memoryRuntime?.getStatus?.()?.memoryStrategyStatus || null
+            });
+            return;
+        }
+
+        if (url.pathname === '/memory/strategy' && req.method === 'POST') {
             const body = await this.readJsonBody(req);
-            this.sendJson(res, 200, await this.curateMemoryLedger(body || {}));
+            this.sendJson(res, 200, this.setMemoryStrategy(body?.strategy || body?.id || ''));
+            return;
+        }
+
+        if (url.pathname === '/memory/cognition/status' && req.method === 'GET') {
+            this.sendJson(res, 200, this.getMemoryCognitionStatus());
+            return;
+        }
+
+        if (url.pathname === '/memory/cognition/curate' && req.method === 'POST') {
+            const body = await this.readJsonBody(req);
+            this.sendJson(res, 200, await this.curateMemoryCognition(body || {}));
+            return;
+        }
+
+        if (url.pathname === '/memory/profile/curate' && (req.method === 'GET' || req.method === 'POST')) {
+            const body = req.method === 'POST' ? await this.readJsonBody(req) : {};
+            this.sendJson(res, 200, await this.curateUserProfile({
+                ...(body || {}),
+                force: body.force === true || url.searchParams.get('force') === 'true',
+                rawLimit: body.rawLimit || Number(url.searchParams.get('rawLimit') || 5000),
+                evidenceLimit: body.evidenceLimit || Number(url.searchParams.get('evidenceLimit') || 120)
+            }));
+            return;
+        }
+
+        if (url.pathname === '/memory/profile/rebuild' && req.method === 'POST') {
+            const body = await this.readJsonBody(req);
+            this.sendJson(res, 200, await this.rebuildUserProfile(body || {}));
             return;
         }
 
@@ -1602,7 +2751,7 @@ class AILISGateway extends EventEmitter {
                 registeredToolIds.has(tool.id) ||
                 materializedSet.has(tool.id) ||
                 Boolean(smoke.map.get(tool.id)?.materialized),
-            needsApproval: tool.id === 'exec' || tool.id === 'subagents',
+            needsApproval: tool.id === 'exec',
             externalSideEffect: EXTERNAL_SIDE_EFFECT_TOOL_IDS.has(tool.id)
         }));
 
@@ -1703,6 +2852,99 @@ class AILISGateway extends EventEmitter {
         ])];
     }
 
+    shouldRunEmberHarness(context = {}) {
+        return this.emberHarness?.enabled !== false &&
+            context.emberHarness !== false &&
+            context.disableEmberHarness !== true;
+    }
+
+    async runEmberHarnessCheck({
+        stage = 'unknown',
+        boundary = 'unknown',
+        text = '',
+        context = {},
+        metadata = {},
+        runId = '',
+        sessionId = ''
+    } = {}) {
+        const finalRunId = normalizeString(
+            runId || context.runId || context.parentRunId || context.sessionRunId,
+            'global'
+        );
+        const finalSessionId = normalizeString(
+            sessionId || context.sessionId || context.sessionKey || context.parentSessionId,
+            'main'
+        );
+        if (!this.shouldRunEmberHarness(context)) {
+            return {
+                ok: true,
+                status: 'disabled',
+                decision: 'allow',
+                blocked: false,
+                runId: finalRunId,
+                sessionId: finalSessionId,
+                stage,
+                boundary
+            };
+        }
+        const result = await this.emberHarness.check({
+            runId: finalRunId,
+            sessionId: finalSessionId,
+            stage,
+            boundary,
+            text,
+            metadata: redactObject(metadata),
+            evaluator: typeof context.emberHarnessEvaluator === 'function' ? context.emberHarnessEvaluator : null
+        });
+        const eventPayload = {
+            schema: result.schema,
+            checkId: result.checkId,
+            runId: result.runId,
+            sessionId: result.sessionId,
+            stage: result.stage,
+            boundary: result.boundary,
+            mode: result.mode,
+            status: result.status,
+            decision: result.decision,
+            blocked: result.blocked,
+            riskLevel: result.riskLevel,
+            riskTypes: result.riskTypes,
+            summary: result.summary,
+            suggestion: result.suggestion,
+            evaluatorDetails: result.evaluatorDetails,
+            evaluatorConfigured: result.evaluatorConfigured,
+            snapshot: result.snapshot,
+            rollbackTo: result.rollbackTo
+        };
+        this.emitGatewayEvent('ember.harness.check', eventPayload);
+        await this.appendAudit({
+            type: 'ember.harness.check',
+            runId: result.runId,
+            sessionId: result.sessionId,
+            status: result.status,
+            ok: result.blocked !== true,
+            args: {
+                stage: result.stage,
+                boundary: result.boundary
+            },
+            context: {
+                workspace: context.workspace || context.workspaceDir,
+                planner: context.planner,
+                iteration: context.iteration
+            },
+            result: eventPayload
+        }).catch(() => {});
+        if (result.runId && result.runId !== 'global') {
+            await this.runtime.appendItem(result.runId, {
+                type: 'ember.harness.check',
+                sessionId: result.sessionId,
+                status: result.status,
+                payload: eventPayload
+            }).catch(() => {});
+        }
+        return result;
+    }
+
     async callTool(request = {}) {
         const callId = randomUUID();
         const startedAt = Date.now();
@@ -1742,14 +2984,16 @@ class AILISGateway extends EventEmitter {
                     });
                 }
             }
-            const workspaceDir = this.resolveWorkspace(context.workspace);
+            const workspaceDir = this.resolveWorkspace(context.workspace, context);
             if (transcriptRunId) {
                 await this.runtime.appendItem(transcriptRunId, {
                     type: 'tool.call',
                     sessionId: transcriptSessionId,
                     status: 'started',
                     payload: {
+                        schema: 'ailis.tool_call.v1',
                         callId,
+                        toolName: toolId,
                         tool: toolId,
                         args,
                         context: {
@@ -1795,20 +3039,94 @@ class AILISGateway extends EventEmitter {
                     classification: policyDecision.classification
                 });
             }
+            const preToolGate = await this.runEmberHarnessCheck({
+                stage: policyDecision.classification?.mutates ? 'pre_side_effect' : 'tool_call',
+                boundary: 'tool_call_before_execution',
+                text: {
+                    tool: toolId,
+                    args,
+                    policy: policyDecision.policy,
+                    classification: policyDecision.classification
+                },
+                context,
+                runId: transcriptRunId,
+                sessionId: transcriptSessionId,
+                metadata: {
+                    callId,
+                    tool: toolId,
+                    workspace: workspaceDir,
+                    mutates: policyDecision.classification?.mutates === true,
+                    needsApproval: policyDecision.needsApproval === true
+                }
+            });
+            if (preToolGate.blocked) {
+                throwBlocked('tool call blocked by EMBER-Harness stage gate before execution', {
+                    tool: toolId,
+                    callId,
+                    emberHarness: summarizeEmberHarnessRecord(preToolGate)
+                });
+            }
             const result = await withTimeout(
-                Number(context.timeoutMs || request.timeoutMs || TOOL_CALL_TIMEOUT_MS),
-                () => this.callOpenClawTool({ callId, toolId, args, context, workspaceDir })
+                Number(request.timeoutMs || context.timeoutMs || TOOL_CALL_TIMEOUT_MS),
+                () => this.callAgentRuntimeTool({ callId, toolId, args, context, workspaceDir })
             );
             const guardedResult = this.runtime.guardToolResult(result, { toolId, callId });
+            attachObservationContract(guardedResult, { toolId });
+            const postToolGate = await this.runEmberHarnessCheck({
+                stage: 'tool_result',
+                boundary: 'tool_result_enter_context',
+                text: guardedResult,
+                context,
+                runId: transcriptRunId,
+                sessionId: transcriptSessionId,
+                metadata: {
+                    callId,
+                    tool: toolId,
+                    workspace: workspaceDir
+                }
+            });
+            if (postToolGate.blocked) {
+                throwBlocked('tool result blocked by EMBER-Harness before entering model context', {
+                    tool: toolId,
+                    callId,
+                    emberHarness: summarizeEmberHarnessRecord(postToolGate)
+                });
+            }
+            if (toolId === 'tool_search') {
+                attachRawToolSearchToolsForDirectExposure(guardedResult, result);
+            } else if (
+                parseAilisDirectMcpToolId(toolId) ||
+                toolId === WEB_SEARCH_TOOL_ID ||
+                toolId === WEB_RUN_TOOL_ID
+            ) {
+                await attachSuggestedMcpToolsForDirectExposure(
+                    guardedResult,
+                    toolId === WEB_SEARCH_TOOL_ID
+                        ? 'mcp__ailis_research__web_search'
+                        : toolId === WEB_RUN_TOOL_ID
+                        ? 'mcp__ailis_research__web_fetch'
+                        : toolId,
+                    this.runtime?.mcpManager,
+                    Number(request.timeoutMs || context.timeoutMs || 8000)
+                );
+            }
             const status = classifyToolResult(guardedResult);
+            const semanticFailure = ['blocked', 'failed'].includes(status);
             const response = {
-                ok: status === 'completed',
+                ok: !semanticFailure && guardedResult?.isError !== true,
                 callId,
                 tool: toolId,
                 status,
                 durationMs: Date.now() - startedAt,
                 result: guardedResult
             };
+            const canonicalToolOutput = normalizeToolOutput({
+                id: callId,
+                callId,
+                tool: toolId,
+                args,
+                response
+            });
             await this.appendAudit({
                 ...auditBase,
                 status,
@@ -1822,11 +3140,16 @@ class AILISGateway extends EventEmitter {
                     sessionId: transcriptSessionId,
                     status,
                     payload: {
+                        schema: canonicalToolOutput.schema,
                         callId,
+                        toolName: canonicalToolOutput.toolName,
                         tool: toolId,
                         ok: response.ok,
                         status,
                         durationMs: response.durationMs,
+                        outputPreview: canonicalToolOutput.outputPreview,
+                        errorSummary: canonicalToolOutput.errorSummary,
+                        threadItem: toolOutputToThreadItem(canonicalToolOutput),
                         result: guardedResult
                     }
                 });
@@ -1854,13 +3177,14 @@ class AILISGateway extends EventEmitter {
             return response;
         } catch (error) {
             const status = classifyError(error);
+            const errorMessage = formatGatewayToolError(error);
             const response = {
                 ok: false,
                 callId,
                 tool: toolId,
                 status,
                 durationMs: Date.now() - startedAt,
-                error: error.message || String(error),
+                error: errorMessage,
                 ...(error.details ? { details: error.details } : {})
             };
             await this.appendAudit({
@@ -1889,16 +3213,31 @@ class AILISGateway extends EventEmitter {
                     },
                     { toolId, callId }
                 );
+                const canonicalToolOutput = normalizeToolOutput({
+                    id: callId,
+                    callId,
+                    tool: toolId,
+                    args,
+                    response: {
+                        ...response,
+                        result: guardedError
+                    }
+                });
                 await this.runtime.appendItem(transcriptRunId, {
                     type: 'tool.result',
                     sessionId: transcriptSessionId,
                     status,
                     payload: {
+                        schema: canonicalToolOutput.schema,
                         callId,
+                        toolName: canonicalToolOutput.toolName,
                         tool: toolId,
                         ok: false,
                         status,
                         durationMs: response.durationMs,
+                        outputPreview: canonicalToolOutput.outputPreview,
+                        errorSummary: canonicalToolOutput.errorSummary,
+                        threadItem: toolOutputToThreadItem(canonicalToolOutput),
                         result: guardedError
                     }
                 });
@@ -1931,12 +3270,108 @@ class AILISGateway extends EventEmitter {
 
     async runAgent(request = {}) {
         const input = request && typeof request === 'object' ? request : {};
-        return await this.ensureAgentRunner().runMessage({
-            ...input,
-            context: this.mergeDefaultContext(
-                input.context && typeof input.context === 'object' ? input.context : {}
-            )
+        const context = this.mergeDefaultContext(
+            input.context && typeof input.context === 'object' ? input.context : {}
+        );
+        const suppliedLlmSettings = (
+            input.llmSettings && typeof input.llmSettings === 'object'
+                ? input.llmSettings
+                : context.llmSettings && typeof context.llmSettings === 'object'
+                    ? context.llmSettings
+                    : null
+        );
+        const defaultLlmSettings = !suppliedLlmSettings && this.getLlmSettings
+            ? this.getLlmSettings()
+            : null;
+        const sessionId = normalizeString(input.sessionId || input.sessionKey || context.sessionId || context.sessionKey, 'main');
+        const runId = normalizeString(input.runId || context.runId);
+        const inputGate = await this.runEmberHarnessCheck({
+            stage: 'user_input',
+            boundary: 'untrusted_input_enter_context',
+            text: {
+                message: input.message || input.prompt || input.task || '',
+                attachments: Array.isArray(input.attachments) ? input.attachments : [],
+                messageHistoryCount: Array.isArray(input.messageHistory) ? input.messageHistory.length : 0
+            },
+            context,
+            runId,
+            sessionId,
+            metadata: {
+                source: 'agent.run',
+                agentLoop: input.agentLoop || context.agentLoop,
+                planner: input.planner || context.planner
+            }
         });
+        if (inputGate.blocked) {
+            return {
+                ok: false,
+                status: 'blocked',
+                mode: 'agent',
+                intent: 'blocked_by_ember_harness',
+                displayText: '本次请求已被 EMBER-Harness 阶段门控阻断，未进入智能体执行链路。',
+                speechText: '本次请求已被安全门控阻断。',
+                emberHarness: summarizeEmberHarnessRecord(inputGate)
+            };
+        }
+        const result = await this.ensureAgentRunner().runMessage({
+            ...input,
+            ...(defaultLlmSettings && typeof defaultLlmSettings === 'object'
+                ? { llmSettings: defaultLlmSettings }
+                : {}),
+            context
+        });
+        const finalText = normalizeString(
+            result?.displayText ||
+            result?.speechText ||
+            result?.finalAnswer ||
+            result?.answer ||
+            result?.message
+        );
+        if (!finalText) {
+            return {
+                ...result,
+                emberHarness: {
+                    input: summarizeEmberHarnessRecord(inputGate)
+                }
+            };
+        }
+        const finalGate = await this.runEmberHarnessCheck({
+            stage: 'final_output',
+            boundary: 'final_output_before_user',
+            text: finalText,
+            context,
+            runId: result?.runId || runId,
+            sessionId: result?.sessionId || sessionId,
+            metadata: {
+                source: 'agent.run',
+                status: result?.status,
+                ok: result?.ok === true
+            }
+        });
+        if (finalGate.blocked) {
+            return {
+                ok: false,
+                status: 'blocked',
+                mode: result?.mode || 'agent',
+                intent: 'blocked_by_ember_harness',
+                runId: result?.runId,
+                sessionId: result?.sessionId || sessionId,
+                durationMs: result?.durationMs,
+                displayText: '最终回答已被 EMBER-Harness 阶段门控阻断，系统已回退到最近稳定阶段快照。',
+                speechText: '最终回答已被安全门控阻断。',
+                emberHarness: {
+                    input: summarizeEmberHarnessRecord(inputGate),
+                    final: summarizeEmberHarnessRecord(finalGate)
+                }
+            };
+        }
+        return {
+            ...result,
+            emberHarness: {
+                input: summarizeEmberHarnessRecord(inputGate),
+                final: summarizeEmberHarnessRecord(finalGate)
+            }
+        };
     }
 
     async interruptAgentRun(request = {}) {
@@ -1950,8 +3385,8 @@ class AILISGateway extends EventEmitter {
         });
     }
 
-    async executeSubagentTask({ subagent, args = {}, context = {}, signal, onEvent } = {}) {
-        const task = normalizeString(subagent?.task || args.task || args.prompt || args.message);
+    async executeTaskAgent({ agent, args = {}, context = {}, signal, onEvent, registerInputHandler } = {}) {
+        const task = normalizeString(agent?.task || args.task || args.prompt || args.message);
         if (!task) {
             return {
                 ok: false,
@@ -1959,36 +3394,102 @@ class AILISGateway extends EventEmitter {
                 displayText: 'Subagent task is empty.'
             };
         }
+        const parentLlmSettings = (
+            args.llmSettings && typeof args.llmSettings === 'object' ? args.llmSettings :
+            args.llm && typeof args.llm === 'object' ? args.llm :
+            context.llmSettings && typeof context.llmSettings === 'object' ? context.llmSettings :
+            context.llm && typeof context.llm === 'object' ? context.llm :
+            null
+        );
+        const inheritanceMode = ['clean', 'recent', 'checkpoint'].includes(normalizeString(
+            args.inheritanceMode || context.taskAgentInheritanceMode,
+            'clean'
+        ).toLowerCase())
+            ? normalizeString(args.inheritanceMode || context.taskAgentInheritanceMode, 'clean').toLowerCase()
+            : 'clean';
+        const inheritedCheckpoint = inheritanceMode === 'checkpoint'
+            ? args.contextManagerCheckpoint || context.initialContextManagerCheckpoint || null
+            : null;
+        const recentMessages = inheritanceMode === 'recent'
+            ? (Array.isArray(args.recentMessages) ? args.recentMessages : context.recentMessages || [])
+            : [];
+        const attachments = Array.isArray(context.attachments)
+            ? context.attachments
+            : Array.isArray(context.fileAttachments)
+                ? context.fileAttachments
+                : [];
+        const requestedMaxAgentSteps = Number(args.maxAgentSteps || context.maxAgentSteps || TASK_AGENT_MAX_MODEL_ROUNDS);
+        const taskAgentMaxSteps = Math.max(
+            1,
+            Math.min(
+                Number.isFinite(requestedMaxAgentSteps) ? requestedMaxAgentSteps : TASK_AGENT_MAX_MODEL_ROUNDS,
+                TASK_AGENT_MAX_MODEL_ROUNDS
+            )
+        );
+        const childContext = this.mergeDefaultContext({
+            ...context,
+            ...(parentLlmSettings ? { llmSettings: parentLlmSettings } : {}),
+            parentRunId: agent?.runId,
+            parentSessionId: agent?.sessionId,
+            agentId: agent?.id,
+            agentLabel: agent?.label,
+            agentPath: agent?.agent_path,
+            runId: agent?.childRunId || context.runId,
+            sessionId: agent?.childSessionId || context.sessionId,
+            sessionKey: agent?.childSessionId || context.sessionKey,
+            agentLoop: 'llm',
+            planner: 'llm',
+            agentRole: 'task_agent',
+            contextMode: 'task_agent',
+            cleanContext: inheritanceMode === 'clean',
+            taskAgentInheritanceMode: inheritanceMode,
+            initialContextManagerCheckpoint: inheritedCheckpoint,
+            attachments,
+            fileAttachments: attachments,
+            maxAgentSteps: taskAgentMaxSteps
+        });
         await onEvent?.({
             type: 'subagent.runner.started',
             status: 'running',
             message: task,
             payload: {
-                subagentId: subagent?.id,
-                sessionId: subagent?.childSessionId
+                agentId: agent?.id,
+                sessionId: agent?.childSessionId
             }
         });
-        const runPromise = this.ensureAgentRunner().runMessage({
+        const agentRunner = this.ensureAgentRunner();
+        const runPromise = agentRunner.runMessage({
+            runId: agent?.childRunId,
             message: task,
-            sessionId: subagent?.childSessionId || context.sessionId || context.sessionKey,
+            messageHistory: recentMessages,
+            attachments,
+            sessionId: agent?.childSessionId || context.sessionId || context.sessionKey,
             agentLoop: 'llm',
             planner: 'llm',
-            maxAgentSteps: Number(args.maxAgentSteps || context.maxAgentSteps || 50),
-            context: this.mergeDefaultContext({
-                ...context,
-                parentRunId: subagent?.runId,
-                parentSessionId: subagent?.sessionId,
-                subagentId: subagent?.id,
-                subagentLabel: subagent?.label,
-                sessionId: subagent?.childSessionId || context.sessionId,
-                sessionKey: subagent?.childSessionId || context.sessionKey,
-                agentLoop: 'llm',
-                planner: 'llm',
-                maxAgentSteps: Number(args.maxAgentSteps || context.maxAgentSteps || 50)
-            })
+            agentRole: 'task_agent',
+            ...(parentLlmSettings ? { llmSettings: parentLlmSettings } : {}),
+            taskAgentInheritanceMode: inheritanceMode,
+            initialContextManagerCheckpoint: inheritedCheckpoint,
+            initialStepResults: Array.isArray(args.initialStepResults) ? args.initialStepResults : [],
+            maxAgentSteps: taskAgentMaxSteps,
+            context: childContext
         });
-        const result = signal
-            ? await new Promise((resolve, reject) => {
+        const unregisterInputHandler = typeof registerInputHandler === 'function'
+            ? registerInputHandler((message) => {
+                  const delivered = agentRunner.enqueueRunInput({
+                      runId: agent?.childRunId,
+                      sessionId: agent?.childSessionId || context.sessionId || context.sessionKey,
+                      message
+                  });
+                  if (!delivered) {
+                      throw new Error('TaskAgent input queue is not available for this run.');
+                  }
+              })
+            : () => {};
+        let result;
+        try {
+            result = signal
+                ? await new Promise((resolve, reject) => {
                   if (signal.aborted) {
                       reject(new Error('subagent run aborted'));
                       return;
@@ -2005,8 +3506,11 @@ class AILISGateway extends EventEmitter {
                           reject(error);
                       }
                   );
-              })
-            : await runPromise;
+                  })
+                : await runPromise;
+        } finally {
+            unregisterInputHandler?.();
+        }
         await onEvent?.({
             type: 'subagent.runner.finished',
             status: result?.status || 'completed',
@@ -2017,21 +3521,26 @@ class AILISGateway extends EventEmitter {
                 durationMs: result?.durationMs
             }
         });
+        const taskRunHandoff = result?.taskRunHandoff ||
+            result?.task_run_handoff ||
+            result?.handoff ||
+            null;
         return {
             ok: result?.ok === true,
             status: result?.status || (result?.ok === false ? 'failed' : 'completed'),
             runId: result?.runId,
             mode: result?.mode,
             intent: result?.intent,
-            displayText: result?.displayText || result?.speechText || '',
-            speechText: result?.speechText || result?.displayText || '',
+            displayText: taskRunHandoff?.userVisibleSummary || result?.displayText || result?.speechText || '',
+            speechText: result?.speechText || taskRunHandoff?.userVisibleSummary || result?.displayText || '',
             durationMs: result?.durationMs,
+            taskRunHandoff,
             steps: result?.steps || [],
             plan: result?.plan || []
         };
     }
 
-    async callOpenClawTool({ callId = '', toolId, args, context, workspaceDir }) {
+    async callAgentRuntimeTool({ callId = '', toolId, args, context, workspaceDir }) {
         if (isExternalVirtualToolId(toolId)) {
             const result = await this.runtime?.capabilityManager?.executeVirtualExternalTool?.(toolId, args, {
                 ...context,
@@ -2068,6 +3577,7 @@ class AILISGateway extends EventEmitter {
         }
 
         const tools = await this.getToolSet({
+            ...context,
             workspace: workspaceDir,
             sessionKey: context.sessionKey || args.sessionKey || 'main'
         });
@@ -2078,13 +3588,1301 @@ class AILISGateway extends EventEmitter {
 
         const finalArgs = this.prepareToolArgs({ toolId, args, context, workspaceDir });
         if (GATEWAY_BACKED_TOOL_IDS.has(toolId) || SESSION_BOUND_TOOL_IDS.has(toolId)) {
-            return await this.withDefaultOpenClawGatewayEnv(() => tool.execute(`ailis-${toolId}`, finalArgs));
+            return await this.withDefaultAgentRuntimeGatewayEnv(() => tool.execute(`ailis-${toolId}`, finalArgs));
         }
         return await tool.execute(`ailis-${toolId}`, finalArgs);
     }
 
+    getWebRunSession(context = {}) {
+        const key = normalizeString(
+            context.runId || context.sessionId || context.sessionKey,
+            'main'
+        );
+        let state = this.webRunSessions.get(key);
+        if (!state) {
+            state = {
+                refs: new Map(),
+                countersByTurn: new Map(),
+                selectionProtocol: null
+            };
+            this.webRunSessions.set(key, state);
+            while (this.webRunSessions.size > 64) {
+                this.webRunSessions.delete(this.webRunSessions.keys().next().value);
+            }
+        }
+        return state;
+    }
+
+    registerWebRunRef(context = {}, kind = 'search', url = '', metadata = {}) {
+        const state = this.getWebRunSession(context);
+        const iteration = Math.max(0, Number(context.iteration) || 0);
+        const turnCounters = state.countersByTurn.get(iteration) || { search: 0, view: 0 };
+        const counterKey = kind === 'view' ? 'view' : 'search';
+        const refId = `turn${iteration}${counterKey}${turnCounters[counterKey]}`;
+        turnCounters[counterKey] += 1;
+        state.countersByTurn.set(iteration, turnCounters);
+        state.refs.set(refId, {
+            ref_id: refId,
+            url: normalizeString(url),
+            ...cloneJson(metadata)
+        });
+        return refId;
+    }
+
+    resolveWebRunRef(context = {}, refId = '') {
+        const normalized = normalizeString(refId);
+        if (/^https?:\/\//i.test(normalized)) {
+            return { ref_id: normalized, url: normalized };
+        }
+        return this.getWebRunSession(context).refs.get(normalized) || null;
+    }
+
+    executeWebRunCachedFind(resolved = {}, operation = {}, context = {}) {
+        const extractedText = String(resolved.extractedText || resolved.extracted_text || '');
+        const pattern = normalizeString(operation.pattern);
+        if (!extractedText || !pattern) {
+            return null;
+        }
+        const allLines = extractedText.split(/\r?\n/);
+        const normalizedPattern = pattern.toLowerCase();
+        const matchIndexes = [];
+        for (let index = 0; index < allLines.length; index += 1) {
+            if (allLines[index].toLowerCase().includes(normalizedPattern)) {
+                matchIndexes.push(index);
+            }
+        }
+        const selectedIndexes = new Set();
+        for (const matchIndex of matchIndexes.slice(0, 8)) {
+            for (
+                let index = Math.max(0, matchIndex - 3);
+                index <= Math.min(allLines.length - 1, matchIndex + 3);
+                index += 1
+            ) {
+                selectedIndexes.add(index);
+            }
+        }
+        const viewRef = this.registerWebRunRef(context, 'view', resolved.url, {
+            parent_ref_id: normalizeString(operation.ref_id),
+            mode: 'find',
+            extractedText,
+            contentType: normalizeString(
+                resolved.contentType || resolved.content_type,
+                'application/pdf'
+            )
+        });
+        const sourceLines = [...selectedIndexes]
+            .sort((left, right) => left - right)
+            .map((index) => ({
+                lineNumber: index + 1,
+                line_number: index + 1,
+                lineno: index + 1,
+                text: allLines[index],
+                rendered: `L${index + 1}: ${allLines[index]}`
+            }));
+        const lineStart = sourceLines[0]?.lineno || 1;
+        const lineEnd = sourceLines.at(-1)?.lineno || lineStart;
+        const sourceWindow = {
+            type: 'source_viewport',
+            action: {
+                type: 'find_in_page',
+                url: normalizeString(resolved.url),
+                pattern
+            },
+            url: normalizeString(resolved.url),
+            ref_id: viewRef,
+            contentType: normalizeString(
+                resolved.contentType || resolved.content_type,
+                'application/pdf'
+            ),
+            content_type: normalizeString(
+                resolved.contentType || resolved.content_type,
+                'application/pdf'
+            ),
+            totalLines: allLines.length,
+            total_lines: allLines.length,
+            lineno: lineStart,
+            lineStart,
+            line_start: lineStart,
+            lineEnd,
+            line_end: lineEnd,
+            hasMoreBefore: lineStart > 1,
+            has_more_before: lineStart > 1,
+            hasMoreAfter: lineEnd < allLines.length,
+            has_more_after: lineEnd < allLines.length,
+            lines: sourceLines
+        };
+        const text = matchIndexes.length
+            ? [
+                  `Find results in cached extracted source for pattern: ${pattern}`,
+                  `Matches: ${matchIndexes.length}`,
+                  ...sourceLines.map((line) => line.rendered)
+              ].join('\n')
+            : `No matches in cached extracted source for pattern: ${pattern}`;
+        const structuredContent = {
+            status: 'completed',
+            cached: true,
+            url: normalizeString(resolved.url),
+            ref_id: viewRef,
+            pattern,
+            matchCount: matchIndexes.length,
+            match_count: matchIndexes.length,
+            source: sourceWindow,
+            source_window: sourceWindow,
+            sourceWindow,
+            sourceViewport: sourceWindow,
+            source_viewport: sourceWindow
+        };
+        return {
+            content: [{ type: 'text', text }],
+            isError: false,
+            details: structuredContent,
+            structuredContent
+        };
+    }
+
+    async searchMemoryAsync(query, options = {}) {
+        if (typeof this.memoryRuntime?.searchMemoryAsync === 'function') {
+            return await this.memoryRuntime.searchMemoryAsync(query, options);
+        }
+        return this.searchMemory(query, options);
+    }
+
+    setMemoryStrategy(strategy) {
+        return this.memoryRuntime?.setMemoryStrategy?.(strategy) || {
+            ok: false,
+            status: 'memory_not_configured'
+        };
+    }
+
+    getMemoryStrategyCatalog() {
+        return this.memoryRuntime?.getMemoryStrategyCatalog?.() || [];
+    }
+
+    async executeWebRunSearch(args = {}, context = {}) {
+        const queries = (Array.isArray(args.search_query) ? args.search_query : [])
+            .slice(0, 4)
+            .map((entry) => ({
+                q: normalizeString(entry?.q),
+                recency: entry?.recency,
+                domains: Array.isArray(entry?.domains) ? entry.domains.map((domain) => normalizeString(domain)).filter(Boolean) : []
+            }))
+            .filter((entry) => entry.q);
+        if (!queries.length) {
+            return {
+                content: [{ type: 'text', text: 'web_run search_query requires at least one non-empty q.' }],
+                isError: true,
+                structuredContent: { status: 'invalid_tool_args', error: 'empty search_query' }
+            };
+        }
+        const sourceQuestion = normalizeString(
+            context.currentUserMessage ||
+            context.currentTaskRequest ||
+            context.current_task_request
+        );
+        let queryAssumptionAudit = null;
+        if (
+            context.exactAnswerMode === true &&
+            Math.max(0, Number(context.iteration) || 0) === 0 &&
+            looksLikeNestedSelectorTask(sourceQuestion)
+        ) {
+            const normalizedSource = sourceQuestion.toLowerCase();
+            const unverifiedAnchors = [...new Set(queries.flatMap((query) =>
+                extractStructuredQueryAnchors(query.q)
+                    .filter((anchor) => !normalizedSource.includes(anchor.toLowerCase()))
+            ))];
+            if (unverifiedAnchors.length) {
+                queryAssumptionAudit = {
+                    status: 'unverified_intermediate_anchor_advisory',
+                    anchors: unverifiedAnchors,
+                    queryGuidance: {
+                        action: 'verify',
+                        strategy: 'parent_index_first',
+                        remove_unverified_anchors: unverifiedAnchors,
+                        next_evidence: 'Retrieve the parent candidate index and apply the user-specified selector before naming a child identifier.'
+                    }
+                };
+            }
+        }
+        const maxResults = args.response_length === 'short' ? 4 : args.response_length === 'long' ? 12 : 8;
+        const perQueryTimeoutMs = Math.max(
+            25,
+            Math.min(Number(context.webRunSearchTimeoutMs) || 45000, 120000)
+        );
+        const responses = await Promise.all(queries.map(async (query) => {
+            try {
+                return await withTimeout(perQueryTimeoutMs, () => this.runtime.executeMcpBridge({
+                    action: 'call_tool',
+                    server: 'ailis_research',
+                    tool: 'web_search',
+                    timeoutMs: perQueryTimeoutMs,
+                    args: {
+                        query: query.q,
+                        maxResults,
+                        ...(query.recency !== undefined ? { recency: query.recency } : {}),
+                        ...(query.domains.length ? { domains: query.domains } : {})
+                    }
+                }, context));
+            } catch (error) {
+                const timedOut = error?.code === 'AILIS_GATEWAY_TIMEOUT';
+                const status = timedOut ? 'search_timeout' : 'search_failed';
+                const message = timedOut
+                    ? `Search query exceeded its ${perQueryTimeoutMs}ms budget.`
+                    : normalizeString(error?.message || String(error), 'The underlying search tool failed.');
+                return {
+                    content: [{ type: 'text', text: message }],
+                    isError: true,
+                    details: {
+                        status,
+                        error: message,
+                        retryable: true,
+                        timeoutMs: perQueryTimeoutMs
+                    },
+                    structuredContent: {
+                        status,
+                        error: message,
+                        retryable: true,
+                        timeoutMs: perQueryTimeoutMs
+                    }
+                };
+            }
+        }));
+        const failures = responses.flatMap((response, queryIndex) => {
+            const details = bridgeStructuredContent(response);
+            const nestedDetails = firstObject(details.details, response?.details?.details);
+            const failed = response?.isError === true
+                || response?.details?.result?.isError === true
+                || details.isError === true
+                || details.status === 'error'
+                || nestedDetails.status === 'invalid_mcp_tool_args';
+            if (!failed) {
+                return [];
+            }
+            return [{
+                query_index: queryIndex,
+                query: queries[queryIndex].q,
+                status: normalizeString(nestedDetails.status || details.status, 'search_failed'),
+                error: normalizeString(
+                    nestedDetails.error
+                    || details.error
+                    || bridgeTextContent(response),
+                    'The underlying search tool failed.'
+                ),
+                ...(Array.isArray(nestedDetails.errors) ? { errors: cloneJson(nestedDetails.errors) } : {})
+            }];
+        });
+        const excludedEvaluationLeakResults = [];
+        const evaluationMode = Boolean(
+            normalizeString(context.evaluationName || context.evaluation_name) ||
+            context.benchmarkEvaluation === true ||
+            context.benchmark_evaluation === true
+        );
+        const queryResults = responses.map((response, queryIndex) => {
+            const details = bridgeStructuredContent(response);
+            const results = Array.isArray(details.results)
+                ? details.results
+                : Array.isArray(details.webSearchOutput?.search?.results)
+                ? details.webSearchOutput.search.results
+                : Array.isArray(details.search?.results)
+                ? details.search.results
+                : [];
+            return results.flatMap((result) => {
+                if (
+                    evaluationMode &&
+                    (
+                        isEvaluationAnswerLeak(sourceQuestion, result) ||
+                        isEvaluationTaskMirror(sourceQuestion, result)
+                    )
+                ) {
+                    excludedEvaluationLeakResults.push({
+                        query_index: queryIndex,
+                        title: normalizeString(result?.title),
+                        url: normalizeString(result?.url),
+                        reason: isEvaluationAnswerLeak(sourceQuestion, result)
+                            ? 'Search result repeats the evaluation question and exposes a labeled answer.'
+                            : 'Search result is an evaluation-corpus mirror that repeats the task prompt without source evidence.'
+                    });
+                    return [];
+                }
+                return [{ ...result, query_index: queryIndex }];
+            });
+        });
+        const specializedNextCalls = [];
+        const seenSpecializedCalls = new Set();
+        for (const response of responses) {
+            const details = bridgeStructuredContent(response);
+            for (const call of Array.isArray(details.suggestedNextCalls) ? details.suggestedNextCalls : []) {
+                const tool = normalizeString(call?.tool);
+                const callArgs = call?.args && typeof call.args === 'object' && !Array.isArray(call.args)
+                    ? cloneJson(call.args)
+                    : null;
+                if (!tool || !callArgs || ['open_page', 'web_fetch', 'web_run', 'web_search'].includes(tool)) {
+                    continue;
+                }
+                const key = `${tool}:${JSON.stringify(callArgs)}`;
+                if (seenSpecializedCalls.has(key)) {
+                    continue;
+                }
+                seenSpecializedCalls.add(key);
+                specializedNextCalls.push({
+                    tool,
+                    args: callArgs,
+                    reason: normalizeString(call.reason, 'Use the source-specific reader suggested by the search backend.')
+                });
+            }
+        }
+        const merged = [];
+        const seenUrls = new Set();
+        const longest = Math.max(0, ...queryResults.map((results) => results.length));
+        for (let rank = 0; rank < longest && merged.length < maxResults; rank += 1) {
+            for (const results of queryResults) {
+                const result = results[rank];
+                const url = normalizeString(result?.url);
+                if (!url || seenUrls.has(url)) {
+                    continue;
+                }
+                seenUrls.add(url);
+                const refId = this.registerWebRunRef(context, 'search', url, {
+                    title: result.title,
+                    snippet: result.snippet,
+                    query_index: result.query_index
+                });
+                merged.push({
+                    id: refId,
+                    ref_id: refId,
+                    title: normalizeString(result.title || result.text || url),
+                    url,
+                    snippet: normalizeString(result.snippet || result.content),
+                    source: normalizeString(result.source || result.sourceBackend),
+                    rank: merged.length + 1,
+                    query_index: result.query_index
+                });
+                if (merged.length >= maxResults) {
+                    break;
+                }
+            }
+        }
+        const queryValues = queries.map((query) => query.q);
+        let deferredToolSearchSuggestion = null;
+        if (sourceQuestion && this.runtime?.capabilityManager?.searchExternalToolEntries) {
+            try {
+                const searched = await this.runtime.capabilityManager.searchExternalToolEntries({
+                    query: sourceQuestion,
+                    limit: 3,
+                    includeExposed: true,
+                    includeContracts: false
+                });
+                const matches = (Array.isArray(searched?.tools) ? searched.tools : [])
+                    .filter((entry) => entry?.callable === true)
+                    .sort((left, right) => Number(right.search_score || 0) - Number(left.search_score || 0));
+                const top = matches[0];
+                const runnerUp = matches[1];
+                const topScore = Number(top?.search_score || 0);
+                const runnerUpScore = Number(runnerUp?.search_score || 0);
+                if (top && topScore >= 3 && (!runnerUp || topScore - runnerUpScore >= 2)) {
+                    deferredToolSearchSuggestion = {
+                        tool: 'tool_search',
+                        args: {
+                            query: sourceQuestion,
+                            limit: 5
+                        },
+                        reason: `A callable deferred structured/API tool is a strong semantic match (${normalizeString(top.id || top.name || top.toolId)}). Discover its schema before doing more broad web search.`
+                    };
+                }
+            } catch {
+                deferredToolSearchSuggestion = null;
+            }
+        }
+        const action = queryValues.length === 1
+            ? { type: 'search', query: queryValues[0] }
+            : { type: 'search', queries: queryValues };
+        const webSearchCall = { type: 'web_search_call', status: 'completed', action };
+        if (failures.length === responses.length) {
+            const failedCall = { ...webSearchCall, status: 'failed' };
+            const failedSearch = {
+                status: 'search_failed',
+                queries: queryValues,
+                results: [],
+                candidates: [],
+                failures
+            };
+            const structuredContent = {
+                type: 'function_call_output',
+                status: 'failed',
+                webSearchCall: failedCall,
+                web_search_call: failedCall,
+                search: failedSearch
+            };
+            return {
+                content: [{
+                    type: 'text',
+                    text: [
+                        'Web search failed before producing results.',
+                        ...failures.map((failure) => `${failure.query}: ${failure.status}: ${failure.error}`)
+                    ].join('\n')
+                }],
+                isError: true,
+                details: structuredContent,
+                structuredContent
+            };
+        }
+        const searchStatus = merged.length ? 'completed' : 'empty';
+        const filteredQueries = queries.filter((query) => query.recency !== undefined || query.domains.length > 0);
+        const queryNeedsReformulation = queries.some((query) => {
+            const terms = query.q.toLowerCase().match(/[\p{L}\p{N}][\p{L}\p{N}._:-]*/gu) || [];
+            const uniqueTerms = new Set(terms);
+            return query.q.length > 180 ||
+                terms.length > 24 ||
+                (terms.length >= 12 && uniqueTerms.size / terms.length < 0.65);
+        });
+        const selectionAudit = merged.length
+            ? buildSearchSelectionAudit(sourceQuestion, merged)
+            : null;
+        const historicalArchiveUrl = !merged.length && looksLikeHistoricalWebStateQuestion(sourceQuestion)
+            ? historicalArchiveUrlFromQueries(queries)
+            : '';
+        const historicalArchiveSuggestion = historicalArchiveUrl
+            ? {
+                  tool: 'web_run',
+                  args: {
+                      archive: [{
+                          url: historicalArchiveUrl,
+                          mode: 'search',
+                          matchType: 'prefix',
+                          ...(sourceQuestion ? { query: sourceQuestion } : {})
+                      }]
+                  },
+                  reason: 'The task asks for a past public-web state and the live search returned no candidates. Inspect an archived snapshot of the known URL or stable prefix instead of repeatedly rewriting broad search queries.'
+              }
+            : null;
+        const queryGuidance = historicalArchiveSuggestion
+            ? {
+                  action: 'switch_source',
+                  strategy: 'historical_archive',
+                  repeat_previous_query: false,
+                  archive_url: historicalArchiveUrl
+              }
+            : !merged.length
+            ? {
+                  action: 'reformulate',
+                  strategy: queryNeedsReformulation ? 'fresh_concise_query' : 'broaden_or_simplify',
+                  repeat_previous_query: false,
+                  target_term_count: { min: 3, max: 8 }
+              }
+            : selectionAudit?.candidate_set_coverage_sufficient === false
+            ? {
+                  action: selectionAudit.parent_index_candidates.length
+                      ? 'inspect_parent_index'
+                      : selectionAudit.candidates.length >= 2
+                      ? 'inspect_competing_parents'
+                      : 'reformulate',
+                  strategy: selectionAudit.parent_index_candidates.length
+                      ? 'nearest_url_ancestor_first'
+                      : selectionAudit.candidates.length >= 2
+                      ? 'compare_visible_parents_and_expand_candidate_boundary'
+                      : 'fresh_concise_parent_index_query',
+                  repeat_previous_query: false,
+                  target_term_count: { min: 3, max: 8 },
+                  parent_index_refs: selectionAudit.parent_index_candidates
+              }
+            : null;
+        if (
+            selectionAudit?.candidate_set_coverage_sufficient === false &&
+            selectionAudit.parent_index_candidates.length
+        ) {
+            const state = this.getWebRunSession(context);
+            const parentIndexRef = selectionAudit.parent_index_candidates[0];
+            const parentIndex = state.refs.get(parentIndexRef);
+            if (parentIndex?.url && state.selectionProtocol?.boundaryComplete !== true) {
+                state.selectionProtocol = {
+                    status: 'parent_index_required',
+                    parentKind: selectionAudit.parent_kind,
+                    quotedTerm: selectionAudit.quoted_term,
+                    selector: selectionAudit.selector,
+                    parentIndexRef,
+                    parentIndexUrl: parentIndex.url,
+                    relevantStart: 0,
+                    totalLines: 0,
+                    ranges: [],
+                    currentGroup: '',
+                    groupTitleMatches: {},
+                    groupTitleCounts: [],
+                    boundaryComplete: false
+                };
+            }
+        }
+        const prioritizedOpenResults = selectionAudit?.candidate_set_coverage_sufficient === false &&
+            selectionAudit.parent_index_candidates.length
+            ? [
+                  ...selectionAudit.parent_index_candidates
+                      .map((refId) => merged.find((result) => result.ref_id === refId))
+                      .filter(Boolean),
+                  ...selectionAudit.candidates
+                      .map((candidate) => merged.find((result) => result.ref_id === candidate.ref_id))
+                      .filter((result) =>
+                          result &&
+                          !selectionAudit.parent_index_candidates.includes(result.ref_id)
+                      )
+              ]
+            : selectionAudit
+            ? selectionAudit.candidates
+                .map((candidate) => merged.find((result) => result.ref_id === candidate.ref_id))
+                .filter(Boolean)
+            : merged;
+        const suggestedNextCalls = merged.length
+            ? [
+                  ...(deferredToolSearchSuggestion ? [deferredToolSearchSuggestion] : []),
+                  ...specializedNextCalls,
+                  ...prioritizedOpenResults.map((result) => {
+                      const lexicalCandidate = selectionAudit?.candidates
+                          ?.find((candidate) => candidate.ref_id === result.ref_id);
+                      return {
+                      tool: 'web_run',
+                      args: { open: [{ ref_id: result.ref_id }] },
+                      reason: selectionAudit?.parent_index_candidates.includes(result.ref_id)
+                          ? `Open the nearest parent index before selecting a child. Only ${selectionAudit.competing_matching_candidates_visible} matching parent candidate(s) are visible, so the current search result set cannot establish "${selectionAudit.selector}".`
+                          : selectionAudit
+                          ? `Inspect this parent candidate and count unique child titles. Its visible snippet contains ${lexicalCandidate?.visible_snippet_occurrences || 0} exact occurrence(s) of "${selectionAudit.quoted_term}", but snippet counts are not final selection evidence.`
+                          : 'Open a relevant candidate to inspect source evidence.'
+                      };
+                  })
+              ].slice(0, 3)
+            : historicalArchiveSuggestion
+            ? [historicalArchiveSuggestion]
+            : deferredToolSearchSuggestion
+            ? [deferredToolSearchSuggestion]
+            : filteredQueries.length && !queryNeedsReformulation
+            ? [{
+                  tool: 'web_run',
+                  args: {
+                      search_query: queries.map((query) => ({ q: query.q })),
+                      ...(args.response_length ? { response_length: args.response_length } : {})
+                  },
+                  reason: 'Retry the same model-authored queries without optional recency or domain transport filters.'
+              }]
+            : [];
+        const webSearchOutput = {
+            type: 'function_call_output',
+            webSearchCall,
+            web_search_call: webSearchCall,
+            functionCallOutput: { type: 'function_call_output', status: 'completed', output_kind: 'web_search_results' },
+            function_call_output: { type: 'function_call_output', status: 'completed', output_kind: 'web_search_results' },
+            search: {
+                status: searchStatus,
+                queries: queryValues,
+                results: merged,
+                candidates: merged,
+                ...(excludedEvaluationLeakResults.length ? {
+                    evaluationLeakAudit: {
+                        status: 'excluded_labeled_answer_leaks',
+                        excluded_count: excludedEvaluationLeakResults.length,
+                        excluded_results: excludedEvaluationLeakResults
+                    }
+                } : {}),
+                ...(failures.length ? { failures } : {}),
+                ...(queryGuidance ? { queryGuidance } : {}),
+                ...(queryAssumptionAudit ? { queryAssumptionAudit } : {}),
+                ...(selectionAudit ? { selectionAudit } : {}),
+                ...(suggestedNextCalls.length ? { suggestedNextCalls } : {})
+            }
+        };
+        const selectionAuditText = selectionAudit
+            ? [
+                  `Selection audit (incomplete): search ranking does not answer "${selectionAudit.selector}".`,
+                  `Exact whole-token/phrase "${selectionAudit.quoted_term}" occurrences visible in result snippets:`,
+                  ...selectionAudit.candidates
+                      .filter((candidate) => candidate.visible_snippet_occurrences > 0)
+                      .map((candidate) =>
+                          `- [${candidate.ref_id}] ${candidate.visible_snippet_occurrences} occurrence(s)`
+                      ),
+                  ...(selectionAudit.parent_index_candidates.length
+                      ? [
+                            `Only ${selectionAudit.competing_matching_candidates_visible} matching parent candidate(s) are visible. Open the nearest parent index [${selectionAudit.parent_index_candidates[0]}] before selecting a child.`
+                        ]
+                      : selectionAudit.candidates.length >= 2
+                      ? [
+                            `${selectionAudit.competing_matching_candidates_visible} parent candidate(s) are visible, but search results do not establish the full candidate-set boundary. Inspect the competing parents and continue boundary discovery before selecting a child.`
+                        ]
+                      : [
+                            `Only ${selectionAudit.competing_matching_candidates_visible} matching parent candidate(s) are visible. Write a fresh concise parent-index query before selecting a child.`
+                        ]),
+                  'These are diagnostic snippet counts, not final per-group title counts. Inspect the leading candidates and verify unique matching titles plus the candidate-set boundary before selecting a child.'
+              ]
+            : [];
+        const text = [
+            ...(queryAssumptionAudit
+                ? [
+                      `Query assumption audit (advisory): ${queryAssumptionAudit.anchors.join(', ')} are possible intermediate identifiers not stated by the user.`,
+                      'The search still ran. Treat those identifiers as hypotheses and verify the parent selection before relying on them.'
+                  ]
+                : []),
+            ...selectionAuditText,
+            ...((queryAssumptionAudit || selectionAudit || historicalArchiveSuggestion) && suggestedNextCalls[0]
+                ? [
+                      'Next recommended call (advisory; the model may choose another evidence action):',
+                      `${suggestedNextCalls[0].tool} ${JSON.stringify(suggestedNextCalls[0].args)}`
+                  ]
+                : []),
+            ...(excludedEvaluationLeakResults.length
+                ? [`Excluded ${excludedEvaluationLeakResults.length} evaluation-answer leak candidate(s); labeled benchmark answers are not source evidence.`]
+                : []),
+            merged.length
+                ? 'Search results (open a relevant reference to inspect source evidence):'
+                : historicalArchiveSuggestion
+                ? `No live search results for this past-state question. Run the visible archive call for ${historicalArchiveUrl} instead of repeating broad web search.`
+                : queryNeedsReformulation
+                ? 'No search results. Write one fresh concise query with 3-8 discriminative terms; do not concatenate or repeat prior queries.'
+                : 'No search results. Broaden the query and omit optional recency/domain filters before retrying.',
+            ...merged.flatMap((result, index) => [
+                `${index + 1}. [${result.ref_id}] ${result.title}`,
+                `   URL: ${result.url}`,
+                result.snippet ? `   Snippet: ${result.snippet}` : ''
+            ].filter(Boolean))
+        ].join('\n');
+        const structuredContent = {
+            type: 'function_call_output',
+            status: 'completed',
+            webSearchCall,
+            web_search_call: webSearchCall,
+            webSearchOutput,
+            web_search_output: webSearchOutput,
+            search: webSearchOutput.search
+        };
+        return {
+            content: [{ type: 'text', text }],
+            isError: responses.every((response) => response?.isError === true),
+            details: structuredContent,
+            structuredContent
+        };
+    }
+
+    async executeWebRunNavigation(operation = {}, context = {}, mode = 'open') {
+        const resolved = this.resolveWebRunRef(context, operation.ref_id);
+        if (!resolved?.url) {
+            return {
+                content: [{ type: 'text', text: `Unknown web reference id: ${normalizeString(operation.ref_id)}` }],
+                isError: true,
+                structuredContent: { status: 'unknown_ref_id', ref_id: normalizeString(operation.ref_id) }
+            };
+        }
+        const state = this.getWebRunSession(context);
+        const selectionProtocol = state.selectionProtocol;
+        const sourceQuestion = normalizeString(
+            context.currentUserMessage ||
+            context.currentTaskRequest ||
+            context.current_task_request
+        );
+        if (mode === 'find') {
+            const cachedFind = this.executeWebRunCachedFind(resolved, operation, context);
+            if (cachedFind) {
+                return cachedFind;
+            }
+        }
+        const comparableUrl = (value = '') => normalizeString(value)
+            .replace(/#.*$/, '')
+            .replace(/\/+$/, '')
+            .toLowerCase();
+        const selectionDependencyAdvisory = (
+            mode === 'open' &&
+            context.exactAnswerMode === true &&
+            selectionProtocol &&
+            selectionProtocol.boundaryComplete !== true &&
+            comparableUrl(resolved.url) !== comparableUrl(selectionProtocol.parentIndexUrl)
+        ) ? {
+            status: 'selection_dependency_unresolved_advisory',
+            parent_kind: selectionProtocol.parentKind,
+            selector: selectionProtocol.selector,
+            quoted_term: selectionProtocol.quotedTerm,
+            boundary_complete: false,
+            required_parent_index_ref: selectionProtocol.parentIndexRef
+        } : null;
+        const resolvedFetchBackend = normalizeString(
+            resolved.fetchBackend || resolved.fetch_backend
+        ).toLowerCase();
+        let tool = mode === 'find'
+            ? 'web_find'
+            : resolvedFetchBackend.startsWith('crawl4ai')
+            ? 'render_page'
+            : resolvedFetchBackend
+            ? 'web_fetch'
+            : 'render_page';
+        const bridgeArgs = mode === 'find'
+            ? { url: resolved.url, pattern: operation.pattern }
+            : {
+                url: resolved.url,
+                ...(operation.lineno !== undefined ? { lineno: operation.lineno } : {}),
+                ...(sourceQuestion ? { query: sourceQuestion } : {})
+            };
+        let response = await this.runtime.executeMcpBridge({
+            action: 'call_tool',
+            server: 'ailis_research',
+            tool,
+            args: bridgeArgs
+        }, context);
+        const renderedFailed = tool === 'render_page' && (
+            response?.isError === true || response?.details?.result?.isError === true
+        );
+        if (renderedFailed) {
+            tool = 'web_fetch';
+            response = await this.runtime.executeMcpBridge({
+                action: 'call_tool',
+                server: 'ailis_research',
+                tool,
+                args: bridgeArgs
+            }, context);
+        }
+        const cloned = cloneJson(response) || {};
+        const details = bridgeStructuredContent(cloned);
+        const contentType = normalizeString(details.contentType || details.content_type).toLowerCase();
+        if (mode === 'open' && contentType.includes('application/pdf')) {
+            const pdfResponse = await this.executeWebRunPdf(resolved.url, context, {
+                parentRefId: normalizeString(operation.ref_id)
+            });
+            if (pdfResponse.isError !== true) {
+                return pdfResponse;
+            }
+        }
+        const viewRef = this.registerWebRunRef(context, 'view', resolved.url, {
+            parent_ref_id: normalizeString(operation.ref_id),
+            mode
+        });
+        const sourceViews = [
+            details.source,
+            details.source_viewport,
+            details.sourceViewport,
+            details.source_window,
+            details.sourceWindow
+        ].filter((value) => value && typeof value === 'object' && !Array.isArray(value));
+        for (const sourceView of sourceViews) {
+            sourceView.ref_id = viewRef;
+        }
+        const observedLinks = Array.isArray(details.observedRelevantLinks)
+            ? details.observedRelevantLinks
+            : Array.isArray(details.observed_relevant_links)
+            ? details.observed_relevant_links
+            : [];
+        const sectionLinks = sourceViewportSectionLinks(sourceViews, resolved.url);
+        const mergedLinks = [];
+        const seenLinkUrls = new Set();
+        for (const link of [...sectionLinks, ...observedLinks]) {
+            const url = normalizeString(link?.url);
+            if (!url || seenLinkUrls.has(url)) {
+                continue;
+            }
+            seenLinkUrls.add(url);
+            mergedLinks.push(link);
+        }
+        const numberedLinks = mergedLinks
+            .map((link, index) => ({
+                ...link,
+                id: index + 1,
+                url: normalizeString(link?.url)
+            }))
+            .filter((link) => link.url);
+        if (numberedLinks.length) {
+            const state = this.getWebRunSession(context);
+            const view = state.refs.get(viewRef);
+            if (view) {
+                view.links = cloneJson(numberedLinks);
+            }
+            const openedRef = state.refs.get(normalizeString(operation.ref_id));
+            if (openedRef) {
+                openedRef.links = cloneJson(numberedLinks);
+            }
+            details.observedRelevantLinks = numberedLinks;
+            details.observed_relevant_links = numberedLinks;
+        }
+        const fetchBackend = normalizeString(details.fetchBackend || details.fetch_backend);
+        const view = state.refs.get(viewRef);
+        if (view) {
+            view.fetchBackend = fetchBackend;
+        }
+        const openedRef = state.refs.get(normalizeString(operation.ref_id));
+        if (openedRef) {
+            openedRef.fetchBackend = fetchBackend;
+        }
+        details.ref_id = viewRef;
+        details.url = resolved.url;
+        if (selectionDependencyAdvisory) {
+            details.selectionDependencyAdvisory = selectionDependencyAdvisory;
+            details.selection_dependency_advisory = selectionDependencyAdvisory;
+        }
+        const primarySourceView = sourceViews[0] || {};
+        const hasMoreAfter = primarySourceView.hasMoreAfter === true ||
+            primarySourceView.has_more_after === true;
+        const lineEnd = Number(
+            primarySourceView.lineEnd ||
+            primarySourceView.line_end ||
+            primarySourceView.endLine ||
+            primarySourceView.end_line
+        ) || 0;
+        const parentKind = selectorParentKind(sourceQuestion);
+        const parentAnchorsInViewport = new Set(
+            sourceViews.flatMap((sourceView) =>
+                (Array.isArray(sourceView?.lines) ? sourceView.lines : [])
+                    .flatMap((line) => extractStructuredQueryAnchors(line?.text || line?.rendered))
+            )
+                .filter((anchor) => structuredAnchorKind(anchor) === parentKind)
+                .map((anchor) => anchor.toLowerCase())
+        );
+        const selectionGroupCounts = updateSelectionProtocolTitleCounts(
+            selectionProtocol,
+            sourceViews
+        );
+        if (
+            selectionProtocol &&
+            comparableUrl(resolved.url) === comparableUrl(selectionProtocol.parentIndexUrl)
+        ) {
+            const lineStart = Number(
+                primarySourceView.lineStart ||
+                primarySourceView.line_start ||
+                primarySourceView.lineno
+            ) || 1;
+            const totalLines = Number(
+                primarySourceView.totalLines ||
+                primarySourceView.total_lines
+            ) || lineEnd;
+            const parentAnchorLines = sourceViews.flatMap((sourceView) =>
+                (Array.isArray(sourceView?.lines) ? sourceView.lines : [])
+                    .filter((line) =>
+                        extractStructuredQueryAnchors(line?.text || line?.rendered)
+                            .some((anchor) => structuredAnchorKind(anchor) === selectionProtocol.parentKind)
+                    )
+                    .map((line) => Number(line?.lineno || line?.lineNumber || line?.line_number) || 0)
+                    .filter(Boolean)
+            );
+            if (parentAnchorLines.length) {
+                const firstParentLine = Math.min(...parentAnchorLines);
+                selectionProtocol.relevantStart = selectionProtocol.relevantStart > 0
+                    ? Math.min(selectionProtocol.relevantStart, firstParentLine)
+                    : firstParentLine;
+            }
+            selectionProtocol.totalLines = Math.max(selectionProtocol.totalLines || 0, totalLines);
+            selectionProtocol.ranges.push([lineStart, lineEnd]);
+            selectionProtocol.ranges.sort((left, right) => left[0] - right[0]);
+            const mergedRanges = [];
+            for (const range of selectionProtocol.ranges) {
+                const previous = mergedRanges[mergedRanges.length - 1];
+                if (!previous || range[0] > previous[1] + 1) {
+                    mergedRanges.push([...range]);
+                } else {
+                    previous[1] = Math.max(previous[1], range[1]);
+                }
+            }
+            selectionProtocol.ranges = mergedRanges;
+            selectionProtocol.boundaryComplete = selectionProtocol.relevantStart > 0 &&
+                mergedRanges.some((range) =>
+                    range[0] <= selectionProtocol.relevantStart &&
+                    range[1] >= selectionProtocol.totalLines
+                );
+            selectionProtocol.status = selectionProtocol.boundaryComplete
+                ? 'parent_index_complete'
+                : 'parent_index_incomplete';
+            details.selectionProtocol = {
+                status: selectionProtocol.status,
+                parent_kind: selectionProtocol.parentKind,
+                selector: selectionProtocol.selector,
+                quoted_term: selectionProtocol.quotedTerm,
+                boundary_complete: selectionProtocol.boundaryComplete,
+                relevant_line_start: selectionProtocol.relevantStart || null,
+                total_lines: selectionProtocol.totalLines,
+                covered_ranges: cloneJson(selectionProtocol.ranges),
+                exact_title_match_counts: cloneJson(selectionGroupCounts),
+                winning_group: selectionProtocol.boundaryComplete &&
+                    selectionGroupCounts.length &&
+                    (
+                        selectionGroupCounts.length === 1 ||
+                        selectionGroupCounts[0].count > selectionGroupCounts[1].count
+                    )
+                    ? selectionGroupCounts[0].group
+                    : null
+            };
+            details.selection_protocol = details.selectionProtocol;
+        }
+        if (
+            mode === 'open' &&
+            context.exactAnswerMode === true &&
+            looksLikeNestedSelectorTask(sourceQuestion) &&
+            parentKind &&
+            parentAnchorsInViewport.size >= 2 &&
+            hasMoreAfter &&
+            lineEnd > 0
+        ) {
+            const nextCall = {
+                tool: 'web_run',
+                args: {
+                    open: [{
+                        ref_id: viewRef,
+                        lineno: lineEnd + 1
+                    }]
+                },
+                reason: 'Continue the same parent index at the next unread line before selecting a child; the current viewport does not establish the candidate-set boundary.'
+            };
+            const existingCalls = Array.isArray(details.suggestedNextCalls)
+                ? details.suggestedNextCalls
+                : Array.isArray(details.suggested_next_calls)
+                ? details.suggested_next_calls
+                : [];
+            const suggestedNextCalls = [
+                nextCall,
+                ...existingCalls.filter((call) =>
+                    JSON.stringify(call?.args || {}) !== JSON.stringify(nextCall.args)
+                )
+            ];
+            details.suggestedNextCalls = suggestedNextCalls;
+            details.suggested_next_calls = suggestedNextCalls;
+        }
+        const navigationSuggestedCalls = Array.isArray(details.suggestedNextCalls)
+            ? details.suggestedNextCalls
+            : Array.isArray(details.suggested_next_calls)
+            ? details.suggested_next_calls
+            : [];
+        const selectionCountText = selectionGroupCounts.length
+            ? [
+                  `Exact "${normalizeString(selectionProtocol?.quotedTerm)}" child-title counts observed in the parent index (${selectionProtocol?.boundaryComplete === true ? 'candidate boundary complete' : 'provisional; more lines remain'}):`,
+                  ...selectionGroupCounts.map((group) =>
+                      `- ${group.group}: ${group.count}${group.matched_children.length ? ` (${group.matched_children.map((child) => child.id).join(', ')})` : ''}`
+                  ),
+                  ...(selectionProtocol?.boundaryComplete === true &&
+                  selectionGroupCounts.length &&
+                  (
+                      selectionGroupCounts.length === 1 ||
+                      selectionGroupCounts[0].count > selectionGroupCounts[1].count
+                  )
+                      ? [`Unique winning group: ${selectionGroupCounts[0].group}.`]
+                      : [])
+              ].join('\n')
+            : '';
+        const navigationNextCallText = navigationSuggestedCalls[0]
+            ? [
+                  'Next recommended call (advisory; the model may choose another evidence action):',
+                  `${navigationSuggestedCalls[0].tool} ${JSON.stringify(navigationSuggestedCalls[0].args)}`
+              ].join('\n')
+            : '';
+        return {
+            content: [{
+                type: 'text',
+                text: [
+                    selectionDependencyAdvisory
+                        ? [
+                              `Selection dependency audit (advisory): parent comparison at ${selectionDependencyAdvisory.required_parent_index_ref} is not complete.`,
+                              'The requested child page was opened anyway. Use its evidence as a hypothesis and finish the parent comparison before making a global selector claim.'
+                          ].join('\n')
+                        : '',
+                    selectionCountText,
+                    navigationNextCallText,
+                    bridgeTextContent(cloned)
+                ].filter(Boolean).join('\n\n')
+            }],
+            isError: cloned.isError === true || cloned.details?.result?.isError === true,
+            details,
+            structuredContent: details
+        };
+    }
+
+    async executeWebRunClick(operation = {}, context = {}) {
+        const resolved = this.resolveWebRunRef(context, operation.ref_id);
+        const linkId = Number(operation.id);
+        const link = Array.isArray(resolved?.links)
+            ? resolved.links.find((candidate) => Number(candidate.id) === linkId)
+            : null;
+        if (!link?.url) {
+            return {
+                content: [{
+                    type: 'text',
+                    text: `Unknown link id ${normalizeString(operation.id)} for web reference ${normalizeString(operation.ref_id)}.`
+                }],
+                isError: true,
+                structuredContent: {
+                    status: 'unknown_link_id',
+                    ref_id: normalizeString(operation.ref_id),
+                    id: linkId
+                }
+            };
+        }
+        const navigationMode = normalizeString(link.navigationMode || link.navigation_mode).toLowerCase();
+        const sectionPattern = normalizeString(link.pattern || link.text || link.title);
+        if (navigationMode === 'find' && sectionPattern) {
+            return await this.executeWebRunNavigation({
+                ref_id: operation.ref_id,
+                pattern: sectionPattern
+            }, context, 'find');
+        }
+        const navigation = await this.executeWebRunNavigation({ ref_id: link.url }, context, 'open');
+        if (normalizeString(link.kind).toLowerCase() !== 'pdf') {
+            return navigation;
+        }
+        const navigationDetails = firstObject(navigation.structuredContent, navigation.details);
+        const contentType = normalizeString(
+            navigationDetails.contentType || navigationDetails.content_type
+        ).toLowerCase();
+        if (contentType.includes('application/pdf')) {
+            return navigation;
+        }
+        const observedLinks = Array.isArray(navigationDetails.observedRelevantLinks)
+            ? navigationDetails.observedRelevantLinks
+            : Array.isArray(navigationDetails.observed_relevant_links)
+            ? navigationDetails.observed_relevant_links
+            : [];
+        const pdfCandidate = observedLinks.find((candidate) => (
+            normalizeString(candidate?.kind).toLowerCase() === 'pdf' &&
+            normalizeString(candidate?.url) &&
+            normalizeString(candidate.url) !== normalizeString(link.url)
+        ));
+        if (!pdfCandidate?.url) {
+            return navigation;
+        }
+        const pdfResponse = await this.executeWebRunPdf(pdfCandidate.url, context, {
+            parentRefId: navigationDetails.ref_id || operation.ref_id
+        });
+        return pdfResponse.isError === true ? navigation : pdfResponse;
+    }
+
+    async executeWebRunScreenshot(operation = {}, context = {}) {
+        const resolved = this.resolveWebRunRef(context, operation.ref_id);
+        if (!resolved?.url) {
+            return {
+                content: [{ type: 'text', text: `Unknown web reference id: ${normalizeString(operation.ref_id)}` }],
+                isError: true,
+                structuredContent: {
+                    status: 'unknown_ref_id',
+                    ref_id: normalizeString(operation.ref_id)
+                }
+            };
+        }
+        const workspaceDir = this.resolveWorkspace(
+            context.workspaceDir || context.workspace || this.workspaceRoot,
+            context
+        );
+        const screenshotDir = path.join(workspaceDir, '.ailis-web-screenshots');
+        await fsp.mkdir(screenshotDir, { recursive: true });
+        const screenshotPath = path.join(screenshotDir, `${randomUUID()}.png`);
+        const sourceQuestion = normalizeString(
+            context.currentUserMessage ||
+            context.currentTaskRequest ||
+            context.current_task_request
+        );
+        const response = await this.runtime.executeMcpBridge({
+            action: 'call_tool',
+            server: 'ailis_research',
+            tool: 'webpage_screenshot',
+            args: {
+                url: resolved.url,
+                path: screenshotPath,
+                detail: normalizeString(operation.detail, 'original'),
+                ...(operation.waitFor ? { waitFor: operation.waitFor } : {}),
+                ...(operation.delayMs !== undefined ? { delayMs: operation.delayMs } : {}),
+                ...(sourceQuestion ? { query: sourceQuestion } : {})
+            }
+        }, context);
+        const cloned = cloneJson(response) || {};
+        const details = bridgeStructuredContent(cloned);
+        const viewRef = this.registerWebRunRef(context, 'view', resolved.url, {
+            parent_ref_id: normalizeString(operation.ref_id),
+            mode: 'screenshot',
+            screenshotPath: normalizeString(details.path || screenshotPath)
+        });
+        details.ref_id = viewRef;
+        details.url = resolved.url;
+        return {
+            content: [{ type: 'text', text: bridgeTextContent(cloned) }],
+            isError: cloned.isError === true || cloned.details?.result?.isError === true,
+            details,
+            structuredContent: details
+        };
+    }
+
+    async executeWebRunPdf(url = '', context = {}, { parentRefId = '' } = {}) {
+        const sourceQuestion = normalizeString(
+            context.currentUserMessage ||
+            context.currentTaskRequest ||
+            context.current_task_request
+        );
+        const response = await this.runtime.executeMcpBridge({
+            action: 'call_tool',
+            server: 'ailis_research',
+            tool: 'pdf_extract_text',
+            args: {
+                url: normalizeString(url),
+                maxChars: 24000,
+                maxPages: 24,
+                ...(sourceQuestion ? { query: sourceQuestion } : {})
+            }
+        }, context);
+        const cloned = cloneJson(response) || {};
+        const details = bridgeStructuredContent(cloned);
+        const text = bridgeTextContent(cloned);
+        const isError = cloned.isError === true || cloned.details?.result?.isError === true || !normalizeString(text);
+        if (isError) {
+            return {
+                content: [{ type: 'text', text }],
+                isError: true,
+                details,
+                structuredContent: details
+            };
+        }
+        const extractedText = String(
+            details.extractedText ||
+            details.extracted_text ||
+            text
+        );
+        delete details.extractedText;
+        delete details.extracted_text;
+        const viewRef = this.registerWebRunRef(context, 'view', url, {
+            parent_ref_id: normalizeString(parentRefId),
+            mode: 'open',
+            extractedText,
+            contentType: normalizeString(
+                details.contentType || details.content_type,
+                'application/pdf'
+            )
+        });
+        const sourceLines = extractedText
+            .split(/\r?\n/)
+            .map((line, index) => ({
+                lineNumber: index + 1,
+                line_number: index + 1,
+                lineno: index + 1,
+                text: line,
+                rendered: `L${index + 1}: ${line}`
+            }));
+        const lineEnd = Math.max(1, sourceLines.length);
+        const sourceWindow = {
+            type: 'source_viewport',
+            action: {
+                type: 'open_page',
+                url: normalizeString(url),
+                lineno: 1
+            },
+            url: normalizeString(url),
+            ref_id: viewRef,
+            contentType: normalizeString(details.contentType || details.content_type, 'application/pdf'),
+            content_type: normalizeString(details.contentType || details.content_type, 'application/pdf'),
+            totalLines: lineEnd,
+            total_lines: lineEnd,
+            lineno: 1,
+            lineStart: 1,
+            line_start: 1,
+            lineEnd,
+            line_end: lineEnd,
+            hasMoreBefore: false,
+            has_more_before: false,
+            hasMoreAfter: false,
+            has_more_after: false,
+            lines: sourceLines
+        };
+        const structuredContent = {
+            ...details,
+            status: 'completed',
+            url: normalizeString(url),
+            ref_id: viewRef,
+            source: sourceWindow,
+            source_window: sourceWindow,
+            sourceWindow,
+            sourceViewport: sourceWindow,
+            source_viewport: sourceWindow
+        };
+        return {
+            content: [{ type: 'text', text }],
+            isError: false,
+            details: structuredContent,
+            structuredContent
+        };
+    }
+
+    async executeWebRun(args = {}, context = {}) {
+        if (Array.isArray(args.search_query) && args.search_query.length) {
+            return await this.executeWebRunSearch(args, context);
+        }
+        if (Array.isArray(args.open) && args.open.length) {
+            return await this.executeWebRunNavigation(args.open[0], context, 'open');
+        }
+        if (Array.isArray(args.click) && args.click.length) {
+            return await this.executeWebRunClick(args.click[0], context);
+        }
+        if (Array.isArray(args.find) && args.find.length) {
+            return await this.executeWebRunNavigation(args.find[0], context, 'find');
+        }
+        if (Array.isArray(args.screenshot) && args.screenshot.length) {
+            return await this.executeWebRunScreenshot(args.screenshot[0], context);
+        }
+        if (Array.isArray(args.archive) && args.archive.length) {
+            return await this.runtime.executeMcpBridge({
+                action: 'call_tool',
+                server: 'ailis_research',
+                tool: 'web_archive_lookup',
+                args: cloneJson(args.archive[0])
+            }, context);
+        }
+        return {
+            content: [{ type: 'text', text: 'This web_run backend currently executes search_query, open, click, find, screenshot, and archive commands.' }],
+            isError: true,
+            structuredContent: {
+                status: 'unsupported_command',
+                supported_commands: ['search_query', 'open', 'click', 'find', 'screenshot', 'archive']
+            }
+        };
+    }
+
     async executeGatewayLocalTool(toolId, args, context = {}) {
-        const workspaceDir = context.workspaceDir || this.resolveWorkspace(context.workspace);
+        const workspaceDir = context.workspaceDir || this.resolveWorkspace(context.workspace, context);
+        if (toolId === HANDOFF_TASK_TOOL_ID) {
+            const taskResult = await this.taskAgentHarness.handoff(args, {
+                ...context,
+                workspace: context.workspace || workspaceDir,
+                workspaceDir
+            });
+            return {
+                content: [{ type: 'text', text: JSON.stringify(taskResult, null, 2) }],
+                isError: false,
+                details: taskResult,
+                structuredContent: taskResult
+            };
+        }
+        if (toolId === WEB_RUN_TOOL_ID) {
+            return await this.executeWebRun(args, context);
+        }
+        if (toolId === WEB_SEARCH_TOOL_ID) {
+            return await this.runtime.executeMcpBridge({
+                action: 'call_tool',
+                server: 'ailis_research',
+                tool: 'web_search',
+                args: {
+                    query: args.query,
+                    ...(args.maxResults !== undefined ? { maxResults: args.maxResults } : {}),
+                    ...(args.search_context_size ? { search_context_size: args.search_context_size } : {})
+                }
+            }, context);
+        }
+        if (toolId === TASK_RESULTS_TOOL_ID) {
+            const action = normalizeString(args.action, 'search').toLowerCase();
+            const limit = Math.max(1, Math.min(Number(args.limit) || 3, 8));
+            const sessionId = normalizeString(args.sessionId || context.sessionId || context.sessionKey);
+            if (action === 'get') {
+                const capsule = this.taskResultCapsules?.get?.(args.id) || null;
+                const payload = {
+                    status: capsule ? 'completed' : 'not_found',
+                    result: capsule
+                };
+                return {
+                    content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }],
+                    isError: !capsule,
+                    details: payload,
+                    structuredContent: payload
+                };
+            }
+            const results = this.taskResultCapsules?.search?.(args.query, { sessionId, limit }) || [];
+            const payload = {
+                status: 'completed',
+                query: normalizeString(args.query),
+                results
+            };
+            return {
+                content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }],
+                isError: false,
+                details: payload,
+                structuredContent: payload
+            };
+        }
         if (toolId === EMAIL_TOOL_ID) {
             const { executeEmailTool } = loadEmailToolModule();
             return await executeEmailTool(args, {
@@ -2107,7 +4905,7 @@ class AILISGateway extends EventEmitter {
             if (['exec_command', 'exec', 'run'].includes(action)) {
                 const interceptedPatch = this.extractPatchFromCommand(args.cmd || args.command);
                 if (interceptedPatch) {
-                    return await this.executeLocalApplyPatch(interceptedPatch, workspaceDir);
+                    return await this.executeLocalApplyPatch(interceptedPatch, workspaceDir, context);
                 }
             }
             return await this.computerTool.execute(args, context, {
@@ -2134,12 +4932,11 @@ class AILISGateway extends EventEmitter {
                 projectRoot: this.projectRoot
             });
         }
-        if (toolId === READ_XLSX_WORKBOOK_TOOL_ID) {
-            return await executeReadXlsxWorkbookTool(args, context, {
+        if (toolId === ARTIFACT_IMPORT_TOOL_ID) {
+            return await executeArtifactImportTool(args, context, {
                 workspaceDir,
                 workspaceRoot: this.workspaceRoot,
                 projectRoot: this.projectRoot,
-                auditDir: this.auditDir,
                 contextArtifactStore: this.runtime.contextArtifactStore
             });
         }
@@ -2310,12 +5107,12 @@ class AILISGateway extends EventEmitter {
         return text;
     }
 
-    async executeLocalApplyPatch(input, workspaceDir) {
-        this.assertPatchInsideWorkspace(input, workspaceDir);
+    async executeLocalApplyPatch(input, workspaceDir, context = {}) {
+        this.assertPatchInsideWorkspace(input, workspaceDir, context);
         const operations = this.parseLocalPatch(input);
         const changedFiles = [];
         for (const operation of operations) {
-            const target = this.resolveToolPath(operation.path, workspaceDir, 'patchPath');
+            const target = this.resolveToolPath(operation.path, workspaceDir, 'patchPath', context);
             if (operation.type === 'add') {
                 const content = this.patchBodyToText(operation.body);
                 await fsp.mkdir(path.dirname(target), { recursive: true });
@@ -2347,7 +5144,7 @@ class AILISGateway extends EventEmitter {
 
     async executeLocalCoreTool({ toolId, args, context, workspaceDir }) {
         if (toolId === 'read') {
-            const target = this.resolveToolPath(args.path, workspaceDir, 'path');
+            const target = this.resolveToolPath(args.path, workspaceDir, 'path', context);
             const artifactRecord = await this.runtime.contextArtifactStore?.findByPath?.(target).catch(() => null);
             if (artifactRecord?.payloadPath && path.resolve(artifactRecord.payloadPath) === path.resolve(target)) {
                 return this.runtime.contextArtifactStore.guardReadResult(artifactRecord, target);
@@ -2389,7 +5186,7 @@ class AILISGateway extends EventEmitter {
         }
 
         if (toolId === 'write') {
-            const target = this.resolveToolPath(args.path, workspaceDir, 'path');
+            const target = this.resolveToolPath(args.path, workspaceDir, 'path', context);
             const content = typeof args.content === 'string' ? args.content : '';
             await fsp.mkdir(path.dirname(target), { recursive: true });
             await fsp.writeFile(target, content, args.encoding || 'utf8');
@@ -2405,13 +5202,13 @@ class AILISGateway extends EventEmitter {
         }
 
         if (toolId === 'apply_patch') {
-            return await this.executeLocalApplyPatch(args.input || args.patch, workspaceDir);
+            return await this.executeLocalApplyPatch(args.input || args.patch, workspaceDir, context);
         }
 
         if (toolId === 'exec') {
             const interceptedPatch = this.extractPatchFromCommand(args.command || args.cmd);
             if (interceptedPatch) {
-                return await this.executeLocalApplyPatch(interceptedPatch, workspaceDir);
+                return await this.executeLocalApplyPatch(interceptedPatch, workspaceDir, context);
             }
             const finalArgs = this.prepareToolArgs({ toolId, args, context, workspaceDir });
             return await this.computerTool.execute(
@@ -2441,11 +5238,29 @@ class AILISGateway extends EventEmitter {
 
     prepareToolArgs({ toolId, args, context, workspaceDir }) {
         const finalArgs = { ...args };
+        if (
+            /(?:^|__)pdf_extract_text$/i.test(toolId) &&
+            !normalizeString(
+                finalArgs.query ||
+                finalArgs.q ||
+                finalArgs.extractQuery ||
+                finalArgs.extract_query
+            )
+        ) {
+            const sourceQuestion = normalizeString(
+                context.currentUserMessage ||
+                context.currentTaskRequest ||
+                context.current_task_request
+            );
+            if (sourceQuestion) {
+                finalArgs.query = sourceQuestion;
+            }
+        }
         if (FILE_TOOL_IDS.has(toolId)) {
-            this.assertToolPathInsideWorkspace(finalArgs.path, workspaceDir, 'path');
+            this.assertToolPathInsideWorkspace(finalArgs.path, workspaceDir, 'path', context);
         }
         if (toolId === 'apply_patch') {
-            this.assertPatchInsideWorkspace(finalArgs.input, workspaceDir);
+            this.assertPatchInsideWorkspace(finalArgs.input, workspaceDir, context);
         }
         if (toolId === 'exec') {
             if (context.approved !== true && finalArgs.approved !== true) {
@@ -2454,13 +5269,27 @@ class AILISGateway extends EventEmitter {
                     approval: 'required'
                 });
             }
+            const commandArgs = Array.isArray(finalArgs.args)
+                ? finalArgs.args
+                : Array.isArray(finalArgs.arguments)
+                ? finalArgs.arguments
+                : [];
+            const wrapperExecutable = normalizeString(commandArgs[0]).toLowerCase();
+            const wrapsExistingCommand = this.platformAdapter?.isWindows?.() === true
+                && /^(?:powershell|powershell\.exe|pwsh|pwsh\.exe)$/.test(wrapperExecutable)
+                && commandArgs.some((entry) => /^-(?:command|c)$/i.test(normalizeString(entry)))
+                && normalizeString(finalArgs.command || finalArgs.cmd);
+            if (wrapsExistingCommand) {
+                finalArgs.args = [];
+                delete finalArgs.arguments;
+            }
             if (finalArgs.timeoutMs === undefined && finalArgs.timeout !== undefined) {
                 const timeout = Number(finalArgs.timeout);
                 if (Number.isFinite(timeout) && timeout > 0) {
                     finalArgs.timeoutMs = timeout < 1000 ? timeout * 1000 : timeout;
                 }
             }
-            finalArgs.workdir = this.resolveToolPath(finalArgs.workdir || workspaceDir, workspaceDir, 'workdir');
+            finalArgs.workdir = this.resolveToolPath(finalArgs.workdir || workspaceDir, workspaceDir, 'workdir', context);
             finalArgs.host = finalArgs.host || 'gateway';
             finalArgs.security = finalArgs.security || 'full';
             finalArgs.ask = finalArgs.ask || 'off';
@@ -2471,10 +5300,34 @@ class AILISGateway extends EventEmitter {
         return finalArgs;
     }
 
-    resolveWorkspace(rawWorkspace) {
+    getProtectedPathRoot(targetPath) {
+        const target = path.resolve(targetPath);
+        return this.platformAdapter.protectedRoots().find((root) => this.platformAdapter.isPathInside(root, target)) || '';
+    }
+
+    assertFullControlPathAllowed(targetPath, context = {}, fieldName = 'path') {
+        if (!isFullControlContext(context)) {
+            return;
+        }
+        const protectedRoot = this.getProtectedPathRoot(targetPath);
+        if (protectedRoot) {
+            throwBlocked(`${fieldName} targets protected C drive system files`, {
+                fieldName,
+                target: path.resolve(targetPath),
+                protectedRoot,
+                permissionProfile: context.permissionProfile || context.policy || context.sandbox || 'full-control'
+            });
+        }
+    }
+
+    resolveWorkspace(rawWorkspace, context = {}) {
         const workspace = normalizeString(rawWorkspace)
             ? path.resolve(rawWorkspace)
             : this.workspaceRoot;
+        if (isFullControlContext(context)) {
+            this.assertFullControlPathAllowed(workspace, context, 'workspace');
+            return workspace;
+        }
         if (!isPathInside(this.workspaceRoot, workspace)) {
             throwBlocked('workspace must stay inside the configured AILIS workspace root', {
                 workspace,
@@ -2484,12 +5337,16 @@ class AILISGateway extends EventEmitter {
         return workspace;
     }
 
-    resolveToolPath(rawPath, workspaceDir, fieldName) {
+    resolveToolPath(rawPath, workspaceDir, fieldName, context = {}) {
         const value = normalizeString(rawPath);
         if (!value) {
             throwBlocked(`${fieldName} is required`);
         }
         const target = path.isAbsolute(value) ? path.resolve(value) : path.resolve(workspaceDir, value);
+        if (isFullControlContext(context)) {
+            this.assertFullControlPathAllowed(target, context, fieldName);
+            return target;
+        }
         if (!isPathInside(workspaceDir, target)) {
             throwBlocked(`${fieldName} must stay inside workspace`, {
                 fieldName,
@@ -2500,11 +5357,11 @@ class AILISGateway extends EventEmitter {
         return target;
     }
 
-    assertToolPathInsideWorkspace(rawPath, workspaceDir, fieldName) {
-        this.resolveToolPath(rawPath, workspaceDir, fieldName);
+    assertToolPathInsideWorkspace(rawPath, workspaceDir, fieldName, context = {}) {
+        this.resolveToolPath(rawPath, workspaceDir, fieldName, context);
     }
 
-    assertPatchInsideWorkspace(rawPatch, workspaceDir) {
+    assertPatchInsideWorkspace(rawPatch, workspaceDir, context = {}) {
         const patch = normalizeString(rawPatch);
         if (!patch) {
             throwBlocked('apply_patch input is required');
@@ -2519,7 +5376,7 @@ class AILISGateway extends EventEmitter {
                     workspaceDir
                 });
             }
-            this.resolveToolPath(patchPath, workspaceDir, 'patchPath');
+            this.resolveToolPath(patchPath, workspaceDir, 'patchPath', context);
             match = pattern.exec(patch);
         }
     }
@@ -2540,7 +5397,7 @@ class AILISGateway extends EventEmitter {
     }
 
     async getToolSet(context = {}) {
-        const workspaceDir = this.resolveWorkspace(context.workspace);
+        const workspaceDir = this.resolveWorkspace(context.workspace, context);
         const sessionKey = normalizeString(context.sessionKey, 'main');
         const cacheKey = `${workspaceDir}|${sessionKey}`;
         if (this.toolSets.has(cacheKey)) {
@@ -2566,7 +5423,7 @@ class AILISGateway extends EventEmitter {
 
     async ensureToolGatewayReady() {
         if (!this.toolRuntimeSupervisor) {
-            this.toolRuntimeSupervisor = new OpenClawRuntimeSupervisor({
+            this.toolRuntimeSupervisor = new AILISAgentRuntimeSupervisor({
                 app: this.app,
                 gatewayUrl: this.toolGatewayUrl
             });
@@ -2574,23 +5431,23 @@ class AILISGateway extends EventEmitter {
         return await this.toolRuntimeSupervisor.ensureReady();
     }
 
-    async withDefaultOpenClawGatewayEnv(action) {
-        const priorOpenClawGatewayUrl = process.env.OPENCLAW_GATEWAY_URL;
-        const priorAilisOpenClawGatewayUrl = process.env.AILIS_OPENCLAW_GATEWAY_URL;
+    async withDefaultAgentRuntimeGatewayEnv(action) {
+        const priorAgentRuntimeGatewayUrl = process.env.OPENCLAW_GATEWAY_URL;
+        const priorAilisAgentRuntimeGatewayUrl = process.env.AILIS_OPENCLAW_GATEWAY_URL;
         try {
             delete process.env.OPENCLAW_GATEWAY_URL;
             delete process.env.AILIS_OPENCLAW_GATEWAY_URL;
             return await action();
         } finally {
-            if (priorOpenClawGatewayUrl === undefined) {
+            if (priorAgentRuntimeGatewayUrl === undefined) {
                 delete process.env.OPENCLAW_GATEWAY_URL;
             } else {
-                process.env.OPENCLAW_GATEWAY_URL = priorOpenClawGatewayUrl;
+                process.env.OPENCLAW_GATEWAY_URL = priorAgentRuntimeGatewayUrl;
             }
-            if (priorAilisOpenClawGatewayUrl === undefined) {
+            if (priorAilisAgentRuntimeGatewayUrl === undefined) {
                 delete process.env.AILIS_OPENCLAW_GATEWAY_URL;
             } else {
-                process.env.AILIS_OPENCLAW_GATEWAY_URL = priorAilisOpenClawGatewayUrl;
+                process.env.AILIS_OPENCLAW_GATEWAY_URL = priorAilisAgentRuntimeGatewayUrl;
             }
         }
     }
@@ -2871,7 +5728,7 @@ class AILISGateway extends EventEmitter {
                 const callId = normalizeString(payload.callId || item.id);
                 const tool = {
                     callId,
-                    tool: payload.tool || '',
+                    tool: payload.toolName || payload.tool || '',
                     status: 'started',
                     ok: null,
                     durationMs: 0,
@@ -2889,12 +5746,12 @@ class AILISGateway extends EventEmitter {
                 if (!tool) {
                     tool = {
                         callId,
-                        tool: payload.tool || '',
+                        tool: payload.toolName || payload.tool || '',
                         status: payload.status || item.status || '',
                         ok: payload.ok === true,
                         durationMs: Number(payload.durationMs) || 0,
                         args: null,
-                        resultPreview: summarizeForAnalysis(payload.result || payload.error || '', 900),
+                        resultPreview: payload.outputPreview || summarizeForAnalysis(payload.result || payload.error || '', 900),
                         outputStore: this.extractOutputStoreFromToolPayload(payload)
                     };
                     ensureRound(iteration).tools.push(tool);
@@ -2902,7 +5759,7 @@ class AILISGateway extends EventEmitter {
                     tool.status = payload.status || item.status || tool.status;
                     tool.ok = payload.ok === true;
                     tool.durationMs = Number(payload.durationMs) || tool.durationMs;
-                    tool.resultPreview = summarizeForAnalysis(payload.result || payload.error || '', 900);
+                    tool.resultPreview = payload.outputPreview || summarizeForAnalysis(payload.result || payload.error || '', 900);
                     tool.outputStore = this.extractOutputStoreFromToolPayload(payload) || tool.outputStore;
                 }
             }
@@ -2924,7 +5781,7 @@ class AILISGateway extends EventEmitter {
             }
             const existing = calls.get(callId) || {
                 callId,
-                tool: payload.tool || '',
+                tool: payload.toolName || payload.tool || '',
                 startedAt: null,
                 completedAt: null,
                 status: 'started',
@@ -2937,16 +5794,16 @@ class AILISGateway extends EventEmitter {
             };
             if (item.type === 'tool.call') {
                 existing.startedAt = analysisTimestamp(item);
-                existing.tool = payload.tool || existing.tool;
+                existing.tool = payload.toolName || payload.tool || existing.tool;
                 existing.args = payload.args || existing.args;
                 existing.iteration = getPayloadIteration(payload);
             } else {
                 existing.completedAt = analysisTimestamp(item);
-                existing.tool = payload.tool || existing.tool;
+                existing.tool = payload.toolName || payload.tool || existing.tool;
                 existing.status = payload.status || item.status || existing.status;
                 existing.ok = payload.ok === true;
                 existing.durationMs = Number(payload.durationMs) || existing.durationMs;
-                existing.resultPreview = summarizeForAnalysis(payload.result || payload.error || '', 900);
+                existing.resultPreview = payload.outputPreview || summarizeForAnalysis(payload.result || payload.error || '', 900);
                 existing.outputStore = this.extractOutputStoreFromToolPayload(payload) || existing.outputStore;
             }
             calls.set(callId, existing);
@@ -3155,5 +6012,7 @@ class AILISGateway extends EventEmitter {
 
 module.exports = {
     DEFAULT_PORT,
-    AILISGateway
+    AILISGateway,
+    attachSuggestedMcpToolsForDirectExposure,
+    collectSuggestedMcpToolNames
 };

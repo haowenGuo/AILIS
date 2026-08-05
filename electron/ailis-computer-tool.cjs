@@ -188,6 +188,19 @@ function protectedRoots(runtime = {}) {
     return getRuntimePlatform(runtime).protectedRoots();
 }
 
+function isFullControlContext(context = {}) {
+    const rawProfile = typeof context.permissionProfile === 'string'
+        ? context.permissionProfile
+        : context.permissionProfile?.id || context.permissions || context.policy || context.sandbox;
+    const profile = normalizeString(rawProfile).toLowerCase();
+    return (
+        profile === 'danger-full-access' ||
+        profile === 'full-access' ||
+        context.allowComputerWideAccess === true ||
+        (context.computerControlEnabled === true && context.allowOutsideWorkspace === true)
+    );
+}
+
 function resolveTargetPath(rawPath, runtime = {}) {
     const value = normalizeString(rawPath);
     if (!value) {
@@ -212,6 +225,19 @@ function guardPath(targetPath, action, context = {}, runtime = {}) {
     const readOnly = READ_ONLY_ACTIONS.has(action);
     const commonRoots = commonUserRoots(runtime);
     const platformAdapter = getRuntimePlatform(runtime);
+    const protectedHit = protectedRoots(runtime).find((root) => isPathInside(root, targetPath, platformAdapter));
+    if (protectedHit && isFullControlContext(context)) {
+        return createErrorResult(
+            'blocked',
+            '完全控制模式仍然拒绝访问 C 盘系统保护路径。',
+            {
+                path: targetPath,
+                protectedRoot: protectedHit,
+                action,
+                permissionProfile: context.permissionProfile || context.policy || context.sandbox || 'full-control'
+            }
+        );
+    }
     const insideCommon = commonRoots.some((root) => isPathInside(root, targetPath, platformAdapter));
     if (insideCommon) {
         return null;
@@ -228,7 +254,6 @@ function guardPath(targetPath, action, context = {}, runtime = {}) {
             }
         );
     }
-    const protectedHit = protectedRoots(runtime).find((root) => isPathInside(root, targetPath, platformAdapter));
     if (protectedHit && !readOnly && context.allowSystemMutation !== true) {
         return createErrorResult(
             'blocked',
@@ -1316,7 +1341,7 @@ async function actionRead(args, context, runtime) {
                 });
             }
             const structuredQuery = /Excel|XLSX|spreadsheet/i.test(fileKind)
-                ? 'read_xlsx_workbook xlsx workbook cell values fill colors formulas merged ranges'
+                ? 'artifact_tools xlsx workbook cell values fill colors formulas merged ranges'
                 : `${fileKind} extract text tables content artifact_query document_search`;
             return createErrorResult(
                 'binary_file',
@@ -2010,17 +2035,6 @@ function buildCommandDiagnostics({ command = '', args = [], platformAdapter = nu
         platform: platformAdapter?.getStatus ? platformAdapter.getStatus() : null,
         warnings: []
     };
-    if (
-        diagnostics.shellString &&
-        diagnostics.containsNewline &&
-        typeof platformAdapter?.isWindows === 'function' &&
-        platformAdapter.isWindows()
-    ) {
-        diagnostics.warnings.push({
-            code: 'windows_cmd_multiline_shell_string',
-            message: 'Windows cmd shell strings with embedded newlines are fragile. Prefer command+args, or write complex Python/PowerShell/Node logic to a script file and run that file.'
-        });
-    }
     return diagnostics;
 }
 
@@ -2046,16 +2060,23 @@ function formatExecContent(details = {}) {
     if (details.outputStore?.outputId) {
         const outputStore = details.outputStore;
         const previewTruncated = outputStore.previewTruncated === true;
+        const previewBytes = Buffer.byteLength(String(outputStore.preview || ''), 'utf8');
+        const omittedApproxTokens = previewTruncated
+            ? Math.max(1, Math.ceil(Math.max(0, Number(outputStore.bytes || 0) - previewBytes) / 4))
+            : 0;
         const lines = [
             `exitCode=${details.exitCode ?? details.exit_code}`,
-            `bytes=${outputStore.bytes ?? 0} lines=${outputStore.lineCount ?? 0} stdoutBytes=${outputStore.stdoutBytes ?? 0} stderrBytes=${outputStore.stderrBytes ?? 0}`,
-            `outputComplete=${previewTruncated ? 'false' : 'true'}`,
-            `outputTruncatedForModel=${previewTruncated ? 'true' : 'false'}`
+            `outputId=${outputStore.outputId}`,
+            `bytes=${outputStore.bytes ?? 0} lines=${outputStore.lineCount ?? 0} stdoutBytes=${outputStore.stdoutBytes ?? 0} stderrBytes=${outputStore.stderrBytes ?? 0}`
         ];
         if (previewTruncated) {
             lines.push(
+                `<truncated omitted_approx_tokens="${omittedApproxTokens}" />`,
                 'fullOutput=stored_for_agent_lab',
-                'modelHint=Visible output is incomplete. Use tool_search query "exec output outputId search tail read" to load output_search/output_tail/output_read, then inspect only the needed slice. Do not rerun the command just to recover truncated output.'
+                `outputRead={"outputId":"${outputStore.outputId}"}`,
+                `outputTail={"outputId":"${outputStore.outputId}"}`,
+                `outputSearch={"outputId":"${outputStore.outputId}","query":"<text>"}`,
+                'modelHint=Visible stdout/stderr is a preview with omitted bytes. Use tool_search query "exec output outputId search tail read" to load output_search/output_tail/output_read, then inspect only the needed slice. Do not rerun the command just to recover omitted output.'
             );
         } else {
             lines.push('modelHint=Visible stdout/stderr below is complete for this command.');
@@ -3280,7 +3301,7 @@ function schemaResult(runtime) {
             platform: getRuntimePlatform(runtime).getStatus(),
             mutationsRequireApproval: true,
             outsideWorkspaceRequires: 'context.allowOutsideWorkspace=true',
-            protectedMutationRequires: 'context.allowSystemMutation=true plus approval',
+            protectedMutationRequires: 'context.allowSystemMutation=true plus approval; full-control still keeps C drive system roots blocked',
             deleteDefault: 'trash/quarantine; permanent delete requires allowPermanentDelete=true and dangerous=true',
             rollbackJournal: rollbackJournalPath(runtime),
             ptyOptional: loadNodePty().ok,

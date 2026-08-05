@@ -1,6 +1,22 @@
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
-const initialPreferences = ipcRenderer.sendSync('ailis:get-preferences-sync');
+function getCurrentPageName() {
+    try {
+        return String(window.location?.pathname || '').split('/').pop() || '';
+    } catch {
+        return '';
+    }
+}
+
+const currentPageName = getCurrentPageName();
+// The control panel needs a compact preference snapshot before its first paint.
+const shouldLoadPreferencesSynchronously = ![
+    'agent-lab.html',
+    'character-lab.html'
+].includes(currentPageName);
+const initialPreferences = shouldLoadPreferencesSynchronously
+    ? ipcRenderer.sendSync('ailis:get-preferences-sync')
+    : {};
 
 function createResourceUrl(relativePath = '') {
     const cleanPath = String(relativePath || '')
@@ -23,6 +39,7 @@ contextBridge.exposeInMainWorld('ailisDesktop', {
         node: process.versions.node
     },
     getControlPanelState: () => ipcRenderer.invoke('ailis:get-control-panel-state'),
+    getPreferences: () => ipcRenderer.invoke('ailis:get-preferences'),
     savePreferences: (payload) => ipcRenderer.invoke('ailis:save-preferences', payload),
     restoreDefaultPreferences: () => ipcRenderer.invoke('ailis:restore-default-preferences'),
     chooseAILISStateDir: () => ipcRenderer.invoke('ailis:choose-ailis-state-dir'),
@@ -31,8 +48,40 @@ contextBridge.exposeInMainWorld('ailisDesktop', {
     hideChatWindow: () => ipcRenderer.invoke('ailis:hide-chat-window'),
     showControlPanel: () => ipcRenderer.invoke('ailis:show-control-panel'),
     showAgentLab: () => ipcRenderer.invoke('ailis:show-agent-lab'),
-    showControlMenu: () => ipcRenderer.invoke('ailis:show-control-menu'),
+    showCharacterLab: () => ipcRenderer.invoke('ailis:show-character-lab'),
+    characterLab: {
+        getStatus: () => ipcRenderer.invoke('ailis:get-character-renderer-status'),
+        getCapabilities: () => ipcRenderer.invoke('ailis:get-character-lab-capabilities'),
+        applySurface: (payload) => ipcRenderer.invoke('ailis:character-lab-apply-surface', payload || {}),
+        playMotion: (payload) => ipcRenderer.invoke('ailis:character-lab-play-motion', payload || {}),
+        getAnimationState: () => ipcRenderer.invoke('ailis:character-lab-animation-state'),
+        controlAnimation: (payload) => ipcRenderer.invoke(
+            'ailis:character-lab-animation-control',
+            payload || {}
+        ),
+        publishBubble: (payload) => ipcRenderer.invoke('ailis:character-lab-publish-bubble', payload || {}),
+        hideBubble: () => ipcRenderer.invoke('ailis:character-lab-hide-bubble')
+    },
+    characterRenderer: {
+        send: (payload) => ipcRenderer.send('ailis:character-renderer-command', payload || {}),
+        onCommand: (listener) => {
+            const wrapped = (_event, payload = {}) => listener(payload);
+            ipcRenderer.on('ailis:character-renderer-command', wrapped);
+            return () => ipcRenderer.removeListener('ailis:character-renderer-command', wrapped);
+        }
+    },
+    dialogueSurface: {
+        publish: (payload) => ipcRenderer.send('ailis:dialogue-surface-event', payload || {}),
+        onEvent: (listener) => {
+            const wrapped = (_event, payload = {}) => listener(payload);
+            ipcRenderer.on('ailis:dialogue-surface-event', wrapped);
+            return () => ipcRenderer.removeListener('ailis:dialogue-surface-event', wrapped);
+        }
+    },
     showTextEditMenu: (payload) => ipcRenderer.invoke('ailis:show-text-edit-menu', payload || {}),
+    minimizeCurrentWindow: () => ipcRenderer.invoke('ailis:minimize-current-window'),
+    toggleMaximizeCurrentWindow: () => ipcRenderer.invoke('ailis:toggle-maximize-current-window'),
+    getCurrentWindowState: () => ipcRenderer.invoke('ailis:get-current-window-state'),
     closeCurrentWindow: () => ipcRenderer.invoke('ailis:close-current-window'),
     setSpeechMode: (mode) => ipcRenderer.invoke('ailis:set-speech-mode', mode),
     setRecognitionMode: (mode) => ipcRenderer.invoke('ailis:set-recognition-mode', mode),
@@ -40,7 +89,8 @@ contextBridge.exposeInMainWorld('ailisDesktop', {
     llm: {
         chat: (payload) => ipcRenderer.invoke('ailis:llm-chat', payload || {}),
         healthCheck: (payload) => ipcRenderer.invoke('ailis:llm-health-check', payload || {}),
-        searchVllmModels: (payload) => ipcRenderer.invoke('ailis:vllm-model-catalog-search', payload || {})
+        searchVllmModels: (payload) => ipcRenderer.invoke('ailis:vllm-model-catalog-search', payload || {}),
+        searchOllamaModels: (payload) => ipcRenderer.invoke('ailis:ollama-model-catalog-search', payload || {})
     },
     files: {
         choose: (payload) => ipcRenderer.invoke('ailis:chat-files-choose', payload || {}),
@@ -56,6 +106,14 @@ contextBridge.exposeInMainWorld('ailisDesktop', {
             return file?.path || '';
         }
     },
+    assetPacks: {
+        list: () => ipcRenderer.invoke('ailis:asset-packs-list'),
+        installFromFolder: () => ipcRenderer.invoke('ailis:asset-packs-install-folder'),
+        installSample: () => ipcRenderer.invoke('ailis:asset-packs-install-sample'),
+        activate: (payload) => ipcRenderer.invoke('ailis:asset-packs-activate', payload || {}),
+        resetActive: (payload) => ipcRenderer.invoke('ailis:asset-packs-reset-active', payload || {}),
+        uninstall: (payload) => ipcRenderer.invoke('ailis:asset-packs-uninstall', payload || {})
+    },
     memory: {
         getSnapshot: (payload) => ipcRenderer.invoke('ailis:memory-snapshot', payload || {}),
         search: (payload) => ipcRenderer.invoke('ailis:memory-search', payload || {}),
@@ -64,7 +122,27 @@ contextBridge.exposeInMainWorld('ailisDesktop', {
         clear: (payload) => ipcRenderer.invoke('ailis:memory-clear', payload || {}),
         forget: (payload) => ipcRenderer.invoke('ailis:memory-forget', payload || {}),
         saveSecret: (payload) => ipcRenderer.invoke('ailis:memory-save-secret', payload || {}),
-        deleteSecret: (payload) => ipcRenderer.invoke('ailis:memory-delete-secret', payload || {})
+        deleteSecret: (payload) => ipcRenderer.invoke('ailis:memory-delete-secret', payload || {}),
+        getStrategies: () => ipcRenderer.invoke('ailis:memory-strategies'),
+        setStrategy: (payload) => ipcRenderer.invoke('ailis:memory-set-strategy', payload || {}),
+        getCognitionStatus: () => ipcRenderer.invoke('ailis:memory-cognition-status'),
+        curateCognition: (payload) => ipcRenderer.invoke('ailis:memory-cognition-curate', payload || {})
+    },
+    rawMemory: {
+        status: () => ipcRenderer.invoke('ailis:raw-memory-status'),
+        replay: (payload) => ipcRenderer.invoke('ailis:raw-memory-replay', payload || {}),
+        sessions: (payload) => ipcRenderer.invoke('ailis:raw-memory-sessions', payload || {})
+    },
+    memoryProfile: {
+        state: () => ipcRenderer.invoke('ailis:memory-profile-state'),
+        curate: (payload) => ipcRenderer.invoke('ailis:memory-profile-curate', payload || {}),
+        rebuild: (payload) => ipcRenderer.invoke('ailis:memory-profile-rebuild', payload || {})
+    },
+    chatHistory: {
+        load: (payload) => ipcRenderer.invoke('ailis:chat-history-load', payload || {}),
+        save: (payload) => ipcRenderer.invoke('ailis:chat-history-save', payload || {}),
+        clear: (payload) => ipcRenderer.invoke('ailis:chat-history-clear', payload || {}),
+        status: () => ipcRenderer.invoke('ailis:chat-history-status')
     },
     vision: {
         capture: (payload) => ipcRenderer.invoke('ailis:vision-capture', payload || {}),
@@ -81,13 +159,37 @@ contextBridge.exposeInMainWorld('ailisDesktop', {
     voiceRuntime: {
         diagnose: () => ipcRenderer.invoke('ailis:voice-runtime-diagnose'),
         getStatus: () => ipcRenderer.invoke('ailis:voice-runtime-status'),
+        chooseInstallDir: () => ipcRenderer.invoke('ailis:voice-runtime-choose-install-dir'),
         bootstrap: (payload) => ipcRenderer.invoke('ailis:voice-runtime-bootstrap', payload || {})
+    },
+    runtimeComponents: {
+        getStatus: () => ipcRenderer.invoke('ailis:runtime-components-status'),
+        installSelected: (payload) => ipcRenderer.invoke('ailis:runtime-components-install', payload || {})
+    },
+    runtimeAssets: {
+        scan: () => ipcRenderer.invoke('ailis:runtime-assets-scan'),
+        delete: (payload) => ipcRenderer.invoke('ailis:runtime-assets-delete', payload || {}),
+        chooseMigrationRoot: (payload) =>
+            ipcRenderer.invoke('ailis:runtime-assets-choose-migration-root', payload || {}),
+        migrate: (payload) => ipcRenderer.invoke('ailis:runtime-assets-migrate', payload || {})
     },
     vllmRuntime: {
         diagnose: (payload) => ipcRenderer.invoke('ailis:vllm-runtime-diagnose', payload || {}),
         getStatus: () => ipcRenderer.invoke('ailis:vllm-runtime-status'),
         deploy: (payload) => ipcRenderer.invoke('ailis:vllm-runtime-deploy', payload || {}),
+        chooseLocalModelFolder: () => ipcRenderer.invoke('ailis:vllm-local-model-folder-choose'),
+        describeLocalModelPath: (payload) => ipcRenderer.invoke('ailis:vllm-local-model-path-describe', payload || {}),
+        chooseDownloadFolder: (payload) => ipcRenderer.invoke('ailis:vllm-download-folder-choose', payload || {}),
         cancel: () => ipcRenderer.invoke('ailis:vllm-runtime-cancel')
+    },
+    ollamaRuntime: {
+        diagnose: (payload) => ipcRenderer.invoke('ailis:ollama-runtime-diagnose', payload || {}),
+        getStatus: () => ipcRenderer.invoke('ailis:ollama-runtime-status'),
+        inspectInstalledModels: (payload) => ipcRenderer.invoke('ailis:ollama-installed-models-inspect', payload || {}),
+        deploy: (payload) => ipcRenderer.invoke('ailis:ollama-runtime-deploy', payload || {}),
+        chooseLocalModelPath: () => ipcRenderer.invoke('ailis:ollama-local-model-path-choose'),
+        describeLocalModelPath: (payload) => ipcRenderer.invoke('ailis:ollama-local-model-path-describe', payload || {}),
+        cancel: () => ipcRenderer.invoke('ailis:ollama-runtime-cancel')
     },
     transcribeAudio: (audioBytes) => ipcRenderer.invoke('ailis:asr-transcribe', audioBytes),
     beginDragPetWindow: () => {
@@ -106,8 +208,6 @@ contextBridge.exposeInMainWorld('ailisDesktop', {
     setPetMousePassthrough: (enabled) => {
         ipcRenderer.send('ailis:set-pet-mouse-passthrough', { enabled: Boolean(enabled) });
     },
-    setPetDialogueExpanded: (payload) =>
-        ipcRenderer.invoke('ailis:set-pet-dialogue-expanded', payload || {}),
     sendChatMessage: (content, options = {}) => {
         if (content && typeof content === 'object') {
             ipcRenderer.send('ailis:chat-send-message', content);

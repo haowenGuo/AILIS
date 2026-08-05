@@ -23,9 +23,22 @@ test('SWE-bench setup recipes fall back for unknown Python repos', () => {
 test('SWE-bench setup recipes expose repo-specific wheelhouse packages', () => {
     const packages = getSweBenchWheelhousePackages({ repos: ['astropy/astropy'] });
     assert.ok(packages.includes('setuptools<60'));
+    assert.ok(packages.includes('astropy-helpers==2.0.2'));
+    assert.ok(packages.includes('Jinja2'));
     assert.ok(packages.includes('pytest-astropy'));
     assert.ok(packages.includes('exceptiongroup'));
     assert.ok(!packages.includes('django'));
+});
+
+test('Astropy setup handles omitted helper gitlinks and Python 3.10 collections APIs', () => {
+    const command = buildSweBenchSetupCommand(
+        getSweBenchSetupRecipe('astropy/astropy'),
+        { wheelhouseDir: '/tmp/wheelhouse' }
+    );
+    assert.match(command, /astropy-helpers==2\.0\.2/);
+    assert.match(command, /collections\.MutableSequence/);
+    assert.match(command, /setup\.py --no-git build_ext --inplace/);
+    assert.match(command, /\|\| python setup\.py build_ext --inplace/);
 });
 
 test('SWE-bench setup recipes are listable for control panel or CLI docs', () => {

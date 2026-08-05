@@ -16,16 +16,57 @@ test('AILIS tool contracts expose versioned schemas and validate common failures
     assert.ok(contracts.length >= 10);
     assert.ok(contracts.some((contract) => contract.id === 'mcp_bridge' && contract.version >= 1));
     assert.ok(contracts.some((contract) => contract.id === 'tool_search' && contract.version >= 1));
+    assert.ok(contracts.some((contract) => contract.id === 'web_search' && contract.version >= 1));
     assert.ok(contracts.some((contract) => contract.id === 'tool_doctor' && contract.version >= 1));
     assert.ok(contracts.some((contract) => contract.id === 'capability_manager' && contract.version >= 1));
     assert.ok(contracts.some((contract) => contract.id === 'self_debugger' && contract.version >= 1));
     assert.ok(contracts.some((contract) => contract.id === 'self_evolution' && contract.version >= 1));
     assert.ok(contracts.some((contract) => contract.id === 'github_pages' && contract.risk === 'low'));
     assert.ok(contracts.some((contract) => contract.id === 'computer' && contract.risk === 'high'));
-    assert.ok(contracts.every((contract) => contract.returns?.properties?.content));
+    for (const toolId of ['spawn_agent', 'followup_task', 'wait_agent', 'list_agents', 'close_agent']) {
+        assert.ok(contracts.some((contract) => contract.id === toolId), `${toolId} contract is registered`);
+    }
+    const codexCollaborationTools = new Set(['spawn_agent', 'followup_task', 'wait_agent', 'list_agents', 'close_agent']);
+    assert.ok(contracts.every((contract) =>
+        codexCollaborationTools.has(contract.id) || contract.returns?.properties?.content
+    ));
     assert.ok(contracts.every((contract) => contract.errors?.includes('invalid_tool_args')));
     assert.ok(contracts.every((contract) => contract.experience?.embodiedAction));
     assert.ok(contracts.every((contract) => contract.experience?.userFacingVerb));
+
+    const validSpawnAgent = validateToolContract('spawn_agent', {
+        task_name: 'mavuika_guide',
+        message: 'Research and produce the current guide.',
+        fork_turns: 'all'
+    });
+    assert.equal(validSpawnAgent.ok, true);
+    assert.equal(validSpawnAgent.contract.approval, 'never');
+    const spawnContract = contracts.find((contract) => contract.id === 'spawn_agent');
+    assert.deepEqual(spawnContract.returns.required, ['task_name', 'nickname']);
+    assert.equal(spawnContract.returns.additionalProperties, false);
+
+    const invalidSpawnAgent = validateToolContract('spawn_agent', {
+        task_name: 'Mavuika-Guide',
+        message: 'Research the guide.',
+        unexpected: true
+    });
+    assert.equal(invalidSpawnAgent.ok, false);
+    assert.ok(invalidSpawnAgent.errors.some((error) => error.includes('task_name')));
+    assert.ok(invalidSpawnAgent.errors.some((error) => error.includes('unexpected')));
+
+    const validFollowupTask = validateToolContract('followup_task', {
+        target: 'mavuika_guide',
+        message: 'Verify the weapon ranking.'
+    });
+    assert.equal(validFollowupTask.ok, true);
+
+    const invalidWaitAgent = validateToolContract('wait_agent', { timeoutMs: 10_000 });
+    assert.equal(invalidWaitAgent.ok, false);
+    assert.ok(invalidWaitAgent.errors.some((error) => error.includes('timeoutMs')));
+    const waitContract = contracts.find((contract) => contract.id === 'wait_agent');
+    assert.deepEqual(waitContract.returns.required, ['message', 'timed_out']);
+    const listContract = contracts.find((contract) => contract.id === 'list_agents');
+    assert.deepEqual(listContract.returns.required, ['agents']);
 
     const validRead = validateToolContract('read', { path: 'package.json' });
     assert.equal(validRead.ok, true);
@@ -101,6 +142,20 @@ test('AILIS tool contracts expose versioned schemas and validate common failures
     });
     assert.equal(validToolSearch.ok, true);
 
+    const validWebSearch = validateToolContract('web_search', {
+        query: 'official release date',
+        maxResults: 5,
+        search_context_size: 'medium'
+    });
+    assert.equal(validWebSearch.ok, true);
+    const validWebScreenshot = validateToolContract('web_run', {
+        screenshot: [{
+            ref_id: 'turn0view0',
+            detail: 'original'
+        }]
+    });
+    assert.equal(validWebScreenshot.ok, true);
+
     const validGitHubPages = validateToolContract('github_pages', {
         action: 'diagnose_publish',
         targetPath: 'about-ailis.html',
@@ -115,6 +170,24 @@ test('AILIS tool contracts expose versioned schemas and validate common failures
     assert.equal(validArtifactCompute.ok, true);
     assert.equal(validArtifactCompute.args.action, 'profile');
 
+    const validArtifactToolsPlan = validateToolContract('artifact_tools', {
+        action: 'plan_import',
+        path: 'report.pdf',
+        requiredCapabilities: ['load', 'inspect', 'render']
+    });
+    assert.equal(validArtifactToolsPlan.ok, true);
+
+    const validArtifactImport = validateToolContract('artifact_import', {
+        path: 'inventory.xlsx',
+        parserId: 'table'
+    });
+    assert.equal(validArtifactImport.ok, true);
+    assert.equal(validArtifactImport.args.action, 'import');
+
+    const badArtifactImport = validateToolContract('artifact_import', {});
+    assert.equal(badArtifactImport.ok, false);
+    assert.ok(badArtifactImport.errors.some((error) => error.includes('requires path')));
+
     const badArtifactCompute = validateToolContract('artifact_compute', {
         action: 'find_path',
         sheet: 'Map'
@@ -125,6 +198,44 @@ test('AILIS tool contracts expose versioned schemas and validate common failures
     const badToolSearch = validateToolContract('tool_search', {});
     assert.equal(badToolSearch.ok, false);
     assert.ok(badToolSearch.errors.some((error) => error.includes('requires query')));
+
+    const badWebSearch = validateToolContract('web_search', {});
+    assert.equal(badWebSearch.ok, false);
+    assert.ok(badWebSearch.errors.some((error) => error.includes('requires query')));
+
+    const validWebRun = validateToolContract('web_run', {
+        search_query: [{ q: 'Codex app-server tool lifecycle' }],
+        response_length: 'medium'
+    });
+    assert.equal(validWebRun.ok, true);
+    assert.equal(contracts.find((contract) => contract.id === 'web_run').schema.minProperties, 1);
+    const webRunContract = contracts.find((contract) => contract.id === 'web_run');
+    assert.equal(webRunContract.schema.properties.search_query.items.properties.q.maxLength, 240);
+    assert.equal(webRunContract.schema.properties.search_query.items.properties.domains.maxItems, 8);
+    const emptyWebRun = validateToolContract('web_run', {});
+    assert.equal(emptyWebRun.ok, false);
+    assert.ok(emptyWebRun.errors.some((error) => error.includes('exactly one non-empty operation')));
+    const mixedWebRun = validateToolContract('web_run', {
+        search_query: [{ q: 'query' }],
+        open: [{ ref_id: 'turn0search0' }]
+    });
+    assert.equal(mixedWebRun.ok, false);
+    const unsupportedWebRun = validateToolContract('web_run', {
+        image_query: [{ q: 'unsupported' }]
+    });
+    assert.equal(unsupportedWebRun.ok, false);
+
+    const wrongArtifactOwner = validateToolContract('artifact_query', {
+        action: 'summary',
+        artifactHandle: {
+            owner: 'artifact_tools',
+            tool: 'artifact_tools',
+            sessionId: 'arts-demo',
+            artifactId: 'art_demo'
+        }
+    });
+    assert.equal(wrongArtifactOwner.ok, false);
+    assert.ok(wrongArtifactOwner.errors.some((error) => error.includes('owned by artifact_tools')));
 
     const badMcpPrompt = validateToolContract('mcp_bridge', {
         action: 'get_prompt',
@@ -243,6 +354,14 @@ test('AILIS tool contracts generate prompt and summary text from the same source
     assert.match(artifactComputePrompt, /artifact_compute/);
     assert.match(artifactComputePrompt, /find_path/);
 
+    const artifactToolsPrompt = getToolContractPromptText('artifact_tools');
+    assert.match(artifactToolsPrompt, /artifact_tools/);
+    assert.match(artifactToolsPrompt, /plan_import/);
+
+    const artifactImportPrompt = getToolContractPromptText('artifact_import');
+    assert.match(artifactImportPrompt, /artifact_import/);
+    assert.match(artifactImportPrompt, /parserId/);
+
     const doctorPrompt = getToolContractPromptText('tool_doctor');
     assert.match(doctorPrompt, /discover_mcp/);
     assert.match(doctorPrompt, /检查工具健康/);
@@ -259,6 +378,6 @@ test('AILIS tool contracts generate prompt and summary text from the same source
     assert.match(selfEvolutionPrompt, /apply_proposal/);
     assert.match(selfEvolutionPrompt, /分析并优化自己/);
 
-    const subagentPrompt = getToolContractPromptText('subagents');
-    assert.match(subagentPrompt, /"maximum": 50/);
+    assert.equal(getToolContractPromptText('subagents'), '');
+    assert.equal(listToolContracts().some((contract) => contract.id === 'subagents'), false);
 });

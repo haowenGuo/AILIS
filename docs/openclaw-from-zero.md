@@ -777,8 +777,8 @@ sequenceDiagram
 源码证据：
 
 - `@modelcontextprotocol/sdk` 直接出现在上游依赖里。
-- [mcp-transport.ts](/F:/AILIS/AILISClaw/.refs/openclaw-main/src/agents/mcp-transport.ts:1) 明确支持 `stdio`、`sse`、`streamable-http`。
-- [mcp-http.handlers.ts](/F:/AILIS/AILISClaw/.refs/openclaw-main/src/gateway/mcp-http.handlers.ts:1) 直接实现 `initialize`、`tools/list`、`tools/call`。
+- [mcp-transport.ts](https://github.com/openclaw/openclaw/blob/main/src/agents/mcp-transport.ts#L1) 明确支持 `stdio`、`sse`、`streamable-http`。
+- [mcp-http.handlers.ts](https://github.com/openclaw/openclaw/blob/main/src/gateway/mcp-http.handlers.ts#L1) 直接实现 `initialize`、`tools/list`、`tools/call`。
 
 对应生态：
 
@@ -822,7 +822,7 @@ sequenceDiagram
 
 源码证据：
 
-- [pi-bundle-lsp-runtime.ts](/F:/AILIS/AILISClaw/.refs/openclaw-main/src/agents/pi-bundle-lsp-runtime.ts:1) 里直接写了 “Minimal LSP JSON-RPC framing over stdio”。
+- [pi-bundle-lsp-runtime.ts](https://github.com/openclaw/openclaw/blob/main/src/agents/pi-bundle-lsp-runtime.ts#L1) 里直接写了 “Minimal LSP JSON-RPC framing over stdio”。
 - 同文件里实现了 `Content-Length` framing、`initialize`、`shutdown`、`$/cancelRequest` 这一类标准 LSP/JSON-RPC 行为。
 
 对应生态：
@@ -838,8 +838,8 @@ sequenceDiagram
 源码证据：
 
 - 上游依赖和浏览器插件依赖里有 `playwright-core`。
-- [extensions/browser/package.json](/F:/AILIS/AILISClaw/.refs/openclaw-main/extensions/browser/package.json:1) 直接依赖 `playwright-core`。
-- [browser-cdp.ts](/F:/AILIS/AILISClaw/.refs/openclaw-main/src/plugin-sdk/browser-cdp.ts:1) 说明它也接了 CDP URL 这一层。
+- [extensions/browser/package.json](https://github.com/openclaw/openclaw/blob/main/extensions/browser/package.json#L1) 直接依赖 `playwright-core`。
+- [browser-cdp.ts](https://github.com/openclaw/openclaw/blob/main/src/plugin-sdk/browser-cdp.ts#L1) 说明它也接了 CDP URL 这一层。
 
 对应生态：
 
@@ -853,7 +853,7 @@ sequenceDiagram
 
 源码证据：
 
-- [gmail-watcher.ts](/F:/AILIS/AILISClaw/.refs/openclaw-main/src/hooks/gmail-watcher.ts:1) 会启动 `gog gmail watch serve`。
+- [gmail-watcher.ts](https://github.com/openclaw/openclaw/blob/main/src/hooks/gmail-watcher.ts#L1) 会启动 `gog gmail watch serve`。
 - 代码注释已经写明：这是在 Gateway 启动时自动起 Gmail watcher。
 
 对应生态：
@@ -875,8 +875,8 @@ sequenceDiagram
 源码证据：
 
 - `wizard` 文案和 channel runtime 里已经能看到 `telegram`、`line`、`google chat`、`synology chat`、`imessage-webhook` 这些渠道痕迹。
-- [server-channels.ts](/F:/AILIS/AILISClaw/.refs/openclaw-main/src/gateway/server-channels.ts:1) 是统一的 channel 生命周期管理器。
-- [webhook-request-guards.ts](/F:/AILIS/AILISClaw/.refs/openclaw-main/src/plugin-sdk/webhook-request-guards.ts:1) 是统一 webhook 防护层。
+- [server-channels.ts](https://github.com/openclaw/openclaw/blob/main/src/gateway/server-channels.ts#L1) 是统一的 channel 生命周期管理器。
+- [webhook-request-guards.ts](https://github.com/openclaw/openclaw/blob/main/src/plugin-sdk/webhook-request-guards.ts#L1) 是统一 webhook 防护层。
 
 对应生态：
 
@@ -897,7 +897,7 @@ OpenClaw 自己做的不是“聊天协议本身”，而是：
 源码证据：
 
 - 上游 lockfile 里有 `standardwebhooks`。
-- [webhook-request-guards.ts](/F:/AILIS/AILISClaw/.refs/openclaw-main/src/plugin-sdk/webhook-request-guards.ts:1) 实现了方法限制、Content-Type 限制、限流、并发 in-flight 限制、body size limit。
+- [webhook-request-guards.ts](https://github.com/openclaw/openclaw/blob/main/src/plugin-sdk/webhook-request-guards.ts#L1) 实现了方法限制、Content-Type 限制、限流、并发 in-flight 限制、body size limit。
 
 对应生态：
 

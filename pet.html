@@ -27,9 +27,6 @@
         }
 
         #pet-shell {
-            --pet-dialogue-reserved-top: 0px;
-            --pet-dialogue-reserved-left: 0px;
-            --pet-dialogue-reserved-right: 0px;
             position: relative;
             width: 100%;
             height: 100%;
@@ -38,10 +35,7 @@
 
         #canvas-container {
             position: absolute;
-            left: var(--pet-dialogue-reserved-left, 0px);
-            right: var(--pet-dialogue-reserved-right, 0px);
-            bottom: 0;
-            height: calc(100% - var(--pet-dialogue-reserved-top, 0px));
+            inset: 0;
         }
 
         #canvas-container canvas {
@@ -50,27 +44,11 @@
             height: 100% !important;
         }
 
-        .pet-hidden-ui {
-            position: absolute;
-            width: 1px;
-            height: 1px;
-            overflow: hidden;
-            opacity: 0;
-            pointer-events: none;
-            left: -9999px;
-            top: -9999px;
-        }
     </style>
 </head>
 <body>
     <div id="pet-shell">
         <div id="canvas-container"></div>
-
-        <div class="pet-hidden-ui" aria-hidden="true">
-            <div id="message-list"></div>
-            <textarea id="message-input"></textarea>
-            <button id="send-btn" type="button">发送</button>
-        </div>
     </div>
 
     <script type="module" src="./src/pet-app.js"></script>

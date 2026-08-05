@@ -1,0 +1,67 @@
+{
+  "schemaVersion": 1,
+  "product": "AILIS",
+  "outputRoot": "F:/AILIS/Build/AILIS",
+  "profiles": {
+    "core": {
+      "title": "Core lightweight installer",
+      "description": "Build the default lightweight installer and portable package. Runtime components stay optional and are not bundled.",
+      "buildFrontend": true,
+      "buildDesktop": true,
+      "builderConfig": "electron-builder.yml",
+      "builderTargets": ["--win", "nsis", "portable"],
+      "runtimeComponents": [],
+      "buildRuntimePacks": false,
+      "stageRuntimePacks": false,
+      "outputSubdir": "core"
+    },
+    "runtime-packs": {
+      "title": "Runtime packs only",
+      "description": "Build selected optional runtime packs without rebuilding the desktop installer.",
+      "buildFrontend": false,
+      "buildDesktop": false,
+      "runtimeComponents": [
+        "python-runtime",
+        "cosyvoice3-runtime",
+        "asr-runtime",
+        "web-runtime"
+      ],
+      "buildRuntimePacks": true,
+      "stageRuntimePacks": true,
+      "runtimePackSubdir": "",
+      "outputSubdir": "runtime-packs"
+    },
+    "with-packs": {
+      "title": "Installer plus sidecar runtime packs",
+      "description": "Build the lightweight installer, then place selected runtime packs next to it under runtime-packs/ for optional offline install.",
+      "buildFrontend": true,
+      "buildDesktop": true,
+      "builderConfig": "electron-builder.yml",
+      "builderTargets": ["--win", "nsis", "portable"],
+      "runtimeComponents": [
+        "python-runtime",
+        "cosyvoice3-runtime",
+        "asr-runtime",
+        "web-runtime"
+      ],
+      "buildRuntimePacks": true,
+      "stageRuntimePacks": true,
+      "outputSubdir": "with-packs"
+    },
+    "voice-debug": {
+      "title": "Offline voice debug package",
+      "description": "Build the legacy voice-heavy directory package for internal debugging only. This is not the default public release.",
+      "buildFrontend": true,
+      "buildDesktop": true,
+      "builderConfig": "electron-builder.voice.yml",
+      "builderTargets": ["--win", "--dir"],
+      "runtimeComponents": [
+        "python-runtime",
+        "cosyvoice3-runtime"
+      ],
+      "buildRuntimePacks": false,
+      "stageRuntimePacks": false,
+      "outputSubdir": "voice-debug"
+    }
+  }
+}

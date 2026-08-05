@@ -163,6 +163,7 @@ export class VRMModelSystem {
         this.sceneMoodCurrent = null;
         this.clock = new THREE.Clock();
         this.lastRenderTimestamp = 0;
+        this.renderEnabled = true;
 
         this.vrm = null;
         this.mixer = null;
@@ -240,6 +241,23 @@ export class VRMModelSystem {
 
     getExpressionPresetValue(expressionName) {
         return CONFIG.EXPRESSION_PRESETS[expressionName];
+    }
+
+    setRenderEnabled(enabled) {
+        const nextEnabled = enabled !== false;
+        if (this.renderEnabled === nextEnabled) {
+            return;
+        }
+        this.renderEnabled = nextEnabled;
+        this.lastRenderTimestamp = 0;
+        this.clock?.getDelta();
+        if (!this.renderer?.domElement) {
+            return;
+        }
+        this.renderer.domElement.style.visibility = this.renderEnabled ? 'visible' : 'hidden';
+        if (!this.renderEnabled) {
+            this.renderer.clear();
+        }
     }
 
     setExpressionPresetValue(expressionName, value) {
@@ -1162,6 +1180,10 @@ export class VRMModelSystem {
 
     animate(timestamp = 0) {
         requestAnimationFrame(this.animate);
+        if (!this.renderEnabled) {
+            this.clock.getDelta();
+            return;
+        }
         const fpsLimit = clampNumber(CONFIG.RENDER_FPS_LIMIT, 24, 60, 60);
         const frameIntervalMs = 1000 / fpsLimit;
         if (
@@ -1192,7 +1214,9 @@ export class VRMModelSystem {
         if (this.controls?.enabled) {
             this.controls.update();
         }
-        this.renderer.render(this.scene, this.camera);
+        if (this.renderEnabled) {
+            this.renderer.render(this.scene, this.camera);
+        }
     }
 
     updateAutoBlink() {

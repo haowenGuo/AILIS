@@ -1,0 +1,427 @@
+{
+  "status": "ready",
+  "requestedSamples": 2,
+  "requestedQaPerSample": 20,
+  "availableSamples": 2,
+  "availableQa": 40,
+  "sourcePath": "F:\\AILIS_self_evolution_runtime\\build-cache\\benchmarks\\locomo\\data\\locomo10.json",
+  "samples": [
+    {
+      "benchmark": "locomo",
+      "sampleId": "conv-26",
+      "sourcePath": "F:\\AILIS_self_evolution_runtime\\build-cache\\benchmarks\\locomo\\data\\locomo10.json",
+      "speakers": {
+        "speakerA": "Caroline",
+        "speakerB": "Melanie"
+      },
+      "contextStats": {
+        "chars": 174017,
+        "roughTokens": 49720,
+        "qaCount": 199,
+        "selectedQaCount": 20
+      },
+      "evaluationMode": "Load this sample into Raw Memory Ledger/artifact memory once, then answer selected QA. Do not stuff full sample into every QA prompt.",
+      "selectedQa": [
+        {
+          "smokeId": "locomo-01-qa-01",
+          "question": "When did Caroline go to the LGBTQ support group?",
+          "answer": "7 May 2023",
+          "evidence": [
+            "D1:3"
+          ],
+          "category": 2
+        },
+        {
+          "smokeId": "locomo-01-qa-02",
+          "question": "When did Melanie paint a sunrise?",
+          "answer": 2022,
+          "evidence": [
+            "D1:12"
+          ],
+          "category": 2
+        },
+        {
+          "smokeId": "locomo-01-qa-03",
+          "question": "What fields would Caroline be likely to pursue in her educaton?",
+          "answer": "Psychology, counseling certification",
+          "evidence": [
+            "D1:9",
+            "D1:11"
+          ],
+          "category": 3
+        },
+        {
+          "smokeId": "locomo-01-qa-04",
+          "question": "What did Caroline research?",
+          "answer": "Adoption agencies",
+          "evidence": [
+            "D2:8"
+          ],
+          "category": 1
+        },
+        {
+          "smokeId": "locomo-01-qa-05",
+          "question": "What is Caroline's identity?",
+          "answer": "Transgender woman",
+          "evidence": [
+            "D1:5"
+          ],
+          "category": 1
+        },
+        {
+          "smokeId": "locomo-01-qa-06",
+          "question": "When did Melanie run a charity race?",
+          "answer": "The sunday before 25 May 2023",
+          "evidence": [
+            "D2:1"
+          ],
+          "category": 2
+        },
+        {
+          "smokeId": "locomo-01-qa-07",
+          "question": "When is Melanie planning on going camping?",
+          "answer": "June 2023",
+          "evidence": [
+            "D2:7"
+          ],
+          "category": 2
+        },
+        {
+          "smokeId": "locomo-01-qa-08",
+          "question": "What is Caroline's relationship status?",
+          "answer": "Single",
+          "evidence": [
+            "D3:13",
+            "D2:14"
+          ],
+          "category": 1
+        },
+        {
+          "smokeId": "locomo-01-qa-09",
+          "question": "When did Caroline give a speech at a school?",
+          "answer": "The week before 9 June 2023",
+          "evidence": [
+            "D3:1"
+          ],
+          "category": 2
+        },
+        {
+          "smokeId": "locomo-01-qa-10",
+          "question": "When did Caroline meet up with her friends, family, and mentors?",
+          "answer": "The week before 9 June 2023",
+          "evidence": [
+            "D3:11"
+          ],
+          "category": 2
+        },
+        {
+          "smokeId": "locomo-01-qa-11",
+          "question": "How long has Caroline had her current group of friends for?",
+          "answer": "4 years",
+          "evidence": [
+            "D3:13"
+          ],
+          "category": 2
+        },
+        {
+          "smokeId": "locomo-01-qa-12",
+          "question": "Where did Caroline move from 4 years ago?",
+          "answer": "Sweden",
+          "evidence": [
+            "D3:13",
+            "D4:3"
+          ],
+          "category": 1
+        },
+        {
+          "smokeId": "locomo-01-qa-13",
+          "question": "How long ago was Caroline's 18th birthday?",
+          "answer": "10 years ago",
+          "evidence": [
+            "D4:5"
+          ],
+          "category": 2
+        },
+        {
+          "smokeId": "locomo-01-qa-14",
+          "question": "What career path has Caroline decided to persue?",
+          "answer": "counseling or mental health for Transgender people",
+          "evidence": [
+            "D4:13",
+            "D1:11"
+          ],
+          "category": 1
+        },
+        {
+          "smokeId": "locomo-01-qa-15",
+          "question": "Would Caroline still want to pursue counseling as a career if she hadn't received support growing up?",
+          "answer": "Likely no",
+          "evidence": [
+            "D4:15",
+            "D3:5"
+          ],
+          "category": 3
+        },
+        {
+          "smokeId": "locomo-01-qa-16",
+          "question": "What activities does Melanie partake in?",
+          "answer": "pottery, camping, painting, swimming",
+          "evidence": [
+            "D5:4",
+            "D9:1",
+            "D1:12",
+            "D1:18"
+          ],
+          "category": 1
+        },
+        {
+          "smokeId": "locomo-01-qa-17",
+          "question": "When did Melanie sign up for a pottery class?",
+          "answer": "2 July 2023",
+          "evidence": [
+            "D5:4"
+          ],
+          "category": 2
+        },
+        {
+          "smokeId": "locomo-01-qa-18",
+          "question": "When is Caroline going to the transgender conference?",
+          "answer": "July 2023",
+          "evidence": [
+            "D5:13"
+          ],
+          "category": 2
+        },
+        {
+          "smokeId": "locomo-01-qa-19",
+          "question": "Where has Melanie camped?",
+          "answer": "beach, mountains, forest",
+          "evidence": [
+            "D6:16",
+            "D4:6",
+            "D8:32"
+          ],
+          "category": 1
+        },
+        {
+          "smokeId": "locomo-01-qa-20",
+          "question": "What do Melanie's kids like?",
+          "answer": "dinosaurs, nature",
+          "evidence": [
+            "D6:6",
+            "D4:8"
+          ],
+          "category": 1
+        }
+      ]
+    },
+    {
+      "benchmark": "locomo",
+      "sampleId": "conv-30",
+      "sourcePath": "F:\\AILIS_self_evolution_runtime\\build-cache\\benchmarks\\locomo\\data\\locomo10.json",
+      "speakers": {
+        "speakerA": "Jon",
+        "speakerB": "Gina"
+      },
+      "contextStats": {
+        "chars": 119095,
+        "roughTokens": 34028,
+        "qaCount": 105,
+        "selectedQaCount": 20
+      },
+      "evaluationMode": "Load this sample into Raw Memory Ledger/artifact memory once, then answer selected QA. Do not stuff full sample into every QA prompt.",
+      "selectedQa": [
+        {
+          "smokeId": "locomo-02-qa-01",
+          "question": "When Jon has lost his job as a banker?",
+          "answer": "19 January, 2023",
+          "evidence": [
+            "D1:2"
+          ],
+          "category": 2
+        },
+        {
+          "smokeId": "locomo-02-qa-02",
+          "question": "When Gina has lost her job at Door Dash?",
+          "answer": "January, 2023",
+          "evidence": [
+            "D1:3"
+          ],
+          "category": 2
+        },
+        {
+          "smokeId": "locomo-02-qa-03",
+          "question": "How do Jon and Gina both like to destress?",
+          "answer": "by dancing",
+          "evidence": [
+            "D1:7",
+            "D1:6"
+          ],
+          "category": 4
+        },
+        {
+          "smokeId": "locomo-02-qa-04",
+          "question": "What do Jon and Gina both have in common?",
+          "answer": "They lost their jobs and decided to start their own businesses.",
+          "evidence": [
+            "D1:2",
+            "D1:3",
+            "D1:4",
+            "D2:1"
+          ],
+          "category": 1
+        },
+        {
+          "smokeId": "locomo-02-qa-05",
+          "question": "Why did Jon decide to start his dance studio?",
+          "answer": "He lost his job and decided to start his own business to share his passion.",
+          "evidence": [
+            "D1:2",
+            "D1:4"
+          ],
+          "category": 4
+        },
+        {
+          "smokeId": "locomo-02-qa-06",
+          "question": "What Jon thinks the ideal dance studio should look like?",
+          "answer": "By the water, with natural light and Marley flooring",
+          "evidence": [
+            "D1:20",
+            "D2:4",
+            "D2:8"
+          ],
+          "category": 1
+        },
+        {
+          "smokeId": "locomo-02-qa-07",
+          "question": "When is Jon's group performing at a festival?",
+          "answer": "February, 2023",
+          "evidence": [
+            "D1:24"
+          ],
+          "category": 2
+        },
+        {
+          "smokeId": "locomo-02-qa-08",
+          "question": "When did Gina launch an ad campaign for her store?",
+          "answer": "29 January, 2023",
+          "evidence": [
+            "D2:1"
+          ],
+          "category": 2
+        },
+        {
+          "smokeId": "locomo-02-qa-09",
+          "question": "When was Jon in Paris?",
+          "answer": "28 January 2023",
+          "evidence": [
+            "D2:4"
+          ],
+          "category": 2
+        },
+        {
+          "smokeId": "locomo-02-qa-10",
+          "question": "Which city have both Jean and John visited?",
+          "answer": "Rome",
+          "evidence": [
+            "D2:5",
+            "D15:1"
+          ],
+          "category": 1
+        },
+        {
+          "smokeId": "locomo-02-qa-11",
+          "question": "When did Gina team up with a local artist for some cool designs?",
+          "answer": "February, 2023",
+          "evidence": [
+            "D5:5"
+          ],
+          "category": 2
+        },
+        {
+          "smokeId": "locomo-02-qa-12",
+          "question": "When did Gina get her tattoo?",
+          "answer": "A few years ago",
+          "evidence": [
+            "D5:15"
+          ],
+          "category": 2
+        },
+        {
+          "smokeId": "locomo-02-qa-13",
+          "question": "When did Jon start to go to the gym?",
+          "answer": "March, 2023",
+          "evidence": [
+            "D6:1"
+          ],
+          "category": 2
+        },
+        {
+          "smokeId": "locomo-02-qa-14",
+          "question": "When did Gina open her online clothing store?",
+          "answer": "16 March, 2023",
+          "evidence": [
+            "D6:6"
+          ],
+          "category": 2
+        },
+        {
+          "smokeId": "locomo-02-qa-15",
+          "question": "When did Jon start expanding his studio's social media presence?",
+          "answer": "April, 2023",
+          "evidence": [
+            "D8:13"
+          ],
+          "category": 2
+        },
+        {
+          "smokeId": "locomo-02-qa-16",
+          "question": "When did Jon host a dance competition?",
+          "answer": "May, 2023",
+          "evidence": [
+            "D8:13"
+          ],
+          "category": 2
+        },
+        {
+          "smokeId": "locomo-02-qa-17",
+          "question": "When did Jon go to a fair to get more exposure for his dance studio?",
+          "answer": "24 April, 2023",
+          "evidence": [
+            "D10:1"
+          ],
+          "category": 2
+        },
+        {
+          "smokeId": "locomo-02-qa-18",
+          "question": "Why did Gina decide to start her own clothing store?",
+          "answer": "She always loved fashion trends and finding unique pieces and she lost her job so decided it was time to start her own business.",
+          "evidence": [
+            "D6:8",
+            "D1:3"
+          ],
+          "category": 1
+        },
+        {
+          "smokeId": "locomo-02-qa-19",
+          "question": "Do Jon and Gina start businesses out of what they love?",
+          "answer": "Yes",
+          "evidence": [
+            "D1:4",
+            "D6:8"
+          ],
+          "category": 1
+        },
+        {
+          "smokeId": "locomo-02-qa-20",
+          "question": "When did Gina interview for a design internship?",
+          "answer": "10 May, 2023",
+          "evidence": [
+            "D11:14"
+          ],
+          "category": 2
+        }
+      ]
+    }
+  ]
+}

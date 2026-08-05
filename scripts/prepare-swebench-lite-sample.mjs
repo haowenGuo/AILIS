@@ -10,7 +10,12 @@ const __dirname = path.dirname(__filename);
 const projectRoot = path.resolve(__dirname, '..');
 const execFileAsync = promisify(execFile);
 
-const DATASET = 'princeton-nlp/SWE-bench_Lite';
+export const SWE_BENCH_DATASET = 'princeton-nlp/SWE-bench';
+export const SWE_BENCH_LITE_DATASET = 'princeton-nlp/SWE-bench_Lite';
+const SUPPORTED_DATASETS = new Set([
+    SWE_BENCH_DATASET,
+    SWE_BENCH_LITE_DATASET
+]);
 const CONFIG = 'default';
 const DEFAULT_SPLIT = 'test';
 const DEFAULT_LIMIT = 10;
@@ -19,6 +24,7 @@ const DEFAULT_MAX_SCAN_ROWS = 2500;
 
 function parseArgs(argv = process.argv.slice(2)) {
     const args = {
+        datasetName: SWE_BENCH_LITE_DATASET,
         split: DEFAULT_SPLIT,
         limit: DEFAULT_LIMIT,
         offset: 0,
@@ -29,7 +35,9 @@ function parseArgs(argv = process.argv.slice(2)) {
     };
     for (let index = 0; index < argv.length; index += 1) {
         const arg = argv[index];
-        if (arg === '--split') {
+        if (arg === '--dataset-name') {
+            args.datasetName = argv[++index] || args.datasetName;
+        } else if (arg === '--split') {
             args.split = argv[++index] || args.split;
         } else if (arg === '--limit') {
             args.limit = Number(argv[++index] || args.limit);
@@ -49,7 +57,25 @@ function parseArgs(argv = process.argv.slice(2)) {
     args.offset = Math.max(0, Number.isFinite(args.offset) ? args.offset : 0);
     args.scanStep = Math.max(1, Math.min(Number.isFinite(args.scanStep) ? args.scanStep : DEFAULT_SCAN_STEP, 100));
     args.maxScanRows = Math.max(args.scanStep, Number.isFinite(args.maxScanRows) ? args.maxScanRows : DEFAULT_MAX_SCAN_ROWS);
+    args.datasetName = resolveSweBenchDataset(args.datasetName);
     return args;
+}
+
+export function resolveSweBenchDataset(datasetName = SWE_BENCH_LITE_DATASET) {
+    const normalized = String(datasetName || SWE_BENCH_LITE_DATASET).trim();
+    if (!SUPPORTED_DATASETS.has(normalized)) {
+        throw new Error(
+            `Unsupported SWE-bench dataset: ${normalized}. ` +
+            `Expected ${SWE_BENCH_DATASET} or ${SWE_BENCH_LITE_DATASET}.`
+        );
+    }
+    return normalized;
+}
+
+export function sweBenchDatasetFilePrefix(datasetName = SWE_BENCH_LITE_DATASET) {
+    return resolveSweBenchDataset(datasetName) === SWE_BENCH_DATASET
+        ? 'swebench'
+        : 'swebench-lite';
 }
 
 function fetchTextOverHttps(url, { timeoutMs = 60000 } = {}) {
@@ -136,11 +162,11 @@ function safeJsonParse(value, fallback = []) {
     }
 }
 
-function normalizeRow(rowEntry = {}) {
+function normalizeRow(rowEntry = {}, datasetName = SWE_BENCH_LITE_DATASET) {
     const row = rowEntry.row || rowEntry;
     return {
         row_idx: rowEntry.row_idx ?? null,
-        dataset: DATASET,
+        dataset: datasetName,
         config: CONFIG,
         split: rowEntry.split || DEFAULT_SPLIT,
         repo: row.repo,
@@ -166,9 +192,9 @@ function repoSlug(repo = '') {
         .toLowerCase();
 }
 
-async function fetchRowsPage({ split, offset, length }) {
+async function fetchRowsPage({ datasetName, split, offset, length }) {
     const params = new URLSearchParams({
-        dataset: DATASET,
+        dataset: datasetName,
         config: CONFIG,
         split,
         offset: String(offset),
@@ -178,13 +204,16 @@ async function fetchRowsPage({ split, offset, length }) {
     const payload = await fetchJson(url);
     return {
         payload,
-        rows: (payload.rows || []).map((entry) => normalizeRow({ ...entry, split }))
+        rows: (payload.rows || []).map((entry) =>
+            normalizeRow({ ...entry, split }, datasetName)
+        )
     };
 }
 
 async function fetchRows(args) {
     if (!args.repo) {
         const { payload, rows } = await fetchRowsPage({
+            datasetName: args.datasetName,
             split: args.split,
             offset: args.offset,
             length: args.limit
@@ -204,6 +233,7 @@ async function fetchRows(args) {
     let scannedRows = 0;
     for (let offset = args.offset; scannedRows < args.maxScanRows; offset += args.scanStep) {
         const { payload, rows } = await fetchRowsPage({
+            datasetName: args.datasetName,
             split: args.split,
             offset,
             length: args.scanStep
@@ -226,20 +256,22 @@ async function fetchRows(args) {
     return { rows: matchedRows, totalRows, scannedRows, scanOffsets };
 }
 
-export async function prepareSweBenchLiteSample(options = {}) {
+export async function prepareSweBenchSample(options = {}) {
     const args = {
         ...parseArgs([]),
         ...options
     };
+    args.datasetName = resolveSweBenchDataset(args.datasetName);
     await fs.mkdir(args.outputDir, { recursive: true });
     const { rows, totalRows, scannedRows, scanOffsets } = await fetchRows(args);
     const suffix = args.repo ? `${repoSlug(args.repo)}.sample` : 'sample';
-    const jsonlPath = path.join(args.outputDir, `swebench-lite.${args.split}.${suffix}.jsonl`);
-    const summaryPath = path.join(args.outputDir, `swebench-lite.${args.split}.${suffix}.summary.json`);
+    const filePrefix = sweBenchDatasetFilePrefix(args.datasetName);
+    const jsonlPath = path.join(args.outputDir, `${filePrefix}.${args.split}.${suffix}.jsonl`);
+    const summaryPath = path.join(args.outputDir, `${filePrefix}.${args.split}.${suffix}.summary.json`);
     await fs.writeFile(jsonlPath, `${rows.map((row) => JSON.stringify(row)).join('\n')}\n`, 'utf8');
     const summary = {
         ok: true,
-        dataset: DATASET,
+        dataset: args.datasetName,
         config: CONFIG,
         split: args.split,
         offset: args.offset,
@@ -260,7 +292,14 @@ export async function prepareSweBenchLiteSample(options = {}) {
     };
 }
 
+export async function prepareSweBenchLiteSample(options = {}) {
+    return await prepareSweBenchSample({
+        ...options,
+        datasetName: SWE_BENCH_LITE_DATASET
+    });
+}
+
 if (process.argv[1] && path.resolve(process.argv[1]) === __filename) {
-    const report = await prepareSweBenchLiteSample(parseArgs());
+    const report = await prepareSweBenchSample(parseArgs());
     console.log(JSON.stringify(report, null, 2));
 }

@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="500" viewBox="0 0 1200 500" role="img" aria-labelledby="title desc">
+  <title id="title">AILIS evaluation snapshot</title>
+  <desc id="desc">Apple ToolSandbox frozen holdout mean 71.51 percent, GAIA Level 1 strict first run 77.36 percent, internal longitudinal companion score 78.46 out of 100, and an early OSWorld small run with two of four tasks passed.</desc>
+
+  <rect width="1200" height="500" fill="#f8fafc"/>
+  <rect x="28" y="24" width="1144" height="452" rx="8" fill="#ffffff" stroke="#cbd5e1"/>
+
+  <text x="64" y="70" fill="#0f172a" font-family="Arial, sans-serif" font-size="28" font-weight="700">AILIS Evaluation Snapshot</text>
+  <text x="64" y="98" fill="#475569" font-family="Arial, sans-serif" font-size="15">End-to-end evidence with scale and claim status disclosed</text>
+  <rect x="937" y="49" width="199" height="34" rx="6" fill="#f1f5f9" stroke="#cbd5e1"/>
+  <text x="1037" y="71" text-anchor="middle" fill="#334155" font-family="Arial, sans-serif" font-size="12" font-weight="700">SNAPSHOT 2026-07-20</text>
+
+  <rect x="64" y="126" width="252" height="226" rx="8" fill="#eff6ff" stroke="#93c5fd"/>
+  <rect x="64" y="126" width="252" height="8" rx="4" fill="#2563eb"/>
+  <text x="84" y="167" fill="#1e3a8a" font-family="Arial, sans-serif" font-size="13" font-weight="700">APPLE TOOLSANDBOX</text>
+  <text x="84" y="225" fill="#1d4ed8" font-family="Arial, sans-serif" font-size="40" font-weight="700">71.51%</text>
+  <text x="84" y="253" fill="#334155" font-family="Arial, sans-serif" font-size="14" font-weight="700">Frozen holdout mean</text>
+  <text x="84" y="278" fill="#64748b" font-family="Arial, sans-serif" font-size="12">239 / 239 scored | 0 errors</text>
+  <rect x="84" y="303" width="86" height="27" rx="5" fill="#dbeafe"/>
+  <text x="127" y="321" text-anchor="middle" fill="#1e40af" font-family="Arial, sans-serif" font-size="11" font-weight="700">PRIMARY</text>
+
+  <rect x="336" y="126" width="252" height="226" rx="8" fill="#ecfdf5" stroke="#6ee7b7"/>
+  <rect x="336" y="126" width="252" height="8" rx="4" fill="#059669"/>
+  <text x="356" y="167" fill="#065f46" font-family="Arial, sans-serif" font-size="13" font-weight="700">GAIA LEVEL 1</text>
+  <text x="356" y="225" fill="#047857" font-family="Arial, sans-serif" font-size="40" font-weight="700">77.36%</text>
+  <text x="356" y="253" fill="#334155" font-family="Arial, sans-serif" font-size="14" font-weight="700">Strict Run 1</text>
+  <text x="356" y="278" fill="#64748b" font-family="Arial, sans-serif" font-size="12">41 / 53 | memory disabled</text>
+  <rect x="356" y="303" width="104" height="27" rx="5" fill="#d1fae5"/>
+  <text x="408" y="321" text-anchor="middle" fill="#065f46" font-family="Arial, sans-serif" font-size="11" font-weight="700">PROVISIONAL</text>
+
+  <rect x="608" y="126" width="252" height="226" rx="8" fill="#f0fdfa" stroke="#5eead4"/>
+  <rect x="608" y="126" width="252" height="8" rx="4" fill="#0f766e"/>
+  <text x="628" y="167" fill="#134e4a" font-family="Arial, sans-serif" font-size="13" font-weight="700">LONGITUDINAL COMPANION</text>
+  <text x="628" y="225" fill="#0f766e" font-family="Arial, sans-serif" font-size="40" font-weight="700">78.46</text>
+  <text x="628" y="253" fill="#334155" font-family="Arial, sans-serif" font-size="14" font-weight="700">Weighted score / 100</text>
+  <text x="628" y="278" fill="#64748b" font-family="Arial, sans-serif" font-size="12">171 judged checkpoints</text>
+  <rect x="628" y="303" width="83" height="27" rx="5" fill="#ccfbf1"/>
+  <text x="670" y="321" text-anchor="middle" fill="#115e59" font-family="Arial, sans-serif" font-size="11" font-weight="700">INTERNAL</text>
+
+  <rect x="880" y="126" width="256" height="226" rx="8" fill="#fffbeb" stroke="#fcd34d"/>
+  <rect x="880" y="126" width="256" height="8" rx="4" fill="#d97706"/>
+  <text x="900" y="167" fill="#92400e" font-family="Arial, sans-serif" font-size="13" font-weight="700">OSWORLD</text>
+  <text x="900" y="225" fill="#b45309" font-family="Arial, sans-serif" font-size="40" font-weight="700">2 / 4</text>
+  <text x="900" y="253" fill="#334155" font-family="Arial, sans-serif" font-size="14" font-weight="700">Historical small run</text>
+  <text x="900" y="278" fill="#64748b" font-family="Arial, sans-serif" font-size="12">Early desktop-operation signal</text>
+  <rect x="900" y="303" width="112" height="27" rx="5" fill="#fef3c7"/>
+  <text x="956" y="321" text-anchor="middle" fill="#92400e" font-family="Arial, sans-serif" font-size="11" font-weight="700">SMALL SAMPLE</text>
+
+  <rect x="64" y="382" width="1072" height="58" rx="8" fill="#f8fafc" stroke="#e2e8f0"/>
+  <circle cx="88" cy="411" r="6" fill="#2563eb"/>
+  <text x="104" y="416" fill="#334155" font-family="Arial, sans-serif" font-size="13">
+    Historical GAIA mean 85.85% remains diagnostic only; strict Run 2 is required before publishing a replacement reproducibility mean.
+  </text>
+  <text x="64" y="462" fill="#64748b" font-family="Arial, sans-serif" font-size="11">Public benchmark, provisional rerun, internal product eval, and small-sample evidence are intentionally not averaged.</text>
+</svg>

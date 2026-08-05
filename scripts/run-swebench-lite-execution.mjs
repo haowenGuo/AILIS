@@ -4,7 +4,11 @@ import os from 'node:os';
 import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { prepareSweBenchLiteSample } from './prepare-swebench-lite-sample.mjs';
+import {
+    SWE_BENCH_LITE_DATASET,
+    prepareSweBenchSample,
+    sweBenchDatasetFilePrefix
+} from './prepare-swebench-lite-sample.mjs';
 import {
     DEFAULT_WHEELHOUSE_DIR,
     buildSweBenchSetupCommand,
@@ -24,6 +28,7 @@ const DEFAULT_ARCHIVE_TIMEOUT_MS = 15 * 60 * 1000;
 
 function parseArgs(argv = process.argv.slice(2)) {
     const args = {
+        datasetName: SWE_BENCH_LITE_DATASET,
         split: 'test',
         offset: 0,
         limit: 1,
@@ -41,6 +46,7 @@ function parseArgs(argv = process.argv.slice(2)) {
         agentCommand: '',
         passToPassLimit: 5,
         archiveFallback: true,
+        archiveFirst: false,
         archiveCacheDir: path.join(projectRoot, 'build-cache', 'github-archives'),
         archiveTimeoutMs: DEFAULT_ARCHIVE_TIMEOUT_MS,
         checkoutTimeoutMs: DEFAULT_CHECKOUT_TIMEOUT_MS,
@@ -51,6 +57,7 @@ function parseArgs(argv = process.argv.slice(2)) {
     for (let index = 0; index < argv.length; index += 1) {
         const arg = argv[index];
         if (arg === '--dataset') args.datasetPath = path.resolve(argv[++index] || '');
+        else if (arg === '--dataset-name') args.datasetName = argv[++index] || args.datasetName;
         else if (arg === '--instance') args.instanceId = argv[++index] || '';
         else if (arg === '--split') args.split = argv[++index] || args.split;
         else if (arg === '--offset') args.offset = Number(argv[++index] || args.offset);
@@ -67,6 +74,7 @@ function parseArgs(argv = process.argv.slice(2)) {
         else if (arg === '--agent-command') args.agentCommand = argv[++index] || '';
         else if (arg === '--pass-to-pass-limit') args.passToPassLimit = Number(argv[++index] || args.passToPassLimit);
         else if (arg === '--no-archive-fallback') args.archiveFallback = false;
+        else if (arg === '--archive-first') args.archiveFirst = true;
         else if (arg === '--archive-cache-dir') args.archiveCacheDir = path.resolve(argv[++index] || args.archiveCacheDir);
         else if (arg === '--archive-timeout-ms') args.archiveTimeoutMs = Number(argv[++index] || args.archiveTimeoutMs);
         else if (arg === '--checkout-timeout-ms') args.checkoutTimeoutMs = Number(argv[++index] || args.checkoutTimeoutMs);
@@ -142,6 +150,37 @@ function truncateText(text = '', maxChars = 12000) {
     return normalized.length > maxChars ? `${normalized.slice(0, maxChars - 3)}...` : normalized;
 }
 
+function mojibakeSignatureCount(text = '') {
+    return (String(text).match(/[ÃÂÐÑØÙâ]|[\u0080-\u009f]/g) || []).length;
+}
+
+export function repairUtf8Mojibake(text = '') {
+    const source = String(text);
+    const sourceSignatures = mojibakeSignatureCount(source);
+    if (!sourceSignatures) return source;
+    const repaired = Buffer.from(source, 'latin1').toString('utf8');
+    if (
+        repaired.includes('\ufffd') ||
+        mojibakeSignatureCount(repaired) >= sourceSignatures
+    ) {
+        return source;
+    }
+    return repaired;
+}
+
+export function isTransientWslFailure(result = {}) {
+    const diagnostic = [
+        result.stdout,
+        result.stderr,
+        result.error
+    ].filter(Boolean).join('\n').replace(/\0/g, '').toLowerCase();
+    return (
+        diagnostic.includes('hcs_e_connection_timeout') ||
+        diagnostic.includes('hcs_e_service_not_available') ||
+        diagnostic.includes('wsl/service/createinstance/createvm')
+    );
+}
+
 async function runHostCommand(command, args = [], { cwd, timeoutMs = DEFAULT_COMMAND_TIMEOUT_MS } = {}) {
     const startedAt = Date.now();
     try {
@@ -175,6 +214,52 @@ async function runHostCommand(command, args = [], { cwd, timeoutMs = DEFAULT_COM
     }
 }
 
+export async function runWslWithRetries({
+    distro,
+    script,
+    cwd = projectRoot,
+    timeoutMs = DEFAULT_COMMAND_TIMEOUT_MS,
+    maxAttempts = 3,
+    retryDelayMs = 750,
+    execute = runHostCommand,
+    delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds))
+}) {
+    const startedAt = Date.now();
+    const transientFailures = [];
+    const boundedAttempts = Math.max(1, Math.min(3, Number(maxAttempts) || 1));
+    let result = null;
+    for (let attempt = 1; attempt <= boundedAttempts; attempt += 1) {
+        result = await execute(
+            'wsl.exe',
+            ['-d', distro, '--', 'bash', '-lc', script],
+            { cwd, timeoutMs }
+        );
+        if (result.ok || !isTransientWslFailure(result) || attempt === boundedAttempts) {
+            return {
+                ...result,
+                attempts: attempt,
+                transientFailures,
+                durationMs: Date.now() - startedAt
+            };
+        }
+        transientFailures.push({
+            attempt,
+            exitCode: result.exitCode,
+            signal: result.signal || '',
+            durationMs: result.durationMs,
+            stdout: truncateText(result.stdout, 1200),
+            stderr: truncateText(result.stderr, 1200)
+        });
+        await delay(retryDelayMs * attempt);
+    }
+    return {
+        ...result,
+        attempts: boundedAttempts,
+        transientFailures,
+        durationMs: Date.now() - startedAt
+    };
+}
+
 async function runShell(runner, script, { cwd = '', timeoutMs = DEFAULT_COMMAND_TIMEOUT_MS } = {}) {
     if (runner.kind === 'wsl') {
         const wslCwd = cwd ? winToWslPath(cwd) : '';
@@ -183,11 +268,12 @@ async function runShell(runner, script, { cwd = '', timeoutMs = DEFAULT_COMMAND_
             wslCwd ? `cd ${quoteBash(wslCwd)}` : '',
             script
         ].filter(Boolean).join('\n');
-        return await runHostCommand(
-            'wsl.exe',
-            ['-d', runner.distro, '--', 'bash', '-lc', wrapped],
-            { cwd: projectRoot, timeoutMs }
-        );
+        return await runWslWithRetries({
+            distro: runner.distro,
+            script: wrapped,
+            cwd: projectRoot,
+            timeoutMs
+        });
     }
     if (runner.kind === 'host') {
         return await runHostCommand(
@@ -217,7 +303,9 @@ async function runShell(runner, script, { cwd = '', timeoutMs = DEFAULT_COMMAND_
 
 async function resolveRunner(args) {
     if (args.runner === 'wsl' || args.runner === 'auto') {
-        const status = await runHostCommand('wsl.exe', ['-d', args.wslDistro, '--', 'bash', '-lc', 'git --version && python3 --version'], {
+        const status = await runWslWithRetries({
+            distro: args.wslDistro,
+            script: 'git --version && python3 --version',
             cwd: projectRoot,
             timeoutMs: 30000
         });
@@ -350,6 +438,29 @@ async function hasZipEndOfCentralDirectory(filePath) {
     }
 }
 
+export function buildGitHubArchiveCurlArgs({
+    archivePath,
+    url,
+    archiveTimeoutMs
+}) {
+    return [
+        '-L',
+        '--fail',
+        '--retry',
+        '2',
+        '--retry-all-errors',
+        '--retry-delay',
+        '3',
+        '--connect-timeout',
+        '20',
+        '--max-time',
+        String(Math.ceil(archiveTimeoutMs / 1000)),
+        '-o',
+        archivePath,
+        url
+    ];
+}
+
 async function downloadGitHubArchive({ row, args, timeoutMs }) {
     const archive = githubArchiveInfo(row);
     if (!archive) {
@@ -382,21 +493,11 @@ async function downloadGitHubArchive({ row, args, timeoutMs }) {
         existingSize = 0;
     }
     const archiveTimeoutMs = Math.max(args.archiveTimeoutMs || DEFAULT_ARCHIVE_TIMEOUT_MS, timeoutMs, 180000);
-    const curlArgs = [
-        '-L',
-        '--fail',
-        '--retry',
-        '2',
-        '--retry-delay',
-        '3',
-        '--connect-timeout',
-        '20',
-        '--max-time',
-        String(Math.ceil(archiveTimeoutMs / 1000)),
-        '-o',
+    const curlArgs = buildGitHubArchiveCurlArgs({
         archivePath,
-        archive.url
-    ];
+        url: archive.url,
+        archiveTimeoutMs
+    });
     const result = await runHostCommand('curl.exe', curlArgs, {
         cwd: projectRoot,
         timeoutMs: archiveTimeoutMs + 10000
@@ -412,72 +513,134 @@ async function downloadGitHubArchive({ row, args, timeoutMs }) {
     };
 }
 
-async function extractGitHubArchive({ archivePath, repoDir, timeoutMs = 180000 }) {
-    const extractDir = path.join(path.dirname(repoDir), 'archive-extract');
-    await fs.rm(extractDir, { recursive: true, force: true });
-    await fs.mkdir(extractDir, { recursive: true });
-    const result = await runHostCommand('powershell', [
-        '-NoProfile',
-        '-ExecutionPolicy',
-        'Bypass',
-        '-Command',
-        [
-            `$ErrorActionPreference='Stop'`,
-            `Expand-Archive -LiteralPath ${JSON.stringify(archivePath)} -DestinationPath ${JSON.stringify(extractDir)} -Force`
-        ].join('\n')
-    ], {
+async function findCompleteCachedGitHubArchive({ row, args }) {
+    const archive = githubArchiveInfo(row);
+    if (!archive) return '';
+    const archivePath = path.join(args.archiveCacheDir, archive.cacheName);
+    if (!(await pathExists(archivePath))) return '';
+    const stat = await fs.stat(archivePath);
+    if (stat.size <= 0 || !(await hasZipEndOfCentralDirectory(archivePath))) return '';
+    return archivePath;
+}
+
+export function shouldPreferGitHubArchive({ row = {}, args = {}, cachedArchivePath = '' } = {}) {
+    return Boolean(
+        args.archiveFallback &&
+        args.archiveFirst &&
+        !cachedArchivePath &&
+        githubArchiveInfo(row)
+    );
+}
+
+export function gitForWindowsUnzipCandidates(whereGitOutput = '') {
+    return [...new Set(String(whereGitOutput)
+        .split(/\r?\n/)
+        .map((entry) => entry.trim())
+        .filter(Boolean)
+        .map((gitPath) => path.resolve(
+            path.dirname(gitPath),
+            '..',
+            'usr',
+            'bin',
+            'unzip.exe'
+        )))];
+}
+
+async function resolveWindowsUnzipCommand() {
+    const whereGit = await runHostCommand('where.exe', ['git.exe'], {
         cwd: projectRoot,
-        timeoutMs: Math.max(timeoutMs, 180000)
+        timeoutMs: 30000
     });
-    if (!result.ok) return { ...result, status: 'archive_extract_failed', extractDir };
-    const entries = await fs.readdir(extractDir, { withFileTypes: true });
-    const rootEntry = entries.find((entry) => entry.isDirectory());
-    if (!rootEntry) {
-        return {
-            ok: false,
-            status: 'archive_extract_failed',
-            command: 'Expand-Archive',
-            stdout: result.stdout,
-            stderr: 'GitHub archive did not contain a source directory.',
-            extractDir
-        };
+    if (!whereGit.ok) return '';
+    for (const candidate of gitForWindowsUnzipCandidates(whereGit.stdout)) {
+        if (await pathExists(candidate)) return candidate;
     }
-    await safeRemoveGeneratedRepoDir(repoDir);
-    await fs.cp(path.join(extractDir, rootEntry.name), repoDir, { recursive: true });
-    await fs.rm(extractDir, { recursive: true, force: true });
-    return {
-        ...result,
-        ok: true,
-        status: 'archive_extracted',
-        extractDir,
-        archiveRoot: rootEntry.name
-    };
+    return '';
+}
+
+async function extractGitHubArchive({ archivePath, repoDir, timeoutMs = 180000 }) {
+    const extractDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-swebench-archive-'));
+    try {
+        const unzipCommand = await resolveWindowsUnzipCommand();
+        const result = unzipCommand
+            ? await runHostCommand(unzipCommand, [
+                  '-q',
+                  '-o',
+                  archivePath,
+                  '-d',
+                  extractDir
+              ], {
+                  cwd: projectRoot,
+                  timeoutMs: Math.max(timeoutMs, 180000)
+              })
+            : await runHostCommand('tar.exe', [
+                  '-xf',
+                  archivePath,
+                  '-C',
+                  extractDir
+              ], {
+                  cwd: projectRoot,
+                  timeoutMs: Math.max(timeoutMs, 180000)
+              });
+        if (!result.ok) {
+            return {
+                ...result,
+                status: 'archive_extract_failed',
+                extractDir,
+                extractor: unzipCommand ? 'git-for-windows-unzip' : 'tar'
+            };
+        }
+        const entries = await fs.readdir(extractDir, { withFileTypes: true });
+        const rootEntry = entries.find((entry) => entry.isDirectory());
+        if (!rootEntry) {
+            return {
+                ok: false,
+                status: 'archive_extract_failed',
+                command: result.command,
+                stdout: result.stdout,
+                stderr: 'GitHub archive did not contain a source directory.',
+                extractDir,
+                extractor: unzipCommand ? 'git-for-windows-unzip' : 'tar'
+            };
+        }
+        await safeRemoveGeneratedRepoDir(repoDir);
+        await fs.cp(path.join(extractDir, rootEntry.name), repoDir, { recursive: true });
+        return {
+            ...result,
+            ok: true,
+            status: 'archive_extracted',
+            extractDir,
+            archiveRoot: rootEntry.name,
+            extractor: unzipCommand ? 'git-for-windows-unzip' : 'tar'
+        };
+    } finally {
+        await fs.rm(extractDir, { recursive: true, force: true });
+    }
 }
 
 async function initializeArchiveGitRepo({ runner, row, repoDir, timeoutMs }) {
-    const repoShell = runner.kind === 'wsl' ? winToWslPath(repoDir) : repoDir;
-    const script = runner.kind === 'host'
-        ? [
-              `$ErrorActionPreference='Stop'`,
-              `Set-Location ${JSON.stringify(repoDir)}`,
-              `git init .`,
-              `git config user.email "swebench-archive@example.local"`,
-              `git config user.name "SWE-bench archive checkout"`,
-              `git add -A`,
-              `git commit -m ${JSON.stringify(`archive checkout ${row.base_commit}`)}`,
-              `git status --short`
-          ].join('\n')
-        : [
-              `set -e`,
-              `cd ${quoteBash(repoShell)}`,
-              `git init .`,
-              `git config user.email 'swebench-archive@example.local'`,
-              `git config user.name 'SWE-bench archive checkout'`,
-              `git add -A`,
-              `git commit -m ${quoteBash(`archive checkout ${row.base_commit}`)}`,
-              `git status --short`
-          ].join('\n');
-    const result = await runShell(runner, script, { timeoutMs: Math.max(timeoutMs, 180000) });
+    const script = [
+        `$ErrorActionPreference='Stop'`,
+        `Set-Location ${JSON.stringify(repoDir)}`,
+        `git init .`,
+        `if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }`,
+        `git config core.autocrlf false`,
+        `git config user.email "swebench-archive@example.local"`,
+        `git config user.name "SWE-bench archive checkout"`,
+        `git add -A`,
+        `if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }`,
+        `git commit -m ${JSON.stringify(`archive checkout ${row.base_commit}`)}`,
+        `if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }`,
+        `git status --short`
+    ].join('\n');
+    const result = await runHostCommand(
+        'powershell',
+        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script],
+        {
+            cwd: projectRoot,
+            timeoutMs: Math.max(timeoutMs, 180000)
+        }
+    );
     return {
         ...result,
         status: result.ok ? 'archive_git_initialized' : 'archive_git_init_failed'
@@ -507,15 +670,24 @@ async function checkoutRepoFromGitHubArchive({ runner, row, repoDir, args, timeo
         };
     }
     const init = await initializeArchiveGitRepo({ runner, row, repoDir, timeoutMs });
+    const preferred = gitAttempt?.status === 'skipped_archive_preferred';
     return {
         ...init,
         ok: init.ok,
-        status: init.ok ? 'completed_archive_fallback' : 'checkout_failed',
+        status: init.ok
+            ? preferred
+                ? 'completed_archive_preferred'
+                : 'completed_archive_fallback'
+            : 'checkout_failed',
         gitAttempt,
         archiveDownload: download,
         archiveExtract: extract,
         stdout: [
-            'Git checkout failed; used GitHub codeload archive fallback.',
+            gitAttempt?.status === 'skipped_archive_cache_hit'
+                ? 'Used complete cached GitHub codeload archive.'
+                : preferred
+                    ? 'Preferred GitHub codeload archive over Git checkout.'
+                : 'Git checkout failed; used GitHub codeload archive fallback.',
             `archive=${download.archivePath}`,
             download.stdout,
             extract.stdout,
@@ -542,6 +714,43 @@ async function checkoutRepo({ runner, row, repoDir, timeoutMs, args }) {
             stdout: '',
             stderr: 'SWE-bench row is missing base_commit.'
         };
+    }
+    const cachedArchivePath = args.archiveFallback
+        ? await findCompleteCachedGitHubArchive({ row, args })
+        : '';
+    if (cachedArchivePath) {
+        return await checkoutRepoFromGitHubArchive({
+            runner,
+            row,
+            repoDir,
+            args,
+            timeoutMs,
+            gitAttempt: {
+                ok: false,
+                status: 'skipped_archive_cache_hit',
+                command: 'git checkout skipped',
+                stdout: `Complete archive cache hit: ${cachedArchivePath}`,
+                stderr: ''
+            }
+        });
+    }
+    let archiveFirstAttempt = null;
+    if (shouldPreferGitHubArchive({ row, args, cachedArchivePath })) {
+        archiveFirstAttempt = await checkoutRepoFromGitHubArchive({
+            runner,
+            row,
+            repoDir,
+            args,
+            timeoutMs,
+            gitAttempt: {
+                ok: false,
+                status: 'skipped_archive_preferred',
+                command: 'git checkout skipped',
+                stdout: 'Archive-first checkout requested.',
+                stderr: ''
+            }
+        });
+        if (archiveFirstAttempt.ok) return archiveFirstAttempt;
     }
     const script = runner.kind === 'host'
         ? [
@@ -574,6 +783,22 @@ async function checkoutRepo({ runner, row, repoDir, timeoutMs, args }) {
           ].join('\n');
     const result = await runShell(runner, script, { timeoutMs });
     if (result.ok || !args.archiveFallback) return result;
+    if (archiveFirstAttempt) {
+        return {
+            ...result,
+            ok: false,
+            status: 'checkout_failed',
+            archiveFirstAttempt,
+            stdout: [
+                archiveFirstAttempt.stdout,
+                result.stdout
+            ].filter(Boolean).join('\n'),
+            stderr: [
+                archiveFirstAttempt.stderr,
+                result.stderr
+            ].filter(Boolean).join('\n')
+        };
+    }
     return await checkoutRepoFromGitHubArchive({
         runner,
         row,
@@ -584,8 +809,16 @@ async function checkoutRepo({ runner, row, repoDir, timeoutMs, args }) {
     });
 }
 
-async function applyPatch({ runner, repoDir, patchPath, title, timeoutMs }) {
-    if (!(await pathExists(patchPath)) || !(await fs.readFile(patchPath, 'utf8')).trim()) {
+async function applyPatch({
+    runner,
+    repoDir,
+    patchPath,
+    title,
+    timeoutMs,
+    repairMojibake = false
+}) {
+    const patchText = await fs.readFile(patchPath, 'utf8').catch(() => '');
+    if (!(await pathExists(patchPath)) || !patchText.trim()) {
         return {
             ok: true,
             status: 'skipped_empty_patch',
@@ -594,25 +827,48 @@ async function applyPatch({ runner, repoDir, patchPath, title, timeoutMs }) {
             stderr: ''
         };
     }
-    const repoShell = runner.kind === 'wsl' ? winToWslPath(repoDir) : repoDir;
-    const patchShell = runner.kind === 'wsl' ? winToWslPath(patchPath) : patchPath;
-    const script = runner.kind === 'host'
-        ? [
-              `$ErrorActionPreference='Stop'`,
-              `Set-Location ${JSON.stringify(repoDir)}`,
-              `git apply --check ${JSON.stringify(patchPath)}`,
-              `git apply ${JSON.stringify(patchPath)}`
-          ].join('\n')
-        : [
-              `cd ${quoteBash(repoShell)}`,
-              `git apply --check ${quoteBash(patchShell)}`,
-              `git apply ${quoteBash(patchShell)}`
-          ].join('\n');
-    const result = await runShell(runner, script, { timeoutMs });
+    const runApply = async (targetPatchPath) => {
+        const repoShell = runner.kind === 'wsl' ? winToWslPath(repoDir) : repoDir;
+        const patchShell = runner.kind === 'wsl'
+            ? winToWslPath(targetPatchPath)
+            : targetPatchPath;
+        const script = runner.kind === 'host'
+            ? [
+                  `$ErrorActionPreference='Stop'`,
+                  `Set-Location ${JSON.stringify(repoDir)}`,
+                  `git apply --check ${JSON.stringify(targetPatchPath)}`,
+                  `git apply ${JSON.stringify(targetPatchPath)}`
+              ].join('\n')
+            : [
+                  `cd ${quoteBash(repoShell)}`,
+                  `git apply --check ${quoteBash(patchShell)}`,
+                  `git apply ${quoteBash(patchShell)}`
+              ].join('\n');
+        return await runShell(runner, script, { timeoutMs });
+    };
+    const initialResult = await runApply(patchPath);
+    let result = initialResult;
+    let encodingRepair = null;
+    if (!initialResult.ok && repairMojibake) {
+        const repairedText = repairUtf8Mojibake(patchText);
+        if (repairedText !== patchText) {
+            const repairedPatchPath = `${patchPath}.utf8-repaired.patch`;
+            await fs.writeFile(repairedPatchPath, repairedText, 'utf8');
+            result = await runApply(repairedPatchPath);
+            encodingRepair = {
+                applied: true,
+                originalPatchPath: patchPath,
+                repairedPatchPath,
+                retrySucceeded: result.ok,
+                initialFailure: truncateText(initialResult.stderr, 2000)
+            };
+        }
+    }
     return {
         ...result,
         status: result.ok ? 'completed' : 'patch_failed',
-        title
+        title,
+        encodingRepair
     };
 }
 
@@ -1001,7 +1257,8 @@ async function executeInstance(rowInput, args, runner) {
         repoDir,
         patchPath: files.testPatchPath,
         title: 'apply SWE-bench test patch',
-        timeoutMs: args.checkoutTimeoutMs
+        timeoutMs: args.checkoutTimeoutMs,
+        repairMojibake: true
     });
     if (!execution.testPatch.ok) {
         execution.status = 'test_patch_failed';
@@ -1120,7 +1377,8 @@ async function loadRows(args) {
     let datasetPath = args.datasetPath;
     let prepared = null;
     if (!datasetPath) {
-        prepared = await prepareSweBenchLiteSample({
+        prepared = await prepareSweBenchSample({
+            datasetName: args.datasetName,
             split: args.split,
             offset: args.offset,
             limit: args.limit
@@ -1135,7 +1393,7 @@ async function loadRows(args) {
     return { datasetPath, prepared, rows };
 }
 
-export async function runSweBenchLiteExecution(options = {}) {
+export async function runSweBenchExecution(options = {}) {
     const args = {
         ...parseArgs([]),
         ...options
@@ -1150,6 +1408,7 @@ export async function runSweBenchLiteExecution(options = {}) {
     const report = {
         ok: cases.every((entry) => entry.ok),
         generatedAt: new Date().toISOString(),
+        dataset: rows[0]?.dataset || args.datasetName,
         datasetPath,
         prepared,
         runner,
@@ -1167,15 +1426,25 @@ export async function runSweBenchLiteExecution(options = {}) {
         },
         cases
     };
-    const reportPath = path.join(args.outputDir, 'swebench-lite-execution.report.json');
+    const reportPrefix = sweBenchDatasetFilePrefix(
+        rows[0]?.dataset || args.datasetName
+    );
+    const reportPath = path.join(args.outputDir, `${reportPrefix}-execution.report.json`);
     await fs.writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
     report.output = reportPath;
     return report;
 }
 
+export async function runSweBenchLiteExecution(options = {}) {
+    return await runSweBenchExecution({
+        ...options,
+        datasetName: SWE_BENCH_LITE_DATASET
+    });
+}
+
 if (process.argv[1] && path.resolve(process.argv[1]) === __filename) {
     const args = parseArgs();
-    const report = await runSweBenchLiteExecution(args);
+    const report = await runSweBenchExecution(args);
     console.log(JSON.stringify({
         ok: report.ok,
         output: report.output,

@@ -43,7 +43,8 @@ test('AILIS persona renderer attaches structured surface while preserving agent 
 
     assert.equal(result.status, 'max_steps_reached');
     assert.equal(result.surface.lipSync.mode, 'audio_envelope');
-    assert.match(result.displayText, /^\[expression:relaxed\]/);
+    assert.equal(result.displayText, '我先停在这里，避免越跑越乱。');
+    assert.doesNotMatch(result.displayText, /\[(?:expression|action):/);
     assert.equal(result.expression, 'relaxed');
     assert.equal(result.action, null);
     assert.match(result.speechText, /先停在这里|避免越跑越乱/);
@@ -68,6 +69,24 @@ test('AILIS persona renderer owns failure text instead of leaking upstream tool 
     assert.doesNotMatch(surface.speechText, /Agentic Executor|tool_call|raw observation|SECRET|git_status/);
     assert.equal(surface.expression, 'relaxed');
     assert.equal(surface.action, null);
+});
+
+test('AILIS persona renderer preserves persona-safe TaskAgent handoff text on failure', () => {
+    const surface = renderPersonaSurfaceGateway({
+        task_state: 'blocked',
+        evidence_state: 'present',
+        error_code: 'max_steps_reached',
+        text_is_persona_safe: true,
+        text: [
+            'TaskAgent 已经跑满 30 轮，我先让它停住并整理现场，避免继续空转。',
+            '执行情况：已执行 30 个工具步骤，其中 28 个成功、2 个失败。',
+            '当前卡点：web_fetch 返回 HTTP 403。'
+        ].join('\n')
+    });
+
+    assert.match(surface.text, /TaskAgent 已经跑满 30 轮/);
+    assert.match(surface.text, /28 个成功、2 个失败/);
+    assert.doesNotMatch(surface.text, /这一步我先停住|不拿不稳|继续处理/);
 });
 
 test('AILIS persona renderer hides internal invalid-json failure details', () => {

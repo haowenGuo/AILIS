@@ -179,5 +179,6 @@ function createFumiEntry(fileName) {
 }
 
 export const EXTERNAL_MOTION_INTAKE_CATALOG = Object.freeze(Object.fromEntries([
+    ...SACHI_CAPTURE_FILES.map(createSachiEntry),
     ...FUMI2KICK_FILES.map(createFumiEntry)
 ].map((entry) => [entry.id, entry])));

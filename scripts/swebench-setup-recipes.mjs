@@ -30,7 +30,9 @@ const RECIPE_LIST = [
             'numpy<2',
             'setuptools_scm==6.4.2',
             'cython==0.29.22',
+            'astropy-helpers==2.0.2',
             'extension-helpers',
+            'Jinja2',
             'pyerfa',
             'PyYAML',
             'packaging',
@@ -42,7 +44,13 @@ const RECIPE_LIST = [
         ],
         commands: [
             { type: 'pipInstallWheelhouse' },
-            { type: 'shell', command: 'python setup.py build_ext --inplace' }
+            { type: 'shell', command: PY310_COLLECTIONS_ABCS_COMPAT_COMMAND },
+            {
+                type: 'shell',
+                command:
+                    'python setup.py --no-git build_ext --inplace || ' +
+                    'python setup.py build_ext --inplace'
+            }
         ]
     },
     {

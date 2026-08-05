@@ -18,23 +18,44 @@ const AILIS_TOOL_KIND = Object.freeze({
 });
 
 function isExperimentalOutputStoreToolsEnabled() {
+    const surfaceMode = String(process.env.AILIS_TOOL_SURFACE_MODE || '').toLowerCase();
     return (
         process.env.AILIS_EXPERIMENTAL_OUTPUT_TOOLS === '1' ||
-        process.env.AIGL_EXPERIMENTAL_OUTPUT_TOOLS === '1' ||
-        process.env.AILIS_TOOL_SURFACE_MODE === 'codex' ||
-        process.env.AIGL_TOOL_SURFACE_MODE === 'codex'
+        surfaceMode === 'responses' ||
+        surfaceMode === 'full'
+    );
+}
+
+function normalizeToolSurfaceMode() {
+    return String(process.env.AILIS_TOOL_SURFACE_MODE || 'codex')
+        .trim()
+        .toLowerCase();
+}
+
+function isExtendedAilisToolSurfaceEnabled() {
+    const mode = normalizeToolSurfaceMode();
+    return (
+        process.env.AILIS_ENABLE_EXTENDED_TOOLS === '1' ||
+        ['ailis', 'extended', 'full', 'legacy'].includes(mode)
     );
 }
 
 const OUTPUT_STORE_TOOL_EXPOSURE = isExperimentalOutputStoreToolsEnabled()
     ? AILIS_TOOL_EXPOSURE.DIRECT
     : AILIS_TOOL_EXPOSURE.DEFERRED;
+// Keep the first-turn surface small while allowing tool_search to discover
+// extended runtime capabilities from the Registry on demand.
+const EXTENDED_RUNTIME_TOOL_EXPOSURE = AILIS_TOOL_EXPOSURE.DEFERRED;
 
 const AILIS_RUNTIME_TOOL_DEFINITIONS = Object.freeze([
     Object.freeze({
         id: 'update_plan',
         label: 'update_plan',
-        description: 'Update the visible agent plan as a first-class runtime tool.',
+        description: [
+            'Update only the user-visible progress checklist.',
+            'This is a UI/progress bookkeeping tool: it does not inspect files, retrieve data, execute actions, compute answers, or produce task evidence.',
+            'Use sparingly after meaningful progress; if the next step requires real work, call the real tool such as read, exec, apply_patch, or search instead.'
+        ].join(' '),
         sectionId: 'runtime',
         route: 'ailis-runtime',
         materialized: true,
@@ -45,7 +66,7 @@ const AILIS_RUNTIME_TOOL_DEFINITIONS = Object.freeze([
     Object.freeze({
         id: 'tool_search',
         label: 'tool_search',
-        description: 'Tool discovery. Searches over deferred tool metadata with BM25 and exposes matching tools for the next Agent step.',
+        description: 'Tool discovery. Searches deferred tool metadata and exposes matching tools for the next Agent step. Use it as soon as the visible direct tools are a poor semantic fit or would require manually reconstructing structured facts, cross-record ordering, entity resolution, document parsing, transcripts, APIs, or artifact data.',
         sectionId: 'runtime',
         route: 'ailis-runtime',
         materialized: true,
@@ -56,24 +77,35 @@ const AILIS_RUNTIME_TOOL_DEFINITIONS = Object.freeze([
     Object.freeze({
         id: 'artifact_query',
         label: 'artifact_query',
-        description: 'Query managed AILIS context artifacts by details.artifactId/contextArtifact.id without dumping large payload files into the model context. Do not pass evidence_refs artifact-* ids here. Use spreadsheet grid/range/search, text_range/text_search/text_tail, or document_search/document_page/document_section instead of raw read on artifact payloads.',
+        description: 'Query managed AILIS context artifacts using an owner=context_artifact_store artifactHandle or ctx-* context artifactId without dumping payload files into model context. Do not pass artifact_tools art_* ids or evidence_refs artifact-* ids here.',
         sectionId: 'context-artifacts',
         route: 'ailis-runtime',
         materialized: true,
         status: 'available',
         needsApproval: false,
-        exposure: AILIS_TOOL_EXPOSURE.DEFERRED
+        exposure: EXTENDED_RUNTIME_TOOL_EXPOSURE
+    }),
+    Object.freeze({
+        id: 'artifact_tools',
+        label: 'artifact_tools',
+        description: 'Canonical AILIS Artifact Tools runtime for local files and attachments. After open_session, continue with the returned owner=artifact_tools artifactHandle (or its sessionId); never send its art_* artifactId to artifact_query. Supports index/search/query/materialize/aggregate/inspect/render/trace/recalculate/edit/export/roundtrip across Office, PDF, table, and image adapters.',
+        sectionId: 'context-artifacts',
+        route: 'ailis-runtime',
+        materialized: true,
+        status: 'available',
+        needsApproval: false,
+        exposure: EXTENDED_RUNTIME_TOOL_EXPOSURE
     }),
     Object.freeze({
         id: 'artifact_compute',
         label: 'artifact_compute',
-        description: 'Run deterministic data-worker computations on managed context artifacts, such as spreadsheet profiling and grid path search, returning compact reasoning-ready evidence instead of raw payloads.',
+        description: 'Internal compatibility surface for legacy managed context artifact computations. Hidden from model-facing tool discovery; artifact-style file tasks should use artifact_tools.',
         sectionId: 'context-artifacts',
         route: 'ailis-runtime',
         materialized: true,
         status: 'available',
         needsApproval: false,
-        exposure: AILIS_TOOL_EXPOSURE.DEFERRED
+        exposure: AILIS_TOOL_EXPOSURE.HIDDEN
     }),
     Object.freeze({
         id: 'output_read',
@@ -120,15 +152,59 @@ const AILIS_RUNTIME_TOOL_DEFINITIONS = Object.freeze([
         exposure: AILIS_TOOL_EXPOSURE.DIRECT
     }),
     Object.freeze({
-        id: 'subagents',
-        label: 'subagents',
-        description: 'Spawn, wait, cancel, and inspect child Agent runs through the AILIS runtime transcript.',
+        id: 'spawn_agent',
+        label: 'spawn_agent',
+        description: 'Spawns one persistent agent to own the current user task. The spawned agent receives a canonical task name, inherits sanitized parent turns according to fork_turns, and sends its final answer back through the parent mailbox. Returns task_name and nickname; it does not wait for completion. Continue the same subtask only with followup_task and the returned task_name. A duplicate spawn request is normalized into a followup of the existing agent instead of creating another agent.',
         sectionId: 'runtime',
         route: 'ailis-runtime',
         materialized: true,
         status: 'available',
-        needsApprovalActions: Object.freeze(['spawn', 'create', 'send', 'close']),
-        exposure: AILIS_TOOL_EXPOSURE.DEFERRED
+        needsApproval: false,
+        exposure: AILIS_TOOL_EXPOSURE.HIDDEN
+    }),
+    Object.freeze({
+        id: 'followup_task',
+        label: 'followup_task',
+        description: 'Send a message to an existing non-root target agent and trigger a turn in that target. If the target is currently mid-turn, the message is queued and used for its next turn.',
+        sectionId: 'runtime',
+        route: 'ailis-runtime',
+        materialized: true,
+        status: 'available',
+        needsApproval: false,
+        exposure: AILIS_TOOL_EXPOSURE.HIDDEN
+    }),
+    Object.freeze({
+        id: 'wait_agent',
+        label: 'wait_agent',
+        description: 'Wait for a mailbox update from any live agent. Does not return the child content; the completion notification is delivered through the parent mailbox.',
+        sectionId: 'runtime',
+        route: 'ailis-runtime',
+        materialized: true,
+        status: 'available',
+        needsApproval: false,
+        exposure: AILIS_TOOL_EXPOSURE.HIDDEN
+    }),
+    Object.freeze({
+        id: 'list_agents',
+        label: 'list_agents',
+        description: 'List live agents in the current root thread tree. Optionally filter by task-path prefix.',
+        sectionId: 'runtime',
+        route: 'ailis-runtime',
+        materialized: true,
+        status: 'available',
+        needsApproval: false,
+        exposure: AILIS_TOOL_EXPOSURE.HIDDEN
+    }),
+    Object.freeze({
+        id: 'close_agent',
+        label: 'close_agent',
+        description: 'Close an agent when it is no longer needed and return the previous AgentStatus.',
+        sectionId: 'runtime',
+        route: 'ailis-runtime',
+        materialized: true,
+        status: 'available',
+        needsApproval: false,
+        exposure: AILIS_TOOL_EXPOSURE.HIDDEN
     }),
     Object.freeze({
         id: 'mcp_bridge',
@@ -139,7 +215,7 @@ const AILIS_RUNTIME_TOOL_DEFINITIONS = Object.freeze([
         materialized: true,
         status: 'available',
         needsApprovalActions: Object.freeze(['tool_call']),
-        exposure: AILIS_TOOL_EXPOSURE.DEFERRED
+        exposure: EXTENDED_RUNTIME_TOOL_EXPOSURE
     }),
     Object.freeze({
         id: 'tool_doctor',
@@ -150,7 +226,7 @@ const AILIS_RUNTIME_TOOL_DEFINITIONS = Object.freeze([
         materialized: true,
         status: 'available',
         needsApprovalActions: Object.freeze([]),
-        exposure: AILIS_TOOL_EXPOSURE.DEFERRED
+        exposure: EXTENDED_RUNTIME_TOOL_EXPOSURE
     }),
     Object.freeze({
         id: 'capability_manager',
@@ -161,7 +237,7 @@ const AILIS_RUNTIME_TOOL_DEFINITIONS = Object.freeze([
         materialized: true,
         status: 'available',
         needsApprovalActions: Object.freeze(['install_capability', 'author_skill', 'rollback', 'execute_repair', 'smoke_mcp_candidate']),
-        exposure: AILIS_TOOL_EXPOSURE.DEFERRED
+        exposure: EXTENDED_RUNTIME_TOOL_EXPOSURE
     }),
     Object.freeze({
         id: 'self_debugger',
@@ -172,7 +248,7 @@ const AILIS_RUNTIME_TOOL_DEFINITIONS = Object.freeze([
         materialized: true,
         status: 'available',
         needsApprovalActions: Object.freeze(['apply_patch']),
-        exposure: AILIS_TOOL_EXPOSURE.DEFERRED
+        exposure: EXTENDED_RUNTIME_TOOL_EXPOSURE
     }),
     Object.freeze({
         id: 'self_evolution',
@@ -183,7 +259,7 @@ const AILIS_RUNTIME_TOOL_DEFINITIONS = Object.freeze([
         materialized: true,
         status: 'available',
         needsApprovalActions: Object.freeze(['apply_proposal']),
-        exposure: AILIS_TOOL_EXPOSURE.DEFERRED
+        exposure: EXTENDED_RUNTIME_TOOL_EXPOSURE
     })
 ]);
 
@@ -243,20 +319,36 @@ function ensureModelFacingRequired(schema = {}, fields = []) {
 
 function applyModelFacingSchemaOverrides(toolId = '', schema = {}) {
     if (toolId === 'tool_search') {
+        const query = schema.properties?.query || {
+            type: 'string',
+            minLength: 1,
+            description: 'Search query for deferred tools.'
+        };
+        const limit = schema.properties?.limit || {
+            type: 'number',
+            minimum: 1,
+            maximum: 50,
+            description: 'Maximum number of tools to return.'
+        };
+        schema.properties = { query, limit };
         ensureModelFacingRequired(schema, ['query']);
         if (schema.properties?.query && schema.properties.query.minLength === undefined) {
             schema.properties.query.minLength = 1;
         }
+        schema.additionalProperties = false;
     }
     return schema;
 }
 
 function createModelFacingParameters(definition = {}, contract = null) {
-    const schema = compactToolSchema(cloneJson(contract?.schema || {
+    const sourceSchema = cloneJson(contract?.schema || {
         type: 'object',
         additionalProperties: true,
         properties: {}
-    }));
+    });
+    const schema = definition.parseToolInputSchemaWithoutCompaction === true
+        ? sourceSchema
+        : compactToolSchema(sourceSchema);
     if (definition.id === 'mcp_bridge') {
         const action = schema?.properties?.action;
         if (Array.isArray(action?.enum)) {
@@ -273,12 +365,17 @@ function createModelFacingParameters(definition = {}, contract = null) {
 function createAilisFunctionToolSpec(definition = {}) {
     const contract = getToolContract(definition.id);
     const deferred = definition.exposure === AILIS_TOOL_EXPOSURE.DEFERRED;
-    const outputSchema = !deferred && contract?.returns ? compactToolSchema(contract.returns) : undefined;
+    const outputSchema = definition.id !== 'followup_task' && !deferred && contract?.returns
+        ? compactToolSchema(contract.returns)
+        : undefined;
     return {
         type: AILIS_TOOL_KIND.FUNCTION,
         name: definition.id,
-        description: truncateMiddleText(definition.description || definition.label || definition.id, 900),
-        strict: false,
+        description: truncateMiddleText(
+            definition.description || definition.label || definition.id,
+            Math.max(900, Number(definition.modelDescriptionChars || 900))
+        ),
+        strict: definition.strict !== false,
         defer_loading: deferred ? true : undefined,
         parameters: createModelFacingParameters(definition, contract),
         output_schema: outputSchema
@@ -290,5 +387,7 @@ module.exports = {
     AILIS_RUNTIME_TOOL_IDS,
     AILIS_TOOL_EXPOSURE,
     AILIS_TOOL_KIND,
-    createAilisFunctionToolSpec
+    createAilisFunctionToolSpec,
+    isExtendedAilisToolSurfaceEnabled,
+    normalizeToolSurfaceMode
 };

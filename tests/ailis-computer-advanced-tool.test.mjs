@@ -7,6 +7,7 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const { AILISComputerTool } = require('../electron/ailis-computer-tool.cjs');
+const { AILISOutputStore } = require('../electron/ailis-output-store.cjs');
 
 test('AILIS computer advanced layer covers binary, rollback, watch, ACL, and optional PTY', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-computer-advanced-'));
@@ -75,5 +76,64 @@ test('AILIS computer advanced layer covers binary, rollback, watch, ACL, and opt
         assert.ok(['completed', 'not_available'].includes(ptyDryRun.details.status));
     } finally {
         await tool.shutdown();
+    }
+});
+
+test('AILIS computer exec stores workbench script output in output store', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-computer-output-store-'));
+    const tool = new AILISComputerTool({ workspaceRoot });
+    const outputStore = new AILISOutputStore({
+        rootDir: path.join(workspaceRoot, '.ailis-state', 'output-store')
+    });
+    const workbenchRoot = path.join(workspaceRoot, '.ailis-state', 'workbench', 'run-output-store');
+    const scriptsDir = path.join(workbenchRoot, 'scripts');
+    const outputsDir = path.join(workbenchRoot, 'outputs');
+    const inputsDir = path.join(workbenchRoot, 'inputs');
+    const runtime = { workspaceRoot, workspaceDir: workspaceRoot, outputStore };
+
+    try {
+        await fs.mkdir(scriptsDir, { recursive: true });
+        await fs.mkdir(outputsDir, { recursive: true });
+        await fs.mkdir(inputsDir, { recursive: true });
+        const inputPath = path.join(inputsDir, 'matrixRows.json');
+        const scriptPath = path.join(scriptsDir, 'workbench-script.mjs');
+        const answerPath = path.join(outputsDir, 'answer.json');
+        await fs.writeFile(inputPath, JSON.stringify({
+            schema: 'ailis.workbench.materialized_input.v1',
+            matrixRows: [{ rowNumber: 1, values: ['START'], fills: ['F478A7'] }]
+        }, null, 2), 'utf8');
+        await fs.writeFile(scriptPath, `
+import fs from 'node:fs';
+const input = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+for (let i = 0; i < 180; i += 1) console.log('WORKBENCH_TRACE_' + i + ':' + 'x'.repeat(48));
+const answer = input.matrixRows[0].fills[0];
+fs.writeFileSync(process.argv[3], JSON.stringify({ answer }, null, 2));
+console.log('WORKBENCH_FINAL=' + answer);
+`, 'utf8');
+
+        const executed = await tool.execute({
+            action: 'exec',
+            command: process.execPath,
+            args: [scriptPath, inputPath, answerPath],
+            workdir: workbenchRoot,
+            timeout: 8,
+            maxPreviewChars: 900
+        }, { approved: true }, runtime);
+
+        assert.equal(executed.details.status, 'completed');
+        assert.ok(executed.details.outputStore?.outputId);
+        assert.equal(executed.details.outputStore.previewTruncated, true);
+        const searched = await outputStore.search({
+            outputId: executed.details.outputStore.outputId,
+            query: 'WORKBENCH_FINAL=F478A7',
+            contextLines: 0
+        });
+        assert.equal(searched.ok, true);
+        assert.equal(searched.matchCount, 1);
+        const answer = JSON.parse(await fs.readFile(answerPath, 'utf8'));
+        assert.equal(answer.answer, 'F478A7');
+    } finally {
+        await tool.shutdown();
+        await fs.rm(workspaceRoot, { recursive: true, force: true });
     }
 });

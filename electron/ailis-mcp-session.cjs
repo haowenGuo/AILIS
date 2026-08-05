@@ -14,6 +14,10 @@ const {
 
 const DEFAULT_MCP_PROTOCOL_VERSION = '2025-06-18';
 const DEFAULT_MCP_TIMEOUT_MS = 30000;
+const MAX_MCP_TIMEOUT_MS = Math.max(
+    DEFAULT_MCP_TIMEOUT_MS,
+    Number(process.env.AILIS_MCP_MAX_TIMEOUT_MS || 15 * 60 * 1000)
+);
 const DEFAULT_STDERR_LINES = 40;
 
 function normalizeString(value, fallback = '') {
@@ -496,7 +500,7 @@ class McpStdioSession {
             method,
             params
         };
-        const boundedTimeout = Math.max(1000, Math.min(Number(timeoutMs) || DEFAULT_MCP_TIMEOUT_MS, 180000));
+        const boundedTimeout = Math.max(1000, Math.min(Number(timeoutMs) || DEFAULT_MCP_TIMEOUT_MS, MAX_MCP_TIMEOUT_MS));
         this.lastUsedAt = Date.now();
         return new Promise((resolve, reject) => {
             const timer = setTimeout(() => {
@@ -664,7 +668,7 @@ class McpHttpSession {
     }
 
     async postJsonRpc(message, timeoutMs = DEFAULT_MCP_TIMEOUT_MS, { notification = false } = {}) {
-        const boundedTimeout = Math.max(1000, Math.min(Number(timeoutMs) || DEFAULT_MCP_TIMEOUT_MS, 180000));
+        const boundedTimeout = Math.max(1000, Math.min(Number(timeoutMs) || DEFAULT_MCP_TIMEOUT_MS, MAX_MCP_TIMEOUT_MS));
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), boundedTimeout);
         this.lastUsedAt = Date.now();

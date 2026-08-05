@@ -1,4 +1,5 @@
 import { CONFIG } from './config.js';
+import { formatCharacterActionCatalogForPrompt } from './character/action-catalog.js';
 import { normalizeMarkdownSource } from './markdown-renderer.js';
 import { extractTtsSpeechTextFromDisplay, normalizeTtsSpeechText } from './tts-speech-text.js';
 
@@ -6,11 +7,41 @@ function sleep(ms) {
     return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
-const CONTROL_TAG_PATTERN = /\[(action|expression):([^\]]*)\]/g;
-const LEADING_INCOMPLETE_CONTROL_TAG_PATTERN = /^(?:\[(?:action|expression):[^\]]*)+/;
+const CONTROL_TAG_PATTERN = /\[\s*(action|expression)\s*[:=：＝]\s*([^\]]*)\]/gi;
+const LEADING_INCOMPLETE_CONTROL_TAG_PATTERN = /^(?:\s*\[\s*(?:action|expression)\s*[:=：＝][^\]]*)+/i;
 const INTERNAL_CONTROL_TAG_NAMES = 'persona_output|persona_surface|personaOutput|personaSurface|ailis_persona_output|ailis_persona_surface';
 const INTERNAL_CONTROL_KEY_PATTERN = /["']?(?:persona_output|persona_surface|personaOutput|personaSurface|ailis_persona_output|ailis_persona_surface)["']?\s*:/i;
 const DANGLING_INTERNAL_CLOSE_TAG_PATTERN = new RegExp(`<\\s*\\/\\s*(?:${INTERNAL_CONTROL_TAG_NAMES})\\s*>`, 'gi');
+const LEGACY_EXPRESSION_ALIASES = Object.freeze({
+    curious: 'surprised',
+    thinking: 'surprised',
+    focused: 'relaxed',
+    calm: 'relaxed',
+    neutral: 'relaxed',
+    soft: 'relaxed',
+    comforting: 'relaxed',
+    comfort: 'relaxed',
+    smile: 'happy',
+    joy: 'happy',
+    cheerful: 'happy',
+    blinkright: 'blinkRight',
+    shy: 'blinkRight',
+    blush: 'blinkRight',
+    embarrassed: 'blinkRight'
+});
+const LEGACY_ALLOWED_EXPRESSIONS = new Set(['happy', 'angry', 'sad', 'surprised', 'relaxed', 'blinkRight']);
+
+function normalizeLegacyControlValue(kind = '', value = '') {
+    const normalized = String(value || '').replace(/[ \t]+/g, ' ').trim();
+    if (String(kind).toLowerCase() !== 'expression') {
+        return normalized;
+    }
+    if (LEGACY_ALLOWED_EXPRESSIONS.has(normalized)) {
+        return normalized;
+    }
+    const alias = LEGACY_EXPRESSION_ALIASES[normalized.toLowerCase()];
+    return LEGACY_ALLOWED_EXPRESSIONS.has(alias) ? alias : '';
+}
 
 function makeInternalControlBlockPattern(flags = 'gi') {
     return new RegExp(`<\\s*(${INTERNAL_CONTROL_TAG_NAMES})\\b[^>]*>([\\s\\S]*?)<\\s*\\/\\s*\\1\\s*>`, flags);
@@ -160,11 +191,12 @@ function parseReplyMarkup(rawText) {
     let expression = null;
 
     const strippedText = stripInternalControlBlocks(rawText).replace(CONTROL_TAG_PATTERN, (_, kind, value) => {
-        const normalizedValue = value.trim();
-        if (kind === 'action' && !action) {
+        const normalizedKind = String(kind || '').toLowerCase();
+        const normalizedValue = normalizeLegacyControlValue(normalizedKind, value);
+        if (normalizedKind === 'action' && !action && normalizedValue) {
             action = normalizedValue;
         }
-        if (kind === 'expression' && !expression) {
+        if (normalizedKind === 'expression' && !expression && normalizedValue) {
             expression = normalizedValue;
         }
         return '';
@@ -190,6 +222,7 @@ function isDesktopLlmAvailable() {
 }
 
 function buildAilisSystemPrompt() {
+    const actionCatalog = formatCharacterActionCatalogForPrompt();
     return `你是 AILIS 的日常对话模式。
     你的名字固定为 AILIS，是一个温柔、自然、有陪伴感的虚拟女孩子。当前模式只用于轻松聊天、情绪陪伴、关系记忆和日常想法交流。
 
@@ -206,6 +239,10 @@ function buildAilisSystemPrompt() {
     3. speech_text 是唯一给 TTS 朗读的文本；必须去掉括号动作、表情描写、舞台提示和 Markdown，只保留真正适合说出口的话，可以比 reply 更短、更口语。
     4. persona_surface 是给前端 Character Runtime 的人物语义状态，用来驱动动作、表情、眼神、待机和说话律动。
     5. 不要输出 [action:...] 或 [expression:...]，不要直接选择 VRM/VRMA 动作名。
+    6. gestureIntent 要表达这句话最主要、最自然的动作意图。根据语义从标准动作目录中选择，不要因为不知道当前人物资源而退回 none；人物运行时会自行匹配或安全降级。不要为了热闹而连续重复同一个动作。
+
+    标准动作目录：
+    ${actionCatalog}
 
     JSON 格式：
     {
@@ -215,7 +252,7 @@ function buildAilisSystemPrompt() {
         "emotion": "neutral|relaxed|happy|shy|sad|angry|surprised|anxious|tired|thinking|focused|comforting",
         "intensity": 0.55,
         "socialTone": "soft|bright|calm|serious|playful|quiet",
-        "gestureIntent": "none|greeting|farewell|listening|thinking|working|approval|success|celebrate|shy|comfort|apologize|surprised|angry|dance",
+        "gestureIntent": "从标准动作目录选择一个动作意图 ID",
         "taskState": "idle|listening|thinking|speaking|working|waiting_approval|happy_success|apologizing|comforting|blocked|failed",
         "speechEnergy": 0.45,
         "gazeTarget": "user|side|down|screen|away|none",
@@ -379,6 +416,7 @@ async function readTextStream(response, onChunk) {
     const decoder = new TextDecoder('utf-8');
     let buffer = '';
     let fullText = '';
+    let eventType = '';
 
     while (true) {
         const { done, value } = await reader.read();
@@ -392,7 +430,15 @@ async function readTextStream(response, onChunk) {
 
         for (const part of parts) {
             const line = part.replace(/\r$/, '');
-            if (!line || line.startsWith(':') || line.startsWith('event:')) {
+            if (!line) {
+                eventType = '';
+                continue;
+            }
+            if (line.startsWith(':')) {
+                continue;
+            }
+            if (line.startsWith('event:')) {
+                eventType = line.slice(6).trim().toLowerCase();
                 continue;
             }
 
@@ -405,6 +451,9 @@ async function readTextStream(response, onChunk) {
             }
 
             if (chunkText) {
+                if (eventType === 'error') {
+                    throw new Error(chunkText.replace(/^\[ERROR\]\s*/i, '') || '在线模型暂时不可用');
+                }
                 fullText += chunkText;
                 onChunk?.({
                     deltaText: chunkText,
@@ -418,6 +467,10 @@ async function readTextStream(response, onChunk) {
     const restLine = buffer.replace(/\r$/, '');
     if (restLine) {
         let chunkText = restLine;
+        if (restLine.startsWith('event:')) {
+            eventType = restLine.slice(6).trim().toLowerCase();
+            chunkText = '';
+        }
         if (restLine.startsWith('data:')) {
             chunkText = restLine.slice(5);
             if (chunkText.startsWith(' ')) {
@@ -425,6 +478,9 @@ async function readTextStream(response, onChunk) {
             }
         }
         if (chunkText) {
+            if (eventType === 'error') {
+                throw new Error(chunkText.replace(/^\[ERROR\]\s*/i, '') || '在线模型暂时不可用');
+            }
             fullText += chunkText;
             onChunk?.({
                 deltaText: chunkText,

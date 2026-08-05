@@ -41,6 +41,8 @@ The ledger is not part of TaskAgent working memory.
   truth.
 - `event-action-ledger.v3.json`: derived, versioned sidecar.
 - `event-action-ledger-runs.v3.jsonl`: curation audit trail.
+- `memory-cognition.json`: the earlier experimental cognition representation;
+  not overwritten by Memory v3.
 
 Deleting the v3 sidecar does not delete raw memory. The ledger can be rebuilt
 by replaying native events through the curator.
@@ -65,19 +67,6 @@ records:
 - matched channel names;
 - rank and score within each channel;
 - source event/session/time references.
-
-Query-planned time ranges are soft ranking constraints by default. They boost
-temporally compatible evidence without deleting the unrestricted BM25/E5
-fallback. The planner may request hard time filtering only when the exclusion
-range is unambiguous.
-
-When the model query plan requests `needsCoverage`, each self-contained search
-query, semantic key, and target entity receives an opportunity to seed the
-candidate set before the remaining RRF-ranked slots are filled. Coverage mode
-also limits repeated raw turns from one session before backfilling, so one
-highly similar session cannot consume the evidence budget needed by other
-facets. These are deterministic context-allocation rules over model-selected
-facets; they do not infer task semantics from keywords.
 
 The existing two-channel raw-turn Hybrid RRF result is retained as a raw
 evidence anchor. This prevents the structured layer from hiding evidence that
@@ -144,6 +133,7 @@ to audit dates, numbers, names, mappings, and action counts.
 - A derived record is removed when it has no remaining source.
 - Clearing AILIS memory clears the v3 sidecar together with the raw memory
   operation.
+- Switching strategies does not migrate or rewrite raw events.
 
 ## LongMemEval acceptance gate
 

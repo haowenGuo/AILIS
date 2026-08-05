@@ -8,6 +8,13 @@ import { CharacterEmoteController } from '../src/character/emote-controller.js';
 import { ChatVRMAmicaMotionController } from '../src/character/chatvrm-amica-motion-controller.js';
 import { parseEmotionTaggedText, surfaceToScreenplay, textsToScreenplay } from '../src/character/chatvrm-amica-screenplay.js';
 import { CharacterBehaviorScheduler } from '../src/character/behavior-scheduler.js';
+import {
+    CHARACTER_ACTION_CATALOG_SCHEMA,
+    CHARACTER_ACTION_CATEGORIES,
+    CHARACTER_ACTION_INTENTS,
+    getCharacterActionFallbackChain,
+    normalizeCharacterActionIntent
+} from '../src/character/action-catalog.js';
 import { mixExpressionsForSurface } from '../src/character/emotion-mixer.js';
 import { isMotionApproved, listMotionLibrary, selectMotionForSurface } from '../src/character/motion-library.js';
 import { getLoadableMotionFiles, listMotionIntakeEntries, listMotionIntakeSources } from '../src/character/motion-intake-catalog.js';
@@ -17,6 +24,31 @@ import { CONFIG } from '../src/config.js';
 test('default avatar model uses the approved AILIS VRM asset', () => {
     assert.equal(CONFIG.MODEL_PATH, 'Resources/AILIS.vrm');
     assert.ok(!CONFIG.MODEL_PATH.includes('AILIS_18.vrm'));
+});
+
+test('character action catalog is versioned, broad, and has terminating fallback chains', () => {
+    assert.equal(CHARACTER_ACTION_CATALOG_SCHEMA, 'ailis.character-action-catalog.v1');
+    assert.equal(CHARACTER_ACTION_CATEGORIES.length, 5);
+    assert.equal(CHARACTER_ACTION_INTENTS.length, 63);
+    assert.equal(new Set(CHARACTER_ACTION_INTENTS.map((intent) => intent.id)).size, 63);
+    assert.equal(normalizeCharacterActionIntent('clapping'), 'clap');
+    assert.equal(normalizeCharacterActionIntent('WAITING APPROVAL'), 'waiting_approval');
+
+    for (const intent of CHARACTER_ACTION_INTENTS) {
+        const chain = getCharacterActionFallbackChain(intent.id);
+        assert.equal(chain[0], intent.id);
+        assert.equal(new Set(chain).size, chain.length, `${intent.id} fallback cycle`);
+        assert.ok(chain.length <= CHARACTER_ACTION_INTENTS.length);
+    }
+    assert.deepEqual(getCharacterActionFallbackChain('completed'), [
+        'completed',
+        'success',
+        'celebrate',
+        'acknowledge',
+        'attentive',
+        'idle',
+        'none'
+    ]);
 });
 
 test('persona surface normalizes legacy avatar cue into semantic state', () => {
@@ -30,6 +62,41 @@ test('persona surface normalizes legacy avatar cue into semantic state', () => {
     assert.equal(surface.gestureIntent, 'greeting');
     assert.equal(surface.taskState, 'speaking');
     assert.equal(surface.legacyAction, 'wave');
+});
+
+test('persona surface v2 carries semantic action fallback chain independently of assets', () => {
+    const surface = normalizePersonaSurfaceState({
+        emotion: 'happy',
+        gestureIntent: 'completed',
+        taskState: 'happy_success'
+    });
+
+    assert.equal(surface.version, 2);
+    assert.equal(surface.gestureIntent, 'completed');
+    assert.deepEqual(surface.gestureFallbacks, [
+        'success',
+        'celebrate',
+        'acknowledge',
+        'attentive',
+        'idle',
+        'none'
+    ]);
+});
+
+test('motion library resolves a rich action through its semantic fallback chain', () => {
+    const surface = normalizePersonaSurfaceState({
+        emotion: 'happy',
+        gestureIntent: 'clap',
+        taskState: 'happy_success'
+    });
+    const motion = selectMotionForSurface(surface, {
+        availableActions: ['jump'],
+        allowExpressiveMotion: true,
+        allowExperimentalMotion: true,
+        random: () => 0
+    });
+
+    assert.equal(motion.id, 'jump');
 });
 
 test('motion library does not auto-play one-shot motion for semantic thinking state', () => {

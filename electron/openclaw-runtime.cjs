@@ -9,6 +9,7 @@ const { pathToFileURL } = require('url');
 const PROJECT_ROOT = path.resolve(__dirname, '..');
 const EXTERNAL_RUNTIME_ROOT = 'F:\\AILIS\\AILIS\\build-cache\\openclaw-runtime';
 const EXTERNAL_VENDOR_ROOT = 'F:\\AILIS\\AILIS\\build-cache\\openclaw-vendor';
+const EXTERNAL_AGENT_RUNTIME_HOME = 'F:\\AILIS\\Runtime\\AgentRuntimeHome';
 const EXTERNAL_OPENCLAW_HOME = 'F:\\AILIS\\Runtime\\OpenClawHome';
 
 const DEFAULT_GATEWAY_URL =
@@ -134,7 +135,7 @@ function resolveRuntimeRootCandidates(app) {
     ]);
 }
 
-function resolveBundledOpenClawRoot(app) {
+function resolveBundledAgentRuntimeRoot(app) {
     return resolveRuntimeRootCandidates(app).find((candidate) => isValidRuntimeRoot(candidate)) || '';
 }
 
@@ -165,11 +166,14 @@ function resolveVendorNodePath(app) {
     ]);
 }
 
-function resolveOpenClawHomeRoot(app) {
+function resolveAgentRuntimeHomeRoot(app) {
     const candidates = dedupeStrings([
         process.env.AILIS_OPENCLAW_HOME,
         process.env.OPENCLAW_HOME,
         process.env.AILIS_OPENCLAW_HOME,
+        EXTERNAL_AGENT_RUNTIME_HOME,
+        app?.getPath?.('userData') ? path.join(app.getPath('userData'), 'agent-runtime-home') : '',
+        path.join(PROJECT_ROOT, 'tmp', 'agent-runtime-home'),
         EXTERNAL_OPENCLAW_HOME,
         app?.getPath?.('userData') ? path.join(app.getPath('userData'), 'openclaw-home') : '',
         path.join(PROJECT_ROOT, 'tmp', 'openclaw-home')
@@ -186,15 +190,15 @@ function resolveOpenClawHomeRoot(app) {
         }
     }
 
-    return candidates[0] || path.join(PROJECT_ROOT, 'tmp', 'openclaw-home');
+    return candidates[0] || path.join(PROJECT_ROOT, 'tmp', 'agent-runtime-home');
 }
 
 async function loadGatewayRuntime(app) {
     if (!gatewayRuntimePromise) {
         gatewayRuntimePromise = (async () => {
-            const openClawHome = resolveOpenClawHomeRoot(app);
-            if (openClawHome && !normalizeOptionalString(process.env.OPENCLAW_HOME)) {
-                process.env.OPENCLAW_HOME = openClawHome;
+            const agentRuntimeHome = resolveAgentRuntimeHomeRoot(app);
+            if (agentRuntimeHome && !normalizeOptionalString(process.env.OPENCLAW_HOME)) {
+                process.env.OPENCLAW_HOME = agentRuntimeHome;
             }
 
             try {
@@ -204,7 +208,7 @@ async function loadGatewayRuntime(app) {
             const runtimePath = resolveExistingPath(resolveGatewayRuntimeCandidates(app));
             if (!runtimePath) {
                 throw new Error(
-                    '未找到 OpenClaw Gateway runtime，请先准备 build-cache/openclaw-runtime 或设置 AILIS_OPENCLAW_REPO'
+                    '未找到可选 AILIS Agent Runtime bridge，请先准备兼容 runtime 或关闭外部桥接模式'
                 );
             }
 
@@ -298,7 +302,7 @@ function isChildAlive(child) {
     return Boolean(child && child.exitCode === null && !child.killed);
 }
 
-class OpenClawGatewayManager extends EventEmitter {
+class AILISGatewayBridgeManager extends EventEmitter {
     constructor(options = {}) {
         super();
 
@@ -357,7 +361,7 @@ class OpenClawGatewayManager extends EventEmitter {
 
     async ensureConnected() {
         if (!this.config.enabled) {
-            throw new Error('OpenClaw 助手桥接未启用');
+            throw new Error('AILIS Agent Runtime 桥接未启用');
         }
 
         if (this.connected) {
@@ -383,7 +387,7 @@ class OpenClawGatewayManager extends EventEmitter {
         const runtime = await loadGatewayRuntime(this.app);
         const GatewayClient = runtime?.GatewayClient;
         if (!GatewayClient) {
-            throw new Error('OpenClaw Gateway runtime 未导出 GatewayClient');
+            throw new Error('AILIS Agent Runtime bridge 未导出 GatewayClient');
         }
 
         let lastFailure = null;
@@ -407,7 +411,7 @@ class OpenClawGatewayManager extends EventEmitter {
 
         const attempts = failures.length > 0 ? failures.join(' | ') : this.config.gatewayUrls.join(', ');
         throw new Error(
-            `OpenClaw Gateway 连接失败（已尝试：${attempts}${lastFailure?.message ? `；最后错误：${lastFailure.message}` : ''}）`
+            `AILIS Agent Runtime bridge 连接失败（已尝试：${attempts}${lastFailure?.message ? `；最后错误：${lastFailure.message}` : ''}）`
         );
     }
 
@@ -422,7 +426,7 @@ class OpenClawGatewayManager extends EventEmitter {
         await new Promise((resolve, reject) => {
             let settled = false;
             const timer = setTimeout(() => {
-                finishReject(createTimeoutError('连接 OpenClaw Gateway 超时'));
+                finishReject(createTimeoutError('连接 AILIS Agent Runtime bridge 超时'));
             }, DEFAULT_CONNECT_TIMEOUT_MS);
 
             const finishResolve = () => {
@@ -486,7 +490,7 @@ class OpenClawGatewayManager extends EventEmitter {
                     this.connectedAt = 0;
                     this.sessionSubscriptionsReady = false;
                     if (!this.closedManually) {
-                        this.lastError = normalizeOptionalString(reason) || 'OpenClaw Gateway 连接已断开';
+                        this.lastError = normalizeOptionalString(reason) || 'AILIS Agent Runtime bridge 连接已断开';
                     }
                     this.emitStatus();
                 }
@@ -528,7 +532,7 @@ class OpenClawGatewayManager extends EventEmitter {
 
     async requestDirect(method, params, timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS) {
         if (!this.client) {
-            throw new Error('OpenClaw Gateway 尚未连接');
+            throw new Error('AILIS Agent Runtime bridge 尚未连接');
         }
 
         try {
@@ -729,7 +733,7 @@ class OpenClawGatewayManager extends EventEmitter {
     }
 }
 
-class OpenClawRuntimeSupervisor extends EventEmitter {
+class AILISAgentRuntimeSupervisor extends EventEmitter {
     constructor(options = {}) {
         super();
 
@@ -738,7 +742,7 @@ class OpenClawRuntimeSupervisor extends EventEmitter {
         this.address = normalizeGatewayAddress(DEFAULT_GATEWAY_URL);
         this.bundleRoot = '';
         this.vendorNodePath = '';
-        this.homeRoot = resolveOpenClawHomeRoot(this.app);
+        this.homeRoot = resolveAgentRuntimeHomeRoot(this.app);
         this.logsDir = path.join(this.homeRoot, 'logs');
         this.stdoutLogPath = path.join(this.logsDir, 'gateway.out.log');
         this.stderrLogPath = path.join(this.logsDir, 'gateway.err.log');
@@ -763,11 +767,11 @@ class OpenClawRuntimeSupervisor extends EventEmitter {
         const previousSignature = this.getLaunchSignature();
         this.gatewayUrl = normalizeOptionalString(options.gatewayUrl, this.gatewayUrl || DEFAULT_GATEWAY_URL);
         this.address = normalizeGatewayAddress(this.gatewayUrl);
-        this.homeRoot = normalizeOptionalString(options.homeRoot, resolveOpenClawHomeRoot(this.app));
+        this.homeRoot = normalizeOptionalString(options.homeRoot, resolveAgentRuntimeHomeRoot(this.app));
         this.logsDir = path.join(this.homeRoot, 'logs');
         this.stdoutLogPath = path.join(this.logsDir, 'gateway.out.log');
         this.stderrLogPath = path.join(this.logsDir, 'gateway.err.log');
-        this.bundleRoot = resolveBundledOpenClawRoot(this.app);
+        this.bundleRoot = resolveBundledAgentRuntimeRoot(this.app);
         this.vendorNodePath = resolveVendorNodePath(this.app);
 
         if (previousSignature && previousSignature !== this.getLaunchSignature()) {
@@ -963,7 +967,7 @@ class OpenClawRuntimeSupervisor extends EventEmitter {
             }
 
             if (!this.closedManually) {
-                this.lastError = this.lastError || `OpenClaw Gateway 已退出 (${code ?? signal ?? 'unknown'})`;
+                this.lastError = this.lastError || `AILIS Agent Runtime bridge 已退出 (${code ?? signal ?? 'unknown'})`;
                 if (this.health === 'running') {
                     this.health = 'stopped';
                 } else if (this.health !== 'external') {
@@ -998,12 +1002,12 @@ class OpenClawRuntimeSupervisor extends EventEmitter {
 
         if (this.child && this.child.exitCode !== null) {
             throw new Error(
-                `OpenClaw Gateway 启动后提前退出 (${this.child.exitCode ?? 'unknown'})${this.readFailureContext()}`
+                `AILIS Agent Runtime bridge 启动后提前退出 (${this.child.exitCode ?? 'unknown'})${this.readFailureContext()}`
             );
         }
 
         throw new Error(
-            `等待 OpenClaw Gateway 监听 ${this.address.port} 超时${this.readFailureContext()}`
+            `等待 AILIS Agent Runtime bridge 监听 ${this.address.port} 超时${this.readFailureContext()}`
         );
     }
 
@@ -1016,9 +1020,9 @@ class OpenClawRuntimeSupervisor extends EventEmitter {
                 continue;
             }
 
-            const probeClient = new OpenClawGatewayManager({
+            const probeClient = new AILISGatewayBridgeManager({
                 app: this.app,
-                clientVersion: 'ailis-openclaw-probe',
+                clientVersion: 'ailis-agent-runtime-probe',
                 enabled: true,
                 gatewayUrl: this.address.url
             });
@@ -1080,7 +1084,7 @@ class OpenClawRuntimeSupervisor extends EventEmitter {
         const protocolReady = await this.probeGatewayProtocol(reset ? 12000 : 8000);
         if (!protocolReady) {
             throw new Error(
-                `${reset ? 'OpenClaw Gateway 重置后仍未通过握手检查' : 'OpenClaw Gateway 握手检查失败'}${this.readFailureContext()}`
+                `${reset ? 'AILIS Agent Runtime bridge 重置后仍未通过握手检查' : 'AILIS Agent Runtime bridge 握手检查失败'}${this.readFailureContext()}`
             );
         }
 
@@ -1107,7 +1111,7 @@ class OpenClawRuntimeSupervisor extends EventEmitter {
 
         if (!this.isBundleReady()) {
             this.health = 'error';
-            this.lastError = '未找到 OpenClaw runtime，请先执行 pnpm openclaw:prepare-runtime。';
+            this.lastError = '未找到可选 AILIS Agent Runtime bridge；默认 AILIS Agent Loop 不需要它。';
             this.emitStatus();
             throw new Error(this.lastError);
         }
@@ -1159,9 +1163,14 @@ class OpenClawRuntimeSupervisor extends EventEmitter {
     }
 }
 
+const OpenClawGatewayManager = AILISGatewayBridgeManager;
+const OpenClawRuntimeSupervisor = AILISAgentRuntimeSupervisor;
+
 module.exports = {
     DEFAULT_GATEWAY_URL,
     DEFAULT_SESSION_KEY,
+    AILISGatewayBridgeManager,
+    AILISAgentRuntimeSupervisor,
     OpenClawGatewayManager,
     OpenClawRuntimeSupervisor,
     toGatewayWsUrl

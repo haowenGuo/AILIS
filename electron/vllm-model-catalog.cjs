@@ -232,6 +232,8 @@ function inferVllmFit(model) {
     const hasTransformers = hasAnyNeedle(joined, ['transformers', 'transformer']);
     const hasSafetensors = hasAnyNeedle(joined, ['safetensors']);
     const isGguf = hasAnyNeedle(joined, ['gguf']);
+    const isMlx = hasAnyNeedle(joined, ['mlx-community', '-mlx', ' mlx', 'mlx-']);
+    const isOnnx = hasAnyNeedle(joined, ['onnx', 'ryzenai', 'openvino']);
 
     if (model.private) {
         return {
@@ -240,18 +242,32 @@ function inferVllmFit(model) {
             detail: '私有模型通常需要登录和权限，不适合作为默认本地 vLLM 候选。'
         };
     }
+    if (isMlx) {
+        return {
+            level: 'blocked',
+            label: 'MLX 权重',
+            detail: 'MLX 权重主要面向 Apple MLX，不适合作为 vLLM 一键部署候选。'
+        };
+    }
+    if (isOnnx) {
+        return {
+            level: 'blocked',
+            label: 'ONNX/OpenVINO 权重',
+            detail: 'ONNX/OpenVINO 权重通常不由 vLLM serve 直接加载，不适合作为一键部署候选。'
+        };
+    }
+    if (isGguf) {
+        return {
+            level: 'blocked',
+            label: 'GGUF 权重',
+            detail: 'GGUF 更适合 Ollama/llama.cpp，不适合作为 vLLM 一键部署候选。'
+        };
+    }
     if (model.gated) {
         return {
             level: 'warning',
             label: '可能需要授权',
             detail: '该模型可能需要登录或访问授权，下载前请确认本机凭据。'
-        };
-    }
-    if (isGguf) {
-        return {
-            level: 'warning',
-            label: '更适合 llama.cpp/Ollama',
-            detail: 'GGUF 通常不是 vLLM 的首选权重格式。'
         };
     }
     if (isVision) {
@@ -367,6 +383,9 @@ function normalizeModelScopeModel(raw = {}) {
 
 function isUsefulVllmCandidate(model) {
     if (!model?.id || model.private) {
+        return false;
+    }
+    if (model.fit?.level === 'blocked') {
         return false;
     }
     const joined = [

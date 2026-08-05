@@ -1,11 +1,6 @@
-import { VRMModelSystem } from './vrm-model-system.js';
-import { TTSAudioPlayer } from './tts-audio-player.js';
-import { ChatTTSSystem } from './chat-tts-system.js';
-import { createChatService } from './chat-service.js';
-import { createSpeechProvider } from './speech-provider.js';
 import { CONFIG, applyDesktopPreferencesToConfig } from './config.js';
-import { installAvatarDialogueBubble } from './avatar-dialogue-bubble.js';
 import { installPetMouseHitTest } from './pet-mouse-hit-test.js';
+import { setUiLanguage } from './i18n.js';
 
 const PET_RENDER_AVATAR_REFERENCE_HEIGHT = 560;
 const PET_RENDER_WINDOW_FRAME_HEIGHT = 960;
@@ -22,29 +17,19 @@ function applyPetWindowFrameCameraCompensation() {
     CONFIG.CAMERA_MAX_DISTANCE = Number(Math.min(3.2, compensatedDistance + 0.6).toFixed(2));
 }
 
-function emitDesktopChatEvent(payload) {
-    window.ailisDesktop?.emitChatEvent?.(payload);
-}
-
-function installPetInteractions(rootElement) {
+function installRendererInteractions(rootElement) {
     let dragState = null;
-
-    const resetDragState = () => {
-        dragState = null;
-    };
 
     rootElement.addEventListener('pointerdown', (event) => {
         if (event.button !== 0) {
             return;
         }
-
         dragState = {
             pointerId: event.pointerId,
             startX: event.screenX,
             startY: event.screenY,
             moved: false
         };
-
         window.ailisDesktop?.beginDragPetWindow?.();
         rootElement.setPointerCapture?.(event.pointerId);
     });
@@ -53,42 +38,59 @@ function installPetInteractions(rootElement) {
         if (!dragState || event.pointerId !== dragState.pointerId) {
             return;
         }
-
-        const totalDistance = Math.abs(event.screenX - dragState.startX) +
+        const distance = Math.abs(event.screenX - dragState.startX) +
             Math.abs(event.screenY - dragState.startY);
-
-        if (totalDistance > 4) {
-            dragState.moved = true;
-        }
-
-        if (dragState.moved) {
-            window.ailisDesktop?.dragPetWindow?.();
-        }
+        dragState.moved ||= distance > 4;
     });
 
-    rootElement.addEventListener('pointerup', async (event) => {
+    const finishInteraction = async (event) => {
         if (!dragState || event.pointerId !== dragState.pointerId) {
             return;
         }
-
         const wasClick = !dragState.moved;
-        resetDragState();
+        dragState = null;
         window.ailisDesktop?.endDragPetWindow?.();
-
         if (wasClick) {
             await window.ailisDesktop?.showChatWindow?.();
         }
-    });
+    };
 
-    rootElement.addEventListener('pointercancel', () => {
-        resetDragState();
-        window.ailisDesktop?.endDragPetWindow?.();
-    });
-    rootElement.addEventListener('contextmenu', async (event) => {
-        event.preventDefault();
-        resetDragState();
-        await window.ailisDesktop?.showControlMenu?.();
-    });
+    rootElement.addEventListener('pointerup', finishInteraction);
+    rootElement.addEventListener('pointercancel', finishInteraction);
+}
+
+function applyRendererCommand(vrmSystem, message = {}) {
+    if (!vrmSystem) {
+        return;
+    }
+    switch (message.type) {
+        case 'persona.surface':
+            vrmSystem.applyPersonaSurfacePayload?.({
+                persona_surface: message.surface || {},
+                speech_text: message.surface?.speechText || ''
+            }, {
+                messageId: message.requestId || '',
+                source: 'character_renderer_protocol',
+                allowExpressiveMotion: true,
+                allowExperimentalMotion: true
+            });
+            break;
+        case 'persona.speech.start':
+            if (message.mode === 'audio') {
+                vrmSystem.startAudioDrivenSpeech?.();
+            } else {
+                vrmSystem.startFallbackSpeech?.();
+            }
+            break;
+        case 'persona.speech.stop':
+            vrmSystem.stopSpeaking?.();
+            break;
+        case 'persona.lip':
+            vrmSystem.setLipSyncValue?.(Number(message.lip?.weight || 0));
+            break;
+        default:
+            break;
+    }
 }
 
 window.addEventListener('DOMContentLoaded', async () => {
@@ -96,111 +98,80 @@ window.addEventListener('DOMContentLoaded', async () => {
     const canvasContainerEl = document.getElementById('canvas-container');
     const initialPreferences = window.ailisDesktop?.preferences || {};
     applyDesktopPreferencesToConfig(initialPreferences);
+    setUiLanguage(initialPreferences.uiLanguage || 'zh-CN');
     applyPetWindowFrameCameraCompensation();
-    const vrmSystem = new VRMModelSystem();
-    installAvatarDialogueBubble({
-        rootElement: petShellEl,
-        variant: 'pet',
-        avatarBoundsProvider: () => vrmSystem.getAvatarHitTestBounds?.()
-    });
-    const audioPlayer = new TTSAudioPlayer(vrmSystem);
-    let chatService = createChatService(initialPreferences);
-    const buildSpeechProvider = (speechMode = null) => createSpeechProvider({
-        enableTTS: true,
-        speechMode
-    });
-    let speechProvider = buildSpeechProvider(initialPreferences.speechMode);
-    const chatSystem = new ChatTTSSystem(vrmSystem, audioPlayer, chatService, {
-        speechProvider,
-        chunkedTtsEnabled: initialPreferences.chunkedTtsEnabled
-    });
+
+    let vrmSystem = null;
+    let vrmLoadPromise = null;
+
+    const ensureThreeRenderer = async () => {
+        if (vrmSystem) {
+            return vrmSystem;
+        }
+        if (!vrmLoadPromise) {
+            vrmLoadPromise = import('./vrm-model-system.js')
+                .then(async ({ VRMModelSystem }) => {
+                    const system = new VRMModelSystem();
+                    system.init('canvas-container');
+                    if (system.scene) {
+                        system.scene.background = null;
+                    }
+                    if (system.renderer) {
+                        system.renderer.setClearColor(0x000000, 0);
+                    }
+                    if (system.controls) {
+                        system.controls.enabled = false;
+                    }
+                    await system.loadModel();
+                    system.setRenderEnabled(true);
+                    vrmSystem = system;
+                    window.vrmSystem = system;
+                    return system;
+                })
+                .catch((error) => {
+                    vrmLoadPromise = null;
+                    console.error('[pet] Three renderer failed to load:', error);
+                    throw error;
+                });
+        }
+        return vrmLoadPromise;
+    };
+
     const mouseHitTest = installPetMouseHitTest({
         rootElement: petShellEl,
         canvasElement: canvasContainerEl,
-        avatarBoundsProvider: () => vrmSystem.getAvatarHitTestBounds?.(),
+        avatarBoundsProvider: () => vrmSystem?.getAvatarHitTestBounds?.(),
         preferences: initialPreferences
     });
-    const removePetCursorPointListener = window.ailisDesktop?.onPetCursorPoint?.((payload = {}) => {
+    const removeCursorListener = window.ailisDesktop?.onPetCursorPoint?.((payload = {}) => {
         mouseHitTest?.handleCursorPoint?.(payload);
     });
-
-    window.addEventListener('ailis-chat-ui-event', (event) => {
-        emitDesktopChatEvent(event.detail);
-    });
-
-    window.ailisDesktop?.onChatMessageRequest?.((payload = {}) => {
-        void chatSystem.sendExternalMessage(payload.content || '', {
-            attachments: payload.attachments || [],
-            source: payload.source || ''
-        });
-    });
-
-    window.ailisDesktop?.onChatControlRequest?.((payload = {}) => {
-        if (payload.type === 'clear-conversation') {
-            chatSystem.clearConversation();
-        }
-        if (payload.type === 'interrupt-conversation') {
-            void chatSystem.interruptCurrentTurn();
-        }
-    });
-
-    window.ailisDesktop?.onChatStateSyncRequest?.(() => {
-        emitDesktopChatEvent({
-            type: 'snapshot',
-            messages: chatSystem.getTranscriptSnapshot(),
-            isBusy: chatSystem.isBusy
+    const removeCommandListener = window.ailisDesktop?.characterRenderer?.onCommand?.((message = {}) => {
+        void ensureThreeRenderer().then((system) => {
+            applyRendererCommand(system, message);
         });
     });
 
     window.ailisDesktop?.onPreferencesUpdated?.(({ preferences = {} } = {}) => {
+        const previousModelPath = CONFIG.MODEL_PATH;
         applyDesktopPreferencesToConfig(preferences);
-        applyPetWindowFrameCameraCompensation();
-        speechProvider?.dispose?.();
-        speechProvider = buildSpeechProvider(preferences.speechMode);
-        chatSystem.setSpeechProvider(speechProvider);
-        const nextChatService = createChatService(preferences);
-        if (nextChatService.conversationMode !== chatService.conversationMode) {
-            chatService = nextChatService;
-            chatSystem.setChatService(chatService);
-            window.chatService = chatService;
+        setUiLanguage(preferences.uiLanguage || 'zh-CN');
+        if (CONFIG.MODEL_PATH !== previousModelPath && vrmSystem) {
+            window.location.reload();
+            return;
         }
-        chatSystem.applyRuntimePreferences(preferences);
-        vrmSystem.applyPreferences();
+        applyPetWindowFrameCameraCompensation();
+        vrmSystem?.applyPreferences();
         mouseHitTest?.updatePreferences(preferences);
-        window.speechProvider = speechProvider;
     });
 
-    installPetInteractions(petShellEl);
-
-    vrmSystem.init('canvas-container');
-
-    if (vrmSystem.scene) {
-        vrmSystem.scene.background = null;
-    }
-    if (vrmSystem.renderer) {
-        vrmSystem.renderer.setClearColor(0x000000, 0);
-    }
-    if (vrmSystem.controls) {
-        vrmSystem.controls.enabled = false;
-    }
-
-    await vrmSystem.loadModel();
-
-    emitDesktopChatEvent({
-        type: 'snapshot',
-        messages: chatSystem.getTranscriptSnapshot(),
-        isBusy: chatSystem.isBusy
-    });
-
-    window.vrmSystem = vrmSystem;
-    window.audioPlayer = audioPlayer;
-    window.chatService = chatService;
-    window.chatSystem = chatSystem;
-    window.speechProvider = speechProvider;
+    installRendererInteractions(petShellEl);
+    window.vrmSystem = null;
+    await ensureThreeRenderer();
 
     window.addEventListener('beforeunload', () => {
-        removePetCursorPointListener?.();
+        removeCursorListener?.();
+        removeCommandListener?.();
         mouseHitTest?.dispose?.();
-        speechProvider?.dispose?.();
     });
 });

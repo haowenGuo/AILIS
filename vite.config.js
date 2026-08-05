@@ -11,10 +11,18 @@ export default defineConfig({
         port: 5173,
         watch: {
             ignored: [
+                '**/.ailis-runtime/**',
+                '**/.ailis-state/**',
+                '**/.humanclaw-state/**',
+                '**/.local/**',
+                '**/build-cache/**',
+                '**/models/**',
+                '**/node_modules/**',
                 '**/release/**',
                 '**/logs/**',
                 '**/eval-results/**',
                 '**/references/**',
+                '**/vendor/**',
                 '**/android/**'
             ]
         }
@@ -23,10 +31,14 @@ export default defineConfig({
         rollupOptions: {
             input: {
                 agentLab: resolve(workspaceRoot, 'agent-lab.html'),
+                characterLab: resolve(workspaceRoot, 'character-lab.html'),
                 control: resolve(workspaceRoot, 'control.html'),
                 index: resolve(workspaceRoot, 'index.html'),
                 pet: resolve(workspaceRoot, 'pet.html'),
+                personaHost: resolve(workspaceRoot, 'persona-host.html'),
+                dialogue: resolve(workspaceRoot, 'dialogue.html'),
                 chat: resolve(workspaceRoot, 'chat.html'),
+                test: resolve(workspaceRoot, 'Test/index.html'),
                 visionRegion: resolve(workspaceRoot, 'vision-region.html')
             }
         }

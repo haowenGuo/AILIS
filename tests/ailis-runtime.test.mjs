@@ -8,6 +8,15 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { AILISRuntime } = require('../electron/ailis-runtime.cjs');
 const { AILISGateway } = require('../electron/ailis-gateway.cjs');
+const {
+    AgentPath,
+    AgentStatus,
+    InputQueue,
+    InterAgentCommunication,
+    SubagentNotification
+} = require('../electron/ailis-agent-control.cjs');
+const { CompactedItem } = require('../electron/ailis-prompt-model.cjs');
+const { ResponseItem } = require('../electron/ailis-response-model.cjs');
 
 async function jsonFetch(url, options = {}) {
     const response = await fetch(url, {
@@ -27,6 +36,34 @@ async function callTool(baseUrl, payload) {
         body: JSON.stringify(payload)
     });
 }
+
+test('AILIS agent protocol mirrors Codex mailbox and status object shapes', async () => {
+    const childPath = new AgentPath('/root/mavuika_guide');
+    const status = AgentStatus.Completed('verified answer');
+    const notification = new SubagentNotification(childPath, status).render();
+    assert.equal(childPath.parent().toString(), '/root');
+    assert.match(notification, /^<subagent_notification>/);
+    assert.match(notification, /"agent_path":"\/root\/mavuika_guide"/);
+    assert.match(notification, /"completed":"verified answer"/);
+
+    const communication = new InterAgentCommunication({
+        author: childPath,
+        recipient: childPath.parent(),
+        content: notification
+    });
+    const item = communication.to_response_input_item();
+    assert.equal(item.role, 'assistant');
+    assert.equal(item.phase, 'commentary');
+    assert.match(item.content[0].text, /"author":"\/root\/mavuika_guide"/);
+
+    const queue = new InputQueue();
+    const context = { runId: 'parent-run', sessionId: 'parent-session' };
+    const waiting = queue.subscribe_mailbox(context, 1000);
+    queue.enqueue_mailbox_communication(context, communication);
+    assert.equal(await waiting, true);
+    assert.equal(queue.get_pending_input(context).length, 1);
+    assert.equal(queue.get_pending_input(context).length, 0);
+});
 
 test('AILIS runtime guards tool results and repairs incomplete transcripts', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-runtime-direct-'));
@@ -48,6 +85,68 @@ test('AILIS runtime guards tool results and repairs incomplete transcripts', asy
     assert.equal(guarded.content[0].truncated, true);
     assert.equal(guarded.details.apiKey, '__REDACTED__');
     assert.equal(guarded.details.guard.tool, 'read');
+    assert.equal(guarded.details.modelVisibleContent.status, 'model_visible_truncated');
+
+    const guardedWorkbenchRead = runtime.guardToolResult(
+        {
+            content: [{ type: 'text', text: `${'{"row":1}\n'.repeat(2000)}`, originalTextChars: 18000 }],
+            details: {
+                status: 'completed',
+                action: 'read',
+                path: path.join(workspaceRoot, '.ailis-state', 'workbench', 'run-map', 'inputs', 'matrixRows.json'),
+                bytesRead: 18000,
+                size: 18000,
+                truncated: false
+            }
+        },
+        { toolId: 'read', callId: 'guard-workbench-read', maxTextChars: 512 }
+    );
+    assert.equal(guardedWorkbenchRead.content[0].modelVisibleTruncated, true);
+    assert.match(guardedWorkbenchRead.content[0].text, /MODEL_VISIBLE_CONTENT_TRUNCATED/);
+    assert.match(guardedWorkbenchRead.content[0].text, /truncationScope=model_visible_tool_result_text/);
+    assert.equal(guardedWorkbenchRead.details.modelVisibleContent.fullFileReadTruncated, false);
+    assert.equal(
+        guardedWorkbenchRead.details.modelVisibleContent.semantics.contentTruncatedMeansModelVisibleProjectionTruncation,
+        true
+    );
+
+    const sourceLines = Array.from({ length: 60 }, (_, index) => ({
+        lineno: 330 + index,
+        text: index === 22
+            ? 'Cuba (1)'
+            : index === 47
+                ? 'Panama (1)'
+                : `country row ${index + 1}`
+    }));
+    const guardedSourceViewport = runtime.guardToolResult(
+        {
+            content: [{ type: 'text', text: 'Find results for participating nations' }],
+            details: {
+                status: 'completed',
+                sourceWindow: {
+                    type: 'source_viewport',
+                    lineStart: 330,
+                    lineEnd: 389,
+                    lines: sourceLines
+                }
+            },
+            structuredContent: {
+                status: 'completed',
+                sourceWindow: {
+                    type: 'source_viewport',
+                    lineStart: 330,
+                    lineEnd: 389,
+                    lines: sourceLines
+                }
+            }
+        },
+        { toolId: 'mcp__ailis_research__web_find', callId: 'guard-source-viewport' }
+    );
+    const guardedLines = guardedSourceViewport.structuredContent.sourceWindow.lines;
+    assert.equal(guardedLines.length, 60);
+    assert.equal(guardedLines[22].text, 'Cuba (1)');
+    assert.equal(guardedLines[47].text, 'Panama (1)');
+    assert.equal(guardedLines.some((line) => 'omitted_items' in line), false);
 
     await runtime.startRun({
         runId,
@@ -79,6 +178,60 @@ test('AILIS runtime guards tool results and repairs incomplete transcripts', asy
     assert.equal(transcript.ok, true);
     assert.ok(transcript.items.some((item) => item.type === 'tool.result' && item.status === 'repaired_missing_result'));
     assert.ok(transcript.items.some((item) => item.type === 'transcript.repair'));
+});
+
+test('AILIS runtime persists ContextCompaction rollout items and reference context', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-runtime-compaction-'));
+    const auditDir = path.join(workspaceRoot, '.audit');
+    const runtime = new AILISRuntime({
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir
+    });
+    const runId = 'runtime-compaction-run';
+    const sessionId = 'runtime-compaction';
+    const replacementHistory = [
+        ResponseItem.message({ role: 'user', text: 'current task summary' }),
+        ResponseItem.message({ role: 'assistant', text: 'Known fact: START=A1.' })
+    ];
+    const compactedItem = CompactedItem.create({
+        message: 'Compacted task state.',
+        replacement_history: replacementHistory
+    });
+
+    await runtime.startRun({
+        runId,
+        sessionId,
+        message: 'compact this run',
+        planner: 'test'
+    });
+    const written = await runtime.appendContextCompaction(runId, {
+        sessionId,
+        compactedItem,
+        referenceContextItem: {
+            cwd: workspaceRoot,
+            model: 'test-model'
+        },
+        contextManagerCheckpoint: {
+            history_version: 1,
+            items: replacementHistory
+        },
+        reason: 'test_compaction'
+    });
+
+    assert.equal(written.length, 2);
+
+    const transcript = await runtime.readTranscript(runId);
+    const compaction = transcript.items.find((item) => item.type === 'agent.context_compaction');
+    const turnContext = transcript.items.find((item) => item.type === 'agent.turn_context');
+
+    assert.equal(compaction.status, 'installed');
+    assert.equal(compaction.payload.rollout_item.type, 'compacted');
+    assert.deepEqual(compaction.payload.compacted_item.replacement_history, replacementHistory);
+    assert.equal(compaction.payload.context_manager_checkpoint.history_version, 1);
+    assert.equal(turnContext.status, 'captured');
+    assert.equal(turnContext.payload.rollout_item.type, 'turn_context');
+    assert.equal(turnContext.payload.reference_context_item.model, 'test-model');
 });
 
 test('AILIS Gateway exposes runtime tools, update_plan, policy checks, and transcripts', async () => {
@@ -114,6 +267,11 @@ test('AILIS Gateway exposes runtime tools, update_plan, policy checks, and trans
         });
         assert.equal(plan.body.ok, true, plan.body.error);
         assert.equal(plan.body.status, 'completed');
+        assert.equal(plan.body.result.details.completion_scope, 'progress_recorded_only');
+        assert.equal(plan.body.result.details.semantic_role, 'progress_ui_only');
+        assert.equal(plan.body.result.details.produces_evidence, false);
+        assert.equal(plan.body.result.details.task_advanced, false);
+        assert.match(plan.body.result.content[0].text, /did not inspect files/);
         assert.equal(plan.body.result.details.plan[0].step, 'wire the runtime');
 
         const blocked = await callTool(baseUrl, {
@@ -268,7 +426,7 @@ rl.on('line', (line) => {
     return;
   }
   if (request.method === 'tools/list') {
-    send({ id: request.id, result: { tools: [{ name: 'echo', description: 'Echo input text', inputSchema: { type: 'object', properties: { text: { type: 'string' } } } }] } });
+    send({ id: request.id, result: { tools: [{ name: 'echo', description: 'Echo input text', inputSchema: { type: 'object', required: ['text'], additionalProperties: false, properties: { text: { type: 'string' } } } }] } });
     return;
   }
   if (request.method === 'tools/call') {
@@ -589,44 +747,255 @@ test('AILIS runtime persists MCP server registry to local config', async () => {
     }
 });
 
-test('AILIS runtime subagents execute child runner lifecycle and retain logs', async () => {
-    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-subagent-runtime-'));
+test('AILIS Codex-style Agent tree delivers completion through the session mailbox', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-agent-tree-runtime-'));
+    const childContexts = [];
     const runtime = new AILISRuntime({
         workspaceRoot,
         projectRoot: path.resolve('.'),
         auditDir: path.join(workspaceRoot, '.audit'),
-        subagentExecutor: async ({ subagent, onEvent }) => {
-            await onEvent({
-                type: 'subagent.progress',
-                status: 'running',
-                message: 'reading task'
-            });
+        agentExecutor: async ({ agent, context }) => {
+            childContexts.push(context);
+            await new Promise((resolve) => setTimeout(resolve, 20));
             return {
                 ok: true,
                 status: 'completed',
-                displayText: `done:${subagent.task}`
+                displayText: `answer:${agent.task}`,
+                taskRunHandoff: {
+                    status: 'completed',
+                    resume: {
+                        contextManagerCheckpoint: {
+                            history_version: 2,
+                            items: []
+                        }
+                    }
+                }
             };
         }
     });
+    const context = {
+        runId: 'parent-run',
+        sessionId: 'session-a',
+        agent_path: '/root',
+        attachments: [{
+            type: 'file',
+            name: 'input.xlsx',
+            path: path.join(workspaceRoot, '.ailis-runtime', 'attachments', 'input.xlsx')
+        }],
+        parentUserGoal: 'calculate the complete workbook total',
+        forked_context_checkpoint: {
+            history_version: 2,
+            items: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'original request' }] }]
+        }
+    };
 
-    const spawned = await runtime.executeTool(
-        'subagents',
-        { action: 'spawn', subagentId: 'worker-1', task: 'summarize repo', wait: true, waitTimeoutMs: 2000 },
-        { runId: 'subagent-run', sessionId: 'main' }
-    );
-    assert.equal(spawned.details.subagent.status, 'completed');
-    assert.match(spawned.details.subagent.result.displayText, /done:summarize repo/);
+    const spawned = await runtime.executeTool('spawn_agent', {
+        task_name: 'guide',
+        message: 'Research the guide.',
+        fork_turns: 'all'
+    }, context);
+    assert.equal(spawned.structuredContent.task_name, '/root/guide');
 
-    const log = await runtime.executeTool(
-        'subagents',
-        { action: 'log', subagentId: 'worker-1' },
-        { runId: 'subagent-run', sessionId: 'main' }
-    );
-    assert.equal(log.details.status, 'completed');
-    assert.ok(log.details.events.some((event) => event.type === 'subagent.progress'));
-    assert.ok(log.details.events.some((event) => event.type === 'subagent.completed'));
+    const waited = await runtime.executeTool('wait_agent', { timeout_ms: 1000 }, context);
+    assert.equal(waited.structuredContent.timed_out, false);
+    const mailbox = runtime.drain_mailbox_input_items({ sessionId: 'session-a', runId: 'a-different-run' });
+    assert.equal(mailbox.length, 1);
+    assert.match(JSON.stringify(mailbox), /answer:Research the guide/);
+    assert.equal(childContexts.length, 1);
+    assert.equal(childContexts[0].taskAgentInheritanceMode, 'checkpoint');
+    assert.deepEqual(childContexts[0].initialContextManagerCheckpoint, context.forked_context_checkpoint);
+    assert.deepEqual(childContexts[0].attachments, context.attachments);
+    assert.equal(childContexts[0].parentUserGoal, context.parentUserGoal);
+    await runtime.shutdown();
 });
 
+test('AILIS Agent tree queues followup input into a running thread', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-agent-input-runtime-'));
+    const runtime = new AILISRuntime({
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit'),
+        agentExecutor: async ({ registerInputHandler }) => await new Promise((resolve) => {
+            registerInputHandler((message) => resolve({
+                ok: true,
+                status: 'completed',
+                displayText: `received:${message}`
+            }));
+        })
+    });
+    const context = { runId: 'parent-input', sessionId: 'session-input', agent_path: '/root' };
+    await runtime.executeTool('spawn_agent', {
+        task_name: 'worker',
+        message: 'initial',
+        fork_turns: 'none'
+    }, context);
+    await runtime.executeTool('followup_task', {
+        target: 'worker',
+        message: 'corrected input'
+    }, context);
+    await runtime.executeTool('wait_agent', { timeout_ms: 1000 }, context);
+    assert.match(JSON.stringify(runtime.drain_mailbox_input_items(context)), /received:corrected input/);
+    await runtime.shutdown();
+});
+
+test('AILIS Agent tree resumes a completed thread from its checkpoint', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-agent-resume-runtime-'));
+    const contexts = [];
+    const checkpoint = {
+        history_version: 2,
+        items: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'checkpoint' }] }]
+    };
+    const runtime = new AILISRuntime({
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit'),
+        agentExecutor: async ({ agent, context }) => {
+            contexts.push(context);
+            return {
+                ok: true,
+                status: 'completed',
+                displayText: agent.task,
+                taskRunHandoff: { status: 'completed', resume: { contextManagerCheckpoint: checkpoint } }
+            };
+        }
+    });
+    const context = { runId: 'parent-resume', sessionId: 'session-resume', agent_path: '/root' };
+    await runtime.executeTool('spawn_agent', {
+        task_name: 'worker',
+        message: 'first',
+        fork_turns: 'none'
+    }, context);
+    await runtime.executeTool('wait_agent', { timeout_ms: 1000 }, context);
+    runtime.drain_mailbox_input_items(context);
+    const stableId = runtime.agent_control.state.list(context)[0].id;
+
+    await runtime.executeTool('followup_task', { target: 'worker', message: 'second' }, context);
+    await runtime.executeTool('wait_agent', { timeout_ms: 1000 }, context);
+    assert.equal(contexts.length, 2);
+    assert.equal(runtime.agent_control.state.list(context)[0].id, stableId);
+    assert.equal(contexts[1].taskAgentInheritanceMode, 'checkpoint');
+    assert.deepEqual(contexts[1].initialContextManagerCheckpoint, checkpoint);
+    await runtime.shutdown();
+});
+
+test('Persona parent run converts duplicate spawn into followup on the persistent TaskAgent', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-persona-agent-owner-'));
+    const tasks = [];
+    const runtime = new AILISRuntime({
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit'),
+        agentExecutor: async ({ agent }) => {
+            tasks.push(agent.task);
+            return { ok: true, status: 'completed', displayText: `answer:${agent.task}` };
+        }
+    });
+    const context = {
+        runId: 'persona-parent-run',
+        sessionId: 'persona-owner-session',
+        agent_path: '/root',
+        agentRole: 'persona_orchestrator'
+    };
+    await runtime.executeTool('spawn_agent', {
+        task_name: 'guide',
+        message: 'research the guide',
+        fork_turns: 'none'
+    }, context);
+    await runtime.executeTool('wait_agent', { timeout_ms: 1000 }, context);
+    runtime.drain_mailbox_input_items(context);
+
+    const duplicate = await runtime.executeTool('spawn_agent', {
+        task_name: 'guide_supplement',
+        message: 'search for missing guide details',
+        fork_turns: 'none'
+    }, context);
+
+    assert.equal(duplicate.isError, false);
+    assert.equal(duplicate.structuredContent.status, 'followup_queued');
+    assert.equal(duplicate.structuredContent.task_name, '/root/guide');
+    assert.equal(duplicate.structuredContent.continued, true);
+    assert.equal(duplicate.structuredContent.result_available, true);
+    await runtime.executeTool('wait_agent', { timeout_ms: 1000 }, context);
+    assert.equal(runtime.agent_control.state.list(context).length, 1);
+    assert.deepEqual(tasks, ['research the guide', 'search for missing guide details']);
+    await runtime.shutdown();
+});
+
+test('Subagent notification carries a source-only Persona evidence boundary', () => {
+    const rendered = new SubagentNotification(
+        '/root/research',
+        AgentStatus.Completed('supported answer'),
+        {
+            final_answer: 'supported answer',
+            source_refs: [{ url: 'https://example.test/source' }],
+            evidence_boundary: {
+                mode: 'source_only',
+                may_add_facts: false
+            }
+        }
+    ).render();
+    assert.match(rendered, /"final_answer":"supported answer"/);
+    assert.match(rendered, /"mode":"source_only"/);
+    assert.match(rendered, /"may_add_facts":false/);
+});
+
+test('AILIS Agent trees are session scoped and enforce one live direct child', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-agent-isolation-runtime-'));
+    let release;
+    const gate = new Promise((resolve) => {
+        release = resolve;
+    });
+    const runtime = new AILISRuntime({
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit'),
+        agentExecutor: async ({ agent }) => {
+            await gate;
+            return { ok: true, status: 'completed', displayText: agent.task };
+        }
+    });
+    const sessionA = { runId: 'run-a', sessionId: 'session-a', agent_path: '/root' };
+    const sessionB = { runId: 'run-b', sessionId: 'session-b', agent_path: '/root' };
+    await runtime.executeTool('spawn_agent', { task_name: 'one', message: 'one', fork_turns: 'none' }, sessionA);
+    const duplicate = await runtime.executeTool('spawn_agent', { task_name: 'two', message: 'two', fork_turns: 'none' }, sessionA);
+    assert.equal(duplicate.isError, true);
+    assert.equal(duplicate.structuredContent.status, 'agent_thread_limit_reached');
+    await runtime.executeTool('spawn_agent', { task_name: 'one', message: 'other session', fork_turns: 'none' }, sessionB);
+    assert.deepEqual(runtime.agent_control.list_agents({}, sessionA).agents.map((entry) => entry.agent_name), ['/root/one']);
+    assert.deepEqual(runtime.agent_control.list_agents({}, sessionB).agents.map((entry) => entry.agent_name), ['/root/one']);
+    release();
+    await Promise.all([
+        runtime.agent_control.await_live_children(sessionA, 1000),
+        runtime.agent_control.await_live_children(sessionB, 1000)
+    ]);
+    await runtime.shutdown();
+});
+
+test('AILIS Agent failures remain Errored and preserve a parent handoff', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-agent-error-runtime-'));
+    const runtime = new AILISRuntime({
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit'),
+        agentExecutor: async () => {
+            throw new Error('fixture provider failure');
+        }
+    });
+    const context = { runId: 'parent-error', sessionId: 'session-error', agent_path: '/root' };
+    await runtime.executeTool('spawn_agent', {
+        task_name: 'worker',
+        message: 'solve task',
+        fork_turns: 'none'
+    }, context);
+    await runtime.executeTool('wait_agent', { timeout_ms: 1000 }, context);
+    const listed = runtime.agent_control.list_agents({}, context).agents;
+    assert.equal(listed.length, 1);
+    assert.deepEqual(listed[0].agent_status, { errored: 'fixture provider failure' });
+    assert.match(JSON.stringify(runtime.drain_mailbox_input_items(context)), /fixture provider failure/);
+    const agent = runtime.agent_control.state.list(context)[0];
+    assert.equal(agent.result.taskRunHandoff.status, 'failed');
+    await runtime.shutdown();
+});
 test('AILIS runtime exposes self_evolution as a conversation-driven agent tool', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-self-evolution-tool-'));
     const runtime = new AILISRuntime({

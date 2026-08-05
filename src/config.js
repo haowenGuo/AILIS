@@ -13,8 +13,9 @@ const DEFAULT_CAMERA_TARGET_Y = 1;
 const DEFAULT_DESKTOP_NATIVE_TTS_RATE = 0.96;
 const DEFAULT_DESKTOP_NATIVE_TTS_PITCH = 1.12;
 const DEFAULT_DESKTOP_NATIVE_TTS_VOLUME = 1;
-const DEFAULT_AUTO_CHAT_MIN_INTERVAL = 60000;
-const DEFAULT_AUTO_CHAT_MAX_INTERVAL = 120000;
+const DEFAULT_AUTO_CHAT_MIN_INTERVAL = 15 * 60 * 1000;
+const DEFAULT_AUTO_CHAT_MAX_INTERVAL = 45 * 60 * 1000;
+const DEFAULT_AUTO_CHAT_MODE = 'off';
 const DEFAULT_RENDER_LIGHT_YAW_DEG = 0;
 const DEFAULT_RENDER_KEY_LIGHT_SCALE = 1;
 const DEFAULT_RENDER_AMBIENT_FILL_SCALE = 1;
@@ -28,6 +29,7 @@ const DEFAULT_RENDER_SHADOW_QUALITY = 3;
 const DEFAULT_RENDER_OUTLINE_ENABLED = true;
 const DEFAULT_RENDER_ANTIALIAS_ENABLED = true;
 const RENDER_FPS_LIMIT_OPTIONS = [24, 30, 45, 60];
+const DEFAULT_MODEL_PATH = getDesktopResourceUrl('Resources/AILIS.vrm');
 
 function normalizeBackendBaseUrl(value, fallbackValue = DEFAULT_BACKEND_BASE_URL) {
     const normalizedValue = String(value || '').trim().replace(/\/+$/, '');
@@ -245,9 +247,18 @@ function applyDesktopSpeechSettings(preferences = {}) {
 }
 
 function applyRenderProfileSettings(preferences = {}) {
+    const characterRenderProfileId = preferences.characterAssets?.effective?.renderProfileId;
     CONFIG.RENDER_PROFILE_ID = normalizeRenderProfileId(
-        preferences.renderProfileId || CONFIG.RENDER_PROFILE_ID || DEFAULT_RENDER_PROFILE_ID
+        characterRenderProfileId ||
+            preferences.renderProfileId ||
+            CONFIG.RENDER_PROFILE_ID ||
+            DEFAULT_RENDER_PROFILE_ID
     );
+}
+
+function applyCharacterAssetSettings(preferences = {}) {
+    const effectiveCharacter = preferences.characterAssets?.effective || {};
+    CONFIG.MODEL_PATH = effectiveCharacter.modelUrl || DEFAULT_MODEL_PATH;
 }
 
 function applyRenderLookSettings(preferences = {}) {
@@ -306,31 +317,54 @@ function applyRenderQualitySettings(preferences = {}) {
     );
 }
 
-function applyAutoChatSettings(preferences = {}) {
-    const minimumIntervalMs = Math.round(normalizeNumber(
-        preferences.autoChatMinIntervalSec,
-        15,
-        1800,
-        CONFIG.AUTO_CHAT_MIN_INTERVAL / 1000,
-        0
-    ) * 1000);
-    const maximumIntervalMs = Math.round(normalizeNumber(
-        preferences.autoChatMaxIntervalSec,
-        minimumIntervalMs / 1000,
-        3600,
-        CONFIG.AUTO_CHAT_MAX_INTERVAL / 1000,
-        0
-    ) * 1000);
+function normalizeAutoChatMode(value, enabled = false) {
+    const mode = String(value || '').trim().toLowerCase();
+    if (['off', 'companion', 'cowork'].includes(mode)) {
+        return mode;
+    }
+    if (mode === 'autonomous') {
+        return 'off';
+    }
+    return normalizeDesktopBoolean(enabled, false) ? 'companion' : DEFAULT_AUTO_CHAT_MODE;
+}
 
-    CONFIG.AUTO_CHAT_ENABLED = false;
-    CONFIG.AUTO_CHAT_MIN_INTERVAL = minimumIntervalMs;
-    CONFIG.AUTO_CHAT_MAX_INTERVAL = Math.max(minimumIntervalMs, maximumIntervalMs);
+function getAutoChatModeSettings(mode) {
+    switch (normalizeAutoChatMode(mode)) {
+        case 'companion':
+            return {
+                enabled: true,
+                minIntervalMs: 20 * 1000,
+                maxIntervalMs: 20 * 1000
+            };
+        case 'cowork':
+            return {
+                enabled: true,
+                minIntervalMs: 30 * 60 * 1000,
+                maxIntervalMs: 60 * 60 * 1000
+            };
+        case 'off':
+        default:
+            return {
+                enabled: false,
+                minIntervalMs: DEFAULT_AUTO_CHAT_MIN_INTERVAL,
+                maxIntervalMs: DEFAULT_AUTO_CHAT_MAX_INTERVAL
+            };
+    }
+}
+
+function applyAutoChatSettings(preferences = {}) {
+    const mode = normalizeAutoChatMode(preferences.autoChatMode, preferences.autoChatEnabled);
+    const modeSettings = getAutoChatModeSettings(mode);
+    CONFIG.AUTO_CHAT_MODE = mode;
+    CONFIG.AUTO_CHAT_ENABLED = modeSettings.enabled;
+    CONFIG.AUTO_CHAT_MIN_INTERVAL = modeSettings.minIntervalMs;
+    CONFIG.AUTO_CHAT_MAX_INTERVAL = modeSettings.maxIntervalMs;
 }
 
 const runtimeSettings = getRuntimeSettings();
 
 export const CONFIG = {
-    MODEL_PATH: getDesktopResourceUrl('Resources/AILIS.vrm'),
+    MODEL_PATH: DEFAULT_MODEL_PATH,
     ANIMATION_FILES: getDesktopLoadableMotionFiles(),
     IDLE_ACTION_LIST: ['idle', 'idle1', 'idle2'],
     DANCE_ACTION_LIST: ['vrma17', 'vrma25'],
@@ -421,6 +455,7 @@ export const CONFIG = {
     DESKTOP_NATIVE_TTS_PITCH: DEFAULT_DESKTOP_NATIVE_TTS_PITCH,
     DESKTOP_NATIVE_TTS_VOLUME: DEFAULT_DESKTOP_NATIVE_TTS_VOLUME,
     AUTO_CHAT_ENABLED: false,
+    AUTO_CHAT_MODE: DEFAULT_AUTO_CHAT_MODE,
     AUTO_CHAT_MIN_INTERVAL: DEFAULT_AUTO_CHAT_MIN_INTERVAL,
     AUTO_CHAT_MAX_INTERVAL: DEFAULT_AUTO_CHAT_MAX_INTERVAL
 };
@@ -444,6 +479,7 @@ export function applyDesktopPreferencesToConfig(preferences = {}) {
     }
 
     applyCameraSettings(preferences);
+    applyCharacterAssetSettings(preferences);
     applyRenderProfileSettings(preferences);
     applyRenderQualitySettings(preferences);
     applyRenderLookSettings(preferences);

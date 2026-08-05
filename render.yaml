@@ -54,11 +54,11 @@ services:
       - key: EDU_QUESTION_BANK_CACHE_TTL_SECONDS
         value: "900"
       - key: LLM_API_BASE
-        value: https://ark.cn-beijing.volces.com/api/v3
+        value: https://api.deepseek.com
       - key: LLM_API_KEY
         sync: false
       - key: LLM_MODEL_NAME
-        value: doubao-seed-2-0-mini-260215
+        value: deepseek-chat
       - key: ELEVENLABS_API_BASE
         value: https://api.elevenlabs.io
       - key: ELEVENLABS_API_KEY

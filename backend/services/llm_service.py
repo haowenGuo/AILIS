@@ -147,4 +147,4 @@ class LLMService:
                     yield chunk.content
         except Exception as e:
             print(f"[LLM Stream Error] 调用失败: {e}")
-            yield "ε=(´ο｀*)))，我的大脑暂时短路了~"
+            raise

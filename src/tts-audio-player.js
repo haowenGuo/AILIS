@@ -1,6 +1,59 @@
 import { CONFIG } from './config.js';
 
 const TWO_PI = Math.PI * 2;
+const PCM_CAPTURE_PROCESSOR = 'ailis-pcm-capture';
+const PCM_CAPTURE_FRAME_SAMPLES = 2048;
+
+const PCM_CAPTURE_WORKLET_SOURCE = `
+class AilisPcmCaptureProcessor extends AudioWorkletProcessor {
+    constructor(options) {
+        super();
+        this.frameSize = Math.max(
+            512,
+            Number(options.processorOptions?.frameSize || ${PCM_CAPTURE_FRAME_SAMPLES})
+        );
+        this.frame = new Int16Array(this.frameSize);
+        this.offset = 0;
+    }
+
+    process(inputs, outputs) {
+        const inputChannels = inputs[0] || [];
+        const outputChannels = outputs[0] || [];
+        for (let channelIndex = 0; channelIndex < outputChannels.length; channelIndex += 1) {
+            const output = outputChannels[channelIndex];
+            const input = inputChannels[Math.min(channelIndex, inputChannels.length - 1)];
+            if (input) {
+                output.set(input);
+            } else {
+                output.fill(0);
+            }
+        }
+
+        const mono = inputChannels[0];
+        if (!mono) {
+            return true;
+        }
+        for (let index = 0; index < mono.length; index += 1) {
+            const sample = Math.max(-1, Math.min(1, mono[index]));
+            this.frame[this.offset] = sample < 0
+                ? Math.round(sample * 32768)
+                : Math.round(sample * 32767);
+            this.offset += 1;
+            if (this.offset >= this.frame.length) {
+                const completed = this.frame;
+                this.port.postMessage({
+                    samples: completed,
+                    sampleRate
+                }, [completed.buffer]);
+                this.frame = new Int16Array(this.frameSize);
+                this.offset = 0;
+            }
+        }
+        return true;
+    }
+}
+registerProcessor('${PCM_CAPTURE_PROCESSOR}', AilisPcmCaptureProcessor);
+`;
 
 
 function base64ToBlobUrl(base64Audio, mimeType) {
@@ -50,6 +103,7 @@ export class TTSAudioPlayer {
         this.mediaSourceNode = null;
         this.analyserNode = null;
         this.timeDomainData = null;
+        this.pcmCaptureNode = null;
 
         this.currentObjectUrl = null;
         this.syncRafId = 0;
@@ -233,8 +287,57 @@ export class TTSAudioPlayer {
         this.analyserNode.smoothingTimeConstant = CONFIG.AUDIO_LIP_SYNC_ANALYSER_SMOOTHING;
         this.timeDomainData = new Uint8Array(this.analyserNode.fftSize);
 
-        this.mediaSourceNode.connect(this.analyserNode);
+        this.pcmCaptureNode = await this.createPcmCaptureNode();
+        if (this.pcmCaptureNode) {
+            this.mediaSourceNode.connect(this.pcmCaptureNode);
+            this.pcmCaptureNode.connect(this.analyserNode);
+        } else {
+            this.mediaSourceNode.connect(this.analyserNode);
+        }
         this.analyserNode.connect(this.audioContext.destination);
+    }
+
+    async createPcmCaptureNode() {
+        if (!this.audioContext?.audioWorklet || typeof AudioWorkletNode === 'undefined') {
+            return null;
+        }
+        let moduleUrl = '';
+        try {
+            moduleUrl = URL.createObjectURL(new Blob(
+                [PCM_CAPTURE_WORKLET_SOURCE],
+                { type: 'text/javascript' }
+            ));
+            await this.audioContext.audioWorklet.addModule(moduleUrl);
+            const node = new AudioWorkletNode(
+                this.audioContext,
+                PCM_CAPTURE_PROCESSOR,
+                {
+                    numberOfInputs: 1,
+                    numberOfOutputs: 1,
+                    outputChannelCount: [2],
+                    processorOptions: {
+                        frameSize: PCM_CAPTURE_FRAME_SAMPLES
+                    }
+                }
+            );
+            node.port.onmessage = (event) => {
+                const samples = event.data?.samples;
+                if (samples instanceof Int16Array) {
+                    this.vrmSystem.pushAudioSamples?.(
+                        samples,
+                        Number(event.data?.sampleRate || this.audioContext.sampleRate)
+                    );
+                }
+            };
+            return node;
+        } catch (error) {
+            console.warn('⚠️ PCM 口型采样器不可用，将回退到音量口型：', error);
+            return null;
+        } finally {
+            if (moduleUrl) {
+                URL.revokeObjectURL(moduleUrl);
+            }
+        }
     }
 
     updateLipSyncFromAudio() {

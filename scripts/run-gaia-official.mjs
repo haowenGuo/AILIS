@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawn } from 'node:child_process';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -58,7 +58,8 @@ function parseArgs(argv = process.argv.slice(2)) {
         taskRetries: 1,
         downloadOnly: false,
         skipDownload: false,
-        localSubmit: null
+        localSubmit: null,
+        directToolExecutor: /^(1|true|yes|on)$/i.test(process.env.AILIS_GAIA_DIRECT_TOOL_EXECUTOR || '')
     };
     for (let index = 0; index < argv.length; index += 1) {
         const token = argv[index];
@@ -85,6 +86,8 @@ function parseArgs(argv = process.argv.slice(2)) {
         else if (token === '--skip-download') args.skipDownload = true;
         else if (token === '--local-submit') args.localSubmit = true;
         else if (token === '--no-local-submit') args.localSubmit = false;
+        else if (token === '--direct-tool-executor') args.directToolExecutor = true;
+        else if (token === '--no-direct-tool-executor') args.directToolExecutor = false;
     }
     if (!['validation', 'test'].includes(args.split)) {
         throw new Error(`Unsupported --split ${args.split}; expected validation or test.`);
@@ -515,7 +518,7 @@ async function runLiteRunner(args, baseUrl) {
         '--benchmark-name', args.benchmarkName,
         '--agent-code', `AILIS local AILIS Gateway ${args.benchmarkName} runner`
     ];
-    if (/^(1|true|yes|on)$/i.test(process.env.AILIS_GAIA_DIRECT_TOOL_EXECUTOR || '')) {
+    if (args.directToolExecutor) {
         liteArgs.push('--direct-tool-executor');
     }
     if (args.localSubmit) {
@@ -531,7 +534,41 @@ async function runLiteRunner(args, baseUrl) {
     });
 }
 
-async function writeDatasetManifest(args, questions, goldByTaskId) {
+async function writeDesktopRealSourceArtifacts(args, questions, goldByTaskId) {
+    const sourceJsonlPath = path.join(args.outputDir, `${args.runId}.desktop-source.jsonl`);
+    const sourceSummaryPath = path.join(args.outputDir, `${args.runId}.desktop-source.summary.json`);
+    const rows = questions.map((question, index) => ({
+        record_type: 'final',
+        index,
+        task_id: question.task_id,
+        question: question.question,
+        level: question.level,
+        file_name: question.file_name || '',
+        file_path: question.file_path || '',
+        final_answer: goldByTaskId.get(question.task_id) || ''
+    }));
+    const summary = {
+        benchmark: args.benchmarkName,
+        runId: args.runId,
+        sourceOnly: true,
+        questionCount: questions.length,
+        score: {
+            per_task: rows.map((row) => ({
+                task_id: row.task_id,
+                final_answer: row.final_answer
+            }))
+        }
+    };
+    await fs.writeFile(
+        sourceJsonlPath,
+        rows.map((row) => JSON.stringify(row)).join('\n') + (rows.length ? '\n' : ''),
+        'utf8'
+    );
+    await fs.writeFile(sourceSummaryPath, `${JSON.stringify(summary, null, 2)}\n`, 'utf8');
+    return { sourceJsonlPath, sourceSummaryPath };
+}
+
+async function writeDatasetManifest(args, questions, goldByTaskId, sourceArtifacts = {}) {
     const manifest = {
         benchmark: args.benchmarkName,
         dataset: DATASET_REPO,
@@ -540,6 +577,8 @@ async function writeDatasetManifest(args, questions, goldByTaskId) {
         questionCount: questions.length,
         questionsWithGold: [...goldByTaskId.keys()].length,
         stagedFilesDir: args.stageFilesDir,
+        sourceJsonlPath: sourceArtifacts.sourceJsonlPath || '',
+        sourceSummaryPath: sourceArtifacts.sourceSummaryPath || '',
         outputDir: args.outputDir,
         runId: args.runId
     };
@@ -554,7 +593,13 @@ async function main() {
     await fs.mkdir(args.outputDir, { recursive: true });
     const rows = await loadOfficialRows(args);
     const { questions, goldByTaskId, fileByName } = await stageQuestions(args, rows);
-    const manifestPath = await writeDatasetManifest(args, questions, goldByTaskId);
+    const sourceArtifacts = await writeDesktopRealSourceArtifacts(args, questions, goldByTaskId);
+    const manifestPath = await writeDatasetManifest(
+        args,
+        questions,
+        goldByTaskId,
+        sourceArtifacts
+    );
     console.log(JSON.stringify({
         status: 'dataset_ready',
         benchmark: args.benchmarkName,
@@ -563,6 +608,7 @@ async function main() {
         questions: questions.length,
         questionsWithGold: goldByTaskId.size,
         attachments: fileByName.size,
+        ...sourceArtifacts,
         manifestPath
     }, null, 2));
     if (args.downloadOnly) {
@@ -576,7 +622,13 @@ async function main() {
     }
 }
 
-main().catch((error) => {
-    console.error(error?.stack || error?.message || String(error));
-    process.exitCode = 1;
-});
+export {
+    writeDesktopRealSourceArtifacts
+};
+
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+    main().catch((error) => {
+        console.error(error?.stack || error?.message || String(error));
+        process.exitCode = 1;
+    });
+}

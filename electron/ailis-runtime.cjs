@@ -20,11 +20,19 @@ const {
     compactJsonForModel,
     compactToolResultForModel
 } = require('./ailis-runtime-budget.cjs');
+const { collectStructuredToolActionKeys } = require('./ailis-tool-result.cjs');
+const {
+    RolloutItem
+} = require('./ailis-prompt-model.cjs');
+const {
+    AgentControl,
+    InputQueue
+} = require('./ailis-agent-control.cjs');
 
 const DEFAULT_MAX_RESULT_TEXT_CHARS = 6000;
 const DEFAULT_MAX_TRANSCRIPT_ITEMS = 500;
-const DEFAULT_SUBAGENT_WAIT_TIMEOUT_MS = 30000;
 const DEFAULT_SUBAGENT_RUN_TIMEOUT_MS = 15 * 60 * 1000;
+const TASK_AGENT_MAX_MODEL_ROUNDS = 9;
 
 const FILE_MUTATING_TOOLS = new Set(['write', 'edit', 'apply_patch']);
 const FILE_READONLY_TOOLS = new Set(['read', 'web_fetch']);
@@ -196,6 +204,72 @@ function summarize(value, maxChars = 800) {
     return text.length > maxChars ? `${text.slice(0, maxChars - 3)}...` : text;
 }
 
+function buildSubagentErrorHandoff({ subagent = {}, status = 'failed', error = '', durationMs = 0 } = {}) {
+    const normalizedStatus = normalizeString(status, 'failed');
+    const task = normalizeString(subagent.task);
+    const reason = normalizeString(error, normalizedStatus);
+    const statusText = normalizedStatus === 'timeout'
+        ? 'TaskAgent 执行超时，运行时已经停止等待。'
+        : normalizedStatus === 'cancelled'
+            ? 'TaskAgent 已被取消。'
+            : 'TaskAgent 执行失败。';
+    const userVisibleSummary = [
+        statusText,
+        reason ? `失败原因：${summarize(reason, 360)}` : '',
+        task ? `原任务：${summarize(task, 220)}` : '',
+        '完整事件链路已保存在 Agent Lab，可以从这个子任务记录继续排查。'
+    ].filter(Boolean).join('\n');
+    return {
+        version: 1,
+        status: normalizedStatus,
+        ok: false,
+        runId: subagent.childRunId || '',
+        sessionId: subagent.childSessionId || '',
+        task,
+        finalAnswer: '',
+        partialAnswer: '',
+        userVisibleSummary,
+        failureAnalysis: {
+            reason,
+            bottleneck: reason,
+            unresolvedQuestions: [],
+            latestFailedStep: null,
+            likelyCause: normalizedStatus === 'timeout'
+                ? '子任务超过运行时等待时间。'
+                : '子任务执行器抛出错误或被取消。',
+            retryable: normalizedStatus !== 'cancelled'
+        },
+        executionTrace: {
+            stepsUsed: 0,
+            maxSteps: 0,
+            elapsedMs: Number(durationMs) || 0,
+            toolCalls: 0,
+            successfulToolCount: 0,
+            failedToolCount: 0,
+            successfulTools: [],
+            failedTools: []
+        },
+        collectedData: [],
+        keyEvents: [],
+        nextStep: {
+            recommendation: normalizedStatus === 'timeout'
+                ? '提高任务预算或先缩小任务范围后继续。'
+                : '查看 Agent Lab 中的子任务事件，定位失败前最后一个动作。',
+            resumeFrom: 0,
+            suggestedTool: '',
+            needsUserInput: false
+        },
+        resume: {
+            runId: subagent.childRunId || '',
+            sessionId: subagent.childSessionId || '',
+            lastStepIndex: 0,
+            contextManagerCheckpoint: null,
+            checkpointAvailable: false
+        },
+        traceRef: subagent.childRunId || ''
+    };
+}
+
 function isSafeTokenMetricKey(key = '') {
     return /^(prompt|completion|input|output|total|reasoning|cached|candidates)Tokens$/i.test(key) ||
         /^(prompt|completion|input|output|total|reasoning|cached)_tokens$/i.test(key) ||
@@ -230,52 +304,23 @@ function cloneJson(value) {
     }
 }
 
-function isAbortError(error) {
-    return error?.name === 'AbortError' || /aborted|cancelled|canceled/i.test(error?.message || '');
-}
-
-function raceWithAbort(promise, signal) {
-    if (!signal) {
-        return promise;
+function buildModelVisibleTruncationNotice({
+    filePath = '',
+    originalTextChars = 0,
+    visibleChars = 0,
+    maxTextChars = DEFAULT_MAX_RESULT_TEXT_CHARS
+} = {}) {
+    const normalizedPath = normalizeString(filePath);
+    const omittedApproxTokens = Math.max(1, Math.ceil(Math.max(0, Number(originalTextChars) - Number(visibleChars || maxTextChars)) / 4));
+    const lines = [
+        'MODEL_VISIBLE_CONTENT_TRUNCATED:',
+        `<truncated omitted_approx_tokens="${omittedApproxTokens}" />`,
+        `originalTextChars=${originalTextChars || 'unknown'}; visibleTextChars<=${visibleChars || maxTextChars}; truncationScope=model_visible_tool_result_text;`
+    ];
+    if (normalizedPath) {
+        lines.push(`sourcePath=${normalizedPath}`);
     }
-    if (signal.aborted) {
-        const error = new Error('subagent run aborted');
-        error.name = 'AbortError';
-        return Promise.reject(error);
-    }
-    return new Promise((resolve, reject) => {
-        const onAbort = () => {
-            const error = new Error('subagent run aborted');
-            error.name = 'AbortError';
-            reject(error);
-        };
-        signal.addEventListener('abort', onAbort, { once: true });
-        promise.then(
-            (value) => {
-                signal.removeEventListener('abort', onAbort);
-                resolve(value);
-            },
-            (error) => {
-                signal.removeEventListener('abort', onAbort);
-                reject(error);
-            }
-        );
-    });
-}
-
-function withTimeoutPromise(promise, timeoutMs, timeoutMessage) {
-    const bounded = Math.max(1000, Math.min(Number(timeoutMs) || DEFAULT_SUBAGENT_WAIT_TIMEOUT_MS, 24 * 60 * 60 * 1000));
-    let timer = null;
-    return Promise.race([
-        promise,
-        new Promise((_, reject) => {
-            timer = setTimeout(() => reject(new Error(timeoutMessage || `operation timed out after ${bounded}ms`)), bounded);
-        })
-    ]).finally(() => {
-        if (timer) {
-            clearTimeout(timer);
-        }
-    });
+    return `${lines.join('\n')}\n\n`;
 }
 
 function normalizeMcpContent(result) {
@@ -539,14 +584,22 @@ class AILISRuntime {
             rootDir: options.contextArtifactStoreDir || path.join(this.auditDir, 'context-artifacts'),
             emitGatewayEvent: (type, payload) => this.emitGatewayEvent(type, payload)
         });
-        this.subagentExecutor = typeof options.subagentExecutor === 'function' ? options.subagentExecutor : null;
+        this.rawMemoryLedger = options.rawMemoryLedger || null;
+        this.agentExecutor = typeof options.agentExecutor === 'function' ? options.agentExecutor : null;
         this.platformAdapter = createAILISPlatformAdapter(options.platformAdapter || options.platform || {});
         this.runs = new Map();
         this.planState = new Map();
         this.permissionGrants = new Map();
-        this.subagents = new Map();
-        this.subagentRuns = new Map();
-        this.subagentControllers = new Map();
+        this.input_queue = new InputQueue();
+        this.agent_control = new AgentControl({
+            execute_agent: this.agentExecutor,
+            input_queue: this.input_queue,
+            max_threads_per_session: options.agentMaxThreads || 1,
+            run_timeout_ms: options.agentRunTimeoutMs || DEFAULT_SUBAGENT_RUN_TIMEOUT_MS,
+            build_agent_context: (agent, args, context) => this.buildAgentContext(agent, args, context),
+            build_error_result: (agent, status, error, durationMs) => this.buildAgentErrorResult(agent, status, error, durationMs),
+            emit_agent_event: (agent, event) => this.appendAgentTranscriptEvent(agent, event)
+        });
         this.mcpManager = new AILISMcpManager({
             workspaceRoot: this.workspaceRoot,
             projectRoot: this.projectRoot,
@@ -708,7 +761,7 @@ class AILISRuntime {
             transcriptDir: this.transcriptDir,
             activeTranscriptRuns: this.runs.size,
             planStateCount: this.planState.size,
-            subagentCount: this.subagents.size,
+            agentCount: this.agent_control.count_agents(),
             platform: this.platformAdapter.getStatus(),
             mcpServerCount: this.mcpManager.getStatus().serverCount,
             mcp: this.mcpManager.getStatus(),
@@ -716,13 +769,13 @@ class AILISRuntime {
             capabilityManager: this.capabilityManager.getStatus(),
             selfDebugger: this.selfDebugger.getStatus(),
             selfEvolution: this.selfEvolutionRuntime?.getStatus?.() || null,
+            rawMemory: this.rawMemoryLedger?.getStatus?.() || null,
             runtimeTools: this.toolRuntimeRegistry.listDefinitions().map((tool) => tool.id),
             contextArtifacts: {
                 rootDir: this.contextArtifactStore.rootDir,
                 indexPath: this.contextArtifactStore.indexPath
             },
             toolRuntime: {
-                model: 'codex_like_tool_runtime_registry',
                 directToolCount: this.toolRuntimeRegistry.modelVisibleSpecs().length,
                 registeredToolCount: this.toolRuntimeRegistry.listDefinitions().length
             },
@@ -740,7 +793,7 @@ class AILISRuntime {
                 'permission_grant_store',
                 'tool_result_guard',
                 'tool_result_repair',
-                'subagent_child_runner',
+                'codex_agent_thread_tree',
                 'mcp_stdio_session_manager',
                 'mcp_http_session_manager',
                 'mcp_config_store',
@@ -767,12 +820,7 @@ class AILISRuntime {
     }
 
     async shutdown() {
-        for (const controller of this.subagentControllers.values()) {
-            try {
-                controller.abort();
-            } catch {}
-        }
-        this.subagentControllers.clear();
+        await this.agent_control.shutdown();
         await this.mcpManager.shutdown().catch(() => {});
     }
 
@@ -856,6 +904,15 @@ class AILISRuntime {
         };
         await fsp.mkdir(path.dirname(run.transcriptPath), { recursive: true });
         await fsp.appendFile(run.transcriptPath, `${JSON.stringify(transcriptItem)}\n`, 'utf8');
+        try {
+            this.rawMemoryLedger?.recordRuntimeItem?.(transcriptItem);
+        } catch (error) {
+            this.emitGatewayEvent('raw_memory.error', {
+                runId: id,
+                sessionId: transcriptItem.sessionId,
+                error: error?.message || String(error)
+            });
+        }
         this.emitGatewayEvent('runtime.item', {
             runId: id,
             sessionId: transcriptItem.sessionId,
@@ -864,6 +921,47 @@ class AILISRuntime {
             itemId: transcriptItem.id
         });
         return transcriptItem;
+    }
+
+    async appendContextCompaction(runId, {
+        sessionId = '',
+        compactedItem = {},
+        referenceContextItem = null,
+        contextManagerCheckpoint = null,
+        reason = ''
+    } = {}) {
+        const compacted = RolloutItem.compacted(compactedItem);
+        const written = [];
+        const compactionItem = await this.appendItem(runId, {
+            type: 'agent.context_compaction',
+            sessionId,
+            status: 'installed',
+            payload: {
+                reason,
+                rollout_item: compacted,
+                compacted_item: compacted.payload,
+                context_manager_checkpoint: contextManagerCheckpoint || null
+            }
+        });
+        if (compactionItem) {
+            written.push(compactionItem);
+        }
+        if (referenceContextItem) {
+            const turnContext = RolloutItem.turnContext(referenceContextItem);
+            const turnContextItem = await this.appendItem(runId, {
+                type: 'agent.turn_context',
+                sessionId,
+                status: 'captured',
+                payload: {
+                    rollout_item: turnContext,
+                    reference_context_item: turnContext.payload
+                }
+            });
+            if (turnContextItem) {
+                written.push(turnContextItem);
+            }
+        }
+        return written;
     }
 
     async completeRun(runId, result = {}) {
@@ -1052,14 +1150,42 @@ class AILISRuntime {
         if (!Array.isArray(guarded.content)) {
             guarded.content = [];
         }
+        let modelVisibleTruncation = null;
         guarded.content = guarded.content.map((part) => {
             if (!part || typeof part !== 'object') {
                 return { type: 'text', text: summarize(part, maxTextChars) };
             }
             const next = redactObject(part);
             if (typeof next.text === 'string' && next.text.length > maxTextChars) {
-                next.text = `${next.text.slice(0, maxTextChars - 3)}...`;
+                const originalTextChars = Number.isFinite(Number(next.originalTextChars))
+                    ? Number(next.originalTextChars)
+                    : next.text.length;
+                const notice = buildModelVisibleTruncationNotice({
+                    filePath: guarded.details?.path,
+                    originalTextChars,
+                    visibleChars: maxTextChars,
+                    maxTextChars
+                });
+                const sliceBudget = Math.max(128, maxTextChars - notice.length - 3);
+                next.text = `${notice}${next.text.slice(0, sliceBudget)}...`;
                 next.truncated = true;
+                next.modelVisibleTruncated = true;
+                modelVisibleTruncation = {
+                    status: 'model_visible_truncated',
+                    tool: toolId,
+                    callId,
+                    reason: 'model_budget_guard',
+                    maxTextChars,
+                    originalTextChars,
+                    visibleTextChars: Math.min(maxTextChars, next.text.length),
+                    filePath: normalizeString(guarded.details?.path),
+                    fullFileReadTruncated: Boolean(guarded.details?.truncated),
+                    semantics: {
+                        contentTruncated: true,
+                        detailsTruncatedMeansToolLevelTruncation: true,
+                        contentTruncatedMeansModelVisibleProjectionTruncation: true
+                    }
+                };
             }
             return next;
         });
@@ -1095,9 +1221,21 @@ class AILISRuntime {
             callId,
             maxTextChars
         };
+        if (modelVisibleTruncation) {
+            guarded.details.modelVisibleContent = modelVisibleTruncation;
+        }
+        const structuredToolActionKeys = collectStructuredToolActionKeys(guarded);
         return compactToolResultForModel(guarded, {
             maxTextChars,
-            maxStructuredStringChars: 1200
+            maxStructuredStringChars: 1200,
+            preserveGuidanceKeys: [
+                ...((
+                    guarded.isError === true ||
+                    guarded.details?.ok === false ||
+                    !['completed', 'success'].includes(normalizeString(guarded.details?.status).toLowerCase())
+                ) ? ['suggestedNext', 'suggested_next'] : []),
+                ...structuredToolActionKeys
+            ]
         });
     }
 
@@ -1130,13 +1268,12 @@ class AILISRuntime {
                     action: 'request_permissions'
                 };
             }
-            if (toolId === 'subagents') {
-                const subagentAction = normalizeAction(args.action, 'list');
+            if (['spawn_agent', 'followup_task', 'wait_agent', 'list_agents', 'close_agent'].includes(toolId)) {
                 return {
-                    class: 'subagent',
-                    mutates: ['spawn', 'create', 'send', 'close'].includes(subagentAction),
-                    requiresApprovalCapable: ['spawn', 'create', 'send', 'close'].includes(subagentAction),
-                    action: subagentAction
+                    class: 'agent_control',
+                    mutates: false,
+                    requiresApprovalCapable: false,
+                    action: toolId
                 };
             }
             if (toolId === 'tool_doctor') {
@@ -1526,26 +1663,26 @@ class AILISRuntime {
             explanation: state.explanation,
             plan: items
         });
+        const modelView = {
+            status: 'completed',
+            completion_scope: 'progress_recorded_only',
+            semantic_role: 'progress_ui_only',
+            produces_evidence: false,
+            task_advanced: false,
+            execution_effect: 'updated_user_visible_progress_checklist_only',
+            next_step_guidance: 'This did not inspect files, retrieve data, execute commands, compute answers, or produce task evidence. Continue with the real task tool when work remains.',
+            explanation: state.explanation,
+            plan: items
+        };
         return {
             content: [
                 {
                     type: 'text',
-                    text: JSON.stringify(
-                        {
-                            status: 'completed',
-                            explanation: state.explanation,
-                            plan: items
-                        },
-                        null,
-                        2
-                    )
+                    text: JSON.stringify(modelView, null, 2)
                 }
             ],
-            details: {
-                status: 'completed',
-                explanation: state.explanation,
-                plan: items
-            }
+            structuredContent: modelView,
+            details: modelView
         };
     }
 
@@ -1623,58 +1760,64 @@ class AILISRuntime {
         return await this.toolRuntimeRegistry.dispatch(toolId, args, context);
     }
 
-    publicSubagent(subagent = {}) {
-        return cloneJson(subagent);
+    drain_mailbox_input_items(context = {}) {
+        return this.agent_control.get_pending_input(context);
     }
 
-    appendSubagentLocalEvent(subagent, event = {}) {
-        const entry = {
-            id: randomUUID(),
-            ts: Date.now(),
-            iso: new Date().toISOString(),
-            type: normalizeString(event.type, 'subagent.event'),
-            status: normalizeString(event.status),
+    async appendAgentTranscriptEvent(agent = {}, event = {}) {
+        const payload = {
+            parentRunId: agent.runId,
+            parentSessionId: agent.sessionId,
+            agentId: agent.id,
+            agentPath: agent.agent_path,
+            childRunId: agent.childRunId,
+            childSessionId: agent.childSessionId,
+            task: agent.originalTask || agent.task,
             message: normalizeString(event.message),
-            payload: redactObject(event.payload || {})
+            ...(event.payload && typeof event.payload === 'object' ? event.payload : {})
         };
-        subagent.events = Array.isArray(subagent.events) ? subagent.events : [];
-        subagent.events.push(entry);
-        if (subagent.events.length > 200) {
-            subagent.events = subagent.events.slice(-200);
-        }
         this.emitGatewayEvent('subagent.event', {
-            subagentId: subagent.id,
-            childRunId: subagent.childRunId,
-            sessionId: subagent.childSessionId,
-            type: entry.type,
-            status: entry.status,
-            message: entry.message,
-            payload: entry.payload
+            runId: agent.runId,
+            parentRunId: agent.runId,
+            parentSessionId: agent.sessionId,
+            subagentId: agent.id,
+            childRunId: agent.childRunId,
+            sessionId: agent.childSessionId,
+            childSessionId: agent.childSessionId,
+            type: event.type,
+            status: normalizeString(event.status, agent.status),
+            message: normalizeString(event.message),
+            task: agent.originalTask || agent.task,
+            payload
         });
-        return entry;
-    }
-
-    async appendSubagentTranscriptEvent(subagent, event = {}) {
-        this.appendSubagentLocalEvent(subagent, event);
-        if (!subagent.runId) {
+        if (!agent.runId) {
             return null;
         }
-        return await this.appendItem(subagent.runId, {
-            type: normalizeString(event.type, 'subagent.event'),
-            sessionId: subagent.sessionId,
-            status: normalizeString(event.status, subagent.status),
-            payload: {
-                subagentId: subagent.id,
-                childRunId: subagent.childRunId,
-                childSessionId: subagent.childSessionId,
-                message: normalizeString(event.message),
-                ...(event.payload && typeof event.payload === 'object' ? event.payload : {})
-            }
+        return await this.appendItem(agent.runId, {
+            type: normalizeString(event.type, 'agent.event'),
+            sessionId: agent.sessionId,
+            status: normalizeString(event.status, agent.status),
+            payload
         });
     }
 
-    buildSubagentContext(subagent, args = {}, context = {}) {
-        const inherited = {
+    buildAgentContext(agent = {}, args = {}, context = {}) {
+        const parentAgentDepth = Math.max(0, Number(context.agentDepth || context.parentAgentDepth || 0) || 0);
+        const inheritanceMode = ['clean', 'recent', 'checkpoint'].includes(normalizeString(
+            args.inheritanceMode || agent.inheritanceMode,
+            'clean'
+        ).toLowerCase())
+            ? normalizeString(args.inheritanceMode || agent.inheritanceMode, 'clean').toLowerCase()
+            : 'clean';
+        const requestedMaxAgentSteps = Number(args.maxAgentSteps || context.maxAgentSteps || TASK_AGENT_MAX_MODEL_ROUNDS);
+        const maxAgentSteps = Math.max(
+            1,
+            Math.min(
+                Number.isFinite(requestedMaxAgentSteps) ? requestedMaxAgentSteps : TASK_AGENT_MAX_MODEL_ROUNDS,
+                TASK_AGENT_MAX_MODEL_ROUNDS
+            )
+        );
+        return {
             permissionProfile: context.permissionProfile || context.permissions || context.policy || context.sandbox,
             approvalPolicy: context.approvalPolicy || context.confirmationPolicy,
             toolPolicy: context.toolPolicy,
@@ -1684,379 +1827,68 @@ class AILISRuntime {
             visionPermissionPolicy: context.visionPermissionPolicy || context.visionPolicy,
             computerControlEnabled: context.computerControlEnabled,
             approved: context.approved === true,
-            autoConfirm: context.autoConfirm === true
-        };
-        return {
-            ...inherited,
+            autoConfirm: context.autoConfirm === true,
             ...(args.context && typeof args.context === 'object' ? args.context : {}),
-            parentRunId: subagent.runId,
-            parentSessionId: subagent.sessionId,
-            subagentId: subagent.id,
-            subagentLabel: subagent.label,
-            sessionId: subagent.childSessionId,
-            sessionKey: subagent.childSessionId,
+            parentRunId: agent.runId,
+            parentSessionId: agent.sessionId,
+            agentId: agent.id,
+            agentLabel: agent.label,
+            agentPath: agent.agent_path,
+            sessionId: agent.childSessionId,
+            sessionKey: agent.childSessionId,
             planner: normalizeString(args.planner || context.planner, 'llm'),
             agentLoop: normalizeString(args.agentLoop || context.agentLoop, 'llm'),
             agentMode: normalizeString(args.agentMode || context.agentMode, 'llm'),
-            maxAgentSteps: Number(args.maxAgentSteps || context.maxAgentSteps || 50)
+            contextMode: 'task_agent',
+            cleanContext: inheritanceMode === 'clean',
+            taskAgentInheritanceMode: inheritanceMode,
+            initialContextManagerCheckpoint: inheritanceMode === 'checkpoint'
+                ? args.contextManagerCheckpoint || null
+                : null,
+            recentMessages: inheritanceMode === 'recent' && Array.isArray(args.recentMessages)
+                ? args.recentMessages.slice(-Math.max(1, Math.min(Number(args.recentTurns || 4), 12)))
+                : [],
+            attachments: Array.isArray(context.attachments)
+                ? cloneJson(context.attachments)
+                : Array.isArray(context.fileAttachments)
+                    ? cloneJson(context.fileAttachments)
+                    : [],
+            fileAttachments: Array.isArray(context.fileAttachments)
+                ? cloneJson(context.fileAttachments)
+                : Array.isArray(context.attachments)
+                    ? cloneJson(context.attachments)
+                    : [],
+            parentUserGoal: normalizeString(
+                context.parentUserGoal ||
+                context.parent_user_goal ||
+                args.parentUserGoal ||
+                args.parent_user_goal
+            ),
+            parentAgentDepth,
+            agentDepth: parentAgentDepth + 1,
+            maxAgentSteps
         };
     }
 
-    async runDefaultSubagentExecutor({ subagent, onEvent, signal }) {
-        await onEvent({
-            type: 'subagent.runner.notice',
-            status: 'running',
-            message: 'No custom subagent executor was configured; using deterministic local runner.'
+    buildAgentErrorResult(agent = {}, status = 'failed', error = '', durationMs = 0) {
+        const taskRunHandoff = buildSubagentErrorHandoff({
+            subagent: {
+                task: agent.task,
+                childRunId: agent.childRunId,
+                childSessionId: agent.childSessionId
+            },
+            status,
+            error,
+            durationMs
         });
-        await raceWithAbort(Promise.resolve(), signal);
-        return {
-            ok: true,
-            status: 'completed',
-            displayText: `Subagent accepted task: ${subagent.task}`,
-            result: {
-                task: subagent.task
-            }
-        };
+        return redactObject({
+            ok: false,
+            status,
+            error,
+            displayText: taskRunHandoff.userVisibleSummary,
+            taskRunHandoff
+        });
     }
-
-    startSubagentRun(subagent, args = {}, context = {}) {
-        const controller = new AbortController();
-        this.subagentControllers.set(subagent.id, controller);
-        const runTimeoutMs = Math.max(
-            1000,
-            Math.min(Number(args.runTimeoutMs || args.timeoutMs || DEFAULT_SUBAGENT_RUN_TIMEOUT_MS), 24 * 60 * 60 * 1000)
-        );
-        const executor = this.subagentExecutor || ((payload) => this.runDefaultSubagentExecutor(payload));
-        const runPromise = (async () => {
-            subagent.status = 'running';
-            subagent.startedAt = Date.now();
-            await this.appendSubagentTranscriptEvent(subagent, {
-                type: 'subagent.started',
-                status: 'running',
-                message: subagent.task,
-                payload: this.publicSubagent(subagent)
-            });
-            try {
-                const result = await withTimeoutPromise(
-                    raceWithAbort(
-                        Promise.resolve(
-                            executor({
-                                subagent: this.publicSubagent(subagent),
-                                args: cloneJson(args),
-                                context: this.buildSubagentContext(subagent, args, context),
-                                signal: controller.signal,
-                                onEvent: async (event) => {
-                                    await this.appendSubagentTranscriptEvent(subagent, event);
-                                }
-                            })
-                        ),
-                        controller.signal
-                    ),
-                    runTimeoutMs,
-                    `subagent ${subagent.id} timed out after ${runTimeoutMs}ms`
-                );
-                subagent.status = normalizeString(result?.status, 'completed');
-                subagent.ok = result?.ok !== false && !['failed', 'error', 'cancelled', 'timeout'].includes(subagent.status);
-                subagent.finishedAt = Date.now();
-                subagent.durationMs = subagent.finishedAt - subagent.startedAt;
-                subagent.result = redactObject(result || {});
-                await this.appendSubagentTranscriptEvent(subagent, {
-                    type: 'subagent.completed',
-                    status: subagent.status,
-                    message: normalizeString(result?.displayText || result?.summary, 'subagent completed'),
-                    payload: {
-                        ok: subagent.ok,
-                        durationMs: subagent.durationMs,
-                        result: subagent.result
-                    }
-                });
-                return subagent.result;
-            } catch (error) {
-                subagent.status = isAbortError(error) ? 'cancelled' : /timed out/i.test(error?.message || '') ? 'timeout' : 'failed';
-                subagent.ok = false;
-                subagent.finishedAt = Date.now();
-                subagent.durationMs = subagent.startedAt ? subagent.finishedAt - subagent.startedAt : 0;
-                subagent.error = error?.message || String(error);
-                await this.appendSubagentTranscriptEvent(subagent, {
-                    type: 'subagent.completed',
-                    status: subagent.status,
-                    message: subagent.error,
-                    payload: {
-                        ok: false,
-                        durationMs: subagent.durationMs,
-                        error: subagent.error
-                    }
-                });
-                return {
-                    ok: false,
-                    status: subagent.status,
-                    error: subagent.error
-                };
-            } finally {
-                this.subagentControllers.delete(subagent.id);
-                this.subagentRuns.delete(subagent.id);
-            }
-        })();
-        this.subagentRuns.set(subagent.id, runPromise);
-        return runPromise;
-    }
-
-    async waitForSubagent(subagentId, timeoutMs = DEFAULT_SUBAGENT_WAIT_TIMEOUT_MS) {
-        const subagent = this.subagents.get(subagentId);
-        if (!subagent) {
-            return {
-                status: 'not_found',
-                subagent: null
-            };
-        }
-        const promise = this.subagentRuns.get(subagentId);
-        if (!promise || ['completed', 'failed', 'cancelled', 'timeout'].includes(subagent.status)) {
-            return {
-                status: subagent.status || 'completed',
-                subagent: this.publicSubagent(subagent)
-            };
-        }
-        try {
-            await withTimeoutPromise(promise, timeoutMs, `wait for subagent ${subagentId} timed out`);
-        } catch (error) {
-            if (/timed out/i.test(error?.message || '')) {
-                return {
-                    status: 'running',
-                    timedOut: true,
-                    subagent: this.publicSubagent(subagent)
-                };
-            }
-            throw error;
-        }
-        return {
-            status: subagent.status || 'completed',
-            subagent: this.publicSubagent(subagent)
-        };
-    }
-
-    async executeSubagentRelay(args = {}, context = {}) {
-        const action = normalizeAction(args.action, 'list');
-        const runId = normalizeString(context.runId || args.runId);
-        const sessionId = normalizeString(context.sessionId || context.sessionKey || args.sessionId, 'main');
-        if (action === 'list') {
-            const subagents = [...this.subagents.values()].map((subagent) => this.publicSubagent(subagent));
-            return {
-                content: [
-                    {
-                        type: 'text',
-                        text: JSON.stringify({ status: 'completed', subagents }, null, 2)
-                    }
-                ],
-                details: {
-                    status: 'completed',
-                    subagents
-                }
-            };
-        }
-        if (['spawn', 'create'].includes(action)) {
-            const subagentId = normalizeString(args.subagentId || args.id, `subagent-${randomUUID()}`);
-            const task = normalizeString(args.task || args.prompt || args.message);
-            const subagent = {
-                id: subagentId,
-                label: normalizeString(args.label || args.name, subagentId),
-                runId,
-                sessionId,
-                childRunId: normalizeString(args.childRunId, `child-${randomUUID()}`),
-                childSessionId: normalizeString(
-                    args.childSessionId || args.childSessionKey,
-                    `${sessionId}:subagent:${subagentId}`
-                ),
-                status: 'queued',
-                task,
-                createdAt: Date.now(),
-                events: []
-            };
-            this.subagents.set(subagentId, subagent);
-            await this.appendSubagentTranscriptEvent(subagent, {
-                type: 'subagent.spawned',
-                status: 'queued',
-                message: task,
-                payload: this.publicSubagent(subagent)
-            });
-            this.startSubagentRun(subagent, args, context);
-            if (args.wait === true) {
-                const waited = await this.waitForSubagent(subagentId, args.waitTimeoutMs || DEFAULT_SUBAGENT_WAIT_TIMEOUT_MS);
-                const response = {
-                    status: waited.status === 'completed' ? 'completed' : waited.status,
-                    subagent: waited.subagent
-                };
-                return {
-                    content: [
-                        {
-                            type: 'text',
-                            text: JSON.stringify(response, null, 2)
-                        }
-                    ],
-                    details: response,
-                    isError: !['completed', 'running'].includes(response.status)
-                };
-            }
-            const publicRecord = this.publicSubagent(subagent);
-            return {
-                content: [
-                    {
-                        type: 'text',
-                        text: JSON.stringify({ status: 'running', subagent: publicRecord }, null, 2)
-                    }
-                ],
-                details: {
-                    status: 'running',
-                    subagent: publicRecord
-                }
-            };
-        }
-        if (['status', 'info'].includes(action)) {
-            const subagent = this.subagents.get(normalizeString(args.subagentId || args.id));
-            return {
-                content: [
-                    {
-                        type: 'text',
-                        text: JSON.stringify(
-                            {
-                                status: subagent ? 'completed' : 'not_found',
-                                subagent: subagent ? this.publicSubagent(subagent) : null
-                            },
-                            null,
-                            2
-                        )
-                    }
-                ],
-                details: {
-                    status: subagent ? 'completed' : 'not_found',
-                    subagent: subagent ? this.publicSubagent(subagent) : null
-                },
-                isError: !subagent
-            };
-        }
-        if (action === 'wait') {
-            const subagentId = normalizeString(args.subagentId || args.id);
-            const waited = await this.waitForSubagent(subagentId, args.timeoutMs || args.waitTimeoutMs);
-            return {
-                content: [
-                    {
-                        type: 'text',
-                        text: JSON.stringify(waited, null, 2)
-                    }
-                ],
-                details: waited,
-                isError: waited.status === 'not_found'
-            };
-        }
-        if (action === 'log') {
-            const subagent = this.subagents.get(normalizeString(args.subagentId || args.id));
-            const limit = Math.max(1, Math.min(Number(args.limit || 50), 200));
-            const events = subagent ? (subagent.events || []).slice(-limit) : [];
-            return {
-                content: [
-                    {
-                        type: 'text',
-                        text: JSON.stringify({ status: subagent ? 'completed' : 'not_found', events }, null, 2)
-                    }
-                ],
-                details: {
-                    status: subagent ? 'completed' : 'not_found',
-                    events
-                },
-                isError: !subagent
-            };
-        }
-        if (['send', 'steer'].includes(action)) {
-            const subagent = this.subagents.get(normalizeString(args.subagentId || args.id));
-            if (subagent) {
-                await this.appendSubagentTranscriptEvent(subagent, {
-                    type: 'subagent.input',
-                    status: 'queued',
-                    message: normalizeString(args.message || args.input || args.text),
-                    payload: {
-                        action,
-                        message: normalizeString(args.message || args.input || args.text)
-                    }
-                });
-            }
-            return {
-                content: [
-                    {
-                        type: 'text',
-                        text: JSON.stringify(
-                            {
-                                status: subagent ? 'queued' : 'not_found',
-                                subagent: subagent ? this.publicSubagent(subagent) : null
-                            },
-                            null,
-                            2
-                        )
-                    }
-                ],
-                details: {
-                    status: subagent ? 'queued' : 'not_found',
-                    subagent: subagent ? this.publicSubagent(subagent) : null
-                },
-                isError: !subagent
-            };
-        }
-        if (['close', 'cancel', 'kill'].includes(action)) {
-            const subagentId = normalizeString(args.subagentId || args.id);
-            const subagent = this.subagents.get(subagentId);
-            if (subagent) {
-                const controller = this.subagentControllers.get(subagentId);
-                if (controller) {
-                    controller.abort();
-                }
-                subagent.status = ['completed', 'failed', 'cancelled', 'timeout'].includes(subagent.status)
-                    ? subagent.status
-                    : 'cancel_requested';
-                subagent.closedAt = Date.now();
-                await this.appendSubagentTranscriptEvent(subagent, {
-                    type: 'subagent.closed',
-                    status: subagent.status,
-                    message: normalizeString(args.reason, 'subagent close requested'),
-                    payload: {
-                        subagentId,
-                        reason: normalizeString(args.reason)
-                    }
-                });
-            }
-            return {
-                content: [
-                    {
-                        type: 'text',
-                        text: JSON.stringify(
-                            {
-                                status: subagent ? 'completed' : 'not_found',
-                                subagent: subagent ? this.publicSubagent(subagent) : null
-                            },
-                            null,
-                            2
-                        )
-                    }
-                ],
-                details: {
-                    status: subagent ? 'completed' : 'not_found',
-                    subagent: subagent ? this.publicSubagent(subagent) : null
-                },
-                isError: !subagent
-            };
-        }
-        return {
-            content: [
-                {
-                    type: 'text',
-                    text: JSON.stringify({ status: 'unsupported_action', action }, null, 2)
-                }
-            ],
-            isError: true,
-            details: {
-                status: 'unsupported_action',
-                action
-            }
-        };
-    }
-
     async executeMcpBridge(args = {}, context = {}) {
         const action = normalizeAction(args.action, 'list_servers');
         const runId = normalizeString(context.runId || args.runId);

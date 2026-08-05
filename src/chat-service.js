@@ -10,9 +10,15 @@ function normalizeConversationMode(preferences = {}) {
 
 export function createChatService(preferences = window.ailisDesktop?.preferences || {}) {
     const mode = normalizeConversationMode(preferences);
-    const service = mode === 'daily'
-        ? createAilisCompanionChatService()
-        : new AILISDesktopChatService();
-    service.conversationMode = mode;
+    const desktopAgentAvailable = Boolean(
+        window.ailisDesktop?.platform === 'electron' &&
+        window.ailisDesktop?.gateway?.isSupported &&
+        typeof window.ailisDesktop?.gateway?.runAgent === 'function'
+    );
+    const useDesktopAgent = mode === 'assistant' && desktopAgentAvailable;
+    const service = useDesktopAgent
+        ? new AILISDesktopChatService()
+        : createAilisCompanionChatService();
+    service.conversationMode = useDesktopAgent ? 'assistant' : 'daily';
     return service;
 }

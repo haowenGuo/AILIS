@@ -4,6 +4,10 @@ import {
     isMotionIntakeApproved,
     listMotionIntakeEntries
 } from './motion-intake-catalog.js';
+import {
+    CHARACTER_ACTION_INTENT_IDS,
+    getCharacterActionFallbackChain
+} from './action-catalog.js';
 
 const BASE_MOTION_DEFINITIONS = Object.freeze({
     idle: {
@@ -262,7 +266,7 @@ export const MOTION_DEFINITIONS = Object.freeze({
         .map((entry) => [entry.id, createCandidateMotionDefinition(entry)]))
 });
 
-export const GESTURE_MOTION_MAP = Object.freeze({
+const IMPLEMENTED_GESTURE_MOTION_MAP = Object.freeze({
     none: [],
     greeting: ['vroid_greeting', 'fumi_004_hello_1'],
     farewell: ['vroid_greeting'],
@@ -279,6 +283,13 @@ export const GESTURE_MOTION_MAP = Object.freeze({
     angry: [],
     dance: ['vrma17', 'vrma25']
 });
+
+export const GESTURE_MOTION_MAP = Object.freeze(Object.fromEntries(
+    CHARACTER_ACTION_INTENT_IDS.map((intentId) => [
+        intentId,
+        Object.freeze([...(IMPLEMENTED_GESTURE_MOTION_MAP[intentId] || [])])
+    ])
+));
 
 const TASK_STATE_TO_GESTURE = Object.freeze({
     idle: 'none',
@@ -359,7 +370,17 @@ export function getGestureIntentForSurface(surface = {}) {
 
 export function getMotionCandidates(surface = {}) {
     const gestureIntent = getGestureIntentForSurface(surface);
-    return GESTURE_MOTION_MAP[gestureIntent] || [];
+    const candidates = [];
+    const seen = new Set();
+    for (const intentId of getCharacterActionFallbackChain(gestureIntent)) {
+        for (const motionId of GESTURE_MOTION_MAP[intentId] || []) {
+            if (!seen.has(motionId)) {
+                seen.add(motionId);
+                candidates.push(motionId);
+            }
+        }
+    }
+    return candidates;
 }
 
 export function selectMotionForSurface(surface = {}, options = {}) {

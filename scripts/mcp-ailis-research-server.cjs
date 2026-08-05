@@ -1,11 +1,12 @@
 #!/usr/bin/env node
-const { spawn } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 const fs = require('node:fs/promises');
 const fsSync = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const readline = require('node:readline');
 const { callDesktopLlmProvider } = require('../electron/desktop-llm-provider.cjs');
+const { analyzeChessPosition } = require('./ailis-stockfish-engine.cjs');
 
 const SERVER_INFO = { name: 'ailis_research', version: '0.1.0' };
 const PROTOCOL_VERSION = '2025-06-18';
@@ -31,30 +32,130 @@ function optionIsTrue(value) {
     return value === true || /^(?:true|1|yes|on)$/i.test(normalizeString(value));
 }
 
+function optionIsFalse(value) {
+    return value === false || /^(?:false|0|no|off)$/i.test(normalizeString(value));
+}
+
+async function runBoundedParallel(items = [], concurrency = 1, worker = async () => null, options = {}) {
+    const list = Array.isArray(items) ? items : [];
+    const limit = clampNumber(concurrency, 1, 1, Math.max(1, list.length || 1));
+    const keyFn = typeof options.keyFn === 'function' ? options.keyFn : null;
+    const perKeyConcurrency = keyFn
+        ? clampNumber(options.perKeyConcurrency, 1, 1, limit)
+        : limit;
+    const activeByKey = new Map();
+    const started = new Array(list.length).fill(false);
+    const results = new Array(list.length);
+    let active = 0;
+    let completed = 0;
+    const keyForItem = (item, index) => {
+        if (!keyFn) return '';
+        return normalizeString(keyFn(item, index), `__item_${index}`);
+    };
+    const canStart = (index) => {
+        if (started[index]) return false;
+        if (!keyFn) return true;
+        const key = keyForItem(list[index], index);
+        return (activeByKey.get(key) || 0) < perKeyConcurrency;
+    };
+    const markActive = (index, delta) => {
+        if (!keyFn) return;
+        const key = keyForItem(list[index], index);
+        const next = Math.max(0, (activeByKey.get(key) || 0) + delta);
+        if (next) {
+            activeByKey.set(key, next);
+        } else {
+            activeByKey.delete(key);
+        }
+    };
+    return await new Promise((resolve) => {
+        const pump = () => {
+            while (active < limit) {
+                const index = list.findIndex((_item, itemIndex) => canStart(itemIndex));
+                if (index < 0) break;
+                started[index] = true;
+                active += 1;
+                markActive(index, 1);
+                Promise.resolve()
+                    .then(() => worker(list[index], index))
+                    .then((result) => {
+                        results[index] = result;
+                    })
+                    .catch((error) => {
+                        results[index] = {
+                            error,
+                            message: error?.message || String(error)
+                        };
+                    })
+                    .finally(() => {
+                        active -= 1;
+                        completed += 1;
+                        markActive(index, -1);
+                        if (completed >= list.length) {
+                            resolve(results);
+                        } else {
+                            pump();
+                        }
+                    });
+            }
+            if (list.length === 0) {
+                resolve(results);
+            }
+        };
+        pump();
+    });
+}
+
 function readDesktopLlmSettings() {
     const appData = process.env.APPDATA || path.join(process.env.USERPROFILE || '', 'AppData', 'Roaming');
     const statePath = path.join(appData, 'ailis', 'desktop-state.json');
-    if (!fsSync.existsSync(statePath)) {
-        return null;
+    let state = {};
+    if (fsSync.existsSync(statePath)) {
+        try {
+            state = JSON.parse(fsSync.readFileSync(statePath, 'utf8'));
+        } catch {
+            state = {};
+        }
     }
-    const state = JSON.parse(fsSync.readFileSync(statePath, 'utf8'));
     const preferences = state.preferences || {};
     const apiKey = normalizeString(
+        process.env.AILIS_TOOL_LLM_API_KEY ||
         preferences.llmApiKey ||
         process.env.DOUBAO_API_KEY ||
         process.env.ARK_API_KEY ||
         process.env.VOLCENGINE_API_KEY ||
         process.env.OPENAI_COMPATIBLE_API_KEY
     );
+    const provider = normalizeString(
+        process.env.AILIS_TOOL_LLM_PROVIDER ||
+        process.env.AILIS_AGENT_LLM_PROVIDER ||
+        preferences.llmProvider,
+        'openai-compatible'
+    );
     const settings = {
-        provider: normalizeString(preferences.llmProvider, 'openai-compatible'),
-        baseUrl: normalizeString(preferences.llmBaseUrl, 'https://ark.cn-beijing.volces.com/api/v3'),
-        model: normalizeString(preferences.llmModel, 'doubao-seed-2-0-mini-260215'),
+        provider,
+        baseUrl: normalizeString(
+            process.env.AILIS_TOOL_LLM_BASE_URL ||
+            process.env.AILIS_AGENT_LLM_BASE_URL ||
+            preferences.llmBaseUrl,
+            'https://ark.cn-beijing.volces.com/api/v3'
+        ),
+        model: normalizeString(
+            process.env.AILIS_TOOL_LLM_MODEL ||
+            process.env.AILIS_AGENT_LLM_MODEL ||
+            preferences.llmModel,
+            'doubao-seed-2-0-mini-260215'
+        ),
         apiKey,
+        reasoningEffort: normalizeString(
+            process.env.AILIS_TOOL_LLM_REASONING_EFFORT ||
+            process.env.AILIS_CODEX_REASONING_EFFORT
+        ),
         temperature: 0,
         timeoutMs: 120000
     };
-    return settings.baseUrl && settings.model && settings.apiKey ? settings : null;
+    const keylessProvider = ['codex-model-bridge', 'ollama', 'vllm'].includes(provider.toLowerCase());
+    return settings.baseUrl && settings.model && (keylessProvider || settings.apiKey) ? settings : null;
 }
 
 function imageMimeType(filePath) {
@@ -517,17 +618,410 @@ function extractHtmlDefinitionRelations(html = '', limit = 24) {
     return { keyValues, triples };
 }
 
-function extractTableCells(rowHtml = '') {
-    const cells = [];
-    const pattern = /<t[hd]\b[^>]*>([\s\S]*?)<\/t[hd]>/gi;
-    let match;
-    while ((match = pattern.exec(rowHtml)) && cells.length < 16) {
-        cells.push(truncateRelationText(stripHtml(match[1]), 240));
-    }
-    return cells;
+function parseTableSpan(attributes = '', name = 'colspan') {
+    const match = String(attributes || '').match(new RegExp(`\\b${name}\\s*=\\s*(?:"(\\d+)"|'(\\d+)'|(\\d+))`, 'i'));
+    const parsed = Number(match?.[1] || match?.[2] || match?.[3] || 1);
+    return Number.isFinite(parsed) ? Math.max(1, Math.min(96, parsed)) : 1;
 }
 
-function extractHtmlTableRelations(html = '', limit = 6) {
+function extractHtmlTableMatrix(tableHtml = '', { maxRows = 200, maxColumns = 96 } = {}) {
+    const rowMatches = Array.from(String(tableHtml || '').matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/gi));
+    const carry = [];
+    const rows = [];
+    const headerMasks = [];
+    for (const rowMatch of rowMatches.slice(0, maxRows)) {
+        const row = Array(maxColumns);
+        const headerMask = Array(maxColumns).fill(false);
+        for (let index = 0; index < carry.length && index < maxColumns; index += 1) {
+            const span = carry[index];
+            if (!span || span.remaining < 1) {
+                continue;
+            }
+            row[index] = span.value;
+            headerMask[index] = span.header === true;
+            span.remaining -= 1;
+        }
+        const cellPattern = /<t([hd])\b([^>]*)>([\s\S]*?)<\/t\1>/gi;
+        let cellMatch;
+        let cursor = 0;
+        while ((cellMatch = cellPattern.exec(rowMatch[1]))) {
+            while (cursor < maxColumns && row[cursor] !== undefined) {
+                cursor += 1;
+            }
+            if (cursor >= maxColumns) {
+                break;
+            }
+            const attributes = cellMatch[2] || '';
+            const value = truncateRelationText(stripHtml(cellMatch[3]), 240);
+            const colspan = parseTableSpan(attributes, 'colspan');
+            const rowspan = parseTableSpan(attributes, 'rowspan');
+            let placed = 0;
+            while (placed < colspan && cursor < maxColumns) {
+                while (cursor < maxColumns && row[cursor] !== undefined) {
+                    cursor += 1;
+                }
+                if (cursor >= maxColumns) {
+                    break;
+                }
+                row[cursor] = value;
+                headerMask[cursor] = cellMatch[1].toLowerCase() === 'h';
+                if (rowspan > 1) {
+                    carry[cursor] = {
+                        value,
+                        header: headerMask[cursor],
+                        remaining: rowspan - 1
+                    };
+                }
+                cursor += 1;
+                placed += 1;
+            }
+        }
+        let width = row.length;
+        while (width > 0 && row[width - 1] === undefined) {
+            width -= 1;
+        }
+        const cells = row.slice(0, width).map((value) => normalizeString(value));
+        if (cells.some(Boolean)) {
+            rows.push(cells);
+            headerMasks.push(headerMask.slice(0, width));
+        }
+    }
+    return {
+        rows,
+        headerMasks,
+        sourceRowCount: rowMatches.length,
+        rowsComplete: rowMatches.length <= maxRows
+    };
+}
+
+function tableRowLooksNumeric(row = []) {
+    const values = row.slice(1).map((value) => normalizeString(value)).filter(Boolean);
+    if (!values.length) {
+        return false;
+    }
+    const numeric = values.filter((value) =>
+        /^(?:[-–—]|n\/a|[<>~≈]?\s*[+-]?(?:\d[\d,.\s]*|\.\d+)(?:\s*%|\s*[A-Za-z]+)?)$/i.test(value)
+    ).length;
+    return numeric >= 1 && numeric / values.length >= 0.2;
+}
+
+function inferTableHeaderRowCount(rows = [], headerMasks = []) {
+    if (!rows.length) {
+        return 0;
+    }
+    const firstNumericRow = rows.slice(0, 8).findIndex((row) => tableRowLooksNumeric(row));
+    if (firstNumericRow > 0) {
+        return firstNumericRow;
+    }
+    let headerRows = 0;
+    for (let index = 0; index < Math.min(rows.length, 4); index += 1) {
+        if ((headerMasks[index] || []).some(Boolean)) {
+            headerRows += 1;
+        } else {
+            break;
+        }
+    }
+    return headerRows;
+}
+
+function mergeTableHeaderRows(headerRows = [], width = 0) {
+    const merged = [];
+    const normalizedRows = headerRows.map((row) => {
+        const sourceValues = row.map((value) => normalizeString(value));
+        let values;
+        if (sourceValues.length >= 2 && sourceValues.length < width) {
+            const identity = sourceValues[0];
+            const parentGroups = sourceValues.slice(1);
+            const childSlots = width - 1;
+            const baseSpan = Math.floor(childSlots / parentGroups.length);
+            let remainder = childSlots - (baseSpan * parentGroups.length);
+            values = [identity];
+            for (let index = 0; index < parentGroups.length; index += 1) {
+                const groupsRemaining = parentGroups.length - index;
+                const span = baseSpan + (remainder >= groupsRemaining ? 1 : 0);
+                remainder -= Math.max(0, span - baseSpan);
+                for (let offset = 0; offset < Math.max(1, span); offset += 1) {
+                    values.push(parentGroups[index]);
+                }
+            }
+            values = values.slice(0, width);
+        } else {
+            values = Array.from({ length: width }, (_, index) => sourceValues[index] || '');
+        }
+        const nonEmpty = values.filter(Boolean).length;
+        if (nonEmpty < 2 || nonEmpty >= width * 0.8) {
+            return values;
+        }
+        let parent = '';
+        return values.map((value, index) => {
+            if (value) {
+                parent = value;
+                return value;
+            }
+            return index === 0 ? '' : parent;
+        });
+    });
+    for (let column = 0; column < width; column += 1) {
+        const parts = [];
+        for (const row of normalizedRows) {
+            const value = normalizeString(row[column]);
+            if (value && !parts.some((part) => part.toLowerCase() === value.toLowerCase())) {
+                parts.push(value);
+            }
+        }
+        merged.push(parts.join(' / ') || `column_${column + 1}`);
+    }
+    return merged;
+}
+
+function tableQueryTokens(query = '') {
+    return Array.from(new Set(
+        normalizeString(query)
+            .toLowerCase()
+            .split(/[^\p{L}\p{N}]+/u)
+            .filter((token) => token.length >= 3)
+    ));
+}
+
+function tableSemanticColumnScore(header = '', query = '') {
+    const normalizedHeader = normalizeString(header).toLowerCase();
+    const normalizedQuery = normalizeString(query).toLowerCase();
+    const concepts = [
+        { header: /\bbirth|birthplace|born\b/, query: /\bbirth|birthplace|born\b/, score: 70 },
+        { header: /\bdeath|died|deceased\b/, query: /\bdeath|died|deceased\b/, score: 70 },
+        { header: /\benrollment|enrolled|recruitment\b/, query: /\benrollment|enrolled|recruitment\b/, score: 65 },
+        { header: /\bauthor|writer|creator\b/, query: /\bauthor|writer|wrote|written|creator\b/, score: 55 },
+        { header: /\bdate|year|time\b/, query: /\bdate|year|when|time\b/, score: 35 },
+        { header: /place|\blocation|city|country|state\b/, query: /\bplace|location|where|city|cities|country|state\b/, score: 25 }
+    ];
+    return concepts.reduce((score, concept) => (
+        concept.header.test(normalizedHeader) && concept.query.test(normalizedQuery)
+            ? score + concept.score
+            : score
+    ), 0);
+}
+
+function tableMetricColumnScore(header = '', index = 0, width = 1, query = '') {
+    const normalizedHeader = normalizeString(header).toLowerCase();
+    const normalizedQuery = normalizeString(query).toLowerCase();
+    const extremaOrCount = /\b(?:least|most|fewest|highest|lowest|minimum|maximum|min|max|number|count|total|how many)\b/i.test(normalizedQuery);
+    let score = tableSemanticColumnScore(normalizedHeader, normalizedQuery);
+    for (const token of tableQueryTokens(query)) {
+        if (normalizedHeader.includes(token)) {
+            score += token.length >= 6 ? 18 : 10;
+        }
+    }
+    if (extremaOrCount) {
+        if (/\btotal\b/i.test(normalizedHeader)) {
+            score += 90;
+        }
+        if (/(?:^| \/ )all$/i.test(normalizedHeader)) {
+            score += 80;
+        }
+        if (/\b(?:count|number|participants?|athletes?)\b/i.test(normalizedHeader)) {
+            score += 55;
+        }
+    }
+    if (/\b(?:women|female)\b/i.test(normalizedQuery) && /\b(?:w|women|female)\b/i.test(normalizedHeader)) {
+        score += 45;
+    }
+    if (/\b(?:men|male)\b/i.test(normalizedQuery) && /\b(?:m|men|male)\b/i.test(normalizedHeader)) {
+        score += 45;
+    }
+    return score + (index / Math.max(1, width));
+}
+
+function buildQueryAwareTableProjection({
+    caption = '',
+    headers = [],
+    rows = [],
+    rowCount = rows.length,
+    rowsComplete = true
+} = {}, query = '') {
+    const width = Math.max(headers.length, ...rows.map((row) => row.length), 0);
+    if (width < 2 || rows.length < 2) {
+        return null;
+    }
+    const normalizedHeaders = Array.from(
+        { length: width },
+        (_, index) => normalizeString(headers[index]) || `column_${index + 1}`
+    );
+    const identityTerms = /\b(?:country|nation|team|name|code|entity|participant|athlete|title|item)\b/i;
+    const identityIndex = normalizedHeaders.findIndex((header, index) =>
+        index < Math.min(3, width) && identityTerms.test(header)
+    );
+    const entityColumn = identityIndex >= 0 ? identityIndex : 0;
+    const rankedMetrics = normalizedHeaders
+        .map((header, index) => ({
+            index,
+            score: index === entityColumn ? Number.NEGATIVE_INFINITY : tableMetricColumnScore(header, index, width, query)
+        }))
+        .filter((entry) => entry.index !== entityColumn)
+        .sort((left, right) => right.score - left.score);
+    const bestMetric = rankedMetrics[0];
+    if (!bestMetric) {
+        return null;
+    }
+    const extremaOrCount = /\b(?:least|most|fewest|highest|lowest|minimum|maximum|min|max|number|count|total|how many)\b/i.test(normalizeString(query));
+    const queryRelevant = bestMetric.score >= 10 || (
+        extremaOrCount &&
+        /\b(?:total|all|count|number|participants?|athletes?)\b/i.test(normalizedHeaders[bestMetric.index])
+    );
+    const selectedIndexes = [entityColumn, bestMetric.index];
+    const entityRows = rows.filter((row) => normalizeString(row[entityColumn]));
+    const projectedRows = entityRows.slice(0, 120).map((row) =>
+        selectedIndexes.map((index) => normalizeString(row[index]))
+    );
+    const inferredEntityHeader = /^column_\d+$/i.test(normalizedHeaders[entityColumn])
+        ? /\bcountr(?:y|ies)\b/i.test(normalizeString(query))
+            ? 'country'
+            : /\bnation\b/i.test(normalizeString(query))
+            ? 'nation'
+            : /\bteam\b/i.test(normalizeString(query))
+            ? 'team'
+            : normalizedHeaders[entityColumn]
+        : normalizedHeaders[entityColumn];
+    return pruneEmptyDeep({
+        caption: caption || undefined,
+        columns: [inferredEntityHeader, normalizedHeaders[bestMetric.index]],
+        selectedColumnIndexes: selectedIndexes,
+        rowCount: entityRows.length,
+        rowsComplete: rowsComplete && projectedRows.length === entityRows.length,
+        queryRelevant,
+        rows: projectedRows
+    });
+}
+
+function buildTableRelation({
+    caption = '',
+    rows = [],
+    headerMasks = [],
+    sourceRowCount = rows.length,
+    rowsComplete = true
+} = {}, query = '') {
+    if (!rows.length) {
+        return null;
+    }
+    const headerRowCount = inferTableHeaderRowCount(rows, headerMasks);
+    const headerRows = rows.slice(0, headerRowCount);
+    const dataRows = rows.slice(headerRowCount);
+    const width = Math.max(...rows.map((row) => row.length), 0);
+    const headers = headerRows.length ? mergeTableHeaderRows(headerRows, width) : [];
+    const rowCount = Math.max(0, sourceRowCount - headerRowCount);
+    const projection = buildQueryAwareTableProjection({
+        caption,
+        headers,
+        rows: dataRows,
+        rowCount,
+        rowsComplete
+    }, query);
+    return pruneEmptyDeep({
+        caption: caption || undefined,
+        headers: headers.length ? headers : undefined,
+        headerRowCount: headerRowCount || undefined,
+        rowCount,
+        rowsComplete,
+        sampleRows: dataRows.slice(0, 8),
+        projection: projection || undefined,
+        dataRows
+    });
+}
+
+function splitMarkdownTableLine(line = '') {
+    const source = String(line || '').trim().replace(/^\|/, '').replace(/\|$/, '');
+    const cells = [];
+    let current = '';
+    let escaped = false;
+    for (const character of source) {
+        if (escaped) {
+            current += character;
+            escaped = false;
+        } else if (character === '\\') {
+            escaped = true;
+        } else if (character === '|') {
+            cells.push(normalizeString(current));
+            current = '';
+        } else {
+            current += character;
+        }
+    }
+    cells.push(normalizeString(current));
+    return cells.map((cell) => truncateRelationText(stripHtml(cell), 240));
+}
+
+function markdownTableDelimiter(line = '') {
+    const cells = splitMarkdownTableLine(line);
+    return cells.length >= 2 && cells.every((cell) => /^:?-{3,}:?$/.test(cell.replace(/\s+/g, '')));
+}
+
+function extractMarkdownTableRelations(markdown = '', query = '', limit = 6) {
+    const lines = String(markdown || '').split(/\r?\n/);
+    const tables = [];
+    for (let index = 1; index < lines.length && tables.length < limit; index += 1) {
+        if (!markdownTableDelimiter(lines[index]) || !lines[index - 1].includes('|')) {
+            continue;
+        }
+        const rows = [splitMarkdownTableLine(lines[index - 1])];
+        let cursor = index + 1;
+        while (cursor < lines.length && lines[cursor].includes('|') && rows.length < 200) {
+            rows.push(splitMarkdownTableLine(lines[cursor]));
+            cursor += 1;
+        }
+        const table = buildTableRelation({
+            rows,
+            headerMasks: [rows[0].map(() => true), ...rows.slice(1).map((row) => row.map(() => false))],
+            sourceRowCount: rows.length,
+            rowsComplete: cursor >= lines.length || !lines[cursor].includes('|')
+        }, query);
+        if (table) {
+            const { dataRows: _dataRows, ...publicTable } = table;
+            tables.push(publicTable);
+        }
+        index = Math.max(index, cursor - 1);
+    }
+    return { tables };
+}
+
+function formatTableProjections(tables = [], maxChars = 3600) {
+    const candidates = (Array.isArray(tables) ? tables : [])
+        .map((table) => table?.projection)
+        .filter((projection) => projection?.queryRelevant === true)
+        .sort((left, right) => Number(right.rowsComplete) - Number(left.rowsComplete));
+    if (!candidates.length) {
+        return '';
+    }
+    const lines = [
+        'Structured table projection (query-selected columns; source rows keep their original order):',
+        'candidate_set_complete=true when rows_complete=true; raw page pagination does not make this table projection partial.'
+    ];
+    for (const projection of candidates.slice(0, 2)) {
+        if (projection.caption) {
+            lines.push(`table=${projection.caption}`);
+        }
+        lines.push(`columns=${projection.columns.join(' | ')}`);
+        const rowMetadataIndex = lines.length;
+        lines.push('');
+        let displayedRows = 0;
+        for (const row of projection.rows || []) {
+            const rendered = row.join(' | ');
+            if (displayedRows > 0 && lines.join('\n').length + rendered.length + 1 > maxChars - 80) {
+                break;
+            }
+            lines.push(rendered);
+            displayedRows += 1;
+        }
+        const fullyDisplayed = projection.rowsComplete === true &&
+            displayedRows === projection.rowCount &&
+            displayedRows === (projection.rows || []).length;
+        lines[rowMetadataIndex] = `rows=${projection.rowCount}; rows_complete=${fullyDisplayed}`;
+        if (lines.join('\n').length >= maxChars) {
+            break;
+        }
+    }
+    return lines.join('\n').slice(0, maxChars);
+}
+
+function extractHtmlTableRelations(html = '', query = '', limit = 6) {
     const tables = [];
     const keyValues = [];
     const triples = [];
@@ -538,21 +1032,15 @@ function extractHtmlTableRelations(html = '', limit = 6) {
         const tableHtml = tableMatch[1];
         const captionMatch = tableHtml.match(/<caption\b[^>]*>([\s\S]*?)<\/caption>/i);
         const caption = captionMatch ? truncateRelationText(stripHtml(captionMatch[1]), 180) : '';
-        const rowMatches = Array.from(tableHtml.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/gi)).slice(0, 24);
-        const rows = rowMatches.map((row) => extractTableCells(row[1])).filter((cells) => cells.some(Boolean));
-        if (!rows.length) {
+        const matrix = extractHtmlTableMatrix(tableHtml);
+        const table = buildTableRelation({ caption, ...matrix }, query);
+        if (!table) {
             continue;
         }
-        const firstRowHasHeaders = /<th\b/i.test(rowMatches[0]?.[1] || '');
-        const headers = firstRowHasHeaders ? rows[0] : [];
-        const dataRows = firstRowHasHeaders ? rows.slice(1) : rows;
-        const table = pruneEmptyDeep({
-            caption: caption || undefined,
-            headers: headers.length ? headers : undefined,
-            rowCount: dataRows.length,
-            sampleRows: dataRows.slice(0, 8)
-        });
-        tables.push(table);
+        const headers = table.headers || [];
+        const dataRows = table.dataRows || [];
+        const { dataRows: _dataRows, ...publicTable } = table;
+        tables.push(publicTable);
         for (const cells of dataRows.slice(0, 12)) {
             if (headers.length >= 2 && cells.length >= 2) {
                 const rowSubject = cells[0] || caption || 'table row';
@@ -690,7 +1178,7 @@ function extractHtmlRelationGraph(html = '', { url = '', query = '', links = [] 
         queryMatchedTerms: candidate.queryMatchedTerms?.length ? candidate.queryMatchedTerms.slice(0, 8) : undefined
     }));
     const jsonLd = extractJsonLdRelations(html, url);
-    const tableRelations = extractHtmlTableRelations(html);
+    const tableRelations = extractHtmlTableRelations(html, query);
     const definitionRelations = extractHtmlDefinitionRelations(html);
     const keyValues = [...definitionRelations.keyValues, ...tableRelations.keyValues].slice(0, 30);
     const relationTriples = [
@@ -849,11 +1337,13 @@ function extractDoiCandidate(value = '') {
     return match ? match[0].replace(/[).,;]+$/g, '').toLowerCase() : '';
 }
 
-function isLikelyPdfUrl(value = '') {
+function isLikelyDirectPdfUrl(value = '') {
     const text = normalizeString(value).toLowerCase();
     return Boolean(text) && (
         /\.pdf(?:$|[?#])/i.test(text) ||
         /\/pdf(?:$|[/?#])/i.test(text) ||
+        /\/article\/download\/\d+(?:\/\d+)?(?:\/|$|[?#])/i.test(text) ||
+        /\/article\/view\/\d+\/\d+(?:\/|$|[?#])/i.test(text) ||
         /[?&](?:format|type)=pdf\b/i.test(text) ||
         /download[^?#]*pdf/i.test(text)
     );
@@ -866,7 +1356,7 @@ function classifyResearchLink(link = {}) {
     if (doi) {
         return { kind: 'doi', doi };
     }
-    if (isLikelyPdfUrl(url) || /\b(pdf|full text|download pdf|view pdf)\b/i.test(text)) {
+    if (isLikelyDirectPdfUrl(url) || /\b(pdf|full text|download pdf|view pdf)\b/i.test(text)) {
         return { kind: 'pdf', doi: '' };
     }
     if (/arxiv\.org\/abs\//i.test(url)) {
@@ -948,6 +1438,25 @@ function buildSuggestedCallForLink(candidate = {}, { query = '' } = {}) {
     const url = normalizeString(candidate.url);
     const text = normalizeString(candidate.text, 'linked resource');
     const fetchArgs = query ? { url, query } : { url };
+    const github = parseGitHubRepoRef({ url });
+    if (github.owner && github.repo) {
+        const mode = github.path
+            ? (/\/tree\//i.test(url) ? 'tree' : 'file')
+            : 'readme';
+        return {
+            tool: 'github_repo_read',
+            args: pruneEmptyDeep({
+                repo: `${github.owner}/${github.repo}`,
+                mode,
+                path: github.path || undefined,
+                ref: github.ref || undefined,
+                maxChars: mode === 'file' ? 30000 : undefined
+            }),
+            reason: github.path
+                ? `Read the linked GitHub ${mode === 'tree' ? 'directory' : 'file'} through the repository API: ${text}`
+                : `Read the linked GitHub repository through the repository API: ${text}`
+        };
+    }
     if (normalizeString(candidate.doi)) {
         return {
             tool: 'paper_metadata_lookup',
@@ -955,15 +1464,26 @@ function buildSuggestedCallForLink(candidate = {}, { query = '' } = {}) {
             reason: `Resolve scholarly metadata from DOI link: ${text}`
         };
     }
-    if (candidate.kind === 'pdf' || isLikelyPdfUrl(url)) {
+    if (isLikelyDirectPdfUrl(url)) {
         return {
             tool: 'pdf_extract_text',
             args: { url, maxChars: 12000 },
             reason: `Read the linked PDF directly: ${text}`
         };
     }
+    if (candidate.kind === 'pdf') {
+        return {
+            tool: 'pdf_find_and_extract',
+            args: {
+                url,
+                ...(query ? { extract_query: query } : {}),
+                maxChars: 12000
+            },
+            reason: `Resolve the PDF download behind the linked article page: ${text}`
+        };
+    }
     return {
-        tool: 'web_fetch',
+        tool: 'open_page',
         args: fetchArgs,
         reason: `Read the linked page before broadening search: ${text}`
     };
@@ -1494,6 +2014,170 @@ function scoreSearchSourceConsensus(result = {}) {
     return Math.min(44, backendScore + engineScore + shapedResultScore);
 }
 
+const SEARCH_MIRROR_OR_LOW_AUTHORITY_HOSTS = Object.freeze([
+    'scribd.com',
+    'studocu.com',
+    'coursehero.com',
+    'docsity.com',
+    'pdfcoffee.com',
+    'slideshare.net',
+    'slideshare.com',
+    'issuu.com'
+]);
+
+const SEARCH_AI_DIRECTORY_HOSTS = Object.freeze([
+    'theresanaiforthat.com',
+    'futuretools.io',
+    'aitoolsdirectory.com',
+    'toolify.ai',
+    'insidr.ai'
+]);
+
+function searchQueryMentionsHost(query = '', host = '') {
+    const normalizedQuery = normalizeString(query).toLowerCase();
+    const normalizedHost = normalizeString(host).replace(/^www\./i, '').toLowerCase();
+    if (!normalizedQuery || !normalizedHost) {
+        return false;
+    }
+    if (normalizedQuery.includes(normalizedHost)) {
+        return true;
+    }
+    return extractSearchSiteConstraints(query).some((site) => hostMatchesSiteConstraint(normalizedHost, site));
+}
+
+function importantSearchQueryTerms(query = '') {
+    return extractSearchQueryTerms(query)
+        .map((term) => normalizeSearchText(term))
+        .filter((term) => (
+            term &&
+            term.length >= 4 &&
+            !SEARCH_QUERY_STOPWORDS.has(term) &&
+            !GUIDE_QUERY_TERMS.has(term)
+        ))
+        .slice(0, 12);
+}
+
+function hostMatchesImportantQueryTerm(host = '', terms = []) {
+    const compactHost = compactSearchText(normalizeString(host).replace(/[.-]+/g, ' '));
+    return terms.some((term) => {
+        const compactTerm = compactSearchText(term);
+        return compactTerm.length >= 4 && compactHost.includes(compactTerm);
+    });
+}
+
+function temporalAnchorsFromSearchQuery(query = '') {
+    const text = normalizeString(query).toLowerCase();
+    const years = Array.from(text.matchAll(/\b((?:18|19|20)\d{2})\b/g)).map((match) => match[1]);
+    const months = Array.from(text.matchAll(/\b(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)\b/g)).map((match) => match[1]);
+    return {
+        years: Array.from(new Set(years)),
+        months: Array.from(new Set(months))
+    };
+}
+
+function scoreSearchSourceQualityPrior(result = {}, query = '') {
+    const url = normalizeString(result.url);
+    const title = normalizeString(result.title);
+    const snippet = normalizeString(result.snippet);
+    let parsed = null;
+    try {
+        parsed = new URL(url);
+    } catch {
+        return 0;
+    }
+    const host = parsed.hostname.replace(/^www\./i, '').toLowerCase();
+    const pathname = parsed.pathname || '/';
+    const text = normalizeSearchText(`${title} ${snippet} ${url}`);
+    const terms = importantSearchQueryTerms(query);
+    const queryMentionsHost = searchQueryMentionsHost(query, host);
+    let score = 0;
+
+    if (hostMatchesImportantQueryTerm(host, terms)) {
+        score += 34;
+    }
+    if (
+        hostMatchesImportantQueryTerm(host, terms) &&
+        !/^github\.com$/i.test(host) &&
+        /(?:^|\/)(?:_sources?|docs?|doc|documentation|whats_new|changelog|release[-_]?notes?|api|reference)(?:\/|$)/i.test(pathname)
+    ) {
+        score += 48;
+    }
+    if (/\b(?:changelog|release notes?|whats new|what's new|api|docs?|documentation|reference|source)\b/i.test(`${title} ${pathname}`)) {
+        score += 24;
+    }
+    if (/(?:^|\/)(?:_sources?|docs?|doc|documentation|whats_new|changelog|release[-_]?notes?|api|reference)(?:\/|$)/i.test(pathname)) {
+        score += 38;
+    }
+    if (/\.(?:rst|md|txt|py|ts|js|json|ya?ml)(?:$|[?#])/i.test(pathname)) {
+        score += 26;
+    }
+    if (/^github\.com$/i.test(host) && /\/(?:blob|raw|tree)\/[^/]+\/(?:docs?|doc|source|src|examples?|tests?)\//i.test(pathname)) {
+        score += 46;
+    } else if (/^github\.com$/i.test(host) && /\/(?:blob|raw|tree)\//i.test(pathname)) {
+        score += 28;
+    }
+    if (/readthedocs\.io$/i.test(host) || /(?:^|\.)docs\./i.test(host) || /(?:^|\.)developer\./i.test(host)) {
+        score += 26;
+    }
+    if (extractQuotedSearchPhrases(query).some((phrase) => compactSearchText(phrase) && compactSearchText(text).includes(compactSearchText(phrase)))) {
+        score += 28;
+    }
+    if (queryMentionsHost) {
+        score += 28;
+    }
+    const asksForSpecificArticle = /\b(?:article|paper|publication|essay|study)\b/i.test(query);
+    const articleDetailPath = /(?:^|\/)(?:articles?|papers?|publications?)(?:\/view)?\/[^/]+/i.test(pathname);
+    const collectionPath = /(?:^|\/)(?:issues?|archives?|search|category|tag)(?:\/|$)/i.test(pathname);
+    if (asksForSpecificArticle && articleDetailPath) {
+        score += 140;
+    }
+    if (asksForSpecificArticle && collectionPath) {
+        score -= 36;
+    }
+    const temporalAnchors = temporalAnchorsFromSearchQuery(query);
+    if (temporalAnchors.months.length || temporalAnchors.years.length) {
+        const lowerEvidenceText = `${title} ${snippet} ${url}`.toLowerCase();
+        const monthMatched = temporalAnchors.months.some((month) => new RegExp(`\\b${escapeRegExp(month)}\\b`, 'i').test(lowerEvidenceText));
+        const yearMatched = temporalAnchors.years.some((year) => lowerEvidenceText.includes(year));
+        if (temporalAnchors.months.length && !monthMatched) {
+            score -= 70;
+        }
+        if (temporalAnchors.years.length && !yearMatched) {
+            score -= monthMatched ? 20 : 50;
+        }
+    }
+
+    const lowAuthorityHost = SEARCH_MIRROR_OR_LOW_AUTHORITY_HOSTS.some((domain) => hostMatchesSiteConstraint(host, domain));
+    if (lowAuthorityHost && !queryMentionsHost) {
+        score -= 120;
+        if (/\b(?:pdf|document|mirror|mirrored|download|release notes?)\b/i.test(`${title} ${snippet}`)) {
+            score -= 80;
+        }
+    }
+    const exactFactOrDocQuery = /\b(?:changelog|release notes?|bug fixes?|official|documentation|source|api|reference|wikipedia|predictor|base command)\b/i.test(query);
+    const aiDirectoryHost = SEARCH_AI_DIRECTORY_HOSTS.some((domain) => hostMatchesSiteConstraint(host, domain));
+    if (
+        exactFactOrDocQuery &&
+        !queryMentionsHost &&
+        (aiDirectoryHost || /\b(?:AI tools?|AIs|LLM tools?|productivity tools?)\b/i.test(`${title} ${snippet}`))
+    ) {
+        score -= 700;
+    }
+    const portalHomePage = (
+        (host === 'yahoo.com' || host.endsWith('.yahoo.com')) &&
+        /^\/(?:$|news\/?$|finance\/?$|sports\/?$|entertainment\/?$)/i.test(pathname)
+    );
+    if (portalHomePage && !queryMentionsHost) {
+        score -= 120;
+    }
+    const rootLikePath = /^\/(?:$|index\.(?:html?|php)$|stable\/index\.html?$)/i.test(pathname);
+    const queryLooksForSpecificDocument = /\b(?:changelog|release notes?|whats new|what's new|july|version|v\d+(?:\.\d+)*|api|reference|method|class|command|bug fix)\b/i.test(query);
+    if (rootLikePath && queryLooksForSpecificDocument && !/\b(?:changelog|release notes?|whats new|what's new|api|reference)\b/i.test(`${title} ${snippet}`)) {
+        score -= 48;
+    }
+    return score;
+}
+
 function isRelevantSearchCandidate(candidate = {}) {
     const queryScore = Number(candidate.queryScore) || 0;
     const matchedTerms = Array.isArray(candidate.queryMatchedTerms) ? candidate.queryMatchedTerms : [];
@@ -1532,6 +2216,7 @@ function describeSearchRelevance(rankedResults = []) {
         queryScore: Number.isFinite(candidate.queryScore) ? Number(candidate.queryScore.toFixed(2)) : undefined,
         researchScore: Number.isFinite(candidate.researchScore) ? Number(candidate.researchScore.toFixed(2)) : undefined,
         sourceConsensusScore: Number.isFinite(candidate.sourceConsensusScore) ? Number(candidate.sourceConsensusScore.toFixed(2)) : undefined,
+        sourceQualityScore: Number.isFinite(candidate.sourceQualityScore) ? Number(candidate.sourceQualityScore.toFixed(2)) : undefined,
         matchedTerms: candidate.queryMatchedTerms?.length ? candidate.queryMatchedTerms.slice(0, 8) : undefined,
         matchedSites: candidate.queryMatchedSites?.length ? candidate.queryMatchedSites.slice(0, 3) : undefined,
         sourceBackends: candidate.sourceBackends?.length ? candidate.sourceBackends.slice(0, 5) : undefined,
@@ -1588,8 +2273,10 @@ function rankSearchResultsForFollowup(results = [], query = '') {
             }, index);
             const queryMatch = scoreSearchResultAgainstQuery(item, query);
             const sourceConsensusScore = scoreSearchSourceConsensus(item);
+            const sourceQualityScore = scoreSearchSourceQualityPrior(item, query);
             const targetCoverage = assessSearchResultTargetCoverage(item, query);
             const targetPenalty = targetCoverage?.specificTargetCovered === false ? 260 : 0;
+            const boundedQueryScore = Math.min(queryMatch.score, 100);
             return {
                 ...item,
                 kind: research.kind,
@@ -1601,8 +2288,9 @@ function rankSearchResultsForFollowup(results = [], query = '') {
                 queryMatchedSites: queryMatch.matchedSites,
                 guideSource: queryMatch.guideSource,
                 sourceConsensusScore,
+                sourceQualityScore,
                 queryTargetCoverage: targetCoverage,
-                combinedScore: queryMatch.score * 4 + research.score + sourceConsensusScore - targetPenalty
+                combinedScore: boundedQueryScore * 4 + research.score + sourceConsensusScore + sourceQualityScore - targetPenalty
             };
         })
         .sort((a, b) => b.combinedScore - a.combinedScore || b.queryScore - a.queryScore || b.researchScore - a.researchScore);
@@ -1723,9 +2411,66 @@ function isGenericSearchQueryTerm(term = '', entityTerms = []) {
     );
 }
 
+function buildConciseQuotedTargetSearchQuery(query = '') {
+    const original = normalizeString(query);
+    if (!original || /[\p{Script=Han}]/u.test(original)) {
+        return '';
+    }
+    const quotedTargets = Array.from(
+        original.matchAll(/"([^"]{12,})"|“([^”]{12,})”/g)
+    )
+        .map((match) => ({
+            full: match[0],
+            value: normalizeString(match[1] || match[2]),
+            termCount: (normalizeSearchText(match[1] || match[2]).match(/[a-z0-9]{2,}/g) || []).length
+        }))
+        .filter((item) => item.value && item.termCount >= 4)
+        .sort((left, right) =>
+            right.termCount - left.termCount ||
+            right.value.length - left.value.length
+        );
+    const target = quotedTargets[0];
+    if (!target) {
+        return '';
+    }
+    const allTerms = extractSearchQueryTerms(original);
+    const shouldContract = (
+        original.length > 150 ||
+        allTerms.length > 12 ||
+        quotedTargets.length > 2
+    );
+    if (!shouldContract) {
+        return '';
+    }
+    let contextText = original;
+    for (const quoted of quotedTargets) {
+        contextText = contextText.replace(quoted.full, ' ');
+    }
+    const contextTerms = extractSearchQueryTerms(contextText).slice(0, 3);
+    const contextTermSet = new Set(contextTerms);
+    const weakTitleTerms = new Set([
+        'can', 'could', 'may', 'might', 'must', 'shall', 'should', 'will', 'would'
+    ]);
+    const targetTerms = extractSearchQueryTerms(target.value)
+        .filter((term) => !weakTitleTerms.has(term) && !contextTermSet.has(term))
+        .slice(0, 5);
+    const sites = extractSearchSiteConstraints(original)
+        .slice(0, 2)
+        .map((site) => `site:${site}`);
+    return [
+        ...contextTerms,
+        ...targetTerms,
+        ...sites
+    ].join(' ').slice(0, 240).trim();
+}
+
 function buildEffectiveSearchQuery(query = '') {
     const normalized = normalizeString(query);
     if (normalized && !/[\p{Script=Han}]/u.test(normalized)) {
+        const conciseQuotedTargetQuery = buildConciseQuotedTargetSearchQuery(normalized);
+        if (conciseQuotedTargetQuery) {
+            return conciseQuotedTargetQuery;
+        }
         const exactAnswerQuery = buildExactAnswerFocusedSearchQuery(normalized);
         if (exactAnswerQuery) {
             return exactAnswerQuery;
@@ -1868,6 +2613,11 @@ function buildWebResearchQueryPlan(query = '', args = {}) {
     const original = normalizeString(query);
     const effective = buildEffectiveSearchQuery(original);
     const maxQueries = clampNumber(args.maxSearchQueries || args.max_search_queries, 3, 1, 5);
+    const explicitQueries = [
+        ...(Array.isArray(args.queries) ? args.queries : []),
+        ...(Array.isArray(args.searchQueries) ? args.searchQueries : []),
+        ...(Array.isArray(args.search_queries) ? args.search_queries : [])
+    ];
     const variants = [];
     const seen = new Set();
     const addVariant = ({ searchQuery = '', backendQuery = '', role = '', reason = '' } = {}) => {
@@ -1891,6 +2641,22 @@ function buildWebResearchQueryPlan(query = '', args = {}) {
         backendQuery: original,
         role: 'original',
         reason: 'Run the literal user query first so the pipeline can detect over-broad or ambiguous intent before rewriting.'
+    });
+    explicitQueries.forEach((item, index) => {
+        const itemQuery = typeof item === 'string'
+            ? item
+            : normalizeString(item?.query || item?.q || item?.search || item?.text);
+        const itemBackendQuery = typeof item === 'string'
+            ? item
+            : normalizeString(item?.backendQuery || item?.backend_query || itemQuery);
+        addVariant({
+            searchQuery: itemQuery,
+            backendQuery: itemBackendQuery,
+            role: typeof item === 'object' ? normalizeString(item.role, 'explicit_query') : 'explicit_query',
+            reason: typeof item === 'object'
+                ? normalizeString(item.reason, 'Explicit query variant supplied by the model as part of a single structured research action.')
+                : `Explicit query variant ${index + 1} supplied by the model as part of a single structured research action.`
+        });
     });
     const quotedPhrases = extractQuotedSearchPhrases(original);
     const entityTerms = extractShortCjkEntityTerms(original);
@@ -2029,11 +2795,10 @@ function buildSuggestedCallsFromSearchResults(results = [], { query = '', limit 
     return dedupeSuggestedNextCalls(
         eligible
             .slice(0, limit)
-            .map((item) => ({
-                tool: 'web_fetch',
-                args: query ? { url: item.url, query } : { url: item.url },
-                reason: `Read search result: ${normalizeString(item.title, item.url)}`
-            })),
+            .map((item) => buildSuggestedCallForLink({
+                ...item,
+                text: normalizeString(item.text || item.title, item.url)
+            }, { query })),
         limit
     );
 }
@@ -2091,21 +2856,36 @@ function enrichSearchResultsWithSource(results = [], attempt = {}, backendIndex 
 
 function formatSearchResultForModel(item = {}, index = 0) {
     const lines = [
-        `${index + 1}. ${item.title}`,
-        `URL: ${item.url}`
+        `${index + 1}. ${truncateRelationText(normalizeString(item.title, '(untitled)'), 220)}`,
+        `URL: ${normalizeString(item.url)}`
     ];
     const sources = normalizeSourceList(item.sourceBackends || item.sourceBackend || item.backend);
     if (sources.length) {
         lines.push(`Source: ${sources.join(', ')}`);
     }
     const matchedTerms = Array.isArray(item.queryMatchedTerms) ? item.queryMatchedTerms.slice(0, 8) : [];
-    if (matchedTerms.length || Number.isFinite(item.queryScore)) {
-        const score = Number.isFinite(item.queryScore) ? `score=${Number(item.queryScore.toFixed(2))}` : '';
-        const terms = matchedTerms.length ? `matched=${matchedTerms.join(', ')}` : '';
-        lines.push(`Relevance: ${[score, terms].filter(Boolean).join(' ')}`);
+    if (matchedTerms.length) {
+        lines.push(`Query term matches: ${matchedTerms.join(', ')}`);
     }
-    lines.push(`Snippet: ${item.snippet}`);
+    const snippet = truncateRelationText(normalizeString(item.snippet), 520);
+    if (snippet) {
+        lines.push(`Snippet: ${snippet}`);
+    }
     return lines.join('\n');
+}
+
+function formatCandidateSearchEvidence(rankedResults = [], limit = 8) {
+    const rows = (Array.isArray(rankedResults) ? rankedResults : [])
+        .slice(0, limit)
+        .map((item, index) => formatSearchResultForModel(item, index))
+        .filter(Boolean);
+    if (!rows.length) {
+        return '';
+    }
+    return [
+        'Candidate snippets from search results:',
+        rows.join('\n\n')
+    ].join('\n');
 }
 
 const COUNTRY_ANSWER_NAMES = [
@@ -2308,6 +3088,131 @@ function formatSearchAnswerCandidates(candidates = []) {
     ].join('\n');
 }
 
+function normalizeSearchContextSize(value = '', fallback = 'medium') {
+    const normalized = normalizeString(value || fallback).toLowerCase();
+    return ['low', 'medium', 'high'].includes(normalized) ? normalized : fallback;
+}
+
+function buildCanonicalWebSearchOutput({
+    query = '',
+    backendQuery = '',
+    rankedResults = [],
+    attempts = [],
+    startedAt = Date.now(),
+    overallTimeoutMs = 0,
+    searchContextSize = 'medium',
+    aggregated = false,
+    backend = ''
+} = {}) {
+    const results = (Array.isArray(rankedResults) ? rankedResults : [])
+        .slice(0, 10)
+        .map((result, index) => pruneEmptyDeep({
+            id: `result_${index + 1}`,
+            title: normalizeString(result.title || result.text || result.url),
+            url: normalizeString(result.url),
+            snippet: normalizeString(result.snippet || result.content),
+            source: normalizeString(result.sourceBackend || result.source || backend),
+            rank: index + 1
+        }));
+    const action = pruneEmptyDeep({
+        type: 'search',
+        query,
+        search_context_size: normalizeSearchContextSize(searchContextSize),
+        max_results: results.length || undefined
+    });
+    return pruneEmptyDeep({
+        type: 'function_call_output',
+        webSearchCall: {
+            type: 'web_search_call',
+            status: 'completed',
+            action
+        },
+        web_search_call: {
+            type: 'web_search_call',
+            status: 'completed',
+            action
+        },
+        functionCallOutput: {
+            type: 'function_call_output',
+            status: 'completed',
+            output_kind: 'web_search_results'
+        },
+        function_call_output: {
+            type: 'function_call_output',
+            status: 'completed',
+            output_kind: 'web_search_results'
+        },
+        search: {
+            query,
+            backend_query: backendQuery && backendQuery !== query ? backendQuery : undefined,
+            status: 'completed',
+            mode: aggregated ? 'aggregated' : 'single_backend',
+            results,
+            candidates: results
+        },
+        execution: {
+            duration_ms: Date.now() - startedAt,
+            overall_timeout_ms: overallTimeoutMs,
+            attempts: (Array.isArray(attempts) ? attempts : []).map((attempt) => pruneEmptyDeep({
+                ok: attempt.ok === true,
+                backend: normalizeString(attempt.backend),
+                duration_ms: attempt.durationMs,
+                status: attempt.status,
+                error_code: attempt.errorCode
+            }))
+        }
+    });
+}
+
+function buildCanonicalSourceViewportOutput({ sourceViewport = {}, action = {}, matches = [] } = {}) {
+    const actionType = normalizeString(action.type, 'open_page');
+    const url = normalizeString(action.url || sourceViewport.url || sourceViewport.ref_id);
+    const canonicalAction = pruneEmptyDeep({
+        type: actionType === 'find_in_page' ? 'find_in_page' : 'open_page',
+        ...(url ? { url } : {}),
+        ...(actionType === 'find_in_page' && normalizeString(action.pattern)
+            ? { pattern: normalizeString(action.pattern) }
+            : {}),
+        ...(actionType !== 'find_in_page'
+            ? { lineno: Number(action.lineno || sourceViewport.lineno || sourceViewport.line_start || 1) || 1 }
+            : {})
+    });
+    const normalizedMatches = (Array.isArray(matches) ? matches : []).map((match) => pruneEmptyDeep({
+        lineno: Number(match.lineno || match.lineNumber || match.line_number || 0) || undefined,
+        text: normalizeString(match.text)
+    })).filter((match) => match.lineno || match.text);
+    return pruneEmptyDeep({
+        type: 'function_call_output',
+        webSearchCall: {
+            type: 'web_search_call',
+            status: 'completed',
+            action: canonicalAction
+        },
+        web_search_call: {
+            type: 'web_search_call',
+            status: 'completed',
+            action: canonicalAction
+        },
+        functionCallOutput: {
+            type: 'function_call_output',
+            status: 'completed',
+            output_kind: 'source_viewport'
+        },
+        function_call_output: {
+            type: 'function_call_output',
+            status: 'completed',
+            output_kind: 'source_viewport'
+        },
+        source_viewport: sourceViewport,
+        ...(normalizedMatches.length ? {
+            find: {
+                match_count: normalizedMatches.length,
+                matches: normalizedMatches
+            }
+        } : {})
+    });
+}
+
 function buildWebSearchSuccessObservation({
     query = '',
     backendQuery = '',
@@ -2315,12 +3220,25 @@ function buildWebSearchSuccessObservation({
     rawResults = [],
     backend = '',
     url = '',
+    managedSearxng = null,
     startedAt = Date.now(),
     overallTimeoutMs = 0,
-    aggregated = false
+    aggregated = false,
+    searchContextSize = 'medium'
 } = {}) {
     const rankedResults = rankSearchResultsForFollowup(rawResults, query);
-    const text = rankedResults.map((item, index) => formatSearchResultForModel(item, index)).join('\n\n');
+    const webSearchOutput = buildCanonicalWebSearchOutput({
+        query,
+        backendQuery,
+        rankedResults,
+        attempts,
+        startedAt,
+        overallTimeoutMs,
+        searchContextSize,
+        aggregated,
+        backend
+    });
+    const candidateEvidenceText = formatCandidateSearchEvidence(rankedResults, 8);
     const answerCandidates = extractSearchAnswerCandidates(rankedResults, query);
     const answerCandidateText = formatSearchAnswerCandidates(answerCandidates);
     const baseSuggestedNextCalls = buildSuggestedCallsFromSearchResults(rankedResults, { query, limit: 3 });
@@ -2347,15 +3265,15 @@ function buildWebSearchSuccessObservation({
         ], 3)
         : baseSuggestedNextCalls;
     const evidenceGap = clarificationRequired
-        ? `Search confidence is ${searchConfidence.level}; the query appears ambiguous and should be clarified before following any result.`
+        ? 'Search results contain multiple plausible target clusters for the query.'
         : offTarget
-        ? `Search results look off-target for the key query terms: ${queryFocusTerms.join(', ') || query}. Refine the query with exact phrases, source names, or author names before following a result.`
-        : 'Search results are discovery only. Open a result or resolve a DOI/PDF before answering.';
+        ? `Search results contain few matches for the key query terms: ${queryFocusTerms.join(', ') || query}.`
+        : 'Candidate snippets and URLs returned for model inspection.';
     const recoveryHint = clarificationRequired
         ? searchConfidence.clarificationQuestion || 'Ask the user to disambiguate the target before calling web_fetch or another broad search.'
         : offTarget
-        ? 'Do not follow obviously unrelated popular results. Tighten the query or switch to a more specific tool before searching again.'
-        : 'Prefer the suggested follow-up calls below before issuing another broad web_search.';
+        ? 'Potential next retrieval inputs include exact phrases, source names, author names, or a more specific tool.'
+        : '';
     const guidance = buildWebToolGuidanceText({
         evidenceGap,
         recoveryHint,
@@ -2364,7 +3282,7 @@ function buildWebSearchSuccessObservation({
     });
     const successfulBackends = attempts.filter((attempt) => attempt.ok).map((attempt) => attempt.backend);
     const resultBackends = normalizeSourceList(rankedResults.flatMap((item) => item.sourceBackends || item.sourceBackend || []));
-    const response = textResult([guidance, answerCandidateText, `Search results:\n${text}`].filter(Boolean).join('\n\n'), {
+    const response = textResult([answerCandidateText, candidateEvidenceText, guidance].filter(Boolean).join('\n\n'), {
         status: 'completed',
         query,
         backendQuery: backendQuery !== query ? backendQuery : undefined,
@@ -2387,6 +3305,13 @@ function buildWebSearchSuccessObservation({
         observedRelevantLinks,
         queryFocusTerms,
         topQueryScore,
+        managedSearxng,
+        webSearchOutput,
+        webSearchCall: webSearchOutput.webSearchCall,
+        web_search_call: webSearchOutput.web_search_call,
+        functionCallOutput: webSearchOutput.functionCallOutput,
+        function_call_output: webSearchOutput.function_call_output,
+        search_context_size: normalizeSearchContextSize(searchContextSize),
         searchAggregation: pruneEmptyDeep({
             enabled: aggregated || undefined,
             successfulBackends,
@@ -2460,17 +3385,8 @@ function formatRelevantLinks(links = []) {
 
 function buildWebToolGuidanceText({ evidenceGap = '', recoveryHint = '', suggestedNextCalls = [], observedRelevantLinks = [] } = {}) {
     const sections = [];
-    if (evidenceGap) {
-        sections.push(`Evidence gap: ${evidenceGap}`);
-    }
-    if (recoveryHint) {
-        sections.push(`Recovery hint: ${recoveryHint}`);
-    }
-    if (Array.isArray(suggestedNextCalls) && suggestedNextCalls.length) {
-        sections.push(`Suggested next calls:\n${formatSuggestedNextCalls(suggestedNextCalls)}`);
-    }
     if (Array.isArray(observedRelevantLinks) && observedRelevantLinks.length) {
-        sections.push(`High-signal links:\n${formatRelevantLinks(observedRelevantLinks)}`);
+        sections.push(`Candidate links observed by the fetcher:\n${formatRelevantLinks(observedRelevantLinks)}`);
     }
     return sections.join('\n\n');
 }
@@ -2608,12 +3524,12 @@ function classifyFetchedPageType({ text = '', url = '', contentType = '', sugges
     ) {
         return 'search_results_page';
     }
+    const knownVideoUrl = /(?:youtube\.com\/watch|youtu\.be\/|bilibili\.com\/video\/|\/video\/|vimeo\.com\/)/i.test(normalizedUrl);
+    const explicitVideoChrome = /播放量|弹幕|正在缓冲|未经作者授权|相关推荐|视频播放器|video player|watch later|share (?:this )?video|subscribers?/i.test(normalizedText);
+    const supportingVideoSignal = /视频|播放|video|watch|投稿|subscribe/i.test(normalizedText);
     if (
-        /(?:youtube\.com\/watch|youtu\.be\/|bilibili\.com\/video\/|\/video\/|vimeo\.com\/)/i.test(normalizedUrl) ||
-        (
-            /视频|播放|弹幕|views?|subscribers?|正在缓冲|未经作者授权/i.test(normalizedText) &&
-            /播放量|弹幕|video|watch|投稿|recommend|相关推荐/i.test(normalizedText)
-        )
+        knownVideoUrl ||
+        (explicitVideoChrome && supportingVideoSignal)
     ) {
         return 'video_page';
     }
@@ -2684,7 +3600,7 @@ function classifyWebFetchEvidenceQuality({ text = '', url = '', query = '', cont
             evidenceQuality: 'metadata_only',
             isEvidence: true,
             evidenceGap: 'The fetched page is video metadata/page chrome, not the transcript or answer-bearing guide content.',
-            recoveryHint: 'Use a transcript/video-specific tool, ASR, page description, or an accessible text guide before generating detailed claims.',
+            recoveryHint: 'Available alternate material may include accessible text, transcript, ASR, page description, or another public source.',
             pageStatus: 'video_metadata',
             pageType
         };
@@ -2750,10 +3666,24 @@ function buildHttpAccessFailureDetails(url, fetched = {}) {
     });
     if (fetched.status === 403) {
         details.evidenceGap = 'Remote site blocked automated access (HTTP 403).';
-        details.recoveryHint = 'This is a server-side access policy, not a local network failure. Prefer metadata, extracted links from an accessible page, or another source instead of retrying this URL.';
+        details.recoveryHint = 'This is a server-side access policy, not a local network failure. Prefer metadata, extracted links from an accessible page, another source, or a historical web snapshot instead of retrying this URL.';
+        details.suggestedNextCalls = [{
+            tool: 'tool_search',
+            args: {
+                query: 'historical web archive snapshot unavailable blocked URL',
+                limit: 5
+            }
+        }];
     } else if (fetched.status === 429) {
         details.evidenceGap = 'Remote site rate-limited automated requests (HTTP 429).';
-        details.recoveryHint = 'This is a remote rate limit, not a local connectivity failure. Back off or use another API/source instead of hammering the same endpoint.';
+        details.recoveryHint = 'This is a remote rate limit, not a local connectivity failure. Back off, use another API/source, or inspect a historical snapshot when past content is sufficient instead of hammering the same endpoint.';
+        details.suggestedNextCalls = [{
+            tool: 'tool_search',
+            args: {
+                query: 'historical web archive snapshot rate limited URL',
+                limit: 5
+            }
+        }];
     } else if (/ssl|unexpected_eof|eof occurred/i.test(`${fetched.error || ''}\n${fetched.stderr || ''}\n${fetched.fallbackError || ''}`)) {
         details.failureReason = 'https_ssl_fetch_failed';
         details.evidenceGap = 'The HTTP fetch backend hit a TLS/SSL transport failure before page content was retrieved.';
@@ -2946,6 +3876,54 @@ function sourceHintsFromSearchResult(result = {}) {
     };
 }
 
+function scoreSearchResultTitleMetadataQuality(result = {}, rawTitle = '', rawUrl = '') {
+    const title = stripHtml(rawTitle || '').replace(/\s+/g, ' ').trim();
+    const url = normalizeUrlCandidate(rawUrl);
+    if (!title || !url || title === url) {
+        return -100;
+    }
+
+    const sourceHints = sourceHintsFromSearchResult(result);
+    const sources = normalizeSourceList([
+        ...sourceHints.sourceBackends,
+        ...sourceHints.sourceEngines
+    ]).map((item) => item.toLowerCase());
+    let score = title.length >= 3 && title.length <= 180 ? 20 : 0;
+    if (sources.includes('wikipedia_api') || sources.includes('wikipedia_search')) {
+        score += 60;
+    }
+    if (/https?:\/\/|\bwww\./i.test(title)) {
+        score -= 80;
+    }
+    if (/\s(?:>|›|»)\s/.test(title)) {
+        score -= 35;
+    }
+
+    try {
+        const parsed = new URL(url);
+        const host = parsed.hostname.replace(/^www\./i, '').toLowerCase();
+        if (host && title.toLowerCase().includes(host)) {
+            score -= 35;
+        }
+        const rawLeaf = decodeURIComponent(parsed.pathname.split('/').filter(Boolean).at(-1) || '')
+            .replace(/[_-]+/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim()
+            .toLowerCase();
+        const normalizedTitle = title
+            .replace(/[_-]+/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim()
+            .toLowerCase();
+        if (rawLeaf && normalizedTitle === rawLeaf) {
+            score += 50;
+        }
+    } catch {
+        // URL normalization already validated the candidate; title scoring is best-effort.
+    }
+    return score;
+}
+
 function mergeSearchResultsForRerank(results = [], maxResults = 24) {
     const merged = new Map();
     for (const item of Array.isArray(results) ? results : []) {
@@ -2957,9 +3935,12 @@ function mergeSearchResultsForRerank(results = [], maxResults = 24) {
         const title = stripHtml(item.title || '').replace(/\s+/g, ' ').trim() || url;
         const snippet = stripHtml(item.snippet || '').replace(/\s+/g, ' ').trim();
         const sourceHints = sourceHintsFromSearchResult(item);
-        const existing = merged.get(key);
-        if (!existing) {
-            merged.set(key, pruneEmptyDeep({
+        const titleScore = scoreSearchResultTitleMetadataQuality(item, title, url);
+        const existingEntry = merged.get(key);
+        if (!existingEntry) {
+            merged.set(key, {
+                titleScore,
+                result: pruneEmptyDeep({
                 ...item,
                 title,
                 url,
@@ -2967,11 +3948,14 @@ function mergeSearchResultsForRerank(results = [], maxResults = 24) {
                 sourceBackends: sourceHints.sourceBackends,
                 sourceEngines: sourceHints.sourceEngines,
                 sourceCount: Math.max(1, sourceHints.sourceBackends.length + sourceHints.sourceEngines.length)
-            }));
+                })
+            });
             continue;
         }
-        if (title.length > normalizeString(existing.title).length) {
+        const existing = existingEntry.result;
+        if (titleScore > existingEntry.titleScore) {
             existing.title = title;
+            existingEntry.titleScore = titleScore;
         }
         if (snippet && !normalizeString(existing.snippet).includes(snippet)) {
             existing.snippet = truncateRelationText([existing.snippet, snippet].filter(Boolean).join(' | '), 700);
@@ -2986,7 +3970,7 @@ function mergeSearchResultsForRerank(results = [], maxResults = 24) {
         ]);
         existing.sourceCount = Math.max(1, existing.sourceBackends.length + existing.sourceEngines.length);
     }
-    return Array.from(merged.values()).slice(0, maxResults);
+    return Array.from(merged.values(), (entry) => entry.result).slice(0, maxResults);
 }
 
 function extractGenericAnchorResults(html = '', maxResults = 8) {
@@ -3005,7 +3989,10 @@ function extractGenericAnchorResults(html = '', maxResults = 8) {
         } catch {
             continue;
         }
-        if (['bing.com', 'duckduckgo.com', 'google.com', 'microsoft.com'].includes(host) && !/learn\.microsoft\.com/i.test(url)) {
+        const searchEngineNavigationHost =
+            /(^|\.)(bing|duckduckgo|google|yahoo)\.com$/i.test(host) ||
+            (/(^|\.)microsoft\.com$/i.test(host) && !/^learn\.microsoft\.com$/i.test(host));
+        if (searchEngineNavigationHost) {
             continue;
         }
         if (/privacy|terms|settings|help|account|login|images|videos|maps/i.test(`${title} ${url}`)) {
@@ -3185,13 +4172,20 @@ function isLikelyGitHubSearch(query = '') {
 
 const HTML_SEARCH_BACKEND_IDS = Object.freeze(['bing_html', 'duckduckgo_lite', 'duckduckgo_html', 'yahoo_html']);
 const DEFAULT_SEARXNG_URL = 'http://127.0.0.1:8080';
+const DEFAULT_WIKIPEDIA_SEARCH_URL = 'https://en.wikipedia.org/w/api.php';
 const DEFAULT_FIRECRAWL_LOCAL_URL = 'http://127.0.0.1:3002';
 const FIRECRAWL_CLOUD_URL = 'https://api.firecrawl.dev';
 const DEFAULT_CRAWL4AI_URL = 'http://127.0.0.1:11235';
 const DEFAULT_CRAWL4AI_WORKER = path.join(__dirname, 'ailis-crawl4ai-worker.py');
+const DEFAULT_PYTHON_SEARCH_WORKER = path.join(__dirname, 'ailis-python-search-worker.py');
+const MANAGED_SEARXNG_MANIFEST = 'managed-searxng.json';
+const MANAGED_SEARXNG_DEFAULT_PORT = 18888;
+const MANAGED_SEARXNG_STARTUP_TIMEOUT_MS = 5000;
+const MANAGED_SEARXNG_FAILURE_COOLDOWN_MS = 120000;
 const CRAWL4AI_FETCH_PROVIDERS = new Set(['crawl4ai', 'rendered', 'browser', 'crawl4ai_rendered', 'crawl4ai-style', 'crawl4ai_style']);
 const RENDERED_FALLBACK_EVIDENCE_QUALITIES = new Set(['js_shell', 'thin_content']);
 const PROJECT_ROOT = path.resolve(__dirname, '..');
+let managedSearxngState = null;
 
 function executableName(name) {
     return process.platform === 'win32' ? `${name}.exe` : name;
@@ -3279,6 +4273,366 @@ function resolveBundledCrawl4aiWorker() {
         process.resourcesPath ? path.join(process.resourcesPath, 'app.asar.unpacked', 'scripts', 'ailis-crawl4ai-worker.py') : '',
         DEFAULT_CRAWL4AI_WORKER
     ]) || DEFAULT_CRAWL4AI_WORKER;
+}
+
+function resolveBundledPythonSearchWorker() {
+    return firstExistingPath([
+        asarUnpackedPath(DEFAULT_PYTHON_SEARCH_WORKER),
+        process.resourcesPath ? path.join(process.resourcesPath, 'app.asar.unpacked', 'scripts', 'ailis-python-search-worker.py') : '',
+        DEFAULT_PYTHON_SEARCH_WORKER
+    ]) || DEFAULT_PYTHON_SEARCH_WORKER;
+}
+
+function readJsonFileSync(filePath = '') {
+    try {
+        return JSON.parse(fsSync.readFileSync(filePath, 'utf8'));
+    } catch {
+        return null;
+    }
+}
+
+function resolveRuntimeRelativePath(baseDir = '', value = '') {
+    const normalized = normalizeString(value);
+    if (!normalized) {
+        return '';
+    }
+    return path.isAbsolute(normalized) ? normalized : path.resolve(baseDir, normalized);
+}
+
+function managedSearxngManifestCandidates() {
+    const candidates = [];
+    for (const root of ailisWebRuntimeRoots()) {
+        candidates.push(path.join(root, MANAGED_SEARXNG_MANIFEST));
+        candidates.push(path.join(root, 'searxng', MANAGED_SEARXNG_MANIFEST));
+    }
+    candidates.push(path.join(PROJECT_ROOT, '.ailis-runtime', MANAGED_SEARXNG_MANIFEST));
+    return dedupeSearchStrings(candidates.map((candidate) => asarUnpackedPath(candidate)));
+}
+
+function loadManagedSearxngManifest(args = {}) {
+    const explicitManifest = normalizeString(
+        args.managedSearxngManifest ||
+        args.managed_searxng_manifest ||
+        process.env.AILIS_MANAGED_SEARXNG_MANIFEST
+    );
+    const manifestPath = firstExistingPath([
+        explicitManifest,
+        ...managedSearxngManifestCandidates()
+    ]);
+    if (!manifestPath) {
+        return null;
+    }
+    const manifest = readJsonFileSync(manifestPath);
+    if (!manifest || typeof manifest !== 'object') {
+        return null;
+    }
+    const manifestDir = path.dirname(manifestPath);
+    const command = resolveRuntimeRelativePath(manifestDir, manifest.python || manifest.command);
+    const settingsPath = resolveRuntimeRelativePath(manifestDir, manifest.settingsPath || manifest.settings_path || '');
+    if (!command || !fsSync.existsSync(command)) {
+        return null;
+    }
+    if (settingsPath && !fsSync.existsSync(settingsPath)) {
+        return null;
+    }
+    const cwd = resolveRuntimeRelativePath(manifestDir, manifest.cwd || '.');
+    const env = {};
+    if (manifest.env && typeof manifest.env === 'object') {
+        for (const [key, value] of Object.entries(manifest.env)) {
+            env[key] = /path$/i.test(key) ? resolveRuntimeRelativePath(manifestDir, value) : String(value);
+        }
+    }
+    if (settingsPath) {
+        env.SEARXNG_SETTINGS_PATH = settingsPath;
+    }
+    return {
+        manifestPath,
+        manifestDir,
+        command,
+        args: Array.isArray(manifest.args) ? manifest.args.map(String) : ['-m', 'searx.webapp'],
+        cwd: fsSync.existsSync(cwd) ? cwd : manifestDir,
+        env,
+        defaultPort: clampNumber(manifest.defaultPort || manifest.port, MANAGED_SEARXNG_DEFAULT_PORT, 1024, 65535),
+        bindAddress: normalizeString(manifest.bindAddress || manifest.bind_address, '127.0.0.1'),
+        healthPath: normalizeString(manifest.healthPath || manifest.health_path, '/search?q=ailis&format=json')
+    };
+}
+
+function managedSearxngDisabled(args = {}) {
+    return optionIsTrue(args.disableManagedSearxng || args.disable_managed_searxng) ||
+        /^(?:0|false|no|off)$/i.test(normalizeString(process.env.AILIS_MANAGED_SEARXNG, '1'));
+}
+
+function requestedSearchBackends(args = {}) {
+    if (Array.isArray(args.backends)) {
+        return args.backends.map((item) => normalizeString(item).toLowerCase()).filter(Boolean);
+    }
+    return String(args.backend || args.searchBackend || args.search_backend || '')
+        .split(',')
+        .map((item) => normalizeString(item).toLowerCase())
+        .filter(Boolean);
+}
+
+function managedSearxngAllowedForSearch(args = {}) {
+    if (managedSearxngDisabled(args) || hasConfiguredSearxngUrl(args)) {
+        return false;
+    }
+    const explicitBackends = requestedSearchBackends(args);
+    if (explicitBackends.length) {
+        return explicitBackends.some((id) => ['searxng', 'searxng_json', 'auto', 'external', 'agent_web'].includes(id));
+    }
+    const providerText = normalizeString(
+        args.provider ||
+        args.searchProvider ||
+        args.search_provider ||
+        process.env.AILIS_WEB_SEARCH_PROVIDER ||
+        'auto',
+        'auto'
+    );
+    const providers = providerText.split(',').map((item) => normalizeString(item).toLowerCase()).filter(Boolean);
+    if (!providers.length) {
+        return true;
+    }
+    if (providers.some((provider) => ['auto', 'external', 'agent_web', 'searxng'].includes(provider))) {
+        return true;
+    }
+    if (providers.every((provider) => ['html', 'builtin_html', 'current_html_fallback', 'python', 'python_search', 'python-search', 'github'].includes(provider))) {
+        return false;
+    }
+    return false;
+}
+
+function managedSearxngPortCandidates(manifest = {}, args = {}) {
+    const rawPorts = [
+        args.managedSearxngPort,
+        args.managed_searxng_port,
+        process.env.AILIS_MANAGED_SEARXNG_PORT,
+        process.env.SEARXNG_PORT,
+        manifest.defaultPort,
+        MANAGED_SEARXNG_DEFAULT_PORT,
+        18080,
+        8080
+    ];
+    const seen = new Set();
+    const ports = [];
+    for (const value of rawPorts) {
+        const numeric = Number(value);
+        if (!Number.isFinite(numeric)) {
+            continue;
+        }
+        const port = Math.max(1024, Math.min(Math.round(numeric), 65535));
+        if (!port || seen.has(port)) {
+            continue;
+        }
+        seen.add(port);
+        ports.push(port);
+    }
+    return ports;
+}
+
+function managedSearxngStartupTimeoutMs(args = {}) {
+    return clampNumber(
+        args.managedSearxngStartupTimeoutMs ||
+        args.managed_searxng_startup_timeout_ms ||
+        process.env.AILIS_MANAGED_SEARXNG_STARTUP_TIMEOUT_MS,
+        MANAGED_SEARXNG_STARTUP_TIMEOUT_MS,
+        1000,
+        30000
+    );
+}
+
+function managedSearxngFailureCooldownMs(args = {}) {
+    return clampNumber(
+        args.managedSearxngFailureCooldownMs ||
+        args.managed_searxng_failure_cooldown_ms ||
+        process.env.AILIS_MANAGED_SEARXNG_FAILURE_COOLDOWN_MS,
+        MANAGED_SEARXNG_FAILURE_COOLDOWN_MS,
+        0,
+        600000
+    );
+}
+
+function managedSearxngSpawnPortCandidates(manifest = {}, args = {}) {
+    const explicitPort = Number(args.managedSearxngPort || args.managed_searxng_port || process.env.AILIS_MANAGED_SEARXNG_PORT || process.env.SEARXNG_PORT);
+    if (Number.isFinite(explicitPort) && explicitPort >= 1024 && explicitPort <= 65535) {
+        return [Math.round(explicitPort)];
+    }
+    return [clampNumber(manifest.defaultPort, MANAGED_SEARXNG_DEFAULT_PORT, 1024, 65535)];
+}
+
+function managedSearxngBaseUrl(port, bindAddress = '127.0.0.1') {
+    const host = normalizeString(bindAddress, '127.0.0.1') === '0.0.0.0'
+        ? '127.0.0.1'
+        : normalizeString(bindAddress, '127.0.0.1');
+    return `http://${host}:${port}`;
+}
+
+function managedSearxngHealthUrl(baseUrl = '', healthPath = '/search?q=ailis&format=json') {
+    const normalizedBase = normalizeBaseUrl(baseUrl);
+    const suffix = normalizeString(healthPath, '/search?q=ailis&format=json');
+    return `${normalizedBase}${suffix.startsWith('/') ? suffix : `/${suffix}`}`;
+}
+
+async function probeManagedSearxng(baseUrl = '', healthPath = '/search?q=ailis&format=json', timeoutMs = 1200) {
+    if (!baseUrl) {
+        return false;
+    }
+    const fetched = await fetchJsonWithNodeFetch(managedSearxngHealthUrl(baseUrl, healthPath), { timeoutMs });
+    return Boolean(fetched.ok && fetched.status >= 200 && fetched.status < 300 && fetched.json && typeof fetched.json === 'object');
+}
+
+function killManagedSearxngChild(child) {
+    if (!child || child.killed) {
+        return;
+    }
+    try {
+        if (process.platform === 'win32' && child.pid) {
+            spawnSync('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], {
+                windowsHide: true,
+                stdio: 'ignore'
+            });
+            return;
+        }
+        child.kill();
+    } catch {
+        // Ignore cleanup failures.
+    }
+}
+
+async function waitForManagedSearxngReady({ baseUrl, healthPath, timeoutMs = 12000 } = {}) {
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < timeoutMs) {
+        if (await probeManagedSearxng(baseUrl, healthPath, 1200)) {
+            return true;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 350));
+    }
+    return false;
+}
+
+async function ensureManagedSearxng(args = {}) {
+    if (!managedSearxngAllowedForSearch(args)) {
+        return null;
+    }
+    const cooldownMs = managedSearxngFailureCooldownMs(args);
+    if (
+        managedSearxngState?.source === 'failed' &&
+        cooldownMs > 0 &&
+        Number.isFinite(managedSearxngState.lastFailureAt) &&
+        Date.now() - managedSearxngState.lastFailureAt < cooldownMs &&
+        !optionIsTrue(args.forceManagedSearxng || args.force_managed_searxng)
+    ) {
+        return null;
+    }
+    if (managedSearxngState?.baseUrl && await probeManagedSearxng(managedSearxngState.baseUrl, managedSearxngState.healthPath, 900)) {
+        return {
+            ok: true,
+            baseUrl: managedSearxngState.baseUrl,
+            source: managedSearxngState.source || 'running',
+            manifestPath: managedSearxngState.manifestPath || '',
+            pid: managedSearxngState.child?.pid || 0
+        };
+    }
+    const manifest = loadManagedSearxngManifest(args);
+    if (!manifest) {
+        return null;
+    }
+    for (const port of managedSearxngPortCandidates(manifest, args)) {
+        const baseUrl = managedSearxngBaseUrl(port, manifest.bindAddress);
+        if (await probeManagedSearxng(baseUrl, manifest.healthPath, 900)) {
+            managedSearxngState = {
+                baseUrl,
+                healthPath: manifest.healthPath,
+                manifestPath: manifest.manifestPath,
+                source: 'existing'
+            };
+            return { ok: true, baseUrl, source: 'existing', manifestPath: manifest.manifestPath, pid: 0 };
+        }
+    }
+    for (const port of managedSearxngSpawnPortCandidates(manifest, args)) {
+        const baseUrl = managedSearxngBaseUrl(port, manifest.bindAddress);
+        const stderr = [];
+        const stdout = [];
+        let child = null;
+        try {
+            child = spawn(manifest.command, manifest.args, {
+            cwd: manifest.cwd,
+            windowsHide: true,
+            stdio: ['ignore', 'pipe', 'pipe'],
+            env: {
+                ...process.env,
+                ...manifest.env,
+                SEARXNG_BIND_ADDRESS: manifest.bindAddress,
+                SEARXNG_PORT: String(port),
+                SEARXNG_LIMITER: 'false',
+                SEARXNG_PUBLIC_INSTANCE: 'false'
+            }
+            });
+        } catch (error) {
+            managedSearxngState = {
+                baseUrl,
+                healthPath: manifest.healthPath,
+                manifestPath: manifest.manifestPath,
+                source: 'failed',
+                lastFailureAt: Date.now(),
+                lastError: normalizeString(error?.message || String(error)).slice(0, 3000)
+            };
+            continue;
+        }
+        child.stdout?.on('data', (chunk) => {
+            stdout.push(String(chunk).slice(0, 1200));
+            if (stdout.length > 8) stdout.shift();
+        });
+        child.stderr?.on('data', (chunk) => {
+            stderr.push(String(chunk).slice(0, 1200));
+            if (stderr.length > 8) stderr.shift();
+        });
+        const exited = new Promise((resolve) => child.once('exit', (code) => resolve(code)));
+        const spawnFailed = new Promise((resolve) => child.once('error', (error) => resolve(error)));
+        const ready = await Promise.race([
+            waitForManagedSearxngReady({ baseUrl, healthPath: manifest.healthPath, timeoutMs: managedSearxngStartupTimeoutMs(args) }),
+            spawnFailed.then((error) => {
+                stderr.push(error?.message || String(error));
+                return false;
+            }),
+            exited.then(() => false)
+        ]);
+        if (ready) {
+            managedSearxngState = {
+                baseUrl,
+                healthPath: manifest.healthPath,
+                manifestPath: manifest.manifestPath,
+                source: 'spawned',
+                child,
+                command: manifest.command,
+                args: manifest.args,
+                port
+            };
+            return { ok: true, baseUrl, source: 'spawned', manifestPath: manifest.manifestPath, pid: child.pid || 0 };
+        }
+        killManagedSearxngChild(child);
+        managedSearxngState = {
+            baseUrl,
+            healthPath: manifest.healthPath,
+            manifestPath: manifest.manifestPath,
+            source: 'failed',
+            lastFailureAt: Date.now(),
+            lastError: normalizeString(stderr.join('\n') || stdout.join('\n')).slice(0, 3000)
+        };
+    }
+    return null;
+}
+
+async function webSearchArgsWithManagedSearxng(args = {}) {
+    const managed = await ensureManagedSearxng(args);
+    if (!managed?.ok || !managed.baseUrl) {
+        return args;
+    }
+    return {
+        ...args,
+        searxngUrl: managed.baseUrl,
+        __managedSearxng: managed
+    };
 }
 
 function normalizeBaseUrl(value = '') {
@@ -3412,10 +4766,65 @@ function buildSearxngSearchUrl(query, maxResults, args = {}) {
     url.searchParams.set('language', normalizeString(args.language || args.lang || 'auto', 'auto'));
     url.searchParams.set('safesearch', String(clampNumber(args.safeSearch || args.safe_search, 0, 0, 2)));
     url.searchParams.set('pageno', '1');
+    const recency = Number(args.recency);
+    const timeRange = Number.isFinite(recency) && recency > 0
+        ? recency <= 1
+            ? 'day'
+            : recency <= 7
+            ? 'week'
+            : recency <= 31
+            ? 'month'
+            : recency <= 366
+            ? 'year'
+            : ''
+        : '';
+    if (timeRange) {
+        url.searchParams.set('time_range', timeRange);
+    }
     if (maxResults) {
         url.searchParams.set('results_on_new_tab', '0');
     }
     return url.toString();
+}
+
+function normalizeSearchDomains(value) {
+    const values = Array.isArray(value) ? value : value ? [value] : [];
+    return [...new Set(values.map((entry) => {
+        const raw = normalizeString(entry).toLowerCase().replace(/^\*\./, '');
+        if (!raw) {
+            return '';
+        }
+        try {
+            return new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`).hostname
+                .replace(/^www\./, '')
+                .replace(/^\*\./, '');
+        } catch {
+            return raw.split('/')[0].replace(/^www\./, '').replace(/^\*\./, '');
+        }
+    }).filter(Boolean))].slice(0, 8);
+}
+
+function searchResultMatchesDomains(result = {}, domains = []) {
+    if (!domains.length) {
+        return true;
+    }
+    try {
+        const hostname = new URL(normalizeString(result.url || result.link)).hostname
+            .toLowerCase()
+            .replace(/^www\./, '');
+        return domains.some((domain) => hostname === domain || hostname.endsWith(`.${domain}`));
+    } catch {
+        return false;
+    }
+}
+
+function filterSearchResultsByDomains(results = [], domains = []) {
+    const normalizedDomains = normalizeSearchDomains(domains);
+    if (!normalizedDomains.length) {
+        return Array.isArray(results) ? results : [];
+    }
+    return (Array.isArray(results) ? results : [])
+        .filter((result) => searchResultMatchesDomains(result, normalizedDomains));
 }
 
 function extractSearxngJsonResults(payload = {}, maxResults = 8) {
@@ -3428,6 +4837,112 @@ function extractSearxngJsonResults(payload = {}, maxResults = 8) {
         category: item.category || '',
         publishedDate: item.publishedDate || item.published_date || ''
     })), maxResults);
+}
+
+function wikipediaSearchUrl(args = {}) {
+    return normalizeString(
+        args.wikipediaSearchUrl ||
+        args.wikipedia_search_url ||
+        process.env.AILIS_WIKIPEDIA_SEARCH_URL ||
+        DEFAULT_WIKIPEDIA_SEARCH_URL,
+        DEFAULT_WIKIPEDIA_SEARCH_URL
+    );
+}
+
+function extractWikipediaSearchResults(payload = {}, maxResults = 8) {
+    const rows = Array.isArray(payload?.query?.search) ? payload.query.search : [];
+    return dedupeSearchResults(rows.map((item) => {
+        const title = normalizeString(item.title);
+        return {
+            title,
+            url: title ? `https://en.wikipedia.org/wiki/${encodeURIComponent(title.replace(/\s+/g, '_'))}` : '',
+            snippet: stripHtml(item.snippet || ''),
+            sourceEngines: ['wikipedia_api']
+        };
+    }), maxResults);
+}
+
+async function runWikipediaSearchBackend({ query, maxResults, timeoutMs, args = {} } = {}) {
+    const startedAt = Date.now();
+    const workerPath = path.resolve(
+        normalizeString(args.pythonSearchWorker || args.python_search_worker) ||
+        normalizeString(process.env.AILIS_PYTHON_SEARCH_WORKER) ||
+        resolveBundledPythonSearchWorker()
+    );
+    const pythonCandidates = dedupeSearchStrings([
+        args.pythonSearchPython,
+        args.python_search_python,
+        process.env.AILIS_PYTHON_SEARCH_PYTHON,
+        process.env.AILIS_PYTHON,
+        'python',
+        resolveBundledCrawl4aiPython()
+    ]);
+    const payload = {
+        provider: 'wikipedia',
+        query,
+        maxResults,
+        timeoutSeconds: Math.max(3, Math.ceil(timeoutMs / 1000)),
+        wikipediaSearchUrl: wikipediaSearchUrl(args)
+    };
+    const failures = [];
+    for (const python of pythonCandidates) {
+        const remainingTimeoutMs = Math.max(0, timeoutMs - (Date.now() - startedAt));
+        if (remainingTimeoutMs < 1000) {
+            break;
+        }
+        const result = await runProcess(python, [workerPath, JSON.stringify(payload)], {
+            cwd: PROJECT_ROOT,
+            timeoutMs: remainingTimeoutMs
+        });
+        let workerResult = null;
+        try {
+            workerResult = JSON.parse(result.stdout || '{}');
+        } catch (error) {
+            failures.push({
+                python,
+                errorCode: 'invalid_python_search_payload',
+                error: error.message,
+                stderr: normalizeString(result.stderr || result.stdout).slice(0, 3000)
+            });
+            continue;
+        }
+        const results = dedupeSearchResults(workerResult.results || [], maxResults);
+        if (result.exitCode === 0 && workerResult.ok !== false && results.length) {
+            return {
+                ok: true,
+                backend: 'wikipedia_search',
+                url: wikipediaSearchUrl(args),
+                durationMs: Date.now() - startedAt,
+                status: 200,
+                errorCode: '',
+                error: '',
+                retryable: true,
+                python,
+                workerAttempts: workerResult.attempts || [],
+                results
+            };
+        }
+        failures.push({
+            python,
+            errorCode: normalizeString(workerResult.errorCode) || (result.timedOut ? 'timeout' : 'wikipedia_search_failed'),
+            error: normalizeString(workerResult.error) || `Python search worker exit ${result.exitCode}`,
+            stderr: normalizeString(result.stderr).slice(0, 3000),
+            workerAttempts: workerResult.attempts || []
+        });
+    }
+    const last = failures[failures.length - 1] || {};
+    return {
+        ok: false,
+        backend: 'wikipedia_search',
+        url: wikipediaSearchUrl(args),
+        durationMs: Date.now() - startedAt,
+        status: 0,
+        errorCode: last.errorCode || 'wikipedia_search_failed',
+        error: last.error || 'Wikipedia search failed for all configured Python candidates.',
+        retryable: true,
+        pythonFailures: failures,
+        results: []
+    };
 }
 
 function extractFirecrawlSearchResults(payload = {}, maxResults = 8) {
@@ -3533,6 +5048,122 @@ async function runFirecrawlSearchBackend({ query, maxResults, timeoutMs, args = 
     };
 }
 
+async function runPythonSearchBackend({ query, maxResults, timeoutMs, args = {} } = {}) {
+    const startedAt = Date.now();
+    const firecrawlCloudEnabled = optionIsTrue(args.allowFirecrawlCloud || args.allow_firecrawl_cloud || process.env.AILIS_ENABLE_FIRECRAWL_CLOUD);
+    const configuredProvider = hasConfiguredSearxngUrl(args) || hasConfiguredFirecrawlUrl(args) || firecrawlCloudEnabled;
+    const effectiveTimeoutMs = configuredProvider ? timeoutMs : Math.min(timeoutMs, 5000);
+    const workerPath = path.resolve(
+        normalizeString(args.pythonSearchWorker || args.python_search_worker) ||
+        normalizeString(process.env.AILIS_PYTHON_SEARCH_WORKER) ||
+        resolveBundledPythonSearchWorker()
+    );
+    const pythonCandidates = dedupeSearchStrings([
+        args.pythonSearchPython,
+        args.python_search_python,
+        process.env.AILIS_PYTHON_SEARCH_PYTHON,
+        process.env.AILIS_PYTHON,
+        'python',
+        resolveBundledCrawl4aiPython()
+    ]);
+    const payload = pruneEmptyDeep({
+        query,
+        maxResults,
+        timeoutSeconds: configuredProvider
+            ? Math.max(3, Math.ceil(effectiveTimeoutMs / 1000))
+            : Math.max(2, Math.min(4, Math.ceil(effectiveTimeoutMs / 2000))),
+        searxngUrl: args.searxngUrl || args.searxng_url,
+        firecrawlUrl: args.firecrawlUrl || args.firecrawl_url,
+        allowFirecrawlCloud: firecrawlCloudEnabled
+    });
+    const failures = [];
+    for (const python of pythonCandidates) {
+        const remainingTimeoutMs = Math.max(0, effectiveTimeoutMs - (Date.now() - startedAt));
+        if (remainingTimeoutMs < 1000) {
+            break;
+        }
+        const result = await runProcess(python, [workerPath, JSON.stringify(payload)], {
+            cwd: PROJECT_ROOT,
+            timeoutMs: remainingTimeoutMs
+        });
+        const durationMs = Date.now() - startedAt;
+        let payloadResult = null;
+        try {
+            payloadResult = JSON.parse(result.stdout || '{}');
+        } catch (error) {
+            const failure = {
+                python,
+                exitCode: result.exitCode,
+                errorCode: 'invalid_python_search_payload',
+                error: `Python search worker returned invalid JSON: ${error.message}`,
+                stderr: normalizeString(result.stderr || result.stdout).slice(0, 3000)
+            };
+            failures.push(failure);
+            if (/ModuleNotFoundError|No module named/i.test(failure.stderr)) {
+                continue;
+            }
+            return {
+                ok: false,
+                backend: 'python_search',
+                url: workerPath,
+                durationMs,
+                status: 0,
+                retryable: true,
+                python,
+                pythonFailures: failures,
+                ...failure
+            };
+        }
+        const rows = dedupeSearchResults((Array.isArray(payloadResult.results) ? payloadResult.results : []).map((item) => ({
+            title: item.title,
+            url: item.url,
+            snippet: item.snippet || item.description || '',
+            sourceEngines: item.sourceEngines || ['python_search']
+        })), maxResults);
+        const ok = result.exitCode === 0 && rows.length > 0 && payloadResult.ok !== false;
+        if (ok) {
+            return {
+                ok,
+                backend: 'python_search',
+                url: workerPath,
+                durationMs,
+                status: 200,
+                errorCode: '',
+                error: '',
+                stderr: normalizeString(result.stderr).slice(0, 3000),
+                retryable: true,
+                python,
+                pythonFailures: failures.length ? failures : undefined,
+                workerAttempts: payloadResult.attempts || [],
+                results: rows
+            };
+        }
+        failures.push({
+            python,
+            exitCode: result.exitCode,
+            errorCode: normalizeString(payloadResult.errorCode) || (result.timedOut ? 'timeout' : 'python_search_failed'),
+            error: normalizeString(payloadResult.error) || `Python search worker exit ${result.exitCode}`,
+            stderr: normalizeString(result.stderr).slice(0, 3000),
+            workerAttempts: payloadResult.attempts || []
+        });
+    }
+    const last = failures[failures.length - 1] || {};
+    return {
+        ok: false,
+        backend: 'python_search',
+        url: workerPath,
+        durationMs: Date.now() - startedAt,
+        status: 0,
+        errorCode: last.errorCode || 'python_search_failed',
+        error: last.error || 'Python search worker failed for all configured Python candidates.',
+        stderr: last.stderr || '',
+        retryable: true,
+        pythonFailures: failures,
+        workerAttempts: last.workerAttempts || [],
+        results: []
+    };
+}
+
 const SEARCH_BACKENDS = Object.freeze({
     searxng_json: Object.freeze({
         id: 'searxng_json',
@@ -3541,6 +5172,14 @@ const SEARCH_BACKENDS = Object.freeze({
     firecrawl_search: Object.freeze({
         id: 'firecrawl_search',
         run: runFirecrawlSearchBackend
+    }),
+    python_search: Object.freeze({
+        id: 'python_search',
+        run: runPythonSearchBackend
+    }),
+    wikipedia_search: Object.freeze({
+        id: 'wikipedia_search',
+        run: runWikipediaSearchBackend
     }),
     duckduckgo_lite: Object.freeze({
         id: 'duckduckgo_lite',
@@ -3587,23 +5226,55 @@ function dedupeSearchBackendIds(ids = []) {
     return unique;
 }
 
-function expandSearchProviderToken(token = '', query = '', { includeFallback = true } = {}) {
+function dedupeSearchStrings(values = []) {
+    const seen = new Set();
+    const rows = [];
+    for (const value of values) {
+        const normalized = normalizeString(value);
+        const key = normalized.toLowerCase();
+        if (!normalized || seen.has(key)) {
+            continue;
+        }
+        seen.add(key);
+        rows.push(normalized);
+    }
+    return rows;
+}
+
+function configuredJsonSearchBackendIds(args = {}, query = '') {
+    const chain = [];
+    if (hasConfiguredSearxngUrl(args)) {
+        chain.push('searxng_json');
+    }
+    if (hasConfiguredFirecrawlUrl(args)) {
+        chain.push('firecrawl_search');
+    }
+    chain.push('python_search', 'wikipedia_search', ...HTML_SEARCH_BACKEND_IDS);
+    return isLikelyGitHubSearch(query) ? ['github_repositories', ...chain] : chain;
+}
+
+function expandSearchProviderToken(token = '', query = '', { includeFallback = true, args = {} } = {}) {
     const normalized = normalizeString(token).toLowerCase();
     if (!normalized || normalized === 'auto') {
-        const chain = ['searxng_json', 'firecrawl_search', ...HTML_SEARCH_BACKEND_IDS];
-        return isLikelyGitHubSearch(query) ? ['github_repositories', ...chain] : chain;
+        return configuredJsonSearchBackendIds(args, query);
     }
     if (normalized === 'html' || normalized === 'builtin_html' || normalized === 'current_html_fallback') {
         return [...HTML_SEARCH_BACKEND_IDS];
     }
     if (normalized === 'searxng') {
-        return includeFallback ? ['searxng_json', ...HTML_SEARCH_BACKEND_IDS] : ['searxng_json'];
+        return includeFallback ? ['searxng_json', 'python_search', ...HTML_SEARCH_BACKEND_IDS] : ['searxng_json'];
     }
     if (normalized === 'firecrawl') {
-        return includeFallback ? ['firecrawl_search', ...HTML_SEARCH_BACKEND_IDS] : ['firecrawl_search'];
+        return includeFallback ? ['firecrawl_search', 'python_search', ...HTML_SEARCH_BACKEND_IDS] : ['firecrawl_search'];
+    }
+    if (normalized === 'python' || normalized === 'python_search' || normalized === 'python-search') {
+        return includeFallback ? ['python_search', ...HTML_SEARCH_BACKEND_IDS] : ['python_search'];
+    }
+    if (normalized === 'wikipedia' || normalized === 'wikipedia_search') {
+        return ['wikipedia_search'];
     }
     if (normalized === 'external' || normalized === 'agent_web') {
-        return ['searxng_json', 'firecrawl_search', ...HTML_SEARCH_BACKEND_IDS];
+        return configuredJsonSearchBackendIds(args, query);
     }
     if (normalized === 'github') {
         return ['github_repositories'];
@@ -3611,14 +5282,14 @@ function expandSearchProviderToken(token = '', query = '', { includeFallback = t
     return [normalized];
 }
 
-function expandSearchProviderIds(value = '', query = '') {
+function expandSearchProviderIds(value = '', query = '', args = {}) {
     const tokens = String(value || 'auto')
         .split(',')
         .map((item) => item.trim())
         .filter(Boolean);
     const compound = tokens.length > 1;
     return dedupeSearchBackendIds(
-        tokens.flatMap((item) => expandSearchProviderToken(item, query, { includeFallback: !compound }))
+        tokens.flatMap((item) => expandSearchProviderToken(item, query, { includeFallback: !compound, args }))
     );
 }
 
@@ -3630,14 +5301,15 @@ function normalizeSearchBackends(args = {}, query = '') {
             .map((item) => item.trim())
             .filter(Boolean);
     const requested = raw.length
-        ? dedupeSearchBackendIds(raw.flatMap((item) => expandSearchProviderToken(item, query, { includeFallback: raw.length <= 1 })))
+        ? dedupeSearchBackendIds(raw.flatMap((item) => expandSearchProviderToken(item, query, { includeFallback: raw.length <= 1, args })))
         : expandSearchProviderIds(
             args.provider ||
             args.searchProvider ||
             args.search_provider ||
             process.env.AILIS_WEB_SEARCH_PROVIDER ||
             'auto',
-            query
+            query,
+            args
         );
     const backends = requested
         .map((id) => SEARCH_BACKENDS[normalizeString(id).toLowerCase()])
@@ -3726,20 +5398,71 @@ async function webSearch(args = {}) {
     ].filter(Boolean).join(' ');
     const backendQuery = normalizeString(args.backendQuery || args.backend_query) || buildEffectiveSearchQuery(queryWithExactKeywords);
     const maxResults = clampNumber(args.maxResults || args.limit, 8, 1, 12);
+    const domains = normalizeSearchDomains(args.domains);
+    const searchContextSize = normalizeSearchContextSize(args.search_context_size || args.searchContextSize);
     const timeoutMs = clampNumber(args.timeoutMs || args.timeout_ms, 8000, 3000, 30000);
     const attempts = [];
-    const backends = normalizeSearchBackends(args, backendQuery);
+    const effectiveArgs = await webSearchArgsWithManagedSearxng(args);
+    const backends = normalizeSearchBackends(effectiveArgs, backendQuery);
     const overallTimeoutMs = clampNumber(
-        args.overallTimeoutMs || args.overall_timeout_ms,
+        effectiveArgs.overallTimeoutMs || effectiveArgs.overall_timeout_ms,
         Math.min(36000, Math.max(12000, timeoutMs * backends.length)),
         8000,
         120000
     );
     const startedAt = Date.now();
-    const aggregateAcrossBackends = shouldAggregateSearchBackends(args);
+    const aggregateAcrossBackends = shouldAggregateSearchBackends(effectiveArgs);
     let collectedResults = [];
     let lastSuccessObservation = null;
     let lastSuccessfulAttempt = null;
+    if (aggregateAcrossBackends && backends.length > 1) {
+        const attemptTimeoutMs = Math.min(timeoutMs, Math.max(1000, overallTimeoutMs - 750));
+        const parallelAttempts = await Promise.all(backends.map((backend) =>
+            runSearchBackend(backend, backendQuery, maxResults, attemptTimeoutMs, effectiveArgs)
+        ));
+        attempts.push(...parallelAttempts);
+        const successfulAttempts = parallelAttempts
+            .map((attempt, backendIndex) => ({ attempt, backendIndex }))
+            .filter(({ attempt }) => attempt.ok);
+        for (const { attempt, backendIndex } of successfulAttempts) {
+            const enrichedResults = filterSearchResultsByDomains(
+                enrichSearchResultsWithSource(attempt.results, attempt, backendIndex),
+                domains
+            );
+            collectedResults = mergeSearchResultsForRerank(
+                [...collectedResults, ...enrichedResults],
+                maxResults * 3
+            );
+        }
+        if (successfulAttempts.length) {
+            const finalAttempt = successfulAttempts[successfulAttempts.length - 1].attempt;
+            return buildWebSearchSuccessObservation({
+                query,
+                backendQuery,
+                attempts,
+                rawResults: collectedResults,
+                backend: finalAttempt.backend,
+                url: finalAttempt.url,
+                managedSearxng: effectiveArgs.__managedSearxng || null,
+                startedAt,
+                overallTimeoutMs,
+                aggregated: successfulAttempts.length > 1,
+                searchContextSize
+            }).response;
+        }
+        return errorResult('web_search failed across all configured search backends', {
+            status: 'search_failed',
+            errorCode: 'search_backends_failed',
+            query,
+            retryable: true,
+            overallDurationMs: Date.now() - startedAt,
+            overallTimeoutMs,
+            attempts,
+            suggestedTools: ['web_fetch', 'web_extract_links'],
+            evidenceGap: 'Broad discovery failed; no evidence page was opened yet.',
+            recoveryHint: 'Try a more specific title/DOI/source query or switch to a domain-specific tool instead of repeating the same broad search.'
+        });
+    }
     for (let backendIndex = 0; backendIndex < backends.length; backendIndex += 1) {
         const elapsedMs = Date.now() - startedAt;
         const remainingMs = overallTimeoutMs - elapsedMs;
@@ -3756,12 +5479,19 @@ async function webSearch(args = {}) {
         }
         const backend = backends[backendIndex];
         const attemptTimeoutMs = Math.min(timeoutMs, Math.max(1000, remainingMs - 750));
-        const attempt = await runSearchBackend(backend, backendQuery, maxResults, attemptTimeoutMs, args);
+        const attempt = await runSearchBackend(backend, backendQuery, maxResults, attemptTimeoutMs, effectiveArgs);
         attempts.push(attempt);
         if (!attempt.ok) {
             continue;
         }
-        const enrichedResults = enrichSearchResultsWithSource(attempt.results, attempt, backendIndex);
+        lastSuccessfulAttempt = attempt;
+        const enrichedResults = filterSearchResultsByDomains(
+            enrichSearchResultsWithSource(attempt.results, attempt, backendIndex),
+            domains
+        );
+        if (domains.length && !enrichedResults.length) {
+            continue;
+        }
         collectedResults = aggregateAcrossBackends
             ? mergeSearchResultsForRerank([...collectedResults, ...enrichedResults], maxResults * 3)
             : enrichedResults;
@@ -3772,14 +5502,15 @@ async function webSearch(args = {}) {
             rawResults: collectedResults,
             backend: attempt.backend,
             url: attempt.url,
+            managedSearxng: effectiveArgs.__managedSearxng || null,
             startedAt,
             overallTimeoutMs,
-            aggregated: aggregateAcrossBackends && attempts.filter((entry) => entry.ok).length > 1
+            aggregated: aggregateAcrossBackends && attempts.filter((entry) => entry.ok).length > 1,
+            searchContextSize
         });
         lastSuccessObservation = observation;
-        lastSuccessfulAttempt = attempt;
         if (!shouldContinueSearchAggregation({
-            args,
+            args: effectiveArgs,
             backends,
             backendIndex,
             searchConfidence: observation.searchConfidence,
@@ -3789,7 +5520,7 @@ async function webSearch(args = {}) {
             return observation.response;
         }
     }
-    if (lastSuccessObservation && lastSuccessfulAttempt) {
+    if (lastSuccessfulAttempt) {
         return buildWebSearchSuccessObservation({
             query,
             backendQuery,
@@ -3797,9 +5528,11 @@ async function webSearch(args = {}) {
             rawResults: collectedResults,
             backend: lastSuccessfulAttempt.backend,
             url: lastSuccessfulAttempt.url,
+            managedSearxng: effectiveArgs.__managedSearxng || null,
             startedAt,
             overallTimeoutMs,
-            aggregated: aggregateAcrossBackends && attempts.filter((entry) => entry.ok).length > 1
+            aggregated: aggregateAcrossBackends && attempts.filter((entry) => entry.ok).length > 1,
+            searchContextSize
         }).response;
     }
     return errorResult('web_search failed across all configured search backends', {
@@ -4389,6 +6122,10 @@ async function fetchWithLocalCrawl4aiWorker(url, config = {}, args = {}, timeout
     if (delayMs) {
         processArgs.push('--delay-ms', String(delayMs));
     }
+    const screenshotPath = normalizeString(args.screenshotPath || args.screenshot_path);
+    if (screenshotPath) {
+        processArgs.push('--screenshot-path', screenshotPath);
+    }
     const result = await runProcess(command, processArgs, {
         timeoutMs: effectiveTimeoutMs + 1000,
         env: config.playwrightBrowsersPath
@@ -4454,6 +6191,8 @@ async function fetchWithLocalCrawl4aiWorker(url, config = {}, args = {}, timeout
         probe: config.probe === true,
         links: Array.isArray(payload.links) ? payload.links : extractLinksFromMarkdown(markdown, url, 80),
         metadata: payload.metadata,
+        screenshotPath: normalizeString(payload.screenshotPath),
+        screenshotBytes: Number(payload.screenshotBytes || 0),
         crawl4aiWorker: workerPath
     };
 }
@@ -4559,6 +6298,26 @@ function shouldRetryRenderedFetchAfterStaticResult({ details = {}, args = {}, cr
     return explicitlyRendered || configured || previousFullAttempt || defaultProbeTimedOut;
 }
 
+function expandStructuredSourceText(text = '', contentType = '') {
+    const source = String(text || '').trim();
+    if (!source || source.length > 2_000_000) {
+        return source;
+    }
+    const fenced = source.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+    const candidate = (fenced?.[1] || source).trim();
+    const looksStructured = /json/i.test(normalizeString(contentType)) ||
+        ((candidate.startsWith('{') && candidate.endsWith('}')) ||
+        (candidate.startsWith('[') && candidate.endsWith(']')));
+    if (!looksStructured) {
+        return source;
+    }
+    try {
+        return JSON.stringify(JSON.parse(candidate), null, 2);
+    } catch {
+        return source;
+    }
+}
+
 function buildWebFetchResult({ url, args = {}, maxChars = MAX_FETCH_CHARS, fetched = {}, crawl4aiAttempt = null, renderedFallbackAttempt = null, renderedFallbackUsed = false, renderedFallbackTrigger = '' } = {}) {
     const contentType = fetched.contentType || '';
     const body = fetched.text;
@@ -4567,16 +6326,56 @@ function buildWebFetchResult({ url, args = {}, maxChars = MAX_FETCH_CHARS, fetch
         : fetched.kind === 'crawl4ai_markdown' ? body.trim()
         : /html/i.test(contentType) ? stripHtml(body) : body.trim();
     const encodingRepair = repairUtf8MojibakeText(rawText);
-    const text = encodingRepair.text;
-    const focused = focusTextWindow(text, {
-        query: args.query || args.contains || args.extract_query || args.extractQuery || '',
+    const text = expandStructuredSourceText(encodingRepair.text, contentType);
+    const linkQuery = normalizeString(args.query || args.contains || args.extract_query || args.extractQuery || '');
+    const findPattern = normalizeString(args.findPattern || args.find_pattern);
+    const sourceText = findPattern ? compactFindPageText(text) : text;
+    const findMatches = findPattern ? findSourceLineMatches(sourceText, findPattern) : [];
+    const selectedFindMatch = findPattern ? selectFindSourceMatch(findMatches, findPattern) : null;
+    const firstFindOffset = selectedFindMatch
+        ? sourceOffsetForLine(sourceText, selectedFindMatch.lineno)
+        : findPattern
+        ? sourceText.toLowerCase().indexOf(findPattern.toLowerCase())
+        : -1;
+    const firstFindLineEnd = firstFindOffset >= 0 ? sourceText.indexOf('\n', firstFindOffset) : -1;
+    const firstFindFocusOffset = firstFindLineEnd >= 0 ? firstFindLineEnd + 1 : firstFindOffset;
+    const requestedMaxLines = Number(args.maxLines || args.max_lines || 0);
+    const defaultViewportChars = Number.isFinite(requestedMaxLines) && requestedMaxLines > 0
+        ? Math.min(maxChars, Math.max(4800, Math.round(requestedMaxLines * 100)))
+        : Math.min(maxChars, 4800);
+    const maxViewportChars = Math.max(1000, Math.min(maxChars, MAX_FETCH_CHARS));
+    const viewportChars = clampNumber(
+        args.viewportChars || args.viewport_chars || defaultViewportChars,
+        defaultViewportChars,
+        1000,
+        maxViewportChars
+    );
+    const focused = focusTextWindow(sourceText, {
+        query: linkQuery,
         url,
-        maxChars
+        maxChars: viewportChars
     });
+    const sourceFocus = firstFindOffset >= 0
+        ? {
+            selectedIndex: firstFindFocusOffset,
+            start: firstFindFocusOffset,
+            end: firstFindFocusOffset
+        }
+        : focused.focus;
+    const sourceWindow = buildSourceLineWindow(sourceText, {
+        url,
+        contentType,
+        query: linkQuery,
+        maxChars: viewportChars,
+        lineStart: args.lineno || args.lineNo || args.line_no || args.lineStart || args.line_start,
+        lineEnd: args.lineEnd || args.line_end,
+        maxLines: args.maxLines || args.max_lines,
+        focus: sourceFocus
+    });
+    const sourceWindowText = formatSourceLineWindow(sourceWindow);
     const extractedLinks = /html/i.test(contentType)
         ? extractLinksFromHtml(body, url, 80)
         : Array.isArray(fetched.links) ? fetched.links : [];
-    const linkQuery = normalizeString(args.query || args.contains || args.extract_query || args.extractQuery || '');
     const rankedLinks = rankLinksForResearch(extractedLinks, url, linkQuery);
     const suggestedRankedLinks = filterRankedLinksForQuerySuggestions(rankedLinks, linkQuery);
     const suggestedNextCalls = buildSuggestedCallsFromRankedLinks(suggestedRankedLinks, 3, { query: linkQuery });
@@ -4586,13 +6385,34 @@ function buildWebFetchResult({ url, args = {}, maxChars = MAX_FETCH_CHARS, fetch
         ? extractHtmlRelationGraph(body, { url, query: linkQuery, links: extractedLinks })
         : null;
     const htmlRelationSummary = formatHtmlRelationGraph(htmlRelations);
+    const markdownTableRelations = fetched.kind === 'crawl4ai_markdown' || /markdown/i.test(contentType)
+        ? extractMarkdownTableRelations(text, linkQuery)
+        : null;
+    const structuredTables = [
+        ...(Array.isArray(htmlRelations?.tables) ? htmlRelations.tables : []),
+        ...(Array.isArray(markdownTableRelations?.tables) ? markdownTableRelations.tables : [])
+    ];
+    const tableProjectionSummary = formatTableProjections(structuredTables);
+    const structuredTableCoversTask = Boolean(linkQuery) && structuredTables.some((table) =>
+        table?.projection?.queryRelevant === true &&
+        table?.projection?.rowsComplete === true &&
+        Number(table?.projection?.rowCount || 0) >= 2 &&
+        Array.isArray(table?.projection?.columns) &&
+        table.projection.columns.length >= 2
+    );
     const wikiFacts = fetched.kind === 'wikipedia_wikitext'
         ? extractWikiKeyValueFacts(text, linkQuery)
         : [];
     const wikiFactSummary = formatWikiKeyValueFacts(wikiFacts);
     const wikiFactReasoningReady = wikiFactsAreReasoningReady(wikiFacts, linkQuery);
+    const recordFieldProjections = extractRecordFieldProjections(text);
+    const recordFieldProjectionSummary = formatRecordFieldProjections(recordFieldProjections);
+    const repeatedLabeledFields = extractRepeatedLabeledFields(text);
+    const repeatedLabeledFieldSummary = formatRepeatedLabeledFields(repeatedLabeledFields);
+    const facetedSearchFilters = extractFacetedSearchFilters(text);
+    const facetedSearchFilterSummary = formatFacetedSearchFilters(facetedSearchFilters);
     const barrier = classifyAccessBarrierText(text);
-    const truncatedForModel = focused.text.length < text.length;
+    const sourceHasMore = sourceWindow.hasMoreBefore || sourceWindow.hasMoreAfter;
     const quality = classifyWebFetchEvidenceQuality({
         text,
         url,
@@ -4600,80 +6420,221 @@ function buildWebFetchResult({ url, args = {}, maxChars = MAX_FETCH_CHARS, fetch
         contentType,
         barrier,
         suggestedNextCalls,
-        truncated: truncatedForModel,
+        truncated: false,
         encodingRepair
     });
-    const evidenceGap = wikiFactReasoningReady ? '' : (quality.evidenceGap || '');
+    const evidenceGap = wikiFactReasoningReady || structuredTableCoversTask ? '' : (quality.evidenceGap || '');
     const recoveryHint = wikiFactReasoningReady
         ? 'Use the Wiki key-value facts above as structured evidence; only fetch more if another required field is missing.'
+        : structuredTableCoversTask
+        ? 'Use the complete structured table projection above for comparison; only fetch more if another required field is missing.'
         : (quality.recoveryHint || '');
-    const effectiveSuggestedNextCalls = wikiFactReasoningReady ? [] : suggestedNextCalls;
+    const sourceWindowFollowups = buildSourceWindowFollowups(sourceWindow, linkQuery);
+    const sourceWindowPlainText = (Array.isArray(sourceWindow.lines) ? sourceWindow.lines : [])
+        .map((line) => line.text)
+        .join('\n');
+    const sourceWindowCoversTask = sourceWindowCoversQuery(sourceWindowPlainText, linkQuery);
+    const reasoningReady = (
+        quality.evidenceQuality === 'sufficient_evidence' &&
+        quality.isEvidence === true &&
+        sourceWindowCoversTask
+    ) || wikiFactReasoningReady || structuredTableCoversTask;
+    const effectiveEvidenceQuality = structuredTableCoversTask
+        ? 'sufficient_evidence'
+        : quality.evidenceQuality;
+    const effectivePageType = structuredTableCoversTask
+        ? 'structured_data_page'
+        : quality.pageType;
+    const effectiveIsEvidence = quality.isEvidence === true || structuredTableCoversTask;
+    const effectiveSuggestedNextCalls = reasoningReady
+        ? []
+        : dedupeSuggestedNextCalls([...suggestedNextCalls, ...sourceWindowFollowups], 5);
     const guidance = buildWebToolGuidanceText({
         evidenceGap,
         recoveryHint,
         suggestedNextCalls: effectiveSuggestedNextCalls,
         observedRelevantLinks
     });
-    const reasoningReady = (quality.evidenceQuality === 'sufficient_evidence' && quality.isEvidence === true && !truncatedForModel) || wikiFactReasoningReady;
-    const observationTruncated = wikiFactReasoningReady ? false : truncatedForModel;
-    return textResult([guidance, htmlRelationSummary, wikiFactSummary, `Content excerpt:\n${focused.text}`].filter(Boolean).join('\n\n'), {
+    const compactHtmlRelationSummary = htmlRelationSummary && htmlRelationSummary.length <= 1200
+        ? htmlRelationSummary
+        : '';
+    const source = pruneEmptyDeep({
+        type: 'source_viewport',
+        tool: 'web_fetch',
+        url,
+        ref_id: url,
+        lineno: sourceWindow.lineno || sourceWindow.lineStart,
+        line_start: sourceWindow.line_start || sourceWindow.lineStart,
+        line_end: sourceWindow.line_end || sourceWindow.lineEnd,
+        total_lines: sourceWindow.total_lines || sourceWindow.totalLines,
+        has_more_before: sourceWindow.has_more_before ?? sourceWindow.hasMoreBefore,
+        has_more_after: sourceWindow.has_more_after ?? sourceWindow.hasMoreAfter,
+        content_type: sourceWindow.content_type || sourceWindow.contentType,
+        selection_reason: sourceWindow.selection_reason || sourceWindow.selectionReason,
+        lines: (Array.isArray(sourceWindow.lines) ? sourceWindow.lines : []).map((line) => pruneEmptyDeep({
+            lineno: line.lineno || line.lineNumber,
+            line_number: line.line_number || line.lineNumber,
+            text: line.text
+        }))
+    });
+    const webSearchOutput = buildCanonicalSourceViewportOutput({
+        sourceViewport: source,
+        action: sourceWindow.action || {
+            type: 'open_page',
+            url,
+            lineno: source.line_start || source.lineno || 1
+        }
+    });
+    return textResult([
+        tableProjectionSummary,
+        repeatedLabeledFieldSummary,
+        recordFieldProjectionSummary,
+        facetedSearchFilterSummary,
+        guidance,
+        compactHtmlRelationSummary,
+        wikiFactSummary,
+        sourceWindowText
+    ].filter(Boolean).join('\n\n'), {
+        ok: true,
         status: 'completed',
         url,
+        ref_id: url,
         contentType,
+        content_type: contentType,
         fetchBackend: fetched.backend,
+        fetch_backend: fetched.backend,
+        proxyUsed: fetched.proxyUsed === true || undefined,
+        proxy_used: fetched.proxyUsed === true || undefined,
         fallbackFrom: fetched.fallbackFrom,
+        fallback_from: fetched.fallbackFrom,
         primaryErrorCode: fetched.primaryErrorCode,
+        primary_error_code: fetched.primaryErrorCode,
         tlsVerificationDisabled: fetched.tlsVerificationDisabled === true || undefined,
+        tls_verification_disabled: fetched.tlsVerificationDisabled === true || undefined,
         tlsFallbackReason: normalizeString(fetched.tlsFallbackReason),
+        tls_fallback_reason: normalizeString(fetched.tlsFallbackReason),
         originalChars: text.length,
-        returnedChars: focused.text.length,
-        focus: focused.focus,
+        original_chars: text.length,
+        returnedChars: sourceWindowText.length,
+        returned_chars: sourceWindowText.length,
+        focus: sourceFocus,
+        ...(findPattern ? {
+            pattern: findPattern,
+            matchCount: findMatches.length,
+            match_count: findMatches.length,
+            matches: findMatches
+        } : {}),
         complete: reasoningReady,
-        truncated: observationTruncated,
-        contentTruncated: truncatedForModel,
+        truncated: false,
+        contentTruncated: sourceHasMore,
+        content_truncated: sourceHasMore,
+        sourceRetrievalComplete: true,
+        source_retrieval_complete: true,
+        modelVisibleMode: 'source_viewport',
+        model_visible_mode: 'source_viewport',
+        webSearchOutput,
+        webSearchCall: webSearchOutput.webSearchCall,
+        web_search_call: webSearchOutput.web_search_call,
+        functionCallOutput: webSearchOutput.functionCallOutput,
+        function_call_output: webSearchOutput.function_call_output,
+        source,
+        source_window: source,
+        sourceWindow,
+        sourceViewport: source,
+        sourceWindowCoversTask,
+        source_window_covers_query: sourceWindowCoversTask,
+        structuredTableCoversTask,
+        structured_table_covers_task: structuredTableCoversTask,
         reasoningReady,
-        isEvidence: quality.isEvidence,
-        evidenceQuality: quality.evidenceQuality,
-        pageType: quality.pageType,
-        contentQuality: quality.evidenceQuality,
+        reasoning_ready: reasoningReady,
+        isEvidence: effectiveIsEvidence,
+        is_evidence: effectiveIsEvidence,
+        evidenceQuality: effectiveEvidenceQuality,
+        evidence_quality: effectiveEvidenceQuality,
+        pageType: effectivePageType,
+        page_type: effectivePageType,
+        contentQuality: effectiveEvidenceQuality,
+        content_quality: effectiveEvidenceQuality,
         observationContract: {
             complete: reasoningReady,
-            truncated: observationTruncated,
+            truncated: false,
             reasoning_ready: reasoningReady,
-            is_evidence: quality.isEvidence,
-            evidence_quality: quality.evidenceQuality,
-            page_type: quality.pageType,
-            final_answer_requires_llm_evidence_audit: true
+            is_evidence: effectiveIsEvidence,
+            evidence_quality: effectiveEvidenceQuality,
+            page_type: effectivePageType,
+            source_window: true,
+            source_viewport: source,
+            source_retrieval_complete: true,
+            line_start: sourceWindow.lineStart,
+            line_end: sourceWindow.lineEnd,
+            total_lines: sourceWindow.totalLines,
+            has_more_source_lines: sourceHasMore,
+            source_window_covers_task: sourceWindowCoversTask,
+            structured_table_covers_task: structuredTableCoversTask,
+            evidence_judged_by_model: true
         },
         observedLinkCount: extractedLinks.length,
+        observed_link_count: extractedLinks.length,
         suggestedNextCalls: effectiveSuggestedNextCalls,
+        suggested_next_calls: effectiveSuggestedNextCalls,
         observedRelevantLinks,
+        observed_relevant_links: observedRelevantLinks,
+        contentExcerpt: sourceWindowText,
         htmlRelations: htmlRelations || undefined,
+        html_relations: htmlRelations || undefined,
         htmlRelationSummary: htmlRelationSummary || undefined,
+        html_relation_summary: htmlRelationSummary || undefined,
+        structuredTables: structuredTables.length ? structuredTables : undefined,
+        structured_tables: structuredTables.length ? structuredTables : undefined,
+        tableProjectionSummary: tableProjectionSummary || undefined,
+        recordFieldProjections: recordFieldProjections.length ? recordFieldProjections : undefined,
+        record_field_projections: recordFieldProjections.length ? recordFieldProjections : undefined,
+        recordFieldProjectionSummary: recordFieldProjectionSummary || undefined,
+        record_field_projection_summary: recordFieldProjectionSummary || undefined,
+        repeatedLabeledFields: repeatedLabeledFields.length ? repeatedLabeledFields : undefined,
+        repeated_labeled_fields: repeatedLabeledFields.length ? repeatedLabeledFields : undefined,
+        repeatedLabeledFieldSummary: repeatedLabeledFieldSummary || undefined,
+        repeated_labeled_field_summary: repeatedLabeledFieldSummary || undefined,
+        facetedSearchFilters: facetedSearchFilters.length ? facetedSearchFilters : undefined,
+        faceted_search_filters: facetedSearchFilters.length ? facetedSearchFilters : undefined,
+        facetedSearchFilterSummary: facetedSearchFilterSummary || undefined,
+        faceted_search_filter_summary: facetedSearchFilterSummary || undefined,
+        table_projection_summary: tableProjectionSummary || undefined,
         wikiFacts: wikiFacts.length ? wikiFacts : undefined,
+        wiki_facts: wikiFacts.length ? wikiFacts : undefined,
         wikiFactSummary: wikiFactSummary || undefined,
+        wiki_fact_summary: wikiFactSummary || undefined,
         evidenceGap,
+        evidence_gap: evidenceGap,
         recoveryHint,
+        recovery_hint: recoveryHint,
         pageStatus: quality.pageStatus || undefined,
-        finalAnswerRequiresEvidenceAudit: true,
+        page_status: quality.pageStatus || undefined,
+        modelJudgesEvidence: true,
+        model_judges_evidence: true,
         encodingRepair: encodingRepair.repaired ? 'latin1_to_utf8' : undefined,
+        encoding_repair: encodingRepair.repaired ? 'latin1_to_utf8' : undefined,
         crawl4aiAttempt: summarizeCrawl4aiAttempt(crawl4aiAttempt),
+        crawl4ai_attempt: summarizeCrawl4aiAttempt(crawl4aiAttempt),
         renderedFallbackAttempt: summarizeCrawl4aiAttempt(renderedFallbackAttempt),
+        rendered_fallback_attempt: summarizeCrawl4aiAttempt(renderedFallbackAttempt),
         renderedFallbackUsed: renderedFallbackUsed || undefined,
-        renderedFallbackTrigger: normalizeString(renderedFallbackTrigger)
+        rendered_fallback_used: renderedFallbackUsed || undefined,
+        renderedFallbackTrigger: normalizeString(renderedFallbackTrigger),
+        rendered_fallback_trigger: normalizeString(renderedFallbackTrigger)
     });
 }
 
 async function webFetch(args = {}) {
-    const url = normalizeString(args.url || args.uri);
+    const url = normalizeString(args.url || args.ref_id || args.refId || args.uri);
     if (!/^https?:\/\//i.test(url)) {
         return errorResult('web_fetch requires http(s) url');
     }
     const maxChars = clampNumber(args.maxChars || args.max_chars, MAX_FETCH_CHARS, 1000, 80000);
     const timeoutMs = clampNumber(args.timeoutMs || args.timeout_ms, 90000, 1000, 300000);
     const crawl4aiAttempt = await maybeFetchWithCrawl4ai(url, args, timeoutMs);
-    const wikiText = crawl4aiAttempt?.ok ? null : await maybeFetchWikipediaWikitext(url, timeoutMs);
-    const fetched = crawl4aiAttempt?.ok ? crawl4aiAttempt : wikiText || await fetchText(url, timeoutMs);
+    const wikipediaPage = crawl4aiAttempt?.ok ? null : await maybeFetchWikipediaPage(url, timeoutMs);
+    const fetched = crawl4aiAttempt?.ok ? crawl4aiAttempt : wikipediaPage || await fetchText(url, timeoutMs);
     if (!fetched.ok) {
         return errorResult(fetched.error || 'web_fetch fetch failed', buildHttpAccessFailureDetails(url, fetched));
     }
@@ -4718,6 +6679,1062 @@ async function webFetch(args = {}) {
         });
     }
     return primaryResult;
+}
+
+const WEB_ARCHIVE_PROVIDERS = Object.freeze({
+    internet_archive: Object.freeze({
+        id: 'internet_archive',
+        aliases: Object.freeze(['internet_archive', 'internet archive', 'ia', 'wayback', 'wayback_machine']),
+        cdxBaseUrl: 'https://web.archive.org/cdx/search/cdx',
+        replayBaseUrl: 'https://web.archive.org/web'
+    }),
+    arquivo: Object.freeze({
+        id: 'arquivo',
+        aliases: Object.freeze(['arquivo', 'arquivo.pt', 'arquivo_pt']),
+        cdxBaseUrl: 'https://arquivo.pt/wayback/cdx',
+        replayBaseUrl: 'https://arquivo.pt/wayback'
+    })
+});
+
+function normalizeWebArchiveProvider(value = '') {
+    const normalized = normalizeString(value).toLowerCase();
+    if (!normalized || normalized === 'auto' || normalized === 'all') {
+        return '';
+    }
+    return Object.values(WEB_ARCHIVE_PROVIDERS)
+        .find((provider) => provider.aliases.includes(normalized))
+        ?.id || '';
+}
+
+function normalizeWebArchiveProviders(args = {}) {
+    const raw = Array.isArray(args.providers)
+        ? args.providers
+        : String(args.provider || '')
+            .split(',')
+            .map((item) => item.trim())
+            .filter(Boolean);
+    if (!raw.length) {
+        return ['internet_archive', 'arquivo'];
+    }
+    const providers = dedupeSearchStrings(raw.map(normalizeWebArchiveProvider)).filter(Boolean);
+    return providers.length ? providers : ['internet_archive', 'arquivo'];
+}
+
+function webArchiveSearchTerms(value = '') {
+    let decoded = String(value || '');
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+            decoded = decodeURIComponent(decoded.replace(/\+/g, ' '));
+        } catch {
+            break;
+        }
+    }
+    return dedupeSearchStrings(
+        (decoded.toLowerCase().match(/[\p{L}\p{N}]{2,}/gu) || [])
+            .filter((term) => !['http', 'https', 'www'].includes(term))
+    );
+}
+
+function webArchiveAnchorTerms(terms = []) {
+    const normalized = dedupeSearchStrings(Array.isArray(terms) ? terms : webArchiveSearchTerms(terms));
+    if (!normalized.length) {
+        return [];
+    }
+    const numericTerms = normalized.filter((term) => /\d/.test(term));
+    return dedupeSearchStrings([
+        normalized[0],
+        ...numericTerms
+    ]).slice(0, 6);
+}
+
+const WEB_ARCHIVE_URL_FIELD_TERMS = new Set([
+    'access', 'article', 'author', 'classification', 'content', 'country', 'date',
+    'document', 'field', 'filter', 'flag', 'format', 'lang', 'language', 'page',
+    'provider', 'query', 'record', 'region', 'resource', 'search', 'sort', 'source',
+    'subject', 'topic', 'type', 'typenorm', 'year'
+]);
+
+function webArchiveAnchorTermSets(terms = []) {
+    const normalized = dedupeSearchStrings(Array.isArray(terms) ? terms : webArchiveSearchTerms(terms));
+    const primary = webArchiveAnchorTerms(normalized);
+    if (!primary.length) {
+        return [];
+    }
+    const firstTerm = normalized[0];
+    const numericTerms = normalized.filter((term) => /\d/.test(term));
+    const literalValueTerms = normalized
+        .slice(1)
+        .filter((term) => !/\d/.test(term) && !WEB_ARCHIVE_URL_FIELD_TERMS.has(term))
+        .slice(0, 2);
+    const candidates = [
+        literalValueTerms.length
+            ? [firstTerm, numericTerms[0], numericTerms[numericTerms.length - 1], ...literalValueTerms]
+            : [],
+        primary,
+        numericTerms.length >= 2
+            ? [firstTerm, numericTerms[0], numericTerms[numericTerms.length - 1]]
+            : [],
+        numericTerms.length
+            ? [firstTerm, numericTerms[0]]
+            : [firstTerm]
+    ];
+    const seen = new Set();
+    return candidates
+        .map((candidate) => dedupeSearchStrings(candidate).slice(0, 6))
+        .filter((candidate) => {
+            if (!candidate.length) {
+                return false;
+            }
+            const key = candidate.join('\u0000');
+            if (seen.has(key)) {
+                return false;
+            }
+            seen.add(key);
+            return true;
+        });
+}
+
+function webArchiveUrlRankingText(value = '') {
+    const rawUrl = normalizeString(value);
+    try {
+        const parsed = new URL(rawUrl);
+        const parts = [
+            parsed.hostname,
+            parsed.pathname,
+            parsed.hash
+        ];
+        for (const [key, parameterValue] of parsed.searchParams.entries()) {
+            const normalizedValue = normalizeString(parameterValue);
+            if (!normalizedValue) {
+                continue;
+            }
+            parts.push(key);
+            parts.push(normalizedValue);
+        }
+        return webArchiveSearchTerms(parts.join(' ')).join(' ');
+    } catch {
+        return webArchiveSearchTerms(rawUrl).join(' ');
+    }
+}
+
+function normalizeArchiveIndexTarget(url, matchType = 'exact') {
+    const normalizedUrl = normalizeString(url);
+    return normalizeString(matchType).toLowerCase() === 'prefix'
+        ? normalizedUrl.replace(/\*$/, '')
+        : normalizedUrl;
+}
+
+function escapeWebArchiveRegexTerm(value = '') {
+    return String(value || '').replace(/[\\^$.*+?()[\]{}|]/g, '\\$&');
+}
+
+function buildWebArchiveCdxUrl(providerId, args = {}, page = {}) {
+    const provider = WEB_ARCHIVE_PROVIDERS[providerId];
+    const override = providerId === 'internet_archive'
+        ? normalizeString(args.cdxBaseUrl || args.cdx_base_url || args.internetArchiveCdxUrl)
+        : normalizeString(args.arquivoCdxUrl || args.arquivo_cdx_url);
+    const endpoint = new URL(override || provider.cdxBaseUrl);
+    endpoint.searchParams.set('url', normalizeArchiveIndexTarget(
+        args.url,
+        args.matchType || args.match_type
+    ));
+    const matchType = normalizeString(args.matchType || args.match_type).toLowerCase();
+    if (matchType === 'prefix') {
+        endpoint.searchParams.set('matchType', 'prefix');
+    }
+    endpoint.searchParams.set('output', 'json');
+    endpoint.searchParams.set('limit', String(clampNumber(
+        page.limit || args.scanLimit || args.scan_limit,
+        matchType === 'prefix' ? 500 : 120,
+        1,
+        500
+    )));
+    const fromYear = clampNumber(args.fromYear || args.from_year, 0, 0, 9999);
+    const toYear = clampNumber(args.toYear || args.to_year, 0, 0, 9999);
+    if (fromYear) endpoint.searchParams.set('from', String(fromYear));
+    if (toYear) endpoint.searchParams.set('to', String(toYear));
+    if (providerId === 'internet_archive') {
+        endpoint.searchParams.set('fl', 'timestamp,original,statuscode,mimetype,digest,length');
+        endpoint.searchParams.append('filter', 'statuscode:200');
+        for (const term of Array.isArray(page.urlFilterTerms) ? page.urlFilterTerms : []) {
+            const escapedTerm = escapeWebArchiveRegexTerm(term);
+            if (escapedTerm) {
+                endpoint.searchParams.append('filter', `original:(?i).*${escapedTerm}.*`);
+            }
+        }
+        if (normalizeString(args.matchType || args.match_type).toLowerCase() === 'prefix') {
+            endpoint.searchParams.set('collapse', 'urlkey');
+        }
+        if (page.showResumeKey === true) {
+            endpoint.searchParams.set('showResumeKey', 'true');
+        }
+        const resumeKey = normalizeString(page.resumeKey);
+        if (resumeKey) {
+            endpoint.searchParams.set('resumeKey', resumeKey);
+        }
+    }
+    return endpoint.toString();
+}
+
+function parseInternetArchiveCdxPage(text = '') {
+    let payload;
+    try {
+        payload = JSON.parse(text);
+    } catch {
+        return { rows: [], resumeKey: '' };
+    }
+    if (!Array.isArray(payload) || !Array.isArray(payload[0])) {
+        return { rows: [], resumeKey: '' };
+    }
+    const header = payload[0].map((field) => normalizeString(String(field)));
+    const rows = payload.slice(1)
+        .filter((row) => Array.isArray(row) && row.length >= header.length)
+        .map((row) => Object.fromEntries(header.map((field, index) => [field, row[index]])));
+    const resumeKey = payload.slice(1)
+        .findLast((row) => Array.isArray(row) && row.length === 1 && normalizeString(String(row[0] || '')))
+        ?.[0];
+    return {
+        rows,
+        resumeKey: normalizeString(String(resumeKey || ''))
+    };
+}
+
+function parseArquivoCdx(text = '') {
+    return String(text || '')
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .map((line) => {
+            try {
+                return JSON.parse(line);
+            } catch {
+                return null;
+            }
+        })
+        .filter(Boolean);
+}
+
+function buildWebArchiveReplayUrl(providerId, timestamp, originalUrl, args = {}) {
+    const provider = WEB_ARCHIVE_PROVIDERS[providerId];
+    const override = providerId === 'internet_archive'
+        ? normalizeString(args.replayBaseUrl || args.replay_base_url || args.internetArchiveReplayUrl)
+        : normalizeString(args.arquivoReplayUrl || args.arquivo_replay_url);
+    const baseUrl = (override || provider.replayBaseUrl).replace(/\/+$/, '');
+    const captureTimestamp = normalizeString(String(timestamp || '')).replace(/\D/g, '');
+    if (providerId === 'internet_archive') {
+        return `${baseUrl}/${captureTimestamp}id_/${originalUrl}`;
+    }
+    return `${baseUrl}/${captureTimestamp}/${originalUrl}`;
+}
+
+function normalizeWebArchiveCapture(providerId, row = {}, args = {}) {
+    const timestamp = normalizeString(String(row.timestamp || ''));
+    const originalUrl = normalizeString(String(row.original || row.url || ''));
+    if (!/^\d{8,14}$/.test(timestamp) || !/^https?:\/\//i.test(originalUrl)) {
+        return null;
+    }
+    const capturedAt = timestamp.length >= 14
+        ? `${timestamp.slice(0, 4)}-${timestamp.slice(4, 6)}-${timestamp.slice(6, 8)}T${timestamp.slice(8, 10)}:${timestamp.slice(10, 12)}:${timestamp.slice(12, 14)}Z`
+        : `${timestamp.slice(0, 4)}-${timestamp.slice(4, 6)}-${timestamp.slice(6, 8)}`;
+    return pruneEmptyDeep({
+        provider: providerId,
+        timestamp,
+        capturedAt,
+        originalUrl,
+        replayUrl: buildWebArchiveReplayUrl(providerId, timestamp, originalUrl, args),
+        statusCode: Number(row.statuscode || row.status) || undefined,
+        mimeType: normalizeString(String(row.mimetype || row.mime || '')),
+        digest: normalizeString(String(row.digest || '')),
+        contentLength: Number(row.length) || undefined
+    });
+}
+
+function rankWebArchiveCaptures(captures = [], contains = '', options = {}) {
+    const terms = webArchiveSearchTerms(contains);
+    const preferEarliest = options.preferEarliest === true;
+    const ranked = captures.map((capture, index) => {
+        const haystack = webArchiveUrlRankingText(capture.originalUrl);
+        const matchedTerms = terms.filter((term) => haystack.includes(term));
+        return {
+            ...capture,
+            matchedTerms,
+            matchCount: matchedTerms.length,
+            matchCoverage: terms.length ? Number((matchedTerms.length / terms.length).toFixed(3)) : 1,
+            _index: index
+        };
+    });
+    ranked.sort((left, right) => preferEarliest
+        ? right.matchCount - left.matchCount ||
+            left.timestamp.localeCompare(right.timestamp) ||
+            left._index - right._index
+        : right.matchCount - left.matchCount ||
+            right.timestamp.localeCompare(left.timestamp) ||
+            left._index - right._index
+    );
+    const exactMatches = terms.length
+        ? ranked.filter((capture) => capture.matchCount === terms.length)
+        : ranked;
+    const termMatches = ranked.filter((capture) => capture.matchCount > 0);
+    const candidates = preferEarliest
+        ? termMatches
+        : exactMatches.length
+            ? exactMatches
+            : termMatches;
+    return {
+        terms,
+        exactMatch: Boolean(exactMatches.length),
+        captures: (candidates.length ? candidates : ranked).map(({ _index, ...capture }) => capture)
+    };
+}
+
+function selectWebArchiveCaptures(captures = [], terms = [], limit = 10) {
+    const rankedCaptures = Array.isArray(captures) ? captures : [];
+    const selected = rankedCaptures.slice(0, limit);
+    const coreTerms = webArchiveAnchorTerms(terms);
+    if (!coreTerms.length || limit < 2) {
+        return { selected, coreTerms, recoveryCaptures: [] };
+    }
+    const recoveryCaptures = rankedCaptures
+        .filter((capture) =>
+            coreTerms.every((term) => (capture.matchedTerms || []).includes(term))
+        )
+        .sort((left, right) =>
+            Number(left.matchCount || 0) - Number(right.matchCount || 0) ||
+            left.timestamp.localeCompare(right.timestamp)
+        )
+        .slice(0, 2);
+    let insertIndex = Math.min(3, Math.max(1, limit - 1));
+    for (const recovery of recoveryCaptures) {
+        const existingIndex = selected.findIndex((capture) =>
+            capture.provider === recovery.provider &&
+            capture.timestamp === recovery.timestamp &&
+            capture.originalUrl === recovery.originalUrl
+        );
+        if (existingIndex >= 0) {
+            continue;
+        }
+        selected.splice(Math.min(insertIndex, selected.length), 0, recovery);
+        insertIndex += 1;
+    }
+    return {
+        selected: selected.slice(0, limit),
+        coreTerms,
+        recoveryCaptures
+    };
+}
+
+function annotateArchiveDateBoundsRelaxed(result = {}, fromYear = 0, toYear = 0) {
+    const details = pruneEmptyDeep({
+        ...(result.structuredContent || result.details || {}),
+        captureDateBoundsRelaxed: true,
+        capture_date_bounds_relaxed: true,
+        originalCaptureDateBounds: {
+            fromYear: fromYear || undefined,
+            toYear: toYear || undefined
+        },
+        original_capture_date_bounds: {
+            from_year: fromYear || undefined,
+            to_year: toYear || undefined
+        },
+        captureDateRecoveryReason: 'The requested archive crawl-year bounds duplicated URL/content ranking years or returned no captures, so discovery retried without crawl-date bounds.',
+        capture_date_recovery_reason: 'The requested archive crawl-year bounds duplicated URL/content ranking years or returned no captures, so discovery retried without crawl-date bounds.'
+    });
+    return {
+        ...result,
+        content: Array.isArray(result.content) && result.content.length
+            ? [{
+                ...result.content[0],
+                text: `archive_capture_date_bounds_relaxed=true original_from=${fromYear || '(none)'} original_to=${toYear || '(none)'}\n${result.content[0].text}`
+            }, ...result.content.slice(1)]
+            : result.content,
+        structuredContent: details,
+        details
+    };
+}
+
+async function webArchiveLookup(args = {}) {
+    const url = normalizeString(args.url || args.uri || args.originalUrl || args.original_url);
+    if (!/^https?:\/\//i.test(url)) {
+        return errorResult('web_archive_lookup requires an original http(s) url');
+    }
+    const requestedProvider = normalizeWebArchiveProvider(args.provider);
+    const timestamp = normalizeString(String(args.timestamp || args.captureTimestamp || args.capture_timestamp || ''))
+        .replace(/\D/g, '');
+    const mode = normalizeString(args.mode, timestamp ? 'open' : 'captures').toLowerCase();
+    const timeoutMs = clampNumber(args.timeoutMs || args.timeout_ms, 120000, 3000, 300000);
+    if (mode === 'open') {
+        if (!requestedProvider) {
+            return errorResult('web_archive_lookup mode=open requires provider');
+        }
+        if (!/^\d{8,14}$/.test(timestamp)) {
+            return errorResult('web_archive_lookup mode=open requires an 8-14 digit timestamp');
+        }
+        const replayUrl = buildWebArchiveReplayUrl(requestedProvider, timestamp, url, args);
+        const fetched = await fetchText(replayUrl, timeoutMs);
+        if (!fetched.ok) {
+            return errorResult(fetched.error || 'archived snapshot fetch failed', {
+                ...buildHttpAccessFailureDetails(replayUrl, fetched),
+                provider: requestedProvider,
+                timestamp,
+                originalUrl: url,
+                replayUrl
+            });
+        }
+        const maxChars = clampNumber(args.maxChars || args.max_chars, MAX_FETCH_CHARS, 1000, 80000);
+        const result = buildWebFetchResult({
+            url: replayUrl,
+            args: {
+                ...args,
+                url: replayUrl,
+                query: args.query || args.contains
+            },
+            maxChars,
+            fetched,
+            crawl4aiAttempt: null
+        });
+        const details = pruneEmptyDeep({
+            ...(result.structuredContent || result.details || {}),
+            kind: 'web_archive_snapshot',
+            archiveProvider: requestedProvider,
+            archive_provider: requestedProvider,
+            captureTimestamp: timestamp,
+            capture_timestamp: timestamp,
+            originalUrl: url,
+            original_url: url,
+            replayUrl,
+            replay_url: replayUrl
+        });
+        return {
+            ...result,
+            structuredContent: details,
+            details
+        };
+    }
+    if (mode !== 'captures' && mode !== 'search') {
+        return errorResult('web_archive_lookup mode must be captures, search, or open');
+    }
+
+    const providers = normalizeWebArchiveProviders(args);
+    const matchType = normalizeString(args.matchType || args.match_type, 'exact').toLowerCase();
+    const rankingTerms = webArchiveSearchTerms(args.contains || args.query);
+    const requestedFromYear = clampNumber(args.fromYear || args.from_year, 0, 0, 9999);
+    const requestedToYear = clampNumber(args.toYear || args.to_year, 0, 0, 9999);
+    const duplicatedContentYearBounds = [requestedFromYear, requestedToYear]
+        .filter(Boolean)
+        .some((year) => rankingTerms.includes(String(year)));
+    if (
+        duplicatedContentYearBounds &&
+        args._captureDateBoundsRelaxed !== true
+    ) {
+        const relaxed = await webArchiveLookup({
+            ...args,
+            fromYear: 0,
+            from_year: 0,
+            toYear: 0,
+            to_year: 0,
+            _captureDateBoundsRelaxed: true
+        });
+        return annotateArchiveDateBoundsRelaxed(relaxed, requestedFromYear, requestedToYear);
+    }
+    const defaultScanLimit = matchType === 'prefix'
+        ? (rankingTerms.length ? 2500 : 500)
+        : 120;
+    const scanLimit = clampNumber(args.scanLimit || args.scan_limit, defaultScanLimit, 1, 10000);
+    const maxResults = clampNumber(args.maxResults || args.max_results || args.limit, 12, 1, 50);
+    const archiveIndexTimeoutMs = clampNumber(
+        args.indexTimeoutMs || args.index_timeout_ms,
+        Math.max(timeoutMs, 90000),
+        5000,
+        180000
+    );
+    const attempts = await runBoundedParallel(providers, providers.length, async (providerId) => {
+        if (providerId !== 'internet_archive') {
+            const cdxUrl = buildWebArchiveCdxUrl(providerId, args, {
+                limit: Math.min(scanLimit, 500)
+            });
+            const fetched = await fetchArchiveIndexText(cdxUrl, archiveIndexTimeoutMs);
+            if (!fetched.ok) {
+                return {
+                    ok: false,
+                    provider: providerId,
+                    cdxUrl,
+                    cdxUrls: [cdxUrl],
+                    pageCount: 1,
+                    statusCode: fetched.status || 0,
+                    errorCode: fetched.errorCode,
+                    error: fetched.error
+                };
+            }
+            return {
+                ok: true,
+                provider: providerId,
+                cdxUrl,
+                cdxUrls: [cdxUrl],
+                pageCount: 1,
+                stopReason: 'provider_single_page',
+                captures: parseArquivoCdx(fetched.text)
+                    .map((row) => normalizeWebArchiveCapture(providerId, row, args))
+                    .filter(Boolean)
+            };
+        }
+
+        const captures = [];
+        const cdxUrls = [];
+        let resumeKey = '';
+        let statusCode = 0;
+        let errorCode = '';
+        let error = '';
+        let stopReason = 'scan_limit_reached';
+        let serverUrlProbeComplete = false;
+        let matchedAnchorSetCount = 0;
+
+        if (matchType === 'prefix' && rankingTerms.length) {
+            const anchorTermSets = webArchiveAnchorTermSets(rankingTerms);
+            for (let anchorIndex = 0; anchorIndex < anchorTermSets.length; anchorIndex += 1) {
+                const anchorTerms = anchorTermSets[anchorIndex];
+                const isPreferredAnchorSet = anchorIndex === 0;
+                const isLastAnchorSet = anchorIndex === anchorTermSets.length - 1;
+                const probeTimeoutMs = isPreferredAnchorSet || matchedAnchorSetCount > 0
+                    ? archiveIndexTimeoutMs
+                    : Math.min(archiveIndexTimeoutMs, 20000);
+                const filteredCdxUrl = buildWebArchiveCdxUrl(providerId, args, {
+                    limit: Math.min(scanLimit, 500),
+                    urlFilterTerms: anchorTerms
+                });
+                cdxUrls.push(filteredCdxUrl);
+                let filteredFetch = await fetchArchiveIndexText(filteredCdxUrl, probeTimeoutMs);
+                if (
+                    !filteredFetch.ok &&
+                    isLastAnchorSet &&
+                    !isPreferredAnchorSet &&
+                    ['timeout', 'curl_fetch_failed', 'fetch_process_failed', 'node_fetch_failed'].includes(
+                        normalizeString(filteredFetch.errorCode)
+                    )
+                ) {
+                    await new Promise((resolve) => setTimeout(resolve, 750));
+                    cdxUrls.push(filteredCdxUrl);
+                    filteredFetch = await fetchArchiveIndexText(filteredCdxUrl, archiveIndexTimeoutMs);
+                }
+                statusCode = filteredFetch.status || statusCode;
+                if (!filteredFetch.ok) {
+                    errorCode = filteredFetch.errorCode;
+                    error = filteredFetch.error;
+                    if (isLastAnchorSet) {
+                        stopReason = 'server_url_probe_failure_falling_back_to_prefix_scan';
+                        break;
+                    }
+                    stopReason = 'server_url_anchor_probe_failed_backing_off';
+                    continue;
+                }
+                const filteredPage = parseInternetArchiveCdxPage(filteredFetch.text);
+                const filteredCaptures = filteredPage.rows
+                    .map((row) => normalizeWebArchiveCapture(providerId, row, args))
+                    .filter(Boolean);
+                if (filteredCaptures.length) {
+                    errorCode = '';
+                    error = '';
+                    captures.push(...filteredCaptures);
+                    matchedAnchorSetCount += 1;
+                    const filteredRanking = rankWebArchiveCaptures(
+                        filteredCaptures,
+                        args.contains || args.query
+                    );
+                    stopReason = anchorIndex > 0
+                        ? 'server_url_anchor_backoff_matched'
+                        : anchorTerms.length === rankingTerms.length
+                        ? 'server_url_terms_matched'
+                        : 'server_url_anchor_terms_matched';
+                    const shouldProbeBroaderCore = (
+                        matchedAnchorSetCount === 1 &&
+                        anchorIndex < anchorTermSets.length - 1
+                    );
+                    if (shouldProbeBroaderCore) {
+                        stopReason = 'server_url_selective_terms_matched_probing_broader_core';
+                        continue;
+                    }
+                    serverUrlProbeComplete = filteredRanking.exactMatch || matchedAnchorSetCount >= 2;
+                    if (serverUrlProbeComplete) {
+                        break;
+                    }
+                }
+            }
+            if (!serverUrlProbeComplete) {
+                stopReason = stopReason === 'server_url_probe_failure_falling_back_to_prefix_scan'
+                    ? stopReason
+                    : 'server_url_anchor_terms_empty_falling_back_to_prefix_scan';
+            }
+        }
+
+        const maxPages = Math.ceil(scanLimit / 500);
+        for (let pageIndex = 0; !serverUrlProbeComplete && pageIndex < maxPages; pageIndex += 1) {
+            const requestedBeforePage = pageIndex * 500;
+            const pageLimit = Math.min(500, scanLimit - requestedBeforePage);
+            if (pageLimit <= 0) break;
+            const cdxUrl = buildWebArchiveCdxUrl(providerId, args, {
+                limit: pageLimit,
+                showResumeKey: requestedBeforePage + pageLimit < scanLimit,
+                resumeKey
+            });
+            cdxUrls.push(cdxUrl);
+            const fetched = await fetchArchiveIndexText(cdxUrl, archiveIndexTimeoutMs);
+            statusCode = fetched.status || statusCode;
+            if (!fetched.ok) {
+                errorCode = fetched.errorCode;
+                error = fetched.error;
+                stopReason = captures.length ? 'partial_fetch_failure' : 'fetch_failure';
+                break;
+            }
+            errorCode = '';
+            error = '';
+            const page = parseInternetArchiveCdxPage(fetched.text);
+            const pageCaptures = page.rows
+                .map((row) => normalizeWebArchiveCapture(providerId, row, args))
+                .filter(Boolean);
+            captures.push(...pageCaptures);
+            if (rankingTerms.length && rankWebArchiveCaptures(pageCaptures, args.contains || args.query).exactMatch) {
+                stopReason = 'all_url_terms_matched';
+                break;
+            }
+            if (!page.resumeKey || page.resumeKey === resumeKey) {
+                stopReason = 'no_resume_key';
+                break;
+            }
+            resumeKey = page.resumeKey;
+        }
+        return {
+            ok: captures.length > 0,
+            provider: providerId,
+            cdxUrl: cdxUrls[0] || '',
+            cdxUrls,
+            pageCount: cdxUrls.length,
+            stopReason,
+            statusCode,
+            errorCode,
+            error,
+            captures
+        };
+    });
+    const captures = Array.from(new Map(
+        attempts
+            .flatMap((attempt) => Array.isArray(attempt.captures) ? attempt.captures : [])
+            .map((capture) => [`${capture.provider}:${capture.timestamp}:${capture.originalUrl}`, capture])
+    ).values());
+    if (!captures.length) {
+        if ((requestedFromYear || requestedToYear) && args._captureDateBoundsRelaxed !== true) {
+            const relaxed = await webArchiveLookup({
+                ...args,
+                fromYear: 0,
+                from_year: 0,
+                toYear: 0,
+                to_year: 0,
+                _captureDateBoundsRelaxed: true
+            });
+            return annotateArchiveDateBoundsRelaxed(relaxed, requestedFromYear, requestedToYear);
+        }
+        if (
+            matchType === 'prefix' &&
+            args._archiveEmptyRetry !== true
+        ) {
+            await new Promise((resolve) => setTimeout(resolve, 750));
+            return await webArchiveLookup({
+                ...args,
+                _archiveEmptyRetry: true
+            });
+        }
+        return errorResult('No archived captures were found for this URL pattern', {
+            status: 'not_found',
+            originalUrl: url,
+            matchType: normalizeString(args.matchType || args.match_type, 'exact'),
+            attempts,
+            evidenceGap: 'The configured public web archives returned no matching captures.',
+            recoveryHint: 'Try matchType=prefix on a stable path, widen fromYear/toYear, or remove contains terms before returning to broad web search.'
+        });
+    }
+    const ranked = rankWebArchiveCaptures(captures, args.contains || args.query, {
+        preferEarliest: matchType === 'prefix'
+    });
+    const captureSelection = selectWebArchiveCaptures(ranked.captures, ranked.terms, maxResults);
+    const selected = captureSelection.selected;
+    const suggestedNextCalls = selected.slice(0, 5).map((capture) => ({
+        tool: 'web_archive_lookup',
+        args: pruneEmptyDeep({
+            mode: 'open',
+            provider: capture.provider,
+            url: capture.originalUrl,
+            timestamp: capture.timestamp,
+            query: normalizeString(args.query || args.contains)
+        })
+    }));
+    const details = pruneEmptyDeep({
+        status: 'completed',
+        kind: 'web_archive_captures',
+        originalUrl: url,
+        original_url: url,
+        matchType,
+        providers,
+        searchTerms: ranked.terms,
+        exactTermMatch: ranked.exactMatch,
+        rankingPolicy: matchType === 'prefix'
+            ? 'earliest_term_matching_capture'
+            : 'term_match_then_latest_capture',
+        candidateSelectionPolicy: 'top_url_matches_with_broad_core_recovery',
+        candidate_selection_policy: 'top_url_matches_with_broad_core_recovery',
+        coreSearchTerms: captureSelection.coreTerms,
+        core_search_terms: captureSelection.coreTerms,
+        recoveryCaptureCount: captureSelection.recoveryCaptures.length,
+        recovery_capture_count: captureSelection.recoveryCaptures.length,
+        scanLimit,
+        scannedCaptureCount: captures.length,
+        captureCount: selected.length,
+        captures: selected,
+        attempts: attempts.map((attempt) => ({
+            ok: attempt.ok,
+            provider: attempt.provider,
+            cdxUrl: attempt.cdxUrl,
+            cdxUrls: attempt.cdxUrls,
+            pageCount: attempt.pageCount,
+            stopReason: attempt.stopReason,
+            statusCode: attempt.statusCode,
+            errorCode: attempt.errorCode,
+            error: attempt.error,
+            captureCount: Array.isArray(attempt.captures) ? attempt.captures.length : 0
+        })),
+        suggestedNextCalls,
+        suggested_next_calls: suggestedNextCalls,
+        reasoningReady: false,
+        reasoning_ready: false,
+        sourceRetrievalComplete: true,
+        source_retrieval_complete: true
+    });
+    const autoOpenSnapshot = mode === 'search' || Boolean(normalizeString(args.query));
+    if (autoOpenSnapshot) {
+        const openAttempts = [];
+        const bestMatchCount = Number(selected[0]?.matchCount || 0);
+        for (const capture of selected.slice(0, 10)) {
+            const minimumCandidateMatchCount = Math.max(
+                rankingTerms.length >= 3 ? 2 : 1,
+                bestMatchCount - 2
+            );
+            const coversCoreSearchTerms = captureSelection.coreTerms.length > 0 &&
+                captureSelection.coreTerms.every((term) =>
+                    (capture.matchedTerms || []).includes(term)
+                );
+            if (
+                bestMatchCount &&
+                Number(capture.matchCount || 0) < minimumCandidateMatchCount &&
+                !coversCoreSearchTerms
+            ) {
+                openAttempts.push({
+                    provider: capture.provider,
+                    timestamp: capture.timestamp,
+                    originalUrl: capture.originalUrl,
+                    ok: false,
+                    error: 'archive_candidate_below_relevance_threshold'
+                });
+                continue;
+            }
+            const opened = await webArchiveLookup({
+                ...args,
+                mode: 'open',
+                provider: capture.provider,
+                url: capture.originalUrl,
+                timestamp: capture.timestamp,
+                query: normalizeString(args.query || args.contains),
+                fromYear: 0,
+                from_year: 0,
+                toYear: 0,
+                to_year: 0
+            });
+            openAttempts.push({
+                provider: capture.provider,
+                timestamp: capture.timestamp,
+                originalUrl: capture.originalUrl,
+                ok: opened.isError !== true,
+                error: opened.isError === true
+                    ? normalizeString(opened.structuredContent?.error || opened.content?.[0]?.text)
+                    : ''
+            });
+            if (opened.isError === true) {
+                continue;
+            }
+            const snapshotDetails = opened.structuredContent || opened.details || {};
+            const snapshotText = normalizeString(opened.content?.[0]?.text);
+            const snapshotBlocked = /making sure you(?:'|’)re not a bot|anubis|enable javascript to get past this challenge|proof[- ]of[- ]work scheme/i.test(snapshotText) ||
+                /anti_bot|access_barrier|captcha|js_challenge/i.test(normalizeString(
+                    snapshotDetails.evidenceQuality ||
+                    snapshotDetails.evidence_quality ||
+                    snapshotDetails.pageStatus ||
+                    snapshotDetails.page_status
+                ));
+            const snapshotHasNoResults = /\bno (?:documents|records|results|matches) found\b|\b0 (?:documents|records|results|matches)\b/i.test(snapshotText);
+            if (snapshotBlocked || snapshotHasNoResults) {
+                openAttempts[openAttempts.length - 1] = {
+                    ...openAttempts[openAttempts.length - 1],
+                    ok: false,
+                    error: snapshotBlocked
+                        ? 'archived_snapshot_access_barrier'
+                        : 'archived_snapshot_no_results'
+                };
+                continue;
+            }
+            const queryConstraintFidelity = assessArchivedSnapshotQueryFidelity(
+                capture.originalUrl,
+                snapshotDetails
+            );
+            if (queryConstraintFidelity.rejected === true) {
+                openAttempts[openAttempts.length - 1] = {
+                    ...openAttempts[openAttempts.length - 1],
+                    ok: false,
+                    error: 'archived_snapshot_query_constraints_not_reflected',
+                    queryConstraintFidelity,
+                    query_constraint_fidelity: queryConstraintFidelity
+                };
+                continue;
+            }
+            const combinedDetails = pruneEmptyDeep({
+                ...snapshotDetails,
+                kind: 'web_archive_search_result',
+                archiveSearchMode: mode,
+                archive_search_mode: mode,
+                selectedCapture: capture,
+                selected_capture: capture,
+                captureSearch: details,
+                capture_search: details,
+                openAttempts,
+                open_attempts: openAttempts,
+                queryConstraintFidelity,
+                query_constraint_fidelity: queryConstraintFidelity
+            });
+            const discoveryLine = `archive_snapshot_selected provider=${capture.provider} captured_at=${capture.capturedAt} original_url=${capture.originalUrl}`;
+            return {
+                ...opened,
+                content: [{
+                    type: 'text',
+                    text: [discoveryLine, opened.content?.[0]?.text].filter(Boolean).join('\n\n')
+                }],
+                structuredContent: combinedDetails,
+                details: combinedDetails
+            };
+        }
+        details.openAttempts = openAttempts;
+        details.open_attempts = openAttempts;
+    }
+    const lines = [
+        selected[0]
+            ? `best_next_call=web_archive_lookup ${JSON.stringify(suggestedNextCalls[0].args)}`
+            : '',
+        `archive_capture_count=${selected.length} scanned=${captures.length}`,
+        `original_url=${url}`,
+        ...selected.map((capture, index) =>
+            `${index + 1}. provider=${capture.provider} captured_at=${capture.capturedAt} matched_terms=${capture.matchedTerms.join(',') || '(none)'}\n` +
+            `   original_url=${capture.originalUrl}\n` +
+            `   replay_url=${capture.replayUrl}`
+        )
+    ].filter(Boolean);
+    return textResult(lines.join('\n'), details);
+}
+
+async function webFind(args = {}) {
+    const url = normalizeString(args.url || args.ref_id || args.refId || args.uri);
+    const pattern = normalizeString(args.pattern || args.query || args.q || args.text);
+    if (!/^https?:\/\//i.test(url)) {
+        return errorResult('web_find requires http(s) url');
+    }
+    if (!pattern) {
+        return errorResult('web_find requires pattern');
+    }
+    const requestedContextLines = Number(args.contextLines || args.context_lines || 0);
+    const defaultFindLines = Number.isFinite(requestedContextLines) && requestedContextLines > 0
+        ? requestedContextLines * 2 + 7
+        : 120;
+    const maxLines = clampNumber(args.maxLines || args.max_lines || defaultFindLines, defaultFindLines, 3, 300);
+    const fetchResult = await webFetch({
+        ...args,
+        url,
+        query: pattern,
+        findPattern: pattern,
+        maxLines,
+        viewportChars: args.viewportChars || args.viewport_chars || Math.max(5200, Math.min(16000, maxLines * 100))
+    });
+    if (fetchResult.isError) {
+        return fetchResult;
+    }
+    const details = fetchResult.structuredContent || fetchResult.details || {};
+    const sourceWindow = details.sourceWindow || details.sourceViewport || {};
+    const findSourceWindow = pruneEmptyDeep({
+        ...sourceWindow,
+        action: {
+            type: 'find_in_page',
+            url,
+            pattern
+        }
+    });
+    const normalizedPattern = pattern.toLowerCase();
+    const matches = Array.isArray(details.matches)
+        ? details.matches
+        : (Array.isArray(findSourceWindow.lines) ? findSourceWindow.lines : [])
+            .filter((line) => String(line.text || '').toLowerCase().includes(normalizedPattern))
+            .map((line) => ({
+                lineNumber: line.lineNumber,
+                lineno: line.lineno || line.lineNumber,
+                line_number: line.line_number || line.lineNumber,
+                text: line.text
+            }));
+    const source = pruneEmptyDeep({
+        type: 'source_viewport',
+        tool: 'web_find',
+        url,
+        ref_id: url,
+        pattern,
+        lineno: findSourceWindow.lineno || findSourceWindow.lineStart,
+        line_start: findSourceWindow.line_start || findSourceWindow.lineStart,
+        line_end: findSourceWindow.line_end || findSourceWindow.lineEnd,
+        total_lines: findSourceWindow.total_lines || findSourceWindow.totalLines,
+        has_more_before: findSourceWindow.has_more_before ?? findSourceWindow.hasMoreBefore,
+        has_more_after: findSourceWindow.has_more_after ?? findSourceWindow.hasMoreAfter,
+        content_type: findSourceWindow.content_type || findSourceWindow.contentType,
+        lines: (Array.isArray(findSourceWindow.lines) ? findSourceWindow.lines : []).map((line) => pruneEmptyDeep({
+            lineno: line.lineno || line.lineNumber,
+            line_number: line.line_number || line.lineNumber,
+            text: line.text
+        }))
+    });
+    const webSearchOutput = buildCanonicalSourceViewportOutput({
+        sourceViewport: source,
+        action: findSourceWindow.action || {
+            type: 'find_in_page',
+            url,
+            pattern
+        },
+        matches
+    });
+    const lines = [
+        `Find results for pattern: ${pattern}`,
+        `URL: ${url}`,
+        `Match count in page: ${matches.length}`,
+        '',
+        formatSourceLineWindow(findSourceWindow)
+    ];
+    return textResult(lines.join('\n'), {
+        ...details,
+        status: 'completed',
+        url,
+        pattern,
+        matchCount: matches.length,
+        match_count: matches.length,
+        matches,
+        source,
+        source_window: source,
+        sourceWindow: findSourceWindow,
+        sourceViewport: source,
+        source_viewport: source,
+        webSearchOutput,
+        webSearchCall: webSearchOutput.webSearchCall,
+        web_search_call: webSearchOutput.web_search_call,
+        functionCallOutput: webSearchOutput.functionCallOutput,
+        function_call_output: webSearchOutput.function_call_output,
+        modelVisibleMode: 'source_viewport_find',
+        model_visible_mode: 'source_viewport_find'
+    });
+}
+
+async function openPage(args = {}) {
+    return await webFetch(args);
+}
+
+async function findInPage(args = {}) {
+    return await webFind(args);
+}
+
+async function continuePage(args = {}) {
+    const url = normalizeString(args.url || args.ref_id || args.refId || args.uri);
+    const lineno = Number(args.lineno || args.lineStart || args.line_start || 0);
+    if (!url || !Number.isFinite(lineno) || lineno < 1) {
+        return errorResult('continue_page requires url and a positive lineno');
+    }
+    return await webFetch({
+        ...args,
+        url,
+        lineno
+    });
+}
+
+async function renderPage(args = {}) {
+    return await webFetch({
+        ...args,
+        provider: 'crawl4ai',
+        fetchProvider: 'crawl4ai',
+        fetch_provider: 'crawl4ai'
+    });
+}
+
+async function webpageScreenshot(args = {}) {
+    const url = normalizeString(args.url || args.uri);
+    if (!/^https?:\/\//i.test(url)) {
+        return errorResult('webpage_screenshot requires an http(s) url', { url });
+    }
+    const timeoutMs = clampNumber(args.timeoutMs || args.timeout_ms, 120000, 30000, 300000);
+    const outputPath = path.resolve(
+        normalizeString(args.path || args.outputPath || args.output_path) ||
+        path.join(os.tmpdir(), `ailis-webpage-${Date.now()}-${Math.random().toString(16).slice(2)}.png`)
+    );
+    const config = crawl4aiFetchConfig({
+        ...args,
+        provider: 'crawl4ai',
+        fetchProvider: 'crawl4ai',
+        fetch_provider: 'crawl4ai'
+    });
+    if (!config || config.mode !== 'local_worker') {
+        return actionableErrorResult('webpage_screenshot requires the local Crawl4AI worker.', {
+            status: 'screenshot_backend_unavailable',
+            url,
+            failureReason: 'local_crawl4ai_worker_unavailable',
+            nextActions: [
+                'Configure the bundled local Crawl4AI worker and Playwright Chromium runtime.',
+                'Use another screenshot-capable browser or scraping connector if one is installed.'
+            ]
+        });
+    }
+    const fetched = await fetchWithLocalCrawl4aiWorker(
+        url,
+        { ...config, probe: false },
+        {
+            ...args,
+            screenshotPath: outputPath
+        },
+        timeoutMs
+    );
+    const stat = fetched.ok
+        ? await fs.stat(fetched.screenshotPath || outputPath).catch(() => null)
+        : null;
+    if (!fetched.ok || !stat?.isFile()) {
+        return actionableErrorResult('webpage_screenshot failed.', {
+            status: fetched.errorCode || 'screenshot_failed',
+            url,
+            failureReason: fetched.error || 'The screenshot file was not produced.',
+            backend: fetched.backend,
+            nextActions: [
+                'Use a different screenshot-capable browser connector or inspect source HTML/CSS when visual layout cannot be captured.'
+            ]
+        });
+    }
+    const screenshotPath = path.resolve(fetched.screenshotPath || outputPath);
+    return textResult([
+        `Captured a browser-rendered screenshot of ${url}`,
+        `Path: ${screenshotPath}`,
+        'The screenshot is attached to the next model turn as visual input. Inspect the pixels before answering layout, indentation, color, position, chart, or canvas questions.'
+    ].join('\n'), {
+        status: 'completed',
+        url,
+        path: screenshotPath,
+        bytes: stat.size,
+        contentType: 'image/png',
+        backend: fetched.backend,
+        modelImage: {
+            image_url: screenshotPath,
+            detail: normalizeString(args.detail, 'original')
+        }
+    });
 }
 
 function extractTextFromToolResult(result = {}, maxChars = 3000) {
@@ -4804,7 +7821,7 @@ function buildWebResearchCandidates(searchDetails = {}, limit = 3) {
     const query = normalizeString(searchDetails.query);
     const addCandidateToPool = (candidate = {}, source = '') => {
         const url = normalizeUrlCandidate(candidate.url || candidate.args?.url);
-        if (!url || seen.has(url) || !/^https?:\/\//i.test(url) || isLikelyPdfUrl(url)) {
+        if (!url || seen.has(url) || !/^https?:\/\//i.test(url) || isLikelyDirectPdfUrl(url)) {
             return;
         }
         seen.add(url);
@@ -4813,6 +7830,7 @@ function buildWebResearchCandidates(searchDetails = {}, limit = 3) {
             url,
             source,
             searchRank: Number(candidate.searchRank) || undefined,
+            snippet: normalizeString(candidate.snippet),
             queryScore: Number(candidate.queryScore) || undefined,
             combinedScore: Number(candidate.combinedScore) || undefined,
             sourceBackends: candidate.sourceBackends || undefined,
@@ -4821,14 +7839,6 @@ function buildWebResearchCandidates(searchDetails = {}, limit = 3) {
             queryVariantIndex: candidate.queryVariantIndex || undefined
         }));
     };
-    for (const call of searchDetails.suggestedNextCalls || []) {
-        if (normalizeString(call.tool) === 'web_fetch') {
-            addCandidateToPool({
-                title: call.reason,
-                url: call.args?.url
-            }, 'suggested_next_call');
-        }
-    }
     for (const [index, result] of (searchDetails.results || []).entries()) {
         if (!isRelevantSearchCandidate(result)) {
             continue;
@@ -4838,21 +7848,90 @@ function buildWebResearchCandidates(searchDetails = {}, limit = 3) {
             searchRank: index + 1
         }, query ? 'ranked_relevant_result' : 'ranked_result');
     }
+    for (const call of searchDetails.suggestedNextCalls || []) {
+        if (normalizeString(call.tool) === 'web_fetch') {
+            addCandidateToPool({
+                title: call.reason,
+                url: call.args?.url
+            }, 'optional_followup_call');
+        }
+    }
+    const selected = [];
+    const selectedUrls = new Set();
+    const selectedHosts = new Set();
+    const selectCandidate = (candidate) => {
+        if (!candidate || selectedUrls.has(candidate.url) || selected.length >= limit) {
+            return false;
+        }
+        selected.push(candidate);
+        selectedUrls.add(candidate.url);
+        const host = extractHostname(candidate.url);
+        if (host) {
+            selectedHosts.add(host);
+        }
+        return true;
+    };
+    const explicitVariantGroups = new Map();
+    for (const candidate of candidatePool) {
+        const variantIndex = Number(candidate.queryVariantIndex);
+        if (
+            normalizeString(candidate.queryVariantRole) !== 'explicit_query' ||
+            !Number.isFinite(variantIndex) ||
+            variantIndex <= 0
+        ) {
+            continue;
+        }
+        if (!explicitVariantGroups.has(variantIndex)) {
+            explicitVariantGroups.set(variantIndex, []);
+        }
+        explicitVariantGroups.get(variantIndex).push(candidate);
+    }
+    const diversifyCandidateGroupByHost = (candidates = []) => {
+        const primary = [];
+        const overflow = [];
+        const seenHosts = new Set();
+        for (const candidate of candidates) {
+            const host = extractHostname(candidate.url);
+            if (!host || !seenHosts.has(host)) {
+                if (host) {
+                    seenHosts.add(host);
+                }
+                primary.push(candidate);
+            } else {
+                overflow.push(candidate);
+            }
+        }
+        return [...primary, ...overflow];
+    };
+    const explicitGroups = [...explicitVariantGroups.entries()]
+        .sort(([leftIndex], [rightIndex]) => leftIndex - rightIndex)
+        .map(([, candidates]) => diversifyCandidateGroupByHost(candidates));
+    const maxGroupDepth = Math.max(0, ...explicitGroups.map((group) => group.length));
+    for (let depth = 0; depth < maxGroupDepth && selected.length < limit; depth += 1) {
+        for (const group of explicitGroups) {
+            selectCandidate(group[depth]);
+            if (selected.length >= limit) {
+                break;
+            }
+        }
+    }
     const primary = [];
     const overflow = [];
-    const seenHosts = new Set();
     for (const candidate of candidatePool) {
+        if (selectedUrls.has(candidate.url)) {
+            continue;
+        }
         const host = extractHostname(candidate.url);
-        if (!host || !seenHosts.has(host)) {
+        if (!host || !selectedHosts.has(host)) {
             if (host) {
-                seenHosts.add(host);
+                selectedHosts.add(host);
             }
             primary.push(candidate);
         } else {
             overflow.push(candidate);
         }
     }
-    return [...primary, ...overflow].slice(0, limit);
+    return [...selected, ...primary, ...overflow].slice(0, limit);
 }
 
 function extractEvidenceSnippetsFromText(text = '', query = '', limit = 4) {
@@ -4986,13 +8065,16 @@ function scoreWebResearchPage(page = {}, query = '') {
 function summarizeWebResearchPage(candidate = {}, fetchResult = {}, query = '') {
     const details = fetchResult.structuredContent || fetchResult.details || {};
     let evidenceQuality = normalizeString(details.evidenceQuality || details.observationContract?.evidence_quality);
-    const fullText = extractTextFromToolResult(fetchResult, 16000);
+    const contentExcerpt = normalizeString(details.contentExcerpt || details.content_excerpt);
+    const fullText = contentExcerpt || extractTextFromToolResult(fetchResult, 16000);
     const targetCoverage = assessWebResearchTargetCoverage([
         candidate.title,
+        candidate.snippet,
         candidate.url,
         fullText
     ].filter(Boolean).join('\n'), query, [
         candidate.title,
+        candidate.snippet,
         candidate.url
     ].filter(Boolean).join('\n'));
     const missingTargetTerms = targetCoverage?.missingSpecificTargetTerms || [];
@@ -5007,6 +8089,7 @@ function summarizeWebResearchPage(candidate = {}, fetchResult = {}, query = '') 
         searchRank: candidate.searchRank,
         queryScore: Number.isFinite(candidate.queryScore) ? Number(candidate.queryScore.toFixed(2)) : undefined,
         combinedScore: Number.isFinite(candidate.combinedScore) ? Number(candidate.combinedScore.toFixed(2)) : undefined,
+        searchSnippet: normalizeString(candidate.snippet),
         sourceBackends: candidate.sourceBackends?.length ? candidate.sourceBackends.slice(0, 5) : undefined,
         queryVariant: normalizeString(candidate.queryVariant),
         queryVariantRole: normalizeString(candidate.queryVariantRole),
@@ -5016,7 +8099,7 @@ function summarizeWebResearchPage(candidate = {}, fetchResult = {}, query = '') 
         evidenceQuality,
         pageType: normalizeString(details.pageType || details.observationContract?.page_type),
         contentQuality: normalizeString(details.contentQuality || evidenceQuality),
-        finalAnswerRequiresEvidenceAudit: details.finalAnswerRequiresEvidenceAudit !== false,
+        modelJudgesEvidence: details.modelJudgesEvidence !== false,
         isEvidence: targetCovered ? details.isEvidence : false,
         reasoningReady: targetCovered && (details.reasoningReady === true || details.observationContract?.reasoning_ready === true),
         complete: targetCovered && (details.complete === true || details.observationContract?.complete === true),
@@ -5033,7 +8116,11 @@ function summarizeWebResearchPage(candidate = {}, fetchResult = {}, query = '') 
         observedRelevantLinks: Array.isArray(details.observedRelevantLinks) ? details.observedRelevantLinks.slice(0, 5) : undefined,
         suggestedNextCalls: Array.isArray(details.suggestedNextCalls) ? details.suggestedNextCalls.slice(0, 5) : undefined,
         htmlRelations: details.htmlRelations,
-        evidenceSnippets: extractEvidenceSnippetsFromText(fullText, query),
+        evidenceSnippets: extractEvidenceSnippetsFromText([
+            candidate.title,
+            candidate.snippet,
+            fullText
+        ].filter(Boolean).join('\n'), query),
         excerpt: fullText.length > 3600 ? `${fullText.slice(0, 3597).trim()}...` : fullText
     });
     const evidenceScore = scoreWebResearchPage(page, query);
@@ -5045,74 +8132,24 @@ function summarizeWebResearchPage(candidate = {}, fetchResult = {}, query = '') 
 }
 
 function assessWebResearchBundle(pages = [], searchDetails = {}) {
-    const evidencePages = pages.filter((page) => page.isEvidence === true);
-    const readyPages = pages.filter((page) => page.reasoningReady === true || page.evidenceQuality === 'sufficient_evidence');
     const blockedPages = pages.filter((page) => ['js_shell', 'encoding_failure', 'access_denied', 'access_challenge'].includes(page.evidenceQuality));
-    if (searchDetails.clarificationRequired) {
-        return {
-            answerReadiness: 'needs_clarification',
-            readinessAuthority: 'retrieval_heuristic',
-            requiresEvidenceAudit: false,
-            evidenceGap: searchDetails.evidenceGap || 'Search target is ambiguous.',
-            recoveryHint: searchDetails.recoveryHint || 'Ask the user to clarify the search target before fetching pages.'
-        };
-    }
-    if (readyPages.length) {
-        return {
-            answerReadiness: 'ready',
-            readinessAuthority: 'retrieval_heuristic',
-            requiresEvidenceAudit: true,
-            evidenceAuditInstruction: 'Before final answer, an LLM evidence auditor must verify that supported claims cover the user goal and identify missing fields; tool readiness is retrieval quality, not final answer authority.',
-            evidenceGap: '',
-            recoveryHint: 'Use the evidence pages; do not run another broad search unless a specific field is missing.'
-        };
-    }
-    if (evidencePages.length) {
-        return {
-            answerReadiness: 'partial',
-            readinessAuthority: 'retrieval_heuristic',
-            requiresEvidenceAudit: true,
-            evidenceAuditInstruction: 'Run an LLM evidence audit over the fetched evidence. If required answer fields are missing, continue retrieval or state the gap instead of filling with generic claims.',
-            evidenceGap: 'Fetched pages contain some evidence but are not fully reasoning-ready. Follow high-signal linked resources or fetch a more specific result if needed.',
-            recoveryHint: 'Prefer suggestedNextCalls from the evidence pages before issuing another broad search.'
-        };
-    }
-    if (blockedPages.length) {
-        return {
-            answerReadiness: 'blocked',
-            readinessAuthority: 'retrieval_heuristic',
-            requiresEvidenceAudit: true,
-            evidenceAuditInstruction: 'An LLM evidence audit should reject final answering from blocked pages and choose alternate retrieval or explicit gap reporting.',
-            evidenceGap: 'Top pages were blocked, JavaScript-only, or unusable as answer evidence.',
-            recoveryHint: 'Try alternate sources, rendered/browser extraction, or a domain-specific API/tool.'
-        };
-    }
-    return {
-        answerReadiness: 'needs_followup',
-        readinessAuthority: 'retrieval_heuristic',
-        requiresEvidenceAudit: true,
-        evidenceAuditInstruction: 'No final answer should be generated from this bundle until an LLM evidence audit finds sufficient supported claims.',
-        evidenceGap: searchDetails.evidenceGap || 'No answer-bearing evidence page was fetched.',
-        recoveryHint: searchDetails.recoveryHint || 'Refine the query or use a more specific retrieval tool.'
-    };
+    return pruneEmptyDeep({
+        fetchedPageCount: pages.length,
+        blockedPageCount: blockedPages.length,
+        searchTarget: normalizeString(searchDetails.targetLabel || searchDetails.query)
+    });
 }
 
 function formatWebResearchBundle({ query = '', searchDetails = {}, pages = [], bundleAssessment = {}, pipelineSteps = [] } = {}) {
     const lines = [
         'AILIS web research evidence bundle:',
         `Query: ${query}`,
-        `Retrieval readiness: ${bundleAssessment.answerReadiness || 'unknown'}`,
-        `Readiness authority: ${bundleAssessment.readinessAuthority || 'retrieval_heuristic'}`,
-        `Evidence audit required: ${bundleAssessment.requiresEvidenceAudit !== false}`
+        'Codex object: web_search_call action=search',
+        'Bundle contents: ranked search results, fetched page excerpts, source URLs, and open_page actions.'
     ];
-    if (bundleAssessment.evidenceAuditInstruction) {
-        lines.push(`Evidence audit instruction: ${bundleAssessment.evidenceAuditInstruction}`);
-    }
-    if (bundleAssessment.evidenceGap) {
-        lines.push(`Evidence gap: ${bundleAssessment.evidenceGap}`);
-    }
-    if (bundleAssessment.recoveryHint) {
-        lines.push(`Recovery hint: ${bundleAssessment.recoveryHint}`);
+    if (bundleAssessment.fetchedPageCount !== undefined) {
+        lines.push(`Fetched page count: ${bundleAssessment.fetchedPageCount}`);
+        lines.push(`Blocked pages: ${bundleAssessment.blockedPageCount || 0}`);
     }
     if (searchDetails.backend || searchDetails.searchAggregation?.successfulBackends?.length) {
         const sources = searchDetails.searchAggregation?.successfulBackends?.length
@@ -5120,13 +8157,10 @@ function formatWebResearchBundle({ query = '', searchDetails = {}, pages = [], b
             : searchDetails.backend;
         lines.push(`Search sources: ${sources}`);
     }
-    if (searchDetails.searchConfidence?.level) {
-        lines.push(`Search confidence: ${searchDetails.searchConfidence.level} (${searchDetails.searchConfidence.score})`);
-    }
     if (Array.isArray(searchDetails.answerCandidates) && searchDetails.answerCandidates.length) {
-        lines.push('Answer candidates from search results:');
+        lines.push('Search-extracted candidate strings:');
         searchDetails.answerCandidates.slice(0, 5).forEach((candidate, index) => {
-            lines.push(`- ${index + 1}. ${candidate.answer} (${candidate.type || 'answer'}, score=${candidate.score ?? 'n/a'})`);
+            lines.push(`- ${index + 1}. ${candidate.answer} (${candidate.type || 'answer'})`);
             if (candidate.url) {
                 lines.push(`  URL: ${candidate.url}`);
             }
@@ -5148,19 +8182,30 @@ function formatWebResearchBundle({ query = '', searchDetails = {}, pages = [], b
         });
     }
     if (pages.length) {
-        lines.push('Evidence pages:');
-        pages.forEach((page, index) => {
-            lines.push(`- ${index + 1}. ${page.title || page.url}`);
+        lines.push('Highest-ranked fetched sources:');
+        pages.slice(0, 5).forEach((page, index) => {
+            const refId = `source_${index + 1}`;
+            lines.push(`- [${refId}] ${page.title || page.url}`);
             lines.push(`  URL: ${page.url}`);
-            lines.push(`  Quality: ${page.evidenceQuality || 'unknown'}; reasoningReady=${page.reasoningReady === true}; evidenceScore=${page.evidenceScore ?? 'n/a'}`);
-            if (page.pageType || page.contentQuality) {
-                lines.push(`  Page type: ${page.pageType || 'unknown'}; contentQuality=${page.contentQuality || page.evidenceQuality || 'unknown'}`);
-            }
-            if (page.evidenceGap) {
-                lines.push(`  Gap: ${page.evidenceGap}`);
+            lines.push(`  Open page: open_page ${JSON.stringify({ url: page.url, lineno: 1 })}`);
+        });
+    }
+    const searchEvidenceText = formatCandidateSearchEvidence(searchDetails.results || [], 8);
+    if (searchEvidenceText) {
+        lines.push(searchEvidenceText);
+    }
+    if (pages.length) {
+        lines.push('Fetched pages:');
+        pages.forEach((page, index) => {
+            const refId = `source_${index + 1}`;
+            lines.push(`- [${refId}] ${page.title || page.url}`);
+            lines.push(`  URL: ${page.url}`);
+            lines.push(`  Open page: open_page ${JSON.stringify({ url: page.url, lineno: 1 })}`);
+            if (page.searchSnippet) {
+                lines.push(`  Search snippet: ${truncateRelationText(page.searchSnippet, 460)}`);
             }
             if (Array.isArray(page.evidenceSnippets) && page.evidenceSnippets.length) {
-                lines.push('  Evidence snippets:');
+                lines.push('  Candidate snippets:');
                 page.evidenceSnippets.slice(0, 3).forEach((snippet) => lines.push(`  - ${snippet}`));
             }
             const excerpt = normalizeString(page.excerpt).split('\n').slice(0, 18).join('\n');
@@ -5169,17 +8214,243 @@ function formatWebResearchBundle({ query = '', searchDetails = {}, pages = [], b
             }
         });
     }
-    if (Array.isArray(pipelineSteps) && pipelineSteps.length) {
-        lines.push('Pipeline diagnostics:');
-        pipelineSteps.slice(0, 12).forEach((step) => {
-            lines.push(`- ${step.stage || 'step'}: ${step.status || 'unknown'}${step.note ? `; ${step.note}` : ''}`);
-        });
-    }
     return lines.join('\n');
 }
 
+function summarizeWebResearchSource(page = {}, index = 0) {
+    const refId = `source_${index + 1}`;
+    return pruneEmptyDeep({
+        id: refId,
+        ref_id: refId,
+        title: normalizeString(page.title || page.url),
+        url: normalizeString(page.url),
+        host: extractHostname(page.url),
+        open_page: {
+            type: 'open_page',
+            url: normalizeString(page.url),
+            lineno: 1
+        },
+        source: normalizeString(page.source),
+        sourceBackends: Array.isArray(page.sourceBackends) ? page.sourceBackends.slice(0, 5) : undefined,
+        status: normalizeString(page.fetchStatus || page.pageStatus),
+        pageType: normalizeString(page.pageType),
+        returnedChars: Number.isFinite(Number(page.returnedChars)) ? Number(page.returnedChars) : undefined,
+        originalChars: Number.isFinite(Number(page.originalChars)) ? Number(page.originalChars) : undefined,
+        queryVariant: normalizeString(page.queryVariant),
+        queryVariantRole: normalizeString(page.queryVariantRole),
+        searchRank: page.searchRank,
+        searchSnippet: truncateRelationText(page.searchSnippet, 360),
+        evidenceSnippets: Array.isArray(page.evidenceSnippets) ? page.evidenceSnippets.slice(0, 4) : undefined,
+        excerpt: truncateRelationText(page.excerpt, 2400)
+    });
+}
+
+function stripWebResearchBehaviorFields(page = {}) {
+    const {
+        modelJudgesEvidence,
+        model_judges_evidence,
+        isEvidence,
+        is_evidence,
+        reasoningReady,
+        reasoning_ready,
+        complete,
+        recoveryHint,
+        recovery_hint,
+        evidenceGap,
+        evidence_gap,
+        suggestedNextCalls,
+        suggested_next_calls,
+        evidenceScore,
+        evidence_score,
+        evidenceScoreBreakdown,
+        evidence_score_breakdown,
+        evidenceQuality,
+        evidence_quality,
+        contentQuality,
+        content_quality,
+        ...rest
+    } = page && typeof page === 'object' ? page : {};
+    return pruneEmptyDeep(rest);
+}
+
+function stripWebResearchSearchBehaviorFields(details = {}) {
+    const {
+        recoveryHint,
+        recovery_hint,
+        evidenceGap,
+        evidence_gap,
+        suggestedNextCalls,
+        suggested_next_calls,
+        clarificationRequired,
+        clarification_required,
+        answerReadiness,
+        answer_readiness,
+        readinessAuthority,
+        readiness_authority,
+        evidenceDecision,
+        evidence_decision,
+        requiresEvidenceAudit,
+        requires_evidence_audit,
+        ...rest
+    } = details && typeof details === 'object' ? details : {};
+    return pruneEmptyDeep(rest);
+}
+
+function summarizeWebResearchSearchResult(result = {}, index = 0) {
+    const refId = `candidate_${index + 1}`;
+    return pruneEmptyDeep({
+        id: refId,
+        ref_id: refId,
+        title: normalizeString(result.title || result.text || result.url),
+        url: normalizeString(result.url),
+        host: extractHostname(result.url),
+        open_page: {
+            type: 'open_page',
+            tool: 'open_page',
+            args: {
+                url: normalizeString(result.url),
+                lineno: 1
+            },
+            url: normalizeString(result.url),
+            lineno: 1
+        },
+        sourceBackend: normalizeString(result.sourceBackend),
+        sourceBackends: Array.isArray(result.sourceBackends) ? result.sourceBackends.slice(0, 5) : undefined,
+        queryVariant: normalizeString(result.queryVariant),
+        queryVariantRole: normalizeString(result.queryVariantRole),
+        rank: index + 1,
+        score: Number.isFinite(Number(result.queryScore)) ? Number(result.queryScore) : undefined,
+        snippet: truncateRelationText(result.snippet, 360)
+    });
+}
+
+function buildWebResearchOpenPageActions(sources = [], candidates = [], limit = 3) {
+    const actions = [];
+    const seen = new Set();
+    const append = (entry = {}) => {
+        const url = normalizeString(entry.url);
+        if (!/^https?:\/\//i.test(url) || seen.has(url) || actions.length >= limit) {
+            return;
+        }
+        seen.add(url);
+        actions.push({
+            tool: 'open_page',
+            args: { url, lineno: 1 },
+            reason: `Open source: ${normalizeString(entry.title, url)}`
+        });
+    };
+    (Array.isArray(sources) ? sources : []).forEach(append);
+    (Array.isArray(candidates) ? candidates : []).forEach(append);
+    return actions;
+}
+
+function buildCodexWebSearchOutput({
+    query = '',
+    queryPlan = [],
+    searchDetails = {},
+    candidates = [],
+    pages = [],
+    bundleAssessment = {},
+    pipelineSteps = [],
+    startedAt = Date.now(),
+    overallTimeoutMs = 0,
+    executionMode = 'sequential',
+    parallelism = {},
+    answerCandidates = []
+} = {}) {
+    const sources = (Array.isArray(pages) ? pages : []).map(summarizeWebResearchSource);
+    const candidateResults = Array.isArray(searchDetails.results)
+        ? searchDetails.results.slice(0, 12).map(summarizeWebResearchSearchResult)
+        : [];
+    const suggestedNextCalls = buildWebResearchOpenPageActions(sources, candidateResults);
+    const fetchedCount = sources.filter((source) => source.status === 'completed').length;
+    const failedCount = sources.filter((source) => source.status && source.status !== 'completed').length;
+    const queries = (Array.isArray(queryPlan) ? queryPlan : []).map((item) => pruneEmptyDeep({
+        index: item.index,
+        role: normalizeString(item.role),
+        query: normalizeString(item.query),
+        backendQuery: normalizeString(item.backendQuery),
+        reason: normalizeString(item.reason)
+    }));
+    const webSearchAction = pruneEmptyDeep({
+        type: 'search',
+        query,
+        queries,
+        maxResults: searchDetails.maxResults,
+        maxPages: candidates.length || sources.length
+    });
+    const webSearchCall = pruneEmptyDeep({
+        type: 'web_search_call',
+        status: 'completed',
+        action: webSearchAction
+    });
+    const webSearchItem = pruneEmptyDeep({
+        type: 'web_search',
+        id: 'web_research',
+        query,
+        action: webSearchAction
+    });
+    return pruneEmptyDeep({
+        type: 'function_call_output',
+        webSearchCall,
+        webSearchItem,
+        functionCallOutput: {
+            type: 'function_call_output',
+            status: webSearchCall.status,
+            outputKind: 'web_search_bundle'
+        },
+        action: webSearchAction,
+        suggestedNextCalls,
+        execution: {
+            mode: executionMode,
+            durationMs: Date.now() - startedAt,
+            overallTimeoutMs,
+            parallelism,
+            pipeline: (Array.isArray(pipelineSteps) ? pipelineSteps : []).map((step) => pruneEmptyDeep({
+                stage: normalizeString(step.stage),
+                status: normalizeString(step.status),
+                note: normalizeString(step.note)
+            }))
+        },
+        search: {
+            status: normalizeString(searchDetails.status, 'completed'),
+            backend: normalizeString(searchDetails.backend),
+            sourceBackends: searchDetails.searchAggregation?.successfulBackends,
+            resultCount: Array.isArray(searchDetails.results) ? searchDetails.results.length : undefined,
+            candidates: candidateResults
+        },
+        fetch: {
+            candidateCount: candidates.length,
+            pageCount: sources.length,
+            completedCount: fetchedCount,
+            failedCount,
+            sources
+        },
+        evidence: {
+            sources: sources.filter((source) => source.evidenceSnippets?.length),
+            answerCandidates: Array.isArray(answerCandidates) ? answerCandidates.slice(0, 8) : []
+        },
+        retrievalDiagnostics: {
+            fetchedPageCount: bundleAssessment.fetchedPageCount,
+            blockedPageCount: bundleAssessment.blockedPageCount
+        },
+        legacy: {
+            pageCount: sources.length
+        }
+    });
+}
+
 async function webResearch(args = {}) {
-    const query = normalizeString(args.query || args.q || args.search || args.text);
+    const explicitQueryItems = [
+        ...(Array.isArray(args.queries) ? args.queries : []),
+        ...(Array.isArray(args.searchQueries) ? args.searchQueries : []),
+        ...(Array.isArray(args.search_queries) ? args.search_queries : [])
+    ];
+    const firstExplicitQuery = explicitQueryItems
+        .map((item) => typeof item === 'string' ? item : item?.query || item?.q || item?.search || item?.text)
+        .map(normalizeString)
+        .find(Boolean);
+    const query = normalizeString(args.query || args.q || args.search || args.text) || firstExplicitQuery;
     if (!query) {
         return errorResult('web_research requires query');
     }
@@ -5188,10 +8459,19 @@ async function webResearch(args = {}) {
     const maxCharsPerPage = clampNumber(args.maxCharsPerPage || args.max_chars_per_page || args.maxChars, 14000, 3000, 60000);
     const queryPlan = buildWebResearchQueryPlan(query, args);
     const searchRuns = [];
+    const serialRequested = optionIsFalse(args.parallel) ||
+        optionIsFalse(args.parallelSearch) ||
+        optionIsFalse(args.parallel_search) ||
+        optionIsTrue(args.serial) ||
+        optionIsTrue(args.sequential);
+    const parallelSearch = !serialRequested && queryPlan.length > 1;
+    const searchConcurrency = parallelSearch
+        ? clampNumber(args.searchConcurrency || args.search_concurrency, Math.min(3, queryPlan.length), 1, 5)
+        : 1;
     const pipelineSteps = [{
         stage: 'query_plan',
         status: 'planned',
-        note: `${queryPlan.length} search quer${queryPlan.length === 1 ? 'y' : 'ies'}`
+        note: `${queryPlan.length} search quer${queryPlan.length === 1 ? 'y' : 'ies'}; mode=${parallelSearch ? `parallel:${searchConcurrency}` : 'sequential'}`
     }];
     const startedAt = Date.now();
     const overallTimeoutMs = clampNumber(
@@ -5200,17 +8480,22 @@ async function webResearch(args = {}) {
         8000,
         180000
     );
-    for (const variant of queryPlan) {
+    const runSearchVariant = async (variant) => {
         const elapsedMs = Date.now() - startedAt;
         const remainingMs = overallTimeoutMs - elapsedMs;
         if (remainingMs < 2000) {
-            pipelineSteps.push({
-                stage: 'search',
-                status: 'skipped',
-                note: `timeout budget exhausted before ${variant.role || variant.query}`
-            });
-            break;
+            return {
+                variant,
+                result: null,
+                details: {
+                    status: 'skipped',
+                    error: 'timeout_budget_exhausted',
+                    results: []
+                },
+                durationMs: 0
+            };
         }
+        const searchStartedAt = Date.now();
         const searchResult = await webSearch({
             query: variant.query,
             backendQuery: variant.backendQuery,
@@ -5225,28 +8510,62 @@ async function webResearch(args = {}) {
             aggregate: args.aggregate
         });
         const details = searchResult.structuredContent || searchResult.details || {};
-        searchRuns.push({ variant, result: searchResult, details });
+        return {
+            variant,
+            result: searchResult,
+            details,
+            durationMs: Date.now() - searchStartedAt
+        };
+    };
+    if (parallelSearch) {
+        const parallelRuns = await runBoundedParallel(queryPlan, searchConcurrency, runSearchVariant);
+        parallelRuns.forEach((run, index) => {
+            if (run?.variant) {
+                searchRuns.push(run);
+            } else {
+                searchRuns.push({
+                    variant: queryPlan[index],
+                    result: null,
+                    details: {
+                        status: 'error',
+                        error: run?.message || 'parallel search worker failed',
+                        results: []
+                    },
+                    durationMs: 0
+                });
+            }
+        });
+    } else {
+        for (const variant of queryPlan) {
+            const run = await runSearchVariant(variant);
+            searchRuns.push(run);
+            if (run.details?.status === 'skipped') {
+                break;
+            }
+            if (run.details?.clarificationRequired) {
+                break;
+            }
+            const shouldDeferEarlyStopForExactAnswer =
+                looksLikeExactAnswerResearchQuery(query) &&
+                variant.role === 'original' &&
+                queryPlan.some((item) => item.role === 'exact_answer_terms');
+            if (
+                run.details?.searchConfidence?.level === 'high' &&
+                Array.isArray(run.details?.suggestedNextCalls) &&
+                run.details.suggestedNextCalls.length > 0 &&
+                !optionIsTrue(args.expandQueries || args.expand_queries) &&
+                !shouldDeferEarlyStopForExactAnswer
+            ) {
+                break;
+            }
+        }
+    }
+    for (const run of searchRuns) {
         pipelineSteps.push({
             stage: 'search',
-            status: searchResult.isError ? 'error' : details.clarificationRequired ? 'clarification_required' : details.status || 'completed',
-            note: `${variant.role || 'query'} -> ${details.searchConfidence?.level || details.error || 'no_confidence'}`
+            status: run.result?.isError ? 'error' : run.details?.clarificationRequired ? 'clarification_required' : run.details?.status || 'completed',
+            note: `${run.variant?.role || 'query'}; results=${Array.isArray(run.details?.results) ? run.details.results.length : 0}; durationMs=${run.durationMs || 0}${run.details?.error ? `; error=${run.details.error}` : ''}`
         });
-        if (details.clarificationRequired) {
-            break;
-        }
-        const shouldDeferEarlyStopForExactAnswer =
-            looksLikeExactAnswerResearchQuery(query) &&
-            variant.role === 'original' &&
-            queryPlan.some((item) => item.role === 'exact_answer_terms');
-        if (
-            details.searchConfidence?.level === 'high' &&
-            Array.isArray(details.suggestedNextCalls) &&
-            details.suggestedNextCalls.length > 0 &&
-            !optionIsTrue(args.expandQueries || args.expand_queries) &&
-            !shouldDeferEarlyStopForExactAnswer
-        ) {
-            break;
-        }
     }
     const clarificationDetails = bestClarificationSearchDetails(searchRuns);
     const mergedSearchDetails = searchRunRequiresClarification(searchRuns)
@@ -5263,16 +8582,50 @@ async function webResearch(args = {}) {
             error: run.details?.error
         })))
     });
-    if (!searchDetails || searchRuns.every((run) => run.result?.isError) || searchDetails.clarificationRequired) {
+    const publicSearchDetails = stripWebResearchSearchBehaviorFields(searchDetails);
+    const allSearchRunsFailed = !searchRuns.length || searchRuns.every((run) => {
+        const status = normalizeString(run.details?.status);
+        return run.result?.isError === true || ['error', 'skipped', 'search_failed'].includes(status);
+    });
+    if (!searchDetails || allSearchRunsFailed || searchDetails.clarificationRequired) {
         const bundleAssessment = assessWebResearchBundle([], searchDetails);
-        return textResult(formatWebResearchBundle({ query, searchDetails, pages: [], bundleAssessment, pipelineSteps }), {
-            status: searchDetails.clarificationRequired ? 'clarification_required' : 'search_failed',
+        const webSearchOutput = buildCodexWebSearchOutput({
             query,
-            search: searchDetails,
+            queryPlan,
+            searchDetails: publicSearchDetails,
+            candidates: [],
+            pages: [],
+            bundleAssessment,
+            pipelineSteps,
+            startedAt,
+            overallTimeoutMs,
+            executionMode: parallelSearch ? 'bounded_parallel' : 'sequential',
+            parallelism: pruneEmptyDeep({
+                search: {
+                    enabled: parallelSearch,
+                    concurrency: searchConcurrency,
+                    queryCount: queryPlan.length
+                },
+                fetch: {
+                    enabled: false,
+                    concurrency: 1,
+                    candidateCount: 0
+                }
+            })
+        });
+        return textResult(formatWebResearchBundle({ query, searchDetails: publicSearchDetails, pages: [], bundleAssessment, pipelineSteps }), {
+            type: 'function_call_output',
+            status: searchDetails?.clarificationRequired ? 'clarification_required' : 'search_failed',
+            query,
+            webSearchCall: webSearchOutput.webSearchCall,
+            webSearchItem: webSearchOutput.webSearchItem,
+            functionCallOutput: webSearchOutput.functionCallOutput,
+            webSearchOutput,
+            suggestedNextCalls: webSearchOutput.suggestedNextCalls || [],
+            search: publicSearchDetails,
             evidencePages: [],
             pipelineSteps,
-            ...bundleAssessment,
-            suggestedNextCalls: searchDetails.suggestedNextCalls || []
+            ...bundleAssessment
         });
     }
     const candidates = buildWebResearchCandidates(searchDetails, maxPages);
@@ -5282,23 +8635,89 @@ async function webResearch(args = {}) {
         note: `${candidates.length} fetch candidate${candidates.length === 1 ? '' : 's'}`
     });
     const pages = [];
-    for (const candidate of candidates) {
+    const parallelFetch = !serialRequested && candidates.length > 1;
+    const fetchConcurrency = parallelFetch
+        ? clampNumber(args.fetchConcurrency || args.fetch_concurrency, Math.min(3, candidates.length), 1, 5)
+        : 1;
+    const perDomainFetchConcurrency = parallelFetch
+        ? clampNumber(args.perDomainFetchConcurrency || args.per_domain_fetch_concurrency, 1, 1, fetchConcurrency)
+        : 1;
+    const fetchTimeoutBudgetMs = clampNumber(
+        args.fetchTimeoutMs || args.fetch_timeout_ms,
+        Math.min(60000, Math.max(12000, overallTimeoutMs - (Date.now() - startedAt))),
+        3000,
+        180000
+    );
+    if (candidates.length) {
+        pipelineSteps.push({
+            stage: 'fetch_plan',
+            status: 'planned',
+            note: `mode=${parallelFetch ? `parallel:${fetchConcurrency}` : 'sequential'}; perDomain=${perDomainFetchConcurrency}; candidates=${candidates.length}; fetchTimeoutMs=${fetchTimeoutBudgetMs}`
+        });
+    }
+    const fetchRuns = await runBoundedParallel(candidates, fetchConcurrency, async (candidate) => {
+        const fetchStartedAt = Date.now();
+        const remainingMs = overallTimeoutMs - (fetchStartedAt - startedAt);
+        if (remainingMs < 2000) {
+            return {
+                candidate,
+                page: pruneEmptyDeep({
+                    title: candidate.title || candidate.url,
+                    url: candidate.url,
+                    fetchStatus: 'skipped',
+                    evidenceQuality: 'timeout_budget_exhausted',
+                    evidenceGap: 'web_research overall timeout budget was exhausted before this page could be fetched.',
+                    recoveryHint: 'Call web_fetch on this URL directly only if the source remains essential.'
+                }),
+                durationMs: 0
+            };
+        }
+        const pageTimeoutMs = Math.min(fetchTimeoutBudgetMs, Math.max(1000, remainingMs - 750));
         const fetchResult = await webFetch({
             url: candidate.url,
             query,
             maxChars: maxCharsPerPage,
+            timeoutMs: pageTimeoutMs,
             provider: args.fetchProvider || args.fetch_provider,
             crawl4aiUrl: args.crawl4aiUrl || args.crawl4ai_url,
             crawl4aiWorker: args.crawl4aiWorker || args.crawl4ai_worker,
             crawl4aiPython: args.crawl4aiPython || args.crawl4ai_python
         });
         const page = summarizeWebResearchPage(candidate, fetchResult, query);
-        pages.push(page);
-        pipelineSteps.push({
-            stage: 'fetch',
-            status: page.fetchStatus || (fetchResult.isError ? 'error' : 'completed'),
-            note: `${page.evidenceQuality || 'unknown'} score=${page.evidenceScore ?? 'n/a'} ${candidate.url}`
-        });
+        return {
+            candidate,
+            fetchResult,
+            page,
+            durationMs: Date.now() - fetchStartedAt
+        };
+    }, {
+        keyFn: (candidate) => extractHostname(candidate.url),
+        perKeyConcurrency: perDomainFetchConcurrency
+    });
+    for (const run of fetchRuns) {
+        if (run?.page) {
+            pages.push(run.page);
+            pipelineSteps.push({
+                stage: 'fetch',
+                status: run.page.fetchStatus || (run.fetchResult?.isError ? 'error' : 'completed'),
+                note: `${run.page.pageType || run.page.fetchStatus || 'page'} ${run.candidate?.url || run.page.url}; durationMs=${run.durationMs || 0}`
+            });
+        } else if (run?.candidate) {
+            const failedPage = pruneEmptyDeep({
+                title: run.candidate.title || run.candidate.url,
+                url: run.candidate.url,
+                fetchStatus: 'error',
+                evidenceQuality: 'fetch_worker_error',
+                evidenceGap: run.message || 'Parallel fetch worker failed.',
+                recoveryHint: 'Try fetching this URL directly with web_fetch if it remains important.'
+            });
+            pages.push(failedPage);
+            pipelineSteps.push({
+                stage: 'fetch',
+                status: 'error',
+                note: `${run.candidate.url}; error=${run.message || 'parallel fetch worker failed'}`
+            });
+        }
     }
     const orderedPages = pages.sort((left, right) =>
         (Number(right.evidenceScore) || 0) - (Number(left.evidenceScore) || 0) ||
@@ -5306,23 +8725,56 @@ async function webResearch(args = {}) {
         (Number(left.searchRank) || 999) - (Number(right.searchRank) || 999)
     );
     const bundleAssessment = assessWebResearchBundle(orderedPages, searchDetails);
-    const suggestedNextCalls = dedupeSuggestedNextCalls([
-        ...orderedPages.flatMap((page) => page.suggestedNextCalls || []),
-        ...(searchDetails.suggestedNextCalls || [])
-    ], 6);
+    const publicPages = orderedPages.map(stripWebResearchBehaviorFields);
     const answerCandidates = Array.isArray(searchDetails.answerCandidates)
         ? searchDetails.answerCandidates.slice(0, 5)
         : [];
-    return textResult(formatWebResearchBundle({ query, searchDetails, pages: orderedPages, bundleAssessment, pipelineSteps }), {
+    const executionMode = parallelSearch || parallelFetch ? 'bounded_parallel' : 'sequential';
+    const parallelism = pruneEmptyDeep({
+        search: {
+            enabled: parallelSearch,
+            concurrency: searchConcurrency,
+            queryCount: queryPlan.length
+        },
+        fetch: {
+            enabled: parallelFetch,
+            concurrency: fetchConcurrency,
+            perDomainConcurrency: perDomainFetchConcurrency,
+            timeoutMs: fetchTimeoutBudgetMs,
+            candidateCount: candidates.length
+        }
+    });
+    const webSearchOutput = buildCodexWebSearchOutput({
+        query,
+        queryPlan,
+        searchDetails: publicSearchDetails,
+        candidates,
+        pages: publicPages,
+        bundleAssessment,
+        pipelineSteps,
+        startedAt,
+        overallTimeoutMs,
+        executionMode,
+        parallelism,
+        answerCandidates
+    });
+    return textResult(formatWebResearchBundle({ query, searchDetails: publicSearchDetails, pages: publicPages, bundleAssessment, pipelineSteps }), {
+        type: 'function_call_output',
         status: 'completed',
         query,
-        search: searchDetails,
-        evidencePages: orderedPages,
-        pageCount: orderedPages.length,
+        webSearchCall: webSearchOutput.webSearchCall,
+        webSearchItem: webSearchOutput.webSearchItem,
+        functionCallOutput: webSearchOutput.functionCallOutput,
+        webSearchOutput,
+        suggestedNextCalls: webSearchOutput.suggestedNextCalls || [],
+        executionMode,
+        parallelism,
+        search: publicSearchDetails,
+        evidencePages: publicPages,
+        pageCount: publicPages.length,
         answerCandidates,
         pipelineSteps,
-        ...bundleAssessment,
-        suggestedNextCalls
+        ...bundleAssessment
     });
 }
 
@@ -5351,8 +8803,8 @@ async function webExtractLinks(args = {}) {
         ? orderedLinks.map((link, index) => `${index + 1}. ${link.text || '(no text)'}\nURL: ${link.url}`).join('\n\n')
         : `No links extracted from: ${url}`;
     const guidance = buildWebToolGuidanceText({
-        evidenceGap: orderedLinks.length ? 'Extracted links are candidates only. Follow a DOI/PDF/article link before answering.' : '',
-        recoveryHint: suggestedNextCalls.length ? 'Prefer the high-signal links below over another broad web_search.' : '',
+        evidenceGap: orderedLinks.length ? 'Links extracted from the page; link text is not page content.' : '',
+        recoveryHint: suggestedNextCalls.length ? 'Follow-up call arguments below were derived from extracted links.' : '',
         suggestedNextCalls,
         observedRelevantLinks
     });
@@ -5361,8 +8813,7 @@ async function webExtractLinks(args = {}) {
         url,
         links: orderedLinks,
         suggestedNextCalls,
-        observedRelevantLinks,
-        evidenceGap: orderedLinks.length ? 'Links alone are not evidence; follow one of them.' : undefined
+        observedRelevantLinks
     });
 }
 
@@ -5420,6 +8871,12 @@ print(json.dumps({
 async function pdfExtractText(args = {}) {
     const sourceUrl = normalizeString(args.url || args.uri);
     const sourcePath = normalizeString(args.path || args.file || args.filePath || args.file_path);
+    const evidenceQuery = normalizeString(
+        args.query ||
+        args.q ||
+        args.extractQuery ||
+        args.extract_query
+    );
     if (!sourceUrl && !sourcePath) {
         return errorResult('pdf_extract_text requires url or path');
     }
@@ -5529,15 +8986,62 @@ print(json.dumps({
         return errorResult(`pdf_extract_text invalid payload: ${error.message}`, { url: sourceUrl, path: sourcePath, stderr: result.stderr });
     }
     if (!payload.ok) {
+        const httpStatus = Number(payload.status) || 0;
+        const returnedHtmlInsteadOfPdf = /not a pdf file/i.test(normalizeString(payload.error)) &&
+            /html/i.test(normalizeString(payload.content_type));
+        const pdfAccessBarrier = Boolean(
+            sourceUrl &&
+            (
+                returnedHtmlInsteadOfPdf ||
+                [401, 403, 429].includes(httpStatus)
+            )
+        );
+        const fallbackQuery = normalizeString(evidenceQuery || sourceUrl).slice(0, 240);
+        const suggestedNextCalls = pdfAccessBarrier
+            ? [401, 403, 429].includes(httpStatus)
+                ? [{
+                      tool: 'web_search',
+                      args: { query: fallbackQuery },
+                      reason: 'Find the authoritative HTML article, repository copy, or another accessible copy; the PDF endpoint is access-blocked.'
+                  }]
+                : [{
+                      tool: 'web_fetch',
+                      args: {
+                          url: sourceUrl,
+                          ...(evidenceQuery ? { query: evidenceQuery } : {})
+                      },
+                      reason: 'Inspect the HTML response for a landing page, access barrier, or alternate source link.'
+                  }]
+            : [];
         return errorResult(payload.error || 'pdf_extract_text failed', {
             status: payload.status || 'error',
             errorCode: payload.status || 'pdf_extract_failed',
             url: sourceUrl,
             path: sourcePath,
+            ...(pdfAccessBarrier ? {
+                evidenceGap: [401, 403, 429].includes(httpStatus)
+                    ? `The requested PDF endpoint returned HTTP ${httpStatus}; this is an access or rate-limit barrier, not evidence that the document is absent.`
+                    : 'The requested PDF URL returned an HTML page instead of PDF bytes.',
+                recoveryHint: 'Do not keep retrying this URL as a PDF. Inspect an authoritative HTML article or another accessible copy of the same document, and keep the source identity and answer constraints unchanged.',
+                suggestedNextCalls
+            } : {}),
             ...payload
         });
     }
-    return textResult(payload.text, {
+    const extractedText = String(payload.text || '');
+    const evidenceSnippets = evidenceQuery
+        ? buildEvidenceSnippets(extractedText, evidenceQuery, { maxSnippets: 5 })
+        : '';
+    const modelText = [
+        evidenceSnippets
+            ? `Query-focused evidence from the extracted PDF:\n${evidenceSnippets}`
+            : '',
+        evidenceSnippets
+            ? 'Extracted PDF text (full returned range):'
+            : '',
+        extractedText
+    ].filter(Boolean).join('\n\n');
+    return textResult(modelText, {
         status: 'completed',
         source: sourceUrl || sourcePath,
         url: sourceUrl,
@@ -5548,7 +9052,10 @@ print(json.dumps({
         pages: payload.pages,
         maxPages: payload.max_pages,
         originalChars: payload.original_chars,
-        returnedChars: String(payload.text || '').length
+        returnedChars: extractedText.length,
+        evidenceQuery,
+        evidenceSnippets,
+        extractedText
     });
 }
 
@@ -5964,6 +9471,455 @@ async function fetchJsonUrlWithPowerShell(url, timeoutMs = 30000) {
     }
 }
 
+const WIKIDATA_PROPERTY_ALIASES = Object.freeze({
+    coordinates: 'P625',
+    coordinate: 'P625',
+    latitude_longitude: 'P625',
+    place_of_birth: 'P19',
+    birthplace: 'P19',
+    place_of_death: 'P20',
+    deathplace: 'P20',
+    country: 'P17',
+    located_in: 'P131',
+    administrative_entity: 'P131',
+    location: 'P276',
+    official_name: 'P1448',
+    date_of_birth: 'P569',
+    date_of_death: 'P570',
+    inception: 'P571',
+    occupation: 'P106',
+    author: 'P50',
+    instance_of: 'P31'
+});
+
+const WIKIDATA_PROPERTY_NAMES = Object.freeze({
+    P625: 'coordinates',
+    P19: 'place_of_birth',
+    P20: 'place_of_death',
+    P17: 'country',
+    P131: 'located_in',
+    P276: 'location',
+    P1448: 'official_name',
+    P569: 'date_of_birth',
+    P570: 'date_of_death',
+    P571: 'inception',
+    P106: 'occupation',
+    P50: 'author',
+    P31: 'instance_of'
+});
+
+const DEFAULT_WIKIDATA_PROPERTIES = Object.freeze([
+    'coordinates',
+    'place_of_birth',
+    'country',
+    'located_in',
+    'official_name',
+    'instance_of'
+]);
+
+function normalizeWikidataPropertySelection(values = []) {
+    const requested = Array.isArray(values)
+        ? values
+        : normalizeString(values)
+            ? String(values).split(',')
+            : [];
+    const normalized = requested
+        .map((value) => normalizeString(value).toLowerCase().replace(/[\s-]+/g, '_'))
+        .filter(Boolean);
+    const source = normalized.length ? normalized : DEFAULT_WIKIDATA_PROPERTIES;
+    const seen = new Set();
+    return source.flatMap((value) => {
+        const propertyId = /^p\d+$/i.test(value)
+            ? value.toUpperCase()
+            : WIKIDATA_PROPERTY_ALIASES[value];
+        if (!propertyId || seen.has(propertyId)) return [];
+        seen.add(propertyId);
+        return [{
+            id: propertyId,
+            name: WIKIDATA_PROPERTY_NAMES[propertyId] || value
+        }];
+    }).slice(0, 16);
+}
+
+function wikidataApiUrl(baseUrl, params = {}) {
+    const url = new URL(normalizeString(baseUrl, 'https://www.wikidata.org/w/api.php'));
+    for (const [key, value] of Object.entries({
+        format: 'json',
+        formatversion: '2',
+        maxlag: '5',
+        ...params
+    })) {
+        if (value !== undefined && value !== null && value !== '') {
+            url.searchParams.set(key, String(value));
+        }
+    }
+    return url.toString();
+}
+
+function buildWikidataSearchVariants(query = '') {
+    const original = normalizeString(query);
+    if (!original) return [];
+    const strippedDisambiguator = normalizeString(
+        original
+            .replace(
+                /\s+(?:\d+(?:st|nd|rd|th)\s+)?(?:(?:u\.?\s*s\.?|united\s+states)\s+)?president\b.*$/i,
+                ''
+            )
+            .replace(/\s+(?:city|town|village|municipality)\b.*$/i, '')
+    );
+    const words = original
+        .replace(/[()[\]{},;:]+/g, ' ')
+        .split(/\s+/)
+        .map((value) => normalizeString(value))
+        .filter(Boolean);
+    const variants = [
+        original,
+        ...(strippedDisambiguator && strippedDisambiguator !== original
+            ? [strippedDisambiguator]
+            : [])
+    ];
+    for (let length = Math.min(words.length - 1, 4); length >= 1; length -= 1) {
+        variants.push(words.slice(0, length).join(' '));
+    }
+    return [...new Set(variants)].slice(0, 5);
+}
+
+async function fetchWikidataJson(url, timeoutMs) {
+    let first = await fetchJsonUrl(url, timeoutMs);
+    if (!first.ok && first.status === 0) {
+        const fallback = await fetchJsonUrlWithPowerShell(url, timeoutMs);
+        if (fallback.ok) return fallback;
+        first = {
+            ...first,
+            fallbackError: fallback.error || ''
+        };
+    }
+    if (first.ok || first.status !== 429) return first;
+    const retrySeconds = clampNumber(first.retryAfter, 1, 1, 30);
+    await new Promise((resolve) => setTimeout(resolve, retrySeconds * 1000));
+    const retry = await fetchJsonUrl(url, timeoutMs);
+    if (!retry.ok && retry.status === 0) {
+        const fallback = await fetchJsonUrlWithPowerShell(url, timeoutMs);
+        if (fallback.ok) return fallback;
+    }
+    return retry;
+}
+
+function wikidataEntityId(value = {}) {
+    const direct = normalizeString(value.id);
+    if (/^Q\d+$/i.test(direct)) return direct.toUpperCase();
+    const numeric = Number(value['numeric-id']);
+    return Number.isInteger(numeric) && numeric > 0 ? `Q${numeric}` : '';
+}
+
+function wikidataClaimValue(statement = {}) {
+    if (statement?.rank === 'deprecated') return null;
+    const dataValue = statement?.mainsnak?.datavalue;
+    if (!dataValue || statement?.mainsnak?.snaktype !== 'value') return null;
+    const value = dataValue.value;
+    if (dataValue.type === 'wikibase-entityid') {
+        const entityId = wikidataEntityId(value || {});
+        return entityId ? { type: 'entity', entity_id: entityId } : null;
+    }
+    if (dataValue.type === 'globecoordinate' && value && typeof value === 'object') {
+        const latitude = Number(value.latitude);
+        const longitude = Number(value.longitude);
+        if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
+        return {
+            type: 'coordinates',
+            latitude,
+            longitude,
+            precision: Number.isFinite(Number(value.precision)) ? Number(value.precision) : null,
+            globe: normalizeString(value.globe)
+        };
+    }
+    if (dataValue.type === 'time' && value && typeof value === 'object') {
+        return {
+            type: 'time',
+            time: normalizeString(value.time),
+            precision: Number.isFinite(Number(value.precision)) ? Number(value.precision) : null,
+            calendar_model: normalizeString(value.calendarmodel)
+        };
+    }
+    if (dataValue.type === 'quantity' && value && typeof value === 'object') {
+        return {
+            type: 'quantity',
+            amount: normalizeString(value.amount),
+            unit: normalizeString(value.unit),
+            lower_bound: normalizeString(value.lowerBound),
+            upper_bound: normalizeString(value.upperBound)
+        };
+    }
+    if (dataValue.type === 'monolingualtext' && value && typeof value === 'object') {
+        return {
+            type: 'text',
+            text: normalizeString(value.text),
+            language: normalizeString(value.language)
+        };
+    }
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+        return { type: dataValue.type || typeof value, value };
+    }
+    return value && typeof value === 'object'
+        ? { type: dataValue.type || 'object', value }
+        : null;
+}
+
+function preferredWikidataClaims(claims = []) {
+    const list = Array.isArray(claims) ? claims.filter((claim) => claim?.rank !== 'deprecated') : [];
+    const preferred = list.filter((claim) => claim?.rank === 'preferred');
+    return (preferred.length ? preferred : list).slice(0, 8);
+}
+
+function wikidataLanguageValue(values = {}, language = 'en') {
+    return normalizeString(
+        values?.[language]?.value ||
+        values?.en?.value ||
+        Object.values(values || {}).find((value) => normalizeString(value?.value))?.value
+    );
+}
+
+async function wikidataEntityLookup(args = {}) {
+    const queryValues = [
+        normalizeString(args.query || args.q || args.search),
+        ...(Array.isArray(args.queries) ? args.queries.map((value) => normalizeString(value)) : [])
+    ].filter(Boolean);
+    const entityIds = (Array.isArray(args.entityIds)
+        ? args.entityIds
+        : Array.isArray(args.entity_ids)
+            ? args.entity_ids
+            : []
+    ).map((value) => normalizeString(value).toUpperCase()).filter((value) => /^Q\d+$/.test(value));
+    const uniqueQueries = [...new Set(queryValues)].slice(0, 20);
+    const uniqueEntityIds = [...new Set(entityIds)].slice(0, 50);
+    if (!uniqueQueries.length && !uniqueEntityIds.length) {
+        return errorResult('wikidata_entity_lookup requires query, queries, or entityIds');
+    }
+
+    const language = normalizeString(args.language, 'en').toLowerCase().replace(/[^a-z-]/g, '').slice(0, 16) || 'en';
+    const maxResultsPerQuery = clampNumber(
+        args.maxResultsPerQuery ?? args.max_results_per_query ?? args.maxResults,
+        3,
+        1,
+        5
+    );
+    const timeoutMs = clampNumber(args.timeoutMs, 60000, 5000, 180000);
+    const apiUrl = normalizeString(args.wikidataApiUrl || args.apiUrl, 'https://www.wikidata.org/w/api.php');
+    const properties = normalizeWikidataPropertySelection(args.properties || args.fields || []);
+    const attempts = [];
+
+    const searches = await runBoundedParallel(uniqueQueries, 1, async (query) => {
+        let response = { ok: true, status: 200, json: { search: [] } };
+        let effectiveQuery = query;
+        for (const searchQuery of buildWikidataSearchVariants(query)) {
+            const url = wikidataApiUrl(apiUrl, {
+                action: 'wbsearchentities',
+                search: searchQuery,
+                language,
+                uselang: language,
+                type: 'item',
+                limit: maxResultsPerQuery
+            });
+            response = await fetchWikidataJson(url, Math.min(timeoutMs, 30000));
+            attempts.push({
+                action: 'wbsearchentities',
+                query,
+                search_query: searchQuery,
+                ok: response.ok,
+                status: response.status || 0,
+                error: response.error || ''
+            });
+            effectiveQuery = searchQuery;
+            if (Array.isArray(response.json?.search) && response.json.search.length) break;
+            if (!response.ok && response.status === 429) break;
+        }
+        return {
+            query,
+            effectiveQuery,
+            response,
+            matches: Array.isArray(response.json?.search)
+                ? response.json.search.slice(0, maxResultsPerQuery)
+                : []
+        };
+    });
+
+    const searchedIds = searches.flatMap((result) => result.matches.map((match) => normalizeString(match.id)));
+    const allEntityIds = [...new Set([...uniqueEntityIds, ...searchedIds])]
+        .filter((value) => /^Q\d+$/i.test(value))
+        .slice(0, 50);
+    if (!allEntityIds.length) {
+        return actionableErrorResult('wikidata_entity_lookup found no entity candidates', {
+            status: searches.some((result) => result.response?.status === 429) ? 'rate_limited' : 'not_found',
+            attempts,
+            nextActions: [
+                'Retry with an unambiguous entity name plus country, date, occupation, or identifier.',
+                'Use web_run search only to discover a Wikidata Q-id, then call this tool with entityIds.'
+            ]
+        });
+    }
+
+    const entitiesUrl = wikidataApiUrl(apiUrl, {
+        action: 'wbgetentities',
+        ids: allEntityIds.join('|'),
+        props: 'labels|descriptions|claims|sitelinks/urls',
+        languages: `${language}|en`,
+        languagefallback: '1',
+        sitefilter: `${language}wiki|enwiki`
+    });
+    const entityResponse = await fetchWikidataJson(entitiesUrl, timeoutMs);
+    attempts.push({
+        action: 'wbgetentities',
+        ids: allEntityIds,
+        ok: entityResponse.ok,
+        status: entityResponse.status || 0,
+        error: entityResponse.error || ''
+    });
+    if (!entityResponse.ok) {
+        return actionableErrorResult('wikidata_entity_lookup could not read entity metadata', {
+            status: entityResponse.status === 429 ? 'rate_limited' : 'source_unavailable',
+            attempts,
+            retryAfter: entityResponse.retryAfter || '',
+            nextActions: [
+                'Retry after the returned Retry-After interval when rate limited.',
+                'Use the entity Wikidata page or linked Wikipedia page as a public-web fallback.'
+            ]
+        });
+    }
+
+    const entityPayload = entityResponse.json?.entities || {};
+    const entities = Array.isArray(entityPayload)
+        ? Object.fromEntries(entityPayload.map((entity) => [entity.id, entity]))
+        : entityPayload;
+    const projectedById = new Map();
+    const linkedIds = new Set();
+    for (const entityId of allEntityIds) {
+        const entity = entities?.[entityId] || {};
+        const projectedProperties = {};
+        for (const property of properties) {
+            const values = preferredWikidataClaims(entity.claims?.[property.id])
+                .map((claim) => wikidataClaimValue(claim))
+                .filter(Boolean);
+            for (const value of values) {
+                if (value.type === 'entity' && value.entity_id) linkedIds.add(value.entity_id);
+            }
+            if (values.length) projectedProperties[property.name] = values;
+        }
+        const preferredSitelink = entity.sitelinks?.[`${language}wiki`] || entity.sitelinks?.enwiki || {};
+        projectedById.set(entityId, {
+            id: entityId,
+            label: wikidataLanguageValue(entity.labels, language),
+            description: wikidataLanguageValue(entity.descriptions, language),
+            wikidata_url: `https://www.wikidata.org/wiki/${entityId}`,
+            wikipedia_url: normalizeString(preferredSitelink.url),
+            properties: projectedProperties
+        });
+    }
+
+    const linkedLabels = new Map();
+    const linkedIdList = [...linkedIds].filter((entityId) => !projectedById.has(entityId)).slice(0, 50);
+    if (linkedIdList.length) {
+        const linkedUrl = wikidataApiUrl(apiUrl, {
+            action: 'wbgetentities',
+            ids: linkedIdList.join('|'),
+            props: 'labels|descriptions|sitelinks/urls',
+            languages: `${language}|en`,
+            languagefallback: '1',
+            sitefilter: `${language}wiki|enwiki`
+        });
+        const linkedResponse = await fetchWikidataJson(linkedUrl, timeoutMs);
+        attempts.push({
+            action: 'wbgetentities_labels',
+            ids: linkedIdList,
+            ok: linkedResponse.ok,
+            status: linkedResponse.status || 0,
+            error: linkedResponse.error || ''
+        });
+        if (linkedResponse.ok) {
+            const linkedPayload = linkedResponse.json?.entities || {};
+            const linkedEntities = Array.isArray(linkedPayload)
+                ? Object.fromEntries(linkedPayload.map((entity) => [entity.id, entity]))
+                : linkedPayload;
+            for (const entityId of linkedIdList) {
+                const linked = linkedEntities?.[entityId] || {};
+                const sitelink = linked.sitelinks?.[`${language}wiki`] || linked.sitelinks?.enwiki || {};
+                linkedLabels.set(entityId, {
+                    id: entityId,
+                    label: wikidataLanguageValue(linked.labels, language),
+                    description: wikidataLanguageValue(linked.descriptions, language),
+                    wikidata_url: `https://www.wikidata.org/wiki/${entityId}`,
+                    wikipedia_url: normalizeString(sitelink.url)
+                });
+            }
+        }
+    }
+
+    for (const projected of projectedById.values()) {
+        for (const values of Object.values(projected.properties)) {
+            for (const value of values) {
+                if (value.type !== 'entity' || !value.entity_id) continue;
+                const resolved = projectedById.get(value.entity_id) || linkedLabels.get(value.entity_id);
+                if (resolved) Object.assign(value, resolved);
+            }
+        }
+    }
+
+    const results = searches.map((searchResult) => ({
+        query: searchResult.query,
+        effective_query: searchResult.effectiveQuery,
+        matches: searchResult.matches
+            .map((match) => projectedById.get(normalizeString(match.id)))
+            .filter(Boolean)
+    }));
+    if (uniqueEntityIds.length) {
+        results.push({
+            query: '',
+            entity_ids: uniqueEntityIds,
+            matches: uniqueEntityIds.map((entityId) => projectedById.get(entityId)).filter(Boolean)
+        });
+    }
+
+    const propertyRows = [];
+    for (const result of results) {
+        for (const [matchRank, match] of result.matches.entries()) {
+            for (const [property, values] of Object.entries(match.properties || {})) {
+                for (const value of Array.isArray(values) ? values : []) {
+                    propertyRows.push({
+                        source_query: normalizeString(result.query),
+                        source_entity_id: normalizeString(match.id),
+                        source_entity: normalizeString(match.label),
+                        match_rank: matchRank,
+                        property,
+                        value_type: normalizeString(value.type),
+                        value_entity_id: normalizeString(value.entity_id || value.id),
+                        value_label: normalizeString(value.label),
+                        value_description: normalizeString(value.description),
+                        latitude: Number.isFinite(Number(value.latitude)) ? Number(value.latitude) : null,
+                        longitude: Number.isFinite(Number(value.longitude)) ? Number(value.longitude) : null,
+                        amount: normalizeString(value.amount),
+                        text: normalizeString(value.text || value.value)
+                    });
+                }
+            }
+        }
+    }
+    const details = {
+        status: 'completed',
+        source: 'Wikidata Action API',
+        attribution: 'Data from Wikidata',
+        language,
+        requested_properties: properties,
+        candidate_set_complete: false,
+        property_rows: propertyRows.slice(0, 200),
+        results,
+        attempts
+    };
+    return textResult(JSON.stringify(details, null, 2), {
+        ...details,
+        evidenceQuality: 'structured_knowledge_graph',
+        reasoningReady: results.some((result) => result.matches.length > 0)
+    });
+}
+
 function readScholarlyApiConfig() {
     return {
         openAlexApiKey: normalizeString(process.env.OPENALEX_API_KEY || process.env.AILIS_OPENALEX_API_KEY),
@@ -6093,6 +10049,12 @@ function rankOpenAlexAuthorMatches(results = [], targetAuthor = '') {
         })
         .filter((author) => author.id && author.name)
         .sort((a, b) => b.score - a.score || b.worksCount - a.worksCount || a.name.localeCompare(b.name));
+}
+
+function isExactAuthorNameMatch(candidateName = '', targetAuthor = '') {
+    const candidate = authorNameTokens(candidateName).join(' ');
+    const target = authorNameTokens(targetAuthor).join(' ');
+    return Boolean(candidate && target && candidate === target);
 }
 
 function buildOpenAlexAuthorsSearchUrl(baseUrl, author, maxResults, { apiKey = '' } = {}) {
@@ -6607,6 +10569,30 @@ async function paperMetadataLookup(args = {}) {
         attempts.push({ source: 'openalex_authors', url: authorSearchUrl, ok: authorSearch.ok, status: authorSearch.status, error: authorSearch.error || '' });
         if (authorSearch.ok) {
             const rankedAuthors = rankOpenAlexAuthorMatches(authorSearch.json?.results, author).slice(0, 3);
+            const exactAuthors = rankedAuthors.filter((candidate) => isExactAuthorNameMatch(candidate.name, author));
+            const authorHistoryRequested = beforeYear && !query && !year && !topic && !venue;
+            if (authorHistoryRequested && exactAuthors.length === 1) {
+                const resolved = await paperMetadataLookup({
+                    ...args,
+                    author: exactAuthors[0].name,
+                    authorId: exactAuthors[0].id
+                });
+                if (!resolved.isError) {
+                    const resolvedPayload = resolved.structuredContent || resolved.details || {};
+                    const responsePayload = {
+                        ...resolvedPayload,
+                        requestedAuthor: author,
+                        resolvedAuthor: exactAuthors[0],
+                        attempts: [...attempts, ...(Array.isArray(resolvedPayload.attempts) ? resolvedPayload.attempts : [])]
+                    };
+                    return {
+                        ...resolved,
+                        content: [{ type: 'text', text: buildPaperMetadataText(responsePayload) }],
+                        structuredContent: responsePayload,
+                        details: responsePayload
+                    };
+                }
+            }
             const authorWorkQuery = normalizeString(buildTopicalPaperQuery({ query, author, year, topic, venue }));
             for (const authorMatch of rankedAuthors) {
                 const authorScopedUrl = buildOpenAlexWorksSearchUrl(
@@ -6674,6 +10660,28 @@ async function paperMetadataLookup(args = {}) {
     if (crossrefSearch.ok) {
         for (const item of Array.isArray(crossrefSearch.json?.message?.items) ? crossrefSearch.json.message.items : []) {
             pushPaperMetadataCandidate(results, seen, mapCrossrefItemToPaperMetadata(item), scoringContext);
+        }
+    }
+
+    if (titleOnlyLookup && results.length === 0) {
+        const broadSearchText = normalizeString(searchText.replace(/[?*]+/g, ' '));
+        const openAlexFallbackUrl = buildOpenAlexWorksSearchUrl(openAlexBaseUrl, broadSearchText, maxResults, {
+            exact: false,
+            apiKey: openAlexApiKey,
+            filter: year ? buildOpenAlexWorksFilter({ year }) : ''
+        });
+        const openAlexFallback = await fetchJsonUrl(openAlexFallbackUrl, Math.min(timeoutMs, 20000));
+        attempts.push({
+            source: 'openalex_title_fallback',
+            url: openAlexFallbackUrl,
+            ok: openAlexFallback.ok,
+            status: openAlexFallback.status,
+            error: openAlexFallback.error || ''
+        });
+        if (openAlexFallback.ok) {
+            for (const work of Array.isArray(openAlexFallback.json?.results) ? openAlexFallback.json.results : []) {
+                pushPaperMetadataCandidate(results, seen, mapOpenAlexWorkToPaperMetadata(work), scoringContext);
+            }
         }
     }
 
@@ -6950,6 +10958,29 @@ function scoreHtmlFullTextCandidate(candidate = {}, query = '') {
     return score;
 }
 
+function htmlFullTextCandidatePriority(candidate = {}) {
+    const source = normalizeString(candidate.source);
+    const haystack = `${candidate.url || ''} ${candidate.text || ''} ${candidate.title || ''} ${candidate.snippet || ''}`;
+    let priority = 0;
+    if (/page_html_link/i.test(source)) {
+        priority += 120;
+    } else if (/scholarly_search_html|document_search_html/i.test(source)) {
+        priority += 90;
+    } else if (/fetched_html_page/i.test(source)) {
+        priority += 20;
+    }
+    if (/full\s*text|\/articles?\b|\/article\/view\/|html/i.test(haystack)) {
+        priority += 40;
+    }
+    if (/abstract/i.test(haystack) && !/full\s*text|\/articles?\b/i.test(haystack)) {
+        priority -= 20;
+    }
+    if (/download|pdf/i.test(haystack) && !/html|article|full\s*text/i.test(haystack)) {
+        priority -= 30;
+    }
+    return priority;
+}
+
 function pushHtmlFullTextCandidate(candidates, seen, candidate = {}, query = '', source = '') {
     const url = normalizeString(candidate.url);
     const descriptor = `${candidate.text || ''} ${candidate.title || ''} ${candidate.snippet || ''}`;
@@ -6965,7 +10996,8 @@ function pushHtmlFullTextCandidate(candidates, seen, candidate = {}, query = '',
         ...candidate,
         url,
         source,
-        score
+        score,
+        priority: htmlFullTextCandidatePriority({ ...candidate, url, source, score })
     });
 }
 
@@ -7020,8 +11052,6 @@ function evaluateExtractedEvidenceMatch(text = '', evidenceQuery = '') {
 async function addPdfCandidatesFromUrl({ url, query, candidates, seen, htmlCandidates = [], htmlSeen = new Set(), maxLinks, timeoutMs, depth = 0 }) {
     if (isLikelyPdfUrl(url)) {
         pushPdfCandidate(candidates, seen, { url, text: 'direct PDF-like URL' }, query, 'direct_url');
-    } else {
-        pushHtmlFullTextCandidate(htmlCandidates, htmlSeen, { url, text: `source HTML page for ${query}` }, query, 'source_url_html');
     }
     for (const guess of buildOjsPdfGuesses(url)) {
         pushPdfCandidate(candidates, seen, { url: guess, text: `OJS PDF download guess for ${query}` }, query, 'ojs_guess');
@@ -7244,7 +11274,10 @@ async function pdfFindAndExtract(args = {}) {
 
     async function tryExtractHtmlRankedCandidates() {
         const rankedCandidates = htmlCandidates
-            .sort((a, b) => b.score - a.score)
+            .sort((a, b) =>
+                (Number(b.priority) || 0) - (Number(a.priority) || 0) ||
+                b.score - a.score
+            )
             .slice(0, maxCandidates);
         for (const candidate of rankedCandidates) {
             if (attemptedHtmlUrls.has(candidate.url)) {
@@ -7286,7 +11319,15 @@ async function pdfFindAndExtract(args = {}) {
             if (fetched.isError) {
                 continue;
             }
-            const extractedText = fetched.content?.[0]?.text || '';
+            const fetchedDetails = fetched.structuredContent || fetched.details || {};
+            const sourceLines = fetchedDetails.sourceWindow?.lines ||
+                fetchedDetails.sourceViewport?.lines ||
+                fetchedDetails.source?.lines ||
+                fetchedDetails.source_window?.lines ||
+                [];
+            const extractedText = Array.isArray(sourceLines) && sourceLines.length
+                ? sourceLines.map((line) => normalizeString(line.text)).filter(Boolean).join('\n')
+                : (fetched.content?.[0]?.text || '');
             const evidenceMatch = evaluateExtractedEvidenceMatch(extractedText, evidenceQuery || query);
             attempts[attempts.length - 1].evidenceMatched = evidenceMatch.ok;
             attempts[attempts.length - 1].matchedTerms = evidenceMatch.matchedTerms;
@@ -7482,7 +11523,28 @@ async function pdfFindAndExtract(args = {}) {
     });
 }
 
-async function maybeFetchWikipediaWikitext(rawUrl, timeoutMs = 90000) {
+function parseWikipediaPagePayload(payload = {}) {
+    const renderedHtml = normalizeString(payload?.parse?.text?.['*']);
+    if (renderedHtml) {
+        return {
+            contentType: 'text/html; charset=utf-8',
+            kind: 'wikipedia_rendered_html',
+            text: renderedHtml
+        };
+    }
+
+    const wikitext = normalizeString(payload?.parse?.wikitext?.['*']);
+    if (wikitext) {
+        return {
+            contentType: 'text/x-wiki',
+            kind: 'wikipedia_wikitext',
+            text: wikitext
+        };
+    }
+    return null;
+}
+
+async function maybeFetchWikipediaPage(rawUrl, timeoutMs = 90000) {
     let parsed;
     try {
         parsed = new URL(rawUrl);
@@ -7496,23 +11558,22 @@ async function maybeFetchWikipediaWikitext(rawUrl, timeoutMs = 90000) {
     if (!pageTitle || /Special:|File:|Category:/i.test(pageTitle)) {
         return null;
     }
-    const apiUrl = `${parsed.protocol}//${parsed.hostname}/w/api.php?action=parse&page=${encodeURIComponent(pageTitle)}&prop=wikitext&format=json`;
+    const apiUrl = `${parsed.protocol}//${parsed.hostname}/w/api.php?action=parse&page=${encodeURIComponent(pageTitle)}&prop=text%7Cwikitext&format=json&redirects=1&disableeditsection=1`;
     const fetched = await fetchText(apiUrl, timeoutMs);
     if (!fetched.ok) {
         return null;
     }
     try {
         const payload = JSON.parse(fetched.text);
-        const text = payload?.parse?.wikitext?.['*'];
-        if (!text) {
+        const page = parseWikipediaPagePayload(payload);
+        if (!page) {
             return null;
         }
         return {
             ok: true,
             status: fetched.status,
-            contentType: 'text/x-wiki',
-            kind: 'wikipedia_wikitext',
-            text,
+            ...page,
+            backend: 'wikipedia_parse_api',
             stderr: ''
         };
     } catch {
@@ -7653,10 +11714,771 @@ function focusTextWindow(text, { query = '', url = '', maxChars = MAX_FETCH_CHAR
         focus: {
             mode: 'window',
             term: selectedTerm,
+            selectedIndex,
             start,
             end
         }
     };
+}
+
+function sourceLines(text = '') {
+    return String(text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+}
+
+function extractRepeatedLabeledFields(text = '', { maxFields = 16, maxValues = 20 } = {}) {
+    const fields = new Map();
+    const lines = sourceLines(text);
+    for (let index = 0; index < lines.length; index += 1) {
+        const line = compactWhitespace(lines[index]);
+        const match = line.match(/^([\p{L}][\p{L}\p{N} _./(),&%+-]{1,80}):(?:\s*(.*))?$/u);
+        if (!match) {
+            continue;
+        }
+        const label = compactWhitespace(match[1]);
+        if (
+            !label ||
+            label.split(/\s+/).length > 10 ||
+            /^(?:https?|mailto|javascript)$/i.test(label)
+        ) {
+            continue;
+        }
+        let value = compactWhitespace(match[2]);
+        let valueLine = index + 1;
+        if (!value) {
+            for (let lookahead = index + 1; lookahead < Math.min(lines.length, index + 3); lookahead += 1) {
+                const candidate = compactWhitespace(lines[lookahead]);
+                if (!candidate) {
+                    continue;
+                }
+                if (/^[\p{L}][\p{L}\p{N} _./(),&%+-]{1,80}:$/u.test(candidate)) {
+                    break;
+                }
+                value = candidate;
+                valueLine = lookahead + 1;
+                break;
+            }
+        }
+        if (!value || value.length > 320 || /^https?:\/\//i.test(value)) {
+            continue;
+        }
+        const fieldKey = label.toLowerCase();
+        const field = fields.get(fieldKey) || {
+            label,
+            occurrenceCount: 0,
+            values: new Map()
+        };
+        field.occurrenceCount += 1;
+        const valueKey = value.toLowerCase();
+        const existing = field.values.get(valueKey) || {
+            value,
+            count: 0,
+            lineNumbers: []
+        };
+        existing.count += 1;
+        if (existing.lineNumbers.length < 6) {
+            existing.lineNumbers.push(valueLine);
+        }
+        field.values.set(valueKey, existing);
+        fields.set(fieldKey, field);
+    }
+    return Array.from(fields.values())
+        .filter((field) => field.occurrenceCount >= 2)
+        .sort((left, right) =>
+            right.occurrenceCount - left.occurrenceCount ||
+            left.label.localeCompare(right.label)
+        )
+        .slice(0, maxFields)
+        .map((field) => ({
+            label: field.label,
+            occurrenceCount: field.occurrenceCount,
+            uniqueValueCount: field.values.size,
+            values: Array.from(field.values.values())
+                .sort((left, right) => left.lineNumbers[0] - right.lineNumbers[0])
+                .slice(0, maxValues)
+        }));
+}
+
+function formatRepeatedLabeledFields(fields = [], maxChars = 2400) {
+    if (!Array.isArray(fields) || !fields.length) {
+        return '';
+    }
+    const lines = ['Repeated labeled fields across the full source (independent of the visible viewport):'];
+    for (const field of fields) {
+        const values = field.values.map((entry) => {
+            const locations = entry.lineNumbers.map((line) => `L${line}`).join(',');
+            return `${entry.value} x${entry.count}${locations ? ` (${locations})` : ''}`;
+        });
+        const rendered = `- ${field.label} [${field.occurrenceCount} occurrences, ${field.uniqueValueCount} unique]: ${values.join('; ')}`;
+        if (lines.join('\n').length + rendered.length + 1 > maxChars) {
+            break;
+        }
+        lines.push(rendered);
+    }
+    return lines.length > 1 ? lines.join('\n') : '';
+}
+
+const RECORD_PROJECTION_FIELD_PATTERN = /^(?:year|publisher(?:,\s*year)?|publisher|document type|resource type|content provider|country|language|source)$/i;
+
+function extractRecordFieldProjections(text = '', { maxRecords = 20, maxFields = 8 } = {}) {
+    const lines = sourceLines(text);
+    const recordStarts = [];
+    for (let index = 0; index < lines.length; index += 1) {
+        const line = compactWhitespace(lines[index]);
+        const match = line.match(/^Record\s+(\d+)\)\s*(?:\d+\.\s*)?(.+)$/i);
+        if (match) {
+            recordStarts.push({
+                index,
+                lineNumber: index + 1,
+                recordNumber: Number(match[1]) || recordStarts.length + 1,
+                title: compactWhitespace(match[2])
+            });
+        }
+    }
+    const records = [];
+    for (let recordIndex = 0; recordIndex < recordStarts.length && records.length < maxRecords; recordIndex += 1) {
+        const start = recordStarts[recordIndex];
+        const end = recordStarts[recordIndex + 1]?.index ?? lines.length;
+        const fields = [];
+        const seenLabels = new Set();
+        for (let index = start.index + 1; index < end && fields.length < maxFields; index += 1) {
+            const line = compactWhitespace(lines[index]);
+            const match = line.match(/^([\p{L}][\p{L}\p{N} _./(),&%+-]{1,80})\s*:\s*(.*)$/u);
+            if (!match) {
+                continue;
+            }
+            const label = compactWhitespace(match[1]);
+            if (!RECORD_PROJECTION_FIELD_PATTERN.test(label) || seenLabels.has(label.toLowerCase())) {
+                continue;
+            }
+            let value = compactWhitespace(match[2]);
+            let valueLineNumber = index + 1;
+            if (!value) {
+                for (let lookahead = index + 1; lookahead < Math.min(end, index + 4); lookahead += 1) {
+                    const candidate = compactWhitespace(lines[lookahead]);
+                    if (!candidate || /^\[\s*claim\s*\]$/i.test(candidate)) {
+                        continue;
+                    }
+                    if (/^[\p{L}][\p{L}\p{N} _./(),&%+-]{1,80}\s*:/u.test(candidate)) {
+                        break;
+                    }
+                    value = candidate;
+                    valueLineNumber = lookahead + 1;
+                    break;
+                }
+            }
+            if (!value || value.length > 500) {
+                continue;
+            }
+            seenLabels.add(label.toLowerCase());
+            fields.push({
+                label,
+                value,
+                lineNumber: valueLineNumber
+            });
+        }
+        if (fields.length) {
+            records.push({
+                recordNumber: start.recordNumber,
+                title: start.title,
+                lineNumber: start.lineNumber,
+                fields
+            });
+        }
+    }
+    return records;
+}
+
+function formatRecordFieldProjections(records = [], maxChars = 3200) {
+    if (!Array.isArray(records) || !records.length) {
+        return '';
+    }
+    const lines = ['Record-level field projection across the full source (each row keeps its fields correlated):'];
+    for (const record of records) {
+        const fieldText = record.fields
+            .map((field) => `${field.label}=${field.value} (L${field.lineNumber})`)
+            .join(' | ');
+        const rendered = `- Record ${record.recordNumber} (L${record.lineNumber}): ${record.title}\n  ${fieldText}`;
+        if (lines.join('\n').length + rendered.length + 1 > maxChars) {
+            break;
+        }
+        lines.push(rendered);
+    }
+    return lines.length > 1 ? lines.join('\n') : '';
+}
+
+const WEB_ARCHIVE_QUERY_CONSTRAINTS = [
+    {
+        id: 'year',
+        parameterPattern: /\byear\b|year.?from|year.?to|datefrom|dateto|dcyear|publication.?date|\bissued\b/i,
+        fieldPattern: /\byear\b|\bdate\b|\bissued\b/i,
+        numeric: true
+    },
+    {
+        id: 'language',
+        parameterPattern: /\blang(?:uage)?\b|dclang|\bling\b/i,
+        fieldPattern: /\blang(?:uage)?\b/i
+    },
+    {
+        id: 'document_type',
+        parameterPattern: /^\s*type\b|\bdoctype\b|document.?type|resource.?type|dctype|typenorm|publication.?type|\bcontent\b/i,
+        fieldPattern: /document.?type|resource.?type|publication.?type|^\s*type\s*$/i
+    },
+    {
+        id: 'country_region',
+        parameterPattern: /\bcountry\b|\bregion\b/i,
+        fieldPattern: /\bcountry\b|\bregion\b/i
+    }
+];
+
+const WEB_ARCHIVE_GENERIC_CONSTRAINT_VALUES = new Set([
+    'all', 'any', 'both', 'either', 'everything', 'none', 'null', 'true', 'false'
+]);
+
+function normalizeWebArchiveConstraintValue(value = '') {
+    return normalizeString(value)
+        .normalize('NFKD')
+        .replace(/\p{M}/gu, '')
+        .toLowerCase()
+        .replace(/[_+]+/g, ' ')
+        .replace(/[^\p{L}\p{N}]+/gu, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function webArchiveConstraintValues(parameterKey = '', parameterValue = '', constraint = {}) {
+    const normalizedValue = normalizeString(parameterValue);
+    if (!normalizedValue) {
+        return [];
+    }
+    if (constraint.numeric === true) {
+        return dedupeSearchStrings(normalizedValue.match(/\b(?:18|19|20)\d{2}\b/g) || []);
+    }
+    const keyMatches = constraint.parameterPattern.test(normalizeString(parameterKey));
+    const valueParts = normalizedValue
+        .split(/[|,;]/)
+        .flatMap((part) => {
+            const segments = part.split(/[:=]/).map((segment) => normalizeWebArchiveConstraintValue(segment));
+            return keyMatches ? [segments.at(-1)] : segments.slice(1);
+        })
+        .map((value) => normalizeWebArchiveConstraintValue(value))
+        .filter((value) =>
+            value &&
+            !WEB_ARCHIVE_GENERIC_CONSTRAINT_VALUES.has(value) &&
+            !/^\d+$/.test(value)
+        );
+    return dedupeSearchStrings(valueParts);
+}
+
+function extractWebArchiveQueryConstraints(url = '') {
+    let parsed;
+    try {
+        parsed = new URL(normalizeString(url));
+    } catch {
+        return [];
+    }
+    const grouped = new Map();
+    for (const [parameterKey, parameterValue] of parsed.searchParams.entries()) {
+        const descriptor = `${parameterKey} ${parameterValue}`;
+        for (const constraint of WEB_ARCHIVE_QUERY_CONSTRAINTS) {
+            const compactKey = normalizeString(parameterKey).replace(/\[\]$/, '').toLowerCase();
+            const directYearRange = constraint.id === 'year' &&
+                /^(?:from|to)$/.test(compactKey) &&
+                /\b(?:18|19|20)\d{2}\b/.test(normalizeString(parameterValue));
+            const directDocumentType = constraint.id === 'document_type' &&
+                compactKey === 'type' &&
+                !WEB_ARCHIVE_GENERIC_CONSTRAINT_VALUES.has(
+                    normalizeWebArchiveConstraintValue(parameterValue)
+                );
+            if (
+                !directYearRange &&
+                !directDocumentType &&
+                !constraint.parameterPattern.test(descriptor)
+            ) {
+                continue;
+            }
+            const values = webArchiveConstraintValues(parameterKey, parameterValue, constraint);
+            if (!values.length) {
+                continue;
+            }
+            const current = grouped.get(constraint.id) || {
+                id: constraint.id,
+                expectedValues: [],
+                parameters: []
+            };
+            current.expectedValues = dedupeSearchStrings([...current.expectedValues, ...values]);
+            current.parameters.push(`${parameterKey}=${parameterValue}`);
+            grouped.set(constraint.id, current);
+        }
+    }
+    return Array.from(grouped.values());
+}
+
+function webArchiveConstraintValueMatches(constraintId = '', expected = '', observed = '') {
+    const expectedValue = normalizeWebArchiveConstraintValue(expected);
+    const observedValue = normalizeWebArchiveConstraintValue(observed);
+    if (!expectedValue || !observedValue) {
+        return false;
+    }
+    if (constraintId === 'year') {
+        return new RegExp(`\\b${escapeWebArchiveRegexTerm(expectedValue)}\\b`).test(observedValue);
+    }
+    if (expectedValue.length <= 3) {
+        return observedValue.split(/\s+/).includes(expectedValue);
+    }
+    return observedValue.includes(expectedValue) || expectedValue.includes(observedValue);
+}
+
+function assessArchivedSnapshotQueryFidelity(originalUrl = '', snapshotDetails = {}) {
+    const constraints = extractWebArchiveQueryConstraints(originalUrl);
+    const repeatedFields = Array.isArray(snapshotDetails.repeatedLabeledFields)
+        ? snapshotDetails.repeatedLabeledFields
+        : Array.isArray(snapshotDetails.repeated_labeled_fields)
+        ? snapshotDetails.repeated_labeled_fields
+        : [];
+    const assessments = [];
+    for (const constraint of constraints) {
+        const definition = WEB_ARCHIVE_QUERY_CONSTRAINTS.find((entry) => entry.id === constraint.id);
+        const matchingFields = repeatedFields.filter((field) =>
+            definition?.fieldPattern.test(normalizeString(field?.label))
+        );
+        if (!matchingFields.length) {
+            continue;
+        }
+        const observedValues = dedupeSearchStrings(matchingFields.flatMap((field) =>
+            (Array.isArray(field?.values) ? field.values : [])
+                .map((entry) => normalizeString(entry?.value))
+                .filter(Boolean)
+        ));
+        if (!observedValues.length) {
+            continue;
+        }
+        const reflected = constraint.expectedValues.some((expected) =>
+            observedValues.some((observed) =>
+                webArchiveConstraintValueMatches(constraint.id, expected, observed)
+            )
+        );
+        const observedOccurrenceCount = matchingFields.reduce(
+            (total, field) => total + Math.max(0, Number(field?.occurrenceCount) || 0),
+            0
+        );
+        assessments.push(pruneEmptyDeep({
+            id: constraint.id,
+            reflected,
+            expectedValues: constraint.expectedValues,
+            parameters: constraint.parameters,
+            recordFieldLabels: matchingFields.map((field) => normalizeString(field.label)),
+            observedOccurrenceCount,
+            observedValues: observedValues.slice(0, 16)
+        }));
+    }
+    const mismatchedConstraints = assessments
+        .filter((assessment) => assessment.reflected !== true)
+        .map((assessment) => assessment.id);
+    const stronglyContradictedConstraints = assessments
+        .filter((assessment) =>
+            assessment.reflected !== true &&
+            Number(assessment.observedOccurrenceCount || 0) >= 2
+        )
+        .map((assessment) => assessment.id);
+    const rejected = (
+        assessments.length >= 2 &&
+        mismatchedConstraints.length >= 2
+    ) || stronglyContradictedConstraints.length >= 1;
+    return pruneEmptyDeep({
+        status: rejected
+            ? 'rejected'
+            : assessments.length
+            ? 'accepted'
+            : 'not_assessable',
+        rejected,
+        assessedConstraintCount: assessments.length,
+        mismatchCount: mismatchedConstraints.length,
+        requiredMismatchCount: 2,
+        mismatchedConstraints,
+        stronglyContradictedConstraints,
+        strongContradictionMinimumOccurrences: 2,
+        assessments
+    });
+}
+
+function extractFacetedSearchFilters(text = '', { maxFacets = 16, maxValues = 30 } = {}) {
+    const lines = sourceLines(text);
+    const facets = [];
+    let current = null;
+    for (let index = 0; index < lines.length; index += 1) {
+        const line = compactWhitespace(lines[index]);
+        const heading = line.match(/^Search the list from the filter (.+?) with ([\d,]+) entr(?:y|ies)\b/i);
+        if (heading) {
+            current = {
+                label: compactWhitespace(heading[1]),
+                declaredValueCount: Number(heading[2].replace(/,/g, '')) || undefined,
+                lineNumber: index + 1,
+                values: [],
+                seen: new Set()
+            };
+            facets.push(current);
+            if (facets.length >= maxFacets) {
+                break;
+            }
+            continue;
+        }
+        if (!current) {
+            continue;
+        }
+        if (/^Go$/i.test(line)) {
+            current = null;
+            continue;
+        }
+        const valueMatch = line.match(/^\(([\d,]+)\)\s+(.+?)(?:\s+\(Number of documents:\s*[\d,]+\))?$/i);
+        if (!valueMatch || current.values.length >= maxValues) {
+            continue;
+        }
+        const value = compactWhitespace(valueMatch[2]);
+        const key = value.toLowerCase();
+        if (!value || current.seen.has(key)) {
+            continue;
+        }
+        current.seen.add(key);
+        current.values.push({
+            value,
+            count: Number(valueMatch[1].replace(/,/g, '')) || 0,
+            lineNumber: index + 1
+        });
+    }
+    return facets
+        .filter((facet) => facet.label && facet.values.length)
+        .map(({ seen, ...facet }) => facet);
+}
+
+function facetedSearchDisplayScore(facet = {}) {
+    const label = normalizeString(facet.label).toLowerCase();
+    if (/\bcountry\b|\bregion\b/.test(label)) return 100;
+    if (/\blanguage\b|\blang\b/.test(label)) return 95;
+    if (/\bdocument type\b|\bresource type\b|\btype\b/.test(label)) return 90;
+    if (/\bcontent provider\b|\brepository\b|\bsource\b/.test(label)) return 85;
+    if (/\byear\b|\bdate\b/.test(label)) return 80;
+    if (/\bclassification\b|\bsubject\b|\bdewey\b|\bddc\b/.test(label)) return 70;
+    if (/\bauthor\b|\bcreator\b/.test(label)) return 40;
+    return 20;
+}
+
+function formatFacetedSearchFilters(facets = [], maxChars = 3600) {
+    if (!Array.isArray(facets) || !facets.length) {
+        return '';
+    }
+    const lines = ['Faceted search filters across the full source (values preserve source line numbers):'];
+    const rankedFacets = facets
+        .map((facet, index) => ({ facet, index, score: facetedSearchDisplayScore(facet) }))
+        .sort((left, right) => right.score - left.score || left.index - right.index)
+        .map((entry) => entry.facet);
+    for (const facet of rankedFacets) {
+        const visibleValues = facet.values.length > 12
+            ? [...facet.values.slice(0, 8), ...facet.values.slice(-4)]
+            : facet.values;
+        const values = visibleValues.map((entry) =>
+            `${entry.value} x${entry.count} (L${entry.lineNumber})`
+        );
+        const omitted = Math.max(0, facet.values.length - visibleValues.length);
+        const rendered = `- ${facet.label}: ${values.join('; ')}${omitted ? `; ... +${omitted} more values` : ''}`;
+        if (lines.join('\n').length + rendered.length + 1 > maxChars) {
+            break;
+        }
+        lines.push(rendered);
+    }
+    return lines.length > 1 ? lines.join('\n') : '';
+}
+
+function findSourceLineMatches(text = '', pattern = '', { maxMatches = 50 } = {}) {
+    const normalizedPattern = normalizeString(pattern).toLowerCase();
+    if (!normalizedPattern) {
+        return [];
+    }
+    const matches = [];
+    const lines = sourceLines(text);
+    for (let index = 0; index < lines.length && matches.length < maxMatches; index += 1) {
+        const line = String(lines[index] || '');
+        if (!line.toLowerCase().includes(normalizedPattern)) {
+            continue;
+        }
+        const lineno = index + 1;
+        matches.push({
+            lineNumber: lineno,
+            lineno,
+            line_number: lineno,
+            text: line
+        });
+    }
+    return matches;
+}
+
+function compactFindPageText(text = '') {
+    return sourceLines(text).map((line) => String(line || '')
+        .replace(/!\[[^\]]*\]\((?:\\.|[^)])*\)/g, '')
+        .replace(/\[([^\]]*)\]\((?:\\.|[^)])*\)/g, '$1')
+        .replace(/\s+/g, ' ')
+        .trim()).join('\n');
+}
+
+function normalizedFindHeadingText(value = '') {
+    return normalizeString(value)
+        .replace(/^#{1,6}\s+/, '')
+        .replace(/^\|\s*/, '')
+        .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .toLowerCase();
+}
+
+function selectFindSourceMatch(matches = [], pattern = '') {
+    const normalizedPattern = normalizeString(pattern).toLowerCase();
+    let best = null;
+    let bestScore = Number.NEGATIVE_INFINITY;
+    for (const match of Array.isArray(matches) ? matches : []) {
+        const text = normalizeString(match.text);
+        const headingText = normalizedFindHeadingText(text);
+        let score = 0;
+        if (/^#{1,6}\s+\S/.test(text)) score += 100;
+        if (/^\|\s*\S/.test(text)) score += 60;
+        if (sourceLineLooksLikeSectionHeading(text)) score += 30;
+        if (headingText === normalizedPattern) score += 40;
+        if (/toggle\b|\[\[?edit\]?\]|table of contents/i.test(text)) score -= 120;
+        score -= (text.match(/https?:\/\//g) || []).length * 8;
+        if (score > bestScore) {
+            best = match;
+            bestScore = score;
+        }
+    }
+    return best;
+}
+
+function sourceOffsetForLine(text = '', lineNumber = 1) {
+    const lines = sourceLines(text);
+    const targetIndex = Math.max(0, Math.min(lines.length - 1, Number(lineNumber || 1) - 1));
+    let offset = 0;
+    for (let index = 0; index < targetIndex; index += 1) {
+        offset += String(lines[index] || '').length + 1;
+    }
+    return offset;
+}
+
+function lineNumberForOffset(text = '', offset = 0) {
+    const boundedOffset = Math.max(0, Math.min(String(text || '').length, Number(offset) || 0));
+    const before = String(text || '').slice(0, boundedOffset);
+    return before ? before.split(/\n/).length : 1;
+}
+
+function extractSourceWindowYearTerms(query = '') {
+    return Array.from(new Set(String(query || '').match(/\b(?:18|19|20)\d{2}\b/g) || []));
+}
+
+function sourceWindowCoversQuery(text = '', query = '') {
+    const normalizedQuery = normalizeString(query);
+    if (!normalizedQuery) {
+        return true;
+    }
+    const normalizedText = String(text || '').toLowerCase();
+    const yearTerms = extractSourceWindowYearTerms(normalizedQuery);
+    if (yearTerms.length) {
+        return yearTerms.some((year) => normalizedText.includes(year.toLowerCase()));
+    }
+    const queryTokens = significantPdfQueryTerms(normalizedQuery)
+        .filter((token) => pdfEvidenceTermWeight(token) >= 4)
+        .slice(0, 8);
+    if (!queryTokens.length) {
+        return true;
+    }
+    return queryTokens.some((token) => normalizedText.includes(String(token || '').toLowerCase()));
+}
+
+function firstLineWithQueryYear(lines = [], query = '', startLine = 1) {
+    const yearTerms = extractSourceWindowYearTerms(query);
+    if (!yearTerms.length) {
+        return 0;
+    }
+    const startIndex = Math.max(0, Number(startLine || 1) - 1);
+    for (let index = startIndex; index < lines.length; index += 1) {
+        const line = String(lines[index] || '');
+        if (yearTerms.some((year) => line.includes(year))) {
+            return index + 1;
+        }
+    }
+    return 0;
+}
+
+function sourceLineLooksLikeSectionHeading(value = '') {
+    const text = normalizeString(value);
+    if (!text || text.length > 120 || text.split(/\s+/).length > 14) {
+        return false;
+    }
+    return !/[.!?;:]$/.test(text);
+}
+
+function buildSourceLineWindow(text = '', {
+    url = '',
+    contentType = '',
+    query = '',
+    maxChars = 4800,
+    lineStart = 0,
+    lineEnd = 0,
+    maxLines = 120,
+    focus = null
+} = {}) {
+    const normalizedText = String(text || '');
+    const lines = sourceLines(normalizedText);
+    const totalLines = lines.length;
+    const requestedLine = clampNumber(lineStart, 0, 0, totalLines || 1);
+    const requestedEnd = clampNumber(lineEnd, 0, 0, totalLines || 1);
+    const focusSelectedIndex = Number(focus?.selectedIndex);
+    const focusStart = Number.isFinite(focusSelectedIndex) && focusSelectedIndex >= 0
+        ? focusSelectedIndex
+        : Number(focus?.start);
+    let focusLine = Number.isFinite(focusStart) && focusStart >= 0
+        ? Math.max(1, lineNumberForOffset(normalizedText, focusStart) - 4)
+        : 1;
+    const yearLine = !requestedLine ? firstLineWithQueryYear(lines, query, focusLine) : 0;
+    if (yearLine) {
+        focusLine = Math.max(1, yearLine - 6);
+    }
+    const startLine = Math.max(1, requestedLine || focusLine || 1);
+    const lineBudget = Math.max(1, clampNumber(maxLines, 120, 1, 300));
+    const charBudget = Math.max(1000, clampNumber(maxChars, 4800, 1000, MAX_FETCH_CHARS));
+    const targetEndLine = requestedEnd && requestedEnd >= startLine
+        ? Math.min(totalLines, requestedEnd)
+        : Math.min(totalLines, startLine + lineBudget - 1);
+    const selected = [];
+    let visibleChars = 0;
+    for (let index = startLine; index <= targetEndLine; index += 1) {
+        const textLine = lines[index - 1] ?? '';
+        const rendered = `L${index}: ${textLine}`;
+        if (selected.length && visibleChars + rendered.length + 1 > charBudget) {
+            break;
+        }
+        selected.push({
+            lineNumber: index,
+            text: textLine,
+            rendered
+        });
+        visibleChars += rendered.length + 1;
+    }
+    const lastSelected = selected[selected.length - 1];
+    if (
+        lastSelected &&
+        lastSelected.lineNumber < targetEndLine &&
+        sourceLineLooksLikeSectionHeading(lastSelected.text)
+    ) {
+        const nextLineNumber = lastSelected.lineNumber + 1;
+        const nextText = lines[nextLineNumber - 1] ?? '';
+        selected.push({
+            lineNumber: nextLineNumber,
+            text: nextText,
+            rendered: `L${nextLineNumber}: ${nextText}`
+        });
+    }
+    const lineEndActual = selected.length ? selected[selected.length - 1].lineNumber : startLine;
+    const selectionReason = requestedLine
+        ? 'requested_line_window'
+        : normalizeString(query)
+        ? `focused around query/hash: ${normalizeString(query)}`
+        : 'document_head';
+    return {
+        type: 'source_viewport',
+        action: {
+            type: 'open_page',
+            tool: 'open_page',
+            args: {
+                url,
+                lineno: startLine
+            },
+            url,
+            lineno: startLine
+        },
+        url,
+        ref_id: url,
+        contentType,
+        content_type: contentType,
+        totalLines,
+        total_lines: totalLines,
+        lineno: startLine,
+        lineStart: startLine,
+        line_start: startLine,
+        lineEnd: lineEndActual,
+        line_end: lineEndActual,
+        hasMoreBefore: startLine > 1,
+        has_more_before: startLine > 1,
+        hasMoreAfter: lineEndActual < totalLines,
+        has_more_after: lineEndActual < totalLines,
+        selectionReason,
+        selection_reason: selectionReason,
+        focus: focus || undefined,
+        lines: selected.map((line) => ({
+            ...line,
+            lineno: line.lineNumber,
+            line_number: line.lineNumber
+        }))
+    };
+}
+
+function buildSourceWindowFollowups(sourceWindow = {}, query = '') {
+    const calls = [];
+    const url = normalizeString(sourceWindow.url);
+    if (!url) {
+        return calls;
+    }
+    const maxLines = Math.max(1, Number(sourceWindow.lineEnd || 0) - Number(sourceWindow.lineStart || 0) + 1) || 120;
+    if (sourceWindow.hasMoreBefore) {
+        calls.push({
+            tool: 'continue_page',
+            args: {
+                url,
+                lineno: Math.max(1, Number(sourceWindow.lineStart || 1) - maxLines),
+                maxLines
+            },
+            reason: 'Open the previous source window if a missing field is above the current viewport.'
+        });
+    }
+    if (sourceWindow.hasMoreAfter) {
+        calls.push({
+            tool: 'continue_page',
+            args: {
+                url,
+                lineno: Number(sourceWindow.lineEnd || 0) + 1,
+                maxLines
+            },
+            reason: 'Open the next source window if a missing field is below the current viewport.'
+        });
+    }
+    const normalizedQuery = normalizeString(query);
+    if (normalizedQuery) {
+        calls.push({
+            tool: 'find_in_page',
+            args: {
+                url,
+                pattern: normalizedQuery,
+                maxLines
+            },
+            reason: 'Re-open the same source around a specific missing phrase rather than refetching the whole page.'
+        });
+    }
+    return calls.slice(0, 3);
+}
+
+function formatSourceLineWindow(sourceWindow = {}) {
+    const renderedLines = (Array.isArray(sourceWindow.lines) ? sourceWindow.lines : [])
+        .map((line) => normalizeString(line.rendered))
+        .filter(Boolean)
+        .join('\n');
+    return [
+        'Source viewport:',
+        `Content type: ${normalizeString(sourceWindow.content_type || sourceWindow.contentType, 'text/plain')}`,
+        `Source: web_fetch({"url":${JSON.stringify(sourceWindow.url || sourceWindow.ref_id || '')},"lineno":${Number(sourceWindow.lineno || sourceWindow.line_start || sourceWindow.lineStart || 1)}})`,
+        `Total lines: ${Number(sourceWindow.total_lines || sourceWindow.totalLines || 0)}`,
+        `Line range: L${Number(sourceWindow.line_start || sourceWindow.lineStart || 1)}-L${Number(sourceWindow.line_end || sourceWindow.lineEnd || sourceWindow.line_start || sourceWindow.lineStart || 1)}`,
+        `Has more before: ${(sourceWindow.has_more_before ?? sourceWindow.hasMoreBefore) ? 'true' : 'false'}`,
+        `Has more after: ${(sourceWindow.has_more_after ?? sourceWindow.hasMoreAfter) ? 'true' : 'false'}`,
+        'Note: this is a focused source viewport, not a failed or incomplete fetch. If it contains enough answer-bearing evidence, answer. If a specific field is missing, fetch another line window or query-focused window. For first/earliest/latest/only/all/count questions, a partial viewport is sufficient only when it establishes the relevant candidate-set boundary; otherwise inspect the remaining relevant lines or sections.',
+        '',
+        renderedLines
+    ].filter((line) => line !== '').join('\n');
 }
 
 function buildEvidenceSnippets(text = '', query = '', { maxSnippets = 3 } = {}) {
@@ -7946,8 +12768,7 @@ function classifyYtDlpFailure(stderr = '') {
             message: 'YouTube/yt-dlp was blocked by anti-bot or requires browser cookies.',
             nextActions: [
                 'Retry with allow_cookies=true and cookies_from_browser set to an installed browser if the user permits cookie access.',
-                'Use a video frame sampling or ASR backend if video/audio download is available.',
-                'Do not keep rewriting web_search queries for the same YouTube video.'
+                'Use another evidence source if it is more likely to answer the task.'
             ]
         };
     }
@@ -7964,7 +12785,7 @@ function classifyYtDlpFailure(stderr = '') {
             status: 'transcript_unavailable',
             failureReason: 'transcript_unavailable',
             message: 'No subtitles or automatic captions were available.',
-            nextActions: ['Use audio ASR or video frame sampling instead of retrying transcript.']
+            nextActions: ['Use another evidence source if it is more likely to answer the task.']
         };
     }
     return {
@@ -8074,12 +12895,7 @@ function buildYouTubeEvidenceSearchQuery(video = {}, args = {}) {
 }
 
 function buildYouTubeOEmbedSuggestedCalls(video = {}, args = {}) {
-    const language = normalizeString(args.language || args.lang, 'en');
     return [
-        {
-            tool: 'youtube_transcript',
-            args: { url: video.url, language }
-        },
         {
             tool: 'web_search',
             args: { query: buildYouTubeEvidenceSearchQuery(video, args), maxResults: 5 }
@@ -8097,12 +12913,10 @@ function youtubeOEmbedMetadataResult(video = {}, args = {}, failure = {}) {
         `url: ${video.url || ''}`,
         `thumbnail_url: ${video.thumbnail_url || ''}`,
         '',
-        'evidence_gap: metadata_only; this is not transcript, audio, or frame evidence.',
-        'Use the exact title/channel above for follow-up search or media fallback before answering visual/audio questions.',
+        'retrieval_diagnostic: metadata_only; this is not transcript, audio, or frame evidence.',
         '',
-        'Suggested next calls:',
-        `1. youtube_transcript ${JSON.stringify(suggestedNextCalls[0].args)}`,
-        `2. web_search ${JSON.stringify(suggestedNextCalls[1].args)}`
+        'Available follow-up calls derived from the recovered metadata:',
+        `1. web_search ${JSON.stringify(suggestedNextCalls[0].args)}`
     ];
     return textResult(lines.join('\n'), {
         ...failure,
@@ -8164,6 +12978,174 @@ async function writeMcpArtifact(kind = 'artifact', baseName = 'artifact', text =
     return artifactPath;
 }
 
+let cachedWindowsUserProxy;
+
+function normalizeProxyUrl(value = '') {
+    const proxy = normalizeString(value);
+    if (!proxy) {
+        return '';
+    }
+    return /^[a-z][a-z0-9+.-]*:\/\//i.test(proxy) ? proxy : `http://${proxy}`;
+}
+
+function windowsUserProxySettings() {
+    if (process.platform !== 'win32') {
+        return {};
+    }
+    if (cachedWindowsUserProxy !== undefined) {
+        return cachedWindowsUserProxy;
+    }
+    cachedWindowsUserProxy = {};
+    try {
+        const result = spawnSync('reg.exe', [
+            'query',
+            'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings'
+        ], {
+            encoding: 'utf8',
+            windowsHide: true,
+            timeout: 3000
+        });
+        const output = `${result.stdout || ''}\n${result.stderr || ''}`;
+        const enabled = /ProxyEnable\s+REG_DWORD\s+0x1\b/i.test(output);
+        const server = output.match(/ProxyServer\s+REG_SZ\s+([^\r\n]+)/i)?.[1]?.trim() || '';
+        if (!enabled || !server) {
+            return cachedWindowsUserProxy;
+        }
+        if (!server.includes('=')) {
+            cachedWindowsUserProxy = { http: normalizeProxyUrl(server), https: normalizeProxyUrl(server) };
+            return cachedWindowsUserProxy;
+        }
+        for (const segment of server.split(';')) {
+            const separator = segment.indexOf('=');
+            if (separator <= 0) {
+                continue;
+            }
+            const protocol = segment.slice(0, separator).trim().toLowerCase();
+            const proxy = normalizeProxyUrl(segment.slice(separator + 1));
+            if (proxy && ['http', 'https'].includes(protocol)) {
+                cachedWindowsUserProxy[protocol] = proxy;
+            }
+        }
+    } catch {}
+    return cachedWindowsUserProxy;
+}
+
+function urlBypassesProxy(url = '') {
+    let parsed;
+    try {
+        parsed = new URL(url);
+    } catch {
+        return false;
+    }
+    const hostname = parsed.hostname.toLowerCase();
+    if (
+        hostname === 'localhost' ||
+        hostname === '::1' ||
+        /^127\./.test(hostname) ||
+        /^169\.254\./.test(hostname)
+    ) {
+        return true;
+    }
+    const noProxy = normalizeString(process.env.NO_PROXY || process.env.no_proxy);
+    if (!noProxy) {
+        return false;
+    }
+    return noProxy.split(',').map((entry) => entry.trim().toLowerCase()).filter(Boolean).some((entry) => {
+        const normalized = entry.replace(/^\*\./, '.').split(':')[0];
+        return normalized === '*' ||
+            hostname === normalized.replace(/^\./, '') ||
+            (normalized.startsWith('.') && hostname.endsWith(normalized));
+    });
+}
+
+function configuredHttpProxy(url = '') {
+    if (urlBypassesProxy(url)) {
+        return '';
+    }
+    let protocol = 'https';
+    try {
+        protocol = new URL(url).protocol.replace(':', '').toLowerCase();
+    } catch {}
+    const explicit = normalizeProxyUrl(
+        process.env.AILIS_WEB_PROXY ||
+        process.env.AILIS_HTTP_PROXY ||
+        (protocol === 'https'
+            ? process.env.HTTPS_PROXY || process.env.https_proxy
+            : process.env.HTTP_PROXY || process.env.http_proxy)
+    );
+    if (explicit) {
+        return explicit;
+    }
+    const windowsProxy = windowsUserProxySettings();
+    return windowsProxy[protocol] || windowsProxy.https || windowsProxy.http || '';
+}
+
+async function fetchTextWithCurl(url, timeoutMs = 60000) {
+    const proxyUrl = configuredHttpProxy(url);
+    const marker = '__AILIS_CURL_META__';
+    const args = [
+        '-sS',
+        '-L',
+        '--max-time',
+        String(Math.max(5, Math.ceil(timeoutMs / 1000))),
+        '--connect-timeout',
+        String(Math.max(3, Math.min(20, Math.ceil(timeoutMs / 3000)))),
+        '-A',
+        'AILISResearchMCP/0.1 (+local assistant research tool)',
+        '-H',
+        'Accept: text/html,application/json,application/xml;q=0.9,text/plain;q=0.8,*/*;q=0.5'
+    ];
+    if (proxyUrl) {
+        args.push('--proxy', proxyUrl);
+    }
+    args.push(
+        '-w',
+        `\n${marker}%{http_code}\t%{content_type}\t%{size_download}`,
+        url
+    );
+    const result = await runProcess(process.platform === 'win32' ? 'curl.exe' : 'curl', args, {
+        timeoutMs: timeoutMs + 5000
+    });
+    const markerIndex = result.stdout.lastIndexOf(`\n${marker}`);
+    const body = markerIndex >= 0 ? result.stdout.slice(0, markerIndex) : result.stdout;
+    const metadata = markerIndex >= 0
+        ? result.stdout.slice(markerIndex + marker.length + 1).split('\t')
+        : [];
+    const status = Number(metadata[0] || 0);
+    const contentType = normalizeString(metadata[1]);
+    const ok = result.exitCode === 0 && status >= 200 && status < 400;
+    return {
+        ok,
+        status,
+        errorCode: ok
+            ? ''
+            : result.timedOut
+                ? 'timeout'
+                : result.exitCode === -1
+                    ? 'curl_unavailable'
+                    : status
+                        ? `http_${status}`
+                        : 'curl_fetch_failed',
+        error: ok
+            ? ''
+            : normalizeString(result.stderr, result.timedOut ? 'curl request timed out' : `curl exit ${result.exitCode}`),
+        contentType,
+        contentLength: Number(metadata[2] || Buffer.byteLength(body)),
+        text: body,
+        timedOut: result.timedOut,
+        proxyUsed: Boolean(proxyUrl),
+        backend: 'curl'
+    };
+}
+
+async function fetchArchiveIndexText(url, timeoutMs = 60000) {
+    const curlResult = await fetchTextWithCurl(url, timeoutMs);
+    if (curlResult.ok || curlResult.status || curlResult.errorCode !== 'curl_unavailable') {
+        return curlResult;
+    }
+    return fetchText(url, timeoutMs);
+}
+
 async function fetchTextWithPythonRequests(url, timeoutMs = 60000, options = {}) {
     if (process.env.AILIS_RESEARCH_TEST_FORCE_PYTHON_FETCH_FAIL === '1') {
         return {
@@ -8174,15 +13156,18 @@ async function fetchTextWithPythonRequests(url, timeoutMs = 60000, options = {})
             backend: 'python_requests'
         };
     }
+    const proxyUrl = options.useSystemProxy === false ? '' : configuredHttpProxy(url);
     const code = `
 import json, requests, sys
 url = sys.argv[1]
 timeout = float(sys.argv[2])
 verify_tls = sys.argv[3].lower() != "false"
+proxy_url = sys.argv[4] if len(sys.argv) > 4 else ""
+proxies = {"http": proxy_url, "https": proxy_url} if proxy_url else None
 if not verify_tls:
     import urllib3
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-r = requests.get(url, timeout=timeout, verify=verify_tls, headers={"User-Agent": "AILISResearchMCP/0.1 (+local assistant research tool)"})
+r = requests.get(url, timeout=timeout, verify=verify_tls, proxies=proxies, headers={"User-Agent": "AILISResearchMCP/0.1 (+local assistant research tool)"})
 content = r.content or b""
 content_type = r.headers.get("content-type", "")
 prefix = content[:16]
@@ -8198,6 +13183,7 @@ print(json.dumps({
   "is_binary": is_binary,
   "prefix_hex": prefix.hex(),
   "tls_verify": verify_tls,
+  "proxy_used": bool(proxy_url),
   "text": text,
 }, ensure_ascii=False))
 `.trim();
@@ -8207,7 +13193,8 @@ print(json.dumps({
         code,
         url,
         String(Math.max(5, Math.ceil(timeoutMs / 1000))),
-        verifyTls ? 'true' : 'false'
+        verifyTls ? 'true' : 'false',
+        proxyUrl
     ], { timeoutMs });
     if (result.exitCode !== 0) {
         return {
@@ -8247,6 +13234,7 @@ print(json.dumps({
         stderr: result.stderr,
         error: status ? `HTTP ${status}` : '',
         tlsVerificationDisabled: payload.tls_verify === false,
+        proxyUsed: payload.proxy_used === true,
         backend: 'python_requests'
     };
 }
@@ -8619,6 +13607,8 @@ print(json.dumps({
             fullDocumentRead: true
         },
         observationContract: {
+            status: 'completed',
+            semantic_level: 'structure',
             complete: true,
             truncated: false,
             reasoning_ready: true,
@@ -8719,12 +13709,72 @@ print(json.dumps(payload, ensure_ascii=False))
         return errorResult('read_presentation failed', { path: filePath, stderr: result.stderr.slice(0, 3000) });
     }
     const text = normalizeString(result.stdout);
-    return textResult(text, { status: 'completed', path: filePath });
+    let presentation;
+    try {
+        presentation = JSON.parse(text);
+    } catch (error) {
+        return errorResult(`read_presentation returned invalid JSON: ${error.message}`, {
+            path: filePath,
+            stdout: text.slice(0, 2000)
+        });
+    }
+    const totalSlides = Number(presentation.total_slides || 0);
+    const returnedSlides = Number(presentation.returned_slides || 0);
+    const complete = returnedSlides >= totalSlides;
+    const details = {
+        status: complete ? 'completed' : 'partial',
+        ok: true,
+        path: filePath,
+        totalSlides,
+        returnedSlides,
+        complete,
+        truncated: !complete,
+        coverage: {
+            totalSlides,
+            returnedSlides,
+            matchingSlides: Array.isArray(presentation.matching_slides)
+                ? presentation.matching_slides.length
+                : 0
+        },
+        observationContract: {
+            status: complete ? 'completed' : 'partial',
+            semantic_level: 'structure',
+            complete,
+            truncated: !complete,
+            coverage: {
+                totalSlides,
+                returnedSlides
+            }
+        }
+    };
+    return {
+        content: [{ type: 'text', text }],
+        structuredContent: {
+            ok: true,
+            ...details,
+            presentation,
+            ...presentation
+        },
+        details
+    };
 }
 
 async function transcribeAudio(args = {}) {
     const filePath = path.resolve(normalizeString(args.path || args.file || args.filePath || args.file_path));
     const model = normalizeString(args.model, 'base');
+    const stat = filePath ? await fs.stat(filePath).catch(() => null) : null;
+    if (!stat || !stat.isFile()) {
+        return actionableErrorResult('transcribe_audio requires an existing local audio path', {
+            status: 'not_found',
+            path: filePath,
+            failureReason: 'local_audio_path_not_found',
+            message: 'The supplied staged audio path does not exist. Use the exact current attached_files path.',
+            nextActions: [
+                'Use the exact current attached_files path and retry once.',
+                'Do not change Whisper model size to recover a missing input file.'
+            ]
+        });
+    }
     const code = `
 import json, os, sys, whisper
 try:
@@ -8768,7 +13818,43 @@ print(json.dumps({"text": result.get("text", ""), "language": result.get("langua
     if (result.exitCode !== 0) {
         return errorResult('transcribe_audio failed', { path: filePath, stderr: result.stderr.slice(0, 2000) });
     }
-    return textResult(result.stdout.trim(), { status: 'completed', path: filePath, model });
+    const text = normalizeString(result.stdout);
+    let transcript;
+    try {
+        transcript = JSON.parse(text);
+    } catch (error) {
+        return errorResult(`transcribe_audio returned invalid JSON: ${error.message}`, {
+            path: filePath,
+            stdout: text.slice(0, 2000)
+        });
+    }
+    return {
+        content: [{ type: 'text', text }],
+        structuredContent: {
+            ok: true,
+            status: 'completed',
+            path: filePath,
+            model,
+            transcript,
+            ...transcript
+        },
+        details: {
+            status: 'completed',
+            ok: true,
+            path: filePath,
+            model,
+            language: normalizeString(transcript.language),
+            textChars: normalizeString(transcript.text).length,
+            complete: true,
+            truncated: false,
+            observationContract: {
+                status: 'completed',
+                semantic_level: 'text',
+                complete: true,
+                truncated: false
+            }
+        }
+    };
 }
 
 async function describeImage(args = {}) {
@@ -8783,10 +13869,14 @@ async function describeImage(args = {}) {
     }
     const question = normalizeString(args.question || args.prompt, 'Describe the image and answer any visible question.');
     const maxChars = clampNumber(args.maxChars || args.max_chars, 4000, 500, 12000);
+    const timeoutMs = clampNumber(args.timeoutMs || args.timeout_ms, settings.timeoutMs || 180000, 30000, 600000);
+    const detail = ['low', 'high', 'original'].includes(normalizeString(args.detail).toLowerCase())
+        ? normalizeString(args.detail).toLowerCase()
+        : 'original';
     const imageBytes = await fs.readFile(filePath);
     const payload = {
         temperature: 0,
-        timeoutMs: args.timeoutMs || 180000,
+        timeoutMs,
         messages: [
             {
                 role: 'user',
@@ -8795,18 +13885,27 @@ async function describeImage(args = {}) {
                     {
                         type: 'image_url',
                         image_url: {
-                            url: `data:${imageMimeType(filePath)};base64,${imageBytes.toString('base64')}`
-                        }
+                            url: `data:${imageMimeType(filePath)};base64,${imageBytes.toString('base64')}`,
+                            detail
+                        },
+                        detail
                     }
                 ]
             }
         ]
     };
-    let response = await callDesktopLlmProvider(settings, payload);
+    let response = await callDesktopLlmProvider({
+        ...settings,
+        timeoutMs
+    }, payload);
     if (!response.ok && response.code === 'timeout') {
-        response = await callDesktopLlmProvider(settings, {
+        const retryTimeoutMs = Math.max(timeoutMs, 240000);
+        response = await callDesktopLlmProvider({
+            ...settings,
+            timeoutMs: retryTimeoutMs
+        }, {
             ...payload,
-            timeoutMs: Math.max(Number(args.timeoutMs) || 180000, 240000)
+            timeoutMs: retryTimeoutMs
         });
     }
     if (!response.ok) {
@@ -8820,22 +13919,21 @@ async function describeImage(args = {}) {
                 ? 'configured_llm_provider_does_not_accept_image_url_parts'
                 : 'vision_model_call_failed',
             message: unsupportedImageInput
-                ? '当前配置的大模型接口不支持 image_url 视觉输入；不要重复调用 describe_image。请改用窗口标题、页面文本、OCR/截图读取工具，或先用 web_search 检索公开比赛信息。'
+                ? '当前配置的大模型接口不支持 image_url 视觉输入；不要重复调用 describe_image。请改用 OCR、文档渲染或其他已配置的视觉工具。'
                 : '视觉模型调用失败；不要机械重复同一个截图分析调用，改用其他证据来源。',
             nextActions: unsupportedImageInput
                 ? [
-                    'Call tool_search with a public web discovery query such as "Kaggle AI defense competition latest strategy web_search".',
-                    'If screen evidence is still needed, inspect window titles or use OCR/page-text tools instead of describe_image.',
+                    'Call tool_search for a configured local-image vision or OCR capability.',
+                    'If visual evidence is still needed, use OCR, document rendering, or another vision-capable provider.',
                     'Only retry describe_image after switching to a vision-capable provider/model.'
                 ]
                 : [
-                    'Try another evidence source before retrying describe_image.',
-                    'Use web_search for public competition/strategy information when the screen cannot be analyzed.'
+                    'Try another available vision or OCR source before retrying describe_image.'
                 ],
             suggestedNextCalls: [
                 {
                     tool: 'tool_search',
-                    args: { query: 'Kaggle AI defense competition latest strategy web_search', limit: 8 }
+                    args: { query: 'local image semantic vision OCR describe image', limit: 8 }
                 }
             ]
         });
@@ -8843,8 +13941,631 @@ async function describeImage(args = {}) {
     return textResult(response.content.slice(0, maxChars), {
         status: 'completed',
         path: filePath,
-        model: response.model
+        model: response.model,
+        complete: true,
+        truncated: response.content.length > maxChars,
+        observationContract: {
+            status: response.content.length > maxChars ? 'partial' : 'completed',
+            semantic_level: 'semantic',
+            complete: response.content.length <= maxChars,
+            truncated: response.content.length > maxChars
+        }
     });
+}
+
+function normalizeInvidiousInstanceUrl(value = '') {
+    const raw = normalizeString(value).replace(/\/+$/, '');
+    if (!raw) return '';
+    try {
+        const parsed = new URL(/^[a-z]+:\/\//i.test(raw) ? raw : `https://${raw}`);
+        return parsed.protocol === 'https:' ? parsed.origin : '';
+    } catch {
+        return '';
+    }
+}
+
+function configuredInvidiousInstances() {
+    const configured = normalizeString(process.env.AILIS_INVIDIOUS_INSTANCES)
+        .split(/[,\s]+/)
+        .map(normalizeInvidiousInstanceUrl)
+        .filter(Boolean);
+    return [...new Set([
+        ...configured,
+        'https://invidious.f5.si',
+        'https://inv.zoomerville.com'
+    ])];
+}
+
+function buildInvidiousVideoProxyUrl(instance = '', videoId = '', itag = 18) {
+    const base = normalizeInvidiousInstanceUrl(instance);
+    const id = extractYouTubeVideoId(videoId);
+    if (!base || !id) return '';
+    const params = new URLSearchParams({
+        id,
+        itag: String(clampNumber(itag, 18, 1, 999)),
+        local: 'true'
+    });
+    return `${base}/latest_version?${params.toString()}`;
+}
+
+async function downloadVideoForFrameExtraction({
+    sourceUrl = '',
+    videoId = '',
+    targetPath = '',
+    timeoutMs = 180000,
+    maxBytes = 268435456
+} = {}) {
+    const boundedTimeoutMs = clampNumber(timeoutMs, 180000, 30000, 600000);
+    const boundedMaxBytes = clampNumber(maxBytes, 268435456, 1048576, 1073741824);
+    const instances = configuredInvidiousInstances();
+    const code = `
+import json, os, requests, sys
+
+source_url = sys.argv[1]
+video_id = sys.argv[2]
+target_path = sys.argv[3]
+timeout_seconds = float(sys.argv[4])
+max_bytes = int(sys.argv[5])
+configured_instances = json.loads(sys.argv[6])
+registry_url = "https://api.invidious.io/instances.json?sort_by=health"
+session = requests.Session()
+
+def clean_instance(value):
+    value = str(value or "").strip().rstrip("/")
+    return value if value.startswith("https://") else ""
+
+def registry_instances():
+    try:
+        response = session.get(registry_url, timeout=(6, 15))
+        response.raise_for_status()
+        rows = response.json()
+    except Exception:
+        return []
+    output = []
+    for _host, metadata in rows:
+        if not isinstance(metadata, dict) or metadata.get("type") != "https":
+            continue
+        monitor = metadata.get("monitor") or {}
+        if monitor and monitor.get("down") is True:
+            continue
+        uri = clean_instance(metadata.get("uri"))
+        if uri:
+            output.append(uri)
+    return output
+
+def candidates():
+    if source_url and not video_id:
+        return [("direct_url", source_url)]
+    instances = []
+    for item in configured_instances + registry_instances():
+        item = clean_instance(item)
+        if item and item not in instances:
+            instances.append(item)
+    return [
+        (
+            "invidious_companion",
+            f"{base}/latest_version?id={video_id}&itag=18&local=true",
+        )
+        for base in instances[:12]
+    ]
+
+errors = []
+part_path = target_path + ".part"
+for backend, url in candidates():
+    source_host = requests.utils.urlparse(url).netloc
+    try:
+        response = session.get(
+            url,
+            timeout=(10, max(30, timeout_seconds)),
+            allow_redirects=True,
+            stream=True,
+        )
+        content_type = (response.headers.get("content-type") or "").lower()
+        content_length = int(response.headers.get("content-length") or 0)
+        if response.status_code not in (200, 206):
+            errors.append(f"{backend}:{source_host}:http_{response.status_code}")
+            response.close()
+            continue
+        if content_length and content_length > max_bytes:
+            errors.append(f"{backend}:{source_host}:content_too_large")
+            response.close()
+            continue
+        if "video/" not in content_type and "application/octet-stream" not in content_type:
+            errors.append(f"{backend}:{source_host}:unexpected_content_type:{content_type[:80]}")
+            response.close()
+            continue
+        written = 0
+        with open(part_path, "wb") as output:
+            for chunk in response.iter_content(chunk_size=1024 * 256):
+                if not chunk:
+                    continue
+                written += len(chunk)
+                if written > max_bytes:
+                    raise RuntimeError("content_too_large")
+                output.write(chunk)
+        response.close()
+        if written < 1024:
+            raise RuntimeError("video_payload_too_small")
+        os.replace(part_path, target_path)
+        print(json.dumps({
+            "ok": True,
+            "backend": backend,
+            "bytes": written,
+            "contentType": content_type,
+            "sourceHost": source_host,
+        }))
+        raise SystemExit(0)
+    except Exception as exc:
+        errors.append(f"{backend}:{source_host}:{type(exc).__name__}:{str(exc)[:160]}")
+        try:
+            os.remove(part_path)
+        except OSError:
+            pass
+
+print(json.dumps({"ok": False, "errors": errors[-12:]}))
+raise SystemExit(2)
+`.trim();
+    const result = await runProcess('python', [
+        '-c',
+        code,
+        sourceUrl,
+        videoId,
+        targetPath,
+        String(Math.max(30, Math.ceil(boundedTimeoutMs / 1000))),
+        String(boundedMaxBytes),
+        JSON.stringify(instances)
+    ], {
+        cwd: path.dirname(targetPath),
+        timeoutMs: boundedTimeoutMs
+    });
+    let payload = {};
+    try {
+        payload = JSON.parse(normalizeString(result.stdout, '{}').split(/\r?\n/).filter(Boolean).at(-1) || '{}');
+    } catch {}
+    return {
+        ...payload,
+        ok: result.exitCode === 0 && payload.ok === true,
+        exitCode: result.exitCode,
+        timedOut: result.timedOut === true,
+        stderr: normalizeString(result.stderr).slice(0, 2000)
+    };
+}
+
+async function sampleVideoFrames(videoPath = '', outputDir = '', sampleCount = 36, timeoutMs = 180000) {
+    const code = `
+import glob, json, math, os, re, subprocess, sys
+from PIL import Image, ImageDraw, ImageFont, ImageOps
+import imageio_ffmpeg
+
+video_path = sys.argv[1]
+output_dir = sys.argv[2]
+sample_count = int(sys.argv[3])
+os.makedirs(output_dir, exist_ok=True)
+ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+probe = subprocess.run(
+    [ffmpeg, "-hide_banner", "-i", video_path],
+    capture_output=True,
+    text=True,
+    errors="replace",
+)
+probe_text = (probe.stderr or "") + "\\n" + (probe.stdout or "")
+match = re.search(r"Duration:\\s*(\\d+):(\\d+):(\\d+(?:\\.\\d+)?)", probe_text)
+if not match:
+    print(json.dumps({"ok": False, "error": "duration_unavailable", "probe": probe_text[-1200:]}))
+    raise SystemExit(2)
+duration = int(match.group(1)) * 3600 + int(match.group(2)) * 60 + float(match.group(3))
+fps = sample_count / max(duration, 0.1)
+frame_pattern = os.path.join(output_dir, "frame-%03d.jpg")
+filter_graph = (
+    f"fps={fps:.9f},"
+    "scale=480:270:force_original_aspect_ratio=decrease,"
+    "pad=480:270:(ow-iw)/2:(oh-ih)/2:black"
+)
+extract = subprocess.run(
+    [
+        ffmpeg, "-hide_banner", "-loglevel", "error", "-i", video_path,
+        "-vf", filter_graph, "-frames:v", str(sample_count),
+        "-q:v", "3", frame_pattern,
+    ],
+    capture_output=True,
+    text=True,
+    errors="replace",
+)
+frames = sorted(glob.glob(os.path.join(output_dir, "frame-*.jpg")))
+if extract.returncode != 0 or not frames:
+    print(json.dumps({
+        "ok": False,
+        "error": "ffmpeg_frame_extraction_failed",
+        "stderr": (extract.stderr or "")[-1600:],
+    }))
+    raise SystemExit(3)
+
+columns = 5
+cell_width, cell_height = 320, 204
+rows = math.ceil(len(frames) / columns)
+sheet = Image.new("RGB", (columns * cell_width, rows * cell_height), "black")
+draw = ImageDraw.Draw(sheet)
+font = ImageFont.load_default()
+timestamps = []
+for index, frame_path in enumerate(frames):
+    image = Image.open(frame_path).convert("RGB")
+    image = ImageOps.fit(image, (cell_width, 180))
+    x = (index % columns) * cell_width
+    y = (index // columns) * cell_height
+    sheet.paste(image, (x, y))
+    timestamp = min(duration, (index + 0.5) * duration / max(len(frames), 1))
+    timestamps.append(round(timestamp, 3))
+    label = f"frame {index + 1:02d}  {int(timestamp // 60):02d}:{timestamp % 60:04.1f}"
+    draw.rectangle((x, y + 180, x + cell_width, y + cell_height), fill="black")
+    draw.text((x + 6, y + 186), label, fill="white", font=font)
+
+sheet_path = os.path.join(output_dir, "contact-sheet.jpg")
+sheet.save(sheet_path, quality=91, optimize=True)
+
+detail_columns = 3
+detail_batch_size = 9
+detail_cell_width, detail_image_height, detail_cell_height = 480, 270, 294
+detail_sheet_paths = []
+detail_sheet_ranges = []
+for batch_start in range(0, len(frames), detail_batch_size):
+    batch_paths = frames[batch_start:batch_start + detail_batch_size]
+    batch_rows = math.ceil(len(batch_paths) / detail_columns)
+    detail_sheet = Image.new(
+        "RGB",
+        (detail_columns * detail_cell_width, batch_rows * detail_cell_height),
+        "black",
+    )
+    detail_draw = ImageDraw.Draw(detail_sheet)
+    for batch_index, frame_path in enumerate(batch_paths):
+        absolute_index = batch_start + batch_index
+        image = Image.open(frame_path).convert("RGB")
+        image = ImageOps.fit(image, (detail_cell_width, detail_image_height))
+        x = (batch_index % detail_columns) * detail_cell_width
+        y = (batch_index // detail_columns) * detail_cell_height
+        detail_sheet.paste(image, (x, y))
+        timestamp = timestamps[absolute_index]
+        label = f"frame {absolute_index + 1:02d}  {int(timestamp // 60):02d}:{timestamp % 60:04.1f}"
+        detail_draw.rectangle(
+            (x, y + detail_image_height, x + detail_cell_width, y + detail_cell_height),
+            fill="black",
+        )
+        detail_draw.text((x + 6, y + detail_image_height + 6), label, fill="white", font=font)
+    detail_path = os.path.join(
+        output_dir,
+        f"contact-sheet-detail-{len(detail_sheet_paths) + 1:02d}.jpg",
+    )
+    detail_sheet.save(detail_path, quality=93, optimize=True)
+    detail_sheet_paths.append(detail_path)
+    detail_sheet_ranges.append({
+        "path": detail_path,
+        "startFrame": batch_start + 1,
+        "endFrame": batch_start + len(batch_paths),
+        "startSeconds": timestamps[batch_start],
+        "endSeconds": timestamps[batch_start + len(batch_paths) - 1],
+    })
+
+print(json.dumps({
+    "ok": True,
+    "durationSeconds": round(duration, 3),
+    "sampleCount": len(frames),
+    "framePaths": frames,
+    "timestampsSeconds": timestamps,
+    "contactSheetPath": sheet_path,
+    "detailSheetPaths": detail_sheet_paths,
+    "detailSheetRanges": detail_sheet_ranges,
+    "ffmpegPath": ffmpeg,
+}))
+`.trim();
+    const result = await runProcess('python', [
+        '-c',
+        code,
+        videoPath,
+        outputDir,
+        String(clampNumber(sampleCount, 36, 6, 40))
+    ], {
+        cwd: outputDir,
+        timeoutMs: clampNumber(timeoutMs, 180000, 30000, 600000)
+    });
+    let payload = {};
+    try {
+        payload = JSON.parse(normalizeString(result.stdout, '{}').split(/\r?\n/).filter(Boolean).at(-1) || '{}');
+    } catch {}
+    return {
+        ...payload,
+        ok: result.exitCode === 0 && payload.ok === true,
+        exitCode: result.exitCode,
+        timedOut: result.timedOut === true,
+        stderr: normalizeString(result.stderr).slice(0, 2000)
+    };
+}
+
+function needsDetailedVideoFrameReview(question = '') {
+    const text = normalizeString(question).toLowerCase();
+    const sameFrameCue = /\b(?:simultaneous(?:ly)?|at (?:the )?same time|at once|same frame|single frame|on[- ]screen|on camera|co[- ]occur)\b/.test(text) ||
+        /(?:同时|同屏|同一画面|同一个画面|同一帧|镜头中|画面中)/.test(text);
+    const enumerationCue = /\b(?:highest|lowest|maximum|minimum|max|most|least|fewest|how many|number of|count)\b/.test(text) ||
+        /(?:最高|最低|最多|最少|多少|数量|计数)/.test(text);
+    return sameFrameCue && enumerationCue;
+}
+
+async function synthesizeVideoFrameAnalyses({
+    question = '',
+    analyses = [],
+    timeoutMs = 240000
+} = {}) {
+    const usable = (Array.isArray(analyses) ? analyses : [])
+        .filter((entry) => normalizeString(entry?.analysis))
+        .map((entry) => [
+            `Batch ${entry.batch}: frames ${entry.startFrame}-${entry.endFrame}`,
+            normalizeString(entry.analysis)
+        ].join('\n'));
+    if (!usable.length) return '';
+    const settings = readDesktopLlmSettings();
+    if (!settings) return usable.join('\n\n');
+    const response = await callDesktopLlmProvider({
+        ...settings,
+        timeoutMs
+    }, {
+        temperature: 0,
+        timeoutMs,
+        messages: [
+            {
+                role: 'system',
+                content: [
+                    'Aggregate visual evidence reports from non-overlapping chronological frame batches of one video.',
+                    'Use only facts explicitly visible in the reports.',
+                    'For simultaneous or same-frame maxima, never combine entities from different frames or batches.',
+                    'If a report supports a larger count with a same-frame entity breakdown, preserve that supported maximum even when other batches have lower counts.',
+                    'State the strongest answer first, followed by the supporting frame and timestamp.'
+                ].join(' ')
+            },
+            {
+                role: 'user',
+                content: [
+                    `Question: ${normalizeString(question)}`,
+                    '',
+                    ...usable
+                ].join('\n')
+            }
+        ]
+    });
+    return response.ok ? normalizeString(response.content) : usable.join('\n\n');
+}
+
+async function videoExtractFrames(args = {}) {
+    const rawPath = normalizeString(args.path || args.file || args.filePath || args.file_path);
+    const rawUrl = normalizeString(args.url || args.videoUrl || args.video_url);
+    const explicitVideoId = normalizeString(args.video_id || args.videoId || args.id);
+    const videoId = extractYouTubeVideoId(explicitVideoId || rawUrl);
+    const localPath = rawPath ? path.resolve(rawPath) : '';
+    const localStat = localPath ? await fs.stat(localPath).catch(() => null) : null;
+    const isDirectUrl = /^https?:\/\//i.test(rawUrl) && !videoId;
+    if ((!localStat || !localStat.isFile()) && !videoId && !isDirectUrl) {
+        return actionableErrorResult('video_extract_frames requires a local video path or an http(s)/YouTube URL', {
+            status: 'invalid_args',
+            failureReason: 'video_source_missing',
+            suggestedNextCalls: [{
+                tool: 'youtube_video_search',
+                args: { query: normalizeString(args.query || args.title) }
+            }]
+        });
+    }
+
+    const timeoutMs = clampNumber(args.timeoutMs || args.timeout_ms, 240000, 30000, 600000);
+    const sampleCount = clampNumber(args.sampleCount || args.sample_count || args.frames, 36, 6, 40);
+    const shouldAnalyze = args.analyze !== false && args.visual_analysis !== false;
+    const artifactBase = normalizeString(process.env.AILIS_MCP_ARTIFACT_DIR) ||
+        path.join(process.cwd(), '.ailis-state', 'mcp-artifacts');
+    const sourceName = videoId || path.basename(localPath || new URL(rawUrl).pathname) || 'video';
+    const safeName = sourceName.replace(/[^a-zA-Z0-9._-]+/g, '-').slice(0, 64) || 'video';
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const outputDir = path.join(artifactBase, 'video-frames', `${safeName}-${stamp}`);
+    await fs.mkdir(outputDir, { recursive: true });
+
+    let videoPath = localPath;
+    let sourceBackend = 'local_file';
+    let download = null;
+    if (!videoPath) {
+        videoPath = path.join(outputDir, `${safeName}.mp4`);
+        download = await downloadVideoForFrameExtraction({
+            sourceUrl: isDirectUrl ? rawUrl : '',
+            videoId,
+            targetPath: videoPath,
+            timeoutMs,
+            maxBytes: args.maxBytes || args.max_bytes
+        });
+        if (!download.ok) {
+            return actionableErrorResult('video_extract_frames could not retrieve readable video bytes', {
+                status: download.timedOut ? 'timeout' : 'video_download_failed',
+                failureReason: videoId ? 'youtube_video_backends_unavailable' : 'video_download_failed',
+                videoId,
+                sourceUrl: rawUrl,
+                backendErrors: download.errors || [],
+                stderr: download.stderr,
+                nextActions: [
+                    'Retry later or configure AILIS_INVIDIOUS_INSTANCES with a healthy HTTPS Invidious instance.',
+                    'If the user permits it, use youtube_transcript with browser cookies for an authenticated fallback.'
+                ]
+            });
+        }
+        sourceBackend = download.backend || 'download';
+    }
+
+    const sampled = await sampleVideoFrames(videoPath, outputDir, sampleCount, timeoutMs);
+    if (!sampled.ok) {
+        return actionableErrorResult('video_extract_frames could not sample the downloaded video', {
+            status: sampled.timedOut ? 'timeout' : 'frame_extraction_failed',
+            failureReason: sampled.error || 'ffmpeg_frame_extraction_failed',
+            path: videoPath,
+            stderr: sampled.stderr,
+            probe: sampled.probe
+        });
+    }
+
+    const question = normalizeString(
+        args.question || args.prompt,
+        'Describe the visible events and identify important entities in the sampled video frames.'
+    );
+    const detailedReview = shouldAnalyze && needsDetailedVideoFrameReview(question);
+    let analysisResult = null;
+    let batchAnalyses = [];
+    if (detailedReview && Array.isArray(sampled.detailSheetRanges) && sampled.detailSheetRanges.length) {
+        const batchResults = await Promise.all(sampled.detailSheetRanges.map(async (batch, index) => {
+            const analysisPrompt = [
+                'This is one high-resolution chronological batch from a uniformly sampled video.',
+                `It contains frames ${batch.startFrame}-${batch.endFrame}; each tile has a frame number and timestamp.`,
+                `Question: ${question}`,
+                'Inspect every tile at full resolution.',
+                'For simultaneous or on-screen-at-once questions, count only entities visible inside the same tile.',
+                'Include small, distant, or background entities when visibly distinct. Do not count age, sex, or life stage as a separate species/type.',
+                'State the strongest same-frame answer first, then list the visible entity/species breakdown and exact supporting frame number(s).'
+            ].join('\n');
+            const result = await describeImage({
+                path: batch.path,
+                question: analysisPrompt,
+                detail: 'original',
+                maxChars: args.maxChars || args.max_chars || 6000,
+                timeoutMs
+            });
+            return {
+                batch: index + 1,
+                ...batch,
+                analysis: result && !result.isError
+                    ? normalizeString(result.content?.[0]?.text)
+                    : '',
+                error: result?.isError === true
+                    ? normalizeString(result.content?.[0]?.text || result.details?.error)
+                    : ''
+            };
+        }));
+        batchAnalyses = batchResults.filter((entry) => entry.analysis || entry.error);
+    } else if (shouldAnalyze) {
+        const analysisPrompt = [
+            'This is a chronological contact sheet sampled uniformly from one video.',
+            'Each tile is one frame and has a timestamp label.',
+            `Question: ${question}`,
+            'Inspect every tile. When the question asks what is simultaneous or on screen at once, count only entities visible within the same tile; never merge entities seen at different timestamps.',
+            'State the strongest answer first, then cite the relevant frame number(s) and timestamp(s). Distinguish exact species/types only when visually supportable.'
+        ].join('\n');
+        analysisResult = await describeImage({
+            path: sampled.contactSheetPath,
+            question: analysisPrompt,
+            detail: 'original',
+            maxChars: args.maxChars || args.max_chars || 6000,
+            timeoutMs
+        });
+    }
+    const visualAnalysis = detailedReview
+        ? await synthesizeVideoFrameAnalyses({
+              question,
+              analyses: batchAnalyses,
+              timeoutMs
+          })
+        : analysisResult && !analysisResult.isError
+        ? normalizeString(analysisResult.content?.[0]?.text)
+        : '';
+    const suggestedNextCalls = visualAnalysis
+        ? []
+        : [{
+            tool: 'describe_image',
+            args: {
+                path: sampled.contactSheetPath,
+                question
+            }
+        }];
+    const text = [
+        '# VIDEO_FRAME_EVIDENCE_COMPLETE',
+        '',
+        visualAnalysis ? `visual_analysis:\n${visualAnalysis}` : 'visual_analysis: not_run_or_unavailable',
+        '',
+        `source_backend: ${sourceBackend}`,
+        `video_id: ${videoId}`,
+        `duration_seconds: ${sampled.durationSeconds}`,
+        `sample_count: ${sampled.sampleCount}`,
+        `analysis_mode: ${detailedReview ? 'multi_sheet_detailed' : 'overview'}`,
+        `contact_sheet_path: ${sampled.contactSheetPath}`,
+        ...(detailedReview
+            ? (sampled.detailSheetPaths || []).map((sheetPath, index) =>
+                  `detail_sheet_${index + 1}_path: ${sheetPath}`
+              )
+            : []),
+        `timestamps_seconds: ${(sampled.timestampsSeconds || []).join(', ')}`,
+        suggestedNextCalls.length
+            ? `suggested_next_calls:\n1. describe_image ${JSON.stringify(suggestedNextCalls[0].args)}`
+            : ''
+    ].filter(Boolean).join('\n');
+    const details = {
+        status: 'completed',
+        complete: true,
+        truncated: false,
+        reasoningReady: Boolean(visualAnalysis),
+        evidenceQuality: visualAnalysis ? 'visual_frame_evidence' : 'sampled_frames',
+        sourceBackend,
+        sourceUrl: rawUrl,
+        videoId,
+        videoPath,
+        download,
+        durationSeconds: sampled.durationSeconds,
+        sampleCount: sampled.sampleCount,
+        framePaths: sampled.framePaths,
+        frameTimestampsSeconds: sampled.timestampsSeconds,
+        contactSheetPath: sampled.contactSheetPath,
+        detailSheetPaths: sampled.detailSheetPaths || [],
+        detailSheetRanges: sampled.detailSheetRanges || [],
+        analysisMode: detailedReview ? 'multi_sheet_detailed' : 'overview',
+        batchAnalyses,
+        visualAnalysis,
+        suggestedNextCalls,
+        observationContract: {
+            status: 'completed',
+            semantic_level: visualAnalysis ? 'semantic' : 'visual_frames',
+            complete: true,
+            truncated: false,
+            reasoning_ready: Boolean(visualAnalysis),
+            is_evidence: true,
+            evidence_quality: visualAnalysis ? 'visual_frame_evidence' : 'sampled_frames'
+        }
+    };
+    return {
+        content: [{ type: 'text', text }],
+        structuredContent: { ok: true, ...details },
+        details
+    };
+}
+
+async function chessPositionAnalyze(args = {}) {
+    const result = await analyzeChessPosition(args);
+    if (!result.ok) {
+        return actionableErrorResult('chess_position_analyze could not complete local engine analysis.', {
+            status: result.status,
+            failureReason: result.error,
+            message: result.stderr,
+            fen: result.fen,
+            receivedFen: result.receivedFen,
+            nextActions: [
+                'Verify that the submitted FEN matches the source board, including every piece and the side to move.',
+                'Configure AILIS_STOCKFISH_ENGINE_PATH only when the bundled Stockfish backend is unavailable.'
+            ]
+        });
+    }
+    const topVariation = result.variations.find((variation) => variation.rank === 1) ||
+        result.variations[0] ||
+        null;
+    const text = [
+        `best_move_san=${result.bestMove.san}`,
+        `best_move_uci=${result.bestMove.uci}`,
+        `side_to_move=${result.sideToMove}`,
+        `fen=${result.fen}`,
+        topVariation
+            ? `engine_score=${topVariation.score.type} ${topVariation.score.value} (${topVariation.score.perspective})`
+            : '',
+        topVariation?.movesSan?.length
+            ? `principal_variation=${topVariation.movesSan.join(' ')}`
+            : '',
+        'board_echo:',
+        result.boardEcho
+    ].filter(Boolean).join('\n');
+    return textResult(text, result);
 }
 
 async function youtubeVideoSearch(args = {}) {
@@ -8958,24 +14679,14 @@ print(json.dumps({"query": target, "videos": videos[:max_results]}, ensure_ascii
             ]
         });
     }
-    const suggestedNextCalls = [
-        {
-            tool: 'youtube_transcript',
-            args: { url: videos[0].url, language: normalizeString(args.language || args.lang, 'en') }
-        }
-    ];
     const lines = [
         'YouTube search results:',
-        ...videos.map((video, index) => `${index + 1}. ${video.title || '(untitled)'} | ${video.channel || video.uploader || 'unknown channel'} | ${video.url}`),
-        '',
-        `Suggested next calls:`,
-        `1. youtube_transcript ${JSON.stringify(suggestedNextCalls[0].args)}`
+        ...videos.map((video, index) => `${index + 1}. ${video.title || '(untitled)'} | ${video.channel || video.uploader || 'unknown channel'} | ${video.url}`)
     ];
     return textResult(lines.join('\n'), {
         status: 'completed',
         query: searchQuery,
-        videos,
-        suggestedNextCalls
+        videos
     });
 }
 
@@ -9092,10 +14803,6 @@ print(json.dumps(payload, ensure_ascii=False))
             ? buildYouTubeOEmbedSuggestedCalls(oembed.video, args)
             : [
                 {
-                    tool: 'youtube_video_search',
-                    args: { url, maxResults: 1 }
-                },
-                {
                     tool: 'web_search',
                     args: { query: `${url} transcript`, maxResults: 5 }
                 }
@@ -9134,10 +14841,6 @@ print(json.dumps(payload, ensure_ascii=False))
         evidenceGap: transcript ? '' : 'No subtitles or automatic captions were available in yt-dlp metadata.',
         suggestedNextCalls: transcript ? [] : [
             {
-                tool: 'youtube_video_search',
-                args: { url, maxResults: 1 }
-            },
-            {
                 tool: 'web_search',
                 args: { query: `${payload?.title || url} transcript species visual evidence`, maxResults: 5 }
             }
@@ -9145,54 +14848,35 @@ print(json.dumps(payload, ensure_ascii=False))
     };
     const text = result.stdout.trim() + (transcript
         ? ''
-        : `\n\nevidence_gap=${details.evidenceGap}\nSuggested next calls:\n1. youtube_video_search ${JSON.stringify(details.suggestedNextCalls[0].args)}\n2. web_search ${JSON.stringify(details.suggestedNextCalls[1].args)}`);
+        : `\n\nretrieval_diagnostic=${details.evidenceGap}\nAvailable follow-up calls derived from metadata:\n1. web_search ${JSON.stringify(details.suggestedNextCalls[0].args)}`);
     return textResult(text, details);
 }
 
 const TOOLS = [
     {
         name: 'web_search',
-        description: 'Fallback broad public web search through AILIS managed search backends. Standard call: { "query": "specific search keywords", "maxResults": 5 }. Do not use as the first step for attached/local files, known URLs, PDFs/papers/reports, YouTube/videos, audio, images, spreadsheets, presentations, Word documents, code files, or GitHub repositories; use the dedicated MCP tool for those artifact types first. Use web_fetch for a known HTML/text URL, paper_metadata_lookup for exact paper/DOI metadata, pdf_extract_text for a known PDF URL, pdf_find_and_extract for a paper/report title when you need full text, and github_repo_read for GitHub README/tree/file evidence. General web queries use a SearXNG-style provider chain: SearXNG JSON, Firecrawl-compatible local search, then current HTML fallback; GitHub/code repository queries keep GitHub repository search first. Configure with AILIS_SEARXNG_URL, AILIS_FIRECRAWL_URL, and AILIS_WEB_SEARCH_PROVIDER when local endpoints exist. Hosted Firecrawl is intentionally disabled here. Results from multiple successful providers are normalized, de-duplicated, source-tagged, re-ranked, and returned with searchConfidence plus clarificationRequired/candidateChoices when the result set is too ambiguous to follow safely.',
+        description: 'Search the public web. Codex/OAI-style action: search. Standard call: { "query": "specific search keywords", "maxResults": 5, "search_context_size": "medium" }. Use this for discovery; use web_fetch/open_page for a selected result URL and web_find/find_in_page for an exact phrase inside a known page. Do not use for attached/local files, known PDFs, audio, images, spreadsheets, Word documents, code files, or GitHub repositories when a dedicated tool exists. Results are normalized, de-duplicated, re-ranked, and returned as compact search results with URLs; the model judges evidence sufficiency.',
         inputSchema: {
             type: 'object',
             required: ['query'],
             properties: {
-                query: { type: 'string', minLength: 1, description: 'Required search keywords. Prefer this field over q/search/text. Example: "Playwright wait for selector timeout official docs". Do not call web_search with empty arguments.' },
-                q: { type: 'string', description: 'Compatibility alias for query. Prefer query.' },
-                search: { type: 'string', description: 'Compatibility alias for query. Prefer query.' },
-                text: { type: 'string', description: 'Compatibility alias for query. Prefer query.' },
-                exact_keywords: {
-                    type: 'array',
-                    items: { type: 'string' },
-                    description: 'Optional exact terms that should stay in the effective backend query. Prefer including them in query directly; this is an explicit compatibility field, not a replacement for query.'
-                },
-                exactKeywords: {
-                    type: 'array',
-                    items: { type: 'string' },
-                    description: 'Compatibility alias for exact_keywords.'
+                query: {
+                    type: 'string',
+                    minLength: 1,
+                    maxLength: 240,
+                    description: 'Required concise public web search query. Keep only discriminative entities and constraints; never concatenate previous queries.'
                 },
                 maxResults: { type: 'number', description: 'Requested result count, clamped to 1-12. Use 3-8 for normal tasks.' },
-                limit: { type: 'number', description: 'Compatibility alias for maxResults. Prefer maxResults.' },
-                timeoutMs: { type: 'number', description: 'Per-backend timeout in milliseconds, clamped to 3000-30000. Default is 8000. Omit unless a task needs a longer wait.' },
-                overallTimeoutMs: { type: 'number', description: 'Overall search budget in milliseconds, clamped to 8000-120000. Defaults under the Gateway timeout so failures return as tool results instead of hanging.' },
-                aggregate: { type: 'boolean', description: 'Optional. true forces multi-provider aggregation; false returns the first successful backend. Omit for automatic aggregation in auto/provider-chain mode.' },
-                provider: { type: 'string', description: 'Optional provider chain selector: auto, searxng, firecrawl, html/current_html_fallback, external, github, or a comma-separated backend list. Prefer omitting this for automatic fallback.' },
-                searchProvider: { type: 'string', description: 'Compatibility alias for provider. Prefer provider.' },
-                searxngUrl: { type: 'string', description: 'Optional SearXNG base URL override. Prefer configuring AILIS_SEARXNG_URL instead of passing this per call.' },
-                firecrawlUrl: { type: 'string', description: 'Optional Firecrawl base URL override for local/self-hosted Firecrawl. AILIS does not call hosted Firecrawl from this tool.' },
-                backend: { type: 'string', description: 'Optional backend id or provider alias: searxng_json, firecrawl_search, bing_html, duckduckgo_lite, duckduckgo_html, yahoo_html, github_repositories, html, searxng, or firecrawl. Omit for automatic fallback.' },
-                backends: {
-                    type: 'array',
-                    items: { type: 'string', enum: ['searxng_json', 'firecrawl_search', 'bing_html', 'duckduckgo_lite', 'duckduckgo_html', 'yahoo_html', 'github_repositories', 'html', 'current_html_fallback', 'searxng', 'firecrawl'] },
-                    description: 'Optional ordered backend ids. Omit for automatic fallback.'
-                }
+                search_context_size: { type: 'string', enum: ['low', 'medium', 'high'], description: 'Amount of search context to return. Defaults to medium.' },
+                recency: { type: 'integer', minimum: 1, maximum: 3650, description: 'Optional recent-days hint. Omit unless recent results are explicitly required.' },
+                domains: { type: 'array', maxItems: 8, items: { type: 'string', minLength: 1 }, description: 'Optional domain allowlist. Matching includes subdomains.' }
             },
             additionalProperties: false
         }
     },
     {
         name: 'web_research',
-        description: 'End-to-end AILIS web research pipeline for natural research/guide/current-info tasks. It runs web_search, de-duplicates and ranks candidates, fetches the top high-signal HTML/text pages, extracts readable content plus relationship maps, and returns a retrieval evidence bundle with retrieval-readiness metadata, page types, evidencePages, searchConfidence, and suggestedNextCalls. Retrieval readiness is only a tool-layer heuristic: final answering requires an LLM evidence audit over supported claims, missing fields, and rejected/non-answer-bearing sources. Use this when the user asks to research, make a guide, compare public sources, or gather current web evidence and there is no more specific artifact tool. It stops for clarification instead of fetching pages when searchConfidence says the target is ambiguous.',
+        description: 'End-to-end AILIS web research pipeline for natural research/guide/current-info tasks. Use it once for broad discovery and bounded page fetching. It returns ranked candidates and fetched sources with stable ref_id, answer-bearing excerpts, source URLs, and explicit open_page actions. If one concrete required fact is absent from the excerpts, call web_fetch on the most authoritative returned source URL; do not repeat broad web_research for the same question. The tool does not produce the final answer; the model judges evidence sufficiency.',
         inputSchema: {
             type: 'object',
             required: ['query'],
@@ -9201,11 +14885,39 @@ const TOOLS = [
                 q: { type: 'string', description: 'Compatibility alias for query. Prefer query.' },
                 search: { type: 'string', description: 'Compatibility alias for query. Prefer query.' },
                 text: { type: 'string', description: 'Compatibility alias for query. Prefer query.' },
+                queries: {
+                    type: 'array',
+                    items: { type: 'string' },
+                    description: 'Optional Codex-style multi-query action. Provide 2-5 query variants when helpful; web_research will run them inside one bounded-parallel retrieval pipeline and return one merged evidence bundle.'
+                },
+                searchQueries: {
+                    type: 'array',
+                    items: { type: 'string' },
+                    description: 'Compatibility alias for queries. Prefer queries.'
+                },
+                search_queries: {
+                    type: 'array',
+                    items: { type: 'string' },
+                    description: 'Compatibility alias for queries. Prefer queries.'
+                },
                 maxResults: { type: 'number', description: 'Search result count, clamped to 1-12.' },
                 limit: { type: 'number', description: 'Compatibility alias for maxResults. Prefer maxResults.' },
                 maxPages: { type: 'number', description: 'Maximum pages to fetch into the evidence bundle, clamped to 1-5.' },
                 maxSearchQueries: { type: 'number', description: 'Maximum planned query variants to run before fetching pages, clamped to 1-5. Defaults to 3 for product-grade recall without open-ended loops.' },
                 max_search_queries: { type: 'number', description: 'Compatibility alias for maxSearchQueries. Prefer maxSearchQueries.' },
+                parallel: { type: 'boolean', description: 'Optional. Defaults to true. false forces the old sequential/adaptive pipeline for diagnostics.' },
+                parallelSearch: { type: 'boolean', description: 'Compatibility alias for parallel search execution. Prefer parallel.' },
+                parallel_search: { type: 'boolean', description: 'Compatibility alias for parallel search execution. Prefer parallel.' },
+                serial: { type: 'boolean', description: 'Optional diagnostic alias. true forces sequential execution.' },
+                sequential: { type: 'boolean', description: 'Compatibility alias for serial. true forces sequential execution.' },
+                searchConcurrency: { type: 'number', description: 'Optional search query concurrency, clamped to 1-5. Default is 3 when multiple query variants exist.' },
+                search_concurrency: { type: 'number', description: 'Compatibility alias for searchConcurrency.' },
+                fetchConcurrency: { type: 'number', description: 'Optional page fetch concurrency, clamped to 1-5. Default is 3 when multiple candidate pages exist.' },
+                fetch_concurrency: { type: 'number', description: 'Compatibility alias for fetchConcurrency.' },
+                perDomainFetchConcurrency: { type: 'number', description: 'Optional same-host fetch concurrency, clamped to 1-fetchConcurrency. Default is 1 to avoid hammering one site while still fetching different domains in parallel.' },
+                per_domain_fetch_concurrency: { type: 'number', description: 'Compatibility alias for perDomainFetchConcurrency.' },
+                fetchTimeoutMs: { type: 'number', description: 'Optional timeout budget per fetched page, clamped to 3000-180000 and further limited by overallTimeoutMs. Defaults to a conservative slice of the remaining research budget.' },
+                fetch_timeout_ms: { type: 'number', description: 'Compatibility alias for fetchTimeoutMs.' },
                 expandQueries: { type: 'boolean', description: 'Optional. true forces all planned query variants even after a high-confidence search hit. Defaults to false/adaptive.' },
                 expand_queries: { type: 'boolean', description: 'Compatibility alias for expandQueries. Prefer expandQueries.' },
                 maxCharsPerPage: { type: 'number', description: 'Maximum readable chars per fetched page, clamped to 3000-60000.' },
@@ -9223,7 +14935,7 @@ const TOOLS = [
                 backend: { type: 'string', description: 'Optional search backend id or provider alias.' },
                 backends: {
                     type: 'array',
-                    items: { type: 'string', enum: ['searxng_json', 'firecrawl_search', 'bing_html', 'duckduckgo_lite', 'duckduckgo_html', 'yahoo_html', 'github_repositories', 'html', 'current_html_fallback', 'searxng', 'firecrawl'] },
+                    items: { type: 'string', enum: ['searxng_json', 'firecrawl_search', 'python_search', 'bing_html', 'duckduckgo_lite', 'duckduckgo_html', 'yahoo_html', 'github_repositories', 'html', 'current_html_fallback', 'searxng', 'firecrawl', 'python'] },
                     description: 'Optional ordered search backend ids.'
                 }
             },
@@ -9253,33 +14965,158 @@ const TOOLS = [
     },
     {
         name: 'web_fetch',
-        description: 'Fetch a public HTTP(S) HTML or text resource and return readable text plus a structured relationship map. AILIS now prefers a local Python Crawl4AI worker (scripts/ailis-crawl4ai-worker.py, configurable with AILIS_CRAWL4AI_WORKER/AILIS_CRAWL4AI_PYTHON) for rendered Markdown extraction; Docker is not required. Legacy Crawl4AI HTTP service URLs remain supported through AILIS_CRAWL4AI_URL/CRAWL4AI_URL. In auto mode, web_fetch probes Crawl4AI and falls back to builtin fetch/extract when unavailable; if static fetch returns a JavaScript shell or thin non-evidence page, it can retry through full rendered Crawl4AI extraction when configured or requested with provider=crawl4ai/rendered/browser. provider=builtin/current/html disables rendered fallback. Rejects PDF/binary content with unsupported_content_type; use pdf_extract_text or download_file for PDFs/files. For archive, listing, search-result, table-of-contents, or journal issue pages, pass query/contains with task terms such as author, year, topic, or answer clue so excerpts and linked resources are ranked against the task instead of newest/first links.',
+        description: 'Open a public HTTP(S) HTML/text URL. Codex/OAI-style action: open_page. Standard calls: { "url": "https://..." }, { "url": "https://...", "lineno": 120 }, or { "url": "https://...", "query": "answer-bearing phrase" }. Returns a line-numbered source_viewport with total_lines, line_start/line_end, has_more_before/has_more_after, and L123 lines. If a field is missing, open another viewport on the same URL with a new lineno or query; do not scrape with shell. Rejects PDF/binary content with unsupported_content_type; use pdf_extract_text or download_file for PDFs/files.',
+        inputSchema: {
+            type: 'object',
+            required: ['url'],
+            properties: {
+                url: { type: 'string', minLength: 1, description: 'Required public HTTP(S) HTML/text URL. Do not call with empty args.' },
+                lineno: { type: 'number', description: 'Optional 1-based source line number to open near, matching Codex open(..., lineno).' },
+                query: { type: 'string', description: 'Optional answer-bearing phrase used only to focus the returned source viewport.' },
+                maxLines: { type: 'number', description: 'Optional maximum source lines in the viewport, clamped to 1-300. Omit unless a narrower/wider viewport is needed.' },
+                timeoutMs: { type: 'number', description: 'Optional request timeout in milliseconds. Omit by default.' }
+            },
+            additionalProperties: false
+        }
+    },
+    {
+        name: 'web_archive_lookup',
+        description: 'Recover historical database, catalog, academic-index, and search-engine result records when a live site, API, or OAI endpoint is offline, blocked, rate-limited, DNS-changed, removed, or no longer preserves the requested past state. Use it for as-of-year record questions and archived query pages filtered by identifiers, classification/subject codes such as DDC, year, language, document type, country/region, flags, or other URL values. This is a general Internet Archive + Arquivo.pt connector, not broad web search. Prefer mode=search for one-call dynamic URL discovery plus snapshot reading; use matchType=prefix and concise contains terms such as identifiers, filter values, or years. Use mode=captures only when you need to inspect candidates, and mode=open for a known provider/URL/timestamp. Read repeated_labeled_fields before paging a long catalog result because it projects labels and values from the full source.',
+        inputSchema: {
+            type: 'object',
+            required: ['url'],
+            properties: {
+                url: { type: 'string', minLength: 1, description: 'Original public HTTP(S) URL or stable URL prefix. For dynamic result pages, end the URL at the path or query prefix and use matchType=prefix.' },
+                mode: { type: 'string', enum: ['captures', 'search', 'open'], description: 'search discovers candidates and opens the first readable snapshot in one call; captures lists candidates; open reads one known timestamp. Defaults to open when timestamp is present, otherwise captures.' },
+                provider: { type: 'string', enum: ['internet_archive', 'arquivo'], description: 'Required for mode=open. Optional single-provider restriction for capture search.' },
+                providers: { type: 'array', maxItems: 2, items: { type: 'string', enum: ['internet_archive', 'arquivo'] }, description: 'Optional archive backends for capture search. Defaults to both.' },
+                timestamp: { type: 'string', pattern: '^[0-9]{8,14}$', description: 'Capture timestamp returned by mode=captures. Required for mode=open.' },
+                matchType: { type: 'string', enum: ['exact', 'prefix'], description: 'exact lists captures of one URL; prefix enumerates archived subpaths or dynamic query URLs. Defaults to exact.' },
+                contains: { type: 'string', description: 'Optional terms used to rank archived original URLs, for example a year, identifier, filter name, or query value. Prefix discovery prefers the earliest URL matching every term so later replay-generated query URLs do not hide the original evidence; terms are not sent as a new web search.' },
+                query: { type: 'string', description: 'Optional evidence phrase. In captures mode it ranks URLs and triggers opening the first readable snapshot; in search mode it focuses the one-call snapshot; in open mode it focuses the returned source viewport.' },
+                fromYear: { type: 'integer', minimum: 1996, maximum: 9999, description: 'Optional archive capture-year lower bound. This is the crawl date, not necessarily the publication year.' },
+                toYear: { type: 'integer', minimum: 1996, maximum: 9999, description: 'Optional archive capture-year upper bound.' },
+                maxResults: { type: 'integer', minimum: 1, maximum: 50, description: 'Maximum ranked capture URLs returned. Defaults to 12.' },
+                scanLimit: { type: 'integer', minimum: 1, maximum: 10000, description: 'Maximum CDX rows scanned before local ranking. Prefix discovery first probes the full terms, then a compact identifier/numeric anchor set; prefix listing defaults to 500 and exact lookup to 120.' },
+                maxChars: { type: 'integer', minimum: 1000, maximum: 80000, description: 'Maximum readable characters for mode=open.' },
+                timeoutMs: { type: 'integer', minimum: 3000, maximum: 300000, description: 'Per-backend archive request timeout, not the total tool-call deadline. Search mode may issue several requests; omit unless an individual backend probe needs a custom limit.' },
+                cdxBaseUrl: { type: 'string', description: 'Optional Internet Archive-compatible CDX endpoint override for self-hosted mirrors/tests.' },
+                replayBaseUrl: { type: 'string', description: 'Optional Internet Archive-compatible replay base URL override for self-hosted mirrors/tests.' },
+                arquivoCdxUrl: { type: 'string', description: 'Optional Arquivo.pt-compatible CDX endpoint override.' },
+                arquivoReplayUrl: { type: 'string', description: 'Optional Arquivo.pt-compatible replay base URL override.' }
+            },
+            additionalProperties: false
+        }
+    },
+    {
+        name: 'open_page',
+        description: 'Open a selected public web source by URL and return a line-numbered source_viewport. This is the direct search → open action. Use lineno to open a specific region or query to focus around one missing field.',
         inputSchema: {
             type: 'object',
             required: ['url'],
             properties: {
                 url: { type: 'string', minLength: 1 },
-                maxChars: { type: 'number' },
+                lineno: { type: 'number', minimum: 1 },
                 query: { type: 'string' },
-                contains: { type: 'string' },
-                extract_query: { type: 'string', description: 'Compatibility alias for query/contains. Use when asking web_fetch to focus the returned text around answer terms.' },
-                extractQuery: { type: 'string', description: 'Compatibility alias for query/contains. Prefer query.' },
-                provider: { type: 'string', description: 'Optional fetch provider selector: auto, crawl4ai/rendered/browser, builtin/current/html. Prefer omitting this unless testing a provider.' },
-                fetchProvider: { type: 'string', description: 'Compatibility alias for provider. Prefer provider.' },
-                crawl4aiUrl: { type: 'string', description: 'Optional legacy Crawl4AI HTTP base URL override. Prefer local worker configuration unless running a service intentionally.' },
-                crawl4aiWorker: { type: 'string', description: 'Optional local Crawl4AI worker path. Defaults to scripts/ailis-crawl4ai-worker.py and does not require Docker.' },
-                crawl4aiPython: { type: 'string', description: 'Optional Python executable for the local Crawl4AI worker. Defaults to AILIS_CRAWL4AI_PYTHON, AILIS_PYTHON, or python.' },
-                waitFor: { type: 'string', description: 'Optional Crawl4AI wait_for selector/condition for JS-rendered pages.' },
-                delayMs: { type: 'number', description: 'Optional Crawl4AI delay before reading rendered HTML, in milliseconds.' }
+                maxLines: { type: 'number', minimum: 1, maximum: 300 },
+                timeoutMs: { type: 'number' }
+            },
+            additionalProperties: false
+        }
+    },
+    {
+        name: 'continue_page',
+        description: 'Continue reading the same public source at a specific 1-based line number. Use this when a source_viewport has_more_before or has_more_after; do not repeat web_search.',
+        inputSchema: {
+            type: 'object',
+            required: ['url', 'lineno'],
+            properties: {
+                url: { type: 'string', minLength: 1 },
+                lineno: { type: 'number', minimum: 1 },
+                maxLines: { type: 'number', minimum: 1, maximum: 300 },
+                query: { type: 'string' },
+                timeoutMs: { type: 'number' }
+            },
+            additionalProperties: false
+        }
+    },
+    {
+        name: 'render_page',
+        description: 'Render a JavaScript-dependent public page with the bundled local Crawl4AI worker, then return the same source_viewport object model. Use after a static open returns a JS shell, thin placeholder, or omits data visibly present after rendering.',
+        inputSchema: {
+            type: 'object',
+            required: ['url'],
+            properties: {
+                url: { type: 'string', minLength: 1 },
+                lineno: { type: 'number', minimum: 1 },
+                query: { type: 'string' },
+                maxLines: { type: 'number', minimum: 1, maximum: 300 },
+                timeoutMs: { type: 'number' }
+            },
+            additionalProperties: false
+        }
+    },
+    {
+        name: 'webpage_screenshot',
+        description: 'Capture a browser-rendered PNG screenshot of a known public HTTP(S) page with the bundled local Crawl4AI/Playwright browser. Use when the answer depends on visual layout, indentation, columns, line breaks, color, position, charts, canvas, or other pixel evidence that Markdown/text extraction cannot preserve. The PNG is returned to the main Agent model as visual input; this tool does not call another reasoning model.',
+        inputSchema: {
+            type: 'object',
+            required: ['url'],
+            properties: {
+                url: { type: 'string', minLength: 1 },
+                path: { type: 'string', description: 'Optional local PNG output path. The runtime supplies a workspace path for web_run screenshot calls.' },
+                query: { type: 'string', description: 'Optional original visual question retained as screenshot context.' },
+                detail: { type: 'string', enum: ['low', 'high', 'original'] },
+                waitFor: { type: 'string' },
+                wait_for: { type: 'string' },
+                delayMs: { type: 'integer', minimum: 0, maximum: 30000 },
+                delay_ms: { type: 'integer', minimum: 0, maximum: 30000 },
+                timeoutMs: { type: 'integer', minimum: 30000, maximum: 300000 }
+            },
+            additionalProperties: false
+        }
+    },
+    {
+        name: 'web_find',
+        description: 'Find an exact phrase inside a known public HTTP(S) HTML/text URL. Codex/OAI-style action: find_in_page. Standard call: { "url": "https://...", "pattern": "exact phrase" }. Returns a line-numbered source_viewport around matches. This is not a broad web search.',
+        inputSchema: {
+            type: 'object',
+            required: ['url', 'pattern'],
+            properties: {
+                url: { type: 'string', minLength: 1, description: 'Required public HTTP(S) HTML/text URL to inspect.' },
+                pattern: { type: 'string', minLength: 1, description: 'Required exact phrase or keyword to find inside the source.' },
+                contextLines: { type: 'number', description: 'Approximate context lines around the match. Defaults to 3.' },
+                maxLines: { type: 'number', description: 'Maximum source lines in the returned viewport, clamped to 3-120.' },
+                timeoutMs: { type: 'number', description: 'Request timeout in milliseconds.' }
+            },
+            additionalProperties: false
+        }
+    },
+    {
+        name: 'find_in_page',
+        description: 'Find an exact phrase or keyword inside a known public URL and return a line-numbered source_viewport around all visible matches. This is the direct open → find action, not a broad search.',
+        inputSchema: {
+            type: 'object',
+            required: ['url', 'pattern'],
+            properties: {
+                url: { type: 'string', minLength: 1 },
+                pattern: { type: 'string', minLength: 1 },
+                contextLines: { type: 'number', minimum: 0 },
+                maxLines: { type: 'number', minimum: 3, maximum: 120 },
+                timeoutMs: { type: 'number' }
             },
             additionalProperties: false
         }
     },
     {
         name: 'pdf_extract_text',
-        description: 'Extract readable text from a public PDF URL or local PDF path. Use this instead of web_fetch for application/pdf or .pdf sources.',
+        description: 'Extract readable text from a public PDF URL or local PDF path. Use this instead of web_fetch for application/pdf or .pdf sources. Pass query/extract_query with answer-bearing clues so relevant evidence from the middle of a long PDF is placed before the full returned text.',
         inputSchema: {
             type: 'object',
+            anyOf: [
+                { required: ['url'] },
+                { required: ['path'] }
+            ],
             properties: {
                 url: { type: 'string' },
                 uri: { type: 'string' },
@@ -9287,10 +15124,15 @@ const TOOLS = [
                 file: { type: 'string' },
                 filePath: { type: 'string' },
                 file_path: { type: 'string' },
+                query: { type: 'string' },
+                q: { type: 'string' },
+                extractQuery: { type: 'string' },
+                extract_query: { type: 'string' },
                 maxChars: { type: 'number' },
                 maxPages: { type: 'number' },
                 timeoutMs: { type: 'number' }
-            }
+            },
+            additionalProperties: false
         }
     },
     {
@@ -9298,6 +15140,26 @@ const TOOLS = [
         description: 'Look up scholarly paper metadata from structured APIs before broad web search. Use it for exact paper/report titles or DOI questions, and also for fuzzy bibliographic discovery when you only have author name, year, topic, or journal/source clues. Returns authors, year, venue, DOI, and candidate landing/PDF URLs without scraping publisher pages. It also supports a second hop with authorId to list an author’s earlier works in chronological order.',
         inputSchema: {
             type: 'object',
+            anyOf: [
+                { required: ['title'] },
+                { required: ['query'] },
+                { required: ['q'] },
+                { required: ['search'] },
+                { required: ['doi'] },
+                { required: ['author'] },
+                { required: ['authorName'] },
+                { required: ['author_name'] },
+                { required: ['authorId'] },
+                { required: ['year'] },
+                { required: ['publicationYear'] },
+                { required: ['publication_year'] },
+                { required: ['topic'] },
+                { required: ['subject'] },
+                { required: ['keywords'] },
+                { required: ['venue'] },
+                { required: ['journal'] },
+                { required: ['source'] }
+            ],
             properties: {
                 title: { type: 'string', description: 'Exact paper/report title when known. Preferred for title-based lookup.' },
                 query: { type: 'string', description: 'General scholarly lookup query. Use title when the title is exact; use query plus author/year/topic for fuzzy bibliographic discovery.' },
@@ -9321,7 +15183,40 @@ const TOOLS = [
                 maxResults: { type: 'number', description: 'Maximum metadata candidates to return, clamped to 1-12.' },
                 timeoutMs: { type: 'number', description: 'Overall lookup timeout in milliseconds, clamped to 5000-180000.' },
                 openAlexAuthorsBaseUrl: { type: 'string', description: 'Optional override for tests/self-hosted OpenAlex author search endpoint.' }
-            }
+            },
+            additionalProperties: false
+        }
+    },
+    {
+        name: 'wikidata_entity_lookup',
+        description: 'Search Wikidata entities and return structured, source-linked facts for small entity sets. Use it for geocoding/place coordinates (latitude and longitude), identity resolution, country or administrative location, official names, dates, authorship, and entity relations such as a person’s place of birth. It accepts several queries in one call, automatically relaxes over-specific natural-language suffixes when exact entity search is empty, resolves linked Q-ids to readable labels, and is suitable for comparing boundary candidates before verifying their source-period labels. This is read-only structured knowledge-graph lookup, not broad web search or a large SPARQL query.',
+        inputSchema: {
+            type: 'object',
+            anyOf: [
+                { required: ['query'] },
+                { required: ['queries'] },
+                { required: ['entityIds'] }
+            ],
+            properties: {
+                query: { type: 'string', minLength: 1, description: 'One entity search phrase. Add country, occupation, year, or another disambiguator when needed.' },
+                q: { type: 'string', description: 'Compatibility alias for query.' },
+                queries: { type: 'array', minItems: 1, maxItems: 20, items: { type: 'string', minLength: 1 }, description: 'Batch of independent entity search phrases.' },
+                entityIds: { type: 'array', minItems: 1, maxItems: 50, items: { type: 'string', pattern: '^Q[0-9]+$' }, description: 'Known Wikidata Q-ids. Use after search when exact identity is established.' },
+                entity_ids: { type: 'array', maxItems: 50, items: { type: 'string', pattern: '^Q[0-9]+$' }, description: 'Compatibility alias for entityIds.' },
+                properties: {
+                    type: 'array',
+                    maxItems: 16,
+                    items: { type: 'string', minLength: 1 },
+                    description: 'Facts to project, such as coordinates, place_of_birth, place_of_death, country, located_in, location, official_name, date_of_birth, date_of_death, inception, occupation, author, instance_of, or an explicit P-id.'
+                },
+                fields: { type: 'array', maxItems: 16, items: { type: 'string', minLength: 1 }, description: 'Compatibility alias for properties.' },
+                language: { type: 'string', description: 'Preferred label language code. Defaults to en with English fallback.' },
+                maxResultsPerQuery: { type: 'number', minimum: 1, maximum: 5, description: 'Candidate entities per query. Defaults to 3.' },
+                max_results_per_query: { type: 'number', minimum: 1, maximum: 5, description: 'Compatibility alias for maxResultsPerQuery.' },
+                timeoutMs: { type: 'number', minimum: 5000, maximum: 180000 },
+                wikidataApiUrl: { type: 'string', description: 'Optional Wikidata-compatible Action API endpoint override for mirrors or tests.' }
+            },
+            additionalProperties: false
         }
     },
     {
@@ -9329,6 +15224,11 @@ const TOOLS = [
         description: 'Find a PDF from a known HTML page URL, exact document title, or search query, then extract readable text from the best PDF candidate. Use this after paper_metadata_lookup when you need the paper body rather than just metadata. Standard flow: { "title": "exact paper/report title", "extract_query": "answer terms" } or { "url": "known article page", "extract_query": "answer terms" }. It discovers PDF/download links, tries likely OJS article download URLs, and returns extraction attempts for recovery.',
         inputSchema: {
             type: 'object',
+            anyOf: [
+                { required: ['url'] },
+                { required: ['title'] },
+                { required: ['query'] }
+            ],
             properties: {
                 title: { type: 'string', description: 'Exact paper/report/document title. When known, use this as the primary discovery field.' },
                 query: { type: 'string', description: 'General search query or answer/evidence terms. If title is also provided, title is used for discovery and query is treated as supporting evidence text.' },
@@ -9345,7 +15245,8 @@ const TOOLS = [
                 maxCandidates: { type: 'number', description: 'Maximum candidate PDF URLs to try, clamped to 1-24.' },
                 maxLinks: { type: 'number', description: 'Maximum page links to inspect, clamped to 1-300.' },
                 timeoutMs: { type: 'number', description: 'Overall extraction timeout per candidate in milliseconds.' }
-            }
+            },
+            additionalProperties: false
         }
     },
     {
@@ -9398,7 +15299,7 @@ const TOOLS = [
     },
     {
         name: 'read_spreadsheet',
-        description: 'Read an xlsx/xls/csv file and return shape, columns, rows, numeric_sums, and total_numeric_sum as JSON text. Set maxRows high enough when the full table is needed.',
+        description: 'Value-only pandas preview for simple CSV/XLSX tables: returns shape, columns, first rows, numeric_sums, and total_numeric_sum as JSON text. It does not preserve Excel fills/colors, styles, merged cells, formulas, comments, images, hidden metadata, or render layout. For artifact-style spreadsheet tasks, especially cell colors, formulas, maps, comments, tables, hidden rows/sheets, or exact workbook structure, use artifact_tools open/query/inspect/materialize/render instead.',
         inputSchema: {
             type: 'object',
             properties: {
@@ -9472,6 +15373,7 @@ const TOOLS = [
                 imagePath: { type: 'string' },
                 image_path: { type: 'string' },
                 question: { type: 'string' },
+                detail: { type: 'string', enum: ['low', 'high', 'original'] },
                 maxChars: { type: 'number' },
                 timeoutMs: { type: 'number' }
             },
@@ -9479,8 +15381,69 @@ const TOOLS = [
         }
     },
     {
+        name: 'video_extract_frames',
+        description: 'Retrieve and uniformly sample a local or remote video into timestamped frames and a contact sheet, then optionally analyze that sheet with the configured vision model. Use this for visual video questions, especially simultaneous/on-screen counts that transcripts cannot answer. For YouTube anti-bot failures it uses healthy Invidious companion proxies without browser cookies, then local ffmpeg frame extraction. It never treats title, transcript, or thumbnails as proof of same-frame co-occurrence.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                path: { type: 'string', description: 'Existing local video path.' },
+                file: { type: 'string', description: 'Compatibility alias for path.' },
+                filePath: { type: 'string', description: 'Compatibility alias for path.' },
+                file_path: { type: 'string', description: 'Compatibility alias for path.' },
+                url: { type: 'string', description: 'Direct video URL or YouTube watch URL.' },
+                videoUrl: { type: 'string', description: 'Compatibility alias for url.' },
+                video_url: { type: 'string', description: 'Compatibility alias for url.' },
+                video_id: { type: 'string', description: 'YouTube video id.' },
+                videoId: { type: 'string', description: 'Compatibility alias for video_id.' },
+                id: { type: 'string', description: 'Compatibility alias for video_id.' },
+                question: { type: 'string', description: 'Visual question to answer from the sampled frames.' },
+                prompt: { type: 'string', description: 'Compatibility alias for question.' },
+                sampleCount: { type: 'number', minimum: 6, maximum: 40, description: 'Uniformly sampled frame count. Default 36.' },
+                sample_count: { type: 'number', minimum: 6, maximum: 40, description: 'Compatibility alias for sampleCount.' },
+                frames: { type: 'number', minimum: 6, maximum: 40, description: 'Compatibility alias for sampleCount.' },
+                analyze: { type: 'boolean', description: 'Run vision analysis on the contact sheet. Default true.' },
+                visual_analysis: { type: 'boolean', description: 'Compatibility alias for analyze.' },
+                maxBytes: { type: 'number', minimum: 1048576, maximum: 1073741824 },
+                max_bytes: { type: 'number', minimum: 1048576, maximum: 1073741824 },
+                maxChars: { type: 'number', minimum: 500, maximum: 12000 },
+                max_chars: { type: 'number', minimum: 500, maximum: 12000 },
+                timeoutMs: { type: 'number', minimum: 30000, maximum: 600000 },
+                timeout_ms: { type: 'number', minimum: 30000, maximum: 600000 }
+            },
+            additionalProperties: false,
+            anyOf: [
+                { required: ['path'] },
+                { required: ['url'] },
+                { required: ['video_id'] },
+                { required: ['videoId'] }
+            ]
+        }
+    },
+    {
+        name: 'chess_position_analyze',
+        description: 'Analyze a standard chess position from a caller-supplied FEN with the bundled local Stockfish engine. Use after transcribing and checking a board image when the task asks for the best, winning, optimal, forced, or guaranteed move. This tool does not inspect images. It validates the FEN, echoes the board and side to move, and returns the best move in both SAN and UCI plus ranked principal variations.',
+        inputSchema: {
+            type: 'object',
+            required: ['fen'],
+            properties: {
+                fen: { type: 'string', minLength: 1, description: 'Complete standard-chess FEN with 4 or 6 fields. Verify every piece and the side-to-move field against the source before calling.' },
+                position: { type: 'string', description: 'Compatibility alias for fen.' },
+                depth: { type: 'number', minimum: 8, maximum: 24, description: 'Stockfish search depth. Default 18.' },
+                analysisTimeMs: { type: 'number', minimum: 1000, maximum: 60000, description: 'Soft analysis budget. At this point the tool asks Stockfish to stop and returns the strongest completed result instead of discarding it. Default 12000.' },
+                maxTimeMs: { type: 'number', minimum: 1000, maximum: 60000, description: 'Compatibility alias for analysisTimeMs.' },
+                max_time_ms: { type: 'number', minimum: 1000, maximum: 60000, description: 'Compatibility alias for analysisTimeMs.' },
+                multiPv: { type: 'number', minimum: 1, maximum: 5, description: 'Number of ranked candidate lines. Default 3.' },
+                multi_pv: { type: 'number', minimum: 1, maximum: 5, description: 'Compatibility alias for multiPv.' },
+                timeoutMs: { type: 'number', minimum: 5000, maximum: 120000 },
+                enginePath: { type: 'string', description: 'Optional local Stockfish JS engine path for diagnostics.' },
+                engine_path: { type: 'string', description: 'Compatibility alias for enginePath.' }
+            },
+            additionalProperties: false
+        }
+    },
+    {
         name: 'youtube_video_search',
-        description: 'Search or resolve YouTube videos with yt-dlp using title, channel, or URL. Use this when a YouTube/video task gives only a title/channel or when fetching youtube.com search pages would be low-value. If yt-dlp is blocked for a known URL, this tool recovers metadata through YouTube oEmbed and returns metadata_only plus exact-title follow-up search suggestions; do not treat metadata_only as transcript/frame evidence.',
+        description: 'Search or resolve YouTube videos with yt-dlp using title, channel, or URL. This tool is for YouTube/youtu.be sources, not generic video platforms. If yt-dlp is blocked for a known URL, this tool recovers metadata through YouTube oEmbed and returns metadata_only plus exact-title follow-up search suggestions; do not treat metadata_only as transcript/frame evidence.',
         inputSchema: {
             type: 'object',
             properties: {
@@ -9504,7 +15467,7 @@ const TOOLS = [
     },
     {
         name: 'youtube_transcript',
-        description: 'Fetch YouTube metadata and available subtitles/auto-captions with yt-dlp. Use for known YouTube URLs before guessing from search snippets; if only a title/query is known, this can resolve a URL through youtube_video_search first. If yt-dlp is blocked, the failure result may include oEmbed metadata and exact-title suggestedNextCalls; follow those before broad web_search, but do not answer visual/audio questions from metadata_only.',
+        description: 'Fetch YouTube metadata and available subtitles/auto-captions with yt-dlp. This tool is for YouTube/youtu.be sources. If only a title/query is known, it can resolve a URL through youtube_video_search. If yt-dlp is blocked, the failure result may include oEmbed metadata and exact-title suggestedNextCalls; do not answer visual/audio questions from metadata_only alone.',
         inputSchema: {
             type: 'object',
             properties: {
@@ -9538,8 +15501,16 @@ async function handleToolCall(request) {
     if (name === 'web_research') return await webResearch(args);
     if (name === 'github_repo_read') return await githubRepoRead(args);
     if (name === 'web_fetch') return await webFetch(args);
+    if (name === 'web_archive_lookup') return await webArchiveLookup(args);
+    if (name === 'web_find') return await webFind(args);
+    if (name === 'open_page') return await openPage(args);
+    if (name === 'find_in_page') return await findInPage(args);
+    if (name === 'continue_page') return await continuePage(args);
+    if (name === 'render_page') return await renderPage(args);
+    if (name === 'webpage_screenshot') return await webpageScreenshot(args);
     if (name === 'pdf_extract_text') return await pdfExtractText(args);
     if (name === 'paper_metadata_lookup') return await paperMetadataLookup(args);
+    if (name === 'wikidata_entity_lookup') return await wikidataEntityLookup(args);
     if (name === 'pdf_find_and_extract') return await pdfFindAndExtract(args);
     if (name === 'download_file') return await downloadFile(args);
     if (name === 'web_extract_links') return await webExtractLinks(args);
@@ -9549,6 +15520,8 @@ async function handleToolCall(request) {
     if (name === 'read_presentation') return await readPresentation(args);
     if (name === 'transcribe_audio') return await transcribeAudio(args);
     if (name === 'describe_image') return await describeImage(args);
+    if (name === 'video_extract_frames') return await videoExtractFrames(args);
+    if (name === 'chess_position_analyze') return await chessPositionAnalyze(args);
     if (name === 'youtube_video_search') return await youtubeVideoSearch(args);
     if (name === 'youtube_transcript') return await youtubeTranscript(args);
     return errorResult(`Unknown tool: ${name}`);
@@ -9613,11 +15586,15 @@ module.exports = {
     TOOLS,
     assessSearchConfidence,
     buildEffectiveSearchQuery,
+    buildEvidenceSnippets,
+    buildWebResearchCandidates,
     buildWebResearchQueryPlan,
     buildSearchClarificationChoices,
     buildSuggestedCallsFromSearchResults,
     buildYouTubeEvidenceSearchQuery,
     buildYouTubeOEmbedUrl,
+    buildInvidiousVideoProxyUrl,
+    chessPositionAnalyze,
     classifyYtDlpFailure,
     crawl4aiFetchConfig,
     crawl4aiWorkerPath,
@@ -9631,27 +15608,51 @@ module.exports = {
     extractYouTubeVideoId,
     extractWikipediaPageTitle,
     extractYahooResults,
+    expandStructuredSourceText,
+    filterSearchResultsByDomains,
     inferPaperMetadataArgsFromScholarlyQuery,
+    fetchArchiveIndexText,
     fetchText,
+    fetchTextWithCurl,
     githubRepoRead,
     handleRequest,
     handleToolCall,
+    loadManagedSearxngManifest,
+    managedSearxngAllowedForSearch,
+    managedSearxngManifestCandidates,
+    managedSearxngPortCandidates,
+    mergeSearchResultsForRerank,
+    needsDetailedVideoFrameReview,
+    normalizeSearchDomains,
     normalizeSearchBackends,
     parseGitHubRepoRef,
+    parseWikipediaPagePayload,
     paperMetadataLookup,
     pdfFindAndExtract,
     pdfExtractText,
     rankLinksForResearch,
     rankSearchResultsForFollowup,
+    readDesktopLlmSettings,
     readDocument,
     readPresentation,
+    readSpreadsheet,
     runPythonFile,
     SEARCH_BACKENDS,
     stripWikiText,
+    transcribeAudio,
+    videoExtractFrames,
     webExtractLinks,
+    webArchiveLookup,
     webFetch,
+    webFind,
+    openPage,
+    findInPage,
+    continuePage,
+    renderPage,
+    webpageScreenshot,
     webResearch,
     webSearch,
+    wikidataEntityLookup,
     youtubeTranscript,
     youtubeVideoSearch
 };

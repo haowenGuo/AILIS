@@ -1,0 +1,383 @@
+{
+  "locomo-01-qa-01": {
+    "answer": "7 May 2023",
+    "question": "When did Caroline go to the LGBTQ support group?",
+    "question_type": "temporal",
+    "sample_id": "conv-26",
+    "evidence": [
+      "D1:3"
+    ]
+  },
+  "locomo-01-qa-02": {
+    "answer": 2022,
+    "question": "When did Melanie paint a sunrise?",
+    "question_type": "temporal",
+    "sample_id": "conv-26",
+    "evidence": [
+      "D1:12"
+    ]
+  },
+  "locomo-01-qa-03": {
+    "answer": "Psychology, counseling certification",
+    "question": "What fields would Caroline be likely to pursue in her educaton?",
+    "question_type": "multi_hop",
+    "sample_id": "conv-26",
+    "evidence": [
+      "D1:9",
+      "D1:11"
+    ]
+  },
+  "locomo-01-qa-04": {
+    "answer": "Adoption agencies",
+    "question": "What did Caroline research?",
+    "question_type": "single_hop",
+    "sample_id": "conv-26",
+    "evidence": [
+      "D2:8"
+    ]
+  },
+  "locomo-01-qa-05": {
+    "answer": "Transgender woman",
+    "question": "What is Caroline's identity?",
+    "question_type": "single_hop",
+    "sample_id": "conv-26",
+    "evidence": [
+      "D1:5"
+    ]
+  },
+  "locomo-01-qa-06": {
+    "answer": "The sunday before 25 May 2023",
+    "question": "When did Melanie run a charity race?",
+    "question_type": "temporal",
+    "sample_id": "conv-26",
+    "evidence": [
+      "D2:1"
+    ]
+  },
+  "locomo-01-qa-07": {
+    "answer": "June 2023",
+    "question": "When is Melanie planning on going camping?",
+    "question_type": "temporal",
+    "sample_id": "conv-26",
+    "evidence": [
+      "D2:7"
+    ]
+  },
+  "locomo-01-qa-08": {
+    "answer": "Single",
+    "question": "What is Caroline's relationship status?",
+    "question_type": "single_hop",
+    "sample_id": "conv-26",
+    "evidence": [
+      "D3:13",
+      "D2:14"
+    ]
+  },
+  "locomo-01-qa-09": {
+    "answer": "The week before 9 June 2023",
+    "question": "When did Caroline give a speech at a school?",
+    "question_type": "temporal",
+    "sample_id": "conv-26",
+    "evidence": [
+      "D3:1"
+    ]
+  },
+  "locomo-01-qa-10": {
+    "answer": "The week before 9 June 2023",
+    "question": "When did Caroline meet up with her friends, family, and mentors?",
+    "question_type": "temporal",
+    "sample_id": "conv-26",
+    "evidence": [
+      "D3:11"
+    ]
+  },
+  "locomo-01-qa-11": {
+    "answer": "4 years",
+    "question": "How long has Caroline had her current group of friends for?",
+    "question_type": "temporal",
+    "sample_id": "conv-26",
+    "evidence": [
+      "D3:13"
+    ]
+  },
+  "locomo-01-qa-12": {
+    "answer": "Sweden",
+    "question": "Where did Caroline move from 4 years ago?",
+    "question_type": "single_hop",
+    "sample_id": "conv-26",
+    "evidence": [
+      "D3:13",
+      "D4:3"
+    ]
+  },
+  "locomo-01-qa-13": {
+    "answer": "10 years ago",
+    "question": "How long ago was Caroline's 18th birthday?",
+    "question_type": "temporal",
+    "sample_id": "conv-26",
+    "evidence": [
+      "D4:5"
+    ]
+  },
+  "locomo-01-qa-14": {
+    "answer": "counseling or mental health for Transgender people",
+    "question": "What career path has Caroline decided to persue?",
+    "question_type": "single_hop",
+    "sample_id": "conv-26",
+    "evidence": [
+      "D4:13",
+      "D1:11"
+    ]
+  },
+  "locomo-01-qa-15": {
+    "answer": "Likely no",
+    "question": "Would Caroline still want to pursue counseling as a career if she hadn't received support growing up?",
+    "question_type": "multi_hop",
+    "sample_id": "conv-26",
+    "evidence": [
+      "D4:15",
+      "D3:5"
+    ]
+  },
+  "locomo-01-qa-16": {
+    "answer": "pottery, camping, painting, swimming",
+    "question": "What activities does Melanie partake in?",
+    "question_type": "single_hop",
+    "sample_id": "conv-26",
+    "evidence": [
+      "D5:4",
+      "D9:1",
+      "D1:12",
+      "D1:18"
+    ]
+  },
+  "locomo-01-qa-17": {
+    "answer": "2 July 2023",
+    "question": "When did Melanie sign up for a pottery class?",
+    "question_type": "temporal",
+    "sample_id": "conv-26",
+    "evidence": [
+      "D5:4"
+    ]
+  },
+  "locomo-01-qa-18": {
+    "answer": "July 2023",
+    "question": "When is Caroline going to the transgender conference?",
+    "question_type": "temporal",
+    "sample_id": "conv-26",
+    "evidence": [
+      "D5:13"
+    ]
+  },
+  "locomo-01-qa-19": {
+    "answer": "beach, mountains, forest",
+    "question": "Where has Melanie camped?",
+    "question_type": "single_hop",
+    "sample_id": "conv-26",
+    "evidence": [
+      "D6:16",
+      "D4:6",
+      "D8:32"
+    ]
+  },
+  "locomo-01-qa-20": {
+    "answer": "dinosaurs, nature",
+    "question": "What do Melanie's kids like?",
+    "question_type": "single_hop",
+    "sample_id": "conv-26",
+    "evidence": [
+      "D6:6",
+      "D4:8"
+    ]
+  },
+  "locomo-02-qa-01": {
+    "answer": "19 January, 2023",
+    "question": "When Jon has lost his job as a banker?",
+    "question_type": "temporal",
+    "sample_id": "conv-30",
+    "evidence": [
+      "D1:2"
+    ]
+  },
+  "locomo-02-qa-02": {
+    "answer": "January, 2023",
+    "question": "When Gina has lost her job at Door Dash?",
+    "question_type": "temporal",
+    "sample_id": "conv-30",
+    "evidence": [
+      "D1:3"
+    ]
+  },
+  "locomo-02-qa-03": {
+    "answer": "by dancing",
+    "question": "How do Jon and Gina both like to destress?",
+    "question_type": "open_domain",
+    "sample_id": "conv-30",
+    "evidence": [
+      "D1:7",
+      "D1:6"
+    ]
+  },
+  "locomo-02-qa-04": {
+    "answer": "They lost their jobs and decided to start their own businesses.",
+    "question": "What do Jon and Gina both have in common?",
+    "question_type": "single_hop",
+    "sample_id": "conv-30",
+    "evidence": [
+      "D1:2",
+      "D1:3",
+      "D1:4",
+      "D2:1"
+    ]
+  },
+  "locomo-02-qa-05": {
+    "answer": "He lost his job and decided to start his own business to share his passion.",
+    "question": "Why did Jon decide to start his dance studio?",
+    "question_type": "open_domain",
+    "sample_id": "conv-30",
+    "evidence": [
+      "D1:2",
+      "D1:4"
+    ]
+  },
+  "locomo-02-qa-06": {
+    "answer": "By the water, with natural light and Marley flooring",
+    "question": "What Jon thinks the ideal dance studio should look like?",
+    "question_type": "single_hop",
+    "sample_id": "conv-30",
+    "evidence": [
+      "D1:20",
+      "D2:4",
+      "D2:8"
+    ]
+  },
+  "locomo-02-qa-07": {
+    "answer": "February, 2023",
+    "question": "When is Jon's group performing at a festival?",
+    "question_type": "temporal",
+    "sample_id": "conv-30",
+    "evidence": [
+      "D1:24"
+    ]
+  },
+  "locomo-02-qa-08": {
+    "answer": "29 January, 2023",
+    "question": "When did Gina launch an ad campaign for her store?",
+    "question_type": "temporal",
+    "sample_id": "conv-30",
+    "evidence": [
+      "D2:1"
+    ]
+  },
+  "locomo-02-qa-09": {
+    "answer": "28 January 2023",
+    "question": "When was Jon in Paris?",
+    "question_type": "temporal",
+    "sample_id": "conv-30",
+    "evidence": [
+      "D2:4"
+    ]
+  },
+  "locomo-02-qa-10": {
+    "answer": "Rome",
+    "question": "Which city have both Jean and John visited?",
+    "question_type": "single_hop",
+    "sample_id": "conv-30",
+    "evidence": [
+      "D2:5",
+      "D15:1"
+    ]
+  },
+  "locomo-02-qa-11": {
+    "answer": "February, 2023",
+    "question": "When did Gina team up with a local artist for some cool designs?",
+    "question_type": "temporal",
+    "sample_id": "conv-30",
+    "evidence": [
+      "D5:5"
+    ]
+  },
+  "locomo-02-qa-12": {
+    "answer": "A few years ago",
+    "question": "When did Gina get her tattoo?",
+    "question_type": "temporal",
+    "sample_id": "conv-30",
+    "evidence": [
+      "D5:15"
+    ]
+  },
+  "locomo-02-qa-13": {
+    "answer": "March, 2023",
+    "question": "When did Jon start to go to the gym?",
+    "question_type": "temporal",
+    "sample_id": "conv-30",
+    "evidence": [
+      "D6:1"
+    ]
+  },
+  "locomo-02-qa-14": {
+    "answer": "16 March, 2023",
+    "question": "When did Gina open her online clothing store?",
+    "question_type": "temporal",
+    "sample_id": "conv-30",
+    "evidence": [
+      "D6:6"
+    ]
+  },
+  "locomo-02-qa-15": {
+    "answer": "April, 2023",
+    "question": "When did Jon start expanding his studio's social media presence?",
+    "question_type": "temporal",
+    "sample_id": "conv-30",
+    "evidence": [
+      "D8:13"
+    ]
+  },
+  "locomo-02-qa-16": {
+    "answer": "May, 2023",
+    "question": "When did Jon host a dance competition?",
+    "question_type": "temporal",
+    "sample_id": "conv-30",
+    "evidence": [
+      "D8:13"
+    ]
+  },
+  "locomo-02-qa-17": {
+    "answer": "24 April, 2023",
+    "question": "When did Jon go to a fair to get more exposure for his dance studio?",
+    "question_type": "temporal",
+    "sample_id": "conv-30",
+    "evidence": [
+      "D10:1"
+    ]
+  },
+  "locomo-02-qa-18": {
+    "answer": "She always loved fashion trends and finding unique pieces and she lost her job so decided it was time to start her own business.",
+    "question": "Why did Gina decide to start her own clothing store?",
+    "question_type": "single_hop",
+    "sample_id": "conv-30",
+    "evidence": [
+      "D6:8",
+      "D1:3"
+    ]
+  },
+  "locomo-02-qa-19": {
+    "answer": "Yes",
+    "question": "Do Jon and Gina start businesses out of what they love?",
+    "question_type": "single_hop",
+    "sample_id": "conv-30",
+    "evidence": [
+      "D1:4",
+      "D6:8"
+    ]
+  },
+  "locomo-02-qa-20": {
+    "answer": "10 May, 2023",
+    "question": "When did Gina interview for a design internship?",
+    "question_type": "temporal",
+    "sample_id": "conv-30",
+    "evidence": [
+      "D11:14"
+    ]
+  }
+}

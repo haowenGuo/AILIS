@@ -571,6 +571,18 @@ test('Tool Acquisition Gateway includes built-in public OpenAPI tools in externa
     assert.equal(direct.callable, true);
     assert.equal(direct.verification, 'builtin_public_readonly');
     assert.equal(direct.call_pattern.tool, 'external__clinicaltrials__get_study');
+
+    const topicSearch = await gateway.searchExternalToolEntries({
+        query: 'NIH clinical trial H. pylori acne vulgaris actual enrollment',
+        limit: 5
+    });
+    const searchStudies = topicSearch.tools.find((entry) => (
+        entry.id === 'external__clinicaltrials__search_studies'
+    ));
+    assert.ok(searchStudies, JSON.stringify(topicSearch.tools, null, 2));
+    assert.equal(searchStudies.callable, true);
+    assert.equal(searchStudies.call_pattern.tool, 'external__clinicaltrials__search_studies');
+    assert.deepEqual(Object.keys(searchStudies.spec.parameters.properties), ['query']);
 });
 
 test('Tool Acquisition Gateway executes approved OpenAPI adapter with env auth profile', async () => {

@@ -12,10 +12,14 @@ const {
     TOOLS,
     assessSearchConfidence,
     buildEffectiveSearchQuery,
+    buildEvidenceSnippets,
+    buildWebResearchCandidates,
     buildSearchClarificationChoices,
     buildSuggestedCallsFromSearchResults,
+    buildInvidiousVideoProxyUrl,
     buildYouTubeEvidenceSearchQuery,
     buildYouTubeOEmbedUrl,
+    chessPositionAnalyze,
     classifyYtDlpFailure,
     crawl4aiFetchConfig,
     extractArxivCandidatesFromAtom,
@@ -27,21 +31,39 @@ const {
     extractYouTubeVideoId,
     extractWikipediaPageTitle,
     extractYahooResults,
+    expandStructuredSourceText,
+    filterSearchResultsByDomains,
     githubRepoRead,
+    handleToolCall,
     inferPaperMetadataArgsFromScholarlyQuery,
+    loadManagedSearxngManifest,
+    managedSearxngAllowedForSearch,
+    managedSearxngPortCandidates,
+    mergeSearchResultsForRerank,
+    needsDetailedVideoFrameReview,
+    normalizeSearchDomains,
     normalizeSearchBackends,
+    openPage,
+    findInPage,
+    continuePage,
     paperMetadataLookup,
     parseGitHubRepoRef,
+    parseWikipediaPagePayload,
+    pdfExtractText,
     pdfFindAndExtract,
     rankLinksForResearch,
     rankSearchResultsForFollowup,
     readDocument,
+    readPresentation,
     runPythonFile,
     stripWikiText,
+    webArchiveLookup,
     webExtractLinks,
     webFetch,
+    webFind,
     webResearch,
     webSearch,
+    wikidataEntityLookup,
     youtubeTranscript,
     youtubeVideoSearch
 } = require('../scripts/mcp-ailis-research-server.cjs');
@@ -55,6 +77,17 @@ async function withServer(handler, run) {
     } finally {
         await new Promise((resolve) => server.close(resolve));
     }
+}
+
+async function reserveUnusedPort() {
+    const server = http.createServer((_request, response) => {
+        response.writeHead(404);
+        response.end('closed');
+    });
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const { port } = server.address();
+    await new Promise((resolve) => server.close(resolve));
+    return port;
 }
 
 function buildSimplePdf(text = 'Hello PDF') {
@@ -87,36 +120,78 @@ test('AILIS research MCP exposes Codex-aligned PDF/file tools', () => {
     const names = TOOLS.map((tool) => tool.name);
     const searchTool = TOOLS.find((tool) => tool.name === 'web_search');
     const fetchTool = TOOLS.find((tool) => tool.name === 'web_fetch');
+    const pdfFindTool = TOOLS.find((tool) => tool.name === 'pdf_find_and_extract');
     const pythonTool = TOOLS.find((tool) => tool.name === 'run_python_file');
     const youtubeSearchTool = TOOLS.find((tool) => tool.name === 'youtube_video_search');
     const youtubeTranscriptTool = TOOLS.find((tool) => tool.name === 'youtube_transcript');
+    const videoFramesTool = TOOLS.find((tool) => tool.name === 'video_extract_frames');
 
     assert.ok(names.includes('web_search'));
     assert.ok(names.includes('web_research'));
     assert.ok(names.includes('github_repo_read'));
     assert.ok(names.includes('web_fetch'));
+    assert.ok(names.includes('web_archive_lookup'));
+    assert.ok(names.includes('web_find'));
+    assert.ok(names.includes('open_page'));
+    assert.ok(names.includes('find_in_page'));
+    assert.ok(names.includes('continue_page'));
+    assert.ok(names.includes('render_page'));
+    assert.ok(names.includes('webpage_screenshot'));
     assert.ok(names.includes('pdf_extract_text'));
     assert.ok(names.includes('paper_metadata_lookup'));
+    assert.ok(names.includes('wikidata_entity_lookup'));
     assert.ok(names.includes('pdf_find_and_extract'));
     assert.ok(names.includes('download_file'));
     assert.ok(names.includes('read_document'));
     assert.ok(names.includes('read_presentation'));
+    assert.ok(names.includes('chess_position_analyze'));
     assert.ok(names.includes('youtube_video_search'));
     assert.ok(names.includes('youtube_transcript'));
-    assert.ok(searchTool.inputSchema.properties.backend);
-    assert.ok(searchTool.inputSchema.properties.backends);
-    assert.ok(searchTool.inputSchema.properties.provider);
-    assert.ok(searchTool.inputSchema.properties.searxngUrl);
-    assert.ok(searchTool.inputSchema.properties.exact_keywords);
-    assert.ok(searchTool.inputSchema.properties.exactKeywords);
-    assert.ok(searchTool.inputSchema.properties.backends.items.enum.includes('duckduckgo_html'));
-    assert.ok(searchTool.inputSchema.properties.backends.items.enum.includes('github_repositories'));
-    assert.ok(searchTool.inputSchema.properties.backends.items.enum.includes('searxng_json'));
-    assert.ok(searchTool.inputSchema.properties.backends.items.enum.includes('firecrawl_search'));
-    assert.ok(searchTool.description.includes('managed search backends'));
-    assert.ok(searchTool.description.includes('AILIS_SEARXNG_URL'));
-    assert.ok(fetchTool.inputSchema.properties.extract_query);
-    assert.ok(fetchTool.inputSchema.properties.extractQuery);
+    assert.ok(names.includes('video_extract_frames'));
+    assert.deepEqual(Object.keys(searchTool.inputSchema.properties), ['query', 'maxResults', 'search_context_size', 'recency', 'domains']);
+    assert.equal(searchTool.inputSchema.properties.query.maxLength, 240);
+    assert.equal(searchTool.inputSchema.properties.recency.minimum, 1);
+    assert.equal(searchTool.inputSchema.properties.domains.maxItems, 8);
+    assert.equal(searchTool.inputSchema.properties.backend, undefined);
+    assert.equal(searchTool.inputSchema.properties.backends, undefined);
+    assert.equal(searchTool.inputSchema.properties.provider, undefined);
+    assert.equal(searchTool.inputSchema.properties.searxngUrl, undefined);
+    assert.equal(searchTool.inputSchema.properties.exact_keywords, undefined);
+    assert.ok(searchTool.description.includes('Codex/OAI-style action: search'));
+    assert.ok(searchTool.description.includes('open_page'));
+    assert.ok(searchTool.description.includes('find_in_page'));
+    assert.deepEqual(fetchTool.inputSchema.required, ['url']);
+    assert.ok(fetchTool.inputSchema.properties.url);
+    assert.ok(fetchTool.inputSchema.properties.lineno);
+    assert.ok(fetchTool.inputSchema.properties.query);
+    assert.ok(fetchTool.inputSchema.properties.maxLines);
+    assert.equal(fetchTool.inputSchema.properties.lineStart, undefined);
+    assert.equal(fetchTool.inputSchema.properties.lineEnd, undefined);
+    assert.equal(fetchTool.inputSchema.properties.viewportChars, undefined);
+    assert.equal(fetchTool.inputSchema.properties.extract_query, undefined);
+    assert.ok(fetchTool.description.includes('Codex/OAI-style action: open_page'));
+    const archiveTool = TOOLS.find((tool) => tool.name === 'web_archive_lookup');
+    assert.deepEqual(archiveTool.inputSchema.required, ['url']);
+    assert.deepEqual(archiveTool.inputSchema.properties.mode.enum, ['captures', 'search', 'open']);
+    assert.deepEqual(archiveTool.inputSchema.properties.provider.enum, ['internet_archive', 'arquivo']);
+    assert.match(archiveTool.description, /Internet Archive \+ Arquivo\.pt/);
+    assert.deepEqual(pdfFindTool.inputSchema.anyOf, [
+        { required: ['url'] },
+        { required: ['title'] },
+        { required: ['query'] }
+    ]);
+    assert.equal(pdfFindTool.inputSchema.additionalProperties, false);
+    const findTool = TOOLS.find((tool) => tool.name === 'web_find');
+    assert.deepEqual(findTool.inputSchema.required, ['url', 'pattern']);
+    assert.equal(findTool.inputSchema.properties.ref_id, undefined);
+    assert.ok(findTool.inputSchema.properties.url);
+    assert.ok(findTool.inputSchema.properties.pattern);
+    assert.ok(findTool.inputSchema.properties.contextLines);
+    assert.ok(findTool.description.includes('Codex/OAI-style action: find_in_page'));
+    assert.deepEqual(TOOLS.find((tool) => tool.name === 'open_page').inputSchema.required, ['url']);
+    assert.deepEqual(TOOLS.find((tool) => tool.name === 'find_in_page').inputSchema.required, ['url', 'pattern']);
+    assert.deepEqual(TOOLS.find((tool) => tool.name === 'continue_page').inputSchema.required, ['url', 'lineno']);
+    assert.deepEqual(TOOLS.find((tool) => tool.name === 'render_page').inputSchema.required, ['url']);
     assert.ok(pythonTool.inputSchema.properties.code);
     assert.ok(pythonTool.inputSchema.properties.inline_code);
     assert.ok(pythonTool.inputSchema.properties.inlineCode);
@@ -126,8 +201,220 @@ test('AILIS research MCP exposes Codex-aligned PDF/file tools', () => {
     assert.equal(youtubeTranscriptTool.inputSchema.additionalProperties, false);
     assert.ok(youtubeSearchTool.inputSchema.properties.video_id);
     assert.ok(youtubeTranscriptTool.inputSchema.properties.video_id);
+    assert.ok(videoFramesTool.inputSchema.properties.sampleCount);
+    assert.match(videoFramesTool.inputSchema.properties.sampleCount.description, /Default 36/);
+    assert.match(videoFramesTool.description, /simultaneous\/on-screen/);
     assert.match(youtubeSearchTool.description, /oEmbed/);
     assert.match(youtubeTranscriptTool.description, /metadata_only/);
+});
+
+test('video frame analysis uses detailed batches only for same-frame enumeration questions', () => {
+    assert.equal(
+        needsDetailedVideoFrameReview('What is the highest number of bird species on camera simultaneously?'),
+        true
+    );
+    assert.equal(
+        needsDetailedVideoFrameReview('How many people are visible at the same time in one frame?'),
+        true
+    );
+    assert.equal(
+        needsDetailedVideoFrameReview('What does the speaker say about bird migration?'),
+        false
+    );
+    assert.equal(
+        needsDetailedVideoFrameReview('Describe the events in this video.'),
+        false
+    );
+});
+
+test('wikidata_entity_lookup resolves coordinates and linked relationship labels', async () => {
+    let activeSearchRequests = 0;
+    let maxActiveSearchRequests = 0;
+    let totalSearchRequests = 0;
+    await withServer((request, response) => {
+        const url = new URL(request.url, 'http://127.0.0.1');
+        const action = url.searchParams.get('action');
+        response.setHeader('Content-Type', 'application/json');
+        if (action === 'wbsearchentities') {
+            activeSearchRequests += 1;
+            totalSearchRequests += 1;
+            maxActiveSearchRequests = Math.max(maxActiveSearchRequests, activeSearchRequests);
+            const query = url.searchParams.get('search');
+            const search = query === 'John Adams'
+                ? [{ id: 'Q11806', label: 'John Adams', description: 'second president of the United States' }]
+                : query === 'Honolulu'
+                    ? [{ id: 'Q18094', label: 'Honolulu', description: 'city in Hawaii, United States' }]
+                    : [];
+            activeSearchRequests -= 1;
+            response.end(JSON.stringify({ search }));
+            return;
+        }
+        if (action === 'wbgetentities') {
+            const ids = String(url.searchParams.get('ids') || '').split('|');
+            const entities = {};
+            for (const id of ids) {
+                if (id === 'Q11806') {
+                    entities[id] = {
+                        id,
+                        labels: { en: { language: 'en', value: 'John Adams' } },
+                        descriptions: { en: { language: 'en', value: 'second president of the United States' } },
+                        claims: {
+                            P19: [{
+                                rank: 'preferred',
+                                mainsnak: {
+                                    snaktype: 'value',
+                                    datavalue: {
+                                        type: 'wikibase-entityid',
+                                        value: { id: 'Q49145', 'entity-type': 'item', 'numeric-id': 49145 }
+                                    }
+                                }
+                            }]
+                        }
+                    };
+                } else if (id === 'Q18094') {
+                    entities[id] = {
+                        id,
+                        labels: { en: { language: 'en', value: 'Honolulu' } },
+                        descriptions: { en: { language: 'en', value: 'city in Hawaii, United States' } },
+                        claims: {
+                            P625: [{
+                                rank: 'preferred',
+                                mainsnak: {
+                                    snaktype: 'value',
+                                    datavalue: {
+                                        type: 'globecoordinate',
+                                        value: {
+                                            latitude: 21.30694,
+                                            longitude: -157.85833,
+                                            precision: 0.00001,
+                                            globe: 'http://www.wikidata.org/entity/Q2'
+                                        }
+                                    }
+                                }
+                            }]
+                        }
+                    };
+                } else if (id === 'Q49145') {
+                    entities[id] = {
+                        id,
+                        labels: { en: { language: 'en', value: 'Braintree' } },
+                        descriptions: { en: { language: 'en', value: 'city in Norfolk County, Massachusetts' } },
+                        claims: {}
+                    };
+                }
+            }
+            response.end(JSON.stringify({ entities }));
+            return;
+        }
+        response.statusCode = 404;
+        response.end(JSON.stringify({ error: 'not found' }));
+    }, async (baseUrl) => {
+        const result = await wikidataEntityLookup({
+            queries: ['John Adams U.S. president', 'Honolulu Hawaii city'],
+            properties: ['place_of_birth', 'coordinates'],
+            wikidataApiUrl: `${baseUrl}/w/api.php`
+        });
+
+        assert.equal(result.structuredContent.ok, true);
+        assert.equal(result.structuredContent.status, 'completed');
+        assert.equal(result.structuredContent.results[0].matches[0].properties.place_of_birth[0].label, 'Braintree');
+        assert.equal(result.structuredContent.results[1].matches[0].properties.coordinates[0].longitude, -157.85833);
+        assert.deepEqual(
+            result.structuredContent.property_rows.find((row) =>
+                row.source_query === 'John Adams U.S. president' &&
+                row.property === 'place_of_birth'
+            ),
+            {
+                source_query: 'John Adams U.S. president',
+                source_entity_id: 'Q11806',
+                source_entity: 'John Adams',
+                match_rank: 0,
+                property: 'place_of_birth',
+                value_type: 'entity',
+                value_entity_id: 'Q49145',
+                value_label: 'Braintree',
+                value_description: 'city in Norfolk County, Massachusetts',
+                latitude: null,
+                longitude: null,
+                amount: '',
+                text: ''
+            }
+        );
+        assert.equal(result.structuredContent.results[0].effective_query, 'John Adams');
+        assert.equal(result.structuredContent.results[1].effective_query, 'Honolulu');
+        assert.equal(result.structuredContent.attribution, 'Data from Wikidata');
+        assert.equal(maxActiveSearchRequests, 1);
+        assert.equal(totalSearchRequests, 5);
+    });
+});
+
+test('structured JSON source text is expanded before viewport and find processing', () => {
+    const expanded = expandStructuredSourceText(
+        '```json\n{"protocolSection":{"designModule":{"enrollmentInfo":{"count":90,"type":"ACTUAL"}}}}\n```',
+        'application/json'
+    );
+
+    assert.match(expanded, /"enrollmentInfo": \{/);
+    assert.match(expanded, /"count": 90/);
+    assert.ok(expanded.split('\n').length > 5);
+});
+
+test('query-focused evidence surfaces answer-bearing lines from the middle of long extracted text', () => {
+    const filler = Array.from({ length: 80 }, (_, index) => `unrelated appendix line ${index + 1}`);
+    const extracted = [
+        ...filler.slice(0, 40),
+        'The bag has a measured internal volume of 0.1777 m3 for the fish transport calculation.',
+        ...filler.slice(40)
+    ].join('\n');
+
+    const snippets = buildEvidenceSnippets(
+        extracted,
+        'What is the volume in m3 of the fish transport bag?'
+    );
+
+    assert.match(snippets, /0\.1777 m3/);
+    assert.ok(snippets.length < extracted.length);
+});
+
+test('pdf extraction classifies HTTP access blocks as source-recovery problems', async () => {
+    await withServer((_request, response) => {
+        response.writeHead(403, { 'content-type': 'text/html; charset=utf-8' });
+        response.end('<html><body>Access denied</body></html>');
+    }, async (baseUrl) => {
+        const result = await pdfExtractText({
+            url: `${baseUrl}/article.pdf`,
+            query: 'exact quoted word from the article'
+        });
+
+        assert.equal(result.isError, true);
+        assert.match(result.details.evidenceGap, /HTTP 403/);
+        assert.match(result.details.recoveryHint, /Do not keep retrying/i);
+        assert.equal(result.details.suggestedNextCalls[0].tool, 'web_search');
+        assert.deepEqual(result.details.suggestedNextCalls[0].args, {
+            query: 'exact quoted word from the article'
+        });
+    });
+});
+
+test('chess_position_analyze validates a transcribed FEN with local Stockfish and returns SAN', async () => {
+    const result = await chessPositionAnalyze({
+        fen: '3r2k1/pp3pp1/4b2p/7Q/3n4/PqBBR2P/5PP1/6K1 b - - 0 1',
+        depth: 24,
+        analysisTimeMs: 3000,
+        multiPv: 3,
+        timeoutMs: 15000
+    });
+
+    assert.equal(result.structuredContent.ok, true);
+    assert.equal(result.structuredContent.status, 'completed');
+    assert.equal(result.structuredContent.backend, 'stockfish_wasm');
+    assert.equal(result.structuredContent.sideToMove, 'black');
+    assert.equal(result.structuredContent.bestMove.san, 'Rd5');
+    assert.equal(result.structuredContent.bestMove.uci, 'd8d5');
+    assert.ok(result.structuredContent.analysis.reachedDepth >= 8);
+    assert.equal(result.structuredContent.analysis.requestedAnalysisTimeMs, 3000);
+    assert.match(result.content[0].text, /best_move_san=Rd5/);
+    assert.match(result.content[0].text, /board_echo:/);
 });
 
 test('run_python_file supports inline Python code for one-off benchmark calculations', async () => {
@@ -231,6 +518,7 @@ test('read_document extracts Word paragraphs and tables as structured JSON', asy
         assert.equal(result.structuredContent.truncated, false);
         assert.equal(result.structuredContent.reasoningReady, true);
         assert.equal(result.structuredContent.observationContract.reasoning_ready, true);
+        assert.equal(result.structuredContent.observationContract.semantic_level, 'structure');
     } finally {
         fs.rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -487,6 +775,560 @@ test('paper_metadata_lookup can list earlier works for an OpenAlex author id', a
     });
 });
 
+test('video frame fallback builds cookie-free local Invidious companion URLs', () => {
+    const url = buildInvidiousVideoProxyUrl(
+        'https://invidious.example.test/',
+        'https://www.youtube.com/watch?v=L1vXCYZAYYM',
+        18
+    );
+
+    assert.equal(
+        url,
+        'https://invidious.example.test/latest_version?id=L1vXCYZAYYM&itag=18&local=true'
+    );
+    assert.equal(buildInvidiousVideoProxyUrl('http://unsafe.example', 'L1vXCYZAYYM'), '');
+});
+
+test('web_archive_lookup ranks dynamic archived URLs and opens a selected source snapshot', async () => {
+    await withServer((request, response) => {
+        if (request.url.startsWith('/cdx')) {
+            response.writeHead(200, { 'content-type': 'application/json' });
+            response.end(JSON.stringify([
+                ['timestamp', 'original', 'statuscode', 'mimetype', 'digest', 'length'],
+                ['20240102030405', 'https://offline.example/Search/Results?topic=other', '200', 'text/html', 'OTHER', '1200'],
+                ['20241212025015', 'https://offline.example/Search/Results?topic=633&year=2020', '200', 'text/html', 'MATCH', '4200'],
+                ['20251212025015', 'https://offline.example/Search/Results?topic=633&year=2020&retry=1', '200', 'text/html', 'LATER', '3100']
+            ]));
+            return;
+        }
+        if (request.url.startsWith('/web/20241212025015id_/')) {
+            response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+            response.end(`
+                <html><head><title>Archived result list</title></head><body>
+                    <main>
+                        <h1>Historical result</h1>
+                        <p>Content Provider: University repository</p>
+                        <p>Country: de</p>
+                        <p>Country: gt</p>
+                    </main>
+                </body></html>
+            `);
+            return;
+        }
+        response.writeHead(404);
+        response.end('not found');
+    }, async (baseUrl) => {
+        const captures = await webArchiveLookup({
+            url: 'https://offline.example/Search/Results?',
+            mode: 'captures',
+            matchType: 'prefix',
+            contains: '633 2020',
+            providers: ['internet_archive'],
+            cdxBaseUrl: `${baseUrl}/cdx`,
+            replayBaseUrl: `${baseUrl}/web`,
+            maxResults: 5
+        });
+
+        assert.notEqual(captures.isError, true);
+        assert.equal(captures.structuredContent.captureCount, 2);
+        assert.equal(captures.structuredContent.captures[0].timestamp, '20241212025015');
+        assert.equal(captures.structuredContent.captures[0].matchCoverage, 1);
+        assert.equal(captures.structuredContent.rankingPolicy, 'earliest_term_matching_capture');
+        assert.match(captures.content[0].text, /^best_next_call=web_archive_lookup/);
+
+        const opened = await webArchiveLookup({
+            url: captures.structuredContent.captures[0].originalUrl,
+            mode: 'open',
+            provider: 'internet_archive',
+            timestamp: captures.structuredContent.captures[0].timestamp,
+            replayBaseUrl: `${baseUrl}/web`,
+            query: 'Country'
+        });
+
+        assert.notEqual(opened.isError, true);
+        assert.equal(opened.structuredContent.kind, 'web_archive_snapshot');
+        assert.equal(opened.structuredContent.archiveProvider, 'internet_archive');
+        assert.match(opened.content[0].text, /Country: gt/);
+        assert.equal(opened.structuredContent.repeatedLabeledFields[0].label, 'Country');
+        assert.match(opened.structuredContent.repeatedLabeledFieldSummary, /gt x1/);
+    });
+});
+
+test('web_archive_lookup relaxes mistaken crawl-year bounds, backs off optional URL anchors, and opens evidence in search mode', async () => {
+    let boundedRequests = 0;
+    let anchorRequests = 0;
+    let firstUnboundedOriginalFilters = [];
+    await withServer((request, response) => {
+        if (request.url.startsWith('/cdx')) {
+            const requestUrl = new URL(request.url, 'http://localhost');
+            const originalFilters = requestUrl.searchParams.getAll('filter')
+                .filter((value) => value.startsWith('original:'));
+            assert.equal(requestUrl.searchParams.get('matchType'), 'prefix');
+            assert.equal(requestUrl.searchParams.get('url'), 'https://offline.example/Search/Results?');
+            response.writeHead(200, { 'content-type': 'application/json' });
+            if (requestUrl.searchParams.has('from') || requestUrl.searchParams.has('to')) {
+                boundedRequests += 1;
+                response.end(JSON.stringify([
+                    ['timestamp', 'original', 'statuscode', 'mimetype', 'digest', 'length']
+                ]));
+                return;
+            }
+            if (!firstUnboundedOriginalFilters.length) {
+                firstUnboundedOriginalFilters = originalFilters;
+            }
+            if (originalFilters.some((value) => /121/i.test(value))) {
+                response.end(JSON.stringify([
+                    ['timestamp', 'original', 'statuscode', 'mimetype', 'digest', 'length']
+                ]));
+                return;
+            }
+            if (
+                originalFilters.some((value) => /ddc/i.test(value)) &&
+                originalFilters.some((value) => /633/i.test(value)) &&
+                originalFilters.some((value) => /2020/i.test(value)) &&
+                originalFilters.some((value) => /unknown/i.test(value))
+            ) {
+                anchorRequests += 1;
+                response.end(JSON.stringify([
+                    ['timestamp', 'original', 'statuscode', 'mimetype', 'digest', 'length'],
+                    ['20230102030405', 'https://offline.example/Search/Results?lookfor=ddc:633&filter=year:2020', '200', 'text/html', 'BLOCKED', '1200'],
+                    ['20241212025015', 'https://offline.example/Search/Results?lookfor=ddc:633&filter=year:2020', '200', 'text/html', 'MATCH', '4200']
+                ]));
+                return;
+            }
+            response.end(JSON.stringify([
+                ['timestamp', 'original', 'statuscode', 'mimetype', 'digest', 'length']
+            ]));
+            return;
+        }
+        if (request.url.startsWith('/web/20241212025015id_/')) {
+            response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+            response.end(`
+                <html><head><title>Archived catalog</title></head><body>
+                    <p>Country: de</p>
+                    <p>Country: de</p>
+                    <p>Country: gt</p>
+                    <p>Search the list from the filter Content Provider with 2 entries.</p>
+                    <p>(4) German Repository (Number of documents: 4)</p>
+                    <p>(1) Universidad de San Carlos de Guatemala (Number of documents: 1)</p>
+                    <p>Go</p>
+                    <p>Search the list from the filter Language with 1 entry.</p>
+                    <p>(5) Unknown (Number of documents: 5)</p>
+                    <p>Go</p>
+                </body></html>
+            `);
+            return;
+        }
+        if (request.url.startsWith('/web/20230102030405id_/')) {
+            response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+            response.end('<html><body>Making sure you are not a bot! Anubis proof-of-work scheme. Enable JavaScript to get past this challenge.</body></html>');
+            return;
+        }
+        response.writeHead(404);
+        response.end('not found');
+    }, async (baseUrl) => {
+        const result = await webArchiveLookup({
+            url: 'https://offline.example/Search/Results?',
+            mode: 'search',
+            matchType: 'prefix',
+            contains: 'DDC 633 unknown language article typenorm 121 year 2020 country flag',
+            query: 'country flag',
+            fromYear: 2020,
+            toYear: 2020,
+            providers: ['internet_archive'],
+            cdxBaseUrl: `${baseUrl}/cdx`,
+            replayBaseUrl: `${baseUrl}/web`,
+            scanLimit: 500
+        });
+
+        assert.notEqual(result.isError, true, result.content[0].text);
+        assert.equal(result.structuredContent.kind, 'web_archive_search_result');
+        assert.equal(result.structuredContent.captureDateBoundsRelaxed, true);
+        assert.equal(result.structuredContent.captureSearch.attempts[0].stopReason, 'no_resume_key');
+        assert.equal(result.structuredContent.selectedCapture.timestamp, '20241212025015');
+        assert.match(result.content[0].text, /Repeated labeled fields across the full source/);
+        assert.match(result.content[0].text, /gt x1/);
+        assert.match(result.content[0].text, /Faceted search filters across the full source/);
+        assert.match(result.content[0].text, /Universidad de San Carlos de Guatemala/);
+        assert.equal(result.structuredContent.facetedSearchFilters[1].label, 'Language');
+        assert.equal(result.structuredContent.facetedSearchFilters[1].values[0].value, 'Unknown');
+        assert.equal(boundedRequests, 0);
+        assert.ok(anchorRequests >= 1);
+        assert.ok(firstUnboundedOriginalFilters.some((value) => /unknown/i.test(value)));
+        assert.equal(firstUnboundedOriginalFilters.some((value) => /121/i.test(value)), false);
+    });
+});
+
+test('web_archive_lookup skips readable snapshots whose record fields do not reflect multiple URL constraints', async () => {
+    const originalUrl = 'https://offline.example/Search/Results?year[]=2020&language[]=unknown&doctype[]=Article';
+    await withServer((request, response) => {
+        if (request.url.startsWith('/cdx')) {
+            response.writeHead(200, { 'content-type': 'application/json' });
+            response.end(JSON.stringify([
+                ['timestamp', 'original', 'statuscode', 'mimetype', 'digest', 'length'],
+                ['20240102030405', originalUrl, '200', 'text/html', 'STALE', '4200'],
+                ['20240202030405', originalUrl, '200', 'text/html', 'MATCH', '4200']
+            ]));
+            return;
+        }
+        if (request.url.startsWith('/web/20240102030405id_/')) {
+            response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+            response.end(`
+                <html><body>
+                    <h2>Record 1) 1. Stale thesis</h2>
+                    <p>Year: 2017</p><p>Language: English</p>
+                    <p>Document Type: Bachelor thesis</p><p>Country: us</p>
+                    <h2>Record 2) 2. Stale book</h2>
+                    <p>Year: 2018</p><p>Language: German</p>
+                    <p>Document Type: Book</p><p>Country: de</p>
+                </body></html>
+            `);
+            return;
+        }
+        if (request.url.startsWith('/web/20240202030405id_/')) {
+            response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+            response.end(`
+                <html><body>
+                    <h2>Record 1) 1. Matching article</h2>
+                    <p>Year: 2020</p><p>Language: Unknown</p>
+                    <p>Document Type: Article</p><p>Country: gt</p>
+                    <h2>Record 2) 2. Matching article contribution</h2>
+                    <p>Year: 2020</p><p>Language: Unknown</p>
+                    <p>Document Type: Article contribution</p><p>Country: gt</p>
+                </body></html>
+            `);
+            return;
+        }
+        response.writeHead(404);
+        response.end('not found');
+    }, async (baseUrl) => {
+        const result = await webArchiveLookup({
+            url: 'https://offline.example/Search/Results?',
+            mode: 'search',
+            matchType: 'prefix',
+            contains: '2020 unknown Article',
+            query: 'Country',
+            providers: ['internet_archive'],
+            cdxBaseUrl: `${baseUrl}/cdx`,
+            replayBaseUrl: `${baseUrl}/web`,
+            maxResults: 5
+        });
+
+        assert.notEqual(result.isError, true, result.content[0].text);
+        assert.equal(result.structuredContent.kind, 'web_archive_search_result');
+        assert.equal(result.structuredContent.selectedCapture.timestamp, '20240202030405');
+        assert.equal(result.structuredContent.openAttempts[0].ok, false);
+        assert.equal(
+            result.structuredContent.openAttempts[0].error,
+            'archived_snapshot_query_constraints_not_reflected'
+        );
+        assert.deepEqual(
+            result.structuredContent.openAttempts[0].queryConstraintFidelity.mismatchedConstraints,
+            ['year', 'language', 'document_type']
+        );
+        assert.equal(result.structuredContent.queryConstraintFidelity.status, 'accepted');
+        assert.equal(result.structuredContent.recordFieldProjections.length, 2);
+        assert.match(result.content[0].text, /Document Type=Article/);
+        assert.match(result.content[0].text, /Country=gt/);
+        assert.match(result.content[0].text, /Country: gt/);
+    });
+});
+
+test('web_archive_lookup prefix ranking prefers stronger URL matches, then the earliest capture', async () => {
+    await withServer((request, response) => {
+        if (!request.url.startsWith('/cdx')) {
+            response.writeHead(404);
+            response.end('not found');
+            return;
+        }
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify([
+            ['timestamp', 'original', 'statuscode', 'mimetype', 'digest', 'length'],
+            ['20220102030405', 'https://offline.example/Search/Results?lookfor=ddc:633', '200', 'text/html', 'EARLY', '1200'],
+            ['20241212025015', 'https://offline.example/Search/Results?lookfor=ddc:633&year=2020', '200', 'text/html', 'LATE', '4200']
+        ]));
+    }, async (baseUrl) => {
+        const result = await webArchiveLookup({
+            url: 'https://offline.example/Search/Results?',
+            mode: 'captures',
+            matchType: 'prefix',
+            contains: 'ddc 633 2020',
+            providers: ['internet_archive'],
+            cdxBaseUrl: `${baseUrl}/cdx`,
+            maxResults: 5
+        });
+
+        assert.notEqual(result.isError, true, result.content[0].text);
+        assert.equal(result.structuredContent.captures[0].timestamp, '20241212025015');
+        assert.equal(result.structuredContent.captures[1].timestamp, '20220102030405');
+    });
+});
+
+test('web_archive_lookup retries one empty prefix index response before reporting not found', async () => {
+    let cdxRequests = 0;
+    await withServer((request, response) => {
+        if (request.url.startsWith('/cdx')) {
+            cdxRequests += 1;
+            const requestUrl = new URL(request.url, 'http://localhost');
+            const hasOriginalFilter = requestUrl.searchParams.getAll('filter')
+                .some((value) => value.startsWith('original:'));
+            response.writeHead(200, { 'content-type': 'application/json' });
+            if (hasOriginalFilter) {
+                response.end(JSON.stringify([
+                    ['timestamp', 'original', 'statuscode', 'mimetype', 'digest', 'length']
+                ]));
+                return;
+            }
+            response.end(JSON.stringify([
+                ['timestamp', 'original', 'statuscode', 'mimetype', 'digest', 'length'],
+                ['20241212025015', 'https://offline.example/Search/Results?catalog=true', '200', 'text/html', 'MATCH', '4200']
+            ]));
+            return;
+        }
+        if (request.url.startsWith('/web/20241212025015id_/')) {
+            response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+            response.end('<html><body><p>Country: gt</p></body></html>');
+            return;
+        }
+        response.writeHead(404);
+        response.end('not found');
+    }, async (baseUrl) => {
+        const result = await webArchiveLookup({
+            url: 'https://offline.example/Search/Results?',
+            mode: 'search',
+            matchType: 'prefix',
+            contains: 'catalog',
+            query: 'Country',
+            providers: ['internet_archive'],
+            cdxBaseUrl: `${baseUrl}/cdx`,
+            replayBaseUrl: `${baseUrl}/web`
+        });
+
+        assert.notEqual(result.isError, true, result.content[0].text);
+        assert.equal(cdxRequests, 2);
+        assert.equal(result.structuredContent.kind, 'web_archive_search_result');
+        assert.equal(
+            result.structuredContent.captureSearch.attempts[0].stopReason,
+            'all_url_terms_matched'
+        );
+        assert.match(result.content[0].text, /Country: gt/);
+    });
+});
+
+test('web_archive_lookup follows Internet Archive resume keys until the capture listing is exhausted', async () => {
+    let cdxRequests = 0;
+    await withServer((request, response) => {
+        if (!request.url.startsWith('/cdx')) {
+            response.writeHead(404);
+            response.end('not found');
+            return;
+        }
+        cdxRequests += 1;
+        const requestUrl = new URL(request.url, 'http://localhost');
+        response.writeHead(200, { 'content-type': 'application/json' });
+        if (requestUrl.searchParams.getAll('filter').some((value) => value.startsWith('original:'))) {
+            response.end(JSON.stringify([
+                ['timestamp', 'original', 'statuscode', 'mimetype', 'digest', 'length']
+            ]));
+            return;
+        }
+        if (!requestUrl.searchParams.get('resumeKey')) {
+            response.end(JSON.stringify([
+                ['timestamp', 'original', 'statuscode', 'mimetype', 'digest', 'length'],
+                ['20250102030405', 'https://offline.example/Search/Results?topic=633', '200', 'text/html', 'PARTIAL', '1200'],
+                [],
+                ['next-page-key']
+            ]));
+            return;
+        }
+        assert.equal(requestUrl.searchParams.get('resumeKey'), 'next-page-key');
+        response.end(JSON.stringify([
+            ['timestamp', 'original', 'statuscode', 'mimetype', 'digest', 'length'],
+            ['20241212025015', 'https://offline.example/Search/Results?topic=633&year=2020', '200', 'text/html', 'MATCH', '4200']
+        ]));
+    }, async (baseUrl) => {
+        const captures = await webArchiveLookup({
+            url: 'https://offline.example/Search/Results?',
+            mode: 'captures',
+            matchType: 'prefix',
+            providers: ['internet_archive'],
+            cdxBaseUrl: `${baseUrl}/cdx`,
+            scanLimit: 1000,
+            maxResults: 5
+        });
+
+        assert.notEqual(captures.isError, true);
+        assert.equal(cdxRequests, 2);
+        assert.equal(captures.structuredContent.exactTermMatch, true);
+        assert.equal(captures.structuredContent.captures[0].matchCoverage, 1);
+        assert.equal(captures.structuredContent.attempts[0].pageCount, 2);
+        assert.equal(captures.structuredContent.attempts[0].stopReason, 'no_resume_key');
+    });
+});
+
+test('transcribe_audio rejects a missing staged path before loading Whisper', async () => {
+    const result = await handleToolCall({
+        params: {
+            name: 'transcribe_audio',
+            arguments: {
+                path: path.join(os.tmpdir(), `missing-audio-${Date.now()}.mp3`),
+                model: 'small',
+                timeoutMs: 180000
+            }
+        }
+    });
+
+    assert.equal(result.isError, true);
+    assert.equal(result.details.status, 'not_found');
+    assert.equal(result.details.failureReason, 'local_audio_path_not_found');
+    assert.match(result.content[0].text, /exact current attached_files path/i);
+});
+
+test('read_presentation reports full and truncated slide coverage structurally', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ailis-pptx-'));
+    try {
+        const pptxPath = path.join(tmpDir, 'sample.pptx');
+        const code = [
+            'from pptx import Presentation',
+            'import sys',
+            'prs = Presentation()',
+            'for title in ["First slide evidence", "Second slide evidence"]:',
+            '    slide = prs.slides.add_slide(prs.slide_layouts[5])',
+            '    slide.shapes.title.text = title',
+            'prs.save(sys.argv[1])'
+        ].join('\n');
+        const created = spawnSync('python', ['-c', code, pptxPath], { encoding: 'utf8' });
+        assert.equal(created.status, 0, created.stderr || created.stdout);
+
+        const complete = await readPresentation({ path: pptxPath });
+        assert.equal(complete.isError, undefined, complete.content[0].text);
+        assert.equal(complete.structuredContent.total_slides, 2);
+        assert.equal(complete.structuredContent.returned_slides, 2);
+        assert.equal(complete.details.complete, true);
+        assert.equal(complete.details.truncated, false);
+        assert.equal(complete.details.observationContract.semantic_level, 'structure');
+
+        const partial = await readPresentation({ path: pptxPath, maxSlides: 1 });
+        assert.equal(partial.details.status, 'partial');
+        assert.equal(partial.details.complete, false);
+        assert.equal(partial.details.truncated, true);
+        assert.deepEqual(partial.details.coverage, {
+            totalSlides: 2,
+            returnedSlides: 1,
+            matchingSlides: 0
+        });
+    } finally {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+});
+
+test('paper_metadata_lookup resolves an exact author name into chronological earlier works', async () => {
+    await withServer((request, response) => {
+        const url = new URL(request.url || '/', 'http://127.0.0.1');
+        response.setHeader('content-type', 'application/json');
+        if (url.pathname === '/openalex/authors') {
+            assert.equal(url.searchParams.get('search'), 'Pietro Murano');
+            response.end(JSON.stringify({
+                results: [{
+                    id: 'https://openalex.org/A5047423326',
+                    display_name: 'Pietro Murano',
+                    works_count: 42,
+                    cited_by_count: 120
+                }]
+            }));
+            return;
+        }
+        if (url.pathname === '/openalex/works') {
+            assert.equal(url.searchParams.get('filter'), 'author.id:https://openalex.org/A5047423326');
+            assert.equal(url.searchParams.get('sort'), 'publication_date:asc');
+            response.end(JSON.stringify({
+                results: [
+                    {
+                        id: 'https://openalex.org/W1',
+                        display_name: 'Mapping human-oriented information to software agents for online systems usage',
+                        publication_year: 2001,
+                        publication_date: '2001-01-01',
+                        authorships: [{ author: { display_name: 'Pietro Murano', id: 'https://openalex.org/A5047423326' } }]
+                    },
+                    {
+                        id: 'https://openalex.org/W2',
+                        display_name: 'Later paper',
+                        publication_year: 2016,
+                        authorships: [{ author: { display_name: 'Pietro Murano', id: 'https://openalex.org/A5047423326' } }]
+                    }
+                ]
+            }));
+            return;
+        }
+        response.writeHead(404);
+        response.end(JSON.stringify({ message: `not found: ${url.pathname}` }));
+    }, async (baseUrl) => {
+        const result = await paperMetadataLookup({
+            author: 'Pietro Murano',
+            beforeYear: 2015,
+            openAlexBaseUrl: `${baseUrl}/openalex/works`,
+            openAlexAuthorsBaseUrl: `${baseUrl}/openalex/authors`
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.equal(result.structuredContent.authorId, 'https://openalex.org/A5047423326');
+        assert.equal(result.structuredContent.resolvedAuthor.name, 'Pietro Murano');
+        assert.equal(result.structuredContent.bestMatch.title, 'Mapping human-oriented information to software agents for online systems usage');
+        assert.equal(result.structuredContent.results.length, 1);
+    });
+});
+
+test('paper_metadata_lookup retries broad OpenAlex title search after exact lookup returns no candidates', async () => {
+    let exactCalls = 0;
+    let broadCalls = 0;
+    let broadQuery = '';
+    await withServer((request, response) => {
+        const url = new URL(request.url || '/', 'http://127.0.0.1');
+        response.setHeader('content-type', 'application/json');
+        if (url.pathname === '/openalex/works') {
+            if (url.searchParams.get('search.exact')) {
+                exactCalls += 1;
+                response.end(JSON.stringify({ results: [] }));
+                return;
+            }
+            broadCalls += 1;
+            broadQuery = url.searchParams.get('search') || '';
+            response.end(JSON.stringify({
+                results: [{
+                    id: 'https://openalex.org/W123',
+                    display_name: 'Pie Menus or Linear Menus, Which Is Better?',
+                    publication_year: 2015,
+                    authorships: [
+                        { author: { display_name: 'Pietro Murano', id: 'https://openalex.org/A5047423326' } },
+                        { author: { display_name: 'Iram N. Khan', id: 'https://openalex.org/A5016585278' } }
+                    ]
+                }]
+            }));
+            return;
+        }
+        if (url.pathname === '/crossref/works') {
+            response.end(JSON.stringify({ message: { items: [] } }));
+            return;
+        }
+        response.writeHead(404);
+        response.end(JSON.stringify({ message: `not found: ${url.pathname}` }));
+    }, async (baseUrl) => {
+        const result = await paperMetadataLookup({
+            title: 'Pie Menus or Linear Menus, Which Is Better?',
+            year: 2015,
+            openAlexBaseUrl: `${baseUrl}/openalex/works`,
+            crossrefBaseUrl: `${baseUrl}/crossref/works`
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.equal(exactCalls, 1);
+        assert.equal(broadCalls, 1);
+        assert.equal(broadQuery, 'Pie Menus or Linear Menus, Which Is Better');
+        assert.equal(result.structuredContent.bestMatch.title, 'Pie Menus or Linear Menus, Which Is Better?');
+        assert.ok(result.structuredContent.attempts.some((attempt) => attempt.source === 'openalex_title_fallback'));
+    });
+});
+
 test('paper_metadata_lookup supports author-year-topic bibliographic discovery', async () => {
     let openAlexAuthorSearch = '';
     let openAlexScopedFilter = '';
@@ -720,6 +1562,41 @@ test('github_repo_read parses common GitHub repository references', () => {
     });
 });
 
+test('web_search suggests github_repo_read for a GitHub blob result', async () => {
+    await withServer((request, response) => {
+        const url = new URL(request.url || '/', 'http://127.0.0.1');
+        assert.equal(url.pathname, '/search');
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({
+            results: [{
+                title: 'Project changelog source',
+                url: 'https://github.com/example/project/blob/v1.2/docs/changelog.rst',
+                content: 'Official release changelog source file.'
+            }]
+        }));
+    }, async (baseUrl) => {
+        const result = await webSearch({
+            query: 'project version 1.2 changelog',
+            provider: 'searxng',
+            searxngUrl: baseUrl,
+            maxResults: 5
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.deepEqual(result.structuredContent.suggestedNextCalls[0], {
+            tool: 'github_repo_read',
+            args: {
+                repo: 'example/project',
+                mode: 'file',
+                path: 'docs/changelog.rst',
+                ref: 'v1.2',
+                maxChars: 30000
+            },
+            reason: 'Read the linked GitHub file through the repository API: Project changelog source'
+        });
+    });
+});
+
 test('web_search can parse Bing HTML result blocks for fallback search', () => {
     const html = `
         <html><body>
@@ -780,6 +1657,17 @@ test('web_search can parse Yahoo result blocks and decode redirect URLs', () => 
     assert.match(results[0].snippet, /view of history/i);
 });
 
+test('Yahoo fallback parsing excludes Yahoo navigation controls', () => {
+    const html = `
+        <a href="https://search.yahoo.com/local/s?p=BASE+DDC+633">Local</a>
+        <a href="https://scout.yahoo.com/chat?q=BASE+DDC+633">Yahoo Scout</a>
+        <a href="https://news.search.yahoo.com/search?p=BASE+DDC+633">News</a>
+        <a href="https://oai.base-search.net/">BASE OAI Interface</a>
+    `;
+    const results = extractYahooResults(html, 5);
+    assert.deepEqual(results.map((result) => result.url), ['https://oai.base-search.net/']);
+});
+
 test('scholarly search can parse arXiv DOI API entries into PDF candidates', () => {
     const xml = `
         <feed>
@@ -831,20 +1719,37 @@ test('web_search can parse GitHub repository API fallback results', () => {
     );
 });
 
-test('web_search chooses provider chain while keeping GitHub backend first for repository queries', () => {
+test('web_search auto chain uses no-Docker Python search while skipping unconfigured local JSON services', () => {
     const previousProvider = process.env.AILIS_WEB_SEARCH_PROVIDER;
+    const previousSearxng = process.env.AILIS_SEARXNG_URL;
+    const previousFirecrawl = process.env.AILIS_FIRECRAWL_URL;
     delete process.env.AILIS_WEB_SEARCH_PROVIDER;
+    delete process.env.AILIS_SEARXNG_URL;
+    delete process.env.AILIS_FIRECRAWL_URL;
     try {
         const githubBackends = normalizeSearchBackends({}, 'site:github.com Attention Is All You Need implementation').map((backend) => backend.id);
         assert.equal(githubBackends[0], 'github_repositories');
-        assert.equal(githubBackends[1], 'searxng_json');
-        assert.ok(githubBackends.includes('firecrawl_search'));
+        assert.equal(githubBackends[1], 'python_search');
+        assert.ok(!githubBackends.includes('searxng_json'));
+        assert.ok(!githubBackends.includes('firecrawl_search'));
+        assert.ok(githubBackends.includes('bing_html'));
         assert.ok(githubBackends.includes('duckduckgo_lite'));
 
         const generalBackends = normalizeSearchBackends({}, 'Playwright locator waitFor official docs').map((backend) => backend.id);
-        assert.equal(generalBackends[0], 'searxng_json');
-        assert.equal(generalBackends[1], 'firecrawl_search');
+        assert.equal(generalBackends[0], 'python_search');
+        assert.ok(generalBackends.includes('wikipedia_search'));
+        assert.ok(!generalBackends.includes('searxng_json'));
+        assert.ok(!generalBackends.includes('firecrawl_search'));
         assert.ok(generalBackends.includes('bing_html'));
+
+        const configuredBackends = normalizeSearchBackends({
+            searxngUrl: 'http://127.0.0.1:18080',
+            firecrawlUrl: 'http://127.0.0.1:13002'
+        }, 'Playwright locator waitFor official docs').map((backend) => backend.id);
+        assert.equal(configuredBackends[0], 'searxng_json');
+        assert.equal(configuredBackends[1], 'firecrawl_search');
+        assert.equal(configuredBackends[2], 'python_search');
+        assert.ok(configuredBackends.includes('bing_html'));
 
         const htmlBackends = normalizeSearchBackends({ provider: 'html' }, 'Playwright locator waitFor official docs').map((backend) => backend.id);
         assert.deepEqual(htmlBackends, ['bing_html', 'duckduckgo_lite', 'duckduckgo_html', 'yahoo_html']);
@@ -854,6 +1759,206 @@ test('web_search chooses provider chain while keeping GitHub backend first for r
         } else {
             process.env.AILIS_WEB_SEARCH_PROVIDER = previousProvider;
         }
+        if (previousSearxng === undefined) {
+            delete process.env.AILIS_SEARXNG_URL;
+        } else {
+            process.env.AILIS_SEARXNG_URL = previousSearxng;
+        }
+        if (previousFirecrawl === undefined) {
+            delete process.env.AILIS_FIRECRAWL_URL;
+        } else {
+            process.env.AILIS_FIRECRAWL_URL = previousFirecrawl;
+        }
+    }
+});
+
+test('web_search domain filters normalize hosts and include subdomains only', () => {
+    assert.deepEqual(
+        normalizeSearchDomains(['https://www.wikipedia.org/wiki/Test', '*.Example.COM', 'wikipedia.org']),
+        ['wikipedia.org', 'example.com']
+    );
+    const results = filterSearchResultsByDomains([
+        { title: 'Wikipedia', url: 'https://en.wikipedia.org/wiki/Test' },
+        { title: 'Lookalike', url: 'https://wikipedia.org.example.test/fake' },
+        { title: 'Other', url: 'https://example.test/other' }
+    ], ['wikipedia.org']);
+    assert.deepEqual(results.map((result) => result.title), ['Wikipedia']);
+});
+
+test('web_search can aggregate structured Wikipedia search results without task-specific rules', async () => {
+    await withServer((request, response) => {
+        const url = new URL(request.url || '/', 'http://127.0.0.1');
+        assert.equal(url.pathname, '/w/api.php');
+        assert.equal(url.searchParams.get('action'), 'query');
+        assert.equal(url.searchParams.get('list'), 'search');
+        assert.match(url.searchParams.get('srsearch') || '', /1928 Summer Olympics/);
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({
+            query: {
+                search: [
+                    {
+                        pageid: 86224,
+                        title: '1928 Summer Olympics',
+                        snippet: 'The <span class="searchmatch">1928 Summer Olympics</span> were held in Amsterdam.'
+                    }
+                ]
+            }
+        }));
+    }, async (baseUrl) => {
+        const result = await webSearch({
+            query: '1928 Summer Olympics number of athletes by country',
+            domains: ['wikipedia.org'],
+            backends: ['wikipedia_search'],
+            wikipediaSearchUrl: `${baseUrl}/w/api.php`,
+            maxResults: 5
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.equal(result.structuredContent.backend, 'wikipedia_search');
+        assert.equal(result.structuredContent.attempts[0].backend, 'wikipedia_search');
+        assert.equal(result.structuredContent.results[0].url, 'https://en.wikipedia.org/wiki/1928_Summer_Olympics');
+        assert.match(result.content[0].text, /1928 Summer Olympics/);
+    });
+});
+
+test('managed SearXNG manifest is resolved without requiring a user URL', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ailis-managed-searxng-'));
+    const configDir = path.join(tempDir, 'searxng-config');
+    fs.mkdirSync(configDir, { recursive: true });
+    fs.writeFileSync(path.join(configDir, 'settings.yml'), 'use_default_settings: true\n', 'utf8');
+    const manifestPath = path.join(tempDir, 'managed-searxng.json');
+    fs.writeFileSync(manifestPath, JSON.stringify({
+        python: process.execPath,
+        args: ['-e', ''],
+        cwd: '.',
+        settingsPath: 'searxng-config/settings.yml',
+        defaultPort: 18889,
+        bindAddress: '127.0.0.1',
+        env: {
+            SEARXNG_SETTINGS_PATH: 'searxng-config/settings.yml'
+        }
+    }), 'utf8');
+    try {
+        const manifest = loadManagedSearxngManifest({ managedSearxngManifest: manifestPath });
+        assert.equal(manifest.command, process.execPath);
+        assert.equal(manifest.defaultPort, 18889);
+        assert.equal(manifest.env.SEARXNG_SETTINGS_PATH, path.join(configDir, 'settings.yml'));
+        assert.deepEqual(managedSearxngPortCandidates(manifest, { managedSearxngPort: 19001 }).slice(0, 2), [19001, 18889]);
+        assert.equal(managedSearxngAllowedForSearch({}), true);
+        assert.equal(managedSearxngAllowedForSearch({ provider: 'html' }), false);
+        assert.equal(managedSearxngAllowedForSearch({ backends: ['python_search'] }), false);
+        assert.equal(managedSearxngAllowedForSearch({ provider: 'searxng' }), true);
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test('web_search auto-start path reuses an AILIS-managed local SearXNG service', async () => {
+    const observedSearchRequests = [];
+    await withServer((request, response) => {
+        const url = new URL(request.url || '/', 'http://127.0.0.1');
+        observedSearchRequests.push(url);
+        assert.equal(url.pathname, '/search');
+        assert.equal(url.searchParams.get('format'), 'json');
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({
+            results: [
+                {
+                    title: 'AILIS managed SearXNG result',
+                    url: 'https://example.test/managed-searxng',
+                    content: 'Managed SearXNG returned this result through the automatic local service path.'
+                }
+            ]
+        }));
+    }, async (baseUrl) => {
+        const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ailis-managed-searxng-'));
+        const configDir = path.join(tempDir, 'searxng-config');
+        fs.mkdirSync(configDir, { recursive: true });
+        fs.writeFileSync(path.join(configDir, 'settings.yml'), 'use_default_settings: true\n', 'utf8');
+        const manifestPath = path.join(tempDir, 'managed-searxng.json');
+        fs.writeFileSync(manifestPath, JSON.stringify({
+            python: process.execPath,
+            args: ['-e', 'setTimeout(() => {}, 60000)'],
+            cwd: '.',
+            settingsPath: 'searxng-config/settings.yml',
+            defaultPort: Number(new URL(baseUrl).port),
+            bindAddress: '127.0.0.1',
+            healthPath: '/search?q=ailis&format=json'
+        }), 'utf8');
+        try {
+            const result = await webSearch({
+                query: 'managed searxng automatic local service',
+                managedSearxngManifest: manifestPath,
+                managedSearxngPort: Number(new URL(baseUrl).port),
+                maxResults: 3,
+                recency: 7,
+                timeoutMs: 3000,
+                overallTimeoutMs: 9000
+            });
+            assert.equal(result.isError, undefined, result.content[0].text);
+            assert.equal(result.structuredContent.backend, 'aggregated');
+            assert.equal(result.structuredContent.managedSearxng.source, 'existing');
+            assert.ok(result.structuredContent.results.some((entry) => entry.url === 'https://example.test/managed-searxng'));
+            assert.ok(result.structuredContent.searchAggregation.successfulBackends.includes('searxng_json'));
+            assert.ok(observedSearchRequests.some((url) => (
+                /managed searxng automatic local service/i.test(url.searchParams.get('q') || '')
+                && url.searchParams.get('time_range') === 'week'
+            )));
+        } finally {
+            fs.rmSync(tempDir, { recursive: true, force: true });
+        }
+    });
+});
+
+test('web_search fast-falls back when managed SearXNG startup is unhealthy', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ailis-managed-searxng-fail-'));
+    const configDir = path.join(tempDir, 'searxng-config');
+    fs.mkdirSync(configDir, { recursive: true });
+    fs.writeFileSync(path.join(configDir, 'settings.yml'), 'use_default_settings: true\n', 'utf8');
+    const port = await reserveUnusedPort();
+    const manifestPath = path.join(tempDir, 'managed-searxng.json');
+    fs.writeFileSync(manifestPath, JSON.stringify({
+        python: process.execPath,
+        args: ['-e', 'setTimeout(() => {}, 60000)'],
+        cwd: '.',
+        settingsPath: 'searxng-config/settings.yml',
+        defaultPort: port,
+        bindAddress: '127.0.0.1',
+        healthPath: '/search?q=ailis&format=json'
+    }), 'utf8');
+    try {
+        const startedAt = Date.now();
+        const result = await webSearch({
+            query: 'managed searxng unhealthy fallback',
+            backends: ['searxng_json'],
+            managedSearxngManifest: manifestPath,
+            managedSearxngPort: port,
+            managedSearxngStartupTimeoutMs: 200,
+            managedSearxngFailureCooldownMs: 60000,
+            timeoutMs: 1000,
+            overallTimeoutMs: 2500,
+            maxResults: 1
+        });
+        const firstElapsedMs = Date.now() - startedAt;
+        assert.equal(result.isError, true);
+        assert.ok(firstElapsedMs < 5000, `unhealthy managed SearXNG should not block web_search for ${firstElapsedMs}ms`);
+
+        const secondStartedAt = Date.now();
+        await webSearch({
+            query: 'managed searxng unhealthy fallback',
+            backends: ['searxng_json'],
+            managedSearxngManifest: manifestPath,
+            managedSearxngPort: port,
+            managedSearxngStartupTimeoutMs: 5000,
+            managedSearxngFailureCooldownMs: 60000,
+            timeoutMs: 1000,
+            overallTimeoutMs: 2500,
+            maxResults: 1
+        });
+        const secondElapsedMs = Date.now() - secondStartedAt;
+        assert.ok(secondElapsedMs < 3000, `recent managed SearXNG failure should be cooldown-skipped, got ${secondElapsedMs}ms`);
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
     }
 });
 
@@ -885,7 +1990,45 @@ test('web_search uses SearXNG JSON provider before HTML fallback', async () => {
         assert.equal(result.structuredContent.backend, 'searxng_json');
         assert.equal(result.structuredContent.attempts[0].backend, 'searxng_json');
         assert.equal(result.structuredContent.results[0].url, 'https://www.bilibili.com/video/BV1rXBoBoEv1/');
-        assert.equal(result.structuredContent.suggestedNextCalls[0].tool, 'web_fetch');
+        assert.equal(result.structuredContent.suggestedNextCalls[0].tool, 'open_page');
+    });
+});
+
+test('web_search python_search backend can call SearXNG-compatible JSON without Docker', async () => {
+    await withServer((request, response) => {
+        const url = new URL(request.url || '/', 'http://127.0.0.1');
+        assert.equal(url.pathname, '/search');
+        assert.equal(url.searchParams.get('format'), 'json');
+        assert.match(url.searchParams.get('q') || '', /Top 5 Silliest Animal Moments/);
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({
+            results: [
+                {
+                    title: 'BBC Earth Top 5 Silliest Animal Moments transcript',
+                    url: 'https://example.test/bbc-earth-silliest-animal-moments',
+                    content: 'The segment mentions rockhopper penguins as the silly bird moment.'
+                }
+            ]
+        }));
+    }, async (baseUrl) => {
+        const result = await webSearch({
+            query: 'BBC Earth Top 5 Silliest Animal Moments bird species',
+            backends: ['python_search'],
+            searxngUrl: baseUrl,
+            maxResults: 5
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.equal(result.structuredContent.backend, 'python_search');
+        assert.equal(result.structuredContent.attempts[0].backend, 'python_search');
+        assert.equal(result.structuredContent.attempts[0].workerAttempts[0].backend, 'searxng_json_python');
+        assert.equal(result.structuredContent.results[0].url, 'https://example.test/bbc-earth-silliest-animal-moments');
+        assert.equal(result.structuredContent.webSearchOutput.webSearchCall.type, 'web_search_call');
+        assert.equal(result.structuredContent.webSearchOutput.webSearchCall.action.type, 'search');
+        assert.equal(result.structuredContent.webSearchOutput.webSearchCall.action.query, 'BBC Earth Top 5 Silliest Animal Moments bird species');
+        assert.equal(result.structuredContent.webSearchOutput.webSearchCall.action.search_context_size, 'medium');
+        assert.equal(result.structuredContent.webSearchOutput.search.results[0].url, 'https://example.test/bbc-earth-silliest-animal-moments');
+        assert.match(result.content[0].text, /rockhopper penguins/i);
     });
 });
 
@@ -1028,7 +2171,55 @@ test('web_search aggregates provider chain when the first successful backend is 
         assert.ok(result.structuredContent.searchAggregation.enabled);
         assert.ok(result.structuredContent.searchAggregation.successfulBackends.includes('searxng_json'));
         assert.ok(result.structuredContent.searchAggregation.successfulBackends.includes('firecrawl_search'));
-        assert.equal(result.structuredContent.suggestedNextCalls[0].tool, 'web_fetch');
+        assert.equal(result.structuredContent.suggestedNextCalls[0].tool, 'open_page');
+    });
+});
+
+test('web_search aggregates configured backends even when the first result looks sufficient', async () => {
+    const requests = [];
+    await withServer((request, response) => {
+        const url = new URL(request.url || '/', 'http://127.0.0.1');
+        requests.push(url.pathname);
+        if (url.pathname === '/search') {
+            response.writeHead(200, { 'content-type': 'application/json' });
+            response.end(JSON.stringify({
+                results: [{
+                    title: 'Official Example API documentation reference',
+                    url: 'https://docs.example.test/api/reference',
+                    content: 'Official Example API documentation and complete reference.'
+                }]
+            }));
+            return;
+        }
+        if (url.pathname === '/v1/search') {
+            response.writeHead(200, { 'content-type': 'application/json' });
+            response.end(JSON.stringify({
+                success: true,
+                data: [{
+                    title: 'Example API release notes',
+                    url: 'https://example.test/releases',
+                    description: 'Current release notes for the Example API.'
+                }]
+            }));
+            return;
+        }
+        response.writeHead(404, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ error: 'not found' }));
+    }, async (baseUrl) => {
+        const result = await webSearch({
+            query: 'Official Example API documentation reference',
+            provider: 'searxng,firecrawl',
+            searxngUrl: baseUrl,
+            firecrawlUrl: baseUrl,
+            maxResults: 5
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.equal(result.structuredContent.backend, 'aggregated');
+        assert.deepEqual(requests.sort(), ['/search', '/v1/search'].sort());
+        assert.equal(result.structuredContent.attempts.filter((attempt) => attempt.ok).length, 2);
+        assert.ok(result.structuredContent.searchAggregation.successfulBackends.includes('searxng_json'));
+        assert.ok(result.structuredContent.searchAggregation.successfulBackends.includes('firecrawl_search'));
     });
 });
 
@@ -1221,7 +2412,7 @@ test('web_search reranks Chinese game guide results ahead of unrelated popular p
     assert.ok(ranked[0].queryMatchedTerms.includes('小光'));
     assert.ok(ranked[0].queryMatchedTerms.includes('攻略'));
     assert.deepEqual(ranked[0].queryMatchedSites, ['bilibili.com']);
-    assert.equal(calls[0].tool, 'web_fetch');
+    assert.equal(calls[0].tool, 'open_page');
     assert.equal(calls[0].args.url, 'https://www.bilibili.com/video/BV1rXBoBoEv1/');
 });
 
@@ -1272,7 +2463,8 @@ test('web_search extracts short Chinese guide targets and asks before following 
         assert.equal(result.structuredContent.searchConfidence.level, 'low');
         assert.equal(result.structuredContent.suggestedNextCalls.length, 0);
         assert.ok(result.structuredContent.candidateChoices.length >= 2);
-        assert.match(result.content[0].text, /具体指哪一个|should be clarified/);
+        assert.match(result.structuredContent.searchConfidence.clarificationQuestion, /具体指哪一个|clarif/i);
+        assert.doesNotMatch(result.content[0].text, /Retrieval diagnostic|Additional retrieval context/);
     });
 });
 
@@ -1296,6 +2488,25 @@ test('search confidence stays high when a short nickname has explicit game conte
     assert.equal(confidence.shouldAskUser, false);
     assert.equal(confidence.level, 'high');
     assert.ok(choices.length >= 1);
+});
+
+test('web_search contracts an overstuffed quoted-target query before backend retrieval', () => {
+    const query = [
+        'University of Leicester',
+        '"Can Hiccup Supply Enough Fish to Maintain a Dragon’s Diet"',
+        'fish bag volume m^3 paper pdf',
+        '"fish bag" "m^3" "Hiccup"',
+        'dragon diet'
+    ].join(' ');
+
+    assert.equal(
+        buildEffectiveSearchQuery(query),
+        'university leicester fish hiccup supply enough maintain dragon'
+    );
+    assert.equal(
+        buildEffectiveSearchQuery('"short quoted phrase" source'),
+        '"short quoted phrase" source'
+    );
 });
 
 test('web_search does not treat a site match alone as relevant evidence', () => {
@@ -1344,8 +2555,144 @@ test('web_search site-constrained rerank prefers high-signal NGA guide threads',
     assert.match(ranked[0].url, /bbs\.nga\.cn/);
     assert.deepEqual(ranked[0].queryMatchedSites, ['nga.cn']);
     assert.ok(ranked[0].queryMatchedTerms.includes('叶瞬光'));
-    assert.equal(calls[0].tool, 'web_fetch');
+    assert.equal(calls[0].tool, 'open_page');
     assert.match(calls[0].args.url, /bbs\.nga\.cn/);
+});
+
+test('web_search reranks official source documents ahead of mirrors and portal noise', () => {
+    const results = [
+        {
+            title: 'List of predictor base commands in scikit-learn july 2017 changelog AIs',
+            url: 'https://theresanaiforthat.com/s/list+of+predictor+base+commands+in+scikit-learn+july+2017+changelog/',
+            snippet: 'Browse 13 AIs for productivity, LLM management, data analysis and spreadsheets.'
+        },
+        {
+            title: 'Scribd Scikit-learn Release Notes July 2017 | PDF',
+            url: 'https://www.scribd.com/document/660158268/Scikit-learn',
+            snippet: 'Scikit-learn release notes mirrored as a PDF document.'
+        },
+        {
+            title: 'Yahoo',
+            url: 'https://www.yahoo.com/',
+            snippet: 'Yahoo homepage.'
+        },
+        {
+            title: 'scikit-learn: machine learning in Python',
+            url: 'https://scikit-learn.org/stable/index.html',
+            snippet: 'scikit-learn is a machine learning library for Python.'
+        },
+        {
+            title: 'Release History - scikit-learn documentation',
+            url: 'https://scikit-learn.org/stable/whats_new.html',
+            snippet: 'Release notes and changelog for scikit-learn versions.'
+        },
+        {
+            title: 'scikit-learn/doc/whats_new/v0.19.rst at main',
+            url: 'https://github.com/scikit-learn/scikit-learn/blob/main/doc/whats_new/v0.19.rst',
+            snippet: 'Bug fixes, July 2017, Other predictors.'
+        },
+        {
+            title: 'v0.19.rst.txt',
+            url: 'https://scikit-learn.org/dev/_sources/whats_new/v0.19.rst.txt',
+            snippet: 'July 2017 changelog source text. Other predictors and bug fixes.'
+        }
+    ];
+    const ranked = rankSearchResultsForFollowup(
+        results,
+        'Scikit-Learn July 2017 changelog predictor base command'
+    );
+
+    assert.equal(ranked[0].url, 'https://scikit-learn.org/dev/_sources/whats_new/v0.19.rst.txt');
+    assert.ok(ranked[0].sourceQualityScore > 0);
+    assert.ok(ranked.findIndex((item) => /theresanaiforthat\.com/.test(item.url)) >= 2);
+    assert.ok(ranked.findIndex((item) => /scribd\.com/.test(item.url)) >= 2);
+    assert.ok(ranked.findIndex((item) => /yahoo\.com/.test(item.url)) > 2);
+    assert.ok(ranked.findIndex((item) => /stable\/index\.html/.test(item.url)) > 2);
+});
+
+test('search aggregation preserves canonical metadata when duplicate SERP titles contain URL breadcrumbs', () => {
+    const url = 'https://en.wikipedia.org/wiki/1928_Summer_Olympics';
+    const merged = mergeSearchResultsForRerank([
+        {
+            title: 'Wikipedia https://en.wikipedia.org › wiki › 1928_Summer_Olympics 1928 Summer Olympics national flag bearers',
+            url,
+            snippet: 'A search-engine breadcrumb with unrelated trailing text.',
+            sourceBackend: 'python_search',
+            sourceEngines: ['html_search']
+        },
+        {
+            title: '1928 Summer Olympics',
+            url,
+            snippet: 'The 1928 Summer Olympics were held in Amsterdam.',
+            sourceBackend: 'wikipedia_search',
+            sourceEngines: ['wikipedia_api']
+        }
+    ]);
+
+    assert.equal(merged.length, 1);
+    assert.equal(merged[0].title, '1928 Summer Olympics');
+    assert.deepEqual(merged[0].sourceBackends, ['python_search', 'wikipedia_search']);
+    assert.match(merged[0].snippet, /breadcrumb/);
+    assert.match(merged[0].snippet, /held in Amsterdam/);
+    assert.equal('titleScore' in merged[0], false);
+});
+
+test('search reranking caps lexical saturation so repeated query terms do not erase source consensus', () => {
+    const query = 'Acme 2024 tournament participating teams player count';
+    const ranked = rankSearchResultsForFollowup([
+        {
+            title: 'Acme 2024 tournament participating teams player count standings',
+            url: 'https://single-source.example/acme-2024',
+            snippet: 'Acme tournament teams players count participating teams player count.',
+            sourceBackends: ['html_search'],
+            sourceEngines: ['engine_a']
+        },
+        {
+            title: 'Acme 2024 tournament',
+            url: 'https://consensus.example/acme-2024',
+            snippet: 'Participating teams and player count for the tournament.',
+            sourceBackends: ['search_a', 'search_b', 'search_c'],
+            sourceEngines: ['engine_a', 'engine_b']
+        }
+    ], query);
+
+    assert.equal(ranked[0].url, 'https://consensus.example/acme-2024');
+    assert.ok(ranked[1].queryScore > 100);
+    assert.ok(ranked[0].sourceConsensusScore > ranked[1].sourceConsensusScore);
+});
+
+test('search follow-up suggestions resolve HTML PDF wrappers with pdf_find_and_extract', () => {
+    const calls = buildSuggestedCallsFromSearchResults([{
+        title: 'Dragons are Tricksy - PDF',
+        url: 'https://journal.example/article/view/164228',
+        snippet: 'Emily Midkiff Fafnir article PDF'
+    }], { query: 'Emily Midkiff Fafnir Dragons are Tricksy' });
+
+    assert.equal(calls[0].tool, 'pdf_find_and_extract');
+    assert.equal(calls[0].args.url, 'https://journal.example/article/view/164228');
+});
+
+test('research ranking prefers an article detail page over issue and archive collections', () => {
+    const ranked = rankSearchResultsForFollowup([
+        {
+            title: 'Vol. 1 No. 2/2014 journal issue',
+            url: 'https://journal.example/issue/view/12461',
+            snippet: 'Emily Midkiff, June 2014, dragons article, pages 41-54'
+        },
+        {
+            title: 'Journal archive 2/2014',
+            url: 'https://journal.example/archive/2014-2',
+            snippet: 'Emily Midkiff dragons article published June 2014'
+        },
+        {
+            title: 'The Uncanny Dragons of Children\'s Literature',
+            url: 'https://journal.example/article/view/164228',
+            snippet: 'Article by Emily Midkiff about dragons in Fafnir'
+        }
+    ], 'Emily Midkiff Fafnir June 2014 dragons article');
+
+    assert.equal(ranked[0].url, 'https://journal.example/article/view/164228');
+    assert.ok(ranked[0].sourceQualityScore > ranked[1].sourceQualityScore);
 });
 
 test('web_research builds an evidence bundle from search and fetched pages', async () => {
@@ -1392,18 +2739,47 @@ test('web_research builds an evidence bundle from search and fetched pages', asy
 
         assert.equal(result.isError, undefined, result.content[0].text);
         assert.equal(result.structuredContent.status, 'completed');
-        assert.equal(result.structuredContent.answerReadiness, 'ready');
+        assert.equal(result.structuredContent.type, 'function_call_output');
+        assert.equal(result.structuredContent.webSearchCall.type, 'web_search_call');
+        assert.equal(result.structuredContent.webSearchCall.action.type, 'search');
+        assert.equal(result.structuredContent.webSearchItem.type, 'web_search');
+        assert.equal(result.structuredContent.webSearchOutput.type, 'function_call_output');
+        assert.deepEqual(result.structuredContent.suggestedNextCalls[0], {
+            tool: 'open_page',
+            args: { url: `${baseUrl}/guide`, lineno: 1 },
+            reason: 'Open source: 莱特 - 绝区零WIKI_BWIKI'
+        });
+        assert.deepEqual(
+            result.structuredContent.webSearchOutput.suggestedNextCalls,
+            result.structuredContent.suggestedNextCalls
+        );
+        assert.equal(result.structuredContent.answerReadiness, undefined);
+        assert.equal(result.structuredContent.fetchedPageCount, 1);
         assert.equal(result.structuredContent.evidencePages.length, 1);
         assert.equal(result.structuredContent.evidencePages[0].url, `${baseUrl}/guide`);
-        assert.equal(result.structuredContent.evidencePages[0].evidenceQuality, 'sufficient_evidence');
-        assert.equal(result.structuredContent.evidencePages[0].reasoningReady, true);
-        assert.ok(result.structuredContent.evidencePages[0].evidenceScore >= 70);
+        assert.equal(result.structuredContent.evidencePages[0].evidenceQuality, undefined);
+        assert.equal(result.structuredContent.evidencePages[0].reasoningReady, undefined);
+        assert.equal(result.structuredContent.evidencePages[0].isEvidence, undefined);
+        assert.equal(result.structuredContent.evidencePages[0].evidenceGap, undefined);
         assert.ok(result.structuredContent.evidencePages[0].evidenceSnippets.length >= 1);
+        assert.equal(result.structuredContent.webSearchOutput.fetch.sources[0].ref_id, 'source_1');
+        assert.deepEqual(result.structuredContent.webSearchOutput.fetch.sources[0].open_page, {
+            type: 'open_page',
+            url: `${baseUrl}/guide`,
+            lineno: 1
+        });
+        assert.match(result.structuredContent.webSearchOutput.fetch.sources[0].excerpt, /莱特是一名适合火属性队伍/);
         assert.equal(result.structuredContent.pipelineSteps[0].stage, 'query_plan');
         assert.equal(result.structuredContent.search.searchQueries[0].role, 'original');
         assert.ok(result.structuredContent.evidencePages[0].htmlRelations.sections.some((section) => section.heading === '配队建议'));
         assert.match(result.content[0].text, /AILIS web research evidence bundle/);
-        assert.deepEqual(requests, ['/search', '/guide']);
+        assert.match(result.content[0].text, /Open page: open_page/);
+        assert.ok(result.content[0].text.indexOf('Highest-ranked fetched sources:') >= 0);
+        assert.ok(result.content[0].text.indexOf(`${baseUrl}/guide`) < 2000);
+        assert.doesNotMatch(result.content[0].text, /Fetch diagnostic:|Pipeline diagnostics:/);
+        assert.doesNotMatch(result.content[0].text, /Readiness:|Recovery hint:|Output policy:|Evidence gap:|Retrieval note:/);
+        assert.ok(requests.filter((pathname) => pathname === '/search').length >= 1);
+        assert.ok(requests.includes('/guide'));
     });
 });
 
@@ -1469,13 +2845,71 @@ test('web_research expands query variants and fetches the high-signal result', a
         });
 
         assert.equal(result.isError, undefined, result.content[0].text);
-        assert.equal(result.structuredContent.answerReadiness, 'ready');
+        assert.equal(result.structuredContent.answerReadiness, undefined);
+        assert.equal(result.structuredContent.fetchedPageCount, 1);
         assert.deepEqual(searchQueries, ['帮我做一个绝区零 莱特 攻略 配队', '绝区零 "莱特" 攻略']);
         assert.deepEqual(fetchedPaths, ['/guide']);
         assert.equal(result.structuredContent.search.searchAggregation.queryPlan, true);
         assert.equal(result.structuredContent.search.searchQueries.length, 2);
         assert.equal(result.structuredContent.evidencePages[0].url, `${baseUrl}/guide`);
     });
+});
+
+test('web_research reserves fetch coverage for each explicit model query', () => {
+    const candidates = buildWebResearchCandidates({
+        query: 'Calculate a result from two independent facts',
+        results: [
+            {
+                title: 'Primary topic overview',
+                url: 'https://primary.example/overview',
+                queryScore: 100,
+                queryVariantRole: 'original',
+                queryVariantIndex: 1
+            },
+            {
+                title: 'First explicit fact',
+                url: 'https://first.example/fact',
+                queryScore: 90,
+                queryVariantRole: 'explicit_query',
+                queryVariantIndex: 2
+            },
+            {
+                title: 'More evidence for the first explicit fact',
+                url: 'https://first-mirror.example/fact',
+                queryScore: 80,
+                queryVariantRole: 'explicit_query',
+                queryVariantIndex: 2
+            },
+            {
+                title: 'Second explicit fact',
+                url: 'https://second.example/fact',
+                queryScore: 40,
+                queryVariantRole: 'explicit_query',
+                queryVariantIndex: 3
+            },
+            {
+                title: 'Fallback evidence for the second explicit fact',
+                url: 'https://second.example/backup',
+                queryScore: 35,
+                queryVariantRole: 'explicit_query',
+                queryVariantIndex: 3
+            },
+            {
+                title: 'Alternate-host evidence for the second explicit fact',
+                url: 'https://second-alternate.example/fact',
+                queryScore: 30,
+                queryVariantRole: 'explicit_query',
+                queryVariantIndex: 3
+            }
+        ]
+    }, 4);
+
+    assert.deepEqual(candidates.map((candidate) => candidate.url), [
+        'https://first.example/fact',
+        'https://second.example/fact',
+        'https://first-mirror.example/fact',
+        'https://second-alternate.example/fact'
+    ]);
 });
 
 test('web_research exact entity planning preserves specific target terms', async () => {
@@ -1538,10 +2972,11 @@ test('web_research exact entity planning preserves specific target terms', async
         });
 
         assert.equal(result.isError, undefined, result.content[0].text);
-        assert.equal(result.structuredContent.answerReadiness, 'ready');
+        assert.equal(result.structuredContent.answerReadiness, undefined);
+        assert.equal(result.structuredContent.fetchedPageCount, 1);
         assert.ok(searchQueries.includes('绝区零 "叶瞬光" "小光" 攻略'));
         assert.equal(result.structuredContent.evidencePages[0].url, `${baseUrl}/xiaoguang-guide`);
-        assert.equal(result.structuredContent.evidencePages[0].evidenceQuality, 'sufficient_evidence');
+        assert.equal(result.structuredContent.evidencePages[0].evidenceQuality, undefined);
     });
 });
 
@@ -1642,7 +3077,8 @@ test('web_research does not mark broad source pages ready when target terms are 
         });
 
         assert.equal(result.isError, undefined, result.content[0].text);
-        assert.equal(result.structuredContent.answerReadiness, 'needs_followup');
+        assert.equal(result.structuredContent.answerReadiness, undefined);
+        assert.equal(result.structuredContent.fetchedPageCount, 0);
         assert.deepEqual(result.structuredContent.evidencePages, []);
         assert.equal(result.structuredContent.search.searchConfidence.level, 'low');
         assert.ok(result.structuredContent.search.searchConfidence.reasons.includes('top_result_missing_specific_target_terms'));
@@ -1709,7 +3145,8 @@ test('web_research diversifies fetch candidates across hosts before retrying one
             });
 
             assert.equal(result.isError, undefined, result.content[0].text);
-            assert.equal(result.structuredContent.answerReadiness, 'ready');
+            assert.equal(result.structuredContent.answerReadiness, undefined);
+            assert.equal(result.structuredContent.fetchedPageCount, 2);
             assert.equal(result.structuredContent.evidencePages.some((page) => page.url === `http://localhost:${guidePort}/guide`), true);
             assert.equal(result.structuredContent.evidencePages.filter((page) => page.url.includes(`127.0.0.1:${shellPort}`)).length, 1);
         });
@@ -1770,12 +3207,13 @@ test('web_research reranks fetched pages by evidence score instead of search ord
         });
 
         assert.equal(result.isError, undefined, result.content[0].text);
-        assert.equal(result.structuredContent.answerReadiness, 'ready');
+        assert.equal(result.structuredContent.answerReadiness, undefined);
+        assert.equal(result.structuredContent.fetchedPageCount, 2);
         assert.equal(result.structuredContent.evidencePages.length, 2);
         assert.equal(result.structuredContent.evidencePages[0].url, `${baseUrl}/guide`);
-        assert.equal(result.structuredContent.evidencePages[0].evidenceQuality, 'sufficient_evidence');
+        assert.equal(result.structuredContent.evidencePages[0].evidenceQuality, undefined);
         assert.equal(result.structuredContent.evidencePages[1].url, `${baseUrl}/shell`);
-        assert.ok(result.structuredContent.evidencePages[0].evidenceScore > result.structuredContent.evidencePages[1].evidenceScore);
+        assert.equal(result.structuredContent.evidencePages[0].evidenceScore, undefined);
     });
 });
 
@@ -1815,10 +3253,13 @@ test('web_research stops before fetching pages when search target is ambiguous',
 
         assert.equal(result.isError, undefined, result.content[0].text);
         assert.equal(result.structuredContent.status, 'clarification_required');
-        assert.equal(result.structuredContent.answerReadiness, 'needs_clarification');
+        assert.equal(result.structuredContent.answerReadiness, undefined);
+        assert.equal(result.structuredContent.clarificationRequired, undefined);
+        assert.equal(result.structuredContent.search.candidateChoices.length, 2);
         assert.equal(result.structuredContent.evidencePages.length, 0);
-        assert.equal(result.structuredContent.search.clarificationRequired, true);
-        assert.deepEqual(requests, ['/search']);
+        assert.equal(result.structuredContent.search.clarificationRequired, undefined);
+        assert.ok(requests.length >= 1);
+        assert.ok(requests.every((pathname) => pathname === '/search'));
     });
 });
 
@@ -1840,7 +3281,7 @@ test('inferPaperMetadataArgsFromScholarlyQuery keeps single-author surname clues
     assert.match(args.topic, /Lepidoptera/i);
 });
 
-test('web_research requires audit instead of marking video metadata pages ready', async () => {
+test('web_research returns candidate evidence for video metadata pages without a hard audit gate', async () => {
     const videoBody = [
         '<html><head><title>【绝区零】叶瞬光 超详细养成攻略教学_攻略</title></head><body>',
         '<nav>首页 番剧 直播 游戏中心 会员购 漫画 赛事 投稿</nav>',
@@ -1883,16 +3324,42 @@ test('web_research requires audit instead of marking video metadata pages ready'
         });
 
         assert.equal(result.isError, undefined, result.content[0].text);
-        assert.equal(result.structuredContent.answerReadiness, 'partial');
-        assert.equal(result.structuredContent.requiresEvidenceAudit, true);
-        assert.match(result.structuredContent.evidenceAuditInstruction, /LLM evidence audit/i);
+        assert.equal(result.structuredContent.answerReadiness, undefined);
+        assert.equal(result.structuredContent.requiresEvidenceAudit, undefined);
+        assert.equal(result.structuredContent.evidenceDecision, undefined);
         assert.equal(result.structuredContent.evidencePages.length, 1);
         assert.equal(result.structuredContent.evidencePages[0].pageType, 'video_page');
-        assert.equal(result.structuredContent.evidencePages[0].evidenceQuality, 'metadata_only');
-        assert.equal(result.structuredContent.evidencePages[0].reasoningReady, false);
-        assert.match(result.structuredContent.evidencePages[0].recoveryHint, /transcript|video-specific|ASR/i);
-        assert.match(result.content[0].text, /Retrieval readiness: partial/);
-        assert.match(result.content[0].text, /Evidence audit required: true/);
+        assert.equal(result.structuredContent.evidencePages[0].evidenceQuality, undefined);
+        assert.equal(result.structuredContent.evidencePages[0].reasoningReady, undefined);
+        assert.equal(result.structuredContent.evidencePages[0].recoveryHint, undefined);
+        assert.equal(result.structuredContent.evidencePages[0].evidenceGap, undefined);
+        assert.match(result.content[0].text, /Codex object: web_search_call action=search/);
+        assert.match(result.content[0].text, /Bundle contents: ranked search results, fetched page excerpts/);
+        assert.doesNotMatch(result.content[0].text, /Readiness:|Recovery hint:|Output policy:|Evidence decision:|Evidence gap:|Retrieval note:/);
+        assert.match(result.content[0].text, /Candidate snippets from search results/);
+    });
+});
+
+test('web_fetch does not classify technical documentation as a video page from generic terms', async () => {
+    const technicalBody = [
+        '<h1>Rendering views and recommendations</h1>',
+        '<p>This technical reference documents video frame views, watch expressions, and recommendation APIs.</p>',
+        `<p>${'The API returns structured views for video metadata and recommends safe watch expressions. '.repeat(40)}</p>`,
+        '<h2>Reference</h2>',
+        '<p>Use the documented methods and examples to implement the feature.</p>'
+    ].join('');
+    await withServer((request, response) => {
+        response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        response.end(`<html><body>${technicalBody}</body></html>`);
+    }, async (baseUrl) => {
+        const result = await webFetch({
+            url: `${baseUrl}/documentation`,
+            provider: 'builtin'
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.equal(result.structuredContent.pageType, 'article_or_document_page');
+        assert.notEqual(result.structuredContent.evidenceQuality, 'metadata_only');
     });
 });
 
@@ -2162,7 +3629,7 @@ test('web_fetch falls back to current HTML extraction when Crawl4AI is unavailab
     });
 });
 
-test('web_fetch surfaces linked DOI and PDF follow-up actions from HTML pages', async () => {
+test('web_fetch keeps linked DOI and PDF follow-up actions structured without model-visible diagnostics', async () => {
     await withServer((request, response) => {
         response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
         response.end([
@@ -2180,8 +3647,9 @@ test('web_fetch surfaces linked DOI and PDF follow-up actions from HTML pages', 
         assert.equal(result.structuredContent.suggestedNextCalls[0].args.doi, '10.3847/2041-8213/acd54b');
         assert.equal(result.structuredContent.suggestedNextCalls[1].tool, 'pdf_extract_text');
         assert.equal(result.structuredContent.observedRelevantLinks[0].kind, 'doi');
-        assert.match(result.content[0].text, /Suggested next calls:/);
-        assert.match(result.content[0].text, /High-signal links:/);
+        assert.doesNotMatch(result.content[0].text, /Available follow-up calls derived from retrieved links\/results/);
+        assert.doesNotMatch(result.content[0].text, /Retrieval diagnostic|Additional retrieval context/);
+        assert.match(result.content[0].text, /Candidate links observed by the fetcher/);
     });
 });
 
@@ -2237,6 +3705,98 @@ test('web_fetch extracts HTML relationship map for model reasoning', async () =>
     });
 });
 
+test('web_fetch projects complete query-relevant columns from wide multi-row HTML tables', async () => {
+    await withServer((request, response) => {
+        response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        response.end([
+            '<html><body><h1>Participation counts</h1><table>',
+            '<tr><th rowspan="2">Country</th><th colspan="2">Archery</th><th colspan="3">Total</th></tr>',
+            '<tr><th>m</th><th>w</th><th>m</th><th>w</th><th>all</th></tr>',
+            '<tr><td>ARG</td><td>2</td><td>-</td><td>10</td><td>2</td><td>12</td></tr>',
+            '<tr><td>CUB</td><td>-</td><td>-</td><td>1</td><td>-</td><td>1</td></tr>',
+            '<tr><td>PAN</td><td>-</td><td>-</td><td>1</td><td>-</td><td>1</td></tr>',
+            '</table></body></html>'
+        ].join(''));
+    }, async (baseUrl) => {
+        const result = await webFetch({
+            url: `${baseUrl}/wide-table`,
+            query: 'Which country had the least number of athletes? Return the country code.',
+            provider: 'builtin'
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.match(result.content[0].text, /Structured table projection/);
+        assert.match(result.content[0].text, /columns=Country \| Total \/ all/);
+        assert.match(result.content[0].text, /CUB \| 1/);
+        assert.match(result.content[0].text, /PAN \| 1/);
+        assert.match(result.content[0].text, /rows=3; rows_complete=true/);
+        assert.equal(result.structuredContent.structuredTableCoversTask, true);
+        assert.equal(result.structuredContent.reasoningReady, true);
+        assert.equal(result.structuredContent.structuredTables[0].rowCount, 3);
+        assert.deepEqual(
+            result.structuredContent.structuredTables[0].projection.columns,
+            ['Country', 'Total / all']
+        );
+    });
+});
+
+test('web_fetch matches born language to a Birthplace table column instead of a later location column', async () => {
+    await withServer((request, response) => {
+        response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        response.end([
+            '<html><body><table>',
+            '<tr><th>President</th><th>Birthplace</th><th>Birthdate</th><th>Location of Death</th></tr>',
+            '<tr><td>First Person</td><td>First City</td><td>1900-01-01</td><td>Later City</td></tr>',
+            '<tr><td>Second Person</td><td>Second City</td><td>1901-01-01</td><td>Another City</td></tr>',
+            '</table></body></html>'
+        ].join(''));
+    }, async (baseUrl) => {
+        const result = await webFetch({
+            url: `${baseUrl}/birthplaces`,
+            query: 'Of the cities where presidents were born, which are farthest apart?',
+            provider: 'builtin'
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.deepEqual(
+            result.structuredContent.structuredTables[0].projection.columns,
+            ['President', 'Birthplace']
+        );
+        assert.equal(result.structuredContent.structuredTables[0].projection.queryRelevant, true);
+        assert.match(result.content[0].text, /First Person \| First City/);
+        assert.doesNotMatch(result.content[0].text, /First Person \| Later City/);
+    });
+});
+
+test('web_fetch preserves multi-row headers when rendered Markdown contains a wide table', async () => {
+    await withServer((request, response) => {
+        response.writeHead(200, { 'content-type': 'text/markdown; charset=utf-8' });
+        response.end([
+            '# Participation counts',
+            '',
+            '| Country | Archery | Total |',
+            '| --- | --- | --- |',
+            '|  | m | w | m | w | all |',
+            '| ARG | 2 | - | 10 | 2 | 12 |',
+            '| CUB | - | - | 1 | - | 1 |',
+            '| PAN | - | - | 1 | - | 1 |'
+        ].join('\n'));
+    }, async (baseUrl) => {
+        const result = await webFetch({
+            url: `${baseUrl}/rendered-table`,
+            query: 'Which country had the least number of athletes? Return the country code.',
+            provider: 'builtin'
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.match(result.content[0].text, /columns=Country \| Total \/ all/);
+        assert.match(result.content[0].text, /CUB \| 1/);
+        assert.match(result.content[0].text, /PAN \| 1/);
+        assert.equal(result.structuredContent.structuredTableCoversTask, true);
+        assert.equal(result.structuredContent.structuredTables[0].projection.rowsComplete, true);
+    });
+});
+
 test('stripWikiText preserves MediaWiki infobox convert facts for numeric reasoning', () => {
     const wikiText = [
         '{{Infobox planet',
@@ -2253,6 +3813,24 @@ test('stripWikiText preserves MediaWiki infobox convert facts for numeric reason
     assert.match(text, /periapsis:\s*362600 km;\s*\(?356400-370400 km\)?/i);
     assert.match(text, /apoapsis:\s*405400 km/i);
     assert.match(text, /orbital_period:\s*27\.321661 d/i);
+});
+
+test('Wikipedia page parsing prefers rendered HTML over lossy template source', () => {
+    const page = parseWikipediaPagePayload({
+        parse: {
+            text: {
+                '*': '<h3>Number of athletes</h3><table><tr><td>Cuba</td><td>1</td></tr><tr><td>Panama</td><td>1</td></tr></table>'
+            },
+            wikitext: {
+                '*': '{{flagIOC|CUB|1928 Summer|1}}\n{{flagIOC|PAN|1928 Summer|1}}'
+            }
+        }
+    });
+
+    assert.equal(page.kind, 'wikipedia_rendered_html');
+    assert.equal(page.contentType, 'text/html; charset=utf-8');
+    assert.match(page.text, /<td>Cuba<\/td><td>1<\/td>/);
+    assert.match(page.text, /<td>Panama<\/td><td>1<\/td>/);
 });
 
 test('extractWikipediaPageTitle handles canonical and language-variant article paths', () => {
@@ -2279,7 +3857,7 @@ test('web_fetch does not suggest unrelated PDFs when query terms are absent', as
         });
 
         assert.equal(result.isError, undefined, result.content[0].text);
-        assert.equal(result.structuredContent.suggestedNextCalls[0].tool, 'web_fetch');
+        assert.equal(result.structuredContent.suggestedNextCalls[0].tool, 'open_page');
         assert.equal(result.structuredContent.suggestedNextCalls[0].args.url, `${baseUrl}/issue/archive/2`);
         assert.ok(!result.structuredContent.suggestedNextCalls.some((call) => call.tool === 'pdf_extract_text'));
     });
@@ -2402,6 +3980,222 @@ test('web_fetch marks long relevant HTML text as reasoning-ready evidence', asyn
         assert.equal(result.structuredContent.reasoningReady, true);
         assert.equal(result.structuredContent.observationContract.reasoning_ready, true);
         assert.equal(result.structuredContent.evidenceGap, '');
+    });
+});
+
+test('web_fetch returns Codex-style source viewport with line navigation', async () => {
+    const lines = Array.from({ length: 70 }, (_, index) => `filler line ${index + 1}`);
+    lines[29] = '## Discography';
+    lines[30] = '### Studio albums';
+    lines[35] = '2005 Corazon Libre';
+    lines[36] = '2009 Cantora 1';
+    lines[37] = '2009 Cantora 2';
+    await withServer((request, response) => {
+        response.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' });
+        response.end(lines.join('\n'));
+    }, async (baseUrl) => {
+        const result = await webFetch({
+            url: `${baseUrl}/mercedes`,
+            query: 'Studio albums',
+            provider: 'builtin',
+            maxLines: 20
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.match(result.content[0].text, /Source viewport:/);
+        assert.match(result.content[0].text, /Total lines: 70/);
+        assert.match(result.content[0].text, /L31: ### Studio albums/);
+        assert.match(result.content[0].text, /candidate-set boundary/);
+        assert.match(result.content[0].text, /remaining relevant lines or sections/);
+        const deprecatedPreviewMarker = new RegExp(['output', 'Complete=false'].join(''));
+        assert.doesNotMatch(result.content[0].text, deprecatedPreviewMarker);
+        assert.equal(result.structuredContent.modelVisibleMode, 'source_viewport');
+        assert.equal(result.structuredContent.model_visible_mode, 'source_viewport');
+        assert.equal(result.structuredContent.sourceRetrievalComplete, true);
+        assert.equal(result.structuredContent.source_retrieval_complete, true);
+        assert.equal(result.structuredContent.source.type, 'source_viewport');
+        assert.equal(result.structuredContent.source.tool, 'web_fetch');
+        assert.equal(result.structuredContent.source.line_start, 27);
+        assert.equal(result.structuredContent.source.total_lines, 70);
+        assert.ok(result.structuredContent.source.lines.some((line) => line.lineno === 31 && /Studio albums/.test(line.text)));
+        assert.equal(result.structuredContent.source_window.type, 'source_viewport');
+        assert.equal(result.structuredContent.sourceWindow.type, 'source_viewport');
+        assert.equal(result.structuredContent.sourceWindow.action.type, 'open_page');
+        assert.ok(result.structuredContent.sourceWindow.lines.some((line) => /Studio albums/.test(line.text)));
+        assert.equal(result.structuredContent.webSearchOutput.webSearchCall.type, 'web_search_call');
+        assert.equal(result.structuredContent.webSearchOutput.webSearchCall.action.type, 'open_page');
+        assert.equal(result.structuredContent.webSearchOutput.webSearchCall.action.url, `${baseUrl}/mercedes`);
+        assert.equal(result.structuredContent.webSearchOutput.source_viewport.line_start, 27);
+        assert.equal(result.structuredContent.observationContract.source_window, true);
+        assert.equal(result.structuredContent.observationContract.source_viewport.tool, 'web_fetch');
+
+        const lineResult = await webFetch({
+            url: `${baseUrl}/mercedes`,
+            lineno: 36,
+            maxLines: 3,
+            provider: 'builtin'
+        });
+        assert.equal(lineResult.structuredContent.sourceWindow.lineStart, 36);
+        assert.equal(lineResult.structuredContent.source.line_start, 36);
+        assert.match(lineResult.content[0].text, /L36: 2005 Corazon Libre/);
+        assert.match(lineResult.content[0].text, /L38: 2009 Cantora 2/);
+    });
+});
+
+test('web_fetch expands the character budget when maxLines explicitly requests a wide viewport', async () => {
+    const lines = Array.from({ length: 30 }, (_, index) => `L${index + 1} ${'context '.repeat(55)}`);
+    lines[16] = 'Ruth Stein and Margaret Blount both object to increasingly cuddly, "fluffy" dragons.';
+    await withServer((request, response) => {
+        response.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' });
+        response.end(lines.join('\n'));
+    }, async (baseUrl) => {
+        const result = await webFetch({
+            url: `${baseUrl}/wide-article`,
+            maxLines: 300,
+            provider: 'builtin'
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.match(result.content[0].text, /L17: Ruth Stein and Margaret Blount/);
+        assert.match(result.content[0].text, /"fluffy" dragons/);
+        assert.ok(result.structuredContent.source.line_end >= 17);
+    });
+});
+
+test('web_fetch keeps a section heading with its first body paragraph at the viewport boundary', async () => {
+    const lines = Array.from({ length: 20 }, (_, index) => `L${index + 1} ${'context '.repeat(56)}`);
+    lines[10] = 'Fluffy Dragons';
+    lines[11] = `Ruth Stein and Margaret Blount both object to increasingly cuddly, "fluffy" dragons. ${'detail '.repeat(60)}`;
+    await withServer((request, response) => {
+        response.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' });
+        response.end(lines.join('\n'));
+    }, async (baseUrl) => {
+        const result = await webFetch({
+            url: `${baseUrl}/section-boundary`,
+            provider: 'builtin'
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.match(result.content[0].text, /L11: Fluffy Dragons/);
+        assert.match(result.content[0].text, /L12: Ruth Stein and Margaret Blount/);
+        assert.match(result.content[0].text, /"fluffy" dragons/);
+    });
+});
+
+test('web_find opens a Codex-style source viewport around a pattern', async () => {
+    const lines = [
+        'alpha',
+        'beta',
+        '## Discography',
+        '### Studio albums',
+        '2005 Corazon Libre',
+        '2009 Cantora 1',
+        '2009 Cantora 2',
+        'omega'
+    ];
+    await withServer((request, response) => {
+        response.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' });
+        response.end(lines.join('\n'));
+    }, async (baseUrl) => {
+        const result = await webFind({
+            url: `${baseUrl}/mercedes`,
+            pattern: 'Cantora',
+            contextLines: 2,
+            provider: 'builtin'
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.match(result.content[0].text, /Find results for pattern: Cantora/);
+        assert.match(result.content[0].text, /Source viewport:/);
+        assert.match(result.content[0].text, /L6: 2009 Cantora 1/);
+        assert.equal(result.structuredContent.modelVisibleMode, 'source_viewport_find');
+        assert.equal(result.structuredContent.model_visible_mode, 'source_viewport_find');
+        assert.equal(result.structuredContent.source.tool, 'web_find');
+        assert.equal(result.structuredContent.source.line_start, 3);
+        assert.equal(result.structuredContent.source_window.tool, 'web_find');
+        assert.equal(result.structuredContent.sourceWindow.type, 'source_viewport');
+        assert.equal(result.structuredContent.sourceWindow.action.type, 'find_in_page');
+        assert.equal(result.structuredContent.webSearchOutput.webSearchCall.type, 'web_search_call');
+        assert.equal(result.structuredContent.webSearchOutput.webSearchCall.action.type, 'find_in_page');
+        assert.equal(result.structuredContent.webSearchOutput.webSearchCall.action.pattern, 'Cantora');
+        assert.equal(result.structuredContent.webSearchOutput.find.match_count, 2);
+        assert.equal(result.structuredContent.matchCount, 2);
+        assert.equal(result.structuredContent.match_count, 2);
+        assert.deepEqual(result.structuredContent.matches.map((match) => match.lineNumber), [6, 7]);
+        assert.deepEqual(result.structuredContent.matches.map((match) => match.lineno), [6, 7]);
+    });
+});
+
+test('open_page, find_in_page, and continue_page share one source viewport chain', async () => {
+    const lines = Array.from({ length: 40 }, (_, index) => `line ${index + 1}`);
+    lines[24] = 'Actual Enrollment 90';
+    await withServer((request, response) => {
+        response.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' });
+        response.end(lines.join('\n'));
+    }, async (baseUrl) => {
+        const url = `${baseUrl}/study`;
+        const opened = await openPage({ url, lineno: 1, maxLines: 5, provider: 'builtin' });
+        assert.equal(opened.isError, undefined, opened.content[0].text);
+        assert.equal(opened.structuredContent.sourceWindow.action.tool, 'open_page');
+        assert.equal(opened.structuredContent.source.has_more_after, true);
+        assert.equal(opened.structuredContent.suggestedNextCalls[0].tool, 'continue_page');
+
+        const continued = await continuePage({ url, lineno: 23, maxLines: 5, provider: 'builtin' });
+        assert.match(continued.content[0].text, /Actual Enrollment 90/);
+
+        const found = await findInPage({ url, pattern: 'Actual Enrollment', provider: 'builtin' });
+        assert.equal(found.structuredContent.matchCount, 1);
+        assert.match(found.content[0].text, /Actual Enrollment 90/);
+    });
+});
+
+test('web_find indexes matches across the full page instead of only the focused viewport', async () => {
+    const lines = Array.from({ length: 220 }, (_, index) => `line ${index + 1}`);
+    lines[4] = 'Participating navigation link';
+    lines[89] = '## Participating National Olympic Committees';
+    lines[100] = 'CUB 1';
+    lines[101] = 'PAN 1';
+    lines[189] = 'Participating footer link';
+    await withServer((request, response) => {
+        response.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' });
+        response.end(lines.join('\n'));
+    }, async (baseUrl) => {
+        const result = await webFind({
+            url: `${baseUrl}/multi-match`,
+            pattern: 'Participating',
+            provider: 'builtin'
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.match(result.content[0].text, /Match count in page: 3/);
+        assert.match(result.content[0].text, /L101: CUB 1/);
+        assert.match(result.content[0].text, /L102: PAN 1/);
+        assert.deepEqual(result.structuredContent.matches.map((match) => match.lineno), [5, 90, 190]);
+        assert.equal(result.structuredContent.source.line_start, 87);
+        assert.equal(result.structuredContent.webSearchOutput.find.match_count, 3);
+    });
+});
+
+test('web_find compacts image and link markup while preserving visible evidence and line numbers', async () => {
+    const lines = Array.from({ length: 180 }, (_, index) => `line ${index + 1}`);
+    lines[39] = '## Participating nations';
+    lines[48] = '![](https://example.test/cuba.png)[Cuba](https://example.test/cuba "Cuba")(1)';
+    lines[49] = '![](https://example.test/panama.png)[Panama](https://example.test/panama "Panama")(1)';
+    await withServer((request, response) => {
+        response.writeHead(200, { 'content-type': 'text/markdown; charset=utf-8' });
+        response.end(lines.join('\n'));
+    }, async (baseUrl) => {
+        const result = await webFind({
+            url: `${baseUrl}/compact-markdown`,
+            pattern: 'Participating',
+            provider: 'builtin'
+        });
+
+        const visible = result.content[0].text;
+        assert.match(visible, /L49: Cuba\(1\)/);
+        assert.match(visible, /L50: Panama\(1\)/);
+        assert.doesNotMatch(visible, /cuba\.png|example\.test\/cuba/);
+        assert.equal(result.structuredContent.source.line_start, 37);
     });
 });
 
@@ -2659,7 +4453,7 @@ test('web_extract_links preserves duplicate OJS issue titles and archive paginat
         assert.equal(issueLink.text, 'Vol. 1 No. 2/2014 (2014)');
         assert.ok(result.details.links.some((link) => link.url === `${baseUrl}/issue/archive/2` && link.text === 'Next'));
         assert.ok(result.structuredContent.suggestedNextCalls.some((call) => (
-            call.tool === 'web_fetch' && call.args?.url === `${baseUrl}/issue/archive/2`
+            call.tool === 'open_page' && call.args?.url === `${baseUrl}/issue/archive/2`
         )));
         assert.match(result.content[0].text, /Vol\. 1 No\. 2\/2014/);
     });

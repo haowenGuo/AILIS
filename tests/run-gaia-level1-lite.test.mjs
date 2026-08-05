@@ -355,6 +355,18 @@ test('GAIA Level 1 Lite answer formatting removes units already specified by the
         formatSubmittedAnswerForQuestion('123 kg', { question: 'What is the mass in kg?' }),
         '123'
     );
+    assert.equal(
+        formatSubmittedAnswerForQuestion('17000', { question: 'How many thousand hours would it take? Return only the number.' }),
+        '17'
+    );
+    assert.equal(
+        formatSubmittedAnswerForQuestion('17000 hours', { question: 'How many thousand hours would it take? Return only the number.' }),
+        '17'
+    );
+    assert.equal(
+        formatSubmittedAnswerForQuestion('17 thousand hours', { question: 'How many thousand hours would it take? Return only the number.' }),
+        '17'
+    );
 });
 
 test('GAIA evidence digest preserves ClinicalTrials enrollment from structured body', () => {

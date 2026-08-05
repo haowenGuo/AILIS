@@ -4,6 +4,14 @@ const DEFAULT_TEXT_BUDGET_CHARS = 6000;
 const DEFAULT_JSON_STRING_BUDGET_CHARS = 1200;
 const DEFAULT_JSON_ARRAY_ITEMS = 24;
 const DEFAULT_JSON_OBJECT_KEYS = 80;
+const MAX_SOURCE_VIEWPORT_LINES = 256;
+const MAX_SOURCE_VIEWPORT_TEXT_CHARS = 24000;
+const DEFAULT_CONTEXT_INPUT_LIMIT_TOKENS = 128000;
+const DEFAULT_CONTEXT_RESERVED_OUTPUT_TOKENS = 4096;
+const DEFAULT_CONTEXT_SYSTEM_RESERVE_TOKENS = 8192;
+const DEFAULT_CONTEXT_SOFT_RATIO = 0.5;
+const DEFAULT_CONTEXT_HARD_RATIO = 0.7;
+const DEFAULT_CONTEXT_STOP_RATIO = 0.8;
 
 function normalizeString(value, fallback = '') {
     if (typeof value !== 'string') {
@@ -18,6 +26,98 @@ function cloneJson(value) {
         return JSON.parse(JSON.stringify(value));
     } catch {
         return value;
+    }
+}
+
+function isSourceViewportLine(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value) || typeof value.text !== 'string') {
+        return false;
+    }
+    return Number.isFinite(Number(value.lineno ?? value.line_number ?? value.lineNumber));
+}
+
+function compactSourceViewportLinesForModel(lines, options = {}) {
+    const maxStringChars = Math.max(64, Number(options.maxStringChars || DEFAULT_JSON_STRING_BUDGET_CHARS));
+    const perLineTextChars = Math.max(
+        64,
+        Math.min(maxStringChars, Math.floor(MAX_SOURCE_VIEWPORT_TEXT_CHARS / Math.max(1, lines.length)))
+    );
+    return lines.map((line) => {
+        const compacted = {};
+        for (const [key, value] of Object.entries(line)) {
+            compacted[key] = typeof value === 'string'
+                ? truncateMiddleText(value, perLineTextChars)
+                : cloneJson(value);
+        }
+        return compacted;
+    });
+}
+
+const MODEL_GUIDANCE_KEYS = new Set([
+    'nextActions',
+    'next_actions',
+    'suggestedNext',
+    'suggested_next',
+    'suggestedNextCalls',
+    'suggested_next_calls',
+    'suggestedActions',
+    'suggested_actions',
+    'recoveryHint',
+    'recovery_hint',
+    'recommended_next_action',
+    'requiredNextStep',
+    'required_next_step',
+    'instruction',
+    'instructions',
+    'repairInstruction',
+    'repair_instruction',
+    'continuation',
+    'queryHints',
+    'alternatives',
+    'readingGuide'
+]);
+
+function stripModelGuidance(value, options = {}) {
+    const preserveGuidanceKeys = new Set(Array.isArray(options.preserveGuidanceKeys) ? options.preserveGuidanceKeys : []);
+    if (Array.isArray(value)) {
+        return value.map((entry) => stripModelGuidance(entry, options));
+    }
+    if (!value || typeof value !== 'object') {
+        return value;
+    }
+    const out = {};
+    for (const [key, entry] of Object.entries(value)) {
+        if (MODEL_GUIDANCE_KEYS.has(key) && !preserveGuidanceKeys.has(key)) {
+            continue;
+        }
+        out[key] = stripModelGuidance(entry, options);
+    }
+    return out;
+}
+
+function shouldStripJsonTextGuidance(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return false;
+    }
+    const schema = normalizeString(value.schema);
+    return schema.startsWith('ailis.artifact_tools.') ||
+        schema.startsWith('ailis.active_artifact_observation.') ||
+        value?.protocol?.tool === 'artifact_tools';
+}
+
+function stripGuidanceFromModelText(text = '') {
+    const source = normalizeString(text);
+    if (!/^\s*[\[{]/.test(source)) {
+        return source;
+    }
+    try {
+        const parsed = JSON.parse(source);
+        if (!shouldStripJsonTextGuidance(parsed)) {
+            return source;
+        }
+        return JSON.stringify(stripModelGuidance(parsed), null, 2);
+    } catch {
+        return source;
     }
 }
 
@@ -48,6 +148,171 @@ function truncateMiddleText(value, maxChars = DEFAULT_TEXT_BUDGET_CHARS) {
     const head = Math.ceil(remaining * 0.6);
     const tail = Math.max(0, remaining - head);
     return `${text.slice(0, head)}${marker}${tail ? text.slice(-tail) : ''}`;
+}
+
+function makeHeadTailPreview(value, maxChars = DEFAULT_TEXT_BUDGET_CHARS, options = {}) {
+    const text = normalizeString(value);
+    const budget = Math.max(0, Number(maxChars) || 0);
+    const headRatio = Math.min(0.85, Math.max(0.15, Number(options.headRatio || 0.6)));
+    if (!budget || text.length <= budget) {
+        return {
+            text,
+            strategy: 'complete',
+            truncated: false,
+            originalTextChars: text.length,
+            visibleTextChars: text.length,
+            omittedTextChars: 0
+        };
+    }
+    if (budget <= 16) {
+        const preview = `${text.slice(0, Math.max(0, budget - 3))}...`;
+        return {
+            text: preview,
+            strategy: 'head_tail',
+            truncated: true,
+            originalTextChars: text.length,
+            visibleTextChars: preview.length,
+            omittedTextChars: Math.max(0, text.length - preview.length)
+        };
+    }
+    const marker = '\n... [middle omitted for model budget; use output refs for exact slices when available] ...\n';
+    const remaining = Math.max(0, budget - marker.length);
+    const head = Math.ceil(remaining * headRatio);
+    const tail = Math.max(0, remaining - head);
+    const preview = `${text.slice(0, head)}${marker}${tail ? text.slice(-tail) : ''}`;
+    return {
+        text: preview,
+        strategy: 'head_tail',
+        truncated: true,
+        originalTextChars: text.length,
+        visibleTextChars: preview.length,
+        omittedTextChars: Math.max(0, text.length - preview.length)
+    };
+}
+
+function normalizeBudgetParts(parts = {}) {
+    if (Array.isArray(parts)) {
+        return parts
+            .map((part, index) => ({
+                name: normalizeString(part?.name, `part_${index}`),
+                value: Object.prototype.hasOwnProperty.call(part || {}, 'value') ? part.value : part
+            }))
+            .filter((part) => part.name);
+    }
+    if (!parts || typeof parts !== 'object') {
+        return [{ name: 'value', value: parts }];
+    }
+    return Object.entries(parts).map(([name, value]) => ({ name, value }));
+}
+
+function measureBudgetPart(name, value) {
+    let text = '';
+    try {
+        text = typeof value === 'string' ? value : JSON.stringify(value || '');
+    } catch {
+        text = String(value || '');
+    }
+    return {
+        name,
+        chars: text.length,
+        bytes: Buffer.byteLength(text, 'utf8'),
+        approxTokens: approxTokenCount(text)
+    };
+}
+
+function classifyCompactionLevel(ratio = 0, thresholds = {}) {
+    const soft = Number(thresholds.soft ?? DEFAULT_CONTEXT_SOFT_RATIO);
+    const hard = Number(thresholds.hard ?? DEFAULT_CONTEXT_HARD_RATIO);
+    const stop = Number(thresholds.stop ?? DEFAULT_CONTEXT_STOP_RATIO);
+    if (ratio >= stop) {
+        return 'stop';
+    }
+    if (ratio >= hard) {
+        return 'hard';
+    }
+    if (ratio >= soft) {
+        return 'soft';
+    }
+    return 'ok';
+}
+
+function buildContextBudgetReport(parts = {}, config = {}) {
+    const inputLimitTokens = Math.max(1, Number(
+        config.effectiveInputLimitTokens ||
+        config.inputLimitTokens ||
+        DEFAULT_CONTEXT_INPUT_LIMIT_TOKENS
+    ));
+    const reservedOutputTokens = Math.max(0, Number(config.reservedOutputTokens ?? DEFAULT_CONTEXT_RESERVED_OUTPUT_TOKENS));
+    const systemReserveTokens = Math.max(0, Number(config.systemReserveTokens ?? DEFAULT_CONTEXT_SYSTEM_RESERVE_TOKENS));
+    const effectiveInputLimitTokens = Math.max(1, Number(config.effectiveInputLimitTokens || (
+        inputLimitTokens - reservedOutputTokens - systemReserveTokens
+    )));
+    const thresholds = {
+        soft: Number(config.softRatio ?? DEFAULT_CONTEXT_SOFT_RATIO),
+        hard: Number(config.hardRatio ?? DEFAULT_CONTEXT_HARD_RATIO),
+        stop: Number(config.stopRatio ?? DEFAULT_CONTEXT_STOP_RATIO)
+    };
+    const measuredParts = normalizeBudgetParts(parts).map((part) => measureBudgetPart(part.name, part.value));
+    const estimatedPromptTokens = measuredParts.reduce((sum, part) => sum + part.approxTokens, 0);
+    const tokenInfo = parts.tokenInfo && typeof parts.tokenInfo === 'object'
+        ? parts.tokenInfo
+        : {};
+    const providerInputTokens = [
+        config.providerInputTokens,
+        config.actualInputTokens,
+        tokenInfo.promptTokens,
+        tokenInfo.prompt_tokens,
+        tokenInfo.inputTokens,
+        tokenInfo.input_tokens
+    ]
+        .map((value) => Number(value))
+        .find((value) => Number.isFinite(value) && value > 0) || 0;
+    // Provider usage is authoritative for the previous request. The local estimate
+    // still protects the next request after new tool outputs have been appended.
+    const effectivePromptTokens = Math.max(estimatedPromptTokens, providerInputTokens);
+    const ratio = effectivePromptTokens / effectiveInputLimitTokens;
+    const level = classifyCompactionLevel(ratio, thresholds);
+    const largestParts = measuredParts
+        .slice()
+        .sort((a, b) => b.approxTokens - a.approxTokens)
+        .slice(0, 8);
+    return {
+        schema: 'ailis.context_budget_report.v1',
+        inputLimitTokens,
+        reservedOutputTokens,
+        systemReserveTokens,
+        effectiveInputLimitTokens,
+        totalPromptTokens: effectivePromptTokens,
+        estimatedPromptTokens,
+        providerInputTokens,
+        effectivePromptTokens,
+        ratio,
+        level,
+        shouldCompact: level === 'soft' || level === 'hard' || level === 'stop',
+        mustStopAndCheckpoint: level === 'stop',
+        thresholds,
+        parts: measuredParts,
+        largestParts,
+        action: level === 'stop'
+            ? 'checkpoint_or_drop_nonessential_context_before_next_model_call'
+            : level === 'hard'
+                ? 'compact_tool_outputs_and_refresh_evidence_manifest'
+                : level === 'soft'
+                    ? 'prefer_refs_and_head_tail_previews_for_new_tool_outputs'
+                    : 'continue'
+    };
+}
+
+function buildModelVisibleTruncationNotice({
+    originalTextChars = 0,
+    visibleTextChars = 0
+} = {}) {
+    const omittedApproxTokens = Math.max(1, Math.ceil(Math.max(0, Number(originalTextChars) - Number(visibleTextChars)) / 4));
+    return [
+        'MODEL_VISIBLE_CONTENT_TRUNCATED:',
+        `<truncated omitted_approx_tokens="${omittedApproxTokens}" />`,
+        `originalTextChars=${Number(originalTextChars) || 'unknown'}; visibleTextChars<=${Number(visibleTextChars) || 'unknown'}; truncationScope=model_visible_tool_result_text;`
+    ].join('\n');
 }
 
 function stripSchemaDescriptions(value) {
@@ -105,6 +370,18 @@ function collapseDeepSchemaObjects(value, depth = 0, maxDepth = DEFAULT_SCHEMA_D
         return value;
     }
     if (depth >= maxDepth && isComplexSchemaObject(value)) {
+        const hasProperties = value.properties && typeof value.properties === 'object';
+        const hasSchemaUnion = (
+            Array.isArray(value.oneOf) ||
+            Array.isArray(value.anyOf) ||
+            Array.isArray(value.allOf)
+        );
+        if (!hasProperties && hasSchemaUnion) {
+            for (const entry of Object.values(value)) {
+                collapseDeepSchemaObjects(entry, depth + 1, maxDepth);
+            }
+            return value;
+        }
         const type = value.type || 'object';
         const required = Array.isArray(value.required) ? value.required.slice(0, 12) : undefined;
         for (const key of Object.keys(value)) {
@@ -231,7 +508,27 @@ function compactJsonForModel(value, options = {}, depth = 0, parentKey = '') {
     if (value == null || typeof value !== 'object') {
         return value;
     }
+    // Source viewports are already bounded by the web tool. Preserve the full
+    // line range so generic array compaction cannot discard evidence near the end.
+    if (
+        parentKey === 'lines' &&
+        Array.isArray(value) &&
+        value.length <= MAX_SOURCE_VIEWPORT_LINES &&
+        value.every(isSourceViewportLine)
+    ) {
+        return compactSourceViewportLinesForModel(value, options);
+    }
     if (depth >= maxDepth) {
+        try {
+            const serialized = JSON.stringify(value);
+            const smallArray = Array.isArray(value) && value.length <= maxArrayItems;
+            const smallObject = !Array.isArray(value) && Object.keys(value).length <= Math.min(maxObjectKeys, 12);
+            if ((smallArray || smallObject) && serialized.length <= maxStringChars) {
+                return cloneJson(value);
+            }
+        } catch {
+            // Fall through to the normal summarizer.
+        }
         if (Array.isArray(value) && (
             parentKey === 'required' ||
             parentKey === 'enum' ||
@@ -289,7 +586,9 @@ function summarizeForModel(value, maxChars = DEFAULT_TEXT_BUDGET_CHARS) {
 function compactToolResultForModel(result = {}, options = {}) {
     const maxTextChars = Math.max(256, Number(options.maxTextChars || DEFAULT_TEXT_BUDGET_CHARS));
     const maxStructuredStringChars = Math.max(128, Number(options.maxStructuredStringChars || DEFAULT_JSON_STRING_BUDGET_CHARS));
-    const output = cloneJson(result || {});
+    const output = stripModelGuidance(cloneJson(result || {}), {
+        preserveGuidanceKeys: options.preserveGuidanceKeys
+    });
     if (!output || typeof output !== 'object') {
         return {
             content: [{ type: 'text', text: summarizeForModel(output, maxTextChars) }],
@@ -314,12 +613,45 @@ function compactToolResultForModel(result = {}, options = {}) {
                     maxObjectKeys: 48,
                     maxDepth: 5
                 });
+                const sourceText = stripGuidanceFromModelText(part.text);
                 const originalTextChars = Number.isFinite(Number(part.originalTextChars))
                     ? Number(part.originalTextChars)
-                    : part.text.length;
-                next.text = truncateMiddleText(part.text, remaining || 128);
+                    : sourceText.length;
+                const jsonLikeText = /^\s*[\[{]/.test(sourceText);
+                let modelText = sourceText;
+                let structurallyCompacted = false;
+                if (jsonLikeText && sourceText.length > maxTextChars) {
+                    try {
+                        modelText = JSON.stringify(compactJsonForModel(JSON.parse(sourceText), {
+                            maxStringChars: maxStructuredStringChars,
+                            maxArrayItems: 32,
+                            maxObjectKeys: 80,
+                            maxDepth: 8
+                        }), null, 2);
+                        structurallyCompacted = modelText.length < sourceText.length;
+                    } catch {
+                        modelText = sourceText;
+                    }
+                }
+                next.text = jsonLikeText ? modelText : truncateMiddleText(modelText, remaining || 128);
                 next.originalTextChars = originalTextChars;
-                next.truncated = Boolean(part.truncated) || next.text.length < part.text.length || originalTextChars > next.text.length;
+                const modelViewShortened = structurallyCompacted || next.text.length < sourceText.length || originalTextChars > next.text.length;
+                next.truncated = Boolean(part.truncated) || modelViewShortened;
+                if (modelViewShortened) {
+                    const notice = buildModelVisibleTruncationNotice({
+                        originalTextChars,
+                        visibleTextChars: next.text.length
+                    });
+                    next.modelVisibleTruncation = {
+                        originalTextChars,
+                        visibleTextChars: next.text.length,
+                        truncationScope: 'model_visible_tool_result_text'
+                    };
+                    if (!jsonLikeText) {
+                        const noticeBudget = remaining || 128;
+                        next.text = truncateMiddleText(`${notice}\n\n${next.text}`, noticeBudget);
+                    }
+                }
                 remaining = Math.max(0, remaining - next.text.length);
                 return next;
             }
@@ -332,7 +664,22 @@ function compactToolResultForModel(result = {}, options = {}) {
             if (typeof next.text === 'string') {
                 next.originalTextChars = part.text.length;
                 next.text = truncateMiddleText(next.text, remaining || 128);
-                next.truncated = next.truncated || next.text.length < part.text.length;
+                const modelViewShortened = next.text.length < part.text.length;
+                next.truncated = next.truncated || modelViewShortened;
+                if (modelViewShortened) {
+                    const notice = buildModelVisibleTruncationNotice({
+                        originalTextChars: next.originalTextChars,
+                        visibleTextChars: next.text.length
+                    });
+                    next.modelVisibleTruncation = {
+                        originalTextChars: next.originalTextChars,
+                        visibleTextChars: next.text.length,
+                        truncationScope: 'model_visible_tool_result_text'
+                    };
+                    if (!/^\s*[\[{]/.test(part.text)) {
+                        next.text = truncateMiddleText(`${notice}\n\n${next.text}`, remaining || 128);
+                    }
+                }
                 remaining = Math.max(0, remaining - next.text.length);
             }
             return next;
@@ -363,14 +710,24 @@ function compactToolResultForModel(result = {}, options = {}) {
 }
 
 module.exports = {
+    DEFAULT_CONTEXT_HARD_RATIO,
+    DEFAULT_CONTEXT_INPUT_LIMIT_TOKENS,
+    DEFAULT_CONTEXT_RESERVED_OUTPUT_TOKENS,
+    DEFAULT_CONTEXT_SOFT_RATIO,
+    DEFAULT_CONTEXT_STOP_RATIO,
+    DEFAULT_CONTEXT_SYSTEM_RESERVE_TOKENS,
     DEFAULT_JSON_STRING_BUDGET_CHARS,
     DEFAULT_SCHEMA_BUDGET_BYTES,
     DEFAULT_SCHEMA_DEPTH,
     DEFAULT_TEXT_BUDGET_CHARS,
     approxTokenCount,
+    buildContextBudgetReport,
+    classifyCompactionLevel,
     compactJsonForModel,
     compactToolResultForModel,
     compactToolSchema,
+    makeHeadTailPreview,
     summarizeForModel,
-    truncateMiddleText
+    truncateMiddleText,
+    stripModelGuidance
 };

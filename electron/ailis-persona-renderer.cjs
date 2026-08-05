@@ -65,6 +65,7 @@ const ALLOWED_GAZE_TARGETS = new Set(['user', 'side', 'down', 'screen', 'away', 
 const ALLOWED_DURATION_HINTS = new Set(['short', 'medium', 'long', 'hold']);
 const ALLOWED_APPROVAL_STATES = new Set(['none', 'required', 'optional']);
 const ALLOWED_EVIDENCE_STATES = new Set(['unknown', 'present', 'missing', 'none']);
+const USER_FACING_CONTROL_TAG_PATTERN = /(?:\[\s*|【\s*)(?:action|expression|emotion|gestureIntent|socialTone|taskState|speechEnergy|gazeTarget|durationHint)\s*[:=：＝][^\]】\r\n]*(?:\]|】)/gi;
 const EXPRESSION_TO_EMOTION = Object.freeze({
     happy: 'happy',
     angry: 'angry',
@@ -240,6 +241,7 @@ function sanitizeUserFacingText(value) {
         text = text.replace(pattern, replacement);
     }
     text = text
+        .replace(USER_FACING_CONTROL_TAG_PATTERN, '')
         .replace(/确认编号[:：][^\n]+/gi, '')
         .replace(/如果确认，请回复[“"][^”"]+[”"]；?如果不执行，请回复[“"][^”"]+[”"]。?/g, '你点头我就继续，不想继续也可以先停。')
         .replace(/\n{3,}/g, '\n\n')
@@ -251,7 +253,6 @@ function sanitizeUserFacingText(value) {
 
 function compactSpeechText(value) {
     return sanitizeUserFacingText(value)
-        .replace(/\[(?:action|expression):[^\]]*\]/g, '')
         .replace(/```[\s\S]*?```/g, '我把较长的细节放在文字里。')
         .replace(/[#>*_`~\-\[\]\(\)]/g, '')
         .replace(/\s+/g, ' ')
@@ -614,8 +615,11 @@ function renderPersonaSurfaceGateway(input = {}) {
         const canUseRequestedFailureText =
             !emailConfigMissing &&
             requestedText &&
-            !isInternalFailureDetail(requestedText) &&
-            !/AILIS_|<PROVIDER>|tool_call|raw observation/i.test(requestedText);
+            (personaAuthoredText ||
+                (
+                    !isInternalFailureDetail(requestedText) &&
+                    !/AILIS_|<PROVIDER>|tool_call|raw observation/i.test(requestedText)
+                ));
         if (canUseRequestedFailureText) {
             return createPersonaSurface({
                 text: requestedText,
@@ -749,7 +753,8 @@ function attachPersonaSurface(result = {}, surface = null) {
         source: result.planner || 'agent',
         ok: result.ok
     });
-    const displayText = withControlTags(personaSurface.text, personaSurface);
+    // Visible chat text stays pure; character state travels in structured fields.
+    const displayText = personaSurface.text;
     return {
         ...result,
         displayText,

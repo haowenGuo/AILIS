@@ -72,6 +72,53 @@
             -webkit-app-region: no-drag;
         }
 
+        .window-controls {
+            display: inline-flex;
+            align-items: center;
+            gap: 2px;
+            border: 1px solid rgba(115, 184, 229, 0.2);
+            border-radius: 8px;
+            overflow: hidden;
+            background: rgba(255, 255, 255, 0.72);
+            -webkit-app-region: no-drag;
+        }
+
+        .window-control-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 30px;
+            height: 30px;
+            min-width: 30px;
+            border: 0;
+            border-radius: 0;
+            padding: 0;
+            color: var(--text-main);
+            background: transparent;
+            cursor: pointer;
+            pointer-events: auto;
+            -webkit-app-region: no-drag;
+        }
+
+        .window-control-btn svg {
+            width: 15px;
+            height: 15px;
+            fill: none;
+            stroke: currentColor;
+            stroke-width: 2;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+        }
+
+        .window-control-btn:hover {
+            background: rgba(115, 184, 229, 0.16);
+        }
+
+        .window-control-btn.is-close:hover {
+            color: #ffffff;
+            background: #e5484d;
+        }
+
         #chat-title {
             color: var(--text-main);
             font-size: 16px;
@@ -249,12 +296,14 @@
 
         .ailis-emote-sticker {
             display: inline-block;
-            width: 2.15em;
-            height: 2.15em;
-            margin: 0 0.08em;
-            vertical-align: -0.55em;
+            width: 2.3em;
+            height: 2.3em;
+            margin: 0 0.06em;
+            vertical-align: -0.68em;
             object-fit: contain;
-            filter: drop-shadow(0 2px 3px rgba(36, 68, 91, 0.16));
+            border-radius: 999px;
+            image-rendering: auto;
+            filter: drop-shadow(0 2px 4px rgba(36, 68, 91, 0.18));
         }
 
         .message-user.message-markdown code {
@@ -894,11 +943,39 @@
             height: 16px;
         }
 
+        #chat-header-actions .window-control-btn {
+            width: 30px;
+            height: 30px;
+            min-width: 30px;
+            border: 0;
+            border-radius: 0;
+            padding: 0;
+            background: transparent;
+        }
+
+        #chat-header-actions .window-control-btn:hover:enabled {
+            color: var(--text-main);
+            background: rgba(115, 184, 229, 0.16);
+            border-color: transparent;
+        }
+
+        #chat-header-actions .window-control-btn.is-close:hover:enabled {
+            color: #ffffff;
+            background: #e5484d;
+            border-color: transparent;
+        }
+
         #clear-chat-btn:hover:enabled,
         #close-btn:hover:enabled {
             color: var(--danger);
             background: #fff5f5;
             border-color: #fecaca;
+        }
+
+        #chat-header-actions .window-control-btn.is-close:hover:enabled {
+            color: #ffffff;
+            background: #e5484d;
+            border-color: transparent;
         }
 
         #composer {
@@ -1031,10 +1108,17 @@
                     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5A3.5 3.5 0 1 0 12 8a3.5 3.5 0 0 0 0 7.5Z"></path><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6V20a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-.6 1.7 1.7 0 0 0-1.88.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1H4a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 .6-1 1.7 1.7 0 0 0-.34-1.88l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6V4a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 .6 1.7 1.7 0 0 0 1.88-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9c.12.36.33.7.6 1h.1a2 2 0 1 1 0 4H20a1.7 1.7 0 0 0-.6 1Z"></path></svg>
                     <span class="sr-only">打开控制面板</span>
                 </button>
-                <button id="close-btn" class="icon-btn" type="button" aria-label="关闭聊天窗" title="关闭聊天窗">
-                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg>
-                    <span class="sr-only">关闭聊天窗</span>
-                </button>
+                <div class="window-controls" role="group" aria-label="窗口控制">
+                    <button id="minimize-btn" class="window-control-btn" type="button" aria-label="最小化聊天窗" title="最小化">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 18h12"></path></svg>
+                    </button>
+                    <button id="maximize-btn" class="window-control-btn" type="button" aria-label="最大化或还原聊天窗" title="最大化 / 还原">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.8"></rect></svg>
+                    </button>
+                    <button id="close-btn" class="window-control-btn is-close" type="button" aria-label="关闭聊天窗" title="关闭">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg>
+                    </button>
+                </div>
             </div>
         </header>
 
