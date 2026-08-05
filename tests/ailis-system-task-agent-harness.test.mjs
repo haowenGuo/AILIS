@@ -44,6 +44,14 @@ test('Persona handoff contract exposes no TaskAgent lifecycle controls', () => {
     assert.deepEqual(contract.schema.properties, {});
     assert.equal(validateToolContract('handoff_task', {}).ok, true);
     assert.equal(validateToolContract('handoff_task', { continuation: 'new' }).ok, false);
+
+    const goalContract = getToolContract('task_goal');
+    assert.deepEqual(goalContract.schema.properties.action.enum, ['get', 'set', 'complete', 'clear']);
+    assert.equal(validateToolContract('task_goal', { action: 'set' }).ok, false);
+    assert.equal(validateToolContract('task_goal', {
+        action: 'set',
+        objective: '完成长期任务'
+    }).ok, true);
 });
 
 test('system TaskAgent handoff preserves the exact request and returns a compact result packet', async () => {
@@ -80,7 +88,11 @@ test('system TaskAgent handoff preserves the exact request and returns a compact
     assert.equal(calls.length, 1);
     assert.equal(calls[0].agent.task, message);
     assert.equal(calls[0].agent.originalTask, message);
-    assert.equal(calls[0].context.originalUserGoal, message);
+    assert.equal(calls[0].context.originalUserGoal, undefined);
+    assert.equal(calls[0].context.currentTaskRequest, message);
+    assert.ok(calls[0].context.taskAgentThreadId);
+    assert.ok(calls[0].context.taskAgentTurnId);
+    assert.equal(calls[0].context.taskAgentActiveGoal, null);
     assert.equal(calls[0].context.desktopRealEval, true);
     assert.equal(calls[0].context.benchmarkName, 'Apple ToolSandbox');
     assert.equal(calls[0].context.benchmarkScenario, 'toolsandbox-scenario-1');
@@ -187,8 +199,8 @@ test('system TaskAgent persists answer candidates across warning-complete handof
         sessionId: 'candidate-session',
         runId: 'candidate-parent-2'
     });
-    assert.equal(calls[1].context.priorBestAnswerCandidate.answer, '4');
-    assert.deepEqual(calls[1].context.priorAnswerCandidates.map((item) => item.answer), ['4']);
+    assert.equal(calls[1].context.priorBestAnswerCandidate, null);
+    assert.deepEqual(calls[1].context.priorAnswerCandidates, []);
 });
 
 test('repeated handoff in the same parent run reuses the first TaskAgent result', async () => {
@@ -219,7 +231,7 @@ test('repeated handoff in the same parent run reuses the first TaskAgent result'
     assert.equal(harness.getStatus().parentRunHandoffCount, 1);
 });
 
-test('a later handoff resumes the persistent TaskAgent checkpoint without replacing the original goal', async () => {
+test('a later handoff starts a new Turn in the same persistent Session without an implicit fixed Goal', async () => {
     const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-task-harness-resume-'));
     const calls = [];
     const harness = new AILISSystemTaskAgentHarness({
@@ -245,11 +257,80 @@ test('a later handoff resumes the persistent TaskAgent checkpoint without replac
 
     assert.equal(calls.length, 2);
     assert.equal(calls[1].args.inheritanceMode, 'checkpoint');
-    assert.deepEqual(calls[1].args.contextManagerCheckpoint, { version: 1 });
-    assert.equal(calls[1].context.originalUserGoal, '分析这个仓库的长期任务架构。');
+    assert.equal(calls[1].args.contextManagerCheckpoint.version, 1);
+    assert.equal(calls[1].args.contextManagerCheckpoint.turn_index.length, 1);
+    assert.equal(calls[1].context.originalUserGoal, undefined);
+    assert.equal(calls[1].context.taskAgentActiveGoal, null);
+    assert.equal(calls[1].context.taskAgentThreadId, calls[0].context.taskAgentThreadId);
+    assert.notEqual(calls[1].context.taskAgentTurnId, calls[0].context.taskAgentTurnId);
     assert.equal(calls[1].agent.task, '继续补充失败恢复部分。');
-    assert.equal(packet.original_goal, '分析这个仓库的长期任务架构。');
+    assert.equal(packet.original_goal, '');
     assert.equal(packet.current_request, '继续补充失败恢复部分。');
+});
+
+test('v1 fixed-goal state migrates into historical Session context without retaining goal authority', async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-task-harness-v1-migration-'));
+    const statePath = path.join(rootDir, 'state.json');
+    const legacyCheckpoint = {
+        items: [{
+            type: 'message',
+            role: 'user',
+            content: [{
+                type: 'input_text',
+                text: `<ailis_context_checkpoint>\n${JSON.stringify({
+                    schema: 'ailis.semantic_context_checkpoint.v1',
+                    originalGoalPreservedVerbatim: true,
+                    originalGoal: '查北京天气',
+                    taskState: {
+                        original_user_goal: '查北京天气',
+                        current_request: '继续天气任务',
+                        progress: { toolCalls: 1 }
+                    }
+                })}\n</ailis_context_checkpoint>`
+            }]
+        }]
+    };
+    await fs.writeFile(statePath, JSON.stringify({
+        version: 1,
+        sessions: {
+            'legacy-session': {
+                taskId: 'legacy-task',
+                sessionId: 'legacy-session',
+                originalGoal: '查北京天气',
+                latestRequest: '改成木偶攻略',
+                status: 'completed',
+                checkpoint: legacyCheckpoint
+            }
+        }
+    }), 'utf8');
+    const calls = [];
+    const harness = new AILISSystemTaskAgentHarness({
+        rootDir,
+        statePath,
+        executeTaskAgent: async (payload) => {
+            calls.push(payload);
+            return completedResult({
+                runId: payload.agent.childRunId,
+                answer: '继续木偶攻略',
+                checkpoint: payload.args.contextManagerCheckpoint
+            });
+        }
+    });
+
+    const migrated = harness.getThread('legacy-session');
+    assert.equal(migrated.activeGoal, null);
+    assert.equal(migrated.turns[0].request, '改成木偶攻略');
+    assert.match(JSON.stringify(migrated.contextCheckpoint), /ailis_session_checkpoint/);
+    assert.doesNotMatch(JSON.stringify(migrated.contextCheckpoint), /查北京天气|originalGoal/);
+
+    const packet = await harness.handoff({}, {
+        currentUserMessage: '继续',
+        sessionId: 'legacy-session'
+    });
+    assert.equal(calls[0].context.taskAgentActiveGoal, null);
+    assert.equal(calls[0].context.currentTaskRequest, '继续');
+    assert.doesNotMatch(JSON.stringify(calls[0].args.contextManagerCheckpoint), /查北京天气|originalGoal/);
+    assert.equal(packet.original_goal, '');
 });
 
 test('incomplete TaskAgent results preserve unresolved fields across checkpoint resume', async () => {
@@ -304,11 +385,10 @@ test('incomplete TaskAgent results preserve unresolved fields across checkpoint 
         'datetime_info_to_timestamp requires year and month.',
         'execution_evidence_missing'
     ]);
-    assert.deepEqual(calls[1].args.contextManagerCheckpoint, {
-        version: 1,
-        marker: 'invalid-datetime-call'
-    });
-    assert.deepEqual(calls[1].context.priorUnresolvedFields, first.unresolved_fields);
+    assert.equal(calls[1].args.contextManagerCheckpoint.version, 1);
+    assert.equal(calls[1].args.contextManagerCheckpoint.marker, 'invalid-datetime-call');
+    assert.equal(calls[1].args.contextManagerCheckpoint.turn_index.length, 1);
+    assert.deepEqual(calls[1].context.priorUnresolvedFields, []);
 });
 
 test('incomplete TaskAgent handoffs merge unresolved prerequisites until completion', async () => {
@@ -360,11 +440,8 @@ test('incomplete TaskAgent handoffs merge unresolved prerequisites until complet
         sessionId: 'session-monotonic-unresolved'
     });
 
-    assert.deepEqual(second.unresolved_fields, [
-        'missing_current_time_observation',
-        'latest_stateful_tool_call_rejected'
-    ]);
-    assert.deepEqual(calls[2].context.priorUnresolvedFields, second.unresolved_fields);
+    assert.deepEqual(second.unresolved_fields, ['latest_stateful_tool_call_rejected']);
+    assert.deepEqual(calls[2].context.priorUnresolvedFields, []);
     assert.equal(third.status, 'completed');
     assert.deepEqual(harness.getTask('session-monotonic-unresolved').unresolvedFields, []);
 });
@@ -397,12 +474,15 @@ test('the session TaskAgent remains long-lived across later requests', async () 
 
     assert.equal(calls.length, 2);
     assert.equal(calls[1].args.inheritanceMode, 'checkpoint');
-    assert.deepEqual(calls[1].args.contextManagerCheckpoint, { version: 1, marker: 'excel-map-task' });
-    assert.equal(calls[1].context.originalUserGoal, '读取这个 Excel 地图并求第 11 步颜色。');
+    assert.equal(calls[1].args.contextManagerCheckpoint.version, 1);
+    assert.equal(calls[1].args.contextManagerCheckpoint.marker, 'excel-map-task');
+    assert.equal(calls[1].context.originalUserGoal, undefined);
     assert.equal(calls[1].context.currentTaskRequest, '你自己找');
-    assert.equal(calls[1].agent.originalTask, '读取这个 Excel 地图并求第 11 步颜色。');
+    assert.equal(calls[1].context.taskAgentThreadId, calls[0].context.taskAgentThreadId);
+    assert.notEqual(calls[1].context.taskAgentTurnId, calls[0].context.taskAgentTurnId);
+    assert.equal(calls[1].agent.originalTask, '你自己找');
     assert.equal(calls[1].agent.task, '你自己找');
-    assert.equal(packet.original_goal, '读取这个 Excel 地图并求第 11 步颜色。');
+    assert.equal(packet.original_goal, '');
     assert.equal(packet.current_request, '你自己找');
 });
 
@@ -446,7 +526,157 @@ test('concurrent follow-up input joins the running system TaskAgent instead of s
     assert.equal(executionCount, 1);
     assert.deepEqual(receivedInputs, ['补充检查测试覆盖率。']);
     assert.equal(firstPacket.task_id, secondPacket.task_id);
+    assert.equal(firstPacket.turn_id, secondPacket.turn_id);
     assert.equal(secondPacket.current_request, '补充检查测试覆盖率。');
+});
+
+test('the TaskAgent model can replace and retain a dynamic Goal across ordinary Session Turns', async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-task-harness-dynamic-goal-'));
+    const calls = [];
+    let harness;
+    harness = new AILISSystemTaskAgentHarness({
+        rootDir,
+        executeTaskAgent: async (payload) => {
+            calls.push(payload);
+            if (payload.agent.task === '查北京天气') {
+                const result = harness.applyGoalAction({
+                    action: 'set',
+                    objective: '查清北京天气'
+                }, payload.context);
+                assert.equal(result.ok, true);
+            }
+            if (payload.agent.task === '改成木偶攻略') {
+                assert.doesNotMatch(
+                    JSON.stringify(payload.args.contextManagerCheckpoint),
+                    /查清北京天气/
+                );
+                const result = harness.applyGoalAction({
+                    action: 'set',
+                    objective: '完成木偶攻略'
+                }, payload.context);
+                assert.equal(result.ok, true);
+            }
+            if (payload.agent.task === '攻略已经完成') {
+                const result = harness.applyGoalAction({
+                    action: 'complete',
+                    expected_goal_id: payload.context.taskAgentActiveGoal.goalId
+                }, payload.context);
+                assert.equal(result.ok, true);
+            }
+            return completedResult({
+                runId: payload.agent.childRunId,
+                answer: `完成：${payload.agent.task}`,
+                checkpoint: payload.agent.task === '查北京天气'
+                    ? {
+                          version: calls.length,
+                          items: [{
+                              type: 'message',
+                              role: 'developer',
+                              content: [{
+                                  type: 'input_text',
+                                  text: `<ailis_session_checkpoint>\n${JSON.stringify({
+                                      schema: 'ailis.session_context_checkpoint.v2',
+                                      activeGoal: { objective: '查清北京天气' },
+                                      currentRequest: '查北京天气',
+                                      taskState: {
+                                          active_goal: { objective: '查清北京天气' },
+                                          current_request: '查北京天气'
+                                      }
+                                  })}\n</ailis_session_checkpoint>`
+                              }]
+                          }]
+                      }
+                    : { version: calls.length }
+            });
+        }
+    });
+
+    await harness.handoff({}, { currentUserMessage: '哈哈', sessionId: 'dynamic-goal-session' });
+    const weather = await harness.handoff({}, {
+        currentUserMessage: '查北京天气',
+        sessionId: 'dynamic-goal-session'
+    });
+    const puppet = await harness.handoff({}, {
+        currentUserMessage: '改成木偶攻略',
+        sessionId: 'dynamic-goal-session'
+    });
+    const continued = await harness.handoff({}, {
+        currentUserMessage: '继续',
+        sessionId: 'dynamic-goal-session'
+    });
+    const completed = await harness.handoff({}, {
+        currentUserMessage: '攻略已经完成',
+        sessionId: 'dynamic-goal-session'
+    });
+
+    assert.equal(new Set(calls.map((call) => call.context.taskAgentThreadId)).size, 1);
+    assert.equal(new Set(calls.map((call) => call.context.taskAgentTurnId)).size, 5);
+    assert.equal(calls[0].context.taskAgentActiveGoal, null);
+    assert.equal(calls[1].context.taskAgentActiveGoal, null);
+    assert.equal(calls[2].context.taskAgentActiveGoal.objective, '查清北京天气');
+    assert.equal(calls[3].context.taskAgentActiveGoal.objective, '完成木偶攻略');
+    assert.equal(calls[4].context.taskAgentActiveGoal.objective, '完成木偶攻略');
+    assert.equal(weather.original_goal, '查清北京天气');
+    assert.equal(puppet.original_goal, '完成木偶攻略');
+    assert.equal(continued.original_goal, '完成木偶攻略');
+    assert.equal(completed.original_goal, '');
+    const thread = harness.getThread('dynamic-goal-session');
+    assert.equal(thread.activeGoal, null);
+    assert.equal(thread.goalHistory[0].objective, '查清北京天气');
+    assert.equal(thread.goalHistory[0].status, 'replaced');
+    assert.equal(thread.goalHistory.at(-1).objective, '完成木偶攻略');
+    assert.equal(thread.goalHistory.at(-1).status, 'completed');
+});
+
+test('Turn steer requires the currently active Turn id and never opens a replacement Turn', async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-task-harness-steer-id-'));
+    let releaseExecution;
+    const executionGate = new Promise((resolve) => {
+        releaseExecution = resolve;
+    });
+    let activeTurnId = '';
+    const harness = new AILISSystemTaskAgentHarness({
+        rootDir,
+        executeTaskAgent: async (payload) => {
+            activeTurnId = payload.context.taskAgentTurnId;
+            payload.registerInputHandler(() => {});
+            await executionGate;
+            return completedResult({
+                runId: payload.agent.childRunId,
+                answer: 'done',
+                checkpoint: { version: 1 }
+            });
+        }
+    });
+
+    const running = harness.handoff({}, {
+        currentUserMessage: '开始分析',
+        sessionId: 'steer-id-session'
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    await assert.rejects(
+        harness.handoff({}, {
+            currentUserMessage: '错误地转向另一个 Turn',
+            sessionId: 'steer-id-session',
+            expectedTaskAgentTurnId: 'turn_stale'
+        }),
+        /Turn mismatch/
+    );
+    const steered = harness.handoff({}, {
+        currentUserMessage: '补充当前分析',
+        sessionId: 'steer-id-session',
+        expectedTaskAgentTurnId: activeTurnId
+    });
+    releaseExecution();
+    const [firstPacket, steeredPacket] = await Promise.all([running, steered]);
+
+    assert.equal(firstPacket.turn_id, activeTurnId);
+    assert.equal(steeredPacket.turn_id, activeTurnId);
+    assert.equal(harness.getThread('steer-id-session').turns.length, 1);
+    assert.deepEqual(
+        harness.getThread('steer-id-session').turns[0].inputs.map((input) => input.message),
+        ['开始分析', '补充当前分析']
+    );
 });
 
 test('Persona and TaskAgent receive disjoint orchestration tool surfaces', () => {
@@ -470,12 +700,21 @@ test('Persona and TaskAgent receive disjoint orchestration tool surfaces', () =>
             name: 'read',
             description: 'Read a file.',
             parameters: { type: 'object', properties: { path: { type: 'string' } } }
+        },
+        task_goal: {
+            name: 'task_goal',
+            description: 'Manage the optional active Goal.',
+            parameters: {
+                type: 'object',
+                required: ['action'],
+                properties: { action: { type: 'string' } }
+            }
         }
     };
     const gateway = {
         gatewayToolRuntimeRegistry: {
             definition: (id) => specs[id] ? { spec: specs[id] } : null,
-            modelVisibleSpecs: () => [specs.handoff_task, specs.spawn_agent, specs.read]
+            modelVisibleSpecs: () => [specs.handoff_task, specs.spawn_agent, specs.read, specs.task_goal]
         }
     };
 
@@ -483,6 +722,13 @@ test('Persona and TaskAgent receive disjoint orchestration tool surfaces', () =>
         requestContext: { agentRole: 'persona_orchestrator' }
     });
     const taskAgent = buildAgentDirectToolSpecs(gateway, {
+        requestContext: {
+            agentRole: 'task_agent',
+            taskAgentThreadId: 'thread-test',
+            taskAgentTurnId: 'turn-test'
+        }
+    });
+    const standaloneTaskAgent = buildAgentDirectToolSpecs(gateway, {
         requestContext: { agentRole: 'task_agent' }
     });
 
@@ -492,5 +738,6 @@ test('Persona and TaskAgent receive disjoint orchestration tool surfaces', () =>
         requestContext: { agentRole: 'persona_orchestrator' }
     });
     assert.deepEqual(personaAfterHandoff, []);
-    assert.deepEqual(taskAgent.map((spec) => spec.name), ['read']);
+    assert.deepEqual(taskAgent.map((spec) => spec.name), ['read', 'task_goal']);
+    assert.deepEqual(standaloneTaskAgent.map((spec) => spec.name), ['read']);
 });

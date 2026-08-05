@@ -135,7 +135,7 @@ test('ContextManager can build an auditable context package and compact stale to
     assert.equal(pkg.recentResponseItems.filter((item) => item.type === 'function_call_output').length, 8);
 });
 
-test('ContextManager semantic compaction replaces active history while preserving task state and refs', () => {
+test('TaskAgent semantic compaction preserves active Goal, current Turn, and refs without a fixed first Goal', () => {
     const originalTask = 'Research the release and answer with exact dates. Do not omit the source.';
     const items = [
         {
@@ -165,11 +165,20 @@ test('ContextManager semantic compaction replaces active history while preservin
     const manager = new ContextManager({ items, toolOutputChars: 50000 });
     const compacted = manager.semanticCompact({
         force: true,
+        contextMode: 'task_agent_session',
         goal: originalTask,
         constraints: ['Do not omit the source.'],
         currentPlan: { items: [{ step: 'verify dates', status: 'in_progress' }] },
         unresolvedFields: ['official publication date'],
-        taskState: { progress: { toolCalls: 10 } },
+        taskState: {
+            active_goal: {
+                goal_id: 'goal-release-research',
+                objective: originalTask,
+                status: 'active'
+            },
+            current_request: 'Verify the remaining official publication date.',
+            progress: { toolCalls: 10 }
+        },
         pinnedEvidenceManifest: [{ id: 'artifact-date', summary: 'Official date evidence' }],
         budgetConfig: {
             effectiveInputLimitTokens: 2000,
@@ -187,8 +196,11 @@ test('ContextManager semantic compaction replaces active history while preservin
     assert.match(serialized, /official publication date/);
     assert.match(serialized, /artifact-date/);
     assert.match(serialized, /semantic-ref-9/);
-    assert.equal(compacted.checkpoint.originalGoalPreservedVerbatim, true);
-    assert.equal(compacted.checkpoint.originalGoal, originalTask);
+    assert.equal(compacted.checkpoint.schema, 'ailis.session_context_checkpoint.v2');
+    assert.equal(compacted.checkpoint.activeGoal.objective, originalTask);
+    assert.equal(compacted.checkpoint.currentRequest, 'Verify the remaining official publication date.');
+    assert.equal(Object.hasOwn(compacted.checkpoint, 'originalGoal'), false);
+    assert.match(serialized, /latest Turn input is authoritative/);
 });
 
 test('Persona semantic compaction keeps recent visible user and assistant turns plus active task context', () => {

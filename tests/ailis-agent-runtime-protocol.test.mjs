@@ -185,6 +185,9 @@ test('ToolContext keeps approval and sandbox policy in one reusable object', () 
         agentRole: 'persona_orchestrator',
         contextMode: 'persona',
         agent_path: '/root',
+        parentSessionId: 'persona_session_1',
+        taskAgentThreadId: 'thread_1',
+        taskAgentTurnId: 'turn_1',
         approved: true,
         allowOutsideWorkspace: true,
         permissionProfile: 'full-access',
@@ -218,6 +221,9 @@ test('ToolContext keeps approval and sandbox policy in one reusable object', () 
     assert.equal(context.agentRole, 'persona_orchestrator');
     assert.equal(context.contextMode, 'persona');
     assert.equal(context.agent_path, '/root');
+    assert.equal(context.parentSessionId, 'persona_session_1');
+    assert.equal(context.taskAgentThreadId, 'thread_1');
+    assert.equal(context.taskAgentTurnId, 'turn_1');
     assert.equal(context.approved, true);
     assert.equal(context.allowOutsideWorkspace, true);
     assert.equal(context.permissionProfile, 'full-access');
