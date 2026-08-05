@@ -9,7 +9,7 @@ This directory contains the design record, operating guides, evaluation plans, a
 - [Codex Multi-Agent Data-Flow Migration](ailis-codex-multi-agent-dataflow-migration.md) - current agent object and result flow.
 - [Memory Architecture V2](ailis-memory-architecture-v2.md) - current memory lanes and lifecycle.
 - [Memory BM25 + MMR Baseline](ailis-memory-bm25-mmr-baseline.md) - current production retrieval
-  parameters, evaluation evidence, latency, and future comparison rules.
+  parameters, BM25-only evaluation results, latency, and future comparison rules.
 - [Tool Ecosystem Driver Guide](tool-ecosystem-driver-guide.md) - tool, MCP, skill, and adapter entry points.
 - [Demo and Benchmark Scorecard](ailis-demo-benchmark-scorecard.md) - current evidence and benchmark status.
 
