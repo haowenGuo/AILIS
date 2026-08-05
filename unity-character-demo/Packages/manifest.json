@@ -1,0 +1,32 @@
+{
+  "dependencies": {
+    "com.hecomi.ulipsync": "file:vendor/com.hecomi.ulipsync",
+    "com.kirurobo.uniwinc": "file:vendor/com.kirurobo.uniwinc",
+    "jp.lilxyzw.liltoon": "file:vendor/jp.lilxyzw.liltoon",
+    "com.unity.animation.rigging": "1.2.1",
+    "com.unity.burst": "1.8.21",
+    "com.unity.mathematics": "1.2.6",
+    "com.unity.nuget.newtonsoft-json": "3.2.1",
+    "com.unity.render-pipelines.universal": "14.0.12",
+    "com.unity.toonshader": "0.9.4-preview",
+    "com.unity.timeline": "1.7.6",
+    "com.unity.ugui": "1.0.0",
+    "com.vrmc.gltf": "file:vendor/com.vrmc.gltf",
+    "com.vrmc.vrm": "file:vendor/com.vrmc.vrm",
+    "com.unity.modules.ai": "1.0.0",
+    "com.unity.modules.animation": "1.0.0",
+    "com.unity.modules.assetbundle": "1.0.0",
+    "com.unity.modules.audio": "1.0.0",
+    "com.unity.modules.director": "1.0.0",
+    "com.unity.modules.imageconversion": "1.0.0",
+    "com.unity.modules.imgui": "1.0.0",
+    "com.unity.modules.jsonserialize": "1.0.0",
+    "com.unity.modules.particlesystem": "1.0.0",
+    "com.unity.modules.physics": "1.0.0",
+    "com.unity.modules.physics2d": "1.0.0",
+    "com.unity.modules.screencapture": "1.0.0",
+    "com.unity.modules.ui": "1.0.0",
+    "com.unity.modules.uielements": "1.0.0",
+    "com.unity.modules.unityanalytics": "1.0.0"
+  }
+}
