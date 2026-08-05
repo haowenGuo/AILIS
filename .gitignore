@@ -37,6 +37,7 @@ eval-results/
 AILISClaw/
 历史版本/
 release/
+/release-*/
 backend/blog_content/auto_blog_runs/**/local_runner_*.log
 backend/blog_content/auto_blog_runs/**/runner.lock
 backend/blog_content/auto_blog_runs/**/RUNNER_LOG.md

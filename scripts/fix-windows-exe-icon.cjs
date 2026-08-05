@@ -110,6 +110,11 @@ function resolveAppExe(context, projectRoot) {
 
 function fixWindowsExeIcon(context = {}) {
     const projectRoot = path.resolve(__dirname, '..');
+    const packageMetadata = JSON.parse(fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf8'));
+    const appVersion = normalizeString(
+        context?.packager?.appInfo?.version,
+        normalizeString(packageMetadata.version, '0.0.0')
+    );
     const platformName = normalizeString(context?.electronPlatformName, process.platform);
     if (platformName !== 'win32' && process.platform !== 'win32') {
         return;
@@ -139,6 +144,10 @@ function fixWindowsExeIcon(context = {}) {
         exePath,
         '--set-icon',
         iconPath,
+        '--set-file-version',
+        appVersion,
+        '--set-product-version',
+        appVersion,
         '--set-version-string',
         'FileDescription',
         'AILIS',
@@ -167,7 +176,7 @@ function fixWindowsExeIcon(context = {}) {
         ].filter(Boolean).join('\n'));
     }
 
-    console.log(`[AILIS icon] Windows exe icon written: ${exePath}`);
+    console.log(`[AILIS icon] Windows exe icon and ${appVersion} version resources written: ${exePath}`);
 }
 
 module.exports = fixWindowsExeIcon;
