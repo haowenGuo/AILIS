@@ -211,6 +211,8 @@ test('AILIS exposes Codex-style web_run and preserves refs across search and ope
             const isSectionView = request.args.url.endsWith('/section-view');
             const isPagedView = request.args.url.endsWith('/paged-view');
             const isParentIndexView = request.args.url.endsWith('/rules');
+            const isRefinedParentIndexView = request.args.url.endsWith('/collections/evidence');
+            const isRuleChildView = request.args.url.endsWith('/rules/article-vi');
             return mcpBridgeResult('L1: opened source', {
                     contentType: 'text/html',
                     fetchBackend: 'crawl4ai_local',
@@ -235,20 +237,25 @@ test('AILIS exposes Codex-style web_run and preserves refs across search and ope
                         url: request.args.url,
                         ref_id: request.args.url,
                         line_start: isPagedView ? 58 : 1,
-                        line_end: isPagedView ? 105 : isParentIndexView ? 7 : 1,
-                        total_lines: isPagedView ? 175 : isParentIndexView ? 7 : isSectionView ? 3 : 1,
+                        line_end: isPagedView ? 105 : isParentIndexView || isRefinedParentIndexView ? 7 : isRuleChildView ? 4 : 1,
+                        total_lines: isPagedView ? 175 : isParentIndexView || isRefinedParentIndexView ? 7 : isRuleChildView ? 4 : isSectionView ? 3 : 1,
                         has_more_after: isPagedView,
                         lines: isPagedView ? [
                             { lineno: 58, text: '1. ARTICLE I. GENERAL' },
                             { lineno: 105, text: '2. ARTICLE II. OTHER' }
-                        ] : isParentIndexView ? [
+                        ] : isParentIndexView || isRefinedParentIndexView ? [
                             { lineno: 1, text: '1. ARTICLE I. GENERAL' },
-                            { lineno: 2, text: '2. ARTICLE VI. WITNESSES' },
-                            { lineno: 3, text: 'Rule 601. Competency to Testify in General' },
-                            { lineno: 4, text: 'Rule 611. Mode and Order of Examining Witnesses' },
+                            { lineno: 2, text: '2. ARTICLE VI. WITNESSES Rule 601. Competency to Testify in General' },
+                            { lineno: 3, text: 'Rule 611. Mode and Order of Examining Witnesses' },
+                            { lineno: 4, text: '' },
                             { lineno: 5, text: '3. ARTICLE VII. OPINIONS AND EXPERT TESTIMONY' },
                             { lineno: 6, text: 'Rule 701. Opinion Testimony by Lay Witnesses' },
                             { lineno: 7, text: 'Rule 702. Testimony by Expert Witnesses' }
+                        ] : isRuleChildView ? [
+                            { lineno: 1, text: 'Rule 603. Oath or Affirmation to Testify Truthfully' },
+                            { lineno: 2, text: 'Rule 609. Impeachment by Evidence of a Criminal Conviction of Witnesses' },
+                            { lineno: 3, text: 'Rule 610. Religious Beliefs or Opinions of Witnesses' },
+                            { lineno: 4, text: 'Rule 615. Excluding Witnesses' }
                         ] : isSectionView ? [
                             { lineno: 1, text: '## Contents' },
                             { lineno: 2, text: '[Studio albums](https://example.test/section-view#Studio_albums)' },
@@ -359,6 +366,38 @@ test('AILIS exposes Codex-style web_run and preserves refs across search and ope
                 ]
             });
         }
+        if (request.args.query === 'nested selector index only fixture') {
+            return mcpBridgeResult('Nested selector parent-index results.', {
+                results: [
+                    {
+                        title: 'Rules overview',
+                        url: 'https://example.test/rules',
+                        snippet: 'Several rule collections.'
+                    },
+                    {
+                        title: 'Evidence rules index',
+                        url: 'https://example.test/rules/evidence',
+                        snippet: 'ARTICLE I. GENERAL PROVISIONS Rule 101. Scope ARTICLE VI. WITNESSES Rule 601. Competency ARTICLE VII. OPINIONS Rule 701. Opinion Testimony by Lay Witnesses'
+                    }
+                ]
+            });
+        }
+        if (request.args.query === 'nested selector refinable collection fixture') {
+            return mcpBridgeResult('Nested selector collection results.', {
+                results: [
+                    {
+                        title: 'ARTICLE VI',
+                        url: 'https://example.test/collections/evidence/article-vi',
+                        snippet: 'ARTICLE VI. WITNESSES Rule 601. Competency Rule 611. Examining Witnesses'
+                    },
+                    {
+                        title: 'Collections index',
+                        url: 'https://example.test/collections',
+                        snippet: 'Choose a collection before comparing its articles.'
+                    }
+                ]
+            });
+        }
         return mcpBridgeResult(`Search result for ${request.args.query}`, {
                 results: [{
                     title: request.args.query,
@@ -445,8 +484,10 @@ test('AILIS exposes Codex-style web_run and preserves refs across search and ope
         assert.equal(webRun.parameters.properties.image_query, undefined);
         assert.equal(
             webRun.parameters.properties.screenshot.description,
-            'Capture one browser-rendered screenshot and return it to the main model as visual tool evidence.'
+            'Capture one browser-rendered screenshot and return it to the main model as visual tool evidence. The default primary viewport preserves readable detail; request fullPage only when lower-page context is required.'
         );
+        assert.equal(webRun.parameters.properties.screenshot.items.properties.fullPage.type, 'boolean');
+        assert.equal(webRun.parameters.properties.screenshot.items.properties.height.maximum, 16000);
         assert.equal(firstTurnTools.some((tool) => tool.name === 'web_search'), false);
         assert.equal(firstTurnTools.some((tool) => tool.name === 'mcp__ailis_research__open_page'), false);
 
@@ -585,6 +626,137 @@ test('AILIS exposes Codex-style web_run and preserves refs across search and ope
         );
         assert.match(partialSelectorResponse.result.content[0].text, /open the nearest parent index/i);
 
+        const partialSelectionState = gateway.getWebRunSession({ runId: 'run-selector-partial' });
+        partialSelectionState.selectionProtocol.ranges = [[1, 115]];
+        partialSelectionState.selectionProtocol.totalLines = 153;
+
+        const repeatedDiscoveryResponse = await gateway.callTool({
+            tool: 'web_run',
+            args: {
+                search_query: [{ q: 'nested selector comparison fixture repeated discovery' }],
+                response_length: 'medium'
+            },
+            context: {
+                workspace: workspaceRoot,
+                runId: 'run-selector-partial',
+                sessionId: 'session-selector-partial',
+                iteration: 3,
+                exactAnswerMode: true,
+                currentUserMessage: 'Which article has "witnesses" in the most titles?'
+            }
+        });
+        assert.equal(repeatedDiscoveryResponse.ok, true, JSON.stringify(repeatedDiscoveryResponse));
+        assert.equal(repeatedDiscoveryResponse.result.structuredContent.search.selectionAudit, undefined);
+        assert.equal(
+            repeatedDiscoveryResponse.result.structuredContent.search.selectionProtocol.parent_index_ref,
+            'turn2search1'
+        );
+        assert.deepEqual(
+            repeatedDiscoveryResponse.result.structuredContent.search.suggestedNextCalls[0].args,
+            { open: [{ ref_id: 'turn2search1', lineno: 116 }] }
+        );
+        assert.match(repeatedDiscoveryResponse.result.content[0].text, /cannot replace that pending evidence action/i);
+        partialSelectionState.selectionProtocol.ranges = [];
+        partialSelectionState.selectionProtocol.totalLines = 0;
+
+        const indexOnlySelectorResponse = await gateway.callTool({
+            tool: 'web_run',
+            args: {
+                search_query: [{ q: 'nested selector index only fixture' }],
+                response_length: 'medium'
+            },
+            context: {
+                workspace: workspaceRoot,
+                runId: 'run-selector-index-only',
+                sessionId: 'session-selector-index-only',
+                iteration: 2,
+                exactAnswerMode: true,
+                currentUserMessage: 'Which article has "witnesses" in the most titles?'
+            }
+        });
+        assert.equal(indexOnlySelectorResponse.ok, true, JSON.stringify(indexOnlySelectorResponse));
+        const indexOnlyAudit = indexOnlySelectorResponse.result.structuredContent.search.selectionAudit;
+        assert.equal(indexOnlyAudit.status, 'parent_index_required');
+        assert.equal(indexOnlyAudit.parent_index_candidates.length, 1);
+        assert.deepEqual(
+            indexOnlySelectorResponse.result.structuredContent.search.suggestedNextCalls[0].args,
+            { open: [{ ref_id: indexOnlyAudit.parent_index_candidates[0] }] }
+        );
+        assert.match(indexOnlySelectorResponse.result.content[0].text, /open the nearest parent index/i);
+
+        const refinableSelectorResponse = await gateway.callTool({
+            tool: 'web_run',
+            args: {
+                search_query: [{ q: 'nested selector refinable collection fixture' }],
+                response_length: 'medium'
+            },
+            context: {
+                workspace: workspaceRoot,
+                runId: 'run-selector-refinement',
+                sessionId: 'session-selector-refinement',
+                iteration: 0,
+                exactAnswerMode: true,
+                currentUserMessage: 'Which article has "witnesses" in the most titles?'
+            }
+        });
+        assert.equal(refinableSelectorResponse.ok, true, JSON.stringify(refinableSelectorResponse));
+        assert.equal(
+            refinableSelectorResponse.result.structuredContent.search.selectionAudit.parent_index_candidates.length,
+            1
+        );
+
+        const refinedParentIndexResponse = await gateway.callTool({
+            tool: 'web_run',
+            args: {
+                open: [{ ref_id: 'https://example.test/collections/evidence', lineno: 1 }]
+            },
+            context: {
+                workspace: workspaceRoot,
+                runId: 'run-selector-refinement',
+                sessionId: 'session-selector-refinement',
+                iteration: 1,
+                exactAnswerMode: true,
+                currentUserMessage: 'Which article has "witnesses" in the most titles?'
+            }
+        });
+        assert.equal(refinedParentIndexResponse.ok, true, JSON.stringify(refinedParentIndexResponse));
+        assert.equal(refinedParentIndexResponse.result.structuredContent.selectionDependencyAdvisory, undefined);
+        assert.equal(
+            refinedParentIndexResponse.result.structuredContent.selectionProtocol.boundary_complete,
+            true
+        );
+        assert.equal(
+            refinedParentIndexResponse.result.structuredContent.selectionProtocol.winning_group,
+            'ARTICLE VII'
+        );
+        assert.deepEqual(
+            refinedParentIndexResponse.result.structuredContent.selectionProtocol.exact_title_match_counts
+                .map((group) => [group.group, group.count]),
+            [
+                ['ARTICLE VII', 2],
+                ['ARTICLE VI', 1],
+                ['ARTICLE I', 0]
+            ]
+        );
+
+        const terminalFactSearchResponse = await gateway.callTool({
+            tool: 'web_run',
+            args: {
+                search_query: [{ q: 'nested selector comparison fixture' }],
+                response_length: 'medium'
+            },
+            context: {
+                workspace: workspaceRoot,
+                runId: 'run-selector-refinement',
+                sessionId: 'session-selector-refinement',
+                iteration: 2,
+                exactAnswerMode: true,
+                currentUserMessage: 'Which article has "witnesses" in the most titles?'
+            }
+        });
+        assert.equal(terminalFactSearchResponse.ok, true, JSON.stringify(terminalFactSearchResponse));
+        assert.equal(terminalFactSearchResponse.result.structuredContent.search.selectionAudit, undefined);
+
         const prematureChildResponse = await gateway.callTool({
             tool: 'web_run',
             args: {
@@ -594,7 +766,7 @@ test('AILIS exposes Codex-style web_run and preserves refs across search and ope
                 workspace: workspaceRoot,
                 runId: 'run-selector-partial',
                 sessionId: 'session-selector-partial',
-                iteration: 3,
+                iteration: 4,
                 exactAnswerMode: true,
                 currentUserMessage: 'Which article has "witnesses" in the most titles?'
             }
@@ -615,7 +787,7 @@ test('AILIS exposes Codex-style web_run and preserves refs across search and ope
                 workspace: workspaceRoot,
                 runId: 'run-selector-partial',
                 sessionId: 'session-selector-partial',
-                iteration: 4,
+                iteration: 5,
                 exactAnswerMode: true,
                 currentUserMessage: 'Which article has "witnesses" in the most titles?'
             }
@@ -652,12 +824,41 @@ test('AILIS exposes Codex-style web_run and preserves refs across search and ope
                 workspace: workspaceRoot,
                 runId: 'run-selector-partial',
                 sessionId: 'session-selector-partial',
-                iteration: 5,
+                iteration: 6,
                 exactAnswerMode: true,
                 currentUserMessage: 'Which article has "witnesses" in the most titles?'
             }
         });
         assert.equal(allowedChildResponse.ok, true, JSON.stringify(allowedChildResponse));
+
+        const parentIndexAfterChildResponse = await gateway.callTool({
+            tool: 'web_run',
+            args: {
+                open: [{ ref_id: 'turn2search1', lineno: 1 }]
+            },
+            context: {
+                workspace: workspaceRoot,
+                runId: 'run-selector-partial',
+                sessionId: 'session-selector-partial',
+                iteration: 6,
+                exactAnswerMode: true,
+                currentUserMessage: 'Which article has "witnesses" in the most titles?'
+            }
+        });
+        assert.equal(parentIndexAfterChildResponse.ok, true, JSON.stringify(parentIndexAfterChildResponse));
+        assert.deepEqual(
+            parentIndexAfterChildResponse.result.structuredContent.selectionProtocol.exact_title_match_counts
+                .map((group) => [group.group, group.count]),
+            [
+                ['ARTICLE VII', 2],
+                ['ARTICLE VI', 1],
+                ['ARTICLE I', 0]
+            ]
+        );
+        assert.equal(
+            parentIndexAfterChildResponse.result.structuredContent.selectionProtocol.winning_group,
+            'ARTICLE VII'
+        );
 
         const pagedSelectorResponse = await gateway.callTool({
             tool: 'web_run',
@@ -974,7 +1175,10 @@ test('AILIS exposes Codex-style web_run and preserves refs across search and ope
             args: {
                 screenshot: [{
                     ref_id: 'https://example.test/layout',
-                    detail: 'original'
+                    detail: 'original',
+                    fullPage: true,
+                    width: 1200,
+                    height: 2400
                 }]
             },
             context: {
@@ -988,6 +1192,9 @@ test('AILIS exposes Codex-style web_run and preserves refs across search and ope
         assert.equal(screenshotResponse.ok, true, JSON.stringify(screenshotResponse));
         assert.equal(bridgeRequests.at(-1).tool, 'webpage_screenshot');
         assert.equal(bridgeRequests.at(-1).args.url, 'https://example.test/layout');
+        assert.equal(bridgeRequests.at(-1).args.fullPage, true);
+        assert.equal(bridgeRequests.at(-1).args.width, 1200);
+        assert.equal(bridgeRequests.at(-1).args.height, 2400);
         assert.match(bridgeRequests.at(-1).args.path, /\.ailis-web-screenshots[\\/].+\.png$/);
         assert.equal(
             screenshotResponse.result.structuredContent.modelImage.image_url,
@@ -1243,8 +1450,8 @@ test('AILIS Gateway TaskAgent thread reuses parent LLM settings', async () => {
     assert.deepEqual(calls[0].messageHistory, []);
     assert.equal(calls[0].context.cleanContext, true);
     assert.equal(calls[0].context.contextMode, 'task_agent');
-    assert.equal(calls[0].maxAgentSteps, 7);
-    assert.equal(calls[0].context.maxAgentSteps, 7);
+    assert.equal(Object.hasOwn(calls[0], 'maxAgentSteps'), false);
+    assert.equal(Object.hasOwn(calls[0].context, 'maxAgentSteps'), false);
     assert.deepEqual(calls[0].llmSettings, llmSettings);
     assert.deepEqual(calls[0].context.llmSettings, llmSettings);
 });

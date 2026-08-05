@@ -17,6 +17,7 @@ const DEFAULT_TOOL_OUTPUT_CHARS = 24000;
 const DEFAULT_THREAD_ITEM_PREVIEW_CHARS = 1200;
 const TOOL_SEARCH_OUTPUT_DESCRIPTION_CHARS = 220;
 const TOOL_SEARCH_OUTPUT_PROPERTIES_LIMIT = 32;
+const SOURCE_VIEWPORT_LINK_LIMIT = 12;
 
 function cloneJson(value) {
     if (value == null || typeof value !== 'object') {
@@ -638,34 +639,89 @@ function buildWebSearchFunctionOutput(toolOutput = {}, webSearchOutput = {}) {
     });
 }
 
+function collectSourceViewportLinks(details = {}, limit = SOURCE_VIEWPORT_LINK_LIMIT) {
+    const sourceWindow = normalizeText(details.type) === 'source_viewport'
+        ? details
+        : firstObject(
+            details.sourceWindow,
+            details.source_window,
+            details.sourceViewport,
+            details.source_viewport,
+            details.source
+        );
+    const visibleText = [
+        ...(Array.isArray(sourceWindow.lines) ? sourceWindow.lines : []).map((line) => line?.text || line?.rendered),
+        sourceWindow.url,
+        sourceWindow.ref_id
+    ].map(normalizeText).filter(Boolean).join(' ').toLowerCase();
+    const candidates = [];
+    let order = 0;
+    const addLinks = (links, priority = 0, sectionText = '') => {
+        const normalizedSectionText = normalizeText(sectionText).toLowerCase();
+        const sectionVisible = normalizedSectionText && visibleText.includes(normalizedSectionText);
+        for (const link of Array.isArray(links) ? links : []) {
+            const url = normalizeText(link?.url || link?.href);
+            if (!url) {
+                continue;
+            }
+            const text = normalizeText(link?.text || link?.title || link?.label || url);
+            const textVisible = text && visibleText.includes(text.toLowerCase());
+            candidates.push({
+                id: Number(link?.id) || undefined,
+                text,
+                url,
+                score: priority + (sectionVisible ? 40 : 0) + (textVisible ? 20 : 0),
+                order: order++
+            });
+        }
+    };
+
+    addLinks(details.observedRelevantLinks, 300);
+    addLinks(details.observed_relevant_links, 300);
+    addLinks(sourceWindow.links, 260);
+
+    const relations = firstObject(details.htmlRelations, details.html_relations);
+    for (const [index, section] of (Array.isArray(relations.sections) ? relations.sections : []).entries()) {
+        const sectionPath = Array.isArray(section?.path) ? section.path : [];
+        const sectionText = normalizeText(section?.heading || sectionPath[sectionPath.length - 1] || section?.textPreview);
+        addLinks(section?.links, 180 - Math.min(index, 20), sectionText);
+    }
+    addLinks(relations.linkRelations, 80);
+
+    const byUrl = new Map();
+    for (const candidate of candidates) {
+        const existing = byUrl.get(candidate.url);
+        if (!existing || candidate.score > existing.score) {
+            byUrl.set(candidate.url, candidate);
+        }
+    }
+    return [...byUrl.values()]
+        .sort((left, right) => right.score - left.score || left.order - right.order)
+        .slice(0, Math.max(0, Number(limit) || SOURCE_VIEWPORT_LINK_LIMIT))
+        .map(({ id, text, url }) => ({ ...(id ? { id } : {}), text, url }));
+}
+
 function formatSourceViewportLinks(toolOutput = {}, details = {}) {
     if (normalizeText(toolOutput.toolName) !== 'web_run') {
         return '';
     }
-    const links = Array.isArray(details.observedRelevantLinks)
-        ? details.observedRelevantLinks
-        : Array.isArray(details.observed_relevant_links)
-        ? details.observed_relevant_links
-        : [];
+    const links = collectSourceViewportLinks(details, 8);
     if (!links.length) {
         return '';
     }
     const sourceRef = normalizeText(details.ref_id || details.sourceWindow?.ref_id || details.source?.ref_id);
-    if (!sourceRef) {
-        return '';
-    }
     const lines = ['Links:'];
     links.slice(0, 8).forEach((link, index) => {
         const url = normalizeText(link.url);
         if (!url) {
             return;
         }
-        const id = Number(link.id) || index + 1;
-        lines.push(`${index + 1}. [${id}] ${link.text || link.title || url}`);
+        const id = Number(link.id) || null;
+        lines.push(`${index + 1}. ${id ? `[${id}] ` : ''}${link.text || link.title || url}`);
         lines.push(`   URL: ${url}`);
-        lines.push(`   Click link: web_run ${safeJsonStringify({
-            click: [{ ref_id: sourceRef, id }]
-        }, '{}')}`);
+        lines.push(id && sourceRef
+            ? `   Click link: web_run ${safeJsonStringify({ click: [{ ref_id: sourceRef, id }] }, '{}')}`
+            : `   Open link: web_run ${safeJsonStringify({ open: [{ ref_id: url }] }, '{}')}`);
     });
     return lines.length > 1 ? lines.join('\n') : '';
 }
@@ -751,6 +807,29 @@ function formatSourceViewportLines(sourceWindow = {}) {
         '',
         rendered
     ].filter((line, index) => index === 7 || normalizeText(line)).join('\n');
+}
+
+function formatSourceViewportOverflowPreviews(sourceWindow = {}) {
+    const previews = Array.isArray(sourceWindow.overflowPreviews)
+        ? sourceWindow.overflowPreviews
+        : Array.isArray(sourceWindow.overflow_previews)
+        ? sourceWindow.overflow_previews
+        : [];
+    const rendered = previews
+        .slice(0, 5)
+        .map((line) => {
+            const lineno = Number(line?.lineno || line?.lineNumber || line?.line_number || 0) || '?';
+            const text = normalizeText(line?.rendered) || `L${lineno}: ${normalizeText(line?.text)}`;
+            return summarizeForModel(text, 720);
+        })
+        .filter(Boolean);
+    if (!rendered.length) {
+        return '';
+    }
+    return [
+        'Longest source rows preserved from the explicitly requested range:',
+        ...rendered
+    ].join('\n');
 }
 
 function formatExpandedLongSourceLines(sourceWindow = {}) {
@@ -877,12 +956,13 @@ function buildSourceViewportFunctionOutput(toolOutput = {}, sourceViewport = {})
             toolOutput.durationMs != null ? `duration_ms=${toolOutput.durationMs}` : ''
         ].filter(Boolean).join('\n')),
         ContentItem.inputText(formatSourceViewportMatches(details)),
+        ContentItem.inputText(formatStructuredTableProjections(details)),
+        ContentItem.inputText(formatSourceViewportOverflowPreviews(sourceWindow)),
+        ContentItem.inputText(formatExpandedLongSourceLines(sourceWindow)),
+        ContentItem.inputText(formatSourceViewportLines(sourceWindow)),
         ContentItem.inputText(formatSourceSelectionProtocol(details)),
         ContentItem.inputText(formatWebSuggestedNextCalls(details, toolOutput.toolName)),
-        ContentItem.inputText(formatSourceViewportLinks(toolOutput, details)),
-        ContentItem.inputText(formatStructuredTableProjections(details)),
-        ContentItem.inputText(formatExpandedLongSourceLines(sourceWindow)),
-        ContentItem.inputText(formatSourceViewportLines(sourceWindow))
+        ContentItem.inputText(formatSourceViewportLinks(toolOutput, details))
     ].filter(Boolean);
     return FunctionCallOutputPayload.fromContentItems(contentItems, {
         success: toolOutput.ok === true ? true : toolOutput.ok === false ? false : null
@@ -1042,6 +1122,7 @@ module.exports = {
     DEFAULT_THREAD_ITEM_PREVIEW_CHARS,
     DEFAULT_TOOL_OUTPUT_CHARS,
     extractText,
+    collectSourceViewportLinks,
     makeRolloutItem,
     normalizeToolOutput,
     sanitizeWebToolDetailsForModel,

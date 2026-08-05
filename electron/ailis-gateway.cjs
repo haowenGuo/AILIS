@@ -86,7 +86,6 @@ const DEFAULT_HTTP_REQUEST_TIMEOUT_MS = Math.max(0, Number(process.env.AILIS_GAT
 const DEFAULT_PROFILE_CURATION_START_DELAY_MS = Number(process.env.AILIS_PROFILE_CURATION_START_DELAY_MS || 60 * 1000);
 const DEFAULT_PROFILE_CURATION_CHECK_INTERVAL_MS = Number(process.env.AILIS_PROFILE_CURATION_CHECK_INTERVAL_MS || 6 * 60 * 60 * 1000);
 const DEFAULT_PROFILE_CURATION_DEBOUNCE_MS = Number(process.env.AILIS_PROFILE_CURATION_DEBOUNCE_MS || 2 * 60 * 1000);
-const TASK_AGENT_MAX_MODEL_ROUNDS = 9;
 
 const GATEWAY_BACKED_TOOL_IDS = new Set(['sessions_list', 'gateway', 'cron', 'nodes']);
 const SESSION_BOUND_TOOL_IDS = new Set([
@@ -622,11 +621,23 @@ function updateSelectionProtocolTitleCounts(selectionProtocol = null, sourceView
                 matchedChildren: []
             };
         }
-        if (!currentGroup || countExactLexicalOccurrences(line.text, quotedTerm) === 0) {
+        if (!currentGroup) {
             continue;
         }
         const childAnchors = anchors.filter((anchor) => structuredAnchorKind(anchor) !== parentKind);
-        for (const childAnchor of childAnchors) {
+        for (let childIndex = 0; childIndex < childAnchors.length; childIndex += 1) {
+            const childAnchor = childAnchors[childIndex];
+            const titleStart = line.text.toLowerCase().indexOf(childAnchor.toLowerCase());
+            const nextAnchor = childAnchors[childIndex + 1];
+            const nextTitleStart = nextAnchor
+                ? line.text.toLowerCase().indexOf(nextAnchor.toLowerCase(), titleStart + childAnchor.length)
+                : -1;
+            const childTitle = titleStart >= 0
+                ? line.text.slice(titleStart, nextTitleStart > titleStart ? nextTitleStart : undefined)
+                : '';
+            if (countExactLexicalOccurrences(childTitle, quotedTerm) === 0) {
+                continue;
+            }
             const groupKey = currentGroup.toLowerCase();
             groups[groupKey] ||= {
                 label: currentGroup,
@@ -640,7 +651,7 @@ function updateSelectionProtocolTitleCounts(selectionProtocol = null, sourceView
                 groups[groupKey].matchedChildren.push({
                     key: childKey,
                     label: normalizeString(childAnchor),
-                    title: line.text
+                    title: normalizeString(childTitle, line.text)
                 });
             }
         }
@@ -686,15 +697,25 @@ function buildSearchSelectionAudit(sourceQuestion = '', results = []) {
     const allEntries = (Array.isArray(results) ? results : [])
         .map((result) => {
             const title = normalizeString(result?.title);
+            const snippet = normalizeString(result?.snippet);
             const parentAnchor = extractStructuredQueryAnchors(title)[0] || '';
+            const snippetAnchorKinds = extractStructuredQueryAnchors(snippet)
+                .map((anchor) => normalizeString(anchor.split(/\s+/)[0]).toLowerCase())
+                .filter(Boolean);
             return {
             ref_id: normalizeString(result?.ref_id || result?.id),
             title,
+            snippet,
             url: normalizeString(result?.url),
             structured_anchor: parentAnchor,
             structured_kind: structuredAnchorKind(title),
+            parent_index_signal: Boolean(
+                parentKind &&
+                snippetAnchorKinds.includes(parentKind) &&
+                snippetAnchorKinds.some((kind) => kind !== parentKind)
+            ),
             visible_snippet_occurrences: countExactLexicalChildTitleUnits(
-                result?.snippet,
+                snippet,
                 quotedTerm,
                 parentAnchor
             ),
@@ -730,8 +751,37 @@ function buildSearchSelectionAudit(sourceQuestion = '', results = []) {
         right.visible_snippet_occurrences - left.visible_snippet_occurrences ||
         (left.search_rank || Number.MAX_SAFE_INTEGER) - (right.search_rank || Number.MAX_SAFE_INTEGER)
     );
+    const indexOnlyCandidates = allEntries
+        .filter((entry) => entry.parent_index_signal)
+        .sort((left, right) => {
+            try {
+                const pathDifference = new URL(right.url).pathname.length - new URL(left.url).pathname.length;
+                if (pathDifference) {
+                    return pathDifference;
+                }
+            } catch {}
+            return (left.search_rank || Number.MAX_SAFE_INTEGER) -
+                (right.search_rank || Number.MAX_SAFE_INTEGER);
+        });
     if (!counts.length) {
-        return null;
+        if (!indexOnlyCandidates.length) {
+            return null;
+        }
+        return {
+            status: 'parent_index_required',
+            selector: lower.match(/\b(most|least|fewest|highest|lowest)\b/)?.[1] || '',
+            parent_kind: parentKind,
+            quoted_term: quotedTerm,
+            lexical_match: 'exact_whole_token_or_phrase',
+            scope: 'structured_parent_and_child_anchors_visible_in_search_result_snippets',
+            result_ranking_is_selection_evidence: false,
+            counts_are_final_group_counts: false,
+            competing_matching_candidates_visible: 0,
+            candidate_set_coverage_sufficient: false,
+            parent_index_candidates: indexOnlyCandidates.map((entry) => entry.ref_id),
+            caveat: 'The results expose a structured parent index but not comparable child groups. Open the most specific parent index and count child-title matches across its complete boundary before selecting a group.',
+            candidates: []
+        };
     }
     const parentIndexCandidates = counts
         .flatMap((parentCandidate) => allEntries.filter((candidate) => {
@@ -1485,7 +1535,6 @@ class AILISGateway extends EventEmitter {
         this.taskAgentHarness = options.taskAgentHarness || new AILISSystemTaskAgentHarness({
             rootDir: path.join(this.auditDir, 'task-agent-harness'),
             taskResultCapsules: this.taskResultCapsules,
-            maxAgentSteps: TASK_AGENT_MAX_MODEL_ROUNDS,
             executeTaskAgent: (payload) => this.executeTaskAgent(payload),
             emitEvent: (type, payload) => this.emitGatewayEvent(type, payload)
         });
@@ -3303,14 +3352,6 @@ class AILISGateway extends EventEmitter {
             : Array.isArray(context.fileAttachments)
                 ? context.fileAttachments
                 : [];
-        const requestedMaxAgentSteps = Number(args.maxAgentSteps || context.maxAgentSteps || TASK_AGENT_MAX_MODEL_ROUNDS);
-        const taskAgentMaxSteps = Math.max(
-            1,
-            Math.min(
-                Number.isFinite(requestedMaxAgentSteps) ? requestedMaxAgentSteps : TASK_AGENT_MAX_MODEL_ROUNDS,
-                TASK_AGENT_MAX_MODEL_ROUNDS
-            )
-        );
         const childContext = this.mergeDefaultContext({
             ...context,
             ...(parentLlmSettings ? { llmSettings: parentLlmSettings } : {}),
@@ -3330,8 +3371,7 @@ class AILISGateway extends EventEmitter {
             taskAgentInheritanceMode: inheritanceMode,
             initialContextManagerCheckpoint: inheritedCheckpoint,
             attachments,
-            fileAttachments: attachments,
-            maxAgentSteps: taskAgentMaxSteps
+            fileAttachments: attachments
         });
         await onEvent?.({
             type: 'subagent.runner.started',
@@ -3356,7 +3396,6 @@ class AILISGateway extends EventEmitter {
             taskAgentInheritanceMode: inheritanceMode,
             initialContextManagerCheckpoint: inheritedCheckpoint,
             initialStepResults: Array.isArray(args.initialStepResults) ? args.initialStepResults : [],
-            maxAgentSteps: taskAgentMaxSteps,
             context: childContext
         });
         const unregisterInputHandler = typeof registerInputHandler === 'function'
@@ -3901,7 +3940,25 @@ class AILISGateway extends EventEmitter {
                 terms.length > 24 ||
                 (terms.length >= 12 && uniqueTerms.size / terms.length < 0.65);
         });
-        const selectionAudit = merged.length
+        const searchState = this.getWebRunSession(context);
+        const activeSelectionProtocol = searchState.selectionProtocol;
+        const pendingSelectionProtocol = activeSelectionProtocol &&
+            activeSelectionProtocol.boundaryComplete !== true &&
+            normalizeString(activeSelectionProtocol.parentIndexRef) &&
+            normalizeString(activeSelectionProtocol.parentIndexUrl)
+            ? activeSelectionProtocol
+            : null;
+        const selectionBoundaryWorkStarted = Boolean(
+            activeSelectionProtocol &&
+            (
+                activeSelectionProtocol.boundaryComplete === true ||
+                pendingSelectionProtocol ||
+                Number(activeSelectionProtocol.relevantStart) > 0 ||
+                (Array.isArray(activeSelectionProtocol.groupTitleCounts) &&
+                    activeSelectionProtocol.groupTitleCounts.length > 0)
+            )
+        );
+        const selectionAudit = merged.length && !selectionBoundaryWorkStarted
             ? buildSearchSelectionAudit(sourceQuestion, merged)
             : null;
         const historicalArchiveUrl = !merged.length && looksLikeHistoricalWebStateQuestion(sourceQuestion)
@@ -3956,11 +4013,10 @@ class AILISGateway extends EventEmitter {
             selectionAudit?.candidate_set_coverage_sufficient === false &&
             selectionAudit.parent_index_candidates.length
         ) {
-            const state = this.getWebRunSession(context);
             const parentIndexRef = selectionAudit.parent_index_candidates[0];
-            const parentIndex = state.refs.get(parentIndexRef);
-            if (parentIndex?.url && state.selectionProtocol?.boundaryComplete !== true) {
-                state.selectionProtocol = {
+            const parentIndex = searchState.refs.get(parentIndexRef);
+            if (parentIndex?.url && searchState.selectionProtocol?.boundaryComplete !== true) {
+                searchState.selectionProtocol = {
                     status: 'parent_index_required',
                     parentKind: selectionAudit.parent_kind,
                     quotedTerm: selectionAudit.quoted_term,
@@ -3995,7 +4051,34 @@ class AILISGateway extends EventEmitter {
                 .map((candidate) => merged.find((result) => result.ref_id === candidate.ref_id))
                 .filter(Boolean)
             : merged;
-        const suggestedNextCalls = merged.length
+        const pendingSelectionRangeEnd = pendingSelectionProtocol
+            ? Math.max(
+                  0,
+                  ...(Array.isArray(pendingSelectionProtocol.ranges)
+                      ? pendingSelectionProtocol.ranges.map((range) =>
+                            Number(Array.isArray(range) ? range[1] : range?.end) || 0
+                        )
+                      : [])
+              )
+            : 0;
+        const pendingSelectionNextLine = pendingSelectionProtocol &&
+            pendingSelectionRangeEnd > 0 &&
+            Number(pendingSelectionProtocol.totalLines) > pendingSelectionRangeEnd
+            ? pendingSelectionRangeEnd + 1
+            : 0;
+        const pendingSelectionNavigationSuggestion = pendingSelectionProtocol
+            ? {
+                  tool: 'web_run',
+                  args: {
+                      open: [{
+                          ref_id: pendingSelectionProtocol.parentIndexRef,
+                          ...(pendingSelectionNextLine ? { lineno: pendingSelectionNextLine } : {})
+                      }]
+                  },
+                  reason: `Complete the preserved ${normalizeString(pendingSelectionProtocol.parentKind, 'parent')} index comparison before another discovery search. The candidate boundary for "${normalizeString(pendingSelectionProtocol.selector, 'the requested selector')}" is still incomplete.`
+              }
+            : null;
+        const discoveredNextCalls = merged.length
             ? [
                   ...(deferredToolSearchSuggestion ? [deferredToolSearchSuggestion] : []),
                   ...specializedNextCalls,
@@ -4027,6 +4110,13 @@ class AILISGateway extends EventEmitter {
                   reason: 'Retry the same model-authored queries without optional recency or domain transport filters.'
               }]
             : [];
+        const suggestedNextCalls = [
+            ...(pendingSelectionNavigationSuggestion ? [pendingSelectionNavigationSuggestion] : []),
+            ...discoveredNextCalls.filter((call) =>
+                !pendingSelectionNavigationSuggestion ||
+                JSON.stringify(call?.args || {}) !== JSON.stringify(pendingSelectionNavigationSuggestion.args)
+            )
+        ].slice(0, 3);
         const webSearchOutput = {
             type: 'function_call_output',
             webSearchCall,
@@ -4049,6 +4139,20 @@ class AILISGateway extends EventEmitter {
                 ...(queryGuidance ? { queryGuidance } : {}),
                 ...(queryAssumptionAudit ? { queryAssumptionAudit } : {}),
                 ...(selectionAudit ? { selectionAudit } : {}),
+                ...(pendingSelectionProtocol ? {
+                    selectionProtocol: {
+                        status: normalizeString(pendingSelectionProtocol.status, 'parent_index_required'),
+                        parent_kind: normalizeString(pendingSelectionProtocol.parentKind),
+                        quoted_term: normalizeString(pendingSelectionProtocol.quotedTerm),
+                        selector: normalizeString(pendingSelectionProtocol.selector),
+                        parent_index_ref: normalizeString(pendingSelectionProtocol.parentIndexRef),
+                        parent_index_url: normalizeString(pendingSelectionProtocol.parentIndexUrl),
+                        boundary_complete: false,
+                        exact_title_match_counts: Array.isArray(pendingSelectionProtocol.groupTitleCounts)
+                            ? cloneJson(pendingSelectionProtocol.groupTitleCounts)
+                            : []
+                    }
+                } : {}),
                 ...(suggestedNextCalls.length ? { suggestedNextCalls } : {})
             }
         };
@@ -4075,6 +4179,12 @@ class AILISGateway extends EventEmitter {
                   'These are diagnostic snippet counts, not final per-group title counts. Inspect the leading candidates and verify unique matching titles plus the candidate-set boundary before selecting a child.'
               ]
             : [];
+        const pendingSelectionProtocolText = pendingSelectionProtocol
+            ? [
+                  `Selection protocol pending: the preserved ${normalizeString(pendingSelectionProtocol.parentKind, 'parent')} index [${pendingSelectionProtocol.parentIndexRef}] has not been inspected to a complete candidate boundary.`,
+                  'Another discovery query cannot replace that pending evidence action. Open the preserved parent index next; abandon it only if the open action fails or the source is unavailable.'
+              ]
+            : [];
         const text = [
             ...(queryAssumptionAudit
                 ? [
@@ -4083,9 +4193,12 @@ class AILISGateway extends EventEmitter {
                   ]
                 : []),
             ...selectionAuditText,
-            ...((queryAssumptionAudit || selectionAudit || historicalArchiveSuggestion) && suggestedNextCalls[0]
+            ...pendingSelectionProtocolText,
+            ...((queryAssumptionAudit || selectionAudit || pendingSelectionNavigationSuggestion || historicalArchiveSuggestion) && suggestedNextCalls[0]
                 ? [
-                      'Next recommended call (advisory; the model may choose another evidence action):',
+                      pendingSelectionNavigationSuggestion
+                          ? 'Next required evidence call (preserved from the earlier tool result):'
+                          : 'Next recommended call (advisory; the model may choose another evidence action):',
                       `${suggestedNextCalls[0].tool} ${JSON.stringify(suggestedNextCalls[0].args)}`
                   ]
                 : []),
@@ -4148,7 +4261,7 @@ class AILISGateway extends EventEmitter {
             .replace(/#.*$/, '')
             .replace(/\/+$/, '')
             .toLowerCase();
-        const selectionDependencyAdvisory = (
+        let selectionDependencyAdvisory = (
             mode === 'open' &&
             context.exactAnswerMode === true &&
             selectionProtocol &&
@@ -4283,22 +4396,70 @@ class AILISGateway extends EventEmitter {
             primarySourceView.end_line
         ) || 0;
         const parentKind = selectorParentKind(sourceQuestion);
+        const structuredAnchorsInViewport = sourceViews.flatMap((sourceView) =>
+            (Array.isArray(sourceView?.lines) ? sourceView.lines : [])
+                .flatMap((line) => extractStructuredQueryAnchors(line?.text || line?.rendered))
+        );
         const parentAnchorsInViewport = new Set(
-            sourceViews.flatMap((sourceView) =>
-                (Array.isArray(sourceView?.lines) ? sourceView.lines : [])
-                    .flatMap((line) => extractStructuredQueryAnchors(line?.text || line?.rendered))
-            )
+            structuredAnchorsInViewport
                 .filter((anchor) => structuredAnchorKind(anchor) === parentKind)
                 .map((anchor) => anchor.toLowerCase())
         );
-        const selectionGroupCounts = updateSelectionProtocolTitleCounts(
-            selectionProtocol,
-            sourceViews
+        const childAnchorsInViewport = new Set(
+            structuredAnchorsInViewport
+                .filter((anchor) => {
+                    const kind = structuredAnchorKind(anchor);
+                    return kind && kind !== parentKind;
+                })
+                .map((anchor) => anchor.toLowerCase())
         );
+        const isNestedIndexRefinement = (() => {
+            if (!selectionProtocol?.parentIndexUrl || !resolved.url) {
+                return false;
+            }
+            try {
+                const currentIndexUrl = new URL(selectionProtocol.parentIndexUrl);
+                const openedUrl = new URL(resolved.url);
+                const currentPath = currentIndexUrl.pathname.replace(/\/+$/, '') || '/';
+                const openedPath = openedUrl.pathname.replace(/\/+$/, '') || '/';
+                const descendantPrefix = currentPath === '/' ? '/' : `${currentPath}/`;
+                return openedUrl.origin === currentIndexUrl.origin &&
+                    openedPath !== currentPath &&
+                    openedPath.startsWith(descendantPrefix);
+            } catch {
+                return false;
+            }
+        })();
         if (
             selectionProtocol &&
-            comparableUrl(resolved.url) === comparableUrl(selectionProtocol.parentIndexUrl)
+            selectionProtocol.boundaryComplete !== true &&
+            isNestedIndexRefinement &&
+            parentAnchorsInViewport.size >= 2 &&
+            childAnchorsInViewport.size >= 2
         ) {
+            selectionProtocol.status = 'parent_index_refined';
+            selectionProtocol.parentIndexRef = viewRef;
+            selectionProtocol.parentIndexUrl = resolved.url;
+            selectionProtocol.relevantStart = 0;
+            selectionProtocol.totalLines = 0;
+            selectionProtocol.ranges = [];
+            selectionProtocol.currentGroup = '';
+            selectionProtocol.groupTitleMatches = {};
+            selectionProtocol.groupTitleCounts = [];
+            selectionProtocol.boundaryComplete = false;
+            selectionDependencyAdvisory = null;
+            delete details.selectionDependencyAdvisory;
+            delete details.selection_dependency_advisory;
+        }
+        const isSelectionParentIndex = selectionProtocol &&
+            comparableUrl(resolved.url) === comparableUrl(selectionProtocol.parentIndexUrl);
+        if (isSelectionParentIndex && viewRef) {
+            selectionProtocol.parentIndexRef = viewRef;
+        }
+        const selectionGroupCounts = isSelectionParentIndex
+            ? updateSelectionProtocolTitleCounts(selectionProtocol, sourceViews)
+            : cloneJson(selectionProtocol?.groupTitleCounts || []);
+        if (isSelectionParentIndex) {
             const lineStart = Number(
                 primarySourceView.lineStart ||
                 primarySourceView.line_start ||
@@ -4538,6 +4699,10 @@ class AILISGateway extends EventEmitter {
                 detail: normalizeString(operation.detail, 'original'),
                 ...(operation.waitFor ? { waitFor: operation.waitFor } : {}),
                 ...(operation.delayMs !== undefined ? { delayMs: operation.delayMs } : {}),
+                ...(operation.fullPage !== undefined ? { fullPage: operation.fullPage } : {}),
+                ...(operation.full_page !== undefined ? { fullPage: operation.full_page } : {}),
+                ...(operation.width !== undefined ? { width: operation.width } : {}),
+                ...(operation.height !== undefined ? { height: operation.height } : {}),
                 ...(sourceQuestion ? { query: sourceQuestion } : {})
             }
         }, context);

@@ -137,3 +137,48 @@ console.log('WORKBENCH_FINAL=' + answer);
         await fs.rm(workspaceRoot, { recursive: true, force: true });
     }
 });
+
+test('AILIS computer exec projects repeated JSON records before a truncated raw preview', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-computer-json-preview-'));
+    const tool = new AILISComputerTool({ workspaceRoot });
+    const outputStore = new AILISOutputStore({
+        rootDir: path.join(workspaceRoot, '.ailis-state', 'output-store')
+    });
+    const runtime = { workspaceRoot, workspaceDir: workspaceRoot, outputStore };
+    const scriptPath = path.join(workspaceRoot, 'emit-records.mjs');
+
+    try {
+        await fs.writeFile(scriptPath, `
+const rows = Array.from({ length: 40 }, (_, index) => ({
+    entity: { type: 'uri', value: 'https://example.test/entity/' + index },
+    entityLabel: { type: 'literal', value: index === 28 ? 'TARGET_CITY' : 'Entity ' + index, 'xml:lang': 'en' },
+    place: { type: 'uri', value: 'https://example.test/place/' + index },
+    placeLabel: { type: 'literal', value: 'Place ' + index, 'xml:lang': 'en' },
+    coordinate: { type: 'literal', value: 'Point(' + index + ' ' + (index + 1) + ')' }
+}));
+process.stdout.write(JSON.stringify(rows, null, 2));
+`, 'utf8');
+
+        const executed = await tool.execute({
+            action: 'exec',
+            command: process.execPath,
+            args: [scriptPath],
+            workdir: workspaceRoot,
+            timeout: 8,
+            maxPreviewChars: 900
+        }, { approved: true }, runtime);
+
+        assert.equal(executed.details.status, 'completed');
+        assert.equal(executed.details.outputStore.previewTruncated, true);
+        assert.equal(executed.details.outputStore.structuredPreviewPath, '$');
+        assert.equal(executed.details.outputStore.structuredRowCount, 40);
+        assert.match(executed.details.outputStore.structuredPreview, /columns: entityLabel \| placeLabel \| coordinate/);
+        assert.match(executed.details.outputStore.structuredPreview, /\[29\] TARGET_CITY \| Place 28 \| Point\(28 29\)/);
+        assert.match(executed.content[0].text, /--- structured JSON records preview ---/);
+        assert.match(executed.content[0].text, /\[29\] TARGET_CITY \| Place 28 \| Point\(28 29\)/);
+        assert.match(executed.content[0].text, /outputId=/);
+    } finally {
+        await tool.shutdown();
+        await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
+});

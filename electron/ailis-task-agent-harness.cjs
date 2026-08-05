@@ -4,9 +4,8 @@ const { randomUUID } = require('crypto');
 
 const TASK_HARNESS_STATE_VERSION = 1;
 const TASK_RESULT_SCHEMA = 'ailis.task_result.v1';
-const TASK_AGENT_MAX_MODEL_ROUNDS = 9;
 const MAX_PARENT_RUN_HANDOFFS = 256;
-const FINAL_STATUSES = new Set(['completed', 'success', 'succeeded']);
+const FINAL_STATUSES = new Set(['completed', 'completed_with_warnings', 'success', 'succeeded']);
 
 function normalizeString(value, fallback = '') {
     const text = typeof value === 'string' ? value.trim() : '';
@@ -85,6 +84,49 @@ function normalizeSourceRefs(values = []) {
     return refs;
 }
 
+function normalizeAnswerCandidate(value = {}) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return null;
+    }
+    const answerValue = value.answer ?? value.value ?? value.exactAnswer ?? value.exact_answer;
+    const answer = normalizeString(
+        ['string', 'number', 'boolean'].includes(typeof answerValue) ? String(answerValue) : ''
+    );
+    if (!answer) return null;
+    const confidence = Number(value.confidence);
+    const score = Number(value.score);
+    return {
+        answer,
+        persona_text: normalizeString(value.personaText || value.persona_text, answer),
+        reason: normalizeString(value.reason || value.rationale),
+        evidence_refs: uniqueStrings(value.evidenceRefs || value.evidence_refs, 16),
+        source: normalizeString(value.source),
+        source_tool: normalizeString(value.sourceTool || value.source_tool),
+        source_step_id: normalizeString(value.sourceStepId || value.source_step_id),
+        kind: normalizeString(value.kind, 'singular'),
+        iteration: Number.isFinite(Number(value.iteration)) ? Number(value.iteration) : 0,
+        selected: value.selected === true,
+        finalizable: value.finalizable === true,
+        ...(Number.isFinite(confidence) ? { confidence } : {}),
+        ...(Number.isFinite(score) ? { score } : {})
+    };
+}
+
+function normalizeAnswerCandidates(values = [], limit = 32) {
+    const candidates = [];
+    const seen = new Set();
+    for (const value of Array.isArray(values) ? values : []) {
+        const candidate = normalizeAnswerCandidate(value);
+        if (!candidate) continue;
+        const key = [candidate.answer.toLowerCase(), candidate.source, candidate.source_tool, candidate.kind].join('\u0000');
+        if (seen.has(key)) continue;
+        seen.add(key);
+        candidates.push(candidate);
+        if (candidates.length >= limit) break;
+    }
+    return candidates;
+}
+
 function refsFromCollectedData(collectedData = [], key = 'evidenceRefs') {
     const refs = [];
     for (const item of Array.isArray(collectedData) ? collectedData : []) {
@@ -119,6 +161,8 @@ function normalizeStoredTask(raw = {}) {
         evidenceRefs: uniqueStrings(raw.evidenceRefs),
         outputRefs: uniqueStrings(raw.outputRefs),
         sourceRefs: normalizeSourceRefs(raw.sourceRefs),
+        answerCandidates: normalizeAnswerCandidates(raw.answerCandidates || raw.answer_candidates),
+        bestAnswerCandidate: normalizeAnswerCandidate(raw.bestAnswerCandidate || raw.best_answer_candidate),
         unresolvedFields: uniqueStrings(raw.unresolvedFields, 24),
         traceRef: normalizeString(raw.traceRef || raw.latestRunId),
         createdAt: normalizeString(raw.createdAt, new Date().toISOString()),
@@ -142,6 +186,10 @@ function buildTaskResultPacket(result = {}, task = {}) {
     );
     const displayText = normalizeString(result.displayText || result.display_text || finalAnswer);
     const partialAnswer = normalizeString(handoff.partialAnswer);
+    const answerCandidates = normalizeAnswerCandidates(handoff.answerCandidates || handoff.answer_candidates);
+    const bestAnswerCandidate = normalizeAnswerCandidate(
+        handoff.bestAnswerCandidate || handoff.best_answer_candidate
+    );
     const status = normalizeString(handoff.status || result.status, result.ok === false ? 'failed' : 'completed').toLowerCase();
     const unresolvedFields = FINAL_STATUSES.has(status)
         ? []
@@ -165,6 +213,8 @@ function buildTaskResultPacket(result = {}, task = {}) {
         final_answer: finalAnswer,
         display_text: displayText,
         partial_answer: partialAnswer,
+        answer_candidates: answerCandidates,
+        best_answer_candidate: bestAnswerCandidate,
         source_refs: normalizeSourceRefs(handoff.sourceRefs),
         evidence_refs: refsFromCollectedData(collectedData, 'evidenceRefs'),
         output_refs: refsFromCollectedData(collectedData, 'outputRefs'),
@@ -186,10 +236,6 @@ class AILISSystemTaskAgentHarness {
             : null;
         this.emitEvent = typeof options.emitEvent === 'function' ? options.emitEvent : () => {};
         this.taskResultCapsules = options.taskResultCapsules || null;
-        this.maxAgentSteps = Math.max(2, Math.min(
-            Number(options.maxAgentSteps) || TASK_AGENT_MAX_MODEL_ROUNDS,
-            TASK_AGENT_MAX_MODEL_ROUNDS
-        ));
         const loaded = readJson(this.statePath, {});
         this.state = {
             version: TASK_HARNESS_STATE_VERSION,
@@ -327,7 +373,6 @@ class AILISSystemTaskAgentHarness {
                     task: message,
                     inheritanceMode,
                     contextManagerCheckpoint: prior?.checkpoint || null,
-                    maxAgentSteps: this.maxAgentSteps,
                     llmSettings: context.llmSettings || context.llm || null
                 },
                 context: {
@@ -341,9 +386,12 @@ class AILISSystemTaskAgentHarness {
                     current_task_request: task.latestRequest,
                     priorUnresolvedFields: prior?.unresolvedFields || [],
                     prior_unresolved_fields: prior?.unresolvedFields || [],
+                    priorAnswerCandidates: prior?.answerCandidates || [],
+                    prior_answer_candidates: prior?.answerCandidates || [],
+                    priorBestAnswerCandidate: prior?.bestAnswerCandidate || null,
+                    prior_best_answer_candidate: prior?.bestAnswerCandidate || null,
                     taskAgentInheritanceMode: inheritanceMode,
                     initialContextManagerCheckpoint: prior?.checkpoint || null,
-                    maxAgentSteps: this.maxAgentSteps
                 },
                 signal: context.signal,
                 registerInputHandler,
@@ -363,6 +411,8 @@ class AILISSystemTaskAgentHarness {
             task.evidenceRefs = packet.evidence_refs;
             task.outputRefs = packet.output_refs;
             task.sourceRefs = packet.source_refs;
+            task.answerCandidates = packet.answer_candidates;
+            task.bestAnswerCandidate = packet.best_answer_candidate;
             task.unresolvedFields = packet.unresolved_fields;
             task.traceRef = packet.trace_ref;
             task.updatedAt = new Date().toISOString();

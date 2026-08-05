@@ -5,9 +5,39 @@ import {
     buildDesktopRealPayload,
     configureResearchMcpLlmEnvironment,
     isIncompleteStatus,
+    parseArgs,
     scoreVisibleAnswer,
     summarizeEvents
 } from '../scripts/run-ailis-desktop-real-gaia-eval.mjs';
+
+test('desktop-real GAIA defaults to the Luna Codex bridge without a round cap', () => {
+    const previousBridge = process.env.AILIS_EVAL_CODEX_MODEL_BRIDGE;
+    const previousModel = process.env.AILIS_CODEX_MODEL;
+    delete process.env.AILIS_EVAL_CODEX_MODEL_BRIDGE;
+    delete process.env.AILIS_CODEX_MODEL;
+    try {
+        const args = parseArgs([
+            '--run-id', 'luna-default-test',
+            '--output-dir', 'eval-results/luna-default-test'
+        ]);
+
+        assert.equal(args.codexModelBridge, true);
+        assert.equal(args.codexModel, 'gpt-5.6-luna');
+        assert.equal(Object.hasOwn(args, 'maxAgentSteps'), false);
+
+        const explicitFallback = parseArgs([
+            '--run-id', 'provider-fallback-test',
+            '--output-dir', 'eval-results/provider-fallback-test',
+            '--no-codex-model-bridge'
+        ]);
+        assert.equal(explicitFallback.codexModelBridge, false);
+    } finally {
+        if (previousBridge === undefined) delete process.env.AILIS_EVAL_CODEX_MODEL_BRIDGE;
+        else process.env.AILIS_EVAL_CODEX_MODEL_BRIDGE = previousBridge;
+        if (previousModel === undefined) delete process.env.AILIS_CODEX_MODEL;
+        else process.env.AILIS_CODEX_MODEL = previousModel;
+    }
+});
 
 test('desktop-real GAIA payload disables persistent memory for independent tasks', () => {
     const payload = buildDesktopRealPayload({
@@ -26,12 +56,14 @@ test('desktop-real GAIA payload disables persistent memory for independent tasks
         },
         llmSettings: {
             provider: 'codex-model-bridge',
-            model: 'gpt-5.5'
+            model: 'gpt-5.6-luna'
         }
     });
 
     assert.equal(payload.memoryPolicy, 'disabled');
     assert.equal(payload.context.memoryPolicy, 'disabled');
+    assert.equal(Object.hasOwn(payload, 'maxAgentSteps'), false);
+    assert.equal(Object.hasOwn(payload.context, 'maxAgentSteps'), false);
 });
 
 test('desktop-real eval forwards its active LLM provider to research MCP subprocesses', () => {
@@ -47,13 +79,13 @@ test('desktop-real eval forwards its active LLM provider to research MCP subproc
         configureResearchMcpLlmEnvironment({
             provider: 'codex-model-bridge',
             baseUrl: 'codex://chatgpt-oauth',
-            model: 'gpt-5.5',
+            model: 'gpt-5.6-luna',
             apiKey: '',
             reasoningEffort: 'medium'
         });
         assert.equal(process.env.AILIS_TOOL_LLM_PROVIDER, 'codex-model-bridge');
         assert.equal(process.env.AILIS_TOOL_LLM_BASE_URL, 'codex://chatgpt-oauth');
-        assert.equal(process.env.AILIS_TOOL_LLM_MODEL, 'gpt-5.5');
+        assert.equal(process.env.AILIS_TOOL_LLM_MODEL, 'gpt-5.6-luna');
         assert.equal(process.env.AILIS_TOOL_LLM_API_KEY, undefined);
         assert.equal(process.env.AILIS_TOOL_LLM_REASONING_EFFORT, 'medium');
     } finally {

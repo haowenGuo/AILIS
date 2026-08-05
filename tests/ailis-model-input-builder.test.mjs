@@ -5,6 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 import {
     buildModelInput,
+    recordToolOutputToContextManager,
     responseItemsToChatMessages,
     restoreModelInputContextManagerFromCheckpoint,
     toolOutputToModelInputItems
@@ -46,6 +47,45 @@ test('toolOutputToModelInputItems emits Responses function call and output pair'
     assert.equal(items[1].call_id, 'inspect-1');
     assert.match(FunctionCallOutputPayload.toText(items[1].output), /F478A7/);
     assert.equal(items[1].output.body.kind, 'text');
+});
+
+test('native provider calls stay canonical and receive exactly one AILIS-owned output', () => {
+    const history = new ContextManager();
+    history.recordItems([
+        {
+            type: 'reasoning',
+            id: 'reasoning-1',
+            summary: [{ type: 'summary_text', text: 'Need both independent lookups.' }],
+            encrypted_content: 'opaque'
+        },
+        {
+            type: 'function_call',
+            id: 'item-call-1',
+            call_id: 'call-1',
+            name: 'web_run',
+            arguments: '{"search_query":[{"q":"alpha"},{"q":"beta"}]}'
+        }
+    ]);
+
+    recordToolOutputToContextManager(history, {
+        id: 'call-1',
+        tool: 'web_run',
+        args: { search_query: [{ q: 'alpha' }, { q: 'beta' }] },
+        response: {
+            ok: true,
+            status: 'completed',
+            result: { text: 'two results' }
+        }
+    }, 0);
+
+    const items = history.rawItems();
+    assert.equal(items.filter((item) => item.type === 'reasoning').length, 1);
+    assert.equal(items.filter((item) => item.type === 'function_call').length, 1);
+    assert.equal(items.filter((item) => item.type === 'function_call_output').length, 1);
+    assert.equal(
+        items.find((item) => item.type === 'function_call_output').call_id,
+        'call-1'
+    );
 });
 
 test('tool-returned visual artifacts become image input for the next main-model turn', () => {

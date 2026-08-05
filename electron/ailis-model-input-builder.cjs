@@ -6,6 +6,7 @@ const { ContextManager } = require('./ailis-context-manager.cjs');
 const {
     FunctionCallOutputPayload,
     ResponseItem,
+    callIdOf,
     normalizeText,
     responseItemOutputToText,
     safeJsonStringify
@@ -309,7 +310,17 @@ function recordToolOutputToContextManager(contextManager, toolOutput = {}, index
     if (!contextManager || typeof contextManager.recordItems !== 'function') {
         return [];
     }
-    const items = toolOutputToModelInputItems(toolOutput, index, options);
+    const existingFunctionCallIds = new Set(
+        (contextManager.rawItems?.() || [])
+            .filter((item) => item?.type === 'function_call')
+            .map(callIdOf)
+            .filter(Boolean)
+    );
+    const items = toolOutputToModelInputItems(toolOutput, index, options)
+        .filter((item) => (
+            item?.type !== 'function_call' ||
+            !existingFunctionCallIds.has(callIdOf(item))
+        ));
     contextManager.recordItems(items, options);
     return items;
 }

@@ -10,11 +10,16 @@ const {
     buildCodexBridgeDecisionSchema,
     buildCodexBridgePrompt,
     buildCodexBridgeTurnInput,
+    buildCodexResponsesRequest,
     buildProcessTreeTerminationPlan,
+    codexResponsesInputItems,
+    codexResponsesCanonicalItems,
     normalizeBridgeToolCalls,
     normalizeCodexUsage,
     parseCodexAppServerNotifications,
     parseCodexJsonlEvents,
+    parseCodexResponsesSse,
+    parseWindowsProxyServer,
     resolveCodexBridgeMaxAttempts,
     resolveCodexEntrypoint,
     shouldRetryCodexBridgeFailure
@@ -91,6 +96,217 @@ describe('Codex model bridge process lifecycle', () => {
 });
 
 describe('Codex model bridge', () => {
+    it('builds a native Responses request from canonical AILIS items and real tools', () => {
+        const input = [
+            {
+                type: 'message',
+                role: 'user',
+                content: [{ type: 'input_text', text: 'Find two independent sources.' }]
+            },
+            {
+                type: 'function_call',
+                call_id: 'call_previous',
+                name: 'web_search',
+                arguments: '{"query":"prior"}',
+                provider_metadata: { private: true }
+            },
+            {
+                type: 'function_call_output',
+                call_id: 'call_previous',
+                output: 'prior result'
+            }
+        ];
+        const request = buildCodexResponsesRequest({
+            model: 'gpt-5.5',
+            reasoningEffort: 'medium'
+        }, {
+            instructions: 'AILIS system instructions',
+            input,
+            tools: visibleTools,
+            toolChoice: 'auto',
+            parallel_tool_calls: true
+        });
+
+        assert.equal(request.instructions, 'AILIS system instructions');
+        assert.equal(request.input.length, 3);
+        assert.equal(request.input[1].type, 'function_call');
+        assert.equal(Object.hasOwn(request.input[1], 'provider_metadata'), false);
+        assert.equal(request.tools.length, 2);
+        assert.equal(request.tools[0].type, 'function');
+        assert.equal(request.tools[0].name, 'read_document');
+        assert.equal(request.parallel_tool_calls, true);
+        assert.equal(request.tool_choice, 'auto');
+        assert.equal(request.stream, true);
+        assert.equal(request.store, false);
+        assert.deepEqual(request.include, ['reasoning.encrypted_content']);
+        assert.match(request.prompt_cache_key, /^ailis-[a-f0-9]{48}$/);
+        assert.equal(Object.hasOwn(request, 'text'), false);
+        assert.equal(Object.hasOwn(request, 'output_schema'), false);
+    });
+
+    it('drops response item ids at the native wire boundary like stateless Codex requests', () => {
+        const items = codexResponsesInputItems([
+            {
+                type: 'web_search_call',
+                id: 'call_1_web_search',
+                status: 'completed',
+                action: { type: 'search', query: 'alpha' }
+            },
+            {
+                type: 'web_search_call',
+                id: 'ws_native_1',
+                status: 'completed',
+                action: { type: 'search', query: 'beta' }
+            },
+            {
+                type: 'function_call',
+                call_id: 'call_1',
+                name: 'web_run',
+                arguments: '{}'
+            }
+        ]);
+
+        assert.equal(items[0].id, undefined);
+        assert.equal(items[1].id, undefined);
+        assert.equal(items[2].call_id, 'call_1');
+    });
+
+    it('hydrates compact AILIS tool search history with native loadable tool specs', () => {
+        const nativeTools = [{
+            type: 'function',
+            name: 'transcribe_audio',
+            description: 'Transcribe audio.',
+            strict: true,
+            parameters: {
+                type: 'object',
+                properties: { path: { type: 'string' } },
+                required: ['path'],
+                additionalProperties: false
+            }
+        }];
+        const items = codexResponsesInputItems([{
+            type: 'tool_search_output',
+            call_id: 'call_search',
+            status: 'completed',
+            execution: 'client',
+            tools: [{
+                id: 'transcribe_audio',
+                name: 'transcribe_audio',
+                required: ['path'],
+                properties: ['path'],
+                spec_ref: 'tool_registry:transcribe_audio'
+            }]
+        }], nativeTools);
+
+        assert.equal(items[0].tools.length, 1);
+        assert.deepEqual(items[0].tools[0], nativeTools[0]);
+        assert.equal(Object.hasOwn(items[0].tools[0], 'spec_ref'), false);
+    });
+
+    it('projects AILIS web viewport extensions onto standard Responses actions', () => {
+        const source = {
+            type: 'web_search_call',
+            id: 'call_1_open_page',
+            status: 'completed',
+            action: {
+                type: 'open_page',
+                url: 'https://example.com',
+                ref_id: 'turn0search0',
+                lineno: 301
+            }
+        };
+        const [wire] = codexResponsesInputItems([source]);
+
+        assert.deepEqual(wire.action, {
+            type: 'open_page',
+            url: 'https://example.com'
+        });
+        assert.equal(source.action.lineno, 301);
+        assert.equal(source.action.ref_id, 'turn0search0');
+    });
+
+    it('compiles optional strict tool arguments as required nullable wire fields', () => {
+        const request = buildCodexResponsesRequest({ model: 'gpt-5.5' }, {
+            instructions: 'test',
+            input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'write' }] }],
+            tools: [{
+                type: 'function',
+                name: 'write',
+                description: 'Write a file.',
+                strict: true,
+                parameters: {
+                    type: 'object',
+                    additionalProperties: false,
+                    properties: {
+                        path: { type: 'string' },
+                        content: { type: 'string' },
+                        encoding: { type: 'string' }
+                    },
+                    required: ['path']
+                }
+            }]
+        });
+        const schema = request.tools[0].parameters;
+
+        assert.deepEqual(schema.required, ['path', 'content', 'encoding']);
+        assert.equal(schema.properties.path.type, 'string');
+        assert.equal(schema.properties.content.anyOf.at(-1).type, 'null');
+        assert.equal(schema.properties.encoding.anyOf.at(-1).type, 'null');
+    });
+
+    it('keeps stable prompt cache keys for the same prefix and tool surface', () => {
+        const first = buildCodexResponsesRequest({ model: 'gpt-5.5' }, {
+            instructions: 'stable prefix',
+            input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'A' }] }],
+            tools: visibleTools
+        });
+        const second = buildCodexResponsesRequest({ model: 'gpt-5.5' }, {
+            instructions: 'stable prefix',
+            input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'B' }] }],
+            tools: visibleTools
+        });
+
+        assert.equal(first.prompt_cache_key, second.prompt_cache_key);
+    });
+
+    it('parses every native function call and canonical reasoning item from SSE', () => {
+        const raw = [
+            'data: {"type":"response.created","response":{"id":"resp_1"}}',
+            'data: {"type":"response.output_item.done","item":{"id":"rs_1","type":"reasoning","summary":[],"encrypted_content":"sealed"}}',
+            'data: {"type":"response.output_item.done","item":{"id":"fc_1","type":"function_call","call_id":"call_1","name":"web_search","arguments":"{\\"query\\":\\"alpha\\"}"}}',
+            'data: {"type":"response.output_item.done","item":{"id":"fc_2","type":"function_call","call_id":"call_2","name":"web_search","arguments":"{\\"query\\":\\"beta\\"}"}}',
+            'data: {"type":"response.completed","response":{"id":"resp_1","usage":{"input_tokens":100,"output_tokens":20,"total_tokens":120}}}',
+            'data: [DONE]'
+        ].join('\n\n');
+        const parsed = parseCodexResponsesSse(raw);
+        const canonical = codexResponsesCanonicalItems(parsed.outputItems);
+        const calls = normalizeBridgeToolCalls(
+            canonical.filter((item) => item.type === 'function_call').map((item) => ({
+                id: item.call_id,
+                name: item.name,
+                arguments: item.arguments
+            }))
+        );
+
+        assert.equal(parsed.responseId, 'resp_1');
+        assert.equal(canonical[0].encrypted_content, 'sealed');
+        assert.deepEqual(calls.map((call) => call.id), ['call_1', 'call_2']);
+        assert.deepEqual(calls.map((call) => call.arguments.query), ['alpha', 'beta']);
+        assert.deepEqual(parsed.usage, {
+            input_tokens: 100,
+            output_tokens: 20,
+            total_tokens: 120
+        });
+    });
+
+    it('parses Windows HTTPS proxy forms without changing protocol semantics', () => {
+        assert.equal(parseWindowsProxyServer('127.0.0.1:7890'), 'http://127.0.0.1:7890/');
+        assert.equal(
+            parseWindowsProxyServer('http=127.0.0.1:8080;https=127.0.0.1:7890'),
+            'http://127.0.0.1:7890/'
+        );
+    });
+
     it('constrains required decisions to the AILIS-visible tool schema', () => {
         const schema = buildCodexBridgeDecisionSchema(visibleTools, {
             toolChoice: { name: 'read_document' }
@@ -397,8 +613,8 @@ describe('Codex model bridge', () => {
         });
 
         assert.equal(getDefaultProviderBaseUrl('codex-model-bridge'), 'codex://chatgpt-oauth');
-        assert.equal(getDefaultProviderModel('codex-model-bridge'), 'gpt-5.5');
-        assert.equal(capabilities.transport, 'codex-app-server-ephemeral');
+        assert.equal(getDefaultProviderModel('codex-model-bridge'), 'gpt-5.6-luna');
+        assert.equal(capabilities.transport, 'codex-responses-native');
         assert.equal(capabilities.nativeToolCalling, true);
         assert.equal(capabilities.vision, true);
         assert.equal(resolveCodexEntrypoint().ok, true);

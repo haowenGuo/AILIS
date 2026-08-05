@@ -18,9 +18,11 @@ const {
     AILISAgentRunner,
         assessAgentCompletionEvidence,
         buildAgentDirectToolSpecs,
+        buildAgentPromptCacheKey,
         buildDirectModelImageAttachments,
         buildInvalidDecisionProgressRecord,
         buildLlmAgentDirectToolPrompt,
+    buildToolExecutionGroups,
     buildResearchProgressState,
         buildStagedAttachmentFilename,
         buildTaskRunHandoffPackage,
@@ -36,6 +38,107 @@ const {
     stripControlTags,
     validateNativeDirectToolCall
 } = require('../electron/ailis-agent-runner.cjs');
+
+test('native tool scheduler preserves every call while mixing parallel-safe and serial groups', () => {
+    const calls = [
+        { id: 'search-1', tool: 'web_run' },
+        { id: 'search-2', tool: 'web_run' },
+        { id: 'write-1', tool: 'write_file' },
+        { id: 'read-1', tool: 'read_file' },
+        { id: 'read-2', tool: 'read_file' }
+    ];
+    const groups = buildToolExecutionGroups(calls, {
+        parallelToolCalls: true,
+        supportsParallel: (call) => call.tool !== 'write_file'
+    });
+
+    assert.deepEqual(groups.map((group) => ({
+        mode: group.mode,
+        ids: group.calls.map((call) => call.id)
+    })), [
+        { mode: 'parallel', ids: ['search-1', 'search-2'] },
+        { mode: 'serial', ids: ['write-1'] },
+        { mode: 'parallel', ids: ['read-1', 'read-2'] }
+    ]);
+    assert.deepEqual(
+        groups.flatMap((group) => group.calls.map((call) => call.id)),
+        calls.map((call) => call.id)
+    );
+});
+
+test('native tool scheduler serializes the whole batch without dropping tail calls when parallelism is disabled', () => {
+    const calls = [
+        { id: 'call-1', tool: 'web_run' },
+        { id: 'call-2', tool: 'run_command' },
+        { id: 'call-3', tool: 'web_run' }
+    ];
+    const groups = buildToolExecutionGroups(calls, {
+        parallelToolCalls: false,
+        supportsParallel: () => true
+    });
+
+    assert.deepEqual(groups.map((group) => group.mode), ['serial', 'serial', 'serial']);
+    assert.deepEqual(
+        groups.flatMap((group) => group.calls.map((call) => call.id)),
+        ['call-1', 'call-2', 'call-3']
+    );
+});
+
+test('native tool approval checkpoint persists every call and its execution groups', () => {
+    const runner = new AILISAgentRunner({
+        gateway: {
+            workspaceRoot: process.cwd(),
+            emitGatewayEvent() {}
+        }
+    });
+    const steps = [
+        { id: 'search-1', title: 'Search one', tool: 'web_run', args: { search_query: [{ q: 'one' }] } },
+        { id: 'search-2', title: 'Search two', tool: 'web_run', args: { search_query: [{ q: 'two' }] } },
+        { id: 'write-1', title: 'Write result', tool: 'write_file', args: { path: 'result.txt' } }
+    ];
+    const executionGroups = buildToolExecutionGroups(steps, {
+        parallelToolCalls: true,
+        supportsParallel: (call) => call.tool === 'web_run'
+    });
+    const pending = runner.buildPendingAgentApproval({
+        message: 'Run all calls',
+        sessionId: 'session-1',
+        settings: { model: 'gpt-5.5' },
+        decision: {
+            intent: 'tool_batch',
+            summary: 'Run all calls',
+            riskLevel: 'medium',
+            raw: {}
+        },
+        step: steps[0],
+        steps,
+        executionGroups,
+        events: [],
+        stepResults: [],
+        iteration: 2,
+        maxSteps: 20
+    });
+
+    assert.deepEqual(pending.pendingSteps.map((step) => step.id), [
+        'search-1',
+        'search-2',
+        'write-1'
+    ]);
+    assert.deepEqual(pending.pendingExecutionGroups, [
+        { mode: 'parallel', stepIds: ['search-1', 'search-2'] },
+        { mode: 'serial', stepIds: ['write-1'] }
+    ]);
+});
+
+test('agent prompt cache key stays stable within a run and separates different runs', () => {
+    const first = buildAgentPromptCacheKey('run-1', 'session-1');
+    const repeated = buildAgentPromptCacheKey('run-1', 'session-1');
+    const otherRun = buildAgentPromptCacheKey('run-2', 'session-1');
+
+    assert.equal(first, repeated);
+    assert.notEqual(first, otherRun);
+    assert.match(first, /^ailis-run-[a-f0-9]{48}$/);
+});
 
 test('direct model image attachments are scoped to Codex bridge image inputs', () => {
     const imagePath = path.join('C:', 'tmp', 'board.png');
@@ -181,16 +284,8 @@ test('explicit task execution forces Persona handoff without changing ordinary c
         requestContext: {},
         directToolSpecs: [handoffSpec]
     });
-    const finalChoice = resolveAgentDirectToolChoice({
-        agentRuntimeRole: 'persona_orchestrator',
-        requestContext: { requireTaskExecution: true },
-        directToolSpecs: [handoffSpec],
-        safetyFinalizationReason: 'time_budget'
-    });
-
     assert.deepEqual(requiredChoice, { name: 'handoff_task', required: true });
     assert.equal(ordinaryChoice, 'auto');
-    assert.equal(finalChoice, 'none');
 
     const prompt = buildLlmAgentDirectToolPrompt({
         message: 'How many days until the holiday?',
@@ -612,6 +707,10 @@ test('AILIS stages external attachments inside the active workspace', async () =
     assert.equal(staged[0].staged, true);
     assert.equal(staged[0].stageStatus, 'copied_to_workspace');
     assert.equal(path.relative(workspaceRoot, staged[0].path).startsWith('..'), false);
+    assert.match(
+        path.relative(workspaceRoot, staged[0].path),
+        /^\.ailis-runtime[\\/]attachments[\\/]session_with_unsafe_chars[\\/]/
+    );
     assert.equal(await fs.readFile(staged[0].path, 'utf8'), 'spreadsheet-bytes');
     assert.equal(staged[0].originalPath, sourcePath);
 });
@@ -633,6 +732,36 @@ test('AILIS preserves file extensions when staging long attachment names', async
     assert.equal(path.extname(staged.path), '.xlsx');
     assert.ok(path.basename(staged.path).length <= 99);
     assert.equal(await fs.readFile(staged.path, 'utf8'), 'spreadsheet-bytes');
+});
+
+test('AILIS keeps staged attachment paths below the Windows subprocess safety limit', async () => {
+    const workspaceBase = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-stage-path-'));
+    const workspaceRoot = path.join(
+        workspaceBase,
+        'isolated-benchmark-workspace-with-a-deliberately-long-run-identifier',
+        'nested-workspace'
+    );
+    const sourceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-stage-source-'));
+    const sourcePath = path.join(sourceRoot, 'recording.mp3');
+    await fs.mkdir(workspaceRoot, { recursive: true });
+    await fs.writeFile(sourcePath, 'audio-bytes');
+
+    const [staged] = await stageFileAttachmentsForWorkspace([{
+        id: 'gaia-file-long-path',
+        type: 'file',
+        name: `${'gaia-recording-'.repeat(10)}recording.mp3`,
+        path: sourcePath
+    }], workspaceRoot, `${'desktop-real-gaia-long-session-'.repeat(6)}`);
+
+    assert.equal(staged.staged, true);
+    assert.equal(path.relative(workspaceRoot, staged.path).startsWith('..'), false);
+    if (process.platform === 'win32') {
+        assert.match(path.relative(workspaceRoot, staged.path), /^\.ailis-runtime[\\/]a[\\/][a-f0-9]{12}[\\/]/);
+        assert.ok(staged.path.length < 240, `staged path length was ${staged.path.length}`);
+    } else {
+        assert.match(path.relative(workspaceRoot, staged.path), /^\.ailis-runtime[\\/]attachments[\\/]/);
+    }
+    assert.equal(await fs.readFile(staged.path, 'utf8'), 'audio-bytes');
 });
 
 test('AILIS staging uses a stable attachment identity instead of recursively growing filenames', async () => {
@@ -854,7 +983,7 @@ test('AILIS parent Persona prompt stays conversational while TaskAgent keeps exe
     assert.match(taskPrompt.instructions, /For local file and data tasks/);
     assert.match(taskPrompt.instructions, /join across records, global ordering or de-duplication/);
     assert.match(taskPrompt.instructions, /tool_search for a dedicated metadata, document, API, or data capability/);
-    assert.match(taskPrompt.instructions, /do not spend the remaining work budget paging through a site/);
+    assert.match(taskPrompt.instructions, /do not keep paging through a site/);
     assert.doesNotMatch(taskPrompt.instructions, /open_page actions|most authoritative returned source URL/);
     assert.match(taskPrompt.instructions, /mechanical transport metadata, not a decision/);
     assert.match(taskPrompt.instructions, /candidate-set boundary/);
@@ -1217,6 +1346,152 @@ test('bounded web source viewport keeps answer-bearing middle lines in the final
     assert.match(digest.text, /L71:/);
     assert.equal(digest.lossless, true);
     assert.equal(digest.compression, null);
+});
+
+test('canonical source viewport preserves bounded overflow rows in model input', () => {
+    const toolOutput = normalizeToolOutput({
+        id: 'overflow-source-viewport-1',
+        tool: 'web_run',
+        args: { open: [{ ref_id: 'turn0view0', lineno: 120 }] },
+        response: {
+            ok: true,
+            status: 'completed',
+            result: {
+                content: [{
+                    type: 'text',
+                    text: 'The raw tool text also contains L233: TARGET_OVERFLOW_EVIDENCE.'
+                }],
+                structuredContent: {
+                    sourceWindow: {
+                        type: 'source_viewport',
+                        action: { type: 'open_page', url: 'https://example.test/article', lineno: 120 },
+                        url: 'https://example.test/article',
+                        totalLines: 317,
+                        lineStart: 120,
+                        lineEnd: 193,
+                        hasMoreBefore: true,
+                        hasMoreAfter: true,
+                        overflowPreviews: [{
+                            lineno: 233,
+                            text: 'The requested relationship is TARGET_OVERFLOW_EVIDENCE.',
+                            originalChars: 1471
+                        }],
+                        lines: [
+                            { lineno: 120, text: 'contiguous source row' },
+                            { lineno: 193, text: 'last contiguous source row' }
+                        ]
+                    }
+                }
+            }
+        }
+    });
+    const serializedItems = JSON.stringify(toolOutputToResponseItems(toolOutput));
+
+    assert.match(serializedItems, /Longest source rows preserved from the explicitly requested range/);
+    assert.match(serializedItems, /L233: The requested relationship is TARGET_OVERFLOW_EVIDENCE/);
+});
+
+test('canonical source viewport preserves bounded structured section links in model input', () => {
+    const execution = {
+        id: 'source-viewport-links-1',
+        tool: 'web_run',
+        args: { open: [{ ref_id: 'https://example.test/journal', lineno: 234 }] },
+        response: {
+            ok: true,
+            status: 'completed',
+            result: {
+                content: [{ type: 'text', text: 'L235: View All Issues\nL237: Example Journal' }],
+                structuredContent: {
+                    ref_id: 'turn6view0',
+                    sourceWindow: {
+                        type: 'source_viewport',
+                        url: 'https://example.test/journal',
+                        ref_id: 'turn6view0',
+                        totalLines: 238,
+                        lineStart: 234,
+                        lineEnd: 238,
+                        lines: [
+                            { lineno: 235, text: 'View All Issues' },
+                            { lineno: 237, text: 'Example Journal' }
+                        ]
+                    },
+                    htmlRelations: {
+                        sections: [{
+                            heading: 'Example Journal',
+                            links: [
+                                { text: 'Current', url: 'https://example.test/journal/issue/current' },
+                                { text: 'Archives', url: 'https://example.test/journal/issue/archive' }
+                            ]
+                        }]
+                    }
+                }
+            }
+        }
+    };
+    const toolOutput = normalizeToolOutput(execution);
+    const serializedItems = JSON.stringify(toolOutputToResponseItems(toolOutput));
+    const [digest] = buildToolObservationDigest([execution]);
+    const serializedDigest = JSON.stringify(digest);
+
+    assert.match(serializedItems, /Archives/);
+    assert.match(serializedItems, /https:\/\/example\.test\/journal\/issue\/archive/);
+    assert.match(serializedDigest, /Archives/);
+    assert.match(serializedDigest, /https:\/\/example\.test\/journal\/issue\/archive/);
+});
+
+test('tool observation budget keeps source evidence ahead of web navigation metadata', () => {
+    const navigationFiller = 'navigation metadata '.repeat(90);
+    const lines = Array.from({ length: 45 }, (_, index) => ({
+        lineno: 229 + index,
+        text: index === 4
+            ? `The source identifies the requested relation as TARGET_RELATION_VALUE. ${'supporting context '.repeat(45)}`
+            : `source row ${index + 1} ${'source content '.repeat(18)}`
+    }));
+    const [digest] = buildToolObservationDigest([{
+        id: 'source-before-navigation-1',
+        tool: 'web_run',
+        args: { open: [{ ref_id: 'turn0view0', lineno: 229 }], response_length: 'long' },
+        response: {
+            ok: true,
+            status: 'completed',
+            result: {
+                content: [{ type: 'text', text: 'Source viewport model preview' }],
+                structuredContent: {
+                    sourceWindow: {
+                        type: 'source_viewport',
+                        action: { type: 'open_page', url: 'https://example.test/article', lineno: 229 },
+                        url: 'https://example.test/article',
+                        ref_id: 'turn0view0',
+                        totalLines: 317,
+                        lineStart: 229,
+                        lineEnd: 273,
+                        hasMoreBefore: true,
+                        hasMoreAfter: true,
+                        lines
+                    },
+                    suggestedNextCalls: Array.from({ length: 4 }, (_, index) => ({
+                        tool: 'open_page',
+                        args: { url: `https://example.test/navigation-${index + 1}`, query: navigationFiller },
+                        reason: navigationFiller
+                    })),
+                    observedRelevantLinks: Array.from({ length: 8 }, (_, index) => ({
+                        id: index + 1,
+                        title: `Navigation ${index + 1} ${navigationFiller}`,
+                        url: `https://example.test/navigation-${index + 1}`
+                    }))
+                }
+            }
+        }
+    }], {
+        maxItems: 4,
+        maxTextChars: 3500,
+        maxArgsChars: 400,
+        compact: true
+    });
+
+    assert.equal(digest.promptTextChars, 3500);
+    assert.equal(digest.compression.reason, 'tool_observation_prompt_budget');
+    assert.match(digest.text, /L233: The source identifies the requested relation as TARGET_RELATION_VALUE/);
 });
 
 test('TaskAgent finalization digest unwraps nested MCP source viewport evidence', () => {

@@ -24,6 +24,7 @@ const {
     crawl4aiFetchConfig,
     extractArxivCandidatesFromAtom,
     extractBingResults,
+    extractBreakDelimitedLayoutEvidence,
     extractDuckDuckGoHtmlResults,
     extractGenericAnchorResults,
     extractGitHubRepositoryResults,
@@ -32,10 +33,13 @@ const {
     extractWikipediaPageTitle,
     extractYahooResults,
     expandStructuredSourceText,
+    extractWikidataEntitySearchTerms,
     filterSearchResultsByDomains,
     githubRepoRead,
     handleToolCall,
     inferPaperMetadataArgsFromScholarlyQuery,
+    isLikelyWikidataEntitySearch,
+    isHeadlessBrowserAccessBarrier,
     loadManagedSearxngManifest,
     managedSearxngAllowedForSearch,
     managedSearxngPortCandidates,
@@ -55,7 +59,11 @@ const {
     rankSearchResultsForFollowup,
     readDocument,
     readPresentation,
+    resolveHeadlessBrowserExecutable,
+    resolveHeadlessScreenshotViewport,
+    resolveSubprocessCwd,
     runPythonFile,
+    runWikidataSearchBackend,
     stripWikiText,
     webArchiveLookup,
     webExtractLinks,
@@ -411,10 +419,89 @@ test('chess_position_analyze validates a transcribed FEN with local Stockfish an
     assert.equal(result.structuredContent.sideToMove, 'black');
     assert.equal(result.structuredContent.bestMove.san, 'Rd5');
     assert.equal(result.structuredContent.bestMove.uci, 'd8d5');
+    assert.deepEqual(result.structuredContent.bestAnswerCandidate, {
+        answer: 'Rd5',
+        source: 'stockfish_engine_best_move',
+        selected: true,
+        finalizable: true,
+        confidence: 0.99
+    });
+    assert.deepEqual(result.structuredContent.answerCandidates, [
+        result.structuredContent.bestAnswerCandidate
+    ]);
     assert.ok(result.structuredContent.analysis.reachedDepth >= 8);
     assert.equal(result.structuredContent.analysis.requestedAnalysisTimeMs, 3000);
     assert.match(result.content[0].text, /best_move_san=Rd5/);
     assert.match(result.content[0].text, /board_echo:/);
+});
+
+test('resolveHeadlessBrowserExecutable accepts an available explicit browser backend', async () => {
+    const temporaryDirectory = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ailis-browser-resolver-'));
+    const executablePath = path.join(temporaryDirectory, process.platform === 'win32' ? 'browser.exe' : 'browser');
+    try {
+        await fs.promises.writeFile(executablePath, 'fixture');
+        assert.equal(
+            resolveHeadlessBrowserExecutable({ browserExecutable: executablePath }),
+            executablePath
+        );
+    } finally {
+        await fs.promises.rm(temporaryDirectory, { recursive: true, force: true });
+    }
+});
+
+test('headless screenshot fallback recognizes anti-bot pages as access barriers', () => {
+    assert.equal(
+        isHeadlessBrowserAccessBarrier('<script src="/cdn-cgi/challenge-platform/x"></script><input name="cf-turnstile-response">'),
+        true
+    );
+    assert.equal(
+        isHeadlessBrowserAccessBarrier('<main><article>Source evidence rendered successfully.</article></main>'),
+        false
+    );
+});
+
+test('headless screenshot defaults to a readable primary viewport and keeps full-page opt-in', () => {
+    assert.deepEqual(resolveHeadlessScreenshotViewport({}), {
+        width: 1440,
+        height: 1800,
+        fullPage: false
+    });
+    assert.deepEqual(resolveHeadlessScreenshotViewport({ fullPage: true }), {
+        width: 1440,
+        height: 10000,
+        fullPage: true
+    });
+    assert.deepEqual(resolveHeadlessScreenshotViewport({ width: 1200, height: 2400 }), {
+        width: 1200,
+        height: 2400,
+        fullPage: false
+    });
+});
+
+test('HTML layout evidence maps repeated leading whitespace to blank-line-delimited blocks', () => {
+    const evidence = extractBreakDelimitedLayoutEvidence(`
+        <div class="verse">
+            Opening line<br><br>
+First line of block two<br>
+    shifted line one<br>
+    shifted line two<br>
+Last line of block two<br><br>
+Final block line<br>
+        </div>
+    `);
+    assert.equal(evidence.status, 'differentiated_indentation_detected');
+    assert.equal(evidence.blockCount, 3);
+    assert.deepEqual(evidence.indentedBlocks, [{
+        blockIndex: 2,
+        indentedLineCount: 2,
+        leadingColumns: 4,
+        examples: ['shifted line one', 'shifted line two']
+    }]);
+
+    assert.equal(
+        extractBreakDelimitedLayoutEvidence('<div>one<br>two<br>three<br>four<br>five</div>').status,
+        'differentiated_indentation_not_detected'
+    );
 });
 
 test('run_python_file supports inline Python code for one-off benchmark calculations', async () => {
@@ -854,7 +941,49 @@ test('web_archive_lookup ranks dynamic archived URLs and opens a selected source
     });
 });
 
-test('web_archive_lookup relaxes mistaken crawl-year bounds, backs off optional URL anchors, and opens evidence in search mode', async () => {
+test('web_archive_lookup prefers answer-bearing result URLs over earlier advanced-search forms', async () => {
+    await withServer((request, response) => {
+        if (request.url.startsWith('/cdx')) {
+            response.writeHead(200, { 'content-type': 'application/json' });
+            response.end(JSON.stringify([
+                ['timestamp', 'original', 'statuscode', 'mimetype', 'digest', 'length'],
+                ['20230102030405', 'https://offline.example/Search/Advanced/topic-alpha-unknown-language-article', '200', 'text/html', 'FORM', '1200'],
+                ['20241212025015', 'https://offline.example/Search/Results/topic-alpha-unknown-language-article', '200', 'text/html', 'RESULTS', '4200']
+            ]));
+            return;
+        }
+        if (request.url.startsWith('/web/20230102030405id_/')) {
+            response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+            response.end('<html><head><title>Advanced Search</title></head><body><form><label>Query</label><input></form></body></html>');
+            return;
+        }
+        if (request.url.startsWith('/web/20241212025015id_/')) {
+            response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+            response.end('<html><head><title>Results</title></head><body><p>Country: de</p><p>Country: gt</p></body></html>');
+            return;
+        }
+        response.writeHead(404);
+        response.end('not found');
+    }, async (baseUrl) => {
+        const result = await webArchiveLookup({
+            url: 'https://offline.example/Search/',
+            mode: 'search',
+            matchType: 'prefix',
+            contains: 'topic alpha unknown language article',
+            query: 'country',
+            providers: ['internet_archive'],
+            cdxBaseUrl: `${baseUrl}/cdx`,
+            replayBaseUrl: `${baseUrl}/web`,
+            scanLimit: 500
+        });
+
+        assert.notEqual(result.isError, true, result.content[0].text);
+        assert.match(result.structuredContent.selectedCapture.originalUrl, /\/Search\/Results\//);
+        assert.match(result.content[0].text, /Country: gt/);
+    });
+});
+
+test('web_archive_lookup tries requested capture-year bounds before relaxing, backs off optional URL anchors, and opens evidence', async () => {
     let boundedRequests = 0;
     let anchorRequests = 0;
     let firstUnboundedOriginalFilters = [];
@@ -952,7 +1081,7 @@ test('web_archive_lookup relaxes mistaken crawl-year bounds, backs off optional 
         assert.match(result.content[0].text, /Universidad de San Carlos de Guatemala/);
         assert.equal(result.structuredContent.facetedSearchFilters[1].label, 'Language');
         assert.equal(result.structuredContent.facetedSearchFilters[1].values[0].value, 'Unknown');
-        assert.equal(boundedRequests, 0);
+        assert.ok(boundedRequests >= 1);
         assert.ok(anchorRequests >= 1);
         assert.ok(firstUnboundedOriginalFilters.some((value) => /unknown/i.test(value)));
         assert.equal(firstUnboundedOriginalFilters.some((value) => /121/i.test(value)), false);
@@ -1182,6 +1311,13 @@ test('transcribe_audio rejects a missing staged path before loading Whisper', as
     assert.equal(result.details.status, 'not_found');
     assert.equal(result.details.failureReason, 'local_audio_path_not_found');
     assert.match(result.content[0].text, /exact current attached_files path/i);
+});
+
+test('subprocess cwd falls back before an invalid or overlong path can crash the MCP server', () => {
+    const fallback = path.resolve(os.tmpdir());
+    const preferred = path.join(fallback, 'x'.repeat(245));
+
+    assert.equal(resolveSubprocessCwd(preferred, fallback), fallback);
 });
 
 test('read_presentation reports full and truncated slide coverage structurally', async () => {
@@ -1738,9 +1874,15 @@ test('web_search auto chain uses no-Docker Python search while skipping unconfig
         const generalBackends = normalizeSearchBackends({}, 'Playwright locator waitFor official docs').map((backend) => backend.id);
         assert.equal(generalBackends[0], 'python_search');
         assert.ok(generalBackends.includes('wikipedia_search'));
+        assert.ok(!generalBackends.includes('wikidata_search'));
         assert.ok(!generalBackends.includes('searxng_json'));
         assert.ok(!generalBackends.includes('firecrawl_search'));
         assert.ok(generalBackends.includes('bing_html'));
+
+        const identifierBackends = normalizeSearchBackends({}, 'Tropicos Helotiales order Tropicos ID').map((backend) => backend.id);
+        assert.ok(identifierBackends.includes('wikidata_search'));
+        assert.equal(isLikelyWikidataEntitySearch('Tropicos Helotiales order Tropicos ID'), true);
+        assert.equal(isLikelyWikidataEntitySearch('Playwright locator waitFor official docs'), false);
 
         const configuredBackends = normalizeSearchBackends({
             searxngUrl: 'http://127.0.0.1:18080',
@@ -1818,6 +1960,99 @@ test('web_search can aggregate structured Wikipedia search results without task-
         assert.equal(result.structuredContent.attempts[0].backend, 'wikipedia_search');
         assert.equal(result.structuredContent.results[0].url, 'https://en.wikipedia.org/wiki/1928_Summer_Olympics');
         assert.match(result.content[0].text, /1928 Summer Olympics/);
+    });
+});
+
+test('Wikidata search backend adds bounded entity candidates without resolving task answers', async () => {
+    const observedTerms = [];
+    await withServer((request, response) => {
+        const url = new URL(request.url || '/', 'http://127.0.0.1');
+        assert.equal(url.pathname, '/w/api.php');
+        assert.equal(url.searchParams.get('action'), 'wbsearchentities');
+        const term = url.searchParams.get('search') || '';
+        observedTerms.push(term);
+        const rows = term === 'Helotiales'
+            ? [{
+                id: 'Q134490',
+                label: 'Helotiales',
+                description: 'order of fungi'
+            }]
+            : term === 'Tropicos'
+                ? [{
+                    id: 'Q2578548',
+                    label: 'Tropicos',
+                    description: 'online botanical database'
+                }]
+                : [];
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({
+            search: rows
+        }));
+    }, async (baseUrl) => {
+        assert.deepEqual(
+            extractWikidataEntitySearchTerms('Tropicos Helotiales order Tropicos ID'),
+            ['Tropicos', 'Helotiales']
+        );
+        const result = await runWikidataSearchBackend({
+            query: 'Tropicos Helotiales order Tropicos ID',
+            maxResults: 5,
+            timeoutMs: 3000,
+            args: {
+                wikidataSearchUrl: `${baseUrl}/w/api.php`
+            }
+        });
+
+        assert.equal(result.ok, true, result.error);
+        assert.deepEqual(observedTerms.sort(), ['Helotiales', 'Tropicos'].sort());
+        assert.ok(result.results.some((entry) => entry.url === 'https://www.wikidata.org/wiki/Q134490'));
+        assert.ok(result.results.some((entry) => entry.title === 'Helotiales - Wikidata'));
+        assert.equal(result.results.some((entry) => /100370510|check digit/i.test(entry.snippet)), false);
+    });
+});
+
+test('web_search retries MediaWiki maxlag and keeps structured identifier evidence in a short result set', async () => {
+    let requests = 0;
+    await withServer((request, response) => {
+        const url = new URL(request.url || '/', 'http://127.0.0.1');
+        assert.equal(url.pathname, '/w/api.php');
+        assert.equal(url.searchParams.get('action'), 'wbsearchentities');
+        assert.equal(url.searchParams.get('search'), 'Helotiales');
+        assert.equal(url.searchParams.get('maxlag'), '10');
+        requests += 1;
+        response.writeHead(200, { 'content-type': 'application/json' });
+        if (requests === 1) {
+            response.end(JSON.stringify({
+                error: {
+                    code: 'maxlag',
+                    info: 'Waiting for a lagged replica.',
+                    lag: 0.01,
+                    type: 'wikibase-queryservice'
+                }
+            }));
+            return;
+        }
+        response.end(JSON.stringify({
+            search: [{
+                id: 'Q134490',
+                label: 'Helotiales',
+                description: 'order of fungi'
+            }]
+        }));
+    }, async (baseUrl) => {
+        const result = await webSearch({
+            query: 'Helotiales catalog ID',
+            backends: ['wikidata_search'],
+            wikidataSearchUrl: `${baseUrl}/w/api.php`,
+            maxResults: 4,
+            timeoutMs: 3000
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.equal(requests, 2);
+        assert.equal(result.structuredContent.attempts[0].ok, true);
+        assert.equal(result.structuredContent.attempts[0].attempts[0].retryCount, 1);
+        assert.equal(result.structuredContent.attempts[0].attempts[0].initialErrorCode, 'wikidata_maxlag');
+        assert.equal(result.structuredContent.results[0].url, 'https://www.wikidata.org/wiki/Q134490');
     });
 });
 
@@ -3653,6 +3888,36 @@ test('web_fetch keeps linked DOI and PDF follow-up actions structured without mo
     });
 });
 
+test('web_fetch preserves standard scholarly PDF resources when their short labels do not match the query', async () => {
+    await withServer((request, response) => {
+        response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        response.end([
+            '<html><head>',
+            '<title>Container measurements in marine transport</title>',
+            '<meta name="citation_pdf_url" content="/article/download/733/684">',
+            '<link rel="alternate" type="application/pdf" href="/article/download/733/684?mirror=1">',
+            '</head><body>',
+            '<p>The study reports measurements for an irregular marine specimen and its transport container.</p>',
+            '<a class="obj_galley_link pdf" href="/article/view/733/684">PDF</a>',
+            '</body></html>'
+        ].join(''));
+    }, async (baseUrl) => {
+        const result = await webFetch({
+            url: `${baseUrl}/article/view/733`,
+            query: 'calculated bag volume irregular marine specimen'
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        const pdfCalls = result.structuredContent.suggestedNextCalls.filter((call) => call.tool === 'pdf_extract_text');
+        assert.ok(pdfCalls.some((call) => call.args.url === `${baseUrl}/article/download/733/684`));
+        assert.ok(pdfCalls.some((call) => call.args.url === `${baseUrl}/article/download/733/684?mirror=1`));
+        assert.ok(result.structuredContent.observedRelevantLinks.some((link) => (
+            link.kind === 'pdf' && link.url === `${baseUrl}/article/download/733/684`
+        )));
+        assert.match(result.content[0].text, /Candidate links observed by the fetcher/);
+    });
+});
+
 test('web_fetch extracts HTML relationship map for model reasoning', async () => {
     await withServer((request, response) => {
         response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
@@ -4129,7 +4394,14 @@ test('web_find opens a Codex-style source viewport around a pattern', async () =
 test('open_page, find_in_page, and continue_page share one source viewport chain', async () => {
     const lines = Array.from({ length: 40 }, (_, index) => `line ${index + 1}`);
     lines[24] = 'Actual Enrollment 90';
+    let requestCount = 0;
     await withServer((request, response) => {
+        requestCount += 1;
+        if (requestCount > 1) {
+            response.writeHead(503, { 'content-type': 'text/plain; charset=utf-8' });
+            response.end('transient source failure after the first successful snapshot');
+            return;
+        }
         response.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' });
         response.end(lines.join('\n'));
     }, async (baseUrl) => {
@@ -4142,10 +4414,97 @@ test('open_page, find_in_page, and continue_page share one source viewport chain
 
         const continued = await continuePage({ url, lineno: 23, maxLines: 5, provider: 'builtin' });
         assert.match(continued.content[0].text, /Actual Enrollment 90/);
+        assert.equal(continued.structuredContent.snapshotCacheUsed, true);
 
         const found = await findInPage({ url, pattern: 'Actual Enrollment', provider: 'builtin' });
         assert.equal(found.structuredContent.matchCount, 1);
         assert.match(found.content[0].text, /Actual Enrollment 90/);
+        assert.equal(found.structuredContent.snapshotCacheUsed, true);
+        assert.equal(requestCount, 1);
+    });
+});
+
+test('open_page preserves HTML block boundaries and non-breaking indentation in source rows', async () => {
+    await withServer((_request, response) => {
+        response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        response.end([
+            '<article>',
+            '<div>Opening line<br></div>',
+            '<div><br></div>',
+            '<div>Second block starts<br></div>',
+            '<div>&nbsp;&nbsp;&nbsp;&nbsp;indented evidence<br></div>',
+            '<div>Second block ends<br></div>',
+            '</article>'
+        ].join('\n        '));
+    }, async (baseUrl) => {
+        const result = await openPage({
+            url: `${baseUrl}/structured-text`,
+            lineno: 1,
+            maxLines: 20,
+            provider: 'builtin'
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        const lines = result.structuredContent.sourceWindow.lines.map((line) => line.text);
+        const openingIndex = lines.indexOf('Opening line');
+        const secondBlockIndex = lines.indexOf('Second block starts');
+        const indentedIndex = lines.indexOf('\u00a0\u00a0\u00a0\u00a0indented evidence');
+        assert.ok(openingIndex >= 0);
+        assert.equal(secondBlockIndex - openingIndex, 2);
+        assert.equal(lines.slice(openingIndex + 1, secondBlockIndex).some((line) => line === ''), true);
+        assert.equal(indentedIndex, secondBlockIndex + 1);
+        assert.match(result.content[0].text, /L\d+: \u00a0\u00a0\u00a0\u00a0indented evidence/);
+    });
+});
+
+test('continue_page keeps maxLines independent from its bounded source character window', async () => {
+    const lines = Array.from({ length: 140 }, (_, index) =>
+        `line ${index + 1} ${'background material '.repeat(5)}`
+    );
+    lines[43] = `A horse doctor named Louvrier treated the livestock. ${'relationship detail '.repeat(45)}`;
+    await withServer((request, response) => {
+        response.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' });
+        response.end(lines.join('\n'));
+    }, async (baseUrl) => {
+        const result = await continuePage({
+            url: `${baseUrl}/exercise`,
+            lineno: 20,
+            maxLines: 80,
+            query: 'equine veterinarian',
+            provider: 'builtin'
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.equal(result.structuredContent.sourceWindow.lineStart, 20);
+        assert.match(result.content[0].text, /L44: A horse doctor named Louvrier/);
+        assert.ok(result.structuredContent.sourceWindow.lineEnd < 99);
+        assert.equal(result.structuredContent.source.has_more_after, true);
+    });
+});
+
+test('continue_page preserves long records from the requested range beyond its contiguous character window', async () => {
+    const lines = Array.from({ length: 180 }, (_, index) =>
+        `line ${index + 1} ${'brief context '.repeat(5)}`
+    );
+    lines[119] = `A dated archive record names Dr. Ada Nwosu as the responsible reviewer. ${'supporting detail '.repeat(90)}`;
+    await withServer((request, response) => {
+        response.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' });
+        response.end(lines.join('\n'));
+    }, async (baseUrl) => {
+        const result = await continuePage({
+            url: `${baseUrl}/records`,
+            lineno: 20,
+            maxLines: 140,
+            provider: 'builtin'
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.ok(result.structuredContent.sourceWindow.lineEnd < 120);
+        assert.match(result.content[0].text, /Longest source rows from the explicitly requested range/);
+        assert.match(result.content[0].text, /L120: A dated archive record names Dr\. Ada Nwosu/);
+        assert.ok(result.structuredContent.source.overflow_previews.some((line) => (
+            line.lineno === 120 && /Ada Nwosu/.test(line.text)
+        )));
     });
 });
 
@@ -4420,6 +4779,27 @@ test('web_extract_links ranks research links ahead of navigation noise and sugge
         assert.equal(result.structuredContent.suggestedNextCalls[1].tool, 'pdf_extract_text');
         assert.ok(rankLinksForResearch(result.details.links, `${baseUrl}/article`)[0].score >= rankLinksForResearch(result.details.links, `${baseUrl}/article`)[1].score);
     });
+});
+
+test('rankLinksForResearch reserves bounded link slots for child pages over root and self navigation', () => {
+    const sourceUrl = 'https://docs.example.test/collections';
+    const childLinks = [
+        { text: 'Alpha Procedure', url: 'https://docs.example.test/collections/alpha' },
+        { text: 'Beta Procedure', url: 'https://docs.example.test/collections/beta' },
+        { text: 'Gamma Procedure', url: 'https://docs.example.test/collections/gamma' },
+        { text: 'Delta Procedure', url: 'https://docs.example.test/collections/delta' },
+        { text: 'Epsilon Procedure', url: 'https://docs.example.test/collections/epsilon' }
+    ];
+    const ranked = rankLinksForResearch([
+        { text: 'Example Documentation', url: 'https://docs.example.test/' },
+        { text: 'Collections', url: sourceUrl },
+        ...childLinks
+    ], sourceUrl, 'Which is the fifth procedure alphabetically?');
+
+    assert.deepEqual(
+        new Set(ranked.slice(0, 5).map((candidate) => candidate.url)),
+        new Set(childLinks.map((candidate) => candidate.url))
+    );
 });
 
 test('web_extract_links preserves duplicate OJS issue titles and archive pagination', async () => {

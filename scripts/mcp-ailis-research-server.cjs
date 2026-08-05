@@ -11,6 +11,8 @@ const { analyzeChessPosition } = require('./ailis-stockfish-engine.cjs');
 const SERVER_INFO = { name: 'ailis_research', version: '0.1.0' };
 const PROTOCOL_VERSION = '2025-06-18';
 const MAX_FETCH_CHARS = 24000;
+const WEB_FETCH_SNAPSHOT_CACHE_LIMIT = 24;
+const webFetchSnapshotCache = new Map();
 
 function normalizeString(value, fallback = '') {
     if (typeof value !== 'string') {
@@ -34,6 +36,56 @@ function optionIsTrue(value) {
 
 function optionIsFalse(value) {
     return value === false || /^(?:false|0|no|off)$/i.test(normalizeString(value));
+}
+
+function webFetchSnapshotCacheKey(url = '') {
+    try {
+        const parsed = new URL(normalizeString(url));
+        parsed.hash = '';
+        return parsed.toString();
+    } catch {
+        return normalizeString(url);
+    }
+}
+
+function rememberWebFetchSnapshot(url = '', fetched = {}) {
+    const key = webFetchSnapshotCacheKey(url);
+    const text = typeof fetched?.text === 'string' ? fetched.text : '';
+    if (!key || !text || text.length > 2_000_000) {
+        return;
+    }
+    webFetchSnapshotCache.delete(key);
+    webFetchSnapshotCache.set(key, {
+        fetched: { ...fetched, text },
+        cachedAt: Date.now()
+    });
+    while (webFetchSnapshotCache.size > WEB_FETCH_SNAPSHOT_CACHE_LIMIT) {
+        webFetchSnapshotCache.delete(webFetchSnapshotCache.keys().next().value);
+    }
+}
+
+function reuseWebFetchSnapshot(url = '', args = {}) {
+    if (optionIsTrue(args.refresh || args.forceRefresh || args.force_refresh)) {
+        return null;
+    }
+    const requestedLine = Number(args.lineno || args.lineStart || args.line_start || 0);
+    const isContinuation = Number.isFinite(requestedLine) && requestedLine > 1;
+    const isFind = Boolean(normalizeString(args.findPattern || args.find_pattern));
+    if (!isContinuation && !isFind && !optionIsTrue(args.reuseSnapshot || args.reuse_snapshot)) {
+        return null;
+    }
+    const key = webFetchSnapshotCacheKey(url);
+    const cached = webFetchSnapshotCache.get(key);
+    if (!cached?.fetched?.text) {
+        return null;
+    }
+    webFetchSnapshotCache.delete(key);
+    webFetchSnapshotCache.set(key, cached);
+    return {
+        ...cached.fetched,
+        snapshotCacheUsed: true,
+        snapshotCachedAt: cached.cachedAt
+    };
 }
 
 async function runBoundedParallel(items = [], concurrency = 1, worker = async () => null, options = {}) {
@@ -278,17 +330,26 @@ function decodeHtml(value = '') {
 }
 
 function stripHtml(html = '') {
-    return decodeHtml(String(html)
+    const emptyBlockSentinel = '\uE000AILIS_EMPTY_BLOCK\uE001';
+    const protectedHtml = String(html)
+        .replace(/&nbsp;|&#160;|&#xa0;/gi, '\u00a0');
+    const stripped = decodeHtml(protectedHtml
         .replace(/<script[\s\S]*?<\/script>/gi, ' ')
         .replace(/<style[\s\S]*?<\/style>/gi, ' ')
         .replace(/<!--[\s\S]*?-->/g, ' ')
+        .replace(/<(p|div|li|tr|h[1-6]|section|article)\b[^>]*>\s*(?:<br\s*\/?>\s*)*<\/\1>/gi, `\n${emptyBlockSentinel}\n`)
+        .replace(/(?:<br\s*\/?>\s*){2,}/gi, `\n${emptyBlockSentinel}\n`)
+        .replace(/<br\s*\/?>\s*<\/(p|div|li|tr|h[1-6]|section|article)>/gi, '</$1>')
         .replace(/<\/(p|div|li|tr|h[1-6]|section|article)>/gi, '\n')
         .replace(/<br\s*\/?>/gi, '\n')
         .replace(/<[^>]+>/g, ' ')
-        .replace(/\s+\n/g, '\n')
-        .replace(/\n\s+/g, '\n')
+        .replace(/[ \t]+\n/g, '\n')
+        .replace(/\n[ \t]+/g, '\n')
         .replace(/[ \t]{2,}/g, ' ')
-        .replace(/\n{3,}/g, '\n\n'))
+        .replace(/\n{2,}/g, '\n'));
+    return stripped
+        .replace(new RegExp(`\\n?${emptyBlockSentinel}\\n?`, 'g'), '\n\n')
+        .replace(/\n{3,}/g, '\n\n')
         .trim();
 }
 
@@ -1373,7 +1434,15 @@ function classifyResearchLink(link = {}) {
 
 function isLowSignalNavigationLink(link = {}) {
     const haystack = `${normalizeString(link.text || link.title)} ${normalizeString(link.url || link.uri)}`.toLowerCase();
-    return /\b(home|about|contact|privacy|terms|login|log in|sign in|register|subscribe|cookie|cookies|menu|share|facebook|twitter|linkedin|instagram|mastodon|rss|comment|comments|reply|print|tag|category|author profile|profile)\b/.test(haystack);
+    if (/\b(home|about|contact|privacy|terms|login|log in|sign in|register|subscribe|cookie|cookies|menu|share|facebook|twitter|linkedin|instagram|mastodon|rss|comment|comments|reply|print|tag|category|author profile|profile)\b/.test(haystack)) {
+        return true;
+    }
+    try {
+        const parsed = new URL(normalizeString(link.url || link.uri));
+        return parsed.pathname === '/' && !parsed.search && !parsed.hash;
+    } catch {
+        return false;
+    }
 }
 
 function isArchivePaginationLink({ url = '', text = '', pageUrl = '' } = {}) {
@@ -1406,8 +1475,21 @@ function scoreResearchLink(link = {}, index = 0, pageUrl = '') {
     if (/\b(pdf|paper|study|article|journal|research|doi|arxiv|abstract)\b/i.test(`${text} ${url}`)) score += 12;
     if (isLowSignalNavigationLink({ url, text })) score -= 80;
     try {
-        const linkHost = new URL(url).hostname.replace(/^www\./i, '');
-        const pageHost = pageUrl ? new URL(pageUrl).hostname.replace(/^www\./i, '') : '';
+        const linkedUrl = new URL(url);
+        const sourceUrl = pageUrl ? new URL(pageUrl) : null;
+        const linkHost = linkedUrl.hostname.replace(/^www\./i, '');
+        const pageHost = sourceUrl?.hostname.replace(/^www\./i, '') || '';
+        const linkedPath = linkedUrl.pathname.replace(/\/+$/, '') || '/';
+        const sourcePath = sourceUrl?.pathname.replace(/\/+$/, '') || '/';
+        if (
+            sourceUrl &&
+            linkedUrl.origin === sourceUrl.origin &&
+            linkedPath === sourcePath &&
+            linkedUrl.search === sourceUrl.search &&
+            !linkedUrl.hash
+        ) {
+            score -= 120;
+        }
         if (pageHost && linkHost && linkHost !== pageHost) {
             score += 8;
         }
@@ -1418,7 +1500,8 @@ function scoreResearchLink(link = {}, index = 0, pageUrl = '') {
         kind,
         doi,
         url,
-        text
+        text,
+        explicitResource: link.explicitResource === true
     };
 }
 
@@ -3360,6 +3443,7 @@ function filterRankedLinksForQuerySuggestions(rankedLinks = [], query = '') {
     }
     return (Array.isArray(rankedLinks) ? rankedLinks : []).filter((candidate) => (
         candidate.kind === 'pagination' ||
+        candidate.explicitResource === true ||
         isRelevantSearchCandidate(candidate) ||
         (Array.isArray(candidate.queryMatchedTerms) && candidate.queryMatchedTerms.some((term) => /^(?:18|19|20)\d{2}$/.test(term)))
     ));
@@ -4945,6 +5029,164 @@ async function runWikipediaSearchBackend({ query, maxResults, timeoutMs, args = 
     };
 }
 
+const WIKIDATA_ENTITY_SEARCH_STOPWORDS = new Set([
+    'article',
+    'calculate',
+    'compare',
+    'compute',
+    'country',
+    'determine',
+    'find',
+    'identify',
+    'list',
+    'lookup',
+    'order',
+    'search',
+    'show',
+    'under',
+    'what',
+    'when',
+    'where',
+    'which',
+    'who'
+]);
+
+function extractWikidataEntitySearchTerms(query = '') {
+    const sanitized = normalizeString(query)
+        .replace(/\bsite:[^\s]+/gi, ' ')
+        .replace(/\bhttps?:\/\/\S+/gi, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    if (!sanitized) {
+        return [];
+    }
+
+    const quoted = Array.from(sanitized.matchAll(/["“”]([^"“”]{3,80})["“”]/g))
+        .map((match) => normalizeString(match[1]));
+    const capitalizedGroups = sanitized.match(
+        /[A-Z][\p{L}\p{M}\p{N}'’.-]{2,}(?:\s+(?:(?:of|the|de|da|van|von)\s+)?[A-Z][\p{L}\p{M}\p{N}'’.-]{2,}){0,3}/gu
+    ) || [];
+    const capitalizedTokens = sanitized.match(/[A-Z][\p{L}\p{M}\p{N}'’.-]{2,}/gu) || [];
+    const seen = new Set();
+    const terms = [];
+    for (const value of [...quoted, ...capitalizedTokens, ...capitalizedGroups]) {
+        const term = normalizeString(value).replace(/[.,;:!?()[\]{}]+$/g, '');
+        const key = term.toLowerCase();
+        if (
+            term.length < 3 ||
+            term.length > 80 ||
+            WIKIDATA_ENTITY_SEARCH_STOPWORDS.has(key) ||
+            ['api', 'ddc', 'id', 'isbn', 'url'].includes(key) ||
+            seen.has(key)
+        ) {
+            continue;
+        }
+        seen.add(key);
+        terms.push(term);
+        if (terms.length >= 2) {
+            break;
+        }
+    }
+    return terms;
+}
+
+function isLikelyWikidataEntitySearch(query = '') {
+    return /\b(?:wikidata|id|identifier|catalog(?:ue)?(?:\s+(?:id|number))?|record\s+(?:id|number)|authority\s+id|database\s+id)\b/i
+        .test(normalizeString(query));
+}
+
+async function runWikidataSearchBackend({ query, maxResults, timeoutMs, args = {} } = {}) {
+    const startedAt = Date.now();
+    const language = normalizeString(args.language || args.lang, 'en')
+        .toLowerCase()
+        .replace(/[^a-z-]/g, '')
+        .slice(0, 16) || 'en';
+    const apiUrl = normalizeString(
+        args.wikidataSearchUrl ||
+        args.wikidata_search_url ||
+        args.wikidataApiUrl ||
+        args.wikidata_api_url,
+        'https://www.wikidata.org/w/api.php'
+    );
+    const terms = extractWikidataEntitySearchTerms(query);
+    if (!terms.length) {
+        return {
+            ok: false,
+            backend: 'wikidata_search',
+            url: apiUrl,
+            durationMs: Date.now() - startedAt,
+            status: 0,
+            errorCode: 'no_entity_search_terms',
+            error: 'No bounded entity-like terms were found in the search query.',
+            retryable: false,
+            attempts: [],
+            results: []
+        };
+    }
+
+    const perTerm = 1;
+    const attemptTimeoutMs = Math.max(1000, Math.min(timeoutMs, 5000));
+    const attempts = await Promise.all(terms.map(async (term) => {
+        const url = wikidataApiUrl(apiUrl, {
+            action: 'wbsearchentities',
+            search: term,
+            language,
+            uselang: language,
+            type: 'item',
+            limit: perTerm
+        });
+        const response = await fetchWikidataJson(url, attemptTimeoutMs);
+        return {
+            term,
+            url,
+            ok: response.ok,
+            status: response.status || 0,
+            errorCode: response.errorCode || '',
+            error: response.error || '',
+            retryCount: response.retryCount || 0,
+            initialErrorCode: response.initialErrorCode || '',
+            matches: Array.isArray(response.json?.search)
+                ? response.json.search.slice(0, perTerm)
+                : []
+        };
+    }));
+    const results = dedupeSearchResults(attempts.flatMap((attempt) =>
+        attempt.matches.map((match) => {
+            const id = normalizeString(match.id).toUpperCase();
+            const label = normalizeString(match.label || match.display?.label?.value || id);
+            const description = normalizeString(
+                match.description ||
+                match.display?.description?.value
+            );
+            return {
+                title: label ? `${label} - Wikidata` : `${id} - Wikidata`,
+                url: /^Q\d+$/.test(id) ? `https://www.wikidata.org/wiki/${id}` : '',
+                snippet: [
+                    description,
+                    id ? `Wikidata entity ${id}` : ''
+                ].filter(Boolean).join('. '),
+                sourceEngines: ['wikidata_api']
+            };
+        })
+    ), maxResults);
+    const successfulAttempts = attempts.filter((attempt) => attempt.ok);
+    return {
+        ok: results.length > 0,
+        backend: 'wikidata_search',
+        url: apiUrl,
+        durationMs: Date.now() - startedAt,
+        status: successfulAttempts[0]?.status || attempts[0]?.status || 0,
+        errorCode: results.length ? '' : 'no_results_parsed',
+        error: results.length ? '' : 'Wikidata entity search returned no result rows.',
+        retryable: results.length === 0,
+        attempts: attempts.map(({ matches, ...attempt }) => ({
+            ...attempt,
+            resultCount: matches.length
+        })),
+        results
+    };
+}
+
 function extractFirecrawlSearchResults(payload = {}, maxResults = 8) {
     const rows = Array.isArray(payload.data)
         ? payload.data
@@ -5181,6 +5423,10 @@ const SEARCH_BACKENDS = Object.freeze({
         id: 'wikipedia_search',
         run: runWikipediaSearchBackend
     }),
+    wikidata_search: Object.freeze({
+        id: 'wikidata_search',
+        run: runWikidataSearchBackend
+    }),
     duckduckgo_lite: Object.freeze({
         id: 'duckduckgo_lite',
         buildUrl: (query) => `https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}`,
@@ -5249,7 +5495,11 @@ function configuredJsonSearchBackendIds(args = {}, query = '') {
     if (hasConfiguredFirecrawlUrl(args)) {
         chain.push('firecrawl_search');
     }
-    chain.push('python_search', 'wikipedia_search', ...HTML_SEARCH_BACKEND_IDS);
+    chain.push('python_search', 'wikipedia_search');
+    if (isLikelyWikidataEntitySearch(query)) {
+        chain.push('wikidata_search');
+    }
+    chain.push(...HTML_SEARCH_BACKEND_IDS);
     return isLikelyGitHubSearch(query) ? ['github_repositories', ...chain] : chain;
 }
 
@@ -5272,6 +5522,9 @@ function expandSearchProviderToken(token = '', query = '', { includeFallback = t
     }
     if (normalized === 'wikipedia' || normalized === 'wikipedia_search') {
         return ['wikipedia_search'];
+    }
+    if (normalized === 'wikidata' || normalized === 'wikidata_search') {
+        return ['wikidata_search'];
     }
     if (normalized === 'external' || normalized === 'agent_web') {
         return configuredJsonSearchBackendIds(args, query);
@@ -6340,9 +6593,13 @@ function buildWebFetchResult({ url, args = {}, maxChars = MAX_FETCH_CHARS, fetch
     const firstFindLineEnd = firstFindOffset >= 0 ? sourceText.indexOf('\n', firstFindOffset) : -1;
     const firstFindFocusOffset = firstFindLineEnd >= 0 ? firstFindLineEnd + 1 : firstFindOffset;
     const requestedMaxLines = Number(args.maxLines || args.max_lines || 0);
-    const defaultViewportChars = Number.isFinite(requestedMaxLines) && requestedMaxLines > 0
+    const requestedLine = Number(args.lineno || args.lineNo || args.line_no || args.lineStart || args.line_start || 0);
+    const wideViewportChars = Number.isFinite(requestedMaxLines) && requestedMaxLines > 0
         ? Math.min(maxChars, Math.max(4800, Math.round(requestedMaxLines * 100)))
         : Math.min(maxChars, 4800);
+    const defaultViewportChars = Number.isFinite(requestedLine) && requestedLine > 1
+        ? Math.min(wideViewportChars, 5200)
+        : wideViewportChars;
     const maxViewportChars = Math.max(1000, Math.min(maxChars, MAX_FETCH_CHARS));
     const viewportChars = clampNumber(
         args.viewportChars || args.viewport_chars || defaultViewportChars,
@@ -6367,7 +6624,7 @@ function buildWebFetchResult({ url, args = {}, maxChars = MAX_FETCH_CHARS, fetch
         contentType,
         query: linkQuery,
         maxChars: viewportChars,
-        lineStart: args.lineno || args.lineNo || args.line_no || args.lineStart || args.line_start,
+        lineStart: requestedLine,
         lineEnd: args.lineEnd || args.line_end,
         maxLines: args.maxLines || args.max_lines,
         focus: sourceFocus
@@ -6471,6 +6728,12 @@ function buildWebFetchResult({ url, args = {}, maxChars = MAX_FETCH_CHARS, fetch
         has_more_after: sourceWindow.has_more_after ?? sourceWindow.hasMoreAfter,
         content_type: sourceWindow.content_type || sourceWindow.contentType,
         selection_reason: sourceWindow.selection_reason || sourceWindow.selectionReason,
+        overflow_previews: (Array.isArray(sourceWindow.overflowPreviews) ? sourceWindow.overflowPreviews : []).map((line) => pruneEmptyDeep({
+            lineno: line.lineno || line.lineNumber,
+            line_number: line.line_number || line.lineNumber,
+            text: line.text,
+            original_chars: line.originalChars
+        })),
         lines: (Array.isArray(sourceWindow.lines) ? sourceWindow.lines : []).map((line) => pruneEmptyDeep({
             lineno: line.lineno || line.lineNumber,
             line_number: line.line_number || line.lineNumber,
@@ -6503,6 +6766,10 @@ function buildWebFetchResult({ url, args = {}, maxChars = MAX_FETCH_CHARS, fetch
         content_type: contentType,
         fetchBackend: fetched.backend,
         fetch_backend: fetched.backend,
+        snapshotCacheUsed: fetched.snapshotCacheUsed === true || undefined,
+        snapshot_cache_used: fetched.snapshotCacheUsed === true || undefined,
+        snapshotCachedAt: fetched.snapshotCachedAt || undefined,
+        snapshot_cached_at: fetched.snapshotCachedAt || undefined,
         proxyUsed: fetched.proxyUsed === true || undefined,
         proxy_used: fetched.proxyUsed === true || undefined,
         fallbackFrom: fetched.fallbackFrom,
@@ -6632,6 +6899,15 @@ async function webFetch(args = {}) {
     }
     const maxChars = clampNumber(args.maxChars || args.max_chars, MAX_FETCH_CHARS, 1000, 80000);
     const timeoutMs = clampNumber(args.timeoutMs || args.timeout_ms, 90000, 1000, 300000);
+    const cachedSnapshot = reuseWebFetchSnapshot(url, args);
+    if (cachedSnapshot) {
+        return buildWebFetchResult({
+            url,
+            args,
+            maxChars,
+            fetched: cachedSnapshot
+        });
+    }
     const crawl4aiAttempt = await maybeFetchWithCrawl4ai(url, args, timeoutMs);
     const wikipediaPage = crawl4aiAttempt?.ok ? null : await maybeFetchWikipediaPage(url, timeoutMs);
     const fetched = crawl4aiAttempt?.ok ? crawl4aiAttempt : wikipediaPage || await fetchText(url, timeoutMs);
@@ -6653,6 +6929,7 @@ async function webFetch(args = {}) {
     if (shouldRetryRenderedFetchAfterStaticResult({ details: primaryDetails, args, crawl4aiAttempt, fetched })) {
         const renderedFallbackAttempt = await maybeFetchWithCrawl4ai(url, buildRenderedFallbackArgs(args), timeoutMs);
         if (renderedFallbackAttempt?.ok) {
+            rememberWebFetchSnapshot(url, renderedFallbackAttempt);
             return buildWebFetchResult({
                 url,
                 args,
@@ -6668,6 +6945,7 @@ async function webFetch(args = {}) {
                 renderedFallbackTrigger: primaryDetails.evidenceQuality
             });
         }
+        rememberWebFetchSnapshot(url, fetched);
         return buildWebFetchResult({
             url,
             args,
@@ -6678,6 +6956,7 @@ async function webFetch(args = {}) {
             renderedFallbackTrigger: primaryDetails.evidenceQuality
         });
     }
+    rememberWebFetchSnapshot(url, fetched);
     return primaryResult;
 }
 
@@ -6952,22 +7231,32 @@ function normalizeWebArchiveCapture(providerId, row = {}, args = {}) {
 function rankWebArchiveCaptures(captures = [], contains = '', options = {}) {
     const terms = webArchiveSearchTerms(contains);
     const preferEarliest = options.preferEarliest === true;
+    const preferAnswerBearing = options.preferAnswerBearing === true;
     const ranked = captures.map((capture, index) => {
         const haystack = webArchiveUrlRankingText(capture.originalUrl);
         const matchedTerms = terms.filter((term) => haystack.includes(term));
+        const url = normalizeString(capture.originalUrl);
+        const answerBearingPriority = /\/(?:results?|records?|items?|details?|documents?)(?:[/?#]|$)/i.test(url)
+            ? 2
+            : /\/(?:advanced|autocomplete|account|login)(?:[/?#]|$)/i.test(url)
+                ? -2
+                : 0;
         return {
             ...capture,
             matchedTerms,
             matchCount: matchedTerms.length,
             matchCoverage: terms.length ? Number((matchedTerms.length / terms.length).toFixed(3)) : 1,
+            answerBearingPriority,
             _index: index
         };
     });
     ranked.sort((left, right) => preferEarliest
         ? right.matchCount - left.matchCount ||
+            (preferAnswerBearing ? right.answerBearingPriority - left.answerBearingPriority : 0) ||
             left.timestamp.localeCompare(right.timestamp) ||
             left._index - right._index
         : right.matchCount - left.matchCount ||
+            (preferAnswerBearing ? right.answerBearingPriority - left.answerBearingPriority : 0) ||
             right.timestamp.localeCompare(left.timestamp) ||
             left._index - right._index
     );
@@ -7122,20 +7411,6 @@ async function webArchiveLookup(args = {}) {
     const duplicatedContentYearBounds = [requestedFromYear, requestedToYear]
         .filter(Boolean)
         .some((year) => rankingTerms.includes(String(year)));
-    if (
-        duplicatedContentYearBounds &&
-        args._captureDateBoundsRelaxed !== true
-    ) {
-        const relaxed = await webArchiveLookup({
-            ...args,
-            fromYear: 0,
-            from_year: 0,
-            toYear: 0,
-            to_year: 0,
-            _captureDateBoundsRelaxed: true
-        });
-        return annotateArchiveDateBoundsRelaxed(relaxed, requestedFromYear, requestedToYear);
-    }
     const defaultScanLimit = matchType === 'prefix'
         ? (rankingTerms.length ? 2500 : 500)
         : 120;
@@ -7252,7 +7527,10 @@ async function webArchiveLookup(args = {}) {
                         stopReason = 'server_url_selective_terms_matched_probing_broader_core';
                         continue;
                     }
-                    serverUrlProbeComplete = filteredRanking.exactMatch || matchedAnchorSetCount >= 2;
+                    const strongestFilteredCapture = filteredRanking.captures[0];
+                    const minimumMeaningfulAnchorMatches = Math.min(2, rankingTerms.length);
+                    serverUrlProbeComplete = filteredRanking.exactMatch ||
+                        Number(strongestFilteredCapture?.matchCount || 0) >= minimumMeaningfulAnchorMatches;
                     if (serverUrlProbeComplete) {
                         break;
                     }
@@ -7351,8 +7629,28 @@ async function webArchiveLookup(args = {}) {
         });
     }
     const ranked = rankWebArchiveCaptures(captures, args.contains || args.query, {
-        preferEarliest: matchType === 'prefix'
+        preferEarliest: matchType === 'prefix',
+        preferAnswerBearing: mode === 'search' || Boolean(normalizeString(args.query))
     });
+    if (
+        duplicatedContentYearBounds &&
+        matchType === 'prefix' &&
+        args._captureDateBoundsRelaxed !== true
+    ) {
+        const strongestCapture = ranked.captures[0];
+        const minimumMeaningfulMatches = Math.min(2, rankingTerms.length);
+        if (Number(strongestCapture?.matchCount || 0) < minimumMeaningfulMatches) {
+            const relaxed = await webArchiveLookup({
+                ...args,
+                fromYear: 0,
+                from_year: 0,
+                toYear: 0,
+                to_year: 0,
+                _captureDateBoundsRelaxed: true
+            });
+            return annotateArchiveDateBoundsRelaxed(relaxed, requestedFromYear, requestedToYear);
+        }
+    }
     const captureSelection = selectWebArchiveCaptures(ranked.captures, ranked.terms, maxResults);
     const selected = captureSelection.selected;
     const suggestedNextCalls = selected.slice(0, 5).map((capture) => ({
@@ -7474,6 +7772,21 @@ async function webArchiveLookup(args = {}) {
                     error: snapshotBlocked
                         ? 'archived_snapshot_access_barrier'
                         : 'archived_snapshot_no_results'
+                };
+                continue;
+            }
+            const repeatedFieldCount = (Array.isArray(snapshotDetails.repeatedLabeledFields)
+                ? snapshotDetails.repeatedLabeledFields
+                : [])
+                .reduce((sum, field) => sum + Number(field?.occurrenceCount || 0), 0);
+            const snapshotIsNavigationOnly = repeatedFieldCount === 0 &&
+                snapshotDetails.reasoningReady !== true &&
+                /\/(?:advanced|autocomplete|account|login)(?:[/?#]|$)/i.test(capture.originalUrl);
+            if (snapshotIsNavigationOnly) {
+                openAttempts[openAttempts.length - 1] = {
+                    ...openAttempts[openAttempts.length - 1],
+                    ok: false,
+                    error: 'archived_snapshot_not_answer_bearing'
                 };
                 continue;
             }
@@ -7668,6 +7981,220 @@ async function renderPage(args = {}) {
     });
 }
 
+function headlessBrowserExecutableCandidates(args = {}) {
+    const explicit = normalizeString(
+        args.browserExecutable ||
+        args.browser_executable ||
+        process.env.AILIS_HEADLESS_BROWSER_PATH
+    );
+    const candidates = [explicit];
+    if (process.platform === 'win32') {
+        candidates.push(
+            path.join(process.env.PROGRAMFILES || 'C:\\Program Files', 'Google', 'Chrome', 'Application', 'chrome.exe'),
+            path.join(process.env['PROGRAMFILES(X86)'] || 'C:\\Program Files (x86)', 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
+            path.join(process.env.PROGRAMFILES || 'C:\\Program Files', 'Microsoft', 'Edge', 'Application', 'msedge.exe')
+        );
+    } else if (process.platform === 'darwin') {
+        candidates.push(
+            '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+            '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge'
+        );
+    } else {
+        candidates.push('/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/usr/bin/chromium', '/usr/bin/chromium-browser', '/usr/bin/microsoft-edge');
+    }
+    return dedupeSearchStrings(candidates.filter(Boolean));
+}
+
+function resolveHeadlessBrowserExecutable(args = {}) {
+    return headlessBrowserExecutableCandidates(args)
+        .find((candidate) => fsSync.existsSync(candidate) && fsSync.statSync(candidate).isFile()) || '';
+}
+
+function isHeadlessBrowserAccessBarrier(html = '') {
+    return /challenge-platform|cf-chl-|cf-turnstile-response|captcha|making sure you(?:'|’)re not a bot|enable javascript and cookies to continue|正在进行安全验证|安全服务防护恶意自动程序/i.test(
+        normalizeString(html)
+    );
+}
+
+function looksLikeTextLayoutQuestion(value = '') {
+    return /\b(?:indent(?:ed|ation)?|stanza|line\s*breaks?|leading\s+spaces?|text\s+alignment|spacing)\b|缩进|诗节|段落|行距|对齐/i.test(
+        normalizeString(value)
+    );
+}
+
+function extractBreakDelimitedLayoutEvidence(html = '') {
+    const source = String(html || '')
+        .replace(/<script[\s\S]*?<\/script>/gi, '')
+        .replace(/<style[\s\S]*?<\/style>/gi, '')
+        .replace(/<!--[\s\S]*?-->/g, '');
+    const candidates = [];
+    const containerPattern = /<(div|p|pre|blockquote|td|article)\b[^>]*>([\s\S]*?)<\/\1>/gi;
+    let containerMatch;
+    while ((containerMatch = containerPattern.exec(source)) !== null) {
+        const body = containerMatch[2] || '';
+        const breakCount = (body.match(/<br\s*\/?>/gi) || []).length;
+        if (breakCount < 4) {
+            continue;
+        }
+        const layoutText = decodeHtml(body
+            .replace(/\r?\n/g, '')
+            .replace(/<br\s*\/?>/gi, '\n')
+            .replace(/<[^>]+>/g, ''));
+        const lines = [];
+        let block = 0;
+        let nextLineStartsBlock = true;
+        for (const rawLine of layoutText.split('\n')) {
+            const text = rawLine.trim();
+            if (!text) {
+                nextLineStartsBlock = true;
+                continue;
+            }
+            if (nextLineStartsBlock) {
+                block += 1;
+                nextLineStartsBlock = false;
+            }
+            const prefix = rawLine.match(/^[ \t]*/)?.[0] || '';
+            const leadingColumns = [...prefix]
+                .reduce((sum, character) => sum + (character === '\t' ? 4 : 1), 0);
+            lines.push({ block, text: compactWhitespace(text), leadingColumns });
+        }
+        if (lines.length < 4) {
+            continue;
+        }
+        const baseline = Math.min(...lines.map((line) => line.leadingColumns));
+        const indentedByBlock = new Map();
+        for (const line of lines) {
+            if (line.leadingColumns < baseline + 2) {
+                continue;
+            }
+            const blockLines = indentedByBlock.get(line.block) || [];
+            blockLines.push(line);
+            indentedByBlock.set(line.block, blockLines);
+        }
+        const indentedBlocks = [...indentedByBlock.entries()]
+            .filter(([, blockLines]) => blockLines.length >= 2)
+            .map(([blockIndex, blockLines]) => ({
+                blockIndex,
+                indentedLineCount: blockLines.length,
+                leadingColumns: Math.min(...blockLines.map((line) => line.leadingColumns)) - baseline,
+                examples: blockLines.slice(0, 4).map((line) => line.text)
+            }))
+            .sort((left, right) =>
+                right.indentedLineCount - left.indentedLineCount ||
+                left.blockIndex - right.blockIndex
+            );
+        candidates.push({
+            breakCount,
+            lineCount: lines.length,
+            blockCount: Math.max(...lines.map((line) => line.block)),
+            indentedBlocks
+        });
+    }
+    const best = candidates
+        .filter((candidate) => candidate.indentedBlocks.length)
+        .sort((left, right) => {
+            const leftIndented = left.indentedBlocks.reduce((sum, block) => sum + block.indentedLineCount, 0);
+            const rightIndented = right.indentedBlocks.reduce((sum, block) => sum + block.indentedLineCount, 0);
+            return rightIndented - leftIndented || right.lineCount - left.lineCount;
+        })[0];
+    if (!best) {
+        return {
+            status: 'differentiated_indentation_not_detected',
+            blockBoundary: 'blank-line-delimited_text_blocks',
+            indentedBlocks: []
+        };
+    }
+    return {
+        status: 'differentiated_indentation_detected',
+        blockBoundary: 'blank-line-delimited_text_blocks',
+        blockCount: best.blockCount,
+        lineCount: best.lineCount,
+        indentedBlocks: best.indentedBlocks
+    };
+}
+
+function formatLayoutEvidence(layoutEvidence = null) {
+    if (layoutEvidence?.status !== 'differentiated_indentation_detected') {
+        return [];
+    }
+    return [
+        'Static HTML layout evidence (blank-line-delimited text blocks):',
+        ...layoutEvidence.indentedBlocks.map((block) =>
+            `- Block ${block.blockIndex}: ${block.indentedLineCount} line(s) use at least +${block.leadingColumns} leading columns (${block.examples.join(' | ')})`
+        )
+    ];
+}
+
+function resolveHeadlessScreenshotViewport(args = {}) {
+    const fullPage = optionIsTrue(args.fullPage ?? args.full_page);
+    return {
+        width: clampNumber(args.width, 1440, 320, 3840),
+        height: clampNumber(args.height, fullPage ? 10000 : 1800, 480, 16000),
+        fullPage
+    };
+}
+
+async function captureWithHeadlessBrowser(url, outputPath, args = {}, timeoutMs = 120000) {
+    const executable = resolveHeadlessBrowserExecutable(args);
+    if (!executable) {
+        return {
+            ok: false,
+            errorCode: 'headless_browser_unavailable',
+            error: 'No supported Chrome, Chromium, or Edge executable was found.'
+        };
+    }
+    await fs.mkdir(path.dirname(outputPath), { recursive: true });
+    const profileDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-headless-browser-'));
+    const viewport = resolveHeadlessScreenshotViewport(args);
+    const { width, height } = viewport;
+    const virtualTimeBudgetMs = clampNumber(args.delayMs || args.delay_ms, 5000, 500, 30000);
+    try {
+        const processResult = await runProcess(executable, [
+            '--headless=new',
+            '--disable-gpu',
+            '--hide-scrollbars',
+            '--ignore-certificate-errors',
+            '--no-first-run',
+            '--no-default-browser-check',
+            '--disable-background-networking',
+            '--dump-dom',
+            `--user-data-dir=${profileDir}`,
+            `--window-size=${width},${height}`,
+            `--virtual-time-budget=${virtualTimeBudgetMs}`,
+            `--screenshot=${outputPath}`,
+            url
+        ], { timeoutMs });
+        const stat = processResult.exitCode === 0
+            ? await fs.stat(outputPath).catch(() => null)
+            : null;
+        if (stat?.isFile() && isHeadlessBrowserAccessBarrier(processResult.stdout)) {
+            await fs.unlink(outputPath).catch(() => {});
+            return {
+                ok: false,
+                errorCode: 'headless_browser_access_barrier',
+                error: 'The browser rendered an anti-bot or verification page instead of the requested source.',
+                backend: path.basename(executable).toLowerCase()
+            };
+        }
+        return stat?.isFile()
+            ? {
+                ok: true,
+                screenshotPath: outputPath,
+                backend: path.basename(executable).toLowerCase(),
+                stat,
+                viewport
+            }
+            : {
+                ok: false,
+                errorCode: processResult.timedOut ? 'headless_browser_timeout' : 'headless_browser_failed',
+                error: normalizeString(processResult.stderr || processResult.stdout, 'The headless browser did not produce a screenshot.'),
+                backend: path.basename(executable).toLowerCase()
+            };
+    } finally {
+        await fs.rm(profileDir, { recursive: true, force: true }).catch(() => {});
+    }
+}
+
 async function webpageScreenshot(args = {}) {
     const url = normalizeString(args.url || args.uri);
     if (!/^https?:\/\//i.test(url)) {
@@ -7684,44 +8211,78 @@ async function webpageScreenshot(args = {}) {
         fetchProvider: 'crawl4ai',
         fetch_provider: 'crawl4ai'
     });
-    if (!config || config.mode !== 'local_worker') {
-        return actionableErrorResult('webpage_screenshot requires the local Crawl4AI worker.', {
-            status: 'screenshot_backend_unavailable',
+    const crawl4aiResult = config?.mode === 'local_worker'
+        ? await fetchWithLocalCrawl4aiWorker(
             url,
-            failureReason: 'local_crawl4ai_worker_unavailable',
-            nextActions: [
-                'Configure the bundled local Crawl4AI worker and Playwright Chromium runtime.',
-                'Use another screenshot-capable browser or scraping connector if one is installed.'
-            ]
+            { ...config, probe: false },
+            { ...args, screenshotPath: outputPath },
+            timeoutMs
+        )
+        : {
+            ok: false,
+            errorCode: 'local_crawl4ai_worker_unavailable',
+            error: 'The local Crawl4AI worker is not configured.'
+        };
+    const fetched = crawl4aiResult.ok
+        ? crawl4aiResult
+        : await captureWithHeadlessBrowser(url, outputPath, args, timeoutMs);
+    let layoutEvidence = null;
+    if (looksLikeTextLayoutQuestion(args.query)) {
+        const sourceFetch = await fetchText(url, Math.min(timeoutMs, 30000));
+        if (sourceFetch.ok && /html/i.test(normalizeString(sourceFetch.contentType))) {
+            layoutEvidence = extractBreakDelimitedLayoutEvidence(sourceFetch.text);
+        }
+    }
+    const stat = fetched.stat || (fetched.ok
+        ? await fs.stat(fetched.screenshotPath || outputPath).catch(() => null)
+        : null);
+    if ((!fetched.ok || !stat?.isFile()) && layoutEvidence?.status === 'differentiated_indentation_detected') {
+        return textResult([
+            'The browser screenshot was unavailable, but the public source HTML preserves differentiated indentation.',
+            ...formatLayoutEvidence(layoutEvidence),
+            'Use these block numbers only for text groups separated by blank lines. The evidence does not claim that ordinary browser source-code formatting is visual indentation.'
+        ].join('\n'), {
+            status: 'partial_layout_evidence',
+            url,
+            screenshotStatus: fetched.errorCode || 'screenshot_failed',
+            screenshotFailureReason: fetched.error || 'The screenshot file was not produced.',
+            backend: fetched.backend,
+            layoutEvidence,
+            reasoningReady: true
         });
     }
-    const fetched = await fetchWithLocalCrawl4aiWorker(
-        url,
-        { ...config, probe: false },
-        {
-            ...args,
-            screenshotPath: outputPath
-        },
-        timeoutMs
-    );
-    const stat = fetched.ok
-        ? await fs.stat(fetched.screenshotPath || outputPath).catch(() => null)
-        : null;
     if (!fetched.ok || !stat?.isFile()) {
         return actionableErrorResult('webpage_screenshot failed.', {
             status: fetched.errorCode || 'screenshot_failed',
             url,
             failureReason: fetched.error || 'The screenshot file was not produced.',
             backend: fetched.backend,
-            nextActions: [
-                'Use a different screenshot-capable browser connector or inspect source HTML/CSS when visual layout cannot be captured.'
-            ]
+            crawl4aiFailure: crawl4aiResult.ok ? undefined : crawl4aiResult.error,
+            nextActions: fetched.errorCode === 'headless_browser_access_barrier'
+                ? [
+                    'Open another already discovered source for the same content and call webpage_screenshot on that source before returning to broad search.'
+                ]
+                : [
+                    'Use a different screenshot-capable browser connector or inspect source HTML/CSS when visual layout cannot be captured.'
+                ]
         });
     }
     const screenshotPath = path.resolve(fetched.screenshotPath || outputPath);
+    const viewport = fetched.viewport || resolveHeadlessScreenshotViewport(args);
+    const captureMode = viewport.fullPage ? 'full page overview' : 'primary viewport';
+    const layoutAuditText = layoutEvidence?.status === 'differentiated_indentation_detected'
+        ? formatLayoutEvidence(layoutEvidence)
+        : layoutEvidence
+        ? [
+            'Static HTML indentation audit: no repeated differentiated leading-whitespace run was preserved in the source line text.',
+            'For questions about original indentation, treat this rendered copy as potentially reformatted and compare another source before finalizing.'
+        ]
+        : [];
     return textResult([
         `Captured a browser-rendered screenshot of ${url}`,
         `Path: ${screenshotPath}`,
+        `Capture mode: ${captureMode} (${viewport.width}x${viewport.height}).`,
+        ...layoutAuditText,
         'The screenshot is attached to the next model turn as visual input. Inspect the pixels before answering layout, indentation, color, position, chart, or canvas questions.'
     ].join('\n'), {
         status: 'completed',
@@ -7730,6 +8291,9 @@ async function webpageScreenshot(args = {}) {
         bytes: stat.size,
         contentType: 'image/png',
         backend: fetched.backend,
+        captureMode: viewport.fullPage ? 'full_page' : 'primary_viewport',
+        viewport,
+        ...(layoutEvidence ? { layoutEvidence } : {}),
         modelImage: {
             image_url: screenshotPath,
             detail: normalizeString(args.detail, 'original')
@@ -9546,7 +10110,7 @@ function wikidataApiUrl(baseUrl, params = {}) {
     for (const [key, value] of Object.entries({
         format: 'json',
         formatversion: '2',
-        maxlag: '5',
+        maxlag: '10',
         ...params
     })) {
         if (value !== undefined && value !== null && value !== '') {
@@ -9584,25 +10148,63 @@ function buildWikidataSearchVariants(query = '') {
     return [...new Set(variants)].slice(0, 5);
 }
 
+function normalizeWikidataJsonResponse(response = {}) {
+    const apiError = response?.json?.error;
+    if (!response.ok || !apiError || typeof apiError !== 'object') {
+        return response;
+    }
+    const code = normalizeString(apiError.code, 'api_error').toLowerCase().replace(/[^a-z0-9_-]+/g, '_');
+    return {
+        ...response,
+        ok: false,
+        errorCode: `wikidata_${code}`,
+        error: normalizeString(apiError.info || apiError.message, `Wikidata API error: ${code}`),
+        apiError: pruneEmptyDeep({
+            code,
+            lag: Number.isFinite(Number(apiError.lag)) ? Number(apiError.lag) : undefined,
+            type: normalizeString(apiError.type)
+        })
+    };
+}
+
+function wikidataRetryDelayMs(response = {}) {
+    const retryAfterSeconds = Number(response.retryAfter);
+    if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0) {
+        return Math.min(5000, Math.max(100, Math.ceil(retryAfterSeconds * 1000)));
+    }
+    const lagSeconds = Number(response.apiError?.lag);
+    if (Number.isFinite(lagSeconds) && lagSeconds > 0) {
+        return Math.min(5000, Math.max(100, Math.ceil(lagSeconds * 1000)));
+    }
+    return 1000;
+}
+
 async function fetchWikidataJson(url, timeoutMs) {
-    let first = await fetchJsonUrl(url, timeoutMs);
+    let first = normalizeWikidataJsonResponse(await fetchJsonUrl(url, timeoutMs));
     if (!first.ok && first.status === 0) {
-        const fallback = await fetchJsonUrlWithPowerShell(url, timeoutMs);
+        const fallback = normalizeWikidataJsonResponse(await fetchJsonUrlWithPowerShell(url, timeoutMs));
         if (fallback.ok) return fallback;
         first = {
             ...first,
             fallbackError: fallback.error || ''
         };
     }
-    if (first.ok || first.status !== 429) return first;
-    const retrySeconds = clampNumber(first.retryAfter, 1, 1, 30);
-    await new Promise((resolve) => setTimeout(resolve, retrySeconds * 1000));
-    const retry = await fetchJsonUrl(url, timeoutMs);
+    const retryable = first.status === 429 || first.errorCode === 'wikidata_maxlag';
+    if (first.ok || !retryable) return first;
+    await new Promise((resolve) => setTimeout(resolve, wikidataRetryDelayMs(first)));
+    let retry = normalizeWikidataJsonResponse(await fetchJsonUrl(url, timeoutMs));
     if (!retry.ok && retry.status === 0) {
-        const fallback = await fetchJsonUrlWithPowerShell(url, timeoutMs);
-        if (fallback.ok) return fallback;
+        const fallback = normalizeWikidataJsonResponse(await fetchJsonUrlWithPowerShell(url, timeoutMs));
+        if (fallback.ok) {
+            retry = fallback;
+        }
     }
-    return retry;
+    return {
+        ...retry,
+        retryCount: 1,
+        initialErrorCode: first.errorCode || (first.status === 429 ? 'http_429' : ''),
+        initialError: first.error || ''
+    };
 }
 
 function wikidataEntityId(value = {}) {
@@ -12375,6 +12977,25 @@ function buildSourceLineWindow(text = '', {
         });
     }
     const lineEndActual = selected.length ? selected[selected.length - 1].lineNumber : startLine;
+    const overflowPreviews = lineEndActual < targetEndLine
+        ? lines
+            .slice(lineEndActual, targetEndLine)
+            .map((textLine, offset) => ({
+                lineNumber: lineEndActual + offset + 1,
+                text: normalizeString(textLine),
+                originalChars: String(textLine || '').length
+            }))
+            .filter((line) => line.text)
+            .sort((a, b) => b.originalChars - a.originalChars || a.lineNumber - b.lineNumber)
+            .slice(0, 5)
+            .map((line) => ({
+                ...line,
+                text: truncateRelationText(line.text, 640),
+                rendered: `L${line.lineNumber}: ${truncateRelationText(line.text, 640)}`,
+                lineno: line.lineNumber,
+                line_number: line.lineNumber
+            }))
+        : [];
     const selectionReason = requestedLine
         ? 'requested_line_window'
         : normalizeString(query)
@@ -12410,6 +13031,8 @@ function buildSourceLineWindow(text = '', {
         selectionReason,
         selection_reason: selectionReason,
         focus: focus || undefined,
+        overflowPreviews,
+        overflow_previews: overflowPreviews,
         lines: selected.map((line) => ({
             ...line,
             lineno: line.lineNumber,
@@ -12467,6 +13090,10 @@ function formatSourceLineWindow(sourceWindow = {}) {
         .map((line) => normalizeString(line.rendered))
         .filter(Boolean)
         .join('\n');
+    const overflowPreviewLines = (Array.isArray(sourceWindow.overflowPreviews) ? sourceWindow.overflowPreviews : [])
+        .map((line) => normalizeString(line.rendered))
+        .filter(Boolean)
+        .join('\n');
     return [
         'Source viewport:',
         `Content type: ${normalizeString(sourceWindow.content_type || sourceWindow.contentType, 'text/plain')}`,
@@ -12476,6 +13103,8 @@ function formatSourceLineWindow(sourceWindow = {}) {
         `Has more before: ${(sourceWindow.has_more_before ?? sourceWindow.hasMoreBefore) ? 'true' : 'false'}`,
         `Has more after: ${(sourceWindow.has_more_after ?? sourceWindow.hasMoreAfter) ? 'true' : 'false'}`,
         'Note: this is a focused source viewport, not a failed or incomplete fetch. If it contains enough answer-bearing evidence, answer. If a specific field is missing, fetch another line window or query-focused window. For first/earliest/latest/only/all/count questions, a partial viewport is sufficient only when it establishes the relevant candidate-set boundary; otherwise inspect the remaining relevant lines or sections.',
+        overflowPreviewLines ? 'Longest source rows from the explicitly requested range that fell beyond the contiguous character window:' : '',
+        overflowPreviewLines,
         '',
         renderedLines
     ].filter((line) => line !== '').join('\n');
@@ -12673,6 +13302,38 @@ function formatAnswerCandidates(candidates = []) {
 function extractLinksFromHtml(html = '', baseUrl = '', maxLinks = 80) {
     const links = [];
     const seen = new Map();
+    const addLink = (rawHref = '', rawText = '', options = {}) => {
+        if (links.length >= maxLinks) {
+            return;
+        }
+        let href = decodeHtml(rawHref).trim();
+        if (!href || href.startsWith('#') || /^javascript:/i.test(href)) {
+            return;
+        }
+        try {
+            href = new URL(href, baseUrl).href;
+        } catch {
+            return;
+        }
+        const text = normalizeString(rawText).slice(0, 240);
+        if (seen.has(href)) {
+            const existing = seen.get(href);
+            if (existing && !normalizeString(existing.text) && text) {
+                existing.text = text;
+            }
+            if (existing && options.explicitResource === true) {
+                existing.explicitResource = true;
+            }
+            return;
+        }
+        const link = {
+            url: href,
+            text,
+            ...(options.explicitResource === true ? { explicitResource: true } : {})
+        };
+        seen.set(href, link);
+        links.push(link);
+    };
     const textById = new Map();
     const idPattern = /<([a-z0-9]+)\b[^>]*\bid=["']([^"']+)["'][^>]*>([\s\S]*?)<\/\1>/gi;
     let idMatch;
@@ -12683,18 +13344,24 @@ function extractLinksFromHtml(html = '', baseUrl = '', maxLinks = 80) {
             textById.set(id, text);
         }
     }
+
+    const metadataTagPattern = /<(?:meta|link)\b[^>]*>/gi;
+    let metadataMatch;
+    while ((metadataMatch = metadataTagPattern.exec(html)) && links.length < maxLinks) {
+        const tag = metadataMatch[0];
+        const name = normalizeString(extractHtmlAttribute(tag, 'name') || extractHtmlAttribute(tag, 'property')).toLowerCase();
+        const type = normalizeString(extractHtmlAttribute(tag, 'type')).toLowerCase();
+        const rel = normalizeString(extractHtmlAttribute(tag, 'rel')).toLowerCase();
+        if (name === 'citation_pdf_url') {
+            addLink(extractHtmlAttribute(tag, 'content'), 'PDF metadata', { explicitResource: true });
+        } else if (type === 'application/pdf' && /(?:^|\s)alternate(?:\s|$)/i.test(rel)) {
+            addLink(extractHtmlAttribute(tag, 'href'), 'PDF alternate', { explicitResource: true });
+        }
+    }
+
     const pattern = /<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
     let match;
     while ((match = pattern.exec(html)) && links.length < maxLinks) {
-        let href = decodeHtml(match[1]).trim();
-        if (!href || href.startsWith('#') || /^javascript:/i.test(href)) {
-            continue;
-        }
-        try {
-            href = new URL(href, baseUrl).href;
-        } catch {
-            continue;
-        }
         let text = stripHtml(match[2]).slice(0, 240);
         const ariaLabelledBy = match[0].match(/\baria-labelledby=["']([^"']+)["']/i);
         if (ariaLabelledBy && /^(?:pdf|download|full text|view pdf)?$/i.test(normalizeString(text))) {
@@ -12708,53 +13375,88 @@ function extractLinksFromHtml(html = '', baseUrl = '', maxLinks = 80) {
                 text = normalizeString(`${labelText} ${text}`.trim()).slice(0, 240);
             }
         }
-        if (seen.has(href)) {
-            const existing = seen.get(href);
-            if (existing && !normalizeString(existing.text) && normalizeString(text)) {
-                existing.text = text;
-            }
-            continue;
-        }
-        const link = {
-            url: href,
-            text
-        };
-        seen.set(href, link);
-        links.push(link);
+        addLink(match[1], text);
     }
     return links;
+}
+
+function resolveSubprocessCwd(preferredCwd = '', fallbackCwd = process.cwd()) {
+    const fallback = path.resolve(normalizeString(fallbackCwd, process.cwd()));
+    const preferred = path.resolve(normalizeString(preferredCwd, fallback));
+    if (process.platform === 'win32' && preferred.length >= 240) {
+        return fallback;
+    }
+    try {
+        if (!fsSync.statSync(preferred).isDirectory()) {
+            return fallback;
+        }
+    } catch {
+        return fallback;
+    }
+    return preferred;
 }
 
 function runProcess(command, args, options = {}) {
     const timeoutMs = clampNumber(options.timeoutMs, 120000, 1000, 600000);
     return new Promise((resolve) => {
-        const child = spawn(command, args, {
-            cwd: options.cwd || process.cwd(),
-            windowsHide: true,
-            shell: false,
-            env: {
-                ...process.env,
-                ...(options.env || {})
-            }
-        });
         let stdout = '';
         let stderr = '';
-        const timer = setTimeout(() => {
+        let settled = false;
+        let child = null;
+        let timer = null;
+        const finish = (result) => {
+            if (settled) {
+                return;
+            }
+            settled = true;
+            if (timer) {
+                clearTimeout(timer);
+            }
+            resolve(result);
+        };
+        try {
+            child = spawn(command, args, {
+                cwd: resolveSubprocessCwd(options.cwd),
+                windowsHide: true,
+                shell: false,
+                stdio: ['ignore', 'pipe', 'pipe'],
+                env: {
+                    ...process.env,
+                    ...(options.env || {})
+                }
+            });
+        } catch (error) {
+            finish({
+                exitCode: -1,
+                stdout,
+                stderr: error?.message || String(error),
+                timedOut: false
+            });
+            return;
+        }
+        timer = setTimeout(() => {
             child.kill('SIGKILL');
         }, timeoutMs);
-        child.stdout.on('data', (chunk) => {
+        child.stdout?.on('data', (chunk) => {
             stdout += chunk.toString();
         });
-        child.stderr.on('data', (chunk) => {
+        child.stderr?.on('data', (chunk) => {
             stderr += chunk.toString();
         });
+        const handleStdioError = (error) => {
+            stderr += `${stderr ? '\n' : ''}${error?.message || String(error)}`;
+            try {
+                child.kill('SIGKILL');
+            } catch {}
+            finish({ exitCode: -1, stdout, stderr, timedOut: false });
+        };
+        child.stdout?.on('error', handleStdioError);
+        child.stderr?.on('error', handleStdioError);
         child.on('close', (exitCode) => {
-            clearTimeout(timer);
-            resolve({ exitCode, stdout, stderr, timedOut: exitCode === null });
+            finish({ exitCode, stdout, stderr, timedOut: exitCode === null });
         });
         child.on('error', (error) => {
-            clearTimeout(timer);
-            resolve({ exitCode: -1, stdout, stderr: stderr || error.message, timedOut: false });
+            finish({ exitCode: -1, stdout, stderr: stderr || error.message, timedOut: false });
         });
     });
 }
@@ -14565,7 +15267,18 @@ async function chessPositionAnalyze(args = {}) {
         'board_echo:',
         result.boardEcho
     ].filter(Boolean).join('\n');
-    return textResult(text, result);
+    const bestAnswerCandidate = {
+        answer: result.bestMove.san,
+        source: 'stockfish_engine_best_move',
+        selected: true,
+        finalizable: true,
+        confidence: 0.99
+    };
+    return textResult(text, {
+        ...result,
+        answerCandidates: [bestAnswerCandidate],
+        bestAnswerCandidate
+    });
 }
 
 async function youtubeVideoSearch(args = {}) {
@@ -15058,7 +15771,7 @@ const TOOLS = [
     },
     {
         name: 'webpage_screenshot',
-        description: 'Capture a browser-rendered PNG screenshot of a known public HTTP(S) page with the bundled local Crawl4AI/Playwright browser. Use when the answer depends on visual layout, indentation, columns, line breaks, color, position, charts, canvas, or other pixel evidence that Markdown/text extraction cannot preserve. The PNG is returned to the main Agent model as visual input; this tool does not call another reasoning model.',
+        description: 'Capture a browser-rendered PNG screenshot of a known public HTTP(S) page with the bundled local Crawl4AI/Playwright browser or an installed Chrome/Edge fallback. Use when the answer depends on visual layout, indentation, columns, line breaks, color, position, charts, canvas, or other pixel evidence that Markdown/text extraction cannot preserve. The default 1440x1800 primary viewport keeps text and spacing legible; request fullPage only when lower-page or whole-page context is necessary. The PNG is returned to the main Agent model as visual input; this tool does not call another reasoning model.',
         inputSchema: {
             type: 'object',
             required: ['url'],
@@ -15071,6 +15784,10 @@ const TOOLS = [
                 wait_for: { type: 'string' },
                 delayMs: { type: 'integer', minimum: 0, maximum: 30000 },
                 delay_ms: { type: 'integer', minimum: 0, maximum: 30000 },
+                fullPage: { type: 'boolean', description: 'Capture a tall full-page overview instead of the default readable primary viewport.' },
+                full_page: { type: 'boolean', description: 'Snake-case alias for fullPage.' },
+                width: { type: 'integer', minimum: 320, maximum: 3840 },
+                height: { type: 'integer', minimum: 480, maximum: 16000 },
                 timeoutMs: { type: 'integer', minimum: 30000, maximum: 300000 }
             },
             additionalProperties: false
@@ -15595,9 +16312,14 @@ module.exports = {
     buildYouTubeOEmbedUrl,
     buildInvidiousVideoProxyUrl,
     chessPositionAnalyze,
+    captureWithHeadlessBrowser,
     classifyYtDlpFailure,
     crawl4aiFetchConfig,
     crawl4aiWorkerPath,
+    isHeadlessBrowserAccessBarrier,
+    extractBreakDelimitedLayoutEvidence,
+    resolveHeadlessScreenshotViewport,
+    resolveHeadlessBrowserExecutable,
     downloadFile,
     extractBingResults,
     extractArxivCandidatesFromAtom,
@@ -15609,8 +16331,10 @@ module.exports = {
     extractWikipediaPageTitle,
     extractYahooResults,
     expandStructuredSourceText,
+    extractWikidataEntitySearchTerms,
     filterSearchResultsByDomains,
     inferPaperMetadataArgsFromScholarlyQuery,
+    isLikelyWikidataEntitySearch,
     fetchArchiveIndexText,
     fetchText,
     fetchTextWithCurl,
@@ -15636,7 +16360,9 @@ module.exports = {
     readDocument,
     readPresentation,
     readSpreadsheet,
+    resolveSubprocessCwd,
     runPythonFile,
+    runWikidataSearchBackend,
     SEARCH_BACKENDS,
     stripWikiText,
     transcribeAudio,

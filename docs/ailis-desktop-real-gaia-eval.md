@@ -48,10 +48,13 @@ node scripts/run-ailis-desktop-real-gaia-eval.mjs --limit 5 --plan-only
 
 ## Codex Subscription Model Backend
 
-The desktop-real runner can use the local Codex login as an evaluation-only
-model backend. AILIS remains the harness: it owns context assembly, memory,
-tool visibility, tool execution, observations, retries, evidence, finalization,
-and interruption. Codex performs one stateless model inference per call.
+The desktop-real runner uses the local Codex login and `gpt-5.6-luna` by
+default as its evaluation-only model backend. AILIS remains the harness: it
+owns context assembly, memory, tool visibility, tool execution, observations,
+retries, canonical-history compaction, and interruption. The model decides
+whether to call another tool or end with a normal assistant response. Pass
+`--no-codex-model-bridge` only when intentionally testing another configured
+desktop provider.
 
 Prerequisite:
 
@@ -67,7 +70,7 @@ Plan one task without spending model tokens:
 ```powershell
 node scripts/run-ailis-desktop-real-gaia-eval.mjs `
   --codex-model-bridge `
-  --codex-model gpt-5.5 `
+  --codex-model gpt-5.6-luna `
   --codex-reasoning-effort medium `
   --limit 1 `
   --plan-only
@@ -78,9 +81,8 @@ Run a resumable L1 evaluation:
 ```powershell
 node scripts/run-ailis-desktop-real-gaia-eval.mjs `
   --codex-model-bridge `
-  --codex-model gpt-5.5 `
+  --codex-model gpt-5.6-luna `
   --codex-reasoning-effort medium `
-  --max-agent-steps 20 `
   --llm-timeout-ms 180000 `
   --request-timeout-ms 900000 `
   --run-id codex-model-bridge-gaia-l1 `
@@ -102,6 +104,12 @@ Bridge isolation contract:
 - Tool decisions are constrained to the tool names currently exposed by AILIS.
   Codex returns structured tool-call intent; AILIS executes the tool and owns the
   next inference context.
+- A TaskAgent has no model-round cap and no synthetic tool-free final request.
+  Every ordinary inference receives the canonical projected history and the
+  current tool surface. When the context budget is reached, AILIS installs a
+  semantic compaction checkpoint into that same history and continues. The run
+  ends when the model returns a normal final response or an external runtime
+  condition interrupts it.
 - Any Codex-side tool item, server callback, loaded instruction source, invalid
   schema output, auth failure, or transport failure is recorded as a provider
   failure instead of being silently accepted.

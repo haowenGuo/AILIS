@@ -170,6 +170,10 @@ test('TurnContext builds the per-turn runtime envelope without leaking provider 
     assert.equal(turnContext.memory.hasContext, true);
     assert.equal(turnContext.model.provider, 'deepseek');
     assert.equal(Object.hasOwn(turnContext.model, 'apiKey'), false);
+    assert.equal(turnContext.request.terminationPolicy, 'model_directed');
+    assert.equal(turnContext.request.contextPolicy, 'canonical_history_compaction');
+    assert.equal(Object.hasOwn(turnContext.request, 'maxAgentSteps'), false);
+    assert.equal(Object.hasOwn(turnContext.requestContext, 'maxAgentSteps'), false);
 });
 
 test('ToolContext keeps approval and sandbox policy in one reusable object', () => {

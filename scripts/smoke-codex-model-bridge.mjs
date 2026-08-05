@@ -3,7 +3,7 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { callDesktopLlmProvider } = require('../electron/desktop-llm-provider.cjs');
 
-const model = process.env.AILIS_CODEX_MODEL || 'gpt-5.5';
+const model = process.env.AILIS_CODEX_MODEL || 'gpt-5.6-luna';
 const reasoningEffort = process.env.AILIS_CODEX_REASONING_EFFORT || 'medium';
 const settings = {
     provider: 'codex-model-bridge',
@@ -77,9 +77,9 @@ const finalDecision = await callDesktopLlmProvider(settings, {
         }
     ],
     tools: [echoTool],
-    toolChoice: 'none'
+    toolChoice: 'auto'
 });
-if (!finalDecision.ok || !finalDecision.content) {
+if (!finalDecision.ok || !finalDecision.content || finalDecision.toolCalls?.length) {
     console.error(JSON.stringify({ stage: 'final_decision', result: finalDecision }, null, 2));
     process.exit(1);
 }

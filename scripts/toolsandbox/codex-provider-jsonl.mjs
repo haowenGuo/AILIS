@@ -12,7 +12,7 @@ function send(payload) {
 }
 
 async function infer(command) {
-    const model = String(command.model || process.env.AILIS_CODEX_MODEL || 'gpt-5.5').trim();
+    const model = String(command.model || process.env.AILIS_CODEX_MODEL || 'gpt-5.6-luna').trim();
     const reasoningEffort = String(
         command.reasoningEffort || process.env.AILIS_CODEX_REASONING_EFFORT || 'low'
     ).trim();

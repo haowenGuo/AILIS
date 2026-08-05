@@ -85,7 +85,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-scenarios", type=int)
     parser.add_argument("--max-agent-steps", type=int, default=7)
     parser.add_argument("--provider", choices=["desktop", "codex-model-bridge"], default="codex-model-bridge")
-    parser.add_argument("--codex-model", default=os.environ.get("AILIS_CODEX_MODEL", "gpt-5.5"))
+    parser.add_argument("--codex-model", default=os.environ.get("AILIS_CODEX_MODEL", "gpt-5.6-luna"))
     parser.add_argument(
         "--codex-reasoning-effort",
         default=os.environ.get("AILIS_CODEX_REASONING_EFFORT", "low"),

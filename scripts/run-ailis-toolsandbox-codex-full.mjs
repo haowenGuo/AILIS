@@ -47,7 +47,7 @@ function isPidAlive(pid) {
 
 const jobId = argValue('--job-id', defaultJobId);
 const runId = argValue('--run-id', jobId);
-const model = argValue('--model', process.env.AILIS_CODEX_MODEL || 'gpt-5.5');
+const model = argValue('--model', process.env.AILIS_CODEX_MODEL || 'gpt-5.6-luna');
 const retryErrorsOnly = argv.includes('--retry-errors-only');
 const retryFailuresOnly = argv.includes('--retry-failures-only');
 const retryBatchId = argValue('--retry-batch-id');
@@ -105,8 +105,6 @@ const runnerArgs = [
     model,
     '--codex-reasoning-effort',
     reasoningEffort,
-    '--max-agent-steps',
-    '7',
     '--llm-timeout-ms',
     '180000',
     '--run-id',

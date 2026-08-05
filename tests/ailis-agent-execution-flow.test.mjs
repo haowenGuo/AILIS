@@ -14,15 +14,18 @@ const {
     buildToolResultEvent,
     buildToolObservationDigest,
     buildLosslessToolObservationDigest,
+    buildTaskRunHandoffPackage,
     buildAgentDecisionLowLatencyPayload,
+    collectExplicitAnswerCandidatesFromStepResult,
+    mergeAnswerCandidateLedger,
+    selectBestAnswerCandidate,
+    hasBlockingExactAnswerAuditErrors,
     buildExactAnswerRecoveryToolAffordanceNote,
-    canStartExactAnswerAuditRecovery,
     isExactAnswerExecutionMode,
     isAgentDecisionDeepThinkingMode,
     isDeepThinkingAgentDecisionModel,
     looksLikeSelfContainedExactAnswerQuestion,
     normalizeExactAnswerSubmission,
-    resolveExactAnswerAuditFinalizationIteration,
     resolveAgentDirectToolChoice,
     resolveAgentDecisionSettings,
     resolveAgentDecisionTimeoutMs,
@@ -284,6 +287,117 @@ test('Agent decision timeout gives artifact and exact-answer tasks a 300s budget
     assert.equal(resolveAgentDecisionTimeoutMs({}, {
         stepResults: [{ tool: 'artifact_tools', response: { ok: true } }]
     }), 300000);
+});
+
+test('Answer candidate ledger preserves only explicit structured tool candidates', () => {
+    const stepResult = {
+        id: 'presentation-result',
+        iteration: 3,
+        tool: 'mcp__ailis_research__read_presentation',
+        response: {
+            ok: true,
+            status: 'completed',
+            result: {
+                content: [{
+                    type: 'text',
+                    text: JSON.stringify({ answerCandidates: [{ answer: 'text-only-decoy' }] })
+                }],
+                structuredContent: {
+                    answerCandidates: [{ answer: 'alternate candidate', score: 61 }],
+                    bestAnswerCandidate: {
+                        answer: '4',
+                        finalizable: true,
+                        confidence: 0.94,
+                        evidenceRefs: ['artifact-presentation']
+                    },
+                    unrelated: { answer: 'must-not-be-collected' }
+                }
+            }
+        }
+    };
+
+    const candidates = collectExplicitAnswerCandidatesFromStepResult(stepResult);
+    assert.deepEqual(candidates.map((candidate) => candidate.answer).sort(), ['4', 'alternate candidate']);
+    assert.equal(candidates.some((candidate) => candidate.answer === 'text-only-decoy'), false);
+    assert.equal(candidates.some((candidate) => candidate.answer === 'must-not-be-collected'), false);
+    const best = selectBestAnswerCandidate(candidates, { requireFinalizable: true });
+    assert.equal(best.answer, '4');
+    assert.equal(best.selected, true);
+    assert.equal(best.finalizable, true);
+    assert.deepEqual(best.evidenceRefs, ['artifact-presentation']);
+
+    const tentative = collectExplicitAnswerCandidatesFromStepResult({
+        ...stepResult,
+        response: {
+            ...stepResult.response,
+            result: { structuredContent: { bestAnswerCandidate: { answer: 'tentative' } } }
+        }
+    });
+    assert.equal(selectBestAnswerCandidate(tentative)?.answer, 'tentative');
+    assert.equal(selectBestAnswerCandidate(tentative, { requireFinalizable: true }), null);
+});
+
+test('Answer candidate ledger keeps model decisions authoritative over tool rankings', () => {
+    const ledger = mergeAnswerCandidateLedger([], [{
+        answer: 'tool candidate',
+        source: 'tool_explicit_candidate',
+        kind: 'best',
+        selected: true,
+        finalizable: true,
+        iteration: 4
+    }, {
+        answer: 'model candidate',
+        source: 'model_submission',
+        kind: 'model_final',
+        selected: true,
+        finalizable: true,
+        iteration: 2
+    }]);
+
+    assert.equal(selectBestAnswerCandidate(ledger).answer, 'model candidate');
+});
+
+test('Answer candidate ledger retains an early final answer when later tentative candidates exceed its limit', () => {
+    const ledger = mergeAnswerCandidateLedger([], [{
+        answer: 'preserved final answer',
+        source: 'model_submission',
+        kind: 'model_final',
+        selected: true,
+        finalizable: true,
+        iteration: 1
+    }, ...Array.from({ length: 40 }, (_, index) => ({
+        answer: `tentative candidate ${index + 1}`,
+        source: 'tool_explicit_candidate',
+        sourceTool: 'example_tool',
+        kind: 'ranked',
+        iteration: index + 2
+    }))]);
+
+    assert.equal(ledger.length, 32);
+    assert.equal(ledger.some((candidate) => candidate.answer === 'preserved final answer'), true);
+    assert.equal(selectBestAnswerCandidate(ledger, { requireFinalizable: true }).answer, 'preserved final answer');
+});
+
+test('Completed-with-warnings handoff returns a preserved answer instead of failure prose', () => {
+    const candidate = {
+        answer: '4',
+        source: 'model_submission',
+        kind: 'model_final',
+        selected: true,
+        finalizable: true,
+        evidenceRefs: ['artifact-presentation']
+    };
+    const handoff = buildTaskRunHandoffPackage({
+        status: 'completed_with_warnings',
+        reason: 'provider_timeout_after_candidate',
+        finalAnswer: '4',
+        answerCandidates: [candidate],
+        bestAnswerCandidate: candidate
+    });
+
+    assert.equal(handoff.ok, true);
+    assert.equal(handoff.userVisibleSummary, '4');
+    assert.equal(handoff.bestAnswerCandidate.answer, '4');
 });
 
 test('Agent decision model routing avoids deep-thinking models unless explicit or unavoidable', () => {
@@ -1393,46 +1507,6 @@ test('Agent exact-answer relation recovery diagnoses structured lookups that omi
     }), null);
 });
 
-test('Agent exact-answer audit reserves bounded recovery and final submission rounds', () => {
-    assert.equal(resolveExactAnswerAuditFinalizationIteration({
-        currentFinalizationIteration: 8,
-        baseFinalizationIteration: 8,
-        auditIteration: 3,
-        recoveryToolCalls: 2
-    }), 8);
-    assert.equal(resolveExactAnswerAuditFinalizationIteration({
-        currentFinalizationIteration: 8,
-        baseFinalizationIteration: 8,
-        auditIteration: 7,
-        recoveryToolCalls: 2
-    }), 11);
-    assert.equal(resolveExactAnswerAuditFinalizationIteration({
-        currentFinalizationIteration: 11,
-        baseFinalizationIteration: 8,
-        auditIteration: 10,
-        recoveryToolCalls: 2
-    }), 14);
-    assert.equal(resolveExactAnswerAuditFinalizationIteration({
-        currentFinalizationIteration: 14,
-        baseFinalizationIteration: 8,
-        auditIteration: 14,
-        recoveryToolCalls: 2
-    }), 15);
-    assert.equal(resolveExactAnswerAuditFinalizationIteration({
-        currentFinalizationIteration: 14,
-        baseFinalizationIteration: 8,
-        auditIteration: 14,
-        recoveryToolCalls: 0
-    }), 15);
-    assert.equal(resolveExactAnswerAuditFinalizationIteration({
-        currentFinalizationIteration: 14,
-        baseFinalizationIteration: 8,
-        auditIteration: 14,
-        recoveryToolCalls: 0,
-        finalSubmissionReserve: 0
-    }), 14);
-});
-
 test('Agent exact-answer audit advances to the next unattempted recovery gap', () => {
     const validation = {
         selectorMetricGap: { error: 'selector_metric_evidence_missing' },
@@ -1459,6 +1533,23 @@ test('Agent exact-answer audit advances to the next unattempted recovery gap', (
         ),
         null
     );
+});
+
+test('Agent exact-answer audit warnings remain observable without blocking a valid final answer', () => {
+    assert.equal(hasBlockingExactAnswerAuditErrors({
+        ok: true,
+        errors: [],
+        warnings: ['selector_metric_evidence_missing'],
+        selectorMetricGap: { error: 'selector_metric_evidence_missing' }
+    }), false);
+    assert.equal(hasBlockingExactAnswerAuditErrors({
+        ok: false,
+        errors: []
+    }), true);
+    assert.equal(hasBlockingExactAnswerAuditErrors({
+        ok: true,
+        errors: ['schema_invalid']
+    }), true);
 });
 
 test('Agent exact-answer audit asks for one visual enumeration cross-check without suppressing the answer', () => {
@@ -1733,23 +1824,6 @@ test('Agent exact-answer relation audit catches submitted cities that disagree w
     assert.equal(gap.error, 'selector_terminal_relation_answer_mismatch');
     assert.deepEqual(gap.unmatchedLabels, ['Quincy']);
     assert.ok(gap.relationCandidates.includes('Braintree'));
-});
-
-test('Agent exact-answer audit can extend only the ordinary tool-round boundary', () => {
-    assert.equal(canStartExactAnswerAuditRecovery({
-        iteration: 8,
-        finalizationIteration: 8,
-        safetyFinalizationReason: 'maximum_tool_rounds'
-    }), true);
-    assert.equal(canStartExactAnswerAuditRecovery({
-        iteration: 8,
-        finalizationIteration: 8,
-        safetyFinalizationReason: 'time_budget'
-    }), false);
-    assert.equal(canStartExactAnswerAuditRecovery({
-        iteration: 9,
-        finalizationIteration: 8
-    }), false);
 });
 
 test('Agent exact-answer recovery promotes schema-matched relation tools without forcing a route', () => {

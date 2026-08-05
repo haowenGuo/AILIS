@@ -8,6 +8,7 @@ const { execFile, spawn } = require('child_process');
 const { randomUUID } = require('crypto');
 const { createAILISPlatformAdapter, getDefaultPlatformAdapter } = require('./ailis-platform-adapter.cjs');
 const { extractPdfDocument } = require('./ailis-pdf-document-engine.cjs');
+const { buildTextPreview } = require('./ailis-output-store.cjs');
 
 const COMPUTER_TOOL_ID = 'computer';
 const DEFAULT_MAX_BYTES = 128 * 1024;
@@ -2081,8 +2082,17 @@ function formatExecContent(details = {}) {
         } else {
             lines.push('modelHint=Visible stdout/stderr below is complete for this command.');
         }
+        if (outputStore.structuredPreview) {
+            lines.push(
+                '--- structured JSON records preview ---',
+                outputStore.structuredPreview
+            );
+        }
         if (outputStore.preview) {
-            lines.push(previewTruncated ? '--- stdout/stderr preview ---' : '--- stdout/stderr complete ---', outputStore.preview);
+            const rawPreview = outputStore.structuredPreview
+                ? buildTextPreview(outputStore.preview, 900).preview
+                : outputStore.preview;
+            lines.push(previewTruncated ? '--- stdout/stderr preview ---' : '--- stdout/stderr complete ---', rawPreview);
         } else {
             lines.push('stdout=<empty>', 'stderr=<empty>');
         }
