@@ -11,5 +11,6 @@ The following assets are preserved on this workstation but intentionally exclude
 | `unity-character-demo/Assets/Resources/AILIS/Animation/VRMA/` | Large generated animation cache. | Rebuild from the source motion libraries. |
 | `Build/` | Reproducible standalone output. | Rebuild from the Unity project. |
 | `unity-character-demo/Library/` | Unity import/cache state tied to the local editor. | Let Unity regenerate it. |
+| `source-assets/` | Duplicate downloadable motion-source archive; runtime-ready motion metadata remains in Git. | Restore from the local archive or download again from the recorded upstream source. |
 
 The local archive remains complete under `F:\AIGAME`; these exclusions only apply to Git publication.

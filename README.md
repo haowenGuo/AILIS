@@ -8,7 +8,6 @@ AIGAME is the paused Unity-rendered edition split from the lightweight AILIS des
 - `integration/`: Electron integration modules removed from the active AILIS runtime.
 - `integration-snapshot/`: source snapshots needed to reconstruct the former AILIS/AIGAME connection.
 - `docs/`: Unity renderer and product-split design notes.
-- `source-assets/`: redistributable source motion assets and their licenses.
 - `Build/`: local standalone build, intentionally excluded from Git.
 
 The split was made from AILIS branch `codex/ailis-self-evolve-sync-20260804`, whose pre-split baseline was commit `4ddef69`.
@@ -23,6 +22,6 @@ The split was made from AILIS branch `codex/ailis-self-evolve-sync-20260804`, wh
 
 ## Public archive policy
 
-Git contains source code and redistributable dependencies. Generated Unity caches, standalone builds, temporary logs, and character packages that prohibit or complicate redistribution remain available in the local `F:\AIGAME` archive but are excluded from the public branch. This keeps the source recoverable without publishing assets outside their licenses.
+Git contains source code and redistributable dependencies. Generated Unity caches, standalone builds, duplicate source-motion downloads, temporary logs, and character packages that prohibit or complicate redistribution remain available in the local `F:\AIGAME` archive but are excluded from the public branch. This keeps the source recoverable without publishing assets outside their licenses.
 
 Development is intentionally paused. New renderer work should resume on this archive branch rather than reintroducing Unity into the lightweight AILIS branch.
