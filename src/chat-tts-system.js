@@ -319,6 +319,7 @@ export class ChatTTSSystem {
                     content: String(message.content || ''),
                     attachments: normalizeChatAttachments(message.attachments),
                     source: String(message.source || ''),
+                    approvalId: String(message.approvalId || message.approval_id || ''),
                     createdAt: String(message.createdAt || '')
                 }))
                 .filter((message) => message.content);
@@ -820,6 +821,7 @@ export class ChatTTSSystem {
             this.messageHistory.push({
                 role: 'assistant',
                 content: payload.display_text,
+                approvalId: String(payload.approvalId || ''),
                 createdAt: new Date().toISOString()
             });
             await this.persistConversation();

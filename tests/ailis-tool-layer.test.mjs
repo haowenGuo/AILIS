@@ -522,12 +522,13 @@ test('AILIS Gateway exposes a small Responses-compatible core surface by default
         'exec',
         'handoff_task',
         'request_permissions',
+        'task_goal',
         'tool_search',
         'update_plan',
         'web_run',
         'write'
     ].sort());
-    for (const expected of ['web_run', 'tool_search', 'update_plan', 'write', 'exec', 'apply_patch', 'request_permissions', 'handoff_task']) {
+    for (const expected of ['web_run', 'tool_search', 'update_plan', 'write', 'exec', 'apply_patch', 'request_permissions', 'handoff_task', 'task_goal']) {
         assert.ok(directNames.includes(expected), `${expected} should be a core direct tool`);
     }
     for (const deferred of ['read', 'artifact_tools', 'artifact_query', 'github_pages', 'mcp_bridge', 'computer']) {

@@ -2,10 +2,12 @@ const fs = require('fs');
 const path = require('path');
 const { randomUUID } = require('crypto');
 
-const TASK_HARNESS_STATE_VERSION = 1;
+const TASK_HARNESS_STATE_VERSION = 2;
 const TASK_RESULT_SCHEMA = 'ailis.task_result.v1';
+const LONG_HORIZON_TASK_OPTIMIZATION = '长程任务优化';
 const MAX_PARENT_RUN_HANDOFFS = 256;
 const FINAL_STATUSES = new Set(['completed', 'completed_with_warnings', 'success', 'succeeded']);
+const GOAL_STATUSES = new Set(['active', 'blocked', 'completed', 'replaced', 'cancelled']);
 
 function normalizeString(value, fallback = '') {
     const text = typeof value === 'string' ? value.trim() : '';
@@ -139,25 +141,113 @@ function refsFromCollectedData(collectedData = [], key = 'evidenceRefs') {
     return uniqueStrings(refs);
 }
 
-function normalizeStoredTask(raw = {}) {
+function normalizeGoal(raw = {}) {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
         return null;
     }
-    const taskId = normalizeString(raw.taskId);
-    const sessionId = normalizeString(raw.sessionId);
-    const originalGoal = normalizeString(raw.originalGoal);
-    if (!taskId || !sessionId || !originalGoal) {
+    const goalId = normalizeString(raw.goalId || raw.goal_id);
+    const objective = normalizeString(raw.objective);
+    if (!goalId || !objective) {
         return null;
     }
+    const status = normalizeString(raw.status, 'active').toLowerCase();
     return {
-        taskId,
-        sessionId,
-        originalGoal,
-        latestRequest: normalizeString(raw.latestRequest, originalGoal),
+        goalId,
+        objective,
+        status: GOAL_STATUSES.has(status) ? status : 'active',
+        createdAt: normalizeString(raw.createdAt || raw.created_at, new Date().toISOString()),
+        updatedAt: normalizeString(raw.updatedAt || raw.updated_at, new Date().toISOString()),
+        completedAt: normalizeString(raw.completedAt || raw.completed_at),
+        reason: normalizeString(raw.reason)
+    };
+}
+
+function normalizeTurn(raw = {}, fallbackSessionId = '') {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+        return null;
+    }
+    const turnId = normalizeString(raw.turnId || raw.turn_id);
+    const request = normalizeString(raw.request || raw.latestRequest || raw.current_request);
+    if (!turnId || !request) {
+        return null;
+    }
+    const createdAt = normalizeString(raw.createdAt || raw.created_at, new Date().toISOString());
+    const inputs = (Array.isArray(raw.inputs) ? raw.inputs : [])
+        .map((input) => {
+            if (typeof input === 'string') {
+                return {
+                    inputId: `input_${randomUUID()}`,
+                    message: normalizeString(input),
+                    createdAt
+                };
+            }
+            const message = normalizeString(input?.message || input?.text);
+            return message ? {
+                inputId: normalizeString(input?.inputId || input?.input_id, `input_${randomUUID()}`),
+                message,
+                createdAt: normalizeString(input?.createdAt || input?.created_at, createdAt)
+            } : null;
+        })
+        .filter(Boolean);
+    if (!inputs.length) {
+        inputs.push({ inputId: `input_${randomUUID()}`, message: request, createdAt });
+    }
+    return {
+        turnId,
+        sessionId: normalizeString(raw.sessionId || raw.session_id, fallbackSessionId),
+        runId: normalizeString(raw.runId || raw.run_id || raw.latestRunId),
+        request: normalizeString(raw.request, inputs[0].message),
+        latestRequest: normalizeString(raw.latestRequest || raw.current_request, inputs.at(-1).message),
+        inputs,
         status: normalizeString(raw.status, 'incomplete').toLowerCase(),
-        childSessionId: normalizeString(raw.childSessionId, `${sessionId}:task-agent:${taskId}`),
-        latestRunId: normalizeString(raw.latestRunId),
-        checkpoint: raw.checkpoint && typeof raw.checkpoint === 'object' ? raw.checkpoint : null,
+        resultStatus: normalizeString(raw.resultStatus || raw.result_status),
+        finalAnswer: normalizeString(raw.finalAnswer || raw.final_answer),
+        traceRef: normalizeString(raw.traceRef || raw.trace_ref),
+        createdAt,
+        updatedAt: normalizeString(raw.updatedAt || raw.updated_at, createdAt),
+        completedAt: normalizeString(raw.completedAt || raw.completed_at)
+    };
+}
+
+function normalizeStoredThread(raw = {}, fallbackSessionId = '') {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+        return null;
+    }
+    const threadId = normalizeString(raw.threadId || raw.thread_id);
+    const sessionId = normalizeString(raw.sessionId || raw.session_id, fallbackSessionId);
+    if (!threadId || !sessionId) {
+        return null;
+    }
+    const turns = (Array.isArray(raw.turns) ? raw.turns : [])
+        .map((turn) => normalizeTurn(turn, sessionId))
+        .filter(Boolean);
+    const requestedActiveTurnId = normalizeString(raw.activeTurnId || raw.active_turn_id);
+    const activeTurn = turns.find((turn) => turn.turnId === requestedActiveTurnId);
+    const pendingApproval = raw.pendingApproval && typeof raw.pendingApproval === 'object'
+        ? {
+              approvalId: normalizeString(raw.pendingApproval.approvalId || raw.pendingApproval.approval_id),
+              turnId: normalizeString(raw.pendingApproval.turnId || raw.pendingApproval.turn_id),
+              itemId: normalizeString(raw.pendingApproval.itemId || raw.pendingApproval.item_id),
+              createdAt: normalizeString(raw.pendingApproval.createdAt || raw.pendingApproval.created_at)
+          }
+        : null;
+    const activeGoal = normalizeGoal(raw.activeGoal || raw.active_goal);
+    return {
+        threadId,
+        sessionId,
+        childSessionId: normalizeString(raw.childSessionId || raw.child_session_id, `${sessionId}:task-agent:${threadId}`),
+        turns,
+        activeTurnId: activeTurn?.status === 'needs_approval' ? activeTurn.turnId : '',
+        activeGoal: activeGoal && ['active', 'blocked'].includes(activeGoal.status) ? activeGoal : null,
+        goalHistory: (Array.isArray(raw.goalHistory || raw.goal_history) ? (raw.goalHistory || raw.goal_history) : [])
+            .map(normalizeGoal)
+            .filter(Boolean),
+        historyCheckpoint: raw.historyCheckpoint && typeof raw.historyCheckpoint === 'object'
+            ? raw.historyCheckpoint
+            : raw.history_checkpoint && typeof raw.history_checkpoint === 'object'
+                ? raw.history_checkpoint
+                : null,
+        pendingApproval: pendingApproval?.approvalId && pendingApproval?.turnId ? pendingApproval : null,
         evidenceRefs: uniqueStrings(raw.evidenceRefs),
         outputRefs: uniqueStrings(raw.outputRefs),
         sourceRefs: normalizeSourceRefs(raw.sourceRefs),
@@ -170,7 +260,58 @@ function normalizeStoredTask(raw = {}) {
     };
 }
 
-function buildTaskResultPacket(result = {}, task = {}) {
+function migrateLegacyTask(raw = {}, fallbackSessionId = '') {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+        return null;
+    }
+    const legacyTaskId = normalizeString(raw.taskId);
+    const sessionId = normalizeString(raw.sessionId, fallbackSessionId);
+    const originalGoal = normalizeString(raw.originalGoal);
+    const latestRequest = normalizeString(raw.latestRequest, originalGoal);
+    if (!legacyTaskId || !sessionId || !latestRequest) {
+        return null;
+    }
+    const now = new Date().toISOString();
+    const status = normalizeString(raw.status, 'incomplete').toLowerCase();
+    const turnId = `turn_legacy_${legacyTaskId.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+    return normalizeStoredThread({
+        threadId: `thread_${legacyTaskId}`,
+        sessionId,
+        childSessionId: normalizeString(raw.childSessionId, `${sessionId}:task-agent:thread_${legacyTaskId}`),
+        turns: [{
+            turnId,
+            sessionId,
+            runId: normalizeString(raw.latestRunId),
+            request: latestRequest,
+            latestRequest,
+            status,
+            resultStatus: status,
+            traceRef: normalizeString(raw.traceRef || raw.latestRunId),
+            createdAt: normalizeString(raw.createdAt, now),
+            updatedAt: normalizeString(raw.updatedAt, now),
+            completedAt: status === 'needs_approval' ? '' : normalizeString(raw.updatedAt, now)
+        }],
+        activeTurnId: status === 'needs_approval' ? turnId : '',
+        // v1 originalGoal was implicit first-request state, not an explicitly created Goal.
+        // Preserve it in historical Turn/checkpoint data without granting it active authority.
+        activeGoal: null,
+        goalHistory: [],
+        historyCheckpoint: raw.checkpoint && typeof raw.checkpoint === 'object' ? raw.checkpoint : null,
+        evidenceRefs: raw.evidenceRefs,
+        outputRefs: raw.outputRefs,
+        sourceRefs: raw.sourceRefs,
+        answerCandidates: raw.answerCandidates || raw.answer_candidates,
+        bestAnswerCandidate: raw.bestAnswerCandidate || raw.best_answer_candidate,
+        unresolvedFields: raw.unresolvedFields,
+        traceRef: raw.traceRef || raw.latestRunId,
+        createdAt: raw.createdAt,
+        updatedAt: raw.updatedAt
+    }, sessionId);
+}
+
+function buildTaskResultPacket(result = {}, state = {}) {
+    const thread = state.thread || state;
+    const turn = state.turn || state;
     const handoff = result.taskRunHandoff || result.task_run_handoff || result.handoff || {};
     const collectedData = Array.isArray(handoff.collectedData) ? handoff.collectedData : [];
     const exactAnswer = normalizeString(
@@ -194,7 +335,7 @@ function buildTaskResultPacket(result = {}, task = {}) {
     const unresolvedFields = FINAL_STATUSES.has(status)
         ? []
         : uniqueStrings([
-              ...(Array.isArray(task.unresolvedFields) ? task.unresolvedFields : []),
+              ...(Array.isArray(thread.unresolvedFields) ? thread.unresolvedFields : []),
               ...(Array.isArray(handoff.unresolvedFields) ? handoff.unresolvedFields : []),
               ...(Array.isArray(handoff.unresolved_fields) ? handoff.unresolved_fields : []),
               ...(Array.isArray(result.unresolvedFields) ? result.unresolvedFields : []),
@@ -205,10 +346,14 @@ function buildTaskResultPacket(result = {}, task = {}) {
           ], 24);
     return {
         schema: TASK_RESULT_SCHEMA,
-        task_id: task.taskId,
+        optimization: LONG_HORIZON_TASK_OPTIMIZATION,
+        thread_id: normalizeString(thread.threadId || thread.taskId),
+        turn_id: normalizeString(turn.turnId || turn.taskId),
+        task_id: normalizeString(turn.turnId || turn.taskId || thread.threadId || thread.taskId),
         status,
-        original_goal: task.originalGoal,
-        current_request: task.latestRequest,
+        original_goal: normalizeString(thread.activeGoal?.objective || turn.originalGoal || turn.latestRequest),
+        active_goal: thread.activeGoal ? cloneJson(thread.activeGoal) : null,
+        current_request: normalizeString(turn.latestRequest || turn.currentRequest),
         exact_answer: exactAnswer,
         final_answer: finalAnswer,
         display_text: displayText,
@@ -219,10 +364,15 @@ function buildTaskResultPacket(result = {}, task = {}) {
         evidence_refs: refsFromCollectedData(collectedData, 'evidenceRefs'),
         output_refs: refsFromCollectedData(collectedData, 'outputRefs'),
         unresolved_fields: unresolvedFields,
-        trace_ref: normalizeString(handoff.traceRef || result.runId || task.latestRunId),
+        trace_ref: normalizeString(handoff.traceRef || result.runId || turn.runId || turn.latestRunId),
+        approval_id: normalizeString(result.approvalId || handoff.approvalId || handoff.approval_id),
+        approval_item_id: normalizeString(
+            result.plan?.[0]?.id || handoff.approvalItemId || handoff.approval_item_id
+        ),
         checkpoint_available: Boolean(
             handoff.resume?.contextManagerCheckpoint ||
-            handoff.resume?.context_manager_checkpoint
+            handoff.resume?.context_manager_checkpoint ||
+            thread.historyCheckpoint
         )
     };
 }
@@ -237,52 +387,239 @@ class AILISSystemTaskAgentHarness {
         this.emitEvent = typeof options.emitEvent === 'function' ? options.emitEvent : () => {};
         this.taskResultCapsules = options.taskResultCapsules || null;
         const loaded = readJson(this.statePath, {});
+        const loadedVersion = Number(loaded.version || 1);
         this.state = {
             version: TASK_HARNESS_STATE_VERSION,
+            optimization: LONG_HORIZON_TASK_OPTIMIZATION,
             updatedAt: normalizeString(loaded.updatedAt),
             sessions: Object.fromEntries(
                 Object.entries(loaded.sessions && typeof loaded.sessions === 'object' ? loaded.sessions : {})
-                    .map(([sessionId, task]) => [sessionId, normalizeStoredTask(task)])
-                    .filter(([, task]) => Boolean(task))
+                    .map(([sessionId, value]) => [
+                        sessionId,
+                        loadedVersion >= 2 || value?.threadId || value?.thread_id
+                            ? normalizeStoredThread(value, sessionId)
+                            : migrateLegacyTask(value, sessionId)
+                    ])
+                    .filter(([, thread]) => Boolean(thread))
             )
         };
         this.inFlight = new Map();
         this.parentRunHandoffs = new Map();
+        if (loadedVersion < TASK_HARNESS_STATE_VERSION && Object.keys(this.state.sessions).length) {
+            this.persist();
+        }
     }
 
     persist() {
         this.state.version = TASK_HARNESS_STATE_VERSION;
+        this.state.optimization = LONG_HORIZON_TASK_OPTIMIZATION;
         this.state.updatedAt = new Date().toISOString();
         atomicWriteJson(this.statePath, this.state);
     }
 
-    getTask(sessionId = '') {
+    getThread(sessionId = '') {
         return this.state.sessions[normalizeString(sessionId, 'main')] || null;
     }
 
-    selectPriorTask(sessionId) {
-        return this.getTask(sessionId);
+    getTask(sessionId = '') {
+        return this.getThread(sessionId);
     }
 
-    createTask({ sessionId, message, prior = null }) {
-        const taskId = prior?.taskId || `task_${randomUUID()}`;
+    createThread(sessionId) {
         const now = new Date().toISOString();
         return {
-            taskId,
+            threadId: `thread_${randomUUID()}`,
             sessionId,
-            originalGoal: prior?.originalGoal || message,
-            latestRequest: message,
-            status: 'running',
-            childSessionId: prior?.childSessionId || `${sessionId}:task-agent:${taskId}`,
-            latestRunId: `task_run_${randomUUID()}`,
-            checkpoint: prior?.checkpoint || null,
-            evidenceRefs: prior?.evidenceRefs || [],
-            outputRefs: prior?.outputRefs || [],
-            sourceRefs: prior?.sourceRefs || [],
-            unresolvedFields: prior?.unresolvedFields || [],
-            traceRef: prior?.traceRef || '',
-            createdAt: prior?.createdAt || now,
+            childSessionId: '',
+            turns: [],
+            activeTurnId: '',
+            activeGoal: null,
+            goalHistory: [],
+            historyCheckpoint: null,
+            pendingApproval: null,
+            evidenceRefs: [],
+            outputRefs: [],
+            sourceRefs: [],
+            answerCandidates: [],
+            bestAnswerCandidate: null,
+            unresolvedFields: [],
+            traceRef: '',
+            createdAt: now,
             updatedAt: now
+        };
+    }
+
+    createTurn(thread, message) {
+        const now = new Date().toISOString();
+        const turn = {
+            turnId: `turn_${randomUUID()}`,
+            sessionId: thread.sessionId,
+            runId: `task_run_${randomUUID()}`,
+            request: message,
+            latestRequest: message,
+            inputs: [{ inputId: `input_${randomUUID()}`, message, createdAt: now }],
+            status: 'running',
+            resultStatus: '',
+            finalAnswer: '',
+            traceRef: '',
+            createdAt: now,
+            updatedAt: now,
+            completedAt: ''
+        };
+        thread.turns.push(turn);
+        thread.activeTurnId = turn.turnId;
+        thread.updatedAt = now;
+        return turn;
+    }
+
+    steerTurn(thread, turn, message) {
+        const now = new Date().toISOString();
+        turn.inputs.push({ inputId: `input_${randomUUID()}`, message, createdAt: now });
+        turn.latestRequest = message;
+        turn.status = 'running';
+        turn.updatedAt = now;
+        turn.completedAt = '';
+        thread.activeTurnId = turn.turnId;
+        thread.updatedAt = now;
+        return turn;
+    }
+
+    findThreadForGoalContext(context = {}) {
+        const explicitThreadId = normalizeString(context.taskAgentThreadId || context.task_agent_thread_id);
+        const parentSessionId = normalizeString(context.parentSessionId || context.parent_session_id);
+        if (explicitThreadId) {
+            return Object.values(this.state.sessions).find((thread) => thread.threadId === explicitThreadId) || null;
+        }
+        return parentSessionId ? this.getThread(parentSessionId) : null;
+    }
+
+    applyGoalAction(args = {}, context = {}) {
+        const action = normalizeString(args.action, 'get').toLowerCase();
+        const thread = this.findThreadForGoalContext(context);
+        if (!thread) {
+            return { ok: false, status: 'thread_not_found', error: 'No TaskAgent thread is bound to this goal operation.' };
+        }
+        const turnId = normalizeString(context.taskAgentTurnId || context.task_agent_turn_id);
+        if (action !== 'get' && (!turnId || thread.activeTurnId !== turnId)) {
+            return {
+                ok: false,
+                status: 'stale_turn',
+                error: 'Goal mutation rejected because the requesting Turn is no longer active.',
+                thread_id: thread.threadId,
+                active_turn_id: thread.activeTurnId
+            };
+        }
+        const expectedGoalId = normalizeString(args.expected_goal_id || args.expectedGoalId);
+        const currentGoal = thread.activeGoal;
+        if (action === 'get') {
+            return {
+                ok: true,
+                status: 'completed',
+                thread_id: thread.threadId,
+                turn_id: turnId,
+                active_goal: currentGoal ? cloneJson(currentGoal) : null
+            };
+        }
+        if (currentGoal && expectedGoalId !== currentGoal.goalId) {
+            return {
+                ok: false,
+                status: expectedGoalId ? 'goal_conflict' : 'expected_goal_id_required',
+                error: expectedGoalId
+                    ? 'Goal mutation rejected because expected_goal_id does not match the active Goal.'
+                    : 'expected_goal_id is required while a Goal is active.',
+                active_goal: cloneJson(currentGoal)
+            };
+        }
+        if (!currentGoal && expectedGoalId) {
+            return {
+                ok: false,
+                status: 'goal_conflict',
+                error: 'No active Goal matches expected_goal_id.',
+                active_goal: null
+            };
+        }
+        const now = new Date().toISOString();
+        const objective = normalizeString(args.objective);
+        if (action === 'create') {
+            if (currentGoal) {
+                return { ok: false, status: 'goal_already_active', active_goal: cloneJson(currentGoal) };
+            }
+            if (!objective) {
+                return { ok: false, status: 'invalid_goal', error: 'objective is required to create a Goal.' };
+            }
+            thread.activeGoal = {
+                goalId: `goal_${randomUUID()}`,
+                objective,
+                status: 'active',
+                reason: normalizeString(args.reason),
+                createdAt: now,
+                updatedAt: now,
+                completedAt: ''
+            };
+        } else if (action === 'replace') {
+            if (!objective) {
+                return { ok: false, status: 'invalid_goal', error: 'objective is required to replace a Goal.' };
+            }
+            if (currentGoal) {
+                thread.goalHistory.push({
+                    ...currentGoal,
+                    status: 'replaced',
+                    reason: normalizeString(args.reason, 'replaced_by_model_goal_transition'),
+                    updatedAt: now,
+                    completedAt: now
+                });
+            }
+            thread.activeGoal = {
+                goalId: `goal_${randomUUID()}`,
+                objective,
+                status: 'active',
+                reason: normalizeString(args.reason),
+                createdAt: now,
+                updatedAt: now,
+                completedAt: ''
+            };
+        } else if (['complete', 'clear'].includes(action)) {
+            if (!currentGoal) {
+                return { ok: false, status: 'goal_not_found', active_goal: null };
+            }
+            thread.goalHistory.push({
+                ...currentGoal,
+                status: action === 'complete' ? 'completed' : 'cancelled',
+                reason: normalizeString(args.reason),
+                updatedAt: now,
+                completedAt: now
+            });
+            thread.activeGoal = null;
+        } else if (['block', 'resume'].includes(action)) {
+            if (!currentGoal) {
+                return { ok: false, status: 'goal_not_found', active_goal: null };
+            }
+            thread.activeGoal = {
+                ...currentGoal,
+                status: action === 'block' ? 'blocked' : 'active',
+                reason: normalizeString(args.reason),
+                updatedAt: now
+            };
+        } else {
+            return { ok: false, status: 'invalid_action', error: `Unsupported task_goal action: ${action}` };
+        }
+        thread.updatedAt = now;
+        this.persist();
+        this.emitEvent('task_agent.goal.updated', {
+            optimization: LONG_HORIZON_TASK_OPTIMIZATION,
+            sessionId: thread.sessionId,
+            threadId: thread.threadId,
+            turnId,
+            action,
+            activeGoal: thread.activeGoal ? cloneJson(thread.activeGoal) : null
+        });
+        return {
+            ok: true,
+            status: 'completed',
+            action,
+            thread_id: thread.threadId,
+            turn_id: turnId,
+            active_goal: thread.activeGoal ? cloneJson(thread.activeGoal) : null
         };
     }
 
@@ -300,8 +637,10 @@ class AILISSystemTaskAgentHarness {
         const existingHandoff = parentRunKey ? this.parentRunHandoffs.get(parentRunKey) : null;
         if (existingHandoff?.promise) {
             this.emitEvent('task_agent.handoff.reused', {
+                optimization: LONG_HORIZON_TASK_OPTIMIZATION,
                 sessionId,
-                taskId: existingHandoff.taskId,
+                threadId: existingHandoff.threadId,
+                turnId: existingHandoff.turnId,
                 runId: existingHandoff.runId,
                 parentRunId
             });
@@ -309,9 +648,14 @@ class AILISSystemTaskAgentHarness {
         }
         const running = this.inFlight.get(sessionId);
         if (running) {
-            running.task.latestRequest = message;
-            running.task.updatedAt = new Date().toISOString();
-            this.state.sessions[sessionId] = running.task;
+            const expectedTurnId = normalizeString(
+                context.expectedTaskAgentTurnId || context.expected_task_agent_turn_id
+            );
+            if (expectedTurnId && expectedTurnId !== running.turn.turnId) {
+                throw new Error(`TaskAgent Turn mismatch: expected ${expectedTurnId}, active ${running.turn.turnId}`);
+            }
+            this.steerTurn(running.thread, running.turn, message);
+            this.state.sessions[sessionId] = running.thread;
             this.persist();
             if (typeof running.inputHandler === 'function') {
                 await running.inputHandler(message);
@@ -319,26 +663,60 @@ class AILISSystemTaskAgentHarness {
                 running.pendingInputs.push(message);
             }
             this.emitEvent('task_agent.handoff.queued', {
+                optimization: LONG_HORIZON_TASK_OPTIMIZATION,
                 sessionId,
-                taskId: running.task.taskId,
-                runId: running.task.latestRunId
+                threadId: running.thread.threadId,
+                turnId: running.turn.turnId,
+                runId: running.turn.runId
             });
             return await running.promise;
         }
 
-        const prior = this.selectPriorTask(sessionId);
-        const task = this.createTask({ sessionId, message, prior });
-        this.state.sessions[sessionId] = task;
+        let thread = this.getThread(sessionId);
+        const threadExisted = Boolean(thread);
+        if (!thread) {
+            thread = this.createThread(sessionId);
+            thread.childSessionId = `${sessionId}:task-agent:${thread.threadId}`;
+        }
+        const explicitApprovalId = normalizeString(
+            context.confirmApprovalId || context.confirm_approval_id || context.approvalId || context.approval_id
+        );
+        const pendingApproval = thread.pendingApproval;
+        if (explicitApprovalId && pendingApproval?.approvalId !== explicitApprovalId) {
+            throw new Error('TaskAgent approval mismatch: the approval is stale or belongs to another Turn.');
+        }
+        let turn = pendingApproval && thread.activeTurnId === pendingApproval.turnId
+            ? thread.turns.find((candidate) => candidate.turnId === pendingApproval.turnId) || null
+            : null;
+        const resumedApproval = Boolean(turn && explicitApprovalId && pendingApproval?.approvalId === explicitApprovalId);
+        if (turn) {
+            this.steerTurn(thread, turn, message);
+            turn.runId = `task_run_${randomUUID()}`;
+        } else {
+            turn = this.createTurn(thread, message);
+        }
+        const expectedTurnId = normalizeString(
+            context.expectedTaskAgentTurnId || context.expected_task_agent_turn_id
+        );
+        if (expectedTurnId && expectedTurnId !== turn.turnId) {
+            throw new Error(`TaskAgent Turn mismatch: expected ${expectedTurnId}, active ${turn.turnId}`);
+        }
+        this.state.sessions[sessionId] = thread;
         this.persist();
         this.emitEvent('task_agent.handoff.started', {
+            optimization: LONG_HORIZON_TASK_OPTIMIZATION,
             sessionId,
-            taskId: task.taskId,
-            runId: task.latestRunId,
-            threadState: prior ? 'resumed' : 'created'
+            threadId: thread.threadId,
+            turnId: turn.turnId,
+            goalId: thread.activeGoal?.goalId || '',
+            runId: turn.runId,
+            threadState: threadExisted ? 'resumed' : 'created',
+            turnState: resumedApproval ? 'approval_resumed' : turn.inputs.length > 1 ? 'steered' : 'created'
         });
 
         const inFlight = {
-            task,
+            thread,
+            turn,
             inputHandler: null,
             pendingInputs: [],
             promise: null
@@ -355,104 +733,162 @@ class AILISSystemTaskAgentHarness {
                 }
             };
         };
-        const inheritanceMode = prior?.checkpoint ? 'checkpoint' : 'clean';
+        const inheritanceMode = thread.historyCheckpoint ? 'checkpoint' : 'clean';
+        const currentObjective = normalizeString(thread.activeGoal?.objective, turn.latestRequest);
         const runPromise = (async () => {
-            const result = await this.executeTaskAgent({
-                agent: {
-                    id: task.taskId,
-                    label: 'TaskAgent',
-                    runId: normalizeString(context.runId),
-                    sessionId,
-                    childRunId: task.latestRunId,
-                    childSessionId: task.childSessionId,
-                    task: message,
-                    originalTask: task.originalGoal,
-                    agent_path: '/root/task_agent'
-                },
-                args: {
-                    task: message,
-                    inheritanceMode,
-                    contextManagerCheckpoint: prior?.checkpoint || null,
-                    llmSettings: context.llmSettings || context.llm || null
-                },
-                context: {
-                    ...context,
-                    sessionId: task.childSessionId,
-                    sessionKey: task.childSessionId,
-                    parentSessionId: sessionId,
-                    originalUserGoal: task.originalGoal,
-                    original_user_goal: task.originalGoal,
-                    currentTaskRequest: task.latestRequest,
-                    current_task_request: task.latestRequest,
-                    priorUnresolvedFields: prior?.unresolvedFields || [],
-                    prior_unresolved_fields: prior?.unresolvedFields || [],
-                    priorAnswerCandidates: prior?.answerCandidates || [],
-                    prior_answer_candidates: prior?.answerCandidates || [],
-                    priorBestAnswerCandidate: prior?.bestAnswerCandidate || null,
-                    prior_best_answer_candidate: prior?.bestAnswerCandidate || null,
-                    taskAgentInheritanceMode: inheritanceMode,
-                    initialContextManagerCheckpoint: prior?.checkpoint || null,
-                },
-                signal: context.signal,
-                registerInputHandler,
-                onEvent: async (event) => {
-                    this.emitEvent('task_agent.event', {
+            try {
+                const result = await this.executeTaskAgent({
+                    agent: {
+                        id: thread.threadId,
+                        label: 'TaskAgent',
+                        runId: normalizeString(context.runId),
                         sessionId,
-                        taskId: task.taskId,
-                        runId: task.latestRunId,
-                        event: cloneJson(event) || {}
-                    });
+                        childRunId: turn.runId,
+                        childSessionId: thread.childSessionId,
+                        task: turn.latestRequest,
+                        originalTask: currentObjective,
+                        agent_path: '/root/task_agent'
+                    },
+                    args: {
+                        task: turn.latestRequest,
+                        inheritanceMode,
+                        contextManagerCheckpoint: thread.historyCheckpoint,
+                        llmSettings: context.llmSettings || context.llm || null
+                    },
+                    context: {
+                        ...context,
+                        sessionId: thread.childSessionId,
+                        sessionKey: thread.childSessionId,
+                        parentSessionId: sessionId,
+                        taskAgentOptimization: LONG_HORIZON_TASK_OPTIMIZATION,
+                        task_agent_optimization: LONG_HORIZON_TASK_OPTIMIZATION,
+                        taskAgentThreadId: thread.threadId,
+                        task_agent_thread_id: thread.threadId,
+                        taskAgentTurnId: turn.turnId,
+                        task_agent_turn_id: turn.turnId,
+                        taskAgentActiveGoal: thread.activeGoal ? cloneJson(thread.activeGoal) : null,
+                        task_agent_active_goal: thread.activeGoal ? cloneJson(thread.activeGoal) : null,
+                        originalUserGoal: currentObjective,
+                        original_user_goal: currentObjective,
+                        currentTaskRequest: turn.latestRequest,
+                        current_task_request: turn.latestRequest,
+                        priorUnresolvedFields: thread.unresolvedFields || [],
+                        prior_unresolved_fields: thread.unresolvedFields || [],
+                        priorAnswerCandidates: thread.answerCandidates || [],
+                        prior_answer_candidates: thread.answerCandidates || [],
+                        priorBestAnswerCandidate: thread.bestAnswerCandidate || null,
+                        prior_best_answer_candidate: thread.bestAnswerCandidate || null,
+                        taskAgentInheritanceMode: inheritanceMode,
+                        initialContextManagerCheckpoint: thread.historyCheckpoint,
+                        ...(resumedApproval ? {
+                            confirmApprovalId: explicitApprovalId,
+                            approvalId: explicitApprovalId,
+                            approved: true
+                        } : {})
+                    },
+                    signal: context.signal,
+                    registerInputHandler,
+                    onEvent: async (event) => {
+                        this.emitEvent('task_agent.event', {
+                            optimization: LONG_HORIZON_TASK_OPTIMIZATION,
+                            sessionId,
+                            threadId: thread.threadId,
+                            turnId: turn.turnId,
+                            runId: turn.runId,
+                            event: cloneJson(event) || {}
+                        });
+                    }
+                });
+                const packet = buildTaskResultPacket(result, { thread, turn });
+                const handoff = result.taskRunHandoff || result.task_run_handoff || result.handoff || {};
+                const now = new Date().toISOString();
+                turn.status = packet.status;
+                turn.resultStatus = packet.status;
+                turn.finalAnswer = packet.final_answer;
+                turn.traceRef = packet.trace_ref;
+                turn.updatedAt = now;
+                const nextCheckpoint = handoff.resume?.contextManagerCheckpoint || handoff.resume?.context_manager_checkpoint;
+                if (nextCheckpoint && typeof nextCheckpoint === 'object') {
+                    thread.historyCheckpoint = nextCheckpoint;
                 }
-            });
-            const packet = buildTaskResultPacket(result, task);
-            const handoff = result.taskRunHandoff || result.task_run_handoff || result.handoff || {};
-            task.status = packet.status;
-            task.checkpoint = handoff.resume?.contextManagerCheckpoint || handoff.resume?.context_manager_checkpoint || null;
-            task.evidenceRefs = packet.evidence_refs;
-            task.outputRefs = packet.output_refs;
-            task.sourceRefs = packet.source_refs;
-            task.answerCandidates = packet.answer_candidates;
-            task.bestAnswerCandidate = packet.best_answer_candidate;
-            task.unresolvedFields = packet.unresolved_fields;
-            task.traceRef = packet.trace_ref;
-            task.updatedAt = new Date().toISOString();
-            this.state.sessions[sessionId] = task;
-            this.persist();
-            this.taskResultCapsules?.recordExecution?.({
-                sessionId,
-                parentRunId: normalizeString(context.runId),
-                action: prior ? 'resume' : 'spawn',
-                task: task.originalGoal,
-                ok: FINAL_STATUSES.has(packet.status),
-                status: packet.status,
-                subagent: {
-                    id: task.taskId,
-                    childRunId: task.taskId,
+                thread.evidenceRefs = packet.evidence_refs;
+                thread.outputRefs = packet.output_refs;
+                thread.sourceRefs = packet.source_refs;
+                thread.answerCandidates = packet.answer_candidates;
+                thread.bestAnswerCandidate = packet.best_answer_candidate;
+                thread.unresolvedFields = packet.unresolved_fields;
+                thread.traceRef = packet.trace_ref;
+                thread.updatedAt = now;
+                if (packet.status === 'needs_approval' && packet.approval_id) {
+                    thread.pendingApproval = {
+                        approvalId: packet.approval_id,
+                        turnId: turn.turnId,
+                        itemId: packet.approval_item_id,
+                        createdAt: now
+                    };
+                    thread.activeTurnId = turn.turnId;
+                } else {
+                    turn.completedAt = now;
+                    if (thread.pendingApproval?.turnId === turn.turnId) {
+                        thread.pendingApproval = null;
+                    }
+                    thread.activeTurnId = '';
+                }
+                this.state.sessions[sessionId] = thread;
+                this.persist();
+                this.taskResultCapsules?.recordExecution?.({
                     sessionId,
-                    originalTask: task.originalGoal,
-                    task: task.latestRequest,
-                    status: packet.status
-                },
-                childResult: result,
-                taskRunHandoff: handoff,
-                unresolvedFields: packet.unresolved_fields
-            });
-            this.emitEvent('task_agent.handoff.finished', {
-                sessionId,
-                taskId: task.taskId,
-                runId: task.latestRunId,
-                status: packet.status,
-                traceRef: packet.trace_ref
-            });
-            return packet;
+                    parentRunId: normalizeString(context.runId),
+                    action: inheritanceMode === 'checkpoint' ? 'resume' : 'spawn',
+                    task: currentObjective,
+                    ok: FINAL_STATUSES.has(packet.status),
+                    status: packet.status,
+                    subagent: {
+                        id: thread.threadId,
+                        childRunId: turn.runId,
+                        sessionId,
+                        threadId: thread.threadId,
+                        turnId: turn.turnId,
+                        originalTask: currentObjective,
+                        task: turn.latestRequest,
+                        status: packet.status
+                    },
+                    childResult: result,
+                    taskRunHandoff: handoff,
+                    unresolvedFields: packet.unresolved_fields
+                });
+                this.emitEvent('task_agent.handoff.finished', {
+                    optimization: LONG_HORIZON_TASK_OPTIMIZATION,
+                    sessionId,
+                    threadId: thread.threadId,
+                    turnId: turn.turnId,
+                    goalId: thread.activeGoal?.goalId || '',
+                    runId: turn.runId,
+                    status: packet.status,
+                    traceRef: packet.trace_ref
+                });
+                return packet;
+            } catch (error) {
+                const now = new Date().toISOString();
+                turn.status = 'failed';
+                turn.resultStatus = 'failed';
+                turn.updatedAt = now;
+                turn.completedAt = now;
+                thread.activeTurnId = '';
+                thread.updatedAt = now;
+                this.state.sessions[sessionId] = thread;
+                this.persist();
+                throw error;
+            }
         })();
         inFlight.promise = runPromise;
         this.inFlight.set(sessionId, inFlight);
         if (parentRunKey) {
             this.parentRunHandoffs.set(parentRunKey, {
                 promise: runPromise,
-                taskId: task.taskId,
-                runId: task.latestRunId
+                threadId: thread.threadId,
+                turnId: turn.turnId,
+                runId: turn.runId
             });
             while (this.parentRunHandoffs.size > MAX_PARENT_RUN_HANDOFFS) {
                 this.parentRunHandoffs.delete(this.parentRunHandoffs.keys().next().value);
@@ -471,6 +907,7 @@ class AILISSystemTaskAgentHarness {
         return {
             ok: true,
             version: TASK_HARNESS_STATE_VERSION,
+            optimization: LONG_HORIZON_TASK_OPTIMIZATION,
             statePath: this.statePath,
             sessionCount: Object.keys(this.state.sessions).length,
             inFlightCount: this.inFlight.size,
@@ -484,5 +921,6 @@ module.exports = {
     AILISSystemTaskAgentHarness,
     TASK_HARNESS_STATE_VERSION,
     TASK_RESULT_SCHEMA,
+    LONG_HORIZON_TASK_OPTIMIZATION,
     buildTaskResultPacket
 };

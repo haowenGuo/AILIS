@@ -511,6 +511,8 @@ class ContextManager {
             reason: String(options.compactionReason || packageBefore.budgetReport.level || 'context_budget'),
             originalGoalPreservedVerbatim: Boolean(originalTaskText),
             originalGoal: originalTaskText,
+            activeGoal: normalizeContextPackageValue(options.taskState?.active_goal || null, 2400),
+            currentRequest: normalizeContextPackageValue(options.taskState?.current_request || '', 2000),
             constraints: normalizeManifestList(options.constraints || options.taskState?.constraints || [], 24),
             currentPlan: normalizeContextPackageValue(
                 options.currentPlan || options.taskState?.currentPlan || options.taskState?.plan || null,
@@ -529,7 +531,7 @@ class ContextManager {
             droppedItemsManifest: packageBefore.droppedItemsManifest,
             instruction: personaMode
                 ? 'Continue the same visible conversation. Use the active task state and recent user/assistant turns as context; do not invent missing history.'
-                : 'Continue the same task from this checkpoint. Do not repeat completed work. Use the preserved original task and constraints as the authority.'
+                : 'Continue the same TaskAgent Thread from this history checkpoint. The optional activeGoal and currentRequest determine present authority; older requests and completed work are historical context. Do not treat the first preserved request or this checkpoint as a permanently active task.'
         };
         const checkpointMessage = ResponseItem.message({
             role: 'user',

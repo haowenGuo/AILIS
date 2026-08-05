@@ -584,6 +584,7 @@ function toAILISPayload(result) {
     const fallbackText = normalizeMarkdownSource(result?.displayText || result?.finalAnswer || result?.error || 'AILIS 没有返回可显示内容。');
     return toAssistantPayload(surfaceText || fallbackText, {
         ...cue,
+        approvalId: normalizeText(result?.approvalId),
         action: surface ? surface.action : cue.action,
         expression: surface ? surface.expression : cue.expression,
         speechText: surface?.speechText || result?.speechText || surfaceText || '',
@@ -591,6 +592,28 @@ function toAILISPayload(result) {
         surface,
         ailis: result
     });
+}
+
+function isExplicitApprovalConfirmation(message = '') {
+    return /^(确认|确认执行|批准|同意|允许|可以执行|开始执行|执行吧|approve|approved|confirm)$/i.test(
+        normalizeText(message).replace(/[\s。！!,.，]+/g, '')
+    );
+}
+
+function isExplicitApprovalCancellation(message = '') {
+    return /^(取消|不要执行|停止执行|不同意|拒绝|cancel|reject|deny)$/i.test(
+        normalizeText(message).replace(/[\s。！!,.，]+/g, '')
+    );
+}
+
+function latestApprovalIdFromHistory(messageHistory = []) {
+    for (const entry of [...(Array.isArray(messageHistory) ? messageHistory : [])].reverse()) {
+        if (entry?.role !== 'assistant') {
+            continue;
+        }
+        return normalizeText(entry.approvalId || entry.approval_id);
+    }
+    return '';
 }
 
 function parseAssistantReply(rawText) {
@@ -692,6 +715,7 @@ export class AILISDesktopChatService {
         this.prefersThinkingState = true;
         this.activeRunId = '';
         this.activeSessionId = '';
+        this.pendingApprovalIds = new Map();
     }
 
     getWelcomeMessage() {
@@ -766,6 +790,16 @@ export class AILISDesktopChatService {
         }
 
         const status = await this.ensureReady();
+        const pendingApprovalId = this.pendingApprovalIds.get(sessionId) ||
+            latestApprovalIdFromHistory(messageHistory);
+        if (pendingApprovalId) {
+            this.pendingApprovalIds.set(sessionId, pendingApprovalId);
+        }
+        const confirmsPendingApproval = Boolean(pendingApprovalId && isExplicitApprovalConfirmation(message));
+        const cancelsPendingApproval = Boolean(pendingApprovalId && isExplicitApprovalCancellation(message));
+        if (pendingApprovalId && !confirmsPendingApproval && !cancelsPendingApproval) {
+            this.pendingApprovalIds.delete(sessionId);
+        }
         let streamedAnswerText = '';
         let activeAnswerStreamId = '';
         let answerStreamVisible = false;
@@ -804,13 +838,22 @@ export class AILISDesktopChatService {
                     agentLoop: 'llm',
                     directToolExecutor: true,
                     maxAgentSteps: 4,
+                    ...((confirmsPendingApproval || cancelsPendingApproval) ? {
+                        confirmApprovalId: pendingApprovalId,
+                        ...(confirmsPendingApproval ? { confirmed: true } : {})
+                    } : {}),
                     context: {
                         workspace: status.workspaceRoot,
                         runtimeKind: this.runtimeKind,
                         agentLoop: 'llm',
                         directToolExecutor: true,
                         maxAgentSteps: 4,
-                        agentRole: 'persona_orchestrator'
+                        agentRole: 'persona_orchestrator',
+                        ...((confirmsPendingApproval || cancelsPendingApproval) ? {
+                            confirmApprovalId: pendingApprovalId,
+                            approvalId: pendingApprovalId,
+                            ...(confirmsPendingApproval ? { approved: true } : {})
+                        } : {})
                     }
                 },
                 {
@@ -895,6 +938,11 @@ export class AILISDesktopChatService {
             ...toAILISPayload(result),
             streamMode: answerStreamCommitted
         };
+        if (result?.status === 'needs_approval' && normalizeText(result?.approvalId)) {
+            this.pendingApprovalIds.set(sessionId, normalizeText(result.approvalId));
+        } else if (confirmsPendingApproval || cancelsPendingApproval) {
+            this.pendingApprovalIds.delete(sessionId);
+        }
 
         return attachServerTtsIfRequested(payload, replyMode);
     }

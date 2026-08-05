@@ -71,6 +71,9 @@ function normalizeMessage(value = {}) {
             .filter(Boolean)
             .slice(0, MAX_ATTACHMENTS),
         source: normalizeString(value.source),
+        approvalId: role === 'assistant'
+            ? normalizeString(value.approvalId || value.approval_id)
+            : '',
         createdAt: normalizeString(value.createdAt, new Date().toISOString())
     };
 }

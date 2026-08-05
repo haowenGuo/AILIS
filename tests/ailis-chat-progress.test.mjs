@@ -92,6 +92,72 @@ test('assistant embodied command parser does not steal task-like dance requests'
     assert.equal(createEmbodiedCommandPayload('帮我写一个跳舞脚本'), null);
 });
 
+test('chat binds explicit confirmation to the rendered approval id and never maps plain continue', async () => {
+    const previousWindow = globalThis.window;
+    const calls = [];
+    const gateway = {
+        isSupported: true,
+        async getStatus() {
+            return { running: true, workspaceRoot: 'F:/workspace' };
+        },
+        onEvent() {
+            return () => {};
+        },
+        async runAgent(request) {
+            calls.push(request);
+            if (calls.length === 1) {
+                return {
+                    ok: false,
+                    status: 'needs_approval',
+                    approvalId: 'approval-exact-turn-item',
+                    displayText: '需要确认当前动作'
+                };
+            }
+            return { ok: true, status: 'completed', displayText: 'done' };
+        }
+    };
+    globalThis.window = { ailisDesktop: { gateway } };
+
+    try {
+        const service = new AILISDesktopChatService();
+        const approvalPayload = await service.fetchAssistantTurn({
+            sessionId: 'approval-chat',
+            messageHistory: [{ role: 'user', content: '执行动作' }],
+            replyMode: 'text_only'
+        });
+        assert.equal(approvalPayload.approvalId, 'approval-exact-turn-item');
+
+        await service.fetchAssistantTurn({
+            sessionId: 'approval-chat',
+            messageHistory: [
+                { role: 'assistant', content: '需要确认当前动作', approvalId: 'approval-exact-turn-item' },
+                { role: 'user', content: '继续' }
+            ],
+            replyMode: 'text_only'
+        });
+        assert.equal(calls[1].confirmApprovalId, undefined);
+
+        const reloadedService = new AILISDesktopChatService();
+        await reloadedService.fetchAssistantTurn({
+            sessionId: 'approval-chat',
+            messageHistory: [
+                { role: 'assistant', content: '需要确认当前动作', approvalId: 'approval-exact-turn-item' },
+                { role: 'user', content: '确认执行' }
+            ],
+            replyMode: 'text_only'
+        });
+        assert.equal(calls[2].confirmApprovalId, 'approval-exact-turn-item');
+        assert.equal(calls[2].confirmed, true);
+        assert.equal(calls[2].context.approvalId, 'approval-exact-turn-item');
+    } finally {
+        if (previousWindow === undefined) {
+            delete globalThis.window;
+        } else {
+            globalThis.window = previousWindow;
+        }
+    }
+});
+
 test('chat progress bridge stays silent until reasoning arrives for a task run', () => {
     const fake = createFakeGateway();
     const outputs = [];

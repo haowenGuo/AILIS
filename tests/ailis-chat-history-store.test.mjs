@@ -14,7 +14,12 @@ test('desktop chat history survives store restart and keeps only visible convers
 
     const saved = store.saveSession('user-a', [
         { role: 'user', content: '记住这一轮', createdAt: '2026-07-17T01:00:00.000Z' },
-        { role: 'assistant', content: '这会保存在聊天历史里。', createdAt: '2026-07-17T01:00:01.000Z' },
+        {
+            role: 'assistant',
+            content: '这会保存在聊天历史里。',
+            approvalId: 'approval-visible-turn',
+            createdAt: '2026-07-17T01:00:01.000Z'
+        },
         { role: 'system', content: 'internal status must not persist' }
     ]);
     assert.equal(saved.messageCount, 2);
@@ -24,6 +29,7 @@ test('desktop chat history survives store restart and keeps only visible convers
     assert.equal(restored.status, 'loaded');
     assert.deepEqual(restored.messages.map((message) => message.role), ['user', 'assistant']);
     assert.match(restored.messages[0].content, /记住这一轮/);
+    assert.equal(restored.messages[1].approvalId, 'approval-visible-turn');
 });
 
 test('desktop chat history is session scoped, bounded, and clearable', async () => {
