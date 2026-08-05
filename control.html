@@ -1065,6 +1065,10 @@
         .control-page[data-control-page="appearance"] .section-character {
             grid-column: span 6;
         }
+        .backend-settings-stack {
+            display: grid;
+            gap: 14px;
+        }
 
         .control-page[data-control-page="appearance"] .section-dialogue,
         .control-page[data-control-page="agent"] .section-permissions,
@@ -1840,9 +1844,9 @@
         }
 
     </style>
-  <script type="module" crossorigin src="./assets/control-D0KWU1qx.js"></script>
-  <link rel="modulepreload" crossorigin href="./assets/modulepreload-polyfill-DfS4ul37.js">
-  <link rel="modulepreload" crossorigin href="./assets/i18n-D7yMXoS4.js">
+  <script type="module" crossorigin src="./assets/control-Baxblu_S.js"></script>
+  <link rel="modulepreload" crossorigin href="./assets/modulepreload-polyfill-CGdBa_z4.js">
+  <link rel="modulepreload" crossorigin href="./assets/i18n-B5SS86Ke.js">
 </head>
 <body>
     <div id="shell">
@@ -1933,6 +1937,7 @@
                             <select id="pet-scale"></select>
                         </label>
 
+                        <div id="electron-render-settings" class="backend-settings-stack">
                         <label class="field">
                             <div class="field-meta">
                                 <span class="field-label">渲染风格</span>
@@ -2058,6 +2063,7 @@
                                 </label>
                             </div>
                         </details>
+                        </div>
 
                         <label class="field inline">
                             <div>
@@ -2142,6 +2148,8 @@
                         <div class="section-copy">本地安装人物包和皮肤包，面向 MIT 开源社区扩展；完全本地使用，适合社区自愿分享。</div>
                     </div>
                     <div class="section-body">
+                        <div class="field-help" id="character-renderer-status">当前使用 Electron / Three.js 轻量渲染。</div>
+
                         <div class="field">
                             <div class="field-meta">
                                 <span class="field-label">当前启用</span>
@@ -2151,6 +2159,7 @@
                         </div>
 
                         <div class="field-actions">
+                            <button id="open-character-lab-btn" class="primary-btn" type="button">打开功能测试台</button>
                             <button id="character-install-folder-btn" class="ghost-btn" type="button">安装本地包</button>
                             <button id="character-install-sample-btn" class="ghost-btn" type="button">安装测试包</button>
                             <button id="character-reset-active-btn" class="danger-btn" type="button">恢复默认人物</button>
@@ -2885,6 +2894,19 @@
                                         <button id="clear-memory-btn" class="danger-btn" type="button">清空记忆</button>
                                     </span>
                                 </div>
+                                <label class="field">
+                                    <span class="field-label">记忆实验方案</span>
+                                    <select id="memory-strategy-select"></select>
+                                    <div class="field-help">
+                                        只切换 AILIS 的对话记忆表示与检索；不会改动 Persona、原始对话或 TaskAgent。
+                                    </div>
+                                </label>
+                                <div class="field-actions">
+                                    <button id="curate-memory-cognition-btn" class="ghost-btn" type="button">
+                                        整理认知记忆
+                                    </button>
+                                </div>
+                                <div class="field-help" id="memory-strategy-status-text"></div>
                                 <div class="field-help" id="memory-status-text">记忆状态读取中...</div>
                                 <div class="field-help" id="memory-path-text"></div>
                                 <div class="memory-list" id="memory-block-list"></div>
