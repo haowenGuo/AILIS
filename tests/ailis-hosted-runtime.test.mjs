@@ -135,7 +135,6 @@ test('hosted runtime replaces browser-supplied paths, credentials, and approvals
     assert.equal(request.approved, undefined);
     assert.equal(request.agentRole, 'persona_orchestrator');
     assert.equal(request.context.agentRole, 'persona_orchestrator');
-    assert.equal(request.context.taskAgentOwnsExecution, true);
 });
 
 test('hosted runtime forwards provider text deltas outside the serialized request', async () => {
@@ -162,7 +161,7 @@ test('hosted runtime forwards provider text deltas outside the serialized reques
                 onTextStreamEvent: (event) => streamEvents.push(event.type)
             }
         );
-        assert.equal(result.ok, true, JSON.stringify(result));
+        assert.equal(result.ok, true);
         assert.deepEqual(deltas, [{ delta: 'done', metadata: { provider: 'fake' } }]);
         assert.deepEqual(streamEvents, [
             'response.output_text.started',
@@ -220,18 +219,14 @@ test('real hosted Persona commits streamed assistant text for a direct final res
             }
         );
 
-        assert.equal(result.ok, true, JSON.stringify(result));
+        assert.equal(result.ok, true);
         assert.equal(result.displayText, '你好，我在这里。');
         assert.deepEqual(deltas, ['你好', '，我在这里。']);
         assert.deepEqual(streamEvents, [
             'response.output_text.started',
             'response.output_text.committed'
         ]);
-        assert.equal(modelRequests[0].stream, false);
-        assert.ok((modelRequests[0].tools || []).some((tool) => (
-            (tool?.function?.name || tool?.name) === 'task_intake_decision'
-        )));
-        assert.equal(modelRequests.at(-1).stream, true);
+        assert.equal(modelRequests[0].stream, true);
     } finally {
         await manager.close();
         await new Promise((resolve) => modelServer.close(resolve));
@@ -292,7 +287,7 @@ test('hosted runtime executes the real Persona Agent and restores memory after r
             (request.tools || []).map((tool) => tool?.function?.name || tool?.name || '')
         );
         assert.ok(
-            personaToolNames.includes('task_intake_decision'),
+            personaToolNames.includes('handoff_task'),
             JSON.stringify(requests.map((request) => ({
                 keys: Object.keys(request),
                 toolNames: (request.tools || []).map((tool) => tool?.function?.name || tool?.name || '')
@@ -330,7 +325,7 @@ test('hosted runtime executes the real Persona Agent and restores memory after r
     }
 });
 
-test('hosted TaskAgent intake can execute a web request through the persistent harness', async () => {
+test('hosted Persona can hand a web request to the real persistent TaskAgent harness', async () => {
     const requests = [];
     const modelServer = http.createServer(async (req, res) => {
         const chunks = [];
@@ -340,17 +335,14 @@ test('hosted TaskAgent intake can execute a web request through the persistent h
         const toolNames = (request.tools || []).map((tool) =>
             tool?.function?.name || tool?.name || ''
         );
-        const message = toolNames.includes('task_intake_decision')
+        const message = toolNames.includes('handoff_task')
             ? {
                   role: 'assistant',
                   content: null,
                   tool_calls: [{
-                      id: 'call-hosted-intake',
+                      id: 'call-hosted-handoff',
                       type: 'function',
-                      function: {
-                          name: 'task_intake_decision',
-                          arguments: '{"action":"execute","reason":"需要执行任务"}'
-                      }
+                      function: { name: 'handoff_task', arguments: '{}' }
                   }]
               }
             : {
@@ -396,8 +388,7 @@ test('hosted TaskAgent intake can execute a web request through the persistent h
         const allToolSurfaces = requests.map((request) =>
             (request.tools || []).map((tool) => tool?.function?.name || tool?.name || '')
         );
-        assert.ok(allToolSurfaces.some((tools) => tools.includes('task_intake_decision')));
-        assert.ok(allToolSurfaces.every((tools) => !tools.includes('handoff_task')));
+        assert.ok(allToolSurfaces.some((tools) => tools.includes('handoff_task')));
         assert.ok(allToolSurfaces.some((tools) => tools.includes('tool_search')));
 
         const key = tenantKey('web:task-agent');

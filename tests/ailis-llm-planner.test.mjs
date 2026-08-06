@@ -2616,7 +2616,7 @@ test('TaskAgent ignores the legacy round cap, compacts canonical history, and en
                     tool: 'exec',
                     title: `读取输出 ${decisionCount}`,
                     args: {
-                        command: `powershell -NoProfile -Command "Write-Output ('output-${decisionCount} ' * 800)"`
+                        command: `powershell -NoProfile -Command "$value = 'output-${decisionCount} '; Write-Output ($value * 800)"`
                     }
                 }
             };

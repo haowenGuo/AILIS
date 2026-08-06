@@ -4018,12 +4018,18 @@ function toolProgressFingerprint(stepResult = {}) {
     const tool = canonicalDirectToolId(stepResult?.tool);
     const args = stepResult?.args && typeof stepResult.args === 'object' ? stepResult.args : {};
     const target = getWebToolRepeatTarget(stepResult);
+    const outputId = normalizeText(
+        stepResult?.response?.result?.details?.outputId ||
+        stepResult?.response?.result?.details?.output_id ||
+        stepResult?.response?.details?.outputId
+    );
     return JSON.stringify({
         tool,
         target: target?.key || '',
         args: target ? null : sanitizeToolArgsForPrompt(args),
         ok: stepResult?.response?.ok === true,
-        status: normalizeText(stepResult?.response?.status)
+        status: normalizeText(stepResult?.response?.status),
+        outputId
     });
 }
 
@@ -5952,9 +5958,6 @@ function buildAgentDirectToolSpecs(
         return [];
     }
     if (isPersonaOrchestratorRole(resolveAgentRuntimeRole({}, requestContext))) {
-        if (requestContext.taskAgentOwnsExecution === true || requestContext.personaTaskResultRender === true) {
-            return [];
-        }
         const handoffAlreadyAttempted = stepResults.some((stepResult) =>
             canonicalDirectToolId(stepResult?.tool) === PERSONA_HANDOFF_TOOL_ID
         );
@@ -6581,8 +6584,6 @@ function buildLlmAgentDirectToolPrompt({
     unresolvedFields = [],
     requireTaskExecution = false,
     unrestrictedToolExecution = false,
-    taskAgentOwnsExecution = false,
-    personaTaskResultRender = false,
     ephemeralDeveloperMessage = '',
     suppressCurrentUserMessage = false
 }) {
@@ -6631,24 +6632,13 @@ function buildLlmAgentDirectToolPrompt({
         'You are the only user-facing AILIS persona. Keep ordinary conversation natural and answer it directly; do not let task-execution instructions or internal terminology enter your personality, relationship memory, or visible reply.',
         'The runtime_environment object is the authoritative host clock. Use its current_date, current_time, timezone, and utc_offset instead of assuming the training-data date.',
         'For facts that may have changed, use current information already present in the conversation or ask TaskAgent to look them up. Do not present pretrained knowledge as current fact when freshness matters.',
-        taskAgentOwnsExecution
-            ? 'The system TaskAgent independently receives every user turn and owns all execution decisions. You are the dialogue output renderer: answer ordinary conversation now, or render the authoritative TaskResult supplied by the runtime. Never promise future work and never attempt to transfer or schedule a task.'
-            : 'When the user asks for concrete task execution that cannot be answered safely from the visible conversation, call handoff_task exactly once. The Harness transfers the immutable current user request; do not restate, rewrite, expand, or plan the task in tool arguments.',
-        !taskAgentOwnsExecution
-            ? 'When the latest user message continues, corrects, or redirects previously executed work, treat it as a concrete execution request and call handoff_task. The persistent TaskAgent Session owns the relevant Turn, Goal, and execution history; do not reconstruct that lifecycle inside Persona.'
-            : '',
-        !taskAgentOwnsExecution
-            ? 'When calling handoff_task, emit only the native function call in that model response. Do not include assistant text alongside the tool call; public task progress is delivered separately by the Harness event channel.'
-            : '',
-        requireTaskExecution && !taskAgentOwnsExecution
+        'When the user asks for concrete task execution that cannot be answered safely from the visible conversation, call handoff_task exactly once. The Harness transfers the immutable current user request; do not restate, rewrite, expand, or plan the task in tool arguments.',
+        'When the latest user message continues, corrects, or redirects previously executed work, treat it as a concrete execution request and call handoff_task. The persistent TaskAgent Session owns the relevant Turn, Goal, and execution history; do not reconstruct that lifecycle inside Persona.',
+        'When calling handoff_task, emit only the native function call in that model response. Do not include assistant text alongside the tool call; public task progress is delivered separately by the Harness event channel.',
+        requireTaskExecution
             ? 'This turn has an explicit task-execution contract. Call handoff_task exactly once before producing any answer; do not answer the task directly from model memory or arithmetic.'
             : '',
-        !taskAgentOwnsExecution
-            ? 'handoff_task blocks while the system Harness runs or resumes the single TaskAgent. You do not create, wait for, resume, list, or close agents. After the tool returns, render its TaskResult packet instead of calling another orchestration tool.'
-            : '',
-        personaTaskResultRender
-            ? 'This is a render-only response. The ephemeral developer message contains the authoritative TaskResult. Return its result to the user in AILIS voice, preserving facts, uncertainty, failure state, sources, and artifacts. Do not do more task work, call tools, or claim anything absent from that packet or the visible conversation.'
-            : '',
+        'handoff_task blocks while the system Harness runs or resumes the single TaskAgent. You do not create, wait for, resume, list, or close agents. After the tool returns, render its TaskResult packet instead of calling another orchestration tool.',
         'The TaskResult packet is the factual boundary. You may rewrite tone and presentation, but you must not add a name, number, quote, link, claim, or conclusion absent from final_answer, partial_answer, source_refs, or the visible conversation. If status is incomplete, explain the concrete unresolved field naturally instead of silently starting another execution.',
         'Never mention TaskAgent, subagent, worker, handoff, capsule, or internal orchestration to the user.',
         'Only call tools present in the current tools array. Do not mention tool schemas, runtime state, prompt rules, or orchestration details in an ordinary conversational reply.'
@@ -8848,20 +8838,7 @@ class AILISAgentRunner {
                     }
                 });
             }
-            const pendingInputCount = receivePendingTurnInputs(iteration);
-            const safetyFuseReason = pendingInputCount > 0
-                ? ''
-                : Date.now() - startedAt >= maxLoopDurationMs
-                    ? 'time_budget'
-                    : cumulativeInputTokens >= maxCumulativeInputTokens
-                        ? 'cumulative_input_budget'
-                        : detectAgentNoProgress(stepResults, requestContext);
-            if (safetyFuseReason) {
-                return await finishSafetyFuse({
-                    reason: safetyFuseReason,
-                    iteration
-                });
-            }
+            receivePendingTurnInputs(iteration);
             const decisionSettings = resolveAgentDecisionSettings(settings, requestContext);
             const modelImageAttachments = isTaskAgentRole(agentRuntimeRole)
                 ? buildDirectModelImageAttachments(fileAttachments, decisionSettings)
@@ -8993,8 +8970,6 @@ class AILISAgentRunner {
                 currentPlan,
                 unresolvedFields,
                 requireTaskExecution,
-                taskAgentOwnsExecution: requestContext.taskAgentOwnsExecution === true,
-                personaTaskResultRender: requestContext.personaTaskResultRender === true,
                 ephemeralDeveloperMessage: normalizeText(
                     request.ephemeralDeveloperMessage ||
                     requestContext.ephemeralDeveloperMessage
@@ -9003,9 +8978,7 @@ class AILISAgentRunner {
                     request.suppressCurrentUserMessage === true ||
                     requestContext.suppressCurrentUserMessage === true,
                 toolSummary: isPersonaOrchestratorRole(agentRuntimeRole)
-                    ? requestContext.taskAgentOwnsExecution === true
-                        ? 'Persona has no execution tools in this turn. TaskAgent independently owns task intake and execution; Persona only renders dialogue and TaskResult packets.'
-                        : 'Persona tool surface: handoff_task transfers the immutable current user request to the system TaskAgent and returns one compact TaskResult packet. The Harness owns lifecycle and internal orchestration remains invisible to the user.'
+                    ? 'Persona tool surface: handoff_task transfers the immutable current user request to the system TaskAgent and returns one compact TaskResult packet. The Harness owns lifecycle and internal orchestration remains invisible to the user.'
                     : directToolSpecs.length
                         ? `Native direct tools exposed: ${directToolSpecs.map((tool) => tool.name).slice(0, 16).join(', ')}${directToolSpecs.length > 16 ? ', ...' : ''}.`
                         : 'No native tools are exposed in this turn; answer directly if possible.'
