@@ -2816,19 +2816,31 @@ test('Agentic Executor stops repeated identical invalid native calls before they
     }
 });
 
-test('TaskAgent stops repeated identical successful observations without restoring a round cap', async () => {
+test('TaskAgent stops different commands that keep returning the same observation', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-identical-observation-fuse-'));
-    const llmServer = await createScriptedChatCompletionsServer(() => ({
-        mode: 'task',
-        intent: 'repeat_same_observation',
-        summary: '重复执行同一个读取动作',
-        action: 'tool',
-        tool_call: {
-            tool: 'exec',
-            title: '读取相同输出',
-            args: { command: 'powershell -NoProfile -Command "Write-Output unchanged"' }
-        }
-    }));
+    const llmServer = await createScriptedChatCompletionsServer(({ decisionCount }) => (
+        decisionCount <= 5
+            ? {
+                  mode: 'task',
+                  intent: 'repeat_same_observation',
+                  summary: `尝试第 ${decisionCount} 个替代命令`,
+                  action: 'tool',
+                  tool_call: {
+                      tool: 'exec',
+                      title: `读取相同输出 ${decisionCount}`,
+                      args: {
+                          command: `powershell -NoProfile -Command "Write-Output unchanged # attempt-${decisionCount}"`
+                      }
+                  }
+              }
+            : {
+                  mode: 'task',
+                  intent: 'repeat_same_observation',
+                  summary: '未触发停滞检测',
+                  action: 'final',
+                  final_answer: '执行了五种没有进展的命令。'
+              }
+    ));
     const gateway = new AILISGateway({
         port: 0,
         workspaceRoot,
@@ -2860,8 +2872,8 @@ test('TaskAgent stops repeated identical successful observations without restori
 
         assert.equal(result.body.status, 'stalled', JSON.stringify(result.body));
         assert.equal(result.body.taskRunHandoff.reason, 'repeated_identical_observation');
-        assert.equal(result.body.steps.length, 4);
-        assert.equal(llmServer.calls.length, 4);
+        assert.equal(result.body.steps.length, 3);
+        assert.equal(llmServer.calls.length, 3);
     } finally {
         await gateway.stop();
         await llmServer.close();
