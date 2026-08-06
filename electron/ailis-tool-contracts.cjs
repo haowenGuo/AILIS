@@ -1169,31 +1169,6 @@ const TOOL_CONTRACTS = Object.freeze({
             additionalProperties: false
         })
     }),
-    task_goal: Object.freeze({
-        id: 'task_goal',
-        version: CONTRACT_VERSION,
-        mutates: true,
-        risk: 'low',
-        approval: 'never',
-        experience: TOOL_EXPERIENCE.task_handoff,
-        returns: STANDARD_TOOL_RETURN_SCHEMA,
-        errors: defaultErrors(['thread_not_found', 'stale_turn', 'goal_conflict', 'goal_not_found', 'invalid_goal']),
-        schema: makeObjectSchema({
-            required: ['action'],
-            properties: {
-                action: stringSchema({ enum: ['get', 'set', 'complete', 'clear'] }),
-                objective: stringSchema({ minLength: 1, maxLength: 4000 }),
-                expected_goal_id: stringSchema({ minLength: 1 }),
-                reason: stringSchema({ maxLength: 1000 })
-            },
-            additionalProperties: false
-        }),
-        customValidate(args = {}) {
-            return normalizeAction(args.action) === 'set' && !normalizeString(args.objective)
-                ? ['task_goal.set requires objective']
-                : [];
-        }
-    }),
     task_results: Object.freeze({
         id: 'task_results',
         version: CONTRACT_VERSION,

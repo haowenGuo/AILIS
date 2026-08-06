@@ -108,6 +108,7 @@ const ARTIFACT_OBSERVATION_ROW_WINDOW_TEXT_CHARS = 8000;
 const MAX_MCP_TOOL_DESCRIPTION_CHARS = 900;
 const DEFAULT_AGENT_LOOP_STEPS = 30;
 const MAX_AGENT_LOOP_STEPS = 30;
+const TASK_AGENT_MAX_MODEL_ROUNDS = 9;
 const TASK_AGENT_FINALIZATION_CONTEXT_CHARS = 18000;
 const PERSONA_SUBAGENT_FINALIZATION_CONTEXT_CHARS = 24000;
 const DEFAULT_PENDING_PLAN_TTL_MS = 30 * 60 * 1000;
@@ -148,13 +149,13 @@ const AILIS_SYSTEM_PROMPT = `你是可爱的虚拟助手，名字固定为AILIS�
 标准动作目录：
 ${AILIS_CHARACTER_ACTION_PROMPT}`;
 
-const AILIS_TASK_AGENT_SYSTEM_PROMPT = `You are a coding agent running in AILIS, a desktop agentic assistant. You are expected to be precise, autonomous, and helpful.
+const AILIS_TASK_AGENT_SYSTEM_PROMPT = `You are a coding agent running in AILIS, a desktop agentic assistant. You are expected to be precise, safe, and helpful.
 
 Your capabilities:
 
 - Receive user prompts and other context provided by the harness, such as files in the workspace.
 - Communicate with the user by streaming thinking & responses, and by making & updating plans.
-- Emit function calls to run terminal commands and apply patches.
+- Emit function calls to run terminal commands and apply patches. Depending on how this specific run is configured, you can request that these function calls be escalated to the user for approval before running.
 
 Within this context, AILIS TaskAgent follows the task-execution behavior of a modern coding agent.
 
@@ -1716,21 +1717,9 @@ function buildAgentTaskState({
     const failedSteps = (Array.isArray(stepResults) ? stepResults : [])
         .filter((stepResult) => stepResult?.response?.ok === false);
     const research = buildResearchProgressState(stepResults, requestContext);
-    const threadId = normalizeText(requestContext.taskAgentThreadId || requestContext.task_agent_thread_id);
-    const turnId = normalizeText(requestContext.taskAgentTurnId || requestContext.task_agent_turn_id);
     return {
         schema: 'ailis.agent_task_state.v1',
         runId,
-        ...(threadId ? {
-            thread_id: threadId,
-            turn_id: turnId,
-            active_goal: requestContext.taskAgentActiveGoal || requestContext.task_agent_active_goal || null,
-            current_request: normalizeText(
-                requestContext.currentTaskRequest ||
-                requestContext.current_task_request ||
-                requestContext.currentUserMessage
-            )
-        } : {}),
         currentPlan: currentPlan || null,
         constraints: Array.isArray(constraints) ? constraints.slice(-24) : [],
         unresolvedFields: collectAgentUnresolvedFields(stepResults, latestDecision),
@@ -1743,22 +1732,6 @@ function buildAgentTaskState({
         },
         ...(research ? { research } : {})
     };
-}
-
-function resolveTaskAgentActiveGoal(stepResults = [], requestContext = {}) {
-    let activeGoal = requestContext.taskAgentActiveGoal || requestContext.task_agent_active_goal || null;
-    for (const stepResult of Array.isArray(stepResults) ? stepResults : []) {
-        if (normalizeText(stepResult?.tool) !== 'task_goal' || stepResult?.response?.ok !== true) {
-            continue;
-        }
-        const details = getToolResultDetails(stepResult);
-        if (Object.hasOwn(details, 'active_goal')) {
-            activeGoal = details.active_goal && typeof details.active_goal === 'object'
-                ? details.active_goal
-                : null;
-        }
-    }
-    return activeGoal;
 }
 
 function normalizeEvidenceBoolean(value, fallback = false) {
@@ -4590,36 +4563,14 @@ function toolProgressFingerprint(stepResult = {}) {
         stepResult?.response?.result?.details?.output_id ||
         stepResult?.response?.details?.outputId
     );
-    const repeatedDiscoveryCall = tool === 'tool_search';
     return JSON.stringify({
         tool,
         target: target?.key || '',
         args: target ? null : sanitizeToolArgsForPrompt(args),
         ok: stepResult?.response?.ok === true,
         status: normalizeText(stepResult?.response?.status),
-        evidenceRefs: repeatedDiscoveryCall ? [] : evidenceRefs,
-        outputId: repeatedDiscoveryCall ? '' : outputId
-    });
-}
-
-function toolObservationFingerprint(stepResult = {}) {
-    const response = stepResult?.response || {};
-    const rawObservation = [
-        normalizeText(response.error),
-        extractToolResultText(response.result)
-    ].filter(Boolean).join('\n');
-    if (!rawObservation) {
-        return '';
-    }
-    const normalizedObservation = rawObservation
-        .replace(/\boutputId\s*[=:]\s*["']?[^\s,"'}]+/gi, 'outputId=<volatile>')
-        .replace(/\s+/g, ' ')
-        .trim()
-        .slice(0, 6000);
-    return JSON.stringify({
-        ok: response.ok === true,
-        status: normalizeText(response.status),
-        observation: normalizedObservation
+        evidenceRefs,
+        outputId
     });
 }
 
@@ -4627,23 +4578,8 @@ function detectAgentNoProgress(stepResults = [], requestContext = {}) {
     if (requestContext.disableNoProgressFuse === true) {
         return '';
     }
-    const allStepResults = Array.isArray(stepResults) ? stepResults : [];
-    const observationWindowSize = Math.max(
-        3,
-        Math.min(Number(requestContext.noProgressObservationWindow || 3), 8)
-    );
-    const recentObservations = allStepResults
-        .slice(-observationWindowSize)
-        .map(toolObservationFingerprint);
-    if (
-        recentObservations.length === observationWindowSize &&
-        recentObservations.every(Boolean) &&
-        new Set(recentObservations).size === 1
-    ) {
-        return 'repeated_identical_observation';
-    }
     const windowSize = Math.max(3, Math.min(Number(requestContext.noProgressWindow || 4), 8));
-    const recent = allStepResults.slice(-windowSize);
+    const recent = (Array.isArray(stepResults) ? stepResults : []).slice(-windowSize);
     if (recent.length < windowSize) {
         return '';
     }
@@ -5736,7 +5672,7 @@ function assessAgentCompletionEvidence({
         const toolId = canonicalDirectToolId(stepResult?.tool);
         return Boolean(toolId) &&
             !isCollaborationTool(toolId) &&
-            !['tool_search', 'update_plan', 'task_goal'].includes(toolId);
+            !['tool_search', 'update_plan'].includes(toolId);
     });
     const successfulWorkSteps = workSteps.filter((stepResult) => stepResult?.response?.ok === true);
     if (!successfulWorkSteps.length) {
@@ -6670,9 +6606,6 @@ function buildAgentDirectToolSpecs(
         return [];
     }
     if (isPersonaOrchestratorRole(resolveAgentRuntimeRole({}, requestContext))) {
-        if (requestContext.taskAgentOwnsExecution === true || requestContext.personaTaskResultRender === true) {
-            return [];
-        }
         const handoffAlreadyAttempted = stepResults.some((stepResult) =>
             canonicalDirectToolId(stepResult?.tool) === PERSONA_HANDOFF_TOOL_ID
         );
@@ -6687,14 +6620,10 @@ function buildAgentDirectToolSpecs(
     const exposeFinalAnswer = exactAnswerMode && !suppressFinalAnswer;
     const modelVisibleSpecs = gateway?.gatewayToolRuntimeRegistry?.modelVisibleSpecs?.() || [];
     const suppressedCoreTools = collectTemporarilySuppressedCoreDirectTools(stepResults, requestContext);
-    const hasPersistentTaskAgentSession = Boolean(
-        normalizeText(requestContext.taskAgentThreadId || requestContext.task_agent_thread_id)
-    );
     for (const spec of modelVisibleSpecs) {
         const toolId = canonicalDirectToolId(spec.name || spec.function?.name);
         if (
             toolId === PERSONA_HANDOFF_TOOL_ID ||
-            (toolId === 'task_goal' && !hasPersistentTaskAgentSession) ||
             LEGACY_COLLABORATION_TOOL_IDS.includes(toolId) ||
             suppressedCoreTools.has(toolId)
         ) {
@@ -8758,7 +8687,6 @@ function buildLlmAgentDirectToolPrompt({
     message,
     originalUserGoal = '',
     messageHistory = [],
-    turnInputHistory = [],
     events = [],
     stepResults = [],
     contextManager = null,
@@ -8784,36 +8712,21 @@ function buildLlmAgentDirectToolPrompt({
     requireTaskExecution = false,
     requireExecutionEvidence = false,
     safetyFinalizationReason = '',
-    unrestrictedToolExecution = false,
-    taskAgentOwnsExecution = false,
-    personaTaskResultRender = false,
     ephemeralDeveloperMessage = '',
     suppressCurrentUserMessage = false
 }) {
     const activePromptProfile = promptProfile || resolveAgentPromptProfile();
     const taskAgentMode = normalizeText(contextMode).toLowerCase() === 'task_agent';
-    const persistentTaskAgentSession = taskAgentMode && Boolean(
-        normalizeText(taskState?.thread_id || taskState?.threadId)
-    );
     const activeModelImageAttachments = taskAgentMode
         ? (Array.isArray(modelImageAttachments) ? modelImageAttachments : [])
         : [];
-    const effectiveGoal = taskAgentMode
-        ? persistentTaskAgentSession
-            ? normalizeText(taskState?.active_goal?.objective)
-            : normalizeText(originalUserGoal, message)
+    const effectiveOriginalGoal = taskAgentMode
+        ? normalizeText(originalUserGoal, message)
         : normalizeText(message);
     const inheritanceMode = normalizeText(taskAgentInheritanceMode, 'clean').toLowerCase();
-    const modelMessageHistory = taskAgentMode && inheritanceMode === 'clean'
-        ? (persistentTaskAgentSession && Array.isArray(turnInputHistory)
-            ? turnInputHistory.map((value) => ({ role: 'user', content: normalizeText(value) })).filter((item) => item.content)
-            : [])
-        : messageHistory;
+    const modelMessageHistory = taskAgentMode && inheritanceMode === 'clean' ? [] : messageHistory;
     const capabilityCatalog = null;
     const availableTools = Array.isArray(tools) ? tools : [];
-    const hasTaskGoalTool = availableTools.some((tool) =>
-        canonicalDirectToolId(tool?.name || tool?.function?.name) === 'task_goal'
-    );
     const toolSemanticText = (tool) => [
         normalizeText(tool?.name || tool?.function?.name),
         normalizeText(tool?.description || tool?.function?.description)
@@ -8835,27 +8748,14 @@ function buildLlmAgentDirectToolPrompt({
         'You are the only user-facing AILIS persona. Keep ordinary conversation natural and answer it directly; do not let task-execution instructions or internal terminology enter your personality, relationship memory, or visible reply.',
         'The runtime_environment object is the authoritative host clock. Use its current_date, current_time, timezone, and utc_offset instead of assuming the training-data date.',
         'For facts that may have changed, use fresh evidence already present in the conversation or verify them through TaskAgent. Do not present pretrained knowledge as current fact when freshness matters.',
-        taskAgentOwnsExecution
-            ? 'The system TaskAgent independently receives every user turn and owns all execution decisions. You are the dialogue output renderer: answer ordinary conversation now, or render the authoritative TaskResult supplied by the runtime. Never promise future work and never attempt to transfer or schedule a task.'
-            : 'When the user asks for concrete task execution that cannot be answered safely from the visible conversation, call handoff_task exactly once. The Harness transfers the immutable current user request; do not restate, rewrite, expand, or plan the task in tool arguments.',
-        !taskAgentOwnsExecution
-            ? 'When the latest user message continues, corrects, or redirects previously executed work, treat it as a concrete execution request and call handoff_task. The persistent TaskAgent Session owns the relevant Turn, Goal, and execution history; do not reconstruct that lifecycle inside Persona.'
-            : '',
-        !taskAgentOwnsExecution
-            ? 'When calling handoff_task, emit only the native function call in that model response. Do not include assistant text alongside the tool call; public task progress is delivered separately by the Harness event channel.'
-            : '',
-        requireTaskExecution && !taskAgentOwnsExecution
+        'When the user asks for concrete task execution that cannot be answered safely from the visible conversation, call handoff_task exactly once. The Harness transfers the immutable current user request; do not restate, rewrite, expand, or plan the task in tool arguments.',
+        requireTaskExecution
             ? 'This turn has an explicit task-execution contract. Call handoff_task exactly once before producing any answer; do not answer the task directly from model memory or arithmetic.'
             : '',
-        exactAnswerMode && !taskAgentOwnsExecution
+        exactAnswerMode
             ? 'In exact-answer mode, arithmetic, multi-step logic, optimization, best/maximum/minimum/guaranteed claims, source lookup, and cross-record identity are concrete verification tasks: call handoff_task instead of answering them from intuition. Answer directly only when the requested value is explicitly established in the visible conversation and needs no new calculation or verification.'
             : '',
-        !taskAgentOwnsExecution
-            ? 'handoff_task blocks while the system Harness runs or resumes the single TaskAgent. You do not create, wait for, resume, list, or close agents. After the tool returns, render its TaskResult packet instead of calling another orchestration tool.'
-            : '',
-        personaTaskResultRender
-            ? 'This is a render-only response. The ephemeral developer message contains the authoritative TaskResult. Return its result to the user in AILIS voice, preserving facts, uncertainty, failure state, sources, and artifacts. Do not do more task work, call tools, or claim anything absent from that packet or the visible conversation.'
-            : '',
+        'handoff_task blocks while the system Harness runs or resumes the single TaskAgent. You do not create, wait for, resume, list, or close agents. After the tool returns, render its TaskResult packet instead of calling another orchestration tool.',
         'The TaskResult packet is the factual boundary. You may rewrite tone and presentation, but you must not add a name, number, quote, link, claim, or conclusion absent from final_answer, partial_answer, source_refs, or the visible conversation. If status is incomplete, explain the concrete unresolved field naturally instead of silently starting another execution.',
         'Never mention TaskAgent, subagent, worker, handoff, capsule, or internal orchestration to the user.',
         'Only call tools present in the current tools array. Do not mention tool schemas, runtime state, prompt rules, or orchestration details in an ordinary conversational reply.'
@@ -8863,19 +8763,9 @@ function buildLlmAgentDirectToolPrompt({
     const taskAgentRuntimeInstructions = [
         'The model-visible protocol follows the OpenAI Responses object model used by modern coding agents. The request has instructions, input, tools, tool_choice, parallel_tool_calls, and reasoning controls. The input is an ordered list of ResponseItem objects such as message, function_call, function_call_output, tool_search_call, and tool_search_output.',
         responseProtocolInstruction,
-        unrestrictedToolExecution
-            ? 'This TaskAgent run has unrestricted direct tool execution. Call available tools immediately when they advance the task. There is no approval, confirmation, safety-review, or human-in-the-loop stage; never ask the user to approve a tool call.'
-            : '',
         'Use native tool calls when work requires files, artifacts, search, shell/code, APIs, or verification. Otherwise answer with an assistant message.',
-        persistentTaskAgentSession
-            ? 'The persistent TaskAgent Session contains an ordered history of Turns. task_state.current_request is authoritative for the active Turn. task_state.active_goal is optional durable state for a long-running objective; it is not Session identity and it never overrides the latest user input.'
-            : 'task_state.current_request / task_state.delegated_task is the current user request for this turn. task_state.original_user_goal is durable thread context for continuity, not a reason to ignore the current request; when the user continues, corrects, or redirects the task, preserve useful prior artifacts/checkpoints while making the current request the active objective.',
-        persistentTaskAgentSession && hasTaskGoalTool
-            ? 'The TaskAgent model owns Goal semantics. Use task_goal only when an objective must survive across completed Turns: set, replace, complete, or clear it inside the normal execution loop. Do not create a Goal for an ordinary self-contained Turn that can finish now. Do not use regex-like keyword heuristics and do not make a separate classification pass.'
-            : '',
-        persistentTaskAgentSession
-            ? 'A Session checkpoint is history, not an instruction to repeat an old task. Reuse relevant evidence and artifacts, but treat completed Turn commands and stale tool errors as historical observations unless the current Turn makes them relevant.'
-            : '',
+        `The runtime allows at most ${Math.max(1, maxSteps - 1)} work-tool rounds for this TaskAgent, followed by one tool-free finalization within the ${maxSteps}-round total budget. Use parallel tool calls for independent evidence and return the best supported result within this budget.`,
+        'task_state.current_request / task_state.delegated_task is the current user request for this turn. task_state.original_user_goal is durable thread context for continuity, not a reason to ignore the current request; when the user continues, corrects, or redirects the task, preserve useful prior artifacts/checkpoints while making the current request the active objective.',
         'Tool call outputs from previous turns appear as function_call_output/tool_search_output items paired with their call_id. Use recent, relevant outputs as observations, but do not keep rereading stale exploration results once you have enough information to code, verify, or answer.',
         'Answer directly once the available evidence supports a reasonable answer. Use another tool only when you can name the specific missing field or uncertainty that blocks the answer. Do not repeat an identical tool call unless the new arguments materially change the observation.',
         'A rejected native tool call is an authoritative schema observation. Never repeat the same rejected tool name and arguments. Read the required fields and visible types from the rejection, then either submit materially corrected complete arguments or call a prerequisite/alternate tool that can produce the missing values.',
@@ -8939,7 +8829,7 @@ function buildLlmAgentDirectToolPrompt({
             memoryContext,
             fileAttachments: getAttachedFilesPromptObject(fileAttachments),
             modelImageAttachments: activeModelImageAttachments,
-            runtimeEnvironment: persistentTaskAgentSession ? null : runtimeEnvironment,
+            runtimeEnvironment,
             capabilityCatalog,
             externalToolExposure: null,
             toolOutputChars,
@@ -8952,7 +8842,7 @@ function buildLlmAgentDirectToolPrompt({
     );
     const taskContextState = taskAgentMode ? {
         ...(taskState && typeof taskState === 'object' ? taskState : {}),
-        ...(!persistentTaskAgentSession ? { original_user_goal: effectiveGoal } : {}),
+        original_user_goal: effectiveOriginalGoal,
         current_request: normalizeText(message),
         delegated_task: normalizeText(message)
     } : taskState;
@@ -8965,12 +8855,8 @@ function buildLlmAgentDirectToolPrompt({
     const contextPackageOptions = {
         instructions,
         staticPrefix: instructions,
-        contextMode: persistentTaskAgentSession
-            ? 'task_agent_session'
-            : taskAgentMode
-                ? 'task_agent'
-                : 'persona',
-        goal: effectiveGoal,
+        contextMode: taskAgentMode ? 'task_agent' : 'persona',
+        goal: effectiveOriginalGoal,
         runtimeEnvironment,
         taskState: taskContextState,
         constraints,
@@ -8988,20 +8874,9 @@ function buildLlmAgentDirectToolPrompt({
         semanticCompaction = activeContextManager.semanticCompact(contextPackageOptions);
         contextPackage = semanticCompaction.packageAfter;
     }
-    const taskSessionStateItem = persistentTaskAgentSession
-        ? responseMessage('developer', [
-              '<task_agent_session_state>',
-              JSON.stringify({
-                  runtime_environment: runtimeEnvironment || null,
-                  task_state: taskContextState
-              }),
-              '</task_agent_session_state>'
-          ].join('\n'))
-        : null;
     const ephemeralDeveloperItem = responseMessage('developer', ephemeralDeveloperMessage);
     const input = [
         ...contextPackage.recentResponseItems,
-        ...(taskSessionStateItem ? [taskSessionStateItem] : []),
         ...(ephemeralDeveloperItem ? [ephemeralDeveloperItem] : [])
     ];
     const prompt = Prompt.create({
@@ -10012,7 +9887,6 @@ class AILISAgentRunner {
             runId: id,
             controller,
             signal: controller.signal,
-            acceptingInput: record.acceptingInput ?? existing.acceptingInput ?? true,
             interruptRequested: existing.interruptRequested === true || controller.signal.aborted,
             interruptReason: existing.interruptReason || '',
             interruptedAt: existing.interruptedAt || null
@@ -10024,7 +9898,7 @@ class AILISAgentRunner {
     enqueueRunInput({ runId = '', sessionId = '', message = '' } = {}) {
         const record = this.findActiveRun({ runId, sessionId });
         const text = normalizeText(message);
-        if (!record || record.acceptingInput === false || !text) {
+        if (!record || !text) {
             return false;
         }
         record.pendingInputs = Array.isArray(record.pendingInputs) ? record.pendingInputs : [];
@@ -10037,17 +9911,6 @@ class AILISAgentRunner {
             record.pendingInputs = record.pendingInputs.slice(-32);
         }
         this.activeRuns.set(record.runId, record);
-        return true;
-    }
-
-    setRunInputAcceptance(runId = '', acceptingInput = true) {
-        const id = normalizeText(runId);
-        const record = this.activeRuns.get(id);
-        if (!record) {
-            return false;
-        }
-        record.acceptingInput = acceptingInput === true;
-        this.activeRuns.set(id, record);
         return true;
     }
 
@@ -11201,45 +11064,19 @@ class AILISAgentRunner {
         const agentRuntimeRole = resolveAgentRuntimeRole(request, requestContext);
         const requireTaskExecution = isTaskExecutionRequired(request, requestContext);
         const requireExecutionEvidence = isExecutionEvidenceRequired(request, requestContext);
-        const taskAgentNaturalTermination = isTaskAgentRole(agentRuntimeRole);
         const requestedMaxSteps = Number(request.maxAgentSteps || requestContext.maxAgentSteps || DEFAULT_AGENT_LOOP_STEPS);
         const boundedMaxSteps = Math.max(1, Math.min(Number.isFinite(requestedMaxSteps) ? requestedMaxSteps : DEFAULT_AGENT_LOOP_STEPS, MAX_AGENT_LOOP_STEPS));
-        let maxSteps = taskAgentNaturalTermination ? 0 : boundedMaxSteps;
-        const baseFinalizationIteration = taskAgentNaturalTermination
-            ? Number.POSITIVE_INFINITY
-            : Math.max(0, maxSteps - 1);
+        let maxSteps = isTaskAgentRole(agentRuntimeRole)
+            ? Math.max(2, Math.min(boundedMaxSteps, TASK_AGENT_MAX_MODEL_ROUNDS))
+            : boundedMaxSteps;
+        const baseFinalizationIteration = Math.max(0, maxSteps - 1);
         let finalizationIteration = baseFinalizationIteration;
         const events = initialEvents.slice();
         const stepResults = initialStepResults.slice();
-        let currentTurnRequest = normalizeText(
-            requestContext.currentTaskRequest || requestContext.current_task_request,
-            message
-        );
-        const turnInputs = [currentTurnRequest];
         let modelInputContextManager = restoreModelInputContextManagerFromCheckpoint(initialContextManagerCheckpoint);
         if (modelInputContextManager) {
-            appendUserInputToContextManager(modelInputContextManager, currentTurnRequest);
+            appendUserInputToContextManager(modelInputContextManager, message);
         }
-        const receivePendingTurnInputs = (iteration, phase = 'before_round') => {
-            const pendingInputs = this.drainRunInputs(runId);
-            for (const pendingInput of pendingInputs) {
-                if (modelInputContextManager) {
-                    appendUserInputToContextManager(modelInputContextManager, pendingInput.message);
-                }
-                currentTurnRequest = normalizeText(pendingInput.message, currentTurnRequest);
-                turnInputs.push(currentTurnRequest);
-                requestContext.currentTaskRequest = currentTurnRequest;
-                requestContext.current_task_request = currentTurnRequest;
-                events.push({
-                    type: 'user_input',
-                    status: 'received',
-                    iteration,
-                    phase,
-                    message: pendingInput.message
-                });
-            }
-            return pendingInputs.length;
-        };
         const contextManagerCheckpoint = () =>
             modelInputContextManager && typeof modelInputContextManager.toCheckpoint === 'function'
                 ? modelInputContextManager.toCheckpoint()
@@ -11266,7 +11103,6 @@ class AILISAgentRunner {
         let latestDecision = null;
         let cumulativeInputTokens = 0;
         let safetyFinalizationAttempted = false;
-        let loopStopReason = 'maximum_tool_rounds';
         let exactAnswerAuditRepairInstruction = '';
         const exactAnswerAuditRepairWarningsAttempted = new Set();
         let exactAnswerAuditRecoveryToolCallsRemaining = 0;
@@ -11289,10 +11125,7 @@ class AILISAgentRunner {
             settings.maxCumulativeInputTokens
         ], initialContextWindow.tokens * 4);
         const pauseAfterRound = async ({ iteration, reason = 'round_completed', decision = null, step = null } = {}) => {
-            if (
-                !debugBreakAfterRound ||
-                (!taskAgentNaturalTermination && iteration + 1 >= maxSteps)
-            ) {
+            if (!debugBreakAfterRound || iteration + 1 >= maxSteps) {
                 return null;
             }
             const debugSession = this.storePendingAgentDebugSession({
@@ -11346,11 +11179,7 @@ class AILISAgentRunner {
             }, { reason });
         };
 
-        for (
-            let iteration = startIteration;
-            taskAgentNaturalTermination || iteration <= finalizationIteration;
-            iteration += 1
-        ) {
+        for (let iteration = startIteration; iteration <= finalizationIteration; iteration += 1) {
             const interruptedBeforeRound = await maybeFinishInterruptedRun(`before_round_${iteration}`);
             if (interruptedBeforeRound) {
                 return interruptedBeforeRound;
@@ -11396,7 +11225,7 @@ class AILISAgentRunner {
             const noProgressReason =
                 detectInvalidDecisionNoProgress(invalidDecisionHistory, requestContext) ||
                 detectAgentNoProgress(stepResults, requestContext);
-            const safetyFinalizationReason = !taskAgentNaturalTermination && iteration >= finalizationIteration
+            const safetyFinalizationReason = iteration >= finalizationIteration
                 ? 'maximum_tool_rounds'
                 : Date.now() - startedAt >= maxLoopDurationMs
                     ? 'time_budget'
@@ -11404,7 +11233,6 @@ class AILISAgentRunner {
                         ? 'cumulative_input_budget'
                         : noProgressReason;
             if (safetyFinalizationReason && safetyFinalizationAttempted) {
-                loopStopReason = safetyFinalizationReason;
                 break;
             }
             if (safetyFinalizationReason) {
@@ -11418,13 +11246,23 @@ class AILISAgentRunner {
                     elapsedMs: Date.now() - startedAt
                 });
             }
-            receivePendingTurnInputs(iteration);
+            if (modelInputContextManager) {
+                for (const pendingInput of this.drainRunInputs(runId)) {
+                    appendUserInputToContextManager(modelInputContextManager, pendingInput.message);
+                    events.push({
+                        type: 'user_input',
+                        status: 'received',
+                        iteration,
+                        message: pendingInput.message
+                    });
+                }
+            }
             const decisionSettings = resolveAgentDecisionSettings(settings, requestContext);
             const modelImageAttachments = isTaskAgentRole(agentRuntimeRole)
                 ? buildDirectModelImageAttachments(fileAttachments, decisionSettings)
                 : [];
             const taskCompactPrompt = looksLikeArtifactAnswerQuestion({
-                message: currentTurnRequest,
+                message,
                 fileAttachments
             });
             const decisionTimeoutMs = resolveAgentDecisionTimeoutMs(decisionSettings, {
@@ -11447,7 +11285,7 @@ class AILISAgentRunner {
                 requestContext.includeExternalToolExposureInPrompt !== true
                 ? null
                 : await buildExternalToolExposurePromptObject(this.gateway, {
-                    query: currentTurnRequest,
+                    query: message,
                     limit: requestContext.externalToolExposureLimit ||
                         request.externalToolExposureLimit ||
                         promptProfile.externalToolExposureLimit
@@ -11491,7 +11329,6 @@ class AILISAgentRunner {
                     : []),
                 ...collectAgentUnresolvedFields(stepResults, latestDecision)
             ].map((value) => normalizeText(value)).filter(Boolean))].slice(-24);
-            const activeGoal = resolveTaskAgentActiveGoal(stepResults, requestContext);
             const taskState = buildAgentTaskState({
                 runId,
                 stepResults,
@@ -11500,13 +11337,11 @@ class AILISAgentRunner {
                 constraints,
                 requestContext: {
                     ...requestContext,
-                    currentUserMessage: currentTurnRequest,
-                    taskAgentActiveGoal: activeGoal,
-                    task_agent_active_goal: activeGoal
+                    currentUserMessage: message
                 }
             });
             const evidenceManifest = buildAgentEvidenceArtifactsPromptObject(stepResults, {
-                message: currentTurnRequest,
+                message,
                 exactAnswerMode
             });
             const contextBudgetConfig = buildAgentContextBudgetConfig(
@@ -11517,15 +11352,13 @@ class AILISAgentRunner {
             const turnContext = buildAilisTurnContext({
                 runId,
                 sessionId,
-                message: currentTurnRequest,
+                message,
                 request,
                 requestContext: {
                     ...requestContext,
                     agentRole: agentRuntimeRole,
                     exactAnswerMode,
-                    taskCompactPrompt,
-                    taskAgentActiveGoal: activeGoal,
-                    task_agent_active_goal: activeGoal
+                    taskCompactPrompt
                 },
                 workspaceRoot: this.workspaceRoot,
                 runtimeEnvironment,
@@ -11536,7 +11369,7 @@ class AILISAgentRunner {
                 iteration
             });
             const commonPromptArgs = {
-                message: currentTurnRequest,
+                message,
                 originalUserGoal: normalizeText(
                     requestContext.parentUserGoal ||
                     requestContext.parent_user_goal ||
@@ -11544,7 +11377,6 @@ class AILISAgentRunner {
                     requestContext.original_user_goal
                 ),
                 messageHistory: request.messageHistory,
-                turnInputHistory: turnInputs.slice(0, -1),
                 events,
                 stepResults,
                 contextManager: modelInputContextManager,
@@ -11573,8 +11405,6 @@ class AILISAgentRunner {
                 requireTaskExecution,
                 requireExecutionEvidence,
                 safetyFinalizationReason,
-                taskAgentOwnsExecution: requestContext.taskAgentOwnsExecution === true,
-                personaTaskResultRender: requestContext.personaTaskResultRender === true,
                 ephemeralDeveloperMessage: [
                     normalizeText(
                         request.ephemeralDeveloperMessage ||
@@ -11595,9 +11425,7 @@ class AILISAgentRunner {
                     request.suppressCurrentUserMessage === true ||
                     requestContext.suppressCurrentUserMessage === true,
                 toolSummary: isPersonaOrchestratorRole(agentRuntimeRole)
-                    ? requestContext.taskAgentOwnsExecution === true
-                        ? 'Persona has no execution tools in this turn. TaskAgent independently owns task intake and execution; Persona only renders dialogue and TaskResult packets.'
-                        : 'Persona tool surface: handoff_task transfers the immutable current user request to the system TaskAgent and returns one compact TaskResult packet. The Harness owns lifecycle and internal orchestration remains invisible to the user.'
+                    ? 'Persona tool surface: handoff_task transfers the immutable current user request to the system TaskAgent and returns one compact TaskResult packet. The Harness owns lifecycle and internal orchestration remains invisible to the user.'
                     : directToolSpecs.length
                         ? `Native direct tools exposed: ${directToolSpecs.map((tool) => tool.name).slice(0, 16).join(', ')}${directToolSpecs.length > 16 ? ', ...' : ''}.`
                         : 'No native tools are exposed in this turn; answer directly if possible.'
@@ -11616,8 +11444,6 @@ class AILISAgentRunner {
             });
             const directModelInputPrompt = buildLlmAgentDirectToolPrompt({
                 ...commonPromptArgs,
-                unrestrictedToolExecution:
-                    requestContext.taskAgentPermissionMode === 'unrestricted',
                 parallelToolCalls
             });
             modelInputContextManager = directModelInputPrompt.contextManager || modelInputContextManager;
@@ -11655,7 +11481,7 @@ class AILISAgentRunner {
             const optimizationShadowTelemetry = buildOptimizationShadowTelemetry({
                 flags: optimizationShadowFlags,
                 iteration,
-                message: currentTurnRequest,
+                message,
                 promptBudget,
                 modelInputRequest: {
                     instructions: directModelInputPrompt.instructions,
@@ -11785,8 +11611,13 @@ class AILISAgentRunner {
                 allowFinalizationRetry: !isTaskAgentRole(agentRuntimeRole),
                 nativeToolValidationContext: {
                     enforceEvidenceProvenance: isTaskAgentRole(agentRuntimeRole),
-                    userText: currentTurnRequest,
-                    originalUserGoal: normalizeText(activeGoal?.objective, currentTurnRequest),
+                    userText: message,
+                    originalUserGoal: normalizeText(
+                        requestContext.parentUserGoal ||
+                        requestContext.parent_user_goal ||
+                        requestContext.originalUserGoal ||
+                        requestContext.original_user_goal
+                    ),
                     stepResults
                 }
             });
@@ -11888,16 +11719,6 @@ class AILISAgentRunner {
                 return interruptedAfterDecision;
             }
             if (decision.budgetExhausted === true) {
-                loopStopReason = safetyFinalizationReason || loopStopReason;
-                if (loopStopReason !== 'maximum_tool_rounds') {
-                    decision.intent = `task_agent_${loopStopReason}`;
-                    decision.summary = loopStopReason === 'time_budget'
-                        ? '任务已达到本轮时间预算，执行现场和检查点已经保留。'
-                        : loopStopReason === 'cumulative_input_budget'
-                            ? '任务已达到本轮上下文预算，执行现场和检查点已经保留。'
-                            : '检测到连续重复或无效的工具调用，任务已停止空转并保留检查点。';
-                    decision.blockedReason = decision.summary;
-                }
                 break;
             }
             if (!decision.ok && isTerminalAgentDecisionFailure(decision)) {
@@ -12180,10 +12001,7 @@ class AILISAgentRunner {
             }
 
             if (decision.action === 'final') {
-                if (receivePendingTurnInputs(iteration, 'before_final')) {
-                    continue;
-                }
-                if (legacyAgentMailboxEnabled && isPersonaOrchestratorRole(agentRuntimeRole)) {
+                if (legacyAgentMailboxEnabled && isPersonaOrchestratorRole(agentRuntimeRole) && iteration < finalizationIteration) {
                     const settlement = await this.gateway.runtime?.agent_control?.await_live_children?.({
                         sessionId,
                         agent_path: normalizeText(requestContext.agent_path || requestContext.agentPath, '/root')
@@ -12230,7 +12048,7 @@ class AILISAgentRunner {
                     ? validateExactAnswerSubmission({
                           decision,
                           stepResults,
-                          message: currentTurnRequest,
+                          message,
                           fileAttachments
                       })
                     : { ok: true, submission: null };
@@ -12289,9 +12107,7 @@ class AILISAgentRunner {
                         recoveryToolCalls: exactAnswerAuditRecoveryToolCallsRemaining
                     });
                     safetyFinalizationAttempted = false;
-                    if (!taskAgentNaturalTermination) {
-                        maxSteps = finalizationIteration + 1;
-                    }
+                    maxSteps = finalizationIteration + 1;
                     exactAnswerAuditRepairInstruction = [
                         'Exact-answer soft audit: do not repeat the same unsupported final submission.',
                         exactAnswerAuditRecoveryGap.instruction,
@@ -12333,7 +12149,7 @@ class AILISAgentRunner {
                     reason: completionAssessment.reason,
                     runId,
                     sessionId,
-                    message: currentTurnRequest,
+                    message,
                     startedAt,
                     maxSteps,
                     stepResults,
@@ -12368,7 +12184,7 @@ class AILISAgentRunner {
                     intent: decision.intent,
                     executionRequired: requireTaskExecution || requireExecutionEvidence || stepResults.length > 0,
                     durationMs: Date.now() - startedAt,
-                    message: currentTurnRequest,
+                    message,
                     exactAnswer: authoritativeTaskResult?.exactAnswer || exactAnswerSubmission?.answer || '',
                     finalAnswer: authoritativeTaskResult?.finalAnswer || exactAnswerSubmission?.answer || decision.finalAnswer || '',
                     exactAnswerSubmission,
@@ -12405,10 +12221,6 @@ class AILISAgentRunner {
                               ttsStyle: normalizeText(decision.personaOutput?.ttsStyle)
                           }
                 };
-                if (receivePendingTurnInputs(iteration, 'before_final_commit')) {
-                    continue;
-                }
-                this.setRunInputAcceptance(runId, false);
                 return await finishRuntimeRun(
                     result,
                     { source: 'agent_final' }
@@ -12416,13 +12228,10 @@ class AILISAgentRunner {
             }
 
             if (decision.action === 'blocked') {
-                if (receivePendingTurnInputs(iteration, 'before_blocked')) {
-                    continue;
-                }
                 const displayText = stripControlTags(decision.blockedReason || decision.finalAnswer || '我判断现在继续下去不太稳，先停住，等你给我补一点信息。');
                 const failureSurface = renderLatestToolFailureSurface({
                     stepResults,
-                    message: currentTurnRequest,
+                    message,
                     intent: decision.intent,
                     fallbackText: displayText
                 });
@@ -12432,7 +12241,7 @@ class AILISAgentRunner {
                     reason: decision.blockedReason || decision.summary || 'blocked',
                     runId,
                     sessionId,
-                    message: currentTurnRequest,
+                    message,
                     startedAt,
                     maxSteps,
                     stepResults,
@@ -12441,7 +12250,6 @@ class AILISAgentRunner {
                     partialAnswer: decision.summary || '',
                     contextManagerCheckpoint: contextManagerCheckpoint('blocked', iteration)
                 });
-                this.setRunInputAcceptance(runId, false);
                 return await finishRuntimeRun(attachPersonaSurface({
                     ok: false,
                     runId,
@@ -12454,7 +12262,7 @@ class AILISAgentRunner {
                     intent: decision.intent,
                     executionRequired: stepResults.length > 0,
                     durationMs: Date.now() - startedAt,
-                    message: currentTurnRequest,
+                    message,
                     displayText: visibleText,
                     speechText: visibleText.replace(/\n/g, ' '),
                     plan: [],
@@ -12502,9 +12310,7 @@ class AILISAgentRunner {
                         auditIteration: iteration,
                         recoveryToolCalls: exactAnswerAuditRecoveryToolCallsRemaining
                     });
-                    if (!taskAgentNaturalTermination) {
-                        maxSteps = finalizationIteration + 1;
-                    }
+                    maxSteps = finalizationIteration + 1;
                 } else {
                     exactAnswerAuditRecoveryToolCallsRemaining = Math.max(
                         0,
@@ -12598,7 +12404,7 @@ class AILISAgentRunner {
                             sessionId
                         ),
                         agent_path: normalizeText(requestContext.agent_path || requestContext.agentPath, '/root'),
-                        currentUserMessage: currentTurnRequest
+                        currentUserMessage: message
                     };
                     const parallelStepResults = await Promise.all(parallelCandidateSteps.map((candidateStep) => this.executeAgentToolStep({
                         runId,
@@ -12962,7 +12768,7 @@ class AILISAgentRunner {
                         sessionId
                     ),
                     agent_path: normalizeText(requestContext.agent_path || requestContext.agentPath, '/root'),
-                    currentUserMessage: currentTurnRequest,
+                    currentUserMessage: message,
                     ...(canonicalDirectToolId(step.tool) === 'spawn_agent'
                         ? {
                               forked_context_checkpoint: build_forked_context_checkpoint(
@@ -13125,14 +12931,9 @@ class AILISAgentRunner {
 
         const fallbackExactAnswerSubmission = latestExactAnswerCandidate?.submission || null;
         const fallbackExactAnswer = normalizeText(fallbackExactAnswerSubmission?.answer);
-        const fallbackStatus = loopStopReason === 'maximum_tool_rounds'
-            ? 'max_steps_reached'
-            : loopStopReason === 'time_budget'
-                ? 'timeout'
-                : 'stalled';
         const taskRunHandoff = buildTaskRunHandoffPackage({
-            status: fallbackStatus,
-            reason: loopStopReason,
+            status: 'max_loop',
+            reason: 'max_steps_reached',
             runId,
             sessionId,
             message,
@@ -13144,7 +12945,7 @@ class AILISAgentRunner {
             exactAnswer: fallbackExactAnswer,
             finalAnswer: fallbackExactAnswer,
             partialAnswer: fallbackExactAnswer,
-            contextManagerCheckpoint: contextManagerCheckpoint(fallbackStatus, stepResults.length)
+            contextManagerCheckpoint: contextManagerCheckpoint('max_steps_reached', stepResults.length)
         });
         const displayText = taskRunHandoff.userVisibleSummary;
         const fallbackSurface = renderMaxStepsSurface({
@@ -13157,16 +12958,14 @@ class AILISAgentRunner {
             task_state: 'blocked',
             approval_state: 'none',
             evidence_state: stepResults.length > 0 ? 'present' : 'missing',
-            error_code: fallbackStatus,
+            error_code: 'max_steps_reached',
             relationship_stage: 'trusted',
             emotion_hint: 'neutral',
             next_action: taskRunHandoff.nextStep?.recommendation || fallbackSurface.nextAction || '',
             text: displayText || fallbackSurface.text,
             bubble_text: '我整理好执行现场了。',
             text_is_persona_safe: true,
-            source: fallbackStatus === 'max_steps_reached'
-                ? 'agent_max_steps_handoff'
-                : 'agent_safety_fuse_handoff',
+            source: 'agent_max_steps_handoff',
             experience: {
                 ...(fallbackSurface.experience || {}),
                 userSafePreview: 'task_run_handoff',
@@ -13177,10 +12976,10 @@ class AILISAgentRunner {
             ok: false,
             runId,
             sessionId,
-            status: fallbackStatus,
+            status: 'max_steps_reached',
             mode: 'task',
             planner: 'llm-agentic-executor',
-            intent: latestDecision?.intent || `llm_agent_${fallbackStatus}`,
+            intent: latestDecision?.intent || 'llm_agent_max_steps',
             executionRequired: stepResults.length > 0,
             durationMs: Date.now() - startedAt,
             message,
@@ -13375,27 +13174,7 @@ class AILISAgentRunner {
     }
 
     async runMessage(request = {}) {
-        const suppliedRequestContext = request.context && typeof request.context === 'object' ? request.context : {};
-        const unrestrictedTaskAgent =
-            suppliedRequestContext.taskAgentPermissionMode === 'unrestricted' &&
-            isTaskAgentRole(resolveAgentRuntimeRole(request, suppliedRequestContext));
-        const requestContext = unrestrictedTaskAgent
-            ? {
-                  ...suppliedRequestContext,
-                  permissionProfile: 'danger-full-access',
-                  approvalPolicy: 'never',
-                  confirmationPolicy: 'never',
-                  approved: true,
-                  autoConfirm: false,
-                  requireApprovalForMutations: false,
-                  computerControlEnabled: true,
-                  visionPermissionPolicy: 'auto',
-                  executeExternal: true,
-                  allowOutsideWorkspace: true,
-                  allowComputerWideAccess: true,
-                  allowSystemMutation: true
-              }
-            : suppliedRequestContext;
+        const requestContext = request.context && typeof request.context === 'object' ? request.context : {};
         const explicitRunId = normalizeText(request.runId || requestContext.runId);
         const runId = explicitRunId || randomUUID();
         const startedAt = Date.now();
@@ -13403,16 +13182,12 @@ class AILISAgentRunner {
         const sessionId = normalizeText(request.sessionId || request.sessionKey, 'main');
         const dryRun = request.dryRun === true || requestContext.dryRun === true;
         const explicitDebugSessionId = normalizeText(request.debugSessionId || requestContext.debugSessionId);
-        const explicitPlanId = unrestrictedTaskAgent
-            ? ''
-            : normalizeText(request.confirmPlanId || request.planId || requestContext.confirmPlanId);
-        const explicitApprovalId = unrestrictedTaskAgent
-            ? ''
-            : normalizeText(
-                  request.confirmApprovalId || request.approvalId || requestContext.confirmApprovalId || requestContext.approvalId
-              );
-        const confirmedByMessage = !unrestrictedTaskAgent && isConfirmationMessage(message);
-        const cancelPendingByMessage = !unrestrictedTaskAgent && isCancelMessage(message);
+        const explicitPlanId = normalizeText(request.confirmPlanId || request.planId || requestContext.confirmPlanId);
+        const explicitApprovalId = normalizeText(
+            request.confirmApprovalId || request.approvalId || requestContext.confirmApprovalId || requestContext.approvalId
+        );
+        const confirmedByMessage = isConfirmationMessage(message);
+        const cancelPendingByMessage = isCancelMessage(message);
         const pendingAgentApproval =
             explicitApprovalId
                 ? this.pendingAgentApprovals.get(explicitApprovalId)
@@ -14246,7 +14021,6 @@ module.exports = {
     buildDirectModelImageAttachments,
     assessAgentCompletionEvidence,
     buildInvalidDecisionProgressRecord,
-    detectAgentNoProgress,
     detectInvalidDecisionNoProgress,
     resolveAgentDirectToolChoice,
     resolveMemoryPolicy,
