@@ -1546,6 +1546,7 @@ function buildAgentTaskState({
             thread_id: threadId,
             turn_id: turnId,
             active_goal: requestContext.taskAgentActiveGoal || requestContext.task_agent_active_goal || null,
+            session_ledger: requestContext.sessionLedgerProjection || requestContext.session_ledger_projection || null,
             current_request: normalizeText(
                 requestContext.currentTaskRequest ||
                 requestContext.current_task_request ||
@@ -2895,6 +2896,18 @@ function resolveAgentDirectToolChoice({
     stepResults = [],
     requireToolAction = false
 } = {}) {
+    const routeAvailable = (Array.isArray(directToolSpecs) ? directToolSpecs : [])
+        .some((spec) => canonicalDirectToolId(spec?.name || spec?.function?.name) === TASK_ROUTE_TOOL_NAME);
+    const routeAlreadyDecided = (Array.isArray(stepResults) ? stepResults : [])
+        .some((stepResult) => canonicalDirectToolId(stepResult?.tool) === TASK_ROUTE_TOOL_NAME);
+    if (
+        isTaskAgentRole(agentRuntimeRole) &&
+        requestContext.taskAgentRoutePending === true &&
+        routeAvailable &&
+        !routeAlreadyDecided
+    ) {
+        return { name: TASK_ROUTE_TOOL_NAME, required: true };
+    }
     const handoffAvailable = (Array.isArray(directToolSpecs) ? directToolSpecs : [])
         .some((spec) => canonicalDirectToolId(spec?.name || spec?.function?.name) === PERSONA_HANDOFF_TOOL_ID);
     const alreadyHandedOff = (Array.isArray(stepResults) ? stepResults : [])
@@ -4541,6 +4554,7 @@ function agentStepNeedsConfirmation(step) {
         'web_search',
         'web_research',
         'tool_search',
+        'task_route',
         'handoff_task',
         'output_read',
         'output_tail',
@@ -5710,6 +5724,7 @@ function canonicalDirectToolId(value = '') {
 }
 
 const PERSONA_HANDOFF_TOOL_ID = 'handoff_task';
+const TASK_ROUTE_TOOL_NAME = 'task_route';
 const LEGACY_COLLABORATION_TOOL_IDS = Object.freeze([
     'spawn_agent',
     'followup_task',
@@ -5922,6 +5937,9 @@ function buildAgentDirectToolSpecs(
         return [];
     }
     if (isPersonaOrchestratorRole(resolveAgentRuntimeRole({}, requestContext))) {
+        if (requestContext.taskAgentRoutingOwned === true || requestContext.personaRenderOnly === true) {
+            return [];
+        }
         const handoffAlreadyAttempted = stepResults.some((stepResult) =>
             canonicalDirectToolId(stepResult?.tool) === PERSONA_HANDOFF_TOOL_ID
         );
@@ -5933,6 +5951,13 @@ function buildAgentDirectToolSpecs(
     }
     const specs = [];
     const seen = new Set();
+    const routeAlreadyDecided = stepResults.some((stepResult) =>
+        canonicalDirectToolId(stepResult?.tool) === TASK_ROUTE_TOOL_NAME
+    );
+    if (requestContext.taskAgentRoutePending === true && !routeAlreadyDecided) {
+        const routeSpec = gateway?.gatewayToolRuntimeRegistry?.definition?.(TASK_ROUTE_TOOL_NAME)?.spec;
+        return routeSpec ? [routeSpec] : [];
+    }
     const modelVisibleSpecs = gateway?.gatewayToolRuntimeRegistry?.modelVisibleSpecs?.() || [];
     const suppressedCoreTools = collectTemporarilySuppressedCoreDirectTools(stepResults, requestContext);
     const hasPersistentTaskAgentSession = Boolean(
@@ -5942,6 +5967,7 @@ function buildAgentDirectToolSpecs(
         const toolId = canonicalDirectToolId(spec.name || spec.function?.name);
         if (
             toolId === PERSONA_HANDOFF_TOOL_ID ||
+            toolId === TASK_ROUTE_TOOL_NAME ||
             (toolId === 'task_goal' && !hasPersistentTaskAgentSession) ||
             LEGACY_COLLABORATION_TOOL_IDS.includes(toolId) ||
             suppressedCoreTools.has(toolId)
@@ -6548,6 +6574,9 @@ function buildLlmAgentDirectToolPrompt({
     unresolvedFields = [],
     requireTaskExecution = false,
     unrestrictedToolExecution = false,
+    taskAgentRoutingOwned = false,
+    taskAgentRoutePending = false,
+    personaRenderOnly = false,
     ephemeralDeveloperMessage = '',
     suppressCurrentUserMessage = false
 }) {
@@ -6596,13 +6625,24 @@ function buildLlmAgentDirectToolPrompt({
         'You are the only user-facing AILIS persona. Keep ordinary conversation natural and answer it directly; do not let task-execution instructions or internal terminology enter your personality, relationship memory, or visible reply.',
         'The runtime_environment object is the authoritative host clock. Use its current_date, current_time, timezone, and utc_offset instead of assuming the training-data date.',
         'For facts that may have changed, use current information already present in the conversation or ask TaskAgent to look them up. Do not present pretrained knowledge as current fact when freshness matters.',
-        'When the user asks for concrete task execution that cannot be answered safely from the visible conversation, call handoff_task exactly once. The Harness transfers the immutable current user request; do not restate, rewrite, expand, or plan the task in tool arguments.',
-        'When the latest user message continues, corrects, or redirects previously executed work, treat it as a concrete execution request and call handoff_task. The persistent TaskAgent Session owns the relevant Turn, Goal, and execution history; do not reconstruct that lifecycle inside Persona.',
-        'When calling handoff_task, emit only the native function call in that model response. Do not include assistant text alongside the tool call; public task progress is delivered separately by the Harness event channel.',
-        requireTaskExecution
+        taskAgentRoutingOwned
+            ? 'The persistent TaskAgent independently owns task routing and execution. You never transfer, schedule, resume, or control tasks. Produce only the conversational or render text requested by this turn.'
+            : 'When the user asks for concrete task execution that cannot be answered safely from the visible conversation, call handoff_task exactly once. The Harness transfers the immutable current user request; do not restate, rewrite, expand, or plan the task in tool arguments.',
+        !taskAgentRoutingOwned
+            ? 'When the latest user message continues, corrects, or redirects previously executed work, treat it as a concrete execution request and call handoff_task. The persistent TaskAgent Session owns the relevant Turn, Goal, and execution history; do not reconstruct that lifecycle inside Persona.'
+            : '',
+        !taskAgentRoutingOwned
+            ? 'When calling handoff_task, emit only the native function call in that model response. Do not include assistant text alongside the tool call; public task progress is delivered separately by the Harness event channel.'
+            : '',
+        requireTaskExecution && !taskAgentRoutingOwned
             ? 'This turn has an explicit task-execution contract. Call handoff_task exactly once before producing any answer; do not answer the task directly from model memory or arithmetic.'
             : '',
-        'handoff_task blocks while the system Harness runs or resumes the single TaskAgent. You do not create, wait for, resume, list, or close agents. After the tool returns, render its TaskResult packet instead of calling another orchestration tool.',
+        !taskAgentRoutingOwned
+            ? 'handoff_task blocks while the system Harness runs or resumes the single TaskAgent. You do not create, wait for, resume, list, or close agents. After the tool returns, render its TaskResult packet instead of calling another orchestration tool.'
+            : '',
+        personaRenderOnly
+            ? 'This is a render-only turn. The developer packet is the sole factual authority. Preserve its status, uncertainty, sources, artifacts, and failure state. Do not promise future work, infer progress, or add facts.'
+            : '',
         'The TaskResult packet is the factual boundary. You may rewrite tone and presentation, but you must not add a name, number, quote, link, claim, or conclusion absent from final_answer, partial_answer, source_refs, or the visible conversation. If status is incomplete, explain the concrete unresolved field naturally instead of silently starting another execution.',
         'Never mention TaskAgent, subagent, worker, handoff, capsule, or internal orchestration to the user.',
         'Only call tools present in the current tools array. Do not mention tool schemas, runtime state, prompt rules, or orchestration details in an ordinary conversational reply.'
@@ -6613,10 +6653,16 @@ function buildLlmAgentDirectToolPrompt({
         unrestrictedToolExecution
             ? 'This TaskAgent run has unrestricted direct tool execution. Call available tools immediately when they advance the task. There is no approval, confirmation, safety-review, or human-in-the-loop stage; never ask the user to approve a tool call.'
             : '',
+        taskAgentRoutePending
+            ? 'This is the first decision of a new Turn. Call task_route exactly once with mode=chat only when Persona can fully answer without external work or task execution; otherwise choose mode=execute. Do not summarize or rewrite the request. After execute, continue in this same TaskAgent run.'
+            : '',
         'Use native tool calls when work requires files, artifacts, search, shell/code, APIs, or verification. Otherwise answer with an assistant message.',
         persistentTaskAgentSession
             ? 'The persistent TaskAgent Session contains an ordered history of Turns. task_state.current_request is authoritative for the active Turn. task_state.active_goal is optional durable state for a long-running objective; it is not Session identity and it never overrides the latest user input.'
             : 'task_state.current_request / task_state.delegated_task is the current user request for this turn. task_state.original_user_goal is durable thread context for continuity, not a reason to ignore the current request; when the user continues, corrects, or redirects the task, preserve useful prior artifacts/checkpoints while making the current request the active objective.',
+        persistentTaskAgentSession
+            ? 'task_state.session_ledger is the canonical Session context projection. Apply its authority ordering: the current user Turn outranks the active Goal, unresolved task state, verified results, and completed-Turn history. Entries marked display_only are presentation artifacts and must never become task instructions.'
+            : '',
         persistentTaskAgentSession && hasTaskGoalTool
             ? 'The TaskAgent model owns Goal semantics. Use task_goal only when an objective must survive across completed Turns: set, replace, complete, or clear it inside the normal execution loop. Do not create a Goal for an ordinary self-contained Turn that can finish now. Do not use regex-like keyword heuristics and do not make a separate classification pass.'
             : '',
@@ -7699,7 +7745,12 @@ class AILISAgentRunner {
     }
 
     recordMemoryTurn({ request = {}, result = {}, message = '', sessionId = 'main', source = 'agent' } = {}) {
-        if (request.classifyOnly === true || !this.memoryRuntime?.recordTurn) {
+        if (
+            request.classifyOnly === true ||
+            request?.context?.personaDraft === true ||
+            request?.context?.personaRenderOnly === true ||
+            !this.memoryRuntime?.recordTurn
+        ) {
             return;
         }
         if (resolveMemoryPolicy(request, request?.context || {}) !== 'read_write') {
@@ -8854,6 +8905,9 @@ class AILISAgentRunner {
                 currentPlan,
                 unresolvedFields,
                 requireTaskExecution,
+                taskAgentRoutingOwned: requestContext.taskAgentRoutingOwned === true,
+                taskAgentRoutePending: requestContext.taskAgentRoutePending === true,
+                personaRenderOnly: requestContext.personaRenderOnly === true,
                 ephemeralDeveloperMessage: normalizeText(
                     request.ephemeralDeveloperMessage ||
                     requestContext.ephemeralDeveloperMessage
@@ -8862,7 +8916,9 @@ class AILISAgentRunner {
                     request.suppressCurrentUserMessage === true ||
                     requestContext.suppressCurrentUserMessage === true,
                 toolSummary: isPersonaOrchestratorRole(agentRuntimeRole)
-                    ? 'Persona tool surface: handoff_task transfers the immutable current user request to the system TaskAgent and returns one compact TaskResult packet. The Harness owns lifecycle and internal orchestration remains invisible to the user.'
+                    ? requestContext.taskAgentRoutingOwned === true
+                        ? 'Persona has no task-control tools. TaskAgent owns routing and execution; Persona only produces buffered chat or renders an authoritative TaskEvent/TaskResult packet.'
+                        : 'Persona tool surface: handoff_task transfers the immutable current user request to the system TaskAgent and returns one compact TaskResult packet. The Harness owns lifecycle and internal orchestration remains invisible to the user.'
                     : directToolSpecs.length
                         ? `Native direct tools exposed: ${directToolSpecs.map((tool) => tool.name).slice(0, 16).join(', ')}${directToolSpecs.length > 16 ? ', ...' : ''}.`
                         : 'No native tools are exposed in this turn; answer directly if possible.'
@@ -10199,6 +10255,50 @@ class AILISAgentRunner {
                     preview: toolResultEvent.preview
                 }
             });
+
+            if (canonicalDirectToolId(step.tool) === TASK_ROUTE_TOOL_NAME) {
+                const routeDetails = getToolResultDetails(stepResult);
+                const routeMode = normalizeText(routeDetails.mode || step.args?.mode).toLowerCase();
+                if (stepResult.response?.ok === true && ['chat', 'execute'].includes(routeMode)) {
+                    requestContext.taskAgentRoutePending = false;
+                    events.push({
+                        type: 'task_route',
+                        status: 'completed',
+                        iteration,
+                        mode: routeMode
+                    });
+                    this.gateway.emitGatewayEvent?.('task_agent.route.decided', {
+                        runId,
+                        sessionId,
+                        status: 'completed',
+                        mode: routeMode,
+                        turnId: normalizeText(
+                            requestContext.taskAgentTurnId || requestContext.task_agent_turn_id
+                        )
+                    });
+                    if (routeMode === 'chat') {
+                        return await finishRuntimeRun({
+                            ok: true,
+                            runId,
+                            sessionId,
+                            status: 'completed',
+                            mode: 'task-route',
+                            planner: 'llm-agentic-executor',
+                            intent: 'task_route_chat',
+                            taskRoute: 'chat',
+                            executionRequired: false,
+                            durationMs: Date.now() - startedAt,
+                            message: currentTurnRequest,
+                            displayText: '',
+                            speechText: '',
+                            plan: [],
+                            steps: stepResults,
+                            events
+                        }, { source: 'task_route_chat' });
+                    }
+                    continue;
+                }
+            }
 
             if (
                 isPersonaOrchestratorRole(resolveAgentRuntimeRole({}, requestContext)) &&

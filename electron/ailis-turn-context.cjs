@@ -51,6 +51,8 @@ function buildToolContext(requestContext = {}, fallbackWorkspace = '', sessionId
         'task_agent_thread_id',
         'taskAgentTurnId',
         'task_agent_turn_id',
+        'taskAgentRoutePending',
+        'taskAgentRoutingOwned',
         'parentSessionId',
         'parent_session_id',
         'personaOrchestrator',
