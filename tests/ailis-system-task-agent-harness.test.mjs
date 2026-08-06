@@ -44,6 +44,11 @@ test('Persona handoff contract exposes no TaskAgent lifecycle controls', () => {
     assert.equal(validateToolContract('handoff_task', {}).ok, true);
     assert.equal(validateToolContract('handoff_task', { continuation: 'new' }).ok, false);
 
+    const routeContract = getToolContract('task_route');
+    assert.deepEqual(routeContract.schema.properties.mode.enum, ['chat', 'execute']);
+    assert.equal(validateToolContract('task_route', { mode: 'chat' }).ok, true);
+    assert.equal(validateToolContract('task_route', { mode: 'other' }).ok, false);
+
     const goalContract = getToolContract('task_goal');
     assert.deepEqual(goalContract.schema.properties.action.enum, ['get', 'set', 'complete', 'clear']);
     assert.equal(validateToolContract('task_goal', { action: 'set' }).ok, false);
@@ -51,6 +56,59 @@ test('Persona handoff contract exposes no TaskAgent lifecycle controls', () => {
         action: 'set',
         objective: '完成长期任务'
     }).ok, true);
+});
+
+test('TaskAgent owns the first Turn route and both views share one immutable TurnEnvelope', async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-task-route-ledger-'));
+    const calls = [];
+    const harness = new AILISSystemTaskAgentHarness({
+        rootDir,
+        executeTaskAgent: async (payload) => {
+            calls.push(payload);
+            return {
+                ok: true,
+                status: 'completed',
+                runId: payload.agent.childRunId,
+                taskRoute: 'chat',
+                displayText: '',
+                steps: [{
+                    tool: 'task_route',
+                    args: { mode: 'chat' },
+                    response: { ok: true, status: 'completed' }
+                }]
+            };
+        }
+    });
+    const packet = await harness.dispatchTurn({
+        currentUserMessage: '今天心情怎么样？',
+        sessionId: 'shared-session',
+        turnEnvelope: {
+            userMessage: '今天心情怎么样？',
+            visibleHistory: [
+                { role: 'user', content: '你好' },
+                { role: 'assistant', content: '你好呀' }
+            ]
+        }
+    });
+
+    assert.equal(packet.route, 'chat');
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].context.taskAgentRoutePending, true);
+    assert.equal(calls[0].context.taskAgentRoutingOwned, true);
+    assert.equal(calls[0].context.sessionLedgerProjection.active_turn.request, '今天心情怎么样？');
+    assert.deepEqual(
+        calls[0].context.sessionLedgerProjection.visible_history.map((entry) => entry.authority),
+        ['user_instruction', 'display_only']
+    );
+    const thread = harness.getThread('shared-session');
+    assert.deepEqual(thread.ledger.map((entry) => entry.type), [
+        'user.turn',
+        'task.route',
+        'task.result'
+    ]);
+    harness.recordPersonaOutput('shared-session', packet.turn_id, '今天也很高兴见到你。', 'chat');
+    assert.equal(thread.ledger.at(-1).type, 'persona.output');
+    assert.equal(thread.ledger.at(-1).payload.authority, 'display_only');
 });
 
 test('system TaskAgent handoff preserves the exact request and returns a compact result packet', async () => {

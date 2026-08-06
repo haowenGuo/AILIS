@@ -1631,6 +1631,16 @@ test('AILIS persona exposes only system handoff while TaskAgent keeps execution 
             properties: {}
         }
     };
+    const taskRouteSpec = {
+        name: 'task_route',
+        description: 'Choose chat or execute.',
+        parameters: {
+            type: 'object',
+            required: ['mode'],
+            properties: { mode: { type: 'string', enum: ['chat', 'execute'] } },
+            additionalProperties: false
+        }
+    };
     const collaborationSpecs = Object.fromEntries([
         'spawn_agent',
         'followup_task',
@@ -1656,6 +1666,7 @@ test('AILIS persona exposes only system handoff while TaskAgent keeps execution 
         gatewayToolRuntimeRegistry: {
             modelVisibleSpecs: () => [
                 handoffSpec,
+                taskRouteSpec,
                 collaborationSpecs.spawn_agent,
                 {
                     name: 'read',
@@ -1670,6 +1681,7 @@ test('AILIS persona exposes only system handoff while TaskAgent keeps execution 
             ],
             definition: (toolId) => {
                 if (toolId === 'handoff_task') return { spec: handoffSpec };
+                if (toolId === 'task_route') return { spec: taskRouteSpec };
                 if (collaborationSpecs[toolId]) return { spec: collaborationSpecs[toolId] };
                 return null;
             }
@@ -1685,6 +1697,28 @@ test('AILIS persona exposes only system handoff while TaskAgent keeps execution 
     assert.deepEqual(personaSpecs[0].parameters.required, []);
     assert.equal(personaSpecs[0].parameters.additionalProperties, false);
     assert.equal(personaSpecs.some((spec) => spec.name === 'subagents'), false);
+
+    const ownedPersonaSpecs = buildAgentDirectToolSpecs(gateway, {
+        requestContext: {
+            agentRole: 'persona_orchestrator',
+            taskAgentRoutingOwned: true
+        }
+    });
+    assert.deepEqual(ownedPersonaSpecs, []);
+
+    const routeSpecs = buildAgentDirectToolSpecs(gateway, {
+        requestContext: {
+            agentRole: 'task_agent',
+            taskAgentRoutePending: true
+        }
+    });
+    assert.deepEqual(routeSpecs.map((spec) => spec.name), ['task_route']);
+    assert.deepEqual(resolveAgentDirectToolChoice({
+        agentRuntimeRole: 'task_agent',
+        requestContext: { taskAgentRoutePending: true },
+        directToolSpecs: routeSpecs,
+        stepResults: []
+    }), { name: 'task_route', required: true });
 
     const taskSpecs = buildAgentDirectToolSpecs(gateway, {
         requestContext: {

@@ -62,9 +62,11 @@ class FakeGateway extends EventEmitter {
 
 test('hosted runtime isolates memory and workspace roots per signed tenant', async () => {
     const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-hosted-runtime-'));
+    const projectRoot = path.resolve('.');
     const gateways = [];
     const manager = new AILISHostedRuntimeManager({
         dataRoot,
+        projectRoot,
         llmSettings: {
             provider: 'openai-compatible',
             baseUrl: 'https://example.test',
@@ -84,6 +86,8 @@ test('hosted runtime isolates memory and workspace roots per signed tenant', asy
     assert.equal(gateways.length, 2);
     assert.notEqual(gateways[0].options.auditDir, gateways[1].options.auditDir);
     assert.notEqual(gateways[0].options.workspaceRoot, gateways[1].options.workspaceRoot);
+    assert.equal(gateways[0].options.projectRoot, projectRoot);
+    assert.equal(gateways[0].options.getDefaultContext().taskAgentRoutingOwned, true);
     assert.match(gateways[0].options.auditDir, new RegExp(tenantKey('web:alice')));
     assert.match(gateways[1].options.auditDir, new RegExp(tenantKey('web:bob')));
     assert.equal(gateways[0].requests[0].llmSettings.apiKey, 'test-key');
@@ -101,6 +105,7 @@ test('hosted runtime isolates memory and workspace roots per signed tenant', asy
 test('hosted runtime replaces browser-supplied paths, credentials, and approvals', () => {
     const record = {
         workspaceRoot: '/srv/ailis/tenant/workspace',
+        projectRoot: '/srv/ailis/source',
         llmSettings: {
             provider: 'openai-compatible',
             baseUrl: 'https://example.test',
@@ -127,7 +132,8 @@ test('hosted runtime replaces browser-supplied paths, credentials, and approvals
     assert.equal(request.maxAgentSteps, 12);
     assert.equal(request.llmSettings.apiKey, 'server-key');
     assert.equal(request.context.workspace, record.workspaceRoot);
-    assert.equal(request.context.projectRoot, record.workspaceRoot);
+    assert.equal(request.context.projectRoot, record.projectRoot);
+    assert.equal(request.context.taskAgentRoutingOwned, true);
     assert.equal(request.context.approved, undefined);
     assert.equal(request.context.autoConfirm, undefined);
     assert.equal(request.workspace, undefined);
@@ -172,21 +178,47 @@ test('hosted runtime forwards provider text deltas outside the serialized reques
     }
 });
 
-test('real hosted Persona commits streamed assistant text for a direct final response', async () => {
+test('real hosted Persona buffers its draft until TaskAgent routes chat', async () => {
     const modelRequests = [];
     const modelServer = http.createServer(async (req, res) => {
         const chunks = [];
         for await (const chunk of req) chunks.push(chunk);
         const request = JSON.parse(Buffer.concat(chunks).toString('utf8'));
         modelRequests.push(request);
+        const toolNames = (request.tools || []).map((tool) => tool?.function?.name || tool?.name || '');
+        if (toolNames.includes('task_route')) {
+            const response = Buffer.from(JSON.stringify({
+                choices: [{
+                    message: {
+                        role: 'assistant',
+                        content: null,
+                        tool_calls: [{
+                            id: 'call-hosted-chat-route',
+                            type: 'function',
+                            function: { name: 'task_route', arguments: '{"mode":"chat"}' }
+                        }]
+                    }
+                }]
+            }));
+            res.writeHead(200, {
+                'content-type': 'application/json',
+                'content-length': response.length
+            });
+            res.end(response);
+            return;
+        }
+        const response = Buffer.from(JSON.stringify({
+            choices: [{
+                message: { role: 'assistant', content: '你好，我在这里。' },
+                finish_reason: 'stop'
+            }],
+            usage: { prompt_tokens: 20, completion_tokens: 6, total_tokens: 26 }
+        }));
         res.writeHead(200, {
-            'content-type': 'text/event-stream; charset=utf-8',
-            'cache-control': 'no-cache'
+            'content-type': 'application/json',
+            'content-length': response.length
         });
-        res.write('data: {"choices":[{"delta":{"role":"assistant","content":"你好"}}]}\n\n');
-        res.write('data: {"choices":[{"delta":{"content":"，我在这里。"},"finish_reason":"stop"}]}\n\n');
-        res.write('data: {"choices":[],"usage":{"prompt_tokens":20,"completion_tokens":6,"total_tokens":26}}\n\n');
-        res.end('data: [DONE]\n\n');
+        res.end(response);
     });
     await new Promise((resolve) => modelServer.listen(0, '127.0.0.1', resolve));
     const address = modelServer.address();
@@ -221,12 +253,12 @@ test('real hosted Persona commits streamed assistant text for a direct final res
 
         assert.equal(result.ok, true);
         assert.equal(result.displayText, '你好，我在这里。');
-        assert.deepEqual(deltas, ['你好', '，我在这里。']);
-        assert.deepEqual(streamEvents, [
-            'response.output_text.started',
-            'response.output_text.committed'
-        ]);
-        assert.equal(modelRequests[0].stream, true);
+        assert.deepEqual(deltas, ['你好，我在这里。']);
+        assert.deepEqual(streamEvents, []);
+        assert.ok(modelRequests.every((request) => request.stream !== true));
+        assert.ok(modelRequests.some((request) => (request.tools || []).some((tool) =>
+            (tool?.function?.name || tool?.name) === 'task_route'
+        )));
     } finally {
         await manager.close();
         await new Promise((resolve) => modelServer.close(resolve));
@@ -238,17 +270,30 @@ test('hosted runtime executes the real Persona Agent and restores memory after r
     const modelServer = http.createServer(async (req, res) => {
         const chunks = [];
         for await (const chunk of req) chunks.push(chunk);
-        requests.push(JSON.parse(Buffer.concat(chunks).toString('utf8')));
+        const request = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+        requests.push(request);
+        const toolNames = (request.tools || []).map((tool) => tool?.function?.name || tool?.name || '');
+        const message = toolNames.includes('task_route')
+            ? {
+                  role: 'assistant',
+                  content: null,
+                  tool_calls: [{
+                      id: 'call-hosted-memory-chat-route',
+                      type: 'function',
+                      function: { name: 'task_route', arguments: '{"mode":"chat"}' }
+                  }]
+              }
+            : {
+                  role: 'assistant',
+                  content: '你好，我在这里。'
+              };
         const response = Buffer.from(JSON.stringify({
             id: 'chatcmpl-hosted-test',
             object: 'chat.completion',
             choices: [{
                 index: 0,
-                message: {
-                    role: 'assistant',
-                    content: '你好，我在这里。'
-                },
-                finish_reason: 'stop'
+                message,
+                finish_reason: message.tool_calls ? 'tool_calls' : 'stop'
             }],
             usage: { prompt_tokens: 20, completion_tokens: 8, total_tokens: 28 }
         }));
@@ -287,7 +332,7 @@ test('hosted runtime executes the real Persona Agent and restores memory after r
             (request.tools || []).map((tool) => tool?.function?.name || tool?.name || '')
         );
         assert.ok(
-            personaToolNames.includes('handoff_task'),
+            personaToolNames.includes('task_route'),
             JSON.stringify(requests.map((request) => ({
                 keys: Object.keys(request),
                 toolNames: (request.tools || []).map((tool) => tool?.function?.name || tool?.name || '')
@@ -325,7 +370,7 @@ test('hosted runtime executes the real Persona Agent and restores memory after r
     }
 });
 
-test('hosted Persona can hand a web request to the real persistent TaskAgent harness', async () => {
+test('hosted TaskAgent owns web task routing and Persona renders its result', async () => {
     const requests = [];
     const modelServer = http.createServer(async (req, res) => {
         const chunks = [];
@@ -335,19 +380,19 @@ test('hosted Persona can hand a web request to the real persistent TaskAgent har
         const toolNames = (request.tools || []).map((tool) =>
             tool?.function?.name || tool?.name || ''
         );
-        const message = toolNames.includes('handoff_task')
+        const message = toolNames.includes('task_route')
             ? {
                   role: 'assistant',
                   content: null,
                   tool_calls: [{
-                      id: 'call-hosted-handoff',
+                      id: 'call-hosted-task-route',
                       type: 'function',
-                      function: { name: 'handoff_task', arguments: '{}' }
+                      function: { name: 'task_route', arguments: '{"mode":"execute"}' }
                   }]
               }
             : {
                   role: 'assistant',
-                  content: '网页 TaskAgent 已经完成任务。'
+                  content: '网页任务已经完成。'
               };
         const response = Buffer.from(JSON.stringify({
             id: 'chatcmpl-hosted-handoff',
@@ -384,11 +429,12 @@ test('hosted Persona can hand a web request to the real persistent TaskAgent har
             requireTaskExecution: true
         });
         assert.equal(result.ok, true);
-        assert.match(result.displayText || result.finalAnswer, /TaskAgent/);
+        assert.match(result.displayText || result.finalAnswer, /网页任务已经完成/);
         const allToolSurfaces = requests.map((request) =>
             (request.tools || []).map((tool) => tool?.function?.name || tool?.name || '')
         );
-        assert.ok(allToolSurfaces.some((tools) => tools.includes('handoff_task')));
+        assert.ok(allToolSurfaces.some((tools) => tools.includes('task_route')));
+        assert.equal(allToolSurfaces.some((tools) => tools.includes('handoff_task')), false);
         assert.ok(allToolSurfaces.some((tools) => tools.includes('tool_search')));
 
         const key = tenantKey('web:task-agent');

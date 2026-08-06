@@ -1461,6 +1461,83 @@ test('model-authored task_goal persists through the real Gateway into the next S
     }
 });
 
+test('dispatchTurn lets the same persistent TaskAgent route chat or continue execution in one run', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-task-route-integration-'));
+    const llmServer = await createScriptedChatCompletionsServer(({ decisionCount }) => {
+        if (decisionCount === 1) {
+            return {
+                action: 'tool',
+                tool_call: { tool: 'task_route', args: { mode: 'chat' } }
+            };
+        }
+        if (decisionCount === 2) {
+            return {
+                action: 'tool',
+                tool_call: { tool: 'task_route', args: { mode: 'execute' } }
+            };
+        }
+        return {
+            action: 'final',
+            final_answer: '同一个 TaskAgent 已继续执行并完成。'
+        };
+    });
+    const gateway = new AILISGateway({
+        port: 0,
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit')
+    });
+    const llmSettings = {
+        provider: 'openai-compatible',
+        baseUrl: llmServer.url,
+        apiKey: 'test-key',
+        model: 'mock-task-route',
+        timeoutMs: 10000
+    };
+    const publicEvents = [];
+    gateway.on('event', (event) => publicEvents.push(event));
+
+    try {
+        await gateway.start();
+        const chat = await gateway.taskAgentHarness.dispatchTurn({
+            currentUserMessage: '陪我聊两句',
+            sessionId: 'task-route-chat-session',
+            runId: 'task-route-chat-parent',
+            llmSettings
+        });
+        const execute = await gateway.taskAgentHarness.dispatchTurn({
+            currentUserMessage: '执行一个具体任务',
+            sessionId: 'task-route-execute-session',
+            runId: 'task-route-execute-parent',
+            llmSettings
+        });
+
+        assert.equal(chat.route, 'chat');
+        assert.equal(chat.final_answer, '');
+        assert.equal(execute.route, 'execute');
+        assert.equal(execute.final_answer, '同一个 TaskAgent 已继续执行并完成。');
+        assert.equal(llmServer.calls.length, 3);
+        for (const call of llmServer.calls.slice(0, 2)) {
+            const toolNames = (call.payload.tools || []).map((tool) => tool.function?.name || tool.name);
+            assert.deepEqual(toolNames, ['task_route']);
+            assert.match(JSON.stringify(call.payload.tool_choice), /task_route/);
+        }
+        const executionToolNames = (llmServer.calls[2].payload.tools || [])
+            .map((tool) => tool.function?.name || tool.name);
+        assert.equal(executionToolNames.includes('task_route'), false);
+        const executionContext = parseModelContextPayload(llmServer.calls[2]);
+        assert.equal(executionContext.task_state.current_request, '执行一个具体任务');
+        assert.equal(publicEvents.some((event) =>
+            ['agent.message.completed', 'persona.surface', 'agent.progress.note'].includes(event.type) &&
+            [chat.trace_ref, execute.trace_ref].includes(event.payload?.runId)
+        ), false);
+    } finally {
+        await gateway.stop().catch(() => {});
+        await llmServer.close().catch(() => {});
+        await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
+});
+
 async function createDirectToolCallChatCompletionsServer() {
     const calls = [];
     let turn = 0;
