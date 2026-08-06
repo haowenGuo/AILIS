@@ -115,7 +115,8 @@ function sanitizeAgentRequest(payload = {}, record) {
             workspace: record.workspaceRoot,
             workspaceDir: record.workspaceRoot,
             workspaceRoot: record.workspaceRoot,
-            projectRoot: record.workspaceRoot,
+            projectRoot: record.projectRoot,
+            taskAgentRoutingOwned: true,
             llmSettings: { ...record.llmSettings }
         }
     };
@@ -128,6 +129,7 @@ class AILISHostedRuntimeManager {
             process.env.AILIS_HOSTED_DATA_ROOT ||
             path.join(process.cwd(), '.ailis-state', 'hosted')
         );
+        this.projectRoot = path.resolve(options.projectRoot || path.join(__dirname, '..'));
         this.maxActiveTenants = boundedInteger(
             options.maxActiveTenants ?? process.env.AILIS_HOSTED_MAX_ACTIVE_TENANTS,
             DEFAULT_MAX_ACTIVE_TENANTS,
@@ -170,6 +172,7 @@ class AILISHostedRuntimeManager {
             tenantRoot,
             stateRoot,
             workspaceRoot,
+            projectRoot: this.projectRoot,
             llmSettings: { ...this.llmSettings },
             createdAt: Date.now(),
             lastUsedAt: Date.now(),
@@ -180,7 +183,7 @@ class AILISHostedRuntimeManager {
         const gateway = this.gatewayFactory({
             host: '127.0.0.1',
             port: 0,
-            projectRoot: workspaceRoot,
+            projectRoot: record.projectRoot,
             workspaceRoot,
             auditDir: stateRoot,
             emberHarnessEnabled: process.env.AILIS_HOSTED_EMBER_ENABLED === 'true',
@@ -191,7 +194,8 @@ class AILISHostedRuntimeManager {
                 workspace: workspaceRoot,
                 workspaceDir: workspaceRoot,
                 workspaceRoot,
-                projectRoot: workspaceRoot,
+                projectRoot: record.projectRoot,
+                taskAgentRoutingOwned: true,
                 llmSettings: { ...record.llmSettings }
             })
         });
