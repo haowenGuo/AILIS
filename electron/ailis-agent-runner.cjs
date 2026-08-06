@@ -11251,7 +11251,7 @@ class AILISAgentRunner {
             request.maxCumulativeInputTokens,
             requestContext.maxCumulativeInputTokens,
             settings.maxCumulativeInputTokens
-        ], initialContextWindow.tokens * 4);
+        ], initialContextWindow.tokens * 16);
         const pauseAfterRound = async ({ iteration, reason = 'round_completed', decision = null, step = null } = {}) => {
             if (
                 !debugBreakAfterRound ||
