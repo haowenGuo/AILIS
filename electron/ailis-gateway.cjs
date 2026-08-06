@@ -3415,7 +3415,7 @@ class AILISGateway extends EventEmitter {
 
         const authoritativePacket = JSON.stringify({
             schema: 'ailis.persona_task_result_render.v1',
-            current_user_message: message,
+            current_user_message: normalizeString(taskResult?.current_request, message),
             task_result: taskResult
         });
         const rendered = await this.ensureAgentRunner().runMessage({

@@ -150,3 +150,30 @@ test('a user steer during an active TaskAgent run is accepted immediately withou
     assert.equal(calls.persona[0].suppressCurrentUserMessage, true);
     assert.equal(result.executionRequired, true);
 });
+
+test('Persona render follows the TaskResult current request when an active Turn was steered', async () => {
+    const { gateway, calls } = await createGateway({
+        intake: {
+            ok: true,
+            status: 'decided',
+            action: 'execute',
+            executionRequired: true
+        },
+        taskResult: {
+            schema: 'ailis.task_result.v1',
+            status: 'completed',
+            current_request: '停止天气查询，改为木偶攻略。',
+            final_answer: '请确认“木偶”具体指哪款游戏。'
+        }
+    });
+    await gateway.runAgent({
+        message: '查询北京天气',
+        messageHistory: [{ role: 'user', content: '查询北京天气' }],
+        sessionId: 'routing-steered-result',
+        llmSettings: { model: 'mock' },
+        context: { taskAgentOwnsExecution: true, agentRole: 'persona_orchestrator' }
+    });
+
+    assert.match(calls.persona[0].ephemeralDeveloperMessage, /"current_user_message":"停止天气查询，改为木偶攻略。"/);
+    assert.deepEqual(calls.persona[0].messageHistory, []);
+});
