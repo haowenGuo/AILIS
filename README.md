@@ -21,7 +21,7 @@
     <a href="README.de.md">Deutsch</a>
   </p>
   <p>
-    <a href="https://101.133.239.56/">Homepage</a> ·
+    <a href="https://101.133.239.56/Test/">Homepage</a> ·
     <a href="https://github.com/haowenGuo/AILIS/releases/tag/v1.1.0">Download</a> ·
     <a href="docs/ailis-embodied-agent-architecture.md">Architecture</a> ·
     <a href="docs/ailis-demo-benchmark-scorecard.md">Benchmarks</a>
