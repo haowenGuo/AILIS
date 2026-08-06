@@ -3324,8 +3324,8 @@ class AILISGateway extends EventEmitter {
                     ? input.messageHistory
                     : [],
                 ephemeralDeveloperMessage: normalizeString(developerPacket),
-                onTextDelta: () => {},
-                onTextStreamEvent: () => {},
+                onTextDelta: undefined,
+                onTextStreamEvent: undefined,
                 context: {
                     ...context,
                     runId: privateRunId,
