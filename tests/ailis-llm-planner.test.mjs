@@ -137,7 +137,7 @@ async function waitFor(predicate, { timeoutMs = 2000, intervalMs = 25 } = {}) {
     return false;
 }
 
-test('Agent turn items mark successful web fetches with structured API evidence gaps', () => {
+test('Agent turn items keep successful web fetches as ordinary observations', () => {
     const turnItems = buildObservationLedgerPromptObject({
         stepResults: [
             {
@@ -163,9 +163,9 @@ test('Agent turn items mark successful web fetches with structured API evidence 
             }
         ]
     });
-    assert.equal(turnItems.latest_observation.evidence_gap, 'structured_api_preferred');
-    assert.match(turnItems.latest_observation.preview, /ClinicalTrials\.gov|structured ClinicalTrials/);
-    assert.match(JSON.stringify(turnItems.items), /structured_api_preferred|ClinicalTrials\.gov/);
+    assert.equal(Object.hasOwn(turnItems.latest_observation, 'evidence_gap'), false);
+    assert.match(turnItems.latest_observation.preview, /ClinicalTrials\.gov/);
+    assert.doesNotMatch(JSON.stringify(turnItems.items), /structured_api_preferred/);
 });
 
 test('Agent prompt profile uses compact budgets for Ollama without changing cloud providers', () => {
@@ -180,13 +180,12 @@ test('Agent prompt profile uses compact budgets for Ollama without changing clou
     assert.equal(cloudProfile.compact, false);
     assert.ok(cloudProfile.memoryChars >= 20000);
 
-    const exactAnswerProfile = resolveAgentPromptProfile(
+    const legacyExactAnswerProfile = resolveAgentPromptProfile(
         { provider: 'openai-compatible' },
         { exactAnswerMode: true }
     );
-    assert.equal(exactAnswerProfile.id, 'local_compact');
-    assert.equal(exactAnswerProfile.compact, true);
-    assert.equal(exactAnswerProfile.reason, 'exact_answer_task');
+    assert.equal(legacyExactAnswerProfile.id, 'full');
+    assert.equal(legacyExactAnswerProfile.compact, false);
 
     const artifactQuestionProfile = resolveAgentPromptProfile(
         { provider: 'openai-compatible' },
@@ -314,7 +313,7 @@ test('TaskAgent main loop semantically compacts over-budget history and preserve
         assert.match(checkpointText, /Use the official source/);
         assert.match(checkpointText, /Verify the official publication date/);
         assert.match(checkpointText, /official publication date remains unresolved/);
-        assert.match(checkpointText, /Official release date evidence/);
+        assert.doesNotMatch(checkpointText, /evidenceManifest|pinnedEvidenceManifest|evidenceRefs/);
         assert.match(checkpointText, /checkpoint-output-15/);
     } finally {
         await gateway.stop();
@@ -855,7 +854,7 @@ test('Persona hands one exact request to the system TaskAgent and renders its co
         assert.equal(taskCalls[0].context.benchmarkName, 'Apple ToolSandbox');
         assert.equal(taskCalls[0].context.benchmarkScenario, 'toolsandbox-scenario-1');
         assert.equal(taskCalls[0].context.directToolLimit, 35);
-        assert.equal(taskCalls[0].context.requireExecutionEvidence, true);
+        assert.equal(Object.hasOwn(taskCalls[0].context, 'requireExecutionEvidence'), false);
         assert.deepEqual(taskCalls[0].context.runtimeEnvironmentOverride, {
             source: 'toolsandbox_benchmark_clock',
             current_date: '2026-07-17',
@@ -2605,19 +2604,19 @@ test('Agentic Executor skips vision confirmation when full computer control is e
 
 test('TaskAgent ignores the legacy round cap, compacts canonical history, and ends on the model final', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-task-agent-natural-termination-'));
-    await fs.writeFile(path.join(workspaceRoot, 'note.txt'), 'evidence\n', 'utf8');
+    await fs.writeFile(path.join(workspaceRoot, 'note.txt'), 'output\n', 'utf8');
     const llmServer = await createScriptedChatCompletionsServer(({ decisionCount }) => {
         if (decisionCount <= 10) {
             return {
                 mode: 'task',
                 intent: 'long_task',
-                summary: `收集第 ${decisionCount} 份证据`,
+                summary: `读取第 ${decisionCount} 份输出`,
                 action: 'tool',
                 tool_call: {
                     tool: 'exec',
-                    title: `读取证据 ${decisionCount}`,
+                    title: `读取输出 ${decisionCount}`,
                     args: {
-                        command: `powershell -NoProfile -Command "$value = 'evidence-${decisionCount} '; Write-Output ($value * 800)"`
+                        command: `powershell -NoProfile -Command "$value = 'output-${decisionCount} '; Write-Output ($value * 800)"`
                     }
                 }
             };
@@ -2625,7 +2624,7 @@ test('TaskAgent ignores the legacy round cap, compacts canonical history, and en
         return {
             mode: 'task',
             intent: 'long_task',
-            summary: '证据已经充分',
+            summary: '任务已经完成',
             action: 'final',
             final_answer: 'Natural completion after ten tool rounds.'
         };
@@ -2668,7 +2667,7 @@ test('TaskAgent ignores the legacy round cap, compacts canonical history, and en
         assert.equal(llmServer.calls.length, 11);
         assert.doesNotMatch(llmServer.calls[0].system, /work-tool rounds|round total budget|finalization/i);
         assert.match(llmServer.calls[0].system, /tool_search acquires a capability/);
-        assert.match(llmServer.calls[0].system, /web_run archive operation/);
+        assert.doesNotMatch(llmServer.calls[0].system, /web_run archive operation|exact-answer|evidence contract/i);
         assert.notEqual(llmServer.calls.at(-1).payload.tool_choice, 'none');
         assert.ok((llmServer.calls.at(-1).payload.tools || []).length > 0);
         assert.doesNotMatch(JSON.stringify(llmServer.calls.at(-1).payload.messages), /finalization package/i);
@@ -2745,7 +2744,7 @@ test('Agentic Executor feeds invalid decisions back as observations instead of s
     }
 });
 
-test('Agentic Executor keeps native tools available after invalid calls until the model ends', async () => {
+test('Agentic Executor stops repeated identical invalid native calls before they can run away', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-invalid-native-tool-fuse-'));
     const llmServer = await createScriptedChatCompletionsServer(({ decisionCount }) => {
         if (decisionCount <= 2) {
@@ -2795,10 +2794,12 @@ test('Agentic Executor keeps native tools available after invalid calls until th
             }
         });
 
-        assert.equal(result.body.ok, true, JSON.stringify(result.body));
-        assert.equal(llmServer.calls.length, 3);
-        assert.notEqual(llmServer.calls[2].payload.tool_choice, 'none');
-        assert.ok((llmServer.calls[2].payload.tools || []).length > 0);
+        assert.equal(result.body.ok, false, JSON.stringify(result.body));
+        assert.equal(result.body.status, 'stalled');
+        assert.equal(result.body.taskRunHandoff.reason, 'repeated_invalid_native_tool_call');
+        assert.equal(llmServer.calls.length, 2);
+        assert.notEqual(llmServer.calls[1].payload.tool_choice, 'none');
+        assert.ok((llmServer.calls[1].payload.tools || []).length > 0);
         assert.equal(
             result.body.events.filter((event) =>
                 event.type === 'runtime_note' &&
@@ -3123,7 +3124,7 @@ test('Agentic Executor allows zero-observation final answers without evidence wa
     }
 });
 
-test('Agentic Executor marks evidence-required zero-tool finals incomplete', async () => {
+test('Agentic Executor ignores the removed execution-evidence flag', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-required-execution-evidence-'));
     const llmServer = await createScriptedChatCompletionsServer(() => ({
         mode: 'task',
@@ -3161,16 +3162,12 @@ test('Agentic Executor marks evidence-required zero-tool finals incomplete', asy
             }
         });
 
-        assert.equal(result.body.ok, false);
-        assert.equal(result.body.status, 'incomplete');
-        assert.equal(result.body.executionRequired, true);
+        assert.equal(result.body.ok, true);
+        assert.equal(result.body.status, 'completed');
         assert.equal(result.body.steps.length, 0);
-        assert.equal(result.body.taskRunHandoff.status, 'incomplete');
-        assert.deepEqual(
-            result.body.taskRunHandoff.unresolvedFields,
-            ['No successful task-execution tool call was recorded.']
-        );
-        assert.match(llmServer.calls[0].system, /explicit execution-evidence contract/i);
+        assert.equal(result.body.taskRunHandoff.status, 'completed');
+        assert.match(result.body.displayText, /reminder was created/i);
+        assert.doesNotMatch(llmServer.calls[0].system, /execution-evidence contract/i);
     } finally {
         await gateway.stop();
         await llmServer.close();

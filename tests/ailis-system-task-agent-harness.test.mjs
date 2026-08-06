@@ -26,7 +26,6 @@ function completedResult({ runId, answer, checkpoint, sourceUrl = '' }) {
             partialAnswer: '',
             sourceRefs: sourceUrl ? [{ ref_id: 'source-1', title: 'Source', url: sourceUrl }] : [],
             collectedData: [{
-                evidenceRefs: ['evidence-1'],
                 outputId: 'output-1'
             }],
             traceRef: runId,
@@ -106,15 +105,22 @@ test('system TaskAgent handoff preserves the exact request and returns a compact
     assert.equal(Object.hasOwn(calls[0].context, 'maxAgentSteps'), false);
     assert.equal(packet.schema, TASK_RESULT_SCHEMA);
     assert.equal(packet.final_answer, 'Verified answer');
-    assert.deepEqual(packet.evidence_refs, ['evidence-1']);
     assert.deepEqual(packet.output_refs, ['output-1']);
+    assert.deepEqual(packet.source_refs, [{
+        ref_id: 'source-1',
+        title: 'Source',
+        url: 'https://example.test/source'
+    }]);
+    assert.equal(Object.hasOwn(packet, 'evidence_refs'), false);
+    assert.equal(Object.hasOwn(packet, 'exact_answer'), false);
+    assert.equal(Object.hasOwn(packet, 'answer_candidates'), false);
     assert.equal(packet.checkpoint_available, true);
     assert.equal(Object.hasOwn(packet, 'steps'), false);
     assert.equal(Object.hasOwn(packet, 'checkpoint'), false);
     assert.equal(JSON.stringify(packet).includes('private'), false);
 });
 
-test('system TaskAgent result packet keeps exact answer separate from user-facing prose', async () => {
+test('system TaskAgent result packet uses the natural final response and ignores legacy exact-answer metadata', async () => {
     const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-task-harness-exact-answer-'));
     const harness = new AILISSystemTaskAgentHarness({
         rootDir,
@@ -122,11 +128,11 @@ test('system TaskAgent result packet keeps exact answer separate from user-facin
             ok: true,
             status: 'completed',
             runId: payload.agent.childRunId,
-            displayText: '根据证据，最终计数是 42。',
+            displayText: '最终计数是 42。',
             exactAnswerSubmission: { answer: '42' },
             taskRunHandoff: {
                 status: 'completed',
-                finalAnswer: '根据证据，最终计数是 42。',
+                finalAnswer: '最终计数是 42。',
                 sourceRefs: [],
                 collectedData: [],
                 traceRef: payload.agent.childRunId
@@ -139,23 +145,14 @@ test('system TaskAgent result packet keeps exact answer separate from user-facin
         sessionId: 'persona-exact-answer'
     });
 
-    assert.equal(packet.exact_answer, '42');
-    assert.equal(packet.final_answer, '根据证据，最终计数是 42。');
-    assert.equal(packet.display_text, '根据证据，最终计数是 42。');
+    assert.equal(Object.hasOwn(packet, 'exact_answer'), false);
+    assert.equal(packet.final_answer, '最终计数是 42。');
+    assert.equal(packet.display_text, '最终计数是 42。');
 });
 
-test('system TaskAgent persists answer candidates across warning-complete handoffs', async () => {
+test('system TaskAgent does not persist legacy answer-candidate metadata across handoffs', async () => {
     const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-task-harness-candidates-'));
     const calls = [];
-    const candidate = {
-        answer: '4',
-        personaText: '4',
-        evidenceRefs: ['artifact-presentation'],
-        source: 'model_submission',
-        kind: 'model_final',
-        selected: true,
-        finalizable: true
-    };
     const harness = new AILISSystemTaskAgentHarness({
         rootDir,
         executeTaskAgent: async (payload) => {
@@ -168,10 +165,9 @@ test('system TaskAgent persists answer candidates across warning-complete handof
                     displayText: '4',
                     taskRunHandoff: {
                         status: 'completed_with_warnings',
-                        exactAnswer: '4',
                         finalAnswer: '4',
-                        answerCandidates: [candidate],
-                        bestAnswerCandidate: candidate,
+                        answerCandidates: [{ answer: 'legacy candidate' }],
+                        bestAnswerCandidate: { answer: 'legacy candidate' },
                         resume: { contextManagerCheckpoint: { version: 1 } }
                     }
                 };
@@ -190,17 +186,17 @@ test('system TaskAgent persists answer candidates across warning-complete handof
         runId: 'candidate-parent-1'
     });
     assert.equal(first.status, 'completed_with_warnings');
-    assert.equal(first.best_answer_candidate.answer, '4');
-    assert.equal(first.best_answer_candidate.finalizable, true);
-    assert.deepEqual(first.answer_candidates.map((item) => item.answer), ['4']);
+    assert.equal(first.final_answer, '4');
+    assert.equal(Object.hasOwn(first, 'best_answer_candidate'), false);
+    assert.equal(Object.hasOwn(first, 'answer_candidates'), false);
 
     await harness.handoff({}, {
         currentUserMessage: '继续核对。',
         sessionId: 'candidate-session',
         runId: 'candidate-parent-2'
     });
-    assert.equal(calls[1].context.priorBestAnswerCandidate, null);
-    assert.deepEqual(calls[1].context.priorAnswerCandidates, []);
+    assert.equal(Object.hasOwn(calls[1].context, 'priorBestAnswerCandidate'), false);
+    assert.equal(Object.hasOwn(calls[1].context, 'priorAnswerCandidates'), false);
 });
 
 test('repeated handoff in the same parent run reuses the first TaskAgent result', async () => {
@@ -348,7 +344,7 @@ test('incomplete TaskAgent results preserve unresolved fields across checkpoint 
                     displayText: 'The reminder was not created.',
                     taskRunHandoff: {
                         status: 'incomplete',
-                        reason: 'execution_evidence_missing',
+                        reason: 'prerequisite_missing',
                         finalAnswer: 'The reminder was not created.',
                         unresolvedFields: [
                             'No successful task-execution tool call was recorded.',
@@ -383,7 +379,7 @@ test('incomplete TaskAgent results preserve unresolved fields across checkpoint 
     assert.deepEqual(first.unresolved_fields, [
         'No successful task-execution tool call was recorded.',
         'datetime_info_to_timestamp requires year and month.',
-        'execution_evidence_missing'
+        'prerequisite_missing'
     ]);
     assert.equal(calls[1].args.contextManagerCheckpoint.version, 1);
     assert.equal(calls[1].args.contextManagerCheckpoint.marker, 'invalid-datetime-call');
@@ -421,7 +417,7 @@ test('incomplete TaskAgent handoffs merge unresolved prerequisites until complet
             }
             return completedResult({
                 runId: payload.agent.childRunId,
-                answer: 'Completed with verified evidence.',
+                answer: 'Completed successfully.',
                 checkpoint: { version: 3 }
             });
         }

@@ -841,7 +841,7 @@ const TOOL_CONTRACTS = Object.freeze({
         returns: (() => {
             const schema = defaultReturns();
             const progressOnlyPayload = makeObjectSchema({
-                required: ['status', 'completion_scope', 'semantic_role', 'produces_evidence', 'task_advanced', 'plan'],
+                required: ['status', 'completion_scope', 'semantic_role', 'task_advanced', 'plan'],
                 properties: {
                     status: stringSchema({
                         enum: ['completed'],
@@ -854,10 +854,6 @@ const TOOL_CONTRACTS = Object.freeze({
                     semantic_role: stringSchema({
                         enum: ['progress_ui_only'],
                         description: 'This result is only for user-visible progress bookkeeping.'
-                    }),
-                    produces_evidence: booleanSchema({
-                        enum: [false],
-                        description: 'update_plan never produces evidence for the task answer.'
                     }),
                     task_advanced: booleanSchema({
                         enum: [false],
@@ -887,7 +883,7 @@ const TOOL_CONTRACTS = Object.freeze({
                 required: ['plan'],
                 properties: {
                     explanation: stringSchema({
-                        description: 'Optional user-visible progress note. This is not evidence and does not mean the task advanced.'
+                        description: 'Optional user-visible progress note. This does not mean the task advanced.'
                     }),
                     plan: arraySchema(makeObjectSchema({
                         required: ['step', 'status'],
@@ -899,7 +895,7 @@ const TOOL_CONTRACTS = Object.freeze({
                             }),
                             status: stringSchema({
                                 enum: ['pending', 'in_progress', 'completed'],
-                                description: 'Checklist display status only, not proof that the task evidence was obtained.'
+                                description: 'Checklist display status only; it does not execute the step.'
                             })
                         },
                         additionalProperties: true
@@ -910,7 +906,7 @@ const TOOL_CONTRACTS = Object.freeze({
                 },
                 additionalProperties: true
             }),
-            description: 'Progress UI only. update_plan does not inspect files, retrieve data, execute actions, compute answers, or produce evidence. Use real tools for task progress.'
+            description: 'Progress UI only. update_plan does not inspect files, retrieve data, execute actions, or compute answers. Use real tools for task progress.'
         }
     }),
     tool_search: Object.freeze({
@@ -1005,7 +1001,7 @@ const TOOL_CONTRACTS = Object.freeze({
                         height: integerSchema({ minimum: 480, maximum: 16000, description: 'Optional browser viewport height. Defaults to 1800, or 10000 when fullPage is true.' })
                     },
                     additionalProperties: false
-                }), { minItems: 1, maxItems: 1, description: 'Capture one browser-rendered screenshot and return it to the main model as visual tool evidence. The default primary viewport preserves readable detail; request fullPage only when lower-page context is required.' }),
+                }), { minItems: 1, maxItems: 1, description: 'Capture one browser-rendered screenshot and return it to the main model as visual input. The default primary viewport preserves readable detail; request fullPage only when lower-page context is required.' }),
                 archive: arraySchema(makeObjectSchema({
                     required: ['url'],
                     properties: {
@@ -1016,7 +1012,7 @@ const TOOL_CONTRACTS = Object.freeze({
                         timestamp: stringSchema({ pattern: '^[0-9]{8,14}$', description: 'Capture timestamp returned by mode=captures. Required for mode=open.' }),
                         matchType: stringSchema({ enum: ['exact', 'prefix'], description: 'Use prefix to discover archived dynamic/query URLs.' }),
                         contains: stringSchema({ description: 'Terms used to rank archived original URLs, such as an identifier, filter name, year, or classification.' }),
-                        query: stringSchema({ description: 'Evidence phrase; in search/captures it also opens the first readable snapshot, and in open mode it focuses the source viewport.' }),
+                        query: stringSchema({ description: 'Focus phrase; in search/captures it also opens the first readable snapshot, and in open mode it focuses the source viewport.' }),
                         fromYear: integerSchema({ minimum: 1996, maximum: 9999, description: 'Optional archive crawl-year lower bound, not publication/content year.' }),
                         toYear: integerSchema({ minimum: 1996, maximum: 9999, description: 'Optional archive crawl-year upper bound, not publication/content year.' }),
                         maxResults: integerSchema({ minimum: 1, maximum: 50, description: 'Maximum ranked capture URLs returned.' }),

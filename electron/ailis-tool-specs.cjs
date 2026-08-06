@@ -53,7 +53,7 @@ const AILIS_RUNTIME_TOOL_DEFINITIONS = Object.freeze([
         label: 'update_plan',
         description: [
             'Update only the user-visible progress checklist.',
-            'This is a UI/progress bookkeeping tool: it does not inspect files, retrieve data, execute actions, compute answers, or produce task evidence.',
+            'This is a UI/progress bookkeeping tool: it does not inspect files, retrieve data, execute actions, or compute answers.',
             'Use sparingly after meaningful progress; if the next step requires real work, call the real tool such as read, exec, apply_patch, or search instead.'
         ].join(' '),
         sectionId: 'runtime',
@@ -77,7 +77,7 @@ const AILIS_RUNTIME_TOOL_DEFINITIONS = Object.freeze([
     Object.freeze({
         id: 'artifact_query',
         label: 'artifact_query',
-        description: 'Query managed AILIS context artifacts using an owner=context_artifact_store artifactHandle or ctx-* context artifactId without dumping payload files into model context. Do not pass artifact_tools art_* ids or evidence_refs artifact-* ids here.',
+        description: 'Query managed AILIS context artifacts using an owner=context_artifact_store artifactHandle or ctx-* context artifactId without dumping payload files into model context. Do not pass artifact_tools art_* ids here.',
         sectionId: 'context-artifacts',
         route: 'ailis-runtime',
         materialized: true,

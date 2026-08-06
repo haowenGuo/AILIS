@@ -323,8 +323,7 @@ async function executeArtifactImportTool(args = {}, context = {}, runtime = {}) 
         workerSource: workerResult.source,
         stderr: String(stderr || '').slice(0, 2000),
         complete: true,
-        truncated: false,
-        reasoningReady: true
+        truncated: false
     }, {
         artifact: {
             artifactId: record.id,

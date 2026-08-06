@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+    buildRepairTicket,
     buildPracticeTasks,
     classifyGaiaResult,
     enrichTaskFromGaiaResult,
@@ -127,7 +128,7 @@ test('GAIA auto optimizer routes rejected web-derived answers to retrieval repai
     assert.equal(verdict.failureCategory, 'web_retrieval_mcp');
     assert.equal(verdict.optimizationFocus, 'web_search_web_fetch_mcp');
     assert.match(verdict.summary, /1000/);
-    assert.match(verdict.summary, /17/);
+    assert.doesNotMatch(verdict.summary, /17/);
 });
 
 test('GAIA auto optimizer classifies provider failures before scorer empty-answer rejection', () => {
@@ -265,17 +266,41 @@ test('GAIA auto optimizer enriches official task shells from runner result evide
         task_id: '9318445f-fe6a-4e1b-acbf-c68228c9906a',
         question: 'Using the provided image provide all fractions and sample answers.',
         file_name: '9318445f-fe6a-4e1b-acbf-c68228c9906a.png',
-        file_path: '2023/validation/9318445f-fe6a-4e1b-acbf-c68228c9906a.png',
-        answer_gate: { source: 'agent_final_answer', status: 'accepted' },
-        finalizer: { ok: false, status: 'missing_evidence' }
+        file_path: '2023/validation/9318445f-fe6a-4e1b-acbf-c68228c9906a.png'
     };
     const enriched = enrichTaskFromGaiaResult(task, result);
     assert.equal(enriched.gaiaTaskId, result.task_id);
     assert.equal(enriched.question, result.question);
     assert.equal(enriched.fileName, result.file_name);
     assert.equal(enriched.filePath, result.file_path);
-    assert.deepEqual(enriched.lastAnswerGate, result.answer_gate);
-    assert.deepEqual(enriched.lastFinalizer, result.finalizer);
+});
+
+test('GAIA repair tickets withhold gold answers and forbid evaluation-layer repairs', () => {
+    const ticket = buildRepairTicket({
+        task: {
+            taskId: 'official-task',
+            source: 'official',
+            title: 'Official task',
+            question: 'Compute the requested value.'
+        },
+        chain: {
+            submittedAnswer: '17000',
+            expectedAnswer: '17',
+            stepCount: 1,
+            steps: []
+        },
+        verdict: {
+            failureCategory: 'model_reasoning',
+            optimizationFocus: 'reasoning_from_tool_results',
+            generalizedCapability: 'gaia_reasoning',
+            summary: 'The Agent submission was rejected.'
+        }
+    });
+
+    assert.match(ticket, /gold answer intentionally withheld/i);
+    assert.match(ticket, /Do not modify the GAIA transport adapter, scorer, submitted answer, or output normalization/i);
+    assert.doesNotMatch(ticket, /Expected answer/i);
+    assert.doesNotMatch(ticket, /(?:^|\D)17(?:\D|$)/);
 });
 
 test('GAIA auto optimizer resolves conservative spend-safety defaults', () => {

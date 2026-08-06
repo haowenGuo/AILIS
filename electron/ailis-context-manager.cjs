@@ -447,7 +447,6 @@ class ContextManager {
             recentResponseItems: this.items,
             toolSummary: options.toolSummary || null,
             toolSchemas: options.toolSchemas || options.tools || null,
-            pinnedEvidenceManifest: options.pinnedEvidenceManifest || options.evidenceManifest || null,
             availableOutputRefs: collectAvailableOutputRefs(this.items)
         }, options.budgetConfig || options.contextBudget || {});
     }
@@ -481,9 +480,6 @@ class ContextManager {
             referenceContextItem: this.reference_context_item ? cloneJson(this.reference_context_item) : null,
             recentResponseItems: items,
             toolSummary: normalizeContextPackageValue(options.toolSummary || null, 4000),
-            pinnedEvidenceManifest: Array.isArray(options.pinnedEvidenceManifest || options.evidenceManifest)
-                ? cloneJson(options.pinnedEvidenceManifest || options.evidenceManifest)
-                : [],
             availableOutputRefs: collectAvailableOutputRefs(items),
             droppedItemsManifest: buildDroppedItemsManifest(items),
             budgetReport
@@ -543,10 +539,6 @@ class ContextManager {
                       24
                   ),
                   taskState: normalizeContextPackageValue(options.taskState || null, 5000),
-                  evidenceManifest: normalizeManifestList(
-                      options.pinnedEvidenceManifest || options.evidenceManifest || [],
-                      16
-                  ),
                   outputRefs: packageBefore.availableOutputRefs.slice(-24),
                   droppedItemsManifest: packageBefore.droppedItemsManifest,
                   instruction: 'Continue the same visible conversation. Use the active task state and recent user/assistant turns as context; do not invent missing history.'
@@ -568,10 +560,6 @@ class ContextManager {
                       24
                   ),
                   taskState: normalizeContextPackageValue(options.taskState || null, 5000),
-                  evidenceManifest: normalizeManifestList(
-                      options.pinnedEvidenceManifest || options.evidenceManifest || [],
-                      16
-                  ),
                   outputRefs: packageBefore.availableOutputRefs.slice(-24),
                   droppedItemsManifest: packageBefore.droppedItemsManifest,
                   instruction: 'Continue the persistent Session. The latest Turn input is authoritative; activeGoal is optional durable context. Completed Turn commands and stale tool errors are history, not current instructions.'
@@ -592,10 +580,6 @@ class ContextManager {
                       24
                   ),
                   taskState: normalizeContextPackageValue(options.taskState || null, 5000),
-                  evidenceManifest: normalizeManifestList(
-                      options.pinnedEvidenceManifest || options.evidenceManifest || [],
-                      16
-                  ),
                   outputRefs: packageBefore.availableOutputRefs.slice(-24),
                   droppedItemsManifest: packageBefore.droppedItemsManifest,
                   instruction: 'Continue the same task from this checkpoint. Do not repeat completed work. Use the preserved original task and constraints as the authority.'

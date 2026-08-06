@@ -15,9 +15,7 @@ const {
 } = require('./ailis-tool-contracts.cjs');
 const {
     buildObservationLedgerPromptObject,
-    classifyEvidenceGapObservation,
     classifyToolFailureObservation,
-    formatEvidenceGapHint,
     formatFailureHint,
     sanitizeToolArgsForPrompt
 } = require('./ailis-turn-items.cjs');
@@ -81,10 +79,6 @@ const {
     AILISContextCompiler
 } = require('./ailis-context-compiler.cjs');
 const {
-    createEvidenceArtifact,
-    getEvidenceArtifactsPromptObject
-} = require('./ailis-evidence-artifacts.cjs');
-const {
     buildOptimizationShadowTelemetry,
     resolveOptimizationShadowFlags
 } = require('./ailis-optimization-shadow.cjs');
@@ -112,9 +106,6 @@ const EXTENDED_AGENT_DECISION_TIMEOUT_MS = 300000;
 const DEEP_THINKING_AGENT_DECISION_TIMEOUT_MS = 10 * 60 * 1000;
 const MAX_AGENT_DECISION_TIMEOUT_MS = DEEP_THINKING_AGENT_DECISION_TIMEOUT_MS;
 const PENDING_STORE_VERSION = 1;
-const FINAL_ANSWER_TOOL_NAME = 'final_answer';
-const SOURCE_QUESTION_EVIDENCE_TASK_TYPE = 'agent_exact_answer_source';
-const SOURCE_QUESTION_EVIDENCE_ID = 'source_question';
 const DIRECT_TOOL_PROGRESS_NOTE_FIELD = 'progress_note';
 const AGENT_DECISION_REASONING_EFFORT_VALUES = new Set(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
 const DEEP_AGENT_DECISION_REASONING_EFFORT_VALUES = new Set(['medium', 'high', 'xhigh', 'max']);
@@ -141,11 +132,11 @@ Your capabilities:
 Within this context, AILIS TaskAgent follows the task-execution behavior of a modern coding agent.
 
 This Worker is not responsible for persona performance, relationship management, emotional acting, or roleplay; its result returns as a normal tool observation to the same outer AILIS conversation.
-Do not actively use persona_output, persona_surface, character actions, expressions, affinity, or casual roleplay style. Keep task reports concise, verifiable, and centered on code results, tool observations, and evidence.
+Do not actively use persona_output, persona_surface, character actions, expressions, affinity, or casual roleplay style. Keep task reports concise, useful, and centered on code results and tool observations.
 
 ## Task execution
 
-You are a coding agent. Continue only while a concrete tool call or reasoning step can advance the task. When the available evidence supports the requested result, answer immediately instead of searching for optional completeness. Do NOT guess or make up an answer.
+You are a coding agent. Continue only while a concrete tool call or reasoning step can advance the task. Answer as soon as you can reasonably satisfy the current request instead of searching for optional completeness. Do NOT guess or make up an answer.
 
 You MUST adhere to the following criteria when solving queries:
 
@@ -284,14 +275,14 @@ const AGENT_TOOL_CATALOG = Object.freeze([
     Object.freeze({ id: 'artifact_query', label: 'artifact_query', summary: 'AILIS Context Artifact 查询入口：用 artifactId 查询 summary/grid/range/search，避免把大 payload 文件读进主上下文。' }),
     Object.freeze({ id: 'artifact_tools', label: 'artifact_tools', summary: 'AILIS Artifact Tools 统一工件运行时：本地附件/文件的 open、index、search、query、inspect、render、trace、edit、export、roundtrip，优先接管 XLSX/PDF/DOCX/PPTX/CSV/图片等 artifact 类任务。' }),
     Object.freeze({ id: 'artifact_import', label: 'artifact_import', summary: 'AILIS Context Artifact 导入入口：用 RAGFlow-lite worker 解析本地文件并注册可查询 artifactId。' }),
-    Object.freeze({ id: 'github_pages', label: 'github_pages', summary: 'GitHub Pages/gh-pages/github.io 发布诊断、关键阻塞和公开 URL 验收证据。' }),
+    Object.freeze({ id: 'github_pages', label: 'github_pages', summary: 'GitHub Pages/gh-pages/github.io 发布诊断、关键阻塞和公开 URL 验收。' }),
     Object.freeze({ id: 'exec', label: 'exec', summary: '在当前 runtime_environment shell 中运行一条命令，返回 stdout/stderr/exitCode/duration/workdir；适合已有脚本、测试、构建、诊断和短命令。' }),
     Object.freeze({ id: 'update_plan', label: 'update_plan', summary: '更新任务计划和进度。' }),
     Object.freeze({ id: 'tool_search', label: 'tool_search', summary: 'AILIS 工具发现：搜索 deferred tool metadata，并暴露匹配工具给下一轮调用。' }),
     Object.freeze({ id: 'request_permissions', label: 'request_permissions', summary: 'AILIS 权限申请：当当前 permission profile 阻止必要的文件或网络操作时，先请求精确授权。' }),
     Object.freeze({ id: 'mcp_bridge', label: 'mcp_bridge', summary: 'MCP 管理与发现入口：列 server、健康检查、搜索 direct MCP tool specs、读 resources/prompts；普通任务使用 mcp__server__tool。' }),
     Object.freeze({ id: 'capability_manager', label: 'capability_manager', summary: '能力注册、安装、外部工具批量暴露、Contract 编译/验收、Skill 生成、回滚和已审批修复执行。' }),
-    Object.freeze({ id: 'self_debugger', label: 'self_debugger', summary: 'AILIS 自身 bug 的专用排查协议：建案、收证据、诊断、提补丁、验证、审批后应用。' }),
+    Object.freeze({ id: 'self_debugger', label: 'self_debugger', summary: 'AILIS 自身 bug 的专用排查协议：建案、收集运行资料、诊断、提补丁和验证。' }),
     Object.freeze({ id: 'self_evolution', label: 'self_evolution', summary: '通过对话和任务执行分析用户偏好、工具瓶颈、能力缺口，并生成可审批的自我优化提案。' })
 ]);
 const AGENT_MCP_CATALOG = Object.freeze([
@@ -1000,9 +991,6 @@ function hasVisionAgentContext(events = [], stepResults = []) {
 
 function hasArtifactAgentContext(stepResults = [], requestContext = {}) {
     if (
-        requestContext.exactAnswerMode === true ||
-        requestContext.exactAnswer === true ||
-        requestContext.exact_answer_mode === true ||
         requestContext.taskCompactPrompt === true ||
         requestContext.artifactQuestionCompact === true ||
         requestContext.artifact_answer_question === true
@@ -1272,24 +1260,6 @@ function extractToolResultText(result) {
     return chunks.join('\n').trim();
 }
 
-function isExactAnswerExecutionMode(request = {}, requestContext = {}) {
-    const profile = requestContext.executionProfile || request.executionProfile || {};
-    return Boolean(
-        request.answerOnly === true ||
-            requestContext.answerOnly === true ||
-            request.exactAnswerMode === true ||
-            requestContext.exactAnswerMode === true ||
-            request.exact_answer_mode === true ||
-            requestContext.exact_answer_mode === true ||
-            request.exactAnswer === true ||
-            requestContext.exactAnswer === true ||
-            profile.kind === 'exact_answer_eval' ||
-            profile.answerOnly === true ||
-            requestContext.evaluationTaskId ||
-            requestContext.evaluationName
-    );
-}
-
 function looksLikeArtifactAnswerQuestion({ message = '', fileAttachments = [] } = {}) {
     const text = normalizeText(message);
     const attachments = normalizeFileAttachments(fileAttachments);
@@ -1384,188 +1354,6 @@ function buildAgentContextBudgetConfig(settings = {}, requestContext = {}, token
     };
 }
 
-function normalizeFinalAnswerConfidence(value) {
-    const confidence = normalizeText(value).toLowerCase();
-    if (/^(high|sure|certain|confident|高)/.test(confidence)) {
-        return 'high';
-    }
-    if (/^(medium|moderate|partial|中)/.test(confidence)) {
-        return 'medium';
-    }
-    if (/^(low|weak|uncertain|missing|低)/.test(confidence)) {
-        return 'low';
-    }
-    return confidence || '';
-}
-
-function getAgentRunTaskType(request = {}, requestContext = {}) {
-    return normalizeText(
-        requestContext.evaluationName ||
-            requestContext.executionProfile?.kind ||
-            request.evaluationName ||
-            request.executionProfile?.kind ||
-            'ailis_agent_task',
-        'ailis_agent_task'
-    );
-}
-
-function inferAgentEvidenceId(stepResult = {}) {
-    const tool = normalizeText(stepResult.tool).toLowerCase();
-    const args = stepResult.args && typeof stepResult.args === 'object' ? stepResult.args : {};
-    const action = normalizeText(args.action || args.command || args.operation || stepResult.action).toLowerCase();
-    const haystack = `${tool}\n${action}\n${stepResult.title || ''}\n${extractToolResultText(stepResult.response?.result) || stepResult.response?.error || ''}`.toLowerCase();
-    const details = getToolResultDetails(stepResult);
-    const observationContract = details.observationContract || details.observation_contract || {};
-    if (
-        observationContract.semantic_level === 'computation' ||
-        action === 'aggregate' ||
-        details.computation ||
-        details.query?.observation?.computation
-    ) {
-        return 'computation_result';
-    }
-    if (tool === VISION_TOOL_ID || /vision|screenshot|image|ocr|frame/.test(haystack)) {
-        return /observation|describe|caption|ocr/.test(haystack) ? 'vision_observation' : 'snapshot';
-    }
-    if (/email|gmail|outlook|mailbox/.test(tool)) {
-        return /read|get|summary|thread|message/.test(action) ? 'mail_summary' : 'mailbox_query';
-    }
-    if (/web_search|search|candidate|source|url|link/.test(haystack)) {
-        return 'research_source';
-    }
-    if (/artifact_verifier|verify|check|test|lint|validate/.test(`${tool}\n${action}\n${haystack}`)) {
-        return /fail|traceback|assert|error/.test(haystack) ? 'test_failure' : 'verification_result';
-    }
-    if (/git|diff|patch|apply_patch|commit|worktree|working tree|branch/.test(haystack)) {
-        if (/diff|patch|changed/.test(haystack)) {
-            return 'change_set';
-        }
-        if (/branch|status|working tree|worktree/.test(haystack)) {
-            return 'repo_state';
-        }
-        return 'operation_result';
-    }
-    if (/web_fetch|pdf|artifact_tools|artifact_import|artifact_query|read_spreadsheet|spreadsheet|workbook|xlsx|csv|extract|download|transcript|github_repo_read|read|fetch/.test(haystack)) {
-        return /pdf|document|spreadsheet|csv|transcript|extract|read/.test(haystack)
-            ? 'research_read_result'
-            : 'parsed_content';
-    }
-    if (/write|mkdir|copy|move|delete|trash|rename|exec|run|command/.test(action)) {
-        return 'operation_result';
-    }
-    return 'operation_result';
-}
-
-function buildAgentEvidenceArtifactsForStep(stepResult = {}, { taskType = 'ailis_agent_task' } = {}) {
-    const resultText = extractToolResultText(stepResult.response?.result) || stepResult.response?.error || summarize(stepResult.response, 1200);
-    if (!normalizeText(resultText) && !normalizeText(stepResult.title)) {
-        return [];
-    }
-    const evidenceId = inferAgentEvidenceId(stepResult);
-    const artifact = createEvidenceArtifact({
-        taskType,
-        evidenceId,
-        observation: {
-            id: stepResult.id,
-            title: stepResult.title,
-            tool: stepResult.tool,
-            action: stepResult.args?.action || stepResult.args?.command || stepResult.phase || '',
-            args: stepResult.args,
-            status: stepResult.response?.status || '',
-            ok: stepResult.response?.ok === true,
-            iteration: stepResult.iteration,
-            resultText,
-            preview: resultText,
-            response: stepResult.response
-        }
-    });
-    return [artifact].filter((entry) => entry?.validation?.ok === true);
-}
-
-function attachAgentEvidenceArtifacts(stepResult = {}, { taskType = 'ailis_agent_task' } = {}) {
-    const artifacts = buildAgentEvidenceArtifactsForStep(stepResult, { taskType });
-    return {
-        ...stepResult,
-        evidenceArtifacts: artifacts
-    };
-}
-
-function looksLikeSelfContainedExactAnswerQuestion(message = '') {
-    const text = normalizeText(message);
-    if (text.length < 24) {
-        return false;
-    }
-    const externalEvidenceClues = [
-        /https?:\/\//i,
-        /\bwww\./i,
-        /\bdoi\b|arxiv|youtube|youtu\.be/i,
-        /\battached file path\b|\bfile path\b|\battached file\b/i,
-        /\.(?:pdf|docx?|xlsx?|csv|pptx?|png|jpe?g|mp3|wav|mp4)\b/i,
-        /\b(?:website|webpage|web page|article|paper|journal|report|news|database|library catalog|archive|dataset|BASE)\b/i,
-        /\b(?:as of|published|retrieved|according to|from what country|which country)\b/i
-    ];
-    if (externalEvidenceClues.some((pattern) => pattern.test(text))) {
-        return false;
-    }
-    const selfContainedClues = [
-        /\b(?:fictional language|translate|translation|sentence|grammar|nominative|accusative|genitive|root verb|preterit|imperfect)\b/i,
-        /\b(?:given|suppose|assume|let|if|when|where|arranged|defined as|rules?|constraints?)\b/i,
-        /\b(?:logic|puzzle|calculate|compute|solve|what is the value|how many|probability|odds|chance|random|dice|cards|maximi[sz]e)\b/i,
-        /\b(?:truth table|expression|equation|sequence|integer|number|word that indicates|form)\b/i
-    ];
-    return selfContainedClues.some((pattern) => pattern.test(text));
-}
-
-function buildSourceQuestionEvidenceArtifact(message = '', { exactAnswerMode = false } = {}) {
-    if (exactAnswerMode !== true || !looksLikeSelfContainedExactAnswerQuestion(message)) {
-        return null;
-    }
-    const text = normalizeText(message);
-    const artifact = createEvidenceArtifact({
-        taskType: SOURCE_QUESTION_EVIDENCE_TASK_TYPE,
-        evidenceId: SOURCE_QUESTION_EVIDENCE_ID,
-        observation: {
-            id: 'source-question',
-            title: 'Original exact-answer question',
-            tool: 'user_prompt',
-            action: SOURCE_QUESTION_EVIDENCE_ID,
-            status: 'provided',
-            ok: true,
-            iteration: 0,
-            resultText: text,
-            preview: text,
-            response: {
-                ok: true,
-                status: 'provided',
-                result: {
-                    content: [{ type: 'text', text }]
-                }
-            }
-        }
-    });
-    return artifact?.validation?.ok === true ? artifact : null;
-}
-
-function buildBaseAgentEvidenceArtifacts({ message = '', exactAnswerMode = false } = {}) {
-    return [buildSourceQuestionEvidenceArtifact(message, { exactAnswerMode })].filter(Boolean);
-}
-
-function getStepEvidenceRefs(stepResult = {}) {
-    return (Array.isArray(stepResult.evidenceArtifacts) ? stepResult.evidenceArtifacts : [])
-        .map((artifact) => artifact.id)
-        .filter(Boolean);
-}
-
-function buildAgentEvidenceArtifactsPromptObject(stepResults = [], options = {}) {
-    const artifacts = [
-        ...buildBaseAgentEvidenceArtifacts(options),
-        ...stepResults.flatMap((stepResult) =>
-        Array.isArray(stepResult.evidenceArtifacts) ? stepResult.evidenceArtifacts : []
-        )
-    ];
-    return getEvidenceArtifactsPromptObject(artifacts).slice(-16);
-}
-
 function getToolResultDetails(stepResult = {}) {
     const result = stepResult.response?.result || {};
     const candidates = [
@@ -1584,185 +1372,24 @@ function getToolResultDetails(stepResult = {}) {
     return [...candidates, ...nestedCandidates].reduce((merged, entry) => ({ ...merged, ...entry }), {});
 }
 
-const EXPLICIT_ANSWER_CANDIDATE_KEYS = new Map([
-    ['bestanswercandidate', { kind: 'best', finalizable: false }],
-    ['answercandidate', { kind: 'singular', finalizable: false }],
-    ['answercandidates', { kind: 'ranked', finalizable: false }]
-]);
-const ANSWER_CANDIDATE_SOURCE_PRIORITY = {
-    model_submission: 100,
-    task_handoff_candidate: 90,
-    tool_explicit_candidate: 50
-};
-
-function compareAnswerCandidatesForRetention(left = {}, right = {}) {
-    return Number(right.selected) - Number(left.selected) ||
-        Number(right.finalizable) - Number(left.finalizable) ||
-        (ANSWER_CANDIDATE_SOURCE_PRIORITY[right.source] || 0) -
-            (ANSWER_CANDIDATE_SOURCE_PRIORITY[left.source] || 0) ||
-        Number(right.confidence || 0) - Number(left.confidence || 0) ||
-        Number(right.score || 0) - Number(left.score || 0) ||
-        Number(right.iteration || 0) - Number(left.iteration || 0);
-}
-
-function normalizeAnswerCandidateEvidenceRefs(value = []) {
-    const refs = [];
-    for (const item of normalizeArrayValue(value)) {
-        const ref = normalizeText(
-            typeof item === 'string' ? item : item?.id || item?.ref || item?.ref_id || item?.evidenceId
-        );
-        if (ref && !refs.includes(ref)) {
-            refs.push(ref);
-        }
-    }
-    return refs.slice(0, 16);
-}
-
-function normalizePreservedAnswerCandidate(value, metadata = {}) {
-    const objectValue = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
-    const scalarValue = ['string', 'number', 'boolean'].includes(typeof value) ? value : '';
-    const answer = stripControlTags(normalizeText(
-        scalarValue ||
-            objectValue.answer ||
-            objectValue.value ||
-            objectValue.exactAnswer ||
-            objectValue.exact_answer ||
-            objectValue.finalAnswer ||
-            objectValue.final_answer ||
-            objectValue.candidate
-    ));
-    if (!answer) {
-        return null;
-    }
-    const confidence = Number(objectValue.confidence ?? metadata.confidence);
-    const score = Number(objectValue.score ?? objectValue.rankScore ?? metadata.score);
-    const selected = metadata.selected === true ||
-        objectValue.selected === true ||
-        objectValue.isBest === true ||
-        objectValue.is_best === true ||
-        objectValue.status === 'selected';
-    const finalizable = metadata.finalizable === true ||
-        objectValue.finalizable === true ||
-        objectValue.readyForFinal === true ||
-        objectValue.ready_for_final === true;
-    return {
-        answer,
-        personaText: stripControlTags(normalizeText(
-            objectValue.personaText || objectValue.persona_text || metadata.personaText || answer
-        )),
-        reason: normalizeText(objectValue.reason || objectValue.rationale || metadata.reason),
-        evidenceRefs: normalizeAnswerCandidateEvidenceRefs(
-            objectValue.evidenceRefs || objectValue.evidence_refs || metadata.evidenceRefs
-        ),
-        source: normalizeText(metadata.source || objectValue.source, 'tool_explicit_candidate'),
-        sourceTool: normalizeText(metadata.sourceTool || objectValue.sourceTool || objectValue.source_tool),
-        sourceStepId: normalizeText(metadata.sourceStepId || objectValue.sourceStepId || objectValue.source_step_id),
-        sourcePath: normalizeText(metadata.sourcePath),
-        kind: normalizeText(metadata.kind || objectValue.kind, 'singular'),
-        iteration: Number.isFinite(Number(metadata.iteration)) ? Number(metadata.iteration) : 0,
-        selected,
-        finalizable,
-        ...(Number.isFinite(confidence) ? { confidence } : {}),
-        ...(Number.isFinite(score) ? { score } : {})
-    };
-}
-
-function mergeAnswerCandidateLedger(current = [], incoming = [], limit = 32) {
-    const merged = new Map();
-    for (const candidate of [...normalizeArrayValue(current), ...normalizeArrayValue(incoming)]) {
-        const normalized = normalizePreservedAnswerCandidate(candidate, candidate);
-        if (!normalized) continue;
-        const key = [
-            normalized.answer.toLowerCase(),
-            normalized.source,
-            normalized.sourceTool,
-            normalized.kind
-        ].join('\u0000');
-        const existing = merged.get(key);
-        if (!existing || (
-            Number(normalized.finalizable) + Number(normalized.selected) >
-            Number(existing.finalizable) + Number(existing.selected)
-        )) {
-            merged.set(key, normalized);
-        }
-    }
-    const boundedLimit = Math.max(1, Number(limit) || 32);
-    const retained = [...merged.values()]
-        .sort(compareAnswerCandidatesForRetention)
-        .slice(0, boundedLimit);
-    return retained.sort((left, right) => Number(left.iteration) - Number(right.iteration));
-}
-
-function collectExplicitAnswerCandidatesFromStepResult(stepResult = {}) {
-    const response = stepResult.response || {};
-    const candidates = [];
-    const visited = new Set();
-    let visitedNodes = 0;
-    const baseMetadata = {
-        source: 'tool_explicit_candidate',
-        sourceTool: canonicalDirectToolId(stepResult.tool),
-        sourceStepId: stepResult.id,
-        iteration: Number(stepResult.iteration) || 0
-    };
-    const pushCandidate = (value, metadata = {}) => {
-        const normalized = normalizePreservedAnswerCandidate(value, {
-            ...baseMetadata,
-            ...metadata,
-            finalizable: response.ok === true && metadata.finalizable === true
-        });
-        if (normalized) candidates.push(normalized);
-    };
-    const visit = (value, depth = 0, path = '') => {
-        if (!value || typeof value !== 'object' || depth > 8 || visitedNodes >= 2000) return;
-        if (visited.has(value)) return;
-        visited.add(value);
-        visitedNodes += 1;
-        if (Array.isArray(value)) {
-            value.slice(0, 200).forEach((item, index) => visit(item, depth + 1, `${path}[${index}]`));
-            return;
-        }
-        for (const [key, nested] of Object.entries(value)) {
-            const normalizedKey = key.toLowerCase().replace(/[^a-z]/g, '');
-            const candidateContract = EXPLICIT_ANSWER_CANDIDATE_KEYS.get(normalizedKey);
-            if (candidateContract) {
-                const values = candidateContract.kind === 'ranked' ? normalizeArrayValue(nested) : [nested];
-                values.slice(0, 12).forEach((candidate, index) => pushCandidate(candidate, {
-                    kind: candidateContract.kind,
-                    finalizable: candidateContract.finalizable,
-                    selected: candidateContract.kind === 'best',
-                    sourcePath: `${path}.${key}${candidateContract.kind === 'ranked' ? `[${index}]` : ''}`
-                }));
-            }
-            if (normalizedKey === 'taskrunhandoff' || normalizedKey === 'taskresult') {
-                const handoff = nested && typeof nested === 'object' && !Array.isArray(nested) ? nested : {};
-                const status = normalizeText(handoff.status).toLowerCase();
-                const answer = handoff.exactAnswer || handoff.exact_answer || handoff.finalAnswer || handoff.final_answer;
-                if (answer) {
-                    pushCandidate({
-                        answer,
-                        evidenceRefs: handoff.evidenceRefs || handoff.evidence_refs || handoff.sourceRefs || handoff.source_refs
-                    }, {
-                        source: 'task_handoff_candidate',
-                        kind: 'handoff',
-                        selected: status.startsWith('completed') || ['success', 'succeeded'].includes(status),
-                        finalizable: status.startsWith('completed') || ['success', 'succeeded'].includes(status),
-                        sourcePath: `${path}.${key}`
-                    });
-                }
-            }
-            if (nested && typeof nested === 'object') {
-                visit(nested, depth + 1, `${path}.${key}`);
-            }
-        }
-    };
-    visit(response, 0, 'response');
-    return mergeAnswerCandidateLedger([], candidates);
-}
-
-function selectBestAnswerCandidate(candidates = [], { requireFinalizable = false } = {}) {
-    return mergeAnswerCandidateLedger([], candidates)
-        .filter((candidate) => !requireFinalizable || candidate.finalizable === true)
-        .sort(compareAnswerCandidatesForRetention)[0] || null;
+function previewBudgetForAgentToolResult(stepResult = {}) {
+    const tool = normalizeText(stepResult.tool).toLowerCase();
+    const resultText = extractToolResultText(stepResult.response?.result) || stepResult.response?.error || '';
+    const details = getToolResultDetails(stepResult);
+    const structuredDocument =
+        details.document ||
+        details.paragraphCount !== undefined ||
+        details.tableCount !== undefined ||
+        /#\s*DOCUMENT_READ_COMPLETE\b|## Tables|Table \d+ rows=/i.test(resultText);
+    const structuredSpreadsheet =
+        details.workbook ||
+        details.sheetCount !== undefined ||
+        /spreadsheet|workbook|sheet=/i.test(`${tool}\n${resultText}`);
+    return /read_document|read_spreadsheet|read_presentation/.test(tool) ||
+        structuredDocument ||
+        structuredSpreadsheet
+        ? STRUCTURED_TOOL_RESULT_PREVIEW_CHARS
+        : 1600;
 }
 
 function collectAgentUnresolvedFields(stepResults = [], latestDecision = null) {
@@ -1843,40 +1470,9 @@ function classifyResearchAttemptOperation(tool = '', args = {}) {
     return 'other';
 }
 
-function detectResearchStrategyAlerts(attempts = [], requestContext = {}) {
-    const taskText = normalizeText(
-        requestContext.currentUserMessage ||
-            requestContext.desktopRealEvalTaskText ||
-            requestContext.parentUserGoal ||
-            requestContext.parent_user_goal
-    );
-    const historicalPublicSourceTask =
-        /(?:\bas\s+of\b|\bin\s+(?:19|20)\d{2}\b|\bhistorical\b|\barchived?\b|截至|当时|历史)/i.test(taskText) &&
-        /(?:website|webpage|database|catalog|library|search engine|result page|archive|网站|网页|数据库|目录|检索)/i.test(taskText);
-    if (!historicalPublicSourceTask) {
-        return [];
-    }
-    const searchAttempts = attempts.filter((attempt) => attempt.operation === 'search');
-    const archiveAttempts = attempts.filter((attempt) => attempt.operation === 'archive');
-    if (searchAttempts.length < 2 || archiveAttempts.length > 0) {
-        return [];
-    }
-    return [{
-        code: 'historical_archive_not_tried_after_repeated_search',
-        searchAttempts: searchAttempts.length,
-        recommendedCapability: 'web_run.archive',
-        instruction: [
-            `${searchAttempts.length} web discovery searches have not established the requested historical/as-of source state, and no archive operation has been attempted.`,
-            'The archive capability is already visible inside web_run; this is not a request for another tool_search.',
-            'Use web_run.archive with a known authoritative URL or stable URL prefix, mode:"search", and concise identifier/filter terms, then inspect the opened snapshot.',
-            'Choose the arguments yourself from observed source URLs. This is a no-progress affordance, not a hard route or answer decision.'
-        ].join(' ')
-    }];
-}
-
 function buildResearchProgressState(stepResults = [], requestContext = {}) {
     const attempts = (Array.isArray(stepResults) ? stepResults : [])
-        .filter((stepResult) => isWebEvidenceToolName(stepResult?.tool))
+        .filter((stepResult) => isWebToolName(stepResult?.tool))
         .slice(-12)
         .map((stepResult) => {
             const details = getToolResultDetails(stepResult);
@@ -1895,7 +1491,6 @@ function buildResearchProgressState(stepResults = [], requestContext = {}) {
                 complete: contract.complete,
                 truncated: contract.truncated,
                 errorCode: normalizeText(contract.error_code),
-                evidenceRefs: getStepEvidenceRefs(stepResult),
                 nextActions: Array.isArray(contract.next_actions)
                     ? contract.next_actions.slice(0, 4)
                     : []
@@ -1920,19 +1515,12 @@ function buildResearchProgressState(stepResults = [], requestContext = {}) {
             }
         }
     }
-    const evidenceRefs = [...new Set(attempts.flatMap((entry) => entry.evidenceRefs))];
-    const strategyAlerts = detectResearchStrategyAlerts(attempts, requestContext);
     return {
         schema: 'ailis.research_progress.v1',
         attempts,
         blockedHosts: blockedHosts.slice(0, 12),
-        evidenceRefs: evidenceRefs.slice(-24),
         noProgressReason: detectAgentNoProgress(stepResults, requestContext),
-        strategyAlerts,
-        instruction: [
-            'This is mechanical observation history, not a semantic conclusion. Preserve the original task entities, roles, dates, ordering, and source constraints in your reasoning; avoid repeating blocked or identical observations, and choose the next source or tool yourself.',
-            ...strategyAlerts.map((alert) => alert.instruction)
-        ].join(' ')
+        instruction: 'This is mechanical observation history, not a semantic conclusion. Avoid repeating blocked or identical calls, and choose the next source or tool yourself.'
     };
 }
 
@@ -1992,265 +1580,6 @@ function resolveTaskAgentActiveGoal(stepResults = [], requestContext = {}) {
         }
     }
     return activeGoal;
-}
-
-function normalizeEvidenceBoolean(value, fallback = false) {
-    if (value === true || value === 'true') {
-        return true;
-    }
-    if (value === false || value === 'false') {
-        return false;
-    }
-    return fallback;
-}
-
-function isWebEvidenceToolName(tool = '') {
-    const normalized = normalizeText(tool).toLowerCase();
-    return /(?:^|__|:|\.)(web_run|web_search|web_fetch|web_research|web_archive_lookup|web_extract_links|open_page|find_in_page|continue_page|render_page)$/.test(normalized) ||
-        ['web_run', 'web_search', 'web_fetch', 'web_research', 'web_archive_lookup', 'web_extract_links', 'open_page', 'find_in_page', 'continue_page', 'render_page'].includes(normalized);
-}
-
-function buildEvidenceAuditCandidateFromStep(stepResult = {}) {
-    const tool = normalizeText(stepResult.tool);
-    if (!isWebEvidenceToolName(tool) || stepResult.response?.ok !== true) {
-        return null;
-    }
-    const details = getToolResultDetails(stepResult);
-    const observationContract = details.observationContract || details.observation_contract || {};
-    const resultText = extractToolResultText(stepResult.response?.result) || stepResult.response?.error || '';
-    const pages = Array.isArray(details.evidencePages)
-        ? details.evidencePages
-        : (Array.isArray(details.pages) ? details.pages : []);
-    const summarizedPages = pages.slice(0, 5).map((page) => ({
-        title: page.title || null,
-        url: page.url || null,
-        pageType: page.pageType || page.page_type || null,
-        contentQuality: page.contentQuality || page.content_quality || page.evidenceQuality || null,
-        evidenceQuality: page.evidenceQuality || page.evidence_quality || null,
-        reasoningReady: page.reasoningReady === true || page.reasoning_ready === true,
-        evidenceScore: Number.isFinite(Number(page.evidenceScore)) ? Number(page.evidenceScore) : undefined,
-        evidenceGap: summarize(page.evidenceGap || '', 220),
-        snippets: Array.isArray(page.evidenceSnippets) ? page.evidenceSnippets.slice(0, 2).map((snippet) => summarize(snippet, 220)) : []
-    }));
-    return {
-        stepId: stepResult.id || null,
-        tool,
-        title: stepResult.title || null,
-        query: details.query || stepResult.args?.query || stepResult.args?.q || stepResult.args?.search || null,
-        url: details.url || stepResult.args?.url || null,
-        retrievalReadiness: details.answerReadiness || details.retrievalReadiness || details.retrieval_readiness || null,
-        readinessAuthority: details.readinessAuthority || details.readiness_authority || 'retrieval_heuristic',
-        pageType: details.pageType || observationContract.page_type || null,
-        contentQuality: details.contentQuality || details.evidenceQuality || observationContract.evidence_quality || null,
-        evidenceQuality: details.evidenceQuality || observationContract.evidence_quality || null,
-        reasoningReady: details.reasoningReady === true || details.reasoning_ready === true || observationContract.reasoning_ready === true,
-        isEvidence: details.isEvidence === true || observationContract.is_evidence === true,
-        focus: details.focus || null,
-        evidenceGap: summarize(details.evidenceGap || '', 360),
-        evidencePages: summarizedPages,
-        preview: summarize(resultText, 1200)
-    };
-}
-
-function buildEvidenceAuditContractPromptObject(auditCandidates = [], { message = '' } = {}) {
-    if (!Array.isArray(auditCandidates) || !auditCandidates.length) {
-        return null;
-    }
-    return {
-        model: 'ailis_llm_evidence_auditor.v1',
-        required: true,
-        user_goal: summarize(message, 500),
-        instruction: [
-            'Before final answer, audit whether the available retrieval evidence is sufficient for the user goal.',
-            'This LLM audit overrides retrieval/readiness labels from tools.',
-            'Do not invent unsupported fields; if key fields are missing, continue retrieval, switch tools, ask clarification, or state the evidence gap.'
-        ].join(' '),
-        output_schema: {
-            ready: 'boolean',
-            confidence: 'high|medium|low',
-            task_type: 'short task category inferred from the user goal',
-            answerable_scope: 'what can be answered from current evidence',
-            supported_claims: [
-                {
-                    claim: 'claim that can be stated',
-                    evidence_ref: 'stepId or source URL',
-                    quote_or_snippet: 'short supporting excerpt',
-                    confidence: 'high|medium|low'
-                }
-            ],
-            missing_fields: ['required user-goal fields not supported by evidence'],
-            rejected_evidence: [
-                {
-                    evidence_ref: 'stepId or source URL',
-                    reason: 'why it is not answer-bearing'
-                }
-            ],
-            next_action: 'final|continue_retrieval|use_specialized_tool|ask_clarification|blocked'
-        },
-        final_answer_rule: 'Evidence labels are advisory only. The model decides whether the available observations are sufficient for a final answer.',
-        candidates: auditCandidates
-    };
-}
-
-function buildReadyEvidenceFromStep(stepResult = {}) {
-    const details = getToolResultDetails(stepResult);
-    const resultText = extractToolResultText(stepResult.response?.result) || stepResult.response?.error || '';
-    const documentReadComplete = /#\s*DOCUMENT_READ_COMPLETE\b/i.test(resultText);
-    const textSaysNotTruncated = /\btruncated:\s*false\b/i.test(resultText);
-    const observationContract = details.observationContract || details.observation_contract || {};
-    const evidence = details.evidence && typeof details.evidence === 'object' ? details.evidence : {};
-    const coveredByEvidence = details.coveredByEvidence && typeof details.coveredByEvidence === 'object'
-        ? details.coveredByEvidence
-        : null;
-    const complete = normalizeEvidenceBoolean(details.complete, normalizeEvidenceBoolean(observationContract.complete, normalizeEvidenceBoolean(evidence.complete, documentReadComplete && textSaysNotTruncated)));
-    const truncated = normalizeEvidenceBoolean(details.truncated, normalizeEvidenceBoolean(observationContract.truncated, normalizeEvidenceBoolean(evidence.truncated, documentReadComplete ? !textSaysNotTruncated : false)));
-    const reasoningReady = normalizeEvidenceBoolean(
-        details.reasoningReady,
-        normalizeEvidenceBoolean(details.reasoning_ready, normalizeEvidenceBoolean(observationContract.reasoning_ready, normalizeEvidenceBoolean(evidence.reasoningReady, documentReadComplete && textSaysNotTruncated)))
-    );
-    if (stepResult.response?.ok !== true) {
-        return null;
-    }
-    const coverage = details.coverage && typeof details.coverage === 'object'
-        ? details.coverage
-        : (evidence.coverage && typeof evidence.coverage === 'object' ? evidence.coverage : null);
-    const result = details.result && typeof details.result === 'object' ? details.result : {};
-    return {
-        stepId: stepResult.id || null,
-        tool: stepResult.tool || null,
-        title: stepResult.title || null,
-        action: details.action || stepResult.args?.action || stepResult.args?.operation || stepResult.args?.intent || null,
-        artifactId: details.artifactId || evidence.artifactId || stepResult.args?.artifactId || stepResult.args?.artifact_id || null,
-        sheet: details.sheet || evidence.sheet || coverage?.sheet || null,
-        range: details.range || evidence.range || coverage?.range || result.range || null,
-        evidenceId: details.pinnedEvidenceId || evidence.evidenceId || coveredByEvidence?.evidenceId || null,
-        coveredByEvidence,
-        resultSummary: Object.keys(result).length
-            ? {
-                pathFound: typeof result.pathFound === 'boolean' ? result.pathFound : undefined,
-                steps: Number.isFinite(Number(result.steps)) ? Number(result.steps) : undefined,
-                visited: Number.isFinite(Number(result.visited)) ? Number(result.visited) : undefined,
-                pathTruncated: result.pathTruncated === true
-            }
-            : null,
-        coverage: coverage ? {
-            kind: coverage.kind,
-            queryAction: coverage.queryAction,
-            sheet: coverage.sheet,
-            range: coverage.range,
-            complete: coverage.complete,
-            truncated: coverage.truncated
-        } : {
-            kind: isWebEvidenceToolName(stepResult.tool) ? 'web_observation' : 'tool_observation',
-            complete,
-            truncated,
-            reasoningReady,
-            evidenceQuality: details.evidenceQuality || details.evidence_quality || observationContract.evidence_quality || null,
-            isEvidence: details.isEvidence ?? details.is_evidence ?? observationContract.is_evidence ?? null
-        }
-    };
-}
-
-function previewBudgetForAgentToolResult(stepResult = {}) {
-    const tool = normalizeText(stepResult.tool).toLowerCase();
-    const resultText = extractToolResultText(stepResult.response?.result) || stepResult.response?.error || '';
-    const details = getToolResultDetails(stepResult);
-    const structuredDocument =
-        details.document ||
-        details.paragraphCount !== undefined ||
-        details.tableCount !== undefined ||
-        /#\s*DOCUMENT_READ_COMPLETE\b|## Tables|Table \d+ rows=/i.test(resultText);
-    const structuredSpreadsheet =
-        details.workbook ||
-        details.sheetCount !== undefined ||
-        /spreadsheet|workbook|sheet=/i.test(`${tool}\n${resultText}`);
-    if (
-        /read_document|read_spreadsheet|read_presentation/.test(tool) ||
-        structuredDocument ||
-        structuredSpreadsheet
-    ) {
-        return STRUCTURED_TOOL_RESULT_PREVIEW_CHARS;
-    }
-    return 1600;
-}
-
-function buildEvidenceSufficiencyPromptObject(stepResults = [], { exactAnswerMode = false, message = '' } = {}) {
-    const sourceQuestionArtifact = buildSourceQuestionEvidenceArtifact(message, { exactAnswerMode });
-    const evidenceAuditCandidates = (Array.isArray(stepResults) ? stepResults : [])
-        .map(buildEvidenceAuditCandidateFromStep)
-        .filter(Boolean)
-        .slice(-6);
-    const toolReadyEvidence = (Array.isArray(stepResults) ? stepResults : [])
-        .map(buildReadyEvidenceFromStep)
-        .filter(Boolean)
-        .slice(-8);
-    const sourceQuestionReady = sourceQuestionArtifact
-        ? [{
-            stepId: 'source-question',
-            tool: 'user_prompt',
-            title: 'Original exact-answer question',
-            action: SOURCE_QUESTION_EVIDENCE_ID,
-            artifactId: null,
-            sheet: null,
-            range: null,
-            evidenceId: sourceQuestionArtifact.id,
-            coveredByEvidence: null,
-            resultSummary: null,
-            coverage: {
-                kind: 'source_question',
-                complete: true,
-                truncated: false,
-                reasoningReady: true
-            }
-        }]
-        : [];
-    const readyEvidence = [...sourceQuestionReady, ...toolReadyEvidence].slice(-8);
-    const latestReady = readyEvidence[readyEvidence.length - 1] || null;
-    const latestFailed = [...(Array.isArray(stepResults) ? stepResults : [])].reverse()
-        .find((stepResult) => stepResult?.response && stepResult.response.ok !== true) || null;
-    const repeatedCoveredReads = readyEvidence.filter((entry) => entry.coveredByEvidence?.evidenceId).slice(-6);
-    const hasComputeEvidence = (Array.isArray(stepResults) ? stepResults : []).some((entry) => (
-        entry.tool === 'artifact_compute' ||
-        (Array.isArray(entry.evidenceArtifacts) && entry.evidenceArtifacts.some((artifact) => artifact.type === 'ComputationEvidence')) ||
-        normalizeText(
-            getToolResultDetails(entry).observationContract?.semantic_level ||
-            getToolResultDetails(entry).observation_contract?.semantic_level
-        ) === 'computation' ||
-        Boolean(getToolResultDetails(entry).query?.observation?.computation)
-    ));
-    const auditRequired = false;
-    const status = readyEvidence.length
-        ? 'model_judges_evidence'
-        : 'no_response_item_outputs';
-    return {
-        status,
-        ready: readyEvidence.length > 0,
-        audit_required: auditRequired,
-        exact_answer_mode: exactAnswerMode === true,
-        ready_evidence_count: readyEvidence.length,
-        ready_evidence: readyEvidence,
-        evidence_audit_contract: null,
-        evidence_audit_candidates: evidenceAuditCandidates,
-        latest_ready_evidence: latestReady,
-        repeated_covered_reads: repeatedCoveredReads,
-        has_compute_evidence: hasComputeEvidence,
-        computation_guidance: 'For numerical aggregation, ordering, filtering, counting, or unit conversion, prefer deterministic computation evidence when available. This is advisory: missing computation evidence must never suppress a best-effort final answer.',
-        latest_failure_after_ready_evidence: latestFailed && readyEvidence.length
-            ? {
-                stepId: latestFailed.id || null,
-                tool: latestFailed.tool || null,
-                status: latestFailed.response?.status || 'unknown',
-                error: summarize(latestFailed.response?.error || extractToolResultText(latestFailed.response?.result) || '', 360)
-            }
-            : null
-    };
-}
-
-function getAvailableEvidenceRefSet(stepResults = [], options = {}) {
-    return new Set([
-        ...buildBaseAgentEvidenceArtifacts(options).map((artifact) => artifact.id).filter(Boolean),
-        ...stepResults.flatMap(getStepEvidenceRefs)
-    ]);
 }
 
 function getLatestUserMessage(request = {}) {
@@ -3558,18 +2887,6 @@ function isTaskExecutionRequired(request = {}, requestContext = {}) {
     );
 }
 
-function isExecutionEvidenceRequired(request = {}, requestContext = {}) {
-    const executionProfile = requestContext.executionProfile || request.executionProfile || {};
-    return (
-        request.requireExecutionEvidence === true ||
-        request.require_execution_evidence === true ||
-        requestContext.requireExecutionEvidence === true ||
-        requestContext.require_execution_evidence === true ||
-        executionProfile.requireExecutionEvidence === true ||
-        executionProfile.require_execution_evidence === true
-    );
-}
-
 function resolveAgentDirectToolChoice({
     agentRuntimeRole = '',
     request = {},
@@ -3592,108 +2909,11 @@ function resolveAgentDirectToolChoice({
     }
     if (
         requireToolAction &&
-        (Array.isArray(directToolSpecs) ? directToolSpecs : [])
-            .some((spec) => canonicalDirectToolId(spec?.name || spec?.function?.name) !== FINAL_ANSWER_TOOL_NAME)
+        (Array.isArray(directToolSpecs) ? directToolSpecs : []).length > 0
     ) {
         return 'required';
     }
     return 'auto';
-}
-
-function exactAnswerRecoveryToolMatchScore(spec = {}, recoveryGap = null) {
-    if (!recoveryGap?.error) return 0;
-    const toolId = canonicalDirectToolId(spec?.name || spec?.function?.name);
-    if (!toolId || toolId === FINAL_ANSWER_TOOL_NAME || toolId === 'tool_search') return 0;
-    const searchable = JSON.stringify(spec).toLowerCase().replace(/[\s-]+/g, '_');
-    const relationProperty = normalizeText(recoveryGap.relationProperty)
-        .toLowerCase()
-        .replace(/[\s-]+/g, '_');
-    if (relationProperty) {
-        let score = 0;
-        if (searchable.includes(relationProperty)) score += 6;
-        if (/(?:wikidata|knowledge_graph|entity_lookup|entity.*lookup)/i.test(toolId)) score += 3;
-        if (/(?:relation|linked.*entity|structured.*fact)/i.test(searchable)) score += 1;
-        return score;
-    }
-    if (recoveryGap.error === 'selector_metric_evidence_missing') {
-        let score = 0;
-        if (/(?:coordinates|longitude|latitude|distance|geocod)/i.test(searchable)) score += 5;
-        if (/(?:wikidata|knowledge_graph|entity_lookup|compute|python)/i.test(toolId)) score += 2;
-        return score;
-    }
-    if (recoveryGap.error === 'structured_attachment_semantic_zero_unverified') {
-        const recommendedTools = normalizeArrayValue(recoveryGap.recommendedTools)
-            .map((value) => normalizeText(value).toLowerCase());
-        let score = recommendedTools.includes(toolId.toLowerCase()) ? 8 : 0;
-        if (/(?:read_presentation|read_document|read_spreadsheet)/i.test(toolId)) score += 5;
-        if (/(?:presentation|document|spreadsheet|office|slides|paragraphs|tables)/i.test(searchable)) {
-            score += 2;
-        }
-        return score;
-    }
-    if (recoveryGap.error === 'record_selector_fields_not_correlated') {
-        let score = 0;
-        if (/(?:web_archive_lookup|web_run|open_page|find_in_page|continue_page|web_fetch)/i.test(toolId)) {
-            score += 5;
-        }
-        if (/(?:archive|record|field|filter|facet|structured|find|page|source)/i.test(searchable)) {
-            score += 2;
-        }
-        return score;
-    }
-    if (
-        [
-            'word_problem_quantifier_constraint_vacuous',
-            'incomplete_process_simulation_evidence',
-            'monte_carlo_only_random_process_evidence',
-            'ad_hoc_terminal_transition_evidence'
-        ].includes(recoveryGap.error)
-    ) {
-        let score = 0;
-        if (/(?:exec|python|compute|solver|simulation)/i.test(toolId)) score += 5;
-        if (/(?:enumerat|deterministic|optimization|dynamic_program|state_transition)/i.test(searchable)) score += 2;
-        return score;
-    }
-    return 0;
-}
-
-function prioritizeExactAnswerRecoveryToolSpecs(specs = [], recoveryGap = null) {
-    return normalizeArrayValue(specs)
-        .map((spec, index) => ({
-            spec,
-            index,
-            score: exactAnswerRecoveryToolMatchScore(spec, recoveryGap)
-        }))
-        .sort((left, right) => right.score - left.score || left.index - right.index)
-        .map((entry) => entry.spec);
-}
-
-function buildExactAnswerRecoveryToolAffordanceNote(specs = [], recoveryGap = null) {
-    const normalizedSpecs = normalizeArrayValue(specs);
-    const matches = normalizedSpecs
-        .map((spec) => ({
-            name: canonicalDirectToolId(spec?.name || spec?.function?.name),
-            score: exactAnswerRecoveryToolMatchScore(spec, recoveryGap)
-        }))
-        .filter((entry) => entry.name && entry.score > 0)
-        .sort((left, right) => right.score - left.score)
-        .slice(0, 3);
-    const relationProperty = normalizeText(recoveryGap?.relationProperty);
-    if (!matches.length) {
-        const toolSearchVisible = normalizedSpecs.some((spec) =>
-            canonicalDirectToolId(spec?.name || spec?.function?.name) === 'tool_search'
-        );
-        if (!toolSearchVisible) return '';
-        return relationProperty
-            ? `The structured ${relationProperty} capability is not visible yet. Use tool_search now for a structured entity relation tool that exposes ${relationProperty}, then call the discovered tool with the source entities as the next recovery action. Do not spend both recovery actions on broad web search.`
-            : 'The matching structured capability is not visible yet. Use tool_search now for the active evidence gap, then call the discovered tool as the next recovery action.';
-    }
-    return [
-        `Recovery capability already visible: ${matches.map((entry) => entry.name).join(', ')}.`,
-        relationProperty
-            ? `These contracts semantically match the required ${relationProperty} relation. Prefer a direct structured call with the source entities and properties:["${relationProperty}"]; broad web search is a fallback if the structured backend fails.`
-            : 'These contracts semantically match the active evidence gap. Prefer the most direct structured or deterministic call before another broad search.'
-    ].join(' ');
 }
 
 function resolveAgentContextMode(request = {}, requestContext = {}) {
@@ -3747,9 +2967,6 @@ function resolveAgentPromptProfile(settings = {}, requestContext = {}) {
             settings.agentPromptProfile ||
             ''
     ).toLowerCase();
-    const exactAnswerCompact = requestContext.exactAnswerMode === true ||
-        requestContext.exactAnswer === true ||
-        requestContext.exact_answer_mode === true;
     const taskCompact = requestContext.taskCompactPrompt === true ||
         requestContext.artifactQuestionCompact === true ||
         requestContext.artifact_answer_question === true;
@@ -3758,7 +2975,6 @@ function resolveAgentPromptProfile(settings = {}, requestContext = {}) {
         explicitProfile === 'local_compact' ||
         requestContext.compactAgentPrompt === true ||
         settings.compactAgentPrompt === true ||
-        (explicitProfile !== 'full' && exactAnswerCompact) ||
         (explicitProfile !== 'full' && taskCompact) ||
         (explicitProfile !== 'full' && isConstrainedLocalAgentProvider(settings.provider));
     if (!compact) {
@@ -3775,9 +2991,7 @@ function resolveAgentPromptProfile(settings = {}, requestContext = {}) {
     return {
         id: 'local_compact',
         compact: true,
-        reason: exactAnswerCompact
-            ? 'exact_answer_task'
-            : (taskCompact ? 'artifact_answer_task' : 'local_constrained_llm'),
+        reason: taskCompact ? 'artifact_answer_task' : 'local_constrained_llm',
         memoryChars: LOCAL_AGENT_PROMPT_MEMORY_CHARS,
         historyItems: LOCAL_AGENT_PROMPT_HISTORY_ITEMS,
         historyChars: LOCAL_AGENT_PROMPT_HISTORY_CHARS,
@@ -3928,7 +3142,7 @@ function buildComputerAgentSkillText() {
         '命令必须根据 runtime_environment.family/default_shell/path_style 生成：Windows 用 cmd/PowerShell 语义，Linux/macOS 用 POSIX shell 语义，Android 用 adb shell 语义；工具层不会替你解析或改写命令。',
         '不要默认当前是 Linux，也不要默认当前是 Windows。只有 runtime_environment 或 observation 明确对应平台时，才使用该平台专属片段，例如 head/tail/grep/wc/rm -rf、/dev/null、PowerShell 管道、cmd 的 NUL/cd /d、Windows 盘符路径。',
         'exec/exec_command 用法：适合运行已有脚本、测试、构建、诊断和短命令；复杂 Python/PowerShell/Bash/Node 逻辑优先写入临时脚本文件，再运行脚本入口；短 inline 代码可以使用 -c，但不要把大段多行程序塞进 shell 字符串。',
-        'exec/exec_command 返回理解：exitCode=0 只表示进程正常退出，任务证据主要来自 stdout/stderr 和后续 read/stat/hash 验证；如果预期有输出或文件产物但 stdout/stderr 为空，应视为没有拿到证据，检查 quoting、workdir、输出路径或改用脚本/专用工具。',
+        'exec/exec_command 返回理解：exitCode=0 只表示进程正常退出，任务结果要结合 stdout/stderr 和后续 read/stat/hash；如果预期有输出或文件产物但 stdout/stderr 为空，应检查 quoting、workdir、输出路径或改用脚本/专用工具。',
         'Exec 输出可能会在运行时保存完整日志供 Agent Lab/调试面板查看；模型当前默认工具面只依赖本轮返回的 stdout/stderr/preview 和后续可见工具，不要幻想未暴露的工具名。',
         'exec_command 参数：{"action":"exec_command","cmd":"命令","workdir":"工作目录","yield_time_ms":1000,"max_output_tokens":6000,"tty":false}；write_stdin 参数：{"action":"write_stdin","session_id":"...","chars":"","yield_time_ms":1000,"max_output_tokens":6000}。',
         '兼容旧动作：exec/session_start/process_read/process_write/pty_start/pty_write 仍可用，但代码、测试、脚本类任务优先走 exec_command/write_stdin。',
@@ -3950,7 +3164,7 @@ function buildCodeAgentSkillText() {
         '代码 SKILL：用于代码搜索、符号索引、诊断、AST 级重构、测试、Git 和 PR/CI 工作流。',
         '先理解仓库和测试方式，再改代码；改后运行最相关验证。',
         '执行测试/构建/脚本时优先通过 computer.exec_command + computer.write_stdin 观察长命令；修改源码时优先使用 apply_patch，不要用 shell 重定向覆盖源码文件。',
-        'GitHub Pages/gh-pages/github.io 发布和验收不是普通 Git 任务；优先加载 github_pages Skill 并调用 github_pages 工具收集 blocker/evidence。',
+        'GitHub Pages/gh-pages/github.io 发布和验收不是普通 Git 任务；优先加载 github_pages Skill 并调用 github_pages 工具检查 blocker 和公开状态。',
         'code action：search/symbols/diagnostics/refactor_rename/test/git_status/git_diff/git_commit/pr_create/ci_status。'
     ].join('\n');
 }
@@ -3984,7 +3198,7 @@ function buildSelfDebuggerSkillText() {
     return [
         'SELF DEBUGGER SKILL：用于 AILIS 自身 bug、工具链异常、Agent Loop 不稳定、能力退化等自我排查与修复。',
         '协议：open_case/run_loop 建案 -> collect_evidence 收集 transcript/audit/source/tool health/capability registry -> diagnose -> propose_patch -> validate_patch -> apply_patch。',
-        '边界：不要凭感觉直接改自己；先收证据。apply_patch 必须经过确认，并由 capability_manager 执行验证和失败回滚。',
+        '边界：不要凭感觉直接改自己；先检查 transcript、audit、源码和工具状态。',
         'self_debugger action：schema/open_case/list_cases/get_case/collect_evidence/diagnose/propose_patch/validate_patch/apply_patch/run_loop/mark_case/close_case。'
     ].join('\n');
 }
@@ -3992,8 +3206,8 @@ function buildSelfDebuggerSkillText() {
 function buildSelfEvolutionSkillText() {
     return [
         'SELF EVOLUTION SKILL：用于用户通过对话或任务执行要求 AILIS 优化自己、学习长期偏好、修复 Tool/MCP/Skill 卡点、补齐复杂任务能力、或改进前端/人物渲染体验。',
-        '协议：先用 self_evolution.analyze 汇总近期偏好、工具瓶颈和能力缺口，生成可审查提案；再用自然语言向用户说明提案、证据、风险和建议动作；用户明确确认后才 mark_proposal/apply_proposal。',
-        '边界：不要把用户引导到控制面板；不要直接裸改自身代码。代码、前端架构、人物渲染或工具链修复应由 self_evolution 生成提案，再联动 self_debugger/capability_manager 收证据、验证和应用。',
+        '协议：先用 self_evolution.analyze 汇总近期偏好、工具瓶颈和能力缺口，生成可审查提案；再用自然语言向用户说明提案、依据、风险和建议动作。',
+        '边界：不要把用户引导到控制面板；不要直接裸改自身代码。代码、前端架构、人物渲染或工具链修复应由 self_evolution 生成提案，再联动 self_debugger/capability_manager 检查、验证和应用。',
         '可见表达：不要把 proposal JSON 原样甩给用户；要解释为“我发现了什么、为什么这是瓶颈、风险是什么、下一步要不要我应用”。',
         'self_evolution action：schema/analyze/list_proposals/get_proposal/mark_proposal/apply_proposal。'
     ].join('\n');
@@ -4005,7 +3219,7 @@ function buildVisionAgentSkillText() {
         '边界：只能截图并理解，不允许点击、输入、拖动、连续监控屏幕，不能声称已经操作了用户电脑。',
         `工具：${VISION_TOOL_ID}`,
         'schema：tool_call={tool:"vision.capture_context", title:"看一眼屏幕", args:{action:"capture_context", target:"screen|chat-window|active-window|region", reason:"为什么需要看", question:"希望从截图中判断什么"}}。',
-        '触发：由 Agent 根据任务目标与证据缺口自行判断，不采用关键词硬触发。ASR/口唇/语音策略类问题默认先走文本与配置推理，只有在需要验证可见 UI 状态时才调用截图。',
+        '触发：由 Agent 根据任务目标和当前缺失信息自行判断，不采用关键词硬触发。ASR/口唇/语音策略类问题默认先走文本与配置推理，只有在需要验证可见 UI 状态时才调用截图。',
         '权限：Agent Loop 主动看屏幕前需要用户确认。被确认后工具会返回截图附件元数据和 VisionUnderstandingSkill 的文字 observation。',
         '回答：基于 observation 自然回复用户，明确“我看到/不确定/建议下一步”，不要输出工具日志口吻。'
     ].join('\n');
@@ -4283,19 +3497,19 @@ function buildToolContextText(toolId, { emailProfiles = {} } = {}) {
     if (toolId === 'artifact_query') {
         return appendToolContractText('artifact_query', [
             'TOOL artifact_query schema：',
-            'AILIS Context Artifact 查询工具。只接受 owner=context_artifact_store/tool=artifact_query 的 artifactHandle，或 ctx-* queryable context artifactId；artifact_tools 的 art_* id 和 evidence_artifacts 的 artifact-* 引用都不能传入。',
+            'AILIS Context Artifact 查询工具。只接受 owner=context_artifact_store/tool=artifact_query 的 artifactHandle，或 ctx-* queryable context artifactId；artifact_tools 的 art_* id 不能传入。',
             '复杂文件解析、长日志、大文本和大工具输出会保存成 context artifactId；不要 raw read 这些 payload 文件。',
             '表格动作：summary 查看概要；grid 查看紧凑网格；range 按 A1:D20 读取局部；search 按文本/颜色/地址搜索。',
             '大文本动作：text_schema 查看行数/字符数；text_range 按行号或 offset 读片段；text_search 搜索匹配行和上下文；text_tail 查看尾部。',
             '文档动作：document_schema 查看页/section；document_search 搜索；document_page 读取指定页；document_section 读取指定章节。',
             '典型调用：{"tool":"artifact_query","args":{"artifactId":"ctx-spreadsheet-...","action":"range","sheet":"Map","range":"A1:I20"}}。',
-            '返回包含 complete/truncated/reasoning_ready。若 complete=true 且 reasoning_ready=true，应基于证据推理或回答，不要反复读取同一大 payload。'
+            '直接使用返回的结构化结果；不要反复读取相同的大 payload。'
         ].join('\n'));
     }
     if (toolId === 'artifact_tools') {
         return appendToolContractText('artifact_tools', [
             'TOOL artifact_tools schema：',
-            'AILIS Artifact Tools 是本地文件/附件 artifact 的统一运行时入口。文件类任务优先调用它，让 adapter 暴露结构、索引、检索、渲染和 compact evidence；XLSX/CSV/表格也走这一统一入口。',
+            'AILIS Artifact Tools 是本地文件/附件 artifact 的统一运行时入口。文件类任务优先调用它，让 adapter 暴露结构、索引、检索、渲染和紧凑结果；XLSX/CSV/表格也走这一统一入口。',
             '支持按 adapter 对 XLSX/XLSM/CSV/TSV/PDF/DOCX/PPTX/图片等执行 schema、list_adapters、plan_import、open_session、index/build_index、search/artifact_search、query/aggregate、inspect、render、trace、recalculate、edit、rollback、export、roundtrip、run_checks。',
             '调用参数事实：open_session 使用 path；后续动作传回结果中的 owner=artifact_tools artifactHandle，或兼容使用同一 sessionId；不要把其 artifactId 交给 artifact_query。sheet/range/include 等字段按动作需要填写。',
             '若 observation 标记 truncatedForModelText 或 omittedCompactRowCount，表示模型可见文本被压缩，不等同于底层读取失败。'
@@ -4315,7 +3529,7 @@ function buildToolContextText(toolId, { emailProfiles = {} } = {}) {
             'TOOL github_pages schema：',
             '只读 GitHub Pages/gh-pages/github.io 发布诊断工具，用于识别 Pages workflow、dist 发布目录、远端仓库、公开 URL 验收和关键阻塞。',
             'GitHub Pages、gh-pages、github.io、部署验收、Pages 404 场景优先使用 github_pages.diagnose_publish 或 github_pages.verify_url，不要先裸用 git/curl/head。',
-            '返回的 criticalBlockers 是未解决关键阻塞，verificationEvidence 是验收证据；最终回答应解释成人类可读结论。'
+            '返回的 criticalBlockers 是未解决关键阻塞，verificationEvidence 是验收记录；最终回答应解释成人类可读结论。'
         ].join('\n'));
     }
     if (toolId === 'update_plan') {
@@ -4741,36 +3955,27 @@ function getWebToolRepeatTarget(step = {}) {
     return null;
 }
 
-function getWebToolEvidenceQuality(stepResult = {}) {
-    const details = getToolResultDetails(stepResult);
-    const observationContract = details.observationContract || details.observation_contract || {};
-    return normalizeText(
-        details.evidenceQuality ||
-            details.evidence_quality ||
-            observationContract.evidence_quality ||
-            stepResult.response?.details?.evidenceQuality ||
-            stepResult.response?.details?.evidence_quality
-    );
+function isWebToolName(tool = '') {
+    const parsedMcp = parseDirectMcpToolId(tool);
+    const baseName = normalizeText(parsedMcp?.tool || tool).toLowerCase();
+    return [
+        'web_run',
+        'web_research',
+        'web_search',
+        'web_fetch',
+        'web_find',
+        'open_page',
+        'find_in_page',
+        'continue_page',
+        'render_page'
+    ].includes(baseName);
 }
 
 function webRepeatGuardReason(priorResults = []) {
-    const qualities = priorResults.map(getWebToolEvidenceQuality).filter(Boolean);
-    if (qualities.includes('sufficient_evidence')) {
-        return {
-            status: 'repeated_ready_evidence',
-            error: 'This URL/query already produced reasoning-ready evidence. Use the existing evidence to answer or ask a narrower missing-field question instead of repeating the same call.'
-        };
-    }
-    if (qualities.some((quality) => ['js_shell', 'thin_content', 'encoding_failure', 'access_challenge', 'access_denied'].includes(quality))) {
-        return {
-            status: 'repeated_low_value_web_observation',
-            error: 'This URL/query already produced low-value web evidence. Do not repeat it; switch source, change query, or answer from other evidence.'
-        };
-    }
     if (priorResults.length >= 2) {
         return {
             status: 'repeated_web_tool_call',
-            error: 'The same web_search query or web_fetch URL has already been tried twice. Change strategy or summarize the evidence already collected.'
+            error: 'The same web_search query or web_fetch URL has already been tried twice. Change strategy or use the results already collected.'
         };
     }
     return null;
@@ -4813,7 +4018,6 @@ function toolProgressFingerprint(stepResult = {}) {
     const tool = canonicalDirectToolId(stepResult?.tool);
     const args = stepResult?.args && typeof stepResult.args === 'object' ? stepResult.args : {};
     const target = getWebToolRepeatTarget(stepResult);
-    const evidenceRefs = getStepEvidenceRefs(stepResult).slice().sort();
     const outputId = normalizeText(
         stepResult?.response?.result?.details?.outputId ||
         stepResult?.response?.result?.details?.output_id ||
@@ -4825,7 +4029,6 @@ function toolProgressFingerprint(stepResult = {}) {
         args: target ? null : sanitizeToolArgsForPrompt(args),
         ok: stepResult?.response?.ok === true,
         status: normalizeText(stepResult?.response?.status),
-        evidenceRefs,
         outputId
     });
 }
@@ -4849,10 +4052,9 @@ function detectAgentNoProgress(stepResults = [], requestContext = {}) {
     if (new Set(fingerprints).size === 1) {
         return 'repeated_identical_observation';
     }
-    const evidenceRefs = new Set(recent.flatMap(getStepEvidenceRefs));
     const allFailed = recent.every((stepResult) => stepResult?.response?.ok !== true);
-    if (allFailed && evidenceRefs.size === 0) {
-        return 'consecutive_failures_without_evidence';
+    if (allFailed) {
+        return 'consecutive_tool_failures';
     }
     return '';
 }
@@ -5135,23 +4337,15 @@ function inferRelationshipStageFromContext(requestContext = {}) {
     return 'trusted';
 }
 
-function inferEvidenceStateFromStepResults(stepResults = []) {
-    if (!Array.isArray(stepResults) || !stepResults.length) {
-        return 'none';
-    }
-    const successful = stepResults.some((step) => step?.response?.ok === true);
-    return successful ? 'present' : 'missing';
-}
-
-function hasSuccessfulEvidenceStep(result = {}) {
+function hasSuccessfulToolStep(result = {}) {
     const steps = Array.isArray(result.steps) ? result.steps : [];
     return steps.some((step) => step?.response?.ok === true || step?.ok === true);
 }
 
-function inferTaskStateFromResult(result = {}, evidenceRequirement = null) {
+function inferTaskStateFromResult(result = {}) {
     const status = normalizeText(result.status).toLowerCase();
     const steps = Array.isArray(result.steps) ? result.steps : [];
-    const hasSuccessfulStep = hasSuccessfulEvidenceStep(result);
+    const hasSuccessfulStep = hasSuccessfulToolStep(result);
     const hasFailedStep = steps.some((step) => step?.response && step.response.ok !== true);
     if (status === 'needs_approval') {
         return 'needs_approval';
@@ -5514,7 +4708,6 @@ function buildAgentEventPreview(event) {
         return [
             `${event.title || event.tool}: ${event.status}`,
             event.ok ? 'ok=true' : 'ok=false',
-            event.evidenceRefs?.length ? `evidence_refs=${event.evidenceRefs.join(',')}` : '',
             event.preview ? `preview=${event.preview}` : ''
         ].filter(Boolean).join(' | ');
     }
@@ -5523,18 +4716,6 @@ function buildAgentEventPreview(event) {
     }
     if (event.type === 'reasoning') {
         return `reasoning: ${summarize(event.text || event.summary || event, 800)}`;
-    }
-    if (event.type === 'evidence_recovery') {
-        return [
-            `evidence_recovery: ${event.status || 'missing_evidence'}`,
-            event.reason ? `reason=${event.reason}` : '',
-            event.nextAction ? `next_action=${event.nextAction}` : '',
-            event.missingEvidence?.length
-                ? `missing=${event.missingEvidence.map((entry) => entry.id || entry.description).filter(Boolean).join(', ')}`
-                : '',
-            event.toolHint?.tool ? `tool_hint=${event.toolHint.tool}.${event.toolHint.action || ''}` : '',
-            event.content ? `content=${summarize(event.content, 1000)}` : ''
-        ].filter(Boolean).join(' | ');
     }
     return summarize(event, 1000);
 }
@@ -5554,8 +4735,7 @@ function buildAgentPromptProgressSnapshot({ events = [], stepResults = [], turnI
         title: latestToolResultItem.title || null,
         ok: latestToolResultItem.ok,
         result_status: latestToolResultItem.result_status || null,
-        error_type: latestToolResultItem.error_type || latestToolResultItem.errorType || null,
-        evidence_gap: latestToolResultItem.evidence_gap || latestToolResultItem.evidenceGap || null
+        error_type: latestToolResultItem.error_type || latestToolResultItem.errorType || null
     } : null;
     const latestObservation = turnItems?.latest_observation || fallbackLatestObservation;
     const latestFailedObservation = turnItems?.latest_failed_observation ||
@@ -5648,14 +4828,6 @@ function buildToolResultEvent(stepResult) {
               response: stepResult.response,
               preview: basePreview
           });
-    const evidenceGap = stepResult.response?.ok === true
-        ? classifyEvidenceGapObservation({
-              tool: stepResult.tool,
-              args: stepResult.args,
-              response: stepResult.response,
-              preview: basePreview
-          })
-        : null;
     const event = {
         ...runtimeEvent,
         type: 'tool_result',
@@ -5665,16 +4837,17 @@ function buildToolResultEvent(stepResult) {
         args: stepResult.args,
         status: stepResult.response?.status || 'unknown',
         ok: stepResult.response?.ok === true,
-        preview: summarize([basePreview, formatFailureHint(failure), formatEvidenceGapHint(evidenceGap)].filter(Boolean).join('\n'), previewBudget),
-        evidenceRefs: getStepEvidenceRefs(stepResult),
-        evidenceArtifacts: getEvidenceArtifactsPromptObject(stepResult.evidenceArtifacts || []),
-        errorType: failure?.error_type || '',
-        evidenceGap
+        preview: summarize([basePreview, formatFailureHint(failure)].filter(Boolean).join('\n'), previewBudget),
+        errorType: failure?.error_type || ''
     };
-    return normalizeRuntimeEvent(event, {
+    const normalizedEvent = normalizeRuntimeEvent(event, {
         layer: RUNTIME_LAYER.TOOL_EXECUTOR,
         status: event.status || 'unknown'
     });
+    delete normalizedEvent.evidenceRefs;
+    delete normalizedEvent.evidenceArtifacts;
+    delete normalizedEvent.evidenceGap;
+    return normalizedEvent;
 }
 
 function extractHandoffOutputId(details = {}, result = {}) {
@@ -5742,9 +4915,6 @@ function collectHandoffSourceRefs(stepResult = {}) {
     const webFetch = webSearchOutput.fetch && typeof webSearchOutput.fetch === 'object'
         ? webSearchOutput.fetch
         : {};
-    const webEvidence = webSearchOutput.evidence && typeof webSearchOutput.evidence === 'object'
-        ? webSearchOutput.evidence
-        : {};
     const openedSourceCandidates = tool === 'web_search' ? [] : [
         details.source,
         details.source_window,
@@ -5757,9 +4927,8 @@ function collectHandoffSourceRefs(stepResult = {}) {
         ...openedSourceCandidates,
         ...(Array.isArray(fetch.sources) ? fetch.sources : []),
         ...(Array.isArray(webFetch.sources) ? webFetch.sources : []),
-        ...(Array.isArray(webEvidence.sources) ? webEvidence.sources : []),
         ...(Array.isArray(details.sources) ? details.sources : []),
-        ...(Array.isArray(details.evidencePages) ? details.evidencePages : []),
+        ...(Array.isArray(details.pages) ? details.pages : []),
         tool !== 'web_search' && stepResult.args?.url ? {
             url: stepResult.args.url,
             lineno: stepResult.args.lineno,
@@ -5806,7 +4975,6 @@ function summarizeStepResultForHandoff(stepResult = {}, index = 0) {
     const result = response.result || {};
     const details = getToolResultDetails(stepResult);
     const resultText = extractToolResultText(result) || response.error || summarize(response, 800);
-    const evidenceRefs = getStepEvidenceRefs(stepResult);
     const stepNumber = Number.isFinite(Number(stepResult.iteration))
         ? Number(stepResult.iteration) + 1
         : index + 1;
@@ -5819,7 +4987,6 @@ function summarizeStepResultForHandoff(stepResult = {}, index = 0) {
         status: response.status || 'unknown',
         args: sanitizeToolArgsForPrompt(stepResult.args || null),
         summary: summarize(resultText, response.ok === true ? 520 : 700),
-        evidenceRefs,
         sourceRefs: collectHandoffSourceRefs(stepResult),
         outputId: extractHandoffOutputId(details, result),
         artifactId: extractHandoffArtifactId(details, result)
@@ -5842,7 +5009,7 @@ function buildTaskRunFailureAnalysis({ status = '', reason = '', stepResults = [
     } else if (statusText === 'interrupted') {
         humanReason = '任务被用户或运行时中断，已经保留中断前的上下文和工具结果。';
     } else if (statusText === 'incomplete') {
-        humanReason = '任务尚未获得足以确认完成的执行证据。';
+        humanReason = '任务尚未形成可交付的最终结果。';
     } else if (statusText === 'failed' || statusText === 'error') {
         humanReason = latestFailedSummary?.summary || '任务执行过程中出现失败。';
     }
@@ -5865,7 +5032,7 @@ function buildTaskRunFailureAnalysis({ status = '', reason = '', stepResults = [
 function buildTaskRunHandoffDisplayText(handoff = {}) {
     const stats = handoff.executionTrace || {};
     const failure = handoff.failureAnalysis || {};
-    const evidence = Array.isArray(handoff.collectedData) ? handoff.collectedData : [];
+    const collectedData = Array.isArray(handoff.collectedData) ? handoff.collectedData : [];
     const lines = [];
     if (handoff.ok === true || normalizeText(handoff.status).toLowerCase().startsWith('completed')) {
         const completedText = normalizeText(
@@ -5873,7 +5040,7 @@ function buildTaskRunHandoffDisplayText(handoff = {}) {
             '任务已经完成。'
         );
         if (looksLikeLeakedAgentProtocol(completedText)) {
-            return 'TaskAgent 返回了未执行的内部调用协议，运行时已阻止展示；现有证据和检查点已经保留。';
+            return 'TaskAgent 返回了未执行的内部调用协议，运行时已阻止展示；现有工具结果和检查点已经保留。';
         }
         return completedText;
     }
@@ -5892,14 +5059,14 @@ function buildTaskRunHandoffDisplayText(handoff = {}) {
     if (stats.toolCalls > 0) {
         lines.push(`执行情况：已执行 ${stats.toolCalls} 个工具步骤，其中 ${stats.successfulToolCount || 0} 个成功、${stats.failedToolCount || 0} 个失败。`);
     }
-    if (evidence.length) {
-        const evidenceText = evidence.slice(0, 3).map((item) => {
+    if (collectedData.length) {
+        const collectedText = collectedData.slice(0, 3).map((item) => {
             const label = item.title || item.source || '工具结果';
-            const reference = item.outputId || item.artifactId || item.evidenceRefs?.[0] || '';
+            const reference = item.outputId || item.artifactId || '';
             return reference ? `${label}（引用：${reference}）` : label;
         }).filter(Boolean).join('；');
-        if (evidenceText) {
-            lines.push(`已收集到的数据：${evidenceText}`);
+        if (collectedText) {
+            lines.push(`已收集到的数据：${collectedText}`);
         }
     }
     if (failure.bottleneck) {
@@ -5909,56 +5076,6 @@ function buildTaskRunHandoffDisplayText(handoff = {}) {
         lines.push(`建议下一步：${handoff.nextStep.recommendation}`);
     }
     return lines.filter(Boolean).join('\n');
-}
-
-function assessAgentCompletionEvidence({
-    agentRuntimeRole = '',
-    requireExecutionEvidence = false,
-    stepResults = []
-} = {}) {
-    if (!isTaskAgentRole(agentRuntimeRole) || requireExecutionEvidence !== true) {
-        return {
-            ok: true,
-            status: 'completed',
-            reason: 'final_answer',
-            unresolvedFields: []
-        };
-    }
-    const workSteps = (Array.isArray(stepResults) ? stepResults : []).filter((stepResult) => {
-        const toolId = canonicalDirectToolId(stepResult?.tool);
-        return Boolean(toolId) &&
-            !isCollaborationTool(toolId) &&
-            !['tool_search', 'update_plan', 'task_goal'].includes(toolId);
-    });
-    const successfulWorkSteps = workSteps.filter((stepResult) => stepResult?.response?.ok === true);
-    if (!successfulWorkSteps.length) {
-        return {
-            ok: false,
-            status: 'incomplete',
-            reason: 'execution_evidence_missing',
-            unresolvedFields: ['No successful task-execution tool call was recorded.']
-        };
-    }
-    const latestWorkStep = workSteps.at(-1);
-    if (latestWorkStep?.response?.ok !== true) {
-        const error = normalizeText(
-            latestWorkStep?.response?.error ||
-            latestWorkStep?.response?.status,
-            'The latest task-execution tool call failed.'
-        );
-        return {
-            ok: false,
-            status: 'incomplete',
-            reason: 'latest_execution_step_failed',
-            unresolvedFields: [error]
-        };
-    }
-    return {
-        ok: true,
-        status: 'completed',
-        reason: 'verified_execution_evidence',
-        unresolvedFields: []
-    };
 }
 
 function buildTaskRunHandoffPackage({
@@ -5972,11 +5089,8 @@ function buildTaskRunHandoffPackage({
     stepResults = [],
     events = [],
     latestDecision = null,
-    exactAnswer = '',
     finalAnswer = '',
     partialAnswer = '',
-    answerCandidates = [],
-    bestAnswerCandidate = null,
     unresolvedFields = [],
     contextManagerCheckpoint = null
 } = {}) {
@@ -5988,21 +5102,14 @@ function buildTaskRunHandoffPackage({
     const sourceRefs = mergeHandoffSourceRefs(summarizedSteps);
     const successfulSteps = summarizedSteps.filter((step) => step.ok);
     const failedSteps = summarizedSteps.filter((step) => !step.ok);
-    const preservedAnswerCandidates = mergeAnswerCandidateLedger([], [
-        ...safeStepResults.flatMap((stepResult) => collectExplicitAnswerCandidatesFromStepResult(stepResult)),
-        ...normalizeArrayValue(answerCandidates),
-        ...(bestAnswerCandidate ? [bestAnswerCandidate] : [])
-    ]);
-    const preservedBestAnswerCandidate = selectBestAnswerCandidate(preservedAnswerCandidates);
     const collectedData = successfulSteps
-        .filter((step) => step.summary || step.evidenceRefs.length || step.outputId || step.artifactId)
+        .filter((step) => step.summary || step.sourceRefs.length || step.outputId || step.artifactId)
         .slice(-8)
         .map((step) => ({
             type: 'tool_observation',
             title: step.title || step.tool,
             summary: step.summary,
             source: step.tool,
-            evidenceRefs: step.evidenceRefs,
             sourceRefs: step.sourceRefs,
             outputId: step.outputId || '',
             artifactId: step.artifactId || ''
@@ -6012,8 +5119,7 @@ function buildTaskRunHandoffPackage({
         type: step.ok ? 'tool_success' : 'tool_failure',
         summary: step.summary,
         status: step.status,
-        tool: step.tool,
-        evidenceRefs: step.evidenceRefs
+        tool: step.tool
     }));
     const failureAnalysis = buildTaskRunFailureAnalysis({
         status: handoffStatus,
@@ -6035,11 +5141,8 @@ function buildTaskRunHandoffPackage({
         runId,
         sessionId,
         task: normalizeText(message),
-        exactAnswer: normalizeText(exactAnswer),
         finalAnswer: normalizeText(finalAnswer),
         partialAnswer: normalizeText(partialAnswer),
-        answerCandidates: preservedAnswerCandidates,
-        bestAnswerCandidate: preservedBestAnswerCandidate,
         unresolvedFields: [...new Set(
             (Array.isArray(unresolvedFields) ? unresolvedFields : [unresolvedFields])
                 .map((value) => normalizeText(value))
@@ -6417,7 +5520,7 @@ function withNativeProgressNoteParameter(schema = {}, { enabled = true } = {}) {
             type: 'string',
             description: [
                 'Optional short user-visible AILIS progress note in the same natural language as the user.',
-                'Use only when there is a meaningful change: strategy shift, key evidence found, failure recovery, permission/environment blocker, or ready-to-answer signal.',
+                'Use only when there is a meaningful change: strategy shift, key result found, failure recovery, permission/environment blocker, or ready-to-answer signal.',
                 'Leave empty for routine tool calls. Do not reveal hidden chain-of-thought, raw tool logs, JSON, step numbers, or generic "I am thinking" text.'
             ].join(' ')
         };
@@ -6808,64 +5911,11 @@ function buildDynamicDirectToolSpecsFromObservations(stepResults = [], gateway =
     return specs;
 }
 
-function buildFinalAnswerNativeToolSpec() {
-    return normalizeNativeToolSpec({
-        name: FINAL_ANSWER_TOOL_NAME,
-        description: [
-            'Submit the exact benchmark/task answer separately from visible persona text, only when ready; otherwise call another tool.',
-            'For relation or constraint questions, verify role alignment and answer the requested entity, not an intermediate entity.',
-            'For first, earliest, latest, only, all, count, most, or least questions, verify the candidate set and boundary; a partial viewport is insufficient unless it proves that boundary.',
-            'For extrema, ranking, or distance questions, the evidence must contain the comparison metric or a deterministic computation of it; a complete list of labels without comparable metric values does not establish the winner.',
-            'For quoted-term selection, preserve the exact lexical form and record per-group match counts before selecting the next entity.',
-            'For self-contained logic, math, grammar, translation, or rules questions, QuestionEvidence/source_question can support reasoning from the problem statement itself.',
-            'For quantitative questions, finish requested unit conversion, scaling, and rounding before submitting.',
-            'Cite the evidence_artifacts refs actually used. Do not use this tool for plans, repair requests, or messages saying more inspection is needed.'
-        ].join(' '),
-        parameters: {
-            type: 'object',
-            additionalProperties: true,
-            required: ['answer'],
-            properties: {
-                answer: {
-                    type: 'string',
-                    description: 'Short exact answer only. No Markdown, no explanation, no units if the question already specifies the unit.'
-                },
-                confidence: {
-                    type: 'string',
-                    description: 'Optional confidence label for audit, such as high, medium, low, or unknown. This is not a runtime gate.'
-                },
-                evidence_refs: {
-                    type: 'array',
-                    items: { type: 'string' },
-                    description: 'Optional artifact ids, URLs, file paths, or human-readable evidence notes that support the answer. These refs are advisory only.'
-                },
-                format_type: {
-                    type: 'string',
-                    enum: ['plain', 'number', 'date', 'list', 'name', 'url', 'json'],
-                    description: 'Expected exact-answer shape.'
-                },
-                reason: {
-                    type: 'string',
-                    description: 'Brief private evidence note for audit. For relation/constraint tasks, include the target role, intermediate missing entity, and relation table direction check. For first/earliest/latest/only/all/count/most/least tasks, note how the relevant candidate-set boundary was verified. For extrema/ranking/distance tasks, include the comparable metric values or deterministic computation used to select the winner. For quoted-term selection, include the exact lexical match and per-group counts. Do not put this in answer.'
-                },
-                persona_text: {
-                    type: 'string',
-                    description: 'Optional user-visible natural text. The benchmark answer remains answer.'
-                }
-            }
-        },
-        strict: true
-    });
-}
-
 function buildAgentDirectToolSpecs(
     gateway,
     {
         stepResults = [],
-        requestContext = {},
-        exactAnswerMode = false,
-        suppressFinalAnswer = false,
-        recoveryGap = null
+        requestContext = {}
     } = {}
 ) {
     if (requestContext.directToolExecutor === false || requestContext.nativeDirectTools === false) {
@@ -6883,7 +5933,6 @@ function buildAgentDirectToolSpecs(
     }
     const specs = [];
     const seen = new Set();
-    const exposeFinalAnswer = exactAnswerMode && !suppressFinalAnswer;
     const modelVisibleSpecs = gateway?.gatewayToolRuntimeRegistry?.modelVisibleSpecs?.() || [];
     const suppressedCoreTools = collectTemporarilySuppressedCoreDirectTools(stepResults, requestContext);
     const hasPersistentTaskAgentSession = Boolean(
@@ -6907,1393 +5956,12 @@ function buildAgentDirectToolSpecs(
         }
         pushUniqueNativeToolSpec(specs, seen, spec);
     }
-    let orderedSpecs = specs;
-    let finalAnswerSpec = null;
-    if (exposeFinalAnswer) {
-        finalAnswerSpec = buildFinalAnswerNativeToolSpec();
-        orderedSpecs = specs
-            .filter((spec) => canonicalDirectToolId(spec.name || spec.function?.name) !== FINAL_ANSWER_TOOL_NAME)
-            .concat(finalAnswerSpec);
-    }
-    if (recoveryGap) {
-        orderedSpecs = prioritizeExactAnswerRecoveryToolSpecs(orderedSpecs, recoveryGap);
-    }
     const requestedLimit = Number(requestContext.directToolLimit);
     const limit = Number.isFinite(requestedLimit) && requestedLimit > 0
         ? Math.max(1, Math.min(Math.floor(requestedLimit), 40))
         : 16;
-    const toolRouter = buildToolRouterFromModelVisibleSpecs(orderedSpecs, {
-        limit,
-        finalToolName: finalAnswerSpec ? FINAL_ANSWER_TOOL_NAME : '',
-        finalToolSpec: finalAnswerSpec
-    });
+    const toolRouter = buildToolRouterFromModelVisibleSpecs(specs, { limit });
     return toolRouter.modelVisibleSpecs();
-}
-
-function normalizeExactAnswerSubmission(value = {}) {
-    const parsed = typeof value === 'string' ? extractJsonObject(value) : value;
-    const candidate = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
-    const evidenceRefs = normalizeArrayValue(
-        candidate.evidence_refs ||
-            candidate.evidenceRefs ||
-            candidate.evidence ||
-            candidate.refs
-    ).map((entry) => normalizeText(entry)).filter(Boolean);
-    return {
-        answer: stripControlTags(candidate.answer || candidate.final_answer || candidate.finalAnswer || candidate.value),
-        confidence: normalizeFinalAnswerConfidence(candidate.confidence),
-        evidenceRefs,
-        formatType: normalizeText(candidate.format_type || candidate.formatType || candidate.type, 'plain'),
-        reason: normalizeText(candidate.reason || candidate.evidence_note || candidate.evidenceNote),
-        personaText: stripControlTags(candidate.persona_text || candidate.personaText || candidate.visible_text || candidate.visibleText),
-        repairInstruction: normalizeText(candidate.repair_instruction || candidate.repairInstruction)
-    };
-}
-
-function looksLikeExplanatoryFinalAnswer(text = '') {
-    const stripped = stripControlTags(text);
-    if (!stripped) {
-        return false;
-    }
-    if (/```|^\s*(?:[-*+]|\d+\.)\s+/m.test(stripped)) {
-        return true;
-    }
-    if (/\b(?:according to|based on|therefore|because|the\s+answer\s+(?:is|would\s+be)|final\s+answer\s+(?:is|:)|I\s+(?:found|checked|calculated|think|believe)|we\s+(?:found|checked|calculated|think|believe))\b/i.test(stripped)) {
-        return true;
-    }
-    if (/(?:已完成|完成分析|我(?:已经|已|会|可以|来|帮)|我们|根据|依据|因此|所以|综上|最终(?:结果|答案)|答案(?:是|为)|证据|步骤|过程|计算|脚本|查到|确认|需要更多)/i.test(stripped)) {
-        return true;
-    }
-    return stripped.length > 240 || stripped.split(/\r?\n/).length > 3;
-}
-
-function parsePlainNumericAnswer(value = '') {
-    const normalized = normalizeText(value).replace(/,/g, '');
-    if (!/^[+-]?(?:\d+\.?\d*|\.\d+)$/.test(normalized)) {
-        return null;
-    }
-    const parsed = Number(normalized);
-    return Number.isFinite(parsed) ? parsed : null;
-}
-
-function scaledUnitAnswerMismatch({ question = '', answer = '' } = {}) {
-    const text = normalizeText(question).toLowerCase();
-    const numericAnswer = parsePlainNumericAnswer(answer);
-    if (numericAnswer === null || !text) {
-        return null;
-    }
-    const scaleMatch = text.match(/\bhow\s+many\s+(thousand|million|billion)\s+([a-z][a-z -]{0,40}?)(?:\?| would\b| does\b| did\b| to\b| for\b|$)/i);
-    if (!scaleMatch) {
-        return null;
-    }
-    const scaleName = scaleMatch[1].toLowerCase();
-    const scale = scaleName === 'thousand' ? 1000 : scaleName === 'million' ? 1000000 : 1000000000;
-    const asksRoundingInBaseUnit = new RegExp(`\\bround(?:ed)?\\b[\\s\\S]{0,80}\\bnearest\\s+${scale}\\b`, 'i').test(text) ||
-        new RegExp(`\\bnearest\\s+${scale}\\s+${scaleMatch[2].trim().split(/\s+/)[0] || ''}`, 'i').test(text);
-    if (!asksRoundingInBaseUnit) {
-        return null;
-    }
-    const looksLikeRawRoundedBaseUnit = Math.abs(numericAnswer) >= scale && Math.abs(numericAnswer % scale) < 1e-9;
-    if (!looksLikeRawRoundedBaseUnit) {
-        return null;
-    }
-    return {
-        error: 'scaled_unit_answer_mismatch',
-        scaleName,
-        scale,
-        instruction: `The question asks for how many ${scaleName} units. Compute the raw unit value, round as requested, then divide by ${scale} and submit that scaled count.`
-    };
-}
-
-function normalizeNumericAnswerForComparison(value = '') {
-    const parsed = parsePlainNumericAnswer(value);
-    if (parsed === null) {
-        return '';
-    }
-    return Number.isInteger(parsed) ? String(parsed) : String(Number(parsed.toPrecision(12)));
-}
-
-function extractStrongFinalNumbersFromReason(reason = '') {
-    const text = normalizeText(reason);
-    if (!text) {
-        return [];
-    }
-    const patterns = [
-        /\b(?:final\s+answer|correct\s+answer|answer|submit(?:ted)?|therefore|so)\s*(?:is|=|:)?\s*([+-]?(?:\d+\.?\d*|\.\d+))/gi,
-        /(?:最终答案|正确答案|答案|所以|因此|得到|得出|应(?:填|为|是)|千小时(?:是|为)?)\s*(?:是|为|=|:)?\s*([+-]?(?:\d+\.?\d*|\.\d+))/g
-    ];
-    const values = [];
-    const seen = new Set();
-    for (const pattern of patterns) {
-        let match;
-        while ((match = pattern.exec(text)) !== null) {
-            const normalized = normalizeNumericAnswerForComparison(match[1]);
-            if (normalized && !seen.has(normalized)) {
-                seen.add(normalized);
-                values.push(normalized);
-            }
-        }
-    }
-    return values;
-}
-
-function exactAnswerReasonConflict(submission = {}) {
-    const answerNumber = normalizeNumericAnswerForComparison(submission.answer);
-    if (!answerNumber) {
-        return null;
-    }
-    const finalNumbers = extractStrongFinalNumbersFromReason(submission.reason);
-    if (!finalNumbers.length || finalNumbers.includes(answerNumber)) {
-        return null;
-    }
-    return {
-        error: 'answer_reason_conflict',
-        answer: answerNumber,
-        reasonFinalNumbers: finalNumbers,
-        instruction: `The answer field (${answerNumber}) conflicts with the final numeric conclusion in reason (${finalNumbers.join(', ')}). Make answer match the audited final conclusion or continue calculating.`
-    };
-}
-
-function collectCodeLikeStepInputs(stepResults = []) {
-    const snippets = [];
-    for (const step of Array.isArray(stepResults) ? stepResults : []) {
-        const args = step?.args || {};
-        for (const value of [args.code, args.content, args.script]) {
-            if (typeof value === 'string' && value.trim()) {
-                snippets.push(value);
-            }
-        }
-    }
-    return snippets;
-}
-
-function detectIncompleteProcessSimulation({ message = '', stepResults = [] } = {}) {
-    const question = normalizeText(message).toLowerCase();
-    const looksSequentialRandomProcess = /(?:at each stage|each stage|random(?:ly)? fire|piston|platform|ramp|advance|simulate|simulation|game show|process)/i.test(question) &&
-        /(?:probabil|odds|chance|maximi[sz]e|which .* choose|which .* select|win)/i.test(question);
-    if (!looksSequentialRandomProcess) {
-        return null;
-    }
-    const snippets = collectCodeLikeStepInputs(stepResults);
-    for (const code of snippets) {
-        const compact = code.replace(/\r/g, '');
-        const lower = compact.toLowerCase();
-        const hasMonteCarlo = /random\.(?:randint|choice|random)|np\.random|defaultdict|win_counts|num_trials/.test(lower);
-        const hasTrialLoop = /for\s+\w+\s+in\s+range\(\s*num_trials|for\s+\w+\s+in\s+range\(\s*\d+/i.test(compact);
-        const hasSingleImmediateBreak = /while\s+true\s*:\s*[\s\S]{0,900}random\.(?:randint|choice|random)[\s\S]{0,900}\bbreak\b/i.test(compact);
-        const hasNoInnerProgressionLoop = hasTrialLoop &&
-            /piston\s*=|random\.(?:randint|choice|random)/i.test(compact) &&
-            !/while\s+.+:|while\s+True\s*:|for\s+(?:step|stage|turn|round|move)\b/i.test(compact);
-        const hasExactStateMethod = /(?:dynamic\s+program|dp\b|memo|cache|lru_cache|probabilit(?:y|ies)\s*=|state_probs|transition|enumerat|fractions?\.Fraction|from\s+fractions\s+import\s+Fraction)/i.test(compact);
-        const monteCarloOnly = hasMonteCarlo &&
-            /(?:sim_count|num_trials|trials|for\s+\w+\s+in\s+range\(\s*\d{3,})/i.test(compact) &&
-            !hasExactStateMethod;
-        const updatesState = /advance|released|rolls|platform\s*=|platform\.(?:append|insert|pop|remove)|ramp\.pop|deque|state|transition/i.test(compact);
-        const inventsTerminalTransition = /(?:\*\s*0\.5|\/\s*2\b|len\(\s*platform\s*\)\s*-\s*1|random\.randint\(\s*0\s*,\s*len\()/i.test(compact) &&
-            /(?:elif\s+\w+\s*<\s*total|if\s+\w+\s*<\s*total|remaining|只剩|剩余|platform|terminal|末尾)/i.test(compact);
-        if (hasMonteCarlo && (hasSingleImmediateBreak || (hasNoInnerProgressionLoop && !updatesState))) {
-            return {
-                error: 'incomplete_process_simulation_evidence',
-                instruction: 'The executed simulation appears to sample only the first random event of a multi-stage process. Implement the full state transition loop or exact dynamic program until the chosen outcome is resolved, then compare all candidate probabilities before final_answer.'
-            };
-        }
-        if (inventsTerminalTransition) {
-            return {
-                error: 'ad_hoc_terminal_transition_evidence',
-                instruction: 'The stochastic-process code appears to invent terminal/partial-state probabilities or a variable random device that the question did not specify. Use only stated transitions; if a full next stage cannot be formed under the stated rules, do not fabricate replacement probabilities. Add a probability-mass or top-candidate audit before final_answer.'
-            };
-        }
-        if (monteCarloOnly) {
-            return {
-                error: 'monte_carlo_only_random_process_evidence',
-                instruction: 'The evidence is Monte Carlo-only for a finite stochastic exact-answer task. Build an exact state transition / dynamic program, or at minimum cross-check the simulation against the original random-event rules and compare all candidate probabilities before final_answer.'
-            };
-        }
-    }
-    return null;
-}
-
-const SMALL_CARDINALS = Object.freeze({
-    one: 1,
-    two: 2,
-    three: 3,
-    four: 4,
-    five: 5,
-    six: 6,
-    seven: 7,
-    eight: 8,
-    nine: 9,
-    ten: 10,
-    eleven: 11,
-    twelve: 12,
-    thirteen: 13,
-    fourteen: 14,
-    fifteen: 15,
-    sixteen: 16,
-    seventeen: 17,
-    eighteen: 18,
-    nineteen: 19,
-    twenty: 20,
-    thirty: 30,
-    forty: 40,
-    fifty: 50,
-    sixty: 60,
-    seventy: 70,
-    eighty: 80,
-    ninety: 90,
-    hundred: 100
-});
-
-function parseSmallCardinal(value = '') {
-    const token = normalizeText(value).toLowerCase();
-    if (/^\d+$/.test(token)) {
-        return Number(token);
-    }
-    return SMALL_CARDINALS[token] || null;
-}
-
-function detectVacuousDistributionConstraintGap({ message = '' } = {}) {
-    const question = normalizeText(message);
-    if (
-        !/(?:minimum|least|guarantee|minimi[sz]e|smallest|最少|最低|保证)/i.test(question) ||
-        !/(?:box|boxes|bin|bins|container|containers|盒|箱|容器)/i.test(question)
-    ) {
-        return null;
-    }
-    const cardinal = '(?:\\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred)';
-    const optionalDescriptors = '(?:\\s+[A-Za-z][A-Za-z-]*){0,3}';
-    const totalMatch = question.match(new RegExp(
-        `\\b(${cardinal})${optionalDescriptors}\\s+(?:coins?|objects?|items?|balls?|tokens?|counters?|pieces?)\\b`,
-        'i'
-    ));
-    const containerMatch = question.match(new RegExp(
-        `\\b(${cardinal})${optionalDescriptors}\\s+(?:boxes|bins|containers)\\b`,
-        'i'
-    ));
-    const thresholdMatch = question.match(new RegExp(
-        `\\b(?:one|a)\\s+(?:of\\s+the\\s+)?(?:box|boxes|bin|bins|container|containers)?\\s*(?:must\\s+|has\\s+to\\s+|is\\s+required\\s+to\\s+)?(?:contain|hold|have)\\s+at\\s+least\\s+(${cardinal})\\b`,
-        'i'
-    ));
-    const total = parseSmallCardinal(totalMatch?.[1]);
-    const containerCount = parseSmallCardinal(containerMatch?.[1]);
-    const threshold = parseSmallCardinal(thresholdMatch?.[1]);
-    if (
-        !Number.isInteger(total) ||
-        !Number.isInteger(containerCount) ||
-        !Number.isInteger(threshold) ||
-        total <= 0 ||
-        containerCount <= 0 ||
-        threshold <= 0
-    ) {
-        return null;
-    }
-    const guaranteedMaximumLowerBound = Math.ceil(total / containerCount);
-    if (guaranteedMaximumLowerBound < threshold) {
-        return null;
-    }
-    const describedAsRestrictingRule =
-        /(?:only\s+rule\s+restrict|rule\s+restrict|constraint|restriction|限制|约束)/i.test(question);
-    return {
-        error: 'word_problem_quantifier_constraint_vacuous',
-        total,
-        containerCount,
-        threshold,
-        guaranteedMaximumLowerBound,
-        describedAsRestrictingRule,
-        instruction: [
-            `The literal constraint that one container has at least ${threshold} items is automatically true: distributing ${total} items among ${containerCount} containers guarantees some container has at least ${guaranteedMaximumLowerBound}.`,
-            'Do not silently use that redundant condition as though it restricted every container.',
-            'Use a deterministic enumeration or proof to compare the literal reading with the plausible non-vacuous reading, state which reading the wording and task design support, then submit the best answer.',
-            describedAsRestrictingRule
-                ? 'The problem explicitly presents this clause as restricting the adversary, so a reading that leaves the feasible set unchanged is internally inconsistent with the stated role of the clause. Unless the text affirmatively says the redundancy is intentional, prefer the smallest quantifier repair that makes the advertised restriction non-vacuous after verifying both values.'
-                : '',
-            'This is a soft ambiguity check; it must not suppress the final answer after the short recovery phase.'
-        ].filter(Boolean).join(' ')
-    };
-}
-
-function collectStructuredSelectorMetricEvidence(stepResults = [], message = '') {
-    const question = normalizeText(message);
-    const axis = /(?:westernmost|easternmost|longitude|最西|最东|经度)/i.test(question)
-        ? 'longitude'
-        : /(?:northernmost|southernmost|latitude|最北|最南|纬度)/i.test(question)
-            ? 'latitude'
-            : 'coordinates';
-    const metricsBySource = new Map();
-    const visit = (value, depth = 0) => {
-        if (depth > 14 || value === null || value === undefined) return;
-        if (Array.isArray(value)) {
-            for (const entry of value) visit(entry, depth + 1);
-            return;
-        }
-        if (typeof value !== 'object') return;
-        for (const row of normalizeArrayValue(value.property_rows || value.propertyRows)) {
-            const property = normalizeText(row?.property)
-                .toLowerCase()
-                .replace(/[\s-]+/g, '_');
-            const matchRank = Number(row?.match_rank ?? row?.matchRank ?? 0);
-            if (
-                !['coordinates', 'coordinate', 'longitude', 'latitude', 'distance'].includes(property) ||
-                (Number.isFinite(matchRank) && matchRank > 0)
-            ) {
-                continue;
-            }
-            const source = normalizeText(
-                row?.source_query ||
-                row?.sourceQuery ||
-                row?.source_entity ||
-                row?.sourceEntity ||
-                row?.source_entity_id ||
-                row?.sourceEntityId
-            );
-            if (!source) continue;
-            const latitude = Number(row?.latitude);
-            const longitude = Number(row?.longitude);
-            const scalar = Number(
-                row?.amount ??
-                row?.value ??
-                row?.numeric_value ??
-                row?.numericValue
-            );
-            let metric = '';
-            if (axis === 'longitude' && Number.isFinite(longitude)) {
-                metric = `longitude=${longitude}`;
-            } else if (axis === 'latitude' && Number.isFinite(latitude)) {
-                metric = `latitude=${latitude}`;
-            } else if (axis === 'coordinates' && Number.isFinite(latitude) && Number.isFinite(longitude)) {
-                metric = `coordinates=${latitude},${longitude}`;
-            } else if (Number.isFinite(scalar)) {
-                metric = `${property}=${scalar}`;
-            }
-            if (metric) {
-                metricsBySource.set(source.toLowerCase(), `${source}:${metric}`);
-            }
-        }
-        for (const nested of Object.values(value)) {
-            visit(nested, depth + 1);
-        }
-    };
-    for (const stepResult of Array.isArray(stepResults) ? stepResults : []) {
-        if (stepResult?.response?.ok !== true) continue;
-        visit(stepResult.response.result);
-    }
-    return [...metricsBySource.values()];
-}
-
-function detectSelectorMetricEvidenceGap({ message = '', submission = {}, stepResults = [] } = {}) {
-    const question = normalizeText(message);
-    const geographicSelector = /(?:farthest|closest|westernmost|easternmost|northernmost|southernmost|longitude|latitude|distance|最远|最近|最西|最东|最北|最南|经度|纬度|距离)/i.test(question);
-    if (!geographicSelector) return null;
-    const reason = normalizeText(submission.reason);
-    const numericValues = reason.match(/[+-]?(?:\d+\.\d+|\d{1,3})(?:\s*°|\s*(?:degrees?|deg|km|mi|miles?|kilometers?))?/gi) || [];
-    const comparableValues = [...new Set([
-        ...numericValues
-            .map((value) => normalizeText(value).toLowerCase())
-            .filter((value) => /[+-]?\d/.test(value)),
-        ...collectStructuredSelectorMetricEvidence(stepResults, question)
-    ])];
-    if (comparableValues.length >= 2) return null;
-    return {
-        error: 'selector_metric_evidence_missing',
-        comparableValues,
-        instruction: 'The proposed geographic extrema/distance answer does not cite at least two comparable metric values. A complete list of entity labels is not a longitude, latitude, or distance comparison. Use the short recovery phase to retrieve comparable coordinates/metric values or run a deterministic computation, then verify each selected terminal entity and its source-period label. If the needed structured capability is not visible, use tool_search first and then call the discovered evidence tool. After the recovery phase, submit the best available answer instead of returning an empty answer.'
-    };
-}
-
-function collectPrimaryStructuredRelationEvidence(stepResults = [], relationProperty = '') {
-    const normalizedProperty = normalizeText(relationProperty)
-        .toLowerCase()
-        .replace(/[\s-]+/g, '_');
-    if (!normalizedProperty) return [];
-    const collected = [];
-    const seen = new Set();
-    const visit = (value, depth = 0) => {
-        if (depth > 14 || value === null || value === undefined) return;
-        if (Array.isArray(value)) {
-            for (const entry of value) visit(entry, depth + 1);
-            return;
-        }
-        if (typeof value !== 'object') return;
-        for (const row of normalizeArrayValue(value.property_rows || value.propertyRows)) {
-            const property = normalizeText(row?.property)
-                .toLowerCase()
-                .replace(/[\s-]+/g, '_');
-            const matchRank = Number(row?.match_rank ?? row?.matchRank ?? 0);
-            if (property !== normalizedProperty || (Number.isFinite(matchRank) && matchRank > 0)) {
-                continue;
-            }
-            const label = normalizeText(
-                row?.value_label ||
-                row?.valueLabel ||
-                row?.value_entity_id ||
-                row?.valueEntityId
-            );
-            const description = normalizeText(row?.value_description || row?.valueDescription);
-            if (!label && !description) continue;
-            const sourceQuery = normalizeText(row?.source_query || row?.sourceQuery);
-            const sourceEntity = normalizeText(row?.source_entity || row?.sourceEntity);
-            const key = `${sourceQuery.toLowerCase()}|${label.toLowerCase()}|${description.toLowerCase()}`;
-            if (seen.has(key)) continue;
-            seen.add(key);
-            collected.push({
-                sourceQuery,
-                sourceEntity,
-                label,
-                description
-            });
-        }
-        if (Array.isArray(value.results)) {
-            for (const result of value.results) {
-                const matches = Array.isArray(result?.matches) ? result.matches : [];
-                const primaryMatch = matches.find((match) => {
-                    const properties = match?.properties;
-                    return properties &&
-                        typeof properties === 'object' &&
-                        Array.isArray(properties[normalizedProperty]) &&
-                        properties[normalizedProperty].length > 0;
-                });
-                const relationValues = primaryMatch?.properties?.[normalizedProperty];
-                for (const relationValue of Array.isArray(relationValues) ? relationValues : []) {
-                    const label = normalizeText(relationValue?.label || relationValue?.name);
-                    const description = normalizeText(relationValue?.description);
-                    if (!label && !description) continue;
-                    const key = `${normalizeText(result?.query).toLowerCase()}|${label.toLowerCase()}|${description.toLowerCase()}`;
-                    if (seen.has(key)) continue;
-                    seen.add(key);
-                    collected.push({
-                        sourceQuery: normalizeText(result?.query),
-                        sourceEntity: normalizeText(primaryMatch?.label),
-                        label,
-                        description
-                    });
-                }
-            }
-        }
-        for (const child of Object.values(value)) {
-            visit(child, depth + 1);
-        }
-    };
-    for (const stepResult of Array.isArray(stepResults) ? stepResults : []) {
-        if (stepResult?.response?.ok !== true) continue;
-        const args = stepResult?.args && typeof stepResult.args === 'object'
-            ? stepResult.args
-            : stepResult?.request?.args && typeof stepResult.request.args === 'object'
-                ? stepResult.request.args
-                : {};
-        const requestedProperties = normalizeArrayValue(args.properties || args.fields)
-            .map((value) => normalizeText(value).toLowerCase().replace(/[\s-]+/g, '_'));
-        if (!requestedProperties.includes(normalizedProperty)) continue;
-        visit(
-            stepResult?.response?.result ||
-                stepResult?.response?.details ||
-                stepResult?.result ||
-                stepResult?.details
-        );
-    }
-    return collected;
-}
-
-function detectSelectorTerminalRelationAnswerMismatch({
-    submission = {},
-    relationProperty = '',
-    stepResults = []
-} = {}) {
-    const submittedLabels = normalizeText(submission.answer)
-        .split(/\s*[,;|]\s*/)
-        .map((value) => normalizeText(value))
-        .filter((value) => value.length >= 2);
-    if (!submittedLabels.length) return null;
-    const relationEvidence = collectPrimaryStructuredRelationEvidence(
-        stepResults,
-        relationProperty
-    );
-    const coveredSourceQueries = new Set(relationEvidence
-        .map((entry) => entry.sourceQuery || entry.sourceEntity)
-        .filter(Boolean));
-    if (
-        !relationEvidence.length ||
-        coveredSourceQueries.size < submittedLabels.length
-    ) {
-        return null;
-    }
-    const unmatchedLabels = submittedLabels.filter((submittedLabel) => {
-        const normalizedSubmitted = submittedLabel
-            .normalize('NFKD')
-            .replace(/\p{M}/gu, '')
-            .toLowerCase();
-        return !relationEvidence.some((entry) => {
-            const relationText = `${entry.label} ${entry.description}`
-                .normalize('NFKD')
-                .replace(/\p{M}/gu, '')
-                .toLowerCase();
-            return relationText.includes(normalizedSubmitted);
-        });
-    });
-    if (!unmatchedLabels.length || unmatchedLabels.length === submittedLabels.length) {
-        return null;
-    }
-    const relationCandidates = [...new Set(relationEvidence
-        .map((entry) => entry.label)
-        .filter(Boolean))];
-    return {
-        error: 'selector_terminal_relation_answer_mismatch',
-        relationProperty,
-        unmatchedLabels,
-        relationCandidates,
-        instruction: [
-            `The submitted terminal label(s) ${unmatchedLabels.join(', ')} do not match the primary structured ${relationProperty} values already retrieved for the source entities.`,
-            `Reconcile the answer against the source-entity relation values before submitting; visible relation candidates include ${relationCandidates.join(', ')}.`,
-            'Preserve the source-period place label instead of substituting a nearby modern municipality or a related person’s city.',
-            'This is a soft consistency check: submit the best available answer after reconciling the existing evidence, even if no further retrieval is possible.'
-        ].join(' ')
-    };
-}
-
-function detectSelectorTerminalRelationEvidenceGap({
-    message = '',
-    submission = {},
-    stepResults = []
-} = {}) {
-    const question = normalizeText(message);
-    const geographicSelector = /(?:farthest|closest|westernmost|easternmost|northernmost|southernmost|longitude|latitude|distance|最远|最近|最西|最东|最北|最南|经度|纬度|距离)/i.test(question);
-    if (!geographicSelector) return null;
-    const relationProperty = /(?:\bplace\s+of\s+birth\b|\bbirthplace\b|\bwere?\s+born\b|\bborn\b|出生地|出生于)/i.test(question)
-        ? 'place_of_birth'
-        : /(?:\bplace\s+of\s+death\b|\bdeathplace\b|\bdied\b|死亡地|逝世于)/i.test(question)
-            ? 'place_of_death'
-            : '';
-    if (!relationProperty) return null;
-
-    const reason = normalizeText(submission.reason);
-    const submittedLabels = normalizeText(submission.answer)
-        .split(/\s*[,;|]\s*/)
-        .map((value) => normalizeText(value))
-        .filter((value) => value.length >= 2);
-    const periodTransitionPattern = /\b(?:formerly|previously|historically|renamed\s+from|at\s+the\s+time|later\s+became|now\s+known\s+as)\b/gi;
-    const periodLabelConflict = [...reason.matchAll(periodTransitionPattern)]
-        .map((transition) => submittedLabels
-            .map((label) => ({
-                label,
-                index: reason.toLowerCase().lastIndexOf(label.toLowerCase(), transition.index)
-            }))
-            .filter((candidate) =>
-                candidate.index >= 0 &&
-                transition.index - (candidate.index + candidate.label.length) <= 120
-            )
-            .sort((left, right) => right.index - left.index)[0] || null)
-        .find(Boolean)?.label ||
-        submittedLabels.find((label) => {
-            const escapedLabel = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            return new RegExp(
-                `\\b(?:now|currently)(?:\\s+known\\s+as)?\\s+${escapedLabel}\\b`,
-                'i'
-            ).test(reason);
-        }) ||
-        '';
-    const relationNamedInReason = new RegExp(`\\b${relationProperty}\\b`, 'i').test(reason);
-    const relationEvidence = collectPrimaryStructuredRelationEvidence(
-        stepResults,
-        relationProperty
-    );
-    const relationProjectedByTool = relationEvidence.length > 0 ||
-        (Array.isArray(stepResults) ? stepResults : []).some((stepResult) => {
-        if (stepResult?.response?.ok !== true) return false;
-        const args = stepResult?.args && typeof stepResult.args === 'object'
-            ? stepResult.args
-            : stepResult?.request?.args && typeof stepResult.request.args === 'object'
-                ? stepResult.request.args
-                : {};
-        const requestedRelation = normalizeArrayValue(args.properties || args.fields)
-            .map((value) => normalizeText(value).toLowerCase().replace(/[\s-]+/g, '_'))
-            .includes(relationProperty);
-        if (!requestedRelation) return false;
-        return nestedObjectHasNonEmptyProperty(
-            stepResult?.response?.result ||
-                stepResult?.response?.details ||
-                stepResult?.result ||
-                stepResult?.details,
-            relationProperty
-        );
-        });
-    if (!periodLabelConflict && relationProjectedByTool) {
-        const relationAnswerMismatch = detectSelectorTerminalRelationAnswerMismatch({
-            submission,
-            relationProperty,
-            stepResults
-        });
-        if (relationAnswerMismatch) return relationAnswerMismatch;
-    }
-    if (!periodLabelConflict && (relationNamedInReason || relationProjectedByTool)) return null;
-
-    return {
-        error: periodLabelConflict
-            ? 'selector_terminal_period_label_conflict'
-            : 'selector_terminal_relation_evidence_missing',
-        relationProperty,
-        periodLabelConflict: periodLabelConflict || null,
-        instruction: [
-            'The geographic metric comparison is not enough because the candidate locations are reached through an entity relation.',
-            `Verify the source entities and the terminal relation ${relationProperty}, including the period-appropriate terminal label, rather than treating a modern site or municipality label as the historical relation value.`,
-            periodLabelConflict
-                ? `The submitted rationale itself says that answer label "${periodLabelConflict}" has a former, previous, or historical label. That conflicts with submitting the modern label without resolving which name applied when the relation occurred. Resolve this self-contradiction explicitly before answering.`
-                : '',
-            `When using an entity lookup, query the source people/entities rather than the answer cities and request the relation explicitly, for example {"queries":["<source entity A>","<source entity B>"],"properties":["${relationProperty}"]}.`,
-            `If no visible tool contract exposes ${relationProperty}, use tool_search first for a structured entity relation capability, then call the discovered tool in the next recovery action instead of spending both actions on broad web search.`,
-            'Alternatively cite a direct source row that establishes source entity -> terminal place.',
-            'After the short recovery phase, submit the best available answer instead of returning an empty answer.'
-        ].filter(Boolean).join(' ')
-    };
-}
-
-function detectVisualEnumerationEvidenceGap({
-    message = '',
-    submission = {},
-    stepResults = [],
-    fileAttachments = []
-} = {}) {
-    const question = normalizeText(message);
-    const hasImageAttachment = normalizeFileAttachments(fileAttachments)
-        .some((attachment) => /\.(?:png|jpe?g|webp|gif|bmp|tiff?)$/i.test(attachment.path || attachment.name || ''));
-    const exhaustiveVisualTask =
-        hasImageAttachment &&
-        /(?:\ball\b|\bevery\b|\border\b|\bsequence\b|全部|所有|每个|顺序)/i.test(question) &&
-        /(?:provided image|attached image|using the image|fraction line|slash|glyph|indentation|column|layout|position|color|图片|图像|分数线|斜杠|缩进|列|布局|位置|颜色)/i.test(question);
-    if (!exhaustiveVisualTask || !normalizeText(submission.answer)) return null;
-    const hasSuccessfulVisualCrossCheck = (Array.isArray(stepResults) ? stepResults : [])
-        .some((stepResult) =>
-            stepResult?.response?.ok === true &&
-            /(?:describe_image|vision|ocr|screenshot|image)/i.test(normalizeText(stepResult.tool))
-        );
-    if (hasSuccessfulVisualCrossCheck) return null;
-    return {
-        error: 'visual_enumeration_not_cross_checked',
-        instruction: [
-            'The answer claims an exhaustive ordered transcription from an attached image, but it was submitted on the first visual pass without a separate occurrence/count cross-check.',
-            'Re-inspect the whole image from top-left to bottom-right, distinguish literal source glyphs from visually stacked forms, preserve duplicates, append only the requested solved sample outputs, and verify the final item count and order.',
-            'Do not turn source expressions into equations unless the requested output explicitly asks for equations.',
-            'This is one model-side verification pass, not an evidence gate; return the best available answer even if the visual uncertainty remains.'
-        ].join(' ')
-    };
-}
-
-function detectStructuredAttachmentSemanticEvidenceGap({
-    message = '',
-    submission = {},
-    stepResults = [],
-    fileAttachments = []
-} = {}) {
-    const question = normalizeText(message);
-    const answer = normalizeText(submission.answer).toLowerCase();
-    if (
-        !/^(?:0|zero|none|no|没有|无)$/i.test(answer) ||
-        !/(?:how many|count|number of|mention|include|contain|show|discuss|about|related to|多少|几个|提到|包含|展示|讨论|关于)/i.test(question)
-    ) {
-        return null;
-    }
-    const structuredAttachments = normalizeFileAttachments(fileAttachments)
-        .map((attachment) => ({
-            ...attachment,
-            extension: normalizeText(
-                attachment.extension,
-                path.extname(attachment.path || attachment.name)
-            ).toLowerCase()
-        }))
-        .filter((attachment) => ['.ppt', '.pptx', '.doc', '.docx'].includes(attachment.extension));
-    if (!structuredAttachments.length) {
-        return null;
-    }
-    const recommendedTools = structuredAttachments.some((attachment) =>
-        ['.ppt', '.pptx'].includes(attachment.extension)
-    )
-        ? ['read_presentation']
-        : ['read_document'];
-    const hasSuccessfulSemanticRead = normalizeArrayValue(stepResults).some((stepResult) => {
-        if (stepResult?.response?.ok !== true) return false;
-        const toolId = canonicalDirectToolId(stepResult?.tool);
-        return recommendedTools.includes(toolId) ||
-            /(?:read_presentation|read_document)/i.test(toolId);
-    });
-    if (hasSuccessfulSemanticRead) {
-        return null;
-    }
-    return {
-        error: 'structured_attachment_semantic_zero_unverified',
-        attachmentTypes: [...new Set(structuredAttachments.map((attachment) => attachment.extension))],
-        recommendedTools,
-        instruction: [
-            'The submitted zero/none answer concerns semantic content in an attached Office file, but no dedicated structured reader succeeded.',
-            `Use tool_search for ${recommendedTools.join(' or ')}, then call the reader on the staged attachment and inspect its complete slide/paragraph/table structure.`,
-            'A raw ZIP/OOXML exact-string search is lexical evidence only: category members can be present even when the category word is absent, so zero exact matches cannot establish zero semantic mentions.',
-            'After the short recovery phase, return the best available answer even if the reader remains unavailable.'
-        ].join(' ')
-    };
-}
-
-function normalizeRecordProjectionFieldLabel(value = '') {
-    const label = normalizeText(value).toLowerCase().replace(/[\s_-]+/g, ' ');
-    if (/^language$/.test(label)) return 'language';
-    if (/^(?:document|resource) type$/.test(label)) return 'document_type';
-    if (/^country$/.test(label)) return 'country';
-    if (/^content provider$/.test(label)) return 'content_provider';
-    if (/^publisher(?:, year)?$/.test(label)) return 'publisher';
-    if (/^source$/.test(label)) return 'source';
-    return label.replace(/\s+/g, '_');
-}
-
-function inferRecordSelectorRequirements(message = '') {
-    const question = normalizeText(message);
-    const requirements = [];
-    if (/\blanguage\b|语言/i.test(question)) {
-        requirements.push({
-            field: 'language',
-            valuePattern: /\bunknown\b|未知/i.test(question) ? /^(?:unknown|undetermined|unspecified|n\/a)$/i : null
-        });
-    }
-    if (/\b(?:document|resource)\s+type\b|\barticle\b|\bthesis\b|\breport\b|文献类型|文章|论文|报告/i.test(question)) {
-        let valuePattern = null;
-        if (/\barticle\b/i.test(question)) {
-            valuePattern = /^(?:\[?article\]?|journal article)(?:\s*;\s*.*)?$/i;
-        }
-        else if (/\bthesis\b/i.test(question)) valuePattern = /\bthesis\b/i;
-        else if (/\breport\b/i.test(question)) valuePattern = /\breport\b/i;
-        requirements.push({ field: 'document_type', valuePattern });
-    }
-    if (/\bcountry\b|\bflag\b|国家|国旗/i.test(question)) {
-        requirements.push({ field: 'country', valuePattern: null });
-    }
-    if (/\bcontent provider\b|内容提供者/i.test(question)) {
-        requirements.push({ field: 'content_provider', valuePattern: null });
-    }
-    if (/\bpublisher\b|出版者|出版社/i.test(question)) {
-        requirements.push({ field: 'publisher', valuePattern: null });
-    }
-    if (/\bsource\b|来源/i.test(question)) {
-        requirements.push({ field: 'source', valuePattern: null });
-    }
-    return requirements.filter((requirement, index, all) =>
-        all.findIndex((candidate) => candidate.field === requirement.field) === index
-    );
-}
-
-function collectRecordFieldProjections(stepResults = []) {
-    const projections = [];
-    const seenObjects = new WeakSet();
-    const seenRows = new Set();
-    const visit = (value, depth = 0) => {
-        if (!value || typeof value !== 'object' || depth > 16 || projections.length >= 240) return;
-        if (seenObjects.has(value)) return;
-        seenObjects.add(value);
-        if (Array.isArray(value)) {
-            for (const entry of value) visit(entry, depth + 1);
-            return;
-        }
-        for (const [key, nested] of Object.entries(value)) {
-            if (
-                (key === 'recordFieldProjections' || key === 'record_field_projections') &&
-                Array.isArray(nested)
-            ) {
-                for (const row of nested) {
-                    if (!row || typeof row !== 'object' || !Array.isArray(row.fields)) continue;
-                    const normalizedFields = row.fields
-                        .map((field) => ({
-                            label: normalizeRecordProjectionFieldLabel(field?.label || field?.name),
-                            value: normalizeText(field?.value)
-                        }))
-                        .filter((field) => field.label && field.value);
-                    if (!normalizedFields.length) continue;
-                    const normalizedRow = {
-                        recordNumber: row.recordNumber ?? row.record_number ?? null,
-                        title: normalizeText(row.title),
-                        fields: normalizedFields
-                    };
-                    const rowKey = JSON.stringify(normalizedRow);
-                    if (!seenRows.has(rowKey)) {
-                        seenRows.add(rowKey);
-                        projections.push(normalizedRow);
-                    }
-                }
-                continue;
-            }
-            visit(nested, depth + 1);
-        }
-    };
-    for (const stepResult of normalizeArrayValue(stepResults)) {
-        if (stepResult?.response?.ok !== true && stepResult?.ok !== true) continue;
-        visit(stepResult?.response?.result || stepResult?.result || stepResult);
-    }
-    return projections;
-}
-
-function detectRecordSelectorConjunctionEvidenceGap({
-    message = '',
-    submission = {},
-    stepResults = []
-} = {}) {
-    if (!normalizeText(submission.answer)) return null;
-    const requirements = inferRecordSelectorRequirements(message);
-    if (requirements.length < 2) return null;
-    const projections = collectRecordFieldProjections(stepResults);
-    if (!projections.length) return null;
-    const satisfiesRequirement = (row, requirement) => {
-        const fields = row.fields.filter((field) => field.label === requirement.field);
-        if (!fields.length) return false;
-        return !requirement.valuePattern ||
-            fields.some((field) => requirement.valuePattern.test(field.value));
-    };
-    const matchingRows = projections.filter((row) =>
-        requirements.every((requirement) => satisfiesRequirement(row, requirement))
-    );
-    if (matchingRows.length) return null;
-    const fieldsPresent = new Set(projections.flatMap((row) => row.fields.map((field) => field.label)));
-    const missingFields = requirements
-        .filter((requirement) => !fieldsPresent.has(requirement.field))
-        .map((requirement) => requirement.field);
-    const uncorrelatedFields = requirements
-        .filter((requirement) => fieldsPresent.has(requirement.field))
-        .map((requirement) => requirement.field);
-    return {
-        error: 'record_selector_fields_not_correlated',
-        requiredFields: requirements.map((requirement) => requirement.field),
-        missingFields,
-        uncorrelatedFields,
-        projectedRecordCount: projections.length,
-        instruction: [
-            `The submitted answer selects a record using ${requirements.map((requirement) => requirement.field).join(' + ')}, but no structured record row establishes all of those predicates together.`,
-            missingFields.length
-                ? `The current record projections do not expose these required fields: ${missingFields.join(', ')}.`
-                : 'The required fields appear only on different or value-mismatched rows.',
-            'Repeated-field summaries, independent facets, and majority counts do not prove a conjunction on one record.',
-            'Use the existing source filters/facet links, a focused archive/open/find call, or another structured record view to obtain a row-correlated candidate with every requested field before selecting its answer field.',
-            'Choose the next tool and arguments from the observed source; this is a soft evidence audit, not a hard route. After the short recovery phase, return the best available answer even if the source remains incomplete.'
-        ].join(' ')
-    };
-}
-
-function detectAnswerSpecificityEvidenceGap({ message = '', submission = {}, stepResults = [] } = {}) {
-    const question = normalizeText(message);
-    const answer = normalizeText(submission.answer);
-    if (!/\bspecies\b|物种|种类/i.test(question) || !/^[\p{L}-]+$/u.test(answer)) {
-        return null;
-    }
-    const answerPattern = answer.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const phrasePattern = new RegExp(`\\b([A-Za-z][A-Za-z-]{2,})\\s+${answerPattern}s?\\b`, 'gi');
-    const genericModifiers = new Set([
-        'a', 'an', 'the', 'this', 'that', 'featured', 'tenacious', 'hilarious',
-        'funny', 'majestic', 'mighty', 'tiny', 'young', 'adult', 'baby', 'wild'
-    ]);
-    const candidates = new Set();
-    for (const stepResult of Array.isArray(stepResults) ? stepResults : []) {
-        const text = successfulStepText(stepResult);
-        let match;
-        while ((match = phrasePattern.exec(text)) !== null) {
-            const modifier = normalizeText(match[1]);
-            if (modifier && !genericModifiers.has(modifier.toLowerCase())) {
-                candidates.add(`${modifier} ${answer}`);
-            }
-        }
-    }
-    if (!candidates.size) return null;
-    return {
-        error: 'answer_entity_specificity_missing',
-        sourceCandidates: [...candidates].slice(0, 8),
-        instruction: [
-            `The question asks for a species-level name, but the submitted one-word answer "${answer}" is broader than compound species phrases already visible in the retrieved evidence.`,
-            `Compare the candidate against these source phrases and submit the most specific supported entity name: ${[...candidates].slice(0, 8).join(', ')}.`,
-            'Do not broaden a source-supported compound entity to its generic head noun.'
-        ].join(' ')
-    };
-}
-
-function detectCompleteTitleEvidenceGap({ message = '', submission = {}, stepResults = [] } = {}) {
-    const question = normalizeText(message);
-    const answer = normalizeText(submission.answer);
-    if (
-        !/(?:\bcomplete\s+title\b|\bfull\s+title\b|\btitle\s+in\s+full\b|完整标题|全名)/i.test(question) ||
-        !answer ||
-        /[:：]\s*\S/.test(answer)
-    ) {
-        return null;
-    }
-    const hasTitleAuthorityEvidence = (Array.isArray(stepResults) ? stepResults : []).some((stepResult) => {
-        if (stepResult?.response?.ok !== true) return false;
-        const searchable = `${normalizeText(stepResult.tool)} ${successfulStepText(stepResult)}`;
-        return /(?:catalog|bibliograph|isbn|title page|google books|open library|worldcat|book metadata)/i.test(searchable) &&
-            searchable.toLowerCase().includes(answer.toLowerCase());
-    });
-    if (hasTitleAuthorityEvidence) return null;
-    return {
-        error: 'complete_title_not_verified',
-        instruction: [
-            `The request asks for the complete title, while the submitted title "${answer}" has not been checked against a catalog, title page, ISBN record, or another full-title authority.`,
-            'Use the short recovery phase to verify whether a subtitle or post-colon phrase was omitted, then preserve the complete official title while applying the user’s requested number formatting.',
-            'After the recovery phase, submit the best available title rather than returning an empty answer.'
-        ].join(' ')
-    };
-}
-
-function collectNestedSelectorProtocols(stepResults = []) {
-    const protocols = [];
-    const seen = new Set();
-    const visit = (value, depth = 0) => {
-        if (depth > 14 || value === null || value === undefined) return;
-        if (Array.isArray(value)) {
-            for (const entry of value) visit(entry, depth + 1);
-            return;
-        }
-        if (typeof value !== 'object') return;
-        const candidates = [
-            value.selectionProtocol,
-            value.selection_protocol,
-            value.selectionAudit,
-            value.selection_audit,
-            (
-                Object.prototype.hasOwnProperty.call(value, 'boundary_complete') &&
-                Object.prototype.hasOwnProperty.call(value, 'exact_title_match_counts')
-            ) ? value : null,
-            (
-                Object.prototype.hasOwnProperty.call(value, 'candidate_set_coverage_sufficient') &&
-                Object.prototype.hasOwnProperty.call(value, 'quoted_term')
-            ) ? value : null
-        ].filter((entry) => entry && typeof entry === 'object' && !Array.isArray(entry));
-        for (const candidate of candidates) {
-            const parentKind = normalizeText(candidate.parent_kind || candidate.parentKind);
-            const quotedTerm = normalizeText(candidate.quoted_term || candidate.quotedTerm);
-            let counts = normalizeArrayValue(
-                candidate.exact_title_match_counts ||
-                candidate.exactTitleMatchCounts ||
-                candidate.group_title_counts ||
-                candidate.groupTitleCounts
-            );
-            if (!counts.length) {
-                counts = normalizeArrayValue(candidate.candidates).map((entry) => ({
-                    group: normalizeText(
-                        entry?.structured_anchor ||
-                        entry?.title ||
-                        entry?.ref_id
-                    ),
-                    count: Math.max(
-                        0,
-                        Number(
-                            entry?.visible_snippet_occurrences ||
-                            entry?.visibleSnippetOccurrences
-                        ) || 0
-                    ),
-                    matched_children: []
-                })).filter((entry) => entry.group);
-            }
-            if (!parentKind || !quotedTerm || !counts.length) continue;
-            const normalized = {
-                parentKind,
-                quotedTerm,
-                boundaryComplete: candidate.boundary_complete === true ||
-                    candidate.boundaryComplete === true ||
-                    candidate.candidate_set_coverage_sufficient === true,
-                winningGroup: normalizeText(candidate.winning_group || candidate.winningGroup),
-                counts: counts.map((group) => ({
-                    group: normalizeText(group?.group || group?.label),
-                    count: Math.max(0, Number(group?.count) || 0),
-                    matchedChildren: normalizeArrayValue(
-                        group?.matched_children || group?.matchedChildren
-                    ).map((child) => normalizeText(child?.id || child?.label)).filter(Boolean)
-                })).filter((group) => group.group)
-            };
-            const key = JSON.stringify(normalized);
-            if (!seen.has(key)) {
-                seen.add(key);
-                protocols.push(normalized);
-            }
-        }
-        for (const child of Object.values(value)) visit(child, depth + 1);
-    };
-    for (const stepResult of Array.isArray(stepResults) ? stepResults : []) {
-        if (stepResult?.response?.ok !== true) continue;
-        visit(
-            stepResult?.response?.result ||
-            stepResult?.response?.details ||
-            stepResult?.result ||
-            stepResult?.details
-        );
-    }
-    return protocols;
-}
-
-function collectNestedSelectorRecoveryActions(stepResults = []) {
-    const actions = [];
-    const seen = new Set();
-    const push = (value) => {
-        if (!value || typeof value !== 'object' || Array.isArray(value)) return;
-        const tool = normalizeText(value.tool || value.name);
-        const args = value.args && typeof value.args === 'object' && !Array.isArray(value.args)
-            ? value.args
-            : value.arguments && typeof value.arguments === 'object' && !Array.isArray(value.arguments)
-                ? value.arguments
-                : null;
-        const reason = normalizeText(value.reason);
-        if (
-            !tool ||
-            !args ||
-            !/(?:parent[\s-]*index|candidate[\s-]*set boundary|before selecting a child|same parent index)/i.test(reason)
-        ) {
-            return;
-        }
-        const normalized = { tool, args, reason };
-        const key = JSON.stringify(normalized);
-        if (!seen.has(key)) {
-            seen.add(key);
-            actions.push(normalized);
-        }
-    };
-    const visit = (value, depth = 0) => {
-        if (depth > 14 || value === null || value === undefined) return;
-        if (Array.isArray(value)) {
-            for (const entry of value) visit(entry, depth + 1);
-            return;
-        }
-        if (typeof value !== 'object') return;
-        for (const key of [
-            'next_actions',
-            'nextActions',
-            'suggestedNextCalls',
-            'suggested_next_calls'
-        ]) {
-            for (const action of normalizeArrayValue(value[key])) push(action);
-        }
-        for (const child of Object.values(value)) visit(child, depth + 1);
-    };
-    for (const stepResult of Array.isArray(stepResults) ? stepResults : []) {
-        if (stepResult?.response?.ok !== true) continue;
-        visit(
-            stepResult?.response?.result ||
-            stepResult?.response?.details ||
-            stepResult?.result ||
-            stepResult?.details
-        );
-    }
-    return actions.slice(0, 4);
-}
-
-function renderRecoveryAction(action = {}) {
-    const tool = normalizeText(action.tool);
-    if (!tool) return '';
-    try {
-        return `${tool} ${JSON.stringify(action.args || {})}`;
-    } catch {
-        return tool;
-    }
-}
-
-function detectRecommendedRecoveryActionGap({
-    recoveryGap = null,
-    toolCalls = []
-} = {}) {
-    const recommendedActions = normalizeArrayValue(recoveryGap?.recommendedActions)
-        .filter((action) => action && typeof action === 'object');
-    if (!recommendedActions.length) return null;
-    const calls = normalizeArrayValue(toolCalls).filter(Boolean);
-    if (!calls.length) return null;
-    const selectedDiscoveryCalls = calls.filter((call) => {
-        const tool = canonicalDirectToolId(call?.tool || call?.name);
-        const args = call?.args && typeof call.args === 'object'
-            ? call.args
-            : call?.arguments && typeof call.arguments === 'object'
-                ? call.arguments
-                : {};
-        return tool === 'tool_search' ||
-            (tool === 'web_run' && normalizeArrayValue(args.search_query).length > 0);
-    });
-    if (!selectedDiscoveryCalls.length) return null;
-    const rendered = recommendedActions
-        .map((action) => renderRecoveryAction(action))
-        .filter(Boolean)
-        .slice(0, 3);
-    return {
-        error: 'recommended_recovery_navigation_skipped',
-        tools: selectedDiscoveryCalls
-            .map((call) => canonicalDirectToolId(call?.tool || call?.name))
-            .filter(Boolean),
-        recommendedActions,
-        instruction: [
-            'A prior tool result already exposed an executable parent-index or continuation action, so another discovery call does not close the audited candidate boundary.',
-            `Use one of the existing structured actions next: ${rendered.join(' OR ')}.`
-        ].join(' ')
-    };
-}
-
-function detectNestedSelectorSelectionGap({
-    message = '',
-    submission = {},
-    stepResults = []
-} = {}) {
-    const question = normalizeText(message);
-    if (
-        !/\b(?:most|least|fewest|highest|lowest)\b/i.test(question) ||
-        !/\b(?:titles?|labels?|records?|entries|names?)\b/i.test(question)
-    ) {
-        return null;
-    }
-    const protocols = collectNestedSelectorProtocols(stepResults);
-    if (!protocols.length) return null;
-    const latest = protocols.at(-1);
-    const countsText = latest.counts
-        .map((group) => `${group.group}=${group.count}`)
-        .join(', ');
-    if (!latest.boundaryComplete) {
-        const recommendedActions = collectNestedSelectorRecoveryActions(stepResults);
-        const recommendedActionText = recommendedActions
-            .map((action) => renderRecoveryAction(action))
-            .filter(Boolean)
-            .slice(0, 3);
-        return {
-            error: 'nested_selector_candidate_boundary_incomplete',
-            parentKind: latest.parentKind,
-            quotedTerm: latest.quotedTerm,
-            counts: latest.counts,
-            recommendedActions,
-            instruction: [
-                `The parent-index evidence has only provisional exact "${latest.quotedTerm}" child-title counts (${countsText}); its candidate boundary is not complete.`,
-                recommendedActionText.length
-                    ? `Execute one of these already available structured actions before tool_search or another broad search: ${recommendedActionText.join(' OR ')}.`
-                    : 'Use the tool-provided next recommended parent-index or continuation call before opening or searching a remembered child.',
-                'After the boundary is complete, select the unique winning parent from the displayed per-group counts, then inspect that parent’s requested child.',
-                'This is a soft consistency check: after the short recovery phase, submit the best available answer even if the remaining source is unavailable.'
-            ].join(' ')
-        };
-    }
-    if (!latest.winningGroup) return null;
-    const rationale = `${normalizeText(submission.reason)} ${normalizeText(submission.answer)}`;
-    const anchors = rationale.match(
-        /\b(?:rule|article|chapter|section|part|item|table|figure|episode|volume|book)\s+(?:\d+(?:\.\d+)*[a-z]?|[ivxlcdm]+)\b/gi
-    ) || [];
-    const winning = latest.counts.find((group) =>
-        group.group.toLowerCase() === latest.winningGroup.toLowerCase()
-    );
-    const winningAnchors = new Set([
-        latest.winningGroup,
-        ...(winning?.matchedChildren || [])
-    ].map((value) => normalizeText(value).toLowerCase()).filter(Boolean));
-    const conflictingAnchors = anchors
-        .map((anchor) => normalizeText(anchor))
-        .filter((anchor) => anchor && !winningAnchors.has(anchor.toLowerCase()));
-    if (!conflictingAnchors.length) return null;
-    return {
-        error: 'nested_selector_selected_group_mismatch',
-        parentKind: latest.parentKind,
-        quotedTerm: latest.quotedTerm,
-        winningGroup: latest.winningGroup,
-        counts: latest.counts,
-        conflictingAnchors: [...new Set(conflictingAnchors)],
-        instruction: [
-            `The completed parent-index evidence identifies ${latest.winningGroup} as the unique winner for exact "${latest.quotedTerm}" child-title counts (${countsText}).`,
-            `The proposed rationale instead follows ${[...new Set(conflictingAnchors)].join(', ')}.`,
-            `Reconcile the child lookup with ${latest.winningGroup} and its visible matching child identifiers before submitting.`,
-            'This is a soft consistency check: return the best available answer after the short recovery phase.'
-        ].join(' ')
-    };
-}
-
-function nestedObjectHasNonEmptyProperty(value, propertyName, depth = 0) {
-    if (depth > 12 || value === null || value === undefined) return false;
-    if (Array.isArray(value)) {
-        return value.some((entry) => nestedObjectHasNonEmptyProperty(entry, propertyName, depth + 1));
-    }
-    if (typeof value !== 'object') return false;
-    if (Object.prototype.hasOwnProperty.call(value, propertyName)) {
-        const propertyValue = value[propertyName];
-        if (Array.isArray(propertyValue) && propertyValue.length > 0) return true;
-        if (propertyValue && typeof propertyValue === 'object' && Object.keys(propertyValue).length > 0) return true;
-        if (typeof propertyValue === 'string' && normalizeText(propertyValue)) return true;
-        if (typeof propertyValue === 'number' || typeof propertyValue === 'boolean') return true;
-    }
-    return Object.values(value)
-        .some((entry) => nestedObjectHasNonEmptyProperty(entry, propertyName, depth + 1));
-}
-
-function detectStructuredRelationRecoveryCallGap({ recoveryGap = null, toolCalls = [] } = {}) {
-    if (
-        recoveryGap?.error !== 'selector_terminal_relation_evidence_missing' ||
-        !normalizeText(recoveryGap.relationProperty)
-    ) {
-        return null;
-    }
-    const relationProperty = normalizeText(recoveryGap.relationProperty).toLowerCase();
-    const structuredEntityCalls = normalizeArrayValue(toolCalls).filter((call) => {
-        const tool = canonicalDirectToolId(call?.tool || call?.name);
-        return /(?:wikidata|knowledge_graph|entity).*lookup|entity_lookup/i.test(tool);
-    });
-    if (!structuredEntityCalls.length) return null;
-    const missingRelationCalls = structuredEntityCalls.filter((call) => {
-        const args = call?.args && typeof call.args === 'object'
-            ? call.args
-            : call?.arguments && typeof call.arguments === 'object'
-                ? call.arguments
-                : {};
-        return !normalizeArrayValue(args.properties || args.fields)
-            .map((value) => normalizeText(value).toLowerCase().replace(/[\s-]+/g, '_'))
-            .includes(relationProperty);
-    });
-    if (!missingRelationCalls.length) return null;
-    return {
-        error: 'structured_relation_property_omitted',
-        relationProperty,
-        tools: missingRelationCalls
-            .map((call) => canonicalDirectToolId(call?.tool || call?.name))
-            .filter(Boolean),
-        instruction: `The structured entity lookup omitted the required ${relationProperty} field. Query the source entities, not the candidate answer locations, and include properties:["${relationProperty}"].`
-    };
-}
-
-function selectExactAnswerAuditRecoveryGap(validation = {}, attemptedWarnings = new Set()) {
-    const attempted = attemptedWarnings instanceof Set
-        ? attemptedWarnings
-        : new Set(normalizeArrayValue(attemptedWarnings).map((value) => normalizeText(value)).filter(Boolean));
-    return [
-        validation?.incompleteSimulation,
-        validation?.quantifierConstraintGap,
-        validation?.structuredAttachmentSemanticGap,
-        validation?.recordSelectorConjunctionGap,
-        validation?.nestedSelectorGap,
-        validation?.selectorTerminalRelationGap,
-        validation?.selectorMetricGap,
-        validation?.visualEnumerationGap,
-        validation?.answerSpecificityGap,
-        validation?.completeTitleGap
-    ].find((gap) => gap?.error && !attempted.has(gap.error)) || null;
-}
-
-function hasBlockingExactAnswerAuditErrors(validation = {}) {
-    return validation?.ok === false || normalizeArrayValue(validation?.errors)
-        .some((error) => Boolean(normalizeText(error)));
-}
-
-function validateExactAnswerSubmission({
-    decision = {},
-    stepResults = [],
-    message = '',
-    fileAttachments = []
-} = {}) {
-    const submission = normalizeExactAnswerSubmission(decision.exactAnswerSubmission || {});
-    if (!submission.answer && normalizeText(decision.finalAnswer)) {
-        submission.answer = stripControlTags(decision.finalAnswer);
-        submission.reason = submission.reason || normalizeText(decision.publicReasoning);
-        submission.personaText = submission.personaText || submission.answer;
-    }
-    const availableRefs = getAvailableEvidenceRefSet(stepResults, {
-        message,
-        exactAnswerMode: true
-    });
-    const errors = [];
-    const warnings = [];
-    if (!submission.answer) {
-        warnings.push('answer_missing');
-    }
-    if (looksLikeExplanatoryFinalAnswer(submission.answer)) {
-        warnings.push('answer_not_exact_shape');
-    }
-    const unknownRefs = submission.evidenceRefs.filter((ref) => !availableRefs.has(ref));
-    if (submission.evidenceRefs.length && unknownRefs.length) {
-        warnings.push('evidence_refs_unknown');
-        if (unknownRefs.length === submission.evidenceRefs.length && availableRefs.size === 0) {
-            warnings.push('evidence_missing');
-        }
-    }
-    const scaledUnitMismatch = scaledUnitAnswerMismatch({ question: message, answer: submission.answer });
-    if (scaledUnitMismatch) {
-        warnings.push(scaledUnitMismatch.error);
-    }
-    const reasonConflict = exactAnswerReasonConflict(submission);
-    if (reasonConflict) {
-        warnings.push(reasonConflict.error);
-    }
-    const incompleteSimulation = detectIncompleteProcessSimulation({ message, stepResults });
-    if (incompleteSimulation) {
-        warnings.push(incompleteSimulation.error);
-    }
-    const quantifierConstraintGap = detectVacuousDistributionConstraintGap({ message });
-    if (quantifierConstraintGap) {
-        warnings.push(quantifierConstraintGap.error);
-    }
-    const selectorMetricGap = detectSelectorMetricEvidenceGap({ message, submission, stepResults });
-    if (selectorMetricGap) {
-        warnings.push(selectorMetricGap.error);
-    }
-    const nestedSelectorGap = detectNestedSelectorSelectionGap({
-        message,
-        submission,
-        stepResults
-    });
-    if (nestedSelectorGap) {
-        warnings.push(nestedSelectorGap.error);
-    }
-    const selectorTerminalRelationGap = detectSelectorTerminalRelationEvidenceGap({
-        message,
-        submission,
-        stepResults
-    });
-    if (selectorTerminalRelationGap) {
-        warnings.push(selectorTerminalRelationGap.error);
-    }
-    const visualEnumerationGap = detectVisualEnumerationEvidenceGap({
-        message,
-        submission,
-        stepResults,
-        fileAttachments
-    });
-    if (visualEnumerationGap) {
-        warnings.push(visualEnumerationGap.error);
-    }
-    const structuredAttachmentSemanticGap = detectStructuredAttachmentSemanticEvidenceGap({
-        message,
-        submission,
-        stepResults,
-        fileAttachments
-    });
-    if (structuredAttachmentSemanticGap) {
-        warnings.push(structuredAttachmentSemanticGap.error);
-    }
-    const recordSelectorConjunctionGap = detectRecordSelectorConjunctionEvidenceGap({
-        message,
-        submission,
-        stepResults
-    });
-    if (recordSelectorConjunctionGap) {
-        warnings.push(recordSelectorConjunctionGap.error);
-    }
-    const answerSpecificityGap = detectAnswerSpecificityEvidenceGap({
-        message,
-        submission,
-        stepResults
-    });
-    if (answerSpecificityGap) {
-        warnings.push(answerSpecificityGap.error);
-    }
-    const completeTitleGap = detectCompleteTitleEvidenceGap({
-        message,
-        submission,
-        stepResults
-    });
-    if (completeTitleGap) {
-        warnings.push(completeTitleGap.error);
-    }
-    return {
-        ok: true,
-        submission,
-        errors,
-        warnings,
-        unknownRefs,
-        availableEvidenceRefs: [...availableRefs],
-        scaledUnitMismatch,
-        reasonConflict,
-        incompleteSimulation,
-        quantifierConstraintGap,
-        nestedSelectorGap,
-        selectorMetricGap,
-        selectorTerminalRelationGap,
-        visualEnumerationGap,
-        structuredAttachmentSemanticGap,
-        recordSelectorConjunctionGap,
-        answerSpecificityGap,
-        completeTitleGap
-    };
 }
 
 function firstPromptObject(...values) {
@@ -8660,8 +6328,7 @@ function buildToolObservationDigest(stepResults = [], options = {}) {
     return stepResults.slice(-maxItems).map((stepResult) => {
         const response = stepResult.response || {};
         const result = response.result || {};
-        const evidenceRefs = getStepEvidenceRefs(stepResult);
-        const webTool = isWebEvidenceToolName(stepResult.tool);
+        const webTool = isWebToolName(stepResult.tool);
         const resultText = extractToolResultText(result) || response.error || '';
         const modelVisibleResultText = webTool
             ? sanitizeWebToolTextForModel(resultText)
@@ -8732,10 +6399,6 @@ function buildToolObservationDigest(stepResults = [], options = {}) {
             promptTextChars: boundedPromptText.text.length,
             compression: boundedPromptText.compression,
             observationContract,
-            evidenceRefs,
-            note: evidenceRefs.length
-                ? 'Full observation is retained in transcript/evidence artifact; use evidenceRefs for final_answer.'
-                : '',
             details: compact || canonicalWebPromptText ? null : detailsForPrompt
                 ? summarizeForModel(JSON.stringify(detailsForPrompt), 500)
                 : null,
@@ -8794,18 +6457,12 @@ function parseCompletedSubagentNotificationInputItem(item = {}) {
         const taskResult = rawTaskResult
             ? {
                   status: normalizeText(rawTaskResult.status, 'completed'),
-                  exactAnswer: normalizeText(rawTaskResult.exact_answer || rawTaskResult.exactAnswer),
                   finalAnswer: normalizeText(rawTaskResult.final_answer || rawTaskResult.finalAnswer),
                   partialAnswer: normalizeText(rawTaskResult.partial_answer || rawTaskResult.partialAnswer),
                   sourceRefs: Array.isArray(rawTaskResult.source_refs)
                       ? rawTaskResult.source_refs
                       : (Array.isArray(rawTaskResult.sourceRefs) ? rawTaskResult.sourceRefs : []),
-                  traceRef: normalizeText(rawTaskResult.trace_ref || rawTaskResult.traceRef),
-                  evidenceBoundary: rawTaskResult.evidence_boundary && typeof rawTaskResult.evidence_boundary === 'object'
-                      ? rawTaskResult.evidence_boundary
-                      : (rawTaskResult.evidenceBoundary && typeof rawTaskResult.evidenceBoundary === 'object'
-                          ? rawTaskResult.evidenceBoundary
-                          : null)
+                  traceRef: normalizeText(rawTaskResult.trace_ref || rawTaskResult.traceRef)
               }
             : null;
         return {
@@ -8855,37 +6512,15 @@ function latestAuthoritativeSubagentTaskResult(notifications = []) {
         return {
             agentPath: notification.agentPath,
             status: normalizeText(taskResult.status, 'completed'),
-            exactAnswer: normalizeText(taskResult.exactAnswer),
             finalAnswer,
             sourceRefs: Array.isArray(taskResult.sourceRefs) ? taskResult.sourceRefs : [],
-            traceRef: normalizeText(taskResult.traceRef),
-            evidenceBoundary: taskResult.evidenceBoundary || null
+            traceRef: normalizeText(taskResult.traceRef)
         };
     }
     return null;
 }
 
 const buildLosslessToolObservationDigest = buildToolObservationDigest;
-
-function buildExactAnswerContractPromptObject({ exactAnswerMode = false, evidenceArtifacts = [] } = {}) {
-    if (!exactAnswerMode) {
-        return null;
-    }
-    return {
-        mode: 'exact_answer_eval',
-        final_answer_tool: FINAL_ANSWER_TOOL_NAME,
-        required_fields: ['answer'],
-        accept_confidence: ['high', 'medium', 'low'],
-        reject_if: [
-            'answer is empty',
-            'answer contains Markdown or explanatory prose',
-            'numeric answer conflicts with the final/correct answer stated in reason',
-            'question asks for scaled units such as thousand/million/billion but answer is the raw rounded base-unit value'
-        ],
-        available_evidence_refs: evidenceArtifacts.map((artifact) => artifact.id).filter(Boolean),
-        instruction: `When solved, call ${FINAL_ANSWER_TOOL_NAME} instead of writing a visible prose final. Evidence artifact ids are audit references for the observations you used; they do not decide sufficiency for you, but ${FINAL_ANSWER_TOOL_NAME} submissions must cite available refs. Use your own judgment about whether evidence is sufficient; if it is not, continue tools or return blocked. For first/earliest/latest/only/all/count/most/least questions, verify that the evidence covers the relevant candidate set and its list or section boundaries before submitting; a partial viewport or one source category is insufficient unless it establishes the requested boundary. If selection depends on a quoted term, preserve its exact lexical form and record the per-group counts rather than matching stems or inflectional variants. For quantitative questions, finish unit conversion, rate conversion, scaling, and rounding before final; if the question asks how many thousand/million/billion X, answer with the scaled count, not the raw unit value. For finite stochastic/probability/odds questions, use exact state transitions, dynamic programming, or exhaustive enumeration when needed; Monte Carlo may be a sanity check. Keep the answer field consistent with the final numeric conclusion written in reason.`
-    };
-}
 
 function buildLlmAgentDirectToolPrompt({
     message,
@@ -8900,7 +6535,6 @@ function buildLlmAgentDirectToolPrompt({
     fileAttachments = [],
     modelImageAttachments = [],
     externalToolExposure = null,
-    exactAnswerMode = false,
     runtimeEnvironment = null,
     promptProfile = null,
     tools = [],
@@ -8910,11 +6544,9 @@ function buildLlmAgentDirectToolPrompt({
     contextBudgetConfig = {},
     taskState = null,
     constraints = [],
-    evidenceManifest = [],
     currentPlan = null,
     unresolvedFields = [],
     requireTaskExecution = false,
-    requireExecutionEvidence = false,
     unrestrictedToolExecution = false,
     ephemeralDeveloperMessage = '',
     suppressCurrentUserMessage = false
@@ -8963,15 +6595,12 @@ function buildLlmAgentDirectToolPrompt({
         responseProtocolInstruction,
         'You are the only user-facing AILIS persona. Keep ordinary conversation natural and answer it directly; do not let task-execution instructions or internal terminology enter your personality, relationship memory, or visible reply.',
         'The runtime_environment object is the authoritative host clock. Use its current_date, current_time, timezone, and utc_offset instead of assuming the training-data date.',
-        'For facts that may have changed, use fresh evidence already present in the conversation or verify them through TaskAgent. Do not present pretrained knowledge as current fact when freshness matters.',
+        'For facts that may have changed, use current information already present in the conversation or ask TaskAgent to look them up. Do not present pretrained knowledge as current fact when freshness matters.',
         'When the user asks for concrete task execution that cannot be answered safely from the visible conversation, call handoff_task exactly once. The Harness transfers the immutable current user request; do not restate, rewrite, expand, or plan the task in tool arguments.',
         'When the latest user message continues, corrects, or redirects previously executed work, treat it as a concrete execution request and call handoff_task. The persistent TaskAgent Session owns the relevant Turn, Goal, and execution history; do not reconstruct that lifecycle inside Persona.',
         'When calling handoff_task, emit only the native function call in that model response. Do not include assistant text alongside the tool call; public task progress is delivered separately by the Harness event channel.',
         requireTaskExecution
             ? 'This turn has an explicit task-execution contract. Call handoff_task exactly once before producing any answer; do not answer the task directly from model memory or arithmetic.'
-            : '',
-        exactAnswerMode
-            ? 'In exact-answer mode, arithmetic, multi-step logic, optimization, best/maximum/minimum/guaranteed claims, source lookup, and cross-record identity are concrete verification tasks: call handoff_task instead of answering them from intuition. Answer directly only when the requested value is explicitly established in the visible conversation and needs no new calculation or verification.'
             : '',
         'handoff_task blocks while the system Harness runs or resumes the single TaskAgent. You do not create, wait for, resume, list, or close agents. After the tool returns, render its TaskResult packet instead of calling another orchestration tool.',
         'The TaskResult packet is the factual boundary. You may rewrite tone and presentation, but you must not add a name, number, quote, link, claim, or conclusion absent from final_answer, partial_answer, source_refs, or the visible conversation. If status is incomplete, explain the concrete unresolved field naturally instead of silently starting another execution.',
@@ -8992,47 +6621,31 @@ function buildLlmAgentDirectToolPrompt({
             ? 'The TaskAgent model owns Goal semantics. Use task_goal only when an objective must survive across completed Turns: set, replace, complete, or clear it inside the normal execution loop. Do not create a Goal for an ordinary self-contained Turn that can finish now. Do not use regex-like keyword heuristics and do not make a separate classification pass.'
             : '',
         persistentTaskAgentSession
-            ? 'A Session checkpoint is history, not an instruction to repeat an old task. Reuse relevant evidence and artifacts, but treat completed Turn commands and stale tool errors as historical observations unless the current Turn makes them relevant.'
+            ? 'A Session checkpoint is history, not an instruction to repeat an old task. Reuse relevant observations and artifacts, but treat completed Turn commands and stale tool errors as historical observations unless the current Turn makes them relevant.'
             : '',
         'Tool call outputs from previous turns appear as function_call_output/tool_search_output items paired with their call_id. Use recent, relevant outputs as observations, but do not keep rereading stale exploration results once you have enough information to code, verify, or answer.',
-        'Answer directly once the available evidence supports a reasonable answer. Use another tool only when you can name the specific missing field or uncertainty that blocks the answer. Do not repeat an identical tool call unless the new arguments materially change the observation.',
+        'Answer directly once you can reasonably satisfy the current request. Use another tool only when you can name the specific missing field or uncertainty that blocks the answer. Do not repeat an identical tool call unless the new arguments materially change the observation.',
         'A rejected native tool call is an authoritative schema observation. Never repeat the same rejected tool name and arguments. Read the required fields and visible types from the rejection, then either submit materially corrected complete arguments or call a prerequisite/alternate tool that can produce the missing values.',
-        'Build tool arguments only from explicit evidence. Supply required fields and optional fields stated by the user or returned by a prior tool; otherwise leave optional fields omitted. An optional value is evidence-backed only when the user supplied that field or a prior tool returned it for this call. A runtime clock, plausible default, or inferred context is not evidence for an omitted optional field. Do not invent optional years, locations, identifiers, contacts, filters, or defaults. For user-supplied names, titles, labels, or identifiers, preserve the exact literal text on the first lookup; do not expand, canonicalize, or append words unless a prior tool result or an enum in the visible contract authorizes that value.',
-        requireExecutionEvidence
-            ? 'This run has an explicit execution-evidence contract. Do not claim completion until at least one task-execution tool succeeds and the latest task-execution step is successful. If that evidence is unavailable, state the concrete blocker; the runtime will preserve the task as incomplete rather than completed.'
-            : '',
+        'Build tool arguments from the current request, runtime state, prior observations, and your own reasoning. Supply required fields, omit irrelevant optional fields, and preserve explicit user literals unless there is a concrete reason to transform them.',
         hasTemporalTool && hasCurrentTimestampTool
-            ? 'When the request depends on current or relative date/time, ground it with runtime_environment and the exposed temporal tools. A current-time observation capability is exposed; identify it from its name or description even when names are opaque, call it first, then convert or compare dates with tool results. Runtime-environment text or model arithmetic alone does not replace that prerequisite tool observation.'
+            ? 'When the request depends on current or relative date/time, use the supplied runtime clock and the exposed temporal capability as observations, then perform the required conversion or comparison.'
             : hasTemporalTool
-                ? 'Temporal conversion or filtering tools are exposed, but no current-time observation capability is available. For a stateful tool call whose timestamp or filter depends on now, today, yesterday, tomorrow, or upcoming, do not derive absolute values from runtime_environment, model arithmetic, plausible defaults, or unrelated records. Ask for an absolute time anchor or return the missing prerequisite instead of searching or mutating state with assumed bounds.'
+                ? 'When the request depends on current or relative date/time, use the supplied runtime clock as the time anchor and use exposed temporal tools when they materially improve verification.'
                 : '',
         'In the final answer, preserve the user-requested output shape, unit scaling, rounding, and brevity.',
         'Only call tools that are present in the current tools array. If a needed tool is missing, use tool_search when it is available.',
-        'tool_search acquires a capability; its metadata is not answer evidence. After selecting a capability, invoke the selected work tool when it is needed to answer the request.',
-        'When web discovery identifies the relevant entity but the answer still depends on structured identity, a join across records, global ordering or de-duplication, chronology, or a complete candidate-set boundary, use tool_search for a dedicated metadata, document, API, or data capability. Once that dependency is apparent, do not keep paging through a site or rewriting web queries to reconstruct the structure manually.',
-        'For nested selector questions, do not put an unverified intermediate entity inferred from memory into the first search query. Preserve the dependency order: retrieve the parent candidate index, apply the user-specified exact match/count/order criterion, select the winning parent, then inspect its requested child and terminal fact. A plausible intermediate entity is not evidence for the selection step.',
-        'When a successful web tool result says a nested-selector candidate boundary is incomplete and exposes a structured parent-index or continuation action in suggestedNextCalls/next_actions, execute one of those actions before another search or tool_search. That action is an evidence precondition, not a search suggestion. Abandon it only after the action itself fails or reports the source unavailable; query rewriting does not replace the pending boundary evidence.',
-        'For latest/current/recent information, public web facts, recommendations, guides, prices, schedules, rules, product/software versions, news, or anything likely to change over time, you must browse or use web research first. Do not rely on memory, local code search, local logs, or shell commands as a substitute for public web evidence unless the user explicitly asks about local files/code.',
-        'For a past/as-of state of a named public website, database, catalog, API, OAI endpoint, or result page, one empty, blocked, rate-limited, or unavailable live lookup is enough to switch strategy. Use the web_run archive operation on a known URL or stable prefix; do not spend later rounds rewriting broad searches or treating benchmark/task-prompt mirrors as source evidence.',
-        'Once a direct authoritative page, document, or API response visibly contains an answer-bearing candidate that satisfies the task constraints, stop broad discovery. If the requested relationship or role is still uncertain, inspect the candidate in its local source context; do not replace it with a less authoritative search result merely because another wording looks plausible.',
-        'For historical-source questions, preserve the name, place, organization, category, and other labels used by the source at the requested time. Do not silently modernize a historical label to a current administrative or corporate name unless the user explicitly asks for the modern equivalent.',
-        'For aggregate extrema, ranking, distance, earliest/latest, or other selector tasks, keep three checks separate: establish the complete candidate set, obtain comparable values for the requested metric and compute the selector, then verify each selected terminal record against an entity-level source. A complete table of entity labels without the selector metric does not establish the winner. For a record selected by multiple predicates, verify every predicate on the same record row; separate facets, repeated-field summaries, and majority counts do not establish their conjunction. For geographic direction or distance, obtain comparable coordinates for the boundary contenders instead of inferring fine ordering from region names or memory. Aggregate indexes may normalize historical places or labels, so preserve the entity-level source-period label instead of silently substituting a current municipality.',
-        'For local file and data tasks, prefer the coding main path: read/write/exec/apply_patch. Use read to inspect small files, write to create helper scripts, exec to run scripts/tests/diagnostics, and apply_patch for source edits. Use tool_search only when the coding path cannot reliably inspect the file type or when a specialized direct MCP/tool is clearly needed.',
-        'For semantic questions about PowerPoint or Word content, a dedicated presentation/document reader is the primary evidence path. Raw ZIP/OOXML inspection may support exact lexical checks, but an absent category word does not prove that no slides or paragraphs contain members of that category; never convert zero raw string matches directly into a zero semantic count.',
+        'tool_search acquires a capability; its metadata is not the requested result. After selecting a capability, invoke the selected work tool when it is needed to answer the request.',
+        'For current or public information, use an available web, API, connector, research capability, or direct HTTP client. Prefer a dedicated capability when it works, but do not treat a particular tool name or backend as mandatory.',
+        'When a tool fails, inspect whether the failure is caused by the request, the source, or the capability itself. Retry only when a materially changed call can produce a new result; otherwise switch to an independent viable method. A read-only shell script or direct HTTP client is a valid fallback when runtime policy permits network access, and should preserve useful source URLs and response metadata.',
+        'For multi-step research, preserve the task dependencies and distinguish observed facts from intermediate assumptions. Choose the next source or tool based on the concrete unresolved information rather than a benchmark-shaped task category.',
+        'For local files and data, use read/write/exec/apply_patch or a specialized reader according to which path can reliably inspect the relevant content. It is acceptable to create and run a small helper script instead of waiting for a dedicated adapter.',
         activeModelImageAttachments.length
-            ? 'Attached image content is included directly in this model input together with its staged path. Inspect the supplied image before deciding whether any additional vision tool is needed. For PDF, Office, audio, archive, or other structured/binary files, use tool_search once for the exact dedicated reader/transcriber capability.'
-            : 'Attached files are staged inside the current workspace before TaskAgent starts. Always use the staged attached_files path. For PDF, Office, image, audio, archive, or other structured/binary files, use tool_search once for the exact dedicated reader/transcriber/vision capability and call that tool; do not spend the task budget installing ad-hoc parsers when a dedicated tool is available.',
-        'When a task asks for a best, optimal, forced, guaranteed, or formally correct action from an image or other perceived state, perception alone is not verification. Transcribe and cross-check the structured state, then use tool_search for an available domain rules engine, solver, simulator, or validator before claiming optimality. Do not replace a deterministic verifier with heuristic model judgment when such a verifier is available.',
-        'For data reasoning tasks, use code as a calculator and verifier: write scripts that parse the source file, compute the needed result, and print a short answer plus compact evidence. Do not write scripts whose main purpose is to dump large files, whole spreadsheets, logs, or documents back into model context.',
-        'For bounded numerical optimization, minimax, game-strategy, or guaranteed-value questions stated in text, use exec to exhaustively enumerate the finite integer state space or run an equivalent deterministic solver before answering. Verify both the claimed strategy/value and the adversarial bound; do not rely on a plausible witness alone.',
-        'For a derived numeric answer, make a compact operand ledger before finalizing: bind each number to its exact source label, date, group, unit, and requested role, then run the arithmetic with exec when more than one operation is involved. Never substitute a nearby statistic that has the right topic but the wrong year, population, or field.',
-        'Before coding a word problem, sanity-check its quantifiers and constraints. If a literal reading makes an explicitly stated restriction redundant or vacuous, or two plausible readings change the result, compute the material alternatives. When the problem says a clause restricts the adversary but the literal quantifier leaves the feasible set unchanged, prefer the smallest non-vacuous quantifier repair unless the text affirmatively says the redundancy is intentional; do not silently commit before comparing both values.',
-        'For finite staged processes, use only transitions explicitly defined by the rules. If the rules stop defining a transition at a boundary or partial stage, do not invent a terminal probability, shortened random device, or replacement transition; enumerate the material interpretations and flag any extreme result that exists only because of an added boundary rule.',
-        'For ordered extraction or transcription lists, preserve every source occurrence, including repeated values. Verify the final item count and order against the source before answering; repeated items are evidence, not duplicates to remove.',
-        'For layout-sensitive or source-form questions about indentation, columns, line breaks, fraction bars, slash glyphs, colors, or positions, inspect rendered visual evidence from the image or document. Text search and normalized extraction cannot establish those properties. Preserve the original visual form while selecting occurrences; do not convert a stacked fraction into a slash expression before deciding whether the source literally contains a slash.',
-        'When a question puts a word or phrase in quotation marks and asks which group has the most matching titles, labels, or records, compare the quoted lexical form as an exact whole token or phrase unless the question explicitly asks for variants. Do not merge singular/plural forms, stems, or merely related words; record the per-group match counts before following the winning group.',
-        'For long-running work, you may attach progress_note to a tool call or include a short public progress sentence only at meaningful milestones: plan changed, key evidence found, strategy changed after failure, blocker/recovery identified, or evidence is sufficient and you are preparing the final answer. Leave progress_note empty for routine tool calls. Do not expose raw JSON, hidden reasoning, internal IDs, stack traces, token counts, or generic "I am thinking" text.',
-        'Tool outputs provide observations and mechanical transport metadata, not a decision about whether the user task is complete. Judge sufficiency from the original task and the source content yourself. A Source viewport line range, has-more marker, or <truncated omitted_approx_tokens="..."/> marker describes visible context only; it does not require another call when the visible evidence already supports the answer. For first/earliest/latest/only/all/count questions, a visible subset supports the answer only when it establishes the relevant candidate-set boundary; otherwise inspect the remaining relevant lines or sections, or use a structured tool.',
+            ? 'Attached image content is included directly together with its staged path. Inspect it before deciding whether another vision or document capability is needed.'
+            : 'Attached files are staged inside the current workspace. Use the staged attached_files path and choose a reader, renderer, direct file inspection, or helper script that exposes the content the task actually needs.',
+        'Use deterministic computation or a small script when it materially improves accuracy or verification. Choose the method yourself from the task constraints and observations rather than following a fixed benchmark recipe.',
+        'Preserve user-requested labels, order, duplicates, units, formatting, and level of detail. Verify claims about visual layout against a representation that actually contains layout information.',
+        'For long-running work, you may attach progress_note to a tool call or include a short public progress sentence only at meaningful milestones: plan changed, a useful result was found, strategy changed after failure, a blocker was identified, or you are preparing the final answer. Leave progress_note empty for routine tool calls. Do not expose raw JSON, hidden reasoning, internal IDs, stack traces, token counts, or generic "I am thinking" text.',
+        'Tool outputs provide observations and mechanical transport metadata, not a decision about whether the user task is complete. Judge sufficiency from the current request and the source content yourself. Viewport, pagination, has-more, and truncation markers describe what is visible; inspect more only when the missing portion could materially change the answer.',
         'When exec output is truncated, use the visible outputId with output_read/output_tail/output_search to inspect a needed slice. Do not rerun the same command solely to recover truncated text.',
         'Runtime environment and attached file metadata are provided as ordinary user message context items. Use them for path, shell, date, time, and freshness decisions.'
     ];
@@ -9041,9 +6654,6 @@ function buildLlmAgentDirectToolPrompt({
         '',
         '【AILIS Responses-Compatible Tool Runtime】',
         ...(taskAgentMode ? taskAgentRuntimeInstructions : personaRuntimeInstructions),
-        exactAnswerMode
-            ? `Exact-answer mode: when the answer is complete, provide the shortest exact answer in the final assistant message${toolSummary.includes(FINAL_ANSWER_TOOL_NAME) ? ` or call ${FINAL_ANSWER_TOOL_NAME} if that tool is exposed as the submission endpoint` : ''}.`
-            : '',
         `Tool summary: ${toolSummary || 'Direct tools are exposed as native function tools. Search more tools with tool_search.'}`
     ].filter(Boolean).join('\n');
     const activeContextManager = contextManager && typeof contextManager.forPrompt === 'function'
@@ -9092,7 +6702,6 @@ function buildLlmAgentDirectToolPrompt({
         constraints,
         currentPlan,
         unresolvedFields,
-        pinnedEvidenceManifest: evidenceManifest,
         inputModalities: contextHasImageInput ? ['text', 'input_image'] : ['text'],
         toolSummary,
         toolSchemas: tools,
@@ -9261,175 +6870,6 @@ function findNativeToolSpec(toolName = '', tools = []) {
     return tools.find((tool) => normalizeText(tool?.name || tool?.function?.name) === normalizedName) || null;
 }
 
-function nativeToolSemanticText(spec = {}) {
-    const schema = spec?.parameters || spec?.function?.parameters || {};
-    const properties = schema?.properties && typeof schema.properties === 'object'
-        ? schema.properties
-        : {};
-    return [
-        normalizeText(spec?.name || spec?.function?.name),
-        normalizeText(spec?.description || spec?.function?.description),
-        ...Object.entries(properties).flatMap(([name, property]) => [
-            name,
-            normalizeText(property?.description)
-        ])
-    ].filter(Boolean).join(' ').replaceAll('_', ' ');
-}
-
-function isCurrentTimeObservationToolSpec(spec = {}) {
-    const semanticText = nativeToolSemanticText(spec);
-    return /\bcurrent\b.{0,40}\b(?:time|date|datetime|timestamp|posix)\b/i.test(semanticText) ||
-        /\b(?:time|date|datetime|timestamp|posix)\b.{0,40}\bcurrent\b/i.test(semanticText);
-}
-
-function isStatefulTemporalToolSpec(spec = {}) {
-    const semanticText = nativeToolSemanticText(spec);
-    const schema = spec?.parameters || spec?.function?.parameters || {};
-    const properties = schema?.properties && typeof schema.properties === 'object'
-        ? Object.keys(schema.properties).join(' ').replaceAll('_', ' ')
-        : '';
-    return /\b(?:time|date|datetime|timestamp|posix)\b/i.test(`${semanticText} ${properties}`) &&
-        /\b(?:search|find|query|list|remind|reminder|calendar|event|message|schedule|add|create|modify|update|delete)\b/i.test(semanticText) &&
-        !isCurrentTimeObservationToolSpec(spec);
-}
-
-function containsRelativeTimeReference(value = '') {
-    const text = normalizeText(value);
-    return /\b(?:now|today|tonight|yesterday|tomorrow|upcoming|next\s+(?:day|week|month|year|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|this\s+(?:week|month|year|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|in\s+\d+\s+(?:minute|hour|day|week|month|year)s?)\b/i.test(text) ||
-        /(?:现在|今天|今晚|昨天|明天|后天|下周|下个月|明年|本周|这个月|下个星期|过\d+(?:分钟|小时|天|周|个月|年))/.test(text);
-}
-
-function containsAbsoluteTimeAnchor(value = '') {
-    const text = normalizeText(value);
-    return /\b\d{4}[-/.]\d{1,2}[-/.]\d{1,2}\b/.test(text) ||
-        /\b\d{1,2}[-/.]\d{1,2}[-/.]\d{4}\b/.test(text) ||
-        /\b1\d{9}(?:\.\d+)?\b/.test(text);
-}
-
-function successfulStepText(stepResult = {}) {
-    if (stepResult?.response?.ok !== true) {
-        return '';
-    }
-    try {
-        return JSON.stringify({
-            tool: stepResult.tool,
-            args: stepResult.args,
-            response: stepResult.response
-        });
-    } catch {
-        return '';
-    }
-}
-
-function priorToolSupportsTemporalArguments(args = {}, stepResults = [], tools = []) {
-    const successfulSteps = (Array.isArray(stepResults) ? stepResults : [])
-        .filter((stepResult) => stepResult?.response?.ok === true);
-    if (successfulSteps.some((stepResult) =>
-        isCurrentTimeObservationToolSpec(findNativeToolSpec(stepResult?.tool, tools) || {})
-    )) {
-        return true;
-    }
-    const temporalValues = Object.entries(args)
-        .filter(([name, value]) =>
-            /\b(?:time|date|datetime|timestamp|posix)\b/i.test(name.replaceAll('_', ' ')) &&
-            ['string', 'number'].includes(typeof value)
-        )
-        .map(([, value]) => String(value));
-    return temporalValues.length > 0 && temporalValues.every((value) =>
-        successfulSteps.some((stepResult) => successfulStepText(stepResult).includes(value))
-    );
-}
-
-function normalizeLiteralTokens(value = '') {
-    return normalizeText(value)
-        .toLowerCase()
-        .match(/[\p{L}\p{N}]+/gu) || [];
-}
-
-function containsTokenSequence(haystack = [], needle = []) {
-    if (!needle.length || needle.length > haystack.length) {
-        return false;
-    }
-    for (let index = 0; index <= haystack.length - needle.length; index += 1) {
-        if (needle.every((token, offset) => haystack[index + offset] === token)) {
-            return true;
-        }
-    }
-    return false;
-}
-
-function priorToolReturnedLiteral(value = '', stepResults = []) {
-    const expected = normalizeText(value).toLowerCase();
-    if (!expected) {
-        return false;
-    }
-    return (Array.isArray(stepResults) ? stepResults : [])
-        .some((stepResult) => successfulStepText(stepResult).toLowerCase().includes(expected));
-}
-
-function validateEntityLiteralProvenance(args = {}, schema = {}, options = {}) {
-    const userText = [
-        options.originalUserGoal,
-        options.userText
-    ].map((value) => normalizeText(value)).filter(Boolean).join('\n');
-    const userTokens = normalizeLiteralTokens(userText);
-    if (!userTokens.length) {
-        return [];
-    }
-    const properties = schema?.properties && typeof schema.properties === 'object'
-        ? schema.properties
-        : {};
-    const errors = [];
-    for (const [name, value] of Object.entries(args)) {
-        if (
-            typeof value !== 'string' ||
-            !/(?:^|_)(?:name|title|label|identifier)(?:$|_)/i.test(name)
-        ) {
-            continue;
-        }
-        const argumentTokens = normalizeLiteralTokens(value);
-        if (
-            argumentTokens.length < 2 ||
-            containsTokenSequence(userTokens, argumentTokens) ||
-            priorToolReturnedLiteral(value, options.stepResults) ||
-            (Array.isArray(properties[name]?.enum) && properties[name].enum.includes(value))
-        ) {
-            continue;
-        }
-        const strictSubsequences = [
-            argumentTokens.slice(0, -1),
-            argumentTokens.slice(1)
-        ].filter((tokens) => tokens.join('').length >= 4);
-        if (strictSubsequences.some((tokens) => containsTokenSequence(userTokens, tokens))) {
-            errors.push(
-                `${name} expands or canonicalizes an explicit user entity without evidence; preserve the user's exact literal value or use a prior tool result`
-            );
-        }
-    }
-    return errors;
-}
-
-function validateRelativeTemporalPrerequisite(args = {}, spec = {}, tools = [], options = {}) {
-    const requestText = [
-        options.originalUserGoal,
-        options.userText
-    ].map((value) => normalizeText(value)).filter(Boolean).join('\n');
-    if (
-        !containsRelativeTimeReference(requestText) ||
-        containsAbsoluteTimeAnchor(requestText) ||
-        !isStatefulTemporalToolSpec(spec) ||
-        priorToolSupportsTemporalArguments(args, options.stepResults, tools)
-    ) {
-        return [];
-    }
-    const currentTimeAvailable = tools.some((tool) => isCurrentTimeObservationToolSpec(tool));
-    return [
-        currentTimeAvailable
-            ? 'relative-time stateful tool call requires a successful current-time observation first'
-            : 'relative-time stateful tool call is blocked because no current-time observation capability or explicit absolute time anchor is available'
-    ];
-}
-
 function validateNativeDirectToolCall(toolCall = {}, tools = [], options = {}) {
     const name = normalizeText(toolCall.name || toolCall.tool);
     const args = toolCall.arguments && typeof toolCall.arguments === 'object' && !Array.isArray(toolCall.arguments)
@@ -9452,10 +6892,6 @@ function validateNativeDirectToolCall(toolCall = {}, tools = [], options = {}) {
     const required = Array.isArray(repairedSchema.required) ? repairedSchema.required : [];
     if (required.length && Object.keys(args).length === 0) {
         errors.push(`native tool call ${name} cannot use empty arguments; required: ${required.join(', ')}`);
-    }
-    if (spec && options.enforceEvidenceProvenance === true) {
-        errors.push(...validateEntityLiteralProvenance(args, repairedSchema, options));
-        errors.push(...validateRelativeTemporalPrerequisite(args, spec, tools, options));
     }
     return {
         ok: errors.length === 0,
@@ -9622,69 +7058,6 @@ async function callLlmAgentDirectToolDecision(settings, payload, {
             arguments: routedToolCall.args,
             ...(providerMetadata ? { providerMetadata } : {})
         };
-        if (routedToolCall.toolName === FINAL_ANSWER_TOOL_NAME) {
-            const nativeValidation = validateNativeDirectToolCall(
-                routedNativeToolCall,
-                payload.tools,
-                nativeToolValidationContext || {}
-            );
-            if (!nativeValidation.ok) {
-                return {
-                    ok: false,
-                    status: 'invalid_native_final_answer_args',
-                    error: `Provider returned invalid final_answer arguments: ${nativeValidation.errors.join('; ')}`,
-                    raw: {
-                        toolCall: routedNativeToolCall,
-                        responseItem,
-                        errors: nativeValidation.errors,
-                        schema: nativeValidation.schema,
-                        content: response.content || ''
-                    },
-                    nativeToolCall: routedNativeToolCall,
-                    usage: response.usage
-                };
-            }
-            const exactAnswerSubmission = normalizeExactAnswerSubmission(nativeValidation.args || {});
-            const visibleText = exactAnswerSubmission.personaText || exactAnswerSubmission.answer;
-            const argumentProgressNote = normalizeProgressNoteText(directToolCall.arguments?.[DIRECT_TOOL_PROGRESS_NOTE_FIELD]);
-            const contentProgressNote = normalizeProgressNoteText(response.content);
-            const progressNote = argumentProgressNote || contentProgressNote;
-            return {
-                ok: true,
-                mode: 'task',
-                intent: 'exact_answer_final',
-                summary: 'Exact answer submitted through native final_answer tool.',
-                publicReasoning: progressNote,
-                riskLevel: 'low',
-                action: 'final',
-                finalAnswer: exactAnswerSubmission.answer,
-                blockedReason: '',
-                toolCall: null,
-                capabilityRequest: sanitizeCapabilityRequest({}),
-                planUpdates: [],
-                progressNoteSource: argumentProgressNote ? 'model_tool_progress_note' : (contentProgressNote ? 'model_message_content' : ''),
-                personaOutput: sanitizePersonaOutput({
-                    text: visibleText,
-                    emotion: 'focused',
-                    socialTone: 'calm',
-                    taskState: 'happy_success'
-                }),
-                exactAnswerSubmission,
-                legacyPlan: false,
-                raw: {
-                    toolCall: routedNativeToolCall,
-                    responseItem,
-                    content: response.content || ''
-                },
-                decisionSource: 'native_final_answer_tool',
-                nativeToolCall: routedNativeToolCall,
-                transportFallback: false,
-                ...repairMetadata,
-                providerResponseItems,
-                model: response.model,
-                usage: response.usage
-            };
-        }
         const nativeValidation = validateNativeDirectToolCall(
             routedNativeToolCall,
             payload.tools,
@@ -9754,9 +7127,6 @@ async function callLlmAgentDirectToolDecision(settings, payload, {
                     },
                     usage: response.usage
                 };
-            }
-            if (nextRoutedToolCall.toolName === FINAL_ANSWER_TOOL_NAME) {
-                continue;
             }
             const nextRoutedNativeToolCall = {
                 ...nextDirectToolCall,
@@ -10205,7 +7575,6 @@ class AILISAgentRunner {
         const taskState = inferTaskStateFromResult(result);
         const status = normalizeText(result.status || '');
         const approvalState = result.confirmationRequired || status === 'needs_approval' ? 'required' : 'none';
-        const evidenceState = inferEvidenceStateFromStepResults(result.steps || []);
         const relationshipStage = inferRelationshipStageFromContext(requestContext);
         const personaHint = result.personaOutput && typeof result.personaOutput === 'object' ? result.personaOutput : {};
         const firstPlanStep = Array.isArray(result.plan) && result.plan.length ? result.plan[0] : null;
@@ -10226,7 +7595,6 @@ class AILISAgentRunner {
         return {
             task_state: taskState,
             approval_state: approvalState,
-            evidence_state: evidenceState,
             error_code: normalizeText(latestToolStatus || result.error || status || ''),
             reason: normalizeText(result.blockedReason || result.error || latestStep?.response?.error || result.review?.finalAnswer || ''),
             relationship_stage: relationshipStage,
@@ -10827,7 +8195,7 @@ class AILISAgentRunner {
                 timeoutMs: Math.max(Number(effectiveToolContext?.timeoutMs || 0), effectiveToolCallTimeoutMs)
             }
             : effectiveToolContext;
-        const stepResult = await executeToolStep({
+        return await executeToolStep({
             gateway: this.gateway,
             runId,
             sessionId: finalToolContext.sessionId || finalToolContext.sessionKey,
@@ -10835,23 +8203,8 @@ class AILISAgentRunner {
             toolContext: finalToolContext,
             request: effectiveRequest,
             iteration,
-            planner: 'llm-agentic-executor',
-            decorateStepResult: (baseStepResult) => attachAgentEvidenceArtifacts(baseStepResult, {
-                taskType: getAgentRunTaskType(request, finalToolContext)
-            }),
-            finishedPayload: (result) => ({
-                evidenceRefs: getStepEvidenceRefs(result)
-            })
+            planner: 'llm-agentic-executor'
         });
-        if (stepResult.evidenceArtifacts?.length) {
-            this.gateway.emitGatewayEvent?.('agent.evidence_artifacts', {
-                runId,
-                stepId: step.id,
-                iteration,
-                artifacts: getEvidenceArtifactsPromptObject(stepResult.evidenceArtifacts)
-            });
-        }
-        return stepResult;
     }
 
     async executeConfirmedPlan({ request, pendingPlan, sessionId, requestContext, startedAt, runId }) {
@@ -11101,10 +8454,6 @@ class AILISAgentRunner {
             if (!interruptState.interrupted) {
                 return null;
             }
-            const bestAnswerCandidate = selectBestAnswerCandidate(answerCandidateLedger);
-            const finalizableAnswerCandidate = selectBestAnswerCandidate(answerCandidateLedger, {
-                requireFinalizable: true
-            });
             const taskRunHandoff = buildTaskRunHandoffPackage({
                 status: 'interrupted',
                 reason: interruptState.reason || 'user_interrupt',
@@ -11116,9 +8465,7 @@ class AILISAgentRunner {
                 stepResults,
                 events,
                 latestDecision,
-                partialAnswer: exactAnswerMode ? normalizeText(finalizableAnswerCandidate?.answer) : '',
-                answerCandidates: answerCandidateLedger,
-                bestAnswerCandidate,
+                partialAnswer: '',
                 contextManagerCheckpoint: contextManagerCheckpoint('interrupted', stepResults.length)
             });
             const displayText = taskRunHandoff.userVisibleSummary;
@@ -11179,7 +8526,6 @@ class AILISAgentRunner {
                 text: displayText,
                 task_state: 'blocked',
                 approval_state: 'none',
-                evidence_state: stepResults.length > 0 ? 'present' : 'missing',
                 error_code: 'interrupted',
                 ok: false,
                 text_is_persona_safe: true,
@@ -11233,7 +8579,6 @@ class AILISAgentRunner {
             requestContext.agentLabStepMode === true;
         const agentRuntimeRole = resolveAgentRuntimeRole(request, requestContext);
         const requireTaskExecution = isTaskExecutionRequired(request, requestContext);
-        const requireExecutionEvidence = isExecutionEvidenceRequired(request, requestContext);
         const maxSteps = 0;
         const events = initialEvents.slice();
         const stepResults = initialStepResults.slice();
@@ -11271,7 +8616,6 @@ class AILISAgentRunner {
                 ? modelInputContextManager.toCheckpoint()
                 : null;
         const initialPlan = request.initialPlan || requestContext.initialPlan || null;
-        const exactAnswerMode = isExactAnswerExecutionMode(request, requestContext);
         const optimizationShadowFlags = resolveOptimizationShadowFlags(
             request,
             requestContext
@@ -11291,19 +8635,6 @@ class AILISAgentRunner {
         });
         let latestDecision = null;
         let cumulativeInputTokens = 0;
-        let latestExactAnswerCandidate = null;
-        let answerCandidateLedger = mergeAnswerCandidateLedger(
-            [],
-            [
-                ...normalizeArrayValue(
-                    requestContext.priorAnswerCandidates || requestContext.prior_answer_candidates
-                ),
-                ...normalizeArrayValue(
-                    requestContext.priorBestAnswerCandidate || requestContext.prior_best_answer_candidate
-                ),
-                ...stepResults.flatMap((stepResult) => collectExplicitAnswerCandidatesFromStepResult(stepResult))
-            ]
-        );
         const completedSubagentNotifications = [];
         const invalidDecisionHistory = [];
         const legacyAgentMailboxEnabled = requestContext.enableLegacyAgentMailbox === true;
@@ -11406,7 +8737,6 @@ class AILISAgentRunner {
                 requestContext: {
                     ...requestContext,
                     agentRole: agentRuntimeRole,
-                    exactAnswerMode,
                     taskCompactPrompt
                 }
             });
@@ -11414,7 +8744,6 @@ class AILISAgentRunner {
             const promptProfile = resolveAgentPromptProfile(decisionSettings, {
                 ...requestContext,
                 agentRole: agentRuntimeRole,
-                exactAnswerMode,
                 taskCompactPrompt
             });
             const externalToolExposure = isPersonaOrchestratorRole(agentRuntimeRole) ||
@@ -11432,8 +8761,7 @@ class AILISAgentRunner {
                     ...requestContext,
                     agentRole: agentRuntimeRole,
                     taskCompactPrompt
-                },
-                exactAnswerMode
+                }
             });
             const runtimeEnvironment = buildRuntimeEnvironmentPromptObject(
                 this.gateway?.platformAdapter,
@@ -11468,10 +8796,6 @@ class AILISAgentRunner {
                     task_agent_active_goal: activeGoal
                 }
             });
-            const evidenceManifest = buildAgentEvidenceArtifactsPromptObject(stepResults, {
-                message: currentTurnRequest,
-                exactAnswerMode
-            });
             const contextBudgetConfig = buildAgentContextBudgetConfig(
                 decisionSettings,
                 requestContext,
@@ -11485,7 +8809,6 @@ class AILISAgentRunner {
                 requestContext: {
                     ...requestContext,
                     agentRole: agentRuntimeRole,
-                    exactAnswerMode,
                     taskCompactPrompt,
                     taskAgentActiveGoal: activeGoal,
                     task_agent_active_goal: activeGoal
@@ -11517,7 +8840,6 @@ class AILISAgentRunner {
                 fileAttachments,
                 modelImageAttachments,
                 externalToolExposure,
-                exactAnswerMode,
                 runtimeEnvironment,
                 promptProfile,
                 tools: directToolSpecs,
@@ -11529,11 +8851,9 @@ class AILISAgentRunner {
                 contextBudgetConfig,
                 taskState,
                 constraints,
-                evidenceManifest,
                 currentPlan,
                 unresolvedFields,
                 requireTaskExecution,
-                requireExecutionEvidence,
                 ephemeralDeveloperMessage: normalizeText(
                     request.ephemeralDeveloperMessage ||
                     requestContext.ephemeralDeveloperMessage
@@ -11646,7 +8966,6 @@ class AILISAgentRunner {
                               schema: directModelInputPrompt.contextPackage.schema,
                               historyVersion: directModelInputPrompt.contextPackage.historyVersion,
                               taskState: directModelInputPrompt.contextPackage.taskState,
-                              pinnedEvidenceManifest: directModelInputPrompt.contextPackage.pinnedEvidenceManifest,
                               availableOutputRefs: directModelInputPrompt.contextPackage.availableOutputRefs,
                               droppedItemsManifest: directModelInputPrompt.contextPackage.droppedItemsManifest,
                               budgetReport: directModelInputPrompt.contextPackage.budgetReport
@@ -11717,13 +9036,7 @@ class AILISAgentRunner {
                 }
             });
             let decision = await callLlmAgentDirectToolDecision(decisionSettings, decisionPayload, {
-                hasToolHistory: stepResults.length > 0 || events.some((event) => event?.type === 'tool_result'),
-                nativeToolValidationContext: {
-                    enforceEvidenceProvenance: isTaskAgentRole(agentRuntimeRole),
-                    userText: currentTurnRequest,
-                    originalUserGoal: normalizeText(activeGoal?.objective, currentTurnRequest),
-                    stepResults
-                }
+                hasToolHistory: stepResults.length > 0 || events.some((event) => event?.type === 'tool_result')
             });
             const commitsVisibleAssistantText = Boolean(
                 decision.ok === true &&
@@ -11838,7 +9151,6 @@ class AILISAgentRunner {
                         : null,
                     capabilityRequest: decision.capabilityRequest,
                     planUpdates: decision.planUpdates || [],
-                    exactAnswerSubmission: decision.exactAnswerSubmission || null,
                     error: decision.error,
                     repaired: decision.repaired === true,
                     repairedFrom: decision.repairedFrom || '',
@@ -11853,108 +9165,6 @@ class AILISAgentRunner {
             }
             if (!decision.ok && isTerminalAgentDecisionFailure(decision)) {
                 const terminalFailure = describeTerminalAgentDecisionFailure(decision);
-                const preservedFinalizableCandidate = selectBestAnswerCandidate(answerCandidateLedger, {
-                    requireFinalizable: true
-                });
-                if (
-                    exactAnswerMode &&
-                    (latestExactAnswerCandidate?.submission?.answer || preservedFinalizableCandidate?.answer)
-                ) {
-                    const candidate = latestExactAnswerCandidate || {
-                        iteration: preservedFinalizableCandidate.iteration,
-                        decision: latestDecision || {},
-                        submission: {
-                            answer: preservedFinalizableCandidate.answer,
-                            personaText: preservedFinalizableCandidate.personaText,
-                            reason: preservedFinalizableCandidate.reason,
-                            evidenceRefs: preservedFinalizableCandidate.evidenceRefs
-                        },
-                        validation: {
-                            ok: true,
-                            warnings: ['preserved_explicit_answer_candidate'],
-                            source: preservedFinalizableCandidate.source
-                        }
-                    };
-                    const displayText = candidate.submission.personaText || candidate.submission.answer;
-                    const taskRunHandoff = buildTaskRunHandoffPackage({
-                        status: 'completed_with_warnings',
-                        reason: 'recovery_failed_using_prior_answer_candidate',
-                        runId,
-                        sessionId,
-                        message,
-                        startedAt,
-                        maxSteps,
-                        stepResults,
-                        events,
-                        latestDecision: candidate.decision,
-                        exactAnswer: candidate.submission.answer,
-                        finalAnswer: candidate.submission.answer,
-                        partialAnswer: '',
-                        answerCandidates: answerCandidateLedger,
-                        bestAnswerCandidate: preservedFinalizableCandidate,
-                        contextManagerCheckpoint: contextManagerCheckpoint(
-                            'recovery_failed_using_prior_answer_candidate',
-                            iteration
-                        )
-                    });
-                    events.push({
-                        type: 'exact_answer_candidate_fallback',
-                        status: 'completed_with_warnings',
-                        iteration,
-                        candidateIteration: candidate.iteration,
-                        recoveryFailure: terminalFailure.status
-                    });
-                    await appendRuntimeItem({
-                        type: 'agent.exact_answer_audit',
-                        status: 'candidate_fallback',
-                        payload: {
-                            iteration,
-                            candidateIteration: candidate.iteration,
-                            answer: candidate.submission.answer,
-                            recoveryFailure: terminalFailure.status,
-                            recoveryError: decision.error || ''
-                        }
-                    });
-                    return await finishRuntimeRun({
-                        ok: true,
-                        runId,
-                        sessionId,
-                        status: 'completed_with_warnings',
-                        mode: candidate.decision.mode || 'task',
-                        planner: 'llm-agentic-executor',
-                        intent: 'exact_answer_candidate_fallback',
-                        executionRequired: stepResults.length > 0,
-                        durationMs: Date.now() - startedAt,
-                        message,
-                        exactAnswer: candidate.submission.answer,
-                        finalAnswer: candidate.submission.answer,
-                        exactAnswerSubmission: candidate.submission,
-                        exactAnswerAudit: candidate.validation,
-                        recoveryFailure: {
-                            status: terminalFailure.status,
-                            error: decision.error || '',
-                            source: terminalFailure.source
-                        },
-                        displayText,
-                        speechText: displayText.replace(/\n/g, ' '),
-                        plan: [],
-                        steps: stepResults,
-                        events,
-                        taskRunHandoff,
-                        personaOutput: {
-                            text: displayText,
-                            speechText: displayText.replace(/\n/g, ' '),
-                            bubbleText: '',
-                            expression: 'focused',
-                            emotion: 'focused',
-                            socialTone: 'calm',
-                            taskState: 'speaking'
-                        }
-                    }, {
-                        source: 'agent_exact_answer_candidate_fallback',
-                        nextAction: terminalFailure.nextAction
-                    });
-                }
                 const taskRunHandoff = buildTaskRunHandoffPackage({
                     status: terminalFailure.status || 'failed',
                     reason: decision.error || terminalFailure.status,
@@ -11966,8 +9176,6 @@ class AILISAgentRunner {
                     stepResults,
                     events,
                     latestDecision: decision,
-                    answerCandidates: answerCandidateLedger,
-                    bestAnswerCandidate: selectBestAnswerCandidate(answerCandidateLedger),
                     contextManagerCheckpoint: contextManagerCheckpoint('terminal_decision_failure', iteration)
                 });
                 const displayText = terminalFailure.displayText;
@@ -12072,6 +9280,65 @@ class AILISAgentRunner {
                     status: decision.status || 'invalid_agent_decision',
                     payload: invalidDecisionObservation
                 });
+                const invalidNoProgressReason = detectInvalidDecisionNoProgress(
+                    invalidDecisionHistory,
+                    requestContext
+                );
+                if (invalidNoProgressReason) {
+                    const displayText = `连续工具调用参数无效，已停止本轮以避免继续空转：${decision.error || invalidNoProgressReason}`;
+                    const taskRunHandoff = buildTaskRunHandoffPackage({
+                        status: 'stalled',
+                        reason: invalidNoProgressReason,
+                        runId,
+                        sessionId,
+                        message: currentTurnRequest,
+                        startedAt,
+                        maxSteps,
+                        stepResults,
+                        events,
+                        latestDecision: decision,
+                        finalAnswer: '',
+                        partialAnswer: displayText,
+                        unresolvedFields: [decision.error || invalidNoProgressReason],
+                        contextManagerCheckpoint: contextManagerCheckpoint('invalid_decision_fuse', iteration)
+                    });
+                    await appendRuntimeItem({
+                        type: 'agent.invalid_decision_fuse',
+                        status: 'stalled',
+                        payload: {
+                            iteration,
+                            reason: invalidNoProgressReason,
+                            invalidDecisionCount: invalidDecisionHistory.length
+                        }
+                    });
+                    return await finishRuntimeRun(attachPersonaSurface({
+                        ok: false,
+                        runId,
+                        sessionId,
+                        status: 'stalled',
+                        mode: 'task',
+                        planner: 'llm-agentic-executor',
+                        intent: 'invalid_tool_call_stalled',
+                        executionRequired: false,
+                        durationMs: Date.now() - startedAt,
+                        message: currentTurnRequest,
+                        displayText,
+                        speechText: displayText,
+                        plan: [],
+                        steps: stepResults,
+                        events,
+                        taskRunHandoff
+                    }, renderStatusSurface({
+                        text: displayText,
+                        status: 'stalled',
+                        ok: false,
+                        source: 'invalid_decision_fuse',
+                        expression: 'anxious'
+                    })), {
+                        source: 'invalid_decision_fuse',
+                        nextAction: '重新规划或切换工具'
+                    });
+                }
                 const paused = await pauseAfterRound({
                     iteration,
                     reason: 'invalid_decision',
@@ -12201,57 +9468,15 @@ class AILISAgentRunner {
                         continue;
                     }
                 }
-                const exactAnswerValidation = exactAnswerMode
-                    ? validateExactAnswerSubmission({
-                          decision,
-                          stepResults,
-                          message: currentTurnRequest,
-                          fileAttachments
-                      })
-                    : { ok: true, submission: null };
-                if (exactAnswerMode && exactAnswerValidation?.submission?.answer) {
-                    latestExactAnswerCandidate = {
-                        iteration,
-                        decision,
-                        submission: exactAnswerValidation.submission,
-                        validation: exactAnswerValidation
-                    };
-                    answerCandidateLedger = mergeAnswerCandidateLedger(answerCandidateLedger, [{
-                        ...exactAnswerValidation.submission,
-                        source: 'model_submission',
-                        sourceTool: FINAL_ANSWER_TOOL_NAME,
-                        sourceStepId: `decision_${iteration}`,
-                        kind: 'model_final',
-                        iteration,
-                        selected: true,
-                        finalizable: true
-                    }]);
-                }
-                if (exactAnswerMode && exactAnswerValidation?.warnings?.length) {
-                    await appendRuntimeItem({
-                        type: 'agent.exact_answer_audit',
-                        status: 'warning',
-                        payload: {
-                            iteration,
-                            validation: exactAnswerValidation
-                        }
-                    });
-                }
-                const exactAnswerSubmission = exactAnswerValidation.submission || null;
                 const authoritativeTaskResult = isPersonaOrchestratorRole(agentRuntimeRole)
                     ? latestAuthoritativeSubagentTaskResult(completedSubagentNotifications)
                     : null;
-                const completionAssessment = assessAgentCompletionEvidence({
-                    agentRuntimeRole,
-                    requireExecutionEvidence,
-                    stepResults
-                });
                 const modelDisplayText = stripControlTags(decision.finalAnswer || decision.summary || '任务完成。');
                 const displayText = stripControlTags(authoritativeTaskResult?.finalAnswer || modelDisplayText);
                 const visibleText = displayText;
                 const baseTaskRunHandoff = buildTaskRunHandoffPackage({
-                    status: completionAssessment.status,
-                    reason: completionAssessment.reason,
+                    status: 'completed',
+                    reason: 'model_final',
                     runId,
                     sessionId,
                     message: currentTurnRequest,
@@ -12260,42 +9485,32 @@ class AILISAgentRunner {
                     stepResults,
                     events,
                     latestDecision: decision,
-                    exactAnswer: authoritativeTaskResult?.exactAnswer || exactAnswerSubmission?.answer || '',
-                    finalAnswer: authoritativeTaskResult?.finalAnswer || exactAnswerSubmission?.answer || decision.finalAnswer || '',
+                    finalAnswer: authoritativeTaskResult?.finalAnswer || visibleText,
                     partialAnswer: decision.summary || '',
-                    answerCandidates: answerCandidateLedger,
-                    bestAnswerCandidate: selectBestAnswerCandidate(answerCandidateLedger),
-                    unresolvedFields: completionAssessment.ok
-                        ? []
-                        : [...unresolvedFields, ...completionAssessment.unresolvedFields],
-                    contextManagerCheckpoint: contextManagerCheckpoint(completionAssessment.status, iteration)
+                    unresolvedFields: [],
+                    contextManagerCheckpoint: contextManagerCheckpoint('completed', iteration)
                 });
                 const taskRunHandoff = authoritativeTaskResult
                     ? {
                           ...baseTaskRunHandoff,
-                          exactAnswer: authoritativeTaskResult.exactAnswer || baseTaskRunHandoff.exactAnswer,
                           finalAnswer: visibleText,
                           sourceRefs: authoritativeTaskResult.sourceRefs,
                           traceRef: authoritativeTaskResult.traceRef || baseTaskRunHandoff.traceRef,
-                          evidenceBoundary: authoritativeTaskResult.evidenceBoundary,
                           userVisibleSummary: visibleText
                       }
                     : baseTaskRunHandoff;
                 const result = {
-                    ok: completionAssessment.ok,
+                    ok: true,
                     runId,
                     sessionId,
-                    status: completionAssessment.status,
+                    status: 'completed',
                     mode: decision.mode,
                     planner: 'llm-agentic-executor',
                     intent: decision.intent,
-                    executionRequired: requireTaskExecution || requireExecutionEvidence || stepResults.length > 0,
+                    executionRequired: requireTaskExecution || stepResults.length > 0,
                     durationMs: Date.now() - startedAt,
                     message: currentTurnRequest,
-                    exactAnswer: authoritativeTaskResult?.exactAnswer || exactAnswerSubmission?.answer || '',
-                    finalAnswer: authoritativeTaskResult?.finalAnswer || exactAnswerSubmission?.answer || decision.finalAnswer || '',
-                    exactAnswerSubmission,
-                    exactAnswerAudit: exactAnswerMode ? exactAnswerValidation : null,
+                    finalAnswer: authoritativeTaskResult?.finalAnswer || visibleText,
                     displayText: visibleText,
                     speechText: authoritativeTaskResult
                         ? visibleText.replace(/\n/g, ' ')
@@ -12362,8 +9577,6 @@ class AILISAgentRunner {
                     events,
                     latestDecision: decision,
                     partialAnswer: decision.summary || '',
-                    answerCandidates: answerCandidateLedger,
-                    bestAnswerCandidate: selectBestAnswerCandidate(answerCandidateLedger),
                     contextManagerCheckpoint: contextManagerCheckpoint('blocked', iteration)
                 });
                 this.setRunInputAcceptance(runId, false);
@@ -12603,11 +9816,6 @@ class AILISAgentRunner {
                     }
                     for (const stepResult of parallelStepResults) {
                         stepResults.push(stepResult);
-                        const explicitAnswerCandidates = collectExplicitAnswerCandidatesFromStepResult(stepResult);
-                        answerCandidateLedger = mergeAnswerCandidateLedger(
-                            answerCandidateLedger,
-                            explicitAnswerCandidates
-                        );
                         recordToolOutputToContextManager(
                             modelInputContextManager,
                             stepResult,
@@ -12629,10 +9837,7 @@ class AILISAgentRunner {
                                 tool: stepResult.tool,
                                 ok: stepResult.response?.ok === true,
                                 status: stepResult.response?.status || 'unknown',
-                                evidenceRefs: getStepEvidenceRefs(stepResult),
-                                evidenceArtifacts: getEvidenceArtifactsPromptObject(stepResult.evidenceArtifacts || []),
                                 preview: toolResultEvent.preview,
-                                answerCandidates: explicitAnswerCandidates,
                                 parallelBatch: true
                             }
                         });
@@ -12709,7 +9914,6 @@ class AILISAgentRunner {
                     text: displayText,
                     task_state: 'failed',
                     approval_state: 'none',
-                    evidence_state: stepResults.length > 0 ? 'present' : 'missing',
                     error_code: 'invalid_agent_tool_call',
                     ok: false,
                     text_is_persona_safe: true,
@@ -12894,7 +10098,6 @@ class AILISAgentRunner {
                     text: displayText,
                     task_state: 'blocked',
                     approval_state: 'none',
-                    evidence_state: stepResults.length > 0 ? 'present' : 'missing',
                     error_code: 'policy_denied',
                     ok: false,
                     text_is_persona_safe: true,
@@ -12975,11 +10178,6 @@ class AILISAgentRunner {
                 iteration
             });
             stepResults.push(stepResult);
-            const explicitAnswerCandidates = collectExplicitAnswerCandidatesFromStepResult(stepResult);
-            answerCandidateLedger = mergeAnswerCandidateLedger(
-                answerCandidateLedger,
-                explicitAnswerCandidates
-            );
             recordToolOutputToContextManager(
                 modelInputContextManager,
                 stepResult,
@@ -12998,10 +10196,7 @@ class AILISAgentRunner {
                     tool: stepResult.tool,
                     ok: stepResult.response?.ok === true,
                     status: stepResult.response?.status || 'unknown',
-                    evidenceRefs: getStepEvidenceRefs(stepResult),
-                    evidenceArtifacts: getEvidenceArtifactsPromptObject(stepResult.evidenceArtifacts || []),
-                    preview: toolResultEvent.preview,
-                    answerCandidates: explicitAnswerCandidates
+                    preview: toolResultEvent.preview
                 }
             });
 
@@ -13013,7 +10208,6 @@ class AILISAgentRunner {
                 const packetStatus = normalizeText(
                     packet?.status || stepResult.response?.status || 'completed'
                 ).toLowerCase();
-                const packetExactAnswer = normalizeText(packet?.exact_answer || packet?.exactAnswer);
                 const displayText = normalizeText(
                     packet?.final_answer ||
                         packet?.partial_answer ||
@@ -13044,11 +10238,6 @@ class AILISAgentRunner {
                     durationMs: Date.now() - startedAt,
                     message,
                     displayText,
-                    exactAnswer: packetExactAnswer,
-                    exactAnswerSubmission: packetExactAnswer ? {
-                        answer: packetExactAnswer,
-                        evidenceRefs: Array.isArray(packet?.evidence_refs) ? packet.evidence_refs : []
-                    } : null,
                     finalAnswer: packet?.final_answer || displayText,
                     speechText: displayText.replace(/\n/g, ' '),
                     plan: [],
@@ -13057,11 +10246,8 @@ class AILISAgentRunner {
                     taskResult: packet || null,
                     taskRunHandoff: packet ? {
                         status: packet.status,
-                        exactAnswer: packetExactAnswer,
                         finalAnswer: packet.final_answer,
                         partialAnswer: packet.partial_answer,
-                        answerCandidates: packet.answer_candidates || [],
-                        bestAnswerCandidate: packet.best_answer_candidate || null,
                         sourceRefs: packet.source_refs || [],
                         collectedData: [],
                         traceRef: packet.trace_ref,
@@ -13071,7 +10257,6 @@ class AILISAgentRunner {
                     text: displayText,
                     task_state: handoffOk ? 'completed' : 'blocked',
                     approval_state: 'none',
-                    evidence_state: Array.isArray(packet?.evidence_refs) && packet.evidence_refs.length ? 'present' : 'unknown',
                     error_code: packetStatus,
                     ok: handoffOk,
                     text_is_persona_safe: true,
@@ -14205,38 +11390,24 @@ class AILISAgentRunner {
 module.exports = {
     AILISAgentRunner,
     planMessage,
-    attachAgentEvidenceArtifacts,
     buildAgentDirectToolSpecs,
-    buildAgentEvidenceArtifactsPromptObject,
     buildAgentTaskState,
-    buildEvidenceSufficiencyPromptObject,
-    buildFinalAnswerNativeToolSpec,
-    buildSourceQuestionEvidenceArtifact,
     buildToolObservationDigest,
     buildLosslessToolObservationDigest,
     buildToolResultEvent,
     sanitizeAgentToolCall,
-    isExactAnswerExecutionMode,
-    looksLikeSelfContainedExactAnswerQuestion,
-    normalizeExactAnswerSubmission,
     isAgentLlmSettingsMissing,
     buildAgentDecisionLowLatencyPayload,
     buildToolExecutionGroups,
     buildAgentPromptCacheKey,
     buildLlmAgentDirectToolPrompt,
     buildTaskRunHandoffPackage,
-    collectExplicitAnswerCandidatesFromStepResult,
-    mergeAnswerCandidateLedger,
-    selectBestAnswerCandidate,
     buildResearchProgressState,
     buildDirectModelImageAttachments,
-    assessAgentCompletionEvidence,
     buildInvalidDecisionProgressRecord,
     detectInvalidDecisionNoProgress,
     resolveAgentDirectToolChoice,
     resolveMemoryPolicy,
-    prioritizeExactAnswerRecoveryToolSpecs,
-    buildExactAnswerRecoveryToolAffordanceNote,
     buildStagedAttachmentFilename,
     build_forked_context_checkpoint,
     keep_forked_rollout_item,
@@ -14248,21 +11419,6 @@ module.exports = {
     looksLikeLeakedAgentProtocol,
     validateAgentToolLoopGuard,
     validateNativeDirectToolCall,
-    validateExactAnswerSubmission,
-    hasBlockingExactAnswerAuditErrors,
-    detectNestedSelectorSelectionGap,
-    detectSelectorMetricEvidenceGap,
-    detectSelectorTerminalRelationEvidenceGap,
-    detectSelectorTerminalRelationAnswerMismatch,
-    detectVisualEnumerationEvidenceGap,
-    detectAnswerSpecificityEvidenceGap,
-    detectCompleteTitleEvidenceGap,
-    detectStructuredAttachmentSemanticEvidenceGap,
-    detectRecordSelectorConjunctionEvidenceGap,
-    detectVacuousDistributionConstraintGap,
-    detectStructuredRelationRecoveryCallGap,
-    detectRecommendedRecoveryActionGap,
-    selectExactAnswerAuditRecoveryGap,
     isAgentDecisionDeepThinkingMode,
     isDeepThinkingAgentDecisionModel,
     resolveAgentDecisionTimeoutMs,

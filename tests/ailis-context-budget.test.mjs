@@ -179,7 +179,6 @@ test('TaskAgent semantic compaction preserves active Goal, current Turn, and ref
             current_request: 'Verify the remaining official publication date.',
             progress: { toolCalls: 10 }
         },
-        pinnedEvidenceManifest: [{ id: 'artifact-date', summary: 'Official date evidence' }],
         budgetConfig: {
             effectiveInputLimitTokens: 2000,
             reservedOutputTokens: 0,
@@ -194,7 +193,6 @@ test('TaskAgent semantic compaction preserves active Goal, current Turn, and ref
     assert.match(serialized, /Research the release and answer with exact dates/);
     assert.match(serialized, /fixture\.pdf/);
     assert.match(serialized, /official publication date/);
-    assert.match(serialized, /artifact-date/);
     assert.match(serialized, /semantic-ref-9/);
     assert.equal(compacted.checkpoint.schema, 'ailis.session_context_checkpoint.v2');
     assert.equal(compacted.checkpoint.activeGoal.objective, originalTask);

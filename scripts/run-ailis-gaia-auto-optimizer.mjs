@@ -491,7 +491,7 @@ async function runPracticeTask({ task, iterationDir, runId, policy, args }) {
     const { server, baseUrl } = await createPracticeScoringServer(task);
     try {
         const commandArgs = [
-            'scripts/run-gaia-level1-lite.mjs',
+            'scripts/run-gaia-pure-agent.mjs',
             '--output-dir', outputDir,
             '--run-id', runId,
             '--scoring-api', baseUrl,
@@ -587,13 +587,8 @@ function summarizeStep(step = {}, index = 0) {
         ok: response.ok === true,
         status: response.status || mergedDetails.status || '',
         error: normalizeText(response.error || mergedDetails.error).slice(0, 500),
-        evidenceQuality: normalizeText(mergedDetails.evidenceQuality || mergedDetails.evidence_quality || mergedDetails.observationContract?.evidence_quality),
-        reasoningReady: mergedDetails.reasoningReady ?? mergedDetails.reasoning_ready ?? mergedDetails.observationContract?.reasoning_ready,
         preview: normalizeText(
-            result.content?.[0]?.text ||
-            mergedDetails.evidenceGap ||
-            mergedDetails.recoveryHint ||
-            ''
+            result.content?.[0]?.text || ''
         ).replace(/\s+/g, ' ').slice(0, 900)
     };
 }
@@ -614,10 +609,7 @@ function extractExecutionChain({ task, result = {}, processResult = {}, summary 
         question: normalizeText(task.question || result.question),
         fileName: normalizeText(task.fileName || result.file_name),
         filePath: normalizeText(task.filePath || result.file_path),
-        expectedAnswer: task.expectedAnswer || perTask?.final_answer || '',
         submittedAnswer: result.submitted_answer || '',
-        answerGate: result.answer_gate || null,
-        finalizer: result.finalizer || null,
         ok: result.ok === true,
         status: result.status || '',
         durationMs: result.durationMs || processResult.durationMs || 0,
@@ -625,7 +617,13 @@ function extractExecutionChain({ task, result = {}, processResult = {}, summary 
         toolCounts,
         steps,
         rawStatus: result.raw_status || null,
-        score: summary?.score || null,
+        score: summary?.score ? {
+            benchmark: summary.score.benchmark || '',
+            score: summary.score.score,
+            correctCount: summary.score.correct_count,
+            totalAttempted: summary.score.total_attempted,
+            taskCorrect: perTask?.correct === true
+        } : null,
         process: {
             ok: processResult.ok === true,
             exitCode: processResult.exitCode,
@@ -652,12 +650,6 @@ function enrichTaskFromGaiaResult(task = {}, result = {}) {
     }
     if (resultTaskId && resultTaskId !== normalizeText(enriched.taskId)) {
         enriched.gaiaTaskId = resultTaskId;
-    }
-    if (result.answer_gate) {
-        enriched.lastAnswerGate = result.answer_gate;
-    }
-    if (result.finalizer) {
-        enriched.lastFinalizer = result.finalizer;
     }
     return enriched;
 }
@@ -726,7 +718,6 @@ function classifyGaiaResult({ task = {}, result = {}, chain = {}, processResult 
     }
     if (perTask && perTask.correct !== true) {
         const submitted = normalizeText(perTask.submitted_answer || result.submitted_answer || '(empty)');
-        const finalAnswer = normalizeText(perTask.final_answer || expected || '(unknown)');
         if (/web_fetch|web_search|js_shell|thin_content|HTTP 403|HTTP 404|access_challenge|miyoushe|crawl4ai/i.test(statusText)) {
             return {
                 ok: false,
@@ -734,8 +725,8 @@ function classifyGaiaResult({ task = {}, result = {}, chain = {}, processResult 
                 failureCategory: 'web_retrieval_mcp',
                 optimizationFocus: 'web_search_web_fetch_mcp',
                 generalizedCapability: 'robust_web_retrieval_and_rendered_extraction',
-                summary: `Local GAIA scorer rejected web-derived answer (${submitted}); expected ${finalAnswer}. The failed chain should be repaired at the retrieval/evidence layer before finalization.`,
-                nextAction: 'patch generalized web_search/web_fetch evidence selection, source following, or rendered extraction before rerunning',
+                summary: `Local GAIA scorer rejected web-derived answer (${submitted}). Diagnose retrieval and source handling without exposing or encoding the benchmark answer.`,
+                nextAction: 'patch generalized web_search/web_fetch result ranking, source following, or rendered extraction before rerunning',
                 emptyAnswer: normalizeAnswer(submitted) === normalizeAnswer('(empty)')
             };
         }
@@ -746,19 +737,19 @@ function classifyGaiaResult({ task = {}, result = {}, chain = {}, processResult 
                 failureCategory: 'tools_mcp',
                 optimizationFocus: /describe_image/i.test(statusText) ? 'vision_artifact_extraction_mcp' : 'artifact_tools_mcp',
                 generalizedCapability: /describe_image/i.test(statusText) ? 'robust_image_ocr_and_visual_extraction' : (task.capabilityClass || 'artifact_reading_tools'),
-                summary: `Local GAIA scorer rejected tool-derived answer (${submitted}); expected ${finalAnswer}. The failed chain used artifact/MCP tools, so repair extraction/schema/evidence quality before changing the agent.`,
-                nextAction: 'patch the relevant MCP/tool contract, extraction quality, or evidence handoff and add a focused regression',
+                summary: `Local GAIA scorer rejected tool-derived answer (${submitted}). Diagnose extraction and schema quality without exposing or encoding the benchmark answer.`,
+                nextAction: 'patch the relevant MCP/tool contract, extraction quality, or result handoff and add a focused regression',
                 emptyAnswer: normalizeAnswer(submitted) === normalizeAnswer('(empty)')
             };
         }
         return {
             ok: false,
             status: 'failed',
-            failureCategory: 'harness_finalization',
-            optimizationFocus: 'exact_answer_finalization',
-            generalizedCapability: 'benchmark_final_answer_and_evidence_gate',
-            summary: `Local GAIA scorer rejected the submitted answer (${submitted}); expected ${finalAnswer}.`,
-            nextAction: 'repair exact-answer reasoning, unit conversion, and scorer verdict handling before advancing',
+            failureCategory: 'model_reasoning',
+            optimizationFocus: 'reasoning_from_tool_results',
+            generalizedCapability: task.capabilityClass || 'gaia_reasoning',
+            summary: `Local GAIA scorer rejected the Agent submission (${submitted}).`,
+            nextAction: 'inspect the Agent tool results and reasoning; never repair the benchmark adapter, scorer, or answer normalization',
             emptyAnswer: normalizeAnswer(submitted) === normalizeAnswer('(empty)')
         };
     }
@@ -770,7 +761,7 @@ function classifyGaiaResult({ task = {}, result = {}, chain = {}, processResult 
             optimizationFocus: 'web_search_web_fetch_mcp',
             generalizedCapability: 'robust_web_retrieval_and_rendered_extraction',
             summary: 'Failure chain involves web discovery/fetch quality, blocked pages, JS shell, or source-followup behavior.',
-            nextAction: 'patch generalized web_search/web_fetch evidence selection or rendered extraction',
+            nextAction: 'patch generalized web_search/web_fetch result ranking or rendered extraction',
             emptyAnswer: !normalizeText(result.submitted_answer)
         };
     }
@@ -786,15 +777,15 @@ function classifyGaiaResult({ task = {}, result = {}, chain = {}, processResult 
             emptyAnswer: !normalizeText(result.submitted_answer)
         };
     }
-    if (/missing_exact_answer|rejected_visible_prose|finalizer|answer_gate|exact answer|no submitted/i.test(statusText) || !normalizeText(result.submitted_answer)) {
+    if (/missing_exact_answer|exact answer|no submitted/i.test(statusText) || !normalizeText(result.submitted_answer)) {
         return {
             ok: false,
             status: 'failed',
-            failureCategory: 'harness_finalization',
-            optimizationFocus: 'exact_answer_finalization',
-            generalizedCapability: 'benchmark_final_answer_and_evidence_gate',
-            summary: 'The agent did not produce an acceptable exact answer or the answer gate rejected it.',
-            nextAction: 'repair exact-answer finalization and evidence digest handling',
+            failureCategory: 'agent_architecture',
+            optimizationFocus: 'agent_output_contract',
+            generalizedCapability: 'agent_exact_answer_output',
+            summary: 'The Agent did not emit a usable final answer.',
+            nextAction: 'repair the generic Agent output contract; never add an evaluation-layer finalizer or answer repair',
             emptyAnswer: !normalizeText(result.submitted_answer)
         };
     }
@@ -804,9 +795,9 @@ function classifyGaiaResult({ task = {}, result = {}, chain = {}, processResult 
             status: 'failed',
             failureCategory: 'agent_architecture',
             optimizationFocus: 'agent_stopping_and_tool_choice',
-            generalizedCapability: 'agent_loop_control_and_ready_evidence_stopping',
+            generalizedCapability: 'agent_loop_control_and_result_based_stopping',
             summary: 'The chain suggests poor stopping behavior, repeated tool calls, or bad tool choice.',
-            nextAction: 'patch Agent/Harness only if Tools/MCP evidence is already sufficient',
+            nextAction: 'patch Agent/Harness only if Tools/MCP outputs are already sufficient',
             emptyAnswer: !normalizeText(result.submitted_answer)
         };
     }
@@ -814,10 +805,10 @@ function classifyGaiaResult({ task = {}, result = {}, chain = {}, processResult 
         ok: false,
         status: 'failed',
         failureCategory: 'model_reasoning',
-        optimizationFocus: 'reasoning_from_evidence',
+        optimizationFocus: 'reasoning_from_tool_results',
         generalizedCapability: task.capabilityClass || 'gaia_reasoning',
-        summary: 'Evidence may have been available, but the final answer was wrong or absent without a clearer tool failure.',
-        nextAction: 'inspect chain and decide whether evidence extraction or reasoning prompt needs generalized repair',
+        summary: 'Tool results may have been available, but the final answer was wrong or absent without a clearer tool failure.',
+        nextAction: 'inspect the chain and decide whether tool output handling or reasoning needs a generalized repair',
         emptyAnswer: !normalizeText(result.submitted_answer)
     };
 }
@@ -835,7 +826,7 @@ function buildRepairTicket({ task, chain, verdict }) {
         `- Optimization focus: ${verdict.optimizationFocus || '(none)'}`,
         `- Generalized capability: ${verdict.generalizedCapability || '(none)'}`,
         `- Submitted answer: ${chain.submittedAnswer || '(empty)'}`,
-        `- Expected answer: ${chain.expectedAnswer || '(unknown)'}`,
+        '- Benchmark verdict: incorrect (gold answer intentionally withheld from repair context)',
         `- Step count: ${chain.stepCount}`,
         '',
         '## Diagnosis',
@@ -845,8 +836,10 @@ function buildRepairTicket({ task, chain, verdict }) {
         '## Required Repair Policy',
         '',
         '- Do not hard-code this task, its answer, or one-off strings.',
+        '- Do not modify the GAIA transport adapter, scorer, submitted answer, or output normalization to make a failure pass.',
+        '- The benchmark gold answer is intentionally unavailable to the repair context.',
         '- Prefer a Tools/MCP fix if the first wrong turn is parser, fetcher, reader, schema, extraction, or source ranking.',
-        '- Touch Agent/Harness only when the chain proves stopping, finalization, loop control, or evidence handoff is the generalized bottleneck.',
+        '- Touch Agent/Harness only when the chain proves stopping, finalization, loop control, or result handoff is the generalized bottleneck.',
         '- Add or update a regression test that protects a class of similar tasks.',
         '',
         '## Execution Chain',
@@ -856,7 +849,6 @@ function buildRepairTicket({ task, chain, verdict }) {
             '',
             `- ok: ${step.ok}`,
             `- status: ${step.status || '(none)'}`,
-            `- evidenceQuality: ${step.evidenceQuality || '(none)'}`,
             `- error: ${step.error || '(none)'}`,
             `- preview: ${step.preview || '(none)'}`,
             ''
@@ -1206,6 +1198,7 @@ if (isDirectRun) {
 }
 
 export {
+    buildRepairTicket,
     buildPracticeTasks,
     classifyGaiaResult,
     discoverOfficialDatasetDir,

@@ -86,57 +86,10 @@ function normalizeSourceRefs(values = []) {
     return refs;
 }
 
-function normalizeAnswerCandidate(value = {}) {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) {
-        return null;
-    }
-    const answerValue = value.answer ?? value.value ?? value.exactAnswer ?? value.exact_answer;
-    const answer = normalizeString(
-        ['string', 'number', 'boolean'].includes(typeof answerValue) ? String(answerValue) : ''
-    );
-    if (!answer) return null;
-    const confidence = Number(value.confidence);
-    const score = Number(value.score);
-    return {
-        answer,
-        persona_text: normalizeString(value.personaText || value.persona_text, answer),
-        reason: normalizeString(value.reason || value.rationale),
-        evidence_refs: uniqueStrings(value.evidenceRefs || value.evidence_refs, 16),
-        source: normalizeString(value.source),
-        source_tool: normalizeString(value.sourceTool || value.source_tool),
-        source_step_id: normalizeString(value.sourceStepId || value.source_step_id),
-        kind: normalizeString(value.kind, 'singular'),
-        iteration: Number.isFinite(Number(value.iteration)) ? Number(value.iteration) : 0,
-        selected: value.selected === true,
-        finalizable: value.finalizable === true,
-        ...(Number.isFinite(confidence) ? { confidence } : {}),
-        ...(Number.isFinite(score) ? { score } : {})
-    };
-}
-
-function normalizeAnswerCandidates(values = [], limit = 32) {
-    const candidates = [];
-    const seen = new Set();
-    for (const value of Array.isArray(values) ? values : []) {
-        const candidate = normalizeAnswerCandidate(value);
-        if (!candidate) continue;
-        const key = [candidate.answer.toLowerCase(), candidate.source, candidate.source_tool, candidate.kind].join('\u0000');
-        if (seen.has(key)) continue;
-        seen.add(key);
-        candidates.push(candidate);
-        if (candidates.length >= limit) break;
-    }
-    return candidates;
-}
-
-function refsFromCollectedData(collectedData = [], key = 'evidenceRefs') {
+function outputRefsFromCollectedData(collectedData = []) {
     const refs = [];
     for (const item of Array.isArray(collectedData) ? collectedData : []) {
-        if (key === 'outputRefs') {
-            refs.push(item?.outputId, item?.artifactId);
-        } else {
-            refs.push(...(Array.isArray(item?.evidenceRefs) ? item.evidenceRefs : []));
-        }
+        refs.push(item?.outputId, item?.artifactId);
     }
     return uniqueStrings(refs);
 }
@@ -244,11 +197,8 @@ function normalizeStoredThread(raw = {}, fallbackSessionId = '') {
             .map(normalizeGoal)
             .filter(Boolean),
         contextCheckpoint: sanitizeContextCheckpoint(checkpoint),
-        evidenceRefs: uniqueStrings(raw.evidenceRefs),
         outputRefs: uniqueStrings(raw.outputRefs),
         sourceRefs: normalizeSourceRefs(raw.sourceRefs),
-        answerCandidates: normalizeAnswerCandidates(raw.answerCandidates || raw.answer_candidates),
-        bestAnswerCandidate: normalizeAnswerCandidate(raw.bestAnswerCandidate || raw.best_answer_candidate),
         unresolvedFields: uniqueStrings(raw.unresolvedFields, 24),
         traceRef: normalizeString(raw.traceRef || raw.latestRunId),
         createdAt: normalizeString(raw.createdAt, new Date().toISOString()),
@@ -293,11 +243,8 @@ function migrateLegacyTask(raw = {}, fallbackSessionId = '') {
         activeGoal: null,
         goalHistory: [],
         contextCheckpoint: raw.checkpoint && typeof raw.checkpoint === 'object' ? raw.checkpoint : null,
-        evidenceRefs: raw.evidenceRefs,
         outputRefs: raw.outputRefs,
         sourceRefs: raw.sourceRefs,
-        answerCandidates: raw.answerCandidates || raw.answer_candidates,
-        bestAnswerCandidate: raw.bestAnswerCandidate || raw.best_answer_candidate,
         unresolvedFields: raw.unresolvedFields,
         traceRef: raw.traceRef || raw.latestRunId,
         createdAt: raw.createdAt,
@@ -357,7 +304,6 @@ function sanitizeContextCheckpoint(checkpoint = null) {
                           currentPlan: prior.currentPlan || null,
                           unresolvedFields: prior.unresolvedFields || [],
                           taskState: priorTaskState,
-                          evidenceManifest: prior.evidenceManifest || [],
                           outputRefs: prior.outputRefs || [],
                           droppedItemsManifest: prior.droppedItemsManifest || [],
                           instruction: 'This is prior Session history. The latest Turn input and current active Goal are authoritative.'
@@ -423,23 +369,11 @@ function buildTaskResultPacket(result = {}, state = {}) {
     const turn = state.turn || state;
     const handoff = result.taskRunHandoff || result.task_run_handoff || result.handoff || {};
     const collectedData = Array.isArray(handoff.collectedData) ? handoff.collectedData : [];
-    const exactAnswer = normalizeString(
-        handoff.exactAnswer ||
-        handoff.exact_answer ||
-        result.exactAnswerSubmission?.answer ||
-        result.exact_answer_submission?.answer ||
-        result.exactAnswer ||
-        result.exact_answer
-    );
     const finalAnswer = normalizeString(
-        handoff.finalAnswer || result.finalAnswer || result.answer || exactAnswer || result.displayText
+        handoff.finalAnswer || result.finalAnswer || result.answer || result.displayText
     );
     const displayText = normalizeString(result.displayText || result.display_text || finalAnswer);
     const partialAnswer = normalizeString(handoff.partialAnswer);
-    const answerCandidates = normalizeAnswerCandidates(handoff.answerCandidates || handoff.answer_candidates);
-    const bestAnswerCandidate = normalizeAnswerCandidate(
-        handoff.bestAnswerCandidate || handoff.best_answer_candidate
-    );
     const status = normalizeString(handoff.status || result.status, result.ok === false ? 'failed' : 'completed').toLowerCase();
     const unresolvedFields = FINAL_STATUSES.has(status)
         ? []
@@ -464,15 +398,11 @@ function buildTaskResultPacket(result = {}, state = {}) {
         original_goal: normalizeString(thread.activeGoal?.objective),
         active_goal: thread.activeGoal ? cloneJson(thread.activeGoal) : null,
         current_request: normalizeString(turn.latestRequest || turn.currentRequest),
-        exact_answer: exactAnswer,
         final_answer: finalAnswer,
         display_text: displayText,
         partial_answer: partialAnswer,
-        answer_candidates: answerCandidates,
-        best_answer_candidate: bestAnswerCandidate,
         source_refs: normalizeSourceRefs(handoff.sourceRefs),
-        evidence_refs: refsFromCollectedData(collectedData, 'evidenceRefs'),
-        output_refs: refsFromCollectedData(collectedData, 'outputRefs'),
+        output_refs: outputRefsFromCollectedData(collectedData),
         unresolved_fields: unresolvedFields,
         trace_ref: normalizeString(handoff.traceRef || result.runId || turn.runId || turn.latestRunId),
         checkpoint_available: Boolean(
@@ -557,11 +487,8 @@ class AILISSystemTaskAgentHarness {
             activeGoal: null,
             goalHistory: [],
             contextCheckpoint: null,
-            evidenceRefs: [],
             outputRefs: [],
             sourceRefs: [],
-            answerCandidates: [],
-            bestAnswerCandidate: null,
             unresolvedFields: [],
             traceRef: '',
             createdAt: now,
@@ -857,10 +784,6 @@ class AILISSystemTaskAgentHarness {
                         current_task_request: turn.latestRequest,
                         priorUnresolvedFields: [],
                         prior_unresolved_fields: [],
-                        priorAnswerCandidates: [],
-                        prior_answer_candidates: [],
-                        priorBestAnswerCandidate: null,
-                        prior_best_answer_candidate: null,
                         taskAgentInheritanceMode: inheritanceMode,
                         initialContextManagerCheckpoint: thread.contextCheckpoint
                     },
@@ -893,11 +816,8 @@ class AILISSystemTaskAgentHarness {
                     turn,
                     packet
                 );
-                thread.evidenceRefs = packet.evidence_refs;
                 thread.outputRefs = packet.output_refs;
                 thread.sourceRefs = packet.source_refs;
-                thread.answerCandidates = packet.answer_candidates;
-                thread.bestAnswerCandidate = packet.best_answer_candidate;
                 thread.unresolvedFields = packet.unresolved_fields;
                 thread.traceRef = packet.trace_ref;
                 thread.updatedAt = now;

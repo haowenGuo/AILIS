@@ -54,7 +54,6 @@ test('AILIS persona renderer attaches structured surface while preserving agent 
 test('AILIS persona renderer owns failure text instead of leaking upstream tool logs', () => {
     const surface = renderPersonaSurfaceGateway({
         task_state: 'failed',
-        evidence_state: 'missing',
         error_code: 'tool_failed',
         text: 'Agentic Executor tool_call failed: exec git_status raw observation SECRET=abc',
         speech_text: 'Agentic Executor tool_call failed',
@@ -64,7 +63,7 @@ test('AILIS persona renderer owns failure text instead of leaking upstream tool 
     });
 
     assert.match(surface.text, /这一步我先停住/);
-    assert.match(surface.text, /不会把这一步说成已经完成/);
+    assert.match(surface.text, /执行没有完整成功/);
     assert.doesNotMatch(surface.text, /Agentic Executor|tool_call|raw observation|SECRET|git_status/);
     assert.doesNotMatch(surface.speechText, /Agentic Executor|tool_call|raw observation|SECRET|git_status/);
     assert.equal(surface.expression, 'relaxed');
@@ -74,7 +73,6 @@ test('AILIS persona renderer owns failure text instead of leaking upstream tool 
 test('AILIS persona renderer preserves persona-safe TaskAgent handoff text on failure', () => {
     const surface = renderPersonaSurfaceGateway({
         task_state: 'blocked',
-        evidence_state: 'present',
         error_code: 'max_steps_reached',
         text_is_persona_safe: true,
         text: [
@@ -92,14 +90,13 @@ test('AILIS persona renderer preserves persona-safe TaskAgent handoff text on fa
 test('AILIS persona renderer hides internal invalid-json failure details', () => {
     const surface = renderPersonaSurfaceGateway({
         task_state: 'failed',
-        evidence_state: 'missing',
         error_code: 'invalid_json',
         reason: 'Agentic Executor 没有返回合法 JSON。',
         next_action: '换一种方式重新整理论文摘要'
     });
 
     assert.match(surface.text, /可靠结论/);
-    assert.match(surface.text, /不会把这一步说成已经完成/);
+    assert.match(surface.text, /还没形成可以直接交给你的可靠结论/);
     assert.doesNotMatch(surface.text, /JSON|结构化结果|任务执行流程|合法|格式|内部结果/);
     assert.doesNotMatch(surface.speechText, /JSON|结构化结果|任务执行流程|合法|格式|内部结果/);
 });
@@ -107,7 +104,6 @@ test('AILIS persona renderer hides internal invalid-json failure details', () =>
 test('AILIS persona renderer maps angry emotion to available avatar channels', () => {
     const surface = renderPersonaSurfaceGateway({
         task_state: 'completed',
-        evidence_state: 'none',
         emotion_hint: 'angry',
         relationship_stage: 'familiarizing',
         text: '被领导催进度真的会很烦，我先陪你把这口气接住。'

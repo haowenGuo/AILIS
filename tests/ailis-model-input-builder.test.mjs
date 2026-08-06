@@ -433,7 +433,7 @@ test('web_search canonical results are projected as search web_search_call', () 
     assert.match(text, /OpenAI Web Search/);
 });
 
-test('web_run search results preserve stable refs for the next open call', () => {
+test('web_run search results preserve stable refs without injecting selection rules', () => {
     const items = toolOutputToModelInputItems({
         id: 'web-run-search-1',
         tool: 'web_run',
@@ -479,14 +479,12 @@ test('web_run search results preserve stable refs for the next open call', () =>
     });
 
     const text = FunctionCallOutputPayload.toText(items[2].output);
-    assert.match(text, /Selection protocol:/);
-    assert.match(text, /Candidate-set coverage is insufficient/);
-    assert.match(text, /Open the nearest parent index first: \[turn0search0\]/);
+    assert.doesNotMatch(text, /Selection protocol|Candidate-set coverage|parent index/i);
     assert.match(text, /Open page: web_run \{"open":\[\{"ref_id":"turn0search1","lineno":1\}\]\}/);
     assert.doesNotMatch(text, /Open page: web_fetch/);
 });
 
-test('web_run empty search preserves status and executable recovery affordance', () => {
+test('web_run empty search preserves status without injecting tool-provided recovery commands', () => {
     const items = toolOutputToModelInputItems({
         id: 'web-run-search-empty-1',
         tool: 'web_run',
@@ -526,12 +524,11 @@ test('web_run empty search preserves status and executable recovery affordance',
 
     const text = FunctionCallOutputPayload.toText(items[2].output);
     assert.match(text, /Search status: empty/);
-    assert.match(text, /Suggested next calls \(tool-provided options/);
-    assert.match(text, /web_run \{"search_query":\[\{"q":"Mercedes Sosa discography"\}\],"response_length":"medium"\}/);
+    assert.doesNotMatch(text, /Suggested next calls|Retry without optional domain filters/);
     assert.doesNotMatch(text, /"domains"/);
 });
 
-test('web_run deferred-tool suggestion preserves native tool_search namespace', () => {
+test('web_run ignores deferred-tool suggestions and leaves strategy to the model', () => {
     const items = toolOutputToModelInputItems({
         id: 'web-run-tool-search-suggestion-1',
         tool: 'web_run',
@@ -575,8 +572,8 @@ test('web_run deferred-tool suggestion preserves native tool_search namespace', 
     });
 
     const text = FunctionCallOutputPayload.toText(items[2].output);
-    assert.match(text, /tool_search \{"query":"ClinicalTrials\.gov structured enrollment","limit":5\}/);
-    assert.doesNotMatch(text, /mcp__ailis_research__tool_search/);
+    assert.match(text, /ClinicalTrials\.gov/);
+    assert.doesNotMatch(text, /tool_search|structured enrollment|mcp__ailis_research__tool_search/);
 });
 
 test('web_run open preserves discovered document links for the next open call', () => {
@@ -714,7 +711,7 @@ test('source viewport projection preserves query-relevant tables and intact long
     assert.match(text, /Context remains attached\.(?: Context remains attached\.){20}/);
 });
 
-test('web_run source viewport preserves executable deferred-tool follow-up calls', () => {
+test('web_run source viewport keeps source links without injected selection or follow-up rules', () => {
     const pdfUrl = 'https://example.test/article.pdf';
     const items = toolOutputToModelInputItems({
         id: 'web-run-pdf-affordance-1',
@@ -753,15 +750,9 @@ test('web_run source viewport preserves executable deferred-tool follow-up calls
     });
 
     const text = FunctionCallOutputPayload.toText(items[2].output);
-    assert.match(text, /Selection dependency:/);
-    assert.match(text, /candidate_boundary_complete=false/);
-    assert.match(text, /Continue the parent index; do not select or open a child yet/);
-    assert.match(text, /Suggested next calls \(tool-provided options/);
-    assert.match(
-        text,
-        /mcp__ailis_research__pdf_extract_text \{"url":"https:\/\/example\.test\/article\.pdf","maxChars":12000\}/
-    );
-    assert.match(text, /Reason: Read the discovered PDF body/);
+    assert.match(text, /Download PDF/);
+    assert.match(text, /https:\/\/example\.test\/article\.pdf/);
+    assert.doesNotMatch(text, /Selection dependency|candidate_boundary_complete|Suggested next calls|pdf_extract_text/);
 });
 
 test('nested MCP source viewport preserves answer-bearing lines instead of generic text previews', () => {

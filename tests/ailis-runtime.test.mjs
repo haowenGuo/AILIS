@@ -269,7 +269,7 @@ test('AILIS Gateway exposes runtime tools, update_plan, policy checks, and trans
         assert.equal(plan.body.status, 'completed');
         assert.equal(plan.body.result.details.completion_scope, 'progress_recorded_only');
         assert.equal(plan.body.result.details.semantic_role, 'progress_ui_only');
-        assert.equal(plan.body.result.details.produces_evidence, false);
+        assert.equal(Object.hasOwn(plan.body.result.details, 'produces_evidence'), false);
         assert.equal(plan.body.result.details.task_advanced, false);
         assert.match(plan.body.result.content[0].text, /did not inspect files/);
         assert.equal(plan.body.result.details.plan[0].step, 'wire the runtime');

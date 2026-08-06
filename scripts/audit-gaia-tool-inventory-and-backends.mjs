@@ -277,9 +277,8 @@ async function collectGatewayInventory(args) {
             gatewayStatus: status,
             gaiaRunnerSurface: {
                 directToolExecutorEnv: process.env.AILIS_GAIA_DIRECT_TOOL_EXECUTOR || '',
-                startupNativeDirectToolCountWithoutFinalAnswer: directSpecs.length,
-                startupNativeDirectToolNamesWithoutFinalAnswer: directSpecs.map((spec) => spec.name),
-                exactAnswerModeAdds: ['final_answer'],
+                startupNativeDirectToolCount: directSpecs.length,
+                startupNativeDirectToolNames: directSpecs.map((spec) => spec.name),
                 note: 'MCP and external direct tools are not all native tools at turn 0. They are surfaced through tool_search and become direct native tools on later turns after tool_search observations.'
             },
             runtimeTools: allRuntimeDefinitions.map((definition) => ({

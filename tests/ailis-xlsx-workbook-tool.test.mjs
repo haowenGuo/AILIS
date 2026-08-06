@@ -70,7 +70,7 @@ test('read_xlsx_workbook reads values, fills, formulas, and merged ranges', asyn
         assert.doesNotMatch(result.content[0].text, /fullJsonPath/);
         assert.ok(result.structuredContent.artifact.artifactId);
         assert.equal(result.details.artifactId, result.structuredContent.artifact.artifactId);
-        assert.equal(result.structuredContent.observationContract.reasoning_ready, true);
+        assert.equal(Object.hasOwn(result.structuredContent.observationContract, 'reasoning_ready'), false);
 
         const summary = await contextArtifactStore.execute({
             action: 'summary',
@@ -90,8 +90,8 @@ test('read_xlsx_workbook reads values, fills, formulas, and merged ranges', asyn
         assert.match(range.content[0].text, /0099FF/);
         assert.equal(range.details.coverage.range, 'A1:F4');
         assert.equal(range.details.complete, true);
-        assert.equal(range.details.reasoningReady, true);
-        assert.ok(range.details.evidence.evidenceId);
+        assert.equal(Object.hasOwn(range.details, 'reasoningReady'), false);
+        assert.ok(range.details.cachedCoverage.coverageId);
 
         const coveredRange = await contextArtifactStore.execute({
             action: 'range',
@@ -100,9 +100,9 @@ test('read_xlsx_workbook reads values, fills, formulas, and merged ranges', asyn
             range: 'B1:C2'
         });
         assert.equal(coveredRange.isError, false);
-        assert.match(coveredRange.content[0].text, /covered_by_pinned_evidence/);
-        assert.equal(coveredRange.details.coveredByEvidence.evidenceId, range.details.evidence.evidenceId);
-        assert.equal(coveredRange.details.coveredByEvidence.range, 'A1:F4');
+        assert.match(coveredRange.content[0].text, /covered_by_cache/);
+        assert.equal(coveredRange.details.coveredByCache.coverageId, range.details.cachedCoverage.coverageId);
+        assert.equal(coveredRange.details.coveredByCache.range, 'A1:F4');
 
         const profile = await contextArtifactStore.compute({
             action: 'profile',
@@ -126,12 +126,12 @@ test('read_xlsx_workbook reads values, fills, formulas, and merged ranges', asyn
         });
         assert.equal(pathResult.isError, false);
         assert.match(pathResult.content[0].text, /ARTIFACT_COMPUTE_FIND_PATH/);
-        assert.match(pathResult.content[0].text, /answer_candidate=F478A7/);
+        assert.match(pathResult.content[0].text, /extracted_value=F478A7/);
         assert.equal(pathResult.details.result.pathFound, true);
         assert.equal(pathResult.details.result.path.some((cell) => cell.address === 'B1'), false);
         assert.equal(pathResult.details.result.extraction.cell.address, 'B2');
-        assert.equal(pathResult.details.result.extraction.answerCandidate, 'F478A7');
-        assert.equal(pathResult.details.reasoningReady, true);
+        assert.equal(pathResult.details.result.extraction.extractedValue, 'F478A7');
+        assert.equal(Object.hasOwn(pathResult.details, 'reasoningReady'), false);
 
         const nestedPathResult = await contextArtifactStore.compute({
             action: 'find_path',
@@ -146,9 +146,9 @@ test('read_xlsx_workbook reads values, fills, formulas, and merged ranges', asyn
             }
         });
         assert.equal(nestedPathResult.isError, false);
-        assert.match(nestedPathResult.content[0].text, /answer_candidate=F478A7/);
+        assert.match(nestedPathResult.content[0].text, /extracted_value=F478A7/);
         assert.equal(nestedPathResult.details.result.extraction.cell.address, 'B2');
-        assert.equal(nestedPathResult.details.result.extraction.answerCandidate, 'F478A7');
+        assert.equal(nestedPathResult.details.result.extraction.extractedValue, 'F478A7');
 
         const ruleTextPathResult = await contextArtifactStore.compute({
             action: 'find_path',
@@ -162,9 +162,9 @@ test('read_xlsx_workbook reads values, fills, formulas, and merged ranges', asyn
             }
         });
         assert.equal(ruleTextPathResult.isError, false);
-        assert.match(ruleTextPathResult.content[0].text, /answer_candidate=F478A7/);
+        assert.match(ruleTextPathResult.content[0].text, /extracted_value=F478A7/);
         assert.equal(ruleTextPathResult.details.result.extraction.cell.address, 'B2');
-        assert.equal(ruleTextPathResult.details.result.extraction.answerCandidate, 'F478A7');
+        assert.equal(ruleTextPathResult.details.result.extraction.extractedValue, 'F478A7');
 
         const search = await contextArtifactStore.execute({
             action: 'search',
@@ -175,8 +175,8 @@ test('read_xlsx_workbook reads values, fills, formulas, and merged ranges', asyn
         assert.equal(search.details.matchCount, 1);
 
         const record = await contextArtifactStore.getRecord(result.details.artifactId);
-        assert.ok(record.metadata.pinnedEvidence.some((entry) =>
-            entry.evidenceId === range.details.evidence.evidenceId &&
+        assert.ok(record.metadata.pinnedCoverage.some((entry) =>
+            entry.coverageId === range.details.cachedCoverage.coverageId &&
             entry.coverage?.range === 'A1:F4'
         ));
         await fsp.stat(record.payloadPath);
