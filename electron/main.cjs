@@ -2527,6 +2527,7 @@ function getPersistedComputerControlEnabled() {
 function getAILISDefaultContext() {
     if (getPersistedComputerControlEnabled()) {
         return {
+            taskAgentRoutingOwned: true,
             computerControlEnabled: true,
             permissionProfile: 'danger-full-access',
             approvalPolicy: 'auto',
@@ -2542,6 +2543,7 @@ function getAILISDefaultContext() {
     }
 
     return {
+        taskAgentRoutingOwned: true,
         computerControlEnabled: false,
         permissionProfile: 'workspace-write',
         approvalPolicy: 'on-request',

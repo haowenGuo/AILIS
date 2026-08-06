@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const { randomUUID } = require('crypto');
 
-const TASK_HARNESS_STATE_VERSION = 2;
+const TASK_HARNESS_STATE_VERSION = 3;
 const TASK_RESULT_SCHEMA = 'ailis.task_result.v1';
 const LONG_HORIZON_TASK_OPTIMIZATION = '长程任务优化';
 const MAX_PARENT_RUN_HANDOFFS = 256;
@@ -49,6 +49,52 @@ function uniqueStrings(values = [], limit = 80) {
         }
     }
     return result;
+}
+
+function normalizeVisibleHistory(values = []) {
+    return (Array.isArray(values) ? values : [])
+        .filter((entry) => entry && ['user', 'assistant'].includes(entry.role))
+        .map((entry) => ({
+            role: entry.role,
+            content: normalizeString(entry.content),
+            authority: entry.role === 'user' ? 'user_instruction' : 'display_only'
+        }))
+        .filter((entry) => entry.content)
+        .slice(-120);
+}
+
+function normalizeLedgerEntry(value = {}) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return null;
+    }
+    const type = normalizeString(value.type);
+    if (!type) {
+        return null;
+    }
+    return {
+        id: normalizeString(value.id, `ledger_${randomUUID()}`),
+        type,
+        sessionId: normalizeString(value.sessionId || value.session_id),
+        turnId: normalizeString(value.turnId || value.turn_id),
+        createdAt: normalizeString(value.createdAt || value.created_at, new Date().toISOString()),
+        payload: value.payload && typeof value.payload === 'object' && !Array.isArray(value.payload)
+            ? cloneJson(value.payload) || {}
+            : {}
+    };
+}
+
+function appendLedgerEntry(thread, type, payload = {}, turnId = '') {
+    thread.ledger = Array.isArray(thread.ledger) ? thread.ledger : [];
+    const entry = normalizeLedgerEntry({
+        type,
+        sessionId: thread.sessionId,
+        turnId,
+        payload
+    });
+    if (entry) {
+        thread.ledger.push(entry);
+    }
+    return entry;
 }
 
 function normalizeSourceRefs(values = []) {
@@ -199,6 +245,16 @@ function normalizeTurn(raw = {}, fallbackSessionId = '') {
         request: normalizeString(raw.request, inputs[0].message),
         latestRequest: normalizeString(raw.latestRequest || raw.current_request, inputs.at(-1).message),
         inputs,
+        envelope: raw.envelope && typeof raw.envelope === 'object'
+            ? {
+                  sessionId: normalizeString(raw.envelope.sessionId || raw.envelope.session_id, fallbackSessionId),
+                  turnId: normalizeString(raw.envelope.turnId || raw.envelope.turn_id, turnId),
+                  userMessage: normalizeString(raw.envelope.userMessage || raw.envelope.user_message, request),
+                  attachments: Array.isArray(raw.envelope.attachments) ? cloneJson(raw.envelope.attachments) || [] : [],
+                  visibleHistory: normalizeVisibleHistory(raw.envelope.visibleHistory || raw.envelope.visible_history),
+                  createdAt: normalizeString(raw.envelope.createdAt || raw.envelope.created_at, createdAt)
+              }
+            : null,
         status: normalizeString(raw.status, 'incomplete').toLowerCase(),
         resultStatus: normalizeString(raw.resultStatus || raw.result_status),
         finalAnswer: normalizeString(raw.finalAnswer || raw.final_answer),
@@ -242,6 +298,9 @@ function normalizeStoredThread(raw = {}, fallbackSessionId = '') {
         activeGoal: activeGoal && ['active', 'blocked'].includes(activeGoal.status) ? activeGoal : null,
         goalHistory: (Array.isArray(raw.goalHistory || raw.goal_history) ? (raw.goalHistory || raw.goal_history) : [])
             .map(normalizeGoal)
+            .filter(Boolean),
+        ledger: (Array.isArray(raw.ledger) ? raw.ledger : [])
+            .map(normalizeLedgerEntry)
             .filter(Boolean),
         contextCheckpoint: sanitizeContextCheckpoint(checkpoint),
         evidenceRefs: uniqueStrings(raw.evidenceRefs),
@@ -431,16 +490,25 @@ function buildTaskResultPacket(result = {}, state = {}) {
         result.exactAnswer ||
         result.exact_answer
     );
-    const finalAnswer = normalizeString(
+    const finalAnswerCandidate = normalizeString(
         handoff.finalAnswer || result.finalAnswer || result.answer || exactAnswer || result.displayText
     );
-    const displayText = normalizeString(result.displayText || result.display_text || finalAnswer);
     const partialAnswer = normalizeString(handoff.partialAnswer);
     const answerCandidates = normalizeAnswerCandidates(handoff.answerCandidates || handoff.answer_candidates);
     const bestAnswerCandidate = normalizeAnswerCandidate(
         handoff.bestAnswerCandidate || handoff.best_answer_candidate
     );
     const status = normalizeString(handoff.status || result.status, result.ok === false ? 'failed' : 'completed').toLowerCase();
+    const routeStep = (Array.isArray(result.steps) ? result.steps : [])
+        .find((step) => normalizeString(step?.tool) === 'task_route');
+    const taskRoute = normalizeString(
+        result.taskRoute || result.task_route || routeStep?.args?.mode,
+        'execute'
+    ).toLowerCase();
+    const finalAnswer = taskRoute === 'chat' ? '' : finalAnswerCandidate;
+    const displayText = taskRoute === 'chat'
+        ? ''
+        : normalizeString(result.displayText || result.display_text || finalAnswer);
     const unresolvedFields = FINAL_STATUSES.has(status)
         ? []
         : uniqueStrings([
@@ -459,6 +527,7 @@ function buildTaskResultPacket(result = {}, state = {}) {
         turn_id: normalizeString(turn.turnId || turn.taskId),
         task_id: normalizeString(turn.turnId || turn.taskId || thread.threadId || thread.taskId),
         status,
+        route: ['chat', 'execute'].includes(taskRoute) ? taskRoute : 'execute',
         // Kept for TaskResult v1 compatibility. It reflects only an explicit model-managed
         // Goal; the Session's first request is never promoted into an implicit fixed Goal.
         original_goal: normalizeString(thread.activeGoal?.objective),
@@ -556,6 +625,7 @@ class AILISSystemTaskAgentHarness {
             activeTurnId: '',
             activeGoal: null,
             goalHistory: [],
+            ledger: [],
             contextCheckpoint: null,
             evidenceRefs: [],
             outputRefs: [],
@@ -569,8 +639,16 @@ class AILISSystemTaskAgentHarness {
         };
     }
 
-    createTurn(thread, message) {
+    createTurn(thread, message, envelope = {}) {
         const now = new Date().toISOString();
+        const normalizedEnvelope = {
+            sessionId: thread.sessionId,
+            turnId: '',
+            userMessage: message,
+            attachments: Array.isArray(envelope.attachments) ? cloneJson(envelope.attachments) || [] : [],
+            visibleHistory: normalizeVisibleHistory(envelope.visibleHistory || envelope.visible_history),
+            createdAt: normalizeString(envelope.createdAt || envelope.created_at, now)
+        };
         const turn = {
             turnId: `turn_${randomUUID()}`,
             sessionId: thread.sessionId,
@@ -586,9 +664,16 @@ class AILISSystemTaskAgentHarness {
             updatedAt: now,
             completedAt: ''
         };
+        normalizedEnvelope.turnId = turn.turnId;
+        turn.envelope = normalizedEnvelope;
         thread.turns.push(turn);
         thread.activeTurnId = turn.turnId;
         thread.updatedAt = now;
+        appendLedgerEntry(thread, 'user.turn', {
+            user_message: message,
+            attachments: normalizedEnvelope.attachments,
+            visible_history: normalizedEnvelope.visibleHistory
+        }, turn.turnId);
         return turn;
     }
 
@@ -601,7 +686,63 @@ class AILISSystemTaskAgentHarness {
         turn.completedAt = '';
         thread.activeTurnId = turn.turnId;
         thread.updatedAt = now;
+        appendLedgerEntry(thread, 'user.steer', { user_message: message }, turn.turnId);
         return turn;
+    }
+
+    getSessionProjection(sessionId = '') {
+        const thread = this.getThread(sessionId);
+        if (!thread) {
+            return null;
+        }
+        const activeTurn = thread.turns.find((turn) => turn.turnId === thread.activeTurnId) || null;
+        return {
+            schema: 'ailis.session_ledger_projection.v1',
+            session_id: thread.sessionId,
+            thread_id: thread.threadId,
+            active_goal: thread.activeGoal ? cloneJson(thread.activeGoal) : null,
+            active_turn: activeTurn ? {
+                turn_id: activeTurn.turnId,
+                request: activeTurn.request,
+                latest_request: activeTurn.latestRequest,
+                inputs: activeTurn.inputs.map((input) => input.message)
+            } : null,
+            unresolved_fields: [...thread.unresolvedFields],
+            completed_turns: thread.turns
+                .filter((turn) => turn.turnId !== thread.activeTurnId)
+                .slice(-40)
+                .map((turn) => ({
+                    turn_id: turn.turnId,
+                    request: turn.request,
+                    latest_request: turn.latestRequest,
+                    status: turn.resultStatus || turn.status,
+                    final_answer: turn.finalAnswer,
+                    completed_at: turn.completedAt
+                })),
+            visible_history: activeTurn?.envelope?.visibleHistory || [],
+            authority: {
+                current_user_turn: 1,
+                active_goal: 2,
+                unresolved_task_state: 3,
+                verified_results: 4,
+                persona_output: 'display_only'
+            }
+        };
+    }
+
+    recordPersonaOutput(sessionId = '', turnId = '', text = '', kind = 'chat') {
+        const thread = this.getThread(sessionId);
+        const content = normalizeString(text);
+        if (!thread || !content) {
+            return null;
+        }
+        const entry = appendLedgerEntry(thread, 'persona.output', {
+            kind: normalizeString(kind, 'chat'),
+            text: content,
+            authority: 'display_only'
+        }, turnId);
+        this.persist();
+        return entry;
     }
 
     findThreadForGoalContext(context = {}) {
@@ -706,6 +847,10 @@ class AILISSystemTaskAgentHarness {
             return { ok: false, status: 'invalid_action', error: `Unsupported task_goal action: ${action}` };
         }
         thread.updatedAt = now;
+        appendLedgerEntry(thread, 'goal.updated', {
+            action,
+            active_goal: thread.activeGoal ? cloneJson(thread.activeGoal) : null
+        }, turnId);
         this.persist();
         this.emitEvent('task_agent.goal.updated', {
             optimization: LONG_HORIZON_TASK_OPTIMIZATION,
@@ -728,7 +873,7 @@ class AILISSystemTaskAgentHarness {
     async handoff(_args = {}, context = {}) {
         const message = normalizeString(context.currentUserMessage);
         if (!message) {
-            throw new Error('handoff_task requires the immutable current user message from the Agent Harness');
+            throw new Error('TaskAgent dispatch requires the immutable current user message.');
         }
         if (!this.executeTaskAgent) {
             throw new Error('System TaskAgent executor is not available');
@@ -771,6 +916,28 @@ class AILISSystemTaskAgentHarness {
                 turnId: running.turn.turnId,
                 runId: running.turn.runId
             });
+            if (context.returnAfterSteer === true) {
+                return {
+                    schema: TASK_RESULT_SCHEMA,
+                    optimization: LONG_HORIZON_TASK_OPTIMIZATION,
+                    thread_id: running.thread.threadId,
+                    turn_id: running.turn.turnId,
+                    task_id: running.turn.turnId,
+                    status: 'accepted',
+                    route: 'execute',
+                    current_request: message,
+                    final_answer: '',
+                    display_text: '',
+                    partial_answer: '',
+                    source_refs: [],
+                    evidence_refs: [],
+                    output_refs: [],
+                    unresolved_fields: [],
+                    trace_ref: running.turn.runId,
+                    checkpoint_available: true,
+                    steer_accepted: true
+                };
+            }
             return await running.promise;
         }
 
@@ -786,7 +953,7 @@ class AILISSystemTaskAgentHarness {
         if (expectedTurnId) {
             throw new Error(`TaskAgent Turn mismatch: expected ${expectedTurnId}, but the Session has no active Turn.`);
         }
-        const turn = this.createTurn(thread, message);
+        const turn = this.createTurn(thread, message, context.turnEnvelope || {});
         this.state.sessions[sessionId] = thread;
         this.persist();
         this.emitEvent('task_agent.handoff.started', {
@@ -855,6 +1022,9 @@ class AILISSystemTaskAgentHarness {
                         task_agent_active_goal: thread.activeGoal ? cloneJson(thread.activeGoal) : null,
                         currentTaskRequest: turn.latestRequest,
                         current_task_request: turn.latestRequest,
+                        taskAgentRoutePending: context.taskAgentRoutingOwned === true,
+                        taskAgentRoutingOwned: context.taskAgentRoutingOwned === true,
+                        sessionLedgerProjection: this.getSessionProjection(sessionId),
                         priorUnresolvedFields: [],
                         prior_unresolved_fields: [],
                         priorAnswerCandidates: [],
@@ -867,6 +1037,25 @@ class AILISSystemTaskAgentHarness {
                     signal: context.signal,
                     registerInputHandler,
                     onEvent: async (event) => {
+                        const eventType = normalizeString(event?.type);
+                        if (eventType) {
+                            appendLedgerEntry(thread, 'task.event', {
+                                type: eventType,
+                                status: normalizeString(event?.status),
+                                message: normalizeString(event?.message),
+                                payload: event?.payload && typeof event.payload === 'object'
+                                    ? cloneJson(event.payload) || {}
+                                    : {}
+                            }, turn.turnId);
+                            this.persist();
+                            Promise.resolve(context.onTaskEvent?.({
+                                ...cloneJson(event),
+                                sessionId,
+                                threadId: thread.threadId,
+                                turnId: turn.turnId,
+                                runId: turn.runId
+                            })).catch(() => {});
+                        }
                         this.emitEvent('task_agent.event', {
                             optimization: LONG_HORIZON_TASK_OPTIMIZATION,
                             sessionId,
@@ -878,6 +1067,15 @@ class AILISSystemTaskAgentHarness {
                     }
                 });
                 const packet = buildTaskResultPacket(result, { thread, turn });
+                appendLedgerEntry(thread, 'task.route', { mode: packet.route }, turn.turnId);
+                appendLedgerEntry(thread, 'task.result', {
+                    status: packet.status,
+                    route: packet.route,
+                    final_answer: packet.final_answer,
+                    source_refs: packet.source_refs,
+                    output_refs: packet.output_refs,
+                    unresolved_fields: packet.unresolved_fields
+                }, turn.turnId);
                 const handoff = result.taskRunHandoff || result.task_run_handoff || result.handoff || {};
                 const now = new Date().toISOString();
                 turn.status = packet.status;
@@ -969,6 +1167,13 @@ class AILISSystemTaskAgentHarness {
                 this.inFlight.delete(sessionId);
             }
         }
+    }
+
+    async dispatchTurn(context = {}) {
+        return await this.handoff({}, {
+            ...context,
+            taskAgentRoutingOwned: true
+        });
     }
 
     getStatus() {

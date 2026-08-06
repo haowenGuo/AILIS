@@ -50,6 +50,7 @@ const {
 const EMAIL_TOOL_ID = 'email';
 const TASK_RESULTS_TOOL_ID = 'task_results';
 const HANDOFF_TASK_TOOL_ID = 'handoff_task';
+const TASK_ROUTE_TOOL_ID = 'task_route';
 const TASK_GOAL_TOOL_ID = 'task_goal';
 const WEB_RUN_TOOL_ID = 'web_run';
 const WEB_SEARCH_TOOL_ID = 'web_search';
@@ -89,6 +90,10 @@ const DEFAULT_PROFILE_CURATION_START_DELAY_MS = Number(process.env.AILIS_PROFILE
 const DEFAULT_PROFILE_CURATION_CHECK_INTERVAL_MS = Number(process.env.AILIS_PROFILE_CURATION_CHECK_INTERVAL_MS || 6 * 60 * 60 * 1000);
 const DEFAULT_PROFILE_CURATION_DEBOUNCE_MS = Number(process.env.AILIS_PROFILE_CURATION_DEBOUNCE_MS || 2 * 60 * 1000);
 const TASK_AGENT_MAX_MODEL_ROUNDS = 9;
+const TASK_AGENT_PUBLIC_EVENT_TYPES = new Set([
+    'task_agent.route.decided',
+    'agent.progress.note'
+]);
 
 const GATEWAY_BACKED_TOOL_IDS = new Set(['sessions_list', 'gateway', 'cron', 'nodes']);
 const SESSION_BOUND_TOOL_IDS = new Set([
@@ -140,6 +145,7 @@ const CODEX_STYLE_DIRECT_LOCAL_TOOL_IDS = new Set([
     'apply_patch',
     WEB_RUN_TOOL_ID,
     HANDOFF_TASK_TOOL_ID,
+    TASK_ROUTE_TOOL_ID,
     TASK_GOAL_TOOL_ID
 ]);
 // Extended tools stay out of the first-turn tool surface, but remain discoverable
@@ -243,6 +249,16 @@ const AILIS_LOCAL_TOOL_DEFINITIONS = Object.freeze([
         label: 'handoff_task',
         description: 'Transfer the immutable current user request to the session\'s persistent system TaskAgent and wait for one compact TaskResult packet. No task text or lifecycle command is accepted from the model; the Harness owns thread identity, checkpointing, execution, and result transport.',
         sectionId: 'persona-runtime',
+        route: 'ailis-system-task-agent',
+        materialized: true,
+        status: 'available',
+        needsApprovalActions: Object.freeze([])
+    }),
+    Object.freeze({
+        id: TASK_ROUTE_TOOL_ID,
+        label: 'task_route',
+        description: 'Internal first-step control for the persistent TaskAgent. Choose chat when Persona can answer the current Turn without task execution; choose execute to continue immediately in the same TaskAgent run. Do not summarize or rewrite the user request.',
+        sectionId: 'task-agent-runtime',
         route: 'ailis-system-task-agent',
         materialized: true,
         status: 'available',
@@ -1454,6 +1470,7 @@ class AILISGateway extends EventEmitter {
         this.sseClients = new Set();
         this.eventSeq = 0;
         this.eventLog = [];
+        this.privateRunIds = new Set();
         this.eventLogLimit = Math.max(
             100,
             Math.min(Number(options.eventLogLimit || DEFAULT_EVENT_REPLAY_LIMIT), MAX_EVENT_REPLAY_LIMIT)
@@ -2254,6 +2271,13 @@ class AILISGateway extends EventEmitter {
     }
 
     emitGatewayEvent(type, payload = {}) {
+        const eventRunId = normalizeString(
+            payload.runId || payload.childRunId || payload.payload?.runId
+        );
+        if (eventRunId && this.privateRunIds.has(eventRunId)) {
+            this.emit('private-event', { type, payload });
+            return;
+        }
         if (type === 'subagent.event' && payload.type === 'subagent.completed') {
             try {
                 this.taskResultCapsules?.recordExecution?.({
@@ -3280,6 +3304,272 @@ class AILISGateway extends EventEmitter {
         }
     }
 
+    async runPrivatePersonaTurn({
+        input = {},
+        context = {},
+        sessionId = 'main',
+        runId = '',
+        purpose = 'draft',
+        developerPacket = ''
+    } = {}) {
+        const privateRunId = normalizeString(runId, `persona_${purpose}_${randomUUID()}`);
+        this.privateRunIds.add(privateRunId);
+        try {
+            return await this.ensureAgentRunner().runMessage({
+                ...input,
+                runId: privateRunId,
+                sessionId,
+                memoryPolicy: purpose === 'draft' ? 'read_only' : 'disabled',
+                messageHistory: purpose === 'draft' && Array.isArray(input.messageHistory)
+                    ? input.messageHistory
+                    : [],
+                ephemeralDeveloperMessage: normalizeString(developerPacket),
+                onTextDelta: () => {},
+                onTextStreamEvent: () => {},
+                context: {
+                    ...context,
+                    runId: privateRunId,
+                    sessionId,
+                    sessionKey: sessionId,
+                    agentRole: 'persona_orchestrator',
+                    contextMode: 'persona',
+                    taskAgentRoutingOwned: true,
+                    personaDraft: purpose === 'draft',
+                    personaRenderOnly: purpose !== 'draft',
+                    memoryPolicy: purpose === 'draft' ? 'read_only' : 'disabled'
+                }
+            });
+        } finally {
+            this.privateRunIds.delete(privateRunId);
+        }
+    }
+
+    async renderTaskPacket({
+        input = {},
+        context = {},
+        sessionId = 'main',
+        outerRunId = '',
+        turnEnvelope = {},
+        packet = {},
+        purpose = 'result'
+    } = {}) {
+        const developerPacket = [
+            'Render the following authoritative TaskEvent/TaskResult for the user.',
+            'Use only this packet and the current user request as factual input. Preserve status, failure, uncertainty, sources, artifacts, and unresolved fields. Never promise work that the packet does not report as running.',
+            JSON.stringify(packet)
+        ].join('\n');
+        const rendered = await this.runPrivatePersonaTurn({
+            input: {
+                ...input,
+                message: normalizeString(turnEnvelope.userMessage || input.message || input.prompt || input.task),
+                attachments: [],
+                messageHistory: []
+            },
+            context: { ...context, turnEnvelope },
+            sessionId,
+            runId: `persona_${purpose}_${outerRunId || randomUUID()}`,
+            purpose,
+            developerPacket
+        }).catch(() => null);
+        return normalizeString(
+            rendered?.displayText || rendered?.finalAnswer || rendered?.speechText,
+            normalizeString(
+                packet.final_answer || packet.partial_answer || packet.summary || packet.message,
+                packet.status ? `任务状态：${packet.status}` : ''
+            )
+        );
+    }
+
+    async runTaskAgentControlledPersonaTurn({
+        input = {},
+        context = {},
+        sessionId = 'main',
+        runId = '',
+        llmSettings = null
+    } = {}) {
+        const message = normalizeString(input.message || input.prompt || input.task);
+        const outerRunId = normalizeString(runId, randomUUID());
+        const turnEnvelope = Object.freeze({
+            sessionId,
+            turnId: '',
+            userMessage: message,
+            attachments: Object.freeze(Array.isArray(input.attachments) ? cloneJson(input.attachments) || [] : []),
+            visibleHistory: Object.freeze((Array.isArray(input.messageHistory) ? input.messageHistory : [])
+                .filter((entry) => entry && ['user', 'assistant'].includes(entry.role))
+                .map((entry) => Object.freeze({ role: entry.role, content: normalizeString(entry.content) }))
+                .filter((entry) => entry.content)
+                .slice(-120)),
+            createdAt: new Date().toISOString()
+        });
+        const draftPromise = this.runPrivatePersonaTurn({
+            input: {
+                ...input,
+                runId: `persona_draft_${outerRunId}`,
+                ...(llmSettings ? { llmSettings } : {})
+            },
+            context: { ...context, turnEnvelope },
+            sessionId,
+            runId: `persona_draft_${outerRunId}`,
+            purpose: 'draft'
+        });
+        draftPromise.catch(() => {});
+
+        let progressRenderChain = Promise.resolve();
+        const onTaskEvent = (event = {}) => {
+            const type = normalizeString(event.type);
+            const messageText = normalizeString(event.message || event.payload?.text || event.payload?.summary);
+            const isAccepted = type === 'task_agent.route.decided' && event.payload?.mode === 'execute';
+            const isProgress = type === 'agent.progress.note' && messageText;
+            if (!isAccepted && !isProgress) {
+                return;
+            }
+            const packet = isAccepted
+                ? {
+                      type: 'task.accepted',
+                      status: 'running',
+                      current_request: message
+                  }
+                : {
+                      type: 'task.progress',
+                      status: normalizeString(event.status, 'running'),
+                      summary: messageText
+                  };
+            progressRenderChain = progressRenderChain.then(async () => {
+                const text = await this.renderTaskPacket({
+                    input,
+                    context,
+                    sessionId,
+                    outerRunId,
+                    turnEnvelope,
+                    packet,
+                    purpose: 'progress'
+                });
+                if (text) {
+                    this.emitGatewayEvent('agent.progress.note', {
+                        runId: outerRunId,
+                        sessionId,
+                        status: packet.status,
+                        text,
+                        source: 'task_event_persona_renderer'
+                    });
+                }
+            }).catch(() => {});
+        };
+
+        let taskResult;
+        try {
+            taskResult = await this.taskAgentHarness.dispatchTurn({
+                ...context,
+                runId: outerRunId,
+                parentRunId: outerRunId,
+                sessionId,
+                sessionKey: sessionId,
+                currentUserMessage: message,
+                turnEnvelope,
+                attachments: turnEnvelope.attachments,
+                fileAttachments: turnEnvelope.attachments,
+                llmSettings: llmSettings || context.llmSettings || null,
+                returnAfterSteer: true,
+                onTaskEvent
+            });
+        } catch (error) {
+            await progressRenderChain;
+            const failurePacket = {
+                type: 'task.failed',
+                status: 'failed',
+                error: error?.message || String(error),
+                current_request: message
+            };
+            const displayText = await this.renderTaskPacket({
+                input,
+                context,
+                sessionId,
+                outerRunId,
+                turnEnvelope,
+                packet: failurePacket,
+                purpose: 'failure'
+            });
+            return {
+                ok: false,
+                runId: outerRunId,
+                sessionId,
+                status: 'failed',
+                mode: 'task-agent-controlled',
+                intent: 'task_execution_failed',
+                executionRequired: true,
+                displayText,
+                speechText: displayText,
+                taskResult: failurePacket
+            };
+        }
+
+        if (taskResult?.route === 'chat') {
+            const draft = await draftPromise;
+            const displayText = normalizeString(
+                draft?.displayText || draft?.finalAnswer || draft?.speechText
+            );
+            this.ensureAgentRunner().recordMemoryTurn({
+                request: {
+                    ...input,
+                    context: { ...context, memoryPolicy: 'read_write' },
+                    memoryPolicy: 'read_write'
+                },
+                result: { ...draft, displayText },
+                message,
+                sessionId,
+                source: 'persona_chat_committed'
+            });
+            this.taskAgentHarness.recordPersonaOutput(
+                sessionId,
+                taskResult.turn_id,
+                displayText,
+                'chat'
+            );
+            return {
+                ...draft,
+                runId: outerRunId,
+                sessionId,
+                taskRoute: 'chat',
+                taskResult,
+                displayText,
+                speechText: normalizeString(draft?.speechText, displayText)
+            };
+        }
+
+        await progressRenderChain;
+        const purpose = taskResult?.steer_accepted === true ? 'steer' : 'result';
+        const displayText = await this.renderTaskPacket({
+            input,
+            context,
+            sessionId,
+            outerRunId,
+            turnEnvelope,
+            packet: taskResult,
+            purpose
+        });
+        this.taskAgentHarness.recordPersonaOutput(
+            sessionId,
+            taskResult?.turn_id,
+            displayText,
+            purpose
+        );
+        return {
+            ok: taskResult?.steer_accepted === true || ['completed', 'completed_with_warnings', 'success', 'succeeded'].includes(
+                normalizeString(taskResult?.status).toLowerCase()
+            ),
+            runId: outerRunId,
+            sessionId,
+            status: normalizeString(taskResult?.status, 'completed'),
+            mode: 'task-agent-controlled',
+            intent: taskResult?.steer_accepted === true ? 'task_steer_accepted' : 'task_result_rendered',
+            taskRoute: 'execute',
+            executionRequired: true,
+            displayText,
+            speechText: displayText,
+            taskResult
+        };
+    }
+
     async runAgent(request = {}) {
         const input = request && typeof request === 'object' ? request : {};
         const context = this.mergeDefaultContext(
@@ -3325,13 +3615,30 @@ class AILISGateway extends EventEmitter {
                 emberHarness: summarizeEmberHarnessRecord(inputGate)
             };
         }
-        const result = await this.ensureAgentRunner().runMessage({
-            ...input,
-            ...(defaultLlmSettings && typeof defaultLlmSettings === 'object'
-                ? { llmSettings: defaultLlmSettings }
-                : {}),
-            context
-        });
+        const agentRole = normalizeString(input.agentRole || context.agentRole).toLowerCase();
+        const taskAgentOwnsTurn = context.taskAgentRoutingOwned === true &&
+            !['task', 'task_agent', 'worker', 'subagent', 'child_agent'].includes(agentRole) &&
+            context.personaRenderOnly !== true &&
+            input.personaRenderOnly !== true;
+        const effectiveLlmSettings = suppliedLlmSettings || defaultLlmSettings || null;
+        const result = taskAgentOwnsTurn
+            ? await this.runTaskAgentControlledPersonaTurn({
+                  input: {
+                      ...input,
+                      ...(effectiveLlmSettings ? { llmSettings: effectiveLlmSettings } : {})
+                  },
+                  context,
+                  sessionId,
+                  runId,
+                  llmSettings: effectiveLlmSettings
+              })
+            : await this.ensureAgentRunner().runMessage({
+                  ...input,
+                  ...(defaultLlmSettings && typeof defaultLlmSettings === 'object'
+                      ? { llmSettings: defaultLlmSettings }
+                      : {}),
+                  context
+              });
         const finalText = normalizeString(
             result?.displayText ||
             result?.speechText ||
@@ -3483,6 +3790,25 @@ class AILISGateway extends EventEmitter {
             }
         });
         const agentRunner = this.ensureAgentRunner();
+        const childRunId = normalizeString(agent?.childRunId || context.runId);
+        const forwardChildEvent = (event = {}) => {
+            const eventType = normalizeString(event.type);
+            const eventPayload = event.payload && typeof event.payload === 'object' ? event.payload : {};
+            if (
+                !TASK_AGENT_PUBLIC_EVENT_TYPES.has(eventType) ||
+                normalizeString(eventPayload.runId) !== childRunId
+            ) {
+                return;
+            }
+            void onEvent?.({
+                type: eventType,
+                status: normalizeString(eventPayload.status, 'running'),
+                message: normalizeString(eventPayload.text || eventPayload.summary || eventPayload.progressNote),
+                payload: eventPayload
+            });
+        };
+        this.privateRunIds.add(childRunId);
+        this.on('private-event', forwardChildEvent);
         const runPromise = agentRunner.runMessage({
             runId: agent?.childRunId,
             message: task,
@@ -3534,6 +3860,8 @@ class AILISGateway extends EventEmitter {
                   })
                 : await runPromise;
         } finally {
+            this.off('private-event', forwardChildEvent);
+            this.privateRunIds.delete(childRunId);
             unregisterInputHandler?.();
         }
         await onEvent?.({
@@ -4850,6 +5178,28 @@ class AILISGateway extends EventEmitter {
 
     async executeGatewayLocalTool(toolId, args, context = {}) {
         const workspaceDir = context.workspaceDir || this.resolveWorkspace(context.workspace, context);
+        if (toolId === TASK_ROUTE_TOOL_ID) {
+            const mode = normalizeString(args.mode).toLowerCase();
+            const allowed = context.taskAgentRoutePending === true && ['chat', 'execute'].includes(mode);
+            const routeResult = allowed
+                ? {
+                      ok: true,
+                      status: 'completed',
+                      mode,
+                      turn_id: normalizeString(context.taskAgentTurnId || context.task_agent_turn_id)
+                  }
+                : {
+                      ok: false,
+                      status: 'invalid_task_route',
+                      error: 'task_route is available only for the first decision of a new TaskAgent Turn.'
+                  };
+            return {
+                content: [{ type: 'text', text: JSON.stringify(routeResult) }],
+                isError: routeResult.ok === false,
+                details: routeResult,
+                structuredContent: routeResult
+            };
+        }
         if (toolId === TASK_GOAL_TOOL_ID) {
             const goalResult = this.taskAgentHarness.applyGoalAction(args, context);
             return {

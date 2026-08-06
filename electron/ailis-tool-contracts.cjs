@@ -1169,6 +1169,23 @@ const TOOL_CONTRACTS = Object.freeze({
             additionalProperties: false
         })
     }),
+    task_route: Object.freeze({
+        id: 'task_route',
+        version: CONTRACT_VERSION,
+        mutates: false,
+        risk: 'low',
+        approval: 'never',
+        experience: TOOL_EXPERIENCE.task_handoff,
+        returns: STANDARD_TOOL_RETURN_SCHEMA,
+        errors: defaultErrors(['invalid_task_route']),
+        schema: makeObjectSchema({
+            required: ['mode'],
+            properties: {
+                mode: stringSchema({ enum: ['chat', 'execute'] })
+            },
+            additionalProperties: false
+        })
+    }),
     task_goal: Object.freeze({
         id: 'task_goal',
         version: CONTRACT_VERSION,
