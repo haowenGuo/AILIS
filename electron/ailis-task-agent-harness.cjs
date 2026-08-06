@@ -6,6 +6,7 @@ const TASK_HARNESS_STATE_VERSION = 2;
 const TASK_RESULT_SCHEMA = 'ailis.task_result.v1';
 const LONG_HORIZON_TASK_OPTIMIZATION = '长程任务优化';
 const MAX_PARENT_RUN_HANDOFFS = 256;
+const DEFAULT_PROGRESS_HEARTBEAT_MS = 25_000;
 const FINAL_STATUSES = new Set(['completed', 'completed_with_warnings', 'success', 'succeeded']);
 const GOAL_STATUSES = new Set(['active', 'blocked', 'completed', 'replaced', 'cancelled']);
 
@@ -422,6 +423,10 @@ class AILISSystemTaskAgentHarness {
             : null;
         this.emitEvent = typeof options.emitEvent === 'function' ? options.emitEvent : () => {};
         this.taskResultCapsules = options.taskResultCapsules || null;
+        this.progressHeartbeatMs = Math.max(
+            5_000,
+            Number(options.progressHeartbeatMs || DEFAULT_PROGRESS_HEARTBEAT_MS) || DEFAULT_PROGRESS_HEARTBEAT_MS
+        );
         const loaded = readJson(this.statePath, {});
         const loadedVersion = Number(loaded.version || 1);
         this.state = {
@@ -474,6 +479,30 @@ class AILISSystemTaskAgentHarness {
 
     getTask(sessionId = '') {
         return this.getThread(sessionId);
+    }
+
+    isRunning(sessionId = '') {
+        return this.inFlight.has(normalizeString(sessionId, 'main'));
+    }
+
+    getSessionSnapshot(sessionId = '') {
+        const normalizedSessionId = normalizeString(sessionId, 'main');
+        const thread = this.getThread(normalizedSessionId);
+        const running = this.inFlight.get(normalizedSessionId);
+        const latestTurn = thread?.turns?.at?.(-1) || null;
+        return {
+            schema: 'ailis.task_agent_session_snapshot.v1',
+            session_id: normalizedSessionId,
+            running: Boolean(running),
+            thread_id: normalizeString(thread?.threadId),
+            active_turn_id: normalizeString(running?.turn?.turnId || thread?.activeTurnId),
+            active_goal: thread?.activeGoal ? cloneJson(thread.activeGoal) : null,
+            latest_turn: latestTurn ? {
+                turn_id: normalizeString(latestTurn.turnId),
+                status: normalizeString(latestTurn.status),
+                request: normalizeString(latestTurn.latestRequest || latestTurn.request)
+            } : null
+        };
     }
 
     createThread(sessionId) {
@@ -698,6 +727,28 @@ class AILISSystemTaskAgentHarness {
                 turnId: running.turn.turnId,
                 runId: running.turn.runId
             });
+            this.emitEvent('subagent.event', {
+                type: 'agent.progress.note',
+                status: 'running',
+                sessionId,
+                parentRunId,
+                childRunId: running.turn.runId,
+                payload: {
+                    runId: running.turn.runId,
+                    text: '已收到你的补充，正在当前任务中继续处理。',
+                    source: 'task_agent_steer_accepted'
+                }
+            });
+            if (context.returnAfterSteer === true) {
+                return {
+                    schema: 'ailis.task_steer.v1',
+                    status: 'accepted',
+                    final_answer: '已收到你的补充，我会在当前任务中按新要求继续。',
+                    thread_id: running.thread.threadId,
+                    turn_id: running.turn.turnId,
+                    trace_ref: running.turn.runId
+                };
+            }
             return await running.promise;
         }
 
@@ -726,6 +777,18 @@ class AILISSystemTaskAgentHarness {
             threadState: threadExisted ? 'resumed' : 'created',
             turnState: 'created'
         });
+        this.emitEvent('subagent.event', {
+            type: 'subagent.started',
+            status: 'running',
+            sessionId,
+            parentRunId,
+            childRunId: turn.runId,
+            payload: {
+                runId: turn.runId,
+                sessionId,
+                taskState: 'working'
+            }
+        });
 
         const inFlight = {
             thread,
@@ -747,7 +810,35 @@ class AILISSystemTaskAgentHarness {
             };
         };
         const inheritanceMode = thread.contextCheckpoint ? 'checkpoint' : 'clean';
+        const visibleMessages = (Array.isArray(context.taskAgentVisibleHistory)
+            ? context.taskAgentVisibleHistory
+            : Array.isArray(context.visibleConversation)
+                ? context.visibleConversation
+                : [])
+            .filter((entry) => entry && ['user', 'assistant'].includes(entry.role) && normalizeString(entry.content))
+            .map((entry) => ({ role: entry.role, content: normalizeString(entry.content) }))
+            .slice(-240);
         const runPromise = (async () => {
+            let lastPublicProgressAt = Date.now();
+            const heartbeatTimer = setInterval(() => {
+                if (Date.now() - lastPublicProgressAt < this.progressHeartbeatMs) {
+                    return;
+                }
+                lastPublicProgressAt = Date.now();
+                this.emitEvent('subagent.event', {
+                    type: 'agent.progress.note',
+                    status: 'running',
+                    sessionId,
+                    parentRunId,
+                    childRunId: turn.runId,
+                    payload: {
+                        runId: turn.runId,
+                        text: '任务仍在继续处理，当前没有中断。有新的关键结果时我会继续同步。',
+                        source: 'task_agent_heartbeat'
+                    }
+                });
+            }, this.progressHeartbeatMs);
+            heartbeatTimer.unref?.();
             try {
                 const result = await this.executeTaskAgent({
                     agent: {
@@ -765,6 +856,7 @@ class AILISSystemTaskAgentHarness {
                         task: turn.latestRequest,
                         inheritanceMode,
                         contextManagerCheckpoint: thread.contextCheckpoint,
+                        recentMessages: visibleMessages,
                         llmSettings: context.llmSettings || context.llm || null
                     },
                     context: {
@@ -790,6 +882,7 @@ class AILISSystemTaskAgentHarness {
                     signal: context.signal,
                     registerInputHandler,
                     onEvent: async (event) => {
+                        lastPublicProgressAt = Date.now();
                         this.emitEvent('task_agent.event', {
                             optimization: LONG_HORIZON_TASK_OPTIMIZATION,
                             sessionId,
@@ -797,6 +890,19 @@ class AILISSystemTaskAgentHarness {
                             turnId: turn.turnId,
                             runId: turn.runId,
                             event: cloneJson(event) || {}
+                        });
+                        this.emitEvent('subagent.event', {
+                            type: normalizeString(event?.type, 'agent.progress.note'),
+                            status: normalizeString(event?.status, 'running'),
+                            sessionId,
+                            parentRunId,
+                            childRunId: turn.runId,
+                            message: normalizeString(event?.message),
+                            payload: {
+                                ...(event?.payload && typeof event.payload === 'object' ? cloneJson(event.payload) : {}),
+                                runId: turn.runId,
+                                source: normalizeString(event?.payload?.source || event?.source, 'task_agent_event')
+                            }
                         });
                     }
                 });
@@ -855,6 +961,18 @@ class AILISSystemTaskAgentHarness {
                     status: packet.status,
                     traceRef: packet.trace_ref
                 });
+                this.emitEvent('subagent.event', {
+                    type: 'subagent.completed',
+                    status: packet.status,
+                    sessionId,
+                    parentRunId,
+                    childRunId: turn.runId,
+                    payload: {
+                        runId: turn.runId,
+                        ok: FINAL_STATUSES.has(packet.status),
+                        status: packet.status
+                    }
+                });
                 return packet;
             } catch (error) {
                 const now = new Date().toISOString();
@@ -867,6 +985,8 @@ class AILISSystemTaskAgentHarness {
                 this.state.sessions[sessionId] = thread;
                 this.persist();
                 throw error;
+            } finally {
+                clearInterval(heartbeatTimer);
             }
         })();
         inFlight.promise = runPromise;
